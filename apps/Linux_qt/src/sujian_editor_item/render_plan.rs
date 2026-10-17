@@ -1,8 +1,8 @@
-use super::layout_snapshot::{LineSnapshotId, SourceRect};
+use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
 use super::qt_text_node::AnimationClipRect;
+use super::text_motion::{ClipDirection, MotionKind};
 use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
-use writer_core::editor::EditorRevision;
 
 /// Issue #904：动画层本帧要画的一个局部文字覆盖层。
 ///
@@ -25,23 +25,23 @@ pub(crate) struct TextAnimationGlyphInfo {
     /// 按同一个 `progress` 更新（吐字/吞字据此推进），与静态层孔洞是两个概念：
     /// 静态孔洞覆盖目标字形完整范围（与 progress 无关），动态 clip 随 progress 变化。
     pub clip_rect: SourceRect,
-    /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围。
-    pub logical_range: (usize, usize),
-    /// 该动画 glyph 对应的 Core source revision（旧字为编辑前，新字为编辑后）。
-    pub source_revision: EditorRevision,
-    /// 字形逻辑身份，由 `text_motion::derive_fragment_id` 派生。
-    pub glyph_id: u64,
-    /// Issue #904 评论 4：该片段所属段落 id。
+    /// Issue #919 复核 5：`sample()` 产生的原始动画遮罩（视口裁剪前）。
     ///
-    /// 贯穿到"本帧已提交局部片段"记录，供下一次快速输入从当前画面重定向，
-    /// 不再把它写死成 0。
-    pub paragraph_id: u64,
-    /// Issue #904 复核 6：该片段的字形 shaping 身份（来自 `LineClusterSnapshot`）。
-    ///
-    /// 等长度替换（"甲"→"乙"）时新旧 byte range 相同，只有 shaping 身份能区分
-    /// "同一个字的位移"与"旧字退出 + 新字进入"；下一帧继承遮罩宽度也依赖它。
-    /// 无法判定（例如从 QSG 回执重建的片段）时为 `None`。
-    pub shaping: Option<super::layout_snapshot::ShapingIdentity>,
+    /// `scene_graph_renderer` 用 `clip_rect`（视口裁剪后）做最终可见裁剪，用
+    /// `mask_clip` 回执给 `DrawnSlice`，供下一笔接续时继承裁剪起止位置。两者分开
+    /// 保存：视口/上一动画局部裁过时 `clip_rect` 的位置与 `mask_clip` 不同，只用
+    /// `clip_rect` 的宽度从源矩形边界重新造遮罩会把可见部分移到旧矩形另一边。
+    pub mask_clip: SourceRect,
+    /// Issue #919 复核 1：运动类别，供 `DrawnSlice` 记录本帧实际显示的运动类型。
+    pub motion_kind: MotionKind,
+    /// Issue #919 复核 1：所属字节范围，供连续编辑重定向时轻量片段关联。
+    pub byte_range: (usize, usize),
+    /// Issue #919 复核 3：本片段的 shaping 指纹，供 `DrawnSlice` 记录后用于
+    /// 连续编辑接续时确认同一份字形，避免同 byte_range 不同字误继承遮罩宽度。
+    pub shaping_identity: ShapingIdentity,
+    /// Issue #919 复核 3：本片段的裁剪方向（Shift 无裁剪方向，为 None），
+    /// 供 `DrawnSlice` 记录后用于旧 Conceal 继续吞时沿用原方向。
+    pub direction: Option<ClipDirection>,
 }
 
 #[derive(Clone, Debug, Default)]

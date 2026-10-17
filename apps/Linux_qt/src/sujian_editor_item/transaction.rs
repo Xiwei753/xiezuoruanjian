@@ -134,7 +134,7 @@ impl SujianEditorItem {
                 editor_animation_debug_log(&format!(
                     "record_transaction: local_animation kind={}, pieces={}, required={}, prepared={}, missing={}, ready={}{}",
                     if retargeting { "retarget" } else { "create" },
-                    m.pieces.len(),
+                    m.slices.len(),
                     required.len(),
                     prep.prepared.len(),
                     prep.missing.len(),

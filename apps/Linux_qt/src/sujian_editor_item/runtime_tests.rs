@@ -8,9 +8,29 @@ use super::render_plan::{
     SelectionPreeditStyle,
 };
 use super::*;
+use super::layout_snapshot::SourceRect;
+use super::text_motion::SliceMotion;
 use crate::editor::layout::{run_on_qt_thread, LayoutParams};
 use qmetaobject::QString;
 use std::time::{Duration, Instant};
+
+// Issue #919 复核：每个 cpp! 块独立编译，本文件自查缓存的 QImage 内容时
+// 需要在本文件内 include 头文件。
+cpp! {{
+    #include <QtGui/QImage>
+}}
+
+/// Issue #919 复核：`LineTextureStore::contains()` 本质是 `HashMap::contains_key`，
+/// 只证明缓存里有这个 id 的条目，并不证明存进去的是含像素的行图。此前
+/// `real_edit_prepares_ready_source_textures_for_animation_layer` 只按缓存键判断
+/// "源纹理已就绪"，等于把"已建立 TextMotion 结构"当成"已经有动画"。本辅助直接读
+/// 缓存里的 `QImage`，检查其非 null 且宽高为正，关闭这条假阳性边界。
+fn line_image_has_pixels(image: &qmetaobject::QImage) -> bool {
+    let ptr = image as *const qmetaobject::QImage;
+    cpp!(unsafe [ptr as "const QImage*"] -> bool as "bool" {
+        return ptr != nullptr && !ptr->isNull() && ptr->width() > 0 && ptr->height() > 0;
+    })
+}
 
 fn default_layout_params() -> LayoutParams {
     LayoutParams {
@@ -21,6 +41,57 @@ fn default_layout_params() -> LayoutParams {
         text_indent: 0.0,
         padding: 16.0,
     }
+}
+
+/// Issue #919 复核（comment-id 6221824024）：连续编辑 Shift 几何断言用容差比较
+/// 文档坐标矩形，避免依赖浮点精确相等。`SourceRect` 字段语义由调用方契约决定，
+/// 此处只做四分量逐项容差比较。
+fn rects_approx_eq(a: SourceRect, b: SourceRect, eps: f64) -> bool {
+    (a.x - b.x).abs() <= eps
+        && (a.y - b.y).abs() <= eps
+        && (a.w - b.w).abs() <= eps
+        && (a.h - b.h).abs() <= eps
+}
+
+/// Issue #919 复核（comment 6229842948）：收集 `snapshot` 中 `byte_range` 覆盖的
+/// cluster 文档矩形并求整段并集（min x/y, max x+w/y+h）。先用 contained 严格匹配，
+/// 为空时退到 overlapping，以兼容 cluster 跨范围合并。返回 None 表示无 cluster 命中。
+fn cluster_union_rect(
+    snapshot: &super::layout_snapshot::EditorLayoutSnapshot,
+    byte_range: (usize, usize),
+) -> Option<SourceRect> {
+    let (bs, be) = byte_range;
+    let mut rects: Vec<SourceRect> = Vec::new();
+    for line in &snapshot.line_snapshots {
+        let contained = line.clusters_contained_in_range(bs, be);
+        let picked: Vec<_> = if contained.is_empty() {
+            line.clusters_overlapping_range(bs, be)
+        } else {
+            contained
+        };
+        for cluster in picked {
+            rects.push(line.source_rect_to_document_rect(&cluster.source_rect));
+        }
+    }
+    if rects.is_empty() {
+        return None;
+    }
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_xw = f64::MIN;
+    let mut max_yh = f64::MIN;
+    for r in &rects {
+        min_x = min_x.min(r.x);
+        min_y = min_y.min(r.y);
+        max_xw = max_xw.max(r.x + r.w);
+        max_yh = max_yh.max(r.y + r.h);
+    }
+    Some(SourceRect {
+        x: min_x,
+        y: min_y,
+        w: max_xw - min_x,
+        h: max_yh - min_y,
+    })
 }
 
 // =========================================================================
@@ -358,8 +429,10 @@ fn render_state_uses_sampled_cursor_position_not_stale_visual() {
 }
 
 /// 评论 36 要求③：真实 `click_at` 路径 —— 逻辑 caret 立即变，视觉 caret 随之追上。
+///
+/// Issue #919：`text_motion` 协同进度已接入，`PointerClick` 不再被统一下压成
+/// Snap，重新启用这条 Tween 回归。
 #[test]
-#[ignore = "TODO(issue-904): 协同模式下 PointerClick 暂时 Snap，待 text_motion 协同进度接入后恢复 Tween"]
 fn pointer_click_moves_visual_caret_after_logical_cursor_changed() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
@@ -420,8 +493,10 @@ fn pointer_click_moves_visual_caret_after_logical_cursor_changed() {
 }
 
 /// 评论 36 要求④：方向键走**同一条** cursor timeline（不为鼠标/键盘造两套）。
+///
+/// Issue #919：`text_motion` 协同进度已接入，`KeyboardNavigation` 恢复独立
+/// Tween，不再被统一下压成 Snap。
 #[test]
-#[ignore = "TODO(issue-904): 协同模式下 KeyboardNavigation 暂时 Snap，待 text_motion 协同进度接入后恢复 Tween"]
 fn keyboard_cursor_move_uses_same_timeline() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
@@ -641,5 +716,725 @@ fn cursor_timeline_finish_stops_frame_requests_and_keeps_target_render_state() {
         );
 
         println!("[BEHAVIOR_VERIFY] 评论36 补充：结束后停止 request_frame_update");
+    });
+}
+
+/// Issue #919：协同模式下**整个光标接线**——正文事务的光标用 `text_motion`
+/// 的 `caret_sample` 推进，真实鼠标点击不被正文动画接管，仍用 `cursor_ctrl`
+/// 自己的视觉位置，并且点击不清掉进行中的正文动画计划。
+///
+/// 此前该测试只验证 `TextMotion` 采样几何，并用测试伪造的 `last_move_source`
+/// 断言"状态选择"；这里补上真实 `click_at` 路径对计划生命周期的验证。
+#[test]
+fn coordinated_text_transaction_cursor_follows_motion_caret_sample() {
+    run_on_qt_thread(|| {
+        use super::cursor_controller::CursorMoveSource;
+        use super::layout_snapshot::SourceRect;
+        use super::text_motion::{TextMotion, TextMotionFrame};
+
+        // 安装一份进行中的正文动画计划。`text_motion` 内部几何由其自身单元测试
+        // 覆盖，这里只验证光标接线与真实点击后的计划生命周期。
+        let install_motion = |item: &mut SujianEditorItem| {
+            *item.pipeline.text_motion_mut() = Some(TextMotion {
+                slices: Vec::new(),
+                started_ms: 0.0,
+                duration_ms: 100,
+                session: item.document_session,
+                target_revision: 0,
+                viewport: SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 400.0,
+                    h: 600.0,
+                },
+                static_exclusions: Vec::new(),
+                required_textures: Vec::new(),
+                caret_from: Some((10.0, 5.0)),
+                caret_to: Some((40.0, 20.0)),
+                paragraph_moves: Vec::new(),
+            });
+        };
+
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("Hello World"));
+        item.current_viewport_height = 600.0;
+        item.set_cursor_animation_duration_ms(120);
+        item.cursor_ctrl.visible = true;
+        item.cursor_ctrl.visual_x = 111.0;
+        item.cursor_ctrl.visual_y = 222.0;
+
+        // 协同动画默认开启，且本帧确有唯一的正文动画计划。
+        assert!(
+            item.effective_animation().shared_timeline,
+            "前置：协同动画默认开启"
+        );
+        install_motion(&mut item);
+
+        let frame = TextMotionFrame {
+            caret_sample: Some((35.0, 17.5)),
+            ..TextMotionFrame::default()
+        };
+
+        // ① 正文事务（TextTransaction）：光标用正文动画的同一进度采样点。
+        item.cursor_ctrl.last_move_source = CursorMoveSource::TextTransaction;
+        let state = item.build_cursor_render_state_for_frame(&frame);
+        assert!(
+            (state.x - 35.0).abs() < 1e-9 && (state.y - 17.5).abs() < 1e-9,
+            "协同正文事务光标必须读 caret_sample，实际 ({}, {})",
+            state.x,
+            state.y
+        );
+        assert!(
+            item.pipeline.text_motion().is_some(),
+            "采样必须基于仍存在的正文动画计划"
+        );
+
+        // ② 真实 `click_at` 路径：点击独立于正文动画，且不清掉进行中的计划。
+        // 第一次点击消费初始 force-snap，第二次点击才建立独立视觉 Tween。
+        item.click_at(0.0, 0.0, false);
+        assert!(
+            item.pipeline.text_motion().is_some(),
+            "点击不得清掉进行中的正文动画计划"
+        );
+        item.click_at(300.0, 10.0, false);
+        assert_eq!(
+            item.cursor_ctrl.last_move_source,
+            CursorMoveSource::PointerClick,
+            "真实 click_at 必须把来源标为 PointerClick"
+        );
+        assert!(
+            item.pipeline.text_motion().is_some(),
+            "真实点击后正文动画计划仍在（点击不拥有正文动画）"
+        );
+        assert!(
+            item.cursor_ctrl.animation.is_some(),
+            "点击必须建立独立于正文动画的光标 Tween"
+        );
+
+        let state = item.build_cursor_render_state_for_frame(&frame);
+        assert!(
+            (state.x - item.cursor_ctrl.visual_x).abs() < 1e-9
+                && (state.y - item.cursor_ctrl.visual_y).abs() < 1e-9,
+            "点击源必须用 cursor_ctrl 自己的视觉位置，而非正文 caret_sample；\
+             实际 state=({}, {}) visual=({}, {})",
+            state.x,
+            state.y,
+            item.cursor_ctrl.visual_x,
+            item.cursor_ctrl.visual_y
+        );
+
+        println!("[BEHAVIOR_VERIFY] #919 协同 caret_sample 与真实点击独立接线 ok");
+    });
+}
+
+/// Issue #919 复核：**真实编辑入口**（而非测试安装的空计划）必须构造出含字形
+/// 切片的非空 `TextMotion`，协同光标再用该计划的同一进度采样。
+///
+/// 上一轮 `coordinated_text_transaction_cursor_follows_motion_caret_sample` 只安装
+/// 了一份 `slices` 为空的计划，复核据此指出它"不模拟从真实编辑构造非空字形动画"。
+/// 本用例走 `insert_text` / `delete_backward` 生产路径，确认 `begin_or_retarget`
+/// 真的由 Core `display_patches` 生成 Reveal/Conceal 覆盖层，计划的 `caret_sample`
+/// 随同一 progress 推进，正文事务光标读取它。
+///
+/// 边界说明：仍在 Qt 布局/runtime 层验证"真实编辑 → 非空计划 → 光标采样"，
+/// 不在此单元测试中真正把 QSG 场景图提交到渲染线程。
+#[test]
+fn real_edit_builds_non_empty_motion_and_caret_follows_it() {
+    run_on_qt_thread(|| {
+        use super::cursor_controller::CursorMoveSource;
+        use super::text_motion::SliceMotion;
+
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("甲乙"));
+        item.current_viewport_height = 600.0;
+        item.set_cursor_animation_duration_ms(120);
+        assert!(item.effective_animation().text, "前置：输入动画默认开启");
+
+        // 光标放到文本末尾（走真实 hit-test/click 入口）。
+        item.click_at(1000.0, 0.0, false);
+        assert_eq!(item.pipeline.cursor(), 6, "前置：光标落在「甲乙」末尾");
+
+        // 第一笔真实插入：必须由编辑本身构造出含字形切片的计划。
+        item.insert_text(QString::from("丙"));
+        assert_eq!(
+            item.cursor_ctrl.last_move_source,
+            CursorMoveSource::TextTransaction,
+            "真实插入必须把光标来源标为 TextTransaction"
+        );
+        let motion = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("真实插入必须建立唯一的局部动画计划");
+        assert!(
+            !motion.slices.is_empty(),
+            "真实编辑的字形动画不得为空（slices={}）",
+            motion.slices.len()
+        );
+        assert!(
+            motion.slices.iter().any(|s| matches!(
+                s,
+                SliceMotion::Reveal { byte_range, .. } if *byte_range == (6, 9)
+            )),
+            "新输入「丙」必须产生覆盖字节区间 (6,9) 的 Reveal，实际 {:?}",
+            motion.slices
+        );
+        assert!(
+            motion.required_textures.iter().all(|id| !id.is_none()),
+            "真实编辑计划必须引用有效（非无纹理哨兵）的源行 id"
+        );
+        assert!(
+            motion.caret_to.is_some(),
+            "真实编辑计划必须带新布局 caret 终点"
+        );
+
+        // 计划的 sample() 在同一 progress 上产出真实覆盖层，中途帧确有像素。
+        let frame = motion.sample(motion.started_ms + f64::from(motion.duration_ms) / 2.0);
+        assert!(
+            !frame.overlays.is_empty(),
+            "真实编辑计划的中间帧必须产出字形覆盖层"
+        );
+        let sampled = frame.caret_sample.expect("真实编辑计划必须带 caret 采样");
+
+        // 正文事务光标读该计划的 caret_sample，而不是 cursor_ctrl 的静态视觉位置。
+        let state = item.build_cursor_render_state_for_frame(&frame);
+        assert!(
+            (state.x - sampled.0).abs() < 1e-9 && (state.y - sampled.1).abs() < 1e-9,
+            "正文事务光标必须读真实编辑计划的 caret_sample {:?}，实际 ({}, {})",
+            sampled,
+            state.x,
+            state.y
+        );
+
+        // 第二笔真实删除：从上一笔的新布局继续，生成旧字 Conceal。
+        item.delete_backward();
+        let motion = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("真实删除必须建立局部动画计划");
+        assert!(!motion.slices.is_empty(), "真实删除的字形动画不得为空");
+        assert!(
+            motion
+                .slices
+                .iter()
+                .any(|s| matches!(s, SliceMotion::Conceal { .. })),
+            "真实删除必须产生旧字 Conceal，实际 {:?}",
+            motion.slices
+        );
+
+        println!("[BEHAVIOR_VERIFY] #919 真实编辑构造非空字形动画且协同光标跟随同一采样 ok");
+    });
+}
+
+/// Issue #919 复核：真实编辑必须把本帧接管所需的**源行纹理**准备好放进
+/// `texture_cache` —— 这是 Rust 侧在向 QSG 提交动画层之前的最后一步。
+///
+/// 上一轮 `real_edit_builds_non_empty_motion_and_caret_follows_it` 只断言
+/// `required_textures` 引用的是非哨兵行 id，并未验证这些纹理真的已在缓存中就绪。
+/// `scene_graph_renderer::render_frame` 的提交前提是
+/// `LocalTextPlan::has_animation_resources == true`：缺任一张源纹理时
+/// `prepare_text_animation_layer` 会 `continue` 掉缺纹理的 glyph，静态层画完整
+/// canonical、动画层一帧也提交不出去。本用例走真实 insert/delete 路径，确认编辑
+/// 结束后计划引用的旧/新源行纹理都已就绪，且中间帧确实存在具备可见面积的覆盖层。
+///
+/// 边界说明：仍在 Qt 布局/runtime 层验证"真实编辑 → 资源就绪 → 可提交动画层"，
+/// 不真正把 QSG 场景图提交到渲染线程（那需要活的 QQuickWindow 与渲染线程帧）。
+#[test]
+fn real_edit_prepares_ready_source_textures_for_animation_layer() {
+    run_on_qt_thread(|| {
+        use super::render_plan::LocalTextPlan;
+
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("甲乙"));
+        item.current_viewport_height = 600.0;
+        item.set_cursor_animation_duration_ms(120);
+        item.click_at(1000.0, 0.0, false);
+
+        // 检查当前计划在其采样帧上，接管所需的源纹理是否全部就绪，
+        // 且中间帧确实存在可提交的可见覆盖层。
+        let assert_committable = |item: &SujianEditorItem, label: &str| {
+            let motion = item
+                .pipeline
+                .text_motion()
+                .cloned()
+                .unwrap_or_else(|| panic!("{label}: 必须存在局部动画计划"));
+            let frame = motion.sample(motion.started_ms + f64::from(motion.duration_ms) / 2.0);
+            let plan = LocalTextPlan {
+                overlays: frame.overlays.clone(),
+                static_holes: frame.static_holes.clone(),
+                required_textures: frame.required_textures.clone(),
+                paragraph_y_offsets: frame.paragraph_y_offsets.clone(),
+            };
+            let cache = item.pipeline.texture_cache();
+            let missing = plan.missing_textures(cache);
+            assert!(
+                missing.is_empty(),
+                "{label}: 真实编辑后动画源纹理必须已就绪，缺失 {missing:?}"
+            );
+            assert!(
+                plan.has_animation_resources(cache),
+                "{label}: has_animation_resources 必须为真，否则 QSG 动画层不会提交"
+            );
+            // `has_animation_resources` 只按键存在判断；这里进一步确认每个必需源
+            // 纹理确实是含像素的行图，而不是空 QImage 撑起的假"已就绪"。
+            for id in &plan.required_textures {
+                let image = cache
+                    .get_line(id)
+                    .unwrap_or_else(|| panic!("{label}: 源纹理 {id:?} 必须在缓存中"));
+                assert!(
+                    line_image_has_pixels(image),
+                    "{label}: 源纹理 {id:?} 必须是含像素的行图，不能是空 QImage"
+                );
+            }
+            assert!(
+                frame
+                    .overlays
+                    .iter()
+                    .any(|g| g.clip_rect.w > 0.0 && g.clip_rect.h > 0.0),
+                "{label}: 中间帧必须存在具备可见面积的覆盖层，实际 {:?}",
+                frame.overlays
+            );
+        };
+
+        // 插入：新字 Reveal 的源纹理必须就绪。
+        item.insert_text(QString::from("丙"));
+        assert_committable(&item, "插入");
+
+        // 删除：从前一笔的新布局继续，旧字 Conceal 的源纹理也必须就绪。
+        item.delete_backward();
+        assert_committable(&item, "删除");
+
+        println!("[BEHAVIOR_VERIFY] #919 真实编辑的动画源纹理就绪、覆盖层可提交 QSG 动画层 ok");
+    });
+}
+
+/// Issue #919 复核：`has_animation_resources` / `missing_textures` 是"静态孔洞与
+/// 动画层同帧原子提交"的 Rust 侧闸门 —— 缺任一源纹理时必须整体不接管，静态层画
+/// 完整 canonical，绝不允许"静态挖了空但动画没画"。上一轮只在真实编辑的正向路径
+/// 断言了闸门为真，这里补上反向路径：空缓存/只补一侧时闸门必须为假且逐一列出缺失的
+/// `LineSnapshotId`，两侧补齐后才为真。
+#[test]
+fn missing_source_texture_keeps_animation_plan_not_ready() {
+    use super::render_plan::LocalTextPlan;
+    use super::snapshot_id::LineSnapshotId;
+    use super::texture_cache::TextureCache;
+
+    let id_old = LineSnapshotId::new(7, 1, 0);
+    let id_new = LineSnapshotId::new(8, 1, 0);
+    let plan = LocalTextPlan {
+        required_textures: vec![id_old, id_new],
+        ..LocalTextPlan::default()
+    };
+
+    let one_pixel = || {
+        qmetaobject::QImage::new(
+            qmetaobject::QSize {
+                width: 1,
+                height: 1,
+            },
+            qmetaobject::ImageFormat::ARGB32_Premultiplied,
+        )
+    };
+
+    run_on_qt_thread(move || {
+        let mut cache = TextureCache::new();
+
+        // 空缓存：缺任一张源纹理时整体不接管，并逐一列出缺失 id。
+        assert!(
+            !plan.has_animation_resources(&cache),
+            "缺源纹理时不得判定为可接管"
+        );
+        assert_eq!(plan.missing_textures(&cache), vec![id_old, id_new]);
+
+        // 只补旧侧：仍缺新侧，闸门保持关闭。
+        cache.insert_line(id_old, one_pixel());
+        assert!(
+            !plan.has_animation_resources(&cache),
+            "只补一侧仍不得判定为可接管"
+        );
+        assert_eq!(plan.missing_textures(&cache), vec![id_new]);
+
+        // 两侧补齐后才允许同帧提交静态孔洞与动画层。
+        cache.insert_line(id_new, one_pixel());
+        assert!(plan.has_animation_resources(&cache));
+        assert!(plan.missing_textures(&cache).is_empty());
+
+        println!("[BEHAVIOR_VERIFY] #919 缺源纹理时动画计划保持不接管并列出缺失 id ok");
+    });
+}
+
+/// Issue #919：关闭正文吞吐动画后，真实编辑入口不得再建立局部动画计划，
+/// 因而也不会产生静态孔洞或字形覆盖层，静态层直接画完整 canonical。
+///
+/// 议题明确要求「关闭文字动画时不生成 holes/动态片段，直接只画 canonical
+/// 静态正文」。此前 runtime 用例只覆盖动画开启时的正向路径；本用例补上开关
+/// 关闭分支，并确认开关可逆——重新开启后同一编辑入口恢复构造计划。
+///
+/// Issue #919 复核（comment-id 6221824024）：原版只对比一次插入前后
+/// `current_layout_snapshot` 的 revision，但 `set_plain_text` 调用
+/// `reset_document_visual_state()` 把 snapshot 置 None，`click_at` 不安装新
+/// snapshot，`snap_before` 恒为 None，`assert_ne!(Some(snap_after), None)` 恒真，
+/// 没有真正覆盖「关闭动画时连续编辑各自提交新 canonical revision」的语义。
+/// 本版改为两次关闭动画的真实插入各自取 revision，`assert_ne!(snap1, snap2)`
+/// 真正约束版本链递增，再重新开启动画验证同一入口恢复构造 motion。
+#[test]
+fn typing_animation_disabled_edit_produces_no_motion_or_static_holes() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("甲乙"));
+        item.current_viewport_height = 600.0;
+        assert!(item.effective_animation().text, "前置：输入动画默认开启");
+
+        // 协同模式是完整模式（`animation::resolve` 恒令 text=true），先退出协同，
+        // 独立开关才能表达"关闭正文动画"。
+        item.set_coordinated_animation_enabled(false);
+        item.set_typing_animation_enabled(false);
+        assert!(
+            !item.effective_animation().text,
+            "退出协同并关闭输入动画后，正文动画策略必须为 false"
+        );
+        assert!(
+            item.pipeline.text_motion().is_none(),
+            "关闭动画时不得残留局部动画计划"
+        );
+
+        // 真实插入仍会更新正文，但不得建立动画计划。先定位到末尾。
+        item.click_at(1000.0, 0.0, false);
+
+        // 第一笔关闭动画插入"丙"：不得建立 motion，但必须安装新 canonical snapshot。
+        item.insert_text(QString::from("丙"));
+        assert!(
+            item.pipeline.text_motion().is_none(),
+            "关闭文字动画后真实插入不得建立 text_motion 计划"
+        );
+        // Issue #919：关闭正文动画只影响局部动画计划，不影响 canonical 提交。
+        // 即使动画关闭，编辑仍安装一份新的 canonical layout snapshot（其 revision
+        // 由 `LayoutRevision::next()` 推进），供后续帧/光标使用，不依赖
+        // text_animation_enabled。
+        let snap1 = item
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .expect("关闭文字动画时真实编辑仍必须安装新的 canonical layout snapshot")
+            .revision;
+        // 与 `qquickitem_impl` 相同的消费路径：无计划 → 默认空帧 → 无孔洞/覆盖层。
+        let motion_frame_1 = item
+            .pipeline
+            .text_motion()
+            .map(|motion| motion.sample(0.0))
+            .unwrap_or_default();
+        assert!(
+            motion_frame_1.static_holes.is_empty(),
+            "关闭文字动画时静态层不得挖孔: {:?}",
+            motion_frame_1.static_holes
+        );
+        assert!(
+            motion_frame_1.overlays.is_empty(),
+            "关闭文字动画时不得有字形覆盖层: {:?}",
+            motion_frame_1.overlays
+        );
+
+        // 第二笔继续保持动画关闭，插入"丁"：仍不得建立 motion，且必须提交一份
+        // 与 snap1 不同的新 canonical revision。这才是「关闭动画时连续编辑各自
+        // 提交新 canonical revision」的真正约束，而不是与 None 对比的恒真断言。
+        item.insert_text(QString::from("丁"));
+        assert!(
+            item.pipeline.text_motion().is_none(),
+            "继续保持文字动画关闭时第二笔真实插入仍不得建立 text_motion 计划"
+        );
+        let snap2 = item
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .expect("第二笔关闭动画编辑仍必须安装新的 canonical layout snapshot")
+            .revision;
+        assert_ne!(
+            snap1, snap2,
+            "两次关闭动画的真实编辑依然各自提交新 canonical revision"
+        );
+        let motion_frame_2 = item
+            .pipeline
+            .text_motion()
+            .map(|motion| motion.sample(0.0))
+            .unwrap_or_default();
+        assert!(
+            motion_frame_2.static_holes.is_empty(),
+            "关闭文字动画时静态层不得挖孔: {:?}",
+            motion_frame_2.static_holes
+        );
+        assert!(
+            motion_frame_2.overlays.is_empty(),
+            "关闭文字动画时不得有字形覆盖层: {:?}",
+            motion_frame_2.overlays
+        );
+
+        // 重新开启后，同一编辑入口恢复构造局部动画计划（开关可逆、编辑未受损）。
+        item.set_typing_animation_enabled(true);
+        assert!(item.effective_animation().text);
+        item.insert_text(QString::from("戊"));
+        let motion = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("重新开启后真实插入必须恢复建立局部动画计划");
+        assert!(
+            !motion.slices.is_empty(),
+            "重新开启后真实插入的字形动画不得为空"
+        );
+
+        println!("[BEHAVIOR_VERIFY] #919 关闭文字动画不生成孔洞/覆盖层且开关可逆 ok");
+    });
+}
+
+/// Issue #919：连续两笔真实编辑必须走同一条 canonical revision 链。
+///
+/// 原先 `pipeline::tests::consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revision`
+/// 在 pipeline 内部用 `prepare_edit_motion` + 整章 `current_layout_snapshot` 驱动，
+/// #919 把普通编辑路径收敛到唯一的 `TextMotion` 局部计划后，该 helper 不再经过
+/// `prepare_edit_motion`，用例长期 `#[ignore]`、放开即失败。本用例用当前唯一入口
+/// （`insert_text` → `transaction.rs::record_transaction`）验证同一语义：
+///
+/// - 每一笔真实编辑都安装一份新的 canonical layout snapshot（revision 由
+///   `LayoutRevision::next()` 推进），第二笔起 `text_revision` 继续严格递增；
+/// - 每一笔局部 `TextMotion` 的 `target_revision` 都绑定该笔的 Core new_revision；
+/// - 第二笔以上一笔安装的 canonical snapshot 为 base（`current_layout_snapshot`
+///   在第二笔前已是第一笔的目标），因此第二笔的 revision 与第一笔不同。
+///
+/// Issue #919 复核（comment-id 6221824024）：原版只断言 `r1 >= r0`（即使没增长
+/// 也能过），且第二笔末尾追加只生成 Reveal，无法验证「第二笔以第一笔布局为 base」。
+/// 本版改为：第一笔严格 `assert!(r1 > r0)`；第二笔先 `click_at(0.0, 0.0, false)`
+/// 定位段首再插入"丁"，让原有"甲乙丙"被挤动生成 Shift，并验证 Shift 的 `from`
+/// 与第一笔 `snap1` 中对应未改文字的真实旧布局几何一致、`to` 与第二笔 `snap2`
+/// 新位置一致——这才是从实际动画计划验证 base 链，而不只是对比两个 revision 编号。
+#[test]
+fn consecutive_real_edits_commit_canonical_revision_chain() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("甲乙"));
+        item.current_viewport_height = 600.0;
+        item.click_at(1000.0, 0.0, false);
+
+        // Issue #919 复核（comment 6229842948）：`set_plain_text` 现已统一为 Load
+        // 路线（properties.rs），不再走 `synthetic_edit_result(new_revision=1)` +
+        // `record_transaction`，`text_revision` 直接绑定 `mirror().revision()`。
+        // 此处断言生产加载路径本身让两者一致，不再手动补 `set_text_revision`。
+        assert_eq!(
+            item.pipeline.text_revision(),
+            item.pipeline.mirror().revision(),
+            "set_plain_text 后 text_revision 必须等于 Core mirror revision（生产 Load 路线绑定）"
+        );
+
+        let r0 = item.pipeline.text_revision();
+
+        // 第一笔：甲乙 -> 甲乙丙。
+        item.insert_text(QString::from("丙"));
+        let r1 = item.pipeline.text_revision();
+        assert!(
+            r1 > r0,
+            "第一笔真实编辑必须严格推进 text_revision（{r0} -> {r1}）"
+        );
+        // 保留完整 EditorLayoutSnapshot（clone，避免跨第二笔 mutable borrow），
+        // 供第二笔 Shift 几何断言在 snap1.line_snapshots 中查找 from 对应的旧布局 cluster。
+        let snap1 = item
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .expect("第一笔后必须安装新的 canonical layout snapshot")
+            .clone();
+        let motion1 = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("第一笔必须建立局部动画计划");
+        assert_eq!(
+            motion1.target_revision, r1,
+            "第一笔动画计划的目标 revision 必须绑定该笔 Core new_revision"
+        );
+
+        // 第二笔：段首插入"丁" -> 丁甲乙丙。原有"甲乙丙"被挤动，应生成 Shift。
+        // base 即第一笔安装的 canonical snapshot，Shift.from 必须落在 snap1 的
+        // cluster 文档几何上，Shift.to 必须落在 snap2 的 cluster 文档几何上。
+        item.click_at(0.0, 0.0, false);
+        item.insert_text(QString::from("丁"));
+        let r2 = item.pipeline.text_revision();
+        assert!(
+            r2 > r1,
+            "第二笔真实编辑必须继续推进 text_revision（{r1} -> {r2}）"
+        );
+        let snap2 = item
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .expect("第二笔后必须安装新的 canonical layout snapshot");
+        assert_ne!(
+            snap1.revision, snap2.revision,
+            "第二笔必须安装一份新的 canonical layout revision，而不是沿用第一笔目标"
+        );
+        let motion2 = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("第二笔必须建立局部动画计划");
+        assert_eq!(
+            motion2.target_revision, r2,
+            "第二笔动画计划的目标 revision 必须绑定该笔 Core new_revision"
+        );
+
+        // 核心新增：从实际动画计划验证第二笔以第一笔布局为 base。
+        // 段首插入"丁"后，原有"甲乙丙"整体右移，应在 motion2.slices 中生成 Shift。
+        // `merge_adjacent_shifts()` 可能合并连续文本为一个 Shift，故 byte_range
+        // 可能覆盖整块"甲乙丙"（new 坐标），不假设逐字拆分。
+        let shifts: Vec<_> = motion2
+            .slices
+            .iter()
+            .filter_map(|s| match s {
+                SliceMotion::Shift {
+                    new,
+                    from,
+                    to,
+                    byte_range,
+                    ..
+                } => Some((*new, *from, *to, *byte_range)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !shifts.is_empty(),
+            "段首插入必须为被挤动的原有文字生成 Shift（实际 slices: {:?}）",
+            motion2.slices
+        );
+
+        // Issue #919 复核（comment 6229842948）：`merge_adjacent_shifts()` 会把相邻
+        // 未改 cluster 合并为一个 Shift，合并后的 from/to 是整段并集矩形，byte_range
+        // 覆盖整段。因此不能把合并后的大矩形与单个 cluster 比较。这里为每条 Shift 将
+        // new byte_range 经段首插入"丁"的 UTF-8 3 字节增量映回 snap1 旧范围
+        //（old = new.start-3 .. new.end-3），分别收集 snap1 旧范围 / snap2 新范围
+        // 覆盖的 cluster 文档矩形求整段并集，断言 Shift.from=旧并集、Shift.to=新并集。
+        // 本测试尚未提交 QSG 帧，使用第一笔当前 canonical 作为旧布局（第二笔 base）。
+        let eps = 1e-4;
+        for (new_slice, from, to, byte_range) in &shifts {
+            // from 与 to 必须确实有位移（x 或 y 不同）。
+            assert!(
+                (from.x - to.x).abs() > eps || (from.y - to.y).abs() > eps,
+                "Shift 的 from 与 to 必须确实有位移（byte_range {:?}, from {:?}, to {:?}）",
+                byte_range,
+                from,
+                to
+            );
+
+            let (bs, be) = *byte_range;
+            // 段首插入"丁"（UTF-8 3 字节）后，snap2 中未改片段的 new byte_range 比
+            // snap1 旧范围整体后移 3 字节，映回旧范围 old = (bs-3, be-3)。
+            let old_range = (bs.saturating_sub(3), be.saturating_sub(3));
+
+            let expected_to = cluster_union_rect(snap2, (bs, be)).expect(
+                "snap2 中 byte_range 必须覆盖至少一个 cluster，才能计算 Shift.to 期望并集",
+            );
+            let expected_from = cluster_union_rect(&snap1, old_range).expect(
+                "snap1 中映回的旧 byte_range 必须覆盖至少一个 cluster，才能计算 Shift.from 期望并集",
+            );
+
+            assert!(
+                rects_approx_eq(expected_from, *from, eps),
+                "Shift.from {:?} 必须等于 snap1 旧范围 {:?} 覆盖 cluster 的整段并集 {:?}\
+                 （byte_range {:?}），证明第二笔以第一笔布局为 base",
+                from, old_range, expected_from, byte_range
+            );
+            assert!(
+                rects_approx_eq(expected_to, *to, eps),
+                "Shift.to {:?} 必须等于 snap2 新范围 {:?} 覆盖 cluster 的整段并集 {:?}\
+                 （byte_range {:?}）",
+                to, (bs, be), expected_to, byte_range
+            );
+
+            // Shift.new.source.snapshot_id 必须与 snap2 中覆盖该 byte_range 的行快照 id 一致。
+            let mut snapshot_id_matched = false;
+            for line in &snap2.line_snapshots {
+                if line.byte_start <= bs && line.byte_end >= be {
+                    if new_slice.source.snapshot_id == line.id {
+                        snapshot_id_matched = true;
+                        break;
+                    }
+                }
+            }
+            assert!(
+                snapshot_id_matched,
+                "Shift.new.source.snapshot_id {:?} 必须与 snap2 中覆盖 byte_range {:?} 的行快照 id 一致",
+                new_slice.source.snapshot_id, byte_range
+            );
+        }
+
+        println!(
+            "[BEHAVIOR_VERIFY] #919 连续两笔真实编辑提交同一条 canonical revision 链 ok"
+        );
+    });
+}
+
+/// Issue #919 复核（comment 6230082812）：`reload_plain_text` 选区恢复条件修正。
+///
+/// 旧代码用 `mirror.cursor() != clamp_to_char_boundary(new_text, old_cursor)` 作
+/// 选区恢复条件，但 `load_text` 内部已把新 kernel 的 cursor/anchor 钳到
+/// `clamp_to_char_boundary(new_text, old_cursor)`，条件恒不成立，非空选区
+///（如 anchor=1/head=4）会被新 kernel 的折叠选区覆盖成 anchor=head。
+/// 修正后按 `new_anchor != new_cursor` 决定是否恢复选区；折叠光标由 `load_text`
+/// 本身保留，无需额外 SetSelection。版本绑定放在恢复选区之后。
+///
+/// 本测试先在旧正文 "abcdef" 上设置非空选区 [1, 4)，调用
+/// `reload_plain_text("abcdefg")`，断言：
+/// - 新正文为 "abcdefg"；
+/// - `selection_range() == (1, 4)`（非空选区保留，不被折叠选区覆盖）；
+/// - `text_revision() == mirror.revision()`（版本绑定与 Core 一致）；
+/// - 无跨文档残留 text_motion（reload 是 Load 路线，`reset_document_visual_state`
+///   已清空 text_motion，不产生编辑动画）。
+#[test]
+fn reload_plain_text_preserves_non_empty_selection() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("abcdef"));
+        // 设置非空选区 [1, 4)（"bcd"）。
+        item.pipeline.set_selection(1, 4);
+        assert_eq!(
+            item.pipeline.selection_range(),
+            (1, 4),
+            "前置：reload 前必须有非空选区 [1, 4)"
+        );
+        assert_eq!(
+            item.pipeline.committed_text(),
+            "abcdef",
+            "前置：reload 前正文为 abcdef"
+        );
+
+        // reload 到新正文 "abcdefg"（末尾追加一个字符，old_anchor=1/old_cursor=4
+        // 仍落在合法 char boundary，非空选区应保留）。
+        item.reload_plain_text(QString::from("abcdefg"));
+
+        // 新正文。
+        assert_eq!(
+            item.pipeline.committed_text(),
+            "abcdefg",
+            "reload 后正文必须更新为 abcdefg"
+        );
+        // 非空选区保留——这是本轮修正的核心断言。
+        assert_eq!(
+            item.pipeline.selection_range(),
+            (1, 4),
+            "reload 后非空选区 [1, 4) 必须保留，不能被折叠选区覆盖\
+            （旧条件 mirror.cursor()!=clamp(...) 恒不成立会丢失选区）"
+        );
+        // 版本绑定与 Core 一致。
+        assert_eq!(
+            item.pipeline.text_revision(),
+            item.pipeline.mirror().revision(),
+            "reload 后 text_revision 必须等于 Core mirror revision（Load 路线绑定）"
+        );
+        // 无跨文档残留 text_motion（reload 是 Load 路线，不产生编辑动画）。
+        assert!(
+            item.pipeline.text_motion().is_none(),
+            "reload 是 Load 路线，reset_document_visual_state 已清空 text_motion，\
+             不应残留跨文档 text_motion"
+        );
+
+        println!("[BEHAVIOR_VERIFY] #919 reload_plain_text 保留非空选区 ok");
     });
 }

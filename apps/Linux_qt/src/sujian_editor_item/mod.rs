@@ -571,7 +571,7 @@ pub struct SujianEditorItem {
     ///
     /// 快速连续输入/删除时直接从这里重定向，而不是从静态起点重来。
     /// 无历史队列、无第二套引擎；跨 session 直接丢弃。
-    last_drawn_local_frame: Option<text_motion::LocalTextFrame>,
+    last_drawn_local_frame: Option<text_motion::LocalDrawnFrame>,
     /// Issue #904 评论 4: 已为当前局部动画写过"首次真正提交"日志的 (session, revision)。
     ///
     /// 只在首次把局部覆盖层真正提交到 QSG 时记一条，不逐帧刷屏。
