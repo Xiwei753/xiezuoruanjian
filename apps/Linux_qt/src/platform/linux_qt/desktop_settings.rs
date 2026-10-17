@@ -39,6 +39,8 @@ pub struct DesktopSettings {
     pub window_height: f64,
     /// 章节导航 / 列表侧栏宽度（vp）。
     pub desktop_sidebar_width: f64,
+    /// 最右工具 pane 宽度（vp）。Issue #922：右工具栏宽度由 SplitView 拖动后持久化。
+    pub desktop_tool_pane_width: f64,
     /// 编辑器正文列宽度（vp）。0 表示不额外限宽。
     pub desktop_editor_width: f64,
 }
@@ -51,6 +53,8 @@ impl Default for DesktopSettings {
             window_height: 768.0,
             // 与旧 Core LayoutMetrics.list_pane_width_dp 一致的合理默认。
             desktop_sidebar_width: 240.0,
+            // Issue #922：右工具 pane 宽度默认 240（与 LeftDrawer / 主题一致）。
+            desktop_tool_pane_width: 240.0,
             desktop_editor_width: 0.0,
         }
     }
@@ -89,6 +93,15 @@ fn desktop_settings_from_legacy(value: &Value) -> DesktopSettings {
             ],
         )
         .unwrap_or(defaults.desktop_sidebar_width),
+        desktop_tool_pane_width: legacy_number(
+            value,
+            &[
+                "desktopToolPaneWidth",
+                "linux_qt_tool_pane_width",
+                "desktop_tool_pane_width",
+            ],
+        )
+        .unwrap_or(defaults.desktop_tool_pane_width),
         desktop_editor_width: legacy_number(
             value,
             &[
@@ -199,6 +212,7 @@ mod tests {
         assert_eq!(d.window_width, 1100.0);
         assert_eq!(d.window_height, 768.0);
         assert_eq!(d.desktop_sidebar_width, 240.0);
+        assert_eq!(d.desktop_tool_pane_width, 240.0);
         assert_eq!(d.desktop_editor_width, 0.0);
     }
 
@@ -208,11 +222,13 @@ mod tests {
             window_width: 1280.0,
             window_height: 800.0,
             desktop_sidebar_width: 320.0,
+            desktop_tool_pane_width: 360.0,
             desktop_editor_width: 640.0,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("\"windowWidth\""));
         assert!(json.contains("\"desktopSidebarWidth\""));
+        assert!(json.contains("\"desktopToolPaneWidth\""));
         let back: DesktopSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(back, d);
     }
@@ -231,6 +247,7 @@ mod tests {
                 window_width: 1280.0,
                 window_height: 800.0,
                 desktop_sidebar_width: 320.0,
+                desktop_tool_pane_width: 240.0,
                 desktop_editor_width: 640.0,
             }
         );
@@ -270,8 +287,32 @@ mod tests {
                 window_width: 1440.0,
                 window_height: 900.0,
                 desktop_sidebar_width: 260.0,
+                desktop_tool_pane_width: 240.0,
                 desktop_editor_width: 700.0,
             }
+        );
+    }
+
+    #[test]
+    fn legacy_tool_pane_width_migrates() {
+        let legacy = serde_json::json!({
+            "desktopToolPaneWidth": 300.0,
+            "linux_qt_tool_pane_width": 200.0,
+        });
+        assert_eq!(
+            desktop_settings_from_legacy(&legacy).desktop_tool_pane_width,
+            300.0
+        );
+        let snake = serde_json::json!({ "desktop_tool_pane_width": 280.0 });
+        assert_eq!(
+            desktop_settings_from_legacy(&snake).desktop_tool_pane_width,
+            280.0
+        );
+        // 缺失时回退默认值。
+        assert_eq!(
+            desktop_settings_from_legacy(&serde_json::json!({}))
+                .desktop_tool_pane_width,
+            DesktopSettings::default().desktop_tool_pane_width
         );
     }
 

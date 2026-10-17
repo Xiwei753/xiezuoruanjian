@@ -3,20 +3,20 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：把 Core 的七角色布局真正落到 Qt 树结构上
-//   - 上层是一条贯通整窗的工具条带，按 Core 的 ToolbarLeading / ToolbarCenter /
-//     ToolbarTrailing 三个 bounds 分组；
-//   - 下层是内容区，装 ChapterNavigation | Editor | ToolPane | ToolRail。
-// 约束（Issue #825）：
-//   - 条带高度和三个分组的宽度都来自 Core 的 workbench plan（WritingWorkspace 注入
-//     bounds）；Core 判 SinglePane 时不给工具条 bounds，此时分组按内容自适应，
-//     保证窄窗口仍然排得下。
-//   - Issue #825 复核5：三个分组容器严格占 Core 的 bounds，段间 spacing=0，
-//     条带外层不再加 margin/padding；视觉内边距只加在各组内部。
-//   - Issue #825 复核6第3点：Qt Quick Layouts 的 Layout.*Margin 是 item **外部**
-//     margin，会放大该 item 在布局里占的有效 cell 宽度——所以角色 wrapper 上
-//     一个 Layout margin 都不能有。三个角色 wrapper 的 min/preferred/max 宽度
-//     严格等于 Core 的 bounds，视觉留白一律放在 wrapper **内部**子项的 anchors 上。
+// 职责：把 Qt 平台自管的写作工作台外壳落到 Qt 树结构上
+//   - 上层是一条贯通整窗的工具条带，按 ToolbarLeading / ToolbarCenter /
+//     ToolbarTrailing 三个分组；
+//   - 下层是内容区，装「章节导航 | 正文 | 工具 pane | 工具 rail」。
+// 约束（Issue #825 / #922）：
+//   - 条带高度和三个分组的宽度由 WritingWorkspace（Qt 本地布局）注入：多栏工作台
+//     跟随 SplitView 三栏实时宽度，正文（Editor 列）吃满剩余宽度；SinglePane 时
+//     分组按内容自适应，保证窄窗口仍然排得下。
+//   - 三个分组容器严格占注入宽度，段间 spacing=0，条带外层不再加 margin/padding；
+//     视觉内边距只加在各组内部。
+//   - Qt Quick Layouts 的 Layout.*Margin 是 item **外部** margin，会放大该 item 在
+//     布局里占的有效 cell 宽度——所以角色 wrapper 上一个 Layout margin 都不能有。
+//     三个角色 wrapper 的 min/preferred/max 宽度严格等于注入宽度，视觉留白一律放在
+//     wrapper **内部**子项的 anchors 上。
 //   - 章节树 / 工具 pane / 工具 rail 只占内容区，不穿进工具条带。
 //   - 返回 / 撤销 / 重做走真实路径（sujianEditor.undo()/redo()），不摆假按钮。
 // =============================================================================
@@ -31,7 +31,7 @@ ColumnLayout {
 
     required property var dt
 
-    // ── Core 注入的工具条 bounds（dp）。-1 表示 Core 没给（SinglePane），按内容自适应。──
+    // ── Core 注入的工具条 bounds（dp）。-1 表示未给（SinglePane），按内容自适应。──
     property real toolbarHeight: -1
     property real leadingWidth: -1
     property real centerWidth: -1
@@ -57,7 +57,8 @@ ColumnLayout {
     signal requestSearch()
     signal openSettings()
 
-    // Issue #825：内容区插槽。WritingWorkspace 把 SplitView（四角色）放进来。
+    // Issue #825 / #922：内容区插槽。WritingWorkspace 放进外层 RowLayout
+    // （内含 SplitView 三栏 + 固定宽最右工具 rail）。
     default property alias contentData: contentSlot.data
 
     spacing: 0

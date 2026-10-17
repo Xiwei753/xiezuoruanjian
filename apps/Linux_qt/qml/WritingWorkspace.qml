@@ -64,9 +64,6 @@ Rectangle {
     property bool rightPaneCollapsed: true
     readonly property bool drawerOpen: !root.rightPaneCollapsed
     property bool leftPaneCollapsed: false
-    // 拖拽起始宽度记录（内部属性）
-    property real _dragStartChapterNavWidth: 0
-    property real _dragStartToolPaneWidth: 0
     // Issue #833 复核：SinglePane 下章节导航作为覆盖在正文上的浮层打开，
     // 不参与 RowLayout 宽度分配；多栏工作台下章节导航由 leftPaneCollapsed 管理，
     // 这个属性只在 SinglePane 下生效。
@@ -88,21 +85,21 @@ Rectangle {
     readonly property int toolbarMinHeight: 64
     readonly property int toolbarLeadingMinWidth: 200
     readonly property int toolbarTrailingMinWidth: 200
-
-    // 用户可拖拽的侧栏 / 工具面板宽度（Qt 本地 UI 状态，多栏工作台内生效）。
-    property real chapterNavWidth: 320
-    property real toolPaneWidth: 240
+    // Issue #922：SplitView 原生分隔线宽度（vp）。拖动条由 Qt 接管，只看得到这条线。
+    readonly property int splitHandleWidth: 6
 
     // 一级断点：窗口够宽够高才进入多栏工作台。
     readonly property bool wideWorkbench: root.width >= root.workbenchMinWidth
                                             && root.height >= root.workbenchMinHeight
 
     // 当前可见 pane 的多栏最小需求宽度。放不下就退回单栏，不把栏压成细线。
+    // 展开的每个可见 pane 各需一条可见分隔线，预算里要算上 splitHandleWidth，
+    // 否则刚好卡阈值时正文会被 handle 挤小。
     function workbenchFitsFor(chapterVisible, toolVisible) {
         if (!root.wideWorkbench)
             return false
-        var needed = (chapterVisible ? root.listPaneMinWidth : 0)
-                   + (toolVisible ? root.toolPaneMinWidth : 0)
+        var needed = (chapterVisible ? root.listPaneMinWidth + root.splitHandleWidth : 0)
+                   + (toolVisible ? root.toolPaneMinWidth + root.splitHandleWidth : 0)
                    + root.toolRailWidth
                    + root.editorMinWidth
         return root.width >= needed
@@ -129,25 +126,18 @@ Rectangle {
 
     // 工具条带三个分组的尺寸。多栏时 leading/trailing 跟随左右栏分割线，
     // 让顶栏分段与内容栏边界对齐；单栏时交给组件按内容自适应（-1）。
-    // effective* 与 RowLayout 的压缩口径一致：面板先拿 preferred，空间不足时
-    // 压到 min，正文始终保住 editorMinWidth。
-    function effectiveChapterNavWidth() {
-        return Math.max(root.listPaneMinWidth,
-                        Math.min(root.chapterNavWidth, root._chapterNavMaxWidth))
-    }
-    function effectiveToolPaneWidth() {
-        return Math.max(root.toolPaneMinWidth,
-                        Math.min(root.toolPaneWidth, root._toolPaneMaxWidth))
-    }
+    // SplitView 拖动时会自己更新 sidebarRect/rightDrawerRect 的实际宽度，
+    // 这里直接读当前实际显示宽度，与 SplitView 原生布局保持同一尺度。
     readonly property real toolbarHeight: root.multiPane ? root.toolbarMinHeight : -1
     readonly property real toolbarCenterWidth: -1
     readonly property real toolbarLeadingWidth: root.multiPane
         ? Math.max(root.toolbarLeadingMinWidth,
-                   root.leftPaneCollapsed ? 0 : root.effectiveChapterNavWidth())
+                   root.leftPaneCollapsed ? 0 : (sidebarRect.visible ? sidebarRect.width : 0))
         : -1
     readonly property real toolbarTrailingWidth: root.multiPane
         ? Math.max(root.toolbarTrailingMinWidth,
-                   root.toolRailWidth + (root.drawerOpen ? root.effectiveToolPaneWidth() : 0))
+                   root.toolRailWidth + (root.drawerOpen && rightDrawerRect.visible
+                                         ? rightDrawerRect.width : 0))
         : -1
 
     // 单栏时正文纸面的最大宽度（多栏时正文跟随 Editor 列宽度，不额外限宽）。
@@ -156,34 +146,39 @@ Rectangle {
         ? Math.min(840, Math.max(0, root.width - 64))
         : 0
 
-    // 拖拽时允许的侧栏 / 工具面板宽度上限：始终给正文留 editorMinWidth。
-    readonly property real _chapterNavMaxWidth: Math.max(root.listPaneMinWidth,
-        root.width - root.toolRailWidth - root.editorMinWidth
-            - (root.drawerOpen ? root.toolPaneMinWidth : 0))
-    readonly property real _toolPaneMaxWidth: Math.max(root.toolPaneMinWidth,
-        root.width - root.toolRailWidth - root.editorMinWidth
-            - (root.leftPaneCollapsed ? 0 : root.listPaneMinWidth))
+    // Issue #922：SplitView 拖动与折叠/收起状态之间只互补、不互相写回。
+    // sidebarRect / rightDrawerRect 的 SplitView.preferredWidth 是唯一宽度状态源，
+    // 根组件不再维护一套 chapterNavWidth / toolPaneWidth 去反向覆盖原生拖拽。
 
-    // Issue #920 复核：恢复用户上次拖拽保存的侧栏宽度。
-    // 只恢复左侧章节导航栏（对应旧 LocalSettings.desktop_sidebar_width）；
-    // 右侧工具 pane 宽度是另一种 UI 状态，不复用旧 desktop_editor_width。
+    // 启动恢复用户上次拖拽保存的栏宽（只做下界钳制，不因当前窗口暂时变窄而
+    // 永久改写保存的期望值；实际显示宽度由 SplitView 自己约束）。
     function restorePersistedPaneWidths() {
         if (!settingsBackend)
             return
-        var stored = settingsBackend.setting_desktop_sidebar_width
-        if (stored !== undefined && stored > 0) {
-            // 只做下界处理：chapterNavWidth 保存用户的期望宽度，不因当前窗口暂时
-            // 变窄而被永久改写；实际显示宽度由 effectiveChapterNavWidth() 在布局
-            // 阶段按 _chapterNavMaxWidth 动态钳制，窗口放大后仍能回到期望宽度。
-            root.chapterNavWidth = Math.max(root.listPaneMinWidth, stored)
+        var storedSidebar = settingsBackend.setting_desktop_sidebar_width
+        if (storedSidebar !== undefined && storedSidebar > 0) {
+            sidebarRect.SplitView.preferredWidth = Math.max(root.listPaneMinWidth, storedSidebar)
+        }
+        var storedTool = settingsBackend.setting_desktop_tool_pane_width
+        if (storedTool !== undefined && storedTool > 0) {
+            rightDrawerRect.SplitView.preferredWidth = Math.max(root.toolPaneMinWidth, storedTool)
         }
     }
 
-    // 拖拽结束后把章节导航栏宽度写回平台本地配置（不回写 Core 业务设置）。
-    function persistChapterNavWidth() {
+    // 拖拽结束后把当前可见栏的期望宽度写回平台本地配置（不回写 Core 业务设置）。
+    // 只在拖动结束（!resizing）调用一次，不在每一帧写 JSON；只写当前可见栏，
+    // 收起栏的原宽度仍由 SplitView.preferredWidth 保留。
+    function persistPaneWidths() {
         if (!settingsBackend)
             return
-        settingsBackend.setting_desktop_sidebar_width = root.chapterNavWidth
+        if (sidebarRect.visible && sidebarRect.SplitView.preferredWidth > 0) {
+            settingsBackend.setting_desktop_sidebar_width =
+                Math.max(root.listPaneMinWidth, sidebarRect.SplitView.preferredWidth)
+        }
+        if (rightDrawerRect.visible && rightDrawerRect.SplitView.preferredWidth > 0) {
+            settingsBackend.setting_desktop_tool_pane_width =
+                Math.max(root.toolPaneMinWidth, rightDrawerRect.SplitView.preferredWidth)
+        }
         settingsBackend.debounced_save_local_settings()
     }
 
@@ -592,68 +587,92 @@ Rectangle {
         onRequestSearch: root.requestSearch()
         onOpenSettings: root.openSettings()
 
-        // Issue #920：内容区用 RowLayout，子项通过 Layout.preferredWidth /
-        // minimumWidth / maximumWidth 落尺寸，尺寸来自本组件的 Qt 本地常量。
-        // 窗口宽度 -> QML 断点 -> Qt Quick Layouts，一条链到底，不经 Core。
+        // Issue #922：内容区改用 Qt 原生 SplitView 管理「章节导航 | 正文 | 工具 pane」
+        // 三栏，两道分隔线由 Qt 自己生成并驱动宽度；最右 WritingToolRail 仍固定宽度，
+        // 留在外层 RowLayout（不放进 SplitView，避免造第三条可拖动线）。
         RowLayout {
             anchors.fill: parent
             spacing: 0
 
-            // Left sidebar: volume/chapter tree
-            // Issue #833 复核：章节导航内容抽成 WritingChapterNavigation 组件，
-            // 多栏工作台下作为 RowLayout 子项，宽度取 Qt 本地 chapterNavWidth。
-            // SinglePane 下章节导航作为覆盖浮层打开（见文件末尾 singlePaneNavOverlay），
-            // 不参与 RowLayout 宽度分配。
-            WritingChapterNavigation {
-                id: sidebarRect
-                // Issue #833 复核3：多栏工作台下才参与 RowLayout，
-                // SinglePane 下章节导航走 singlePaneNavOverlay 浮层，不占宽度。
-                visible: !root.singlePaneMode && !root.leftPaneCollapsed
-                // Issue #920 复核：章节导航宽度取 Qt 本地 chapterNavWidth（可拖拽，
-                // 保存用户期望宽度），显示时由 effectiveChapterNavWidth() 按当前
-                // 窗口可用范围动态压缩，保证正文列先拿到 editorMinWidth。
-                // Issue #920 复核：preferred/maximum 用 effectiveChapterNavWidth()，
-                // 它在布局阶段按 _chapterNavMaxWidth 动态钳制，chapterNavWidth 仍是
-                // 用户的期望宽度；避免窄窗口把期望宽度提前钳死。顶栏口径保持一致。
-                Layout.preferredWidth: root.effectiveChapterNavWidth()
-                Layout.minimumWidth: root.listPaneMinWidth
-                Layout.maximumWidth: root.effectiveChapterNavWidth()
-                // Issue #835：内容区 RowLayout cross-axis 高度填满，
-                // 不再靠子组件内容溢出父项来显示，MouseArea 命中区与视觉一致。
-                Layout.fillHeight: true
-
-                dt: root.dt
-                tree: root.tree
-                workspaceProjectId: root.workspaceProjectId
-                workspaceProjectTitle: root.workspaceProjectTitle
-                currentChapterId: editorController.chapterId
-
-                onOpenChapter: function(pId, vId, cId, cTitle) {
-                    root.openChapter(pId, vId, cId, cTitle)
-                }
-                onCreateVolumeRequested: function(pId) {
-                    root.createVolumeRequested(pId)
-                }
-                onCreateChapterRequested: function(pId, vId) {
-                    root.createChapterRequested(pId, vId)
-                }
-                onRenameItemRequested: function(itemData) {
-                    root.renameItemRequested(itemData)
-                }
-                onDeleteItemRequested: function(itemData) {
-                    root.deleteItemRequested(itemData)
-                }
-            }
-
-            // Middle Area: Toolbar + Editor
-            ColumnLayout {
-                // Issue #920：Editor 列始终占满剩余宽度；多栏时用 minimumWidth
-                // 保证正文不小于 editorMinWidth，单栏时不再额外限制。
+            // SplitView 的一级断点逻辑（multiPane / singlePane）保持在外层，
+            // 这里只负责把三栏内容交给 Qt 原生分栏器布局。
+            SplitView {
+                id: paneSplitView
                 Layout.fillWidth: true
-                Layout.minimumWidth: root.multiPane ? root.editorMinWidth : 0
-                // Issue #835：内容区 RowLayout cross-axis 高度填满。
                 Layout.fillHeight: true
-                spacing: 0
+                orientation: Qt.Horizontal
+
+                // Issue #922：原生分隔线。纯视觉 Rectangle，不手工放 MouseArea /
+                // DragHandler（Qt 文档指出会与原生分割器输入冲突）。
+                handle: Rectangle {
+                    implicitWidth: root.splitHandleWidth
+                    color: SplitHandle.pressed
+                           ? Kirigami.Theme.highlightColor
+                           : (SplitHandle.hovered
+                              ? Kirigami.Theme.focusColor
+                              : "transparent")
+                    Rectangle {
+                        // 可视线：1vp 竖线，居中。命中区由整个 handle 承担。
+                        anchors.centerIn: parent
+                        width: 1
+                        height: parent.height
+                        color: Kirigami.Theme.disabledTextColor
+                        opacity: 0.3
+                    }
+                }
+
+                // 拖动结束（用户松手）才持久化一次，不在每一帧写 JSON。
+                onResizingChanged: {
+                    if (!paneSplitView.resizing) {
+                        root.persistPaneWidths()
+                    }
+                }
+
+                // Left sidebar: volume/chapter tree
+                // Issue #833 复核：章节导航内容抽成 WritingChapterNavigation 组件，
+                // 多栏工作台下作为 SplitView 子项，宽度由 SplitView.preferredWidth 表达。
+                // SinglePane 下章节导航作为覆盖浮层打开（见文件末尾 singlePaneNavOverlay），
+                // 不参与宽度分配。
+                WritingChapterNavigation {
+                    id: sidebarRect
+                    // Issue #833 复核3：多栏工作台下才参与 SplitView 布局，
+                    // SinglePane 下章节导航走 singlePaneNavOverlay 浮层，不占宽度。
+                    visible: !root.singlePaneMode && !root.leftPaneCollapsed
+                    // Issue #922：只有一份宽度状态就是 SplitView.preferredWidth，
+                    // 用户期望宽度保存于此；最小宽度钳制在这里表达。
+                    SplitView.minimumWidth: root.listPaneMinWidth
+                    SplitView.preferredWidth: 320
+
+                    dt: root.dt
+                    tree: root.tree
+                    workspaceProjectId: root.workspaceProjectId
+                    workspaceProjectTitle: root.workspaceProjectTitle
+                    currentChapterId: editorController.chapterId
+
+                    onOpenChapter: function(pId, vId, cId, cTitle) {
+                        root.openChapter(pId, vId, cId, cTitle)
+                    }
+                    onCreateVolumeRequested: function(pId) {
+                        root.createVolumeRequested(pId)
+                    }
+                    onCreateChapterRequested: function(pId, vId) {
+                        root.createChapterRequested(pId, vId)
+                    }
+                    onRenameItemRequested: function(itemData) {
+                        root.renameItemRequested(itemData)
+                    }
+                    onDeleteItemRequested: function(itemData) {
+                        root.deleteItemRequested(itemData)
+                    }
+                }
+
+                // Middle Area: Toolbar + Editor
+                ColumnLayout {
+                    // Issue #922：正文列吃满剩余宽度，左右拖动都会改变它；
+                    // 多栏时用 minimumWidth 保证正文不小于 editorMinWidth。
+                    SplitView.fillWidth: true
+                    SplitView.minimumWidth: root.multiPane ? root.editorMinWidth : 0
+                    spacing: 0
 
                 // Editor Container Area
                 Rectangle {
@@ -796,14 +815,11 @@ Rectangle {
             // Issue #825：工具 pane（ToolPane 角色）—— 只显示 rail 选中的那个工具内容。
             RightDrawer {
                 id: rightDrawerRect
-                // Issue #920：工具 pane 宽度取 Qt 本地 toolPaneWidth（可拖拽），
-                // 空间紧张时在 [toolPaneMinWidth, toolPaneWidth] 内压缩。
-                Layout.preferredWidth: root.toolPaneWidth
-                Layout.minimumWidth: root.toolPaneMinWidth
-                Layout.maximumWidth: root.toolPaneWidth
-                // Issue #835：内容区 RowLayout cross-axis 高度填满。
-                Layout.fillHeight: true
-                // Issue #920：只有多栏工作台且工具 pane 展开时才存在。
+                // Issue #922：工具 pane 宽度由 SplitView.preferredWidth 表达用户期望宽度，
+                // SplitView 拖动时自动更新它；最小宽度钳制在这里表达。
+                SplitView.minimumWidth: root.toolPaneMinWidth
+                SplitView.preferredWidth: 240
+                // Issue #922：只有多栏工作台且工具 pane 展开时才存在。
                 visible: root.multiPane && root.drawerOpen
                 dt: root.dt
                 editorBackendRef: root.editorBackendRef
@@ -834,14 +850,16 @@ Rectangle {
                     root.refreshConflictList();
                 }
             }
+            } // end SplitView paneSplitView
 
             // Issue #825：最右竖向工具 rail（Core 的 ToolRail 角色）。
             // 只负责「选哪个工具 + 展开/收起 ToolPane」，工具内容在右边的 ToolPane 里。
             // 顶部工具条带 ToolbarTrailing 的同步/搜索/设置不搬到这里。
+            // Issue #922：rail 固定 56vp，留在外层 RowLayout，不进 SplitView，
+            // 不给最右加第三条可拖动线。
             WritingToolRail {
                 id: toolRailRect
                 visible: root.toolRailVisible
-                // Issue #833：工具 rail 宽度只取 Core 的 ToolRail bounds。
                 Layout.preferredWidth: root.toolRailWidth
                 Layout.minimumWidth: root.toolRailWidth
                 Layout.maximumWidth: root.toolRailWidth
@@ -857,95 +875,6 @@ Rectangle {
                 onToolPaneToggled: {
                     root.toggleToolPane();
                     if (root.drawerOpen) root.requestEditorFocus();
-                }
-            }
-        }
-
-        // Issue #842 评论修复（问题1）：左 resize separator 改为 overlay，
-        // 不再作为 RowLayout 子项参与宽度分配。四栏（章节导航 + 正文 +
-        // 工具 pane + 工具 rail）已占满内容区，separator 只盖在章节栏右边界上
-        // 做命中与拖拽，z 提高确保盖在内容之上。可视线 1vp（居中 Rectangle），
-        // 命中 Item 12vp。x 跟随 sidebarRect 右边界（中心对齐边界）。
-        // 垂直范围锚到 parent（contentSlot）顶/底，与 RowLayout 同高。
-        Item {
-            id: leftResizeSeparator
-            visible: root.multiPane && !root.leftPaneCollapsed
-            width: 12
-            x: sidebarRect.x + sidebarRect.width - width / 2
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            z: 50
-
-            Rectangle {
-                anchors.centerIn: parent
-                width: 1
-                height: parent.height
-                color: Kirigami.Theme.disabledTextColor
-                opacity: 0.3
-            }
-
-            DragHandler {
-                target: null
-                cursorShape: Qt.SplitHCursor
-                onActiveChanged: {
-                    if (active) {
-                        // 从当前实际显示宽度起算，避免死区。用 sidebarRect.width
-                        // 而非 chapterNavWidth：窄窗口下期望宽度可能大于可显示宽度，
-                        // 用期望值起算会出现「拉一段距离侧栏才动」。
-                        root._dragStartChapterNavWidth = sidebarRect.width
-                    } else {
-                        // Issue #920 复核：拖拽结束写回平台本地配置，下次启动恢复。
-                        root.persistChapterNavWidth()
-                    }
-                }
-                onTranslationChanged: {
-                    if (active) {
-                        // Issue #920：本地 clamp 到 [listPaneMinWidth, _chapterNavMaxWidth]，
-                        // 始终给正文留 editorMinWidth。activeTranslation 每次手势从 0 重置。
-                        root.chapterNavWidth = Math.min(root._chapterNavMaxWidth,
-                            Math.max(root.listPaneMinWidth,
-                                     root._dragStartChapterNavWidth + activeTranslation.x))
-                    }
-                }
-            }
-        }
-
-        // Issue #842 评论修复（问题1）：右 resize separator 改为 overlay。
-        // x 跟随 rightDrawerRect 左边界（Editor 右边界），中心对齐边界。
-        Item {
-            id: rightResizeSeparator
-            visible: root.multiPane && root.drawerOpen
-            width: 12
-            x: rightDrawerRect.x - width / 2
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            z: 50
-
-            Rectangle {
-                anchors.centerIn: parent
-                width: 1
-                height: parent.height
-                color: Kirigami.Theme.disabledTextColor
-                opacity: 0.3
-            }
-
-            DragHandler {
-                target: null
-                cursorShape: Qt.SplitHCursor
-                onActiveChanged: {
-                    if (active) {
-                        // 每次手势从当前实际宽度起算，避免死区。
-                        root._dragStartToolPaneWidth = root.toolPaneWidth
-                    }
-                }
-                onTranslationChanged: {
-                    if (active) {
-                        // Issue #920：本地 clamp 到 [toolPaneMinWidth, _toolPaneMaxWidth]，
-                        // 始终给正文留 editorMinWidth。activeTranslation 每次手势从 0 重置。
-                        root.toolPaneWidth = Math.min(root._toolPaneMaxWidth,
-                            Math.max(root.toolPaneMinWidth,
-                                     root._dragStartToolPaneWidth - activeTranslation.x))
-                    }
                 }
             }
         }

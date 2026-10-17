@@ -80,6 +80,8 @@ pub struct SettingsBackend {
     #[allow(dead_code)]
     setting_desktop_sidebar_width: qt_property!(f64; READ setting_desktop_sidebar_width WRITE set_setting_desktop_sidebar_width NOTIFY settings_changed),
     #[allow(dead_code)]
+    setting_desktop_tool_pane_width: qt_property!(f64; READ setting_desktop_tool_pane_width WRITE set_setting_desktop_tool_pane_width NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_desktop_editor_width: qt_property!(f64; READ setting_desktop_editor_width WRITE set_setting_desktop_editor_width NOTIFY settings_changed),
     #[allow(dead_code)]
     setting_diagnostics_enabled: qt_property!(bool; READ setting_diagnostics_enabled WRITE set_setting_diagnostics_enabled NOTIFY settings_changed),
@@ -621,6 +623,17 @@ impl SettingsBackend {
             self.settings_changed();
         }
     }
+    fn setting_desktop_tool_pane_width(&self) -> f64 {
+        self.snap().setting_desktop_tool_pane_width
+    }
+    fn set_setting_desktop_tool_pane_width(&mut self, val: f64) {
+        if self
+            .with_app_mut(|app| app.set_setting_desktop_tool_pane_width(val))
+            .is_ok()
+        {
+            self.settings_changed();
+        }
+    }
     fn setting_desktop_editor_width(&self) -> f64 {
         self.snap().setting_desktop_editor_width
     }
@@ -1032,6 +1045,11 @@ impl AppBackend {
         self.current_setting_desktop_sidebar_width = val;
     }
 
+    // AppBackend::set_setting_desktop_tool_pane_width
+    pub(crate) fn set_setting_desktop_tool_pane_width(&mut self, val: f64) {
+        self.current_setting_desktop_tool_pane_width = val;
+    }
+
     // AppBackend::set_setting_desktop_editor_width
     pub(crate) fn set_setting_desktop_editor_width(&mut self, val: f64) {
         self.current_setting_desktop_editor_width = val;
@@ -1068,6 +1086,7 @@ impl AppBackend {
         // 迁移必须传入真实数据根，否则自定义数据目录的用户会掉到默认栏宽。
         let desktop = desktop_settings::load(&self.desktop_settings_data_root());
         self.current_setting_desktop_sidebar_width = desktop.desktop_sidebar_width;
+        self.current_setting_desktop_tool_pane_width = desktop.desktop_tool_pane_width;
         self.current_setting_desktop_editor_width = desktop.desktop_editor_width;
         if let Some(core) = self.core_api() {
             let local_load = core.load_local_settings();
@@ -1180,9 +1199,11 @@ impl AppBackend {
         // Issue #920：窗口 / 栏宽是 Qt 平台本地状态，写入平台层 JSON，
         // 不再写 Core LocalSettings（Core 已删除这些字段）。
         let sidebar_width = self.current_setting_desktop_sidebar_width;
+        let tool_pane_width = self.current_setting_desktop_tool_pane_width;
         let editor_width = self.current_setting_desktop_editor_width;
         if let Err(e) = desktop_settings::update(&self.desktop_settings_data_root(), |settings| {
             settings.desktop_sidebar_width = sidebar_width;
+            settings.desktop_tool_pane_width = tool_pane_width;
             settings.desktop_editor_width = editor_width;
         }) {
             error_msg = Some(format!("desktop settings save failed: {e}"));

@@ -405,6 +405,7 @@ pub struct AppBackend {
     current_system_color_scheme: String,
     pub current_ai_enabled: bool,
     pub current_setting_desktop_sidebar_width: f64,
+    pub current_setting_desktop_tool_pane_width: f64,
     pub current_setting_desktop_editor_width: f64,
     current_setting_font_size: f32,
     current_setting_line_spacing: f32,
@@ -473,6 +474,7 @@ impl AppBackend {
         s.ai_available = cfg!(feature = "ai");
         s.ai_enabled = self.current_ai_enabled;
         s.setting_desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
+        s.setting_desktop_tool_pane_width = self.current_setting_desktop_tool_pane_width;
         s.setting_desktop_editor_width = self.current_setting_desktop_editor_width;
         s.setting_diagnostics_enabled = self.current_setting_diagnostics_enabled;
         s.setting_diagnostics_verbose = self.current_setting_diagnostics_verbose;
