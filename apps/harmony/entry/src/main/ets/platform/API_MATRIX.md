@@ -477,13 +477,13 @@
 | **独立边缘层 1vp `border('#22FFFFFF')` + `hitTestBehavior(None)`（Issue #811 方案，已被 Issue #905 取代）** | 描边像素值 60，与 `#22FFFFFF` 的 13% 白相符；截图可见清晰细圆环 | 当时可用；#905 后不再拆「Button + 独立描边层」两套结构 |
 | **固定 `border(1vp, sys.color.icon_secondary)`（#905 第一~七轮）** | 圆环可见，但**颜色固定**，不随背景变化 | 当作「深色模式最低轮廓」可用；**不是反射光**，第八轮已替换为下面的反色混色环 |
 | **`Circle().stroke('#66FFFFFF')` + `blendMode(BlendMode.DIFFERENCE, BlendApplyType.FAST)` + `hitTestBehavior(None)`（Issue #905 第八轮，Issue #937 已移除）** | 描边与下层画面做差值混合，圆环颜色随按钮底下那圈画面变化 | 随**本地背景像素**变化，但没有方向与衰减，无法按光源位置形成亮暗分区；#937 重做玻璃表面时删除，不再叠加第二套边框 |
-| **方向性 `radialGradient` 边缘高光层 + 极低不透明度系统色表面层（Issue #937 现行）** | 玻璃圆边形成带高光区与衰减区的高光环（方向固定左上），配合毛玻璃与 `pressShadow` 形成完整玻璃按钮 | 方向/强度来自固定的 UI 约定光源方向常量；**静态方向渐变高光只能称作玻璃光泽，不是实时反射/点光源**；实机目视观感待确认 |
+| **Canvas 圆环 conic 渐变描边边缘高光 + 极低不透明度系统色表面层（Issue #937 现行）** | 圆周 1vp 圆环用 `createConicGradient` 描边分亮度：左上方向最亮、沿圆周向两侧衰减、其余位置保留很轻的基础轮廓（同一套环形视觉）；「+」符号画在最上层，不被装饰层覆盖，配合毛玻璃与 `pressShadow` 形成完整玻璃按钮 | 方向/强度来自固定的 UI 约定光源方向常量；**静态方向渐变高光只能称作玻璃光泽，不是实时反射/点光源**；实机目视观感待确认 |
 
 现行结构：`Stack { Row(边缘层 1vp 描边, hitTestBehavior(None)); Button(ImmersiveMaterial + lightEffect, 不画边) }`。描边必须放独立节点，压在 `systemMaterial` 的 Button 上会挡掉材质层。
 
-**Issue #937 现行结构（内容流右下角唯一主操作载体）**：`PrimaryFab.ets` 是同一尺寸的 `Stack { 极低不透明度系统色表面层 + Button(毛玻璃主体，唯一可点击) + 方向性 radialGradient 边缘高光层 }`，位置即原设计位置（`Alignment.BottomEnd` + 原 `PRIMARY_FAB_BOTTOM_INSET_VP`），三个页面共用：
+**Issue #937 现行结构（内容流右下角唯一主操作载体）**：`PrimaryFab.ets` 是同一尺寸的 `Stack { Button(毛玻璃主体，唯一可点击) + 极低不透明度系统色表面层 + Canvas 圆环边缘高光层 + SymbolGlyph「+」(最上层，hitTestBehavior(None)) }`，位置即原设计位置（`Alignment.BottomEnd` + 原 `PRIMARY_FAB_BOTTOM_INSET_VP`），三个页面共用：
 - 表面：透明 `backgroundColor` + `backgroundBlurStyle(BlurStyle.Thin)`（可透视毛玻璃）+ `shadow(ShadowStyle.OUTER_DEFAULT_XS)`；另加一层极低不透明度的系统色圆形表面（`sys.color` 前景色低透明度），让浅色/深色/纯色背景下都有稳定可见的体积感，不盖住模糊。**不再有写死的固定色 `border`**。
-- 边缘高光：顶层独立圆形容器（`hitTestBehavior(HitTestMode.None)`、裁剪为圆形）用方向性 `radialGradient` 画出有高光区与衰减区的边缘高光环，并带一档更弱的内侧高光；方向与强度取自固定的 UI 约定光源方向（左上），不是实时追光。原来的 `BlendMode.DIFFERENCE` 反色描边环已删除，不保留第二套边框，也不要把它称作「光感已复刻」。
+- 边缘高光：独立 `Canvas`（`hitTestBehavior(HitTestMode.None)`）在圆周描 1vp 圆环，`strokeStyle` 用 `createConicGradient` 生成的方向性渐变——左上方向高光带、沿圆周向两侧衰减、其余位置保留轻基础轮廓，高光与基础轮廓是同一套环形视觉；方向与强度取自固定的 UI 约定光源方向（左上），不是实时追光。原来的 `BlendMode.DIFFERENCE` 反色描边环已删除，不保留第二套边框，也不要把它称作「光感已复刻」；「+」符号从 Button 内部拆出、作为根 `Stack` 最后一层画在玻璃装饰层之上（`hitTestBehavior(HitTestMode.None)`），避免被表面层/高光层覆盖，唯一可点击的始终只有 `Button`。
 - 按压：`stateEffect: false` + `.visualEffect(new hdsEffect.HdsEffectBuilder().pressShadow(...).buildEffect())`，按下 `BLEND_WHITE`、抬起/取消一起解除发光与底栏手势锁。
 - **不挂 `systemMaterial`**（内容流不在官方生效范围，真机 `Material inactive: out of scope`）；**不接 `hdsEffect.pointLight`**（native 拒收、且 API 26 元数据里非公开接口，见上文）。
 - 因此唯一仍缺的是原位置上的**沉浸材质跟手追光**与「由真实邻近光源驱动、随光源位置/强弱变化的动态边缘受光」，这两项按未完成如实保留：普通毛玻璃、方向性静态渐变高光与 pressShadow 都是真实可用的普通能力，但静态渐变高光只能叫玻璃光泽，不得写成已实现动态受光/实时反射；且整体观感**未经真机目视确认**（`hdc list targets` 为空）。
