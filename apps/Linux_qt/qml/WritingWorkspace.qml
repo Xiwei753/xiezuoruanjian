@@ -605,7 +605,16 @@ Rectangle {
                 // Issue #922：原生分隔线。纯视觉 Rectangle，不手工放 MouseArea /
                 // DragHandler（Qt 文档指出会与原生分割器输入冲突）。
                 handle: Rectangle {
-                    implicitWidth: root.splitHandleWidth
+                    id: handleDelegate
+                    implicitWidth: root.splitHandleWidth   // 视觉仍 6vp
+                    // Issue #922 复核：原生分隔线命中区只有 6vp，高 DPI 上易点空。
+                    // 用 containmentMask 把命中范围扩到 14vp（左右各多 4vp），
+                    // 不重叠加鼠标拦截，也不动视觉宽度。
+                    containmentMask: Item {
+                        x: (handleDelegate.width - width) / 2
+                        width: 14                          // 左右各多 4vp 命中
+                        height: paneSplitView.height
+                    }
                     color: SplitHandle.pressed
                            ? Kirigami.Theme.highlightColor
                            : (SplitHandle.hovered
