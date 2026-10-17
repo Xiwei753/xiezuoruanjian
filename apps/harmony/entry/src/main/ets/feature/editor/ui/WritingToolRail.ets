@@ -1,11 +1,11 @@
-// Issue #829：宽屏写作区最右侧 ToolRail（Core 七角色之一）。
+// Issue #829：宽屏写作区最右侧 ToolRail。
 //
 // 手稿固定为：顶部工具条 + 左章节树 + 中间正文 + 右工具面板 + 最右窄 rail。
 // rail 本身只负责“选哪个工具”和“展开/收起 ToolPane”，不承载同步 / 搜索 / 设置。
-// 手稿里最右 rail 明确是“星图 / AI”，所以骨架先固定这两个入口；
+// 手稿里最右侧 rail 明确是“星图 / AI”，所以骨架先固定这两个入口；
 // 真实星图 / AI 内容由 ToolPane 后续接入，不再改 rail 的空间结构。
 //
-// 宽度仍由 Core 的 WorkbenchRole.ToolRail bounds 决定，不在端侧另算断点。
+// 宽度由平台自己的宽屏断点与常量决定（WritingScreen），不再从 Core 取 bounds。
 
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 

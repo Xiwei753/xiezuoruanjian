@@ -31,11 +31,6 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.LocalWorkspaceAppState
 import com.xiwei.sujian.app.RecoveryFromLocalButton
 import com.xiwei.sujian.app.WorkspaceAppState
-import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
-import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.screen.WorkspaceActionKind
-import com.xiwei.sujian.app.presentation.screen.WorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.screen.WorkspaceActionTarget
 import com.xiwei.sujian.core.designsystem.component.SujianCard
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianFab
@@ -107,9 +102,12 @@ private fun ProjectCardWordCount(totalWordCount: Int) {
 
 /**
  * #625 / #628：作品列表布局参数 — 打包传给 [ProjectListContent] 以避免超出门禁阈值。
+ *
+ * [useWideGrid] 由 Android 顶层导航按窗口尺寸决定（大屏多列 / 窄屏单列），
+ * [projectCardMinWidthDp] 是 Android 本端的作品卡最小宽度。
  */
 internal data class ProjectListLayoutConfig(
-    val workspaceLayoutMode: WorkspaceLayoutMode = WorkspaceLayoutMode.SINGLE_PANE,
+    val useWideGrid: Boolean = false,
     val projectCardMinWidthDp: Float = 0f,
 )
 
@@ -117,7 +115,7 @@ internal data class ProjectListLayoutConfig(
 @Composable
 internal fun ProjectListContent(
     appState: WorkspaceAppState,
-    workspaceActions: AndroidWorkspaceActionSpec,
+    workspaceActions: WorkspaceActions,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     /**
      * #630 评论12 项2：最近编辑卡片点击时回调，携带完整 projectId + volumeId + chapterId。
@@ -143,8 +141,8 @@ internal fun ProjectListContent(
         workspaceActions.primaryActions.firstOrNull { it.kind == WorkspaceActionKind.CreateProject }
     val projectMenuActions = workspaceActions.contextActions(WorkspaceActionTarget.Project)
 
-    // #628 原则：宽屏 grid 切换依据是 layoutConfig.workspaceLayoutMode，不自己判断宽度。
-    val useWideGrid = layoutConfig.workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
+    // #628 原则：宽屏 grid 切换由 Android 顶层导航按窗口尺寸决定。
+    val useWideGrid = layoutConfig.useWideGrid
 
     Box(modifier = modifier.fillMaxSize()) {
         if (appState.projectSummaries.isEmpty()) {

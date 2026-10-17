@@ -924,18 +924,6 @@ export interface StarMapItemRef {
   itemId: string
 }
 
-/** 跨层连线的落点方案：宿主 Scene + 两条相对宿主的端点路径。 */
-export interface CrossLayerEdgePlan {
-  /** 宿主 Scene（两端的最近公共祖先）的绝对路径 */
-  hostScenePath: StarMapPathSegment[]
-  /** 宿主 Scene 的星图 ID，也就是 addStarMapEdge 的 starmapId */
-  hostStarmapId: string
-  /** 起点，相对宿主 Scene 的 StarMapTargetPath */
-  from: StarMapTargetPath
-  /** 终点，相对宿主 Scene 的 StarMapTargetPath */
-  to: StarMapTargetPath
-}
-
 // ─── Scene 路径工具 ───
 
 /** 深拷贝路径段。 */
@@ -960,24 +948,6 @@ export function isSameScenePath(a: StarMapPathSegment[], b: StarMapPathSegment[]
     }
   }
   return true
-}
-
-/** 两条 Scene 路径的最长公共前缀。 */
-export function commonScenePathPrefix(
-  a: StarMapPathSegment[],
-  b: StarMapPathSegment[]
-): StarMapPathSegment[] {
-  const out: StarMapPathSegment[] = []
-  const max: number = Math.min(a.length, b.length)
-  for (let i = 0; i < max; i++) {
-    if (a[i].type !== b[i].type ||
-      a[i].instanceId !== b[i].instanceId ||
-      a[i].nodeId !== b[i].nodeId) {
-      break
-    }
-    out.push({ type: a[i].type, instanceId: a[i].instanceId, nodeId: a[i].nodeId })
-  }
-  return out
 }
 
 /** 生成单个 enterEmbed 路径段。 */
@@ -1057,17 +1027,6 @@ export function buildTargetPathForHost(
     segments: segments,
     target: emptyTargetDetail('node', itemRef.itemId)
   }
-}
-
-/** 两条端点路径是否描述同一个对象（用于去掉自环）。 */
-export function isSameTargetPath(a: StarMapTargetPath, b: StarMapTargetPath): boolean {
-  if (a.starmapId !== b.starmapId) {
-    return false
-  }
-  if (!isSameScenePath(a.segments, b.segments)) {
-    return false
-  }
-  return a.target.type === b.target.type && a.target.nodeId === b.target.nodeId
 }
 
 /** 端点路径的可读描述（日志用）。 */
@@ -1568,106 +1527,6 @@ export function resolveSceneLocalPoint(
     index++
   }
   return { x: localX, y: localY }
-}
-
-/**
- * 解析"相对根星图的端点路径"对应的 item 引用（含容纳它的 Scene 的 starmapId）。
- *
- * @param root 根 Scene 上下文
- * @param path 相对根星图的 StarMapTargetPath
- * @returns item 引用；解析不出来（Portal 段 / Scene 未加载）时返回 null
- */
-export function resolveItemRefFromTargetPath(
-  root: RecursiveSceneContext,
-  path: StarMapTargetPath
-): StarMapItemRef | null {
-  if (path.segments.length === 0) {
-    if (path.target.type === 'node' && path.target.nodeId !== null) {
-      return { scenePath: [], starmapId: root.starmapId, kind: 'node', itemId: path.target.nodeId }
-    }
-    return null
-  }
-  if (path.target.type === 'node' && path.target.nodeId !== null) {
-    // node 端点：segments 全是"走到所在 Scene"的穿越步骤，节点就在末段到达的那张图里
-    const holder: RecursiveSceneContext | null = findSceneContext(root, path.segments)
-    if (holder === null) {
-      return null
-    }
-    return {
-      scenePath: cloneScenePath(path.segments),
-      starmapId: holder.starmapId,
-      kind: 'node',
-      itemId: path.target.nodeId
-    }
-  }
-  // Embed 端点：最后一段就是被引用的那个 Embed 自身，它属于**上一段**到达的 Scene
-  const last: StarMapPathSegment = path.segments[path.segments.length - 1]
-  if (last.type !== 'enterEmbed' || last.instanceId === null) {
-    // enterPortal 不是 Embed 容器，跨层连线暂不支持（Core 侧也只把 enterEmbed 当层级）
-    return null
-  }
-  const containerPath: StarMapPathSegment[] = path.segments.slice(0, path.segments.length - 1)
-  const container: RecursiveSceneContext | null = findSceneContext(root, containerPath)
-  if (container === null) {
-    return null
-  }
-  return {
-    scenePath: cloneScenePath(containerPath),
-    starmapId: container.starmapId,
-    kind: 'embed',
-    itemId: last.instanceId
-  }
-}
-
-/**
- * 规划一条跨层连线应该落在哪张图上。
- *
- * 规则（#816）：宿主 = 两个端点所在 Scene 的最近公共祖先。
- * 于是这五种情形都自动落到 Core 能接受的形状：
- * - 父 Node → 子 Node：宿主 = 父 Scene，to = [enterEmbed(...)] + node
- * - 子 Node → 父 Node：宿主 = 父 Scene，from = [enterEmbed(...)] + node
- * - 同一 Embed 里的两个子 Node：宿主 = 该 Embed 的 Scene，两端 segments 都为空
- * - 两个不同 Embed 里的 Node：宿主 = 根 Scene，两端各带一段 enterEmbed
- * - 子 Node → 更深一层的子 Embed/Node：宿主 = 两者的最近公共 Embed Scene
- *
- * 同一层的连线走这里得到的结果和原来的 buildItemTargetPath 完全一致（segments 为空 / 一段 enterEmbed）。
- *
- * @param root 根 Scene 上下文
- * @param sourcePath 起点（相对根星图）
- * @param targetPath 终点（相对根星图）
- * @returns 落点方案；自环或解析失败时返回 null
- */
-export function planCrossLayerEdge(
-  root: RecursiveSceneContext,
-  sourcePath: StarMapTargetPath,
-  targetPath: StarMapTargetPath
-): CrossLayerEdgePlan | null {
-  const from: StarMapItemRef | null = resolveItemRefFromTargetPath(root, sourcePath)
-  const to: StarMapItemRef | null = resolveItemRefFromTargetPath(root, targetPath)
-  if (from === null || to === null) {
-    return null
-  }
-  if (from.kind === to.kind && from.itemId === to.itemId &&
-    isSameScenePath(from.scenePath, to.scenePath)) {
-    return null
-  }
-  const hostScenePath: StarMapPathSegment[] = commonScenePathPrefix(from.scenePath, to.scenePath)
-  const host: RecursiveSceneContext | null = findSceneContext(root, hostScenePath)
-  if (host === null) {
-    return null
-  }
-  const hostStarmapId: string = host.starmapId
-  const planFrom: StarMapTargetPath = buildTargetPathForHost(hostStarmapId, hostScenePath, from)
-  const planTo: StarMapTargetPath = buildTargetPathForHost(hostStarmapId, hostScenePath, to)
-  if (isSameTargetPath(planFrom, planTo)) {
-    return null
-  }
-  return {
-    hostScenePath: hostScenePath,
-    hostStarmapId: hostStarmapId,
-    from: planFrom,
-    to: planTo
-  }
 }
 
 // ─── 坐标互转 ───

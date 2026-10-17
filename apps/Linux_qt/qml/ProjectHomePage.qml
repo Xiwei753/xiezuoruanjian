@@ -34,10 +34,6 @@ Rectangle {
     property var appState: ({})
     property var tree: []
 
-    // Issue #827 评论 2：布局契约由上层注入（main.qml 的 window.layoutPlan），
-    // 作品卡宽度读 Core 的 project_card_min_width_dp，不在 QML 写死。
-    property var layoutPlan: null
-
     signal openProject(string projectId)
     signal createProject()
     signal renameProjectRequested(string projectId, string title)
@@ -79,16 +75,13 @@ Rectangle {
         }
     }
 
-    // ── 卡片尺寸：Core 的共用值，两端（作品卡 / 「+」卡）共用同一组 ──
-    readonly property int _cardWidth: root.layoutPlan && root.layoutPlan.projectCardMinWidthVp > 0
-                                     ? Math.round(root.layoutPlan.projectCardMinWidthVp)
-                                     : 180
+    // ── 卡片尺寸：Qt 平台本地常量（Issue #920，不再从 Core 布局契约注入） ──
+    // 作品卡 / 「+」卡共用同一组尺寸，两处都读这两个常量。
+    readonly property int _cardWidth: 180
     // 书封面是竖向的：高 / 宽 = 4 / 3，与手绘稿一致。
     readonly property int _cardHeight: Math.round(_cardWidth * 4 / 3)
     readonly property int _gridGap: Kirigami.Units.largeSpacing
-    readonly property int _pagePadding: root.layoutPlan && root.layoutPlan.contentPaddingVp > 0
-                                       ? Math.round(root.layoutPlan.contentPaddingVp)
-                                       : Kirigami.Units.largeSpacing * 2
+    readonly property int _pagePadding: Kirigami.Units.largeSpacing * 2
 
     // 每行放几张卡：卡宽固定，剩下多少空间就放多少，不把卡拉宽填满整列。
     readonly property int _columns: Math.max(1, Math.floor((width - _pagePadding * 2 + _gridGap) / (_cardWidth + _gridGap)))

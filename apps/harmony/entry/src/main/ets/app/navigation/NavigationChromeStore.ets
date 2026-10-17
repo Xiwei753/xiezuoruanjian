@@ -1,6 +1,6 @@
 // NavigationChromeStore — 纯 presentation 层的导航 chrome 状态存储。
 // 各 Screen 的根 NavDestination.onShown 上报自己的 ScreenRole；
-// AppNavigation 订阅此 store，再 resolve ScreenPolicy 控制底栏显隐。
+// AppNavigation 订阅此 store，按平台动作表控制底栏显隐。
 // 不塞回 NavigationTransactionCoordinator，保持 UI chrome 和导航事务分离。
 //
 // Issue #768：按 tab 保存最后一个可见 role，切 tab 时同步发布该 tab 当前 role。
@@ -8,7 +8,7 @@
 // Issue #768 评论5835958606：后台 tab 的 onShown 只更新缓存，不污染全局 currentRole；
 // 只有 activeTab 的 role 变化才发布给观察者。
 
-import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
+import { ScreenRole } from './ScreenSemantics'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 
 type ScreenRoleObserver = (role: ScreenRole) => void

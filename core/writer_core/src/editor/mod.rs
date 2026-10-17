@@ -10,6 +10,7 @@
 //! 平台视觉快照、glyph shaping、纹理、动画时间线、RenderNode/QImage 均不属于 Core。
 
 pub mod autocorrect;
+pub mod formatting;
 pub mod kernel;
 pub mod strong_types;
 pub mod text_edit_session;

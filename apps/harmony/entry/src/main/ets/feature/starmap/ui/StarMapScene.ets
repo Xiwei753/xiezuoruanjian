@@ -122,7 +122,7 @@ import {
   screenToCanvas, canvasToScreen, resolveEdgeEndpointAnchor,
   edgeEndpointBoundaryPoint, buildCircleResponseBands,
   buildRecursiveSceneContext, resolveRecursiveHit, convertPointToRoot,
-  buildTargetPathForHost, planCrossLayerEdge, describeScenePath,
+  buildTargetPathForHost, describeScenePath,
   embedHitMetricsForScene, describeEmbedInputNodeId, describeSceneInputNodeId,
   extractEmbedInstanceIdFromInputNodeId,
   EMBED_TITLE_HIT_HEIGHT, EMBED_BORDER_HIT_WIDTH, EmbedHitMetrics
@@ -1480,7 +1480,7 @@ private refitAfterContentAdded(): void {
    * 之前这里是以"当前 Scene 的 starmapId + 空 segments"起手，于是每层的端点路径
    * 只在自己那一层里有效，"父节点拖到子节点上"这种跨层连线根本无法表达。
    * 现在起点统一相对根星图：segments 就是本 Scene 的绝对路径（Embed 再追加一段 enterEmbed），
-   * 之后 planCrossLayerEdge 负责把它换算到真正的宿主 Scene。
+   * 交给 Core 的 plan_cross_layer_connection 换算到真正的宿主 Scene。
    */
   private buildItemTargetPath(itemId: string): StarMapTargetPath {
     return buildTargetPathForHost(this.rootStarmapId, [], {
@@ -1564,14 +1564,22 @@ private refitAfterContentAdded(): void {
       kind: hit.target.objectKind === 'embed' ? 'embed' : 'node',
       itemId: hit.target.objectId
     })
-    const plan = planCrossLayerEdge(context, sourcePath, targetPath)
-    if (plan === null) {
-      logConnectEnd(sourcePath, targetPath, '', false, 'same_object')
+
+    // 宿主由 Core 决定：两条从根星图出发的绝对端点路径交给 Core，
+    // 自环 / 不可解析 / 不同根星图都会被 Core 拒绝。平台端不再算最近公共祖先。
+    if (this.bridge === null) {
+      logConnectEnd(sourcePath, targetPath, '', false, 'no_bridge')
       return
     }
+    const planEnvelope = await this.bridge.planStarMapCrossLayerConnection(sourcePath, targetPath)
+    if (!planEnvelope.success || !planEnvelope.data) {
+      logConnectEnd(sourcePath, targetPath, '', false, 'core_plan_failed')
+      return
+    }
+    const plan = planEnvelope.data
 
     // 边只能落在宿主 Scene 上：把两条相对宿主的端点路径交给它去写 Core
-    const hostHandle: StarMapSceneNode | null = this.findSceneHandle(plan.hostScenePath)
+    const hostHandle: StarMapSceneNode | null = this.findSceneHandle(plan.hostSegments)
     if (hostHandle === null) {
       logConnectEnd(sourcePath, targetPath, plan.hostStarmapId, false, 'no_host_scene')
       return
@@ -1753,7 +1761,8 @@ private refitAfterContentAdded(): void {
   /**
    * 落一条边：通过 bridge 的星图 CRUD API 写回**宿主 Scene**的图。
    *
-   * 端点路径已经由 planCrossLayerEdge 换算成相对本 Scene，所以这里直接透传，
+   * 端点路径已经由 Core 的 plan_cross_layer_connection 换算成相对本 Scene，
+   * 所以这里直接透传，
    * 不再做任何坐标或层级判断。边一定存进宿主那张图，这是 Core 的既有语义
    * （facade/starmap_ops/graph.rs::add_starmap_edge 把边写进 starmap_id 自己的图）。
    */

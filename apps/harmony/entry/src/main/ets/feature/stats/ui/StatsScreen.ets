@@ -9,12 +9,11 @@ import { WritingStats } from '../../../corebridge/dto/ProjectDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { HarmonyThemeAdapter, ThemeConfig } from '../../../ui/theme/HarmonyThemeAdapter'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole, WidthClass, ActionSlot } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ActionSlot, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
-import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 
 @Component
@@ -37,10 +36,7 @@ export struct StatsScreen {
     // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳；API < 23 用 NavDestination .menus() 接入 HeaderTrailing。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     if (!this.useHdsNav) {
-      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.Stats)
-      if (policy !== null) {
-        this.headerActions = policy.actionSlots
-      }
+      this.headerActions = resolveScreenPolicy(ScreenRole.Stats).actionSlots
     }
 
     const self = this

@@ -156,18 +156,17 @@ fn controller_create_edge_with_paths_returns_bool() {
 }
 
 #[test]
-fn content_connect_end_uses_lca_host_and_real_return_value() {
+fn content_connect_end_uses_core_host_plan_and_real_return_value() {
     let src = read_src(CONTENT);
     let window = function_window(&src, "function finishConnect(", 2800);
     assert!(
-        window.contains("StarMapPathPlanner.planCrossLayerRelation(fromPath, toPath)")
+        window.contains("planCrossLayerConnection(fromPath, toPath)")
             && window.contains("rootContent.findContentByPathSegments(plan.hostSegments)"),
-        "connect_end 必须先规划宿主（最近公共祖先）再找到宿主 Content，实际窗口:\n{window}"
+        "connect_end 必须先让 Core 规划宿主再找到宿主 Content，实际窗口:\n{window}"
     );
     assert!(
-        window.contains("plan = bindPlanToHost(plan, host)")
-            && window.contains("hostStarmapId = host.finalStarmapId"),
-        "端点 starmapId 必须绑定到宿主的 finalStarmapId，实际窗口:\n{window}"
+        window.contains("hostStarmapId = plan.hostStarmapId"),
+        "端点 starmapId 必须用 Core 返回的宿主 starmapId，实际窗口:\n{window}"
     );
     assert!(
         window.contains("success = host.commitEdgeWithPaths(plan.from, plan.to)"),

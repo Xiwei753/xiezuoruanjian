@@ -7,7 +7,7 @@
 // 官方为此留的口子是 titleBar.content.stackBuilder（6.0.0(20) 起），
 // 允许自绘标题栏区域，本组件就是填进那个口子的。
 //
-// 动作来源没有变：仍是 Core ScreenPolicy 的 ActionSlot[] → sortedHeaderTrailingActions
+// 动作来源没有变：仍是平台动作表的 ActionSlot[] → sortedHeaderTrailingActions
 // → NavigationHeaderActionDispatcher，这里只替换「怎么画」，不替换「做什么、谁决定顺序」。
 //
 // Issue #905：删除内容流（inHdsTitleBar=false）的两条渲染分支。
@@ -20,7 +20,7 @@
 // 手势：按住胶囊任意位置（含按钮之间空隙与内边距）不得触发一级 Tabs 的横向滑动切页，
 // 与 PrimaryFab 共用 PrimaryTabGestureLock。
 
-import { ActionSlot, ActionRole } from '../../../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ActionRole } from '../../ScreenSemantics'
 import { sortedHeaderTrailingActions } from '../../NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from '../../NavigationHeaderActionDispatcher'
 import { PrimaryTabGestureLock } from '../../PrimaryTabGestureLock'
@@ -37,7 +37,7 @@ const DRAG_SLOP_VP: number = 8
 
 @ComponentV2
 export struct HeaderActionCapsule {
-  /** Core ScreenPolicy 下发的页头动作 */
+  /** 平台动作表下发的页头动作 */
   @Param actionSlots: ActionSlot[] = []
   @Local dragged: boolean = false
 

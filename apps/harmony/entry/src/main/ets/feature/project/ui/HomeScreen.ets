@@ -18,22 +18,19 @@ import { ProjectSummary } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../../feature/settings/presentation/SyncOperationController'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
+import { PRIMARY_FAB_BOTTOM_INSET_VP, PROJECT_CARD_MIN_WIDTH_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { ProjectListViewModel, ProjectOpenTarget } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
-import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ActionTarget, ActionRole, ScreenRole, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
-import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
-import { defaultLayoutMetrics } from '../../../ui/adaptive/LayoutPolicyHelper'
 
 // Issue #827 评论 1 第 7 点：命名框 / 确认框的内容最大宽度（vp）。
 // 原来写 .width('80%')，在 1244vp 宽屏上对话框会被拉到近 1000vp 宽，
@@ -98,10 +95,7 @@ export struct HomeScreen {
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     // Issue #905：窄屏恢复 HDS 原生标题栏，页头动作由 HdsAppDestinationApi23 的
     // stackBuilder 自绘。这里的 headerActions 只供 API < 23 的 NavDestination.menus 兜底。
-    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectList)
-    if (policy !== null) {
-      this.headerActions = policy.actionSlots
-    }
+    this.headerActions = resolveScreenPolicy(ScreenRole.ProjectList).actionSlots
   }
 
   aboutToDisappear() {
@@ -443,14 +437,9 @@ export struct HomeScreen {
   // 宽屏布局（Issue #827 评论 2 结构图）
   // ────────────────────────────────────────
 
-  // 作品卡宽度：Core 的 project_card_min_width_dp 是共用最小宽度，
-  // 不在平台端另写一套 180。Core 契约没解析出来时退回 LayoutPolicyHelper 的兜底值。
+  // 作品卡宽度：平台自己的最小宽度常量（项目卡共享尺寸），不在平台端另写一套 180。
   private get wideProjectCardWidth(): number {
-    const planMetrics = this.adaptiveState.layoutPlan.metrics
-    if (planMetrics.projectCardMinWidthDp > 0) {
-      return planMetrics.projectCardMinWidthDp
-    }
-    return defaultLayoutMetrics().projectCardMinWidthDp
+    return PROJECT_CARD_MIN_WIDTH_VP
   }
 
   // 书封面卡是竖向的：高 / 宽 = 4 / 3，与手绘稿一致。

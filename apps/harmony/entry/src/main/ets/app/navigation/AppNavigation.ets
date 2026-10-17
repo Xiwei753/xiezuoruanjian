@@ -71,9 +71,9 @@ export struct AppNavigation {
       homeStack.clear()
       homeStack.pushPath({ name: Routes.Home })
 
-      // 底栏显隐由 ScreenPolicy 决定，不再手工设置。
-      // continuation 导航到 Workspace 时 showPrimaryNavigation=true（底栏显示），
-      // 导航到 Writing 时 showPrimaryNavigation=false（底栏隐藏），与普通进入一致。
+      // 底栏显隐由平台动作表按页面角色决定，不再手工设置。
+      // continuation 导航到 Workspace 时底栏显示，
+      // 导航到 Writing 时底栏隐藏，与普通进入一致。
       const hasProject: boolean = payload.projectId !== undefined && payload.projectId !== ''
       const hasChapter: boolean = payload.chapterId !== undefined && payload.chapterId !== ''
       const hasVolume: boolean = payload.volumeId !== undefined && payload.volumeId !== ''

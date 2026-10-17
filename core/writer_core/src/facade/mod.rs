@@ -386,7 +386,6 @@ mod tests {
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
 
         let mut local_settings = core.load_local_settings().unwrap();
-        local_settings.window_width = 1000.0;
         // Issue #705: LocalSettings 已删除 theme_mode,运行时只认 appearance_mode。
         local_settings.appearance_mode = "dark".to_string();
         local_settings.auto_save_enabled = true;
@@ -394,7 +393,6 @@ mod tests {
         core.save_local_settings(&local_settings).unwrap();
 
         let loaded_local = core.load_local_settings().unwrap();
-        assert_eq!(loaded_local.window_width, 1000.0);
         assert_eq!(loaded_local.appearance_mode, "dark");
         assert!(loaded_local.auto_save_enabled);
         assert_eq!(loaded_local.editor_font_size, 14.0);

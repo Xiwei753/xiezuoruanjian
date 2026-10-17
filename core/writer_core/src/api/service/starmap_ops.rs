@@ -1504,6 +1504,34 @@ impl WriterCoreApi {
         })
     }
 
+    /// 规划跨层连线应当落在哪张图上（Core 唯一事实来源）。
+    ///
+    /// Edge 与 Link 共用同一条宿主规划规则：平台端提交两条从同一根星图出发的
+    /// 绝对端点路径，Core 解析两端所在 Scene，取最长公共前缀得到宿主星图与
+    /// 两条相对宿主的端点路径。自环、不可解析路径、不同根星图都会被拒绝。
+    pub fn plan_cross_layer_connection(
+        &self,
+        from: crate::api::types::StarMapTargetPathDto,
+        to: crate::api::types::StarMapTargetPathDto,
+    ) -> Result<crate::api::types::CrossLayerConnectionPlanDto, WriterError> {
+        let from_core: crate::starmap::types::reference::StarMapTargetPath =
+            from.try_into().map_err(|e: crate::error::Error| {
+                WriterError::Other(format!(
+                    "plan_cross_layer_connection: from conversion failed: {e:?}"
+                ))
+            })?;
+        let to_core: crate::starmap::types::reference::StarMapTargetPath =
+            to.try_into().map_err(|e: crate::error::Error| {
+                WriterError::Other(format!(
+                    "plan_cross_layer_connection: to conversion failed: {e:?}"
+                ))
+            })?;
+        let plan = self
+            .core_write()
+            .plan_cross_layer_connection(&from_core, &to_core)?;
+        Ok(plan.into())
+    }
+
     /// 列出与特定画布或目标相关的所有连接。
     ///
     /// `target` 为 `Some` 时走 `query_starmap_connections_for_target`，为 `None`

@@ -6,8 +6,8 @@
 // - 页面不再维护 @State 副本，直接观察 ViewModel 的 @Trace 字段
 
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { Project, VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
-import { ScreenPolicy, ScreenRole, ActionSlot, ActionTarget, ActionRegion } from '../../../corebridge/dto/PlatformDtos'
+import { Project, Volume, VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
+import { ScreenPolicy, ScreenRole, ActionSlot, ActionTarget, ActionRegion, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
 import { getBridge } from '../../../app/AppContext'
 
 // ─── 页面状态对象（V2 状态管理） ───
@@ -142,13 +142,10 @@ export class ProjectWorkspaceViewModel {
         this.errorMessageState = '加载项目失败'
       }
 
-      // 加载页面策略（ScreenPolicy）
-      const policyResult = await this.bridge.resolveScreenPolicy(ScreenRole.ProjectWorkspace)
-      if (!policyResult.success || !policyResult.data) {
-        throw new Error(policyResult.errorCode ?? 'resolve screen policy failed')
-      }
-      this.screenPolicy = policyResult.data
-      this.primaryActions = policyResult.data.actionSlots
+      // 加载页面动作表（平台 UI 语义，不再经过 Core）
+      const policy: ScreenPolicy = resolveScreenPolicy(ScreenRole.ProjectWorkspace)
+      this.screenPolicy = policy
+      this.primaryActions = policy.actionSlots
         .filter((slot: ActionSlot) => slot.region === ActionRegion.PrimaryAction)
         .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
     } catch (_err) {
@@ -206,79 +203,41 @@ export class ProjectWorkspaceViewModel {
     this.expandedVolumes = newSet
   }
 
-  // ─── CRUD 操作 ───
+  // ─── 卷/章节共享业务入口 ───
+  // Issue #920 A：作品工作区页与写作页（宽屏章节树）复用同一套卷/章节创建/删除规则，
+  // 写作页不再各自维护第二套创建/删除逻辑。这里只做 Core 调用与错误处理，不碰页面状态。
 
-  async createVolume(): Promise<boolean> {
+  /** 在指定作品下新建卷。成功返回新建的卷，失败返回 null。 */
+  async createVolumeIn(projectId: string, name: string): Promise<Volume | null> {
     try {
-      const result = await this.bridge.createVolume(this.projectId, '新卷')
-      if (result.success) {
-        await this.loadData(this.projectId)
-        return true
+      const result = await this.bridge.createVolume(projectId, name)
+      if (result.success && result.data) {
+        return result.data
       }
     } catch (_err) {
       console.error('Failed to create volume:', _err)
     }
-    return false
+    return null
   }
 
-  async createChapter(volumeId: string): Promise<boolean> {
+  /** 在指定卷下新建章节。成功返回新建的章节，失败返回 null。 */
+  async createChapterIn(volumeId: string, name: string): Promise<ChapterMeta | null> {
     try {
-      const result = await this.bridge.createChapter(volumeId, '新章节')
+      const result = await this.bridge.createChapter(volumeId, name)
       if (result.success && result.data) {
-        const newChapterMeta: ChapterMeta = result.data
-
-        // 1. 在 volumeTrees 中找到目标卷，追加新 ChapterMeta
-        // Issue #774 评论5847638284 第4项：顶层重新赋值 volumeTrees，不原地改嵌套 chapters，
-        // 确保 V2 状态管理正确触发更新（VolumeTree 是普通 interface，不是 @ObservedV2）。
-        const nextTrees: VolumeTree[] = []
-        for (const vt of this.volumeTrees) {
-          if (vt.volume.id === volumeId) {
-            const nextTree: VolumeTree = {
-              volume: vt.volume,
-              chapters: vt.chapters.concat([newChapterMeta])
-            }
-            nextTrees.push(nextTree)
-          } else {
-            nextTrees.push(vt)
-          }
-        }
-        this.volumeTrees = nextTrees
-
-        // 2. 在 volumeCardStates 中找到对应 VolumeCardState，追加新 ChapterRowState
-        for (const card of this.volumeCardStates) {
-          if (card.volumeId === volumeId) {
-            const chState: ChapterRowState = new ChapterRowState()
-            chState.chapterId = newChapterMeta.id
-            chState.chapterTitle = newChapterMeta.title
-            chState.wordCount = newChapterMeta.wordCount
-            chState.lastEditedTime = newChapterMeta.updatedAt
-            chState.volumeId = volumeId
-            card.chapters.push(chState)
-            card.chapterCount = card.chapters.length
-            break
-          }
-        }
-
-        // 3. 保证目标卷在 expandedVolumes 中（新增章节后应展开该卷）
-        if (!this.expandedVolumes.has(volumeId)) {
-          const newSet = new Set<string>(this.expandedVolumes)
-          newSet.add(volumeId)
-          this.expandedVolumes = newSet
-        }
-
-        return true
+        return result.data
       }
     } catch (_err) {
       console.error('Failed to create chapter:', _err)
     }
-    return false
+    return null
   }
 
-  async deleteVolume(volumeId: string): Promise<boolean> {
+  /** 删除指定作品下的卷。 */
+  async deleteVolumeIn(projectId: string, volumeId: string): Promise<boolean> {
     try {
-      const result = await this.bridge.deleteVolume(this.projectId, volumeId)
+      const result = await this.bridge.deleteVolume(projectId, volumeId)
       if (result.success) {
-        await this.loadData(this.projectId)
         return true
       }
     } catch (_err) {
@@ -287,15 +246,91 @@ export class ProjectWorkspaceViewModel {
     return false
   }
 
-  async deleteChapter(chapterId: string): Promise<boolean> {
+  /** 删除指定章节。 */
+  async deleteChapterIn(chapterId: string): Promise<boolean> {
     try {
       const result = await this.bridge.deleteChapter(chapterId)
       if (result.success) {
-        await this.loadData(this.projectId)
         return true
       }
     } catch (_err) {
       console.error('Failed to delete chapter:', _err)
+    }
+    return false
+  }
+
+  // ─── CRUD 操作（工作区页面入口，复用上面的共享业务入口 + 刷新工作区状态） ───
+
+  async createVolume(): Promise<boolean> {
+    const created: Volume | null = await this.createVolumeIn(this.projectId, '新卷')
+    if (created === null) {
+      return false
+    }
+    await this.loadData(this.projectId)
+    return true
+  }
+
+  async createChapter(volumeId: string): Promise<boolean> {
+    const newChapterMeta: ChapterMeta | null = await this.createChapterIn(volumeId, '新章节')
+    if (newChapterMeta === null) {
+      return false
+    }
+    // 1. 在 volumeTrees 中找到目标卷，追加新 ChapterMeta
+    // Issue #774 评论5847638284 第4项：顶层重新赋值 volumeTrees，不原地改嵌套 chapters，
+    // 确保 V2 状态管理正确触发更新（VolumeTree 是普通 interface，不是 @ObservedV2）。
+    const nextTrees: VolumeTree[] = []
+    for (const vt of this.volumeTrees) {
+      if (vt.volume.id === volumeId) {
+        const nextTree: VolumeTree = {
+          volume: vt.volume,
+          chapters: vt.chapters.concat([newChapterMeta])
+        }
+        nextTrees.push(nextTree)
+      } else {
+        nextTrees.push(vt)
+      }
+    }
+    this.volumeTrees = nextTrees
+
+    // 2. 在 volumeCardStates 中找到对应 VolumeCardState，追加新 ChapterRowState
+    for (const card of this.volumeCardStates) {
+      if (card.volumeId === volumeId) {
+        const chState: ChapterRowState = new ChapterRowState()
+        chState.chapterId = newChapterMeta.id
+        chState.chapterTitle = newChapterMeta.title
+        chState.wordCount = newChapterMeta.wordCount
+        chState.lastEditedTime = newChapterMeta.updatedAt
+        chState.volumeId = volumeId
+        card.chapters.push(chState)
+        card.chapterCount = card.chapters.length
+        break
+      }
+    }
+
+    // 3. 保证目标卷在 expandedVolumes 中（新增章节后应展开该卷）
+    if (!this.expandedVolumes.has(volumeId)) {
+      const newSet = new Set<string>(this.expandedVolumes)
+      newSet.add(volumeId)
+      this.expandedVolumes = newSet
+    }
+
+    return true
+  }
+
+  async deleteVolume(volumeId: string): Promise<boolean> {
+    const ok: boolean = await this.deleteVolumeIn(this.projectId, volumeId)
+    if (ok) {
+      await this.loadData(this.projectId)
+      return true
+    }
+    return false
+  }
+
+  async deleteChapter(chapterId: string): Promise<boolean> {
+    const ok: boolean = await this.deleteChapterIn(chapterId)
+    if (ok) {
+      await this.loadData(this.projectId)
+      return true
     }
     return false
   }

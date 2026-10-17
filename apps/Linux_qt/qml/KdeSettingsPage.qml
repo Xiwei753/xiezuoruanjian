@@ -40,7 +40,10 @@ ScrollView {
     contentHeight: settingsColumns.height
 
     // ── 依赖注入（与旧 SettingsDialog 保持同一属性名） ──
-    property var layoutPlan: null
+    // Issue #920：面板形态（宽屏两列 / 顶部搜索）由宿主 SettingsDialog 按窗口
+    // 宽度断点算好后注入，本页不再从 Core 读 layoutPlan。
+    property bool widePanel: true
+    property bool overlayPanel: true
     property var settingsBackendRef: null
     property var workspaceBackendRef: null
     property var syncBackendRef: null
@@ -49,10 +52,6 @@ ScrollView {
     property var beforeSyncHook: null
     // 宽屏顶部搜索关键词：只做分组过滤，不改任何设置读取/保存路径。
     property string searchText: ""
-
-    // Issue #836：layoutPlan 为 null 时默认宽屏 / Workbench。
-    readonly property bool widePanel: layoutPlan === null || layoutPlan.primaryNavigationPlacement === "Side"
-    readonly property bool overlayPanel: layoutPlan === null || layoutPlan.workspaceLayoutMode === "Workbench"
 
     signal settingsChanged()
     // Issue #902：openConflict 增加 targetKind 参数（"app"/"project"），区分 App 级与作品级冲突。

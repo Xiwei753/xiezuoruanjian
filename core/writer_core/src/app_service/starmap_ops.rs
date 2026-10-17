@@ -5,7 +5,8 @@ use crate::api::{
     StarMapHyperlinkPatchInputDto, StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto,
     StarMapNavigationLocationDto, StarMapNavigationRouteDto, StarMapNodeDto,
     StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPhasedSnapshotDto, StarMapPointDto,
-    StarMapReferenceDto, StarMapResolvedPathDto, StarMapTargetDetailDto, WriterError,
+    StarMapReferenceDto, StarMapResolvedPathDto, StarMapTargetDetailDto, StarMapTargetPathDto,
+    WriterError,
 };
 
 impl super::WriterAppService {
@@ -307,5 +308,17 @@ impl super::WriterAppService {
         target: Option<StarMapTargetDetailDto>,
     ) -> Result<Vec<StarMapConnectionInfoDto>, WriterError> {
         self.api.list_starmap_connections(route, target)
+    }
+
+    /// 规划跨层连线应当落在哪张图上。转发到 Core API。
+    ///
+    /// 输入是两条从同一根星图出发的绝对端点路径，返回宿主星图、宿主 Scene
+    /// 路径和两条相对宿主的端点路径；自环/不可解析/不同根都返回 `Err`。
+    pub fn plan_cross_layer_connection(
+        &self,
+        from: StarMapTargetPathDto,
+        to: StarMapTargetPathDto,
+    ) -> Result<crate::api::types::CrossLayerConnectionPlanDto, WriterError> {
+        self.api.plan_cross_layer_connection(from, to)
     }
 }

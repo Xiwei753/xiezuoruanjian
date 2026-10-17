@@ -35,14 +35,11 @@ Supersedes: None
 - `editorSmoothCursorEnabled`（布尔值）
 - `editorTypingAnimationDurationMs`（整数，毫秒，范围 30..1000，步长 10）
 - `editorSmoothCursorDurationMs`（整数，毫秒，范围 30..1000，步长 10）
-- `windowWidth`、`windowHeight`（浮点数）
 - `autoIndentEnabled`（布尔值，自动首行缩进开关，默认 true）
 - `autoIndentWidth`（浮点数，首行缩进宽度字符数，默认 2.0）
 - `editorCoordinatedTextCursorAnimationEnabled`（布尔值，协同光标动画开关，默认 false）
 - `aiEnabled`（布尔值，AI 功能开关，默认 false）
 - `statsDeviceId`（字符串，统计设备 ID，默认自动生成 UUID）
-- `desktopSidebarWidth`（浮点数，桌面端侧边栏宽度像素，默认 240.0；兼容读取 `linux_qt_sidebar_width`、`desktop_sidebar_width`、`linux_sidebar_width`）
-- `desktopEditorWidth`（浮点数，桌面端编辑器宽度像素，默认 0.0；兼容读取 `linux_qt_editor_width`、`desktop_editor_width`）
 - `diagnosticsEnabled`（布尔值，本地诊断日志开关，默认 true，不进入同步、不含敏感数据）
 - `diagnosticsVerbose`（布尔值，本地诊断详细模式，默认 true，不进入同步、不含敏感数据）
 

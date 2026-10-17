@@ -51,6 +51,10 @@ pub struct StarMapBackend {
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QString),
     resolve_starmap_path:
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QJsonObject),
+    plan_cross_layer_connection_json:
+        qt_method!(fn(&self, from_path_json: QString, to_path_json: QString) -> QString),
+    plan_cross_layer_connection:
+        qt_method!(fn(&self, from_path_json: QString, to_path_json: QString) -> QJsonObject),
     create_starmap_node_json: qt_method!(
         fn(
             &mut self,
@@ -549,6 +553,26 @@ impl StarMapBackend {
         segments_json: QString,
     ) -> QJsonObject {
         self.with_app(|app| app.resolve_starmap_path(root_starmap_id, segments_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn plan_cross_layer_connection_json(
+        &self,
+        from_path_json: QString,
+        to_path_json: QString,
+    ) -> QString {
+        self.with_app(|app| app.plan_cross_layer_connection_json(from_path_json, to_path_json))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn plan_cross_layer_connection(
+        &self,
+        from_path_json: QString,
+        to_path_json: QString,
+    ) -> QJsonObject {
+        self.with_app(|app| app.plan_cross_layer_connection(from_path_json, to_path_json))
             .unwrap_or_else(|_| {
                 crate::backend::json_utils::qjson_object_from_json(
                     &crate::backend::json_utils::borrow_conflict_error_json(),

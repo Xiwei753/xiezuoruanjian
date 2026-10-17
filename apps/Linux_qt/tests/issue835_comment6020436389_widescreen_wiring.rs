@@ -17,8 +17,8 @@
 //!    不再有"章纲" TextArea / outlineGroupExpanded / chapterNoteChanged。
 //! 5. 宽屏设置两列、窄屏上下单列，两组列都在同一份 `settingsColumns` 里，
 //!    不再用 `visible: root.widePanel` 隐藏右列丢掉三组设置。
-//! 6. 宽屏默认布局：layoutPlan 为 null 时默认宽屏侧栏（Side），只有 Core 明确
-//!    返回 "Bottom" 才进入窄屏导航。
+//! 6. 宽度断点：壳层宽窄（CreativeHub 侧栏 / WritingWorkspace 多栏 /
+//!    设置面板形态）都由 Qt 本地宽度断点决定，不再从 Core 读 layoutPlan。
 //!
 //! 每条断言对应 #835 复核评论里明确要求或明确禁止的一条接线，不复制 QML 逻辑。
 
@@ -252,7 +252,7 @@ fn main_qml_writing_workspace_does_not_forward_starmap() {
 // 3. WritingToolRail.qml — AI 入口保留在自己的 rail 位置，禁用而非删除
 // ─────────────────────────────────────────────────────────────────────────
 
-/// AI 入口仍占独立 44px 行，降低 opacity，且不发 toolRequested。
+/// AI 入口仍占独立一行，降低 opacity，且不发 toolRequested。
 #[test]
 fn tool_rail_keeps_disabled_ai_slot() {
     let src = read_src("qml/WritingToolRail.qml");
@@ -268,8 +268,8 @@ fn tool_rail_keeps_disabled_ai_slot() {
         "rail 入口必须直接渲染 tools 常驻数组，不得按 enabled 过滤，实际窗口:\n{delegate}"
     );
     assert!(
-        delegate.contains("Layout.preferredHeight: 44"),
-        "disabled 的 AI 入口仍要占自己的 44px 行，实际窗口:\n{delegate}"
+        delegate.contains("Layout.preferredHeight:"),
+        "disabled 的 AI 入口仍要占自己的一行高度，实际窗口:\n{delegate}"
     );
     assert!(
         delegate.contains("opacity: modelData.enabled !== false ? 1.0 : 0.4"),
@@ -581,101 +581,135 @@ fn settings_wide_two_columns_narrow_stacked() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 7. 宽屏默认布局 — layoutPlan 为 null 时默认宽屏
+// 7. Issue #920：壳层宽度断点由 Qt 本地决定，不再依赖 Core 布局契约
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Issue #836：CreativeHub.qml 的 wideShell 在 layoutPlan 为 null 时默认 true。
+/// Issue #920：CreativeHub.qml 的 wideShell 由 Qt 本地窗口宽度断点决定，
+/// 不再从 Core 读 layoutPlan。
 #[test]
-fn creative_hub_wide_shell_defaults_to_side_when_plan_null() {
+fn creative_hub_wide_shell_uses_local_breakpoint() {
     let src = read_src("qml/CreativeHub.qml");
-    assert!(
-        src.contains("layoutPlan === null || layoutPlan.primaryNavigationPlacement === \"Side\""),
-        "Issue #836：CreativeHub wideShell 必须在 layoutPlan===null 时默认 Side，实际:\n{src}"
-    );
-
-    // 确保不再用旧逻辑（layoutPlan && ...）
     let code = strip_line_comments(&src);
     assert!(
-        !code.contains("layoutPlan && layoutPlan.primaryNavigationPlacement"),
-        "Issue #836：CreativeHub 不得再使用旧逻辑 layoutPlan && ..."
+        src.contains("root.width >= root.wideShellBreakpoint"),
+        "Issue #920：CreativeHub wideShell 必须用本地宽度断点判定，实际:\n{src}"
+    );
+    assert!(
+        code.contains("readonly property int wideShellBreakpoint: 840"),
+        "Issue #920：CreativeHub 必须有本地 wideShellBreakpoint 常量"
+    );
+    assert!(
+        !code.contains("layoutPlan"),
+        "Issue #920：CreativeHub 不得再引用 layoutPlan（Core 布局契约已删除）"
     );
 }
 
-/// Issue #836：WritingWorkspace.qml 的 wideWorkbench 在 layoutPlan 为 null 时默认 true。
+/// Issue #920：WritingWorkspace.qml 的 wideWorkbench 由 Qt 本地宽度/高度断点决定，
+/// 不再向 Core 要工作台布局计划。
 #[test]
-fn writing_workspace_wide_workbench_defaults_when_plan_null() {
+fn writing_workspace_wide_workbench_uses_local_breakpoint() {
     let src = read_src("qml/WritingWorkspace.qml");
-    assert!(
-        src.contains("layoutPlan === null || layoutPlan.workspaceLayoutMode === \"Workbench\""),
-        "Issue #836：WritingWorkspace wideWorkbench 必须在 layoutPlan===null 时默认 Workbench，实际:\n{src}"
-    );
-
     let code = strip_line_comments(&src);
     assert!(
-        !code.contains("layoutPlan && layoutPlan.workspaceLayoutMode"),
-        "Issue #836：WritingWorkspace 不得再使用旧逻辑 layoutPlan && ..."
+        src.contains("root.width >= root.workbenchMinWidth")
+            && src.contains("root.height >= root.workbenchMinHeight"),
+        "Issue #920：WritingWorkspace wideWorkbench 必须用本地宽高断点判定，实际:\n{src}"
+    );
+    assert!(
+        !code.contains("layoutPlan"),
+        "Issue #920：WritingWorkspace 不得再引用 layoutPlan"
+    );
+    assert!(
+        !code.contains("resolve_workbench_layout"),
+        "Issue #920：WritingWorkspace 不得再调 appBackend.resolve_workbench_layout"
+    );
+    assert!(
+        !code.contains("workbenchPlan")
+            && !code.contains("roleBounds")
+            && !code.contains("roleWidth"),
+        "Issue #920：WritingWorkspace 不得再消费 Core 七角色 bounds plan"
     );
 }
 
-/// Issue #836：SettingsDialog.qml 的 widePanel / overlayPanel 在 layoutPlan 为 null 时默认宽屏。
+/// Issue #920：SettingsDialog.qml 的 widePanel / overlayPanel 由本地面板宿主宽度
+/// 断点决定，不再从 Core 读 layoutPlan。
 #[test]
-fn settings_dialog_wide_defaults_when_plan_null() {
+fn settings_dialog_wide_panel_uses_local_breakpoint() {
     let src = read_src("qml/SettingsDialog.qml");
-    assert!(
-        src.contains("layoutPlan === null || layoutPlan.primaryNavigationPlacement === \"Side\""),
-        "Issue #836：SettingsDialog widePanel 必须在 layoutPlan===null 时默认 Side"
-    );
-    assert!(
-        src.contains("layoutPlan === null || layoutPlan.workspaceLayoutMode === \"Workbench\""),
-        "Issue #836：SettingsDialog overlayPanel 必须在 layoutPlan===null 时默认 Workbench"
-    );
-
     let code = strip_line_comments(&src);
     assert!(
-        !code.contains("layoutPlan && layoutPlan.primaryNavigationPlacement"),
-        "Issue #836：SettingsDialog 不得再使用旧逻辑 layoutPlan && ..."
+        src.contains("readonly property bool widePanel: root.hostWidth >= root.wideBreakpoint"),
+        "Issue #920：SettingsDialog widePanel 必须用本地断点判定"
     );
     assert!(
-        !code.contains("layoutPlan && layoutPlan.workspaceLayoutMode"),
-        "Issue #836：SettingsDialog 不得再使用旧逻辑 layoutPlan && ..."
+        src.contains(
+            "readonly property bool overlayPanel: root.hostWidth >= root.overlayBreakpoint"
+        ),
+        "Issue #920：SettingsDialog overlayPanel 必须用本地断点判定"
+    );
+    assert!(
+        !code.contains("layoutPlan"),
+        "Issue #920：SettingsDialog 不得再引用 layoutPlan"
+    );
+    assert!(
+        !code.contains("primaryNavigationPlacement") && !code.contains("workspaceLayoutMode"),
+        "Issue #920：SettingsDialog 不得再读 Core 的导航放置 / 布局模式"
     );
 }
 
-/// Issue #836：只有 Core 明确返回 "Bottom" 才进入窄屏导航。
-/// 验证三处 QML 的 wideShell/wideWorkbench/widePanel 都只在 "Bottom" 时为 false。
+/// Issue #920：KdeSettingsPage 的面板形态由宿主注入布尔，不再持有 layoutPlan。
 #[test]
-fn only_bottom_placement_enters_narrow_shell() {
-    // CreativeHub: wideShell = layoutPlan === null || placement === "Side"
-    // → 只有 placement === "Bottom" 时 wideShell 才为 false
+fn kde_settings_page_has_no_layout_plan() {
+    let src = read_src("qml/KdeSettingsPage.qml");
+    let code = strip_line_comments(&src);
+    assert!(
+        !code.contains("layoutPlan"),
+        "Issue #920：KdeSettingsPage 不得再引用 layoutPlan"
+    );
+    assert!(
+        code.contains("property bool widePanel: true")
+            && code.contains("property bool overlayPanel: true"),
+        "Issue #920：KdeSettingsPage 的 widePanel / overlayPanel 应为注入布尔"
+    );
+}
+
+/// Issue #920：三处壳层宽度判断都改为 Qt 本地宽度断点，不再依赖 Core 返回放置/模式。
+#[test]
+fn shell_width_decisions_use_local_breakpoints() {
+    // CreativeHub: wideShell = root.width >= root.wideShellBreakpoint
     let hub = read_src("qml/CreativeHub.qml");
     let hub_line = hub
         .lines()
         .find(|l| l.contains("wideShell:"))
         .expect("CreativeHub must have wideShell property");
     assert!(
-        hub_line.contains("layoutPlan === null") && hub_line.contains("\"Side\""),
-        "CreativeHub wideShell 必须在 null 时默认宽屏，只有 Bottom 才窄屏，实际:\n{hub_line}"
+        hub_line.contains("root.width >= root.wideShellBreakpoint"),
+        "CreativeHub wideShell 必须按本地宽度断点判定，实际:\n{hub_line}"
     );
 
-    // WritingWorkspace: wideWorkbench = layoutPlan === null || mode === "Workbench"
+    // WritingWorkspace: wideWorkbench = root.width >= workbenchMinWidth && height >= ...
     let ws = read_src("qml/WritingWorkspace.qml");
     let ws_line = ws
         .lines()
         .find(|l| l.contains("wideWorkbench:"))
         .expect("WritingWorkspace must have wideWorkbench property");
     assert!(
-        ws_line.contains("layoutPlan === null") && ws_line.contains("\"Workbench\""),
-        "WritingWorkspace wideWorkbench 必须在 null 时默认宽屏，实际:\n{ws_line}"
+        ws_line.contains("root.width >= root.workbenchMinWidth"),
+        "WritingWorkspace wideWorkbench 必须按本地宽度断点判定，实际:\n{ws_line}"
+    );
+    assert!(
+        ws.contains("root.height >= root.workbenchMinHeight"),
+        "WritingWorkspace wideWorkbench 必须按本地高度断点判定"
     );
 
-    // SettingsDialog: widePanel = layoutPlan === null || placement === "Side"
+    // SettingsDialog: widePanel = root.hostWidth >= root.wideBreakpoint
     let sd = read_src("qml/SettingsDialog.qml");
     let sd_line = sd
         .lines()
         .find(|l| l.contains("widePanel:"))
         .expect("SettingsDialog must have widePanel property");
     assert!(
-        sd_line.contains("layoutPlan === null") && sd_line.contains("\"Side\""),
-        "SettingsDialog widePanel 必须在 null 时默认宽屏，实际:\n{sd_line}"
+        sd_line.contains("root.hostWidth >= root.wideBreakpoint"),
+        "SettingsDialog widePanel 必须按本地宽度断点判定，实际:\n{sd_line}"
     );
 }

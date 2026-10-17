@@ -163,17 +163,17 @@ Item {
     // for viewport clipping. Flickable only holds a transparent spacer
     // for scrollbar / contentHeight.
     //
-    // 关于渲染：LayoutPlan 只控制布局策略（如最大宽度和padding），
+    // 关于渲染（Issue #920）：Qt 本地布局断点只控制布局策略（最大宽度和 padding），
     // 不控制 SujianEditorItem 的渲染细节，渲染由 QML layout 自动处理
     //
     // 具体分工：
-    //   - LayoutPlan 策略（contentMaxWidthVp, shellMode, contentPaddingVp）
-    //     通过视口宽度和 SujianEditorItem 的 Q_PROPERTY 传递
+    //   - 本地布局常量（contentMaxWidthVp 等）通过视口宽度传递给
+    //     SujianEditorItem 的 Q_PROPERTY
     //   - 编辑器参数（font_pixel_size, line_spacing, text_indent,
     //     cursor_color, scroll_y 等）由 settingsBackend 和 EditorController
-    //     直接管理，不走 LayoutPlan
+    //     直接管理，不走布局断点
     //   - 编辑区尺寸跟随视口宽度和 QML layout 自动调整
-    //     不需要 SujianEditorItem 的 geometry_changed 依赖 LayoutPlan
+    //     不需要 SujianEditorItem 的 geometry_changed 依赖布局断点
     //   - updatePaintNode / QSG 渲染完全由 Rust 侧管理
     // Issue #677 评论 5653315696 约束:
     //   - 写作区只拿 DesignTokens 已经算好的最终颜色（editorText、

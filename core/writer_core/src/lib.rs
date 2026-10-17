@@ -68,7 +68,6 @@ pub mod platform_interaction;
 
 #[cfg(feature = "harmony-ffi")]
 pub mod ffi;
-pub mod presentation;
 pub mod project;
 pub mod recent_edits;
 pub mod search;

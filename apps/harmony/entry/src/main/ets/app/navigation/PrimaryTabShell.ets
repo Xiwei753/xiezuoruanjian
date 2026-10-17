@@ -9,7 +9,7 @@
 // - 统计栈：Stats
 //
 // 一级切换只切 tab index，不再 clear() + pushPath() 重建根页面。
-// Writing/Settings 需要隐藏一级底栏时，通过 ScreenPolicy.showPrimaryNavigation 控制 Tabs 的 barHeight 切到 0。
+// Writing/Settings 需要隐藏一级底栏时，通过平台动作表 resolveShowPrimaryNavigation 控制 Tabs 的 barHeight 切到 0。
 //
 // Issue #767 修复 navPathStack render 期间修改问题：
 // 用工厂函数在字段初始化时创建已经带根路由的 NavPathStack，
@@ -29,8 +29,7 @@ import { NavigationTransactionCoordinator } from './NavigationTransactionCoordin
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../ui/theme/DesignTokens'
-import { ActionSlot, ScreenRole, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
-import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
+import { ActionSlot, ScreenRole, resolveScreenPolicy, resolveShowPrimaryNavigation } from './ScreenSemantics'
 import { NavigationChromeStore } from './NavigationChromeStore'
 import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
@@ -93,9 +92,9 @@ export struct PrimaryTabShell {
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   // 当前页面对应的 ScreenRole
   @State currentScreenRole: ScreenRole = ScreenRole.ProjectList
-  // 是否显示底部一级导航栏，由 Core ScreenPolicy.showPrimaryNavigation 决定
+  // 是否显示底部一级导航栏，由平台动作表 resolveShowPrimaryNavigation 决定
   @State currentShowPrimaryNav: boolean = true
-  // Issue #774 评论5847638284 第2项：交互锁——异步查 policy 期间禁止切 tab，
+  // Issue #774 评论5847638284 第2项：交互锁——解析页面动作期间禁止切 tab，
   // 但不触发 @Watch 导致底栏无意义 hide→show。与视觉显示分开。
   @State currentPrimaryNavInteractive: boolean = true
   // 按住主操作悬浮按钮期间的手势锁。与上面的 policy 交互锁语义不同（那个是「能否离开当前页」，
@@ -105,7 +104,7 @@ export struct PrimaryTabShell {
   // Issue #768：API23+ 分流标志。true 时使用 HdsPrimaryTabsApi23，false 时使用普通 Tabs。
   @State useHdsTabs: boolean = false
 
-  // Issue #827 评论 1 第 6 点：宽屏顶部固定动作条的动作槽，来源仍是 Core ScreenPolicy。
+  // Issue #827 评论 1 第 6 点：宽屏顶部固定动作条的动作槽，来源是平台动作表。
   @State wideHeaderActions: ActionSlot[] = []
 
   // Issue #767：@Provide 活动栈，供 @Consume("navPathStack") 的页面使用。
@@ -207,33 +206,13 @@ export struct PrimaryTabShell {
     SettingsOverlayController.getInstance().detachUIContext(this.getUIContext())
   }
 
-  // 通过 Core ScreenPolicy.showPrimaryNavigation 决定底栏显隐。
-  // Core 规则：Writing/Settings=false，Home/ProjectWorkspace/StarMap/Stats/Sync=true。
-  // Issue #767 评论5832129578 第3项：role 变化时先禁用切 tab（保守策略），
-  // 等 policy 返回后再决定是否开放；异步返回后校验 role 是否已变化，防止旧页面结果覆盖新页面状态。
-  // Issue #774 评论5847638284 第2项：只改交互锁，不改 currentShowPrimaryNav，
-  // 避免 @Watch 触发 controller.applyHideAnimation/applyShowAnimation 导致正常切换也 hide→show。
-  private async updateShowPrimaryNav(screenRole: ScreenRole): Promise<void> {
-    this.currentPrimaryNavInteractive = false
-
-    const requestedRole = screenRole
-    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(screenRole)
-    // 异步返回后校验 role 是否已变化，防止旧页面结果覆盖新页面状态
-    if (this.currentScreenRole !== requestedRole) {
-      return
-    }
-    // Issue #767 评论5832378491：policy 解析失败时保持 fail-closed，
-    // 不要 fail-open 把一级导航重新放开，否则 Writing/Settings 用户能横向切 tab 绕过离开事务。
-    if (policy === null) {
-      hilog.warn(0x0000, 'PrimaryTabShell',
-        'resolveScreenPolicy failed for role=%{public}s; keep primary navigation disabled',
-        String(requestedRole))
-      this.currentShowPrimaryNav = false
-      this.currentPrimaryNavInteractive = false
-      return
-    }
-    this.currentShowPrimaryNav = policy.showPrimaryNavigation
-    this.currentPrimaryNavInteractive = policy.showPrimaryNavigation
+  // 按平台动作表决定底栏显隐。
+  // 规则：Writing/Settings/StarMapDetail=false，Home/ProjectList/ProjectWorkspace/StarMap/Stats/Sync=true。
+  // Issue #920 D：动作表已收回平台 UI 层（ScreenSemantics），同步解析，无异步竞态。
+  private updateShowPrimaryNav(screenRole: ScreenRole): void {
+    const showPrimaryNav: boolean = resolveShowPrimaryNavigation(screenRole)
+    this.currentShowPrimaryNav = showPrimaryNav
+    this.currentPrimaryNavInteractive = showPrimaryNav
   }
 
   // Issue #767 评论5832129578 第1项：syncActiveTab 是同步 activeStack 和 Coordinator 的唯一入口。
@@ -343,30 +322,19 @@ export struct PrimaryTabShell {
     this.PageMapForStack(name, this.statsStack, TAB_STATS)
   }
 
-  // Issue #829：宽屏一级导航只认 Core 的 PrimaryNavigationPlacement.Side。
-  // 只要契约说 Side，就直接走左侧 rail，绝不再实例化 HDS 底部 Tabs。
+  // Issue #829：宽屏一级导航只认平台自己的窗口断点（isWidePrimaryNavigation）。
+  // 只要进入侧栏档，就直接走左侧 rail，绝不再实例化 HDS 底部 Tabs。
   // 这样不会出现“页面已经是宽屏骨架，但底下还挂着一个沉浸光感底栏”的双导航。
   // 沉浸光感不是布局理由：侧栏没有系统 HDS TabBar 光感能力时，侧栏就用普通系统 token。
   private get isWidePrimaryNavigation(): boolean {
-    return this.adaptiveState.layoutPlan.primaryNavigationPlacement === PrimaryNavigationPlacement.Side ||
+    return this.adaptiveState.isWidePrimaryNavigation ||
       (this.adaptiveState.isDedicatedLandscapeTablet && this.adaptiveState.prefersWideLayout)
   }
 
-  // 宽屏顶部固定动作区（同步 / 搜索 / 设置）的动作来源仍是 Core ScreenPolicy，
+  // 宽屏顶部固定动作区（同步 / 搜索 / 设置）的动作来源是平台动作表，
   // 不在壳层硬编码三个按钮，也不新增第四套枚举。
   private loadWideHeaderActions(role: ScreenRole): void {
-    const requested = role
-    ScreenPolicyBridge.getInstance().resolveScreenPolicy(requested).then((policy) => {
-      // 异步返回后校验 role 是否已变化，防止旧页面结果覆盖新页面状态
-      if (this.currentScreenRole !== requested || policy === null) {
-        return
-      }
-      this.wideHeaderActions = policy.actionSlots
-    }).catch((e: Error) => {
-      hilog.error(0x0000, 'PrimaryTabShell',
-        'resolveScreenPolicy failed for wide header role=%{public}s: %{public}s',
-        String(requested), e.message)
-    })
+    this.wideHeaderActions = resolveScreenPolicy(role).actionSlots
   }
 
   // 宽屏：一级导航固定在左侧，作品 / 星图 / 统计纵向排列，选中态沿用现有系统 token。

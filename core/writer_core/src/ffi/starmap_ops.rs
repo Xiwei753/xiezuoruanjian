@@ -4,7 +4,7 @@ use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 use crate::api::{
     StarMapEdgeDto, StarMapEmbedDto, StarMapEmbedPatchInputDto, StarMapEndpointSelectionDto,
     StarMapMetaDto, StarMapNavigationRouteDto, StarMapNodeDto, StarMapNodePatchInputDto,
-    StarMapPathSegmentDto, StarMapPointDto, StarMapTargetDetailDto,
+    StarMapPathSegmentDto, StarMapPointDto, StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 
 #[no_mangle]
@@ -780,6 +780,31 @@ pub unsafe extern "C" fn writer_core_jump_starmap_ancestor(json: *const c_char) 
     }
 }
 
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `json` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
+pub unsafe extern "C" fn writer_core_plan_cross_layer_connection(
+    json: *const c_char,
+) -> *mut c_char {
+    let input_str = match c_str_to_rust(json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid json: error {}", e)),
+    };
+    let input = match serde_json::from_str::<PlanCrossLayerConnectionInput>(&input_str) {
+        Ok(i) => i,
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse json: {}", e)),
+    };
+    match with_app_service(|svc| {
+        svc.plan_cross_layer_connection(input.from, input.to)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_CONNECTION_ERROR", &e),
+    }
+}
+
 // --- FFI 内部输入 DTO ---
 // 统一采用 camelCase 字段命名，与 route DTO（StarMapNavigationRouteDto 等）一致。
 
@@ -826,4 +851,11 @@ struct ListConnectionsInput {
 struct JumpAncestorInput {
     route: StarMapNavigationRouteDto,
     depth: u32,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanCrossLayerConnectionInput {
+    from: StarMapTargetPathDto,
+    to: StarMapTargetPathDto,
 }

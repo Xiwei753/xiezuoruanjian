@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -29,18 +30,6 @@ import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.WorkspaceUiEvent
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.di.SujianAppDependencies
-import com.xiwei.sujian.app.presentation.contract.PresentationContractBridge
-import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
-import com.xiwei.sujian.app.presentation.layout.physicalSafeBounds
-import com.xiwei.sujian.app.presentation.layout.rememberAndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.layout.rememberAndroidWorkbenchPlanState
-import com.xiwei.sujian.app.presentation.layout.rememberAndroidWorkbenchViewportFrame
-import com.xiwei.sujian.app.presentation.layout.rememberWorkbenchLayoutPlanner
-import com.xiwei.sujian.app.presentation.screen.AndroidChromePolicy
-import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
-import com.xiwei.sujian.app.presentation.screen.rememberProjectActions
 import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
@@ -48,6 +37,7 @@ import com.xiwei.sujian.core.platform.window.AospFoldFeatureInfo
 import com.xiwei.sujian.feature.project.ui.EditorWorkspaceCallbacks
 import com.xiwei.sujian.feature.project.ui.ProjectNavigationState
 import com.xiwei.sujian.feature.project.ui.ProjectWorkspaceScreen
+import com.xiwei.sujian.feature.project.ui.SujianChromeSpec
 import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
 import com.xiwei.sujian.feature.project.ui.WorkspaceNavigator
 import com.xiwei.sujian.feature.project.ui.buildInitialHistory
@@ -110,18 +100,14 @@ private fun rememberInitialNavStack(initialDestination: String?): Pair<SujianDes
 /**
  * 导航内容上下文 — 打包传递，避免函数参数超出门禁阈值。
  *
- * [workbenchPlan] 与 pane 收起状态在这里统一解析/持有 ——
- * 外层顶栏归属与工作区必须消费同一份 Rust 最终 mode，不允许 layoutSpec=Workbench 但
- * plan 已 SinglePane、外层还按 Workbench 隐藏顶栏的分裂状态。
+ * 宽/窄工作区模式（[isWideLayout]）与作品卡最小宽度按 Android 本端窗口尺寸在导航套件层
+ * 统一决定；pane 收起状态与 chrome 也在这里统一持有，工作区与外层壳层消费同一份。
  */
 private data class SujianNavContext(
     val appState: SujianAppState,
     val workspaceNavState: ProjectNavigationState,
-    val projectListActions: AndroidWorkspaceActionSpec,
-    val projectWorkspaceActions: AndroidWorkspaceActionSpec,
-    val layoutSpec: AndroidLayoutSpec,
-    val workbenchPlan: AndroidWorkbenchLayoutPlan?,
-    val workbenchSafeBounds: com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect,
+    val isWideLayout: Boolean,
+    val projectCardMinWidthDp: Float,
     val chapterTreeCollapsed: Boolean,
     val toolPaneCollapsed: Boolean,
     val onToggleChapterTree: () -> Unit,
@@ -140,9 +126,8 @@ private fun SujianNavDisplayContent(
     // 每个 top-level 栈绑定自己的 decorated entries（独立 SaveableStateHolder +
     // ViewModelStore decorator）。三个 rememberDecoratedNavEntries 始终在组合中，
     // inactive tab 状态不丢失；NavDisplay 直接消费 entries。
-    // entryProvider 按 appState / workspaceNavState / 两份静态动作 spec 稳定保存，
+    // entryProvider 按 appState / workspaceNavState 稳定保存，
     // 底栏切换不再顺手重建三套 NavEntry provider。
-    // entryProvider 还消费 layoutSpec / chrome — 大屏 Editor 位置画 WideWritingWorkspace。
     val entryProvider =
         rememberSujianEntryProvider(
             context,
@@ -165,10 +150,8 @@ private fun SujianNavDisplayContent(
 }
 
 /**
- * 工作区 NavEntry provider — 按 [appState] / [workspaceNavState] /
- * 两份静态动作 spec 稳定保存，避免每次重组都重建三个 back stack 的 provider。
- * 动作 spec 来自容器创建时解析的 [com.xiwei.sujian.app.presentation.screen.PresentationPolicyCatalog]，
- * 是稳定引用，因此 provider 只在真正需要时重建。
+ * 工作区 NavEntry provider — 按 [appState] / [workspaceNavState] 稳定保存，
+ * 避免每次重组都重建三个 back stack 的 provider。
  */
 @Composable
 private fun rememberSujianEntryProvider(
@@ -223,10 +206,9 @@ private fun rememberSujianEntryProvider(
 
 /**
  * Works 路由的 NavEntry — 提取以降低 [rememberSujianEntryProvider] 认知复杂度。
- * ProjectWorkspaceScreen 消费 layoutSpec 与 chrome — 大屏 Editor 位置画 WideWritingWorkspace。
+ * ProjectWorkspaceScreen 消费本端宽窄模式（isWideLayout）与 chrome — 大屏 Editor 位置画 WideWritingWorkspace。
  *
- * 把 workbenchPlan/safeBounds/pane 收起/chrome 打包成 WorkbenchPresentationState
- * 传给 ProjectWorkspaceScreen，避免 WideLayoutContent Editor 分支再用 null/空函数让 plan 永远走 single-pane。
+ * 把 pane 收起/chrome 打包成 WorkbenchPresentationState 传给 ProjectWorkspaceScreen。
  */
 private fun rememberWorksEntry(
     key: SujianRoute.Works,
@@ -238,8 +220,6 @@ private fun rememberWorksEntry(
     NavEntry(key, metadata = noPageTransitionMetadata) { route ->
         val workbenchPresentation =
             com.xiwei.sujian.feature.project.ui.WorkbenchPresentationState(
-                plan = context.workbenchPlan,
-                safeBounds = context.workbenchSafeBounds,
                 chapterTreeCollapsed = context.chapterTreeCollapsed,
                 toolPaneCollapsed = context.toolPaneCollapsed,
                 onToggleChapterTree = context.onToggleChapterTree,
@@ -249,9 +229,8 @@ private fun rememberWorksEntry(
         ProjectWorkspaceScreen(
             appState = context.appState,
             workspaceNavState = context.workspaceNavState,
-            projectListActions = context.projectListActions,
-            projectWorkspaceActions = context.projectWorkspaceActions,
-            layoutSpec = context.layoutSpec,
+            isWideLayout = context.isWideLayout,
+            projectCardMinWidthDp = context.projectCardMinWidthDp,
             workbenchPresentation = workbenchPresentation,
             editorCallbacks = editorCallbacks,
         )
@@ -304,8 +283,7 @@ private fun SujianTopLevelSwitchMotion(
  *
  * 改用纯业务 [WorkspaceNavigator]，不再依赖 Material3 Adaptive
  * 的 rememberListDetailPaneScaffoldNavigator。"当前在哪个业务位置"与"屏幕上同时画
- * 哪些区域"彻底分开 — 后者由 [com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec]
- * 的 `workspaceLayoutMode` 决定，[ProjectWorkspaceScreen] 消费。 */
+ * 哪些区域"彻底分开 — 后者由导航套件按本端窗口尺寸决定，[ProjectWorkspaceScreen] 消费。 */
 @Composable
 private fun rememberSujianWorkspaceNavState(appState: SujianAppState): ProjectNavigationState {
     val initialDestination =
@@ -409,9 +387,8 @@ private fun SujianRouteEffects(
 }
 
 /**
- * 作品工作区的两份静态动作 spec 取自容器创建时解析的 PresentationPolicyCatalog。
- * 章节树固定按 PROJECT_WORKSPACE 取动作契约（卷章操作不依赖父层组合帧观察到的
- * navigator 位置）；作品列表固定按 PROJECT_LIST 取契约（新建作品主操作同理）。
+ * 顶层导航套件 — 宽/窄工作区模式、一级导航放置、顶栏 chrome 全部按 Android 本端
+ * 窗口尺寸与当前路由决定；不再向 Core 请求布局模式或页面动作契约。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -422,27 +399,20 @@ fun SujianNavigationSuite(
     foldingFeatures: List<AospFoldFeatureInfo> = emptyList(),
 ) {
     val deps = LocalSujianAppDependencies.current
-    val resolver = PresentationContractBridge.layoutContractResolver(deps.appServiceBridge)
-    val workbenchResolver = PresentationContractBridge.workbenchLayoutResolver(deps.appServiceBridge)
-    val layoutSpec = rememberAndroidLayoutSpec(foldingFeatures, resolver)
-    // 把稳定系统 UI（systemBars + displayCutout）的 safe viewport 放到
-    // planner 输入前，Rust 看到的 (0,0) 是稳定安全工作区左上角；plan 返回后再 offsetBy 平移回物理坐标。
-    val workbenchViewportFrame = rememberAndroidWorkbenchViewportFrame(layoutSpec.viewport)
-    // 物理安全矩形（plan 有无都共用）。workbenchPlan == null（resolver 失败）时
-    // wide SinglePane / EditorOnly 用它作 fallback，不再回落整个 constraints（物理窗口 (0,0)），
-    // 避免 TopAppBar 从 (0,0) 开始、正文只躲 IME 不躲 status bar / display cutout / navigation bar。
-    val workbenchSafeBounds = workbenchViewportFrame.physicalSafeBounds
-    val workbenchPlanner = rememberWorkbenchLayoutPlanner(workbenchViewportFrame, workbenchResolver)
-
-    // pane 收起状态 + Rust workbench plan 统一在
-    // 导航套件层持有/解析（外层顶栏归属必须消费同一份 Rust 最终 mode）。
-    val workbenchPlanState = rememberAndroidWorkbenchPlanState(workbenchPlanner)
+    // 宽/窄工作区模式与一级导航放置：完全依据本端窗口尺寸（含折叠分离铰链几何）。
+    val windowLayout = rememberSujianWindowLayout(foldingFeatures)
     val (initialTopLevel, initialStackRoutes) = rememberInitialNavStack(initialDestination)
     val topLevelBackStack = rememberSujianTopLevelBackStack(initialTopLevel, initialStackRoutes)
     val backStack = topLevelBackStack.backStack
     val currentRoute = backStack.lastOrNull() as? SujianRoute ?: SujianRoute.Works
     val currentTopDestination = currentRoute.toTopDestination()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // pane 收起状态是 Android 局部 UI 状态，在导航套件层持有，工作区与外层壳层消费同一份。
+    var chapterTreeCollapsed by rememberSaveable { mutableStateOf(false) }
+    var toolPaneCollapsed by rememberSaveable { mutableStateOf(false) }
+    val onToggleChapterTree: () -> Unit = remember { { chapterTreeCollapsed = !chapterTreeCollapsed } }
+    val onToggleToolPane: () -> Unit = remember { { toolPaneCollapsed = !toolPaneCollapsed } }
 
     // 收集 ViewModel 抛出的 UI 事件，错误走 Snackbar 展示。
     SujianUiEventEffect(appState, snackbarHostState)
@@ -452,17 +422,10 @@ fun SujianNavigationSuite(
 
     val workspaceNavState = rememberSujianWorkspaceNavState(appState)
 
-    // 页面契约在应用容器创建时已一次性解析进 PresentationPolicyCatalog，
-    // 热路径只查内存 Map，不再同步跨 UniFFI 取契约。章节树固定按 PROJECT_WORKSPACE
-    // 取动作契约（卷章操作不依赖父层组合帧观察到的 navigator 位置）；作品列表
-    // 固定按 PROJECT_LIST 取契约（新建作品主操作同理）。
-    val screenRole = AndroidChromePolicy.screenRoleFor(currentRoute, workspaceNavState.currentLocation)
-    val screenPolicy = deps.presentationPolicyCatalog[screenRole]
-    val (projectListActions, projectWorkspaceActions) = rememberProjectActions(deps.presentationPolicyCatalog)
+    // 顶栏 chrome（返回/标题/透明底/一级导航可见性/右侧动作）由本端按路由与工作区位置决定。
     val chrome =
-        AndroidChromePolicy.resolve(
-            screenRole = screenRole,
-            screenPolicy = screenPolicy,
+        resolveSujianChrome(
+            currentRoute = currentRoute,
             workspaceLocation = workspaceNavState.currentLocation,
             canWorkspaceNavigateBack = workspaceNavState.canNavigateBack,
         )
@@ -488,11 +451,12 @@ fun SujianNavigationSuite(
         rememberSujianNavContext(
             appState = appState,
             workspaceNavState = workspaceNavState,
-            projectListActions = projectListActions,
-            projectWorkspaceActions = projectWorkspaceActions,
-            layoutSpec = layoutSpec,
-            workbenchSafeBounds = workbenchSafeBounds,
-            workbenchPlanState = workbenchPlanState,
+            isWideLayout = windowLayout.isWorkbench,
+            projectCardMinWidthDp = SujianWorkbenchDimensions.projectCardMinWidthDp,
+            chapterTreeCollapsed = chapterTreeCollapsed,
+            toolPaneCollapsed = toolPaneCollapsed,
+            onToggleChapterTree = onToggleChapterTree,
+            onToggleToolPane = onToggleToolPane,
             chrome = chrome,
         )
     val scaffoldState =
@@ -510,7 +474,7 @@ fun SujianNavigationSuite(
     androidx.compose.foundation.layout.Box(modifier = modifier) {
         SujianNavScaffoldContent(
             modifier = Modifier.fillMaxSize(),
-            layoutSpec = layoutSpec,
+            useBottomNavigation = windowLayout.useBottomNavigation,
             chrome = chrome,
             scaffoldChrome = scaffoldState.scaffoldChrome,
             selection = SujianTopLevelSelection(currentTopDestination, onTopLevelSelected),
@@ -528,25 +492,23 @@ fun SujianNavigationSuite(
 private fun rememberSujianNavContext(
     appState: SujianAppState,
     workspaceNavState: ProjectNavigationState,
-    projectListActions: AndroidWorkspaceActionSpec,
-    projectWorkspaceActions: AndroidWorkspaceActionSpec,
-    layoutSpec: AndroidLayoutSpec,
-    workbenchSafeBounds: com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect,
-    workbenchPlanState: com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchPlanState,
+    isWideLayout: Boolean,
+    projectCardMinWidthDp: Float,
+    chapterTreeCollapsed: Boolean,
+    toolPaneCollapsed: Boolean,
+    onToggleChapterTree: () -> Unit,
+    onToggleToolPane: () -> Unit,
     chrome: SujianChromeSpec,
 ): SujianNavContext =
     SujianNavContext(
         appState = appState,
         workspaceNavState = workspaceNavState,
-        projectListActions = projectListActions,
-        projectWorkspaceActions = projectWorkspaceActions,
-        layoutSpec = layoutSpec,
-        workbenchPlan = workbenchPlanState.workbenchPlan,
-        workbenchSafeBounds = workbenchSafeBounds,
-        chapterTreeCollapsed = workbenchPlanState.chapterTreeCollapsed,
-        toolPaneCollapsed = workbenchPlanState.toolPaneCollapsed,
-        onToggleChapterTree = workbenchPlanState.onToggleChapterTree,
-        onToggleToolPane = workbenchPlanState.onToggleToolPane,
+        isWideLayout = isWideLayout,
+        projectCardMinWidthDp = projectCardMinWidthDp,
+        chapterTreeCollapsed = chapterTreeCollapsed,
+        toolPaneCollapsed = toolPaneCollapsed,
+        onToggleChapterTree = onToggleChapterTree,
+        onToggleToolPane = onToggleToolPane,
         chrome = chrome,
     )
 
@@ -571,7 +533,6 @@ private fun rememberSujianNavScaffoldState(
             SujianNavDisplayContent(topLevelBackStack, navContext, deps, syncState)
         }
     }
-    // 外层顶栏归属必须消费同一份 Rust 最终模式。
     // Editor 位置的顶栏全部归 Editor composable，
     // Scaffold 不再给任何 Editor 画顶栏（showOuterTopBar=!isEditorLocation）。
     val showOuterTopBar = !isEditorLocation

@@ -13,34 +13,22 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
-import com.xiwei.sujian.app.presentation.layout.resolveSafeWorkbenchViewport
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import uniffi.writer_core.WindowOcclusionDto
-import uniffi.writer_core.WindowViewportDto
 
 /**
- * #640 评论 5443789509：wide Workbench 坐标系闭合修复回归测试。
+ * #640 评论 5443789509：#641 wide Workbench 稳定系统 UI / IME 坐标回归测试。
  *
- * 修复把稳定系统 UI（systemBars + displayCutout）的 safe viewport 放到 Workbench planner
- * 输入前，Rust 看到的 (0,0) 是稳定安全工作区左上角，plan 返回后再 `offsetBy` 平移回物理窗口
- * 坐标；IME 留在 Editor 层（EditorPane 用 `WindowInsetsRulers.Ime.current`）动态处理。
- *
- * 本测覆盖两件事：
- * 1. **safe viewport frame 坐标平移**（纯函数 [resolveSafeWorkbenchViewport]，不依赖 Compose rule）：
- *    - raw viewport 800×1000 + insets (10,24,10,48) → safe viewport 780×928，origin=(10,24)；
- *    - raw viewport 含 occlusion (100,200,300,400,separating=true) → 平移后 occlusion
- *      (90,176,290,376,separating=true)；
- *    - insets 超过 viewport 时 width/height 钳到 0（coerceAtLeast(0f)）。
- * 2. **Editor IME ruler 收缩**（Compose rule）：构造固定 root 800×1000 + 自定义 [RectRulers]
- *    注入 bottom=700（模拟 IME 300dp 占底部），`Box.fillMaxSize().fitInside(rectRulers)` 后
- *    inner content `boundsInRoot.bottom ≤ 700`。锁住 Editor 用 `WindowInsetsRulers.Ime.current`
- *    动态收进键盘上方，键盘出现只改变 Editor 实际可用高度，不重算 Rust workbench plan。
+ * 布局已由 Android 本端 Compose 决定，外层 Scaffold 用 `WindowInsets.safeDrawing`
+ * 处理稳定系统 UI；IME 留在 Editor 层动态处理。本测覆盖 Editor IME ruler 收缩：
+ * 构造固定 root 800×1000 + 自定义 [RectRulers] 注入 bottom=700（模拟 IME 300dp 占底部），
+ * `Box.fillMaxSize().fitInside(rectRulers)` 后 inner content `boundsInRoot.bottom ≤ 700`。
+ * 锁住 Editor 用 `WindowInsetsRulers.Ime.current` 动态收进键盘上方，键盘出现只改变
+ * Editor 实际可用高度，不重算工作区布局。
  *
  * Robolectric density=1（mdpi），1dp=1px，ruler value 用 px（=dp）。
  */
@@ -50,124 +38,7 @@ class EditorPresentationWideInsetBoundsTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    // ── 组1：safe viewport frame 坐标平移（纯函数，不依赖 Compose rule） ──
-
-    @Test
-    fun resolveSafeWorkbenchViewport_translatesViewportAndOrigin() {
-        // raw viewport 800×1000，insets left=10, top=24, right=10, bottom=48
-        // → safe viewport width=780, height=928, origin=(10,24)。
-        val raw =
-            WindowViewportDto(
-                widthDp = 800f,
-                heightDp = 1000f,
-                occlusions = emptyList(),
-            )
-        val frame =
-            resolveSafeWorkbenchViewport(
-                rawViewport = raw,
-                leftDp = 10f,
-                topDp = 24f,
-                rightDp = 10f,
-                bottomDp = 48f,
-            )
-        assertEquals("originXDp 必须等于 left inset", 10f, frame.originXDp, 0.001f)
-        assertEquals("originYDp 必须等于 top inset", 24f, frame.originYDp, 0.001f)
-        assertEquals(
-            "safe viewport width = raw - left - right = 780",
-            780f,
-            frame.viewport.widthDp,
-            0.001f,
-        )
-        assertEquals(
-            "safe viewport height = raw - top - bottom = 928",
-            928f,
-            frame.viewport.heightDp,
-            0.001f,
-        )
-    }
-
-    @Test
-    fun resolveSafeWorkbenchViewport_translatesOcclusionsIntoSafeCoordinates() {
-        // raw viewport 含 occlusion (100,200,300,400,separating=true)，
-        // insets left=10, top=24 → 平移后 occlusion (90,176,290,376,separating=true)。
-        val raw =
-            WindowViewportDto(
-                widthDp = 800f,
-                heightDp = 1000f,
-                occlusions =
-                    listOf(
-                        WindowOcclusionDto(
-                            leftDp = 100f,
-                            topDp = 200f,
-                            rightDp = 300f,
-                            bottomDp = 400f,
-                            separating = true,
-                        ),
-                    ),
-            )
-        val frame =
-            resolveSafeWorkbenchViewport(
-                rawViewport = raw,
-                leftDp = 10f,
-                topDp = 24f,
-                rightDp = 10f,
-                bottomDp = 48f,
-            )
-        assertEquals("平移后 occlusion 数量不变", 1, frame.viewport.occlusions.size)
-        val o = frame.viewport.occlusions.first()
-        assertEquals("occlusion leftDp = raw.left - left = 90", 90f, o.leftDp, 0.001f)
-        assertEquals("occlusion topDp = raw.top - top = 176", 176f, o.topDp, 0.001f)
-        assertEquals("occlusion rightDp = raw.right - left = 290", 290f, o.rightDp, 0.001f)
-        assertEquals("occlusion bottomDp = raw.bottom - top = 376", 376f, o.bottomDp, 0.001f)
-        assertTrue("occlusion separating 标志保留", o.separating)
-    }
-
-    @Test
-    fun resolveSafeWorkbenchViewport_clampsNegativeDimensionsToZero() {
-        // insets 超过 viewport：left=500, right=500 → width = 800-500-500 = -200 → 钳到 0。
-        // top=600, bottom=600 → height = 1000-600-600 = -200 → 钳到 0。
-        val raw =
-            WindowViewportDto(
-                widthDp = 800f,
-                heightDp = 1000f,
-                occlusions = emptyList(),
-            )
-        val frame =
-            resolveSafeWorkbenchViewport(
-                rawViewport = raw,
-                leftDp = 500f,
-                topDp = 600f,
-                rightDp = 500f,
-                bottomDp = 600f,
-            )
-        assertEquals("insets 超过 viewport 时 width 钳到 0", 0f, frame.viewport.widthDp, 0.001f)
-        assertEquals("insets 超过 viewport 时 height 钳到 0", 0f, frame.viewport.heightDp, 0.001f)
-    }
-
-    @Test
-    fun resolveSafeWorkbenchViewport_emptyInsetsReturnsIdentityFrame() {
-        // insets 全 0 → safe viewport = raw viewport，origin=(0,0)。
-        val raw =
-            WindowViewportDto(
-                widthDp = 800f,
-                heightDp = 1000f,
-                occlusions = emptyList(),
-            )
-        val frame =
-            resolveSafeWorkbenchViewport(
-                rawViewport = raw,
-                leftDp = 0f,
-                topDp = 0f,
-                rightDp = 0f,
-                bottomDp = 0f,
-            )
-        assertEquals(0f, frame.originXDp, 0.001f)
-        assertEquals(0f, frame.originYDp, 0.001f)
-        assertEquals(800f, frame.viewport.widthDp, 0.001f)
-        assertEquals(1000f, frame.viewport.heightDp, 0.001f)
-    }
-
-    // ── 组2：Editor IME ruler 收缩（Compose rule） ──
+    // ── Editor IME ruler 收缩（Compose rule） ──
 
     private val rootWidthDp = 800
     private val rootHeightDp = 1000

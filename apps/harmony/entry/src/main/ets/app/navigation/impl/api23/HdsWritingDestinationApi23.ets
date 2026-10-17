@@ -10,17 +10,17 @@
 // - .onBackPressed 只调用 onSystemBack 并消费本次系统返回（return true）。
 //
 // Issue #784 评论5857397503：移除硬编码的三个 menu item（同步/搜索/设置），
-// 改为由 ScreenPolicy 解析出的 ActionSlot[] 交给 HeaderTitleBarStack 自绘标题 +
+// 改为由平台动作表解析出的 ActionSlot[] 交给 HeaderTitleBarStack 自绘标题 +
 // 页头动作胶囊。
 //
-// Issue #825 复核第2项：ActionSlot[] 不再由本壳层自己解析 ScreenPolicy，
-// 改由 WritingScreen 统一解析后透传进来。
-// Issue #825 复核第1项：这组动作是 Core 七角色里的 ToolbarTrailing，窄屏宽屏都在
+// Issue #825 复核第2项：ActionSlot[] 不再由本壳层自己解析，改由 WritingScreen
+// 统一解析后透传进来（Issue #920 D：动作表在平台 UI 层）。
+// Issue #825 复核第1项：这组动作是工作台顶栏的尾部组，窄屏宽屏都在
 // 顶部显示，右侧 ToolPane 不再重复它们，所以胶囊没有开关、恒显示。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
 import { HeaderTitleBarStack } from './HeaderTitleBarStack'
-import { ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
+import { ActionSlot } from '../../ScreenSemantics'
 
 @ComponentV2
 export struct HdsWritingDestinationApi23 {
@@ -32,12 +32,12 @@ export struct HdsWritingDestinationApi23 {
   @Param onShown: (() => void) | null = null
   // Issue #778 任务8：接收父级传入的 scroller，绑定到 HdsNavDestination 做沉浸联动。
   @Param scroller: Scroller = new Scroller()
-  // Issue #784 评论5857397503：ScreenPolicy 解析结果由 WritingScreen 统一持有并透传。
+  // Issue #784 评论5857397503：动作表解析结果由 WritingScreen 统一持有并透传。
   @Param headerActions: ActionSlot[] = []
-  // Issue #825 复核第 3 项：宽屏由 WritingWorkbenchToolbar 按 Core 的 Toolbar* bounds
-  // 画整条工具条带（返回归 ToolbarLeading、HeaderTrailing 归 ToolbarTrailing），
-  // HDS 标题栏必须整条让位——它只有章节标题 + 尾部胶囊，高度也不等于 Core 的
-  // toolbar bounds，两者并存就会出现两套返回、两套尾部动作和两条工具条带。
+  // Issue #825 复核第 3 项：宽屏由 WritingWorkbenchToolbar 画整条工具条带
+  // （返回归左组、HeaderTrailing 归右组），HDS 标题栏必须整条让位——它只有章节
+  // 标题 + 尾部胶囊，高度也不等于工作台工具条，两者并存就会出现两套返回、
+  // 两套尾部动作和两条工具条带。Issue #920 D：这条工具条带由 ArkUI 自适应布局决定。
   @Param showTitleBar: boolean = true
 
   // stackBuilder 是 CustomBuilder，组件调用必须写在 @Builder 里。

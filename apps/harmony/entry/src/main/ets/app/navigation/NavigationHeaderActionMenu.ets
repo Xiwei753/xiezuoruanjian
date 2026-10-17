@@ -4,7 +4,7 @@
 //
 // Issue #784 评论 5858136516：拆分 HdsHeaderActionMenu，普通 ArkUI 菜单项独立文件。
 
-import { ActionSlot, ActionRole } from '../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ActionRole } from './ScreenSemantics'
 import { sortedHeaderTrailingActions } from './NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from './NavigationHeaderActionDispatcher'
 

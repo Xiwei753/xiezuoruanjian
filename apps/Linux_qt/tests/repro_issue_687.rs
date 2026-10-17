@@ -186,18 +186,17 @@ fn issue687_p3_qml_uses_setting_desktop_editor_width() {
         "问题3修复: WritingFormatGroup.qml 不应再使用 setting_linux_qt_editor_width，实际 {} 处",
         tb_count
     );
-    // #901 重写后编辑器宽度通过 roleWidth("Editor") 获取，
-    // 不再直接引用 setting_desktop_editor_width。
-    // 确认 editorWidth 属性存在且使用 roleWidth。
+    // Issue #920：编辑器宽度改由 Qt Quick Layouts 决定（Editor 列 fillWidth），
+    // 不再从 Core role bounds 取 editorWidth，也不再直接引用 setting_desktop_editor_width。
     assert!(
-        writing_workspace.contains("editorWidth"),
-        "问题3修复: WritingWorkspace.qml 应有 editorWidth 属性获取编辑器宽度。"
+        !writing_workspace.contains("roleWidth"),
+        "问题3修复: WritingWorkspace.qml 不应再用 Core role bounds 的 roleWidth。"
     );
     assert!(
-        writing_workspace.contains("roleWidth"),
-        "问题3修复: WritingWorkspace.qml 应通过 roleWidth 获取编辑器宽度。"
+        writing_workspace.contains("Layout.minimumWidth: root.multiPane ? root.editorMinWidth : 0"),
+        "问题3修复: WritingWorkspace.qml 编辑器列应通过 Qt Quick Layouts 约束宽度。"
     );
-    println!("[BUGFIX_687_VERIFY] P3 QML uses roleWidth for editor width (FIXED)");
+    println!("[BUGFIX_687_VERIFY] P3 QML uses Qt Quick Layouts for editor width (FIXED)");
 }
 
 #[test]

@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::starmap::graph::path_planner::CrossLayerConnectionPlan;
 use crate::starmap::graph::resolve::GraphResolverContext;
 use crate::starmap::graph::validation;
 use crate::starmap::store::{LoadPhase, SaveQueueEntry, StarMapStore};
@@ -279,6 +280,40 @@ impl super::WriterCore {
         };
         crate::starmap::graph::resolve::resolve_target(&context, &path)
             .map_err(|status| crate::error::Error::Other(format!("星图路径解析失败: {status:?}")))
+    }
+
+    /// 规划跨层连线应当落在哪张图上（Core 唯一事实来源）。
+    ///
+    /// 两端必须是**同一条根星图**的绝对端点路径（`starmap_id` 相同且非空），
+    /// `segments` 是从根星图逐层穿越到端点所在 Scene 的绝对路径。先确保根星图
+    /// Store 完全加载，再构建 resolver context（含其它已全量加载 Store 的
+    /// overlay），交给 `path_planner::plan_cross_layer_connection` 统一算宿主。
+    pub fn plan_cross_layer_connection(
+        &self,
+        from: &crate::starmap::types::reference::StarMapTargetPath,
+        to: &crate::starmap::types::reference::StarMapTargetPath,
+    ) -> Result<CrossLayerConnectionPlan> {
+        if from.starmap_id.is_empty() || from.starmap_id != to.starmap_id {
+            return Err(crate::error::Error::Other(
+                "plan_cross_layer_connection: endpoints must share the same root star map"
+                    .to_string(),
+            ));
+        }
+
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        {
+            let store = stores
+                .entry(from.starmap_id.clone())
+                .or_insert_with(|| StarMapStore::new(&self.app_data_root, &from.starmap_id));
+            store.ensure_fully_loaded()?;
+        }
+
+        let context = self.build_resolver_context(&stores);
+        crate::starmap::graph::path_planner::plan_cross_layer_connection(&context, from, to)
+            .map_err(|e| crate::error::Error::Other(format!("plan_cross_layer_connection: {e:?}")))
     }
 
     /// 构建一个 `GraphResolverContext`，包含当前所有已完成后台全量加载的

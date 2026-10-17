@@ -20,8 +20,8 @@
 //   │ 26/8/11 22:37│   ← 左下最后编辑时间
 //   └──────────────┘
 //
-// 宽度取 Core 的 project_card_min_width_dp（经 layoutPlan.projectCardMinWidthVp 透传，
-// 三端共用同一个值），不在 QML 里写死另一套卡片宽度。
+// 宽度取 Qt 平台本地常量（ProjectHomePage._cardWidth = 180vp，Issue #920 起
+// 不再经 Core 布局契约透传），卡片只做展示，不在组件内另写一套尺寸。
 // lastEdited 由 ProjectHomePage.formatProjectTime() 格式化后传入（26/8/11 22:37），
 // 卡片只负责画，不再自己解析 Core 的 ISO 字符串。
 // 右键菜单挂整张卡，不常驻「更多」按钮。
@@ -55,8 +55,7 @@ Rectangle {
     property int chapterCount: 0
     property string lastEdited: ""
 
-    // 卡片宽高由 ProjectHomePage 从 Core 的 projectCardMinWidthVp 传入，
-    // 「+」卡复用同一组尺寸，不允许自己另有一套。
+    // 卡片宽高由 ProjectHomePage 传入，「+」卡复用同一组尺寸，不允许自己另有一套。
     property int cardWidth: 180
     property int cardHeight: 240
 

@@ -258,6 +258,27 @@ static napi_value NativeResolveStarMapPath(napi_env env, napi_callback_info info
     return result;
 }
 
+static napi_value NativePlanCrossLayerConnection(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    size_t json_len = 0;
+    char* json = nullptr;
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
+        json = new char[json_len + 1];
+        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
+    } else {
+        json = new char[1];
+        json[0] = '\0';
+    }
+
+    napi_value result = ReturnJsonString(env, writer_core_plan_cross_layer_connection(json));
+    delete[] json;
+    return result;
+}
+
 // ── StarMap property descriptors ──
 
 napi_property_descriptor* getStarMapDescriptors(size_t* count) {
@@ -274,6 +295,7 @@ napi_property_descriptor* getStarMapDescriptors(size_t* count) {
         {"nativeCreateStarMapChildEmbed", nullptr, NativeCreateStarMapChildEmbed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeUpdateStarMapEmbed", nullptr, NativeUpdateStarMapEmbed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveStarMapPath", nullptr, NativeResolveStarMapPath, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativePlanCrossLayerConnection", nullptr, NativePlanCrossLayerConnection, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCreateStarMap", nullptr, NativeCreateStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeDeleteStarMap", nullptr, NativeDeleteStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRenameStarMap", nullptr, NativeRenameStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},

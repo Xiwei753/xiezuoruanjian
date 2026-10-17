@@ -17,7 +17,6 @@ import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSa
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
-import { LayoutContract, ScreenPolicy, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement, ScreenRole, ActionSlot, ActionRole, ActionTarget, ActionRegion, LayoutMetrics, LayoutRect, WorkbenchPlacement, WorkbenchLayoutPlan, WorkbenchRole, ResolvedWorkspaceMode } from '../dto/PlatformDtos'
 
 // ─── Decode Result ───
 
@@ -198,10 +197,6 @@ export function decodeLocalSettings(data: Object): DecodeResult<LocalSettings> {
   if (editorFontSize === null) { return err<LocalSettings>('LocalSettings.editorFontSize missing or not number') }
   const editorLineSpacingMultiplier: number | null = reqNum(data, 'editorLineSpacingMultiplier')
   if (editorLineSpacingMultiplier === null) { return err<LocalSettings>('LocalSettings.editorLineSpacingMultiplier missing or not number') }
-  const windowWidth: number | null = reqNum(data, 'windowWidth')
-  if (windowWidth === null) { return err<LocalSettings>('LocalSettings.windowWidth missing or not number') }
-  const windowHeight: number | null = reqNum(data, 'windowHeight')
-  if (windowHeight === null) { return err<LocalSettings>('LocalSettings.windowHeight missing or not number') }
   const autoSaveDelayMs: number | null = reqNum(data, 'autoSaveDelayMs')
   if (autoSaveDelayMs === null) { return err<LocalSettings>('LocalSettings.autoSaveDelayMs missing or not number') }
   const autoIndentEnabled: boolean | null = reqBool(data, 'autoIndentEnabled')
@@ -218,10 +213,6 @@ export function decodeLocalSettings(data: Object): DecodeResult<LocalSettings> {
   if (editorSmoothCursorDurationMs === null) { return err<LocalSettings>('LocalSettings.editorSmoothCursorDurationMs missing or not number') }
   const aiEnabled: boolean | null = reqBool(data, 'aiEnabled')
   if (aiEnabled === null) { return err<LocalSettings>('LocalSettings.aiEnabled missing or not boolean') }
-  const desktopSidebarWidth: number | null = reqNum(data, 'desktopSidebarWidth')
-  if (desktopSidebarWidth === null) { return err<LocalSettings>('LocalSettings.desktopSidebarWidth missing or not number') }
-  const desktopEditorWidth: number | null = reqNum(data, 'desktopEditorWidth')
-  if (desktopEditorWidth === null) { return err<LocalSettings>('LocalSettings.desktopEditorWidth missing or not number') }
   const editorCoordinatedTextCursorAnimationEnabled: boolean | null = reqBool(data, 'editorCoordinatedTextCursorAnimationEnabled')
   if (editorCoordinatedTextCursorAnimationEnabled === null) { return err<LocalSettings>('LocalSettings.editorCoordinatedTextCursorAnimationEnabled missing or not boolean') }
   const diagnosticsEnabled: boolean | null = reqBool(data, 'diagnosticsEnabled')
@@ -247,8 +238,6 @@ export function decodeLocalSettings(data: Object): DecodeResult<LocalSettings> {
     autoSaveEnabled: autoSaveEnabled,
     editorFontSize: editorFontSize,
     editorLineSpacingMultiplier: editorLineSpacingMultiplier,
-    windowWidth: windowWidth,
-    windowHeight: windowHeight,
     autoSaveDelayMs: autoSaveDelayMs,
     autoIndentEnabled: autoIndentEnabled,
     autoIndentWidth: autoIndentWidth,
@@ -258,8 +247,6 @@ export function decodeLocalSettings(data: Object): DecodeResult<LocalSettings> {
     editorSmoothCursorDurationMs: editorSmoothCursorDurationMs,
     aiEnabled: aiEnabled,
     statsDeviceId: statsDeviceIdR.value,
-    desktopSidebarWidth: desktopSidebarWidth,
-    desktopEditorWidth: desktopEditorWidth,
     editorCoordinatedTextCursorAnimationEnabled: editorCoordinatedTextCursorAnimationEnabled,
     diagnosticsEnabled: diagnosticsEnabled,
     diagnosticsVerbose: diagnosticsVerbose
@@ -1896,159 +1883,3 @@ export function decodeEditorEditResult(data: Object): DecodeResult<import('../dt
   }; return ok(value)
 }
 
-// ─── Layout / Screen Policy Decoders ───
-
-function decodeLayoutMetrics(data: Object): DecodeResult<LayoutMetrics> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<LayoutMetrics>('LayoutMetrics: expected object')
-  }
-  const listPaneWidthDp: number | null = reqNum(data, 'listPaneWidthDp')
-  if (listPaneWidthDp === null) { return err<LayoutMetrics>('listPaneWidthDp missing') }
-  const projectCardMinWidthDp: number | null = reqNum(data, 'projectCardMinWidthDp')
-  if (projectCardMinWidthDp === null) { return err<LayoutMetrics>('projectCardMinWidthDp missing') }
-  const toolPaneWidthDp: number | null = reqNum(data, 'toolPaneWidthDp')
-  if (toolPaneWidthDp === null) { return err<LayoutMetrics>('toolPaneWidthDp missing') }
-  const toolRailWidthDp: number | null = reqNum(data, 'toolRailWidthDp')
-  if (toolRailWidthDp === null) { return err<LayoutMetrics>('toolRailWidthDp missing') }
-  const editorMinWidthDp: number | null = reqNum(data, 'editorMinWidthDp')
-  if (editorMinWidthDp === null) { return err<LayoutMetrics>('editorMinWidthDp missing') }
-  const toolbarHeightDp: number | null = reqNum(data, 'toolbarHeightDp')
-  if (toolbarHeightDp === null) { return err<LayoutMetrics>('toolbarHeightDp missing') }
-  const toolbarLeadingWidthDp: number | null = reqNum(data, 'toolbarLeadingWidthDp')
-  if (toolbarLeadingWidthDp === null) { return err<LayoutMetrics>('toolbarLeadingWidthDp missing') }
-  const toolbarTrailingWidthDp: number | null = reqNum(data, 'toolbarTrailingWidthDp')
-  if (toolbarTrailingWidthDp === null) { return err<LayoutMetrics>('toolbarTrailingWidthDp missing') }
-  const listPaneMinWidthDp: number | null = reqNum(data, 'listPaneMinWidthDp')
-  if (listPaneMinWidthDp === null) { return err<LayoutMetrics>('listPaneMinWidthDp missing') }
-  const toolPaneMinWidthDp: number | null = reqNum(data, 'toolPaneMinWidthDp')
-  if (toolPaneMinWidthDp === null) { return err<LayoutMetrics>('toolPaneMinWidthDp missing') }
-  return ok<LayoutMetrics>({
-    listPaneWidthDp: listPaneWidthDp,
-    projectCardMinWidthDp: projectCardMinWidthDp,
-    toolPaneWidthDp: toolPaneWidthDp,
-    toolRailWidthDp: toolRailWidthDp,
-    editorMinWidthDp: editorMinWidthDp,
-    toolbarHeightDp: toolbarHeightDp,
-    toolbarLeadingWidthDp: toolbarLeadingWidthDp,
-    toolbarTrailingWidthDp: toolbarTrailingWidthDp,
-    listPaneMinWidthDp: listPaneMinWidthDp,
-    toolPaneMinWidthDp: toolPaneMinWidthDp
-  })
-}
-
-export function decodeLayoutContract(data: Object): DecodeResult<LayoutContract> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<LayoutContract>('LayoutContract: expected object')
-  }
-  const shellMode: string | null = reqStr(data, 'shellMode')
-  if (shellMode === null) { return err<LayoutContract>('shellMode missing') }
-  const workspaceLayoutMode: string | null = reqStr(data, 'workspaceLayoutMode')
-  if (workspaceLayoutMode === null) { return err<LayoutContract>('workspaceLayoutMode missing') }
-  const primaryNavigationPlacement: string | null = reqStr(data, 'primaryNavigationPlacement')
-  if (primaryNavigationPlacement === null) { return err<LayoutContract>('primaryNavigationPlacement missing') }
-  const metricsObj: Object | null = reqObj(data, 'metrics')
-  if (metricsObj === null) { return err<LayoutContract>('metrics missing or not object') }
-  const metricsR: DecodeResult<LayoutMetrics> = decodeLayoutMetrics(metricsObj)
-  if (!metricsR.ok || metricsR.value === undefined) { return err<LayoutContract>(`metrics: ${metricsR.error}`) }
-  const value: LayoutContract = {
-    shellMode: shellMode as ShellMode,
-    workspaceLayoutMode: workspaceLayoutMode as WorkspaceLayoutMode,
-    primaryNavigationPlacement: primaryNavigationPlacement as PrimaryNavigationPlacement,
-    metrics: metricsR.value
-  }
-  return ok<LayoutContract>(value)
-}
-
-// Issue #825：resolve_workbench_layout 的七角色 bounds 解码。
-// 平台端只按 role 取 bounds 摆控件，不再自己决定栏宽。
-
-function decodeLayoutRect(data: Object): DecodeResult<LayoutRect> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<LayoutRect>('LayoutRect: expected object')
-  }
-  const leftDp: number | null = reqNum(data, 'leftDp')
-  if (leftDp === null) { return err<LayoutRect>('leftDp missing') }
-  const topDp: number | null = reqNum(data, 'topDp')
-  if (topDp === null) { return err<LayoutRect>('topDp missing') }
-  const rightDp: number | null = reqNum(data, 'rightDp')
-  if (rightDp === null) { return err<LayoutRect>('rightDp missing') }
-  const bottomDp: number | null = reqNum(data, 'bottomDp')
-  if (bottomDp === null) { return err<LayoutRect>('bottomDp missing') }
-  return ok<LayoutRect>({ leftDp: leftDp, topDp: topDp, rightDp: rightDp, bottomDp: bottomDp })
-}
-
-function decodeWorkbenchPlacement(data: Object): DecodeResult<WorkbenchPlacement> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<WorkbenchPlacement>('WorkbenchPlacement: expected object')
-  }
-  const role: string | null = reqStr(data, 'role')
-  if (role === null) { return err<WorkbenchPlacement>('role missing') }
-  const boundsObj: Object | null = reqObj(data, 'bounds')
-  if (boundsObj === null) { return err<WorkbenchPlacement>('bounds missing or not object') }
-  const boundsR: DecodeResult<LayoutRect> = decodeLayoutRect(boundsObj)
-  if (!boundsR.ok || boundsR.value === undefined) { return err<WorkbenchPlacement>(`bounds: ${boundsR.error}`) }
-  return ok<WorkbenchPlacement>({ role: role as WorkbenchRole, bounds: boundsR.value })
-}
-
-export function decodeWorkbenchLayoutPlan(data: Object): DecodeResult<WorkbenchLayoutPlan> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<WorkbenchLayoutPlan>('WorkbenchLayoutPlan: expected object')
-  }
-  const mode: string | null = reqStr(data, 'mode')
-  if (mode === null) { return err<WorkbenchLayoutPlan>('mode missing') }
-  const placementsArr: Array<Object> | null = reqArray(data, 'placements')
-  if (placementsArr === null) { return err<WorkbenchLayoutPlan>('placements missing or not array') }
-  const placementsR: DecodeResult<WorkbenchPlacement[]> =
-    decodeArray<WorkbenchPlacement>(placementsArr as Object, decodeWorkbenchPlacement, 'placements')
-  if (!placementsR.ok || placementsR.value === undefined) {
-    return err<WorkbenchLayoutPlan>(placementsR.error ?? 'decode failed')
-  }
-  return ok<WorkbenchLayoutPlan>({
-    placements: placementsR.value,
-    mode: mode as ResolvedWorkspaceMode
-  })
-}
-
-function decodeActionSlot(data: Object): DecodeResult<ActionSlot> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<ActionSlot>('ActionSlot: expected object')
-  }
-  const role: string | null = reqStr(data, 'role')
-  if (role === null) { return err<ActionSlot>('role missing') }
-  const target: string | null = reqStr(data, 'target')
-  if (target === null) { return err<ActionSlot>('target missing') }
-  const region: string | null = reqStr(data, 'region')
-  if (region === null) { return err<ActionSlot>('region missing') }
-  const order: number | null = reqNum(data, 'order')
-  if (order === null) { return err<ActionSlot>('order missing') }
-  const requiresConfirmation: boolean | null = reqBool(data, 'requiresConfirmation')
-  if (requiresConfirmation === null) { return err<ActionSlot>('requiresConfirmation missing') }
-  const value: ActionSlot = {
-    role: role as ActionRole,
-    target: target as ActionTarget,
-    region: region as ActionRegion,
-    order: order,
-    requiresConfirmation: requiresConfirmation
-  }
-  return ok<ActionSlot>(value)
-}
-
-export function decodeScreenPolicy(data: Object): DecodeResult<ScreenPolicy> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<ScreenPolicy>('ScreenPolicy: expected object')
-  }
-  const screenRole: string | null = reqStr(data, 'screenRole')
-  if (screenRole === null) { return err<ScreenPolicy>('screenRole missing') }
-  const showPrimaryNavigation: boolean | null = reqBool(data, 'showPrimaryNavigation')
-  if (showPrimaryNavigation === null) { return err<ScreenPolicy>('showPrimaryNavigation missing or not boolean') }
-  const slotsArr: Array<Object> | null = reqArray(data, 'actionSlots')
-  if (slotsArr === null) { return err<ScreenPolicy>('actionSlots missing or not array') }
-  const slotsR: DecodeResult<ActionSlot[]> = decodeArray<ActionSlot>(slotsArr as Object, decodeActionSlot, 'actionSlots')
-  if (!slotsR.ok || slotsR.value === undefined) { return err<ScreenPolicy>(slotsR.error ?? 'decode failed') }
-  const value: ScreenPolicy = {
-    screenRole: screenRole as ScreenRole,
-    showPrimaryNavigation: showPrimaryNavigation,
-    actionSlots: slotsR.value
-  }
-  return ok<ScreenPolicy>(value)
-}

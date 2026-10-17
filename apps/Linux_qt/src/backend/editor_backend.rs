@@ -52,6 +52,9 @@ pub struct EditorBackend {
     clear_editor: qt_signal!(),
     #[allow(dead_code)]
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
+    /// Issue #920：正文段落格式化规则归 Core，Qt 只触发此操作。
+    #[allow(dead_code)]
+    format_plain_text: qt_method!(fn(&self, text: QString) -> QString),
     #[allow(dead_code)]
     open_chapter_json: qt_method!(
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
@@ -456,6 +459,14 @@ impl EditorBackend {
             .unwrap_or_else(|_| {
                 QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             })
+    }
+
+    /// Issue #920：正文段落格式化规则由 Core 持有（`editor::formatting`），
+    /// Qt 不再自带一套 JS 正则分段与重组；平台只负责把结果刷新到编辑器并保存。
+    fn format_plain_text(&self, text: QString) -> QString {
+        let text_str = text.to_string();
+        let formatted = writer_core::editor::formatting::format_paragraphs(&text_str);
+        QString::from(formatted.as_str())
     }
 }
 

@@ -34,12 +34,11 @@ Rectangle {
     property int currentTab: appControllerRef ? appControllerRef.hubTab : 0
     property bool aiCapable: false
     property bool aiEnabled: false
-    property var layoutPlan: null
-    // Issue #825 复核第4项：一级导航放左侧还是放顶部，只看 Core 下发的
-    // primaryNavigationPlacement（LinuxQtLayoutPlanDto 从 Core 的
-    // primary_navigation_placement 直通）。Core 在 600–839vp 宽度下已经是
-    // Workbench 但仍给 Bottom，用 workspaceLayoutMode 判会把中等窗口错抬成侧栏。
-    readonly property bool wideShell: layoutPlan === null || layoutPlan.primaryNavigationPlacement === "Side"
+    // Issue #920：一级导航放左侧（宽屏）还是放顶部（窄屏）由 Qt 自己按窗口宽度
+    // 断点决定，不再从 Core 读 primaryNavigationPlacement。840vp 与旧 Core
+    // breakpoints 的 Wide 起点一致：≥840 用左侧导航栏，否则用顶部导航条。
+    readonly property int wideShellBreakpoint: 840
+    readonly property bool wideShell: root.width >= root.wideShellBreakpoint
 
     // Issue #827 评论 3 第 1 点：宽屏顶栏高度。左栏「素笺」行与右侧动作条
     // 必须用同一个值，两条分隔线才能落在同一个 y 上。
@@ -240,9 +239,6 @@ Rectangle {
                         projectBackendRef: root.projectBackendRef
                         appState: root.appState
                         tree: root.tree
-                        // Issue #827 评论 2：作品卡宽度与页面内边距由 Core 布局契约决定，
-                        // 不在 QML 里写死另一套。
-                        layoutPlan: root.layoutPlan
                         onOpenProject: function(projectId) {
                             var title = "";
                             for (var i = 0; i < root.tree.length; i++) {

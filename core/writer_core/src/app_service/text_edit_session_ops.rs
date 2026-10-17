@@ -722,6 +722,42 @@ impl super::WriterAppService {
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
 
+    /// Issue #920：按 Core 的段落格式化规则重排当前会话正文并作为一次编辑事务提交。
+    ///
+    /// 规则见 [`crate::editor::formatting::format_paragraphs`]（与 Qt 原 `formatText()` 一致）。
+    /// 平台端只触发此操作、再走既有章节保存流程，不再各自实现格式化。
+    pub fn text_edit_session_format_paragraphs(
+        &self,
+        session_id: u64,
+        cause: EditorTransactionCauseDto,
+        expected_revision: u64,
+    ) -> EditorEditResultDto {
+        use crate::editor::formatting::format_paragraphs;
+        use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
+        use crate::editor::EditorCommand;
+        let core_cause: crate::editor::EditorTransactionCause = cause.into();
+        self.with_session_in_registry(session_id, |s| {
+            let current_text = s.kernel.snapshot_text();
+            let formatted = format_paragraphs(&current_text);
+            let byte_range =
+                match Utf8ByteRange::try_new_rope(s.kernel.rope(), 0, current_text.len()) {
+                    Ok(r) => r,
+                    Err(_) => return EditorEditResultDto::invalid_range_fallback(),
+                };
+            let result = s.kernel.apply(EditorCommand::Replace {
+                byte_range,
+                replacement_text: formatted,
+                original_text: current_text,
+                cause: core_cause,
+                expected_revision: EditorRevision::new(expected_revision),
+            });
+            let mut dto: EditorEditResultDto = result.into_result().into();
+            backfill_active_composition(&mut dto, &s.kernel);
+            dto
+        })
+        .unwrap_or_else(EditorEditResultDto::stale_fallback)
+    }
+
     pub fn text_edit_session_insert_line_break(
         &self,
         session_id: u64,

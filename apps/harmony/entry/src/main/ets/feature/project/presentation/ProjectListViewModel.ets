@@ -11,7 +11,7 @@ import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
 import { getBridge, getAppDataRoot, getAppContext } from '../../../app/AppContext'
 import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
 import { HarmonyThemeAdapter } from '../../../ui/theme/HarmonyThemeAdapter'
-import { ScreenPolicy, ScreenRole, ActionSlot, ActionRegion, ActionTarget } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenPolicy, ScreenRole, ActionSlot, ActionRegion, ActionTarget, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
 
 const TAG = 'ProjectListViewModel'
 const DOMAIN = 0x0000
@@ -102,7 +102,7 @@ export class ProjectListViewModel {
       }
 
       await this.loadWorkspace()
-      await this.loadScreenPolicy()
+      this.loadScreenPolicy()
       this.initializeTheme()
     } catch (err) {
       this.errorMessage = `Init error: ${err}`
@@ -137,18 +137,15 @@ export class ProjectListViewModel {
     }
   }
 
-  // ── 加载 ScreenPolicy（问题5） ──
+  // ── 加载页面动作表（平台 UI 语义，不再经过 Core） ──
 
-  private async loadScreenPolicy(): Promise<void> {
-    const result = await this.bridge.resolveScreenPolicy(ScreenRole.ProjectList)
-    if (!result.success || !result.data) {
-      throw new Error(result.errorCode ?? 'resolve screen policy failed')
-    }
-    this.screenPolicy = result.data
-    this.contextActions = result.data.actionSlots
+  private loadScreenPolicy(): void {
+    const policy: ScreenPolicy = resolveScreenPolicy(ScreenRole.ProjectList)
+    this.screenPolicy = policy
+    this.contextActions = policy.actionSlots
       .filter((slot: ActionSlot) => slot.region === ActionRegion.Context)
       .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
-    this.primaryActions = result.data.actionSlots
+    this.primaryActions = policy.actionSlots
       .filter((slot: ActionSlot) => slot.region === ActionRegion.PrimaryAction)
       .sort((a: ActionSlot, b: ActionSlot) => a.order - b.order)
   }

@@ -11,24 +11,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.presentation.screen.SujianChromeAction
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 
 /*
- * 写作工作台顶部工具栏三组容器（#625 评论项2 / #628 评论 5301021120 第 4 步）—
- * 按 Rust AndroidWorkbenchLayoutPlan 的 ToolbarLeading/Center/Trailing bounds 分别放置。
+ * 写作工作台顶部工具栏三组容器（#625 评论项2）— 由 WideWritingWorkspace 用 Compose 布局
+ * 放在顶部一行的左 / 中 / 右三段。
  *
- * #628 评论 5301021120 第 4 步：删除整体的 `WritingWorkspaceToolbar`（被 WideWritingWorkspace
- * 的自定义 Compose Layout 按 plan 放 slot 替代，不加 fallback/兼容旁路）。
- * 三组容器暴露为 internal，供 WideWritingWorkspace 直接按 bounds 放置。
+ * #628 评论 5301021120 第 4 步：删除整体的 `WritingWorkspaceToolbar`（由
+ * WideWritingWorkspace 的 Compose 布局放 slot 替代，不加 fallback/兼容旁路）。
+ * 三组容器暴露为 internal，供 WideWritingWorkspace 直接放置。
  *
- * #640 评论 5443789509：稳定系统栏（systemBars + displayCutout）已由 workbench safe frame
- * 在 planner 输入前裁掉，Rust plan 的 toolbar rect 已在安全区内；toolbar slot 内不再
- * `fitInside(SafeDrawing)`，避免二次避让。IME 不在 toolbar 出现，无需处理。
- * Surface 仍占完整 Rust rect 画背景（背景画到系统栏由 safe frame 保证不露出透明 Scaffold）。
+ * 稳定系统栏（systemBars + displayCutout）由外层 Scaffold 的 safeDrawing 内容窗口内边距处理，
+ * toolbar slot 内不再 `fitInside(SafeDrawing)`。IME 不在 toolbar 出现，无需处理。
  *
  * - 左组：返回 + 撤销 + 重做 + 章节栏收起/展开（用户主动收起，不按设备尺寸自动收）；
  * - 中组：WritingToolbarCenterSlot 正文工具区域 content slot，当前无真实功能时保持空 slot；

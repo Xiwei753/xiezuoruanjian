@@ -1,15 +1,14 @@
 // HdsAppDestinationApi23 — API23+ Home/StarMap/Stats 共享根页面壳。
 // Issue #784 评论 5857397503 第 1 点：Home 删除旧顶栏后没有新标题栏接上，
 // 新建此共享根页面壳，让 Home / StarMap / Stats 共用 HdsNavDestination + 标题栏。
-// 通过 ScreenPolicyBridge 异步加载 ActionSlot[]，交给 HeaderTitleBarStack 自绘
+// 通过平台动作表加载 ActionSlot[]，交给 HeaderTitleBarStack 自绘
 // 标题 + 页头动作胶囊，不再在平台端硬编码"同步/搜索/设置"三个 item。
 // onShown 时通过 NavigationChromeStore.reportScreenRole 上报当前 ScreenRole + tabIndex。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
 import { HeaderTitleBarStack } from './HeaderTitleBarStack'
-import { ScreenPolicyBridge } from '../../../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from '../../NavigationChromeStore'
-import { ScreenRole, ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ActionSlot, resolveScreenPolicy } from '../../ScreenSemantics'
 import { handleRootBack } from '../../RootBackHandler'
 
 @ComponentV2
@@ -28,11 +27,8 @@ export struct HdsAppDestinationApi23 {
   @Param showTitleBar: boolean = true
   @Local headerActions: ActionSlot[] = []
 
-  async aboutToAppear() {
-    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(this.screenRole)
-    if (policy !== null) {
-      this.headerActions = policy.actionSlots
-    }
+  aboutToAppear() {
+    this.headerActions = resolveScreenPolicy(this.screenRole).actionSlots
   }
 
   // stackBuilder 是 CustomBuilder，组件调用必须写在 @Builder 里。

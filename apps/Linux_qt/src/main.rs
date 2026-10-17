@@ -87,22 +87,20 @@
 // 被什么引用：
 // - 作为 apps/Linux_qt 二进制项目的独立编译与执行起点（main.rs）。
 //
-// ── LayoutPlan 边界约束 ──
+// ── 布局边界约束（Issue #920）──
 //
-// LayoutPlan（由 Core resolve_layout 产出）只决定壳层布局，包括：
-//   - 导航模式（shellMode: compact/medium/expanded）
-//   - 内容区域最大宽度（contentMaxWidthVp）
-//   - 页面内边距（contentPaddingVp）
-//   - 侧栏可见性与宽度
+// 布局完全由各端 UI 层自己决定：WriterCore 不接收窗口尺寸，也不返回布局模式 /
+// 栏宽 / 矩形 bounds / 控件类型 / 导航放置。Qt 端在 QML 里用本地断点 +
+// Qt Quick Layouts 自行决定壳层与栏宽。
 //
-// LayoutPlan 绝对不干预编辑器底层渲染，具体包括：
+// 本地布局绝对不干预编辑器底层渲染，具体包括：
 //   - 不传递到 SujianEditorItem 的 QSG 渲染线程
 //   - 不影响光标位置、IME 输入、动画帧率
 //   - 不改变 QTextLayout 的排版计算
 //   - 不驱动 EditorAnimationOverlay 的动画属性
 //
 // 编辑器渲染由 EditorController + SujianEditorItem 独立管理，
-// 遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
+// 遵守 Qt QSG 线程边界，不受布局断点影响。
 // =============================================================================
 #![recursion_limit = "8192"]
 //! Linux_qt 客户端入口：只负责 Qt/QML 启动、资源注册和顶层 Backend 注册。

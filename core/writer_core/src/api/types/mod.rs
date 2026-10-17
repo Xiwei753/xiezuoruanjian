@@ -12,21 +12,14 @@ mod platform;
 mod platform_interaction;
 mod project;
 mod recent_edits;
-pub mod screen_policy;
 mod settings;
 mod starmap;
 mod stats;
 mod sync;
 mod volume;
-mod workbench_plan;
-
-#[cfg(test)]
-mod workbench_plan_tests;
 
 #[cfg(test)]
 mod action_tests;
-#[cfg(test)]
-mod platform_tests;
 #[cfg(test)]
 mod project_tests;
 #[cfg(test)]
@@ -43,10 +36,8 @@ pub use platform::*;
 pub use platform_interaction::*;
 pub use project::*;
 pub use recent_edits::*;
-pub use screen_policy::*;
 pub use settings::*;
 pub use starmap::*;
 pub use stats::*;
 pub use sync::*;
 pub use volume::*;
-pub use workbench_plan::*;

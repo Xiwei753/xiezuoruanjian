@@ -238,6 +238,29 @@ pub fn create_starmap_edge_with_paths(
     envelope(api.add_starmap_edge(starmap_id, edge))
 }
 
+/// 跨层连线宿主规划（Core 唯一事实来源）。
+///
+/// `from_path_json` / `to_path_json` 是两条从同一根星图出发的
+/// `StarMapTargetPathDto`（`starmapId` 相同）。Core 解析两端所在 Scene，取
+/// 最长公共前缀得到宿主星图和两条相对宿主的端点路径，返回
+/// `hostStarmapId` / `hostSegments` / `from` / `to` 的 envelope。
+/// 自环、不可解析路径、不同根星图都会返回错误 envelope，调用方不得自行猜测宿主。
+pub fn plan_cross_layer_connection(
+    api: &WriterCoreApi,
+    from_path_json: &str,
+    to_path_json: &str,
+) -> String {
+    let from: StarMapTargetPathDto = match serde_json::from_str(from_path_json) {
+        Ok(p) => p,
+        Err(e) => return envelope_err_str(&format!("Invalid fromPath JSON: {}", e)),
+    };
+    let to: StarMapTargetPathDto = match serde_json::from_str(to_path_json) {
+        Ok(p) => p,
+        Err(e) => return envelope_err_str(&format!("Invalid toPath JSON: {}", e)),
+    };
+    envelope(api.plan_cross_layer_connection(from, to))
+}
+
 pub fn update_starmap_edge(
     api: &WriterCoreApi,
     starmap_id: &str,

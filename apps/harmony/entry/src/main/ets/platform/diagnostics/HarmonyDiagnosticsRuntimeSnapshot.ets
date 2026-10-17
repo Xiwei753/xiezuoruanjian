@@ -20,7 +20,8 @@ import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStor
 import { AdaptiveContext } from '../../ui/adaptive/AdaptiveContext'
 import { NavigationTransactionCoordinator } from '../../app/navigation/NavigationTransactionCoordinator'
 import { EditorRuntimeSnapshotStore, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
-import { ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
+import { ScreenRole } from '../../app/navigation/ScreenSemantics'
+import { WidthClass } from '../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../version/PlatformApiResolver'
 import { HarmonyMaterialRuntimeApi26 } from '../material/impl/api26/HarmonyMaterialRuntimeApi26'
 

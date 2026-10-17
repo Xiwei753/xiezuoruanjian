@@ -102,8 +102,6 @@ export class SettingsViewModel {
     autoSaveEnabled: true,
     editorFontSize: 16,
     editorLineSpacingMultiplier: 1.8,
-    windowWidth: 0,
-    windowHeight: 0,
     autoSaveDelayMs: 30000,
     autoIndentEnabled: true,
     autoIndentWidth: 2,
@@ -113,8 +111,6 @@ export class SettingsViewModel {
     editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
     statsDeviceId: null,
-    desktopSidebarWidth: 0,
-    desktopEditorWidth: 0,
     editorCoordinatedTextCursorAnimationEnabled: false,
     diagnosticsEnabled: false,
     diagnosticsVerbose: false

@@ -15,8 +15,6 @@ export interface LocalSettings {
   autoSaveEnabled: boolean
   editorFontSize: number
   editorLineSpacingMultiplier: number
-  windowWidth: number
-  windowHeight: number
   autoSaveDelayMs: number
   autoIndentEnabled: boolean
   autoIndentWidth: number
@@ -26,8 +24,6 @@ export interface LocalSettings {
   editorSmoothCursorDurationMs: number
   aiEnabled: boolean
   statsDeviceId: string | null
-  desktopSidebarWidth: number
-  desktopEditorWidth: number
   editorCoordinatedTextCursorAnimationEnabled: boolean
   diagnosticsEnabled: boolean
   diagnosticsVerbose: boolean

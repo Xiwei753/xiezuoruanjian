@@ -4,13 +4,12 @@
 // 避免高版本模块引用进入所有版本都会加载的共享页面，破坏版本隔离。
 // Issue #773 评论5844518092：统一为 V2 @ComponentV2 + @Param，消除 V2 页面把 @Builder
 // 交给 V1 壳的 @BuilderParam 后 this 变成壳组件导致 adaptiveState undefined 的 TypeError。
-// Issue #784 评论5857397503：移除硬编码的三个 menu item，改为通过 ScreenPolicyBridge
-// 异步加载 ActionSlot[]，交给 HeaderTitleBarStack 自绘标题 + 页头动作胶囊。
+// Issue #784 评论5857397503：移除硬编码的三个 menu item，改为通过平台动作表
+// 加载 ActionSlot[]，交给 HeaderTitleBarStack 自绘标题 + 页头动作胶囊。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
 import { HeaderTitleBarStack } from './HeaderTitleBarStack'
-import { ScreenPolicyBridge } from '../../../../ui/adaptive/ScreenPolicyBridge'
-import { ScreenRole, ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ActionSlot, resolveScreenPolicy } from '../../ScreenSemantics'
 
 @ComponentV2
 export struct HdsWorkspaceDestinationApi23 {
@@ -23,11 +22,8 @@ export struct HdsWorkspaceDestinationApi23 {
   @Param showTitleBar: boolean = true
   @Local headerActions: ActionSlot[] = []
 
-  async aboutToAppear() {
-    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(this.screenRole)
-    if (policy !== null) {
-      this.headerActions = policy.actionSlots
-    }
+  aboutToAppear() {
+    this.headerActions = resolveScreenPolicy(this.screenRole).actionSlots
   }
 
   // stackBuilder 是 CustomBuilder，组件调用必须写在 @Builder 里。

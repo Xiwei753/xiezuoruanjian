@@ -219,48 +219,6 @@ impl WriterAppService {
         self.api.ai_available()
     }
 
-    // ── Layout Contract ──
-
-    pub fn resolve_layout(
-        &self,
-        viewport: crate::api::WindowViewportDto,
-    ) -> crate::api::LayoutContractDto {
-        let core_viewport: crate::presentation::layout::resolver::WindowViewport = viewport.into();
-        let contract = crate::presentation::layout::resolve_layout(&core_viewport);
-        contract.into()
-    }
-
-    ///   第 3 步：FFI 直接返回 workbench 布局计划。
-    ///
-    /// 平台端调用此入口获取七角色 bounds，不再自己推导 hinge 布局。
-    pub fn resolve_workbench_layout(
-        &self,
-        viewport: crate::api::WindowViewportDto,
-        visibility: crate::api::WorkbenchVisibilityDto,
-    ) -> crate::api::WorkbenchLayoutPlanDto {
-        let core_viewport: crate::presentation::layout::resolver::WindowViewport = viewport.into();
-        let core_visibility: crate::presentation::layout::resolver::WorkbenchVisibility =
-            visibility.into();
-        let plan =
-            crate::presentation::layout::resolve_workbench_layout(&core_viewport, core_visibility);
-        plan.into()
-    }
-
-    // ── Screen Contract ──
-
-    pub fn resolve_screen_policy(
-        &self,
-        screen_role: crate::api::ScreenRoleDto,
-    ) -> crate::api::ScreenPolicyDto {
-        let core_role: crate::presentation::screen::ScreenRole = screen_role.into();
-        let policy = crate::presentation::screen::resolve_screen_policy(core_role);
-        crate::api::ScreenPolicyDto {
-            screen_role: policy.screen_role.into(),
-            action_slots: policy.action_slots.into_iter().map(Into::into).collect(),
-            show_primary_navigation: policy.show_primary_navigation,
-        }
-    }
-
     // ── Thin wrappers for FFI that need WriterCore methods through WriterAppService ──
 
     pub fn project_root(&self, project_id: &str) -> std::path::PathBuf {

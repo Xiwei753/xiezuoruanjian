@@ -3,7 +3,7 @@
 //! 管理两类设置：
 //!
 //! 1. **LocalSettings（本地设置）**：仅存储在本地，不同步
-//!    - 窗口大小、自动保存开关、字号、行距、自动缩进、动画开关等
+//!    - 自动保存开关、字号、行距、自动缩进、动画开关等
 //!    - 文件路径：`<app_data_root>/settings.local.json`
 //!
 //! 2. **SyncableSettings（可同步设置）**：跨设备同步候选
@@ -73,10 +73,6 @@ pub struct LocalSettings {
     pub auto_indent_enabled: bool,
     #[serde(default = "default_auto_indent_width")]
     pub auto_indent_width: f32,
-    #[serde(default)]
-    pub window_width: f64,
-    #[serde(default)]
-    pub window_height: f64,
     #[serde(default = "default_editor_typing_animation_enabled")]
     pub editor_typing_animation_enabled: bool,
     #[serde(default = "default_editor_smooth_cursor_enabled")]
@@ -91,19 +87,6 @@ pub struct LocalSettings {
     pub ai_enabled: bool,
     #[serde(default)]
     pub stats_device_id: Option<String>,
-    #[serde(
-        default = "default_desktop_sidebar_width",
-        alias = "linux_qt_sidebar_width",
-        alias = "desktop_sidebar_width",
-        alias = "linux_sidebar_width"
-    )]
-    pub desktop_sidebar_width: f64,
-    #[serde(
-        default = "default_desktop_editor_width",
-        alias = "linux_qt_editor_width",
-        alias = "desktop_editor_width"
-    )]
-    pub desktop_editor_width: f64,
     #[serde(default = "default_diagnostics_enabled")]
     pub diagnostics_enabled: bool,
     #[serde(default = "default_diagnostics_verbose")]
@@ -116,14 +99,6 @@ fn default_appearance_mode() -> String {
 
 fn default_color_source() -> String {
     "built_in".to_string()
-}
-
-fn default_desktop_sidebar_width() -> f64 {
-    240.0
-}
-
-fn default_desktop_editor_width() -> f64 {
-    0.0
 }
 
 /// alpha/内测阶段 diagnostics_enabled 默认 true（crash/error 永远开启）
@@ -219,8 +194,6 @@ impl Default for LocalSettings {
             auto_save_delay_ms: default_auto_save_delay_ms(),
             auto_indent_enabled: default_auto_indent_enabled(),
             auto_indent_width: default_auto_indent_width(),
-            window_width: 800.0,
-            window_height: 600.0,
             editor_typing_animation_enabled: default_editor_typing_animation_enabled(),
             editor_smooth_cursor_enabled: default_editor_smooth_cursor_enabled(),
             editor_typing_animation_duration_ms: default_editor_typing_animation_duration_ms(),
@@ -229,8 +202,6 @@ impl Default for LocalSettings {
                 default_editor_coordinated_text_cursor_animation_enabled(),
             ai_enabled: false,
             stats_device_id: None,
-            desktop_sidebar_width: default_desktop_sidebar_width(),
-            desktop_editor_width: default_desktop_editor_width(),
             diagnostics_enabled: default_diagnostics_enabled(),
             diagnostics_verbose: default_diagnostics_verbose(),
         }

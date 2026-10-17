@@ -11,12 +11,12 @@ import androidx.compose.ui.res.stringResource
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.SujianAppDependencies
-import com.xiwei.sujian.app.presentation.screen.SujianChromeAction
-import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.feature.project.ui.ProjectNavigationState
+import com.xiwei.sujian.feature.project.ui.SujianChromeAction
+import com.xiwei.sujian.feature.project.ui.SujianChromeSpec
 import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
 import com.xiwei.sujian.feature.project.ui.guardedBack
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
@@ -95,8 +95,7 @@ private fun rememberSujianTopBarNavigation(
     return navigationIcon to onNavigationClick
 }
 
-/** 顶栏右侧操作 — 顺序由 Core screen contract 的 HeaderTrailing order 决定（#610）：
- * 作品页/写作区依次提供 同步状态、搜索、设置（视觉从右往左为 设置/搜索/同步）。 */
+/** 顶栏右侧操作 — 顺序为 同步 → 搜索 → 设置（Android 本端 chrome 决策）。 */
 
 @Composable
 private fun rememberSujianTopBarActions(

@@ -2,10 +2,8 @@ package com.xiwei.sujian.app.di
 
 import android.content.Context
 import androidx.compose.runtime.compositionLocalOf
-import com.xiwei.sujian.app.presentation.screen.PresentationPolicyCatalog
 import com.xiwei.sujian.app.theme.ThemeRepository
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
-import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -19,8 +17,6 @@ import com.xiwei.sujian.feature.sync.data.SyncStatusRepository
 interface AppServiceContainer {
     val appServiceBridge: AppServiceBridge
 
-    /** 静态页面契约目录（#618 一）：容器创建时一次性解析，Compose 热路径只查内存 Map。 */
-    val presentationPolicyCatalog: PresentationPolicyCatalog
     val projectRepository: ProjectRepository
     val chapterRepository: ChapterRepository
     val recentEditsRepository: RecentEditsRepository
@@ -64,15 +60,6 @@ class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     // #618 一：桥创建后立即解析静态页面契约（resolver 在 DI 层提供 Bridge 调用，
     // presentation 层不直接依赖 Bridge），之后 Compose 只查 Map，
     // 不再在页面组合过程中临时跨 UniFFI 取契约。
-    override val presentationPolicyCatalog: PresentationPolicyCatalog =
-        PresentationPolicyCatalog(
-            resolver = { role ->
-                when (val result = appServiceBridge.resolveScreenPolicy(role)) {
-                    is BridgeResult.Success -> result.data
-                    else -> null
-                }
-            },
-        )
     override val projectRepository: ProjectRepository = ProjectRepository(appContext, appServiceBridge)
     override val chapterRepository: ChapterRepository = ChapterRepository(appContext, appServiceBridge)
     override val recentEditsRepository: RecentEditsRepository = RecentEditsRepository(appContext, appServiceBridge)

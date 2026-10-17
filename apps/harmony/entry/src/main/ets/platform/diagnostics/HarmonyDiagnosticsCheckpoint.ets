@@ -32,7 +32,7 @@ import { HarmonyDiagnosticsRuntimeSnapshot } from './HarmonyDiagnosticsRuntimeSn
 import { HarmonyThemeAdapter, ThemeObserver, ThemeConfig } from '../../ui/theme/HarmonyThemeAdapter'
 import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
 import { EditorRuntimeSnapshotStore, EditorRuntimeSnapshot, EditorSnapshotObserver } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
-import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
+import { ScreenRole } from '../../app/navigation/ScreenSemantics'
 import { AdaptiveContext, AdaptiveObserver, AdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 
 const LOG_TAG = 'HarmonyDiagnosticsCheckpoint'

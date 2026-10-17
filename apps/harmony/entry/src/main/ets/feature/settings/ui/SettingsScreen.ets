@@ -1,6 +1,6 @@
 // SettingsScreen — 设置页路由外壳（窄屏专用）。
 // Issue #825：设置内容已抽到 SettingsContent.ets。
-// - 宽屏（WorkspaceLayoutMode.Workbench）不再走这条路由：
+// - 宽屏工作台档（Platform AdaptiveState.isWorkbenchLayout）不再走这条路由：
 //   设置由 SettingsOverlayPanel 作为窗口层级 custom dialog 挂在当前页面之上，
 //   背景仍是打开设置前的页面；见 SettingsOverlayController。
 // - 窄屏继续保持原来的 Routes.Settings 路由页行为，只是内容换成 SettingsContent。
@@ -10,7 +10,7 @@ import hilog from '@ohos.hilog'
 import { SettingsContent } from './SettingsContent'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole } from '../../../app/navigation/ScreenSemantics'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsSettingsDestinationApi23 } from '../../../app/navigation/impl/api23/HdsSettingsDestinationApi23'
 

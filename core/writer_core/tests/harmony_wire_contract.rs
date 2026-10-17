@@ -333,7 +333,6 @@ fn harmony_wire_contract_matches_fixture() {
     let patch = cstr(
         r#"{"editorFontSize":17.5,"editorLineSpacingMultiplier":1.75,"autoSaveEnabled":false,
             "autoSaveDelayMs":1500,"autoIndentEnabled":true,"autoIndentWidth":2,
-            "desktopSidebarWidth":260,"desktopEditorWidth":720,
             "editorCoordinatedTextCursorAnimationEnabled":true,
             "diagnosticsEnabled":true,"diagnosticsVerbose":false,"appearanceMode":"dark"}"#,
     );
@@ -356,8 +355,6 @@ fn harmony_wire_contract_matches_fixture() {
         ("autoSaveDelayMs", "1500"),
         ("autoIndentEnabled", "true"),
         ("autoIndentWidth", "2"),
-        ("desktopSidebarWidth", "260"),
-        ("desktopEditorWidth", "720"),
         ("editorCoordinatedTextCursorAnimationEnabled", "true"),
         ("diagnosticsEnabled", "true"),
         ("diagnosticsVerbose", "false"),
@@ -594,38 +591,6 @@ fn harmony_wire_contract_matches_fixture() {
         "getWritingStats",
         &call0(stats::writer_core_get_writing_stats),
     );
-
-    // ── layout / screen policy ──
-    use ffi::layout_ops as layout;
-    use ffi::screen_policy_ops as screen_policy;
-    let viewport = cstr(
-        r#"{"widthDp":1280.0,"heightDp":800.0,"occlusions":[{"leftDp":0.0,"topDp":0.0,"rightDp":0.0,"bottomDp":0.0,"separating":false}]}"#,
-    );
-    let _ = note(
-        &mut out,
-        "resolveLayout",
-        &call1(layout::writer_core_resolve_layout, &viewport),
-    );
-    // #825：七角色 workbench bounds 直通平台端。
-    let visibility = cstr(r#"{"chapterNavigationVisible":true,"toolPaneVisible":false}"#);
-    let _ = note(
-        &mut out,
-        "resolveWorkbenchLayout",
-        &call2(
-            layout::writer_core_resolve_workbench_layout,
-            &viewport,
-            &visibility,
-        ),
-    );
-    for role in ["Home", "Writing", "ProjectWorkspace", "Settings"] {
-        let role_json = format!("\"{role}\"");
-        let role_c = cstr(&role_json);
-        let _ = note(
-            &mut out,
-            &format!("resolveScreenPolicy.{role}"),
-            &call1(screen_policy::writer_core_resolve_screen_policy, &role_c),
-        );
-    }
 
     // ── starmap ──
     use ffi::starmap_ops as starmap;

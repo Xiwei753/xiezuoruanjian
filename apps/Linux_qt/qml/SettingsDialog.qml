@@ -33,21 +33,22 @@ Dialog {
     // 「关闭」入口（点击即 reject/close），不再手绘顶部按钮。
     standardButtons: Dialog.Close
 
-    // Issue #825：设置始终是浮层，悬浮在打开设置前的那一页之上，不改成路由页。
-    // 宽度分两档：primaryNavigationPlacement === Side 用大号面板；其余用窄对话框。
-    // Issue #836：layoutPlan 为 null 时默认宽屏 / Workbench。
-    readonly property bool widePanel: layoutPlan === null || layoutPlan.primaryNavigationPlacement === "Side"
-    // Workbench 形态保留顶部搜索。
-    readonly property bool overlayPanel: layoutPlan === null || layoutPlan.workspaceLayoutMode === "Workbench"
-
+    // Issue #920：设置面板始终是浮层，悬浮在打开设置前的那一页之上，不改成路由页。
+    // 宽度 / 形态由 Qt 自己按宿主窗口宽度断点决定，不再从 Core 读 layoutPlan：
+    // - ≥840vp：宽屏两列大号面板（与一级导航 Side 的断点一致）；
+    // - ≥600vp：Workbench 形态，保留顶部搜索；
+    // - 更窄：窄对话框、单列。
+    readonly property int wideBreakpoint: 840
+    readonly property int overlayBreakpoint: 600
     // Issue #912：可用尺寸只取 Overlay 宿主（即主窗口）大小，去掉旧的最小宽度
     // 400，避免小窗口下弹窗比窗口还宽被推出屏幕。
     readonly property real hostWidth: Overlay.overlay ? Overlay.overlay.width : 0
     readonly property real hostHeight: Overlay.overlay ? Overlay.overlay.height : 0
+    readonly property bool widePanel: root.hostWidth >= root.wideBreakpoint
+    readonly property bool overlayPanel: root.hostWidth >= root.overlayBreakpoint && root.hostHeight >= 480
     width: Math.max(1, Math.min(root.widePanel ? 1120 : 640, hostWidth - 2 * margins))
     height: Math.max(1, Math.min(root.widePanel ? 880 : 720, hostHeight - 2 * margins))
 
-    property var layoutPlan: null
     // 宽屏顶部搜索关键词。只做分组过滤，不改任何设置读取/保存路径。
     property string searchText: ""
     property var theme: null
@@ -70,7 +71,9 @@ Dialog {
     KdeSettingsPage {
         id: settingsPage
         anchors.fill: parent
-        layoutPlan: root.layoutPlan
+        // Issue #920：面板形态由 SettingsDialog 按宿主窗口宽度断点算好后注入。
+        widePanel: root.widePanel
+        overlayPanel: root.overlayPanel
         settingsBackendRef: root.settingsBackendRef
         workspaceBackendRef: root.workspaceBackendRef
         syncBackendRef: root.syncBackendRef

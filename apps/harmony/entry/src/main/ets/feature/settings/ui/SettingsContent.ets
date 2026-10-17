@@ -21,7 +21,7 @@ import { SyncOutcomePresenter } from '../presentation/SyncOutcomePresenter'
 import { SyncOutcome } from '../presentation/SyncOperationController'
 import { SyncMessagePayload } from '../presentation/SyncMessagePayload'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
-import { PrimaryNavigationPlacement, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
@@ -54,10 +54,10 @@ export struct SettingsContent {
   // 窄屏路由页传 false，标题栏由 NavDestination 承载。
   @Param overlayLayout: boolean = false
   // Issue #825 复核第3项：两列与否不作为打开时快照传进来，改成按最新 AdaptiveContext 派生。
-  // 只有 Core 判定一级导航在 Side（>=840vp）才两列；600–839vp 那档 Workbench 但一级导航
-  // 仍是 Bottom，用单列。平板旋转 / 自由窗口在两档之间移动时，浮层会跟着换布局。
+  // 只有平台自己的窗口断点判定一级导航在侧栏（>=840vp）才两列；600–839vp 那档虽是
+  // 工作台但一级导航仍是 Bottom，用单列。平板旋转 / 自由窗口在两档之间移动时，浮层会跟着换布局。
   private get twoColumn(): boolean {
-    return this.adaptiveState.layoutPlan.primaryNavigationPlacement === PrimaryNavigationPlacement.Side
+    return this.adaptiveState.isWidePrimaryNavigation
   }
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）

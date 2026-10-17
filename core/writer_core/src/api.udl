@@ -171,8 +171,6 @@ dictionary LocalSettingsDto {
     boolean auto_save_enabled;
     f32 editor_font_size;
     f32 editor_line_spacing_multiplier;
-    f32 window_width;
-    f32 window_height;
     u64 auto_save_delay_ms;
     boolean auto_indent_enabled;
     f32 auto_indent_width;
@@ -182,8 +180,6 @@ dictionary LocalSettingsDto {
     u64 editor_smooth_cursor_duration_ms;
     boolean ai_enabled;
     string? stats_device_id;
-    f64 desktop_sidebar_width;
-    f64 desktop_editor_width;
     boolean editor_coordinated_text_cursor_animation_enabled;
     boolean diagnostics_enabled;
     boolean diagnostics_verbose;
@@ -931,6 +927,13 @@ dictionary CreateCrossCanvasEdgeResultDto {
     StarMapEdgeDto edge;
 };
 
+dictionary CrossLayerConnectionPlanDto {
+    string host_starmap_id;
+    sequence<StarMapPathSegmentDto> host_segments;
+    StarMapTargetPathDto from;
+    StarMapTargetPathDto to;
+};
+
 enum StarMapNodeKindDto {
     "Character",
     "Event",
@@ -1356,6 +1359,11 @@ interface WriterAppService {
     [Throws=WriterError]
     CreateCrossCanvasEdgeResultDto create_cross_canvas_edge(StarMapEndpointSelectionDto from, StarMapEndpointSelectionDto to, StarMapEdgeKindDto kind, string? label, string? payload);
 
+    // 跨层连线宿主规划：两条从同一根星图出发的绝对端点路径 → 宿主星图、宿主
+    // Scene 路径和两条相对宿主的端点路径。Edge 与 Link 共用这一条规则。
+    [Throws=WriterError]
+    CrossLayerConnectionPlanDto plan_cross_layer_connection(StarMapTargetPathDto from, StarMapTargetPathDto to);
+
     [Throws=WriterError]
     sequence<StarMapConnectionInfoDto> list_starmap_connections(StarMapNavigationRouteDto route, StarMapTargetDetailDto? target);
 
@@ -1410,20 +1418,6 @@ interface WriterAppService {
 
     sequence<BuiltinThemeDto> list_builtin_themes();
 
-    // ── Layout Contract（输入为原始窗口尺寸，不再接收平台已判断好的窗口能力） ──
-
-    LayoutContractDto resolve_layout(WindowViewportDto viewport);
-
-    // ── Workbench Layout Plan：FFI 直接返回 plan，
-    //     Android 不再自己推导 hinge 布局） ──
-
-    WorkbenchLayoutPlanDto resolve_workbench_layout(WindowViewportDto viewport, WorkbenchVisibilityDto visibility);
-
-    // ── Screen Contract（动作区域/顺序是产品语义，不随壳层变化；
-    //     ScreenPolicy 含 show_primary_navigation 由 Rust 决定） ──
-
-    ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role);
-
     // ── Text Edit Session API ──
 
     u64? text_edit_session_open(string target_id, string initial_text, u32 initial_cursor_byte_offset);
@@ -1466,184 +1460,6 @@ interface WriterAppService {
 
     [Throws=WriterError]
     boolean enqueue_search_update(string action, string object_id, string scope, string title, string body);
-};
-
-// ── Layout Contract DTOs（WindowCapabilitiesDto → WindowViewportDto） ──
-
-enum ShellModeDto {
-    "SinglePane",
-    "SupportingPane",
-    "TwoPane",
-    "ThreePane",
-};
-
-enum WorkspaceLayoutModeDto {
-    "SinglePane",
-    "Workbench",
-};
-
-// 一级导航放置位置（平台无关）。
-enum PrimaryNavigationPlacementDto {
-    "Bottom",
-    "Side",
-};
-
-// 共用布局尺寸 DTO。
-dictionary LayoutMetricsDto {
-    f32 list_pane_width_dp;
-    f32 project_card_min_width_dp;
-    f32 tool_pane_width_dp;
-    f32 tool_rail_width_dp;
-    f32 editor_min_width_dp;
-    f32 toolbar_height_dp;
-    f32 toolbar_leading_width_dp;
-    f32 toolbar_trailing_width_dp;
-    f32 list_pane_min_width_dp;
-    f32 tool_pane_min_width_dp;
-};
-
-// 平台中立的窗口遮挡 DTO。
-dictionary WindowOcclusionDto {
-    f32 left_dp;
-    f32 top_dp;
-    f32 right_dp;
-    f32 bottom_dp;
-    boolean separating;
-};
-
-// 原始窗口尺寸 DTO，替代旧的 WindowCapabilitiesDto。
-// 平台端只传宽高（dp）与遮挡列表，不再传 paneCount / has_separating_fold /
-// pointer_class / keyboard_visible。
-dictionary WindowViewportDto {
-    f32 width_dp;
-    f32 height_dp;
-    sequence<WindowOcclusionDto> occlusions;
-};
-
-// LayoutContractDto 删除 show_primary_navigation（改由 ScreenPolicy 提供），
-// 新增 primary_navigation_placement 与 metrics。
-// workspace_pane_mode → workspace_layout_mode（WorkspaceLayoutModeDto）。
-// 删除单数 workbench_occlusion 字段（死数据）。工作台布局计划改由
-// WorkbenchLayoutPlanDto 单独提供（resolve_workbench_layout 接口）。
-dictionary LayoutContractDto {
-    ShellModeDto shell_mode;
-    WorkspaceLayoutModeDto workspace_layout_mode;
-    PrimaryNavigationPlacementDto primary_navigation_placement;
-    LayoutMetricsDto metrics;
-};
-
-// ── Workbench Layout Plan DTOs ──
-
-dictionary LayoutRectDto {
-    f32 left_dp;
-    f32 top_dp;
-    f32 right_dp;
-    f32 bottom_dp;
-};
-
-enum WorkbenchRoleDto {
-    "ToolbarLeading",
-    "ToolbarCenter",
-    "ToolbarTrailing",
-    "ChapterNavigation",
-    "Editor",
-    "ToolPane",
-    "ToolRail"
-};
-
-dictionary WorkbenchPlacementDto {
-    WorkbenchRoleDto role;
-    LayoutRectDto bounds;
-};
-
-dictionary WorkbenchVisibilityDto {
-    boolean chapter_navigation_visible;
-    boolean tool_pane_visible;
-};
-
-// 不再返回含糊的 boolean valid，
-// 改由 ResolvedWorkspaceModeDto 表达 Rust 决定的最终产品模式。
-// - Workbench：七角色正常放置；
-// - SinglePane：只返回 Editor 的最大连续安全 free-region bounds，其余 role 空。
-enum ResolvedWorkspaceModeDto {
-    "Workbench",
-    "SinglePane"
-};
-
-dictionary WorkbenchLayoutPlanDto {
-    sequence<WorkbenchPlacementDto> placements;
-    ResolvedWorkspaceModeDto mode;
-};
-
-// ── Screen Contract DTOs ──
-
-enum ScreenRoleDto {
-    "Home",
-    "ProjectList",
-    "ProjectWorkspace",
-    "Writing",
-    "StarMap",
-    "StarMapDetail",
-    "Stats",
-    "Settings",
-    "Sync"
-};
-
-enum PaneRoleDto {
-    "PrimaryList",
-    "Detail",
-    "Editor",
-    "Inspector",
-    "Drawer",
-    "Supporting"
-};
-
-enum ActionRoleDto {
-    "Back",
-    "CreateProject",
-    "CreateVolume",
-    "CreateChapter",
-    "Delete",
-    "Rename",
-    "MoveEarlier",
-    "MoveLater",
-    "Settings",
-    "Sync",
-    "Search"
-};
-
-// 平台无关的业务目标身份。
-enum ActionTargetDto {
-    "App",
-    "Project",
-    "Volume",
-    "Chapter"
-};
-
-enum ActionRegionDto {
-    "HeaderLeading",
-    "HeaderTrailing",
-    "PrimaryAction",
-    "ListHeader",
-    "ItemTrailing",
-    "Context",
-    "EmptyState"
-};
-
-dictionary ActionSlotDto {
-    ActionRoleDto role;
-    ActionTargetDto target;
-    ActionRegionDto region;
-    u16 order;
-    boolean requires_confirmation;
-};
-
-// ScreenPolicyDto 新增 show_primary_navigation，
-// 由 Rust 根据页面角色决定，平台端直接读，不再传 contractShowsPrimaryNavigation。
-dictionary ScreenPolicyDto {
-    ScreenRoleDto screen_role;
-    sequence<ActionSlotDto> action_slots;
-    boolean show_primary_navigation;
 };
 
 // ── Editor Animation DTOs ──

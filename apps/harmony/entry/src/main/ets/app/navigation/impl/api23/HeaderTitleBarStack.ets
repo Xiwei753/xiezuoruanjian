@@ -17,7 +17,7 @@
 //      会直接压住自绘标题（实测返回按钮面占 x 50~174px）。所以显示返回按钮时
 //      必须自己让出槽位：16 内边距 + 40 返回按钮 + 4 间距 = 60vp。
 
-import { ActionSlot } from '../../../../corebridge/dto/PlatformDtos'
+import { ActionSlot } from '../../ScreenSemantics'
 import { HeaderActionCapsule } from './HeaderActionCapsule'
 
 /** 标题左右内边距（vp），与 HDS 标题栏默认值一致 */
@@ -44,7 +44,7 @@ export struct HeaderTitleBarStack {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-      // Issue #825 复核第1项：HeaderTrailing 动作恒显示（属于 Core 的 ToolbarTrailing 角色）。
+      // Issue #825 复核第1项：HeaderTrailing 动作恒显示（工作台顶栏的尾部组）。
       HeaderActionCapsule({ actionSlots: this.headerActions })
     }
     .width('100%')

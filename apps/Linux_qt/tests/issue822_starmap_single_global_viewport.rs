@@ -869,19 +869,18 @@ fn connect_end_creates_the_edge_on_the_lca_host() {
         finish.contains("toPath = hit.targetPath"),
         "落点必须是命中层给出的完整 targetPath，不得退化成 nodeId-only，实际窗口:\n{finish}"
     );
-    // 宿主 = 两端 Scene 的最近公共祖先；边写进宿主图，starmapId 必须是宿主的。
+    // 宿主规划由 Core 完成；边写进宿主图，starmapId 就是 Core 返回的宿主。
     assert!(
-        finish.contains("StarMapPathPlanner.planCrossLayerRelation(fromPath, toPath)"),
-        "建边必须先做跨层宿主规划（宿主 = 最近公共祖先），实际窗口:\n{finish}"
+        finish.contains("planCrossLayerConnection(fromPath, toPath)"),
+        "建边必须调用 Core 的跨层宿主规划，实际窗口:\n{finish}"
     );
     assert!(
         finish.contains("rootContent.findContentByPathSegments(plan.hostSegments)"),
         "必须按宿主路径段找到宿主 Content，实际窗口:\n{finish}"
     );
     assert!(
-        finish.contains("plan = bindPlanToHost(plan, host)")
-            && finish.contains("hostStarmapId = host.finalStarmapId"),
-        "端点 starmapId 必须绑定到宿主的 finalStarmapId，实际窗口:\n{finish}"
+        finish.contains("hostStarmapId = plan.hostStarmapId"),
+        "端点 starmapId 必须用 Core 返回的宿主 starmapId，实际窗口:\n{finish}"
     );
     assert!(
         finish.contains("success = host.commitEdgeWithPaths(plan.from, plan.to)"),
@@ -904,33 +903,39 @@ fn connect_end_creates_the_edge_on_the_lca_host() {
     );
 }
 
-/// 跨层连线的宿主规划必须照搬 Harmony 已验证的规则：
-/// 宿主 = 两端所在 Scene 的最近公共祖先，segments 只保留从宿主往下的部分。
+/// 跨层连线的宿主规划已收回 Core：#818/#822 曾经在 QML 复制的
+/// "最近公共祖先 + 端点相对宿主路径"必须整体消失，QML 只保留渲染需要的
+/// UI instanceId 映射，宿主统一走 Core 的 plan_cross_layer_connection。
 #[test]
-fn path_planner_ports_harmony_lca_rules() {
+fn path_planner_no_longer_ports_lca_rules() {
     let planner = read_src("qml/StarMapPathPlanner.js");
-    for expected in [
-        "function commonScenePathPrefix(",
-        "function resolveItemRef(",
-        "function buildTargetPathForHost(",
-        "function planCrossLayerRelation(",
-        "function uiInstanceIdOfSegment(",
-        "itemRef.scenePath.slice(hostSegments.length)",
-        "segments.slice(0, segments.length - 1)",
-        "var hostSegments = commonScenePathPrefix(from.scenePath, to.scenePath)",
+    for forbidden in [
+        "commonScenePathPrefix",
+        "resolveItemRef",
+        "buildTargetPathForHost",
+        "planCrossLayerRelation",
+        "terminalSegment",
+        "hostSegments.length",
     ] {
         assert!(
-            planner.contains(expected),
-            "StarMapPathPlanner.js 缺 {expected}：宿主必须是两端 Scene 的最近公共祖先"
+            !planner.contains(forbidden),
+            "StarMapPathPlanner.js 仍残留 QML 侧宿主规划逻辑：{forbidden}"
         );
     }
-    // Embed-like 端点必须保留原来的 terminal segment（enterEmbed 或旧 portal 的
-    // enterPortal），重建相对宿主的路径时不再无条件改写成 enterEmbed。
     assert!(
-        planner.contains("last.type !== \"enterEmbed\" && last.type !== \"enterPortal\"")
-            && planner.contains("terminalSegment: cloneSegment(last)")
-            && planner.contains("segments.push(cloneSegment(itemRef.terminalSegment))"),
-        "Embed-like 端点必须沿用原始 terminal segment，实际源码缺少"
+        planner.contains("function uiInstanceIdOfSegment("),
+        "StarMapPathPlanner.js 必须保留 UI instanceId 映射"
+    );
+
+    let content = read_src(CONTENT);
+    assert!(
+        content.contains("planCrossLayerConnection(fromPath, toPath)")
+            && content.contains("plan_cross_layer_connection"),
+        "SceneContent 必须把两条绝对端点路径交给 Core 规划宿主"
+    );
+    assert!(
+        !content.contains("bindPlanToHost"),
+        "SceneContent 不得再自行绑定点 starmapId（Core 已返回宿主）"
     );
 
     // 新资源必须进 qrc 和 rerun-if-changed 清单。
@@ -1674,24 +1679,22 @@ fn connect_preview_reuses_platform_edge_renderer() {
     let prospective = function_window(&content, "function prospectiveEdgeRenderForPlan(", 500);
     assert!(
         prospective.contains("graphController.computeProspectiveEdgeRender(plan.from, plan.to)"),
-        "宿主 Content 必须把 prospective LCA 的 from/to 交给平台候选边入口，实际窗口:\n{prospective}"
+        "宿主 Content 必须把 Core 规划的 from/to 交给平台候选边入口，实际窗口:\n{prospective}"
     );
-    let bind = function_window(&content, "function bindPlanToHost(", 500);
     assert!(
-        bind.contains("plan.from.starmapId = host.finalStarmapId")
-            && bind.contains("plan.to.starmapId = host.finalStarmapId"),
-        "端点路径必须先绑定到宿主图（Core 按 starmapId 区分本地/跨层），实际窗口:\n{bind}"
+        content.contains("function planCrossLayerConnection(")
+            && content.contains("starmapBackendRef.plan_cross_layer_connection("),
+        "SceneContent 必须把两条绝对端点路径交给 Core 的 plan_cross_layer_connection"
     );
 
-    // 悬停合法 target：prospective plan → 宿主 Content → 平台 renderer → 端点。
+    // 悬停合法 target：Core plan → 宿主 Content → 平台 renderer → 端点。
     let refresh = function_window(&content, "function refreshConnectPreview(", 2400);
     assert!(
-        refresh.contains(
-            "StarMapPathPlanner.planCrossLayerRelation(ic.connectFromPath, hit.targetPath)"
-        ) && refresh.contains("rootContent.findContentByPathSegments(plan.hostSegments)")
-            && refresh.contains("plan = bindPlanToHost(plan, host)")
+        refresh.contains("planCrossLayerConnection(ic.connectFromPath, hit.targetPath)")
+            && refresh.contains("rootContent.findContentByPathSegments(plan.hostSegments)")
+            && refresh.contains("if (plan && host)")
             && refresh.contains("host.prospectiveEdgeRenderForPlan(plan)"),
-        "预览必须先做 prospective LCA 规划再交给宿主平台 renderer，实际窗口:\n{refresh}"
+        "预览必须先让 Core 规划宿主再交给宿主平台 renderer，实际窗口:\n{refresh}"
     );
     assert!(
         refresh.contains("host.localToScene(preview.startX, preview.startY)")
@@ -1862,12 +1865,18 @@ fn legacy_portal_recurse_and_edge_paths_share_one_truth() {
         "Embed 不得再自己猜 enterEmbed 段（旧 portal 会拿不存在的 instanceId 解析）"
     );
 
+    // Embed-like 端点的原始 terminal segment（含旧 portal 的 enterPortal）保留
+    // 逻辑已收回 Core：见 core/writer_core/src/starmap/graph/path_planner.rs 的
+    // endpoint_scene / build_target_path_for_host。QML planner 不再持有它。
     let planner = read_src("qml/StarMapPathPlanner.js");
     assert!(
-        planner.contains("last.type !== \"enterEmbed\" && last.type !== \"enterPortal\"")
-            && planner.contains("terminalSegment: cloneSegment(last)")
-            && planner.contains("segments.push(cloneSegment(itemRef.terminalSegment))"),
-        "planner 必须保留 Embed-like 端点的原始 terminal segment（含旧 portal）"
+        !planner.contains("terminalSegment"),
+        "planner 不得再持有 Embed-like terminal segment 逻辑（已收回 Core）"
+    );
+    assert!(
+        content.contains("planCrossLayerConnection(")
+            && content.contains("plan_cross_layer_connection"),
+        "SceneContent 必须把两端绝对路径交给 Core 的 plan_cross_layer_connection"
     );
 }
 // ─────────────────────────────────────────────────────────────────────────

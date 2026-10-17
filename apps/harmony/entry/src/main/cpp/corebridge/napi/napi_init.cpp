@@ -654,88 +654,6 @@ static napi_value NativeGetHilogCaptureStats(napi_env env, napi_callback_info in
     return result;
 }
 
-// ── Layout Policy ──
-// NativeResolveLayout: Takes metrics JSON, returns ResultEnvelope<LayoutPolicyDto> JSON.
-static napi_value NativeResolveLayout(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_resolve_layout(json));
-    delete[] json;
-    return result;
-}
-
-// NativeResolveWorkbenchLayout: Takes viewport JSON + visibility JSON, returns
-// ResultEnvelope<WorkbenchLayoutPlanDto> JSON (#825：七角色 bounds 由 Core 决定)。
-static napi_value NativeResolveWorkbenchLayout(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char* viewport_json = nullptr;
-    if (argc >= 1) {
-        size_t json_len = 0;
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        viewport_json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], viewport_json, json_len + 1, &json_len);
-    } else {
-        viewport_json = new char[1];
-        viewport_json[0] = '\0';
-    }
-
-    char* visibility_json = nullptr;
-    if (argc >= 2) {
-        size_t json_len = 0;
-        napi_get_value_string_utf8(env, args[1], nullptr, 0, &json_len);
-        visibility_json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[1], visibility_json, json_len + 1, &json_len);
-    } else {
-        visibility_json = new char[1];
-        visibility_json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(
-        env, writer_core_resolve_workbench_layout(viewport_json, visibility_json));
-    delete[] viewport_json;
-    delete[] visibility_json;
-    return result;
-}
-
-// ── Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化） ──
-// NativeResolveScreenPolicy: Takes screen_role JSON, returns ResultEnvelope<ScreenPolicyDto> JSON.
-static napi_value NativeResolveScreenPolicy(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json1 = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json1 = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json1, json_len + 1, &json_len);
-    } else {
-        json1 = new char[1];
-        json1[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_resolve_screen_policy(json1));
-    delete[] json1;
-    return result;
-}
-
 // ── Misc ──
 
 static napi_value NativeIsAiAvailable(napi_env env, napi_callback_info info) {
@@ -769,7 +687,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor* sm_desc = getStarMapDescriptors(&sm_count);
     napi_property_descriptor* editor_desc = getEditorSessionDescriptors(&editor_count);
 
-    // Core lifecycle + layout + misc descriptors
+    // Core lifecycle + misc descriptors
     napi_property_descriptor core_desc[] = {
         {"nativeInit", nullptr, NativeInit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeUpdateNetworkState", nullptr, NativeUpdateNetworkState, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -785,9 +703,6 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"nativeGetHilogSnapshot", nullptr, NativeGetHilogSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeClearHilogSnapshot", nullptr, NativeClearHilogSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetHilogCaptureStats", nullptr, NativeGetHilogCaptureStats, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeResolveLayout", nullptr, NativeResolveLayout, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeResolveWorkbenchLayout", nullptr, NativeResolveWorkbenchLayout, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeResolveScreenPolicy", nullptr, NativeResolveScreenPolicy, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeIsAiAvailable", nullptr, NativeIsAiAvailable, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     size_t core_count = sizeof(core_desc) / sizeof(core_desc[0]);

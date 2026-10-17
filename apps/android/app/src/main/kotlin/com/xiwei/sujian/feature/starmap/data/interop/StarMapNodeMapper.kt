@@ -54,8 +54,8 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode =
 
 internal fun StarMapPointDto.toModel(): StarMapPointData =
     StarMapPointData(
-        x = x,
-        y = y,
+        x = x.toFloat(),
+        y = y.toFloat(),
     )
 
 internal fun StarMapNodeStyleDto.toModel(): StarMapNodeStyleData =
@@ -65,8 +65,8 @@ internal fun StarMapNodeStyleDto.toModel(): StarMapNodeStyleData =
 
 internal fun StarMapPointData.toPointDto(): StarMapPointDto =
     StarMapPointDto(
-        x = x,
-        y = y,
+        x = x.toDouble(),
+        y = y.toDouble(),
     )
 
 internal fun StarMapAnchorDto.toAnchorModel(): StarMapAnchorData =
@@ -111,7 +111,7 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
     val dtoContent = contentToDto()
     val dtoAnchors = anchors.map { it.anchorToDto() }
     val dtoPortal = portal?.portalToDto()
-    val dtoPosition = StarMapPointDto(x = position.x, y = position.y)
+    val dtoPosition = StarMapPointDto(x = position.x.toDouble(), y = position.y.toDouble())
     val dtoStyle = StarMapNodeStyleDto(fillColor = style.fillColor)
     val dtoProvenance =
         provenance?.provenanceToDto() ?: base?.provenance ?: StarMapProvenanceDto(

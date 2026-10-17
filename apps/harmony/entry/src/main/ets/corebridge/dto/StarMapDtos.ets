@@ -228,3 +228,12 @@ export interface CreateStarmapChildEmbedResult {
   embed: StarMapEmbed
   pending: boolean
 }
+
+// StarMapCrossLayerConnectionPlanDto（#920：跨层连线宿主规划，宿主图由 Core 决定）
+// hostSegments 是宿主 Scene 相对根星图的绝对路径；from/to 已绑定 hostStarmapId。
+export interface StarMapCrossLayerConnectionPlan {
+  hostStarmapId: string
+  hostSegments: StarMapPathSegment[]
+  from: StarMapTargetPath
+  to: StarMapTargetPath
+}

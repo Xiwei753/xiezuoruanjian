@@ -5,12 +5,11 @@ import { StarMapGraph, StarMapPathSegment, StarMapPoint } from '../../../corebri
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { ScreenRole, ActionSlot } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ActionSlot, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
-import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { PlatformMotionConfig, defaultMotionConfig, shouldAnimate } from '../platform/StarMapMotion'
 import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureStateTracker } from '../platform/StarMapGestureState'
@@ -124,10 +123,7 @@ export struct StarMapScreen {
 
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     if (!this.useHdsNav) {
-      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.StarMapDetail)
-      if (policy !== null) {
-        this.headerActions = policy.actionSlots
-      }
+      this.headerActions = resolveScreenPolicy(ScreenRole.StarMapDetail).actionSlots
     }
 
     const self = this

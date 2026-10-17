@@ -17,13 +17,11 @@ fn test_settings() {
     assert!(local.auto_save_enabled);
     assert_eq!(local.auto_save_delay_ms, 1500);
 
-    local.window_width = 800.0;
     local.appearance_mode = "light".to_string();
     local.auto_save_delay_ms = 3000;
     save_local_settings(data_root, &local).unwrap();
 
     let loaded_local = load_local_settings(data_root).unwrap();
-    assert_eq!(loaded_local.window_width, 800.0);
     assert_eq!(loaded_local.appearance_mode, "light");
     assert_eq!(loaded_local.auto_save_delay_ms, 3000);
 

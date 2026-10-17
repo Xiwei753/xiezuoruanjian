@@ -2561,14 +2561,6 @@
         "kind": "scalar",
         "ty": "string"
       },
-      "desktopEditorWidth": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "desktopSidebarWidth": {
-        "kind": "scalar",
-        "ty": "number"
-      },
       "diagnosticsEnabled": {
         "kind": "scalar",
         "ty": "boolean"
@@ -2628,14 +2620,6 @@
       "themeMode": {
         "kind": "scalar",
         "ty": "null"
-      },
-      "windowHeight": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "windowWidth": {
-        "kind": "scalar",
-        "ty": "number"
       }
     }
   },
@@ -2670,14 +2654,6 @@
         "kind": "scalar",
         "ty": "string"
       },
-      "desktopEditorWidth": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "desktopSidebarWidth": {
-        "kind": "scalar",
-        "ty": "number"
-      },
       "diagnosticsEnabled": {
         "kind": "scalar",
         "ty": "boolean"
@@ -2737,14 +2713,6 @@
       "themeMode": {
         "kind": "scalar",
         "ty": "null"
-      },
-      "windowHeight": {
-        "kind": "scalar",
-        "ty": "number"
-      },
-      "windowWidth": {
-        "kind": "scalar",
-        "ty": "number"
       }
     }
   },
@@ -2955,232 +2923,6 @@
       }
     }
   },
-  "resolveLayout": {
-    "kind": "object",
-    "fields": {
-      "metrics": {
-        "kind": "object",
-        "fields": {
-          "editorMinWidthDp": {
-            "kind": "scalar",
-            "ty": "number"
-          },
-          "listPaneMinWidthDp": {
-            "kind": "scalar",
-            "ty": "number"
-          },
-          "listPaneWidthDp": {
-            "kind": "scalar",
-            "ty": "number"
-          },
-          "projectCardMinWidthDp": {
-            "kind": "scalar",
-            "ty": "number"
-          },
-          "toolPaneMinWidthDp": {
-            "kind": "scalar",
-            "ty": "number"
-          },
-          "toolPaneWidthDp": {
-            "kind": "scalar",
-            "ty": "number"
-          },
-          "toolRailWidthDp": {
-            "kind": "scalar",
-            "ty": "number"
-          },
-          "toolbarHeightDp": {
-            "kind": "scalar",
-            "ty": "number"
-          },
-          "toolbarLeadingWidthDp": {
-            "kind": "scalar",
-            "ty": "number"
-          },
-          "toolbarTrailingWidthDp": {
-            "kind": "scalar",
-            "ty": "number"
-          }
-        }
-      },
-      "primaryNavigationPlacement": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "shellMode": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "workspaceLayoutMode": {
-        "kind": "scalar",
-        "ty": "string"
-      }
-    }
-  },
-  "resolveScreenPolicy.Home": {
-    "kind": "object",
-    "fields": {
-      "actionSlots": {
-        "kind": "array",
-        "element": {
-          "kind": "object",
-          "fields": {
-            "order": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "region": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "requiresConfirmation": {
-              "kind": "scalar",
-              "ty": "boolean"
-            },
-            "role": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "target": {
-              "kind": "scalar",
-              "ty": "string"
-            }
-          }
-        }
-      },
-      "screenRole": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "showPrimaryNavigation": {
-        "kind": "scalar",
-        "ty": "boolean"
-      }
-    }
-  },
-  "resolveScreenPolicy.ProjectWorkspace": {
-    "kind": "object",
-    "fields": {
-      "actionSlots": {
-        "kind": "array",
-        "element": {
-          "kind": "object",
-          "fields": {
-            "order": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "region": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "requiresConfirmation": {
-              "kind": "scalar",
-              "ty": "boolean"
-            },
-            "role": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "target": {
-              "kind": "scalar",
-              "ty": "string"
-            }
-          }
-        }
-      },
-      "screenRole": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "showPrimaryNavigation": {
-        "kind": "scalar",
-        "ty": "boolean"
-      }
-    }
-  },
-  "resolveScreenPolicy.Settings": {
-    "kind": "object",
-    "fields": {
-      "actionSlots": {
-        "kind": "array",
-        "element": {
-          "kind": "object",
-          "fields": {
-            "order": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "region": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "requiresConfirmation": {
-              "kind": "scalar",
-              "ty": "boolean"
-            },
-            "role": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "target": {
-              "kind": "scalar",
-              "ty": "string"
-            }
-          }
-        }
-      },
-      "screenRole": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "showPrimaryNavigation": {
-        "kind": "scalar",
-        "ty": "boolean"
-      }
-    }
-  },
-  "resolveScreenPolicy.Writing": {
-    "kind": "object",
-    "fields": {
-      "actionSlots": {
-        "kind": "array",
-        "element": {
-          "kind": "object",
-          "fields": {
-            "order": {
-              "kind": "scalar",
-              "ty": "number"
-            },
-            "region": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "requiresConfirmation": {
-              "kind": "scalar",
-              "ty": "boolean"
-            },
-            "role": {
-              "kind": "scalar",
-              "ty": "string"
-            },
-            "target": {
-              "kind": "scalar",
-              "ty": "string"
-            }
-          }
-        }
-      },
-      "screenRole": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "showPrimaryNavigation": {
-        "kind": "scalar",
-        "ty": "boolean"
-      }
-    }
-  },
   "resolveVolumeLocation": {
     "kind": "object",
     "fields": {
@@ -3191,48 +2933,6 @@
       "volumeId": {
         "kind": "scalar",
         "ty": "string"
-      }
-    }
-  },
-  "resolveWorkbenchLayout": {
-    "kind": "object",
-    "fields": {
-      "mode": {
-        "kind": "scalar",
-        "ty": "string"
-      },
-      "placements": {
-        "kind": "array",
-        "element": {
-          "kind": "object",
-          "fields": {
-            "bounds": {
-              "kind": "object",
-              "fields": {
-                "bottomDp": {
-                  "kind": "scalar",
-                  "ty": "number"
-                },
-                "leftDp": {
-                  "kind": "scalar",
-                  "ty": "number"
-                },
-                "rightDp": {
-                  "kind": "scalar",
-                  "ty": "number"
-                },
-                "topDp": {
-                  "kind": "scalar",
-                  "ty": "number"
-                }
-              }
-            },
-            "role": {
-              "kind": "scalar",
-              "ty": "string"
-            }
-          }
-        }
       }
     }
   },

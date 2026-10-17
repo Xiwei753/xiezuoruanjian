@@ -9,28 +9,25 @@
 //   - 通过 WritingTreeController 管理章节树
 //   - 不包含保存、格式化等业务操作
 //
-// 关于 LayoutPlan 和布局策略
+// 关于布局（Issue #920）
 //
-// LayoutPlan 是布局策略对象，控制：
-//   - 侧栏宽度（sidebarWidth）
-//   - 内容区最大宽度（contentMaxWidthVp）
-//   - 外壳模式（shellMode）
-//   - 内容区内边距（contentPaddingVp）
+// 布局完全由 Qt 平台层自己决定：本组件的 RowLayout + 本地断点 + 本地尺寸常量。
+// Core 不再接收窗口尺寸，也不返回布局模式 / 栏宽 / bounds / 角色矩形。
 //
-// LayoutPlan 不直接控制以下内容：
+// 本地布局不直接控制以下内容：
 //   - 自研 SujianEditorItem 的 QSG 渲染
 //   - 光标和选区的 IME 交互逻辑
 //   - QTextLayout 的排版细节
 //   - Rust Coordinator → Scene Graph 动画渲染参数
 //
 // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
-// 直接管理，不走 Qt QSG 渲染管线，不受 LayoutPlan 约束
+// 直接管理，不走 Qt QSG 渲染管线，不受本地布局断点约束
 //
-// 组成（Issue #825 按 Core 七角色组织）：
+// 组成（按七个产品语义角色组织）：
 //   WritingWorkbenchToolbar：上方一条贯通工具条带
 //     （ToolbarLeading 返回/撤销/重做 | ToolbarCenter 字号/行距/段落/排版 |
 //       ToolbarTrailing 同步/搜索/设置）
-//   下方内容区 SplitView：
+//   下方内容区 RowLayout：
 //     ChapterNavigation (章节树) | Editor (SujianEditorItem) |
 //     ToolPane (工具内容) | ToolRail (最右竖向工具栏)
 // =============================================================================
@@ -57,8 +54,7 @@ Rectangle {
     // 由 main.qml 注入 globalStarMapController，透传给 RightDrawer.starMapControllerRef。
     property var starMapControllerRef: null
     property var tree: []
-    // Issue #825：左右 pane 的展开状态只是端侧 UI 状态（不进 Core、不进同步），
-    // 它们作为 WorkbenchVisibility 输入重新算 Core 的七角色 plan。
+    // 左右 pane 的展开状态只是端侧 UI 状态（不进 Core、不进同步）。
     // 工具 pane 用「选中的工具 key」表达："" = 收起，非空 = 展开并显示该工具。
     // Issue #829：手稿里的常驻入口是 starmap / ai；冲突只作为动态附加工具。
     // 不再保留 drawerOpen + drawerTab 两份状态，避免第二套开关。
@@ -68,133 +64,120 @@ Rectangle {
     property bool rightPaneCollapsed: true
     readonly property bool drawerOpen: !root.rightPaneCollapsed
     property bool leftPaneCollapsed: false
-    // Issue #842 任务2：用户拖拽请求的 pane 宽度，0 代表用 Core 默认。
-    property real requestedChapterNavWidth: 0
-    property real requestedToolPaneWidth: 0
     // 拖拽起始宽度记录（内部属性）
     property real _dragStartChapterNavWidth: 0
     property real _dragStartToolPaneWidth: 0
-    // Issue #833 复核：SinglePane（非 Workbench 或 Core 退回单栏）下章节导航
-    // 作为覆盖在正文上的浮层打开，不参与 RowLayout 宽度分配。
-    // Workbench 下章节导航由 leftPaneCollapsed + Core ChapterNavigation bounds 管理，
+    // Issue #833 复核：SinglePane 下章节导航作为覆盖在正文上的浮层打开，
+    // 不参与 RowLayout 宽度分配；多栏工作台下章节导航由 leftPaneCollapsed 管理，
     // 这个属性只在 SinglePane 下生效。
     property bool singlePaneNavOpen: false
-    readonly property bool wideWorkbench: layoutPlan === null || layoutPlan.workspaceLayoutMode === "Workbench"
-    // Issue #825：Core 工作台布局计划（appBackend.resolve_workbench_layout 直通）。
-    // 七角色 bounds 与最终模式都由 Core 决定，QML 只按 bounds 量/摆。
-    property var workbenchPlan: null
-    readonly property bool coreWorkbench: !!(workbenchPlan && workbenchPlan.mode === "Workbench")
-    // 关于 LayoutPlan 和布局策略
-    // layoutPlan 是外部注入的布局策略（由上层根据屏幕尺寸和设置决定）
-    // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
-    // 直接管理，不走 Qt QSG 渲染管线，不受 LayoutPlan 约束
-    property var layoutPlan: null
 
-    // ── Issue #825：Core 七角色 bounds → QML 宽度 ──
-    // 只在 Workbench 模式下用 Core 的尺寸；SinglePane（Core 明确退回单栏）时
-    // 回落到旧的 SplitView 设定值，Qt 不自己再判一次宽度断点。
-    function roleBounds(role) {
-        if (!root.workbenchPlan || !root.workbenchPlan.placements) return null;
-        var list = root.workbenchPlan.placements;
-        for (var i = 0; i < list.length; i++) {
-            if (list[i].role === role) return list[i].bounds;
-        }
-        return null;
+    // ── Issue #920：Qt 平台本地布局断点与尺寸 ──
+    // 布局完全由 Qt 自己决定（Qt Quick Layouts + 本地断点），不再让 Core 收窗口
+    // 尺寸 / 返回布局模式、栏宽、bounds。数值沿用旧 Core LayoutMetrics，断点沿用
+    // 旧窗口宽度分类，保证视觉等价：
+    //   width < 600 或 height < 480：单栏；
+    //   >= 600 且 >= 480：多栏工作台（当前 pane 组合放不下时退回单栏）。
+    readonly property int workbenchMinWidth: 600
+    readonly property int workbenchMinHeight: 480
+    readonly property int listPaneWidth: 320
+    readonly property int listPaneMinWidth: 200
+    readonly property int toolPaneMinWidth: 200
+    readonly property int toolRailWidth: 56
+    readonly property int editorMinWidth: 240
+    readonly property int toolbarMinHeight: 64
+    readonly property int toolbarLeadingMinWidth: 200
+    readonly property int toolbarTrailingMinWidth: 200
+
+    // 用户可拖拽的侧栏 / 工具面板宽度（Qt 本地 UI 状态，多栏工作台内生效）。
+    property real chapterNavWidth: 320
+    property real toolPaneWidth: 240
+
+    // 一级断点：窗口够宽够高才进入多栏工作台。
+    readonly property bool wideWorkbench: root.width >= root.workbenchMinWidth
+                                            && root.height >= root.workbenchMinHeight
+
+    // 当前可见 pane 的多栏最小需求宽度。放不下就退回单栏，不把栏压成细线。
+    function workbenchFitsFor(chapterVisible, toolVisible) {
+        if (!root.wideWorkbench)
+            return false
+        var needed = (chapterVisible ? root.listPaneMinWidth : 0)
+                   + (toolVisible ? root.toolPaneMinWidth : 0)
+                   + root.toolRailWidth
+                   + root.editorMinWidth
+        return root.width >= needed
     }
 
-    function roleWidth(role, fallback) {
-        var b = root.roleBounds(role);
-        if (!b) return fallback;
-        return Math.max(0, b.rightDp - b.leftDp);
-    }
-
-    readonly property real chapterNavWidth: root.roleWidth("ChapterNavigation", -1)
-    readonly property real editorWidth: root.roleWidth("Editor", -1)
-    readonly property real toolPaneWidth: root.roleWidth("ToolPane", -1)
-    readonly property real toolRailWidth: root.roleWidth("ToolRail", -1)
-
-    // ── Issue #825 复核第3项：工具条带的三个分组 bounds 也吃 Core ──
-    // Core 的 plan 里 ToolbarLeading / ToolbarCenter / ToolbarTrailing 在同一条顶部带子上，
-    // toolbarHeight 取这条带子的高度。Core 判 SinglePane 时不给这些 bounds（返回 -1），
-    // 此时 WritingWorkbenchToolbar 按内容自适应，保证窄窗口仍排得下。
-    readonly property real toolbarHeight: {
-        var b = root.roleBounds("ToolbarCenter")
-        return b ? Math.max(0, b.bottomDp - b.topDp) : -1
-    }
-    readonly property real toolbarLeadingWidth: root.roleWidth("ToolbarLeading", -1)
-    readonly property real toolbarCenterWidth: root.roleWidth("ToolbarCenter", -1)
-    readonly property real toolbarTrailingWidth: root.roleWidth("ToolbarTrailing", -1)
-
-    // ── Issue #825 复核5第1项：最终结构只听 resolve_workbench_layout().mode ──
-    // WorkspaceLayoutMode.Workbench 只是第一层壳模式；Core 还会按当前 pane visibility
-    // 再判一次最终模式（600～695vp 时左右都展开就放不下，Core 明确回 SinglePane）。
-    // plan 一旦返回，mode=SinglePane 就只留 Editor：章节栏 / 工具 pane / 工具 rail
-    // 全部隐藏，不再退回旧的 240/480/240 三栏宽度自己硬塞。
-    readonly property bool planResolved: root.wideWorkbench && root.workbenchPlan !== null
-    readonly property bool hideContentPanes: root.planResolved && !root.coreWorkbench
+    // 多栏工作台是否成立（等价于旧 Core 的 workbenchPlan.mode === "Workbench"）。
+    readonly property bool multiPane: root.workbenchFitsFor(!root.leftPaneCollapsed, root.drawerOpen)
 
     // Issue #833 复核3：SinglePane 和 Workbench 是两套壳结构，状态互不污染。
-    // singlePaneMode：非 Workbench，或 Core 因空间不够退回单栏。
-    // chapterNavigationShown：当前模式下章节导航是否展开，统一读这一份，
-    // PaneFoldButton / 把手不再直接读 leftPaneCollapsed。
-    readonly property bool singlePaneMode: !root.wideWorkbench || root.hideContentPanes
+    // singlePaneMode：窗口不够大，或当前 pane 组合放不下。
+    readonly property bool singlePaneMode: !root.multiPane
     readonly property bool chapterNavigationShown:
         root.singlePaneMode ? root.singlePaneNavOpen : !root.leftPaneCollapsed
-    // 从 SinglePane 切回 Workbench 时清掉浮层状态，避免 overlay 继续盖在 Workbench 上。
+    // 从 SinglePane 切回多栏时清掉浮层状态，避免 overlay 继续盖在工作台上。
     onSinglePaneModeChanged: {
         if (!root.singlePaneMode) {
             root.singlePaneNavOpen = false;
         }
     }
 
-    // 宽屏下 Core 已经把七角色尺寸算好：pre/min/max 三者取同一个值，
-    // 让 SplitView 只负责"可见子项参与剩余空间分配"，不再被用户拖拽改宽度。
-    // 非宽屏仍保留原来的可拖拽区间（最小 180 / 最大 420）。
-    // 注意：可收起角色（ChapterNavigation / ToolPane）收起时 Core 给的宽度就是 0，
-    // 0 是合法宽度不是 plan 无效，所以这里只校验 Editor / ToolRail 的宽度，
-    // 另外确认四个角色在 placements 里确实存在。
-    readonly property bool coreSized: root.coreWorkbench
-                                   && root.hasContentRole("ChapterNavigation")
-                                   && root.hasContentRole("Editor")
-                                   && root.hasContentRole("ToolPane")
-                                   && root.hasContentRole("ToolRail")
-                                   && root.editorWidth > 0
-                                   && root.toolRailWidth > 0
-    // Issue #825：最右工具 rail 与两个折叠把手在 Core 判定 Workbench 时始终出现，
-    // 不跟工具 pane 是否展开绑定——Core 的 ToolRail 恒有宽度，
-    // 工具 pane 收起后 rail 仍是唯一能把它再拉出来的入口。
-    // Core 明确退回 SinglePane（窗口放不下七角色）时，Qt 不自己挤一个 rail 出来，
-    // 收起/展开工具 pane 回到正文区里那个箭头按钮。
-    readonly property bool toolRailVisible: root.coreSized
+    // 最右工具 rail 与两个折叠把手只在多栏工作台出现；单栏时工具 pane
+    // 由正文区里那个箭头按钮收起/展开。
+    readonly property bool toolRailVisible: root.multiPane
 
-    function hasContentRole(role) {
-        return root.roleBounds(role) !== null
+    // 工具条带三个分组的尺寸。多栏时 leading/trailing 跟随左右栏分割线，
+    // 让顶栏分段与内容栏边界对齐；单栏时交给组件按内容自适应（-1）。
+    // effective* 与 RowLayout 的压缩口径一致：面板先拿 preferred，空间不足时
+    // 压到 min，正文始终保住 editorMinWidth。
+    function effectiveChapterNavWidth() {
+        return Math.max(root.listPaneMinWidth,
+                        Math.min(root.chapterNavWidth, root._chapterNavMaxWidth))
     }
+    function effectiveToolPaneWidth() {
+        return Math.max(root.toolPaneMinWidth,
+                        Math.min(root.toolPaneWidth, root._toolPaneMaxWidth))
+    }
+    readonly property real toolbarHeight: root.multiPane ? root.toolbarMinHeight : -1
+    readonly property real toolbarCenterWidth: -1
+    readonly property real toolbarLeadingWidth: root.multiPane
+        ? Math.max(root.toolbarLeadingMinWidth,
+                   root.leftPaneCollapsed ? 0 : root.effectiveChapterNavWidth())
+        : -1
+    readonly property real toolbarTrailingWidth: root.multiPane
+        ? Math.max(root.toolbarTrailingMinWidth,
+                   root.toolRailWidth + (root.drawerOpen ? root.effectiveToolPaneWidth() : 0))
+        : -1
 
-    // Issue #825 复核6第1点：展开侧 pane 是一个「请求」，不是直接写状态。
-    // 窄窗口下 Core 按当前可见性重判最终 mode：600～695vp 里左章节栏开着时再展开
-    // 右工具 pane，最小需求 200+240+200+56 = 696vp 放不下，Core 退回 SinglePane。
-    // 如果端侧还留着「右 pane 已展开」，下一轮重算又继续喂 toolPaneVisible=true，
-    // 于是永远 SinglePane，而 rail / 折叠把手已被隐藏，用户没有入口再关回去，
-    // 只能拉大窗口解锁。
-    //
-    // Issue #825 复核7第 2 点：改成「先算候选，再一次性提交」。
-    // 之前是「先改 QML 属性 → 看 Core 结果 → 再回滚」，失败分支只回滚了自己那侧，
-    // 为了腾位置收掉的另一侧没有恢复——用户只想开右栏，失败后左栏反而被关掉了。
-    // 现在一个属性都不改就先把候选组合问一遍，哪一组是 Workbench 就整体提交；
-    // 两组都不行就什么都不改，不留"已展开但看不见"的端侧状态，也没有中间态闪烁。
+    // 单栏时正文纸面的最大宽度（多栏时正文跟随 Editor 列宽度，不额外限宽）。
+    // 与旧 Core Workbench 的 contentMaxWidthVp 口径一致：min(840, width - 2*32)。
+    readonly property real contentMaxWidthVp: (root.wideWorkbench && root.singlePaneMode)
+        ? Math.min(840, Math.max(0, root.width - 64))
+        : 0
+
+    // 拖拽时允许的侧栏 / 工具面板宽度上限：始终给正文留 editorMinWidth。
+    readonly property real _chapterNavMaxWidth: Math.max(root.listPaneMinWidth,
+        root.width - root.toolRailWidth - root.editorMinWidth
+            - (root.drawerOpen ? root.toolPaneMinWidth : 0))
+    readonly property real _toolPaneMaxWidth: Math.max(root.toolPaneMinWidth,
+        root.width - root.toolRailWidth - root.editorMinWidth
+            - (root.leftPaneCollapsed ? 0 : root.listPaneMinWidth))
+
+    // 展开侧 pane 是一个「请求」，不是直接写状态：一个属性都不改就把候选组合
+    // 先按本地最小宽度算一遍，放得下才整体提交；放不下就什么都不改，
+    // 不留「已展开但看不见」的端侧状态，也没有中间态闪烁。
     function requestToolPaneOpen(toolKey, allowCollapseLeft) {
         var targetLeftCollapsed = root.leftPaneCollapsed;
-        var plan = resolveWorkbenchCandidate(!root.leftPaneCollapsed, true);
-        if (!isWorkbenchPlan(plan) && allowCollapseLeft === true) {
-            plan = resolveWorkbenchCandidate(false, true);
+        var fits = root.workbenchFitsFor(!root.leftPaneCollapsed, true);
+        if (!fits && allowCollapseLeft === true) {
+            fits = root.workbenchFitsFor(false, true);
             targetLeftCollapsed = true;
         }
-        if (!isWorkbenchPlan(plan)) return;
+        if (!fits) return;
         root.leftPaneCollapsed = targetLeftCollapsed;
         root.drawerTool = toolKey || "starmap";
         root.rightPaneCollapsed = false;
-        root.workbenchPlan = plan;
     }
 
     // 左目录栏的展开请求，与右侧对称：必要时让右 pane 让位，仍放不下就不改任何状态。
@@ -204,25 +187,24 @@ Rectangle {
             return;
         }
         var targetRightPaneCollapsed = root.rightPaneCollapsed;
-        var plan = resolveWorkbenchCandidate(true, !root.rightPaneCollapsed);
-        if (!isWorkbenchPlan(plan)) {
-            plan = resolveWorkbenchCandidate(true, false);
+        var fits = root.workbenchFitsFor(true, !root.rightPaneCollapsed);
+        if (!fits) {
+            fits = root.workbenchFitsFor(true, false);
             targetRightPaneCollapsed = true;
         }
-        if (!isWorkbenchPlan(plan)) return;
+        if (!fits) return;
         root.rightPaneCollapsed = targetRightPaneCollapsed;
         root.leftPaneCollapsed = false;
-        root.workbenchPlan = plan;
     }
 
-    // 关闭方向不会把窗口撑小，永远放得下，直接改状态即可（refreshWorkbenchPlan 随后重算）。
+    // 关闭方向不会把窗口撑小，永远放得下，直接改状态即可。
     function closeToolPane() {
         root.rightPaneCollapsed = true;
     }
 
     function closeChapterNavigation() {
         // Issue #833 复核3：按 singlePaneMode 分支，SinglePane 只收浮层，
-        // Workbench 只收 leftPaneCollapsed，两套状态互不污染。
+        // 多栏只收 leftPaneCollapsed，两套状态互不污染。
         if (root.singlePaneMode) {
             root.singlePaneNavOpen = false;
         } else {
@@ -231,9 +213,7 @@ Rectangle {
     }
 
     // 展开/收起工具 pane 的统一入口（rail 的展开收起按钮 + 右侧折叠把手）。
-    // Issue #842 评论修复（问题2）：展开走 requestToolPaneOpen() 候选入口，
-    // 不再绕过「先算候选、必要时收左栏再展开」逻辑。drawerTool 已独立保存当前工具，
-    // 不会重新硬切星图；空值兜底 "starmap"。
+    // drawerTool 独立保存当前工具，不会重新硬切星图；空值兜底 "starmap"。
     function toggleToolPane() {
         if (root.drawerOpen) {
             root.closeToolPane();
@@ -242,46 +222,8 @@ Rectangle {
         }
     }
 
-    // 状态路径：按当前可见性重算并写回 workbenchPlan（窗口尺寸 / 折叠变化时走这里）。
-    function refreshWorkbenchPlan() {
-        if (!root.wideWorkbench) {
-            root.workbenchPlan = null;
-            return null;
-        }
-        root.workbenchPlan = resolveWorkbenchCandidate(!root.leftPaneCollapsed, root.drawerOpen);
-        return root.workbenchPlan;
-    }
-
-    // Issue #825 复核7第 2 点：候选计算用的纯 helper。
-    // 只按给定的可见性问一次 Core，不碰任何属性、不写 workbenchPlan，
-    // 这样「算候选」和「提交状态」彻底分开，失败时另一侧的状态不会被弄丢。
-    function resolveWorkbenchCandidate(chapterVisible, toolVisible) {
-        if (!root.wideWorkbench) return null;
-        if (typeof appBackend === "undefined" || !appBackend) return null;
-        return appBackend.resolve_workbench_layout(
-            root.width,
-            root.height,
-            chapterVisible,
-            toolVisible,
-            root.requestedChapterNavWidth,
-            root.requestedToolPaneWidth
-        );
-    }
-
-    function isWorkbenchPlan(plan) {
-        return !!plan && plan.mode === "Workbench";
-    }
-
-    onWidthChanged: refreshWorkbenchPlan()
-    onHeightChanged: refreshWorkbenchPlan()
-    onLeftPaneCollapsedChanged: refreshWorkbenchPlan()
-    onRightPaneCollapsedChanged: refreshWorkbenchPlan()
-    onWideWorkbenchChanged: refreshWorkbenchPlan()
     // Issue #828：根对象上只能有一个 Component.onCompleted。
-    // #825 新增的启动期 refreshWorkbenchPlan() 与下面原有的启动初始化块
-    // 曾写成两个并列 handler，Qt 报 Property value set multiple times，
-    // WritingWorkspace 类型随之不可用，main.qml 加载失败直接退出。
-    // 现在只保留下面那一个，refreshWorkbenchPlan() 合并进去当第一句。
+    // 底部启动初始化块是唯一入口，这里不再有并列 handler。
 
     // Project-level ID - set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
@@ -476,9 +418,6 @@ Rectangle {
     // Issue #833 复核：onTreeChanged -> populateTreeModel() 已删，
     // treeModel 现在由 WritingChapterNavigation 内部维护。
     Component.onCompleted: {
-        // Issue #828：启动期先算一次宽屏工作台布局，否则首帧会用上一次的 plan。
-        refreshWorkbenchPlan();
-
         // Issue #829：启动时先起状态栏的时钟。
         root.updateClockText()
         // Issue #829：状态栏左段（写作速度）也来自 Core 统计，起步就拉一次。
@@ -628,28 +567,28 @@ Rectangle {
         onRequestSearch: root.requestSearch()
         onOpenSettings: root.openSettings()
 
-        // Issue #833：Workbench 内容区改用 RowLayout，子项只读 workbenchPlan
-        // 的 role bounds，通过 Layout.preferredWidth / minimumWidth / maximumWidth
-        // 落尺寸。不再用 SplitView 做固定角色排版，也不再回写用户设置项宽度。
-        // 窗口尺寸 -> Core layout plan -> QML Layout，一条链到底。
+        // Issue #920：内容区用 RowLayout，子项通过 Layout.preferredWidth /
+        // minimumWidth / maximumWidth 落尺寸，尺寸来自本组件的 Qt 本地常量。
+        // 窗口宽度 -> QML 断点 -> Qt Quick Layouts，一条链到底，不经 Core。
         RowLayout {
             anchors.fill: parent
             spacing: 0
 
             // Left sidebar: volume/chapter tree
             // Issue #833 复核：章节导航内容抽成 WritingChapterNavigation 组件，
-            // Workbench 下作为 RowLayout 子项，宽度只吃 Core 的 ChapterNavigation bounds。
+            // 多栏工作台下作为 RowLayout 子项，宽度取 Qt 本地 chapterNavWidth。
             // SinglePane 下章节导航作为覆盖浮层打开（见文件末尾 singlePaneNavOverlay），
             // 不参与 RowLayout 宽度分配。
             WritingChapterNavigation {
                 id: sidebarRect
-                // Issue #833 复核3：Workbench 下才参与 RowLayout，
+                // Issue #833 复核3：多栏工作台下才参与 RowLayout，
                 // SinglePane 下章节导航走 singlePaneNavOverlay 浮层，不占宽度。
                 visible: !root.singlePaneMode && !root.leftPaneCollapsed
-                // Issue #833：章节导航宽度只取 Core 的 ChapterNavigation bounds，
-                // 不再读 setting_desktop_sidebar_width，也不再回写。
+                // Issue #920：章节导航宽度取 Qt 本地 chapterNavWidth（可拖拽），
+                // 空间紧张时在 [listPaneMinWidth, chapterNavWidth] 内压缩，
+                // 保证正文列先拿到 editorMinWidth。
                 Layout.preferredWidth: root.chapterNavWidth
-                Layout.minimumWidth: root.chapterNavWidth
+                Layout.minimumWidth: root.listPaneMinWidth
                 Layout.maximumWidth: root.chapterNavWidth
                 // Issue #835：内容区 RowLayout cross-axis 高度填满，
                 // 不再靠子组件内容溢出父项来显示，MouseArea 命中区与视觉一致。
@@ -680,12 +619,10 @@ Rectangle {
 
             // Middle Area: Toolbar + Editor
             ColumnLayout {
-                // Issue #833：Editor 角色宽度只取 Core 的 Editor bounds。
-                // SinglePane（hideContentPanes）或非 coreSized 时 fillWidth 占满。
-                Layout.fillWidth: root.hideContentPanes || !root.coreSized
-                Layout.preferredWidth: root.editorWidth > 0 ? root.editorWidth : -1
-                Layout.minimumWidth: root.editorWidth > 0 ? root.editorWidth : 0
-                Layout.maximumWidth: root.editorWidth > 0 ? root.editorWidth : -1
+                // Issue #920：Editor 列始终占满剩余宽度；多栏时用 minimumWidth
+                // 保证正文不小于 editorMinWidth，单栏时不再额外限制。
+                Layout.fillWidth: true
+                Layout.minimumWidth: root.multiPane ? root.editorMinWidth : 0
                 // Issue #835：内容区 RowLayout cross-axis 高度填满。
                 Layout.fillHeight: true
                 spacing: 0
@@ -707,9 +644,7 @@ Rectangle {
                         anchors.topMargin: Kirigami.Units.smallSpacing
                         z: 30
                         dt: root.dt
-                        // Issue #833 复核3：任何模式下都给用户入口切换章节导航，
-                        // 不再随 hideContentPanes 隐藏（wideWorkbench 但 Core 退回
-                        // SinglePane 时 hideContentPanes=true，按钮原本直接消失）。
+                        // Issue #833 复核3：任何模式下都给用户入口切换章节导航。
                         visible: true
                         // 统一读 chapterNavigationShown：展开时显示收起箭头 ⌃，
                         // 收起时显示展开箭头 ⌄。
@@ -732,24 +667,19 @@ Rectangle {
                         anchors.topMargin: Kirigami.Units.smallSpacing
                         anchors.bottomMargin: Kirigami.Units.smallSpacing
 
-                        // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
-                        // 关于 LayoutPlan：contentMaxWidthVp 控制 paperBg 最大宽度，
-                        // 编辑区组件（SujianEditorItem）跟随 paperBg 宽度
-                        // 编辑器交互由 EditorController + SujianEditorItem 直接管理
+                        // Paper background — Issue #920：单栏时最多夹到 contentMaxWidthVp，
+                        // 多栏时正文直接跟随 Editor 列可用宽度，不额外限宽。
+                        // 编辑区组件（SujianEditorItem）跟随 paperBg 宽度；
+                        // 编辑器交互由 EditorController + SujianEditorItem 直接管理。
                         Rectangle {
                             id: paperBg
-                            // Issue #833 复核：不再有 480 的平台端最小值。
-                            // Core 的 editor_min_width_dp 明确是 240，Workbench 在空间紧张时
-                            // 允许 Editor 只有 240 起步；SinglePane 的 contentMaxWidthVp
-                            // 明确是 0 表示不要额外限宽。Math.max(480) 会导致 Core 给 Editor
-                            // 240～479 时 QML 仍画 480，正文纸面溢出 Editor role。
-                            // coreSized（Workbench 且 Core 给出 Editor bounds）时直接跟随
-                            // parent.width；否则只夹 contentMaxWidthVp（>0 才生效）。
-                            width: root.coreSized
+                            // 不再有 480 的平台端最小值：多栏时正文跟随 parent.width，
+                            // 单栏时只在 contentMaxWidthVp > 0 时夹一下，避免正文溢出。
+                            width: root.multiPane
                                    ? parent.width
                                    : Math.min(parent.width,
-                                              (root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0)
-                                                  ? root.layoutPlan.contentMaxWidthVp
+                                              root.contentMaxWidthVp > 0
+                                                  ? root.contentMaxWidthVp
                                                   : parent.width)
                             height: parent.height
                             anchors.horizontalCenter: parent.horizontalCenter
@@ -758,9 +688,7 @@ Rectangle {
                         }
 
                         // Issue #833：删除 paperBg 左右两个拖拽改宽 MouseArea。
-                        // 这两个把旧 setting_desktop_editor_width 写回去，正好会和
-                        // Core role width 打架。Editor role 宽度已由 Core 给出，
-                        // paperBg 在 Editor role 内直接跟随可用宽度。
+                        // 正文宽度属于 Editor 列布局，paperBg 直接跟随可用宽度。
 
                         EditorViewport {
                             id: editorViewport
@@ -802,7 +730,7 @@ Rectangle {
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
                         width: Kirigami.Units.gridUnit * 2
-                        visible: !root.drawerOpen && !root.toolRailVisible && !root.hideContentPanes
+                        visible: !root.drawerOpen && !root.toolRailVisible && !root.wideWorkbench
                         color: "transparent"
 
                         ColumnLayout {
@@ -837,17 +765,18 @@ Rectangle {
                 }
             }
 
-            // Issue #825：工具 pane（Core 的 ToolPane 角色）—— 只显示 rail 选中的那个工具内容。
+            // Issue #825：工具 pane（ToolPane 角色）—— 只显示 rail 选中的那个工具内容。
             RightDrawer {
                 id: rightDrawerRect
-                // Issue #833：工具 pane 宽度只取 Core 的 ToolPane bounds。
+                // Issue #920：工具 pane 宽度取 Qt 本地 toolPaneWidth（可拖拽），
+                // 空间紧张时在 [toolPaneMinWidth, toolPaneWidth] 内压缩。
                 Layout.preferredWidth: root.toolPaneWidth
-                Layout.minimumWidth: root.toolPaneWidth
+                Layout.minimumWidth: root.toolPaneMinWidth
                 Layout.maximumWidth: root.toolPaneWidth
                 // Issue #835：内容区 RowLayout cross-axis 高度填满。
                 Layout.fillHeight: true
-                // Issue #825 复核5第1项：Core 最终判 SinglePane 时工具 pane 不存在。
-                visible: root.drawerOpen && !root.hideContentPanes
+                // Issue #920：只有多栏工作台且工具 pane 展开时才存在。
+                visible: root.multiPane && root.drawerOpen
                 dt: root.dt
                 editorBackendRef: root.editorBackendRef
                 isOpen: root.drawerOpen
@@ -894,9 +823,8 @@ Rectangle {
                 hasConflicts: root.hasConflicts
                 selectedTool: root.drawerTool
                 toolPaneOpen: root.drawerOpen
-                // Issue #825 复核4 第2项：rail 内部的按钮宽度也吃 Core 的 ToolRail bounds，
-                // 不能容器用 Core 宽度、组件内部还按默认 56 画。
-                railWidth: root.coreSized ? root.toolRailWidth : 56
+                // Issue #920：rail 宽度取 Qt 本地常量（多栏时 56vp，单栏不显示）。
+                railWidth: root.multiPane ? root.toolRailWidth : 56
                 onToolRequested: function(toolKey) { root.requestToolPaneOpen(toolKey, true); }
                 onToolPaneToggled: {
                     root.toggleToolPane();
@@ -906,14 +834,14 @@ Rectangle {
         }
 
         // Issue #842 评论修复（问题1）：左 resize separator 改为 overlay，
-        // 不再作为 RowLayout 子项参与宽度分配。Core 的四角色（ChapterNavigation +
-        // Editor + ToolPane + ToolRail）已占满 placement region，separator 只盖在
-        // 章节栏右边界上做命中与拖拽，z 提高确保盖在内容之上。可视线 1vp（居中
-        // Rectangle），命中 Item 12vp。x 跟随 sidebarRect 右边界（中心对齐边界）。
+        // 不再作为 RowLayout 子项参与宽度分配。四栏（章节导航 + 正文 +
+        // 工具 pane + 工具 rail）已占满内容区，separator 只盖在章节栏右边界上
+        // 做命中与拖拽，z 提高确保盖在内容之上。可视线 1vp（居中 Rectangle），
+        // 命中 Item 12vp。x 跟随 sidebarRect 右边界（中心对齐边界）。
         // 垂直范围锚到 parent（contentSlot）顶/底，与 RowLayout 同高。
         Item {
             id: leftResizeSeparator
-            visible: !root.singlePaneMode && !root.leftPaneCollapsed && root.coreSized
+            visible: root.multiPane && !root.leftPaneCollapsed
             width: 12
             x: sidebarRect.x + sidebarRect.width - width / 2
             anchors.top: parent.top
@@ -933,19 +861,17 @@ Rectangle {
                 cursorShape: Qt.SplitHCursor
                 onActiveChanged: {
                     if (active) {
-                        // 每次手势从 Core 当前实际宽度起算，避免旧 requested 与实际宽度
-                        // 不一致造成死区，或 requested<=0 触发 Core"恢复默认宽度"语义。
+                        // 每次手势从当前实际宽度起算，避免死区。
                         root._dragStartChapterNavWidth = root.chapterNavWidth
                     }
                 }
                 onTranslationChanged: {
                     if (active) {
-                        // Math.max(1,...) 只防误触 Core 的"<=0 表示默认宽度"哨兵；
-                        // 实际最小值仍由 Core list_pane_min_width_dp clamp。
-                        // activeTranslation 每次手势从 0 重置（translation 已 deprecated）。
-                        root.requestedChapterNavWidth =
-                            Math.max(1, root._dragStartChapterNavWidth + activeTranslation.x)
-                        root.refreshWorkbenchPlan()
+                        // Issue #920：本地 clamp 到 [listPaneMinWidth, _chapterNavMaxWidth]，
+                        // 始终给正文留 editorMinWidth。activeTranslation 每次手势从 0 重置。
+                        root.chapterNavWidth = Math.min(root._chapterNavMaxWidth,
+                            Math.max(root.listPaneMinWidth,
+                                     root._dragStartChapterNavWidth + activeTranslation.x))
                     }
                 }
             }
@@ -955,7 +881,7 @@ Rectangle {
         // x 跟随 rightDrawerRect 左边界（Editor 右边界），中心对齐边界。
         Item {
             id: rightResizeSeparator
-            visible: root.drawerOpen && !root.hideContentPanes && root.coreSized
+            visible: root.multiPane && root.drawerOpen
             width: 12
             x: rightDrawerRect.x - width / 2
             anchors.top: parent.top
@@ -975,19 +901,17 @@ Rectangle {
                 cursorShape: Qt.SplitHCursor
                 onActiveChanged: {
                     if (active) {
-                        // 每次手势从 Core 当前实际宽度起算，避免旧 requested 与实际宽度
-                        // 不一致造成死区，或 requested<=0 触发 Core"恢复默认宽度"语义。
+                        // 每次手势从当前实际宽度起算，避免死区。
                         root._dragStartToolPaneWidth = root.toolPaneWidth
                     }
                 }
                 onTranslationChanged: {
                     if (active) {
-                        // Math.max(1,...) 只防误触 Core 的"<=0 表示默认宽度"哨兵；
-                        // 实际最小值仍由 Core tool_pane_min_width_dp clamp。
-                        // activeTranslation 每次手势从 0 重置（translation 已 deprecated）。
-                        root.requestedToolPaneWidth =
-                            Math.max(1, root._dragStartToolPaneWidth - activeTranslation.x)
-                        root.refreshWorkbenchPlan()
+                        // Issue #920：本地 clamp 到 [toolPaneMinWidth, _toolPaneMaxWidth]，
+                        // 始终给正文留 editorMinWidth。activeTranslation 每次手势从 0 重置。
+                        root.toolPaneWidth = Math.min(root._toolPaneMaxWidth,
+                            Math.max(root.toolPaneMinWidth,
+                                     root._dragStartToolPaneWidth - activeTranslation.x))
                     }
                 }
             }
@@ -1213,17 +1137,11 @@ Rectangle {
             }
         }
 
-        // 左侧抽屉：复用 WritingChapterNavigation，宽度取可用宽度与 Core listPaneWidthVp 的较小值。
-        // Issue #833 第四轮复核：宽度来自 Core LayoutMetrics.list_pane_width_dp（经 DTO 透传），
-        // QML 不再自己写第二个 320——SinglePane 正文占满，抽屉只是临时覆盖。
+        // 左侧抽屉：复用 WritingChapterNavigation，宽度取可用宽度与 Qt 本地
+        // listPaneWidth 的较小值（SinglePane 正文占满，抽屉只是临时覆盖）。
         WritingChapterNavigation {
             id: singlePaneNavPanel
-            width: Math.min(
-                parent.width,
-                root.layoutPlan && root.layoutPlan.listPaneWidthVp > 0
-                    ? root.layoutPlan.listPaneWidthVp
-                    : parent.width
-            )
+            width: Math.min(parent.width, root.listPaneWidth)
             height: parent.height
             x: 0
             y: 0

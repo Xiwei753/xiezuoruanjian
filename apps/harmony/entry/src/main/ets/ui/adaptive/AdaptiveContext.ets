@@ -1,30 +1,45 @@
 import window from '@ohos.window'
 import display from '@ohos.display'
 import hilog from '@ohos.hilog'
-import { getBridge } from '../../app/AppContext'
-import { WindowViewport, LayoutPlan, LayoutContract, FoldPosture, WidthClass, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
-import { harmonyAvailablePaneCount, buildHarmonyLayoutPlan, defaultLayoutMetrics } from './LayoutPolicyHelper'
+import { FoldPosture, WidthClass } from '../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 import { TabletWindowPolicy } from '../../platform/window/TabletWindowPolicy'
 
+// ── Harmony 平台布局断点（vp） ──
+// Issue #920 D：页面结构完全由平台 UI 层决定，不再向 Core 要布局模式。
+// 断点沿用产品既有的响应式设计，保证窗口尺寸变化时页面结构与改动前等价。
+const WIDTH_MEDIUM_MIN_VP: number = 600
+const WIDTH_WIDE_MIN_VP: number = 840
+// 宽屏工作区内容的纸面最大宽度（vp）。
+const WORKBENCH_CONTENT_MAX_WIDTH_VP: number = 840
+// 页面水平内边距（vp）：工作台档 32，其他档 16。
+const WIDE_PAGE_PADDING_VP: number = 32
+const COMPACT_PAGE_PADDING_VP: number = 16
+// 工作台档要求的最小高度（vp）：中等宽度但过矮时塞不下双栏，退回单栏。
+const HEIGHT_MEDIUM_MIN_VP: number = 480
+
 /**
- * 响应式布局状态 — 直接映射 Core LayoutPlan
+ * 响应式布局状态 — Harmony 平台自行推导的窗口断点结果。
+ *
+ * Issue #920 D：不再包含 Core LayoutPlan；布局模式、纸面宽度、内边距与
+ * 一级导航摆放都由本层按窗口尺寸本地决定。
  */
 export interface AdaptiveState {
   widthVp: number
   heightVp: number
-  layoutPlan: LayoutPlan
-  // 便捷访问属性（从 layoutPlan 派生）
+  // 平台自己的宽度分类（见 harmonySizeClass）
   sizeClass: WidthClass
-  isTwoPane: boolean
+  // 宽屏工作区（Workbench）档，决定纸面宽度 / 内边距 / 设置浮层形态
+  isWorkbenchLayout: boolean
+  // 一级导航放侧栏（宽窗口），否则放底部
+  isWidePrimaryNavigation: boolean
   contentMaxWidth: number
   pagePadding: number
-  gridColumns: number
   // 底部安全区域高度（导航栏避让），单位 vp
   safeBottomVp: number
   // 顶部安全区域高度（状态栏避让），单位 vp
   safeTopVp: number
-  // 当前是否偏好宽屏布局（专用横屏平板且 Core 返回 Workbench 模式，或 sizeClass === Expanded）
+  // 当前是否偏好宽屏布局（专用横屏平板且进入工作台档，或 sizeClass === Expanded）
   prefersWideLayout: boolean
   // 是否是专用横屏平板（deviceType=tablet + 非折叠 + 宽高比>=1.25）
   isDedicatedLandscapeTablet: boolean
@@ -59,9 +74,9 @@ const TAG = 'AdaptiveContext'
 const DOMAIN = 0x0000
 
 /**
- * 响应式断点上下文（单例）
+ * 响应式布局上下文（单例）
  *
- * 监听窗口尺寸变化，通过 bridge.resolveLayout 获取布局方案，通知所有订阅者。
+ * 监听窗口尺寸变化，按 Harmony 平台自己的断点推导布局状态，通知所有订阅者。
  * 在 EntryAbility.onWindowStageCreate 中初始化。
  */
 export class AdaptiveContext {
@@ -157,7 +172,7 @@ export class AdaptiveContext {
       if (widthVp <= 0 || heightVp <= 0) {
         hilog.info(DOMAIN, TAG, 'Window rect not ready: %{public}sx%{public}s, deferring until first valid size', `${widthVp}`, `${heightVp}`)
       } else {
-        await this.updateState(widthVp, heightVp)
+        this.updateState(widthVp, heightVp)
         hilog.info(DOMAIN, TAG, `Initialized: ${this.state.sizeClass} ${this.state.widthVp}x${this.state.heightVp}`)
       }
 
@@ -177,12 +192,11 @@ export class AdaptiveContext {
     return {
       widthVp: this.state.widthVp,
       heightVp: this.state.heightVp,
-      layoutPlan: this.state.layoutPlan,
       sizeClass: this.state.sizeClass,
-      isTwoPane: this.state.isTwoPane,
+      isWorkbenchLayout: this.state.isWorkbenchLayout,
+      isWidePrimaryNavigation: this.state.isWidePrimaryNavigation,
       contentMaxWidth: this.state.contentMaxWidth,
       pagePadding: this.state.pagePadding,
-      gridColumns: this.state.gridColumns,
       safeBottomVp: this.cachedSafeBottomVp,
       safeTopVp: this.cachedSafeTopVp,
       prefersWideLayout: this.state.prefersWideLayout,
@@ -282,67 +296,60 @@ export class AdaptiveContext {
     }
   }
 
-  private async updateState(widthVp: number, heightVp: number): Promise<void> {
+  // Issue #920 D：按 Harmony 平台自己的断点本地推导布局状态，不再调用 Core。
+  private updateState(widthVp: number, heightVp: number): void {
     // Issue #752：防御性判断，0x0 尺寸不写入布局状态。
     if (widthVp <= 0 || heightVp <= 0) {
       return
     }
     // Issue #752：首次拿到非 0 有效尺寸时记录首帧路标日志。
     const isFirstValidSize: boolean = this.state.widthVp <= 0 || this.state.heightVp <= 0
-    const bridge = getBridge()
-    // #610/#753：平台端只上报测量到的原始窗口尺寸（dp），
-    // paneCount / 折叠 / 指针 / 键盘都不再是 Core 的输入，由 Core 自己从尺寸推导。
-    const viewport: WindowViewport = {
-      widthDp: Math.round(widthVp * 100) / 100,
-      heightDp: Math.round(heightVp * 100) / 100,
-      occlusions: []
+    const sizeClass: WidthClass = this.harmonySizeClass(widthVp)
+    const isWorkbenchLayout: boolean = AdaptiveContext.isWorkbenchLayout(widthVp, heightVp)
+    // prefersWideLayout: 专用横屏平板且进入工作台档（能展示完整宽屏工作台），或 sizeClass === Expanded。
+    // 不能只按 600vp 判定：600-695vp 展示不下完整工作台，此时进入 Writing 会出现
+    // 无章节树且无法新建章节的死状态，所以用 isWorkbenchLayout 兜一层。
+    const prefersWideLayout: boolean =
+      (this.cachedIsDedicatedLandscapeTablet && isWorkbenchLayout) || sizeClass === WidthClass.Expanded
+    this.state = {
+      widthVp: Math.round(widthVp * 100) / 100,
+      heightVp: Math.round(heightVp * 100) / 100,
+      sizeClass: sizeClass,
+      isWorkbenchLayout: isWorkbenchLayout,
+      // 一级导航放侧栏：宽窗口（>=840vp）与旧 Core 的 Side 判定一致。
+      isWidePrimaryNavigation: widthVp >= WIDTH_WIDE_MIN_VP,
+      contentMaxWidth: isWorkbenchLayout ? WORKBENCH_CONTENT_MAX_WIDTH_VP : Number.MAX_SAFE_INTEGER,
+      pagePadding: isWorkbenchLayout ? WIDE_PAGE_PADDING_VP : COMPACT_PAGE_PADDING_VP,
+      safeBottomVp: this.cachedSafeBottomVp,
+      safeTopVp: this.cachedSafeTopVp,
+      prefersWideLayout: prefersWideLayout,
+      isDedicatedLandscapeTablet: this.cachedIsDedicatedLandscapeTablet
     }
-
-    try {
-      const result = await bridge.resolveLayout(viewport)
-      const contract: LayoutContract | undefined = result.data
-      if (result.success && contract !== undefined) {
-        // Harmony 平台值（纸面宽度/内边距/网格列数）在平台层叠加，不在 Core。
-        const plan: LayoutPlan = buildHarmonyLayoutPlan(contract, widthVp)
-        const sizeClass: WidthClass = this.harmonySizeClass(widthVp)
-        // prefersWideLayout: 专用横屏平板且 Core 返回 Workbench 模式（能展示完整宽屏工作台），或 sizeClass === Expanded
-        // 不能只按 600vp 判定：600-695vp 时 Core 返回 SinglePane（最小 workbench 宽度 = 696dp），
-        // 此时进入 Writing 会出现无章节树且无法新建章节的死状态。
-        // 用 Core 的 workspaceLayoutMode 判断，确保只在真正能展示工作台时才启用宽屏布局。
-        const prefersWideLayout: boolean =
-          (this.cachedIsDedicatedLandscapeTablet && contract.workspaceLayoutMode === WorkspaceLayoutMode.Workbench) || sizeClass === WidthClass.Expanded
-        this.state = {
-          widthVp: Math.round(widthVp * 100) / 100,
-          heightVp: Math.round(heightVp * 100) / 100,
-          layoutPlan: plan,
-          sizeClass: sizeClass,
-          isTwoPane: contract.shellMode === ShellMode.TwoPane,
-          contentMaxWidth: plan.contentMaxWidthVp === 0 ? Number.MAX_SAFE_INTEGER : plan.contentMaxWidthVp,
-          pagePadding: plan.pagePaddingVp,
-          gridColumns: plan.gridColumns,
-          safeBottomVp: this.cachedSafeBottomVp,
-          safeTopVp: this.cachedSafeTopVp,
-          prefersWideLayout: prefersWideLayout,
-          isDedicatedLandscapeTablet: this.cachedIsDedicatedLandscapeTablet
-        }
-        // Issue #752：第一次拿到非 0 有效尺寸的首帧路标日志。
-        if (isFirstValidSize) {
-          hilog.info(DOMAIN, TAG, 'First valid window size: %{public}sx%{public}s vp', `${this.state.widthVp}`, `${this.state.heightVp}`)
-        }
-        this.notifyObservers()
-      }
-    } catch (err) {
-      hilog.error(DOMAIN, TAG, `resolveLayout failed: ${JSON.stringify(err)}`)
+    // Issue #752：第一次拿到非 0 有效尺寸的首帧路标日志。
+    if (isFirstValidSize) {
+      hilog.info(DOMAIN, TAG, 'First valid window size: %{public}sx%{public}s vp', `${this.state.widthVp}`, `${this.state.heightVp}`)
     }
+    this.notifyObservers()
   }
 
-  /** Harmony 自身的大小分类（平台决策，不在 Core），与 harmonyAvailablePaneCount 同一断点。 */
+  // 宽屏工作台档：宽度 >= 600vp，且不是「中等宽度 + 过矮窗口」。
+  // 中等宽度（600-839vp）但高度 < 480vp 时塞不下双栏，退回单栏。
+  private static isWorkbenchLayout(widthVp: number, heightVp: number): boolean {
+    if (widthVp < WIDTH_MEDIUM_MIN_VP) {
+      return false
+    }
+    if (widthVp < WIDTH_WIDE_MIN_VP && heightVp < HEIGHT_MEDIUM_MIN_VP) {
+      return false
+    }
+    return true
+  }
+
+  /** Harmony 自身的大小分类（平台决策，不在 Core）。 */
   private harmonySizeClass(widthVp: number): WidthClass {
-    const paneCount = harmonyAvailablePaneCount(widthVp)
-    if (paneCount <= 1) {
+    if (widthVp < WIDTH_MEDIUM_MIN_VP) {
       return WidthClass.Compact
     }
-    if (paneCount === 2) {
+    if (widthVp < WIDTH_WIDE_MIN_VP) {
       return WidthClass.Medium
     }
     return WidthClass.Expanded
@@ -360,24 +367,14 @@ export class AdaptiveContext {
   }
 
   private static createDefaultState(): AdaptiveState {
-    const defaultPlan: LayoutPlan = {
-      shellMode: ShellMode.SinglePane,
-      workspaceLayoutMode: WorkspaceLayoutMode.SinglePane,
-      primaryNavigationPlacement: PrimaryNavigationPlacement.Bottom,
-      contentMaxWidthVp: 0,
-      pagePaddingVp: 16,
-      gridColumns: 2,
-      metrics: defaultLayoutMetrics()
-    }
     return {
       widthVp: 0,
       heightVp: 0,
-      layoutPlan: defaultPlan,
       sizeClass: WidthClass.Compact,
-      isTwoPane: false,
+      isWorkbenchLayout: false,
+      isWidePrimaryNavigation: false,
       contentMaxWidth: Number.MAX_SAFE_INTEGER,
-      pagePadding: 16,
-      gridColumns: 2,
+      pagePadding: COMPACT_PAGE_PADDING_VP,
       safeBottomVp: 0,
       safeTopVp: 0,
       prefersWideLayout: false,

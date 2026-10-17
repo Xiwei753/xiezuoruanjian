@@ -5,8 +5,8 @@
 //! - `CrossCanvasEdgeErrorDto`：跨画布边规划错误（使用 `error_type` 字符串判别）
 
 use super::{
-    StarMapEdgeDto, StarMapEdgeKindDto, StarMapNavigationRouteDto, StarMapTargetDetailDto,
-    StarMapTargetPathDto,
+    StarMapEdgeDto, StarMapEdgeKindDto, StarMapNavigationRouteDto, StarMapPathSegmentDto,
+    StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 
 /// 端点选择 DTO：导航路由 + 本地目标。
@@ -180,4 +180,36 @@ fn resolve_status_from_string(
 pub struct CreateCrossCanvasEdgeResultDto {
     pub owner_starmap_id: String,
     pub edge: StarMapEdgeDto,
+}
+
+/// 跨层连线宿主规划结果 DTO。
+///
+/// `plan_cross_layer_connection` 接收两条从同一根星图出发的绝对端点路径，
+/// 由 Core 统一算出关系应落在哪张图上：
+///
+/// - `host_starmap_id`：宿主星图 ID（Edge/Link 的 `starmap_id`）。
+/// - `host_segments`：宿主 Scene 相对根星图的绝对路径段，供平台端找到宿主画布。
+/// - `from` / `to`：两条相对宿主的 `StarMapTargetPath`，`starmap_id` 已填成
+///   `host_starmap_id`，可直接交给 `add_starmap_edge` / `add_starmap_link`。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CrossLayerConnectionPlanDto {
+    pub host_starmap_id: String,
+    #[serde(default)]
+    pub host_segments: Vec<StarMapPathSegmentDto>,
+    pub from: StarMapTargetPathDto,
+    pub to: StarMapTargetPathDto,
+}
+
+impl From<crate::starmap::graph::path_planner::CrossLayerConnectionPlan>
+    for CrossLayerConnectionPlanDto
+{
+    fn from(p: crate::starmap::graph::path_planner::CrossLayerConnectionPlan) -> Self {
+        Self {
+            host_starmap_id: p.host_starmap_id,
+            host_segments: p.host_segments.into_iter().map(Into::into).collect(),
+            from: p.from.into(),
+            to: p.to.into(),
+        }
+    }
 }

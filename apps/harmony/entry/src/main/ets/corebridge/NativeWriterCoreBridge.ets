@@ -1,10 +1,9 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
-import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole, WorkbenchVisibility, WorkbenchLayoutPlan } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult } from './dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 import { NativeCoreModule } from './native/NativeCoreModule'
 import { NativeAppStateBridge } from './native/NativeAppStateBridge'
@@ -15,7 +14,6 @@ import { NativeSyncBridge } from './native/NativeSyncBridge'
 import { NativeStatsBridge } from './native/NativeStatsBridge'
 import { NativeStarMapBridge } from './native/NativeStarMapBridge'
 import { NativeDiagnosticsBridge } from './native/NativeDiagnosticsBridge'
-import { decodeLayoutContract, decodeScreenPolicy, decodeWorkbenchLayoutPlan } from './codec/CoreWireDecoders'
 import { NativeInitParams } from '../platform/init/NativeInitParams'
 
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
@@ -289,6 +287,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.starMapBridge.resolveStarMapPath(rootStarmapId, segments)
   }
 
+  async planStarMapCrossLayerConnection(from: StarMapTargetPath, to: StarMapTargetPath): Promise<ResultEnvelope<StarMapCrossLayerConnectionPlan>> {
+    return this.starMapBridge.planStarMapCrossLayerConnection(from, to)
+  }
+
   // ── Settings ──
 
   async getLocalSettings(): Promise<ResultEnvelope<LocalSettings>> {
@@ -419,41 +421,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
         success: true,
         data: available === 1 }
       return result
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
-    }
-  }
-
-  // ── Layout Contract（#610） ──
-
-  async resolveLayout(viewport: WindowViewport): Promise<ResultEnvelope<LayoutContract>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeResolveLayout(JSON.stringify(viewport))
-      return this.core.decodeEnvelope<LayoutContract>(jsonStr, decodeLayoutContract)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
-    }
-  }
-
-  // ── Workbench Layout Plan（#825：七角色 bounds 由 Core 决定） ──
-
-  async resolveWorkbenchLayout(viewport: WindowViewport,
-    visibility: WorkbenchVisibility): Promise<ResultEnvelope<WorkbenchLayoutPlan>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule()
-        .nativeResolveWorkbenchLayout(JSON.stringify(viewport), JSON.stringify(visibility))
-      return this.core.decodeEnvelope<WorkbenchLayoutPlan>(jsonStr, decodeWorkbenchLayoutPlan)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
-    }
-  }
-
-  // ── Screen Contract（#610：不随壳层变化） ──
-
-  async resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeResolveScreenPolicy(JSON.stringify(screenRole))
-      return this.core.decodeEnvelope<ScreenPolicy>(jsonStr, decodeScreenPolicy)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
     }

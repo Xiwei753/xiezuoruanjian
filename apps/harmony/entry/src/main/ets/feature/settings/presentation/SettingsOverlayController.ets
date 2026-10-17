@@ -21,7 +21,6 @@
 import hilog from '@ohos.hilog'
 import { UIContext, ComponentContent } from '@kit.ArkUI'
 import { AdaptiveContext } from '../../../ui/adaptive/AdaptiveContext'
-import { WorkspaceLayoutMode } from '../../../corebridge/dto/PlatformDtos'
 import { createSettingsOverlayContent, SettingsOverlayArgs } from '../ui/SettingsOverlayPanel'
 
 const TAG = 'SettingsOverlayController'
@@ -60,13 +59,13 @@ export class SettingsOverlayController {
 
   /**
    * 当前窗口是否用悬浮设置。窄屏仍然走 Routes.Settings 路由页。
-   * Issue #825 复核第4项：按 Core 的 workspace_layout_mode 判 Workbench，
-   * 600–839vp 这一档 Core 已经给 Workbench（但一级导航仍是 Bottom），
+   * Issue #825 复核第4项 / #920 D：按平台自己的工作台档（isWorkbenchLayout）判，
+   * 600–839vp 这一档（窗口够高）已是工作台档（但一级导航仍是 Bottom），
    * 那一档窗口里设置同样走悬浮层。
    */
   isOverlayLayout(): boolean {
     const state = AdaptiveContext.getInstance().getCurrentState()
-    return state.layoutPlan.workspaceLayoutMode === WorkspaceLayoutMode.Workbench
+    return state.isWorkbenchLayout
   }
 
   /** 当前是否已经有设置浮层在（含正在关闭的那一段）。 */

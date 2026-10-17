@@ -1,5 +1,5 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeCreateStarmapChildEmbedResult, decodeArray } from '../codec/CoreWireDecoders'
 import util from '@ohos.util'
@@ -245,5 +245,48 @@ export class NativeStarMapBridge {
       }
       return result
     } catch (e) { return nativeError<StarMapResolvedPath>(e) }
+  }
+
+  // plan_cross_layer_connection：两条从同一根星图出发的绝对端点路径交给 Core，
+  // 由 Core 统一算出宿主星图、宿主 Scene 路径和两条相对宿主的端点路径。
+  // 自环 / 不可解析 / 不同根星图由 Core 拒绝（返回失败 envelope），平台端不猜宿主。
+  async planStarMapCrossLayerConnection(from: StarMapTargetPath, to: StarMapTargetPath): Promise<ResultEnvelope<StarMapCrossLayerConnectionPlan>> {
+    try {
+      const body: string = JSON.stringify({ from: from, to: to })
+      const jsonStr: string = this.core.getNativeModule().nativePlanCrossLayerConnection(body)
+      const raw = this.core.parseRawEnvelope(jsonStr)
+      if (!raw.success) {
+        const errResult: ResultEnvelope<StarMapCrossLayerConnectionPlan> = {
+          success: false,
+          errorCode: raw.errorCode,
+          userMessage: raw.userMessage
+        }
+        return errResult
+      }
+      if (raw.data === undefined || raw.data === null) {
+        return this.core.schemaMismatch<StarMapCrossLayerConnectionPlan>('data is null or undefined')
+      }
+      const data = raw.data as Record<string, Object>
+      const hostStarmapId: Object | undefined = data['hostStarmapId']
+      const hostSegments: Object | undefined = data['hostSegments']
+      const fromPath: Object | undefined = data['from']
+      const toPath: Object | undefined = data['to']
+      if (typeof hostStarmapId !== 'string' || hostStarmapId === '' ||
+        !Array.isArray(hostSegments) || fromPath === undefined || toPath === undefined) {
+        return this.core.schemaMismatch<StarMapCrossLayerConnectionPlan>(
+          'hostStarmapId/hostSegments/from/to missing or invalid')
+      }
+      const plan: StarMapCrossLayerConnectionPlan = {
+        hostStarmapId: hostStarmapId,
+        hostSegments: hostSegments as StarMapPathSegment[],
+        from: fromPath as StarMapTargetPath,
+        to: toPath as StarMapTargetPath
+      }
+      const result: ResultEnvelope<StarMapCrossLayerConnectionPlan> = {
+        success: true,
+        data: plan
+      }
+      return result
+    } catch (e) { return nativeError<StarMapCrossLayerConnectionPlan>(e) }
   }
 }

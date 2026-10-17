@@ -61,7 +61,7 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         y: Float,
     ): BridgeResult<StarMapNodeDto> =
         holder.wrapResult {
-            holder.service.addStarmapNode(starmapId, node, x, y)
+            holder.service.addStarmapNode(starmapId, node, x.toDouble(), y.toDouble())
         }
 
     override fun addStarmapEmbed(

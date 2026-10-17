@@ -6,7 +6,7 @@
 
 import hilog from '@ohos.hilog'
 import promptAction from '@ohos.promptAction'
-import { ActionRole } from '../../corebridge/dto/PlatformDtos'
+import { ActionRole } from './ScreenSemantics'
 import { Routes } from './Routes'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { SyncOperationController, SyncOutcome } from '../../feature/settings/presentation/SyncOperationController'
@@ -86,7 +86,7 @@ export class NavigationHeaderActionDispatcher {
   }
 
   /** 设置 — 宽屏开模态浮层，窄屏进 Routes.Settings 路由页 */
-  // Issue #825 复核第2点：宽屏（WorkspaceLayoutMode.Workbench）设置悬浮在打开前页面之上，
+  // Issue #825 复核第2点：宽屏（平台工作台档 isWorkbenchLayout）设置悬浮在打开前页面之上，
   // 走 SettingsOverlayController 的窗口层级 custom dialog——系统返回 / 遮罩都由对话框容器保证；
   // 窄屏保持原来的 pushPath(Routes.Settings) 行为，不留第二套入口。
   private navigateToSettings(): void {

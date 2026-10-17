@@ -97,6 +97,38 @@ impl AppBackend {
         qjson_object_from_json(&raw)
     }
 
+    // AppBackend::plan_cross_layer_connection_json
+    /// 跨层连线宿主规划：两条从同一根星图出发的绝对端点路径交给 Core，
+    /// 返回宿主星图、宿主 Scene 路径和两条相对宿主的端点路径。
+    pub(crate) fn plan_cross_layer_connection_json(
+        &self,
+        from_path_json: QString,
+        to_path_json: QString,
+    ) -> QString {
+        let fp = from_path_json.to_string();
+        let tp = to_path_json.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::plan_cross_layer_connection(&core, &fp, &tp).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::plan_cross_layer_connection
+    pub(crate) fn plan_cross_layer_connection(
+        &self,
+        from_path_json: QString,
+        to_path_json: QString,
+    ) -> QJsonObject {
+        let raw = self
+            .plan_cross_layer_connection_json(from_path_json, to_path_json)
+            .to_string();
+        qjson_object_from_json(&raw)
+    }
+
     // AppBackend::create_starmap_edge_json
     pub(crate) fn create_starmap_edge_json(
         &mut self,

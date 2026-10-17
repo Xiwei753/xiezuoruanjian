@@ -28,10 +28,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.screen.WorkspaceActionKind
-import com.xiwei.sujian.app.presentation.screen.WorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.screen.WorkspaceActionTarget
 import com.xiwei.sujian.core.designsystem.component.SujianDialog
 import com.xiwei.sujian.core.designsystem.component.SujianFab
 import com.xiwei.sujian.core.designsystem.component.SujianIconButton
@@ -154,7 +150,7 @@ private fun handleChapterAction(
 internal fun ChapterTreeContent(
     projectId: String,
     projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
-    workspaceActions: AndroidWorkspaceActionSpec,
+    workspaceActions: WorkspaceActions,
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
     onError: (String) -> Unit = {},
@@ -421,7 +417,7 @@ internal fun ChapterTreeContent(
 
 /** VolumeRow 的 spec 与行内回调 — 打包传递，避免函数参数超出门禁阈值（与 ChapterRowActions 同模式）。 */
 internal class VolumeRowActions(
-    val workspaceActions: AndroidWorkspaceActionSpec,
+    val workspaceActions: WorkspaceActions,
     val onToggleExpand: () -> Unit,
     val onCreateChapter: () -> Unit,
     val onAction: (WorkspaceActionSpec) -> Unit,
@@ -489,7 +485,7 @@ internal fun VolumeRow(
 
 /** ChapterRow 的 spec 与行内回调 — 打包传递，避免函数参数超出门禁阈值。 */
 internal class ChapterRowActions(
-    val workspaceActions: AndroidWorkspaceActionSpec,
+    val workspaceActions: WorkspaceActions,
     val onSelect: () -> Unit,
     val onAction: (WorkspaceActionSpec) -> Unit,
 )

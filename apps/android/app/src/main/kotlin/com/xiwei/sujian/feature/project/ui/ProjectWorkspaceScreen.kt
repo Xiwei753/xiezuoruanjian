@@ -14,12 +14,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
-import com.xiwei.sujian.app.presentation.layout.AndroidLayoutRect
-import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.layout.AndroidWorkbenchLayoutPlan
-import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
-import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
-import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
 import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
@@ -31,17 +25,12 @@ import kotlinx.coroutines.withContext
 
 /**
  * #641 评论 问题5：大屏 Workbench 真实布局链的展示状态打包 —
- * 由导航套件层统一解析（plan + pane 收起 + chrome + safe bounds）后下发，
- * 避免 [WideLayoutContent] Editor 分支再用 null/空函数让 plan 永远走 single-pane。
+ * 由导航套件层统一解析（pane 收起 + chrome）后下发。
  *
- * - [plan]：Rust workbench plan（null 表示桥失败）；
- * - [safeBounds]：safe frame 物理安全矩形（dp），plan=null 或 Editor bounds 空时 fallback；
- * - [chapterTreeCollapsed]/[toolPaneCollapsed] + 收起回调：pane 收起状态；
- * - [chrome]：顶栏契约（showBack/actions），用于工具栏左/右组。
+ * - [chapterTreeCollapsed]/[toolPaneCollapsed] + 收起回调：pane 收起状态（Android 局部 UI 状态）；
+ * - [chrome]：顶栏决策（showBack/actions），用于工具栏左/右组。
  */
 internal data class WorkbenchPresentationState(
-    val plan: AndroidWorkbenchLayoutPlan?,
-    val safeBounds: AndroidLayoutRect,
     val chapterTreeCollapsed: Boolean,
     val toolPaneCollapsed: Boolean,
     val onToggleChapterTree: () -> Unit,
@@ -52,8 +41,8 @@ internal data class WorkbenchPresentationState(
 /**
  * 写作工作区 — 「作品」一级入口的唯一内容。
  *
- * #625 第二段 / #628 验收点 1：根据 [AndroidLayoutSpec.contract.workspaceLayoutMode]
- * （**不自己判断窗口尺寸**）+ [WorkspaceLocation] 决定画什么：
+ * 布局模式由 Android 顶层导航按本端窗口尺寸决定，并通过 [isWideLayout] 下发
+ * （本组件不再自行判断窗口尺寸，也不向 Core 请求布局模式）：
  * - **窄屏**（SinglePane）：只画当前业务位置（稳定 Box 承载编辑器，无动画）；
  * - **大屏**（Workbench）：
  *   - ProjectList 位置 → [ProjectListContent]（grid）；
@@ -62,25 +51,20 @@ internal data class WorkbenchPresentationState(
  *
  * 不再用 [androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold] 三窗格硬塞所有情况。
  *
- * #628 原则：窗口尺寸→布局决策唯一在 Rust — 判断窄屏/大屏必须通过
- * `layoutSpec.contract.workspaceLayoutMode`，不得引入 600/840/1200/1600 或 WindowWidthSizeClass 断点。
- *
  * [workspaceNavState] 由导航套件层创建并注入（#597：返回历史始终同一份）——
  * 顶栏返回、系统返回、预测返回和页面返回共用同一个 navigator；
  * 本组件不再自行创建第二份工作区导航状态。
  *
- * #618 一：两份动作 spec 都由容器创建时解析的 PresentationPolicyCatalog 固定提供，
- * 不再依赖父层组合帧观察到的 navigator 位置：
- * - [projectListActions] 固定按 PROJECT_LIST 契约（新建作品主操作/作品菜单）；
- * - [projectWorkspaceActions] 固定按 PROJECT_WORKSPACE 契约（卷章创建/删除/重命名/排序）。
+ * 工作区动作 spec 是 Android 本端常量（[WorkspaceActions]）：
+ * - [WorkspaceActions.ProjectList] 用于作品列表（新建作品主操作/作品菜单）；
+ * - [WorkspaceActions.ProjectWorkspace] 用于章节树（卷章创建/删除/重命名/排序）。
  */
 @Composable
 internal fun ProjectWorkspaceScreen(
     appState: SujianAppState,
     workspaceNavState: ProjectNavigationState,
-    projectListActions: AndroidWorkspaceActionSpec,
-    projectWorkspaceActions: AndroidWorkspaceActionSpec,
-    layoutSpec: AndroidLayoutSpec,
+    isWideLayout: Boolean,
+    projectCardMinWidthDp: Float,
     workbenchPresentation: WorkbenchPresentationState?,
     editorCallbacks: EditorWorkspaceCallbacks? = null,
     modifier: Modifier = Modifier,
@@ -89,8 +73,6 @@ internal fun ProjectWorkspaceScreen(
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
     val projectRepository = deps.projectRepository
-    val workspaceLayoutMode = layoutSpec.workspaceLayoutMode
-    val isWideLayout = workspaceLayoutMode != WorkspaceLayoutMode.SINGLE_PANE
 
     // #595 一：章节切换事务入口 — 显式 Factory 注入进程级容器依赖 + 会话层协调器。
     // 与 WritingPane 内 viewModel(factory=...) 解析到同一 Activity 级实例。
@@ -262,21 +244,9 @@ internal fun ProjectWorkspaceScreen(
 
     val currentProjectId = appState.currentProjectId
 
-    // #628 原则：窗口尺寸→布局决策唯一在 Rust — 通过 layoutSpec.workspaceLayoutMode。
-    // 契约缺失（桥失败/空契约）时 fallback 到 SinglePane（与窄窗口基线一致）。
-    // #628 验收点 4：作品卡片最小宽度来自 Rust LayoutMetrics.projectCardMinWidthDp。
-    // isWideLayout=true 时 contract 必非 null（workspaceLayoutMode 缺失回落 SINGLE_PANE），
-    // 因此 projectCardMinWidthDp 必非 null；SinglePane 时不画 grid，传 0f 占位。
-    val projectCardMinWidthDp = layoutSpec.contract?.metrics?.projectCardMinWidthDp ?: 0f
-
     if (isWideLayout) {
-        // #641：宽屏 Editor 位置直接画 WideWritingWorkspace（WorkspaceLocation.Editor 分支）。
-        // #641 评论 问题5：把 workbenchPresentation 传下去 — plan/chrome/safeBounds/pane 收起
-        // 都来自导航套件层，不再用 null/空函数让 plan 永远走 single-pane。
         WideLayoutContent(
             appState = appState,
-            projectListActions = projectListActions,
-            projectWorkspaceActions = projectWorkspaceActions,
             location = location,
             currentProjectId = currentProjectId,
             projectRepository = projectRepository,
@@ -302,15 +272,11 @@ internal fun ProjectWorkspaceScreen(
             modifier = modifier,
         )
     } else {
-        // #641：窄屏 Editor 位置直接画 SujianEditorHost（WorkspaceLocation.Editor 分支）。
-        // #641 评论 问题6：SinglePaneContent.Editor 分支改用 CompactWritingWorkspace，
-        // 恢复完整写作顶栏（返回/搜索/同步/设置），不再只画 SujianEditorHost。
+        // #641 评论 问题6：SinglePaneContent.Editor 分支用 CompactWritingWorkspace，
+        // 恢复完整写作顶栏（返回/搜索/同步/设置）。
         SinglePaneContent(
             appState = appState,
-            projectListActions = projectListActions,
-            projectWorkspaceActions = projectWorkspaceActions,
             location = location,
-            workspaceLayoutMode = workspaceLayoutMode,
             projectCardMinWidthDp = projectCardMinWidthDp,
             onSelectProject = { projectId, projectTitle ->
                 appState.selectProject(projectId, projectTitle)
@@ -340,10 +306,7 @@ internal fun ProjectWorkspaceScreen(
 @Composable
 private fun SinglePaneContent(
     appState: SujianAppState,
-    projectListActions: AndroidWorkspaceActionSpec,
-    projectWorkspaceActions: AndroidWorkspaceActionSpec,
     location: WorkspaceLocation,
-    workspaceLayoutMode: WorkspaceLayoutMode,
     projectCardMinWidthDp: Float,
     onSelectProject: (projectId: String, projectTitle: String) -> Unit,
     onContinueRecentEdit: (edit: RecentEdit) -> Unit,
@@ -362,13 +325,13 @@ private fun SinglePaneContent(
         is WorkspaceLocation.ProjectList ->
             ProjectListContent(
                 appState = appState,
-                workspaceActions = projectListActions,
+                workspaceActions = WorkspaceActions.ProjectList,
                 onSelectProject = onSelectProject,
                 onContinueRecentEdit = onContinueRecentEdit,
                 modifier = modifier.fillMaxSize(),
                 layoutConfig =
                     ProjectListLayoutConfig(
-                        workspaceLayoutMode = workspaceLayoutMode,
+                        useWideGrid = false,
                         projectCardMinWidthDp = projectCardMinWidthDp,
                     ),
             )
@@ -379,7 +342,7 @@ private fun SinglePaneContent(
                     ChapterTreeContent(
                         projectId = projectId,
                         projectRepository = LocalSujianAppDependencies.current.projectRepository,
-                        workspaceActions = projectWorkspaceActions,
+                        workspaceActions = WorkspaceActions.ProjectWorkspace,
                         onSelectChapter = onSelectChapter,
                         onError = appState::reportWorkspaceError,
                         modifier = Modifier.fillMaxSize(),
@@ -412,8 +375,6 @@ private fun SinglePaneContent(
 @Composable
 private fun WideLayoutContent(
     appState: SujianAppState,
-    projectListActions: AndroidWorkspaceActionSpec,
-    projectWorkspaceActions: AndroidWorkspaceActionSpec,
     location: WorkspaceLocation,
     currentProjectId: String?,
     projectRepository: com.xiwei.sujian.feature.project.data.ProjectRepository,
@@ -436,13 +397,13 @@ private fun WideLayoutContent(
         is WorkspaceLocation.ProjectList ->
             ProjectListContent(
                 appState = appState,
-                workspaceActions = projectListActions,
+                workspaceActions = WorkspaceActions.ProjectList,
                 onSelectProject = onSelectProject,
                 onContinueRecentEdit = onContinueRecentEdit,
                 modifier = modifier.fillMaxSize(),
                 layoutConfig =
                     ProjectListLayoutConfig(
-                        workspaceLayoutMode = WorkspaceLayoutMode.WORKBENCH,
+                        useWideGrid = true,
                         projectCardMinWidthDp = projectCardMinWidthDp,
                     ),
             )
@@ -452,7 +413,7 @@ private fun WideLayoutContent(
                     ChapterTreeContent(
                         projectId = currentProjectId,
                         projectRepository = projectRepository,
-                        workspaceActions = projectWorkspaceActions,
+                        workspaceActions = WorkspaceActions.ProjectWorkspace,
                         onSelectChapter = onSelectChapter,
                         onError = appState::reportWorkspaceError,
                         modifier = Modifier.fillMaxSize(),
@@ -460,22 +421,20 @@ private fun WideLayoutContent(
                 }
             }
         is WorkspaceLocation.Editor -> {
-            // 大屏 Editor 位置直接绘制 WideWritingWorkspace
-            // #641 评论 问题5：plan/chrome/safeBounds/pane 收起全部来自 workbenchPresentation,
-            // 不再用 null/空函数让 resolveWideWorkspaceCompositionMode(null) 永远走 single-pane。
+            // 大屏 Editor 位置绘制 Compose-native WideWritingWorkspace。
+            // pane 收起 + chrome 全部来自 workbenchPresentation。
             val deps =
-                remember(appState, projectRepository, projectWorkspaceActions, workbenchPresentation) {
+                remember(appState, projectRepository, workbenchPresentation) {
                     WideWorkspaceDeps(
                         appState = appState,
                         projectRepository = projectRepository,
-                        projectWorkspaceActions = projectWorkspaceActions,
+                        projectWorkspaceActions = WorkspaceActions.ProjectWorkspace,
                         chrome = workbenchPresentation?.chrome,
                     )
                 }
             val layoutState =
                 remember(workbenchPresentation) {
                     WideWorkspaceLayoutState(
-                        workbenchPlan = workbenchPresentation?.plan,
                         chapterTreeCollapsed = workbenchPresentation?.chapterTreeCollapsed ?: false,
                         toolPaneCollapsed = workbenchPresentation?.toolPaneCollapsed ?: false,
                         onToggleChapterTree = workbenchPresentation?.onToggleChapterTree ?: {},
@@ -504,8 +463,6 @@ private fun WideLayoutContent(
                     ),
                 layoutState = layoutState,
                 callbacks = callbacks,
-                fallbackSafeBounds =
-                    workbenchPresentation?.safeBounds ?: AndroidLayoutRect(0f, 0f, 0f, 0f),
                 modifier = Modifier.fillMaxSize(),
             )
         }

@@ -1,9 +1,8 @@
 import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
-import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole, WorkbenchVisibility, WorkbenchLayoutPlan } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult } from './dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 
 export interface IWriterCoreBridge {
@@ -53,6 +52,8 @@ export interface IWriterCoreBridge {
   addStarMapEmbed(starmapId: string, targetStarmapId: string, label: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapEmbed>>
   createStarmapChildEmbed(hostStarmapId: string, title: string, position: StarMapPoint): Promise<ResultEnvelope<CreateStarmapChildEmbedResult>>
   resolveStarMapPath(rootStarmapId: string, segments: StarMapPathSegment[]): Promise<ResultEnvelope<StarMapResolvedPath>>
+  // 跨层连线宿主规划：Core 决定 Edge/Link 落在哪张图（自环/不可解析/不同根会被拒绝）。
+  planStarMapCrossLayerConnection(from: StarMapTargetPath, to: StarMapTargetPath): Promise<ResultEnvelope<StarMapCrossLayerConnectionPlan>>
 
   // Settings
   getLocalSettings(): Promise<ResultEnvelope<LocalSettings>>
@@ -94,15 +95,6 @@ export interface IWriterCoreBridge {
   recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>>
   calculateWordCount(text: string): Promise<number>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
-
-  // Layout Contract（#610/#753：输入为平台测量到的原始窗口尺寸 + 遮挡几何）
-  resolveLayout(viewport: WindowViewport): Promise<ResultEnvelope<LayoutContract>>
-  // Workbench Layout Plan（#825：七角色 bounds 由 Core 决定，visibility 是端侧局部 UI 状态）
-  resolveWorkbenchLayout(viewport: WindowViewport,
-    visibility: WorkbenchVisibility): Promise<ResultEnvelope<WorkbenchLayoutPlan>>
-
-  // Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化）
-  resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>>
 
   // Native Status
   getNativeLoadStatus(): Promise<ResultEnvelope<string>>

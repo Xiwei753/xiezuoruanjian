@@ -15,7 +15,6 @@ import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncState
 import com.xiwei.sujian.storage.mirror.MirrorChangeSink
-import uniffi.writer_core.ScreenRoleDto
 
 /**
  * AppServiceBridge — 门面类（向后兼容）。
@@ -424,29 +423,8 @@ open class AppServiceBridge(
             false
         }
 
-    // #628：resolveLayout 签名从 WindowCapabilitiesDto 改为 WindowViewportDto
-    // （原始窗口宽高 dp）。断点/壳层/导航放置由 Rust presentation/layout 决定。
-    fun resolveLayout(
-        viewport: uniffi.writer_core.WindowViewportDto,
-    ): BridgeResult<uniffi.writer_core.LayoutContractDto> =
-        holder.wrapResult {
-            holder.service.resolveLayout(viewport)
-        }
-
-    // #628 评论 5301021120 第 3 步：FFI 直接返回 workbench 布局计划。
-    // Android 不再自己推导 hinge 布局，只按 plan 的 WorkbenchPlacement.bounds 放 slot。
-    fun resolveWorkbenchLayout(
-        viewport: uniffi.writer_core.WindowViewportDto,
-        visibility: uniffi.writer_core.WorkbenchVisibilityDto,
-    ): BridgeResult<uniffi.writer_core.WorkbenchLayoutPlanDto> =
-        holder.wrapResult {
-            holder.service.resolveWorkbenchLayout(viewport, visibility)
-        }
-
-    fun resolveScreenPolicy(screenRole: ScreenRoleDto): BridgeResult<uniffi.writer_core.ScreenPolicyDto> =
-        holder.wrapResult {
-            holder.service.resolveScreenPolicy(screenRole)
-        }
+    // 布局与页面动作归属完全由各平台 UI 层决定：Core 不再接收窗口尺寸，
+    // 也不再返回布局模式 / 页面动作契约。相关转发已删除。
 
     // ── #541: Text Edit Session API ──
 

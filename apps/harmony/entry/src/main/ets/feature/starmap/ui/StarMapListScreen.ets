@@ -16,12 +16,11 @@ import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { ScreenRole, ActionSlot } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, ActionSlot, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
-import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 @ComponentV2
 export struct StarMapListScreen {
@@ -67,10 +66,7 @@ export struct StarMapListScreen {
 
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     if (!this.useHdsNav) {
-      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.StarMap)
-      if (policy !== null) {
-        this.headerActions = policy.actionSlots
-      }
+      this.headerActions = resolveScreenPolicy(ScreenRole.StarMap).actionSlots
     }
 
     this.loadStarMaps()

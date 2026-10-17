@@ -8,7 +8,7 @@
 //      「禁掉父组件内建手势」，但 HdsTabs 不受理这些通用属性
 // 所以只能从 Tabs 自己下手：按住期间把 .scrollable 关掉。
 //
-// 为什么不复用 currentPrimaryNavInteractive：那个状态由 Core ScreenPolicy 驱动，语义是
+// 为什么不复用 currentPrimaryNavInteractive：那个状态由平台动作表按页面角色驱动，语义是
 // 「当前角色是否允许离开」（Writing/Settings 为 false），并且和底栏显隐解耦是 Issue #774 的
 // 明确要求。这里是纯手势锁，语义完全不同，所以单独一个 store，两者取与后传给 Tabs，
 // 互不覆盖。

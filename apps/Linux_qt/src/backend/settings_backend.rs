@@ -18,6 +18,7 @@
 use super::*;
 use crate::backend::AppRef;
 use crate::backend::DomainSnapshot;
+use crate::platform::linux_qt::desktop_settings;
 
 #[allow(non_snake_case)] // Qt QML naming convention
 #[derive(QObject, Default)]
@@ -1051,6 +1052,11 @@ impl AppBackend {
     // AppBackend::load_local_settings
     pub(crate) fn load_local_settings(&mut self) {
         self.debug_log("settings", "load_local_settings_start", "");
+        // Issue #920：窗口几何 / 侧栏 / 编辑器宽度是 Qt 平台本地状态，
+        // 从平台层加载，不再存在于 Core LocalSettings。
+        let desktop = desktop_settings::load();
+        self.current_setting_desktop_sidebar_width = desktop.desktop_sidebar_width;
+        self.current_setting_desktop_editor_width = desktop.desktop_editor_width;
         if let Some(core) = self.core_api() {
             let local_load = core.load_local_settings();
             self.debug_log(
@@ -1075,8 +1081,6 @@ impl AppBackend {
                 self.current_setting_coordinated_text_cursor_animation_enabled =
                     settings.editor_coordinated_text_cursor_animation_enabled;
                 self.current_ai_enabled = settings.ai_enabled;
-                self.current_setting_desktop_sidebar_width = settings.desktop_sidebar_width;
-                self.current_setting_desktop_editor_width = settings.desktop_editor_width;
                 self.current_setting_diagnostics_enabled = settings.diagnostics_enabled;
                 self.current_setting_diagnostics_verbose = settings.diagnostics_verbose;
             }
@@ -1161,6 +1165,16 @@ impl AppBackend {
     pub(crate) fn save_local_settings(&mut self) -> bool {
         self.debug_log("settings", "save_local_settings_start", "");
         let mut error_msg: Option<String> = None;
+        // Issue #920：窗口 / 栏宽是 Qt 平台本地状态，写入平台层 JSON，
+        // 不再写 Core LocalSettings（Core 已删除这些字段）。
+        let sidebar_width = self.current_setting_desktop_sidebar_width;
+        let editor_width = self.current_setting_desktop_editor_width;
+        if let Err(e) = desktop_settings::update(|settings| {
+            settings.desktop_sidebar_width = sidebar_width;
+            settings.desktop_editor_width = editor_width;
+        }) {
+            error_msg = Some(format!("desktop settings save failed: {e}"));
+        }
         if let Some(core) = self.core_api() {
             let mut local = core.load_local_settings().unwrap_or_else(|_| {
                 writer_core::api::types::LocalSettingsDto::from(
@@ -1183,8 +1197,6 @@ impl AppBackend {
             local.editor_coordinated_text_cursor_animation_enabled =
                 self.current_setting_coordinated_text_cursor_animation_enabled;
             local.ai_enabled = self.current_ai_enabled;
-            local.desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
-            local.desktop_editor_width = self.current_setting_desktop_editor_width;
             local.diagnostics_enabled = self.current_setting_diagnostics_enabled;
             local.diagnostics_verbose = self.current_setting_diagnostics_verbose;
             local.color_source = self.current_setting_color_source.clone();

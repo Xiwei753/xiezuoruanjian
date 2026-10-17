@@ -413,20 +413,9 @@ QtObject {
 
         var raw = read.text;
         if (!raw) return;
-        var paragraphs = raw.split(/\r?\n|\u2029/);
-        var formatted = [];
-        for (var i = 0; i < paragraphs.length; i++) {
-            var p = paragraphs[i];
-            // Only strip leading full-width spaces, tabs, non-breaking spaces
-            p = p.replace(/^[ \t\u3000\u00a0]+/, "");
-            // Only strip trailing horizontal whitespace, preserve empty lines
-            if (p.length > 0) {
-                p = p.replace(/[ \t]+$/, "");
-            }
-            formatted.push(p);
-        }
-
-        var plain = formatted.join("\n");
+        if (!editorBackendRef || !editorBackendRef.format_plain_text) return;
+        // 正文格式化规则归 Core：这里只触发后端业务操作、刷新编辑器快照并保存。
+        var plain = editorBackendRef.format_plain_text(raw);
 
         isApplyingFormat = true;
         autoSaveTimer.stop();

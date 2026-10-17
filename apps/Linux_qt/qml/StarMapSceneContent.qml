@@ -245,17 +245,21 @@ Item {
         return { x: cx + t * ux, y: cy + t * uy }
     }
 
-    // 端点路径的 starmapId 必须绑定到宿主图（Core 按它区分本地/跨层）。
-    // 预览与正式边提交共用这一份绑定，两边路径完全相同。
-    function bindPlanToHost(plan, host) {
-        if (!plan || !host || host.finalStarmapId === "")
+    // 端点路径的宿主规划统一走 Core：两条相对同一根星图的绝对路径交给
+    // starmapBackendRef.plan_cross_layer_connection，返回宿主星图 ID、宿主 Scene
+    // 路径和两条已绑定宿主 starmapId 的端点路径。QML 不再自己算最近公共祖先。
+    // 自环 / 不可解析 / 不同根星图都由 Core 拒绝，这里统一返回 null。
+    function planCrossLayerConnection(fromPath, toPath) {
+        if (!starmapBackendRef || !fromPath || !toPath)
             return null
-        plan.from.starmapId = host.finalStarmapId
-        plan.to.starmapId = host.finalStarmapId
-        return plan
+        var res = starmapBackendRef.plan_cross_layer_connection(
+                    JSON.stringify(fromPath), JSON.stringify(toPath))
+        if (!res || res.success !== true || !res.data)
+            return null
+        return res.data
     }
 
-    // 候选边预览：宿主 Content 把 prospective LCA 规划结果交给平台 edge renderer。
+    // 候选边预览：宿主 Content 把 Core 规划结果交给平台 edge renderer。
     // Content 只负责把规划路径交给宿主本层的 graphController；边界求交、
     // 双向偏移、旧 portal 归一、深路径投影全部由 Rust 正式边几何出一份真相。
     function prospectiveEdgeRenderForPlan(plan) {
@@ -282,12 +286,11 @@ Item {
                 ? rootContent.hitTargetAtScene(ic.connectMouseX, ic.connectMouseY)
                 : null
         if (hit && (hit.kind === "node" || hit.kind === "embed")) {
-            var plan = StarMapPathPlanner.planCrossLayerRelation(ic.connectFromPath, hit.targetPath)
+            var plan = planCrossLayerConnection(ic.connectFromPath, hit.targetPath)
             var host = plan && rootContent
                     ? rootContent.findContentByPathSegments(plan.hostSegments)
                     : null
-            plan = bindPlanToHost(plan, host)
-            if (plan) {
+            if (plan && host) {
                 var preview = host.prospectiveEdgeRenderForPlan(plan)
                 if (preview) {
                     var startScene = host.localToScene(preview.startX, preview.startY)
@@ -947,17 +950,16 @@ Item {
             var sameTarget = hit.scenePathKey === ic.connectFromScenePathKey && hit.id === fromId
             if (!sameTarget) {
                 toPath = hit.targetPath
-                // 宿主 = 两端所在 Scene 的最近公共祖先（照 Harmony 的规划规则）。
-                // 边的 starmapId 必须等于宿主的 finalStarmapId，segments 只保留
-                // "从宿主往下"的部分，Core 才能从宿主图自己走完。
-                var plan = StarMapPathPlanner.planCrossLayerRelation(fromPath, toPath)
+                // 宿主 = 两端所在 Scene 的最近公共祖先，由 Core 统一规划。
+                // Core 返回的 from/to 已绑定宿主 starmapId，QML 只需按
+                // hostSegments 找到宿主 Content 并落库。
+                var plan = planCrossLayerConnection(fromPath, toPath)
                 var host = plan && rootContent
                         ? rootContent.findContentByPathSegments(plan.hostSegments)
                         : null
-                plan = bindPlanToHost(plan, host)
-                if (plan) {
+                if (plan && host) {
                     hostPathKey = host.scenePathKey
-                    hostStarmapId = host.finalStarmapId
+                    hostStarmapId = plan.hostStarmapId
                     success = host.commitEdgeWithPaths(plan.from, plan.to)
                     cancelled = !success
                 }
@@ -997,14 +999,13 @@ Item {
             var sameTarget = toHit.scenePathKey === ic.linkFromScenePathKey && toHit.id === fromId
             if (!sameTarget) {
                 toPath = toHit.targetPath
-                var plan = StarMapPathPlanner.planCrossLayerRelation(fromPath, toPath)
+                var plan = planCrossLayerConnection(fromPath, toPath)
                 var host = plan && rootContent
                         ? rootContent.findContentByPathSegments(plan.hostSegments)
                         : null
-                plan = bindPlanToHost(plan, host)
-                if (plan) {
+                if (plan && host) {
                     hostPathKey = host.scenePathKey
-                    hostStarmapId = host.finalStarmapId
+                    hostStarmapId = plan.hostStarmapId
                     if (ic.linkExistingId !== "" && ic.linkExistingHostOwner) {
                         action = "migrate"
                         var oldHost = ic.linkExistingHostOwner

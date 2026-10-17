@@ -25,11 +25,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.xiwei.sujian.app.presentation.layout.AndroidLayoutSpec
-import com.xiwei.sujian.app.presentation.screen.SujianChromeSpec
 import com.xiwei.sujian.core.designsystem.component.SujianSnackbar
 import com.xiwei.sujian.core.designsystem.component.SujianTopAppBar
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
+import com.xiwei.sujian.feature.project.ui.SujianChromeSpec
 
 /** compact 底栏 — 一级入口只保留 作品/星图/统计（#597 评论问题一）。 */
 @Composable
@@ -212,7 +211,7 @@ internal data class SujianTopLevelSelection(
 )
 
 /**
- * #628 验收点 6：根据 [AndroidLayoutSpec.useBottomNavigation] 选择 compact 或 wide scaffold。
+ * #628 验收点 6：根据 [useBottomNavigation] 选择 compact 或 wide scaffold。
  * 提取以降低 [SujianNavigationSuite] 行数 — 顶栏归属由 showOuterTopBar 统一判定。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -220,14 +219,14 @@ internal data class SujianTopLevelSelection(
 @Suppress("LongParameterList") // #641 评论 问题5：7 参数达 threshold，函数级 suppress（既有先例）
 internal fun SujianNavScaffoldContent(
     modifier: Modifier,
-    layoutSpec: AndroidLayoutSpec,
+    useBottomNavigation: Boolean,
     chrome: SujianChromeSpec,
     scaffoldChrome: SujianNavScaffoldChrome,
     selection: SujianTopLevelSelection,
     navDisplayContent: @Composable () -> Unit,
     containerColor: androidx.compose.ui.graphics.Color,
 ) {
-    if (layoutSpec.useBottomNavigation) {
+    if (useBottomNavigation) {
         SujianCompactNavScaffold(
             modifier = modifier,
             topBarInfo = scaffoldChrome.topBarInfo,

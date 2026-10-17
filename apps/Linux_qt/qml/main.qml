@@ -225,22 +225,6 @@ Kirigami.ApplicationWindow {
 
     property string previousEditorText: ""
 
-    // ── 布局契约驱动（#610）：Qt 侧按本平台窗口系统算能力，再套 Core 契约 ──
-    property var layoutPlan: null
-
-    function applyLayoutPlan() {
-        if (appBackend === null) return;
-        var w = window.width;
-        var h = window.height;
-        var plan = appBackend.resolve_layout(w, h);
-        if (plan) {
-            window.layoutPlan = plan;
-        }
-    }
-
-    onWidthChanged: window.applyLayoutPlan()
-    onHeightChanged: window.applyLayoutPlan()
-
     SystemPalette {
         id: systemPalette
         colorGroup: SystemPalette.Active
@@ -601,7 +585,6 @@ Kirigami.ApplicationWindow {
                 tree: window.appState.tree || []
                 aiCapable: settingsBackend.ai_available
                 aiEnabled: settingsBackend.ai_enabled
-                layoutPlan: window.layoutPlan
 
                 onOpenStarmapWorkspace: function(smId, smTitle) {
                     // Issue #796 评论 5887280405: 从 Hub 星图列表点卡片进入根星图，清空栈。
@@ -672,7 +655,6 @@ Kirigami.ApplicationWindow {
                 appState: window.appState
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId
-                layoutPlan: window.layoutPlan
                 // Issue #757 评论 5818193510 第 5 点：传入 syncBackend 给 WritingWorkspace，
                 // 用于监听同步完成信号并在冲突产生时打开临时冲突侧栏。
                 syncBackendRef: syncBackend
@@ -855,10 +837,8 @@ Kirigami.ApplicationWindow {
         active: false
         sourceComponent: SettingsDialog {
             theme: designTokens
-            // Issue #825：设置面板消费 Core 的 WorkspaceLayoutMode。
-            // Workbench → 大号悬浮面板（顶部搜索 + 两列分组）；
-            // SinglePane → 原来的窄对话框。两种形态都还是同一个 Dialog。
-            layoutPlan: window.layoutPlan
+            // Issue #920：设置面板是否为宽屏两列由面板自身按宽度断点决定，
+            // 不再从 Core 布局契约注入 layoutPlan。
             settingsBackendRef: settingsBackend
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend

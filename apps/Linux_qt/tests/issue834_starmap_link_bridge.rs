@@ -5,7 +5,8 @@
 //! 2. backend/starmap_backend/links.rs 存在并注册为 qt_method。
 //! 3. GraphController 有 addLink/updateLink/deleteLink/listLinks/createLinkWithPaths。
 //! 4. InteractionController 有 linkArmed/connectArmed/beginLinkArmed/beginConnectFromMenu/cancelArmed。
-//! 5. PathPlanner 用通用 planCrossLayerRelation（Edge/Link 共用，无第二套 LCA）。
+//! 5. 跨层宿主规划收回 Core：PathPlanner 不再持有 LCA 逻辑，SceneContent 调
+//!    plan_cross_layer_connection。
 //! 6. SceneContent 有 finishLink/commitLinkWithPaths/listLinksForSource。
 //! 7. Canvas：hyperlinkDialog 已删，linkDialog 已建；菜单有"内部链接"和"连线"；
 //!    signal 改名 visualFocusChanged（无 focusChanged 撞名）。
@@ -113,15 +114,19 @@ fn interaction_armed_state_present() {
 }
 
 #[test]
-fn planner_uses_universal_relation_name() {
+fn planner_no_longer_owns_host_planning() {
     let planner = read_src(PLANNER);
     assert!(
-        planner.contains("function planCrossLayerRelation("),
-        "PathPlanner 缺 planCrossLayerRelation"
+        !planner.contains("function planCrossLayerRelation("),
+        "宿主规划已收回 Core，PathPlanner 不得再持有 planCrossLayerRelation"
     );
     assert!(
-        !planner.contains("function planCrossLayerEdge("),
-        "PathPlanner 仍残留 planCrossLayerEdge 定义"
+        !planner.contains("planCrossLayerEdge"),
+        "PathPlanner 不得再持有 planCrossLayerEdge 定义"
+    );
+    assert!(
+        planner.contains("function uiInstanceIdOfSegment("),
+        "PathPlanner 仍应保留渲染需要的 UI instanceId 映射"
     );
 }
 
@@ -135,10 +140,10 @@ fn scene_content_link_commit_present() {
     ] {
         assert!(sc.contains(f), "SceneContent 缺 {}", f);
     }
-    // 调用方用 planCrossLayerRelation
+    // 宿主规划统一走 Core 的 plan_cross_layer_connection。
     assert!(
-        sc.contains("planCrossLayerRelation"),
-        "SceneContent 未用 planCrossLayerRelation"
+        sc.contains("planCrossLayerConnection(fromPath, toPath)"),
+        "SceneContent 未用 Core 的跨层宿主规划"
     );
 }
 

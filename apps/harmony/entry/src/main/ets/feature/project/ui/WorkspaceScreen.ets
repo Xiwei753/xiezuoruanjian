@@ -11,12 +11,12 @@ import { AppContinuationService } from '../../../platform/continuity/AppContinua
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../presentation/ProjectWorkspaceViewModel'
-import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ActionTarget, ActionRole, ScreenRole, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
+import { WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWorkspaceDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWorkspaceDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
-import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 
 /** Issue #827 评论 1 第 7 点：确认框内容最大宽度（vp），与 HomeScreen 同口径。
  *  原来写 .width('80%')，宽屏上会被拉到近 1000vp 宽。 */
@@ -61,10 +61,7 @@ export struct WorkspaceScreen {
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     // Issue #905：窄屏恢复 HDS 原生标题栏，页头动作由 HdsWorkspaceDestinationApi23 的
     // stackBuilder 自绘。这里的 headerActions 只供 API < 23 的 NavDestination.menus 兜底。
-    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectWorkspace)
-    if (policy !== null) {
-      this.headerActions = policy.actionSlots
-    }
+    this.headerActions = resolveScreenPolicy(ScreenRole.ProjectWorkspace).actionSlots
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {

@@ -14,6 +14,8 @@
 //! 不再需要独立的适配器层。
 
 pub mod clipboard_focus_adapter;
+/// Issue #920：Qt 平台本地桌面设置（窗口几何 + 侧栏/编辑器宽度）。
+pub mod desktop_settings;
 pub mod runtime_environment;
 pub mod screen_geometry;
 pub mod utf16_converter;

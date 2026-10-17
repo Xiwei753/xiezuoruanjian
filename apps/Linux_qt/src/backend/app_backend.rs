@@ -3,10 +3,9 @@
 // =============================================================================
 //
 // 引用了什么：
-// - qmetaobject：提供 Qt JSON 对象（QJsonObject, QJsonArray）与常规 QObject 属性机制。
+// - qmetaobject：提供 Qt JSON 对象（QJsonArray）与常规 QObject 属性机制。
 // - rfd::FileDialog：调用桌面系统原生文件选择对话框（如新建/打开工作区）。
 // - writer_core::api::WriterCoreApi：核心库对外的统一 API 入口。
-// - super::json_utils：JSON 工具函数库，用于进行 DTO ↔ QJsonObject 转换。
 // - crate::*：引入 starmap_bridge, sync_bridge, writing_bridge 以调用各个领域的桥接函数。
 //
 // 干什么的：
@@ -32,13 +31,14 @@ use writer_core::api::WriterCoreApi;
 use std::sync::Arc;
 use writer_core::sync::SyncCancellationToken;
 
+use crate::{starmap_bridge, writing_bridge};
+
+// 这些 JSON 工具由 app_backend 的子模块（editor_backend / chapter_operations /
+// writing_stats 等）通过 `use super::*` 消费，导入放在父模块统一提供。
 use super::json_utils::{
     bridge_error_object, bridge_success_object, qjson_array_data_from_json, qjson_object_from_json,
     serde_to_qjson_object,
 };
-use super::linux_qt_layout_plan_dto::LinuxQtLayoutPlanDto;
-use super::linux_qt_workbench_plan_dto::LinuxQtWorkbenchPlanDto;
-use crate::{starmap_bridge, writing_bridge};
 
 cpp! {{
     #include <QtGlobal>
@@ -431,28 +431,6 @@ pub struct AppBackend {
     // alpha 阶段 diagnostics 默认 true（与 core settings 和 diagnostics 全局 AtomicBool 对齐）
     pub(crate) current_setting_diagnostics_enabled: bool,
     pub(crate) current_setting_diagnostics_verbose: bool,
-
-    // ── Layout Contract（#610：Qt 侧先按本平台窗口系统算能力，再套 Core 契约） ──
-    #[allow(dead_code)]
-    resolve_layout: qt_method!(fn(&self, width_vp: f64, height_vp: f64) -> QJsonObject),
-
-    // ── Screen Contract ──
-    #[allow(dead_code)]
-    resolve_screen_policy: qt_method!(fn(&self, screen_role: QString) -> QJsonObject),
-
-    // ── Workbench Layout Contract（#825：七角色 bounds 由 Core 决定） ──
-    #[allow(dead_code)]
-    resolve_workbench_layout: qt_method!(
-        fn(
-            &self,
-            width_vp: f64,
-            height_vp: f64,
-            chapter_navigation_visible: bool,
-            tool_pane_visible: bool,
-            chapter_navigation_width_vp: f64,
-            tool_pane_width_vp: f64,
-        ) -> QJsonObject
-    ),
 }
 
 impl AppBackend {
@@ -660,131 +638,6 @@ impl AppBackend {
 
     fn set_ai_enabled(&mut self, val: bool) {
         self.current_ai_enabled = val;
-    }
-
-    // ── Layout Contract ──
-    //
-    // ⚠️ 边界约束（#610）⚠️
-    //
-    // resolve_layout() 产出的布局 DTO 只决定壳层布局：
-    //   - shellMode（单栏/双栏/三栏）
-    //   - contentMaxWidthVp（编辑纸面最大宽度）
-    //   - contentPaddingVp（页面内边距）
-    //   - showPrimaryNavigation / visible pane roles
-    //
-    // 布局 DTO 绝对不干预编辑器底层渲染：
-    //   - 不传递到 SujianEditorItem 的 QSG 渲染线程
-    //   - 不影响光标位置、IME 输入、动画帧率
-    //   - 不改变 QTextLayout 的排版计算
-    //   - 不驱动 EditorAnimationOverlay 的动画属性
-    //
-    // 编辑器渲染由 EditorController + SujianEditorItem 独立管理，
-    // 遵守 Qt QSG 线程边界，不受布局 DTO 影响。
-    //
-    // Qt 是桌面端：鼠标为主、无软键盘、无折叠屏，因此只把窗口宽高换算成
-    // 可用栏数（Qt 平台断点），再调 Core 解析产品壳层契约。
-
-    fn resolve_layout(&self, width_vp: f64, height_vp: f64) -> QJsonObject {
-        use writer_core::presentation::layout::resolver::WindowViewport;
-
-        let viewport = WindowViewport {
-            width_dp: width_vp as f32,
-            height_dp: height_vp as f32,
-            // Qt 桌面端无折叠屏/系统遮挡（与上方"无折叠屏"注释一致，#628 验收点 5）。
-            occlusions: Vec::new(),
-        };
-
-        let contract = writer_core::presentation::layout::resolve_layout(&viewport);
-        // #628：show_primary_navigation 改由 ScreenPolicy 提供。
-        // 桌面端默认显示一级导航；具体页面（Writing/Settings）的隐藏由
-        // resolve_screen_policy 返回的 ScreenPolicy.show_primary_navigation 决定。
-        let dto = LinuxQtLayoutPlanDto::from_contract(&contract, width_vp as f32, true);
-        let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
-        qjson_object_from_json(&json)
-    }
-
-    /// 根据页面角色解析动作槽位列表（#610 / #628：动作区域/顺序是产品语义，不随壳层变化；
-    /// ScreenPolicy 含 show_primary_navigation 由 Rust 决定）
-    ///
-    /// QML 调用：backend.resolve_screen_policy("Writing")
-    /// 返回：{ screenRole: "Writing", actionSlots: [...], showPrimaryNavigation: bool }
-    fn resolve_screen_policy(&self, screen_role: QString) -> QJsonObject {
-        use writer_core::presentation::screen::{resolve_screen_policy, ScreenRole};
-
-        let role = match screen_role.to_string().as_str() {
-            "Home" => ScreenRole::Home,
-            "ProjectList" => ScreenRole::ProjectList,
-            "ProjectWorkspace" => ScreenRole::ProjectWorkspace,
-            "Writing" => ScreenRole::Writing,
-            "StarMap" => ScreenRole::StarMap,
-            "Stats" => ScreenRole::Stats,
-            "Settings" => ScreenRole::Settings,
-            "Sync" => ScreenRole::Sync,
-            _ => ScreenRole::Home,
-        };
-
-        let policy = resolve_screen_policy(role);
-
-        use writer_core::api::types::screen_policy::*;
-        let dto = ScreenPolicyDto {
-            screen_role: policy.screen_role.into(),
-            action_slots: policy.action_slots.into_iter().map(Into::into).collect(),
-            show_primary_navigation: policy.show_primary_navigation,
-        };
-
-        let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
-        qjson_object_from_json(&json)
-    }
-
-    /// Issue #825：解析宽屏工作台七角色布局（#610 契约链路的第二步）。
-    ///
-    /// QML 调用：backend.resolve_workbench_layout(width, height, chapterNavVisible, toolPaneVisible)
-    ///
-    /// Core 的 `resolve_workbench_layout` 决定：
-    /// - 最终产品模式（Workbench / SinglePane）——放不下七角色时明确退回 SinglePane；
-    /// - 七个角色的最终 bounds（ToolbarLeading / ToolbarCenter / ToolbarTrailing /
-    ///   ChapterNavigation / Editor / ToolPane / ToolRail）。
-    ///
-    /// Qt 侧只做 camelCase 直通，不再用 `SplitView.preferredWidth` 自己决定三栏宽度。
-    ///
-    /// `chapter_navigation_visible` / `tool_pane_visible` 是端侧局部 UI 状态
-    /// （左右 pane 收起与否），只作为重算 plan 的输入，不落 Core、不进同步。
-    fn resolve_workbench_layout(
-        &self,
-        width_vp: f64,
-        height_vp: f64,
-        chapter_navigation_visible: bool,
-        tool_pane_visible: bool,
-        chapter_navigation_width_vp: f64,
-        tool_pane_width_vp: f64,
-    ) -> QJsonObject {
-        use writer_core::presentation::layout::resolver::{
-            WindowViewport, WorkbenchPaneWidths, WorkbenchVisibility,
-        };
-
-        let viewport = WindowViewport {
-            width_dp: width_vp as f32,
-            height_dp: height_vp as f32,
-            // Qt 桌面端无折叠屏/系统遮挡，与 resolve_layout 保持同一口径。
-            occlusions: Vec::new(),
-        };
-        let visibility = WorkbenchVisibility {
-            chapter_navigation_visible,
-            tool_pane_visible,
-        };
-        let pane_widths = WorkbenchPaneWidths {
-            chapter_navigation_dp: chapter_navigation_width_vp as f32,
-            tool_pane_dp: tool_pane_width_vp as f32,
-        };
-
-        let plan = writer_core::presentation::layout::resolve_workbench_layout_with_pane_widths(
-            &viewport,
-            visibility,
-            pane_widths,
-        );
-        let dto = LinuxQtWorkbenchPlanDto::from_plan(&plan);
-        let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
-        qjson_object_from_json(&json)
     }
 
     fn query_system_color_scheme(&mut self) {

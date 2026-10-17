@@ -1,10 +1,9 @@
 import { IWriterCoreBridge } from '../../../main/ets/corebridge/IWriterCoreBridge'
 import { EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorDtos'
-import { WindowViewport, LayoutContract, LayoutMetrics, ScreenPolicy, ActionSlot, ScreenRole, ActionRole, ActionRegion, ActionTarget, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement } from '../../../main/ets/corebridge/dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult } from '../../../main/ets/corebridge/dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
@@ -39,8 +38,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     autoSaveEnabled: true,
     editorFontSize: 16,
     editorLineSpacingMultiplier: 1.8,
-    windowWidth: 720,
-    windowHeight: 1280,
     autoSaveDelayMs: 3000,
     autoIndentEnabled: true,
     autoIndentWidth: 2,
@@ -50,8 +47,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
     statsDeviceId: null,
-    desktopSidebarWidth: 280,
-    desktopEditorWidth: 820,
     editorCoordinatedTextCursorAnimationEnabled: false,
     diagnosticsEnabled: false,
     diagnosticsVerbose: false
@@ -592,6 +587,19 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(resolved)
   }
 
+  async planStarMapCrossLayerConnection(from: StarMapTargetPath,
+    to: StarMapTargetPath): Promise<ResultEnvelope<StarMapCrossLayerConnectionPlan>> {
+    await this.delay(100)
+    // mock：宿主固定为起点根星图，不做 LCA（真实宿主由 Core 决定）。
+    const plan: StarMapCrossLayerConnectionPlan = {
+      hostStarmapId: from.starmapId,
+      hostSegments: [],
+      from: from,
+      to: to
+    }
+    return this.success(plan)
+  }
+
   // Settings methods
   async getLocalSettings(): Promise<ResultEnvelope<LocalSettings>> {
     await this.delay(100)
@@ -606,8 +614,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       autoSaveEnabled: this.mockSettings.autoSaveEnabled,
       editorFontSize: this.mockSettings.editorFontSize,
       editorLineSpacingMultiplier: this.mockSettings.editorLineSpacingMultiplier,
-      windowWidth: this.mockSettings.windowWidth,
-      windowHeight: this.mockSettings.windowHeight,
       autoSaveDelayMs: this.mockSettings.autoSaveDelayMs,
       autoIndentEnabled: this.mockSettings.autoIndentEnabled,
       autoIndentWidth: this.mockSettings.autoIndentWidth,
@@ -617,8 +623,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       editorSmoothCursorDurationMs: this.mockSettings.editorSmoothCursorDurationMs,
       aiEnabled: this.mockSettings.aiEnabled,
       statsDeviceId: this.mockSettings.statsDeviceId,
-      desktopSidebarWidth: this.mockSettings.desktopSidebarWidth,
-      desktopEditorWidth: this.mockSettings.desktopEditorWidth,
       editorCoordinatedTextCursorAnimationEnabled: this.mockSettings.editorCoordinatedTextCursorAnimationEnabled,
       diagnosticsEnabled: this.mockSettings.diagnosticsEnabled,
       diagnosticsVerbose: this.mockSettings.diagnosticsVerbose
@@ -639,8 +643,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       autoSaveEnabled: settings.autoSaveEnabled,
       editorFontSize: settings.editorFontSize,
       editorLineSpacingMultiplier: settings.editorLineSpacingMultiplier,
-      windowWidth: settings.windowWidth,
-      windowHeight: settings.windowHeight,
       autoSaveDelayMs: settings.autoSaveDelayMs,
       autoIndentEnabled: settings.autoIndentEnabled,
       autoIndentWidth: settings.autoIndentWidth,
@@ -650,8 +652,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       editorSmoothCursorDurationMs: settings.editorSmoothCursorDurationMs,
       aiEnabled: settings.aiEnabled,
       statsDeviceId: settings.statsDeviceId,
-      desktopSidebarWidth: settings.desktopSidebarWidth,
-      desktopEditorWidth: settings.desktopEditorWidth,
       editorCoordinatedTextCursorAnimationEnabled: settings.editorCoordinatedTextCursorAnimationEnabled,
       diagnosticsEnabled: settings.diagnosticsEnabled,
       diagnosticsVerbose: settings.diagnosticsVerbose
@@ -852,144 +852,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
     await this.delay(100)
     return this.success([] as RecentEdit[])
-  }
-
-  // Layout Contract methods — mock 内联实现（与 Core resolve_layout 等价，仅用于测试源码）
-  resolveLayout(viewport: WindowViewport): Promise<ResultEnvelope<LayoutContract>> {
-    const contract = this.mockResolveLayoutFromViewport(viewport)
-    return Promise.resolve({
-      success: true,
-      data: contract } as ResultEnvelope<LayoutContract>)
-  }
-
-  // 与 Core resolve_layout() 等价的纯函数，仅 mock 测试源码使用。
-  // 生产代码走 NativeWriterCoreBridge.resolveLayout() → Core FFI，不经过此处。
-  // 断点表见 core/writer_core/src/presentation/layout/breakpoints.rs；
-  // 决策表见同目录 resolver.rs 模块注释。
-  private mockResolveLayoutFromViewport(viewport: WindowViewport): LayoutContract {
-    const width = viewport.widthDp
-    const height = viewport.heightDp
-
-    let shellMode: ShellMode = ShellMode.SinglePane
-    let workspaceLayoutMode: WorkspaceLayoutMode = WorkspaceLayoutMode.SinglePane
-    let placement: PrimaryNavigationPlacement = PrimaryNavigationPlacement.Bottom
-
-    if (width >= 840) {
-      shellMode = width >= 1200 ? ShellMode.ThreePane : ShellMode.TwoPane
-      workspaceLayoutMode = WorkspaceLayoutMode.Workbench
-      placement = PrimaryNavigationPlacement.Side
-    } else if (width >= 600 && height >= 480) {
-      shellMode = ShellMode.TwoPane
-      workspaceLayoutMode = WorkspaceLayoutMode.Workbench
-    }
-
-    return {
-      shellMode: shellMode,
-      workspaceLayoutMode: workspaceLayoutMode,
-      primaryNavigationPlacement: placement,
-      metrics: this.mockLayoutMetrics()
-    }
-  }
-
-  // Core LayoutMetrics::default()（core/writer_core/src/presentation/layout/metrics.rs）。
-  private mockLayoutMetrics(): LayoutMetrics {
-    return {
-      listPaneWidthDp: 320,
-      projectCardMinWidthDp: 180,
-      toolPaneWidthDp: 240,
-      toolRailWidthDp: 56,
-      editorMinWidthDp: 240,
-      toolbarHeightDp: 64,
-      toolbarLeadingWidthDp: 200,
-      toolbarTrailingWidthDp: 200,
-      listPaneMinWidthDp: 200,
-      toolPaneMinWidthDp: 200
-    }
-  }
-
-  // Screen Policy methods — mock 返回与 Core 一致的策略（#610：区域/顺序是产品语义）
-  resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>> {
-    const policy = this.mockResolveScreenPolicy(screenRole)
-    return Promise.resolve(this.success(policy))
-  }
-
-  private mockResolveScreenPolicy(screenRole: ScreenRole): ScreenPolicy {
-    const showPrimaryNavigation = !(screenRole === ScreenRole.Writing ||
-      screenRole === ScreenRole.Settings || screenRole === ScreenRole.StarMapDetail)
-    return {
-      screenRole: screenRole,
-      actionSlots: this.mockBaseSlots(screenRole),
-      showPrimaryNavigation: showPrimaryNavigation
-    }
-  }
-
-  private mockBaseSlots(screenRole: ScreenRole): ActionSlot[] {
-    switch (screenRole) {
-      case ScreenRole.Home:
-        return [
-          { role: ActionRole.Search, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
-          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
-        ]
-      case ScreenRole.ProjectList:
-        return [
-          // #610 评论五：作品列表顶栏右侧与 ProjectWorkspace 一致，
-          // 同步 / 搜索 / 设置（order 升序）。
-          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Search, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
-          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false },
-          // #610 评论四：新建作品是页面主操作（PrimaryAction）。
-          { role: ActionRole.CreateProject, target: ActionTarget.Project, region: ActionRegion.PrimaryAction, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Delete, target: ActionTarget.Project, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
-          { role: ActionRole.Rename, target: ActionTarget.Project, region: ActionRegion.Context, order: 20, requiresConfirmation: false }
-        ]
-      case ScreenRole.ProjectWorkspace:
-        return [
-          // #610 评论五：作品工作区顶栏左侧返回动作。
-          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Search, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
-          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false },
-          { role: ActionRole.CreateVolume, target: ActionTarget.Project, region: ActionRegion.ListHeader, order: 10, requiresConfirmation: false },
-          { role: ActionRole.CreateChapter, target: ActionTarget.Volume, region: ActionRegion.ItemTrailing, order: 10, requiresConfirmation: false },
-          { role: ActionRole.CreateChapter, target: ActionTarget.Volume, region: ActionRegion.EmptyState, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Delete, target: ActionTarget.Volume, region: ActionRegion.Context, order: 10, requiresConfirmation: true },
-          { role: ActionRole.Delete, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 20, requiresConfirmation: true },
-          { role: ActionRole.Rename, target: ActionTarget.Volume, region: ActionRegion.Context, order: 30, requiresConfirmation: false },
-          { role: ActionRole.Rename, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 40, requiresConfirmation: false },
-          // #610 评论四：卷/章节的真实顺序动作（上移/下移）。
-          { role: ActionRole.MoveEarlier, target: ActionTarget.Volume, region: ActionRegion.Context, order: 50, requiresConfirmation: false },
-          { role: ActionRole.MoveLater, target: ActionTarget.Volume, region: ActionRegion.Context, order: 60, requiresConfirmation: false },
-          { role: ActionRole.MoveEarlier, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 70, requiresConfirmation: false },
-          { role: ActionRole.MoveLater, target: ActionTarget.Chapter, region: ActionRegion.Context, order: 80, requiresConfirmation: false }
-        ]
-      case ScreenRole.Writing:
-        return [
-          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
-          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
-        ]
-      case ScreenRole.StarMap:
-      case ScreenRole.Stats:
-        return []
-      case ScreenRole.StarMapDetail:
-        return [
-          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Search, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 20, requiresConfirmation: false },
-          { role: ActionRole.Settings, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 30, requiresConfirmation: false }
-        ]
-      case ScreenRole.Settings:
-        return [
-          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false }
-        ]
-      case ScreenRole.Sync:
-        return [
-          { role: ActionRole.Back, target: ActionTarget.App, region: ActionRegion.HeaderLeading, order: 10, requiresConfirmation: false },
-          { role: ActionRole.Sync, target: ActionTarget.App, region: ActionRegion.HeaderTrailing, order: 10, requiresConfirmation: false }
-        ]
-      default:
-        return []
-    }
   }
 
   // Native Status methods

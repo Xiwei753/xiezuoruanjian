@@ -4,3 +4,7 @@
 
 export const PRIMARY_FAB_SIZE_VP: number = 56
 export const PRIMARY_FAB_BOTTOM_INSET_VP: number = 112
+
+// 宽屏作品卡的最小宽度（vp）。原由 Core LayoutMetrics.projectCardMinWidthDp 提供，
+// Issue #920 D 后布局尺寸归平台所有，这里作为平台侧的单一来源。
+export const PROJECT_CARD_MIN_WIDTH_VP: number = 180
