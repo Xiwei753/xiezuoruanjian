@@ -152,3 +152,98 @@ pub unsafe extern "C" fn writer_core_record_editor_change_stats(event_json: *con
     })
     .is_ok()
 }
+
+/// 单作品写作档案（#934）：开写日期、累计人工码字、单日最高纪录、写作天数。
+///
+/// # Safety
+/// `project_id` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_project_writing_lifetime_stats(
+    project_id: *const c_char,
+) -> *mut c_char {
+    let project_id = match c_str_to_rust(project_id) {
+        Ok(id) if !id.is_empty() => id,
+        _ => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                "project_id must be a non-empty UTF-8 string",
+            )
+        }
+    };
+    match with_app_service(|svc| {
+        svc.get_project_writing_lifetime_stats(project_id)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("UNKNOWN_ERROR", &e),
+    }
+}
+
+/// 正文保存 + 未确认统计事件一次提交。
+///
+/// 平台端把「这次保存的正文快照」和「该正文版本之前未确认的统计事件」一起送来。
+/// Core 先走既有正文保存事务，成功后按稳定 `event_id` 幂等记录事件：
+/// 正文保存失败一条事件都不记；重复提交同一事件只落一次、只计一次字数。
+///
+/// # Safety
+/// 前四个参数必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串；`content` 可为空串。
+/// `events_json` 可为 NULL 或空串（没有要附带提交的事件），否则必须是
+/// `[EditorChangeStatsInputDto]` 的 JSON 数组。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_chapter_with_stats(
+    project_id: *const c_char,
+    volume_id: *const c_char,
+    chapter_id: *const c_char,
+    content: *const c_char,
+    events_json: *const c_char,
+) -> *mut c_char {
+    let project_id = match c_str_to_rust(project_id) {
+        Ok(id) if !id.is_empty() => id,
+        _ => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                "project_id must be a non-empty UTF-8 string",
+            )
+        }
+    };
+    let volume_id = match c_str_to_rust(volume_id) {
+        Ok(id) if !id.is_empty() => id,
+        _ => return err_json("INVALID_ARGUMENT", "volume_id must be a non-empty UTF-8 string"),
+    };
+    let chapter_id = match c_str_to_rust(chapter_id) {
+        Ok(id) if !id.is_empty() => id,
+        _ => return err_json("INVALID_ARGUMENT", "chapter_id must be a non-empty UTF-8 string"),
+    };
+    let content = match c_str_to_rust(content) {
+        Ok(text) => text,
+        Err(_) => return err_json("INVALID_ARGUMENT", "content must be a UTF-8 string"),
+    };
+    // NULL 与空串都表示「没有附带事件」，无效 UTF-8 才报错。
+    let events_json = if events_json.is_null() {
+        String::new()
+    } else {
+        match c_str_to_rust(events_json) {
+            Ok(json) => json,
+            Err(_) => {
+                return err_json("INVALID_ARGUMENT", "events_json must be a UTF-8 string")
+            }
+        }
+    };
+    let events: Vec<crate::api::EditorChangeStatsInputDto> = if events_json.trim().is_empty() {
+        Vec::new()
+    } else {
+        match serde_json::from_str(&events_json) {
+            Ok(events) => events,
+            Err(e) => return err_json("INVALID_ARGUMENT", &format!("invalid stats events: {}", e)),
+        }
+    };
+    match with_app_service(|svc| {
+        svc.save_chapter_with_editor_stats(project_id, volume_id, chapter_id, content, events)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("UNKNOWN_ERROR", &e),
+    }
+}

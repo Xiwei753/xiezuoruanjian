@@ -46,6 +46,10 @@ Rectangle {
     // Issue #709 评论 issue-body-709: 传入 themeController 给 EditorController，
     // 使 logRenderColorProbe 能读取 ThemeController runtime state。
     property var themeController: null
+    // Issue #933: 显式注入的设置 / 工作区后端引用，替代页面里裸查全局
+    // context property（settingsBackend / workspaceBackend）。由 main.qml 传入。
+    property var settingsBackendRef: null
+    property var workspaceBackendRef: null
     property var appState: ({})
     // Issue #835：星图后端透传给 RightDrawer（任务 4 已为 RightDrawer 加 starmapBackendRef 属性）。
     // 由 main.qml 注入，WritingWorkspace 只做透传，不在本地伪造星图业务状态。
@@ -153,13 +157,13 @@ Rectangle {
     // 启动恢复用户上次拖拽保存的栏宽（只做下界钳制，不因当前窗口暂时变窄而
     // 永久改写保存的期望值；实际显示宽度由 SplitView 自己约束）。
     function restorePersistedPaneWidths() {
-        if (!settingsBackend)
+        if (!root.settingsBackendRef)
             return
-        var storedSidebar = settingsBackend.setting_desktop_sidebar_width
+        var storedSidebar = root.settingsBackendRef.setting_desktop_sidebar_width
         if (storedSidebar !== undefined && storedSidebar > 0) {
             sidebarRect.SplitView.preferredWidth = Math.max(root.listPaneMinWidth, storedSidebar)
         }
-        var storedTool = settingsBackend.setting_desktop_tool_pane_width
+        var storedTool = root.settingsBackendRef.setting_desktop_tool_pane_width
         if (storedTool !== undefined && storedTool > 0) {
             rightDrawerRect.SplitView.preferredWidth = Math.max(root.toolPaneMinWidth, storedTool)
         }
@@ -169,17 +173,17 @@ Rectangle {
     // 只在拖动结束（!resizing）调用一次，不在每一帧写 JSON；只写当前可见栏，
     // 收起栏的原宽度仍由 SplitView.preferredWidth 保留。
     function persistPaneWidths() {
-        if (!settingsBackend)
+        if (!root.settingsBackendRef)
             return
         if (sidebarRect.visible && sidebarRect.SplitView.preferredWidth > 0) {
-            settingsBackend.setting_desktop_sidebar_width =
+            root.settingsBackendRef.setting_desktop_sidebar_width =
                 Math.max(root.listPaneMinWidth, sidebarRect.SplitView.preferredWidth)
         }
         if (rightDrawerRect.visible && rightDrawerRect.SplitView.preferredWidth > 0) {
-            settingsBackend.setting_desktop_tool_pane_width =
+            root.settingsBackendRef.setting_desktop_tool_pane_width =
                 Math.max(root.toolPaneMinWidth, rightDrawerRect.SplitView.preferredWidth)
         }
-        settingsBackend.debounced_save_local_settings()
+        root.settingsBackendRef.debounced_save_local_settings()
     }
 
     // 展开侧 pane 是一个「请求」，不是直接写状态：一个属性都不改就把候选组合
@@ -347,29 +351,42 @@ Rectangle {
     readonly property bool saveStatusIsError: /失败|error|failed/i.test(editorController.saveStatus || "")
 
     // 一次性刷新状态栏的左段（速度）和中段（今日进度）。
+    // Issue #935：同样改为异步请求——计算在 stats worker 串行队列里完成，
+    // 结果经 editorBackendRef 的 writing_status_ready / writing_status_failed
+    // 信号发回，requestId 过滤迟到结果；UI 线程不再同步扫描事件文件。
+    // 左段用 Core 当前写作速度（窗口 60 秒），不用速度曲线的最后一个桶——
+    // 曲线桶只生成到最后一个输入事件，停笔后会一直挂着停笔前的非零值。
+    // 中段用 Core 的「今日」汇总，不自己拼「今天是哪一天」：日历日语义
+    // 只留在 Core 一处，端侧再拼一份本地日期会在凌晨提前清零。
     // 查询失败保持上一次的值，不清零——Core 拿不到不是"今天写了 0 字"。
+    property int statusRequestSerial: 0
+    property int pendingStatusRequestId: 0
+
     function refreshWritingStatusData() {
         var be = root.editorBackendRef
         if (!be) return
+        root.statusRequestSerial += 1
+        root.pendingStatusRequestId = root.statusRequestSerial
+        // 只入队，不在 UI 线程等 result；worker 先处理完此前已入队的编辑事实，
+        // 再生成「实时速度 + 今日汇总」快照。
+        be.request_writing_status(root.statusRequestSerial, root.statusSpeedWindowSeconds)
+    }
 
-        // 左段：Core 当前写作速度。
-        // 不用写作速度曲线的最后一个桶——曲线桶只生成到最后一个输入事件，
-        // 停笔后它会一直挂着停笔前的非零值。也别在这里判断桶是否过期或强制
-        // flush 统计事件，平台 writer queue + raw JSONL 是唯一事实源。
-        // 失败保持上一次的值，不清零：Core 拿不到不等于"这一刻没写字"。
-        var speed = be.get_current_writing_speed(root.statusSpeedWindowSeconds)
-        if (speed && speed.charsPerMinute !== undefined) {
-            root.latestCharsPerMinute = Math.round(speed.charsPerMinute)
+    Connections {
+        target: root.editorBackendRef
+        function onWriting_status_ready(requestId, status) {
+            if (requestId !== root.pendingStatusRequestId) return
+            if (status && status.currentSpeed && status.currentSpeed.charsPerMinute !== undefined) {
+                root.latestCharsPerMinute = Math.round(status.currentSpeed.charsPerMinute)
+            }
+            if (status && status.today && status.today.totalHumanTypedChars !== undefined) {
+                root.todayTypedChars = status.today.totalHumanTypedChars
+            }
         }
-
-        // 中段：今日纯输入字数。
-        // 这里不自己拼"今天是哪一天"（原 todayDateString 已删）：Core 的每日统计
-        // 按事件发生地的本地午夜分桶，端侧再拼一份本地日期，一旦时区口径和 Core
-        // 错开，凌晨就会出现"今日进度提前清零"。日历日语义只留在 Core 一处。
-        // 返回值是 Core JSON 本体（不是 ResultEnvelope），字段是 camelCase。
-        var summary = be.get_today_writing_stats_summary_object()
-        if (summary && summary.totalHumanTypedChars !== undefined) {
-            root.todayTypedChars = summary.totalHumanTypedChars
+        function onWriting_status_failed(requestId, message) {
+            if (requestId !== root.pendingStatusRequestId) return
+            // 保留上一次的值，不清零；只记一笔便于诊断。
+            console.warn("writing status refresh failed:", message)
         }
     }
 
@@ -395,6 +412,8 @@ Rectangle {
         // Issue #709 评论 issue-body-709: 传入 themeController 使
         // logRenderColorProbe 能读取 runtime state。
         themeControllerRef: root.themeController
+        // Issue #933: 设置后端显式传入，替代 EditorController 内裸查全局。
+        settingsBackendRef: root.settingsBackendRef
         onEmptySaveBlocked: function(msg) {
             emptySaveDialogText.text = msg;
             emptySaveDialog.open();
@@ -555,9 +574,9 @@ Rectangle {
         appState: root.appState
 
         // Center 组（WritingFormatGroup）入参
-        currentFontSize: settingsBackend ? settingsBackend.setting_font_size : 16
-        currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
-        firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
+        currentFontSize: root.settingsBackendRef ? root.settingsBackendRef.setting_font_size : 16
+        currentLineSpacing: root.settingsBackendRef ? root.settingsBackendRef.setting_line_spacing : 1.5
+        firstLineIndent: root.settingsBackendRef ? root.settingsBackendRef.setting_auto_indent_enabled : false
         saveStatus: editorController.saveStatus
 
         onBackRequested: root.backToProjects()
@@ -565,21 +584,21 @@ Rectangle {
         onUndoRequested: editorViewport.undo()
         onRedoRequested: editorViewport.redo()
         onFontSizeChanged: function(size) {
-            if (settingsBackend) {
-                settingsBackend.setting_font_size = size;
-                settingsBackend.debounced_save_local_settings();
+            if (root.settingsBackendRef) {
+                root.settingsBackendRef.setting_font_size = size;
+                root.settingsBackendRef.debounced_save_local_settings();
             }
         }
         onLineSpacingChanged: function(spacing) {
-            if (settingsBackend) {
-                settingsBackend.setting_line_spacing = spacing;
-                settingsBackend.debounced_save_local_settings();
+            if (root.settingsBackendRef) {
+                root.settingsBackendRef.setting_line_spacing = spacing;
+                root.settingsBackendRef.debounced_save_local_settings();
             }
         }
         onFirstLineIndentToggled: {
-            if (settingsBackend) {
-                settingsBackend.setting_auto_indent_enabled = !settingsBackend.setting_auto_indent_enabled;
-                settingsBackend.debounced_save_local_settings();
+            if (root.settingsBackendRef) {
+                root.settingsBackendRef.setting_auto_indent_enabled = !root.settingsBackendRef.setting_auto_indent_enabled;
+                root.settingsBackendRef.debounced_save_local_settings();
             }
         }
         onFormatOneClick: editorController.formatText()
@@ -750,7 +769,7 @@ Rectangle {
                             id: editorViewport
                             anchors.fill: paperBg
                             dt: root.dt
-                            settingsBackendRef: settingsBackend
+                            settingsBackendRef: root.settingsBackendRef
                             editorControllerRef: editorController
                             onExplicitClearRequested: editorController.markPotentialExplicitClear()
                         }
@@ -890,7 +909,7 @@ Rectangle {
     }
 
     Connections {
-        target: settingsBackend
+        target: root.settingsBackendRef
         function onSettings_changed() {
             editorController.applyCurrentSettings();
         }
@@ -900,7 +919,7 @@ Rectangle {
     // 主题切换不需要进入 applyCurrentSettings()——正文/选区/光标颜色已通过
     // text_color/selection_color/selected_text_color/cursor_color 绑定自动下发，
     // Rust 侧各自走 color_only_changed() -> request_scene_rebuild()，不会清空动画。
-    // 上面 settingsBackend.onSettings_changed 仍保留，它只保护保存，不控制编辑器动画。
+    // 上面 settingsBackendRef.onSettings_changed 仍保留，它只保护保存，不控制编辑器动画。
 
     Connections {
         target: editorController
@@ -908,8 +927,8 @@ Rectangle {
             if (editorController.chapterId) {
                 root.requestEditorFocus();
                 // 保存导航状态（包含当前章节信息）
-                if (workspaceBackend) {
-                    workspaceBackend.save_last_navigation_state(
+                if (root.workspaceBackendRef) {
+                    root.workspaceBackendRef.save_last_navigation_state(
                         "writing",
                         root.workspaceProjectId || "",
                         editorController.volumeId || "",

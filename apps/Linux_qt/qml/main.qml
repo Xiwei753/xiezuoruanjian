@@ -19,8 +19,9 @@ import QtQuick.Window
 import org.kde.kirigami as Kirigami
 import Sujian 1.0
 
-// Issue #900: 应用壳层迁移到 KDE Kirigami。QQC2 控件风格由 src/main.rs 在
-// QmlEngine 创建前设置为 org.kde.breeze；此处用 Kirigami.ApplicationWindow
+// Issue #900: 应用壳层迁移到 KDE Kirigami。QQC2 控件风格使用 KDE 桌面样式
+// org.kde.desktop（Issue #933：Linux KDE/Plasma 下由已安装的 Breeze + Plasma
+// Integration 自动选择，不再由 src/main.rs 强制指定）；此处用 Kirigami.ApplicationWindow
 // 提供 pageStack/全局工具栏/主题桥。当前内容仍由既有 Loader 路由承载作品库/
 // 写作/星图页面，避免用 Kirigami 页面切换动效驱动正文与光标。
 Kirigami.ApplicationWindow {
@@ -97,8 +98,8 @@ Kirigami.ApplicationWindow {
             Qt.callLater(applyInitialWindowSize)
     }
 
-    // Issue #900: 移除 Material 全局覆写与手工 palette 注入，改用 KDE Breeze
-    // 控件样式的系统调色板。深浅色由 org.kde.breeze 与系统 colorScheme 决定；
+    // Issue #900: 移除 Material 全局覆写与手工 palette 注入，改用 KDE 桌面样式
+    // （org.kde.desktop）的系统调色板。深浅色由 KDE 样式与系统 colorScheme 决定；
     // 应用自有主题 / 编辑区专用色仍由 designTokens 提供给编辑器与星图。
     // pageStack 仅作为 Kirigami 壳层存在，不使用其页面切换动画承载正文路由。
     pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
@@ -644,6 +645,9 @@ Kirigami.ApplicationWindow {
                 dt: designTokens
                 projectBackendRef: projectBackend
                 editorBackendRef: editorBackend
+                // Issue #933：设置/导航后端显式交给写作区，不再由子页面读全局 context property。
+                settingsBackendRef: settingsBackend
+                workspaceBackendRef: workspaceBackend
                 // Issue #835：透传星图后端给 WritingWorkspace，再由它透传给 RightDrawer。
                 starmapBackendRef: starmapBackend
                 // Issue #835 评论 6019713847: 透传真实 StarMapController，RightDrawer 里

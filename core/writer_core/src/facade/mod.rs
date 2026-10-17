@@ -90,6 +90,24 @@ pub struct ChapterOpenResult {
     pub content: String,
 }
 
+/// 单作品写作档案（#934）：作品元数据 + 历史累计人工码字 + 当前正文字数。
+///
+/// 数据源语义分开，不能互相回推：
+/// - `created_at` 来自 `project.json`；`current_word_count` 是现有章节存量；
+/// - `total_human_typed_chars` / `first_written_at_ms` / `best_writing_day` /
+///   `writing_days` 来自本地事件历史（`events.local` 不同步，只是本机可读历史）。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProjectWritingLifetimeStats {
+    pub project_id: String,
+    pub created_at: String,
+    pub first_written_at_ms: Option<i64>,
+    pub current_word_count: u64,
+    pub total_human_typed_chars: u64,
+    pub best_writing_day: Option<String>,
+    pub best_writing_day_chars: u64,
+    pub writing_days: u64,
+}
+
 impl WriterCore {
     pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(app_data_root: P1, projects_root: P2) -> Self {
         Self {
@@ -138,7 +156,9 @@ mod tests {
     fn record_edit(core: &WriterCore, cause: EditorTransactionCause, inserted: u32, deleted: u32) {
         core.record_editor_change_stats(
             "harmony", "proj1", "vol1", "chap1", cause, inserted, deleted,
-        )
+        "",
+        0,
+    )
         .unwrap();
     }
 

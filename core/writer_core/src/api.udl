@@ -630,6 +630,22 @@ dictionary CurrentWritingSpeedDto {
     float chars_per_minute;
 };
 
+// 单作品写作档案（#934）。first_written_at / best_writing_day 用作品事件的
+// 本地业务日（与 Core 日历一致），无历史时为 null；history_scope 说明
+// 历史只覆盖本机可读的 events.local（不参与跨设备同步）。
+// 作品不存在时抛 ProjectNotFound，不会返回「0 字作品」。
+dictionary ProjectWritingLifetimeStatsDto {
+    string project_id;
+    string created_at;
+    string? first_written_at;
+    u64 current_word_count;
+    u64 total_human_typed_chars;
+    string? best_writing_day;
+    u64 best_writing_day_chars;
+    u64 writing_days;
+    string history_scope;
+};
+
 // ============================================================
 // StarMap types
 // ============================================================
@@ -1250,6 +1266,11 @@ interface WriterAppService {
     [Throws=WriterError]
     CurrentWritingSpeedDto get_current_writing_speed(u32 window_seconds);
 
+    // 单作品写作档案：开写日期、累计人工码字、单日最高纪录、写作天数。
+    // 作品不存在时抛 ProjectNotFound，不返回「0 字作品」。
+    [Throws=WriterError]
+    ProjectWritingLifetimeStatsDto get_project_writing_lifetime_stats(string project_id);
+
     u32 calculate_word_count(string text);
 
     // 按编辑事务上报写作统计（Harmony 走这条）。平台端透传编辑 cause 和
@@ -1492,6 +1513,12 @@ dictionary EditorChangeStatsInputDto {
     EditorTransactionCauseDto cause;
     u32 inserted_chars;
     u32 deleted_chars;
+    // 平台端为编辑事务固定并原样重发的稳定事件 ID；空串表示老客户端，
+    // Core 生成新 UUID（此时无法去重）。非空时 Core 按它幂等判重。
+    string event_id = "";
+    // 事件发生时间（Unix 毫秒），重发保留原值，Core 按它算业务日历日；
+    // 0 表示老客户端，Core 用当前时间。
+    i64 occurred_at_ms = 0;
 };
 
 // ── Editor V2 Kernel DTOs ──

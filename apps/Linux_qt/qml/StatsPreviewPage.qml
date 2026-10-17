@@ -3,12 +3,16 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML 页面）
-// 职责：展示今日/本周/月度写作统计、项目/章节/设备统计、速度曲线
+// 职责：展示今日/本周/月度写作统计、作品/章节/设备排行与速度曲线
 // 约束：
-//   - 纯展示层，数据通过 editorBackendRef 从 AppBackend 获取
-//   - 不直接操作文件系统或 Core 层
-// Issue #900：视觉迁移到 KDE 官方组件体系（Kirigami.Theme + Breeze 控件），
-// 不再使用 AppText 等自制 M3 皮肤组件。数据/统计口径保持原样。
+//   - 纯展示层：只消费 editorBackendRef 的 dashboard 快照，不读文件系统、不做统计聚合
+//   - 快照字段为 Core 输出的 camelCase；字段缺失显示 "—"，不用 0 冒充
+//   - 作品/章节标题用 appState.tree 解析，找不到时回退显示 ID，不编造名字
+// Issue #935：统计页改为「单次异步 dashboard 快照」——
+//   - request_writing_stats_dashboard(requestId) 一次取回全部统计，
+//     不再在 UI 线程同步扫描事件文件（移除旧 get_* 同步调用）
+//   - writing_stats_dashboard_ready/failed 按 requestId 过滤迟到结果；
+//     失败时保留旧快照数字，错误独立显示
 // =============================================================================
 
 import QtQuick
@@ -21,63 +25,131 @@ Rectangle {
     required property var dt
     property var editorBackendRef: null
     property var appState: ({})
-    property var todayStats: ({})
-    property var weekStats: ({})
-    property var monthStats: ({})
-    property var projectStats: []
-    property var chapterStats: []
-    property var deviceStats: []
-    property var speedCurve: []
-    property string statsError: ""
     color: Kirigami.Theme.backgroundColor
 
-    function val(obj, key) { var v = obj && obj[key] !== undefined ? Number(obj[key]) : 0; return isNaN(v) ? 0 : v }
-    function formatNum(n) { return Number(n || 0).toLocaleString() }
-    function formatDuration(seconds) { var s = Math.max(0, Number(seconds || 0)); var h = Math.floor(s / 3600); var m = Math.floor((s % 3600) / 60); return h > 0 ? (h + qsTr("时") + m + qsTr("分")) : (m + qsTr("分")) }
+    // ── 请求簿记：同一时刻只允许一个在途请求，用递增 requestId 丢弃迟到结果 ──
+    property int requestSerial: 0
+    property int activeRequestId: 0
+    property var dashboard: null
+    property string statsError: ""
 
-    function parseStatsJson(jsonStr) {
-        var obj = JSON.parse(jsonStr)
-        if (obj && obj.error) {
-            statsError = qsTr("统计读取失败：") + obj.error
-            return null
-        }
-        return obj
+    // ── 派生数据：字段缺失时退化为空数组，渲染层再决定显示 "—" ──
+    readonly property var sortedProjects: root.sortByHumanTypedChars(root.dashboard && root.dashboard.projects ? root.dashboard.projects : [])
+    readonly property var sortedChapters: root.sortByHumanTypedChars(root.dashboard && root.dashboard.chapters ? root.dashboard.chapters : [])
+    readonly property var sortedDevices: root.sortByHumanTypedChars(root.dashboard && root.dashboard.devices ? root.dashboard.devices : [])
+    readonly property var speedBuckets: root.dashboard && root.dashboard.speedCurve && root.dashboard.speedCurve.buckets ? root.dashboard.speedCurve.buckets : []
+
+    // 从对象读数值；字段缺失或非数字返回 null（交给 format* 显示 "—"，不伪造 0）。
+    function val(obj, key) {
+        if (!obj || obj[key] === undefined || obj[key] === null) return null
+        var n = Number(obj[key])
+        return isNaN(n) ? null : n
     }
 
-    function loadStats() {
-        if (!editorBackendRef) return
-        statsError = ""
-        try {
-            var t = new Date()
-            // Issue #829 评论10：「今天是哪一天」由 Core 的本地日历口径决定。
-            // 每日统计按事件发生地的本地午夜分桶，QML 自己拼日期一旦和 Core
-            // 的时区口径错开，凌晨就会看到「今日」提前清零。顺带把 Core 给的
-            // 区间末端日期拿回来当本周/本月的右端，QML 里就不留第二份日期规则。
-            var todayObj = editorBackendRef.get_today_writing_stats_summary_object()
-            var td = todayObj && todayObj.range && todayObj.range.endDate !== undefined
-                ? String(todayObj.range.endDate) : ""
-            if (td === "") {
-                throw new Error(qsTr("Core 未返回今日日期"))
+    // 从对象读字符串；字段缺失返回 ""。
+    function fieldString(obj, key) {
+        if (!obj || obj[key] === undefined || obj[key] === null) return ""
+        return String(obj[key])
+    }
+
+    function formatNum(n) {
+        if (n === null || n === undefined) return "—"
+        var v = Number(n)
+        return isNaN(v) ? "—" : v.toLocaleString()
+    }
+
+    function formatDuration(seconds) {
+        if (seconds === null || seconds === undefined) return "—"
+        var s = Number(seconds)
+        if (isNaN(s)) return "—"
+        s = Math.max(0, s)
+        var h = Math.floor(s / 3600)
+        var m = Math.floor((s % 3600) / 60)
+        return h > 0 ? (h + qsTr("时") + m + qsTr("分")) : (m + qsTr("分"))
+    }
+
+    function sortByHumanTypedChars(list) {
+        var copy = (list || []).slice()
+        copy.sort(function(a, b) {
+            var av = Number(a && a.humanTypedChars)
+            var bv = Number(b && b.humanTypedChars)
+            if (isNaN(av)) av = 0
+            if (isNaN(bv)) bv = 0
+            return bv - av
+        })
+        return copy
+    }
+
+    // 作品/章节标题：遍历 appState.tree，找不到时回退显示 ID 本身。
+    function projectTitleById(projectId) {
+        var tree = root.appState && root.appState.tree ? root.appState.tree : []
+        for (var i = 0; i < tree.length; i++) {
+            var node = tree[i]
+            if (node && node.type === "project" && node.id === projectId) {
+                return node.title ? String(node.title) : String(projectId)
             }
-            var ws = new Date(t); ws.setDate(t.getDate() - t.getDay())
-            var wd = ws.getFullYear() + "-" + String(ws.getMonth() + 1).padStart(2, "0") + "-" + String(ws.getDate()).padStart(2, "0")
-            var ms = new Date(t.getFullYear(), t.getMonth(), 1)
-            var md = ms.getFullYear() + "-" + String(ms.getMonth() + 1).padStart(2, "0") + "-" + String(ms.getDate()).padStart(2, "0")
-            todayStats = todayObj
-            weekStats = parseStatsJson(editorBackendRef.get_writing_stats_summary(wd, td)) || {}
-            monthStats = parseStatsJson(editorBackendRef.get_writing_stats_summary(md, td)) || {}
-            projectStats = (parseStatsJson(editorBackendRef.get_writing_stats_by_project(wd, td)) || {}).projects || []
-            chapterStats = (parseStatsJson(editorBackendRef.get_writing_stats_by_chapter(wd, td)) || {}).chapters || []
-            deviceStats = (parseStatsJson(editorBackendRef.get_writing_stats_by_device(wd, td)) || {}).devices || []
-            speedCurve = (parseStatsJson(editorBackendRef.get_writing_speed_curve(wd, td, 60)) || {}).buckets || []
-        } catch (e) {
-            statsError = qsTr("统计读取失败：") + e
-            todayStats = {}; weekStats = {}; monthStats = {}; projectStats = []; chapterStats = []; deviceStats = []; speedCurve = []
         }
+        return String(projectId)
     }
 
-    Component.onCompleted: loadStats()
-    onVisibleChanged: if (visible) loadStats()
+    function chapterTitleById(chapterId) {
+        var tree = root.appState && root.appState.tree ? root.appState.tree : []
+        for (var i = 0; i < tree.length; i++) {
+            var node = tree[i]
+            if (node && node.type === "chapter" && node.id === chapterId) {
+                return node.title ? String(node.title) : String(chapterId)
+            }
+        }
+        return String(chapterId)
+    }
+
+    // 设备标签：platform · deviceClass · deviceId，空字段跳过，不编造名字。
+    function deviceLabel(device) {
+        if (!device) return ""
+        var parts = []
+        if (device.platform) parts.push(String(device.platform))
+        if (device.deviceClass) parts.push(String(device.deviceClass))
+        if (device.deviceId) parts.push(String(device.deviceId))
+        return parts.join(" · ")
+    }
+
+    function speedPeak() {
+        var maxRate = 0
+        var buckets = root.speedBuckets
+        for (var i = 0; i < buckets.length; i++) {
+            var rate = Number(buckets[i] && buckets[i].charsPerMinute)
+            if (!isNaN(rate) && rate > maxRate) maxRate = rate
+        }
+        return maxRate
+    }
+
+    // 单次异步请求：进入页面各触发一次；旧请求的迟到结果按 requestId 丢弃。
+    function requestStats() {
+        if (!root.editorBackendRef) return
+        root.requestSerial += 1
+        root.activeRequestId = root.requestSerial
+        root.statsError = ""
+        root.editorBackendRef.request_writing_stats_dashboard(root.activeRequestId)
+    }
+
+    Component.onCompleted: requestStats()
+    onVisibleChanged: if (visible) requestStats()
+
+    Connections {
+        target: root.editorBackendRef
+
+        function onWriting_stats_dashboard_ready(requestId, snapshot) {
+            if (requestId !== root.activeRequestId) return
+            root.dashboard = snapshot
+            root.statsError = ""
+        }
+
+        function onWriting_stats_dashboard_failed(requestId, message) {
+            if (requestId !== root.activeRequestId) return
+            // 保留旧快照数字，只提示本次读取失败；不清空 dashboard 冒充 0。
+            root.statsError = String(message || qsTr("统计数据读取失败"))
+        }
+    }
 
     HubPageFrame {
         anchors.fill: parent
@@ -91,76 +163,215 @@ Rectangle {
             Layout.fillHeight: true
             spacing: 0
 
-            // 错误提示
+            // ── 错误条：与正常数据无关，独立显示 ──
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: statsError ? 40 : 0
-                visible: statsError !== ""
+                visible: root.statsError.length > 0
+                implicitHeight: visible ? 40 : 0
                 color: Kirigami.Theme.negativeTextColor
                 radius: Kirigami.Units.cornerRadius
 
                 Label {
                     anchors.centerIn: parent
-                    text: statsError
+                    text: root.statsError
                     color: Kirigami.Theme.backgroundColor
                 }
             }
 
             DashboardGrid {
-                id: dashboard
+                id: dashboardGrid
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 dt: root.dt
 
+                // ── 今日 / 本周 / 本月摘要 ──
                 GridLayout {
                     Layout.fillWidth: true
-                    columns: dashboard.wide ? 4 : (dashboard.medium ? 2 : 1)
-                    columnSpacing: dashboard.gap
-                    rowSpacing: dashboard.gap
-                    StatCard { dt: root.dt; Layout.fillWidth: true; Layout.preferredHeight: 120; title: qsTr("今日纯输入"); value: formatNum(val(todayStats, "total_human_typed_chars")); caption: qsTr("字") }
-                    StatCard { dt: root.dt; Layout.fillWidth: true; Layout.preferredHeight: 120; title: qsTr("本周纯输入"); value: formatNum(val(weekStats, "total_human_typed_chars")); caption: qsTr("字") }
-                    StatCard { dt: root.dt; Layout.fillWidth: true; Layout.preferredHeight: 120; title: qsTr("本月纯输入"); value: formatNum(val(monthStats, "total_human_typed_chars")); caption: qsTr("字") }
-                    StatCard { dt: root.dt; Layout.fillWidth: true; Layout.preferredHeight: 120; title: qsTr("本周活跃时长"); value: formatDuration(val(weekStats, "total_active_seconds")); caption: qsTr("活跃写作") }
+                    columns: dashboardGrid.wide ? 4 : 2
+                    columnSpacing: dashboardGrid.gap
+                    rowSpacing: dashboardGrid.gap
+
+                    StatCard {
+                        dt: root.dt
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 120
+                        title: qsTr("今日纯输入")
+                        value: root.formatNum(root.dashboard && root.dashboard.today ? root.dashboard.today.totalHumanTypedChars : null)
+                        caption: qsTr("人工输入字数")
+                    }
+
+                    StatCard {
+                        dt: root.dt
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 120
+                        title: qsTr("本周纯输入")
+                        value: root.formatNum(root.dashboard && root.dashboard.week ? root.dashboard.week.totalHumanTypedChars : null)
+                        caption: qsTr("人工输入字数")
+                    }
+
+                    StatCard {
+                        dt: root.dt
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 120
+                        title: qsTr("本月纯输入")
+                        value: root.formatNum(root.dashboard && root.dashboard.month ? root.dashboard.month.totalHumanTypedChars : null)
+                        caption: qsTr("人工输入字数")
+                    }
+
+                    StatCard {
+                        dt: root.dt
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 120
+                        title: qsTr("本周活跃时长")
+                        value: root.formatDuration(root.dashboard && root.dashboard.week ? root.dashboard.week.totalActiveSeconds : null)
+                        caption: qsTr("本周累计活跃秒数")
+                    }
                 }
 
+                // ── 速度曲线 + 设备统计（快照口径同为本周）──
                 GridLayout {
                     Layout.fillWidth: true
-                    columns: dashboard.wide ? 3 : (dashboard.medium ? 2 : 1)
-                    columnSpacing: dashboard.gap
-                    rowSpacing: dashboard.gap
+                    columns: dashboardGrid.wide ? 3 : (dashboardGrid.medium ? 2 : 1)
+                    columnSpacing: dashboardGrid.gap
+                    rowSpacing: dashboardGrid.gap
 
                     DashboardSection {
                         dt: root.dt
                         title: qsTr("速度曲线")
                         Layout.fillWidth: true
-                        Layout.columnSpan: dashboard.wide ? 2 : 1
-                        Label { text: speedCurve.length > 0 ? qsTr("已记录 %1 段").arg(speedCurve.length) : qsTr("暂无数据"); color: Kirigami.Theme.textColor }
+                        Layout.columnSpan: dashboardGrid.wide ? 2 : 1
+
+                        Canvas {
+                            id: speedCanvas
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 136
+                            visible: root.speedBuckets.length > 0
+
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.clearRect(0, 0, width, height)
+                                var buckets = root.speedBuckets
+                                if (buckets.length === 0)
+                                    return
+                                // x 按 bucket 序号均布（首尾内边距 6px）；
+                                // y 按本页峰值归一化，峰值 0 时画底部平线。
+                                var peak = root.speedPeak()
+                                var pad = 6
+                                var innerWidth = Math.max(1, width - pad * 2)
+                                var innerHeight = Math.max(1, height - pad * 2)
+                                var step = buckets.length > 1 ? innerWidth / (buckets.length - 1) : 0
+                                ctx.beginPath()
+                                for (var i = 0; i < buckets.length; i++) {
+                                    var rate = Number(buckets[i] && buckets[i].charsPerMinute)
+                                    if (isNaN(rate) || rate < 0) rate = 0
+                                    var x = buckets.length > 1 ? pad + i * step : pad + innerWidth / 2
+                                    var y = pad + innerHeight * (1 - (peak > 0 ? rate / peak : 0))
+                                    if (i === 0) ctx.moveTo(x, y)
+                                    else ctx.lineTo(x, y)
+                                }
+                                ctx.strokeStyle = Kirigami.Theme.highlightColor
+                                ctx.lineWidth = 2
+                                ctx.lineJoin = "round"
+                                ctx.lineCap = "round"
+                                ctx.stroke()
+                            }
+
+                            Connections {
+                                target: root
+                                function onDashboardChanged() { speedCanvas.requestPaint() }
+                            }
+                            onWidthChanged: requestPaint()
+                            onHeightChanged: requestPaint()
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: root.speedBuckets.length === 0
+                            text: qsTr("暂无数据")
+                            color: Kirigami.Theme.disabledTextColor
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: root.speedBuckets.length > 0
+                            text: qsTr("峰值 %1 字/分 · %2 段").arg(Math.round(root.speedPeak())).arg(root.speedBuckets.length)
+                            color: Kirigami.Theme.disabledTextColor
+                            font: Kirigami.Theme.smallFont
+                        }
                     }
 
                     DashboardSection {
                         dt: root.dt
                         title: qsTr("设备统计")
                         Layout.fillWidth: true
+
                         Repeater {
-                            model: deviceStats.length > 0 ? deviceStats.slice(0, 4) : [{ device_name: qsTr("暂无数据"), typed_chars: 0 }]
-                            delegate: Label { required property var modelData; text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: Kirigami.Theme.disabledTextColor }
+                            model: root.sortedDevices.slice(0, 4)
+
+                            delegate: RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: root.deviceLabel(modelData)
+                                    color: Kirigami.Theme.textColor
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    text: root.formatNum(root.val(modelData, "humanTypedChars")) + qsTr(" 字")
+                                    color: Kirigami.Theme.disabledTextColor
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: root.sortedDevices.length === 0
+                            text: qsTr("暂无数据")
+                            color: Kirigami.Theme.disabledTextColor
                         }
                     }
                 }
 
+                // ── 作品 / 章节排行（快照口径同为本周）──
                 GridLayout {
                     Layout.fillWidth: true
-                    columns: dashboard.wide || dashboard.medium ? 2 : 1
-                    columnSpacing: dashboard.gap
-                    rowSpacing: dashboard.gap
+                    columns: dashboardGrid.wide || dashboardGrid.medium ? 2 : 1
+                    columnSpacing: dashboardGrid.gap
+                    rowSpacing: dashboardGrid.gap
 
                     DashboardSection {
                         dt: root.dt
                         title: qsTr("作品排行")
                         Layout.fillWidth: true
+
                         Repeater {
-                            model: projectStats.length > 0 ? projectStats.slice(0, 5) : [{ project_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                            delegate: Label { required property int index; required property var modelData; text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: Kirigami.Theme.textColor }
+                            model: root.sortedProjects.slice(0, 5)
+
+                            delegate: RowLayout {
+                                required property int index
+                                required property var modelData
+                                Layout.fillWidth: true
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: (index + 1) + ". " + root.projectTitleById(root.fieldString(modelData, "projectId"))
+                                    color: Kirigami.Theme.textColor
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    text: root.formatNum(root.val(modelData, "humanTypedChars")) + qsTr(" 字")
+                                    color: Kirigami.Theme.disabledTextColor
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: root.sortedProjects.length === 0
+                            text: qsTr("暂无数据")
+                            color: Kirigami.Theme.disabledTextColor
                         }
                     }
 
@@ -168,9 +379,33 @@ Rectangle {
                         dt: root.dt
                         title: qsTr("章节排行")
                         Layout.fillWidth: true
+
                         Repeater {
-                            model: chapterStats.length > 0 ? chapterStats.slice(0, 5) : [{ chapter_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                            delegate: Label { required property int index; required property var modelData; text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: Kirigami.Theme.textColor }
+                            model: root.sortedChapters.slice(0, 5)
+
+                            delegate: RowLayout {
+                                required property int index
+                                required property var modelData
+                                Layout.fillWidth: true
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: (index + 1) + ". " + root.chapterTitleById(root.fieldString(modelData, "chapterId"))
+                                    color: Kirigami.Theme.textColor
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    text: root.formatNum(root.val(modelData, "humanTypedChars")) + qsTr(" 字")
+                                    color: Kirigami.Theme.disabledTextColor
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: root.sortedChapters.length === 0
+                            text: qsTr("暂无数据")
+                            color: Kirigami.Theme.disabledTextColor
                         }
                     }
                 }

@@ -161,8 +161,13 @@ char*  writer_core_get_writing_speed_curve(const char* start_date, const char* e
 // 实时写作速度：与上面的历史曲线分工，速度由 Core 以「最近 window_seconds 秒」重算。
 char*  writer_core_get_current_writing_speed(uint32_t window_seconds);
 // 按编辑事务上报写作统计（Harmony 走这条）。cause→source 的映射在 Core 侧做，
-// C 层只透传编辑事实。
+// C 层只透传编辑事实。event_json 里带平台端固定并重发的 eventId/occurredAtMs，
+// Core 按 eventId 幂等去重。
 bool  writer_core_record_editor_change_stats(const char* event_json);
+// 正文保存 + 未确认统计事件一次提交：先走正文保存事务，成功后再幂等记录
+// events_json（[EditorChangeStatsInputDto] 数组，可为 NULL/空串）里的事件。
+// 正文保存失败则不记任何事件；重复提交同一批事件不会重复计字。
+char*  writer_core_save_chapter_with_stats(const char* project_id, const char* volume_id, const char* chapter_id, const char* content, const char* events_json);
 
 // ── Palette / Theme ──
 char*  writer_core_list_palette_records(void);

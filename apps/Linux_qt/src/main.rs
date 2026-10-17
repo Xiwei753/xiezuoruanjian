@@ -608,19 +608,19 @@ fn main() {
 
     QML_LOAD_FAILED.store(false, Ordering::SeqCst);
     remember_qml_load_error("");
-    // Issue #900: UI 全面迁移到 KDE 官方组件体系。QQC2 控件风格选用 KDE 的
-    // 纯 Qt Quick Breeze 样式（org.kde.breeze），它不要求 QtWidgets/QStyle，
-    // 与 qmetaobject::QmlEngine 建立的 QGuiApplication 路线兼容。若用户已显式
-    // 设置 QT_QUICK_CONTROLS_STYLE，则尊重用户选择，不覆盖。
-    if std::env::var_os("QT_QUICK_CONTROLS_STYLE").is_none() {
-        std::env::set_var("QT_QUICK_CONTROLS_STYLE", "org.kde.breeze");
-    }
+    // Issue #933: 不再在启动时强制指定 QT_QUICK_CONTROLS_STYLE。Linux KDE/Plasma 上
+    // 已安装的 Breeze + Plasma Integration 会自动选择 KDE 官方桌面样式
+    // org.kde.desktop；用户显式设置的 QT_QUICK_CONTROLS_STYLE 保持最高优先级。
+    // 若确有需要在其它桌面显式指定风格，应使用 KDE 官方的
+    // QQuickStyle::setStyle("org.kde.desktop")，并在 QML 引擎 / Qt Quick Controls
+    // 初始化之前调用，而不是在这里改写环境变量。
     startup_mark("qml_engine_begin", "create QML engine");
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
     // Issue #736 评论 5777408243 问题3: 运行时 profile 的 Qt/QPA 采样必须在
-    // QmlEngine::new()（建立 QGuiApplication）之后才能读到真实的 platformName。
-    // 之前在 QmlEngine::new() 之前调用，QGuiApplication 尚未建立，
+    // QmlEngine::new()（qmetaobject 0.2.10 内部创建 QApplication，QtWidgets 运行时）
+    // 之后才能读到真实的 platformName。
+    // 之前在 QmlEngine::new() 之前调用，GUI application 尚未建立，
     // qt_platform_name() 拿不到实际 QPA 平台。环境变量配置仍在最前面（configure_qpa_and_input_method）。
     log_desktop_runtime_profile(&qt_ver, qml_path);
     // Issue #736 评论 5777408243 问题3: Wayland 会话下，若期望值是 wayland
@@ -644,7 +644,7 @@ fn main() {
             "app",
             "qpa_platform_mismatch",
             &format!(
-                "Wayland session expected QT_QPA_PLATFORM=wayland but actual QGuiApplication platformName is \"{}\"; \
+                "Wayland session expected QT_QPA_PLATFORM=wayland but actual Qt platformName is \"{}\"; \
                  the GUI application did not pick up the configured Wayland QPA",
                 actual_platform_name,
             ),
@@ -654,7 +654,7 @@ fn main() {
     set_application_icon();
 
     // Install QTranslator for i18n — load compiled .qm from embedded qrc
-    // This must happen after QmlEngine::new() (which creates QCoreApplication)
+    // This must happen after QmlEngine::new() (which creates the QApplication)
     // but before loading QML, so that qsTr() calls resolve correctly.
     install_translator();
 

@@ -22,14 +22,17 @@ impl AppBackend {
         deleted_chars: u32,
     ) {
         if let Some(ref writer) = self.stats_writer {
-            writer.enqueue(crate::backend::stats_writer::StatsWriteCommand {
+            if let Err(e) = writer.enqueue(crate::backend::stats_writer::StatsWriteCommand {
                 project_id: project_id.to_string(),
                 volume_id: volume_id.to_string(),
                 chapter_id: chapter_id.to_string(),
                 cause,
                 inserted_chars,
                 deleted_chars,
-            });
+            }) {
+                // Issue #935：发送失败不再静默丢弃，明确记诊断（统计事实已丢）。
+                self.debug_error("stats", "record_editor_change_stats_enqueue_failed", &e);
+            }
         }
     }
 
@@ -343,5 +346,38 @@ impl AppBackend {
         } else {
             QJsonObject::default()
         }
+    }
+
+    /// Issue #935：异步请求统计面板快照。
+    ///
+    /// 查询排进与写入相同的串行队列，worker 消费到它时此前全部编辑事实已处理完，
+    /// 一次性生成快照后通过 completion 交回。本方法立即返回，UI 线程不再
+    /// `barrier().recv()` 阻塞等写盘。completion 在 worker thread 上执行，调用方
+    /// （editor_backend）负责用 `queued_callback` 把结果投递回 GUI 线程。
+    pub(crate) fn request_writing_stats_dashboard(
+        &self,
+        request_id: u32,
+        completion: crate::backend::stats_writer::StatsQueryCallback,
+    ) -> Result<(), String> {
+        let Some(writer) = self.stats_writer.as_ref() else {
+            return Err("stats writer is not available".to_string());
+        };
+        writer.query_dashboard(request_id, completion)
+    }
+
+    /// Issue #935：异步请求「实时速度 + 今日汇总」。
+    ///
+    /// 与 [`Self::request_writing_stats_dashboard`] 同一队列口径；worker 返回
+    /// `{"currentSpeed": {...}, "today": {...}}` 的组合快照。
+    pub(crate) fn request_writing_status(
+        &self,
+        request_id: u32,
+        window_seconds: u32,
+        completion: crate::backend::stats_writer::StatsQueryCallback,
+    ) -> Result<(), String> {
+        let Some(writer) = self.stats_writer.as_ref() else {
+            return Err("stats writer is not available".to_string());
+        };
+        writer.query_writing_status(request_id, window_seconds, completion)
     }
 }

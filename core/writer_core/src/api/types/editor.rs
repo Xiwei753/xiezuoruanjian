@@ -75,6 +75,17 @@ pub struct EditorChangeStatsInputDto {
     pub cause: EditorTransactionCauseDto,
     pub inserted_chars: u32,
     pub deleted_chars: u32,
+    /// 平台端为这次编辑事务固定的事件 ID（重发去重的稳定身份）。
+    ///
+    /// 同一事务失败重试必须原样带回同一个 `event_id`：Core 以它判重，
+    /// 同一 ID 重复上报只落一条、只计一次字数。空串表示老客户端没有稳定
+    /// 身份，Core 按旧行为生成新 UUID（此时无法去重）。
+    #[serde(default)]
+    pub event_id: String,
+    /// 事件**发生**时间（Unix 毫秒）。重发时保留原值，Core 按它算业务日历日，
+    /// 不会把昨天的输入改记到今天。`0` 表示老客户端未提供，Core 用当前时间。
+    #[serde(default)]
+    pub occurred_at_ms: i64,
 }
 
 impl From<crate::editor::EditorTransactionCause> for EditorTransactionCauseDto {

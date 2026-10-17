@@ -20,7 +20,7 @@
 //!   [`local_today_date`]，每日统计分桶和「今天」查询都走这个口径。
 
 use crate::error::{Error, Result};
-use chrono::DateTime;
+use chrono::{DateTime, Datelike};
 
 /// 按给定 UTC 偏移（秒）把时间戳换算成 `YYYY-MM-DD` 业务日历日。
 ///
@@ -76,6 +76,30 @@ pub fn shift_date(date: &str, days: i64) -> Result<String> {
         .to_string())
 }
 
+/// 「本周」的起始业务日（周一，`YYYY-MM-DD`）。
+///
+/// 统计页面的「本周」按中文习惯以**周一**为一周开始，不用
+/// `chrono::Weekday` 的周日口径；周起始只在 Core 算，端侧不再各自拼。
+pub fn week_start_date(date: &str) -> Result<String> {
+    let parsed = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|e| Error::Other(format!("Invalid date {}: {}", date, e)))?;
+    let offset = i64::from(parsed.weekday().num_days_from_monday());
+    Ok((parsed - chrono::Duration::days(offset))
+        .format("%Y-%m-%d")
+        .to_string())
+}
+
+/// 「本月」的起始业务日（当月 1 号，`YYYY-MM-DD`）。
+pub fn month_start_date(date: &str) -> Result<String> {
+    let parsed = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|e| Error::Other(format!("Invalid date {}: {}", date, e)))?;
+    Ok(parsed
+        .with_day(1)
+        .ok_or_else(|| Error::Other(format!("Invalid date {}", date)))?
+        .format("%Y-%m-%d")
+        .to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +146,19 @@ mod tests {
     #[test]
     fn test_shift_date_rejects_garbage() {
         assert!(shift_date("not-a-date", 1).is_err());
+    }
+
+    #[test]
+    fn test_week_start_date_monday_based() {
+        // 2026-10-17 是周六，本周起始为周一 2026-10-12。
+        assert_eq!(week_start_date("2026-10-17").unwrap(), "2026-10-12");
+        // 周一自身就是起始日。
+        assert_eq!(week_start_date("2026-10-12").unwrap(), "2026-10-12");
+    }
+
+    #[test]
+    fn test_month_start_date() {
+        assert_eq!(month_start_date("2026-10-17").unwrap(), "2026-10-01");
+        assert_eq!(month_start_date("2026-01-31").unwrap(), "2026-01-01");
     }
 }

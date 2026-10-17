@@ -33,6 +33,9 @@ QtObject {
     //（appearance_mode/is_dark/color_source），由 WritingWorkspace 注入。
     property var themeControllerRef: null
 
+    // Issue #933：设置后端由 WritingWorkspace 显式注入，不再依赖全局 context property。
+    property var settingsBackendRef: null
+
     // Chapter state — single source of truth, updated only after successful load
     property string projectId: ""
     property string volumeId: ""
@@ -54,11 +57,11 @@ QtObject {
 
     // Autosave timer
     property var autoSaveTimer: Timer {
-        interval: settingsBackend ? settingsBackend.setting_auto_save_delay_ms : 1500
+        interval: controller.settingsBackendRef ? controller.settingsBackendRef.setting_auto_save_delay_ms : 1500
         repeat: false
         onTriggered: {
             if (!editorBackendRef || !controller.chapterId || !controller.projectId || !controller.volumeId) return;
-            if (!settingsBackend || !settingsBackend.setting_auto_save_enabled) return;
+            if (!controller.settingsBackendRef || !controller.settingsBackendRef.setting_auto_save_enabled) return;
             if (controller.saveGuardActive()) {
                 controller.pendingAutoSaveAfterGuard = true;
                 return;
@@ -74,7 +77,7 @@ QtObject {
             controller.settingsSaveGuardActive = false;
             if (!controller.pendingAutoSaveAfterGuard) return;
             controller.pendingAutoSaveAfterGuard = false;
-            if (!settingsBackend || !settingsBackend.setting_auto_save_enabled) return;
+            if (!controller.settingsBackendRef || !controller.settingsBackendRef.setting_auto_save_enabled) return;
             if (!controller.chapterId || !controller.projectId || !controller.volumeId) return;
 
             var read = controller.readEditorPlainText();
@@ -258,7 +261,7 @@ QtObject {
         // Debounce stats + word count — batch into 300ms timer instead of per-keystroke FFI
         controller.statsTimer.restart();
         if (controller.chapterId && controller.editorBackendRef) {
-            if (settingsBackend && settingsBackend.setting_auto_save_enabled) {
+            if (controller.settingsBackendRef && controller.settingsBackendRef.setting_auto_save_enabled) {
                 controller.autoSaveTimer.restart();
             }
         }

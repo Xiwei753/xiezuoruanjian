@@ -182,6 +182,7 @@ Rectangle {
                 StatsPreviewPage {
                     dt: root.dt
                     editorBackendRef: root.editorBackendRef
+                    appState: root.appState
                     visible: root.selectedTool === "stats"
                     anchors.fill: parent
                 }

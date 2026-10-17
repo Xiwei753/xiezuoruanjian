@@ -327,6 +327,53 @@ mod tests {
         assert_eq!(value["changedEntities"][0]["entityId"], chapter.id);
     }
 
+    /// #936：正文保存 + 未确认统计事件一次提交；重复提交同 ID 事件不重复计字。
+    #[test]
+    fn save_chapter_with_editor_stats_commits_body_and_dedups_events() {
+        let temp_dir = tempdir().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
+        let project = api.create_project("Test").unwrap();
+        let volume = api.create_volume(&project.id, "Vol 1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
+
+        let event = crate::api::EditorChangeStatsInputDto {
+            platform: "harmony".to_string(),
+            project_id: project.id.clone(),
+            volume_id: volume.id.clone(),
+            chapter_id: chapter.id.clone(),
+            cause: crate::api::types::EditorTransactionCauseDto::Typing,
+            inserted_chars: 5,
+            deleted_chars: 0,
+            event_id: "evt-save-1".to_string(),
+            occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+        };
+
+        let receipt = api
+            .save_chapter_with_editor_stats(
+                &project.id,
+                &volume.id,
+                &chapter.id,
+                "你好 world",
+                vec![event.clone()],
+            )
+            .unwrap();
+        assert!(!receipt.content_hash.is_empty());
+
+        // 模拟保存失败后的重试：同一批事件再次随正文提交。
+        api.save_chapter_with_editor_stats(
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "你好 world",
+            vec![event],
+        )
+        .unwrap();
+
+        let summary = api.get_today_writing_stats_summary().unwrap();
+        assert_eq!(summary.total_human_typed_chars, 5);
+    }
+
     #[test]
     fn create_project_volume_chapter_envelope_returns_changed_entities() {
         let temp_dir = tempdir().unwrap();

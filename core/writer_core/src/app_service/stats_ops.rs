@@ -1,7 +1,7 @@
 use crate::api::{
     ChapterStatsSummaryDto, CurrentWritingSpeedDto, DeviceInfoDto, DeviceStatsSummaryDto,
-    EditorChangeStatsInputDto, ProjectStatsSummaryDto, SpeedCurveSummaryDto, WriterError,
-    WritingStatsSummaryDto,
+    EditorChangeStatsInputDto, ProjectStatsSummaryDto, ProjectWritingLifetimeStatsDto,
+    SpeedCurveSummaryDto, WriterError, WritingStatsSummaryDto,
 };
 
 impl super::WriterAppService {
@@ -64,11 +64,27 @@ impl super::WriterAppService {
 
     /// 按编辑事务上报写作统计。平台端只透传编辑事实（cause + contentDelta），
     /// source 分类由 Core 从 cause 推导。
+    ///
+    /// `event_id` / `occurred_at_ms` 由平台端为编辑事务固定并原样重发；
+    /// Core 幂等去重，重发不重复计字、也不把旧事件改记到今天。
     pub fn record_editor_change_stats(
         &self,
         input: EditorChangeStatsInputDto,
     ) -> Result<(), WriterError> {
         self.api.record_editor_change_stats(input)
+    }
+
+    /// 正文保存 + 未确认统计事件一次提交（正文保存事务的统计对齐入口）。
+    pub fn save_chapter_with_editor_stats(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        content: String,
+        events: Vec<EditorChangeStatsInputDto>,
+    ) -> Result<crate::api::types::ChapterSaveReceiptDto, WriterError> {
+        self.api
+            .save_chapter_with_editor_stats(&project_id, &volume_id, &chapter_id, &content, events)
     }
 
     pub fn calculate_word_count(&self, text: String) -> u32 {
@@ -90,5 +106,15 @@ impl super::WriterAppService {
 
     pub fn load_device_info(&self) -> Result<DeviceInfoDto, WriterError> {
         self.api.load_device_info()
+    }
+
+    /// 单作品写作档案（#934）：开写日期、累计人工码字、单日最高纪录。
+    ///
+    /// `history_scope` 说明历史只覆盖本地可读事件（`events.local` 不同步）。
+    pub fn get_project_writing_lifetime_stats(
+        &self,
+        project_id: String,
+    ) -> Result<ProjectWritingLifetimeStatsDto, WriterError> {
+        self.api.get_project_writing_lifetime_stats(&project_id)
     }
 }

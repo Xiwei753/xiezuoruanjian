@@ -104,8 +104,54 @@ pub struct WritingInputEvent {
 }
 
 impl WritingInputEvent {
-    #[allow(clippy::too_many_arguments, clippy::cast_possible_wrap)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
+        device_id: &str,
+        platform: Platform,
+        device_class: &str,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        source: EventSource,
+        inserted_chars: u32,
+        deleted_chars: u32,
+        pasted_chars: u32,
+        ai_inserted_chars: u32,
+        duration_seconds: u32,
+        session_id: &str,
+    ) -> Self {
+        Self::with_identity(
+            String::new(),
+            0,
+            device_id,
+            platform,
+            device_class,
+            project_id,
+            volume_id,
+            chapter_id,
+            source,
+            inserted_chars,
+            deleted_chars,
+            pasted_chars,
+            ai_inserted_chars,
+            duration_seconds,
+            session_id,
+        )
+    }
+
+    /// 用调用方固定的身份和发生时间创建事件（重发去重的关键）。
+    ///
+    /// 平台端排队上报的事件带两个不稳定身份：编辑事务当时的 `event_id`
+    /// 和事件**发生**时间。重发同一 `event_id` 必须落成同一条事件，
+    /// 不能再生成 UUID、更不能把旧事件的归属日改写成今天。
+    ///
+    /// - `event_id` 为空：调用方没有稳定身份（老客户端），生成 UUID；
+    /// - `occurred_at_ms <= 0`：调用方没带时间（老客户端），用当前时间；
+    /// - `local_date` 按最终时间戳在**事件发生地**定死，与 [`Self::new`] 一致。
+    #[allow(clippy::too_many_arguments, clippy::cast_possible_wrap)]
+    pub fn with_identity(
+        event_id: String,
+        occurred_at_ms: i64,
         device_id: &str,
         platform: Platform,
         device_class: &str,
@@ -122,9 +168,18 @@ impl WritingInputEvent {
     ) -> Self {
         let net = inserted_chars as i32 + pasted_chars as i32 + ai_inserted_chars as i32
             - deleted_chars as i32;
-        let timestamp_ms = chrono::Utc::now().timestamp_millis();
+        let timestamp_ms = if occurred_at_ms > 0 {
+            occurred_at_ms
+        } else {
+            chrono::Utc::now().timestamp_millis()
+        };
+        let event_id = if event_id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            event_id
+        };
         Self {
-            event_id: Uuid::new_v4().to_string(),
+            event_id,
             timestamp_ms,
             device_id: device_id.to_string(),
             platform,
@@ -141,8 +196,7 @@ impl WritingInputEvent {
             duration_seconds,
             session_id: session_id.to_string(),
             // 事件归属的业务日历日在**记录这一刻**就定死，见字段注释。
-            // 时间戳来自 `Utc::now()`，一定合法；这里退到 UTC 日只是为了让
-            // 类型收敛，不让一个不可能的分支把整个事件丢掉。
+            // 重发走同一条路径：按事件发生时间算，绝不改成「今天」。
             local_date: calendar::local_date_at(timestamp_ms)
                 .or_else(|_| calendar::utc_date_at(timestamp_ms))
                 .unwrap_or_default(),

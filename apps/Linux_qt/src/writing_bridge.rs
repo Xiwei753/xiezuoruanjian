@@ -84,6 +84,9 @@ pub fn record_editor_change_stats(
         cause: cause.into(),
         inserted_chars,
         deleted_chars,
+        // Linux 端暂不上报稳定身份，Core 按旧行为生成 UUID / 用当前时间。
+        event_id: String::new(),
+        occurred_at_ms: 0,
     };
     api.record_editor_change_stats(input)
         .map_err(WriterError::from)

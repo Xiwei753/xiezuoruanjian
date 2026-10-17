@@ -265,6 +265,70 @@ pub fn project_events(
     projection
 }
 
+/// 作品级写作档案聚合结果（#934）。
+///
+/// `total_human_typed_chars` 复用 [`project_events`] 的 per-project 分类结果；
+/// 日期纪录直接从原始事件取。注意这只是**当前设备可读的本地事件历史**：
+/// `events.local` 不参与跨设备同步，不代表全设备终身输入量。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProjectLifetimeStatsAgg {
+    pub project_id: String,
+    pub total_human_typed_chars: u64,
+    pub first_written_at_ms: Option<i64>,
+    pub best_writing_day: Option<String>,
+    pub best_writing_day_chars: u64,
+    pub writing_days: u64,
+}
+
+/// 计算单个作品的历史写作档案。
+///
+/// - 只统计 `EventSource::HumanTyped` 且 `inserted_chars > 0` 的事件：
+///   粘贴 / AI 插入 / 同步 / 程序加载 / 撤销都不算「写作」。
+/// - 日期用事件保存的 [`WritingInputEvent::business_date`]（创作当地日历日），
+///   不按当前时区改写旧日期。
+/// - `best_writing_day_chars` 是当天**实际人工输入量**，不是净增量；
+///   并列时取更早的日期。
+/// - 没有任何人工输入时：`first_written_at_ms` / `best_writing_day` 为
+///   `None`，字数与写作天数为 0。
+pub fn project_lifetime_stats(
+    events: &[WritingInputEvent],
+    project_id: &str,
+) -> ProjectLifetimeStatsAgg {
+    let total_human_typed_chars = project_events(events, 60, None)
+        .per_project
+        .get(project_id)
+        .map_or(0, |project| project.human_typed_chars);
+
+    let mut daily = std::collections::BTreeMap::<String, u64>::new();
+    let mut first_written_at_ms: Option<i64> = None;
+    for event in events.iter().filter(|e| e.project_id == project_id) {
+        if event.source != EventSource::HumanTyped || event.inserted_chars == 0 {
+            continue;
+        }
+        first_written_at_ms =
+            Some(first_written_at_ms.map_or(event.timestamp_ms, |old| old.min(event.timestamp_ms)));
+        *daily.entry(event.business_date()).or_default() += u64::from(event.inserted_chars);
+    }
+
+    // BTreeMap 按日期升序；并列时 `then_with` 选更早的日期。
+    let best = daily.iter().max_by(|(day_a, count_a), (day_b, count_b)| {
+        count_a.cmp(count_b).then_with(|| day_b.cmp(day_a))
+    });
+    let (best_writing_day, best_writing_day_chars) = match best {
+        Some((day, count)) => (Some(day.clone()), *count),
+        None => (None, 0),
+    };
+
+    ProjectLifetimeStatsAgg {
+        project_id: project_id.to_string(),
+        total_human_typed_chars,
+        first_written_at_ms,
+        best_writing_day,
+        best_writing_day_chars,
+        writing_days: u64::try_from(daily.len()).unwrap_or(0),
+    }
+}
+
 /// 从事件列表计算总汇统计的字符部分。
 ///
 /// `total_sessions` 和 `total_active_seconds` 不在这里算——它们从 per_device
@@ -770,5 +834,80 @@ mod tests {
         // 这里用 1 分钟确保不卡，真正的钳制在 api.rs 层
         let proj = project_events(&events, 1, None);
         assert!(!proj.speed_curve.is_empty());
+    }
+
+    // ── 作品级写作档案（#934）──
+
+    #[test]
+    fn test_lifetime_stats_empty_events_no_first_written_day() {
+        let stats = project_lifetime_stats(&[], "proj1");
+        assert_eq!(stats.first_written_at_ms, None);
+        assert_eq!(stats.best_writing_day, None);
+        assert_eq!(stats.best_writing_day_chars, 0);
+        assert_eq!(stats.writing_days, 0);
+        assert_eq!(stats.total_human_typed_chars, 0);
+    }
+
+    #[test]
+    fn test_lifetime_stats_ignores_pasted_and_ai() {
+        let mut pasted = make_event(1000, EventSource::Pasted, 0, 0, 100, 0);
+        pasted.local_date = "2026-10-01".to_string();
+        let mut ai = make_event(2000, EventSource::AiInserted, 0, 0, 0, 50);
+        ai.local_date = "2026-10-01".to_string();
+        let mut typed = make_event(3000, EventSource::HumanTyped, 10, 0, 0, 0);
+        typed.local_date = "2026-10-02".to_string();
+
+        let events = vec![pasted, ai, typed];
+        let stats = project_lifetime_stats(&events, "proj1");
+
+        assert_eq!(stats.total_human_typed_chars, 10);
+        assert_eq!(stats.first_written_at_ms, Some(3000));
+        assert_eq!(stats.best_writing_day.as_deref(), Some("2026-10-02"));
+        assert_eq!(stats.best_writing_day_chars, 10);
+        assert_eq!(stats.writing_days, 1);
+    }
+
+    #[test]
+    fn test_lifetime_stats_best_day_tie_picks_earlier_date() {
+        let mut d1 = make_event(1000, EventSource::HumanTyped, 40, 0, 0, 0);
+        d1.local_date = "2026-10-01".to_string();
+        let mut d2 = make_event(2000, EventSource::HumanTyped, 40, 0, 0, 0);
+        d2.local_date = "2026-10-02".to_string();
+
+        // 事件顺序颠倒不影响结果：并列时取更早日期。
+        let events = vec![d2, d1];
+        let stats = project_lifetime_stats(&events, "proj1");
+
+        assert_eq!(stats.best_writing_day.as_deref(), Some("2026-10-01"));
+        assert_eq!(stats.best_writing_day_chars, 40);
+        assert_eq!(stats.writing_days, 2);
+        assert_eq!(stats.first_written_at_ms, Some(1000));
+    }
+
+    #[test]
+    fn test_lifetime_stats_only_counts_own_project() {
+        let mut other = make_event(500, EventSource::HumanTyped, 999, 0, 0, 0);
+        other.project_id = "proj2".to_string();
+        other.local_date = "2026-09-30".to_string();
+        let mut mine = make_event(1000, EventSource::HumanTyped, 7, 0, 0, 0);
+        mine.local_date = "2026-10-01".to_string();
+
+        let events = vec![other, mine];
+        let stats = project_lifetime_stats(&events, "proj1");
+
+        assert_eq!(stats.total_human_typed_chars, 7);
+        assert_eq!(stats.first_written_at_ms, Some(1000));
+        assert_eq!(stats.writing_days, 1);
+    }
+
+    #[test]
+    fn test_lifetime_stats_zero_insert_does_not_start_history() {
+        // HumanTyped 但 inserted=0（纯删除事务）：不算开写，也不增加写作日。
+        let mut e = make_event(1000, EventSource::HumanTyped, 0, 5, 0, 0);
+        e.local_date = "2026-10-01".to_string();
+        let stats = project_lifetime_stats(&[e], "proj1");
+        assert_eq!(stats.first_written_at_ms, None);
+        assert_eq!(stats.total_human_typed_chars, 0);
+        assert_eq!(stats.writing_days, 0);
     }
 }

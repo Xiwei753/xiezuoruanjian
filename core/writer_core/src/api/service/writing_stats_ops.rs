@@ -2,6 +2,9 @@ use super::*;
 
 impl WriterCoreApi {
     /// 按编辑事务上报写作统计。平台端透传编辑事实，source 分类由 Core 决定。
+    ///
+    /// `eventId` / `occurredAtMs` 由平台端为事务固定并原样重发；
+    /// Core 按 `event_id` 幂等去重，重发不会重复计字。
     pub fn record_editor_change_stats(
         &self,
         input: crate::api::EditorChangeStatsInputDto,
@@ -15,8 +18,37 @@ impl WriterCoreApi {
                 input.cause.into(),
                 input.inserted_chars,
                 input.deleted_chars,
+                &input.event_id,
+                input.occurred_at_ms,
             )
             .map_err(WriterError::from)
+    }
+
+    /// 正文保存 + 未确认统计事件一次提交（按正文保存事务对齐）。
+    ///
+    /// 顺序：**先保存正文**（沿用既有的空覆盖保护、搜索索引与变更集逻辑），
+    /// 成功后再逐条幂等记录事件。正文保存失败直接返回错误、事件一条不记；
+    /// 事件记录只可能因磁盘错误失败，此时调用方保留原事件重发（同
+    /// `event_id` 再次提交只补落缺失的事件，不会重复计字）。
+    pub fn save_chapter_with_editor_stats(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        events: Vec<crate::api::EditorChangeStatsInputDto>,
+    ) -> ApiResult<crate::api::types::ChapterSaveReceiptDto> {
+        let receipt = self.save_chapter_content_with_options(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            false,
+        )?;
+        for event in events {
+            self.record_editor_change_stats(event)?;
+        }
+        Ok(receipt)
     }
 
     /// 「今天」的写作汇总。日历日由 Core 本地时区口径决定，平台端不传日期。
@@ -182,5 +214,51 @@ impl WriterCoreApi {
             .get_writing_speed_curve(start_date, end_date, bucket_minutes)
             .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
+    }
+
+    /// 单作品写作档案（#934）：开写日期、累计人工码字、单日最高纪录。
+    pub fn get_project_writing_lifetime_stats(
+        &self,
+        project_id: &str,
+    ) -> ApiResult<crate::api::types::ProjectWritingLifetimeStatsDto> {
+        let stats = self
+            .core_write()
+            .get_project_writing_lifetime_stats(project_id)
+            .map_err(Into::<WriterError>::into)?;
+        Ok(crate::api::types::ProjectWritingLifetimeStatsDto {
+            project_id: stats.project_id,
+            created_at: stats.created_at,
+            first_written_at: stats
+                .first_written_at_ms
+                .and_then(chrono::DateTime::from_timestamp_millis)
+                .map(|dt| dt.to_rfc3339()),
+            current_word_count: stats.current_word_count,
+            total_human_typed_chars: stats.total_human_typed_chars,
+            best_writing_day: stats.best_writing_day,
+            best_writing_day_chars: stats.best_writing_day_chars,
+            writing_days: stats.writing_days,
+            history_scope: "localEvents".to_string(),
+        })
+    }
+
+    pub fn get_project_writing_lifetime_stats_json(&self, project_id: &str) -> ApiResult<String> {
+        let value = self.get_project_writing_lifetime_stats(project_id)?;
+        Self::json_string(&value)
+    }
+
+    /// 统计面板一次性快照（#935）：一次读取，今日 / 本周 / 本月 + 本周排行 + 曲线。
+    pub fn get_writing_stats_dashboard(
+        &self,
+    ) -> ApiResult<crate::api::types::WritingStatsDashboardDto> {
+        let value = self
+            .core_write()
+            .get_writing_stats_dashboard()
+            .map_err(Into::<WriterError>::into)?;
+        serde_json::from_value(value).map_err(Into::into)
+    }
+
+    pub fn get_writing_stats_dashboard_json(&self) -> ApiResult<String> {
+        let value = self.get_writing_stats_dashboard()?;
+        Self::json_string(&value)
     }
 }

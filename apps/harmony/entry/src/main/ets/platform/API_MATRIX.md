@@ -412,6 +412,7 @@
   - `hdsEffect.pointLight`（`@kit.UIDesignKit`，`@since 6.0.0(20)`，`SystemCapability.UIDesign.HDSComponent.Core`）：语义是光源照亮**周围**组件，本就不是单组件按压反馈；且本机 ArkTS 侧构造成功、能力检查通过（`apiLevel=26 hdsCore=true effect=true`），native 层每次报 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`，enum 成员/字面量 int/只留两字段/去掉 options 全被拒。
     - d.ts 形参（本机 `hms/ets/api/@hms.hds.hdsBaseComponent.d.ets`）：`HdsEffectBuilder.pointLight(value: PointLightEffect)`；`PointLightEffect { sourceType?: PointLightSourceType; illuminatedType?: PointLightIlluminatedType; options?: PointLightOptions }`；`PointLightOptions { color?: ResourceColor; intensity?: number; height?: Dimension; bloom?: number }`；`PointLightSourceType { NONE=0, SOFT=1, BRIGHT=2 }`；`PointLightIlluminatedType { NONE=0, BORDER=1, CONTENT=2, BORDER_CONTENT=3, DEFAULT_FEATHERING_BORDER=20 }`。
     - 根因定位：报错来自 native 侧对这个结构的取参，ArkTS 侧类型与枚举取值都合法却仍被拒（连只传 `sourceType` + `illuminatedType`、完全不传 `options` 也一样），即当前 SDK/设备上 `pointLight` 的 native 实参要求与公开 d.ts 对不上。**按实机证据本轮不接入**：`pressShadow` 与它共用同一个 `.visualEffect`，把已知被 native 拒收的调用塞进同一个 `HdsEffectBuilder` 会连累已经能工作的按压视效，不把报错调用直接重复堆回线上。
+    - **Issue #937 只读取证补充（pointLight 仍不接入，属能力边界）**：本机 SDK（`~/.harmony-cli/sdk/default`，API 26）的公开 API 元数据 `hms/ets/api/device-define/api-version/UIDesignKit.json` 中，`hdsEffect` 相关 74 条里只有 namespace / `PressShadowType` / `HdsEffectBuilder` / `constructor` / `pressShadow` / `buildEffect` 标有 `publicApi: \"6.0.0(20)\"`；`pointLight`、`PointLightEffect`、`PointLightOptions`、两个点光源枚举及成员全部为 `publicApi: \"\"`（未公开）。Previewer 的 `hms/previewer/systemHsp/hmos/hdscomponent/HdsComponent.hsp` 内除公开方法外还有内部方法 `pointLightSource` / `pointLightIlluminated`，并对 `pointLight` 标注 “mocked implementation”。模拟器镜像（API 24）里 `libhds_base.z.so` 的报错模板来自通用 `GetInt32`/`ParseInt`（`[42]` 是按源码行号输出，不是参数序号），`libhdsvisualeffectsimpl.z.so` 含 `PointLightSourceEffectPara` / `PointLightIlluminatedEffectPara` / `PointLightUnsupportedHandler`。综合判断：当前运行时上 `pointLight` 的对象式实参与 native 取参方式不匹配（native 更像按 int32 或内部属性名读取），**本机无法用它实现动态受光**。该结论不再作为重做 FAB 玻璃表面的前置条件（见下文「Issue #937 现行结构」），也不再重复入参照样试错。
   - `hdsEffect.pressShadow(PressShadowType)`：只支持 Button，官方定义为「按压交互时自动计算背景色变化」的视效，产生的是**系统渐变按压高光**，不是跟随手指的反射点光。同一枚举两个档位都有实机数据：`BLEND_GRADIENT`（中心 85% 白 → 边缘 100% 白）量到由内向外递增的整面高光，白底上削顶到 255 看不出，深色底上整颗刷白、白色 + 号消失；`BLEND_WHITE`（15% 白叠加）在同一表面上按压可见且 + 号仍清晰。**本轮取 `BLEND_WHITE`**（`PrimaryFab.ets` 里改一行即可切换）。官方示例要求 Button 配 `stateEffect: false`，否则内建压暗与按压阴影互盖。
   - `CommonMethod.lightUpEffect(0..1)`（common.d.ts:21813-21845）：只有整体亮度一个参数，**无位置参数**。
   - `HdsVisualComponent`：只有 `DUAL_EDGE_FLOW_LIGHT_WITH_BACKGROUND_MASK` 一个场景，无悬浮按钮场景。HDS 组件库里没有任何悬浮按钮类组件。
@@ -475,21 +476,22 @@
 | `lightUpEffect(0..1)` | 只有整体亮度，无位置参数 | 死路 |
 | **独立边缘层 1vp `border('#22FFFFFF')` + `hitTestBehavior(None)`（Issue #811 方案，已被 Issue #905 取代）** | 描边像素值 60，与 `#22FFFFFF` 的 13% 白相符；截图可见清晰细圆环 | 当时可用；#905 后不再拆「Button + 独立描边层」两套结构 |
 | **固定 `border(1vp, sys.color.icon_secondary)`（#905 第一~七轮）** | 圆环可见，但**颜色固定**，不随背景变化 | 当作「深色模式最低轮廓」可用；**不是反射光**，第八轮已替换为下面的反色混色环 |
-| **`Circle().stroke('#66FFFFFF')` + `blendMode(BlendMode.DIFFERENCE, BlendApplyType.FAST)` + `hitTestBehavior(None)`（Issue #905 第八轮现行）** | 描边与下层画面做差值混合，圆环颜色随按钮底下那圈画面变化，配合毛玻璃形成环境受光观感 | **本轮采用**：随**本地背景像素**变化，不是固定灰环，也不是跟手追光/点光源；修复 `OFFSCREEN` 会取不到正确画面，故用 `FAST` |
+| **`Circle().stroke('#66FFFFFF')` + `blendMode(BlendMode.DIFFERENCE, BlendApplyType.FAST)` + `hitTestBehavior(None)`（Issue #905 第八轮，Issue #937 已移除）** | 描边与下层画面做差值混合，圆环颜色随按钮底下那圈画面变化 | 随**本地背景像素**变化，但没有方向与衰减，无法按光源位置形成亮暗分区；#937 重做玻璃表面时删除，不再叠加第二套边框 |
+| **方向性 `radialGradient` 边缘高光层 + 极低不透明度系统色表面层（Issue #937 现行）** | 玻璃圆边形成带高光区与衰减区的高光环（方向固定左上），配合毛玻璃与 `pressShadow` 形成完整玻璃按钮 | 方向/强度来自固定的 UI 约定光源方向常量；**静态方向渐变高光只能称作玻璃光泽，不是实时反射/点光源**；实机目视观感待确认 |
 
 现行结构：`Stack { Row(边缘层 1vp 描边, hitTestBehavior(None)); Button(ImmersiveMaterial + lightEffect, 不画边) }`。描边必须放独立节点，压在 `systemMaterial` 的 Button 上会挡掉材质层。
 
-**Issue #905 现行结构（第八轮起，内容流右下角唯一主操作载体）**：`PrimaryFab.ets` 是同一尺寸的 `Stack { Button(毛玻璃主体，唯一可点击) + Circle(只做混色的描边环) }`，位置即原设计位置（`Alignment.BottomEnd` + 原 `PRIMARY_FAB_BOTTOM_INSET_VP`），三个页面共用：
-- 表面：透明 `backgroundColor` + `backgroundBlurStyle(BlurStyle.Thin)`（可透视毛玻璃）+ `shadow(ShadowStyle.OUTER_DEFAULT_XS)`。**不再有写死的固定色 `border`**。
-- 描边：`Circle().width/height(PRIMARY_FAB_SIZE_VP - 1).fill(Color.Transparent).stroke('#66FFFFFF').strokeWidth(1).blendMode(BlendMode.DIFFERENCE, BlendApplyType.FAST).hitTestBehavior(HitTestMode.None)`——半透明白描边与下层画面差值混合，得到随**本地背景**变化的反色边缘；`strokeWidth` 1vp、描边居中，外沿与 Button 圆边对齐，不拦触摸、不遮 + 号。不要把它称作「光感已复刻」，也不要把它挂到 Button 主体或整个 Stack 上。
+**Issue #937 现行结构（内容流右下角唯一主操作载体）**：`PrimaryFab.ets` 是同一尺寸的 `Stack { 极低不透明度系统色表面层 + Button(毛玻璃主体，唯一可点击) + 方向性 radialGradient 边缘高光层 }`，位置即原设计位置（`Alignment.BottomEnd` + 原 `PRIMARY_FAB_BOTTOM_INSET_VP`），三个页面共用：
+- 表面：透明 `backgroundColor` + `backgroundBlurStyle(BlurStyle.Thin)`（可透视毛玻璃）+ `shadow(ShadowStyle.OUTER_DEFAULT_XS)`；另加一层极低不透明度的系统色圆形表面（`sys.color` 前景色低透明度），让浅色/深色/纯色背景下都有稳定可见的体积感，不盖住模糊。**不再有写死的固定色 `border`**。
+- 边缘高光：顶层独立圆形容器（`hitTestBehavior(HitTestMode.None)`、裁剪为圆形）用方向性 `radialGradient` 画出有高光区与衰减区的边缘高光环，并带一档更弱的内侧高光；方向与强度取自固定的 UI 约定光源方向（左上），不是实时追光。原来的 `BlendMode.DIFFERENCE` 反色描边环已删除，不保留第二套边框，也不要把它称作「光感已复刻」。
 - 按压：`stateEffect: false` + `.visualEffect(new hdsEffect.HdsEffectBuilder().pressShadow(...).buildEffect())`，按下 `BLEND_WHITE`、抬起/取消一起解除发光与底栏手势锁。
-- **不挂 `systemMaterial`**（内容流不在官方生效范围，真机 `Material inactive: out of scope`）；**不接 `hdsEffect.pointLight`**（native 拒收，见上文）。
-- 因此唯一仍缺的是原位置上的**沉浸材质跟手追光**，该项按未完成如实保留：普通毛玻璃、反色混色描边与 pressShadow 都是真实可用的普通能力，但都不等于沉浸光感，不得写成已补回；且圆环随背景变化、按压高光、以及整体观感均**未经真机目视确认**（`hdc list targets` 为空）。
+- **不挂 `systemMaterial`**（内容流不在官方生效范围，真机 `Material inactive: out of scope`）；**不接 `hdsEffect.pointLight`**（native 拒收、且 API 26 元数据里非公开接口，见上文）。
+- 因此唯一仍缺的是原位置上的**沉浸材质跟手追光**与「由真实邻近光源驱动、随光源位置/强弱变化的动态边缘受光」，这两项按未完成如实保留：普通毛玻璃、方向性静态渐变高光与 pressShadow 都是真实可用的普通能力，但静态渐变高光只能叫玻璃光泽，不得写成已实现动态受光/实时反射；且整体观感**未经真机目视确认**（`hdc list targets` 为空）。
 上面 `Stack + 独立描边层 + Button(ImmersiveMaterial)` 是 Issue #811 的旧方案，已被 #905 取代。作品页 / 工作区 / 星图列表三个页面的主操作「+」在 API 23+ 窄屏与宽屏**都**用这个内容流右下角 FAB，不再有任何 MiniBar 分支。
 
 **~~#905 复核更正（第二轮）~~：已撤销并回滚**。曾经把 API 23+ 窄屏的主操作「+」改由底部 `HdsTabs` MiniBar 承载（`isHdsMiniBarHostingPrimaryAction()` 互斥），该改造已被复核推翻——MiniBar 与页签栏同排，不是原右下角 FAB 的位置，为拿材质改位置属于偷换需求；`PrimaryActionChannel` / `miniBar` / `isHdsMiniBarHostingPrimaryAction()` 已从代码删除，三个页面恢复各自的内容流 `PrimaryFab`。`ui.primary_action_requested` 诊断事件（#906 引入）已迁到唯一真实点击入口 `PrimaryFab.handleClick()`（`origin=User`、`source=content_fab`，仅在未拖动且实际调用 `onTap` 时记录）。**未完成项保留**：原右下角独立 FAB 上的原生沉浸光感在公开 SDK 下仍无法实现（真机 `Material inactive: out of scope`；官方生效范围只有标题栏与合规底部 TabBar），不得用「搬到 MiniBar」或普通按钮宣称已补回。
 
-**边缘层 `hdsEffect.pointLight(DEFAULT_FEATHERING_BORDER)` 与第七轮的点光源接入均未采纳**：本机 native 层对 `pointLight` 一律回 `Wrong argument type. int32 expected.`（见上表与对应说明），加上去只会每次刷一条错误而没有光，还会连累同一 `.visualEffect` 里的 `pressShadow`。
+**边缘层 `hdsEffect.pointLight(DEFAULT_FEATHERING_BORDER)` 与第七轮的点光源接入均未采纳**：本机 native 层对 `pointLight` 一律回 `Wrong argument type. int32 expected.`（见上表与对应说明），加上去只会每次刷一条错误而没有光，还会连累同一 `.visualEffect` 里的 `pressShadow`。Issue #937 复核确认：API 26 SDK 元数据（`hms/ets/api/device-define/api-version/UIDesignKit.json`）中 `pointLight` 及 `PointLightEffect` / `PointLightOptions` / 两个枚举全部 `publicApi: ""`（非公开接口），只有 `pressShadow` / `buildEffect` 是公开 API，与本机 native 行为一致——**属能力边界，FAB 重做不以它为前提，也不再做任何试验性接入**。
 
 ## 菜单 / 气泡菜单（bindMenu）
 

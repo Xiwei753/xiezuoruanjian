@@ -50,6 +50,16 @@ pub struct EditorBackend {
     error_occurred: qt_signal!(),
     #[allow(dead_code)]
     clear_editor: qt_signal!(),
+    /// Issue #935：统计面板快照异步查询完成。`request_id` 用于区分迟到的结果。
+    #[allow(dead_code)]
+    writing_stats_dashboard_ready: qt_signal!(request_id: u32, snapshot: QJsonObject),
+    #[allow(dead_code)]
+    writing_stats_dashboard_failed: qt_signal!(request_id: u32, message: QString),
+    /// Issue #935：实时速度 + 今日汇总异步查询完成。
+    #[allow(dead_code)]
+    writing_status_ready: qt_signal!(request_id: u32, status: QJsonObject),
+    #[allow(dead_code)]
+    writing_status_failed: qt_signal!(request_id: u32, message: QString),
     #[allow(dead_code)]
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
     /// Issue #920：正文段落格式化规则归 Core，Qt 只触发此操作。
@@ -132,6 +142,15 @@ pub struct EditorBackend {
     /// 实时写作速度（最近 N 秒）。状态栏左段「N 字/分」走这里，不读速度曲线。
     #[allow(dead_code)]
     get_current_writing_speed: qt_method!(fn(&self, window_seconds: u32) -> QJsonObject),
+    /// Issue #935：异步请求统计面板快照。
+    ///
+    /// 立即返回；worker 生成结果后经 `writing_stats_dashboard_ready` /
+    /// `writing_stats_dashboard_failed` 携 `request_id` 发回。
+    #[allow(dead_code)]
+    request_writing_stats_dashboard: qt_method!(fn(&mut self, request_id: u32)),
+    /// Issue #935：异步请求「实时速度 + 今日汇总」。
+    #[allow(dead_code)]
+    request_writing_status: qt_method!(fn(&mut self, request_id: u32, window_seconds: u32)),
     #[allow(dead_code)]
     flush_recent_edits: qt_method!(fn(&self)),
     #[allow(dead_code)]
@@ -322,6 +341,86 @@ impl EditorBackend {
             );
         }
     }
+
+    /// Issue #935：异步请求统计面板快照（非阻塞，结果走信号回 GUI 线程）。
+    fn request_writing_stats_dashboard(&mut self, request_id: u32) {
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, result): (u32, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => this.writing_stats_dashboard_ready(
+                            request_id,
+                            qjson_object_from_json(&json),
+                        ),
+                        Err(message) => {
+                            this.writing_stats_dashboard_failed(request_id, message.into());
+                        }
+                    }
+                }
+            },
+        );
+        let completion: crate::backend::stats_writer::StatsQueryCallback =
+            Box::new(move |request_id: u32, result: Result<String, String>| {
+                callback((request_id, result));
+            });
+        match self.with_app(|app| app.request_writing_stats_dashboard(request_id, completion)) {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                self.writing_stats_dashboard_failed(request_id, message.into());
+            }
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "editor_backend",
+                    "BORROW_CONFLICT",
+                    "request_writing_stats_dashboard skipped due to borrow conflict",
+                );
+                self.writing_stats_dashboard_failed(request_id, "stats backend busy".into());
+            }
+        }
+    }
+
+    /// Issue #935：异步请求「实时速度 + 今日汇总」（结果走信号回 GUI 线程）。
+    fn request_writing_status(&mut self, request_id: u32, window_seconds: u32) {
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, result): (u32, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => {
+                            this.writing_status_ready(request_id, qjson_object_from_json(&json));
+                        }
+                        Err(message) => {
+                            this.writing_status_failed(request_id, message.into());
+                        }
+                    }
+                }
+            },
+        );
+        let completion: crate::backend::stats_writer::StatsQueryCallback =
+            Box::new(move |request_id: u32, result: Result<String, String>| {
+                callback((request_id, result));
+            });
+        match self
+            .with_app(|app| app.request_writing_status(request_id, window_seconds, completion))
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                self.writing_status_failed(request_id, message.into());
+            }
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "editor_backend",
+                    "BORROW_CONFLICT",
+                    "request_writing_status skipped due to borrow conflict",
+                );
+                self.writing_status_failed(request_id, "stats backend busy".into());
+            }
+        }
+    }
+
     fn get_writing_stats_summary(&self, start_date: QString, end_date: QString) -> QString {
         self.with_app(|app| app.get_writing_stats_summary(start_date, end_date))
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())

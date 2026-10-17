@@ -63,7 +63,8 @@ pub fn qrc_resource_exists(path: &str) -> bool {
 }
 
 pub fn set_application_icon() {
-    // SAFETY: QGuiApplication::setWindowIcon requires QGuiApplication instance; called after engine creation in main.
+    // SAFETY: QGuiApplication::setWindowIcon requires a QGuiApplication instance
+    // (QmlEngine creates a QApplication, which is one); called after engine creation in main.
     cpp!(unsafe [] {
         QGuiApplication::setWindowIcon(QIcon(":/icons/sujian.svg"));
     });

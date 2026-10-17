@@ -88,6 +88,19 @@ fn list_projects_inner(projects_root: &Path) -> Result<Vec<Project>> {
     Ok(projects)
 }
 
+/// 读取单个作品的元数据；作品目录或 `project.json` 缺失时报 `ProjectNotFound`。
+///
+/// 与 [`list_projects`] 的宽容读取不同：按 ID 明确查询单个作品时，不存在
+/// 必须报 NotFound，不能让调用方拿到「0 字空作品」冒充真实作品。
+pub fn get_project(projects_root: &Path, project_id: &str) -> Result<Project> {
+    let meta_path = projects_root.join(project_id).join("project.json");
+    if !meta_path.exists() {
+        return Err(crate::error::Error::ProjectNotFound);
+    }
+    let content = fs::read_to_string(&meta_path)?;
+    Ok(serde_json::from_str(&content)?)
+}
+
 /// 项目统计摘要。
 ///
 /// `total_word_count` 为所有章节字数之和，`volume_count`/`chapter_count` 为直接子项计数。

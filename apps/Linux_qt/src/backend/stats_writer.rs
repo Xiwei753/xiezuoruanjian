@@ -20,6 +20,12 @@
 //         的内部锁不是同一把锁，对同一份 events.local/*.jsonl 没有顺序保证。
 //         增加 Barrier 消息：查询前 UI 线程发 Barrier 并等 ack，worker 处理到
 //         Barrier 时前面所有 Record 已落盘，回 ack，UI 线程再读磁盘。
+//
+// Issue #935：QML 统计页的一次性查询不再走「UI 线程 barrier().recv() 再读盘」，
+// 而是把 QueryDashboard / QueryWritingStatus 排进同一条串行队列。worker 消费到
+// 查询时，此前全部 Record 已处理完，它在 worker thread 里一次性生成快照/状态并
+// 通过 completion 回报；completion 由上层用 queued_callback 投递回 GUI 线程。
+// 队列消费到查询时若前面有 Record 写盘失败，先向下一次查询回报错误，不假装成功。
 
 use std::sync::mpsc::{self, Sender};
 use writer_core::editor::EditorTransactionCause;
@@ -35,13 +41,30 @@ pub(crate) struct StatsWriteCommand {
     pub deleted_chars: u32,
 }
 
-/// worker 消息：写入命令或 barrier 同步点。
+/// 统计查询完成回调：worker 在 worker thread 上调用，交回 `(request_id, 结果)`。
+///
+/// 实现方负责把结果投递回 GUI 线程（上层用 `qmetaobject::queued_callback` 包装），
+/// 这里不接触任何 QObject/QML 对象。
+pub(crate) type StatsQueryCallback = Box<dyn FnOnce(u32, Result<String, String>) + Send + Sync>;
+
+/// worker 消息：写入命令、barrier 同步点或一次性查询。
 ///
 /// `Record` 携带一条写统计命令；`Barrier` 携带一个 ack sender，worker 处理到
 /// 这条消息时说明前面所有 Record 已全部落盘，回 `ack.send(())` 让 UI 线程继续。
+/// `QueryDashboard` / `QueryWritingStatus`（Issue #935）与 Record 走同一条队列，
+/// 消费到查询时此前全部编辑事实已处理完，回调带回最新快照或真实错误。
 enum StatsWriterMessage {
     Record(StatsWriteCommand),
     Barrier(Sender<()>),
+    QueryDashboard {
+        request_id: u32,
+        completion: StatsQueryCallback,
+    },
+    QueryWritingStatus {
+        request_id: u32,
+        window_seconds: u32,
+        completion: StatsQueryCallback,
+    },
 }
 
 /// 进程内唯一的串行 stats writer handle。
@@ -71,6 +94,9 @@ impl StatsWriterHandle {
                     &projects_root,
                     &layout,
                 );
+                // Issue #935：Record 写盘失败不吞掉——记在这里，由下一次
+                // Query 回报真实错误，避免「查询假装全部成功」。
+                let mut pending_error: Option<String> = None;
                 for msg in receiver.iter() {
                     match msg {
                         StatsWriterMessage::Record(cmd) => {
@@ -87,11 +113,47 @@ impl StatsWriterHandle {
                                     "stats-writer: record_editor_change_stats failed: {}",
                                     e
                                 );
+                                pending_error = Some(format!("record_editor_change_stats: {e}"));
                             }
                         }
                         StatsWriterMessage::Barrier(ack) => {
                             // 前面的 Record 已全部落盘，回 ack 让 UI 线程继续查询。
                             let _ = ack.send(());
+                        }
+                        StatsWriterMessage::QueryDashboard {
+                            request_id,
+                            completion,
+                        } => {
+                            if let Some(err) = pending_error.take() {
+                                completion(request_id, Err(err));
+                            } else {
+                                completion(
+                                    request_id,
+                                    api.get_writing_stats_dashboard_json()
+                                        .map_err(|e| e.to_string()),
+                                );
+                            }
+                        }
+                        StatsWriterMessage::QueryWritingStatus {
+                            request_id,
+                            window_seconds,
+                            completion,
+                        } => {
+                            if let Some(err) = pending_error.take() {
+                                completion(request_id, Err(err));
+                            } else {
+                                let result = api
+                                    .get_current_writing_speed_json(window_seconds)
+                                    .and_then(|speed| {
+                                        api.get_today_writing_stats_summary_json()
+                                            .map(|today| (speed, today))
+                                    })
+                                    .map(|(speed, today)| {
+                                        format!("{{\"currentSpeed\":{speed},\"today\":{today}}}")
+                                    })
+                                    .map_err(|e| e.to_string());
+                                completion(request_id, result);
+                            }
                         }
                     }
                 }
@@ -104,11 +166,55 @@ impl StatsWriterHandle {
     }
 
     /// UI 线程调用：把命令放进 channel，立刻返回。
-    /// worker 已退出时 send 返回 Err，命令被丢弃——不影响 UI。
-    pub(crate) fn enqueue(&self, cmd: StatsWriteCommand) {
-        if let Some(ref sender) = self.sender {
-            let _ = sender.send(StatsWriterMessage::Record(cmd));
-        }
+    ///
+    /// Issue #935：发送失败（worker 已退出）不再静默丢弃，明确返回上层，
+    /// 由调用方决定显示错误还是降级，避免统计事实无声丢失。
+    pub(crate) fn enqueue(&self, cmd: StatsWriteCommand) -> Result<(), String> {
+        let Some(sender) = self.sender.as_ref() else {
+            return Err("stats writer is shut down".to_string());
+        };
+        sender
+            .send(StatsWriterMessage::Record(cmd))
+            .map_err(|_| "stats writer worker has exited".to_string())
+    }
+
+    /// Issue #935：把「统计面板快照」查询排进同一条串行队列。
+    ///
+    /// worker 消费到这条消息时，之前全部 Record 已处理完，它在 worker thread
+    /// 里一次性生成快照并通过 completion 回报；UI 线程不再 `barrier().recv()`。
+    pub(crate) fn query_dashboard(
+        &self,
+        request_id: u32,
+        completion: StatsQueryCallback,
+    ) -> Result<(), String> {
+        let Some(sender) = self.sender.as_ref() else {
+            return Err("stats writer is shut down".to_string());
+        };
+        sender
+            .send(StatsWriterMessage::QueryDashboard {
+                request_id,
+                completion,
+            })
+            .map_err(|_| "stats writer worker has exited".to_string())
+    }
+
+    /// Issue #935：把「实时速度 + 今日汇总」查询排进同一条串行队列。
+    pub(crate) fn query_writing_status(
+        &self,
+        request_id: u32,
+        window_seconds: u32,
+        completion: StatsQueryCallback,
+    ) -> Result<(), String> {
+        let Some(sender) = self.sender.as_ref() else {
+            return Err("stats writer is shut down".to_string());
+        };
+        sender
+            .send(StatsWriterMessage::QueryWritingStatus {
+                request_id,
+                window_seconds,
+                completion,
+            })
+            .map_err(|_| "stats writer worker has exited".to_string())
     }
 
     /// 同步 barrier：等 worker 把前面所有 Record 落盘后再返回。

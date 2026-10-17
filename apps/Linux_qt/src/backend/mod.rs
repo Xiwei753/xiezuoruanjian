@@ -278,6 +278,13 @@ impl BackendRuntime {
         }
     }
 
+    /// Issue #933: 这 8 个 context property 只在**主窗口边界**注入一次，
+    /// 供 main.qml 自己使用（路由、同步屏障、关闭收尾）。
+    ///
+    /// 子页面不得再查裸全局名，而是由 main.qml 逐层通过 QML 显式
+    /// `required property var xxxBackendRef` 传入各自需要的少数后端；
+    /// 后端通知一律走 QObject 的 `qt_signal!` / `qt_property!(NOTIFY)`。
+    /// 不要再扩展这里的注入列表。
     pub fn register_context_properties(&self, engine: &mut QmlEngine) {
         // SAFETY: Rc<RefCell<AppBackend>> heap-allocates and pins the RefCell;
         // Rc is !Send + !Sync, confining access to the GUI thread.

@@ -23,28 +23,28 @@
 //   两者都是**真实可用的普通能力**，但不是沉浸材质那种跟手追光：普通毛玻璃 ≠ IMMERSIVE，
 //   不要写成已补回华为沉浸光感；该项在 #905 仍按未完成保留。
 //
-// 描边不再是写死的灰色 border，而是单独一层的「随背景反色」细圆环：
-//   Stack { Button(毛玻璃主体) + Circle(仅描边).blendMode(BlendMode.DIFFERENCE, FAST) }。
-//   DIFFERENCE 把描边像素与下层已绘制画面做差值混合，所以圆环颜色随按钮底下那圈画面
-//   （毛玻璃透上来的邻近亮暗/色彩）变化，而不是一个固定灰环。它采样的是**描边覆盖处的
-//   本地像素**，不会去屏幕别的坐标找远处光源，与 systemMaterial 的沉浸追光和
-//   hdsEffect.pointLight 是三个不同机制；不要把它称作光感已复刻。
-//   必须只把混色挂在描边 Circle 上：挂到 Button 主体会连正文图标和毛玻璃一起被混掉。
-//   必须用 BlendApplyType.FAST：OFFSCREEN 模式会让同层的 backgroundBlurStyle 取不到正确画面。
+// 玻璃表面（Issue #937 重做）：毛玻璃主体之外补两层纯绘制装饰，全部 hitTestBehavior(None)，
+// 唯一可点击的仍然只有中间的 Button：
+//   体积感表面层：极低不透明度的系统色圆形，让浅色/深色/纯色背景下都有稳定可见的玻璃体积感，
+//     不构成实心底色、不遮毛玻璃。
+//   方向性边缘高光层：独立圆形容器（裁剪为圆形）用 radialGradient 画出「高光带 + 衰减」的边缘
+//     高光环，并带一档更弱的内侧高光；方向与强度取自固定的 UI 约定光源方向（左上）。
+//     这是**静态方向渐变**，只能叫玻璃光泽，不是实时反射，也不会随屏幕内容自动追光。
+//   #905 第八轮那层 BlendMode.DIFFERENCE 反色描边环已删除：它只对描边正下方的本地像素做差值
+//   混合，没有方向与衰减，做不出按光源位置分布的亮暗分区；不留旧圈叠加，避免多套边框。
 //
 // 按压视效取 PressShadowType.BLEND_WHITE（15% 白叠加），不用官方示例里的 BLEND_GRADIENT：
 //   BLEND_GRADIENT 按定义是「中心 85% 白 → 边缘 100% 白」的整面叠白，本仓库在真机上量到
 //   整颗刷白、深色底上白色 + 号消失。按压高光必须让「+」仍看得清，所以取较轻的一档。
 //   两者都是同一个官方枚举里的档位，如需换回改这一行即可。
-// hdsEffect.pointLight（点光源/受光）本轮**没有**接入，原因不是没查，而是查清后仍不可用：
-//   d.ts 形参为 PointLightEffect { sourceType?, illuminatedType?, options?: { color?,
-//   intensity?: number, height?: Dimension, bloom?: number } }；本仓库真机记录显示
-//   ArkTS 侧构造成功、能力检查通过（apiLevel=26 hdsCore=true effect=true），但 native 层
-//   对枚举成员、字面量整数、只留两字段、去掉 options 等各种传法一律回
-//   `HDS_hdsbase: [42]Wrong argument type. int32 expected.`，即该实参结构在当前
-//   SDK/设备上被 native 拒收。把已知被拒的调用塞回同一个 HdsEffectBuilder，会连累已经能
-//   工作的 pressShadow（同一个 .visualEffect 只挂一次），因此本轮不接；结论与实机证据记在
-//   platform/API_MATRIX.md，待有真机或官方修正 native 实参要求后再评估。
+//
+// 动态受光与静态玻璃高光分开记录：真正「随邻近光源位置/强弱变化」的边缘受光当前**未实现**。
+//   官方 hdsEffect.pointLight 需要显式光源节点与受光节点配对，而它在 API 26 SDK 元数据里是
+//   非公开接口（publicApi 为空）；本仓库真机记录显示 ArkTS 侧可构造、能力检查通过，
+//   但 native 对所有传法一律回 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`
+//   （最终定位见 platform/API_MATRIX.md 的 #937 取证记录）。按能力边界不接入，也不再提交
+//   试验性调用；没有具体可配对光源时，不凭空新增永久发光节点假扮环境反射。
+//   systemMaterial 的自动采样沉浸材质在内容流 FAB 上仍被官方范围拒绝（见上文 #888 记录）。
 //
 // 手势：按住时锁住底栏的横向滑动切页，避免按住加号横向拖动时页面被带走。
 // 锁的实现见 app/navigation/PrimaryTabGestureLock.ets。
@@ -72,12 +72,12 @@ export struct PrimaryFab {
   private lastGeometryWidth: number = -1
   private lastGeometryHeight: number = -1
 
-  // Issue #911：FAB 挂载起点。这是**代码所请求的效果**（透明底 + Thin 模糊 + 反色描边 +
+  // Issue #911：FAB 挂载起点。这是**代码所请求的效果**（透明底 + Thin 模糊 + 方向性渐变高光 +
   // 按压视效），不可命名为"材质渲染成功"——真机渲染结果仍需独立的 hilog.txt 佐证。
   aboutToAppear(): void {
     const fields: DiagnosticField[] = [
       { key: 'source', value: 'content_fab' },
-      { key: 'visualStyle', value: 'blur_thin_difference_fast_press_shadow' }
+      { key: 'visualStyle', value: 'blur_thin_gradient_edge_press_shadow' }
     ]
     HarmonyDiagnosticEvents.record('Info', 'App', 'ui.fab_mounted', 'PrimaryFab', fields)
   }

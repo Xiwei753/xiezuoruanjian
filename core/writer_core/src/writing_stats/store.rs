@@ -17,22 +17,33 @@
 use crate::error::Result;
 use crate::writing_stats::WritingInputEvent;
 use chrono::NaiveDate;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// 写作统计数据存储引擎 — 只负责事件存储和按日期范围读取事件。
 ///
 /// 不再持有内存缓冲区：`record_event` 直接追加写入 JSONL。
 /// 不再管理 daily stats：所有统计计算由 projection 模块完成。
+///
+/// 写入按 `event_id` 幂等：同一事件（同 ID）重复落盘只写一行，
+/// 平台端重发未确认事件不会翻倍字数。
 pub struct StatsStore {
     app_data_root: PathBuf,
+    /// 每个 UTC 日期文件里已持久化的事件 ID（惰性扫描、写入时维护）。
+    ///
+    /// 只用于写入判重；查询仍以文件内容为准。`rewrite_events_for_date`
+    /// 会清掉对应日期，避免整体改写后缓存过期。
+    written_ids: Mutex<HashMap<String, HashSet<String>>>,
 }
 
 impl StatsStore {
     pub fn new(app_data_root: &Path) -> Self {
         Self {
             app_data_root: app_data_root.to_path_buf(),
+            written_ids: Mutex::new(HashMap::new()),
         }
     }
 
@@ -70,24 +81,109 @@ impl StatsStore {
         let tmp_path = file_path.with_extension("jsonl.tmp");
         fs::write(&tmp_path, contents)?;
         fs::rename(&tmp_path, &file_path)?;
+        // 整体改写后缓存的 ID 集合作废，下次写入重新扫描。
+        self.written_ids
+            .lock()
+            .map_err(|_| crate::Error::Other("stats event id cache poisoned".to_string()))?
+            .remove(date);
         Ok(())
     }
 
     /// 记录一个写作输入事件 — 直接追加写入 JSONL，无缓冲。
     ///
     /// 一次编辑事务就是追加一行 JSONL。不再有内存缓冲或防抖逻辑。
+    /// 同一 `event_id` 重复调用不重复落盘（幂等）。
     pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {
-        let date = self.timestamp_to_date(event.timestamp_ms)?;
-        let events_dir = self.events_dir();
-        fs::create_dir_all(&events_dir)?;
-        let file_path = events_dir.join(format!("{}.events.jsonl", date));
-        let json = serde_json::to_string(&event)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)?;
-        writeln!(file, "{}", json)?;
-        Ok(())
+        self.record_events(vec![event]).map(|_| ())
+    }
+
+    /// 幂等批量记录事件，返回真正新落盘的事件数。
+    ///
+    /// 平台端排队上报的事件可能重发（保存失败、进程重启恢复），
+    /// 判重按稳定 `event_id`：文件里已有同 ID 的行就跳过。
+    /// 事件按**事件发生时间**的 UTC 日期分文件（与 [`Self::timestamp_to_date`] 一致），
+    /// 重发旧事件仍落在它原本的日期文件里，不会篡改归属日。
+    pub fn record_events(&self, events: Vec<WritingInputEvent>) -> Result<usize> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+
+        // 先按存储分区（UTC 日）聚拢，写入顺序与调用顺序无关。
+        let mut by_date: BTreeMap<String, Vec<WritingInputEvent>> = BTreeMap::new();
+        for event in events {
+            let date = self.timestamp_to_date(event.timestamp_ms)?;
+            by_date.entry(date).or_default().push(event);
+        }
+
+        let mut guard = self
+            .written_ids
+            .lock()
+            .map_err(|_| crate::Error::Other("stats event id cache poisoned".to_string()))?;
+        let mut written = 0usize;
+        for (date, day_events) in by_date {
+            // 惰性加载该日期文件的已有 ID；坏行跳过（严格报错留给读取路径），
+            // 一个历史坏行不该阻塞新事件的写入。
+            if !guard.contains_key(&date) {
+                let ids = self.scan_event_ids(&date)?;
+                guard.insert(date.clone(), ids);
+            }
+            let ids = guard
+                .get_mut(&date)
+                .expect("stats event id cache must contain the date");
+
+            let fresh: Vec<WritingInputEvent> = day_events
+                .into_iter()
+                .filter(|event| event.event_id.is_empty() || !ids.contains(&event.event_id))
+                .collect();
+            if fresh.is_empty() {
+                continue;
+            }
+
+            let events_dir = self.events_dir();
+            fs::create_dir_all(&events_dir)?;
+            let file_path = events_dir.join(format!("{}.events.jsonl", date));
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file_path)?;
+            for event in &fresh {
+                writeln!(file, "{}", serde_json::to_string(event)?)?;
+                if !event.event_id.is_empty() {
+                    ids.insert(event.event_id.clone());
+                }
+                written += 1;
+            }
+        }
+        Ok(written)
+    }
+
+    /// 扫描某个日期文件里已存在的事件 ID（用于写入判重缓存）。
+    ///
+    /// 只提取 `event_id` 字段，解析不了的行直接跳过：这是判重的尽力缓存，
+    /// 与 [`Self::load_events_for_date`] 的「坏行严格报错」职责不同。
+    fn scan_event_ids(&self, date: &str) -> Result<HashSet<String>> {
+        let file_path = self.events_dir().join(format!("{}.events.jsonl", date));
+        if !file_path.exists() {
+            return Ok(HashSet::new());
+        }
+        let file = File::open(&file_path)?;
+        let reader = BufReader::new(file);
+        let mut ids = HashSet::new();
+        for line in reader.lines() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Some(id) = value.get("event_id").and_then(|v| v.as_str()) {
+                    if !id.is_empty() {
+                        ids.insert(id.to_string());
+                    }
+                }
+            }
+        }
+        Ok(ids)
     }
 
     /// 读取某个 UTC 分区的事件文件，**任何一行解析失败都返回 Err**。
@@ -122,6 +218,21 @@ impl StatsStore {
             events.push(event);
         }
 
+        Ok(events)
+    }
+
+    /// 读取指定作品的全部本地事件（跨所有已有事件文件的 UTC 分区）。
+    ///
+    /// 只遍历 [`StatsStore::list_event_file_dates`] 里真实存在的日期文件，
+    /// 不按「作品创建日到今天」逐日枚举空文件。任一分区文件损坏仍返回
+    /// 明确错误，不把错误当「0 字」吞掉。
+    pub fn load_events_for_project(&self, project_id: &str) -> Result<Vec<WritingInputEvent>> {
+        let mut events = Vec::new();
+        for date in self.list_event_file_dates()? {
+            let mut day_events = self.load_events_for_date(&date)?;
+            day_events.retain(|e| e.project_id == project_id);
+            events.append(&mut day_events);
+        }
         Ok(events)
     }
 
@@ -298,5 +409,112 @@ mod tests {
 
         let events = store.load_events_for_date(&date).unwrap();
         assert_eq!(events.len(), 1);
+    }
+
+    // ── 幂等写入（#936）──
+
+    #[test]
+    fn test_record_events_dedup_by_event_id() {
+        let (store, _tmp) = create_mock_store();
+        let mut event = create_mock_event();
+        event.event_id = "fixed-event-id".to_string();
+
+        // 同一事件重发三次，只落一条。
+        store.record_event(event.clone()).unwrap();
+        store.record_event(event.clone()).unwrap();
+        store.record_event(event.clone()).unwrap();
+
+        let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
+        let events = store.load_events_for_date(&date).unwrap();
+        assert_eq!(events.len(), 1);
+
+        // 重新构造 store（缓存冷启动）再重发，仍不重复写。
+        let store2 = StatsStore::new(_tmp.path());
+        store2.record_event(event.clone()).unwrap();
+        let events = store2.load_events_for_date(&date).unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn test_record_events_resend_keeps_original_storage_date() {
+        let (store, _tmp) = create_mock_store();
+        // 事件发生在昨天（UTC），重发也落在昨天的文件里。
+        let occurred_at_ms =
+            (chrono::Utc::now() - chrono::Duration::days(1)).timestamp_millis();
+        let event = WritingInputEvent::with_identity(
+            "old-event-id".to_string(),
+            occurred_at_ms,
+            "device_1",
+            Platform::Desktop,
+            "desktop",
+            "proj_1",
+            "vol_1",
+            "ch_1",
+            EventSource::HumanTyped,
+            10,
+            0,
+            0,
+            0,
+            0,
+            "",
+        );
+        let date = store.timestamp_to_date(occurred_at_ms).unwrap();
+        store.record_event(event.clone()).unwrap();
+        store.record_event(event).unwrap();
+
+        let events = store.load_events_for_date(&date).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].timestamp_ms, occurred_at_ms);
+    }
+
+    #[test]
+    fn test_record_events_counts_only_new_writes() {
+        let (store, _tmp) = create_mock_store();
+        let mut first = create_mock_event();
+        first.event_id = "e1".to_string();
+        let second = create_mock_event();
+
+        assert_eq!(store.record_events(vec![first.clone()]).unwrap(), 1);
+        // 一条重复 + 一条新的：只新写 1 条。
+        assert_eq!(store.record_events(vec![first, second]).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_record_events_tolerates_corrupt_history_lines() {
+        let (store, _tmp) = create_mock_store();
+        let date = store
+            .timestamp_to_date(chrono::Utc::now().timestamp_millis())
+            .unwrap();
+        let file_path = store.events_dir().join(format!("{}.events.jsonl", date));
+        std::fs::create_dir_all(store.events_dir()).unwrap();
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        writeln!(file, "{{\"bad\":}}").unwrap();
+        drop(file);
+
+        // 历史坏行不让新事件写入失败（严格报错留给读取路径）。
+        let event = create_mock_event();
+        store.record_event(event).unwrap();
+        assert!(store.load_events_for_date(&date).is_err());
+    }
+
+    #[test]
+    fn test_rewrite_events_for_date_invalidates_id_cache() {
+        let (store, _tmp) = create_mock_store();
+        let mut event = create_mock_event();
+        event.event_id = "rewritten-id".to_string();
+        store.record_event(event.clone()).unwrap();
+
+        let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
+        // 整体改写把这条事件清掉后，同 ID 再写应重新落盘。
+        store.rewrite_events_for_date(&date, "").unwrap();
+        store.record_event(event.clone()).unwrap();
+
+        let events = store.load_events_for_date(&date).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "rewritten-id");
     }
 }

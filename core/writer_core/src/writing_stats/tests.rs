@@ -658,6 +658,8 @@ fn test_facade_record_editor_change_stats() {
         crate::editor::EditorTransactionCause::Typing,
         10,
         0,
+        "",
+        0,
     )
     .unwrap();
 
@@ -668,6 +670,8 @@ fn test_facade_record_editor_change_stats() {
         "chap1",
         crate::editor::EditorTransactionCause::Paste,
         20,
+        0,
+        "",
         0,
     )
     .unwrap();
@@ -680,6 +684,8 @@ fn test_facade_record_editor_change_stats() {
         crate::editor::EditorTransactionCause::Delete,
         0,
         5,
+        "",
+        0,
     )
     .unwrap();
 
@@ -690,6 +696,8 @@ fn test_facade_record_editor_change_stats() {
         "chap1",
         crate::editor::EditorTransactionCause::Programmatic,
         0,
+        0,
+        "",
         0,
     )
     .unwrap();
@@ -718,6 +726,8 @@ fn test_facade_record_editor_change_stats_non_typed_sources_never_human_typed() 
         crate::editor::EditorTransactionCause::Typing,
         10,
         0,
+        "",
+        0,
     )
     .unwrap();
     // Paste → Pasted
@@ -728,6 +738,8 @@ fn test_facade_record_editor_change_stats_non_typed_sources_never_human_typed() 
         "chap1",
         crate::editor::EditorTransactionCause::Paste,
         7,
+        0,
+        "",
         0,
     )
     .unwrap();
@@ -740,6 +752,8 @@ fn test_facade_record_editor_change_stats_non_typed_sources_never_human_typed() 
         crate::editor::EditorTransactionCause::Delete,
         0,
         3,
+        "",
+        0,
     )
     .unwrap();
     // Undo → Unknown
@@ -751,6 +765,8 @@ fn test_facade_record_editor_change_stats_non_typed_sources_never_human_typed() 
         crate::editor::EditorTransactionCause::Undo,
         0,
         2,
+        "",
+        0,
     )
     .unwrap();
     // Redo → Unknown
@@ -761,6 +777,8 @@ fn test_facade_record_editor_change_stats_non_typed_sources_never_human_typed() 
         "chap1",
         crate::editor::EditorTransactionCause::Redo,
         4,
+        0,
+        "",
         0,
     )
     .unwrap();
@@ -773,6 +791,8 @@ fn test_facade_record_editor_change_stats_non_typed_sources_never_human_typed() 
         crate::editor::EditorTransactionCause::Programmatic,
         5,
         1,
+        "",
+        0,
     )
     .unwrap();
 
@@ -784,6 +804,41 @@ fn test_facade_record_editor_change_stats_non_typed_sources_never_human_typed() 
     assert_eq!(summary["totalDeletedChars"], 3);
     // net_delta = 10(typing) + 7(pasted) - 3(deleted) - 2(undo) + 4(redo) + 5-1(programmatic)
     assert_eq!(summary["totalNetDeltaChars"], 20);
+}
+
+/// #936：平台端固定 event_id 的事件重发只计一次；归属日按事件发生时间，
+/// 重发时不能用「今天」覆盖。
+#[test]
+fn test_facade_record_editor_change_stats_dedups_and_keeps_occurred_date() {
+    let temp_dir = tempdir().unwrap();
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+    let core = crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+    let today = StatsApi::today_date();
+    let yesterday = crate::writing_stats::calendar::shift_date(&today, -1).unwrap();
+    let occurred_at_ms = chrono::Utc::now().timestamp_millis() - 24 * 60 * 60 * 1000;
+
+    // 同 event_id 重发两次（保存失败重试 / 进程重启恢复都会这样）。
+    for _ in 0..2 {
+        core.record_editor_change_stats(
+            "harmony",
+            "proj1",
+            "vol1",
+            "chap1",
+            crate::editor::EditorTransactionCause::Typing,
+            10,
+            0,
+            "evt-stable-1",
+            occurred_at_ms,
+        )
+        .unwrap();
+    }
+
+    // 只算一次，且落在事件发生当天（昨天），不漂到今天。
+    let daily = core.get_writing_stats_summary(&yesterday, &yesterday).unwrap();
+    assert_eq!(daily["totalHumanTypedChars"], 10);
+    let today_summary = core.get_writing_stats_summary(&today, &today).unwrap();
+    assert_eq!(today_summary["totalHumanTypedChars"], 0);
 }
 
 #[test]
@@ -946,6 +1001,8 @@ fn test_today_summary_matches_local_calendar_day() {
         &chapter.id,
         crate::editor::EditorTransactionCause::Typing,
         18,
+        0,
+        "",
         0,
     )
     .unwrap();

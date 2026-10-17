@@ -24,6 +24,10 @@ impl super::WriterCore {
     ///
     /// 不再接受 `duration_seconds` 和 `session_id` 参数：Core 从事件时间间隔自己算会话。
     /// 设备身份从 Core 的 `current_device.json` 取。
+    ///
+    /// `event_id` / `occurred_at_ms` 由平台端为编辑事务固定并原样重发：同一
+    /// `event_id` 只落一条、只计一次；`occurred_at_ms` 是事件发生时间，
+    /// 重发也不会把旧输入改记到今天（空串 / 0 表示老客户端，按 Core 旧行为生成）。
     #[allow(clippy::too_many_arguments)]
     pub fn record_editor_change_stats(
         &self,
@@ -34,6 +38,8 @@ impl super::WriterCore {
         cause: crate::editor::EditorTransactionCause,
         inserted_chars: u32,
         deleted_chars: u32,
+        event_id: &str,
+        occurred_at_ms: i64,
     ) -> Result<()> {
         use crate::editor::EditorTransactionCause;
 
@@ -72,7 +78,9 @@ impl super::WriterCore {
             return Ok(());
         }
 
-        let event = WritingInputEvent::new(
+        let event = WritingInputEvent::with_identity(
+            event_id.to_string(),
+            occurred_at_ms,
             device_id,
             platform,
             device_class,
@@ -159,5 +167,38 @@ impl super::WriterCore {
     /// 这里是以「现在」为终点重算的窗口速度，停笔超过一个窗口后回落到 0。
     pub fn get_current_writing_speed(&self, window_seconds: u32) -> Result<CurrentWritingSpeed> {
         self.get_stats_api().get_current_speed(window_seconds)
+    }
+
+    /// 单作品写作档案（#934）：作品元数据 + 历史累计人工码字 + 当前正文字数。
+    ///
+    /// 数据源语义分开：`created_at` 来自作品元数据；`current_word_count` 来自
+    /// 现有章节存量（`get_project_stats`）；其余字段来自本地事件历史。
+    /// 作品不存在时返回 `ProjectNotFound`，不返回「0 字作品」。
+    pub fn get_project_writing_lifetime_stats(
+        &self,
+        project_id: &str,
+    ) -> Result<super::ProjectWritingLifetimeStats> {
+        let project = crate::project::get_project(self.projects_root(), project_id)?;
+        let lifetime = self
+            .get_stats_api()
+            .get_project_lifetime_stats(project_id)?;
+        let stats = self.get_project_stats(project_id)?;
+
+        Ok(super::ProjectWritingLifetimeStats {
+            project_id: project.id,
+            created_at: project.created_at,
+            first_written_at_ms: lifetime.first_written_at_ms,
+            current_word_count: u64::from(stats.total_word_count),
+            total_human_typed_chars: lifetime.total_human_typed_chars,
+            best_writing_day: lifetime.best_writing_day,
+            best_writing_day_chars: lifetime.best_writing_day_chars,
+            writing_days: lifetime.writing_days,
+        })
+    }
+
+    /// 统计面板一次性快照（#935）：读一次事件，按 Core 本地日历切分
+    /// 今日 / 本周 / 本月，并给出本周范围的作品、章节、设备排行与速度曲线。
+    pub fn get_writing_stats_dashboard(&self) -> Result<Value> {
+        self.get_stats_api().get_dashboard_snapshot()
     }
 }
