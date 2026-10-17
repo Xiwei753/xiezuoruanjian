@@ -1,5 +1,5 @@
 import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
+import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from './dto/StarMapDtos'
@@ -16,6 +16,7 @@ export interface IWriterCoreBridge {
   renameProject(projectId: string, newName: string): Promise<ResultEnvelope<boolean>>
   deleteProject(projectId: string): Promise<ResultEnvelope<boolean>>
   getProjectStats(projectId: string): Promise<ResultEnvelope<ProjectStats>>
+  getProjectWritingLifetimeStats(projectId: string): Promise<ResultEnvelope<ProjectWritingLifetimeStats>>
 
   // Volume
   listVolumes(projectId: string): Promise<ResultEnvelope<Volume[]>>

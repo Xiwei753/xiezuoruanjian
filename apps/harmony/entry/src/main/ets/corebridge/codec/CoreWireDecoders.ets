@@ -13,7 +13,7 @@
 // 4. 嵌套对象递归 decode；数组逐元素 decode。
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
-import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
+import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
@@ -525,6 +525,42 @@ export function decodeProjectStats(data: Object): DecodeResult<ProjectStats> {
   const chapterCount: number | null = reqNum(data, 'chapterCount')
   if (chapterCount === null) { return err<ProjectStats>('chapterCount missing or not number') }
   return ok<ProjectStats>({ totalWordCount: totalWordCount, volumeCount: volumeCount, chapterCount: chapterCount })
+}
+
+export function decodeProjectWritingLifetimeStats(data: Object): DecodeResult<ProjectWritingLifetimeStats> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<ProjectWritingLifetimeStats>('ProjectWritingLifetimeStats: expected object')
+  }
+  const projectId: string | null = reqStr(data, 'projectId')
+  if (projectId === null) { return err<ProjectWritingLifetimeStats>('projectId missing or not string') }
+  const createdAt: string | null = reqStr(data, 'createdAt')
+  if (createdAt === null) { return err<ProjectWritingLifetimeStats>('createdAt missing or not string') }
+  const firstWrittenAtR: DecodeResult<string | null> = nullStr(data, 'firstWrittenAt')
+  if (!firstWrittenAtR.ok || firstWrittenAtR.value === undefined) { return err<ProjectWritingLifetimeStats>(`ProjectWritingLifetimeStats.${firstWrittenAtR.error ?? 'decode failed'}`) }
+  const currentWordCount: number | null = reqNum(data, 'currentWordCount')
+  if (currentWordCount === null) { return err<ProjectWritingLifetimeStats>('currentWordCount missing or not number') }
+  const totalHumanTypedChars: number | null = reqNum(data, 'totalHumanTypedChars')
+  if (totalHumanTypedChars === null) { return err<ProjectWritingLifetimeStats>('totalHumanTypedChars missing or not number') }
+  const bestWritingDayR: DecodeResult<string | null> = nullStr(data, 'bestWritingDay')
+  if (!bestWritingDayR.ok || bestWritingDayR.value === undefined) { return err<ProjectWritingLifetimeStats>(`ProjectWritingLifetimeStats.${bestWritingDayR.error ?? 'decode failed'}`) }
+  const bestWritingDayChars: number | null = reqNum(data, 'bestWritingDayChars')
+  if (bestWritingDayChars === null) { return err<ProjectWritingLifetimeStats>('bestWritingDayChars missing or not number') }
+  const writingDays: number | null = reqNum(data, 'writingDays')
+  if (writingDays === null) { return err<ProjectWritingLifetimeStats>('writingDays missing or not number') }
+  const historyScope: string | null = reqStr(data, 'historyScope')
+  if (historyScope === null) { return err<ProjectWritingLifetimeStats>('historyScope missing or not string') }
+  const value: ProjectWritingLifetimeStats = {
+    projectId: projectId,
+    createdAt: createdAt,
+    firstWrittenAt: firstWrittenAtR.value,
+    currentWordCount: currentWordCount,
+    totalHumanTypedChars: totalHumanTypedChars,
+    bestWritingDay: bestWritingDayR.value,
+    bestWritingDayChars: bestWritingDayChars,
+    writingDays: writingDays,
+    historyScope: historyScope
+  }
+  return ok<ProjectWritingLifetimeStats>(value)
 }
 
 export function decodeWritingStats(data: Object): DecodeResult<WritingStats> {

@@ -253,27 +253,50 @@ Rectangle {
                                 var buckets = root.speedBuckets
                                 if (buckets.length === 0)
                                     return
-                                // x 按 bucket 序号均布（首尾内边距 6px）；
-                                // y 按本页峰值归一化，峰值 0 时画底部平线。
+                                // Issue #935 复核：x 按 startMs 实际时间轴映射，
+                                // 断档按真实时间留白；y 按本页峰值归一化，峰值 0 时画底部平线。
                                 var peak = root.speedPeak()
                                 var pad = 6
                                 var innerWidth = Math.max(1, width - pad * 2)
                                 var innerHeight = Math.max(1, height - pad * 2)
-                                var step = buckets.length > 1 ? innerWidth / (buckets.length - 1) : 0
-                                ctx.beginPath()
-                                for (var i = 0; i < buckets.length; i++) {
-                                    var rate = Number(buckets[i] && buckets[i].charsPerMinute)
-                                    if (isNaN(rate) || rate < 0) rate = 0
-                                    var x = buckets.length > 1 ? pad + i * step : pad + innerWidth / 2
-                                    var y = pad + innerHeight * (1 - (peak > 0 ? rate / peak : 0))
-                                    if (i === 0) ctx.moveTo(x, y)
-                                    else ctx.lineTo(x, y)
+                                var minMs = Number(buckets[0].startMs)
+                                var maxMs = minMs
+                                for (var i = 1; i < buckets.length; i++) {
+                                    var bucketStart = Number(buckets[i].startMs)
+                                    if (bucketStart < minMs) minMs = bucketStart
+                                    if (bucketStart > maxMs) maxMs = bucketStart
                                 }
+                                if (isNaN(minMs)) minMs = 0
+                                if (isNaN(maxMs)) maxMs = minMs
+                                var span = maxMs - minMs
+                                var bucketMs = Math.max(1, Number(root.dashboard && root.dashboard.speedCurve ? root.dashboard.speedCurve.bucketMinutes : 60) || 60) * 60000
                                 ctx.strokeStyle = Kirigami.Theme.highlightColor
                                 ctx.lineWidth = 2
                                 ctx.lineJoin = "round"
                                 ctx.lineCap = "round"
+                                ctx.beginPath()
+                                var previousMs = -1
+                                for (var j = 0; j < buckets.length; j++) {
+                                    var rate = Number(buckets[j] && buckets[j].charsPerMinute)
+                                    if (isNaN(rate) || rate < 0) rate = 0
+                                    var bucketStartMs = Number(buckets[j].startMs)
+                                    var x = span > 0 ? pad + innerWidth * (bucketStartMs - minMs) / span : pad + innerWidth / 2
+                                    var y = pad + innerHeight * (1 - (peak > 0 ? rate / peak : 0))
+                                    // 断档（超过 1.5 个桶宽没有数据）断开折线，按真实时间留白。
+                                    if (previousMs < 0 || bucketStartMs - previousMs > bucketMs * 1.5)
+                                        ctx.moveTo(x, y)
+                                    else
+                                        ctx.lineTo(x, y)
+                                    previousMs = bucketStartMs
+                                }
                                 ctx.stroke()
+                                if (buckets.length === 1) {
+                                    // 单点没有线段，画一个圆点让数据可见。
+                                    ctx.beginPath()
+                                    ctx.arc(pad + innerWidth / 2, pad + innerHeight * (1 - (peak > 0 ? Number(buckets[0].charsPerMinute) / peak : 0)), 3, 0, Math.PI * 2)
+                                    ctx.fillStyle = Kirigami.Theme.highlightColor
+                                    ctx.fill()
+                                }
                             }
 
                             Connections {

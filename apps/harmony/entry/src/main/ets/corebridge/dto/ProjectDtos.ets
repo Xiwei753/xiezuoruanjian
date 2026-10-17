@@ -29,6 +29,21 @@ export interface ProjectStats {
   chapterCount: number
 }
 
+// 单作品写作档案（#934）— Core ProjectWritingLifetimeStatsDto（api/types/stats.rs，camelCase）。
+// firstWrittenAt / bestWritingDay 是 Core `Option<String>`（未标 skip_serializing_if，
+// 键恒出现，无值时为 null）→ `string | null`；historyScope 原样透传（当前固定 "localEvents"）。
+export interface ProjectWritingLifetimeStats {
+  projectId: string
+  createdAt: string
+  firstWrittenAt: string | null
+  currentWordCount: number
+  totalHumanTypedChars: number
+  bestWritingDay: string | null
+  bestWritingDayChars: number
+  writingDays: number
+  historyScope: string
+}
+
 // ─── Volume DTOs ───
 
 export interface Volume {

@@ -64,9 +64,12 @@ pub fn open_chapter(
 
 /// 按编辑事务上报写作统计。
 ///
-/// 平台端只透传编辑事实（cause + inserted/deleted），不自己拼 source、device_id、session_id。
-/// `cause → EventSource` 映射和设备身份管理由 Core 内部完成。
-/// `platform` 固定为 `"linux"`。
+/// 平台端只透传编辑事实（cause + inserted/deleted + 稳定身份），不自己拼
+/// source、device_id、session_id。`cause → EventSource` 映射和设备身份管理由
+/// Core 内部完成。`platform` 固定为 `"linux"`。
+///
+/// Issue #935 复核：`event_id` / `occurred_at_ms` 由调用方首次入队时固定，
+/// 写盘失败重发必须原样带回，Core 才能按 `event_id` 判重而不是把重发当新事件。
 pub fn record_editor_change_stats(
     api: &WriterCoreApi,
     project_id: &str,
@@ -75,6 +78,8 @@ pub fn record_editor_change_stats(
     cause: writer_core::editor::EditorTransactionCause,
     inserted_chars: u32,
     deleted_chars: u32,
+    event_id: &str,
+    occurred_at_ms: i64,
 ) -> Result<(), WriterError> {
     let input = writer_core::api::EditorChangeStatsInputDto {
         platform: "linux".to_string(),
@@ -84,9 +89,9 @@ pub fn record_editor_change_stats(
         cause: cause.into(),
         inserted_chars,
         deleted_chars,
-        // Linux 端暂不上报稳定身份，Core 按旧行为生成 UUID / 用当前时间。
-        event_id: String::new(),
-        occurred_at_ms: 0,
+        // Issue #935 复核：身份与发生时间由入队时固定，重发原样带回。
+        event_id: event_id.to_string(),
+        occurred_at_ms,
     };
     api.record_editor_change_stats(input)
         .map_err(WriterError::from)

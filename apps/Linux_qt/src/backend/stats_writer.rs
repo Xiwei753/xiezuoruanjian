@@ -26,6 +26,10 @@
 // 查询时，此前全部 Record 已处理完，它在 worker thread 里一次性生成快照/状态并
 // 通过 completion 回报；completion 由上层用 queued_callback 投递回 GUI 线程。
 // 队列消费到查询时若前面有 Record 写盘失败，先向下一次查询回报错误，不假装成功。
+//
+// Issue #935 复核：写盘失败不能只回报一次就假装成功。失败命令保留在 worker 的
+// 待补写列表里，用首次入队就固定的 event_id / occurred_at_ms 在同一串行队列中
+// 重放；查询前先补写，仍有失败则回报错误而不是表面成功的快照。
 
 use std::sync::mpsc::{self, Sender};
 use writer_core::editor::EditorTransactionCause;
@@ -39,6 +43,10 @@ pub(crate) struct StatsWriteCommand {
     pub cause: EditorTransactionCause,
     pub inserted_chars: u32,
     pub deleted_chars: u32,
+    /// Issue #935 复核：编辑事实首次入队就固定稳定身份与发生时间，
+    /// 写盘失败重发时原样带回，避免每次重发都被 Core 当成新事件。
+    pub event_id: String,
+    pub occurred_at_ms: i64,
 }
 
 /// 统计查询完成回调：worker 在 worker thread 上调用，交回 `(request_id, 结果)`。
@@ -65,6 +73,64 @@ enum StatsWriterMessage {
         window_seconds: u32,
         completion: StatsQueryCallback,
     },
+}
+
+/// 把一条编辑事实写进 Core 统计；失败时记录日志并保留原始命令供补写。
+fn try_record_editor_change_stats(
+    api: &writer_core::api::WriterCoreApi,
+    cmd: &StatsWriteCommand,
+) -> Result<(), String> {
+    crate::writing_bridge::record_editor_change_stats(
+        api,
+        &cmd.project_id,
+        &cmd.volume_id,
+        &cmd.chapter_id,
+        cmd.cause,
+        cmd.inserted_chars,
+        cmd.deleted_chars,
+        &cmd.event_id,
+        cmd.occurred_at_ms,
+    )
+    .map_err(|e| {
+        log::error!(
+            "stats-writer: record_editor_change_stats failed (event_id={}): {e}",
+            cmd.event_id
+        );
+        format!("record_editor_change_stats: {e}")
+    })
+}
+
+/// 按入队顺序重放待补写命令，返回仍未成功的数量。
+fn flush_pending_records(
+    api: &writer_core::api::WriterCoreApi,
+    pending_records: &mut Vec<StatsWriteCommand>,
+) -> usize {
+    if pending_records.is_empty() {
+        return 0;
+    }
+    let mut still_failed = Vec::new();
+    for cmd in pending_records.drain(..) {
+        if try_record_editor_change_stats(api, &cmd).is_err() {
+            still_failed.push(cmd);
+        }
+    }
+    *pending_records = still_failed;
+    pending_records.len()
+}
+
+/// 先补写再判断：全部写盘成功返回 None，否则返回给查询的错误。
+fn pending_records_failure(
+    api: &writer_core::api::WriterCoreApi,
+    pending_records: &mut Vec<StatsWriteCommand>,
+) -> Option<String> {
+    let remaining = flush_pending_records(api, pending_records);
+    if remaining == 0 {
+        None
+    } else {
+        Some(format!(
+            "stats-writer: {remaining} 条编辑事实尚未写盘成功，暂不返回统计结果"
+        ))
+    }
 }
 
 /// 进程内唯一的串行 stats writer handle。
@@ -94,37 +160,28 @@ impl StatsWriterHandle {
                     &projects_root,
                     &layout,
                 );
-                // Issue #935：Record 写盘失败不吞掉——记在这里，由下一次
-                // Query 回报真实错误，避免「查询假装全部成功」。
-                let mut pending_error: Option<String> = None;
+                // Issue #935 复核：Record 写盘失败不吞掉——失败命令保留在待补写
+                // 列表里，用固定的 event_id / occurred_at_ms 在队列内重放；
+                // 补写成功前，查询回报错误而不是表面成功。
+                let mut pending_records: Vec<StatsWriteCommand> = Vec::new();
                 for msg in receiver.iter() {
                     match msg {
                         StatsWriterMessage::Record(cmd) => {
-                            if let Err(e) = crate::writing_bridge::record_editor_change_stats(
-                                &api,
-                                &cmd.project_id,
-                                &cmd.volume_id,
-                                &cmd.chapter_id,
-                                cmd.cause,
-                                cmd.inserted_chars,
-                                cmd.deleted_chars,
-                            ) {
-                                log::error!(
-                                    "stats-writer: record_editor_change_stats failed: {}",
-                                    e
-                                );
-                                pending_error = Some(format!("record_editor_change_stats: {e}"));
+                            if try_record_editor_change_stats(&api, &cmd).is_err() {
+                                pending_records.push(cmd);
                             }
                         }
                         StatsWriterMessage::Barrier(ack) => {
-                            // 前面的 Record 已全部落盘，回 ack 让 UI 线程继续查询。
+                            // 先尽量补写前面的失败事实，再放行查询；仍失败的
+                            // 留给 QueryDashboard/QueryWritingStatus 回报。
+                            let _ = flush_pending_records(&api, &mut pending_records);
                             let _ = ack.send(());
                         }
                         StatsWriterMessage::QueryDashboard {
                             request_id,
                             completion,
                         } => {
-                            if let Some(err) = pending_error.take() {
+                            if let Some(err) = pending_records_failure(&api, &mut pending_records) {
                                 completion(request_id, Err(err));
                             } else {
                                 completion(
@@ -139,7 +196,7 @@ impl StatsWriterHandle {
                             window_seconds,
                             completion,
                         } => {
-                            if let Some(err) = pending_error.take() {
+                            if let Some(err) = pending_records_failure(&api, &mut pending_records) {
                                 completion(request_id, Err(err));
                             } else {
                                 let result = api
@@ -157,6 +214,8 @@ impl StatsWriterHandle {
                         }
                     }
                 }
+                // 退出前最后再补写一次，尽量不丢尾部失败事实。
+                let _ = flush_pending_records(&api, &mut pending_records);
             })
             .expect("failed to spawn stats-writer thread");
         Self {

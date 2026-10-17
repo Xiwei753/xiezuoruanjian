@@ -68,6 +68,17 @@ static napi_value NativeGetProjectStats(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_get_project_stats(project_id));
 }
 
+static napi_value NativeGetProjectWritingLifetimeStats(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char project_id[256] = {0};
+    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
+
+    return ReturnJsonString(env, writer_core_get_project_writing_lifetime_stats(project_id));
+}
+
 // ── Volume ──
 
 static napi_value NativeListVolumes(napi_env env, napi_callback_info info) {
@@ -162,6 +173,7 @@ napi_property_descriptor* getProjectDescriptors(size_t* count) {
         {"nativeRenameProject", nullptr, NativeRenameProject, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeDeleteProject", nullptr, NativeDeleteProject, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetProjectStats", nullptr, NativeGetProjectStats, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetProjectWritingLifetimeStats", nullptr, NativeGetProjectWritingLifetimeStats, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeListVolumes", nullptr, NativeListVolumes, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCreateVolume", nullptr, NativeCreateVolume, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRenameVolume", nullptr, NativeRenameVolume, nullptr, nullptr, nullptr, napi_default, nullptr},

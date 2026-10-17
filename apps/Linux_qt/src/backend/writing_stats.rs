@@ -22,6 +22,13 @@ impl AppBackend {
         deleted_chars: u32,
     ) {
         if let Some(ref writer) = self.stats_writer {
+            // Issue #935 复核：编辑事实首次入队就固定稳定身份与发生时间，
+            // 写盘失败重发时由 worker 原样带回，Core 按 event_id 判重。
+            let event_id = uuid::Uuid::new_v4().to_string();
+            let occurred_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+                .unwrap_or(0);
             if let Err(e) = writer.enqueue(crate::backend::stats_writer::StatsWriteCommand {
                 project_id: project_id.to_string(),
                 volume_id: volume_id.to_string(),
@@ -29,6 +36,8 @@ impl AppBackend {
                 cause,
                 inserted_chars,
                 deleted_chars,
+                event_id,
+                occurred_at_ms,
             }) {
                 // Issue #935：发送失败不再静默丢弃，明确记诊断（统计事实已丢）。
                 self.debug_error("stats", "record_editor_change_stats_enqueue_failed", &e);

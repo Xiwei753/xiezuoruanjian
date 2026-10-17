@@ -1,6 +1,6 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
+import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from './dto/StarMapDtos'
@@ -166,6 +166,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getProjectStats(projectId: string): Promise<ResultEnvelope<ProjectStats>> {
     return this.projectBridge.getProjectStats(projectId)
+  }
+
+  async getProjectWritingLifetimeStats(projectId: string): Promise<ResultEnvelope<ProjectWritingLifetimeStats>> {
+    return this.projectBridge.getProjectWritingLifetimeStats(projectId)
   }
 
   // ── Volume ──

@@ -89,6 +89,9 @@ char*  writer_core_save_syncable_settings(const char* settings_json);
 char*  writer_core_rename_project(const char* project_id, const char* new_name);
 char*  writer_core_delete_project(const char* project_id);
 char*  writer_core_get_project_stats(const char* project_id);
+// 单作品写作档案（#934）：开写日期 / 累计人工码字 / 单日最高纪录 / 写作天数。
+// 返回 ResultEnvelope JSON；firstWrittenAt / bestWritingDay 可为 null。
+char*  writer_core_get_project_writing_lifetime_stats(const char* project_id);
 
 // ── Volume mutations ──
 char*  writer_core_rename_volume(const char* project_id, const char* volume_id, const char* new_name);
