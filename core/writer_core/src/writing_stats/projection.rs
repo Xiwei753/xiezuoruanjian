@@ -267,8 +267,9 @@ pub fn project_events(
 
 /// 作品级写作档案聚合结果（#934）。
 ///
-/// `total_human_typed_chars` 复用 [`project_events`] 的 per-project 分类结果；
-/// 日期纪录直接从原始事件取。注意这只是**当前设备可读的本地事件历史**：
+/// `total_human_typed_chars` 与 [`project_events`] 的人工输入口径一致，
+/// 但单次遍历直接累计，不计算无关的速度曲线；日期纪录同样直接从原始事件取。
+/// 注意这只是**当前设备可读的本地事件历史**：
 /// `events.local` 不参与跨设备同步，不代表全设备终身输入量。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProjectLifetimeStatsAgg {
@@ -294,17 +295,17 @@ pub fn project_lifetime_stats(
     events: &[WritingInputEvent],
     project_id: &str,
 ) -> ProjectLifetimeStatsAgg {
-    let total_human_typed_chars = project_events(events, 60, None)
-        .per_project
-        .get(project_id)
-        .map_or(0, |project| project.human_typed_chars);
-
+    // 单次遍历同时累计人工码字、最早开写时间、每日产量与写作天数。
+    // 不复用 `project_events`：它会连带计算速度曲线（按小时分桶并逐桶重扫
+    // 事件），作品历史变长后，查询「累计码字」会被无关计算拖慢。
+    let mut total_human_typed_chars: u64 = 0;
     let mut daily = std::collections::BTreeMap::<String, u64>::new();
     let mut first_written_at_ms: Option<i64> = None;
     for event in events.iter().filter(|e| e.project_id == project_id) {
         if event.source != EventSource::HumanTyped || event.inserted_chars == 0 {
             continue;
         }
+        total_human_typed_chars += u64::from(event.inserted_chars);
         first_written_at_ms =
             Some(first_written_at_ms.map_or(event.timestamp_ms, |old| old.min(event.timestamp_ms)));
         *daily.entry(event.business_date()).or_default() += u64::from(event.inserted_chars);
