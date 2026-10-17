@@ -141,11 +141,26 @@ impl super::WriterCore {
         // 同步编排层（full_sync）在 Prepare 阶段取 snapshot 后传入。
         const GLOBAL_KEY: &str = "sync_token_global";
         if let Some(ref storage) = self.secure_storage {
-            if let Ok(Some(bytes)) = storage.get_secret(GLOBAL_KEY) {
-                if let Ok(token) = String::from_utf8(bytes) {
+            // Issue #924 复核：区分 Ok(None)（新用户/需要迁移）与 Err（安全存储真故障）。
+            // 安全存储故障必须明确返回错误，不能吞掉后误判为「Token 不存在」。
+            match storage.get_secret(GLOBAL_KEY) {
+                Ok(Some(bytes)) => {
+                    let token = String::from_utf8(bytes).map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "secure storage value for {} is not valid UTF-8: {}",
+                            GLOBAL_KEY, e
+                        )))
+                    })?;
                     if !token.is_empty() {
                         return Ok(crate::sync::SyncSecrets::from_github_token(token));
                     }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "secure storage read failed for {}: {}",
+                        GLOBAL_KEY, error
+                    ))));
                 }
             }
             // 旧明文凭据一次性迁移：只有安全存储写入成功、读回一致且旧文件删除成功
@@ -208,14 +223,32 @@ impl super::WriterCore {
     ) -> crate::error::Result<Option<crate::sync::SyncSecrets>> {
         let key = format!("sync_token_global_g{}", generation);
         if let Some(ref storage) = self.secure_storage {
-            let token = storage
-                .get_secret(&key)
-                .ok()
-                .flatten()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-                .filter(|t| !t.is_empty());
-            if token.is_some() {
-                return Ok(token.map(crate::sync::SyncSecrets::from_github_token));
+            // Issue #924 复核：读取错误必须透出（Err），不能用 `.ok().flatten()` 吞掉后
+            // 误判为「没有凭据」。只有 Ok(None) 才继续旧明文迁移路径。
+            let token = match storage.get_secret(&key) {
+                Ok(Some(bytes)) => {
+                    let token = String::from_utf8(bytes).map_err(|e| {
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "secure storage value for {} is not valid UTF-8: {}",
+                            key, e
+                        )))
+                    })?;
+                    if token.is_empty() {
+                        None
+                    } else {
+                        Some(token)
+                    }
+                }
+                Ok(None) => None,
+                Err(error) => {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "secure storage read failed for {}: {}",
+                        key, error
+                    ))));
+                }
+            };
+            if let Some(token) = token {
+                return Ok(Some(crate::sync::SyncSecrets::from_github_token(token)));
             }
             // generation 旧明文凭据一次性迁移（成功时序，Issue #924）：
             // 写入成功 → 读回一致 → 删除旧文件；任一步失败保留文件并返回错误。

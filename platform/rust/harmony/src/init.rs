@@ -209,7 +209,8 @@ fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
 /// - `-2` 任一参数含无效 UTF-8
 /// - `-4` bootstrap 失败
 /// - `-5` `app_data_root` 为空串（非法路径）
-/// - `-6` 安全存储（HUKS）初始化失败（不回落明文凭据路径）
+/// - `-6` 安全存储目录创建等本地初始化失败（不回落明文凭据路径；
+///   HUKS 可用性不在启动时探测，安全能力故障在凭证操作时明确返回）
 ///
 /// ## Safety
 ///
@@ -266,13 +267,13 @@ pub unsafe extern "C" fn writer_core_init_harmony(
     let connected = tri_state(is_connected);
     let metered = tri_state(is_metered);
 
-    // 安全存储（HUKS）初始化失败时以稳定错误码 -6 结束，不在 UI 与同步凭据上
-    // 悄悄回退明文文件路径（Issue #924）。
+    // 安全存储实例只在构造时建立目录；HUKS 可用性不在这里探测（Issue #924 复核），
+    // 因此这里的失败只可能是目录创建等本地错误，以 -6 结束，不悄悄回退明文文件路径。
     let services =
         match super::services::create_platform_services(platform_init, connected, metered) {
             Ok(services) => services,
             Err(error) => {
-                log::error!("writer_core_init_harmony: secure storage init failed: {error}");
+                log::error!("writer_core_init_harmony: secure storage setup failed: {error}");
                 return -6;
             }
         };

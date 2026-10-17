@@ -19,7 +19,8 @@ use super::transport::ReqwestSyncTransport;
 /// - `PlatformInit`：Harmony 平台初始化上下文
 /// - `ConfigStore`：基于 `FileConfigStore` 的配置存储
 /// - `SecureStorage`：基于系统 HUKS 的密文存储（Issue #924）；
-///   初始化失败即返回 `Err`，由调用方以稳定错误码告知 UI，不回落明文文件
+///   构造时只建立存储目录，HUKS 可用性在凭证/同步操作时按需处理并把错误明确返回，
+///   不回退明文文件，也不因安全能力暂不可用阻断 Core 启动（离线写作照常）
 /// - `NetworkState`：网络连接状态；`None` 表示平台查询失败/未知，不注入伪造的在线状态
 /// - `SyncTransportFactory`：基于 `ReqwestSyncTransport` 的同步传输工厂（仅 `github-api` feature）
 ///
@@ -37,6 +38,8 @@ pub fn create_platform_services(
         Some(Box::new(FileConfigStore::new(config_dir)));
 
     // HUKS 安全存储：密文信封放在同一个 app 私有数据根下（不存明文、不存密钥）。
+    // 这里只创建存储实例（建立目录）；HUKS 可用性不在此处探测——安全能力暂不可用时，
+    // 只让凭据/同步操作失败并返回明确错误，离线写作不受影响（Issue #924 复核）。
     let secure_storage: Option<Box<dyn writer_platform_api::SecureStorage>> = Some(Box::new(
         HarmonyHuksSecureStorage::new(&platform_init.app_data_dir)?,
     ));

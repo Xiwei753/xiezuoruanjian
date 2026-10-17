@@ -169,7 +169,9 @@ pub struct HarmonyHuksSecureStorage {
 }
 
 impl HarmonyHuksSecureStorage {
-    /// 建立安全存储目录并探测 HUKS 可用性；失败时返回明确错误，不回退明文路径。
+    /// 建立安全存储目录并创建实例。**不在启动时探测 HUKS**：安全能力不可用时
+    /// 只应让凭证/同步操作失败，离线写作照常（Issue #924 复核）。
+    /// 失败时返回明确错误，不回退明文路径。
     pub fn new(app_data_root: &Path) -> Result<Self, String> {
         if app_data_root.as_os_str().is_empty() {
             return Err("app data root is empty".to_string());
@@ -177,8 +179,13 @@ impl HarmonyHuksSecureStorage {
         let directory = app_data_root.join("secure_storage");
         fs::create_dir_all(&directory)
             .map_err(|error| format!("create secure storage directory failed: {}", error))?;
-        platform::probe()?;
         Ok(Self { directory })
+    }
+
+    /// 显式安全能力诊断：密钥生成 + 加解密回环自检。
+    /// 供诊断入口按需调用，不绑定 Core 启动（Issue #924 复核）。
+    pub fn probe_security_capability(&self) -> Result<(), String> {
+        platform::probe()
     }
 
     /// key → 信封文件名：对 key 原始字节做十六进制编码，避免路径穿越与非法字符。
