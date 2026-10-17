@@ -1370,3 +1370,71 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
         );
     });
 }
+
+/// Issue #919 复核（comment 6230082812）：`reload_plain_text` 选区恢复条件修正。
+///
+/// 旧代码用 `mirror.cursor() != clamp_to_char_boundary(new_text, old_cursor)` 作
+/// 选区恢复条件，但 `load_text` 内部已把新 kernel 的 cursor/anchor 钳到
+/// `clamp_to_char_boundary(new_text, old_cursor)`，条件恒不成立，非空选区
+///（如 anchor=1/head=4）会被新 kernel 的折叠选区覆盖成 anchor=head。
+/// 修正后按 `new_anchor != new_cursor` 决定是否恢复选区；折叠光标由 `load_text`
+/// 本身保留，无需额外 SetSelection。版本绑定放在恢复选区之后。
+///
+/// 本测试先在旧正文 "abcdef" 上设置非空选区 [1, 4)，调用
+/// `reload_plain_text("abcdefg")`，断言：
+/// - 新正文为 "abcdefg"；
+/// - `selection_range() == (1, 4)`（非空选区保留，不被折叠选区覆盖）；
+/// - `text_revision() == mirror.revision()`（版本绑定与 Core 一致）；
+/// - 无跨文档残留 text_motion（reload 是 Load 路线，`reset_document_visual_state`
+///   已清空 text_motion，不产生编辑动画）。
+#[test]
+fn reload_plain_text_preserves_non_empty_selection() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("abcdef"));
+        // 设置非空选区 [1, 4)（"bcd"）。
+        item.pipeline.set_selection(1, 4);
+        assert_eq!(
+            item.pipeline.selection_range(),
+            (1, 4),
+            "前置：reload 前必须有非空选区 [1, 4)"
+        );
+        assert_eq!(
+            item.pipeline.committed_text(),
+            "abcdef",
+            "前置：reload 前正文为 abcdef"
+        );
+
+        // reload 到新正文 "abcdefg"（末尾追加一个字符，old_anchor=1/old_cursor=4
+        // 仍落在合法 char boundary，非空选区应保留）。
+        item.reload_plain_text(QString::from("abcdefg"));
+
+        // 新正文。
+        assert_eq!(
+            item.pipeline.committed_text(),
+            "abcdefg",
+            "reload 后正文必须更新为 abcdefg"
+        );
+        // 非空选区保留——这是本轮修正的核心断言。
+        assert_eq!(
+            item.pipeline.selection_range(),
+            (1, 4),
+            "reload 后非空选区 [1, 4) 必须保留，不能被折叠选区覆盖\
+            （旧条件 mirror.cursor()!=clamp(...) 恒不成立会丢失选区）"
+        );
+        // 版本绑定与 Core 一致。
+        assert_eq!(
+            item.pipeline.text_revision(),
+            item.pipeline.mirror().revision(),
+            "reload 后 text_revision 必须等于 Core mirror revision（Load 路线绑定）"
+        );
+        // 无跨文档残留 text_motion（reload 是 Load 路线，不产生编辑动画）。
+        assert!(
+            item.pipeline.text_motion().is_none(),
+            "reload 是 Load 路线，reset_document_visual_state 已清空 text_motion，\
+             不应残留跨文档 text_motion"
+        );
+
+        println!("[BEHAVIOR_VERIFY] #919 reload_plain_text 保留非空选区 ok");
+    });
+}

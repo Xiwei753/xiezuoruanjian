@@ -89,17 +89,22 @@ impl SujianEditorItem {
         // Issue #919 复核（comment 6229842948）：统一为 Load 路线（与
         // `set_plain_text_from_qml` / `load_document_text` 一致），不再走
         // `synthetic_edit_result` + `record_transaction`，避免 `text_revision` 与
-        // Core revision 脱节。保留 reload 的光标/选区语义：`load_text` 用 old_cursor，
-        // 若 mirror cursor 与 char boundary 不一致则用正式 `set_selection` 恢复。
+        // Core revision 脱节。
+        //
+        // Issue #919 复核（comment 6230082812）：选区恢复条件修正。`load_text` 内部
+        // 已把新 kernel 的 cursor/anchor 钳到 `clamp_to_char_boundary(new_text,
+        // old_cursor)`，因此旧的"mirror cursor != clamp(...)"条件恒不成立，非空选区
+        // （如 anchor=1/head=4）会被新 kernel 的折叠选区覆盖成 anchor=head。改为按
+        // 钳位后的 anchor/cursor 是否不同决定是否恢复选区；折叠光标由 `load_text`
+        // 本身保留，无需额外 SetSelection。版本绑定放在恢复选区之后，保持与 Core
+        // mirror 的最终版本一致。
         self.reset_document_visual_state();
         self.pipeline.load_text(normalized.clone(), old_cursor);
-        if self.pipeline.mirror().cursor()
-            != clamp_to_char_boundary(self.pipeline.mirror().text(), old_cursor)
-        {
-            let _ = self.pipeline.set_selection(
-                clamp_to_char_boundary(self.pipeline.mirror().text(), old_anchor),
-                clamp_to_char_boundary(self.pipeline.mirror().text(), old_cursor),
-            );
+        let text = self.pipeline.mirror().text();
+        let new_anchor = clamp_to_char_boundary(text, old_anchor);
+        let new_cursor = clamp_to_char_boundary(text, old_cursor);
+        if new_anchor != new_cursor {
+            let _ = self.pipeline.set_selection(new_anchor, new_cursor);
         }
         self.pipeline
             .set_text_revision(self.pipeline.mirror().revision());
