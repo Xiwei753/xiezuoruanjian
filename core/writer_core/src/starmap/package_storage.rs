@@ -116,6 +116,13 @@ pub fn save_node(app_data_root: &Path, starmap_id: &str, node: &StarMapNode) -> 
         .join(format!("{}.json", node.id)))
 }
 
+/// 直接 unlink 的旧删除 API：生产代码不得调用。
+///
+/// 节点删除必须走 [`delete_node_file_to_trash`] + `flush_save_queue` 的
+/// durable 删除事务（journal → trash → tombstone），否则文件消失却没有
+/// 删除事实，同步会报 "known file missing without tombstone"。
+/// 保留给单元测试，标记 `#[cfg(test)]` 使生产构建不可调用。
+#[cfg(test)]
 pub fn delete_node_file(
     app_data_root: &Path,
     starmap_id: &str,
@@ -171,6 +178,8 @@ pub fn save_edge(app_data_root: &Path, starmap_id: &str, edge: &StarMapEdge) -> 
         .join(format!("{}.json", edge.id)))
 }
 
+/// 直接 unlink 的旧删除 API：生产代码不得调用（同 [`delete_node_file`] 语义）。
+#[cfg(test)]
 pub fn delete_edge_file(
     app_data_root: &Path,
     starmap_id: &str,
@@ -221,6 +230,8 @@ pub fn save_embed(app_data_root: &Path, starmap_id: &str, embed: &StarMapEmbed) 
         .join(format!("{}.json", embed.instance_id)))
 }
 
+/// 直接 unlink 的旧删除 API：生产代码不得调用（同 [`delete_node_file`] 语义）。
+#[cfg(test)]
 pub fn delete_embed_file(
     app_data_root: &Path,
     starmap_id: &str,
@@ -271,6 +282,8 @@ pub fn save_link(app_data_root: &Path, starmap_id: &str, link: &StarMapLink) -> 
         .join(format!("{}.json", link.link_id)))
 }
 
+/// 直接 unlink 的旧删除 API：生产代码不得调用（同 [`delete_node_file`] 语义）。
+#[cfg(test)]
 pub fn delete_link_file(
     app_data_root: &Path,
     starmap_id: &str,
@@ -325,6 +338,8 @@ pub fn save_hyperlink(
         .join(format!("{}.json", hl.hyperlink_id)))
 }
 
+/// 直接 unlink 的旧删除 API：生产代码不得调用（同 [`delete_node_file`] 语义）。
+#[cfg(test)]
 pub fn delete_hyperlink_file(
     app_data_root: &Path,
     starmap_id: &str,
@@ -401,6 +416,60 @@ mod tests {
         assert!(node_file.exists());
         delete_node_file(dir.path(), &meta.starmap_id, "n1").unwrap();
         assert!(!node_file.exists());
+    }
+
+    #[test]
+    fn test_delete_node_file_to_trash_moves_file_and_returns_paths() {
+        // 生产删除入口必须返回完整的 (original, trash) 路径对，并把文件留在 trash，
+        // 证明节点文件不会无声 unlink——queue 层据这两个路径注册 SyncDeleteFact。
+        let dir = setup_project_root();
+        let meta = create_starmap(dir.path(), "Test", "", None).unwrap();
+        let now = crate::starmap::now_epoch();
+        let node = StarMapNode {
+            id: "n1".to_string(),
+            title: "Node 1".to_string(),
+            kind: StarMapNodeKind::Concept,
+            payload: None,
+            tags: vec![],
+            content: Default::default(),
+            anchors: vec![],
+            portal: None,
+            position: StarMapPoint::default(),
+            style: StarMapNodeStyle::default(),
+            provenance: Default::default(),
+            created_at: now,
+            updated_at: now,
+        };
+        save_node(dir.path(), &meta.starmap_id, &node).unwrap();
+
+        let orig_rel = format!(
+            "starmaps/{}/nodes/{}/n1.json",
+            meta.starmap_id,
+            bucket_for_id("n1")
+        );
+        let orig_abs = dir.path().join(&orig_rel);
+        assert!(orig_abs.exists());
+
+        let trash_rel = "sync/trash/token_test";
+        let trash_root = dir.path().join(trash_rel);
+        let (returned_orig, returned_trash) =
+            delete_node_file_to_trash(dir.path(), &meta.starmap_id, "n1", &trash_root, trash_rel)
+                .unwrap()
+                .expect("file exists → Some");
+        assert_eq!(returned_orig, orig_rel);
+        assert_eq!(returned_trash, format!("{trash_rel}/{orig_rel}"));
+        assert!(!orig_abs.exists(), "原路径不应再存在");
+        assert!(
+            dir.path().join(&returned_trash).exists(),
+            "文件必须位于 trash，而不是被 unlink 掉"
+        );
+
+        // 幂等：原文件已不在时返回 Ok(None)，调用方仍可用 journal facts 补墓碑。
+        assert!(
+            delete_node_file_to_trash(dir.path(), &meta.starmap_id, "n1", &trash_root, trash_rel)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -143,8 +143,10 @@ fn recover_storage_transactions(
 /// 恢复星图对象级删除事务（starmap_object_delete journal）。
 ///
 /// 枚举 `app-meta/starmap-object-delete-journals/` 下所有 journal，按阶段处理：
-/// - `Planned`：plan/facts 已 durable 但 rename 未开始。清掉 journal，让下一轮
-///   flush 重新处理（deleted_*_ids 集合如果还在内存中会被重新 plan）。
+/// - `Planned`：plan/facts 已 durable 但 local apply 可能未开始或部分完成。
+///   必须用 journal 里固定的 trash 路径重放 rename + tombstone + GraphMeta，
+///   不能只清 journal——清掉会丢 durable facts，同步会报 "known file missing
+///   without tombstone"。
 /// - `Tombstoned`：文件已进 trash、tombstone 已写，但 GraphMeta 没完成。
 ///   按 journal 里的 objects 补 GraphMeta 删除记录（移除成员 id + 补
 ///   deleted_since_last_sync 条目），GraphMeta 补完后清 journal。
