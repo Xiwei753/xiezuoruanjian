@@ -59,8 +59,9 @@ import { EditorMotionPolicy } from '../motion/EditorMotionPolicy'
 import { ProjectWorkspaceViewModel } from '../../project/presentation/ProjectWorkspaceViewModel'
 
 // Issue #920 A：写作页不再向 Core 要七角色 bounds，布局由 ArkUI 自适应自行决定。
-// 下面是平台自己的宽屏断点与面板尺寸（vp），不再从 Core 的 WorkbenchLayoutPlan 取。
-const WORKBENCH_MIN_WIDTH_VP: number = 696
+// Issue #932：宽窄形态统一由 AdaptiveContext.prefersWideLayout（与导航/设置同一口径）判定，
+// 不再维护写作页私有的宽屏断点（原 WORKBENCH_MIN_WIDTH_VP = 696 已删除）。
+// 下面是平台自己的面板尺寸（vp）与「两侧同时展开」的让位阈值，不再从 Core 的 WorkbenchLayoutPlan 取。
 const WORKBENCH_BOTH_PANES_MIN_WIDTH_VP: number = 960
 const CHAPTER_NAV_WIDTH_VP: number = 320
 const TOOL_PANE_WIDTH_VP: number = 240
@@ -581,9 +582,11 @@ export struct WritingScreen {
     this.shareService.stopAirTransferSharing().then(() => {})
   }
 
-  // Issue #920 A：宽屏只看平台自己的窗口宽度断点，不再读 Core 的 WorkspaceLayoutMode。
+  // Issue #932：宽屏形态改与外层导航 / 设置同一口径 —— AdaptiveContext.prefersWideLayout，
+  // 不再在写作页独立维护 696vp 断点；窄屏 / 中屏一律走 HDS 标题栏 + 正文 + 底部状态栏，
+  // 只有宽屏继续 WritingWorkbenchToolbar + 多栏工具面板。
   private get isWideWorkbench(): boolean {
-    return this.adaptiveState.widthVp >= WORKBENCH_MIN_WIDTH_VP
+    return this.adaptiveState.prefersWideLayout
   }
 
   // Issue #825 复核第2项 / #920 D：HeaderTrailing 动作只在这里解析一次（平台动作表）。

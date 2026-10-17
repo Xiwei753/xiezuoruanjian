@@ -4,23 +4,33 @@ import emitter from '@ohos.events.emitter'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../../feature/settings/presentation/SyncOperationController'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
-import { PrimaryFab } from '../../../ui/components/PrimaryFab'
+import {
+  COMPACT_CARD_PADDING_VP,
+  COMPACT_CARD_SPACING_VP,
+  COMPACT_CARD_SUPPORTING_FONT_VP,
+  COMPACT_CARD_TITLE_FONT_VP,
+  COMPACT_LIST_BOTTOM_INSET_VP
+} from '../../../ui/theme/LayoutTokens'
+// Issue #932：窄屏 FAB 定位、窗口级对话框、公共加载/错误/空状态统一复用共享构件，
+// 页面不再自绘 Stack + PrimaryFab、自绘全屏遮罩对话框。
+import { CompactPrimaryActionLayer } from '../../../ui/components/CompactPrimaryActionLayer'
+import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
+import {
+  CompactConfirmDialogArgs,
+  CompactTextDialogArgs,
+  openCompactConfirmDialog,
+  openCompactTextDialog
+} from '../../../ui/components/CompactDialogs'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
-import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../presentation/ProjectWorkspaceViewModel'
+import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState, RenameTarget, DeleteTarget } from '../presentation/ProjectWorkspaceViewModel'
 import { ActionSlot, ActionTarget, ActionRole, ScreenRole, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
-import { WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWorkspaceDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWorkspaceDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
-
-/** Issue #827 评论 1 第 7 点：确认框内容最大宽度（vp），与 HomeScreen 同口径。
- *  原来写 .width('80%')，宽屏上会被拉到近 1000vp 宽。 */
-const DIALOG_CONTENT_MAX_WIDTH: number = 420
 
 // Issue #629 评论14 第1项：WorkspaceScreen 只保留项目/卷/章节浏览和目录操作。
 // 章节正文只有 WritingScreen 一个页面级 owner。
@@ -153,9 +163,9 @@ export struct WorkspaceScreen {
   private handleVolumeContextAction(slot: ActionSlot): void {
     const volumeId = this.viewModel.currentMenuVolumeId
     if (slot.role === ActionRole.Rename) {
-      this.viewModel.startRenameVolume(volumeId)
+      this.startRenameVolume(volumeId)
     } else if (slot.role === ActionRole.Delete) {
-      this.viewModel.startDeleteVolume(volumeId, slot.requiresConfirmation)
+      this.startDeleteVolume(volumeId, slot.requiresConfirmation)
     } else if (slot.role === ActionRole.MoveEarlier) {
       this.viewModel.moveVolumeEarlier(volumeId)
     } else if (slot.role === ActionRole.MoveLater) {
@@ -167,14 +177,104 @@ export struct WorkspaceScreen {
   private handleChapterContextAction(slot: ActionSlot): void {
     const chapterId = this.viewModel.currentMenuChapterId
     if (slot.role === ActionRole.Rename) {
-      this.viewModel.startRenameChapter(chapterId)
+      this.startRenameChapter(chapterId)
     } else if (slot.role === ActionRole.Delete) {
-      this.viewModel.startDeleteChapter(chapterId, slot.requiresConfirmation)
+      this.startDeleteChapter(chapterId, slot.requiresConfirmation)
     } else if (slot.role === ActionRole.MoveEarlier) {
       this.viewModel.moveChapterEarlier(chapterId)
     } else if (slot.role === ActionRole.MoveLater) {
       this.viewModel.moveChapterLater(chapterId)
     }
+  }
+
+  // ─── Issue #932：窗口级输入 / 确认对话框（替换页面自绘全屏遮罩） ───
+  // 业务状态仍归 ViewModel：这里只把「渲染开关」改为在动作触发点直接打开系统对话框。
+
+  /** 重命名卷：先走 ViewModel 的 startRenameVolume，再打开窗口级输入对话框 */
+  private startRenameVolume(volumeId: string): void {
+    this.viewModel.startRenameVolume(volumeId)
+    this.openRenameDialog()
+  }
+
+  /** 重命名章节：先走 ViewModel 的 startRenameChapter，再打开窗口级输入对话框 */
+  private startRenameChapter(chapterId: string): void {
+    this.viewModel.startRenameChapter(chapterId)
+    this.openRenameDialog()
+  }
+
+  /** 打开重命名输入框：初始文本取 ViewModel 的 renameInput，确认/取消仍走原 ViewModel 回调 */
+  private openRenameDialog(): void {
+    const target: RenameTarget | null = this.viewModel.renameTarget
+    if (target === null) {
+      return
+    }
+    let confirmed: boolean = false
+    const args: CompactTextDialogArgs = {
+      title: target.type === 'volume' ? '重命名卷' : '重命名章节',
+      placeholder: '请输入新名称',
+      initialText: this.viewModel.renameInput,
+      // 卷/章节改名只有一个输入栏。
+      secondaryLabel: '',
+      secondaryPlaceholder: '',
+      secondaryInitialText: '',
+      confirmLabel: '确认',
+      onConfirm: (text: string, _secondaryText: string): void => {
+        confirmed = true
+        this.viewModel.renameInput = text
+        this.viewModel.confirmRename()
+      },
+      onCancel: (): void => {
+        this.viewModel.cancelRename()
+      }
+    }
+    // 点遮罩 / 返回键关闭时同样清理 ViewModel 的重命名状态；
+    // 已被确认文案消费的对话框不再重复清理。
+    openCompactTextDialog(this.getUIContext(), args, (): void => {
+      if (!confirmed) {
+        this.viewModel.cancelRename()
+      }
+    })
+  }
+
+  /** 删除卷：requiresConfirmation 为 false 时 ViewModel 直接删除，只有需要确认才弹窗口级确认框 */
+  private startDeleteVolume(volumeId: string, requiresConfirmation: boolean): void {
+    this.viewModel.startDeleteVolume(volumeId, requiresConfirmation)
+    this.openDeleteConfirmDialog()
+  }
+
+  /** 删除章节：requiresConfirmation 为 false 时 ViewModel 直接删除，只有需要确认才弹窗口级确认框 */
+  private startDeleteChapter(chapterId: string, requiresConfirmation: boolean): void {
+    this.viewModel.startDeleteChapter(chapterId, requiresConfirmation)
+    this.openDeleteConfirmDialog()
+  }
+
+  /** 打开删除确认框：确认/取消仍走原 ViewModel 的 confirmDelete / cancelDelete */
+  private openDeleteConfirmDialog(): void {
+    const target: DeleteTarget | null = this.viewModel.deleteTarget
+    if (target === null) {
+      return
+    }
+    let confirmed: boolean = false
+    const args: CompactConfirmDialogArgs = {
+      title: '确认删除',
+      message: `确定要删除"${target.name}"吗？此操作不可撤销。`,
+      destructive: true,
+      confirmLabel: getContext(this).resourceManager.getStringSync($r('app.string.delete').id),
+      onConfirm: (): void => {
+        confirmed = true
+        this.viewModel.confirmDelete()
+      },
+      onCancel: (): void => {
+        this.viewModel.cancelDelete()
+      }
+    }
+    // 点遮罩 / 返回键关闭时同样清理 ViewModel 的删除目标；
+    // 已被确认文案消费的对话框不再重复清理。
+    openCompactConfirmDialog(this.getUIContext(), args, (): void => {
+      if (!confirmed) {
+        this.viewModel.cancelDelete()
+      }
+    })
   }
 
   /** 获取 action 的显示标签 */
@@ -267,27 +367,10 @@ export struct WorkspaceScreen {
   // 供 HdsNavDestination 和 NavDestination 两个条件渲染分支共用。
   @Builder
   NavContent() {
-    Stack() {
-      Column() {
-        if (this.adaptiveState.sizeClass === WidthClass.Compact) {
-          // ── 窄屏模式：卷卡可展开设计（Issue #760） ──
-          this.CompactWorkspaceLayout()
-        } else {
-          // 非 Compact：Core 没给工作台（宽屏入口不再 push Workspace），
-          // 按窄屏结构兜底
-          this.CompactWorkspaceLayout()
-        }
-      }
-      .width('100%')
-      .height('100%')
-
-      // ── 对话框层 ──
-      if (this.viewModel.renameTarget !== null) {
-        this.RenameDialog()
-      }
-      if (this.viewModel.deleteTarget !== null) {
-        this.DeleteConfirmDialog()
-      }
+    Column() {
+      // Issue #932：原来 if (sizeClass === Compact) else 两边都调同一个布局，收成单一窄屏布局调用。
+      // 卷章浏览不再按窗口宽度切换第二套结构。
+      this.CompactWorkspaceLayout()
     }
     .width('100%')
     .height('100%')
@@ -340,43 +423,44 @@ export struct WorkspaceScreen {
 
   @Builder
   CompactWorkspaceLayout() {
-    Stack({ alignContent: Alignment.BottomEnd }) {
+    // Issue #932：窄屏主操作 FAB 统一由 CompactPrimaryActionLayer 承载，
+    // 删除页面自己画的 Stack(Alignment.BottomEnd) + PrimaryFab 定位。
+    CompactPrimaryActionLayer({
+      visible: !this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction(),
+      pagePadding: this.adaptiveState.pagePadding,
+      onTap: () => {
+        this.handleCreateVolume()
+      }
+    }) {
       Column() {
         // ── 内容区 ──
         if (this.viewModel.isLoadingState) {
-          Column() {
-            LoadingProgress()
-              .width(48)
-              .height(48)
-            Text($r('app.string.loading'))
-              .fontSize(14)
-              .margin({ top: 12 })
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
+          CompactPageState({
+            kind: CompactPageStateKind.Loading,
+            title: getContext(this).resourceManager.getStringSync($r('app.string.loading').id)
+          })
         } else if (this.viewModel.errorMessageState) {
-          Column() {
-            Text(this.viewModel.errorMessageState)
-              .fontSize(16)
-              .margin({ bottom: 16 })
-
-            Button($r('app.string.retry'))
-              .onClick(() => this.handleRetry())
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
+          CompactPageState({
+            kind: CompactPageStateKind.Error,
+            title: this.viewModel.errorMessageState,
+            onRetry: () => {
+              this.handleRetry()
+            }
+          })
+        } else if (this.viewModel.volumeCardStates.length === 0) {
+          // Issue #932：卷章为空时也走公共空状态视觉（图标 + 标题 + 说明）。
+          CompactPageState({
+            kind: CompactPageStateKind.Empty,
+            title: getContext(this).resourceManager.getStringSync($r('app.string.no_volumes_chapters').id),
+            description: getContext(this).resourceManager.getStringSync($r('app.string.click_new_volume_to_start').id),
+            icon: $r('sys.symbol.plus')
+          })
         } else {
           Scroll() {
             Column() {
-              if (this.viewModel.volumeCardStates.length === 0) {
-                this.EmptyState()
-              } else {
-                ForEach(this.viewModel.volumeCardStates, (cardState: VolumeCardState) => {
-                  this.VolumeCard(cardState)
-                }, (cardState: VolumeCardState) => cardState.volumeId)
-              }
+              ForEach(this.viewModel.volumeCardStates, (cardState: VolumeCardState) => {
+                this.VolumeCard(cardState)
+              }, (cardState: VolumeCardState) => cardState.volumeId)
             }
             .width('100%')
             .justifyContent(FlexAlign.Start)
@@ -386,7 +470,8 @@ export struct WorkspaceScreen {
               right: this.adaptiveState.pagePadding,
               // Issue #905：HDS 原生标题栏自行避让状态栏，内容区不再人工叠加安全区。
               top: this.adaptiveState.pagePadding,
-              bottom: 24
+              // Issue #932：列表末端留白统一走窄屏 token。
+              bottom: COMPACT_LIST_BOTTOM_INSET_VP
             })
           }
           .layoutWeight(1)
@@ -397,50 +482,15 @@ export struct WorkspaceScreen {
       .width('100%')
       .height('100%')
       .alignItems(HorizontalAlign.Center)
-
-      // ── FAB 层：新建卷浮动按钮 ──
-      // Issue #778：FAB 改用 Stack BottomEnd 对齐 + margin 定位，不再用绝对坐标。
-      // 配色/材质统一到 PrimaryFab，与作品页、星图页同源。
-      if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
-        PrimaryFab({
-          onTap: () => {
-            this.handleCreateVolume()
-          }
-        })
-        .margin({
-          right: this.adaptiveState.pagePadding,
-          bottom: PRIMARY_FAB_BOTTOM_INSET_VP
-        })
-      }
+      // Issue #932：窄屏页面底色统一 background_secondary。
+      .backgroundColor($r('sys.color.background_secondary'))
     }
-    .width('100%')
-    .height('100%')
-  }
-
-  // ── 空状态 ──
-  @Builder
-  EmptyState() {
-    Column() {
-      SymbolGlyph($r('sys.symbol.plus'))
-        .fontSize(64)
-        .fontColor([$r('sys.color.icon_primary')])
-        .margin({ bottom: 16 })
-
-      Text($r('app.string.no_volumes_chapters'))
-        .fontSize(16)
-        .margin({ bottom: 8 })
-
-      Text($r('app.string.click_new_volume_to_start'))
-        .fontSize(14)
-    }
-    .width('100%')
-    .padding(48)
-    .justifyContent(FlexAlign.Center)
   }
 
   // ── 卷卡（可展开） ──
   // 收起状态：左上卷名 / 右上新增章节按钮+更多菜单 / 左下章节数 / 中下展开箭头 / 右下卷总字数
   // 展开后：同一张卷卡下方显示章节列表
+  // Issue #932：卡面、圆角、内边距与字号统一走窄屏卡片 token；章节展开结构保留。
   @Builder
   VolumeCard(cardState: VolumeCardState) {
     Column() {
@@ -448,7 +498,7 @@ export struct WorkspaceScreen {
       // 左上：卷名    右上：新增章节按钮 + 更多菜单
       Row() {
         Text(cardState.volumeTitle)
-          .fontSize(16)
+          .fontSize(COMPACT_CARD_TITLE_FONT_VP)
           .fontWeight(FontWeight.Medium)
           .layoutWeight(1)
           .maxLines(1)
@@ -477,14 +527,15 @@ export struct WorkspaceScreen {
           .bindMenu(this.VolumeMoreMenu)
       }
       .width('100%')
-      .padding({ left: 16, right: 12, top: 14, bottom: 8 })
+      .padding({ bottom: 8 })
 
       // ── 卷卡底部信息行 ──
       // 左下：章节数    中下：展开箭头    右下：卷总字数
       Row() {
         // 左下：章节数
         Text(getContext(this).resourceManager.getStringSync($r('app.string.chapter_count_format').id).replace('%s', `${cardState.chapterCount}`))
-          .fontSize(12)
+          .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+          .fontColor($r('sys.color.font_secondary'))
         // 中下：展开/收起箭头
         Row() {
           Image(this.viewModel.isVolumeExpanded(cardState.volumeId)
@@ -498,10 +549,10 @@ export struct WorkspaceScreen {
 
         // 右下：卷总字数
         Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${cardState.totalWordCount}`))
-          .fontSize(12)
+          .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+          .fontColor($r('sys.color.font_secondary'))
       }
       .width('100%')
-      .padding({ left: 16, right: 12, bottom: 10 })
       .onClick(() => this.handleToggleVolume(cardState.volumeId))
 
       // ── 章节列表（展开后显示） ──
@@ -509,8 +560,9 @@ export struct WorkspaceScreen {
         if (cardState.chapters.length === 0) {
           Column() {
             Text($r('app.string.no_chapters'))
-              .fontSize(14)
-              .padding(16)
+              .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+              .fontColor($r('sys.color.font_secondary'))
+              .padding({ top: 16, bottom: 16 })
           }
           .width('100%')
         } else {
@@ -524,8 +576,9 @@ export struct WorkspaceScreen {
       }
     }
     .width('100%')
-    .margin({ bottom: 12 })
-    .borderRadius(DesignTokens.radiusSm)
+    .margin({ bottom: COMPACT_CARD_SPACING_VP })
+    .padding(COMPACT_CARD_PADDING_VP)
+    .borderRadius(DesignTokens.cardRadius)
     .clip(true)
     // Issue #888：卷卡加系统卡片底色，与页面底色 background_secondary 拉开色阶。
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
@@ -534,6 +587,7 @@ export struct WorkspaceScreen {
 
   // ── 章节行 ──
   // 左：章节名    右侧：最后编辑日期    最右：章节字数
+  // Issue #932：章节行只保留纵向内边距，左右对齐由卷卡内边距统一；辅助字走窄屏卡片 token。
   @Builder
   ChapterRow(chapterState: ChapterRowState) {
     Row() {
@@ -546,12 +600,14 @@ export struct WorkspaceScreen {
 
       // 右侧：最后编辑日期
       Text(this.formatTime(chapterState.lastEditedTime))
-        .fontSize(12)
+        .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+        .fontColor($r('sys.color.font_secondary'))
         .margin({ left: 8, right: 8 })
 
       // 最右：章节字数
       Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${chapterState.wordCount}`))
-        .fontSize(12)
+        .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+        .fontColor($r('sys.color.font_secondary'))
       // 章节更多菜单 — 按 ScreenPolicy 的 Context action slot 渲染
       Image($r('sys.media.ohos_ic_public_more'))
         .width(20)
@@ -564,7 +620,7 @@ export struct WorkspaceScreen {
         .bindMenu(this.ChapterMoreMenu)
     }
     .width('100%')
-    .padding({ left: 16, right: 12, top: 12, bottom: 12 })
+    .padding({ top: 12, bottom: 12 })
     .onClick(() => this.navigateToWriting(chapterState.chapterId, chapterState.chapterTitle, chapterState.volumeId))
   }
 
@@ -592,104 +648,8 @@ export struct WorkspaceScreen {
     }
   }
 
-  // ── 重命名对话框 ──
-  // 类似 HomeScreen 的 RenameDialog，调用 ViewModel 的 renameVolume/renameChapter
-  // Issue #767：默认路径不读 themeConfig.colors.*，用系统默认样式
-  @Builder
-  RenameDialog() {
-    Column() {
-      Column() {
-        Text(this.viewModel.renameTarget?.type === 'volume' ? '重命名卷' : '重命名章节')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 16 })
-
-        TextInput({ text: this.viewModel.renameInput, placeholder: '请输入新名称' })
-          .width('100%')
-          .height(40)
-          .fontSize(16)
-          .onChange((value: string) => {
-            this.viewModel.renameInput = value
-          })
-
-        Row() {
-          Button('取消')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.cancelRename()
-            })
-
-          Blank()
-
-          Button('确认')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.confirmRename()
-            })
-        }
-        .width('100%')
-        .margin({ top: 16 })
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ left: 24, right: 24 })
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
-  }
-
-  // ── 删除确认对话框 ──
-  // 仅当 ActionSlot.requiresConfirmation === true 时显示
-  // Issue #767：默认路径不读 themeConfig.colors.*，用系统默认样式
-  @Builder
-  DeleteConfirmDialog() {
-    Column() {
-      Column() {
-        Text('确认删除')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 8 })
-
-        Text(`确定要删除"${this.viewModel.deleteTarget?.name}"吗？此操作不可撤销。`)
-          .fontSize(14)
-          .margin({ bottom: 16 })
-
-        Row() {
-          Button('取消')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.cancelDelete()
-            })
-
-          Blank()
-
-          Button('删除')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.confirmDelete()
-            })
-        }
-        .width('100%')
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ left: 24, right: 24 })
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
-  }
+  // ── 重命名 / 删除确认对话框已迁至窗口级 ──
+  // Issue #932：原页面自绘的全屏 Column + '#80000000' 遮罩已删除，
+  // 统一走 ui/components/CompactDialogs 的 openCompactTextDialog / openCompactConfirmDialog，
+  // 触发点见 openRenameDialog / openDeleteConfirmDialog。
 }

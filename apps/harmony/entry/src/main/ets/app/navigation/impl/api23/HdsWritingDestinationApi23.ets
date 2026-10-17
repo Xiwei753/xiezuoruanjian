@@ -18,7 +18,7 @@
 // Issue #825 复核第1项：这组动作是工作台顶栏的尾部组，窄屏宽屏都在
 // 顶部显示，右侧 ToolPane 不再重复它们，所以胶囊没有开关、恒显示。
 
-import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
+import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial, ScrollEffectType } from '@kit.UIDesignKit'
 import { HeaderTitleBarStack } from './HeaderTitleBarStack'
 import { ActionSlot } from '../../ScreenSemantics'
 
@@ -86,6 +86,17 @@ export struct HdsWritingDestinationApi23 {
         }
       },
       style: {
+        // Issue #932：窄屏标题栏背板透明。仍然保留真正的 HDS 标题栏节点——
+        // 自绘标题与动作胶囊挂在 titleBar.content.stackBuilder 下，不隐藏标题栏、
+        // 不把胶囊挪到内容层 Stack，只是把标题栏背板与滚动模糊关掉，让页面内容
+        // 直接透到标题栏区域。
+        scrollEffectOpts: {
+          enableScrollEffect: false,
+          scrollEffectType: ScrollEffectType.COMMON_BLUR
+        },
+        originalStyle: {
+          backgroundStyle: { backgroundColor: Color.Transparent }
+        },
         // ADAPTIVE 是官方《沉浸光感》示例里的值，标题栏的按压光要靠它。
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,

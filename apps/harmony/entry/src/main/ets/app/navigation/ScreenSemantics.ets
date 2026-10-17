@@ -29,6 +29,8 @@ export enum ActionRole {
   CreateProject = 'CreateProject',
   CreateVolume = 'CreateVolume',
   CreateChapter = 'CreateChapter',
+  // Issue #932：星图页「+」进入统一动作表（PrimaryAction）；动作执行仍由页面 requestCreateStarMap() 负责。
+  CreateStarMap = 'CreateStarMap',
   Delete = 'Delete',
   Rename = 'Rename',
   MoveEarlier = 'MoveEarlier',
@@ -135,7 +137,11 @@ export function resolveActionSlots(screenRole: ScreenRole): ActionSlot[] {
     return actions
   }
   if (screenRole === ScreenRole.StarMap) {
-    return globalHeaderTrailingActions()
+    // Issue #932：星图「+」并入统一动作表，与 CreateProject 同为 PrimaryAction；
+    // 页面消费该 slot 的点击仍走自己的 requestCreateStarMap()，dispatcher 不加新业务分支。
+    const actions: ActionSlot[] = globalHeaderTrailingActions()
+    actions.push(slot(ActionRole.CreateStarMap, ActionTarget.App, ActionRegion.PrimaryAction, 10, false))
+    return actions
   }
   if (screenRole === ScreenRole.StarMapDetail) {
     const actions: ActionSlot[] = [

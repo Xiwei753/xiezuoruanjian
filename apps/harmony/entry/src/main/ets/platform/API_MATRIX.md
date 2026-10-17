@@ -290,6 +290,11 @@
   - `HdsNavDestinationAttribute.onBackPressed(callback)` — 返回按钮回调
   - `HdsNavDestinationAttribute.onShown(callback)` — 页面显示回调
   - `HdsNavigationTitleBarOptions.content?.title?.mainTitle: ResourceStr` — 标题文本
+  - `HdsNavigationTitleBarOptions.style?: TitleBarStyleOptions` — 标题栏样式（Issue #932 登记实际使用字段）：
+    - `scrollEffectOpts?: ScrollEffectOptions`（since 5.1.0(18)）— `enableScrollEffect?: boolean`（默认 true）、`scrollEffectType?: ScrollEffectType`（默认 `COMMON_BLUR`）；本项目设 `enableScrollEffect: false` 关闭标题栏滚动模糊
+    - `originalStyle?: HdsNavigationTitleBarStyle`（since 5.1.0(18)）— 滚动效果生效前的标题栏样式，`backgroundStyle.backgroundColor` 可设 `Color.Transparent`；本项目用它把标题栏背板设为透明
+    - `systemMaterialEffect?: SystemMaterialParams`（since 6.1.0(23)）— 标题栏的系统材质效果
+  - 枚举 `ScrollEffectType`（since 5.1.0(18)）：`COMMON_BLUR = 0`（5.1.0(18)）、`GRADUAL_BLUR = 1`（6.0.0(20)）、`GRADIENT_BLUR = 2`（6.0.0(20)）、`IMMERSIVE_GRADIENT_BLUR = 3`（6.1.0(23)）；本项目只用 `COMMON_BLUR`
 - 最低 API：23（本项目使用条件：API23+ 时启用，API < 23 fallback 到普通 Navigation/NavDestination）
 - SystemCapability：`SystemCapability.UIDesign.HDSComponent.Core`
 - 权限：无
@@ -297,6 +302,10 @@
 - fallback：API < 23 使用普通 `Navigation` / `NavDestination`
 - 实现文件：
   - `app/navigation/impl/api23/HdsPrimaryTabsApi23.ets`（HdsNavigation 替代 Navigation）
+  - `app/navigation/impl/api23/HdsAppDestinationApi23.ets`（HdsNavDestination 壳，根页面：作品/星图/统计）
+  - `app/navigation/impl/api23/HdsWorkspaceDestinationApi23.ets`（HdsNavDestination 壳，项目工作区）
+  - `app/navigation/impl/api23/HdsWritingDestinationApi23.ets`（HdsNavDestination 壳，写作页）
+  - `app/navigation/impl/api23/HdsSettingsDestinationApi23.ets`（HdsNavDestination 壳，设置页）
   - `feature/project/ui/WorkspaceScreen.ets`（HdsNavDestination 替代 NavDestination，条件渲染）
   - `feature/editor/ui/WritingScreen.ets`（HdsNavDestination 替代 NavDestination，条件渲染）
   - `feature/settings/ui/SettingsScreen.ets`（HdsNavDestination 替代 NavDestination，条件渲染）

@@ -12,9 +12,14 @@
 
 import { UIContext, ComponentContent } from '@kit.ArkUI'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-
-/** Issue #827 评论 1 第 7 点：命名框内容最大宽度（vp），与 HomeScreen / WorkspaceScreen 同口径。 */
-const DIALOG_CONTENT_MAX_WIDTH: number = 420
+// Issue #932：对话框度量统一到 LayoutTokens / DesignTokens，与 CompactDialogs 同口径，
+// 不在本文件再维护一份 420 / 40 / 20 的副本。
+import {
+  COMPACT_DIALOG_CONTENT_PADDING_VP,
+  COMPACT_DIALOG_MAX_WIDTH_VP,
+  COMPACT_DIALOG_SIDE_INSET_VP,
+  COMPACT_TEXT_INPUT_HEIGHT_VP
+} from '../../../ui/theme/LayoutTokens'
 
 /**
  * 标题输入对话框的参数。
@@ -46,10 +51,8 @@ struct CreateTitleDialog {
   @State inputText: string = ''
 
   build() {
-    // Issue #827 评论 1 第 7 点：命名框内容框「手机上能缩、宽屏有上限」。
-    // 原来 Column 根节点写 .width('80%')，在 1244vp 宽屏上命名框被拉到近 1000vp 宽，
-    // 一行输入框横跨整屏。改成 Row 铺满再放一个 100% + 上限的内容列，
-    // 窄屏按屏宽收缩、宽屏停在 DIALOG_CONTENT_MAX_WIDTH。
+    // Issue #932：外观/度量与 CompactDialogs 同口径（最大宽度 / 左右 inset / 内容 padding /
+    // 输入框高度 / dialogRadius），继续挂在窗口级容器上，不被星图画布裁剪。
     Row() {
       Column() {
         Text(this.dialogTitle)
@@ -59,8 +62,9 @@ struct CreateTitleDialog {
 
         TextInput({ text: this.inputText, placeholder: this.placeholder })
           .width('100%')
-          .height(40)
+          .height(COMPACT_TEXT_INPUT_HEIGHT_VP)
           .fontSize(16)
+          .borderRadius(DesignTokens.inputFieldRadius)
           .onChange((value: string) => {
             this.inputText = value
           })
@@ -90,13 +94,13 @@ struct CreateTitleDialog {
         .margin({ top: 16 })
       }
       .width('100%')
-      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
+      .constraintSize({ maxWidth: COMPACT_DIALOG_MAX_WIDTH_VP })
+      .padding(COMPACT_DIALOG_CONTENT_PADDING_VP)
+      .borderRadius(DesignTokens.dialogRadius)
       .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
-    .padding({ left: 24, right: 24 })
+    .padding({ left: COMPACT_DIALOG_SIDE_INSET_VP, right: COMPACT_DIALOG_SIDE_INSET_VP })
     .justifyContent(FlexAlign.Center)
   }
 }

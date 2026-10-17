@@ -59,13 +59,12 @@ export class SettingsOverlayController {
 
   /**
    * 当前窗口是否用悬浮设置。窄屏仍然走 Routes.Settings 路由页。
-   * Issue #825 复核第4项 / #920 D：按平台自己的工作台档（isWorkbenchLayout）判，
-   * 600–839vp 这一档（窗口够高）已是工作台档（但一级导航仍是 Bottom），
-   * 那一档窗口里设置同样走悬浮层。
+   * Issue #932 A：判定统一为 prefersWideLayout——与外层导航外壳是同一模式判定。
+   * 600–839vp 但仍使用底栏的窗口不再算浮层档，设置进入窄屏路由页；
+   * isWorkbenchLayout 只服务页面内部内容，不再决定设置呈现方式。
    */
   isOverlayLayout(): boolean {
-    const state = AdaptiveContext.getInstance().getCurrentState()
-    return state.isWorkbenchLayout
+    return AdaptiveContext.getInstance().getCurrentState().prefersWideLayout
   }
 
   /** 当前是否已经有设置浮层在（含正在关闭的那一段）。 */

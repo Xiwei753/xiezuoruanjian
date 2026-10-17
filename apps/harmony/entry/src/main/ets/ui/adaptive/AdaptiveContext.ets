@@ -29,9 +29,12 @@ export interface AdaptiveState {
   heightVp: number
   // 平台自己的宽度分类（见 harmonySizeClass）
   sizeClass: WidthClass
-  // 宽屏工作区（Workbench）档，决定纸面宽度 / 内边距 / 设置浮层形态
+  // 宽屏工作区（Workbench）档。
+  // Issue #932：只服务页面内部内容（纸面宽度 / 内边距 / 双栏与否），
+  // 不再参与外层导航外壳与设置呈现方式的判定——那是 prefersWideLayout 的职责。
   isWorkbenchLayout: boolean
-  // 一级导航放侧栏（宽窗口），否则放底部
+  // 一级导航放侧栏（宽窗口，>=840vp），否则放底部。
+  // Issue #932：壳层的外壳判定已统一用 prefersWideLayout，本字段保留给页面内部既有调用点。
   isWidePrimaryNavigation: boolean
   contentMaxWidth: number
   pagePadding: number
@@ -39,7 +42,9 @@ export interface AdaptiveState {
   safeBottomVp: number
   // 顶部安全区域高度（状态栏避让），单位 vp
   safeTopVp: number
-  // 当前是否偏好宽屏布局（专用横屏平板且进入工作台档，或 sizeClass === Expanded）
+  // 当前是否偏好宽屏布局（专用横屏平板且进入工作台档，或 sizeClass === Expanded）。
+  // Issue #932：这是外层导航外壳（窄屏 Tabs / 宽屏侧栏）、页头形态与设置呈现方式
+  // （路由页 / 浮层）的唯一模式判定；断点数值不变（600 / 840 / 480）。
   prefersWideLayout: boolean
   // 是否是专用横屏平板（deviceType=tablet + 非折叠 + 宽高比>=1.25）
   isDedicatedLandscapeTablet: boolean
@@ -309,6 +314,8 @@ export class AdaptiveContext {
     // prefersWideLayout: 专用横屏平板且进入工作台档（能展示完整宽屏工作台），或 sizeClass === Expanded。
     // 不能只按 600vp 判定：600-695vp 展示不下完整工作台，此时进入 Writing 会出现
     // 无章节树且无法新建章节的死状态，所以用 isWorkbenchLayout 兜一层。
+    // Issue #932：外层导航外壳 / 设置呈现方式统一以它为唯一模式判定，与各页 showTitleBar 判定同源；
+    // isWorkbenchLayout / contentMaxWidth / pagePadding 只留给页面内部内容。
     const prefersWideLayout: boolean =
       (this.cachedIsDedicatedLandscapeTablet && isWorkbenchLayout) || sizeClass === WidthClass.Expanded
     this.state = {

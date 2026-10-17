@@ -1,8 +1,8 @@
 // HeaderTitleBarStack — 标题栏 stackBuilder 自绘区域的统一实现。
 //
-// 三个 NavDestination 壳共用：根页面壳（作品/星图列表/星图详情/统计）、
-// 二级页面壳（工作区）、二级页面壳（写作页）。三处以前各写各的，
-// 根页面已是胶囊而两个二级页面还是原生三圆，观感不统一。
+// 四个 NavDestination 壳共用：根页面壳（作品/星图列表/星图详情/统计）、
+// 二级页面壳（工作区）、二级页面壳（写作页）、二级页面壳（设置页，Issue #932 接入）。
+// 三处以前各写各的，根页面已是胶囊而两个二级页面还是原生三圆，观感不统一。
 //
 // 为什么用 stackBuilder 而不是 titleBar.content.menu：HDS 的 menu.value 每一项都是
 // 独立的圆形面，三项之间断开，没有「容器」概念可套一个整体外框
@@ -18,6 +18,7 @@
 //      必须自己让出槽位：16 内边距 + 40 返回按钮 + 4 间距 = 60vp。
 
 import { ActionSlot } from '../../ScreenSemantics'
+import { sortedHeaderTrailingActions } from '../../NavigationHeaderActionModel'
 import { HeaderActionCapsule } from './HeaderActionCapsule'
 
 /** 标题左右内边距（vp），与 HDS 标题栏默认值一致 */
@@ -45,7 +46,11 @@ export struct HeaderTitleBarStack {
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
       // Issue #825 复核第1项：HeaderTrailing 动作恒显示（工作台顶栏的尾部组）。
-      HeaderActionCapsule({ actionSlots: this.headerActions })
+      // Issue #932：没有任何 HeaderTrailing 动作时（如设置页 headerActions=[]）
+      // 不渲染空胶囊，避免在标题右侧留一块空的材质圆角面。
+      if (sortedHeaderTrailingActions(this.headerActions).length > 0) {
+        HeaderActionCapsule({ actionSlots: this.headerActions })
+      }
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)

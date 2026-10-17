@@ -7,7 +7,7 @@
 // Issue #784 评论5857397503：移除硬编码的三个 menu item，改为通过平台动作表
 // 加载 ActionSlot[]，交给 HeaderTitleBarStack 自绘标题 + 页头动作胶囊。
 
-import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
+import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial, ScrollEffectType } from '@kit.UIDesignKit'
 import { HeaderTitleBarStack } from './HeaderTitleBarStack'
 import { ScreenRole, ActionSlot, resolveScreenPolicy } from '../../ScreenSemantics'
 
@@ -62,6 +62,17 @@ export struct HdsWorkspaceDestinationApi23 {
         }
       },
       style: {
+        // Issue #932：窄屏标题栏背板透明。仍然保留真正的 HDS 标题栏节点——
+        // 自绘标题与动作胶囊挂在 titleBar.content.stackBuilder 下，不隐藏标题栏、
+        // 不把胶囊挪到内容层 Stack，只是把标题栏背板与滚动模糊关掉，让页面内容
+        // 直接透到标题栏区域。
+        scrollEffectOpts: {
+          enableScrollEffect: false,
+          scrollEffectType: ScrollEffectType.COMMON_BLUR
+        },
+        originalStyle: {
+          backgroundStyle: { backgroundColor: Color.Transparent }
+        },
         // ADAPTIVE 是官方《沉浸光感》示例里的值，标题栏的按压光要靠它。
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,

@@ -27,6 +27,7 @@ import {
 } from '../platform/StarMapViewport'
 import { StarMapSelectionState } from '../platform/StarMapSelectionState'
 import { StarMapScene } from './StarMapScene'
+import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 
 /**
  * 工具栏每次点击的**倍数**（#821）。
@@ -373,32 +374,30 @@ export struct StarMapScreen {
       // 缩放控件：独立锚定右下角
       this.ZoomControls()
 
-      // Loading 盖层
+      // Loading 盖层（#932：复用窄屏统一状态组件）
       if (this.isLoading) {
         Column() {
-          LoadingProgress()
-            .width(48)
-            .height(48)
-          Text($r('app.string.loading'))
-            .fontSize(14)
-            .margin({ top: 12 })
+          CompactPageState({
+            kind: CompactPageStateKind.Loading,
+            title: getContext(this).resourceManager.getStringSync($r('app.string.loading').id)
+          })
         }
-        .justifyContent(FlexAlign.Center)
         .backgroundColor($r('sys.color.background_secondary'))
         .width('100%')
         .height('100%')
       }
 
-      // Error 盖层
+      // Error 盖层（#932：复用窄屏统一状态组件）
       if (this.errorMessage) {
         Column() {
-          Text(this.errorMessage)
-            .fontSize(16)
-            .margin({ bottom: 16 })
-          Button($r('app.string.retry'))
-            .onClick(() => this.loadStarMap())
+          CompactPageState({
+            kind: CompactPageStateKind.Error,
+            title: this.errorMessage,
+            onRetry: () => {
+              this.loadStarMap()
+            }
+          })
         }
-        .justifyContent(FlexAlign.Center)
         .backgroundColor($r('sys.color.background_secondary'))
         .width('100%')
         .height('100%')

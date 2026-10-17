@@ -15,6 +15,16 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
+// Issue #932：窄屏统计页统一页面底色 / 边距 / 分组卡度量，并复用公共加载/错误状态。
+import { DesignTokens } from '../../../ui/theme/DesignTokens'
+import {
+  COMPACT_CARD_PADDING_VP,
+  COMPACT_CARD_SPACING_VP,
+  COMPACT_CARD_SUPPORTING_FONT_VP,
+  COMPACT_CARD_TITLE_FONT_VP,
+  COMPACT_LIST_BOTTOM_INSET_VP
+} from '../../../ui/theme/LayoutTokens'
+import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 
 @Component
 export struct StatsScreen {
@@ -72,140 +82,90 @@ export struct StatsScreen {
     }
   }
 
+  // ─── Issue #932：窄屏统计分组卡 ───
+
+  /** 指标行：左标签右数值；字号沿用窄屏卡片 token，只做视觉分组，不重算任何统计口径。 */
+  @Builder
+  StatRow(label: string, value: string) {
+    Row() {
+      Text(label)
+        .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+        .fontColor($r('sys.color.font_secondary'))
+        .layoutWeight(1)
+      Text(value)
+        .fontSize(COMPACT_CARD_TITLE_FONT_VP)
+        .fontWeight(FontWeight.Medium)
+    }
+    .width('100%')
+    .padding({ top: 8, bottom: 8 })
+  }
+
   @Builder
   StatsContent() {
     Column() {
       if (this.isLoading) {
-        Column() {
-          LoadingProgress()
-            .width(48)
-            .height(48)
-          Text('加载中...')
-            .fontSize(14)
-            .margin({ top: 12 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
+        CompactPageState({
+          kind: CompactPageStateKind.Loading,
+          title: '加载中...'
+        })
       } else if (this.errorMessage) {
-        Column() {
-          Text(this.errorMessage)
-            .fontSize(16)
-            .margin({ bottom: 16 })
-
-          Button('重试')
-            .onClick(() => this.loadStats())
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
+        CompactPageState({
+          kind: CompactPageStateKind.Error,
+          title: this.errorMessage,
+          onRetry: () => {
+            this.loadStats()
+          }
+        })
       } else if (this.stats) {
         Scroll() {
           Column() {
             // Issue #753 评论 5814008597 问题2：WritingStats 已换成 Core 的 WritingStatsSummaryDto（最近 30 天汇总）。
             // 旧字段 totalChars/totalWords/totalChapters/todayChars/todayDuration/averageSpeed 全部不存在，
             // 改为展示新 DTO 的全部字段，并在首行展示统计范围。
-            Row() {
-              Text('统计范围')
-                .fontSize(16)
-                .layoutWeight(1)
-              Text(`${this.stats.range.startDate} ~ ${this.stats.range.endDate}`)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
+            // Issue #932：统计指标不再裸露 Row 一直铺到底，改为分组卡呈现。
+            Column() {
+              this.StatRow('统计范围', `${this.stats.range.startDate} ~ ${this.stats.range.endDate}`)
             }
             .width('100%')
-            .padding({ top: 12, bottom: 12 })
+            .padding(COMPACT_CARD_PADDING_VP)
+            .borderRadius(DesignTokens.cardRadius)
+            .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+            .margin({ bottom: COMPACT_CARD_SPACING_VP })
 
-            Row() {
-              Text('手写字数')
-                .fontSize(16)
-                .layoutWeight(1)
-              Text(`${this.stats.totalHumanTypedChars}`)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
+            // 字数指标分组卡
+            Column() {
+              this.StatRow('手写字数', `${this.stats.totalHumanTypedChars}`)
+              this.StatRow('粘贴字数', `${this.stats.totalPastedChars}`)
+              this.StatRow('删除字数', `${this.stats.totalDeletedChars}`)
+              this.StatRow('AI插入字数', `${this.stats.totalAiInsertedChars}`)
+              this.StatRow('净增字数', `${this.stats.totalNetDeltaChars}`)
             }
             .width('100%')
-            .padding({ top: 12, bottom: 12 })
+            .padding(COMPACT_CARD_PADDING_VP)
+            .borderRadius(DesignTokens.cardRadius)
+            .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+            .margin({ bottom: COMPACT_CARD_SPACING_VP })
 
-            Row() {
-              Text('粘贴字数')
-                .fontSize(16)
-                .layoutWeight(1)
-              Text(`${this.stats.totalPastedChars}`)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
+            // 活跃指标分组卡
+            Column() {
+              this.StatRow('活跃时长(秒)', `${this.stats.totalActiveSeconds}`)
+              this.StatRow('写作会话数', `${this.stats.totalSessions}`)
+              this.StatRow('写作天数', `${this.stats.daysCount}`)
             }
             .width('100%')
-            .padding({ top: 12, bottom: 12 })
-
-            Row() {
-              Text('删除字数')
-                .fontSize(16)
-                .layoutWeight(1)
-              Text(`${this.stats.totalDeletedChars}`)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-            }
-            .width('100%')
-            .padding({ top: 12, bottom: 12 })
-
-            Row() {
-              Text('AI插入字数')
-                .fontSize(16)
-                .layoutWeight(1)
-              Text(`${this.stats.totalAiInsertedChars}`)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-            }
-            .width('100%')
-            .padding({ top: 12, bottom: 12 })
-
-            Row() {
-              Text('净增字数')
-                .fontSize(16)
-                .layoutWeight(1)
-              Text(`${this.stats.totalNetDeltaChars}`)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-            }
-            .width('100%')
-            .padding({ top: 12, bottom: 12 })
-
-            Row() {
-              Text('活跃时长(秒)')
-                .fontSize(16)
-                .layoutWeight(1)
-              Text(`${this.stats.totalActiveSeconds}`)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-            }
-            .width('100%')
-            .padding({ top: 12, bottom: 12 })
-
-            Row() {
-              Text('写作会话数')
-                .fontSize(16)
-                .layoutWeight(1)
-              Text(`${this.stats.totalSessions}`)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-            }
-            .width('100%')
-            .padding({ top: 12, bottom: 12 })
-
-            Row() {
-              Text('写作天数')
-                .fontSize(16)
-                .layoutWeight(1)
-              Text(`${this.stats.daysCount}`)
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-            }
-            .width('100%')
-            .padding({ top: 12, bottom: 12 })
+            .padding(COMPACT_CARD_PADDING_VP)
+            .borderRadius(DesignTokens.cardRadius)
+            .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+            .margin({ bottom: COMPACT_CARD_SPACING_VP })
           }
           .width('100%')
-          .padding({ left: 16, right: 16, bottom: 24 })
+          .padding({
+            left: this.adaptiveState.pagePadding,
+            right: this.adaptiveState.pagePadding,
+            top: this.adaptiveState.pagePadding,
+            // Issue #932：列表末端留白统一走窄屏 token，避免贴住悬浮底栏。
+            bottom: COMPACT_LIST_BOTTOM_INSET_VP
+          })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)

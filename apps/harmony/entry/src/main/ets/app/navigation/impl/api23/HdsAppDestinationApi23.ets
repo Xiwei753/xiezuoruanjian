@@ -5,7 +5,7 @@
 // 标题 + 页头动作胶囊，不再在平台端硬编码"同步/搜索/设置"三个 item。
 // onShown 时通过 NavigationChromeStore.reportScreenRole 上报当前 ScreenRole + tabIndex。
 
-import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
+import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial, ScrollEffectType } from '@kit.UIDesignKit'
 import { HeaderTitleBarStack } from './HeaderTitleBarStack'
 import { NavigationChromeStore } from '../../NavigationChromeStore'
 import { ScreenRole, ActionSlot, resolveScreenPolicy } from '../../ScreenSemantics'
@@ -77,6 +77,17 @@ export struct HdsAppDestinationApi23 {
         }
       },
       style: {
+        // Issue #932：窄屏标题栏背板透明。仍然保留真正的 HDS 标题栏节点——
+        // 自绘标题与动作胶囊挂在 titleBar.content.stackBuilder 下，不隐藏标题栏、
+        // 不把胶囊挪到内容层 Stack，只是把标题栏背板与滚动模糊关掉，让页面内容
+        // 直接透到标题栏区域。
+        scrollEffectOpts: {
+          enableScrollEffect: false,
+          scrollEffectType: ScrollEffectType.COMMON_BLUR
+        },
+        originalStyle: {
+          backgroundStyle: { backgroundColor: Color.Transparent }
+        },
         // 官方《沉浸光感》（ui-design-hds-component-material）示例用的是
         // MaterialType.ADAPTIVE，不是 IMMERSIVE：ADAPTIVE 表示自适应系统材质，
         // 材质等级 ADAPTIVE 表示生效策略由系统按设备算力自适应决定。

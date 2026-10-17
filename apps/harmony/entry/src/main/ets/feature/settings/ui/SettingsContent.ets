@@ -7,6 +7,8 @@
 // - twoColumn=true 时用大号浮层布局：顶部搜索 + 两列折叠分组。
 //   是否两列由 SettingsOverlayController 按 Core 的 primaryNavigationPlacement 决定，
 //   只有一级导航在 Side（>=840vp）才两列，Bottom 那档用单列。
+// - Issue #932：路由页（overlayLayout=false）不再按 sizeClass 分叉宽屏版式，
+//   窄屏 / 中屏一律 CompactSettingsHeader + CompactScreenLayout；宽屏完整设置只由宽屏浮层承载。
 // 设置内容、保存逻辑、主题逻辑仍然全部走现有 SettingsViewModel 和 backend。
 
 import { promptAction, ComponentContent } from '@kit.ArkUI'
@@ -24,7 +26,8 @@ import { SyncMessagePayload } from '../presentation/SyncMessagePayload'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { SyncConflictViewModel } from '../presentation/SyncConflictViewModel'
 import { createSyncConflictsPanelContent, SyncConflictsPanelArgs } from './SyncConflictsPanel'
-import { WidthClass } from '../../../corebridge/dto/PlatformDtos'
+// Issue #932：窄屏页面状态（加载中 / 出错重试 / 空）复用公共组件。
+import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 
 const TAG = 'SettingsContent'
 const DOMAIN = 0x0000
@@ -62,6 +65,7 @@ export struct SettingsContent {
   // Issue #825 复核第3项：两列与否不作为打开时快照传进来，改成按最新 AdaptiveContext 派生。
   // 只有平台自己的窗口断点判定一级导航在侧栏（>=840vp）才两列；600–839vp 那档虽是
   // 工作台但一级导航仍是 Bottom，用单列。平板旋转 / 自由窗口在两档之间移动时，浮层会跟着换布局。
+  // Issue #932：只有宽屏浮层消费这个判定；路由页不再分叉宽屏版式（见 NavContent）。
   private get twoColumn(): boolean {
     return this.adaptiveState.isWidePrimaryNavigation
   }
@@ -360,98 +364,35 @@ export struct SettingsContent {
   }
 
   // Issue #825：设置内容的唯一根 Builder。
-  // 窄屏由 SettingsScreen 的 NavDestination/HdsSettingsDestination 外壳调用，
-  // 宽屏由 SettingsOverlayPanel 调用：overlayLayout 决定用浮层外壳（标题 + 关闭 + 搜索），
-  // twoColumn（内部按 AdaptiveContext 派生）决定分组是排两列还是单列。
+  // 窄屏 / 中屏由 SettingsScreen 的 NavDestination/HdsSettingsDestination 外壳调用（overlayLayout=false），
+  // 宽屏由 SettingsOverlayPanel 调用（overlayLayout=true，标题 + 关闭 + 搜索由本组件自己画）。
+  // Issue #932：overlayLayout=false 不再按 sizeClass 分叉宽屏版式，一律
+  // CompactSettingsHeader + CompactScreenLayout；只有宽屏浮层按 twoColumn 决定单列 / 双列分组。
   @Builder
   NavContent() {
     Column() {
-      // ── 顶部 Header：宽屏浮层有标题、关闭和搜索，窄屏路由页才有搜索框 ──
+      // ── 顶部 Header：宽屏浮层有标题、关闭和搜索，路由页只有保存状态提示 + 搜索框 ──
       if (this.overlayLayout) {
         this.OverlaySettingsHeader()
-      } else if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-        this.WideSettingsHeader()
       } else {
         this.CompactSettingsHeader()
       }
 
       if (this.viewModel.isLoading) {
-        Column() {
-          LoadingProgress()
-            .width(48)
-            .height(48)
-          Text($r('app.string.loading'))
-            .fontSize(14)
-            .margin({ top: 12 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
+        // Issue #932：加载中状态复用公共 CompactPageState，不再自绘 LoadingProgress。
+        CompactPageState({
+          kind: CompactPageStateKind.Loading,
+          title: getContext(this).resourceManager.getStringSync($r('app.string.loading').id)
+        })
+      } else if (this.overlayLayout && this.twoColumn) {
+        // 只有宽屏浮层决定单列 / 双列分组（列数来自最新 AdaptiveContext，窗口改档会即时重排）。
+        this.TwoColumnSettingsLayout()
       } else {
-        // 宽屏浮层：两列（>=840vp，一级导航在 Side）或单列（600–839vp，一级导航仍是 Bottom）；
-        // 单列沿用折叠分组列表，和窄屏路由页同一套展开逻辑。
-        // 路由页宽屏 (sizeClass 非 Compact)：#760 之前的完整设置列表布局。
-        // 列数来自最新的 Core primaryNavigationPlacement，窗口改档会即时重排。
-        if (this.twoColumn) {
-          this.TwoColumnSettingsLayout()
-        } else if (this.overlayLayout || this.adaptiveState.sizeClass === WidthClass.Compact) {
-          this.CompactScreenLayout()
-        } else {
-          this.WideScreenLayout()
-        }
+        this.CompactScreenLayout()
       }
     }
     .width('100%')
     .height('100%')
-  }
-
-
-  // ════════════════════════════════════════════
-  // 问题3：宽屏布局 — 恢复 #760 之前的完整设置列表
-  // ════════════════════════════════════════════
-  @Builder
-  WideScreenLayout() {
-    Scroll() {
-      Column() {
-        // 按 Core 契约顺序：外观→编辑器→保存→同步→AI→关于/高级
-        this.WideAppearanceSection()
-        this.WideEditorSection()
-        this.WideSaveSection()
-        this.WideSyncSection()
-        this.WideAiSection()
-        this.WideAboutSection()
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
-    }
-    .layoutWeight(1)
-    .scrollBar(BarState.Off)
-    .align(Alignment.Top)
-  }
-
-  // ── 宽屏 Header：保存状态提示（标题由外壳标题栏承载，Issue #768/#774） ──
-  @Builder
-  WideSettingsHeader() {
-    Row() {
-      Blank()
-
-      // 保存状态提示
-      if (this.viewModel.saveMessage) {
-        Text(this.resolveSaveMessage())
-          .fontSize(12)
-      }
-
-      // 复制设备信息结果提示
-      if (this.copyMessage) {
-        Text(this.copyMessage)
-          .fontSize(12)
-          .margin({ left: 8 })
-      }
-    }
-    .width('100%')
-    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 8 })
-    .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
   }
 
   // ── 窄屏 Header：保存状态提示 + 搜索框（标题由外壳标题栏承载，Issue #768/#774） ──
@@ -501,7 +442,8 @@ export struct SettingsContent {
       .height(40)
       .margin({ bottom: 8 })
       .backgroundColor($r('sys.color.comp_background_gray'))
-      .borderRadius(DesignTokens.radiusSm)
+      // Issue #932：输入框圆角归口到共享 token。
+      .borderRadius(DesignTokens.inputFieldRadius)
     }
     .width('100%')
     .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding })
@@ -646,670 +588,6 @@ export struct SettingsContent {
     } else if (sectionId === 'about') {
       this.AboutContent()
     }
-  }
-
-  // ════════════════════════════════════════════
-  // 宽屏 — 外观设置（恢复 #760 之前的完整列表布局）
-  // ════════════════════════════════════════════
-  @Builder
-  WideAppearanceSection() {
-    Column() {
-      Text($r('app.string.appearance'))
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 16 })
-
-      // 主题模式 — 顺序必须是 跟随系统→浅色→深色
-      Row() {
-        Text($r('app.string.theme_mode'))
-          .fontSize(16)
-          .layoutWeight(1)
-
-        Select(this.getAppearanceOptions())
-          .selected(this.getThemeIndex())
-          .value(this.getThemeName())
-          .onSelect((index: number) => {
-            const themes: ThemeMode[] = ['system', 'light', 'dark']
-            const selectedTheme: ThemeMode = themes[index]
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.appearanceMode = selectedTheme
-              s.themeMode = selectedTheme
-              return s
-            })
-            this.themeAdapter.setMode(selectedTheme)
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // 颜色主题来源（实验性：当前页面默认使用系统 token，自定义颜色暂不生效）
-      Row() {
-        Text('颜色主题（实验性）')
-          .fontSize(16)
-          .layoutWeight(1)
-
-        Select(this.getColorSourceOptions())
-          .selected(this.getColorSourceIndex())
-          .value(this.getColorSourceName())
-          .onSelect((index: number) => {
-            const sources: ColorSource[] = ['built_in', 'saved_palette']
-            const selected = sources[index]
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.colorSource = selected
-              return s
-            })
-            this.themeAdapter.setColorSource(selected)
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // 内置主题选择（实验性）
-      if (this.viewModel.settings.colorSource === 'built_in' && this.viewModel.builtinThemes.length > 0) {
-        Row() {
-          Text('内置主题（实验性）')
-            .fontSize(16)
-            .layoutWeight(1)
-
-          Select(this.getBuiltinThemeOptions())
-            .selected(this.getSelectedBuiltinThemeIndex())
-            .value(this.getSelectedBuiltinThemeName())
-            .onSelect((index: number) => {
-              if (index < this.viewModel.builtinThemes.length) {
-                const themeId = this.viewModel.builtinThemes[index].theme_id
-                this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-                  s.selectedBuiltinThemeId = themeId
-                  return s
-                })
-                this.themeAdapter.setSelectedBuiltinThemeId(themeId)
-                this.viewModel.saveSettings()
-              }
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-      }
-
-      // 已保存调色板选择（实验性）
-      if (this.viewModel.settings.colorSource === 'saved_palette' && this.viewModel.paletteRecords.length > 0) {
-        Row() {
-          Text('设备配色（实验性）')
-            .fontSize(16)
-            .layoutWeight(1)
-
-          Select(this.viewModel.paletteRecords.map((r: ThemePaletteRecordDto): SettingsSelectOption => {
-            const date = new Date(r.captured_at_ms)
-            const dateStr = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
-            return { value: `${r.source_device_class} · ${dateStr}`, icon: '' }
-          }))
-            .selected(this.getSelectedPaletteIndex())
-            .value(this.getSelectedPaletteName())
-            .onSelect((index: number) => {
-              if (index < this.viewModel.paletteRecords.length) {
-                const paletteId = this.viewModel.paletteRecords[index].palette_id
-                this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-                  s.selectedPaletteId = paletteId
-                  return s
-                })
-                this.themeAdapter.setSelectedPaletteId(paletteId)
-                this.viewModel.saveSettings()
-              }
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-      }
-
-      // 字体大小
-      Row() {
-        Text($r('app.string.font_size'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Text(`${this.viewModel.settings.editorFontSize}px`)
-          .fontSize(14)
-          .margin({ right: 16 })
-        Slider({ value: this.viewModel.settings.editorFontSize, min: 12, max: 32, step: 1 })
-          .width(120)
-          .onChange((value: number) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.editorFontSize = value
-              return s
-            })
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // 行距倍数
-      Row() {
-        Text($r('app.string.line_spacing_multiplier'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Text(`${this.viewModel.settings.editorLineSpacingMultiplier.toFixed(1)}`)
-          .fontSize(14)
-          .margin({ right: 16 })
-        Slider({ value: this.viewModel.settings.editorLineSpacingMultiplier, min: 1.0, max: 3.0, step: 0.1 })
-          .width(120)
-          .onChange((value: number) => {
-            const rounded = Math.round(value * 10) / 10
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.editorLineSpacingMultiplier = rounded
-              return s
-            })
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding(16)
-    .borderRadius(DesignTokens.radiusMd)
-    .margin({ bottom: 16 })
-  }
-
-  // ════════════════════════════════════════════
-  // 宽屏 — 编辑器设置
-  // ════════════════════════════════════════════
-  @Builder
-  WideEditorSection() {
-    Column() {
-      Text($r('app.string.editor'))
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 16 })
-
-      // 自动缩进
-      Row() {
-        Text($r('app.string.auto_indent'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.autoIndentEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.autoIndentEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // 缩进宽度
-      Row() {
-        Text($r('app.string.indent_width'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Text(`${this.viewModel.settings.autoIndentWidth}`)
-          .fontSize(14)
-          .margin({ right: 16 })
-        Slider({ value: this.viewModel.settings.autoIndentWidth, min: 0, max: 8, step: 1 })
-          .width(120)
-          .onChange((value: number) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.autoIndentWidth = value
-              return s
-            })
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-
-    }
-    .width('100%')
-    .padding(16)
-    .borderRadius(DesignTokens.radiusMd)
-    .margin({ bottom: 16 })
-  }
-
-  // ════════════════════════════════════════════
-  // 宽屏 — 保存设置
-  // ════════════════════════════════════════════
-  @Builder
-  WideSaveSection() {
-    Column() {
-      Text($r('app.string.save_section'))
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 16 })
-
-      // 自动保存
-      Row() {
-        Text($r('app.string.auto_save'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.autoSaveEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.autoSaveEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // 自动保存延迟
-      if (this.viewModel.settings.autoSaveEnabled) {
-        Row() {
-          Text($r('app.string.auto_save_delay'))
-            .fontSize(16)
-            .layoutWeight(1)
-          Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id)
-            .replace('%s', `${Math.round(this.viewModel.settings.autoSaveDelayMs / 1000)}`))
-            .fontSize(14)
-            .margin({ right: 16 })
-          Slider({ value: this.viewModel.settings.autoSaveDelayMs / 1000, min: 1, max: 10, step: 1 })
-            .width(120)
-            .onChange((value: number) => {
-              this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-                s.autoSaveDelayMs = value * 1000
-                return s
-              })
-              this.viewModel.saveSettings()
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-      }
-    }
-    .width('100%')
-    .padding(16)
-    .borderRadius(DesignTokens.radiusMd)
-    .margin({ bottom: 16 })
-  }
-
-  // ════════════════════════════════════════════
-  // 宽屏 — 同步设置
-  // ════════════════════════════════════════════
-  @Builder
-  WideSyncSection() {
-    Column() {
-      Row() {
-        Text($r('app.string.sync_section'))
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-        Blank()
-
-        if (this.viewModel.syncMessage) {
-          Text(this.resolveSyncMessage())
-            .fontSize(12)
-        }
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // 启用同步
-      Row() {
-        Text($r('app.string.enable_sync'))
-          .fontSize(16)
-          .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.syncConfig?.enabled || false })
-          .onChange((isOn: boolean) => {
-            if (this.viewModel.syncConfig) {
-              const newConfig: SyncConfig = {
-                enabled: isOn,
-                activeProvider: 'github_api',
-                providerConfig: this.viewModel.syncConfig.providerConfig,
-                autoSync: this.viewModel.syncConfig.autoSync,
-                syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
-                hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
-                hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
-              }
-              this.viewModel.updateSyncConfig(newConfig)
-            }
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // Sync 详细配置（仅在同步开启时显示）
-      if (this.viewModel.syncConfig?.enabled) {
-        // 自动同步
-        Row() {
-          Text($r('app.string.auto_sync'))
-            .fontSize(16)
-            .layoutWeight(1)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.viewModel.syncConfig?.autoSync || false })
-            .onChange((isOn: boolean) => {
-              if (this.viewModel.syncConfig) {
-                const newConfig: SyncConfig = {
-                  enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: 'github_api',
-                  providerConfig: this.viewModel.syncConfig.providerConfig,
-                  autoSync: isOn,
-                  syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
-                  hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
-                  hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
-                }
-                this.viewModel.updateSyncConfig(newConfig)
-              }
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-
-        // GitHub 远程仓库地址
-        Column() {
-          Text($r('app.string.github_repo'))
-            .fontSize(16)
-            .margin({ bottom: 8 })
-
-          TextInput({ text: this.viewModel.syncRemoteUrl })
-            .width('100%')
-            .height(40)
-            .fontSize(14)
-            .onChange((value: string) => {
-              this.viewModel.updateSyncRemoteUrl(value)
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-
-        // HTTPS Token
-        Column() {
-          Text($r('app.string.https_token'))
-            .fontSize(16)
-            .margin({ bottom: 8 })
-
-          TextInput({ text: this.viewModel.syncToken })
-            .width('100%')
-            .height(40)
-            .fontSize(14)
-            .type(InputType.Password)
-            .showPasswordIcon(true)
-            .onChange((value: string) => {
-              this.viewModel.updateSyncToken(value)
-            })
-            .onBlur(() => {
-              // Issue #924：输入完成立即有序落盘，不等防抖兜底。
-              void this.viewModel.commitSyncToken()
-            })
-            .onSubmit(() => {
-              void this.viewModel.commitSyncToken()
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-
-        // 同步间隔
-        Row() {
-          Text($r('app.string.sync_interval'))
-            .fontSize(16)
-            .layoutWeight(1)
-
-          Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id)
-            .replace('%s', `${this.viewModel.syncConfig?.syncIntervalSeconds || 300}`))
-            .fontSize(14)
-            .margin({ right: 16 })
-
-          Slider({
-            value: this.viewModel.syncConfig?.syncIntervalSeconds || 300,
-            min: 60,
-            max: 3600,
-            step: 60
-          })
-            .width(120)
-            .onChange((value: number) => {
-              if (this.viewModel.syncConfig) {
-                const newConfig: SyncConfig = {
-                  enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: 'github_api',
-                  providerConfig: this.viewModel.syncConfig.providerConfig,
-                  autoSync: this.viewModel.syncConfig.autoSync,
-                  syncIntervalSeconds: value,
-                  hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
-                  hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
-                }
-                this.viewModel.updateSyncConfig(newConfig)
-              }
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-
-        // Sync actions
-        Row({ space: 12 }) {
-          this.SettingsInlineAction($r('app.string.sync_section'),
-            () => this.requestSync(),
-            !this.viewModel.isSyncing)
-
-          this.SettingsInlineAction($r('app.string.diagnose'),
-            () => this.viewModel.runSyncDiagnostics(),
-            !this.viewModel.isDiagnosing)
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-
-        // Issue #926：同步结果带冲突时给出查看/解决入口。
-        if (this.hasConflictEntry()) {
-          this.SyncConflictEntry()
-        }
-
-        // Diagnostics result card
-        if (this.viewModel.syncDiagnostics) {
-          this.DiagnosticsResultCard()
-        }
-      }
-    }
-    .width('100%')
-    .padding(16)
-    .borderRadius(DesignTokens.radiusMd)
-    .margin({ bottom: 16 })
-  }
-
-  // ════════════════════════════════════════════
-  // 宽屏 — AI 设置
-  // ════════════════════════════════════════════
-  @Builder
-  WideAiSection() {
-    Column() {
-      Text($r('app.string.ai_section'))
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 16 })
-
-      Row() {
-        Text($r('app.string.enable_ai'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.aiEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.aiEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding(16)
-    .borderRadius(DesignTokens.radiusMd)
-    .margin({ bottom: 16 })
-  }
-
-  // ════════════════════════════════════════════
-  // 宽屏 — 诊断与日志设置
-  // ════════════════════════════════════════════
-  @Builder
-  WideDiagnosticsSection() {
-    Column() {
-      Text('诊断与日志')
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 16 })
-
-      // 开启诊断日志
-      Row() {
-        Text('开启诊断日志')
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.diagnosticsEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.diagnosticsEnabled = isOn
-              if (!isOn) {
-                s.diagnosticsVerbose = false
-              }
-              return s
-            })
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // 详细日志
-      Row() {
-        Text('详细日志')
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.diagnosticsVerbose })
-          .enabled(this.viewModel.settings.diagnosticsEnabled)
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.diagnosticsVerbose = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // 导出诊断包
-      Column({ space: 12 }) {
-        this.SettingsNeutralAction('导出诊断包', async () => {
-          const result = await this.viewModel.exportDiagnostics()
-          if (result.status === 'success') {
-            promptAction.showToast({ message: '诊断包已导出' })
-          } else if (result.status === 'failed') {
-            promptAction.showToast({ message: '诊断包导出失败' })
-          }
-        })
-
-        // 清空日志（问题6：ViewModel 内部同时清 Rust diagnostics 和 HiLog buffer）
-        this.SettingsNeutralAction('清空日志', () => {
-          this.viewModel.clearLogs()
-        })
-
-        // 复制设备信息（问题5：调用 copyDeviceInfoToClipboard 真正写入剪贴板）
-        this.SettingsNeutralAction('复制设备信息', async () => {
-          const ok = await this.viewModel.copyDeviceInfoToClipboard()
-          if (ok) {
-            this.copyMessage = '已复制'
-            setTimeout(() => { this.copyMessage = '' }, 2000)
-          } else {
-            this.copyMessage = '复制失败'
-            setTimeout(() => { this.copyMessage = '' }, 2000)
-          }
-        })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding(16)
-    .borderRadius(DesignTokens.radiusMd)
-    .margin({ bottom: 16 })
-  }
-
-  // ════════════════════════════════════════════
-  // 宽屏 — 关于
-  // ════════════════════════════════════════════
-  @Builder
-  WideAboutSection() {
-    Column() {
-      Text($r('app.string.about_title'))
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 16 })
-
-      // 应用名
-      Row() {
-        Text($r('app.string.about_app_name_label'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Text($r('app.string.about_app_name'))
-          .fontSize(14)
-      }
-      .width('100%')
-      .margin({ bottom: 8 })
-
-      // 作者
-      Row() {
-        Text($r('app.string.about_author_label'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Text($r('app.string.about_author'))
-          .fontSize(14)
-      }
-      .width('100%')
-      .margin({ bottom: 8 })
-
-      // 项目地址
-      Column() {
-        Text($r('app.string.about_project_label'))
-          .fontSize(16)
-          .margin({ bottom: 4 })
-        Text('GitHub: github.com/Xiwei753/xiezuoruanjian')
-          .fontSize(14)
-        Text($r('app.string.about_gitee'))
-          .fontSize(14)
-          .margin({ top: 4 })
-      }
-      .width('100%')
-      .alignItems(HorizontalAlign.Start)
-      .margin({ bottom: 8 })
-
-      // 开源协议
-      Row() {
-        Text($r('app.string.about_license_label'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Text($r('app.string.about_license'))
-          .fontSize(14)
-      }
-      .width('100%')
-      .margin({ bottom: 8 })
-
-      // 镜像说明
-      Text($r('app.string.about_mirror_note'))
-        .fontSize(13)
-        .margin({ bottom: 8 })
-
-      // 版本信息
-      Row() {
-        Text($r('app.string.version_info'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Text($r('app.string.about_platform'))
-          .fontSize(14)
-      }
-      .width('100%')
-
-      // 工作区路径
-      Row() {
-        Text($r('app.string.workspace_path'))
-          .fontSize(16)
-          .layoutWeight(1)
-      }
-      .width('100%')
-      .margin({ top: 8 })
-    }
-    .width('100%')
-    .padding(16)
-    .borderRadius(DesignTokens.radiusMd)
-    .margin({ bottom: 16 })
   }
 
   // ════════════════════════════════════════════
@@ -1639,6 +917,8 @@ export struct SettingsContent {
             .width('100%')
             .height(40)
             .fontSize(14)
+            // Issue #932：输入框圆角归口到共享 token。
+            .borderRadius(DesignTokens.inputFieldRadius)
             .onChange((value: string) => {
               this.viewModel.updateSyncRemoteUrl(value)
             })
@@ -1656,6 +936,8 @@ export struct SettingsContent {
             .width('100%')
             .height(40)
             .fontSize(14)
+            // Issue #932：输入框圆角归口到共享 token。
+            .borderRadius(DesignTokens.inputFieldRadius)
             .type(InputType.Password)
             .showPasswordIcon(true)
             .onChange((value: string) => {

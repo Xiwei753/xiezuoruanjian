@@ -5,6 +5,9 @@
 // - 右下角 FAB 新建星图（必须先询问名称，不允许无名星图）
 // - 卡片更多菜单支持重命名/删除
 // - 空列表显示"暂无星图"
+// Issue #932：窄屏内容层 + FAB 统一走 CompactPrimaryActionLayer（动作来自 ScreenSemantics），
+// 加载/错误/空状态走 CompactPageState，创建/改名/删除框走窗口级 CompactDialogs；
+// 页面不再自绘遮罩与 FAB 锚点。
 
 import hilog from '@ohos.hilog'
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
@@ -12,11 +15,20 @@ import { StarMapMeta } from '../../../corebridge/dto/StarMapDtos'
 import { getBridge } from '../../../app/AppContext'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
-import { PrimaryFab } from '../../../ui/components/PrimaryFab'
+import {
+  COMPACT_CARD_PADDING_VP,
+  COMPACT_CARD_SPACING_VP,
+  COMPACT_CARD_SUPPORTING_FONT_VP,
+  COMPACT_CARD_TITLE_FONT_VP,
+  COMPACT_LIST_BOTTOM_INSET_VP
+} from '../../../ui/theme/LayoutTokens'
+// Issue #932：窄屏共享构件 — 内容层 + 右下角 FAB、公共状态视图、窗口级对话框。
+import { CompactPrimaryActionLayer } from '../../../ui/components/CompactPrimaryActionLayer'
+import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
+import { CompactConfirmDialogArgs, CompactTextDialogArgs, openCompactConfirmDialog, openCompactTextDialog } from '../../../ui/components/CompactDialogs'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { ScreenRole, ActionSlot, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
+import { ScreenRole, ActionSlot, ActionRegion, ActionRole, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
@@ -103,10 +115,53 @@ export struct StarMapListScreen {
   }
 
   /** 打开「新建星图」命名框（原 FAB 的 onTap 行为）。 */
+  // Issue #932：命名框改为窗口级 CompactDialogs.openCompactTextDialog；
+  // showCreateDialog / newStarMapName / newStarMapDescription 的设置与清理时机不变，
+  // 但不再作为页面渲染开关，点遮罩关闭由 onDidDisappear 负责清理。
   private requestCreateStarMap(): void {
     this.showCreateDialog = true
     this.newStarMapName = ''
     this.newStarMapDescription = ''
+    const args: CompactTextDialogArgs = {
+      title: '新建星图',
+      placeholder: '请输入星图名称',
+      initialText: '',
+      // 星图创建框保留标题 + 描述两栏，字段语义与旧自绘实现一致。
+      secondaryLabel: '描述',
+      secondaryPlaceholder: '请输入星图描述（可选）',
+      secondaryInitialText: '',
+      confirmLabel: '创建',
+      onConfirm: (text: string, secondaryText: string): void => {
+        this.newStarMapName = text
+        this.newStarMapDescription = secondaryText
+        this.createStarMap()
+      },
+      onCancel: (): void => {
+        this.showCreateDialog = false
+        this.newStarMapName = ''
+        this.newStarMapDescription = ''
+      }
+    }
+    // 点遮罩 / 返回键关闭时同样清理创建状态。
+    openCompactTextDialog(this.getUIContext(), args, (): void => {
+      this.showCreateDialog = false
+      this.newStarMapName = ''
+      this.newStarMapDescription = ''
+    })
+  }
+
+  /**
+   * 检查星图页 PrimaryAction 中是否有 CreateStarMap（决定 FAB 是否显示）。
+   * Issue #932：星图「+」的动作语义由 ScreenSemantics 统一声明，页面只按同名动作槽消费。
+   */
+  private hasCreateStarMapPrimaryAction(): boolean {
+    const policy = resolveScreenPolicy(ScreenRole.StarMap)
+    for (const action of policy.actionSlots) {
+      if (action.region === ActionRegion.PrimaryAction && action.role === ActionRole.CreateStarMap) {
+        return true
+      }
+    }
+    return false
   }
 
   // ─── UI 事件处理 ───
@@ -141,18 +196,40 @@ export struct StarMapListScreen {
 
   // ─── 重命名星图 ───
 
+  // Issue #932：改名框改为窗口级，trigger 仍是卡片菜单的「重命名」。
   private startRename(starmap: StarMapMeta): void {
     this.renameTarget = starmap
     this.renameInput = starmap.title
+    const args: CompactTextDialogArgs = {
+      title: '重命名星图',
+      placeholder: '请输入新名称',
+      initialText: starmap.title,
+      secondaryLabel: '',
+      secondaryPlaceholder: '',
+      secondaryInitialText: '',
+      confirmLabel: '确认',
+      onConfirm: (text: string, _secondaryText: string): void => {
+        this.renameInput = text
+        this.confirmRename()
+      },
+      onCancel: (): void => {
+        this.cancelRename()
+      }
+    }
+    // 点遮罩 / 返回键关闭时同样清理重命名状态。
+    openCompactTextDialog(this.getUIContext(), args, (): void => {
+      this.cancelRename()
+    })
   }
 
   private async confirmRename(): Promise<void> {
-    if (this.renameTarget === null || this.renameInput.trim().length === 0) {
+    const target: StarMapMeta | null = this.renameTarget
+    if (target === null || this.renameInput.trim().length === 0) {
       return
     }
     try {
       const bridge: IWriterCoreBridge = getBridge()
-      const result = await bridge.renameStarMap(this.renameTarget!.starmapId, this.renameInput.trim())
+      const result = await bridge.renameStarMap(target.starmapId, this.renameInput.trim())
       if (result.success) {
         // StarMapMeta 是普通 DTO interface，不是 @ObservedV2/@Trace 对象，
         // 原地修改 title 不会触发可靠刷新。重新从 Core 加载列表确保数据一致。
@@ -173,19 +250,39 @@ export struct StarMapListScreen {
 
   // ─── 删除星图 ───
 
+  // Issue #932：删除确认框改为窗口级，trigger 仍是卡片菜单的「删除」。
   private startDelete(starmap: StarMapMeta): void {
     this.deleteTarget = starmap
+    const args: CompactConfirmDialogArgs = {
+      title: '确认删除',
+      message: `确定要删除"${starmap.title}"吗？此操作不可撤销。`,
+      destructive: true,
+      confirmLabel: '删除',
+      onConfirm: (): void => {
+        this.confirmDelete()
+      },
+      onCancel: (): void => {
+        this.cancelDelete()
+      }
+    }
+    // 点遮罩 / 返回键关闭时同样清理删除目标。
+    openCompactConfirmDialog(this.getUIContext(), args, (): void => {
+      this.cancelDelete()
+    })
   }
 
   private async confirmDelete(): Promise<void> {
-    if (this.deleteTarget === null) {
+    // Issue #932：窗口级对话框关闭后的 onDidDisappear 清理可能先于 await 返回执行，
+    // 先把删除目标捕获到局部变量，不再依赖 this.deleteTarget 在 await 后仍非空。
+    const target: StarMapMeta | null = this.deleteTarget
+    if (target === null) {
       return
     }
     try {
       const bridge: IWriterCoreBridge = getBridge()
-      const result = await bridge.deleteStarMap(this.deleteTarget!.starmapId)
+      const result = await bridge.deleteStarMap(target.starmapId)
       if (result.success) {
-        this.starMaps = this.starMaps.filter((s: StarMapMeta) => s.starmapId !== this.deleteTarget!.starmapId)
+        this.starMaps = this.starMaps.filter((s: StarMapMeta) => s.starmapId !== target.starmapId)
       }
     } catch (err) {
       hilog.error(0x0000, 'StarMapListScreen', `deleteStarMap error: ${JSON.stringify(err)}`)
@@ -228,60 +325,44 @@ export struct StarMapListScreen {
 
   @Builder
   StarMapListContent() {
-    Stack() {
-      RelativeContainer() {
-        // 列表内容：锚定四边
-        Column() {
-          if (this.isLoading) {
-            this.LoadingView()
-          } else if (this.errorMessage) {
-            this.ErrorView()
-          } else {
-            this.StarMapListPane()
-          }
-        }
-        .alignRules({
-          top: { anchor: '__container__', align: VerticalAlign.Top },
-          left: { anchor: '__container__', align: HorizontalAlign.Start },
-          right: { anchor: '__container__', align: HorizontalAlign.End },
-          bottom: { anchor: '__container__', align: VerticalAlign.Bottom }
+    // Issue #932：窄屏内容层 + 右下角 FAB 统一由 CompactPrimaryActionLayer 定位，
+    // 删除 RelativeContainer 的 FAB alignRules 锚点；业务回调仍是 requestCreateStarMap()。
+    // 创建 / 改名 / 删除框已改为窗口级 CompactDialogs（在各自 trigger 打开），页面不再自绘遮罩层。
+    CompactPrimaryActionLayer({
+      visible: !this.isLoading && !this.errorMessage && this.hasCreateStarMapPrimaryAction(),
+      pagePadding: this.adaptiveState.pagePadding,
+      onTap: () => {
+        this.requestCreateStarMap()
+      }
+    }) {
+      this.StarMapListBody()
+    }
+  }
+
+  // 窄屏主体：加载 / 出错重试 / 星图列表；外层背景保持 background_secondary。
+  @Builder
+  StarMapListBody() {
+    Column() {
+      if (this.isLoading) {
+        CompactPageState({
+          kind: CompactPageStateKind.Loading,
+          title: '加载中...'
         })
-
-        // ── FAB 层：新建星图浮动按钮 ──
-        // 配色/材质统一到 PrimaryFab，与作品页、工作区页同源。
-        if (!this.isLoading && !this.errorMessage) {
-          PrimaryFab({
-            onTap: () => {
-              this.requestCreateStarMap()
-            }
-          })
-          .alignRules({
-            right: { anchor: '__container__', align: HorizontalAlign.End },
-            bottom: { anchor: '__container__', align: VerticalAlign.Bottom }
-          })
-          .margin({
-            right: this.adaptiveState.pagePadding,
-            bottom: PRIMARY_FAB_BOTTOM_INSET_VP
-          })
-        }
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor($r('sys.color.background_secondary'))
-
-      // ── 对话框层：全屏覆盖 ──
-      if (this.showCreateDialog) {
-        this.CreateDialog()
-      }
-      if (this.renameTarget !== null) {
-        this.RenameDialog()
-      }
-      if (this.deleteTarget !== null) {
-        this.DeleteConfirmDialog()
+      } else if (this.errorMessage) {
+        CompactPageState({
+          kind: CompactPageStateKind.Error,
+          title: this.errorMessage,
+          onRetry: () => {
+            this.loadStarMaps()
+          }
+        })
+      } else {
+        this.StarMapListPane()
       }
     }
     .width('100%')
     .height('100%')
+    .backgroundColor($r('sys.color.background_secondary'))
   }
 
   build() {
@@ -316,97 +397,58 @@ export struct StarMapListScreen {
 
   @Builder
   StarMapListPane() {
-    Scroll() {
-      Column() {
-        if (this.starMaps.length === 0) {
-          this.EmptyState()
-        } else {
+    if (this.starMaps.length === 0) {
+      // Issue #932：空状态改用公共 CompactPageState（文案不变），作为 StarMapListBody Column 的
+      // 直接子项占满剩余高度，不再放在 Scroll 里自绘。
+      CompactPageState({
+        kind: CompactPageStateKind.Empty,
+        title: '暂无星图',
+        description: '点击右下角按钮创建第一个星图'
+      })
+    } else {
+      Scroll() {
+        Column() {
           ForEach(this.starMaps, (starmap: StarMapMeta) => {
             this.StarMapCard(starmap)
           }, (starmap: StarMapMeta) => starmap.starmapId)
         }
+        .width('100%')
+        .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+        .padding({
+          left: this.adaptiveState.pagePadding,
+          right: this.adaptiveState.pagePadding,
+          // Issue #932：列表顶部边距从原来的固定 8vp 收回统一 pagePadding。
+          top: this.adaptiveState.pagePadding,
+          // Issue #932：列表末端留白统一用公共 token，避免最后一张卡贴住悬浮底栏。
+          bottom: COMPACT_LIST_BOTTOM_INSET_VP
+        })
       }
       .width('100%')
-      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({
-        left: this.adaptiveState.pagePadding,
-        right: this.adaptiveState.pagePadding,
-        top: 8,
-        bottom: 16
-      })
+      .height('100%')
+      .scrollBar(BarState.Off)
+      // Scroll 的 align 默认是 Alignment.Center，星图数量少、内容不满一屏时
+      // 整列会被垂直居中，卡片悬在页面中间。这里与 HomeScreen / WorkspaceScreen 对齐，
+      // 显式顶到上方，内容超出后仍正常滚动。
+      .align(Alignment.Top)
     }
-    .width('100%')
-    .height('100%')
-    .scrollBar(BarState.Off)
-    // Scroll 的 align 默认是 Alignment.Center，星图数量少、内容不满一屏时
-    // 整列会被垂直居中，卡片悬在页面中间。这里与 HomeScreen / WorkspaceScreen 对齐，
-    // 显式顶到上方，内容超出后仍正常滚动。
-    .align(Alignment.Top)
-  }
-
-  // ── 加载中 ──
-  @Builder
-  LoadingView() {
-    Column() {
-      LoadingProgress()
-        .width(48)
-        .height(48)
-      Text('加载中...')
-        .fontSize(14)
-        .margin({ top: 12 })
-    }
-    .width('100%')
-    .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
-  }
-
-  // ── 错误视图 ──
-  @Builder
-  ErrorView() {
-    Column() {
-      Text(this.errorMessage)
-        .fontSize(16)
-        .margin({ bottom: 16 })
-
-      Button('重试')
-        .onClick(() => this.loadStarMaps())
-    }
-    .width('100%')
-    .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
-  }
-
-  // ── 空状态 ──
-  @Builder
-  EmptyState() {
-    Column() {
-      Text('暂无星图')
-        .fontSize(18)
-        .margin({ bottom: 8 })
-
-      Text('点击右下角按钮创建第一个星图')
-        .fontSize(14)
-    }
-    .width('100%')
-    .height(200)
-    .justifyContent(FlexAlign.Center)
   }
 
   // ── 星图卡片：左侧标题+描述，右侧更多菜单+日期 ──
+  // Issue #932：卡片度量统一到公共 token（内边距 / 圆角 / 标题字号 / 辅助字号 / 卡间距）。
   @Builder
   StarMapCard(starmap: StarMapMeta) {
     Row() {
       // 左侧：标题 + 描述
       Column() {
         Text(starmap.title)
-          .fontSize(17)
+          .fontSize(COMPACT_CARD_TITLE_FONT_VP)
           .fontWeight(FontWeight.Medium)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         if (starmap.description) {
           Text(starmap.description)
-            .fontSize(13)
+            .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
             .margin({ top: 6 })
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -433,17 +475,18 @@ export struct StarMapListScreen {
 
         // 右下：更新时间
         Text(this.formatTimestamp(starmap.updatedAt))
-          .fontSize(13)
+          .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
           .margin({ top: 6 })
       }
       .width(80)
       .alignItems(HorizontalAlign.End)
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 16, bottom: 16 })
-    .borderRadius(DesignTokens.radiusMd)
+    .padding(COMPACT_CARD_PADDING_VP)
+    // Issue #932：卡片圆角用统一的 DesignTokens.cardRadius。
+    .borderRadius(DesignTokens.cardRadius)
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-    .margin({ bottom: 10 })
+    .margin({ bottom: COMPACT_CARD_SPACING_VP })
     .onClick(() => this.navigateToStarMap(starmap.starmapId, starmap.title))
   }
 
@@ -467,164 +510,5 @@ export struct StarMapListScreen {
           }
         })
     }
-  }
-
-  // ────────────────────────────────────────
-  // 对话框
-  // ────────────────────────────────────────
-
-  // ── 新建星图对话框 ──
-  @Builder
-  CreateDialog() {
-    Column() {
-      Column() {
-        Text('新建星图')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 16 })
-
-        TextInput({ placeholder: '请输入星图名称' })
-          .width('100%')
-          .height(40)
-          .fontSize(16)
-          .onChange((value: string) => {
-            this.newStarMapName = value
-          })
-
-        TextInput({ placeholder: '请输入星图描述（可选）' })
-          .width('100%')
-          .height(40)
-          .fontSize(16)
-          .margin({ top: 12 })
-          .onChange((value: string) => {
-            this.newStarMapDescription = value
-          })
-
-        Row() {
-          Button('取消')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.showCreateDialog = false
-              this.newStarMapName = ''
-              this.newStarMapDescription = ''
-            })
-
-          Blank()
-
-          Button('创建')
-            .fontSize(14)
-            .height(36)
-            .enabled(this.newStarMapName.trim().length > 0)
-            .onClick(() => {
-              this.createStarMap()
-            })
-        }
-        .width('100%')
-        .margin({ top: 16 })
-      }
-      .width('80%')
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
-  }
-
-  // ── 重命名对话框 ──
-  @Builder
-  RenameDialog() {
-    Column() {
-      Column() {
-        Text('重命名星图')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 16 })
-
-        TextInput({ text: this.renameInput, placeholder: '请输入新名称' })
-          .width('100%')
-          .height(40)
-          .fontSize(16)
-          .onChange((value: string) => {
-            this.renameInput = value
-          })
-
-        Row() {
-          Button('取消')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.cancelRename()
-            })
-
-          Blank()
-
-          Button('确认')
-            .fontSize(14)
-            .height(36)
-            .enabled(this.renameInput.trim().length > 0)
-            .onClick(() => {
-              this.confirmRename()
-            })
-        }
-        .width('100%')
-        .margin({ top: 16 })
-      }
-      .width('80%')
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
-  }
-
-  // ── 删除确认对话框 ──
-  @Builder
-  DeleteConfirmDialog() {
-    Column() {
-      Column() {
-        Text('确认删除')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 8 })
-
-        Text(`确定要删除"${this.deleteTarget?.title}"吗？此操作不可撤销。`)
-          .fontSize(14)
-          .margin({ bottom: 16 })
-
-        Row() {
-          Button('取消')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.cancelDelete()
-            })
-
-          Blank()
-
-          Button('删除')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.confirmDelete()
-            })
-        }
-        .width('100%')
-      }
-      .width('80%')
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
   }
 }

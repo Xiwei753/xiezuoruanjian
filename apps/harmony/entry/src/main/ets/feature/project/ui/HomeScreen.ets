@@ -10,6 +10,9 @@
 // 宽屏首页只剩作品卡流：作品卡 + 「+」卡从内容区左上开始排，
 // 「+」是网格里的一张卡而不是 FAB / 按钮，永久跟在最后一张作品卡后面。
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
+// Issue #932：窄屏列表 / FAB / 对话框统一走共享构件
+// （CompactPrimaryActionLayer / CompactPageState / CompactDialogs），
+// 页面不再自绘遮罩、对话框卡片与 FAB 定位；宽屏作品网格保持不变。
 
 import hilog from '@ohos.hilog'
 import emitter from '@ohos.events.emitter'
@@ -18,8 +21,18 @@ import { ProjectSummary } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../../feature/settings/presentation/SyncOperationController'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { PRIMARY_FAB_BOTTOM_INSET_VP, PROJECT_CARD_MIN_WIDTH_VP } from '../../../ui/theme/LayoutTokens'
-import { PrimaryFab } from '../../../ui/components/PrimaryFab'
+import {
+  COMPACT_CARD_PADDING_VP,
+  COMPACT_CARD_SPACING_VP,
+  COMPACT_CARD_SUPPORTING_FONT_VP,
+  COMPACT_CARD_TITLE_FONT_VP,
+  COMPACT_LIST_BOTTOM_INSET_VP,
+  PROJECT_CARD_MIN_WIDTH_VP
+} from '../../../ui/theme/LayoutTokens'
+// Issue #932：窄屏共享构件 — 内容层 + 右下角 FAB、公共状态视图、窗口级对话框。
+import { CompactPrimaryActionLayer } from '../../../ui/components/CompactPrimaryActionLayer'
+import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
+import { CompactConfirmDialogArgs, CompactTextDialogArgs, openCompactConfirmDialog, openCompactTextDialog } from '../../../ui/components/CompactDialogs'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { ProjectListViewModel, ProjectOpenTarget } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
@@ -36,6 +49,8 @@ import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 // 原来写 .width('80%')，在 1244vp 宽屏上对话框会被拉到近 1000vp 宽，
 // 一行输入框横跨整屏。改成「手机上能缩、宽屏有上限」：
 // 宽度 100% 加上限，窄屏按屏宽收缩，宽屏停在 DIALOG_CONTENT_MAX_WIDTH。
+// Issue #932 后创建/改名/删除框已迁到窗口级 CompactDialogs（COMPACT_DIALOG_MAX_WIDTH_VP），
+// 这个常量只服务留在页面内的「目录读取失败」提示框。
 const DIALOG_CONTENT_MAX_WIDTH: number = 420
 
 // Issue #827 评论 2：宽屏作品卡之间的间距（vp），作品卡与「+」卡共用同一份。
@@ -197,9 +212,88 @@ export struct HomeScreen {
   // 「+」卡、窄屏 FAB、空状态入口都只调它，它只打开命名框；
   // 真正的 createProject(name) 只能从命名框的「创建」回调进入，
   // 不允许任何地方拿默认名直接建作品。
+  // Issue #932：命名框改为窗口级 CompactDialogs.openCompactTextDialog，
+  // ViewModel 的 showCreateDialog / newProjectName 设置与清理时机保持不变，
+  // 但不再作为页面渲染开关。点遮罩关闭由 onDidDisappear 负责清理。
   private requestCreateProject(): void {
     this.viewModel.newProjectName = ''
     this.viewModel.showCreateDialog = true
+    const args: CompactTextDialogArgs = {
+      title: '新建作品',
+      placeholder: '请输入作品名称',
+      initialText: '',
+      secondaryLabel: '',
+      secondaryPlaceholder: '',
+      secondaryInitialText: '',
+      confirmLabel: '创建',
+      onConfirm: (text: string, _secondaryText: string): void => {
+        this.viewModel.newProjectName = text
+        this.viewModel.onCreateProject()
+      },
+      onCancel: (): void => {
+        this.viewModel.showCreateDialog = false
+        this.viewModel.newProjectName = ''
+      }
+    }
+    // 点遮罩 / 返回键关闭时同样清理创建状态。
+    openCompactTextDialog(this.getUIContext(), args, (): void => {
+      this.viewModel.showCreateDialog = false
+      this.viewModel.newProjectName = ''
+    })
+  }
+
+  // Issue #932：改名框迁到窗口级，trigger 仍是菜单里的 Rename Context action；
+  // 初始文本取 ViewModel 已设置的 renameInput，确认/取消回调照旧走 ViewModel。
+  private openRenameDialog(): void {
+    if (this.viewModel.renameTarget === null) {
+      return
+    }
+    const args: CompactTextDialogArgs = {
+      title: '重命名作品',
+      placeholder: '请输入新名称',
+      initialText: this.viewModel.renameInput,
+      // 作品改名只有一个输入栏。
+      secondaryLabel: '',
+      secondaryPlaceholder: '',
+      secondaryInitialText: '',
+      confirmLabel: '确认',
+      onConfirm: (text: string, _secondaryText: string): void => {
+        this.viewModel.renameInput = text
+        this.viewModel.confirmRename()
+      },
+      onCancel: (): void => {
+        this.viewModel.cancelRename()
+      }
+    }
+    // 点遮罩 / 返回键关闭时同样清理 ViewModel 的重命名状态。
+    openCompactTextDialog(this.getUIContext(), args, (): void => {
+      this.viewModel.cancelRename()
+    })
+  }
+
+  // Issue #932：删除确认框迁到窗口级；只有 ViewModel 真的拿到了 deleteTarget
+  // （requiresConfirmation=true）才弹框，不需要确认的删除仍由 ViewModel 直接执行。
+  private openDeleteConfirmDialog(): void {
+    const target: ProjectSummary | null = this.viewModel.deleteTarget
+    if (target === null) {
+      return
+    }
+    const args: CompactConfirmDialogArgs = {
+      title: '确认删除',
+      message: `确定要删除"${target.title}"吗？此操作不可撤销。`,
+      destructive: true,
+      confirmLabel: '删除',
+      onConfirm: (): void => {
+        this.viewModel.confirmDelete()
+      },
+      onCancel: (): void => {
+        this.viewModel.cancelDelete()
+      }
+    }
+    // 点遮罩 / 返回键关闭时同样清理 ViewModel 的删除目标。
+    openCompactConfirmDialog(this.getUIContext(), args, (): void => {
+      this.viewModel.cancelDelete()
+    })
   }
 
   // ─── Context Action 处理 ───
@@ -209,8 +303,11 @@ export struct HomeScreen {
     const projectId = this.viewModel.currentMenuProjectId
     if (slot.role === ActionRole.Rename) {
       this.viewModel.startRenameProject(projectId)
+      // Issue #932：ViewModel 设置 renameTarget 后立即打开窗口级改名框。
+      this.openRenameDialog()
     } else if (slot.role === ActionRole.Delete) {
       this.viewModel.startDeleteProject(projectId, slot.requiresConfirmation)
+      this.openDeleteConfirmDialog()
     }
   }
 
@@ -374,15 +471,8 @@ export struct HomeScreen {
       .height('100%')
 
       // ── 对话框层 ──
-      if (this.viewModel.showCreateDialog) {
-        this.CreateDialog()
-      }
-      if (this.viewModel.renameTarget !== null) {
-        this.RenameDialog()
-      }
-      if (this.viewModel.deleteTarget !== null) {
-        this.DeleteConfirmDialog()
-      }
+      // Issue #932：创建 / 改名 / 删除框已改为窗口级 CompactDialogs（在各自 trigger 打开），
+      // 页面这里不再自绘全屏遮罩层；只剩仍走页面内的「目录读取失败」提示层。
 
       // ── 目录读取失败提示层（宽屏点作品后 getProjectTree 失败） ──
       if (this.viewModel.openProjectError.length > 0) {
@@ -599,37 +689,34 @@ export struct HomeScreen {
   // 窄屏布局（保留当前的新作品卡布局）
   // ────────────────────────────────────────
 
+  // Issue #932：窄屏内容层 + 右下角 FAB 统一由 CompactPrimaryActionLayer 定位，
+  // 删除页面自己写的 Stack(BottomEnd) + FAB margin 计算；业务回调仍是 requestCreateProject()。
+  // Issue #827 评论 2：FAB 只在非宽屏出现。宽屏的「+」卡是网格成员，
+  // 两边不能同时留着两套新建入口。
   @Builder
   SinglePaneLayout() {
-    Stack({ alignContent: Alignment.BottomEnd }) {
-      Column() {
-        // Issue #905：窄屏标题栏恢复由 HDS 原生标题栏承载，内容区不再人工叠加安全区。
-        if (this.viewModel.isLoading) {
-          this.LoadingView()
-        } else if (this.viewModel.errorMessage) {
-          this.ErrorView()
-        } else {
-          this.ProjectListContent()
-        }
+    CompactPrimaryActionLayer({
+      visible: !this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction(),
+      pagePadding: this.adaptiveState.pagePadding,
+      onTap: () => {
+        this.requestCreateProject()
       }
-      .width('100%')
-      .height('100%')
+    }) {
+      this.SinglePaneBody()
+    }
+  }
 
-      // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
-      // Issue #778：FAB 改用 Stack BottomEnd 对齐 + margin 定位，不再用绝对坐标。
-      // 配色/材质统一到 PrimaryFab，与工作区页、星图页同源。
-      // Issue #827 评论 2：FAB 只在非宽屏出现。宽屏的「+」卡是网格成员，
-      // 两边不能同时留着两套新建入口。
-      if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
-        PrimaryFab({
-          onTap: () => {
-            this.requestCreateProject()
-          }
-        })
-        .margin({
-          right: this.adaptiveState.pagePadding,
-          bottom: PRIMARY_FAB_BOTTOM_INSET_VP
-        })
+  // 窄屏主体：加载 / 出错重试 / 作品列表。
+  // Issue #905：窄屏标题栏恢复由 HDS 原生标题栏承载，内容区不再人工叠加安全区。
+  @Builder
+  SinglePaneBody() {
+    Column() {
+      if (this.viewModel.isLoading) {
+        this.LoadingView()
+      } else if (this.viewModel.errorMessage) {
+        this.ErrorView()
+      } else {
+        this.ProjectListContent()
       }
     }
     .width('100%')
@@ -641,99 +728,81 @@ export struct HomeScreen {
   // ────────────────────────────────────────
 
   // ── 加载中 ──
+  // Issue #932：加载 / 错误状态改用公共 CompactPageState，宽屏与窄屏共用同一份视觉。
   @Builder
   LoadingView() {
-    Column() {
-      LoadingProgress()
-        .width(48)
-        .height(48)
-      Text('加载中...')
-        .fontSize(14)
-        .margin({ top: 12 })
-    }
-    .width('100%')
-    .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
+    CompactPageState({
+      kind: CompactPageStateKind.Loading,
+      title: '加载中...'
+    })
   }
 
   // ── 错误视图 ──
   @Builder
   ErrorView() {
-    Column() {
-      Text(this.viewModel.errorMessage)
-        .fontSize(16)
-        .margin({ bottom: 16 })
-
-      Button('重试')
-        .onClick(() => this.handleRetry())
-    }
-    .width('100%')
-    .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
+    CompactPageState({
+      kind: CompactPageStateKind.Error,
+      title: this.viewModel.errorMessage,
+      onRetry: () => {
+        this.handleRetry()
+      }
+    })
   }
 
   // ── 作品列表内容（窄屏） ──
-  @Builder
-  ProjectListContent() {
-    Scroll() {
-      Column() {
-        if (this.viewModel.projects.length === 0) {
-          this.EmptyState()
-        } else {
-          ForEach(this.viewModel.projects, (project: ProjectSummary) => {
-            this.ProjectCard(project)
-          }, (project: ProjectSummary) => project.id)
-        }
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({
-        left: this.adaptiveState.pagePadding,
-        right: this.adaptiveState.pagePadding,
-        // Issue #905：HDS 原生标题栏自行避让状态栏（titleBar.avoidLayoutSafeArea），
-        // 内容区不再人工叠加安全区 + 悬浮 Header 高度，只保留内容列表自身的内边距。
-        top: this.adaptiveState.pagePadding,
-        bottom: 16
-      })
-    }
-    .layoutWeight(1)
-    .scrollBar(BarState.Off)
-    .align(Alignment.Top)
-  }
-
-  // ── 空状态 ──
+  // Issue #932：空状态改用公共 CompactPageState（文案不变），
+  // 作为 SinglePaneBody Column 的直接子项占满剩余高度，不再放在 Scroll 里自绘。
   // Issue #827 评论 1 第 3 点：空状态也是一个新建入口，走同一个 requestCreateProject()，
   // 不在这里直接拿默认名建作品。文案不再写死「右下角按钮」，因为宽屏根本没有 FAB，
   // 宽屏的空状态就是那张「+」卡。
   @Builder
-  EmptyState() {
-    Column() {
-      Text('暂无作品')
-        .fontSize(18)
-        .margin({ bottom: 8 })
-
-      Text('点击「+」创建第一个作品')
-        .fontSize(14)
+  ProjectListContent() {
+    if (this.viewModel.projects.length === 0) {
+      CompactPageState({
+        kind: CompactPageStateKind.Empty,
+        title: '暂无作品',
+        description: '点击「+」创建第一个作品'
+      })
+    } else {
+      Scroll() {
+        Column() {
+          ForEach(this.viewModel.projects, (project: ProjectSummary) => {
+            this.ProjectCard(project)
+          }, (project: ProjectSummary) => project.id)
+        }
+        .width('100%')
+        .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+        .padding({
+          left: this.adaptiveState.pagePadding,
+          right: this.adaptiveState.pagePadding,
+          // Issue #905：HDS 原生标题栏自行避让状态栏（titleBar.avoidLayoutSafeArea），
+          // 内容区不再人工叠加安全区 + 悬浮 Header 高度，只保留内容列表自身的内边距。
+          top: this.adaptiveState.pagePadding,
+          // Issue #932：列表末端留白统一用公共 token，避免最后一张卡贴住悬浮底栏。
+          bottom: COMPACT_LIST_BOTTOM_INSET_VP
+        })
+      }
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .align(Alignment.Top)
     }
-    .width('100%')
-    .height(200)
-    .justifyContent(FlexAlign.Center)
   }
 
   // ── 作品卡片（窄屏）：左上名/左下字数/右下日期/右上更多菜单 ──
+  // Issue #932：卡片度量统一到公共 token（内边距 / 圆角 / 标题字号 / 辅助字号 / 卡间距）。
   @Builder
   ProjectCard(project: ProjectSummary) {
     Row() {
       // 左侧：作品名 + 总字数
       Column() {
         Text(project.title)
-          .fontSize(17)
+          .fontSize(COMPACT_CARD_TITLE_FONT_VP)
           .fontWeight(FontWeight.Medium)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         Text(this.formatWordCount(project.totalWordCount))
-          .fontSize(13)
+          .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
           .margin({ top: 6 })
       }
       .layoutWeight(1)
@@ -757,19 +826,20 @@ export struct HomeScreen {
 
         // 右下：最后编辑日期
         Text(this.formatDate(project.updatedAt))
-          .fontSize(13)
+          .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
           .margin({ top: 6 })
       }
       .width(80)
       .alignItems(HorizontalAlign.End)
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 16, bottom: 16 })
-    .borderRadius(DesignTokens.radiusMd)
+    .padding(COMPACT_CARD_PADDING_VP)
+    // Issue #932：卡片圆角用统一的 DesignTokens.cardRadius。
+    .borderRadius(DesignTokens.cardRadius)
     // 卡片用系统卡片面色（浅色模式实测 #FFFFFF），与页面底色 background_secondary 拉开色阶。
     // 官方 faqs-arkui-1119：组件背景色要与页面背景色区分，否则组件区域无法突出显示。
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-    .margin({ bottom: 10 })
+    .margin({ bottom: COMPACT_CARD_SPACING_VP })
     .onClick(() => this.navigateToWorkspace(project.id, project.title))
   }
 
@@ -786,157 +856,11 @@ export struct HomeScreen {
   }
 
   // ────────────────────────────────────────
-  // 对话框（Issue #767：默认路径不读 themeConfig.colors.*，用系统默认样式）
+  // 对话框
+  // Issue #932：创建 / 改名 / 删除框已迁到窗口级 CompactDialogs
+  //（openCompactTextDialog / openCompactConfirmDialog），不再有页面内自绘实现。
+  // 下面只保留仍走页面内的「目录读取失败」提示框。
   // ────────────────────────────────────────
-
-  // ── 新建作品对话框 ──
-  @Builder
-  CreateDialog() {
-    Column() {
-      Column() {
-        Text('新建作品')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 16 })
-
-        TextInput({ placeholder: '请输入作品名称' })
-          .width('100%')
-          .height(40)
-          .fontSize(16)
-          .onChange((value: string) => {
-            this.viewModel.newProjectName = value
-          })
-
-        Row() {
-          Button('取消')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.showCreateDialog = false
-              this.viewModel.newProjectName = ''
-            })
-
-          Blank()
-
-          Button('创建')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.onCreateProject()
-            })
-        }
-        .width('100%')
-        .margin({ top: 16 })
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ left: 24, right: 24 })
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
-  }
-
-  // ── 重命名对话框 ──
-  @Builder
-  RenameDialog() {
-    Column() {
-      Column() {
-        Text('重命名作品')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 16 })
-
-        TextInput({ text: this.viewModel.renameInput, placeholder: '请输入新名称' })
-          .width('100%')
-          .height(40)
-          .fontSize(16)
-          .onChange((value: string) => {
-            this.viewModel.renameInput = value
-          })
-
-        Row() {
-          Button('取消')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.cancelRename()
-            })
-
-          Blank()
-
-          Button('确认')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.confirmRename()
-            })
-        }
-        .width('100%')
-        .margin({ top: 16 })
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ left: 24, right: 24 })
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
-  }
-
-  // ── 删除确认对话框 ──
-  @Builder
-  DeleteConfirmDialog() {
-    Column() {
-      Column() {
-        Text('确认删除')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .margin({ bottom: 8 })
-
-        Text(`确定要删除"${this.viewModel.deleteTarget?.title}"吗？此操作不可撤销。`)
-          .fontSize(14)
-          .margin({ bottom: 16 })
-
-        Row() {
-          Button('取消')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.cancelDelete()
-            })
-
-          Blank()
-
-          Button('删除')
-            .fontSize(14)
-            .height(36)
-            .onClick(() => {
-              this.viewModel.confirmDelete()
-            })
-        }
-        .width('100%')
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
-      .padding(20)
-      .borderRadius(DesignTokens.radiusLg)
-      .backgroundColor($r('sys.color.background_secondary'))
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ left: 24, right: 24 })
-    .backgroundColor('#80000000')
-    .justifyContent(FlexAlign.Center)
-  }
 
   // ── 目录读取失败对话框 ──
   // 宽屏点作品后 getProjectTree 失败：留在作品首页，给明确错误和重试；
