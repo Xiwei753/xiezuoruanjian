@@ -34,25 +34,20 @@ impl SujianEditorItem {
         if self.pipeline.committed_text() == normalized {
             return;
         }
-        let old = self.pipeline.snapshot();
-        self.pipeline.load_text(normalized.clone(), 0);
-        // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-        let new = self.pipeline.snapshot();
-        let result = super::edit_motion::synthetic_edit_result(
-            &old.text,
-            &new.text,
-            old.cursor,
-            new.cursor,
-            EditorTransactionCause::Load,
-            writer_core::editor::EditorOperationKind::Load,
-        );
-        let _ = self.record_transaction(old, new, &result, false);
-        self.pipeline.composition_mut().clear();
-        self.clear_active_text_animations();
-        // Issue #715: 章节 Load 的完整视觉状态边界。
-        // 不再只清 previous_canonical_snapshot（半套处理），而是无条件重置所有视觉状态，
-        // 确保下一次真实输入从新章节的 layout/snapshot 起算。
+        // Issue #919 复核（comment 6229842948）：统一为 Load 路线（与
+        // `load_document_text` 一致），不再先制造 `synthetic_edit_result(new_revision=1)`
+        // 再 `record_transaction`。旧路径把 `text_revision` 提前到 1，而 Core mirror
+        // revision 仍是 0，下一笔真实输入的 Core `new_revision` 恰好也是 1，导致
+        // `text_revision` 表面 1→1 而非真实 Core 0→1。随后
+        // `clear_active_text_animations` / `reset_document_visual_state` 又把
+        // `record_transaction` 预备的旧局部动画/布局删掉，等于白走一趟事务。
+        // 这里直接 `load_text` + `set_text_revision(mirror.revision)` 让
+        // `text_revision` 与真实 Core revision 一致，后续真实编辑严格递增。
         self.reset_document_visual_state();
+        self.pipeline.load_text(normalized, 0);
+        self.pipeline
+            .set_text_revision(self.pipeline.mirror().revision());
+        self.pipeline.composition_mut().clear();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
@@ -89,9 +84,14 @@ impl SujianEditorItem {
         if self.pipeline.committed_text() == normalized {
             return;
         }
-        let old = self.pipeline.snapshot();
         let old_cursor = self.pipeline.cursor();
         let old_anchor = self.pipeline.selection_anchor();
+        // Issue #919 复核（comment 6229842948）：统一为 Load 路线（与
+        // `set_plain_text_from_qml` / `load_document_text` 一致），不再走
+        // `synthetic_edit_result` + `record_transaction`，避免 `text_revision` 与
+        // Core revision 脱节。保留 reload 的光标/选区语义：`load_text` 用 old_cursor，
+        // 若 mirror cursor 与 char boundary 不一致则用正式 `set_selection` 恢复。
+        self.reset_document_visual_state();
         self.pipeline.load_text(normalized.clone(), old_cursor);
         if self.pipeline.mirror().cursor()
             != clamp_to_char_boundary(self.pipeline.mirror().text(), old_cursor)
@@ -101,23 +101,9 @@ impl SujianEditorItem {
                 clamp_to_char_boundary(self.pipeline.mirror().text(), old_cursor),
             );
         }
-        // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-        let new = self.pipeline.snapshot();
-        let result = super::edit_motion::synthetic_edit_result(
-            &old.text,
-            &new.text,
-            old_cursor,
-            new.cursor,
-            EditorTransactionCause::Load,
-            writer_core::editor::EditorOperationKind::Load,
-        );
-        let _ = self.record_transaction(old, new, &result, false);
+        self.pipeline
+            .set_text_revision(self.pipeline.mirror().revision());
         self.pipeline.composition_mut().clear();
-        self.clear_active_text_animations();
-        // Issue #715: 章节 Load 的完整视觉状态边界。
-        // 不再只清 previous_canonical_snapshot（半套处理），而是无条件重置所有视觉状态，
-        // 确保下一次真实输入从新章节的 layout/snapshot 起算。
-        self.reset_document_visual_state();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;

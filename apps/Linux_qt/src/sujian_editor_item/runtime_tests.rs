@@ -53,6 +53,47 @@ fn rects_approx_eq(a: SourceRect, b: SourceRect, eps: f64) -> bool {
         && (a.h - b.h).abs() <= eps
 }
 
+/// Issue #919 复核（comment 6229842948）：收集 `snapshot` 中 `byte_range` 覆盖的
+/// cluster 文档矩形并求整段并集（min x/y, max x+w/y+h）。先用 contained 严格匹配，
+/// 为空时退到 overlapping，以兼容 cluster 跨范围合并。返回 None 表示无 cluster 命中。
+fn cluster_union_rect(
+    snapshot: &super::layout_snapshot::EditorLayoutSnapshot,
+    byte_range: (usize, usize),
+) -> Option<SourceRect> {
+    let (bs, be) = byte_range;
+    let mut rects: Vec<SourceRect> = Vec::new();
+    for line in &snapshot.line_snapshots {
+        let contained = line.clusters_contained_in_range(bs, be);
+        let picked: Vec<_> = if contained.is_empty() {
+            line.clusters_overlapping_range(bs, be)
+        } else {
+            contained
+        };
+        for cluster in picked {
+            rects.push(line.source_rect_to_document_rect(&cluster.source_rect));
+        }
+    }
+    if rects.is_empty() {
+        return None;
+    }
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_xw = f64::MIN;
+    let mut max_yh = f64::MIN;
+    for r in &rects {
+        min_x = min_x.min(r.x);
+        min_y = min_y.min(r.y);
+        max_xw = max_xw.max(r.x + r.w);
+        max_yh = max_yh.max(r.y + r.h);
+    }
+    Some(SourceRect {
+        x: min_x,
+        y: min_y,
+        w: max_xw - min_x,
+        h: max_yh - min_y,
+    })
+}
+
 // =========================================================================
 // 测试 1: emit_content_changed 后旧 prepared_frame 失效
 // =========================================================================
@@ -1174,16 +1215,15 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
         item.current_viewport_height = 600.0;
         item.click_at(1000.0, 0.0, false);
 
-        // Issue #919 复核：`set_plain_text` 内部 `record_transaction` 用
-        // `synthetic_edit_result`，其 `new_revision` 硬编码为 1（edit_motion.rs:123），
-        // 使 `text_revision` 提前到 1，而 Core mirror revision 仍是 0。后续第一笔
-        // `insert_text` 的 Core new_revision 恰好也是 1，`set_text_revision(1)` 不会
-        // 让 `text_revision` 严格递增（1→1），协调者要求的 `assert!(r1 > r0)` 无法成立。
-        // 此处把 `text_revision` 同步到 Core mirror revision，消除 synthetic 脱节，
-        // 使 `text_revision` 反映真实 Core revision，后续每笔 `insert_text` 的
-        // Core new_revision 严格递增可断言。这是测试设置（调 pub 方法），不改生产代码。
-        item.pipeline
-            .set_text_revision(item.pipeline.mirror().revision());
+        // Issue #919 复核（comment 6229842948）：`set_plain_text` 现已统一为 Load
+        // 路线（properties.rs），不再走 `synthetic_edit_result(new_revision=1)` +
+        // `record_transaction`，`text_revision` 直接绑定 `mirror().revision()`。
+        // 此处断言生产加载路径本身让两者一致，不再手动补 `set_text_revision`。
+        assert_eq!(
+            item.pipeline.text_revision(),
+            item.pipeline.mirror().revision(),
+            "set_plain_text 后 text_revision 必须等于 Core mirror revision（生产 Load 路线绑定）"
+        );
 
         let r0 = item.pipeline.text_revision();
 
@@ -1250,11 +1290,12 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
             .iter()
             .filter_map(|s| match s {
                 SliceMotion::Shift {
+                    new,
                     from,
                     to,
                     byte_range,
                     ..
-                } => Some((*from, *to, *byte_range)),
+                } => Some((*new, *from, *to, *byte_range)),
                 _ => None,
             })
             .collect();
@@ -1264,8 +1305,15 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
             motion2.slices
         );
 
+        // Issue #919 复核（comment 6229842948）：`merge_adjacent_shifts()` 会把相邻
+        // 未改 cluster 合并为一个 Shift，合并后的 from/to 是整段并集矩形，byte_range
+        // 覆盖整段。因此不能把合并后的大矩形与单个 cluster 比较。这里为每条 Shift 将
+        // new byte_range 经段首插入"丁"的 UTF-8 3 字节增量映回 snap1 旧范围
+        //（old = new.start-3 .. new.end-3），分别收集 snap1 旧范围 / snap2 新范围
+        // 覆盖的 cluster 文档矩形求整段并集，断言 Shift.from=旧并集、Shift.to=新并集。
+        // 本测试尚未提交 QSG 帧，使用第一笔当前 canonical 作为旧布局（第二笔 base）。
         let eps = 1e-4;
-        for (from, to, byte_range) in &shifts {
+        for (new_slice, from, to, byte_range) in &shifts {
             // from 与 to 必须确实有位移（x 或 y 不同）。
             assert!(
                 (from.x - to.x).abs() > eps || (from.y - to.y).abs() > eps,
@@ -1275,59 +1323,45 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
                 to
             );
 
-            // to 必须落在 snap2 中对应 byte_range 的 cluster 文档几何上。
-            // 先用 contained 严格匹配，cluster 跨范围合并时退一步用 overlapping。
             let (bs, be) = *byte_range;
-            let mut to_matched = false;
-            for line in &snap2.line_snapshots {
-                for cluster in line.clusters_contained_in_range(bs, be) {
-                    let doc_rect = line.source_rect_to_document_rect(&cluster.source_rect);
-                    if rects_approx_eq(doc_rect, *to, eps) {
-                        to_matched = true;
-                        break;
-                    }
-                }
-                if to_matched {
-                    break;
-                }
-            }
-            if !to_matched {
-                for line in &snap2.line_snapshots {
-                    for cluster in line.clusters_overlapping_range(bs, be) {
-                        let doc_rect = line.source_rect_to_document_rect(&cluster.source_rect);
-                        if rects_approx_eq(doc_rect, *to, eps) {
-                            to_matched = true;
-                            break;
-                        }
-                    }
-                    if to_matched {
-                        break;
-                    }
-                }
-            }
-            assert!(
-                to_matched,
-                "Shift.to {:?} 必须落在 snap2 中 byte_range {:?} 对应 cluster 的文档几何上",
-                to, byte_range
+            // 段首插入"丁"（UTF-8 3 字节）后，snap2 中未改片段的 new byte_range 比
+            // snap1 旧范围整体后移 3 字节，映回旧范围 old = (bs-3, be-3)。
+            let old_range = (bs.saturating_sub(3), be.saturating_sub(3));
+
+            let expected_to = cluster_union_rect(snap2, (bs, be)).expect(
+                "snap2 中 byte_range 必须覆盖至少一个 cluster，才能计算 Shift.to 期望并集",
+            );
+            let expected_from = cluster_union_rect(&snap1, old_range).expect(
+                "snap1 中映回的旧 byte_range 必须覆盖至少一个 cluster，才能计算 Shift.from 期望并集",
             );
 
-            // from 必须落在 snap1 中某个 cluster 的文档几何上（旧布局几何）。
-            // 遍历 snap1 所有行所有 cluster，重建文档坐标 rect 比较。
-            let mut from_matched = false;
-            'outer: for line in &snap1.line_snapshots {
-                for cluster in &line.clusters {
-                    let doc_rect = line.source_rect_to_document_rect(&cluster.source_rect);
-                    if rects_approx_eq(doc_rect, *from, eps) {
-                        from_matched = true;
-                        break 'outer;
+            assert!(
+                rects_approx_eq(expected_from, *from, eps),
+                "Shift.from {:?} 必须等于 snap1 旧范围 {:?} 覆盖 cluster 的整段并集 {:?}\
+                 （byte_range {:?}），证明第二笔以第一笔布局为 base",
+                from, old_range, expected_from, byte_range
+            );
+            assert!(
+                rects_approx_eq(expected_to, *to, eps),
+                "Shift.to {:?} 必须等于 snap2 新范围 {:?} 覆盖 cluster 的整段并集 {:?}\
+                 （byte_range {:?}）",
+                to, (bs, be), expected_to, byte_range
+            );
+
+            // Shift.new.source.snapshot_id 必须与 snap2 中覆盖该 byte_range 的行快照 id 一致。
+            let mut snapshot_id_matched = false;
+            for line in &snap2.line_snapshots {
+                if line.byte_start <= bs && line.byte_end >= be {
+                    if new_slice.source.snapshot_id == line.id {
+                        snapshot_id_matched = true;
+                        break;
                     }
                 }
             }
             assert!(
-                from_matched,
-                "Shift.from {:?} 必须落在 snap1 中某个 cluster 的文档几何上（byte_range {:?}），\
-                 证明第二笔以第一笔布局为 base",
-                from, byte_range
+                snapshot_id_matched,
+                "Shift.new.source.snapshot_id {:?} 必须与 snap2 中覆盖 byte_range {:?} 的行快照 id 一致",
+                new_slice.source.snapshot_id, byte_range
             );
         }
 
