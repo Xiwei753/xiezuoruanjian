@@ -5,16 +5,26 @@
 //! `desktop_sidebar_width` / `desktop_editor_width` 已删除，改为由本模块
 //! 在 Qt 平台层持久化，与 `writer_platform_linux` 的 XDG 目录约定一致。
 //!
-//! 迁移策略：旧值已无法通过（已删除的）Core API 读回，因此首次升级时
-//! 使用 [`DesktopSettings::default`] 的合理默认值；之后由本模块独立读写。
+//! 迁移策略：新文件 `linux_qt_desktop.json` 不存在时，直接读取同一
+//! `xdg_config_dir()` 下旧 Core 的 `settings.local.json` 原始 JSON（不经过已
+//! 删除字段的 Core DTO），把其中的窗口 / 侧栏 / 编辑器宽度迁移过来并立刻写入
+//! 新文件；缺失的字段才使用 [`DesktopSettings::default`]。迁移只发生一次，
+//! 此后始终以本平台文件为准（Core 重写 `settings.local.json` 丢弃未知字段也
+//! 不会影响 Qt UI 状态）。
 //! 其他设置（字号、行距、主题、同步、动画偏好等）仍由 Core 负责，不在此列。
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// 平台本地桌面设置文件名，落在 `xdg_config_dir()`（`~/.config/writer`）下。
 const DESKTOP_SETTINGS_FILE: &str = "linux_qt_desktop.json";
+
+/// 旧 Core 本地设置文件名（与 `DESKTOP_SETTINGS_FILE` 同目录）。
+///
+/// 旧版 `LocalSettings` 的窗口 / 栏宽字段写在 `<xdg_config_dir()>/settings.local.json`。
+const LEGACY_CORE_SETTINGS_FILE: &str = "settings.local.json";
 
 /// Qt 桌面端本地布局设置。所有长度单位都是 Qt 设备无关逻辑像素（vp）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,9 +60,68 @@ fn settings_path() -> PathBuf {
     writer_platform_linux::xdg_config_dir().join(DESKTOP_SETTINGS_FILE)
 }
 
+fn legacy_settings_path() -> PathBuf {
+    writer_platform_linux::xdg_config_dir().join(LEGACY_CORE_SETTINGS_FILE)
+}
+
+/// 从旧 Core `settings.local.json` 的原始 JSON 迁移布局字段。
+///
+/// 取值顺序按旧字段的 serde 主键与 alias：`camelCase` 主键优先，其后是历史
+/// snake_case / `linux_qt_*` / `linux_*` 兼容键。缺失或非数值的字段沿用
+/// [`DesktopSettings::default`]，不因为个别键缺失而整份回退。
+fn desktop_settings_from_legacy(value: &Value) -> DesktopSettings {
+    let defaults = DesktopSettings::default();
+    DesktopSettings {
+        window_width: legacy_number(value, &["windowWidth", "window_width"])
+            .unwrap_or(defaults.window_width),
+        window_height: legacy_number(value, &["windowHeight", "window_height"])
+            .unwrap_or(defaults.window_height),
+        desktop_sidebar_width: legacy_number(
+            value,
+            &[
+                "desktopSidebarWidth",
+                "linux_qt_sidebar_width",
+                "desktop_sidebar_width",
+                "linux_sidebar_width",
+            ],
+        )
+        .unwrap_or(defaults.desktop_sidebar_width),
+        desktop_editor_width: legacy_number(
+            value,
+            &[
+                "desktopEditorWidth",
+                "linux_qt_editor_width",
+                "desktop_editor_width",
+            ],
+        )
+        .unwrap_or(defaults.desktop_editor_width),
+    }
+}
+
+/// 依次尝试多个键，返回第一个存在的数值。
+fn legacy_number(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_f64))
+}
+
+/// 新文件不存在（或不可解析）时，从旧 Core 设置迁移一次并写盘。
+fn migrate_from_legacy_settings() -> Option<DesktopSettings> {
+    let bytes = std::fs::read(legacy_settings_path()).ok()?;
+    let legacy: Value = serde_json::from_slice(&bytes).ok()?;
+    let migrated = desktop_settings_from_legacy(&legacy);
+    // 迁移后立刻落盘：此后即使 Core 重写 settings.local.json 丢弃这些未知字段，
+    // Qt 的窗口 / 栏宽也不会丢失。
+    let _ = write_to_disk(&migrated);
+    Some(migrated)
+}
+
 fn read_from_disk() -> Option<DesktopSettings> {
-    let bytes = std::fs::read(settings_path()).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    if let Ok(bytes) = std::fs::read(settings_path()) {
+        if let Ok(settings) = serde_json::from_slice(&bytes) {
+            return Some(settings);
+        }
+    }
+    migrate_from_legacy_settings()
 }
 
 fn write_to_disk(settings: &DesktopSettings) -> Result<(), String> {
@@ -117,5 +186,86 @@ mod tests {
         assert!(json.contains("\"desktopSidebarWidth\""));
         let back: DesktopSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(back, d);
+    }
+
+    #[test]
+    fn legacy_camel_case_keys_migrate() {
+        let legacy = serde_json::json!({
+            "windowWidth": 1280.0,
+            "windowHeight": 800.0,
+            "desktopSidebarWidth": 320.0,
+            "desktopEditorWidth": 640.0,
+        });
+        assert_eq!(
+            desktop_settings_from_legacy(&legacy),
+            DesktopSettings {
+                window_width: 1280.0,
+                window_height: 800.0,
+                desktop_sidebar_width: 320.0,
+                desktop_editor_width: 640.0,
+            }
+        );
+    }
+
+    #[test]
+    fn legacy_old_alias_keys_migrate() {
+        let legacy = serde_json::json!({
+            "linux_qt_sidebar_width": 300.0,
+            "linux_qt_editor_width": 520.0,
+        });
+        let migrated = desktop_settings_from_legacy(&legacy);
+        assert_eq!(migrated.desktop_sidebar_width, 300.0);
+        assert_eq!(migrated.desktop_editor_width, 520.0);
+        // 窗口尺寸缺失时回退默认值。
+        assert_eq!(
+            migrated.window_width,
+            DesktopSettings::default().window_width
+        );
+        assert_eq!(
+            migrated.window_height,
+            DesktopSettings::default().window_height
+        );
+    }
+
+    #[test]
+    fn legacy_snake_case_keys_migrate() {
+        let legacy = serde_json::json!({
+            "window_width": 1440.0,
+            "window_height": 900.0,
+            "desktop_sidebar_width": 260.0,
+            "desktop_editor_width": 700.0,
+        });
+        assert_eq!(
+            desktop_settings_from_legacy(&legacy),
+            DesktopSettings {
+                window_width: 1440.0,
+                window_height: 900.0,
+                desktop_sidebar_width: 260.0,
+                desktop_editor_width: 700.0,
+            }
+        );
+    }
+
+    #[test]
+    fn legacy_camel_case_takes_precedence_over_aliases() {
+        let legacy = serde_json::json!({
+            "desktopSidebarWidth": 320.0,
+            "linux_qt_sidebar_width": 200.0,
+        });
+        assert_eq!(
+            desktop_settings_from_legacy(&legacy).desktop_sidebar_width,
+            320.0
+        );
+    }
+
+    #[test]
+    fn legacy_missing_or_invalid_fields_fall_back_to_defaults() {
+        let defaults = DesktopSettings::default();
+        assert_eq!(
+            desktop_settings_from_legacy(&serde_json::json!({})),
+            defaults
+        );
+        let invalid = serde_json::json!({ "windowWidth": "wide", "desktopSidebarWidth": null });
+        assert_eq!(desktop_settings_from_legacy(&invalid), defaults);
     }
 }
