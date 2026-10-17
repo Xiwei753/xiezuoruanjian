@@ -150,7 +150,7 @@ export struct PrimaryFab {
   }
 
   build() {
-    // 内容流位置：透明底色 + 通用背景模糊（毛玻璃）+ HDS 按压视效，外层叠一层只做反色混色的描边圆环。
+    // 玻璃三层：毛玻璃 Button（唯一可点击）→ 极低不透明度系统色表面层 → 方向性边缘高光层。
     // stateEffect 置 false：按压反馈交给 pressShadow，避免系统内建按压态与它互相叠加。
     Stack({ alignContent: Alignment.Center }) {
       Button({ type: ButtonType.Circle, stateEffect: false }) {
@@ -174,15 +174,37 @@ export struct PrimaryFab {
       .onTouch((event: TouchEvent) => { this.handleTouch(event) })
       .onClick(() => { this.handleClick() })
 
-      // 只负责混色的细圆环：半透明白描边与下层画面做差值混合，得到随背景变化的反色边缘。
-      // 直径取 SIZE-1，stroke 居中，外沿与 Button 圆边对齐；不拦触摸，可点击的始终只有 Button。
+      // 体积感表面层：极低不透明度系统色，让浅/深/纯色背景下都有稳定可见的玻璃体积感；
+      // 透明度很低，不构成实心底色，不遮毛玻璃；不拦触摸，可点击的始终只有 Button。
       Circle()
-        .width(PRIMARY_FAB_SIZE_VP - 1)
-        .height(PRIMARY_FAB_SIZE_VP - 1)
-        .fill(Color.Transparent)
-        .stroke('#66FFFFFF')
-        .strokeWidth(1)
-        .blendMode(BlendMode.DIFFERENCE, BlendApplyType.FAST)
+        .width(PRIMARY_FAB_SIZE_VP)
+        .height(PRIMARY_FAB_SIZE_VP)
+        .fill($r('sys.color.font_primary'))
+        .opacity(0.06)
+        .hitTestBehavior(HitTestMode.None)
+
+      // 方向性边缘高光层：渐变圆心落在左上角外侧（约定的光源方向），高光带只扫过左上圆边、
+      // 向内一档衰减，右下圆边不受光——静态方向渐变=玻璃光泽，不是实时反射/跟手追光。
+      // 圆形容器 + clip 保证渐变被裁在圆内；不拦触摸，不叠第二套边框。
+      Stack()
+        .width(PRIMARY_FAB_SIZE_VP)
+        .height(PRIMARY_FAB_SIZE_VP)
+        .borderRadius(PRIMARY_FAB_SIZE_VP / 2)
+        .clip(true)
+        .radialGradient({
+          // 光源方向：左上角外侧约 5% 处；渐变盘与左上圆边相交成月牙形高光。
+          center: [PRIMARY_FAB_SIZE_VP * 0.05, PRIMARY_FAB_SIZE_VP * 0.05],
+          radius: PRIMARY_FAB_SIZE_VP * 0.23,
+          colors: [
+            ['#00000000', 0.0],
+            ['#00000000', 0.55],
+            ['#1AFFFFFF', 0.62],
+            ['#59FFFFFF', 0.80],
+            ['#1AFFFFFF', 0.92],
+            ['#00000000', 1.0]
+          ],
+          repeating: false
+        })
         .hitTestBehavior(HitTestMode.None)
     }
     .width(PRIMARY_FAB_SIZE_VP)
