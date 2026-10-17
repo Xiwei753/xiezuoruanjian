@@ -38,6 +38,18 @@ fn qquickwindow_after_frame_end_signal() -> qmetaobject::Signal<fn()> {
     }
 }
 
+/// Issue #901 第十三轮问题5: QQuickWindow::sceneGraphInvalidated 信号。
+/// 在渲染线程触发，场景图被销毁/重建时 emit。用于在渲染线程安全清理
+/// g_incremental_para_map 中该 item 的映射条目。
+fn qquickwindow_scene_graph_invalidated_signal() -> qmetaobject::Signal<fn()> {
+    // SAFETY: QQuickWindow::sceneGraphInvalidated has the exact signature void().
+    unsafe {
+        qmetaobject::Signal::new(cpp::cpp!([] -> qmetaobject::SignalInner as "SignalInner" {
+            return &QQuickWindow::sceneGraphInvalidated;
+        }))
+    }
+}
+
 fn bind_frame_submission_window(
     window_ptr: *mut std::ffi::c_void,
     item_context_ptr: *mut std::ffi::c_void,
@@ -78,6 +90,27 @@ fn bind_frame_submission_window(
     };
     connections.push(Box::new(move || after_synchronizing.disconnect()));
     connections.push(Box::new(move || after_frame_end.disconnect()));
+
+    // Issue #901 第十三轮问题5: 连接 sceneGraphInvalidated 信号。
+    // 该信号在渲染线程触发（场景图被销毁/重建时），回调直接在渲染线程执行。
+    // 在回调中清理 g_incremental_para_map[item_context_ptr]，与同在渲染线程的
+    // update_paint_node 读写互斥安全。
+    // item_context_ptr 是 C++ QQuickItem* 指针，用作 g_incremental_para_map 的 key。
+    // clear_incremental_para_map_render_thread 只按指针值 erase，不解引用，安全。
+    let scene_graph_item_key = item_context_ptr;
+    // SAFETY: window_ptr is a live QQuickWindow pointer; sceneGraphInvalidated has
+    // void() signature; the callback captures only a raw pointer value (Copy type)
+    // and passes it to a C++ function that only uses it as an unordered_map key.
+    let mut scene_graph_invalidated = unsafe {
+        qmetaobject::connect(
+            window_ptr,
+            qquickwindow_scene_graph_invalidated_signal(),
+            move || {
+                qt_text_node::clear_incremental_para_map_render_thread(scene_graph_item_key);
+            },
+        )
+    };
+    connections.push(Box::new(move || scene_graph_invalidated.disconnect()));
 
     // SAFETY: These live Qt pointers come from this item/window binding. The C++ wrapper
     // stores the item as the queued connection context and captures this generation.
@@ -152,15 +185,31 @@ impl QQuickItem for SujianEditorItem {
         // 先完成新排版（recalculate_content_height_and_emit 内部 ensure_layout_cached
         // 真正按新 width 排版），reconcile 发生在新排版完成之后。
         self.recalculate_content_height_and_emit();
-        if width_changed {
-            // 新 canonical 已按新 width 算完，用新 canonical reconcile 旧活动事务。
-            self.reconcile_after_layout_change();
-        }
+        // Issue #904 清理: 宽度变化已由 recalculate_content_height_and_emit() 按新 width
+        // 重排，canonical 由 EditorLayout 单一持有；活动中的局部动画随排版失效自然结束，
+        // 静态层按新布局绘制，不再有第二份 canonical 需要 reconcile。
+        let _ = width_changed;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         let _ = self.update_cursor_visual_position();
         // request_static_repaint 会在 GUI 线程预计算 snapshot
         self.request_static_repaint();
+    }
+
+    /// Issue #901 第十三轮问题5: Qt 官方 `QQuickItem::releaseResources()` 在 GUI 线程触发。
+    ///
+    /// 涉及 render 资源的清理需使用 `QQuickWindow::scheduleRenderJob()`，在渲染线程
+    /// 执行清理 job。`g_incremental_para_map` 被 `update_paint_node`（渲染线程）读写，
+    /// GUI 线程不能直接 erase（跨线程数据竞争）。
+    ///
+    /// `schedule_clear_incremental_para_map` 通过 `scheduleRenderJob` 在渲染线程
+    /// 安全清理 `g_incremental_para_map[item_ptr]`。erase 只按指针值移除 map 条目，
+    /// 不解引用 item_ptr，即使 job 执行时 item 已被销毁也安全。
+    fn release_resources(&mut self) {
+        let item_ptr = self.get_cpp_object();
+        if !item_ptr.is_null() {
+            qt_text_node::schedule_clear_incremental_para_map(item_ptr);
+        }
     }
 
     fn update_paint_node(
@@ -178,18 +227,11 @@ impl QQuickItem for SujianEditorItem {
         self.drain_pointer_frame_submissions();
 
         // Qt invokes this method during synchronization. Consume only acknowledgments that
-        // arrived from afterFrameEnd, then let the coordinator reject stale sessions/revisions.
-        let handoff_promoted = self
-            .pipeline
-            .animation_coordinator_mut()
-            .consume_submitted_frames();
-        if handoff_promoted {
-            let active_ids = self
-                .pipeline
-                .animation_coordinator()
-                .collect_active_snapshot_ids();
-            self.pipeline.retain_active_snapshot_ids(&active_ids);
-        }
+        // arrived from afterFrameEnd.
+        // Issue #904：帧提交 mailbox 的 texture retain 由唯一的局部动画计划与本帧
+        // 静态贡献决定。retain_active_snapshot_ids 的真实 active ids 在下方采样
+        // motion_frame 之后计算（需要 overlays 的 snapshot_ids +
+        // mailbox 的未确认帧 snapshot_ids）。
 
         // Pure pointer/keyboard routes remain owned by CursorController. In coordinated
         // TextTransaction mode, build_render_plan_full samples the edit timeline once and
@@ -224,6 +266,11 @@ impl QQuickItem for SujianEditorItem {
         } else {
             1.0
         };
+
+        // Issue #901 第十三轮问题5: 移除 pending_clear_incremental_map 延迟清理机制。
+        // 旧机制在 Drop/切章时设置标记，依赖下一次 update_paint_node 消费，
+        // 但 Drop 后 item 不再有下一帧，标记永远不会被消费。
+        // 新机制通过 release_resources() + sceneGraphInvalidated 在渲染线程安全清理。
 
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let scroll_y = f64::from(self.current_scroll_y);
@@ -272,7 +319,16 @@ impl QQuickItem for SujianEditorItem {
             // build_render_plan_full 内部，用同一份 AnimationFrameSample。
             // Issue #707 评论 5725190370: CursorRenderState 构造抽成
             // build_cursor_render_state_for_frame，和 runtime_tests 共用同一份逻辑。
-            let cursor_render_state = self.build_cursor_render_state_for_frame();
+            // Issue #904：整个渲染热路径只消费唯一的局部动画计划。
+            // 采样一次得到本帧覆盖层/静态孔洞/进度；没有动画计划时直接走静态绘制。
+            let frame_now_ms = Self::frame_now_ms(&self.last_frame_now);
+            let motion_frame = self
+                .pipeline
+                .text_motion()
+                .map(|motion| motion.sample(frame_now_ms))
+                .unwrap_or_default();
+
+            let cursor_render_state = self.build_cursor_render_state_for_frame(&motion_frame);
 
             // Issue #677 评论 5653944889: render thread 只读 GUI 侧准备好的
             // `PreparedEditorFrame`，不再调用 `build_selection_preedit_plan()` /
@@ -298,9 +354,10 @@ impl QQuickItem for SujianEditorItem {
                 selection_color: self.current_selection_color.to_string(),
             };
             let canonical_visual_snapshot = self.pipeline.current_layout_snapshot().clone();
-            let canonical_document_snapshot = self.pipeline.current_canonical_snapshot().cloned();
+            // Issue #904 清理: canonical document snapshot 的唯一权威是 EditorLayout。
+            let canonical_document_snapshot = self.editor_layout.last_canonical_snapshot();
             let prepared_frame_matches_canonical =
-                match (prepared_frame, canonical_document_snapshot.as_ref()) {
+                match (prepared_frame, canonical_document_snapshot) {
                     (Some(frame), Some(canonical)) => {
                         let layout = &frame.layout_snapshot;
                         let committed_text = self.pipeline.committed_text();
@@ -319,44 +376,97 @@ impl QQuickItem for SujianEditorItem {
                     _ => false,
                 };
 
-            let render_plan = self
-                .pipeline
-                .animation_coordinator_mut()
-                .build_render_plan_full(
-                    cursor_render_state,
-                    selection_preedit,
-                    cursor_style,
-                    selection_preedit_style,
-                    self.current_coordinated_animation_enabled,
-                    frame_now,
-                    canonical_visual_snapshot.as_ref(),
-                );
+            let drawn_caret_rect = if cursor_render_state.visible {
+                Some((
+                    cursor_render_state.x,
+                    cursor_render_state.y,
+                    cursor_render_state.h,
+                ))
+            } else {
+                None
+            };
 
-            // owner revision 来自完整 cluster owner set，A→A+B 也会触发静态 rebuild。
-            // 只在 static + animation 整帧成功后提交 revision；失败时下一帧仍会重试。
+            // Issue #904 评论 1/3: 本帧局部动画的静态挖孔是否活跃（有需要从
+            // canonical 里挖掉的接管目标）。挖孔只在动画 begin/target-change/end
+            // 变化，不随 progress 每帧刷新；状态翻转那一帧必须强制刷新静态裁剪：
+            // 开始帧同一帧挖空、结束帧同一帧恢复 canonical。
+            let render_plan = super::render_plan::RenderPlan {
+                local_text: super::render_plan::LocalTextPlan {
+                    overlays: motion_frame.overlays.clone(),
+                    static_holes: motion_frame.static_holes.clone(),
+                    required_textures: motion_frame.required_textures.clone(),
+                    paragraph_y_offsets: motion_frame.paragraph_y_offsets.clone(),
+                },
+                selection_preedit,
+                cursor: cursor_render_state,
+                cursor_style,
+                selection_preedit_style,
+                drawn_caret_rect,
+            };
+
+            // Issue #904：局部覆盖层/孔洞的源纹理是否已就绪。未就绪时静态层画完整
+            // canonical、动画层不画（两层同一标志对称决策）。
             let animation_resources_ready = render_plan
-                .ownership
+                .local_text
                 .has_animation_resources(self.pipeline.texture_cache());
-            let ownership_changed = render_plan.ownership.ownership_revision
-                != self.last_committed_ownership_revision
-                || render_plan.ownership.handoff_pending
+
+            // Issue #904 评论 1: 只有资源就绪、本帧真的会挖孔时才算"期望挖孔"。
+            // 翻转那一帧强制刷新静态裁剪：开始帧同一帧挖空、结束帧同一帧恢复
+            // canonical、资源就绪帧同一帧补挖。
+            //
+            // Issue #904 复核 5: 这里比较的是"本帧期望"与"上一次**实际提交成功**的
+            // 孔洞状态"，并且**不在这里提前记账**。Qt 首帧可能拒绝动画纹理，此时
+            // 静态层并未真的挖孔；若提前把期望记成已提交，下一帧就不会补挖孔，
+            // 动态图会和完整静态正文叠画。实际状态在 render_frame 返回后更新。
+            let desired_holes_active =
+                animation_resources_ready && !motion_frame.static_holes.is_empty();
+            let clip_state_changed = desired_holes_active != self.prev_local_text_holes_active;
+
+            // Issue #904 复核 12: 段落整体位移的 progress 帧**不再**走静态层重建 ——
+            // 每帧只调用 `update_paragraph_motion_transforms` 直接 setMatrix 移动已有
+            // QSGTransformNode 子树。只有"位移开始/结束"这一次翻转需要静态层刷新
+            // （开始帧把矩阵落到目标 para_y + offset 基准，结束帧清回 para_y）。
+            let paragraph_moves_active = !motion_frame.paragraph_y_offsets.is_empty();
+            let paragraph_moves_changed =
+                paragraph_moves_active != self.prev_paragraph_moves_active;
+            self.prev_paragraph_moves_active = paragraph_moves_active;
+
+            let frame_needs_relayout = base_needs_relayout
+                || clip_state_changed
+                || paragraph_moves_changed
                 || !animation_resources_ready
                 || !prepared_frame_matches_canonical;
-            let frame_needs_relayout = base_needs_relayout || ownership_changed;
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
             // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
             // `PreparedEditorFrame`，render thread 不再自行排版。
             // `prepared_frame = None` 时不排版，请求下一次 GUI 侧准备。
+            // Issue #901 第六轮阻塞5: 传入 height_index 让 scene_graph_renderer
+            // 能 O(log n) 定位视口内首末可见段落，不遍历全章 lines。
+            // height_index 与 prepared_frame.layout_snapshot 都是不可变借用 self，
+            // 可安全共存。
             let has_snapshot = prepared_frame_matches_canonical;
+            // Issue #901 第十四轮问题2: 消费 force_full_relayout_pending。
+            // true 表示真正全局排版属性变化（字号/字体/行距/缩进/padding/宽度），
+            // render_frame 传 force_full_relayout=true，C++ 侧无条件重建所有段落。
+            // 普通正文输入不设此标志，由 per-paragraph content_revision 独立判断。
+            let force_full_relayout = self.force_full_relayout_pending;
+            self.force_full_relayout_pending = false;
             let static_text = StaticTextParams {
                 layout_snapshot: prepared_frame
                     .filter(|_| prepared_frame_matches_canonical)
                     .map(|f| &f.layout_snapshot),
+                height_index: Some(self.editor_layout.height_index()),
                 scroll_y,
                 viewport_height: vp_h,
                 color: &self.current_text_color.to_string(),
                 needs_relayout: frame_needs_relayout,
+                force_full_relayout,
+                force_static_clip_refresh: clip_state_changed,
+                paragraph_y_offsets: &render_plan.local_text.paragraph_y_offsets,
+                session_id: self.document_session,
+                // Issue #901 第九轮阻塞4: per-item loaded_para_range 替代全局 static。
+                loaded_para_range: self.loaded_para_range,
             };
 
             // Issue #668 评论 5646458592 问题 1: 接住静态正文 rebuild 的成功/失败结果。
@@ -365,39 +475,202 @@ impl QQuickItem for SujianEditorItem {
             // 处理正确的 snapshot/generation。同时请求下一帧更新，让 GUI 线程
             // prepare_editor_frame 重新排版（snapshot() 会发现
             // cache 无效而分配新 generation 重新排版）。
-            let static_rebuild_ok = scene_graph_renderer::render_frame(
+            //
+            // Issue #901 第九轮阻塞2：render_frame 返回 FrameRenderOutcome，
+            // 包含 static_rebuild_ok 和 new_loaded_para_range。
+            let render_outcome = scene_graph_renderer::render_frame(
                 editor_root,
                 item_ptr,
                 &static_text,
                 &render_plan,
                 self.pipeline.texture_cache(),
             );
+            let static_rebuild_ok = render_outcome.static_rebuild_ok;
 
-            let ownership_snapshot_matches = canonical_visual_snapshot
-                .as_ref()
-                .map(|snapshot| {
-                    render_plan.ownership.target_layout_revision == Some(snapshot.revision)
-                })
-                .unwrap_or(false);
-            if static_rebuild_ok && has_snapshot && ownership_snapshot_matches {
-                self.last_committed_ownership_revision = render_plan
-                    .ownership
-                    .committed_revision(animation_resources_ready);
-                self.pipeline
-                    .animation_coordinator_mut()
-                    .commit_rendered_plan(
-                        &render_plan.ownership,
-                        render_plan
-                            .cursor
-                            .visible
-                            .then_some(super::edit_motion::CursorRect {
-                                x: render_plan.cursor.x,
-                                top: render_plan.cursor.y,
-                                bottom: render_plan.cursor.y + render_plan.cursor.h,
-                                baseline_y: render_plan.cursor.baseline_y,
-                            }),
-                        animation_resources_ready,
-                    );
+            // Issue #904 复核 5: 只有本帧静态孔洞与动画层真正提交成功（两层同帧
+            // 一致）时，才把"上一帧实际挖了孔"记成真实状态；提交失败时保留上次
+            // 真实状态，本帧明确提交无孔洞 canonical 成功时写回 false。下一帧的
+            // `clip_state_changed` 因此由**实际提交结果**驱动：Qt 首帧拒绝纹理、
+            // 次帧可用时会强制补挖孔，动画结束帧同帧恢复完整 canonical。
+            if render_outcome.static_rebuild_ok && render_outcome.animation_layer_ok {
+                self.prev_local_text_holes_active = !render_outcome.committed_holes.is_empty();
+            }
+
+            // Issue #901 第九轮阻塞4: 更新 per-item loaded_para_range。
+            // rebuild 成功时用新范围，失败时保留旧范围（new_loaded_para_range=None）。
+            if let Some(new_range) = render_outcome.new_loaded_para_range {
+                self.loaded_para_range = Some(new_range);
+            }
+
+            // Issue #904 评论 4: 只把**本帧真正提交到 QSG** 的局部片段记为
+            // "上一次真正画出的局部图片"（当前矩形、当前遮罩宽度、源 id、段落 id、
+            // session/revision），供快速连续输入/删除从当前画面重定向。
+            // 计划侧不算数：静态提交失败或源纹理缺失的那一帧没有画出任何动画像素，
+            // 此时保留上一帧已画出的记录；动画结束帧清空。
+            //
+            // 日志只在生命周期关键点各记一次，不逐帧刷屏：
+            // 首次真正提交（holes/overlay/committed 个数）、源纹理缺失（具体 id）、
+            // 静态提交失败、以及完成交接。
+            let motion_identity = self
+                .pipeline
+                .text_motion()
+                .map(|m| (m.session, m.target_revision));
+            // Issue #904 复核 7：`motion_frame.finished` 只表示时间采样到了终点，
+            // 不等于"终点这一帧已经真正交接出去"。真正完成的定义是：本帧静态层提交
+            // 成功、动画层提交成功、且本帧**实际**没有挖孔、也没有动态覆盖层
+            // （即静态正文已恢复完整 canonical，旧动态图已清空）。
+            let completed_and_committed = motion_frame.finished
+                && render_outcome.static_rebuild_ok
+                && render_outcome.animation_layer_ok
+                && render_outcome.committed_holes.is_empty()
+                && render_outcome.committed_local.is_empty();
+            if let Some((session, revision)) = motion_identity {
+                if completed_and_committed {
+                    super::editor_animation_debug_log(&format!(
+                        "text_motion complete: session={session} revision={revision} \
+                         duration_ms={} pieces={} paragraph_moves={}",
+                        self.current_typing_animation_duration_ms,
+                        self.pipeline.text_motion().map_or(0, |m| m.pieces.len()),
+                        self.pipeline
+                            .text_motion()
+                            .map_or(0, |m| m.paragraph_moves.len()),
+                    ));
+                    self.last_drawn_local_frame = None;
+                    self.last_commit_log_key = None;
+                    self.last_missing_log_key = None;
+                } else if !animation_resources_ready {
+                    // 源纹理缺失：写出具体缺少的 LineSnapshotId，不把它当成
+                    // "这次本来就没有动画"。
+                    if self.last_missing_log_key != Some((session, revision)) {
+                        let missing = render_plan
+                            .local_text
+                            .missing_textures(self.pipeline.texture_cache());
+                        super::editor_animation_debug_log(&format!(
+                            "text_motion source missing: session={session} revision={revision} \
+                             required={} missing={} ids={missing:?}",
+                            render_plan.local_text.required_textures.len(),
+                            missing.len(),
+                        ));
+                        self.last_missing_log_key = Some((session, revision));
+                    }
+                } else if !static_rebuild_ok {
+                    if self.last_missing_log_key != Some((session, revision)) {
+                        super::editor_animation_debug_log(&format!(
+                            "text_motion static rebuild failed: session={session} revision={revision} \
+                             overlays={} holes={}",
+                            render_plan.local_text.overlays.len(),
+                            render_plan.local_text.static_holes.len(),
+                        ));
+                        self.last_missing_log_key = Some((session, revision));
+                    }
+                } else if !render_outcome.animation_layer_ok {
+                    // Issue #904 评论 4: 静态层已重建，但 C++ 动画层本帧未能建立
+                    // 并绑定有效纹理。此时静态层未挖孔、画完整 canonical，本帧没有
+                    // 画出任何动画像素，因此不记录 last_drawn_local_frame。日志沿用
+                    // source missing / static rebuild failed 的同一 (session, revision)
+                    // 去重键，保持每生命周期一行，不逐帧刷屏。
+                    if self.last_missing_log_key != Some((session, revision)) {
+                        super::editor_animation_debug_log(&format!(
+                            "text_motion animation layer failed: session={session} revision={revision} \
+                             overlays={} committed={}",
+                            render_plan.local_text.overlays.len(),
+                            render_outcome.committed_local.len(),
+                        ));
+                        self.last_missing_log_key = Some((session, revision));
+                    }
+                } else if !render_outcome.committed_local.is_empty() {
+                    if self.last_commit_log_key != Some((session, revision)) {
+                        super::editor_animation_debug_log(&format!(
+                            "text_motion committed: session={session} revision={revision} \
+                             holes={} overlays={} committed={} paragraph_offsets={}",
+                            render_plan.local_text.static_holes.len(),
+                            render_plan.local_text.overlays.len(),
+                            render_outcome.committed_local.len(),
+                            render_plan.local_text.paragraph_y_offsets.len(),
+                        ));
+                        self.last_commit_log_key = Some((session, revision));
+                    }
+                    self.last_drawn_local_frame = Some(super::text_motion::LocalTextFrame {
+                        session,
+                        revision,
+                        fragments: render_outcome.committed_local.clone(),
+                    });
+                }
+            }
+
+            // Issue #901 第九轮阻塞3：渲染成功后生成本帧 resource roots 并 retain。
+            // 旧实现在渲染前做 retain，会 sweep 掉本帧即将创建的静态贡献的纹理。
+            // 新实现移到渲染后，resource roots 覆盖：
+            // (1) 最后确认的局部动画计划与本帧静态片段
+            // (2) 所有待 afterFrameEnd 的帧（mailbox.active_snapshot_ids）
+            // (3) 当前将渲染的实际静态/动画片段
+            // (4) 新 target 中动画尚未出现但即将需要的纹理（视口内行的 line.id）
+            {
+                let mut active_ids = self.frame_submission_mailbox.active_snapshot_ids();
+                // (3a) 当前将渲染的局部动画片段。
+                for glyph in &motion_frame.overlays {
+                    if !glyph.snapshot_id.is_none() && !active_ids.contains(&glyph.snapshot_id) {
+                        active_ids.push(glyph.snapshot_id);
+                    }
+                }
+                // (3c) 动画计划保留的旧/新源纹理（未删字仍需旧局部图片）。
+                if let Some(motion) = self.pipeline.text_motion() {
+                    for id in motion.source_snapshot_ids() {
+                        if !id.is_none() && !active_ids.contains(&id) {
+                            active_ids.push(id);
+                        }
+                    }
+                }
+                // (3b) 静态正文身份由常驻 QSGTextNode 持有；本帧活跃纹理只来自
+                // (3a)/(3c) 局部动画、以及 (4) canonical 视口内行。
+                // (1) 动画计划本身已在上方 (3a)/(3c) 覆盖。
+                // (4) 新 target 中动画尚未出现但即将需要的纹理：
+                // canonical_visual_snapshot 的视口内行的 line.id。
+                // 这些行可能不在局部动画计划中（无动画），但下一帧
+                // 编辑时可能需要它们的纹理。
+                if let Some(snap) = canonical_visual_snapshot.as_ref() {
+                    let vp_top = scroll_y - vp_h;
+                    let vp_bottom = scroll_y + vp_h * 2.0;
+                    for line in &snap.line_snapshots {
+                        let line_y = line.visual_line_top;
+                        let line_bottom = line.visual_line_bottom;
+                        if line_bottom < vp_top || line_y > vp_bottom {
+                            continue;
+                        }
+                        if !line.id.is_none() && !active_ids.contains(&line.id) {
+                            active_ids.push(line.id);
+                        }
+                    }
+                }
+                self.pipeline.retain_active_snapshot_ids(&active_ids);
+            }
+
+            // Issue #904：整帧成功（静态层重建成功且快照与 canonical 一致）后，
+            // 只把本帧实际引用的局部源纹理 id 记入提交 mailbox，供
+            // active_snapshot_ids / retain 决定哪些 QImage 不能释放。
+            if static_rebuild_ok && has_snapshot {
+                let mut snapshot_ids: Vec<super::layout_snapshot::LineSnapshotId> = Vec::new();
+                for glyph in &motion_frame.overlays {
+                    if !glyph.snapshot_id.is_none() && !snapshot_ids.contains(&glyph.snapshot_id) {
+                        snapshot_ids.push(glyph.snapshot_id);
+                    }
+                }
+                if let Some(motion) = self.pipeline.text_motion() {
+                    for id in motion.source_snapshot_ids() {
+                        if !id.is_none() && !snapshot_ids.contains(&id) {
+                            snapshot_ids.push(id);
+                        }
+                    }
+                }
+                self.frame_submission_mailbox.stage_rendered_frame(
+                    self.document_session,
+                    self.pipeline
+                        .current_layout_snapshot()
+                        .as_ref()
+                        .map(|s| s.revision)
+                        .unwrap_or_else(super::layout_revision::LayoutRevision::initial),
+                    snapshot_ids,
+                );
             }
 
             // Issue #707 评论 5725190370: drawn_caret_rect 回写抽成
@@ -434,15 +707,21 @@ impl QQuickItem for SujianEditorItem {
                 self.request_frame_update();
             }
 
-            // Issue #701 评论 5699573227 第三阶段 (F6): 有活跃正文动画或光标动画
-            // 未结束就持续请求下一帧，直到文字和光标一起结束。
-            // 正文过渡与光标 tween 各自未结束时都继续请求下一帧.
-            if self
-                .pipeline
-                .animation_coordinator()
-                .has_active_text_animation(frame_now)
-                || self.cursor_ctrl.animation.is_some()
-            {
+            // Issue #904：只有一个动画进度。未结束就持续请求下一帧。
+            // Issue #904 复核 7：时间到期也不等于终点已交接 —— 只有终点那一帧
+            // 真正提交（静态恢复完整 canonical、旧动态图清空）才取走唯一动画；
+            // 提交失败时保留 TextMotion 与上一实际帧，下一帧继续推进到成功为止，
+            // 不新增第二个完成计时器或兜底动画。
+            if motion_frame.needs_next_frame {
+                self.request_frame_update();
+            } else if motion_frame.finished && self.pipeline.text_motion().is_some() {
+                if completed_and_committed {
+                    *self.pipeline.text_motion_mut() = None;
+                } else {
+                    self.request_frame_update();
+                }
+            }
+            if self.cursor_ctrl.animation.is_some() {
                 self.request_frame_update();
             }
         }
@@ -600,40 +879,40 @@ impl SujianEditorItem {
         self.request_static_repaint();
     }
 
-    /// 构造和 `update_paint_node` 完全一致的 `CursorRenderState`。
+    /// Issue #904：从唯一的局部动画计划采样帧构造 `CursorRenderState`。
     ///
-    /// 从 `cursor_ctrl.visual_x/y/h/visible` 和当前 blink mode 算出 opacity。
-    /// Issue #707 评论 5725190370: 把这段纯状态逻辑从 `update_paint_node` 抽出，
-    /// 供正式渲染路径和 `runtime_tests` 共用，避免测试用 `CursorRenderState::default()`
-    /// 冒充光标导致行为偏离生产路径。
-    ///
-    /// Issue #709 评论 issue-body-709: Insert 活跃期间 blink 保持 suppressed
-    /// （opacity 固定为 1），由 Suppressed 模式负责。事务开始/结束的边沿重置
-    /// （blink_visible = true / blink_last_toggle = now）在 update_paint_node 的
-    /// 边沿检测中处理，确保光标从可见状态开始、事务结束后重新开始正常 blink。
+    /// 正文协同输入时，位移/吐字进行中光标从 `motion_frame.caret_sample`
+    /// （局部覆盖层右边界）获取；没有正文动画时直接用 `cursor_ctrl` 的实时位置。
     pub(crate) fn build_cursor_render_state_for_frame(
         &self,
+        motion_frame: &super::text_motion::TextMotionFrame,
     ) -> super::render_plan::CursorRenderState {
         // Issue #679 评论 5657313927 / #701 评论 5699573227 第三阶段 (F5):
         // 每帧只采样一次 frame state。blink mode 由 current_cursor_blink_mode()
         // 统一决定（Issue #710 评论 5732160521 问题 2），保证 tick/render/opacity/
         // 边沿 reset 四处一致。
         let blink_mode = self.current_cursor_blink_mode();
+
+        // Issue #904 复核三: 协同模式是完整模式——只要解析出的策略共享时间线、
+        // 本帧确有 text_motion、且是正文事务（TextTransaction），光标就用正文动画
+        // 的同一进度采样；不再额外要求原始 typing && smooth 同时为 true。
+        // 纯点击/选区不被正文动画接管，仍走 cursor_ctrl 自己的 Snap/Tween。
+        let coordinated_cursor = self.effective_animation().shared_timeline
+            && self.pipeline.text_motion().is_some()
+            && self.cursor_ctrl.last_move_source
+                == super::cursor_controller::CursorMoveSource::TextTransaction;
+        let (caret_x, caret_y) = match motion_frame.caret_sample {
+            Some((x, y)) if coordinated_cursor => (x, y),
+            _ => (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y),
+        };
+
         super::render_plan::CursorRenderState {
             visible: self.cursor_ctrl.visible,
-            x: self.cursor_ctrl.visual_x,
-            y: self.cursor_ctrl.visual_y,
+            x: caret_x,
+            y: caret_y,
             h: self.cursor_ctrl.visual_h,
             baseline_y: self.cursor_ctrl.visual_baseline_y,
             opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
-            movement_source: Some(self.cursor_ctrl.motion_source),
-            driver_revision: self.cursor_ctrl.motion_layout_revision,
-            driver_transition_id: self.cursor_ctrl.motion_transition_id,
-            document_session: self.cursor_ctrl.motion_document_session,
-            target_x: self.cursor_ctrl.motion_target_x,
-            target_y: self.cursor_ctrl.motion_target_y,
-            path_start_x: self.cursor_ctrl.motion_start_x,
-            path_start_y: self.cursor_ctrl.motion_start_y,
         }
     }
 
@@ -712,6 +991,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn drain_pointer_frame_submissions(&mut self) {
+        // Issue #904：不再有整章 PresentedScene 需要提交到 GUI 侧状态机；
+        // 只清空已提交的视觉帧队列，指针帧仍交给诊断消费。
+        let _ = self.frame_submission_mailbox.take_submitted_frames();
+
         let submitted = self
             .frame_submission_mailbox
             .take_submitted_pointer_frames();
@@ -796,3 +1079,6 @@ impl SujianEditorItem {
         self.cursor_ctrl.record_selection_head_rect();
     }
 }
+
+// Issue #904：静态正文的绘制身份只由唯一的局部动画计划与常驻 QSGTextNode 决定，
+// qquickitem_impl 不再需要前置的"谁被动画接管"推测逻辑。

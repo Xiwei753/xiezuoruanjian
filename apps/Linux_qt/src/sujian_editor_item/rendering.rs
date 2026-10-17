@@ -70,8 +70,8 @@ impl CursorAnimationState {
 ///
 /// 供 `CursorController::tick_animation` 推进光标 Tween 使用
 ///（Issue #826 评论 36：生产只留这一个推进入口），
-/// 避免在 `animation_coordinator.rs` 内联 easing 公式（Issue #690 步骤 2 要求
-/// 协调器内不得内联各自的 easing 公式）。CursorOnly 的三次曲线保持独立，
+/// 避免在动画模块内联 easing 公式（Issue #690 步骤 2 要求）。
+/// CursorOnly 的三次曲线保持独立，
 /// 不并入协同曲线（`AnimatedSlice::ease_out_quad`）。
 pub fn ease_out_cubic(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
@@ -132,14 +132,15 @@ impl SujianEditorItem {
         let selection_gesture_active = self.selection_gesture_active;
         let is_preediting = !self.pipeline.composition().preedit_text.is_empty();
 
-        if self.current_coordinated_animation_enabled
+        // Issue #904：协同模式下，正文编辑（TextTransaction）的光标推进由同一个
+        // `text_motion` 进度经 `caret_sample` 驱动（见
+        // `qquickitem_impl::build_cursor_render_state_for_frame`），这里不再为它另起
+        // 第二条光标 tween。纯点击 / 键盘导航仍按 smooth cursor 独立 Tween。
+        let policy = self.effective_animation();
+        let coordinated_text_cursor = policy.shared_timeline
+            && self.pipeline.text_motion().is_some()
             && self.cursor_ctrl.last_move_source
-                != super::cursor_controller::CursorMoveSource::TextTransaction
-        {
-            self.pipeline
-                .animation_coordinator_mut()
-                .detach_caret_driven_transition(Instant::now());
-        }
+                == super::cursor_controller::CursorMoveSource::TextTransaction;
 
         // Issue #853：用户编辑只更新 canonical selection；caret 由唯一的
         // cursor controller 立即跟到最新位置。正文过渡不拥有也不 retarget caret。
@@ -148,33 +149,76 @@ impl SujianEditorItem {
             .current_layout_snapshot()
             .as_ref()
             .map(|snapshot| snapshot.revision);
-        let cursor_plan = self.pipeline.animation_coordinator().build_cursor_plan(
-            &super::animation::CursorMoveInputs {
-                cursor_x,
-                cursor_y,
-                cursor_h,
-                editor_enabled: self.current_editor_enabled,
-                has_selection,
-                is_scrolling: self.current_is_scrolling,
-                selection_gesture_active,
-                is_preediting,
-                smooth_cursor_enabled: self.current_smooth_cursor_enabled,
-                cursor_animation_enabled: super::animation::cursor_animation_enabled(
-                    self.current_smooth_cursor_enabled,
-                    self.current_coordinated_animation_enabled,
-                ),
-                coordinated_animation_enabled: self.current_coordinated_animation_enabled,
-                movement_source: self.cursor_ctrl.last_move_source,
-                driver_revision,
-                visual_position_valid: self.cursor_ctrl.visibility_state
-                    != super::cursor_controller::CursorVisibilityState::Uninitialized,
+        // Issue #901: 旧 animation_coordinator.build_cursor_plan + CursorMoveInputs 已删除。
+        // 直接构造 CursorAnimationPlan，保留 Snap/Tween 决策的核心逻辑。
+        let cursor_animation_enabled = policy.cursor;
+        let should_be_visible = self.current_editor_enabled && !has_selection && !is_preediting;
+        let hidden_by_selection = has_selection && !should_be_visible;
+
+        // Snap/Tween 决策：
+        // - force_snap_next → Snap
+        // - DragSelection / LayoutChange / Scroll → Snap
+        // - PointerClick / KeyboardNavigation → smooth cursor 开启时 Tween，否则 Snap
+        // - 协同模式下的 TextTransaction → Snap（由 text_motion 的同一进度推进）
+        // - 独立模式下的 TextTransaction → 按 smooth cursor
+        let force_snap = self.cursor_ctrl.force_snap_next;
+        let movement_source = self.cursor_ctrl.last_move_source;
+        let allow_tween = cursor_animation_enabled
+            && !force_snap
+            && !coordinated_text_cursor
+            && !selection_gesture_active
+            && !self.current_is_scrolling
+            && matches!(
+                movement_source,
+                super::cursor_controller::CursorMoveSource::PointerClick
+                    | super::cursor_controller::CursorMoveSource::KeyboardNavigation
+                    | super::cursor_controller::CursorMoveSource::TextTransaction
+            );
+
+        let old_rect = super::edit_motion::CursorRect {
+            x: self.cursor_ctrl.visual_x,
+            top: self.cursor_ctrl.visual_y,
+            bottom: self.cursor_ctrl.visual_y + self.cursor_ctrl.visual_h,
+            baseline_y: self.cursor_ctrl.visual_baseline_y,
+        };
+        let new_rect = super::edit_motion::CursorRect {
+            x: cursor_x,
+            top: cursor_y,
+            bottom: cursor_y + cursor_h,
+            baseline_y: layout_res.baseline_y,
+        };
+
+        let transition = if allow_tween
+            && (old_rect.x - new_rect.x).abs() + (old_rect.top - new_rect.top).abs() > 0.01
+        {
+            super::cursor_animation::CursorTransition::Tween {
+                old_rect,
+                new_rect,
                 duration_ms: u64::from(self.current_cursor_animation_duration_ms),
-                visual_x: self.cursor_ctrl.visual_x,
-                visual_y: self.cursor_ctrl.visual_y,
-                force_snap_next: self.cursor_ctrl.force_snap_next,
-                baseline_y: layout_res.baseline_y,
-            },
-        );
+            }
+        } else {
+            super::cursor_animation::CursorTransition::Snap
+        };
+
+        // Issue #904：driver_session / driver_transition_id 标识这次光标推进来自哪一轮
+        // 正文编辑（唯一的 text_motion），不再从已删除的 visual_canvas revision_chain 取。
+        let (driver_session, driver_transition_id) = match self.pipeline.text_motion() {
+            Some(motion) => (motion.session, motion.target_revision),
+            None => (self.document_session, self.pipeline.text_revision()),
+        };
+        let cursor_plan = super::cursor_animation::CursorAnimationPlan {
+            should_be_visible,
+            transition,
+            movement_source,
+            driver_revision,
+            driver_session,
+            driver_transition_id,
+            cursor_x,
+            cursor_y,
+            cursor_h,
+            cursor_baseline_y: layout_res.baseline_y,
+            hidden_by_selection,
+        };
         let result = self.cursor_ctrl.apply_plan(&cursor_plan);
 
         if result.needs_repaint {
@@ -203,7 +247,10 @@ impl SujianEditorItem {
         {
             let mut line_info = String::new();
             if let Some(snapshot) = self.editor_layout.cache() {
-                if let Some(line) = snapshot.lines.iter().find(|l| l.id == visual_line_id) {
+                // Issue #901 第十五轮问题5b: 用 resolve_line 只物化目标行，
+                // 不物化整章。id 现为全局行索引，直接按 id 物化单行。
+                let line = snapshot.resolve_line(visual_line_id);
+                if line.id == visual_line_id {
                     let font_size = f64::from(snapshot.font_size);
                     let font_family = &snapshot.font_family;
                     let ascent = if line.qt_ascent > 0.0 {
@@ -217,7 +264,7 @@ impl SujianEditorItem {
                         crate::editor::layout::get_font_descent(font_family, snapshot.font_size)
                     };
                     let baseline =
-                        crate::editor::layout::text_baseline_y(line, font_size, font_family);
+                        crate::editor::layout::text_baseline_y(&line, font_size, font_family);
                     // Issue #727 评论 5757225958 问题1: cursor_y 已是文档坐标，
                     // 不需要再加 scroll_y 还原。
                     let cursor_top_doc = cursor_y;

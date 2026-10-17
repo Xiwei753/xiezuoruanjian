@@ -186,6 +186,110 @@ hvigorw --mode module -p module=entry@default -p product=default -p buildMode=de
 > `assembleHap` 才暴露。`tools/check_harmony_native_bridge.py` 是为了补上这个缺口
 > 而存在的静态守卫。
 
+### 普通包与受限包（DLP 防窥 ACL）
+
+普通包（`product=default`）**不含** DLP 防窥受限能力。#914 起 DLP 实现属于独立的
+`privacy_acl` HSP，只有 `product=acl` 装配：普通 product 不编译、不打包该模块，
+`entry/src/main/module.json5` 也不声明 `ohos.permission.DLP_GET_HIDE_STATUS`。
+因此普通包不携带该受限权限，也无需手改任何 `module.json5` 或临时删权限。
+
+需要防窥的受限包改用 `product=acl`（必须搭配带 `DLP_GET_HIDE_STATUS` ACL 的签名
+Profile，不能共用普通签名）。`product=acl` 的完整 APP 应包含 `entry@acl` HAP 与
+`privacy_acl@default` HSP；仅执行 `entry@acl assembleHap` 只得到 HAP 模块产物，
+不能把它当成完整受限包进行交付：
+
+```bash
+cd apps/harmony
+hvigorw --mode project -p product=acl -p buildMode=debug \
+        assembleApp --no-daemon
+```
+
+> 若只需单独构建 `entry@acl` HAP（不含独立 HSP 产物），可执行
+> `hvigorw --mode module -p module=entry@acl -p product=acl -p buildMode=debug assembleHap --no-daemon`，
+> 但这不是完整的受限包交付命令。
+
+`privacy_acl` HSP 与 `entry` 相互独立，可单独编译打包（用于单独验证受限实现）：
+
+```bash
+cd apps/harmony   # 已 source tools/setup_harmony_cli.sh
+hvigorw --mode module -p module=privacy_acl@default -p product=acl -p buildMode=debug \
+        assembleHsp --no-daemon
+```
+
+未配置签名 material 时，构建会在 `SignHsp` 阶段停止，但 HSP 已完成打包（未签名），
+位于 `privacy_acl/build/acl/outputs/default/` 下。
+
+权限隔离在源码中由模块和 product 共同决定：`entry/src/main/module.json5`
+声明 `ohos.permission.INTERNET`、`ohos.permission.GET_NETWORK_INFO`、
+`ohos.permission.PRIVACY_WINDOW`、`ohos.permission.DETECT_GESTURE`；
+`ohos.permission.DLP_GET_HIDE_STATUS` 则只由
+`privacy_acl/src/main/module.json5` 声明，包含其专属的 `reason` / `usedScene`。
+`product=default` 不装配 `privacy_acl`，`product=acl` 装配该 HSP。
+最终产物的权限归属应以对应 product 打包后 HAP/HSP/APP 的实际清单为准，
+不能只由源码声明推断「构建后的 entry 模块增加了 DLP 权限」。
+
+`privacy_acl` 是 entry 的 HSP 依赖，构建 `product=acl` 时 hvigor 会把它的
+`requestPermissions`（含 `reason: $string:perm_reason_dlp_anti_peep`）合并进 entry 的
+处理产物 `intermediates/.../module.json`，因此 entry 的 ACL target 必须能解析这个
+`reason` 字符串，否则 `CompileResource` 会报
+`The resource reference '$string:perm_reason_dlp_anti_peep' is not defined`。
+`entry/build-profile.json5` 的 `targets[acl]` 用官方 `resource.directories` 把
+`./src/acl/resources` 与 `./src/main/resources` 一起纳入（配置该字段会替换默认资源目录，
+所以要显式保留 `./src/main/resources`），由
+`entry/src/acl/resources/base/element/string.json` 提供该字符串。这样
+`perm_reason_dlp_anti_peep` 只进入 ACL target 的资源；普通 `default` target 不配置
+`resource.directories`、仍只用 `./src/main/resources`，不携带该 DLP 字符串。
+
+构建后可核对 hvigor 生成的模块依赖装配观察，文件在 entry 构建目录的
+`intermediates/loader/<target>/` 下，完整路径同时带 `<product>` 维度
+（构建产物不入库，名字见下）：
+
+```text
+entry/build/<product>/intermediates/loader/<target>/loader.json
+```
+
+普通 `entry@default` 的 `hspNameOhmMap` 与 `hspResourcesMap` 均为空，不含
+`privacy_acl`；受限 `entry@acl` 的 `hspNameOhmMap` 含
+`privacy_acl: @bundle:com.xiwei.sujian/privacy_acl/ets/Index`，`hspResourcesMap`
+含 `privacy_acl` 指向该 HSP 的资源表。即普通 product 的
+entry 运行时依赖没有该受限 HSP，受限 product 才有。
+
+> 注意区分 `loader.json` 里的 `modulePathMap` 与 `hspNameOhmMap` / `hspResourcesMap`：
+> `modulePathMap` 是工程内**所有**已登记模块的路径表，普通 `product=default` 的
+> `loader.json` 同样会列出 `privacy_acl`（指向模块目录）。它只说明“工程里存在该模块”，
+> **不代表普通 product 装配了该 HSP**。真正表示是否装配的是 `hspNameOhmMap` /
+> `hspResourcesMap`：普通 product 为空，受限 product 才出现 `privacy_acl`。
+
+`entry/src/main/module.json5` 新增 `PRIVACY_WINDOW` 后，重新本地实跑
+`--mode module -p module=entry@default -p product=default -p buildMode=debug assembleHap`
+观察到：`entry/build/default/intermediates/loader/default/loader.json` 中
+`hspNameOhmMap`、`hspResourcesMap` 均为空（`modulePathMap` 仍登记 `entry` 与 `privacy_acl`
+两个工程模块路径）；
+`entry/build/default/intermediates/res/default/module.json` 的
+`requestPermissions` 为 `INTERNET`、`GET_NETWORK_INFO`、`PRIVACY_WINDOW`、`DETECT_GESTURE`
+四项非 DLP 权限、`dependencies` 为空。此前在添加 `PRIVACY_WINDOW` 之前的同一条命令只观察到前
+三项非 DLP 权限。所以普通 product 的产物不含该受限 HSP，也不带受限权限。
+
+受限 product 同样在本地实跑
+`--mode module -p module=entry@acl -p product=acl -p buildMode=debug assembleHap`
+后核对（`entry/build/acl/intermediates/loader/acl/loader.json`）：
+`hspNameOhmMap` 为 `{ "privacy_acl": "@bundle:com.xiwei.sujian/privacy_acl/ets/Index" }`，
+`hspResourcesMap.privacy_acl` 指向 `privacy_acl/build/acl/intermediates/res/default/ResourceTable.txt`；
+合并进 ACL HAP 的 `entry/build/acl/intermediates/res/acl/module.json` 的 `dependencies`
+为 `[{ "moduleName": "privacy_acl", "versionCode": 1000000 }]`（该 `versionCode` 取自应用级
+`AppScope/app.json5` 的 `app.versionCode`，即 `1000000`；不是 `privacy_acl/oh-package.json5`
+的 ohpm 包版本），`requestPermissions` 为 `INTERNET`、`GET_NETWORK_INFO`、`PRIVACY_WINDOW`、
+`DETECT_GESTURE` 四项普通权限，外加 `ohos.permission.DLP_GET_HIDE_STATUS`（历史 ACL 实跑产物
+中普通权限为三项，未含 `PRIVACY_WINDOW`）；`privacy_acl` HSP 自身的
+`privacy_acl/build/acl/intermediates/res/default/module.json` 也单独声明该权限。这组值与
+default product 的对照说明代码里的依赖装配按 product 生效，不是只在源码里分层。
+
+以上 `loader.json` 与合并 `module.json` 都在 `CompileArkTS` 之前的装载/合并阶段生成，
+是本地实跑产物（构建产物不入库，无法在仓库内复现）；`entry@default` 与 `entry@acl`
+构建都能越过 `CompileResource`，随后停在 `CompileArkTS` 的既有 ArkTS 报错（来自 #879
+动画代码，不是 #914 改动），因此这些数值证明的是模块装配与权限归属，不是完整签名
+HAP/APP 的最终内容声明。
+
 ### 装机与验证
 
 HAP 落在 `apps/harmony` 的 `build` 目录下（不进 git），文件名形如
@@ -213,7 +317,7 @@ hdc -t <serial> shell aa start -a EntryAbility -b com.xiwei.sujian
 
 ### 仓库提交结构
 
-`apps/harmony/build-profile.json5` 中 `products[name=default]` 包含 `signingConfig: 'default'` 引用，指向 `signingConfigs[name=default]` 的空 material 占位：
+`apps/harmony/build-profile.json5` 中有两个 product，各对应一个空 material `signingConfig` 占位：普通包 `products[name=default]` → `signingConfigs[name=default]`；受限包 `products[name=acl]` → `signingConfigs[name=acl]`。两者都是空 material 占位：
 
 ```json5
 {
@@ -232,6 +336,19 @@ hdc -t <serial> shell aa start -a EntryAbility -b com.xiwei.sujian
           certpath: ''
         }
       },
+      {
+        name: 'acl',
+        type: 'HarmonyOS',
+        material: {
+          storeFile: '',
+          storePassword: '',
+          keyAlias: '',
+          keyPassword: '',
+          signAlg: 'SHA256withECDSA',
+          profile: '',
+          certpath: ''
+        }
+      },
     ],
     products: [
       {
@@ -239,10 +356,17 @@ hdc -t <serial> shell aa start -a EntryAbility -b com.xiwei.sujian
         signingConfig: 'default',
         // ...
       },
+      {
+        name: 'acl',
+        signingConfig: 'acl',
+        // ...
+      },
     ],
   },
 }
 ```
+
+> `product=acl` 必须使用 `signingConfig: 'acl'` 指向的独立 Profile（其 ACL 含 `ohos.permission.DLP_GET_HIDE_STATUS`），不能共用 `default` 的普通签名；`product=default` 继续用 `default`。这与上文「普通包与受限包」一节一致。
 
 ### 开发者本机操作
 
@@ -262,7 +386,7 @@ devecocli auth status
 
 ### 不要删除 product → signingConfig 引用
 
-- `signingConfig: 'default'` 引用必须保留在仓库中。
+- `signingConfig: 'default'` 与 `signingConfig: 'acl'` 引用都必须保留在仓库中（分别供 `product=default` 与 `product=acl` 使用）。
 - 不再通过删除 product 引用来生成 unsigned HAP。
 - 空 material 占位（所有字段为空字符串）是仓库的默认状态，开发者本机填入真实值后即可签名构建。
 

@@ -1,59 +1,42 @@
-# 素笺 Agent 指南
+# 素笺开发代理指南
 
-这份文件只放全仓库都适用的规则。进入具体目录后继续读取该目录的 `AGENTS.md`。
+**默认任务是实现用户指定的 GitHub Issue，不是重新研究 Issue。** 需求、交互、架构和文件级改法已经在 Issue 中确定；本文件仅规定如何高效执行，以及少数全仓共用的边界。
 
-## 仓库地图
+## 接到 Issue：立即实施
 
-- `core/writer_core/`：业务核心。作品、卷、章节、正文、设置、同步、统计、星图和数据格式的唯一事实来源。
-- `core/writer_platform_api/`：Core 所需的平台能力契约。
-- `core/writer_uniffi/`：稳定的 UniFFI 导出门面。
-- `platform/rust/<target>/`：各平台 Rust 适配与最终动态库组装。
-- `apps/android/`：Android 原生 Kotlin/Compose 客户端。
+1. 读取**当前 Issue 正文和决定具体改法的最新有效评论**。以用户最新、最明确的指令为准；不要再读一遍无关历史 Issue、PR 或旧讨论。
+2. 按 Issue 指定路径直接打开目标文件；只补读直接调用点、接口和必要依赖。**一旦定位到可修改的代码，就开始修改**，不以“先全面理解项目”为前置条件。
+3. 把 Issue 中已确定的设计视为施工要求：照指定方案新建、修改、删除文件及旧逻辑。不要重新提技术选型、另起架构、增加兜底、兼容旁路或第二套状态机。
+4. 仅当文件位置、实际接口或平台 API 与 Issue 有客观出入时，局部搜索并调整实现细节；不要因此推翻议题目标。确实无法继续时，简短指出具体阻塞点。
+5. 做完简短汇报：改了哪些文件、实现了什么。不要附加未要求的全仓审计、CI 流程、冗长验收和下一轮研究计划。
+
+**执行顺序：读当前 Issue → 定位最少文件 → 改代码 → 简短反馈。**
+
+## 读取与并行
+
+- **最小上下文**：优先精确文件路径、符号搜索和局部代码；不做无关全仓扫描，不默认通读 README、技术文档、历史提交、日志或整个目录。Issue 未要求的资料先不看；遇到真实缺口再查官方资料或相关代码。
+- **不重复读取指令**：运行环境若已提供根 `AGENTS.md` 内容，不再手动读取一遍。只在实际改动涉及的子目录读取其 `AGENTS.md`，且只需一次；子目录规则约束该目录的修改。
+- **并行优先但不空等**：运行环境支持子代理时，把相互独立的模块修改、明确的定位任务或资料查询交给子代理；主代理同时推进当前关键修改。分别指定文件/目录边界，避免代理同时写同一文件。小改动或强依赖步骤直接自己做，不为了派代理而派代理。
+- **少说多做**：无需输出冗长计划、假设、问题综述或思维过程。遇到障碍只分析影响当前修改的部分，然后继续实现。
+
+## 仓库定位（按任务使用）
+
+- `core/writer_core/`：作品、卷、章节、正文、设置、同步、统计、星图和数据格式的业务事实来源；修改这里时按需看 `core/writer_core/AGENTS.md`。
+- `core/writer_platform_api/`：Core 平台能力契约。
+- `core/writer_uniffi/`：UniFFI 对外接口。
+- `platform/rust/<target>/`：各平台 Rust 适配及动态库。
+- `apps/android/`：Kotlin/Compose 客户端；涉及这里时按需看 `apps/android/AGENTS.md`。
 - `apps/Linux_qt/`：Linux Qt 客户端。
-- `docs/`：长期架构、数据格式和跨平台契约。
+- `docs/TECHNICAL_ROUTE.md`：长期技术路线；**仅在 Issue 明确引用或修改确实涉及其契约时读取**。
+- 根目录 `Cargo.toml`：需要确认 Rust workspace / crate 依赖时再查看，不猜测 crate 关系。
 
-Rust workspace 以根目录 `Cargo.toml` 为准，不要自行猜 crate 关系。
+## 必须保持的项目边界
 
-## 全局边界
+- Core 是业务状态唯一事实来源；平台端处理 UI、输入、布局、动画与系统能力，不能复制业务状态机。Core 不依赖平台 UI 类型。
+- 正文持久化是纯文本；预输入、选区、缩进显示、动画与高亮不改变正文格式。
+- 跨语言接口使用明确的 DTO、枚举和错误类型；不在 Rust 内部为传递结构体而反复转 JSON。
+- UniFFI/JNI/NAPI 自动生成绑定不手工改；需要调整时修改上游接口或生成契约。
+- Rust 不伪造可变引用、手写不成立的 `unsafe impl Send/Sync`，不靠泄漏/遗忘内存绕过生命周期；必要的 FFI `unsafe` 写明 `SAFETY:`。外部输入、锁、磁盘、网络错误正常处理，不用宽范围 `allow` 掩盖问题。
+- 用户要求保存构建、安装或运行日志时写入仓库 `logs/`（已被忽略），不要强制跟踪。
 
-- Core 保存业务真相；平台端负责 UI、导航、输入法、排版、渲染、动画和系统能力。
-- 平台端不得复制作品、章节、设置、同步、统计等业务状态机。
-- Core 不依赖 Android、Qt、Compose、QML、Activity、View、Window 等平台类型。
-- 正文持久化始终是纯文本。预输入、选区、缩进显示、动画、高亮都不是正文格式。
-- 跨语言接口优先强类型 DTO、枚举和错误类型；不要在 Rust 内部把结构体转 JSON 再解析回来。
-- 自动生成的 UniFFI/JNI/NAPI 绑定不手工修改；生成结果错误时修生成契约或上游接口。
-- 被新实现替代的旧入口直接删除，不再增加 fallback、兼容旁路或第二套状态机。
-
-## 修改位置
-
-改业务规则、数据格式、同步语义、编辑事务：先看 `core/writer_core/AGENTS.md`。
-
-改 Android UI、输入、动画、窗口、系统能力、Gradle：先看 `apps/android/AGENTS.md`。
-
-长期架构以 `docs/TECHNICAL_ROUTE.md` 为准；数据目录、设置、同步、星图语义分别看对应文档。一次性迁移步骤和文件级改法写 Issue，不写进长期文档。
-
-用户要求出打包日志（构建、安装、真机运行输出等）时，日志一律落盘到仓库内的 `logs/` 目录，不要只贴在对话里；`logs/` 已在 `.gitignore` 中，保持不跟踪，也不要 `git add -f`。
-
-## Rust 安全边界
-
-- 不为通过编译手写 `unsafe impl Send/Sync`。
-- 不从共享引用伪造 `&mut`，不靠裸指针、`Box::leak`、`mem::forget` 解决生命周期问题。
-- `unsafe` 只放必要的 FFI/平台边界，并紧邻写明 `SAFETY:` 前提。
-- 外部输入、锁、磁盘、网络路径不用 `unwrap`/`expect` 代替错误处理。
-- 不用 crate/module 级宽范围 `allow` 掩盖 warning。
-
-仓库级 Rust 守卫：
-
-```bash
-python3 tools/check_rust_safety_patterns.py .
-python3 tools/test_check_rust_safety_patterns.py
-```
-
-仓库级 Harmony 数据契约守卫（Core serde DTO ↔ ArkTS DTO/decoder 字段、可空性、契约层 import）：
-
-```bash
-python3 tools/check_harmony_dto_contract.py .
-python3 tools/test_check_harmony_dto_contract.py
-```
-
-
+一次性的文件级施工步骤写在 Issue 中，不反复塞进长期文档。不要用旧代码现状或过期讨论推翻已经明确的 Issue。

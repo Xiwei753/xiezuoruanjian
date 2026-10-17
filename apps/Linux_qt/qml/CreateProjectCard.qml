@@ -14,9 +14,14 @@
 //   - 跟真实作品一起排版、一起换行、一起滚动
 //   - 永远跟在最后一张作品卡后面；没有作品时它就是第一张卡
 //   - 点击只打开命名框，输入名称后才真正创建作品
+//
+// Issue #900：颜色/圆角迁移到 Kirigami.Theme / Kirigami.Units，「+」改用
+// Breeze 图标 "list-add"，不再读 DesignTokens 的 M3 字段。
+// 公共 API（dt / cardWidth / cardHeight / hovered / clicked）保持不变。
 // =============================================================================
 
 import QtQuick
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -33,25 +38,23 @@ Rectangle {
 
     width: cardWidth
     height: cardHeight
-    radius: dt.cardRadius
+    radius: Kirigami.Units.cornerRadius
     // Issue #827 评论 5：和真实作品卡同面色。透明卡在浅灰页面上会退化成
     // 「很淡的空框 + 很淡的加号」，而草图里它和作品封面是同一等级的一张卡。
-    color: hovered ? dt.cardHover : dt.card
+    color: hovered ? Kirigami.Theme.activeBackgroundColor : Kirigami.Theme.alternateBackgroundColor
     // 1px 实线边框：这是一张还没写上名字的封面，而不是一个工具按钮。
-    border.color: hovered ? dt.primary : dt.border
+    border.color: hovered ? Kirigami.Theme.focusColor : Kirigami.Theme.disabledTextColor
     border.width: 1
 
-    Behavior on border.color { ColorAnimation { duration: dt.animFast } }
-    Behavior on color { ColorAnimation { duration: dt.animFast } }
+    Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+    Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
 
-    AppText {
-        dt: root.dt
+    Kirigami.Icon {
         anchors.centerIn: parent
-        text: "+"
-        color: root.hovered ? root.dt.primary : root.dt.textPrimary
-        font.pointSize: 44
-        font.family: root.dt.fontFamily
-        font.weight: Font.Normal
+        source: "list-add"
+        implicitWidth: Kirigami.Units.iconSizes.enormous
+        implicitHeight: Kirigami.Units.iconSizes.enormous
+        color: root.hovered ? Kirigami.Theme.highlightColor : Kirigami.Theme.textColor
     }
 
     MouseArea {

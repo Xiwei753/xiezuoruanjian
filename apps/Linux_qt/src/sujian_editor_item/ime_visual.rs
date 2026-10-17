@@ -42,10 +42,34 @@ impl SujianEditorItem {
         let cursor_byte = self.pipeline.cursor();
         let snapshot = self.layout_snapshot(width);
 
-        let cursor_line = snapshot
-            .lines
-            .iter()
-            .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte);
+        // Issue #901 第十六轮问题2: 用 paragraph_offset_index O(log n) 定位段落，
+        // 只物化该段和前一段的视觉行，不遍历全章 resolved_lines。
+        // paragraph_offset_index 为空时退化为全章物化。
+        let cursor_line: Option<VisualLine> = if !snapshot.paragraph_offset_index.is_empty() {
+            let para_slot = snapshot
+                .paragraph_offset_index
+                .byte_to_paragraph(cursor_byte);
+            let start_slot = para_slot.saturating_sub(1);
+            let end_slot = para_slot + 1;
+            // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
+            // 替换 raw partition_point(logical_slot)。
+            // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
+            // paragraph_id_to_line_range 按 lines 实际行顺序构建，
+            // 索引为空时退化为 partition_point(logical_slot)。
+            let (start_idx, end_idx) = snapshot.paragraph_line_range(start_slot, end_slot);
+            let lines = snapshot.resolve_line_range(start_idx, end_idx);
+            lines
+                .iter()
+                .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte)
+                .cloned()
+        } else {
+            let resolved_lines = snapshot.resolved_lines();
+            resolved_lines
+                .as_ref()
+                .iter()
+                .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte)
+                .cloned()
+        };
 
         let Some(line) = cursor_line else {
             self.pipeline.composition_mut().preedit_cursor_rect = None;
@@ -54,7 +78,7 @@ impl SujianEditorItem {
 
         let preedit_start_x = self.editor_layout.cursor_x_for_line(
             &snapshot,
-            line,
+            &line,
             cursor_byte,
             self.cursor_ctrl.affinity,
         );
@@ -75,7 +99,7 @@ impl SujianEditorItem {
         let cursor_y = line.y - scroll_y;
         let cursor_h = line.height;
 
-        let baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
+        let baseline_y = text_baseline_y(&line, font_size, font_family) - scroll_y;
 
         self.pipeline.composition_mut().preedit_cursor_rect = Some(CursorRect {
             x: cursor_x,

@@ -9,6 +9,7 @@
 // 只有 activeTab 的 role 变化才发布给观察者。
 
 import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 
 type ScreenRoleObserver = (role: ScreenRole) => void
 
@@ -32,16 +33,34 @@ export class NavigationChromeStore {
 
   // Issue #768 评论5835958606：切 tab 时调用，设置 activeTab 并发布该 tab 的 role。
   // 替代旧的 syncTabRole 方法。
+  // Issue #906：这里记录的是实际状态提交（可能来自用户手势，也可能来自接续恢复等程序改 currentTab），
+  // 因此 origin='App'。明确的用户切换意图由 PrimaryTabShell.recordUserTabRequest 记 nav.tab_requested（User）。
   setActiveTab(tabIndex: number): void {
+    const previousTab = this.activeTab
     this.activeTab = tabIndex
+    if (tabIndex !== previousTab) {
+      const fields: DiagnosticField[] = [
+        { key: 'fromTab', value: String(previousTab) },
+        { key: 'toTab', value: String(tabIndex) }
+      ]
+      HarmonyDiagnosticEvents.record('Info', 'App', 'nav.tab_changed', 'NavigationChromeStore', fields)
+    }
     const role = this.tabRoles.get(tabIndex) ?? ScreenRole.ProjectList
     this.publish(role)
   }
 
   // 各 Screen 的 NavDestination.onShown 调此方法上报自己的 ScreenRole。
   // Issue #768 评论5835958606：tabIndex 必选；后台 tab 只更新缓存，不发布全局 role。
+  // Issue #906：按实际到达的 onShown 上报 nav.destination_shown。角色缓存相等不代表页面未重新显示
+  // （连续两个同 ScreenRole 页面、或离开后重显同类型页面都是真实显示事件），不能用 previousRole === role 吞掉。
   reportScreenRole(role: ScreenRole, tabIndex: number): void {
     this.tabRoles.set(tabIndex, role)
+    const fields: DiagnosticField[] = [
+      { key: 'screenRole', value: String(role) },
+      { key: 'tabIndex', value: String(tabIndex) },
+      { key: 'isActiveTab', value: String(tabIndex === this.activeTab) }
+    ]
+    HarmonyDiagnosticEvents.record('Info', 'App', 'nav.destination_shown', 'NavigationChromeStore', fields)
     if (tabIndex === this.activeTab) {
       this.publish(role)
     }

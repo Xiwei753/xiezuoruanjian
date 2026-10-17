@@ -1,26 +1,47 @@
-use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
-use super::render_ownership::RenderOwnershipPlan;
+use super::layout_snapshot::{LineSnapshotId, SourceRect};
+use super::qt_text_node::AnimationClipRect;
+use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
-use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
-use crate::sujian_editor_item::edit_motion::DeleteEdge;
+use writer_core::editor::EditorRevision;
 
+/// Issue #904：动画层本帧要画的一个局部文字覆盖层。
+///
+/// 由 `text_motion::TextMotionFrame.overlays` 生成，位置 / 源 UV / clip 都已算好。
+/// 与静态层同一坐标系（文档坐标，不含滚动偏移），C++ 动画层统一施加一次
+/// `translate(0, -scroll_y)`。
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
+    /// 文档坐标 x（不含滚动偏移）。
     pub x: f64,
+    /// 文档坐标 y（不含滚动偏移）。
     pub y: f64,
     pub w: f64,
     pub h: f64,
     pub opacity: f64,
     pub snapshot_id: LineSnapshotId,
     pub source_rect: SourceRect,
-    /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围和 shaping。
+    /// 动态裁剪矩形（文档坐标）：渲染时只绘制 `target_rect ∩ clip_rect`。
+    ///
+    /// 按同一个 `progress` 更新（吐字/吞字据此推进），与静态层孔洞是两个概念：
+    /// 静态孔洞覆盖目标字形完整范围（与 progress 无关），动态 clip 随 progress 变化。
+    pub clip_rect: SourceRect,
+    /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围。
     pub logical_range: (usize, usize),
-    /// 此 glyph 在当前 canonical revision 中对应的范围。纯删除旧字没有该身份。
-    pub canonical_range: Option<(usize, usize)>,
-    /// 删除 glyph 的 caret 边缘；其他动画 glyph 为 None。
-    pub delete_edge: Option<DeleteEdge>,
-    pub shaping_identity: ShapingIdentity,
+    /// 该动画 glyph 对应的 Core source revision（旧字为编辑前，新字为编辑后）。
+    pub source_revision: EditorRevision,
+    /// 字形逻辑身份，由 `text_motion::derive_fragment_id` 派生。
+    pub glyph_id: u64,
+    /// Issue #904 评论 4：该片段所属段落 id。
+    ///
+    /// 贯穿到"本帧已提交局部片段"记录，供下一次快速输入从当前画面重定向，
+    /// 不再把它写死成 0。
+    pub paragraph_id: u64,
+    /// Issue #904 复核 6：该片段的字形 shaping 身份（来自 `LineClusterSnapshot`）。
+    ///
+    /// 等长度替换（"甲"→"乙"）时新旧 byte range 相同，只有 shaping 身份能区分
+    /// "同一个字的位移"与"旧字退出 + 新字进入"；下一帧继承遮罩宽度也依赖它。
+    /// 无法判定（例如从 QSG 回执重建的片段）时为 `None`。
+    pub shaping: Option<super::layout_snapshot::ShapingIdentity>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -118,45 +139,68 @@ pub(crate) struct CursorRenderState {
     pub h: f64,
     pub baseline_y: f64,
     pub opacity: f64,
-    /// The active move intent and the route currently owned by CursorController.
-    pub movement_source: Option<CursorMoveSource>,
-    pub driver_revision: Option<LayoutRevision>,
-    pub driver_transition_id: u64,
-    pub document_session: u64,
-    pub target_x: f64,
-    pub target_y: f64,
-    pub path_start_x: f64,
-    pub path_start_y: f64,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct VisualCaretGeometry {
-    /// 文档坐标，与动画 glyph rect 使用同一坐标系。
-    pub x: f64,
-    pub y: f64,
-    pub h: f64,
-    pub movement_source: CursorMoveSource,
-    pub transition_id: u64,
-    pub target_x: f64,
-    pub target_y: f64,
-    pub path_start_x: f64,
-    pub path_start_y: f64,
-    pub layout_revision: Option<LayoutRevision>,
-    pub document_session: u64,
+/// Issue #904：本帧要画的局部文字覆盖层 + 静态层要挖掉的局部孔洞。
+///
+/// 取代 #901 的 `RenderOwnership`：不再有整屏 ownership/revision/handoff
+/// 状态机，只有「这一帧动画层画哪些局部片段」和「静态层排除哪些局部矩形」。
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LocalTextPlan {
+    /// 动画层本帧的局部文字覆盖层（吐字/吞字/位移）。
+    pub overlays: Vec<TextAnimationGlyphInfo>,
+    /// 静态层本帧需要排除的局部矩形，与 `overlays` 原子提交。
+    pub static_holes: Vec<AnimationClipRect>,
+    /// 本帧接管所需的全部动画源纹理 id。
+    ///
+    /// 用「本计划全部片段要用到的源纹理」而不是「本帧可见的 overlay 纹理」判断
+    /// 就绪：progress=0 时 Reveal 尚无可见像素，但它的目标字形已被静态孔洞排除，
+    /// 若此时漏检纹理，新字会先消失。
+    pub required_textures: Vec<LineSnapshotId>,
+    /// 本帧仍活动的整体段落 y 偏移（复用已有 transform，不逐字复制纹理）。
+    ///
+    /// 元素为 `(paragraph_id, 相对目标位置的额外 y 偏移)`；动画结束为空，
+    /// 段落直接留在目标矩阵。
+    pub paragraph_y_offsets: Vec<(u64, f64)>,
+}
+
+impl LocalTextPlan {
+    /// 检查本帧接管所需的动画源纹理是否已在 `texture_cache` 中就绪。
+    ///
+    /// 缺任一张就整体不接管：静态层画完整 canonical 正文，动画层不画。
+    /// 静态挖孔与动画覆盖层用同一标志，避免"静态挖了空但动画没画"或反之。
+    pub(crate) fn has_animation_resources(&self, texture_cache: &TextureCache) -> bool {
+        self.required_textures
+            .iter()
+            .all(|id| texture_cache.contains_line(id))
+    }
+
+    /// Issue #904 评论 4：本帧真正缺失的源纹理 id。
+    ///
+    /// 资源缺失不是"正常成功路径"：上游必须生成本计划真正需要的源；这里把缺失
+    /// 的 id 显式列出来，供日志写出具体失败原因，而不是让"已建立 TextMotion 结构"
+    /// 被误报成"已经有动画"。
+    pub(crate) fn missing_textures(&self, texture_cache: &TextureCache) -> Vec<LineSnapshotId> {
+        self.required_textures
+            .iter()
+            .copied()
+            .filter(|id| !texture_cache.contains_line(id))
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `drawn_caret_rect` 字段。
 /// 加 `Default` 让集成测试能构造实例验证字段可读写。
-/// 一个 immutable RenderPlan 汇总本帧 owner table、selection/preedit 和唯一 caret。
+/// 一个 immutable RenderPlan 汇总本帧的局部文字效果、selection/preedit 和唯一 caret。
 /// renderer 不读取动画状态，也不重新决定 owner。
 pub struct RenderPlan {
     // 除 drawn_caret_rect 外全部收回 pub(crate)：字段类型都是平台端内部渲染
-    // 状态（RenderOwnershipPlan / CursorRenderState / FrameContext 等），
-    // 集成测试只需要 drawn_caret_rect 这个 (x, y, h) 裸元组。
+    // 状态（LocalTextPlan / CursorRenderState 等），集成测试只需要
+    // drawn_caret_rect 这个 (x, y, h) 裸元组。
     //
     // 光标采样在 CursorController 内完成，RenderPlan 只保存最终要显示的位置。
-    pub(crate) ownership: RenderOwnershipPlan,
+    pub(crate) local_text: LocalTextPlan,
     pub(crate) selection_preedit: SelectionPreeditPlan,
     /// Issue #679 评论 5657313927: 改为纯显示数据 CursorRenderState，
     /// 不再携带 CursorAnimationPlan（Snap/Tween/driver 由 GUI 线程消费）。

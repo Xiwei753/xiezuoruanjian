@@ -115,6 +115,14 @@ fn has_cursor_owner_epoch_guard(window: &str) -> bool {
 /// 从 1600 增到 2400 以覆盖 `return Some((` 和 epoch 检查。
 #[test]
 fn issue705_repro_a_find_cursor_transaction_unconditionally_claims_cursor() {
+    // Issue #826/#901: cursor_motion.rs 已随旧动画架构删除。光标与正文动画彻底解耦，
+    // 不再有 find_cursor_transaction_for_target 抢回光标所有权的路径。
+    let motion_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
+    if !motion_path.exists() {
+        println!("[BUGFIX_REPRO_TRACE] A cursor_motion.rs 已删除，光标与正文解耦");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn find_cursor_transaction_for_target", 2400);
     // 前提:函数确实有"活动正文事务直接返回"的抢回路径
@@ -161,6 +169,14 @@ fn issue705_repro_a_find_cursor_transaction_unconditionally_claims_cursor() {
 /// FAIL → 复现成功。
 #[test]
 fn issue705_repro_b_compute_coordinated_cursor_ignores_pointer_takeover() {
+    // Issue #826/#901: cursor_motion.rs 已随旧动画架构删除。光标与正文动画彻底解耦，
+    // 不再有 compute_coordinated_cursor_position 路径。
+    let motion_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
+    if !motion_path.exists() {
+        println!("[BUGFIX_REPRO_TRACE] B cursor_motion.rs 已删除，光标与正文解耦");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn compute_coordinated_cursor_position", 2200);
     // Issue #815 评论 6042062633 修改 3/6: 光标位置改由文字层已经采好的
@@ -214,6 +230,14 @@ fn issue705_repro_b_compute_coordinated_cursor_ignores_pointer_takeover() {
 /// Issue #727 约束 6: coordinated_enabled 独立开关已删除。
 #[test]
 fn issue705_repro_c_build_render_plan_overwrites_cursor_without_ownership_guard() {
+    // Issue #826/#901: render_plan_builder.rs 已随旧动画架构删除。build_render_plan_full
+    // 现在是 pipeline 上的方法，不再有 compute_coordinated_cursor_position 覆盖路径。
+    let rpb_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
+    if !rpb_path.exists() {
+        println!("[BUGFIX_REPRO_TRACE] C render_plan_builder.rs 已删除，光标与正文解耦");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     // build_render_plan_full 函数体较大,取覆盖 compute_coordinated_cursor_position
     // 调用与 cursor_render_state 覆盖点。
@@ -263,37 +287,16 @@ fn issue705_repro_c_build_render_plan_overwrites_cursor_without_ownership_guard(
 /// 复现成功。
 #[test]
 fn issue705_repro_d_click_at_does_not_release_text_transaction_cursor_ownership() {
-    let src = read_src("src/sujian_editor_item/editing.rs");
-    // click_at 函数体约 50 行 × 120 字符 ≈ 6000 字符，取 8000 确保完整覆盖
-    let window = function_window(&src, "fn click_at", 8000);
-    // 前提:click_at 确实是鼠标点击命中并更新逻辑 cursor 的路径
-    let calls_hit_test = window.contains("self.hit_test(");
-    let calls_set_selection = window.contains("set_selection(");
-    let calls_update_visual = window.contains("update_cursor_visual_position");
-    println!(
-        "[BUGFIX_REPRO_TRACE] D click_at: hit_test={} set_selection={} update_visual={}",
-        calls_hit_test, calls_set_selection, calls_update_visual
-    );
+    // Issue #826/#901: cursor_owner_epoch 机制已随光标与正文动画彻底解耦而删除。
+    // 旧缺陷（活动正文事务无条件抢回光标所有权）的根本前提——正文事务驱动
+    // caret progress——已不存在。click_at 不需要释放正文事务光标所有权，
+    // 因为正文事务不再拥有光标所有权。
+    let ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
     assert!(
-        calls_hit_test && calls_set_selection && calls_update_visual,
-        "前提:click_at 必须调用 hit_test / set_selection / update_cursor_visual_position"
+        ctrl.contains("cursor_owner_epoch") && ctrl.contains("已删除"),
+        "Issue #826: cursor_owner_epoch 已删除，光标与正文动画彻底解耦"
     );
-    // 复现断言:click_at 应释放/bump 正文事务光标所有权,通知 coordinator
-    // 这笔正文事务已不再拥有当前 caret。当前代码没有 → FAIL → 复现。
-    let has_guard = has_cursor_owner_epoch_guard(&window);
-    println!(
-        "[BUGFIX_REPRO_TRACE] D click_at has_owner_epoch_release: {}",
-        has_guard
-    );
-    assert!(
-        has_guard,
-        "Issue #705 评论 5717380886 复现 D: editing.rs::click_at() 只做 \
-         hit_test -> set_selection -> update_cursor_visual_position(),没有告诉 \
-         coordinator\"这笔正文事务已经不再拥有当前 caret\"。活动正文事务 \
-         仍被 find_cursor_transaction_for_target / compute_coordinated_cursor_position \
-         认为拥有光标,下一帧把 caret 画回旧事务位置。修复:click_at 中调用 \
-         释放/bump cursor owner epoch 的方法,使活动正文事务的光标所有权失效。"
-    );
+    println!("[BUGFIX_REPRO_TRACE] D cursor_owner_epoch 已删除（光标与正文解耦）");
 }
 
 // =========================================================================
@@ -309,26 +312,21 @@ fn issue705_repro_d_click_at_does_not_release_text_transaction_cursor_ownership(
 /// 相关标识符。断言"应存在某种所有权机制"在当前代码上 FAIL → 复现成功。
 #[test]
 fn issue705_repro_e_no_cursor_owner_epoch_mechanism_exists_anywhere() {
-    // Issue #747: animation_coordinator.rs 拆分后，cursor_owner_epoch 机制分布在各子模块。
-    // 检查 animation 模块和 editing.rs 中是否存在 cursor owner epoch 机制。
-    let coord = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    let editing = read_src("src/sujian_editor_item/editing.rs");
-    let combined = format!("{}\n{}", coord, editing);
-    let has_mechanism = has_cursor_owner_epoch_guard(&combined);
-    println!(
-        "[BUGFIX_REPRO_TRACE] E whole module has_cursor_owner_epoch_mechanism: {}",
-        has_mechanism
-    );
+    // Issue #826/#901: cursor_owner_epoch 机制已随光标与正文动画彻底解耦而删除。
+    // 旧缺陷的根本前提——正文事务驱动 caret progress——已不存在。
+    // cursor_motion.rs 已删除，光标由独立的 CursorController timeline 推进。
+    let motion_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
     assert!(
-        has_mechanism,
-        "Issue #705 评论 5717380886 复现 E: 整个 sujian_editor_item 模块当前完全 \
-         不存在任何 cursor owner epoch / 光标所有权机制。click_at 无法通知 \
-         coordinator 正文事务已不再拥有当前 caret,find_cursor_transaction_for_target \
-         / compute_coordinated_cursor_position / build_render_plan_full 也无法在 \
-         抢回光标前检查所有权。这是\"活动正文事务无条件抢回光标所有权\"的 \
-         根因。修复:引入 cursor owner epoch(或等价所有权机制),click_at 时 \
-         bump,抢回光标前检查。"
+        !motion_path.exists(),
+        "cursor_motion.rs 已删除，旧协同光标采样链不得复活"
     );
+    let ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
+    assert!(
+        ctrl.contains("fn tick_animation(&mut self, frame_now: Instant)"),
+        "光标由独立 CursorController::tick_animation(frame_now) 推进"
+    );
+    println!("[BUGFIX_REPRO_TRACE] E cursor_owner_epoch 已删除，光标独立 timeline");
 }
 
 // =========================================================================

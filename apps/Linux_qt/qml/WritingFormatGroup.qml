@@ -9,11 +9,16 @@
 //   - 只发出信号，不直接修改 backend，所有设置变更交给 EditorController；
 //   - 同步 / 搜索 / 设置 不在这里，归 ToolbarTrailing 的 GlobalTopActions；
 //   - 使用 DesignTokens 统一样式，禁止硬编码颜色 / 间距。
+//
+// Issue #900：视觉迁移到 Breeze Controls（ToolButton / Slider / TextField / Switch /
+//   Popup）+ Kirigami.Theme / Kirigami.Units。字号输入框字号提交逻辑、弹层互斥逻辑、
+//   信号与全部属性签名保持不变。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -65,265 +70,119 @@ Rectangle {
     // WritingWorkbenchToolbar 统一画，这里保持透明。
     color: "transparent"
 
-    implicitHeight: 48
+    implicitHeight: Kirigami.Units.gridUnit * 2.6
 
     RowLayout {
         anchors.fill: parent
-        spacing: dt.sp4
+        spacing: Kirigami.Units.smallSpacing
 
         // Font button (triggers popover)
-        Rectangle {
-            Layout.preferredWidth: fontRow.implicitWidth + dt.sp12
-            Layout.preferredHeight: 32
-            radius: dt.radiusPill
-            color: fontPopover.visible || fontHover.containsMouse ?
-                   dt.primaryContainer : "transparent"
-
-            Row {
-                id: fontRow
-                anchors.centerIn: parent
-                spacing: dt.sp4
-                AppText {
-                    dt: root.dt
-                    text: "A"
-                    color: dt.textSecondary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                    font.weight: Font.Bold
-                }
-                AppText {
-                    dt: root.dt
-                    text: Math.round(root.currentFontSize) + "px"
-                    color: dt.textPrimary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                }
-                AppText {
-                    dt: root.dt
-                    text: "\u25BE"
-                    color: dt.textSecondary
-                    font.pointSize: dt.fontXsPt
-                }
-            }
-
-            MouseArea {
-                id: fontHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    if (fontPopover.visible) fontPopover.close(); else fontPopover.open();
-                    lineSpacingPopover.close();
-                    layoutPopover.close();
-                }
+        ToolButton {
+            id: fontButton
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            text: "A " + Math.round(root.currentFontSize) + " px"
+            icon.name: "draw-text"
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
+            display: AbstractButton.TextBesideIcon
+            highlighted: fontPopover.visible
+            onClicked: {
+                if (fontPopover.visible) fontPopover.close(); else fontPopover.open();
+                lineSpacingPopover.close();
+                layoutPopover.close();
             }
         }
 
         // Line Spacing button (triggers lineSpacingPopover)
-        Rectangle {
-            Layout.preferredWidth: spacingRow.implicitWidth + dt.sp12
-            Layout.preferredHeight: 32
-            radius: dt.radiusPill
-            color: lineSpacingPopover.visible || spacingHover.containsMouse ?
-                   dt.primaryContainer : "transparent"
-
-            Row {
-                id: spacingRow
-                anchors.centerIn: parent
-                spacing: dt.sp4
-                AppText {
-                    dt: root.dt
-                    text: "\u2630"
-                    color: dt.textSecondary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                }
-                AppText {
-                    dt: root.dt
-                    text: Number(root.currentLineSpacing).toFixed(1) + "x"
-                    color: dt.textPrimary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                }
-                AppText {
-                    dt: root.dt
-                    text: "\u25BE"
-                    color: dt.textSecondary
-                    font.pointSize: dt.fontXsPt
-                }
-            }
-
-            MouseArea {
-                id: spacingHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    if (lineSpacingPopover.visible) lineSpacingPopover.close(); else lineSpacingPopover.open();
-                    fontPopover.close();
-                    layoutPopover.close();
-                }
+        ToolButton {
+            id: spacingButton
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            text: Number(root.currentLineSpacing).toFixed(1) + "×"
+            icon.name: "format-line-spacing-normal"
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
+            display: AbstractButton.TextBesideIcon
+            highlighted: lineSpacingPopover.visible
+            onClicked: {
+                if (lineSpacingPopover.visible) lineSpacingPopover.close(); else lineSpacingPopover.open();
+                fontPopover.close();
+                layoutPopover.close();
             }
         }
 
         // Paragraph Layout button (triggers layoutPopover)
-        Rectangle {
-            Layout.preferredWidth: layoutRow.implicitWidth + dt.sp12
-            Layout.preferredHeight: 32
-            radius: dt.radiusPill
-            color: layoutPopover.visible || layoutHover.containsMouse ?
-                   dt.primaryContainer : "transparent"
-
-            Row {
-                id: layoutRow
-                anchors.centerIn: parent
-                spacing: dt.sp4
-                AppText {
-                    dt: root.dt
-                    text: "\u21E5"
-                    color: dt.textSecondary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                    font.weight: Font.Bold
-                }
-                AppText {
-                    dt: root.dt
-                    text: qsTr("段落")
-                    color: dt.textPrimary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                }
-                AppText {
-                    dt: root.dt
-                    text: "\u25BE"
-                    color: dt.textSecondary
-                    font.pointSize: dt.fontXsPt
-                }
-            }
-
-            MouseArea {
-                id: layoutHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    if (layoutPopover.visible) layoutPopover.close(); else layoutPopover.open();
-                    fontPopover.close();
-                    lineSpacingPopover.close();
-                }
+        ToolButton {
+            id: layoutButton
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            text: qsTr("段落")
+            icon.name: "format-justify-left"
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
+            display: AbstractButton.TextBesideIcon
+            highlighted: layoutPopover.visible
+            onClicked: {
+                if (layoutPopover.visible) layoutPopover.close(); else layoutPopover.open();
+                fontPopover.close();
+                lineSpacingPopover.close();
             }
         }
 
         // Format button
-        Rectangle {
-            visible: true
-            Layout.preferredWidth: formatRow.implicitWidth + dt.sp12
-            Layout.preferredHeight: 32
-            radius: dt.radiusPill
-            color: formatHover.containsMouse ? dt.surfaceVariant : "transparent"
-            border.color: dt.border
-            border.width: 1
-
-            Row {
-                id: formatRow
-                anchors.centerIn: parent
-                spacing: dt.sp4
-                AppText {
-                    dt: root.dt
-                    text: qsTr("一键排版")
-                    color: dt.textSecondary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                }
-            }
-
-            MouseArea {
-                id: formatHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.formatOneClick()
-            }
+        ToolButton {
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            text: qsTr("一键排版")
+            icon.name: "format-text-bold"
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
+            display: AbstractButton.TextBesideIcon
+            onClicked: root.formatOneClick()
         }
 
         Item { Layout.fillWidth: true }
 
         // Save status
-        AppText {
-            dt: root.dt
+        Label {
             text: root.saveStatus || ""
-            color: dt.textSecondary
-            font.pointSize: dt.captionPt
-            font.family: dt.fontFamily
+            color: Kirigami.Theme.disabledTextColor
             visible: text !== ""
+            elide: Text.ElideRight
             Layout.alignment: Qt.AlignVCenter
         }
-
     }
 
     // === Font Size Popover ===
     Popup {
         id: fontPopover
-        y: root.height + dt.sp8
+        y: root.height + Kirigami.Units.smallSpacing
         x: 60
-        width: 200
-        padding: dt.sp12
+        width: Kirigami.Units.gridUnit * 12
+        padding: Kirigami.Units.largeSpacing
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
-        background: Rectangle {
-            radius: dt.radiusXl
-            color: dt.surface
-            border.color: dt.border
-            border.width: 1
-        }
 
         contentItem: ColumnLayout {
-            spacing: dt.sp12
+            spacing: Kirigami.Units.smallSpacing
 
-            AppText {
-                dt: root.dt
+            Kirigami.Heading {
+                level: 4
                 text: qsTr("字号")
-                color: dt.textPrimary
-                font.pointSize: dt.subtitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.DemiBold
             }
 
             // Quick presets
             Flow {
                 Layout.fillWidth: true
-                spacing: dt.sp6
+                spacing: Kirigami.Units.smallSpacing
 
                 Repeater {
                     model: [12, 14, 16, 18, 20, 24]
 
-                    Rectangle {
-                        width: 40; height: 32
-                        radius: dt.radiusPill
-                        color: Math.round(root.currentFontSize) === modelData ?
-                               dt.primaryContainer :
-                               presetHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                        AppText {
-                            dt: root.dt
-                            anchors.centerIn: parent
-                            text: modelData
-                            color: Math.round(root.currentFontSize) === modelData ?
-                                   dt.selectedText :
-                                   dt.textSecondary
-                            font.pointSize: dt.labelPt
-                            font.family: dt.fontFamily
-                            font.weight: Math.round(root.currentFontSize) === modelData ? Font.DemiBold : Font.Normal
-                        }
-
-                        MouseArea {
-                            id: presetHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                root.fontSizeChanged(modelData)
-                                fontPopover.close()
-                            }
+                    Button {
+                        implicitWidth: Kirigami.Units.gridUnit * 2
+                        text: modelData
+                        flat: true
+                        highlighted: Math.round(root.currentFontSize) === modelData
+                        onClicked: {
+                            root.fontSizeChanged(modelData)
+                            fontPopover.close()
                         }
                     }
                 }
@@ -332,19 +191,16 @@ Rectangle {
             // Slider
             RowLayout {
                 Layout.fillWidth: true
-                spacing: dt.sp8
+                spacing: Kirigami.Units.smallSpacing
 
-                AppText {
-                    dt: root.dt
+                Label {
                     text: "10"
-                    color: dt.textMuted
-                    font.pointSize: dt.fontXsPt
+                    color: Kirigami.Theme.disabledTextColor
                 }
 
-                AppSlider {
+                Slider {
                     id: fontSlider
                     Layout.fillWidth: true
-                    dt: root.dt
                     from: root.minFontSize
                     to: root.maxFontSize
                     stepSize: 1
@@ -352,53 +208,32 @@ Rectangle {
                     onMoved: root.fontSizeChanged(value)
                 }
 
-                AppText {
-                    dt: root.dt
+                Label {
                     text: "72"
-                    color: dt.textMuted
-                    font.pointSize: dt.fontXsPt
+                    color: Kirigami.Theme.disabledTextColor
                 }
             }
 
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
-                spacing: dt.sp6
+                spacing: Kirigami.Units.smallSpacing
 
                 TextField {
                     id: fontSizeInput
-                    Layout.preferredWidth: 68
-                    Layout.preferredHeight: 34
+                    Layout.preferredWidth: Kirigami.Units.gridUnit * 4
                     text: Math.round(root.currentFontSize).toString()
                     horizontalAlignment: TextInput.AlignHCenter
                     selectByMouse: true
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: root.minFontSize; top: root.maxFontSize }
-                    color: dt.textPrimary
-                    selectionColor: dt.primary
-                    selectedTextColor: dt.onPrimary
-                    font.pointSize: dt.bodyPt
-                    font.family: dt.fontFamily
-                    leftPadding: dt.sp8
-                    rightPadding: dt.sp8
-                    topPadding: dt.sp4
-                    bottomPadding: dt.sp4
                     onTextEdited: root.commitFontSizeInput(false)
                     onAccepted: root.commitFontSizeInput(true)
                     onEditingFinished: root.commitFontSizeInput(true)
-                    background: Rectangle {
-                        color: dt.surfaceContainerLow
-                        border.color: fontSizeInput.activeFocus ? dt.primary : dt.border
-                        border.width: fontSizeInput.activeFocus ? 2 : 1
-                        radius: dt.radiusMd
-                    }
                 }
 
-                AppText {
-                    dt: root.dt
+                Label {
                     text: "px"
-                    color: dt.textSecondary
-                    font.pointSize: dt.fontSmPt
-                    font.family: dt.fontFamily
+                    color: Kirigami.Theme.disabledTextColor
                     Layout.alignment: Qt.AlignVCenter
                 }
             }
@@ -408,69 +243,36 @@ Rectangle {
     // === Line Spacing Popover ===
     Popup {
         id: lineSpacingPopover
-        y: root.height + dt.sp8
+        y: root.height + Kirigami.Units.smallSpacing
         x: 100
-        width: 200
-        padding: dt.sp12
+        width: Kirigami.Units.gridUnit * 12
+        padding: Kirigami.Units.largeSpacing
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
-        background: Rectangle {
-            radius: dt.radiusXl
-            color: dt.surface
-            border.color: dt.border
-            border.width: 1
-        }
 
         contentItem: ColumnLayout {
-            spacing: dt.sp12
+            spacing: Kirigami.Units.smallSpacing
 
-            AppText {
-                dt: root.dt
+            Kirigami.Heading {
+                level: 4
                 text: qsTr("行距倍数")
-                color: dt.textPrimary
-                font.pointSize: dt.subtitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.DemiBold
             }
 
             // Quick presets
             Flow {
                 Layout.fillWidth: true
-                spacing: dt.sp6
+                spacing: Kirigami.Units.smallSpacing
 
                 Repeater {
                     model: [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
-                    Rectangle {
-                        width: 40; height: 32
-                        radius: dt.radiusPill
-                        color: Math.abs(root.currentLineSpacing - modelData) < 0.01 ?
-                               dt.primaryContainer :
-                               lineSpacingHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                        AppText {
-                            dt: root.dt
-                            anchors.centerIn: parent
-                            text: Number(modelData).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")
-                            color: Math.abs(root.currentLineSpacing - modelData) < 0.01 ?
-                                   dt.selectedText :
-                                   dt.textSecondary
-                            font.pointSize: dt.labelPt
-                            font.family: dt.fontFamily
-                            font.weight: Math.abs(root.currentLineSpacing - modelData) < 0.01 ? Font.DemiBold : Font.Normal
-                        }
-
-                        MouseArea {
-                            // Issue #830：字号预设用 presetHover，行距预设改用独立 id。
-                            // 两个 preset Repeater 的 delegate 在同一文件里，同名 id 会触发
-                            // qmllint 的 syntax.duplicate-ids 错误，挡住 required 属性门禁。
-                            id: lineSpacingHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                root.lineSpacingChanged(modelData)
-                                lineSpacingPopover.close()
-                            }
+                    Button {
+                        implicitWidth: Kirigami.Units.gridUnit * 2
+                        text: Number(modelData).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")
+                        flat: true
+                        highlighted: Math.abs(root.currentLineSpacing - modelData) < 0.01
+                        onClicked: {
+                            root.lineSpacingChanged(modelData)
+                            lineSpacingPopover.close()
                         }
                     }
                 }
@@ -479,19 +281,16 @@ Rectangle {
             // Slider
             RowLayout {
                 Layout.fillWidth: true
-                spacing: dt.sp8
+                spacing: Kirigami.Units.smallSpacing
 
-                AppText {
-                    dt: root.dt
+                Label {
                     text: "1.0"
-                    color: dt.textMuted
-                    font.pointSize: dt.fontXsPt
+                    color: Kirigami.Theme.disabledTextColor
                 }
 
-                AppSlider {
+                Slider {
                     id: lineSpacingSlider
                     Layout.fillWidth: true
-                    dt: root.dt
                     from: 1.0
                     to: 3.0
                     stepSize: 0.1
@@ -499,19 +298,15 @@ Rectangle {
                     onMoved: root.lineSpacingChanged(value)
                 }
 
-                AppText {
-                    dt: root.dt
+                Label {
                     text: "3.0"
-                    color: dt.textMuted
-                    font.pointSize: dt.fontXsPt
+                    color: Kirigami.Theme.disabledTextColor
                 }
             }
 
-            AppText {
-                dt: root.dt
+            Label {
                 text: Number(root.currentLineSpacing).toFixed(1) + " x"
-                color: dt.textSecondary
-                font.pointSize: dt.fontSmPt
+                color: Kirigami.Theme.disabledTextColor
                 Layout.alignment: Qt.AlignHCenter
             }
         }
@@ -520,28 +315,18 @@ Rectangle {
     // === Layout Popover ===
     Popup {
         id: layoutPopover
-        y: root.height + dt.sp8
+        y: root.height + Kirigami.Units.smallSpacing
         x: 180
-        width: 240
-        padding: dt.sp12
+        width: Kirigami.Units.gridUnit * 14
+        padding: Kirigami.Units.largeSpacing
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
-        background: Rectangle {
-            radius: dt.radiusXl
-            color: dt.surface
-            border.color: dt.border
-            border.width: 1
-        }
 
         contentItem: ColumnLayout {
-            spacing: dt.sp12
+            spacing: Kirigami.Units.smallSpacing
 
-            AppText {
-                dt: root.dt
+            Kirigami.Heading {
+                level: 4
                 text: qsTr("段落设置")
-                color: dt.textPrimary
-                font.pointSize: dt.subtitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.DemiBold
             }
 
             // Issue #833：删除编辑器绝对宽度 widthSlider UI 及对
@@ -549,32 +334,32 @@ Rectangle {
             // 不应再作为格式工具条里的用户设置去反向控制 Workbench 几何。
 
             // Divider
-            Rectangle { Layout.fillWidth: true; height: 1; color: dt.border }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Kirigami.Theme.disabledTextColor
+                opacity: 0.3
+            }
 
             // First line indent
             RowLayout {
                 Layout.fillWidth: true
-                spacing: dt.sp8
+                spacing: Kirigami.Units.smallSpacing
 
                 Column {
                     Layout.fillWidth: true
                     spacing: 2
-                    AppText {
-                        dt: root.dt
+                    Label {
                         text: qsTr("首行缩进")
-                        color: dt.textPrimary
-                        font.pointSize: dt.fontMdPt
+                        color: Kirigami.Theme.textColor
                     }
-                    AppText {
-                        dt: root.dt
+                    Label {
                         text: qsTr("段落开头缩进两个字符")
-                        color: dt.textMuted
-                        font.pointSize: dt.fontXsPt
+                        color: Kirigami.Theme.disabledTextColor
                     }
                 }
 
-                ModernSwitch {
-                    dt: root.dt
+                Switch {
                     checked: root.firstLineIndent
                     onToggled: root.firstLineIndentToggled()
                 }

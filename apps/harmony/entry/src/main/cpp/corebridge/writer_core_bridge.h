@@ -34,16 +34,24 @@ void    writer_core_free_string(char* ptr);
 
 // ── Diagnostics Init ──
 // writer_core_init_diagnostics: Initialize diagnostics backend. Returns 0 on success,
-//   -1 if any argument is null, -2 if any argument contains invalid UTF-8.
-//   session_id is generated inside Rust (uuid v4); enabled/verbose default to true.
+//   -1 if any argument is null, -2 if any argument contains invalid UTF-8,
+//   -3 if local settings could not be read/parsed.
+//   session_id is generated inside Rust (uuid v4); enabled/verbose are read from the
+//   Core LocalSettings under app_data_root (settings.local.json), not hardcoded.
 //   Idempotent: repeated calls have no side effect.
-int32_t writer_core_init_diagnostics(const char* log_dir, const char* device_id, const char* app_version, const char* build_key, const char* locale, const char* timezone);
+int32_t writer_core_init_diagnostics(const char* log_dir, const char* app_data_root, const char* device_id, const char* app_version, const char* build_key, const char* locale, const char* timezone);
 
 // ── Diagnostics operations ──
 int32_t writer_core_set_diagnostics_config(int32_t enabled, int32_t verbose);
 int32_t writer_core_flush_diagnostics(void);
 int32_t writer_core_clear_diagnostics(void);
 char*  writer_core_export_diagnostics(const char* output_dir, const char* attachments_json);
+// writer_core_record_diagnostic_event_json: Record one structured diagnostic event.
+//   payload_json is a NUL-terminated UTF-8 JSON string with fields
+//   { level, origin, event, target, message?, fields:[{key,value}] }.
+//   Returns 0 on success, -1 null pointer, -2 invalid UTF-8, -3 JSON parse failure,
+//   -4 if the core failed to record the event (defensive; not expected today).
+int32_t writer_core_record_diagnostic_event_json(const char* payload_json);
 
 // ── Layout Contract（#610 / #753） ──
 // writer_core_resolve_layout: Input/output are JSON strings (ResultEnvelope<LayoutContract>).

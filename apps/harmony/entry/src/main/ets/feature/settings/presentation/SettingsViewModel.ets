@@ -124,7 +124,6 @@ export class SettingsViewModel {
   @Trace syncConfig: SyncConfig | null = null
   @Trace syncToken: string = ''
   @Trace syncRemoteUrl: string = ''
-  @Trace syncBranch: string = ''
   @Trace isLoading: boolean = true
   @Trace isSaving: boolean = false
   @Trace isSyncing: boolean = false
@@ -178,6 +177,11 @@ export class SettingsViewModel {
 
       if (settingsResult.success && settingsResult.data) {
         this.settings = settingsResult.data
+        // Issue #911：启动时 EntryAbility.initDiagnostics 已按这份 Core 设置启动了诊断后端，
+        // 所以这里把 lastSynced 记为这份真实值，作为后续 saveSettings 的变化基线。
+        // settingsResult 失败时（读取失败）绝不更新 lastSynced，也不把 UI 占位 DTO 下发底层。
+        this.lastSyncedDiagnosticsEnabled = settingsResult.data.diagnosticsEnabled
+        this.lastSyncedDiagnosticsVerbose = settingsResult.data.diagnosticsVerbose
         const appearanceMode = settingsResult.data.appearanceMode || settingsResult.data.themeMode || 'system'
         this.themeAdapter.updateFromLocalSettings(
           appearanceMode,
@@ -198,24 +202,11 @@ export class SettingsViewModel {
         // 回填 UI 可观察字段
         if (syncConfigResult.data.providerConfig) {
           this.syncRemoteUrl = syncConfigResult.data.providerConfig.remote_url
-          this.syncBranch = syncConfigResult.data.providerConfig.branch
         }
       }
 
       // 加载同步密钥，回填 token
       await this.loadSyncSecrets()
-
-      // 加载设置后，把当前诊断配置同步一次到底层 runtime。
-      try {
-        await this.bridge.setDiagnosticsConfig(
-          this.settings.diagnosticsEnabled,
-          this.settings.diagnosticsVerbose
-        )
-        this.lastSyncedDiagnosticsEnabled = this.settings.diagnosticsEnabled
-        this.lastSyncedDiagnosticsVerbose = this.settings.diagnosticsVerbose
-      } catch (_e) {
-        hilog.warn(DOMAIN, TAG, 'setDiagnosticsConfig failed on load')
-      }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to load settings: ${err}`)
     } finally {
@@ -246,6 +237,22 @@ export class SettingsViewModel {
         const persisted = await this.bridge.getLocalSettings()
         if (persisted.success && persisted.data) {
           LocalSettingsStore.getInstance().publish(persisted.data)
+          // Issue #911：诊断开关只在 Core 真正落盘、且重新读回成功后，才比较读回的持久化值
+          // 与上次同步值；this.settings 是 UI 还在原地编辑的对象，不能当"已落盘真相"。
+          const persistedEnabled: boolean = persisted.data.diagnosticsEnabled
+          const persistedVerbose: boolean = persisted.data.diagnosticsVerbose
+          if (persistedEnabled !== this.lastSyncedDiagnosticsEnabled ||
+            persistedVerbose !== this.lastSyncedDiagnosticsVerbose) {
+            // setDiagnosticsConfig 返回 ResultEnvelope；success:false 不等于抛异常，
+            // 不能照旧宣称已同步，只有 success 才更新 lastSynced。
+            const syncResult = await this.bridge.setDiagnosticsConfig(persistedEnabled, persistedVerbose)
+            if (syncResult.success) {
+              this.lastSyncedDiagnosticsEnabled = persistedEnabled
+              this.lastSyncedDiagnosticsVerbose = persistedVerbose
+            } else {
+              hilog.warn(DOMAIN, TAG, `setDiagnosticsConfig failed on save: ${syncResult.errorCode || 'unknown'}`)
+            }
+          }
         }
         const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
         this.themeAdapter.updateFromLocalSettings(
@@ -260,21 +267,6 @@ export class SettingsViewModel {
           fontFamily: 'HarmonyOS Sans',
           lineHeight: this.settings.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
-
-        // 如果诊断配置有变化，同步到 runtime。
-        if (this.settings.diagnosticsEnabled !== this.lastSyncedDiagnosticsEnabled ||
-          this.settings.diagnosticsVerbose !== this.lastSyncedDiagnosticsVerbose) {
-          try {
-            await this.bridge.setDiagnosticsConfig(
-              this.settings.diagnosticsEnabled,
-              this.settings.diagnosticsVerbose
-            )
-            this.lastSyncedDiagnosticsEnabled = this.settings.diagnosticsEnabled
-            this.lastSyncedDiagnosticsVerbose = this.settings.diagnosticsVerbose
-          } catch (_e) {
-            hilog.warn(DOMAIN, TAG, 'setDiagnosticsConfig failed on save')
-          }
-        }
       } else {
         this.saveMessage = `error:${result.errorCode || 'unknown'}`
       }
@@ -410,42 +402,19 @@ export class SettingsViewModel {
   updateSyncRemoteUrl(value: string): void {
     this.syncRemoteUrl = value
     if (this.syncConfig) {
-      const providerConfig: ProviderConfig = this.syncConfig.providerConfig ?? {
+      // providerConfig 缺失时新建，branch 沿用已有值（拿不到时回落 'main'），
+      // 不再由用户在设置页手输；已有 providerConfig 只更新 remote_url。
+      // 注意：必须在创建新对象前先读取旧 branch，避免在 ?? 表达式右侧访问已被收窄的类型。
+      const existingProviderConfig: ProviderConfig | null = this.syncConfig.providerConfig
+      const previousBranch: string = existingProviderConfig ? existingProviderConfig.branch : 'main'
+      const providerConfig: ProviderConfig = existingProviderConfig ?? {
         type: 'github',
         remote_url: value,
-        branch: this.syncBranch,
+        branch: previousBranch,
         username: '',
         transport: 'https_token'
       }
       providerConfig.remote_url = value
-      const newConfig: SyncConfig = {
-        enabled: this.syncConfig.enabled,
-        activeProvider: 'github_api',
-        providerConfig: providerConfig,
-        autoSync: this.syncConfig.autoSync,
-        syncIntervalSeconds: this.syncConfig.syncIntervalSeconds,
-        hasNetworkPermission: this.syncConfig.hasNetworkPermission,
-        hasNetworkStatePermission: this.syncConfig.hasNetworkStatePermission
-      }
-      this.syncConfig = newConfig
-      this.saveSyncConfig()
-    }
-  }
-
-  /**
-   * 更新分支，修改 providerConfig.branch，然后保存。
-   */
-  updateSyncBranch(value: string): void {
-    this.syncBranch = value
-    if (this.syncConfig) {
-      const providerConfig: ProviderConfig = this.syncConfig.providerConfig ?? {
-        type: 'github',
-        remote_url: this.syncRemoteUrl,
-        branch: value,
-        username: '',
-        transport: 'https_token'
-      }
-      providerConfig.branch = value
       const newConfig: SyncConfig = {
         enabled: this.syncConfig.enabled,
         activeProvider: 'github_api',

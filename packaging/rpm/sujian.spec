@@ -17,10 +17,15 @@ Source0:        %{name}-%{version}.tar.gz
 
 # 构建依赖：Qt 6.7+ 开发包 + Rust 工具链 + 基础构建工具
 BuildRequires:  qt6-qtbase-devel >= 6.7
-# QtQuick/Controls 与 QtQuick.Controls.Material 由 qt6-qtdeclarative 提供，
+# QtQuick/Controls 由 qt6-qtdeclarative 提供，
 # Fedora 没有独立的 qt6-qtquickcontrols2(-devel) 包，不要写这条。
+# Issue #900：界面迁移到 KDE Kirigami 6 + Breeze + Kirigami Addons，
+# QML 模块属于运行时资源，无需额外 BuildRequires，见下方 Requires。
 BuildRequires:  qt6-qtdeclarative-devel >= 6.7
 BuildRequires:  qt6-qttools-devel
+# Issue #912：KDE 应用配色方案切换桥（KColorSchemeManager）需要 KF6 ColorScheme
+# 头文件与链接库，该包不提供 pkg-config，构建脚本按头文件目录探测。
+BuildRequires:  kf6-kcolorscheme-devel
 BuildRequires:  rust
 BuildRequires:  cargo
 BuildRequires:  gcc-c++
@@ -39,6 +44,20 @@ Requires:       qt6-qtdeclarative >= 6.7
 # 用户未安装 fcitx5 时不强制拉入，Wayland 原生 text-input 协议仍可用。
 Requires:       qt6-qtwayland
 Recommends:     fcitx5-qt6
+
+# Issue #900：全面采用 KDE 官方组件体系。UI 使用 Kirigami 6 + Kirigami
+# Addons 的 QML 模块，控件风格与图标依赖 Breeze。这些是运行硬依赖。
+Requires:       kf6-kirigami >= 6.0
+Requires:       kf6-kirigami-addons >= 1.0
+# Issue #912：二进制链接 libKF6ColorScheme.so.6（KColorSchemeManager 桥），
+# 需要运行时库；通常随 kf6-kirigami 引入，这里显式声明避免构建环境差异。
+Requires:       kf6-kcolorscheme
+# Issue #912：桥固定使用 BreezeDark/BreezeLight，这两个配色文件由
+# plasma-breeze-common 提供（kf6-kcolorscheme / qqc2-breeze-style 都不含），
+# 否则手动深/浅色查不到方案而失效。
+Requires:       plasma-breeze-common
+Requires:       qqc2-breeze-style
+Requires:       breeze-icon-theme
 
 %description
 素笺写作是一款跨平台写作软件，Linux 端基于 Qt 6.7+ Quick 和自研文本渲染。
@@ -95,6 +114,9 @@ install -Dpm 0644 packaging/rpm/io.github.Xiwei753.Sujian.metainfo.xml \
 %{_datadir}/metainfo/io.github.Xiwei753.Sujian.metainfo.xml
 
 %changelog
+* Thu Oct 15 2026 Xiwei753 <xiwei753@users.noreply.github.com> - 0.1.0-1
+- 界面全面迁移到 KDE Kirigami 6 + Breeze + Kirigami Addons（Issue #900）
+- 新增运行依赖：kf6-kirigami、kf6-kirigami-addons、qqc2-breeze-style、breeze-icon-theme
 * Thu Sep 10 2026 Xiwei753 <xiwei753@users.noreply.github.com> - 0.1.0-1
 - Initial RPM package for 素笺写作 0.1.0
 - Linux Qt 6.7+ 前端，依赖系统 Qt，不捆绑运行时

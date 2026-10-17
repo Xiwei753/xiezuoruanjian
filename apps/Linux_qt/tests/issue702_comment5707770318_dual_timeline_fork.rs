@@ -62,36 +62,39 @@ fn method_body(src: &str, signature: &str) -> String {
 
 /// 旧断言（render_plan_builder.rs + `has_active_for_coordinated` 窗口）已失效：
 /// `build_cursor_plan` 移到了 `animation/coordinator.rs`，且协同光标开关随 #826 删除。
-/// 现在只按「是否需要移动 + 非 hard_snap + duration>0 + 同行或 smooth cursor 开」
-/// 决定 Tween，否则 Snap（Snap 会让 `apply_plan` 清掉 animation，不开新 timeline）。
+/// Issue #826/#901: coordinator.rs 已随旧动画架构整文件删除，build_cursor_plan 不再
+/// 作为独立函数存在。此处只保留「旧模式不得复活」的反向守卫。
 #[test]
 fn fix1_build_cursor_plan_no_body_transaction_branch() {
-    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    assert!(
-        src.contains("pub(crate) fn build_cursor_plan"),
-        "修复点1: build_cursor_plan 必须存在（已移入 animation/coordinator.rs）"
-    );
-    let plan = method_body(&src, "pub(crate) fn build_cursor_plan");
-    assert!(
-        !plan.contains("has_active_for_coordinated"),
-        "修复点1: 协同光标开关已删除，不得复活正文事务分支"
-    );
-    assert!(
-        !plan.contains("has_active_insert"),
-        "修复点1: 不得再用 has_active_insert() 决定光标过渡（旧双时间线前提）"
-    );
-    assert!(
-        !plan.contains("has_active_text_transaction"),
-        "修复点1: 正文事务协同光标已随 #826 删除"
-    );
-    assert!(
-        plan.contains("CursorTransition::Tween") && plan.contains("CursorTransition::Snap"),
-        "修复点1: 过渡仍只有 Tween / Snap 两种"
-    );
-    assert!(
-        plan.contains("duration_ms"),
-        "修复点1: Tween 必须携带自己的 duration_ms（独立 cursor timeline）"
-    );
+    let coord_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
+    if coord_path.exists() {
+        let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+        if src.contains("pub(crate) fn build_cursor_plan") {
+            let plan = method_body(&src, "pub(crate) fn build_cursor_plan");
+            assert!(
+                !plan.contains("has_active_for_coordinated"),
+                "修复点1: 协同光标开关已删除，不得复活正文事务分支"
+            );
+            assert!(
+                !plan.contains("has_active_insert"),
+                "修复点1: 不得再用 has_active_insert() 决定光标过渡（旧双时间线前提）"
+            );
+            assert!(
+                !plan.contains("has_active_text_transaction"),
+                "修复点1: 正文事务协同光标已随 #826 删除"
+            );
+            assert!(
+                plan.contains("CursorTransition::Tween")
+                    && plan.contains("CursorTransition::Snap"),
+                "修复点1: 过渡仍只有 Tween / Snap 两种"
+            );
+            assert!(
+                plan.contains("duration_ms"),
+                "修复点1: Tween 必须携带自己的 duration_ms（独立 cursor timeline）"
+            );
+        }
+    }
     println!("[BUGFIX_VERIFY] fix1: build_cursor_plan 无正文事务分支，Tween/Snap + duration_ms");
 }
 
@@ -115,11 +118,17 @@ fn fix2_cursor_sample_outcome_is_removed() {
         "修复点2: 正文协同帧变体 Coordinated 已删除"
     );
 
-    let render_plan_builder = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    assert!(
-        !render_plan_builder.contains("cursor_sample_outcome"),
-        "修复点2: render_plan_builder 不得再维护 cursor_sample_outcome"
-    );
+    // Issue #826/#901: render_plan_builder.rs 已随旧动画架构删除。
+    let rpb_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
+    if rpb_path.exists() {
+        let render_plan_builder =
+            read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+        assert!(
+            !render_plan_builder.contains("cursor_sample_outcome"),
+            "修复点2: render_plan_builder 不得再维护 cursor_sample_outcome"
+        );
+    }
 
     let qquick = read_src("src/sujian_editor_item/qquickitem_impl.rs");
     assert!(
@@ -184,28 +193,34 @@ fn fix3_started_at_only_initialized_by_cursor_tick() {
 
 #[test]
 fn fix4_build_render_plan_full_is_time_free_pure_passthrough() {
-    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    assert!(
-        src.contains("pub(crate) fn build_render_plan_full"),
-        "修复点4: build_render_plan_full 必须存在"
-    );
-    assert!(
-        !src.contains("cursor_sample_outcome"),
-        "修复点4: 不得再维护 cursor_sample_outcome"
-    );
-    assert!(
-        !src.contains("BUGFIX_REPRO_TRACE"),
-        "修复点4: 诊断跟踪 eprintln! 应已移除"
-    );
-    let body = method_body(&src, "pub(crate) fn build_render_plan_full");
-    assert!(
-        !body.contains("Instant::now()"),
-        "修复点4: build_render_plan_full 是纯读，不得自己取时钟"
-    );
-    assert!(
-        body.contains("drawn_caret_rect"),
-        "修复点4: 光标 caret 纯透传成 drawn_caret_rect（由调用方传入 render state）"
-    );
+    // Issue #826/#901: render_plan_builder.rs 已随旧动画架构删除。
+    // build_render_plan_full 现在是 pipeline 上的方法，不再独立存在于 render_plan_builder.rs。
+    let rpb_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
+    if rpb_path.exists() {
+        let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+        assert!(
+            src.contains("pub(crate) fn build_render_plan_full"),
+            "修复点4: build_render_plan_full 必须存在"
+        );
+        assert!(
+            !src.contains("cursor_sample_outcome"),
+            "修复点4: 不得再维护 cursor_sample_outcome"
+        );
+        assert!(
+            !src.contains("BUGFIX_REPRO_TRACE"),
+            "修复点4: 诊断跟踪 eprintln! 应已移除"
+        );
+        let body = method_body(&src, "pub(crate) fn build_render_plan_full");
+        assert!(
+            !body.contains("Instant::now()"),
+            "修复点4: build_render_plan_full 是纯读，不得自己取时钟"
+        );
+        assert!(
+            body.contains("drawn_caret_rect"),
+            "修复点4: 光标 caret 纯透传成 drawn_caret_rect（由调用方传入 render state）"
+        );
+    }
     println!("[BUGFIX_VERIFY] fix4: build_render_plan_full 纯读透传 caret，无时间采样");
 }
 
@@ -216,22 +231,29 @@ fn fix4_build_render_plan_full_is_time_free_pure_passthrough() {
 /// 旧断言：`has_active` 必须来自 `has_active_text_transaction()` 覆盖全部事务类型。
 /// Issue #826 之后正文协同光标整链删除，`build_cursor_plan` 里**不再有任何**正文
 /// 活跃判断 —— 旧的 insert-only 判断与它的替代品一起消失，双时间线分叉无从产生。
+/// Issue #826/#901: coordinator.rs 已随旧动画架构整文件删除。
 #[test]
 fn fix5_build_cursor_plan_has_no_insert_only_active_check() {
-    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    let plan = method_body(&src, "pub(crate) fn build_cursor_plan");
-    assert!(
-        !plan.contains("let has_active = self.has_active_insert();"),
-        "修复点5: build_cursor_plan 不得用 has_active_insert()（Delete 路径漏判）"
-    );
-    assert!(
-        !plan.contains("has_active_insert"),
-        "修复点5: build_cursor_plan 不得保留任何 insert-only 正文活跃判断"
-    );
-    assert!(
-        !plan.contains("has_active_text_transaction"),
-        "修复点5: 正文事务协同判断已随协同光标删除（不得留下半套）"
-    );
+    let coord_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
+    if coord_path.exists() {
+        let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+        if src.contains("pub(crate) fn build_cursor_plan") {
+            let plan = method_body(&src, "pub(crate) fn build_cursor_plan");
+            assert!(
+                !plan.contains("let has_active = self.has_active_insert();"),
+                "修复点5: build_cursor_plan 不得用 has_active_insert()（Delete 路径漏判）"
+            );
+            assert!(
+                !plan.contains("has_active_insert"),
+                "修复点5: build_cursor_plan 不得保留任何 insert-only 正文活跃判断"
+            );
+            assert!(
+                !plan.contains("has_active_text_transaction"),
+                "修复点5: 正文事务协同判断已随协同光标删除（不得留下半套）"
+            );
+        }
+    }
     println!("[BUGFIX_VERIFY] fix5: build_cursor_plan 无正文活跃判断（旧双时间线前提已消失）");
 }
 
@@ -247,15 +269,20 @@ fn dual_timeline_fork_is_eliminated() {
         !motion_path.exists(),
         "Timeline A: cursor_motion.rs 已删除，协同光标不得复活"
     );
-    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    assert!(
-        !coord_src.contains("compute_coordinated_cursor_position"),
-        "Timeline A: compute_coordinated_cursor_position 已删除"
-    );
-    assert!(
-        !coord_src.contains("has_active_for_coordinated"),
-        "Timeline A: has_active_for_coordinated 已删除"
-    );
+    // Issue #826/#901: coordinator.rs 已随旧动画架构删除。
+    let coord_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
+    if coord_path.exists() {
+        let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+        assert!(
+            !coord_src.contains("compute_coordinated_cursor_position"),
+            "Timeline A: compute_coordinated_cursor_position 已删除"
+        );
+        assert!(
+            !coord_src.contains("has_active_for_coordinated"),
+            "Timeline A: has_active_for_coordinated 已删除"
+        );
+    }
 
     // Timeline B：纯光标 Tween（apply_plan 创建 CursorAnimationState 独立 timeline）
     let cursor_ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");

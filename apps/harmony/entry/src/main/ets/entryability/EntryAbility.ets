@@ -1,18 +1,17 @@
-import { AbilityConstant, UIAbility, Want, wantConstant, Configuration, ConfigurationConstant } from '@kit.AbilityKit'
+import { AbilityConstant, UIAbility, Want, Configuration, ConfigurationConstant } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
 import window from '@ohos.window'
 import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
-import { getAppContext } from '../app/AppContext'
+import { getAppContext, getAppDataRoot } from '../app/AppContext'
 import { getAdaptiveContext } from '../ui/adaptive/AdaptiveContext'
-import { AppContinuationService } from '../platform/continuity/AppContinuationService'
-import { ContinuationPayload } from '../platform/continuity/ContinuationPayload'
-import { NavigationTransactionCoordinator } from '../app/navigation/NavigationTransactionCoordinator'
+import { ContinuationEntrypoint } from '../platform/continuity/ContinuationEntrypoint'
 import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
 import { HarmonyDeviceIdentity } from '../platform/identity/HarmonyDeviceIdentity'
 import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
 import { HarmonyColorModeController } from '../ui/theme/HarmonyColorModeController'
 import { HarmonyCrashEventWatcher } from '../platform/diagnostics/HarmonyCrashEventWatcher'
 import { HarmonyDiagnosticsCheckpoint } from '../platform/diagnostics/HarmonyDiagnosticsCheckpoint'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../platform/diagnostics/HarmonyDiagnosticEvents'
 import { TabletWindowPolicy } from '../platform/window/TabletWindowPolicy'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
@@ -25,11 +24,18 @@ interface BuildIdentity {
 
 export default class EntryAbility extends UIAbility {
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
-  private continuationService: AppContinuationService = AppContinuationService.getInstance()
+  private continuationEntrypoint: ContinuationEntrypoint = ContinuationEntrypoint.getInstance()
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'EntryAbility', 'onCreate')
     getAppContext().setAbilityContext(this.context)
+
+    // Issue #906 评论：共享 Rust diagnostics 必须在记录 ability.created 之前初始化。
+    // writer_diagnostics::enqueue 在 initialized=false 时直接丢弃事件，先 init 再记，
+    // 这条启动事件才会真正进入 JSONL；否则 NAPI/Rust 层返回 0 也落不了盘。
+    // hilog 作为系统实时输出可以在前面；Harmony 起 ArkTS → NAPI → C ABI → Rust。
+    this.initDiagnostics()
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.created', 'EntryAbility', [])
 
     // Issue #767 评论 5831321551：把 UIAbilityContext 注入 HarmonyColorModeController，
     // 使其能在页面 loadContent 后调用 setColorMode 下发用户选择的深浅色模式。
@@ -37,11 +43,6 @@ export default class EntryAbility extends UIAbility {
 
     // Issue #767：首次启动注入当前系统 colorMode，避免一直靠默认值 0 先按亮色启动。
     this.initSystemColorMode()
-
-    // Issue #670 评论 5652500781：共享 Rust diagnostics 必须在应用生命周期通知之前初始化，
-    // 否则 lifecycle/observer 链产生的第一批结构化事件会天然漏掉 create。
-    // hilog 作为系统实时输出可以在前面；Harmony 起 ArkTS → NAPI → C ABI → Rust。
-    this.initDiagnostics()
 
     // Issue #773 评论 5844589231：订阅系统 HiAppEvent 崩溃事件，
     // 在下一次启动时把上一轮 crash fault log 补进 diagnostics/crashes/。
@@ -58,7 +59,7 @@ export default class EntryAbility extends UIAbility {
 
     // 接续恢复：检查 launchReason === CONTINUATION，从 want.parameters 读取 payload。
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
-      this.restoreContinuationFromWant(want)
+      this.continuationEntrypoint.restoreFromWant(want)
     }
   }
 
@@ -81,10 +82,14 @@ export default class EntryAbility extends UIAbility {
   // 失败只记 hilog，不阻塞应用启动。
   // Issue #773 评论 5844589231：logDir 从 cacheDir/log 改为 filesDir/diagnostics/live/log。
   // cacheDir 属于应用私有缓存，文件管理器看不到且系统可清理；filesDir 是持久化目录，进程崩溃后文件仍然存在。
+  // Issue #911：把 appDataRoot 一并下发，Rust 启动时从同一 Core LocalSettings 决定是否启用日志，
+  // 而不是先强开、等用户打开设置页才补关。appDataRoot 此时已是 filesDir/sujian-data
+  // （setAbilityContext 已设置），调用顺序仍是先 initDiagnostics 再 ability.created。
   private initDiagnostics(): void {
     try {
       const filesDir = this.context.filesDir
       const logDir = `${filesDir}/diagnostics/live/log`
+      const appDataRoot = getAppDataRoot()
       const deviceId = HarmonyDeviceIdentity.getOrCreateDeviceId(this.context)
       const identity = this.getBuildIdentity()
       const appVersion = identity.appVersion
@@ -95,10 +100,14 @@ export default class EntryAbility extends UIAbility {
       const locale = i18n.System.getSystemLanguage()
       const timezone = i18n.getTimeZone().getID()
       const result = NativeWriterCoreBridge.getInstance().initDiagnostics(
-        logDir, deviceId, appVersion, buildKey, locale, timezone
+        logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone
       )
       if (result !== 0) {
         hilog.error(0x0000, 'EntryAbility', 'initDiagnostics failed with code %{public}d', result)
+        // Issue #906：init 失败时日志后端未就绪，这条事件大概率落不了盘（enqueue 在未初始化时丢弃），
+        // 仅作 best-effort 记录，不视为已持久化。
+        const resultField: DiagnosticField = { key: 'result', value: String(result) }
+        HarmonyDiagnosticEvents.record('Error', 'App', 'ability.diagnostics_init_failed', 'EntryAbility', [resultField])
       }
     } catch (e) {
       hilog.error(0x0000, 'EntryAbility', 'initDiagnostics exception: %{public}s', String(e))
@@ -133,6 +142,7 @@ export default class EntryAbility extends UIAbility {
   // 避免同一进程里 UIAbility 重建后重复订阅 observer / 重复开 timer / 重复注册 HiAppEvent watcher。
   onDestroy() {
     hilog.info(0x0000, 'EntryAbility', 'onDestroy')
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.destroyed', 'EntryAbility', [])
     HarmonyDiagnosticsCheckpoint.getInstance().destroy()
     HarmonyCrashEventWatcher.getInstance().destroy()
     this.lifecycle.notifyDestroy()
@@ -140,6 +150,8 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageCreate(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageCreate')
+    // Issue #906：窗口舞台创建事件，放在异步 loadContent 之前，保证首帧前就有记录。
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.window_stage_created', 'EntryAbility', [])
 
     // Issue #880：在 loadContent 之前应用平板专用横屏窗口政策。
     // applyTabletWindowPolicy 是异步的，必须 await 完成后再 loadContent，
@@ -167,8 +179,9 @@ export default class EntryAbility extends UIAbility {
 
   // 接续恢复阶段的目标设备窗口初始化：与 onWindowStageCreate 等价的根页面装载。
   // SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用了自动页面栈迁移，这里只装载根页 pages/Index，
-  // AppNavigation 首帧 aboutToAppear 时从 NavigationTransactionCoordinator 消费已交付的接续 payload，
-  // 由 NavigationTransactionCoordinator.restoreFromContinuation 手动重建 NavPathStack。
+  // AppNavigation 在 aboutToAppear 注册恢复回调，由 NavigationTransactionCoordinator 转交
+  // AppNavigation.applyContinuation 手动重建 NavPathStack；回调或 homeStack 未就绪时先暂存，
+  // 待 PrimaryTabShell 注册 homeStack 后由 tryConsumePendingRestore() 消费。
   onWindowStageRestore(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageRestore')
 
@@ -200,11 +213,13 @@ export default class EntryAbility extends UIAbility {
 
   onForeground() {
     hilog.info(0x0000, 'EntryAbility', 'onForeground')
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.foreground', 'EntryAbility', [])
     this.lifecycle.notifyForeground()
   }
 
   onBackground() {
     hilog.info(0x0000, 'EntryAbility', 'onBackground')
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.background', 'EntryAbility', [])
     this.lifecycle.notifyBackground()
   }
 
@@ -225,28 +240,17 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
-  // 应用接续：源设备触发接续时调用。
-  // 从 AppContinuationService.getCurrentPayload() 取 payload 写入 wantParam。
-  // 返回 AGREE 表示同意接续、REJECT 表示拒绝（无 payload 时）。
-  // SUPPORT_CONTINUE_PAGE_STACK_KEY=false：评论明确要求禁用自动页面栈迁移，
-  // Navigation 页面栈不能跨设备自动迁移，由 AppNavigation.restoreFromContinuation 手动重建。
-  // 用官方 wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY 常量，不自己写字符串字面量。
+  // 应用接续：源设备触发接续时调用。委托给 ContinuationEntrypoint，
+  // EntryAbility 仅保留 Ability 生命周期调用。
   onContinue(wantParam: Record<string, Object>): AbilityConstant.OnContinueResult {
-    hilog.info(0x0000, 'EntryAbility', 'onContinue')
-    wantParam[wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY] = false as Object
-    const payload: ContinuationPayload | null = this.continuationService.getCurrentPayload()
-    if (payload !== null) {
-      wantParam['continuationData'] = this.continuationService.serializeForWant(payload)
-      return AbilityConstant.OnContinueResult.AGREE
-    }
-    return AbilityConstant.OnContinueResult.REJECT
+    return this.continuationEntrypoint.onContinue(wantParam)
   }
 
   // 新 want 到达（接续恢复在目标设备的二次入口）。
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'EntryAbility', 'onNewWant')
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
-      this.restoreContinuationFromWant(want)
+      this.continuationEntrypoint.restoreFromWant(want)
     }
   }
 
@@ -262,21 +266,6 @@ export default class EntryAbility extends UIAbility {
       await TabletWindowPolicy.applyTabletWindowPolicy(mainWindow)
     } catch (e) {
       hilog.error(0x0000, 'EntryAbility', 'initWindowPolicy exception: %{public}s', String(e))
-    }
-  }
-
-  // 从 want.parameters 读取接续 payload，交给 AppContinuationService.restoreFromWant() 还原，
-  // 再交 NavigationTransactionCoordinator.restoreFromContinuation() 手动重建 NavPathStack
-  // （SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用了自动页面栈迁移）。
-  private restoreContinuationFromWant(want: Want): void {
-    const parameters: Record<string, Object> | undefined = want.parameters
-    if (parameters === undefined || parameters === null) {
-      return
-    }
-    const restored: ContinuationPayload | null = this.continuationService.restoreFromWant(parameters)
-    if (restored !== null) {
-      hilog.info(0x0000, 'EntryAbility', 'Continuation restored: projectId=%{public}s', restored.projectId ?? '')
-      NavigationTransactionCoordinator.getInstance().restoreFromContinuation(restored)
     }
   }
 }

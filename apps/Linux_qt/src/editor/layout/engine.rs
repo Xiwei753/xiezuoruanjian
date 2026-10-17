@@ -24,7 +24,10 @@ cpp! {{
     // engine 在 qt_cache 之前，需前向声明 qt_cache 定义的 generation cache helper。
     QTextLayout* get_paragraph_layout(uint64_t gen, int slot);
     void set_paragraph_layout_slot_gen(uint64_t gen, int cache_slot, QTextLayout* layout);
+    // Issue #901 第三十轮问题2: deprecated — 空段不再分配物理槽，此函数保留兼容。
     void set_null_paragraph_layout_slot_gen(uint64_t gen, int cache_slot);
+    // Issue #901 第二十九轮复核阻塞1+2: install 是唯一允许写入 layout 的入口。
+    void install_layout_slot_gen(uint64_t gen, int slot, QTextLayout* layout);
 
     // Issue #693 评论 5690222437: 统一 glyphRuns 提取，显式要求
     // RetrieveStringIndexes，确保 stringIndexes() 非空，使吞字/吐字事务
@@ -262,6 +265,9 @@ cpp! {{
         // 对空段落 push_back(nullptr) 的处理一致。这样 cache_slot 与文档段落一一对应，
         // scene_graph_renderer 直接消费 snapshot 中稳定的 slot 不再自行计数。
         // Issue #658 评论 5620035970 问题 2: 用 generation 隔离。
+        // Issue #901 第三十轮问题2: deprecated — 空段不再分配物理槽。
+        // full.rs 中空段不再调用 prepare_paragraph_visual_snapshot（cache_slot 传 -1），
+        // 此分支保留兼容但不应再被触发。set_null_paragraph_layout_slot_gen 也已标注 deprecated。
         if (paraText.isEmpty()) {
             if (cache_slot >= 0) {
                 set_null_paragraph_layout_slot_gen(generation, cache_slot);
@@ -513,8 +519,12 @@ cpp! {{
         // 直接存入 g_layout_generations[generation]，供 rebuild_text_node_from_paragraphs() 消费。
         // 不再排第二遍。如果 cache_slot < 0（不缓存），则销毁 layout 避免泄漏。
         // Issue #658 评论 5620035970 问题 2: 用 generation 隔离。
+        // Issue #901 第二十九轮复核阻塞1+2: 改用 install_layout_slot_gen（唯一允许
+        // 写入 layout 的入口）。install 要求槽已由 acquire_physical_slot_for_generation
+        // 分配（refcount==0, epoch 已设），写入后 refcount=1（Store 初始引用）。
+        // 这样全篇和增量路径统一：acquire(分配槽,refcount=0) → install(写入layout,refcount=1)。
         if (cache_slot >= 0) {
-            set_paragraph_layout_slot_gen(generation, cache_slot, layout);
+            install_layout_slot_gen(generation, cache_slot, layout);
         } else {
             delete layout;
         }

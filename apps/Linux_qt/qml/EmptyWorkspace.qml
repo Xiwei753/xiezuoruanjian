@@ -6,31 +6,21 @@
 // 职责：工作区为空时的引导页面，提示用户创建工作区
 // 约束：
 //   - 纯展示组件，创建操作通过 signal 传递给 main.qml
-//   - 使用 DesignTokens 统一样式
+// Issue #900：视觉迁移到 KDE/Breeze（Controls.Label / Controls.Button /
+// Kirigami.Heading / Kirigami.Icon），颜色与间距统一取 Kirigami.Theme /
+// Kirigami.Units，不再读 DesignTokens 的 M3 字段。
+// 公共 API（workspaceBackendRef / 三个信号）保持不变。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Qt.labs.platform as Platform
+import org.kde.kirigami as Kirigami
 
 Item {
     id: root
     required property var dt
-
-    readonly property color _bg: dt.bg
-    readonly property color _primaryContainer: dt.primaryContainer
-    readonly property color _primary: dt.primary
-    readonly property color _border: dt.border
-    readonly property color _textPrimary: dt.textPrimary
-    readonly property color _textSecondary: dt.textSecondary
-    readonly property int _radiusXs: dt.radiusXs
-    readonly property int _sp8: dt.sp8
-    readonly property int _sp12: dt.sp12
-    readonly property int _sp24: dt.sp24
-    readonly property real _title: dt.titlePt
-    readonly property real _body: dt.bodyPt
-    readonly property string _fontFamily: dt.fontFamily
 
     property var workspaceBackendRef: null
 
@@ -63,53 +53,36 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: _bg
+        color: Kirigami.Theme.backgroundColor
     }
 
     ColumnLayout {
-        spacing: _sp24
+        spacing: Kirigami.Units.largeSpacing
         width: Math.min(parent.width - 80, 480)
         height: implicitHeight
         x: Math.max(0, Math.floor((parent.width - width) / 2))
         y: Math.max(0, Math.floor((parent.height - height) / 2))
 
         // Icon
-        Rectangle {
+        Kirigami.Icon {
             Layout.alignment: Qt.AlignHCenter
-            width: 64; height: 64
-            radius: 32
-            color: _primaryContainer
-            border.color: _border
-            border.width: 1
-
-            Rectangle {
-                anchors.centerIn: parent
-                width: 24; height: 24
-                radius: _radiusXs
-                color: "transparent"
-                border.color: _primary
-                border.width: 2
-            }
+            source: "folder-open"
+            implicitWidth: Kirigami.Units.iconSizes.enormous
+            implicitHeight: Kirigami.Units.iconSizes.enormous
         }
 
         // Title
-        AppText {
-            dt: root.dt
+        Kirigami.Heading {
             Layout.alignment: Qt.AlignHCenter
+            level: 1
             text: qsTr("未打开工作区")
-            font.pointSize: _title
-            font.family: _fontFamily
-            font.bold: true
         }
 
         // Description
-        AppText {
-            dt: root.dt
-            variant: "secondary"
+        Label {
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("选择或创建工作区后开始写作")
-            font.pointSize: _body
-            font.family: _fontFamily
+            color: Kirigami.Theme.disabledTextColor
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -118,27 +91,22 @@ Item {
         // Actions
         ColumnLayout {
             Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: _sp8
-            spacing: _sp12
-            width: 280
+            Layout.topMargin: Kirigami.Units.smallSpacing
+            spacing: Kirigami.Units.smallSpacing
+            Layout.preferredWidth: 280
 
-            AppButton {
+            Button {
                 Layout.fillWidth: true
                 text: qsTr("新建工作区")
-                dt: root.dt
-                variant: "primary"
+                highlighted: true
                 onClicked: createWorkspaceDialog.open()
             }
 
-            AppButton {
+            Button {
                 Layout.fillWidth: true
                 text: qsTr("打开工作区")
-                dt: root.dt
-                variant: "secondary"
                 onClicked: openWorkspaceDialog.open()
             }
-
-
         }
     }
 }

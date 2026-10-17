@@ -15,11 +15,16 @@
 // Issue #833 复核：从 WritingWorkspace.qml 的 sidebarRect 抽出。
 //   - Workbench：作为 RowLayout 子项，宽度只吃 Core 的 ChapterNavigation bounds。
 //   - SinglePane：作为覆盖在正文上的抽屉/浮层打开，不参与 RowLayout 宽度分配。
+//
+// Issue #900：自绘 AppText / 背景 / 右键菜单外观迁移到 Breeze + Kirigami
+//   主题色与间距；chapter 行 ⋯ 按钮换成 Breeze overflow-menu 图标。
+//   WritingTreeController、信号、函数与全部注入属性保持不变。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -40,9 +45,18 @@ Rectangle {
     signal renameItemRequested(var itemData)
     signal deleteItemRequested(var itemData)
 
-    color: dt.sidebar
-    border.color: dt.border
-    border.width: 1
+    color: Kirigami.Theme.alternateBackgroundColor
+
+    // Issue #912：章/卷行高按桌面默认字体实际高度 + KDE 间距派生，替代
+    // gridUnit*1.8 / gridUnit*2 这类在部分 DPI 下偏小的硬值；行内文字、
+    // 操作入口随之回到可读的桌面尺寸。
+    TextMetrics {
+        id: lineMetrics
+        font: Kirigami.Theme.defaultFont
+        text: "章节标题"
+    }
+    readonly property real volumeRowHeight: Math.max(Kirigami.Units.gridUnit * 2, lineMetrics.height + Kirigami.Units.smallSpacing * 2)
+    readonly property real chapterRowHeight: Math.max(Kirigami.Units.gridUnit * 1.8, lineMetrics.height + Kirigami.Units.smallSpacing * 2)
 
     WritingTreeController {
         id: writingTree
@@ -141,19 +155,18 @@ Rectangle {
         // 整行只显示 workspaceProjectTitle，没有折叠箭头、没有点击折叠。
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 36
+            Layout.preferredHeight: root.volumeRowHeight
             color: "transparent"
 
-            AppText {
-                dt: root.dt
+            Label {
                 anchors.left: parent.left
-                anchors.leftMargin: root.dt.sp8
+                anchors.leftMargin: Kirigami.Units.smallSpacing
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.workspaceProjectTitle
-                color: root.dt.textPrimary
-                font.pointSize: root.dt.labelPt
-                font.family: root.dt.fontFamily
-                font.weight: Font.DemiBold
+                color: Kirigami.Theme.textColor
+                font.family: Kirigami.Theme.defaultFont.family
+                font.pointSize: Kirigami.Theme.defaultFont.pointSize
+                font.bold: true
                 elide: Text.ElideRight
             }
         }
@@ -162,13 +175,13 @@ Rectangle {
         // Issue #835：按层级渲染 —— 卷是可折叠分组头（WritingTreeGroupHeader），
         // 卷展开时紧接其章节行。取代旧 flat ListView 把 volume 当 36px 列表行的画法。
         ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
-                Component.onCompleted: {
-                    if (contentItem) contentItem.acceptedButtons = Qt.NoButton
-                }
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+            // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+            Component.onCompleted: {
+                if (contentItem) contentItem.acceptedButtons = Qt.NoButton
+            }
 
             ListView {
                 id: treeListView
@@ -178,7 +191,8 @@ Rectangle {
                 acceptedButtons: Qt.NoButton
                 delegate: Item {
                     width: treeListView.width
-                    height: model.rowType === "volume" ? 36 : 32
+                    height: model.rowType === "volume" ? root.volumeRowHeight
+                                                    : root.chapterRowHeight
 
                     // ── 卷分组头 ──
                     WritingTreeGroupHeader {
@@ -218,12 +232,12 @@ Rectangle {
                         id: chapterDelegateBg
                         visible: model.rowType === "chapter"
                         anchors.fill: parent
-                        anchors.leftMargin: dt.sp32
-                        anchors.rightMargin: dt.sp8
-                        radius: dt.radiusPill
+                        anchors.leftMargin: Kirigami.Units.gridUnit * 2
+                        anchors.rightMargin: Kirigami.Units.smallSpacing
+                        radius: Kirigami.Units.cornerRadius
                         color: {
-                            if (isSelected) return dt.primaryContainer
-                            if (chapterHover.containsMouse) return dt.surfaceVariant
+                            if (isSelected) return Kirigami.Theme.highlightColor
+                            if (chapterHover.containsMouse) return Kirigami.Theme.backgroundColor
                             return "transparent"
                         }
 
@@ -231,57 +245,49 @@ Rectangle {
 
                         RowLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: dt.sp8
-                            spacing: dt.sp6
+                            anchors.leftMargin: Kirigami.Units.smallSpacing
+                            spacing: Kirigami.Units.smallSpacing
 
                             Rectangle {
-                                width: 6; height: 6
+                                Layout.preferredWidth: 6
+                                Layout.preferredHeight: 6
                                 radius: 3
-                                color: chapterDelegateBg.isSelected ? dt.selectedText : dt.textSecondary
+                                color: chapterDelegateBg.isSelected ? Kirigami.Theme.highlightedTextColor
+                                                                    : Kirigami.Theme.disabledTextColor
                                 Layout.alignment: Qt.AlignVCenter
                                 opacity: 0.6
                             }
 
-                            AppText {
-                                dt: root.dt
+                            Label {
                                 text: model.itemTitle || ""
-                                color: chapterDelegateBg.isSelected ? dt.onPrimaryContainer : dt.textPrimary
-                                font.pointSize: dt.labelPt
-                                font.family: dt.fontFamily
-                                font.weight: chapterDelegateBg.isSelected ? Font.DemiBold : Font.Normal
+                                color: chapterDelegateBg.isSelected ? Kirigami.Theme.highlightedTextColor
+                                                                    : Kirigami.Theme.textColor
+                                font.family: Kirigami.Theme.defaultFont.family
+                                font.pointSize: Kirigami.Theme.defaultFont.pointSize
+                                font.bold: chapterDelegateBg.isSelected
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
                             }
 
-                            // "⋯" menu button
-                            Rectangle {
+                            // 章节操作菜单入口（Breeze overflow-menu 图标）
+                            ToolButton {
                                 z: 10
-                                width: 24; height: 24
-                                radius: 12
-                                color: chapterMenuBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
+                                icon.name: "overflow-menu"
+                                icon.width: Kirigami.Units.iconSizes.smallMedium
+                                icon.height: Kirigami.Units.iconSizes.smallMedium
+                                display: AbstractButton.IconOnly
+                                flat: true
+                                // Issue #912：给「⋯」入口完整的可点区域，不再用偏小的 gridUnit*1.4。
+                                implicitWidth: Math.max(Kirigami.Units.gridUnit * 1.8, Kirigami.Units.iconSizes.smallMedium + Kirigami.Units.smallSpacing * 2)
+                                implicitHeight: Math.max(Kirigami.Units.gridUnit * 1.8, Kirigami.Units.iconSizes.smallMedium + Kirigami.Units.smallSpacing * 2)
                                 Layout.alignment: Qt.AlignVCenter
-
-                                AppText {
-                                    dt: root.dt
-                                    anchors.centerIn: parent
-                                    text: "⋯"
-                                    color: dt.textSecondary
-                                    font.pointSize: dt.fontMdPt
-                                }
-
-                                MouseArea {
-                                    id: chapterMenuBtnHover
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        treeContextMenu.itemType = "chapter"
-                                        treeContextMenu.itemId = model.itemId
-                                        treeContextMenu.itemTitle = model.itemTitle
-                                        treeContextMenu.itemProjectId = model.itemProjectId || ""
-                                        treeContextMenu.itemVolumeId = model.itemVolumeId || ""
-                                        treeContextMenu.popup(chapterMenuBtnHover, 0, chapterMenuBtnHover.height)
-                                    }
+                                onClicked: {
+                                    treeContextMenu.itemType = "chapter"
+                                    treeContextMenu.itemId = model.itemId
+                                    treeContextMenu.itemTitle = model.itemTitle
+                                    treeContextMenu.itemProjectId = model.itemProjectId || ""
+                                    treeContextMenu.itemVolumeId = model.itemVolumeId || ""
+                                    treeContextMenu.popup(this, 0, height)
                                 }
                             }
                         }
@@ -292,7 +298,7 @@ Rectangle {
                             anchors.top: parent.top
                             anchors.bottom: parent.bottom
                             anchors.right: parent.right
-                            anchors.rightMargin: 32
+                            anchors.rightMargin: Math.round(Kirigami.Units.gridUnit * 2)
                             hoverEnabled: true
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             cursorShape: Qt.PointingHandCursor
@@ -327,40 +333,18 @@ Rectangle {
         }
 
         // "+" button for project (create volume)
-        Rectangle {
+        ToolButton {
             Layout.fillWidth: true
-            Layout.preferredHeight: 36
-            Layout.leftMargin: dt.sp8
-            Layout.rightMargin: dt.sp8
-            radius: dt.radiusPill
-            color: addVolumeHover.containsMouse ? dt.primaryContainer : "transparent"
-
-            RowLayout {
-                anchors.centerIn: parent
-                spacing: dt.sp4
-                AppText {
-                    dt: root.dt
-                    text: "+"
-                    color: dt.primary
-                    font.pointSize: dt.fontMdPt
-                    font.weight: Font.Bold
-                }
-                AppText {
-                    dt: root.dt
-                    text: qsTr("新卷")
-                    color: dt.primary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                }
-            }
-
-            MouseArea {
-                id: addVolumeHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.createVolumeRequested(root.workspaceProjectId)
-            }
+            Layout.preferredHeight: Math.max(root.volumeRowHeight, implicitHeight)
+            Layout.leftMargin: Kirigami.Units.smallSpacing
+            Layout.rightMargin: Kirigami.Units.smallSpacing
+            flat: true
+            text: qsTr("新卷")
+            icon.name: "list-add"
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
+            display: AbstractButton.TextBesideIcon
+            onClicked: root.createVolumeRequested(root.workspaceProjectId)
         }
 
         // Tree context menu
@@ -371,45 +355,19 @@ Rectangle {
             property string itemTitle: ""
             property string itemProjectId: ""
             property string itemVolumeId: ""
-            background: Rectangle {
-                color: dt.surface
-                border.color: dt.border
-                radius: dt.radiusMd
-                border.width: 1
-            }
 
             MenuItem {
                 id: createVolumeMenuItem
                 text: qsTr("新建卷")
+                icon.name: "list-add"
                 visible: treeContextMenu.itemType === "project"
-                contentItem: AppText {
-                    dt: root.dt
-                    text: createVolumeMenuItem.text
-                    color: dt.textPrimary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    color: createVolumeMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                }
                 onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.workspaceProjectId)
             }
             MenuItem {
                 id: createChapterMenuItem
                 text: qsTr("新建章节")
+                icon.name: "list-add"
                 visible: treeContextMenu.itemType === "volume"
-                contentItem: AppText {
-                    dt: root.dt
-                    text: createChapterMenuItem.text
-                    color: dt.textPrimary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    color: createChapterMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                }
                 onTriggered: root.createChapterRequested(treeContextMenu.itemProjectId, treeContextMenu.itemId)
             }
             MenuSeparator {
@@ -418,18 +376,8 @@ Rectangle {
             MenuItem {
                 id: renameMenuItem
                 text: qsTr("重命名")
+                icon.name: "edit-rename"
                 visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
-                contentItem: AppText {
-                    dt: root.dt
-                    text: renameMenuItem.text
-                    color: dt.textPrimary
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    color: renameMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                }
                 onTriggered: root.renameItemRequested({
                     type: treeContextMenu.itemType,
                     id: treeContextMenu.itemId,
@@ -441,18 +389,8 @@ Rectangle {
             MenuItem {
                 id: deleteMenuItem
                 text: qsTr("删除")
+                icon.name: "edit-delete"
                 visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
-                contentItem: AppText {
-                    dt: root.dt
-                    text: deleteMenuItem.text
-                    color: dt.error
-                    font.pointSize: dt.labelPt
-                    font.family: dt.fontFamily
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    color: deleteMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                }
                 onTriggered: root.deleteItemRequested({
                     type: treeContextMenu.itemType,
                     id: treeContextMenu.itemId,

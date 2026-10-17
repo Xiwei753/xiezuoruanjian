@@ -1,0 +1,22 @@
+{
+  "module": {
+    "name": "privacy_acl",
+    "type": "shared",
+    "description": "$string:module_desc",
+    "deviceTypes": [
+      "default",
+      "tablet"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.DLP_GET_HIDE_STATUS",
+        "reason": "$string:perm_reason_dlp_anti_peep",
+        "usedScene": {
+          "when": "always"
+        }
+      }
+    ]
+  }
+}

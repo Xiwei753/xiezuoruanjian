@@ -43,6 +43,7 @@ apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/
 apps/Linux_qt/build/
 
 # HarmonyOS
+/.hvigor/
 apps/harmony/oh_modules/
 apps/harmony/.hvigor/
 apps/harmony/hvigor/wrapper/
@@ -108,3 +109,10 @@ WINDOWS_NATIVE_DEPS.md
 .codeartsdoer/
 .wrangler/
 .commit
+.resultverify/
+
+# HarmonyOS module ohpm artifacts
+apps/harmony/entry/oh_modules/
+apps/harmony/entry/oh-package-lock.json5
+apps/harmony/privacy_acl/oh_modules/
+apps/harmony/privacy_acl/oh-package-lock.json5

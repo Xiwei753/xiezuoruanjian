@@ -7,12 +7,17 @@
 // 约束：
 //   - 纯展示层，业务逻辑通过 signal 传递给 main.qml
 //   - 不直接操作文件系统或 Core 层
-//   - 使用 DesignTokens 统一样式
+//
+// Issue #900：视觉迁移到 KDE/Breeze（Kirigami 侧栏 + Controls.ItemDelegate /
+// Controls.Button / Controls.Label），颜色与间距统一取 Kirigami.Theme /
+// Kirigami.Units，不再读 DesignTokens 的 M3 字段。
+// 保留：宽屏左侧一级导航 + 内容区（无底部导航），以及全部公共 API。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -50,7 +55,7 @@ Rectangle {
     signal renameProjectRequested(string projectId, string title)
     signal deleteProjectRequested(string projectId, string title)
 
-    color: dt.bg
+    color: Kirigami.Theme.backgroundColor
 
     RowLayout {
         anchors.fill: parent
@@ -63,8 +68,8 @@ Rectangle {
             visible: root.wideShell
             Layout.fillHeight: true
             Layout.preferredWidth: 160
-            color: dt.surface
-            border.color: dt.border
+            color: Kirigami.Theme.alternateBackgroundColor
+            border.color: Kirigami.Theme.disabledTextColor
             border.width: 1
 
             // Issue #827 评论 3 第 1 点：品牌行固定 64 高，与右侧 Top bar 同高，
@@ -75,102 +80,54 @@ Rectangle {
                 anchors.fill: parent
                 spacing: 0
 
-                // Issue #827 评论 4 第 1 点：Rectangle 默认 color 是 white，
-                // 不显式写 color 的话深色模式下这块 64 高品牌行会盖一块纯白。
-                // 右侧顶栏用的是 dt.surface，这里必须同色。
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.topBarHeight
-                    color: dt.surface
+                    color: Kirigami.Theme.alternateBackgroundColor
 
-                    AppText {
+                    Kirigami.Heading {
                         anchors.left: parent.left
-                        anchors.leftMargin: dt.sp20
+                        anchors.leftMargin: Kirigami.Units.largeSpacing
                         anchors.verticalCenter: parent.verticalCenter
-                        dt: root.dt
+                        level: 3
                         text: qsTr("素笺")
-                        color: dt.primary
-                        font.pointSize: dt.subtitlePt
-                        font.family: dt.fontFamily
-                        font.weight: Font.DemiBold
+                        color: Kirigami.Theme.highlightColor
                     }
                 }
 
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 1
-                    color: dt.border
+                    color: Kirigami.Theme.disabledTextColor
                 }
 
                 ColumnLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.leftMargin: dt.sp12
-                    Layout.rightMargin: dt.sp12
-                    Layout.topMargin: dt.sp12
-                    Layout.bottomMargin: dt.sp12
-                    spacing: dt.sp8
+                    Layout.leftMargin: Kirigami.Units.smallSpacing
+                    Layout.rightMargin: Kirigami.Units.smallSpacing
+                    Layout.topMargin: Kirigami.Units.smallSpacing
+                    Layout.bottomMargin: Kirigami.Units.smallSpacing
+                    spacing: Kirigami.Units.smallSpacing
 
                     Repeater {
                         model: [
-                            { label: qsTr("作品"), idx: 0 },
-                            { label: qsTr("星图"), idx: 1 },
-                            { label: qsTr("统计"), idx: 2 }
+                            { label: qsTr("作品"), icon: "folder-documents", idx: 0 },
+                            { label: qsTr("星图"), icon: "draw-star", idx: 1 },
+                            { label: qsTr("统计"), icon: "office-chart-bar", idx: 2 }
                         ]
 
-                    Rectangle {
-                        id: wideNavItem
-                        readonly property bool selected: root.currentTab === modelData.idx
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 44
-                        radius: dt.radiusMd
-                        color: selected
-                               ? dt.primaryContainer
-                               : wideNavHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                        Behavior on color {
-                            ColorAnimation { duration: dt.animFast }
-                        }
-
-                        // 选中态左侧竖条：和窄屏顶栏的 pill 选中态互补，
-                        // 全部取自 DesignTokens，不写字面色值。
-                        Rectangle {
-                            visible: wideNavItem.selected
-                            width: 3
-                            height: 20
-                            radius: dt.radiusPill
-                            color: dt.primary
-                            anchors.left: parent.left
-                            anchors.leftMargin: dt.sp4
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        AppText {
-                            dt: root.dt
-                            anchors.left: parent.left
-                            anchors.leftMargin: dt.sp20
-                            anchors.right: parent.right
-                            anchors.rightMargin: dt.sp12
-                            anchors.verticalCenter: parent.verticalCenter
+                        ItemDelegate {
+                            readonly property bool selected: root.currentTab === modelData.idx
+                            Layout.fillWidth: true
                             text: modelData.label
-                            color: wideNavItem.selected ? dt.onPrimaryContainer : dt.textSecondary
-                            font.pointSize: dt.labelPt
-                            font.family: dt.fontFamily
-                            font.weight: wideNavItem.selected ? Font.DemiBold : Font.Normal
-                            elide: Text.ElideRight
-                        }
-
-                        MouseArea {
-                            id: wideNavHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
+                            icon.name: modelData.icon
+                            highlighted: selected
                             onClicked: {
                                 if (root.appControllerRef) root.appControllerRef.hubTab = modelData.idx
                                 else root.currentTab = modelData.idx
                             }
                         }
-                    }
                     }
 
                     Item { Layout.fillHeight: true }
@@ -196,33 +153,30 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.topBarHeight
-                    color: dt.surface
+                    color: Kirigami.Theme.alternateBackgroundColor
 
                     RowLayout {
                         anchors.fill: parent
-                        anchors.leftMargin: dt.sp32
-                        anchors.rightMargin: dt.sp32
-                        spacing: dt.sp32
+                        anchors.leftMargin: Kirigami.Units.largeSpacing
+                        anchors.rightMargin: Kirigami.Units.largeSpacing
+                        spacing: Kirigami.Units.largeSpacing
 
                         // Logo（窄屏顶栏；宽屏标题已移到左侧导航）
                         Row {
                             visible: !root.wideShell
-                            spacing: dt.sp10
+                            spacing: Kirigami.Units.smallSpacing
                             Layout.alignment: Qt.AlignVCenter
-                            AppText {
-                                dt: root.dt
+                            Kirigami.Heading {
+                                level: 2
                                 text: qsTr("素笺")
-                                color: dt.primary
-                                font.pointSize: dt.fontXlPt
-                                font.family: dt.fontFamily
-                                font.weight: Font.Bold
+                                color: Kirigami.Theme.highlightColor
                             }
                         }
 
                         // Navigation tabs（窄屏顶栏；宽屏使用左侧一级导航）
                         Row {
                             visible: !root.wideShell
-                            spacing: dt.sp4
+                            spacing: Kirigami.Units.smallSpacing
                             Layout.alignment: Qt.AlignVCenter
 
                             Repeater {
@@ -232,40 +186,17 @@ Rectangle {
                                     { label: qsTr("统计"), idx: 2 }
                                 ]
 
-                                Rectangle {
-                                    width: navLabel.implicitWidth + dt.sp20
-                                    height: 36
-                                    radius: dt.radiusPill
-                                    color: root.currentTab === modelData.idx ?
-                                           dt.primaryContainer :
-                                           navHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                                    AppText {
-                                        id: navLabel
-                                        dt: root.dt
-                                        anchors.centerIn: parent
-                                        text: modelData.label
-                                        color: root.currentTab === modelData.idx ?
-                                               dt.onPrimaryContainer :
-                                               dt.onSurfaceVariant
-                                        font.pointSize: dt.labelPt
-                                        font.family: dt.fontFamily
-                                        font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
-                                    }
-
-                                    MouseArea {
-                                        id: navHover
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        // Issue #796 评论 5886483653: 点击改 appControllerRef.hubTab，
-                                        // currentTab 由绑定跟随，Loader 重建后不丢。
-                                        onClicked: {
-                                            if (root.appControllerRef) {
-                                                root.appControllerRef.hubTab = modelData.idx
-                                            } else {
-                                                root.currentTab = modelData.idx
-                                            }
+                                Button {
+                                    text: modelData.label
+                                    flat: true
+                                    highlighted: root.currentTab === modelData.idx
+                                    // Issue #796 评论 5886483653: 点击改 appControllerRef.hubTab，
+                                    // currentTab 由绑定跟随，Loader 重建后不丢。
+                                    onClicked: {
+                                        if (root.appControllerRef) {
+                                            root.appControllerRef.hubTab = modelData.idx
+                                        } else {
+                                            root.currentTab = modelData.idx
                                         }
                                     }
                                 }
@@ -289,7 +220,7 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 1
-                    color: dt.border
+                    color: Kirigami.Theme.disabledTextColor
                 }
             }
 

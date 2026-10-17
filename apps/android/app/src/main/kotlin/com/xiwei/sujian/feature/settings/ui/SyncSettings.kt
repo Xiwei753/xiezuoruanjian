@@ -32,7 +32,7 @@ import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
  *
  * 按逻辑分组拆成多张 High 卡（不再按"一个 TextField 一个卡"分）：
  * - sync_general: 说明 + 启用同步 + 自动同步
- * - sync_credentials: 凭据标题 + 远程仓库 + 分支 + Token
+ * - sync_credentials: 凭据标题 + 远程仓库 + Token
  * - sync_interval: 间隔标题 + 间隔 Slider
  * - sync_actions: 操作标题 + Dry run + Test + Perform + 结果
  *
@@ -68,14 +68,10 @@ fun SyncSettingsContent(vm: SettingsViewModel) {
         )
     }
 
-    // ── 凭据组（凭据标题 + 远程仓库 + 分支 + Token）──
+    // ── 凭据组（凭据标题 + 远程仓库 + Token）──
     val remoteUrlRow by vm.syncRemoteUrlRow.collectAsStateWithLifecycle()
     var remoteUrl by rememberSaveable { mutableStateOf(remoteUrlRow.remoteUrl) }
     LaunchedEffect(remoteUrlRow.remoteUrl) { remoteUrl = remoteUrlRow.remoteUrl }
-
-    val branchRow by vm.syncBranchRow.collectAsStateWithLifecycle()
-    var branch by rememberSaveable { mutableStateOf(branchRow.branch) }
-    LaunchedEffect(branchRow.branch) { branch = branchRow.branch }
 
     val tokenRow by vm.syncTokenRow.collectAsStateWithLifecycle()
     var token by rememberSaveable { mutableStateOf(tokenRow.token) }
@@ -92,16 +88,6 @@ fun SyncSettingsContent(vm: SettingsViewModel) {
             label = { Text(stringResource(id = R.string.pref_github_repo)) },
             modifier = rememberFieldFocusModifier("sync_remote_url") { remoteUrl },
             enabled = remoteUrlRow.enabled,
-        )
-        SujianTextField(
-            value = branch,
-            onValueChange = {
-                branch = it
-                vm.handleIntent(SettingsIntent.UpdateSyncConfig { copy(branch = it) })
-            },
-            label = { Text(stringResource(id = R.string.pref_branch)) },
-            modifier = rememberFieldFocusModifier("sync_branch") { branch },
-            enabled = branchRow.enabled,
         )
         SujianSecretTextField(
             value = token,

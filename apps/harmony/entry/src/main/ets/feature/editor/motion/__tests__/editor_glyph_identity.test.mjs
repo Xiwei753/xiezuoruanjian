@@ -1,0 +1,409 @@
+// editor_glyph_identity.test.mjs — 稳定字形身份表 + 显示版→Core 版位置映射纯逻辑单测。
+//
+// Issue #879 最新复核评论问题2/问题3：
+// - 字形身份必须随每次编辑逐笔搬运，位置平移、old/new 角色变化都不改身份。
+// - 显示版坐标必须能映射到 Core 最新版坐标。
+//
+// 运行：
+//   node apps/harmony/entry/src/main/ets/feature/editor/motion/__tests__/editor_glyph_identity.test.mjs
+
+import { strict as assert } from 'node:assert'
+import { utf16ToUtf8 } from '../../input/text_offset_mapper.ts'
+import { applyPatchesToText, toUtf16CarryPatches } from '../editor_patch_carry.ts'
+import { GlyphIdentityTable, windowIdForGlyphIds, clusterBoundaries } from '../editor_glyph_identity.ts'
+import { RevisionPositionMap } from '../editor_revision_position_map.ts'
+
+let passed = 0
+const test = (name, fn) => {
+  fn()
+  passed++
+  console.log(`  [PASS] ${name}`)
+}
+
+/** 构造一条替换指令：replace 范围用 UTF-8 byte offset。 */
+const patch = (text, utf16Start, utf16End, insertedText) => ({
+  replaceStartByte: utf16ToUtf8(text, utf16Start),
+  replaceEndByte: utf16ToUtf8(text, utf16End),
+  insertedText,
+})
+
+console.log('editor_glyph_identity / editor_revision_position_map 纯逻辑单测（Issue #879 复核问题2+3）')
+console.log('---')
+
+// ── 字符簇切分 ──
+test('create: ASCII 每个字符一个条目', () => {
+  const table = GlyphIdentityTable.create('abc', 1)
+  assert.equal(table.entryCount(), 3)
+  assert.equal(table.entries[0].glyphId, 'orig-1-0')
+  assert.equal(table.entries[2].utf16Start, 2)
+})
+
+test('create: 中文 BMP 每字一个条目', () => {
+  const table = GlyphIdentityTable.create('甲乙丙', 2)
+  assert.equal(table.entryCount(), 3)
+  assert.equal(table.glyphIdAt(1), 'orig-2-1')
+})
+
+test('create: emoji 代理对作为一个条目', () => {
+  const table = GlyphIdentityTable.create('a😀b', 3)
+  assert.equal(table.entryCount(), 3)
+  assert.equal(table.entries[1].utf16Start, 1)
+  assert.equal(table.entries[1].utf16End, 3)
+  assert.equal(table.glyphIdAt(1), 'orig-3-1')
+  assert.equal(table.glyphIdAt(2), 'orig-3-1')
+})
+
+test('create: ZWJ emoji 序列作为一个条目', () => {
+  const family = '👨‍👩‍👧'
+  const table = GlyphIdentityTable.create(family, 4)
+  assert.equal(table.entryCount(), 1)
+  assert.equal(table.entries[0].utf16End, family.length)
+})
+
+test('create: 组合附加符号并入基字符', () => {
+  const text = 'e\u0301x'
+  const table = GlyphIdentityTable.create(text, 5)
+  assert.equal(table.entryCount(), 2)
+  assert.equal(table.entries[0].utf16End, 2)
+})
+
+// ── 身份搬运：插入 ──
+test('applyPatches: 字前插入后原字身份不变', () => {
+  const before = GlyphIdentityTable.create('xy', 10)
+  const xId = before.glyphIdAt(0)
+  const yId = before.glyphIdAt(1)
+  const after = before.applyPatches([patch('xy', 0, 0, 'a')], 'axy', 11)
+  assert.notEqual(after, null)
+  assert.equal(after.text, 'axy')
+  assert.equal(after.revision, 11)
+  assert.notEqual(after.glyphIdAt(0), xId)
+  assert.equal(after.glyphIdAt(1), xId)
+  assert.equal(after.glyphIdAt(2), yId)
+})
+
+test('applyPatches: 中间插入后右侧字身份不变', () => {
+  const before = GlyphIdentityTable.create('甲乙', 20)
+  const yiId = before.glyphIdAt(1)
+  const after = before.applyPatches([patch('甲乙', 1, 1, '丙')], '甲丙乙', 21)
+  assert.equal(after.text, '甲丙乙')
+  assert.equal(after.glyphIdAt(0), before.glyphIdAt(0))
+  assert.equal(after.glyphIdAt(2), yiId)
+  assert.notEqual(after.glyphIdAt(1), yiId)
+})
+
+// ── 身份搬运：删除 ──
+test('applyPatches: 删除左侧字后右侧字身份保持', () => {
+  const before = GlyphIdentityTable.create('a甲', 30)
+  const jiaId = before.glyphIdAt(1)
+  const after = before.applyPatches([patch('a甲', 0, 1, '')], '甲', 31)
+  assert.equal(after.text, '甲')
+  assert.equal(after.glyphIdAt(0), jiaId)
+  assert.equal(after.entryCount(), 1)
+})
+
+test('applyPatches: 删除的字不再有身份', () => {
+  const before = GlyphIdentityTable.create('甲中乙', 40)
+  const after = before.applyPatches([patch('甲中乙', 1, 2, '')], '甲乙', 41)
+  assert.equal(after.text, '甲乙')
+  assert.equal(after.glyphIdAt(1), before.glyphIdAt(2))
+  // 被删的“中”没有身份，位置 1 已是“乙”
+  assert.notEqual(after.glyphIdAt(1), before.glyphIdAt(1))
+})
+
+test('applyPatches: 替换（删除+插入）保两侧身份', () => {
+  const before = GlyphIdentityTable.create('甲的乙', 50)
+  const after = before.applyPatches([patch('甲的乙', 1, 2, '丙丁')], '甲丙丁乙', 51)
+  assert.equal(after.text, '甲丙丁乙')
+  assert.equal(after.glyphIdAt(0), before.glyphIdAt(0))
+  assert.equal(after.glyphIdAt(3), before.glyphIdAt(2))
+})
+
+// ── 身份搬运：多笔连续编辑（问题1/3 的组合场景）──
+test('applyPatches: 两笔连续编辑后同一字身份跨版本稳定', () => {
+  let table = GlyphIdentityTable.create('xy', 60)
+  const xId = table.glyphIdAt(0)
+  const yId = table.glyphIdAt(1)
+
+  // 第一笔：开头插入 a → axy
+  table = table.applyPatches([patch('xy', 0, 0, 'a')], 'axy', 61)
+  assert.equal(table.glyphIdAt(1), xId)
+  assert.equal(table.glyphIdAt(2), yId)
+  const aId = table.glyphIdAt(0)
+
+  // 第二笔：删掉中间的 x → ay
+  table = table.applyPatches([patch('axy', 1, 2, '')], 'ay', 62)
+  assert.equal(table.text, 'ay')
+  assert.equal(table.glyphIdAt(0), aId)
+  assert.equal(table.glyphIdAt(1), yId)
+})
+
+test('applyPatches: 先删后插可复合', () => {
+  let table = GlyphIdentityTable.create('甲乙丙', 70)
+  const bingId = table.glyphIdAt(2)
+  table = table.applyPatches([patch('甲乙丙', 0, 1, '')], '乙丙', 71)
+  assert.equal(table.glyphIdAt(1), bingId)
+  table = table.applyPatches([patch('乙丙', 0, 0, '新')], '新乙丙', 72)
+  assert.equal(table.text, '新乙丙')
+  assert.equal(table.glyphIdAt(2), bingId)
+})
+
+test('applyPatches: emoji 删除后其它字身份不变', () => {
+  let table = GlyphIdentityTable.create('a😀b', 80)
+  const bId = table.glyphIdAt(3)
+  const after = table.applyPatches([patch('a😀b', 1, 3, '')], 'ab', 81)
+  assert.equal(after.text, 'ab')
+  assert.equal(after.glyphIdAt(1), bId)
+})
+
+// ── 非法输入必须失败 ──
+test('applyPatches: 结果文本与重放不符返回 null', () => {
+  const table = GlyphIdentityTable.create('xy', 90)
+  assert.equal(table.applyPatches([patch('xy', 0, 0, 'a')], 'xy', 91), null)
+})
+
+test('applyPatches: 越界范围返回 null', () => {
+  const table = GlyphIdentityTable.create('xy', 92)
+  assert.equal(table.applyPatches([
+    { replaceStartByte: 99, replaceEndByte: 99, insertedText: 'a' }
+  ], 'xya', 93), null)
+})
+
+test('applyPatches: 非 UTF-8 字符边界返回 null', () => {
+  const table = GlyphIdentityTable.create('甲', 94)
+  assert.equal(table.applyPatches([
+    { replaceStartByte: 1, replaceEndByte: 2, insertedText: '' }
+  ], '甲', 95), null)
+})
+
+test('toUtf16CarryPatches: 重叠 patch 返回 null', () => {
+  const ops = toUtf16CarryPatches('abcd', [
+    { replaceStartByte: 0, replaceEndByte: 2, insertedText: 'x' },
+    { replaceStartByte: 1, replaceEndByte: 3, insertedText: 'y' },
+  ])
+  assert.equal(ops, null)
+})
+
+test('applyPatchesToText: 多 patch 重放文本正确', () => {
+  const result = applyPatchesToText('abcd', [
+    { replaceStartByte: 0, replaceEndByte: 1, insertedText: 'X' },
+    { replaceStartByte: 3, replaceEndByte: 4, insertedText: 'YZ' },
+  ])
+  assert.equal(result, 'XbcYZ')
+})
+
+// ── 位置映射：显示版 → Core 最新版 ──
+/** 构造一笔位置映射步骤——revision 必须首尾相接。 */
+const step = (baseRevision, nextRevision, beforeText, afterText, patches) => ({
+  baseRevision,
+  nextRevision,
+  beforeText,
+  afterText,
+  patches,
+})
+
+test('positionMap: 无编辑时 build 返回 null（调用方不做映射）', () => {
+  assert.equal(RevisionPositionMap.build([], 1, 1), null)
+})
+
+test('positionMap: 开头插入把后续位置整体后移', () => {
+  const map = RevisionPositionMap.build([
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+  ], 10, 11)
+  assert.notEqual(map, null)
+  assert.equal(map.mapOffset(0), 0)
+  assert.equal(map.mapOffset(1), 2)
+  assert.equal(map.mapOffset(2), 3)
+})
+
+test('positionMap: 点击被删字符映射到删除点', () => {
+  const map = RevisionPositionMap.build([
+    step(20, 21, 'abc', 'ac', [patch('abc', 1, 2, '')]),
+  ], 20, 21)
+  assert.equal(map.mapOffset(1), 1)
+  assert.equal(map.mapOffset(2), 1)
+  assert.equal(map.mapOffset(3), 2)
+})
+
+test('positionMap: 两笔连续编辑（插入+删除）映射到 Core 最新坐标', () => {
+  const map = RevisionPositionMap.build([
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+    step(11, 12, 'axy', 'ay', [patch('axy', 1, 2, '')]),
+  ], 10, 12)
+  assert.equal(map.mapOffset(0), 0)
+  assert.equal(map.mapOffset(1), 1) // 点在被删的 x 上 → 删除点
+  assert.equal(map.mapOffset(2), 2) // 点在 y 上 → 仍是 y 之后
+})
+
+test('positionMap: 链中任一笔记不上返回 null', () => {
+  assert.equal(RevisionPositionMap.build([
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+    step(11, 12, 'axy', 'zzz', [patch('axy', 1, 2, '')]),
+  ], 10, 12), null)
+})
+
+test('positionMap: UTF-8 多字节偏移可正确映射', () => {
+  const map = RevisionPositionMap.build([
+    step(30, 31, '甲中乙', '甲乙', [patch('甲中乙', 1, 2, '')]),
+  ], 30, 31)
+  assert.equal(map.mapOffset(0), 0)
+  assert.equal(map.mapOffset(1), 1)
+  assert.equal(map.mapOffset(2), 1)
+  assert.equal(map.mapOffset(3), 2)
+})
+
+// ── 位置映射：revision 链首尾与连续性校验（Issue #879 复核问题2） ──
+test('positionMap: 首笔 baseRevision 与可见版本不一致时拒绝映射', () => {
+  assert.equal(RevisionPositionMap.build([
+    step(11, 12, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+  ], 10, 12), null)
+})
+
+test('positionMap: 末笔 nextRevision 与 Core 最新版不一致时拒绝映射', () => {
+  assert.equal(RevisionPositionMap.build([
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+  ], 10, 12), null)
+})
+
+test('positionMap: 链中间断档（11 → 13）时拒绝映射', () => {
+  assert.equal(RevisionPositionMap.build([
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+    step(12, 13, 'axy', 'ay', [patch('axy', 1, 2, '')]),
+  ], 10, 13), null)
+})
+
+test('positionMap: 单笔跨多 revision 时拒绝映射', () => {
+  assert.equal(RevisionPositionMap.build([
+    step(10, 12, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+  ], 10, 12), null)
+})
+
+// ── 窗口身份：窗口身份与字形单元身份分开（Issue #879 复核问题4） ──
+test('windowId: 位置平移不改变窗口身份', () => {
+  const t0 = GlyphIdentityTable.create('甲乙丙', 40)
+  // 在字前插入一个字：原三簇整体平移，覆盖的簇序列不变
+  const t1 = t0.applyPatches([patch('甲乙丙', 0, 0, '前')], '前甲乙丙', 41)
+  const spanOf = (t, from, to) => windowIdForGlyphIds(t.idsForRange(from, to).map((e) => e.glyphId))
+  assert.equal(spanOf(t1, 1, 4), spanOf(t0, 0, 3))
+})
+
+test('windowId: 覆盖簇数不同则窗口身份不同', () => {
+  const t = GlyphIdentityTable.create('甲乙丙', 42)
+  const first = t.idsForRange(0, 1).map((e) => e.glyphId)
+  const all = t.idsForRange(0, 3).map((e) => e.glyphId)
+  assert.notEqual(windowIdForGlyphIds(first), windowIdForGlyphIds(all))
+})
+
+test('windowId: 首簇相同、数量相同的不同序列不碰撞（Issue #879 复核问题4）', () => {
+  // 旧实现 win-<首簇>x<数量> 会让 [A,B,C] 与 [A,D,E] 撞成同一个 ID。
+  const t = GlyphIdentityTable.create('甲乙丙丁戊', 46)
+  const abc = t.idsForRange(0, 3).map((e) => e.glyphId)
+  const ade = t.idsForRange(4, 5).map((e) => e.glyphId)
+  const sameFirst = [abc[0], ade[0], abc[2]]
+  assert.equal(abc.length, sameFirst.length)
+  assert.equal(abc[0], sameFirst[0])
+  assert.notEqual(windowIdForGlyphIds(abc), windowIdForGlyphIds(sameFirst))
+})
+
+test('windowId: 长度前缀编码能从 id 唯一还原完整序列', () => {
+  const ids = ['orig-1-0', 'ins-2-3', 'orig-1-9']
+  const decoded = []
+  const encoded = windowIdForGlyphIds(ids)
+  const body = encoded.substring(encoded.indexOf('-', 4) + 1)
+  let cursor = 0
+  while (cursor < body.length) {
+    const colon = body.indexOf(':', cursor)
+    const size = Number.parseInt(body.substring(cursor, colon), 10)
+    decoded.push(body.substring(colon + 1, colon + 1 + size))
+    cursor = colon + 1 + size
+  }
+  assert.deepEqual(decoded, ids)
+})
+
+test('windowId: 空集合与组件 id 安全性', () => {
+  const t = GlyphIdentityTable.create('甲乙', 43)
+  const id = windowIdForGlyphIds(t.idsForRange(0, 2).map((e) => e.glyphId))
+  // 组件 id / ForEach key 允许字母数字、'-' 与长度分隔符 ':'
+  assert.match(id, /^[A-Za-z0-9:-]+$/)
+  // 空序列在生产路径不可达：身份表不可用时 Planner 会退回内容 hash 单元素列表，
+  // 因此这里只是一个稳定的哨兵值，不会被当成窗口节点身份使用。
+  assert.equal(windowIdForGlyphIds([]), 'win-empty')
+})
+
+test('entryByGlyphId: 按身份反查在屏正文区间', () => {
+  const t = GlyphIdentityTable.create('甲乙丙', 44)
+  const id = t.glyphIdAt(2)
+  const entry = t.entryByGlyphId(id)
+  assert.notEqual(entry, null)
+  assert.equal(entry.utf16Start, 2)
+  assert.equal(entry.utf16End, 3)
+  // 不在这份正文里的字（尚未上屏的新字）返回 null
+  assert.equal(t.entryByGlyphId('ins-999-0'), null)
+})
+
+test('clusterBoundaries: 与身份表分簇一致（emoji 整体一簇）', () => {
+  const text = 'a👨‍👩‍👧b'
+  const boundaries = clusterBoundaries(text, 0, text.length)
+  assert.equal(boundaries[0], 0)
+  assert.equal(boundaries[boundaries.length - 1], text.length)
+  // 'a' + 家庭 emoji（含 ZWJ）+ 'b' = 3 簇
+  assert.equal(boundaries.length - 1, 3)
+  // 与身份表条目一一对应
+  const table = GlyphIdentityTable.create(text, 45)
+  assert.equal(table.entries.length, boundaries.length - 1)
+})
+
+test('withRevision: 正文不变时沿用同一份身份，只推进 revision 标签', () => {
+  const before = GlyphIdentityTable.create('甲乙', 10)
+  const after = before.withRevision(11)
+  assert.equal(after.revision, 11)
+  assert.equal(after.text, before.text)
+  assert.equal(after.glyphIdAt(0), before.glyphIdAt(0))
+  assert.equal(after.glyphIdAt(1), before.glyphIdAt(1))
+  assert.equal(before.withRevision(10), before) // 同 revision 直接复用
+})
+
+test('跨修订连续性: 连着三笔编辑后，未被触碰的字仍是同一个身份', () => {
+  const t10 = GlyphIdentityTable.create('甲乙丙', 10)
+  const 甲 = t10.glyphIdAt(0)
+  const 乙 = t10.glyphIdAt(1)
+  const 丙 = t10.glyphIdAt(2)
+
+  // 11: 开头插入「前」
+  const t11 = t10.applyPatches([patch('甲乙丙', 0, 0, '前')], '前甲乙丙', 11)
+  // 12: 末尾插入「后」
+  const t12 = t11.applyPatches([patch('前甲乙丙', 4, 4, '后')], '前甲乙丙后', 12)
+  // 13: 删掉开头的「前」
+  const t13 = t12.applyPatches([patch('前甲乙丙后', 0, 1, '')], '甲乙丙后', 13)
+
+  assert.equal(t11.glyphIdAt(1), 甲)
+  assert.equal(t12.glyphIdAt(1), 甲)
+  assert.equal(t12.glyphIdAt(2), 乙)
+  assert.equal(t13.glyphIdAt(0), 甲) // 「甲」从 offset 1 平移到 0，身份不变
+  assert.equal(t13.glyphIdAt(1), 乙)
+  assert.equal(t13.glyphIdAt(2), 丙)
+  assert.notEqual(t13.glyphIdAt(3), 丙) // 「后」是 12 插入的新字，不是「丙」
+})
+
+test('applyPatches: 一次事务内多条 patch 顺序搬运', () => {
+  const t0 = GlyphIdentityTable.create('abcd', 20)
+  const b = t0.glyphIdAt(1)
+  const d = t0.glyphIdAt(3)
+  // 同时：删掉 a，删掉 c
+  const t1 = t0.applyPatches([
+    patch('abcd', 0, 1, ''),
+    patch('abcd', 2, 3, ''),
+  ], 'bd', 21)
+  assert.equal(t1.glyphIdAt(0), b)
+  assert.equal(t1.glyphIdAt(1), d)
+})
+
+test('applyPatches: 替换后旧条目被丢弃且新条目拿到新身份', () => {
+  const t0 = GlyphIdentityTable.create('甲乙', 30)
+  const 乙 = t0.glyphIdAt(1)
+  const t1 = t0.applyPatches([patch('甲乙', 0, 1, '丙')], '丙乙', 31)
+  assert.equal(t1.glyphIdAt(1), 乙)
+  assert.ok(t1.glyphIdAt(0).startsWith('ins-31-'))
+})
+
+console.log('---')
+console.log(`✅ editor_glyph_identity: ${passed} tests passed`)

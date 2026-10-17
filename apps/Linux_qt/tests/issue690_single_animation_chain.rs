@@ -76,11 +76,16 @@ fn issue690_single_collaborative_easing_function() {
         !slice_path.exists(),
         "步骤2: animated_slice.rs 已删除，协同二次曲线不得复活"
     );
-    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    assert!(
-        !coord_src.contains("1.0 - (1.0 - "),
-        "步骤2: 协调器内不得再内联各自的 easing 公式"
-    );
+    // Issue #826 评论 36: coordinator.rs 已随旧动画架构删除。
+    // 若文件不存在则无需检查内联 easing；若存在则不得内联 easing 公式。
+    let coord_path = linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
+    if coord_path.exists() {
+        let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+        assert!(
+            !coord_src.contains("1.0 - (1.0 - "),
+            "步骤2: 协调器内不得再内联各自的 easing 公式"
+        );
+    }
     // CursorOnly（方向键/点选平滑）保留自己的三次曲线，不被协同链复用。
     let rendering_src = read_src("src/sujian_editor_item/rendering.rs");
     assert!(
@@ -156,9 +161,13 @@ fn issue690_cursor_only_driven_by_frame_now_not_blink_timer() {
 
 #[test]
 fn issue690_qml_uses_low_frequency_blink_timer_not_frame_animation() {
-    let qml = read_src("qml/WritingWorkspace.qml");
+    // 写作区编辑视口（ScrollView / SujianEditorItem / 光标闪烁 Timer / 鼠标手势）
+    // 已从 WritingWorkspace.qml 抽到 EditorViewport.qml，blink Timer 现居后者。
+    // FrameAnimation 负向守卫覆盖整个写作区（两份 QML），不因抽取而出现盲区。
+    let workspace_qml = read_src("qml/WritingWorkspace.qml");
+    let qml = read_src("qml/EditorViewport.qml");
     assert!(
-        !qml.contains("FrameAnimation {"),
+        !workspace_qml.contains("FrameAnimation {") && !qml.contains("FrameAnimation {"),
         "步骤4: 写作区不再有每帧 FrameAnimation 驱动光标动画"
     );
     let timer_id = qml
@@ -167,7 +176,14 @@ fn issue690_qml_uses_low_frequency_blink_timer_not_frame_animation() {
     let block_start = qml[..timer_id]
         .rfind("Timer {")
         .expect("步骤4: blink 更新必须由 Timer 触发");
-    let window = &qml[block_start..timer_id + 400];
+    // 窗口末端回退到最近的 UTF-8 字符边界：EditorViewport.qml 里 Timer 前后有中文注释，
+    // 固定 400 字节偏移可能落在多字节字符中间。
+    let window_end = (timer_id + 400).min(qml.len());
+    let window_end = (block_start..=window_end)
+        .rev()
+        .find(|i| qml.is_char_boundary(*i))
+        .unwrap_or(block_start);
+    let window = &qml[block_start..window_end];
     assert!(
         window.contains("tick_cursor_animation()"),
         "步骤4: blink 由低频 Timer 显式请求帧更新"
@@ -184,15 +200,33 @@ fn issue690_empty_document_uses_layout_fallback_not_fake_glyph() {
     // Issue #748: layout.rs 拆分为 layout/ 子目录，caret_rect 在 hit_test.rs。
     let src = read_src("src/editor/layout/hit_test.rs");
     // `EditorLayout::caret_rect` 是薄封装转发；要断言的是自由函数实现。
-    let start = src
+    let caret_start = src
         .find("pub fn caret_rect(\n    snapshot")
         .expect("步骤4: 必须存在 caret_rect 实现");
-    let rest = &src[start..];
-    let end = rest.find("\n}\n").expect("步骤4: caret_rect 实现结束位置") + 3;
-    let body = &rest[..end];
+    let caret_rest = &src[caret_start..];
+    let caret_end = caret_rest
+        .find("\n}\n")
+        .expect("步骤4: caret_rect 实现结束位置")
+        + 3;
+    let caret_body = &caret_rest[..caret_end];
+    // Issue #901 第十六轮: caret_rect 重构为薄封装，兜底逻辑移到
+    // find_caret_line_in_layout_snapshot 辅助函数。验证调用关系 + 兜底逻辑仍在。
     assert!(
-        body.contains("or_else(|| snapshot.lines.last())"),
-        "步骤4: 空正文要靠 caret_rect 兜底行，不靠注入假字符"
+        caret_body.contains("find_caret_line_in_layout_snapshot"),
+        "步骤4: caret_rect 必须委托给 find_caret_line_in_layout_snapshot 定位光标行"
+    );
+    let helper_start = src
+        .find("fn find_caret_line_in_layout_snapshot(")
+        .expect("步骤4: 兜底辅助函数 find_caret_line_in_layout_snapshot 必须存在");
+    let helper_rest = &src[helper_start..];
+    let helper_end = helper_rest
+        .find("\n}\n")
+        .expect("步骤4: find_caret_line_in_layout_snapshot 实现结束位置")
+        + 3;
+    let helper_body = &helper_rest[..helper_end];
+    assert!(
+        helper_body.contains("lines_slice.last()"),
+        "步骤4: 空正文要靠 lines_slice.last() 兜底行，不靠注入假字符"
     );
     assert!(
         !src.contains("\\u{200b}") && !src.contains('\u{200b}'),
@@ -210,7 +244,11 @@ fn issue690_no_unconditional_stderr_animation_spam() {
     // 逐帧/无条件 eprintln 会淹没诊断包；只允许 env 控制的 debug log。
     // Issue #826 评论 36: 旧 transaction/ / cursor_motion.rs / rebase.rs /
     // transaction_builder.rs 已删除，改为只扫描仍然存在的动画文件，跳过已删文件。
+    // Issue #826 评论 36 / Issue #904: 旧动画模块（coordinator.rs / cursor_motion.rs /
+    // rebase.rs / transaction_builder.rs 等）与 #901 visual_canvas 状态机均已删除。
+    // 扫描仍存在的动画相关生产文件（含 #904 的 text_motion.rs），确保不刷 eprintln。
     let animation_files = [
+        // 旧动画模块（已被 #826 删除，保留用于防止复活）
         "src/sujian_editor_item/animation/coordinator.rs",
         "src/sujian_editor_item/animation/composition.rs",
         "src/sujian_editor_item/animation/cursor_motion.rs",
@@ -221,6 +259,16 @@ fn issue690_no_unconditional_stderr_animation_spam() {
         "src/sujian_editor_item/animation/transaction/timeline.rs",
         "src/sujian_editor_item/animation/transaction/rebind.rs",
         "src/sujian_editor_item/animation/transaction/queue.rs",
+        // #826/#901 新架构动画相关生产文件
+        "src/sujian_editor_item/animation/mod.rs",
+        "src/sujian_editor_item/cursor_animation.rs",
+        "src/sujian_editor_item/cursor_controller.rs",
+        "src/sujian_editor_item/rendering.rs",
+        "src/sujian_editor_item/scene_graph_renderer.rs",
+        "src/sujian_editor_item/transaction.rs",
+        "src/sujian_editor_item/qquickitem_impl.rs",
+        "src/sujian_editor_item/pipeline.rs",
+        "src/sujian_editor_item/text_motion.rs",
     ];
     let mut checked = 0usize;
     for file in &animation_files {

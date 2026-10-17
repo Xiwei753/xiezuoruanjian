@@ -9,7 +9,8 @@
 //! 修复后正确结构：
 //! 1. `record_composition_commit_transaction` 内有 `LayoutRevision::next()` 生成新 revision；
 //! 2. 内有 `reconcile_active_transactions_with_canonical` 把旧活动事务重绑到新 canonical；
-//! 3. 内有 `set_current_canonical_snapshot` 提交新 canonical identity；
+//! 3. canonical document snapshot 由 EditorLayout 单一持有（Issue #904 清理，
+//!    不再 `set_current_canonical_snapshot`）；
 //! 4. 内有 `set_layout_revision` 无条件提交新 revision；
 //! 5. 内不再用 `let layout_basis_revision = self.pipeline.layout_revision()` 当新事务 basis；
 //! 6. `build_editor_layout_snapshot_with_canonical` helper 存在，返回
@@ -17,7 +18,7 @@
 //! 7. `build_editor_layout_snapshot` 内部调 `build_editor_layout_snapshot_with_canonical`；
 //! 8. 顺序守卫：`reconcile_active_transactions_with_canonical` 调用在
 //!    `handle_composition_commit_or_cancel` 调用之前；
-//! 9. 顺序守卫：`set_layout_revision` / `set_current_canonical_snapshot` 在
+//! 9. 顺序守卫：`set_layout_revision` 在
 //!    `handle_composition_commit_or_cancel` 之后（先创建事务再提升 canonical）。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -75,27 +76,29 @@ fn fix1a_record_composition_commit_has_layout_revision_next() {
     );
 }
 
-/// 守卫1b: `record_composition_commit_transaction` 内有
-/// `reconcile_active_transactions_with_canonical` 把旧活动事务重绑到新 canonical。
+/// 守卫1b: `record_composition_commit_transaction` 内通过唯一的 text_motion 计划处理编辑结果。
+/// #826/#901 重写后旧 reconcile_active_transactions_with_canonical 已删除，
+/// 编辑结果收口到唯一的 text_motion 计划，不再有整章 RevisionChain。
 #[test]
 fn fix1b_record_composition_commit_has_reconcile() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        window.contains(RECONCILE_CALL),
-        "修复后 record_composition_commit_transaction 应调 .reconcile_active_transactions_with_canonical( 。"
+        window.contains("TextMotion::begin_or_retarget"),
+        "修复后 record_composition_commit_transaction 应通过 text_motion.begin_or_retarget 处理编辑结果。"
     );
 }
 
-/// 守卫1c: `record_composition_commit_transaction` 内有
-/// `set_current_canonical_snapshot` 提交新 canonical identity。
+/// 守卫1c（Issue #904 清理）: `record_composition_commit_transaction` 不再
+/// `set_current_canonical_snapshot`；canonical document snapshot 由 EditorLayout
+/// 单一持有，不再往 Pipeline 交第二份。
 #[test]
 fn fix1c_record_composition_commit_has_set_current_canonical_snapshot() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        window.contains(".set_current_canonical_snapshot("),
-        "修复后 record_composition_commit_transaction 应调 .set_current_canonical_snapshot( 提交新 canonical。"
+        !window.contains(".set_current_canonical_snapshot("),
+        "Issue #904 清理后 record_composition_commit_transaction 不得再提交第二份 canonical。"
     );
 }
 
@@ -140,25 +143,24 @@ fn fix1f_record_composition_commit_uses_helper_with_canonical() {
 // 守卫2: build_editor_layout_snapshot_with_canonical helper 存在且被原函数调用
 // =========================================================================
 
-/// 守卫2a: `build_editor_layout_snapshot_with_canonical` helper 存在，返回
-/// `Result<(EditorLayoutSnapshot, CanonicalDocumentVisualSnapshot), String>`。
-/// Issue #810 评论 5934658350: 返回类型跨多行（`-> Result<` 后换行 `(`），守卫改为
-/// 检查 `-> Result<` 而非 `-> (` 单行子串。
+/// 守卫2a（Issue #904 清理）: `build_editor_layout_snapshot_with_canonical` helper
+/// 存在，返回 `Result<EditorLayoutSnapshot, String>`；不再上交第二份
+/// `CanonicalDocumentVisualSnapshot`。
 #[test]
 fn fix2a_helper_build_editor_layout_snapshot_with_canonical_exists() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
     let window = function_window(&src, "fn build_editor_layout_snapshot_with_canonical", 8000);
     assert!(
         window.contains("-> Result<"),
-        "修复后 build_editor_layout_snapshot_with_canonical 应返回 Result tuple。"
+        "修复后 build_editor_layout_snapshot_with_canonical 应返回 Result。"
     );
     assert!(
         window.contains("EditorLayoutSnapshot"),
         "修复后 build_editor_layout_snapshot_with_canonical 返回类型应含 EditorLayoutSnapshot。"
     );
     assert!(
-        window.contains("CanonicalDocumentVisualSnapshot"),
-        "修复后 build_editor_layout_snapshot_with_canonical 返回类型应含 CanonicalDocumentVisualSnapshot。"
+        !window.contains("CanonicalDocumentVisualSnapshot"),
+        "Issue #904 清理后 helper 不得再返回第二份 CanonicalDocumentVisualSnapshot。"
     );
 }
 
@@ -181,9 +183,10 @@ fn fix2b_build_editor_layout_snapshot_calls_helper() {
         window.contains("build_editor_layout_snapshot_with_canonical"),
         "修复后 build_editor_layout_snapshot 应调 build_editor_layout_snapshot_with_canonical。"
     );
+    // Issue #904 清理: helper 现在直接返回 EditorLayoutSnapshot，不再取 tuple 的 .0。
     assert!(
-        window.contains(".0"),
-        "修复后 build_editor_layout_snapshot 应取 tuple 的 .0（EditorLayoutSnapshot）。"
+        !window.contains(".0"),
+        "Issue #904 清理后 build_editor_layout_snapshot 不应再取 tuple 的 .0。"
     );
 }
 
@@ -211,82 +214,86 @@ fn fix3a_pipeline_has_set_layout_revision_setter() {
 // 守卫4: 顺序守卫 — reconcile 在 handle_composition_commit_or_cancel 之前
 // =========================================================================
 
-/// 守卫4a: `record_composition_commit_transaction` 中
-/// `reconcile_active_transactions_with_canonical` 调用在
-/// `handle_composition_commit_or_cancel` 调用之前（先 reconcile 旧事务再创建新事务）。
+/// 守卫4a: `record_composition_commit_transaction` 中编辑结果处理（apply_edit_result）
+/// 在 `set_layout_revision` 之前（先处理编辑结果再提升 canonical revision）。
+/// #826/#901 重写后旧 reconcile/handle_composition_commit_or_cancel 已删除，
+/// 由 text_motion.begin_or_retarget 统一处理。
 #[test]
 fn fix4a_reconcile_before_handle_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
 
-    assert!(
-        window.contains(RECONCILE_CALL),
-        "修复后 record_composition_commit_transaction 应调 .reconcile_active_transactions_with_canonical( 。"
-    );
-    assert!(
-        window.contains(HANDLE_CALL),
-        "修复后 record_composition_commit_transaction 应调 .handle_composition_commit_or_cancel( 。"
-    );
-
-    let reconcile_pos = window
-        .find(RECONCILE_CALL)
-        .expect("reconcile 调用已确认存在");
-    let handle_pos = window.find(HANDLE_CALL).expect("handle 调用已确认存在");
+    let apply_marker = "TextMotion::begin_or_retarget";
+    let set_rev_marker = ".set_layout_revision(";
 
     assert!(
-        reconcile_pos < handle_pos,
-        "修复后 .reconcile_active_transactions_with_canonical( 调用 ({}) 必须在 .handle_composition_commit_or_cancel( 调用 ({}) 之前，\
-         保证旧活动事务先被重绑到新 canonical，再创建新事务。",
-        reconcile_pos, handle_pos
+        window.contains(apply_marker),
+        "修复后 record_composition_commit_transaction 应含 apply_edit_result。"
+    );
+    assert!(
+        window.contains(set_rev_marker),
+        "修复后 record_composition_commit_transaction 应调 .set_layout_revision( 。"
+    );
+
+    let apply_pos = window
+        .find(apply_marker)
+        .expect("apply_edit_result 已确认存在");
+    let set_rev_pos = window
+        .find(set_rev_marker)
+        .expect("set_layout_revision 调用已确认存在");
+
+    assert!(
+        apply_pos < set_rev_pos,
+        "修复后 apply_edit_result 调用 ({}) 必须在 .set_layout_revision( 调用 ({}) 之前，\
+         保证编辑结果先被 text_motion 消费，再提升 canonical revision。",
+        apply_pos,
+        set_rev_pos
     );
 }
 
-/// 守卫4b: `record_composition_commit_transaction` 中
-/// `set_layout_revision` / `set_current_canonical_snapshot` 调用在
-/// `handle_composition_commit_or_cancel` 之后或同一次提交（先创建事务再提升 canonical）。
+/// 守卫4b（Issue #904 清理）: `record_composition_commit_transaction` 中
+/// `set_layout_revision` 调用在 `apply_edit_result` 之后（先处理编辑结果再提升
+/// revision）；canonical document snapshot 由 EditorLayout 单一持有。
+/// #826/#901 重写后旧 handle_composition_commit_or_cancel 已删除。
 #[test]
 fn fix4b_set_layout_revision_after_handle_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
 
+    let apply_marker = "TextMotion::begin_or_retarget";
     let set_rev_marker = ".set_layout_revision(";
-    let set_canonical_marker = ".set_current_canonical_snapshot(";
-
-    let handle_pos = window.find(HANDLE_CALL).expect("handle 调用已确认存在");
+    let apply_pos = window
+        .find(apply_marker)
+        .expect("apply_edit_result 调用已确认存在");
     let set_rev_pos = window
         .find(set_rev_marker)
         .expect("set_layout_revision 调用已确认存在");
-    let set_canonical_pos = window
-        .find(set_canonical_marker)
-        .expect("set_current_canonical_snapshot 调用已确认存在");
-
     assert!(
-        handle_pos < set_rev_pos,
-        "修复后 .set_layout_revision( 调用 ({}) 必须在 .handle_composition_commit_or_cancel( 调用 ({}) 之后，\
-         先创建新事务再提升 canonical revision。",
-        set_rev_pos, handle_pos
+        apply_pos < set_rev_pos,
+        "修复后 .set_layout_revision( 调用 ({}) 必须在 apply_edit_result 调用 ({}) 之后，\
+         先处理编辑结果再提升 canonical revision。",
+        set_rev_pos,
+        apply_pos
     );
     assert!(
-        handle_pos < set_canonical_pos,
-        "修复后 .set_current_canonical_snapshot( 调用 ({}) 必须在 .handle_composition_commit_or_cancel( 调用 ({}) 之后，\
-         先创建新事务再提交 canonical identity。",
-        set_canonical_pos, handle_pos
+        !window.contains(".set_current_canonical_snapshot("),
+        "Issue #904 清理后 record_composition_commit_transaction 不得再提交第二份 canonical。"
     );
 }
 
-/// 守卫4c: `record_composition_commit_transaction` 用统一 `edit_now` 采样
-///（与普通正文路径 prepare_edit_motion 行 1398 一致）。
+/// 守卫4c: `record_composition_commit_transaction` 通过唯一的 text_motion 计划统一处理编辑结果。
+/// #826/#901 重写后旧 edit_now / reconcile 时间采样已删除，
+/// 编辑结果由 text_motion.begin_or_retarget 统一消费，不再需要手动时间采样。
 #[test]
 fn fix4c_unified_edit_now_in_record_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        window.contains("let edit_now = std::time::Instant::now();"),
-        "修复后 record_composition_commit_transaction 应有 let edit_now = std::time::Instant::now(); 统一时间采样。"
+        window.contains("TextMotion::begin_or_retarget"),
+        "修复后 record_composition_commit_transaction 应通过 text_motion.begin_or_retarget 统一处理编辑结果。"
     );
-    // edit_now 传给 reconcile_active_transactions_with_canonical。
     assert!(
-        window.contains("new_revision,\n                edit_now,\n            );"),
-        "修复后 edit_now 应传给 reconcile_active_transactions_with_canonical。"
+        window.contains("LayoutRevision::next()"),
+        "修复后 record_composition_commit_transaction 应含 LayoutRevision::next() 生成新 revision。"
     );
 }

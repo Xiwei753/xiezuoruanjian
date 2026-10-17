@@ -67,8 +67,6 @@ export struct SettingsContent {
   @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @Local adaptiveState: AdaptiveState = getAdaptiveState()
   @Local searchText: string = ''
-  // 搜索过滤后的分组列表（窄屏搜索用）
-  @Local filteredGroups: GroupDefinition[] = GROUP_DEFINITIONS
   // 问题5：复制设备信息结果提示
   @Local copyMessage: string = ''
 
@@ -104,59 +102,58 @@ export struct SettingsContent {
   }
 
   // ── 搜索过滤设置项（窄屏搜索用） ──
-  // 匹配分组标题（getGroupTitle）、分类标题（getSectionTitle）和具体设置项标题（getSectionSearchTerms），
-  // 搜索文本匹配到某个分类时，自动展开该分类。
-  private filterSettings(searchText: string): void {
-    if (searchText.length === 0) {
-      this.filteredGroups = GROUP_DEFINITIONS
-      return
+  // 纯函数：只按当前 searchText 派生可见分组，不写任何 @Local/@Trace，也不改展开状态。
+  // 展开状态只由用户点击分类标题触发的 toggleSection（见 ExpandableCategory.onClick）修改。
+  // 搜索命中的分类在显示层临时展开（isSectionExpandedForDisplay），不落持久化折叠状态。
+  private deriveFilteredGroups(keyword: string): GroupDefinition[] {
+    const normalized = keyword.trim().toLowerCase()
+    if (normalized.length === 0) {
+      return GROUP_DEFINITIONS
     }
 
-    const keyword = searchText.toLowerCase()
     const result: GroupDefinition[] = []
-
     for (const groupDef of GROUP_DEFINITIONS) {
       const groupTitle = this.getGroupTitle(groupDef.id).toLowerCase()
-      let groupMatched = groupTitle.includes(keyword)
+      const groupMatched = groupTitle.includes(normalized)
 
-      // 检查分组内各分类标题及具体设置项标题是否匹配
       const matchedSections: SettingsSectionId[] = []
       for (const sectionId of groupDef.sections) {
-        const sectionTitle = this.getSectionTitle(sectionId).toLowerCase()
-        if (sectionTitle.includes(keyword)) {
+        if (this.sectionMatchesKeyword(sectionId, normalized)) {
           matchedSections.push(sectionId)
-          groupMatched = true
-          continue
-        }
-        // 检查具体设置项标题是否匹配
-        const searchTerms = this.getSectionSearchTerms(sectionId)
-        for (const term of searchTerms) {
-          if (term.toLowerCase().includes(keyword)) {
-            matchedSections.push(sectionId)
-            groupMatched = true
-            break
-          }
         }
       }
 
+      // 分组标题命中：保留分组下全部分类；仅部分分类命中：只保留命中的分类。
       if (groupMatched) {
-        // 如果分组标题匹配，保留全部分类；如果只有部分分类匹配，只保留匹配的分类
-        if (groupTitle.includes(keyword)) {
-          result.push(groupDef)
-        } else {
-          result.push({ id: groupDef.id, sections: matchedSections })
-        }
-
-        // 自动展开匹配到的分类
-        for (const sectionId of matchedSections) {
-          if (!this.viewModel.isSectionExpanded(sectionId)) {
-            this.viewModel.toggleSection(sectionId)
-          }
-        }
+        result.push(groupDef)
+      } else if (matchedSections.length > 0) {
+        result.push({ id: groupDef.id, sections: matchedSections })
       }
     }
+    return result
+  }
 
-    this.filteredGroups = result
+  // 单个分类是否命中关键词（分类标题或分类内具体设置项标题）。keyword 需为小写。
+  private sectionMatchesKeyword(sectionId: SettingsSectionId, keyword: string): boolean {
+    if (this.getSectionTitle(sectionId).toLowerCase().includes(keyword)) {
+      return true
+    }
+    for (const term of this.getSectionSearchTerms(sectionId)) {
+      if (term.toLowerCase().includes(keyword)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  // 显示层展开判断：搜索激活且当前分类命中时临时展开，否则读用户折叠状态。
+  // 这是纯读取，不在渲染期写状态，避免 re-render 期间往更新队列塞新节点。
+  private isSectionExpandedForDisplay(sectionId: SettingsSectionId): boolean {
+    const keyword = this.searchText.trim().toLowerCase()
+    if (keyword.length > 0 && this.sectionMatchesKeyword(sectionId, keyword)) {
+      return true
+    }
+    return this.viewModel.isSectionExpanded(sectionId)
   }
 
   // ── 保存设置后的消息解析（问题9：在页面层做本地化，ViewModel 只管状态） ──
@@ -353,8 +350,9 @@ export struct SettingsContent {
           .fontSize(14)
           .backgroundColor(Color.Transparent)
           .onChange((value: string) => {
+            // 只更新搜索词；可见分组由 deriveFilteredGroups(searchText) 纯派生，
+            // 不再在事件里改写 filteredGroups / 展开状态，避免一次事件多次响应式写入。
             this.searchText = value
-            this.filterSettings(value)
           })
       }
       .width('100%')
@@ -390,7 +388,7 @@ export struct SettingsContent {
   // ── 分组列表（窄屏折叠布局，支持搜索过滤） ──
   @Builder
   SettingsGroupList() {
-    ForEach(this.filteredGroups, (groupDef: GroupDefinition) => {
+    ForEach(this.deriveFilteredGroups(this.searchText), (groupDef: GroupDefinition) => {
       Column() {
         // 分组标题（单分类且组名等于分类名时不重复画）
         if (this.shouldShowGroupHeader(groupDef)) {
@@ -461,7 +459,7 @@ export struct SettingsContent {
         Image($r('sys.media.ohos_ic_public_arrow_down'))
           .width(20)
           .height(20)
-          .rotate({ angle: this.viewModel.isSectionExpanded(sectionId) ? 180 : 0 })
+          .rotate({ angle: this.isSectionExpandedForDisplay(sectionId) ? 180 : 0 })
           .animation({ duration: 150, curve: Curve.EaseInOut })
       }
       .width('100%')
@@ -470,7 +468,7 @@ export struct SettingsContent {
       .onClick(() => this.viewModel.toggleSection(sectionId))
 
       // 分类内容（展开时显示）
-      if (this.viewModel.isSectionExpanded(sectionId)) {
+      if (this.isSectionExpandedForDisplay(sectionId)) {
         Column() {
           this.SectionContent(sectionId)
         }
@@ -719,26 +717,7 @@ export struct SettingsContent {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 打字动画 — 按 Issue #629 静态编辑链路有意不做动画，开关禁用
-      Row() {
-        Text($r('app.string.typing_animation'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false })
-          .enabled(false)
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
 
-      // 平滑光标 — 按 Issue #629 静态编辑链路有意不做光标动画，开关禁用
-      Row() {
-        Text($r('app.string.smooth_cursor'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false })
-          .enabled(false)
-      }
-      .width('100%')
     }
     .width('100%')
     .padding(16)
@@ -888,23 +867,6 @@ export struct SettingsContent {
             .fontSize(14)
             .onChange((value: string) => {
               this.viewModel.updateSyncRemoteUrl(value)
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-
-        // 分支
-        Column() {
-          Text($r('app.string.sync_branch'))
-            .fontSize(16)
-            .margin({ bottom: 8 })
-
-          TextInput({ text: this.viewModel.syncBranch })
-            .width('100%')
-            .height(40)
-            .fontSize(14)
-            .onChange((value: string) => {
-              this.viewModel.updateSyncBranch(value)
             })
         }
         .width('100%')
@@ -1393,26 +1355,7 @@ export struct SettingsContent {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 打字动画 — 按 Issue #629 静态编辑链路有意不做动画，开关禁用
-      Row() {
-        Text($r('app.string.typing_animation'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false })
-          .enabled(false)
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
 
-      // 平滑光标 — 按 Issue #629 静态编辑链路有意不做光标动画，开关禁用
-      Row() {
-        Text($r('app.string.smooth_cursor'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false })
-          .enabled(false)
-      }
-      .width('100%')
     }
   }
 
@@ -1544,23 +1487,6 @@ export struct SettingsContent {
             .fontSize(14)
             .onChange((value: string) => {
               this.viewModel.updateSyncRemoteUrl(value)
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-
-        // 分支
-        Column() {
-          Text($r('app.string.sync_branch'))
-            .fontSize(16)
-            .margin({ bottom: 8 })
-
-          TextInput({ text: this.viewModel.syncBranch })
-            .width('100%')
-            .height(40)
-            .fontSize(14)
-            .onChange((value: string) => {
-              this.viewModel.updateSyncBranch(value)
             })
         }
         .width('100%')
@@ -1979,9 +1905,7 @@ export struct SettingsContent {
       case 'editor':
         return [
           ctx.resourceManager.getStringSync($r('app.string.auto_indent').id),
-          ctx.resourceManager.getStringSync($r('app.string.indent_width').id),
-          ctx.resourceManager.getStringSync($r('app.string.typing_animation').id),
-          ctx.resourceManager.getStringSync($r('app.string.smooth_cursor').id)
+          ctx.resourceManager.getStringSync($r('app.string.indent_width').id)
         ]
       case 'save':
         return [
@@ -1993,7 +1917,6 @@ export struct SettingsContent {
           ctx.resourceManager.getStringSync($r('app.string.enable_sync').id),
           ctx.resourceManager.getStringSync($r('app.string.auto_sync').id),
           ctx.resourceManager.getStringSync($r('app.string.github_repo').id),
-          ctx.resourceManager.getStringSync($r('app.string.sync_branch').id),
           ctx.resourceManager.getStringSync($r('app.string.https_token').id),
           ctx.resourceManager.getStringSync($r('app.string.sync_interval').id),
           ctx.resourceManager.getStringSync($r('app.string.diagnose').id)
@@ -2179,8 +2102,9 @@ export struct SettingsContent {
           .fontSize(14)
           .backgroundColor(Color.Transparent)
           .onChange((value: string) => {
+            // 只更新搜索词；可见分组由 deriveFilteredGroups(searchText) 纯派生，
+            // 不再在事件里改写 filteredGroups / 展开状态，避免一次事件多次响应式写入。
             this.searchText = value
-            this.filterSettings(value)
           })
       }
       .width('100%')
@@ -2194,9 +2118,9 @@ export struct SettingsContent {
   }
 
   // 把过滤后的分组按列数均分，第一列多一个。
-  private columnGroups(index: number): GroupDefinition[] {
-    const split = Math.ceil(this.filteredGroups.length / 2)
-    return index === 0 ? this.filteredGroups.slice(0, split) : this.filteredGroups.slice(split)
+  private columnGroups(groups: GroupDefinition[], index: number): GroupDefinition[] {
+    const split = Math.ceil(groups.length / 2)
+    return index === 0 ? groups.slice(0, split) : groups.slice(split)
   }
 
   @Builder
@@ -2222,7 +2146,7 @@ export struct SettingsContent {
   TwoColumnSettingsLayout() {
     Row() {
       Scroll() {
-        this.SettingsGroupColumn(this.columnGroups(0), 0)
+        this.SettingsGroupColumn(this.columnGroups(this.deriveFilteredGroups(this.searchText), 0), 0)
       }
       .layoutWeight(1)
       .height('100%')
@@ -2231,7 +2155,7 @@ export struct SettingsContent {
       .padding({ left: this.adaptiveState.pagePadding, right: 12 })
 
       Scroll() {
-        this.SettingsGroupColumn(this.columnGroups(1), 1)
+        this.SettingsGroupColumn(this.columnGroups(this.deriveFilteredGroups(this.searchText), 1), 1)
       }
       .layoutWeight(1)
       .height('100%')

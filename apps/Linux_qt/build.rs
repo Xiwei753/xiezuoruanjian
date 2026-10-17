@@ -102,6 +102,76 @@ fn qt_version_meets_minimum(version: &str) -> bool {
     Version::new(major, minor, patch) >= Version::new(6, 7, 0)
 }
 
+/// Issue #912: 定位 KF6 ColorScheme 头文件目录（KColorSchemeManager 等）。
+///
+/// KF6ColorScheme 不提供 pkg-config 文件，因此这里显式探测头文件目录。
+/// 优先读取 `KF6_COLORSCHEME_INCLUDE_DIR` 环境变量，其次探测常见安装前缀。
+/// 返回值是直接包含 `KColorSchemeManager` 的目录（即 `<prefix>/include/KF6/KColorScheme`）。
+fn find_kf6_colorscheme_include_dir() -> Option<PathBuf> {
+    println!("cargo:rerun-if-env-changed=KF6_COLORSCHEME_INCLUDE_DIR");
+    if let Ok(dir) = std::env::var("KF6_COLORSCHEME_INCLUDE_DIR") {
+        if !dir.is_empty() {
+            let path = PathBuf::from(dir);
+            if path.join("KColorSchemeManager").exists()
+                || path.join("kcolorschememanager.h").exists()
+            {
+                return Some(path);
+            }
+        }
+    }
+
+    let candidates = [
+        "/usr/include/KF6/KColorScheme",
+        "/usr/local/include/KF6/KColorScheme",
+        "/run/host/usr/include/KF6/KColorScheme",
+        "/run/host/usr/local/include/KF6/KColorScheme",
+    ];
+    for candidate in candidates {
+        let path = PathBuf::from(candidate);
+        if path.join("KColorSchemeManager").exists() || path.join("kcolorschememanager.h").exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Issue #912: 把 KF6 ColorScheme 的头文件与链接参数注入 cpp_build 配置。
+///
+/// 头文件目录来自 [`find_kf6_colorscheme_include_dir`]；链接使用
+/// `KF6ColorScheme`。若同级存在 `lib64`/`lib` 目录也会加入搜索路径，
+/// 以兼容 `/run/host` 前缀等非默认位置。
+fn configure_kf6_colorscheme(config: &mut cpp_build::Config) {
+    let Some(include_dir) = find_kf6_colorscheme_include_dir() else {
+        panic!(
+            "未找到 KF6 ColorScheme 头文件（KColorSchemeManager）。请安装发行版的 \
+             `kf6-kcolorscheme-devel`（Fedora）或 `libkf6colorscheme-dev`（Debian/Ubuntu），\
+             或通过 KF6_COLORSCHEME_INCLUDE_DIR 指定 KColorScheme 头文件目录。"
+        );
+    };
+    config.include(&include_dir);
+
+    // include_dir 形如 <prefix>/include/KF6/KColorScheme，回推 <prefix> 以探测库目录。
+    // ancestors: 0=自身, 1=KF6, 2=include, 3=<prefix>。
+    if let Some(prefix) = include_dir
+        .ancestors()
+        .nth(3)
+        .map(Path::to_path_buf)
+    {
+        for lib_name in ["lib64", "lib"] {
+            let lib_dir = prefix.join(lib_name);
+            if lib_dir.is_dir() {
+                println!("cargo:rustc-link-search=native={}", lib_dir.display());
+            }
+        }
+    }
+    println!("cargo:rustc-link-lib=KF6ColorScheme");
+
+    // 原生桥源文件与头文件变更时重新编译。
+    println!("cargo:rerun-if-changed=src/native/kde_color_scheme_bridge.cpp");
+    println!("cargo:rerun-if-changed=src/native/kde_color_scheme_bridge.h");
+    config.file("src/native/kde_color_scheme_bridge.cpp");
+}
+
 fn find_qt6_qmake() -> Option<PathBuf> {
     if let Ok(qmake) = std::env::var("QMAKE") {
         let path = PathBuf::from(qmake);
@@ -475,6 +545,7 @@ fn main() {
     // Pages
     println!("cargo:rerun-if-changed=qml/main.qml");
     println!("cargo:rerun-if-changed=qml/SettingsDialog.qml");
+    println!("cargo:rerun-if-changed=qml/KdeSettingsPage.qml");
     println!("cargo:rerun-if-changed=qml/ActionRegistryPage.qml");
     println!("cargo:rerun-if-changed=qml/SyncPage.qml");
     println!("cargo:rerun-if-changed=qml/AppController.qml");
@@ -505,7 +576,6 @@ fn main() {
     // Issue #825：TopWritingToolbar.qml 已拆成工作台工具条带三段组件。
     println!("cargo:rerun-if-changed=qml/WritingWorkbenchToolbar.qml");
     println!("cargo:rerun-if-changed=qml/WritingFormatGroup.qml");
-    println!("cargo:rerun-if-changed=qml/ToolbarIconButton.qml");
     println!("cargo:rerun-if-changed=qml/WritingToolRail.qml");
     println!("cargo:rerun-if-changed=qml/PaneFoldButton.qml");
     // Issue #829：底部状态栏 + 左树分组头
@@ -514,6 +584,8 @@ fn main() {
     // Issue #790 评论 5875963057: 全局顶栏公共入口组件
     println!("cargo:rerun-if-changed=qml/GlobalTopActions.qml");
     println!("cargo:rerun-if-changed=qml/EditorContextMenu.qml");
+    // Issue #904：编辑区视口层组件，WritingWorkspace 直接实例化，纳入重编译列表。
+    println!("cargo:rerun-if-changed=qml/EditorViewport.qml");
     println!("cargo:rerun-if-changed=qml/RightDrawer.qml");
     // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。
     println!("cargo:rerun-if-changed=qml/SyncConflictPanel.qml");
@@ -526,27 +598,12 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/CreateProjectCard.qml");
     println!("cargo:rerun-if-changed=qml/ProjectHomePage.qml");
     println!("cargo:rerun-if-changed=qml/StatCard.qml");
-    println!("cargo:rerun-if-changed=qml/SettingCard.qml");
-    println!("cargo:rerun-if-changed=qml/ModernSwitch.qml");
-    println!("cargo:rerun-if-changed=qml/ModernComboBox.qml");
-    println!("cargo:rerun-if-changed=qml/SettingsSection.qml");
     println!("cargo:rerun-if-changed=qml/DashboardGrid.qml");
     println!("cargo:rerun-if-changed=qml/DashboardSection.qml");
     // Components
-    println!("cargo:rerun-if-changed=qml/AppButton.qml");
-    println!("cargo:rerun-if-changed=qml/AppCard.qml");
-    println!("cargo:rerun-if-changed=qml/AppTextField.qml");
-    println!("cargo:rerun-if-changed=qml/AppSwitch.qml");
-    println!("cargo:rerun-if-changed=qml/AppSlider.qml");
-    println!("cargo:rerun-if-changed=qml/AppComboBox.qml");
-    println!("cargo:rerun-if-changed=qml/AppDialog.qml");
-    println!("cargo:rerun-if-changed=qml/AppText.qml");
     println!("cargo:rerun-if-changed=qml/SectionHeader.qml");
-    println!("cargo:rerun-if-changed=qml/SettingsRow.qml");
     println!("cargo:rerun-if-changed=qml/DesktopWheelScrollHandler.qml");
-    println!("cargo:rerun-if-changed=qml/SidebarItem.qml");
     println!("cargo:rerun-if-changed=qml/StatusPill.qml");
-    println!("cargo:rerun-if-changed=qml/ToolbarButton.qml");
     println!("cargo:rerun-if-changed=qml");
     if let Ok(entries) = fs::read_dir("qml") {
         for entry in entries.flatten() {
@@ -594,6 +651,8 @@ fn main() {
     );
     config.include(qmetaobject_dir);
     qt_info.apply_to(&mut config);
+    // Issue #912: KDE 应用配色方案切换桥需要 KF6 ColorScheme 头文件与链接。
+    configure_kf6_colorscheme(&mut config);
     println!(
         "cargo:warning=Linux Qt binding selected Qt {} via {}",
         qt_info.version, qt_info.source

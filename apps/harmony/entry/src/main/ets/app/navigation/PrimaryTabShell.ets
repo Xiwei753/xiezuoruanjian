@@ -36,6 +36,7 @@ import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 import { HdsPrimaryTabsApi23 } from './impl/api23/HdsPrimaryTabsApi23'
 import { HeaderActionCapsule } from './impl/api23/HeaderActionCapsule'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
@@ -262,7 +263,24 @@ export struct PrimaryTabShell {
 
   // Issue #767：Tabs onChange 切换后只更新 currentTab，由 @Watch 统一触发 syncActiveTab。
   // 一级切换只切 tab index，不再 clear() + pushPath() 重建根页面。
+  // Issue #906：onChange 只管真实状态提交，不在这里记用户意图——程序化恢复（applyContinuation 等）
+  // 也会触发 onChange，记成 User 会把恢复伪装成点击。用户意图由 onTabBarClick 记 nav.tab_requested。
   private onTabChange(index: number): void {
+    this.currentTab = index
+  }
+
+  // Issue #906：只记用户 Tab 意图（nav.tab_requested，User），不提交状态。
+  // 真正的切换由 onChange 写 currentTab → @Watch → syncActiveTab 完成，
+  // 避免在点击回调里强行改 index 绕过 onContentWillChange 交互锁。
+  private recordTabIntent(index: number): void {
+    const fields: DiagnosticField[] = [{ key: 'targetTab', value: String(index) }]
+    HarmonyDiagnosticEvents.record('Info', 'User', 'nav.tab_requested', 'PrimaryTabShell', fields)
+  }
+
+  // Issue #906：明确的用户切换入口（宽屏左栏点击、作品页「打开星图」）。
+  // 先记用户意图，再提交 currentTab；@Watch 只同步实际状态，nav.tab_changed 归为 App。
+  private recordUserTabRequest(index: number): void {
+    this.recordTabIntent(index)
     this.currentTab = index
   }
 
@@ -287,7 +305,8 @@ export struct PrimaryTabShell {
       // Issue #768 评论5838624438：星图快捷入口改为切换一级 tab，不再 push 进 homeStack。
       HomeScreen({
         onOpenStarMap: (): void => {
-          this.currentTab = TAB_STARMAP
+          // Issue #906：作品页「打开星图」是明确的用户入口，走统一的用户 Tab 请求记录。
+          this.recordUserTabRequest(TAB_STARMAP)
         }
       })
     } else if (name === Routes.Workspace) {
@@ -410,7 +429,8 @@ export struct PrimaryTabShell {
     .borderRadius(DesignTokens.radiusSm)
     .backgroundColor(this.currentTab === entry.index ? $r('sys.color.comp_background_gray') : Color.Transparent)
     .onClick(() => {
-      this.currentTab = entry.index
+      // Issue #906：宽屏左栏点击是明确的用户入口，走统一的用户 Tab 请求记录。
+      this.recordUserTabRequest(entry.index)
     })
   }
 
@@ -484,7 +504,11 @@ export struct PrimaryTabShell {
             statsStack: this.statsStack,
             safeBottomVp: this.adaptiveState.safeBottomVp,
             currentShowPrimaryNav: this.currentShowPrimaryNav,
-            currentPrimaryNavInteractive: this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked
+            currentPrimaryNavInteractive: this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked,
+            // Issue #906：HdsTabs 的用户点击入口，转发到只记用户意图的方法（不改 currentTab）。
+            onUserTabClick: (index: number): void => {
+              this.recordTabIntent(index)
+            }
           })
       } else {
         Tabs({ barPosition: BarPosition.End, index: this.currentTab }) {
@@ -534,7 +558,12 @@ export struct PrimaryTabShell {
           }
           return true
         })
+        .onTabBarClick((index: number) => {
+          // Issue #906：onTabBarClick 是确认的用户点击入口，只记用户意图（nav.tab_requested）。
+          this.recordTabIntent(index)
+        })
         .onChange((index: number) => {
+          // Issue #906：onChange 只管真实状态提交（用户点击与程序化恢复都会走到这里）。
           this.onTabChange(index)
         })
         .width('100%')

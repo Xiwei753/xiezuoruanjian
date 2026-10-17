@@ -60,22 +60,30 @@ pub fn init_diagnostics(
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-/// C-ABI diagnostics init 入口 — Issue #670 评论 5652119660 修复 2a / #760 诊断导出。
+/// C-ABI diagnostics init 入口 — Issue #670 评论 5652119660 修复 2a / #760 诊断导出 / #911 启动设置读取。
 ///
 /// 供 NAPI 桥接层（`napi_init.cpp` 的 `NativeInitDiagnostics`）调用，
 /// 把目录/设备/版本/locale/timezone 等信息从 ArkTS 传进 Rust，
+/// 从 `app_data_root` 下的 `settings.local.json` 读取**真实**诊断开关，
 /// 构造 `DiagnosticsConfig` 并启动统一日志后端。
+///
+/// #911：此前 `enabled/verbose` 写死 `true/true`，启动日志是否开启与用户配置不一致，
+/// 只有用户打开设置页才会补关。这里在构造 config 之前先用仓库现成的
+/// `writer_core::settings::load_local_settings` 读同一份 Core LocalSettings，
+/// 不新建设置副本、不在 ArkTS 重写 JSON 解析器。
 ///
 /// ## 参数
 ///
 /// 所有 `*const c_char` 参数均为 NUL-terminated UTF-8 C 字符串。任一为 null 时
 /// 返回 `-1`（无效参数），不构造 config、不调用 `writer_diagnostics::init`。
+/// `app_data_root` 是 WriterCore 数据根，`settings.local.json` 位于其下。
 ///
 /// ## 返回码
 ///
 /// - `0`  成功
 /// - `-1` 任一参数为 null
 /// - `-2` 任一参数含无效 UTF-8
+/// - `-3` 本地设置读取/解析失败（不假称已应用用户配置）
 ///
 /// ## Safety
 ///
@@ -83,6 +91,7 @@ use std::os::raw::c_char;
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_init_diagnostics(
     log_dir: *const c_char,
+    app_data_root: *const c_char,
     device_id: *const c_char,
     app_version: *const c_char,
     build_key: *const c_char,
@@ -91,6 +100,10 @@ pub unsafe extern "C" fn writer_core_init_diagnostics(
 ) -> i32 {
     // SAFETY: 各参数 null 检查后再 CStr::from_ptr；调用方保证非 null 指针指向有效 NUL-terminated UTF-8。
     let log_dir_str = match c_str_to_rust(log_dir) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let app_data_root_str = match c_str_to_rust(app_data_root) {
         Ok(s) => s,
         Err(e) => return e,
     };
@@ -118,6 +131,18 @@ pub unsafe extern "C" fn writer_core_init_diagnostics(
     // session_id 在 Rust 里生成 — 每次启动唯一。
     let session_id = uuid::Uuid::new_v4().to_string();
 
+    // 启动即读 Core 真实本地设置：`load_local_settings` 已处理文件不存在时的 Core
+    // 默认值与旧设置迁移。读取/解析失败返回 -3，不继续用写死的 true/true 冒充用户配置。
+    let settings = match writer_core::settings::load_local_settings(std::path::Path::new(
+        &app_data_root_str,
+    )) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("writer_core_init_diagnostics: load_local_settings failed: {e}");
+            return -3;
+        }
+    };
+
     let config = writer_diagnostics::DiagnosticsConfig {
         log_dir: std::path::PathBuf::from(log_dir_str),
         platform_name: "harmony".to_string(),
@@ -127,8 +152,8 @@ pub unsafe extern "C" fn writer_core_init_diagnostics(
         locale: locale_str,
         timezone: timezone_str,
         session_id,
-        enabled: true,
-        verbose: true,
+        enabled: settings.diagnostics_enabled,
+        verbose: settings.diagnostics_verbose,
     };
     writer_diagnostics::init(config);
     0

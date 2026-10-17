@@ -2,6 +2,8 @@ use super::edit_flow::{CompositionCommitParams, EditOp};
 use super::layout_revision::LayoutRevision;
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;
+use crate::sujian_editor_item::pipeline::LocalTextSource;
+use crate::sujian_editor_item::pipeline::LocalTextTexturePrep;
 
 impl SujianEditorItem {
     pub(crate) fn flush_content_height(&mut self) {
@@ -88,7 +90,9 @@ impl SujianEditorItem {
         // Err 时记诊断并结束本次 commit，不伪装成功。
         let old_snapshot = self.pipeline.current_layout_snapshot().clone().or_else(|| {
             match self.build_editor_layout_snapshot(width, false, old_composition_range) {
-                Ok(snap) => Some(snap),
+                // Issue #904 评论 5: promote=false 的 generation 已在函数末尾 retire，
+                // 事实源不可得，旧一侧只能用快照里冻结的 image（build 内已冻结）。
+                Ok((snap, _source)) => Some(snap),
                 Err(err) => {
                     crate::backend::app_backend::debug_error_static(
                         "editing",
@@ -113,18 +117,26 @@ impl SujianEditorItem {
             );
         };
 
-        let change_count = super::edit_motion::diff_plain_text(&old.text, &new.text).len();
+        let change_count = result.display_patches.len();
 
-        // Issue #810 评论 5934658350: composition commit 在 Core 已提交 new text 后调用，
-        // 此时 pipeline.text_revision() 仍是 emit 前的 old revision。new canonical 必须带
-        // next text revision，与即将 emit_content_changed bump 后的正文 revision 对齐。
-        let canonical_text_revision = self.pipeline.text_revision().wrapping_add(1);
-        let (new_snapshot, new_canonical) = match self.build_editor_layout_snapshot_with_canonical(
+        // Issue #901 第六轮阻塞1: composition commit 与 record_transaction 一样，
+        // 用 Core EditorEditResult.new_revision 唯一绑定 pipeline.text_revision。
+        // 不再预测 text_revision().wrapping_add(1)——那依赖 emit_content_changed 事后
+        // bump，而 emit_content_changed 中的 bump_text_revision 已删除。canonical
+        // text_revision 与 pipeline.text_revision() 共享同一个 Core new_revision，
+        // 确保 EditorLayout cache、current_canonical_snapshot、TargetLayoutDescriptor
+        // 同一次编辑全部绑定同一 Core revision。
+        let core_new_revision = result.new_revision.value();
+        self.pipeline.set_text_revision(core_new_revision);
+        let canonical_text_revision = core_new_revision;
+        let (new_snapshot, new_source) = match self.build_editor_layout_snapshot_with_canonical(
             width,
             true,
             new_composition_range,
             canonical_text_revision,
         ) {
+            // Issue #904 评论 5: promote=true，本版 generation 在函数返回后仍存活，
+            // 作为新一侧的补图事实源；旧一侧另行传 None。
             Ok(pair) => pair,
             Err(err) => {
                 crate::backend::app_backend::debug_error_static(
@@ -146,46 +158,117 @@ impl SujianEditorItem {
             }
         };
 
-        // Issue #826: 正文动画只认 Core display_patches。`from_edit_result` 已经把它
-        // 派生成 inserted/deleted ranges（正文动画分类的唯一事实源）。
-        let motion =
-            super::edit_motion::PreparedEditMotion::from_edit_result(result, &old.text, &new.text);
+        // Issue #904：IME commit 与普通编辑走同一个局部动画入口。
+        // old_snapshot / new_snapshot 分别给出编辑前后的局部 cluster 几何，
+        // 只对受影响片段建立唯一的局部动画计划。
+        let animations_requested = self.effective_animation().text;
+        let suppressed =
+            self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
+        let now_ms = Self::frame_now_ms(&self.last_frame_now);
+
+        self.pipeline
+            .set_current_layout_snapshot(Some(new_snapshot.clone()));
+
+        let session = self.document_session;
+        let retargeting = self
+            .last_drawn_local_frame
+            .as_ref()
+            .map_or(false, |frame| frame.session == session);
+
+        let motion = if animations_requested && !suppressed {
+            let viewport = super::layout_snapshot::SourceRect {
+                x: 0.0,
+                y: f64::from(self.current_scroll_y),
+                w: width,
+                h: f64::from(self.current_viewport_height).max(1.0),
+            };
+            super::text_motion::TextMotion::begin_or_retarget(
+                result,
+                Some(&old_snapshot),
+                &new_snapshot,
+                self.last_drawn_local_frame.as_ref(),
+                now_ms,
+                self.current_typing_animation_duration_ms,
+                self.document_session,
+                viewport,
+            )
+        } else {
+            None
+        };
+
+        // Issue #904 评论 4：IME commit 与普通编辑同一顺序——先建计划，再按计划真正
+        // 引用的源快照 id 准备纹理。缺图行显式记入 missing，不静默降级让 renderer
+        // 误以为"这次没有动画"。
+        if let Some(m) = motion.as_ref() {
+            let required = m.required_textures.clone();
+            // Issue #904 评论 5：old / new 各自显式带自己的视觉事实源。new 侧可用与
+            // 快照同一版的 Qt 布局补缺图；old 侧没有同版句柄，只能用快照里冻结的
+            // image，缺图显式 missing，绝不用 new 侧布局冒充旧字形。
+            let new_prep = self.prepare_local_text_textures(
+                &LocalTextSource {
+                    snapshot: &new_snapshot,
+                    layout: new_source.as_ref(),
+                },
+                &required,
+            );
+            let old_prep = self.prepare_local_text_textures(
+                &LocalTextSource {
+                    snapshot: &old_snapshot,
+                    layout: None,
+                },
+                &required,
+            );
+            let prep = LocalTextTexturePrep::merge_sides(&required, &[&new_prep, &old_prep]);
+            let missing_ids = if prep.missing.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ", missing_ids=[{}]",
+                    prep.missing
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            };
+            editor_animation_debug_log(&format!(
+                "record_composition_commit_transaction: local_animation kind={}, pieces={}, required={}, prepared={}, missing={}, ready={}{}",
+                if retargeting { "retarget" } else { "create" },
+                m.pieces.len(),
+                required.len(),
+                prep.prepared.len(),
+                prep.missing.len(),
+                prep.ready(),
+                missing_ids,
+            ));
+        }
+        let has_motion = motion.is_some();
+        *self.pipeline.text_motion_mut() = motion;
+        self.request_scene_rebuild();
 
         let new_revision = LayoutRevision::next();
-        let edit_now = std::time::Instant::now();
 
-        let outcome = self
-            .pipeline
-            .animation_coordinator_mut()
-            .handle_composition_commit_or_cancel(
-                super::animation::composition::CompositionVisualEditInput {
-                    motion,
-                    old_snapshot: old_snapshot.clone(),
-                    new_snapshot: new_snapshot.clone(),
-                    now: edit_now,
-                },
-            );
-        let visual_outcome = super::pipeline::VisualPrepareOutcome::Created;
-        // 旧行纹理由最近成功绘制帧引用，保留到新的帧成功提交后再裁掉。
-        let active_ids = self
-            .pipeline
-            .animation_coordinator()
-            .collect_active_snapshot_ids();
+        let visual_outcome = if has_motion {
+            super::pipeline::VisualPrepareOutcome::Created
+        } else if animations_requested && !suppressed {
+            // Issue #904 复核: begin_or_retarget 返回 None（本次编辑没有可动画
+            // 局部片段）不能报 Created；如实报 BuilderEmptyTransaction。
+            super::pipeline::VisualPrepareOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+            )
+        } else {
+            super::pipeline::VisualPrepareOutcome::AnimationDisabled
+        };
+        // 从当前 layout snapshot 和 previous layout snapshot 的 line_snapshots
+        // 提取所有 LineSnapshotId，保证动画过渡期间新旧行纹理都被保留。
+        let active_ids = self.collect_active_snapshot_ids_from_layout();
         self.pipeline.retain_active_snapshot_ids(&active_ids);
-        self.prepare_visual_edit_textures(&old_snapshot);
 
-        // Issue #738 评论 5797637204: 无条件提交 Pipeline.layout_revision +
-        // current_canonical_snapshot。new_canonical 一旦成为当前 canonical，
-        // layout_revision 就必须无条件一起提交。
+        // Issue #904 清理: 无条件提交 Pipeline.layout_revision。canonical document
+        // snapshot 由 EditorLayout 单一持有，不再往 Pipeline 交第二份。
         self.pipeline.set_layout_revision(new_revision);
-        self.pipeline
-            .set_current_canonical_snapshot(Some(new_canonical));
-        self.pipeline
-            .set_previous_layout_snapshot(Some(old_snapshot));
-        self.pipeline
-            .set_current_layout_snapshot(Some(new_snapshot));
 
-        self.last_event_count = 1;
+        self.last_event_count = if has_motion { 1 } else { 0 };
         self.last_summary = format!(
             "cause={:?};changes={};visual_edit=1;animate=true",
             cause, change_count,
@@ -206,8 +289,16 @@ impl SujianEditorItem {
         self.transaction_created();
         // Issue #819 评论 5968931455 问题 2.2: 返回 VisualPrepareOutcome，
         // 透传 skip reason，不再让 edit_flow.rs 猜。
-        let _ = outcome;
         visual_outcome
+    }
+
+    /// Issue #901 问题6：从 pipeline 的 current/previous layout snapshot
+    /// 提取所有 active LineSnapshotId，供纹理生命周期 retain 使用。
+    /// 委托到 pipeline 的同名方法。
+    pub(crate) fn collect_active_snapshot_ids_from_layout(
+        &self,
+    ) -> Vec<super::texture_cache::LineSnapshotId> {
+        self.pipeline.collect_active_snapshot_ids_from_layout()
     }
 
     /// Issue #810 评论 5934060933 问题1: 在真正调用 Core edit command 之前保证
@@ -222,19 +313,22 @@ impl SujianEditorItem {
     ///
     /// 不变量：`current_canonical_snapshot == Some` 不代表有效；必须同时满足
     /// `canonical.text_revision == pipeline.text_revision()` 且描述当前 committed text。
-    /// 不一致（stale，例如动画关闭路径上一笔没走 prepare_edit_motion 但正文已变）就重建。
+    /// 不一致（stale，例如动画关闭路径上一笔没走布局快照但正文已变）就重建。
+    ///
+    /// Issue #904 清理: 只保证 EditorLayout 的当前 canonical 与
+    /// `pipeline.text_revision()` 一致，为 Core 改动前的「旧几何」提供布局基础；
+    /// 不再在 Pipeline 里保留第二份 canonical document snapshot。
     pub(crate) fn ensure_current_canonical_before_edit(&mut self) {
-        let needs_rebuild = match self.pipeline.current_canonical_snapshot() {
-            None => true,
-            Some(canonical) => canonical.text_revision != self.pipeline.text_revision(),
-        };
-        if needs_rebuild {
-            let ctx = self.build_visual_transaction_context();
-            let snap = self
-                .pipeline
-                .build_canonical_snapshot_for_current_layout(&ctx, &self.editor_layout);
-            self.pipeline.set_current_canonical_snapshot(Some(snap));
+        if self
+            .editor_layout
+            .last_canonical_snapshot()
+            .map(|snapshot| snapshot.text_revision)
+            == Some(self.pipeline.text_revision())
+        {
+            return;
         }
+        let width = self.bounding_width();
+        let _ = self.layout_snapshot(width);
     }
 
     pub(crate) fn insert_text(&mut self, text: QString) {
@@ -276,12 +370,7 @@ impl SujianEditorItem {
         // composition commit 仅在 was_composing 且动画开启时走 composition 专属路径；
         // 否则走普通 record_transaction，与普通输入/删除同一种 VisualTransaction。
         // Issue #756: composition commit follows the shared effective animation policy.
-        let composition = if commit.was_composing
-            && super::animation::any_animation_enabled(
-                self.current_typing_animation_enabled,
-                self.current_smooth_cursor_enabled,
-                self.current_coordinated_animation_enabled,
-            ) {
+        let composition = if commit.was_composing && self.animation_requested() {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
@@ -406,12 +495,7 @@ impl SujianEditorItem {
         };
 
         // Issue #756: composition commit follows the shared effective animation policy.
-        let composition = if commit.was_composing
-            && super::animation::any_animation_enabled(
-                self.current_typing_animation_enabled,
-                self.current_smooth_cursor_enabled,
-                self.current_coordinated_animation_enabled,
-            ) {
+        let composition = if commit.was_composing && self.animation_requested() {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
@@ -913,27 +997,30 @@ impl SujianEditorItem {
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x / index_at_line_x 同源。
         let snapshot = self.current_render_layout_snapshot();
-        let lines = snapshot.lines.clone();
+        // Issue #901 第十五轮问题5b: 用 resolve_line 只物化目标行，
+        // 不物化整章。只需 line_idx ± 1 一行。
         let Some((line_idx, x)) = self.cursor_line_and_x() else {
             return;
         };
+        let total_lines = snapshot.lines.len();
         let target_idx = if down {
-            (line_idx + 1).min(lines.len().saturating_sub(1))
+            (line_idx + 1).min(total_lines.saturating_sub(1))
         } else {
             line_idx.saturating_sub(1)
         };
         if target_idx == line_idx {
             return;
         }
+        let target_line = snapshot.resolve_line(target_idx);
         // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 仅在确认 target_idx != line_idx 后 bump。
         // Issue #712: 方向键垂直移动设置 CursorMoveSource::KeyboardNavigation，
         // 允许 smooth cursor 开启时跨行 Tween。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::KeyboardNavigation;
-        let index = self.index_at_line_x(&lines[target_idx], x);
+        let index = self.index_at_line_x(&target_line, x);
         self.cursor_ctrl.affinity = self
             .editor_layout
-            .affinity_for_index_on_line(&lines[target_idx], index);
+            .affinity_for_index_on_line(&target_line, index);
         if extend {
             let anchor = self.pipeline.selection_anchor();
             let _ = self.pipeline.set_selection(anchor, index);
@@ -956,11 +1043,12 @@ impl SujianEditorItem {
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x 同源。
         let snapshot = self.current_render_layout_snapshot();
-        let lines = snapshot.lines.clone();
+        // Issue #901 第十五轮问题5b: 用 resolve_line 只物化目标行，
+        // 不物化整章。只需 line_idx 一行。
         let Some((line_idx, _)) = self.cursor_line_and_x() else {
             return;
         };
-        let line = &lines[line_idx];
+        let line = snapshot.resolve_line(line_idx);
         let (index, affinity) = if end {
             (line.byte_end, CaretAffinity::Upstream)
         } else {

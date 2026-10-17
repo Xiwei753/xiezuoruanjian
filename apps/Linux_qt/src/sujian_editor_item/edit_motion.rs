@@ -1,19 +1,15 @@
-//! Issue #735: Linux 私有编辑运动类型。
+//! Issue #904：Linux 私有编辑几何与会话类型。
 //!
-//! Core 已删除 `CursorRect`、`EditorAnimationKind`、`EditorVisualTransaction`、
-//! `PreeditVisualTransaction`、`VisualCoordinateMode`、`EditorEngine`、
-//! `diff_plain_text` 等视觉类型和 FFI 契约。本模块定义 Linux_qt 自己的替代类型，
-//! 不再从 Core 导入任何视觉 DTO。
-//!
-//! 设计原则：
-//! - `PreparedEditMotion` 由 pipeline 从 `EditorEditResult` + old/new `EditorSnapshot`
-//!   直接构造，不经过 `EditorEngine`。
-//! - `CursorRect` 是纯几何值类型，不携带 Core 语义。
-//! - `diff_plain_text` 是本地文本 diff 实现，供 composition update 路径使用。
+//! 旧 `EditorVisualTransaction` / `EditorAnimationKind` / `PreparedEditMotion` /
+//! `diff_plain_text` 等旧动画数据模型已随 `TextMotion` 单一局部计划删除；
+//! 本模块只保留仍被现有路径使用的类型：
+//! - `CompositionSession`：IME 组合会话的虚拟文本投影。
+//! - `CursorRect`：纯几何值类型，供现有光标 Tween 使用。
+//! - `synthetic_edit_result`：`load_text` 等不经过 `kernel.apply()` 路径的合成结果。
 
 use writer_core::editor::{
-    EditorChange, EditorCursor, EditorEditResult, EditorOperationKind, EditorRevision,
-    EditorSelection, EditorTransactionCause, OffsetMap, Utf8ByteOffset, Utf8ByteRange,
+    EditorCursor, EditorEditResult, EditorOperationKind, EditorRevision, EditorSelection,
+    EditorTransactionCause, OffsetMap,
 };
 
 // ── CompositionSession ──────────────────────────────────────────────────────
@@ -24,7 +20,7 @@ use writer_core::editor::{
 ///
 /// Issue #826: preedit 是独立临时显示层。这个 session 只负责维护虚拟文本
 /// （base text 的 replace range 被 preedit 替换后的结果）和 preedit 的 byte
-/// range，不参与正文动画，也不进入 VisualEditState。
+/// range，不参与正文动画。
 #[derive(Clone, Debug)]
 pub(crate) struct CompositionSession {
     pub replace_start: usize,
@@ -83,324 +79,14 @@ impl CompositionSession {
 
 /// Linux 私有光标矩形 — 纯几何值类型。
 ///
-/// 坐标空间：文档逻辑坐标系（不含滚动偏移），与 `AnimatedSlice` / `StaticPatch`
-/// 一致。scene graph 渲染时按当前 `scroll_y` 做 viewport transform。
+/// 坐标空间：文档逻辑坐标系（不含滚动偏移）。scene graph 渲染时按当前
+/// `scroll_y` 做 viewport transform。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CursorRect {
     pub x: f64,
     pub top: f64,
     pub bottom: f64,
     pub baseline_y: f64,
-}
-
-/// 删除动画从 caret 所在的逻辑边缘向外收缩。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DeleteEdge {
-    /// 删除范围的逻辑起始边，通常对应前向 Delete。
-    Leading,
-    /// 删除范围的逻辑结束边，通常对应 Backspace。
-    Trailing,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DeletedRangeEdge {
-    pub range: (usize, usize),
-    pub edge: DeleteEdge,
-}
-
-// ── EditorAnimationKind ─────────────────────────────────────────────────────
-
-/// Linux 私有动画类别 — 只从 `EditorEditResult.display_patches` 的
-/// inserted / deleted 事实派生。
-///
-/// Issue #824 评论 5971089641 第 2 节：删除
-/// “`EditorOperationKind` → 正文动画种类”这条主判断。CompositionCommit、
-/// 普通 Insert、IME replace、粘贴最终都不能因为 `operation_kind` 不同而走出
-/// 不同的正文动画结果：只要 patch 事实一样，正文 Reveal/Conceal 就一样。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EditorAnimationKind {
-    /// inserted 非空、deleted 为空。
-    Insert,
-    /// inserted 为空、deleted 非空。
-    Delete,
-    /// 两边都有（Replace / IME 选区替换 / 粘贴覆盖选区）。
-    Replace,
-    /// 两边都空 —— 没有正文变化，只有光标移动。
-    CursorOnly,
-}
-
-impl EditorAnimationKind {
-    /// 从 patch 事实派生动画类别。
-    ///
-    /// - inserted 非空、deleted 为空：Insert
-    /// - inserted 为空、deleted 非空：Delete
-    /// - 两边都有：Replace
-    /// - 两边都空：CursorOnly
-    pub fn from_patch_facts(has_inserted: bool, has_deleted: bool) -> Self {
-        match (has_inserted, has_deleted) {
-            (true, false) => EditorAnimationKind::Insert,
-            (false, true) => EditorAnimationKind::Delete,
-            (true, true) => EditorAnimationKind::Replace,
-            (false, false) => EditorAnimationKind::CursorOnly,
-        }
-    }
-}
-
-// ── PreparedEditMotion ──────────────────────────────────────────────────────
-
-/// Linux 私有编辑运动 — 替代已删除的 Core `EditorVisualTransaction`。
-///
-/// 由 `pipeline::prepare_edit_motion()` 从 `EditorEditResult` + old/new `EditorSnapshot`
-/// 直接构造，不经过 `EditorEngine`。`animation_coordinator::process_transaction`
-/// 消费此结构创建 `PreparedTextVisualTransaction`。
-///
-/// 字段语义与旧 `EditorVisualTransaction` 对应字段一致：
-/// - `kind`：动画类别（Insert / Delete / Replace / CursorOnly），只从
-///   `display_patches` 的 inserted/deleted 事实派生，不再看 `operation_kind`
-/// - `inserted_ranges`：新文本坐标系中的全部插入范围，从 `display_patches` 派生
-/// - `deleted_ranges`：旧文本坐标系中的全部删除范围，从 `display_patches` 派生
-/// - `inserted_range` / `deleted_range`：首个非零范围，供只需要单段连续编辑的
-///   调用方（段落扩展）使用
-/// - `old_text` / `new_text`：编辑前后的纯文本快照
-///   由 pipeline 从 Qt 设置传入（Issue #756 评论 5821042551 拆分独立 duration）
-/// - `old_selection` / `new_selection`：编辑前后的选区，从 `EditorEditResult` 直接取
-/// - `old_cursor_rect` / `new_cursor_rect`：由 pipeline 从布局快照计算后填入
-#[derive(Clone, Debug)]
-pub(crate) struct PreparedEditMotion {
-    pub transaction_id: u64,
-    pub operation_kind: String,
-    pub kind: EditorAnimationKind,
-    /// Issue #826 评论 9 阻塞 2：Core 在 `EditorEditResult` 里给出的精确映射。
-    ///
-    /// replace-all / 多 delta batch 用 `OffsetMap::from_edits(...)` 构造，
-    /// 能保留多个 unchanged island；而 `OffsetMap::build(old, new)` 只是
-    /// 最长公共前缀 + 最长公共后缀，中间整段都算「改过」。
-    /// 有值时必须优先用 Core 给的这一份。
-    pub offset_map: Option<OffsetMap>,
-    pub inserted_ranges: Vec<(usize, usize)>,
-    pub deleted_ranges: Vec<(usize, usize)>,
-    /// 每个旧坐标删除区间对应的 caret 边缘，用于几何吞字方向。
-    pub deleted_range_edges: Vec<DeletedRangeEdge>,
-    pub inserted_range: Option<Utf8ByteRange>,
-    pub deleted_range: Option<Utf8ByteRange>,
-    pub old_text: String,
-    pub new_text: String,
-    pub old_selection: EditorSelection,
-    pub new_selection: EditorSelection,
-    pub old_cursor_rect: Option<CursorRect>,
-    pub new_cursor_rect: Option<CursorRect>,
-}
-
-impl PreparedEditMotion {
-    /// 从 `EditorEditResult` + old/new 文本快照构造 `PreparedEditMotion`。
-    ///
-    /// `old_cursor_rect` / `new_cursor_rect` 初始为 `None`，由 pipeline 在布局
-    /// 计算后直接赋值到返回的结构体字段。
-    pub fn from_edit_result(result: &EditorEditResult, old_text: &str, new_text: &str) -> Self {
-        let (inserted_ranges, deleted_ranges) = ranges_from_display_patches(result);
-        let fallback_offset_map = OffsetMap::build(old_text, new_text);
-        let offset_map = result.offset_map.as_ref().unwrap_or(&fallback_offset_map);
-        let deleted_range_edges = deleted_ranges
-            .iter()
-            .copied()
-            .map(|range| DeletedRangeEdge {
-                range,
-                edge: delete_edge_for_range(
-                    range,
-                    result.old_selection,
-                    result.new_selection,
-                    offset_map,
-                ),
-            })
-            .collect();
-        // Issue #824 评论 5971089641 第 2 节：动画类别只认 patch 事实，
-        // 不再从 operation_kind 派生（CompositionCommit 也不再有专属分类）。
-        let kind = EditorAnimationKind::from_patch_facts(
-            !inserted_ranges.is_empty(),
-            !deleted_ranges.is_empty(),
-        );
-        let inserted_range = inserted_ranges
-            .first()
-            .map(|&(start, end)| Utf8ByteRange::from_ordered(start, end));
-        let deleted_range = deleted_ranges
-            .first()
-            .map(|&(start, end)| Utf8ByteRange::from_ordered(start, end));
-        Self {
-            transaction_id: result.transaction_id,
-            operation_kind: super::transaction::editor_operation_kind_label(result.operation_kind)
-                .to_string(),
-            kind,
-            offset_map: result.offset_map.clone(),
-            inserted_ranges,
-            deleted_ranges,
-            deleted_range_edges,
-            inserted_range,
-            deleted_range,
-            old_text: old_text.to_string(),
-            new_text: new_text.to_string(),
-            old_selection: result.old_selection.clone(),
-            new_selection: result.new_selection.clone(),
-            old_cursor_rect: None,
-            new_cursor_rect: None,
-        }
-    }
-}
-
-fn delete_edge_for_range(
-    (start, end): (usize, usize),
-    old_selection: EditorSelection,
-    new_selection: EditorSelection,
-    offset_map: &OffsetMap,
-) -> DeleteEdge {
-    let old_head = old_selection.head.index.value();
-    if old_head == start {
-        return DeleteEdge::Leading;
-    }
-    if old_head == end {
-        return DeleteEdge::Trailing;
-    }
-
-    let old_anchor = old_selection.anchor.index.value();
-    if old_anchor == start {
-        return DeleteEdge::Leading;
-    }
-    if old_anchor == end {
-        return DeleteEdge::Trailing;
-    }
-
-    // For compound edits, use the resulting caret when it maps to an edge of this
-    // deleted range. The old selection remains authoritative for ordinary key deletes.
-    if let Some(old_position) = offset_map.map_new_to_old(new_selection.head.index.value()) {
-        if old_position <= start {
-            return DeleteEdge::Leading;
-        }
-        if old_position >= end {
-            return DeleteEdge::Trailing;
-        }
-    }
-
-    if old_head <= start || (old_head < end && old_head - start <= end - old_head) {
-        DeleteEdge::Leading
-    } else {
-        DeleteEdge::Trailing
-    }
-}
-
-/// 从 `EditorEditResult.display_patches` 派生全部 inserted/deleted ranges。
-///
-/// `DisplayPatch.replace_byte_range` 是旧文本坐标系中被替换的范围，
-/// `DisplayPatch.inserted_text` 是插入的新文本。
-///
-/// - deleted range = `replace_byte_range`（旧文本坐标系）
-/// - inserted range = `inserted_byte_range`（**final new 坐标系**，纯 Delete 零长）
-///
-/// Issue #826 评论 10 阻塞 4.5：旧注释写的
-/// `(replace_byte_range.start, replace_byte_range.start + inserted_text.len())`
-/// 已经**不能**用了 —— 一笔 batch 里前一处替换变长后，后一处在 new 坐标里
-/// 已经右移，推算值会把中间的正常正文当成 inserted。现在直接读 Core 的
-/// `inserted_byte_range`，平台端不再做这种累计长度差。
-///
-/// Issue #824 评论 5971089641 第 2 节：本函数是正文动画分类的**唯一事实源**。
-/// 普通 Insert/Delete/Replace、IME commit、粘贴都从这里派生 inserted/deleted，
-/// 不再各自按 `operation_kind` 决定正文动画种类。
-///
-/// 这是 `pub(crate)` 而不是私有：`record_composition_commit_transaction`
-/// 必须用同一份 patch 事实构造 commit 的正文 Reveal/Conceal。
-pub(crate) fn ranges_from_display_patches(
-    result: &EditorEditResult,
-) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
-    let mut inserted = Vec::new();
-    let mut deleted = Vec::new();
-    for patch in &result.display_patches {
-        // Issue #826 评论 9 阻塞 1：两个区间都直接用 Core 的精确值。
-        //
-        // `replace_byte_range` 是**旧正文**（base revision）坐标；
-        // `inserted_byte_range` 是**最终新正文**（new revision）坐标。
-        //
-        // 绝不能写成 `replace_byte_range.start + inserted_text.len()`：
-        // 一笔 batch 里前一处替换变长后，后一处在新正文里已经右移。
-        // 反例 `aXbXc` replace-all `X -> YY`：Core 的两条 delta 是
-        // `old [1,2] -> new [1,3]` 与 `old [3,4] -> new [4,6]`；
-        // 用旧坐标推会得到 `[1,3]` / `[3,5]`，相邻归一化成 `[1,5]`，
-        // 而 `aYYbYYc` 的 `[1,5]` 是 `YYbY` —— 中间**完全没改过的 `b`**
-        // 该 cluster 会作为新增 target 交给 VisualEditState 吐字。
-        let replace_start = patch.replace_byte_range.start().value();
-        let replace_end = patch.replace_byte_range.end().value();
-        if replace_end > replace_start {
-            deleted.push((replace_start, replace_end));
-        }
-        let inserted_start = patch.inserted_byte_range.start().value();
-        let inserted_end = patch.inserted_byte_range.end().value();
-        if inserted_end > inserted_start {
-            inserted.push((inserted_start, inserted_end));
-        }
-    }
-    (inserted, deleted)
-}
-
-// ── diff_plain_text ─────────────────────────────────────────────────────────
-
-/// 本地文本 diff — 替代已删除的 Core `writer_core::editor::diff_plain_text`。
-///
-/// 找出 old_text → new_text 的最小编辑序列（Insert / Delete），按 byte offset 返回。
-/// 算法：公共前缀 + 公共后缀，中间段为一次 Replace（拆成 Delete + Insert）。
-///
-/// 供 `animation_coordinator::handle_composition_update` 使用——composition update
-/// 不经过 `EditorEditResult`，需要独立 diff 找 inserted/deleted range。
-pub(crate) fn diff_plain_text(old_text: &str, new_text: &str) -> Vec<EditorChange> {
-    let old_bytes = old_text.as_bytes();
-    let new_bytes = new_text.as_bytes();
-    let old_len = old_bytes.len();
-    let new_len = new_bytes.len();
-
-    // 找公共前缀（按 byte，但停在 char boundary 上）。
-    let mut prefix = 0usize;
-    while prefix < old_len
-        && prefix < new_len
-        && old_bytes[prefix] == new_bytes[prefix]
-        && old_text.is_char_boundary(prefix + 1)
-        && new_text.is_char_boundary(prefix + 1)
-    {
-        prefix += 1;
-    }
-    // 回退到 char boundary（上面的循环条件保证 prefix 是 char boundary）。
-
-    // 找公共后缀。
-    let mut suffix = 0usize;
-    while prefix + suffix < old_len
-        && prefix + suffix < new_len
-        && old_bytes[old_len - 1 - suffix] == new_bytes[new_len - 1 - suffix]
-        && old_text.is_char_boundary(old_len - suffix - 1)
-        && new_text.is_char_boundary(new_len - suffix - 1)
-    {
-        suffix += 1;
-    }
-
-    let mut changes = Vec::new();
-
-    // Delete 段：old_text[prefix..old_len-suffix)
-    if prefix + suffix < old_len {
-        let deleted_text = &old_text[prefix..old_len - suffix];
-        if !deleted_text.is_empty() {
-            changes.push(EditorChange::Delete {
-                index: Utf8ByteOffset::unchecked(prefix),
-                text: deleted_text.to_string(),
-            });
-        }
-    }
-
-    // Insert 段：new_text[prefix..new_len-suffix)
-    if prefix + suffix < new_len {
-        let inserted_text = &new_text[prefix..new_len - suffix];
-        if !inserted_text.is_empty() {
-            changes.push(EditorChange::Insert {
-                index: Utf8ByteOffset::unchecked(prefix),
-                text: inserted_text.to_string(),
-            });
-        }
-    }
-
-    changes
 }
 
 // ── 辅助：从 EditorEditResult 提取 cause ─────────────────────────────────────

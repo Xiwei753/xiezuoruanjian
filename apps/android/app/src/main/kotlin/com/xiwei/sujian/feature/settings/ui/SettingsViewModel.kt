@@ -258,8 +258,6 @@ class SettingsViewModel(
 
     data class SyncRemoteUrlRowState(val enabled: Boolean, val remoteUrl: String)
 
-    data class SyncBranchRowState(val enabled: Boolean, val branch: String)
-
     data class SyncTokenRowState(val enabled: Boolean, val token: String)
 
     data class SyncIntervalRowState(val enabled: Boolean, val intervalSeconds: Int)
@@ -298,18 +296,6 @@ class SettingsViewModel(
             SyncRemoteUrlRowState(
                 enabled = it.syncConfig.enabled == true,
                 remoteUrl = it.syncConfig.remoteUrl.orEmpty(),
-            )
-        }
-    val syncBranchRow =
-        rowFlow(
-            SyncBranchRowState(
-                _uiState.value.syncConfig.enabled == true,
-                _uiState.value.syncConfig.branch.orEmpty(),
-            ),
-        ) {
-            SyncBranchRowState(
-                enabled = it.syncConfig.enabled == true,
-                branch = it.syncConfig.branch.orEmpty(),
             )
         }
     val syncTokenRow =

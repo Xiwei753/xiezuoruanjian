@@ -1,0 +1,3028 @@
+// editor_commit_start.ts — 提交瞬间的运动起始状态计算（纯逻辑）。
+//
+// Issue #879 复核评论6077187962 的 3 个核心问题修复：
+//
+// 问题1（最严重）：部分裁切的字形在交棒时跳字
+//   旧 clusterVisible() 只返回 {left, top} 或 null——只表达"可见/不可见"，
+//   不表达精确可见区间。visibleGlyphRange() 用 ownLeft/ownRight 取字形的完整边界，
+//   而不是部分可见的裁切区间。交棒瞬间从完整边界变成裁切区间会产生跳字。
+//   修复：clusterVisible() 改为返回精确可见区间 {left, right, top, bottom}，
+//   visibleGlyphPieces() 用精确可见区间计算 startClipLeft/Right。
+//
+// 问题2：不连续的多段可见字形被压成"最长一段"
+//   旧 visibleGlyphRange() 用 bestFirst/bestLast/bestLength 只保留最长一段，
+//   丢弃其他可见段。修复：改为 visibleGlyphPieces() 返回全部可见区间数组。
+//
+// 问题3：ghost字形（已删除但仍被运动窗口绘制）
+//   旧 clusterVisible 先在 displayed revision 的身份表中查找，找不到立刻返回 null。
+//   但删除动画中字形已从 displayed 正文删除，旧 sourceRevision 的运动窗口仍在绘制它。
+//   修复：将"displayed 正文里存在的静态字形"和"仍持有独立 old sourceRevision 的
+//   未完成运动字形"视为两个并列的可见来源。FrozenWindowSpan 增加 sourceRevision
+//   和 glyphUtf16Ranges 字段，clusterVisible 优先查询冻结窗口是否提供还在绘制的 glyphId。
+//
+// 纯逻辑：不依赖 ArkUI、不 import .ets，生产由 Planner/Coordinator 调用，Node 单测直接 import。
+
+import type { LineLayout } from '../render/editor_render_geometry.ts'
+import { glyphRectForRange } from '../render/editor_render_geometry.ts'
+import type { LineRange } from '../render/editor_layout_math.ts'
+import { resolveVisualLineIndex, CaretAffinity } from '../render/editor_layout_math.ts'
+import type { GlyphIdentityTable } from './editor_glyph_identity.ts'
+import { clusterBoundaries } from './editor_glyph_identity.ts'
+
+/** 冻结帧里一个运动窗口暴露给起始状态计算的信息（vp，content 坐标）。 */
+export interface FrozenWindowSpan {
+  /** 该窗口覆盖的稳定字形身份 */
+  glyphIds: string[]
+  /** 当前裁切左边界（绝对 vp） */
+  clipLeft: number
+  /** 当前裁切右边界（绝对 vp） */
+  clipRight: number
+  /**
+   * 该窗口相对自身布局的平移量（vp）。
+   *
+   * 吐字/吞字窗口为 0（字形就在布局位置上，clip 只表达可见范围）；
+   * 保留字平移窗口等于 currentPosition - glyph 基准位置——
+   * 此时 clip 区间本身就是平移后的位置。两者都靠这个字段统一表达，
+   * 不能靠「clipLeft - glyphX」反推（那会把部分裁切误当成平移）。
+   */
+  offsetX: number
+  /** 该窗口相对自身布局的纵向平移量（vp） */
+  offsetY: number
+  /**
+   * Issue #879 评论6096421590 问题2：该窗口在冻结帧的所有可见裁切矩形（多岛并集）。
+   * 单岛场景退化为只有一个元素。用于 clusterVisible/buildPiece 对每个 clipRect 求交，
+   * 避免只看包围盒 clipLeft/clipRight 把两个可见岛之间不可见的字误判为可见。
+   */
+  clipRects: RectLike[]
+  /** 该窗口所属的源修订号（用于识别 ghost 字形的来源） */
+  sourceRevision: number
+  /**
+   * 该窗口内各 glyphId 在源修订正文中的 UTF-16 区间映射（用于在窗口源文本布局中定位字形几何）。
+   * null 表示窗口不提供此映射（窗口内字形都在 displayed 正文身份表中，无需 ghost 逻辑）。
+   */
+  glyphUtf16Ranges: Map<string, [number, number]> | null
+  /**
+   * 窗口源文本的行布局（用于在 ghost 字形几何计算中定位字形像素位置）。
+   * null 表示窗口不提供源文本布局（窗口内字形都在 displayed 正文身份表中，无需 ghost 逻辑）。
+   * 当 glyphUtf16Ranges 非 null 时，sourceLayout 必须也非 null，否则 ghost 字形无法定位几何。
+   */
+  sourceLayout: LineLayout[] | null
+  /**
+   * Issue #879 复核评论6105482207 问题1：该窗口的源类型——'old' 或 'new'。
+   *
+   * 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源窗口和新源窗口覆盖。
+   * frozenIndex 改为 Map<string, FrozenWindowSpan[]> 后，每个成员需携带自己的 sourceKind，
+   * clusterVisible 据此为每个可见交集标记来源身份。
+   */
+  sourceKind: 'old' | 'new'
+  /**
+   * Issue #879 复核评论6105482207 问题1：该窗口的源 runId。
+   *
+   * 如 `new-11` 或 `old-11`——commitDisplayedContext 冻结时从 MotionGlyphWindow.runId 读取。
+   * buildFrame/retargetRunStarts 据此知道每个可见段来自哪个源 run。
+   */
+  runId: string
+  /**
+   * Issue #879 复核评论6105482207 问题1：该窗口的渲染节点身份标识。
+   *
+   * commitDisplayedContext 冻结时从 MotionGlyphWindow.renderNodeKey 读取。
+   * 用于区分同一 glyphId 的不同物理 Text 节点（旧源 vs 新源）。
+   */
+  renderNodeKey: string
+  /**
+   * Issue #879 复核评论6105482207 问题1：该窗口的透明度（0-1）。
+   *
+   * 交叉淡入淡出时旧源窗口 opacity=1-p、新源窗口 opacity=p。
+   * commitDisplayedContext 冻结时从 MotionGlyphWindow.opacity 读取。
+   * undefined 表示完全不透明（非交叉淡入淡出窗口）。
+   */
+  opacity: number | undefined
+  /**
+   * Issue #879 评论6116388578 问题2：该窗口的 windowInstanceId。
+   *
+   * commitDisplayedContext 冻结时从 MotionGlyphWindow.windowInstanceId 读取。
+   * 用于区分冻结成员和新建目标成员的 renderNodeKey 拼接逻辑——
+   * frozen 成员的 renderNodeKey 已包含 windowInstanceId，原样输出；
+   * target 成员的 renderNodeKey 不包含 windowInstanceId，需追加新分配的 ID。
+   */
+  windowInstanceId: string
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口覆盖的完整有序 glyphIds 列表。
+   *
+   * 从 MotionGlyphWindow.fullWindowGlyphIds 读取，保存物理源窗口首次创建时的完整 glyphIds。
+   * frozenIndex 建索引时使用此字段而不是 glyphIds，确保窗口内所有字形都能被找到。
+   */
+  fullWindowGlyphIds: string[]
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整源 UTF-16 起始位置。
+   */
+  fullWindowUtf16Start: number
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整源 UTF-16 结束位置。
+   */
+  fullWindowUtf16End: number
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整逐字 glyphId→UTF-16 映射。
+   */
+  fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null
+}
+
+/**
+ * Issue #879 评论6128121842：统一查询字形 UTF-16 范围的辅助函数。
+ *
+ * 优先使用 fullWindowGlyphUtf16Ranges（包含物理 Text 窗口所有字形的完整映射），
+ * fallback 到 glyphUtf16Ranges（仅包含当前 interval 的局部映射）。
+ *
+ * frozenIndex 使用 fullWindowGlyphIds 为窗口内所有字形建立索引，
+ * 但 glyphUtf16Ranges 只包含当前 interval 的局部映射，导致通过 frozenIndex 找到 span
+ * 但取不到 UTF-16 范围的字形被 continue 跳过——丢字。
+ * 优先使用完整窗口映射可解决此问题。
+ */
+function lookupGlyphUtf16Range(span: FrozenWindowSpan, glyphId: string): [number, number] | undefined {
+  // 优先使用完整窗口映射
+  if (span.fullWindowGlyphUtf16Ranges !== null && span.fullWindowGlyphUtf16Ranges !== undefined) {
+    const r = span.fullWindowGlyphUtf16Ranges.get(glyphId)
+    if (r !== undefined) return r
+  }
+  // fallback 到局部映射
+  if (span.glyphUtf16Ranges !== null && span.glyphUtf16Ranges !== undefined) {
+    return span.glyphUtf16Ranges.get(glyphId)
+  }
+  return undefined
+}
+
+/** 计算起始状态时的「在屏」上下文。 */
+export interface DisplayedContext {
+  /** 在屏正文（displayed revision 的 text） */
+  text: string
+  /** 在屏行布局（displayed revision 的几何） */
+  layout: LineLayout[]
+  /** 在屏正文的字形身份表（glyphId → 在屏 UTF-16 区间）；null 表示身份不可信 */
+  identities: GlyphIdentityTable | null
+  /**
+   * 冻结的运动窗口；**空数组合法**，表示旧动画已结束、屏幕上是完整静态正文，
+   * 此时 displayed 正文里的字形全部完整可见。
+   */
+  frozenWindows: FrozenWindowSpan[]
+}
+
+/** 一个 run 的起始状态（在 run 自己的几何坐标系里）。 */
+export interface RunStartState {
+  startClipLeft: number
+  startClipRight: number
+  startPositionX: number
+  startPositionY: number
+}
+
+/** run 参与几何计算的信息。 */
+export interface RunGeometry {
+  /** 该 run 携带的稳定字形身份（与 ownText 中该范围的字符簇一一对应） */
+  glyphIds: string[]
+  /** run 所在正文（吐字＝新正文，吞字/保留字＝旧正文） */
+  ownText: string
+  /** run 在自己的正文里的 UTF-16 区间 */
+  ownUtf16Start: number
+  ownUtf16End: number
+  /** run 在自己的布局里的矩形（vp，content 坐标） */
+  ownRect: RectLike
+  /** run 自己的行布局 */
+  ownLayout: LineLayout[]
+}
+
+/** 矩形（vp）——与 render 层几何同构，避免依赖 .ets 侧类型。 */
+export interface RectLike {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * Issue #879 评论6108900966 问题1：冻结帧中一个源字形成员的完整绑定信息。
+ *
+ * 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源窗口和新源窗口覆盖。
+ * 旧实现只保存第一张的 frozenDrawOffsetX 并合并所有成员的 startScreenClipRects，
+ * 导致 buildFrame 执行笛卡尔式混合——old/new 两份源矩形各自与 old+new 全部剪裁矩形做交叉。
+ *
+ * FrozenGlyphMember 为每个成员保留各自的 sourceGlyphRect/offsetX/offsetY/clipRects/opacity，
+ * 让 buildFrame 逐成员独立插值，不做笛卡尔混合。
+ */
+export interface FrozenGlyphMember {
+  /** 该成员的源类型——'old' 或 'new' */
+  sourceKind: 'old' | 'new'
+  /** 该成员的源修订号 */
+  sourceRevision: number
+  /**
+   * Issue #879 复核评论6111437799 问题1：该成员的角色——'target' 或 'frozen'。
+   *
+   * 'target' = 本次 newRevision 的目标新源成员，需从零开始露出（空 clip 时从零宽展开到完整字形）。
+   * 'frozen' = 历史源已被上一笔吞没/裁出屏幕，必须保持不可见并淡出（空 clip 时保持零面积并降低透明度）。
+   * 缺省时 buildFrame 按 sourceRevision === newRevision 推断（=newRevision → 'target'，<newRevision → 'frozen'）。
+   */
+  role: 'target' | 'frozen'
+  /** 该成员的源 runId（暂时用 `sourceKind-revision` 格式，buildFrame 会重新分配 windowInstanceId） */
+  runId: string
+  /** 该成员的渲染节点身份标识（暂时用 `sourceKind-revision` 格式） */
+  renderNodeKey: string
+  /** 该成员在源布局坐标系中的完整矩形 */
+  sourceGlyphRect: RectLike
+  /** 该成员相对自身布局的横向平移量（vp） */
+  offsetX: number
+  /** 该成员相对自身布局的纵向平移量（vp） */
+  offsetY: number
+  /** 该成员自己的裁切矩形（屏幕坐标）——只包含该成员对应的 interval 的 rects */
+  clipRects: RectLike[]
+  /**
+   * 该成员的真实透明度（0-1）。
+   * opacity=0 的成员仍保留在 sourceMembers 中（为了提前挂载稳定的 Text），
+   * 但 buildFrame 知道该成员的像素贡献为零。
+   * undefined 表示完全不透明（非交叉淡入淡出窗口）。
+   */
+  opacity: number | undefined
+  /** 该成员在源修订正文中的 UTF-16 起始位置 */
+  sourceUtf16Start: number
+  /** 该成员在源修订正文中的 UTF-16 结束位置（exclusive） */
+  sourceUtf16End: number
+  /**
+   * 该成员的目标透明度（0-1）。
+   * 历史源（sourceRevision < newRevision）的 targetOpacity = 0（动画结束消失）。
+   * 本次新源（sourceRevision === newRevision）的 targetOpacity = 1（动画结束完全可见）。
+   * -1 表示未设置，buildFrame 会根据 sourceRevision 与 newRevision 的关系推断。
+   */
+  targetOpacity: number
+  /**
+   * Issue #879 评论6116388578 问题2：该成员的原始 windowInstanceId。
+   *
+   * frozen 成员：从 FrozenWindowSpan.windowInstanceId 读取，用于 buildFrame 输出
+   * MotionGlyphWindow 时保持与原始物理 Text 节点一致的 windowInstanceId。
+   * target 成员：undefined——由 buildFrame 分配新的 windowInstanceId。
+   */
+  windowInstanceId: string | undefined
+  /**
+   * Issue #879 评论6128658045 问题1+3：该成员所属原始冻结窗口的完整 glyphId→UTF-16 身份映射。
+   *
+   * 从 FrozenWindowSpan.glyphUtf16Ranges 直接复制（非 null 时是整个窗口的映射，不只是该成员
+   * 对应的单个字形）。buildFrame 的 FrozenWindowGroupPlan 用它填充 glyphUtf16Ranges，
+   * 传递给 MotionGlyphWindow.glyphUtf16Ranges，避免下游 buildGlyphUtf16Ranges 在不连续幸存字
+   * 场景用 min/max 重新猜导致返回 null。
+   * target 成员（新建的 newRevision 目标）没有原始窗口映射，为 undefined。
+   */
+  glyphUtf16Ranges?: Map<string, [number, number]> | null
+  /**
+   * Issue #879 评论6128658045 问题1+3：该成员所属原始物理 Text 窗口的完整 glyphIds 列表。
+   *
+   * 从 FrozenWindowSpan.fullWindowGlyphIds 读取，保存物理源窗口首次创建时的完整 glyphIds。
+   * buildFrame 的 FrozenWindowGroupPlan 用它填充 fullWindowGlyphIds，
+   * 确保 MotionGlyphWindow.glyphIds 携带完整字形列表而非单个 interval 的子集。
+   * target 成员没有原始窗口数据，为 undefined。
+   */
+  fullWindowGlyphIds?: string[]
+  /**
+   * Issue #879 第32轮复核问题2：该成员所属原始物理 Text 窗口的完整源 UTF-16 起始位置。
+   */
+  fullWindowUtf16Start?: number
+  /**
+   * Issue #879 第32轮复核问题2：该成员所属原始物理 Text 窗口的完整源 UTF-16 结束位置。
+   */
+  fullWindowUtf16End?: number
+  /**
+   * Issue #879 第32轮复核问题2：该成员所属原始物理 Text 窗口的完整逐字 glyphId→UTF-16 映射。
+   *
+   * 与 glyphUtf16Ranges 不同——glyphUtf16Ranges 是 FrozenWindowSpan.glyphUtf16Ranges 的直接复制，
+   * 而 fullWindowGlyphUtf16Ranges 是 FrozenWindowSpan.fullWindowGlyphUtf16Ranges 的直接复制。
+   * 在旧代码中两者可能相同（都来自 buildGlyphUtf16Ranges），但在新代码中
+   * fullWindowGlyphUtf16Ranges 保证是物理源窗口首次创建时的完整映射，
+   * 而 glyphUtf16Ranges 可能只是冻结时的映射（可能因 glyphIds 不完整而返回 null）。
+   */
+  fullWindowGlyphUtf16Ranges?: Map<string, [number, number]> | null
+}
+
+/** 可见字形段——run 簇序里的一个连续可见区间（可能有多段）。 */
+export interface VisibleRunPiece {
+  /** run 簇序里第一个可见簇的下标 */
+  firstIndex: number
+  /** run 簇序里最后一个可见簇的下标（含） */
+  lastIndex: number
+  /** 第一个可见簇在 run 自己布局里的精确可见左边界（vp，含部分裁切） */
+  ownLeft: number
+  /** 最后一个可见簇在 run 自己布局里的精确可见右边界（vp，含部分裁切） */
+  ownRight: number
+  /** 第一个可见簇此刻在屏的精确可见左边界（vp，含窗口平移和裁切） */
+  onScreenLeft: number
+  /** 第一个可见簇此刻在屏的上边界（vp） */
+  onScreenTop: number
+  /** 最后一个可见簇此刻在屏的精确可见右边界（vp，含窗口平移和裁切） */
+  onScreenRight: number
+  /**
+   * Issue #879 复核评论6078682695 问题4：首字形在**源布局**中的完整左边界（vp）。
+   *
+   * 源布局 = 冻结窗口的 sourceLayout（ghost 字形）或 displayed.layout（静态/被窗口覆盖的 displayed 字形）。
+   * 与 ownLeft（run 自己布局里的投影后边界）不同——ownLeft 是投影到目标局部坐标系后的值，
+   * sourceGlyphX0 是源布局坐标系里的原始值。用于跨字体/换行几何的可见比例投影。
+   */
+  sourceGlyphX0: number
+  /** Issue #879 复核评论6078682695 问题4：尾字形在源布局中的完整右边界（vp） */
+  sourceGlyphX1: number
+  /**
+   * Issue #879 复核评论6102724233 问题2：首字形在源布局中的完整上边界（vp）。
+   *
+   * 与 onScreenTop（裁切后的可见上边界）不同——sourceGlyphY0 是源字形在源布局坐标系
+   * 中的原始 top，不含窗口 offset。用于 retained 通道计算冻结帧的真实绘制原点，
+   * 避免用裁切后的 onScreenTop 导致纵向半字错位。
+   */
+  sourceGlyphY0: number
+  /**
+   * Issue #879 复核评论6078682695 问题4：首字形在源布局中的真实可见左边界（vp，含裁切）。
+   *
+   * = max(sourceGlyphX0, clipLeft - offsetX)，在源布局坐标系里。
+   * 与 onScreenLeft（含 offset 的在屏坐标）不同——visiblePixelLeft 不含 offset。
+   */
+  visiblePixelLeft: number
+  /** Issue #879 复核评论6078682695 问题4：尾字形在源布局中的真实可见右边界（vp，含裁切） */
+  visiblePixelRight: number
+  /**
+   * Issue #879 复核评论6099070438 问题4：该可见段的多段裁切子矩形（在 run 自己布局坐标系中）。
+   *
+   * buildPiece 把首/尾字形与冻结窗口 clipRects 的逐段交集投影保留下来，
+   * 避免只取 min/max 把不连续可见压成连续区间。intervalForIsland 传递到
+   * RunStartInterval.clipRects，buildFrame 据此逐段插值。
+   * 缺省时回落到 [ownLeft, ownRight] 单段（legacy 语义）。
+   */
+  clipRects?: RectLike[]
+  /**
+   * Issue #879 复核评论6100665268 问题3：每段 clipRect 对应的源字形完整矩形
+   * （在 run 自己布局坐标系中）。
+   *
+   * buildFrame retained 多矩形算法用此精确映射每段裁切矩形从冻结布局到目标 glyph
+   * 对应边界。与 clipRects 一一对应；缺省时 buildFrame 回落到按比例分配（legacy 语义）。
+   */
+  sourceGlyphRects?: RectLike[]
+}
+
+/**
+ * Issue #879 复核评论6078682695 问题1：一个 run 的一个可见片段的起始状态。
+ *
+ * 多段可见片段不再合并成连续矩形——每个 piece 各有独立的 startClipLeft/Right，
+ * buildFrame 按 piece 分别采样，每个 piece 生成独立的 MotionGlyphWindow。
+ * 区间之间的空洞绝不填补（丙被旧动画吞没时，新 plan 第一帧不会让丙冒出来）。
+ */
+export interface RunStartPiece {
+  /** 该片段覆盖的 run 簇序起始下标（含） */
+  firstIndex: number
+  /** 该片段覆盖的 run 簇序末下标（含） */
+  lastIndex: number
+  /** 该片段的起始裁切左边界（vp，在 run 自己布局里） */
+  startClipLeft: number
+  /** 该片段的起始裁切右边界（vp，在 run 自己布局里） */
+  startClipRight: number
+  /** 该片段的起始位置 x（vp）——保留字平移用 */
+  startPositionX: number
+  /** 该片段的起始位置 y（vp）——保留字平移用 */
+  startPositionY: number
+  /** 该片段覆盖的 glyphId 子序列 */
+  glyphIds: string[]
+  /**
+   * Issue #879 评论6129701697 问题1：预分配的最终 renderNodeKey。
+   *
+   * 由 Planner 在 planFromPatches 中使用 PhysicalWindowKeyAllocator 一次性分配，
+   * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  renderNodeKey?: string
+  /**
+   * Issue #879 复核评论修复：预分配的 windowInstanceId。
+   *
+   * 与 renderNodeKey 同时由 PhysicalWindowKeyAllocator 分配，
+   * buildFrame 直接读取此字段而非从 renderNodeKey 截取字符串。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  windowInstanceId?: string
+  /**
+   * Issue #879 本轮复核评论（高优先级）：该 piece 内所有不连续可见岛的起始裁切区间列表。
+   *
+   * 固定 piece 分区下，交棒瞬间某字形可能被冻结窗口局部裁切而断开成多段；
+   * 每一段各自独立计算 own/source/onScreen clip。buildFrame 据此为同一物理 Text
+   * （同一 renderNodeKey）生成「多岛并集」clipRects，不丢任何可见字形。
+   * 该字段为 undefined 或空时，buildFrame 回落到 piece 自身的单段 clip（legacy 语义）。
+   */
+  intervals?: RunStartInterval[]
+}
+
+/**
+ * Issue #879 本轮复核评论（高优先级）：一个固定 piece 内的一段不连续可见岛的起始状态。
+ *
+ * 与 RunStartPiece 不同——RunStartPiece 是「按固定分区划分的稳定物理节点单元」，
+ * 而 RunStartInterval 是「该 piece 在某时刻被冻结窗口局部裁切后实际露出的一个可见子段」，
+ * 一个 piece 可能包含多个不连续 RunStartInterval。buildFrame 为每个 interval 各生成一段 clipRect，
+ * 合成并集后由同一个物理 Text 绘制。
+ */
+export interface RunStartInterval {
+  /** 该岛覆盖的 run 簇序起始下标（含） */
+  firstIndex: number
+  /** 该岛覆盖的 run 簇序末下标（含） */
+  lastIndex: number
+  /** 该岛覆盖的 glyphId 子序列 */
+  glyphIds: string[]
+  /**
+   * Issue #879 评论6129701697 问题1：预分配的旧源 renderNodeKey（fallback 分支用）。
+   *
+   * 由 Planner 在 planFromPatches 中使用 PhysicalWindowKeyAllocator 一次性分配，
+   * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  renderNodeKey?: string
+  /**
+   * Issue #879 复核评论修复：预分配的旧源 windowInstanceId。
+   *
+   * 与 renderNodeKey 同时由 PhysicalWindowKeyAllocator 分配，
+   * buildFrame 直接读取此字段而非从 renderNodeKey 截取字符串。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  windowInstanceId?: string
+  /**
+   * Issue #879 评论6129701697 问题1：预分配的新源交叉淡入淡出 renderNodeKey（fallback 分支用）。
+   *
+   * 仅当 needsCrossfade=true 时有意义。由 Planner 在 planFromPatches 中预分配，
+   * plannedWindowKeys 和 buildFrame 只读取此字段。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  crossfadeRenderNodeKey?: string
+  /**
+   * Issue #879 复核评论修复：预分配的新源交叉淡入淡出 windowInstanceId。
+   *
+   * 与 crossfadeRenderNodeKey 同时由 PhysicalWindowKeyAllocator 分配，
+   * buildFrame 直接读取此字段而非从 crossfadeRenderNodeKey 截取字符串。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  crossfadeWindowInstanceId?: string
+  /** 该岛起始裁切左边界（vp，在 run 自己布局里） */
+  startClipLeft: number
+  /** 该岛起始裁切右边界（vp，在 run 自己布局里） */
+  startClipRight: number
+  /** 该岛起始位置 x（vp）——保留字平移用 */
+  startPositionX: number
+  /** 该岛起始位置 y（vp）——保留字平移用 */
+  startPositionY: number
+  /**
+   * 该岛在 run 自己正文里的 UTF-16 区间（exclusive end）。
+   *
+   * 由 retargetRunStarts 在可见性已知的时刻用 clusterBoundaries 算出，
+   * 供 computeStaticRangesMultiChannel 精确扣除「被运动层接管」的字形范围——
+   * 只有真正落在可见岛里的字形才从静态层扣除，岛之间的空洞（被冻结窗口局部裁切断开、
+   * 此刻仍不可见的字形）留在静态层，避免真实丢字。
+   * 缺省（legacy/未填充）时调用方回落到整 piece/整 run 扣除。
+   * 注：insert 通道 own 即新正文，本区间即新正文偏移；deleted/retained 通道 own 为旧正文，
+   * 本区间仅用于旧正文侧几何，静态扣除对 deleted 不生效、对 retained 走 newUtf16 整段。
+   */
+  utf16Start?: number
+  /** 该岛在 run 自己正文里的 UTF-16 结束 offset（exclusive） */
+  utf16End?: number
+  /**
+   * Issue #879 复核评论6099070438 问题4：该岛的多段源/目标裁切子矩形（在 run 自己布局坐标系中）。
+   *
+   * 同一个字形的左右两块露出、中间有空洞时，不能用 [最左,最右] 连续区间——
+   * 那会画出该字原本不可见的中间区域。buildPiece 把首/尾字形与冻结窗口 clipRects
+   * 的逐段交集投影保留下来，buildFrame 从这些矩形逐段插值并作为一个稳定物理窗口
+   * 的多个 clip 输出。
+   * 缺省（legacy/未填充）时回落到 startClipLeft/startClipRight 单段语义。
+   */
+  clipRects?: RectLike[]
+  /**
+   * Issue #879 复核评论6100665268 问题3：每段 clipRect 对应的源字形完整矩形
+   * （在 run 自己布局坐标系中）。
+   *
+   * buildFrame retained 多矩形算法用此精确映射每段裁切矩形从冻结布局到目标 glyph
+   * 对应边界——不按起始可见宽度比例虚构 targetWidth，每段的最终几何来自字形真实
+   * 源/目标矩形。clipRects 可以逐帧合并，但不能填平原本的间隙或溢出字形边界。
+   * 与 clipRects 一一对应；缺省时 buildFrame 回落到按比例分配（legacy 语义）。
+   */
+  sourceGlyphRects?: RectLike[]
+  /**
+   * Issue #879 复核评论6102724233 问题1+2：冻结帧源 Text 的真实绘制偏移 x（vp）。
+   *
+   * 直接从 FrozenWindowSpan.offsetX 读取（窗口真实平移量），不从裁切边界反推。
+   * startPositionX = sourceGlyphX0 + frozenDrawOffsetX（屏幕坐标系中的值）。
+   * buildFrame 用它计算字形在屏绘制原点。缺省时回落到 0（legacy 语义）。
+   */
+  frozenDrawOffsetX?: number
+  /**
+   * Issue #879 复核评论6102724233 问题1+2：冻结帧源 Text 的真实绘制偏移 y（vp）。
+   *
+   * 直接从 FrozenWindowSpan.offsetY 读取（窗口真实平移量），不从裁切边界反推。
+   * startPositionY = sourceGlyphY0 + frozenDrawOffsetY（屏幕坐标系中的值）。
+   * buildFrame 用它计算字形在屏绘制原点。缺省时回落到 0（legacy 语义）。
+   */
+  frozenDrawOffsetY?: number
+  /**
+   * Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
+   *
+   * 直接使用 clusterVisible 返回的 firstVisible.rects（屏幕坐标真实裁切交集矩形），
+   * 包含真实的纵向裁切信息（y 和 height 反映裁切后的可见部分）。
+   * 与 clipRects（run 自己布局坐标系）不同——buildFrame 用它做 clip 插值的起始值。
+   * 缺省时为 undefined（legacy 语义）。
+   */
+  startScreenClipRects?: RectLike[]
+  /**
+   * Issue #879 复核评论6104161755 问题3：冻结源字形在源布局坐标系中的实际完整矩形。
+   *
+   * 与 sourceGlyphRects（来自 run.ownLayout）不同——frozenSourceGlyphRects 来自
+   * 冻结窗口的 sourceLayout 或 displayed.layout，是冻结屏幕上那一个真实字形的范围。
+   * buildFrame 的 sourceGlyphOnScreen 应从 frozenSourceGlyphRects[0] + FrozenWindowSpan.offsetX/Y
+   * 生成，而不是从 sourceGlyphRects[0] + frozenDrawOffsetX/Y。
+   * 缺省时 buildFrame 回落到 sourceGlyphRects + frozenDrawOffsetX/Y（legacy 语义）。
+   */
+   frozenSourceGlyphRects?: RectLike[]
+  /**
+   * Issue #879 复核评论6105482207 问题3：该 interval 是否需要双源交叉淡入淡出。
+   *
+   * 整段 run 的总宽可能不变但单个字形宽高变化，needsCrossfade 必须按 interval 判断。
+   * planFromPatches 在构建 retainedMove 时逐 interval 计算 oldGlyphRect 与 newGlyphRect
+   * 的宽高差异，差异超过阈值时设置此标志。buildFrame 和 plannedWindowKeys 优先读取
+   * interval.needsCrossfade，缺省时回落到 move.needsCrossfade（legacy 语义）。
+   */
+   needsCrossfade?: boolean
+  /**
+   * Issue #879 评论6108900966 问题1：该 interval 的所有源字形成员绑定列表。
+   *
+   * 替代 frozenSourceGlyphRects、frozenDrawOffsetX/Y、startScreenClipRects 三个分离字段——
+   * 每个成员各自保留 sourceGlyphRect/offsetX/offsetY/clipRects/opacity，
+   * buildFrame 逐成员独立插值，不做笛卡尔混合。
+   * 缺省时 buildFrame 回落到旧字段（frozenSourceGlyphRects/frozenDrawOffsetX/Y/startScreenClipRects）。
+   */
+   sourceMembers?: FrozenGlyphMember[]
+  /**
+   * Issue #879 第32轮复核问题3：该 interval 的 frozen 成员可见区域是否不完整（有 gap）。
+   *
+   * 当 frozen 成员的 clipRects 不能完全覆盖其在屏完整字形矩形时，hasVisibleGap=true。
+   * 即使新旧字宽高相同（needsCrossfade 按宽高判断为 false），有 gap 也需要创建 target
+   * 窗口来补全被裁掉的区域——否则 p=1 时旧 clip 只平移不扩大（mapRectByRatio 在宽高
+   * 相同时映射结果等于原值），目标 Text 又不创建（needsSourceCrossfade=false），
+   * 静态全文接管时其余笔画突然出现。
+   *
+   * Planner 依据此标志设置 intervalNeedsCrossfade=true，确保 target 窗口从准备期就有
+   * 固定 key，负责补齐 retained 字形直到 p=1 完整显示。
+   */
+  hasVisibleGap?: boolean
+}
+
+/** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
+const VISIBLE_EPSILON = 0.01
+
+/**
+ * Issue #879 复核评论6102724233 问题1+4：二维矩形几何求差函数。
+ *
+ * 计算 fullRect \ union(clipRects ∩ fullRect) 的剩余区域，
+ * 拆成互不重叠的矩形列表。用于：
+ * - 问题1：carry insert 的"已完全显示"判定——剩余区域面积为 0 时才认为完整覆盖
+ * - 问题4：carry insert 的"找间隙"——剩余区域即为尚未吐出的空洞
+ *
+ * 算法：先标准化 clipRects（裁剪到 fullRect 内、排序、合并重叠），
+ * 再逐行扫描差集。为简化实现，采用矩形分割法：
+ * 1. 将所有 clipRect 裁剪到 fullRect 内
+ * 2. 按 x 坐标排序并合并重叠
+ * 3. 用合并后的矩形从 fullRect 中逐个减去，得到剩余矩形列表
+ *
+ * @param fullRect 完整目标矩形
+ * @param clipRects 当前已可见的裁切矩形列表（可能与 fullRect 不相交）
+ * @returns 剩余不可见区域矩形列表（已排序、不重叠）；fullRect 完全被覆盖时返回空数组
+ */
+export function rectDifference(fullRect: RectLike, clipRects: RectLike[]): RectLike[] {
+  // 1. 裁剪每个 clipRect 到 fullRect 内，丢弃无交集的
+  const clipped: RectLike[] = []
+  for (const cr of clipRects) {
+    const interLeft = Math.max(cr.x, fullRect.x)
+    const interRight = Math.min(cr.x + cr.width, fullRect.x + fullRect.width)
+    const interTop = Math.max(cr.y, fullRect.y)
+    const interBottom = Math.min(cr.y + cr.height, fullRect.y + fullRect.height)
+    if (interRight - interLeft > VISIBLE_EPSILON && interBottom - interTop > VISIBLE_EPSILON) {
+      clipped.push({
+        x: interLeft, y: interTop,
+        width: interRight - interLeft, height: interBottom - interTop,
+      })
+    }
+  }
+  if (clipped.length === 0) {
+    // 没有任何可见区域——整个 fullRect 都是剩余
+    return [fullRect]
+  }
+
+  // 2. 标准化：排序（先按 y，再按 x），合并重叠矩形
+  clipped.sort((a: RectLike, b: RectLike): number => {
+    if (Math.abs(a.y - b.y) > VISIBLE_EPSILON) { return a.y - b.y }
+    return a.x - b.x
+  })
+  const merged: RectLike[] = []
+  for (const cr of clipped) {
+    if (merged.length > 0) {
+      const last = merged[merged.length - 1]
+      // 同一行（y 和 height 相同）且 x 相邻或重叠 → 合并
+      if (Math.abs(last.y - cr.y) <= VISIBLE_EPSILON &&
+          Math.abs(last.height - cr.height) <= VISIBLE_EPSILON &&
+          cr.x <= last.x + last.width + VISIBLE_EPSILON) {
+        last.width = Math.max(last.x + last.width, cr.x + cr.width) - last.x
+        continue
+      }
+    }
+    merged.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
+  }
+
+  // 3. 从 fullRect 中逐个减去 merged 矩形，得到剩余区域
+  // 采用扫描线法：将 fullRect 按 merged 矩形的 y 边界分段，
+  // 每段内做一维 x 方向差集
+  // 收集所有 y 分段边界
+  const yBoundaries: number[] = [fullRect.y, fullRect.y + fullRect.height]
+  for (const m of merged) {
+    if (m.y > fullRect.y + VISIBLE_EPSILON && m.y < fullRect.y + fullRect.height - VISIBLE_EPSILON) {
+      yBoundaries.push(m.y)
+    }
+    if (m.y + m.height > fullRect.y + VISIBLE_EPSILON &&
+        m.y + m.height < fullRect.y + fullRect.height - VISIBLE_EPSILON) {
+      yBoundaries.push(m.y + m.height)
+    }
+  }
+  yBoundaries.sort((a: number, b: number): number => a - b)
+
+  const result: RectLike[] = []
+  for (let yi = 0; yi < yBoundaries.length - 1; yi++) {
+    const segTop = yBoundaries[yi]
+    const segBottom = yBoundaries[yi + 1]
+    if (segBottom - segTop <= VISIBLE_EPSILON) { continue }
+
+    // 该 y 段内被 merged 覆盖的 x 区间
+    const coveredX: Array<[number, number]> = []
+    for (const m of merged) {
+      if (m.y <= segTop + VISIBLE_EPSILON && m.y + m.height >= segBottom - VISIBLE_EPSILON) {
+        coveredX.push([m.x, m.x + m.width])
+      }
+    }
+    // 排序并合并 coveredX
+    coveredX.sort((a: [number, number], b: [number, number]): number => a[0] - b[0])
+    const mergedX: Array<[number, number]> = []
+    for (const cx of coveredX) {
+      if (mergedX.length > 0) {
+        const last = mergedX[mergedX.length - 1]
+        if (cx[0] <= last[1] + VISIBLE_EPSILON) {
+          last[1] = Math.max(last[1], cx[1])
+          continue
+        }
+      }
+      mergedX.push([cx[0], cx[1]])
+    }
+
+    // 从 [fullRect.x, fullRect.x + fullRect.width] 中减去 mergedX
+    let cursor = fullRect.x
+    const fullRight = fullRect.x + fullRect.width
+    for (const mx of mergedX) {
+      if (mx[0] > cursor + VISIBLE_EPSILON) {
+        result.push({
+          x: cursor, y: segTop,
+          width: mx[0] - cursor, height: segBottom - segTop,
+        })
+      }
+      cursor = Math.max(cursor, mx[1])
+    }
+    if (cursor < fullRight - VISIBLE_EPSILON) {
+      result.push({
+        x: cursor, y: segTop,
+        width: fullRight - cursor, height: segBottom - segTop,
+      })
+    }
+  }
+  return result
+}
+
+/**
+ * Issue #879 复核评论6102724233 问题1：判断 fullRect 是否被 clipRects 完全覆盖。
+ *
+ * 使用 rectDifference 计算剩余区域，面积为 0 时认为完全覆盖。
+ * 不使用 clipRight - clipLeft 的一维宽度比较——那会把中间有空洞的包围盒误判为完整覆盖。
+ */
+export function isFullyCovered(fullRect: RectLike, clipRects: RectLike[]): boolean {
+  const remaining = rectDifference(fullRect, clipRects)
+  return remaining.length === 0
+}
+
+/**
+ * Issue #879 复核评论6103000047 问题4：把旧布局坐标系中的矩形按比例映射到新布局。
+ *
+ * 当新旧布局中字形尺寸不同（换行/字宽变化/样式变化）时，clipRect 的绝对位置和宽度
+ * 不能直接复用——需要按相对于源字形矩形的比例映射到目标字形矩形中。
+ *
+ *   relX = (rect.x - sourceRect.x) / sourceRect.width
+ *   targetX = targetRect.x + relX * targetRect.width
+ *
+ * 源宽度/高度为零时退回 targetRect 的左边界/上边界（退化情况）。
+ *
+ * @param rect 旧布局坐标系中的矩形（clipRect 或 gap）
+ * @param sourceRect 旧布局中该字形的完整矩形
+ * @param targetRect 新布局中该字形的完整矩形
+ * @returns 映射到新布局坐标系中的矩形
+ */
+export function mapRectByRatio(
+  rect: RectLike,
+  sourceRect: RectLike,
+  targetRect: RectLike
+): RectLike {
+  const relX = sourceRect.width > VISIBLE_EPSILON ? (rect.x - sourceRect.x) / sourceRect.width : 0
+  const relWidth = sourceRect.width > VISIBLE_EPSILON ? rect.width / sourceRect.width : 0
+  const relY = sourceRect.height > VISIBLE_EPSILON ? (rect.y - sourceRect.y) / sourceRect.height : 0
+  const relHeight = sourceRect.height > VISIBLE_EPSILON ? rect.height / sourceRect.height : 0
+  return {
+    x: targetRect.x + relX * targetRect.width,
+    y: targetRect.y + relY * targetRect.height,
+    width: Math.max(0, relWidth * targetRect.width),
+    height: Math.max(0, relHeight * targetRect.height),
+  }
+}
+
+/**
+ * Issue #879 复核评论6103606574 缺口1：判断 retained 通道是否需要新旧源交叉淡入淡出。
+ *
+ * 当旧源字形和新布局字形的 width 或 height 差异超过阈值（0.5vp）时，需要新旧源切换。
+ * 原因：旧源 Text 的字形宽度是旧字宽，但 clip 被映射到新字宽，多出来的部分没有文字图形。
+ * 通过同时输出新源窗口(opacity=p)与旧源窗口(opacity=1-p)交叉淡入淡出，避免跳字。
+ *
+ * 当新旧字宽/高相同（差异 ≤ 0.5vp）时，不需要新旧源切换——旧源 Text 加 offset 平移即可。
+ *
+ * @param sourceGlyphOnScreen 旧源字形在屏矩形（屏幕坐标系）
+ * @param newGlyphRect 新布局字形矩形（新布局坐标系）
+ * @returns true 表示需要新旧源交叉淡入淡出
+ */
+export function shouldCrossfadeSources(
+  sourceGlyphOnScreen: RectLike,
+  newGlyphRect: RectLike
+): boolean {
+  const CROSSFADE_THRESHOLD = 0.5
+  return Math.abs(newGlyphRect.width - sourceGlyphOnScreen.width) > CROSSFADE_THRESHOLD ||
+         Math.abs(newGlyphRect.height - sourceGlyphOnScreen.height) > CROSSFADE_THRESHOLD
+}
+
+/**
+ * Issue #879 复核评论6082616112 问题4：找 offset 所在的行。
+ *
+ * 用 resolveVisualLineIndex + 指定 affinity 选行——
+ * 软换行边界 offset 属于下一行（Downstream）或上一行（Upstream）。
+ */
+function lineForOffset(layout: LineLayout[], offset: number,
+  affinity: CaretAffinity = CaretAffinity.Downstream): LineLayout | null {
+  if (layout.length === 0) { return null }
+  const lineRanges: LineRange[] = layout.map((l: LineLayout): LineRange => ({
+    start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
+  }))
+  const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity })
+  return layout[idx] ?? null
+}
+
+/** 取 offset 在一行布局里的 x（vp）：用 caretStops 找最近的前一个停止点。 */
+function xAtOffset(layout: LineLayout[], offset: number, fallback: number,
+  affinity: CaretAffinity = CaretAffinity.Downstream): number {
+  const line = lineForOffset(layout, offset, affinity)
+  if (line === null) {
+    return fallback
+  }
+  let x = line.left
+  for (const stop of line.caretStops) {
+    if (stop.utf16Offset <= offset) {
+      x = stop.x
+    }
+  }
+  return x
+}
+
+/** 取 offset 所在行的 y（vp）。 */
+function yAtOffset(layout: LineLayout[], offset: number, fallback: number,
+  affinity: CaretAffinity = CaretAffinity.Downstream): number {
+  const line = lineForOffset(layout, offset, affinity)
+  return line === null ? fallback : line.y
+}
+
+/**
+ * 计算 run 里此刻在屏可见的全部字形段（可能有多段不连续的可见区间）。
+ *
+ * Issue #879 复核评论6105482207 问题1：clusterVisible 改为返回 OnScreenInterval[]，
+ * 空数组表示不可见。visibleGlyphPieces 适配新返回类型。
+ *
+ * @returns 所有可见段数组；没有任何字形在屏可见时返回空数组。
+ */
+export function visibleGlyphPieces(run: RunGeometry, displayed: DisplayedContext): VisibleRunPiece[] {
+  const boundaries = clusterBoundaries(run.ownText, run.ownUtf16Start, run.ownUtf16End)
+  const clusterCount = boundaries.length - 1
+  if (clusterCount <= 0 || clusterCount !== run.glyphIds.length) {
+    // 簇数与身份数对不上（范围不是整簇边界）——不猜几何，交给调用方用兜底起点。
+    return []
+  }
+
+  const frozenByGlyphId = frozenIndex(displayed)
+
+  const pieces: VisibleRunPiece[] = []
+  let currentFirst = -1
+  let currentFirstVisible: OnScreenInterval[] = []
+
+  for (let i = 0; i < clusterCount; i++) {
+    const visible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[i])
+    // Issue #879 评论6110293866 问题1：用 hasVisiblePixels 替代 visible.length > 0，
+    // 因为 clusterVisible 可能返回 opacity=0 的成员（用于物理节点预挂载）。
+    if (hasVisiblePixels(visible)) {
+      if (currentFirst < 0) {
+        currentFirst = i
+        currentFirstVisible = visible
+      }
+    } else {
+      if (currentFirst >= 0) {
+        // 结束当前段
+        const lastIdx = i - 1
+        const piece = buildPiece(run, boundaries, currentFirst, lastIdx, currentFirstVisible, displayed, frozenByGlyphId)
+        if (piece !== null) {
+          pieces.push(piece)
+        }
+        currentFirst = -1
+        currentFirstVisible = []
+      }
+    }
+  }
+  // 处理最后一段
+  if (currentFirst >= 0) {
+    const lastIdx = clusterCount - 1
+    const piece = buildPiece(run, boundaries, currentFirst, lastIdx, currentFirstVisible, displayed, frozenByGlyphId)
+    if (piece !== null) {
+      pieces.push(piece)
+    }
+  }
+
+  return pieces
+}
+
+/**
+ * 构建一个可见段（piece）。
+ *
+ * ownLeft/ownRight 需要精确反映部分裁切后的可见宽度，而非字形的完整边界。
+ *
+ * Issue #879 复核评论6078682695 问题4：
+ * 源窗口的裁切区间（冻结源布局的 vp 边界）不能直接与 run.ownLayout 的 ownFullLeft/Right
+ * 做 max/min——源窗口和新目标 run 一旦因文字变更产生不同前缀宽度、折行或位置，
+ * 二者不是同一局部坐标系，简单比较 vp 会导致首尾裁切错位。
+ *
+ * 修复：先计算首/尾字形在**源布局**中的完整边界 [sourceGlyphX0, sourceGlyphX1] 和
+ * 裁切后的可见区间 [visiblePixelLeft, visiblePixelRight]（都在源布局坐标系里），
+ * 再按可见比例投影到**目标 run 布局**的 [ownFullLeft, ownFullRight]：
+ *   ratio = (visiblePixelLeft - sourceGlyphX0) / (sourceGlyphX1 - sourceGlyphX0)
+ *   ownLeft = ownFullLeft + ratio * (ownFullRight - ownFullLeft)
+ * 跨行必须分别处理（每个 piece 只在一行内），不能以原始全局 x 当新布局 x。
+ */
+/**
+ * Issue #879 评论6110293866 问题1：统一的可见性判断函数。
+ *
+ * 判断 OnScreenInterval[] 中是否存在至少一个有像素贡献的可见矩形：
+ * - opacity > 0（或 opacity === undefined 表示完全不透明）
+ * - rect 面积有效（width > 0 && height > 0）
+ *
+ * 替代所有 `visible.length > 0` 的可见性判断——clusterVisible 返回的 OnScreenInterval[]
+ * 可能包含 opacity=0 的成员（用于物理节点预挂载），`length > 0` 不等于有像素可见。
+ * 节点存在与像素可见是两套判断：sourceMembers 保留 opacity=0 的成员用于挂载，
+ * 但可见性判断必须用 hasVisiblePixels。
+ */
+function hasVisiblePixels(intervals: OnScreenInterval[]): boolean {
+  for (const interval of intervals) {
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
+    for (const r of interval.rects) {
+      if (r.width > 0 && r.height > 0) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Issue #879 评论6110293866 问题2：返回第一个有可见像素贡献的 OnScreenInterval。
+ *
+ * clusterVisible 返回的 OnScreenInterval[] 可能包含 opacity=0 的成员（用于物理节点预挂载）。
+ * 取坐标/几何信息时必须跳过这些不可见成员，从第一个实际有像素贡献的成员取得。
+ */
+function firstVisibleInterval(intervals: OnScreenInterval[]): OnScreenInterval | null {
+  for (const interval of intervals) {
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
+    return interval
+  }
+  return null
+}
+
+/**
+ * 缺口2修复：从 OnScreenInterval[] 的所有 rects 中取最左边的 x（vp，屏幕坐标）。
+ * Issue #879 复核评论6105482207 问题1：适配多成员索引，合并所有成员的 rects。
+ */
+function onScreenLeftOf(intervals: OnScreenInterval[]): number {
+  let min = Infinity
+  for (const interval of intervals) {
+    // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，不计入屏幕边界
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
+    for (const r of interval.rects) {
+      if (r.x < min) { min = r.x }
+    }
+  }
+  return min
+}
+
+/**
+ * 缺口2修复：从 OnScreenInterval[] 的所有 rects 中取最右边的 x+width（vp，屏幕坐标）。
+ * Issue #879 复核评论6105482207 问题1：适配多成员索引，合并所有成员的 rects。
+ */
+function onScreenRightOf(intervals: OnScreenInterval[]): number {
+  let max = -Infinity
+  for (const interval of intervals) {
+    // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，不计入屏幕边界
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
+    for (const r of interval.rects) {
+      if (r.x + r.width > max) { max = r.x + r.width }
+    }
+  }
+  return max
+}
+
+/**
+ * 缺口2修复：从 OnScreenInterval[] 的所有 rects 中取最上边的 y（vp，屏幕坐标）。
+ * Issue #879 复核评论6105482207 问题1：适配多成员索引，合并所有成员的 rects。
+ */
+function onScreenTopOf(intervals: OnScreenInterval[]): number {
+  let min = Infinity
+  for (const interval of intervals) {
+    // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，不计入屏幕边界
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
+    for (const r of interval.rects) {
+      if (r.y < min) { min = r.y }
+    }
+  }
+  return min
+}
+
+function buildPiece(
+  run: RunGeometry,
+  boundaries: number[],
+  firstIndex: number,
+  lastIndex: number,
+  firstVisible: OnScreenInterval[],
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan[]>
+): VisibleRunPiece | null {
+  const firstBoundary = boundaries[firstIndex]
+  const lastBoundary = boundaries[lastIndex + 1]
+
+  // 字形在 run 自己布局中的完整边界（目标局部坐标系）
+  // Issue #879 复核评论6082616112 问题4：start 用 Downstream、end 用 Upstream
+  const ownFullLeft = xAtOffset(run.ownLayout, firstBoundary, run.ownRect.x)
+  const ownFullRight = xAtOffset(run.ownLayout, lastBoundary, run.ownRect.x + run.ownRect.width,
+    CaretAffinity.Upstream)
+
+  // Issue #879 复核评论6078682695 问题4：
+  // 首字形和尾字形各自在目标布局中的完整边界——投影时必须按各自字形的目标边界，
+  // 不能用整个 piece 的 [ownFullLeft, ownFullRight]。
+  // 否则多字形 piece 在源＝目标时会得到非恒等结果（首字形可见比例被映射到整段宽度）。
+  const firstGlyphTargetLeft = ownFullLeft
+  const firstGlyphTargetRight = xAtOffset(run.ownLayout, boundaries[firstIndex + 1], run.ownRect.x + run.ownRect.width,
+    CaretAffinity.Upstream)
+  const lastGlyphTargetLeft = xAtOffset(run.ownLayout, boundaries[lastIndex], run.ownRect.x)
+  const lastGlyphTargetRight = ownFullRight
+
+  const firstGlyphId = run.glyphIds[firstIndex]
+  const lastGlyphId = run.glyphIds[lastIndex]
+  const lastVisible = clusterVisible(displayed, frozenByGlyphId, lastGlyphId)
+
+  // Issue #879 复核评论6100665268 问题3：同时收集 clipRect 和对应的源字形完整矩形。
+  // 每段 clipRect 对应一个字形在 run 自己布局中的完整矩形（sourceGlyphRect），
+  // buildFrame retained 用此精确映射每段裁切矩形到目标 glyph 对应边界。
+  interface ClipWithSource { clip: RectLike; sourceRect: RectLike }
+
+  // ── 首字形 ──
+  // Issue #879 复核评论6105482207 问题1：frozenByGlyphId 改为 Map<string, FrozenWindowSpan[]>，
+  // 取第一个成员作为首字形投影用的 span（多成员场景下各成员的 offset/sourceLayout 通常一致）。
+  const firstSpans = frozenByGlyphId.get(firstGlyphId)
+  const firstSpan = firstSpans !== undefined && firstSpans.length > 0 ? firstSpans[0] : undefined
+  let ownLeft: number
+  let onScreenLeft: number
+  let sourceGlyphX0: number
+  let sourceGlyphX1: number
+  let visiblePixelLeft: number
+  let visiblePixelRight: number
+  // Issue #879 复核评论6099070438 问题4：首字形逐段交集投影收集器。
+  const firstClipRects: RectLike[] = []
+  const firstSourceGlyphRects: RectLike[] = []
+  // 首字形在 run 自己布局中的完整矩形
+  const firstGlyphFullRect: RectLike = {
+    x: firstGlyphTargetLeft, y: run.ownRect.y,
+    width: firstGlyphTargetRight - firstGlyphTargetLeft, height: run.ownRect.height,
+  }
+
+  if (firstSpan !== undefined) {
+    // Issue #879 复核评论6105482207 问题1+3：用 interval 的成员信息投影，
+    // 不再使用 firstSpan.offsetX 和 sourceGlyphGeometry() 的第一个结果。
+    // 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源和新源两个窗口覆盖，
+    // 每个 interval 携带各自成员的 offset 和源字形几何，必须逐 interval 投影。
+    let minProjectedLeft = Infinity
+    let minVisLeft = Infinity
+    let maxVisRight = -Infinity
+    for (const interval of firstVisible) {
+      // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，跳过投影
+      if (interval.opacity !== undefined && interval.opacity <= 0) {
+        continue
+      }
+      // 用 interval 的成员信息，回退到 firstSpan/ownFullLeft（兼容旧代码路径）
+      const intervalOffsetX = interval.offsetX ?? firstSpan.offsetX
+      const intervalSourceGlyphX0 = interval.sourceGlyphX0 ?? ownFullLeft
+      const intervalSourceGlyphX1 = interval.sourceGlyphX1 ?? ownFullRight
+      for (const r of interval.rects) {
+        const visLeftInSource = Math.max(intervalSourceGlyphX0, r.x - intervalOffsetX)
+        const visRightInSource = Math.min(intervalSourceGlyphX1, r.x + r.width - intervalOffsetX)
+        if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+          const projectedLeft = projectToTarget(
+            visLeftInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+            firstGlyphTargetLeft, firstGlyphTargetRight
+          )
+          const projectedRight = projectToTarget(
+            visRightInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+            firstGlyphTargetLeft, firstGlyphTargetRight
+          )
+          firstClipRects.push({
+            x: projectedLeft, y: run.ownRect.y,
+            width: projectedRight - projectedLeft, height: run.ownRect.height,
+          })
+          firstSourceGlyphRects.push(firstGlyphFullRect)
+          if (projectedLeft < minProjectedLeft) {
+            minProjectedLeft = projectedLeft
+          }
+          if (visLeftInSource < minVisLeft) {
+            minVisLeft = visLeftInSource
+          }
+          if (visRightInSource > maxVisRight) {
+            maxVisRight = visRightInSource
+          }
+        }
+      }
+    }
+    if (minProjectedLeft === Infinity) {
+      // Issue #879 评论6110293866 问题1：所有 interval 都是 opacity=0 或无交集——
+      // 零像素不可见，返回零宽起点，不回退画满字形。
+      // Issue #879 评论6110857105 问题5验证：此分支中所有变量均设为有限值——
+      // ownLeft/sourceGlyphX0/sourceGlyphX1/visiblePixelLeft/visiblePixelRight = ownFullLeft（有限），
+      // onScreenLeft 由 hasVisiblePixels 守卫（L928），onScreenTop 由 hasVisiblePixels 守卫（L1149）。
+      ownLeft = ownFullLeft
+      sourceGlyphX0 = ownFullLeft
+      sourceGlyphX1 = ownFullLeft
+      visiblePixelLeft = ownFullLeft
+      visiblePixelRight = ownFullLeft
+      // 不 push firstClipRects（零宽不可见，没有 clipRect）
+      // 不 push firstSourceGlyphRects
+    } else {
+      ownLeft = minProjectedLeft
+      visiblePixelLeft = minVisLeft
+      visiblePixelRight = maxVisRight
+      // Issue #879 评论6110293866 问题2：从第一个有可见像素贡献的成员取得 sourceGlyphX0/X1，
+      // 不再从 firstVisible[0] 取（firstVisible[0] 可能是 opacity=0 的不可见成员）。
+      const firstVis = firstVisibleInterval(firstVisible) ?? firstVisible[0]
+      sourceGlyphX0 = firstVis.sourceGlyphX0 ?? ownFullLeft
+      sourceGlyphX1 = firstVis.sourceGlyphX1 ?? ownFullRight
+    }
+    // 缺口2修复：onScreenLeft 从 firstVisible.rects 中取最左边的 x
+    // Issue #879 评论6110293866 问题1：当所有 interval 都是 opacity=0 时，
+    // onScreenLeftOf 会返回 Infinity——不得让 Infinity 进入 RunStartPiece。
+    onScreenLeft = hasVisiblePixels(firstVisible) ? onScreenLeftOf(firstVisible) : ownFullLeft
+  } else {
+    // 静态可见：完整边界（源 = 目标）
+    sourceGlyphX0 = ownFullLeft
+    sourceGlyphX1 = ownFullRight
+    visiblePixelLeft = ownFullLeft
+    visiblePixelRight = ownFullRight
+    ownLeft = ownFullLeft
+    onScreenLeft = onScreenLeftOf(firstVisible)
+    firstClipRects.push({
+      x: firstGlyphTargetLeft, y: run.ownRect.y,
+      width: firstGlyphTargetRight - firstGlyphTargetLeft, height: run.ownRect.height,
+    })
+    firstSourceGlyphRects.push(firstGlyphFullRect)
+  }
+
+  // ── 尾字形 ──
+  let ownRight: number
+  let onScreenRight: number
+  // Issue #879 复核评论6099070438 问题4：尾字形逐段交集投影收集器。
+  const lastClipRects: RectLike[] = []
+  const lastSourceGlyphRects: RectLike[] = []
+  // 尾字形在 run 自己布局中的完整矩形
+  const lastGlyphFullRect: RectLike = {
+    x: lastGlyphTargetLeft, y: run.ownRect.y,
+    width: lastGlyphTargetRight - lastGlyphTargetLeft, height: run.ownRect.height,
+  }
+  // Issue #879 复核评论6105482207 问题1：lastVisible 是 OnScreenInterval[]，
+  // 空数组表示不可见。
+  if (lastVisible.length > 0) {
+    // Issue #879 复核评论6105482207 问题1：frozenByGlyphId 改为 Map<string, FrozenWindowSpan[]>，
+    // 取第一个成员作为尾字形投影用的 span。
+    const lastSpans = frozenByGlyphId.get(lastGlyphId)
+    const lastSpan = lastSpans !== undefined && lastSpans.length > 0 ? lastSpans[0] : undefined
+    if (lastSpan !== undefined) {
+      // Issue #879 复核评论6105482207 问题1+3：用 interval 的成员信息投影，
+      // 不再使用 lastSpan.offsetX 和 sourceGlyphGeometry() 的第一个结果。
+      let maxProjectedRight = -Infinity
+      let minVisLeft = Infinity
+      let maxVisRight = -Infinity
+      for (const interval of lastVisible) {
+        // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，跳过投影
+        if (interval.opacity !== undefined && interval.opacity <= 0) {
+          continue
+        }
+        const intervalOffsetX = interval.offsetX ?? lastSpan.offsetX
+        const intervalSourceGlyphX0 = interval.sourceGlyphX0 ?? lastGlyphTargetLeft
+        const intervalSourceGlyphX1 = interval.sourceGlyphX1 ?? lastGlyphTargetRight
+        for (const r of interval.rects) {
+          const visLeftInSource = Math.max(intervalSourceGlyphX0, r.x - intervalOffsetX)
+          const visRightInSource = Math.min(intervalSourceGlyphX1, r.x + r.width - intervalOffsetX)
+          if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+            const projectedLeft = projectToTarget(
+              visLeftInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+              lastGlyphTargetLeft, lastGlyphTargetRight
+            )
+            const projectedRight = projectToTarget(
+              visRightInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+              lastGlyphTargetLeft, lastGlyphTargetRight
+            )
+            lastClipRects.push({
+              x: projectedLeft, y: run.ownRect.y,
+              width: projectedRight - projectedLeft, height: run.ownRect.height,
+            })
+            lastSourceGlyphRects.push(lastGlyphFullRect)
+            if (projectedRight > maxProjectedRight) {
+              maxProjectedRight = projectedRight
+            }
+            if (visLeftInSource < minVisLeft) {
+              minVisLeft = visLeftInSource
+            }
+            if (visRightInSource > maxVisRight) {
+              maxVisRight = visRightInSource
+            }
+          }
+        }
+      }
+      if (maxProjectedRight === -Infinity) {
+        // Issue #879 评论6110293866 问题1：所有 interval 都是 opacity=0 或无交集——
+        // 零像素不可见，返回零宽终点，不回退画满字形。
+        // Issue #879 评论6110857105 问题5验证：此分支中 ownRight = ownFullRight（有限），
+        // onScreenRight 由 hasVisiblePixels 守卫（L1020），不会产生 -Infinity。
+        ownRight = ownFullRight
+        // 不 push lastClipRects（零宽不可见，没有 clipRect）
+        // 不 push lastSourceGlyphRects
+      } else {
+        ownRight = maxProjectedRight
+        // Issue #879 评论6112219514 问题1：尾字形的 sourceGlyphX1 从首个**可见**成员获取，
+        // 不再从 lastVisible[0]（首个物理成员，可能是 opacity=0 的不可见成员）取。
+        // 与首字形 L932 的 firstVisibleInterval(firstVisible) 修复对称。
+        // 旧源透明 x50..60、新源可见 x70..80 时，sourceGlyphX0=70（首字形已修），
+        // 但尾部 sourceGlyphX1=60（旧逻辑取 lastVisible[0]），内部源几何自相矛盾。
+        const lastVis = firstVisibleInterval(lastVisible) ?? lastVisible[0]
+        sourceGlyphX1 = lastVis.sourceGlyphX1 ?? ownFullRight
+        visiblePixelRight = maxVisRight
+      }
+      // 缺口2修复：onScreenRight 从 lastVisible.rects 中取最右边的 x+width
+      // Issue #879 评论6110293866 问题1：当所有 interval 都是 opacity=0 时，
+      // onScreenRightOf 会返回 -Infinity——不得让 -Infinity 进入 RunStartPiece。
+      onScreenRight = hasVisiblePixels(lastVisible) ? onScreenRightOf(lastVisible) : ownFullRight
+    } else {
+      // 静态可见：完整边界
+      ownRight = ownFullRight
+      onScreenRight = onScreenRightOf(lastVisible)
+      lastClipRects.push({
+        x: lastGlyphTargetLeft, y: run.ownRect.y,
+        width: lastGlyphTargetRight - lastGlyphTargetLeft, height: run.ownRect.height,
+      })
+      lastSourceGlyphRects.push(lastGlyphFullRect)
+    }
+  } else {
+    // Issue #879 复核评论6105482207 问题1：lastVisible 为空数组不应发生（lastIndex 是可见段的最后一个）
+    ownRight = ownFullRight
+    onScreenRight = onScreenLeft
+  }
+
+  // Issue #879 复核评论6100665268 问题4：合并首/尾 clipRects 为该可见段的多段裁切子矩形。
+  // - 首尾同字形（单字形 piece）：只用 firstClipRects（首尾是同一字形的可见区间）。
+  // - 首尾不同字形：首字形可见段 + 中间逐字形可见段 + 尾字形可见段。
+  //
+  // 旧实现把 firstIndex..lastIndex 之间的中间字形直接画一个完整矩形
+  // (midLeft=firstGlyphTargetRight → midRight=lastGlyphTargetLeft)，
+  // 假设中间字形完整可见。实际上连续可见的中间字形也可能只是部分显示
+  // （例如三个字形都可见，但中间的"乙"仅显示左半）。
+  // 因为 visibleGlyphPieces 只按"是否有非空交集"分段，buildPiece 直接画满乙，
+  // 会重新露出乙的隐藏部分。
+  //
+  // 修复：遍历 firstIndex..lastIndex 的每个 glyphId，从 clusterVisible(...).rects
+  // 获得所有真实二维可见子矩形，逐 glyph 投影到 run.ownLayout（用 projectToTarget），
+  // 再组装 clipRects。不能假设中间字形完整可见。
+  const pieceClipRects: RectLike[] = []
+  const pieceSourceGlyphRects: RectLike[] = []
+  if (firstIndex === lastIndex) {
+    pieceClipRects.push(...firstClipRects)
+    pieceSourceGlyphRects.push(...firstSourceGlyphRects)
+  } else {
+    pieceClipRects.push(...firstClipRects)
+    pieceSourceGlyphRects.push(...firstSourceGlyphRects)
+    // 中间字形逐个处理——不能假设完整可见
+    for (let i = firstIndex + 1; i < lastIndex; i++) {
+      const midGlyphId = run.glyphIds[i]
+      const midVisible = clusterVisible(displayed, frozenByGlyphId, midGlyphId)
+      // Issue #879 复核评论6105482207 问题1：midVisible 是 OnScreenInterval[]，
+      // 空数组表示不可见。
+      if (midVisible.length === 0) {
+        // 中间字形不可见——跳过，不产生 clipRect（不填补空洞）
+        continue
+      }
+      // 该字形在 run 自己布局中的完整边界
+      const midGlyphTargetLeft = xAtOffset(run.ownLayout, boundaries[i], run.ownRect.x)
+      const midGlyphTargetRight = xAtOffset(run.ownLayout, boundaries[i + 1],
+        run.ownRect.x + run.ownRect.width, CaretAffinity.Upstream)
+      const midGlyphFullRect: RectLike = {
+        x: midGlyphTargetLeft, y: run.ownRect.y,
+        width: midGlyphTargetRight - midGlyphTargetLeft, height: run.ownRect.height,
+      }
+      // Issue #879 复核评论6105482207 问题1：frozenByGlyphId 改为 Map<string, FrozenWindowSpan[]>，
+      // 取第一个成员作为中间字形投影用的 span。
+      const midSpans = frozenByGlyphId.get(midGlyphId)
+      const midSpan = midSpans !== undefined && midSpans.length > 0 ? midSpans[0] : undefined
+      if (midSpan !== undefined) {
+        // Issue #879 复核评论6105482207 问题1+3：用 interval 的成员信息投影，
+        // 不再使用 midSpan.offsetX 和 sourceGlyphGeometry() 的第一个结果。
+        for (const interval of midVisible) {
+          // Issue #879 评论6110293866 问题2：跳过 opacity=0 的不可见成员
+          if (interval.opacity !== undefined && interval.opacity <= 0) {
+            continue
+          }
+          const intervalOffsetX = interval.offsetX ?? midSpan.offsetX
+          const intervalSourceGlyphX0 = interval.sourceGlyphX0 ?? midGlyphTargetLeft
+          const intervalSourceGlyphX1 = interval.sourceGlyphX1 ?? midGlyphTargetRight
+          for (const r of interval.rects) {
+            const visLeftInSource = Math.max(intervalSourceGlyphX0, r.x - intervalOffsetX)
+            const visRightInSource = Math.min(intervalSourceGlyphX1, r.x + r.width - intervalOffsetX)
+            if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+              const projectedLeft = projectToTarget(
+                visLeftInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+                midGlyphTargetLeft, midGlyphTargetRight
+              )
+              const projectedRight = projectToTarget(
+                visRightInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+                midGlyphTargetLeft, midGlyphTargetRight
+              )
+              pieceClipRects.push({
+                x: projectedLeft, y: run.ownRect.y,
+                width: projectedRight - projectedLeft, height: run.ownRect.height,
+              })
+              pieceSourceGlyphRects.push(midGlyphFullRect)
+            }
+          }
+        }
+      } else {
+        // 静态可见：完整边界（源 = 目标）
+        pieceClipRects.push({
+          x: midGlyphTargetLeft, y: run.ownRect.y,
+          width: midGlyphTargetRight - midGlyphTargetLeft, height: run.ownRect.height,
+        })
+        pieceSourceGlyphRects.push(midGlyphFullRect)
+      }
+    }
+    pieceClipRects.push(...lastClipRects)
+    pieceSourceGlyphRects.push(...lastSourceGlyphRects)
+  }
+
+  // Issue #879 复核评论6102724233 问题2：计算首字形在源布局中的完整上边界（sourceGlyphY0）。
+  // sourceGlyphY0 是源字形在源布局坐标系中的原始 top，不含窗口 offset。
+  // 用于 retained 通道计算冻结帧的真实绘制原点，避免用裁切后的 onScreenTop 导致纵向半字错位。
+  // Issue #879 复核评论6105482207 问题1+3：不再调用 sourceGlyphGeometry()，
+  // 改为从 firstVisible[0].sourceGlyphY0 获取（如果 firstVisible 非空）。
+  let sourceGlyphY0: number
+  if (firstSpan !== undefined && firstVisible.length > 0) {
+    // Issue #879 评论6110293866 问题2：从第一个有可见像素贡献的成员取得 sourceGlyphY0，
+    // 不再从 firstVisible[0] 取（firstVisible[0] 可能是 opacity=0 的不可见成员）。
+    const firstVis = firstVisibleInterval(firstVisible) ?? firstVisible[0]
+    sourceGlyphY0 = firstVis.sourceGlyphY0 ?? run.ownRect.y
+  } else {
+    // 静态可见或 firstVisible 为空：源 = 目标
+    sourceGlyphY0 = run.ownRect.y
+  }
+
+  return {
+    firstIndex: firstIndex,
+    lastIndex: lastIndex,
+    ownLeft: ownLeft,
+    ownRight: ownRight,
+    onScreenLeft: onScreenLeft,
+    // Issue #879 评论6110293866 问题1：当所有 interval 都是 opacity=0 时，
+    // onScreenTopOf 会返回 Infinity——不得让 Infinity 进入 RunStartPiece。
+    onScreenTop: hasVisiblePixels(firstVisible) ? onScreenTopOf(firstVisible) : run.ownRect.y,
+    onScreenRight: onScreenRight,
+    sourceGlyphX0: sourceGlyphX0,
+    sourceGlyphX1: sourceGlyphX1,
+    sourceGlyphY0: sourceGlyphY0,
+    visiblePixelLeft: visiblePixelLeft,
+    visiblePixelRight: visiblePixelRight,
+    clipRects: pieceClipRects.length > 0 ? pieceClipRects : undefined,
+    sourceGlyphRects: pieceSourceGlyphRects.length > 0 ? pieceSourceGlyphRects : undefined,
+  }
+}
+
+/**
+ * Issue #879 复核评论6078682695 问题4：把源布局坐标系中的可见边界投影到目标布局。
+ *
+ * 当源和目标布局不同（不同前缀宽度、折行或位置）时，不能直接套原坐标。
+ * 按可见比例投影：
+ *   ratio = (sourceVisible - sourceX0) / (sourceX1 - sourceX0)
+ *   target = targetX0 + ratio * (targetX1 - targetX0)
+ *
+ * 源宽度为零时退回 targetX0（退化情况）。
+ */
+function projectToTarget(
+  sourceVisible: number,
+  sourceX0: number,
+  sourceX1: number,
+  targetX0: number,
+  targetX1: number
+): number {
+  const sourceWidth = sourceX1 - sourceX0
+  if (sourceWidth <= VISIBLE_EPSILON) {
+    return targetX0
+  }
+  const ratio = (sourceVisible - sourceX0) / sourceWidth
+  return targetX0 + ratio * (targetX1 - targetX0)
+}
+
+/**
+ * Issue #879 复核评论6105187411 问题2：获取一个字形在**真实冻结 Text 源**布局中的完整几何。
+ *
+ * 与 sourceGlyphGeometry 不同——优先从冻结窗口的 sourceLayout 读取，而不是 displayed.layout。
+ * 即使该字形在 displayed 身份表中仍存在，只要它正由一个冻结旧源 Text 窗口绘制，
+ * 就应该用冻结窗口的 sourceLayout 来获取字形几何，确保 startPositionX/Y、frozenSourceGlyphRects、
+ * FrozenWindowSpan.offset 与 startScreenClipRects 对应同一份真正绘制的 Text。
+ *
+ * 优先级：
+ * 1. 有 FrozenWindowSpan 且 glyphUtf16Ranges、sourceLayout 可取 → 用冻结窗口的 sourceLayout 计算
+ * 2. 没有冻结窗口 → 从 displayed.layout 取得静态字形
+ *
+ * 返回的 x0/x1 是源布局坐标系里的值（不含窗口 offset），用于投影计算。
+ */
+function frozenGlyphGeometry(
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan[]>,
+  glyphId: string
+): { x0: number, x1: number, y0: number, height: number } | null {
+  // Issue #879 复核评论6105482207 问题1：frozenByGlyphId 改为 Map<string, FrozenWindowSpan[]>，
+  // 遍历所有覆盖该 glyphId 的冻结窗口成员，返回第一个能成功计算的几何。
+  const spans = frozenByGlyphId.get(glyphId)
+  if (spans !== undefined) {
+    for (const span of spans) {
+      if (span.glyphUtf16Ranges !== null && span.sourceLayout !== null) {
+        const utf16Range = span.glyphUtf16Ranges.get(glyphId)
+        if (utf16Range !== undefined) {
+          const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+          if (rect !== null) {
+            return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+          }
+        }
+      }
+    }
+  }
+  // 只有没有冻结窗口时才从 displayed.layout 获取
+  // 冻结窗口存在但无法提供字形几何时，返回 null——不应混用 displayed.layout 坐标和冻结源 offset
+  if (spans === undefined || spans.length === 0) {
+    const entry = displayed.identities === null
+      ? null
+      : displayed.identities.entryByGlyphId(glyphId)
+    if (entry !== null) {
+      const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
+      if (rect !== null) {
+        return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Issue #879 复核评论6105482207 问题1+3：获取一个字形在**源布局**中的所有成员几何列表。
+ *
+ * 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源窗口和新源窗口覆盖。
+ * 旧 sourceGlyphGeometry 只返回第一个能成功计算的成员几何，丢弃其他成员，
+ * 导致新源成员的画面贡献被丢弃。改为返回所有成员的几何列表。
+ *
+ * 每个成员的几何包含 offsetX/offsetY/sourceKind，用于 buildPiece/intervalForIsland
+ * 逐成员投影和 frozenSourceGlyphRects 的多成员几何存储。
+ *
+ * 优先级：
+ * 1. 有 FrozenWindowSpan 且 glyphUtf16Ranges、sourceLayout 可取 → 用冻结窗口的 sourceLayout 计算
+ * 2. 没有冻结窗口或冻结窗口无法提供 → 从 displayed.layout 取得静态字形
+ *
+ * 返回的 x0/x1 是源布局坐标系里的值（不含窗口 offset），用于投影计算。
+ */
+function sourceGlyphGeometryAll(
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan[]>,
+  glyphId: string
+): { x0: number, x1: number, y0: number, height: number, offsetX: number, offsetY: number, sourceKind: 'old' | 'new', renderNodeKey: string, sourceRevision: number }[] {
+  const results: { x0: number, x1: number, y0: number, height: number, offsetX: number, offsetY: number, sourceKind: 'old' | 'new', renderNodeKey: string, sourceRevision: number }[] = []
+  const spans = frozenByGlyphId.get(glyphId)
+  if (spans !== undefined) {
+    for (const span of spans) {
+      // Issue #879 评论6128121842：两者都为 null 才跳过，优先使用 fullWindowGlyphUtf16Ranges
+      if (span.fullWindowGlyphUtf16Ranges == null && span.glyphUtf16Ranges == null) {
+        continue
+      }
+      if (span.sourceLayout === null) {
+        continue
+      }
+      const utf16Range = lookupGlyphUtf16Range(span, glyphId)
+      if (utf16Range !== undefined) {
+        const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+        if (rect !== null) {
+          results.push({
+            x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height,
+            offsetX: span.offsetX, offsetY: span.offsetY, sourceKind: span.sourceKind,
+            // Issue #879 评论6110857105 问题6：携带 renderNodeKey 和 sourceRevision，
+            // 供 fallback 分支按唯一身份标识匹配 OnScreenInterval 和 FrozenWindowSpan
+            renderNodeKey: span.renderNodeKey, sourceRevision: span.sourceRevision,
+          })
+        }
+      }
+    }
+  }
+
+  // 回退：只有没有冻结窗口时才从 displayed.identities + displayed.layout 获取静态字形几何
+  // 冻结窗口存在但无法提供字形几何时，返回空数组——不应混用 displayed.layout 坐标和冻结源 offset
+  if (results.length === 0 && (spans === undefined || spans.length === 0)) {
+    const entry = displayed.identities === null
+      ? null
+      : displayed.identities.entryByGlyphId(glyphId)
+    if (entry !== null) {
+      const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
+      if (rect !== null) {
+        results.push({
+          x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height,
+          offsetX: 0, offsetY: 0, sourceKind: 'old',
+          // Issue #879 评论6110857105 问题6：静态主文本没有渲染节点标识和源修订号
+          renderNodeKey: '', sourceRevision: 0,
+        })
+      }
+    }
+  }
+
+  return results
+}
+
+/**
+ * Issue #879 复核评论6078682695 问题4：获取一个字形在**源布局**中的完整几何（兼容包装）。
+ *
+ * 调用 sourceGlyphGeometryAll 取第一个结果，保持与旧 sourceGlyphGeometry 相同的签名和语义。
+ * intervalForIsland 中仍然需要获取单个几何作为 frozenSourceGlyphRects 的基础。
+ */
+function sourceGlyphGeometry(
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan[]>,
+  glyphId: string
+): { x0: number, x1: number, y0: number, height: number } | null {
+  const all = sourceGlyphGeometryAll(displayed, frozenByGlyphId, glyphId)
+  if (all.length > 0) {
+    return { x0: all[0].x0, x1: all[0].x1, y0: all[0].y0, height: all[0].height }
+  }
+  return null
+}
+
+/**
+ * 出字 run 的起始状态：每个可见段各有一个独立的起始裁切区间。
+ *
+ * Issue #879 复核评论6078682695 问题1：
+ * 多段可见片段不再合并成连续矩形——每个 piece 各有独立 startClipLeft/Right，
+ * buildFrame 按 piece 分别采样，每个 piece 生成独立的 MotionGlyphWindow。
+ * 区间之间的空洞绝不填补（丙被旧动画吞没时，新 plan 第一帧不会让丙冒出来）。
+ *
+ * 全不可见时返回单个零宽度 piece（从 run 左边界开始）。
+ */
+export function insertRunStartState(run: RunGeometry, displayed: DisplayedContext): RunStartPiece[] {
+  const pieces = visibleGlyphPieces(run, displayed)
+  if (pieces.length === 0) {
+    // 无旧可见字形（一次插入的所有字都不在旧画面里——粘贴多字、一次 IME 上屏多个字）：
+    // 产生覆盖整段新 run 的合法 piece，从零宽度逐步吐出到这段最终的完整 clip。
+    return [{
+      firstIndex: 0,
+      lastIndex: run.glyphIds.length - 1,
+      startClipLeft: run.ownRect.x,
+      startClipRight: run.ownRect.x,
+      startPositionX: run.ownRect.x,
+      startPositionY: run.ownRect.y,
+      glyphIds: [...run.glyphIds],
+    }]
+  }
+
+  // 混合 run（部分旧可见+真正新插入）：必须同时包含原可见片段与尚未出现的新片段。
+  // visibleGlyphPieces 返回的片段列表可能有间隙（如 piece1 覆盖 index 0-1，piece2 覆盖 index 3-4，
+  // 但 index 2 是新插入的字没有被任何 piece 覆盖），这些间隙作为 0 宽度的新 piece 加入。
+  //
+  // Issue #879 复核评论6080604353 问题2：
+  // 间隙 gap piece 的 startClipLeft/Right/startPositionX 必须用 gap 自身在 ownLayout 中的
+  // 真正左边界（通过 clusterBoundaries + xAtOffset 计算），而不是整 run 的 ownRect.x。
+  // 否则混合插入中间/尾部的零宽度 gap piece 从整 run 左端启动，会短暂露出别的字。
+  const boundaries = clusterBoundaries(run.ownText, run.ownUtf16Start, run.ownUtf16End)
+  const result: RunStartPiece[] = []
+  let prevLastIndex = -1
+
+  for (const p of pieces) {
+    // 间隙区域（新插入的字）作为 0 宽度 piece 加入
+    if (p.firstIndex > prevLastIndex + 1) {
+      const gapFirst = prevLastIndex + 1
+      const gapLast = p.firstIndex - 1
+      // gap 自身在 run 布局中的真正左边界，而不是整 run 的 ownRect.x
+      const gapLeft = boundaries.length > 0
+        ? xAtOffset(run.ownLayout, boundaries[gapFirst], run.ownRect.x)
+        : run.ownRect.x
+      result.push({
+        firstIndex: gapFirst,
+        lastIndex: gapLast,
+        startClipLeft: gapLeft,
+        startClipRight: gapLeft,
+        startPositionX: gapLeft,
+        startPositionY: run.ownRect.y,
+        glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
+      })
+    }
+    // 添加当前可见 piece
+    result.push({
+      firstIndex: p.firstIndex,
+      lastIndex: p.lastIndex,
+      startClipLeft: p.ownLeft,
+      startClipRight: p.ownRight,
+      startPositionX: run.ownRect.x,
+      startPositionY: run.ownRect.y,
+      glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
+    })
+    prevLastIndex = p.lastIndex
+  }
+
+  // 尾部间隙：如果最后一个 piece 的 lastIndex < glyphIds.length - 1
+  if (prevLastIndex < run.glyphIds.length - 1) {
+    const gapFirst = prevLastIndex + 1
+    const gapLast = run.glyphIds.length - 1
+    // 尾部 gap 同样用自身在 run 布局中的真正左边界
+    const gapLeft = boundaries.length > 0
+      ? xAtOffset(run.ownLayout, boundaries[gapFirst], run.ownRect.x)
+      : run.ownRect.x
+    result.push({
+      firstIndex: gapFirst,
+      lastIndex: gapLast,
+      startClipLeft: gapLeft,
+      startClipRight: gapLeft,
+      startPositionX: gapLeft,
+      startPositionY: run.ownRect.y,
+      glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
+    })
+  }
+
+  return result
+}
+
+/**
+ * 吞字 run 的起始状态：每个仍可见的字形段各有独立的起始裁切区间。
+ *
+ * Issue #879 复核评论6078682695 问题1：
+ * 多段可见片段不再合并成连续矩形——每个 piece 各有独立 startClipLeft/Right。
+ *
+ * 已经全不可见（上一笔动画已经把它吞掉）时塌到 collapseX——
+ * 起点＝终点，这一笔不再产生二次运动。
+ */
+export function deletedRunStartState(
+  run: RunGeometry,
+  displayed: DisplayedContext,
+  collapseX: number
+): RunStartPiece[] {
+  const pieces = visibleGlyphPieces(run, displayed)
+  if (pieces.length === 0) {
+    // 全不可见（上一笔动画已经把它吞掉）时塌到 collapseX——
+    // 起点＝终点，这一笔不再产生二次运动。
+    // 覆盖整段 run 的 glyphIds，而不是只取第一个字形。
+    return [{
+      firstIndex: 0,
+      lastIndex: run.glyphIds.length - 1,
+      startClipLeft: collapseX,
+      startClipRight: collapseX,
+      startPositionX: run.ownRect.x,
+      startPositionY: run.ownRect.y,
+      glyphIds: [...run.glyphIds],
+    }]
+  }
+  return pieces.map((p: VisibleRunPiece): RunStartPiece => ({
+    firstIndex: p.firstIndex,
+    lastIndex: p.lastIndex,
+    startClipLeft: p.ownLeft,
+    startClipRight: p.ownRight,
+    startPositionX: run.ownRect.x,
+    startPositionY: run.ownRect.y,
+    glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
+  }))
+}
+
+/**
+ * 保留字平移 run 的起始状态：每个仍可见的字形段各有独立的起始位置。
+ *
+ * Issue #879 复核评论6078682695 问题1：
+ * 多段可见片段不再合并成连续矩形——每个 piece 各有独立 startClipLeft/Right 和 startPosition。
+ * 让每个 piece 的第一个仍可见的字形停在此刻在屏的位置上。
+ *
+ * 一个共享字形都不在屏上（旧帧已静态化且全部消失）→ 返回 fallback。
+ */
+export function retainedMoveStartState(
+  run: RunGeometry,
+  displayed: DisplayedContext,
+  fallback: RunStartState
+): RunStartPiece[] {
+  // Issue #879 复核评论6100665268 问题1：retained 的固定物理窗口分区必须覆盖
+  // run.glyphIds 的全部字符簇，与 prepare 时可不可见无关。
+  //
+  // 旧实现用 visibleGlyphPieces 只返回当时可见的字形段，不可见字形没有 interval。
+  // 如果 prepare 时整段不可见，回退成覆盖全 run、没有 intervals 的 piece。
+  // 此时 plannedWindowKeys 按整 run glyphIds 规划 1 个 key；若等待窗口期间旧动画
+  // 露出局部字形，下一次 retargetRunStarts(kind='retained') 因 piece.intervals
+  // 不存在走 allVisibleIslands，生成若干小 interval.glyphIds，随后 plannedWindowKeys
+  // 和 buildFrame 就变成另一组 key——物理 Text 节点身份不稳定。
+  //
+  // 修复：只有一个 piece 覆盖整个 run（firstIndex=0, lastIndex=glyphIds.length-1），
+  // 其 intervals 覆盖所有字形——按完整 [0..glyphIds.length-1] 每个 glyph 固定一个
+  // interval（firstIndex=lastIndex=i）。可见字形用 intervalForIsland 计算正确的
+  // clip/position/clipRects；不可见字形使用显式零宽/空裁切（startClipLeft=startClipRight），
+  // 但 interval 分区保留。retargetRunStarts(kind='retained') 永远只刷新这份已冻结分区
+  // 内的 startClip/startPosition/clipRects，不增删 glyphIds key。
+  const boundaries = clusterBoundaries(run.ownText, run.ownUtf16Start, run.ownUtf16End)
+  const frozenByGlyphId = frozenIndex(displayed)
+  const intervals: RunStartInterval[] = []
+  let legacyStartClipLeft = fallback.startClipLeft
+  let legacyStartClipRight = fallback.startClipRight
+  let legacyStartPositionX = fallback.startPositionX
+  let legacyStartPositionY = fallback.startPositionY
+  let legacyResolved = false
+
+  for (let i = 0; i < run.glyphIds.length; i++) {
+    const interval = intervalForIsland(
+      run, boundaries, i, i, 'retained', displayed, frozenByGlyphId
+    )
+    if (interval !== null) {
+      intervals.push(interval)
+      // legacy 单段起始取第一个可见 interval 的值
+      if (!legacyResolved) {
+        legacyStartClipLeft = interval.startClipLeft
+        legacyStartClipRight = interval.startClipRight
+        legacyStartPositionX = interval.startPositionX
+        legacyStartPositionY = interval.startPositionY
+        legacyResolved = true
+      }
+    } else {
+      // 不可见字形：保留分区，使用显式零宽/空裁切
+      // Issue #879 复核评论6104161755 问题2：用 glyphRectForRange 获取字形完整矩形，
+      // startPositionX/Y 改为字形绝对屏幕原点（与 buildFrame 的 islandStartX 语义一致），
+      // 不再用 run.ownRect.x/y（零偏移语义）。buildFrame 现在直接使用
+      // islandStartX = interval.startPositionX，若 startPositionX = run.ownRect.x（零偏移），
+      // 则 islandStartX 被设为 run 左端而非字形真实位置，导致字形被挪到错误位置。
+      // 修复：startPositionX = ownGlyphRect.x（真绝对字形原点），
+      // frozenDrawOffsetX/Y = 0（不可见字形没有窗口偏移）。
+      const ownGlyphRect = glyphRectForRange(run.ownLayout,
+        boundaries.length > i ? boundaries[i] : run.ownUtf16Start,
+        boundaries.length > i + 1 ? boundaries[i + 1] : run.ownUtf16End)
+      const glyphX = ownGlyphRect !== null ? ownGlyphRect.x : run.ownRect.x
+      const glyphY = ownGlyphRect !== null ? ownGlyphRect.y : run.ownRect.y
+      const glyphFullWidth = ownGlyphRect !== null ? ownGlyphRect.width : 0
+      const glyphHeight = ownGlyphRect !== null ? ownGlyphRect.height : run.ownRect.height
+      intervals.push({
+        firstIndex: i,
+        lastIndex: i,
+        glyphIds: [run.glyphIds[i]],
+        startClipLeft: glyphX,
+        startClipRight: glyphX,
+        startPositionX: glyphX,
+        startPositionY: glyphY,
+        utf16Start: boundaries.length > i ? boundaries[i] : run.ownUtf16Start,
+        utf16End: boundaries.length > i + 1 ? boundaries[i + 1] : run.ownUtf16End,
+        clipRects: [{
+          x: glyphX, y: glyphY,
+          width: 0, height: glyphHeight,
+        }],
+        sourceGlyphRects: [{
+          x: glyphX, y: glyphY,
+          width: glyphFullWidth, height: glyphHeight,
+        }],
+        // Issue #879 复核评论6102724233 问题5：不可见字形冻结偏移为 0。
+        frozenDrawOffsetX: 0,
+        frozenDrawOffsetY: 0,
+        // Issue #879 复核评论6104161755 问题3：不可见字形没有冻结窗口覆盖，
+        // 源布局就是 run.ownLayout，frozenSourceGlyphRects = sourceGlyphRects。
+        frozenSourceGlyphRects: [{
+          x: glyphX, y: glyphY,
+          width: glyphFullWidth, height: glyphHeight,
+        }],
+      })
+    }
+  }
+
+  return [{
+    firstIndex: 0,
+    lastIndex: run.glyphIds.length - 1,
+    startClipLeft: legacyStartClipLeft,
+    startClipRight: legacyStartClipRight,
+    startPositionX: legacyStartPositionX,
+    startPositionY: legacyStartPositionY,
+    glyphIds: [...run.glyphIds],
+    intervals: intervals.length > 0 ? intervals : undefined,
+  }]
+}
+
+/**
+ * Issue #879 复核评论6088787701 问题4：piece 分区在 retarget 之间保持不变，只重算起始数据。
+ *
+ * 物理 Text 节点的身份由 piece 的 glyphIds 序列决定（WindowInstanceIdAllocator）。
+ * 旧 retarget 用提交瞬间的可见性**重新拆分** piece，于是同一个字形在两个时刻可能落到
+ * 不同的 glyphIds 序列上 → 分配出不同 renderNodeKey → 交棒前刚准备完的节点作废，
+ * 旧 animator 已 cancel 而新节点还没布局，形成「一直等、一直不交棒」。
+ *
+ * 修复：分区（firstIndex/lastIndex/glyphIds）在 prepare 时由可见性确定一次，
+ * retarget 只重算该 piece 的起始 clip/position 数据。同一个字形在两次 retarget 之间
+ * 不会因为临时可见分组改变而更换物理 Text key。
+ *
+ * 数据语义：
+ * - piece 内仍有可见字形：为该 piece 内**所有不连续可见段**各算一段 RunStartInterval
+ *   （intervals 字段），每段独立起始裁切；legacy 单段字段（startClipLeft/Right/Position）
+ *   回落取最长一段，供未读 intervals 的代码兼容。piece 之间的空洞依旧不填补——
+ *   每条 clip 只覆盖一段连续区间，但一个 piece 可以有多条。
+ * - piece 内字形已全部不可见：insert 用该 piece 自身左边界零宽度、deleted 塌到 collapseX、
+ *   retained 用 fallback——与 prepare 时同语义，不猜几何。
+ *
+ * @param run 该 piece 所属的 run 几何
+ * @param pieces prepare 时确定的分区（边界与 glyphIds 保持不变）
+ * @param displayed 提交瞬间的在屏上下文
+ * @param kind 通道类别，决定全不可见时的兜底语义
+ * @param collapseX deleted 通道全不可见时的塌缩位置（vp）
+ * @param fallback retained 通道全不可见时的兜底起始状态
+ * @returns 与入参 piece 一一对应的新 piece 数组（同 firstIndex/lastIndex/glyphIds）
+ */
+export function retargetRunStarts(
+  run: RunGeometry,
+  pieces: RunStartPiece[],
+  displayed: DisplayedContext,
+  kind: RunStartKind,
+  collapseX: number,
+  fallback: RunStartState
+): RunStartPiece[] {
+  const boundaries = clusterBoundaries(run.ownText, run.ownUtf16Start, run.ownUtf16End)
+  if (boundaries.length !== run.glyphIds.length + 1) {
+    // 簇数与身份数对不上（范围不是整簇边界）——不猜几何，保留原起始数据。
+    return clonePieces(pieces)
+  }
+  const frozenByGlyphId = frozenIndex(displayed)
+
+  const result: RunStartPiece[] = []
+  for (const piece of pieces) {
+    const pieceOwnLeft = xAtOffset(run.ownLayout, boundaries[piece.firstIndex], run.ownRect.x)
+    const intervals: RunStartInterval[] = []
+    // Issue #879 复核评论6099070438 问题1：retained 通道保留 prepare 阶段的稳定 intervals 分区
+    // （firstIndex/lastIndex/glyphIds 不变），只重算每个 interval 的 clip/position。
+    // 不调 allVisibleIslands 重新拆分——同一字形在两次 retarget 之间不会因临时可见分组
+    // 改变而更换物理 Text key。如果某个 interval 的字形在 retarget 时不可见，
+    // 将其 clip 设为零宽度（startClipLeft=startClipRight），分区仍保留。
+    if (kind === 'retained' && piece.intervals !== undefined && piece.intervals.length > 0) {
+      for (const prevInterval of piece.intervals) {
+        const reInterval = intervalForIsland(
+          run, boundaries, prevInterval.firstIndex, prevInterval.lastIndex,
+          'retained', displayed, frozenByGlyphId
+        )
+        if (reInterval !== null) {
+          // Issue #879 评论6108900966 问题1+2：传递 needsCrossfade 和 sourceMembers。
+          // needsCrossfade 在 plan 阶段由 planFromPatches 逐 interval 计算，
+          // retarget 时不应重新计算——直接继承 prevInterval 的值。
+          reInterval.needsCrossfade = prevInterval.needsCrossfade
+          // Issue #879 评论6138007192 问题1：保留 prepare 预分配的物理窗口身份字段。
+          // intervalForIsland 不分配身份——身份在 Planner 的 planFromPatches 中一次性分配。
+          // retarget 只改现时裁切、起始位置和起始透明度，不改变物理节点身份。
+          reInterval.renderNodeKey = prevInterval.renderNodeKey
+          reInterval.windowInstanceId = prevInterval.windowInstanceId
+          reInterval.crossfadeRenderNodeKey = prevInterval.crossfadeRenderNodeKey
+          reInterval.crossfadeWindowInstanceId = prevInterval.crossfadeWindowInstanceId
+          // Issue #879 复核评论6111437799 问题5：源窗口集合固定为 PreparedCandidate 不可变成员身份。
+          // retarget 只刷新已固定成员的 clip、位置、alpha，源已离屏则 clip/alpha 归零但成员物理 key 不变。
+          // 不使用 intervalForIsland 重新构建的 sourceMembers——那会因 frozenWindows 变化而引入/丢失成员。
+          // 优先继承 prevInterval 的 sourceMembers（保持 renderNodeKey/sourceRevision/role 不变），
+          // 只用 reInterval 的 sourceMembers 作为 fallback（prevInterval 没有 sourceMembers 时）。
+          if (prevInterval.sourceMembers !== undefined) {
+            // 从 reInterval 的 sourceMembers 中提取新的 clipRects/opacity 信息，
+            // 但保持 prevInterval 的成员身份（renderNodeKey/sourceRevision/role）不变。
+            reInterval.sourceMembers = mergeMemberUpdates(
+              prevInterval.sourceMembers,
+              reInterval.sourceMembers
+            )
+          } else if (reInterval.sourceMembers === undefined) {
+            // 两个都没有 sourceMembers——不需要处理
+          }
+          intervals.push(reInterval)
+        } else {
+          // 该 interval 的字形在 retarget 时不可见——保留分区，clip 设为零宽度
+          // Issue #879 评论6110857105 问题4验证：不可见分支已正确清空所有可见数据——
+          // clipRects 为零宽度矩形、startScreenClipRects 为空数组、sourceMembers.clipRects 为空数组、
+          // opacity/targetOpacity 都为 0。deepCloneSourceMembers 已正确处理 renderNodeKey 和 sourceRevision 字段。
+          const clipX = prevInterval.startClipLeft
+          intervals.push({
+            firstIndex: prevInterval.firstIndex,
+            lastIndex: prevInterval.lastIndex,
+            glyphIds: [...prevInterval.glyphIds],
+            startClipLeft: clipX,
+            startClipRight: clipX,
+            startPositionX: prevInterval.startPositionX,
+            startPositionY: prevInterval.startPositionY,
+            utf16Start: prevInterval.utf16Start,
+            utf16End: prevInterval.utf16End,
+            // Issue #879 评论6138007192 问题1：保留 prepare 预分配的物理窗口身份字段。
+            // 不可见时仍需保留身份，否则 plannedWindowKeys 漏 key、buildFrame 走 fallback 分配。
+            renderNodeKey: prevInterval.renderNodeKey,
+            windowInstanceId: prevInterval.windowInstanceId,
+            crossfadeRenderNodeKey: prevInterval.crossfadeRenderNodeKey,
+            crossfadeWindowInstanceId: prevInterval.crossfadeWindowInstanceId,
+            // Issue #879 复核评论6100665268 问题3：不可见时 clipRects 设为零宽度，
+            // 保留分区但不露出任何可见区域。
+            clipRects: [{
+              x: clipX, y: prevInterval.startPositionY,
+              width: 0, height: run.ownRect.height,
+            }],
+            // 保留 prevInterval.sourceGlyphRects 的引用即可（不可见时不需要重新计算）。
+            sourceGlyphRects: prevInterval.sourceGlyphRects,
+            // Issue #879 复核评论6102724233 问题2+5：保留 prevInterval 的冻结偏移字段。
+            frozenDrawOffsetX: prevInterval.frozenDrawOffsetX,
+            frozenDrawOffsetY: prevInterval.frozenDrawOffsetY,
+            // Issue #879 复核评论6104161755 问题1：不可见时 startScreenClipRects 必须设为空数组，
+            // 不能沿用 prepare 可见数据——否则 buildFrame 新优先分支会绕开刚更新的零宽 clipRects，
+            // 用旧矩形作 p=0 的可见 clip，导致快速连续删除/输入时回闪或双字。
+            startScreenClipRects: [],
+            // Issue #879 复核评论6104161755 问题3：保留 prevInterval 的 frozenSourceGlyphRects。
+            frozenSourceGlyphRects: prevInterval.frozenSourceGlyphRects,
+            // Issue #879 评论6108900966 问题1+2：传递 needsCrossfade 和 sourceMembers。
+            needsCrossfade: prevInterval.needsCrossfade,
+            sourceMembers: prevInterval.sourceMembers !== undefined
+              ? deepCloneSourceMembers(prevInterval.sourceMembers).map(m => {
+                  // Issue #879：reInterval===null 时不可见，但必须区分 role：
+                  // - target 成员：保留 targetOpacity=1 及身份字段，仅 opacity=0 + clipRects=[] 作为待显露起点
+                  // - frozen 成员：clipRects=[]、opacity=0、targetOpacity=0（历史源已离屏应淡出）
+                  if (m.role === 'target') {
+                    return {
+                      ...m,
+                      clipRects: [],
+                      opacity: 0,
+                      // target 成员保留 targetOpacity=1，确保整轮动画正常显露
+                      targetOpacity: 1,
+                    }
+                  } else {
+                    return {
+                      ...m,
+                      clipRects: [],
+                      opacity: 0,
+                      targetOpacity: 0,
+                    }
+                  }
+                })
+              : undefined,
+            // Issue #879 第32轮复核问题3：不可见时继承 prevInterval 的 hasVisibleGap。
+            // 不可见字形没有可见区域，不构成新的 gap，但保留 prevInterval 的值以保持数据一致性。
+            hasVisibleGap: prevInterval.hasVisibleGap,
+          })
+        }
+      }
+    } else {
+      // insert/deleted 通道：计算该 piece 内所有不连续可见岛，
+      // 每段各自独立起始裁切——保留字停在各自在屏位置、吞字各自缩到 collapseX、
+      // 吐字各自从零宽度吐出。不丢任何可见字形（旧 longestVisibleIsland 只保留最长一段）。
+      const islands = allVisibleIslands(
+        run, boundaries, piece.firstIndex, piece.lastIndex, displayed, frozenByGlyphId
+      )
+      for (const island of islands) {
+        const interval = intervalForIsland(
+          run, boundaries, island.firstIndex, island.lastIndex, kind, displayed, frozenByGlyphId
+        )
+        if (interval !== null) {
+          intervals.push(interval)
+        }
+      }
+
+      // 缺口4：insert 通道为不可见连续子区间（空洞）建立零宽度起始 interval。
+      // 空洞里的新字不从 run 左边界吐出，而是从前一个可见岛的右边界旁开始展开，
+      // 避免空洞里的新字直到动画结束才出现。
+      if (kind === 'insert') {
+        const zeroWidthIntervals: RunStartInterval[] = []
+        let cursor = piece.firstIndex
+        let prevClipRight: number | null = null
+        for (const island of islands) {
+          if (island.firstIndex > cursor) {
+            const gapFirst = cursor
+            const gapLast = island.firstIndex - 1
+            const gapClipX = prevClipRight !== null ? prevClipRight : pieceOwnLeft
+            const gapStartX = prevClipRight !== null ? prevClipRight : piece.startPositionX
+            // Issue #879 复核评论6100665268 问题3：空洞的 sourceGlyphRects 保留完整字形矩形，
+            // clipRects 设为零宽度，保持数据结构一致性。
+            const gapGlyphLeft = xAtOffset(run.ownLayout, boundaries[gapFirst], run.ownRect.x)
+            const gapGlyphRight = xAtOffset(run.ownLayout, boundaries[gapLast + 1],
+              run.ownRect.x + run.ownRect.width, CaretAffinity.Upstream)
+            zeroWidthIntervals.push({
+              firstIndex: gapFirst,
+              lastIndex: gapLast,
+              glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
+              startClipLeft: gapClipX,
+              startClipRight: gapClipX,
+              startPositionX: gapStartX,
+              startPositionY: piece.startPositionY,
+              utf16Start: boundaries[gapFirst],
+              utf16End: boundaries[gapLast + 1],
+              clipRects: [{
+                x: gapClipX, y: piece.startPositionY,
+                width: 0, height: run.ownRect.height,
+              }],
+              sourceGlyphRects: [{
+                x: gapGlyphLeft, y: piece.startPositionY,
+                width: gapGlyphRight - gapGlyphLeft, height: run.ownRect.height,
+              }],
+            })
+          }
+          const islandInterval = intervals.find(iv => iv.firstIndex === island.firstIndex)
+          if (islandInterval !== undefined) {
+            prevClipRight = islandInterval.startClipRight
+          }
+          cursor = island.lastIndex + 1
+        }
+        if (cursor <= piece.lastIndex) {
+          const gapFirst = cursor
+          const gapLast = piece.lastIndex
+          const gapClipX = prevClipRight !== null ? prevClipRight : pieceOwnLeft
+          const gapStartX = prevClipRight !== null ? prevClipRight : piece.startPositionX
+          // Issue #879 复核评论6100665268 问题3：尾部空洞的 sourceGlyphRects 保留完整字形矩形，
+          // clipRects 设为零宽度，保持数据结构一致性。
+          const gapGlyphLeft = xAtOffset(run.ownLayout, boundaries[gapFirst], run.ownRect.x)
+          const gapGlyphRight = xAtOffset(run.ownLayout, boundaries[gapLast + 1],
+            run.ownRect.x + run.ownRect.width, CaretAffinity.Upstream)
+          zeroWidthIntervals.push({
+            firstIndex: gapFirst,
+            lastIndex: gapLast,
+            glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
+            startClipLeft: gapClipX,
+            startClipRight: gapClipX,
+            startPositionX: gapStartX,
+            startPositionY: piece.startPositionY,
+            utf16Start: boundaries[gapFirst],
+            utf16End: boundaries[gapLast + 1],
+            clipRects: [{
+              x: gapClipX, y: piece.startPositionY,
+              width: 0, height: run.ownRect.height,
+            }],
+            sourceGlyphRects: [{
+              x: gapGlyphLeft, y: piece.startPositionY,
+              width: gapGlyphRight - gapGlyphLeft, height: run.ownRect.height,
+            }],
+          })
+        }
+        if (zeroWidthIntervals.length > 0) {
+          intervals.push(...zeroWidthIntervals)
+          intervals.sort((a, b) => a.firstIndex - b.firstIndex)
+        }
+      }
+    }
+
+    // legacy 单段起始（最长岛）保持原语义，供未读 intervals 的代码兼容。
+    // 缺口4：零宽度 interval（空洞）不参与 legacy 最长岛选取——
+    // 它们只为动画层提供独立 clip，不应影响兼容单段 clip 的语义。
+    let startClipLeft = pieceOwnLeft
+    let startClipRight = pieceOwnLeft
+    let startPositionX = piece.startPositionX
+    let startPositionY = piece.startPositionY
+    let resolved = false
+    if (intervals.length > 0) {
+      let longest: RunStartInterval | null = null
+      for (const iv of intervals) {
+        if (iv.startClipRight - iv.startClipLeft <= VISIBLE_EPSILON) {
+          continue
+        }
+        if (longest === null) {
+          longest = iv
+          continue
+        }
+        const len = iv.lastIndex - iv.firstIndex
+        const bestLen = longest.lastIndex - longest.firstIndex
+        if (len > bestLen || (len === bestLen && iv.firstIndex < longest.firstIndex)) {
+          longest = iv
+        }
+      }
+      if (longest !== null) {
+        startClipLeft = longest.startClipLeft
+        startClipRight = longest.startClipRight
+        startPositionX = longest.startPositionX
+        startPositionY = longest.startPositionY
+        resolved = true
+      }
+    }
+    if (!resolved) {
+      // 该 piece 的字形此刻全部不可见——按通道语义塌缩，不猜几何。
+      if (kind === 'deleted') {
+        startClipLeft = collapseX
+        startClipRight = collapseX
+      } else if (kind === 'retained') {
+        startClipLeft = fallback.startClipLeft
+        startClipRight = fallback.startClipRight
+        startPositionX = fallback.startPositionX
+        startPositionY = fallback.startPositionY
+      }
+    }
+    result.push({
+      firstIndex: piece.firstIndex,
+      lastIndex: piece.lastIndex,
+      startClipLeft: startClipLeft,
+      startClipRight: startClipRight,
+      startPositionX: startPositionX,
+      startPositionY: startPositionY,
+      glyphIds: [...piece.glyphIds],
+      intervals: intervals.length > 0 ? intervals : undefined,
+      // Issue #879 评论6138007192 问题1：保留 prepare 预分配的物理窗口身份。
+      // retarget 只改现时裁切、起始位置和起始透明度，不改变物理节点身份。
+      // prepare 一次分配，全链路不再改变 key 和 ID。
+      renderNodeKey: piece.renderNodeKey,
+      windowInstanceId: piece.windowInstanceId,
+    })
+  }
+  return result
+}
+
+/**
+ * Issue #879 本轮复核评论（高优先级）：在 piece 的字母下标区间内找**所有**连续可见段。
+ *
+ * 与已删除的 longestVisibleIsland 不同——这里返回区间内每一段连续可见的下标对，
+ * 段与段之间的空洞（被冻结窗口局部裁切断开）各自作为独立岛返回，
+ * 交棒时每段都生成一段独立 clip，不丢任何可见字形。
+ */
+function allVisibleIslands(
+  run: RunGeometry,
+  boundaries: number[],
+  firstIndex: number,
+  lastIndex: number,
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan[]>
+): Array<{ firstIndex: number, lastIndex: number }> {
+  const islands: Array<{ firstIndex: number, lastIndex: number }> = []
+  let currentFirst = -1
+  for (let i = firstIndex; i <= lastIndex; i++) {
+    const visible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[i])
+    // Issue #879 评论6110293866 问题1：用统一的 hasVisiblePixels 替代局部 some() 判断。
+    // 注意：原局部变量名 hasVisiblePixels 与全局函数同名，改为 visibleResult 避免冲突。
+    const visibleResult = hasVisiblePixels(visible)
+    if (visibleResult) {
+      if (currentFirst < 0) {
+        currentFirst = i
+      }
+    } else if (currentFirst >= 0) {
+      islands.push({ firstIndex: currentFirst, lastIndex: i - 1 })
+      currentFirst = -1
+    }
+  }
+  if (currentFirst >= 0) {
+    islands.push({ firstIndex: currentFirst, lastIndex: lastIndex })
+  }
+  return islands
+}
+
+/**
+ * Issue #879 评论6108900966 问题1：为每个冻结窗口成员构建 FrozenGlyphMember。
+ *
+ * 遍历 FrozenWindowSpan[]（与 clusterVisible / sourceGlyphGeometryAll 相同的遍历顺序），
+ * 为每个能提供字形几何的成员构建一个 FrozenGlyphMember，保留各自的
+ * sourceGlyphRect/offsetX/offsetY/clipRects/opacity。
+ *
+ * clipRects 匹配：对每个 span，在 firstVisible 中按 sourceKind + offset 查找匹配的
+ * OnScreenInterval（不依赖顺序——clusterVisible 可能跳过 rects.length === 0 的成员，
+ * 导致顺序错位）。匹配上的取其 rects 作为该成员的 clipRects，并标记该 interval 已消费；
+ * 匹配不上的从 span.clipRects 与字形在屏矩形（sourceGlyphRect + offset）求交，
+ * 得到该成员自己的 clipRects。
+ *
+ * Issue #879 评论6108900966 问题3：opacity=0 的成员仍保留在 sourceMembers 中
+ *（为了提前挂载稳定的 Text），但 opacity 字段标记为 0 让 buildFrame 知道像素贡献为零。
+ */
+function buildSourceMembers(
+  spans: FrozenWindowSpan[],
+  firstVisible: OnScreenInterval[],
+  glyphId: string
+): FrozenGlyphMember[] {
+  const members: FrozenGlyphMember[] = []
+  // Issue #879 评论6108234595：不再使用 visibleIdx 顺序匹配。
+  // clusterVisible 可能跳过某些 span（clip 与字形无交集时 rects.length===0），
+  // 导致后续的顺序匹配全部错位。改为按 renderNodeKey + sourceRevision 稳健查找匹配。
+  // Issue #879 评论6110857105 问题6：旧逻辑按 sourceKind + offset 匹配，但同源类别、
+  // 相同 offset 的不同 sourceRevision/renderNodeKey 会发生错误匹配。改为按唯一身份标识匹配。
+  const consumed = new Set<number>()
+  for (const span of spans) {
+    // Issue #879 评论6128121842：两者都为 null 才跳过，优先使用 fullWindowGlyphUtf16Ranges
+    if (span.fullWindowGlyphUtf16Ranges == null && span.glyphUtf16Ranges == null) {
+      continue
+    }
+    if (span.sourceLayout === null) {
+      continue
+    }
+    const utf16Range = lookupGlyphUtf16Range(span, glyphId)
+    if (utf16Range === undefined) {
+      continue
+    }
+    const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+    if (rect === null) {
+      continue
+    }
+    // 该 span 有有效几何——构建 FrozenGlyphMember
+    // Issue #879 评论6110857105 问题6：按 renderNodeKey + sourceRevision 在 firstVisible 中
+    // 查找匹配的 OnScreenInterval（唯一身份标识匹配，避免同源同 offset 的不同成员错误匹配）
+    // Issue #879 复核评论6120195493：matched 分支只用于标记 consumed（避免同 key 多 span 重复
+    // 匹配 interval），不再直接复制 interval.rects 作为 clipRects。clipRects 的计算统一用
+    // span.clipRects 与字形在屏矩形求交。这样隐藏 span（clipRects 与字形无交集）即使匹配上
+    // interval，也会得到空 clipRects，而不是错误地复制 interval.rects（可见 span 的裁切矩形）。
+    for (let vi = 0; vi < firstVisible.length; vi++) {
+      if (consumed.has(vi)) {
+        continue
+      }
+      const interval = firstVisible[vi]
+      if (interval.renderNodeKey === span.renderNodeKey &&
+          interval.sourceRevision === span.sourceRevision) {
+        consumed.add(vi)
+        break
+      }
+    }
+    // 无论是否匹配 interval，clipRects 都用 span.clipRects 与字形在屏矩形求交计算。
+    // 隐藏 span（clipRects 与字形无交集）得到空 clipRects；可见 span 得到非空 clipRects。
+    // 这与 clusterVisible 的求交逻辑一致，保证 buildSourceMembers 的 clipRects 与
+    // OnScreenInterval 的可见性语义同源。
+    const clipRects: RectLike[] = []
+    const glyphOnScreenLeft = rect.x + span.offsetX
+    const glyphOnScreenRight = rect.x + rect.width + span.offsetX
+    const glyphOnScreenTop = rect.y + span.offsetY
+    const glyphOnScreenBottom = rect.y + rect.height + span.offsetY
+    for (const cr of span.clipRects) {
+      const intersectLeft = Math.max(glyphOnScreenLeft, cr.x)
+      const intersectRight = Math.min(glyphOnScreenRight, cr.x + cr.width)
+      const intersectTop = Math.max(glyphOnScreenTop, cr.y)
+      const intersectBottom = Math.min(glyphOnScreenBottom, cr.y + cr.height)
+      if (intersectRight - intersectLeft > VISIBLE_EPSILON &&
+          intersectBottom - intersectTop > VISIBLE_EPSILON) {
+        clipRects.push({
+          x: intersectLeft,
+          y: intersectTop,
+          width: intersectRight - intersectLeft,
+          height: intersectBottom - intersectTop,
+        })
+      }
+    }
+    members.push({
+      sourceKind: span.sourceKind,
+      sourceRevision: span.sourceRevision,
+      // Issue #879 复核评论6111437799 问题1：来自冻结窗口的成员 role='frozen'，
+      // 空clip时应保持不可见并淡出，而不是从零宽恢复到完整字。
+      role: 'frozen',
+      runId: span.runId,
+      renderNodeKey: span.renderNodeKey,
+      sourceGlyphRect: {
+        x: rect.x, y: rect.y,
+        width: rect.width, height: rect.height,
+      },
+      offsetX: span.offsetX,
+      offsetY: span.offsetY,
+      clipRects: clipRects,
+      opacity: span.opacity,
+      sourceUtf16Start: utf16Range[0],
+      sourceUtf16End: utf16Range[1],
+      targetOpacity: -1,
+      windowInstanceId: span.windowInstanceId,
+      // Issue #879 评论6128658045 问题1+3：携带原始窗口的完整 glyphUtf16Ranges 映射，
+      // 供 buildFrame 的 FrozenWindowGroupPlan.glyphUtf16Ranges 使用。
+      glyphUtf16Ranges: span.glyphUtf16Ranges,
+      // Issue #879 第32轮复核问题2：携带物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射，
+      // 供 buildFrame 的 FrozenWindowGroupPlan.fullWindow* 使用。
+      fullWindowGlyphIds: span.fullWindowGlyphIds,
+      fullWindowUtf16Start: span.fullWindowUtf16Start,
+      fullWindowUtf16End: span.fullWindowUtf16End,
+      fullWindowGlyphUtf16Ranges: span.fullWindowGlyphUtf16Ranges,
+    })
+  }
+  return members
+}
+
+/**
+ * Issue #879 本轮复核评论（高优先级）：为一段连续可见岛计算其起始裁切区间。
+ *
+ * 复用 buildPiece 计算该岛在 run 自己布局里的精确可见边界 ownLeft/ownRight，
+ * 以及（保留字）在屏起始位置。insert/deleted 通道不平移，起始位置落到 run 左/上边界；
+ * retained 通道让该岛第一个仍可见字形停在此刻在屏位置。
+ *
+ * @returns 该岛的 RunStartInterval；岛内无任何字形可见时返回 null。
+ */
+function intervalForIsland(
+  run: RunGeometry,
+  boundaries: number[],
+  firstIndex: number,
+  lastIndex: number,
+  kind: RunStartKind,
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan[]>
+): RunStartInterval | null {
+  const firstVisible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[firstIndex])
+  if (firstVisible.length === 0) {
+    return null
+  }
+  // Issue #879 评论6110293866 问题1：有 interval 但全部 opacity=0 时也不可见，
+  // 用统一的 hasVisiblePixels 判断替代 firstVisible.length === 0 的可见性语义。
+  if (!hasVisiblePixels(firstVisible)) {
+    return null
+  }
+  const visible = buildPiece(run, boundaries, firstIndex, lastIndex, firstVisible, displayed, frozenByGlyphId)
+  if (visible === null) {
+    return null
+  }
+  let startPositionX = run.ownRect.x
+  let startPositionY = run.ownRect.y
+  // Issue #879 复核评论6102724233 问题1+2：retained 通道的冻结帧绘制偏移。
+  // frozenDrawOffsetX/Y 直接从 FrozenWindowSpan.offsetX/Y 读取（窗口真实平移量），
+  // 不再从裁切边界反推。buildFrame 用它计算字形在屏绘制原点。
+  let frozenDrawOffsetX: number | undefined
+  let frozenDrawOffsetY: number | undefined
+  // Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
+  let startScreenClipRects: RectLike[] | undefined
+  // Issue #879 复核评论6104161755 问题3：冻结源字形在源布局坐标系中的完整矩形。
+  let frozenSourceGlyphRects: RectLike[] | undefined
+  // Issue #879 评论6108900966 问题1：sourceMembers 替代分离的旧字段。
+  let sourceMembers: FrozenGlyphMember[] | undefined
+  if (kind === 'retained') {
+    // Issue #879 复核评论6102724233 问题1：frozenDrawOffsetX/Y 直接从 FrozenWindowSpan.offsetX/Y
+    // 读取，不再从裁切边界反推。onScreenTop/onScreenLeft 是裁切后的可见边界，不是源 Text
+    // 的真实偏移——用裁切边界反推会把纵向裁切误当成平移，导致半字错位。
+    // Issue #879 评论6110293866 问题2：从第一个有可见像素贡献的 interval 取 offset，
+    // 不再从 firstSpans[0] 取（firstSpans[0] 可能是 opacity=0 的不可见源）。
+    const firstSpans = frozenByGlyphId.get(run.glyphIds[firstIndex])
+    const firstVis = firstVisibleInterval(firstVisible)
+    if (firstVis !== null) {
+      frozenDrawOffsetX = firstVis.offsetX
+      frozenDrawOffsetY = firstVis.offsetY
+    } else {
+      // 不应走到这里——hasVisiblePixels 已在前面检查过
+      frozenDrawOffsetX = 0
+      frozenDrawOffsetY = 0
+    }
+    const firstSpan = firstSpans !== undefined && firstSpans.length > 0 ? firstSpans[0] : undefined
+    // startPositionX/Y = 源字形原点 + 窗口真实偏移（不是裁切后可见边界）
+    startPositionX = visible.sourceGlyphX0 + frozenDrawOffsetX
+    startPositionY = visible.sourceGlyphY0 + frozenDrawOffsetY
+    // Issue #879 复核评论6102724233 问题2：startScreenClipRects 直接使用 firstVisible 的 rects
+    // （clusterVisible 返回的屏幕坐标真实裁切交集矩形），不通过 clipRects.map(...) 计算。
+    // firstVisible 的 rects 包含真实的纵向裁切信息（y 和 height 反映裁切后的可见部分），
+    // 而 visible.clipRects 在 run 自己布局坐标系中，y/height 都是整字值，简单相加偏移
+    // 不能还原冻结屏幕矩形。
+    // Issue #879 复核评论6105482207 问题1：合并所有 OnScreenInterval 成员的 rects。
+    const allScreenRects: RectLike[] = []
+    for (const interval of firstVisible) {
+      allScreenRects.push(...interval.rects)
+    }
+    startScreenClipRects = allScreenRects
+    // Issue #879 复核评论6105187411 问题2：从 frozenGlyphGeometry 获取冻结源字形在源布局
+    // 坐标系中的完整矩形（不是 run.ownLayout 的）。buildFrame 的 sourceGlyphOnScreen 应从
+    // frozenSourceGlyphRects[0] + FrozenWindowSpan.offsetX/Y 生成。
+    // frozenGlyphGeometry 优先从冻结窗口的 sourceLayout 读取（而不是 displayed.layout），
+    // 确保 startPositionX/Y、frozenSourceGlyphRects、FrozenWindowSpan.offset 与
+    // startScreenClipRects 对应同一份真正绘制的 Text。
+    // Issue #879 复核评论6105482207 问题1+3：frozenSourceGlyphRects 改为存储所有成员的几何列表，
+    // 不再只存储第一个成员的几何。双源交叉淡入淡出时，同一 glyphId 可能同时被旧源和新源
+    // 两个窗口覆盖，每个成员的几何对应一个 RectLike。
+    const allFrozenGeoms = sourceGlyphGeometryAll(displayed, frozenByGlyphId, run.glyphIds[firstIndex])
+    if (allFrozenGeoms.length > 0) {
+      frozenSourceGlyphRects = allFrozenGeoms.map(g => ({
+        x: g.x0,
+        y: g.y0,
+        width: g.x1 - g.x0,
+        height: g.height,
+      }))
+    }
+
+    // Issue #879 评论6108900966 问题1：构建 sourceMembers——为每个成员保留各自的
+    // sourceGlyphRect/offsetX/offsetY/clipRects/opacity，替代分离的旧字段。
+    // buildFrame 逐成员独立插值，不做笛卡尔混合。
+    // Issue #879 评论6108900966 问题3：opacity=0 的成员仍保留在 sourceMembers 中
+    //（为了提前挂载稳定的 Text），但 opacity 字段标记为 0 让 buildFrame 知道像素贡献为零。
+    if (firstSpans !== undefined && firstSpans.length > 0) {
+      sourceMembers = buildSourceMembers(firstSpans, firstVisible, run.glyphIds[firstIndex])
+    }
+    // Issue #879 评论6108234595：当 buildSourceMembers 返回空数组但 frozenSourceGlyphRects
+    // 有多个成员时，从 allFrozenGeoms 构建 fallback sourceMembers，避免 buildFrame 走 fallback
+    // 分支混合不同成员的 offset。
+    if ((sourceMembers === undefined || sourceMembers.length === 0) && allFrozenGeoms.length > 1) {
+      const glyphId = run.glyphIds[firstIndex]
+      const allSpans = frozenByGlyphId.get(glyphId)
+      sourceMembers = allFrozenGeoms.map(g => {
+        // Issue #879 评论6110857105 问题6：按 renderNodeKey + sourceRevision 匹配 span，
+        // 获取 sourceRevision、opacity 和 utf16Range（唯一身份标识匹配）
+        let sourceRevision = 0
+        let opacity: number | undefined = undefined
+        let sourceUtf16Start = 0
+        let sourceUtf16End = 0
+        let windowInstanceId: string | undefined = undefined
+        let glyphUtf16Ranges: Map<string, [number, number]> | null = null
+        // Issue #879 第32轮复核问题2：从匹配的 span 中读取完整窗口数据
+        let fullWindowGlyphIds: string[] | undefined = undefined
+        let fullWindowUtf16Start: number | undefined = undefined
+        let fullWindowUtf16End: number | undefined = undefined
+        let fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null = null
+        if (allSpans !== undefined) {
+          for (const sp of allSpans) {
+            if (sp.renderNodeKey === g.renderNodeKey &&
+                sp.sourceRevision === g.sourceRevision) {
+              sourceRevision = sp.sourceRevision
+              opacity = sp.opacity
+              windowInstanceId = sp.windowInstanceId
+              glyphUtf16Ranges = sp.glyphUtf16Ranges
+              fullWindowGlyphIds = sp.fullWindowGlyphIds
+              fullWindowUtf16Start = sp.fullWindowUtf16Start
+              fullWindowUtf16End = sp.fullWindowUtf16End
+              fullWindowGlyphUtf16Ranges = sp.fullWindowGlyphUtf16Ranges
+              const utf16Range = sp.glyphUtf16Ranges?.get(glyphId)
+              if (utf16Range !== undefined) {
+                sourceUtf16Start = utf16Range[0]
+                sourceUtf16End = utf16Range[1]
+              }
+              break
+            }
+          }
+        }
+        // Issue #879 评论6110857105 问题6：按 renderNodeKey + sourceRevision 匹配 firstVisible 中的 OnScreenInterval
+        let clipRects: RectLike[] = []
+        for (const interval of firstVisible) {
+          if (interval.renderNodeKey === g.renderNodeKey &&
+              interval.sourceRevision === g.sourceRevision) {
+            clipRects = interval.rects.map((r: RectLike): RectLike => ({
+              x: r.x, y: r.y, width: r.width, height: r.height,
+            }))
+            break
+          }
+        }
+        const runId = `${g.sourceKind}-${sourceRevision}`
+        return {
+          sourceKind: g.sourceKind,
+          sourceRevision: sourceRevision,
+          // Issue #879 复核评论6111437799 问题1：fallback 成员也来自冻结窗口，role='frozen'。
+          role: 'frozen',
+          runId: runId,
+          // Issue #879 评论6110857105 问题6：使用 g.renderNodeKey 而非 runId，
+          // 确保与 FrozenWindowSpan.renderNodeKey 一致
+          renderNodeKey: g.renderNodeKey,
+          sourceGlyphRect: {
+            x: g.x0,
+            y: g.y0,
+            width: g.x1 - g.x0,
+            height: g.height,
+          },
+          offsetX: g.offsetX,
+          offsetY: g.offsetY,
+          clipRects: clipRects,
+          opacity: opacity,
+          sourceUtf16Start: sourceUtf16Start,
+          sourceUtf16End: sourceUtf16End,
+          targetOpacity: -1,
+          windowInstanceId: windowInstanceId,
+          // Issue #879 复核评论6120195493：携带原始窗口的完整 glyphUtf16Ranges 映射。
+          glyphUtf16Ranges: glyphUtf16Ranges,
+          // Issue #879 第32轮复核问题2：携带物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射。
+          fullWindowGlyphIds: fullWindowGlyphIds,
+          fullWindowUtf16Start: fullWindowUtf16Start,
+          fullWindowUtf16End: fullWindowUtf16End,
+          fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16Ranges,
+        }
+      })
+    }
+  }
+  // Issue #879 第32轮复核问题3：检测 frozen 成员的可见区域是否不完整（有 gap）。
+  // 当 frozen 成员的 clipRects 不能完全覆盖其在屏完整字形矩形时，hasVisibleGap=true。
+  // 这会触发 Planner 设置 intervalNeedsCrossfade=true，确保创建 target 窗口补全被裁掉的区域。
+  let hasVisibleGap = false
+  if (kind === 'retained' && sourceMembers !== undefined) {
+    for (const member of sourceMembers) {
+      // 只检查有像素贡献的 frozen 成员（opacity>0 或 undefined）
+      // target 成员的 clipRects 为空是正常的（从零面积渐显），不构成 gap
+      // opacity=0 的成员没有像素贡献，不构成 gap
+      if (member.role === 'frozen' &&
+          member.clipRects.length > 0 &&
+          (member.opacity === undefined || member.opacity > 0)) {
+        const glyphOnScreen: RectLike = {
+          x: member.sourceGlyphRect.x + member.offsetX,
+          y: member.sourceGlyphRect.y + member.offsetY,
+          width: member.sourceGlyphRect.width,
+          height: member.sourceGlyphRect.height,
+        }
+        if (!isFullyCovered(glyphOnScreen, member.clipRects)) {
+          hasVisibleGap = true
+          break
+        }
+      }
+    }
+  }
+  return {
+    firstIndex: firstIndex,
+    lastIndex: lastIndex,
+    glyphIds: run.glyphIds.slice(firstIndex, lastIndex + 1),
+    startClipLeft: visible.ownLeft,
+    startClipRight: visible.ownRight,
+    startPositionX: startPositionX,
+    startPositionY: startPositionY,
+    // 该岛在 run 自己正文里的 UTF-16 区间——供 computeStaticRangesMultiChannel 精确扣除。
+    utf16Start: boundaries[firstIndex],
+    utf16End: boundaries[lastIndex + 1],
+    // Issue #879 复核评论6099070438 问题4：传递 buildPiece 收集的多段裁切子矩形，
+    // buildFrame 据此逐段插值，避免把不连续可见压成连续区间。
+    clipRects: visible.clipRects,
+    // Issue #879 复核评论6100665268 问题3：传递每段 clipRect 对应的源字形完整矩形，
+    // buildFrame retained 多矩形算法用此精确映射每段裁切矩形到目标 glyph 对应边界。
+    sourceGlyphRects: visible.sourceGlyphRects,
+    // Issue #879 复核评论6102724233 问题2：冻结帧源 Text 的真实绘制偏移。
+    frozenDrawOffsetX: frozenDrawOffsetX,
+    frozenDrawOffsetY: frozenDrawOffsetY,
+    // Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
+    startScreenClipRects: startScreenClipRects,
+    // Issue #879 复核评论6104161755 问题3：冻结源字形在源布局坐标系中的完整矩形。
+    frozenSourceGlyphRects: frozenSourceGlyphRects,
+    // Issue #879 评论6108900966 问题1：该 interval 的所有源字形成员绑定列表。
+    sourceMembers: sourceMembers,
+    // Issue #879 第32轮复核问题3：frozen 成员可见区域是否不完整。
+    hasVisibleGap: hasVisibleGap,
+  }
+}
+
+/** piece 起始状态的通道类别。 */
+export type RunStartKind = 'insert' | 'deleted' | 'retained'
+
+/**
+ * Issue #879 评论6108900966 问题1：深拷贝 FrozenGlyphMember[]，避免共享引用。
+ */
+function deepCloneSourceMembers(members: FrozenGlyphMember[]): FrozenGlyphMember[] {
+  return members.map((m: FrozenGlyphMember): FrozenGlyphMember => ({
+    sourceKind: m.sourceKind,
+    sourceRevision: m.sourceRevision,
+    // Issue #879 复核评论6111437799 问题1：深拷贝 role 字段
+    role: m.role,
+    runId: m.runId,
+    renderNodeKey: m.renderNodeKey,
+    sourceGlyphRect: {
+      x: m.sourceGlyphRect.x, y: m.sourceGlyphRect.y,
+      width: m.sourceGlyphRect.width, height: m.sourceGlyphRect.height,
+    },
+    offsetX: m.offsetX,
+    offsetY: m.offsetY,
+    clipRects: m.clipRects.map((cr: RectLike): RectLike => ({
+      x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+    })),
+    opacity: m.opacity,
+    sourceUtf16Start: m.sourceUtf16Start,
+    sourceUtf16End: m.sourceUtf16End,
+    targetOpacity: m.targetOpacity,
+    windowInstanceId: m.windowInstanceId,
+    // Issue #879 复核评论6120195493：深拷贝 glyphUtf16Ranges（Map 浅拷贝足够，
+    // tuple [number, number] 不可变）。保留原始窗口的完整映射。
+    glyphUtf16Ranges: m.glyphUtf16Ranges !== undefined && m.glyphUtf16Ranges !== null
+      ? new Map(m.glyphUtf16Ranges) : m.glyphUtf16Ranges,
+    // Issue #879 第32轮复核问题2：深拷贝 fullWindow* 字段
+    fullWindowGlyphIds: m.fullWindowGlyphIds !== undefined
+      ? [...m.fullWindowGlyphIds] : m.fullWindowGlyphIds,
+    fullWindowUtf16Start: m.fullWindowUtf16Start,
+    fullWindowUtf16End: m.fullWindowUtf16End,
+    fullWindowGlyphUtf16Ranges: m.fullWindowGlyphUtf16Ranges !== undefined && m.fullWindowGlyphUtf16Ranges !== null
+      ? new Map(m.fullWindowGlyphUtf16Ranges) : m.fullWindowGlyphUtf16Ranges,
+  }))
+}
+
+/**
+ * Issue #879 复核评论6111437799 问题5：合并成员更新——保持 prevMembers 的物理身份不变，
+ * 只用 newMembers 的 clipRects/opacity 更新对应成员。
+ *
+ * retarget 时 frozenWindows 可能已变化（旧动画结束、窗口消失），intervalForIsland 重新构建的
+ * sourceMembers 可能丢失旧成员或引入新成员。但物理 Text 节点的身份必须在 PreparedCandidate
+ * 生命周期内保持不变——否则 plannedWindowKeys 和 buildFrame 的 sameKeySet 检查会失败。
+ *
+ * 策略：
+ * - 以 prevMembers 为基准（保持 renderNodeKey/sourceRevision/role 不变）
+ * - 对每个 prevMember，在 newMembers 中按 renderNodeKey + sourceRevision 查找匹配
+ *   - 匹配上：更新 clipRects/opacity/offsetX/offsetY（位置和裁切信息）
+ *   - 匹配不上：保持成员身份不变，但 clipRects 清空、opacity=0（源已离屏）
+ * - newMembers 中多出的成员（prevMembers 没有）：追加到结果末尾（新出现的源成员）
+ */
+function mergeMemberUpdates(
+  prevMembers: FrozenGlyphMember[],
+  newMembers: FrozenGlyphMember[] | undefined
+): FrozenGlyphMember[] {
+  // Issue #879 复核评论6120195493 问题3：同 key 的 offset/opacity 在组级别统一更新。
+  // 同一 renderNodeKey 的成员共享一张物理 Text，不能含有互相矛盾的窗口级位移或 alpha。
+  // 先按 renderNodeKey 从 newMembers 中提取窗口级属性，再统一应用到该 key 的所有成员。
+
+  // 步骤1：按 renderNodeKey 从 newMembers 提取窗口级属性
+  const windowLevelUpdates = new Map<string, { offsetX: number, offsetY: number, opacity: number | undefined }>()
+  if (newMembers !== undefined) {
+    for (const nw of newMembers) {
+      const key = nw.renderNodeKey
+      // 同 key 的第一个匹配成员的 offset/opacity 作为窗口级值
+      // （同 key 成员的 offset/opacity 应该一致，取任意一个即可）
+      if (!windowLevelUpdates.has(key)) {
+        windowLevelUpdates.set(key, {
+          offsetX: nw.offsetX,
+          offsetY: nw.offsetY,
+          opacity: nw.opacity,
+        })
+      }
+    }
+  }
+
+  const result: FrozenGlyphMember[] = []
+  const consumedNew = new Set<number>()
+  for (const prev of prevMembers) {
+    let matched = false
+    if (newMembers !== undefined) {
+      for (let ni = 0; ni < newMembers.length; ni++) {
+        if (consumedNew.has(ni)) {
+          continue
+        }
+        const nw = newMembers[ni]
+        if (nw.renderNodeKey === prev.renderNodeKey &&
+            nw.sourceRevision === prev.sourceRevision) {
+          // 匹配上：保持 prev 的身份字段，更新 clipRects/sourceGlyphRect/sourceUtf16
+          // 但 offset/opacity 从窗口级更新取值（同 key 统一）
+          const windowUpdate = windowLevelUpdates.get(prev.renderNodeKey)
+          result.push({
+            sourceKind: prev.sourceKind,
+            sourceRevision: prev.sourceRevision,
+            role: prev.role,
+            runId: prev.runId,
+            renderNodeKey: prev.renderNodeKey,
+            sourceGlyphRect: {
+              x: nw.sourceGlyphRect.x, y: nw.sourceGlyphRect.y,
+              width: nw.sourceGlyphRect.width, height: nw.sourceGlyphRect.height,
+            },
+            // Issue #879 复核评论6120195493 问题3：offset 从窗口级更新取值，不由各字独立刷新
+            offsetX: windowUpdate !== undefined ? windowUpdate.offsetX : nw.offsetX,
+            offsetY: windowUpdate !== undefined ? windowUpdate.offsetY : nw.offsetY,
+            clipRects: nw.clipRects.map((cr: RectLike): RectLike => ({
+              x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+            })),
+            // opacity 从窗口级更新取值
+            opacity: windowUpdate !== undefined ? windowUpdate.opacity : nw.opacity,
+            sourceUtf16Start: nw.sourceUtf16Start,
+            sourceUtf16End: nw.sourceUtf16End,
+            // Issue #879：matched 分支保留 prev.targetOpacity——Planner 设置的目标透明度
+            // 在 retarget 时不应被 newMembers 的默认值 -1 覆盖。
+            targetOpacity: prev.targetOpacity,
+            // Issue #879：matched 冻结成员始终保留 prev.windowInstanceId。
+            // 同一完整 render key 的 ID 若采样出不同值，候选实际上声明同一物理 Text 对应新租约；
+            // 后续 onAppear/onDisAppear 和 releaseRenderNodeLease 会用不一致的 ID。
+            windowInstanceId: prev.windowInstanceId,
+            // Issue #879 复核评论6120195493：保留原始窗口的完整 glyphUtf16Ranges 映射。
+            // 优先用 nw 的（retarget 时新 frozenWindows 已正确传递），fallback 到 prev。
+            glyphUtf16Ranges: nw.glyphUtf16Ranges !== undefined
+              ? nw.glyphUtf16Ranges : prev.glyphUtf16Ranges,
+            // Issue #879 第32轮复核问题2：保留物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射。
+            // 优先用 nw 的，fallback 到 prev。
+            fullWindowGlyphIds: nw.fullWindowGlyphIds !== undefined
+              ? nw.fullWindowGlyphIds : prev.fullWindowGlyphIds,
+            fullWindowUtf16Start: nw.fullWindowUtf16Start !== undefined
+              ? nw.fullWindowUtf16Start : prev.fullWindowUtf16Start,
+            fullWindowUtf16End: nw.fullWindowUtf16End !== undefined
+              ? nw.fullWindowUtf16End : prev.fullWindowUtf16End,
+            fullWindowGlyphUtf16Ranges: nw.fullWindowGlyphUtf16Ranges !== undefined
+              ? nw.fullWindowGlyphUtf16Ranges : prev.fullWindowGlyphUtf16Ranges,
+          })
+          consumedNew.add(ni)
+          matched = true
+          break
+        }
+      }
+    }
+    if (!matched) {
+      // 没匹配上：源已离屏
+      // target 角色：保留原始 targetOpacity/clipRects/opacity——目标成员还没出现在冻结窗口是正常的
+      // frozen 角色：clipRects 清空、opacity=0、targetOpacity=0——历史源已离屏应淡出
+      if (prev.role === 'target') {
+        result.push({
+          sourceKind: prev.sourceKind,
+          sourceRevision: prev.sourceRevision,
+          role: prev.role,
+          runId: prev.runId,
+          renderNodeKey: prev.renderNodeKey,
+          sourceGlyphRect: {
+            x: prev.sourceGlyphRect.x, y: prev.sourceGlyphRect.y,
+            width: prev.sourceGlyphRect.width, height: prev.sourceGlyphRect.height,
+          },
+          offsetX: prev.offsetX,
+          offsetY: prev.offsetY,
+          clipRects: prev.clipRects.map((cr: RectLike): RectLike => ({
+            x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+          })),
+          opacity: prev.opacity,
+          sourceUtf16Start: prev.sourceUtf16Start,
+          sourceUtf16End: prev.sourceUtf16End,
+          targetOpacity: prev.targetOpacity,
+          windowInstanceId: prev.windowInstanceId,
+          // Issue #879 复核评论6120195493：保留原始窗口的完整 glyphUtf16Ranges 映射。
+          glyphUtf16Ranges: prev.glyphUtf16Ranges,
+          // Issue #879 第32轮复核问题2：保留物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射。
+          fullWindowGlyphIds: prev.fullWindowGlyphIds,
+          fullWindowUtf16Start: prev.fullWindowUtf16Start,
+          fullWindowUtf16End: prev.fullWindowUtf16End,
+          fullWindowGlyphUtf16Ranges: prev.fullWindowGlyphUtf16Ranges,
+        })
+      } else {
+        result.push({
+          sourceKind: prev.sourceKind,
+          sourceRevision: prev.sourceRevision,
+          role: prev.role,
+          runId: prev.runId,
+          renderNodeKey: prev.renderNodeKey,
+          sourceGlyphRect: {
+            x: prev.sourceGlyphRect.x, y: prev.sourceGlyphRect.y,
+            width: prev.sourceGlyphRect.width, height: prev.sourceGlyphRect.height,
+          },
+          offsetX: prev.offsetX,
+          offsetY: prev.offsetY,
+          clipRects: [],
+          opacity: 0,
+          sourceUtf16Start: prev.sourceUtf16Start,
+          sourceUtf16End: prev.sourceUtf16End,
+          targetOpacity: 0,
+          windowInstanceId: prev.windowInstanceId,
+          // Issue #879 复核评论6120195493：保留原始窗口的完整 glyphUtf16Ranges 映射。
+          glyphUtf16Ranges: prev.glyphUtf16Ranges,
+          // Issue #879 第32轮复核问题2：保留物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射。
+          fullWindowGlyphIds: prev.fullWindowGlyphIds,
+          fullWindowUtf16Start: prev.fullWindowUtf16Start,
+          fullWindowUtf16End: prev.fullWindowUtf16End,
+          fullWindowGlyphUtf16Ranges: prev.fullWindowGlyphUtf16Ranges,
+        })
+      }
+    }
+  }
+  // Issue #879：不再追加 newMembers 中多出的新成员。
+  // 从 prepare 阶段就固定 MemberPlan[]，retarget 只按 key 更新 clip/offset/startOpacity，不增删。
+  // 候选等待布局时旧 animator 继续运动、sourceWindows 变化，准备阶段没有的历史 key 若突然加入
+  // retarget 后的候选，会破坏两阶段预挂载/同 key 交棒。
+  return result
+}
+
+/** 复制 pieces（分区不变时的兜底返回）。 */
+function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
+  return pieces.map((p: RunStartPiece): RunStartPiece => ({
+    firstIndex: p.firstIndex,
+    lastIndex: p.lastIndex,
+    startClipLeft: p.startClipLeft,
+    startClipRight: p.startClipRight,
+    startPositionX: p.startPositionX,
+    startPositionY: p.startPositionY,
+    glyphIds: [...p.glyphIds],
+    // Issue #879 评论6138007192 问题1：复制物理窗口身份字段。
+    // clonePieces 用于 retargetRunStarts 的 fallback 分支（簇数不匹配时），
+    // 必须保留预分配的 renderNodeKey/windowInstanceId，否则 fallback 路径也会丢身份。
+    renderNodeKey: p.renderNodeKey,
+    windowInstanceId: p.windowInstanceId,
+    intervals: p.intervals === undefined
+      ? undefined
+      : p.intervals.map((iv: RunStartInterval): RunStartInterval => ({
+        firstIndex: iv.firstIndex,
+        lastIndex: iv.lastIndex,
+        glyphIds: [...iv.glyphIds],
+        startClipLeft: iv.startClipLeft,
+        startClipRight: iv.startClipRight,
+        startPositionX: iv.startPositionX,
+        startPositionY: iv.startPositionY,
+        utf16Start: iv.utf16Start,
+        utf16End: iv.utf16End,
+        // Issue #879 评论6138007192 问题1：复制 interval 级别的物理窗口身份字段。
+        renderNodeKey: iv.renderNodeKey,
+        windowInstanceId: iv.windowInstanceId,
+        crossfadeRenderNodeKey: iv.crossfadeRenderNodeKey,
+        crossfadeWindowInstanceId: iv.crossfadeWindowInstanceId,
+        // Issue #879 复核评论6099070438 问题4：深拷贝 clipRects，避免共享引用。
+        clipRects: iv.clipRects === undefined
+          ? undefined
+          : iv.clipRects.map((cr: RectLike): RectLike => ({
+            x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+          })),
+        // Issue #879 复核评论6100665268 问题3：深拷贝 sourceGlyphRects，避免共享引用。
+        sourceGlyphRects: iv.sourceGlyphRects === undefined
+          ? undefined
+          : iv.sourceGlyphRects.map((sr: RectLike): RectLike => ({
+            x: sr.x, y: sr.y, width: sr.width, height: sr.height,
+          })),
+        // Issue #879 复核评论6102724233 问题2：深拷贝 frozenDrawOffsetX/Y 和 startScreenClipRects。
+        frozenDrawOffsetX: iv.frozenDrawOffsetX,
+        frozenDrawOffsetY: iv.frozenDrawOffsetY,
+        startScreenClipRects: iv.startScreenClipRects === undefined
+          ? undefined
+          : iv.startScreenClipRects.map((sr: RectLike): RectLike => ({
+            x: sr.x, y: sr.y, width: sr.width, height: sr.height,
+          })),
+        // Issue #879 复核评论6104161755 问题3：深拷贝 frozenSourceGlyphRects，避免共享引用。
+        frozenSourceGlyphRects: iv.frozenSourceGlyphRects === undefined
+          ? undefined
+          : iv.frozenSourceGlyphRects.map((sr: RectLike): RectLike => ({
+            x: sr.x, y: sr.y, width: sr.width, height: sr.height,
+          })),
+        // Issue #879 评论6108900966 问题1+2：深拷贝 needsCrossfade 和 sourceMembers。
+        needsCrossfade: iv.needsCrossfade,
+        sourceMembers: iv.sourceMembers === undefined
+          ? undefined
+          : deepCloneSourceMembers(iv.sourceMembers),
+        // Issue #879 第32轮复核问题3：深拷贝 hasVisibleGap。
+        hasVisibleGap: iv.hasVisibleGap,
+      })),
+  }))
+}
+
+// Issue #879 本轮复核评论（高优先级）：longestVisibleIsland 已被 allVisibleIslands +
+// intervalForIsland 取代——固定 piece 分区下需返回该 piece 内所有不连续可见岛，
+// 而非仅最长一段，否则其余可见段会被裁切层丢弃而永远无法归还静态层。
+
+/**
+ * 某个字形此刻在屏的精确可见区间（vp，屏幕坐标）。
+ *
+ * 缺口2修复：改为支持多个不连续的可见矩形。不同视觉行即使 x 相同，
+ * 只要 y 完全不相交也不应被误认为可见；两个矩形裁中同一字形的不同不连续
+ * 横向部分时，各自作为独立 rect 保留，不用 min/max 合并成连续区间。
+ *
+ * Issue #879 复核评论6105482207 问题1：增加 sourceKind 和 opacity 字段。
+ * 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源和新源两个窗口覆盖，
+ * clusterVisible 为每个冻结窗口成员分别求交，每个交集对应一个 OnScreenInterval，
+ * 携带该成员的 sourceKind 和 opacity，以便 buildPiece/retargetRunStarts
+ * 知道每个可见段来自哪个源。
+ */
+interface OnScreenInterval {
+  /** 各段不连续可见矩形（vp，屏幕坐标） */
+  rects: RectLike[]
+  /**
+   * Issue #879 复核评论6105482207 问题1：该可见区间来自的源类型。
+   * 'old' = 旧源窗口，'new' = 新源窗口，undefined = 静态主文本（无冻结窗口覆盖）。
+   */
+  sourceKind: 'old' | 'new' | undefined
+  /**
+   * Issue #879 复核评论6105482207 问题1：该可见区间对应窗口的透明度（0-1）。
+   * undefined 表示完全不透明（静态主文本或非交叉淡入淡出窗口）。
+   */
+  opacity: number | undefined
+  /**
+   * Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的 offsetX（来自 FrozenWindowSpan.offsetX）。
+   * 静态主文本为 0。用于 buildPiece 逐 interval 投影时知道每个成员的窗口平移量，
+   * 不再只取 firstSpan.offsetX（双源交叉淡入淡出时旧源和新源的 offset 可能不同）。
+   */
+  offsetX: number
+  /**
+   * Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的 offsetY（来自 FrozenWindowSpan.offsetY）。
+   * 静态主文本为 0。
+   */
+  offsetY: number
+  /**
+   * Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的源字形在源布局坐标系中的左边界。
+   * 用于 buildPiece 逐 interval 投影时知道每个成员的源字形几何，
+   * 不再只取 sourceGlyphGeometry() 第一个结果（双源交叉淡入淡出时旧源和新源的几何可能不同）。
+   */
+  sourceGlyphX0: number
+  /** Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的源字形在源布局坐标系中的右边界 */
+  sourceGlyphX1: number
+  /** Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的源字形在源布局坐标系中的上边界 */
+  sourceGlyphY0: number
+  /** Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的源字形高度 */
+  sourceGlyphHeight: number
+  /**
+   * Issue #879 评论6110857105 问题6：该可见区间对应成员的渲染节点身份标识（来自 FrozenWindowSpan.renderNodeKey）。
+   * 静态主文本为 ''（没有渲染节点标识）。用于 buildSourceMembers 按唯一身份匹配 OnScreenInterval 和 FrozenWindowSpan，
+   * 避免 sourceKind + offset 匹配时同源类别、相同 offset 的不同 sourceRevision/renderNodeKey 发生错误匹配。
+   */
+  renderNodeKey: string
+  /**
+   * Issue #879 评论6110857105 问题6：该可见区间对应成员的源修订号（来自 FrozenWindowSpan.sourceRevision）。
+   * 静态主文本为 0。与 renderNodeKey 一起构成唯一身份标识，用于 buildSourceMembers 精确匹配。
+   */
+  sourceRevision: number
+}
+
+/**
+ * Issue #879 复核评论6105482207 问题1：冻结窗口按字形身份索引。
+ *
+ * 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源窗口和新源窗口覆盖，
+ * 因此改为 Map<string, FrozenWindowSpan[]>——每 glyphId 保存所有覆盖它的窗口成员。
+ * clusterVisible 分别以各成员的 sourceLayout+offset+clipRects 求交，
+ * 保留每个交集对应的源身份和透明度。
+ */
+export function frozenIndex(displayed: DisplayedContext): Map<string, FrozenWindowSpan[]> {
+  const index: Map<string, FrozenWindowSpan[]> = new Map()
+  for (const span of displayed.frozenWindows) {
+    // Issue #879 第32轮复核问题2：使用 fullWindowGlyphIds 而不是 glyphIds 来建索引，
+    // 确保窗口内所有字形都能被找到，而不只是当前 interval 的子集。
+    // fullWindowGlyphIds 在 FrozenWindowSpan 中是必填字段，由 frozenWindowSpans/commitDisplayedContext
+    // 从 MotionGlyphWindow.fullWindowGlyphIds 读取（fallback 到 glyphIds）。
+    // 安全 fallback：如果 fullWindowGlyphIds 未设置（如旧测试数据），退回 glyphIds。
+    const fullIds = span.fullWindowGlyphIds
+    const glyphIdsToIndex = fullIds !== undefined && fullIds.length > 0
+      ? fullIds : span.glyphIds
+    for (const glyphId of glyphIdsToIndex) {
+      const list = index.get(glyphId)
+      if (list !== undefined) {
+        list.push(span)
+      } else {
+        index.set(glyphId, [span])
+      }
+    }
+  }
+  return index
+}
+
+/**
+ * Issue #879 复核评论6105482207 问题1：判断一个字形此刻在屏是否可见，可见时给出它的精确可见区间。
+ *
+ * 改为返回 OnScreenInterval[]——每个冻结窗口成员各产生一个 OnScreenInterval，
+ * 携带该成员的 sourceKind 和 opacity。空数组表示不可见。
+ *
+ * 三个可见来源，按优先级查询：
+ * 1. 在 displayed 正文身份表中找到 → 按现有逻辑计算（静态或被窗口覆盖）
+ * 2. 在 displayed 正文身份表中找不到 → 查冻结窗口是否包含该 glyphId → ghost字形
+ * 3. 都找不到 → 空数组（真正的新字）
+ *
+ * 对于被冻结窗口覆盖的字形：
+ *   遍历所有覆盖该 glyphId 的冻结窗口成员，每个成员各自用其 sourceLayout+offset+clipRects 求交，
+ *   保留每个交集对应的源身份（sourceKind）和透明度（opacity）。
+ *
+ * 对于 ghost字形（已从 displayed 正文删除，但冻结窗口仍在绘制）：
+ *   用窗口的 glyphUtf16Ranges + 窗口的 sourceLayout 计算字形几何
+ *   可见区间 = max(字形在屏left, clipLeft) 到 min(字形在屏right, clipRight)
+ *   字形在屏位置 = 字形在窗口源文本布局中的位置 + 窗口的 offsetX/offsetY
+ */
+export function clusterVisible(
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan[]>,
+  glyphId: string
+): OnScreenInterval[] {
+  // Issue #879 复核评论6083352210 问题4：用 glyphRectForRange 取得精确矩形，
+  // 确保 end offset 用 Upstream affinity 选行，并获取真实行高（替代硬编码 20）。
+  // 1. 先查 displayed.identities
+  const entry = displayed.identities === null
+    ? null
+    : displayed.identities.entryByGlyphId(glyphId)
+  if (entry !== null) {
+    const spans = frozenByGlyphId.get(glyphId)
+    if (spans === undefined || spans.length === 0) {
+      // 没有被任何窗口覆盖：主文本静态绘制这一整段，字形完整可见。
+      // 只有此时才从 displayed.layout 取字形几何（静态可见）
+      const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
+      if (rect === null) {
+        return []
+      }
+      const x0 = rect.x
+      const x1 = rect.x + rect.width
+      const y0 = rect.y
+      const glyphHeight = rect.height
+      return [{
+        rects: [{ x: x0, y: y0, width: x1 - x0, height: glyphHeight }],
+        sourceKind: undefined, opacity: undefined,
+        // Issue #879 复核评论6105482207 问题1+3：静态主文本的成员信息
+        offsetX: 0, offsetY: 0,
+        sourceGlyphX0: x0, sourceGlyphX1: x1,
+        sourceGlyphY0: y0, sourceGlyphHeight: glyphHeight,
+        // Issue #879 评论6110857105 问题6：静态主文本没有渲染节点标识和源修订号
+        renderNodeKey: '', sourceRevision: 0,
+      }]
+    }
+    // 有冻结窗口覆盖：不从 displayed.layout 取初始字形几何，
+    // 直接从冻结源的 sourceLayout + glyphUtf16Ranges 获取。
+    // span.sourceLayout/glyphUtf16Ranges 不可用时跳过该 span——
+    // 不混用 displayed.layout 坐标和冻结源 offset（坐标系不一致会导致跳字）。
+    const intervals: OnScreenInterval[] = []
+    for (const span of spans) {
+      // Issue #879 评论6128121842：两者都为 null 才跳过，优先使用 fullWindowGlyphUtf16Ranges
+      if (span.fullWindowGlyphUtf16Ranges == null && span.glyphUtf16Ranges == null) {
+        continue  // 跳过无法提供字形几何的 span
+      }
+      if (span.sourceLayout === null) {
+        continue
+      }
+      const utf16Range = lookupGlyphUtf16Range(span, glyphId)
+      if (utf16Range === undefined) {
+        continue
+      }
+      const sourceRect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+      if (sourceRect === null) {
+        continue
+      }
+      const spanX0 = sourceRect.x
+      const spanX1 = sourceRect.x + sourceRect.width
+      const spanY0 = sourceRect.y
+      const spanGlyphHeight = sourceRect.height
+      // 被运动窗口接管：对每个 clipRect 求交（多岛并集）
+      const glyphOnScreenLeft = spanX0 + span.offsetX
+      const glyphOnScreenRight = spanX1 + span.offsetX
+      const glyphOnScreenTop = spanY0 + span.offsetY
+      const glyphOnScreenBottom = spanY0 + span.offsetY + spanGlyphHeight
+
+      const rects: RectLike[] = []
+      for (const cr of span.clipRects) {
+        const intersectLeft = Math.max(glyphOnScreenLeft, cr.x)
+        const intersectRight = Math.min(glyphOnScreenRight, cr.x + cr.width)
+        const intersectTop = Math.max(glyphOnScreenTop, cr.y)
+        const intersectBottom = Math.min(glyphOnScreenBottom, cr.y + cr.height)
+        if (intersectRight - intersectLeft > VISIBLE_EPSILON &&
+            intersectBottom - intersectTop > VISIBLE_EPSILON) {
+          rects.push({
+            x: intersectLeft,
+            y: intersectTop,
+            width: intersectRight - intersectLeft,
+            height: intersectBottom - intersectTop,
+          })
+        }
+      }
+      // Issue #879 评论6108900966 问题3：opacity=0 的成员仍要保留在 OnScreenInterval[] 中
+      //（为了提前挂载稳定的 Text），只要其 clip 与源字形相交（rects.length > 0）就 push。
+      // opacity 字段标记为 span.opacity（可能为 0），让下游知道该成员的像素贡献为零。
+      if (rects.length > 0) {
+        intervals.push({
+          rects, sourceKind: span.sourceKind, opacity: span.opacity,
+          // Issue #879 复核评论6105482207 问题1+3：存入该成员的 offset 和源字形几何
+          offsetX: span.offsetX, offsetY: span.offsetY,
+          sourceGlyphX0: spanX0, sourceGlyphX1: spanX1,
+          sourceGlyphY0: spanY0, sourceGlyphHeight: spanGlyphHeight,
+          // Issue #879 评论6110857105 问题6：存入该成员的渲染节点标识和源修订号
+          renderNodeKey: span.renderNodeKey, sourceRevision: span.sourceRevision,
+        })
+      }
+    }
+    return intervals
+  }
+
+  // 2. displayed 正文身份表中找不到 → 查冻结窗口（ghost字形）
+  const spans = frozenByGlyphId.get(glyphId)
+  if (spans !== undefined) {
+    const intervals: OnScreenInterval[] = []
+    for (const span of spans) {
+      // Issue #879 评论6128121842：两者都为 null 才跳过，优先使用 fullWindowGlyphUtf16Ranges
+      if (span.fullWindowGlyphUtf16Ranges != null || span.glyphUtf16Ranges != null) {
+        if (span.sourceLayout === null) {
+          continue
+        }
+        // ghost字形：该 glyphId 已从 displayed 正文删除，但冻结窗口仍在绘制它
+        const utf16Range = lookupGlyphUtf16Range(span, glyphId)
+        if (utf16Range !== undefined) {
+          const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+          if (rect === null) {
+            continue
+          }
+          const x0 = rect.x
+          const x1 = rect.x + rect.width
+          const y0 = rect.y
+          const glyphHeight = rect.height
+          const glyphOnScreenLeft = x0 + span.offsetX
+          const glyphOnScreenRight = x1 + span.offsetX
+          const glyphOnScreenTop = y0 + span.offsetY
+          const glyphOnScreenBottom = y0 + span.offsetY + glyphHeight
+
+          const rects: RectLike[] = []
+          for (const cr of span.clipRects) {
+            const intersectLeft = Math.max(glyphOnScreenLeft, cr.x)
+            const intersectRight = Math.min(glyphOnScreenRight, cr.x + cr.width)
+            const intersectTop = Math.max(glyphOnScreenTop, cr.y)
+            const intersectBottom = Math.min(glyphOnScreenBottom, cr.y + cr.height)
+            if (intersectRight - intersectLeft > VISIBLE_EPSILON &&
+                intersectBottom - intersectTop > VISIBLE_EPSILON) {
+              rects.push({
+                x: intersectLeft,
+                y: intersectTop,
+                width: intersectRight - intersectLeft,
+                height: intersectBottom - intersectTop,
+              })
+            }
+          }
+          // Issue #879 评论6108900966 问题3：opacity=0 的成员仍要保留（同上）
+          if (rects.length > 0) {
+            intervals.push({
+              rects, sourceKind: span.sourceKind, opacity: span.opacity,
+              // Issue #879 复核评论6105482207 问题1+3：存入该成员的 offset 和源字形几何
+              offsetX: span.offsetX, offsetY: span.offsetY,
+              sourceGlyphX0: x0, sourceGlyphX1: x1,
+              sourceGlyphY0: y0, sourceGlyphHeight: glyphHeight,
+              // Issue #879 评论6110857105 问题6：存入该成员的渲染节点标识和源修订号
+              renderNodeKey: span.renderNodeKey, sourceRevision: span.sourceRevision,
+            })
+          }
+        }
+      }
+    }
+    if (intervals.length > 0) {
+      return intervals
+    }
+  }
+
+  // 3. 都找不到 → 空数组（真正的新字）
+  return []
+}

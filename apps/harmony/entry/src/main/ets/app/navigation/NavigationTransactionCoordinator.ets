@@ -1,7 +1,7 @@
 // NavigationTransactionCoordinator — 导航事务协调器。
 // 从 AppNavigation.ets 分离出来的导航事务逻辑：导航意图队列、离开守卫、安全 pop/replace/rebuild。
-// AppNavigation struct 通过 getInstance() 注册 navPathStack 和恢复回调，
-// EntryAbility / WritingScreen 通过 getInstance() 触发接续恢复和安全导航操作。
+// AppNavigation struct 通过 getInstance() 注册恢复回调，PrimaryTabShell 登记各 tab 的 NavPathStack，
+// ContinuationEntrypoint 通过 getInstance() 触发接续恢复；WritingScreen 等 UI 调用方使用协调器进行安全导航。
 //
 // Issue #767：支持多 tab stack。
 // - 单一 navPathStack 改为 tabStacks Map（显式登记每个 tab 的 stack）
@@ -45,9 +45,10 @@ interface ActiveNavigationTask {
 }
 
 // NavigationTransactionCoordinator — AppNavigation 的可外部访问入口。
-// EntryAbility（非 UI 上下文）无法直接持有 @Component struct 实例，
-// 通过此单例间接触发接续恢复：AppNavigation 在 aboutToAppear 注册 navPathStack 与恢复回调，
-// EntryAbility.restoreContinuationFromWant 调 restoreFromContinuation(payload) 手动重建 NavPathStack。
+// UIAbility（非 UI 上下文）无法直接持有 @Component struct 实例，
+// 通过此单例间接触发接续恢复：AppNavigation.aboutToAppear 注册恢复回调，
+// PrimaryTabShell.aboutToAppear 注册各 tab 的 NavPathStack，
+// EntryAbility.onCreate/onNewWant → ContinuationEntrypoint.restoreFromWant → NavigationTransactionCoordinator.restoreFromContinuation 手动重建 NavPathStack。
 // 评论明确要求 SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用自动页面栈迁移，
 // 由本协调器在目标设备手动重建。
 //
@@ -76,7 +77,7 @@ export class NavigationTransactionCoordinator {
   // AppNavigation 注册的恢复回调：能访问 struct @State 进行 selection/cursor/viewport 恢复。
   private restoreListener: ((payload: ContinuationPayload) => void) | null = null
   // AppNavigation 尚未 aboutToAppear 时暂存 payload，待注册后消费。
-  // 场景：onWindowStageRestore 早于首帧，EntryAbility 先把 payload 交来。
+  // 场景：onWindowStageRestore 早于首帧，ContinuationEntrypoint 可能在页面注册恢复监听前交来 payload。
   private pendingRestore: ContinuationPayload | null = null
   // Issue #629 评论14 第2项：离开守卫注册表（token → guard）。
   // 多个 Writing destination 生命周期重叠时，每个实例有唯一 token，
@@ -177,7 +178,8 @@ export class NavigationTransactionCoordinator {
     this.restoreListener = null
   }
 
-  // EntryAbility 调此方法触发接续恢复。
+  // ContinuationEntrypoint 调此方法触发接续恢复（EntryAbility.onCreate/onNewWant 在
+  // CONTINUATION 时委托 ContinuationEntrypoint.restoreFromWant，再由它调到这里）。
   // Issue #767 评论5830638688 第1项：同时检查 restoreListener 和 homeStack 是否可用。
   // 之前只检查 restoreListener：如果 continuation 正好在"restoreListener 已注册、homeStack 还没注册"
   // 的窗口到达，payload 直接进 applyContinuation()，getTabStack(TAB_HOME) 返回 null，

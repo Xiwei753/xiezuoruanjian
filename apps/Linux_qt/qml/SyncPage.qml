@@ -5,22 +5,30 @@
 // 层级：Linux_qt UI 层（QML 页面）
 // 职责：同步配置展示、手动同步触发、同步诊断、错误展示
 // 约束：不直接操作 Git 或文件系统，业务动作全部委托 syncBackend 兼容入口
+// Issue #900：视觉全面迁移到 KDE 官方组件体系（Breeze Controls +
+// Kirigami Addons FormCard），不再使用 AppCard/AppTextField/AppButton/
+// AppText/StatusPill 等自制 M3 皮肤组件。业务逻辑（消息映射、状态归并、
+// 冲突分组、backend 调用与反馈）原样保留。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Window
+import org.kde.kirigami as Kirigami
+import org.kde.kirigamiaddons.formcard as FormCard
 
-Item {
+ColumnLayout {
     id: root
-    implicitHeight: mainCol.implicitHeight + resolvedDt.sp32
+
+    // KDE FormCard 默认内容宽度上限（Kirigami.Units.gridUnit * 30）。
+    // 非卡片内容（状态行、按钮条、日志框）显式用它约束并居中，保证与
+    // KdeSettingsPage 中其它 FormCard 左对齐同一条边。
+    readonly property int cardWidth: Kirigami.Units.gridUnit * 30
+
+    spacing: Kirigami.Units.largeSpacing
+
     property int lastSyncResultLen: -1
     property double lastSyncStatusLogTime: 0
-    required property var dt
-    // Issue #701 评论 5699565102: 删除内部 fallbackDt。组件必须消费调用方
-    // 传入的根 dt；漏传就是调用错误，不偷偷生成独立主题。
-    readonly property var resolvedDt: dt
     property var syncBackendRef: null
     // Issue #754 评论 5814866116 改动4: has_workspace 改读 workspaceBackendRef，
     // SyncBackend 不再暴露 has_workspace property。
@@ -30,6 +38,11 @@ Item {
 
     property string activeOperationId: ""
     property string activeOperationKind: ""
+
+    // 结果区与原始诊断文本（原 TextArea/TextEdit 的文本源）。
+    property string resultText: ""
+    property string rawErrorText: ""
+    property bool showRawError: false
 
     // Issue #762 评论 5826175490 第 4 点：跨作品全局冲突入口。
     // allSyncConflicts 是 Core list_all_sync_conflicts() 的原始扁平列表
@@ -118,7 +131,7 @@ Item {
         case "error.save_sync_config_failed": msg = qsTr("保存同步配置失败"); break;
         case "error.save_sync_secrets_failed": msg = qsTr("保存同步密钥失败"); break;
         case "chapter.deleted_remotely_refreshed": msg = qsTr("章节已在远端被删除，已刷新列表"); break;
-        default: msg = qsTr("同步出错"); window.debugWarn("sync", "unmapped_message_key", key); break;
+        default: msg = qsTr("同步出错"); if (typeof window !== "undefined" && typeof window.debugWarn === "function") window.debugWarn("sync", "unmapped_message_key", key); break;
         }
         if (args) {
             for (var k in args) {
@@ -155,22 +168,22 @@ Item {
                         text += "\n\n" + qsTr("冲突文件:") + "\n  - " + obj.summary_args.conflict_files
                     }
 
-                    syncResultArea.text = text;
+                    root.resultText = text;
 
                     if (obj.raw_error) {
-                        syncRawErrorArea.text = obj.raw_error
-                        syncRawErrorRow.visible = true
+                        root.rawErrorText = obj.raw_error
+                        root.showRawError = true
                     } else {
-                        syncRawErrorArea.text = ""
-                        syncRawErrorRow.visible = false
+                        root.rawErrorText = ""
+                        root.showRawError = false
                     }
                 } else {
-                    syncResultArea.text = qsTr("同步状态解析失败，请复制诊断信息反馈");
-                    window.debugWarn("sync", "operation_state_parse_failed", root.currentSyncOperationState);
+                    root.resultText = qsTr("同步状态解析失败，请复制诊断信息反馈");
+                    if (typeof window !== "undefined" && typeof window.debugWarn === "function") window.debugWarn("sync", "operation_state_parse_failed", root.currentSyncOperationState);
                 }
             } catch(e) {
-                syncResultArea.text = qsTr("同步状态解析失败，请复制诊断信息反馈");
-                window.debugWarn("sync", "operation_state_json_error", e.toString());
+                root.resultText = qsTr("同步状态解析失败，请复制诊断信息反馈");
+                if (typeof window !== "undefined" && typeof window.debugWarn === "function") window.debugWarn("sync", "operation_state_json_error", e.toString());
             }
         }
     }
@@ -188,23 +201,23 @@ Item {
             root.currentSyncInProgress = root.syncBackendRef.sync_in_progress || false;
             root.currentSyncOperationState = root.syncBackendRef.sync_operation_state || "";
             autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false;
-            syncIntervalSlider.value = (root.syncBackendRef.sync_interval || 300) / 60;
+            syncIntervalSpin.value = Math.round((root.syncBackendRef.sync_interval || 300) / 60);
             root.updateSyncResultText();
             // 同步失败时，如果结果区为空，则显示错误信息
-            if (root.isFailureStatus(root.currentSyncStatus) && syncResultArea.text.trim() === "") {
+            if (root.isFailureStatus(root.currentSyncStatus) && root.resultText.trim() === "") {
                 var opState = root.currentSyncOperationState.trim();
                 var parsed = null;
                 try { parsed = JSON.parse(opState); } catch(e) {}
                 if (parsed && parsed.summary_key) {
-                    syncResultArea.text = syncMessageForKey(parsed.summary_key, parsed.summary_args);
+                    root.resultText = syncMessageForKey(parsed.summary_key, parsed.summary_args);
                 } else if (parsed && parsed.phase_key) {
-                    syncResultArea.text = syncMessageForKey(parsed.phase_key, parsed.summary_args);
+                    root.resultText = syncMessageForKey(parsed.phase_key, parsed.summary_args);
                 } else {
-                    syncResultArea.text = qsTr("同步失败");
+                    root.resultText = qsTr("同步失败");
                 }
                 if (parsed && parsed.raw_error) {
-                    syncRawErrorArea.text = parsed.raw_error;
-                    syncRawErrorRow.visible = true;
+                    root.rawErrorText = parsed.raw_error;
+                    root.showRawError = true;
                 }
             }
         }
@@ -302,8 +315,6 @@ Item {
         }
         return list
     }
-
-    // Remove color since root is now an Item
     function statusKind() {
         var s = root.currentSyncStatus
         // Issue #782 评论 5856119763: no_changes / latest_wins_applied 也是 Core 的
@@ -313,6 +324,14 @@ Item {
         if (s === "partial_conflict") return "warning"
         if (root.isFailureStatus(s)) return "error"
         return "info"
+    }
+
+    function statusColor() {
+        var k = root.statusKind()
+        if (k === "success") return Kirigami.Theme.positiveTextColor
+        if (k === "warning") return Kirigami.Theme.neutralTextColor
+        if (k === "error") return Kirigami.Theme.negativeTextColor
+        return Kirigami.Theme.highlightColor
     }
 
     function isFailureStatus(s) {
@@ -379,443 +398,347 @@ Item {
         }
     }
 
-    ColumnLayout {
-        id: mainCol
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.margins: resolvedDt.sp16
-        spacing: resolvedDt.sp16
+    // ── 状态行 ──
+    RowLayout {
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
+        spacing: Kirigami.Units.smallSpacing
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: resolvedDt.sp12
+        // 状态徽标（Breeze 语义色）
+        Rectangle {
+            implicitWidth: statusLabel.implicitWidth + Kirigami.Units.largeSpacing
+            implicitHeight: statusLabel.implicitHeight + Kirigami.Units.smallSpacing
+            radius: height / 2
+            color: root.statusColor()
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: resolvedDt.sp4
-                AppText {
-                    dt: root.resolvedDt
-                    text: qsTr("同步设置")
-                    color: resolvedDt.onBackground
-                    font.pointSize: resolvedDt.titlePt
-                    font.family: resolvedDt.fontFamily
-                    font.weight: Font.Bold
-                }
-                AppText {
-                    dt: root.resolvedDt
-                    text: qsTr("配置远端仓库并查看同步状态")
-                    color: resolvedDt.onSurfaceVariant
-                    font.pointSize: resolvedDt.bodyPt
-                    font.family: resolvedDt.fontFamily
-                }
-            }
-
-            StatusPill {
-                dt: root.resolvedDt
-                status: root.statusKind()
+            Label {
+                id: statusLabel
+                anchors.centerIn: parent
                 text: root.statusText()
-            }
-
-            // Issue #762 评论 5826175490 第 4 点：同步状态区域显示跨作品待处理冲突数。
-            // 只反映持久冲突状态，不依赖本轮同步是否结束。
-            AppText {
-                id: pendingConflictsCount
-                dt: root.resolvedDt
-                visible: root.conflictTotalCount > 0
-                text: qsTr("待处理冲突 %1").arg(root.conflictTotalCount)
-                color: resolvedDt.error
-                font.pointSize: resolvedDt.bodyPt
-                font.family: resolvedDt.fontFamily
-                font.weight: Font.Bold
-                Layout.alignment: Qt.AlignVCenter
+                color: Kirigami.Theme.backgroundColor
+                font.bold: true
             }
         }
 
-        AppCard {
-            Layout.fillWidth: true
-            dt: root.resolvedDt
-            variant: "surface"
-            spacing: resolvedDt.sp16
+        // Issue #762 评论 5826175490 第 4 点：同步状态区域显示跨作品待处理冲突数。
+        // 只反映持久冲突状态，不依赖本轮同步是否结束。
+        Label {
+            id: pendingConflictsCount
+            visible: root.conflictTotalCount > 0
+            text: qsTr("待处理冲突 %1").arg(root.conflictTotalCount)
+            color: Kirigami.Theme.negativeTextColor
+            font.bold: true
+            Layout.alignment: Qt.AlignVCenter
+        }
 
-            AppTextField {
-                id: urlField
-                Layout.fillWidth: true
-                dt: root.resolvedDt
-                label: qsTr("远程仓库地址")
-                text: (root.syncBackendRef ? root.syncBackendRef.sync_remote_url : "")
-                placeholderText: "https://github.com/user/repo"
-            }
+        Item { Layout.fillWidth: true }
+    }
 
-            AppTextField {
-                id: branchField
-                Layout.fillWidth: true
-                dt: root.resolvedDt
-                label: qsTr("分支名")
-                text: (root.syncBackendRef ? root.syncBackendRef.sync_branch : "")
-                placeholderText: "main"
-            }
+    // ── 配置卡片 ──
+    FormCard.FormCard {
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
 
-            AppTextField {
-                id: tokenField
-                Layout.fillWidth: true
-                dt: root.resolvedDt
-                label: qsTr("访问 Token")
-                placeholderText: (root.syncBackendRef ? root.syncBackendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
-                echoMode: TextInput.Password
-            }
+        FormCard.FormTextFieldDelegate {
+            id: urlField
+            label: qsTr("远程仓库地址")
+            text: (root.syncBackendRef ? root.syncBackendRef.sync_remote_url : "")
+            placeholderText: "https://github.com/user/repo"
+        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: resolvedDt.sp12
+        FormCard.FormTextFieldDelegate {
+            id: tokenField
+            label: qsTr("访问 Token")
+            placeholderText: (root.syncBackendRef ? root.syncBackendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
+            echoMode: TextInput.Password
+        }
 
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: resolvedDt.sp2
-                    AppText {
-                        dt: root.resolvedDt
-                        text: qsTr("自动同步")
-                        color: resolvedDt.onBackground
-                        font.pointSize: resolvedDt.bodyPt
-                        font.family: resolvedDt.fontFamily
-                    }
-                    AppText {
-                        dt: root.resolvedDt
-                        text: qsTr("启用后按设定间隔自动执行同步")
-                        color: resolvedDt.onSurfaceVariant
-                        font.pointSize: resolvedDt.captionPt
-                        font.family: resolvedDt.fontFamily
-                    }
-                }
-
-                Switch {
-                    id: autoSyncSwitch
-                    onToggled: {
-                        if (root.syncBackendRef) {
-                            root.syncBackendRef.sync_auto_sync = autoSyncSwitch.checked
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: resolvedDt.sp12
-                visible: autoSyncSwitch.checked
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: resolvedDt.sp2
-                    AppText {
-                        dt: root.resolvedDt
-                        text: qsTr("同步间隔")
-                        color: resolvedDt.onBackground
-                        font.pointSize: resolvedDt.bodyPt
-                        font.family: resolvedDt.fontFamily
-                    }
-                    AppText {
-                        dt: root.resolvedDt
-                        text: Math.round(syncIntervalSlider.value) + qsTr(" 分钟")
-                        color: resolvedDt.onSurfaceVariant
-                        font.pointSize: resolvedDt.captionPt
-                        font.family: resolvedDt.fontFamily
-                    }
-                }
-
-                Slider {
-                    id: syncIntervalSlider
-                    Layout.fillWidth: true
-                    from: 1
-                    to: 60
-                    stepSize: 1
-                    onMoved: {
-                        if (root.syncBackendRef) {
-                            root.syncBackendRef.sync_interval = Math.round(value) * 60
-                        }
-                    }
+        FormCard.FormSwitchDelegate {
+            id: autoSyncSwitch
+            text: qsTr("自动同步")
+            description: qsTr("启用后按设定间隔自动执行同步")
+            onToggled: {
+                if (root.syncBackendRef) {
+                    root.syncBackendRef.sync_auto_sync = autoSyncSwitch.checked
                 }
             }
         }
 
-        Flow {
-            Layout.fillWidth: true
-            spacing: resolvedDt.sp8
+        FormCard.FormSpinBoxDelegate {
+            id: syncIntervalSpin
+            visible: autoSyncSwitch.checked
+            label: qsTr("同步间隔")
+            from: 1
+            to: 60
+            stepSize: 1
+            textFromValue: function(value) { return value + qsTr(" 分钟") }
+            onValueModified: {
+                if (root.syncBackendRef) {
+                    root.syncBackendRef.sync_interval = Math.round(value) * 60
+                }
+            }
+        }
+    }
 
-            AppButton {
-                text: qsTr("保存配置")
-                dt: root.resolvedDt
-                variant: "primary"
-                onClicked: {
-                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
-                        var hasNewToken = tokenField.text.trim().length > 0
-                        window.debugLog("sync", "save_config_clicked", "url=" + urlField.text + ", branch=" + branchField.text + ", hasNewToken=" + hasNewToken)
-                    }
-                    if (!root.syncBackendRef) return
+    // ── 动作按钮条（Breeze Buttons） ──
+    Flow {
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
+        spacing: Kirigami.Units.smallSpacing
+
+        Button {
+            text: qsTr("保存配置")
+            highlighted: true
+            onClicked: {
+                if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                    var hasNewToken = tokenField.text.trim().length > 0
+                    window.debugLog("sync", "save_config_clicked", "url=" + urlField.text + ", hasNewToken=" + hasNewToken)
+                }
+                if (!root.syncBackendRef) return
+                root.syncBackendRef.sync_remote_url = urlField.text
+                if (tokenField.text.trim().length > 0) {
+                    root.syncBackendRef.set_sync_token(tokenField.text.trim())
+                    tokenField.text = ""
+                }
+                root.syncBackendRef.sync_enabled = true
+                root.syncBackendRef.sync_backend_type = "github_api"
+
+                var success = root.syncBackendRef.save_sync_config()
+                if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                    window.debugLog("sync", "save_config_finished", "success=" + success)
+                }
+                if (success) {
+                    root.syncBackendRef.load_sync_config()
+                    root.refreshLocalSyncState()
+                    tokenField.text = ""
+                    root.settingsChanged()
+                    root.showConfigFeedback(qsTr("配置已保存"), false)
+                } else {
+                    root.resultText = root.syncBackendRef.sync_operation_state || qsTr("保存配置失败")
+                    root.showConfigFeedback(qsTr("保存配置失败"), true)
+                }
+            }
+        }
+
+        Button {
+            text: qsTr("执行同步")
+            enabled: root.syncBackendRef && root.syncBackendRef.sync_can_run
+            onClicked: {
+                if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
+                // 先保存当前 UI 配置
+                if (root.syncBackendRef) {
                     root.syncBackendRef.sync_remote_url = urlField.text
-                    root.syncBackendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main"
                     if (tokenField.text.trim().length > 0) {
                         root.syncBackendRef.set_sync_token(tokenField.text.trim())
                         tokenField.text = ""
                     }
-                    root.syncBackendRef.sync_enabled = true
-                    root.syncBackendRef.sync_backend_type = "github_api"
-
-                    var success = root.syncBackendRef.save_sync_config()
-                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
-                        window.debugLog("sync", "save_config_finished", "success=" + success)
-                    }
-                    if (success) {
-                        root.syncBackendRef.load_sync_config()
-                        root.refreshLocalSyncState()
-                        tokenField.text = ""
-                        root.settingsChanged()
-                        root.showConfigFeedback(qsTr("配置已保存"), false)
-                    } else {
-                        syncResultArea.text = root.syncBackendRef.sync_operation_state || qsTr("保存配置失败")
-                        root.showConfigFeedback(qsTr("保存配置失败"), true)
+                    root.syncBackendRef.save_sync_config()
+                    root.syncBackendRef.load_sync_config()
+                }
+                // 再执行同步
+                if (typeof root.beforeSyncHook === "function") {
+                    if (!root.beforeSyncHook()) {
+                        root.resultText = qsTr("同步已取消：保存当前章节失败，请检查编辑器内容后重试")
+                        return
                     }
                 }
-            }
-
-            AppButton {
-                text: qsTr("执行同步")
-                dt: root.resolvedDt
-                variant: "secondary"
-                enabled: root.syncBackendRef && root.syncBackendRef.sync_can_run
-                onClicked: {
-                    if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
-                    // 先保存当前 UI 配置
-                    if (root.syncBackendRef) {
-                        root.syncBackendRef.sync_remote_url = urlField.text
-                        root.syncBackendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main"
-                        if (tokenField.text.trim().length > 0) {
-                            root.syncBackendRef.set_sync_token(tokenField.text.trim())
-                            tokenField.text = ""
-                        }
-                        root.syncBackendRef.save_sync_config()
-                        root.syncBackendRef.load_sync_config()
-                    }
-                    // 再执行同步
-                    if (typeof root.beforeSyncHook === "function") {
-                        if (!root.beforeSyncHook()) {
-                            syncResultArea.text = qsTr("同步已取消：保存当前章节失败，请检查编辑器内容后重试")
-                            return
-                        }
-                    }
-                    syncResultArea.text = qsTr("正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件")
-                    if (root.syncBackendRef) {
-                        var opId = root.syncBackendRef.perform_sync()
-                        root.activeOperationId = opId
-                        root.activeOperationKind = "sync"
-                        root.refreshLocalSyncState()
-                        // 如果 opId 为空，显示即时错误
-                        if (!opId || opId.length === 0) {
-                            syncResultArea.text = root.syncBackendRef.sync_operation_state || qsTr("同步启动失败")
-                        }
+                root.resultText = qsTr("正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件")
+                if (root.syncBackendRef) {
+                    var opId = root.syncBackendRef.perform_sync()
+                    root.activeOperationId = opId
+                    root.activeOperationKind = "sync"
+                    root.refreshLocalSyncState()
+                    // 如果 opId 为空，显示即时错误
+                    if (!opId || opId.length === 0) {
+                        root.resultText = root.syncBackendRef.sync_operation_state || qsTr("同步启动失败")
                     }
                 }
             }
+        }
 
-            AppButton {
-                text: qsTr("运行诊断")
-                dt: root.resolvedDt
-                variant: "secondary"
-                enabled: root.syncBackendRef && root.workspaceBackendRef && root.workspaceBackendRef.has_workspace && !(root.syncBackendRef.sync_in_progress || false)
-                onClicked: {
-                    if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
-                    syncResultArea.text = qsTr("正在诊断...")
-                    if (root.syncBackendRef) {
-                        var opId = root.syncBackendRef.perform_sync_diagnostics()
-                        root.activeOperationId = opId
-                        root.activeOperationKind = "dry_run"
-                        // 如果 opId 为空，显示即时错误
-                        if (!opId || opId.length === 0) {
-                            syncResultArea.text = root.syncBackendRef.sync_operation_state || qsTr("诊断启动失败")
-                        }
+        Button {
+            text: qsTr("运行诊断")
+            enabled: root.syncBackendRef && root.workspaceBackendRef && root.workspaceBackendRef.has_workspace && !(root.syncBackendRef.sync_in_progress || false)
+            onClicked: {
+                if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
+                root.resultText = qsTr("正在诊断...")
+                if (root.syncBackendRef) {
+                    var opId = root.syncBackendRef.perform_sync_diagnostics()
+                    root.activeOperationId = opId
+                    root.activeOperationKind = "dry_run"
+                    // 如果 opId 为空，显示即时错误
+                    if (!opId || opId.length === 0) {
+                        root.resultText = root.syncBackendRef.sync_operation_state || qsTr("诊断启动失败")
                     }
                 }
             }
+        }
 
-            AppButton {
-                text: qsTr("打开工作区目录")
-                dt: root.resolvedDt
-                variant: "text"
-                visible: root.syncBackendRef && root.workspaceBackendRef && root.workspaceBackendRef.has_workspace
-                onClicked: if (root.syncBackendRef) root.syncBackendRef.open_workspace_dir()
+        Button {
+            text: qsTr("打开工作区目录")
+            visible: root.syncBackendRef && root.workspaceBackendRef && root.workspaceBackendRef.has_workspace
+            onClicked: if (root.syncBackendRef) root.syncBackendRef.open_workspace_dir()
+        }
+
+        Button {
+            text: qsTr("复制冲突信息")
+            visible: root.syncBackendRef && root.isConflictStatus(root.currentSyncStatus)
+            onClicked: if (root.syncBackendRef) root.syncBackendRef.copy_text_to_clipboard(root.resultText)
+        }
+    }
+
+    Label {
+        id: syncBlockReason
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
+        visible: root.syncBackendRef && !root.syncBackendRef.sync_can_run && root.syncBackendRef.sync_block_reason.length > 0
+        text: root.syncBackendRef ? root.syncBackendRef.sync_block_reason : ""
+        color: Kirigami.Theme.disabledTextColor
+        wrapMode: Text.Wrap
+    }
+
+    // pending manual 状态展示：当前自动同步运行时点击，显示"当前同步完成后将再次同步"
+    Label {
+        id: manualSyncPendingHint
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
+        visible: root.syncBackendRef && root.syncBackendRef.manual_sync_pending
+        text: qsTr("当前同步完成后将再次同步")
+        color: Kirigami.Theme.disabledTextColor
+        wrapMode: Text.Wrap
+    }
+
+    Label {
+        id: syncConfigFeedback
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
+        property string message: ""
+        property bool isError: false
+        visible: message.length > 0
+        text: message
+        color: isError ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.disabledTextColor
+        wrapMode: Text.Wrap
+    }
+
+    Timer {
+        id: configFeedbackTimer
+        interval: 3000
+        onTriggered: {
+            syncConfigFeedback.message = ""
+            syncConfigFeedback.visible = false
+        }
+    }
+
+    // ── 结果/日志区 ──
+    Rectangle {
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
+        Layout.preferredHeight: 180
+        color: Kirigami.Theme.alternateBackgroundColor
+        border.color: root.isFailureStatus(root.currentSyncStatus) ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.disabledTextColor
+        border.width: 1
+        radius: Kirigami.Units.smallSpacing
+        clip: true
+        visible: (root.currentSyncOperationState !== "" || root.currentSyncStatus === "syncing" || root.isFailureStatus(root.currentSyncStatus))
+
+        ScrollView {
+            id: logScroll
+            anchors.fill: parent
+            anchors.margins: Kirigami.Units.smallSpacing
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ScrollBar.vertical.policy: ScrollBar.AsNeeded
+            // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
+            Component.onCompleted: {
+                if (contentItem) contentItem.acceptedButtons = Qt.NoButton
             }
-
-            AppButton {
-                text: qsTr("复制冲突信息")
-                dt: root.resolvedDt
-                variant: "danger"
-                visible: root.syncBackendRef && root.isConflictStatus(root.currentSyncStatus)
-                onClicked: if (root.syncBackendRef) root.syncBackendRef.copy_text_to_clipboard(syncResultArea.text)
-            }
-        }
-
-        AppText {
-            id: syncBlockReason
-            dt: root.resolvedDt
-            visible: root.syncBackendRef && !root.syncBackendRef.sync_can_run && root.syncBackendRef.sync_block_reason.length > 0
-            text: root.syncBackendRef ? root.syncBackendRef.sync_block_reason : ""
-            color: resolvedDt.onSurfaceVariant
-            font.pointSize: resolvedDt.captionPt
-            font.family: resolvedDt.fontFamily
-            Layout.fillWidth: true
-        }
-
-        // pending manual 状态展示：当前自动同步运行时点击，显示"当前同步完成后将再次同步"
-        AppText {
-            id: manualSyncPendingHint
-            dt: root.resolvedDt
-            visible: root.syncBackendRef && root.syncBackendRef.manual_sync_pending
-            text: qsTr("当前同步完成后将再次同步")
-            color: resolvedDt.onSurfaceVariant
-            font.pointSize: resolvedDt.captionPt
-            font.family: resolvedDt.fontFamily
-            Layout.fillWidth: true
-        }
-
-        AppText {
-            id: syncConfigFeedback
-            dt: root.resolvedDt
-            property string message: ""
-            property bool isError: false
-            visible: message.length > 0
-            text: syncConfigFeedback.message
-            color: isError ? resolvedDt.error : resolvedDt.onSurfaceVariant
-            font.pointSize: resolvedDt.captionPt
-            font.family: resolvedDt.fontFamily
-            Layout.fillWidth: true
-        }
-
-        Timer {
-            id: configFeedbackTimer
-            interval: 3000
-            onTriggered: {
-                syncConfigFeedback.message = ""
-                syncConfigFeedback.visible = false
-            }
-        }
-
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 180
-            color: root.isFailureStatus(root.currentSyncStatus) ? resolvedDt.dangerContainer : resolvedDt.surfaceContainerLow
-            border.color: root.isFailureStatus(root.currentSyncStatus) ? resolvedDt.error : resolvedDt.border
-            border.width: root.isFailureStatus(root.currentSyncStatus) ? 2 : 1
-            radius: resolvedDt.radiusLg
-            clip: true
-            visible: (root.currentSyncOperationState !== "" || root.currentSyncStatus === "syncing" || root.isFailureStatus(root.currentSyncStatus))
-
-            ScrollView {
-                id: logScroll
-                anchors.fill: parent
-                anchors.margins: resolvedDt.sp12
-                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-                // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
-                Component.onCompleted: {
-                    if (contentItem) contentItem.acceptedButtons = Qt.NoButton
-                }
-                TextArea {
-                    id: syncResultArea
-                    width: logScroll.availableWidth
-                    text: ""
-                    color: root.isFailureStatus(root.currentSyncStatus) ? resolvedDt.error : resolvedDt.onSurfaceVariant
-                    font.family: "monospace"
-                    font.pointSize: resolvedDt.captionPt
-                    readOnly: true
-                    background: null
-                    wrapMode: TextEdit.Wrap
-                }
+            TextArea {
+                id: syncResultArea
+                width: logScroll.availableWidth
+                text: root.resultText
+                color: root.isFailureStatus(root.currentSyncStatus) ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
+                font.family: "monospace"
+                readOnly: true
+                background: null
+                wrapMode: TextEdit.Wrap
             }
         }
+    }
 
-        RowLayout {
-            id: syncRawErrorRow
-            Layout.fillWidth: true
-            visible: false
-            spacing: resolvedDt.sp8
+    RowLayout {
+        id: syncRawErrorRow
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
+        visible: root.showRawError
+        spacing: Kirigami.Units.smallSpacing
 
-            AppText {
-                dt: root.resolvedDt
-                text: qsTr("诊断信息可复制")
-                color: resolvedDt.onSurfaceVariant
-                font.pointSize: resolvedDt.captionPt
-                font.family: resolvedDt.fontFamily
-            }
-
-            AppButton {
-                text: qsTr("复制")
-                dt: root.resolvedDt
-                variant: "text"
-                onClicked: if (root.syncBackendRef) root.syncBackendRef.copy_text_to_clipboard(syncRawErrorArea.text)
-            }
+        Label {
+            text: qsTr("诊断信息可复制")
+            color: Kirigami.Theme.disabledTextColor
         }
 
-        // Issue #762 评论 5826175490 第 4 点：跨作品冲突入口。
-        // 按作品分组列出所有未解决冲突，点击直接跳到对应作品的冲突面板，
-        // 不要求这一轮同步先结束。
-        AppCard {
-            id: conflictsCard
-            Layout.fillWidth: true
-            dt: root.resolvedDt
-            variant: "surface"
-            spacing: resolvedDt.sp12
-            visible: root.conflictRows.length > 0
+        Button {
+            text: qsTr("复制")
+            flat: true
+            onClicked: if (root.syncBackendRef) root.syncBackendRef.copy_text_to_clipboard(root.rawErrorText)
+        }
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: resolvedDt.sp12
+        Item { Layout.fillWidth: true }
+    }
 
-                AppText {
-                    dt: root.resolvedDt
-                    text: qsTr("待处理冲突（%1 个作品 / %2 处）")
-                        .arg(root.conflictGroups.length)
-                        .arg(root.conflictTotalCount)
-                    color: resolvedDt.onBackground
-                    font.pointSize: resolvedDt.titlePt
-                    font.family: resolvedDt.fontFamily
-                    font.weight: Font.Bold
-                }
+    // Issue #762 评论 5826175490 第 4 点：跨作品冲突入口。
+    // 按作品分组列出所有未解决冲突，点击直接跳到对应作品的冲突面板，
+    // 不要求这一轮同步先结束。
+    ColumnLayout {
+        Layout.fillWidth: true
+        Layout.maximumWidth: root.cardWidth
+        Layout.alignment: Qt.AlignHCenter
+        spacing: Kirigami.Units.smallSpacing
+        visible: root.conflictRows.length > 0
 
-                // 每个作品一个分组头，其下逐条列出该作品的冲突。
-                Repeater {
-                    model: root.conflictRows
-                    delegate: ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: resolvedDt.sp8
+        FormCard.FormHeader {
+            title: qsTr("待处理冲突（%1 个作品 / %2 处）")
+                .arg(root.conflictGroups.length)
+                .arg(root.conflictTotalCount)
+        }
 
-                        AppText {
-                            Layout.fillWidth: true
-                            visible: modelData.kind === "project"
-                            dt: root.resolvedDt
-                            text: modelData.targetKind === "app"
-                                ? qsTr("应用数据/星图（%1 处）").arg(modelData.conflictCount)
-                                : qsTr("%1（%2 处）").arg(modelData.projectTitle).arg(modelData.conflictCount)
-                            color: resolvedDt.onBackground
-                            font.pointSize: resolvedDt.bodyPt
-                            font.family: resolvedDt.fontFamily
-                            font.weight: Font.Medium
-                        }
+        // Issue #762 评论 5826175490 第 4 点：conflictRows 已按
+        // 「作品分组头 + 该作品每条冲突」展平，这里用单个 Repeater 渲染，
+        // 分组头不可点击，冲突行点击后以作品 id + 冲突路径发出 openConflict。
+        FormCard.FormCard {
+            Repeater {
+                model: root.conflictRows
+                delegate: ColumnLayout {
+                    Layout.fillWidth: true
 
-                        AppButton {
-                            Layout.fillWidth: true
-                            visible: modelData.kind === "conflict"
-                            dt: root.resolvedDt
-                            variant: "secondary"
-                            text: modelData.localPath
-                            onClicked: {
-                                root.openConflict(modelData.targetKind, modelData.projectId, modelData.localPath)
-                                // Issue #902 第二十轮：App 冲突在 SyncPage 内部展示面板，
-                                // 不走 openWriting 跳转（main.qml 对 app target 直接 return）。
-                                if (modelData.targetKind === "app") {
-                                    root.appConflictPath = modelData.localPath
-                                    appConflictPopup.open()
-                                }
+                    FormCard.FormHeader {
+                        visible: modelData.kind === "project"
+                        // Issue #902 第二十轮：区分 App 级与作品级冲突标题。
+                        title: modelData.targetKind === "app"
+                            ? qsTr("应用数据/星图（%1 处）").arg(modelData.conflictCount)
+                            : qsTr("%1（%2 处）").arg(modelData.projectTitle).arg(modelData.conflictCount)
+                    }
+
+                    FormCard.FormButtonDelegate {
+                        visible: modelData.kind === "conflict"
+                        text: modelData.localPath
+                        onClicked: {
+                            root.openConflict(modelData.targetKind, modelData.projectId, modelData.localPath)
+                            // Issue #902 第二十轮：App 冲突在 SyncPage 内部展示面板，
+                            // 不走 openWriting 跳转（main.qml 对 app target 直接 return）。
+                            if (modelData.targetKind === "app") {
+                                root.appConflictPath = modelData.localPath
+                                appConflictPopup.open()
                             }
                         }
+                    }
                     }
                 }
             }
@@ -838,21 +761,24 @@ Item {
         // Issue #902 第二十二轮：删除硬最小宽高 400×300，小窗口（如 320×240）下
         // 居中后 x/y 会变负把面板挤出可见区域。改为不超过 overlay 实际可用尺寸的夹取，
         // 最小只保留 1 防止退化，绝不让最小高度反过来超过窗口。
-        width: Math.max(1, Math.min(960, (parent ? parent.width : 960) - resolvedDt.sp64))
-        height: Math.max(1, Math.min(720, (parent ? parent.height : 720) - resolvedDt.sp32))
+        // Issue #900：原 resolvedDt.sp64/sp32 改用 Kirigami.Units.gridUnit 倍数。
+        width: Math.max(1, Math.min(960, (parent ? parent.width : 960) - Kirigami.Units.gridUnit * 8))
+        height: Math.max(1, Math.min(720, (parent ? parent.height : 720) - Kirigami.Units.gridUnit * 4))
         x: Math.round((parent.width - width) / 2)
         y: Math.round((parent.height - height) / 2)
         Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
         background: Rectangle {
-            color: resolvedDt.surface
-            border.color: resolvedDt.border
+            color: Kirigami.Theme.backgroundColor
+            border.color: Kirigami.Theme.disabledTextColor
             border.width: 1.5
-            radius: resolvedDt.radiusLg
+            radius: Kirigami.Units.largeSpacing
         }
 
         SyncConflictPanel {
             anchors.fill: parent
-            dt: root.resolvedDt
+            // Issue #900：SyncConflictPanel 内部不再消费 dt 的 M3 字段，
+            // 传 null 保持 required property API 满足。
+            dt: null
             syncBackendRef: root.syncBackendRef
             targetKind: "app"
             projectId: ""
@@ -871,7 +797,7 @@ Item {
         if (root.syncBackendRef) {
             root.syncBackendRef.load_sync_config()
             autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false
-            syncIntervalSlider.value = (root.syncBackendRef.sync_interval || 300) / 60
+            syncIntervalSpin.value = Math.round((root.syncBackendRef.sync_interval || 300) / 60)
             // Issue #762 评论 5826175490 第 4 点：页面打开时立即读取全局冲突，
             // 已有冲突不需要用户先手动同步一次才看得到。
             root.refreshAllSyncConflicts()
@@ -887,12 +813,5 @@ Item {
         function onSync_conflicts_changed() {
             root.refreshAllSyncConflicts();
         }
-    }
-
-    TextEdit {
-        id: syncRawErrorArea
-        visible: false
-        text: ""
-        readOnly: true
     }
 }

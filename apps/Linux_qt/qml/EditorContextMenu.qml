@@ -8,6 +8,10 @@
 //   - 菜单项文本固定，不依赖外部数据源
 //   - 菜单项状态绑定 SujianEditorItem 属性
 //   - 不包含业务逻辑，不直接调用 Core
+//
+// Issue #900：外观交给 Breeze QQC2 样式（去掉自绘背景 / AppText contentItem），
+// 菜单项换成 Breeze 图标。editorItem / dt 属性签名保持不变。
+// =============================================================================
 
 import QtQuick
 import QtQuick.Controls
@@ -18,86 +22,43 @@ Menu {
     property var editorItem: null
     required property var dt
 
-    background: Rectangle {
-        color: dt.surface
-        border.color: dt.border
-        radius: dt.radiusMd
-        border.width: 1
-    }
-
     MenuItem {
         text: qsTr("复制")
-        enabled: editorItem && editorItem.has_selection
-        contentItem: AppText {
-            dt: editorContextMenu.dt
-            text: parent.text
-            color: parent.enabled ? dt.textPrimary : dt.textMuted
-            font.pointSize: dt.labelPt
-            font.family: dt.fontFamily
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            color: parent.highlighted ? dt.surfaceVariant : "transparent"
-        }
+        icon.name: "edit-copy"
+        enabled: editorContextMenu.editorItem && editorContextMenu.editorItem.has_selection
         onTriggered: {
-            if (editorItem) editorItem.clipboard_copy()
+            if (editorContextMenu.editorItem)
+                editorContextMenu.editorItem.clipboard_copy()
         }
     }
 
     MenuItem {
         text: qsTr("粘贴")
-        enabled: editorItem && editorItem.editor_enabled
-        contentItem: AppText {
-            dt: editorContextMenu.dt
-            text: parent.text
-            color: parent.enabled ? dt.textPrimary : dt.textMuted
-            font.pointSize: dt.labelPt
-            font.family: dt.fontFamily
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            color: parent.highlighted ? dt.surfaceVariant : "transparent"
-        }
+        icon.name: "edit-paste"
+        enabled: editorContextMenu.editorItem && editorContextMenu.editorItem.editor_enabled
         onTriggered: {
-            if (editorItem) editorItem.clipboard_paste()
+            if (editorContextMenu.editorItem)
+                editorContextMenu.editorItem.clipboard_paste()
         }
     }
 
     MenuItem {
         text: qsTr("全选")
-        enabled: editorItem && editorItem.editor_enabled
-        contentItem: AppText {
-            dt: editorContextMenu.dt
-            text: parent.text
-            color: parent.enabled ? dt.textPrimary : dt.textMuted
-            font.pointSize: dt.labelPt
-            font.family: dt.fontFamily
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            color: parent.highlighted ? dt.surfaceVariant : "transparent"
-        }
+        icon.name: "edit-select-all"
+        enabled: editorContextMenu.editorItem && editorContextMenu.editorItem.editor_enabled
         onTriggered: {
-            if (editorItem) editorItem.select_all()
+            if (editorContextMenu.editorItem)
+                editorContextMenu.editorItem.select_all()
         }
     }
 
     MenuItem {
         text: qsTr("删除")
-        enabled: editorItem && editorItem.has_selection
-        contentItem: AppText {
-            dt: editorContextMenu.dt
-            text: parent.text
-            color: parent.enabled ? dt.error : dt.textMuted
-            font.pointSize: dt.labelPt
-            font.family: dt.fontFamily
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            color: parent.highlighted ? dt.surfaceVariant : "transparent"
-        }
+        icon.name: "edit-delete"
+        enabled: editorContextMenu.editorItem && editorContextMenu.editorItem.has_selection
         onTriggered: {
-            if (editorItem) editorItem.delete_selection()
+            if (editorContextMenu.editorItem)
+                editorContextMenu.editorItem.delete_selection()
         }
     }
 }

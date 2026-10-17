@@ -9,7 +9,6 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use super::animation::visual_frame::VisualFrame;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::LineSnapshotId;
 
@@ -57,23 +56,20 @@ pub(crate) struct SubmittedPointerFrame {
 pub(crate) struct SubmittedFrameTicket {
     pub document_session: u64,
     pub layout_revision: LayoutRevision,
-    pub transition_id: u64,
-    pub ownership_revision: u64,
     pub render_frame_id: u64,
     pub window_generation: u64,
 }
 
+/// Issue #904：已提交视觉帧。
+///
+/// 只保留帧提交 mailbox 需要的最小信息：ticket + 该帧引用的行快照 id 列表
+/// （供 `active_snapshot_ids` 决定哪些 QImage 不能释放）。整章
+/// `PresentedScene` / ownership / handoff / 进度字段已随 #901 状态机删除。
 #[derive(Clone, Debug)]
 pub(crate) struct SubmittedVisualFrame {
     pub ticket: SubmittedFrameTicket,
-    pub visual_frame: VisualFrame,
-    pub terminal_motion_indices: Vec<usize>,
-    pub visible_width_updates: Vec<(usize, f64)>,
-    pub terminal_frame: bool,
-    pub handoff_pending: bool,
-    pub shared_progress: f64,
-    pub timeline_progress: f64,
-    pub ownership_conflict_count: usize,
+    /// 该帧引用的行快照 id 列表（局部新旧源纹理）。
+    pub snapshot_ids: Vec<LineSnapshotId>,
 }
 
 #[derive(Default)]
@@ -103,40 +99,21 @@ impl Default for FrameSubmissionMailbox {
 
 impl FrameSubmissionMailbox {
     /// Stage a successfully rendered frame. It is not a visual source until Qt submits it.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn stage_rendered_frame(
         &self,
         document_session: u64,
         layout_revision: LayoutRevision,
-        transition_id: u64,
-        ownership_revision: u64,
-        visual_frame: VisualFrame,
-        terminal_motion_indices: Vec<usize>,
-        visible_width_updates: Vec<(usize, f64)>,
-        terminal_frame: bool,
-        handoff_pending: bool,
-        shared_progress: f64,
-        timeline_progress: f64,
-        ownership_conflict_count: usize,
+        snapshot_ids: Vec<LineSnapshotId>,
     ) {
         let mut state = self.lock_state();
         let staged = SubmittedVisualFrame {
             ticket: SubmittedFrameTicket {
                 document_session,
                 layout_revision,
-                transition_id,
-                ownership_revision,
                 render_frame_id: self.next_frame_id.fetch_add(1, Ordering::Relaxed),
                 window_generation: state.window_generation,
             },
-            visual_frame,
-            terminal_motion_indices,
-            visible_width_updates,
-            terminal_frame,
-            handoff_pending,
-            shared_progress,
-            timeline_progress,
-            ownership_conflict_count,
+            snapshot_ids,
         };
         state.pending_sync = Some(staged);
     }
@@ -228,9 +205,9 @@ impl FrameSubmissionMailbox {
             .chain(state.synchronized.iter())
             .chain(state.submitted.iter())
         {
-            for cluster in &frame.visual_frame.clusters {
-                if !ids.contains(&cluster.snapshot_id) {
-                    ids.push(cluster.snapshot_id);
+            for snapshot_id in &frame.snapshot_ids {
+                if !ids.contains(snapshot_id) {
+                    ids.push(*snapshot_id);
                 }
             }
         }

@@ -39,6 +39,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Sujian 1.0
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -419,9 +420,7 @@ Rectangle {
 
     function requestEditorFocus() {
         Qt.callLater(function() {
-            if (sujianEditor && sujianEditor.visible && sujianEditor.editor_enabled) {
-                sujianEditor.request_text_input_focus();
-            }
+            editorViewport.requestEditorFocus();
         });
     }
 
@@ -430,7 +429,7 @@ Rectangle {
 
     EditorController {
         id: editorController
-        targetEditorItem: sujianEditor
+        targetEditorItem: editorViewport.editorItem
         editorBackendRef: root.editorBackendRef
         dt: root.dt
         // Issue #709 评论 issue-body-709: 传入 themeController 使
@@ -448,35 +447,26 @@ Rectangle {
         width: 360
         height: 180
         anchors.centerIn: parent
-        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
         header: null
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt.sp24
-            spacing: dt.sp16
-            AppText {
-                dt: root.dt
+            anchors.margins: Kirigami.Units.largeSpacing
+            spacing: Kirigami.Units.largeSpacing
+            Kirigami.Heading {
+                level: 4
                 text: qsTr("保存被阻止")
-                color: dt.textPrimary
-                font.pointSize: dt.subtitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.DemiBold
             }
-            AppText {
-                dt: root.dt
+            Label {
                 id: emptySaveDialogText
                 Layout.fillWidth: true
                 text: qsTr("空内容保存被阻止，请输入内容后重试")
-                color: dt.textSecondary
-                font.pointSize: dt.bodyPt
-                font.family: dt.fontFamily
+                color: Kirigami.Theme.disabledTextColor
                 wrapMode: Text.Wrap
             }
-            AppButton {
-                            text: qsTr("确定")
-                dt: root.dt
-                variant: "primary"
+            Button {
+                text: qsTr("确定")
+                highlighted: true
                 Layout.alignment: Qt.AlignRight
                 onClicked: emptySaveDialog.close()
             }
@@ -527,7 +517,7 @@ Rectangle {
             return;
         }
 
-        sujianEditor.snap_next_cursor_update();
+        editorViewport.snapNextCursorUpdate();
         // loadChapterContentWithIds returns null on failure, result object on success.
         // State is only updated after content is successfully loaded.
         var result = editorController.loadChapterContentWithIds(pId, vId, cId);
@@ -537,13 +527,11 @@ Rectangle {
             editorController.volumeId = d.volumeId || vId;
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
-            sujianEditor.snap_next_cursor_update();
+            editorViewport.snapNextCursorUpdate();
             // Issue #715: 切章后明确把新章节视口设为顶部。
             // 旧章节的 contentY 不应继承到新章节，否则动画层会画到错误 Y 坐标。
             // contentY -> scroll_y 绑定会同步给 Rust，确保两层使用同一滚动坐标。
-            if (editorScroll.contentItem) {
-                editorScroll.contentItem.contentY = 0;
-            }
+            editorViewport.resetScroll();
             if (root.projectBackendRef)
                 root.projectBackendRef.select_chapter(pId, vId, cId)
             root.requestEditorFocus();
@@ -555,7 +543,7 @@ Rectangle {
 
     function reloadActiveChapter() {
         if (editorController.projectId && editorController.volumeId && editorController.chapterId) {
-            sujianEditor.snap_next_cursor_update();
+            editorViewport.snapNextCursorUpdate();
             editorController.loadChapterContentWithIds(
                 editorController.projectId,
                 editorController.volumeId,
@@ -588,7 +576,7 @@ Rectangle {
         reloadActiveChapter();
     }
 
-    color: dt.bg
+    color: Kirigami.Theme.backgroundColor
 
     // Issue #825 复核第3项：Core 的 plan 明确是「最上面一整条 Toolbar，下面才是
     // ChapterNavigation | Editor | ToolPane | ToolRail」。这里由 WritingWorkbenchToolbar
@@ -615,8 +603,8 @@ Rectangle {
 
         onBackRequested: root.backToProjects()
         // 撤销 / 重做走 SujianEditorItem 的真实实现，和键盘 Ctrl+Z/Ctrl+Y 同一条路径。
-        onUndoRequested: sujianEditor.undo()
-        onRedoRequested: sujianEditor.redo()
+        onUndoRequested: editorViewport.undo()
+        onRedoRequested: editorViewport.redo()
         onFontSizeChanged: function(size) {
             if (settingsBackend) {
                 settingsBackend.setting_font_size = size;
@@ -707,7 +695,7 @@ Rectangle {
                     id: editorAreaRect
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: dt.bg
+                    color: Kirigami.Theme.backgroundColor
 
                     // Issue #829：正文区顶部的折叠钮（手稿「宽屏全打开」/「左右缩回」
                     // 都在正文区顶部居中画了一个三角）。它是浮层，不占 ColumnLayout 的
@@ -716,7 +704,7 @@ Rectangle {
                     PaneFoldButton {
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top
-                        anchors.topMargin: dt.sp4
+                        anchors.topMargin: Kirigami.Units.smallSpacing
                         z: 30
                         dt: root.dt
                         // Issue #833 复核3：任何模式下都给用户入口切换章节导航，
@@ -739,10 +727,10 @@ Rectangle {
                     // Centered paper container
                     Item {
                         anchors.fill: parent
-                        anchors.leftMargin: dt.sp8
-                        anchors.rightMargin: dt.sp8
-                        anchors.topMargin: dt.sp8
-                        anchors.bottomMargin: dt.sp8
+                        anchors.leftMargin: Kirigami.Units.smallSpacing
+                        anchors.rightMargin: Kirigami.Units.smallSpacing
+                        anchors.topMargin: Kirigami.Units.smallSpacing
+                        anchors.bottomMargin: Kirigami.Units.smallSpacing
 
                         // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
                         // 关于 LayoutPlan：contentMaxWidthVp 控制 paperBg 最大宽度，
@@ -766,9 +754,7 @@ Rectangle {
                             height: parent.height
                             anchors.horizontalCenter: parent.horizontalCenter
                             color: dt.editorBackground
-                            radius: dt.radiusMd
-                            border.color: dt.border
-                            border.width: 1
+                            radius: Kirigami.Units.cornerRadius
                         }
 
                         // Issue #833：删除 paperBg 左右两个拖拽改宽 MouseArea。
@@ -776,332 +762,13 @@ Rectangle {
                         // Core role width 打架。Editor role 宽度已由 Core 给出，
                         // paperBg 在 Editor role 内直接跟随可用宽度。
 
-                        ScrollView {
-                            id: editorScroll
-                            // Issue #695 评论 5693346400: editorIsScrolling 把
-                            // desktopWheelHandler.active 算进去，这样直接修改 contentY
-                            // 时现有的滚动期间动画暂停逻辑仍然有效。
-                            readonly property bool editorIsScrolling: ScrollBar.vertical.active || desktopWheelHandler.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
-                            property bool editorAnimationSuppressed: false
+                        EditorViewport {
+                            id: editorViewport
                             anchors.fill: paperBg
-                            anchors.margins: dt.sp20
-                            clip: true
-                            contentWidth: availableWidth
-                            contentHeight: Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
-
-                            function clampScroll() {
-                                if (contentItem) {
-                                    var maxScroll = Math.max(0, contentHeight - height);
-                                    // Only clamp if contentY exceeds the valid range.
-                                    // Do NOT force contentY to 0 when contentHeight is still updating.
-                                    if (maxScroll > 0 && contentItem.contentY > maxScroll) {
-                                        contentItem.contentY = maxScroll;
-                                    }
-                                }
-                            }
-
-                            // Issue #724 评论 5751268664 缺口2: 光标自动跟随滚动。
-                            // 语义同 QPlainTextEdit::ensureCursorVisible()（centerOnScroll=false）：
-                            // 只滚刚好够让 caret 回到可视区，不每打一字就强制居中。
-                            // cursor_rect_y 是目标 caret 的 viewport 坐标（Rust 已减过 scroll_y），
-                            // 直接用它做最小滚动量。contentY 改后仍通过 scroll_y 绑定回 Rust，
-                            // Scene Graph 和 IME 继续使用同一滚动位置。
-                            // Issue #727 评论 5757225958 问题2: 删除对已删除 Rust 方法
-                            // set_auto_follow_anchor_with_target 的调用，也删除
-                            // visual_cursor_rect_y / visual_cursor_rect_height 这套只为
-                            // anchor 服务的旧接口。ensureCursorVisible() 只根据 viewport
-                            // cursor_rect_y 算 targetY，最后只做 flick.contentY = targetY。
-
-                            function ensureCursorVisible() {
-                                const flick = contentItem
-                                if (!flick)
-                                    return
-
-                                const margin = Math.max(dt.sp12, sujianEditor.cursor_rect_height * 0.5)
-                                const top = sujianEditor.cursor_rect_y
-                                const bottom = top + sujianEditor.cursor_rect_height
-                                const visibleBottom = availableHeight - margin
-
-                                let nextY = flick.contentY
-                                if (top < margin) {
-                                    nextY += top - margin
-                                } else if (bottom > visibleBottom) {
-                                    nextY += bottom - visibleBottom
-                                } else {
-                                    return
-                                }
-
-                                const maxY = Math.max(0, contentHeight - height)
-                                // Issue #727 评论 5757225958 问题2: 只算出完整目标 targetY，
-                                // 若与当前 contentY 差距 < 0.5 直接返回（无需滚动）。
-                                // 否则直接赋值 flick.contentY，不再调用已删除的
-                                // set_auto_follow_anchor_with_target。
-                                const targetY = Math.max(0, Math.min(maxY, nextY))
-                                if (Math.abs(targetY - flick.contentY) < 0.5)
-                                    return
-                                flick.contentY = targetY
-                            }
-
-                            function scheduleEnsureCursorVisible() {
-                                Qt.callLater(ensureCursorVisible)
-                            }
-
-                            onContentHeightChanged: clampScroll()
-                            onHeightChanged: clampScroll()
-                            Component.onCompleted: {
-                                // Issue #695: Qt 6.9+ 建议桌面 Flickable 设 acceptedButtons: Qt.NoButton，
-                                // 鼠标按住拖动不当触屏甩动；触屏 flick 不受 mouse-button 限制。
-                                // 让 Qt 原生处理 wheel/scrollbar，ScrollView/Flickable 继续持有 contentY。
-                                if (contentItem) {
-                                    contentItem.acceptedButtons = Qt.NoButton;
-                                }
-                            }
-                            onEditorIsScrollingChanged: {
-                                // Issue #724 评论 5752140048 问题 2: 滚动停止时恢复 false，
-                                // 触发 Rust set_is_scrolling(false) → resume_all()。
-                                // anchor 生命周期和 editorAnimationSuppressed 是两件事，
-                                // 不要为了删 anchor timer 顺手把滚动动画抑制状态恢复也删掉。
-                                editorAnimationSuppressed = editorIsScrolling
-                            }
-
-                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                            ScrollBar.vertical: ScrollBar {
-                                policy: ScrollBar.AsNeeded
-                                parent: editorScroll
-                                anchors.top: editorScroll.top
-                                anchors.bottom: editorScroll.bottom
-                                anchors.right: editorScroll.right
-                            }
-
-                            Item {
-                                id: editorCanvas
-                                readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + dt.sp16 * 2, editorScroll.availableHeight)
-                                width: editorScroll.availableWidth
-                                height: editorScroll.availableHeight
-                                implicitHeight: Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
-
-                                // NOTE: SujianEditorItem is a "viewport renderer" - it must be
-                                // a FIXED overlay on paperBg, NOT inside the Flickable contentItem.
-                                // The Flickable only holds a transparent spacer for scrollbar / contentHeight.
-                                // scroll_y is passed to the Rust renderer for viewport clipping.
-                            }
-                        }
-
-                        // SujianEditorItem: viewport renderer - fixed overlay on paperBg,
-                        // NOT inside Flickable. scroll_y passes contentY to Rust renderer
-                        // for viewport clipping. Flickable only holds a transparent spacer
-                        // for scrollbar / contentHeight.
-                        //
-                        // 关于渲染：LayoutPlan 只控制布局策略（如最大宽度和padding），
-                        // 不控制 SujianEditorItem 的渲染细节，渲染由 QML layout 自动处理
-                        //
-                        // 具体分工：
-                        //   - LayoutPlan 策略（contentMaxWidthVp, shellMode, contentPaddingVp）
-                        //     通过 paperBg 宽度和 SujianEditorItem 的 Q_PROPERTY 传递
-                        //   - 编辑器参数（font_pixel_size, line_spacing, text_indent,
-                        //     cursor_color, scroll_y 等）由 settingsBackend 和 EditorController
-                        //     直接管理，不走 LayoutPlan
-                        //   - 编辑区尺寸跟随 paperBg 宽度和 QML layout 自动调整
-                        //     不需要 SujianEditorItem 的 geometry_changed 依赖 LayoutPlan
-                        //   - updatePaintNode / QSG 渲染完全由 Rust 侧管理
-                        // Issue #677 评论 5653315696 约束:
-                        //   - 写作区只拿 DesignTokens 已经算好的最终颜色（editorText、
-                        //     textPrimary、primary、selectedText 等），不在写作区里
-                        //     解释主题 JSON。主题 JSON 的 snake_case key 解析只在
-                        //     DesignTokens.qml 里完成。
-                        //   - text_color 最终来自 dt.editorText → dt.textPrimary →
-                        //     on_surface（Core DTO snake_case 字段）。
-                        //   - QML 的 loading/scrolling 状态（is_loading、is_scrolling）
-                        //     只用于动画抑制等，不能决定 Scene Graph 根节点和正文层是否
-                        //     存在。visible: true 固定不受 loading/scrolling 影响；
-                        //     update_paint_node 通过 ensure_editor_root 在第一帧创建根
-                        //     节点，不再因 root 为空整帧跳过。
-                        SujianEditorItem {
-                            id: sujianEditor
-                            // Issue #693 评论 5689819383: SujianEditorItem 是 ScrollView
-                            // 外的固定 overlay，editorScroll.clip 裁不到这个 sibling。
-                            // 自定义 Scene Graph 默认不裁剪，会画到 item 边界外盖住顶栏。
-                            // 打开 clip 把自身绘制和子节点限制在 bounding rect 内。
-                            // 参考 https://doc.qt.io/qt-6/qquickitem.html#clip-prop
-                            clip: true
-                            // Issue #833：SujianEditorItem 和 editorScroll 是兄弟项，
-                            // 直接 anchors.fill: editorScroll。不再复制 editorScroll.x/y/
-                            // availableWidth/availableHeight，避免 ScrollView 重排时出现
-                            // 一帧 x/y/availableWidth 已变、overlay 还没跟上的裁剪错位。
-                            anchors.fill: editorScroll
-                            visible: true
-                            focus: true
-                            editor_enabled: editorController.chapterId !== ""
-                            font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : 16
-                            font_family: "serif"
-                            line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
-                            text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled)
-                                ? Math.max(0, (settingsBackend.setting_font_size || 16) * settingsBackend.setting_auto_indent_width)
-                                : 0
-                            padding: dt.sp16
-                            // Issue #710 评论 5731145076: text_color 只绑定 dt.editorText，
-                            // 不再有 fallback 到 dt.textPrimaryHex 的第二套逻辑（已删除）。
-                            // editorText = textPrimary = onSurface（DesignTokens 单一事实源），
-                            // 主题变化只触发正文节点颜色重建，不重新创建另一份编辑器主题状态。
-                            // Issue #736 评论 5777408243 问题2: 直接绑定 DesignTokens 的 hex 字符串属性，
-                            // 不再经 QML color → toString() 转换，避免 QString → QML color → toString() → QString 绕一圈。
-                            // 写作区和普通 QML 控件共用同一份最终 color token。
-                            text_color: dt.editorTextHex
-                            selection_color: dt.primaryHex
-                            selected_text_color: dt.selectedTextHex
-                            cursor_color: dt.primaryHex
-                            smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                            // Issue #785 / Issue #826 评论 38：纯光标移动（点击/方向键）
-                            // 的 duration 始终独立，用 smooth cursor duration；
-                            // 协同模式的正文编辑 caret 不走这个时长，跟着 typing
-                            // duration 跑（与前沿同一时钟），两者不再是两条独立时间线。
-                            cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
-                            typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
-                            typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
-                            // Issue #853：正文过渡从最近成功绘制的 VisualFrame
-                            // 更新到最新 canonical layout；光标由 CursorController
-                            // 独立管理。点击移动光标不会结束正在播放的正文过渡。
-                            coordinated_animation_enabled: settingsBackend ? settingsBackend.setting_coordinated_text_cursor_animation_enabled : true
-                            scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
-                            viewport_height: sujianEditor.height
-                            is_scrolling: editorScroll.editorAnimationSuppressed
-                            is_loading: editorController.isLoadingChapter
-                            is_applying_format: editorController.isApplyingFormat
-                            // Issue #721: 不再把保存 guard (settingsSaveGuardActive) 传成
-                            // 编辑器视觉抑制状态。主题切换不再触发 applyCurrentSettings()，
-                            // 正文/选区/光标颜色已通过 text_color/selection_color/
-                            // selected_text_color/cursor_color 绑定自动下发，Rust 侧各自
-                            // 走 color_only_changed() -> request_scene_rebuild()，不会清空动画。
-
-                            // Issue #693 评论 5689819383: 光标自动跟随滚动。
-                            // 只在真正的编辑/selection 变化时调度，不监听 scroll_y 或
-                            // 每次 cursor_rect_changed，避免用户手动滚离光标被立刻拽回。
-                            // Rust 侧先发信号再 update_cursor_visual_position()，故用
-                            // Qt.callLater() 等本轮 caret target 算完再读 cursor_rect_y。
-                            // 同一轮即使排了两次 callLater，第二次看到 caret 已可见会直接返回。
-                            onCursor_position_changed: editorScroll.scheduleEnsureCursorVisible()
-                            onText_changed: editorScroll.scheduleEnsureCursorVisible()
-
-                            onWidthChanged: {
-                                Qt.callLater(sujianEditor.flush_content_height)
-                            }
-
-                            Component.onCompleted: {
-                                sujianEditor.verify_animation_signal_meta_object()
-                            }
-
-                            onExplicit_clear_requested: editorController.markPotentialExplicitClear()
-
-                            onContext_menu_requested: function(cx, cy) {
-                                // 将局部坐标映射为全局坐标后弹出菜单
-                                var globalPos = sujianEditor.mapToGlobal(cx, cy)
-                                editorContextMenu.popup(globalPos.x, globalPos.y)
-                            }
-
-                            TapHandler {
-                                acceptedButtons: Qt.RightButton
-                                onTapped: function(eventPoint) {
-                                    sujianEditor.click_at(eventPoint.position.x, eventPoint.position.y, false)
-                                    sujianEditor.record_pointer_activity(
-                                        "context_menu",
-                                        eventPoint.position.x,
-                                        eventPoint.position.y,
-                                        0)
-                                    editorContextMenu.popup()
-                                }
-                            }
-
-                            // Left-button events have one owner here. Rust only receives
-                            // normalized press/move/release/cancel calls from this area.
-                            MouseArea {
-                                id: editorPointerArea
-                                anchors.fill: parent
-                                acceptedButtons: Qt.LeftButton
-                                preventStealing: true
-                                hoverEnabled: true
-                                pressAndHoldInterval: 800
-
-                                onEntered: {
-                                    sujianEditor.record_pointer_activity(
-                                        "enter", mouseX, mouseY, pressed ? Qt.LeftButton : 0)
-                                }
-                                onExited: {
-                                    sujianEditor.record_pointer_activity(
-                                        "leave", mouseX, mouseY, pressed ? Qt.LeftButton : 0)
-                                }
-                                onPositionChanged: function(mouse) {
-                                    sujianEditor.record_pointer_activity(
-                                        "move", mouse.x, mouse.y, mouse.buttons)
-                                    if (pressed) {
-                                        sujianEditor.pointer_move(mouse.x, mouse.y)
-                                    }
-                                }
-                                onPressed: function(mouse) {
-                                    sujianEditor.record_pointer_activity(
-                                        "press", mouse.x, mouse.y, mouse.buttons)
-                                    sujianEditor.pointer_press(mouse.x, mouse.y)
-                                    sujianEditor.request_text_input_focus()
-                                }
-                                onReleased: function(mouse) {
-                                    sujianEditor.record_pointer_activity(
-                                        "release", mouse.x, mouse.y, mouse.buttons)
-                                    sujianEditor.pointer_release()
-                                }
-                                onCanceled: {
-                                    sujianEditor.record_pointer_activity(
-                                        "cancel", mouseX, mouseY, 0)
-                                    sujianEditor.pointer_cancel()
-                                }
-                                onPressAndHold: function(mouse) {
-                                    sujianEditor.record_pointer_activity(
-                                        "long_press", mouse.x, mouse.y, mouse.buttons)
-                                    sujianEditor.activate_pointer_long_press(mouse.x, mouse.y)
-                                }
-                            }
-
-                            // Cursor is now rendered in SujianEditorItem Scene Graph (child[3])
-                        }
-
-                        // 编辑器上下文菜单
-                        EditorContextMenu {
-                            id: editorContextMenu
-                            editorItem: sujianEditor
                             dt: root.dt
-                        }
-
-                        // Issue #690 评论 5675007226 步骤 4: 光标闪烁改用低频 Timer，
-                        // 不再用 FrameAnimation 每帧回调。正文位置动画已由 RenderPlan 同帧计算，
-                        // 不再需要 QML 每帧推进。空闲闪烁只需要低频定时触发 blink，
-                        // 并且每次切换显式 request_frame_update()。
-                        Timer {
-                            id: cursorBlinkTimer
-                            interval: 265
-                            repeat: true
-                            running: sujianEditor.editor_enabled
-                                     && sujianEditor.focus
-                            onTriggered: {
-                                sujianEditor.tick_cursor_animation()
-                            }
-                        }
-
-                        // Animation overlay removed — text animation is now handled in
-                        // SujianEditorItem Scene Graph (child[1]) via ActiveVisualTransactionQueue
-
-                        // 文字动画唯一主路径：Rust Coordinator → Scene Graph (child[1])
-                        // 不再使用 QML overlay 路线
-
-                        // Issue #695 评论 5693346400: 桌面滚轮事件直译器
-                        // 用 WheelHandler 拦截 wheel 事件并直接修改 contentY，阻止
-                        // Qt 6.10 QQuickFlickable::wheelEvent() 自带的 wheel acceleration。
-                        // 放在 editorScroll/sujianEditor 之后声明（z 更高），wheel 事件
-                        // 先到本组件；不拦截鼠标点击/拖拽（Item 默认不处理鼠标事件）。
-                        DesktopWheelScrollHandler {
-                            id: desktopWheelHandler
-                            targetFlickable: editorScroll.contentItem
-                            // 每格滚动距离 = wheelScrollLines × 当前行高
-                            // 行高 = 字体大小 × 行距倍数
-                            lineSpacingPx: (settingsBackend ? settingsBackend.setting_font_size : 16) * (settingsBackend ? settingsBackend.setting_line_spacing : 1.5)
-                            anchors.fill: editorScroll
+                            settingsBackendRef: settingsBackend
+                            editorControllerRef: editorController
+                            onExplicitClearRequested: editorController.markPotentialExplicitClear()
                         }
 
                     }
@@ -1109,21 +776,20 @@ Rectangle {
                     // Empty state
                     ColumnLayout {
                         anchors.centerIn: parent
-                        spacing: dt.sp12
+                        spacing: Kirigami.Units.largeSpacing
                         visible: !editorController.chapterId
 
-                        Rectangle {
-                            width: 32; height: 32
-                            radius: 16
-                            color: dt.textSecondary
-                            opacity: 0.1
+                        Kirigami.Icon {
+                            source: "document-open"
+                            color: Kirigami.Theme.disabledTextColor
+                            opacity: 0.4
                             Layout.alignment: Qt.AlignHCenter
+                            implicitWidth: Kirigami.Units.iconSizes.large
+                            implicitHeight: Kirigami.Units.iconSizes.large
                         }
-                        AppText {
-                            dt: root.dt
+                        Label {
                             text: qsTr("请选择或新建章节")
-                            color: dt.textSecondary
-                            font.pointSize: dt.fontLgPt
+                            color: Kirigami.Theme.disabledTextColor
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
@@ -1135,34 +801,21 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
-                        width: 36
+                        width: Kirigami.Units.gridUnit * 2
                         visible: !root.drawerOpen && !root.toolRailVisible && !root.hideContentPanes
                         color: "transparent"
 
                         ColumnLayout {
                             anchors.centerIn: parent
-                            spacing: dt.sp8
+                            spacing: Kirigami.Units.smallSpacing
 
-                            Rectangle {
-                                width: 28; height: 28
-                                radius: dt.radiusPill
-                                color: drawerBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                                AppText {
-                                    dt: root.dt
-                                    anchors.centerIn: parent
-                                    text: "\u25C0" // Left arrow to indicate it opens from the right
-                                    color: dt.textMuted
-                                    font.pointSize: dt.fontXsPt
-                                }
-
-                                MouseArea {
-                                    id: drawerBtnHover
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.requestToolPaneOpen("stats", true)
-                                }
+                            ToolButton {
+                                Layout.alignment: Qt.AlignHCenter
+                                // Left arrow to indicate it opens from the right
+                                icon.name: "go-previous"
+                                display: AbstractButton.IconOnly
+                                flat: true
+                                onClicked: root.requestToolPaneOpen("stats", true)
                             }
                         }
                     }
@@ -1271,7 +924,8 @@ Rectangle {
                 anchors.centerIn: parent
                 width: 1
                 height: parent.height
-                color: root.dt.border
+                color: Kirigami.Theme.disabledTextColor
+                opacity: 0.3
             }
 
             DragHandler {
@@ -1312,7 +966,8 @@ Rectangle {
                 anchors.centerIn: parent
                 width: 1
                 height: parent.height
-                color: root.dt.border
+                color: Kirigami.Theme.disabledTextColor
+                opacity: 0.3
             }
 
             DragHandler {
@@ -1446,32 +1101,35 @@ Rectangle {
         id: leftPaneHandle
         visible: root.toolRailVisible
         z: 50
-        width: 18
-        height: 64
-        radius: dt.radiusPill
-        color: leftPaneHandleHover.containsMouse || leftPaneHandleHover.pressed ? dt.surfaceVariant : dt.surface
-        border.color: leftPaneHandleHover.containsMouse ? dt.borderFocus : dt.border
+        width: Kirigami.Units.gridUnit
+        height: Kirigami.Units.gridUnit * 3.5
+        radius: width / 2
+        color: leftPaneHandleHover.containsMouse || leftPaneHandleHover.pressed
+                   ? Kirigami.Theme.alternateBackgroundColor
+                   : Kirigami.Theme.backgroundColor
+        border.color: leftPaneHandleHover.containsMouse ? Kirigami.Theme.focusColor
+                                                        : Kirigami.Theme.disabledTextColor
         border.width: 1
         x: root.leftPaneCollapsed
-           ? dt.sp4
-           : Math.max(0, Math.min(root.width - width - dt.sp4, sidebarRect.width - width / 2))
+           ? Kirigami.Units.smallSpacing
+           : Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing, sidebarRect.width - width / 2))
         y: Math.round((root.height - height) / 2)
 
-        Behavior on color { ColorAnimation { duration: dt.animFast } }
-        Behavior on border.color { ColorAnimation { duration: dt.animFast } }
+        Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+        Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
 
-        AppText {
-            dt: root.dt
+        Kirigami.Icon {
             anchors.centerIn: parent
-            text: root.leftPaneCollapsed ? "›" : "‹"
-            color: dt.textSecondary
-            font.pointSize: dt.fontMdPt
+            source: root.leftPaneCollapsed ? "arrow-right" : "arrow-left"
+            color: Kirigami.Theme.textColor
+            implicitWidth: Kirigami.Units.iconSizes.smallMedium
+            implicitHeight: Kirigami.Units.iconSizes.smallMedium
         }
 
         MouseArea {
             id: leftPaneHandleHover
             anchors.fill: parent
-            anchors.margins: -dt.sp6
+            anchors.margins: -Kirigami.Units.smallSpacing
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
@@ -1480,7 +1138,7 @@ Rectangle {
                 } else {
                     root.closeChapterNavigation();
                 }
-                // 收起后把手贴到左边缘，留出 sp4 边距；不需要动编辑会话。
+                // 收起后把手贴到左边缘，留出边距；不需要动编辑会话。
                 if (root.leftPaneCollapsed) root.requestEditorFocus()
             }
         }
@@ -1490,36 +1148,39 @@ Rectangle {
         id: rightPaneHandle
         visible: root.toolRailVisible
         z: 50
-        width: 18
-        height: 64
-        radius: dt.radiusPill
-        color: rightPaneHandleHover.containsMouse || rightPaneHandleHover.pressed ? dt.surfaceVariant : dt.surface
-        border.color: rightPaneHandleHover.containsMouse ? dt.borderFocus : dt.border
+        width: Kirigami.Units.gridUnit
+        height: Kirigami.Units.gridUnit * 3.5
+        radius: width / 2
+        color: rightPaneHandleHover.containsMouse || rightPaneHandleHover.pressed
+                   ? Kirigami.Theme.alternateBackgroundColor
+                   : Kirigami.Theme.backgroundColor
+        border.color: rightPaneHandleHover.containsMouse ? Kirigami.Theme.focusColor
+                                                         : Kirigami.Theme.disabledTextColor
         border.width: 1
-        Behavior on color { ColorAnimation { duration: dt.animFast } }
-        Behavior on border.color { ColorAnimation { duration: dt.animFast } }
+        Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+        Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
 
         // Issue #825 复核第5项：右把手贴在“正文 | 工具区”分隔边缘上（RightDrawer 展开时
         // 用它的左边缘），只有收起时才退回 ToolRail 左边缘。
         // 工具 pane 收起后 rail 仍然常驻（Core 的 ToolRail 恒有宽度），
         // 所以收起态贴的是 rail 左缘，不是窗口最右缘。
         x: root.drawerOpen
-           ? Math.max(0, Math.min(root.width - width - dt.sp4, rightDrawerRect.x - width / 2))
-           : Math.max(0, Math.min(root.width - width - dt.sp4, toolRailRect.x - width / 2))
+           ? Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing, rightDrawerRect.x - width / 2))
+           : Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing, toolRailRect.x - width / 2))
         y: Math.round((root.height - height) / 2)
 
-        AppText {
-            dt: root.dt
+        Kirigami.Icon {
             anchors.centerIn: parent
-            text: root.drawerOpen ? "›" : "‹"
-            color: dt.textSecondary
-            font.pointSize: dt.fontMdPt
+            source: root.drawerOpen ? "arrow-right" : "arrow-left"
+            color: Kirigami.Theme.textColor
+            implicitWidth: Kirigami.Units.iconSizes.smallMedium
+            implicitHeight: Kirigami.Units.iconSizes.smallMedium
         }
 
         MouseArea {
             id: rightPaneHandleHover
             anchors.fill: parent
-            anchors.margins: -dt.sp6
+            anchors.margins: -Kirigami.Units.smallSpacing
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
@@ -1541,11 +1202,10 @@ Rectangle {
         visible: root.singlePaneMode && root.singlePaneNavOpen
         z: 60
 
-        // 半透明遮罩，点击关闭抽屉。
-        // 颜色取 DesignTokens 的 scrim，不再写死 "black"（ui_tokens 门禁）。
+        // 半透明遮罩，点击关闭抽屉。用主题文本色做暗化，避免写死颜色。
         Rectangle {
             anchors.fill: parent
-            color: dt.scrim
+            color: Kirigami.Theme.textColor
             opacity: 0.4
             MouseArea {
                 anchors.fill: parent

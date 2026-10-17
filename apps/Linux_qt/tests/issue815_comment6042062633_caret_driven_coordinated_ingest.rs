@@ -13,7 +13,11 @@ use source_guard::{function_window, read_src};
 
 #[test]
 fn issue815_modify1_qml_restores_mouse_left_long_press() {
-    let src = read_src("qml/WritingWorkspace.qml");
+    // 左键手势（MouseArea onPressAndHold）、右键 TapHandler 与编辑器上下文菜单
+    // 已从 WritingWorkspace.qml 抽到 EditorViewport.qml：正向断言指向新文件；
+    // 负向断言覆盖整个写作区两份 QML，避免抽取造成守卫盲区。
+    let workspace_src = read_src("qml/WritingWorkspace.qml");
+    let viewport_src = read_src("qml/EditorViewport.qml");
 
     // Issue #819 评论 5956495850 第 6/7 节：旧 touchLongPressHandler 已删除，
     // 改用 TapHandler + Timer 调 activate_pointer_long_press。
@@ -22,38 +26,34 @@ fn issue815_modify1_qml_restores_mouse_left_long_press() {
 
     // 旧 touchLongPressHandler 必须已删除。
     assert!(
-        !src.contains("id: touchLongPressHandler"),
+        !workspace_src.contains("id: touchLongPressHandler")
+            && !viewport_src.contains("id: touchLongPressHandler"),
         "Issue #819 评论 5956495850 第 6 节: 旧 touchLongPressHandler 必须删除，\
          改用 TapHandler + Timer 调 activate_pointer_long_press。"
     );
 
     // Issue #819 评论 5967250411 问题 4：leftButtonLongPressHandler (TapHandler) 已删除。
     // 左键 pointer event 的唯一 owner 是 qquickitem_impl mouse_event。
-    // QML 只保留一个不绑 pointer event 的 Timer，由 Rust property 控制启停。
+    // #901 重写后 QML 用 onPressAndHold 直接调 activate_pointer_long_press，
+    // 不再需要 leftButtonLongPressTimer。
     assert!(
-        !src.contains("id: leftButtonLongPressHandler"),
+        !workspace_src.contains("id: leftButtonLongPressHandler")
+            && !viewport_src.contains("id: leftButtonLongPressHandler"),
         "Issue #819 评论 5967250411 问题 4: leftButtonLongPressHandler (TapHandler) \
          必须删除，左键 pointer event 单一 owner 是 qquickitem_impl mouse_event。"
     );
 
-    // 新 leftButtonLongPressTimer 必须存在，且不绑 pointer event。
+    // 新 onPressAndHold 必须存在，直接调 activate_pointer_long_press。
     assert!(
-        src.contains("id: leftButtonLongPressTimer"),
-        "Issue #819 评论 5967250411 问题 4: WritingWorkspace.qml 必须有 \
-         leftButtonLongPressTimer（不绑 pointer event 的独立 Timer）。"
-    );
-
-    // Timer.running 绑定 Rust property long_press_timer_active。
-    assert!(
-        src.contains("long_press_timer_active"),
-        "Issue #819 评论 5967250411 问题 4: Timer.running 必须绑定 \
-         sujianEditor.long_press_timer_active，由 Rust mouse_event 控制启停。"
+        viewport_src.contains("onPressAndHold"),
+        "Issue #819 评论 5967250411 问题 4: EditorViewport.qml 必须有 \
+         onPressAndHold 处理左键长按。"
     );
 
     // Issue #819 评论 5967250411 问题 4：新链路用 Timer 调
     // activate_pointer_long_press（Rust 状态机 activate_long_press + long_press_at）。
     assert!(
-        src.contains("activate_pointer_long_press"),
+        viewport_src.contains("activate_pointer_long_press"),
         "Issue #819 评论 5967250411 问题 4: QML Timer 必须调 \
          activate_pointer_long_press。"
     );
@@ -61,20 +61,22 @@ fn issue815_modify1_qml_restores_mouse_left_long_press() {
     // Issue #819 评论 5967250411 问题 4：QML 不再调 end_selection_gesture_qml。
     // release/cancel 的 selection gesture 结束只由 qquickitem_impl mouse_event 做一次。
     assert!(
-        !src.contains("end_selection_gesture_qml"),
+        !workspace_src.contains("end_selection_gesture_qml")
+            && !viewport_src.contains("end_selection_gesture_qml"),
         "Issue #819 评论 5967250411 问题 4: QML 不再调 end_selection_gesture_qml，\
          release/cancel 的 selection gesture 结束只由 qquickitem_impl mouse_event 做一次。"
     );
 
     // 右键菜单继续由独立的 Qt.RightButton TapHandler 处理。
     assert!(
-        src.contains("acceptedButtons: Qt.RightButton"),
+        viewport_src.contains("acceptedButtons: Qt.RightButton"),
         "Issue #815 评论 6042062633 修改 1: 右键菜单必须继续走独立的 Qt.RightButton handler。"
     );
 
     // 删掉 Issue #714 的错误论断注释。
     assert!(
-        !src.contains("桌面鼠标的长按等同于右键菜单"),
+        !workspace_src.contains("桌面鼠标的长按等同于右键菜单")
+            && !viewport_src.contains("桌面鼠标的长按等同于右键菜单"),
         "Issue #815 评论 6042062633 修改 1: 必须删除「桌面鼠标长按 == 右键菜单」的注释/逻辑，\
          它正是当初把鼠标排除掉的错误理由。"
     );
@@ -115,15 +117,8 @@ fn issue815_modify8_input_path_close_the_loop_with_formal_events() {
     );
 
     // 输入路径上的每个跳过点都要有正式事件。
+    // #901 重写后 pipeline.rs 不再有跳过事件（跳过逻辑已移到 transaction.rs / editing.rs）。
     let cases: &[(&str, &[&str])] = &[
-        (
-            "src/sujian_editor_item/pipeline.rs",
-            &[
-                "suppressed_by_context",
-                "stale_current_canonical",
-                "canonical_invariant_failure",
-            ],
-        ),
         (
             "src/sujian_editor_item/transaction.rs",
             &["suppressed_by_scrolling"],
@@ -157,7 +152,8 @@ fn issue815_modify8_input_path_close_the_loop_with_formal_events() {
 /// 设置里必须有一个真正驱动协同速度的可调项。
 #[test]
 fn issue815_review14_settings_expose_coordinated_duration() {
-    let qml = read_src("qml/SettingsDialog.qml");
+    // Issue #900：设置内容迁入 KdeSettingsPage.qml。
+    let qml = read_src("qml/KdeSettingsPage.qml");
     assert!(
         qml.contains("qsTr(\"协同动画时长\")"),
         "Issue #815 评论 5955090551: 协同开启时必须单独给一个「协同动画时长」，\
@@ -191,7 +187,8 @@ fn issue815_review14_settings_expose_coordinated_duration() {
 /// 隐藏滑块的旧值会被 `onClosed` 写回去，把刚调好的时长覆盖掉。
 #[test]
 fn issue815_review15_typing_and_coordinated_duration_share_one_value() {
-    let src = read_src("qml/SettingsDialog.qml");
+    // Issue #900：设置内容迁入 KdeSettingsPage.qml。
+    let src = read_src("qml/KdeSettingsPage.qml");
 
     assert!(
         src.contains("property real textAnimationDurationValue: 100"),
@@ -218,7 +215,7 @@ fn issue815_review15_typing_and_coordinated_duration_share_one_value() {
     }
 
     // onClosed 只能写这一份共享值，不能再按协同开关二选一。
-    let closed = function_window(&src, "onClosed: {", 2400);
+    let closed = function_window(&src, "function onDialogClosed() {", 2400);
     assert!(
         closed.contains(
             "settingsBackendRef.setting_typing_animation_duration_ms = root.textAnimationDurationValue"
@@ -243,10 +240,9 @@ fn issue815_review15_typing_and_coordinated_duration_share_one_value() {
          唯一允许的直写在共享 setter 内部。"
     );
     assert_eq!(
-        src.matches("onMoved: function() { root.setTextAnimationDuration(value) }")
-            .count(),
+        src.matches("root.setTextAnimationDuration(value)").count(),
         2,
-        "两个时长滑块的 onMoved 都必须收口到共享 setter。"
+        "两个时长控件都必须收口到共享 setter。"
     );
 
     // 旧的「协同不共享 duration」注释与 #815 实际实现相反，必须改掉。

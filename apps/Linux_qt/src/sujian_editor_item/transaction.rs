@@ -1,15 +1,16 @@
 use super::*;
+use crate::sujian_editor_item::pipeline::LocalTextSource;
+use crate::sujian_editor_item::pipeline::LocalTextTexturePrep;
 use crate::sujian_editor_item::pipeline::VisualPrepareOutcome;
+use crate::sujian_editor_item::text_motion::TextMotion;
 use writer_core::editor::EditorEditResult;
 
 impl SujianEditorItem {
     /// Issue #735: `record_transaction` 接收 `EditorEditResult` 而非从 `EditorEngine` 构造事务。
     ///
-    /// Core 已删除 `EditorEngine`、`EditorVisualTransaction`。平台端从
-    /// `EditorEditResult`（含 `cause`、`operation_kind`、`offset_map`、`content_delta`）
-    /// 直接派生动画策略，不再经过 Core 的视觉事务工厂。
-    ///
-    /// 返回 `prepare_edit_motion` 的明确结果，调用方不重新猜测动画跳过原因。
+    /// Issue #904：单入口。编辑先由 Core 落地，再用 Qt 增量排版得到局部新旧几何，
+    /// 最后只为受影响片段建立**一个** `text_motion::TextMotion`。
+    /// 不再遍历整章建立 `TargetLayoutDescriptor`，也不再有整屏 ownership 状态机。
     pub(crate) fn record_transaction(
         &mut self,
         old: EditorSnapshot,
@@ -17,46 +18,144 @@ impl SujianEditorItem {
         result: &EditorEditResult,
         emit: bool,
     ) -> VisualPrepareOutcome {
-        let ctx = pipeline::VisualTransactionContext {
-            typing_animation_enabled: self.current_typing_animation_enabled,
-            smooth_cursor_enabled: self.current_smooth_cursor_enabled,
-            coordinated_animation_enabled: self.current_coordinated_animation_enabled,
-            is_scrolling: self.current_is_scrolling,
-            is_loading: self.current_is_loading,
-            is_applying_format: self.current_is_applying_format,
-            bounding_width: self.bounding_width(),
-            font_pixel_size: f64::from(self.current_font_pixel_size),
-            font_family: self.current_font_family.to_string(),
-            scroll_y: f64::from(self.current_scroll_y),
-            viewport_height: f64::from(self.current_viewport_height.max(1.0)),
-            text_indent: f64::from(self.current_text_indent),
-            line_spacing: f64::from(self.current_line_spacing),
-            padding: f64::from(self.current_padding),
-            text_color: self.current_text_color.to_string(),
-            dpr: {
-                let item_ptr = self.get_cpp_object();
-                if !item_ptr.is_null() {
-                    crate::editor::renderer::sujian_item_dpr(item_ptr)
-                } else {
-                    1.0
-                }
-            },
+        // Issue #901 第五轮阻塞4：先用 Core new_revision 更新 text_revision，
+        // 再排版，禁止 cache 用字节数命中旧布局。
+        let core_new_revision = result.new_revision.value();
+        self.pipeline.set_text_revision(core_new_revision);
+
+        // Issue #904：编辑前的当前布局即"旧局部图片"的来源。
+        let old_layout = self.pipeline.current_layout_snapshot().clone();
+
+        // 从 Core display_patches 提取受影响字节范围（取旧/新坐标的并集仅用于
+        // 定位受影响段落；动画侧仍分别使用旧/新坐标，不混用）。
+        let mut affected_start = usize::MAX;
+        let mut affected_end = 0usize;
+        for patch in &result.display_patches {
+            let rep_start = patch.replace_byte_range.start().value();
+            let rep_end = patch.replace_byte_range.end().value();
+            let ins_start = patch.inserted_byte_range.start().value();
+            let ins_end = patch.inserted_byte_range.end().value();
+            affected_start = affected_start.min(rep_start).min(ins_start);
+            affected_end = affected_end.max(rep_end).max(ins_end);
+        }
+        let affected_range = if affected_start < affected_end {
+            Some((affected_start, affected_end))
+        } else if affected_start == usize::MAX {
+            None
+        } else {
+            Some((affected_start, affected_start + 1))
         };
 
-        // Issue #756: 删除"两个独立开关同时开启才走协同"的判断
-        // （typing_animation_enabled && smooth_cursor_enabled）。
-        // Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 + 文字以 caret
-        // 当前帧为吞吐边界；非协同时文字动画与光标动画互相独立。
-        // 即 coordinated || typing || smooth 时才调用 prepare_edit_motion。
-        let mut outcome: VisualPrepareOutcome = VisualPrepareOutcome::AnimationDisabled;
-        let animations_requested = super::animation::any_animation_enabled(
-            self.current_typing_animation_enabled,
-            self.current_smooth_cursor_enabled,
-            self.current_coordinated_animation_enabled,
-        );
-        if animations_requested && self.current_is_scrolling {
-            // Issue #815 评论 6042062633 修改 8: 滚动期间抑制动画是显式规则，但这是输入
-            // 路径上"编辑发生了却完全没有动画"的第一个也是最常见的入口，必须记事件。
+        let width = self.bounding_width();
+
+        // Issue #904：先增量排版得到新布局，再据此建立唯一的局部动画。
+        // Issue #904 评论 5：同时拿到本版布局事实源（generation + 物化视觉行），
+        // 供新一侧只在同一版布局上补图。
+        let new_layout = match self.build_incremental_layout_snapshot(width, affected_range) {
+            Ok(pair) => Some(pair),
+            Err(_err) => self.build_editor_layout_snapshot(width, false, None).ok(),
+        };
+
+        let animations_requested = self.effective_animation().text;
+        let suppressed =
+            self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
+
+        // Issue #904 评论 4：先建立唯一的局部动画计划，再按计划真正引用的源快照 id
+        // 准备纹理；不再用编辑字节范围预判几行，也不在计划之前无差别补图。
+        let mut motion: Option<TextMotion> = None;
+        if let Some((new_snap, new_source)) = new_layout.as_ref() {
+            let session = self.document_session;
+            // Issue #904 评论 3: 有上次真正画出的局部图片（同一 session）才算重定向。
+            let retargeting = self
+                .last_drawn_local_frame
+                .as_ref()
+                .map_or(false, |frame| frame.session == session);
+
+            if animations_requested && !suppressed {
+                let now_ms = Self::frame_now_ms(&self.last_frame_now);
+                let viewport = crate::sujian_editor_item::layout_snapshot::SourceRect {
+                    x: 0.0,
+                    y: f64::from(self.current_scroll_y),
+                    w: self.bounding_width(),
+                    h: f64::from(self.current_viewport_height.max(1.0)),
+                };
+                let duration_ms = self.current_typing_animation_duration_ms;
+                // Issue #904 评论 3: 从"上一次真正画出的局部图片"重定向，
+                // 不从计划建立时的静态起点重来。
+                let last_drawn = self.last_drawn_local_frame.as_ref();
+                motion = TextMotion::begin_or_retarget(
+                    result,
+                    old_layout.as_ref(),
+                    new_snap,
+                    last_drawn,
+                    now_ms,
+                    duration_ms,
+                    session,
+                    viewport,
+                );
+            }
+
+            if let Some(m) = motion.as_ref() {
+                // 计划的源纹理：只用 TextMotion 真正引用的旧/新源行 id。
+                // Issue #904 评论 5：old / new 各自显式带自己的视觉事实源；old 侧
+                // 没有同版 Qt 布局句柄，只能用快照里冻结的 image，缺图显式 missing。
+                let required = m.required_textures.clone();
+                let new_prep = self.prepare_local_text_textures(
+                    &LocalTextSource {
+                        snapshot: new_snap,
+                        layout: new_source.as_ref(),
+                    },
+                    &required,
+                );
+                let old_prep = old_layout.as_ref().map(|old_snap| {
+                    self.prepare_local_text_textures(
+                        &LocalTextSource {
+                            snapshot: old_snap,
+                            layout: None,
+                        },
+                        &required,
+                    )
+                });
+                let sides: Vec<&LocalTextTexturePrep> =
+                    std::iter::once(&new_prep).chain(old_prep.iter()).collect();
+                let prep = LocalTextTexturePrep::merge_sides(&required, &sides);
+                let missing_ids = if prep.missing.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", missing_ids=[{}]",
+                        prep.missing
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                };
+                editor_animation_debug_log(&format!(
+                    "record_transaction: local_animation kind={}, pieces={}, required={}, prepared={}, missing={}, ready={}{}",
+                    if retargeting { "retarget" } else { "create" },
+                    m.pieces.len(),
+                    required.len(),
+                    prep.prepared.len(),
+                    prep.missing.len(),
+                    prep.ready(),
+                    missing_ids,
+                ));
+            }
+        }
+
+        let has_motion = motion.is_some();
+        if let Some((new_snap, _new_source)) = new_layout {
+            self.pipeline.set_current_layout_snapshot(Some(new_snap));
+        }
+        *self.pipeline.text_motion_mut() = motion;
+        self.request_scene_rebuild();
+
+        // Issue #815 评论 6042062633 修改 8: 滚动/加载/套用格式期间抑制动画是显式规则，
+        // 但必须留下正式事件，否则诊断包里"编辑发生了却没有动画"没有任何线索。
+        let outcome = if !animations_requested {
+            VisualPrepareOutcome::AnimationDisabled
+        } else if self.current_is_scrolling {
             editor_animation_transaction_skipped_event(&AnimationSkipFields {
                 cause: "suppressed_by_scrolling",
                 operation_kind: editor_operation_kind_label(result.operation_kind),
@@ -74,48 +173,25 @@ impl SujianEditorItem {
                 transaction_id: None,
                 generation: 0,
             });
-            outcome = VisualPrepareOutcome::Skipped(
+            VisualPrepareOutcome::Skipped(
                 super::edit_flow::EditVisualSkipReason::ScrollingSuppressed,
-            );
-            // 正文在滚动期间不创建动画。正文真的变化时丢弃旧过渡；否则滚动结束后
-            // 旧 target 会继续在新正文上播放。光标/选区-only 保留暂停状态。
-            // 光标/选区-only（正文没变）不动画，保留真 pause，恢复后继续。
-            if old.text != new.text
-                && self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .finish_paused_text_animation_to_canonical()
-            {
-                // 收口后 active ids 为空 -> retain 把旧动画纹理全部释放，
-                // 让 suppressed edit 的语义与「这一笔不动画」一致。
-                let active_ids = self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .collect_active_snapshot_ids();
-                self.pipeline
-                    .texture_cache_mut()
-                    .retain_active_snapshot_ids(&active_ids);
-            }
-        } else if animations_requested {
-            // Issue #819 评论 5968240881 问题 2：`prepare_edit_motion` 返回
-            // `VisualPrepareOutcome`，直接透传，不再重新猜 skip reason。
-            outcome =
-                self.pipeline
-                    .prepare_edit_motion(&ctx, result, &old, &new, &self.editor_layout);
-            // Issue #815 评论 6042062633 修改 8: prepare_edit_motion 内部的每一个跳过点
-            // （stale canonical / canonical invariant / caret 几何缺失 / 协同拿不到
-            // cursor track / builder 空事务）都已经记过正式事件，这里不再重复报。
-        }
-        // Issue #658 评论 5622188166 问题 1: 动画关闭/滚动抑制时不再走
-        // fill_visual_transaction_coords_legacy 生成 old/new 动画坐标。
-        // 该 legacy 路径通过 layout_snapshot_for_text 复用同一 EditorLayout，
-        // 连续 snapshot 会互相清 generation，导致 caret_rect 取已失效的 generation
-        // 返回 0.0，光标 x 塌缩到行首。删除 legacy 路径后，motion 的
-        // old_cursor_rect/new_cursor_rect 保持 None（事务元数据仍保留，
-        // 动画坐标不生成）。正常光标位置由 cursor controller / 当前正文 snapshot
-        // 处理，不依赖 legacy 坐标。
+            )
+        } else if self.current_is_loading {
+            VisualPrepareOutcome::Skipped(super::edit_flow::EditVisualSkipReason::LoadingSuppressed)
+        } else if self.current_is_applying_format {
+            VisualPrepareOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::FormatApplyingSuppressed,
+            )
+        } else if has_motion {
+            VisualPrepareOutcome::Created
+        } else {
+            // Issue #904 复核: 没有真正建立局部动画（begin_or_retarget 返回 None）
+            // 不能报 Created，否则诊断会把"根本没有动画"记成成功。
+            VisualPrepareOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+            )
+        };
 
-        let has_motion = matches!(outcome, VisualPrepareOutcome::Created { .. });
         self.last_event_count = if has_motion { 1 } else { 0 };
         self.last_summary = format!(
             "cause={:?};op={:?};motion={};delta_inserted={};delta_deleted={}",
@@ -134,19 +210,21 @@ impl SujianEditorItem {
             self.current_typing_animation_enabled,
             self.current_is_scrolling,
         ));
+        let _ = (&old, &new);
         if emit {
             self.transaction_created();
         }
         outcome
     }
 
-    /// 为当前视觉过渡准备行纹理，并请求 Scene Graph 处理 ownership 更新。
-    pub(crate) fn prepare_visual_edit_textures(
-        &mut self,
-        base_snapshot: &super::layout_snapshot::EditorLayoutSnapshot,
-    ) {
-        self.pipeline.prepare_visual_edit_textures(base_snapshot);
-        self.request_scene_rebuild();
+    /// Issue #904：把 `Instant` 转换为毫秒时间戳，供 `text_motion` 使用。
+    /// 用从进程启动起的相对毫秒数——只关心时间差。
+    pub(crate) fn frame_now_ms(last_frame_now: &Option<std::time::Instant>) -> f64 {
+        use std::sync::OnceLock;
+        static REFERENCE: OnceLock<std::time::Instant> = OnceLock::new();
+        let reference = REFERENCE.get_or_init(std::time::Instant::now);
+        let now = last_frame_now.unwrap_or_else(std::time::Instant::now);
+        now.duration_since(*reference).as_millis() as f64
     }
 }
 

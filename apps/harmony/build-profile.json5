@@ -14,11 +14,36 @@
           certpath: ''
         }
       },
+      {
+        name: 'acl',
+        type: 'HarmonyOS',
+        material: {
+          storeFile: '',
+          storePassword: '',
+          keyAlias: '',
+          keyPassword: '',
+          signAlg: 'SHA256withECDSA',
+          profile: '',
+          certpath: ''
+        }
+      },
     ],
     products: [
       {
         name: 'default',
         signingConfig: 'default',
+        compatibleSdkVersion: '5.0.0(12)',
+        runtimeOS: 'HarmonyOS',
+        buildOption: {
+          strictMode: {
+            caseSensitiveCheck: true,
+          },
+        },
+        targetSdkVersion: '26.0.0',
+      },
+      {
+        name: 'acl',
+        signingConfig: 'acl',
         compatibleSdkVersion: '5.0.0(12)',
         runtimeOS: 'HarmonyOS',
         buildOption: {
@@ -47,6 +72,24 @@
           name: 'default',
           applyToProducts: [
             'default',
+          ],
+        },
+        {
+          name: 'acl',
+          applyToProducts: [
+            'acl',
+          ],
+        },
+      ],
+    },
+    {
+      name: 'privacy_acl',
+      srcPath: './privacy_acl',
+      targets: [
+        {
+          name: 'default',
+          applyToProducts: [
+            'acl',
           ],
         },
       ],

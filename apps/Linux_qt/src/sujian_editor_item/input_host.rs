@@ -202,9 +202,7 @@ impl EditorInputHost for SujianEditorItem {
             session.update_preedit(&text);
         }
 
-        self.pipeline
-            .animation_coordinator_mut()
-            .handle_composition_update();
+        // Issue #904：composition update 只更新 preedit 临时层，正文无吞吐动画。
         self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
         self.request_static_repaint();
@@ -241,9 +239,7 @@ impl EditorInputHost for SujianEditorItem {
             }
         }
 
-        self.pipeline
-            .animation_coordinator_mut()
-            .handle_composition_update();
+        // Issue #904：composition update 只更新 preedit 临时层，正文无吞吐动画。
         self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
         self.request_static_repaint();

@@ -20,6 +20,7 @@ import util from '@ohos.util'
 import { NativeDiagnosticsBridge } from '../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../corebridge/native/NativeCoreModule'
 import { PlatformApiResolver } from '../version/PlatformApiResolver'
+import { HarmonyDiagnosticEvents, DiagnosticField } from './HarmonyDiagnosticEvents'
 
 const LOG_TAG = 'HarmonyCrashEventWatcher'
 const DIAGNOSTICS_DIR = 'diagnostics'
@@ -156,6 +157,20 @@ export class HarmonyCrashEventWatcher {
       }
       this.processedEventKeys.add(eventKey)
 
+      // Issue #906：把系统崩溃/被杀事件补进结构化诊断。放在去重之后，避免同一事件重复上报。
+      // 只记事件名和非敏感原因枚举，不记 exception.message/stack、external_log 路径等
+      // 可能含正文/路径的内容；也不把 crash-copy/zip 逻辑搬进 facade。
+      const reason = this.extractNonSensitiveReason(params)
+      const eventFields: DiagnosticField[] = [{ key: 'eventName', value: event.name }]
+      if (reason.length > 0) {
+        eventFields.push({ key: 'reason', value: reason })
+      }
+      if (event.name === hiAppEvent.event.APP_CRASH) {
+        HarmonyDiagnosticEvents.record('Error', 'System', 'system.app_crash', 'HarmonyCrashEventWatcher', eventFields)
+      } else if (event.name === hiAppEvent.event.APP_KILLED) {
+        HarmonyDiagnosticEvents.record('Warn', 'System', 'system.app_killed', 'HarmonyCrashEventWatcher', eventFields)
+      }
+
       const crashesDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/crashes/${eventKey}`
       fs.mkdirSync(crashesDir, true)
 
@@ -285,6 +300,21 @@ export class HarmonyCrashEventWatcher {
       return logVal as string[]
     }
     return []
+  }
+
+  // Issue #906：从 params 中提取非敏感的故障类型/原因枚举。
+  // APP_CRASH 用 crash_type（NativeCrash / JsError），APP_KILLED 用 reason。
+  // 只取枚举字符串，不取 exception.message、stack 等可能含正文/路径的字段。
+  private extractNonSensitiveReason(params: Record<string, Object>): string {
+    const crashType = params['crash_type']
+    if (typeof crashType === 'string') {
+      return crashType
+    }
+    const reason = params['reason']
+    if (typeof reason === 'string') {
+      return reason
+    }
+    return ''
   }
 
   // 原子写入 — 双槽模式（崩溃安全）：

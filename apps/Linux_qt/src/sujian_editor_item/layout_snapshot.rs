@@ -5,7 +5,9 @@
 
 pub(crate) use super::layout_revision::LayoutRevision;
 pub(crate) use super::snapshot_id::LineSnapshotId;
-use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot};
+use crate::editor::layout::chunked_vec::ChunkedSlotMap;
+use crate::editor::layout::ParagraphHeightIndex;
+use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot, ParagraphId};
 use cpp::cpp;
 use qmetaobject::QImage;
 
@@ -39,7 +41,7 @@ pub(crate) struct LineClusterSnapshot {
 /// 在 cluster 快照中 `source_rect` 使用行视觉资源局部坐标（已乘 DPR）；
 /// 在动画切片中 `from_document_rect`/`to_document_rect` 使用文档坐标（不含滚动偏移）。
 /// 不得仅凭此类型假设是文档坐标。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SourceRect {
     pub x: f64,
     pub y: f64,
@@ -52,7 +54,7 @@ pub(crate) struct SourceRect {
 /// 这不是文字逻辑 identity，而是"当前平台 shaping 结果是否可视为同一视觉对象"的判断依据。
 /// 字体、glyph 索引、方向、格式任一变化都应视为不同 shaping，此时旧视觉不能直接移动，
 /// 必须走 CrossFade（旧视觉淡出 + 新视觉淡入）。
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub(crate) struct ShapingIdentity {
     pub text_content_hash: u64,
     pub raw_font_fingerprint: String,
@@ -81,6 +83,23 @@ impl ShapingIdentity {
 #[derive(Clone)]
 pub(crate) struct PreparedLineSnapshot {
     pub id: LineSnapshotId,
+    /// Issue #904 复核 8：产出该行的 **稳定 ParagraphId**（`VisualLine.paragraph_id`）。
+    ///
+    /// 与静态 QSG 的 `ParagraphLineInfo.paragraph_id`（`line.paragraph_id.as_u64()`）
+    /// 完全同源，也是动画整体段落位移 `paragraph_y_offsets` 用的身份。
+    /// `LineSnapshotId.paragraph_id` 是文档中的段落序号（`logical_slot`），两者职责
+    /// 不同：前者找纹理，后者才标识"同一个段落"（增删换行后不会漂移）。
+    pub stable_paragraph_id: u64,
+    /// Issue #904 复核 9：**真实段首的文档绝对 y**（不是本行 y，也不是视口内
+    /// 第一条可见行的 y）。来源是该版 canonical 的权威 `height_index`。
+    ///
+    /// 两种构建路线都会按视口裁掉屏幕外的行，所以"快照里第一行的
+    /// `document_origin_y`"并不等于段首；长段落从屏幕上方延伸到视口时，
+    /// 拿它当段落锚点会让整段位移的起点 y 取错。
+    pub paragraph_top_document_y: f64,
+    /// Issue #904 复核 9：该段落完整高度（同版 canonical `height_index`）。
+    /// 判断段落是否与视口相交时必须用「段首 + 段高」的矩形，而不是段首之间的短竖条。
+    pub paragraph_height: f64,
     pub image: Option<QImage>,
     pub clusters: Vec<LineClusterSnapshot>,
     pub document_origin_y: f64,
@@ -129,6 +148,10 @@ impl PreparedLineSnapshot {
             .fold(f64::MAX, f64::min);
         Self {
             id: LineSnapshotId::new(0, 0, visual_line_id as u32),
+            // 测试 stub 里没有真实 ParagraphId：与 id 的段落序号保持一致。
+            stable_paragraph_id: 0,
+            paragraph_top_document_y: top,
+            paragraph_height: 20.0,
             image: None,
             clusters,
             document_origin_y: top,
@@ -227,6 +250,17 @@ impl PreparedLineSnapshot {
 pub(crate) struct EditorLayoutSnapshot {
     pub revision: LayoutRevision,
     pub line_snapshots: Vec<PreparedLineSnapshot>,
+    /// Issue #904 复核 12：与 `line_snapshots` 分离的**段落几何索引**。
+    ///
+    /// 直接复用本版 canonical 已有的 `Arc`（不复制、不物化第三份位置表）。段落整体
+    /// 位移的候选段落可能两端都不在 `line_snapshots`（屏幕外进入/离开），因此按稳定
+    /// ParagraphId 用 `paragraph_slot_map.slot(id)` + `paragraph_height_index` 即时
+    /// 查询该版本的 `(段首 y, 段高)`。
+    pub paragraph_height_index: Option<std::sync::Arc<ParagraphHeightIndex>>,
+    /// 稳定 `ParagraphId` → 本版 slot。与 `paragraph_height_index` 配套。
+    pub paragraph_slot_map: Option<std::sync::Arc<ChunkedSlotMap>>,
+    /// 文档级 padding：段首 y = `paragraph_padding + height_index.paragraph_top_y(slot)`。
+    pub paragraph_padding: f64,
     /// Viewport 坐标的 caret（y/baseline_y 已减 scroll_y），给平台/IME query 使用。
     pub caret_rect: Option<CaretRect>,
     /// Issue #722 评论 5749791161: 文档坐标的 caret（y/baseline_y 不减 scroll_y，
@@ -256,10 +290,47 @@ impl EditorLayoutSnapshot {
         EditorLayoutSnapshot {
             revision,
             line_snapshots,
+            paragraph_height_index: None,
+            paragraph_slot_map: None,
+            paragraph_padding: 0.0,
             caret_rect,
             caret_rect_doc,
             caret_affinity,
         }
+    }
+
+    /// Issue #904 复核 12：该版本某个**稳定 ParagraphId** 的真实 `(段首 y, 段高)`。
+    ///
+    /// 与视口裁剪无关：即使该段落的全部行都在屏幕外也能查到。O(1)（slot 映射 + 前缀和）。
+    pub fn paragraph_anchor(&self, paragraph_id: u64) -> Option<(f64, f64)> {
+        let slot = self
+            .paragraph_slot_map
+            .as_ref()?
+            .slot(ParagraphId::from_u64(paragraph_id))?;
+        let height_index = self.paragraph_height_index.as_ref()?;
+        Some((
+            self.paragraph_padding + height_index.paragraph_top_y(slot),
+            height_index.height_at(slot),
+        ))
+    }
+
+    /// Issue #904 复核 12：与文档坐标 y 区间相交的段落 slot 区间 `[first, last_excl)`。
+    ///
+    /// 供 `text_motion` 定位视口附近的候选段落（O(log n) 前缀查询），
+    /// 避免遍历整章段落。
+    pub fn paragraph_slots_in_y_range(&self, y_start: f64, y_end: f64) -> (usize, usize) {
+        match self.paragraph_height_index.as_ref() {
+            Some(index) => index.paragraphs_in_y_range(y_start, y_end),
+            None => (0, 0),
+        }
+    }
+
+    /// Issue #904 复核 12：按 slot 取稳定 ParagraphId。
+    pub fn paragraph_id_at_slot(&self, slot: usize) -> Option<u64> {
+        self.paragraph_slot_map
+            .as_ref()?
+            .id_at_slot(slot)
+            .map(ParagraphId::as_u64)
     }
 
     pub fn lines_in_byte_range(

@@ -1,5 +1,5 @@
 // =============================================================================
-// WritingStatusBar.qml — 写作页底部状态栏（Issue #829 手稿）
+// WritingStatusBar.qml — 写作页底部状态栏（Issue #829 手稿 / Issue #900 KDE 迁移）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
@@ -14,10 +14,15 @@
 // 边界：本组件是纯展示件，不查后端、不持有业务状态。
 // 所有数值由 WritingWorkspace 注入（那边才是持有 Core 数据的地方），
 // 避免状态栏自己再维护一份字数/进度缓存。
+//
+// Issue #900：颜色 / 间距 / 字体走 Kirigami.Theme / Kirigami.Units / 系统字体，
+// AppText 换成 Label。属性签名与注入数据全部保持不变。
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -32,7 +37,7 @@ Rectangle {
     // 输入事件，停笔后它会一直挂着停笔前的非零值。
     property int charsPerMinute: 0
     // 进度分子：Core「今日」汇总里的纯输入字数（getTodayWritingStatsSummaryObject）。
-// 「今天是哪一天」由 Core 的本地日历口径决定，端侧不拼日期。
+    // 「今天是哪一天」由 Core 的本地日历口径决定，端侧不拼日期。
     property int progressCurrent: 0
     // 进度分母：手稿上的「/ 2,000」。
     // Issue #829 备注：Core 目前没有任何目标字数字段（settings 里只有
@@ -49,10 +54,18 @@ Rectangle {
 
     // 状态带高度跟手稿的细条比例；不跟 Core 的七角色走——手稿里它只是
     // Editor 列底部的一条信息带，不是任何一个角色，所以不占 Core bounds。
-    readonly property real barHeight: 28
+    // Issue #912：高度改为跟随默认字体实际高度 + KDE 间距，不再写死 28，
+    // 桌面字号下状态栏文字与图标不再偏小。
+    readonly property real barHeight: Math.max(Kirigami.Units.gridUnit * 1.6, statusMetrics.height + Kirigami.Units.smallSpacing * 2)
 
     implicitHeight: barHeight
-    color: root.dt.surface
+    color: Kirigami.Theme.backgroundColor
+
+    TextMetrics {
+        id: statusMetrics
+        font: Kirigami.Theme.defaultFont
+        text: "00:00  字/分  0/2,000"
+    }
 
     // 与正文纸面上缘呼应的一条分隔线。
     Rectangle {
@@ -60,35 +73,30 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         height: 1
-        color: root.dt.border
+        color: Kirigami.Theme.disabledTextColor
+        opacity: 0.3
     }
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: root.dt.sp16
-        anchors.rightMargin: root.dt.sp16
-        spacing: root.dt.sp12
+        anchors.leftMargin: Kirigami.Units.largeSpacing
+        anchors.rightMargin: Kirigami.Units.largeSpacing
+        spacing: Kirigami.Units.smallSpacing
 
         // ── 左：写作速度 ──
-        AppText {
-            dt: root.dt
+        Label {
             text: root.charsPerMinute + " " + qsTr("字/分")
-            color: root.dt.textSecondary
-            font.pointSize: root.dt.captionPt
-            font.family: root.dt.fontFamily
+            color: Kirigami.Theme.disabledTextColor
             Layout.alignment: Qt.AlignVCenter
         }
 
         Item { Layout.fillWidth: true }
 
         // ── 中：写作进度 ──
-        AppText {
-            dt: root.dt
+        Label {
             // 手稿写的是「434/2,000」，斜杠两侧都不留空格。
             text: root.progressCurrent + "/" + root.progressTarget.toLocaleString(Qt.locale(), "f", 0)
-            color: root.dt.textSecondary
-            font.pointSize: root.dt.captionPt
-            font.family: root.dt.fontFamily
+            color: Kirigami.Theme.disabledTextColor
             Layout.alignment: Qt.AlignVCenter
         }
 
@@ -96,24 +104,19 @@ Rectangle {
 
         // ── 右：时间 + 保存状态 ──
         RowLayout {
-            spacing: root.dt.sp12
+            spacing: Kirigami.Units.largeSpacing
             Layout.alignment: Qt.AlignVCenter
 
-            AppText {
-                dt: root.dt
+            Label {
                 text: root.clockText
-                color: root.dt.textSecondary
-                font.pointSize: root.dt.captionPt
-                font.family: root.dt.fontFamily
+                color: Kirigami.Theme.disabledTextColor
                 visible: root.clockText !== ""
             }
 
-            AppText {
-                dt: root.dt
+            Label {
                 text: root.saveStatus
-                color: root.saveStatusIsError ? root.dt.error : root.dt.success
-                font.pointSize: root.dt.captionPt
-                font.family: root.dt.fontFamily
+                color: root.saveStatusIsError ? Kirigami.Theme.negativeTextColor
+                                              : Kirigami.Theme.positiveTextColor
                 visible: root.saveStatus !== ""
             }
         }

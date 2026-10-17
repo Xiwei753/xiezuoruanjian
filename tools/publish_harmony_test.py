@@ -34,7 +34,6 @@ ROOT = Path(__file__).resolve().parents[1]
 HARMONY_DIR = ROOT / "apps" / "harmony"
 BUILD_PROFILE = HARMONY_DIR / "build-profile.json5"
 APP_SCOPE = HARMONY_DIR / "AppScope" / "app.json5"
-MODULE_PROFILE = HARMONY_DIR / "entry" / "src" / "main" / "module.json5"
 DEFAULT_PACKAGE_NAME = "com.xiwei.sujian"
 DEFAULT_CONNECT_API_CLI_NPM_VERSION = "1.1.3"
 
@@ -366,65 +365,6 @@ def patch_version_code_text(text: str, version_code: int) -> str:
     return updated
 
 
-def remove_request_permission_text(text: str, permission_name: str) -> str:
-    marker = f'"name": "{permission_name}"'
-    index = text.find(marker)
-    if index < 0:
-        raise PublishError(f"module.json5 中没有找到权限：{permission_name}")
-
-    start = text.rfind("{", 0, index)
-    if start < 0:
-        raise PublishError(f"无法定位权限对象起点：{permission_name}")
-
-    depth = 0
-    in_string = False
-    escaped = False
-    end = -1
-    for pos in range(start, len(text)):
-        ch = text[pos]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                end = pos + 1
-                break
-    if end < 0:
-        raise PublishError(f"无法定位权限对象终点：{permission_name}")
-
-    # Prefer consuming the following comma. If this is the last array item,
-    # consume the preceding comma instead.
-    tail = end
-    while tail < len(text) and text[tail] in " \t\r\n":
-        tail += 1
-    if tail < len(text) and text[tail] == ",":
-        tail += 1
-        while tail < len(text) and text[tail] in " \t\r\n":
-            tail += 1
-        return text[:start] + text[tail:]
-
-    head = start
-    while head > 0 and text[head - 1] in " \t\r\n":
-        head -= 1
-    if head > 0 and text[head - 1] == ",":
-        head -= 1
-    return text[:head] + text[end:]
-
-
-def ci_should_include_dlp_acl() -> bool:
-    return os.environ.get("HARMONY_RELEASE_DLP_ACL") == "1"
-
-
 def resolve_hvigorw() -> str:
     hvigorw = shutil.which("hvigorw")
     if hvigorw:
@@ -617,7 +557,6 @@ def build_release_app(skip_rust: bool) -> Path:
     direct_signing = resolve_direct_signing()
     original_profile: str | None = None
     original_app_scope: str | None = None
-    original_module_profile: str | None = None
 
     ci_version_code = resolve_ci_version_code()
     if ci_version_code is not None:
@@ -627,20 +566,6 @@ def build_release_app(skip_rust: bool) -> Path:
             encoding="utf-8",
         )
         eprint(f"CI 临时 versionCode：{ci_version_code}")
-
-    if os.environ.get("GITHUB_ACTIONS") == "true" and not ci_should_include_dlp_acl():
-        original_module_profile = MODULE_PROFILE.read_text(encoding="utf-8")
-        MODULE_PROFILE.write_text(
-            remove_request_permission_text(
-                original_module_profile,
-                "ohos.permission.DLP_GET_HIDE_STATUS",
-            ),
-            encoding="utf-8",
-        )
-        eprint(
-            "CI Release 暂不声明 DLP_GET_HIDE_STATUS：该权限需要 AGC ACL + "
-            "包含 ACL 的 Release Profile。ACL 准备好后设置 HARMONY_RELEASE_DLP_ACL=1。"
-        )
 
     if direct_signing is None:
         check_release_signing_config()
@@ -676,8 +601,6 @@ def build_release_app(skip_rust: bool) -> Path:
             BUILD_PROFILE.write_text(original_profile, encoding="utf-8")
         if original_app_scope is not None:
             APP_SCOPE.write_text(original_app_scope, encoding="utf-8")
-        if original_module_profile is not None:
-            MODULE_PROFILE.write_text(original_module_profile, encoding="utf-8")
 
     if direct_signing is not None:
         app_path = sign_release_app(app_path, direct_signing)
