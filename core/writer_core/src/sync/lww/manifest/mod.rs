@@ -6,13 +6,13 @@
 //! 也收归本模块，`mod.rs` 只保留重试和一次 attempt 的编排。
 //!
 //!   `snapshot_local_records_read_only` 是真正的只读
-//! local record 投影 helper，保留 per-file LWW（含真实 winner device_id），
-//! 无 tombstone 时用 now_ms（删除检测时间）生成 delete record。
+//! local record 投影 helper（严格版），保留 per-file LWW（含真实 winner device_id）。
 //! `snapshot_local_target_lifecycle` 和 LWW `execute_lww_sync_attempt` 都复用它。
 //!
 //!   ：只允许明确 tombstone / durable delete fact 产生 op="delete"。
-//! known_files 中文件缺失但没有 tombstone 时返回 Err（Retry/本地状态错误），
-//! 让同步停在非破坏性状态，不伪造 delete record 传播到远端。
+//! known_files 中文件缺失但没有 tombstone 时，严格版返回 Err（Retry/本地状态错误），
+//! 让同步停在非破坏性状态，不伪造 delete record 传播到远端；merge 路径改用宽松版
+//! `snapshot_local_records_for_merge`，把缺失文件收集为待恢复事实，逐路径恢复或报错。
 
 use crate::sync::path::ValidatedSyncPath;
 use crate::sync::provider::SyncProvider;
@@ -38,7 +38,56 @@ pub(super) fn lww_record_time(record: &ManifestFileRecord) -> i64 {
     }
 }
 
-///   真正的只读 local record 投影 helper。
+/// 本地文件快照：正常可判定的记录 + 缺失且无删除证据的文件。
+#[derive(Debug, Clone)]
+pub(crate) struct LocalSnapshot {
+    /// 正常投影出的 `path → record`（含真实 tombstone 产生的 delete record）。
+    pub records: HashMap<String, ManifestFileRecord>,
+    /// known_files / 旧 manifest 中记录但磁盘缺失且无 tombstone 的文件。
+    /// 这些文件既不能当成删除事实，也不能凭空生成 upsert；merge 需先尝试
+    /// 从远端恢复，无法恢复时显式报错并保留基线。
+    pub missing_without_delete_fact: Vec<MissingKnownFile>,
+}
+
+/// 磁盘缺失且无 tombstone 证据的已知文件。
+#[derive(Debug, Clone)]
+pub(crate) struct MissingKnownFile {
+    /// 相对 sync_root 的路径。
+    pub path: String,
+    /// 已知基线哈希（known_files 或旧 manifest 记录中的哈希）。
+    pub known_hash: String,
+    /// 旧 manifest 中的对应记录（若有），保留真实 LWW 元数据供恢复复用。
+    pub manifest_record: Option<ManifestFileRecord>,
+    /// known_files 中记录的已知时间（若有），重建 known_files 时保留。
+    pub known_files_updated_at: Option<i64>,
+    /// 缺失来源，决定严格调用方给出的错误文案。
+    pub cause: MissingCause,
+}
+
+/// 已知文件缺失来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MissingCause {
+    /// known_files 中存在但磁盘缺失。
+    KnownFile,
+    /// 旧 manifest 中 upsert 记录存在但磁盘缺失。
+    OldManifestUpsert,
+}
+
+/// 宽松版 local record 投影：供 merge 路径使用。
+///
+/// 与 [`snapshot_local_records_read_only`] 同源，但 known file 缺失且无 tombstone
+/// 时不返回 `Err`，而是收集到 [`LocalSnapshot::missing_without_delete_fact`]：
+/// merge 会先尝试从远端 blob 恢复文件；无法恢复时显式报
+/// `local_missing_without_tombstone`，绝不再伪造 delete record。
+pub(crate) fn snapshot_local_records_for_merge(
+    sync_root: &Path,
+    scope: SyncScope,
+    preferred_device_id: &str,
+) -> crate::error::Result<LocalSnapshot> {
+    build_local_snapshot(sync_root, scope, preferred_device_id)
+}
+
+///   真正的只读 local record 投影 helper（严格版）。
 ///
 /// 读 old manifest + read-only SyncState → scan 当前文件，产出完整 LWW 投影：
 ///
@@ -51,17 +100,50 @@ pub(super) fn lww_record_time(record: &ManifestFileRecord) -> i64 {
 ///   状态。不再用 `now_ms` 伪造 delete record——本地缺文件可能是未下载完整、工作区
 ///   损坏、人工移动，不应直接变成远端删除命令。调用方据此返回 Retry。
 ///
+/// 严格语义供生命周期决策与全量 materialize 使用：证据不完整时必须停下。
+/// merge 路径用宽松版 [`snapshot_local_records_for_merge`] 做文件级恢复与隔离。
+///
 /// 这个 helper 是真正只读的：用 [`SyncService::load_sync_state_read_only`] 加载 state，
 /// 不写文件、不删旧文件。
 ///
 /// 返回 `HashMap<path, ManifestFileRecord>`，供 `build_sync_plan`（plan/dry-run 路径）
 /// 与 LWW `execute_lww_sync_attempt` 同源复用。
-#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 pub fn snapshot_local_records_read_only(
     sync_root: &Path,
     scope: SyncScope,
     preferred_device_id: &str,
 ) -> crate::error::Result<HashMap<String, ManifestFileRecord>> {
+    let snapshot = build_local_snapshot(sync_root, scope, preferred_device_id)?;
+    if let Some(missing) = snapshot.missing_without_delete_fact.first() {
+        let message = match missing.cause {
+            MissingCause::KnownFile => format!(
+                "snapshot_local_records_read_only: known file {} missing on disk \
+                 without tombstone — cannot fabricate delete record; local state may be \
+                 incomplete or corrupted, retry sync after restoring local state",
+                missing.path
+            ),
+            MissingCause::OldManifestUpsert => format!(
+                "snapshot_local_records_read_only: old manifest upsert for {} but file missing \
+                 without tombstone — cannot fabricate current local fact",
+                missing.path
+            ),
+        };
+        return Err(crate::Error::Io(std::io::Error::other(message)));
+    }
+    Ok(snapshot.records)
+}
+
+/// 共享实现：宽松投影 + 缺失文件收集。
+#[allow(
+    clippy::too_many_lines,
+    clippy::excessive_nesting,
+    clippy::cognitive_complexity
+)]
+fn build_local_snapshot(
+    sync_root: &Path,
+    scope: SyncScope,
+    preferred_device_id: &str,
+) -> crate::error::Result<LocalSnapshot> {
     // 1. 读 old manifest（manifest.sync.json）→ HashMap<path, ManifestFileRecord>。
     //   manifest 存在但损坏 → 返回 Err（不静默 fallback）。
     // 调用方（compute_local_project_lifecycle_candidate）据此返回 Retry，
@@ -152,8 +234,9 @@ pub fn snapshot_local_records_read_only(
     }
 
     // 4. known file 消失 → 有 tombstone 用真实删除时间；
-    //    无 tombstone → 返回 Err（本地状态错误），不伪造 delete record。
+    //    无 tombstone → 收集为 missing_without_delete_fact（不伪造 delete record）。
     //    只允许明确 tombstone / durable delete fact 产生 op="delete"。
+    let mut missing_without_delete_fact: Vec<MissingKnownFile> = Vec::new();
     for path in state.known_files.keys() {
         if records.contains_key(path) {
             continue;
@@ -184,16 +267,18 @@ pub fn snapshot_local_records_read_only(
                     },
                 );
             } else {
-                // 无 tombstone → 返回 Err（本地状态错误）。
+                // 无 tombstone → 收集缺失事实（不伪造 delete record）。
                 // 本地 known_files 中记录了此文件但磁盘上不存在，且没有 tombstone
                 // 证明它被合法删除。可能是未下载完整、工作区损坏、人工移动。
                 // 伪造 delete record 会让本地删除错误地传播到远端（破坏性）。
-                // 返回 Err 让调用方走 Retry，停在非破坏性状态。
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "snapshot_local_records_read_only: known file {path} missing on disk \
-                     without tombstone — cannot fabricate delete record; local state may be \
-                     incomplete or corrupted, retry sync after restoring local state"
-                ))));
+                // merge 会先尝试从远端 blob 恢复；无法恢复时显式报错。
+                missing_without_delete_fact.push(MissingKnownFile {
+                    path: path.clone(),
+                    known_hash: state.known_files.get(path).cloned().unwrap_or_default(),
+                    manifest_record: old_manifest_records.get(path).cloned(),
+                    known_files_updated_at: state.known_files_updated_at.get(path).cloned(),
+                    cause: MissingCause::KnownFile,
+                });
             }
         }
     }
@@ -236,15 +321,24 @@ pub fn snapshot_local_records_read_only(
                 },
             );
         } else {
-            // 无 tombstone → 不能把旧 upsert 冒充当前本地事实，返回 Err。
-            return Err(crate::Error::Io(std::io::Error::other(format!(
-                "snapshot_local_records_read_only: old manifest upsert for {path} but file missing \
-                 without tombstone — cannot fabricate current local fact"
-            ))));
+            // 无 tombstone → 收集缺失事实（不能把旧 upsert 冒充当前本地事实）。
+            if missing_without_delete_fact.iter().any(|m| m.path == *path) {
+                continue;
+            }
+            missing_without_delete_fact.push(MissingKnownFile {
+                path: path.clone(),
+                known_hash: old_rec.content_hash.clone(),
+                manifest_record: Some(old_rec.clone()),
+                known_files_updated_at: state.known_files_updated_at.get(path).cloned(),
+                cause: MissingCause::OldManifestUpsert,
+            });
         }
     }
 
-    Ok(records)
+    Ok(LocalSnapshot {
+        records,
+        missing_without_delete_fact,
+    })
 }
 
 /// 构建远端文件记录。

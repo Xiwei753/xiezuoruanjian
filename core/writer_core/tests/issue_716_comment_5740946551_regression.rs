@@ -1,15 +1,24 @@
 //! Issue #716 评论 5740946551 — `transfer_live_project` publish 前移 LWW 判定回归测试。
 //!
-//! 覆盖 5 个场景：
-//! 1. 不重复 publish：remote Upsert 同时间戳严格赢 → publish_count == 0，返回 NoChanges。
+//! Issue #928 更新：publish 判定不再只看作品级 whole-work LWW；本轮 merge 产生文件级
+//! 内容/tombstone 变化（`remote_upload_paths` / `remote_delete_paths` 非空）时，即使远端
+//! Upsert 严格赢也必须 publish 新 generation 并通过 catalog CAS 推进 active_generation。
+//! 因此场景 4/10 在第二轮出现新的可见 generation 且本地仍有文件级变化时会再次 publish
+//! （每次 publish 都携带真实变化，不是重复 publish）；场景 11/13 的本地 tombstone 属于
+//! 文件级 tombstone 变化，会触发 publish 新 generation 并如实报告 local_deletes
+//! （超过 30 天的墓碑记录仍按既有清理规则从 manifest 记录中移除）。
+//!
+//! 覆盖场景：
+//! 1. 无文件级变化不 publish：remote Upsert 同时间戳严格赢 + staging 无变化 → publish_count == 0，返回 NoChanges。
 //! 2. candidate 严格赢仍 publish：remote record 时间更小 → candidate 严格赢 → publish_count == 1，CAS Applied，返回 Success。
 //! 3. 远端无 record 仍 publish：catalog 无该 target record → publish_count == 1，CAS Applied。
 //! 4. CAS 期间 snapshot 变化才下一轮：publish 前判定 candidate 赢，但 CAS 返回 RemoteWinner(Upsert)
-//!    → 下一轮重新 merge + 判定，candidate 不赢 → 不再 publish → 返回 NoChanges。publish_count == 1。
+//!    → 下一轮重新 merge；仍有文件级变化 → 再 publish 一次，CAS 成功后 active_generation 指向
+//!    第二轮 generation。publish_count == 2。
 //! 5. RemoteWinner(Delete) 语义不变：remote record op == Delete 且严格赢 → 清远端对象，不 publish generation。
 //!
 //! Issue #716 评论 5741695768 追加 2 个场景：
-//! 6. remote Upsert 严格赢 + 本轮 merge 产生 unresolved conflict → publish_count == 0，PartialConflict，冲突列表非空。
+//! 6. remote Upsert 严格赢 + 本轮 merge 产生 unresolved conflict 且无文件级 upload/delete 变化 → publish_count == 0，PartialConflict，冲突列表非空。
 //! 7. remote Upsert 严格赢 + merge 返回错误 → publish_count == 0，保持错误/RecoverableError，绝不是 NoChanges。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -27,7 +36,8 @@ use writer_core::sync::provider::model::{
 };
 use writer_core::sync::provider::SyncProvider;
 use writer_core::sync::target_lifecycle::{
-    load_remote_catalog, upsert_record, write_remote_catalog, TARGET_CATALOG_REMOTE_PATH,
+    find_record, load_remote_catalog, upsert_record, write_remote_catalog,
+    TARGET_CATALOG_REMOTE_PATH,
 };
 use writer_core::sync::types::{
     ManifestFileRecord, PlannedTargetKind, RemoteTargetCatalogSnapshot, SyncManifest, SyncPolicy,
@@ -425,8 +435,11 @@ fn regression_no_remote_record_publishes_once() {
     );
 }
 
-/// 场景 4：CAS 期间 snapshot 变化才下一轮 — publish 前判定 candidate 赢，CAS 返回 RemoteWinner(Upsert)
-/// → 下一轮重新 merge + 判定，candidate 不赢 → 不再 publish → LatestWinsApplied。publish_count == 1。
+/// 场景 4（#928 更新）：CAS 期间 snapshot 变化才下一轮 — 第一轮 candidate 赢 publish，
+/// CAS 返回 RemoteWinner(Upsert)（远端已推进到 gen_after_conflict）；第二轮重新 merge 后
+/// 本地 volumes/v1/chapter.md 仍不在新 visible generation（文件级变化）→ 再 publish 一次；
+/// CAS 成功后 active_generation 指向第二轮 generation。第一轮本地变化不丢失。
+/// publish_count == 2（每次 publish 都携带真实文件级变化）。
 #[test]
 fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     const T: i64 = 10_000;
@@ -476,10 +489,13 @@ fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
-        1,
-        "第一轮 candidate 赢 publish 1 次，第二轮 candidate 不赢不 publish，总计 1 次"
+        2,
+        "第一轮 candidate 赢 publish 1 次；CAS 竞争失败后第二轮 merge 仍有文件级变化\
+         （本地 volumes/v1/chapter.md 不在新 visible generation gen_after_conflict）→ 再\
+         publish 1 次，总计 2 次（#928：每次 publish 都携带真实变化，不是重复 publish）"
     );
-    // 第二轮 candidate 不赢 → RemoteWins(Upsert)，merge 下载了远端新内容 → LatestWinsApplied
+    // 第二轮 candidate 不赢 → RemoteWins(Upsert)，但文件级变化必须 publish；merge 下载了
+    // 远端新内容 → LatestWinsApplied
     assert!(
         matches!(
             transfer.targets[0].result.status,
@@ -488,6 +504,23 @@ fn regression_cas_conflict_retries_only_when_snapshot_changed() {
         "第二轮 merge 下载了远端新内容应返回 LatestWinsApplied，实际 {:?}",
         transfer.targets[0].result.status
     );
+
+    // 第二轮 publish 后 active_generation 应指向含本地 volumes/v1/chapter.md 的新 generation
+    // —— 第一轮本地变化不得因 CAS 竞争丢失。
+    let snapshot = load_remote_catalog(&provider).unwrap();
+    let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
+    let active = record
+        .active_generation
+        .as_deref()
+        .expect("active_generation 应指向新 generation");
+    assert_ne!(active, "gen_after_conflict");
+    let published = provider
+        .read(&format!(
+            "projects/p1/__generations__/{active}/volumes/v1/chapter.md"
+        ))
+        .unwrap()
+        .expect("第二轮 generation 应包含本地 chapter.md（第一轮本地变化不得丢失）");
+    assert_eq!(published.content, b"chapter content".to_vec());
 }
 
 /// 场景 5：RemoteWinner(Delete) 语义不变 — remote record op == Delete 且严格赢
@@ -1090,15 +1123,16 @@ fn regression_scenario_9_pending_take_remote_failed_swallowed_as_success() {
     );
 }
 
-/// 场景 10（Issue #716 评论 5742849844 问题 2）：CAS 重试丢掉前一轮本地变化。
+/// 场景 10（Issue #716 评论 5742849844 问题 2 + Issue #928）：CAS 重试保留前一轮本地变化。
 ///
-/// 复现：第一轮 merge 下载远端文件 → publish 1 次 → CAS 注入新的 remote generation → continue。
-/// 第二轮 generation 与当前 staging 内容相同，merge NoOp，remote lifecycle 仍严格赢。
-/// 最终应 publish_count == 1，状态 LatestWinsApplied，保留第一轮的 downloaded_files。
-/// 但当前 buggy 代码只看第二轮 merge_result（NoChanges），第一轮的 downloaded_files 消失。
+/// 第一轮 merge 下载远端 volumes/v1/chapters/chapter.md 并上传本地 volumes/v1/chapter.md
+/// → publish 1 次 → CAS 注入新的 remote generation → continue。
+/// 第二轮 visible generation 已换，但本地 volumes/v1/chapter.md 仍不在其中（文件级变化）
+/// → 按 #928 再 publish 1 次（远端推进后重新 merge、按路径 re-publish；每次 publish 都携带
+/// 真实变化，不是重复 publish）。
 ///
-/// 当前 buggy 行为：返回 NoChanges，downloaded_files 为空。
-/// 正确行为：返回 LatestWinsApplied，downloaded_files 保留第一轮的下载，publish_count == 1。
+/// 正确行为：状态 LatestWinsApplied，downloaded_files 保留第一轮的下载，publish_count == 2，
+/// 最终 generation 含本地 chapter.md（第一轮本地变化不得丢失）。
 #[test]
 fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
     const T: i64 = 10_000;
@@ -1162,8 +1196,9 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
-        1,
-        "第一轮 candidate 赢 publish 1 次，第二轮 candidate 不赢不 publish，总计 1 次"
+        2,
+        "第一轮 candidate 赢 publish 1 次；CAS 竞争失败后第二轮 merge 仍有文件级变化\
+         （本地 volumes/v1/chapter.md 不在新 visible generation）→ 再 publish 1 次，合计 2 次"
     );
 
     let status = &transfer.targets[0].result.status;
@@ -1185,18 +1220,35 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
         "downloaded_files 应保留第一轮的下载（非空），实际 {:?}",
         transfer.targets[0].result.downloaded_files
     );
+
+    // #928：最终 active generation 必须包含本地 volumes/v1/chapter.md
+    // —— 第一轮本地变化不得因 CAS 竞争丢失。
+    let snapshot = load_remote_catalog(&provider).unwrap();
+    let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
+    let active = record
+        .active_generation
+        .as_deref()
+        .expect("active_generation 应指向新 generation");
+    assert_ne!(active, "gen_after_conflict");
+    let published = provider
+        .read(&format!(
+            "projects/p1/__generations__/{active}/volumes/v1/chapter.md"
+        ))
+        .unwrap()
+        .expect("最终 generation 应包含本地 chapter.md（第一轮本地变化不得丢失）");
+    assert_eq!(published.content, b"chapter content".to_vec());
 }
 
-/// 场景 11（Issue #716 评论 5742849844 问题 3）：no-publish 路径 local_deletes 报告未执行的远端删除。
+/// 场景 11（Issue #716 评论 5742849844 问题 3 + Issue #928 更新）：本地 tombstone 传播。
 ///
-/// 复现：本地有 project.json 的 delete tombstone（LWW 本地赢），远端 generation 有 project.json
+/// 本地有 project.json 的 delete tombstone（LWW 本地赢），远端 generation 有 project.json
 /// 的 upsert 记录。merge 产生 LwwLocalWinsDeleteRecord → remote_delete_paths 非空。
-/// 但整体 lifecycle remote 严格赢 → RemoteWins(Upsert) → 不 publish。
-/// `transfer_helpers.rs` 在 no-publish 路径写了 `r.local_deletes = outcome.remote_delete_paths.clone()`，
-/// 把没执行的远端删除报成 local_deletes。
 ///
-/// 当前 buggy 行为：local_deletes 非空（报告了未执行的远端删除）。
-/// 正确行为：local_deletes 应为空（remote_delete_paths 是远端操作，merge 没执行本地删除）。
+/// #928 之前：整体 lifecycle remote 严格赢 → RemoteWins(Upsert) → 不 publish，local_deletes 必须
+/// 为空（旧实现把未执行的远端删除报成 local_deletes，是 bug）。
+/// #928 之后：本地 tombstone 是文件级 tombstone 变化 → 即使 remote Upsert 严格赢也必须 publish
+/// 新 generation（manifest 含 project.json 的 delete 墓碑记录），并通过 catalog CAS 推进
+/// active_generation。因此 local_deletes 应如实报告已通过新 generation 执行的删除路径。
 ///
 /// 时间戳设计（避免 30 天 delete 墓碑清理）：
 /// - `now_ms`：当前毫秒时间戳
@@ -1206,7 +1258,8 @@ fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
 ///   - `deleted_at_ms > purge_time`（30 天前）→ delete 记录不被清理
 /// - `T_BIG = now_ms + 1000000`：remote catalog lww_time → remote 严格赢 candidate
 #[test]
-fn regression_scenario_11_no_publish_local_deletes_reports_unexecuted_remote_deletes() {
+#[allow(clippy::too_many_lines)] // #928：新 generation 指针/清单断言使场景变长
+fn regression_scenario_11_tombstone_publishes_new_generation_and_reports_local_deletes() {
     const DEVICE_REMOTE: &str = "device_remote";
     const DEVICE_LOCAL: &str = "device_local";
     const GEN_EXISTING: &str = "gen_existing";
@@ -1284,7 +1337,8 @@ fn regression_scenario_11_no_publish_local_deletes_reports_unexecuted_remote_del
     write_sync_state(&staging_root, &sync_state);
 
     // candidate lww_time ≈ now_ms - 100000（delete 记录），remote record lww_time = t_big
-    // candidate < remote → remote 严格赢 → RemoteWins(Upsert) → 不 publish
+    // candidate < remote → 作品级 LWW remote 赢，但 #928：本地 tombstone 是文件级
+    // tombstone 变化（remote_delete_paths 非空）→ 仍必须 publish 新 generation。
     let candidate_lww_time = deleted_at_secs * 1000;
     let plan = build_plan(
         &tmp,
@@ -1298,24 +1352,49 @@ fn regression_scenario_11_no_publish_local_deletes_reports_unexecuted_remote_del
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
-        0,
-        "remote Upsert 严格赢时不应 publish"
+        1,
+        "#928：本地 tombstone 是文件级变化，remote Upsert 作品级 LWW 赢也必须 publish 新 generation"
     );
 
+    // ── 断言正确行为（Issue #716 评论 5742849844 问题 3 + Issue #928）──
+    // 新 generation 已发布，local_deletes 应如实报告本轮通过新 generation 执行的删除路径；
+    // 而不是把"未执行的远端删除"报成 local_deletes。
     let status = &transfer.targets[0].result.status;
-    eprintln!(
-        "场景 11 实际状态: {:?}, local_deletes: {:?}, remote_deletes: {:?}",
-        status, transfer.targets[0].result.local_deletes, transfer.targets[0].result.remote_deletes
+    assert!(
+        matches!(status, SyncStatus::LatestWinsApplied),
+        "#928：tombstone 发布新 generation 后应为 LatestWinsApplied，实际 {:?}",
+        status
+    );
+    assert_eq!(
+        transfer.targets[0].result.local_deletes,
+        vec!["project.json".to_string()],
+        "#928：local_deletes 应如实报告已通过新 generation 执行的删除路径"
     );
 
-    // ── 断言正确行为（Issue #716 评论 5742849844 问题 3 已修复）──
-    // no-publish 路径没有执行远端删除（既没 delete_remote_files，也没发布新 generation），
-    // local_deletes 应为空。remote_delete_paths 是"调用方应从远端删除的路径"，
-    // merge 本身没执行，不应报告为 local_deletes。
-    assert!(
-        transfer.targets[0].result.local_deletes.is_empty(),
-        "no-publish 路径 local_deletes 应为空（未执行远端删除），实际 {:?}",
-        transfer.targets[0].result.local_deletes
+    // 新 generation 的 manifest 必须包含 project.json 的 delete 墓碑记录，
+    // 且 active_generation 已通过 CAS 推进到新 generation。
+    let snapshot = load_remote_catalog(&provider).unwrap();
+    let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
+    let active = record
+        .active_generation
+        .as_deref()
+        .expect("active_generation 应指向新 generation");
+    assert_ne!(active, GEN_EXISTING);
+    let manifest_obj = provider
+        .read(&format!(
+            "projects/p1/__generations__/{active}/app-meta/sync/manifest.sync.json"
+        ))
+        .unwrap()
+        .expect("新 generation 应包含 manifest.sync.json");
+    let manifest: SyncManifest = serde_json::from_slice(&manifest_obj.content).unwrap();
+    let record = manifest
+        .files
+        .iter()
+        .find(|f| f.path == "project.json")
+        .expect("新 generation manifest 应包含 project.json 的 delete 记录");
+    assert_eq!(
+        record.op, "delete",
+        "新 generation manifest 中 project.json 应为 delete 墓碑记录"
     );
 }
 
@@ -1407,18 +1486,20 @@ fn regression_scenario_12_candidate_wins_pending_take_remote_failed_no_publish()
     );
 }
 
-/// 场景 13（Issue #716 评论 5743264448 问题 2）：unresolved conflict + remote_delete_paths
-/// + RemoteWins → PartialConflict，local_deletes 为空。
+/// 场景 13（Issue #716 评论 5743264448 问题 2 + Issue #928 更新）：unresolved conflict
+/// + remote_delete_paths + 作品级 LWW remote 赢 → 仍必须 publish。
 ///
-/// 复现：同一轮同时产生 unresolved conflict（chapter.md BothChanged）和 remote_delete_paths
-/// （project.json 本地删除墓碑赢远端 upsert）。remote lifecycle 严格赢 → RemoteWins(Upsert)
-/// → 不 publish。retained_conflict 被构造时写了 `r.local_deletes = outcome.remote_delete_paths.clone()`，
-/// 把没执行的远端删除报成 local_deletes。
+/// #928 之前：remote lifecycle 严格赢 → RemoteWins(Upsert) → 不 publish，
+/// 本地 project.json 的 delete 墓碑永远传播不到远端。
+/// #928 之后：本地 tombstone 是文件级变化 → 发布新 generation：conflict 路径
+/// 通过 ReuseVersion 复用远端 blob，project.json 写入 delete 墓碑记录，catalog CAS
+/// 推进 active_generation（作品级 LWW 保持 remote 的 T/device_remote 不降级）。
 ///
-/// 正确行为：retained_conflict 的 local_deletes 应为空（merge 没执行远端删除）。
-/// 只有 CandidateWins publish 且 CAS 成功后才合并 content_result.local_deletes。
+/// 正确行为：结果 = PartialConflict（冲突状态保留，非冲突的删除路径已生效）；
+/// local_deletes 如实报告已通过新 generation 执行的删除路径 ["project.json"]。
 #[test]
-fn regression_scenario_13_conflict_plus_remote_delete_paths_no_publish_local_deletes_empty() {
+#[allow(clippy::too_many_lines)] // #928：新 generation 指针/清单断言使场景变长
+fn regression_scenario_13_conflict_with_remote_delete_paths_still_publishes() {
     const T: i64 = 10_000;
     const DEVICE_REMOTE: &str = "device_remote";
     const DEVICE_LOCAL: &str = "device_local";
@@ -1491,32 +1572,24 @@ fn regression_scenario_13_conflict_plus_remote_delete_paths_no_publish_local_del
     write_sync_state(&staging_root, &sync_state);
 
     // candidate lww_time = T（chapter.md 的 LWW 时间），remote record lww_time = T
-    // 同时间戳，DEVICE_REMOTE > DEVICE_LOCAL → remote 严格赢 → RemoteWins(Upsert) → 不 publish
+    // 同时间戳，DEVICE_REMOTE > DEVICE_LOCAL → 作品级 LWW remote 赢；
+    // 但 #928：本地 project.json tombstone 是文件级变化 → 仍必须 publish 新 generation。
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
     let transfer = run_transfer(&provider, &plan, None, None, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         provider.publish_count(),
-        0,
-        "remote Upsert 严格赢时不应 publish"
+        1,
+        "#928：本地 tombstone 是文件级变化，作品级 LWW remote 赢也必须 publish 新 generation"
     );
 
+    // ── 断言正确行为（Issue #716 评论 5743264448 问题 2 + Issue #928）──
+    // PartialConflict（冲突状态保留）+ local_deletes 如实报告已执行的删除路径。
     let status = &transfer.targets[0].result.status;
-    eprintln!(
-        "场景 13 实际状态: {:?}, local_deletes: {:?}, remote_deletes: {:?}, conflicts: {}",
-        status,
-        transfer.targets[0].result.local_deletes,
-        transfer.targets[0].result.remote_deletes,
-        transfer.targets[0].result.conflicts.len()
-    );
-
-    // ── 断言正确行为（Issue #716 评论 5743264448 问题 2）──
-    // 有 unresolved conflict + remote_delete_paths + RemoteWins no-publish →
-    // PartialConflict（冲突状态保留），但 local_deletes 必须为空（远端删除未执行）。
     assert!(
         matches!(status, SyncStatus::PartialConflict),
-        "有 unresolved conflict + RemoteWins 应返回 PartialConflict，实际 {:?}",
+        "有 unresolved conflict + 文件级 tombstone 变化应返回 PartialConflict，实际 {:?}",
         status
     );
     assert!(
@@ -1524,9 +1597,39 @@ fn regression_scenario_13_conflict_plus_remote_delete_paths_no_publish_local_del
         "冲突列表不应为空，实际 {:?}",
         transfer.targets[0].result.conflicts
     );
-    assert!(
-        transfer.targets[0].result.local_deletes.is_empty(),
-        "no-publish 路径 local_deletes 应为空（远端删除未执行），实际 {:?}",
-        transfer.targets[0].result.local_deletes
+    assert_eq!(
+        transfer.targets[0].result.local_deletes,
+        vec!["project.json".to_string()],
+        "#928：local_deletes 应如实报告已通过新 generation 执行的删除路径"
     );
+
+    // 新 generation manifest 应保留 conflict 路径的远端记录（ReuseVersion 复用 blob，
+    // 不因冲突丢失快照内容）。注意：project.json 的 delete 墓碑时间戳为 8s（1970 年代），
+    // 会被 merge 的"30 天 delete 墓碑清理"从 manifest 记录中清除——因此这里只校验
+    // conflict 路径仍在；墓碑传播语义由 local_deletes 与 active_generation 推进保证。
+    let snapshot = load_remote_catalog(&provider).unwrap();
+    let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
+    assert_eq!(
+        (record.updated_at_ms, record.device_id.as_str()),
+        (T, DEVICE_REMOTE),
+        "#928：作品级 LWW 不应被降级（仍为 remote 的 T/device_remote）"
+    );
+    let active = record
+        .active_generation
+        .as_deref()
+        .expect("active_generation 应指向新 generation");
+    assert_ne!(active, GEN_EXISTING);
+    let generation_manifest_path =
+        format!("projects/p1/__generations__/{active}/app-meta/sync/manifest.sync.json");
+    let manifest_obj = provider
+        .read(&generation_manifest_path)
+        .unwrap()
+        .expect("新 generation 应包含 manifest.sync.json");
+    let manifest: SyncManifest = serde_json::from_slice(&manifest_obj.content).unwrap();
+    let chapter = manifest
+        .files
+        .iter()
+        .find(|f| f.path == "volumes/v1/chapters/chapter.md")
+        .expect("新 generation manifest 应保留 conflict 路径的远端记录");
+    assert_eq!(chapter.op, "upsert");
 }

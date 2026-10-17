@@ -782,6 +782,170 @@ pub fn apply_lifecycle_record(
     ))))
 }
 
+/// 内容 generation 指针 CAS 的独立结果（#928）。
+///
+/// 与 [`TargetLifecycleApplyResult`](crate::sync::types::TargetLifecycleApplyResult) 的区别：
+/// live 作品的内容变化（merge 出文件级 Put/Delete）不需要 whole-work
+/// `max(file.lww_time)` 严格赢，只要远端仍是同一条 Upsert record 且可见
+/// generation 未被别人推进，就允许推进 `active_generation`。
+/// 作品级 delete/restore LWW 仍不被降级。
+#[derive(Debug)]
+pub enum GenerationPointerApplyResult {
+    /// CAS 写入成功，`active_generation` 已推进到 candidate 的 generation。
+    Applied(RemoteTargetCatalogSnapshot),
+    /// 远端 record 与 candidate 完全相等，无需写入。
+    AlreadyCurrent(RemoteTargetCatalogSnapshot),
+    /// 远端已变化（Delete 严格赢，或 Upsert 的可见 generation 已被推进）：
+    /// 携带最新 snapshot/record，调用方按 record.op 决策或重新 merge。
+    RemoteWinner {
+        snapshot: RemoteTargetCatalogSnapshot,
+        record: TargetLifecycleRecord,
+    },
+    /// 非 CAS 错误，不删任何远端文件。
+    Retry(crate::Error),
+}
+
+/// 推进 live 作品内容 generation 指针（#928）。
+///
+/// 与 [`apply_lifecycle_record`] 共用同一份 [`write_catalog_once`] CAS 原语和
+/// LWW helpers，但写入条件不同：
+///
+/// - 远端无 record → 直接写 candidate（首个 generation）；
+/// - 远端 Upsert 且 `active_generation == expected_visible_generation`
+///   （我们 merge 的 source generation）→ 写合并后的 record：
+///   `active_generation` = candidate 的 generation；作品级 LWW
+///   （`updated_at_ms` / `device_id`）取 candidate 与 remote 的严格胜者，
+///   candidate 不严格赢时保留远端值，绝不降级 delete/restore LWW；
+/// - 远端 Upsert 但可见 generation 已被别人推进 → `RemoteWinner`
+///   （调用方用最新 generation 重新 merge，不覆盖别人的内容版本）；
+/// - 远端 Delete → 作品级 LWW 严格赢才允许复活（写 candidate），否则 RemoteWinner。
+///
+/// `expected_visible_generation`：merge 时读取的远端 record 的
+/// `active_generation`（远端无 record / legacy prefix 时为 None）。CAS 冲突后
+/// 重读 snapshot，只有可见 generation 没变才继续写，保证不把别的设备刚发布的
+/// 内容版本指针覆盖掉。只有成功的 CAS 才推进 `active_generation`。
+#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
+pub fn apply_generation_pointer(
+    provider: &dyn SyncProvider,
+    snapshot: &RemoteTargetCatalogSnapshot,
+    candidate: &TargetLifecycleRecord,
+    expected_visible_generation: Option<&str>,
+) -> GenerationPointerApplyResult {
+    let max_retries = 3;
+    let mut current_snapshot = snapshot.clone();
+
+    for attempt in 0..max_retries {
+        let remote_record = find_record(&current_snapshot.catalog, &candidate.target_id).cloned();
+
+        let to_write: TargetLifecycleRecord = match remote_record {
+            None => candidate.clone(),
+            Some(remote_record) => {
+                if records_equal(&remote_record, candidate) {
+                    return GenerationPointerApplyResult::AlreadyCurrent(current_snapshot);
+                }
+                match remote_record.op {
+                    TargetOp::Delete => {
+                        if !lww_record_wins(candidate, &remote_record) {
+                            log::info!(
+                                "[sync] apply_generation_pointer: remote Delete strictly wins \
+                                 target={} — aborting write",
+                                candidate.target_id
+                            );
+                            return GenerationPointerApplyResult::RemoteWinner {
+                                snapshot: current_snapshot,
+                                record: remote_record,
+                            };
+                        }
+                        // 作品级 LWW 严格赢 → 允许复活（candidate 是 Upsert）。
+                        candidate.clone()
+                    }
+                    TargetOp::Upsert => {
+                        if remote_record.active_generation.as_deref() != expected_visible_generation
+                        {
+                            // 可见 generation 已被别人推进：不覆盖，让调用方重新 merge。
+                            log::info!(
+                                "[sync] apply_generation_pointer: visible generation advanced \
+                                 target={} expected={:?} remote={:?} — re-merge with latest",
+                                candidate.target_id,
+                                expected_visible_generation,
+                                remote_record.active_generation
+                            );
+                            return GenerationPointerApplyResult::RemoteWinner {
+                                snapshot: current_snapshot,
+                                record: remote_record,
+                            };
+                        }
+                        // 内容 generation 推进：不要求 candidate 的 whole-work LWW
+                        // 严格赢，但不降级作品级 delete/restore LWW 字段。
+                        let mut to_write = candidate.clone();
+                        if !lww_record_wins(candidate, &remote_record) {
+                            to_write.updated_at_ms = remote_record.updated_at_ms;
+                            to_write.device_id = remote_record.device_id.clone();
+                            to_write.deleted_at_ms = remote_record.deleted_at_ms;
+                        }
+                        to_write
+                    }
+                }
+            }
+        };
+
+        let mut merged_catalog = current_snapshot.catalog.clone();
+        upsert_record(&mut merged_catalog, to_write.clone());
+        let write_snapshot = RemoteTargetCatalogSnapshot {
+            catalog: merged_catalog,
+            version: current_snapshot.version.clone(),
+        };
+
+        match write_catalog_once(provider, &write_snapshot) {
+            Ok(persisted) => {
+                let persisted_rec = find_record(&persisted.catalog, &candidate.target_id);
+                let applied = persisted_rec
+                    .map(|rec| records_equal(rec, &to_write) && rec.op == TargetOp::Upsert)
+                    .unwrap_or(false);
+                if applied {
+                    log::debug!(
+                        "[sync] apply_generation_pointer: Applied (attempt={}) target={} \
+                         generation={:?}",
+                        attempt + 1,
+                        candidate.target_id,
+                        candidate.active_generation
+                    );
+                    return GenerationPointerApplyResult::Applied(persisted);
+                }
+                // CAS 写成功但持久化记录不是 candidate → 远端已有更新。
+                let remote_rec = persisted_rec.cloned().unwrap_or_else(|| to_write.clone());
+                log::info!(
+                    "[sync] apply_generation_pointer: RemoteWinner after CAS target={} \
+                     — persisted record differs from candidate",
+                    candidate.target_id
+                );
+                return GenerationPointerApplyResult::RemoteWinner {
+                    snapshot: persisted,
+                    record: remote_rec,
+                };
+            }
+            Err(crate::Error::SyncRemoteError { category, .. })
+                if category == "precondition_failed" =>
+            {
+                log::info!(
+                    "[sync] apply_generation_pointer: CAS conflict (attempt={}), re-reading snapshot",
+                    attempt + 1
+                );
+                match load_remote_catalog(provider) {
+                    Ok(reloaded) => current_snapshot = reloaded,
+                    Err(e) => return GenerationPointerApplyResult::Retry(e),
+                }
+            }
+            Err(e) => return GenerationPointerApplyResult::Retry(e),
+        }
+    }
+
+    GenerationPointerApplyResult::Retry(crate::Error::Io(std::io::Error::other(format!(
+        "apply_generation_pointer: CAS retry exhausted after {max_retries} attempts for target={}",
+        candidate.target_id
+    ))))
+}
+
 /// 判断两条 record 是否完全相等
 /// （同 op / 同 lww_time / 同 device_id / 同 target_id / 同 remote_prefix /
 /// 同 active_generation）。

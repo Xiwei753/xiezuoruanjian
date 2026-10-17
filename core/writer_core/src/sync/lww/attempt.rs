@@ -12,8 +12,54 @@ use crate::sync::provider::SyncProvider;
 use crate::sync::types::{SyncResult, SyncState, SyncStatus, SyncTarget};
 use std::path::Path;
 
-use super::merge::merge_remote_into_local_snapshot;
+use super::merge::{merge_remote_into_local_snapshot, LwwMergeOutcome};
 use super::transfer::{delete_remote_files, upload_local_files, upload_manifest};
+
+/// 按 merge 结果决定单次尝试的终态。
+///
+/// #931：本地缺失且无墓碑、远端也无可验证 blob 时优先显式报
+/// `local_missing_without_tombstone`（不能当删除传播，也不能假装同步完整）；
+/// 其余分支沿用既有优先级：文档冲突 > pending_take_remote 失败 > 有变更 >
+/// 无变更。其他路径的 Put/Download/Delete 已按文件级隔离完成，这里只决定状态。
+fn apply_outcome_status(result: &mut SyncResult, outcome: &LwwMergeOutcome, remote_prefix: &str) {
+    let has_doc_conflicts = !outcome.conflicts.is_empty();
+    let has_changes = !outcome.remote_upload_paths.is_empty()
+        || !outcome.downloaded_files.is_empty()
+        || !outcome.local_deletes.is_empty()
+        || !outcome.remote_delete_paths.is_empty();
+
+    if !outcome.unresolved_missing_paths.is_empty() {
+        // 显式报出目标与路径，保留 known_files 基线待后续恢复。
+        result.status = SyncStatus::RecoverableError(format!(
+            "local_missing_without_tombstone: {}",
+            outcome.unresolved_missing_paths.join(", ")
+        ));
+        result.error = Some(format!(
+            "local_missing_without_tombstone: target={} paths=[{}] — local file(s) missing on \
+             disk without tombstone and no verifiable remote blob to recover; keeping sync state \
+             for later recovery",
+            remote_prefix,
+            outcome.unresolved_missing_paths.join(", ")
+        ));
+        result.conflicts = outcome.conflicts.clone();
+    } else if has_doc_conflicts {
+        result.status = SyncStatus::PartialConflict;
+        result.conflicts = outcome.conflicts.clone();
+    } else if !outcome.pending_take_remote_failed.is_empty() {
+        result.status = SyncStatus::RecoverableError(format!(
+            "pending_take_remote_failed: {}",
+            outcome.pending_take_remote_failed.join(", ")
+        ));
+        result.error = Some(format!(
+            "pending_take_remote: remote file missing for paths: {}",
+            outcome.pending_take_remote_failed.join(", ")
+        ));
+    } else if has_changes {
+        result.status = SyncStatus::LatestWinsApplied;
+    } else {
+        result.status = SyncStatus::NoChanges;
+    }
+}
 
 /// 执行一次 LWW 同步尝试。
 ///
@@ -105,29 +151,7 @@ pub(crate) fn execute_lww_sync_attempt(
         cancellation_token,
     )?;
 
-    let has_doc_conflicts = !outcome.conflicts.is_empty();
-    let has_changes = !outcome.remote_upload_paths.is_empty()
-        || !outcome.downloaded_files.is_empty()
-        || !outcome.local_deletes.is_empty()
-        || !outcome.remote_delete_paths.is_empty();
-
-    if has_doc_conflicts {
-        result.status = SyncStatus::PartialConflict;
-        result.conflicts = outcome.conflicts;
-    } else if !outcome.pending_take_remote_failed.is_empty() {
-        result.status = SyncStatus::RecoverableError(format!(
-            "pending_take_remote_failed: {}",
-            outcome.pending_take_remote_failed.join(", ")
-        ));
-        result.error = Some(format!(
-            "pending_take_remote: remote file missing for paths: {}",
-            outcome.pending_take_remote_failed.join(", ")
-        ));
-    } else if has_changes {
-        result.status = SyncStatus::LatestWinsApplied;
-    } else {
-        result.status = SyncStatus::NoChanges;
-    }
+    apply_outcome_status(result, &outcome, remote_prefix);
 
     result.uploaded_files = outcome.remote_upload_paths;
     result.downloaded_files = outcome.downloaded_files;

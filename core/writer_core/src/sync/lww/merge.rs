@@ -31,6 +31,7 @@
 //! - 远端同路径更新通过 LWW 时间戳比较进入合并，修复"远端更新丢失"。
 
 use crate::sync::content_class::is_document_content_path;
+use crate::sync::path::ValidatedSyncPath;
 use crate::sync::provider::SyncProvider;
 use crate::sync::scanner::scan_for_sync;
 use crate::sync::types::{
@@ -42,7 +43,7 @@ use std::path::Path;
 
 use super::compare::{resolve_path_decision, PathDecision};
 use super::manifest::{
-    build_remote_records, lww_record_time, snapshot_local_records_read_only, SYNC_MANIFEST_PATH,
+    build_remote_records, lww_record_time, snapshot_local_records_for_merge, SYNC_MANIFEST_PATH,
 };
 use super::transfer::{
     download_pending_take_remote, download_remote_files, fetch_remote_manifest, fetch_remote_tree,
@@ -70,6 +71,10 @@ pub(crate) struct LwwMergeOutcome {
     pub ignored_files: Vec<String>,
     /// pending_take_remote 中下载失败（远端缺失）的路径，保留在 pending 中待下轮重试。
     pub pending_take_remote_failed: Vec<String>,
+    /// 本地缺失且无 tombstone、远端也没有可验证 blob 的路径（#931）。
+    /// 既不能当删除传播，也不能发布引用缺失 blob 的新 generation；
+    /// 调用方应显式报 `local_missing_without_tombstone`。
+    pub unresolved_missing_paths: Vec<String>,
     /// 远端 tree 文件（供调用方做远端写的前置条件）。
     pub remote_tree_files: HashMap<String, String>,
     /// 远端 manifest 路径（供调用方上传 manifest）。
@@ -127,7 +132,10 @@ pub(crate) fn merge_remote_into_local_snapshot(
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    let local_records = snapshot_local_records_read_only(sync_root, scope, &state.device_id)?;
+    // 宽松投影：known file 缺失且无 tombstone 时不整体 Err，而是先尝试从远端
+    // blob 恢复；无法恢复的路径显式报 local_missing_without_tombstone（见下方）。
+    let local_snapshot = snapshot_local_records_for_merge(sync_root, scope, &state.device_id)?;
+    let local_records = local_snapshot.records;
     let remote_records = build_remote_records(
         remote_manifest,
         &remote_tree_files,
@@ -135,6 +143,71 @@ pub(crate) fn merge_remote_into_local_snapshot(
         provider,
         source_remote_prefix,
     )?;
+
+    // ── 已知文件缺失恢复（#931）──
+    // missing_without_delete_fact 中的路径磁盘缺失但没有删除事实：
+    // - 远端有可验证的 upsert blob（读回的 MD5 == remote record.content_hash）
+    //   → 写回本地文件，本轮按正常 merge 继续（不伪造本地 edit/delete）；
+    // - 远端没有可验证 blob → 收集到 unresolved_missing_paths，不转成 delete，
+    //   也不允许发布引用缺失 blob 的新 generation；其余路径正常合并。
+    let mut recovered_missing_files: Vec<String> = Vec::new();
+    let mut unresolved_missing_paths: Vec<String> = Vec::new();
+    for missing in &local_snapshot.missing_without_delete_fact {
+        // 之前轮次可能已恢复 → 磁盘存在即视为已恢复。
+        if sync_root.join(&missing.path).exists() {
+            recovered_missing_files.push(missing.path.clone());
+            continue;
+        }
+        match remote_records.get(&missing.path) {
+            // 远端 tombstone → 交给主循环按 LWW/删除收敛，不当缺失处理。
+            Some(remote_rec) if remote_rec.op == "delete" => continue,
+            Some(remote_rec) => {
+                let remote_path = format!("{}/{}", source_remote_prefix, missing.path);
+                let remote_obj = provider.read(&remote_path)?;
+                let recoverable = match remote_obj {
+                    Some(obj) => {
+                        let content_hash = crate::sync::hash::content_md5(&obj.content);
+                        if content_hash == remote_rec.content_hash {
+                            let validated = ValidatedSyncPath::new(&missing.path)?;
+                            let full_path = validated.join_under(sync_root);
+                            crate::storage::transaction::atomic_write_bytes(
+                                &full_path,
+                                &obj.content,
+                            )
+                            .map_err(|e| {
+                                crate::Error::Io(std::io::Error::other(format!(
+                                    "recover missing file {}: {}",
+                                    missing.path, e
+                                )))
+                            })?;
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    None => false,
+                };
+                if recoverable {
+                    recovered_missing_files.push(missing.path.clone());
+                    log::info!(
+                        "[sync] recovered missing local file from remote blob: path={}",
+                        missing.path
+                    );
+                } else {
+                    unresolved_missing_paths.push(missing.path.clone());
+                }
+            }
+            None => unresolved_missing_paths.push(missing.path.clone()),
+        }
+    }
+    if !unresolved_missing_paths.is_empty() {
+        log::warn!(
+            "[sync] local_missing_without_tombstone: {} path(s) missing without delete fact and no \
+             verifiable remote blob: {:?}",
+            unresolved_missing_paths.len(),
+            unresolved_missing_paths
+        );
+    }
 
     // 提前加载 conflicts_json，让它一直带到最后的 persist_sync_merge_result，
     // 不要末尾再重新读一份。旧基线归一化和主循环都操作这一份 conflicts_json，
@@ -402,6 +475,15 @@ pub(crate) fn merge_remote_into_local_snapshot(
         .collect();
 
     for path in all_paths {
+        if recovered_missing_files.contains(&path) {
+            // 本轮刚从远端 blob 恢复的文件：按远端真实记录进入 merged manifest，
+            // 文件内容已写回磁盘，后续 scan 会重建 known_files。
+            if let Some(remote_rec) = remote_records.get(&path) {
+                merged_manifest_files.insert(path.clone(), remote_rec.clone());
+            }
+            ignored_files.push(path);
+            continue;
+        }
         if pending_take_remote_all_set.contains(&path) {
             if pending_take_remote_downloaded.contains(&path) {
                 if let Some(remote_rec) = remote_records.get(&path) {
@@ -564,6 +646,20 @@ pub(crate) fn merge_remote_into_local_snapshot(
         }
     }
 
+    // 未恢复的缺失路径：保留旧 manifest 记录（真实 LWW 元数据）在 merged manifest 中，
+    // 不伪造 upsert/delete；known_files 基线在下方重建阶段保留。
+    for missing in &local_snapshot.missing_without_delete_fact {
+        if !unresolved_missing_paths.contains(&missing.path) {
+            continue;
+        }
+        if merged_manifest_files.contains_key(&missing.path) {
+            continue;
+        }
+        if let Some(rec) = &missing.manifest_record {
+            merged_manifest_files.insert(missing.path.clone(), rec.clone());
+        }
+    }
+
     move_to_trash(sync_root, &to_delete_local)?;
 
     download_remote_files(sync_root, provider, source_remote_prefix, &to_download)?;
@@ -596,7 +692,16 @@ pub(crate) fn merge_remote_into_local_snapshot(
     }
 
     state.last_sync_time = Some(chrono::Utc::now().timestamp());
-    state.last_error = None;
+    state.last_error = if unresolved_missing_paths.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "local_missing_without_tombstone: {} path(s) missing without delete fact and no \
+             verifiable remote blob: {}",
+            unresolved_missing_paths.len(),
+            unresolved_missing_paths.join(", ")
+        ))
+    };
 
     let post_local_entries = scan_for_sync(sync_root, scope)?;
 
@@ -646,6 +751,23 @@ pub(crate) fn merge_remote_into_local_snapshot(
         state.known_files_updated_at.insert(path, t);
     }
 
+    // 未恢复的缺失路径：保留已知基线（不允许被清空后丢失恢复证据）。
+    for missing in &local_snapshot.missing_without_delete_fact {
+        if !unresolved_missing_paths.contains(&missing.path) {
+            continue;
+        }
+        state
+            .known_files
+            .entry(missing.path.clone())
+            .or_insert_with(|| missing.known_hash.clone());
+        if let Some(t) = missing.known_files_updated_at {
+            state
+                .known_files_updated_at
+                .entry(missing.path.clone())
+                .or_insert(t);
+        }
+    }
+
     state
         .tombstones
         .retain(|t| t.purge_after > chrono::Utc::now().timestamp());
@@ -661,6 +783,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
     )?;
 
     let mut all_downloaded = pending_take_remote_downloaded;
+    all_downloaded.extend(recovered_missing_files);
     all_downloaded.extend(to_download);
 
     Ok(LwwMergeOutcome {
@@ -676,6 +799,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
         overwritten_files,
         ignored_files,
         pending_take_remote_failed,
+        unresolved_missing_paths,
         remote_tree_files,
         remote_manifest_path,
         manifest_json,
@@ -733,13 +857,32 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    // 1. 用 snapshot_local_records_read_only 取本地完整快照（与 planner / LWW attempt 同源）。
-    //    manifest 不存在 → 空 HashMap（首次同步，正常）；manifest 损坏 → Err。
-    let local_records = snapshot_local_records_read_only(sync_root, scope, preferred_device_id)?;
+    // 1. 用 snapshot_local_records_for_merge 取本地快照（与 merge 同源）。
+    //    #931：已知文件缺失且无墓碑时不再整体 Err。缺失路径单独收集，向上层
+    //    显式报告 local_missing_without_tombstone；不允许伪造删除记录。
+    let local_snapshot = snapshot_local_records_for_merge(sync_root, scope, preferred_device_id)?;
+    let local_records = local_snapshot.records;
+    let unresolved_missing_paths: Vec<String> = local_snapshot
+        .missing_without_delete_fact
+        .iter()
+        .filter(|missing| !sync_root.join(&missing.path).exists())
+        .map(|missing| missing.path.clone())
+        .collect();
 
     // 2. 构造 manifest（排序、清除过期 delete tombstone），与 merge_remote_into_local_snapshot 对齐。
     let purge_time = now_ms - 30 * 24 * 3600 * 1000;
     let mut manifest_files_vec: Vec<ManifestFileRecord> = local_records.values().cloned().collect();
+    // #931：缺失路径保留旧 manifest 的真实 LWW 记录（若有），不伪造删除/不丢基线。
+    for missing in &local_snapshot.missing_without_delete_fact {
+        if !unresolved_missing_paths.contains(&missing.path) {
+            continue;
+        }
+        if let Some(record) = &missing.manifest_record {
+            if !manifest_files_vec.iter().any(|rec| rec.path == record.path) {
+                manifest_files_vec.push(record.clone());
+            }
+        }
+    }
     manifest_files_vec.retain(|rec| rec.op != "delete" || lww_record_time(rec) > purge_time);
     manifest_files_vec.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -819,8 +962,35 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         state.known_files_updated_at.insert(path, t);
     }
 
+    // #931：缺失且无墓碑的路径保留 known_files 基线（供后续恢复判断，
+    // 也避免把“未知的缺失”洗成干净同步状态）。
+    for missing in &local_snapshot.missing_without_delete_fact {
+        if !unresolved_missing_paths.contains(&missing.path) {
+            continue;
+        }
+        state
+            .known_files
+            .entry(missing.path.clone())
+            .or_insert_with(|| missing.known_hash.clone());
+        if let Some(t) = missing.known_files_updated_at {
+            state
+                .known_files_updated_at
+                .entry(missing.path.clone())
+                .or_insert(t);
+        }
+    }
+
     state.last_sync_time = Some(chrono::Utc::now().timestamp());
-    state.last_error = None;
+    state.last_error = if unresolved_missing_paths.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "local_missing_without_tombstone: {} path(s) missing without delete fact and no \
+             verifiable remote blob: {}",
+            unresolved_missing_paths.len(),
+            unresolved_missing_paths.join(", ")
+        ))
+    };
     state
         .tombstones
         .retain(|t| t.purge_after > chrono::Utc::now().timestamp());
@@ -860,9 +1030,13 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         overwritten_files: Vec::new(),
         ignored_files: Vec::new(),
         pending_take_remote_failed: Vec::new(),
+        unresolved_missing_paths,
         remote_tree_files: HashMap::new(),
         remote_manifest_path,
         manifest_json,
         merged_manifest: sync_manifest,
     })
 }
+
+#[cfg(test)]
+mod tests;

@@ -918,3 +918,450 @@ fn run_transfer_reports_progress_per_target() {
         assert_eq!(entry.conflict_count, 0, "本场景无冲突");
     }
 }
+
+/// #928 复现：远端 record 是 Upsert，candidate 的 whole-work
+/// `max(file.lww_time)` 不严格赢（打平），但 merge 产生了非冲突文件的增量内容 →
+/// 仍必须推进 generation 发布；不允许被 RemoteWins(Upsert) 直接收敛掉。
+#[test]
+fn repro_issue_928_remote_upsert_lww_does_not_block_incremental_publish() {
+    use crate::sync::types::{PlannedTargetKind, SyncPolicy};
+
+    let tmp = TempDir::new().unwrap();
+    let project_root = tmp.path().join("projects").join("p1");
+    std::fs::create_dir_all(&project_root).unwrap();
+
+    // 本地：project.json 有增量（1500, dev-A），比远端 generation 的新文件旧。
+    let local_content = b"local project content";
+    std::fs::write(project_root.join("project.json"), local_content).unwrap();
+    std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
+    let local_manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: "project.json".to_string(),
+            content_hash: format!("{:x}", md5::compute(local_content)),
+            updated_at_ms: 1500,
+            deleted_at_ms: None,
+            device_id: "dev-A".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    std::fs::write(
+        project_root.join("app-meta/sync/manifest.sync.json"),
+        serde_json::to_vec(&local_manifest).unwrap(),
+    )
+    .unwrap();
+
+    // 远端 visible generation g1：chapter.md (2000, dev-B)。
+    let remote_chapter = b"remote chapter content";
+    let gen_prefix = "projects/p1/__generations__/g1";
+    let remote_manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: "volumes/v1/chapter.md".to_string(),
+            content_hash: format!("{:x}", md5::compute(remote_chapter)),
+            updated_at_ms: 2000,
+            deleted_at_ms: None,
+            device_id: "dev-B".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    let provider = MemoryProvider::with_entries([
+        (
+            format!("{gen_prefix}/volumes/v1/chapter.md"),
+            remote_chapter.to_vec(),
+        ),
+        (
+            format!("{gen_prefix}/app-meta/sync/manifest.sync.json"),
+            serde_json::to_vec(&remote_manifest).unwrap(),
+        ),
+    ]);
+
+    // catalog：远端 record LWW=2000/dev-B，与 candidate 的 whole-work max 打平
+    // （不严格赢）→ compare_lifecycle_candidate 返回 RemoteWins(Upsert)。
+    {
+        let mut cat = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut cat,
+            crate::sync::types::TargetLifecycleRecord::upsert(
+                "projects/p1",
+                "projects/p1",
+                2000,
+                "dev-B",
+            )
+            .with_active_generation("g1"),
+        );
+        let snap = crate::sync::types::RemoteTargetCatalogSnapshot {
+            catalog: cat,
+            version: crate::sync::provider::model::RemoteVersion::new("__nonexistent__"),
+        };
+        crate::sync::target_lifecycle::write_remote_catalog(&provider, &snap).unwrap();
+    }
+    let remote_catalog_snapshot =
+        crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+
+    let planned = crate::sync::full_sync::PlannedTarget {
+        target: SyncTarget::project("p1"),
+        local_root: project_root.clone(),
+        staging_root: None,
+        target_kind: PlannedTargetKind::LiveProject,
+        project_id: Some("p1".to_string()),
+        target_live_root: project_root,
+        deleted_journal_token: None,
+        deleted_lww: None,
+        live_lww: Some(LiveTargetLww {
+            lww_time_ms: 1500,
+            device_id: "dev-A".to_string(),
+        }),
+        expected_delete_lww: None,
+    };
+    let plan = crate::sync::full_sync::FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: false,
+        targets: vec![planned],
+        app_data_root: tmp.path().to_path_buf(),
+        remote_catalog_snapshot,
+    };
+
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None, None, None);
+    assert_eq!(transfer.targets.len(), 1);
+    let result = &transfer.targets[0].result;
+
+    // 非冲突文件的增量必须被真实上传（修复前被 RemoteWins(Upsert) 拦截）。
+    assert!(
+        result.uploaded_files.contains(&"project.json".to_string()),
+        "#928: 非冲突文件增量必须上传；实际 status={:?} uploaded={:?} error={:?}",
+        result.status,
+        result.uploaded_files,
+        result.error
+    );
+    assert!(
+        matches!(result.status, crate::sync::SyncStatus::LatestWinsApplied),
+        "有真实上传应报 LatestWinsApplied；实际 {:?}",
+        result.status
+    );
+
+    // generation 指针已推进，且作品级 LWW 未被降级。
+    let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+    let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/p1")
+        .expect("catalog record 应存在");
+    assert_eq!(rec.op, crate::sync::types::TargetOp::Upsert);
+    assert_eq!(rec.updated_at_ms, 2000);
+    assert_eq!(rec.device_id, "dev-B");
+    let new_gen = rec
+        .active_generation
+        .clone()
+        .expect("active_generation 应存在");
+    assert_ne!(new_gen, "g1", "generation 指针应推进到新版本");
+
+    // 新 generation 包含上传的本地增量，并复用未变化远端文件的 blob。
+    assert_eq!(
+        provider
+            .read(&format!(
+                "projects/p1/__generations__/{new_gen}/project.json"
+            ))
+            .unwrap()
+            .unwrap()
+            .content,
+        local_content
+    );
+    assert_eq!(
+        provider
+            .read(&format!(
+                "projects/p1/__generations__/{new_gen}/volumes/v1/chapter.md"
+            ))
+            .unwrap()
+            .unwrap()
+            .content,
+        remote_chapter
+    );
+}
+
+/// #928 反向保证：远端 Upsert 且 merge 没有任何文件级内容/tombstone 变化时，
+/// 仍然直接收敛，不重复 publish generation，也不推进 `active_generation`。
+#[test]
+fn issue_928_remote_upsert_without_file_level_changes_converges_without_publish() {
+    use crate::sync::types::{PlannedTargetKind, SyncPolicy};
+
+    let tmp = TempDir::new().unwrap();
+    let project_root = tmp.path().join("projects").join("p1");
+    std::fs::create_dir_all(&project_root).unwrap();
+
+    // 本地 project.json 与远端 visible generation 内容一致（仅 LWW 元数据更旧）。
+    let content = b"same content";
+    let hash = format!("{:x}", md5::compute(content));
+    std::fs::write(project_root.join("project.json"), content).unwrap();
+    std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
+    let local_manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: "project.json".to_string(),
+            content_hash: hash.clone(),
+            updated_at_ms: 1500,
+            deleted_at_ms: None,
+            device_id: "dev-A".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    std::fs::write(
+        project_root.join("app-meta/sync/manifest.sync.json"),
+        serde_json::to_vec(&local_manifest).unwrap(),
+    )
+    .unwrap();
+
+    let gen_prefix = "projects/p1/__generations__/g1";
+    let remote_manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: "project.json".to_string(),
+            content_hash: hash,
+            updated_at_ms: 2000,
+            deleted_at_ms: None,
+            device_id: "dev-B".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    let provider = MemoryProvider::with_entries([
+        (format!("{gen_prefix}/project.json"), content.to_vec()),
+        (
+            format!("{gen_prefix}/app-meta/sync/manifest.sync.json"),
+            serde_json::to_vec(&remote_manifest).unwrap(),
+        ),
+    ]);
+
+    {
+        let mut cat = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut cat,
+            crate::sync::types::TargetLifecycleRecord::upsert(
+                "projects/p1",
+                "projects/p1",
+                2000,
+                "dev-B",
+            )
+            .with_active_generation("g1"),
+        );
+        let snap = crate::sync::types::RemoteTargetCatalogSnapshot {
+            catalog: cat,
+            version: crate::sync::provider::model::RemoteVersion::new("__nonexistent__"),
+        };
+        crate::sync::target_lifecycle::write_remote_catalog(&provider, &snap).unwrap();
+    }
+    let remote_catalog_snapshot =
+        crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+
+    let planned = crate::sync::full_sync::PlannedTarget {
+        target: SyncTarget::project("p1"),
+        local_root: project_root.clone(),
+        staging_root: None,
+        target_kind: PlannedTargetKind::LiveProject,
+        project_id: Some("p1".to_string()),
+        target_live_root: project_root,
+        deleted_journal_token: None,
+        deleted_lww: None,
+        live_lww: Some(LiveTargetLww {
+            lww_time_ms: 1500,
+            device_id: "dev-A".to_string(),
+        }),
+        expected_delete_lww: None,
+    };
+    let plan = crate::sync::full_sync::FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: false,
+        targets: vec![planned],
+        app_data_root: tmp.path().to_path_buf(),
+        remote_catalog_snapshot,
+    };
+
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None, None, None);
+    assert_eq!(transfer.targets.len(), 1);
+    let result = &transfer.targets[0].result;
+
+    // 没有任何文件级变化 → 不上传、不 publish。
+    assert!(
+        result.uploaded_files.is_empty(),
+        "无文件级变化不应上传；实际 {:?}",
+        result.uploaded_files
+    );
+
+    // generation 指针保持 g1，作品级 LWW 保持远端值。
+    let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+    let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/p1")
+        .expect("catalog record 应存在");
+    assert_eq!(rec.op, crate::sync::types::TargetOp::Upsert);
+    assert_eq!(rec.updated_at_ms, 2000);
+    assert_eq!(rec.device_id, "dev-B");
+    assert_eq!(rec.active_generation.as_deref(), Some("g1"));
+
+    // 远端 generation 目录里不应出现 g1 之外的新 generation 内容。
+    let generations: Vec<String> = provider
+        .list("projects/p1/__generations__")
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect();
+    assert!(
+        generations.iter().all(|p| p.starts_with("g1/")),
+        "不应 publish 新 generation；实际 {:?}",
+        generations
+    );
+}
+
+/// #931 集成：Live 作品本地 known file 缺失且远端没有可验证 blob →
+/// 禁止 publish 引用缺失 blob 的新 generation，显式报
+/// `local_missing_without_tombstone` + target/path；其余非冲突文件的
+/// 下载/合并照常完成（文件级隔离）。
+#[test]
+fn issue_931_live_missing_without_tombstone_skips_publish_with_explicit_error() {
+    use crate::sync::types::{PlannedTargetKind, SyncPolicy};
+
+    let tmp = TempDir::new().unwrap();
+    let project_root = tmp.path().join("projects").join("p1");
+    std::fs::create_dir_all(&project_root).unwrap();
+
+    // 本地 manifest 记录 project.json，但磁盘上文件缺失（无 tombstone）。
+    let missing_hash = format!("{:x}", md5::compute(b"vanished local content"));
+    std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
+    let local_manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: "project.json".to_string(),
+            content_hash: missing_hash,
+            updated_at_ms: 1500,
+            deleted_at_ms: None,
+            device_id: "dev-A".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    std::fs::write(
+        project_root.join("app-meta/sync/manifest.sync.json"),
+        serde_json::to_vec(&local_manifest).unwrap(),
+    )
+    .unwrap();
+
+    // 远端 visible generation g1：另一个文件 chapter.md (2000, dev-B)。
+    let remote_chapter = b"remote chapter content";
+    let gen_prefix = "projects/p1/__generations__/g1";
+    let remote_manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: "volumes/v1/chapter.md".to_string(),
+            content_hash: format!("{:x}", md5::compute(remote_chapter)),
+            updated_at_ms: 2000,
+            deleted_at_ms: None,
+            device_id: "dev-B".to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    let provider = MemoryProvider::with_entries([
+        (
+            format!("{gen_prefix}/volumes/v1/chapter.md"),
+            remote_chapter.to_vec(),
+        ),
+        (
+            format!("{gen_prefix}/app-meta/sync/manifest.sync.json"),
+            serde_json::to_vec(&remote_manifest).unwrap(),
+        ),
+    ]);
+
+    {
+        let mut cat = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut cat,
+            crate::sync::types::TargetLifecycleRecord::upsert(
+                "projects/p1",
+                "projects/p1",
+                2000,
+                "dev-B",
+            )
+            .with_active_generation("g1"),
+        );
+        let snap = crate::sync::types::RemoteTargetCatalogSnapshot {
+            catalog: cat,
+            version: crate::sync::provider::model::RemoteVersion::new("__nonexistent__"),
+        };
+        crate::sync::target_lifecycle::write_remote_catalog(&provider, &snap).unwrap();
+    }
+    let remote_catalog_snapshot =
+        crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+
+    let planned = crate::sync::full_sync::PlannedTarget {
+        target: SyncTarget::project("p1"),
+        local_root: project_root.clone(),
+        staging_root: None,
+        target_kind: PlannedTargetKind::LiveProject,
+        project_id: Some("p1".to_string()),
+        target_live_root: project_root.clone(),
+        deleted_journal_token: None,
+        deleted_lww: None,
+        live_lww: Some(LiveTargetLww {
+            lww_time_ms: 1500,
+            device_id: "dev-A".to_string(),
+        }),
+        expected_delete_lww: None,
+    };
+    let plan = crate::sync::full_sync::FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: false,
+        targets: vec![planned],
+        app_data_root: tmp.path().to_path_buf(),
+        remote_catalog_snapshot,
+    };
+
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None, None, None);
+    assert_eq!(transfer.targets.len(), 1);
+    let result = &transfer.targets[0].result;
+
+    // 显式错误：target + path 可定位；不是泛化 "sync failed"。
+    match &result.status {
+        crate::sync::SyncStatus::RecoverableError(msg) => {
+            assert!(
+                msg.contains("local_missing_without_tombstone"),
+                "status 应含 local_missing_without_tombstone，实际: {msg}"
+            );
+            assert!(
+                msg.contains("project.json"),
+                "status 应含缺失路径，实际: {msg}"
+            );
+        }
+        other => panic!("expected RecoverableError, got {other:?}"),
+    }
+    let err = result.error.as_deref().unwrap_or_default();
+    assert!(
+        err.contains("target=projects/p1") && err.contains("project.json"),
+        "error 应含 target + path，实际: {err}"
+    );
+
+    // 禁止发布引用缺失 blob 的新 generation：catalog 指针保持 g1。
+    let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+    let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/p1").unwrap();
+    assert_eq!(rec.active_generation.as_deref(), Some("g1"));
+    let generations: Vec<String> = provider
+        .list("projects/p1/__generations__")
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect();
+    assert!(
+        generations.iter().all(|p| p.starts_with("g1/")),
+        "不应 publish 新 generation；实际 {:?}",
+        generations
+    );
+
+    // 文件级隔离：非冲突文件 chapter.md 仍已下载到本地。
+    assert!(
+        project_root.join("volumes/v1/chapter.md").exists(),
+        "其他路径的下载不应被缺失文件阻断"
+    );
+    assert!(result
+        .downloaded_files
+        .contains(&"volumes/v1/chapter.md".to_string()));
+}

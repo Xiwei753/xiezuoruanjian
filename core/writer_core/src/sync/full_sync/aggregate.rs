@@ -83,9 +83,9 @@ pub fn aggregate_full_sync_result(targets: Vec<TargetSyncResult>) -> FullSyncRes
     let dominant = targets
         .iter()
         .find(|t| full_sync_status_priority(&t.result.status) == overall_priority);
-    let error = dominant.and_then(|t| t.result.error.clone());
+    let mut error = dominant.and_then(|t| t.result.error.clone());
     let error_category = dominant.and_then(|t| t.result.error_category.clone());
-    let message_key = dominant
+    let mut message_key = dominant
         .and_then(|t| t.result.message_key.clone())
         .or_else(|| {
             error_category.as_deref().map(|c| {
@@ -94,6 +94,18 @@ pub fn aggregate_full_sync_result(targets: Vec<TargetSyncResult>) -> FullSyncRes
                     .to_string()
             })
         });
+
+    // #928 第 4 点：PartialConflict 必须表达“非冲突文件已同步、N 个冲突待处理”，
+    // 并指出哪些 target 仍有冲突；dominant 没有具体 error 时合成语义化摘要。
+    // 普通远端失败仍走 dominant 的具体 error + error_category + message_key。
+    if overall_priority == 3 && error.is_none() {
+        let (summary_error, summary_key) =
+            build_partial_conflict_summary(&targets, total_conflicts);
+        error = Some(summary_error);
+        if message_key.is_none() {
+            message_key = Some(summary_key);
+        }
+    }
 
     FullSyncResult {
         overall_status,
@@ -109,6 +121,35 @@ pub fn aggregate_full_sync_result(targets: Vec<TargetSyncResult>) -> FullSyncRes
         error_category,
         message_key,
     }
+}
+
+/// #928 第 4 点：PartialConflict 的语义化摘要（dominant 没有具体 error 时）。
+///
+/// 返回 `(error, message_key)`：说明非冲突文件已同步、还有多少冲突、哪些
+/// target 仍有冲突，与真正失败的 target 的 error 区分开。
+fn build_partial_conflict_summary(
+    targets: &[TargetSyncResult],
+    total_conflicts: u32,
+) -> (String, String) {
+    let completed_targets = targets
+        .iter()
+        .filter(|t| full_sync_status_priority(&t.result.status) == 0)
+        .count();
+    let conflicted_targets: Vec<&str> = targets
+        .iter()
+        .filter(|t| full_sync_status_priority(&t.result.status) == 3)
+        .map(|t| t.remote_prefix.as_str())
+        .collect();
+    (
+        format!(
+            "partial_conflict: non-conflicting files synced ({} target(s) completed); \
+             {} conflict(s) pending on target(s): {}",
+            completed_targets,
+            total_conflicts,
+            conflicted_targets.join(", ")
+        ),
+        "sync.result.partial_conflict_summary".to_string(),
+    )
 }
 
 // ── 纯辅助函数（从 facade/sync_ops.rs 搬移） ──

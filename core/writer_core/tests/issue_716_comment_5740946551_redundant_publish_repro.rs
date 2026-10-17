@@ -1,27 +1,37 @@
-//! Issue #716 评论 5740946551 — `transfer_live_project` 不再重复 publish generation 验证测试。
+//! Issue #716 评论 5740946551 + Issue #928 — `transfer_live_project` publish 边界验证测试。
 //!
-//! ## 修复目标
+//! ## 修复目标（#928 后的语义）
 //!
-//! `core/writer_core/src/sync/full_sync/transfer_helpers.rs` 的 `transfer_live_project`
-//! 循环逻辑：修复前每轮先 `publish_generation`（上传一整份新 generation 到远端），再 CAS
-//! `apply_lifecycle_record`。当远端 Upsert 同时间戳严格赢（`device_remote > device_local`）
-//! 且 merge 后 candidate 仍不赢时，CAS 返回 `RemoteWinner(Upsert)` 触发 `continue`，
-//! 下一轮又 publish 一个新的 generation。明知 winner 不会改变仍重复 publish，每轮产生
-//! 一个未引用 generation。
+//! `core/writer_core/src/sync/full_sync/transfer_helpers/transfer_live.rs` 的
+//! `transfer_live_project` publish 判定不再只看作品级 whole-work LWW：
 //!
-//! 修复后 publish 前先用 `compare_lifecycle_candidate` 判定：candidate 不赢直接收敛不 publish。
-//! 本测试用计数 `__generations__` 路径 write 的 mock provider 验证修复后 `publish_count == 0`。
+//! - 有文件级内容/tombstone 变化（`remote_upload_paths` / `remote_delete_paths` 非空）时，
+//!   即使 candidate 的作品级 LWW 不赢，也必须进入 generation publish + catalog CAS 推进
+//!   `active_generation`（#928：作品级 LWW 不得拦截非冲突文件的增量同步）。
+//! - 完全没有文件级变化时，candidate 不赢直接收敛，不 publish（#716 评论 5740946551：
+//!   不产生重复/未引用 generation）。
+//!
+//! 本测试覆盖"有文件级变化"的一侧：远端 visible generation 为空、本地 staging 有
+//! `volumes/v1/chapter.md`，merge 产生 `remote_upload_paths`；远端 Upsert 同时间戳严格赢
+//! （`device_remote > device_local`）且 candidate 仍不赢。修复后必须**恰好 publish 一次**
+//! 新 generation 并通过 CAS 推进 `active_generation`，不得因作品级 LWW 不赢丢弃本地
+//! chapter.md，也不得重复 publish（旧缺陷每轮 `RemoteWinner(Upsert)` 都会重新 publish）。
+//! 作品级 LWW（`updated_at_ms` / `device_id`）保留远端赢家，不被降级。
+//!
+//! 无文件级变化 → 不 publish 的收敛分支由
+//! `sync/full_sync/tests/transfer.rs::issue_928_remote_upsert_without_file_level_changes_converges_without_publish`
+//! 覆盖。
 //!
 //! ## 场景
 //!
 //! 1. 远端 catalog 已有 Upsert record：`target_id="projects/p1"`, `lww_time_ms=T`,
 //!    `device_id="device_remote"`, `active_generation=Some("gen_existing")`。
-//! 2. 本地 staging post-transfer LWW：`lww_time_ms=T`（同时间戳）,
-//!    `device_id="device_local"`，其中 `"device_local" < "device_remote"`（字典序，
-//!    remote 严格赢）。
+//! 2. 远端 visible generation（`gen_existing`）为空；本地 staging 有 chapter.md，
+//!    post-transfer LWW = `(T, device_local)`，`"device_local" < "device_remote"`。
 //! 3. 调用 `run_transfer` 触发 `transfer_live_project`。
-//! 4. 断言：`publish_count == 0`（candidate 不赢直接收敛，不 publish），
-//!    `generation_writes == 0`，返回 `NoChanges`。
+//! 4. 断言：`publish_count == 1`（有文件级变化必须 publish，且不重复），新 generation
+//!    含 chapter.md，catalog `active_generation` 推进、作品级 LWW 仍为远端赢家，
+//!    返回 `LatestWinsApplied`。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -33,11 +43,12 @@ use writer_core::sync::provider::capabilities::SyncCapabilities;
 use writer_core::sync::provider::error::ProviderError;
 use writer_core::sync::provider::memory::MemoryProvider;
 use writer_core::sync::provider::model::{
-    DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion, WritePrecondition,
+    BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion,
+    WritePrecondition,
 };
 use writer_core::sync::provider::SyncProvider;
 use writer_core::sync::target_lifecycle::{
-    load_remote_catalog, upsert_record, write_remote_catalog,
+    find_record, load_remote_catalog, upsert_record, write_remote_catalog,
 };
 use writer_core::sync::types::{
     ManifestFileRecord, PlannedTargetKind, RemoteTargetCatalogSnapshot, SyncManifest, SyncPolicy,
@@ -49,16 +60,16 @@ const GENERATION_SUBDIR: &str = "__generations__";
 /// `generation.meta.json` 文件名 — 与 `generation_gc::GENERATION_META_FILENAME` 一致。
 const GENERATION_META_FILENAME: &str = "generation.meta.json";
 
-/// 计数对 `__generations__` 路径 write 的 mock provider。
+/// 计数对 `__generations__` 路径写入的 mock provider。
 ///
-/// 包装 `MemoryProvider`，在 `write()` 里对包含 `__generations__` 的路径计数，
-/// 并对以 `generation.meta.json` 结尾的路径单独计数（每次 publish 写 2 次 meta：
-/// `complete=false` + `complete=true`，故 `publish_count = meta_writes / 2`）。
+/// 包装 `MemoryProvider`，对 `write()` 和 `commit_batch()` 里包含 `__generations__`
+/// 的路径计数，并对以 `generation.meta.json` 结尾的路径单独计数（batch 路径每次
+/// publish 写 1 次 meta：`complete=true`）。
 struct CountingProvider {
     inner: MemoryProvider,
-    /// 所有对 `__generations__` 路径的 write 次数。
+    /// 所有对 `__generations__` 路径的写入次数（write + batch mutation）。
     generation_writes: AtomicUsize,
-    /// 对 `generation.meta.json` 的 write 次数（每次 publish 2 次）。
+    /// 对 `generation.meta.json` 的写入次数。
     generation_meta_writes: AtomicUsize,
 }
 
@@ -99,21 +110,43 @@ impl SyncProvider for CountingProvider {
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         self.inner.delete(path, precondition)
     }
+
+    fn commit_batch(
+        &self,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        for mutation in mutations {
+            let path = mutation.path();
+            if path.contains(GENERATION_SUBDIR) {
+                self.generation_writes.fetch_add(1, Ordering::SeqCst);
+                if path.ends_with(GENERATION_META_FILENAME) {
+                    self.generation_meta_writes.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+        self.inner.commit_batch(mutations, message)
+    }
 }
 
-/// Issue #716 评论 5740946551 验证：修复后 `transfer_live_project` 在 remote Upsert 同时间戳
-/// 严格赢且 merge 后 candidate 仍不赢时，不再调用 `publish_generation`，直接收敛返回 NoChanges。
+/// Issue #716 评论 5740946551 + Issue #928 验证：远端 visible generation 为空、本地 staging
+/// 有 chapter.md（文件级变化存在），remote Upsert 同时间戳严格赢且 candidate 不赢时，
+/// `transfer_live_project` 必须恰好 publish 一次新 generation 并 CAS 推进 `active_generation`，
+/// 不得丢弃本地增量，也不得重复 publish。
 ///
 /// 场景：
 /// - 远端 catalog：Upsert(`projects/p1`, T, `device_remote`, `active_generation=gen_existing`)
-/// - 本地 staging post-transfer LWW：(T, `device_local`)，`device_local < device_remote`
+/// - 远端 `gen_existing` 下无任何文件；本地 staging chapter.md post-transfer LWW = (T, `device_local`)
 /// - candidate = Upsert(`projects/p1`, T, `device_local`, `active_generation=new_gen`)
 /// - `compare_lifecycle_candidate(candidate, remote)`：
 ///   - `lww_record_wins(candidate, existing)`：时间相等，`device_local < device_remote` → false
 ///   - `records_equal`：`active_generation` 不同 → false
-///   - → `RemoteWins(existing(Upsert))` → 不 publish，直接收敛返回 NoChanges
+///   - → `RemoteWins(existing(Upsert))`
+/// - #928：merge 产生 `remote_upload_paths`（chapter.md 不在远端 visible generation）→ 走
+///   publish；`apply_generation_pointer` 保留远端作品级 LWW（T/device_remote）并推进
+///   `active_generation` 到新 generation。
 ///
-/// 修复后 publish 前先判定 candidate 不赢，故 `publish_count == 0`，不产生未引用 generation。
+/// 修复后 `publish_count == 1`（旧缺陷会在每轮 RemoteWinner 后重复 publish）。
 #[test]
 #[allow(clippy::too_many_lines)]
 fn repro_issue_716_comment_5740946551_redundant_publish() {
@@ -145,7 +178,8 @@ fn repro_issue_716_comment_5740946551_redundant_publish() {
 
     // 重新加载拿到真实 version，作为 plan 的 remote_catalog_snapshot。
     // 注意：不预置 gen_existing 下的任何文件 → merge 远端 visible generation 时 list 为空，
-    // staging manifest 不变，post-transfer LWW 仍是 (T, device_local)。
+    // 本地 staging 的 chapter.md 不在远端 → merge 产生 remote_upload_paths（文件级变化），
+    // post-transfer LWW 仍是 (T, device_local)。
     let remote_catalog_snapshot = load_remote_catalog(&provider).unwrap();
 
     // ── 2. 构造本地 staging：manifest LWW = (T, device_local)，有一个文件 ──
@@ -216,18 +250,18 @@ fn repro_issue_716_comment_5740946551_redundant_publish() {
         "应只有一个 target（projects/p1）"
     );
 
-    // ── 5. 断言：publish 次数 == 0（修复后 candidate 不赢直接收敛，不 publish）──
+    // ── 5. 断言：恰好 publish 一次（#928 有文件级变化必须 publish；不重复 publish）──
     let meta_writes = provider.generation_meta_writes.load(Ordering::SeqCst);
     let generation_writes = provider.generation_writes.load(Ordering::SeqCst);
-    // 每次 publish 写 2 次 generation.meta.json (complete=false + complete=true)
-    let publish_count = meta_writes / 2;
+    // batch 路径每次 publish 写 1 次 generation.meta.json（complete=true）。
+    let publish_count = meta_writes;
 
     assert_eq!(
-        publish_count, 0,
-        "Issue #716 评论 5740946551 修复失败：transfer_live_project 在 remote Upsert 同时间戳 \
-         严格赢（device_remote={:?} > device_local={:?}, T={}）且 merge 后 candidate 仍不赢时， \
-         应直接收敛不 publish。实际 publish_count={}（meta_writes={}, generation_writes={}）， \
-         期望 0。修复后 publish 前先用 compare_lifecycle_candidate 判定，candidate 不赢走 RemoteWins(Upsert) 分支直接返回。",
+        publish_count, 1,
+        "Issue #928 修复失败：remote Upsert 同时间戳严格赢（device_remote={:?} > device_local={:?}, \
+         T={}）但 merge 有文件级变化（chapter.md 不在远端 visible generation）时，应恰好 publish 一次新 \
+         generation 并 CAS 推进 active_generation，不得丢弃本地增量、也不得重复 publish。实际 \
+         publish_count={}（meta_writes={}, generation_writes={}）。",
         DEVICE_REMOTE,
         DEVICE_LOCAL,
         T,
@@ -236,26 +270,67 @@ fn repro_issue_716_comment_5740946551_redundant_publish() {
         generation_writes,
     );
 
-    // 附加证据：generation_writes == 0（没有任何对 __generations__ 路径的 write）。
-    assert_eq!(
-        generation_writes, 0,
-        "Issue #716 评论 5740946551 修复失败：不应有对 __generations__ 路径的 write，\
+    // 附加证据：generation_writes >= 3（新 generation 的 chapter.md + manifest + meta）。
+    assert!(
+        generation_writes >= 3,
+        "Issue #928 修复失败：新 generation 应写入 chapter.md、manifest、meta，\
          实际 generation_writes={}",
         generation_writes
     );
 
-    // 返回的 SyncResult 应该是 NoChanges（本测试无冲突）。
+    // catalog：active_generation 推进到新 generation，作品级 LWW 保留远端赢家。
+    let snapshot = load_remote_catalog(&provider).unwrap();
+    let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
+    let new_generation = record
+        .active_generation
+        .as_deref()
+        .expect("active_generation 应已推进");
+    assert_ne!(
+        new_generation, GEN_EXISTING,
+        "active_generation 应从 gen_existing 推进到新 generation"
+    );
+    assert_eq!(
+        record.updated_at_ms, T,
+        "作品级 LWW 不应被 candidate 降级：updated_at_ms 应保留远端赢家"
+    );
+    assert_eq!(
+        record.device_id, DEVICE_REMOTE,
+        "作品级 LWW 不应被 candidate 降级：device_id 应保留远端赢家"
+    );
+
+    // 新 generation 必须包含本地 chapter.md 增量内容。
+    let published = provider
+        .read(&format!(
+            "projects/p1/__generations__/{new_generation}/volumes/v1/chapter.md"
+        ))
+        .unwrap()
+        .expect("新 generation 应包含 chapter.md");
+    assert_eq!(
+        published.content, chapter_content,
+        "新 generation 中的 chapter.md 内容应与本地 staging 一致"
+    );
+
+    // 返回的 SyncResult：本地增量已应用（非 NoChanges——chapter.md 已上传）。
+    let result = &transfer.targets[0].result;
     assert!(
         matches!(
-            transfer.targets[0].result.status,
-            writer_core::sync::SyncStatus::NoChanges
+            result.status,
+            writer_core::sync::SyncStatus::LatestWinsApplied
         ),
-        "Issue #716 评论 5740946551 修复失败：返回状态应为 NoChanges，实际 {:?}",
-        transfer.targets[0].result.status
+        "返回状态应为 LatestWinsApplied（本地增量已上传），实际 {:?}",
+        result.status
+    );
+    assert!(
+        result
+            .uploaded_files
+            .contains(&"volumes/v1/chapter.md".to_string()),
+        "uploaded_files 应记录真实上传的非冲突文件，实际 {:?}",
+        result.uploaded_files
     );
 
     eprintln!(
-        "[issue_716_repro] publish_count={}, meta_writes={}, generation_writes={}, status={:?}",
-        publish_count, meta_writes, generation_writes, transfer.targets[0].result.status
+        "[issue_716_repro] publish_count={}, meta_writes={}, generation_writes={}, \
+         active_generation={}, status={:?}",
+        publish_count, meta_writes, generation_writes, new_generation, result.status
     );
 }

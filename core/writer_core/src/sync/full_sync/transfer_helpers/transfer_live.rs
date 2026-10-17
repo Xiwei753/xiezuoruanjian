@@ -21,7 +21,6 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
     Option<crate::sync::types::DeletedTargetResolution>,
     Option<crate::sync::types::LocalLifecycleCommitAction>,
 ) {
-    use crate::sync::types::TargetLifecycleApplyResult;
     use crate::sync::SyncStatus;
 
     /// LiveProject lifecycle CAS 重试上限。
@@ -291,6 +290,44 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                 }
             }
 
+            // #931：本地缺失且远端无可验证 blob → 禁止发布引用缺失 blob 的新
+            // generation，显式报 local_missing_without_tombstone + 目标路径。
+            // 其他路径的 merge 已按文件级隔离完成（下载/本地删除已生效），
+            // 远端上传留待恢复后下轮同步。
+            if let Some(outcome) = &merge_outcome_opt {
+                if !outcome.unresolved_missing_paths.is_empty() {
+                    log::warn!(
+                        "[sync] run_transfer: LiveProject {} (attempt {}) — \
+                         local_missing_without_tombstone: {}",
+                        planned.target.remote_prefix,
+                        attempt + 1,
+                        outcome.unresolved_missing_paths.join(", ")
+                    );
+                    let mut r = retained_conflict.take().unwrap_or_else(|| {
+                        merge_result.clone().unwrap_or_else(SyncResult::success)
+                    });
+                    r.status = SyncStatus::RecoverableError(format!(
+                        "local_missing_without_tombstone: {}",
+                        outcome.unresolved_missing_paths.join(", ")
+                    ));
+                    r.error = Some(format!(
+                        "local_missing_without_tombstone: target={} paths=[{}] — local file(s) \
+                         missing on disk without tombstone and no verifiable remote blob to \
+                         recover; generation publish skipped to avoid publishing incomplete content",
+                        planned.target.remote_prefix,
+                        outcome.unresolved_missing_paths.join(", ")
+                    ));
+                    merge_accumulated_local_effects(
+                        &mut r,
+                        &accumulated_downloaded_files,
+                        &accumulated_local_trashed_files,
+                        &accumulated_overwritten_files,
+                        &accumulated_ignored_files,
+                    );
+                    return (r, None, None);
+                }
+            }
+
             // 2. 构造 candidate（winner 身份只来自 merge 后真实 manifest，
             //    不伪造 lww_time+1 / device_id / 新时间戳）。
             //
@@ -355,15 +392,37 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                 }
             };
 
-            // 3. publish 前用复用函数做 LWW 判定。candidate 不赢直接收敛，不 publish。
+            // 3. publish / 收敛判定（#928）：把“作品级 LWW（delete/restore）”与
+            //    “内容 generation 版本推进”分开。
+            //    - 作品 delete/restore 仍按 LWW（compare_lifecycle_candidate）。
+            //    - 远端 Upsert 且 merge 产生文件级内容/tombstone 变化时，candidate 的
+            //      whole-work max(file.lww_time) 不赢也必须进入 publish/CAS 路径；
+            //      只有完全没有文件级变化才收敛跳过 publish。
+            let has_file_level_changes = merge_outcome_opt.as_ref().is_some_and(|outcome| {
+                !outcome.remote_upload_paths.is_empty() || !outcome.remote_delete_paths.is_empty()
+            });
             let remote_record = crate::sync::target_lifecycle::find_record(
                 &catalog_snapshot.catalog,
                 &planned.target.remote_prefix,
             );
-            match crate::sync::target_lifecycle::compare_lifecycle_candidate(
+            let expected_visible_generation =
+                remote_record.and_then(|record| record.active_generation.clone());
+            let comparison = crate::sync::target_lifecycle::compare_lifecycle_candidate(
                 &candidate,
                 remote_record,
-            ) {
+            );
+            // #928 核心修复：远端 Upsert 不因作品级 LWW 未推进而拦截非冲突文件的
+            // 增量同步 —— 有文件级内容/tombstone 变化时按 CandidateWins 走 publish。
+            let effective_comparison = match comparison {
+                crate::sync::target_lifecycle::LifecycleCandidateComparison::RemoteWins(winner)
+                    if winner.op == crate::sync::types::TargetOp::Upsert
+                        && has_file_level_changes =>
+                {
+                    crate::sync::target_lifecycle::LifecycleCandidateComparison::CandidateWins
+                }
+                other => other,
+            };
+            match effective_comparison {
                 crate::sync::target_lifecycle::LifecycleCandidateComparison::CandidateWins => {
                     // Issue #729：publish 前检查取消令牌。
                     // 如果已取消，不执行远端写入，提前返回已收集的 merge 结果。
@@ -521,13 +580,17 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                         }
                     }
 
-                    // 4. CAS apply_lifecycle_record。
-                    match crate::sync::target_lifecycle::apply_lifecycle_record(
+                    // 4. CAS apply_generation_pointer（#928）：content generation
+                    //    指针按 catalog CAS 推进；作品级 delete/restore LWW 不被降级。
+                    match crate::sync::target_lifecycle::apply_generation_pointer(
                         provider,
                         catalog_snapshot,
-                        candidate,
+                        &candidate,
+                        expected_visible_generation.as_deref(),
                     ) {
-                        TargetLifecycleApplyResult::Applied(persisted) => {
+                        crate::sync::target_lifecycle::GenerationPointerApplyResult::Applied(
+                            persisted,
+                        ) => {
                             *catalog_snapshot = persisted;
                             // Issue #716 评论 5742849844 问题 2：合并累计 local effects，
                             // 保留前几轮 CAS 重试的本地变化。content_result 已包含本轮
@@ -561,7 +624,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                             );
                             return (final_result, None, None);
                         }
-                        TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
+                        crate::sync::target_lifecycle::GenerationPointerApplyResult::AlreadyCurrent(persisted) => {
                             *catalog_snapshot = persisted;
                             // 同 Applied：CAS 成功后合并 content_result 远端侧已生效动作。
                             let mut final_result = if let Some(mut rc) = retained_conflict {
@@ -588,7 +651,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                             );
                             return (final_result, None, None);
                         }
-                        TargetLifecycleApplyResult::RemoteWinner {
+                        crate::sync::target_lifecycle::GenerationPointerApplyResult::RemoteWinner {
                             snapshot: persisted,
                             record: winner,
                         } => {
@@ -666,7 +729,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 }
                             }
                         }
-                        TargetLifecycleApplyResult::Retry(e) => {
+                        crate::sync::target_lifecycle::GenerationPointerApplyResult::Retry(e) => {
                             return (sync_result_from_error(e), None, None);
                         }
                     }

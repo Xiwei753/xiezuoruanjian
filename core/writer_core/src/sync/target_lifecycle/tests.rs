@@ -540,3 +540,151 @@ fn issue_659_project_manifest_present_workspace_corrupted_still_succeeds() {
     assert_eq!(record.updated_at_ms, 1800000000000);
     assert_eq!(record.device_id, "project-dev");
 }
+
+// =========================================================================
+// Issue #928: apply_generation_pointer — 内容 generation 指针按 CAS 推进，
+// 作品级 delete/restore LWW 不被降级。
+// =========================================================================
+
+#[test]
+fn apply_generation_pointer_preserves_work_lww_and_advances_generation() {
+    let p = MemoryProvider::new();
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(
+        &mut catalog,
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", 2000, "dev-b")
+            .with_active_generation("g1"),
+    );
+    write_remote_catalog(
+        &p,
+        &RemoteTargetCatalogSnapshot {
+            catalog,
+            version: RemoteVersion::new("__nonexistent__"),
+        },
+    )
+    .unwrap();
+
+    let loaded = load_remote_catalog(&p).unwrap();
+    // candidate 是本地 merge 后的内容版本：作品级 LWW 比远端旧（不能赢），
+    // 但自身有文件级内容变化（调用方已确认），generation 是 g2。
+    let candidate = TargetLifecycleRecord::upsert("projects/p1", "projects/p1", 1000, "dev-a")
+        .with_active_generation("g2");
+    let result = apply_generation_pointer(&p, &loaded, &candidate, Some("g1"));
+
+    match result {
+        GenerationPointerApplyResult::Applied(persisted) => {
+            let rec = find_record(&persisted.catalog, "projects/p1").unwrap();
+            // 作品级 LWW 保留远端严格胜者（绝不降级 delete/restore）。
+            assert_eq!(rec.updated_at_ms, 2000);
+            assert_eq!(rec.device_id, "dev-b");
+            // 内容 generation 指针推进到 candidate。
+            assert_eq!(rec.active_generation.as_deref(), Some("g2"));
+            assert_eq!(rec.op, TargetOp::Upsert);
+        }
+        other => panic!("expected Applied, got {other:?}"),
+    }
+
+    // 落盘后的 catalog 也是同样结果（CAS 写入真实生效）。
+    let reloaded = load_remote_catalog(&p).unwrap();
+    let rec = find_record(&reloaded.catalog, "projects/p1").unwrap();
+    assert_eq!(rec.updated_at_ms, 2000);
+    assert_eq!(rec.device_id, "dev-b");
+    assert_eq!(rec.active_generation.as_deref(), Some("g2"));
+}
+
+#[test]
+fn apply_generation_pointer_remote_winner_when_visible_generation_advanced() {
+    let p = MemoryProvider::new();
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(
+        &mut catalog,
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", 2000, "dev-b")
+            .with_active_generation("g1"),
+    );
+    write_remote_catalog(
+        &p,
+        &RemoteTargetCatalogSnapshot {
+            catalog,
+            version: RemoteVersion::new("__nonexistent__"),
+        },
+    )
+    .unwrap();
+
+    let loaded = load_remote_catalog(&p).unwrap();
+    let candidate = TargetLifecycleRecord::upsert("projects/p1", "projects/p1", 1000, "dev-a")
+        .with_active_generation("g2");
+    // merge 时看到的可见 generation 是 g0，但远端已是 g1 → 别人推进过，不覆盖。
+    let result = apply_generation_pointer(&p, &loaded, &candidate, Some("g0"));
+
+    match result {
+        GenerationPointerApplyResult::RemoteWinner { record, .. } => {
+            assert_eq!(record.active_generation.as_deref(), Some("g1"));
+            assert_eq!(record.updated_at_ms, 2000);
+            assert_eq!(record.device_id, "dev-b");
+        }
+        other => panic!("expected RemoteWinner, got {other:?}"),
+    }
+
+    // 远端 catalog 未被改写。
+    let reloaded = load_remote_catalog(&p).unwrap();
+    let rec = find_record(&reloaded.catalog, "projects/p1").unwrap();
+    assert_eq!(rec.active_generation.as_deref(), Some("g1"));
+    assert_eq!(rec.updated_at_ms, 2000);
+}
+
+#[test]
+fn apply_generation_pointer_never_revives_strictly_newer_remote_delete() {
+    let p = MemoryProvider::new();
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(
+        &mut catalog,
+        TargetLifecycleRecord::delete("projects/p1", "projects/p1", 3000, "dev-b"),
+    );
+    write_remote_catalog(
+        &p,
+        &RemoteTargetCatalogSnapshot {
+            catalog,
+            version: RemoteVersion::new("__nonexistent__"),
+        },
+    )
+    .unwrap();
+
+    let loaded = load_remote_catalog(&p).unwrap();
+    // candidate 作品级 LWW (1000, dev-a) 输给远端 Delete (3000, dev-b) → 不复活。
+    let candidate = TargetLifecycleRecord::upsert("projects/p1", "projects/p1", 1000, "dev-a")
+        .with_active_generation("g2");
+    let result = apply_generation_pointer(&p, &loaded, &candidate, None);
+
+    match result {
+        GenerationPointerApplyResult::RemoteWinner { record, .. } => {
+            assert_eq!(record.op, TargetOp::Delete);
+        }
+        other => panic!("expected RemoteWinner, got {other:?}"),
+    }
+
+    let reloaded = load_remote_catalog(&p).unwrap();
+    assert_eq!(
+        find_record(&reloaded.catalog, "projects/p1").unwrap().op,
+        TargetOp::Delete
+    );
+}
+
+#[test]
+fn apply_generation_pointer_writes_candidate_when_remote_absent() {
+    let p = MemoryProvider::new();
+    let snapshot = load_remote_catalog(&p).unwrap();
+    assert!(snapshot.catalog.records.is_empty());
+    let candidate = TargetLifecycleRecord::upsert("projects/p1", "projects/p1", 1000, "dev-a")
+        .with_active_generation("g1");
+
+    let result = apply_generation_pointer(&p, &snapshot, &candidate, None);
+    match result {
+        GenerationPointerApplyResult::Applied(persisted) => {
+            let rec = find_record(&persisted.catalog, "projects/p1").unwrap();
+            assert_eq!(rec.active_generation.as_deref(), Some("g1"));
+            assert_eq!(rec.updated_at_ms, 1000);
+            assert_eq!(rec.device_id, "dev-a");
+        }
+        other => panic!("expected Applied, got {other:?}"),
+    }
+}
