@@ -28,6 +28,7 @@ import { WritingWorkbenchToolbar } from './WritingWorkbenchToolbar'
 // Issue #825 复核8第 3 点：订阅"刚落盘的 LocalSettings"广播，
 // 让宽屏设置浮层的改动实时回流到本页（对齐 Linux 的 settingsBackend.onSettings_changed）。
 import { LocalSettingsStore } from '../../../feature/settings/presentation/LocalSettingsStore'
+import { ActiveWritingSessionRegistry } from '../session/ActiveWritingSessionRegistry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
@@ -230,6 +231,8 @@ export struct WritingScreen {
   private editorScroller: Scroller = new Scroller()
   // Issue #629 评论14 第2项：离开守卫唯一 token。
   private leaveGuardToken: number = -1
+  // Issue #923：活跃写作会话注册 token（aboutToDisappear 精确注销自身）。
+  private activeSessionToken: (() => void) | null = null
   // Issue #829：状态栏时钟 interval 句柄，-1 表示未启动。
   private clockTimer: number = -1
 
@@ -271,6 +274,10 @@ export struct WritingScreen {
       this.applyWorkflowUpdate(update)
     })
 
+    // Issue #923：把本页工作流登记为活跃写作会话（宽窄屏共用同一实例，
+    // 不按布局创建第二份同步会话）；同步事务从这里取得保存屏障与同步后的会话回填入口。
+    this.activeSessionToken = ActiveWritingSessionRegistry.getInstance().register(this.writingWorkflow)
+
     if (params) {
       // 只要有 projectId 就加载目录树；有有效 chapterId 才加载正文和打开编辑会话。
       this.ensureWorkbenchProjectTree()
@@ -296,10 +303,13 @@ export struct WritingScreen {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
     // Issue #629 评论6 Part G：退后台用 performBackgroundSave（flush+idle+save）。
+    // Issue #927：回调改为返回真实成功/失败；保存事务由 AutoSaveLifecycleObserver →
+    // HarmonyBackgroundSaveTask 申请平台短时任务托管，页面只接收结果、不在生命周期里 await。
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
-      (): Promise<void> => this.writingWorkflow.performBackgroundSave(),
+      (): Promise<boolean> => this.writingWorkflow.performBackgroundSave(),
       this.settings.autoSaveDelayMs,
-      this.settings.autoSaveEnabled
+      this.settings.autoSaveEnabled,
+      (success: boolean): void => { this.onBackgroundSaveResult(success) }
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
     // 页面出现时通常已经在前台，addObserver 不会补发 onForeground，显式起一次。
@@ -370,12 +380,25 @@ export struct WritingScreen {
     }
   }
 
+  // Issue #927：退后台保存结果回调。保存失败/平台不支持时，dirty 与 lastSaveFailed 由
+  // WritingWorkflowCoordinator 内部状态保证（此处不清除、不另造第二套状态），页面只补日志。
+  private onBackgroundSaveResult(success: boolean): void {
+    if (!success) {
+      hilog.warn(0x0000, 'WritingScreen', 'background save did not complete; unsaved content stays dirty')
+    }
+  }
+
   // Issue #629 评论9 第3项：aboutToDisappear 只做页面已确定离开后的清理。
   async aboutToDisappear() {
     // Issue #629 评论14 第2项：用唯一 token 注销自己的离开守卫，不影响其他 WritingScreen 实例。
     if (this.leaveGuardToken >= 0) {
       NavigationTransactionCoordinator.getInstance().unregisterLeaveGuard(this.leaveGuardToken)
       this.leaveGuardToken = -1
+    }
+    // Issue #923：精确注销自身的活跃会话 token（不影响切章时新页面已完成的注册）。
+    if (this.activeSessionToken !== null) {
+      this.activeSessionToken()
+      this.activeSessionToken = null
     }
     // 清除协调器监听器（避免 close 后回调）。
     this.writingWorkflow.dispose()

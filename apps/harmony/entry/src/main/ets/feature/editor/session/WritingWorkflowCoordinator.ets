@@ -24,6 +24,7 @@ import { EditorStatsQueue } from '../stats/EditorStatsQueue'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
+import { ActiveWritingSession, SyncBarrierBeginResult } from './ActiveWritingSessionRegistry'
 
 // 协调器需要页面展示的文案键（翻译成资源字符串由页面负责，协调器不 import UI 上下文）。
 export enum WritingTextKey {
@@ -80,7 +81,7 @@ interface ActiveSaveTask {
   task: Promise<boolean>
 }
 
-export class WritingWorkflowCoordinator {
+export class WritingWorkflowCoordinator implements ActiveWritingSession {
   private bridge: IWriterCoreBridge
   private editorCoordinator: EditorSessionCoordinator
   private dispatcher: EditorSemanticDispatcher
@@ -95,7 +96,8 @@ export class WritingWorkflowCoordinator {
   private sessionOpenedHook: ((snap: EditorSessionSnapshot) => Promise<void>) | null = null
 
   // 路由上下文：chapterId/projectId/volumeId/navPathStack。
-  private chapterId: string = ''
+  // chapterId 公开：同步事务（ActiveWritingSession）需要按当前章节复核 Core 落盘内容。
+  chapterId: string = ''
   private projectId: string = ''
   private volumeId: string = ''
   private navPathStack: NavPathStack = new NavPathStack()
@@ -120,6 +122,10 @@ export class WritingWorkflowCoordinator {
   private leaveTask: Promise<boolean> | null = null
   // Issue #629 评论 5308748920 问题3：保存事务复用 + 精确目标文本。
   private activeSave: ActiveSaveTask | null = null
+  // Issue #923：同步屏障状态（与 endSyncBarrier 成对）。
+  // held=本次同步持有本会话屏障；sealed=传输期间封锁输入（防止往将被替换的 live 章节写旧内存内容）。
+  private syncBarrierHeld: boolean = false
+  private syncBarrierSealed: boolean = false
 
   constructor(
     bridge: IWriterCoreBridge,
@@ -368,12 +374,140 @@ export class WritingWorkflowCoordinator {
 
   // Issue #629 评论6 Part G：退后台保存事务。
   // flush input → await coordinator idle → save latest snapshot；不 detach IME、不 close session。
-  async performBackgroundSave(): Promise<void> {
+  // Issue #927：返回真实成功/失败结果（只开一次保存事务），失败时保留 hasUnsavedChanges，
+  // 调用方不得把「回调已调用」当成「已经落盘」。
+  async performBackgroundSave(): Promise<boolean> {
     await this.dispatcher.flush()
     await this.editorCoordinator.whenIdle()
-    if (this.hasUnsavedChanges) {
-      await this.saveChapter(true)
+    // 无待保存变化：本次后台事务直接成功，不产生多余 Core 写入。
+    if (!this.hasUnsavedChanges) {
+      return true
     }
+    const snap = this.editorCoordinator.getSnapshot()
+    const targetText: string = snap ? snap.text : this.content
+    return this.ensureSnapshotSaved(targetText, true)
+  }
+
+  // ── 同步保存屏障（Issue #923）──
+
+  // 同步事务（手动 / 自动 / 顶栏 / 设置页）的唯一入口是 ActiveWritingSessionRegistry.withSyncBarrier：
+  // beginSyncBarrier 结算当前输入并落盘 → Core 全量同步 → reconcileAfterSync 按落盘身份回填本会话
+  // → endSyncBarrier 释放。三个方法必须在同一笔同步事务内配对使用。
+
+  // 同步前保存屏障：封输入 → finish composition → drain 输入 → 稳定 snapshot → 精确落盘。
+  // 与 performGracefulClose 的区别：**不** close session、不 detach IME、不换章节。
+  // 保存失败返回 ok:false 并恢复编辑输入；只有确实完成当前 snapshot 落盘才放行 Core 全量同步。
+  async beginSyncBarrier(): Promise<SyncBarrierBeginResult> {
+    // 无编辑会话（零章节工作台 / 尚未打开正文）：无正文可被同步替换，直接放行。
+    if (this.editorCoordinator.getSessionId() === null) {
+      return { ok: true }
+    }
+    this.syncBarrierHeld = true
+    try {
+      // 先封住输入：传输期间不得继续往将被替换的 live 章节写旧内存内容。
+      // sealed 只拒绝新命令，已排队命令仍可 drain（与关闭事务同一语义）。
+      this.dispatcher.seal()
+      this.syncBarrierSealed = true
+      // 同一会话边界：先提交 IME composition，再 drain 输入，再取稳定 snapshot。
+      const finishResult = await this.dispatcher.finishActiveComposition()
+      await this.dispatcher.flush()
+      await this.editorCoordinator.whenIdle()
+      const snap = this.editorCoordinator.getSnapshot()
+      if (finishResult.success === false || snap === null ||
+        (snap.composition !== null && snap.composition !== undefined)) {
+        // composition 未结算 / snapshot 丢失：不放行同步（不静默用旧文本覆盖）。
+        this.endSyncBarrier()
+        return { ok: false }
+      }
+      const saved: boolean = await this.ensureSnapshotSaved(snap.text, false)
+      if (!saved) {
+        // 保存失败：不进入同步，恢复编辑输入。
+        this.endSyncBarrier()
+        return { ok: false }
+      }
+      const hash: string | null = this.lastSavedContentHash
+      if (hash === null) {
+        return { ok: true }
+      }
+      return { ok: true, contentHash: hash }
+    } catch (err) {
+      this.lastSaveFailed = true
+      this.saveMessage = this.textProvider(WritingTextKey.SaveError)
+      this.emit(null, null)
+      this.endSyncBarrier()
+      return { ok: false }
+    }
+  }
+
+  // 同步后复核当前章节的 Core 落盘身份：
+  // - 未变：直接返回 true（endSyncBarrier 统一释放输入封锁）。
+  // - 变化：在已无待提交编辑命令前提下，用同一现存 EditorSessionCoordinator 与新内容重新对齐
+  //   （close → open 新内容，不新增第二份正文源），更新 lastSavedContent/hash、字数与排版快照。
+  // - 发现未提交本地变化 / 无法确认落盘身份：返回 false（明确冲突），
+  //   不把远端内容悄悄覆盖成旧文本，也不丢本地输入。
+  async reconcileAfterSync(): Promise<boolean> {
+    if (!this.syncBarrierHeld) {
+      return true
+    }
+    const result = await this.bridge.loadChapter(this.chapterId)
+    if (!result.success || !result.data) {
+      // 无法确认 Core 落盘身份：不放行，交由上层按冲突处理。
+      return false
+    }
+    const diskContent: string = result.data.content
+    const diskHash: string = result.data.meta.hash
+    if (this.lastSavedContentHash !== null && diskHash === this.lastSavedContentHash) {
+      // Core 落盘身份与屏障放行时一致：本次同步未改动本章。
+      return true
+    }
+    // 磁盘已变化：确认没有仍在排队的编辑命令，再决定能否回填。
+    await this.dispatcher.flush()
+    await this.editorCoordinator.whenIdle()
+    const snap = this.editorCoordinator.getSnapshot()
+    if (snap === null) {
+      // 会话已不存在（页面正在关闭）：只更新投影基线，正文以 Core 落盘为准。
+      this.content = diskContent
+      this.lastSavedContent = diskContent
+      this.lastSavedContentHash = diskHash
+      this.hasUnsavedChanges = false
+      this.wordCount = result.data.meta.wordCount
+      this.emit(null, null)
+      return true
+    }
+    if (snap.text !== this.lastSavedContent) {
+      // 屏障之后又出现了未提交的本地变化：明确冲突，由上层提示用户处理。
+      return false
+    }
+    // 同一现存 EditorSessionCoordinator 与新内容重新对齐：close → open 下载后的正文。
+    const closed = await this.editorCoordinator.closeAsync()
+    if (!closed.success || closed.data !== true) {
+      return false
+    }
+    const reopened = await this.editorCoordinator.open(this.chapterId, diskContent)
+    if (!reopened.success || !reopened.data) {
+      return false
+    }
+    this.content = diskContent
+    this.lastSavedContent = diskContent
+    this.lastSavedContentHash = diskHash
+    this.hasUnsavedChanges = false
+    this.wordCount = result.data.meta.wordCount
+    // 页面恢复接续选区 / viewport（与 loadChapter 同一 hook），再统一回流重绘。
+    const hook = this.sessionOpenedHook
+    if (hook !== null) {
+      await hook(reopened.data)
+    }
+    this.emit(reopened.data, null)
+    return true
+  }
+
+  // 释放同步屏障（同步成功 / 失败 / 冲突都必须调用；与 beginSyncBarrier 成对且幂等）。
+  endSyncBarrier(): void {
+    if (this.syncBarrierSealed) {
+      this.dispatcher.unseal()
+      this.syncBarrierSealed = false
+    }
+    this.syncBarrierHeld = false
   }
 
   // ── 清空正文 ──
