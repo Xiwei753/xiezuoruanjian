@@ -10,7 +10,9 @@
 // 本文件不复制第二套编辑器会话逻辑。
 
 import hilog from '@ohos.hilog'
+import { getBridge } from '../../../app/AppContext'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
+import { ChapterSaveReceipt } from '../../../corebridge/dto/ProjectDtos'
 import { AllSyncConflictEntry, SyncConflictPreview } from '../../../corebridge/dto/SyncDtos'
 import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
@@ -38,6 +40,25 @@ function conflictKeyOfEntry(entry: AllSyncConflictEntry): string {
 }
 
 /**
+ * 从章节冲突路径解析 chapterId。
+ *
+ * 章节正文落盘路径固定为 `volumes/<volumeId>/chapters/<chapterId>/chapter.md`
+ * （相对项目根，见 Core chapter/mod.rs）。只有这种路径才支持在面板内做真实合并：
+ * 合并结果必须先写回该章节，再清除冲突标记。
+ */
+export function resolveChapterIdFromConflictPath(path: string): string | null {
+  const parts: string[] = path.split('/')
+  if (parts.length !== 5) {
+    return null
+  }
+  if (parts[0] !== 'volumes' || parts[2] !== 'chapters' || parts[4] !== 'chapter.md') {
+    return null
+  }
+  const chapterId: string = parts[3]
+  return chapterId.length > 0 ? chapterId : null
+}
+
+/**
  * 单个冲突条目的 UI 状态。
  *
  * @ObservedV2 + @Trace：逐项展开、预览加载进度与解决进度都能被面板直接观察，
@@ -60,6 +81,10 @@ export class SyncConflictItemState {
   @Trace previewErrorCode: string = ''
   @Trace resolving: boolean = false
   @Trace actionErrorCode: string = ''
+  /** 面板内合并编辑：正在编辑合并结果 / 合并内容 / 正在保存合并结果。 */
+  @Trace mergeEditing: boolean = false
+  @Trace mergeDraft: string = ''
+  @Trace mergeSaving: boolean = false
 
   constructor(entry: AllSyncConflictEntry) {
     this.targetKind = entry.targetKind
@@ -86,8 +111,16 @@ export class SyncConflictItemState {
     return !this.previewLoaded && !this.previewLoading
   }
 
-  /** "已合并"只在双方内容都可用且远端未被删除时开放。 */
-  canMarkMerged(): boolean {
+  /** 该冲突的章节正文身份（仅章节正文冲突可解析）。 */
+  resolveChapterId(): string | null {
+    return resolveChapterIdFromConflictPath(this.path)
+  }
+
+  /**
+   * 面板内"合并"可用：章节正文冲突、预览已加载、远端未被删除。
+   * 至少一侧有内容（本地内容优先）才能作为合并草稿；真正写盘与清冲突在 saveMerged。
+   */
+  canMergeInPanel(): boolean {
     const current: SyncConflictPreview | null = this.preview
     if (current === null) {
       return false
@@ -95,7 +128,10 @@ export class SyncConflictItemState {
     if (current.remoteDeleted) {
       return false
     }
-    return hasTextContent(current.localContent) && hasTextContent(current.remoteContent)
+    if (this.resolveChapterId() === null) {
+      return false
+    }
+    return hasTextContent(current.localContent) || hasTextContent(current.remoteContent)
   }
 }
 
@@ -197,15 +233,18 @@ export class SyncConflictViewModel {
   }
 
   /**
-   * 解决单条冲突。成功后立即从 Core 重新拉取剩余冲突（不在 UI 里减计数）。
+   * 解决单条冲突（保留本地 / 采用远端）。成功后立即从 Core 重新拉取剩余冲突（不在 UI 里减计数）。
    * 失败时把 Core 的结构化 errorCode 留在条目上，由面板展示。
+   *
+   * `mark_merged` 不走这里：清除合并标记的唯一入口是 saveMerged()，
+   * 必须先真实保存合并结果并由 Core 确认写入成功。
    */
   async resolve(item: SyncConflictItemState, decision: SyncConflictDecision): Promise<boolean> {
     if (this.isResolving || item.resolving) {
       return false
     }
-    if (decision === 'mark_merged' && !item.canMarkMerged()) {
-      // 无可用双方内容时不允许标记已合并；面板已禁用按钮，这里兜底不放行。
+    if (decision === 'mark_merged') {
+      // 不允许在没有合并保存的情况下直接清冲突标记。
       return false
     }
 
@@ -242,6 +281,118 @@ export class SyncConflictViewModel {
       item.actionErrorCode = 'NATIVE_ERROR'
       return false
     } finally {
+      item.resolving = false
+      this.isResolving = false
+    }
+  }
+
+  /**
+   * 进入合并编辑：草稿以本地版本为准，本地无内容时用远端版本。
+   * 只编辑内存草稿，不改写任何文件；真正写盘在 saveMerged()。
+   */
+  beginMerge(item: SyncConflictItemState): void {
+    if (item.mergeEditing || this.isResolving || item.resolving || this.isLoading) {
+      return
+    }
+    const current: SyncConflictPreview | null = item.preview
+    if (current === null || !item.canMergeInPanel()) {
+      return
+    }
+    const localText: string = safeDisplayText(current.localContent)
+    const remoteText: string = safeDisplayText(current.remoteContent)
+    item.mergeDraft = localText.length > 0 ? localText : remoteText
+    item.actionErrorCode = ''
+    item.mergeEditing = true
+  }
+
+  /** 放弃合并编辑，不改动任何文件与冲突状态。 */
+  cancelMerge(item: SyncConflictItemState): void {
+    if (item.mergeSaving) {
+      return
+    }
+    item.mergeEditing = false
+    item.mergeDraft = ''
+    item.actionErrorCode = ''
+  }
+
+  /**
+   * 保存合并结果（真实合并流程，Issue #926 复核）：
+   * 1. 先把合并内容真实写回章节（Core 确认 saveChapter 成功）；
+   * 2. 再调用 Core 的 mark_merged 清除冲突标记——只有确认合并内容已落盘才允许清标记；
+   * 3. 最后按 #923 活跃写作会话事务回填打开中的章节（磁盘内容与编辑器身份重新对齐）。
+   * 任一步失败都保留结构化 errorCode，不伪造成功、不静默清冲突。
+   */
+  async saveMerged(item: SyncConflictItemState): Promise<boolean> {
+    if (this.isResolving || item.resolving || item.mergeSaving) {
+      return false
+    }
+    if (!item.mergeEditing) {
+      return false
+    }
+    const chapterId: string | null = item.resolveChapterId()
+    if (chapterId === null) {
+      item.actionErrorCode = 'INVALID_ARGUMENT'
+      return false
+    }
+    const draft: string = item.mergeDraft
+
+    this.isResolving = true
+    item.resolving = true
+    item.mergeSaving = true
+    item.actionErrorCode = ''
+    this.resolveNoticeCode = ''
+    try {
+      const merged: boolean = await ActiveWritingSessionRegistry.getInstance().withSyncBarrier<boolean>(
+        async (scope: SyncBarrierScope): Promise<boolean> => {
+          // 合并结果先落盘；写入失败时冲突标记必须保持原样。
+          const saveResult: ResultEnvelope<ChapterSaveReceipt> =
+            await getBridge().saveChapter(chapterId, draft)
+          if (!saveResult.success) {
+            item.actionErrorCode = saveResult.errorCode ?? 'UNKNOWN_ERROR'
+            hilog.error(DOMAIN, TAG, 'saveMerged saveChapter failed: errorCode=%{public}s',
+              item.actionErrorCode)
+            return false
+          }
+          // Core 已确认合并内容写入成功，才清除冲突标记（mark_merged 语义：live 已是合并版本）。
+          const markResult: ResultEnvelope<boolean> = await this.bridge.resolveSyncConflict(
+            item.targetKind, item.resolveProjectId(), item.path, 'mark_merged')
+          if (!markResult.success) {
+            item.actionErrorCode = markResult.errorCode ?? 'UNKNOWN_ERROR'
+            hilog.error(DOMAIN, TAG, 'saveMerged markMerged failed: errorCode=%{public}s',
+              item.actionErrorCode)
+            return false
+          }
+          // 打开的章节可能正持有旧正文：按落盘身份回填（与 take_remote 同一套会话事务）。
+          const aligned: boolean = await scope.reconcileAfterSync()
+          if (!aligned) {
+            item.actionErrorCode = 'SYNC_CONFLICT'
+            this.resolveNoticeCode = 'SYNC_CONFLICT'
+            hilog.error(DOMAIN, TAG,
+              'saveMerged applied but active session has unsubmitted content; reload required')
+            return false
+          }
+          return true
+        })
+      if (!merged) {
+        return false
+      }
+      item.mergeEditing = false
+      // 合并结果只信 Core：重新拉取剩余冲突，不在 UI 里减计数。
+      await this.loadConflicts()
+      return true
+    } catch (e) {
+      if (e instanceof SyncPreflightError) {
+        item.actionErrorCode = e.errorCode.length > 0 ? e.errorCode : SYNC_PREFLIGHT_SAVE_FAILED
+        hilog.error(DOMAIN, TAG, 'saveMerged preflight save failed: errorCode=%{public}s',
+          item.actionErrorCode)
+        return false
+      }
+      hilog.error(DOMAIN, TAG, 'saveMerged exception: %{public}s',
+        e instanceof Error ? e.name : 'Unknown')
+      item.actionErrorCode = 'NATIVE_ERROR'
+      return false
+    } finally {
+      item.mergeSaving = false
       item.resolving = false
       this.isResolving = false
     }

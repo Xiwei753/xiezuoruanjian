@@ -889,16 +889,32 @@
       "value": "采用远端"
     },
     {
-      "name": "sync_conflicts_mark_merged",
-      "value": "已合并"
+      "name": "sync_conflicts_merge_open",
+      "value": "合并…"
     },
     {
-      "name": "sync_conflicts_mark_merged_disabled_remote_deleted",
-      "value": "远端已删除，无法标记为已合并"
+      "name": "sync_conflicts_merge_hint",
+      "value": "下面内容将作为合并结果保存到该章节；保存成功后清除冲突标记，可重新同步。"
     },
     {
-      "name": "sync_conflicts_mark_merged_disabled_missing",
-      "value": "缺少本地或远端内容，无法标记为已合并"
+      "name": "sync_conflicts_merge_save",
+      "value": "保存合并结果"
+    },
+    {
+      "name": "sync_conflicts_merge_cancel",
+      "value": "取消合并"
+    },
+    {
+      "name": "sync_conflicts_merge_disabled_remote_deleted",
+      "value": "远端已删除，无法在面板内合并"
+    },
+    {
+      "name": "sync_conflicts_merge_disabled_unsupported",
+      "value": "该文件不支持在面板内合并，请使用保留本地或采用远端"
+    },
+    {
+      "name": "sync_conflicts_merge_disabled_missing",
+      "value": "缺少本地或远端内容，无法合并"
     },
     {
       "name": "sync_conflicts_local_content",

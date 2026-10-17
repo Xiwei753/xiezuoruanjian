@@ -3,6 +3,8 @@
 //
 // - 数据与操作都在 SyncConflictViewModel：列表来自 NativeSyncBridge.listAllSyncConflicts()，
 //   解决后重新从 Core 拉取剩余冲突；面板不维护第二份冲突列表。
+// - "合并"是真实合并流程：以本地版本（或本地为空时的远端版本）为草稿人工编辑，
+//   保存时先真实写回章节、Core 确认成功后才清除冲突标记（见 viewModel.saveMerged）。
 // - 面板挂在窗口层级（openCustomDialog + ComponentContent），与 SettingsOverlayPanel /
 //   CreateTitleDialog 同一套写法：由系统负责遮罩、居中与返回拦截。
 // - "重新同步"只走 SyncOperationController.performSync()：#923 的 withSyncBarrier 会在
@@ -296,40 +298,45 @@ export struct SyncConflictsPanel {
             this.ContentBlock($r('app.string.sync_conflicts_remote_content'), this.remotePreviewText(item))
           }
 
-          // 操作：保留本地 / 采用远端 / 已合并。
-          Row({ space: 8 }) {
-            if (item.resolving) {
-              LoadingProgress()
-                .width(18)
-                .height(18)
+          // 操作：保留本地 / 采用远端 / 合并（合并先进入编辑，保存时真实写回章节）。
+          if (!item.mergeEditing) {
+            Row({ space: 8 }) {
+              if (item.resolving) {
+                LoadingProgress()
+                  .width(18)
+                  .height(18)
+              }
+              Button($r('app.string.sync_conflicts_keep_local'), { type: ButtonType.Normal })
+                .layoutWeight(1)
+                .height(32)
+                .fontSize(13)
+                .enabled(!this.viewModel.isBusy() && !this.reSyncing)
+                .onClick(() => { void this.handleDecision(item, 'keep_local') })
+              Button($r('app.string.sync_conflicts_take_remote'), { type: ButtonType.Normal })
+                .layoutWeight(1)
+                .height(32)
+                .fontSize(13)
+                .enabled(!this.viewModel.isBusy() && !this.reSyncing)
+                .onClick(() => { void this.handleDecision(item, 'take_remote') })
+              Button($r('app.string.sync_conflicts_merge_open'), { type: ButtonType.Normal })
+                .layoutWeight(1)
+                .height(32)
+                .fontSize(13)
+                .enabled(!this.viewModel.isBusy() && !this.reSyncing && item.canMergeInPanel())
+                .onClick(() => { this.viewModel.beginMerge(item) })
             }
-            Button($r('app.string.sync_conflicts_keep_local'), { type: ButtonType.Normal })
-              .layoutWeight(1)
-              .height(32)
-              .fontSize(13)
-              .enabled(!this.viewModel.isBusy() && !this.reSyncing)
-              .onClick(() => { void this.handleDecision(item, 'keep_local') })
-            Button($r('app.string.sync_conflicts_take_remote'), { type: ButtonType.Normal })
-              .layoutWeight(1)
-              .height(32)
-              .fontSize(13)
-              .enabled(!this.viewModel.isBusy() && !this.reSyncing)
-              .onClick(() => { void this.handleDecision(item, 'take_remote') })
-            Button($r('app.string.sync_conflicts_mark_merged'), { type: ButtonType.Normal })
-              .layoutWeight(1)
-              .height(32)
-              .fontSize(13)
-              .enabled(!this.viewModel.isBusy() && !this.reSyncing && item.canMarkMerged())
-              .onClick(() => { void this.handleDecision(item, 'mark_merged') })
-          }
-          .width('100%')
-          .margin({ top: 8 })
+            .width('100%')
+            .margin({ top: 8 })
 
-          // 无可用双方内容时说明"已合并"为何禁用。
-          if (item.previewLoaded && !item.canMarkMerged()) {
-            Text(this.markMergedDisabledReason(item))
-              .fontSize(12)
-              .margin({ top: 6 })
+            // 不支持合并/缺内容时说明原因。
+            if (item.previewLoaded && !item.canMergeInPanel()) {
+              Text(this.mergeDisabledReason(item))
+                .fontSize(12)
+                .margin({ top: 6 })
+            }
+          } else {
+            // 合并编辑：草稿保存为合并结果，Core 确认写入后才清除冲突标记。
+            this.MergeEditor(item)
           }
 
           // 解决失败：展示 Core 返回的结构化 errorCode。
@@ -370,6 +377,50 @@ export struct SyncConflictsPanel {
     .borderRadius(DesignTokens.radiusSm)
     .backgroundColor($r('sys.color.background_secondary'))
     .margin({ bottom: 8 })
+  }
+
+  /**
+   * 合并编辑器：以本地版本（或本地为空时的远端版本）为草稿，
+   * 保存后作为合并结果写回章节；面板内不做冲突算法，只提供人工编辑。
+   */
+  @Builder
+  MergeEditor(item: SyncConflictItemState) {
+    Column({ space: 8 }) {
+      Text($r('app.string.sync_conflicts_merge_hint'))
+        .fontSize(12)
+        .width('100%')
+      TextArea({ text: item.mergeDraft })
+        .width('100%')
+        .height(160)
+        .fontSize(13)
+        .enabled(!this.viewModel.isBusy() && !this.reSyncing)
+        .onChange((value: string) => {
+          item.mergeDraft = value
+        })
+      Row({ space: 8 }) {
+        Button($r('app.string.sync_conflicts_merge_save'), { type: ButtonType.Normal })
+          .layoutWeight(1)
+          .height(32)
+          .fontSize(13)
+          .enabled(!this.viewModel.isBusy() && !this.reSyncing)
+          .onClick(() => { void this.handleMergeSave(item) })
+        Button($r('app.string.sync_conflicts_merge_cancel'), { type: ButtonType.Normal })
+          .layoutWeight(1)
+          .height(32)
+          .fontSize(13)
+          .fontColor($r('sys.color.font_primary'))
+          .backgroundColor($r('sys.color.comp_background_gray'))
+          .enabled(!this.viewModel.isBusy())
+          .onClick(() => { this.viewModel.cancelMerge(item) })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding(8)
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor($r('sys.color.background_secondary'))
+    .margin({ top: 8 })
   }
 
   // ── 面板底：重新同步 + 关闭 ──
@@ -419,6 +470,15 @@ export struct SyncConflictsPanel {
   private async handleDecision(item: SyncConflictItemState, decision: SyncConflictDecision): Promise<void> {
     const resolved: boolean = await this.viewModel.resolve(item, decision)
     if (resolved) {
+      this.resolvedAny = true
+      this.reportRemaining()
+    }
+  }
+
+  /** 保存合并结果：真实写回章节 → Core 清除冲突标记 → 刷新剩余冲突。 */
+  private async handleMergeSave(item: SyncConflictItemState): Promise<void> {
+    const merged: boolean = await this.viewModel.saveMerged(item)
+    if (merged) {
       this.resolvedAny = true
       this.reportRemaining()
     }
@@ -535,11 +595,14 @@ export struct SyncConflictsPanel {
     return truncatePreview(raw)
   }
 
-  private markMergedDisabledReason(item: SyncConflictItemState): string {
+  private mergeDisabledReason(item: SyncConflictItemState): string {
     if (item.preview !== null && item.preview.remoteDeleted) {
-      return this.str($r('app.string.sync_conflicts_mark_merged_disabled_remote_deleted'))
+      return this.str($r('app.string.sync_conflicts_merge_disabled_remote_deleted'))
     }
-    return this.str($r('app.string.sync_conflicts_mark_merged_disabled_missing'))
+    if (item.resolveChapterId() === null) {
+      return this.str($r('app.string.sync_conflicts_merge_disabled_unsupported'))
+    }
+    return this.str($r('app.string.sync_conflicts_merge_disabled_missing'))
   }
 
   private countLabel(count: number): string {
