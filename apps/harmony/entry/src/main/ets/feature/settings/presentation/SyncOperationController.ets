@@ -117,24 +117,28 @@ export class SyncOperationController {
             syncResult.totalOverwritten > 0 ||
             syncResult.totalLocalDeletes > 0
 
+          // Issue #923 复核：Core 全量同步按 target 逐个提交，即使整体终态是 recoverable/fatal，
+          // 排在前面的 target 也可能已提交到 live。只要本次同步确实改动过本地内容，就先按落盘
+          // 身份回填活跃写作会话，再组装 UI 终态——否则旧内存正文会在下一次保存中覆盖已提交版本。
+          // 无本地变更时无需回填（磁盘未动，会话内容必然仍一致）。
+          const aligned: boolean = changed ? await scope.reconcileAfterSync() : true
+          contentChanged = changed
+          if (!aligned) {
+            // 活跃会话存在未提交的本地变化：明确冲突，不把远端内容悄悄覆盖成旧文本，
+            // 也不在此后报告"已对齐"。
+            return {
+              phase: 'failed',
+              message: '同步已改动本地内容，但当前写作会话存在未提交内容，需要先处理',
+              messageKey: 'sync.result.conflict_summary',
+              errorCode: 'SYNC_CONFLICT',
+              totalConflicts: syncResult.totalConflicts,
+              overallStatus: syncResult.overallStatus
+            }
+          }
+
           // 只允许明确的成功终态显示"完成"（与 Core sync_status_to_wire 对齐）
           const status = syncResult.overallStatus
           if (status === 'success' || status === 'no_changes' || status === 'latest_wins_applied') {
-            // 同步可能已改动活跃章节的 Core 落盘正文：按落盘身份回填正在编辑的会话，
-            // 防止旧内存正文在下一次保存中覆盖下载版本。
-            const aligned: boolean = await scope.reconcileAfterSync()
-            contentChanged = changed
-            if (!aligned) {
-              // 活跃会话存在未提交的本地变化：明确冲突，不把远端内容悄悄覆盖成旧文本。
-              return {
-                phase: 'failed',
-                message: '同步已完成，但当前写作会话存在未提交内容，需要先处理',
-                messageKey: 'sync.result.conflict_summary',
-                errorCode: 'SYNC_CONFLICT',
-                totalConflicts: syncResult.totalConflicts,
-                overallStatus: status
-              }
-            }
             hilog.info(DOMAIN, TAG, 'performSync: success, status=%{public}s', status)
             return {
               phase: 'success',
@@ -146,10 +150,6 @@ export class SyncOperationController {
           }
 
           if (status === 'conflict' || status === 'partial_conflict') {
-            // 部分冲突下已有成功提交的 target：仍按 Core 落盘身份回填活跃会话，
-            // 避免打开的章节继续持有同步前正文并在下一次保存覆盖已提交版本。
-            await scope.reconcileAfterSync()
-            contentChanged = changed
             return {
               phase: 'failed',
               message: '同步冲突，需要手动解决',
