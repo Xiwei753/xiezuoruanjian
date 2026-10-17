@@ -172,8 +172,10 @@ Rectangle {
             return
         var stored = settingsBackend.setting_desktop_sidebar_width
         if (stored !== undefined && stored > 0) {
-            root.chapterNavWidth = Math.min(root._chapterNavMaxWidth,
-                Math.max(root.listPaneMinWidth, stored))
+            // 只做下界处理：chapterNavWidth 保存用户的期望宽度，不因当前窗口暂时
+            // 变窄而被永久改写；实际显示宽度由 effectiveChapterNavWidth() 在布局
+            // 阶段按 _chapterNavMaxWidth 动态钳制，窗口放大后仍能回到期望宽度。
+            root.chapterNavWidth = Math.max(root.listPaneMinWidth, stored)
         }
     }
 
@@ -607,12 +609,15 @@ Rectangle {
                 // Issue #833 复核3：多栏工作台下才参与 RowLayout，
                 // SinglePane 下章节导航走 singlePaneNavOverlay 浮层，不占宽度。
                 visible: !root.singlePaneMode && !root.leftPaneCollapsed
-                // Issue #920：章节导航宽度取 Qt 本地 chapterNavWidth（可拖拽），
-                // 空间紧张时在 [listPaneMinWidth, chapterNavWidth] 内压缩，
-                // 保证正文列先拿到 editorMinWidth。
-                Layout.preferredWidth: root.chapterNavWidth
+                // Issue #920 复核：章节导航宽度取 Qt 本地 chapterNavWidth（可拖拽，
+                // 保存用户期望宽度），显示时由 effectiveChapterNavWidth() 按当前
+                // 窗口可用范围动态压缩，保证正文列先拿到 editorMinWidth。
+                // Issue #920 复核：preferred/maximum 用 effectiveChapterNavWidth()，
+                // 它在布局阶段按 _chapterNavMaxWidth 动态钳制，chapterNavWidth 仍是
+                // 用户的期望宽度；避免窄窗口把期望宽度提前钳死。顶栏口径保持一致。
+                Layout.preferredWidth: root.effectiveChapterNavWidth()
                 Layout.minimumWidth: root.listPaneMinWidth
-                Layout.maximumWidth: root.chapterNavWidth
+                Layout.maximumWidth: root.effectiveChapterNavWidth()
                 // Issue #835：内容区 RowLayout cross-axis 高度填满，
                 // 不再靠子组件内容溢出父项来显示，MouseArea 命中区与视觉一致。
                 Layout.fillHeight: true
@@ -884,8 +889,10 @@ Rectangle {
                 cursorShape: Qt.SplitHCursor
                 onActiveChanged: {
                     if (active) {
-                        // 每次手势从当前实际宽度起算，避免死区。
-                        root._dragStartChapterNavWidth = root.chapterNavWidth
+                        // 从当前实际显示宽度起算，避免死区。用 sidebarRect.width
+                        // 而非 chapterNavWidth：窄窗口下期望宽度可能大于可显示宽度，
+                        // 用期望值起算会出现「拉一段距离侧栏才动」。
+                        root._dragStartChapterNavWidth = sidebarRect.width
                     } else {
                         // Issue #920 复核：拖拽结束写回平台本地配置，下次启动恢复。
                         root.persistChapterNavWidth()
