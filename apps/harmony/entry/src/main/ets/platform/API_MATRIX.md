@@ -292,7 +292,7 @@
   - `HdsNavigationTitleBarOptions.content?.title?.mainTitle: ResourceStr` — 标题文本
   - `HdsNavigationTitleBarOptions.style?: TitleBarStyleOptions` — 标题栏样式（Issue #932 登记实际使用字段）：
     - `scrollEffectOpts?: ScrollEffectOptions`（since 5.1.0(18)）— `enableScrollEffect?: boolean`（默认 true）、`scrollEffectType?: ScrollEffectType`（默认 `COMMON_BLUR`）；本项目设 `enableScrollEffect: false` 关闭标题栏滚动模糊
-    - `originalStyle?: HdsNavigationTitleBarStyle`（since 5.1.0(18)）— 滚动效果生效前的标题栏样式，`backgroundStyle.backgroundColor` 可设 `Color.Transparent`；本项目用它把标题栏背板设为透明
+    - `originalStyle?: HdsNavigationTitleBarStyle`（since 5.1.0(18)）— 滚动效果生效前的标题栏样式，`backgroundStyle.backgroundColor` 可设背景色。官方文档明确模糊样式类型（COMMON_BLUR / GRADUAL_BLUR）下背板默认值本来就是透明色，写 `Color.Transparent` 不改变可见像素；Issue #932 复核后本项目改用 `sys.color.background_secondary` 承接标题栏底色——白条根因是标题栏区域无承接层、露出 HDS surface，而非透明配置，且 `backgroundColor` 不能设在 `HdsNavDestination` 本体（会被 HDS surface 覆盖）
     - `systemMaterialEffect?: SystemMaterialParams`（since 6.1.0(23)）— 标题栏的系统材质效果
   - 枚举 `ScrollEffectType`（since 5.1.0(18)）：`COMMON_BLUR = 0`（5.1.0(18)）、`GRADUAL_BLUR = 1`（6.0.0(20)）、`GRADIENT_BLUR = 2`（6.0.0(20)）、`IMMERSIVE_GRADIENT_BLUR = 3`（6.1.0(23)）；本项目只用 `COMMON_BLUR`
 - 最低 API：23（本项目使用条件：API23+ 时启用，API < 23 fallback 到普通 Navigation/NavDestination）

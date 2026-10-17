@@ -987,6 +987,8 @@ export struct WritingScreen {
       }
         .width('100%')
         .height('100%')
+        // Issue #932 复核：宽屏工作台的根容器补页面底色（showTitleBar=false，底色调性仍与全仓统一）。
+        .backgroundColor($r('sys.color.background_secondary'))
     } else {
       // Issue #629 评论9 第3项：窄屏单栏布局（或窄窗口）。
       this.EditorPane()
@@ -1356,5 +1358,7 @@ export struct WritingScreen {
     }
     .width('100%')
     .height('100%')
+    // Issue #932 复核：窄屏编辑区根容器补页面底色，避免 HDS NavDestination 的内部 surface 透出白底。
+    .backgroundColor($r('sys.color.background_secondary'))
   }
 }

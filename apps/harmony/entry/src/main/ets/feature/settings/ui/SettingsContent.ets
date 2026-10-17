@@ -393,6 +393,9 @@ export struct SettingsContent {
     }
     .width('100%')
     .height('100%')
+    // Issue #932 复核：设置页根容器补页面底色，避免 HDS NavDestination 的内部 surface 透出白底。
+    // 宽屏浮层外壳 SettingsOverlayPanel 本已画同色，这里无条件补同色不改变其观感。
+    .backgroundColor($r('sys.color.background_secondary'))
   }
 
   // ── 窄屏 Header：保存状态提示 + 搜索框（标题由外壳标题栏承载，Issue #768/#774） ──

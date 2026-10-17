@@ -34,7 +34,8 @@ export interface AdaptiveState {
   // 不再参与外层导航外壳与设置呈现方式的判定——那是 prefersWideLayout 的职责。
   isWorkbenchLayout: boolean
   // 一级导航放侧栏（宽窗口，>=840vp），否则放底部。
-  // Issue #932：壳层的外壳判定已统一用 prefersWideLayout，本字段保留给页面内部既有调用点。
+  // Issue #932：与 prefersWideLayout 同源；壳层的外壳判定统一用 prefersWideLayout，
+  // 本字段保留给页面内部既有调用点。
   isWidePrimaryNavigation: boolean
   contentMaxWidth: number
   pagePadding: number
@@ -42,9 +43,9 @@ export interface AdaptiveState {
   safeBottomVp: number
   // 顶部安全区域高度（状态栏避让），单位 vp
   safeTopVp: number
-  // 当前是否偏好宽屏布局（专用横屏平板且进入工作台档，或 sizeClass === Expanded）。
+  // 当前是否偏好宽屏布局（窗口宽度 >= 840vp）。
   // Issue #932：这是外层导航外壳（窄屏 Tabs / 宽屏侧栏）、页头形态与设置呈现方式
-  // （路由页 / 浮层）的唯一模式判定；断点数值不变（600 / 840 / 480）。
+  // （路由页 / 浮层）的唯一模式判定；专用横屏平板在 600-839vp 不再为外层 UI 单开规则。
   prefersWideLayout: boolean
   // 是否是专用横屏平板（deviceType=tablet + 非折叠 + 宽高比>=1.25）
   isDedicatedLandscapeTablet: boolean
@@ -311,20 +312,18 @@ export class AdaptiveContext {
     const isFirstValidSize: boolean = this.state.widthVp <= 0 || this.state.heightVp <= 0
     const sizeClass: WidthClass = this.harmonySizeClass(widthVp)
     const isWorkbenchLayout: boolean = AdaptiveContext.isWorkbenchLayout(widthVp, heightVp)
-    // prefersWideLayout: 专用横屏平板且进入工作台档（能展示完整宽屏工作台），或 sizeClass === Expanded。
-    // 不能只按 600vp 判定：600-695vp 展示不下完整工作台，此时进入 Writing 会出现
-    // 无章节树且无法新建章节的死状态，所以用 isWorkbenchLayout 兜一层。
-    // Issue #932：外层导航外壳 / 设置呈现方式统一以它为唯一模式判定，与各页 showTitleBar 判定同源；
+    // Issue #932 复核：窄屏/宽屏两套外壳只按窗口真正容得下侧栏/多栏工作台的宽度切换。
+    // 专用横屏平板在 600-839vp 不再为外层 UI 单开第三套规则（锁方向/全屏仍由
+    // TabletWindowPolicy 管理）；600-695vp 的写作工作台死状态问题回到 840vp 门槛。
     // isWorkbenchLayout / contentMaxWidth / pagePadding 只留给页面内部内容。
-    const prefersWideLayout: boolean =
-      (this.cachedIsDedicatedLandscapeTablet && isWorkbenchLayout) || sizeClass === WidthClass.Expanded
+    const prefersWideLayout: boolean = widthVp >= WIDTH_WIDE_MIN_VP
     this.state = {
       widthVp: Math.round(widthVp * 100) / 100,
       heightVp: Math.round(heightVp * 100) / 100,
       sizeClass: sizeClass,
       isWorkbenchLayout: isWorkbenchLayout,
-      // 一级导航放侧栏：宽窗口（>=840vp）与旧 Core 的 Side 判定一致。
-      isWidePrimaryNavigation: widthVp >= WIDTH_WIDE_MIN_VP,
+      // 一级导航放侧栏与宽屏外壳同源（>=840vp）；壳层判定统一用 prefersWideLayout。
+      isWidePrimaryNavigation: prefersWideLayout,
       contentMaxWidth: isWorkbenchLayout ? WORKBENCH_CONTENT_MAX_WIDTH_VP : Number.MAX_SAFE_INTEGER,
       pagePadding: isWorkbenchLayout ? WIDE_PAGE_PADDING_VP : COMPACT_PAGE_PADDING_VP,
       safeBottomVp: this.cachedSafeBottomVp,

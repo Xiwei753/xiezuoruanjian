@@ -6,8 +6,10 @@
 // - 卡片更多菜单支持重命名/删除
 // - 空列表显示"暂无星图"
 // Issue #932：窄屏内容层 + FAB 统一走 CompactPrimaryActionLayer（动作来自 ScreenSemantics），
-// 加载/错误/空状态走 CompactPageState，创建/改名/删除框走窗口级 CompactDialogs；
-// 页面不再自绘遮罩与 FAB 锚点。
+// 加载/错误/空状态走 CompactPageState，创建/改名/删除框走窗口级 CompactDialogs。
+// Issue #932 复核：窄屏（CompactPrimaryActionLayer）与宽屏（自绘内容层 + 右下角 FAB）
+// 是两个并列形态，由 prefersWideLayout 分流——与导航壳 WidePrimaryShell 同一门槛，
+// 宽屏不再借名为 Compact 的组件布局。
 
 import hilog from '@ohos.hilog'
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
@@ -20,10 +22,13 @@ import {
   COMPACT_CARD_SPACING_VP,
   COMPACT_CARD_SUPPORTING_FONT_VP,
   COMPACT_CARD_TITLE_FONT_VP,
-  COMPACT_LIST_BOTTOM_INSET_VP
+  COMPACT_LIST_BOTTOM_INSET_VP,
+  PRIMARY_FAB_BOTTOM_INSET_VP
 } from '../../../ui/theme/LayoutTokens'
 // Issue #932：窄屏共享构件 — 内容层 + 右下角 FAB、公共状态视图、窗口级对话框。
 import { CompactPrimaryActionLayer } from '../../../ui/components/CompactPrimaryActionLayer'
+// Issue #932 复核：宽屏内容层直接复用 PrimaryFab 本体，与 CompactPrimaryActionLayer 内部是同一个按钮。
+import { PrimaryFab } from '../../../ui/components/PrimaryFab'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 import { CompactConfirmDialogArgs, CompactTextDialogArgs, openCompactConfirmDialog, openCompactTextDialog } from '../../../ui/components/CompactDialogs'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -162,6 +167,14 @@ export struct StarMapListScreen {
       }
     }
     return false
+  }
+
+  /**
+   * 主操作 FAB 的显示条件：加载完成、无错误、且动作表里确实有 CreateStarMap。
+   * Issue #932 复核：窄屏 / 宽屏两个内容层共用这一份判定，不各自抄一份条件式。
+   */
+  private hasStarMapPrimaryAction(): boolean {
+    return !this.isLoading && !this.errorMessage && this.hasCreateStarMapPrimaryAction()
   }
 
   // ─── UI 事件处理 ───
@@ -325,11 +338,23 @@ export struct StarMapListScreen {
 
   @Builder
   StarMapListContent() {
-    // Issue #932：窄屏内容层 + 右下角 FAB 统一由 CompactPrimaryActionLayer 定位，
-    // 删除 RelativeContainer 的 FAB alignRules 锚点；业务回调仍是 requestCreateStarMap()。
-    // 创建 / 改名 / 删除框已改为窗口级 CompactDialogs（在各自 trigger 打开），页面不再自绘遮罩层。
+    // Issue #932 复核：与作品页 HomeContent 的 prefersWideLayout 分流对齐。
+    // 判定与 PrimaryTabShell 的 WidePrimaryShell 同源（下一轮精确等于 widthVp >= 840），
+    // 宽屏不再无条件套窄屏的 CompactPrimaryActionLayer 位置约定。
+    if (this.adaptiveState.prefersWideLayout) {
+      this.WideStarMapListContent()
+    } else {
+      this.CompactStarMapListContent()
+    }
+  }
+
+  // Issue #932：窄屏内容层 + 右下角 FAB 统一由 CompactPrimaryActionLayer 定位，
+  // 删除 RelativeContainer 的 FAB alignRules 锚点；业务回调仍是 requestCreateStarMap()。
+  // 创建 / 改名 / 删除框已改为窗口级 CompactDialogs（在各自 trigger 打开），页面不再自绘遮罩层。
+  @Builder
+  CompactStarMapListContent() {
     CompactPrimaryActionLayer({
-      visible: !this.isLoading && !this.errorMessage && this.hasCreateStarMapPrimaryAction(),
+      visible: this.hasStarMapPrimaryAction(),
       pagePadding: this.adaptiveState.pagePadding,
       onTap: () => {
         this.requestCreateStarMap()
@@ -339,7 +364,33 @@ export struct StarMapListScreen {
     }
   }
 
-  // 窄屏主体：加载 / 出错重试 / 星图列表；外层背景保持 background_secondary。
+  // Issue #932 复核：宽屏内容层只负责宽屏自己的创建入口位置与布局（列表 + 右下角主 FAB），
+  // 与窄屏分支是并列形态——宽屏下用户实际看到的就是这个视觉，不再借名为 Compact 的组件。
+  // 「+」按钮本体仍是共享的 PrimaryFab（毛玻璃 / 按压视效 / 反色描边只有一份），
+  // 位置口径与 CompactPrimaryActionLayer 完全一致：Stack BottomEnd + pagePadding + 底部偏移。
+  @Builder
+  WideStarMapListContent() {
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      this.StarMapListBody()
+
+      if (this.hasStarMapPrimaryAction()) {
+        PrimaryFab({
+          onTap: () => {
+            this.requestCreateStarMap()
+          }
+        })
+          .margin({
+            right: this.adaptiveState.pagePadding,
+            bottom: PRIMARY_FAB_BOTTOM_INSET_VP
+          })
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  // 列表主体：加载 / 出错重试 / 星图列表；窄屏与宽屏两个内容层共用，不复制业务。
+  // 外层背景保持 background_secondary。
   @Builder
   StarMapListBody() {
     Column() {

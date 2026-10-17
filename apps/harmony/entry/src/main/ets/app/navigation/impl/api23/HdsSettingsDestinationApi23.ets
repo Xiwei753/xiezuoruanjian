@@ -5,8 +5,10 @@
 // Issue #773 评论5844518092：统一为 V2 @ComponentV2 + @Param，消除 V2 页面把 @Builder
 // 交给 V1 壳的 @BuilderParam 后 this 变成壳组件导致 adaptiveState undefined 的 TypeError。
 // Issue #932：设置页改用与 App/Workspace/Writing 同一份标题栏实现——
-// titleBar.content.stackBuilder 挂 HeaderTitleBarStack，标题自绘、背板透明，
+// titleBar.content.stackBuilder 挂 HeaderTitleBarStack，标题自绘、背板填页面底色，
 // 材质与其余三处统一为 ADAPTIVE；不再用原生 content.title.mainTitle + IMMERSIVE。
+// Issue #932 复核：官方 COMMON_BLUR 下背板默认即透明，透明配置不改变可见像素；
+// 白条来自标题栏区域无承接层，现改由 originalStyle 填 sys.color.background_secondary 承接。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial, ScrollEffectType } from '@kit.UIDesignKit'
 import { HeaderTitleBarStack } from './HeaderTitleBarStack'
@@ -52,16 +54,21 @@ export struct HdsSettingsDestinationApi23 {
         }
       },
       style: {
-        // Issue #932：窄屏标题栏背板透明。仍然保留真正的 HDS 标题栏节点——
-        // 自绘标题挂在 titleBar.content.stackBuilder 下，不隐藏标题栏、
-        // 不把内容挪出标题栏树，只是把标题栏背板与滚动模糊关掉，让页面内容
-        // 直接透到标题栏区域。
+        // Issue #932 复核：官方文档明确模糊样式类型（COMMON_BLUR / GRADUAL_BLUR）
+        // 下，标题栏背板默认值本来就是透明色——原先这里写 Color.Transparent 属于 no-op，
+        // 不改变任何可见像素，也去不掉白条；白条来自标题栏区域背后没有承接层、
+        // 直接露出 HDS 自己的 surface。现改为把背板填成页面底色
+        // （sys.color.background_secondary），让标题栏与页面同底，HDS surface 不再透出。
+        // 仍然保留真正的 HDS 标题栏节点——自绘标题挂在
+        // titleBar.content.stackBuilder 下，不隐藏标题栏、不把内容挪出标题栏树。
+        // 历史真机结论（Issue #932）：backgroundColor 不能设在 HdsNavDestination 本体上，
+        // 会被 HDS surface 覆盖；背板是标题栏自己的样式入口，不是给 NavDestination 设 backgroundColor。
         scrollEffectOpts: {
           enableScrollEffect: false,
           scrollEffectType: ScrollEffectType.COMMON_BLUR
         },
         originalStyle: {
-          backgroundStyle: { backgroundColor: Color.Transparent }
+          backgroundStyle: { backgroundColor: $r('sys.color.background_secondary') }
         },
         // 与 App/Workspace/Writing 三个壳统一为 ADAPTIVE（不再用 IMMERSIVE）。
         systemMaterialEffect: {

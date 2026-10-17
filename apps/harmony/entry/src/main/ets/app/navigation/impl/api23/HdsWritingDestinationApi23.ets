@@ -86,16 +86,21 @@ export struct HdsWritingDestinationApi23 {
         }
       },
       style: {
-        // Issue #932：窄屏标题栏背板透明。仍然保留真正的 HDS 标题栏节点——
-        // 自绘标题与动作胶囊挂在 titleBar.content.stackBuilder 下，不隐藏标题栏、
-        // 不把胶囊挪到内容层 Stack，只是把标题栏背板与滚动模糊关掉，让页面内容
-        // 直接透到标题栏区域。
+        // Issue #932 复核：官方文档明确模糊样式类型（COMMON_BLUR / GRADUAL_BLUR）
+        // 下，标题栏背板默认值本来就是透明色——原先这里写 Color.Transparent 属于 no-op，
+        // 不改变任何可见像素，也去不掉白条；白条来自标题栏区域背后没有承接层、
+        // 直接露出 HDS 自己的 surface。现改为把背板填成页面底色
+        // （sys.color.background_secondary），让标题栏与页面同底，HDS surface 不再透出。
+        // 仍然保留真正的 HDS 标题栏节点——自绘标题与动作胶囊挂在
+        // titleBar.content.stackBuilder 下，不隐藏标题栏、不把胶囊挪到内容层 Stack。
+        // 历史真机结论（Issue #932）：backgroundColor 不能设在 HdsNavDestination 本体上，
+        // 会被 HDS surface 覆盖；背板是标题栏自己的样式入口，不是给 NavDestination 设 backgroundColor。
         scrollEffectOpts: {
           enableScrollEffect: false,
           scrollEffectType: ScrollEffectType.COMMON_BLUR
         },
         originalStyle: {
-          backgroundStyle: { backgroundColor: Color.Transparent }
+          backgroundStyle: { backgroundColor: $r('sys.color.background_secondary') }
         },
         // ADAPTIVE 是官方《沉浸光感》示例里的值，标题栏的按压光要靠它。
         systemMaterialEffect: {
