@@ -56,8 +56,25 @@ import {
   isInsertGroupComplete, isReflowGroupComplete,
   removeIdentityEntry, releaseOwner,
   transferIdentityOwner,
-  type CarryOverPieceWithContext, type IdentityCache
+  type CarryOverPieceWithContext, type IdentityCache, type CarryOverPhysicalGroupResult
 } from './editor_carry_over_physical_plan'
+
+/**
+ * Issue #921：carry-over 身份清理队列的元素类型。
+ *
+ * ArkTS 禁止匿名对象字面量类型，删除队列改为文件级命名接口。
+ */
+interface IdentityCleanupEntry {
+  groupKey: string
+  owner: string
+  instanceId: string
+}
+
+/** Issue #921：仅需 groupKey/owner 的身份清理队列元素类型。 */
+interface IdentityOwnerEntry {
+  groupKey: string
+  owner: string
+}
 
 /**
  * Issue #879 最新复核评论问题4：prepareCandidate 的返回类型。
@@ -567,7 +584,11 @@ export class EditorMotionCoordinator {
   ): void {
     this.commitGeneration++
     const displayedOwner = `displayed:${this.commitGeneration}`
-    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
+    for (const groupKey of this.carryOverIdentityCache.keys()) {
+      const ownerMap = this.carryOverIdentityCache.get(groupKey)
+      if (ownerMap === undefined) {
+        continue
+      }
       const entry = ownerMap.get(candidateOwnerId)
       // Issue #879 评论6161341265 问题3：只转交当前计划仍引用的身份。
       // renderNodeKey 不在 validRenderNodeKeys 中的条目说明该物理组已从计划中消失，
@@ -596,21 +617,34 @@ export class EditorMotionCoordinator {
    * 使用 removeIdentityEntry 精确移除——先 removeLogicalOwner，再检查是否可以释放。
    */
   private releaseStaleDisplayedGenerations(currentDisplayedOwner: string): void {
-    const entriesToDelete: Array<{ groupKey: string, owner: string, instanceId: string }> = []
-    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
-      for (const [owner, entry] of ownerMap) {
+    const entriesToDelete: IdentityCleanupEntry[] = []
+    for (const groupKey of this.carryOverIdentityCache.keys()) {
+      const ownerMap = this.carryOverIdentityCache.get(groupKey)
+      if (ownerMap === undefined) {
+        continue
+      }
+      for (const owner of ownerMap.keys()) {
+        const entry = ownerMap.get(owner)
+        if (entry === undefined) {
+          continue
+        }
         if (owner.startsWith('displayed:') && owner !== currentDisplayedOwner) {
-          entriesToDelete.push({ groupKey, owner, instanceId: entry.windowInstanceId })
+          const pending: IdentityCleanupEntry = {
+            groupKey: groupKey,
+            owner: owner,
+            instanceId: entry.windowInstanceId
+          }
+          entriesToDelete.push(pending)
         }
       }
     }
-    for (const { groupKey, owner, instanceId } of entriesToDelete) {
+    for (const pending of entriesToDelete) {
       removeIdentityEntry(
         this.carryOverIdentityCache,
         this.windowIdAllocator,
-        groupKey,
-        owner,
-        instanceId
+        pending.groupKey,
+        pending.owner,
+        pending.instanceId
       )
     }
   }
@@ -631,21 +665,34 @@ export class EditorMotionCoordinator {
    * 在 syncMotionWindowOwners 之后、releaseSourcesAfterMotion 之前。
    */
   reconcileDisplayedOwners(): void {
-    const entriesToDelete: Array<{ groupKey: string, owner: string, instanceId: string }> = []
-    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
-      for (const [owner, entry] of ownerMap) {
+    const entriesToDelete: IdentityCleanupEntry[] = []
+    for (const groupKey of this.carryOverIdentityCache.keys()) {
+      const ownerMap = this.carryOverIdentityCache.get(groupKey)
+      if (ownerMap === undefined) {
+        continue
+      }
+      for (const owner of ownerMap.keys()) {
+        const entry = ownerMap.get(owner)
+        if (entry === undefined) {
+          continue
+        }
         if (owner.startsWith('displayed:')) {
-          entriesToDelete.push({ groupKey, owner, instanceId: entry.windowInstanceId })
+          const pending: IdentityCleanupEntry = {
+            groupKey: groupKey,
+            owner: owner,
+            instanceId: entry.windowInstanceId
+          }
+          entriesToDelete.push(pending)
         }
       }
     }
-    for (const { groupKey, owner, instanceId } of entriesToDelete) {
+    for (const pending of entriesToDelete) {
       removeIdentityEntry(
         this.carryOverIdentityCache,
         this.windowIdAllocator,
-        groupKey,
-        owner,
-        instanceId
+        pending.groupKey,
+        pending.owner,
+        pending.instanceId
       )
     }
   }
@@ -666,20 +713,29 @@ export class EditorMotionCoordinator {
     candidateOwnerId: string,
     validRenderNodeKeys: Set<string>
   ): void {
-    const entriesToDelete: Array<{ groupKey: string, owner: string, instanceId: string }> = []
-    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
+    const entriesToDelete: IdentityCleanupEntry[] = []
+    for (const groupKey of this.carryOverIdentityCache.keys()) {
+      const ownerMap = this.carryOverIdentityCache.get(groupKey)
+      if (ownerMap === undefined) {
+        continue
+      }
       const entry = ownerMap.get(candidateOwnerId)
       if (entry !== undefined && !validRenderNodeKeys.has(entry.renderNodeKey)) {
-        entriesToDelete.push({ groupKey, owner: candidateOwnerId, instanceId: entry.windowInstanceId })
+        const pending: IdentityCleanupEntry = {
+          groupKey: groupKey,
+          owner: candidateOwnerId,
+          instanceId: entry.windowInstanceId
+        }
+        entriesToDelete.push(pending)
       }
     }
-    for (const { groupKey, owner, instanceId } of entriesToDelete) {
+    for (const pending of entriesToDelete) {
       removeIdentityEntry(
         this.carryOverIdentityCache,
         this.windowIdAllocator,
-        groupKey,
-        owner,
-        instanceId
+        pending.groupKey,
+        pending.owner,
+        pending.instanceId
       )
     }
   }
@@ -3725,40 +3781,9 @@ export class EditorMotionCoordinator {
       this.windowIdAllocator.addLogicalOwner(owner, group.windowInstanceId)
     }
 
-    // 将共享模块的输出类型转换为 Coordinator 内部的 CarryOverPhysicalGroup
-    return results.map((r): CarryOverPhysicalGroup => ({
-      renderNodeKey: r.renderNodeKey,
-      windowInstanceId: r.windowInstanceId,
-      sourceKind: r.sourceKind,
-      sourceRevision: r.sourceRevision,
-      motionChannel: r.motionChannel,
-      parentWindowId: r.parentWindowId,
-      sourceRunId: r.sourceRunId,
-      glyphIds: r.glyphIds,
-      sourceUtf16Start: r.sourceUtf16Start,
-      sourceUtf16End: r.sourceUtf16End,
-      clipRects: r.clipRects,
-      fullWindowGlyphUtf16Ranges: r.fullWindowGlyphUtf16Ranges,
-      targetUtf16Start: r.targetUtf16Start,
-      targetUtf16End: r.targetUtf16End,
-      targetResolved: r.targetResolved,
-      targetRect: r.targetRect,
-      glyphX: r.glyphX,
-      glyphY: r.glyphY,
-      glyphWidth: r.glyphWidth,
-      glyphHeight: r.glyphHeight,
-      clipLeft: r.clipLeft,
-      clipRight: r.clipRight,
-      clipTop: r.clipTop,
-      clipBottom: r.clipBottom,
-      currentPositionX: r.currentPositionX,
-      currentPositionY: r.currentPositionY,
-      offsetX: r.offsetX,
-      offsetY: r.offsetY,
-      opacity: r.opacity,
-      islandSourceRects: r.islandSourceRects,
-      islandClipRects: r.islandClipRects,
-    }))
+    // 共享模块的输出类型与 Coordinator 内部的 CarryOverPhysicalGroup 结构一致，
+    // 直接返回，避免在 .ets 里再构造一份同形状的对象字面量。
+    return results
   }
 
   /**
@@ -4698,22 +4723,34 @@ export class EditorMotionCoordinator {
     // 旧代码按单层遍历 cached.windowInstanceId 会类型错误（cached 是内层 Map）。
     // 改为遍历 groupKey → ownerMap → owner, entry，精确定位匹配的条目。
     if (this.windowIdAllocator.resolve(windowInstanceId) === null) {
-      const entriesToDelete: Array<{ groupKey: string, owner: string }> = []
-      for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
-        for (const [owner, entry] of ownerMap) {
+      const entriesToDelete: IdentityOwnerEntry[] = []
+      for (const groupKey of this.carryOverIdentityCache.keys()) {
+        const ownerMap = this.carryOverIdentityCache.get(groupKey)
+        if (ownerMap === undefined) {
+          continue
+        }
+        for (const owner of ownerMap.keys()) {
+          const entry = ownerMap.get(owner)
+          if (entry === undefined) {
+            continue
+          }
           if (entry.windowInstanceId === windowInstanceId) {
-            entriesToDelete.push({ groupKey, owner })
+            const pending: IdentityOwnerEntry = {
+              groupKey: groupKey,
+              owner: owner
+            }
+            entriesToDelete.push(pending)
           }
         }
       }
       // Issue #879 评论6160902258 问题3：使用 removeIdentityEntry 精确释放，
       // 不对同一 groupKey 的其他 owner 实例无条件 release。
-      for (const { groupKey, owner } of entriesToDelete) {
+      for (const pending of entriesToDelete) {
         removeIdentityEntry(
           this.carryOverIdentityCache,
           this.windowIdAllocator,
-          groupKey,
-          owner,
+          pending.groupKey,
+          pending.owner,
           windowInstanceId
         )
       }
@@ -4757,25 +4794,38 @@ export class EditorMotionCoordinator {
     // Issue #879 评论6160902258 问题1：carryOverIdentityCache 已改为双层 Map，
     // 旧代码按单层遍历 cached.windowInstanceId 会类型错误。
     // 改为遍历 groupKey → ownerMap → owner, entry，精确定位失效条目。
-    const entriesToDelete: Array<{ groupKey: string, owner: string, instanceId: string }> = []
-    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
-      for (const [owner, entry] of ownerMap) {
+    const entriesToDelete: IdentityCleanupEntry[] = []
+    for (const groupKey of this.carryOverIdentityCache.keys()) {
+      const ownerMap = this.carryOverIdentityCache.get(groupKey)
+      if (ownerMap === undefined) {
+        continue
+      }
+      for (const owner of ownerMap.keys()) {
+        const entry = ownerMap.get(owner)
+        if (entry === undefined) {
+          continue
+        }
         const resolved = this.windowIdAllocator.resolve(entry.windowInstanceId)
         if (resolved === null) {
           // 实例已释放——缓存条目失效
-          entriesToDelete.push({ groupKey, owner, instanceId: entry.windowInstanceId })
+          const pending: IdentityCleanupEntry = {
+            groupKey: groupKey,
+            owner: owner,
+            instanceId: entry.windowInstanceId
+          }
+          entriesToDelete.push(pending)
         }
       }
     }
     // Issue #879 评论6160902258 问题3：使用 removeIdentityEntry 精确移除，
     // 不影响同一 groupKey 下其他 owner 的条目。
-    for (const { groupKey, owner, instanceId } of entriesToDelete) {
+    for (const pending of entriesToDelete) {
       removeIdentityEntry(
         this.carryOverIdentityCache,
         this.windowIdAllocator,
-        groupKey,
-        owner,
-        instanceId
+        pending.groupKey,
+        pending.owner,
+        pending.instanceId
       )
     }
   }
