@@ -55,6 +55,14 @@ export class HarmonyAutoSyncScheduler {
   private observer: SyncLifecycleObserver | null = null
   /** 网络恢复监听注销函数（null 表示未订阅）。 */
   private unsubscribeNetwork: (() => void) | null = null
+  /** Native Core 是否已初始化（由唯一初始化路径经 onCoreReady() 通知）。 */
+  private coreReady: boolean = false
+  /**
+   * 配置是否已成功从 Core 读过（或由设置页按 Core 提交结果写入）。
+   * 读取失败时保持 false 并在下一次前台/网络恢复时重试，绝不把"读不到配置"
+   * 记忆成"自动同步关闭"（Issue #925 复核）。
+   */
+  private configLoaded: boolean = false
 
   private constructor() {
   }
@@ -67,11 +75,13 @@ export class HarmonyAutoSyncScheduler {
   }
 
   /**
-   * Ability 级装配（EntryAbility.onCreate）：注册唯一生命周期监听与网络恢复监听，
-   * 并从 Core 载入已提交配置作为调度依据——自动同步不依赖设置页被打开。
+   * Ability 级装配（EntryAbility.onCreate）：只注册唯一生命周期监听与网络恢复监听。
+   * 不在装配时抢读 Core——NativeWriterCoreBridge.initialize() 由首页初始化路径执行，
+   * 未初始化时 loadSyncConfig 必然失败。真实配置的首次读取与到期判断由
+   * onCoreReady() 在 Core 初始化成功后触发（Issue #925 复核）。
    * 幂等；重复装配直接返回。
    */
-  async attach(lifecycle: HarmonyLifecycle): Promise<void> {
+  attach(lifecycle: HarmonyLifecycle): void {
     if (this.observer !== null) {
       return
     }
@@ -87,13 +97,18 @@ export class HarmonyAutoSyncScheduler {
       this.onNetworkRestored()
     })
     this.isForeground = lifecycle.isForeground()
+    hilog.info(DOMAIN, TAG, 'attach: lifecycle and network listeners registered, awaiting core ready')
+  }
+
+  /**
+   * Native Core 初始化成功后的唯一通知入口（首页初始化路径在 initialize 成功后调用）。
+   * 此时才从 Core 读已提交配置，并按真实前台状态挂前台唤醒、做一次到期判断。
+   * 读取失败不当作"自动同步关闭"：configLoaded 保持 false，由后续前台/网络恢复重试。
+   */
+  async onCoreReady(): Promise<void> {
+    this.coreReady = true
     await this.reloadConfigFromCore()
-    // 装配期间可能已经进入前台（onWindowStageCreate 早于配置载入完成）：
-    // 这里补一次前台唤醒与到期判断，与 onForeground() 使用同一编排。
-    if (this.isForeground && this.isAutoSyncActive()) {
-      this.startForegroundTimer()
-      this.runIfDue()
-    }
+    this.continueForegroundAfterConfig()
   }
 
   /** Ability 级解绑（EntryAbility.onDestroy）：移除监听并停止前台唤醒。 */
@@ -118,6 +133,7 @@ export class HarmonyAutoSyncScheduler {
     try {
       const result: ResultEnvelope<SyncConfig | null> = await this.bridge.loadSyncConfig()
       if (!result.success) {
+        // 读取失败不记为"自动同步关闭"：configLoaded 保持 false，后续前台/网络恢复重试。
         hilog.warn(DOMAIN, TAG, 'reloadConfigFromCore failed: errorCode=%{public}s', result.errorCode ?? 'UNKNOWN')
         return
       }
@@ -131,9 +147,12 @@ export class HarmonyAutoSyncScheduler {
    * 按 Core 已提交的配置更新调度状态。
    * 只记录配置并按 enabled && autoSync 启停前台唤醒 timer；不触发同步——
    * 是否 due 由 runIfDue 决定（打开设置页/仅改配置不产生额外同步）。
+   * 调用方只传 Core 真源（reloadConfigFromCore 读取结果或设置页持久化成功后的配置），
+   * 因此这里同时标记配置已成功加载。
    */
   reconfigure(config: SyncConfig | null): void {
     this.config = config
+    this.configLoaded = true
     if (config === null || !config.enabled || !config.autoSync) {
       this.stopForegroundTimer()
       hilog.info(DOMAIN, TAG, 'reconfigure: auto sync inactive, foreground timer stopped')
@@ -146,15 +165,35 @@ export class HarmonyAutoSyncScheduler {
     }
   }
 
-  /** 进入前台：挂前台唤醒 timer，并立即做一次到期判断。 */
+  /** 进入前台：必要时重试读取配置，然后挂前台唤醒 timer 并立即做一次到期判断。 */
   onForeground(): void {
     this.isForeground = true
+    if (!this.configLoaded) {
+      // 配置尚未成功读过（Core 未就绪或上次读取失败）：本次前台重试一次真实读取，
+      // 不把读取失败记忆成"自动同步关闭"；Core 未就绪时等 onCoreReady()。
+      if (!this.coreReady) {
+        hilog.info(DOMAIN, TAG, 'onForeground: core not ready, defer to onCoreReady')
+        return
+      }
+      this.reloadConfigFromCore().then((): void => {
+        this.continueForegroundAfterConfig()
+      })
+      return
+    }
+    this.continueForegroundAfterConfig()
+  }
+
+  /** 配置已确定时的前台编排：挂前台唤醒 timer 并立即做一次到期判断。 */
+  private continueForegroundAfterConfig(): void {
+    if (!this.isForeground) {
+      return
+    }
     if (!this.isAutoSyncActive()) {
-      hilog.info(DOMAIN, TAG, 'onForeground: auto sync inactive')
+      hilog.info(DOMAIN, TAG, 'foreground: auto sync inactive')
       return
     }
     this.startForegroundTimer()
-    hilog.info(DOMAIN, TAG, 'onForeground: immediate due check')
+    hilog.info(DOMAIN, TAG, 'foreground: immediate due check')
     this.runIfDue()
   }
 
@@ -165,8 +204,19 @@ export class HarmonyAutoSyncScheduler {
     hilog.info(DOMAIN, TAG, 'onBackground: foreground timer stopped')
   }
 
-  /** 网络恢复：立即做一次到期判断（不等待 timer）。 */
+  /** 网络恢复：必要时重试读取配置，然后立即做一次到期判断（不等待 timer）。 */
   onNetworkRestored(): void {
+    if (!this.configLoaded) {
+      if (!this.coreReady) {
+        hilog.info(DOMAIN, TAG, 'onNetworkRestored: core not ready, defer to onCoreReady')
+        return
+      }
+      this.reloadConfigFromCore().then((): void => {
+        hilog.info(DOMAIN, TAG, 'onNetworkRestored: immediate due check after config reload')
+        this.runIfDue()
+      })
+      return
+    }
     hilog.info(DOMAIN, TAG, 'onNetworkRestored: immediate due check')
     this.runIfDue()
   }

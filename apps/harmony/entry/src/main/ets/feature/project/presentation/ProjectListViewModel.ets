@@ -10,6 +10,7 @@ import { ProjectSummary, WritingStats } from '../../../corebridge/dto/ProjectDto
 import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
 import { getBridge, getAppDataRoot, getAppContext } from '../../../app/AppContext'
 import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
+import { HarmonyAutoSyncScheduler } from '../../settings/presentation/HarmonyAutoSyncScheduler'
 import { HarmonyThemeAdapter } from '../../../ui/theme/HarmonyThemeAdapter'
 import { ScreenPolicy, ScreenRole, ActionSlot, ActionRegion, ActionTarget, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
 
@@ -99,6 +100,12 @@ export class ProjectListViewModel {
         }
         const statusResult = await nativeBridge.getNativeLoadStatus()
         this.nativeStatus = statusResult.success ? (statusResult.data || 'unknown') : 'error'
+        // Issue #925 复核：这里是 Core 唯一初始化路径（NativeWriterCoreBridge.initialize）
+        // 成功之后的位置——通知自动同步调度器读取真实配置并按需启动前台自动同步。
+        // 读取失败不记为"自动同步关闭"，由调度器在后续前台/网络恢复时重试。
+        HarmonyAutoSyncScheduler.getInstance().onCoreReady().catch((e: Object): void => {
+          hilog.warn(DOMAIN, TAG, 'onCoreReady failed: %{public}s', String(e))
+        })
       }
 
       await this.loadWorkspace()

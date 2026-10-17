@@ -58,12 +58,11 @@ export default class EntryAbility extends UIAbility {
 
     this.lifecycle.notifyCreate()
 
-    // Issue #925：Ability 级装配唯一自动同步调度器——注册生命周期与网络恢复监听，
-    // 并从 Core 载入已提交配置，保证不打开设置页也能按配置前台自动同步。
-    // attach 只做装配与到期判断，不在装配时凭空发同步。
-    HarmonyAutoSyncScheduler.getInstance().attach(this.lifecycle).catch((e: Object): void => {
-      hilog.warn(0x0000, 'EntryAbility', 'auto sync scheduler attach failed: %{public}s', String(e))
-    })
+    // Issue #925：Ability 级装配唯一自动同步调度器——只注册生命周期与网络恢复监听，
+    // 不在 onCreate 抢读尚未初始化的 Core（loadSyncConfig 会失败且被误记为"未开启自动同步"）。
+    // 真实配置的首次读取与到期判断由 HarmonyAutoSyncScheduler.onCoreReady() 在
+    // NativeWriterCoreBridge.initialize() 成功后触发（Issue #925 复核）。
+    HarmonyAutoSyncScheduler.getInstance().attach(this.lifecycle)
 
     // 接续恢复：检查 launchReason === CONTINUATION，从 want.parameters 读取 payload。
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
