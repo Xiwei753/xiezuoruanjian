@@ -4069,6 +4069,130 @@ mod tests {
         assert!(obj.is_none(), "remote file should be deleted after sync");
     }
 
+    /// #931 review：App 目标 LWW attempt 在 merge 发现本地缺失且远端无可验证
+    /// blob（`unresolved_missing_paths` 非空）时，必须在任何远端写
+    /// （upload / delete_remote / upload_manifest）之前直接返回 RecoverableError：
+    /// 当前完整远端 manifest 无法构成合法快照，不能先上传/发布引用缺失 blob 的
+    /// 清单。本轮 merge 已实际执行的本地下载照常生效并计数，远端留待缺失事实
+    /// 恢复后按已有增量规则发布。
+    #[test]
+    #[cfg(not(windows))]
+    fn test_lww_sync_app_target_unresolved_missing_path_skips_all_remote_writes() {
+        use crate::sync::provider::SyncProvider;
+
+        let dir = tempdir().unwrap();
+        let sync_root = dir.path();
+
+        // 本地基线：known file 缺失且无 tombstone，旧 manifest 保留其 upsert 记录；
+        // 远端没有任何该路径的可验证 blob（既无 manifest 记录也无 tree 对象）。
+        let vanished_hash = format!("{:x}", md5::compute(b"vanished settings"));
+        let mut state = crate::sync::types::SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert("settings.sync.json".to_string(), vanished_hash.clone());
+        state
+            .known_files_updated_at
+            .insert("settings.sync.json".to_string(), 1000);
+        SyncService::save_sync_state(sync_root, &state).unwrap();
+
+        let old_manifest = crate::sync::types::SyncManifest {
+            files: vec![crate::sync::types::ManifestFileRecord {
+                path: "settings.sync.json".to_string(),
+                content_hash: vanished_hash,
+                op: "upsert".to_string(),
+                updated_at_ms: 1000,
+                deleted_at_ms: None,
+                device_id: "device_local".to_string(),
+                schema_version: 1,
+            }],
+        };
+        let local_manifest_path = sync_root.join("app-meta/sync/manifest.sync.json");
+        std::fs::create_dir_all(local_manifest_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &local_manifest_path,
+            serde_json::to_string(&old_manifest).unwrap(),
+        )
+        .unwrap();
+
+        // 远端只有另一个 app 文件（starmaps/ 在 App scope 白名单内）：
+        // 本轮 merge 会把它下载到本地，用来验证本地效果照常执行并计数。
+        let provider = crate::sync::provider::MemoryProvider::with_entries([(
+            "app/starmaps/other.json".to_string(),
+            b"remote starmap".to_vec(),
+        )]);
+
+        let target = crate::sync::types::SyncTarget::app();
+        let sync_policy = crate::sync::types::SyncPolicy {
+            enabled: true,
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            has_network_permission: true,
+        };
+        let res =
+            SyncService::perform_lww_sync(sync_root, &provider, &sync_policy, &target, true, None)
+                .unwrap();
+
+        // 1. 显式可恢复错误：状态与 error 都含 local_missing_without_tombstone
+        //    + 缺失路径 + 目标前缀。
+        match &res.status {
+            crate::sync::types::SyncStatus::RecoverableError(msg) => {
+                assert!(
+                    msg.contains("local_missing_without_tombstone"),
+                    "status 应报 local_missing_without_tombstone，实际: {msg}"
+                );
+                assert!(
+                    msg.contains("settings.sync.json"),
+                    "status 应含缺失路径，实际: {msg}"
+                );
+            }
+            other => panic!("expected RecoverableError, got {other:?}"),
+        }
+        let err = res.error.as_deref().unwrap_or_default();
+        assert!(
+            err.contains("local_missing_without_tombstone"),
+            "error 应含 local_missing_without_tombstone，实际: {err}"
+        );
+        assert!(
+            err.contains("target=app"),
+            "error 应含目标前缀，实际: {err}"
+        );
+        assert!(
+            err.contains("settings.sync.json"),
+            "error 应含缺失路径，实际: {err}"
+        );
+
+        // 2. 远端写一个都没发生：无 upload / delete / manifest 发布。
+        assert!(res.uploaded_files.is_empty(), "不得有远端上传");
+        assert!(res.local_deletes.is_empty(), "不得有远端删除");
+        let remote_entries = provider.list("app").unwrap();
+        let remote_paths: Vec<String> = remote_entries.iter().map(|e| e.path.clone()).collect();
+        assert_eq!(
+            remote_paths,
+            vec!["starmaps/other.json".to_string()],
+            "远端对象集合不应变化"
+        );
+        assert!(
+            provider
+                .read("app/app-meta/sync/manifest.sync.json")
+                .unwrap()
+                .is_none(),
+            "unresolved missing 时不得发布远端 manifest"
+        );
+
+        // 3. merge 已实际执行的本地下载照常生效并计数。
+        assert!(
+            res.downloaded_files
+                .contains(&"starmaps/other.json".to_string()),
+            "本地下载应计入 downloaded_files，实际: {:?}",
+            res.downloaded_files
+        );
+        assert_eq!(
+            std::fs::read_to_string(sync_root.join("starmaps/other.json")).unwrap(),
+            "remote starmap"
+        );
+    }
+
     /// Issue #757 评论 5820327136 第 1 点：staging BothChanged 冲突在 cleanup 前
     /// 保存远端快照到 `remote_snapshot_path`，冲突预览展示的远端正文与
     /// `take_remote` 实际采用的正文是同一份。远端之后再变化，`take_remote` 仍采用

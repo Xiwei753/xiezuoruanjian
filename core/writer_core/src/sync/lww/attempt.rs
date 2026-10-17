@@ -101,6 +101,34 @@ pub(crate) fn execute_lww_sync_attempt(
         }
     }
 
+    // #931 review：merge 已把"本地缺失且远端无可验证 blob"的路径收进
+    // unresolved_missing_paths，且 merged_manifest 仍保留其旧 upsert 记录。
+    // 此时 upload / delete_remote / upload_manifest 任一远端写都会发布引用
+    // 缺失 blob 的清单快照，违反"不能发布引用缺失 blob 的完整快照"的规则
+    // （LiveProject 在 transfer_live.rs publish 前同样拦截）。所以在首次
+    // upload_local_files 之前直接返回可恢复错误：只报告本轮 merge 已实际产生的
+    // 本地效果（下载/本地移入 trash 等已生效），远端发布留待缺失事实恢复后
+    // 按已有增量规则进行。
+    if !outcome.unresolved_missing_paths.is_empty() {
+        apply_outcome_status(result, &outcome, remote_prefix);
+        // 本轮没有执行任何远端写：uploaded_files / local_deletes 保持为空；
+        // downloaded_files / remote_deletes / overwritten_files / ignored_files
+        // 与正常路径同义（merge 内已执行的本地效果）。
+        result.uploaded_files = Vec::new();
+        result.downloaded_files = outcome.downloaded_files;
+        result.local_deletes = Vec::new();
+        result.remote_deletes = outcome.local_deletes;
+        result.overwritten_files = outcome.overwritten_files;
+        result.ignored_files = outcome.ignored_files;
+        log::warn!(
+            "[sync] lww step=skip remote writes for unresolved missing paths remote_prefix={} \
+             paths=[{}]",
+            remote_prefix,
+            outcome.unresolved_missing_paths.join(", ")
+        );
+        return Ok(result.clone());
+    }
+
     log::debug!("[sync] lww step=正在上传本地较新文件");
     upload_local_files(
         sync_root,

@@ -465,11 +465,15 @@ mod tests {
         );
 
         // 幂等：原文件已不在时返回 Ok(None)，调用方仍可用 journal facts 补墓碑。
-        assert!(
-            delete_node_file_to_trash(dir.path(), &meta.starmap_id, "n1", &trash_root, trash_rel)
-                .unwrap()
-                .is_none()
-        );
+        assert!(delete_node_file_to_trash(
+            dir.path(),
+            &meta.starmap_id,
+            "n1",
+            &trash_root,
+            trash_rel
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
