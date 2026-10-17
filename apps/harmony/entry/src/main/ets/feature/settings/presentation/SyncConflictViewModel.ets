@@ -345,8 +345,12 @@ export class SyncConflictViewModel {
       const merged: boolean = await ActiveWritingSessionRegistry.getInstance().withSyncBarrier<boolean>(
         async (scope: SyncBarrierScope): Promise<boolean> => {
           // 合并结果先落盘；写入失败时冲突标记必须保持原样。
-          const saveResult: ResultEnvelope<ChapterSaveReceipt> =
-            await getBridge().saveChapter(chapterId, draft)
+          // Core 拒绝把非空正文覆盖为空串（EMPTY_OVERWRITE_BLOCKED），
+          // 草稿真正为空时走 clearChapter；只区分空字符串，不 trim 空白文本。
+          const chapterBridge = getBridge()
+          const saveResult: ResultEnvelope<ChapterSaveReceipt> = draft.length === 0
+            ? await chapterBridge.clearChapter(chapterId)
+            : await chapterBridge.saveChapter(chapterId, draft)
           if (!saveResult.success) {
             item.actionErrorCode = saveResult.errorCode ?? 'UNKNOWN_ERROR'
             hilog.error(DOMAIN, TAG, 'saveMerged saveChapter failed: errorCode=%{public}s',

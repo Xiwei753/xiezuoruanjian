@@ -622,11 +622,12 @@ export struct SyncConflictsPanel {
       .replace('%s', this.viewModel.listErrorCode)
   }
 
-  private formatTime(ms: number): string {
-    if (ms <= 0) {
+  /** Core SyncConflict.created_at 为 Unix 秒（chrono timestamp()），转毫秒后再格式化。 */
+  private formatTime(seconds: number): string {
+    if (seconds <= 0) {
       return '—'
     }
-    const date = new Date(ms)
+    const date = new Date(seconds * 1000)
     return `${date.getFullYear()}-${this.twoDigits(date.getMonth() + 1)}-${this.twoDigits(date.getDate())} ` +
       `${this.twoDigits(date.getHours())}:${this.twoDigits(date.getMinutes())}`
   }
