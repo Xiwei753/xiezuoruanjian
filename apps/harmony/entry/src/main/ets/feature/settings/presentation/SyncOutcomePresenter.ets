@@ -18,17 +18,38 @@ export class SyncOutcomePresenter {
     const status: string = outcome.overallStatus ?? ''
     const typedReason: string = this.typedReason(context, outcome)
 
-    if (status === 'no_changes') {
-      return `同步完成，没有文件变化${counts}`
+    // 会话对齐可能在远端同步已经成功后失败，Controller 此时会同时返回
+    // phase=failed、SYNC_CONFLICT 和 overallStatus=success。失败语义优先，
+    // 不让远端状态掩盖本地仍需处理的冲突。
+    if (outcome.phase !== 'success') {
+      if (outcome.phase === 'failed' && outcome.errorCode === 'SYNC_CONFLICT') {
+        const conflictCount: number = outcome.totalConflicts ?? 0
+        const conflictText: string = conflictCount > 0 ? `，${conflictCount} 处冲突` : ''
+        return `远端已同步，但当前写作会话未对齐，需要处理${conflictText}${counts}`
+      }
+      const failureTitle: string = outcome.phase === 'failed' ? '同步失败' : '同步尚未完成'
+      return `${failureTitle}${counts}${typedReason.length > 0 ? `：${typedReason}` : ''}`
     }
-    if (status === 'success' || status === 'latest_wins_applied' ||
-      (status.length === 0 && outcome.phase === 'success')) {
-      return `同步完成${counts}`
+
+    if (outcome.errorCode === 'SYNC_CONFLICT') {
+      const conflictCount: number = outcome.totalConflicts ?? 0
+      const conflictText: string = conflictCount > 0 ? `，${conflictCount} 处冲突` : ''
+      return `远端已同步，但当前写作会话未对齐，需要处理${conflictText}${counts}`
     }
-    if (status === 'partial_conflict' || status === 'conflict') {
+
+    if (status === 'partial_conflict' || status === 'conflict' ||
+      outcome.messageKey === 'sync.result.conflict_summary' ||
+      (outcome.totalConflicts !== undefined && outcome.totalConflicts > 0)) {
       const conflictCount: number = outcome.totalConflicts ?? 0
       const conflictText: string = conflictCount > 0 ? `，${conflictCount} 处冲突` : '，存在冲突'
       return `部分同步完成${conflictText}${counts}`
+    }
+
+    if (status === 'no_changes') {
+      return `同步完成，没有文件变化${counts}`
+    }
+    if (status === 'success' || status === 'latest_wins_applied') {
+      return `同步完成${counts}`
     }
     if (status === 'recoverable_error') {
       return `同步遇到可恢复错误${counts}${typedReason.length > 0 ? `：${typedReason}` : ''}`
@@ -37,10 +58,7 @@ export class SyncOutcomePresenter {
       return `同步失败${counts}${typedReason.length > 0 ? `：${typedReason}` : ''}`
     }
 
-    if (outcome.phase === 'success') {
-      return `同步完成${counts}`
-    }
-    return `同步失败${counts}${typedReason.length > 0 ? `：${typedReason}` : ''}`
+    return `同步完成${counts}`
   }
 
   /** 仅使用类型化字段；rawError/message 可能包含 URL、凭据或远端原文，不展示给用户。 */

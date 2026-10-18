@@ -38,7 +38,7 @@ import { HeaderActionCapsule } from './impl/api23/HeaderActionCapsule'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 import { SyncRunPresentationState, SyncRunSnapshot } from '../../feature/settings/presentation/SyncRunPresentationState'
 import { SyncOutcomePresenter } from '../../feature/settings/presentation/SyncOutcomePresenter'
-import { SyncStatusStrip } from '../../ui/components/SyncStatusStrip'
+import { SyncStatusStrip, isSyncOutcomeConflict } from '../../ui/components/SyncStatusStrip'
 import { NavigationHeaderActionDispatcher } from './NavigationHeaderActionDispatcher'
 
 // 一级导航 Tab 索引常量
@@ -66,6 +66,8 @@ const WIDE_RAIL_ENTRIES: WideRailEntry[] = [
 
 // 宽屏左侧一级导航的固定宽度（vp）
 const WIDE_RAIL_WIDTH: number = 160
+const SYNC_STATUS_SUCCESS_VISIBLE_MS: number = 3200
+const SYNC_STATUS_MAX_WIDTH_VP: number = 560
 
 // Issue #827 评论 3 第 1 点：左栏「素笺」行的左右内边距。
 const WIDE_RAIL_BRAND_PADDING: number = 20
@@ -107,6 +109,7 @@ export struct PrimaryTabShell {
 
   // Issue #940：唯一应用壳层宿主负责呈现跨路由同步状态与手动入口 Toast。
   @State syncRunSnapshot: SyncRunSnapshot = SyncRunPresentationState.getInstance().snapshot()
+  @State syncStatusVisible: boolean = this.syncRunSnapshot.phase !== 'idle'
 
   // Issue #768：API23+ 分流标志。true 时使用 HdsPrimaryTabsApi23，false 时使用普通 Tabs。
   @State useHdsTabs: boolean = false
@@ -125,6 +128,7 @@ export struct PrimaryTabShell {
   private navChromeObserver: ((role: ScreenRole) => void) | null = null
   private gestureLockObserver: ((locked: boolean) => void) | null = null
   private syncRunUnsubscribe: (() => void) | null = null
+  private syncStatusHideTimerId: number = -1
 
   aboutToAppear(): void {
     hilog.info(0x0000, 'PrimaryTabShell', 'aboutToAppear: stacks initialized with root routes')
@@ -190,6 +194,10 @@ export struct PrimaryTabShell {
 
     const syncState: SyncRunPresentationState = SyncRunPresentationState.getInstance()
     this.syncRunSnapshot = syncState.snapshot()
+    this.syncStatusVisible = this.syncRunSnapshot.phase !== 'idle'
+    if (this.isPureSuccessfulSyncSnapshot(this.syncRunSnapshot)) {
+      this.scheduleSyncStatusSuccessHide(this.syncRunSnapshot.finishedAtMs)
+    }
     this.syncRunUnsubscribe = syncState.subscribe((snapshot: SyncRunSnapshot): void => {
       const previous: SyncRunSnapshot = self.syncRunSnapshot
       self.syncRunSnapshot = snapshot
@@ -214,6 +222,7 @@ export struct PrimaryTabShell {
       this.syncRunUnsubscribe()
       this.syncRunUnsubscribe = null
     }
+    this.clearSyncStatusHideTimer()
     // Issue #768 评论5835171266 第1项：PrimaryTabShell 始终注销三个栈，不再因 useHdsTabs 跳过。
     // Issue #767 评论5831949869 第1项：注销自己持有的三个栈。
     // 必须按实例相等再删，避免旧 Shell 的迟到 disappear 把新 Shell 已注册的 stack 删掉。
@@ -227,13 +236,92 @@ export struct PrimaryTabShell {
   }
 
   private onSyncRunSnapshotChanged(previous: SyncRunSnapshot, next: SyncRunSnapshot): void {
+    if (next.phase === 'in_progress') {
+      this.clearSyncStatusHideTimer()
+      this.syncStatusVisible = true
+    } else if (next.phase === 'success') {
+      this.syncStatusVisible = true
+      if (this.isPureSuccessfulSyncSnapshot(next)) {
+        this.scheduleSyncStatusSuccessHide(next.finishedAtMs)
+      } else {
+        this.clearSyncStatusHideTimer()
+      }
+    } else if (next.phase === 'failed') {
+      this.clearSyncStatusHideTimer()
+      this.syncStatusVisible = true
+    } else {
+      this.clearSyncStatusHideTimer()
+      this.syncStatusVisible = false
+    }
+
     if (next.phase === 'in_progress' && next.source === 'manual' && previous.phase !== 'in_progress') {
       this.showSyncToast('同步开始…')
-      return
     }
     if (previous.phase === 'in_progress' && next.finishedAtMs !== null && next.source === 'manual' && next.outcome !== null) {
       const context: Context = getContext(this)
       this.showSyncToast(SyncOutcomePresenter.present(context, next.outcome))
+    }
+  }
+
+  private scheduleSyncStatusSuccessHide(finishedAtMs: number | null): void {
+    this.clearSyncStatusHideTimer()
+    const expectedFinishedAtMs: number | null = finishedAtMs
+    this.syncStatusHideTimerId = setTimeout((): void => {
+      this.syncStatusHideTimerId = -1
+      if (this.isPureSuccessfulSyncSnapshot(this.syncRunSnapshot) &&
+        this.syncRunSnapshot.finishedAtMs === expectedFinishedAtMs) {
+        this.syncStatusVisible = false
+      }
+    }, SYNC_STATUS_SUCCESS_VISIBLE_MS)
+  }
+
+  private clearSyncStatusHideTimer(): void {
+    if (this.syncStatusHideTimerId !== -1) {
+      clearTimeout(this.syncStatusHideTimerId)
+      this.syncStatusHideTimerId = -1
+    }
+  }
+
+  private dismissSyncStatus(): void {
+    if (this.syncRunSnapshot.phase === 'failed' || isSyncOutcomeConflict(this.syncRunSnapshot.outcome)) {
+      this.syncStatusVisible = false
+    }
+  }
+
+  private isPureSuccessfulSyncSnapshot(snapshot: SyncRunSnapshot): boolean {
+    if (snapshot.phase !== 'success' || isSyncOutcomeConflict(snapshot.outcome)) {
+      return false
+    }
+    const outcome = snapshot.outcome
+    if (outcome === null) {
+      return true
+    }
+    const status: string = outcome.overallStatus ?? ''
+    if (status.length === 0) {
+      return outcome.errorCode === undefined && outcome.errorCategory === undefined
+    }
+    return status === 'success' || status === 'no_changes' || status === 'latest_wins_applied'
+  }
+
+  private shouldShowSyncStatus(): boolean {
+    return this.syncStatusVisible && this.syncRunSnapshot.phase !== 'idle'
+  }
+
+  @Builder
+  SyncStatusBanner() {
+    if (this.shouldShowSyncStatus()) {
+      Row() {
+        SyncStatusStrip({
+          snapshot: this.syncRunSnapshot,
+          onOpenDetails: (): void => { this.openSyncSettings() },
+          onDismiss: (): void => { this.dismissSyncStatus() }
+        })
+          .width('100%')
+          .constraintSize({ maxWidth: SYNC_STATUS_MAX_WIDTH_VP })
+      }
+      .width('100%')
+      .padding({ top: Math.max(this.adaptiveState.safeTopVp, 8), left: 12, right: 12, bottom: 8 })
+      .alignItems(VerticalAlign.Center)
     }
   }
 
@@ -482,15 +570,21 @@ export struct PrimaryTabShell {
       if (this.currentShowPrimaryNav) {
         this.WidePrimaryRail()
       }
-      Stack() {
-        this.WideCurrentNavigation()
-        // 右上角独立悬浮操作组：不铺白色背景、不占整行高度
-        if (this.currentShowPrimaryNav) {
-          HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
-            .position({ x: '100%', y: 0 })
-            .translate({ x: '-100%', y: 0 })
-            .margin({ top: Math.max(this.adaptiveState.safeTopVp, 8), right: 16 })
+      Column() {
+        this.SyncStatusBanner()
+        Stack() {
+          this.WideCurrentNavigation()
+          // 右上角独立悬浮操作组：不铺白色背景、不占整行高度。
+          // 状态条已占用顶部空间时从其下方开始；状态条收起后恢复安全区避让。
+          if (this.currentShowPrimaryNav) {
+            HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
+              .position({ x: '100%', y: 0 })
+              .translate({ x: '-100%', y: 0 })
+              .margin({ top: this.shouldShowSyncStatus() ? 8 : Math.max(this.adaptiveState.safeTopVp, 8), right: 16 })
+          }
         }
+        .layoutWeight(1)
+        .width('100%')
       }
       .layoutWeight(1)
       .width('100%')
@@ -584,22 +678,19 @@ export struct PrimaryTabShell {
     // 窄屏 CompactPrimaryShell（HDS Tabs / 普通 Tabs），宽屏 WidePrimaryShell（左栏 + 右上动作组）。
     // 600–839vp（Workbench 但一级导航仍为 Bottom）留在窄屏外壳；设置浮层由窗口级
     // custom dialog 承载（见 aboutToAppear 的 attachUIContext），与本 Stack 无关。
-    Stack() {
-      if (this.isWidePrimaryNavigation) {
-        this.WidePrimaryShell()
-      } else {
-        this.CompactPrimaryShell()
+    if (this.isWidePrimaryNavigation) {
+      this.WidePrimaryShell()
+    } else {
+      Column() {
+        this.SyncStatusBanner()
+        Stack() {
+          this.CompactPrimaryShell()
+        }
+        .layoutWeight(1)
+        .width('100%')
       }
-      if (this.syncRunSnapshot.phase !== 'idle') {
-        SyncStatusStrip({
-          snapshot: this.syncRunSnapshot,
-          onOpenDetails: (): void => { this.openSyncSettings() }
-        })
-          .position({ x: 12, y: this.adaptiveState.safeTopVp + 8 })
-          .zIndex(20)
-      }
+      .width('100%')
+      .height('100%')
     }
-    .width('100%')
-    .height('100%')
   }
 }

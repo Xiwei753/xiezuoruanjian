@@ -164,6 +164,27 @@ export interface FullSyncState {
   failed_targets: string[]
 }
 
+// Core `FullSyncReportDto`: latest whole-sync report. Keep Rust snake_case wire keys;
+// `detail` is already sanitized in Core and contains no raw error payload.
+export interface FullSyncReport {
+  attempted_at: number
+  completed_groups: number
+  failed_groups: number
+  pending_groups: number
+  failures: FullSyncReportFailure[]
+}
+
+export interface FullSyncReportFailure {
+  target_kind: string
+  group_id: string
+  path: string
+  phase: string
+  error_category: string
+  message_key: string
+  detail: string
+  occurred_at: number
+}
+
 // Core `AllSyncConflictEntryDto`：全局未解决冲突摘要（list_all_sync_conflicts）。
 // targetKind 为 "app" / "project"；App target 的 projectId / projectTitle 为空字符串。
 export interface AllSyncConflictEntry {

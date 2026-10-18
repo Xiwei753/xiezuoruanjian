@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncSecrets, SyncState, FullSyncState, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
+import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncSecrets, SyncState, FullSyncState, FullSyncReport, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets, decodeFullSyncState, decodeAllSyncConflictEntry, decodeSyncConflictPreview, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets, decodeFullSyncState, decodeFullSyncReport, decodeAllSyncConflictEntry, decodeSyncConflictPreview, decodeArray } from '../codec/CoreWireDecoders'
 
 /**
  * 构造 NATIVE_ERROR 信封，仅用于真正的 JS 异常（如 native 模块不存在）。
@@ -146,6 +146,34 @@ export class NativeSyncBridge {
       }
       return { success: true, data: decoded.data ?? null }
     } catch (e) { return nativeError<FullSyncState | null>(e) }
+  }
+
+  /** 读取 Core 保存的最近一次完整同步报告；data:null 表示尚无报告。 */
+  async loadLatestFullSyncReport(): Promise<ResultEnvelope<FullSyncReport | null>> {
+    try {
+      const jsonStr: string = await (this.core.getNativeModule()
+        .nativeLoadLatestFullSyncReport() as Promise<string>)
+      const raw: ResultEnvelope<Object> = this.core.parseRawEnvelope(jsonStr)
+      if (raw.success && (raw.data === undefined || raw.data === null)) {
+        return { success: true, data: null }
+      }
+      const decoded: ResultEnvelope<FullSyncReport> =
+        this.core.decodeEnvelope<FullSyncReport>(jsonStr, decodeFullSyncReport)
+      if (!decoded.success) {
+        return {
+          success: false,
+          errorCode: decoded.errorCode,
+          userMessage: decoded.userMessage,
+          messageKey: decoded.messageKey,
+          messageArgs: decoded.messageArgs,
+          rawError: decoded.rawError,
+          warnings: decoded.warnings,
+          changedPaths: decoded.changedPaths,
+          changedEntities: decoded.changedEntities
+        }
+      }
+      return { success: true, data: decoded.data ?? null }
+    } catch (e) { return nativeError<FullSyncReport | null>(e) }
   }
 
   /** 列出 App target + 所有 Project target 的未解决冲突摘要（不含正文）。 */

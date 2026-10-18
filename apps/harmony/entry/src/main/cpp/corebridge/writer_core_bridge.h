@@ -141,6 +141,9 @@ char*  writer_core_save_app_sync_state(const char* state_json);
 // writer_core_load_full_sync_state: 读取 full_state.local.json（最近一次全量同步的总体结果）。
 //   Core 尚未写入任何结果时 data 为 null，表示"从未成功同步"，不是查询失败。
 char*  writer_core_load_full_sync_state(void);
+// writer_core_load_latest_full_sync_report: 读取最近一次整轮同步报告（含脱敏失败详情）。
+//   Core 尚未持久化报告时 data 为 null，不代表查询失败。
+char*  writer_core_load_latest_full_sync_report(void);
 // writer_core_list_all_sync_conflicts: 聚合 App target + 所有 Project target 的
 //   未解决冲突摘要（AllSyncConflictEntryDto[]，不含正文/快照）。
 char*  writer_core_list_all_sync_conflicts(void);

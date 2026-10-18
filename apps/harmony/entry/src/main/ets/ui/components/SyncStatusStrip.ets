@@ -2,8 +2,21 @@
 // The caller owns observation, navigation, and sync behavior; this component only renders a snapshot.
 
 import { SyncRunSnapshot } from '../../feature/settings/presentation/SyncRunPresentationState'
+import { SyncOutcome } from '../../feature/settings/presentation/SyncRunTypes'
 import { SyncOutcomePresenter } from '../../feature/settings/presentation/SyncOutcomePresenter'
 import { DesignTokens } from '../theme/DesignTokens'
+
+/** Shared conflict classification for the strip and its shell host. */
+export function isSyncOutcomeConflict(outcome: SyncOutcome | null): boolean {
+  if (outcome === null) {
+    return false
+  }
+  return outcome.errorCode === 'SYNC_CONFLICT' ||
+    outcome.messageKey === 'sync.result.conflict_summary' ||
+    outcome.overallStatus === 'conflict' ||
+    outcome.overallStatus === 'partial_conflict' ||
+    (outcome.totalConflicts !== undefined && outcome.totalConflicts > 0)
+}
 
 @ComponentV2
 export struct SyncStatusStrip {
@@ -16,27 +29,21 @@ export struct SyncStatusStrip {
   }
   /** Failure/conflict detail navigation is supplied by the host page. */
   @Param onOpenDetails: () => void = () => {}
+  /** Failed runs stay available as a small entry until the user dismisses it. */
+  @Param onDismiss: () => void = () => {}
 
   private isConflict(): boolean {
-    const outcome = this.snapshot.outcome
-    if (outcome === null) {
-      return false
-    }
-    return outcome.errorCode === 'SYNC_CONFLICT' ||
-      outcome.messageKey === 'sync.result.conflict_summary' ||
-      outcome.overallStatus === 'conflict' ||
-      outcome.overallStatus === 'partial_conflict' ||
-      (outcome.totalConflicts !== undefined && outcome.totalConflicts > 0)
+    return isSyncOutcomeConflict(this.snapshot.outcome)
   }
 
   private statusTitle(): string {
     if (this.snapshot.phase === 'in_progress') {
       return this.snapshot.source === 'auto' ? '正在自动同步…' : '正在同步…'
     }
-    if (this.snapshot.phase === 'success') {
-      return '同步完成'
+    if (this.isConflict()) {
+      return '同步冲突'
     }
-    return this.isConflict() ? '同步冲突' : '同步失败'
+    return this.snapshot.phase === 'success' ? '同步完成' : '同步失败'
   }
 
   private successSummary(): string {
@@ -69,6 +76,9 @@ export struct SyncStatusStrip {
     if (!this.isConflict() || outcome.totalConflicts === undefined) {
       return summary
     }
+    if (summary.includes(`${outcome.totalConflicts} 处冲突`)) {
+      return summary
+    }
     const countFormat: string = context.resourceManager
       .getStringSync($r('app.string.sync_conflicts_count_format').id)
     return `${summary} · ${countFormat.replace('%s', outcome.totalConflicts.toString())}`
@@ -83,52 +93,80 @@ export struct SyncStatusStrip {
       Row() {
         if (this.snapshot.phase === 'in_progress') {
           LoadingProgress()
-            .width(20)
-            .height(20)
+            .width(18)
+            .height(18)
+        } else if (this.isConflict()) {
+          Text('!')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('sys.color.ohos_id_color_warning'))
         } else if (this.snapshot.phase === 'success') {
           Text('✓')
-            .fontSize(18)
+            .fontSize(16)
             .fontColor($r('sys.color.font_primary'))
         } else {
           Text('!')
-            .fontSize(18)
+            .fontSize(16)
             .fontWeight(FontWeight.Bold)
             .fontColor($r('sys.color.ohos_id_color_warning'))
         }
 
         Column() {
           Text(this.statusTitle())
-            .fontSize(14)
+            .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('sys.color.font_primary'))
 
-          if (this.snapshot.phase === 'success' && this.successSummary().length > 0) {
-            Text(this.successSummary())
-              .fontSize(12)
+          if (this.isConflict()) {
+            Text(this.failureSummary())
+              .fontSize(11)
               .fontColor($r('sys.color.font_secondary'))
-              .margin({ top: 2 })
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .margin({ top: 1 })
+          } else if (this.snapshot.phase === 'success' && this.successSummary().length > 0) {
+            Text(this.successSummary())
+              .fontSize(11)
+              .fontColor($r('sys.color.font_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .margin({ top: 1 })
           } else if (this.snapshot.phase === 'failed') {
             Text(this.failureSummary())
-              .fontSize(12)
+              .fontSize(11)
               .fontColor($r('sys.color.font_secondary'))
-              .margin({ top: 2 })
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .margin({ top: 1 })
           }
         }
         .layoutWeight(1)
-        .margin({ left: 10 })
+        .margin({ left: 8 })
         .alignItems(HorizontalAlign.Start)
 
-        if (this.snapshot.phase === 'failed') {
-          Button('查看详情')
-            .fontSize(12)
-            .height(32)
+        if (this.snapshot.phase === 'failed' || this.isConflict()) {
+          Button('详情')
+            .fontSize(11)
+            .height(30)
+            .padding({ left: 8, right: 8 })
+            .accessibilityText('查看同步详情')
             .onClick(() => {
               this.onOpenDetails()
+            })
+          Button('×')
+            .fontSize(17)
+            .width(30)
+            .height(30)
+            .padding(0)
+            .backgroundColor(Color.Transparent)
+            .accessibilityText('关闭同步提示')
+            .onClick(() => {
+              this.onDismiss()
             })
         }
       }
       .width('100%')
-      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .padding({ left: 10, right: 8, top: 6, bottom: 6 })
       .alignItems(VerticalAlign.Center)
       .backgroundColor($r('sys.color.background_secondary'))
       .borderRadius(DesignTokens.cardRadius)

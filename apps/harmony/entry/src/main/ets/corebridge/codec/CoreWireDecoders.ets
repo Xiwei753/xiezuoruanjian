@@ -15,7 +15,7 @@
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
-import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
+import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 
 // ─── Decode Result ───
@@ -1398,6 +1398,66 @@ export function decodeFullSyncState(data: Object): DecodeResult<FullSyncState> {
     failed_targets: failedTargets
   }
   return ok<FullSyncState>(value)
+}
+
+function decodeFullSyncReportFailure(data: Object): DecodeResult<FullSyncReportFailure> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<FullSyncReportFailure>('FullSyncReportFailure: expected object')
+  }
+  const targetKind: string | null = reqStr(data, 'target_kind')
+  if (targetKind === null) { return err<FullSyncReportFailure>('FullSyncReportFailure.target_kind missing or not string') }
+  const groupId: string | null = reqStr(data, 'group_id')
+  if (groupId === null) { return err<FullSyncReportFailure>('FullSyncReportFailure.group_id missing or not string') }
+  const path: string | null = reqStr(data, 'path')
+  if (path === null) { return err<FullSyncReportFailure>('FullSyncReportFailure.path missing or not string') }
+  const phase: string | null = reqStr(data, 'phase')
+  if (phase === null) { return err<FullSyncReportFailure>('FullSyncReportFailure.phase missing or not string') }
+  const errorCategory: string | null = reqStr(data, 'error_category')
+  if (errorCategory === null) { return err<FullSyncReportFailure>('FullSyncReportFailure.error_category missing or not string') }
+  const messageKey: string | null = reqStr(data, 'message_key')
+  if (messageKey === null) { return err<FullSyncReportFailure>('FullSyncReportFailure.message_key missing or not string') }
+  const detail: string | null = reqStr(data, 'detail')
+  if (detail === null) { return err<FullSyncReportFailure>('FullSyncReportFailure.detail missing or not string') }
+  const occurredAt: number | null = reqNum(data, 'occurred_at')
+  if (occurredAt === null) { return err<FullSyncReportFailure>('FullSyncReportFailure.occurred_at missing or not number') }
+  return ok<FullSyncReportFailure>({
+    target_kind: targetKind,
+    group_id: groupId,
+    path: path,
+    phase: phase,
+    error_category: errorCategory,
+    message_key: messageKey,
+    detail: detail,
+    occurred_at: occurredAt
+  })
+}
+
+export function decodeFullSyncReport(data: Object): DecodeResult<FullSyncReport> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<FullSyncReport>('FullSyncReport: expected object')
+  }
+  const attemptedAt: number | null = reqNum(data, 'attempted_at')
+  if (attemptedAt === null) { return err<FullSyncReport>('FullSyncReport.attempted_at missing or not number') }
+  const completedGroups: number | null = reqNum(data, 'completed_groups')
+  if (completedGroups === null) { return err<FullSyncReport>('FullSyncReport.completed_groups missing or not number') }
+  const failedGroups: number | null = reqNum(data, 'failed_groups')
+  if (failedGroups === null) { return err<FullSyncReport>('FullSyncReport.failed_groups missing or not number') }
+  const pendingGroups: number | null = reqNum(data, 'pending_groups')
+  if (pendingGroups === null) { return err<FullSyncReport>('FullSyncReport.pending_groups missing or not number') }
+  const failuresArray: Array<Object> | null = reqArray(data, 'failures')
+  if (failuresArray === null) { return err<FullSyncReport>('FullSyncReport.failures missing or not array') }
+  const failuresResult: DecodeResult<FullSyncReportFailure[]> =
+    decodeArray<FullSyncReportFailure>(failuresArray as Object, decodeFullSyncReportFailure, 'FullSyncReportFailure')
+  if (!failuresResult.ok || failuresResult.value === undefined) {
+    return err<FullSyncReport>(failuresResult.error ?? 'FullSyncReport.failures decode failed')
+  }
+  return ok<FullSyncReport>({
+    attempted_at: attemptedAt,
+    completed_groups: completedGroups,
+    failed_groups: failedGroups,
+    pending_groups: pendingGroups,
+    failures: failuresResult.value
+  })
 }
 
 export function decodeAllSyncConflictEntry(data: Object): DecodeResult<AllSyncConflictEntry> {

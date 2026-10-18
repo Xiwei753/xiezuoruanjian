@@ -18,7 +18,7 @@ import fs from '@ohos.file.fs'
 import bundleManager from '@ohos.bundle.bundleManager'
 
 import { IWriterCoreBridge } from '../../corebridge/IWriterCoreBridge'
-import { FullSyncState } from '../../corebridge/dto/SyncDtos'
+import { FullSyncReport, FullSyncReportFailure, FullSyncState } from '../../corebridge/dto/SyncDtos'
 import { NativeCoreModule } from '../../corebridge/native/NativeCoreModule'
 import { NativeDiagnosticsBridge } from '../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeSyncBridge } from '../../corebridge/native/NativeSyncBridge'
@@ -78,6 +78,15 @@ interface FullSyncStateAttachment {
   failed_targets: string[]
 }
 
+// last_sync_report_sanitized.json — project only the safe Core report fields.
+interface FullSyncReportAttachment {
+  attempted_at: number
+  completed_groups: number
+  failed_groups: number
+  pending_groups: number
+  failures: FullSyncReportFailure[]
+}
+
 // build_identity.json 附件 DTO。
 interface BuildIdentityAttachment {
   appVersion: string
@@ -98,6 +107,7 @@ const ATTACHMENT_HILOG_CAPTURE_STATS = 'hilog_capture_stats.json'
 const ATTACHMENT_APP_SETTINGS = 'app_settings_sanitized.json'
 const ATTACHMENT_SYNC_STATE = 'sync_state_sanitized.json'
 const ATTACHMENT_FULL_SYNC_STATE = 'full_sync_state_sanitized.json'
+const ATTACHMENT_LATEST_FULL_SYNC_REPORT = 'last_sync_report_sanitized.json'
 const ATTACHMENT_SYNC_OPERATION_RUNTIME = 'sync_operation_runtime.json'
 const ATTACHMENT_CURRENT_DEVICE = 'current_device.json'
 const ATTACHMENT_BUILD_IDENTITY = 'build_identity.json'
@@ -310,6 +320,9 @@ export class HarmonyDiagnosticsExporter {
     // full_sync_state_sanitized.json — the last persisted whole-sync result.
     await this.addFullSyncStateAttachment(attachments)
 
+    // last_sync_report_sanitized.json — per-group failures from the last whole-sync run.
+    await this.addLatestFullSyncReportAttachment(attachments)
+
     // current_device.json
     this.addCurrentDeviceAttachment(attachments)
 
@@ -442,6 +455,44 @@ export class HarmonyDiagnosticsExporter {
       ))
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_FULL_SYNC_STATE,
+        e instanceof Error ? e.name : 'UNKNOWN_ERROR'))
+    }
+  }
+
+  // Core has already sanitized report paths/details. Project only the report DTO fields,
+  // excluding any future raw error or credential fields from the diagnostic archive.
+  private async addLatestFullSyncReportAttachment(attachments: AttachmentItem[]): Promise<void> {
+    try {
+      const result = await this.syncBridge.loadLatestFullSyncReport()
+      if (!result.success) {
+        attachments.push(this.errorAttachment(ATTACHMENT_LATEST_FULL_SYNC_REPORT,
+          result.errorCode ?? 'loadLatestFullSyncReport failed'))
+        return
+      }
+
+      const report: FullSyncReport | null = result.data ?? null
+      const sanitized: FullSyncReportAttachment | null = report === null ? null : {
+        attempted_at: report.attempted_at,
+        completed_groups: report.completed_groups,
+        failed_groups: report.failed_groups,
+        pending_groups: report.pending_groups,
+        failures: report.failures.map((failure: FullSyncReportFailure) => ({
+          target_kind: failure.target_kind,
+          group_id: failure.group_id,
+          path: failure.path,
+          phase: failure.phase,
+          error_category: failure.error_category,
+          message_key: failure.message_key,
+          detail: failure.detail,
+          occurred_at: failure.occurred_at
+        }))
+      }
+      attachments.push(this.makeAttachment(
+        ATTACHMENT_LATEST_FULL_SYNC_REPORT,
+        JSON.stringify(sanitized, null, 2)
+      ))
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_LATEST_FULL_SYNC_REPORT,
         e instanceof Error ? e.name : 'UNKNOWN_ERROR'))
     }
   }

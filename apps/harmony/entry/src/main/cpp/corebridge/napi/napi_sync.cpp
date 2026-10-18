@@ -360,6 +360,12 @@ static void LoadFullSyncStateExecuteCb(napi_env env, void* data) {
     asyncData->result_json = writer_core_load_full_sync_state();
 }
 
+// LoadLatestFullSyncReportExecuteCb: 工作线程上执行 writer_core_load_latest_full_sync_report()
+static void LoadLatestFullSyncReportExecuteCb(napi_env env, void* data) {
+    SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
+    asyncData->result_json = writer_core_load_latest_full_sync_report();
+}
+
 // ListAllSyncConflictsExecuteCb: 工作线程上执行 writer_core_list_all_sync_conflicts()
 static void ListAllSyncConflictsExecuteCb(napi_env env, void* data) {
     SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
@@ -389,6 +395,17 @@ static napi_value NativeLoadFullSyncState(napi_env env, napi_callback_info info)
     asyncData->arg_path = nullptr;
     asyncData->arg_decision = nullptr;
     return SyncAsyncSubmit(env, "NativeLoadFullSyncState", LoadFullSyncStateExecuteCb, asyncData);
+}
+
+static napi_value NativeLoadLatestFullSyncReport(napi_env env, napi_callback_info info) {
+    (void)info;
+    SyncAsyncData* asyncData = new SyncAsyncData();
+    asyncData->arg_target_kind = nullptr;
+    asyncData->arg_project_id = nullptr;
+    asyncData->arg_path = nullptr;
+    asyncData->arg_decision = nullptr;
+    return SyncAsyncSubmit(env, "NativeLoadLatestFullSyncReport",
+        LoadLatestFullSyncReportExecuteCb, asyncData);
 }
 
 static napi_value NativeListAllSyncConflicts(napi_env env, napi_callback_info info) {
@@ -445,6 +462,7 @@ napi_property_descriptor* getSyncDescriptors(size_t* count) {
         {"nativeLoadAppSyncState", nullptr, NativeLoadAppSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSaveAppSyncState", nullptr, NativeSaveAppSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeLoadFullSyncState", nullptr, NativeLoadFullSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeLoadLatestFullSyncReport", nullptr, NativeLoadLatestFullSyncReport, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeListAllSyncConflicts", nullptr, NativeListAllSyncConflicts, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeLoadSyncConflictPreview", nullptr, NativeLoadSyncConflictPreview, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveSyncConflict", nullptr, NativeResolveSyncConflict, nullptr, nullptr, nullptr, napi_default, nullptr},

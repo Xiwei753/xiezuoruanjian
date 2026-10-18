@@ -292,6 +292,25 @@ pub unsafe extern "C" fn writer_core_load_full_sync_state() -> *mut c_char {
     }
 }
 
+/// 加载最近一次完整同步报告（失败组、路径、阶段和脱敏后的类型化原因）。
+///
+/// Core 尚未持久化报告时 `data` 为 `null`，不是查询失败。
+///
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_load_latest_full_sync_report() -> *mut c_char {
+    match with_app_service(|svc| {
+        let report = svc
+            .load_latest_full_sync_report()
+            .map_err(|e| format!("{}", e))?;
+        Ok(report)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_STATE_ERROR", &e),
+    }
+}
+
 /// 列出 App target + 所有 Project target 的未解决冲突摘要。
 ///
 /// 只返回 `AllSyncConflictEntryDto` 摘要（不含正文/快照），让平台端展示冲突

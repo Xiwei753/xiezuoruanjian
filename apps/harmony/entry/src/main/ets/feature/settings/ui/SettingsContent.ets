@@ -14,7 +14,7 @@
 import { promptAction, ComponentContent } from '@kit.ArkUI'
 import hilog from '@ohos.hilog'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
-import { FullSyncState, SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
+import { FullSyncState, FullSyncReport, FullSyncReportFailure, SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
 import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ColorSource } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -88,6 +88,9 @@ export struct SettingsContent {
   // Core 持久化的最近一次全量同步事务状态；null 表示 Core 尚无记录。
   @Local fullSyncState: FullSyncState | null = null
   @Local fullSyncStateReadError: string = ''
+  // Core 最近一次持久化的整轮报告；与当前进程运行快照分开显示。
+  @Local latestFullSyncReport: FullSyncReport | null = null
+  @Local latestFullSyncReportReadError: string = ''
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -122,6 +125,7 @@ export struct SettingsContent {
       this.syncRunSnapshot = snapshot
       if (previousPhase === 'in_progress' && this.syncRunSnapshot.phase !== 'in_progress') {
         void this.refreshFullSyncState()
+        void this.refreshLatestFullSyncReport()
       }
     })
 
@@ -149,7 +153,7 @@ export struct SettingsContent {
 
   private async loadSettingsAndSyncState(): Promise<void> {
     await this.viewModel.loadData()
-    await this.refreshFullSyncState()
+    await Promise.all([this.refreshFullSyncState(), this.refreshLatestFullSyncReport()])
   }
 
   private async refreshFullSyncState(): Promise<void> {
@@ -165,6 +169,22 @@ export struct SettingsContent {
     } catch (_e) {
       this.fullSyncState = null
       this.fullSyncStateReadError = 'NATIVE_ERROR'
+    }
+  }
+
+  private async refreshLatestFullSyncReport(): Promise<void> {
+    try {
+      const result = await this.syncStateBridge.loadLatestFullSyncReport()
+      if (!result.success) {
+        this.latestFullSyncReport = null
+        this.latestFullSyncReportReadError = result.errorCode ?? 'UNKNOWN'
+        return
+      }
+      this.latestFullSyncReport = result.data ?? null
+      this.latestFullSyncReportReadError = ''
+    } catch (_e) {
+      this.latestFullSyncReport = null
+      this.latestFullSyncReportReadError = 'NATIVE_ERROR'
     }
   }
 
@@ -213,6 +233,28 @@ export struct SettingsContent {
     return `最近成功：${this.formatSyncStateTime(this.fullSyncState?.last_success_time ?? null)}`
   }
 
+  private latestFullSyncReportSummaryText(): string {
+    if (this.latestFullSyncReportReadError.length > 0) {
+      return `最近整轮报告读取失败（${this.latestFullSyncReportReadError}）`
+    }
+    const report: FullSyncReport | null = this.latestFullSyncReport
+    if (report === null) {
+      return '最近整轮报告：暂无记录'
+    }
+    return `最近整轮报告：成功 ${report.completed_groups} 组，失败 ${report.failed_groups} 组，待处理 ${report.pending_groups} 组`
+  }
+
+  private fullSyncReportFailureReason(failure: FullSyncReportFailure): string {
+    const reasons: string[] = []
+    if (failure.error_category.length > 0) {
+      reasons.push(failure.error_category)
+    }
+    if (failure.message_key.length > 0) {
+      reasons.push(failure.message_key)
+    }
+    return reasons.length > 0 ? reasons.join(' / ') : '未分类'
+  }
+
   @Builder
   SyncStatusSummary() {
     Column({ space: 4 }) {
@@ -231,6 +273,27 @@ export struct SettingsContent {
         .fontSize(12)
       Text(this.fullSyncFailedTargetsText())
         .fontSize(12)
+      Text(this.latestFullSyncReportSummaryText())
+        .fontSize(12)
+      if (this.latestFullSyncReport !== null && this.latestFullSyncReport.failures.length > 0) {
+        ForEach(this.latestFullSyncReport.failures, (failure: FullSyncReportFailure) => {
+          Column({ space: 2 }) {
+            Text(`失败组：${failure.group_id}（${failure.target_kind}）`)
+              .fontSize(12)
+            Text(`路径：${failure.path} · 阶段：${failure.phase}`)
+              .fontSize(12)
+            Text(`类型化原因：${this.fullSyncReportFailureReason(failure)}`)
+              .fontSize(12)
+            if (failure.detail.length > 0) {
+              Text(`详情：${failure.detail}`)
+                .fontSize(12)
+            }
+          }
+          .width('100%')
+          .margin({ top: 4 })
+        }, (failure: FullSyncReportFailure) =>
+          `${failure.group_id}:${failure.path}:${failure.phase}:${failure.occurred_at}`)
+      }
     }
     .width('100%')
     .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 8 })
@@ -362,6 +425,7 @@ export struct SettingsContent {
       await this.refreshConflictProbe()
     }
     await this.refreshFullSyncState()
+    await this.refreshLatestFullSyncReport()
   }
 
   // 从 Core 全局冲突列表取真实剩余数；拉取失败保持旧值（-1 时退回同步结果判断）。
