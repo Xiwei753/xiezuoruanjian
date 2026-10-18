@@ -938,9 +938,12 @@ Item {
             }, hit.scenePathKey)
             nodeContextMenu.popup(screenX, screenY)
         } else if (hit.kind === "embed") {
+            var embed = hit.owner.hitEmbed(hit.id)
+            if (!embed)
+                return
             hit.owner.selectEmbed(hit.id)
             menuOwnerContent = hit.owner
-            selectedEmbedForMenu = hit
+            selectedEmbedForMenu = embed
             logInteraction("context_menu_open", "embed", hit.id, {
                 "menuKind": "embed",
                 "sceneX": sx,

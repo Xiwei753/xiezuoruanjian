@@ -13,8 +13,8 @@
 //     也没有 localFitScale × ancestor effectiveScale 的递归尺寸链；
 //   - 概览整体留在圆的内接安全区（约直径 66%），天然不会溢出圆外，
 //     不需要 layer.enabled / MultiEffect 圆形 FBO 遮罩 / ShaderEffectSource；
-//   - 只画和目标活动画布同一套节点几何、边与子入口圆；投影足够小时不画文字
-//     （只省文字，形状和颜色一个都不改）；
+//   - 未进入的子图中，普通节点、旧 portal、Embed 都统一显示为小圆点且不画名字；
+//     进入后由活动画布恢复完整几何和标题；
 //   - 不保存任何固定分辨率快照：父图相机变化时按当前投影重画几何。
 //     超过进入阈值后由 StarMapActiveScene 用真实矢量对象接管，本组件不会
 //     被拉伸成活动画布。
@@ -45,6 +45,8 @@ Item {
     readonly property int _embedDiameter: 200
     // 概览线宽的屏幕口径：概览是父图投影的一部分，线宽恒定在屏幕像素上。
     readonly property real _previewStrokeWidth: 1.5
+    readonly property real _overviewDotRadius:
+        Math.max(2, Math.min(6, Math.min(width, height) * 0.018))
 
     // ── 目标图数据（只读快照，不写 Core）──
     property var graphData: null
@@ -114,10 +116,6 @@ Item {
     function projectX(wx) { return width / 2 + (wx - _centerWorldX) * fitScale }
     function projectY(wy) { return height / 2 + (wy - _centerWorldY) * fitScale }
 
-    // 概览文字口径：只有投影后仍能看清才画（只省文字，不改形状）。
-    readonly property real _textPointSize: dt.fontSmPt * Math.max(0.5, Math.min(8.0, fitScale))
-    readonly property bool textVisible: fitScale > 0 && _textPointSize >= 6
-
     // ── 数据加载：只读入口，不写 Core ──
     function _layoutNodes() {
         var out = []
@@ -183,18 +181,6 @@ Item {
     // ── 单一投影入口画出的矢量几何（QtQuick.Shapes）──
     // 全是实时的几何路径，没有 layer / FBO / 快照纹理：父图相机一变，
     // 下面的绑定就按新投影重算路径字符串。
-    function _roundedRectPath(x, y, w, h, radius) {
-        var rr = Math.max(0, Math.min(radius, w / 2, h / 2))
-        if (!(rr > 0.01))
-            return "M " + x + " " + y + " H " + (x + w) + " V " + (y + h)
-                    + " H " + x + " Z "
-        return "M " + (x + rr) + " " + y
-                + " H " + (x + w - rr) + " A " + rr + " " + rr + " 0 0 1 " + (x + w) + " " + (y + rr)
-                + " V " + (y + h - rr) + " A " + rr + " " + rr + " 0 0 1 " + (x + w - rr) + " " + (y + h)
-                + " H " + (x + rr) + " A " + rr + " " + rr + " 0 0 1 " + x + " " + (y + h - rr)
-                + " V " + (y + rr) + " A " + rr + " " + rr + " 0 0 1 " + (x + rr) + " " + y + " Z "
-    }
-
     function _circlePath(cx, cy, r) {
         return "M " + (cx - r) + " " + cy
                 + " A " + r + " " + r + " 0 1 0 " + (cx + r) + " " + cy
@@ -217,14 +203,13 @@ Item {
         var s = ""
         if (!(fitScale > 0))
             return s
-        var radius = dt.radiusSm * fitScale
         for (var i = 0; i < nodes.length; i++) {
             var n = nodes[i]
             var pos = n.position || { x: 0, y: 0 }
             if (n.portal && n.portal.destinationStarmapId)
                 continue
-            s += _roundedRectPath(projectX(pos.x), projectY(pos.y),
-                                  _nodeWidth * fitScale, _nodeHeight * fitScale, radius)
+            s += _circlePath(projectX(pos.x + _nodeWidth / 2),
+                             projectY(pos.y + _nodeHeight / 2), _overviewDotRadius)
         }
         return s
     }
@@ -233,20 +218,19 @@ Item {
         var s = ""
         if (!(fitScale > 0))
             return s
-        var r = _embedDiameter / 2 * fitScale
         for (var i = 0; i < nodes.length; i++) {
             var n = nodes[i]
             var npos = n.position || { x: 0, y: 0 }
             if (!(n.portal && n.portal.destinationStarmapId))
                 continue
             s += _circlePath(projectX(npos.x + _embedDiameter / 2),
-                             projectY(npos.y + _embedDiameter / 2), r)
+                             projectY(npos.y + _embedDiameter / 2), _overviewDotRadius)
         }
         for (var j = 0; j < embeds.length; j++) {
             var e = embeds[j]
             var pos = e.position || { x: 0, y: 0 }
             s += _circlePath(projectX(pos.x + _embedDiameter / 2),
-                             projectY(pos.y + _embedDiameter / 2), r)
+                             projectY(pos.y + _embedDiameter / 2), _overviewDotRadius)
         }
         return s
     }
@@ -267,7 +251,7 @@ Item {
             PathSvg { path: overview.edgesPath }
         }
 
-        // 子入口：和活动画布一样的正圆。
+        // 未进入的子入口：和普通节点一样只显示小圆点。
         ShapePath {
             strokeColor: overview.dt.border
             strokeWidth: overview._previewStrokeWidth
@@ -275,7 +259,7 @@ Item {
             PathSvg { path: overview.embedsPath }
         }
 
-        // 节点：和活动画布一样的圆角矩形 + 同一套颜色。
+        // 普通节点：未进入的子图中只显示小圆点。
         ShapePath {
             strokeColor: overview.dt.border
             strokeWidth: overview._previewStrokeWidth
@@ -284,32 +268,4 @@ Item {
         }
     }
 
-    // 标题：投影够大才画（其余情况只省文字，不改形状）。
-    Repeater {
-        id: titleRepeater
-        model: overview.textVisible ? overview.nodes : []
-
-        delegate: Text {
-            required property var modelData
-
-            readonly property var nodeData: modelData
-            readonly property var nodePos: nodeData.position || ({ x: 0, y: 0 })
-            readonly property bool isPortal:
-                !!(nodeData.portal && nodeData.portal.destinationStarmapId)
-
-            visible: !isPortal || nodeData.title !== null
-            x: overview.projectX(nodePos.x)
-            y: overview.projectY(nodePos.y)
-                    + (overview._nodeHeight / 2 - height / 2) * overview.fitScale
-            width: overview._nodeWidth * overview.fitScale
-            height: Math.max(1, overview._nodeHeight * overview.fitScale)
-            text: nodeData.title || ""
-            color: overview.dt.textPrimary
-            font.pointSize: overview._textPointSize
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-            clip: true
-        }
-    }
 }
