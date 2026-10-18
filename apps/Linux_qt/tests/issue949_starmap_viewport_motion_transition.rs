@@ -47,6 +47,23 @@
 //! 13. **旧画面层逐帧推**：进场父层相机 = parentCameraForChild(子层相机(t))，
 //!     出场子层相机 = childCameraForParent(父层相机(t))；不做端点独立插值。
 //!
+//! 复核评论 6250932011（2026-10-18T14:13:40Z）的定稿口径（本轮）：
+//! 14. **可读镜头不变**：`readableChildCamera` 仍是「再次进入用 cameraStack 保存
+//!     的镜头；首次 zoom=1 + 内容包围盒居中」，不默认 fit 整图；进场仍是
+//!     contentProgress 先停、圆环继续走的同一条进度线。
+//! 15. **换层不吞滚轮**：`enterEmbedViaCore`（滚轮穿越那一路，trigger=zoom）/
+//!     `exitCanvasViaCore(true)` 在 `prepareCanvasSwitch()` 触发换层之前保存本层
+//!     没显示完的 `_zoomTargetLevel` 与鼠标屏幕锚点，按 entryContexts 的父子比例
+//!     换算（子尺度的 parentPendingZoom × ratio / 父尺度的 childPendingZoom ÷ ratio）
+//!     作为过渡目标；`beginCanvasTransition` 不再无条件把 pending 重置成落点。
+//!     双击进入仍用可读镜头落点（评论问题 1 的口径不变）。
+//! 16. **过渡期相机继续跟手**：演出进行中收到滚轮仍要改当前可见镜头（不冻结整个
+//!     longDuration、不排队第二条动画）——`zoomAt` 调 `retargetViewportMotion()`
+//!     从可见帧 + 同一鼠标锚点重定相机两端，唯一进度线用 `cameraProgress`（从重定
+//!     那一刻起的剩余时间）继续推进；出场圆环端点随父相机两端一起重新投影。
+//! 17. **按钮返回不继承滚轮 pending**：`exitCanvasViaCore(false)` 仍平滑回到
+//!     cameraStack 保存的父镜头；70% 进入 / 60% 退出阈值不变。
+//!
 //! QML 组件依赖 qml_resources qrc 与 Rust 注册的上下文属性，无法在本仓库的
 //! Rust 测试里实例化，因此按仓库既有惯例（issue801/issue814/issue817/issue822/
 //! issue832 系列 WHITE_BOX 守卫）读取 QML 源码确定性断言。
@@ -401,7 +418,7 @@ fn canvas_freezes_the_outgoing_scene_before_switching_the_route() {
         "取得新 route / camera 后必须启动同一份演出，实际窗口:\n{enter}"
     );
 
-    let exit = function_window(&src, "function exitCanvasViaCore(", 2600);
+    let exit = function_window(&src, "function exitCanvasViaCore(", 3600);
     assert!(
         exit.contains("starmapBackendRef.exit_starmap_canvas(")
             && exit.contains("var cam = cameraStack[parentKey]")
@@ -414,25 +431,30 @@ fn canvas_freezes_the_outgoing_scene_before_switching_the_route() {
 #[test]
 fn transition_moves_border_and_content_in_the_same_progress() {
     let src = read_src(CANVAS);
-    let begin = function_window(&src, "function beginCanvasTransition(", 3000);
+    let begin = function_window(&src, "function beginCanvasTransition(", 3600);
     assert!(
         begin.contains("viewportMotion.beginEnter(") && begin.contains("viewportMotion.beginExit("),
         "进 / 退场都必须经同一个演出组件启动，实际窗口:\n{begin}"
     );
+    // 复核 6250932011（问题 2）：pending 由调用方按父子比例换算好传进 incomingCam，
+    // 这里不再无条件重置成落点；锚点固定在同一鼠标屏幕位置。
     assert!(
-        begin.contains("_zoomTargetLevel = incomingCam.zoom"),
-        "切画布后滚轮累计目标必须在新画布尺度上重新起步，实际窗口:\n{begin}"
+        begin.contains("_zoomTargetLevel = incomingCam.zoom")
+            && begin.contains("_zoomAnchorX = pendingAnchor ? pendingAnchor.x : width / 2")
+            && begin.contains("_zoomAnchorY = pendingAnchor ? pendingAnchor.y : height / 2"),
+        "切画布后的滚轮累计目标必须是调用方换算好的新层目标，锚点沿用同一鼠标位置，实际窗口:\n{begin}"
     );
 
     let frame = function_window(&src, "function applyMotionFrame(", 1400);
     assert!(
-        frame.contains("cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera,")
-            && frame.contains("viewportMotion.contentProgress)"),
-        "进场活动画布镜头必须按 contentProgress 插值到可读镜头（内容先到、圆环后到），实际窗口:\n{frame}"
-    );
-    assert!(
-        frame.contains("cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera, p)"),
-        "出场活动画布（父图）镜头必须按完整 progress 连续缩回，实际窗口:\n{frame}"
+        frame.contains("var camProgress = viewportMotion.cameraProgress")
+            && count_occurrences(
+                &frame,
+                "cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera,",
+            ) == 2,
+        "进场（内容先到、圆环后到）与出场（连续缩回）的相机都按同一条演出进度线的 \
+         cameraProgress 推进（默认进场 contentProgress / 出场 progress，滚轮重定后从可见帧继续），\
+         实际窗口:\n{frame}"
     );
     assert!(
         frame.contains("parentCameraForChild(childCam, motionContext)")
@@ -766,6 +788,12 @@ fn enter_transition_moves_from_entry_preview_to_the_readable_camera() {
             && readable.contains("panY: height / 2 - cy * zoom"),
         "没有既有镜头时用作者尺度 100% + 内容包围盒居中的合理默认，实际窗口:\n{readable}"
     );
+    // 复核 6250932011 问题 1：保持本行为——首次 zoom=1 + 包围盒居中，不默认
+    // fit 整图（星图可无限扩展，节点距离太远时 fit 全图会让节点小得难读）。
+    assert!(
+        !readable.contains("fit") && !readable.contains("ratio"),
+        "可读镜头不得引入 fit 整图 / 按父子比例反算内容倍率的行为，实际窗口:\n{readable}"
+    );
 
     // 圆环"离开可见视口"的公式只剩进场圆环用，不再被人拿去反算内容倍率。
     let motion = strip_line_comments(&read_src(MOTION));
@@ -783,7 +811,7 @@ fn exits_connect_from_the_currently_displayed_frame() {
     // 帧，不得回到进入前保存的父镜头）；按钮退出 = 目标仍是保存的父镜头，
     // 但从当前可见帧平滑移动 / 缩放过去。
     let canvas = strip_line_comments(&read_src(CANVAS));
-    let exit = function_window(&canvas, "function exitCanvasViaCore(", 3400);
+    let exit = function_window(&canvas, "function exitCanvasViaCore(", 4200);
     assert!(
         exit.contains("var parentStartCam = ctx && ctx.ratio > 0")
             && exit.contains("? parentCameraForChild(childCamera, ctx) : childCamera"),
@@ -793,14 +821,17 @@ fn exits_connect_from_the_currently_displayed_frame() {
         exit.contains("var parentTargetCam = parentStartCam")
             && exit.contains("if (!continuous) {")
             && exit.contains("var cam = cameraStack[parentKey]")
-            && exit.contains("parentTargetCam = cam ? { zoom: cam.zoom, panX: cam.panX, panY: cam.panY }")
+            && exit.contains(
+                "parentTargetCam = cam ? { zoom: cam.zoom, panX: cam.panX, panY: cam.panY }"
+            )
             && exit.contains(": defaultCamera()"),
-        "滚轮出场目标 = 反推帧本身（零跳变）；按钮出场目标 = cameraStack 保存的父镜头，实际窗口:\n{exit}"
+        "没有未完成滚轮目标时滚轮出场目标 = 反推帧本身（零跳变）；按钮出场目标 = cameraStack \
+         保存的父镜头；有未完成目标时见 layer_switch_carries 守卫，实际窗口:\n{exit}"
     );
     assert!(
         exit.contains("beginCanvasTransition(false, childStarmapId, childRoute, childCamera,")
-            && exit.contains("parentTargetCam, exitGeometry, ctx)"),
-        "出场必须把目标父帧 / 入口几何交给同一份演出，实际窗口:\n{exit}"
+            && exit.contains("parentTargetCam, exitGeometry, ctx, pendingAnchor)"),
+        "出场必须把目标父帧 / 入口几何 / 同一鼠标锚点交给同一份演出，实际窗口:\n{exit}"
     );
     // 结束才更新 cameraStack：起始帧写入由 applyCamera 逐帧完成，这里不预写。
     assert!(
@@ -833,12 +864,15 @@ fn exit_ring_spans_the_entry_circle_between_the_two_parent_frames() {
             "演出组件必须保存出场圆环端点 {field}"
         );
     }
+    // 最小替换（复核 6250932011 问题 3）：出场圆环改跟 cameraProgress —— 它默认
+    // 就是 progress（未被打断时行为不变），过渡期滚轮重定相机后仍与父相机同参，
+    // 保证"圆环 = 可见镜头下入口圆的投影"不脱节。
     assert!(
-        motion.contains("exitRingStartX + (exitRingEndX - exitRingStartX) * progress")
+        motion.contains("exitRingStartX + (exitRingEndX - exitRingStartX) * cameraProgress")
             && motion.contains(
-                "exitRingStartRadius + (exitRingEndRadius - exitRingStartRadius) * progress"
+                "exitRingStartRadius + (exitRingEndRadius - exitRingStartRadius) * cameraProgress"
             ),
-        "出场圆环必须按完整 progress 在两端之间线性插值（= 父相机线性插值下的 Embed 投影）"
+        "出场圆环必须与父相机共用同一个参数在两端之间线性插值（= 父相机插值下的 Embed 投影）"
     );
     let begin_exit = function_window(&motion, "function beginExit(", 1600);
     assert!(
@@ -859,7 +893,7 @@ fn exit_ring_spans_the_entry_circle_between_the_two_parent_frames() {
         "出场圆环起点必须由当前帧父镜头下的入口圆投影给出，实际窗口:\n{transition}"
     );
 
-    let exit = function_window(&canvas, "function exitCanvasViaCore(", 3400);
+    let exit = function_window(&canvas, "function exitCanvasViaCore(", 4200);
     assert!(
         exit.contains("embedScreenGeometry(parentTargetCam, ctx.embedCenterX, ctx.embedCenterY,")
             && exit.contains("exitGeometry.diameter = ctx.embedDiameter"),
@@ -975,5 +1009,207 @@ fn transition_ring_clips_the_inside_scene_via_platform_circle_clip() {
             && !clip.contains("qquickitem_p.h")
             && !clip.contains("qquickclipnode_p.h"),
         "平台裁剪组件不得依赖本机不存在的 Qt 私有头"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 8. 复核评论 6250932011：换层不吞滚轮 + 过渡期相机继续跟手
+// ─────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn layer_switch_carries_the_unfinished_wheel_target_across_the_ratio() {
+    // 问题 1/2：换层前先保存本层没显示完的滚动目标与鼠标屏幕锚点，按
+    // entryContexts 的父子比例换算到目标层尺度（子尺度 ×ratio / 父尺度 ÷ratio，
+    // 由 childCameraForParent / parentCameraForChild 的 clamp 一并完成），
+    // 不得直接重置成落点 incomingCam.zoom。
+    let canvas = strip_line_comments(&read_src(CANVAS));
+
+    // 换算公式本体：子镜头 = 父镜头 × ratio、父镜头 = 子镜头 ÷ ratio，都带 clamp。
+    assert!(
+        canvas.contains(
+            "var zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, parentCam.zoom * ctx.ratio))"
+        ) && canvas.contains(
+            "var zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, childCam.zoom / ctx.ratio))"
+        ),
+        "跨画布换算必须走 childCameraForParent / parentCameraForChild 的 ×ratio / ÷ratio（带数值 clamp）"
+    );
+
+    // 进场：换层前保存父层 pending + 锚点，换算到子图尺度当过渡目标。
+    let enter = function_window(&canvas, "function enterEmbedViaCore(", 6600);
+    assert!(
+        enter.contains("var parentPendingZoom = _zoomTargetLevel")
+            && enter.contains("var pendingAnchorX = _zoomAnchorX")
+            && enter.contains("var pendingAnchorY = _zoomAnchorY")
+            && enter.contains("var hasPendingZoom = trigger === \"zoom\" && parentPendingZoom > 0")
+            && enter.contains("var childTargetCamera = hasPendingZoom"),
+        "滚轮穿越（trigger=zoom）必须在 prepareCanvasSwitch() 前保存父层未完成滚轮目标与屏幕锚点，\
+         双击仍走可读镜头落点，实际窗口:\n{enter}"
+    );
+    assert!(
+        enter.contains("anchoredCameraAt(parentPendingZoom, pendingAnchorX, pendingAnchorY)")
+            && enter.contains(": childCamera")
+            && enter.contains("childTargetCamera, entryGeometry, context,")
+            && enter.contains("hasPendingZoom ? { x: pendingAnchorX, y: pendingAnchorY } : null"),
+        "进场过渡目标必须是换算后的滚轮目标（没有 pending 才用可读镜头），并把同一鼠标锚点交给演出，\
+         实际窗口:\n{enter}"
+    );
+    assert!(
+        enter.contains("childCameraForParent(") && enter.contains("anchoredCameraAt("),
+        "子图目标 = childTargetZoom = parentPendingZoom × ratio，且仍锚在同一屏幕位置，实际窗口:\n{enter}"
+    );
+
+    // 出场（滚轮）：换层前保存子层 pending + 锚点，换算到父图尺度当过渡目标。
+    let exit = function_window(&canvas, "function exitCanvasViaCore(", 4600);
+    assert!(
+        exit.contains("var childPendingZoom = _zoomTargetLevel")
+            && exit.contains("var pendingAnchorX = _zoomAnchorX")
+            && exit.contains("var pendingAnchorY = _zoomAnchorY"),
+        "滚轮出场必须在 prepareCanvasSwitch() 前保存子图未完成滚轮目标与屏幕锚点，实际窗口:\n{exit}"
+    );
+    assert!(
+        exit.contains("} else if (childPendingZoom > 0")
+            && exit.contains("anchoredCameraAt(childPendingZoom, pendingAnchorX, pendingAnchorY)")
+            && exit.contains("? parentCameraForChild(pendingCam, ctx) : pendingCam")
+            && exit.contains("pendingAnchor = { x: pendingAnchorX, y: pendingAnchorY }"),
+        "滚轮出场目标 = parentTargetZoom = clamp(childPendingZoom / ctx.ratio) 且锚在同一屏幕位置，\
+         实际窗口:\n{exit}"
+    );
+    assert!(
+        exit.contains("parentTargetCam, exitGeometry, ctx, pendingAnchor)"),
+        "换算后的目标与同一锚点必须交给同一份演出，实际窗口:\n{exit}"
+    );
+}
+
+#[test]
+fn button_exit_does_not_inherit_the_wheel_pending_and_thresholds_are_unchanged() {
+    // 问题 4：点击返回（continuous=false）不接滚轮未完成目标，仍平滑回到
+    // cameraStack 保存的父镜头；70% 进入 / 60% 退出的阈值规则不变。
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let exit = function_window(&canvas, "function exitCanvasViaCore(", 4600);
+    let button_at = exit
+        .find("if (!continuous) {")
+        .unwrap_or_else(|| panic!("按钮返回分支必须存在，实际窗口:\n{exit}"));
+    let pending_at = exit
+        .find("} else if (childPendingZoom > 0")
+        .unwrap_or_else(|| {
+            panic!("滚轮 pending 换算分支必须是按钮分支的 else if，实际窗口:\n{exit}")
+        });
+    assert!(
+        button_at < pending_at,
+        "按钮返回必须优先判定且不继承滚轮 pending（pending 只在 continuous 分支里接），实际窗口:\n{exit}"
+    );
+    let button_branch = window_between(&exit, "if (!continuous) {", "} else if");
+    assert!(
+        button_branch.contains("var cam = cameraStack[parentKey]")
+            && button_branch.contains(": defaultCamera()")
+            && !button_branch.contains("pendingAnchor = {"),
+        "按钮返回落点仍必须是 cameraStack 保存的父镜头（没有则默认镜头），且不得接滚轮 pending，\
+         实际窗口:\n{button_branch}"
+    );
+
+    assert!(
+        canvas.contains("readonly property real _enterRatio: 0.70")
+            && canvas.contains("readonly property real _exitRatio: 0.60"),
+        "70% 进入 / 60% 退出的阈值规则不变"
+    );
+    let maybe_enter = function_window(&canvas, "function maybeEnterEmbedAt(", 800);
+    assert!(
+        maybe_enter.contains("coverageOfScreenPx(projectedPx) < _enterRatio"),
+        "进场阈值仍只按正在显示的投影直径，实际窗口:\n{maybe_enter}"
+    );
+    let maybe_exit = function_window(&canvas, "function maybeExitCanvas(", 900);
+    assert!(
+        maybe_exit.contains("Math.min(_exitRatio, entryCoverage)"),
+        "退场阈值仍受 60% 与进入时覆盖率的较小值约束（不因本轮改动放宽 / 收紧），实际窗口:\n{maybe_exit}"
+    );
+}
+
+#[test]
+fn wheel_during_transition_keeps_the_visible_camera_following() {
+    // 问题 3：过渡过程中收到新的滚轮，必须继续改**当前显示**的缩放镜头
+    // （不冻结整个 longDuration、等过渡结束再追赶），圆环 / 父子画面跟着这台
+    // 可见镜头更新；仍沿用唯一演出进度线，不排队多条动画。
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let zoom = function_window(&canvas, "function zoomAt(", 3800);
+    let active_branch = window_between(
+        &zoom,
+        "if (viewportMotion.active) {",
+        "if (pinchInput || zoomTweenDuration() <= 0) {",
+    );
+    assert!(
+        active_branch.contains("retargetViewportMotion(screenX, screenY)"),
+        "演出进行中收到滚轮必须继续推动可见相机（从可见帧重定目标），实际分支:\n{active_branch}"
+    );
+    assert!(
+        !active_branch.contains("anchorRoundAt(screenX, screenY)"),
+        "只记锚点、等演出结束再追赶的旧冻结行为必须删除（相机要跟着用户的滚轮走），\
+         实际分支:\n{active_branch}"
+    );
+
+    // 重定本体：起点 = 当前可见帧，终点 = 同一鼠标锚点上的累计目标；
+    // 参数从重定那一刻起的剩余时间继续走（进度线不重启）。
+    let retarget = function_window(&canvas, "function retargetViewportMotion(", 1300);
+    assert!(
+        retarget.contains("var fromCam = cameraSnapshot()")
+            && retarget
+                .contains("var toCam = anchoredCameraAt(_zoomTargetLevel, screenX, screenY)")
+            && retarget
+                .contains("viewportMotion.retargetCamera(fromCam, toCam, viewportMotion.progress)")
+            && retarget.contains("applyMotionFrame()"),
+        "过渡期滚轮必须以可见帧为起点、累计目标为终点从当前进度继续推进，实际窗口:\n{retarget}"
+    );
+    assert!(
+        !retarget.contains("startZoomTween")
+            && !retarget.contains(".restart()")
+            && !retarget.contains("NumberAnimation"),
+        "过渡期滚轮不得另起一条动画 / 补间（仍只用唯一演出进度线），实际窗口:\n{retarget}"
+    );
+    // 出场圆环端点随父相机两端一起重新投影（圆环 = 可见镜头下入口圆的投影）。
+    assert!(
+        retarget.contains("viewportMotion.exitRingStartRadius = startGeo.screenRadius")
+            && retarget.contains("viewportMotion.exitRingEndRadius = endGeo.screenRadius"),
+        "出场圆环端点必须随重定后的父相机两端重新投影，实际窗口:\n{retarget}"
+    );
+
+    // 锚点 world 用当前显示帧现算（不得拿尚未渲染的未来帧）。
+    let anchor = function_window(&canvas, "function anchoredCameraAt(", 500);
+    assert!(
+        anchor.contains("(screenX - panX) / z") && anchor.contains("(screenY - panY) / z"),
+        "过渡期滚轮锚点的世界位置必须由当前显示帧现算，实际窗口:\n{anchor}"
+    );
+
+    // 唯一时间线仍是唯一：Canvas 只有一个缩放补间、演出组件只有一个进度线；
+    // 重定只改相机两端与 cameraProgress 参数，不重启进度。
+    assert_eq!(
+        count_occurrences(&canvas, "NumberAnimation {"),
+        1,
+        "过渡期滚轮不得给 Canvas 增加第二条动画（不排队互相打断的补间）"
+    );
+    let motion = strip_line_comments(&read_src(MOTION));
+    assert_eq!(
+        count_occurrences(&motion, "NumberAnimation {"),
+        1,
+        "相机重定必须复用唯一演出进度线，不给圆环 / 相机各开一套时钟"
+    );
+    assert!(
+        motion.contains("property real retargetAt: -1")
+            && motion.contains("return entering ? contentProgress : progress")
+            && motion.contains("(progress - retargetAt) / (1 - retargetAt)")
+            && motion.contains("function retargetCamera(fromCameraIn, toCameraIn, atProgress)")
+            && motion.contains("fromCamera = snapshotOf(fromCameraIn)")
+            && motion.contains("toCamera = snapshotOf(toCameraIn)"),
+        "演出组件必须提供 cameraProgress（默认内容先停 / 完整 progress，重定后从剩余时间继续）"
+    );
+    assert_eq!(
+        count_occurrences(&motion, "retargetAt = -1"),
+        2,
+        "新一次演出与 cancel() 都必须把重定参数复位（不把上一轮的相位带到下一轮）"
+    );
+    // 相机参数默认值仍是 contentProgress —— 4 条口径里的「内容先停、圆环继续」不变。
+    let cam_progress = function_window(&motion, "readonly property real cameraProgress:", 500);
+    assert!(
+        cam_progress.contains("return entering ? contentProgress : progress")
+            && !cam_progress.contains("contentSpan"),
+        "未被打断时相机参数必须就是进场的 contentProgress / 出场的完整 progress，实际窗口:\n{cam_progress}"
     );
 }

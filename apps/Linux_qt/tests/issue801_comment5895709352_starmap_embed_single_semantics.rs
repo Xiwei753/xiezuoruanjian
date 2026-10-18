@@ -192,7 +192,8 @@ fn no_starmap_drill_down_entry_remains() {
     }
     // 进入 / 退出只有 Core 导航路由这一条路：双击与连续缩放共用 enterEmbedViaCore。
     let canvas = strip_line_comments(&read_src(CANVAS));
-    let enter = function_window(&canvas, "function enterEmbedViaCore(", 1200);
+    // Issue #949 复核 6250932011：换层前多了未完成滚轮目标 / 屏幕锚点的保存，窗口跟着放大。
+    let enter = function_window(&canvas, "function enterEmbedViaCore(", 1500);
     assert!(
         enter.contains("starmapBackendRef.enter_starmap_embed("),
         "进入子画布必须走 Core enter_starmap_embed，实际窗口:\n{enter}"

@@ -302,7 +302,8 @@ Item {
     //     于是 panX(t)=anchorX-worldX*z(t)、panY(t)=anchorY-worldY*z(t)，
     //     鼠标指向的对象在整段动画里不会滑走；
     //   - _zoomTargetLevel 是滚轮累计出的目标比例（一档一档连续累积，而不是
-    //     每次从还没走完的显示帧重新硬跳）；
+    //     每次从还没走完的显示帧重新硬跳）；换层时按 entryContexts 的父子比例
+    //     换算到新层尺度（Issue #949 复核评论 6250932011），过渡期滚轮继续重定它；
     //   - 补间只有一个：连续滚轮只重定它，不排队堆积互相打断的补间。
     property real _zoomAnchorX: 0
     property real _zoomAnchorY: 0
@@ -344,9 +345,10 @@ Item {
             return
         }
         if (viewportMotion.active) {
-            // 演出进行中（滚轮 / 按钮）：只累计目标与锚点，收尾后再从"那时的
-            // 显示帧"连续走完，不从未来帧硬跳、也不堆积补间。
-            anchorRoundAt(screenX, screenY)
+            // 演出进行中（滚轮）：不能冻结整个 longDuration —— 继续改这台可见
+            // 相机：把新目标按"当前显示帧 + 本次鼠标屏幕锚点"算出来，沿同一条
+            // 演出进度线从可见帧连续推进（不排队第二条动画）。
+            retargetViewportMotion(screenX, screenY)
             return
         }
         if (pinchInput || zoomTweenDuration() <= 0) {
@@ -409,6 +411,47 @@ Item {
         _zoomAnchorY = screenY
         _zoomRoundWorldX = (screenX - panX) / z
         _zoomRoundWorldY = (screenY - panY) / z
+    }
+
+    // 同一屏幕锚点在给定 zoom 下推出来的相机（锚点 world 位置用"当前显示帧"现算）：
+    // 未完成滚轮目标的跨画布换算、过渡期滚轮重定都走它（Issue #949 复核评论
+    // 6250932011 问题 2/3）。
+    function anchoredCameraAt(zoom, screenX, screenY) {
+        var clamped = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, zoom))
+        var z = zoomLevel > 0 ? zoomLevel : 1
+        var worldX = (screenX - panX) / z
+        var worldY = (screenY - panY) / z
+        return { zoom: clamped, panX: screenX - worldX * clamped,
+                 panY: screenY - worldY * clamped }
+    }
+
+    // 过渡期滚轮：从**当前可见帧**连续推进到新目标（Issue #949 复核评论
+    // 6250932011 问题 3）。终点 = 累计滚轮目标在当前新层尺度上、仍锚在同一鼠标
+    // 屏幕位置的那台相机；两端交给唯一演出进度线（retargetCamera），相机沿
+    // "重定那一刻起的剩余时间"从可见帧继续追，不冻结、不排队第二条动画。
+    // 出场圆环端点随父相机两端重新投影，保证"圆环 = 可见镜头下入口圆的投影"。
+    function retargetViewportMotion(screenX, screenY) {
+        if (!viewportMotion.active || !(_zoomTargetLevel > 0))
+            return
+        var fromCam = cameraSnapshot()
+        var toCam = anchoredCameraAt(_zoomTargetLevel, screenX, screenY)
+        viewportMotion.retargetCamera(fromCam, toCam, viewportMotion.progress)
+        if (!viewportMotion.entering) {
+            var startGeo = embedScreenGeometry(fromCam, viewportMotion.embedCenterX,
+                                               viewportMotion.embedCenterY,
+                                               viewportMotion.embedDiameter)
+            var endGeo = embedScreenGeometry(toCam, viewportMotion.embedCenterX,
+                                             viewportMotion.embedCenterY,
+                                             viewportMotion.embedDiameter)
+            viewportMotion.exitRingStartX = startGeo.screenX
+            viewportMotion.exitRingStartY = startGeo.screenY
+            viewportMotion.exitRingStartRadius = startGeo.screenRadius
+            viewportMotion.exitRingEndX = endGeo.screenX
+            viewportMotion.exitRingEndY = endGeo.screenY
+            viewportMotion.exitRingEndRadius = endGeo.screenRadius
+        }
+        anchorRoundAt(screenX, screenY)
+        applyMotionFrame()
     }
 
     // 缩放补间：只有这一条，每次重定起点（当前显示帧）与目标，不排队。
@@ -538,11 +581,14 @@ Item {
                  panY: from.panY + (to.panY - from.panY) * p }
     }
 
-    // 子图正常可读 / 可交互的镜头（进场落点，Issue #949 复核评论 6250468319）：
-    //   1. 优先沿用该子图已有的合法镜头（同一 routeKey 的相机槽，曾经进去过）；
+    // 子图正常可读 / 可交互的镜头（进场落点，Issue #949 复核评论 6250468319，
+    // 口径经复核评论 6250932011（问题 1）确认保持）：
+    //   1. 优先沿用该子图已有的合法镜头（同一 routeKey 的相机槽，曾经进去过），
+    //      回到用户上次看到的位置和倍率；
     //   2. 否则用进入时的合理默认：作者尺度 100%（节点就是 150×60 的正常可读
     //      大小）并把子图内容包围盒居中——不从"圆环需要撑出可见视口"的倍数
-    //      反算，入口很小时内容也不会被放大几十倍。
+    //      反算，也不默认 fit 整图（星图可无限扩展，节点距离太远时 fit 全图会
+    //      让节点小得难读）；空图按 boundsCenter 0 的原默认中心处理。
     function readableChildCamera(childKey, context) {
         var saved = childKey ? cameraStack[childKey] : null
         if (saved && saved.zoom > 0)
@@ -567,39 +613,50 @@ Item {
     // viewportMotion = 新活动画布从 fromCamera 连续插值到 toCamera。
     // Issue #949 复核评论 6250468319：进出场都是**真正的镜头连续变换**——
     //   - 进场：新子场景 from = 入口预览相机（子图内容按父图当前显示帧里
-    //     Embed 圆壳的投影映射），to = 子图正常可读 / 可交互镜头（不从"圆环
-    //     需要撑出视口"的倍率反算）；内容只在前段（contentProgress）走到
-    //     可读镜头，圆环继续按完整 progress 放大退场；旧父画面层不做端点
-    //     独立插值，而是每帧用 parentCameraForChild(子镜头(t)) 推同一份对应。
+    //     Embed 圆壳的投影映射），to = 调用方给的子图目标镜头（没有未完成滚轮
+    //     目标时就是可读镜头，不从"圆环需要撑出视口"的倍率反算）；内容只在前段
+    //     （contentProgress）走到目标，圆环继续按完整 progress 放大退场；旧父画面层
+    //     不做端点独立插值，而是每帧用 parentCameraForChild(子镜头(t)) 推同一份对应。
     //     每帧子镜头 = cameraLerp(预览, 可读, contentProgress)：to 是包围盒
     //     居中的可读镜头时等价于 pan(t)=ringCenter(cp)−W0×zoom(cp)（W0 =
     //     入口圆心对应的子图世界点），内容锚点沿"入口原屏幕位置 → 视口中心"
     //     的直线移动，不会先把新子图摆到全屏中心再播放动画。
-    //   - 出场：新父场景 from = 从当前子镜头反推的父镜头（滚轮 = 也当落点，
-    //     零跳变；按钮 = 再平滑走到进入前保存的父镜头）；旧子画面层每帧用
-    //     childCameraForParent(父镜头(t)) 推；圆环起点 / 终点就是入口圆在
-    //     这两个父帧下的投影（父相机线性插值下端点圆线性插值 = Embed 投影）。
+    //   - 出场：新父场景 from = 从当前子镜头反推的父镜头（零跳变）；to = 滚轮
+    //     时由未完成目标换算出的父镜头（相机继续缩小），按钮 = 进入前保存的
+    //     父镜头；旧子画面层每帧用 childCameraForParent(父镜头(t)) 推；圆环
+    //     起点 / 终点就是入口圆在这两个父帧下的投影（父相机线性插值下端点圆
+    //     线性插值 = Embed 投影，共用同一个相机参数）。
+    //   - Issue #949 复核评论 6250932011（问题 2）：未完成滚轮目标由调用方换算好
+    //     传进 incomingCam，这里只把屏幕锚点固定到同一鼠标位置（没有 pending
+    //     时回落视口中心），不再无条件重置掉它。
     function beginCanvasTransition(entering, outgoingStarmapIdIn, outgoingRouteIn,
-                                   outgoingCam, incomingCam, geometry, context) {
+                                   outgoingCam, incomingCam, geometry, context,
+                                   pendingAnchor) {
         viewportMotion.generation = ++motionGeneration
         stopZoomTween()
         outgoingStarmapId = outgoingStarmapIdIn
         outgoingRoute = outgoingRouteIn
         motionContext = context
-        // 滚轮累计目标在新画布上重新起步（跨画布尺度不混用）。
+        // Issue #949 复核评论 6250932011（问题 2）：incomingCam 已由调用方按
+        // 父子比例换算好（本层还有没显示完的滚轮目标时 = 换算到新层尺度的目标
+        // 本身，不是落点），这里不再无条件重置成落点；屏幕锚点也沿用处理滚轮
+        // 时的同一鼠标位置，后续滚轮与收尾都从这台可见镜头继续推。
         _zoomTargetLevel = incomingCam.zoom
+        _zoomAnchorX = pendingAnchor ? pendingAnchor.x : width / 2
+        _zoomAnchorY = pendingAnchor ? pendingAnchor.y : height / 2
         if (entering) {
             // 进场：起点 = 入口内同一片坐标（几何精确的概览 fit 映射），
-            // 落点 = 调用方给的子图可读镜头；圆环从入口在旧父镜头下的屏幕
-            // 几何放大到整圈离开视口。
+            // 落点 = 调用方给的子图目标镜头（可读镜头 / 换算后的滚轮目标）；
+            // 圆环从入口在旧父镜头下的屏幕几何放大到整圈离开视口。
             var previewCam = context && context.ratio > 0
                     ? childCameraForParent(outgoingCam, context) : incomingCam
             viewportMotion.beginEnter(previewCam, incomingCam, geometry, outgoingRouteIn,
                                       normalizeRoute(currentRoute))
         } else {
             // 出场：新活动画布是父图，从"当前子内容对应的父镜头"接上（滚轮
-            // 目标 = 这一帧本身，按钮再平滑走到 cameraStack 保存的父镜头）；
-            // 圆环起点 = 这一帧下入口圆的投影，终点 = 落点父帧下入口圆投影。
+            // 目标 = 未完成滚轮目标换算出的父镜头，相机继续缩小；按钮再平滑
+            // 走到 cameraStack 保存的父镜头）；圆环起点 = 这一帧下入口圆的
+            // 投影，终点 = 目标父帧下入口圆投影。
             var parentStartCam = context && context.ratio > 0
                     ? parentCameraForChild(outgoingCam, context) : outgoingCam
             var g = geometry || {}
@@ -628,6 +685,8 @@ Item {
             return
         }
         applyMotionFrame()
+        // 锚点的 world 位置用新层第一帧现算：滚轮 / 收尾从这台可见镜头继续推。
+        anchorRoundAt(_zoomAnchorX, _zoomAnchorY)
         logInteraction(entering ? "viewport_enter" : "viewport_exit", "scene", "", {
             "instanceId": geometry ? geometry.instanceId : "",
             "duration": viewportMotion.effectiveDuration,
@@ -635,17 +694,18 @@ Item {
         })
     }
 
-    // 过渡每帧：活动画布镜头按进度插值（进场用 contentProgress 走到可读镜头
-    // 后停住，出场用完整 progress 连续缩回），旧画面层不做端点独立插值，而是
-    // 每帧用同一份父子镜头对应从**当前子镜头 / 当前父镜头**推出来——圆壳、
-    // 内部内容、镜头因此始终对齐（Issue #949 复核评论 6250468319）。
+    // 过渡每帧：活动画布镜头按唯一演出进度线推进（默认进场 contentProgress
+    // ——内容先停；出场 progress；过渡期滚轮重定后按 cameraProgress 从可见帧
+    // 继续追），旧画面层不做端点独立插值，而是每帧用同一份父子镜头对应从
+    // **当前子镜头 / 当前父镜头**推出来——圆壳、内部内容、镜头因此始终对齐
+    //（Issue #949 复核评论 6250468319 / 6250932011）。
     function applyMotionFrame() {
         if (!viewportMotion.active)
             return
-        var p = viewportMotion.progress
+        var camProgress = viewportMotion.cameraProgress
         if (viewportMotion.entering) {
             var childCam = cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera,
-                                      viewportMotion.contentProgress)
+                                      camProgress)
             applyCamera(childCam)
             if (!outgoingStarmapId || !motionContext)
                 return
@@ -655,7 +715,8 @@ Item {
             outgoingPanY = parentCam.panY
             return
         }
-        var nextParentCam = cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera, p)
+        var nextParentCam = cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera,
+                                       camProgress)
         applyCamera(nextParentCam)
         if (!outgoingStarmapId || !motionContext)
             return
@@ -666,9 +727,10 @@ Item {
     }
 
     // 过渡自然收尾（唯一时间线跑到 progress=1 的 finished 回调）：落最终镜头、
-    // 销毁临时层，不持久化、不写 Core。演出期间累计的滚轮目标（如果有）从落点
-    // 继续走完，不从未来帧硬跳。晚到的旧时间线（generation 不匹配）直接忽略，
-    // 不许把用户拉回上一层。
+    // 销毁临时层，不持久化、不写 Core。Issue #949 复核评论 6250932011（问题 2）：
+    // 新层目标在换层时已按父子比例换算好（过渡期间滚轮还会继续重定它），这里
+    // 只用新层自己的值兜底续走，不再拿旧层倍率 / 落点覆盖它。晚到的旧时间线
+    // （generation 不匹配）直接忽略，不许把用户拉回上一层。
     // Issue #949 复核（问题 2）：只有这一条路径（自然完成）才允许 applyCamera
     // (toCamera)；cameraStack 由 applyCamera 触发的 onZoomLevelChanged /
     // onPanXChanged / onPanYChanged 写回**真实落点**。
@@ -775,7 +837,10 @@ Item {
     // 进入子画布（双击、连续缩放都用这一个入口）。返回新画布的落点 zoom，失败 -1。
     // Issue #949：切换前先冻结旧活动场景身份 / 镜头 / 入口几何，切换后启动
     // 过渡演出 —— 旧父画面在位停留（只绘制），子画布从入口内同一片坐标钻进去、
-    // 前段展开到可读镜头，圆壳描边继续放大到整圈离开可见视口。
+    // 前段展开到目标镜头（没有未完成滚轮目标时 = 可读镜头），圆壳描边继续放大
+    // 到整圈离开可见视口。复核评论 6250932011（问题 2）：滚轮穿越（trigger=zoom）
+    // 若有没显示完的滚轮目标，先按 ctx.ratio 换算到子图尺度当过渡目标，不吞档；
+    // 双击（double_click）是显式进入动作，仍用可读镜头落点（问题 1 的口径）。
     function enterEmbedViaCore(instanceId, trigger) {
         // 过渡还没收尾就继续进入孙图：先从当前已显示帧收尾，再冻结新快照。
         settleViewportMotion()
@@ -789,6 +854,15 @@ Item {
         var parentCamera = cameraSnapshot()
         var parentStarmapId = currentStarmapId
         var parentRoute = normalizeRoute(currentRoute)
+        // Issue #949 复核评论 6250932011（问题 2）：换层前保存本层还没显示完的
+        // 滚轮目标和屏幕锚点（本层尺度），跨进子图那一路（trigger=zoom）按
+        // childTargetZoom = parentPendingZoom × ctx.ratio 换算，避免同类吞滚轮；
+        // 双击（double_click）是显式进入动作，仍用可读镜头落点（问题 1）。
+        var parentPendingZoom = _zoomTargetLevel
+        var pendingAnchorX = _zoomAnchorX
+        var pendingAnchorY = _zoomAnchorY
+        var hasPendingZoom = trigger === "zoom" && parentPendingZoom > 0
+                && Math.abs(parentPendingZoom - parentZoom) > 1e-9 * parentZoom
         // 入口在"正在显示的"旧镜头下的屏幕几何：圆环起点、"入口内同一片坐标"
         // 的换算来源。只能用当前显示帧，不能用尚未显示的目标帧。
         var entryGeometry = {
@@ -842,6 +916,13 @@ Item {
         // 居中）。不再按"圆环要撑出可见视口"的倍率反算——入口很小时那会把
         // 节点放大几十倍、最后根本没法看。
         var childCamera = readableChildCamera(childKey, context)
+        // 有没显示完的滚轮目标：过渡目标 = 换算到子图尺度、仍锚在同一鼠标屏幕
+        // 位置的那台相机（相机跟着用户的滚轮走，不冻结、不吞档）；没有才用
+        // 可读镜头当落点。
+        var childTargetCamera = hasPendingZoom
+                ? childCameraForParent(
+                      anchoredCameraAt(parentPendingZoom, pendingAnchorX, pendingAnchorY), context)
+                : childCamera
         storeEntryContext(childKey, context)
         storeCamera(routeKey, cameraSnapshot())
         storeCamera(childKey, childCamera)
@@ -849,7 +930,8 @@ Item {
         applyRoute(newRoute)
         applyCamera(childCamera)
         beginCanvasTransition(true, parentStarmapId, parentRoute, parentCamera,
-                              childCamera, entryGeometry, context)
+                              childTargetCamera, entryGeometry, context,
+                              hasPendingZoom ? { x: pendingAnchorX, y: pendingAnchorY } : null)
         logInteraction("scene_enter", "embed", instanceId, {
             "trigger": trigger || "",
             "zoomEntryKey": _zoomEntryKey,
@@ -857,6 +939,7 @@ Item {
             "childStarmapId": res.data.location.currentStarmapId,
             "parentZoom": parentZoom,
             "childZoom": childCamera.zoom,
+            "childTargetZoom": childTargetCamera.zoom,
             "frozenScreenRadius": entryGeometry.screenRadius
         })
         visualFocusChanged()
@@ -865,12 +948,15 @@ Item {
 
     // 退出当前画布，回到 Core 返回的父 route。continuous=true 时按当前镜头
     // 反推连续父镜头（缩放穿越用）；false 时恢复进入前的父镜头（返回按钮用）。
-    // Issue #949 复核评论 6250468319：两种出场是两种镜头落点，但都从**当前
-    // 正在显示的帧**接上——
-    //   - 滚轮：落点 = 由当前子镜头按 entryContexts 反推的父镜头本身（沿用户
-    //     正在看的这一帧连续缩小，不得跨 60% 边界瞬间回到进入前保存的父镜头）；
-    //   - 按钮：落点 = cameraStack 保存的父镜头，但从当前可见帧平滑移动 / 缩放
-    //     过去（用户拖到多远都不会直接跳回）。
+    // Issue #949 复核评论 6250468319 / 6250932011：两种出场是两种镜头落点，
+    // 但都从**当前正在显示的帧**接上——
+    //   - 滚轮：落点 = 未走完的滚轮目标按 entryContexts 换算出的父镜头
+    //     （parentTargetZoom = clamp(childPendingZoom / ratio)，仍锚在同一鼠标
+    //     屏幕位置）；没有未完成目标时就是由当前子镜头反推的父镜头本身。沿用户
+    //     正在看的这一帧连续缩小，不得跨 60% 边界瞬间回到进入前保存的父镜头，
+    //     也不得冻结相机把后续滚轮丢给过渡结束后的补间；
+    //   - 按钮：落点 = cameraStack 保存的父镜头，不接滚轮未完成目标，但从当前
+    //     可见帧平滑移动 / 缩放过去（用户拖到多远都不会直接跳回）。
     // 圆环起点 = 当前帧入口圆的投影（与 60% 判定同一"正在显示的投影直径"
     // 几何），终点 = 目标父帧下入口圆投影；圆内子图 / 圆外父图按同一帧接上，
     // 结束才由 applyCamera 更新 cameraStack、才销毁临时层。
@@ -884,6 +970,12 @@ Item {
         var childCamera = cameraSnapshot()
         var childStarmapId = currentStarmapId
         var childRoute = normalizeRoute(currentRoute)
+        // Issue #949 复核评论 6250932011（问题 2）：换层前保存子图这轮还没显示完
+        // 的滚轮目标与屏幕锚点（子图尺度）。prepareCanvasSwitch() 会
+        // resetZoomRound()，不先存就会被丢掉。
+        var childPendingZoom = _zoomTargetLevel
+        var pendingAnchorX = _zoomAnchorX
+        var pendingAnchorY = _zoomAnchorY
         var res = starmapBackendRef.exit_starmap_canvas(JSON.stringify(currentRoute))
         if (!res || res.success !== true || !res.data || !res.data.rootStarmapId) {
             routeError = qsTr("返回父星图失败")
@@ -901,12 +993,24 @@ Item {
         // 起始父帧：当前子镜头按同一份父子对应反推（与 60% 判定同几何）。
         var parentStartCam = ctx && ctx.ratio > 0
                 ? parentCameraForChild(childCamera, ctx) : childCamera
-        // 目标父帧：滚轮 = 反推帧（零跳变）；按钮 = 进入前保存的父镜头。
+        // 目标父帧（Issue #949 复核评论 6250932011 问题 1/2）：滚轮退出时若还有
+        // 没显示完的滚轮目标，先把屏幕锚点上的目标子相机换算到父图尺度
+        // （parentTargetZoom = clamp(childPendingZoom / ctx.ratio)，仍锚在同一屏
+        // 幕位置），过渡期间相机继续缩小、不冻结、不吞档；没有未完成目标时就是
+        // 反推帧本身（零跳变）。按钮返回（continuous=false）不接滚轮未完成目标，
+        // 仍平滑回到进入前保存的父镜头（问题 4）。
         var parentTargetCam = parentStartCam
+        var pendingAnchor = null
         if (!continuous) {
             var cam = cameraStack[parentKey]
             parentTargetCam = cam ? { zoom: cam.zoom, panX: cam.panX, panY: cam.panY }
                                   : defaultCamera()
+        } else if (childPendingZoom > 0
+                   && Math.abs(childPendingZoom - childZoom) > 1e-9 * childZoom) {
+            var pendingCam = anchoredCameraAt(childPendingZoom, pendingAnchorX, pendingAnchorY)
+            parentTargetCam = ctx && ctx.ratio > 0
+                    ? parentCameraForChild(pendingCam, ctx) : pendingCam
+            pendingAnchor = { x: pendingAnchorX, y: pendingAnchorY }
         }
         // 入口世界几何 + 终点屏幕几何（目标父帧下入口圆的投影 = 真实圆壳落点）。
         var exitGeometry = ctx && ctx.embedDiameter > 0
@@ -923,12 +1027,13 @@ Item {
         prepareCanvasSwitch()
         applyRoute(parentRoute)
         beginCanvasTransition(false, childStarmapId, childRoute, childCamera,
-                              parentTargetCam, exitGeometry, ctx)
+                              parentTargetCam, exitGeometry, ctx, pendingAnchor)
         logInteraction("scene_exit", "scene", "", {
             "parentRouteKey": parentKey,
             "continuous": !!continuous,
             "childZoom": childZoom,
-            "parentZoom": parentTargetCam.zoom
+            "parentZoom": parentTargetCam.zoom,
+            "pendingCarried": !!pendingAnchor
         })
         visualFocusChanged()
         return parentTargetCam.zoom

@@ -89,19 +89,20 @@ QtObject {
     property real exitRingEndY: 0
     property real exitRingEndRadius: 0
 
-    // ── 每帧按同一个 progress 算出的圆环几何（屏幕口径）──
-    // 进场：入口圆壳 → 视口中心 + 整圈出视口（screen-space 放大路径）。
+    // ── 每帧按同一条进度算出的圆环几何（屏幕口径）──
+    // 进场：入口圆壳 → 视口中心 + 整圈出视口（screen-space 放大路径，跟 progress）。
     // 出场：当前帧入口圆投影 → 目标父帧入口圆投影（父相机线性插值下的 Embed
-    // 投影，与父相机同一 progress）。
+    // 投影），与父相机共用同一个参数（cameraProgress，默认就是 progress；过渡期
+    // 滚轮重定相机后仍与相机严格同参，圆环不许和可见镜头脱节）。
     readonly property real ringCenterX:
         entering ? embedScreenX + (ringTargetX - embedScreenX) * progress
-                 : exitRingStartX + (exitRingEndX - exitRingStartX) * progress
+                 : exitRingStartX + (exitRingEndX - exitRingStartX) * cameraProgress
     readonly property real ringCenterY:
         entering ? embedScreenY + (ringTargetY - embedScreenY) * progress
-                 : exitRingStartY + (exitRingEndY - exitRingStartY) * progress
+                 : exitRingStartY + (exitRingEndY - exitRingStartY) * cameraProgress
     readonly property real ringRadius:
         entering ? embedScreenRadius + (ringTargetRadius - embedScreenRadius) * progress
-                 : exitRingStartRadius + (exitRingEndRadius - exitRingStartRadius) * progress
+                 : exitRingStartRadius + (exitRingEndRadius - exitRingStartRadius) * cameraProgress
     // 进场：半径到目标时整圈已在视口外，此刻才停止绘制；出场：缩小到落回母图圆壳
     // 之前一直画（落地后由母图真实的 Embed 圆壳接管，同一位置同一半径）。
     readonly property bool ringVisible: active && progress < 1
@@ -116,6 +117,20 @@ QtObject {
     readonly property real contentSpan: 0.6
     readonly property real contentProgress:
         1 - Math.pow(1 - Math.min(1, progress / contentSpan), 3)
+
+    // ── 相机参数（Issue #949 复核评论 6250932011 问题 3）：默认进场跟随
+    //    contentProgress（内容先停）、出场跟随 progress；过渡期收到滚动滚轮时
+    //    Canvas 调 retargetCamera() 把相机重锚到那一刻的可见帧、终点换成新目标，
+    //    参数改为"从重定进度起的剩余时间"——仍沿这一条进度线继续推进，不重启
+    //    进度、不排队第二条动画，圆环（出场）与相机严格同参。──
+    property real retargetAt: -1
+    readonly property real cameraProgress: {
+        if (retargetAt < 0)
+            return entering ? contentProgress : progress
+        if (retargetAt >= 1)
+            return 1
+        return Math.max(0, Math.min(1, (progress - retargetAt) / (1 - retargetAt)))
+    }
 
     // ── 节点展开进度（只影响显示层，跟随 contentProgress）──
     readonly property real detailReveal: entering ? contentProgress : 1 - contentProgress
@@ -170,9 +185,22 @@ QtObject {
     // 出场：fromCamera / toCamera 是新活动画布（父图）自己的起止显示镜头，
     // embedGeometry 给入口世界几何 + 圆环的起点 / 终点屏幕几何：
     //   - startScreen*：当前显示帧（由当前子镜头反推的父镜头）下入口圆的投影；
-    //   - screen*：目标父帧（滚轮 = 反推帧，按钮 = 恢复的父镜头）下入口圆投影。
+    //   - screen*：目标父帧（滚轮 = 反推帧 / 换算后的滚轮目标，按钮 = 恢复的父镜头）
+    //     下入口圆投影。
     function beginExit(fromCamera, toCamera, embedGeometry, childRoute, parentRoute) {
         _begin(false, fromCamera, toCamera, embedGeometry, childRoute, parentRoute)
+    }
+
+    // 过渡期滚轮重定（Issue #949 复核评论 6250932011 问题 3）：起点 = 处理滚轮
+    // 那一刻的可见帧，终点 = 换算后的新目标；进度线本身不重启（圆环 / 展开仍按
+    // 原 progress 走完），相机从可见帧连续追。出场圆环端点由 Canvas 随两端一起
+    // 重新投影，保证"圆环 = 可见镜头下入口圆的投影"不脱节。
+    function retargetCamera(fromCameraIn, toCameraIn, atProgress) {
+        if (!active)
+            return
+        fromCamera = snapshotOf(fromCameraIn)
+        toCamera = snapshotOf(toCameraIn)
+        retargetAt = Math.max(0, Math.min(1, atProgress))
     }
 
     function _begin(direction, outgoingCamera, incomingCamera, embedGeometry, outgoingRoute, incomingRoute) {
@@ -199,6 +227,8 @@ QtObject {
         exitRingEndRadius = embedScreenRadius
         childBounds = g.bounds || null
         fitScale = g.fitScale || 0
+        // 新一次演出从默认参数起步（进场 contentProgress / 出场 progress）。
+        retargetAt = -1
         active = true
         if (effectiveDuration <= 0) {
             // 系统关闭动画 / 有效时长为 0：直接完成到 1（不留半截演出）。
@@ -218,6 +248,7 @@ QtObject {
         timeline.stop()
         active = false
         progress = 0
+        retargetAt = -1
         fromCamera = null
         toCamera = null
     }
