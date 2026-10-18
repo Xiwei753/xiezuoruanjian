@@ -25,6 +25,7 @@ import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 import { SyncOutcomePresenter } from '../presentation/SyncOutcomePresenter'
 import { SyncOutcome } from '../presentation/SyncRunTypes'
 import { SyncRunPresentationState, SyncRunSnapshot } from '../presentation/SyncRunPresentationState'
+import { SyncOperationController } from '../presentation/SyncOperationController'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { SyncConflictViewModel } from '../presentation/SyncConflictViewModel'
 import { createSyncConflictsPanelContent, SyncConflictsPanelArgs } from './SyncConflictsPanel'
@@ -91,6 +92,8 @@ export struct SettingsContent {
   // Core 最近一次持久化的整轮报告；与当前进程运行快照分开显示。
   @Local latestFullSyncReport: FullSyncReport | null = null
   @Local latestFullSyncReportReadError: string = ''
+  // Issue #952：同步失败明细是否展开；默认收起，避免报告挤占设置列表。
+  @Local syncDetailsExpanded: boolean = false
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -118,7 +121,8 @@ export struct SettingsContent {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
 
-    // 页面展示始终订阅共享运行态，状态条不依赖“同步”折叠分类是否展开。
+    // Issue #952：设置页订阅共享运行态，保证“同步”分类展开时看到的是最新一轮结果；
+    // 摘要只在分类内被动展示，不驱动任何主动弹窗。
     this.syncRunSnapshot = this.syncRunPresentation.snapshot()
     this.unsubscribeSyncRun = this.syncRunPresentation.subscribe((snapshot: SyncRunSnapshot): void => {
       const previousPhase: string = this.syncRunSnapshot.phase
@@ -197,15 +201,15 @@ export struct SettingsContent {
     return new Date(epochMs).toLocaleString()
   }
 
-  private fullSyncStatusText(): string {
+  private fullSyncOverallStatusText(): string {
     if (this.fullSyncStateReadError.length > 0) {
-      return `同步状态读取失败（${this.fullSyncStateReadError}）`
+      return `读取失败（${this.fullSyncStateReadError}）`
     }
     const state: FullSyncState | null = this.fullSyncState
     if (state === null) {
       return 'Core 尚无同步记录'
     }
-    return `同步状态：${state.overall_status}`
+    return state.overall_status
   }
 
   private fullSyncFailedTargetsText(): string {
@@ -216,7 +220,10 @@ export struct SettingsContent {
     if (state === null) {
       return '失败目标：暂无记录'
     }
-    return `失败目标：${state.failed_targets.length > 0 ? state.failed_targets.join('、') : '无'}`
+    if (state.failed_targets.length > 0) {
+      return `失败目标：${state.failed_targets.length} 个`
+    }
+    return '失败目标：无'
   }
 
   private fullSyncAttemptTimeText(): string {
@@ -260,17 +267,27 @@ export struct SettingsContent {
     return '未分类'
   }
 
+  // ── Issue #952：同步摘要只在“同步”分类内被动展示 ──
+  // 自动同步照常运行并记录到进程快照与 Core 持久状态；这里只做被动查询显示，从不主动弹提示。
+  // 摘要本身只列关键信息，失败明细由“查看同步详情”按需展开，避免挤占设置列表。
+
+  private syncSourceLabel(source: string): string {
+    return source === 'auto' ? '自动同步' : '手动同步'
+  }
+
   @Builder
-  SyncStatusSummary() {
+  SyncBriefSummary() {
     Column({ space: 4 }) {
+      // 本轮结果：来自进程内运行快照，标注触发来源，避免把自动同步的旧结果误当本次手动操作。
       if (this.syncRunSnapshot.phase === 'in_progress') {
-        Text(this.syncRunSnapshot.source === 'auto' ? '正在自动同步…' : '正在同步…')
+        Text(`本轮结果（${this.syncSourceLabel(this.syncRunSnapshot.source)}）：同步进行中…`)
           .fontSize(13)
-      } else if (this.syncRunSnapshot.outcome !== null) {
-        Text(SyncOutcomePresenter.present(getContext(this), this.syncRunSnapshot.outcome))
+      } else if (this.syncRunSnapshot.phase !== 'idle' && this.syncRunSnapshot.outcome !== null) {
+        Text(`本轮结果（${this.syncSourceLabel(this.syncRunSnapshot.source)}）：${SyncOutcomePresenter.present(getContext(this), this.syncRunSnapshot.outcome)}`)
           .fontSize(13)
       }
-      Text(this.fullSyncStatusText())
+      // 历史结果：Core 持久化的最近一轮状态、失败目标数量与整轮报告摘要。
+      Text(`历史结果：${this.fullSyncOverallStatusText()}`)
         .fontSize(12)
       Text(this.fullSyncAttemptTimeText())
         .fontSize(12)
@@ -280,7 +297,26 @@ export struct SettingsContent {
         .fontSize(12)
       Text(this.latestFullSyncReportSummaryText())
         .fontSize(12)
-      if (this.latestFullSyncReport !== null && this.latestFullSyncReport.failures.length > 0) {
+      this.SettingsNeutralAction(this.syncDetailsExpanded ? '收起同步详情' : '查看同步详情', () => {
+        this.syncDetailsExpanded = !this.syncDetailsExpanded
+      })
+      if (this.syncDetailsExpanded) {
+        this.SyncReportDetails()
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .margin({ bottom: 16 })
+  }
+
+  // 完整失败明细只在用户展开时渲染，失败条目再多也留在设置列表自己的滚动区域内。
+  @Builder
+  SyncReportDetails() {
+    Column({ space: 4 }) {
+      if (this.latestFullSyncReportReadError.length > 0) {
+        Text(`最近整轮报告读取失败（${this.latestFullSyncReportReadError}）`)
+          .fontSize(12)
+      } else if (this.latestFullSyncReport !== null && this.latestFullSyncReport.failures.length > 0) {
         ForEach(this.latestFullSyncReport.failures, (failure: FullSyncReportFailure) => {
           Column({ space: 2 }) {
             Text(`失败组：${failure.group_id}（${failure.target_kind}）`)
@@ -298,11 +334,13 @@ export struct SettingsContent {
           .margin({ top: 4 })
         }, (failure: FullSyncReportFailure) =>
           `${failure.group_id}:${failure.path}:${failure.phase}:${failure.occurred_at}`)
+      } else {
+        Text('最近整轮报告没有失败条目')
+          .fontSize(12)
       }
     }
     .width('100%')
-    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 8 })
-    .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+    .alignItems(HorizontalAlign.Start)
   }
 
   // ── 搜索过滤设置项（窄屏搜索用） ──
@@ -426,15 +464,39 @@ export struct SettingsContent {
   }
 
   // 设置页内发起同步：清掉面板回传的旧计数，入口完全由新的同步结果决定。
+  // Issue #952：与后台自动同步重叠时合并进同一运行任务（保持去重、不新起一轮），
+  // 但本次是用户主动发起——先提示“同步正在进行”，结束时反馈本次请求收到的结果。
   private async requestSync(): Promise<void> {
     this.conflictRemaining = -1
-    await this.viewModel.performSync()
+    const mergedIntoAuto: boolean =
+      SyncOperationController.getInstance().currentRunningSource() === 'auto'
+    if (mergedIntoAuto) {
+      this.showSyncEntryToast('同步正在进行…')
+    }
+    const outcome: SyncOutcome = await this.viewModel.performSync()
+    if (mergedIntoAuto) {
+      this.showSyncEntryToast(SyncOutcomePresenter.present(getContext(this), outcome))
+    }
     // Controller 的共享运行态指示冲突时，用 Core 全局冲突列表的真实剩余数刷新入口计数。
     if (this.syncOutcomeConflictCount() >= 0) {
       await this.refreshConflictProbe()
     }
     await this.refreshFullSyncState()
     await this.refreshLatestFullSyncReport()
+  }
+
+  // Issue #952：手动同步进行中的判定——只禁手动按钮防连点，后台自动同步不锁设置页。
+  private isManualSyncInProgress(): boolean {
+    return this.syncRunSnapshot.phase === 'in_progress' && this.syncRunSnapshot.source === 'manual'
+  }
+
+  // Issue #952：设置页同步入口 Toast（合并进后台自动任务时的进行中/结果反馈）。
+  private showSyncEntryToast(message: string): void {
+    try {
+      promptAction.showToast({ message: message })
+    } catch (_e) {
+      // Toast 失败不影响同步结果本身。
+    }
   }
 
   // 从 Core 全局冲突列表取真实剩余数；拉取失败保持旧值（-1 时退回同步结果判断）。
@@ -512,9 +574,7 @@ export struct SettingsContent {
         this.CompactSettingsHeader()
       }
 
-      // 全量同步摘要位于根内容区，不随“同步”分类折叠或搜索过滤。
-      this.SyncStatusSummary()
-
+      // Issue #952：同步摘要移入“数据与同步 → 同步”分类内，不再固定占据设置页顶部。
       if (this.viewModel.isLoading) {
         // Issue #932：加载中状态复用公共 CompactPageState，不再自绘 LoadingProgress。
         CompactPageState({
@@ -985,6 +1045,10 @@ export struct SettingsContent {
   @Builder
   SyncContent() {
     Column() {
+      // Issue #952：同步摘要跟随“数据与同步 → 同步”分类展开才显示，不再常驻设置页顶部；
+      // 本轮结果 / 历史结果只做被动展示，失败明细按需展开。
+      this.SyncBriefSummary()
+
       // 启用同步
       Row() {
         Text($r('app.string.enable_sync'))
@@ -1122,9 +1186,10 @@ export struct SettingsContent {
 
         // Sync actions
         Row({ space: 12 }) {
+          // Issue #952：只禁手动同步进行中的按钮防连点；后台自动同步不得锁住设置页操作。
           this.SettingsInlineAction($r('app.string.sync_section'),
             () => this.requestSync(),
-            this.syncRunSnapshot.phase !== 'in_progress')
+            !this.isManualSyncInProgress())
 
           this.SettingsInlineAction($r('app.string.diagnose'),
             () => this.viewModel.runSyncDiagnostics(),

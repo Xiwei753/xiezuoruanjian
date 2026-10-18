@@ -109,8 +109,10 @@ export struct PrimaryTabShell {
   @State primaryTabGestureLocked: boolean = false
 
   // Issue #940：唯一应用壳层宿主负责呈现跨路由同步状态与手动入口 Toast。
+  // Issue #952：只呈现用户手动发起的同步；自动同步照常运行并记录，但不弹状态条 / Toast。
   @State syncRunSnapshot: SyncRunSnapshot = SyncRunPresentationState.getInstance().snapshot()
-  @State syncStatusVisible: boolean = this.syncRunSnapshot.phase !== 'idle'
+  @State syncStatusVisible: boolean =
+    this.syncRunSnapshot.source === 'manual' && this.syncRunSnapshot.phase !== 'idle'
 
   // Issue #768：API23+ 分流标志。true 时使用 HdsPrimaryTabsApi23，false 时使用普通 Tabs。
   @State useHdsTabs: boolean = false
@@ -141,6 +143,9 @@ export struct PrimaryTabShell {
     // openCustomDialog 必须在 UIContext 上调用，而页头动作可能来自任何 NavDestination，
     // 所以这里在壳层注册一次窗口级 UIContext，不在每个页面各传一遍。
     SettingsOverlayController.getInstance().attachUIContext(this.getUIContext())
+    // Issue #952：顶栏同步入口在与后台自动同步重叠时需要自行弹提示与结果 Toast，
+    // 同样由壳层注册窗口级 UIContext（与 SettingsOverlayController 同一模式）。
+    NavigationHeaderActionDispatcher.getInstance().attachUIContext(this.getUIContext())
 
     // Issue #768 评论5835171266 第1项：PrimaryTabShell 始终持有三个 NavPathStack 并注册到 coordinator，
     // 不再因 useHdsTabs 跳过——HdsPrimaryTabsApi23 不再自己创建 stack 或注册。
@@ -195,8 +200,10 @@ export struct PrimaryTabShell {
 
     const syncState: SyncRunPresentationState = SyncRunPresentationState.getInstance()
     this.syncRunSnapshot = syncState.snapshot()
-    this.syncStatusVisible = this.syncRunSnapshot.phase !== 'idle'
-    if (this.isPureSuccessfulSyncSnapshot(this.syncRunSnapshot)) {
+    // Issue #952：恢复快照时只恢复手动发起的可见提示；自动同步结果留在状态里被动可查。
+    this.syncStatusVisible =
+      this.syncRunSnapshot.source === 'manual' && this.syncRunSnapshot.phase !== 'idle'
+    if (this.syncRunSnapshot.source === 'manual' && this.isPureSuccessfulSyncSnapshot(this.syncRunSnapshot)) {
       this.scheduleSyncStatusSuccessHide(this.syncRunSnapshot.finishedAtMs)
     }
     this.syncRunUnsubscribe = syncState.subscribe((snapshot: SyncRunSnapshot): void => {
@@ -234,9 +241,19 @@ export struct PrimaryTabShell {
     // Issue #825 复核第3项：壳层销毁时如果还持有当前窗口的设置浮层，先关掉再摘 UIContext，
     // 否则 controller 会攥着一个已经失效的 UIContext，下个窗口 open() 直接失败。
     SettingsOverlayController.getInstance().detachUIContext(this.getUIContext())
+    // Issue #952：同步入口的 UIContext 同样按窗口生命周期摘除。
+    NavigationHeaderActionDispatcher.getInstance().detachUIContext(this.getUIContext())
   }
 
   private onSyncRunSnapshotChanged(previous: SyncRunSnapshot, next: SyncRunSnapshot): void {
+    // Issue #952：自动同步全程静默——不显示状态条、不弹 Toast。
+    // 过程与终态仍由 SyncRunPresentationState 与 Core 保存，设置页同步分类被动可查。
+    if (next.source === 'auto') {
+      this.clearSyncStatusHideTimer()
+      this.syncStatusVisible = false
+      return
+    }
+
     if (next.phase === 'in_progress') {
       this.clearSyncStatusHideTimer()
       this.syncStatusVisible = true
@@ -255,10 +272,10 @@ export struct PrimaryTabShell {
       this.syncStatusVisible = false
     }
 
-    if (next.phase === 'in_progress' && next.source === 'manual' && previous.phase !== 'in_progress') {
+    if (next.phase === 'in_progress' && previous.phase !== 'in_progress') {
       this.showSyncToast('同步开始…')
     }
-    if (previous.phase === 'in_progress' && next.finishedAtMs !== null && next.source === 'manual' && next.outcome !== null) {
+    if (previous.phase === 'in_progress' && next.finishedAtMs !== null && next.outcome !== null) {
       const context: Context = getContext(this)
       this.showSyncToast(SyncOutcomePresenter.present(context, next.outcome))
     }
@@ -305,7 +322,11 @@ export struct PrimaryTabShell {
   }
 
   private shouldShowSyncStatus(): boolean {
-    return this.syncStatusVisible && this.syncRunSnapshot.phase !== 'idle'
+    // Issue #952：状态条只响应用户手动发起的同步，作为渲染的唯一判定，
+    // 避免异步状态改变时旧条复活。
+    return this.syncStatusVisible &&
+      this.syncRunSnapshot.source === 'manual' &&
+      this.syncRunSnapshot.phase !== 'idle'
   }
 
   @Builder

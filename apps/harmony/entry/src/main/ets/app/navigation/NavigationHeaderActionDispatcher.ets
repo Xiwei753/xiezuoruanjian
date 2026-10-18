@@ -5,11 +5,14 @@
 // Issue #784 评论 5856805657：同步行为由全局 dispatcher 持有，不再各页面各写一份。
 
 import hilog from '@ohos.hilog'
+import { UIContext } from '@kit.ArkUI'
 import { ActionRole } from './ScreenSemantics'
 import { Routes } from './Routes'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { SyncOperationController } from '../../feature/settings/presentation/SyncOperationController'
 import { SettingsOverlayController } from '../../feature/settings/presentation/SettingsOverlayController'
+import { SyncOutcomePresenter } from '../../feature/settings/presentation/SyncOutcomePresenter'
+import { SyncOutcome } from '../../feature/settings/presentation/SyncRunTypes'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 
 const TAG = 'NavigationHeaderActionDispatcher'
@@ -18,12 +21,27 @@ const DOMAIN = 0x0000
 export class NavigationHeaderActionDispatcher {
   private static instance: NavigationHeaderActionDispatcher
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
+  // Issue #952：手动请求合并进后台自动同步时，顶栏入口需要自己弹“进行中/结果”Toast，
+  // UIContext 由壳层注册一次（与 SettingsOverlayController 同一模式）。
+  private uiContext: UIContext | null = null
 
   static getInstance(): NavigationHeaderActionDispatcher {
     if (!NavigationHeaderActionDispatcher.instance) {
       NavigationHeaderActionDispatcher.instance = new NavigationHeaderActionDispatcher()
     }
     return NavigationHeaderActionDispatcher.instance
+  }
+
+  /** Issue #952：壳层注册窗口级 UIContext 供顶栏同步入口弹 Toast。 */
+  attachUIContext(uiContext: UIContext): void {
+    this.uiContext = uiContext
+  }
+
+  /** Issue #952：壳层销毁时摘除，避免持有失效 UIContext。 */
+  detachUIContext(uiContext: UIContext): void {
+    if (this.uiContext === uiContext) {
+      this.uiContext = null
+    }
   }
 
   /** 执行页头尾部动作 */
@@ -42,7 +60,40 @@ export class NavigationHeaderActionDispatcher {
 
   /** 同步 — 使用 SyncOperationController 共用同步事务 */
   private handleSync(): void {
-    void SyncOperationController.getInstance().performSync('manual')
+    const controller: SyncOperationController = SyncOperationController.getInstance()
+    // Issue #952：手动请求与后台自动同步重叠时，不去中断也不新起第二轮（保持同一运行任务的去重），
+    // 但这次是用户主动点击：顶栏入口先提示“同步正在进行”，await 后展示本次手动请求收到的结果。
+    // 自动同步自身不弹提示，结果照常由 SyncRunPresentationState 与 Core 记录。
+    if (controller.currentRunningSource() === 'auto') {
+      this.showSyncEntryToast('同步正在进行…')
+      void controller.performSync('manual').then((outcome: SyncOutcome): void => {
+        this.showSyncEntryOutcome(outcome)
+      })
+      return
+    }
+    // 无运行任务或已在手动任务中：进行中与终态由壳层按 manual 快照统一展示，入口不重复弹。
+    void controller.performSync('manual')
+  }
+
+  /** Issue #952：顶栏入口 Toast。没有窗口 UIContext（壳层未注册）时静默跳过。 */
+  private showSyncEntryToast(message: string): void {
+    if (this.uiContext === null) {
+      return
+    }
+    try {
+      this.uiContext.getPromptAction().showToast({ message: message })
+    } catch (_) {
+      // Toast 失败不影响同步结果本身。
+    }
+  }
+
+  /** Issue #952：顶栏入口展示本次手动请求收到的同步结果。 */
+  private showSyncEntryOutcome(outcome: SyncOutcome): void {
+    const context: Context | undefined = this.uiContext?.getHostContext()
+    if (context === undefined) {
+      return
+    }
+    this.showSyncEntryToast(SyncOutcomePresenter.present(context, outcome))
   }
 
   /** 设置 — 宽屏开模态浮层，窄屏进 Routes.Settings 路由页 */

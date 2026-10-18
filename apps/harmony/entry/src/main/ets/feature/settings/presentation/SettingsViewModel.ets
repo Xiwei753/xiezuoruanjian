@@ -21,6 +21,7 @@ import { HarmonyDiagnosticsExporter, DiagnosticsSaveResult } from '../../../plat
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { SyncOperationController } from './SyncOperationController'
+import { SyncOutcome } from './SyncRunTypes'
 import { HarmonyAutoSyncScheduler } from './HarmonyAutoSyncScheduler'
 import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
 
@@ -295,12 +296,13 @@ export class SettingsViewModel {
 
   // ── 执行同步 ──
   // 同步运行状态和结果由 SyncRunPresentationState 统一持有；ViewModel 只准备凭据并触发 Controller。
-  async performSync(): Promise<void> {
+  // Issue #952：返回本次请求收到的 SyncOutcome，供设置页入口在与后台自动同步重叠时自行反馈结果。
+  async performSync(): Promise<SyncOutcome> {
     // Issue #924：若 Token 还在防抖等待/队列中，先落盘再同步，避免用旧凭据发起同步。
     if (this.isSyncSecretsSavePending()) {
       await this.saveSyncSecrets()
     }
-    await SyncOperationController.getInstance().performSync()
+    return await SyncOperationController.getInstance().performSync()
   }
 
   // ── 运行同步诊断 ──

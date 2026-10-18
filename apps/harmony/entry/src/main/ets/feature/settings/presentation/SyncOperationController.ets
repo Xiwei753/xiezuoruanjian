@@ -48,6 +48,15 @@ export class SyncOperationController {
     return this.currentOperation !== null
   }
 
+  /** Issue #952：当前运行中任务的来源；没有运行任务时为 null。
+   *  手动入口据此判断本次点击是否合并进后台自动任务，从而决定是否自行给出“进行中/结果”反馈。 */
+  currentRunningSource(): SyncEntrySource | null {
+    if (this.currentOperation === null) {
+      return null
+    }
+    return SyncRunPresentationState.getInstance().snapshot().source
+  }
+
   /** 执行同步 — 一次只运行一个事务；开始快照先于保存屏障和 NAPI。 */
   performSync(source: SyncEntrySource = 'manual'): Promise<SyncOutcome> {
     if (this.currentOperation !== null) {
