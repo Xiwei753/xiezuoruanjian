@@ -20,8 +20,7 @@ import { LocalSettingsStore } from './LocalSettingsStore'
 import { HarmonyDiagnosticsExporter, DiagnosticsSaveResult } from '../../../platform/diagnostics/HarmonyDiagnosticsExporter'
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
-import { SyncOperationController, SyncOutcome } from './SyncOperationController'
-import { SyncMessagePayload } from './SyncMessagePayload'
+import { SyncOperationController } from './SyncOperationController'
 import { HarmonyAutoSyncScheduler } from './HarmonyAutoSyncScheduler'
 import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
 
@@ -126,10 +125,8 @@ export class SettingsViewModel {
   @Trace syncRemoteUrl: string = ''
   @Trace isLoading: boolean = true
   @Trace isSaving: boolean = false
-  @Trace isSyncing: boolean = false
   @Trace isDiagnosing: boolean = false
   @Trace saveMessage: string = ''
-  @Trace syncMessage: string = ''
   @Trace syncDiagnostics: SyncDiagnosticsResult | null = null
 
   // 诊断配置同步追踪 — 记录上一次同步到 runtime 的值，用于判断是否有变化。
@@ -297,57 +294,13 @@ export class SettingsViewModel {
   }
 
   // ── 执行同步 ──
-  // 原样传递 outcome.messageKey + errorCode + messageArgs + errorCategory + rawError + overallStatus，
-  // 不再机械构造 error.${errorKey} 或 sync_complete:${n}。
-  // syncMessage 现在是 JSON 字符串，UI 层解析后调用 MessageKeyMapper.resolveMessage 做本地化。
-
+  // 同步运行状态和结果由 SyncRunPresentationState 统一持有；ViewModel 只准备凭据并触发 Controller。
   async performSync(): Promise<void> {
-    this.isSyncing = true
-    this.syncMessage = ''
-
-    try {
-      // Issue #924：若 Token 还在防抖等待/队列中，先落盘再同步，避免用旧凭据发起同步。
-      if (this.isSyncSecretsSavePending()) {
-        await this.saveSyncSecrets()
-      }
-      const controller = SyncOperationController.getInstance()
-      const outcome = await controller.performSync()
-      if (outcome.phase === 'success') {
-        // 成功：传递 messageKey / messageArgs / totalDownloaded / overallStatus
-        const payload: SyncMessagePayload = {
-          phase: 'success',
-          messageKey: outcome.messageKey ?? 'sync_complete',
-          messageArgs: outcome.messageArgs,
-          totalDownloaded: outcome.totalDownloaded,
-          overallStatus: outcome.overallStatus
-        }
-        this.syncMessage = JSON.stringify(payload)
-      } else {
-        // 失败：原样传递 Core 类型化字段，不再构造 error.${errorKey}
-        const payload: SyncMessagePayload = {
-          phase: 'failed',
-          messageKey: outcome.messageKey,
-          messageArgs: outcome.messageArgs,
-          errorCode: outcome.errorCode,
-          errorCategory: outcome.errorCategory,
-          rawError: outcome.rawError,
-          // Issue #926：冲突终态带到设置页，入口显示"查看冲突（N 处）"。
-          totalConflicts: outcome.totalConflicts,
-          overallStatus: outcome.overallStatus
-        }
-        this.syncMessage = JSON.stringify(payload)
-      }
-    } catch (err) {
-      hilog.error(DOMAIN, TAG, `Failed to perform sync: ${err}`)
-      const payload: SyncMessagePayload = {
-        phase: 'failed',
-        errorCode: 'sync_error',
-        rawError: String(err)
-      }
-      this.syncMessage = JSON.stringify(payload)
-    } finally {
-      this.isSyncing = false
+    // Issue #924：若 Token 还在防抖等待/队列中，先落盘再同步，避免用旧凭据发起同步。
+    if (this.isSyncSecretsSavePending()) {
+      await this.saveSyncSecrets()
     }
+    await SyncOperationController.getInstance().performSync()
   }
 
   // ── 运行同步诊断 ──
@@ -549,7 +502,7 @@ export class SettingsViewModel {
    * 保存同步密钥（Token）—— 单飞串行队列入口（Issue #924）。
    * 取消防抖等待，把最新 Token 并入队列：多次变更合并、串行执行、最后一次必达。
    * 只有 Core 返回 success=true 才报告"已保存"；失败立即写结构化 errorCode
-   * （saveMessage），不会被之后同步失败的 syncMessage 掩盖。
+   * （saveMessage），不会被之后的同步结果提示掩盖。
    */
   async saveSyncSecrets(): Promise<void> {
     this.clearSyncTokenSaveTimer()
@@ -608,7 +561,7 @@ export class SettingsViewModel {
         this.saveMessage = 'saved'
         return true
       }
-      // 失败：立即显示结构化 errorCode；后续同步失败只写 syncMessage，不会掩盖这里。
+      // 失败：立即显示结构化 errorCode；共享同步状态不会改写这条保存提示。
       this.saveMessage = `error:${result.errorCode || 'unknown'}`
       return false
     } catch (err) {

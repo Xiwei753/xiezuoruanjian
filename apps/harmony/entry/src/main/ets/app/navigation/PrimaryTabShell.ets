@@ -36,6 +36,10 @@ import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 import { HdsPrimaryTabsApi23 } from './impl/api23/HdsPrimaryTabsApi23'
 import { HeaderActionCapsule } from './impl/api23/HeaderActionCapsule'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
+import { SyncRunPresentationState, SyncRunSnapshot } from '../../feature/settings/presentation/SyncRunPresentationState'
+import { SyncOutcomePresenter } from '../../feature/settings/presentation/SyncOutcomePresenter'
+import { SyncStatusStrip } from '../../ui/components/SyncStatusStrip'
+import { NavigationHeaderActionDispatcher } from './NavigationHeaderActionDispatcher'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
@@ -101,6 +105,9 @@ export struct PrimaryTabShell {
   // 这个纯粹是「手指按在按钮上时别让 Tabs 抢走滑动」），两者取与后传给 Tabs，互不覆盖。
   @State primaryTabGestureLocked: boolean = false
 
+  // Issue #940：唯一应用壳层宿主负责呈现跨路由同步状态与手动入口 Toast。
+  @State syncRunSnapshot: SyncRunSnapshot = SyncRunPresentationState.getInstance().snapshot()
+
   // Issue #768：API23+ 分流标志。true 时使用 HdsPrimaryTabsApi23，false 时使用普通 Tabs。
   @State useHdsTabs: boolean = false
 
@@ -117,6 +124,7 @@ export struct PrimaryTabShell {
   private adaptiveObserver: AdaptiveObserver | null = null
   private navChromeObserver: ((role: ScreenRole) => void) | null = null
   private gestureLockObserver: ((locked: boolean) => void) | null = null
+  private syncRunUnsubscribe: (() => void) | null = null
 
   aboutToAppear(): void {
     hilog.info(0x0000, 'PrimaryTabShell', 'aboutToAppear: stacks initialized with root routes')
@@ -179,6 +187,14 @@ export struct PrimaryTabShell {
       self.primaryTabGestureLocked = locked
     }
     PrimaryTabGestureLock.getInstance().subscribe(this.gestureLockObserver)
+
+    const syncState: SyncRunPresentationState = SyncRunPresentationState.getInstance()
+    this.syncRunSnapshot = syncState.snapshot()
+    this.syncRunUnsubscribe = syncState.subscribe((snapshot: SyncRunSnapshot): void => {
+      const previous: SyncRunSnapshot = self.syncRunSnapshot
+      self.syncRunSnapshot = snapshot
+      self.onSyncRunSnapshotChanged(previous, snapshot)
+    })
   }
 
   aboutToDisappear(): void {
@@ -194,6 +210,10 @@ export struct PrimaryTabShell {
     if (this.gestureLockObserver) {
       PrimaryTabGestureLock.getInstance().unsubscribe(this.gestureLockObserver)
     }
+    if (this.syncRunUnsubscribe !== null) {
+      this.syncRunUnsubscribe()
+      this.syncRunUnsubscribe = null
+    }
     // Issue #768 评论5835171266 第1项：PrimaryTabShell 始终注销三个栈，不再因 useHdsTabs 跳过。
     // Issue #767 评论5831949869 第1项：注销自己持有的三个栈。
     // 必须按实例相等再删，避免旧 Shell 的迟到 disappear 把新 Shell 已注册的 stack 删掉。
@@ -204,6 +224,30 @@ export struct PrimaryTabShell {
     // Issue #825 复核第3项：壳层销毁时如果还持有当前窗口的设置浮层，先关掉再摘 UIContext，
     // 否则 controller 会攥着一个已经失效的 UIContext，下个窗口 open() 直接失败。
     SettingsOverlayController.getInstance().detachUIContext(this.getUIContext())
+  }
+
+  private onSyncRunSnapshotChanged(previous: SyncRunSnapshot, next: SyncRunSnapshot): void {
+    if (next.phase === 'in_progress' && next.source === 'manual' && previous.phase !== 'in_progress') {
+      this.showSyncToast('同步开始…')
+      return
+    }
+    if (previous.phase === 'in_progress' && next.finishedAtMs !== null && next.source === 'manual' && next.outcome !== null) {
+      const context: Context = getContext(this)
+      this.showSyncToast(SyncOutcomePresenter.present(context, next.outcome))
+    }
+  }
+
+  private showSyncToast(message: string): void {
+    try {
+      // Toast 绑定当前壳层 UIContext，避免从脱离页面的异步回调猜窗口。
+      this.getUIContext().getPromptAction().showToast({ message: message })
+    } catch (_) {
+      // 页面切换/销毁边界不影响 Core 同步结果和状态条。
+    }
+  }
+
+  private openSyncSettings(): void {
+    NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Settings)
   }
 
   // 按平台动作表决定底栏显隐。
@@ -545,6 +589,14 @@ export struct PrimaryTabShell {
         this.WidePrimaryShell()
       } else {
         this.CompactPrimaryShell()
+      }
+      if (this.syncRunSnapshot.phase !== 'idle') {
+        SyncStatusStrip({
+          snapshot: this.syncRunSnapshot,
+          onOpenDetails: (): void => { this.openSyncSettings() }
+        })
+          .position({ x: 12, y: this.adaptiveState.safeTopVp + 8 })
+          .zIndex(20)
       }
     }
     .width('100%')

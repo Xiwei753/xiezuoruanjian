@@ -4,7 +4,7 @@
 // 复用 MessageKeyMapper 这一份映射表，不再各自维护中文错误字典。
 
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
-import { SyncOutcome } from './SyncOperationController'
+import { SyncOutcome } from './SyncRunTypes'
 
 export class SyncOutcomePresenter {
   /**
@@ -12,14 +12,39 @@ export class SyncOutcomePresenter {
    * @param context 资源管理器来源（UIAbilityContext 或页面 Context）。
    */
   static present(context: Context, outcome: SyncOutcome): string {
-    if (outcome.phase === 'success') {
-      const count: number = outcome.totalDownloaded ?? 0
-      const format: string = context.resourceManager.getStringSync($r('app.string.sync_complete_format').id)
-      return format.replace('%s', count.toString())
+    const uploaded: number = outcome.totalUploaded ?? 0
+    const downloaded: number = outcome.totalDownloaded ?? 0
+    const counts: string = `（上传 ${uploaded} 个文件，下载 ${downloaded} 个文件）`
+    const status: string = outcome.overallStatus ?? ''
+    const typedReason: string = this.typedReason(context, outcome)
+
+    if (status === 'no_changes') {
+      return `同步完成，没有文件变化${counts}`
     }
-    // 失败：优先使用 Core 的真实 messageKey，缺失时按 errorCategory 判定用户可读原因，
-    // 最后回退 errorCode。errorCategory 是 provider-neutral 分类（SyncErrorCategory 线格式码），
-    // MessageKeyMapper 已支持这些码到系统字符串资源的映射。
+    if (status === 'success' || status === 'latest_wins_applied' ||
+      (status.length === 0 && outcome.phase === 'success')) {
+      return `同步完成${counts}`
+    }
+    if (status === 'partial_conflict' || status === 'conflict') {
+      const conflictCount: number = outcome.totalConflicts ?? 0
+      const conflictText: string = conflictCount > 0 ? `，${conflictCount} 处冲突` : '，存在冲突'
+      return `部分同步完成${conflictText}${counts}`
+    }
+    if (status === 'recoverable_error') {
+      return `同步遇到可恢复错误${counts}${typedReason.length > 0 ? `：${typedReason}` : ''}`
+    }
+    if (status === 'fatal_error' || status === 'error') {
+      return `同步失败${counts}${typedReason.length > 0 ? `：${typedReason}` : ''}`
+    }
+
+    if (outcome.phase === 'success') {
+      return `同步完成${counts}`
+    }
+    return `同步失败${counts}${typedReason.length > 0 ? `：${typedReason}` : ''}`
+  }
+
+  /** 仅使用类型化字段；rawError/message 可能包含 URL、凭据或远端原文，不展示给用户。 */
+  private static typedReason(context: Context, outcome: SyncOutcome): string {
     if (outcome.messageKey !== undefined && outcome.messageKey.trim().length > 0) {
       return MessageKeyMapper.resolveMessage(context, outcome.messageKey, outcome.messageArgs, outcome.errorCode)
     }
@@ -31,7 +56,9 @@ export class SyncOutcomePresenter {
         return categoryMessage
       }
     }
-    // errorCategory 未命中或缺失：按 errorCode 回退
-    return MessageKeyMapper.resolveMessage(context, undefined, undefined, outcome.errorCode)
+    if (outcome.errorCode !== undefined && outcome.errorCode.trim().length > 0) {
+      return MessageKeyMapper.resolveMessage(context, undefined, undefined, outcome.errorCode)
+    }
+    return ''
   }
 }

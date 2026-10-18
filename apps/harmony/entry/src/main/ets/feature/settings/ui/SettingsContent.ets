@@ -14,15 +14,17 @@
 import { promptAction, ComponentContent } from '@kit.ArkUI'
 import hilog from '@ohos.hilog'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
-import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
+import { FullSyncState, SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
+import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
+import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ColorSource } from '../../../ui/theme/HarmonyThemeAdapter'
 import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 import { SyncOutcomePresenter } from '../presentation/SyncOutcomePresenter'
-import { SyncOutcome } from '../presentation/SyncOperationController'
-import { SyncMessagePayload } from '../presentation/SyncMessagePayload'
+import { SyncOutcome } from '../presentation/SyncRunTypes'
+import { SyncRunPresentationState, SyncRunSnapshot } from '../presentation/SyncRunPresentationState'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { SyncConflictViewModel } from '../presentation/SyncConflictViewModel'
 import { createSyncConflictsPanelContent, SyncConflictsPanelArgs } from './SyncConflictsPanel'
@@ -81,10 +83,18 @@ export struct SettingsContent {
   @Local copyMessage: string = ''
   // Issue #926：冲突面板回传的剩余冲突数；-1 表示本次会话还没从 Core 拉取过。
   @Local conflictRemaining: number = -1
+  // 同步运行态由 Controller 的共享 Store 提供，不再由设置页 ViewModel 保存副本。
+  @Local syncRunSnapshot: SyncRunSnapshot = SyncRunPresentationState.getInstance().snapshot()
+  // Core 持久化的最近一次全量同步事务状态；null 表示 Core 尚无记录。
+  @Local fullSyncState: FullSyncState | null = null
+  @Local fullSyncStateReadError: string = ''
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
+  private syncRunPresentation: SyncRunPresentationState = SyncRunPresentationState.getInstance()
+  private unsubscribeSyncRun: (() => void) | null = null
+  private syncStateBridge: NativeSyncBridge = new NativeSyncBridge(new NativeCoreModule())
   // Issue #926：冲突面板（窗口层级对话框）句柄。
   private conflictsPanelContent: ComponentContent<SyncConflictsPanelArgs> | null = null
   // Issue #926：入口计数探针——同步结果带冲突时从 Core 全局列表取剩余冲突数，
@@ -105,11 +115,20 @@ export struct SettingsContent {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
 
-    // 加载数据 — ViewModel 内部管理 async 和状态
-    this.viewModel.loadData()
+    // 页面展示始终订阅共享运行态，状态条不依赖“同步”折叠分类是否展开。
+    this.syncRunSnapshot = this.syncRunPresentation.snapshot()
+    this.unsubscribeSyncRun = this.syncRunPresentation.subscribe((snapshot: SyncRunSnapshot): void => {
+      const previousPhase: string = this.syncRunSnapshot.phase
+      this.syncRunSnapshot = snapshot
+      if (previousPhase === 'in_progress' && this.syncRunSnapshot.phase !== 'in_progress') {
+        void this.refreshFullSyncState()
+      }
+    })
 
-    // Issue #926：顶栏同步等不经 SettingsViewModel 的入口不会写 syncMessage，
-    // 打开设置页时直接从 Core 全局冲突列表取一次真实剩余数，冲突入口据此显示。
+    // 先让设置页沿用既有 Core 读取路径完成加载，再读取 Core 的持久化同步状态。
+    void this.loadSettingsAndSyncState()
+
+    // Issue #926：打开设置页时从 Core 全局冲突列表取一次真实剩余数，冲突入口据此显示。
     void this.refreshConflictProbe()
   }
 
@@ -120,8 +139,102 @@ export struct SettingsContent {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+    if (this.unsubscribeSyncRun !== null) {
+      this.unsubscribeSyncRun()
+      this.unsubscribeSyncRun = null
+    }
     // Issue #926：页面销毁时收起还开着的冲突面板（释放由 onDidDisappear 统一回收）。
     this.closeConflictsPanel()
+  }
+
+  private async loadSettingsAndSyncState(): Promise<void> {
+    await this.viewModel.loadData()
+    await this.refreshFullSyncState()
+  }
+
+  private async refreshFullSyncState(): Promise<void> {
+    try {
+      const result = await this.syncStateBridge.loadFullSyncState()
+      if (!result.success) {
+        this.fullSyncState = null
+        this.fullSyncStateReadError = result.errorCode ?? 'UNKNOWN'
+        return
+      }
+      this.fullSyncState = result.data ?? null
+      this.fullSyncStateReadError = ''
+    } catch (_e) {
+      this.fullSyncState = null
+      this.fullSyncStateReadError = 'NATIVE_ERROR'
+    }
+  }
+
+  private formatSyncStateTime(epoch: number | null): string {
+    if (epoch === null) {
+      return '暂无'
+    }
+    // Core 当前以 Unix 秒传输；阈值兼容可能直接提供毫秒的未来版本。
+    const epochMs: number = epoch < 100000000000 ? epoch * 1000 : epoch
+    return new Date(epochMs).toLocaleString()
+  }
+
+  private fullSyncStatusText(): string {
+    if (this.fullSyncStateReadError.length > 0) {
+      return `同步状态读取失败（${this.fullSyncStateReadError}）`
+    }
+    const state: FullSyncState | null = this.fullSyncState
+    if (state === null) {
+      return 'Core 尚无同步记录'
+    }
+    return `同步状态：${state.overall_status}`
+  }
+
+  private fullSyncFailedTargetsText(): string {
+    if (this.fullSyncStateReadError.length > 0) {
+      return '失败目标：读取失败'
+    }
+    const state: FullSyncState | null = this.fullSyncState
+    if (state === null) {
+      return '失败目标：暂无记录'
+    }
+    return `失败目标：${state.failed_targets.length > 0 ? state.failed_targets.join('、') : '无'}`
+  }
+
+  private fullSyncAttemptTimeText(): string {
+    if (this.fullSyncStateReadError.length > 0) {
+      return '最近尝试：读取失败'
+    }
+    return `最近尝试：${this.formatSyncStateTime(this.fullSyncState?.last_attempt_time ?? null)}`
+  }
+
+  private fullSyncSuccessTimeText(): string {
+    if (this.fullSyncStateReadError.length > 0) {
+      return '最近成功：读取失败'
+    }
+    return `最近成功：${this.formatSyncStateTime(this.fullSyncState?.last_success_time ?? null)}`
+  }
+
+  @Builder
+  SyncStatusSummary() {
+    Column({ space: 4 }) {
+      if (this.syncRunSnapshot.phase === 'in_progress') {
+        Text(this.syncRunSnapshot.source === 'auto' ? '正在自动同步…' : '正在同步…')
+          .fontSize(13)
+      } else if (this.syncRunSnapshot.outcome !== null) {
+        Text(SyncOutcomePresenter.present(getContext(this), this.syncRunSnapshot.outcome))
+          .fontSize(13)
+      }
+      Text(this.fullSyncStatusText())
+        .fontSize(12)
+      Text(this.fullSyncAttemptTimeText())
+        .fontSize(12)
+      Text(this.fullSyncSuccessTimeText())
+        .fontSize(12)
+      Text(this.fullSyncFailedTargetsText())
+        .fontSize(12)
+    }
+    .width('100%')
+    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 8 })
+    .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
   }
 
   // ── 搜索过滤设置项（窄屏搜索用） ──
@@ -191,76 +304,23 @@ export struct SettingsContent {
     return ''
   }
 
-  // ── 同步后的消息解析 ──
-  // 把解析出的 SyncOutcome/统一展示数据交给 SyncOutcomePresenter.present，
-  // 使顶栏 Toast 与设置页显示完全一致的结果，复用同一份 MessageKeyMapper 映射。
-  private resolveSyncMessage(): string {
-    const msg = this.viewModel.syncMessage
-    if (!msg || msg.length === 0) {
-      return ''
-    }
-
-    // 解析 ViewModel 传递的 JSON 载荷
-    try {
-      const payload: SyncMessagePayload = JSON.parse(msg) as SyncMessagePayload
-      // 构造 SyncOutcome，交给 SyncOutcomePresenter 统一展示
-      const outcome: SyncOutcome = {
-        phase: payload.phase,
-        message: '',
-        messageKey: payload.messageKey,
-        messageArgs: payload.messageArgs,
-        errorCategory: payload.errorCategory,
-        errorCode: payload.errorCode,
-        rawError: payload.rawError,
-        totalDownloaded: payload.totalDownloaded,
-        overallStatus: payload.overallStatus
-      }
-      return SyncOutcomePresenter.present(getContext(this), outcome)
-    } catch (_e) {
-      // 兼容旧格式：sync_complete:${n} 或 error:${code}
-      if (msg.startsWith('sync_complete:')) {
-        const count = msg.substring('sync_complete:'.length)
-        const format = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id)
-        return format.replace('%s', count)
-      } else if (msg.startsWith('error:')) {
-        const errorKey = msg.substring(6)
-        // 兼容旧的特殊 key：构造 SyncOutcome 走统一展示路径
-        const outcome: SyncOutcome = {
-          phase: 'failed',
-          message: '',
-          messageKey: undefined,
-          messageArgs: undefined,
-          errorCategory: undefined,
-          errorCode: errorKey,
-          rawError: msg
-        }
-        return SyncOutcomePresenter.present(getContext(this), outcome)
-      }
-    }
-    return ''
-  }
-
   // ════════════════════════════════════════════
   // Issue #926：同步冲突入口与面板
   // ════════════════════════════════════════════
 
   // 当前同步结果指示的冲突数；-1 表示结果里没有冲突指示。
-  // 只从 ViewModel 的同步消息载荷读取，不在这里触发任何 Core 调用。
-  private syncPayloadConflictCount(): number {
-    const msg = this.viewModel.syncMessage
-    if (msg.length === 0) {
+  // 只从 Controller 共享运行态读取，不在这里触发任何 Core 调用。
+  private syncOutcomeConflictCount(): number {
+    const outcome: SyncOutcome | null = this.syncRunSnapshot.outcome
+    if (outcome === null) {
       return -1
     }
-    try {
-      const payload: SyncMessagePayload = JSON.parse(msg) as SyncMessagePayload
-      if (payload.errorCode === 'SYNC_CONFLICT') {
-        return payload.totalConflicts ?? 0
-      }
-      const total: number = payload.totalConflicts ?? 0
-      return total > 0 ? total : -1
-    } catch (_e) {
-      return -1
+    const total: number = outcome.totalConflicts ?? 0
+    if (outcome.errorCode === 'SYNC_CONFLICT' || outcome.overallStatus === 'conflict' ||
+      outcome.overallStatus === 'partial_conflict') {
+      return total
     }
+    return total > 0 ? total : -1
   }
 
   // 冲突入口可见性：
@@ -270,7 +330,7 @@ export struct SettingsContent {
     if (this.conflictRemaining >= 0) {
       return this.conflictRemaining > 0
     }
-    return this.syncPayloadConflictCount() >= 0
+    return this.syncOutcomeConflictCount() >= 0
   }
 
   // 入口计数优先用面板从 Core 拉取的真实剩余数（解决后立即刷新），
@@ -279,8 +339,8 @@ export struct SettingsContent {
     if (this.conflictRemaining >= 0) {
       return this.conflictRemaining
     }
-    const payloadCount: number = this.syncPayloadConflictCount()
-    return payloadCount > 0 ? payloadCount : 0
+    const outcomeCount: number = this.syncOutcomeConflictCount()
+    return outcomeCount > 0 ? outcomeCount : 0
   }
 
   private conflictEntryLabel(): string {
@@ -297,10 +357,11 @@ export struct SettingsContent {
   private async requestSync(): Promise<void> {
     this.conflictRemaining = -1
     await this.viewModel.performSync()
-    // 同步结果指示冲突时，用 Core 全局冲突列表的真实剩余数刷新入口计数。
-    if (this.syncPayloadConflictCount() >= 0) {
+    // Controller 的共享运行态指示冲突时，用 Core 全局冲突列表的真实剩余数刷新入口计数。
+    if (this.syncOutcomeConflictCount() >= 0) {
       await this.refreshConflictProbe()
     }
+    await this.refreshFullSyncState()
   }
 
   // 从 Core 全局冲突列表取真实剩余数；拉取失败保持旧值（-1 时退回同步结果判断）。
@@ -377,6 +438,9 @@ export struct SettingsContent {
       } else {
         this.CompactSettingsHeader()
       }
+
+      // 全量同步摘要位于根内容区，不随“同步”分类折叠或搜索过滤。
+      this.SyncStatusSummary()
 
       if (this.viewModel.isLoading) {
         // Issue #932：加载中状态复用公共 CompactPageState，不再自绘 LoadingProgress。
@@ -848,16 +912,6 @@ export struct SettingsContent {
   @Builder
   SyncContent() {
     Column() {
-      // 同步状态提示
-      if (this.viewModel.syncMessage) {
-        Row() {
-          Text(this.resolveSyncMessage())
-            .fontSize(12)
-        }
-        .width('100%')
-        .margin({ bottom: 12 })
-      }
-
       // 启用同步
       Row() {
         Text($r('app.string.enable_sync'))
@@ -997,7 +1051,7 @@ export struct SettingsContent {
         Row({ space: 12 }) {
           this.SettingsInlineAction($r('app.string.sync_section'),
             () => this.requestSync(),
-            !this.viewModel.isSyncing)
+            this.syncRunSnapshot.phase !== 'in_progress')
 
           this.SettingsInlineAction($r('app.string.diagnose'),
             () => this.viewModel.runSyncDiagnostics(),

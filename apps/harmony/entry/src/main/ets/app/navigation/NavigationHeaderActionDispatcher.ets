@@ -5,14 +5,11 @@
 // Issue #784 评论 5856805657：同步行为由全局 dispatcher 持有，不再各页面各写一份。
 
 import hilog from '@ohos.hilog'
-import promptAction from '@ohos.promptAction'
 import { ActionRole } from './ScreenSemantics'
 import { Routes } from './Routes'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
-import { SyncOperationController, SyncOutcome } from '../../feature/settings/presentation/SyncOperationController'
-import { SyncOutcomePresenter } from '../../feature/settings/presentation/SyncOutcomePresenter'
+import { SyncOperationController } from '../../feature/settings/presentation/SyncOperationController'
 import { SettingsOverlayController } from '../../feature/settings/presentation/SettingsOverlayController'
-import { getAppContext } from '../AppContext'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 
 const TAG = 'NavigationHeaderActionDispatcher'
@@ -45,44 +42,7 @@ export class NavigationHeaderActionDispatcher {
 
   /** 同步 — 使用 SyncOperationController 共用同步事务 */
   private handleSync(): void {
-    const controller = SyncOperationController.getInstance()
-    if (controller.isSyncing()) {
-      hilog.info(DOMAIN, TAG, 'sync already in progress')
-      promptAction.showToast({ message: '同步正在进行中…' })
-      return
-    }
-    promptAction.showToast({ message: '同步开始…' })
-    controller.performSync().then((outcome: SyncOutcome) => {
-      // Issue #906：同步完成只记非敏感状态字段，绝不记 rawError（可能含 URL/Token）。
-      const finishedFields: DiagnosticField[] = [
-        { key: 'phase', value: String(outcome.phase) },
-        { key: 'overallStatus', value: String(outcome.overallStatus ?? '') },
-        { key: 'errorCode', value: String(outcome.errorCode ?? '') },
-        { key: 'totalDownloaded', value: String(outcome.totalDownloaded ?? 0) }
-      ]
-      HarmonyDiagnosticEvents.record('Info', 'App', 'sync.finished', 'NavigationHeaderActionDispatcher', finishedFields)
-      // 顶栏与设置页共用同一展示映射（MessageKeyMapper），不各自维护中文错误字典。
-      const context = getAppContext().getAbilityContext()
-      const message: string = context !== null
-        ? SyncOutcomePresenter.present(context, outcome)
-        : outcome.message
-      if (outcome.phase === 'success') {
-        hilog.info(DOMAIN, TAG, 'sync success: %{public}s', outcome.message)
-        promptAction.showToast({ message: message })
-      } else {
-        // Issue #906：HiLog 只记稳定状态码，不记 rawError/message（可能含 URL/Token/正文）。
-        hilog.error(DOMAIN, TAG, 'sync failed: phase=%{public}s errorCode=%{public}s',
-          String(outcome.phase), String(outcome.errorCode ?? ''))
-        promptAction.showToast({ message: message })
-      }
-    }).catch((e: Error) => {
-      // Issue #906：异常只记非敏感分类（e.name），不记 e.message / String(e)（可能含 URL/Token）。
-      const exceptionField: DiagnosticField = { key: 'errorType', value: e.name }
-      HarmonyDiagnosticEvents.record('Error', 'App', 'sync.exception', 'NavigationHeaderActionDispatcher', [exceptionField])
-      // Issue #906：异常只记分类（e.name），不记 String(e)（可能含 URL/Token）。
-      hilog.error(DOMAIN, TAG, 'sync exception: %{public}s', e.name)
-      promptAction.showToast({ message: `同步异常: ${e}` })
-    })
+    void SyncOperationController.getInstance().performSync('manual')
   }
 
   /** 设置 — 宽屏开模态浮层，窄屏进 Routes.Settings 路由页 */

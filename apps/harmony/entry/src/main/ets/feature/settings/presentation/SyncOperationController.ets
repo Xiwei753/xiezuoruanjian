@@ -11,6 +11,9 @@ import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
 import { NetworkStatusService, NetworkSnapshot } from '../../../platform/network/NetworkStatusService'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../../../platform/diagnostics/HarmonyDiagnosticEvents'
+import { SyncOutcome } from './SyncRunTypes'
+import { SyncEntrySource, SyncRunPresentationState } from './SyncRunPresentationState'
 import {
   ActiveWritingSessionRegistry,
   SyncPreflightError,
@@ -23,24 +26,6 @@ export const SYNC_CONTENT_CHANGED_EVENT_ID: number = 1001
 
 const TAG = 'SyncOperationController'
 const DOMAIN = 0x0000
-
-export type SyncPhase = 'idle' | 'in_progress' | 'success' | 'failed'
-
-export interface SyncOutcome {
-  phase: SyncPhase
-  message: string
-  // Core 类型化错误字段——直接透传，不做手写映射
-  messageKey?: string
-  messageArgs?: Record<string, string>
-  errorCategory?: string
-  errorCode?: string
-  rawError?: string
-  totalDownloaded?: number
-  totalUploaded?: number
-  // 本次同步涉及的冲突总数（Core FullSyncResult.totalConflicts）；冲突结果带出给设置页入口用。
-  totalConflicts?: number
-  overallStatus?: string
-}
 
 export class SyncOperationController {
   private static instance: SyncOperationController
@@ -63,18 +48,75 @@ export class SyncOperationController {
     return this.currentOperation !== null
   }
 
-  /** 执行同步 — 一次只运行一个事务 */
-  async performSync(): Promise<SyncOutcome> {
+  /** 执行同步 — 一次只运行一个事务；开始快照先于保存屏障和 NAPI。 */
+  performSync(source: SyncEntrySource = 'manual'): Promise<SyncOutcome> {
     if (this.currentOperation !== null) {
       hilog.warn(DOMAIN, TAG, 'sync already in progress, waiting for existing operation')
       return this.currentOperation
     }
-    this.currentOperation = this.executeSync()
-    try {
-      return await this.currentOperation
-    } finally {
-      this.currentOperation = null
-    }
+    const startedAtMs: number = Date.now()
+    const state: SyncRunPresentationState = SyncRunPresentationState.getInstance()
+    let resolveTrackedOperation: ((outcome: SyncOutcome) => void) | null = null
+    const trackedOperation: Promise<SyncOutcome> = new Promise<SyncOutcome>((resolve: (outcome: SyncOutcome) => void) => {
+      resolveTrackedOperation = resolve
+    })
+    this.currentOperation = trackedOperation
+    state.begin(source)
+    this.recordSyncStarted(source)
+
+    const execution: Promise<SyncOutcome> = this.executeSync().catch((e: Error): SyncOutcome => {
+      // executeSync 已覆盖预检和 NAPI 路径；这里兜住完成通知等外围意外，仍产出唯一终态。
+      const errorType: string = e instanceof Error ? e.name : 'Unknown'
+      hilog.error(DOMAIN, TAG, 'performSync: unhandled operation error: errorType=%{public}s', errorType)
+      return { phase: 'failed', message: '同步异常', errorCode: 'NATIVE_ERROR' }
+    })
+    execution.then((outcome: SyncOutcome): void => {
+      try {
+        try {
+          state.finish(outcome)
+        } catch (_) {
+          hilog.error(DOMAIN, TAG, 'performSync: failed to publish terminal snapshot')
+        }
+        try {
+          this.recordSyncFinished(source, startedAtMs, outcome)
+        } catch (_) {
+          hilog.error(DOMAIN, TAG, 'performSync: failed to record terminal event')
+        }
+      } finally {
+        if (this.currentOperation === trackedOperation) {
+          this.currentOperation = null
+        }
+        if (resolveTrackedOperation !== null) {
+          resolveTrackedOperation(outcome)
+        }
+      }
+    })
+    return trackedOperation
+  }
+
+  private recordSyncStarted(source: SyncEntrySource): void {
+    const fields: DiagnosticField[] = [
+      { key: 'source', value: source },
+      { key: 'phase', value: 'in_progress' },
+      { key: 'overallStatus', value: '' },
+      { key: 'errorCode', value: '' },
+      { key: 'durationMs', value: '0' }
+    ]
+    HarmonyDiagnosticEvents.record('Info', source === 'manual' ? 'User' : 'App',
+      'sync.started', 'SyncOperationController', fields)
+  }
+
+  private recordSyncFinished(source: SyncEntrySource, startedAtMs: number, outcome: SyncOutcome): void {
+    const fields: DiagnosticField[] = [
+      { key: 'source', value: source },
+      { key: 'phase', value: outcome.phase },
+      { key: 'overallStatus', value: outcome.overallStatus ?? '' },
+      { key: 'errorCode', value: outcome.errorCode ?? '' },
+      { key: 'durationMs', value: String(Math.max(0, Date.now() - startedAtMs)) }
+    ]
+    const level = outcome.phase === 'success' ? 'Info' : 'Warn'
+    HarmonyDiagnosticEvents.record(level, source === 'manual' ? 'User' : 'App',
+      'sync.finished', 'SyncOperationController', fields)
   }
 
   // Issue #923：同步是一个统一事务——活跃章节保存屏障 → 网络状态刷新 → Core 全量同步
@@ -131,6 +173,8 @@ export class SyncOperationController {
               message: '同步已改动本地内容，但当前写作会话存在未提交内容，需要先处理',
               messageKey: 'sync.result.conflict_summary',
               errorCode: 'SYNC_CONFLICT',
+              totalDownloaded: syncResult.totalDownloaded,
+              totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts,
               overallStatus: syncResult.overallStatus
             }
@@ -155,6 +199,8 @@ export class SyncOperationController {
               message: '同步冲突，需要手动解决',
               messageKey: 'sync.result.conflict_summary',
               errorCode: 'SYNC_CONFLICT',
+              totalDownloaded: syncResult.totalDownloaded,
+              totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts,
               overallStatus: status
             }
@@ -180,19 +226,34 @@ export class SyncOperationController {
               errorCategory: errorCategory.length > 0 ? errorCategory : undefined,
               errorCode: errorCategory.length > 0 ? errorCategory : 'SYNC_ERROR',
               rawError: errorMsg.length > 0 ? errorMsg : undefined,
+              totalDownloaded: syncResult.totalDownloaded,
+              totalUploaded: syncResult.totalUploaded,
+              totalConflicts: syncResult.totalConflicts,
               overallStatus: status
             }
           }
           if (status === 'syncing') {
-            return { phase: 'failed', message: '同步仍在进行中（状态异常）', errorCode: 'SYNC_STATE_ERROR', overallStatus: status }
+            return {
+              phase: 'failed', message: '同步仍在进行中（状态异常）', errorCode: 'SYNC_STATE_ERROR',
+              totalDownloaded: syncResult.totalDownloaded, totalUploaded: syncResult.totalUploaded,
+              totalConflicts: syncResult.totalConflicts, overallStatus: status
+            }
           }
           if (status === 'idle' || status === 'configured_not_tested') {
-            return { phase: 'failed', message: '同步未执行（状态异常）', errorCode: 'SYNC_STATE_ERROR', overallStatus: status }
+            return {
+              phase: 'failed', message: '同步未执行（状态异常）', errorCode: 'SYNC_STATE_ERROR',
+              totalDownloaded: syncResult.totalDownloaded, totalUploaded: syncResult.totalUploaded,
+              totalConflicts: syncResult.totalConflicts, overallStatus: status
+            }
           }
 
           // 未知值是协议错误
           hilog.error(DOMAIN, TAG, 'performSync: unknown overallStatus=%{public}s', status)
-          return { phase: 'failed', message: `未知的同步状态: ${status}`, errorCode: 'SCHEMA_MISMATCH', overallStatus: status }
+          return {
+            phase: 'failed', message: `未知的同步状态: ${status}`, errorCode: 'SCHEMA_MISMATCH',
+            totalDownloaded: syncResult.totalDownloaded, totalUploaded: syncResult.totalUploaded,
+            totalConflicts: syncResult.totalConflicts, overallStatus: status
+          }
         }
       )
     } catch (e) {

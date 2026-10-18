@@ -18,9 +18,12 @@ import fs from '@ohos.file.fs'
 import bundleManager from '@ohos.bundle.bundleManager'
 
 import { IWriterCoreBridge } from '../../corebridge/IWriterCoreBridge'
+import { FullSyncState } from '../../corebridge/dto/SyncDtos'
 import { NativeCoreModule } from '../../corebridge/native/NativeCoreModule'
 import { NativeDiagnosticsBridge } from '../../corebridge/native/NativeDiagnosticsBridge'
+import { NativeSyncBridge } from '../../corebridge/native/NativeSyncBridge'
 import { NativeWriterCoreBridge } from '../../corebridge/NativeWriterCoreBridge'
+import { SyncRunPresentationState } from '../../feature/settings/presentation/SyncRunPresentationState'
 import { HarmonyShareService } from '../share/HarmonyShareService'
 import { SharePayload } from '../share/SharePayload'
 import { DeviceInfoSnapshot, getDeviceInfoSnapshot } from '../device/DeviceInfoSnapshot'
@@ -58,12 +61,21 @@ interface AppSettingsAttachment {
   diagnosticsVerbose: boolean
 }
 
-// sync_state_sanitized.json 附件 DTO。
+// sync_state_sanitized.json — App target 局部状态，不代表全量同步。
 interface SyncStateAttachment {
+  scope: 'app_target_local'
   status: string | null
   lastSyncTime: number | null
   lastError: string | null
   conflictCount: number
+}
+
+// full_sync_state_sanitized.json 附件 DTO。Core 从未持久化时，各值为空。
+interface FullSyncStateAttachment {
+  overall_status: string | null
+  last_attempt_time: number | null
+  last_success_time: number | null
+  failed_targets: string[]
 }
 
 // build_identity.json 附件 DTO。
@@ -85,6 +97,8 @@ const ATTACHMENT_HILOG = 'hilog.txt'
 const ATTACHMENT_HILOG_CAPTURE_STATS = 'hilog_capture_stats.json'
 const ATTACHMENT_APP_SETTINGS = 'app_settings_sanitized.json'
 const ATTACHMENT_SYNC_STATE = 'sync_state_sanitized.json'
+const ATTACHMENT_FULL_SYNC_STATE = 'full_sync_state_sanitized.json'
+const ATTACHMENT_SYNC_OPERATION_RUNTIME = 'sync_operation_runtime.json'
 const ATTACHMENT_CURRENT_DEVICE = 'current_device.json'
 const ATTACHMENT_BUILD_IDENTITY = 'build_identity.json'
 const ATTACHMENT_THEME_RUNTIME = 'theme_runtime_sanitized.json'
@@ -94,12 +108,15 @@ const ATTACHMENT_EDITOR_RUNTIME = 'editor_runtime_sanitized.json'
 export class HarmonyDiagnosticsExporter {
   private bridge: IWriterCoreBridge
   private diagnosticsBridge: NativeDiagnosticsBridge
+  private syncBridge: NativeSyncBridge
   private abilityContext: common.UIAbilityContext | null = null
 
   constructor() {
     this.bridge = NativeWriterCoreBridge.getInstance()
-    // NativeCoreModule 只是 NAPI 入口的薄封装，创建多个实例安全（都指向同一个 .so）。
-    this.diagnosticsBridge = new NativeDiagnosticsBridge(new NativeCoreModule())
+    // NativeCoreModule 只是 NAPI 入口的薄封装，可供不同领域 Bridge 复用。
+    const coreModule = new NativeCoreModule()
+    this.diagnosticsBridge = new NativeDiagnosticsBridge(coreModule)
+    this.syncBridge = new NativeSyncBridge(coreModule)
   }
 
   // 注入 UIAbilityContext — 由 AppContext 或 SettingsViewModel 调用。
@@ -281,11 +298,17 @@ export class HarmonyDiagnosticsExporter {
     // hilog_capture_stats.json — HiLog 采集统计，解释 hilog.txt 是否为空。
     this.addHilogCaptureStatsAttachment(attachments)
 
+    // Capture the process-local run state before any asynchronous attachment reads.
+    this.addSyncOperationRuntimeAttachment(attachments)
+
     // app_settings_sanitized.json
     await this.addAppSettingsAttachment(attachments)
 
     // sync_state_sanitized.json
     await this.addSyncStateAttachment(attachments)
+
+    // full_sync_state_sanitized.json — the last persisted whole-sync result.
+    await this.addFullSyncStateAttachment(attachments)
 
     // current_device.json
     this.addCurrentDeviceAttachment(attachments)
@@ -372,13 +395,14 @@ export class HarmonyDiagnosticsExporter {
     }
   }
 
-  // sync_state_sanitized.json — 同步状态（脱敏由 Rust 层处理）。
+  // sync_state_sanitized.json — App target 局部状态（脱敏由 Rust 层处理）。
   private async addSyncStateAttachment(attachments: AttachmentItem[]): Promise<void> {
     try {
       const result = await this.bridge.loadAppSyncState()
       if (result.success && result.data !== undefined && result.data !== null) {
         const state = result.data
         const sanitized: SyncStateAttachment = {
+          scope: 'app_target_local',
           status: state.status ?? null,
           lastSyncTime: state.lastSyncTime ?? null,
           lastError: state.lastError ?? null,
@@ -392,6 +416,55 @@ export class HarmonyDiagnosticsExporter {
       }
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_SYNC_STATE, String(e)))
+    }
+  }
+
+  // full_sync_state_sanitized.json — 仅导出 Core 持久化的整轮同步终态字段。
+  private async addFullSyncStateAttachment(attachments: AttachmentItem[]): Promise<void> {
+    try {
+      const result = await this.syncBridge.loadFullSyncState()
+      if (!result.success) {
+        attachments.push(this.errorAttachment(ATTACHMENT_FULL_SYNC_STATE,
+          result.errorCode ?? 'loadFullSyncState failed'))
+        return
+      }
+
+      const state: FullSyncState | null = result.data ?? null
+      const sanitized: FullSyncStateAttachment = {
+        overall_status: state?.overall_status ?? null,
+        last_attempt_time: state?.last_attempt_time ?? null,
+        last_success_time: state?.last_success_time ?? null,
+        failed_targets: state?.failed_targets ?? []
+      }
+      attachments.push(this.makeAttachment(
+        ATTACHMENT_FULL_SYNC_STATE,
+        JSON.stringify(sanitized, null, 2)
+      ))
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_FULL_SYNC_STATE,
+        e instanceof Error ? e.name : 'UNKNOWN_ERROR'))
+    }
+  }
+
+  // sync_operation_runtime.json — export only safe display state, never rawError or credentials.
+  private addSyncOperationRuntimeAttachment(attachments: AttachmentItem[]): void {
+    try {
+      const snapshot = SyncRunPresentationState.getInstance().snapshot()
+      const runtime = {
+        phase: snapshot.phase,
+        source: snapshot.source,
+        startedAtMs: snapshot.startedAtMs,
+        finishedAtMs: snapshot.finishedAtMs,
+        errorCode: snapshot.outcome?.errorCode ?? null,
+        overallStatus: snapshot.outcome?.overallStatus ?? null
+      }
+      attachments.push(this.makeAttachment(
+        ATTACHMENT_SYNC_OPERATION_RUNTIME,
+        JSON.stringify(runtime, null, 2)
+      ))
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_SYNC_OPERATION_RUNTIME,
+        e instanceof Error ? e.name : 'UNKNOWN_ERROR'))
     }
   }
 

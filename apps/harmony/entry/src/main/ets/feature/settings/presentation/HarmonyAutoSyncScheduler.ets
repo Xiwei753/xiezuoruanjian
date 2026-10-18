@@ -25,7 +25,8 @@ import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { HarmonyLifecycle, SyncLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { NetworkStatusService } from '../../../platform/network/NetworkStatusService'
-import { SyncOperationController, SyncOutcome } from './SyncOperationController'
+import { SyncOperationController } from './SyncOperationController'
+import { SyncOutcome } from './SyncRunTypes'
 
 const TAG = 'SyncScheduler'
 const DOMAIN = 0x0000
@@ -258,7 +259,7 @@ export class HarmonyAutoSyncScheduler {
       return
     }
     hilog.info(DOMAIN, TAG, 'runIfDue: due, entering performSync')
-    const outcome: SyncOutcome = await SyncOperationController.getInstance().performSync()
+    const outcome: SyncOutcome = await SyncOperationController.getInstance().performSync('auto')
     hilog.info(DOMAIN, TAG, 'runIfDue: sync finished, phase=%{public}s overallStatus=%{public}s',
       outcome.phase, outcome.overallStatus ?? 'unknown')
     // 同步结束（无论终态）后重读 Core：成功类由 Core 写入新的 last_success_time，
