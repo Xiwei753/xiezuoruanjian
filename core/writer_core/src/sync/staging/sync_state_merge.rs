@@ -19,12 +19,12 @@
 //!
 //! `manifest.sync.json` 不走本模块，继续按同步结果直接写回（由 `EngineState` 处理）。
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 use crate::error::Result;
 use crate::sync::conflict::load_conflicts_json;
-use crate::sync::types::{SyncConflict, SyncState};
+use crate::sync::types::{SyncConflict, SyncState, Tombstone};
 
 /// Three-way merge one group's LWW manifest. Membership is keyed by relative
 /// path; independent live changes survive, while concurrent records use the same
@@ -293,9 +293,19 @@ pub(crate) fn merge_sync_state_three_way_for_target(
         app_group,
     )?;
 
-    // tombstones / deleted_files：按 staging 同步结果合并（同步引擎管理的）。
-    let merged_tombstones = staging_state.tombstones.clone();
-    let merged_deleted_files = staging_state.deleted_files.clone();
+    // 三方合并删除事实。用户可能在 Transfer 后、Commit 前又删除了同组对象，
+    // 该新 tombstone 只存在于 live；同时 staging 可能已消费 base 中的旧墓碑。
+    // 按 stable membership 差分合并，避免丢新事实或复活已消费的事实。
+    let merged_tombstones = merge_tombstones_three_way(
+        &base_state.tombstones,
+        &live_state.tombstones,
+        &staging_state.tombstones,
+    );
+    let merged_deleted_files = merge_string_set_three_way(
+        &base_state.deleted_files,
+        &live_state.deleted_files,
+        &staging_state.deleted_files,
+    );
 
     // last_sync_time / last_error：用 staging 值（同步结果）。
     let merged_last_sync_time = staging_state.last_sync_time;
@@ -323,6 +333,117 @@ pub(crate) fn merge_sync_state_three_way_for_target(
     };
 
     Ok((merged_state, merged_conflicts_json))
+}
+
+/// Tombstone identity is the original path plus its durable trash path. Preserve
+/// independent delete facts for the same path, while applying three-way set
+/// semantics to additions/removals made after the base snapshot.
+fn merge_tombstones_three_way(
+    base: &[Tombstone],
+    live: &[Tombstone],
+    staging: &[Tombstone],
+) -> Vec<Tombstone> {
+    fn by_identity(items: &[Tombstone]) -> BTreeMap<(String, String), &Tombstone> {
+        let mut indexed = BTreeMap::new();
+        for item in items {
+            let key = (item.original_path.clone(), item.trash_path.clone());
+            indexed
+                .entry(key)
+                .and_modify(|existing: &mut &Tombstone| {
+                    if tombstone_order(item) > tombstone_order(existing) {
+                        *existing = item;
+                    }
+                })
+                .or_insert(item);
+        }
+        indexed
+    }
+
+    fn tombstone_order(tombstone: &Tombstone) -> (i64, &str) {
+        (tombstone.deleted_at, tombstone.deleted_by.as_str())
+    }
+
+    let base_by_id = by_identity(base);
+    let live_by_id = by_identity(live);
+    let staging_by_id = by_identity(staging);
+    let identities: BTreeSet<(String, String)> = base_by_id
+        .keys()
+        .chain(live_by_id.keys())
+        .chain(staging_by_id.keys())
+        .cloned()
+        .collect();
+
+    let mut merged = Vec::new();
+    for identity in identities {
+        let base_item = base_by_id.get(&identity).copied();
+        let live_item = live_by_id.get(&identity).copied();
+        let staging_item = staging_by_id.get(&identity).copied();
+        let base_has = base_item.is_some();
+        let live_has = live_item.is_some();
+        let staging_has = staging_item.is_some();
+
+        // A membership change in live is a concurrent local edit; otherwise use
+        // staging's transfer result. For bool membership, simultaneous changes
+        // from the same base necessarily agree.
+        let keep = if live_has != base_has {
+            live_has
+        } else {
+            staging_has
+        };
+        if !keep {
+            continue;
+        }
+
+        let selected = match (live_item, staging_item) {
+            (Some(live), Some(staging)) => {
+                if tombstone_order(staging) > tombstone_order(live) {
+                    staging
+                } else {
+                    live
+                }
+            }
+            (Some(live), None) => live,
+            (None, Some(staging)) => staging,
+            // A true result here would contradict the membership decision above.
+            (None, None) => continue,
+        };
+        merged.push(selected.clone());
+    }
+
+    // snapshot_local_records_read_only uses the first matching original_path.
+    // Keep the newest original deletion time/device first, matching LWW's
+    // timestamp then device-id ordering; trash_path makes ties deterministic.
+    merged.sort_by(|left, right| {
+        left.original_path
+            .cmp(&right.original_path)
+            .then_with(|| right.deleted_at.cmp(&left.deleted_at))
+            .then_with(|| right.deleted_by.cmp(&left.deleted_by))
+            .then_with(|| left.trash_path.cmp(&right.trash_path))
+    });
+    merged
+}
+
+fn merge_string_set_three_way(
+    base: &HashSet<String>,
+    live: &HashSet<String>,
+    staging: &HashSet<String>,
+) -> HashSet<String> {
+    let all_values: HashSet<&String> = base.iter().chain(live).chain(staging).collect();
+    let mut merged = HashSet::new();
+    for value in all_values {
+        let base_has = base.contains(value);
+        let live_has = live.contains(value);
+        let staging_has = staging.contains(value);
+        let keep = if live_has != base_has {
+            live_has
+        } else {
+            staging_has
+        };
+        if keep {
+            merged.insert(value.clone());
+        }
+    }
+    merged
 }
 
 /// device_id 三方合并：按"state.local.json 存在且 device_id 字段非空"选择，

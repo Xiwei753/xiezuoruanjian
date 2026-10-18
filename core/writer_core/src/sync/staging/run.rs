@@ -99,9 +99,9 @@ impl StagingRun {
         self.run_root.join(BASE_SUBDIR)
     }
 
-    /// 从 live 建 base snapshot：对每个 `rel_path`，把 `live_root/rel_path`
-    /// hard-link 到 `base/rel_path`；hard-link 失败（跨文件系统等）回退 copy。
-    /// live 文件不存在时跳过（base 也不留，表示该文件 Prepare 时不存在）。
+    /// 从 live 建 base snapshot：仅复制传入的 `rel_paths`，不扫描或复制整个数据目录。
+    /// App group 使用独立 inode，保证 base 是 Prepare 时冻结的快照；Project 保留
+    /// hard-link 优化。live 文件不存在时跳过（base 也不留，表示该文件 Prepare 时不存在）。
     pub fn build_base_snapshot_from_live(
         &self,
         live_root: &Path,
@@ -116,11 +116,7 @@ impl StagingRun {
             if let Some(parent) = base_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            // 能 hard-link 就 hard-link（同文件系统零拷贝、inode 共享）。
-            if fs::hard_link(&live_path, &base_path).is_err() {
-                // 回退 copy。
-                fs::copy(&live_path, &base_path)?;
-            }
+            self.copy_live_snapshot_file(&live_path, &base_path)?;
         }
         Ok(())
     }
@@ -128,8 +124,8 @@ impl StagingRun {
     /// 从 live 完整初始化 staging run。
     ///
     /// 1. 递归扫描 `live_root` 下所有文件（跳过 `.git/`、`full-sync-staging/`、
-    ///    `app-meta/transactions/`），把每个文件 hard-link/copy 到 `base/`；
-    /// 2. 把同一份文件也 hard-link/copy 到 `staging/`（Transfer 在这份克隆上执行）；
+    ///    `app-meta/transactions/`；App group 进一步按组筛选），把每个文件写入 `base/`；
+    /// 2. 把同一份文件也写入 `staging/`（Transfer 在这份克隆上执行）；
     /// 3. 把 live 的 sync state 和 manifest 复制到 `staging/`，让 LWW 在 staging 里
     ///    能读到 live 的 known_files / device_id / pending / conflict 状态，
     ///    不会重新生成设备身份。
@@ -166,9 +162,7 @@ impl StagingRun {
             if let Some(parent) = staging_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            if fs::hard_link(&live_path, &staging_path).is_err() {
-                fs::copy(&live_path, &staging_path)?;
-            }
+            self.copy_live_snapshot_file(&live_path, &staging_path)?;
         }
         if let Some(group) = &self.app_group {
             self.seed_legacy_group_state(live_root, group)?;
@@ -216,8 +210,27 @@ impl StagingRun {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
+            // Replace the run-local directory entry instead of truncating in place.
+            // This keeps live state untouched even if a future seed path reuses a
+            // hard-linked snapshot entry before applying the legacy-state migration.
+            match fs::symlink_metadata(&path) {
+                Ok(_) => fs::remove_file(&path)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
             fs::write(path, bytes)?;
         }
+        Ok(())
+    }
+
+    /// Copy selected live files into a run snapshot. App group base/staging files
+    /// must never share live inodes: Transfer and legacy-state seeding can rewrite
+    /// them before Commit. Project retains the previous hard-link fast path.
+    fn copy_live_snapshot_file(&self, live_path: &Path, snapshot_path: &Path) -> Result<()> {
+        if self.app_group.is_none() && fs::hard_link(live_path, snapshot_path).is_ok() {
+            return Ok(());
+        }
+        fs::copy(live_path, snapshot_path)?;
         Ok(())
     }
 
