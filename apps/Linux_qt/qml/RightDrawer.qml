@@ -28,6 +28,8 @@ Rectangle {
     property var appShadow: null
 
     property var editorBackendRef: null
+    // 校对面板只消费 WritingWorkspace 中同一个 EditorController。
+    property var editorControllerRef: null
     // Issue #835：星图预览所需后端与全局状态，由 WritingWorkspace 透传，
     // 再下发给 StarMapPreviewPage，不在 RightDrawer 内部自造星图数据。
     property var starmapBackendRef: null
@@ -38,7 +40,7 @@ Rectangle {
     property var appState: ({})
     property bool isOpen: false
     // Issue #829：当前工具 key（"" 表示 pane 收起）。
-    // 手稿固定入口是 starmap / ai；conflict 只在运行时确有冲突时追加。
+    // 手稿固定入口是 starmap / ai / correction；conflict 只在确有冲突时追加。
     // stats 旧内容仍保留给已有调用，不再作为宽屏 rail 的常驻入口。
     // 由 WritingWorkspace 单向注入，本组件不自己改。
     property string selectedTool: ""
@@ -70,6 +72,7 @@ Rectangle {
     function toolTitle(toolKey) {
         if (toolKey === "starmap") return qsTr("星图")
         if (toolKey === "ai") return qsTr("AI")
+        if (toolKey === "correction") return qsTr("校对")
         if (toolKey === "conflict") return qsTr("冲突")
         return qsTr("统计")
     }
@@ -176,6 +179,12 @@ Rectangle {
                         root.embeddedStarmapId = ""
                         root.embeddedStarmapTitle = ""
                     }
+                }
+
+                CorrectionPanel {
+                    visible: root.selectedTool === "correction"
+                    anchors.fill: parent
+                    editorControllerRef: root.editorControllerRef
                 }
 
                 // 统计 — 复用现有 StatsPreviewPage

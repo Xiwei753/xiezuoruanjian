@@ -60,7 +60,7 @@ Rectangle {
     property var tree: []
     // 左右 pane 的展开状态只是端侧 UI 状态（不进 Core、不进同步）。
     // 工具 pane 用「选中的工具 key」表达："" = 收起，非空 = 展开并显示该工具。
-    // Issue #829：手稿里的常驻入口是 starmap / ai；冲突只作为动态附加工具。
+    // Issue #829 / #950：手稿里的常驻入口是 starmap / ai / correction；冲突只作为动态附加工具。
     // 不再保留 drawerOpen + drawerTab 两份状态，避免第二套开关。
     // Issue #842 任务3：drawerTool 只表示当前工具选择，不再同时表达折叠状态。
     // rightPaneCollapsed 独立控制右栏折叠；drawerOpen 由 rightPaneCollapsed 派生。
@@ -190,6 +190,13 @@ Rectangle {
     // 先按本地最小宽度算一遍，放得下才整体提交；放不下就什么都不改，
     // 不留「已展开但看不见」的端侧状态，也没有中间态闪烁。
     function requestToolPaneOpen(toolKey, allowCollapseLeft) {
+        // SinglePane 使用覆盖式侧栏承载当前工具，不参与 SplitView 宽度预算。
+        if (root.singlePaneMode) {
+            if (toolKey !== "correction") return;
+            root.drawerTool = toolKey || "correction";
+            root.rightPaneCollapsed = false;
+            return;
+        }
         var targetLeftCollapsed = root.leftPaneCollapsed;
         var fits = root.workbenchFitsFor(!root.leftPaneCollapsed, true);
         if (!fits && allowCollapseLeft === true) {
@@ -818,7 +825,7 @@ Rectangle {
                                 icon.name: "go-previous"
                                 display: AbstractButton.IconOnly
                                 flat: true
-                                onClicked: root.requestToolPaneOpen("stats", true)
+                                onClicked: root.requestToolPaneOpen("correction", true)
                             }
                         }
                     }
@@ -851,6 +858,7 @@ Rectangle {
                 visible: root.multiPane && root.drawerOpen
                 dt: root.dt
                 editorBackendRef: root.editorBackendRef
+                editorControllerRef: editorController
                 isOpen: root.drawerOpen
                 selectedTool: root.drawerTool
                 // Issue #835：透传星图后端与 appState 给 RightDrawer（任务 4 已加属性）。
@@ -1156,6 +1164,88 @@ Rectangle {
             }
             onDeleteItemRequested: function(itemData) {
                 root.deleteItemRequested(itemData)
+            }
+        }
+    }
+
+    // Issue #950：SinglePane 沿用 drawerTool 和同一个 CorrectionPanel，
+    // 以覆盖式侧栏显示工具内容，不把校对入口放回正文。
+    Item {
+        id: singlePaneToolOverlay
+        anchors.fill: parent
+        visible: root.singlePaneMode && root.drawerOpen && root.drawerTool === "correction"
+        z: 61
+
+        Rectangle {
+            anchors.fill: parent
+            color: Kirigami.Theme.textColor
+            opacity: 0.4
+
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.closeToolPane()
+            }
+        }
+
+        Rectangle {
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.right: parent.right
+            width: Math.min(parent.width, 240)
+            color: Kirigami.Theme.alternateBackgroundColor
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
+
+                Item {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Kirigami.Units.gridUnit * 2.4
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: Kirigami.Units.smallSpacing
+                        anchors.rightMargin: Kirigami.Units.smallSpacing
+                        spacing: Kirigami.Units.smallSpacing
+
+                        PaneFoldButton {
+                            dt: root.dt
+                            Layout.alignment: Qt.AlignVCenter
+                            onTriggered: root.closeToolPane()
+                        }
+
+                        Label {
+                            text: qsTr("校对")
+                            color: Kirigami.Theme.textColor
+                            font.bold: true
+                            Layout.fillWidth: true
+                        }
+
+                        ToolButton {
+                            icon.name: "window-close"
+                            icon.width: Kirigami.Units.iconSizes.small
+                            icon.height: Kirigami.Units.iconSizes.small
+                            display: AbstractButton.IconOnly
+                            flat: true
+                            Layout.alignment: Qt.AlignVCenter
+                            onClicked: root.closeToolPane()
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    color: Kirigami.Theme.disabledTextColor
+                    opacity: 0.3
+                }
+
+                CorrectionPanel {
+                    visible: root.drawerOpen && root.drawerTool === "correction"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    editorControllerRef: editorController
+                }
             }
         }
     }

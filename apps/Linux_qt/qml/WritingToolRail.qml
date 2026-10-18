@@ -7,7 +7,7 @@
 // 约束（Issue #825）：
 //   - 工具内容在 WritingWorkspace 里的 RightDrawer（ToolPane），rail 不持有内容状态；
 //   - 顶部工具条带的 ToolbarTrailing 同步 / 搜索 / 设置不搬到这里；
-//   - Issue #829：手稿把最右 rail 固定为“星图 / AI”；冲突只在确有冲突时追加；
+//   - Issue #829：手稿把最右 rail 固定为“星图 / AI / 校对”；冲突只在确有冲突时追加；
 //   - 只发信号，由 WritingWorkspace 单向写 selectedTool，避免双向写 binding。
 //
 // Issue #900：自绘 Rectangle 工具项换成 Breeze Controls.ItemDelegate
@@ -34,8 +34,8 @@ Rectangle {
     // 由 WritingWorkspace 绑定到 rightPaneCollapsed 的反值，与工具选择解耦。
     property bool toolPaneOpen: false
 
-    // Issue #829：右侧工具 rail 的空间骨架按手稿固定。
-    // 星图始终占这个入口；真实内容在 RightDrawer 里接，不再改 rail 结构。
+    // Issue #829 / #950：右侧工具 rail 的空间骨架按手稿固定。
+    // 星图、校对的真实内容在 RightDrawer 里接，不再改 rail 结构。
     // 冲突属于运行时异常入口，只在确实存在冲突时追加到下面。
     // Issue #835 评论 6020221770: AI 暂无 Linux_Qt 真实会话面板，rail 位置保留
     // 但 enabled:false 禁用，降 opacity，不发 toolRequested，不伪造 AI 页面。
@@ -43,7 +43,8 @@ Rectangle {
     readonly property var tools: {
         var list = [
             { key: "starmap", label: qsTr("星图"), icon: "view-grid", enabled: true },
-            { key: "ai", label: qsTr("AI"), enabled: false }
+            { key: "ai", label: qsTr("AI"), enabled: false },
+            { key: "correction", label: qsTr("校对"), icon: "tools-check-spelling", enabled: true }
         ]
         if (root.hasConflicts) {
             list.push({ key: "conflict", label: qsTr("冲突"), icon: "dialog-warning" })

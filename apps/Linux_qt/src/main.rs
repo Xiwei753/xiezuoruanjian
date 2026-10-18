@@ -184,6 +184,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/WritingFormatGroup.qml" as "WritingFormatGroup.qml",
     "qml/EditorContextMenu.qml" as "EditorContextMenu.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
+    "qml/CorrectionPanel.qml" as "CorrectionPanel.qml",
     // Issue #825 复核4 第1项：工作台最右竖向工具栏（Core 的 ToolRail 角色）。
     // qrc 是显式列表，漏登记开发目录里可能碰巧能找到，打包后就变成组件不存在。
     "qml/WritingToolRail.qml" as "WritingToolRail.qml",
