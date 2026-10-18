@@ -87,6 +87,35 @@ fi
 IS_APPIMAGE="no"
 [ -n "${APPIMAGE:-}" ] && IS_APPIMAGE="yes"
 
+# AppImage 入口会先 source linuxdeploy 的 Qt hook；这里再补一层兜底，
+# 保证直接执行 AppDir 内 launcher 时也能找到包内库、插件与 QML 模块。
+# RPM 没有 APPDIR，不注入任何 AppDir 路径。
+if [ -n "${APPDIR:-}" ]; then
+    for libdir in \
+        "$APPDIR/usr/lib" \
+        "$APPDIR/usr/lib64" \
+        "$APPDIR/usr/lib/x86_64-linux-gnu" \
+        "$APPDIR/usr/lib/aarch64-linux-gnu"; do
+        [ -d "$libdir" ] || continue
+        case ":${LD_LIBRARY_PATH:-}:" in
+            *":$libdir:"*) ;;
+            *) export LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+        esac
+    done
+    if [ -z "${QT_PLUGIN_PATH:-}" ]; then
+        export QT_PLUGIN_PATH="$APPDIR/usr/plugins"
+    fi
+    if [ -z "${QML2_IMPORT_PATH:-}" ]; then
+        export QML2_IMPORT_PATH="$APPDIR/usr/qml"
+    fi
+    if [ -z "${QML_IMPORT_PATH:-}" ]; then
+        export QML_IMPORT_PATH="$QML2_IMPORT_PATH"
+    fi
+    if [ -z "${QT_QPA_PLATFORM_PLUGIN_PATH:-}" ]; then
+        export QT_QPA_PLATFORM_PLUGIN_PATH="$QT_PLUGIN_PATH/platforms"
+    fi
+fi
+
 # --- 写启动头（latest.log 覆盖写开头，history 同步）---
 {
     echo "=== sujian-launcher startup ==="

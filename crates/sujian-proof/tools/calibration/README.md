@@ -1,13 +1,21 @@
 # Calibration corpora
 
-- `calibrator_features.csv`: exported model features. Positive rows only exist
-  when the runtime top-1 single-Han candidate matches the annotated correction.
-- `anonymous_ambiguous.txt`: constructed correct sentences covering pronouns,
-  particles and ordinary prose.
-- `anonymous_constructed_names.txt`: constructed sentences with synthetic
-  two-character names. These names are not taken from any manuscript.
-- `anonymous_constructed_fiction.txt`: constructed narrative sentences with
-  synthetic names and places.
+- `calibrator_features.csv`: exported model features. At an annotated error,
+  the model's runtime top-1 is a positive only when it matches the correction;
+  a wrong top-1 is a negative row (a misleading suggestion the calibrator must
+  reject), and no top-1 is an end-to-end miss.
+- `anonymous_ambiguous.txt`: constructed correct sentences in
+  `group<TAB>text` format. Variants of one template share a group id.
+- `anonymous_constructed_names.txt`: `group<TAB>text` sentences. Both sentences
+  for the same synthetic two-character name share a group id. Names are not
+  taken from any manuscript.
+- `anonymous_constructed_fiction.txt`: constructed narrative `group<TAB>text`
+  sentences with synthetic names and places.
+- `public_heldout_correct.txt`: public shibing624/CSC test-split correct text in
+  `group<TAB>text` format. It is reserved for final evaluation and never used
+  to fit weights or choose the threshold.
 
-Regenerate features with `tools/export_features.py`; do not edit the CSV by
-hand. Train and choose thresholds with `tools/train_calibrator.py`.
+Regenerate features with `tools/export_features.py`; it writes the CSV and a
+`.stats.json` sidecar with no-candidate counts. Train with
+`tools/train_calibrator.py`. Group ids keep one template or entity in exactly
+one of the fit, calibration, or final splits.

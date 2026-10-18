@@ -67,19 +67,10 @@ echo "==> 部署 Qt 运行库/插件"
     --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/sujian.png" \
     --plugin qt
 
-# linuxdeploy may generate its own AppRun. Replace it with the project launcher
-# so APPDIR-relative model/runtime paths are always exported.
-cat > "$APPDIR/AppRun" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-export APPDIR="${APPDIR:-$HERE}"
-# AppDir 的 ELF 在 usr/bin；launcher 的 RPM 默认路径是 usr/libexec。
-# 显式传给同一个入口脚本，避免 AppImage 回落到系统 RPM 路径。
-export SUJIAN_REAL_BINARY="$APPDIR/usr/bin/sujian-linux-qt"
-exec "$APPDIR/usr/libexec/sujian/sujian-launcher.sh" "$@"
-EOF
-chmod +x "$APPDIR/AppRun"
+# linuxdeploy may generate its own AppRun. Install the reviewed entry script,
+# which sources linuxdeploy's apprun-hooks (including the Qt hook) and then
+# executes the same launcher used by the RPM.
+install -m 755 "$ROOT/packaging/linux/AppRun-appimage.sh" "$APPDIR/AppRun"
 
 echo "==> 生成 AppImage"
 ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "$OUT_DIR/素笺写作-x86_64.AppImage"

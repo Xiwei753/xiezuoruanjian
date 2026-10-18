@@ -1,47 +1,80 @@
 {
-  "version": "macbert4csc-csc-2026-10-23-v6",
-  "intercept": -2.8372194584863117,
-  "margin_weight": 0.5893095443924693,
-  "candidate_weight": 0.8159323167198662,
-  "threshold": 0.8447496608058054,
+  "version": "macbert4csc-csc-2026-10-23-v7",
+  "intercept": -2.4570022929386517,
+  "margin_weight": 0.4705159200478763,
+  "candidate_weight": 1.0905089928631866,
+  "threshold": 0.8570238198547705,
   "training": {
-    "dataset": "public shibing624/CSC dev split plus constructed anonymous fiction/name negatives; positive and negative candidates are the same runtime top-1 single-Han proposal",
-    "features_sha256": "d19443034fb041de9b79b2e34bfe3dab6ed29ff11cbad9cddf2bc3918877db01",
+    "dataset": "shibing624/CSC public dev split plus constructed anonymous fiction/name negatives; public CSC test prose is held out for final evaluation",
+    "features_sha256": "a918074e778430960144f7ee38a1284446e59e2f4e5bdad7f4575174d99f7a76",
     "feature_columns": [
       "margin",
       "candidate_logprob"
     ],
     "seed": 985,
     "split": {
-      "fit_rows": 845,
-      "calibration_rows": 284,
-      "final_rows": 291,
-      "sample_ids": 1124
+      "fit_rows": 886,
+      "calibration_rows": 285,
+      "final_rows": 352,
+      "sample_ids": 1096
     },
-    "threshold_policy": "max recall on calibration with precision >= 0.99",
+    "threshold_policy": "max recall on calibration with precision >= 0.995",
+    "candidate_definition": "runtime global top-1 single-Han alternative; at annotated errors, no top-1 is an end-to-end miss, a non-label top-1 is a negative row, and only a matching top-1 is positive",
     "calibration": {
-      "threshold": 0.8447496608058054,
-      "true_positive": 166,
+      "threshold": 0.8570238198547705,
+      "true_positive": 154,
       "false_positive": 0,
-      "false_negative": 24,
-      "true_negative": 94,
+      "false_negative": 38,
+      "true_negative": 93,
       "precision": 1.0,
-      "recall": 0.8736842105263158,
-      "f1": 0.9325842696629214
+      "recall": 0.8020833333333334,
+      "f1": 0.8901734104046243
+    },
+    "calibration_end_to_end": {
+      "threshold": 0.8570238198547705,
+      "true_positive": 154,
+      "false_positive": 0,
+      "false_negative": 53,
+      "true_negative": 86,
+      "no_candidate": 8,
+      "wrong_candidate": 7,
+      "correct_candidate_rejected": 38,
+      "precision": 1.0,
+      "recall": 0.7439613526570048,
+      "f1": 0.853185595567867
     },
     "final_evaluation": {
-      "threshold": 0.8447496608058054,
-      "true_positive": 163,
-      "false_positive": 1,
+      "threshold": 0.8570238198547705,
+      "true_positive": 142,
+      "false_positive": 3,
       "false_negative": 23,
-      "true_negative": 104,
-      "precision": 0.9939024390243902,
-      "recall": 0.8763440860215054,
-      "f1": 0.9314285714285715
+      "true_negative": 184,
+      "precision": 0.9793103448275862,
+      "recall": 0.8606060606060606,
+      "f1": 0.9161290322580644
+    },
+    "final_end_to_end": {
+      "threshold": 0.8570238198547705,
+      "true_positive": 142,
+      "false_positive": 3,
+      "false_negative": 41,
+      "true_negative": 180,
+      "no_candidate": 12,
+      "wrong_candidate": 6,
+      "correct_candidate_rejected": 23,
+      "precision": 0.9793103448275862,
+      "recall": 0.7759562841530054,
+      "f1": 0.8658536585365854
+    },
+    "candidate_stats": {
+      "annotated_positions": 1106,
+      "no_candidate": 116,
+      "wrong_candidate": 40,
+      "correct_candidate": 950
     },
     "model_sha256": "a4d9d6807c0c8bc9d014462a728e7212315630c669a6bd670b653154391a73f3",
     "positive_rows": 950,
-    "negative_rows": 470,
-    "negative_sources": "public CSC correct text and constructed anonymous fiction/name sentences"
+    "negative_rows": 573,
+    "negative_sources": "public CSC correct text, constructed anonymous fiction/name sentences, and heldout public CSC test prose reserved for final evaluation"
   }
 }

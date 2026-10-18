@@ -60,16 +60,22 @@ bundle on disk, and the Rust Core reads it locally.
 `calibrator.json` is fitted offline with `tools/train_calibrator.py`. Features
 come from `tools/export_features.py` over the pinned public CSC data and the
 pinned ONNX weights, plus constructed anonymous fiction/name negatives. Both
-positive and negative rows use the same runtime top-1 single-Han candidate; an
-annotated error is positive only when that candidate matches the correction,
-otherwise it is counted as an end-to-end miss. There is no banned-character
+positive and negative rows use the same runtime top-1 single-Han candidate. At
+an annotated error, no candidate is an end-to-end miss; a candidate that is not
+the correction is written as a negative row (the runtime would show a wrong
+replacement); only a matching candidate is positive. There is no banned-character
 list in the runtime: pronouns and particles are governed by the calibrated
-probability and the author's protected spans. Samples are grouped by source
-text into disjoint fit, calibration, and final evaluation sets. The threshold is selected once on the calibration set under
-the requested precision floor, and the final set is read-only. The exported
-parameters and version are the only runtime calibration inputs; no private
-manuscript text and no per-work word lists are part of the model. The UI does
-not invent a confidence percentage: probabilistic suggestions use a warning
+probability and the author's protected spans. Samples are grouped by template
+or synthetic entity, so variants of one name/template cannot straddle splits.
+Fit, calibration, and final evaluation are disjoint; held-out public CSC test
+prose is reserved for final evaluation and never used to fit weights or choose
+the threshold. The threshold is selected once on the calibration set under
+the requested precision floor, and the final set is read-only. Calibrator
+metadata records candidate-conditioned and end-to-end metrics separately,
+including no-candidate, wrong-candidate, and rejected-correct counts. The
+exported parameters and version are the only runtime calibration inputs; no
+private manuscript text and no per-work word lists are part of the model. The
+UI does not invent a confidence percentage: probabilistic suggestions use a warning
 severity and the calibrated score remains internal.
 
 The model does not handle insertions or deletions. Those require a separate
@@ -104,10 +110,14 @@ The model binary is a build artifact under
   loaded through `SUJIAN_ONNXRUNTIME_LIB`.
 - **Linux AppImage**: `packaging/linux/build-appimage.sh` stages the same model
   bundle and Linux ONNX Runtime under `AppDir/usr/share/sujian/models/macbert4csc`
-  and `AppDir/usr/lib/sujian`. The launcher exports APPDIR-relative
+  and `AppDir/usr/lib/sujian`. The repository-owned
+  `packaging/linux/AppRun-appimage.sh` entry sources linuxdeploy's Qt
+  `apprun-hooks`, initializes AppDir library/Qt plugin/QML paths, and then runs
+  the same launcher as the RPM. The launcher exports APPDIR-relative
   `SUJIAN_CORRECTION_MODEL_DIR` and `SUJIAN_ONNXRUNTIME_LIB`; the Qt backend
   prefers that explicit model directory and only then falls back to the RPM
-  system path. AppImage does not depend on a system-wide RPM installation.
+  system path. RPM launches without `APPDIR` keep the system environment.
+  AppImage does not depend on a system-wide RPM installation.
 - **Android**: the APK carries `assets/correction/macbert4csc/` and the official
   ONNX Runtime Android AAR. On first use the bundle is copied once to private
   storage and verified (474,336,933 bytes and SHA-256). There is no first-run

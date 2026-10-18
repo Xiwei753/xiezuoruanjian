@@ -1,0 +1,46 @@
+#!/bin/bash
+# AppImage entry point. linuxdeploy's Qt hook is sourced first, then fallback
+# directories cover deployments where the hook is absent. The common launcher
+# remains the single entry point for RPM and AppImage.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+export APPDIR="${APPDIR:-$HERE}"
+
+if [ -d "$APPDIR/apprun-hooks" ]; then
+    for hook in "$APPDIR"/apprun-hooks/*.sh; do
+        [ -f "$hook" ] || continue
+        # shellcheck source=/dev/null
+        . "$hook"
+    done
+fi
+
+for libdir in \
+    "$APPDIR/usr/lib" \
+    "$APPDIR/usr/lib64" \
+    "$APPDIR/usr/lib/x86_64-linux-gnu" \
+    "$APPDIR/usr/lib/aarch64-linux-gnu"; do
+    [ -d "$libdir" ] || continue
+    case ":${LD_LIBRARY_PATH:-}:" in
+        *":$libdir:"*) ;;
+        *) export LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+    esac
+done
+
+if [ -z "${QT_PLUGIN_PATH:-}" ]; then
+    export QT_PLUGIN_PATH="$APPDIR/usr/plugins"
+fi
+if [ -z "${QML2_IMPORT_PATH:-}" ]; then
+    export QML2_IMPORT_PATH="$APPDIR/usr/qml"
+fi
+if [ -z "${QML_IMPORT_PATH:-}" ]; then
+    export QML_IMPORT_PATH="$QML2_IMPORT_PATH"
+fi
+if [ -z "${QT_QPA_PLATFORM_PLUGIN_PATH:-}" ]; then
+    export QT_QPA_PLATFORM_PLUGIN_PATH="$QT_PLUGIN_PATH/platforms"
+fi
+
+# AppDir places the ELF in usr/bin while RPM uses usr/libexec. The common
+# launcher receives the actual path explicitly.
+export SUJIAN_REAL_BINARY="$APPDIR/usr/bin/sujian-linux-qt"
+exec "$APPDIR/usr/libexec/sujian/sujian-launcher.sh" "$@"
