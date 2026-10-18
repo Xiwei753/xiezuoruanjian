@@ -30,7 +30,7 @@ set -euo pipefail
 # 固定配置：版本号、下载地址、SHA256
 # -----------------------------------------------------------------------------
 # 版本号必须带完整 build 号（如 26.0.0.821），不要截断。
-# 此版本与 apps/harmony/build-profile.json5 的 targetSdkVersion 26.0.0 配套。
+# 此版本与 apps/harmony/build-profile.template.json5 的 targetSdkVersion 26.0.0 配套。
 # 版本对照：26.0.0.821 = API 26 正式版（HarmonyOS 6.0）
 HARMONY_CLI_VERSION="${HARMONY_CLI_VERSION:-26.0.0.821}"
 HARMONY_CLI_HOME="${HARMONY_CLI_HOME:-$HOME/.harmony-cli}"

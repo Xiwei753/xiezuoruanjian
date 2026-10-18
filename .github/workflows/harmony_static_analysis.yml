@@ -14,6 +14,7 @@ on:
       - 'Cargo.lock'
       - 'tools/build_harmony*'
       - 'tools/setup_harmony_cli.sh'
+      - 'tools/setup_harmony_build_profile.sh'
       - 'tools/publish_harmony_test.py'
       - 'tools/test_publish_harmony_test.py'
       - '.github/workflows/harmony_test_publish.yml'
@@ -32,6 +33,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Generate local build-profile.json5
+        run: bash tools/setup_harmony_build_profile.sh
 
       - name: Test HarmonyOS AGC publisher helpers
         run: python3 tools/test_publish_harmony_test.py

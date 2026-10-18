@@ -49,7 +49,7 @@ devecocli update
 
 ## 本仓库接入（已执行）
 
-HarmonyOS 工程根：`apps/harmony/`（含 `build-profile.json5`、`oh-package.json5`）。
+HarmonyOS 工程根：`apps/harmony/`（含 `oh-package.json5`；`build-profile.json5` 是不入库的本机工作文件，由模板 `build-profile.template.json5` 生成，见「签名配置」）。
 
 ```bash
 export PATH="$(npm prefix -g)/bin:$PATH"
@@ -317,7 +317,13 @@ hdc -t <serial> shell aa start -a EntryAbility -b com.xiwei.sujian
 
 ### 仓库提交结构
 
-`apps/harmony/build-profile.json5` 中有两个 product，各对应一个空 material `signingConfig` 占位：普通包 `products[name=default]` → `signingConfigs[name=default]`；受限包 `products[name=acl]` → `signingConfigs[name=acl]`。两者都是空 material 占位：
+仓库只跟踪公共模板 `apps/harmony/build-profile.template.json5`：其中有两个 product，各对应一个空 material `signingConfig` 占位——普通包 `products[name=default]` → `signingConfigs[name=default]`；受限包 `products[name=acl]` → `signingConfigs[name=acl]`。两者都是空 material 占位：
+
+真正参与构建的 `apps/harmony/build-profile.json5` 不入库（已在 `.gitignore` 忽略，签名材料与 `.env*` 一并忽略），本机/CI 由模板生成：
+
+```bash
+bash tools/setup_harmony_build_profile.sh   # 缺失时从模板复制；已存在则保留，绝不覆盖
+```
 
 ```json5
 {
@@ -376,7 +382,7 @@ hdc -t <serial> shell aa start -a EntryAbility -b com.xiwei.sujian
 
 ```bash
 cd apps/harmony
-devecocli signature generate                 # 写入本机 build-profile.json5 signingConfig material
+devecocli signature generate                 # 写入本机（不入库的）build-profile.json5 signingConfig material
 devecocli signature generate --force         # 强制重生成
 devecocli auth status
 ```
@@ -447,9 +453,10 @@ tools/setup_harmony_cli.sh
 
 ### 一次性准备
 
-1. **本机 release 签名已经可用**：`apps/harmony/build-profile.json5` 的 `default`
-   signingConfig 需要填入本机发布证书 / Profile / P12 信息。仓库中的空 material
-   只是占位；密钥、证书、密码和绝对路径禁止提交。
+1. **本机 release 签名已经可用**：先运行 `bash tools/setup_harmony_build_profile.sh`
+   由模板生成不入库的 `apps/harmony/build-profile.json5`，其 `default`
+   signingConfig 再填入本机发布证书 / Profile / P12 信息（或直接
+   `devecocli signature generate`）；密钥、证书、密码和绝对路径禁止提交。
 2. **AGC 凭据**：推荐 Service Account。凭据可以导出为环境变量，也可以放仓库根
    `.env`（`.env*` 已被 `.gitignore` 忽略）：
 
@@ -571,8 +578,9 @@ base64 -w0 release.cer
 base64 -w0 release.p7b
 ```
 
-workflow 只把这些 Secret 解码到 GitHub runner 的 `$RUNNER_TEMP`，并临时改写
-工作区里的 `apps/harmony/build-profile.json5`。这些修改不会 commit，也不会上传
+workflow 先由 `tools/setup_harmony_build_profile.sh` 从模板生成工作区里不入库的
+`apps/harmony/build-profile.json5`，再把 Secret 解码到 GitHub runner 的
+`$RUNNER_TEMP` 并临时改写该文件。这些修改不会 commit，也不会上传
 为 artifact；GitHub runner 结束后临时文件随 runner 销毁。
 
 > `HARMONY_SIGN_STORE_PASSWORD` / `HARMONY_SIGN_KEY_PASSWORD` 填 P12 实际密码。
@@ -606,7 +614,7 @@ Testing API 的更新版本接口使用 `versionId + pkgId + openTestInfo.testTa
 | SignHap password / material 空 | 本机 `devecocli signature generate`，勿提交 material |
 | `install sign info inconsistent` | `devecocli run --uninstall` 或 `signature generate --force` |
 | Not logged in | `devecocli auth login` |
-| Product/Build mode not found | 查 `apps/harmony/build-profile.json5` |
+| Product/Build mode not found | 查 `apps/harmony/build-profile.json5`，缺失先 `bash tools/setup_harmony_build_profile.sh` 生成 |
 | 多设备 / 无设备 | `devecocli device list` 后加 `--device <serial>` |
 | `00303168 Configuration Error: SDK component missing` | 没 `source tools/setup_harmony_cli.sh`，`DEVECO_SDK_HOME` 未导出 |
 | `build_harmony.sh` 报「未找到 HarmonyOS Native SDK（clang）」 | 同上；或用 `OHOS_NDK_HOME=<路径>/openharmony/native` 显式指定 |

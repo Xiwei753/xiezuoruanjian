@@ -36,6 +36,7 @@
 - CI 的 `HarmonyOS Static Analysis` 只跑 `default@CompileArkTS`，不做完整 `assembleHap`，**它绿灯不代表能打出 HAP**；C++ 桥接与 Rust FFI 的链接问题只有在本地 `assembleHap` 才暴露，`tools/check_harmony_native_bridge.py` 就是补这个缺口的静态守卫。
 - 构建产物按 product 显式选择：普通包用 `hvigorw ... -p product=default`（不编译、不打包 `privacy_acl`，不声明 `ohos.permission.DLP_GET_HIDE_STATUS`）；受限包用 `-p product=acl` 装配 `privacy_acl`，并使用带 `DLP_GET_HIDE_STATUS` ACL 的签名 Profile，不能共用普通签名。
 - 不手工修改自动生成的 UniFFI/NAPI 绑定；生成结果错误时修生成契约或上游接口。
+- `build-profile.json5` 是不入库的本机/CI 工作文件：仓库只跟踪空 material 的公共模板 `build-profile.template.json5`，缺失时运行 `bash tools/setup_harmony_build_profile.sh` 由模板生成，本机再用 `devecocli signature generate` 写入签名；不要在仓库里提交或复制该文件。
 - 签名证书、密码、令牌和本机路径不得提交到仓库。
 
 ## 参考上级规则

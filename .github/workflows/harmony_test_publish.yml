@@ -14,6 +14,7 @@ on:
       - 'Cargo.lock'
       - 'tools/build_harmony.sh'
       - 'tools/setup_harmony_cli.sh'
+      - 'tools/setup_harmony_build_profile.sh'
       - 'tools/publish_harmony_test.py'
   workflow_dispatch:
 
@@ -124,6 +125,11 @@ jobs:
           echo "HARMONY_SIGN_P12_FILE=$sign_dir/release.p12" >> "$GITHUB_ENV"
           echo "HARMONY_SIGN_CER_FILE=$sign_dir/release.cer" >> "$GITHUB_ENV"
           echo "HARMONY_SIGN_PROFILE_FILE=$sign_dir/release.p7b" >> "$GITHUB_ENV"
+
+      - name: Generate local build-profile.json5
+        if: steps.secrets.outputs.ready == 'true'
+        shell: bash
+        run: bash tools/setup_harmony_build_profile.sh
 
       - name: Install HarmonyOS CLI
         if: steps.secrets.outputs.ready == 'true'
