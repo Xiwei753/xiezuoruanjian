@@ -128,7 +128,8 @@ fn find_kf6_colorscheme_include_dir() -> Option<PathBuf> {
     ];
     for candidate in candidates {
         let path = PathBuf::from(candidate);
-        if path.join("KColorSchemeManager").exists() || path.join("kcolorschememanager.h").exists() {
+        if path.join("KColorSchemeManager").exists() || path.join("kcolorschememanager.h").exists()
+        {
             return Some(path);
         }
     }
@@ -152,11 +153,7 @@ fn configure_kf6_colorscheme(config: &mut cpp_build::Config) {
 
     // include_dir 形如 <prefix>/include/KF6/KColorScheme，回推 <prefix> 以探测库目录。
     // ancestors: 0=自身, 1=KF6, 2=include, 3=<prefix>。
-    if let Some(prefix) = include_dir
-        .ancestors()
-        .nth(3)
-        .map(Path::to_path_buf)
-    {
+    if let Some(prefix) = include_dir.ancestors().nth(3).map(Path::to_path_buf) {
         for lib_name in ["lib64", "lib"] {
             let lib_dir = prefix.join(lib_name);
             if lib_dir.is_dir() {
