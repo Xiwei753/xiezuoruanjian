@@ -113,6 +113,7 @@ use std::sync::{Mutex, OnceLock};
 
 use sujian_linux_qt::app_main_cpp;
 use sujian_linux_qt::backend;
+use sujian_linux_qt::native::starmap_circle_clip::StarMapCircleClip;
 use sujian_linux_qt::sujian_editor_item;
 
 use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_static};
@@ -605,6 +606,8 @@ fn main() {
         0,
         c"SujianEditorItem",
     );
+    // Issue #949 复核：平台侧圆形裁剪容器，过渡期把子场景 Loader 裁到圆环内。
+    qmetaobject::qml_register_type::<StarMapCircleClip>(c"Sujian", 1, 0, c"StarMapCircleClip");
     startup_mark("qt_runtime_probe_ready", "Qt runtime probed");
 
     let qml_path = "qrc:/main.qml";

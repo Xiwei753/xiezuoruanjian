@@ -2,10 +2,13 @@
 // native/mod.rs — Linux_qt 原生（C++/KF6）桥接层
 // =============================================================================
 //
-// 集中存放必须走 C++/KDE Frameworks 的原生调用，避免把 KF6 依赖散落到业务模块。
-// 当前只包含 KDE 应用配色方案切换桥（KColorSchemeManager）。
+// 集中存放必须走 C++/KF6 的原生调用，避免把 KF6 依赖散落到业务模块。
+// 当前包含 KDE 应用配色方案切换桥（KColorSchemeManager）与星图穿越过渡的
+// 平台侧圆形裁剪容器（Issue #949 复核）。
 // =============================================================================
 
 mod kde_color_scheme;
+/// Issue #949 复核：过渡期把子场景 Loader 的可见区域裁到过渡圆环内的平台组件。
+pub mod starmap_circle_clip;
 
 pub(crate) use kde_color_scheme::apply_appearance_mode;

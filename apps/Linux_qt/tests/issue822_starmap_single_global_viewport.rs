@@ -180,7 +180,9 @@ fn only_root_canvas_owns_the_camera_properties() {
 #[test]
 fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
     let src = read_src(CANVAS);
-    let zoom = function_window(&src, "function zoomAt(", 2600);
+    // Issue #949 复核：zoomAt 里补了锚点顺序与配对基准的注释，窗口相应放大；
+    // 断言内容不变。
+    let zoom = function_window(&src, "function zoomAt(", 3600);
     assert!(
         zoom.contains("zoomLevel = target") && zoom.contains("applyPan("),
         "zoomAt 必须是唯一缩放入口，内部改活动画布 zoomLevel 并 applyPan，实际窗口:\n{zoom}"
@@ -571,14 +573,15 @@ fn canvas_enter_exit_transition_is_coverage_only_and_never_writes_back() {
     );
 
     // 平台只在 routeKey 相机槽里保存/恢复父镜头，不向 Core 回写任何相机数据。
-    let enter_core = function_window(&canvas, "function enterEmbedViaCore(", 2800);
+    // Issue #949 复核：enterEmbedViaCore 现在同时算预览 / 落点两个相机，窗口放大。
+    let enter_core = function_window(&canvas, "function enterEmbedViaCore(", 5000);
     assert!(
         enter_core.contains("starmapBackendRef.enter_starmap_embed(")
             && enter_core.contains("storeCamera(routeKey, cameraSnapshot())")
             && enter_core.contains("storeCamera(childKey, childCamera)"),
         "进入必须走 Core 导航路由并按 routeKey 保存父镜头，实际窗口:\n{enter_core}"
     );
-    let exit_core = function_window(&canvas, "function exitCanvasViaCore(", 2000);
+    let exit_core = function_window(&canvas, "function exitCanvasViaCore(", 2600);
     assert!(
         exit_core.contains("starmapBackendRef.exit_starmap_canvas(")
             && exit_core.contains("var cam = cameraStack[parentKey]")

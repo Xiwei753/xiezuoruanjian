@@ -75,6 +75,17 @@ QtObject {
                    Math.max(ringTargetY, viewportHeight - ringTargetY))
     readonly property real ringTargetRadius: ringCornerDistance + ringMargin
 
+    // 给定入口圆壳的屏幕半径，算"圆环边框完全离开可见视口"的目标半径。
+    // 与 ringTargetRadius 同一个口径；进场时 Canvas 按它把子镜头从入口预览
+    // 等比放大到"内容与圆环边框一起走到视口外"的落点（Issue #949 复核问题 3）。
+    function discTargetRadiusFor(screenRadius) {
+        var margin = Math.max(screenRadius, 8)
+        var cornerDistance =
+            Math.hypot(Math.max(ringTargetX, viewportWidth - ringTargetX),
+                       Math.max(ringTargetY, viewportHeight - ringTargetY))
+        return cornerDistance + margin
+    }
+
     // ── 每帧按同一个 progress 算出的圆环几何（屏幕口径）──
     readonly property real ringCenterX:
         entering ? embedScreenX + (ringTargetX - embedScreenX) * progress
@@ -173,11 +184,16 @@ QtObject {
         timeline.restart()
     }
 
-    // 取消演出（切图 / 复位 / 收尾）：不写任何业务状态。停止时间线不会发出
-    // finished，晚到的回调另由 Canvas 侧的 generation 兜住。
+    // 取消演出（切图 / 复位 / 收尾）：不写任何业务状态，也不留落点。
+    // Issue #949 复核（问题 2）：必须清掉 toCamera —— 否则 active=false 之后
+    // 旧落点仍然挂在组件上，下一次进 / 退场开始时被 settle 误当成"本轮的最终
+    // 帧"把用户镜头强行复位。停止时间线不会发出 finished，晚到的回调另由
+    // Canvas 侧的 generation 兜住。
     function cancel() {
         timeline.stop()
         active = false
         progress = 0
+        fromCamera = null
+        toCamera = null
     }
 }

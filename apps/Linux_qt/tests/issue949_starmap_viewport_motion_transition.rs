@@ -21,6 +21,19 @@
 //! 5. **KDE 一致性**：时长派生自 Kirigami.Units（longDuration / shortDuration），
 //!    缓动 OutCubic，不用弹簧；关闭动画 / 有效时长为 0 时直接落到最终状态。
 //!
+//! 复核（2026-10-18T12:12:29Z）后的四条硬约束（本轮修复）：
+//! 6. **锚点先于缩放**：捏合 / 关闭动画的直接缩放分支先用本次事件 / 质心坐标
+//!    现算锚点的世界位置，再改 zoom / pan。
+//! 7. **取消与自然完成分开**：settle 仅在演出确实 active 时生效、保留当前
+//!    显示帧、不落 toCamera；只有 generation 匹配的 finished 回调才落 toCamera；
+//!    `cancel()` 清掉落点，下一次进 / 退场不再被旧相机复位。
+//! 8. **真正的镜头连续变换**：进场 from = 入口预览相机、to = 按"圆环边框离开
+//!    可见视口"倍率放大的落点相机；出场镜像恢复到进入前保存的父镜头；每帧
+//!    pan = ringCenter(t) − W0×zoom(t)（内容锚点钉在圆环圆心路径上）。
+//! 9. **圆形可见区域**：圆内那一层（子场景 Loader）由平台 `Sujian.StarMapCircleClip`
+//!    裁到 ringCenterX/Y/ringRadius 的圆内（公共 QSGClipNode 几何，stencil），
+//!    只在过渡期启用；不是 Rectangle 遮挡、不是 FBO / 位图。
+//!
 //! QML 组件依赖 qml_resources qrc 与 Rust 注册的上下文属性，无法在本仓库的
 //! Rust 测试里实例化，因此按仓库既有惯例（issue801/issue814/issue817/issue822/
 //! issue832 系列 WHITE_BOX 守卫）读取 QML 源码确定性断言。
@@ -40,6 +53,9 @@ const EMBED: &str = "qml/StarMapEmbed.qml";
 const ROUTER: &str = "qml/StarMapInputRouter.qml";
 const MAIN_RS: &str = "src/main.rs";
 const BUILD_RS: &str = "build.rs";
+/// Issue #949 复核（问题 4）：平台侧圆形裁剪容器。
+const CLIP_RS: &str = "src/native/starmap_circle_clip.rs";
+const NATIVE_MOD: &str = "src/native/mod.rs";
 
 /// 去掉整行 `//` 注释，只留可执行语句。
 fn strip_line_comments(source: &str) -> String {
@@ -51,6 +67,18 @@ fn strip_line_comments(source: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// 取 `start_marker` 到其后最近 `end_marker` 之间的源码窗口（含两端）。
+fn window_between(source: &str, start_marker: &str, end_marker: &str) -> String {
+    let start = source
+        .find(start_marker)
+        .unwrap_or_else(|| panic!("源码必须包含 {start_marker}"));
+    let rest = &source[start..];
+    let end = rest
+        .find(end_marker)
+        .unwrap_or_else(|| panic!("{start_marker} 之后必须出现 {end_marker}"));
+    rest[..end].to_string()
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -249,7 +277,7 @@ fn canvas_has_exactly_one_zoom_tween_retargeted_from_the_displayed_frame() {
 #[test]
 fn pinch_stays_realtime_and_keeps_the_929_pairing() {
     let src = read_src(CANVAS);
-    let zoom = function_window(&src, "function zoomAt(", 2600);
+    let zoom = function_window(&src, "function zoomAt(", 3600);
     assert!(
         zoom.contains("var pinchInput = interaction && interaction.pointerMode === \"pinch\"")
             && zoom.contains("if (pinchInput || zoomTweenDuration() <= 0)"),
@@ -320,7 +348,7 @@ fn canvas_freezes_the_outgoing_scene_before_switching_the_route() {
         "旧画面层不得自带第二套命中 / 投影入口"
     );
 
-    let enter = function_window(&src, "function enterEmbedViaCore(", 3200);
+    let enter = function_window(&src, "function enterEmbedViaCore(", 5200);
     assert!(
         enter.contains("var parentCamera = cameraSnapshot()")
             && enter.contains("var parentRoute = normalizeRoute(currentRoute)")
@@ -401,19 +429,32 @@ fn new_input_settles_the_transition_and_late_finish_cannot_pull_back() {
             && src.contains("if (generation !== undefined && generation !== motionGeneration)"),
         "每次启动 / 收尾演出都要推进 generation，晚到的旧回调不得改状态"
     );
-    let settle = function_window(&src, "function settleViewportMotion(", 800);
+    // Issue #949 复核（问题 2）：取消 / 打断是独立路径 —— inactive 时是 no-op，
+    // active 时保留当前显示帧，绝不无条件 applyCamera(toCamera)（跳到未来最终帧）。
+    let settle = function_window(&src, "function settleViewportMotion(", 1400);
     assert!(
-        settle.contains("viewportMotion.cancel()")
-            && settle.contains("applyCamera(to)")
+        settle.contains("if (!viewportMotion.active)")
+            && settle.contains("viewportMotion.cancel()")
             && settle.contains("resetZoomRound()"),
-        "新输入必须从当前已显示帧收尾旧演出，实际窗口:\n{settle}"
+        "新输入必须先判断演出确实在播，再从当前已显示帧收尾旧演出，实际窗口:\n{settle}"
+    );
+    assert!(
+        !settle.contains("applyCamera(to)")
+            && !settle.contains("viewportMotion.toCamera"),
+        "取消 / 打断路径不得落 toCamera（保留 cameraSnapshot() 的当前显示帧），实际窗口:\n{settle}"
+    );
+    let finish = function_window(&src, "function finishViewportMotion(", 1200);
+    assert!(
+        finish.contains("var to = viewportMotion.toCamera")
+            && finish.contains("applyCamera(to)"),
+        "自然完成（generation 匹配的 finished 回调）才落 toCamera，实际窗口:\n{finish}"
     );
 
     let router = strip_line_comments(&read_src(ROUTER));
     assert_eq!(
         count_occurrences(&router, "canvas.cancelViewportMotion()"),
         2,
-        "左键 / 右键按下都要先让演出落到最终状态（命中按最新 route + 可见帧）"
+        "左键 / 右键按下都要先让演出落到当前显示帧（命中按最新 route + 可见帧）"
     );
 }
 
@@ -560,5 +601,228 @@ fn hit_testing_follows_the_visible_camera_only() {
     assert!(
         exit.contains("var virtualParentZoom = zoomLevel / ctx.ratio"),
         "退场判定必须用正在显示的投影直径反推父入口，实际窗口:\n{exit}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 7. 复核 2026-10-18T12:12:29Z：四处确定的逻辑错误
+// ─────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn direct_zoom_branches_anchor_before_changing_zoom() {
+    // 问题 1：捏合 / 关闭动画的直接缩放分支必须先用**本次事件 / 质心坐标**
+    // 把锚点的世界位置从正在显示的帧现算出来，再改 zoom / pan；沿用上一次
+    // resetZoomRound() / 滚轮写入的锚点会让触点一偏离屏幕中心就整张图飞走。
+    let src = read_src(CANVAS);
+    let direct = window_between(
+        &src,
+        "if (pinchInput || zoomTweenDuration() <= 0) {",
+        "startZoomTween(target, screenX, screenY)",
+    );
+    let anchor_at = direct
+        .find("anchorRoundAt(screenX, screenY)")
+        .unwrap_or_else(|| panic!("直接缩放分支必须用本次坐标重算锚点，实际窗口:\n{direct}"));
+    let zoom_set = direct
+        .find("zoomLevel = target")
+        .unwrap_or_else(|| panic!("直接缩放分支必须落到目标帧，实际窗口:\n{direct}"));
+    assert!(
+        anchor_at < zoom_set,
+        "必须先 anchorRoundAt(screenX, screenY) 再改 zoomLevel（顺序反了就是 800px 跳动），实际窗口:\n{direct}"
+    );
+    assert!(
+        direct.contains("applyPan(screenX - _zoomRoundWorldX * target,")
+            && direct.contains("screenY - _zoomRoundWorldY * target)"),
+        "锚点必须是本次坐标现算出的世界位置，实际窗口:\n{direct}"
+    );
+    assert!(
+        direct.contains("switched = maybeEnterEmbedAt(screenX, screenY)")
+            && direct.contains("switched = maybeExitCanvas()"),
+        "直接落到目标帧后仍按正在显示的投影直径评估穿越，实际窗口:\n{direct}"
+    );
+
+    // #929 捏合跨 route 倍率基准配对保留；演出被捏合打断时基准锚定当前显示帧。
+    let zoom = function_window(&src, "function zoomAt(", 3600);
+    assert!(
+        zoom.contains("_pinchSwitchBaseZoom = nextZoom")
+            && zoom.contains("_pinchSwitchCanvasZoom = switched")
+            && !zoom.contains("_pinchSwitchBaseZoom = zoomLevel"),
+        "捏合穿越后必须以本帧 nextZoom 重设基准配对，实际窗口:\n{zoom}"
+    );
+    assert!(
+        zoom.contains("if (viewportMotion.active && pinchInput)")
+            && zoom.contains("_pinchSwitchCanvasZoom = zoomLevel"),
+        "捏合继续打断演出时必须把换换算基准锚定到当前显示帧（不是上一次落点），实际窗口:\n{zoom}"
+    );
+}
+
+#[test]
+fn motion_cancel_clears_the_landing_snapshot() {
+    // 问题 2：cancel() 必须清掉 toCamera，否则 active=false 之后旧落点仍挂在
+    // 组件上，下一次进 / 退场开始时的 settle 会把用户镜头强行复位。
+    let src = strip_line_comments(&read_src(MOTION));
+    let cancel = function_window(&src, "function cancel()", 700);
+    assert!(
+        cancel.contains("timeline.stop()")
+            && cancel.contains("active = false")
+            && cancel.contains("toCamera = null"),
+        "cancel() 必须停时间线并把落点清空，实际窗口:\n{cancel}"
+    );
+}
+
+#[test]
+fn enter_transition_moves_the_camera_from_entry_preview_to_ring_landing() {
+    // 问题 3：from = 入口预览相机（父图当前显示帧里 Embed 圆壳的投影映射），
+    // to = 按"圆环边框离开可见视口"倍率等比放大的子相机；内容与圆环同一个
+    // progress 一起放大，内容锚点钉在圆环圆心路径上（不能先全屏居中再补圆环）。
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let begin = function_window(&canvas, "function beginCanvasTransition(", 3200);
+    assert!(
+        begin.contains("var previewCam = context && context.ratio > 0")
+            && begin.contains("? childCameraForParent(outgoingCam, context) : incomingCam")
+            && begin.contains("viewportMotion.beginEnter(previewCam, incomingCam, geometry")
+            && !begin.contains("viewportMotion.beginEnter(incomingCam, incomingCam"),
+        "进场起点必须是与入口预览同一份几何的预览相机，落点另算，实际窗口:\n{begin}"
+    );
+    assert!(
+        begin.contains("outgoingToCamera = context && context.ratio > 0")
+            && begin.contains("? parentCameraForChild(incomingCam, context) : outgoingCam"),
+        "旧父画面层不再原地不动：与子内容同倍率放大到「圆壳铺满视口」的对应帧，实际窗口:\n{begin}"
+    );
+
+    let enter = function_window(&canvas, "function enterEmbedViaCore(", 6400);
+    assert!(
+        enter.contains("var previewCamera = childCameraForParent(parentCamera, context)"),
+        "落点相机必须以入口预览相机为基准，实际窗口:\n{enter}"
+    );
+    assert!(
+        enter.contains("viewportMotion.discTargetRadiusFor(entryGeometry.screenRadius)")
+            && enter.contains("previewCamera.zoom * discTarget / discStart"),
+        "落点倍率 = 圆环目标半径 / 入口投影半径（内容与边框同步放大），实际窗口:\n{enter}"
+    );
+    assert!(
+        enter.contains("panX: width / 2 - context.boundsCenterX * landingZoom")
+            && enter.contains("panY: height / 2 - context.boundsCenterY * landingZoom"),
+        "落点圆心对齐视口中心（内容锚点 = 入口圆心对应的子图坐标），实际窗口:\n{enter}"
+    );
+    assert!(
+        enter.contains("storeCamera(childKey, childCamera)"),
+        "进入后 cameraStack 记的必须是真实落点相机，实际窗口:\n{enter}"
+    );
+
+    // 圆环目标半径口径只有一份（与 ringTargetRadius 同公式）。
+    let motion = strip_line_comments(&read_src(MOTION));
+    assert!(
+        motion.contains("function discTargetRadiusFor(screenRadius)")
+            && motion.contains("return cornerDistance + margin")
+            && motion.contains("ringTargetRadius: ringCornerDistance + ringMargin"),
+        "落点半径必须复用圆环「离开可见视口」的同一公式"
+    );
+
+    // 出场镜像：to = 进入前保存的父镜头；反推只用于父画面层的起始帧。
+    let exit = function_window(&canvas, "function exitCanvasViaCore(", 2600);
+    assert!(
+        exit.contains("var cam = cameraStack[parentKey]")
+            && exit.contains("beginCanvasTransition(false, childStarmapId, childRoute, childCamera, cam,"),
+        "出场必须恢复到进入前保存的父镜头并启动反向演出，实际窗口:\n{exit}"
+    );
+    assert!(
+        !exit.contains("cam = parentCameraForChild(childCamera, ctx)"),
+        "恢复后的父镜头不得被当前子镜头的连续反推改掉（那是演出起点，不是落点），实际窗口:\n{exit}"
+    );
+}
+
+#[test]
+fn transition_ring_clips_the_inside_scene_via_platform_circle_clip() {
+    // 问题 4：圆环只画边不行 —— 圆内那一层（子场景 Loader）的可见区域必须
+    // 由平台圆形裁剪容器裁到 viewportMotion.ringCenterX/Y/ringRadius 的圆内；
+    // 圆外持续显示另一层；只过渡期启用，结束回到直接矢量渲染。
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    assert!(
+        canvas.contains("import Sujian 1.0"),
+        "圆形裁剪容器是平台注册的 QML 类型，Canvas 必须 import Sujian 1.0"
+    );
+    assert_eq!(
+        count_occurrences(&canvas, "StarMapCircleClip {"),
+        2,
+        "活动画布与旧画面层两个 Loader 都要有圆形裁剪容器"
+    );
+    let active_clip = function_window(&canvas, "id: activeSceneClip", 800);
+    assert!(
+        active_clip.contains("clipEnabled: canvasArea.activeSceneIsInsideRing")
+            && active_clip.contains("clipCenterX: viewportMotion.ringCenterX")
+            && active_clip.contains("clipCenterY: viewportMotion.ringCenterY")
+            && active_clip.contains("clipRadius: viewportMotion.ringRadius")
+            && active_clip.contains("id: activeSceneLoader"),
+        "进场时「圆内」的新子场景 Loader 必须被裁到圆环圆内（同一 progress），实际窗口:\n{active_clip}"
+    );
+    let outgoing_clip = function_window(&canvas, "id: outgoingSceneClip", 800);
+    assert!(
+        outgoing_clip.contains("clipEnabled: canvasArea.outgoingSceneIsInsideRing")
+            && outgoing_clip.contains("clipCenterX: viewportMotion.ringCenterX")
+            && outgoing_clip.contains("clipRadius: viewportMotion.ringRadius")
+            && outgoing_clip.contains("id: outgoingSceneLoader"),
+        "出场时「圆内」的旧子场景 Loader 必须反向裁到圆环圆内，实际窗口:\n{outgoing_clip}"
+    );
+    assert!(
+        canvas.contains("activeSceneIsInsideRing:")
+            && canvas.contains("viewportMotion.active && viewportMotion.entering")
+            && canvas.contains("outgoingSceneIsInsideRing:")
+            && canvas.contains("viewportMotion.active && !viewportMotion.entering"),
+        "圆形裁剪必须只在过渡期对「圆内那一层」启用"
+    );
+
+    // 平台 item：native 模块登记 + main.rs qml_register_type + 公共 QSGClipNode
+    // 几何实现（不依赖私有头，也不往 Core 加 UI 坐标 / 状态）。
+    let main = strip_line_comments(&read_src(MAIN_RS));
+    assert!(
+        main.contains("qml_register_type::<StarMapCircleClip>(c\"Sujian\", 1, 0, c\"StarMapCircleClip\")"),
+        "平台圆形裁剪容器必须在加载 QML 之前注册进 Sujian 1.0"
+    );
+    assert!(
+        read_src(NATIVE_MOD).contains("pub mod starmap_circle_clip;"),
+        "native/mod.rs 必须声明 starmap_circle_clip 模块"
+    );
+    let clip_raw = read_src(CLIP_RS);
+    let clip = strip_line_comments(&clip_raw);
+    assert!(
+        clip.contains("pub struct StarMapCircleClip")
+            && clip.contains("qt_base_class!(trait QQuickItem)")
+            && clip.contains("ALIAS clipEnabled WRITE set_clip_enabled"),
+        "平台组件必须是 QQuickItem 子类并暴露 clipEnabled / 圆心 / 半径"
+    );
+    assert!(
+        clip.contains("obj->setClip(true)")
+            && clip.contains("QSGNode::ClipNodeType")
+            && clip.contains("setIsRectangular(false)")
+            && clip.contains("QSGGeometry::DrawTriangleStrip")
+            && clip.contains("markVertexDataDirty"),
+        "圆形可见区域必须落在场景图裁剪节点的自定义圆形几何上（stencil），不是矩形裁剪"
+    );
+    assert!(
+        clip.contains("update_paint_node")
+            && clip.contains("fn geometry_changed"),
+        "几何参数必须在渲染线程同步阶段应用（update_paint_node），尺寸变化后重新应用"
+    );
+    for forbidden in [
+        "layer.enabled",
+        "ShaderEffectSource",
+        "MultiEffect",
+        "grabToImage",
+        "FramebufferObject",
+    ] {
+        assert!(
+            !clip.contains(forbidden) && !canvas.contains(forbidden),
+            "圆形裁剪不得退回位图 / FBO / 纹理放大：{forbidden}"
+        );
+    }
+    assert!(
+        clip_raw.contains("qquickitem_p.h") && clip_raw.contains("QQuickDefaultClipNode"),
+        "必须写明为什么不用私有头 / QQuickDefaultClipNode 的路径与取舍"
+    );
+    assert!(
+        !clip.contains("QQuickItemPrivate")
+            && !clip.contains("qquickitem_p.h")
+            && !clip.contains("qquickclipnode_p.h"),
+        "平台裁剪组件不得依赖本机不存在的 Qt 私有头"
     );
 }
