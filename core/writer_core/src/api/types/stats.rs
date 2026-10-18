@@ -162,3 +162,134 @@ pub struct WritingStatsDashboardDto {
     pub devices: Vec<DeviceStatsRecordDto>,
     pub speed_curve: SpeedCurveSummaryDto,
 }
+
+/// 统计页 Explorer 一次性快照（#944）：生涯摘要 + 四张时段卡 + 当前选中时段详情。
+///
+/// 宽屏总览、窄屏单页都从这同一个 DTO 取数，端侧只做格式化与绘制，
+/// 不再自行统计天数、纪录或速度。
+///
+/// - `history_scope`：历史口径，当前固定 `"localEvents"`（`events.local`
+///   不参与跨设备同步，生涯代表本机可读的事件历史）。
+/// - `lifetime`：全应用生涯摘要。
+/// - `period_cards`：近七天 / 近三十天 / 近半年 / 自选区间四张卡，顺序固定。
+/// - `selected`：当前选中时段（可以是生涯或任一预设/自选区间）的汇总、纪录与趋势。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsExplorerDto {
+    pub history_scope: String,
+    pub lifetime: WritingStatsLifetimeDto,
+    pub period_cards: Vec<WritingStatsPeriodCardDto>,
+    pub selected: WritingStatsSelectedPeriodDto,
+}
+
+/// 全应用生涯摘要。
+///
+/// 「陪伴」口径与「实际写作」口径分开：`elapsed_calendar_days` 是从首次
+/// 写作到今天（含两端）的自然日历天数，不是 `writing_days`。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsLifetimeDto {
+    /// 累计人工输入字符数（含后来被删掉/重写的字；不含粘贴、AI、同步、撤销）。
+    pub total_human_typed_chars: u64,
+    /// 首次有人工输入的本地业务日；没有任何输入时为 null。
+    pub first_writing_date: Option<String>,
+    /// 最近一次有人工输入的本地业务日；没有任何输入时为 null。
+    pub last_writing_date: Option<String>,
+    /// 首次写作日到今天（含两端）的自然日历天数；没有历史时为 0。
+    pub elapsed_calendar_days: u64,
+    /// 实际有人工输入的不同本地业务日数量。
+    pub writing_days: u64,
+    /// 平均每天字数 = 累计人工输入 / 有输入的天数；没有有输入的天时为 null。
+    pub average_chars_per_day: Option<f64>,
+    /// 平均写作速度（字/分）= 累计人工输入 / 有效写作时长；零时长时为 null。
+    pub average_chars_per_minute: Option<f64>,
+}
+
+/// 预设时段卡（近七天 / 近三十天 / 近半年 / 自选区间）。
+///
+/// `preset` 取值固定为 `"last7Days"`、`"last30Days"`、`"last6Months"`、
+/// `"custom"`。自选区间尚未选择时 `range` 为 null、`has_selection` 为 false、
+/// 数值为 0 / null；其余三张卡 `has_selection` 恒为 true
+/// （没有数据时范围照算，数值为 0、平均值为 null）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsPeriodCardDto {
+    pub preset: String,
+    pub has_selection: bool,
+    pub range: Option<DateRangeDto>,
+    pub total_human_typed_chars: u64,
+    pub total_active_seconds: u64,
+    pub writing_days: u64,
+    /// 平均每天字数 = 区间人工输入 / 区间内有输入的天数；区间内没有输入日为 null。
+    pub average_chars_per_day: Option<f64>,
+    /// 平均写作速度（字/分）= 区间人工输入 / 区间有效写作时长；零时长时为 null。
+    pub average_chars_per_minute: Option<f64>,
+}
+
+/// 当前选中时段的完整详情：区间汇总 + 纪录 + 趋势。
+///
+/// `preset` 额外允许 `"lifetime"`（生涯逐月趋势）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsSelectedPeriodDto {
+    pub preset: String,
+    pub range: DateRangeDto,
+    pub total_human_typed_chars: u64,
+    pub total_active_seconds: u64,
+    pub writing_days: u64,
+    /// 平均每天字数 = 区间人工输入 / 区间内有输入的天数；没有输入日为 null。
+    pub average_chars_per_day: Option<f64>,
+    /// 平均写作速度（字/分）= 区间人工输入 / 区间有效写作时长；零时长时为 null。
+    pub average_chars_per_minute: Option<f64>,
+    pub records: WritingStatsRecordsDto,
+    pub trend: WritingStatsTrendDto,
+}
+
+/// 单条纪录。没有事实依据时字段为 null，不用 0 冒充纪录。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsRecordDto {
+    /// 纪录所在日期（连续写作日期段为起始日）。
+    pub date: Option<String>,
+    /// 仅连续写作日期段使用：结束日期；其他纪录为 null。
+    pub end_date: Option<String>,
+    /// 纪录值，单位随所在字段不同（见各字段说明）；无纪录时为 null。
+    pub value: Option<u64>,
+}
+
+/// 时段纪录集合。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsRecordsDto {
+    /// 最多码字日：`date` 为日期，`value` 为当天人工输入字数；并列取更早日期。
+    pub best_day: WritingStatsRecordDto,
+    /// 最快码字：连续 60 分钟半开窗口 `[start, start+60min)` 内的最高人工输入量；
+    /// `date` 为窗口起始业务日，`value` 即窗口内字数（显示为字/时）。
+    pub fastest_hour: WritingStatsRecordDto,
+    /// 最长写作会话：沿用现有 `SESSION_GAP_MS` 会话定义（按设备独立分组，不把
+    /// 不同设备并发事件接成一条）；`date` 为会话开始业务日，`value` 为时长秒数。
+    /// 只有时长大于 0 的会话才算有效样本；没有时为 null。
+    pub longest_session: WritingStatsRecordDto,
+    /// 最长连续有输入日期段：`date` / `end_date` 为起止日期，`value` 为连续天数；
+    /// 并列时取更早的一段。
+    pub longest_streak: WritingStatsRecordDto,
+}
+
+/// 折线趋势：按业务日期聚合的人工输入字数点列。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsTrendDto {
+    /// 聚合粒度：`"day"` / `"week"` / `"month"`。
+    pub granularity: String,
+    /// 日期升序的点列；无数据的日期/周/月补 0。
+    pub points: Vec<WritingStatsTrendPointDto>,
+}
+
+/// 趋势点。`date` 是聚合桶起始日期：按天为该日、按周为该周周一、
+/// 按月为该月 1 号；`human_typed_chars` 为桶内人工输入字数。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsTrendPointDto {
+    pub date: String,
+    pub human_typed_chars: u64,
+}

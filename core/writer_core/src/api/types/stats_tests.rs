@@ -262,3 +262,244 @@ fn test_speed_curve_summary_dto_contract() {
     let restored: SpeedCurveSummaryDto = serde_json::from_value(json).unwrap();
     assert_eq!(restored, summary);
 }
+
+#[test]
+fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
+    // 空历史 + 未选自选区间：钉住 camelCase 键名与 null 语义。
+    let dto = WritingStatsExplorerDto {
+        history_scope: "localEvents".to_string(),
+        lifetime: WritingStatsLifetimeDto {
+            total_human_typed_chars: 0,
+            first_writing_date: None,
+            last_writing_date: None,
+            elapsed_calendar_days: 0,
+            writing_days: 0,
+            average_chars_per_day: None,
+            average_chars_per_minute: None,
+        },
+        period_cards: vec![WritingStatsPeriodCardDto {
+            preset: "custom".to_string(),
+            has_selection: false,
+            range: None,
+            total_human_typed_chars: 0,
+            total_active_seconds: 0,
+            writing_days: 0,
+            average_chars_per_day: None,
+            average_chars_per_minute: None,
+        }],
+        selected: WritingStatsSelectedPeriodDto {
+            preset: "lifetime".to_string(),
+            range: DateRangeDto {
+                start_date: "2026-10-18".to_string(),
+                end_date: "2026-10-18".to_string(),
+            },
+            total_human_typed_chars: 0,
+            total_active_seconds: 0,
+            writing_days: 0,
+            average_chars_per_day: None,
+            average_chars_per_minute: None,
+            records: WritingStatsRecordsDto {
+                best_day: WritingStatsRecordDto {
+                    date: None,
+                    end_date: None,
+                    value: None,
+                },
+                fastest_hour: WritingStatsRecordDto {
+                    date: None,
+                    end_date: None,
+                    value: None,
+                },
+                longest_session: WritingStatsRecordDto {
+                    date: None,
+                    end_date: None,
+                    value: None,
+                },
+                longest_streak: WritingStatsRecordDto {
+                    date: None,
+                    end_date: None,
+                    value: None,
+                },
+            },
+            trend: WritingStatsTrendDto {
+                granularity: "month".to_string(),
+                points: Vec::new(),
+            },
+        },
+    };
+
+    let json = serde_json::to_value(&dto).unwrap();
+    assert_eq!(
+        json,
+        json!({
+            "historyScope": "localEvents",
+            "lifetime": {
+                "totalHumanTypedChars": 0,
+                "firstWritingDate": null,
+                "lastWritingDate": null,
+                "elapsedCalendarDays": 0,
+                "writingDays": 0,
+                "averageCharsPerDay": null,
+                "averageCharsPerMinute": null
+            },
+            "periodCards": [{
+                "preset": "custom",
+                "hasSelection": false,
+                "range": null,
+                "totalHumanTypedChars": 0,
+                "totalActiveSeconds": 0,
+                "writingDays": 0,
+                "averageCharsPerDay": null,
+                "averageCharsPerMinute": null
+            }],
+            "selected": {
+                "preset": "lifetime",
+                "range": { "startDate": "2026-10-18", "endDate": "2026-10-18" },
+                "totalHumanTypedChars": 0,
+                "totalActiveSeconds": 0,
+                "writingDays": 0,
+                "averageCharsPerDay": null,
+                "averageCharsPerMinute": null,
+                "records": {
+                    "bestDay": { "date": null, "endDate": null, "value": null },
+                    "fastestHour": { "date": null, "endDate": null, "value": null },
+                    "longestSession": { "date": null, "endDate": null, "value": null },
+                    "longestStreak": { "date": null, "endDate": null, "value": null }
+                },
+                "trend": { "granularity": "month", "points": [] }
+            }
+        })
+    );
+    let restored: WritingStatsExplorerDto = serde_json::from_value(json).unwrap();
+    assert_eq!(restored, dto);
+}
+
+#[test]
+fn test_writing_stats_explorer_dto_key_contract_with_values() {
+    let dto = WritingStatsExplorerDto {
+        history_scope: "localEvents".to_string(),
+        lifetime: WritingStatsLifetimeDto {
+            total_human_typed_chars: 1234,
+            first_writing_date: Some("2026-03-10".to_string()),
+            last_writing_date: Some("2026-10-18".to_string()),
+            elapsed_calendar_days: 223,
+            writing_days: 42,
+            average_chars_per_day: Some(29.38),
+            average_chars_per_minute: Some(18.5),
+        },
+        period_cards: vec![WritingStatsPeriodCardDto {
+            preset: "last7Days".to_string(),
+            has_selection: true,
+            range: Some(DateRangeDto {
+                start_date: "2026-10-12".to_string(),
+                end_date: "2026-10-18".to_string(),
+            }),
+            total_human_typed_chars: 300,
+            total_active_seconds: 600,
+            writing_days: 5,
+            average_chars_per_day: Some(60.0),
+            average_chars_per_minute: Some(30.0),
+        }],
+        selected: WritingStatsSelectedPeriodDto {
+            preset: "last7Days".to_string(),
+            range: DateRangeDto {
+                start_date: "2026-10-12".to_string(),
+                end_date: "2026-10-18".to_string(),
+            },
+            total_human_typed_chars: 300,
+            total_active_seconds: 600,
+            writing_days: 5,
+            average_chars_per_day: Some(60.0),
+            average_chars_per_minute: Some(30.0),
+            records: WritingStatsRecordsDto {
+                best_day: WritingStatsRecordDto {
+                    date: Some("2026-10-15".to_string()),
+                    end_date: None,
+                    value: Some(120),
+                },
+                fastest_hour: WritingStatsRecordDto {
+                    date: Some("2026-10-15".to_string()),
+                    end_date: None,
+                    value: Some(90),
+                },
+                longest_session: WritingStatsRecordDto {
+                    date: Some("2026-10-16".to_string()),
+                    end_date: None,
+                    value: Some(1800),
+                },
+                longest_streak: WritingStatsRecordDto {
+                    date: Some("2026-10-14".to_string()),
+                    end_date: Some("2026-10-18".to_string()),
+                    value: Some(5),
+                },
+            },
+            trend: WritingStatsTrendDto {
+                granularity: "day".to_string(),
+                points: vec![
+                    WritingStatsTrendPointDto {
+                        date: "2026-10-12".to_string(),
+                        human_typed_chars: 0,
+                    },
+                    WritingStatsTrendPointDto {
+                        date: "2026-10-13".to_string(),
+                        human_typed_chars: 80,
+                    },
+                ],
+            },
+        },
+    };
+
+    let json = serde_json::to_value(&dto).unwrap();
+    assert_eq!(
+        json,
+        json!({
+            "historyScope": "localEvents",
+            "lifetime": {
+                "totalHumanTypedChars": 1234,
+                "firstWritingDate": "2026-03-10",
+                "lastWritingDate": "2026-10-18",
+                "elapsedCalendarDays": 223,
+                "writingDays": 42,
+                "averageCharsPerDay": 29.38,
+                "averageCharsPerMinute": 18.5
+            },
+            "periodCards": [{
+                "preset": "last7Days",
+                "hasSelection": true,
+                "range": { "startDate": "2026-10-12", "endDate": "2026-10-18" },
+                "totalHumanTypedChars": 300,
+                "totalActiveSeconds": 600,
+                "writingDays": 5,
+                "averageCharsPerDay": 60.0,
+                "averageCharsPerMinute": 30.0
+            }],
+            "selected": {
+                "preset": "last7Days",
+                "range": { "startDate": "2026-10-12", "endDate": "2026-10-18" },
+                "totalHumanTypedChars": 300,
+                "totalActiveSeconds": 600,
+                "writingDays": 5,
+                "averageCharsPerDay": 60.0,
+                "averageCharsPerMinute": 30.0,
+                "records": {
+                    "bestDay": { "date": "2026-10-15", "endDate": null, "value": 120 },
+                    "fastestHour": { "date": "2026-10-15", "endDate": null, "value": 90 },
+                    "longestSession": { "date": "2026-10-16", "endDate": null, "value": 1800 },
+                    "longestStreak": {
+                        "date": "2026-10-14",
+                        "endDate": "2026-10-18",
+                        "value": 5
+                    }
+                },
+                "trend": {
+                    "granularity": "day",
+                    "points": [
+                        { "date": "2026-10-12", "humanTypedChars": 0 },
+                        { "date": "2026-10-13", "humanTypedChars": 80 }
+                    ]
+                }
+            }
+        })
+    );
+    let restored: WritingStatsExplorerDto = serde_json::from_value(json).unwrap();
+    assert_eq!(restored, dto);
+}

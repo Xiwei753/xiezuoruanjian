@@ -210,11 +210,21 @@ pub unsafe extern "C" fn writer_core_save_chapter_with_stats(
     };
     let volume_id = match c_str_to_rust(volume_id) {
         Ok(id) if !id.is_empty() => id,
-        _ => return err_json("INVALID_ARGUMENT", "volume_id must be a non-empty UTF-8 string"),
+        _ => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                "volume_id must be a non-empty UTF-8 string",
+            )
+        }
     };
     let chapter_id = match c_str_to_rust(chapter_id) {
         Ok(id) if !id.is_empty() => id,
-        _ => return err_json("INVALID_ARGUMENT", "chapter_id must be a non-empty UTF-8 string"),
+        _ => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                "chapter_id must be a non-empty UTF-8 string",
+            )
+        }
     };
     let content = match c_str_to_rust(content) {
         Ok(text) => text,
@@ -226,9 +236,7 @@ pub unsafe extern "C" fn writer_core_save_chapter_with_stats(
     } else {
         match c_str_to_rust(events_json) {
             Ok(json) => json,
-            Err(_) => {
-                return err_json("INVALID_ARGUMENT", "events_json must be a UTF-8 string")
-            }
+            Err(_) => return err_json("INVALID_ARGUMENT", "events_json must be a UTF-8 string"),
         }
     };
     let events: Vec<crate::api::EditorChangeStatsInputDto> = if events_json.trim().is_empty() {
@@ -245,5 +253,160 @@ pub unsafe extern "C" fn writer_core_save_chapter_with_stats(
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("UNKNOWN_ERROR", &e),
+    }
+}
+
+/// 读取可选的 C 字符串参数：NULL 或空串都表示「未提供」。
+///
+/// 无效 UTF-8 返回 `Err`，由调用方转成 `INVALID_ARGUMENT` 错误信封。
+fn optional_c_str(value: *const c_char) -> Result<Option<String>, i32> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let text = c_str_to_rust(value)?;
+    Ok(if text.is_empty() { None } else { Some(text) })
+}
+
+/// 统计页 Explorer 一次性快照（#944）：生涯摘要 + 四张时段卡 + 选中时段详情。
+///
+/// `preset` 固定为 `"last7Days"` / `"last30Days"` / `"last6Months"` /
+/// `"lifetime"` / `"custom"`；`custom_start` / `custom_end` 是可选的自选闭区间
+/// （两端包含），NULL 或空串表示未提供，`custom` 必须提供两端。
+/// 参数非法（未知 preset / 只给一端 / 日期格式错 / 起止颠倒）返回
+/// `INVALID_ARGUMENT`，其余失败返回 `UNKNOWN_ERROR`。
+///
+/// # Safety
+/// 三个参数都必须是 NULL 或指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_writing_stats_explorer(
+    preset: *const c_char,
+    custom_start: *const c_char,
+    custom_end: *const c_char,
+) -> *mut c_char {
+    let preset = match c_str_to_rust(preset) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "preset must be a UTF-8 string"),
+    };
+    let custom_start = match optional_c_str(custom_start) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "custom_start must be a UTF-8 string"),
+    };
+    let custom_end = match optional_c_str(custom_end) {
+        Ok(value) => value,
+        Err(_) => return err_json("INVALID_ARGUMENT", "custom_end must be a UTF-8 string"),
+    };
+    // 参数校验与 Core 查询共用同一份规则（calendar::parse_explorer_query），
+    // 非法输入在进入服务前就返回 INVALID_ARGUMENT。
+    if let Err(e) = crate::writing_stats::calendar::parse_explorer_query(
+        &preset,
+        custom_start.as_deref(),
+        custom_end.as_deref(),
+    ) {
+        return err_json("INVALID_ARGUMENT", &e.to_string());
+    }
+    match with_app_service(|svc| {
+        svc.get_writing_stats_explorer(preset, custom_start, custom_end)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("UNKNOWN_ERROR", &e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ffi::writer_core_init;
+    use std::ffi::CStr;
+    use std::sync::OnceLock;
+    use tempfile::TempDir;
+
+    /// 临时目录要活到进程结束：全局 Core 仍引用它，提前删会让后续 FFI 测试读到空目录。
+    static TEST_TEMP_DIR: OnceLock<TempDir> = OnceLock::new();
+
+    /// 与 `ffi::mod` 的并发测试共用同一个全局 Core 单例（只初始化一次）。
+    fn ensure_core_init() {
+        if crate::ffi::APP_SERVICE.get().is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("临时目录");
+        let path = std::ffi::CString::new(dir.path().to_str().expect("UTF-8 临时路径"))
+            .expect("CString 路径");
+        // SAFETY: path 是合法的 NUL 结尾 UTF-8 C 字符串。
+        let rc = unsafe { writer_core_init(path.as_ptr()) };
+        assert_eq!(rc, 0, "writer_core_init 失败");
+        let _ = TEST_TEMP_DIR.set(dir);
+    }
+
+    /// 调一次 C ABI，解析返回的 JSON 信封并释放 C 字符串。
+    fn call_explorer(
+        preset: Option<&str>,
+        custom_start: Option<&str>,
+        custom_end: Option<&str>,
+    ) -> serde_json::Value {
+        let preset = preset.map(|value| std::ffi::CString::new(value).expect("preset"));
+        let custom_start =
+            custom_start.map(|value| std::ffi::CString::new(value).expect("custom_start"));
+        let custom_end = custom_end.map(|value| std::ffi::CString::new(value).expect("custom_end"));
+        let as_ptr = |value: &Option<std::ffi::CString>| {
+            value.as_ref().map_or(std::ptr::null(), |v| v.as_ptr())
+        };
+        // SAFETY: 三个参数都是 NULL 或本测试持有的合法 NUL 结尾 UTF-8 C 字符串。
+        let response = unsafe {
+            writer_core_get_writing_stats_explorer(
+                as_ptr(&preset),
+                as_ptr(&custom_start),
+                as_ptr(&custom_end),
+            )
+        };
+        // SAFETY: response 由上面的 FFI 返回，指向 NUL 结尾的 UTF-8 JSON 字符串。
+        let text = unsafe { CStr::from_ptr(response) }
+            .to_str()
+            .expect("FFI 应返回 UTF-8 信封")
+            .to_string();
+        // SAFETY: response 只释放一次，之后不再使用。
+        unsafe { crate::ffi::writer_core_free_string(response) };
+        serde_json::from_str(&text).expect("FFI 应返回 JSON 信封")
+    }
+
+    #[test]
+    fn explorer_ffi_maps_invalid_arguments_to_invalid_argument() {
+        ensure_core_init();
+        for (preset, start, end) in [
+            (None, None, None),
+            (Some("lastWeek"), None, None),
+            (Some("custom"), None, None),
+            (Some("custom"), Some("2026-05-01"), None),
+            (Some("custom"), None, Some("2026-05-31")),
+            (Some("custom"), Some("2026-05-31"), Some("2026-05-01")),
+            (Some("custom"), Some("not-a-date"), Some("2026-05-31")),
+        ] {
+            let envelope = call_explorer(preset, start, end);
+            assert_eq!(
+                envelope["success"], false,
+                "preset={preset:?} start={start:?} end={end:?} 应被拒绝"
+            );
+            assert_eq!(
+                envelope["errorCode"], "INVALID_ARGUMENT",
+                "preset={preset:?} start={start:?} end={end:?} 的错误码"
+            );
+        }
+    }
+
+    #[test]
+    fn explorer_ffi_returns_snapshot_envelope() {
+        ensure_core_init();
+        let envelope = call_explorer(Some("last7Days"), Some("2026-05-01"), Some("2026-05-02"));
+        assert_eq!(envelope["success"], true, "合法参数应成功：{envelope}");
+        assert_eq!(envelope["data"]["historyScope"], "localEvents");
+        assert_eq!(envelope["data"]["selected"]["preset"], "last7Days");
+        assert_eq!(
+            envelope["data"]["periodCards"]
+                .as_array()
+                .expect("四张时段卡")
+                .len(),
+            4
+        );
     }
 }

@@ -221,18 +221,29 @@ impl StatsStore {
         Ok(events)
     }
 
+    /// 读取本地事件历史上的**全部**事件（遍历真实存在的日期文件，升序）。
+    ///
+    /// 供统计页 Explorer 这类「一次拿到全量历史再在内存里切区间」的查询使用：
+    /// 只遍历 [`StatsStore::list_event_file_dates`] 里真实存在的日期文件，
+    /// 绝不按「某天到今天」逐日枚举空文件。任一分区文件损坏仍返回明确错误，
+    /// 不把错误当「0 字」吞掉。
+    pub fn load_all_events(&self) -> Result<Vec<WritingInputEvent>> {
+        let mut events = Vec::new();
+        for date in self.list_event_file_dates()? {
+            let mut day_events = self.load_events_for_date(&date)?;
+            events.append(&mut day_events);
+        }
+        Ok(events)
+    }
+
     /// 读取指定作品的全部本地事件（跨所有已有事件文件的 UTC 分区）。
     ///
     /// 只遍历 [`StatsStore::list_event_file_dates`] 里真实存在的日期文件，
     /// 不按「作品创建日到今天」逐日枚举空文件。任一分区文件损坏仍返回
     /// 明确错误，不把错误当「0 字」吞掉。
     pub fn load_events_for_project(&self, project_id: &str) -> Result<Vec<WritingInputEvent>> {
-        let mut events = Vec::new();
-        for date in self.list_event_file_dates()? {
-            let mut day_events = self.load_events_for_date(&date)?;
-            day_events.retain(|e| e.project_id == project_id);
-            events.append(&mut day_events);
-        }
+        let mut events = self.load_all_events()?;
+        events.retain(|e| e.project_id == project_id);
         Ok(events)
     }
 
@@ -439,8 +450,7 @@ mod tests {
     fn test_record_events_resend_keeps_original_storage_date() {
         let (store, _tmp) = create_mock_store();
         // 事件发生在昨天（UTC），重发也落在昨天的文件里。
-        let occurred_at_ms =
-            (chrono::Utc::now() - chrono::Duration::days(1)).timestamp_millis();
+        let occurred_at_ms = (chrono::Utc::now() - chrono::Duration::days(1)).timestamp_millis();
         let event = WritingInputEvent::with_identity(
             "old-event-id".to_string(),
             occurred_at_ms,

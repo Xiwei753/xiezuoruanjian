@@ -5,12 +5,20 @@
 //!
 //! ## 返回格式
 //!
-//! 所有查询方法返回 `serde_json::Value`，便于直接序列化为 JSON 响应。
+//! 既有查询方法返回 `serde_json::Value`，便于直接序列化为 JSON 响应；
+//! Explorer 一次性快照（#944）返回强类型 DTO，由服务层统一转 JSON。
 
+use crate::api::types::{
+    DateRangeDto, WritingStatsExplorerDto, WritingStatsLifetimeDto, WritingStatsPeriodCardDto,
+    WritingStatsRecordDto, WritingStatsRecordsDto, WritingStatsSelectedPeriodDto,
+    WritingStatsTrendDto, WritingStatsTrendPointDto,
+};
 use crate::error::Result;
+use crate::writing_stats::calendar::{self, StatsPreset};
 use crate::writing_stats::projection::{
-    project_events, project_lifetime_stats, CurrentWritingSpeed, ProjectLifetimeStatsAgg,
-    StatsProjection, StatsSummary,
+    bucket_trend, project_all_time_stats, project_events, project_lifetime_stats,
+    project_range_stats, CurrentWritingSpeed, ProjectLifetimeStatsAgg, RangeStatsAgg,
+    StatsProjection, StatsRecord, StatsSummary, TrendGranularity,
 };
 use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::{DateRange, WritingInputEvent};
@@ -302,6 +310,116 @@ impl StatsApi {
         Ok(project_lifetime_stats(&events, project_id))
     }
 
+    /// 统计页 Explorer 一次性快照（#944）：生涯摘要 + 四张时段卡 + 当前选中时段详情。
+    ///
+    /// 一次 [`StatsStore::load_all_events`] 读盘，所有时段共用同一份事件：
+    /// 不逐卡重复扫描事件文件，也不让端侧各自算天数、纪录或趋势。
+    ///
+    /// - `preset` 固定为 `"last7Days"` / `"last30Days"` / `"last6Months"` /
+    ///   `"lifetime"` / `"custom"`；`custom` 必须带有效自选区间；
+    /// - `custom_start` / `custom_end` 是可选的用户自选闭区间（同给同给）；
+    /// - 生涯/纪录/平均/趋势的口径全部由 Core 决定，端侧只做展示。
+    pub fn get_explorer_snapshot(
+        &self,
+        preset: &str,
+        custom_start: Option<&str>,
+        custom_end: Option<&str>,
+    ) -> Result<WritingStatsExplorerDto> {
+        let (preset, custom_range) =
+            calendar::parse_explorer_query(preset, custom_start, custom_end)?;
+        let today = calendar::local_today_date();
+
+        let events = self.store.load_all_events()?;
+        let career = project_all_time_stats(&events)?;
+        let first_writing_date = career.daily_human_typed_chars.keys().next().cloned();
+        let last_writing_date = career.daily_human_typed_chars.keys().next_back().cloned();
+
+        let lifetime = WritingStatsLifetimeDto {
+            total_human_typed_chars: career.total_human_typed_chars,
+            first_writing_date: first_writing_date.clone(),
+            last_writing_date,
+            elapsed_calendar_days: elapsed_calendar_days(first_writing_date.as_deref(), &today)?,
+            writing_days: career.writing_days,
+            average_chars_per_day: average_chars_per_day(
+                career.total_human_typed_chars,
+                career.writing_days,
+            ),
+            average_chars_per_minute: average_chars_per_minute(
+                career.total_human_typed_chars,
+                career.total_active_seconds,
+            ),
+        };
+
+        // 四张时段卡顺序固定：近七天、近三十天、近半年、自选区间。
+        let mut period_cards = Vec::with_capacity(calendar::PERIOD_CARD_PRESETS.len());
+        for card_preset in calendar::PERIOD_CARD_PRESETS {
+            period_cards.push(period_card(
+                card_preset,
+                &events,
+                &today,
+                first_writing_date.as_deref(),
+                custom_range.as_ref(),
+            )?);
+        }
+
+        let range = calendar::resolve_range(
+            preset,
+            &today,
+            first_writing_date.as_deref(),
+            custom_range.as_ref(),
+        )?;
+        // 生涯在上面已经聚合过，直接复用；其余时段在区间过滤后独立聚合。
+        let selected_stats = match preset {
+            StatsPreset::Lifetime => career,
+            _ => project_range_stats(&events, &range.start_date, &range.end_date)?,
+        };
+        let granularity = trend_granularity(preset, &range)?;
+        let points = if preset == StatsPreset::Lifetime && first_writing_date.is_none() {
+            // 完全没有人工输入时没有「首次写作所在月」，返回空点列，
+            // 不靠补一个 0 月冒充生涯起点。
+            Vec::new()
+        } else {
+            bucket_trend(
+                &selected_stats.daily_human_typed_chars,
+                granularity,
+                &range.start_date,
+                &range.end_date,
+            )?
+            .into_iter()
+            .map(|point| WritingStatsTrendPointDto {
+                date: point.date,
+                human_typed_chars: point.human_typed_chars,
+            })
+            .collect()
+        };
+
+        Ok(WritingStatsExplorerDto {
+            history_scope: "localEvents".to_string(),
+            lifetime,
+            period_cards,
+            selected: WritingStatsSelectedPeriodDto {
+                preset: preset.as_str().to_string(),
+                range: date_range_dto(&range),
+                total_human_typed_chars: selected_stats.total_human_typed_chars,
+                total_active_seconds: selected_stats.total_active_seconds,
+                writing_days: selected_stats.writing_days,
+                average_chars_per_day: average_chars_per_day(
+                    selected_stats.total_human_typed_chars,
+                    selected_stats.writing_days,
+                ),
+                average_chars_per_minute: average_chars_per_minute(
+                    selected_stats.total_human_typed_chars,
+                    selected_stats.total_active_seconds,
+                ),
+                records: records_dto(&selected_stats),
+                trend: WritingStatsTrendDto {
+                    granularity: granularity.as_str().to_string(),
+                    points,
+                },
+            },
+        })
+    }
+
     /// 统计面板一次性快照（#935）：一次读盘，按 Core 本地业务日历切分
     /// 今日 / 本周（周一开始）/ 本月，本周范围的作品、章节、设备与速度曲线
     /// 都从同一份投影取。
@@ -421,5 +539,112 @@ impl StatsApi {
     /// 本机当前的业务日历日（本地时区，非 UTC）。
     pub fn today_date() -> String {
         crate::writing_stats::calendar::local_today_date()
+    }
+}
+
+/// 组装一张时段卡；`custom` 未选择日期时返回空卡而不是报错。
+fn period_card(
+    preset: StatsPreset,
+    events: &[WritingInputEvent],
+    today: &str,
+    first_writing_date: Option<&str>,
+    custom_range: Option<&DateRange>,
+) -> Result<WritingStatsPeriodCardDto> {
+    if preset == StatsPreset::Custom && custom_range.is_none() {
+        return Ok(WritingStatsPeriodCardDto {
+            preset: preset.as_str().to_string(),
+            has_selection: false,
+            range: None,
+            total_human_typed_chars: 0,
+            total_active_seconds: 0,
+            writing_days: 0,
+            average_chars_per_day: None,
+            average_chars_per_minute: None,
+        });
+    }
+    let range = calendar::resolve_range(preset, today, first_writing_date, custom_range)?;
+    let stats = project_range_stats(events, &range.start_date, &range.end_date)?;
+    Ok(WritingStatsPeriodCardDto {
+        preset: preset.as_str().to_string(),
+        has_selection: true,
+        range: Some(date_range_dto(&range)),
+        total_human_typed_chars: stats.total_human_typed_chars,
+        total_active_seconds: stats.total_active_seconds,
+        writing_days: stats.writing_days,
+        average_chars_per_day: average_chars_per_day(
+            stats.total_human_typed_chars,
+            stats.writing_days,
+        ),
+        average_chars_per_minute: average_chars_per_minute(
+            stats.total_human_typed_chars,
+            stats.total_active_seconds,
+        ),
+    })
+}
+
+/// 选中时段的趋势粒度：短区间按天、半年按周、生涯按月，自选按跨度。
+fn trend_granularity(preset: StatsPreset, range: &DateRange) -> Result<TrendGranularity> {
+    Ok(match preset {
+        StatsPreset::Last7Days | StatsPreset::Last30Days => TrendGranularity::Day,
+        StatsPreset::Last6Months => TrendGranularity::Week,
+        StatsPreset::Lifetime => TrendGranularity::Month,
+        StatsPreset::Custom => TrendGranularity::for_span(&range.start_date, &range.end_date)?,
+    })
+}
+
+/// 「陪伴 N 天」：首次写作日到今天（含两端）的自然日历天数。
+///
+/// 没有人工输入的历史返回 0；未来日期（系统时钟被改快）不产出反向跨度。
+fn elapsed_calendar_days(first_writing_date: Option<&str>, today: &str) -> Result<u64> {
+    match first_writing_date {
+        Some(first) if first <= today => calendar::day_span_inclusive(first, today),
+        _ => Ok(0),
+    }
+}
+
+/// 平均每天字数 = 区间人工输入 / 区间内有输入的天数；没有输入日为 null。
+fn average_chars_per_day(total_chars: u64, writing_days: u64) -> Option<f64> {
+    if writing_days == 0 {
+        return None;
+    }
+    Some(total_chars as f64 / writing_days as f64)
+}
+
+/// 平均写作速度（字/分）= 区间人工输入 × 60 / 区间有效写作时长；零时长时为 null。
+fn average_chars_per_minute(total_chars: u64, active_seconds: u64) -> Option<f64> {
+    if active_seconds == 0 {
+        return None;
+    }
+    Some(total_chars as f64 * 60.0 / active_seconds as f64)
+}
+
+fn date_range_dto(range: &DateRange) -> DateRangeDto {
+    DateRangeDto {
+        start_date: range.start_date.clone(),
+        end_date: range.end_date.clone(),
+    }
+}
+
+fn record_dto(record: Option<&StatsRecord>) -> WritingStatsRecordDto {
+    match record {
+        Some(record) => WritingStatsRecordDto {
+            date: Some(record.date.clone()),
+            end_date: record.end_date.clone(),
+            value: Some(record.value),
+        },
+        None => WritingStatsRecordDto {
+            date: None,
+            end_date: None,
+            value: None,
+        },
+    }
+}
+
+fn records_dto(stats: &RangeStatsAgg) -> WritingStatsRecordsDto {
+    WritingStatsRecordsDto {
+        best_day: record_dto(stats.best_day.as_ref()),
+        fastest_hour: record_dto(stats.fastest_hour.as_ref()),
+        longest_session: record_dto(stats.longest_session.as_ref()),
+        longest_streak: record_dto(stats.longest_streak.as_ref()),
     }
 }

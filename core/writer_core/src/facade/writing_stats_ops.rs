@@ -201,4 +201,22 @@ impl super::WriterCore {
     pub fn get_writing_stats_dashboard(&self) -> Result<Value> {
         self.get_stats_api().get_dashboard_snapshot()
     }
+
+    /// 统计页 Explorer 一次性快照（#944）：生涯摘要 + 四张时段卡 + 选中时段详情。
+    ///
+    /// 一次读盘覆盖全部时段；`preset` 取 `"last7Days"` / `"last30Days"` /
+    /// `"last6Months"` / `"lifetime"` / `"custom"`，`custom` 必须带
+    /// `custom_start` / `custom_end`（两端包含）。日期口径、纪录与趋势口径
+    /// 全在 Core，端侧不传「今天」也不自己统计。
+    pub fn get_writing_stats_explorer(
+        &self,
+        preset: &str,
+        custom_start: Option<&str>,
+        custom_end: Option<&str>,
+    ) -> Result<Value> {
+        let snapshot =
+            self.get_stats_api()
+                .get_explorer_snapshot(preset, custom_start, custom_end)?;
+        serde_json::to_value(snapshot).map_err(Into::into)
+    }
 }

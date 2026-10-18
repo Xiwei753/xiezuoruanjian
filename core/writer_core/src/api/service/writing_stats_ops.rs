@@ -38,13 +38,8 @@ impl WriterCoreApi {
         content: &str,
         events: Vec<crate::api::EditorChangeStatsInputDto>,
     ) -> ApiResult<crate::api::types::ChapterSaveReceiptDto> {
-        let receipt = self.save_chapter_content_with_options(
-            project_id,
-            volume_id,
-            chapter_id,
-            content,
-            false,
-        )?;
+        let receipt = self
+            .save_chapter_content_with_options(project_id, volume_id, chapter_id, content, false)?;
         for event in events {
             self.record_editor_change_stats(event)?;
         }
@@ -260,5 +255,33 @@ impl WriterCoreApi {
     pub fn get_writing_stats_dashboard_json(&self) -> ApiResult<String> {
         let value = self.get_writing_stats_dashboard()?;
         Self::json_string(&value)
+    }
+
+    /// 统计页 Explorer 一次性快照（#944）：生涯摘要 + 四张时段卡 + 选中时段详情。
+    ///
+    /// `preset` 取 `"last7Days"` / `"last30Days"` / `"last6Months"` /
+    /// `"lifetime"` / `"custom"`；`custom_start` / `custom_end` 是可选的自选
+    /// 闭区间（同给同给，`custom` 必给）。参数非法返回错误，不做静默兜底。
+    pub fn get_writing_stats_explorer(
+        &self,
+        preset: &str,
+        custom_start: Option<&str>,
+        custom_end: Option<&str>,
+    ) -> ApiResult<crate::api::types::WritingStatsExplorerDto> {
+        let value = self
+            .core_read()
+            .get_writing_stats_explorer(preset, custom_start, custom_end)
+            .map_err(Into::<WriterError>::into)?;
+        serde_json::from_value(value).map_err(Into::into)
+    }
+
+    pub fn get_writing_stats_explorer_json(
+        &self,
+        preset: &str,
+        custom_start: Option<&str>,
+        custom_end: Option<&str>,
+    ) -> ApiResult<String> {
+        let snapshot = self.get_writing_stats_explorer(preset, custom_start, custom_end)?;
+        Self::json_string(&snapshot)
     }
 }

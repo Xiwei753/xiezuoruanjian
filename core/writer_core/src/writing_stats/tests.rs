@@ -835,7 +835,9 @@ fn test_facade_record_editor_change_stats_dedups_and_keeps_occurred_date() {
     }
 
     // 只算一次，且落在事件发生当天（昨天），不漂到今天。
-    let daily = core.get_writing_stats_summary(&yesterday, &yesterday).unwrap();
+    let daily = core
+        .get_writing_stats_summary(&yesterday, &yesterday)
+        .unwrap();
     assert_eq!(daily["totalHumanTypedChars"], 10);
     let today_summary = core.get_writing_stats_summary(&today, &today).unwrap();
     assert_eq!(today_summary["totalHumanTypedChars"], 0);
@@ -1364,4 +1366,456 @@ fn test_days_count_from_business_date() {
 
     // 同一天 → daysCount = 1
     assert_eq!(summary["daysCount"], 1);
+}
+
+// ---------------------------------------------------------------------------
+// #944 统计页 Explorer：生涯 + 时段卡 + 选中时段纪录/趋势
+// ---------------------------------------------------------------------------
+
+/// 钉住业务日的事件：时间戳只决定会话/窗口顺序，归属日由 `local_date` 决定。
+fn explorer_event(
+    timestamp_ms: i64,
+    local_date: &str,
+    source: EventSource,
+    chars: u32,
+) -> WritingInputEvent {
+    let mut event = WritingInputEvent::new(
+        "dev-1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
+        "vol1",
+        "chap1",
+        source,
+        chars,
+        0,
+        0,
+        0,
+        0,
+        "s1",
+    );
+    event.timestamp_ms = timestamp_ms;
+    event.local_date = local_date.to_string();
+    event
+}
+
+#[test]
+fn test_explorer_empty_history_lifetime() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let snapshot = api.get_explorer_snapshot("lifetime", None, None).unwrap();
+    let today = crate::writing_stats::calendar::local_today_date();
+
+    // 只有本机事件历史：显式声明口径。
+    assert_eq!(snapshot.history_scope, "localEvents");
+    assert_eq!(snapshot.lifetime.total_human_typed_chars, 0);
+    assert_eq!(snapshot.lifetime.first_writing_date, None);
+    assert_eq!(snapshot.lifetime.last_writing_date, None);
+    assert_eq!(snapshot.lifetime.elapsed_calendar_days, 0);
+    assert_eq!(snapshot.lifetime.writing_days, 0);
+    assert_eq!(snapshot.lifetime.average_chars_per_day, None);
+    assert_eq!(snapshot.lifetime.average_chars_per_minute, None);
+
+    // 空历史：range 退化成 今天..今天，趋势为空，纪录全 null，不用 0 冒充。
+    assert_eq!(snapshot.selected.preset, "lifetime");
+    assert_eq!(snapshot.selected.range.start_date, today);
+    assert_eq!(snapshot.selected.range.end_date, today);
+    assert_eq!(snapshot.selected.trend.granularity, "month");
+    assert!(snapshot.selected.trend.points.is_empty());
+    assert_eq!(
+        snapshot.selected.records.best_day,
+        crate::api::types::WritingStatsRecordDto {
+            date: None,
+            end_date: None,
+            value: None
+        }
+    );
+    assert!(snapshot.selected.records.fastest_hour.value.is_none());
+    assert!(snapshot.selected.records.longest_session.date.is_none());
+    assert!(snapshot.selected.records.longest_streak.date.is_none());
+
+    // 四张卡顺序固定；没有自选日期时 custom 卡是空卡。
+    let presets: Vec<&str> = snapshot
+        .period_cards
+        .iter()
+        .map(|card| card.preset.as_str())
+        .collect();
+    assert_eq!(
+        presets,
+        vec!["last7Days", "last30Days", "last6Months", "custom"]
+    );
+    for card in snapshot.period_cards.iter().take(3) {
+        assert!(card.has_selection);
+        assert!(card.range.is_some());
+        assert_eq!(card.total_human_typed_chars, 0);
+        assert_eq!(card.average_chars_per_day, None);
+        assert_eq!(card.average_chars_per_minute, None);
+    }
+    let custom = &snapshot.period_cards[3];
+    assert!(!custom.has_selection);
+    assert!(custom.range.is_none());
+    assert_eq!(custom.total_active_seconds, 0);
+}
+
+#[test]
+fn test_explorer_rejects_invalid_preset_and_custom_dates() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    assert!(api.get_explorer_snapshot("lastWeek", None, None).is_err());
+    assert!(api.get_explorer_snapshot("custom", None, None).is_err());
+    assert!(api
+        .get_explorer_snapshot("custom", Some("2026-05-01"), None)
+        .is_err());
+    assert!(api
+        .get_explorer_snapshot("custom", None, Some("2026-05-31"))
+        .is_err());
+    assert!(api
+        .get_explorer_snapshot("custom", Some("2026-05-31"), Some("2026-05-01"))
+        .is_err());
+    assert!(api
+        .get_explorer_snapshot("custom", Some("2026-13-01"), Some("2026-05-31"))
+        .is_err());
+    // 非 custom 预设也不接受只给一端的自选区间。
+    assert!(api
+        .get_explorer_snapshot("last7Days", Some("2026-05-01"), None)
+        .is_err());
+}
+
+#[test]
+fn test_explorer_custom_card_filled_even_when_selected_is_other_preset() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    // 选中近七天，但前端已经记住用户上一次的自选区间：卡片照算。
+    let snapshot = api
+        .get_explorer_snapshot("last7Days", Some("2026-05-10"), Some("2026-05-11"))
+        .unwrap();
+    assert_eq!(snapshot.selected.preset, "last7Days");
+    let custom = &snapshot.period_cards[3];
+    assert_eq!(custom.preset, "custom");
+    assert!(custom.has_selection);
+    let range = custom.range.as_ref().unwrap();
+    assert_eq!(range.start_date, "2026-05-10");
+    assert_eq!(range.end_date, "2026-05-11");
+    // 区间里没有数据时数值为 0、平均为 null，range 仍然是用户选的。
+    assert_eq!(custom.total_human_typed_chars, 0);
+    assert_eq!(custom.average_chars_per_day, None);
+    assert_eq!(custom.average_chars_per_minute, None);
+}
+
+#[test]
+fn test_explorer_custom_selected_counts_both_ends() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    // 05-10 100 字（两次输入），05-11 50 字，05-12 80 字；粘贴不计入人工码字。
+    api.record_event(explorer_event(
+        1_780_000_000_000,
+        "2026-05-10",
+        EventSource::HumanTyped,
+        60,
+    ))
+    .unwrap();
+    api.record_event(explorer_event(
+        1_780_000_030_000,
+        "2026-05-10",
+        EventSource::HumanTyped,
+        40,
+    ))
+    .unwrap();
+    api.record_event(explorer_event(
+        1_780_000_060_000,
+        "2026-05-10",
+        EventSource::Pasted,
+        999,
+    ))
+    .unwrap();
+    api.record_event(explorer_event(
+        1_780_090_000_000,
+        "2026-05-11",
+        EventSource::HumanTyped,
+        50,
+    ))
+    .unwrap();
+    api.record_event(explorer_event(
+        1_780_180_000_000,
+        "2026-05-12",
+        EventSource::HumanTyped,
+        80,
+    ))
+    .unwrap();
+
+    let snapshot = api
+        .get_explorer_snapshot("custom", Some("2026-05-10"), Some("2026-05-11"))
+        .unwrap();
+
+    assert_eq!(snapshot.selected.preset, "custom");
+    assert_eq!(snapshot.selected.range.start_date, "2026-05-10");
+    assert_eq!(snapshot.selected.range.end_date, "2026-05-11");
+    // 两端包含：05-10 + 05-11，区间外的 05-12 不算；粘贴不算。
+    assert_eq!(snapshot.selected.total_human_typed_chars, 150);
+    assert_eq!(snapshot.selected.writing_days, 2);
+    assert_eq!(
+        snapshot.selected.records.best_day.date.as_deref(),
+        Some("2026-05-10")
+    );
+    assert_eq!(snapshot.selected.records.best_day.value, Some(100));
+    assert_eq!(
+        snapshot.selected.records.longest_streak.date.as_deref(),
+        Some("2026-05-10")
+    );
+    assert_eq!(
+        snapshot.selected.records.longest_streak.end_date.as_deref(),
+        Some("2026-05-11")
+    );
+    assert_eq!(snapshot.selected.records.longest_streak.value, Some(2));
+    assert_eq!(snapshot.selected.trend.granularity, "day");
+    let points: Vec<(&str, u64)> = snapshot
+        .selected
+        .trend
+        .points
+        .iter()
+        .map(|point| (point.date.as_str(), point.human_typed_chars))
+        .collect();
+    assert_eq!(points, vec![("2026-05-10", 100), ("2026-05-11", 50)]);
+
+    // 生涯覆盖全部本地事件（含区间外的 05-12）。
+    assert_eq!(snapshot.lifetime.total_human_typed_chars, 230);
+    assert_eq!(
+        snapshot.lifetime.first_writing_date.as_deref(),
+        Some("2026-05-10")
+    );
+    assert_eq!(
+        snapshot.lifetime.last_writing_date.as_deref(),
+        Some("2026-05-12")
+    );
+    assert_eq!(snapshot.lifetime.writing_days, 3);
+    let today = crate::writing_stats::calendar::local_today_date();
+    let expected_elapsed =
+        crate::writing_stats::calendar::day_span_inclusive("2026-05-10", &today).unwrap();
+    assert_eq!(snapshot.lifetime.elapsed_calendar_days, expected_elapsed);
+}
+
+#[test]
+fn test_explorer_last7_days_window_with_real_timestamps() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+    let day_ms = 24 * 60 * 60 * 1000;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let today = crate::writing_stats::calendar::local_date_at(now_ms).unwrap();
+    let three_days_ago = now_ms - 3 * day_ms;
+    let ten_days_ago = now_ms - 10 * day_ms;
+
+    for (timestamp_ms, chars) in [(now_ms, 10_u32), (three_days_ago, 3), (ten_days_ago, 40)] {
+        api.record_event(explorer_event(
+            timestamp_ms,
+            &crate::writing_stats::calendar::local_date_at(timestamp_ms).unwrap(),
+            EventSource::HumanTyped,
+            chars,
+        ))
+        .unwrap();
+    }
+
+    let snapshot = api.get_explorer_snapshot("last7Days", None, None).unwrap();
+    // 近七天含今天共 7 日：今天 + 三天前；十天前不在。
+    assert_eq!(snapshot.period_cards[0].total_human_typed_chars, 13);
+    // 近三十天/近半年包含十天前。
+    assert_eq!(snapshot.period_cards[1].total_human_typed_chars, 53);
+    assert_eq!(snapshot.period_cards[2].total_human_typed_chars, 53);
+
+    assert_eq!(snapshot.selected.total_human_typed_chars, 13);
+    assert_eq!(snapshot.selected.writing_days, 2);
+    assert_eq!(snapshot.selected.trend.granularity, "day");
+    assert_eq!(snapshot.selected.trend.points.len(), 7);
+    let trend_sum: u64 = snapshot
+        .selected
+        .trend
+        .points
+        .iter()
+        .map(|point| point.human_typed_chars)
+        .sum();
+    assert_eq!(trend_sum, 13);
+    let first_point = &snapshot.selected.trend.points[0];
+    assert_eq!(
+        first_point.date,
+        crate::writing_stats::calendar::shift_date(&today, -6).unwrap()
+    );
+}
+
+#[test]
+fn test_explorer_trend_granularity_per_preset() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let today = crate::writing_stats::calendar::local_today_date();
+    api.record_event(explorer_event(now_ms, &today, EventSource::HumanTyped, 10))
+        .unwrap();
+
+    let granularity = |preset: &str, start: Option<&str>, end: Option<&str>| {
+        api.get_explorer_snapshot(preset, start, end)
+            .unwrap()
+            .selected
+            .trend
+            .granularity
+    };
+    assert_eq!(granularity("last7Days", None, None), "day");
+    assert_eq!(granularity("last30Days", None, None), "day");
+    assert_eq!(granularity("last6Months", None, None), "week");
+    assert_eq!(granularity("lifetime", None, None), "month");
+
+    // 自选按跨度选粒度：≤31 天按天、≤200 天按周、更长按月。
+    let short_start = crate::writing_stats::calendar::shift_date(&today, -30).unwrap();
+    let week_start = crate::writing_stats::calendar::shift_date(&today, -40).unwrap();
+    let month_start = crate::writing_stats::calendar::shift_date(&today, -250).unwrap();
+    assert_eq!(
+        granularity("custom", Some(&short_start), Some(&today)),
+        "day"
+    );
+    assert_eq!(
+        granularity("custom", Some(&week_start), Some(&today)),
+        "week"
+    );
+    assert_eq!(
+        granularity("custom", Some(&month_start), Some(&today)),
+        "month"
+    );
+}
+
+#[test]
+fn test_explorer_short_lifetime_trend_starts_at_first_writing_month() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+    let today = crate::writing_stats::calendar::local_today_date();
+    // 五个月前开写：短于一年，生涯趋势按「首次写作所在月 → 今天所在月」。
+    let first_date = crate::writing_stats::calendar::shift_months(&today, -5).unwrap();
+    api.record_event(explorer_event(
+        chrono::Utc::now().timestamp_millis(),
+        &first_date,
+        EventSource::HumanTyped,
+        7,
+    ))
+    .unwrap();
+
+    let snapshot = api.get_explorer_snapshot("lifetime", None, None).unwrap();
+    assert_eq!(
+        snapshot.lifetime.first_writing_date.as_deref(),
+        Some(first_date.as_str())
+    );
+    assert_eq!(snapshot.selected.range.start_date, first_date);
+    assert_eq!(snapshot.selected.trend.granularity, "month");
+    assert_eq!(snapshot.selected.trend.points.len(), 6);
+    let first_month = crate::writing_stats::calendar::month_start_date(&first_date).unwrap();
+    let last_month = crate::writing_stats::calendar::month_start_date(&today).unwrap();
+    assert_eq!(snapshot.selected.trend.points[0].date, first_month);
+    assert_eq!(snapshot.selected.trend.points[0].human_typed_chars, 7);
+    assert_eq!(snapshot.selected.trend.points[5].date, last_month);
+    assert_eq!(snapshot.selected.trend.points[5].human_typed_chars, 0);
+}
+
+#[test]
+fn test_explorer_zero_human_input_keeps_records_null() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+    // 只有粘贴：不产生「写作」纪录，也不产生平均。
+    api.record_event(explorer_event(
+        1_780_000_000_000,
+        "2026-05-10",
+        EventSource::Pasted,
+        500,
+    ))
+    .unwrap();
+
+    let snapshot = api
+        .get_explorer_snapshot("custom", Some("2026-05-10"), Some("2026-05-10"))
+        .unwrap();
+    assert_eq!(snapshot.selected.total_human_typed_chars, 0);
+    assert_eq!(snapshot.selected.writing_days, 0);
+    assert_eq!(snapshot.selected.average_chars_per_day, None);
+    assert_eq!(snapshot.selected.average_chars_per_minute, None);
+    assert!(snapshot.selected.records.best_day.value.is_none());
+    assert!(snapshot.selected.records.fastest_hour.value.is_none());
+    assert!(snapshot.selected.records.longest_streak.value.is_none());
+    // 趋势照常补 0，不是一个点都没有。
+    assert_eq!(snapshot.selected.trend.points.len(), 1);
+    assert_eq!(snapshot.selected.trend.points[0].human_typed_chars, 0);
+    // 生涯没有人工码字。
+    assert_eq!(snapshot.lifetime.total_human_typed_chars, 0);
+    assert_eq!(snapshot.lifetime.elapsed_calendar_days, 0);
+}
+
+#[test]
+fn test_explorer_duplicate_event_resend_counts_once() {
+    let temp_dir = tempdir().unwrap();
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+    let core = crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // 同一编辑事件重发三次（保存失败重试 / 进程恢复）：只落一次、只计一次。
+    for _ in 0..3 {
+        core.record_editor_change_stats(
+            "harmony",
+            "proj1",
+            "vol1",
+            "chap1",
+            crate::editor::EditorTransactionCause::Typing,
+            10,
+            0,
+            "evt-explorer-resend",
+            now_ms,
+        )
+        .unwrap();
+    }
+
+    let snapshot = core
+        .get_writing_stats_explorer("last7Days", None, None)
+        .unwrap();
+    assert_eq!(snapshot["historyScope"], "localEvents");
+    assert_eq!(snapshot["lifetime"]["totalHumanTypedChars"], 10);
+    assert_eq!(snapshot["selected"]["totalHumanTypedChars"], 10);
+    assert_eq!(snapshot["selected"]["writingDays"], 1);
+    // 单条事件没有会话时长：不捏造「字/分」。
+    assert!(snapshot["selected"]["averageCharsPerMinute"].is_null());
+    assert_eq!(
+        snapshot["selected"]["records"]["longestSession"]["date"],
+        serde_json::Value::Null
+    );
+}
+
+#[test]
+fn test_explorer_multi_device_same_window_not_one_long_session() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    // dev-a：10:00–10:01；dev-b：10:00:30–10:01:30。混在一起会变成 90 秒假会话。
+    let base = 1_780_000_000_000_i64;
+    let mut a1 = explorer_event(base, "2026-05-10", EventSource::HumanTyped, 10);
+    a1.device_id = "dev-a".to_string();
+    let mut a2 = explorer_event(base + 60_000, "2026-05-10", EventSource::HumanTyped, 10);
+    a2.device_id = "dev-a".to_string();
+    let mut b1 = explorer_event(base + 30_000, "2026-05-10", EventSource::HumanTyped, 10);
+    b1.device_id = "dev-b".to_string();
+    let mut b2 = explorer_event(base + 90_000, "2026-05-10", EventSource::HumanTyped, 10);
+    b2.device_id = "dev-b".to_string();
+    for event in [a1, a2, b1, b2] {
+        api.record_event(event).unwrap();
+    }
+
+    let snapshot = api
+        .get_explorer_snapshot("custom", Some("2026-05-10"), Some("2026-05-10"))
+        .unwrap();
+    assert_eq!(snapshot.selected.total_active_seconds, 120);
+    assert_eq!(
+        snapshot.selected.records.longest_session.value,
+        Some(60),
+        "不同设备的并发会话不能并成一条超长会话"
+    );
+    assert_eq!(
+        snapshot.selected.records.longest_session.date.as_deref(),
+        Some("2026-05-10")
+    );
+    // 字/分 = 40 字 × 60 / 120 秒 = 20。
+    let per_minute = snapshot.selected.average_chars_per_minute.unwrap();
+    assert!((per_minute - 20.0).abs() < 0.001);
 }

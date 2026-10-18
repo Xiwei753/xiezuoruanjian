@@ -1,7 +1,7 @@
 use crate::api::{
     ChapterStatsSummaryDto, CurrentWritingSpeedDto, DeviceInfoDto, DeviceStatsSummaryDto,
     EditorChangeStatsInputDto, ProjectStatsSummaryDto, ProjectWritingLifetimeStatsDto,
-    SpeedCurveSummaryDto, WriterError, WritingStatsSummaryDto,
+    SpeedCurveSummaryDto, WriterError, WritingStatsExplorerDto, WritingStatsSummaryDto,
 };
 
 impl super::WriterAppService {
@@ -83,8 +83,13 @@ impl super::WriterAppService {
         content: String,
         events: Vec<EditorChangeStatsInputDto>,
     ) -> Result<crate::api::types::ChapterSaveReceiptDto, WriterError> {
-        self.api
-            .save_chapter_with_editor_stats(&project_id, &volume_id, &chapter_id, &content, events)
+        self.api.save_chapter_with_editor_stats(
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            &content,
+            events,
+        )
     }
 
     pub fn calculate_word_count(&self, text: String) -> u32 {
@@ -116,5 +121,19 @@ impl super::WriterAppService {
         project_id: String,
     ) -> Result<ProjectWritingLifetimeStatsDto, WriterError> {
         self.api.get_project_writing_lifetime_stats(&project_id)
+    }
+
+    /// 统计页 Explorer 一次性快照（#944）：生涯摘要 + 四张时段卡 + 选中时段详情。
+    ///
+    /// 日期口径、纪录与趋势全在 Core；C ABI 的 `preset` / 日期参数非法
+    /// 由 FFI 边界按同一份校验规则返回 `INVALID_ARGUMENT`。
+    pub fn get_writing_stats_explorer(
+        &self,
+        preset: String,
+        custom_start: Option<String>,
+        custom_end: Option<String>,
+    ) -> Result<WritingStatsExplorerDto, WriterError> {
+        self.api
+            .get_writing_stats_explorer(&preset, custom_start.as_deref(), custom_end.as_deref())
     }
 }

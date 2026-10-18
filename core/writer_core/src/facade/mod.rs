@@ -155,10 +155,8 @@ mod tests {
 
     fn record_edit(core: &WriterCore, cause: EditorTransactionCause, inserted: u32, deleted: u32) {
         core.record_editor_change_stats(
-            "harmony", "proj1", "vol1", "chap1", cause, inserted, deleted,
-        "",
-        0,
-    )
+            "harmony", "proj1", "vol1", "chap1", cause, inserted, deleted, "", 0,
+        )
         .unwrap();
     }
 
