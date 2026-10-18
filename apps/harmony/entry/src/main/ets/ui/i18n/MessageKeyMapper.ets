@@ -95,6 +95,8 @@ export class MessageKeyMapper {
         return context.resourceManager.getStringSync($r('app.string.sync_result_token_permission_denied').id)
       case 'sync.result.conflict_summary':
         return context.resourceManager.getStringSync($r('app.string.sync_result_conflict_summary').id)
+      case 'sync.result.session_unaligned':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_session_unaligned').id)
       case 'sync.result.network_failed':
         return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
       // SyncErrorCategory 官方线格式码（core/writer_core/src/sync/types.rs::SyncErrorCategory::from_code）

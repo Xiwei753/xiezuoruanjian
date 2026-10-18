@@ -245,14 +245,19 @@ export struct SettingsContent {
   }
 
   private fullSyncReportFailureReason(failure: FullSyncReportFailure): string {
-    const reasons: string[] = []
-    if (failure.error_category.length > 0) {
-      reasons.push(failure.error_category)
-    }
+    const context = getContext(this)
     if (failure.message_key.length > 0) {
-      reasons.push(failure.message_key)
+      return MessageKeyMapper.resolveMessage(context, failure.message_key, undefined, failure.error_category)
     }
-    return reasons.length > 0 ? reasons.join(' / ') : '未分类'
+    const categoryMessage: string | undefined = MessageKeyMapper.resolveSyncErrorCategory(
+      context, failure.error_category, undefined)
+    if (categoryMessage !== undefined) {
+      return categoryMessage
+    }
+    if (failure.error_category.length > 0) {
+      return MessageKeyMapper.resolveMessage(context, failure.error_category, undefined, failure.error_category)
+    }
+    return '未分类'
   }
 
   @Builder
@@ -376,6 +381,10 @@ export struct SettingsContent {
   private syncOutcomeConflictCount(): number {
     const outcome: SyncOutcome | null = this.syncRunSnapshot.outcome
     if (outcome === null) {
+      return -1
+    }
+    if (outcome.errorCode === 'SYNC_SESSION_UNALIGNED' ||
+      outcome.messageKey === 'sync.result.session_unaligned') {
       return -1
     }
     const total: number = outcome.totalConflicts ?? 0

@@ -11,6 +11,10 @@ export function isSyncOutcomeConflict(outcome: SyncOutcome | null): boolean {
   if (outcome === null) {
     return false
   }
+  if (outcome.errorCode === 'SYNC_SESSION_UNALIGNED' ||
+    outcome.messageKey === 'sync.result.session_unaligned') {
+    return false
+  }
   return outcome.errorCode === 'SYNC_CONFLICT' ||
     outcome.messageKey === 'sync.result.conflict_summary' ||
     outcome.overallStatus === 'conflict' ||
@@ -39,6 +43,10 @@ export struct SyncStatusStrip {
   private statusTitle(): string {
     if (this.snapshot.phase === 'in_progress') {
       return this.snapshot.source === 'auto' ? '正在自动同步…' : '正在同步…'
+    }
+    if (this.snapshot.outcome?.errorCode === 'SYNC_SESSION_UNALIGNED' ||
+      this.snapshot.outcome?.messageKey === 'sync.result.session_unaligned') {
+      return '写作会话未对齐'
     }
     if (this.isConflict()) {
       return '同步冲突'
@@ -72,16 +80,7 @@ export struct SyncStatusStrip {
     }
 
     const context = getContext(this)
-    const summary: string = SyncOutcomePresenter.present(context, outcome)
-    if (!this.isConflict() || outcome.totalConflicts === undefined) {
-      return summary
-    }
-    if (summary.includes(`${outcome.totalConflicts} 处冲突`)) {
-      return summary
-    }
-    const countFormat: string = context.resourceManager
-      .getStringSync($r('app.string.sync_conflicts_count_format').id)
-    return `${summary} · ${countFormat.replace('%s', outcome.totalConflicts.toString())}`
+    return SyncOutcomePresenter.present(context, outcome)
   }
 
   build() {

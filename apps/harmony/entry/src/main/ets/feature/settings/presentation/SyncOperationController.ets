@@ -171,8 +171,8 @@ export class SyncOperationController {
             return {
               phase: 'failed',
               message: '同步已改动本地内容，但当前写作会话存在未提交内容，需要先处理',
-              messageKey: 'sync.result.conflict_summary',
-              errorCode: 'SYNC_CONFLICT',
+              messageKey: 'sync.result.session_unaligned',
+              errorCode: 'SYNC_SESSION_UNALIGNED',
               totalDownloaded: syncResult.totalDownloaded,
               totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts,
