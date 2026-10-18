@@ -1,16 +1,26 @@
 import { WritingStats, SpeedCurve, CurrentWritingSpeed } from '../dto/ProjectDtos'
+import { WritingStatsExplorer } from '../dto/StatsDtos'
 import { EditorChangeStatsInput } from '../dto/EditorDtos'
 import { ResultEnvelope, RecentEdit } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeWritingStats, decodeSpeedCurve, decodeCurrentWritingSpeed, decodeRecentEdit, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeWritingStats, decodeSpeedCurve, decodeCurrentWritingSpeed, decodeRecentEdit, decodeArray, decodeWritingStatsExplorer } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
 }
 
+// 统计页 Explorer 请求结果（Issue #945）：requestSeq 是本次 Bridge 实例内单调递增的
+// 请求序号。统计查询跑在线程池，用户快速切换时段时旧范围的响应可能晚于新范围到达；
+// 调用方拿到结果后先用 isLatestExplorerRequest 过滤旧序号，不覆盖当前时段快照。
+export interface StatsExplorerRequestResult {
+  requestSeq: number
+  envelope: ResultEnvelope<WritingStatsExplorer>
+}
+
 export class NativeStatsBridge {
   private isInitialized: boolean = false
   private core: NativeCoreModule
+  private explorerRequestSeq: number = 0
 
   constructor(core: NativeCoreModule) {
     this.core = core
@@ -23,6 +33,32 @@ export class NativeStatsBridge {
       const jsonStr: string = this.core.getNativeModule().nativeGetWritingStats()
       return this.core.decodeEnvelope<WritingStats>(jsonStr, decodeWritingStats)
     } catch (e) { return nativeError<WritingStats>(e) }
+  }
+
+  // Issue #944/#945：统计页 Explorer 快照——生涯摘要 + 四张时段卡 + 当前选中时段详情。
+  // preset 只传 Core 约定的固定字符串（last7Days / last30Days / last6Months / lifetime /
+  // custom）；customStart/customEnd 只在 preset=custom 时是用户所选日期，其余传空串
+  // （空串在 C/Rust 侧表示「未提供」），未来结束日原样透传，不在端侧改写成今天。
+  //
+  // nativeGetWritingStatsExplorer 返回的是 Promise —— 真正的切线程点在 C++ 侧
+  // （Node-API async work，execute 回调跑在线程池）。ArkTS 的 async 函数不会自己开线程，
+  // 光在 ArkTS 侧包 async 没有意义，必须 await 那个 Promise。
+  async getWritingStatsExplorer(preset: string, customStartDate: string, customEndDate: string): Promise<StatsExplorerRequestResult> {
+    this.explorerRequestSeq += 1
+    const requestSeq: number = this.explorerRequestSeq
+    let envelope: ResultEnvelope<WritingStatsExplorer>
+    try {
+      const jsonStr: string = await this.core.getNativeModule().nativeGetWritingStatsExplorer(preset, customStartDate, customEndDate)
+      envelope = this.core.decodeEnvelope<WritingStatsExplorer>(jsonStr, decodeWritingStatsExplorer)
+    } catch (e) {
+      envelope = nativeError<WritingStatsExplorer>(e)
+    }
+    return { requestSeq: requestSeq, envelope: envelope }
+  }
+
+  /** 该请求序号是否仍是最新一次统计查询（旧范围晚到结果返回 false）。 */
+  isLatestExplorerRequest(requestSeq: number): boolean {
+    return requestSeq === this.explorerRequestSeq
   }
 
   // Issue #829：写作页状态栏的「今日进度」要当日口径，writer_core_get_writing_stats

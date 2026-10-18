@@ -45,6 +45,7 @@
 | 触摸事件拦截 | @kit.ArkUI (onTouchIntercept) | 12 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/StarMapScene.ets |
 | 自定义触摸热区 | @kit.ArkUI (responseRegion) | 8 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/StarMapScene.ets |
 | 自定义对话框 | @kit.ArkUI (ComponentContent / PromptAction.openCustomDialog) | 12 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/CreateTitleDialog.ets, feature/starmap/ui/StarMapScene.ets |
+| 系统日期选择 | @kit.ArkUI (UIContext.showDatePickerDialog) | 10 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/stats/ui/StatsScreen.ets |
 | display.isFoldable | @kit.ArkUI (display) | 10 | SystemCapability.Window.SessionManager | 无 | 否 | window/TabletWindowPolicy.ets |
 | setPreferredOrientation | @kit.ArkUI (window) | 9 | 无独立 SystemCapability | 无 | 否 | window/TabletWindowPolicy.ets |
 | setWindowSystemBarEnable | @kit.ArkUI (window) | 12 | 无独立 SystemCapability | 无 | 否 | window/TabletWindowPolicy.ets |
@@ -590,6 +591,19 @@
   - 递归 UI 里被祖先 `clip(true)` 裁掉、或需要脱离 Scene 局部坐标定位的对话框，挂到窗口层级：`getPromptAction().openCustomDialog(...)`，不要作为 Scene `Stack` 的普通子组件。
   - `wrapBuilder(...)` 收到的不接受 `this.xxx` 形式的 `@Builder` 成员方法引用（ArkTS 报 "The wrapBuilder's parameter should be '@Builder' function"）。要用**文件级** `@Builder function`，在函数体里转交给一个独立 `@Component` 组件，由组件自己持有输入状态；关闭时用同一个 `ComponentContent` 实例调 `closeCustomDialog`。
   - `promptAction.BaseDialogOptions` 没有 `backgroundColor` / `width` / `height` 字段：对话框内容完全跟随自定义组件样式，背景与遮罩分别由内容自身的 `backgroundColor` 和 `maskColor` 控制。
+
+## 系统日期选择（UIContext.showDatePickerDialog）
+
+- Kit：`@kit.ArkUI`（`UIContext.showDatePickerDialog(options: DatePickerDialogOptions)`；全局 `DatePickerDialog.show(options)` 自 API 18 起废弃，本工程不使用）
+- 接口：
+  - `UIContext.showDatePickerDialog(options: DatePickerDialogOptions): void`（since 10，`@stagemodelonly`）
+  - `DatePickerDialogOptions.selected?: Date` 初始选中日期；`onDateAccept?: Callback<Date>` 用户确认后的回调（`onAccept` 已废弃）
+- 最低 API：10（高于最低安装基线 12，实际始终可用）
+- SystemCapability：`SystemCapability.ArkUI.ArkUI.Full`
+- 权限 / ACL：无
+- fallback：无 fallback 路径（最低安装基线 API12 已覆盖该接口）
+- 实现文件：`feature/stats/ui/StatsScreen.ets`（统计页「自选」区间依次弹开始 / 结束日期选择）
+- 语义边界：确认后的 `Date` 按用户所选本地日历日格式化成 `YYYY-MM-DD` 原样传给 Core，不在端侧把未来结束日改写成今天、不自行裁剪区间；Core 返回的错误在统计页内显示。
 
 ## 应用共享目录 / 捐献沙箱目录（shareFiles profile）
 

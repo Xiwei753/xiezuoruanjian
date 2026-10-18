@@ -1,0 +1,306 @@
+// CompactStatsContent — 窄屏统计正文（Issue #945，按「手机统计七天 / 手机统计」手稿）。
+//
+// 从上到下：顶部时间范围切换（7 天 / 30 天 / 半年 / 生涯 / 自选）→ 大号总人工码字 +
+// 日期区间 → 纪录 2×2（最多 / 最快 / 最长 / 连续）→ 真实字数折线图；
+// 内容可垂直滚动并给 HDS 悬浮底栏留空间。生涯与近七天只是同一页面换快照，
+// 不另建导航栈。
+//
+// 本组件只画已解码的 Core Explorer 快照：不做统计口径计算、不补假数据；
+// 区间切换 / 自选日期 / 重试都通过回调交给 StatsScreen。
+
+import { WritingStatsExplorer, WritingStatsRecord, WritingStatsSelectedPeriod, STATS_PRESET_LAST_7_DAYS, STATS_PRESET_LAST_30_DAYS, STATS_PRESET_LAST_6_MONTHS, STATS_PRESET_LIFETIME, STATS_PRESET_CUSTOM } from '../../../corebridge/dto/StatsDtos'
+import { DesignTokens } from '../../../ui/theme/DesignTokens'
+import {
+  COMPACT_CARD_PADDING_VP,
+  COMPACT_CARD_SUPPORTING_FONT_VP,
+  COMPACT_CARD_TITLE_FONT_VP,
+  COMPACT_LIST_BOTTOM_INSET_VP
+} from '../../../ui/theme/LayoutTokens'
+import { EMPTY_STATS_EXPLORER, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatInt, formatRecordValue } from './StatsFormat'
+import { WritingStatsTrendChart } from './WritingStatsTrendChart'
+
+// 折线图在窄屏的固定高度（vp）。
+const COMPACT_CHART_HEIGHT_VP: number = 160
+
+interface RangeOption {
+  label: string
+  preset: string
+}
+
+const RANGE_OPTIONS: RangeOption[] = [
+  { label: '7 天', preset: STATS_PRESET_LAST_7_DAYS },
+  { label: '30 天', preset: STATS_PRESET_LAST_30_DAYS },
+  { label: '半年', preset: STATS_PRESET_LAST_6_MONTHS },
+  { label: '生涯', preset: STATS_PRESET_LIFETIME },
+  { label: '自选', preset: STATS_PRESET_CUSTOM }
+]
+
+@Component
+export struct CompactStatsContent {
+  @Prop explorer: WritingStatsExplorer = EMPTY_STATS_EXPLORER
+  @Prop selectedPeriod: string = STATS_PRESET_LAST_7_DAYS
+  @Prop isLoading: boolean = false
+  @Prop errorMessage: string = ''
+  onSelectPeriod: (preset: string) => void = (_preset: string) => {}
+  onPickCustomRange: () => void = () => {}
+  onRetry: () => void = () => {}
+
+  private selected(): WritingStatsSelectedPeriod {
+    return this.explorer.selected
+  }
+
+  private trendGranularityLabel(): string {
+    const granularity: string = this.explorer.selected.trend.granularity
+    if (granularity === 'week') {
+      return '按周'
+    }
+    if (granularity === 'month') {
+      return '按月'
+    }
+    return '按天'
+  }
+
+  private recordValueText(record: WritingStatsRecord, unit: string): string {
+    if (record.value === null) {
+      return '暂无纪录'
+    }
+    return formatRecordValue(record.value, unit)
+  }
+
+  private recordDurationText(record: WritingStatsRecord): string {
+    if (record.value === null) {
+      return '暂无纪录'
+    }
+    return formatDurationHuman(record.value)
+  }
+
+  private streakDateText(record: WritingStatsRecord): string {
+    if (record.date === null) {
+      return ''
+    }
+    return formatDateRangeHuman(record.date, record.endDate)
+  }
+
+  private recordDateText(record: WritingStatsRecord): string {
+    return formatDateHuman(record.date)
+  }
+
+  build() {
+    Scroll() {
+      Column() {
+        if (this.errorMessage.length > 0) {
+          this.ErrorStrip()
+        }
+        this.RangeSwitch()
+        this.SummarySection()
+        this.RecordsSection()
+        this.TrendSection()
+      }
+      .width('100%')
+      .padding({
+        left: 16,
+        right: 16,
+        top: 12,
+        // 列表末端留白：沿用窄屏统一 token，避免内容贴住 HDS 悬浮底栏。
+        bottom: COMPACT_LIST_BOTTOM_INSET_VP
+      })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .scrollBar(BarState.Off)
+    .align(Alignment.Top)
+  }
+
+  /** 页内错误提示（自选日期非法 / Core 查询失败都在这里显示，附重试）。 */
+  @Builder
+  ErrorStrip() {
+    Row({ space: 8 }) {
+      Text(this.errorMessage)
+        .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+        .fontColor($r('sys.color.ohos_id_color_alert'))
+        .layoutWeight(1)
+        .maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Button($r('app.string.retry'))
+        .fontSize(12)
+        .height(28)
+        .onClick(() => {
+          this.onRetry()
+        })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor($r('sys.color.comp_background_gray'))
+    .margin({ bottom: 12 })
+  }
+
+  /** 顶部时间范围切换：选中范围突出显示，自选走系统日期选择。 */
+  @Builder
+  RangeSwitch() {
+    // Flex wrap：极窄窗口下 5 个范围 chip 允许折行，不裁切边界。
+    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+      ForEach(RANGE_OPTIONS, (option: RangeOption) => {
+        Text(option.label)
+          .fontSize(14)
+          .fontColor(this.selectedPeriod === option.preset
+            ? $r('sys.color.font_on_primary')
+            : $r('sys.color.font_primary'))
+          .backgroundColor(this.selectedPeriod === option.preset
+            ? $r('sys.color.ohos_id_color_emphasize')
+            : $r('sys.color.comp_background_gray'))
+          .borderRadius(DesignTokens.radiusPill)
+          .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+          .margin({ right: 8, bottom: 8 })
+          .onClick(() => {
+            if (option.preset === STATS_PRESET_CUSTOM) {
+              this.onPickCustomRange()
+            } else {
+              this.onSelectPeriod(option.preset)
+            }
+          })
+      }, (option: RangeOption) => option.preset)
+    }
+    .width('100%')
+    .margin({ bottom: 8 })
+  }
+
+  /** 大号总人工码字 + 日期区间 + 「本机记录」标注。 */
+  @Builder
+  SummarySection() {
+    Column() {
+      Row({ space: 8 }) {
+        Text(formatInt(this.selected().totalHumanTypedChars))
+          .fontSize(44)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary'))
+        Text('字')
+          .fontSize(18)
+          .fontColor($r('sys.color.font_secondary'))
+        if (this.isLoading) {
+          LoadingProgress()
+            .width(18)
+            .height(18)
+            .margin({ left: 4 })
+        }
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Bottom)
+
+      Row() {
+        Text(formatDateRangeHuman(this.selected().range.startDate, this.selected().range.endDate))
+          .fontSize(14)
+          .fontColor($r('sys.color.font_secondary'))
+          .layoutWeight(1)
+        Text(`陪伴 ${formatInt(this.explorer.lifetime.elapsedCalendarDays)} 天`)
+          .fontSize(14)
+          .fontColor($r('sys.color.font_secondary'))
+      }
+      .width('100%')
+      .margin({ top: 6 })
+
+      Text('本机记录')
+        .fontSize(11)
+        .fontColor($r('sys.color.font_tertiary'))
+        .margin({ top: 4 })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .margin({ bottom: COMPACT_CARD_PADDING_VP })
+  }
+
+  /** 纪录 2×2：最多码字 / 最快码字 / 最长码字 / 连续码字。 */
+  @Builder
+  RecordsSection() {
+    Column() {
+      Row() {
+        this.RecordCell(
+          '最多码字',
+          this.recordValueText(this.selected().records.bestDay, '字'),
+          this.recordDateText(this.selected().records.bestDay)
+        )
+        Divider().vertical(true).height(56).color($r('sys.color.comp_divider'))
+        this.RecordCell(
+          '最快码字',
+          this.recordValueText(this.selected().records.fastestHour, '字/时'),
+          this.recordDateText(this.selected().records.fastestHour)
+        )
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Divider().color($r('sys.color.comp_divider')).margin({ top: 8, bottom: 8 })
+
+      Row() {
+        this.RecordCell(
+          '最长码字',
+          this.recordDurationText(this.selected().records.longestSession),
+          this.recordDateText(this.selected().records.longestSession)
+        )
+        Divider().vertical(true).height(56).color($r('sys.color.comp_divider'))
+        this.RecordCell(
+          '连续码字',
+          this.recordValueText(this.selected().records.longestStreak, '天'),
+          this.streakDateText(this.selected().records.longestStreak)
+        )
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .padding(COMPACT_CARD_PADDING_VP)
+    .borderRadius(DesignTokens.cardRadius)
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+  }
+
+  @Builder
+  RecordCell(label: string, valueText: string, dateText: string) {
+    Column({ space: 2 }) {
+      Text(label)
+        .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+        .fontColor($r('sys.color.font_secondary'))
+      Text(valueText)
+        .fontSize(COMPACT_CARD_TITLE_FONT_VP)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('sys.color.font_primary'))
+      if (dateText.length > 0) {
+        Text(dateText)
+          .fontSize(12)
+          .fontColor($r('sys.color.font_tertiary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 8, right: 8 })
+  }
+
+  /** 底部：真实写作字数折线图（数据点全部来自 Core trend）。 */
+  @Builder
+  TrendSection() {
+    Column() {
+      Row() {
+        Text('写作趋势')
+          .fontSize(COMPACT_CARD_TITLE_FONT_VP)
+          .fontWeight(FontWeight.Medium)
+          .layoutWeight(1)
+        Text(this.trendGranularityLabel())
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+      }
+      .width('100%')
+      .margin({ bottom: 8 })
+
+      WritingStatsTrendChart({ trend: this.selected().trend })
+        .width('100%')
+        .height(COMPACT_CHART_HEIGHT_VP)
+    }
+    .width('100%')
+    .padding(COMPACT_CARD_PADDING_VP)
+    .borderRadius(DesignTokens.cardRadius)
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .margin({ top: COMPACT_CARD_PADDING_VP })
+  }
+}

@@ -48,6 +48,115 @@ static napi_value NativeGetWritingStatsSummary(napi_env env, napi_callback_info 
     return result;
 }
 
+// Issue #944/#945：统计页 Explorer 快照。preset 是固定枚举字符串；
+// custom_start / custom_end 只在 preset == "custom" 时是用户所选业务日，
+// 其余传空串（TakeStringArg 缺参也返回空串），Rust 侧把空串当「未提供」。
+//
+// 统计文件聚合与纪录整理都在 Core：这条链不轻，同步调就等于磁盘 I/O 落在 ArkUI
+// 主线程上。因此与 NativeRecordEditorChangeStats 一样走 Node-API async work ——
+// execute 回调在线程池调 Rust，complete 回调只回主线程把 ResultEnvelope JSON
+// resolve 成 Promise，并释放 Rust 分配的字符串。
+struct StatsExplorerWork {
+    // 三个入参的堆拷贝，execute 回调在线程池里读它们。
+    char* preset = nullptr;
+    char* custom_start = nullptr;
+    char* custom_end = nullptr;
+    // Rust 返回的 ResultEnvelope JSON（须 writer_core_free_string 释放）。
+    char* result_json = nullptr;
+    // create_promise 给的 deferred，随 work 一起活到 complete 回调。
+    napi_deferred deferred = nullptr;
+    // 设置了 complete 回调时，官方要求在 complete 里调 napi_delete_async_work。
+    napi_async_work async_work = nullptr;
+};
+
+// Execute 回调 — 运行在线程池线程，可以安全调用 Rust（含文件 I/O）。
+// 这里不碰任何 napi_value：NAPI 的 JS 侧对象只能在主线程用。
+static void StatsExplorerExecute(napi_env env, void* data) {
+    (void)env;
+    auto* work = static_cast<StatsExplorerWork*>(data);
+    work->result_json =
+        writer_core_get_writing_stats_explorer(work->preset, work->custom_start, work->custom_end);
+}
+
+// Complete 回调 — 回到主线程，把 JSON 字符串 resolve 成 Promise，然后释放 work。
+static void StatsExplorerComplete(napi_env env, napi_status status, void* data) {
+    auto* work = static_cast<StatsExplorerWork*>(data);
+    if (status == napi_ok) {
+        // Rust 侧理论上不返回 NULL；即便出现也按 Core 的错误形状回给 ArkTS，
+        // 不让 Promise 永远悬着。
+        const char* json = work->result_json != nullptr
+            ? work->result_json
+            : "{\"success\":false,\"errorCode\":\"NULL_RESULT\"}";
+        napi_value value = nullptr;
+        napi_create_string_utf8(env, json, NAPI_AUTO_LENGTH, &value);
+        napi_resolve_deferred(env, work->deferred, value);
+    } else {
+        napi_value message = nullptr;
+        const char* text = "get_writing_stats_explorer async work aborted";
+        napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message);
+        napi_reject_deferred(env, work->deferred, message);
+    }
+    if (work->result_json != nullptr) {
+        writer_core_free_string(work->result_json);
+    }
+    napi_delete_async_work(env, work->async_work);
+    delete[] work->preset;
+    delete[] work->custom_start;
+    delete[] work->custom_end;
+    delete work;
+}
+
+static napi_value NativeGetWritingStatsExplorer(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3] = {nullptr, nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    // 参数先拷到堆上：execute 回调跑在别的线程，不能读 NAPI value。
+    auto* work = new StatsExplorerWork();
+    work->preset = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
+    work->custom_start = TakeStringArg(env, argc >= 2 ? args[1] : nullptr);
+    work->custom_end = TakeStringArg(env, argc >= 3 ? args[2] : nullptr);
+
+    napi_value promise = nullptr;
+    if (napi_create_promise(env, &work->deferred, &promise) != napi_ok) {
+        delete[] work->preset;
+        delete[] work->custom_start;
+        delete[] work->custom_end;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_promise failed");
+        return nullptr;
+    }
+
+    napi_value resource_name = nullptr;
+    const char* name = "WriterCoreGetWritingStatsExplorer";
+    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resource_name);
+
+    napi_async_work async_work = nullptr;
+    if (napi_create_async_work(env, nullptr, resource_name, StatsExplorerExecute,
+                               StatsExplorerComplete, work, &async_work) != napi_ok) {
+        delete[] work->preset;
+        delete[] work->custom_start;
+        delete[] work->custom_end;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_async_work failed");
+        return nullptr;
+    }
+    work->async_work = async_work;
+
+    if (napi_queue_async_work(env, async_work) != napi_ok) {
+        napi_delete_async_work(env, async_work);
+        delete[] work->preset;
+        delete[] work->custom_start;
+        delete[] work->custom_end;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_queue_async_work failed");
+        return nullptr;
+    }
+
+    // 调用方（ArkTS）拿到 Promise，await 它就是等 Core 的统计查询真正完成。
+    return promise;
+}
+
 static napi_value NativeGetWritingSpeedCurve(napi_env env, napi_callback_info info) {
     size_t argc = 3;
     napi_value args[3] = {nullptr, nullptr, nullptr};
@@ -195,6 +304,7 @@ static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info
 napi_property_descriptor* getStatsDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {
         {"nativeGetWritingStats", nullptr, NativeGetWritingStats, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetWritingStatsExplorer", nullptr, NativeGetWritingStatsExplorer, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetTodayWritingStatsSummary", nullptr, NativeGetTodayWritingStatsSummary, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingStatsSummary", nullptr, NativeGetWritingStatsSummary, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingSpeedCurve", nullptr, NativeGetWritingSpeedCurve, nullptr, nullptr, nullptr, napi_default, nullptr},

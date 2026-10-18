@@ -13,7 +13,8 @@
 // 4. 嵌套对象递归 decode；数组逐元素 decode。
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
-import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
+import { DateRange, Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
+import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint } from '../dto/StatsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
@@ -601,6 +602,229 @@ export function decodeWritingStats(data: Object): DecodeResult<WritingStats> {
     daysCount: daysCount
   }
   return ok<WritingStats>(value)
+}
+
+// ─── Statistics Explorer Decoders（Issue #944/#945） ───
+// 字段严格对应 Core `WritingStatsExplorerDto` 系列（camelCase）。
+// `Option` 字段（firstWritingDate / lastWritingDate / average* / range /
+// records.*.date|endDate|value）键恒出现，null 表示「无值」：
+// 用 null* 取值保留 null 语义，不用 0 或空串顶替。
+
+function decodeDateRange(data: Object): DecodeResult<DateRange> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<DateRange>('DateRange: expected object')
+  }
+  const startDate: string | null = reqStr(data, 'startDate')
+  if (startDate === null) { return err<DateRange>('range.startDate missing or not string') }
+  const endDate: string | null = reqStr(data, 'endDate')
+  if (endDate === null) { return err<DateRange>('range.endDate missing or not string') }
+  return ok<DateRange>({ startDate: startDate, endDate: endDate })
+}
+
+function decodeWritingStatsLifetime(data: Object): DecodeResult<WritingStatsLifetime> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsLifetime>('WritingStatsLifetime: expected object')
+  }
+  const totalHumanTypedChars: number | null = reqNum(data, 'totalHumanTypedChars')
+  if (totalHumanTypedChars === null) { return err<WritingStatsLifetime>('lifetime.totalHumanTypedChars missing or not number') }
+  const firstWritingDateR: DecodeResult<string | null> = nullStr(data, 'firstWritingDate')
+  if (!firstWritingDateR.ok || firstWritingDateR.value === undefined) { return err<WritingStatsLifetime>(`lifetime.${firstWritingDateR.error ?? 'firstWritingDate decode failed'}`) }
+  const lastWritingDateR: DecodeResult<string | null> = nullStr(data, 'lastWritingDate')
+  if (!lastWritingDateR.ok || lastWritingDateR.value === undefined) { return err<WritingStatsLifetime>(`lifetime.${lastWritingDateR.error ?? 'lastWritingDate decode failed'}`) }
+  const elapsedCalendarDays: number | null = reqNum(data, 'elapsedCalendarDays')
+  if (elapsedCalendarDays === null) { return err<WritingStatsLifetime>('lifetime.elapsedCalendarDays missing or not number') }
+  const writingDays: number | null = reqNum(data, 'writingDays')
+  if (writingDays === null) { return err<WritingStatsLifetime>('lifetime.writingDays missing or not number') }
+  const averageCharsPerDayR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerDay')
+  if (!averageCharsPerDayR.ok || averageCharsPerDayR.value === undefined) { return err<WritingStatsLifetime>(`lifetime.${averageCharsPerDayR.error ?? 'averageCharsPerDay decode failed'}`) }
+  const averageCharsPerMinuteR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerMinute')
+  if (!averageCharsPerMinuteR.ok || averageCharsPerMinuteR.value === undefined) { return err<WritingStatsLifetime>(`lifetime.${averageCharsPerMinuteR.error ?? 'averageCharsPerMinute decode failed'}`) }
+  const value: WritingStatsLifetime = {
+    totalHumanTypedChars: totalHumanTypedChars,
+    firstWritingDate: firstWritingDateR.value,
+    lastWritingDate: lastWritingDateR.value,
+    elapsedCalendarDays: elapsedCalendarDays,
+    writingDays: writingDays,
+    averageCharsPerDay: averageCharsPerDayR.value,
+    averageCharsPerMinute: averageCharsPerMinuteR.value
+  }
+  return ok<WritingStatsLifetime>(value)
+}
+
+function decodeWritingStatsPeriodCard(data: Object): DecodeResult<WritingStatsPeriodCard> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsPeriodCard>('WritingStatsPeriodCard: expected object')
+  }
+  const preset: string | null = reqStr(data, 'preset')
+  if (preset === null) { return err<WritingStatsPeriodCard>('periodCard.preset missing or not string') }
+  const hasSelection: boolean | null = reqBool(data, 'hasSelection')
+  if (hasSelection === null) { return err<WritingStatsPeriodCard>('periodCard.hasSelection missing or not boolean') }
+  const rangeObjR: DecodeResult<Object | null> = nullObj(data, 'range')
+  if (!rangeObjR.ok || rangeObjR.value === undefined) { return err<WritingStatsPeriodCard>(`periodCard.${rangeObjR.error ?? 'range decode failed'}`) }
+  let range: DateRange | null = null
+  if (rangeObjR.value !== null) {
+    const rangeR: DecodeResult<DateRange> = decodeDateRange(rangeObjR.value)
+    if (!rangeR.ok || rangeR.value === undefined) { return err<WritingStatsPeriodCard>(`periodCard.range: ${rangeR.error ?? 'decode failed'}`) }
+    range = rangeR.value
+  }
+  const totalHumanTypedChars: number | null = reqNum(data, 'totalHumanTypedChars')
+  if (totalHumanTypedChars === null) { return err<WritingStatsPeriodCard>('periodCard.totalHumanTypedChars missing or not number') }
+  const totalActiveSeconds: number | null = reqNum(data, 'totalActiveSeconds')
+  if (totalActiveSeconds === null) { return err<WritingStatsPeriodCard>('periodCard.totalActiveSeconds missing or not number') }
+  const writingDays: number | null = reqNum(data, 'writingDays')
+  if (writingDays === null) { return err<WritingStatsPeriodCard>('periodCard.writingDays missing or not number') }
+  const averageCharsPerDayR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerDay')
+  if (!averageCharsPerDayR.ok || averageCharsPerDayR.value === undefined) { return err<WritingStatsPeriodCard>(`periodCard.${averageCharsPerDayR.error ?? 'averageCharsPerDay decode failed'}`) }
+  const averageCharsPerMinuteR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerMinute')
+  if (!averageCharsPerMinuteR.ok || averageCharsPerMinuteR.value === undefined) { return err<WritingStatsPeriodCard>(`periodCard.${averageCharsPerMinuteR.error ?? 'averageCharsPerMinute decode failed'}`) }
+  const value: WritingStatsPeriodCard = {
+    preset: preset,
+    hasSelection: hasSelection,
+    range: range,
+    totalHumanTypedChars: totalHumanTypedChars,
+    totalActiveSeconds: totalActiveSeconds,
+    writingDays: writingDays,
+    averageCharsPerDay: averageCharsPerDayR.value,
+    averageCharsPerMinute: averageCharsPerMinuteR.value
+  }
+  return ok<WritingStatsPeriodCard>(value)
+}
+
+function decodeWritingStatsRecord(data: Object, field: string): DecodeResult<WritingStatsRecord> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsRecord>(`${field}: expected object`)
+  }
+  const dateR: DecodeResult<string | null> = nullStr(data, 'date')
+  if (!dateR.ok || dateR.value === undefined) { return err<WritingStatsRecord>(`${field}.${dateR.error ?? 'date decode failed'}`) }
+  const endDateR: DecodeResult<string | null> = nullStr(data, 'endDate')
+  if (!endDateR.ok || endDateR.value === undefined) { return err<WritingStatsRecord>(`${field}.${endDateR.error ?? 'endDate decode failed'}`) }
+  const valueR: DecodeResult<number | null> = nullNum(data, 'value')
+  if (!valueR.ok || valueR.value === undefined) { return err<WritingStatsRecord>(`${field}.${valueR.error ?? 'value decode failed'}`) }
+  return ok<WritingStatsRecord>({ date: dateR.value, endDate: endDateR.value, value: valueR.value })
+}
+
+function decodeWritingStatsRecords(data: Object): DecodeResult<WritingStatsRecords> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsRecords>('WritingStatsRecords: expected object')
+  }
+  const bestDayObj: Object | null = reqObj(data, 'bestDay')
+  if (bestDayObj === null) { return err<WritingStatsRecords>('records.bestDay missing or not object') }
+  const bestDayR: DecodeResult<WritingStatsRecord> = decodeWritingStatsRecord(bestDayObj, 'records.bestDay')
+  if (!bestDayR.ok || bestDayR.value === undefined) { return err<WritingStatsRecords>(bestDayR.error ?? 'decode failed') }
+  const fastestHourObj: Object | null = reqObj(data, 'fastestHour')
+  if (fastestHourObj === null) { return err<WritingStatsRecords>('records.fastestHour missing or not object') }
+  const fastestHourR: DecodeResult<WritingStatsRecord> = decodeWritingStatsRecord(fastestHourObj, 'records.fastestHour')
+  if (!fastestHourR.ok || fastestHourR.value === undefined) { return err<WritingStatsRecords>(fastestHourR.error ?? 'decode failed') }
+  const longestSessionObj: Object | null = reqObj(data, 'longestSession')
+  if (longestSessionObj === null) { return err<WritingStatsRecords>('records.longestSession missing or not object') }
+  const longestSessionR: DecodeResult<WritingStatsRecord> = decodeWritingStatsRecord(longestSessionObj, 'records.longestSession')
+  if (!longestSessionR.ok || longestSessionR.value === undefined) { return err<WritingStatsRecords>(longestSessionR.error ?? 'decode failed') }
+  const longestStreakObj: Object | null = reqObj(data, 'longestStreak')
+  if (longestStreakObj === null) { return err<WritingStatsRecords>('records.longestStreak missing or not object') }
+  const longestStreakR: DecodeResult<WritingStatsRecord> = decodeWritingStatsRecord(longestStreakObj, 'records.longestStreak')
+  if (!longestStreakR.ok || longestStreakR.value === undefined) { return err<WritingStatsRecords>(longestStreakR.error ?? 'decode failed') }
+  const value: WritingStatsRecords = {
+    bestDay: bestDayR.value,
+    fastestHour: fastestHourR.value,
+    longestSession: longestSessionR.value,
+    longestStreak: longestStreakR.value
+  }
+  return ok<WritingStatsRecords>(value)
+}
+
+function decodeWritingStatsTrendPoint(data: Object): DecodeResult<WritingStatsTrendPoint> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsTrendPoint>('WritingStatsTrendPoint: expected object')
+  }
+  const date: string | null = reqStr(data, 'date')
+  if (date === null) { return err<WritingStatsTrendPoint>('trendPoint.date missing or not string') }
+  const humanTypedChars: number | null = reqNum(data, 'humanTypedChars')
+  if (humanTypedChars === null) { return err<WritingStatsTrendPoint>('trendPoint.humanTypedChars missing or not number') }
+  return ok<WritingStatsTrendPoint>({ date: date, humanTypedChars: humanTypedChars })
+}
+
+function decodeWritingStatsTrend(data: Object): DecodeResult<WritingStatsTrend> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsTrend>('WritingStatsTrend: expected object')
+  }
+  const granularity: string | null = reqStr(data, 'granularity')
+  if (granularity === null) { return err<WritingStatsTrend>('trend.granularity missing or not string') }
+  const pointsArr: Array<Object> | null = reqArray(data, 'points')
+  if (pointsArr === null) { return err<WritingStatsTrend>('trend.points missing or not array') }
+  const pointsR: DecodeResult<WritingStatsTrendPoint[]> =
+    decodeArray<WritingStatsTrendPoint>(pointsArr as Object, decodeWritingStatsTrendPoint, 'trend.points')
+  if (!pointsR.ok || pointsR.value === undefined) { return err<WritingStatsTrend>(pointsR.error ?? 'decode failed') }
+  return ok<WritingStatsTrend>({ granularity: granularity, points: pointsR.value })
+}
+
+function decodeWritingStatsSelectedPeriod(data: Object): DecodeResult<WritingStatsSelectedPeriod> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsSelectedPeriod>('WritingStatsSelectedPeriod: expected object')
+  }
+  const preset: string | null = reqStr(data, 'preset')
+  if (preset === null) { return err<WritingStatsSelectedPeriod>('selected.preset missing or not string') }
+  const rangeObj: Object | null = reqObj(data, 'range')
+  if (rangeObj === null) { return err<WritingStatsSelectedPeriod>('selected.range missing or not object') }
+  const rangeR: DecodeResult<DateRange> = decodeDateRange(rangeObj)
+  if (!rangeR.ok || rangeR.value === undefined) { return err<WritingStatsSelectedPeriod>(`selected.range: ${rangeR.error ?? 'decode failed'}`) }
+  const totalHumanTypedChars: number | null = reqNum(data, 'totalHumanTypedChars')
+  if (totalHumanTypedChars === null) { return err<WritingStatsSelectedPeriod>('selected.totalHumanTypedChars missing or not number') }
+  const totalActiveSeconds: number | null = reqNum(data, 'totalActiveSeconds')
+  if (totalActiveSeconds === null) { return err<WritingStatsSelectedPeriod>('selected.totalActiveSeconds missing or not number') }
+  const writingDays: number | null = reqNum(data, 'writingDays')
+  if (writingDays === null) { return err<WritingStatsSelectedPeriod>('selected.writingDays missing or not number') }
+  const averageCharsPerDayR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerDay')
+  if (!averageCharsPerDayR.ok || averageCharsPerDayR.value === undefined) { return err<WritingStatsSelectedPeriod>(`selected.${averageCharsPerDayR.error ?? 'averageCharsPerDay decode failed'}`) }
+  const averageCharsPerMinuteR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerMinute')
+  if (!averageCharsPerMinuteR.ok || averageCharsPerMinuteR.value === undefined) { return err<WritingStatsSelectedPeriod>(`selected.${averageCharsPerMinuteR.error ?? 'averageCharsPerMinute decode failed'}`) }
+  const recordsObj: Object | null = reqObj(data, 'records')
+  if (recordsObj === null) { return err<WritingStatsSelectedPeriod>('selected.records missing or not object') }
+  const recordsR: DecodeResult<WritingStatsRecords> = decodeWritingStatsRecords(recordsObj)
+  if (!recordsR.ok || recordsR.value === undefined) { return err<WritingStatsSelectedPeriod>(recordsR.error ?? 'decode failed') }
+  const trendObj: Object | null = reqObj(data, 'trend')
+  if (trendObj === null) { return err<WritingStatsSelectedPeriod>('selected.trend missing or not object') }
+  const trendR: DecodeResult<WritingStatsTrend> = decodeWritingStatsTrend(trendObj)
+  if (!trendR.ok || trendR.value === undefined) { return err<WritingStatsSelectedPeriod>(trendR.error ?? 'decode failed') }
+  const value: WritingStatsSelectedPeriod = {
+    preset: preset,
+    range: rangeR.value,
+    totalHumanTypedChars: totalHumanTypedChars,
+    totalActiveSeconds: totalActiveSeconds,
+    writingDays: writingDays,
+    averageCharsPerDay: averageCharsPerDayR.value,
+    averageCharsPerMinute: averageCharsPerMinuteR.value,
+    records: recordsR.value,
+    trend: trendR.value
+  }
+  return ok<WritingStatsSelectedPeriod>(value)
+}
+
+export function decodeWritingStatsExplorer(data: Object): DecodeResult<WritingStatsExplorer> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsExplorer>('WritingStatsExplorer: expected object')
+  }
+  const historyScope: string | null = reqStr(data, 'historyScope')
+  if (historyScope === null) { return err<WritingStatsExplorer>('historyScope missing or not string') }
+  const lifetimeObj: Object | null = reqObj(data, 'lifetime')
+  if (lifetimeObj === null) { return err<WritingStatsExplorer>('lifetime missing or not object') }
+  const lifetimeR: DecodeResult<WritingStatsLifetime> = decodeWritingStatsLifetime(lifetimeObj)
+  if (!lifetimeR.ok || lifetimeR.value === undefined) { return err<WritingStatsExplorer>(lifetimeR.error ?? 'decode failed') }
+  const cardsArr: Array<Object> | null = reqArray(data, 'periodCards')
+  if (cardsArr === null) { return err<WritingStatsExplorer>('periodCards missing or not array') }
+  const cardsR: DecodeResult<WritingStatsPeriodCard[]> =
+    decodeArray<WritingStatsPeriodCard>(cardsArr as Object, decodeWritingStatsPeriodCard, 'periodCards')
+  if (!cardsR.ok || cardsR.value === undefined) { return err<WritingStatsExplorer>(cardsR.error ?? 'decode failed') }
+  const selectedObj: Object | null = reqObj(data, 'selected')
+  if (selectedObj === null) { return err<WritingStatsExplorer>('selected missing or not object') }
+  const selectedR: DecodeResult<WritingStatsSelectedPeriod> = decodeWritingStatsSelectedPeriod(selectedObj)
+  if (!selectedR.ok || selectedR.value === undefined) { return err<WritingStatsExplorer>(selectedR.error ?? 'decode failed') }
+  const value: WritingStatsExplorer = {
+    historyScope: historyScope,
+    lifetime: lifetimeR.value,
+    periodCards: cardsR.value,
+    selected: selectedR.value
+  }
+  return ok<WritingStatsExplorer>(value)
 }
 
 export function decodeSpeedCurvePoint(data: Object): DecodeResult<SpeedCurvePoint> {

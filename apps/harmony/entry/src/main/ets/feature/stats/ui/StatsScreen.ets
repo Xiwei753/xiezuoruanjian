@@ -1,13 +1,26 @@
-// StatsScreen — 统计页 UI。
-// 数据来自 Core 的 NativeStatsBridge（getWritingStats），仅做 UI 展示，
-// 不复制业务状态机（遵守根 AGENTS.md 平台端边界）。
+// StatsScreen — 统计页入口与共享快照状态（Issue #945）。
+//
+// 职责边界（遵守根 AGENTS.md 平台端边界）：
+// - 只从 Core 的 Explorer DTO（#944）取一份统计快照，不在 ArkTS 重算天数 / 纪录 / 速度；
+// - 持有页面状态：selectedPeriod（7d / 30d / 6mo / lifetime / custom）、
+//   expandedPanel（none / range / lifetime，宽屏展开位置）、自选起止日期、
+//   isLoading 与 errorMessage；宽窄两套正文只读同一份状态，不复制两份；
+// - 宽窄分流只按 adaptiveState.prefersWideLayout；旋转 / 展开设备后沿用
+//   selectedPeriod，不重建导航栈（生涯与近七天只是同一页面换快照）；
+// - 自选区间用系统日期选择（UIContext.showDatePickerDialog），确认后把用户所选
+//   日期原样传给 Core（未来结束日不改写成今天），错误在页内显示。
 
 import hilog from '@ohos.hilog'
-import { NativeStatsBridge } from '../../../corebridge/native/NativeStatsBridge'
+import { UIContext } from '@kit.ArkUI'
+import { NativeStatsBridge, StatsExplorerRequestResult } from '../../../corebridge/native/NativeStatsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
-import { WritingStats } from '../../../corebridge/dto/ProjectDtos'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
-import { HarmonyThemeAdapter, ThemeConfig } from '../../../ui/theme/HarmonyThemeAdapter'
+import {
+  WritingStatsExplorer,
+  STATS_PRESET_LAST_7_DAYS,
+  STATS_PRESET_LIFETIME,
+  STATS_PRESET_CUSTOM
+} from '../../../corebridge/dto/StatsDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole, ActionSlot, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
@@ -15,40 +28,36 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
-// Issue #932：窄屏统计页统一页面底色 / 边距 / 分组卡度量，并复用公共加载/错误状态。
-// Issue #932 复核：复核要求本次只统一窄屏——宽屏统计恢复改动前（f3154e32~1）的裸行形态，
-// 因此统计正文拆成 CompactStatsContent / WideStatsContent，两者共用同一份统计数值与 StatRow。
-import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import {
-  COMPACT_CARD_PADDING_VP,
-  COMPACT_CARD_SPACING_VP,
-  COMPACT_CARD_SUPPORTING_FONT_VP,
-  COMPACT_CARD_TITLE_FONT_VP,
-  COMPACT_LIST_BOTTOM_INSET_VP
-} from '../../../ui/theme/LayoutTokens'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
-
-// Issue #932 复核：宽屏统计行沿用改动前（f3154e32~1）的几何——16vp 字号、12vp 上下行距，
-// 标签沿用默认前景色；窄屏行继续用 COMPACT_CARD_* 卡内度量。宽窄共用同一个 StatRow 行构件。
-const WIDE_STAT_ROW_FONT_VP: number = 16
-const WIDE_STAT_ROW_VERTICAL_PADDING_VP: number = 12
+import { STATS_PANEL_NONE, STATS_PANEL_RANGE, STATS_PANEL_LIFETIME, formatIsoDate, parseIsoDate } from './StatsFormat'
+import { CompactStatsContent } from './CompactStatsContent'
+import { WideStatsContent } from './WideStatsContent'
 
 @Component
 export struct StatsScreen {
   @Consume("navPathStack") navPathStack: NavPathStack
-  @State stats: WritingStats | null = null
+  // Core Explorer 快照（生涯摘要 + 四卡 + 选中时段详情），宽窄共用同一份。
+  @State explorer: WritingStatsExplorer | null = null
+  // 当前选中时段：Core 固定 preset 字符串。
+  @State selectedPeriod: string = STATS_PRESET_LAST_7_DAYS
+  // 宽屏展开位置：none（四卡总览）/ range（三栏详情）/ lifetime（生涯详情）。
+  @State expandedPanel: string = STATS_PANEL_NONE
+  // 自选区间：用户所选业务日（YYYY-MM-DD），未选时为空串。
+  @State customStartDate: string = ''
+  @State customEndDate: string = ''
   @State isLoading: boolean = true
   @State errorMessage: string = ''
-  @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State useHdsNav: boolean = false
   @State headerActions: ActionSlot[] = []
 
   private adaptiveObserver: AdaptiveObserver | null = null
+  // 请求序号在 Bridge 内维护：旧范围的晚到结果由 isLatestExplorerRequest 过滤。
+  private statsBridge: NativeStatsBridge = new NativeStatsBridge(new NativeCoreModule())
 
   async aboutToAppear() {
     hilog.info(0x0000, 'StatsScreen', 'route name=Stats')
-    this.loadStats()
+    this.loadExplorer(STATS_PRESET_LAST_7_DAYS, '', '')
 
     // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳；API < 23 用 NavDestination .menus() 接入 HeaderTrailing。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
@@ -70,79 +79,181 @@ export struct StatsScreen {
     }
   }
 
-  async loadStats() {
+  /**
+   * 请求一份 Explorer 快照。只请求 #944 的 Explorer DTO；
+   * 旧范围晚到结果（请求序号已过期）直接丢弃，不覆盖当前时段。
+   */
+  private async loadExplorer(preset: string, customStart: string, customEnd: string): Promise<void> {
     this.isLoading = true
     this.errorMessage = ''
-    try {
-      const bridge = new NativeStatsBridge(new NativeCoreModule())
-      const result: ResultEnvelope<WritingStats> = await bridge.getWritingStats()
-      if (result.success && result.data) {
-        this.stats = result.data
-      } else {
-        // envelope 只有 errorCode / userMessage（Core 不发明 messageKey）。
-        this.errorMessage = result.userMessage || result.errorCode || '加载统计失败'
-      }
-    } catch (err) {
-      this.errorMessage = `加载统计失败: ${err}`
-    } finally {
-      this.isLoading = false
+    const response: StatsExplorerRequestResult = await this.statsBridge.getWritingStatsExplorer(preset, customStart, customEnd)
+    if (!this.statsBridge.isLatestExplorerRequest(response.requestSeq)) {
+      return
+    }
+    this.isLoading = false
+    const result: ResultEnvelope<WritingStatsExplorer> = response.envelope
+    if (result.success && result.data !== undefined) {
+      this.explorer = result.data
+    } else {
+      // envelope 只有 errorCode / userMessage（Core 不发明 messageKey）。
+      this.errorMessage = result.userMessage !== undefined && result.userMessage.length > 0
+        ? result.userMessage
+        : (result.errorCode !== undefined ? result.errorCode : '加载统计失败')
     }
   }
 
-  // ─── Issue #932：统计行构件 + 窄屏分组卡 / 宽屏旧形态 ───
+  /** 窄屏顶部范围切换 / 宽屏点非自选卡：切时段并重新取快照。 */
+  private selectPeriod(preset: string): void {
+    this.selectedPeriod = preset
+    this.expandedPanel = STATS_PANEL_NONE
+    this.loadExplorer(preset, '', '')
+  }
 
-  /**
-   * 指标行：左标签右数值，宽窄两形态共用同一行构件，只做视觉呈现，不重算任何统计口径。
-   * - 窄屏（wideForm = false）：沿用窄屏卡片 token（Issue #932 窄屏统一结果）。
-   * - 宽屏（wideForm = true）：沿用改动前 f3154e32~1 的 16vp 字号 / 12vp 行距 / 默认标签色，
-   *   不把窄屏卡内度量画到宽屏。
-   */
-  @Builder
-  StatRow(label: string, value: string, wideForm: boolean) {
-    Row() {
-      Text(label)
-        .fontSize(wideForm ? WIDE_STAT_ROW_FONT_VP : COMPACT_CARD_SUPPORTING_FONT_VP)
-        .fontColor(wideForm ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
-        .layoutWeight(1)
-      Text(value)
-        .fontSize(wideForm ? WIDE_STAT_ROW_FONT_VP : COMPACT_CARD_TITLE_FONT_VP)
-        .fontWeight(FontWeight.Medium)
+  /** 宽屏点时段卡：切到该时段并在原卡区展开三栏，不导航新页面。 */
+  private openPeriodInWide(preset: string): void {
+    this.selectedPeriod = preset
+    this.expandedPanel = STATS_PANEL_RANGE
+    this.loadExplorer(preset, '', '')
+  }
+
+  /** 宽屏点生涯横条：展开 / 收起生涯纪录 + 折线图。 */
+  private toggleLifetimePanel(): void {
+    if (this.expandedPanel === STATS_PANEL_LIFETIME) {
+      this.expandedPanel = STATS_PANEL_NONE
+      return
     }
-    .width('100%')
-    .padding({
-      top: wideForm ? WIDE_STAT_ROW_VERTICAL_PADDING_VP : 8,
-      bottom: wideForm ? WIDE_STAT_ROW_VERTICAL_PADDING_VP : 8
+    this.selectedPeriod = STATS_PRESET_LIFETIME
+    this.expandedPanel = STATS_PANEL_LIFETIME
+    this.loadExplorer(STATS_PRESET_LIFETIME, '', '')
+  }
+
+  private closeExpandedPanel(): void {
+    this.expandedPanel = STATS_PANEL_NONE
+  }
+
+  private retrySelected(): void {
+    if (this.selectedPeriod === STATS_PRESET_CUSTOM) {
+      if (this.customStartDate.length > 0 && this.customEndDate.length > 0) {
+        this.loadExplorer(STATS_PRESET_CUSTOM, this.customStartDate, this.customEndDate)
+      } else {
+        this.openCustomRangePicker()
+      }
+      return
+    }
+    this.loadExplorer(this.selectedPeriod, '', '')
+  }
+
+  /** 自选区间：先选开始日期，再选结束日期；确认后原样交给 Core。 */
+  private openCustomRangePicker(): void {
+    const uiContext: UIContext = this.getUIContext()
+    uiContext.showDatePickerDialog({
+      selected: this.initialPickerDate(this.customStartDate),
+      onDateAccept: (startValue: Date): void => {
+        const startText: string = formatIsoDate(startValue)
+        this.showEndDatePicker(uiContext, startText)
+      }
     })
   }
 
+  private showEndDatePicker(uiContext: UIContext, startText: string): void {
+    let endInitial: Date = this.initialPickerDate(startText)
+    if (this.customEndDate.length > 0) {
+      const parsedEnd: Date | null = parseIsoDate(this.customEndDate)
+      if (parsedEnd !== null) {
+        endInitial = parsedEnd
+      }
+    }
+    uiContext.showDatePickerDialog({
+      selected: endInitial,
+      onDateAccept: (endValue: Date): void => {
+        const endText: string = formatIsoDate(endValue)
+        this.customStartDate = startText
+        this.customEndDate = endText
+        this.selectedPeriod = STATS_PRESET_CUSTOM
+        // 宽屏确认自选后在原卡区展开三栏；窄屏保持单页换快照。
+        this.expandedPanel = this.adaptiveState.prefersWideLayout ? STATS_PANEL_RANGE : STATS_PANEL_NONE
+        // 用户所选日期原样传 Core：未来结束日不在这里改写成今天。
+        this.loadExplorer(STATS_PRESET_CUSTOM, startText, endText)
+      }
+    })
+  }
+
+  /** 日期选择器的初始位置：优先已有自选，其次生涯首次写作日，否则今天。 */
+  private initialPickerDate(existing: string): Date {
+    const parsed: Date | null = parseIsoDate(existing)
+    if (parsed !== null) {
+      return parsed
+    }
+    if (this.explorer !== null && this.explorer.lifetime.firstWritingDate !== null) {
+      const first: Date | null = parseIsoDate(this.explorer.lifetime.firstWritingDate)
+      if (first !== null) {
+        return first
+      }
+    }
+    return new Date()
+  }
+
   /**
-   * 页面内容：加载 / 错误状态与页面底色宽窄共用（与卡片几何无关），统计正文按窗口形态分流。
-   * Issue #932 复核：窄屏走统一后的分组卡形态，宽屏保持改动前（f3154e32~1）的旧形态。
+   * 页面内容：加载 / 错误状态宽窄共用；拿到快照后按窗口形态分流——
+   * 宽窄两套只读同一份 explorer / selectedPeriod / expandedPanel。
    */
   @Builder
   StatsContent() {
     Column() {
-      if (this.isLoading) {
-        CompactPageState({
-          kind: CompactPageStateKind.Loading,
-          title: '加载中...'
-        })
-      } else if (this.errorMessage) {
-        CompactPageState({
-          kind: CompactPageStateKind.Error,
-          title: this.errorMessage,
-          onRetry: () => {
-            this.loadStats()
+      if (this.explorer === null) {
+        if (this.isLoading) {
+          CompactPageState({
+            kind: CompactPageStateKind.Loading,
+            title: '加载中...'
+          })
+        } else {
+          CompactPageState({
+            kind: CompactPageStateKind.Error,
+            title: this.errorMessage.length > 0 ? this.errorMessage : '加载统计失败',
+            onRetry: () => {
+              this.retrySelected()
+            }
+          })
+        }
+      } else if (this.adaptiveState.prefersWideLayout) {
+        WideStatsContent({
+          explorer: this.explorer,
+          selectedPeriod: this.selectedPeriod,
+          expandedPanel: this.expandedPanel,
+          isLoading: this.isLoading,
+          errorMessage: this.errorMessage,
+          onOpenPeriod: (preset: string): void => {
+            this.openPeriodInWide(preset)
+          },
+          onPickCustomRange: (): void => {
+            this.openCustomRangePicker()
+          },
+          onToggleLifetime: (): void => {
+            this.toggleLifetimePanel()
+          },
+          onCloseExpanded: (): void => {
+            this.closeExpandedPanel()
+          },
+          onRetry: (): void => {
+            this.retrySelected()
           }
         })
-      } else if (this.stats) {
-        // Issue #932 复核：本次只统一窄屏。宽屏走恢复后的旧形态，不把窄屏分组卡与
-        // COMPACT_* 卡内度量画到宽屏；两个形态吃同一个 stats，统计口径只有一份。
-        if (this.adaptiveState.prefersWideLayout) {
-          this.WideStatsContent(this.stats)
-        } else {
-          this.CompactStatsContent(this.stats)
-        }
+      } else {
+        CompactStatsContent({
+          explorer: this.explorer,
+          selectedPeriod: this.selectedPeriod,
+          isLoading: this.isLoading,
+          errorMessage: this.errorMessage,
+          onSelectPeriod: (preset: string): void => {
+            this.selectPeriod(preset)
+          },
+          onPickCustomRange: (): void => {
+            this.openCustomRangePicker()
+          },
+          onRetry: (): void => {
+            this.retrySelected()
+          }
+        })
       }
     }
     .width('100%')
@@ -152,94 +263,10 @@ export struct StatsScreen {
     .backgroundColor($r('sys.color.background_secondary'))
   }
 
-  /** 窄屏统计（Issue #932 统一结果）：统计范围 / 字数指标 / 活跃指标三张分组卡。 */
-  @Builder
-  CompactStatsContent(stats: WritingStats) {
-    Scroll() {
-      Column() {
-        // Issue #753 评论 5814008597 问题2：WritingStats 已换成 Core 的 WritingStatsSummaryDto（最近 30 天汇总）。
-        // 旧字段 totalChars/totalWords/totalChapters/todayChars/todayDuration/averageSpeed 全部不存在，
-        // 改为展示新 DTO 的全部字段，并在首行展示统计范围。
-        // Issue #932：统计指标不再裸露 Row 一直铺到底，改为分组卡呈现。
-        Column() {
-          this.StatRow('统计范围', `${stats.range.startDate} ~ ${stats.range.endDate}`, false)
-        }
-        .width('100%')
-        .padding(COMPACT_CARD_PADDING_VP)
-        .borderRadius(DesignTokens.cardRadius)
-        .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-        .margin({ bottom: COMPACT_CARD_SPACING_VP })
-
-        // 字数指标分组卡
-        Column() {
-          this.StatRow('手写字数', `${stats.totalHumanTypedChars}`, false)
-          this.StatRow('粘贴字数', `${stats.totalPastedChars}`, false)
-          this.StatRow('删除字数', `${stats.totalDeletedChars}`, false)
-          this.StatRow('AI插入字数', `${stats.totalAiInsertedChars}`, false)
-          this.StatRow('净增字数', `${stats.totalNetDeltaChars}`, false)
-        }
-        .width('100%')
-        .padding(COMPACT_CARD_PADDING_VP)
-        .borderRadius(DesignTokens.cardRadius)
-        .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-        .margin({ bottom: COMPACT_CARD_SPACING_VP })
-
-        // 活跃指标分组卡
-        Column() {
-          this.StatRow('活跃时长(秒)', `${stats.totalActiveSeconds}`, false)
-          this.StatRow('写作会话数', `${stats.totalSessions}`, false)
-          this.StatRow('写作天数', `${stats.daysCount}`, false)
-        }
-        .width('100%')
-        .padding(COMPACT_CARD_PADDING_VP)
-        .borderRadius(DesignTokens.cardRadius)
-        .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-        .margin({ bottom: COMPACT_CARD_SPACING_VP })
-      }
-      .width('100%')
-      .padding({
-        left: this.adaptiveState.pagePadding,
-        right: this.adaptiveState.pagePadding,
-        top: this.adaptiveState.pagePadding,
-        // Issue #932：列表末端留白统一走窄屏 token，避免贴住悬浮底栏。
-        bottom: COMPACT_LIST_BOTTOM_INSET_VP
-      })
-    }
-    .layoutWeight(1)
-    .scrollBar(BarState.Off)
-    .align(Alignment.Top)
-  }
-
-  /**
-   * 宽屏统计：恢复改动前 f3154e32~1 的旧形态——指标行裸铺到底，无分组卡、无卡片底色与圆角，
-   * 页面边距仍是旧版的 16 / 24，行几何走 WIDE_STAT_ROW_*；数值与窄屏共用同一份 WritingStats。
-   */
-  @Builder
-  WideStatsContent(stats: WritingStats) {
-    Scroll() {
-      Column() {
-        this.StatRow('统计范围', `${stats.range.startDate} ~ ${stats.range.endDate}`, true)
-        this.StatRow('手写字数', `${stats.totalHumanTypedChars}`, true)
-        this.StatRow('粘贴字数', `${stats.totalPastedChars}`, true)
-        this.StatRow('删除字数', `${stats.totalDeletedChars}`, true)
-        this.StatRow('AI插入字数', `${stats.totalAiInsertedChars}`, true)
-        this.StatRow('净增字数', `${stats.totalNetDeltaChars}`, true)
-        this.StatRow('活跃时长(秒)', `${stats.totalActiveSeconds}`, true)
-        this.StatRow('写作会话数', `${stats.totalSessions}`, true)
-        this.StatRow('写作天数', `${stats.daysCount}`, true)
-      }
-      .width('100%')
-      // Issue #932 复核：宽屏沿用改动前的页面边距（16 / 24），不套窄屏的 pagePadding 与末端留白 token。
-      .padding({ left: 16, right: 16, bottom: 24 })
-    }
-    .layoutWeight(1)
-    .scrollBar(BarState.Off)
-    .align(Alignment.Top)
-  }
-
   build() {
     // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳消费 HeaderTrailing；
     // API < 23 用 NavDestination .menus() 接入 HeaderTrailing 动作。
+    // 页面内不新增导航：返回 / 动作走统一导航壳，分子页返回由 expandedPanel 状态表达。
     if (this.useHdsNav) {
       HdsAppDestinationApi23({
         title: '统计',
