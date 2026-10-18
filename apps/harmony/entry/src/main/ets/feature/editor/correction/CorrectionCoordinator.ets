@@ -3,7 +3,11 @@ import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { utf16ToUtf8, utf8ToUtf16 } from '../input/text_offset_mapper'
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { CorrectionIgnoreScope, ICorrectionBridge } from './ICorrectionBridge'
-import { CorrectionSuggestionDto, MappedCorrectionSuggestion } from './CorrectionDtos'
+import {
+  CorrectionResourceStatusDto,
+  CorrectionSuggestionDto,
+  MappedCorrectionSuggestion
+} from './CorrectionDtos'
 
 export interface CorrectionPresentationState {
   suggestions: MappedCorrectionSuggestion[]
@@ -134,6 +138,10 @@ export class CorrectionCoordinator {
   /** Forward a user-selected local model file to Core; no model path is assumed by the platform. */
   async setModelPath(path: string): Promise<ResultEnvelope<boolean>> {
     return this.bridge.setModelPath(path)
+  }
+
+  async getResourceStatus(): Promise<ResultEnvelope<CorrectionResourceStatusDto>> {
+    return this.bridge.getResourceStatus()
   }
 
   private currentRequest(generation: number): CorrectionRequestSnapshot | null {

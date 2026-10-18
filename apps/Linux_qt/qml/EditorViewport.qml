@@ -354,11 +354,15 @@ Item {
         x: Math.max(8, root.width - width - 8)
         y: correctionToolButton.y + correctionToolButton.height + 4
         width: Math.max(280, Math.min(root.width - 16, 400))
-        height: Math.max(220, Math.min(root.height - y - 8, 430))
+        height: Math.max(220, Math.min(root.height - y - 8, 560))
         padding: 12
         modal: false
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        onOpened: {
+            if (root.editorControllerRef)
+                root.editorControllerRef.refreshCorrectionDictionaryStatus();
+        }
 
         background: Rectangle {
             radius: Kirigami.Units.cornerRadius
@@ -399,15 +403,75 @@ Item {
 
                 TextField {
                     id: correctionModelPathField
-                    width: parent.width - setModelPathButton.implicitWidth - parent.spacing
+                    width: parent.width - setModelPathButton.implicitWidth
+                           - chooseModelPathButton.implicitWidth - parent.spacing * 2
                     placeholderText: qsTr("本地 .klm 模型文件路径")
                     selectByMouse: true
                     onAccepted: root.editorControllerRef.setCorrectionModelPath(text)
                 }
                 Button {
+                    id: chooseModelPathButton
+                    text: qsTr("选择")
+                    onClicked: {
+                        var selectedPath = root.editorControllerRef.chooseCorrectionModelPath();
+                        if (selectedPath) correctionModelPathField.text = selectedPath;
+                    }
+                }
+                Button {
                     id: setModelPathButton
                     text: qsTr("设置")
                     onClicked: root.editorControllerRef.setCorrectionModelPath(correctionModelPathField.text)
+                }
+            }
+
+            Column {
+                width: parent.width
+                spacing: 4
+
+                Row {
+                    width: parent.width
+                    spacing: 8
+
+                    Button {
+                        id: importDictionaryButton
+                        text: qsTr("导入词库文件")
+                        onClicked: root.editorControllerRef.importCorrectionDictionary()
+                    }
+                    Label {
+                        width: parent.width - importDictionaryButton.implicitWidth - parent.spacing
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("固定命名的 .txt")
+                        color: Kirigami.Theme.disabledTextColor
+                        elide: Text.ElideRight
+                    }
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 6
+
+                    Repeater {
+                        model: root.editorControllerRef
+                               ? root.editorControllerRef.correctionDictionaryResources : []
+                        delegate: Label {
+                            required property var modelData
+                            text: qsTr("%1 · %2")
+                                  .arg(modelData.name)
+                                  .arg(modelData.ready ? qsTr("已准备") : qsTr("待准备"))
+                            color: modelData.ready ? "#238636" : Kirigami.Theme.disabledTextColor
+                            font.pixelSize: 11
+                        }
+                    }
+                }
+
+                Label {
+                    width: parent.width
+                    visible: !!(root.editorControllerRef
+                                && root.editorControllerRef.correctionDictionaryError)
+                    text: root.editorControllerRef
+                          ? root.editorControllerRef.correctionDictionaryError : ""
+                    color: "#C52222"
+                    wrapMode: Text.Wrap
                 }
             }
 
@@ -427,7 +491,7 @@ Item {
             ListView {
                 id: correctionSuggestionList
                 width: parent.width
-                height: Math.max(0, parent.height - 94)
+                height: Math.max(60, parent.height - 260)
                 clip: true
                 spacing: 6
                 model: root.editorControllerRef
@@ -446,6 +510,15 @@ Item {
                         anchors.margins: 8
                         spacing: 4
 
+                        Label {
+                            width: parent.width
+                            text: root.editorControllerRef
+                                  ? root.editorControllerRef.correctionSeverityLabel(modelData) : ""
+                            color: root.editorControllerRef
+                                   ? root.editorControllerRef.correctionSeverityColor(modelData)
+                                   : Kirigami.Theme.disabledTextColor
+                            font.bold: true
+                        }
                         Label {
                             width: parent.width
                             text: qsTr("“%1” → “%2”")

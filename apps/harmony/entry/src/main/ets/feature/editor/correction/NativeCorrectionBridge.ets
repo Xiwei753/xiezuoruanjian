@@ -1,7 +1,12 @@
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
-import { CorrectionSuggestionDto, decodeCorrectionSuggestions } from './CorrectionDtos'
+import {
+  CorrectionResourceStatusDto,
+  CorrectionSuggestionDto,
+  decodeCorrectionResourceStatus,
+  decodeCorrectionSuggestions
+} from './CorrectionDtos'
 import { CorrectionIgnoreScope, ICorrectionBridge } from './ICorrectionBridge'
 import { decodeEditorEditResult } from '../../../corebridge/codec/CoreWireDecoders'
 
@@ -15,6 +20,15 @@ export class NativeCorrectionBridge implements ICorrectionBridge {
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return this.nativeError<boolean>(e)
+    }
+  }
+
+  async getResourceStatus(): Promise<ResultEnvelope<CorrectionResourceStatusDto>> {
+    try {
+      const jsonStr: string = await this.core.getNativeModule().nativeCorrectionGetResourceStatus() as string
+      return this.core.decodeEnvelope<CorrectionResourceStatusDto>(jsonStr, decodeCorrectionResourceStatus)
+    } catch (e) {
+      return this.nativeError<CorrectionResourceStatusDto>(e)
     }
   }
 

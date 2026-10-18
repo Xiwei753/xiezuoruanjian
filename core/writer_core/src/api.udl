@@ -1493,6 +1493,8 @@ interface WriterAppService {
 
     // ── Chinese proofreading ──
     [Throws=WriterError]
+    CorrectionResourceStatusDto get_correction_resource_status();
+    [Throws=WriterError]
     void set_correction_model_path(string path);
     [Throws=WriterError]
     sequence<CorrectionSuggestionDto> check_correction_segment(u64 session_id, string project_id, string chapter_id, u64 text_revision, u32 start_byte, u32 end_byte);
@@ -1687,6 +1689,14 @@ dictionary CorrectionSuggestionDto {
     string rule_id;
     string severity;
     u64 text_revision;
+};
+
+dictionary CorrectionResourceStatusDto {
+    boolean model_configured;
+    boolean model_file_available;
+    boolean bundled_lexicon_available;
+    sequence<string> installed_dictionary_files;
+    sequence<string> missing_dictionary_files;
 };
 
 // ── 统一诊断接口（Issue #670 评论 5651060802 / 5651816143） ──

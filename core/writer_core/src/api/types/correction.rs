@@ -15,6 +15,17 @@ pub struct CorrectionSuggestionDto {
     pub text_revision: u64,
 }
 
+/// Current correction resource availability under the Core app-data root.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionResourceStatusDto {
+    pub model_configured: bool,
+    pub model_file_available: bool,
+    pub bundled_lexicon_available: bool,
+    pub installed_dictionary_files: Vec<String>,
+    pub missing_dictionary_files: Vec<String>,
+}
+
 impl TryFrom<(sujian_proof::CorrectionDiagnostic, u64)> for CorrectionSuggestionDto {
     type Error = crate::api::WriterError;
 

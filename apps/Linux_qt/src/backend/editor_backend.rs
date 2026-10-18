@@ -20,6 +20,16 @@
 use super::*;
 use crate::backend::AppRef;
 use crate::backend::DomainSnapshot;
+use rfd::FileDialog;
+
+fn correction_dictionary_resources_value(resources: Vec<(String, bool)>) -> serde_json::Value {
+    serde_json::Value::Array(
+        resources
+            .into_iter()
+            .map(|(name, ready)| serde_json::json!({ "name": name, "ready": ready }))
+            .collect(),
+    )
+}
 
 #[path = "chapter_operations.rs"]
 mod chapter_operations;
@@ -159,6 +169,15 @@ pub struct EditorBackend {
     /// Issue #943：存储用户提供的本地 KenLM 文件路径；Core 负责懒加载与错误返回。
     #[allow(dead_code)]
     set_correction_model_path: qt_method!(fn(&self, path: QString) -> QJsonObject),
+    /// Issue #943：选择现有 .klm 文件，并向 QML 返回解析后的本地绝对路径。
+    #[allow(dead_code)]
+    pick_correction_model_path: qt_method!(fn(&self) -> QJsonObject),
+    /// Issue #943：选择并导入固定命名的共享校对词库文件。
+    #[allow(dead_code)]
+    import_correction_dictionary: qt_method!(fn(&self) -> QJsonObject),
+    /// Issue #943：返回 Core app_data_root 下共享词库文件的就绪状态。
+    #[allow(dead_code)]
+    correction_dictionary_status: qt_method!(fn(&self) -> QJsonObject),
     /// Issue #943：对当前章节快照做后台检查，不在 GUI 线程扫描正文或加载模型。
     #[allow(dead_code)]
     request_correction_chapter: qt_method!(
@@ -469,6 +488,92 @@ impl EditorBackend {
             ),
             Err(error) => crate::backend::json_utils::serde_to_qjson_object(
                 serde_json::json!({ "success": false, "errorCode": "APP_BUSY", "rawError": error.to_string() }),
+            ),
+        }
+    }
+
+    fn pick_correction_model_path(&self) -> QJsonObject {
+        let Some(selected_path) = FileDialog::new()
+            .add_filter("KenLM 模型 (*.klm)", &["klm"])
+            .pick_file()
+        else {
+            return crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "cancelled": true }),
+            );
+        };
+
+        let result = (|| -> Result<String, String> {
+            let path = selected_path
+                .canonicalize()
+                .map_err(|error| format!("无法解析所选模型文件: {error}"))?;
+            if !path.is_file() {
+                return Err("所选模型路径不是文件".to_string());
+            }
+            let is_klm = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("klm"));
+            if !is_klm {
+                return Err("请选择 .klm 模型文件".to_string());
+            }
+            Ok(path.to_string_lossy().into_owned())
+        })();
+
+        match result {
+            Ok(path) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": true, "path": path }),
+            ),
+            Err(message) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "rawError": message }),
+            ),
+        }
+    }
+
+    fn import_correction_dictionary(&self) -> QJsonObject {
+        let Some(source_path) = FileDialog::new()
+            .add_filter("校对词库 (*.txt)", &["txt"])
+            .pick_file()
+        else {
+            return crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "cancelled": true }),
+            );
+        };
+
+        let result = self.with_app(|app| {
+            let file_name = app.import_correction_dictionary(source_path)?;
+            let resources = app.correction_dictionary_resource_status()?;
+            Ok::<_, String>((file_name, resources))
+        });
+        match result {
+            Ok(Ok((file_name, resources))) => {
+                crate::backend::json_utils::serde_to_qjson_object(serde_json::json!({
+                    "success": true,
+                    "fileName": file_name,
+                    "resources": correction_dictionary_resources_value(resources),
+                }))
+            }
+            Ok(Err(message)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "rawError": message }),
+            ),
+            Err(error) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "rawError": error.to_string() }),
+            ),
+        }
+    }
+
+    fn correction_dictionary_status(&self) -> QJsonObject {
+        match self.with_app(|app| app.correction_dictionary_resource_status()) {
+            Ok(Ok(resources)) => {
+                crate::backend::json_utils::serde_to_qjson_object(serde_json::json!({
+                    "success": true,
+                    "resources": correction_dictionary_resources_value(resources),
+                }))
+            }
+            Ok(Err(message)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "rawError": message }),
+            ),
+            Err(error) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "rawError": error.to_string() }),
             ),
         }
     }

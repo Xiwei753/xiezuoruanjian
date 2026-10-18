@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use crate::api::service::{ApiResult, WriterCoreApi};
-use crate::api::types::{CorrectionIgnoreScopeDto, CorrectionSuggestionDto};
+use crate::api::types::{
+    CorrectionIgnoreScopeDto, CorrectionResourceStatusDto, CorrectionSuggestionDto,
+};
 use crate::correction::{scan_text, CorrectionScanner, CorrectionStore};
 
 impl WriterCoreApi {
@@ -32,6 +34,10 @@ impl WriterCoreApi {
     /// the first proofreading request and is never packaged by WriterCore.
     pub fn set_correction_model_path(&self, path: String) -> ApiResult<()> {
         self.correction_store()?.set_model_path(Path::new(&path))
+    }
+
+    pub fn get_correction_resource_status(&self) -> ApiResult<CorrectionResourceStatusDto> {
+        self.correction_store()?.resource_status()
     }
 
     pub fn add_correction_dictionary_entry(

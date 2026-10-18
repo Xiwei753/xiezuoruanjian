@@ -1,0 +1,8 @@
+# Project-authored high-confidence visual-confusion groups; GPL-3.0-only.
+己	已	巳
+未	末
+土	士
+人	入
+日	曰
+大	太	犬
+木	本	术

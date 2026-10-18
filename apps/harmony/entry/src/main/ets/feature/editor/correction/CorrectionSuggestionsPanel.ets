@@ -7,7 +7,13 @@ export struct CorrectionSuggestionsPanel {
   @Prop suggestions: MappedCorrectionSuggestion[] = []
   @Prop isChecking: boolean = false
   @Prop errorMessage: string = ''
+  @Prop resourceDirectory: string = ''
+  @Prop dictionaryResourceStatus: string = ''
+  @Prop modelResourceStatus: string = ''
+  @Prop isPreparingResources: boolean = false
   onCheckChapter: (() => void) | null = null
+  onImportModel: (() => void) | null = null
+  onImportDictionary: (() => void) | null = null
   onApply: ((suggestion: MappedCorrectionSuggestion) => void) | null = null
   onIgnore: ((suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope) => void) | null = null
   onAddDictionary: ((suggestion: MappedCorrectionSuggestion) => void) | null = null
@@ -40,6 +46,22 @@ export struct CorrectionSuggestionsPanel {
       case 'detector.char_mad': return '字符级语言模型发现了较少见的搭配，仅作统计提示。'
       case 'detector.candidate': return '替换候选的上下文评分高于原词。'
       default: return '检查到重复或标点规则提示，请结合上下文确认。'
+    }
+  }
+
+  private severityLabel(suggestion: MappedCorrectionSuggestion): string {
+    switch (suggestion.severity) {
+      case 'error': return '错误'
+      case 'warning': return '提醒'
+      default: return '参考'
+    }
+  }
+
+  private severityColor(suggestion: MappedCorrectionSuggestion): ResourceColor {
+    switch (suggestion.severity) {
+      case 'error': return $r('sys.color.ohos_id_color_alert')
+      case 'warning': return $r('sys.color.ohos_id_color_warning')
+      default: return $r('sys.color.font_secondary')
     }
   }
 
@@ -87,6 +109,42 @@ export struct CorrectionSuggestionsPanel {
       }
       .width('100%')
 
+      Row({ space: 8 }) {
+        Button('导入 .klm 模型')
+          .height(32)
+          .enabled(!this.isPreparingResources)
+          .onClick(() => this.onImportModel?.())
+        Button('导入词典 .txt')
+          .height(32)
+          .enabled(!this.isPreparingResources)
+          .onClick(() => this.onImportDictionary?.())
+      }
+      .width('100%')
+
+      if (this.isPreparingResources) {
+        Text('正在准备校对资源…')
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+      }
+      if (this.modelResourceStatus.length > 0) {
+        Text(this.modelResourceStatus)
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+      }
+      if (this.dictionaryResourceStatus.length > 0) {
+        Text(this.dictionaryResourceStatus)
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+      }
+      if (this.resourceDirectory.length > 0) {
+        Text(`资源目录：${this.resourceDirectory}`)
+          .fontSize(10)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+      }
+
       if (this.errorMessage.length > 0) {
         Text(this.errorMessage)
           .fontSize(12)
@@ -100,10 +158,14 @@ export struct CorrectionSuggestionsPanel {
             ForEach(this.suggestions, (suggestion: MappedCorrectionSuggestion) => {
               Column({ space: 6 }) {
                 Row({ space: 8 }) {
+                  Text(this.severityLabel(suggestion))
+                    .fontSize(12)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.severityColor(suggestion))
                   Text(`“${suggestion.original}” → “${suggestion.replacement}”`)
                     .fontSize(14)
                     .layoutWeight(1)
-                  Button('替换')
+                  Button('采纳')
                     .height(30)
                     .onClick(() => this.onApply?.(suggestion))
                   Button('更多')

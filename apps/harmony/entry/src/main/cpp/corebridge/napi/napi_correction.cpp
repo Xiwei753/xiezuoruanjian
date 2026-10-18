@@ -6,6 +6,7 @@
 
 enum class CorrectionOperation {
     SetModelPath,
+    GetResourceStatus,
     CheckSegment,
     CheckChapter,
     Ignore,
@@ -59,6 +60,9 @@ static void correction_execute(napi_env /*env*/, void* data) {
     switch (call->operation) {
         case CorrectionOperation::SetModelPath:
             call->json = writer_core_set_correction_model_path(call->path.c_str());
+            break;
+        case CorrectionOperation::GetResourceStatus:
+            call->json = writer_core_get_correction_resource_status();
             break;
         case CorrectionOperation::CheckSegment:
             call->json = writer_core_check_correction_segment(
@@ -193,6 +197,12 @@ static napi_value NativeCorrectionSetModelPath(napi_env env, napi_callback_info 
     return correction_queue(env, call);
 }
 
+static napi_value NativeCorrectionGetResourceStatus(napi_env env, napi_callback_info /*info*/) {
+    CorrectionAsyncWork* call = new CorrectionAsyncWork();
+    call->operation = CorrectionOperation::GetResourceStatus;
+    return correction_queue(env, call);
+}
+
 static napi_value NativeCorrectionCheckSegment(napi_env env, napi_callback_info info) {
     size_t argc = 6;
     napi_value args[6];
@@ -302,6 +312,7 @@ static napi_value NativeCorrectionApply(napi_env env, napi_callback_info info) {
 napi_property_descriptor* getCorrectionDescriptors(size_t* count) {
     static const napi_property_descriptor kDesc[] = {
         {"nativeCorrectionSetModelPath", nullptr, NativeCorrectionSetModelPath, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeCorrectionGetResourceStatus", nullptr, NativeCorrectionGetResourceStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckSegment", nullptr, NativeCorrectionCheckSegment, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckChapter", nullptr, NativeCorrectionCheckChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionIgnore", nullptr, NativeCorrectionIgnore, nullptr, nullptr, nullptr, napi_default, nullptr},

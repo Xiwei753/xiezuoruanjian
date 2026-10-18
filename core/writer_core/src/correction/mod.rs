@@ -12,7 +12,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use sujian_proof::{Lexicon, LexiconPaths};
 
-use crate::api::{CorrectionIgnoreScopeDto, WriterError};
+use crate::api::{CorrectionIgnoreScopeDto, CorrectionResourceStatusDto, WriterError};
 
 mod engine;
 
@@ -87,6 +87,17 @@ pub struct CorrectionStore {
 static STORE_REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<CorrectionStoreInner>>>> =
     OnceLock::new();
 
+const CORRECTION_DICTIONARY_FILES: [&str; 8] = [
+    "word_freq.txt",
+    "same_pinyin.txt",
+    "same_stroke.txt",
+    "custom_confusion.txt",
+    "person_name.txt",
+    "place_name.txt",
+    "proper_name.txt",
+    "ignored_words.txt",
+];
+
 impl CorrectionStore {
     pub fn open(app_data_root: &Path) -> Result<Self, WriterError> {
         let registry = STORE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
@@ -148,16 +159,44 @@ impl CorrectionStore {
         self.update_preferences(|preferences| preferences.model_path = Some(path.to_path_buf()))
     }
 
-    pub fn model_path(&self) -> Result<PathBuf, WriterError> {
+    pub fn configured_model_path(&self) -> Result<Option<PathBuf>, WriterError> {
         let guard = self
             .inner
             .preferences
             .lock()
             .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
-        guard
-            .model_path
-            .clone()
-            .ok_or_else(|| WriterError::Other("correction model path is not configured".into()))
+        Ok(guard.model_path.clone())
+    }
+
+    pub fn resource_status(&self) -> Result<CorrectionResourceStatusDto, WriterError> {
+        let model_path = self.configured_model_path()?;
+        let model_file_available = model_path.as_ref().is_some_and(|path| {
+            std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+        });
+        let data_root = self
+            .inner
+            .path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("correction-data");
+        let mut installed_dictionary_files = Vec::new();
+        let mut missing_dictionary_files = Vec::new();
+        for name in CORRECTION_DICTIONARY_FILES {
+            let ready = std::fs::metadata(data_root.join(name))
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+            if ready {
+                installed_dictionary_files.push(name.to_string());
+            } else {
+                missing_dictionary_files.push(name.to_string());
+            }
+        }
+        Ok(CorrectionResourceStatusDto {
+            model_configured: model_path.is_some(),
+            model_file_available,
+            bundled_lexicon_available: true,
+            installed_dictionary_files,
+            missing_dictionary_files,
+        })
     }
 
     pub fn dictionary_entries(&self, project_id: &str) -> Result<Vec<String>, WriterError> {

@@ -60,6 +60,8 @@ QtObject {
     property var correctionSuggestions: []
     property string correctionError: ""
     property string correctionStatus: ""
+    property string correctionDictionaryError: ""
+    property var correctionDictionaryResources: []
     property bool correctionCheckPending: false
     property int correctionRequestSerial: 0
     property int pendingCorrectionRequestId: 0
@@ -399,6 +401,20 @@ QtObject {
         return qsTr("%1（来源：%2）").arg(reason).arg(sourceName);
     }
 
+    function correctionSeverityLabel(suggestion) {
+        var severity = String(suggestion && suggestion.severity || "").toLowerCase();
+        if (severity === "error") return qsTr("错误");
+        if (severity === "warning") return qsTr("警告");
+        return qsTr("提示");
+    }
+
+    function correctionSeverityColor(suggestion) {
+        var severity = String(suggestion && suggestion.severity || "").toLowerCase();
+        if (severity === "error") return "#C52222";
+        if (severity === "warning") return "#A65D00";
+        return "#777777";
+    }
+
     function acceptCorrection(suggestion) {
         if (!suggestionIsCurrent(suggestion)) {
             invalidateCorrectionResults();
@@ -493,6 +509,58 @@ QtObject {
         }
         correctionError = "";
         correctionStatus = qsTr("模型路径已保存。");
+        return true;
+    }
+
+    function chooseCorrectionModelPath() {
+        if (!editorBackendRef || !editorBackendRef.pick_correction_model_path) {
+            correctionError = qsTr("当前版本不支持选择校对模型。");
+            return "";
+        }
+        var result = editorBackendRef.pick_correction_model_path();
+        if (!result || result.cancelled) return "";
+        if (!result.success) {
+            correctionError = result.rawError || qsTr("读取所选模型路径失败。");
+            return "";
+        }
+        var path = String(result.path || "");
+        if (!path) {
+            correctionError = qsTr("所选模型路径为空。");
+            return "";
+        }
+        return setCorrectionModelPath(path) ? path : "";
+    }
+
+    function refreshCorrectionDictionaryStatus() {
+        if (!editorBackendRef || !editorBackendRef.correction_dictionary_status) {
+            correctionDictionaryError = qsTr("当前版本不支持读取词库状态。");
+            return false;
+        }
+        var result = editorBackendRef.correction_dictionary_status();
+        if (!result || !result.success) {
+            correctionDictionaryError = result && result.rawError
+                    ? result.rawError : qsTr("读取词库状态失败。");
+            return false;
+        }
+        correctionDictionaryResources = result.resources || [];
+        correctionDictionaryError = "";
+        return true;
+    }
+
+    function importCorrectionDictionary() {
+        if (!editorBackendRef || !editorBackendRef.import_correction_dictionary) {
+            correctionDictionaryError = qsTr("当前版本不支持导入词库。");
+            return false;
+        }
+        var result = editorBackendRef.import_correction_dictionary();
+        if (!result || result.cancelled) return false;
+        if (!result.success) {
+            correctionDictionaryError = result.rawError || qsTr("导入词库失败。");
+            return false;
+        }
+        correctionDictionaryResources = result.resources || [];
+        correctionDictionaryError = "";
+        correctionStatus = qsTr("已导入词库：%1").arg(result.fileName || "");
         return true;
     }
 

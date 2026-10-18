@@ -17,6 +17,20 @@ fn parse_ignore_scope(scope: &str) -> Result<CorrectionIgnoreScopeDto, String> {
     }
 }
 
+/// Returns the current Core-owned proofreading resource status as JSON.
+/// The returned string is caller-owned and must be freed with `writer_core_free_string`.
+#[no_mangle]
+pub extern "C" fn writer_core_get_correction_resource_status() -> *mut c_char {
+    match with_app_service(|service| {
+        service
+            .get_correction_resource_status()
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(status) => ok_json(status),
+        Err(error) => err_json("CORRECTION_RESOURCE_STATUS_ERROR", &error),
+    }
+}
+
 /// # Safety
 /// `path` must be a valid null-terminated UTF-8 C string.
 /// Returns a caller-owned JSON C string; free it with `writer_core_free_string`.

@@ -13,13 +13,15 @@ use crate::rules::RuleSet;
 use crate::segment::{Segmenter, TextSegment};
 use crate::{CorrectionConfig, CorrectionDiagnostic, CorrectionError};
 
+const PYCORRECTOR_PPL_THRESHOLD: f64 = 57.0;
+
 // Behavioral port of pycorrector Corrector.correct/get_lm_correct_item
-// (Apache-2.0). The original stays in every candidate set; log10 KenLM scores
-// rank alternatives only, and confidence remains unset because scores are not
-// calibrated probabilities.
+// (Apache-2.0). The original stays in every candidate set; KenLM perplexity
+// ranks candidates within pycorrector's tolerance, and confidence remains unset
+// because model scores are not calibrated probabilities.
 
 pub(crate) struct TraditionalCorrector {
-    scorer: Arc<dyn LanguageScorer>,
+    scorer: Option<Arc<dyn LanguageScorer>>,
     lexicon: Arc<Lexicon>,
     rules: RuleSet,
     config: CorrectionConfig,
@@ -47,7 +49,25 @@ impl TraditionalCorrector {
         let confusion_matcher = ConfusionMatcher::new(&lexicon.confusion_entries())
             .map_err(CorrectionError::InvalidConfiguration)?;
         Ok(Self {
-            scorer,
+            scorer: Some(scorer),
+            lexicon,
+            rules,
+            config,
+            segmenter: Segmenter::new(),
+            detector: Detector::default(),
+            confusion_matcher,
+        })
+    }
+
+    pub(crate) fn rules_only(
+        lexicon: Arc<Lexicon>,
+        rules: RuleSet,
+        config: CorrectionConfig,
+    ) -> Result<Self, CorrectionError> {
+        let confusion_matcher = ConfusionMatcher::new(&lexicon.confusion_entries())
+            .map_err(CorrectionError::InvalidConfiguration)?;
+        Ok(Self {
+            scorer: None,
             lexicon,
             rules,
             config,
@@ -59,12 +79,23 @@ impl TraditionalCorrector {
 
     /// Generate byte-addressed suggestions without changing `text`.
     pub(crate) fn suggest(&self, text: &str) -> Result<Vec<CorrectionDiagnostic>, CorrectionError> {
+        let Some(scorer) = self.scorer.as_ref() else {
+            let diagnostics = if self.config.include_weak_hints {
+                self.rule_diagnostics(text)
+            } else {
+                self.rule_diagnostics(text)
+                    .into_iter()
+                    .filter(|diagnostic| diagnostic.severity == "error")
+                    .collect()
+            };
+            return filter_diagnostics(text, diagnostics);
+        };
         let suspects = self.detector.detect(
             text,
             &self.lexicon,
             &self.segmenter,
             &self.confusion_matcher,
-            self.scorer.as_ref(),
+            scorer.as_ref(),
         )?;
         let mut diagnostics = Vec::new();
 
@@ -115,27 +146,32 @@ impl TraditionalCorrector {
             let before = &segment_text[..relative_start];
             let after = &segment_text[relative_end..];
 
-            // Include the unchanged source as a candidate and require every
-            // proposed replacement to improve its sentence's model score.
-            let original_score = self.score_text(segment_text)?;
-            let mut ranked = Vec::with_capacity(candidates.len());
+            // pycorrector keeps the original in the PPL candidate set. A model
+            // score is a ranking signal, not confidence: only flag an error
+            // when the source falls outside the upstream-compatible tolerance.
+            let original_ppl = self.perplexity_text(segment_text)?;
+            let mut ranked = Vec::with_capacity(candidates.len() + 1);
+            ranked.push((None, original_ppl));
             for candidate in candidates {
                 let mut alternative =
                     String::with_capacity(before.len() + candidate.len() + after.len());
                 alternative.push_str(before);
                 alternative.push_str(&candidate);
                 alternative.push_str(after);
-                let score = self.score_text(&alternative)?;
-                if score > original_score {
-                    ranked.push((candidate, score));
-                }
+                let perplexity = self.perplexity_text(&alternative)?;
+                ranked.push((Some(candidate), perplexity));
             }
             ranked.sort_by(|left, right| {
-                right
-                    .1
-                    .total_cmp(&left.1)
+                left.1
+                    .total_cmp(&right.1)
                     .then_with(|| left.0.cmp(&right.0))
             });
+
+            let Some((_, best_ppl)) = ranked.first() else {
+                continue;
+            };
+            let acceptable_limit = best_ppl + PYCORRECTOR_PPL_THRESHOLD;
+            let original_acceptable = original_ppl <= acceptable_limit;
 
             let source_kind = source.to_owned();
             let rule_id = match suspect.kind {
@@ -143,10 +179,23 @@ impl TraditionalCorrector {
                 DetectionKind::Character => "detector.char_mad",
                 _ => "detector.candidate",
             };
-            for (replacement, _) in ranked
-                .into_iter()
-                .take(self.config.max_candidates_per_error)
-            {
+            let mut primary_emitted = false;
+            for (replacement, perplexity) in ranked {
+                let Some(replacement) = replacement else {
+                    continue;
+                };
+                if perplexity > acceptable_limit {
+                    continue;
+                }
+                if original_acceptable && !self.config.include_weak_hints {
+                    continue;
+                }
+                let severity = if !original_acceptable && !primary_emitted {
+                    primary_emitted = true;
+                    "error"
+                } else {
+                    "warning"
+                };
                 diagnostics.push(CorrectionDiagnostic {
                     start_byte: suspect.start_byte,
                     end_byte: suspect.end_byte,
@@ -154,9 +203,21 @@ impl TraditionalCorrector {
                     replacement,
                     source: source_kind.clone(),
                     rule_id: rule_id.to_owned(),
-                    severity: "error".to_owned(),
+                    severity: severity.to_owned(),
                     confidence: None,
                 });
+                if diagnostics
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic.start_byte == suspect.start_byte
+                            && diagnostic.end_byte == suspect.end_byte
+                            && diagnostic.rule_id == rule_id
+                    })
+                    .count()
+                    >= self.config.max_candidates_per_error
+                {
+                    break;
+                }
             }
         }
 
@@ -172,9 +233,12 @@ impl TraditionalCorrector {
         Ok(filter_diagnostics(text, diagnostics)?)
     }
 
-    fn score_text(&self, text: &str) -> Result<f64, CorrectionError> {
+    fn perplexity_text(&self, text: &str) -> Result<f64, CorrectionError> {
         let tokens = self.segmenter.char_tokens(text);
-        self.scorer.score_tokens(&tokens)
+        self.scorer
+            .as_ref()
+            .ok_or(CorrectionError::ModelUnavailable)?
+            .perplexity(&tokens)
     }
 
     fn rule_diagnostics(&self, text: &str) -> Vec<CorrectionDiagnostic> {

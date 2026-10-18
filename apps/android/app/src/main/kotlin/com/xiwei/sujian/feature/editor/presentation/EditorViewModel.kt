@@ -52,6 +52,7 @@ package com.xiwei.sujian.feature.editor.presentation
 // ! 计数器；新旧判断由会话层 reducer 按版本锚点 + localDirty 完成。
 
 import android.app.Application
+import android.net.Uri
 import androidx.compose.ui.text.TextRange
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
@@ -62,6 +63,8 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.SujianAppDependencies
 import com.xiwei.sujian.app.state.ActiveDocumentGate
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
+import com.xiwei.sujian.feature.editor.data.CorrectionResourceRepository
+import com.xiwei.sujian.feature.editor.data.ImportedCorrectionModel
 import com.xiwei.sujian.feature.editor.input.CommitResult
 import com.xiwei.sujian.feature.editor.input.CommittedTextEdit
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
@@ -100,6 +103,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 
 @Suppress("TooManyFunctions")
 class EditorViewModel(
@@ -124,6 +128,10 @@ class EditorViewModel(
     internal var _appServiceBridge: AppServiceBridge? = null
 
     private var correctionCoordinator: EditorCorrectionCoordinator? = null
+    private val correctionResourceRepository = CorrectionResourceRepository(application)
+    private val _correctionResourceState = MutableStateFlow(EditorCorrectionResourceState())
+    val correctionResourceState: StateFlow<EditorCorrectionResourceState> = _correctionResourceState.asStateFlow()
+    private var correctionResourcesLoaded = false
     private val emptyCorrectionState = MutableStateFlow(EditorCorrectionState())
     val correctionState: StateFlow<EditorCorrectionState>
         get() = correctionCoordinator?.state ?: emptyCorrectionState.asStateFlow()
@@ -229,6 +237,10 @@ class EditorViewModel(
                 val snapshot = loadEditorSettingsSnapshot()
                 _uiState.value = _uiState.value.copy(settings = snapshot, settingsReady = true)
             }
+        }
+        if (!correctionResourcesLoaded && _appServiceBridge != null) {
+            correctionResourcesLoaded = true
+            viewModelScope.launch { refreshCorrectionResourceState() }
         }
         // #595 三/四：同步前统一 flush 活动正文（ActiveDocumentGate）。
         registerActiveDocumentGateIfNeeded()
@@ -527,6 +539,112 @@ class EditorViewModel(
         if (identity.targetId != targetId) return
         val correction = correctionCoordinator ?: return
         viewModelScope.launch { correction.checkChapter(identity) }
+    }
+
+    fun importCorrectionModel(uri: Uri) {
+        if (_correctionResourceState.value.preparing) return
+        viewModelScope.launch {
+            _correctionResourceState.value = _correctionResourceState.value.copy(preparing = true, feedback = null)
+            var importedModel: ImportedCorrectionModel? = null
+            try {
+                val model = withContext(Dispatchers.IO) { correctionResourceRepository.copyModel(uri) }
+                importedModel = model
+                val result =
+                    withContext(Dispatchers.IO) {
+                        _appServiceBridge?.setCorrectionModelPath(model.file.absolutePath)
+                    }
+                when (result) {
+                    is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
+                        withContext(Dispatchers.IO) { correctionResourceRepository.setActiveModel(model) }
+                        refreshCorrectionResourceState(
+                            CorrectionResourceFeedback(
+                                CorrectionResourceFeedbackLevel.Success,
+                                getApplication<Application>().getString(
+                                    R.string.editor_correction_resource_model_configured_feedback,
+                                ),
+                            ),
+                        )
+                    }
+                    is com.xiwei.sujian.core.interop.common.BridgeResult.Error,
+                    com.xiwei.sujian.core.interop.common.BridgeResult.NotLoaded,
+                    null -> {
+                        withContext(Dispatchers.IO) { correctionResourceRepository.discardModel(model) }
+                        refreshCorrectionResourceState(
+                            CorrectionResourceFeedback(
+                                CorrectionResourceFeedbackLevel.Error,
+                                getApplication<Application>().getString(R.string.editor_correction_resource_model_failed),
+                            ),
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                importedModel?.let { model ->
+                    withContext(Dispatchers.IO) { correctionResourceRepository.discardModel(model) }
+                }
+                refreshCorrectionResourceState(
+                    CorrectionResourceFeedback(
+                        CorrectionResourceFeedbackLevel.Error,
+                        getApplication<Application>().getString(R.string.editor_correction_resource_model_failed),
+                    ),
+                )
+            }
+        }
+    }
+
+    fun importCorrectionDictionaries(uris: List<Uri>) {
+        if (_correctionResourceState.value.preparing || uris.isEmpty()) return
+        viewModelScope.launch {
+            _correctionResourceState.value = _correctionResourceState.value.copy(preparing = true, feedback = null)
+            try {
+                val result = withContext(Dispatchers.IO) { correctionResourceRepository.importDictionaries(uris) }
+                val feedback =
+                    when {
+                        result.importedFiles.isEmpty() -> CorrectionResourceFeedback(
+                            CorrectionResourceFeedbackLevel.Warning,
+                            getApplication<Application>().getString(R.string.editor_correction_resource_dictionary_unsupported),
+                        )
+                        result.unsupportedFiles.isNotEmpty() -> CorrectionResourceFeedback(
+                            CorrectionResourceFeedbackLevel.Warning,
+                            getApplication<Application>().getString(
+                                R.string.editor_correction_resource_dictionary_partial,
+                                result.importedFiles.distinct().size,
+                                result.unsupportedFiles.size,
+                            ),
+                        )
+                        else -> CorrectionResourceFeedback(
+                            CorrectionResourceFeedbackLevel.Success,
+                            getApplication<Application>().getString(R.string.editor_correction_resource_dictionary_imported),
+                        )
+                    }
+                refreshCorrectionResourceState(feedback)
+            } catch (_: Exception) {
+                refreshCorrectionResourceState(
+                    CorrectionResourceFeedback(
+                        CorrectionResourceFeedbackLevel.Error,
+                        getApplication<Application>().getString(R.string.editor_correction_resource_dictionary_failed),
+                    ),
+                )
+            }
+        }
+    }
+
+    private suspend fun refreshCorrectionResourceState(feedback: CorrectionResourceFeedback? = null) {
+        val files = withContext(Dispatchers.IO) { correctionResourceRepository.currentFiles() }
+        val coreStatus = withContext(Dispatchers.IO) {
+            when (val result = _appServiceBridge?.getCorrectionResourceStatus()) {
+                is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> result.data
+                else -> null
+            }
+        }
+        _correctionResourceState.value =
+            EditorCorrectionResourceState(
+                activeModelDisplayName = files.activeModelDisplayName,
+                modelConfigured = coreStatus?.modelConfigured ?: files.activeModelDisplayName != null,
+                modelFileAvailable = coreStatus?.modelFileAvailable ?: files.activeModelDisplayName != null,
+                bundledLexiconAvailable = coreStatus?.bundledLexiconAvailable ?: false,
+                dictionaryFiles = coreStatus?.installedDictionaryFiles ?: files.dictionaryFiles,
+                feedback = feedback,
+            )
     }
 
     fun ignoreCorrectionSuggestion(

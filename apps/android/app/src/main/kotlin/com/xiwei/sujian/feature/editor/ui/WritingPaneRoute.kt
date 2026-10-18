@@ -1,7 +1,10 @@
 package com.xiwei.sujian.feature.editor.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,7 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -19,8 +25,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -30,6 +38,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
+import com.xiwei.sujian.feature.editor.presentation.CorrectionResourceFeedbackLevel
+import com.xiwei.sujian.feature.editor.presentation.EditorCorrectionResourceState
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.confirmEditorAttached
 import com.xiwei.sujian.feature.editor.presentation.isCurrentChapter
@@ -190,6 +200,19 @@ private fun WritingPaneEditorContent(
     when (surfaceMode) {
         EditorSurfaceMode.EditorHost -> {
             val bridge = viewModel.bridgeForTarget(targetId, uiState.content)
+            val correctionResources by viewModel.correctionResourceState.collectAsStateWithLifecycle()
+            var showCorrectionResources by rememberSaveable(targetId) { mutableStateOf(false) }
+            var authorizedToUseResources by rememberSaveable(targetId) { mutableStateOf(false) }
+            val modelPicker =
+                rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri != null && authorizedToUseResources) viewModel.importCorrectionModel(uri)
+                }
+            val dictionaryPicker =
+                rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+                    if (uris.isNotEmpty() && authorizedToUseResources) {
+                        viewModel.importCorrectionDictionaries(uris)
+                    }
+                }
 
             SetupCorrectionRequests(viewModel, targetId, bridge)
 
@@ -276,6 +299,22 @@ private fun WritingPaneEditorContent(
                     ?: activeCorrectionSuggestions.firstOrNull()
 
             Column(modifier = modifier) {
+                CorrectionResourceStatusRow(
+                    state = correctionResources,
+                    onManage = { showCorrectionResources = true },
+                    onCheckChapter = { viewModel.requestCorrectionChapter(targetId) },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                )
+                if (showCorrectionResources) {
+                    CorrectionResourcesDialog(
+                        state = correctionResources,
+                        authorized = authorizedToUseResources,
+                        onAuthorizedChange = { authorizedToUseResources = it },
+                        onImportModel = { modelPicker.launch(arrayOf("*/*")) },
+                        onImportDictionaries = { dictionaryPicker.launch(arrayOf("*/*")) },
+                        onDismiss = { showCorrectionResources = false },
+                    )
+                }
                 if (activeCorrectionSuggestions.isNotEmpty() && selected != null) {
                     CorrectionSuggestionPanel(
                         suggestions = activeCorrectionSuggestions,
@@ -340,6 +379,149 @@ private fun WritingPaneEditorContent(
 }
 
 @Composable
+private fun CorrectionResourceStatusRow(
+    state: EditorCorrectionResourceState,
+    onManage: () -> Unit,
+    onCheckChapter: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier = modifier) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            val modelName = state.activeModelDisplayName
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.editor_correction_resource_title),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Text(
+                        text = when {
+                            state.modelConfigured && !state.modelFileAvailable ->
+                                stringResource(R.string.editor_correction_resource_model_unavailable)
+                            state.modelFileAvailable && modelName != null ->
+                                stringResource(R.string.editor_correction_resource_model_configured, modelName)
+                            state.modelFileAvailable ->
+                                stringResource(R.string.editor_correction_resource_model_configured_unknown)
+                            else -> stringResource(R.string.editor_correction_resource_missing_model)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        text = if (state.bundledLexiconAvailable) {
+                            stringResource(R.string.editor_correction_resource_bundled_ready)
+                        } else {
+                            stringResource(R.string.editor_correction_resource_bundled_unavailable)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.editor_correction_resource_dictionary_count,
+                            state.dictionaryFiles.size,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = onManage, enabled = !state.preparing) {
+                    Text(stringResource(R.string.editor_correction_resource_manage))
+                }
+                Button(onClick = onCheckChapter, enabled = state.bundledLexiconAvailable && !state.preparing) {
+                    Text(stringResource(R.string.editor_correction_resource_check_chapter))
+                }
+            }
+            state.feedback?.let { feedback ->
+                Text(
+                    text = feedback.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = correctionResourceFeedbackColor(feedback.level),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CorrectionResourcesDialog(
+    state: EditorCorrectionResourceState,
+    authorized: Boolean,
+    onAuthorizedChange: (Boolean) -> Unit,
+    onImportModel: () -> Unit,
+    onImportDictionaries: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!state.preparing) onDismiss() },
+        title = { Text(stringResource(R.string.editor_correction_resource_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.editor_correction_resource_license_help))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Checkbox(checked = authorized, onCheckedChange = onAuthorizedChange)
+                    Text(
+                        text = stringResource(R.string.editor_correction_resource_authorization),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.editor_correction_resource_dictionary_help),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(
+                    onClick = onImportModel,
+                    enabled = authorized && !state.preparing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.editor_correction_resource_import_model))
+                }
+                TextButton(
+                    onClick = onImportDictionaries,
+                    enabled = authorized && !state.preparing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.editor_correction_resource_import_dictionaries))
+                }
+                if (state.preparing) {
+                    Text(
+                        text = stringResource(R.string.editor_correction_resource_preparing),
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                state.feedback?.let { feedback ->
+                    Text(
+                        text = feedback.message,
+                        color = correctionResourceFeedbackColor(feedback.level),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss, enabled = !state.preparing) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun correctionResourceFeedbackColor(level: CorrectionResourceFeedbackLevel) =
+    when (level) {
+        CorrectionResourceFeedbackLevel.Success -> MaterialTheme.colorScheme.primary
+        CorrectionResourceFeedbackLevel.Warning -> MaterialTheme.colorScheme.tertiary
+        CorrectionResourceFeedbackLevel.Error -> MaterialTheme.colorScheme.error
+    }
+
+@Composable
 private fun CorrectionSuggestionPanel(
     suggestions: List<EditorCorrectionSuggestion>,
     selectedSuggestion: EditorCorrectionSuggestion,
@@ -395,11 +577,11 @@ private fun CorrectionSuggestionPanel(
                     R.string.editor_correction_reason,
                     localizedCorrectionSource(selectedSuggestion.source),
                     localizedCorrectionRule(selectedSuggestion.ruleId),
-                    localizedCorrectionSeverity(selectedSuggestion.severity),
                 ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            CorrectionSeverityBadge(selectedSuggestion.severity)
             Spacer(modifier = Modifier.height(2.dp))
             Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
                 TextButton(onClick = onReplace) {
@@ -421,6 +603,25 @@ private fun CorrectionSuggestionPanel(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CorrectionSeverityBadge(severity: String) {
+    val (containerColor, contentColor) =
+        when (severity) {
+            "error" -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+            "warning" -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+            "hint" -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+            else -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    Surface(shape = MaterialTheme.shapes.small, color = containerColor) {
+        Text(
+            text = localizedCorrectionSeverity(severity),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            color = contentColor,
+            style = MaterialTheme.typography.labelSmall,
+        )
     }
 }
 

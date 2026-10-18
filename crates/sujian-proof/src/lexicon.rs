@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Modified behavioral port of pycorrector dictionary loaders in
 // pycorrector/pycorrector/detector.py and proper_corrector.py by XuMing
-// (xuming624); this file loads user-provided paths and contains no upstream data.
+// (xuming624); dictionary data assets and their licenses are listed separately
+// in THIRD_PARTY_NOTICES.md.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 
 // Behavioral port of pycorrector's detector/corrector dictionary loading
-// (Apache-2.0). No upstream dictionary data is bundled or copied here.
+// (Apache-2.0). Bundled and user-provided data are loaded by the same parsers.
 
 #[derive(Clone, Debug, Default)]
 pub struct LexiconPaths {
@@ -39,17 +40,17 @@ pub struct Lexicon {
 
 impl Lexicon {
     pub fn from_paths(paths: &LexiconPaths) -> io::Result<Self> {
-        let mut lexicon = Self::default();
+        let mut lexicon = Self::from_embedded()?;
         if let Some(path) = &paths.word_freq {
             for (word, frequency) in read_word_freq(path)? {
                 lexicon.insert_word_frequency(word, frequency);
             }
         }
         if let Some(path) = &paths.same_pinyin {
-            lexicon.same_pinyin = read_same_pinyin(path)?;
+            merge_character_groups(&mut lexicon.same_pinyin, read_same_pinyin(path)?);
         }
         if let Some(path) = &paths.same_stroke {
-            lexicon.same_stroke = read_same_stroke(path)?;
+            merge_character_groups(&mut lexicon.same_stroke, read_same_stroke(path)?);
         }
         if let Some(path) = &paths.custom_confusion {
             for (wrong, correct, frequency) in read_custom_confusion(path)? {
@@ -58,15 +59,17 @@ impl Lexicon {
             }
         }
         if let Some(path) = &paths.person_name {
-            lexicon.person_names = read_word_freq(path)?;
-            for (word, frequency) in lexicon.person_names.clone() {
-                lexicon.insert_word_frequency(word, frequency);
+            let person_names = read_word_freq(path)?;
+            for (word, frequency) in &person_names {
+                lexicon.person_names.insert(word.clone(), *frequency);
+                lexicon.insert_word_frequency(word.clone(), *frequency);
             }
         }
         if let Some(path) = &paths.place_name {
-            lexicon.place_names = read_word_freq(path)?;
-            for (word, frequency) in lexicon.place_names.clone() {
-                lexicon.insert_word_frequency(word, frequency);
+            let place_names = read_word_freq(path)?;
+            for (word, frequency) in &place_names {
+                lexicon.place_names.insert(word.clone(), *frequency);
+                lexicon.insert_word_frequency(word.clone(), *frequency);
             }
         }
         if let Some(path) = &paths.proper_name {
@@ -75,8 +78,64 @@ impl Lexicon {
             }
         }
         if let Some(path) = &paths.ignored_words {
-            lexicon.ignored_words = read_word_set(path)?;
+            lexicon.ignored_words.extend(read_word_set(path)?);
         }
+        Ok(lexicon)
+    }
+
+    fn from_embedded() -> io::Result<Self> {
+        let mut lexicon = Self::default();
+        for (word, frequency) in read_word_freq_from(
+            Cursor::new(include_str!("../assets/correction-data/word_freq.txt")),
+            "bundled word_freq.txt",
+        )? {
+            lexicon.insert_word_frequency(word, frequency);
+        }
+        merge_character_groups(
+            &mut lexicon.same_pinyin,
+            read_same_pinyin_from(Cursor::new(include_str!(
+                "../assets/correction-data/same_pinyin.txt"
+            )))?,
+        );
+        merge_character_groups(
+            &mut lexicon.same_stroke,
+            read_same_stroke_from(Cursor::new(include_str!(
+                "../assets/correction-data/same_stroke.txt"
+            )))?,
+        );
+        for (wrong, correct, frequency) in read_custom_confusion_from(
+            Cursor::new(include_str!(
+                "../assets/correction-data/custom_confusion.txt"
+            )),
+            "bundled custom_confusion.txt",
+        )? {
+            lexicon.insert_confusion(wrong, correct.clone());
+            lexicon.insert_word_frequency(correct, frequency);
+        }
+        for (word, frequency) in read_word_freq_from(
+            Cursor::new(include_str!("../assets/correction-data/person_name.txt")),
+            "bundled person_name.txt",
+        )? {
+            lexicon.person_names.insert(word.clone(), frequency);
+            lexicon.insert_word_frequency(word, frequency);
+        }
+        for (word, frequency) in read_word_freq_from(
+            Cursor::new(include_str!("../assets/correction-data/place_name.txt")),
+            "bundled place_name.txt",
+        )? {
+            lexicon.place_names.insert(word.clone(), frequency);
+            lexicon.insert_word_frequency(word, frequency);
+        }
+        for name in read_word_set_from(Cursor::new(include_str!(
+            "../assets/correction-data/proper_name.txt"
+        )))? {
+            lexicon.insert_proper_name(name);
+        }
+        lexicon
+            .ignored_words
+            .extend(read_word_set_from(Cursor::new(include_str!(
+                "../assets/correction-data/ignored_words.txt"
+            )))?);
         Ok(lexicon)
     }
 
@@ -190,14 +249,14 @@ impl Lexicon {
     }
 }
 
-fn open_lines(path: &Path) -> io::Result<impl Iterator<Item = io::Result<String>>> {
+fn read_word_freq(path: &Path) -> io::Result<HashMap<String, u64>> {
     let file = File::open(path)?;
-    Ok(BufReader::new(file).lines())
+    read_word_freq_from(BufReader::new(file), &path.display().to_string())
 }
 
-fn read_word_freq(path: &Path) -> io::Result<HashMap<String, u64>> {
+fn read_word_freq_from<R: BufRead>(reader: R, source: &str) -> io::Result<HashMap<String, u64>> {
     let mut result = HashMap::new();
-    for (line_idx, line) in open_lines(path)?.enumerate() {
+    for (line_idx, line) in reader.lines().enumerate() {
         let line = line?;
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -215,7 +274,7 @@ fn read_word_freq(path: &Path) -> io::Result<HashMap<String, u64>> {
                     io::ErrorKind::InvalidData,
                     format!(
                         "{}:{}: invalid word frequency: {error}",
-                        path.display(),
+                        source,
                         line_idx + 1
                     ),
                 )
@@ -226,15 +285,19 @@ fn read_word_freq(path: &Path) -> io::Result<HashMap<String, u64>> {
 }
 
 fn read_same_pinyin(path: &Path) -> io::Result<HashMap<char, HashSet<char>>> {
+    read_same_pinyin_from(BufReader::new(File::open(path)?))
+}
+
+fn read_same_pinyin_from<R: BufRead>(reader: R) -> io::Result<HashMap<char, HashSet<char>>> {
     let mut result = HashMap::<char, HashSet<char>>::new();
-    for line in open_lines(path)? {
+    for line in reader.lines() {
         let line = line?;
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.len() < 3 {
+        if fields.len() < 2 {
             continue;
         }
         let Some(key) = fields[0].chars().next() else {
@@ -242,15 +305,21 @@ fn read_same_pinyin(path: &Path) -> io::Result<HashMap<char, HashSet<char>>> {
         };
         let group = result.entry(key).or_default();
         group.extend(fields[1].chars());
-        group.extend(fields[2].chars());
+        if let Some(additional_chars) = fields.get(2) {
+            group.extend(additional_chars.chars());
+        }
         group.remove(&key);
     }
     Ok(result)
 }
 
 fn read_same_stroke(path: &Path) -> io::Result<HashMap<char, HashSet<char>>> {
+    read_same_stroke_from(BufReader::new(File::open(path)?))
+}
+
+fn read_same_stroke_from<R: BufRead>(reader: R) -> io::Result<HashMap<char, HashSet<char>>> {
     let mut result = HashMap::<char, HashSet<char>>::new();
-    for line in open_lines(path)? {
+    for line in reader.lines() {
         let line = line?;
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -269,8 +338,16 @@ fn read_same_stroke(path: &Path) -> io::Result<HashMap<char, HashSet<char>>> {
 }
 
 fn read_custom_confusion(path: &Path) -> io::Result<Vec<(String, String, u64)>> {
+    let file = File::open(path)?;
+    read_custom_confusion_from(BufReader::new(file), &path.display().to_string())
+}
+
+fn read_custom_confusion_from<R: BufRead>(
+    reader: R,
+    source: &str,
+) -> io::Result<Vec<(String, String, u64)>> {
     let mut result = Vec::new();
-    for (line_idx, line) in open_lines(path)?.enumerate() {
+    for (line_idx, line) in reader.lines().enumerate() {
         let line = line?;
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -288,7 +365,7 @@ fn read_custom_confusion(path: &Path) -> io::Result<Vec<(String, String, u64)>> 
                     io::ErrorKind::InvalidData,
                     format!(
                         "{}:{}: invalid confusion target frequency: {error}",
-                        path.display(),
+                        source,
                         line_idx + 1
                     ),
                 )
@@ -299,8 +376,12 @@ fn read_custom_confusion(path: &Path) -> io::Result<Vec<(String, String, u64)>> 
 }
 
 fn read_word_set(path: &Path) -> io::Result<HashSet<String>> {
+    read_word_set_from(BufReader::new(File::open(path)?))
+}
+
+fn read_word_set_from<R: BufRead>(reader: R) -> io::Result<HashSet<String>> {
     let mut result = HashSet::new();
-    for line in open_lines(path)? {
+    for line in reader.lines() {
         let line = line?;
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -311,4 +392,13 @@ fn read_word_set(path: &Path) -> io::Result<HashSet<String>> {
         }
     }
     Ok(result)
+}
+
+fn merge_character_groups(
+    target: &mut HashMap<char, HashSet<char>>,
+    source: HashMap<char, HashSet<char>>,
+) {
+    for (ch, group) in source {
+        target.entry(ch).or_default().extend(group);
+    }
 }

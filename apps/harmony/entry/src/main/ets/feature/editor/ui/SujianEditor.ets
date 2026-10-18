@@ -99,6 +99,10 @@ interface PendingDisplayData {
   newStyledString: StyledString | null
 }
 
+interface CorrectionUnderlineRect extends SelectionRect {
+  severity: string
+}
+
 /**
  * Issue #879 复核评论修复（问题1）：候选 token——标识一次候选的完整身份。
  *
@@ -270,7 +274,6 @@ export struct SujianEditor {
   // 改为 ResourceColor 引用系统颜色资源，随系统 light/dark 自动适配。
   selectionBackgroundColor: ResourceColor = $r('sys.color.ohos_id_color_text_highlight_bg')
   compositionUnderlineColor: ResourceColor = $r('sys.color.ohos_id_color_emphasize')
-  correctionUnderlineColor: ResourceColor = $r('sys.color.ohos_id_color_warning')
   caretColor: ResourceColor = $r('sys.color.ohos_id_color_text_primary')
   // Issue #879 本轮复核评论修复（问题1）：删除 editorBackgroundColor——不再用背景色 Rect 遮罩。
   // 主 Text 仍完整排版，但其绘制输出按 staticVisibleRanges 用 clipShape/maskShape 裁切——
@@ -280,7 +283,7 @@ export struct SujianEditor {
   @State selectionRects: SelectionRect[] = []
   @State caretRect: CaretRect | null = null
   @State compositionUnderlineRects: CompositionUnderlineRect[] = []
-  @State correctionUnderlineRects: SelectionRect[] = []
+  @State correctionUnderlineRects: CorrectionUnderlineRect[] = []
   // Issue #629 评论6 Part C：分开 viewport 与 content 尺寸。
   // viewportWidth/viewportHeight：外层 Scroll 可视区域尺寸（px），来自 Scroll onAreaChange。
   // contentWidth/contentHeight：内层正文实际渲染尺寸（px），来自 Text onAreaChange。
@@ -2042,7 +2045,7 @@ export struct SujianEditor {
     }
   }
 
-  /** Draw revision-matched Core suggestions as thin warning underlines in editor coordinates. */
+  /** Draw revision-matched Core suggestions as severity-colored underlines. */
   private refreshCorrectionUnderlineRects(): void {
     const snapshot = this.displayedSnapshot
     const result = this.renderResult
@@ -2056,7 +2059,7 @@ export struct SujianEditor {
     const measureTextFn = (text: string): number => {
       return this.getUIContext().px2vp(measureUtils.measureText({ textContent: text, fontSize: snapshot.fontSize }))
     }
-    const rects: SelectionRect[] = []
+    const rects: CorrectionUnderlineRect[] = []
     for (let i = 0; i < this.correctionSuggestions.length; i++) {
       const suggestion = this.correctionSuggestions[i]
       if (suggestion.textRevision !== snapshot.revision || suggestion.startUtf16 < 0 ||
@@ -2068,10 +2071,21 @@ export struct SujianEditor {
         snapshot.text, result.lines, this.contentWidth,
         suggestion.startUtf16, suggestion.endUtf16, measureTextFn)
       for (let j = 0; j < suggestionRects.length; j++) {
-        rects.push(suggestionRects[j])
+        const rect = suggestionRects[j]
+        rects.push({ x: rect.x, y: rect.y, width: rect.width, height: rect.height, severity: suggestion.severity })
       }
     }
     this.correctionUnderlineRects = rects
+  }
+
+  private correctionSeverityColor(severity: string): ResourceColor {
+    if (severity === 'error') {
+      return $r('sys.color.ohos_id_color_alert')
+    }
+    if (severity === 'warning') {
+      return $r('sys.color.ohos_id_color_warning')
+    }
+    return $r('sys.color.font_secondary')
   }
 
   // Issue #768 任务10：从系统 LayoutManager 获取真实布局。
@@ -2905,12 +2919,12 @@ export struct SujianEditor {
           }, (rect: CompositionUnderlineRect, index: number) => index.toString())
 
           // Current-revision correction diagnostics use the same committed line geometry as text.
-          ForEach(this.correctionUnderlineRects, (rect: SelectionRect, index: number) => {
+          ForEach(this.correctionUnderlineRects, (rect: CorrectionUnderlineRect, index: number) => {
             Rect()
               .position({ x: rect.x, y: rect.y + Math.max(0, rect.height - 2) })
               .width(rect.width)
               .height(Math.min(2, rect.height))
-              .fill(this.correctionUnderlineColor)
+              .fill(this.correctionSeverityColor(rect.severity))
           }, (rect: SelectionRect, index: number) => `correction_${index}`)
 
           // 5. caret（最上层）— Issue #879：单一视觉光标。

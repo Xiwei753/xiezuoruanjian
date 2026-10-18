@@ -5,7 +5,7 @@ import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { LocalSettings, ThemeMode } from '../../../corebridge/dto/SettingsDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver, ShareLifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
-import { getBridge } from '../../../app/AppContext'
+import { getAppContext, getAppDataRoot, getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import {
@@ -62,6 +62,7 @@ import { MappedCorrectionSuggestion } from '../correction/CorrectionDtos'
 import { CorrectionIgnoreScope } from '../correction/ICorrectionBridge'
 import { NativeCorrectionBridge } from '../correction/NativeCorrectionBridge'
 import { CorrectionSuggestionsPanel } from '../correction/CorrectionSuggestionsPanel'
+import { CorrectionResourceImporter } from '../correction/CorrectionResourceImporter'
 
 // Issue #920 A：写作页不再向 Core 要七角色 bounds，布局由 ArkUI 自适应自行决定。
 // Issue #932：宽窄形态统一由 AdaptiveContext.prefersWideLayout（与导航/设置同一口径）判定，
@@ -102,6 +103,10 @@ export struct WritingScreen {
   @State correctionSuggestions: MappedCorrectionSuggestion[] = []
   @State correctionIsChecking: boolean = false
   @State correctionErrorMessage: string = ''
+  @State correctionResourceDirectory: string = ''
+  @State correctionDictionaryResourceStatus: string = ''
+  @State correctionModelResourceStatus: string = ''
+  @State correctionResourcesBusy: boolean = false
   @State wordCount: number = 0
   @State isLoading: boolean = true
   @State isSaving: boolean = false
@@ -284,6 +289,7 @@ export struct WritingScreen {
       this.correctionIsChecking = state.isChecking
       this.correctionErrorMessage = state.errorMessage
     })
+    this.refreshCorrectionResourceStatus()
 
     // Issue #920 A：把路由上下文交给协调器，并注册显示状态回流 + 会话打开后的平台侧恢复。
     const workflowConfig: WritingWorkflowConfig = {
@@ -1420,7 +1426,13 @@ export struct WritingScreen {
             suggestions: this.correctionSuggestions,
             isChecking: this.correctionIsChecking,
             errorMessage: this.correctionErrorMessage,
+            resourceDirectory: this.correctionResourceDirectory,
+            dictionaryResourceStatus: this.correctionDictionaryResourceStatus,
+            modelResourceStatus: this.correctionModelResourceStatus,
+            isPreparingResources: this.correctionResourcesBusy,
             onCheckChapter: (): void => { void this.correctionCoordinator.checkChapter() },
+            onImportModel: (): void => { void this.importCorrectionModel() },
+            onImportDictionary: (): void => { void this.importCorrectionDictionary() },
             onApply: (suggestion: MappedCorrectionSuggestion): void => { void this.applyCorrection(suggestion) },
             onIgnore: (suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): void => {
               void this.ignoreCorrection(suggestion, scope)
@@ -1464,6 +1476,83 @@ export struct WritingScreen {
     const result = await this.correctionCoordinator.apply(suggestion)
     if (!result.success) {
       this.correctionErrorMessage = result.userMessage ?? result.errorCode ?? '校对建议已过期，请重新检查'
+    }
+  }
+
+  private async refreshCorrectionResourceStatus(): Promise<void> {
+    const snapshot = CorrectionResourceImporter.inspect(getAppDataRoot())
+    this.correctionResourceDirectory = snapshot.directory
+    const result = await this.correctionCoordinator.getResourceStatus()
+    if (!result.success || result.data === undefined) {
+      this.correctionDictionaryResourceStatus =
+        `无法读取 Core 词库状态：${result.userMessage ?? result.rawError ?? '未知错误'}`
+      this.correctionModelResourceStatus =
+        `无法读取 Core 模型状态：${result.userMessage ?? result.rawError ?? '未知错误'}`
+      return
+    }
+    const status = result.data
+    this.correctionDictionaryResourceStatus = status.bundledLexiconAvailable
+      ? `Core 内置词库已就绪；另有 ${status.installedDictionaryFiles.length} 个可选词典文件已导入`
+      : 'Core 内置词库不可用'
+    this.correctionModelResourceStatus = status.modelFileAvailable
+      ? 'Core 已配置模型文件，格式待首次校对验证'
+      : status.modelConfigured
+        ? 'Core 已配置模型路径，但模型文件不可用'
+        : '尚未配置语言模型；内置固定规则仍可用'
+  }
+
+  private async importCorrectionModel(): Promise<void> {
+    if (this.correctionResourcesBusy) {
+      return
+    }
+    const context = getAppContext().getAbilityContext()
+    const appDataRoot = getAppDataRoot()
+    if (context === null || appDataRoot.length === 0) {
+      this.correctionModelResourceStatus = '无法获取应用目录或 UIAbilityContext，模型未导入'
+      return
+    }
+    this.correctionResourcesBusy = true
+    try {
+      const result = await CorrectionResourceImporter.importModel(
+        context,
+        appDataRoot,
+        (path: string) => this.correctionCoordinator.setModelPath(path),
+        (message: string): void => { this.correctionModelResourceStatus = message }
+      )
+      if (result.status === 'imported') {
+        this.correctionModelResourceStatus = result.message
+      } else if (result.status === 'cancelled') {
+        this.correctionModelResourceStatus = `模型配置未改变；${result.message}`
+      } else {
+        this.correctionModelResourceStatus = result.message
+      }
+      await this.refreshCorrectionResourceStatus()
+    } finally {
+      this.correctionResourcesBusy = false
+    }
+  }
+
+  private async importCorrectionDictionary(): Promise<void> {
+    if (this.correctionResourcesBusy) {
+      return
+    }
+    const context = getAppContext().getAbilityContext()
+    const appDataRoot = getAppDataRoot()
+    if (context === null || appDataRoot.length === 0) {
+      this.correctionDictionaryResourceStatus = '无法获取应用目录或 UIAbilityContext，词典未导入'
+      return
+    }
+    this.correctionResourcesBusy = true
+    try {
+      const result = await CorrectionResourceImporter.importDictionary(
+        context,
+        appDataRoot,
+        (message: string): void => { this.correctionDictionaryResourceStatus = message }
+      )
+      await this.refreshCorrectionResourceStatus()
+      this.correctionDictionaryResourceStatus = `${result.message}；${this.correctionDictionaryResourceStatus}`
+    } finally {
+      this.correctionResourcesBusy = false
     }
   }
 

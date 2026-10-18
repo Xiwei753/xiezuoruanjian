@@ -1,0 +1,1 @@
+# Empty by default. Add one locally ignored word per line.

@@ -1,12 +1,13 @@
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
-import { CorrectionSuggestionDto } from './CorrectionDtos'
+import { CorrectionResourceStatusDto, CorrectionSuggestionDto } from './CorrectionDtos'
 
 export type CorrectionIgnoreScope = 'once' | 'chapter' | 'permanent' | 'rule'
 
 /** Harmony transport contract for the Core-owned correction operations. */
 export interface ICorrectionBridge {
   setModelPath(path: string): Promise<ResultEnvelope<boolean>>
+  getResourceStatus(): Promise<ResultEnvelope<CorrectionResourceStatusDto>>
   checkSegment(sessionId: number, projectId: string, chapterId: string, textRevision: number,
     startByte: number, endByte: number): Promise<ResultEnvelope<CorrectionSuggestionDto[]>>
   checkChapter(sessionId: number, projectId: string, chapterId: string,

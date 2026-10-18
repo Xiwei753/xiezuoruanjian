@@ -93,6 +93,27 @@ data class EditorUiState(
     val settingsReady: Boolean = false,
 )
 
+enum class CorrectionResourceFeedbackLevel {
+    Success,
+    Warning,
+    Error,
+}
+
+data class CorrectionResourceFeedback(
+    val level: CorrectionResourceFeedbackLevel,
+    val message: String,
+)
+
+data class EditorCorrectionResourceState(
+    val preparing: Boolean = false,
+    val activeModelDisplayName: String? = null,
+    val modelConfigured: Boolean = false,
+    val modelFileAvailable: Boolean = false,
+    val bundledLexiconAvailable: Boolean = false,
+    val dictionaryFiles: List<String> = emptyList(),
+    val feedback: CorrectionResourceFeedback? = null,
+)
+
 sealed class EditorEvent {
     data class ToastMessage(val message: String) : EditorEvent()
 

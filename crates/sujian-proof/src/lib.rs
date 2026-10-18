@@ -90,6 +90,26 @@ impl CorrectionEngine {
         })
     }
 
+    /// Create an engine that reports fixed rules without requiring a KenLM model.
+    pub fn rules_only(
+        lexicon: Lexicon,
+        rules: RuleSet,
+        config: CorrectionConfig,
+    ) -> Result<Self, CorrectionError> {
+        Self::rules_only_shared(Arc::new(lexicon), rules, config)
+    }
+
+    /// Create a rules-only engine that shares immutable lexicon data.
+    pub fn rules_only_shared(
+        lexicon: Arc<Lexicon>,
+        rules: RuleSet,
+        config: CorrectionConfig,
+    ) -> Result<Self, CorrectionError> {
+        Ok(Self {
+            corrector: corrector::TraditionalCorrector::rules_only(lexicon, rules, config)?,
+        })
+    }
+
     pub fn scan(&self, text: &str) -> Result<Vec<CorrectionDiagnostic>, CorrectionError> {
         self.corrector.suggest(text)
     }

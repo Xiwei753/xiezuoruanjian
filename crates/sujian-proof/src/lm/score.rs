@@ -67,12 +67,10 @@ fn score_word(
     // higher-order n-gram replaces the lower-order score; a miss adds that
     // context's KenLM backoff weight, preserving the ARPA backoff equation.
     for context_len in 1..=context_limit {
-        let context = &history[history.len() - context_len..];
-        let mut key = u64::from(context[0]);
-        for context_word in &context[1..] {
-            key = combine_word_hash(key, *context_word);
+        let mut key = u64::from(word);
+        for previous_word in history.iter().rev().take(context_len) {
+            key = combine_word_hash(key, *previous_word);
         }
-        key = combine_word_hash(key, word);
 
         let ngram_order = context_len + 1;
         let found_probability = if ngram_order == layout.order {
@@ -126,13 +124,21 @@ fn context_backoff(
     history: &[u32],
     context_len: usize,
 ) -> Result<f32, KenlmError> {
-    let context = &history[history.len() - context_len..];
     if context_len == 1 {
-        return Ok(unigram(bytes, layout, context[0])?.1);
+        let most_recent = history
+            .last()
+            .copied()
+            .ok_or_else(|| invalid("context backoff requested without history"))?;
+        return Ok(unigram(bytes, layout, most_recent)?.1);
     }
 
-    let mut key = u64::from(context[0]);
-    for context_word in &context[1..] {
+    let mut words = history.iter().rev().take(context_len);
+    let first = words
+        .next()
+        .copied()
+        .ok_or_else(|| invalid("context backoff requested without history"))?;
+    let mut key = u64::from(first);
+    for context_word in words {
         key = combine_word_hash(key, *context_word);
     }
     let Some(table) = layout.middle_tables.get(context_len - 2) else {

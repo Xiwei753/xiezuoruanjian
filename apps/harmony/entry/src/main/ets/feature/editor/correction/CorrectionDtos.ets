@@ -12,6 +12,14 @@ export interface CorrectionSuggestionDto {
   textRevision: number
 }
 
+export interface CorrectionResourceStatusDto {
+  modelConfigured: boolean
+  modelFileAvailable: boolean
+  bundledLexiconAvailable: boolean
+  installedDictionaryFiles: string[]
+  missingDictionaryFiles: string[]
+}
+
 /** A current-revision suggestion projected to ArkTS UTF-16 coordinates for presentation. */
 export interface MappedCorrectionSuggestion extends CorrectionSuggestionDto {
   startUtf16: number
@@ -69,4 +77,33 @@ export function decodeCorrectionSuggestions(data: Object): DecodeResult<Correcti
     suggestions.push(decoded.value)
   }
   return { ok: true, value: suggestions }
+}
+
+export function decodeCorrectionResourceStatus(data: Object): DecodeResult<CorrectionResourceStatusDto> {
+  if (!isRecord(data)) {
+    return { ok: false, error: 'data: expected CorrectionResourceStatusDto' }
+  }
+  const record = data as Record<string, Object>
+  const modelConfigured = record['modelConfigured']
+  const modelFileAvailable = record['modelFileAvailable']
+  const bundledLexiconAvailable = record['bundledLexiconAvailable']
+  const installedDictionaryFiles = record['installedDictionaryFiles']
+  const missingDictionaryFiles = record['missingDictionaryFiles']
+  if (typeof modelConfigured !== 'boolean' || typeof modelFileAvailable !== 'boolean' ||
+      typeof bundledLexiconAvailable !== 'boolean' || !Array.isArray(installedDictionaryFiles) ||
+      !Array.isArray(missingDictionaryFiles) ||
+      !installedDictionaryFiles.every((name: Object) => typeof name === 'string') ||
+      !missingDictionaryFiles.every((name: Object) => typeof name === 'string')) {
+    return { ok: false, error: 'data: invalid CorrectionResourceStatusDto fields' }
+  }
+  return {
+    ok: true,
+    value: {
+      modelConfigured: modelConfigured,
+      modelFileAvailable: modelFileAvailable,
+      bundledLexiconAvailable: bundledLexiconAvailable,
+      installedDictionaryFiles: installedDictionaryFiles as string[],
+      missingDictionaryFiles: missingDictionaryFiles as string[]
+    }
+  }
 }

@@ -51,16 +51,16 @@ impl CorrectionScanner {
         chapter_id: String,
         text_revision: u64,
     ) -> Result<Self, WriterError> {
-        let model_path = store.model_path()?;
-        let model = open_model(&model_path)?;
-        let scorer: Arc<dyn LanguageScorer> = model;
         let lexicon = store.lexicon_for_project(&project_id)?;
-        let engine = CorrectionEngine::new_shared(
-            scorer,
-            lexicon,
-            RuleSet::with_common_rules(),
-            CorrectionConfig::default(),
-        )
+        let rules = RuleSet::with_common_rules();
+        let config = CorrectionConfig::default();
+        let engine = if let Some(model_path) = store.configured_model_path()? {
+            let model = open_model(&model_path)?;
+            let scorer: Arc<dyn LanguageScorer> = model;
+            CorrectionEngine::new_shared(scorer, lexicon, rules, config)
+        } else {
+            CorrectionEngine::rules_only_shared(lexicon, rules, config)
+        }
         .map_err(|error| WriterError::Other(error.to_string()))?;
         Ok(Self {
             store,

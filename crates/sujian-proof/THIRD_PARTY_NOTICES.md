@@ -30,12 +30,32 @@ as this crate's third-party notice for the translated components.
 
 ## Data and model assets
 
-- Any pycorrector word-frequency, pinyin, stroke, confusion, or name data file
-  copied into this crate must be listed individually here with its exact source
-  path, author, license, and corresponding local path. A repository-wide
-  license statement is not enough to establish a data file's redistribution
-  rights. No data asset is assumed to be Apache-2.0 solely because pycorrector
-  source code is Apache-2.0.
+- THUOCL: [THUOCL repository](https://github.com/thunlp/THUOCL), commit
+  `a30ce79d895d01ab5132a5c74c29703ff7efb4cc`, MIT License, copyright
+  THUNLP (2018). `assets/correction-data/word_freq.txt` combines the eleven
+  files under `data/` by maximum document frequency; `person_name.txt` uses
+  `data/THUOCL_lishimingren.txt`; `place_name.txt` uses
+  `data/THUOCL_diming.txt`; and `proper_name.txt` is their union. No other
+  THUOCL categories are copied as separate files. The MIT text is included in
+  `LICENSES/THUOCL-MIT.txt`. Required attribution: Han Shiyi, Zhang Yuhui, Ma
+  Yunshan, Tu Cunchao, Guo Zhipeng, Liu Zhiyuan, and Sun Maosong, “THUOCL:
+  Tsinghua Open Chinese Lexicon,” 2016.
+- Unicode Unihan: `assets/correction-data/same_pinyin.txt` is derived only from
+  the `kMandarin` field of `Unihan_Readings.txt` in Unicode 18.0.0 `Unihan.zip`
+  (SHA-256
+  `4c93ea9c1f636451729a840978f1667a53886af37ba854fdcce109721c63d43e`).
+  Readings retain their tone marks; groups are limited to characters appearing
+  in the bundled THUOCL words. The Unicode License v3 is included in
+  `LICENSES/Unicode-v3.txt`, copyright Unicode, Inc. 1991-2026.
+- Project-authored data: `assets/correction-data/same_stroke.txt` contains a
+  small manually curated set of visual-confusion groups;
+  `custom_confusion.txt` contains fixed-form typo/correction pairs; and
+  `ignored_words.txt` is an empty template. They are GPL-3.0-only project data
+  and are not copied from pycorrector or another external lexicon.
+- The generator `tools/build_correction_assets.py` documents and reproduces
+  the THUOCL and Unihan transformations. The source tables are not included in
+  this repository; the derived runtime files and their licenses/attribution
+  are included.
 - `people2014corpus_chars.klm` is not included. Its repository page declares
   `bigscience-bloom-rail-1.0`; see `docs/correction_model_assets.md`. That
   declaration is not treated as GPL-3.0 compatibility or permission to bundle

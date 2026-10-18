@@ -31,6 +31,8 @@
 | 手写笔 | @kit.ArkUI (组件 TouchEvent) | 未限定独立 API（基础输入事件，随 ArkUI） | 无独立 SystemCapability（基础输入事件） | 无独立权限（基础输入事件） | 否 | input/StylusInputService.ets |
 | Native HiLog | @kit.BasicServicesKit (hilog) — C 接口 | 12 | SystemCapability.HiviewDFX.HiLog | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets（ArkTS 侧调用 getHilogSnapshot），cpp/corebridge/napi/napi_init.cpp（C++ 侧 OH_LOG_SetCallback） |
 | Core File Kit (fileUri) | @kit.CoreFileKit (fileUri) | 12 | SystemCapability.FileManagement.File.FileUri | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets |
+| 校对资源文件选择与导入 | @kit.CoreFileKit (picker.DocumentViewPicker, fileIo) | 12 | SystemCapability.FileManagement.UserFileService; SystemCapability.FileManagement.File.FileIO | 无（系统 Picker 授权用户所选 URI） | 否 | feature/editor/correction/CorrectionResourceImporter.ets, feature/editor/ui/WritingScreen.ets, feature/editor/correction/CorrectionSuggestionsPanel.ets |
+| 校对资源状态查询 | WriterCore `get_correction_resource_status` | 1 | NAPI async worker | 无 | 否 | feature/editor/correction/CorrectionDtos.ets, feature/editor/correction/NativeCorrectionBridge.ets, corebridge/napi/napi_correction.cpp |
 | 系统剪贴板 | @ohos.pasteboard | 12 | SystemCapability.MiscServices.Pasteboard | 无 | 否 | feature/settings/presentation/SettingsViewModel.ets |
 | Application 颜色模式 | @kit.AbilityKit (ApplicationContext) | 11 | 无独立 SystemCapability（随 @kit.AbilityKit Application 生命周期） | 无 | 否 | ui/theme/HarmonyColorModeController.ets |
 | HDS Tabs（悬浮页签） | @kit.UIDesignKit (HdsTabs) | 23 | SystemCapability.UIDesign.HDSComponent.Core | 无 | 否 | app/navigation/impl/api23/HdsPrimaryTabsApi23.ets, app/navigation/PrimaryTabShell.ets |
@@ -224,6 +226,23 @@
 - fallback：无（低于 compatibleSdkVersion 12 的设备不存在）
 - 实现文件：`diagnostics/HarmonyDiagnosticsExporter.ets`
 - 说明：Share Kit 官方示例里的沙箱文件 URI 也是 `@kit.CoreFileKit.fileUri.getUriFromPath()`：https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-V5/share-utd-video-V5
+
+## Core File Kit（校对资源导入）
+
+- Kit：`@kit.CoreFileKit`（`picker` 与 `fileIo` 模块）
+- 接口：
+  - `picker.DocumentViewPicker(context).select(options)` 由 UIAbility 页面选择 `.klm` 或 Core 约定的词典 `.txt`
+  - `fileIo.openSync(uri, READ_ONLY)` 打开 Picker 返回的用户文件 URI，再由 `fileIo.copyFile(fd, stagingPath)` 复制到应用沙箱
+  - `fileIo.moveFile(stagingPath, destination, 0)` 覆盖更新目标词典；`listFileSync` / `statSync` 检查现有资源
+- 最低 API：12（`DocumentViewPicker(context)` 构造函数自 API 12 可用；文件操作本身更早可用）
+- SystemCapability：`SystemCapability.FileManagement.UserFileService`、`SystemCapability.FileManagement.File.FileIO`
+- 权限：无；系统 Picker 授权所选用户文件 URI，导入后文件在应用私有目录内
+- ACL：否
+- fallback：Picker 取消或资源复制失败时保留原有 Core 配置与词典文件；资源状态由 Core 汇报。模型文件存在性由 Core 检查，模型格式在首次校对时验证
+- 实现文件：`feature/editor/correction/CorrectionResourceImporter.ets`、`feature/editor/correction/CorrectionSuggestionsPanel.ets`、`feature/editor/ui/WritingScreen.ets`；severity 下划线由 `feature/editor/ui/SujianEditor.ets` 渲染
+- 词典映射：仅接受 `word_freq.txt`、`same_pinyin.txt`、`same_stroke.txt`、`custom_confusion.txt`、`person_name.txt`、`place_name.txt`、`proper_name.txt`、`ignored_words.txt`，复制到 Core `app_data_root/correction-data/`；更新后由 Core 在下一次校对请求中重读。
+- 模型映射：`.klm` 文件复制到同一应用私有资源目录下的唯一文件名，并通过现有 `nativeCorrectionSetModelPath` 配置 Core；模型格式由首次校对时验证。
+- 官方参考：[@ohos.file.picker](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-file-picker)、[@ohos.file.fs](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-file-fs)
 
 ## 系统剪贴板
 
