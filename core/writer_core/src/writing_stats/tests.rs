@@ -1414,6 +1414,7 @@ fn test_explorer_empty_history_lifetime() {
     assert_eq!(snapshot.lifetime.last_writing_date, None);
     assert_eq!(snapshot.lifetime.elapsed_calendar_days, 0);
     assert_eq!(snapshot.lifetime.writing_days, 0);
+    // 完全空生涯没有「首次输入日」：生涯日均仍是 null，不是 0。
     assert_eq!(snapshot.lifetime.average_chars_per_day, None);
     assert_eq!(snapshot.lifetime.average_chars_per_minute, None);
 
@@ -1449,9 +1450,13 @@ fn test_explorer_empty_history_lifetime() {
         assert!(card.has_selection);
         assert!(card.range.is_some());
         assert_eq!(card.total_human_typed_chars, 0);
-        assert_eq!(card.average_chars_per_day, None);
+        // 范围有效但没有输入：区间日均是 0，不是 null。
+        assert_eq!(card.average_chars_per_day, Some(0.0));
         assert_eq!(card.average_chars_per_minute, None);
     }
+    // 选中生涯的区间退化成 今天..今天，同样按 1 个自然日算：0 / 1 = 0。
+    assert_eq!(snapshot.selected.average_chars_per_day, Some(0.0));
+    assert_eq!(snapshot.selected.average_chars_per_minute, None);
     let custom = &snapshot.period_cards[3];
     assert!(!custom.has_selection);
     assert!(custom.range.is_none());
@@ -1499,9 +1504,9 @@ fn test_explorer_custom_card_filled_even_when_selected_is_other_preset() {
     let range = custom.range.as_ref().unwrap();
     assert_eq!(range.start_date, "2026-05-10");
     assert_eq!(range.end_date, "2026-05-11");
-    // 区间里没有数据时数值为 0、平均为 null，range 仍然是用户选的。
+    // 区间里没有数据时数值为 0；日均按 2 个自然日算为 0，字/分为 null，range 仍是用户选的。
     assert_eq!(custom.total_human_typed_chars, 0);
-    assert_eq!(custom.average_chars_per_day, None);
+    assert_eq!(custom.average_chars_per_day, Some(0.0));
     assert_eq!(custom.average_chars_per_minute, None);
 }
 
@@ -1645,6 +1650,62 @@ fn test_explorer_last7_days_window_with_real_timestamps() {
 }
 
 #[test]
+fn test_explorer_period_average_uses_natural_calendar_days() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+    let today = crate::writing_stats::calendar::local_today_date();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // 近七天里只写了一天：700 字。
+    api.record_event(explorer_event(now_ms, &today, EventSource::HumanTyped, 700))
+        .unwrap();
+
+    let snapshot = api.get_explorer_snapshot("last7Days", None, None).unwrap();
+    let card = &snapshot.period_cards[0];
+    assert_eq!(card.preset, "last7Days");
+    assert_eq!(card.total_human_typed_chars, 700);
+    assert_eq!(card.writing_days, 1);
+    // 分母是区间的自然日历天数（含 6 个无输入日）：700 / 7 = 100，不是 700 / 1。
+    assert_eq!(card.average_chars_per_day, Some(100.0));
+    // 选中时段与时段卡同口径。
+    assert_eq!(snapshot.selected.average_chars_per_day, Some(100.0));
+}
+
+#[test]
+fn test_explorer_lifetime_average_uses_elapsed_calendar_days() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+    let today = crate::writing_stats::calendar::local_today_date();
+    let first_day = crate::writing_stats::calendar::shift_date(&today, -9).unwrap();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let day_ms = 24 * 60 * 60 * 1000;
+
+    // 生涯首写日到今天共 10 个自然日，只有 2 天写字：300 + 700 = 1000。
+    api.record_event(explorer_event(
+        now_ms - 9 * day_ms,
+        &first_day,
+        EventSource::HumanTyped,
+        300,
+    ))
+    .unwrap();
+    api.record_event(explorer_event(now_ms, &today, EventSource::HumanTyped, 700))
+        .unwrap();
+
+    let snapshot = api.get_explorer_snapshot("lifetime", None, None).unwrap();
+    assert_eq!(
+        snapshot.lifetime.first_writing_date.as_deref(),
+        Some(first_day.as_str())
+    );
+    assert_eq!(snapshot.lifetime.elapsed_calendar_days, 10);
+    assert_eq!(snapshot.lifetime.writing_days, 2);
+    // 分母是生涯自然日历天数：1000 / 10 = 100，不是 1000 / 2。
+    assert_eq!(snapshot.lifetime.average_chars_per_day, Some(100.0));
+    // 选中生涯复用同一份生涯统计，与 lifetime 同口径。
+    assert_eq!(snapshot.selected.preset, "lifetime");
+    assert_eq!(snapshot.selected.average_chars_per_day, Some(100.0));
+}
+
+#[test]
 fn test_explorer_trend_granularity_per_preset() {
     let temp_dir = tempdir().unwrap();
     let api = StatsApi::new(temp_dir.path());
@@ -1718,7 +1779,7 @@ fn test_explorer_short_lifetime_trend_starts_at_first_writing_month() {
 fn test_explorer_zero_human_input_keeps_records_null() {
     let temp_dir = tempdir().unwrap();
     let api = StatsApi::new(temp_dir.path());
-    // 只有粘贴：不产生「写作」纪录，也不产生平均。
+    // 只有粘贴：不产生「写作」纪录，也不产生字/分。
     api.record_event(explorer_event(
         1_780_000_000_000,
         "2026-05-10",
@@ -1732,7 +1793,8 @@ fn test_explorer_zero_human_input_keeps_records_null() {
         .unwrap();
     assert_eq!(snapshot.selected.total_human_typed_chars, 0);
     assert_eq!(snapshot.selected.writing_days, 0);
-    assert_eq!(snapshot.selected.average_chars_per_day, None);
+    // 区间有效（1 个自然日）但没写字：日均是 0，不是 null。
+    assert_eq!(snapshot.selected.average_chars_per_day, Some(0.0));
     assert_eq!(snapshot.selected.average_chars_per_minute, None);
     assert!(snapshot.selected.records.best_day.value.is_none());
     assert!(snapshot.selected.records.fastest_hour.value.is_none());
@@ -1740,9 +1802,10 @@ fn test_explorer_zero_human_input_keeps_records_null() {
     // 趋势照常补 0，不是一个点都没有。
     assert_eq!(snapshot.selected.trend.points.len(), 1);
     assert_eq!(snapshot.selected.trend.points[0].human_typed_chars, 0);
-    // 生涯没有人工码字。
+    // 生涯没有人工码字：没有首次输入日，生涯日均保持 null（空生涯不是 0）。
     assert_eq!(snapshot.lifetime.total_human_typed_chars, 0);
     assert_eq!(snapshot.lifetime.elapsed_calendar_days, 0);
+    assert_eq!(snapshot.lifetime.average_chars_per_day, None);
 }
 
 #[test]

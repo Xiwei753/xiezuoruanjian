@@ -334,15 +334,17 @@ impl StatsApi {
         let first_writing_date = career.daily_human_typed_chars.keys().next().cloned();
         let last_writing_date = career.daily_human_typed_chars.keys().next_back().cloned();
 
+        let elapsed_days = elapsed_calendar_days(first_writing_date.as_deref(), &today)?;
         let lifetime = WritingStatsLifetimeDto {
             total_human_typed_chars: career.total_human_typed_chars,
             first_writing_date: first_writing_date.clone(),
             last_writing_date,
-            elapsed_calendar_days: elapsed_calendar_days(first_writing_date.as_deref(), &today)?,
+            elapsed_calendar_days: elapsed_days,
             writing_days: career.writing_days,
+            // 生涯日均按自然日历天数（首次写作日到今天）均摊，不排除休息日。
             average_chars_per_day: average_chars_per_day(
                 career.total_human_typed_chars,
-                career.writing_days,
+                elapsed_days,
             ),
             average_chars_per_minute: average_chars_per_minute(
                 career.total_human_typed_chars,
@@ -393,6 +395,9 @@ impl StatsApi {
             .collect()
         };
 
+        // 选中时段的日均按区间自然日历天数均摊（含无输入日），与时段卡同口径。
+        let selected_days = calendar::day_span_inclusive(&range.start_date, &range.end_date)?;
+
         Ok(WritingStatsExplorerDto {
             history_scope: "localEvents".to_string(),
             lifetime,
@@ -405,7 +410,7 @@ impl StatsApi {
                 writing_days: selected_stats.writing_days,
                 average_chars_per_day: average_chars_per_day(
                     selected_stats.total_human_typed_chars,
-                    selected_stats.writing_days,
+                    selected_days,
                 ),
                 average_chars_per_minute: average_chars_per_minute(
                     selected_stats.total_human_typed_chars,
@@ -564,6 +569,8 @@ fn period_card(
     }
     let range = calendar::resolve_range(preset, today, first_writing_date, custom_range)?;
     let stats = project_range_stats(events, &range.start_date, &range.end_date)?;
+    // 卡片日均按区间自然日历天数均摊（含无输入日），不按实际写作天数。
+    let calendar_days = calendar::day_span_inclusive(&range.start_date, &range.end_date)?;
     Ok(WritingStatsPeriodCardDto {
         preset: preset.as_str().to_string(),
         has_selection: true,
@@ -571,10 +578,7 @@ fn period_card(
         total_human_typed_chars: stats.total_human_typed_chars,
         total_active_seconds: stats.total_active_seconds,
         writing_days: stats.writing_days,
-        average_chars_per_day: average_chars_per_day(
-            stats.total_human_typed_chars,
-            stats.writing_days,
-        ),
+        average_chars_per_day: average_chars_per_day(stats.total_human_typed_chars, calendar_days),
         average_chars_per_minute: average_chars_per_minute(
             stats.total_human_typed_chars,
             stats.total_active_seconds,
@@ -602,12 +606,15 @@ fn elapsed_calendar_days(first_writing_date: Option<&str>, today: &str) -> Resul
     }
 }
 
-/// 平均每天字数 = 区间人工输入 / 区间内有输入的天数；没有输入日为 null。
-fn average_chars_per_day(total_chars: u64, writing_days: u64) -> Option<f64> {
-    if writing_days == 0 {
+/// 平均每天字数 = 时间范围内人工输入 / 该范围的自然日历天数（含无输入日）。
+///
+/// 分母是该范围的「陪伴天数」，不是实际写作天数：有效区间没有写字时为 0；
+/// 分母为 0（完全空生涯，没有首次输入日）时为 null。
+fn average_chars_per_day(total_chars: u64, calendar_days: u64) -> Option<f64> {
+    if calendar_days == 0 {
         return None;
     }
-    Some(total_chars as f64 / writing_days as f64)
+    Some(total_chars as f64 / calendar_days as f64)
 }
 
 /// 平均写作速度（字/分）= 区间人工输入 × 60 / 区间有效写作时长；零时长时为 null。

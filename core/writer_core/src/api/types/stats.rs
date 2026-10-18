@@ -199,7 +199,8 @@ pub struct WritingStatsLifetimeDto {
     pub elapsed_calendar_days: u64,
     /// 实际有人工输入的不同本地业务日数量。
     pub writing_days: u64,
-    /// 平均每天字数 = 累计人工输入 / 有输入的天数；没有有输入的天时为 null。
+    /// 平均每天字数 = 累计人工输入 / 首次写作日到今天（含两端）的自然日历
+    /// 天数（同 `elapsed_calendar_days`，不排除休息日）；完全空生涯时为 null。
     pub average_chars_per_day: Option<f64>,
     /// 平均写作速度（字/分）= 累计人工输入 / 有效写作时长；零时长时为 null。
     pub average_chars_per_minute: Option<f64>,
@@ -210,7 +211,7 @@ pub struct WritingStatsLifetimeDto {
 /// `preset` 取值固定为 `"last7Days"`、`"last30Days"`、`"last6Months"`、
 /// `"custom"`。自选区间尚未选择时 `range` 为 null、`has_selection` 为 false、
 /// 数值为 0 / null；其余三张卡 `has_selection` 恒为 true
-/// （没有数据时范围照算，数值为 0、平均值为 null）。
+/// （没有数据时范围照算：数值为 0、区间日均字数为 0、字/分为 null）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WritingStatsPeriodCardDto {
@@ -220,7 +221,8 @@ pub struct WritingStatsPeriodCardDto {
     pub total_human_typed_chars: u64,
     pub total_active_seconds: u64,
     pub writing_days: u64,
-    /// 平均每天字数 = 区间人工输入 / 区间内有输入的天数；区间内没有输入日为 null。
+    /// 平均每天字数 = 区间人工输入 / 该区间的自然日历天数（含无输入日、
+    /// 不排除休息日）；区间有效但没有输入时为 0，自选区间未选择时为 null。
     pub average_chars_per_day: Option<f64>,
     /// 平均写作速度（字/分）= 区间人工输入 / 区间有效写作时长；零时长时为 null。
     pub average_chars_per_minute: Option<f64>,
@@ -237,7 +239,8 @@ pub struct WritingStatsSelectedPeriodDto {
     pub total_human_typed_chars: u64,
     pub total_active_seconds: u64,
     pub writing_days: u64,
-    /// 平均每天字数 = 区间人工输入 / 区间内有输入的天数；没有输入日为 null。
+    /// 平均每天字数 = 区间人工输入 / 该区间的自然日历天数（含无输入日、
+    /// 不排除休息日）；区间有效但没有输入时为 0。
     pub average_chars_per_day: Option<f64>,
     /// 平均写作速度（字/分）= 区间人工输入 / 区间有效写作时长；零时长时为 null。
     pub average_chars_per_minute: Option<f64>,
