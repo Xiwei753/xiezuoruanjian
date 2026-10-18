@@ -6,7 +6,7 @@
 //   - 底层 contentBuilder 绘制页面内容；
 //   - 右下角按 visible 绘制现有 PrimaryFab，位置只用 pagePadding + FAB 底部偏移。
 // 本组件不决定业务动作、不做新建作品/卷/星图的逻辑，onTap 由页面传入。
-// 按钮外观不在这里重画：PrimaryFab 已实现统一的毛玻璃 / 按压视效 / 反色描边。
+// 按钮外观不在这里重画：PrimaryFab 已实现统一的毛玻璃 / 按压视效 / 圆环边缘高光。
 
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../theme/LayoutTokens'
 import { PrimaryFab } from './PrimaryFab'

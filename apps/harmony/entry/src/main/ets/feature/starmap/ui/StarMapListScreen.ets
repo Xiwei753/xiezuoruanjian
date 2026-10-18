@@ -366,7 +366,7 @@ export struct StarMapListScreen {
 
   // Issue #932 复核：宽屏内容层只负责宽屏自己的创建入口位置与布局（列表 + 右下角主 FAB），
   // 与窄屏分支是并列形态——宽屏下用户实际看到的就是这个视觉，不再借名为 Compact 的组件。
-  // 「+」按钮本体仍是共享的 PrimaryFab（毛玻璃 / 按压视效 / 反色描边只有一份），
+  // 「+」按钮本体仍是共享的 PrimaryFab（毛玻璃 / 按压视效 / 圆环边缘高光只有一份），
   // 位置口径与 CompactPrimaryActionLayer 完全一致：Stack BottomEnd + pagePadding + 底部偏移。
   @Builder
   WideStarMapListContent() {

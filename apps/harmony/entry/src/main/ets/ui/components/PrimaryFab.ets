@@ -29,9 +29,9 @@
 //   体积感表面层：极低不透明度的系统色圆形，让浅色/深色/纯色背景下都有稳定可见的玻璃体积感，
 //     不构成实心底色、不遮毛玻璃。
 //   圆环边缘高光层：独立 Canvas 在圆周描 1vp 圆环，描边颜色用 conic 渐变按角度分配亮度——
-//     左上方向（约定光源方向）最亮并沿圆周向两侧衰减，其余位置保留很轻的基础轮廓，
-//     高光与基础轮廓是同一套环形视觉；不再把整颗圆盘铺径向渐变冒充描边。
-//     这是**静态方向渐变**，只能叫玻璃光泽，不是实时反射，也不会随屏幕内容自动追光。
+//     高光峰值方向与强度由 lightDirectionTurns / lightIntensity 入参驱动，沿圆周向两侧衰减，
+//     其余位置保留很轻的基础轮廓，高光与基础轮廓是同一套环形视觉；不再把整颗圆盘铺径向渐变冒充描边。
+//     没有外部光源时用静态约定默认值（左上），只能叫玻璃光泽；有真实光源时才由调用方换算成方向/强度。
 //   #905 第八轮那层 BlendMode.DIFFERENCE 反色描边环已删除：它只对描边正下方的本地像素做差值
 //   混合，没有方向与衰减，做不出按光源位置分布的亮暗分区；不留旧圈叠加，避免多套边框。
 //
@@ -40,7 +40,11 @@
 //   整颗刷白、深色底上白色 + 号消失。按压高光必须让「+」仍看得清，所以取较轻的一档。
 //   两者都是同一个官方枚举里的档位，如需换回改这一行即可。
 //
-// 动态受光与静态玻璃高光分开记录：真正「随邻近光源位置/强弱变化」的边缘受光当前**未实现**。
+// 动态受光与静态玻璃高光分开记录：
+//   受光输入机制已建——lightDirectionTurns / lightIntensity 经 @Monitor 驱动 drawEdgeRing 清理并
+//   重画同一个 Canvas（不重建组件、不整页重绘）；方向/强度来自真实邻近光源时才由调用方换算传入。
+//   当前三个页面附近没有可确定真实坐标与强度的发光组件（HDS 底栏选中高亮是内部渲染、不可测，
+//   也不假称它自动传给内容层按钮），所以保持静态默认值，外观即静态玻璃高光。
 //   官方 hdsEffect.pointLight 需要显式光源节点与受光节点配对，而它在 API 26 SDK 元数据里是
 //   非公开接口（publicApi 为空）；本仓库真机记录显示 ArkTS 侧可构造、能力检查通过，
 //   但 native 对所有传法一律回 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`
@@ -63,6 +67,13 @@ const DRAG_SLOP_VP: number = 8
 export struct PrimaryFab {
   /** 点击回调 */
   @Param onTap: () => void = () => {}
+  /**
+   * 边缘受光输入：高光峰值方向（圈数，0=3 点钟、顺时针；0.625≈左上 10 点半）
+   * 与峰值强度（0..1）。有真实邻近光源时由调用方换算后传入；
+   * 没有外部光源时保持静态约定默认值，外观即静态玻璃高光。
+   */
+  @Param lightDirectionTurns: number = 0.625
+  @Param lightIntensity: number = 1
   /** 按住后是否已经拖动过（拖过就吞掉这次点击） */
   @Local dragged: boolean = false
   /** 按下位置（组件内坐标），用于判定是否拖动 */
@@ -73,9 +84,20 @@ export struct PrimaryFab {
   /** 上一次记录的实测尺寸（vp），用于只在真实尺寸变化时上报几何事件 */
   private lastGeometryWidth: number = -1
   private lastGeometryHeight: number = -1
-  /** 圆环边缘高光层：独立 Canvas 2D，用 conic 渐变描边画圆周高光（静态玻璃光泽） */
+  /** 圆环边缘高光层：独立 Canvas 2D，用 conic 渐变描边画圆周高光 */
   private ringCanvasSettings: RenderingContextSettings = new RenderingContextSettings(true)
   private ringCanvasCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.ringCanvasSettings)
+  /** Canvas 是否已就绪（onReady 后才有可绘制的上下文） */
+  private ringReady: boolean = false
+
+  // 受光输入变化（真实光源的方向/强度，或调用方恢复静态默认值）时，清理并重画同一个 Canvas：
+  // 不重建 Canvas 组件、不触发整页重绘；没有外部光源时入参不变，外观保持静态玻璃高光。
+  @Monitor('lightDirectionTurns', 'lightIntensity')
+  onLightSourceChanged(): void {
+    if (this.ringReady) {
+      this.drawEdgeRing()
+    }
+  }
 
   // Issue #911：FAB 挂载起点。这是**代码所请求的效果**（透明底 + Thin 模糊 + 圆环边缘高光 +
   // 按压视效），不可命名为"材质渲染成功"——真机渲染结果仍需独立的 hilog.txt 佐证。
@@ -155,8 +177,9 @@ export struct PrimaryFab {
   }
 
   // 圆环边缘高光：整圈用 conic 渐变描边一次性画出，不叠第二套边框。
-  // createConicGradient 的角度从中心右侧（3 点钟）起算、顺时针，0.625 圈 ≈ 左上 10 点半方向。
-  // 这是固定 UI 约定方向的静态玻璃光泽，不是随邻近光源位置/强弱变化的实时反射。
+  // 峰值方向与强度由 lightDirectionTurns / lightIntensity 入参驱动（真实光源换算结果）；
+  // 没有外部光源时用静态约定默认值（左上 0.625 圈），外观与固定写死的静态版一致。
+  // createConicGradient 角度从中心右侧（3 点钟）起算、顺时针，1 = 一整圈。
   private drawEdgeRing(): void {
     const size: number = PRIMARY_FAB_SIZE_VP
     const strokeWidth: number = 1
@@ -164,17 +187,34 @@ export struct PrimaryFab {
     const center: number = size / 2
     const ctx: CanvasRenderingContext2D = this.ringCanvasCtx
     ctx.clearRect(0, 0, size, size)
+
+    // 方向归一化到 [0,1)；强度限幅到 [0,1]。
+    const peakTurns: number = ((this.lightDirectionTurns % 1) + 1) % 1
+    const intensity: number = Math.min(1, Math.max(0, this.lightIntensity))
+    // 基础轮廓与峰值 alpha：沿用已确认的静态外观（基础约 18%、峰值约 60%）。
+    const baseAlpha: number = 0.18
+    const peakAlpha: number = baseAlpha + (0.6 - baseAlpha) * intensity
+    // 高光带：距峰值约 0.1875 圈（67.5°）以外回到基础轮廓，带内平滑过渡。
+    const highlightSpan: number = 0.1875
+
+    const alphaAt = (offset: number): number => {
+      const raw: number = Math.abs(offset - peakTurns)
+      const distance: number = Math.min(raw, 1 - raw)
+      if (distance >= highlightSpan) {
+        return baseAlpha
+      }
+      const t: number = 1 - distance / highlightSpan
+      const smooth: number = t * t * (3 - 2 * t)
+      return baseAlpha + (peakAlpha - baseAlpha) * smooth
+    }
+
     const edgeGradient: CanvasGradient = ctx.createConicGradient(0, center, center)
-    // 基础轮廓（轻）→ 左上高光带（最亮在约 0.625 圈）→ 沿圆周回到基础轮廓。
-    edgeGradient.addColorStop(0, '#2EFFFFFF')
-    edgeGradient.addColorStop(0.44, '#2EFFFFFF')
-    edgeGradient.addColorStop(0.53, '#59FFFFFF')
-    edgeGradient.addColorStop(0.6, '#8CFFFFFF')
-    edgeGradient.addColorStop(0.625, '#99FFFFFF')
-    edgeGradient.addColorStop(0.655, '#8CFFFFFF')
-    edgeGradient.addColorStop(0.72, '#59FFFFFF')
-    edgeGradient.addColorStop(0.82, '#2EFFFFFF')
-    edgeGradient.addColorStop(1, '#2EFFFFFF')
+    // 16 步/圈；终点重复起点处的颜色，保证渐变接缝一致。
+    const stepCount: number = 16
+    for (let i = 0; i <= stepCount; i++) {
+      const offset: number = i / stepCount
+      edgeGradient.addColorStop(offset, `rgba(255,255,255,${alphaAt(offset).toFixed(3)})`)
+    }
     ctx.strokeStyle = edgeGradient
     ctx.lineWidth = strokeWidth
     ctx.beginPath()
@@ -213,12 +253,15 @@ export struct PrimaryFab {
         .opacity(0.06)
         .hitTestBehavior(HitTestMode.None)
 
-      // 圆环边缘高光层：Canvas 在圆周描 1vp 圆环，颜色用 conic 渐变——左上方向最亮，
-      // 沿圆周向两侧衰减，其余位置只留很轻的基础轮廓；不拦触摸，可点击的始终只有 Button。
+      // 圆环边缘高光层：Canvas 在圆周描 1vp 圆环，颜色用 conic 渐变——峰值方向/强度由
+      // lightDirectionTurns/lightIntensity 入参驱动，无外部光源时为静态约定方向；不拦触摸。
       Canvas(this.ringCanvasCtx)
         .width(PRIMARY_FAB_SIZE_VP)
         .height(PRIMARY_FAB_SIZE_VP)
-        .onReady(() => { this.drawEdgeRing() })
+        .onReady(() => {
+          this.ringReady = true
+          this.drawEdgeRing()
+        })
         .hitTestBehavior(HitTestMode.None)
 
       // 「+」符号最后画：位于所有玻璃装饰层之上，只显示不抢点击。
