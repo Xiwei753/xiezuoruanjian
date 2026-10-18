@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtTest
 
 TestCase {
@@ -66,6 +67,80 @@ TestCase {
         compare(page.startDate, "")
         compare(page.endDate, "")
         page.destroy()
+    }
+
+    // 自选区间 Dialog 藏在页面 resources 里（非可视对象），按特征找到它。
+    function customRangeDialogOf(page) {
+        for (let i = 0; i < page.resources.length; i++) {
+            let r = page.resources[i]
+            if (r && typeof r.prepare === "function" && r.footer !== undefined)
+                return r
+        }
+        return null
+    }
+
+    function footerButtonByRole(dialog, role) {
+        for (let i = 0; i < dialog.footer.contentChildren.length; i++) {
+            let b = dialog.footer.contentChildren[i]
+            if (b.DialogButtonBox.buttonRole === role)
+                return b
+        }
+        return null
+    }
+
+    function firstHiddenTextItem(item) {
+        let kids = item ? (item.children || []) : []
+        for (let i = 0; i < kids.length; i++) {
+            let k = kids[i]
+            if (k.text !== undefined && k.visible === false)
+                return k
+            let found = firstHiddenTextItem(k)
+            if (found) return found
+        }
+        return null
+    }
+
+    // 回归守卫（Issue #946）：AcceptRole 会自动发出 accepted() 让 Dialog 关闭，
+    // 非法区间的错误提示因此看不到；「确定」必须是 ActionRole，校验只由 onClicked 决定。
+    function test_custom_range_confirm_role_and_validation() {
+        let backend = createFakeBackend()
+        let page = createPage()
+        page.editorBackendRef = backend
+        page.openPeriod("custom")
+        let dialog = customRangeDialogOf(page)
+        verify(dialog !== null, "custom range dialog must be a page resource")
+        tryCompare(dialog, "visible", true)
+
+        compare(footerButtonByRole(dialog, DialogButtonBox.AcceptRole), null,
+                "confirm must not use AcceptRole (it would auto-close the dialog)")
+        let confirm = footerButtonByRole(dialog, DialogButtonBox.ActionRole)
+        verify(confirm !== null, "confirm button must be ActionRole")
+        verify(footerButtonByRole(dialog, DialogButtonBox.RejectRole) !== null,
+               "cancel button keeps RejectRole")
+
+        let errorLabel = firstHiddenTextItem(dialog.contentItem)
+        verify(errorLabel !== null, "error label starts hidden")
+
+        // 非法区间：校验拒绝后弹窗保持打开、只显示错误、不发请求。
+        dialog.startValue = new Date(2026, 0, 1)
+        dialog.endValue = new Date(2025, 0, 1)
+        mouseClick(confirm)
+        compare(dialog.visible, true, "invalid range must keep the dialog open")
+        compare(backend.lastRequestId, 0, "invalid range must not request stats")
+        compare(errorLabel.visible, true)
+        verify(errorLabel.text.length > 0, "invalid range must show an error message")
+
+        // 合法区间：onClicked 内显式关闭并发起自选区间请求。
+        dialog.startValue = new Date(2025, 0, 1)
+        dialog.endValue = new Date(2025, 1, 1)
+        mouseClick(confirm)
+        tryCompare(dialog, "visible", false)
+        compare(backend.lastPreset, "custom")
+        compare(backend.lastStart, "2025-01-01")
+        compare(backend.lastEnd, "2025-02-01")
+
+        page.destroy()
+        backend.destroy()
     }
 
     function test_trend_chart_component() {

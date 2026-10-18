@@ -984,10 +984,12 @@ Rectangle {
                 text: qsTr("取消")
                 DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
             }
+            // 用 ActionRole：AcceptRole 会自动发出 accepted() 并让 Dialog 关闭，
+            // 校验失败时再 return 也拦不住；改为 ActionRole 后由 onClicked 全权处理。
             Button {
                 text: qsTr("确定")
                 highlighted: true
-                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+                DialogButtonBox.buttonRole: DialogButtonBox.ActionRole
                 onClicked: {
                     if (customRangeDialog.startValue > customRangeDialog.endValue) {
                         customRangeError.text = qsTr("开始日期需早于或等于结束日期")
