@@ -1441,6 +1441,98 @@
         <source>速度曲线</source>
         <translation>速度曲线</translation>
     </message>
+    <message>
+        <source>近七天</source>
+        <translation>近七天</translation>
+    </message>
+    <message>
+        <source>近三十天</source>
+        <translation>近三十天</translation>
+    </message>
+    <message>
+        <source>近半年</source>
+        <translation>近半年</translation>
+    </message>
+    <message>
+        <source>自选区间</source>
+        <translation>自选区间</translation>
+    </message>
+    <message>
+        <source>生涯</source>
+        <translation>生涯</translation>
+    </message>
+    <message>
+        <source>暂无本机记录</source>
+        <translation>暂无本机记录</translation>
+    </message>
+    <message>
+        <source>数据范围 %1 – %2（本周口径，与上方区间选择分开）</source>
+        <translation>数据范围 %1 – %2（本周口径，与上方区间选择分开）</translation>
+    </message>
+    <message>
+        <source>统计数据读取失败</source>
+        <translation>统计数据读取失败</translation>
+    </message>
+    <message>
+        <source>详细统计读取失败</source>
+        <translation>详细统计读取失败</translation>
+    </message>
+    <message>
+        <source>平均 %1 字/分 · %2 字/天</source>
+        <translation>平均 %1 字/分 · %2 字/天</translation>
+    </message>
+    <message>
+        <source>共计 %1 天</source>
+        <translation>共计 %1 天</translation>
+    </message>
+    <message>
+        <source>本机记录</source>
+        <translation>本机记录</translation>
+    </message>
+    <message>
+        <source>平均 %1 字/分 · %2 字/天 · 有写作 %3 天</source>
+        <translation>平均 %1 字/分 · %2 字/天 · 有写作 %3 天</translation>
+    </message>
+    <message>
+        <source>素笺写作已陪伴您 %1 天</source>
+        <translation>素笺写作已陪伴您 %1 天</translation>
+    </message>
+    <message>
+        <source>详细统计</source>
+        <translation>详细统计</translation>
+    </message>
+    <message>
+        <source>作品 / 章节 / 设备 · 本周速度</source>
+        <translation>作品 / 章节 / 设备 · 本周速度</translation>
+    </message>
+    <message>
+        <source>本周速度曲线</source>
+        <translation>本周速度曲线</translation>
+    </message>
+    <message>
+        <source>峰值 %1 字/分 · %2 段</source>
+        <translation>峰值 %1 字/分 · %2 段</translation>
+    </message>
+    <message>
+        <source> 字</source>
+        <translation> 字</translation>
+    </message>
+    <message>
+        <source>选择自选区间</source>
+        <translation>选择自选区间</translation>
+    </message>
+    <message>
+        <source>开始日期</source>
+        <translation>开始日期</translation>
+    </message>
+    <message>
+        <source>结束日期</source>
+        <translation>结束日期</translation>
+    </message>
+    <message>
+        <source>开始日期需早于或等于结束日期</source>
+        <translation>开始日期需早于或等于结束日期</translation>
+    </message>
 </context>
 <context>
     <name>SyncPage</name>
@@ -2396,6 +2488,79 @@
     <message>
         <source>搜索</source>
         <translation>搜索</translation>
+    </message>
+</context>
+<context>
+    <name>StatsPeriodCard</name>
+    <message>
+        <source>点击选择区间</source>
+        <translation>点击选择区间</translation>
+    </message>
+    <message>
+        <source>字/分</source>
+        <translation>字/分</translation>
+    </message>
+    <message>
+        <source>字/天</source>
+        <translation>字/天</translation>
+    </message>
+</context>
+<context>
+    <name>StatsRecordPanel</name>
+    <message>
+        <source>纪录</source>
+        <translation>纪录</translation>
+    </message>
+    <message>
+        <source>最多码字日</source>
+        <translation>最多码字日</translation>
+    </message>
+    <message>
+        <source>最快码字</source>
+        <translation>最快码字</translation>
+    </message>
+    <message>
+        <source>字/时</source>
+        <translation>字/时</translation>
+    </message>
+    <message>
+        <source>最长码字</source>
+        <translation>最长码字</translation>
+    </message>
+    <message>
+        <source>连续码字</source>
+        <translation>连续码字</translation>
+    </message>
+    <message>
+        <source>天</source>
+        <translation>天</translation>
+    </message>
+    <message>
+        <source>暂无记录</source>
+        <translation>暂无记录</translation>
+    </message>
+</context>
+<context>
+    <name>StatsTrendChart</name>
+    <message>
+        <source>趋势</source>
+        <translation>趋势</translation>
+    </message>
+    <message>
+        <source>按日</source>
+        <translation>按日</translation>
+    </message>
+    <message>
+        <source>按周</source>
+        <translation>按周</translation>
+    </message>
+    <message>
+        <source>按月</source>
+        <translation>按月</translation>
+    </message>
+    <message>
+        <source>单位：字</source>
+        <translation>单位：字</translation>
     </message>
 </context>
 </TS>

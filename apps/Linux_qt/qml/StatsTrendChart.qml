@@ -66,6 +66,7 @@ Kirigami.ShadowedRectangle {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
+        anchors.bottom: parent.bottom
         anchors.margins: Kirigami.Units.largeSpacing
         spacing: Kirigami.Units.smallSpacing
 

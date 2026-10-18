@@ -28,8 +28,8 @@ TestCase {
 
     function test_overview_period_and_lifetime_states() {
         let page = createPage()
-        compare(page.narrowLayout, false, "1280px 宽窗应为宽屏布局")
-        compare(page.expandedPanel, "", "初始应为四卡总览")
+        compare(page.narrowLayout, false, "wide layout at 1280px")
+        compare(page.expandedPanel, "", "starts on the four-card overview")
 
         page.expandedPanel = "last7Days"
         compare(page.detailPreset(), "last7Days")
@@ -47,7 +47,7 @@ TestCase {
     function test_narrow_layout_switch() {
         let page = createPage()
         page.width = 700
-        compare(page.narrowLayout, true, "700px 窄窗应切窄屏布局")
+        compare(page.narrowLayout, true, "narrow layout at 700px")
 
         page.selectNarrowPeriod("last30Days")
         compare(page.selectedPeriod, "last30Days")
@@ -94,7 +94,7 @@ TestCase {
         let panel = component.createObject(window.contentItem, { "width": 400, "columns": 2 })
         verify(panel !== null, component.errorString())
         compare(panel.entries.length, 4)
-        compare(panel.entries[0].value, "—", "无纪录时必须显示 —，不用 0 冒充")
+        compare(panel.entries[0].value, "—", "missing record must show a dash, not a fake zero")
         panel.destroy()
     }
 
@@ -200,20 +200,20 @@ TestCase {
         page.editorBackendRef = backend
         page.requestStats()
 
-        compare(backend.lastPreset, "last7Days", "初始详情请求默认近七天")
-        compare(backend.lastStart, "", "非自选预设不带自选日期")
+        compare(backend.lastPreset, "last7Days", "default detail preset is last7Days")
+        compare(backend.lastStart, "", "non-custom presets carry no custom dates")
         compare(backend.lastEnd, "")
 
         // 迟到结果：旧 requestId 必须被丢弃。
         backend.writing_stats_explorer_ready(backend.lastRequestId - 1, { "bogus": true })
-        compare(page.explorer, null, "旧 requestId 的结果必须被丢弃")
+        compare(page.explorer, null, "stale requestId result must be dropped")
 
         // 当前 requestId 的结果被接受。
         backend.writing_stats_explorer_ready(backend.lastRequestId, sampleSnapshot())
         verify(page.explorer !== null)
         compare(page.lifetime.totalHumanTypedChars, 29456)
         compare(page.periodCards.length, 4)
-        compare(page.periodCards[3].hasSelection, false, "未选择的自选卡不得被当成 0 字区间")
+        compare(page.periodCards[3].hasSelection, false, "unselected custom card must not look like a 0-char range")
         compare(page.selectedRecords.bestDay.value, 906)
         compare(page.selectedTrend.points.length, 3)
 
@@ -223,7 +223,7 @@ TestCase {
         compare(backend.lastPreset, "last30Days")
         backend.writing_stats_explorer_failed(backend.lastRequestId, "read failed")
         compare(page.statsError, "read failed")
-        compare(page.lifetime.totalHumanTypedChars, 29456, "失败不得清空上次数据冒充 0")
+        compare(page.lifetime.totalHumanTypedChars, 29456, "failure must keep the last snapshot")
 
         // 生涯展开走 lifetime 预设。
         page.toggleLifetime()
