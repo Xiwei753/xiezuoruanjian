@@ -66,6 +66,7 @@ const WIDE_RAIL_ENTRIES: WideRailEntry[] = [
 
 // 宽屏左侧一级导航的固定宽度（vp）
 const WIDE_RAIL_WIDTH: number = 160
+const WIDE_ACTION_CAPSULE_HEIGHT: number = 48
 const SYNC_STATUS_SUCCESS_VISIBLE_MS: number = 3200
 const SYNC_STATUS_MAX_WIDTH_VP: number = 560
 
@@ -561,8 +562,12 @@ export struct PrimaryTabShell {
     }
   }
 
-  // 宽屏壳：一级导航在左，右上角悬浮同步/搜索/设置，内容充满可用高度。
-  // 写进 Writing 这类 showPrimaryNavigation=false 的页面时左栏与右上角操作组一起消失，
+  private get wideActionTopInset(): number {
+    return this.shouldShowSyncStatus() ? 8 : Math.max(this.adaptiveState.safeTopVp, 8)
+  }
+
+  // 宽屏壳：一级导航在左，右侧动作区单独占据顶部空间，内容从其下方开始。
+  // 写进 Writing 这类 showPrimaryNavigation=false 的页面时左栏与动作区一起消失，
   // 内容占满（写作页有自己那套七角色工作台顶栏，不该再叠一条）。
   @Builder
   WidePrimaryShell() {
@@ -572,16 +577,19 @@ export struct PrimaryTabShell {
       }
       Column() {
         this.SyncStatusBanner()
+        if (this.currentShowPrimaryNav) {
+          Row() {
+            HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
+          }
+          .width('100%')
+          .height(this.wideActionTopInset + WIDE_ACTION_CAPSULE_HEIGHT)
+          // 状态条已避开安全区时只留间距；否则本行自行避开状态栏。
+          .padding({ top: this.wideActionTopInset, right: 16 })
+          .justifyContent(FlexAlign.End)
+          .alignItems(VerticalAlign.Center)
+        }
         Stack() {
           this.WideCurrentNavigation()
-          // 右上角独立悬浮操作组：不铺白色背景、不占整行高度。
-          // 状态条已占用顶部空间时从其下方开始；状态条收起后恢复安全区避让。
-          if (this.currentShowPrimaryNav) {
-            HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
-              .position({ x: '100%', y: 0 })
-              .translate({ x: '-100%', y: 0 })
-              .margin({ top: this.shouldShowSyncStatus() ? 8 : Math.max(this.adaptiveState.safeTopVp, 8), right: 16 })
-          }
         }
         .layoutWeight(1)
         .width('100%')

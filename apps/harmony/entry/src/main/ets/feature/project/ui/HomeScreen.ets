@@ -548,7 +548,14 @@ export struct HomeScreen {
         this.ErrorView()
       } else {
         Scroll() {
-          Flex({ wrap: FlexWrap.Wrap }) {
+          // Issue #941：作品卡和新建卡共用从内容区左上开始的同一网格，
+          // 换行及行内对齐都固定在起点，避免卡片视觉上偏离页面边距。
+          Flex({
+            wrap: FlexWrap.Wrap,
+            justifyContent: FlexAlign.Start,
+            alignItems: ItemAlign.Start,
+            alignContent: FlexAlign.Start
+          }) {
             ForEach(this.viewModel.projects, (project: ProjectSummary) => {
               this.WideProjectCard(project)
             }, (project: ProjectSummary) => project.id)

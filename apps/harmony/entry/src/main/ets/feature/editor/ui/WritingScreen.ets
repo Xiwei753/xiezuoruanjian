@@ -61,15 +61,19 @@ import { ProjectWorkspaceViewModel } from '../../project/presentation/ProjectWor
 // Issue #920 A：写作页不再向 Core 要七角色 bounds，布局由 ArkUI 自适应自行决定。
 // Issue #932：宽窄形态统一由 AdaptiveContext.prefersWideLayout（与导航/设置同一口径）判定，
 // 不再维护写作页私有的宽屏断点（原 WORKBENCH_MIN_WIDTH_VP = 696 已删除）。
-// 下面是平台自己的面板尺寸（vp）与「两侧同时展开」的让位阈值，不再从 Core 的 WorkbenchLayoutPlan 取。
-const WORKBENCH_BOTH_PANES_MIN_WIDTH_VP: number = 960
+// 下面是平台自己的面板尺寸与正文最小宽度（vp），不再从 Core 的 WorkbenchLayoutPlan 取。
 const CHAPTER_NAV_WIDTH_VP: number = 320
+const CHAPTER_NAV_MIN_WIDTH_VP: number = 200
+const CHAPTER_NAV_MAX_WIDTH_VP: number = 480
 const TOOL_PANE_WIDTH_VP: number = 240
+const TOOL_PANE_MIN_WIDTH_VP: number = 180
+const TOOL_PANE_MAX_WIDTH_VP: number = 420
 const TOOL_RAIL_WIDTH_VP: number = 56
 const TOOLBAR_HEIGHT_VP: number = 64
-// 贴边折叠把手的尺寸（vp）。把手只是 pane 边界上的 UI 装饰，不属于业务角色。
+// 分隔条只占面板边缘，拖动手势不会覆盖正文或移动窗口。
 const PANE_HANDLE_WIDTH_VP: number = 18
 const PANE_HANDLE_HEIGHT_VP: number = 64
+const EDITOR_MIN_WIDTH_VP: number = 360
 
 // Issue #829 手稿：底部状态栏中段「434 / 2,000」的分母。
 // Core 目前没有目标字数字段，这一轮按手稿取 2000 作为占位，不在端侧造一个假的 Core 字段。
@@ -170,6 +174,11 @@ export struct WritingScreen {
   // Issue #920 A：左右 pane 的展开状态只属于 ArkUI，纯平台 UI 状态，不进 Core。
   @State leftPaneCollapsed: boolean = false
   @State rightPaneCollapsed: boolean = true
+  @State chapterNavWidthVp: number = CHAPTER_NAV_WIDTH_VP
+  @State toolPaneWidthVp: number = TOOL_PANE_WIDTH_VP
+  @State workbenchRowWidthVp: number = 0
+  private chapterNavDragStartWidthVp: number = CHAPTER_NAV_WIDTH_VP
+  private toolPaneDragStartWidthVp: number = TOOL_PANE_WIDTH_VP
   // Issue #829：手稿把最右 ToolRail 固定成“星图 / AI”。
   @State selectedToolKey: string = 'starmap'
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
@@ -300,6 +309,7 @@ export struct WritingScreen {
       self.adaptiveState = state
       // Issue #825 复核第1项：窗口从窄变宽时第一次进入 Workbench 也要补一次目录树。
       self.ensureWorkbenchProjectTree()
+      self.reconcilePaneSpace()
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
@@ -594,26 +604,81 @@ export struct WritingScreen {
     this.headerActions = resolveScreenPolicy(ScreenRole.Writing).actionSlots
   }
 
-  // Issue #920 A：展开/收起是纯 ArkUI 面板状态。窗口放不下两侧时，展开一侧让另一侧让位。
+  private getWorkbenchWidthVp(): number {
+    return this.workbenchRowWidthVp > 0 ? this.workbenchRowWidthVp : this.adaptiveState.widthVp
+  }
+
+  private canKeepBothPanesOpen(): boolean {
+    const requiredWidth: number = this.chapterNavWidthVp + this.toolPaneWidthVp +
+      PANE_HANDLE_WIDTH_VP * 2 + EDITOR_MIN_WIDTH_VP + TOOL_RAIL_WIDTH_VP
+    return this.getWorkbenchWidthVp() >= requiredWidth
+  }
+
+  private maximumChapterNavWidthVp(): number {
+    const rightWidth: number = this.rightPaneCollapsed
+      ? PANE_HANDLE_WIDTH_VP
+      : this.toolPaneWidthVp + PANE_HANDLE_WIDTH_VP
+    const available: number = this.getWorkbenchWidthVp() - EDITOR_MIN_WIDTH_VP - TOOL_RAIL_WIDTH_VP -
+      rightWidth - PANE_HANDLE_WIDTH_VP
+    return Math.max(CHAPTER_NAV_MIN_WIDTH_VP, Math.min(CHAPTER_NAV_MAX_WIDTH_VP, available))
+  }
+
+  private maximumToolPaneWidthVp(): number {
+    const leftWidth: number = this.leftPaneCollapsed
+      ? PANE_HANDLE_WIDTH_VP
+      : this.chapterNavWidthVp + PANE_HANDLE_WIDTH_VP
+    const available: number = this.getWorkbenchWidthVp() - EDITOR_MIN_WIDTH_VP - TOOL_RAIL_WIDTH_VP -
+      leftWidth - PANE_HANDLE_WIDTH_VP
+    return Math.max(TOOL_PANE_MIN_WIDTH_VP, Math.min(TOOL_PANE_MAX_WIDTH_VP, available))
+  }
+
+  private reconcilePaneSpace(): void {
+    const available: number = this.workbenchRowWidthVp
+    if (available <= 0 || !this.isWideWorkbench) {
+      return
+    }
+
+    if (!this.leftPaneCollapsed && !this.rightPaneCollapsed && !this.canKeepBothPanesOpen()) {
+      // Keep chapter navigation available when a resized window can no longer fit both panes.
+      this.rightPaneCollapsed = true
+    }
+    if (!this.leftPaneCollapsed && available < CHAPTER_NAV_MIN_WIDTH_VP + PANE_HANDLE_WIDTH_VP * 2 +
+      EDITOR_MIN_WIDTH_VP + TOOL_RAIL_WIDTH_VP) {
+      this.leftPaneCollapsed = true
+    }
+    if (!this.rightPaneCollapsed && available < TOOL_PANE_MIN_WIDTH_VP + PANE_HANDLE_WIDTH_VP * 2 +
+      EDITOR_MIN_WIDTH_VP + TOOL_RAIL_WIDTH_VP) {
+      this.rightPaneCollapsed = true
+    }
+
+    if (!this.leftPaneCollapsed) {
+      this.chapterNavWidthVp = Math.min(this.chapterNavWidthVp, this.maximumChapterNavWidthVp())
+    }
+    if (!this.rightPaneCollapsed) {
+      this.toolPaneWidthVp = Math.min(this.toolPaneWidthVp, this.maximumToolPaneWidthVp())
+    }
+  }
+
+  // 展开/收起和栏宽均为 ArkUI 状态，不进入 Core；展开另一侧仅在当前栏宽会挤占正文时让位。
   private requestToolPaneOpen(toolKey: string): void {
     if (!this.isWideWorkbench) {
       return
     }
     this.selectedToolKey = toolKey
-    this.rightPaneCollapsed = false
-    if (this.adaptiveState.widthVp < WORKBENCH_BOTH_PANES_MIN_WIDTH_VP) {
+    if (this.rightPaneCollapsed && !this.leftPaneCollapsed && !this.canKeepBothPanesOpen()) {
       this.leftPaneCollapsed = true
     }
+    this.rightPaneCollapsed = false
   }
 
   private requestChapterNavigationOpen(): void {
     if (!this.isWideWorkbench) {
       return
     }
-    this.leftPaneCollapsed = false
-    if (this.adaptiveState.widthVp < WORKBENCH_BOTH_PANES_MIN_WIDTH_VP) {
+    if (this.leftPaneCollapsed && !this.rightPaneCollapsed && !this.canKeepBothPanesOpen()) {
       this.rightPaneCollapsed = true
     }
+    this.leftPaneCollapsed = false
   }
 
   // 收起方向永远放得下：只改状态。
@@ -892,8 +957,10 @@ export struct WritingScreen {
 
         Stack() {
           Row() {
-            // ChapterNavigation：可收起目录栏。收起后整块不占宽度，只留贴边把手。
-            if (!this.leftPaneCollapsed) {
+            // ChapterNavigation：分隔条位于目录栏边缘；折叠后只保留贴正文边缘的把手。
+            if (this.leftPaneCollapsed) {
+              this.CollapsedLeftPaneHandle()
+            } else {
               ChapterTreePane({
                 volumeTrees: this.volumeTrees,
                 projectTitle: this.projectTitle,
@@ -911,8 +978,9 @@ export struct WritingScreen {
                 onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) },
                 onRetry: (): void => { this.ensureWorkbenchProjectTree() }
               })
-                .width(CHAPTER_NAV_WIDTH_VP)
+                .width(this.chapterNavWidthVp)
                 .height('100%')
+              this.LeftPaneDivider()
             }
 
             // Editor：占剩余空间，纸面限宽居中；左右 pane 展开/收起只改变可用空间，不改变编辑会话。
@@ -961,8 +1029,11 @@ export struct WritingScreen {
             .layoutWeight(1)
             .height('100%')
 
-            // ToolPane：可收起，承载 rail 选中的工具内容。
-            if (!this.rightPaneCollapsed) {
+            // ToolPane：右侧工具 rail 常驻；分隔条仅出现在展开的工具面板旁。
+            if (this.rightPaneCollapsed) {
+              this.CollapsedRightPaneHandle()
+            } else {
+              this.RightPaneDivider()
               this.RightToolPane()
             }
 
@@ -978,9 +1049,10 @@ export struct WritingScreen {
           }
           .width('100%')
           .height('100%')
-
-          // Issue #825 复核第5项：整屏覆盖层排把手，不占正文宽度。
-          this.PaneHandleLayer()
+          .onAreaChange((_oldArea: Area, newArea: Area): void => {
+            this.workbenchRowWidthVp = Number(newArea.width)
+            this.reconcilePaneSpace()
+          })
         }
           .width('100%')
           .layoutWeight(1)
@@ -1093,56 +1165,87 @@ export struct WritingScreen {
     }
   }
 
-  // Issue #825 复核第5项：把手走整屏覆盖层，按“窗口左缘 / 分隔边缘 / 窗口右缘”显式排位。
-  // 覆盖层自身不参与命中测试（HitTestMode.Transparent），只有两个 Button 可点。
+  // 面板分隔条只在面板边缘接收水平拖动，不覆盖正文空白，也不接管窗口拖动。
   @Builder
-  PaneHandleLayer() {
-    Row() {
-      if (!this.leftPaneCollapsed) {
-        Blank()
-          .width(CHAPTER_NAV_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2)
-          .hitTestBehavior(HitTestMode.None)
-      }
+  LeftPaneDivider() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width(1)
+        .height('100%')
+        .backgroundColor($r('sys.color.comp_background_gray'))
 
-      Button(this.leftPaneCollapsed ? '›' : '‹', { type: ButtonType.Normal })
+      Button('‹', { type: ButtonType.Normal })
         .width(PANE_HANDLE_WIDTH_VP)
         .height(PANE_HANDLE_HEIGHT_VP)
         .fontSize(14)
         .fontColor($r('sys.color.font_primary'))
         .backgroundColor($r('sys.color.comp_background_gray'))
         .borderRadius(DesignTokens.radiusPill)
-        .onClick(() => {
-          if (this.leftPaneCollapsed) {
-            this.requestChapterNavigationOpen()
-          } else {
-            this.closeChapterNavigation()
-          }
-        })
-
-      Blank()
-        .layoutWeight(1)
-        .hitTestBehavior(HitTestMode.None)
-
-      // 右把手占位必须在按钮“之后”：收起时没有占位，按钮自然贴窗口右缘。
-      Button(this.rightPaneCollapsed ? '‹' : '›', { type: ButtonType.Normal })
-        .width(PANE_HANDLE_WIDTH_VP)
-        .height(PANE_HANDLE_HEIGHT_VP)
-        .fontSize(14)
-        .fontColor($r('sys.color.font_primary'))
-        .backgroundColor($r('sys.color.comp_background_gray'))
-        .borderRadius(DesignTokens.radiusPill)
-        .onClick(() => { this.onToggleToolPane() })
-
-      if (!this.rightPaneCollapsed) {
-        Blank()
-          .width(TOOL_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2)
-          .hitTestBehavior(HitTestMode.None)
-      }
+        .onClick(() => { this.closeChapterNavigation() })
+        .gesture(
+          PanGesture()
+            .onActionStart(() => { this.chapterNavDragStartWidthVp = this.chapterNavWidthVp })
+            .onActionUpdate((event: GestureEvent) => {
+              this.chapterNavWidthVp = Math.max(CHAPTER_NAV_MIN_WIDTH_VP,
+                Math.min(this.maximumChapterNavWidthVp(), this.chapterNavDragStartWidthVp + event.offsetX))
+            })
+        )
     }
-    .width('100%')
+    .width(PANE_HANDLE_WIDTH_VP)
     .height('100%')
-    .alignItems(VerticalAlign.Center)
-    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  @Builder
+  RightPaneDivider() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width(1)
+        .height('100%')
+        .backgroundColor($r('sys.color.comp_background_gray'))
+
+      Button('›', { type: ButtonType.Normal })
+        .width(PANE_HANDLE_WIDTH_VP)
+        .height(PANE_HANDLE_HEIGHT_VP)
+        .fontSize(14)
+        .fontColor($r('sys.color.font_primary'))
+        .backgroundColor($r('sys.color.comp_background_gray'))
+        .borderRadius(DesignTokens.radiusPill)
+        .onClick(() => { this.closeToolPane() })
+        .gesture(
+          PanGesture()
+            .onActionStart(() => { this.toolPaneDragStartWidthVp = this.toolPaneWidthVp })
+            .onActionUpdate((event: GestureEvent) => {
+              this.toolPaneWidthVp = Math.max(TOOL_PANE_MIN_WIDTH_VP,
+                Math.min(this.maximumToolPaneWidthVp(), this.toolPaneDragStartWidthVp - event.offsetX))
+            })
+        )
+    }
+    .width(PANE_HANDLE_WIDTH_VP)
+    .height('100%')
+  }
+
+  @Builder
+  CollapsedLeftPaneHandle() {
+    Button('›', { type: ButtonType.Normal })
+      .width(PANE_HANDLE_WIDTH_VP)
+      .height(PANE_HANDLE_HEIGHT_VP)
+      .fontSize(14)
+      .fontColor($r('sys.color.font_primary'))
+      .backgroundColor($r('sys.color.comp_background_gray'))
+      .borderRadius(DesignTokens.radiusPill)
+      .onClick(() => { this.requestChapterNavigationOpen() })
+  }
+
+  @Builder
+  CollapsedRightPaneHandle() {
+    Button('‹', { type: ButtonType.Normal })
+      .width(PANE_HANDLE_WIDTH_VP)
+      .height(PANE_HANDLE_HEIGHT_VP)
+      .fontSize(14)
+      .fontColor($r('sys.color.font_primary'))
+      .backgroundColor($r('sys.color.comp_background_gray'))
+      .borderRadius(DesignTokens.radiusPill)
+      .onClick(() => { this.onToggleToolPane() })
   }
 
   // Issue #829：ToolPane 骨架固定下来。rail 只切“星图 / AI”，这里负责承载内容。
@@ -1179,7 +1282,7 @@ export struct WritingScreen {
       .width('100%')
       .layoutWeight(1)
     }
-    .width(TOOL_PANE_WIDTH_VP)
+    .width(this.toolPaneWidthVp)
     .height('100%')
     .backgroundColor($r('sys.color.background_secondary'))
   }
