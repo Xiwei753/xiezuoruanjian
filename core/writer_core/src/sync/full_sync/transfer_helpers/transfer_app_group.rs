@@ -3,7 +3,7 @@
 use super::*;
 
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
-pub(super) fn transfer_app_data_group(
+pub(in crate::sync::full_sync) fn transfer_app_data_group(
     provider: &dyn SyncProvider,
     sync_root: &Path,
     sync_policy: &SyncPolicy,
@@ -39,7 +39,7 @@ pub(super) fn transfer_app_data_group(
         // A local-only group not present in the catalog is new and starts from an empty grouped
         // prefix once v2 is already active.
         let source_prefix = match catalog_snapshot.catalog.record(group) {
-            Some(record) => match crate::sync::app_data_group_catalog::resolve_group_source_prefix(
+            Some(_) => match crate::sync::app_data_group_catalog::resolve_group_source_prefix(
                 Some(&catalog_snapshot.catalog),
                 group,
             ) {
