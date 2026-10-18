@@ -11,22 +11,12 @@ use crate::segment::is_chinese_string;
 // Pinyin equivalence is taken only from the supplied same_pinyin table; this
 // module does not reproduce pypinyin or ship its upstream data.
 
-#[derive(Clone, Debug)]
-pub(crate) struct CandidateGenerator {
-    fragment: usize,
-}
-
-impl Default for CandidateGenerator {
-    fn default() -> Self {
-        Self { fragment: 1 }
-    }
-}
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CandidateGenerator;
 
 impl CandidateGenerator {
-    pub(crate) fn new(fragment: usize) -> Self {
-        Self {
-            fragment: fragment.max(1),
-        }
+    pub(crate) fn new() -> Self {
+        Self
     }
 
     /// Return replacement candidates only. The corrector adds the original
@@ -114,13 +104,9 @@ impl CandidateGenerator {
         }
 
         let mut ordered = candidates.into_iter().collect::<Vec<_>>();
-        ordered.sort_by(|left, right| {
-            lexicon
-                .compare_word_frequency(left, right)
-                .then_with(|| left.cmp(right))
-        });
-        let keep = ordered.len() / self.fragment + usize::from(!ordered.is_empty());
-        ordered.truncate(keep);
+        // Cross-category THUOCL counts are not comparable. Keep generation
+        // deterministic here; contextual KenLM scoring ranks every candidate.
+        ordered.sort();
         ordered
     }
 }

@@ -134,10 +134,27 @@ impl SujianEditorItem {
         result: &writer_core::editor::EditorEditResult,
     ) {
         if result.content_delta.inserted_chars > 0 || result.content_delta.deleted_chars > 0 {
+            let patch_ranges: Vec<[usize; 4]> = result
+                .display_patches
+                .iter()
+                .map(|patch| {
+                    [
+                        patch.replace_byte_range.start().value(),
+                        patch.replace_byte_range.end().value(),
+                        patch.inserted_byte_range.start().value(),
+                        patch.inserted_byte_range.end().value(),
+                    ]
+                })
+                .collect();
             self.editor_change_applied(
                 QString::from(format!("{:?}", cause)),
                 result.content_delta.inserted_chars,
                 result.content_delta.deleted_chars,
+                result.base_revision.value(),
+                result.new_revision.value(),
+                QString::from(
+                    serde_json::to_string(&patch_ranges).unwrap_or_else(|_| "[]".to_string()),
+                ),
             );
         }
     }

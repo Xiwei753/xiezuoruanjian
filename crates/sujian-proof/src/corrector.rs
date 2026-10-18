@@ -79,141 +79,148 @@ impl TraditionalCorrector {
 
     /// Generate byte-addressed suggestions without changing `text`.
     pub(crate) fn suggest(&self, text: &str) -> Result<Vec<CorrectionDiagnostic>, CorrectionError> {
-        let Some(scorer) = self.scorer.as_ref() else {
-            let mut diagnostics = self.confusion_diagnostics(text);
-            diagnostics.extend(self.rule_diagnostics(text));
-            if !self.config.include_weak_hints {
-                diagnostics.retain(|diagnostic| diagnostic.severity == "error");
-            }
-            return filter_diagnostics(text, diagnostics);
-        };
-        let suspects = self.detector.detect(
-            text,
-            &self.lexicon,
-            &self.segmenter,
-            &self.confusion_matcher,
-            scorer.as_ref(),
-        )?;
         let mut diagnostics = Vec::new();
+        if let Some(scorer) = self.scorer.as_ref() {
+            let suspects = self.detector.detect(
+                text,
+                &self.lexicon,
+                &self.segmenter,
+                &self.confusion_matcher,
+                scorer.as_ref(),
+            )?;
 
-        for suspect in suspects {
-            let source = match suspect.kind {
-                DetectionKind::ConfusionWord => "confusion_word",
-                DetectionKind::ProperName => "proper_name",
-                DetectionKind::OutOfVocabularyWord => "oov",
-                DetectionKind::Character => "character_ngram",
-            };
-            if let Some(replacement) = suspect.exact_replacement {
-                if replacement != suspect.original {
+            for suspect in suspects {
+                let source = match suspect.kind {
+                    DetectionKind::ConfusionWord => "confusion_word",
+                    DetectionKind::ProperName => "proper_name",
+                    DetectionKind::OutOfVocabularyWord => "oov",
+                    DetectionKind::Character => "character_ngram",
+                };
+                if let Some(replacement) = suspect.exact_replacement {
+                    if replacement != suspect.original {
+                        diagnostics.push(CorrectionDiagnostic {
+                            start_byte: suspect.start_byte,
+                            end_byte: suspect.end_byte,
+                            original: suspect.original,
+                            replacement,
+                            source: source.to_owned(),
+                            rule_id: match suspect.kind {
+                                DetectionKind::ConfusionWord => "confusion.custom".to_owned(),
+                                DetectionKind::ProperName => "proper.similarity".to_owned(),
+                                _ => "detector.exact".to_owned(),
+                            },
+                            severity: "error".to_owned(),
+                            confidence: None,
+                        });
+                    }
+                    continue;
+                }
+
+                if self.config.max_candidates_per_error == 0 {
+                    continue;
+                }
+                let candidate_generator = CandidateGenerator::new();
+                let candidates = candidate_generator.generate(&suspect.original, &self.lexicon);
+                if candidates.is_empty() {
+                    continue;
+                }
+
+                let segment =
+                    segment_for_span(text, suspect.start_byte, suspect.end_byte, &self.segmenter)
+                        .ok_or(CorrectionError::InvalidRange {
+                        start: suspect.start_byte,
+                        end: suspect.end_byte,
+                        text_len: text.len(),
+                    })?;
+                let segment_text = &text[segment.start_byte..segment.end_byte];
+                let relative_start = suspect.start_byte - segment.start_byte;
+                let relative_end = suspect.end_byte - segment.start_byte;
+                let before = &segment_text[..relative_start];
+                let after = &segment_text[relative_end..];
+
+                // pycorrector keeps the original in the PPL candidate set. A model
+                // score is a ranking signal, not confidence: only flag an error
+                // when the source falls outside the upstream-compatible tolerance.
+                let original_ppl = self.perplexity_text(segment_text)?;
+                let mut ranked = Vec::with_capacity(candidates.len() + 1);
+                ranked.push((None, original_ppl));
+                for candidate in candidates {
+                    let mut alternative =
+                        String::with_capacity(before.len() + candidate.len() + after.len());
+                    alternative.push_str(before);
+                    alternative.push_str(&candidate);
+                    alternative.push_str(after);
+                    let perplexity = self.perplexity_text(&alternative)?;
+                    ranked.push((Some(candidate), perplexity));
+                }
+                ranked.sort_by(|left, right| {
+                    left.1
+                        .total_cmp(&right.1)
+                        .then_with(|| left.0.cmp(&right.0))
+                });
+                ranked.truncate(self.config.max_candidates_per_error.saturating_add(1));
+
+                let Some((_, best_ppl)) = ranked.first() else {
+                    continue;
+                };
+                let acceptable_limit = best_ppl + PYCORRECTOR_PPL_THRESHOLD;
+                let original_acceptable = original_ppl <= acceptable_limit;
+
+                // If the source remains in pycorrector's acceptable set, preserve
+                // it without emitting statistically generated alternatives. LM
+                // rankings are not a calibrated reason to warn on valid prose.
+                if original_acceptable {
+                    continue;
+                }
+
+                let source_kind = source.to_owned();
+                let rule_id = match suspect.kind {
+                    DetectionKind::OutOfVocabularyWord => "detector.oov",
+                    DetectionKind::Character => "detector.char_mad",
+                    _ => "detector.candidate",
+                };
+                let chosen = ranked.into_iter().find_map(|(replacement, perplexity)| {
+                    (perplexity <= acceptable_limit)
+                        .then_some(replacement)
+                        .flatten()
+                });
+                if let Some(replacement) = chosen {
                     diagnostics.push(CorrectionDiagnostic {
                         start_byte: suspect.start_byte,
                         end_byte: suspect.end_byte,
                         original: suspect.original,
                         replacement,
-                        source: source.to_owned(),
-                        rule_id: match suspect.kind {
-                            DetectionKind::ConfusionWord => "confusion.custom".to_owned(),
-                            DetectionKind::ProperName => "proper.similarity".to_owned(),
-                            _ => "detector.exact".to_owned(),
-                        },
+                        source: source_kind,
+                        rule_id: rule_id.to_owned(),
                         severity: "error".to_owned(),
                         confidence: None,
                     });
                 }
-                continue;
             }
 
-            if self.config.max_candidates_per_error == 0 {
-                continue;
+            if !self.config.include_weak_hints {
+                diagnostics.extend(
+                    self.rule_diagnostics(text)
+                        .into_iter()
+                        .filter(|diagnostic| diagnostic.severity == "error"),
+                );
+            } else {
+                diagnostics.extend(self.rule_diagnostics(text));
             }
-            let candidate_generator = CandidateGenerator::new(1);
-            let candidates = candidate_generator.generate(&suspect.original, &self.lexicon);
-            if candidates.is_empty() {
-                continue;
-            }
-
-            let segment =
-                segment_for_span(text, suspect.start_byte, suspect.end_byte, &self.segmenter)
-                    .ok_or(CorrectionError::InvalidRange {
-                        start: suspect.start_byte,
-                        end: suspect.end_byte,
-                        text_len: text.len(),
-                    })?;
-            let segment_text = &text[segment.start_byte..segment.end_byte];
-            let relative_start = suspect.start_byte - segment.start_byte;
-            let relative_end = suspect.end_byte - segment.start_byte;
-            let before = &segment_text[..relative_start];
-            let after = &segment_text[relative_end..];
-
-            // pycorrector keeps the original in the PPL candidate set. A model
-            // score is a ranking signal, not confidence: only flag an error
-            // when the source falls outside the upstream-compatible tolerance.
-            let original_ppl = self.perplexity_text(segment_text)?;
-            let mut ranked = Vec::with_capacity(candidates.len() + 1);
-            ranked.push((None, original_ppl));
-            for candidate in candidates {
-                let mut alternative =
-                    String::with_capacity(before.len() + candidate.len() + after.len());
-                alternative.push_str(before);
-                alternative.push_str(&candidate);
-                alternative.push_str(after);
-                let perplexity = self.perplexity_text(&alternative)?;
-                ranked.push((Some(candidate), perplexity));
-            }
-            ranked.sort_by(|left, right| {
-                left.1
-                    .total_cmp(&right.1)
-                    .then_with(|| left.0.cmp(&right.0))
-            });
-            ranked.truncate(self.config.max_candidates_per_error.saturating_add(1));
-
-            let Some((_, best_ppl)) = ranked.first() else {
-                continue;
-            };
-            let acceptable_limit = best_ppl + PYCORRECTOR_PPL_THRESHOLD;
-            let original_acceptable = original_ppl <= acceptable_limit;
-
-            // If the source remains in pycorrector's acceptable set, preserve
-            // it without emitting statistically generated alternatives. LM
-            // rankings are not a calibrated reason to warn on valid prose.
-            if original_acceptable {
-                continue;
-            }
-
-            let source_kind = source.to_owned();
-            let rule_id = match suspect.kind {
-                DetectionKind::OutOfVocabularyWord => "detector.oov",
-                DetectionKind::Character => "detector.char_mad",
-                _ => "detector.candidate",
-            };
-            let chosen = ranked.into_iter().find_map(|(replacement, perplexity)| {
-                (perplexity <= acceptable_limit)
-                    .then_some(replacement)
-                    .flatten()
-            });
-            if let Some(replacement) = chosen {
-                diagnostics.push(CorrectionDiagnostic {
-                    start_byte: suspect.start_byte,
-                    end_byte: suspect.end_byte,
-                    original: suspect.original,
-                    replacement,
-                    source: source_kind,
-                    rule_id: rule_id.to_owned(),
-                    severity: "error".to_owned(),
-                    confidence: None,
-                });
-            }
-        }
-
-        if self.config.include_weak_hints {
-            diagnostics.extend(self.rule_diagnostics(text));
         } else {
-            diagnostics.extend(
-                self.rule_diagnostics(text)
-                    .into_iter()
-                    .filter(|diagnostic| diagnostic.severity == "error"),
-            );
+            diagnostics.extend(self.confusion_diagnostics(text));
+            diagnostics.extend(self.rule_diagnostics(text));
+            if !self.config.include_weak_hints {
+                diagnostics.retain(|diagnostic| diagnostic.severity == "error");
+            }
         }
+
+        let protected_ranges = self.lexicon.protected_word_ranges(text);
+        diagnostics.retain(|diagnostic| {
+            !protected_ranges
+                .iter()
+                .any(|(start, end)| diagnostic.start_byte < *end && *start < diagnostic.end_byte)
+        });
         Ok(filter_diagnostics(text, diagnostics)?)
     }
 

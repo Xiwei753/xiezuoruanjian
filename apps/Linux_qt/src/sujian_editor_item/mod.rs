@@ -381,10 +381,17 @@ pub struct SujianEditorItem {
     /// cause 来自 `visual_cause`（当前真实输入语义，如 Paste/Typing/Delete），
     /// **不是** `result.cause`（pipeline cause）——粘贴时 pipeline cause 仍是 Typing，
     /// 但 visual_cause 是 Paste，透传 visual_cause 才能让 Core 正确分类。
-    /// inserted_chars/deleted_chars 来自 `result.content_delta`。
+    /// inserted_chars/deleted_chars 来自 `result.content_delta`，修订号和 patch 范围来自 Core 结果。
     /// 纯 cursor/selection 移动（content_delta 全 0）不发。
     /// QML 连接此 signal 后直接调用 `record_editor_change_stats`，不再用文本长度 diff 猜统计。
-    editor_change_applied: qt_signal!(cause: QString, inserted_chars: u32, deleted_chars: u32),
+    editor_change_applied: qt_signal!(
+        cause: QString,
+        inserted_chars: u32,
+        deleted_chars: u32,
+        base_revision: u64,
+        new_revision: u64,
+        patch_ranges_json: QString
+    ),
 
     #[allow(dead_code)]
     get_plain_text: qt_method!(fn(&self) -> QString),
