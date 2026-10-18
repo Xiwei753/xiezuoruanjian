@@ -10,9 +10,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
-use sujian_proof::{Lexicon, LexiconPaths};
+use sujian_proof::lm::KenlmModel;
+use sujian_proof::{CorrectionEngine, Lexicon, LexiconPaths};
 
-use crate::api::{CorrectionIgnoreScopeDto, CorrectionResourceStatusDto, WriterError};
+use crate::api::{
+    CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto, CorrectionResourceStatusDto,
+    WriterError,
+};
 
 mod engine;
 
@@ -63,6 +67,7 @@ struct CorrectionStoreInner {
     preferences: Mutex<PersistedCorrectionPreferences>,
     once_ignored: Mutex<HashSet<OnceIgnoredDiagnostic>>,
     lexicons: Mutex<HashMap<String, CachedLexicon>>,
+    engines: Mutex<HashMap<String, CachedCorrectionEngine>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,7 +80,14 @@ struct LexiconFileStamp {
 struct CachedLexicon {
     files: Vec<LexiconFileStamp>,
     dictionary_entries: Vec<String>,
+    version: u64,
     lexicon: Arc<Lexicon>,
+}
+
+struct CachedCorrectionEngine {
+    lexicon_version: u64,
+    model_path: Option<PathBuf>,
+    engine: Arc<CorrectionEngine>,
 }
 
 /// A process-shared, app-data-root-scoped correction preferences store.
@@ -86,6 +98,25 @@ pub struct CorrectionStore {
 
 static STORE_REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<CorrectionStoreInner>>>> =
     OnceLock::new();
+static MODEL_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<KenlmModel>>>> = OnceLock::new();
+
+fn model_cache() -> &'static Mutex<HashMap<PathBuf, Arc<KenlmModel>>> {
+    MODEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn canonical_model_path(path: &Path) -> Result<PathBuf, WriterError> {
+    path.canonicalize()
+        .map_err(|error| WriterError::Io(error.to_string()))
+}
+
+fn open_model_candidate(path: &Path) -> Result<(PathBuf, Arc<KenlmModel>), WriterError> {
+    // KenlmModel::open is the sole format validator. Validate before taking any
+    // preference/cache lock so rejected candidates cannot disturb active state.
+    let model = KenlmModel::open(path)
+        .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")))?;
+    let key = canonical_model_path(path)?;
+    Ok((key, Arc::new(model)))
+}
 
 const CORRECTION_DICTIONARY_FILES: [&str; 8] = [
     "word_freq.txt",
@@ -122,6 +153,7 @@ impl CorrectionStore {
                 preferences: Mutex::new(preferences),
                 once_ignored: Mutex::new(HashSet::new()),
                 lexicons: Mutex::new(HashMap::new()),
+                engines: Mutex::new(HashMap::new()),
             });
             stores.insert(key, Arc::clone(&inner));
             inner
@@ -149,14 +181,39 @@ impl CorrectionStore {
     }
 
     pub fn set_model_path(&self, path: &Path) -> Result<(), WriterError> {
-        let metadata =
-            std::fs::metadata(path).map_err(|error| WriterError::Io(error.to_string()))?;
-        if !metadata.is_file() || metadata.len() == 0 {
-            return Err(WriterError::Other(
-                "correction model path must name a non-empty regular file".into(),
-            ));
+        let (key, candidate) = open_model_candidate(path)?;
+        let mut models = model_cache()
+            .lock()
+            .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
+        let mut preferences = self
+            .inner
+            .preferences
+            .lock()
+            .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
+        let mut engines = self
+            .inner
+            .engines
+            .lock()
+            .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
+
+        let old_path = preferences.model_path.clone();
+        let mut next = preferences.clone();
+        next.model_path = Some(key.clone());
+        let json = serde_json::to_string_pretty(&next)
+            .map_err(|error| WriterError::Json(error.to_string()))?;
+        crate::storage::atomic_write_string(&self.inner.path, &json)
+            .map_err(|error| WriterError::Io(error.to_string()))?;
+
+        // The candidate is already validated. Keep one model mapping per
+        // immutable canonical path; other models remain available to existing
+        // scans and are reclaimed by the path-status query after their final
+        // engine reference is gone.
+        models.entry(key.clone()).or_insert(candidate);
+        *preferences = next;
+        if old_path.as_ref() != Some(&key) {
+            engines.clear();
         }
-        self.update_preferences(|preferences| preferences.model_path = Some(path.to_path_buf()))
+        Ok(())
     }
 
     pub fn configured_model_path(&self) -> Result<Option<PathBuf>, WriterError> {
@@ -193,9 +250,69 @@ impl CorrectionStore {
         Ok(CorrectionResourceStatusDto {
             model_configured: model_path.is_some(),
             model_file_available,
+            model_path: model_path.map(|path| path.to_string_lossy().into_owned()),
             bundled_lexicon_available: true,
             installed_dictionary_files,
             missing_dictionary_files,
+        })
+    }
+
+    pub fn model_path_status(
+        &self,
+        path: &Path,
+    ) -> Result<CorrectionModelPathStatusDto, WriterError> {
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let mut models = model_cache()
+            .lock()
+            .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
+        let stores = STORE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+        let stores = stores
+            .lock()
+            .map_err(|_| WriterError::Other("correction store registry lock poisoned".into()))?;
+
+        let mut configured = false;
+        for inner in stores.values() {
+            let preferences = inner
+                .preferences
+                .lock()
+                .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
+            if preferences
+                .model_path
+                .as_ref()
+                .is_some_and(|configured_path| {
+                    configured_path
+                        .canonicalize()
+                        .unwrap_or_else(|_| configured_path.clone())
+                        == key
+                })
+            {
+                configured = true;
+            }
+        }
+
+        if !configured {
+            for inner in stores.values() {
+                let mut engines = inner.engines.lock().map_err(|_| {
+                    WriterError::Other("correction engine cache lock poisoned".into())
+                })?;
+                engines.retain(|_, cached| {
+                    cached.model_path.as_ref() != Some(&key)
+                        || Arc::strong_count(&cached.engine) > 1
+                });
+            }
+        }
+
+        let in_use = models
+            .get(&key)
+            .is_some_and(|model| Arc::strong_count(model) > 1);
+        if !configured && !in_use {
+            models.remove(&key);
+        }
+
+        Ok(CorrectionModelPathStatusDto {
+            configured,
+            in_use,
+            deletion_eligible: !configured && !in_use,
         })
     }
 
@@ -213,6 +330,14 @@ impl CorrectionStore {
     }
 
     pub fn lexicon_for_project(&self, project_id: &str) -> Result<Arc<Lexicon>, WriterError> {
+        self.lexicon_snapshot_for_project(project_id)
+            .map(|(_, lexicon)| lexicon)
+    }
+
+    pub(super) fn lexicon_snapshot_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<(u64, Arc<Lexicon>), WriterError> {
         let dictionary_entries = self.dictionary_entries(project_id)?;
         let data_root = self
             .inner
@@ -253,7 +378,7 @@ impl CorrectionStore {
             .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))?;
         if let Some(cached) = cache.get(project_id) {
             if cached.files == files && cached.dictionary_entries == dictionary_entries {
-                return Ok(Arc::clone(&cached.lexicon));
+                return Ok((cached.version, Arc::clone(&cached.lexicon)));
             }
         }
 
@@ -272,15 +397,111 @@ impl CorrectionStore {
             lexicon.insert_word_frequency(entry.clone(), 1);
         }
         let lexicon = Arc::new(lexicon);
+        let version = match cache.get(project_id) {
+            Some(cached) => cached
+                .version
+                .checked_add(1)
+                .ok_or_else(|| WriterError::Other("correction lexicon version exhausted".into()))?,
+            None => 1,
+        };
         cache.insert(
             project_id.to_string(),
             CachedLexicon {
                 files,
                 dictionary_entries,
+                version,
                 lexicon: Arc::clone(&lexicon),
             },
         );
-        Ok(lexicon)
+        Ok((version, lexicon))
+    }
+
+    pub(super) fn configured_model_snapshot(
+        &self,
+    ) -> Result<(Option<PathBuf>, Option<Arc<KenlmModel>>), WriterError> {
+        let mut models = model_cache()
+            .lock()
+            .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
+        let preferences = self
+            .inner
+            .preferences
+            .lock()
+            .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
+        let Some(path) = preferences.model_path.clone() else {
+            return Ok((None, None));
+        };
+        let key = canonical_model_path(&path)?;
+        if let Some(model) = models.get(&key) {
+            return Ok((Some(key), Some(Arc::clone(model))));
+        }
+        let model = KenlmModel::open(&key)
+            .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")))?;
+        let model = Arc::new(model);
+        models.insert(key.clone(), Arc::clone(&model));
+        Ok((Some(key), Some(model)))
+    }
+
+    pub(super) fn cached_engine(
+        &self,
+        project_id: &str,
+        lexicon_version: u64,
+        model_path: Option<&Path>,
+    ) -> Result<Option<Arc<CorrectionEngine>>, WriterError> {
+        let engines = self
+            .inner
+            .engines
+            .lock()
+            .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
+        Ok(engines.get(project_id).and_then(|cached| {
+            (cached.lexicon_version == lexicon_version
+                && cached.model_path.as_deref() == model_path)
+                .then(|| Arc::clone(&cached.engine))
+        }))
+    }
+
+    pub(super) fn cache_engine_if_model_current(
+        &self,
+        project_id: &str,
+        lexicon_version: u64,
+        model_path: Option<PathBuf>,
+        engine: Arc<CorrectionEngine>,
+    ) -> Result<Arc<CorrectionEngine>, WriterError> {
+        // Match set_model_path's lock order and keep the preference stable while
+        // publishing an engine built from its model snapshot.
+        let _models = model_cache()
+            .lock()
+            .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
+        let preferences = self
+            .inner
+            .preferences
+            .lock()
+            .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
+        let current_path = preferences
+            .model_path
+            .as_deref()
+            .map(|path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+        if current_path != model_path {
+            return Ok(engine);
+        }
+        let mut engines = self
+            .inner
+            .engines
+            .lock()
+            .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
+        if let Some(cached) = engines.get(project_id) {
+            if cached.lexicon_version == lexicon_version && cached.model_path == model_path {
+                return Ok(Arc::clone(&cached.engine));
+            }
+        }
+        engines.insert(
+            project_id.to_string(),
+            CachedCorrectionEngine {
+                lexicon_version,
+                model_path,
+                engine: Arc::clone(&engine),
+            },
+        );
+        Ok(engine)
     }
 
     pub fn add_dictionary_entry(&self, project_id: &str, entry: &str) -> Result<bool, WriterError> {

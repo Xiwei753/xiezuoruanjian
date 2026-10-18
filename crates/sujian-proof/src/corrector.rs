@@ -80,14 +80,11 @@ impl TraditionalCorrector {
     /// Generate byte-addressed suggestions without changing `text`.
     pub(crate) fn suggest(&self, text: &str) -> Result<Vec<CorrectionDiagnostic>, CorrectionError> {
         let Some(scorer) = self.scorer.as_ref() else {
-            let diagnostics = if self.config.include_weak_hints {
-                self.rule_diagnostics(text)
-            } else {
-                self.rule_diagnostics(text)
-                    .into_iter()
-                    .filter(|diagnostic| diagnostic.severity == "error")
-                    .collect()
-            };
+            let mut diagnostics = self.confusion_diagnostics(text);
+            diagnostics.extend(self.rule_diagnostics(text));
+            if !self.config.include_weak_hints {
+                diagnostics.retain(|diagnostic| diagnostic.severity == "error");
+            }
             return filter_diagnostics(text, diagnostics);
         };
         let suspects = self.detector.detect(
@@ -173,51 +170,35 @@ impl TraditionalCorrector {
             let acceptable_limit = best_ppl + PYCORRECTOR_PPL_THRESHOLD;
             let original_acceptable = original_ppl <= acceptable_limit;
 
+            // If the source remains in pycorrector's acceptable set, preserve
+            // it without emitting statistically generated alternatives. LM
+            // rankings are not a calibrated reason to warn on valid prose.
+            if original_acceptable {
+                continue;
+            }
+
             let source_kind = source.to_owned();
             let rule_id = match suspect.kind {
                 DetectionKind::OutOfVocabularyWord => "detector.oov",
                 DetectionKind::Character => "detector.char_mad",
                 _ => "detector.candidate",
             };
-            let mut primary_emitted = false;
-            for (replacement, perplexity) in ranked {
-                let Some(replacement) = replacement else {
-                    continue;
-                };
-                if perplexity > acceptable_limit {
-                    continue;
-                }
-                if original_acceptable && !self.config.include_weak_hints {
-                    continue;
-                }
-                let severity = if !original_acceptable && !primary_emitted {
-                    primary_emitted = true;
-                    "error"
-                } else {
-                    "warning"
-                };
+            let chosen = ranked.into_iter().find_map(|(replacement, perplexity)| {
+                (perplexity <= acceptable_limit)
+                    .then_some(replacement)
+                    .flatten()
+            });
+            if let Some(replacement) = chosen {
                 diagnostics.push(CorrectionDiagnostic {
                     start_byte: suspect.start_byte,
                     end_byte: suspect.end_byte,
-                    original: suspect.original.clone(),
+                    original: suspect.original,
                     replacement,
-                    source: source_kind.clone(),
+                    source: source_kind,
                     rule_id: rule_id.to_owned(),
-                    severity: severity.to_owned(),
+                    severity: "error".to_owned(),
                     confidence: None,
                 });
-                if diagnostics
-                    .iter()
-                    .filter(|diagnostic| {
-                        diagnostic.start_byte == suspect.start_byte
-                            && diagnostic.end_byte == suspect.end_byte
-                            && diagnostic.rule_id == rule_id
-                    })
-                    .count()
-                    >= self.config.max_candidates_per_error
-                {
-                    break;
-                }
             }
         }
 
@@ -256,6 +237,29 @@ impl TraditionalCorrector {
                 confidence: None,
             })
             .collect()
+    }
+
+    fn confusion_diagnostics(&self, text: &str) -> Vec<CorrectionDiagnostic> {
+        let mut diagnostics = Vec::new();
+        for segment in self.segmenter.sentence_segments(text) {
+            let sentence = &text[segment.start_byte..segment.end_byte];
+            for matched in self.confusion_matcher.scan_text(sentence) {
+                if self.lexicon.is_ignored(&matched.original_text) {
+                    continue;
+                }
+                diagnostics.push(CorrectionDiagnostic {
+                    start_byte: segment.start_byte + matched.start_byte,
+                    end_byte: segment.start_byte + matched.end_byte,
+                    original: matched.original_text,
+                    replacement: matched.suggestion,
+                    source: "confusion_word".to_owned(),
+                    rule_id: "confusion.custom".to_owned(),
+                    severity: "error".to_owned(),
+                    confidence: None,
+                });
+            }
+        }
+        diagnostics
     }
 }
 

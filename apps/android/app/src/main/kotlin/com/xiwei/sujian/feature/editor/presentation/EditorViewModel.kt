@@ -94,6 +94,7 @@ import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -525,7 +526,11 @@ class EditorViewModel(
         if (identity.targetId != targetId) return
         val correction = correctionCoordinator ?: return
         viewModelScope.launch {
-            correction.checkSegment(identity, startByte, endByte, visibleText)
+            try {
+                correction.checkSegment(identity, startByte, endByte, visibleText)
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) { removeReleasedCorrectionModels() }
+            }
         }
     }
 
@@ -538,7 +543,13 @@ class EditorViewModel(
         val identity = currentCorrectionIdentity() ?: return
         if (identity.targetId != targetId) return
         val correction = correctionCoordinator ?: return
-        viewModelScope.launch { correction.checkChapter(identity) }
+        viewModelScope.launch {
+            try {
+                correction.checkChapter(identity)
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) { removeReleasedCorrectionModels() }
+            }
+        }
     }
 
     fun importCorrectionModel(uri: Uri) {
@@ -547,7 +558,7 @@ class EditorViewModel(
             _correctionResourceState.value = _correctionResourceState.value.copy(preparing = true, feedback = null)
             var importedModel: ImportedCorrectionModel? = null
             try {
-                val model = withContext(Dispatchers.IO) { correctionResourceRepository.copyModel(uri) }
+                val model = withContext(Dispatchers.IO) { correctionResourceRepository.stageModel(uri) }
                 importedModel = model
                 val result =
                     withContext(Dispatchers.IO) {
@@ -556,6 +567,7 @@ class EditorViewModel(
                 when (result) {
                     is com.xiwei.sujian.core.interop.common.BridgeResult.Success -> {
                         withContext(Dispatchers.IO) { correctionResourceRepository.setActiveModel(model) }
+                        withContext(Dispatchers.IO) { removeReleasedCorrectionModels() }
                         refreshCorrectionResourceState(
                             CorrectionResourceFeedback(
                                 CorrectionResourceFeedbackLevel.Success,
@@ -587,6 +599,29 @@ class EditorViewModel(
                         getApplication<Application>().getString(R.string.editor_correction_resource_model_failed),
                     ),
                 )
+            }
+        }
+    }
+
+    /** Removes superseded model copies only when Core confirms no active or leased reference. */
+    private fun removeReleasedCorrectionModels() {
+        val bridge = _appServiceBridge ?: return
+        val activePath = correctionResourceRepository.activeModelFile()
+            ?.let { runCatching { it.canonicalFile }.getOrNull() ?: it }
+        val previousModels = correctionResourceRepository.installedModels()
+            .filter { file -> activePath == null || runCatching { file.canonicalFile }.getOrNull() != activePath }
+        previousModels.forEach { file ->
+            val statusResult =
+                runCatching { bridge.getCorrectionModelPathStatus(file.absolutePath) }.getOrNull()
+            if (statusResult is com.xiwei.sujian.core.interop.common.BridgeResult.Success) {
+                runCatching {
+                    correctionResourceRepository.deleteModelIfCoreReleased(
+                        file = file,
+                        configured = statusResult.data.configured,
+                        inUse = statusResult.data.inUse,
+                        deletionEligible = statusResult.data.deletionEligible,
+                    )
+                }
             }
         }
     }

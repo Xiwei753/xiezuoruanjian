@@ -136,12 +136,16 @@ fn detect_near_proper_names(
                 .iter()
                 .map(|token| token.text.as_str())
                 .collect::<String>();
-            if lexicon.is_proper_name(&source) || lexicon.is_ignored(&source) {
+            if lexicon.is_proper_name(&source) || lexicon.is_protected_name_component(&source) {
                 continue;
             }
 
+            let source_char_values = source_chars
+                .iter()
+                .filter_map(|token| token.text.chars().next())
+                .collect::<Vec<_>>();
             let mut best: Option<(String, f32)> = None;
-            for proper in lexicon.proper_names_of_len(len) {
+            for proper in lexicon.near_proper_name_candidates(&source_char_values) {
                 let score = proper_name_similarity(source_chars, proper, lexicon);
                 if score <= 0.85 || proper == source {
                     continue;

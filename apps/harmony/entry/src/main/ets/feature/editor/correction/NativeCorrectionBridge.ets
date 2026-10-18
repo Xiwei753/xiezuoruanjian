@@ -2,8 +2,10 @@ import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import {
+  CorrectionModelPathStatusDto,
   CorrectionResourceStatusDto,
   CorrectionSuggestionDto,
+  decodeCorrectionModelPathStatus,
   decodeCorrectionResourceStatus,
   decodeCorrectionSuggestions
 } from './CorrectionDtos'
@@ -33,6 +35,17 @@ export class NativeCorrectionBridge implements ICorrectionBridge {
       return this.core.decodeEnvelope<CorrectionResourceStatusDto>(jsonStr, decodeCorrectionResourceStatus)
     } catch (e) {
       return this.nativeError<CorrectionResourceStatusDto>(e)
+    }
+  }
+
+  async getModelPathStatus(path: string): Promise<ResultEnvelope<CorrectionModelPathStatusDto>> {
+    try {
+      const pending: Promise<string> =
+        this.core.getNativeModule().nativeCorrectionGetModelPathStatus(path) as Promise<string>
+      const jsonStr: string = await pending
+      return this.core.decodeEnvelope<CorrectionModelPathStatusDto>(jsonStr, decodeCorrectionModelPathStatus)
+    } catch (e) {
+      return this.nativeError<CorrectionModelPathStatusDto>(e)
     }
   }
 

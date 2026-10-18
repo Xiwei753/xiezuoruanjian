@@ -2,7 +2,8 @@ use std::path::Path;
 
 use crate::api::service::{ApiResult, WriterCoreApi};
 use crate::api::types::{
-    CorrectionIgnoreScopeDto, CorrectionResourceStatusDto, CorrectionSuggestionDto,
+    CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto, CorrectionResourceStatusDto,
+    CorrectionSuggestionDto,
 };
 use crate::correction::{scan_text, CorrectionScanner, CorrectionStore};
 
@@ -30,14 +31,21 @@ impl WriterCoreApi {
         )
     }
 
-    /// Save the user's local KenLM model path. The model is opened lazily on
-    /// the first proofreading request and is never packaged by WriterCore.
+    /// Validate and save the user's local KenLM model path. Scans share the
+    /// process-cached model mapping; WriterCore never packages the model.
     pub fn set_correction_model_path(&self, path: String) -> ApiResult<()> {
         self.correction_store()?.set_model_path(Path::new(&path))
     }
 
     pub fn get_correction_resource_status(&self) -> ApiResult<CorrectionResourceStatusDto> {
         self.correction_store()?.resource_status()
+    }
+
+    pub fn get_correction_model_path_status(
+        &self,
+        path: String,
+    ) -> ApiResult<CorrectionModelPathStatusDto> {
+        self.correction_store()?.model_path_status(Path::new(&path))
     }
 
     pub fn add_correction_dictionary_entry(

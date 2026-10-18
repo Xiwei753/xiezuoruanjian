@@ -1,6 +1,10 @@
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
-import { CorrectionResourceStatusDto, CorrectionSuggestionDto } from './CorrectionDtos'
+import {
+  CorrectionModelPathStatusDto,
+  CorrectionResourceStatusDto,
+  CorrectionSuggestionDto
+} from './CorrectionDtos'
 
 export type CorrectionIgnoreScope = 'once' | 'chapter' | 'permanent' | 'rule'
 
@@ -8,6 +12,7 @@ export type CorrectionIgnoreScope = 'once' | 'chapter' | 'permanent' | 'rule'
 export interface ICorrectionBridge {
   setModelPath(path: string): Promise<ResultEnvelope<boolean>>
   getResourceStatus(): Promise<ResultEnvelope<CorrectionResourceStatusDto>>
+  getModelPathStatus(path: string): Promise<ResultEnvelope<CorrectionModelPathStatusDto>>
   checkSegment(sessionId: number, projectId: string, chapterId: string, textRevision: number,
     startByte: number, endByte: number): Promise<ResultEnvelope<CorrectionSuggestionDto[]>>
   checkChapter(sessionId: number, projectId: string, chapterId: string,

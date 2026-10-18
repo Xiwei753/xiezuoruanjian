@@ -7,6 +7,7 @@
 enum class CorrectionOperation {
     SetModelPath,
     GetResourceStatus,
+    GetModelPathStatus,
     CheckSegment,
     CheckChapter,
     Ignore,
@@ -63,6 +64,9 @@ static void correction_execute(napi_env /*env*/, void* data) {
             break;
         case CorrectionOperation::GetResourceStatus:
             call->json = writer_core_get_correction_resource_status();
+            break;
+        case CorrectionOperation::GetModelPathStatus:
+            call->json = writer_core_get_correction_model_path_status(call->path.c_str());
             break;
         case CorrectionOperation::CheckSegment:
             call->json = writer_core_check_correction_segment(
@@ -203,6 +207,22 @@ static napi_value NativeCorrectionGetResourceStatus(napi_env env, napi_callback_
     return correction_queue(env, call);
 }
 
+static napi_value NativeCorrectionGetModelPathStatus(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) {
+        return correction_invalid_args(env, "Expected 1 argument: modelPath");
+    }
+    CorrectionAsyncWork* call = new CorrectionAsyncWork();
+    call->operation = CorrectionOperation::GetModelPathStatus;
+    if (!correction_read_string(env, args[0], &call->path) || call->path.empty()) {
+        delete call;
+        return correction_invalid_args(env, "modelPath must be a non-empty local file path");
+    }
+    return correction_queue(env, call);
+}
+
 static napi_value NativeCorrectionCheckSegment(napi_env env, napi_callback_info info) {
     size_t argc = 6;
     napi_value args[6];
@@ -313,6 +333,7 @@ napi_property_descriptor* getCorrectionDescriptors(size_t* count) {
     static const napi_property_descriptor kDesc[] = {
         {"nativeCorrectionSetModelPath", nullptr, NativeCorrectionSetModelPath, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionGetResourceStatus", nullptr, NativeCorrectionGetResourceStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeCorrectionGetModelPathStatus", nullptr, NativeCorrectionGetModelPathStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckSegment", nullptr, NativeCorrectionCheckSegment, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckChapter", nullptr, NativeCorrectionCheckChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionIgnore", nullptr, NativeCorrectionIgnore, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -1,6 +1,6 @@
 use crate::api::{
-    CorrectionIgnoreScopeDto, CorrectionResourceStatusDto, CorrectionSuggestionDto,
-    EditorEditResultDto, EditorTransactionCauseDto, WriterError,
+    CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto, CorrectionResourceStatusDto,
+    CorrectionSuggestionDto, EditorEditResultDto, EditorTransactionCauseDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -12,6 +12,13 @@ impl super::WriterAppService {
         &self,
     ) -> Result<CorrectionResourceStatusDto, WriterError> {
         self.api.get_correction_resource_status()
+    }
+
+    pub fn get_correction_model_path_status(
+        &self,
+        path: String,
+    ) -> Result<CorrectionModelPathStatusDto, WriterError> {
+        self.api.get_correction_model_path_status(path)
     }
 
     fn correction_session_kernel(

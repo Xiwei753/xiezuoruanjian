@@ -224,6 +224,8 @@ export struct WritingScreen {
   private editorCoordinator: EditorSessionCoordinator = new EditorSessionCoordinator(new NativeEditorSessionBridge())
   private correctionCoordinator: CorrectionCoordinator = new CorrectionCoordinator(
     new NativeCorrectionBridge(), this.editorCoordinator)
+  private correctionModelCleanupQueue: Promise<void> = Promise.resolve()
+  private correctionModelCleanupDeferred: boolean = false
   private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.editorCoordinator)
   private selectionController: SelectionController = new SelectionController(this.editorCoordinator)
   private harmonyImeConnection: HarmonyImeConnection = new HarmonyImeConnection()
@@ -288,6 +290,13 @@ export struct WritingScreen {
       this.correctionSuggestions = state.suggestions
       this.correctionIsChecking = state.isChecking
       this.correctionErrorMessage = state.errorMessage
+    })
+    this.correctionCoordinator.setScanCompletionListener((): void => {
+      if (this.correctionResourcesBusy) {
+        this.correctionModelCleanupDeferred = true
+      } else {
+        void this.cleanupInactiveCorrectionModels().catch(() => {})
+      }
     })
     this.refreshCorrectionResourceStatus()
 
@@ -1491,14 +1500,94 @@ export struct WritingScreen {
       return
     }
     const status = result.data
+    const missingDictionaries = status.missingDictionaryFiles
+    const dictionaryReadiness = missingDictionaries.length > 0
+      ? `可选词典 ${status.installedDictionaryFiles.length}/8 已安装；未安装：${missingDictionaries.join('、')}`
+      : '八种可选词典均已安装'
     this.correctionDictionaryResourceStatus = status.bundledLexiconAvailable
-      ? `Core 内置词库已就绪；另有 ${status.installedDictionaryFiles.length} 个可选词典文件已导入`
+      ? `Core 内置词库已就绪；${dictionaryReadiness}`
       : 'Core 内置词库不可用'
+    const modelName = status.modelPath === null
+      ? ''
+      : status.modelPath.substring(status.modelPath.lastIndexOf('/') + 1)
     this.correctionModelResourceStatus = status.modelFileAvailable
-      ? 'Core 已配置模型文件，格式待首次校对验证'
+      ? `Core 已配置可读取的模型${modelName.length > 0 ? `：${modelName}` : '文件'}`
       : status.modelConfigured
         ? 'Core 已配置模型路径，但模型文件不可用'
         : '尚未配置语言模型；内置固定规则仍可用'
+  }
+
+  private cleanupInactiveCorrectionModels(allowDuringImport: boolean = false): Promise<string> {
+    let lifecycleMessage = ''
+    const task = this.correctionModelCleanupQueue.then(async (): Promise<void> => {
+      lifecycleMessage = await this.performInactiveCorrectionModelCleanup(allowDuringImport)
+    })
+    this.correctionModelCleanupQueue = task.then((): void => {}, (): void => {})
+    return task.then((): string => lifecycleMessage,
+      (): string => '；清理状态无法确认，旧模型均已保留')
+  }
+
+  private async performInactiveCorrectionModelCleanup(allowDuringImport: boolean): Promise<string> {
+    const appDataRoot = getAppDataRoot()
+    if (appDataRoot.length === 0) {
+      return '；无法获取应用数据目录，旧模型均已保留'
+    }
+    const currentStatus = await this.correctionCoordinator.getResourceStatus()
+    if (!currentStatus.success || currentStatus.data === undefined) {
+      return '；无法读取 Core 活动模型路径，旧模型均已保留'
+    }
+    const currentModelPath = currentStatus.data.modelPath
+    const currentModelName = currentModelPath === null
+      ? ''
+      : currentModelPath.substring(currentModelPath.lastIndexOf('/') + 1)
+    const snapshot = CorrectionResourceImporter.inspect(appDataRoot)
+    let managedModelCount = 0
+    let removedModels = 0
+    let retainedModels = 0
+    for (let i = 0; i < snapshot.modelFiles.length; i++) {
+      const name = snapshot.modelFiles[i]
+      if (!CorrectionResourceImporter.isManagedModelFile(name)) {
+        continue
+      }
+      const path = `${snapshot.directory}/${name}`
+      if (currentModelPath !== null && (path === currentModelPath || name === currentModelName)) {
+        continue
+      }
+      managedModelCount++
+      if (this.correctionResourcesBusy && !allowDuringImport) {
+        retainedModels++
+        continue
+      }
+      const pathStatus = await this.correctionCoordinator.getModelPathStatus(path)
+      if (this.correctionResourcesBusy && !allowDuringImport) {
+        retainedModels++
+        continue
+      }
+      if (pathStatus.success && pathStatus.data !== undefined &&
+          CorrectionResourceImporter.removeModelIfEligible(appDataRoot, path, pathStatus.data)) {
+        removedModels++
+      } else {
+        retainedModels++
+      }
+    }
+    if (managedModelCount === 0) {
+      return ''
+    }
+    let message = removedModels > 0
+      ? `；Core 确认并清理了 ${removedModels} 个无活动引用的旧模型`
+      : ''
+    if (retainedModels > 0) {
+      message += `；${retainedModels} 个旧模型仍由 Core 保留`
+    }
+    return message
+  }
+
+  private runDeferredCorrectionModelCleanup(): void {
+    if (!this.correctionModelCleanupDeferred) {
+      return
+    }
+    this.correctionModelCleanupDeferred = false
+    void this.cleanupInactiveCorrectionModels().catch(() => {})
   }
 
   private async importCorrectionModel(): Promise<void> {
@@ -1519,16 +1608,21 @@ export struct WritingScreen {
         (path: string) => this.correctionCoordinator.setModelPath(path),
         (message: string): void => { this.correctionModelResourceStatus = message }
       )
+      let lifecycleMessage = ''
       if (result.status === 'imported') {
-        this.correctionModelResourceStatus = result.message
+        lifecycleMessage = await this.cleanupInactiveCorrectionModels(true)
+      }
+      await this.refreshCorrectionResourceStatus()
+      if (result.status === 'imported') {
+        this.correctionModelResourceStatus = `${result.message}${lifecycleMessage}`
       } else if (result.status === 'cancelled') {
         this.correctionModelResourceStatus = `模型配置未改变；${result.message}`
       } else {
-        this.correctionModelResourceStatus = result.message
+        this.correctionModelResourceStatus = `${result.message}；${this.correctionModelResourceStatus}`
       }
-      await this.refreshCorrectionResourceStatus()
     } finally {
       this.correctionResourcesBusy = false
+      this.runDeferredCorrectionModelCleanup()
     }
   }
 
@@ -1553,6 +1647,7 @@ export struct WritingScreen {
       this.correctionDictionaryResourceStatus = `${result.message}；${this.correctionDictionaryResourceStatus}`
     } finally {
       this.correctionResourcesBusy = false
+      this.runDeferredCorrectionModelCleanup()
     }
   }
 

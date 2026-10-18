@@ -4,6 +4,7 @@ import { utf16ToUtf8, utf8ToUtf16 } from '../input/text_offset_mapper'
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { CorrectionIgnoreScope, ICorrectionBridge } from './ICorrectionBridge'
 import {
+  CorrectionModelPathStatusDto,
   CorrectionResourceStatusDto,
   CorrectionSuggestionDto,
   MappedCorrectionSuggestion
@@ -16,6 +17,7 @@ export interface CorrectionPresentationState {
 }
 
 export type CorrectionStateListener = (state: CorrectionPresentationState) => void
+export type CorrectionScanCompletionListener = () => void
 
 interface CorrectionRequestSnapshot {
   projectId: string
@@ -41,6 +43,7 @@ export class CorrectionCoordinator {
   private bridge: ICorrectionBridge
   private editor: EditorSessionCoordinator
   private listener: CorrectionStateListener | null = null
+  private scanCompletionListener: CorrectionScanCompletionListener | null = null
   private current: CorrectionRequestSnapshot | null = null
   private suggestions: MappedCorrectionSuggestion[] = []
   private isChecking: boolean = false
@@ -56,6 +59,14 @@ export class CorrectionCoordinator {
   setStateListener(listener: CorrectionStateListener | null): void {
     this.listener = listener
     this.notify()
+  }
+
+  setScanCompletionListener(listener: CorrectionScanCompletionListener | null): void {
+    this.scanCompletionListener = listener
+  }
+
+  private notifyScanCompleted(): void {
+    this.scanCompletionListener?.()
   }
 
   private notify(): void {
@@ -149,6 +160,10 @@ export class CorrectionCoordinator {
     return this.bridge.getResourceStatus()
   }
 
+  async getModelPathStatus(path: string): Promise<ResultEnvelope<CorrectionModelPathStatusDto>> {
+    return this.bridge.getModelPathStatus(path)
+  }
+
   private currentRequest(generation: number): CorrectionRequestSnapshot | null {
     if (generation !== this.requestGeneration || this.current === null) {
       return null
@@ -212,10 +227,14 @@ export class CorrectionCoordinator {
     this.isChecking = true
     this.errorMessage = ''
     this.notify()
-    const result = await this.bridge.checkSegment(
-      snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision,
-      range.startByte, range.endByte)
-    this.acceptCheckResult(generation, snapshot, result)
+    try {
+      const result = await this.bridge.checkSegment(
+        snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision,
+        range.startByte, range.endByte)
+      this.acceptCheckResult(generation, snapshot, result)
+    } finally {
+      this.notifyScanCompleted()
+    }
   }
 
   /** User-triggered whole-chapter correction uses the same Core engine and snapshot identity. */
@@ -231,9 +250,13 @@ export class CorrectionCoordinator {
     this.isChecking = true
     this.errorMessage = ''
     this.notify()
-    const result = await this.bridge.checkChapter(
-      snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision)
-    this.acceptCheckResult(generation, snapshot, result)
+    try {
+      const result = await this.bridge.checkChapter(
+        snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision)
+      this.acceptCheckResult(generation, snapshot, result)
+    } finally {
+      this.notifyScanCompleted()
+    }
   }
 
   private acceptCheckResult(generation: number, snapshot: CorrectionRequestSnapshot,
@@ -394,5 +417,6 @@ export class CorrectionCoordinator {
   dispose(): void {
     this.clear()
     this.listener = null
+    this.scanCompletionListener = null
   }
 }

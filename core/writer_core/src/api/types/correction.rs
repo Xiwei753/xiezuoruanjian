@@ -21,9 +21,19 @@ pub struct CorrectionSuggestionDto {
 pub struct CorrectionResourceStatusDto {
     pub model_configured: bool,
     pub model_file_available: bool,
+    pub model_path: Option<String>,
     pub bundled_lexicon_available: bool,
     pub installed_dictionary_files: Vec<String>,
     pub missing_dictionary_files: Vec<String>,
+}
+
+/// Lifecycle status for a caller-supplied local correction model path.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionModelPathStatusDto {
+    pub configured: bool,
+    pub in_use: bool,
+    pub deletion_eligible: bool,
 }
 
 impl TryFrom<(sujian_proof::CorrectionDiagnostic, u64)> for CorrectionSuggestionDto {

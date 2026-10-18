@@ -218,6 +218,7 @@ char* writer_core_editor_session_composition_delete_grapheme_forward(uint64_t se
 // writer_core_free_string. Ranges and revisions are Core UTF-8 byte offsets/revisions.
 char* writer_core_set_correction_model_path(const char* path);
 char* writer_core_get_correction_resource_status(void);
+char* writer_core_get_correction_model_path_status(const char* path);
 char* writer_core_check_correction_segment(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision, uint32_t start_byte, uint32_t end_byte);
 char* writer_core_check_correction_chapter(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision);
 char* writer_core_ignore_correction(const char* project_id, const char* chapter_id, const char* rule_id, const char* original, const char* scope, uint64_t text_revision, uint32_t start_byte, uint32_t end_byte);

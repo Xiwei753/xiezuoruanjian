@@ -16,8 +16,16 @@ export interface CorrectionResourceStatusDto {
   modelConfigured: boolean
   modelFileAvailable: boolean
   bundledLexiconAvailable: boolean
+  modelPath: string | null
   installedDictionaryFiles: string[]
   missingDictionaryFiles: string[]
+}
+
+/** Core lifecycle view for one path; deletion is allowed only when Core marks it eligible. */
+export interface CorrectionModelPathStatusDto {
+  configured: boolean
+  inUse: boolean
+  deletionEligible: boolean
 }
 
 /** A current-revision suggestion projected to ArkTS UTF-16 coordinates for presentation. */
@@ -87,10 +95,12 @@ export function decodeCorrectionResourceStatus(data: Object): DecodeResult<Corre
   const modelConfigured = record['modelConfigured']
   const modelFileAvailable = record['modelFileAvailable']
   const bundledLexiconAvailable = record['bundledLexiconAvailable']
+  const modelPath = record['modelPath']
   const installedDictionaryFiles = record['installedDictionaryFiles']
   const missingDictionaryFiles = record['missingDictionaryFiles']
   if (typeof modelConfigured !== 'boolean' || typeof modelFileAvailable !== 'boolean' ||
-      typeof bundledLexiconAvailable !== 'boolean' || !Array.isArray(installedDictionaryFiles) ||
+      typeof bundledLexiconAvailable !== 'boolean' ||
+      (typeof modelPath !== 'string' && modelPath !== null) || !Array.isArray(installedDictionaryFiles) ||
       !Array.isArray(missingDictionaryFiles) ||
       !installedDictionaryFiles.every((name: Object) => typeof name === 'string') ||
       !missingDictionaryFiles.every((name: Object) => typeof name === 'string')) {
@@ -102,8 +112,31 @@ export function decodeCorrectionResourceStatus(data: Object): DecodeResult<Corre
       modelConfigured: modelConfigured,
       modelFileAvailable: modelFileAvailable,
       bundledLexiconAvailable: bundledLexiconAvailable,
+      modelPath: modelPath as string | null,
       installedDictionaryFiles: installedDictionaryFiles as string[],
       missingDictionaryFiles: missingDictionaryFiles as string[]
+    }
+  }
+}
+
+export function decodeCorrectionModelPathStatus(data: Object): DecodeResult<CorrectionModelPathStatusDto> {
+  if (!isRecord(data)) {
+    return { ok: false, error: 'data: expected CorrectionModelPathStatusDto' }
+  }
+  const record = data as Record<string, Object>
+  const configured = record['configured']
+  const inUse = record['inUse']
+  const deletionEligible = record['deletionEligible']
+  if (typeof configured !== 'boolean' || typeof inUse !== 'boolean' ||
+      typeof deletionEligible !== 'boolean') {
+    return { ok: false, error: 'data: invalid CorrectionModelPathStatusDto fields' }
+  }
+  return {
+    ok: true,
+    value: {
+      configured: configured,
+      inUse: inUse,
+      deletionEligible: deletionEligible
     }
   }
 }

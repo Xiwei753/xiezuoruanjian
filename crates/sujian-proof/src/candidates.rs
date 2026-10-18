@@ -45,7 +45,7 @@ impl CandidateGenerator {
 
         // Pycorrector first looks up known words whose pronunciation matches
         // the complete source term. Here that relation is table driven.
-        for candidate in lexicon.word_candidates_of_len(chars.len()) {
+        for candidate in lexicon.word_candidates_by_pinyin(word) {
             if candidate != word && same_pinyin_word(word, candidate, lexicon) {
                 insert_if_candidate(&mut candidates, word, candidate.to_owned());
             }
@@ -90,7 +90,7 @@ impl CandidateGenerator {
                 }
 
                 let prefix = chars[..chars.len() - 1].iter().collect::<String>();
-                for candidate in lexicon.word_candidates_of_len(chars.len() - 1) {
+                for candidate in lexicon.word_candidates_by_pinyin(&prefix) {
                     if candidate != prefix && same_pinyin_word(&prefix, candidate, lexicon) {
                         insert_if_candidate(
                             &mut candidates,
@@ -101,7 +101,7 @@ impl CandidateGenerator {
                 }
 
                 let suffix = chars[1..].iter().collect::<String>();
-                for candidate in lexicon.word_candidates_of_len(chars.len() - 1) {
+                for candidate in lexicon.word_candidates_by_pinyin(&suffix) {
                     if candidate != suffix && same_pinyin_word(&suffix, candidate, lexicon) {
                         insert_if_candidate(
                             &mut candidates,

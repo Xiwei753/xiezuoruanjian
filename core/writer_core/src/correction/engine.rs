@@ -1,47 +1,17 @@
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
-use sujian_proof::lm::KenlmModel;
 use sujian_proof::{CorrectionConfig, CorrectionEngine, LanguageScorer, RuleSet};
 
 use crate::api::{CorrectionSuggestionDto, WriterError};
 
 use super::CorrectionStore;
 
-static MODEL_CACHE: OnceLock<Mutex<Option<(PathBuf, Arc<KenlmModel>)>>> = OnceLock::new();
-
-fn open_model(path: &Path) -> Result<Arc<KenlmModel>, WriterError> {
-    let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let cache = MODEL_CACHE.get_or_init(|| Mutex::new(None));
-    let mut current = cache
-        .lock()
-        .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
-    if let Some((path, model)) = current.as_ref() {
-        if path == &key {
-            return Ok(Arc::clone(model));
-        }
-        if Arc::strong_count(model) > 1 {
-            return Err(WriterError::Other(
-                "correction model is in use; wait for active scans before switching models".into(),
-            ));
-        }
-    }
-
-    // Drop the previous mapping before opening a different file so a path
-    // switch cannot transiently keep two model mappings in this process.
-    current.take();
-    let model =
-        Arc::new(KenlmModel::open(&key).map_err(|error| WriterError::Other(error.to_string()))?);
-    *current = Some((key, Arc::clone(&model)));
-    Ok(model)
-}
-
 pub(crate) struct CorrectionScanner {
     store: CorrectionStore,
     project_id: String,
     chapter_id: String,
     text_revision: u64,
-    engine: CorrectionEngine,
+    engine: Arc<CorrectionEngine>,
 }
 
 impl CorrectionScanner {
@@ -51,17 +21,29 @@ impl CorrectionScanner {
         chapter_id: String,
         text_revision: u64,
     ) -> Result<Self, WriterError> {
-        let lexicon = store.lexicon_for_project(&project_id)?;
-        let rules = RuleSet::with_common_rules();
-        let config = CorrectionConfig::default();
-        let engine = if let Some(model_path) = store.configured_model_path()? {
-            let model = open_model(&model_path)?;
-            let scorer: Arc<dyn LanguageScorer> = model;
-            CorrectionEngine::new_shared(scorer, lexicon, rules, config)
+        let (lexicon_version, lexicon) = store.lexicon_snapshot_for_project(&project_id)?;
+        let (model_path, model) = store.configured_model_snapshot()?;
+        let engine = if let Some(engine) =
+            store.cached_engine(&project_id, lexicon_version, model_path.as_deref())?
+        {
+            engine
         } else {
-            CorrectionEngine::rules_only_shared(lexicon, rules, config)
-        }
-        .map_err(|error| WriterError::Other(error.to_string()))?;
+            let rules = RuleSet::with_common_rules();
+            let config = CorrectionConfig::default();
+            let engine = if let Some(model) = model {
+                let scorer: Arc<dyn LanguageScorer> = model;
+                CorrectionEngine::new_shared(scorer, lexicon, rules, config)
+            } else {
+                CorrectionEngine::rules_only_shared(lexicon, rules, config)
+            }
+            .map_err(|error| WriterError::Other(error.to_string()))?;
+            store.cache_engine_if_model_current(
+                &project_id,
+                lexicon_version,
+                model_path,
+                Arc::new(engine),
+            )?
+        };
         Ok(Self {
             store,
             project_id,

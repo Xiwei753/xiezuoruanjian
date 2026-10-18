@@ -35,6 +35,27 @@ pub extern "C" fn writer_core_get_correction_resource_status() -> *mut c_char {
 /// `path` must be a valid null-terminated UTF-8 C string.
 /// Returns a caller-owned JSON C string; free it with `writer_core_free_string`.
 #[no_mangle]
+pub unsafe extern "C" fn writer_core_get_correction_model_path_status(
+    path: *const c_char,
+) -> *mut c_char {
+    let path = match c_str_to_rust(path) {
+        Ok(path) => path,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid model path: {error}")),
+    };
+    match with_app_service(|service| {
+        service
+            .get_correction_model_path_status(path)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(status) => ok_json(status),
+        Err(error) => err_json("CORRECTION_MODEL_STATUS_ERROR", &error),
+    }
+}
+
+/// # Safety
+/// `path` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned JSON C string; free it with `writer_core_free_string`.
+#[no_mangle]
 pub unsafe extern "C" fn writer_core_set_correction_model_path(path: *const c_char) -> *mut c_char {
     let path = match c_str_to_rust(path) {
         Ok(path) => path,

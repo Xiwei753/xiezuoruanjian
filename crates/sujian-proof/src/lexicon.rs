@@ -4,7 +4,7 @@
 // (xuming624); dictionary data assets and their licenses are listed separately
 // in THIRD_PARTY_NOTICES.md.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
@@ -27,15 +27,17 @@ pub struct LexiconPaths {
 #[derive(Clone, Debug, Default)]
 pub struct Lexicon {
     word_freq: HashMap<String, u64>,
-    words_by_char_len: BTreeMap<usize, Vec<String>>,
+    words_by_pinyin: HashMap<(usize, Vec<char>), Vec<String>>,
     same_pinyin: HashMap<char, HashSet<char>>,
+    pinyin_representatives: HashMap<char, char>,
     same_stroke: HashMap<char, HashSet<char>>,
     custom_confusion: HashMap<String, String>,
     person_names: HashMap<String, u64>,
     place_names: HashMap<String, u64>,
     proper_names: HashSet<String>,
-    proper_names_by_char_len: BTreeMap<usize, Vec<String>>,
+    proper_name_wildcards: HashMap<(usize, usize, String), Vec<String>>,
     ignored_words: HashSet<String>,
+    ignored_word_components: HashSet<String>,
 }
 
 impl Lexicon {
@@ -78,8 +80,11 @@ impl Lexicon {
             }
         }
         if let Some(path) = &paths.ignored_words {
-            lexicon.ignored_words.extend(read_word_set(path)?);
+            for word in read_word_set(path)? {
+                lexicon.insert_ignored_word(word);
+            }
         }
+        lexicon.rebuild_candidate_indexes();
         Ok(lexicon)
     }
 
@@ -131,11 +136,11 @@ impl Lexicon {
         )))? {
             lexicon.insert_proper_name(name);
         }
-        lexicon
-            .ignored_words
-            .extend(read_word_set_from(Cursor::new(include_str!(
-                "../assets/correction-data/ignored_words.txt"
-            )))?);
+        for word in read_word_set_from(Cursor::new(include_str!(
+            "../assets/correction-data/ignored_words.txt"
+        )))? {
+            lexicon.insert_ignored_word(word);
+        }
         Ok(lexicon)
     }
 
@@ -143,12 +148,15 @@ impl Lexicon {
     /// the uniquely owned lexicon before sharing it through `Arc`.
     pub fn insert_word_frequency(&mut self, word: String, frequency: u64) {
         let char_len = word.chars().count();
-        if !self.word_freq.contains_key(&word) {
-            self.words_by_char_len
-                .entry(char_len)
-                .or_default()
-                .push(word.clone());
+        if self.word_freq.contains_key(&word) {
+            self.word_freq.insert(word, frequency);
+            return;
         }
+        let signature = self.pinyin_signature(&word);
+        self.words_by_pinyin
+            .entry((char_len, signature))
+            .or_default()
+            .push(word.clone());
         self.word_freq.insert(word, frequency);
     }
 
@@ -162,9 +170,7 @@ impl Lexicon {
     pub fn insert_proper_name(&mut self, name: String) {
         let char_len = name.chars().count();
         if self.proper_names.insert(name.clone()) {
-            let names = self.proper_names_by_char_len.entry(char_len).or_default();
-            names.push(name.clone());
-            names.sort();
+            self.index_proper_name(&name, char_len);
         }
         if !self.word_freq.contains_key(&name) {
             self.insert_word_frequency(name, 1);
@@ -172,7 +178,16 @@ impl Lexicon {
     }
 
     pub fn insert_ignored_word(&mut self, word: String) {
-        self.ignored_words.insert(word);
+        if !self.ignored_words.insert(word.clone()) {
+            return;
+        }
+        let chars = word.chars().collect::<Vec<_>>();
+        for length in 2..=4.min(chars.len()) {
+            for start in 0..=chars.len() - length {
+                self.ignored_word_components
+                    .insert(chars[start..start + length].iter().collect());
+            }
+        }
     }
 
     pub(crate) fn is_known(&self, word: &str) -> bool {
@@ -184,6 +199,10 @@ impl Lexicon {
 
     pub(crate) fn is_ignored(&self, word: &str) -> bool {
         self.ignored_words.contains(word)
+    }
+
+    pub(crate) fn is_protected_name_component(&self, word: &str) -> bool {
+        self.ignored_words.contains(word) || self.ignored_word_components.contains(word)
     }
 
     pub(crate) fn is_proper_name(&self, word: &str) -> bool {
@@ -208,18 +227,37 @@ impl Lexicon {
         entries
     }
 
-    pub(crate) fn word_candidates_of_len(&self, char_len: usize) -> impl Iterator<Item = &str> {
-        self.words_by_char_len
-            .get(&char_len)
+    pub(crate) fn word_candidates_by_pinyin(&self, word: &str) -> impl Iterator<Item = &str> {
+        let char_len = word.chars().count();
+        let signature = self.pinyin_signature(word);
+        self.words_by_pinyin
+            .get(&(char_len, signature))
             .into_iter()
             .flat_map(|words| words.iter().map(String::as_str))
     }
 
-    pub(crate) fn proper_names_of_len(&self, char_len: usize) -> impl Iterator<Item = &str> {
-        self.proper_names_by_char_len
-            .get(&char_len)
-            .into_iter()
-            .flat_map(|names| names.iter().map(String::as_str))
+    pub(crate) fn near_proper_name_candidates<'a>(&'a self, source: &[char]) -> Vec<&'a str> {
+        let char_len = source.len();
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        for position in 0..char_len {
+            let remainder = source
+                .iter()
+                .enumerate()
+                .filter_map(|(index, ch)| (index != position).then_some(*ch))
+                .collect::<String>();
+            if let Some(names) = self
+                .proper_name_wildcards
+                .get(&(char_len, position, remainder))
+            {
+                for name in names {
+                    if seen.insert(name.as_str()) {
+                        candidates.push(name.as_str());
+                    }
+                }
+            }
+        }
+        candidates
     }
 
     pub(crate) fn confusable_chars(&self, ch: char) -> Vec<char> {
@@ -246,6 +284,90 @@ impl Lexicon {
                 .same_stroke
                 .get(&left)
                 .is_some_and(|chars| chars.contains(&right))
+    }
+
+    fn pinyin_signature(&self, word: &str) -> Vec<char> {
+        word.chars()
+            .map(|ch| self.pinyin_representatives.get(&ch).copied().unwrap_or(ch))
+            .collect()
+    }
+
+    fn pinyin_components(&self) -> HashMap<char, char> {
+        let mut parent = HashMap::<char, char>::new();
+        for (&key, values) in &self.same_pinyin {
+            parent.entry(key).or_insert(key);
+            for &value in values {
+                parent.entry(value).or_insert(value);
+                union_chars(&mut parent, key, value);
+            }
+        }
+        let chars = parent.keys().copied().collect::<Vec<_>>();
+        chars
+            .into_iter()
+            .map(|ch| (ch, find_char_root(&mut parent, ch)))
+            .collect()
+    }
+
+    fn rebuild_candidate_indexes(&mut self) {
+        self.pinyin_representatives = self.pinyin_components();
+        self.words_by_pinyin.clear();
+        let words = self.word_freq.keys().cloned().collect::<Vec<_>>();
+        for word in words {
+            let char_len = word.chars().count();
+            let signature = self.pinyin_signature(&word);
+            self.words_by_pinyin
+                .entry((char_len, signature))
+                .or_default()
+                .push(word);
+        }
+
+        self.proper_name_wildcards.clear();
+        let proper_names = self.proper_names.iter().cloned().collect::<Vec<_>>();
+        for name in proper_names {
+            let char_len = name.chars().count();
+            self.index_proper_name(&name, char_len);
+        }
+    }
+
+    fn index_proper_name(&mut self, name: &str, char_len: usize) {
+        if !(2..=4).contains(&char_len) {
+            return;
+        }
+        let chars = name.chars().collect::<Vec<_>>();
+        for position in 0..char_len {
+            let remainder = chars
+                .iter()
+                .enumerate()
+                .filter_map(|(index, ch)| (index != position).then_some(*ch))
+                .collect::<String>();
+            self.proper_name_wildcards
+                .entry((char_len, position, remainder))
+                .or_default()
+                .push(name.to_owned());
+        }
+    }
+}
+
+fn find_char_root(parent: &mut HashMap<char, char>, ch: char) -> char {
+    let root = parent.get(&ch).copied().unwrap_or(ch);
+    if root == ch {
+        return ch;
+    }
+    let canonical = find_char_root(parent, root);
+    parent.insert(ch, canonical);
+    canonical
+}
+
+fn union_chars(parent: &mut HashMap<char, char>, left: char, right: char) {
+    let left_root = find_char_root(parent, left);
+    let right_root = find_char_root(parent, right);
+    if left_root != right_root {
+        let (canonical, child) = if left_root < right_root {
+            (left_root, right_root)
+        } else {
+            (right_root, left_root)
+        };
+        parent.insert(child, canonical);
     }
 }
 

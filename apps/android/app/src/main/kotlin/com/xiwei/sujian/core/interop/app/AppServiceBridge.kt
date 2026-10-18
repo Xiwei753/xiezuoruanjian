@@ -709,6 +709,11 @@ open class AppServiceBridge(
             holder.service.getCorrectionResourceStatus()
         }
 
+    fun getCorrectionModelPathStatus(path: String): BridgeResult<uniffi.writer_core.CorrectionModelPathStatusDto> =
+        holder.wrapResult {
+            holder.service.getCorrectionModelPathStatus(path)
+        }
+
     fun checkCorrectionSegment(
         sessionId: ULong,
         projectId: String,

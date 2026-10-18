@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit'
 import { fileIo, fileUri, picker } from '@kit.CoreFileKit'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
+import { CorrectionModelPathStatusDto } from './CorrectionDtos'
 
 const LEXICON_FILES: string[] = [
   'word_freq.txt',
@@ -68,9 +69,12 @@ export class CorrectionResourceImporter {
   }
 
   static async importModel(context: common.UIAbilityContext, appDataRoot: string,
-    configureModel: (path: string) => Promise<ResultEnvelope<boolean>>,
+    activateCandidate: (path: string) => Promise<ResultEnvelope<boolean>>,
     onProgress?: (message: string) => void): Promise<CorrectionResourceImportResult> {
-    let destination = ''
+    let stagingPath = ''
+    let candidatePath = ''
+    let candidateCreated = false
+    let candidateActivated = false
     try {
       onProgress?.('正在打开系统文件选择器…')
       const options = new picker.DocumentSelectOptions()
@@ -88,35 +92,59 @@ export class CorrectionResourceImporter {
 
       const directory = `${appDataRoot}/correction-data`
       CorrectionResourceImporter.ensureDirectory(directory)
-      CorrectionResourceImporter.nextModelId++
-      const modelName = `${MODEL_FILE_PREFIX}${Date.now()}-${CorrectionResourceImporter.nextModelId}.klm`
-      destination = `${directory}/${modelName}`
+      let modelName = ''
+      do {
+        CorrectionResourceImporter.nextModelId++
+        const uniqueSuffix = `${Date.now()}-${CorrectionResourceImporter.nextModelId}`
+        modelName = `${MODEL_FILE_PREFIX}${uniqueSuffix}.klm`
+        candidatePath = `${directory}/${modelName}`
+        stagingPath = `${directory}/.${modelName}.importing`
+      } while (fileIo.accessSync(candidatePath) || fileIo.accessSync(stagingPath))
 
-      onProgress?.('正在将模型复制到应用私有目录…')
-      await CorrectionResourceImporter.copyPickedUri(sourceUri, destination)
-      const copied = fileIo.statSync(destination)
+      onProgress?.('正在将模型复制到应用私有暂存目录…')
+      await CorrectionResourceImporter.copyPickedUri(sourceUri, stagingPath)
+      const copied = fileIo.statSync(stagingPath)
       if (!copied.isFile() || copied.size <= 0) {
         throw new Error('所选模型文件为空或无法读取')
       }
 
-      onProgress?.('正在把模型路径交给 Core…')
-      const result = await configureModel(destination)
+      const duplicatePath = await CorrectionResourceImporter.findDuplicateModel(directory, stagingPath, copied.size)
+      if (duplicatePath.length > 0) {
+        CorrectionResourceImporter.removeIfPresent(stagingPath)
+        stagingPath = ''
+        candidatePath = duplicatePath
+      } else {
+        await fileIo.moveFile(stagingPath, candidatePath)
+        stagingPath = ''
+        candidateCreated = true
+      }
+
+      onProgress?.('正在让 Core 校验并切换到候选模型…')
+      const result = await activateCandidate(candidatePath)
       if (!result.success || result.data !== true) {
-        CorrectionResourceImporter.removeIfPresent(destination)
-        destination = ''
+        if (candidateCreated) {
+          CorrectionResourceImporter.removeIfPresent(candidatePath)
+          candidateCreated = false
+        }
         return {
           status: 'failed',
-          message: result.userMessage ?? result.errorCode ?? 'Core 未能保存模型路径'
+          message: result.userMessage ?? result.errorCode ?? 'Core 未能校验并切换模型'
         }
       }
+      candidateActivated = true
       return {
         status: 'imported',
-        message: '模型已配置；文件格式待首次校对验证',
-        resourceName: modelName
+        message: duplicatePath.length > 0
+          ? '发现内容相同的模型文件；Core 已校验并切换到现有文件'
+          : 'Core 已校验并切换到新模型；旧模型保留以供生命周期检查',
+        resourceName: candidatePath.substring(candidatePath.lastIndexOf('/') + 1)
       }
     } catch (e) {
-      if (destination.length > 0) {
-        CorrectionResourceImporter.removeIfPresent(destination)
+      if (stagingPath.length > 0) {
+        CorrectionResourceImporter.removeIfPresent(stagingPath)
+      }
+      if (candidateCreated && !candidateActivated) {
+        CorrectionResourceImporter.removeIfPresent(candidatePath)
       }
       return { status: 'failed', message: `模型导入失败：${String(e)}` }
     }
@@ -170,6 +198,37 @@ export class CorrectionResourceImporter {
     }
   }
 
+  static removeModelIfEligible(appDataRoot: string, path: string,
+    status: CorrectionModelPathStatusDto): boolean {
+    if (!status.deletionEligible || status.configured || status.inUse || path.length === 0) {
+      return false
+    }
+    const root = appDataRoot.endsWith('/') ? appDataRoot.substring(0, appDataRoot.length - 1) : appDataRoot
+    const directoryPrefix = `${root}/correction-data/`
+    if (!path.startsWith(directoryPrefix)) {
+      return false
+    }
+    const name = path.substring(directoryPrefix.length)
+    if (name.indexOf('/') >= 0 || !name.startsWith(MODEL_FILE_PREFIX) ||
+        !name.toLowerCase().endsWith('.klm')) {
+      return false
+    }
+    try {
+      const stat = fileIo.statSync(path)
+      if (!stat.isFile()) {
+        return false
+      }
+      fileIo.unlinkSync(path)
+      return true
+    } catch (_e) {
+      return false
+    }
+  }
+
+  static isManagedModelFile(name: string): boolean {
+    return name.startsWith(MODEL_FILE_PREFIX) && name.toLowerCase().endsWith('.klm')
+  }
+
   private static canonicalLexiconName(name: string): string {
     const normalized = name.toLowerCase()
     for (let i = 0; i < LEXICON_FILES.length; i++) {
@@ -193,6 +252,79 @@ export class CorrectionResourceImporter {
     } finally {
       fileIo.closeSync(source)
     }
+  }
+
+  private static async findDuplicateModel(directory: string, candidatePath: string,
+    candidateSize: number): Promise<string> {
+    let names: string[] = []
+    try {
+      names = fileIo.listFileSync(directory)
+    } catch (_e) {
+      return ''
+    }
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i]
+      if (!name.toLowerCase().endsWith('.klm')) {
+        continue
+      }
+      const path = `${directory}/${name}`
+      try {
+        const stat = fileIo.statSync(path)
+        if (stat.isFile() && stat.size === candidateSize &&
+            await CorrectionResourceImporter.filesEqual(candidatePath, path, candidateSize)) {
+          return path
+        }
+      } catch (_e) {
+        // Ignore a model that disappears or becomes unreadable during comparison.
+      }
+    }
+    return ''
+  }
+
+  private static async filesEqual(leftPath: string, rightPath: string, size: number): Promise<boolean> {
+    const left = fileIo.openSync(leftPath, fileIo.OpenMode.READ_ONLY)
+    let right: fileIo.File | null = null
+    try {
+      right = fileIo.openSync(rightPath, fileIo.OpenMode.READ_ONLY)
+      let offset = 0
+      const chunkSize = 256 * 1024
+      while (offset < size) {
+        const length = Math.min(chunkSize, size - offset)
+        const leftBytes = await CorrectionResourceImporter.readChunk(left.fd, length)
+        const rightBytes = await CorrectionResourceImporter.readChunk(right.fd, length)
+        if (leftBytes === null || rightBytes === null) {
+          return false
+        }
+        for (let i = 0; i < length; i++) {
+          if (leftBytes[i] !== rightBytes[i]) {
+            return false
+          }
+        }
+        offset += length
+      }
+      return true
+    } finally {
+      if (right !== null) {
+        fileIo.closeSync(right)
+      }
+      fileIo.closeSync(left)
+    }
+  }
+
+  private static async readChunk(fd: number, length: number): Promise<Uint8Array | null> {
+    const bytes = new Uint8Array(length)
+    let offset = 0
+    while (offset < length) {
+      const remaining = length - offset
+      const buffer = new ArrayBuffer(remaining)
+      const read = await fileIo.read(fd, buffer)
+      if (read <= 0) {
+        return null
+      }
+      bytes.set(new Uint8Array(buffer, 0, read), offset)
+      offset += read
+    }
+    return bytes
   }
 
   private static removeIfPresent(path: string): void {

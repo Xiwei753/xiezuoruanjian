@@ -29,7 +29,7 @@ use thiserror::Error;
 pub struct CorrectionConfig {
     /// Maximum number of ranked replacements returned for each suspicious span.
     pub max_candidates_per_error: usize,
-    /// Include context-dependent hints that do not meet the explicit-error threshold.
+    /// Include warning-level suggestions explicitly emitted by configured rules.
     pub include_weak_hints: bool,
 }
 
