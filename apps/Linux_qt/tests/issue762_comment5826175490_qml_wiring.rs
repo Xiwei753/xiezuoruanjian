@@ -203,17 +203,19 @@ fn sync_page_groups_conflicts_by_project() {
     );
 }
 
-/// 点击某条冲突时发出 `openConflict(projectId, path)`。
+/// 点击某条冲突时发出 `openConflict(targetKind, projectId, path)`（#902 起携带 targetKind）。
 #[test]
 fn sync_page_emits_open_conflict() {
     let src = read_src("qml/SyncPage.qml");
     assert!(
-        src.contains("signal openConflict(string projectId, string path)"),
-        "SyncPage 必须声明 openConflict(projectId, path) 信号"
+        src.contains("signal openConflict(string targetKind, string projectId, string path)"),
+        "SyncPage 必须声明 openConflict(targetKind, projectId, path) 信号"
     );
     assert!(
-        src.contains("root.openConflict(modelData.projectId, modelData.localPath)"),
-        "点击冲突行必须以作品 id + 冲突路径发出 openConflict"
+        src.contains(
+            "root.openConflict(modelData.targetKind, modelData.projectId, modelData.localPath)"
+        ),
+        "点击冲突行必须以 targetKind + 作品 id + 冲突路径发出 openConflict"
     );
 }
 
@@ -237,11 +239,11 @@ fn sync_page_refreshes_conflicts_on_signal() {
 fn main_qml_routes_open_conflict_to_workspace() {
     let src = read_src("qml/main.qml");
     assert!(
-        src.contains("onOpenConflict: function(projectId, path)"),
+        src.contains("onOpenConflict: function(targetKind, projectId, path)"),
         "main.qml 必须接住 SyncPage 的 openConflict 信号"
     );
 
-    let route = window_from(&src, "function openConflictInProject(projectId, path)", 900);
+    let route = window_from(&src, "function openConflictInProject(targetKind, projectId, path)", 1500);
     assert!(
         route.contains("appController.openWriting("),
         "openConflict 必须打开对应作品，实际窗口:\n{route}"
@@ -285,7 +287,7 @@ fn main_qml_resolves_project_title_for_conflict_navigation() {
         src.contains("function projectTitleById(projectId)"),
         "main.qml 必须能按 projectId 解析作品标题"
     );
-    let route = window_from(&src, "function openConflictInProject(projectId, path)", 900);
+    let route = window_from(&src, "function openConflictInProject(targetKind, projectId, path)", 900);
     assert!(
         route.contains("window.projectTitleById(projectId)"),
         "openWriting 必须带上真实作品标题，实际窗口:\n{route}"
