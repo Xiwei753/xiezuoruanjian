@@ -35,21 +35,15 @@ mod types;
 
 // ── re-export：外部公开类型 ──
 pub use canonical_snapshot::{
-    inject_animation_visuals_into_snapshot,
-    prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
-    prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
-    prepare_incremental_visual_snapshot,
-    AnimationRasterVisual, CanonicalClusterSnapshot,
-    CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, CanonicalParagraphSnapshot,
-    CursorXMapEntry,
+    inject_animation_visuals_into_snapshot, prepare_affected_paragraphs_visual_snapshot,
+    prepare_animation_visuals_from_layout, prepare_document_visual_snapshot,
+    prepare_document_visual_snapshot_scoped, prepare_incremental_visual_snapshot,
+    AnimationRasterVisual, CanonicalClusterSnapshot, CanonicalDocumentVisualSnapshot,
+    CanonicalLineSnapshot, CanonicalParagraphSnapshot, CursorXMapEntry,
 };
 pub use diff::compute_affected_paragraph_ranges;
 // Issue #901: 增量排版子系统 — 稳定段落身份 + 布局缓存 + Fenwick 树高度索引
-pub use paragraph_height_index::{ParagraphHeightIndex, ParagraphLineCountIndex, ParagraphOffsetIndex};
-pub use paragraph_layout_store::{
-    AffectedParagraphRanges, ParagraphLayoutCacheKey, ParagraphLayoutEntry,
-    ParagraphLayoutStore,
-};
+use chunked_vec::PersistentChunkedVec;
 pub use engine::{
     byte_offset_to_qchar_offset, cursor_rect_for_line, get_font_ascent, get_font_descent,
     qchar_offset_to_byte_offset, text_baseline_y,
@@ -58,20 +52,25 @@ pub use hit_test::{
     affinity_for_index_on_line, calculate_cursor_x_for_line, caret_rect, caret_rect_doc,
     cursor_line_and_x, hit_test, index_at_line_x, line_contains_cursor_with_affinity,
 };
-pub use qt_cache::{
-    begin_layout_generation, clear_layout_generation, retire_temporary_generation,
-    get_paragraph_layout_cursor_to_x_on_line, get_paragraph_layout_cursor_to_x_on_line_checked,
-    get_paragraph_layout_x_to_cursor_on_line, get_paragraph_layout_x_to_cursor_on_line_checked,
-    retain_layout_ref,
+pub use paragraph_height_index::{
+    ParagraphHeightIndex, ParagraphLineCountIndex, ParagraphOffsetIndex,
 };
+pub use paragraph_layout_store::{
+    AffectedParagraphRanges, ParagraphLayoutCacheKey, ParagraphLayoutEntry, ParagraphLayoutStore,
+};
+pub use qt_cache::{
+    begin_layout_generation, clear_layout_generation, get_paragraph_layout_cursor_to_x_on_line,
+    get_paragraph_layout_cursor_to_x_on_line_checked, get_paragraph_layout_x_to_cursor_on_line,
+    get_paragraph_layout_x_to_cursor_on_line_checked, retain_layout_ref,
+    retire_temporary_generation,
+};
+use std::sync::Arc;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use test_support::run_on_qt_thread;
 pub use types::{
     CaretAffinity, CaretRect, CursorLayoutRect, LayoutParams, LayoutSnapshot, ParagraphId,
     PreparedLayoutHandle, PromotedLayout, QtLayoutId, QtLayoutLease, VisualLine,
 };
-use std::sync::Arc;
-use chunked_vec::PersistentChunkedVec;
 
 /// 编辑器布局引擎 — 管理 QTextLayout 排版缓存。
 ///
@@ -167,10 +166,9 @@ impl EditorLayout {
                     affected_byte_end,
                     idx,
                 ),
-                None => self.paragraph_store.compute_affected_paragraphs(
-                    affected_byte_start,
-                    affected_byte_end,
-                ),
+                None => self
+                    .paragraph_store
+                    .compute_affected_paragraphs(affected_byte_start, affected_byte_end),
             }
         };
         if !affected.full_relayout {
@@ -326,11 +324,7 @@ impl EditorLayout {
                 }
                 if let Some(entry) = store.entry(i) {
                     if entry.layout_generation == generation && entry.cache_slot >= 0 {
-                        let id = QtLayoutId::new(
-                            generation,
-                            entry.cache_slot,
-                            entry.layout_epoch,
-                        );
+                        let id = QtLayoutId::new(generation, entry.cache_slot, entry.layout_epoch);
                         if let Some(lease) = QtLayoutLease::try_from_id(id) {
                             leases.push(lease);
                         }
@@ -368,11 +362,9 @@ impl EditorLayout {
                     .as_ref()
                     .map(|s| &*s.paragraph_offset_index);
                 match offset_index {
-                    Some(idx) => self.paragraph_store.compute_affected_paragraphs_via_index(
-                        byte_start,
-                        byte_end,
-                        idx,
-                    ),
+                    Some(idx) => self
+                        .paragraph_store
+                        .compute_affected_paragraphs_via_index(byte_start, byte_end, idx),
                     None => self
                         .paragraph_store
                         .compute_affected_paragraphs(byte_start, byte_end),
@@ -428,11 +420,9 @@ impl EditorLayout {
                     .as_ref()
                     .map(|s| &*s.paragraph_offset_index);
                 match offset_index {
-                    Some(idx) => self.paragraph_store.compute_affected_paragraphs_via_index(
-                        byte_start,
-                        byte_end,
-                        idx,
-                    ),
+                    Some(idx) => self
+                        .paragraph_store
+                        .compute_affected_paragraphs_via_index(byte_start, byte_end, idx),
                     None => self
                         .paragraph_store
                         .compute_affected_paragraphs(byte_start, byte_end),
@@ -577,7 +567,9 @@ impl EditorLayout {
             text_indent: promoted.text_indent,
             padding: promoted.padding,
             lines: cache_lines,
-            paragraph_offset_index: self.last_snapshot.as_ref()
+            paragraph_offset_index: self
+                .last_snapshot
+                .as_ref()
                 .map(|s| s.paragraph_offset_index.clone())
                 .unwrap_or_default(),
             height_index: Arc::clone(&self.height_index),
@@ -741,7 +733,8 @@ impl EditorLayout {
             // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
             let paragraph_id_to_slot = std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot);
             // Issue #901 第二十二轮问题4: Arc::clone 共享，O(1)。
-            let paragraph_line_count_index = std::sync::Arc::clone(&doc_snapshot.paragraph_line_count_index);
+            let paragraph_line_count_index =
+                std::sync::Arc::clone(&doc_snapshot.paragraph_line_count_index);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -808,7 +801,8 @@ impl EditorLayout {
             // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
             let paragraph_id_to_slot = std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot);
             // Issue #901 第二十二轮问题4: Arc::clone 共享，O(1)。
-            let paragraph_line_count_index = std::sync::Arc::clone(&doc_snapshot.paragraph_line_count_index);
+            let paragraph_line_count_index =
+                std::sync::Arc::clone(&doc_snapshot.paragraph_line_count_index);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -869,11 +863,7 @@ impl EditorLayout {
                     // 用 entry.cache_key 中的参数（通过重建 key 比较 text_hash）
                     // 简化：直接比较 paragraph_text_len 和 cache_key
                     0.0, // placeholder，实际用 text_hash 比较
-                    "",
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
+                    "", 0.0, 0.0, 0.0, 0.0,
                 );
                 // 比较文本长度和内容 hash
                 let text_changed = entry.paragraph_text_len != para_text.len()
@@ -969,9 +959,7 @@ impl EditorLayout {
     ///（含 QImage/cluster），不需要再走 `build_editor_layout_snapshot` 的全篇排版路径。
     ///
     /// 返回 `None` 表示尚未排版（初始化/参数变化后 invalidate）。
-    pub fn last_canonical_snapshot(
-        &self,
-    ) -> Option<&CanonicalDocumentVisualSnapshot> {
+    pub fn last_canonical_snapshot(&self) -> Option<&CanonicalDocumentVisualSnapshot> {
         self.last_snapshot.as_ref()
     }
 

@@ -382,23 +382,20 @@ fn qt_cursor_controller_visibility_state_transitions() {
     run_on_qt_thread(|| {
         let mut ctrl = CursorController::new();
         // 初始状态
-        assert_eq!(
-            ctrl.visibility_state,
-            CursorVisibilityState::Uninitialized
-        );
-        
+        assert_eq!(ctrl.visibility_state, CursorVisibilityState::Uninitialized);
+
         // 模拟光标变为可见
         ctrl.visible = true;
         ctrl.visibility_state = CursorVisibilityState::Visible;
         assert_eq!(ctrl.visibility_state, CursorVisibilityState::Visible);
-        
+
         // 模拟因选区隐藏
         ctrl.visibility_state = CursorVisibilityState::HiddenBySelection;
         assert_eq!(
             ctrl.visibility_state,
             CursorVisibilityState::HiddenBySelection
         );
-        
+
         println!("[BEHAVIOR_VERIFY] CursorController: visibility state transitions work");
     });
 }

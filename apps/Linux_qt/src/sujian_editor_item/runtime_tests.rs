@@ -3,13 +3,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use super::layout_snapshot::SourceRect;
 use super::render_plan::{
     CursorRenderState, CursorStyle, PreparedEditorFrame, SelectionPreeditPlan,
     SelectionPreeditStyle,
 };
-use super::*;
-use super::layout_snapshot::SourceRect;
 use super::text_motion::SliceMotion;
+use super::*;
 use crate::editor::layout::{run_on_qt_thread, LayoutParams};
 use qmetaobject::QString;
 use std::time::{Duration, Instant};
@@ -1328,9 +1328,8 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
             // snap1 旧范围整体后移 3 字节，映回旧范围 old = (bs-3, be-3)。
             let old_range = (bs.saturating_sub(3), be.saturating_sub(3));
 
-            let expected_to = cluster_union_rect(snap2, (bs, be)).expect(
-                "snap2 中 byte_range 必须覆盖至少一个 cluster，才能计算 Shift.to 期望并集",
-            );
+            let expected_to = cluster_union_rect(snap2, (bs, be))
+                .expect("snap2 中 byte_range 必须覆盖至少一个 cluster，才能计算 Shift.to 期望并集");
             let expected_from = cluster_union_rect(&snap1, old_range).expect(
                 "snap1 中映回的旧 byte_range 必须覆盖至少一个 cluster，才能计算 Shift.from 期望并集",
             );
@@ -1339,13 +1338,19 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
                 rects_approx_eq(expected_from, *from, eps),
                 "Shift.from {:?} 必须等于 snap1 旧范围 {:?} 覆盖 cluster 的整段并集 {:?}\
                  （byte_range {:?}），证明第二笔以第一笔布局为 base",
-                from, old_range, expected_from, byte_range
+                from,
+                old_range,
+                expected_from,
+                byte_range
             );
             assert!(
                 rects_approx_eq(expected_to, *to, eps),
                 "Shift.to {:?} 必须等于 snap2 新范围 {:?} 覆盖 cluster 的整段并集 {:?}\
                  （byte_range {:?}）",
-                to, (bs, be), expected_to, byte_range
+                to,
+                (bs, be),
+                expected_to,
+                byte_range
             );
 
             // Shift.new.source.snapshot_id 必须与 snap2 中覆盖该 byte_range 的行快照 id 一致。
@@ -1365,9 +1370,7 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
             );
         }
 
-        println!(
-            "[BEHAVIOR_VERIFY] #919 连续两笔真实编辑提交同一条 canonical revision 链 ok"
-        );
+        println!("[BEHAVIOR_VERIFY] #919 连续两笔真实编辑提交同一条 canonical revision 链 ok");
     });
 }
 

@@ -148,7 +148,10 @@ impl<T: PrefixNum> ChunkedPrefixSum<T> {
     pub fn from_values_with_capacity(values: Vec<T>, chunk_capacity: usize) -> Self {
         let cap = chunk_capacity.max(1);
         let total_len = values.len();
-        let total: T = values.iter().copied().fold(T::default(), |acc, v| acc.add(v));
+        let total: T = values
+            .iter()
+            .copied()
+            .fold(T::default(), |acc, v| acc.add(v));
         let chunks = Self::split_into_chunks(values, cap);
         Self {
             chunks,
@@ -351,7 +354,10 @@ impl<T: PrefixNum> ChunkedPrefixSum<T> {
     pub fn rebuild(&mut self, values: Vec<T>) {
         let cap = self.chunk_capacity;
         let total_len = values.len();
-        let total: T = values.iter().copied().fold(T::default(), |acc, v| acc.add(v));
+        let total: T = values
+            .iter()
+            .copied()
+            .fold(T::default(), |acc, v| acc.add(v));
         let chunks = Self::split_into_chunks(values, cap);
         self.chunks = chunks;
         self.total_len = total_len;
@@ -811,9 +817,8 @@ impl ChunkedSlotMap {
         // 保存旧受影响块 [sc, ec] 的 BlockId，供增量删除 block_id_to_index 映射。
         // Issue #901 第三十八轮缺口2: next_block_id 单调增长且从不复用，旧 BlockId 必须
         // 显式 remove，否则 block_id_to_index 会累积已删除块的 key 导致 Map 随编辑次数增长。
-        let old_affected_block_ids: Vec<BlockId> = (sc..=ec)
-            .map(|i| self.blocks[i].block_id)
-            .collect();
+        let old_affected_block_ids: Vec<BlockId> =
+            (sc..=ec).map(|i| self.blocks[i].block_id).collect();
 
         // 结构共享 splice：make_mut blocks（refcount==1 原地改，refcount>1 O(块数) 浅拷），
         // 替换受影响块。未改块（前缀块 [0,sc) 和后缀块 [ec+1, len)）Arc::clone 共享。
@@ -951,9 +956,7 @@ impl ChunkedSlotMap {
     }
 
     /// 计算 稳定叶块标识 → blocks Vec 索引映射。
-    fn compute_block_id_to_index(
-        blocks: &[std::sync::Arc<SlotBlock>],
-    ) -> HashMap<BlockId, usize> {
+    fn compute_block_id_to_index(blocks: &[std::sync::Arc<SlotBlock>]) -> HashMap<BlockId, usize> {
         let mut map = HashMap::with_capacity(blocks.len());
         for (i, b) in blocks.iter().enumerate() {
             map.insert(b.block_id, i);
@@ -976,10 +979,7 @@ impl ChunkedSlotMap {
     }
 
     /// 将 Vec 分成多个块（返回裸 SlotBlock，供 from_ids 等包装 Arc）。
-    fn split_into_blocks(
-        ids: Vec<ParagraphId>,
-        capacity: usize,
-    ) -> Vec<SlotBlock> {
+    fn split_into_blocks(ids: Vec<ParagraphId>, capacity: usize) -> Vec<SlotBlock> {
         if ids.is_empty() {
             return Vec::new();
         }
@@ -1330,25 +1330,16 @@ impl<T: Clone> PersistentChunkedVec<T> {
 
         // 边界合并：受影响块末尾与完整后缀块合并。
         // 循环直到末块 ≥ B/2 或无更多完整后缀块。
-        Self::merge_suffix_boundaries(
-            &mut affected_chunks,
-            old_chunks,
-            &mut suffix_start,
-            cap,
-        );
+        Self::merge_suffix_boundaries(&mut affected_chunks, old_chunks, &mut suffix_start, cap);
 
         // 边界合并：受影响块首部与完整前缀块合并。
         // 循环直到首块 ≥ B/2 或无更多完整前缀块。
-        Self::merge_prefix_boundaries(
-            &mut affected_chunks,
-            old_chunks,
-            &mut prefix_end,
-            cap,
-        );
+        Self::merge_prefix_boundaries(&mut affected_chunks, old_chunks, &mut prefix_end, cap);
 
         // 拼接：完整前缀块 + 受影响块 + 完整后缀块。
-        let mut new_chunks: Vec<Arc<Vec<T>>> =
-            Vec::with_capacity(prefix_end + affected_chunks.len() + (old_chunks.len() - suffix_start));
+        let mut new_chunks: Vec<Arc<Vec<T>>> = Vec::with_capacity(
+            prefix_end + affected_chunks.len() + (old_chunks.len() - suffix_start),
+        );
         for i in 0..prefix_end {
             new_chunks.push(Arc::clone(&old_chunks[i]));
         }
@@ -1446,9 +1437,7 @@ impl<T: Clone> PersistentChunkedVec<T> {
     ) {
         let half_cap = (capacity / 2).max(1);
         loop {
-            let need_merge = affected
-                .last()
-                .map_or(false, |c| c.len() < half_cap);
+            let need_merge = affected.last().map_or(false, |c| c.len() < half_cap);
             if !need_merge || *suffix_start >= old_chunks.len() {
                 break;
             }
@@ -1460,8 +1449,7 @@ impl<T: Clone> PersistentChunkedVec<T> {
             };
             // 合并末块与第一个完整后缀块。
             let suffix_chunk = &old_chunks[*suffix_start];
-            let mut merged: Vec<T> =
-                Vec::with_capacity(last_owned.len() + suffix_chunk.len());
+            let mut merged: Vec<T> = Vec::with_capacity(last_owned.len() + suffix_chunk.len());
             merged.extend(last_owned);
             merged.extend(suffix_chunk.iter().cloned());
             *suffix_start += 1;
@@ -1483,9 +1471,7 @@ impl<T: Clone> PersistentChunkedVec<T> {
     ) {
         let half_cap = (capacity / 2).max(1);
         loop {
-            let need_merge = affected
-                .first()
-                .map_or(false, |c| c.len() < half_cap);
+            let need_merge = affected.first().map_or(false, |c| c.len() < half_cap);
             if !need_merge || *prefix_end == 0 {
                 break;
             }
@@ -1497,8 +1483,7 @@ impl<T: Clone> PersistentChunkedVec<T> {
             };
             // 合并最后一个完整前缀块与首块。
             let prefix_chunk = &old_chunks[*prefix_end - 1];
-            let mut merged: Vec<T> =
-                Vec::with_capacity(prefix_chunk.len() + first_owned.len());
+            let mut merged: Vec<T> = Vec::with_capacity(prefix_chunk.len() + first_owned.len());
             merged.extend(prefix_chunk.iter().cloned());
             merged.extend(first_owned);
             *prefix_end -= 1;
@@ -1585,14 +1570,16 @@ impl<T: Clone> std::ops::Index<usize> for PersistentChunkedVec<T> {
     type Output = T;
     #[inline]
     fn index(&self, index: usize) -> &T {
-        self.get(index).expect("PersistentChunkedVec index out of bounds")
+        self.get(index)
+            .expect("PersistentChunkedVec index out of bounds")
     }
 }
 
 impl<T: Clone> std::ops::IndexMut<usize> for PersistentChunkedVec<T> {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut T {
-        self.get_mut(index).expect("PersistentChunkedVec index out of bounds")
+        self.get_mut(index)
+            .expect("PersistentChunkedVec index out of bounds")
     }
 }
 
@@ -1829,7 +1816,10 @@ mod tests {
         assert_eq!(cps.get(6), Some(8.0));
         // 前缀和验证
         assert_eq!(cps.prefix_sum(2), 3.0); // 1 + 2
-        assert_eq!(cps.prefix_sum(7), 1.0 + 2.0 + 100.0 + 200.0 + 300.0 + 7.0 + 8.0);
+        assert_eq!(
+            cps.prefix_sum(7),
+            1.0 + 2.0 + 100.0 + 200.0 + 300.0 + 7.0 + 8.0
+        );
     }
 
     // ── ChunkedPrefixSum<usize> 测试 ──
@@ -2017,7 +2007,7 @@ mod tests {
         assert_eq!(sm.slot(ParagraphId::from_u64(500)), None); // 500 在删除范围 [100,500) 内
         assert_eq!(sm.slot(ParagraphId::from_u64(501)), Some(101)); // 后缀从 501 开始
         assert_eq!(sm.slot(ParagraphId::from_u64(600)), Some(200)); // 600 在 slot 200
-        // 验证 to_hash_map
+                                                                    // 验证 to_hash_map
         let map = sm.to_hash_map();
         assert_eq!(map.len(), 201);
         assert_eq!(map.get(&id_new), Some(&100));
@@ -2225,10 +2215,7 @@ mod tests {
     #[test]
     fn pcv_splice_preserves_suffix_sharing() {
         // splice 后前缀/后缀块应通过 Arc 共享，不深拷。
-        let v = PersistentChunkedVec::from_vec_with_capacity(
-            (0..100).collect::<Vec<_>>(),
-            10,
-        );
+        let v = PersistentChunkedVec::from_vec_with_capacity((0..100).collect::<Vec<_>>(), 10);
         let mut v2 = v.clone();
         // splice 中间一小段：删除 [40,42)（2 个元素），插入 1 个。
         // 净变化 -1，后缀左移 1。
@@ -2308,7 +2295,8 @@ mod tests {
     #[test]
     fn pcv_truncate_then_access() {
         // truncate 后继续 get/get_mut/index 应正确。
-        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5, 6, 7, 8, 9], 3);
+        let mut v =
+            PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5, 6, 7, 8, 9], 3);
         v.truncate(6); // 块边界：保留 [1,2,3],[4,5,6]
         assert_eq!(v.to_vec(), vec![1, 2, 3, 4, 5, 6]);
         assert_eq!(v[5], 6);
@@ -2322,10 +2310,7 @@ mod tests {
     #[test]
     fn pcv_truncate_block_boundary_multi() {
         // 多块边界截断：容量 2，10 个元素 5 块。
-        let mut v = PersistentChunkedVec::from_vec_with_capacity(
-            (1..=10).collect::<Vec<_>>(),
-            2,
-        );
+        let mut v = PersistentChunkedVec::from_vec_with_capacity((1..=10).collect::<Vec<_>>(), 2);
         v.truncate(6); // 块边界：保留前 3 块 [1,2],[3,4],[5,6]
         assert_eq!(v.to_vec(), vec![1, 2, 3, 4, 5, 6]);
         assert_eq!(v.len(), 6);
@@ -2406,8 +2391,7 @@ mod tests {
             ],
         );
         // 第二次 splice：在头部插入 5 个。
-        let new_head: Vec<ParagraphId> =
-            (2000..2005).map(ParagraphId::from_u64).collect();
+        let new_head: Vec<ParagraphId> = (2000..2005).map(ParagraphId::from_u64).collect();
         sm.splice(0, 0, new_head.clone());
         // 第三次 splice：删除尾部 10 个。
         sm.splice(sm.len().saturating_sub(10), sm.len(), Vec::new());

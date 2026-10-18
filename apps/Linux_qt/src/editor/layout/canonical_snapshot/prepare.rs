@@ -187,8 +187,8 @@ pub fn prepare_document_visual_snapshot_scoped(
 // 实际组装逻辑（整篇 impl / 从 VisualLine 组装 / 局部受影响段落 / 增量排版）移到 full.rs。
 mod full;
 
-use full::prepare_document_visual_snapshot_impl;
 pub use full::prepare_affected_paragraphs_visual_snapshot;
+use full::prepare_document_visual_snapshot_impl;
 
 /// Issue #901: 增量排版入口 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
 ///

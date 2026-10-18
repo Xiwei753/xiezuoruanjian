@@ -310,8 +310,7 @@ mod tests {
         );
         // 缺失时回退默认值。
         assert_eq!(
-            desktop_settings_from_legacy(&serde_json::json!({}))
-                .desktop_tool_pane_width,
+            desktop_settings_from_legacy(&serde_json::json!({})).desktop_tool_pane_width,
             DesktopSettings::default().desktop_tool_pane_width
         );
     }

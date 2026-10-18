@@ -1102,16 +1102,16 @@ mod tests {
         assert!(idx.update_paragraph_length(2, 5, 5));
         assert_eq!(idx.paragraph_byte_start(3), 35); // 10 + 20 + 5
         assert_eq!(idx.total_byte_length(), 75); // 10 + 20 + 5 + 40
-        // 缩短段落 0：10 -> 1
+                                                 // 缩短段落 0：10 -> 1
         assert!(idx.update_paragraph_length(0, 1, 1));
         assert_eq!(idx.paragraph_byte_start(1), 1);
         assert_eq!(idx.paragraph_byte_start(3), 26); // 1 + 20 + 5
         assert_eq!(idx.total_byte_length(), 66); // 1 + 20 + 5 + 40
-        // 缩短段落 3：40 -> 3
+                                                 // 缩短段落 3：40 -> 3
         assert!(idx.update_paragraph_length(3, 3, 3));
         assert_eq!(idx.paragraph_byte_start(3), 26);
         assert_eq!(idx.total_byte_length(), 29); // 1 + 20 + 5 + 3
-        // 前缀和全量校验
+                                                 // 前缀和全量校验
         assert_eq!(idx.paragraph_byte_start(0), 0);
         assert_eq!(idx.paragraph_byte_start(1), 1);
         assert_eq!(idx.paragraph_byte_start(2), 21); // 1 + 20

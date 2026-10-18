@@ -117,8 +117,7 @@ fn has_cursor_owner_epoch_guard(window: &str) -> bool {
 fn issue705_repro_a_find_cursor_transaction_unconditionally_claims_cursor() {
     // Issue #826/#901: cursor_motion.rs 已随旧动画架构删除。光标与正文动画彻底解耦，
     // 不再有 find_cursor_transaction_for_target 抢回光标所有权的路径。
-    let motion_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
+    let motion_path = linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
     if !motion_path.exists() {
         println!("[BUGFIX_REPRO_TRACE] A cursor_motion.rs 已删除，光标与正文解耦");
         return;
@@ -171,8 +170,7 @@ fn issue705_repro_a_find_cursor_transaction_unconditionally_claims_cursor() {
 fn issue705_repro_b_compute_coordinated_cursor_ignores_pointer_takeover() {
     // Issue #826/#901: cursor_motion.rs 已随旧动画架构删除。光标与正文动画彻底解耦，
     // 不再有 compute_coordinated_cursor_position 路径。
-    let motion_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
+    let motion_path = linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
     if !motion_path.exists() {
         println!("[BUGFIX_REPRO_TRACE] B cursor_motion.rs 已删除，光标与正文解耦");
         return;
@@ -232,8 +230,7 @@ fn issue705_repro_b_compute_coordinated_cursor_ignores_pointer_takeover() {
 fn issue705_repro_c_build_render_plan_overwrites_cursor_without_ownership_guard() {
     // Issue #826/#901: render_plan_builder.rs 已随旧动画架构删除。build_render_plan_full
     // 现在是 pipeline 上的方法，不再有 compute_coordinated_cursor_position 覆盖路径。
-    let rpb_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let rpb_path = linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
     if !rpb_path.exists() {
         println!("[BUGFIX_REPRO_TRACE] C render_plan_builder.rs 已删除，光标与正文解耦");
         return;
@@ -315,8 +312,7 @@ fn issue705_repro_e_no_cursor_owner_epoch_mechanism_exists_anywhere() {
     // Issue #826/#901: cursor_owner_epoch 机制已随光标与正文动画彻底解耦而删除。
     // 旧缺陷的根本前提——正文事务驱动 caret progress——已不存在。
     // cursor_motion.rs 已删除，光标由独立的 CursorController timeline 推进。
-    let motion_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
+    let motion_path = linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
     assert!(
         !motion_path.exists(),
         "cursor_motion.rs 已删除，旧协同光标采样链不得复活"

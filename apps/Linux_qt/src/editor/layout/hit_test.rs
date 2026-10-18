@@ -174,8 +174,8 @@ fn find_caret_line_in_layout_snapshot(
         cache_slot: 0,
         logical_slot: 0,
         paragraph_id: super::types::ParagraphId::INVALID,
-                layout_epoch: 0,
-                has_qt_layout: false,
+        layout_epoch: 0,
+        has_qt_layout: false,
     };
 
     if snapshot.lines.is_empty() {
@@ -183,7 +183,9 @@ fn find_caret_line_in_layout_snapshot(
     }
 
     if !snapshot.paragraph_offset_index.is_empty() {
-        let para_slot = snapshot.paragraph_offset_index.byte_to_paragraph(cursor_byte);
+        let para_slot = snapshot
+            .paragraph_offset_index
+            .byte_to_paragraph(cursor_byte);
         // 物化 para_slot-1 和 para_slot 两个段的行（处理段边界光标）
         let start_slot = para_slot.saturating_sub(1);
         let end_slot = para_slot + 1;

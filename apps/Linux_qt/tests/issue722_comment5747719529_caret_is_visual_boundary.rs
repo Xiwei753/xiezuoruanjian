@@ -71,8 +71,7 @@ fn repro_a_last_scroll_y_field_never_written_back_breaks_scroll_animation() {
     let cursor_ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
     let rendering = read_src("src/sujian_editor_item/rendering.rs");
     // Issue #826/#901: render_plan_builder.rs 已删除。
-    let rpb_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let rpb_path = linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
     let coord = if rpb_path.exists() {
         read_src("src/sujian_editor_item/animation/render_plan_builder.rs")
     } else {
@@ -141,8 +140,7 @@ fn repro_a_last_scroll_y_field_never_written_back_breaks_scroll_animation() {
 #[test]
 fn repro_b_build_cursor_plan_hard_snap_includes_scroll_changed() {
     // Issue #826/#901: render_plan_builder.rs 已删除。
-    let rpb_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let rpb_path = linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
     if !rpb_path.exists() {
         println!("[BUGFIX_REPRO_TRACE] B render_plan_builder.rs 已删除，scroll_changed 不复存在");
         return;

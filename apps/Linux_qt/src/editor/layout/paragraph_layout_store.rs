@@ -581,8 +581,11 @@ impl ParagraphLayoutStore {
 
         // 旧段的 text_hash（不含 hard_break — rebuild_from_text 的 Id 继承
         // 只看内容是否相同，hard_break 不影响排版结果/cache_key）
-        let old_text_hashes: Vec<u64> =
-            self.entries.iter().map(|e| e.cache_key.text_hash()).collect();
+        let old_text_hashes: Vec<u64> = self
+            .entries
+            .iter()
+            .map(|e| e.cache_key.text_hash())
+            .collect();
 
         // 前缀匹配：从前往后找 text_hash 相同的段
         let mut prefix_common = 0usize;
@@ -693,7 +696,16 @@ impl ParagraphLayoutStore {
                 }
             } else {
                 // 中间段：分配新 Id
-                (self.allocate_id(), 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new(), false)
+                (
+                    self.allocate_id(),
+                    0u64,
+                    -1,
+                    0u64,
+                    0.0f64,
+                    0usize,
+                    Vec::new(),
+                    false,
+                )
             };
 
             new_entries.push(ParagraphLayoutEntry {
@@ -897,14 +909,18 @@ impl ParagraphLayoutStore {
         //    插入新段 ID（从 entries[old_splice_start..new_layout_end] 收集），
         //    后缀段 slot 自动平移（O(B + n/B)，B=256），不遍历后缀所有段。
         {
-            let new_ids: Vec<ParagraphId> = self.entries
+            let new_ids: Vec<ParagraphId> = self
+                .entries
                 .iter()
                 .skip(old_splice_start)
                 .take(new_layout_end.saturating_sub(old_splice_start))
                 .map(|e| e.id)
                 .collect();
-            Arc::make_mut(&mut self.id_to_slot_cache)
-                .splice(old_splice_start, old_splice_end, new_ids);
+            Arc::make_mut(&mut self.id_to_slot_cache).splice(
+                old_splice_start,
+                old_splice_end,
+                new_ids,
+            );
         }
 
         // 6. 增量更新 line_count_index。
@@ -931,7 +947,12 @@ impl ParagraphLayoutStore {
                 // qchar 占位：用 byte_len 同值（store 不存 qchar，见字段注释）。
                 new_qchar_lengths.push(byte_len);
             }
-            idx.splice(old_splice_start, old_splice_end, new_byte_lengths, new_qchar_lengths);
+            idx.splice(
+                old_splice_start,
+                old_splice_end,
+                new_byte_lengths,
+                new_qchar_lengths,
+            );
         }
 
         true
@@ -1155,7 +1176,11 @@ impl ParagraphLayoutStore {
             let idx = Arc::make_mut(&mut self.byte_offset_index);
             // 新段 byte_len = after_split.len() + hard_break(默认 false → 0)。
             let new_byte_len = self.entries[index + 1].paragraph_text_len
-                + if self.entries[index + 1].hard_break { 1 } else { 0 };
+                + if self.entries[index + 1].hard_break {
+                    1
+                } else {
+                    0
+                };
             idx.insert(index + 1, new_byte_len, new_byte_len);
             // 原段 byte_len 更新（text 变为 before_split，hard_break 保持原值）。
             let orig_byte_len = self.entries[index].paragraph_text_len
@@ -1227,8 +1252,11 @@ impl ParagraphLayoutStore {
             self.retired_slots.push((old_gen, old_slot, old_epoch));
         }
         if removed_entry.cache_slot >= 0 && removed_entry.layout_generation != 0 {
-            self.retired_slots
-                .push((removed_entry.layout_generation, removed_entry.cache_slot, removed_entry.layout_epoch));
+            self.retired_slots.push((
+                removed_entry.layout_generation,
+                removed_entry.cache_slot,
+                removed_entry.layout_epoch,
+            ));
         }
         // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
         // 被删段在 index+1，原 slot > index+1 的段全部 -1。
@@ -1379,7 +1407,11 @@ impl ParagraphLayoutStore {
         // Issue #901 第三十二轮问题4: 同步插入 byte 偏移前缀索引槽位。
         {
             let byte_len = self.entries[insert_idx].paragraph_text_len
-                + if self.entries[insert_idx].hard_break { 1 } else { 0 };
+                + if self.entries[insert_idx].hard_break {
+                    1
+                } else {
+                    0
+                };
             Arc::make_mut(&mut self.byte_offset_index).insert(insert_idx, byte_len, byte_len);
         }
     }
@@ -1392,8 +1424,11 @@ impl ParagraphLayoutStore {
             // removed 是 owned 值，读取其字段不借用 self，无借用冲突。
             // Issue #901 第二十八轮复核问题3: 携带 epoch 供 release_layout_ref 校验。
             if removed.layout_generation != 0 && removed.cache_slot >= 0 {
-                self.retired_slots
-                    .push((removed.layout_generation, removed.cache_slot, removed.layout_epoch));
+                self.retired_slots.push((
+                    removed.layout_generation,
+                    removed.cache_slot,
+                    removed.layout_epoch,
+                ));
             }
             // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
             self.id_to_slot_cache_remove(removed.id, index);
@@ -1737,8 +1772,7 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十一轮问题2: 先确保 line_count_index 长度匹配段落数。
         // 段落数变化（拆段/合段）时 line_count_index 已在 split/merge 中 insert/remove，
         // 此处 ensure_len 仅在异常情况下补齐。
-        Arc::make_mut(&mut self.line_count_index)
-            .ensure_len(self.entries.len(), 0);
+        Arc::make_mut(&mut self.line_count_index).ensure_len(self.entries.len(), 0);
 
         // Issue #901 第十五轮问题4: 改成以受影响段索引 + 基礎 VisualLine.logical_slot
         // 定位段内行范围。lines 中的行坐标已经是段内相对的（y/byte/qchar 相对于段首），
@@ -1761,10 +1795,8 @@ impl ParagraphLayoutStore {
             // Issue #901 第十五轮问题4: lines 中的行坐标已经是段内相对坐标
             //（y 从段顶 0 起、byte/qchar 相对段首、para_start = 段落编号、id = 段内行索引）。
             // 直接 clone 为 relative_lines，不再二次归零。
-            let relative_lines: Vec<VisualLine> = lines[line_start..line_end]
-                .iter()
-                .cloned()
-                .collect();
+            let relative_lines: Vec<VisualLine> =
+                lines[line_start..line_end].iter().cloned().collect();
 
             // Issue #901 第三十二轮复核缺口2: 先用只读借用读取 entry 的
             // paragraph_text_len / cache_slot，计算 new_slot 和 epoch 后释放借用，
@@ -2007,7 +2039,11 @@ impl ParagraphLayoutStore {
                 return false;
             };
             if entry.layout_generation != 0 && entry.cache_slot >= 0 {
-                Some((entry.layout_generation, entry.cache_slot, entry.layout_epoch))
+                Some((
+                    entry.layout_generation,
+                    entry.cache_slot,
+                    entry.layout_epoch,
+                ))
             } else {
                 None
             }
@@ -2069,7 +2105,13 @@ impl ParagraphLayoutStore {
 
         for (i, line) in lines.iter().enumerate() {
             if line.logical_slot != current_slot {
-                slot_stats.push((current_slot, current_physical_slot, count, height, first_idx));
+                slot_stats.push((
+                    current_slot,
+                    current_physical_slot,
+                    count,
+                    height,
+                    first_idx,
+                ));
                 current_slot = line.logical_slot;
                 current_physical_slot = line.cache_slot;
                 count = 0;
@@ -2079,7 +2121,13 @@ impl ParagraphLayoutStore {
             count += 1;
             height += line.height;
         }
-        slot_stats.push((current_slot, current_physical_slot, count, height, first_idx));
+        slot_stats.push((
+            current_slot,
+            current_physical_slot,
+            count,
+            height,
+            first_idx,
+        ));
 
         // 更新对应段落
         for (slot, physical_slot, line_count, total_height, _line_start) in slot_stats {
@@ -2102,8 +2150,7 @@ impl ParagraphLayoutStore {
                     // Issue #901 第三十二轮复核缺口2: 通过 replace_layout_handle 更新
                     // (layout_generation, cache_slot, layout_epoch)，旧 handle 推入
                     // retired_slots，避免直接覆盖丢失旧 generation 的 Store 初始引用。
-                    let epoch =
-                        super::qt_cache::get_layout_epoch(layout_generation, physical_slot);
+                    let epoch = super::qt_cache::get_layout_epoch(layout_generation, physical_slot);
                     self.replace_layout_handle(idx, layout_generation, physical_slot, epoch);
                 }
                 let entry = &mut self.entries[idx];
@@ -2115,11 +2162,7 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十一轮问题2: 从 entries 全量重建行数索引。
         // 用 entries 的 visual_line_count 作为每段行数，保证 line_count_index
         // 与 entries 同步。后缀段行范围由前缀和自动平移。
-        let counts: Vec<usize> = self
-            .entries
-            .iter()
-            .map(|e| e.visual_line_count)
-            .collect();
+        let counts: Vec<usize> = self.entries.iter().map(|e| e.visual_line_count).collect();
         Arc::make_mut(&mut self.line_count_index).rebuild(counts);
 
         // Issue #901 第二十八轮复核问题2: next_physical_slot 已移除，槽号复用完全由
@@ -2169,7 +2212,11 @@ impl ParagraphLayoutStore {
         let mut newly_retired: Vec<(u64, i32, u64)> = Vec::new();
         for entry in &self.entries {
             if entry.layout_generation != 0 && entry.cache_slot >= 0 {
-                newly_retired.push((entry.layout_generation, entry.cache_slot, entry.layout_epoch));
+                newly_retired.push((
+                    entry.layout_generation,
+                    entry.cache_slot,
+                    entry.layout_epoch,
+                ));
             }
         }
         self.retired_slots.extend(newly_retired);
@@ -2323,11 +2370,7 @@ impl ParagraphLayoutStore {
     /// 设置段落 `index` 的段内相对视觉行。
     ///
     /// 排版完成后回填。同时更新 `visual_line_count` 和 `height`。
-    pub fn set_relative_lines(
-        &mut self,
-        index: usize,
-        lines: Vec<VisualLine>,
-    ) -> bool {
+    pub fn set_relative_lines(&mut self, index: usize, lines: Vec<VisualLine>) -> bool {
         let Some(entry) = self.entries.get_mut(index) else {
             return false;
         };
@@ -2383,9 +2426,8 @@ fn find_line_range_by_logical_slot(
         return None;
     }
     // 二分查找段落后第一个 logical_slot != target 的行
-    let end = lines[start..]
-        .partition_point(|vl| (vl.logical_slot as usize) == logical_slot)
-        + start;
+    let end =
+        lines[start..].partition_point(|vl| (vl.logical_slot as usize) == logical_slot) + start;
     Some((start, end))
 }
 
@@ -2422,18 +2464,7 @@ mod tests {
         let original_id = store.paragraph_id_at(0).unwrap();
 
         let (orig_idx, new_idx) = store
-            .split_paragraph(
-                0,
-                5,
-                16.0,
-                "Sans",
-                1.2,
-                0.0,
-                0.0,
-                600.0,
-                "hello",
-                "world",
-            )
+            .split_paragraph(0, 5, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0, "hello", "world")
             .unwrap();
 
         assert_eq!(orig_idx, 0);
@@ -2717,8 +2748,7 @@ mod tests {
     #[test]
     fn affected_paragraphs_edit_second_para() {
         // 编辑第二段内容，第一段不变
-        let affected =
-            ParagraphLayoutStore::affected_paragraphs("aaa\nbbb\nccc", "aaa\nBBB\nccc");
+        let affected = ParagraphLayoutStore::affected_paragraphs("aaa\nbbb\nccc", "aaa\nBBB\nccc");
         // 从差异段（index 1）起所有后续段
         assert_eq!(affected, vec![1, 2]);
     }

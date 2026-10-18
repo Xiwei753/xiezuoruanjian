@@ -6,8 +6,8 @@
 // - 转换入口：`sujian_editor_item` 中的 `utf8_to_utf16` / `utf16_to_utf8`
 //   在调用本模块函数前完成坐标转换
 
-use std::sync::Arc;
 use std::borrow::Cow;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaretAffinity {
@@ -230,8 +230,12 @@ impl LayoutSnapshot {
             text_indent: 0.0,
             padding: 0.0,
             lines: Arc::new(super::chunked_vec::PersistentChunkedVec::new()),
-            paragraph_offset_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphOffsetIndex::new()),
-            height_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphHeightIndex::new()),
+            paragraph_offset_index: std::sync::Arc::new(
+                super::paragraph_height_index::ParagraphOffsetIndex::new(),
+            ),
+            height_index: std::sync::Arc::new(
+                super::paragraph_height_index::ParagraphHeightIndex::new(),
+            ),
             layout_generation: 0,
             paragraph_id_to_slot: std::sync::Arc::new(super::chunked_vec::ChunkedSlotMap::new()),
             paragraph_line_count_index: std::sync::Arc::new(
@@ -262,8 +266,12 @@ impl LayoutSnapshot {
         } else {
             line.logical_slot as usize
         };
-        let para_byte_start = self.paragraph_offset_index.paragraph_byte_start(logical_slot);
-        let para_qchar_start = self.paragraph_offset_index.paragraph_qchar_start(logical_slot);
+        let para_byte_start = self
+            .paragraph_offset_index
+            .paragraph_byte_start(logical_slot);
+        let para_qchar_start = self
+            .paragraph_offset_index
+            .paragraph_qchar_start(logical_slot);
         let para_top_y = f64::from(self.padding) + self.height_index.paragraph_top_y(logical_slot);
         VisualLine {
             byte_start: line.byte_start + para_byte_start,
@@ -312,17 +320,36 @@ impl LayoutSnapshot {
     pub fn resolve_line(&self, idx: usize) -> VisualLine {
         match self.lines.get(idx) {
             Some(vl) => self.materialize_line(vl, idx),
-            None => return VisualLine {
-                id: 0, byte_start: 0, byte_end: 0, qchar_start: 0, qchar_end: 0,
-                hard_break: true, x: 0.0, y: 0.0, width: 0.0,
-                height: self.font_size as f64 * self.line_spacing as f64,
-                para_text: String::new(), para_start: 0, qtextline_idx: 0,
-                para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 0.0,
-                line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
-                qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0, logical_slot: 0,
-                paragraph_id: ParagraphId::INVALID, layout_epoch: 0,
-                has_qt_layout: false,
-            },
+            None => {
+                return VisualLine {
+                    id: 0,
+                    byte_start: 0,
+                    byte_end: 0,
+                    qchar_start: 0,
+                    qchar_end: 0,
+                    hard_break: true,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: self.font_size as f64 * self.line_spacing as f64,
+                    para_text: String::new(),
+                    para_start: 0,
+                    qtextline_idx: 0,
+                    para_qchar_start: 0,
+                    para_qchar_end: 0,
+                    line_wrap_width: 0.0,
+                    line_indent_x: 0.0,
+                    para_indent: 0.0,
+                    x_end_trailing: 0.0,
+                    qt_ascent: 0.0,
+                    qt_descent: 0.0,
+                    cache_slot: 0,
+                    logical_slot: 0,
+                    paragraph_id: ParagraphId::INVALID,
+                    layout_epoch: 0,
+                    has_qt_layout: false,
+                }
+            }
         }
     }
 
@@ -384,8 +411,9 @@ impl LayoutSnapshot {
         let visible_bottom = scroll_y + viewport_h + margin;
 
         if !self.height_index.is_empty() {
-            let (first_para, last_para_excl) =
-                self.height_index.paragraphs_in_y_range(visible_top, visible_bottom);
+            let (first_para, last_para_excl) = self
+                .height_index
+                .paragraphs_in_y_range(visible_top, visible_bottom);
             if first_para < last_para_excl {
                 // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 查行范围，
                 // 替换 raw partition_point(cache_slot)。
@@ -416,7 +444,8 @@ impl LayoutSnapshot {
         // 替换 raw partition_point(cache_slot)。
         // para_slot 是 logical_slot（文档次序），先通过 paragraph_id_to_slot
         // 反查 ParagraphId，再从 paragraph_id_to_line_range 查行范围。
-        let (start_idx, end_idx) = compute_line_range_from_logical_slots(self, para_slot, para_slot + 1);
+        let (start_idx, end_idx) =
+            compute_line_range_from_logical_slots(self, para_slot, para_slot + 1);
         self.resolve_line_range(start_idx, end_idx)
     }
 

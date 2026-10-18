@@ -176,8 +176,12 @@ impl CanonicalDocumentVisualSnapshot {
         } else {
             line.logical_slot as usize
         };
-        let para_byte_start = self.paragraph_offset_index.paragraph_byte_start(logical_slot);
-        let para_qchar_start = self.paragraph_offset_index.paragraph_qchar_start(logical_slot);
+        let para_byte_start = self
+            .paragraph_offset_index
+            .paragraph_byte_start(logical_slot);
+        let para_qchar_start = self
+            .paragraph_offset_index
+            .paragraph_qchar_start(logical_slot);
         let para_top_y = self.padding + self.height_index.paragraph_top_y(logical_slot);
         VisualLine {
             byte_start: line.byte_start + para_byte_start,
@@ -222,13 +226,29 @@ impl CanonicalDocumentVisualSnapshot {
         match self.visual_lines.get(idx) {
             Some(vl) => self.materialize_line(vl, idx),
             None => VisualLine {
-                id: 0, byte_start: 0, byte_end: 0, qchar_start: 0, qchar_end: 0,
-                hard_break: true, x: 0.0, y: 0.0, width: 0.0,
+                id: 0,
+                byte_start: 0,
+                byte_end: 0,
+                qchar_start: 0,
+                qchar_end: 0,
+                hard_break: true,
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
                 height: self.font_size * self.line_spacing,
-                para_text: String::new(), para_start: 0, qtextline_idx: 0,
-                para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 0.0,
-                line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
-                qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0, logical_slot: 0,
+                para_text: String::new(),
+                para_start: 0,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 0,
+                line_wrap_width: 0.0,
+                line_indent_x: 0.0,
+                para_indent: 0.0,
+                x_end_trailing: 0.0,
+                qt_ascent: 0.0,
+                qt_descent: 0.0,
+                cache_slot: 0,
+                logical_slot: 0,
                 paragraph_id: super::types::ParagraphId::INVALID,
                 layout_epoch: 0,
                 has_qt_layout: false,
@@ -285,11 +305,7 @@ impl CanonicalDocumentVisualSnapshot {
     /// 消费方需自行跳过视口外的行（与原 `resolved_visual_lines` 消费方一致）。
     ///
     /// 无 `height_index` 时退化为物化所有行（与 `resolved_visual_lines` 行为一致）。
-    pub fn resolve_viewport_visual_lines(
-        &self,
-        scroll_y: f64,
-        viewport_h: f64,
-    ) -> Vec<VisualLine> {
+    pub fn resolve_viewport_visual_lines(&self, scroll_y: f64, viewport_h: f64) -> Vec<VisualLine> {
         if self.visual_lines.is_empty() {
             return Vec::new();
         }
@@ -298,13 +314,17 @@ impl CanonicalDocumentVisualSnapshot {
         let visible_bottom = scroll_y + viewport_h + margin;
 
         if !self.height_index.is_empty() {
-            let (first_para, last_para_excl) =
-                self.height_index.paragraphs_in_y_range(visible_top, visible_bottom);
+            let (first_para, last_para_excl) = self
+                .height_index
+                .paragraphs_in_y_range(visible_top, visible_bottom);
             if first_para < last_para_excl {
                 // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 查行范围，
                 // 替换 raw partition_point(cache_slot)。
-                let (start_idx, end_idx) =
-                    compute_line_range_from_logical_slots_canonical(self, first_para, last_para_excl);
+                let (start_idx, end_idx) = compute_line_range_from_logical_slots_canonical(
+                    self,
+                    first_para,
+                    last_para_excl,
+                );
                 return self.resolve_visual_line_range(start_idx, end_idx);
             }
             return Vec::new();
@@ -386,11 +406,7 @@ impl CanonicalDocumentVisualSnapshot {
     /// 用 `paragraph_offset_index.byte_to_paragraph` O(log n) 定位段落，
     /// 只物化该段和前一段的视觉行（处理段边界光标），不遍历全章。
     /// `paragraph_offset_index` 为空时退化为全章物化。
-    fn find_caret_line(
-        &self,
-        cursor_byte: usize,
-        affinity: CaretAffinity,
-    ) -> VisualLine {
+    fn find_caret_line(&self, cursor_byte: usize, affinity: CaretAffinity) -> VisualLine {
         let fallback = || VisualLine {
             id: 0,
             byte_start: 0,
@@ -416,8 +432,8 @@ impl CanonicalDocumentVisualSnapshot {
             cache_slot: 0,
             logical_slot: 0,
             paragraph_id: super::types::ParagraphId::INVALID,
-                layout_epoch: 0,
-                has_qt_layout: false,
+            layout_epoch: 0,
+            has_qt_layout: false,
         };
 
         if self.visual_lines.is_empty() {
@@ -605,8 +621,12 @@ impl CanonicalDocumentVisualSnapshot {
             lines: Arc::clone(&self.visual_lines),
             // Issue #901 第十四轮问题1: 段落偏移和高度索引。
             // Issue #901 第二十一轮问题5: Arc 共享偏移索引。
-            paragraph_offset_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphOffsetIndex::new()),
-            height_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphHeightIndex::new()),
+            paragraph_offset_index: std::sync::Arc::new(
+                super::paragraph_height_index::ParagraphOffsetIndex::new(),
+            ),
+            height_index: std::sync::Arc::new(
+                super::paragraph_height_index::ParagraphHeightIndex::new(),
+            ),
             // Issue #658 评论 5620035970 问题 2: 动画路径不直接渲染此 snapshot，
             // generation 填 0 表示不用于 rebuild_text_node_from_paragraphs。
             layout_generation: 0,
@@ -615,9 +635,7 @@ impl CanonicalDocumentVisualSnapshot {
             // Issue #901 第二十一轮问题4: Arc::clone 共享持久映射，O(1)。
             paragraph_id_to_slot: std::sync::Arc::clone(&self.paragraph_id_to_slot),
             // Issue #901 第二十二轮问题4: Arc::clone 共享，O(1)。
-            paragraph_line_count_index: std::sync::Arc::clone(
-                &self.paragraph_line_count_index,
-            ),
+            paragraph_line_count_index: std::sync::Arc::clone(&self.paragraph_line_count_index),
         }
     }
 }
@@ -633,10 +651,9 @@ mod ffi;
 mod prepare;
 
 pub use prepare::{
-    inject_animation_visuals_into_snapshot,
-    prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
-    prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
-    prepare_incremental_visual_snapshot,
+    inject_animation_visuals_into_snapshot, prepare_affected_paragraphs_visual_snapshot,
+    prepare_animation_visuals_from_layout, prepare_document_visual_snapshot,
+    prepare_document_visual_snapshot_scoped, prepare_incremental_visual_snapshot,
 };
 // Issue #810 评论 5932233052 问题1: AnimationRasterVisual 定义在本模块（pub struct），
 // 外部通过 canonical_snapshot::AnimationRasterVisual 访问，无需额外 re-export。

@@ -133,9 +133,15 @@ impl SliceMotion {
     /// 该片段的 shaping 指纹（用于连续编辑接续时确认同一份字形）。
     fn shaping_identity(&self) -> &ShapingIdentity {
         match self {
-            SliceMotion::Reveal { shaping_identity, .. } => shaping_identity,
-            SliceMotion::Conceal { shaping_identity, .. } => shaping_identity,
-            SliceMotion::Shift { shaping_identity, .. } => shaping_identity,
+            SliceMotion::Reveal {
+                shaping_identity, ..
+            } => shaping_identity,
+            SliceMotion::Conceal {
+                shaping_identity, ..
+            } => shaping_identity,
+            SliceMotion::Shift {
+                shaping_identity, ..
+            } => shaping_identity,
         }
     }
 
@@ -363,19 +369,16 @@ impl TextMotion {
         }
         // Issue #919 复核 2：从 display_patches 直接确定真正内容变更的稳定 ParagraphId
         // 集合（旧/新版分别找，不把 layout_spans 扩展取到的未改后续行算成内容已改）。
-        let content_changed_ids =
-            content_changed_paragraph_ids(edit, old_layout, new_layout);
+        let content_changed_ids = content_changed_paragraph_ids(edit, old_layout, new_layout);
         // collect_paragraph_moves 只输出未变内容、纯整体移动的段落。
-        let paragraph_moves = collect_paragraph_moves(old_layout, new_layout, &viewport, &affected_ids)
-            .into_iter()
-            .filter(|m| !content_changed_ids.contains(&m.paragraph_id))
-            .collect::<Vec<_>>();
+        let paragraph_moves =
+            collect_paragraph_moves(old_layout, new_layout, &viewport, &affected_ids)
+                .into_iter()
+                .filter(|m| !content_changed_ids.contains(&m.paragraph_id))
+                .collect::<Vec<_>>();
         // moved_paragraphs 直接取最终的 paragraph_moves，不再过滤一份、渲染另一份。
         // 同一段落只能由一种位移路径接管。
-        let moved_paragraphs: Vec<u64> = paragraph_moves
-            .iter()
-            .map(|m| m.paragraph_id)
-            .collect();
+        let moved_paragraphs: Vec<u64> = paragraph_moves.iter().map(|m| m.paragraph_id).collect();
 
         let mut slices: Vec<SliceMotion> = Vec::new();
         let mut consumed_old: Vec<bool> = vec![false; old_spans.len()];
@@ -405,7 +408,8 @@ impl TextMotion {
                     .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Reveal));
                 let start_clip = match last_reveal {
                     Some(ds)
-                        if ds.shaping_identity
+                        if ds
+                            .shaping_identity
                             .is_same_shaping(&new_span.shaping_identity) =>
                     {
                         // 同一字形：连续输入同一位置，从上一帧 mask clip 继续吐。
@@ -448,16 +452,22 @@ impl TextMotion {
             // 复核 2：同 byte_range 可能并存 Reveal+Conceal，先查 Reveal 再查 Shift。
             let last_vec = last_drawn_map.get(&old_byte_range);
             // 先查未完成 Reveal（连续输入同一位置继续吐）
-            let last_reveal = last_vec
-                .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Reveal).copied());
+            let last_reveal = last_vec.and_then(|v| {
+                v.iter()
+                    .find(|ds| ds.motion_kind == MotionKind::Reveal)
+                    .copied()
+            });
             if let Some(last) = last_reveal {
                 // Issue #919 复核 3：必须核对 shaping_identity，不同字形不能继承。
-                if last.shaping_identity.is_same_shaping(&new_span.shaping_identity)
+                if last
+                    .shaping_identity
+                    .is_same_shaping(&new_span.shaping_identity)
                     && last.visible_width < new_span.slice.rect.w - 0.01
                 {
                     // 上一笔还在吐同一字形，本笔继续吐到满宽。
-                    if let Some(idx) =
-                        old_spans.iter().position(|s| s.byte_range == old_byte_range)
+                    if let Some(idx) = old_spans
+                        .iter()
+                        .position(|s| s.byte_range == old_byte_range)
                     {
                         consumed_old[idx] = true;
                     }
@@ -497,8 +507,7 @@ impl TextMotion {
                     v.iter()
                         .find(|ds| {
                             ds.motion_kind == MotionKind::Shift
-                                && ds.slice.source.snapshot_id
-                                    == old_span.slice.source.snapshot_id
+                                && ds.slice.source.snapshot_id == old_span.slice.source.snapshot_id
                                 && uv_eq(
                                     &ds.slice.source.source_uv,
                                     &old_span.slice.source.source_uv,
@@ -511,7 +520,11 @@ impl TextMotion {
             };
             let last_merged = if last_shift_exact.is_none() && old_span_match.is_some() {
                 let idx = old_span_match.unwrap().0;
-                find_merged_shift(&last_drawn_map, old_byte_range, &old_spans[idx].slice.source)
+                find_merged_shift(
+                    &last_drawn_map,
+                    old_byte_range,
+                    &old_spans[idx].slice.source,
+                )
             } else {
                 None
             };
@@ -741,10 +754,7 @@ impl TextMotion {
                     continue;
                 }
                 // 已被本轮相同真实旧视觉源接管的跳过（第二遍用 source identity 继承）。
-                if old_spans
-                    .iter()
-                    .any(|s| s.slice.source == ds.slice.source)
-                {
+                if old_spans.iter().any(|s| s.slice.source == ds.slice.source) {
                     continue;
                 }
                 // 同 source 已被本计划 Conceal 接管的跳过。
@@ -1664,7 +1674,10 @@ mod tests {
         let overlay = first.overlays.first().expect("conceal overlay");
         assert_eq!((overlay.x, overlay.w), (40.0, 20.0)); // target=40..60
         assert_eq!((overlay.clip_rect.x, overlay.clip_rect.w), (50.0, 8.0)); // mask=50..58
-        assert_eq!(intersect_width(overlay.x, overlay.w, &overlay.clip_rect), 8.0);
+        assert_eq!(
+            intersect_width(overlay.x, overlay.w, &overlay.clip_rect),
+            8.0
+        );
 
         // progress=0.5：左边缘固定 50，宽度缩小，仍与 target 有实际非零交集。
         let mid = motion.sample(50.0);
@@ -1684,7 +1697,10 @@ mod tests {
         let overlay = first.overlays.first().expect("conceal overlay");
         assert_eq!((overlay.x, overlay.w), (40.0, 20.0)); // target=40..60
         assert_eq!((overlay.clip_rect.x, overlay.clip_rect.w), (50.0, 8.0)); // mask=50..58
-        assert_eq!(intersect_width(overlay.x, overlay.w, &overlay.clip_rect), 8.0);
+        assert_eq!(
+            intersect_width(overlay.x, overlay.w, &overlay.clip_rect),
+            8.0
+        );
 
         // progress=0.5：右边缘固定 58，宽度缩小，仍与 target 有实际非零交集。
         let mid = motion.sample(50.0);
@@ -1793,14 +1809,12 @@ mod tests {
     #[test]
     fn source_snapshot_ids_are_deduplicated() {
         let shared = LineSnapshotId::new(1, 1, 0);
-        let slice = |uv: LocalRect| {
-            VisualSlice {
-                source: SnapshotRef {
-                    snapshot_id: shared,
-                    source_uv: uv,
-                },
-                rect: rect(0.0, 0.0, 10.0, 10.0),
-            }
+        let slice = |uv: LocalRect| VisualSlice {
+            source: SnapshotRef {
+                snapshot_id: shared,
+                source_uv: uv,
+            },
+            rect: rect(0.0, 0.0, 10.0, 10.0),
         };
         let motion = make_motion(vec![
             SliceMotion::Reveal {
@@ -2292,7 +2306,9 @@ mod tests {
             other => panic!("expected old Conceal first, got {other:?}"),
         }
         match &motion.slices[1] {
-            SliceMotion::Reveal { new, start_clip, .. } => {
+            SliceMotion::Reveal {
+                new, start_clip, ..
+            } => {
                 assert_eq!(new.source.snapshot_id, new_id);
                 // 新字形从零宽重新露出，不继承旧字宽度。
                 assert_eq!(*start_clip, rect(0.0, 0.0, 0.0, 10.0));
@@ -2426,7 +2442,9 @@ mod tests {
             .expect("应有新插入“乙” Reveal");
 
         match conceal_jia {
-            SliceMotion::Conceal { old, start_clip, .. } => {
+            SliceMotion::Conceal {
+                old, start_clip, ..
+            } => {
                 assert_eq!(old.source.snapshot_id, old_id);
                 // 起点是上一帧实际显示位置，不是 old_span.slice.rect (x=0)。
                 assert_eq!(old.rect, rect(10.0, 0.0, 20.0, 10.0));
@@ -2435,7 +2453,9 @@ mod tests {
             other => panic!("expected Conceal, got {other:?}"),
         }
         match reveal_jia {
-            SliceMotion::Reveal { new, start_clip, .. } => {
+            SliceMotion::Reveal {
+                new, start_clip, ..
+            } => {
                 assert_eq!(new.source.snapshot_id, new_id);
                 assert_eq!(new.rect, rect(20.0, 0.0, 20.0, 10.0));
                 // 新字形从零宽重新露出，不继承上一帧旧图位置。
@@ -2444,7 +2464,9 @@ mod tests {
             other => panic!("expected Reveal, got {other:?}"),
         }
         match reveal_yi {
-            SliceMotion::Reveal { new, start_clip, .. } => {
+            SliceMotion::Reveal {
+                new, start_clip, ..
+            } => {
                 assert_eq!(new.source.snapshot_id, new_id);
                 // 新插入的“乙”位于 x=40，从零宽开始露出。
                 assert_eq!(new.rect, rect(40.0, 0.0, 20.0, 10.0));
@@ -2649,9 +2671,20 @@ mod tests {
             .iter()
             .filter(|s| s.motion_kind() == MotionKind::Shift)
             .collect();
-        assert_eq!(shifts.len(), 1, "乙丙应合并为一条连续 Shift: {:?}", motion.slices);
+        assert_eq!(
+            shifts.len(),
+            1,
+            "乙丙应合并为一条连续 Shift: {:?}",
+            motion.slices
+        );
         match shifts[0] {
-            SliceMotion::Shift { new, from, to, byte_range, .. } => {
+            SliceMotion::Shift {
+                new,
+                from,
+                to,
+                byte_range,
+                ..
+            } => {
                 assert_eq!(*byte_range, (0, 6));
                 assert_eq!((from.x, from.y, from.w, from.h), (20.0, 0.0, 40.0, 10.0));
                 assert_eq!((to.x, to.y, to.w, to.h), (0.0, 0.0, 40.0, 10.0));
@@ -3029,17 +3062,8 @@ mod tests {
         )]);
         let edit = make_edit("", "甲", 0, 3, (0, 0), (0, 3), "甲");
         assert!(
-            TextMotion::begin_or_retarget(
-                &edit,
-                None,
-                &new_layout,
-                None,
-                0.0,
-                100,
-                1,
-                viewport(),
-            )
-            .is_none(),
+            TextMotion::begin_or_retarget(&edit, None, &new_layout, None, 0.0, 100, 1, viewport(),)
+                .is_none(),
             "视口外编辑不应创建局部动画"
         );
     }
@@ -3727,7 +3751,10 @@ mod tests {
             test_line(
                 1,
                 3,
-                vec![cluster_shaped(3, 6, 0.0, 20.0, 0), cluster(6, 9, 20.0, 20.0)],
+                vec![
+                    cluster_shaped(3, 6, 0.0, 20.0, 0),
+                    cluster(6, 9, 20.0, 20.0),
+                ],
                 100.0,
             ),
         ]);
@@ -3805,7 +3832,10 @@ mod tests {
             test_line(
                 1,
                 6,
-                vec![cluster_shaped(6, 9, 0.0, 20.0, 999), cluster(9, 12, 20.0, 20.0)],
+                vec![
+                    cluster_shaped(6, 9, 0.0, 20.0, 999),
+                    cluster(9, 12, 20.0, 20.0),
+                ],
                 110.0,
             ),
         ]);
@@ -3823,7 +3853,9 @@ mod tests {
             .expect("应有旧\"乙\" Conceal (byte 3..6)");
 
         match conceal_yi {
-            SliceMotion::Conceal { old, start_clip, .. } => {
+            SliceMotion::Conceal {
+                old, start_clip, ..
+            } => {
                 // old.rect = shift_from = 上一帧"乙"的插值位置 (2.5, 87.5, 20, 10)
                 // 而非 canonical 目标 (0, 100, 20, 10)
                 assert!(
@@ -3854,7 +3886,12 @@ mod tests {
             .iter()
             .find(|o| o.motion_kind == MotionKind::Conceal && o.byte_range == (3, 6))
             .expect("应有 Conceal overlay");
-        let target = rect(conceal_overlay.x, conceal_overlay.y, conceal_overlay.w, conceal_overlay.h);
+        let target = rect(
+            conceal_overlay.x,
+            conceal_overlay.y,
+            conceal_overlay.w,
+            conceal_overlay.h,
+        );
         let overlap = intersect_rect(&target, &conceal_overlay.clip_rect);
         assert!(
             overlap.w > 0.01 && overlap.h > 0.01,

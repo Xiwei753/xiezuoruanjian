@@ -66,8 +66,7 @@ fn method_body(src: &str, signature: &str) -> String {
 /// 作为独立函数存在。此处只保留「旧模式不得复活」的反向守卫。
 #[test]
 fn fix1_build_cursor_plan_no_body_transaction_branch() {
-    let coord_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
+    let coord_path = linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
     if coord_path.exists() {
         let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
         if src.contains("pub(crate) fn build_cursor_plan") {
@@ -85,8 +84,7 @@ fn fix1_build_cursor_plan_no_body_transaction_branch() {
                 "修复点1: 正文事务协同光标已随 #826 删除"
             );
             assert!(
-                plan.contains("CursorTransition::Tween")
-                    && plan.contains("CursorTransition::Snap"),
+                plan.contains("CursorTransition::Tween") && plan.contains("CursorTransition::Snap"),
                 "修复点1: 过渡仍只有 Tween / Snap 两种"
             );
             assert!(
@@ -119,8 +117,7 @@ fn fix2_cursor_sample_outcome_is_removed() {
     );
 
     // Issue #826/#901: render_plan_builder.rs 已随旧动画架构删除。
-    let rpb_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let rpb_path = linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
     if rpb_path.exists() {
         let render_plan_builder =
             read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
@@ -195,8 +192,7 @@ fn fix3_started_at_only_initialized_by_cursor_tick() {
 fn fix4_build_render_plan_full_is_time_free_pure_passthrough() {
     // Issue #826/#901: render_plan_builder.rs 已随旧动画架构删除。
     // build_render_plan_full 现在是 pipeline 上的方法，不再独立存在于 render_plan_builder.rs。
-    let rpb_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let rpb_path = linux_qt_root().join("src/sujian_editor_item/animation/render_plan_builder.rs");
     if rpb_path.exists() {
         let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
         assert!(
@@ -234,8 +230,7 @@ fn fix4_build_render_plan_full_is_time_free_pure_passthrough() {
 /// Issue #826/#901: coordinator.rs 已随旧动画架构整文件删除。
 #[test]
 fn fix5_build_cursor_plan_has_no_insert_only_active_check() {
-    let coord_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
+    let coord_path = linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
     if coord_path.exists() {
         let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
         if src.contains("pub(crate) fn build_cursor_plan") {
@@ -270,8 +265,7 @@ fn dual_timeline_fork_is_eliminated() {
         "Timeline A: cursor_motion.rs 已删除，协同光标不得复活"
     );
     // Issue #826/#901: coordinator.rs 已随旧动画架构删除。
-    let coord_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
+    let coord_path = linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
     if coord_path.exists() {
         let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
         assert!(

@@ -123,10 +123,7 @@ pub fn prepare_paragraph_visual_snapshot(
 ) -> CanonicalParagraphSnapshot {
     // Issue #901 第十四轮问题1: 段内相对存储 — index map 用 0 构建，
     // 存储段内相对 byte offset。绝对坐标由消费方通过 ParagraphOffsetIndex 按需计算。
-    let index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
-        paragraph_text,
-        0,
-    );
+    let index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(paragraph_text, 0);
 
     // Issue #688: 静态布局路径不接收颜色参数；只有 generate_animation_visuals=true 时才使用真实颜色
     let color = if generate_animation_visuals {
@@ -372,17 +369,16 @@ pub fn prepare_paragraph_visual_snapshot(
 
             let (c_byte_start, c_byte_end) =
                 index_map.qchar_range_to_document_byte_range(c_qchar_start, c_qchar_end);
-            let c_cluster_text: String = if c_byte_start <= c_byte_end
-                && c_byte_end <= paragraph_text.len()
-            {
+            let c_cluster_text: String =
                 if c_byte_start <= c_byte_end && c_byte_end <= paragraph_text.len() {
-                    paragraph_text[c_byte_start..c_byte_end].to_string()
+                    if c_byte_start <= c_byte_end && c_byte_end <= paragraph_text.len() {
+                        paragraph_text[c_byte_start..c_byte_end].to_string()
+                    } else {
+                        String::new()
+                    }
                 } else {
                     String::new()
-                }
-            } else {
-                String::new()
-            };
+                };
 
             clusters.push(CanonicalClusterSnapshot {
                 document_byte_start: c_doc_byte_start,
