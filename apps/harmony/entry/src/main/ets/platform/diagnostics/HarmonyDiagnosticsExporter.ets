@@ -23,7 +23,7 @@ import { NativeCoreModule } from '../../corebridge/native/NativeCoreModule'
 import { NativeDiagnosticsBridge } from '../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeSyncBridge } from '../../corebridge/native/NativeSyncBridge'
 import { NativeWriterCoreBridge } from '../../corebridge/NativeWriterCoreBridge'
-import { SyncRunPresentationState } from '../../feature/settings/presentation/SyncRunPresentationState'
+import { SyncDisplayPhase, SyncEntrySource, SyncRunPresentationState } from '../../feature/settings/presentation/SyncRunPresentationState'
 import { HarmonyShareService } from '../share/HarmonyShareService'
 import { SharePayload } from '../share/SharePayload'
 import { DeviceInfoSnapshot, getDeviceInfoSnapshot } from '../device/DeviceInfoSnapshot'
@@ -85,6 +85,16 @@ interface FullSyncReportAttachment {
   failed_groups: number
   pending_groups: number
   failures: FullSyncReportFailure[]
+}
+
+// sync_operation_runtime.json — 进程内同步运行快照的安全展示字段。
+interface SyncOperationRuntimeAttachment {
+  phase: SyncDisplayPhase
+  source: SyncEntrySource
+  startedAtMs: number | null
+  finishedAtMs: number | null
+  errorCode: string | null
+  overallStatus: string | null
 }
 
 // build_identity.json 附件 DTO。
@@ -476,16 +486,19 @@ export class HarmonyDiagnosticsExporter {
         completed_groups: report.completed_groups,
         failed_groups: report.failed_groups,
         pending_groups: report.pending_groups,
-        failures: report.failures.map((failure: FullSyncReportFailure) => ({
-          target_kind: failure.target_kind,
-          group_id: failure.group_id,
-          path: failure.path,
-          phase: failure.phase,
-          error_category: failure.error_category,
-          message_key: failure.message_key,
-          detail: failure.detail,
-          occurred_at: failure.occurred_at
-        }))
+        failures: report.failures.map((failure: FullSyncReportFailure): FullSyncReportFailure => {
+          const item: FullSyncReportFailure = {
+            target_kind: failure.target_kind,
+            group_id: failure.group_id,
+            path: failure.path,
+            phase: failure.phase,
+            error_category: failure.error_category,
+            message_key: failure.message_key,
+            detail: failure.detail,
+            occurred_at: failure.occurred_at
+          }
+          return item
+        })
       }
       attachments.push(this.makeAttachment(
         ATTACHMENT_LATEST_FULL_SYNC_REPORT,
@@ -501,7 +514,7 @@ export class HarmonyDiagnosticsExporter {
   private addSyncOperationRuntimeAttachment(attachments: AttachmentItem[]): void {
     try {
       const snapshot = SyncRunPresentationState.getInstance().snapshot()
-      const runtime = {
+      const runtime: SyncOperationRuntimeAttachment = {
         phase: snapshot.phase,
         source: snapshot.source,
         startedAtMs: snapshot.startedAtMs,

@@ -87,13 +87,13 @@ export class CorrectionResourceImporter {
       }
 
       const directory = `${appDataRoot}/correction-data`
-      this.ensureDirectory(directory)
+      CorrectionResourceImporter.ensureDirectory(directory)
       CorrectionResourceImporter.nextModelId++
       const modelName = `${MODEL_FILE_PREFIX}${Date.now()}-${CorrectionResourceImporter.nextModelId}.klm`
       destination = `${directory}/${modelName}`
 
       onProgress?.('正在将模型复制到应用私有目录…')
-      await this.copyPickedUri(sourceUri, destination)
+      await CorrectionResourceImporter.copyPickedUri(sourceUri, destination)
       const copied = fileIo.statSync(destination)
       if (!copied.isFile() || copied.size <= 0) {
         throw new Error('所选模型文件为空或无法读取')
@@ -102,7 +102,7 @@ export class CorrectionResourceImporter {
       onProgress?.('正在把模型路径交给 Core…')
       const result = await configureModel(destination)
       if (!result.success || result.data !== true) {
-        this.removeIfPresent(destination)
+        CorrectionResourceImporter.removeIfPresent(destination)
         destination = ''
         return {
           status: 'failed',
@@ -116,7 +116,7 @@ export class CorrectionResourceImporter {
       }
     } catch (e) {
       if (destination.length > 0) {
-        this.removeIfPresent(destination)
+        CorrectionResourceImporter.removeIfPresent(destination)
       }
       return { status: 'failed', message: `模型导入失败：${String(e)}` }
     }
@@ -137,7 +137,7 @@ export class CorrectionResourceImporter {
 
       const sourceUri = uris[0]
       const selectedName = new fileUri.FileUri(sourceUri).name
-      const canonicalName = this.canonicalLexiconName(selectedName)
+      const canonicalName = CorrectionResourceImporter.canonicalLexiconName(selectedName)
       if (canonicalName.length === 0) {
         return {
           status: 'failed',
@@ -146,11 +146,11 @@ export class CorrectionResourceImporter {
       }
 
       const directory = `${appDataRoot}/correction-data`
-      this.ensureDirectory(directory)
+      CorrectionResourceImporter.ensureDirectory(directory)
       const destination = `${directory}/${canonicalName}`
       stagingPath = `${directory}/.${canonicalName}.${Date.now()}.importing`
       onProgress?.(`正在导入 ${canonicalName}…`)
-      await this.copyPickedUri(sourceUri, stagingPath)
+      await CorrectionResourceImporter.copyPickedUri(sourceUri, stagingPath)
       const copied = fileIo.statSync(stagingPath)
       if (!copied.isFile() || copied.size <= 0) {
         throw new Error('所选词典文件为空或无法读取')
@@ -164,7 +164,7 @@ export class CorrectionResourceImporter {
       }
     } catch (e) {
       if (stagingPath.length > 0) {
-        this.removeIfPresent(stagingPath)
+        CorrectionResourceImporter.removeIfPresent(stagingPath)
       }
       return { status: 'failed', message: `词典导入失败：${String(e)}` }
     }

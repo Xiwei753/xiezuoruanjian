@@ -16,7 +16,7 @@ export class SyncOutcomePresenter {
     const downloaded: number = outcome.totalDownloaded ?? 0
     const counts: string = `（上传 ${uploaded} 个文件，下载 ${downloaded} 个文件）`
     const status: string = outcome.overallStatus ?? ''
-    const typedReason: string = this.typedReason(context, outcome)
+    const typedReason: string = SyncOutcomePresenter.typedReason(context, outcome)
 
     if (outcome.errorCode === 'SYNC_SESSION_UNALIGNED') {
       const sessionReason: string = typedReason.length > 0

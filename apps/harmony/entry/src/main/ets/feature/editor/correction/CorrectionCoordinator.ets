@@ -26,6 +26,11 @@ interface CorrectionRequestSnapshot {
   cursorByte: number
 }
 
+interface CorrectionByteRange {
+  startByte: number
+  endByte: number
+}
+
 const SENTENCE_ENDINGS = '。！？!?\n'
 
 /**
@@ -156,7 +161,7 @@ export class CorrectionCoordinator {
     return this.current
   }
 
-  private sentenceByteRange(snapshot: CorrectionRequestSnapshot): { startByte: number; endByte: number } | null {
+  private sentenceByteRange(snapshot: CorrectionRequestSnapshot): CorrectionByteRange | null {
     const text = snapshot.text
     if (text.length === 0) {
       return null
@@ -182,10 +187,11 @@ export class CorrectionCoordinator {
     if (startUtf16 >= endUtf16) {
       return null
     }
-    return {
+    const range: CorrectionByteRange = {
       startByte: utf16ToUtf8(text, startUtf16),
       endByte: utf16ToUtf8(text, endUtf16)
     }
+    return range
   }
 
   private async checkCurrentSegment(generation: number): Promise<void> {
@@ -304,7 +310,11 @@ export class CorrectionCoordinator {
     const generation = this.requestGeneration
     const result = await this.editor.enqueueExternalEdit((sessionId: number, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>> => {
       if (sessionId !== request.sessionId || expectedRevision !== suggestion.textRevision) {
-        return Promise.resolve({ success: false, errorCode: 'STALE_REVISION' })
+        const stale: ResultEnvelope<EditorEditResult> = {
+          success: false,
+          errorCode: 'STALE_REVISION'
+        }
+        return Promise.resolve(stale)
       }
       return this.bridge.apply(sessionId, request.projectId, request.chapterId,
         suggestion.textRevision, suggestion.startByte, suggestion.endByte,

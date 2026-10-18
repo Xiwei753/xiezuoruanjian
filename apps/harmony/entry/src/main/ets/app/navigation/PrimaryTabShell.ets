@@ -29,7 +29,7 @@ import { NavigationTransactionCoordinator } from './NavigationTransactionCoordin
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../ui/theme/DesignTokens'
-import { ActionSlot, ScreenRole, resolveScreenPolicy, resolveShowPrimaryNavigation } from './ScreenSemantics'
+import { ActionRole, ActionSlot, ScreenRole, resolveScreenPolicy, resolveShowPrimaryNavigation } from './ScreenSemantics'
 import { NavigationChromeStore } from './NavigationChromeStore'
 import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'

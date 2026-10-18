@@ -92,9 +92,28 @@ export class SyncRunPresentationState {
   }
 
   private copyOutcome(outcome: SyncOutcome): SyncOutcome {
-    const copy: SyncOutcome = { ...outcome }
+    let messageArgs: Record<string, string> | undefined = undefined
     if (outcome.messageArgs !== undefined) {
-      copy.messageArgs = { ...outcome.messageArgs }
+      const originArgs: Record<string, string> = outcome.messageArgs
+      const clonedArgs: Record<string, string> = {}
+      const keys: string[] = Object.keys(originArgs)
+      for (let i = 0; i < keys.length; i++) {
+        clonedArgs[keys[i]] = originArgs[keys[i]]
+      }
+      messageArgs = clonedArgs
+    }
+    const copy: SyncOutcome = {
+      phase: outcome.phase,
+      message: outcome.message,
+      messageKey: outcome.messageKey,
+      messageArgs: messageArgs,
+      errorCategory: outcome.errorCategory,
+      errorCode: outcome.errorCode,
+      rawError: outcome.rawError,
+      totalDownloaded: outcome.totalDownloaded,
+      totalUploaded: outcome.totalUploaded,
+      totalConflicts: outcome.totalConflicts,
+      overallStatus: outcome.overallStatus
     }
     return copy
   }
