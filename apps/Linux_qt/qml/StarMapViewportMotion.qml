@@ -13,12 +13,15 @@
 //
 // 空间关系（与 enterEmbedViaCore / exitCanvasViaCore 的连续换算同一份）：
 //   - 入口圆壳的世界几何恒定（直径 200），半径随镜头比例放大；
-//   - embedScreenX/Y/Radius 是入口在**冻结的旧镜头**下的屏幕几何（进场的
-//     圆环起点）；ringTarget* 是进场结束时的屏幕几何：圆心对齐视口中心，
-//     半径大到整圈离开可见视口 —— 到此才停止绘制圆环，绝不在 70% 覆盖率
-//     的切换瞬间把入场的圆壳描边关掉；
+//   - 进场：embedScreenX/Y/Radius 是入口在**冻结的旧父镜头**下的屏幕几何
+//     （圆环起点）；ringTarget* 是圆环的终点：圆心对齐视口中心，半径大到
+//     整圈离开可见视口。子图内容只在前段（contentProgress）走到可读镜头
+//     后停住，圆环继续按完整 progress 放大退场；
+//   - 出场：exitRingStart* 是当前显示帧（父镜头由当前子镜头反推）下入口圆的
+//     投影，exitRingEnd* 是目标父帧下入口圆的投影；父相机线性插值下端点圆
+//     线性插值就是 Embed 圆壳投影，圆环与父相机共用同一条 progress；
 //   - detailReveal 是显示层展开进度：概览小圆点 → 当前层完整节点；
-//     进场 0→1，出场 1→0（退回概览圆点）。
+//     进场 0→1，出场 1→0（退回概览圆点），跟随 contentProgress。
 //
 // KDE 一致性：时间从 Kirigami.Units.longDuration 派生，缓动 OutCubic，
 //   不加弹簧；系统 / 应用关闭动画或有效时长为 0 时直接落到最终状态。
@@ -37,8 +40,9 @@ QtObject {
     property bool entering: true
 
     // ── 展示快照（beginEnter / beginExit 只存这些，不再推导业务状态）──
-    // 新活动画布的镜头：进场 = 入口内同一片坐标（概览 fit 映射）→ Core 确认的新镜头；
-    // 出场 = 当前子内容对应的父镜头 → 恢复的父镜头。每帧按 progress 插值。
+    // 新活动画布的镜头：进场 = 入口内同一片坐标（概览 fit 映射）→ 子图正常
+    // 可读 / 可交互镜头；出场 = 当前子内容对应的父镜头 → 目标父镜头。
+    // 每帧由 Canvas 按进度插值（旧画面层由父 / 子相机对应逐帧推，不在这里）。
     property var fromCamera: null
     property var toCamera: null
     // 旧活动场景的身份：过渡期间它继续按冻结的身份 / 镜头绘制。
@@ -75,36 +79,48 @@ QtObject {
                    Math.max(ringTargetY, viewportHeight - ringTargetY))
     readonly property real ringTargetRadius: ringCornerDistance + ringMargin
 
-    // 给定入口圆壳的屏幕半径，算"圆环边框完全离开可见视口"的目标半径。
-    // 与 ringTargetRadius 同一个口径；进场时 Canvas 按它把子镜头从入口预览
-    // 等比放大到"内容与圆环边框一起走到视口外"的落点（Issue #949 复核问题 3）。
-    function discTargetRadiusFor(screenRadius) {
-        var margin = Math.max(screenRadius, 8)
-        var cornerDistance =
-            Math.hypot(Math.max(ringTargetX, viewportWidth - ringTargetX),
-                       Math.max(ringTargetY, viewportHeight - ringTargetY))
-        return cornerDistance + margin
-    }
+    // 出场圆环：起点 = 当前显示帧（父镜头由当前子镜头按 entryContexts 反推）
+    // 下入口圆的投影，终点 = 目标父帧下入口圆的投影。父相机线性插值时端点圆
+    // 线性插值 == Embed 圆壳投影，所以圆环与父相机共用同一个 progress。
+    property real exitRingStartX: 0
+    property real exitRingStartY: 0
+    property real exitRingStartRadius: 0
+    property real exitRingEndX: 0
+    property real exitRingEndY: 0
+    property real exitRingEndRadius: 0
 
     // ── 每帧按同一个 progress 算出的圆环几何（屏幕口径）──
+    // 进场：入口圆壳 → 视口中心 + 整圈出视口（screen-space 放大路径）。
+    // 出场：当前帧入口圆投影 → 目标父帧入口圆投影（父相机线性插值下的 Embed
+    // 投影，与父相机同一 progress）。
     readonly property real ringCenterX:
         entering ? embedScreenX + (ringTargetX - embedScreenX) * progress
-                 : ringTargetX + (embedScreenX - ringTargetX) * progress
+                 : exitRingStartX + (exitRingEndX - exitRingStartX) * progress
     readonly property real ringCenterY:
         entering ? embedScreenY + (ringTargetY - embedScreenY) * progress
-                 : ringTargetY + (embedScreenY - ringTargetY) * progress
+                 : exitRingStartY + (exitRingEndY - exitRingStartY) * progress
     readonly property real ringRadius:
         entering ? embedScreenRadius + (ringTargetRadius - embedScreenRadius) * progress
-                 : ringTargetRadius + (embedScreenRadius - ringTargetRadius) * progress
+                 : exitRingStartRadius + (exitRingEndRadius - exitRingStartRadius) * progress
     // 进场：半径到目标时整圈已在视口外，此刻才停止绘制；出场：缩小到落回母图圆壳
     // 之前一直画（落地后由母图真实的 Embed 圆壳接管，同一位置同一半径）。
     readonly property bool ringVisible: active && progress < 1
     readonly property real ringStrokeWidth: 2
+    // 圆形裁剪半径：只给圆环外半条描边留 1~2 逻辑像素余量，不改圆环大小 /
+    // 世界尺寸 / 70% / 60% 阈值（Issue #949 复核评论 6250468319）。
+    readonly property real ringClipRadius: ringRadius + ringStrokeWidth / 2 + 1
 
-    // ── 节点展开进度（只影响显示层）──
-    readonly property real detailReveal: entering ? progress : 1 - progress
+    // ── 内容进度：只驱动内容（子镜头 / 圆点展开），前段（约 60%）平滑到达
+    //    目标镜头后停住；末端速度趋 0（1-(1-p/0.6)^3），停下的瞬间不跳速。
+    //    圆环继续按完整 progress 走到离开视口，共用同一条时间线。──
+    readonly property real contentSpan: 0.6
+    readonly property real contentProgress:
+        1 - Math.pow(1 - Math.min(1, progress / contentSpan), 3)
+
+    // ── 节点展开进度（只影响显示层，跟随 contentProgress）──
+    readonly property real detailReveal: entering ? contentProgress : 1 - contentProgress
     // 旧画面层的展开进度：进场时旧父图仍是完整节点，出场时它缩回概览圆点。
-    readonly property real outgoingReveal: entering ? 1 : 1 - progress
+    readonly property real outgoingReveal: entering ? 1 : 1 - contentProgress
 
     // 应用侧开关：宿主（StarMapCanvas）可用它整体关掉演出。
     property bool animationsEnabled: true
@@ -152,7 +168,9 @@ QtObject {
     }
 
     // 出场：fromCamera / toCamera 是新活动画布（父图）自己的起止显示镜头，
-    // embedGeometry 给的是入口在**恢复后**父镜头下的屏幕几何（圆环缩小落点）。
+    // embedGeometry 给入口世界几何 + 圆环的起点 / 终点屏幕几何：
+    //   - startScreen*：当前显示帧（由当前子镜头反推的父镜头）下入口圆的投影；
+    //   - screen*：目标父帧（滚轮 = 反推帧，按钮 = 恢复的父镜头）下入口圆投影。
     function beginExit(fromCamera, toCamera, embedGeometry, childRoute, parentRoute) {
         _begin(false, fromCamera, toCamera, embedGeometry, childRoute, parentRoute)
     }
@@ -172,6 +190,13 @@ QtObject {
         embedScreenX = g.screenX || 0
         embedScreenY = g.screenY || 0
         embedScreenRadius = g.screenRadius || 0
+        exitRingStartX = g.startScreenX !== undefined ? g.startScreenX : embedScreenX
+        exitRingStartY = g.startScreenY !== undefined ? g.startScreenY : embedScreenY
+        exitRingStartRadius = g.startScreenRadius !== undefined
+                ? g.startScreenRadius : embedScreenRadius
+        exitRingEndX = embedScreenX
+        exitRingEndY = embedScreenY
+        exitRingEndRadius = embedScreenRadius
         childBounds = g.bounds || null
         fitScale = g.fitScale || 0
         active = true

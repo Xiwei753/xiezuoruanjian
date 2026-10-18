@@ -21,18 +21,31 @@
 //! 5. **KDE 一致性**：时长派生自 Kirigami.Units（longDuration / shortDuration），
 //!    缓动 OutCubic，不用弹簧；关闭动画 / 有效时长为 0 时直接落到最终状态。
 //!
-//! 复核（2026-10-18T12:12:29Z）后的四条硬约束（本轮修复）：
+//! 复核（2026-10-18T12:12:29Z）后的四条硬约束：
 //! 6. **锚点先于缩放**：捏合 / 关闭动画的直接缩放分支先用本次事件 / 质心坐标
 //!    现算锚点的世界位置，再改 zoom / pan。
 //! 7. **取消与自然完成分开**：settle 仅在演出确实 active 时生效、保留当前
 //!    显示帧、不落 toCamera；只有 generation 匹配的 finished 回调才落 toCamera；
 //!    `cancel()` 清掉落点，下一次进 / 退场不再被旧相机复位。
-//! 8. **真正的镜头连续变换**：进场 from = 入口预览相机、to = 按"圆环边框离开
-//!    可见视口"倍率放大的落点相机；出场镜像恢复到进入前保存的父镜头；每帧
-//!    pan = ringCenter(t) − W0×zoom(t)（内容锚点钉在圆环圆心路径上）。
-//! 9. **圆形可见区域**：圆内那一层（子场景 Loader）由平台 `Sujian.StarMapCircleClip`
+//! 8. **圆形可见区域**：圆内那一层（子场景 Loader）由平台 `Sujian.StarMapCircleClip`
 //!    裁到 ringCenterX/Y/ringRadius 的圆内（公共 QSGClipNode 几何，stencil），
-//!    只在过渡期启用；不是 Rectangle 遮挡、不是 FBO / 位图。
+//!    裁剪半径带描边余量，只在过渡期启用；不是 Rectangle 遮挡、不是 FBO / 位图。
+//!
+//! 复查评论 6250468319 的定稿口径（本轮）：
+//! 9. **一条 progress 派生两份进度**：contentProgress 只在前段（约 60%）用
+//!    `1-(1-p/0.6)^3` 平滑到达目标（末端速度趋 0），圆环继续按完整 progress
+//!    走到离开可见视口；detailReveal / outgoingReveal 跟随 contentProgress。
+//! 10. **进场落点 = 可读镜头**：`from = 入口预览相机`，`to = 子图正常可读 /
+//!     可交互镜头`（优先 cameraStack 已有镜头，否则作者尺度 100% + 内容包围盒
+//!     居中）；不得再按"圆环撑出可见视口"的倍率反算内容落点。
+//! 11. **两种出场两种落点**：滚轮出场目标 = 由当前显示子镜头按 entryContexts
+//!     反推的父镜头（零跳变，不回 cameraStack 旧值）；按钮出场目标 =
+//!     cameraStack 保存的父镜头，但从当前可见帧平滑过去。
+//! 12. **出场圆环 = 入口圆在两个父帧下的投影**：起点 = 当前显示边界圆投影
+//!     （与 60% 判定同一"正在显示的投影直径"几何；屏外则覆盖整个视口），
+//!     终点 = 目标父帧下 Embed 圆壳投影；结束才更新 cameraStack、才销毁临时层。
+//! 13. **旧画面层逐帧推**：进场父层相机 = parentCameraForChild(子层相机(t))，
+//!     出场子层相机 = childCameraForParent(父层相机(t))；不做端点独立插值。
 //!
 //! QML 组件依赖 qml_resources qrc 与 Rust 注册的上下文属性，无法在本仓库的
 //! Rust 测试里实例化，因此按仓库既有惯例（issue801/issue814/issue817/issue822/
@@ -170,12 +183,33 @@ fn viewport_motion_has_one_timeline_for_camera_ring_and_reveal() {
         "星图过渡不得引入弹簧 / 回弹缓动"
     );
 
-    // 三部分都由同一个 progress 派生。
+    // 三部分都由同一个 progress 派生；内容态跟随 contentProgress。
     assert!(
         src.contains("readonly property real ringRadius:")
-            && src.contains("readonly property real detailReveal:")
-            && src.contains("entering ? progress : 1 - progress"),
-        "圆环半径与节点展开都必须按同一个 progress 派生出场方向"
+            && src.contains("readonly property real contentProgress:")
+            && src.contains("detailReveal: entering ? contentProgress : 1 - contentProgress")
+            && src.contains("outgoingReveal: entering ? 1 : 1 - contentProgress"),
+        "圆环半径与节点展开都必须按同一个 progress 派生出场方向，且内容态跟随 contentProgress"
+    );
+    assert!(
+        src.contains("contentSpan: 0.6")
+            && src.contains("1 - Math.pow(1 - Math.min(1, progress / contentSpan), 3)"),
+        "contentProgress 必须在前段（约 60%）平滑到达 1：1-(1-p/0.6)^3，末端速度趋 0"
+    );
+    // 数值语义：p=0.6 时内容已经到 1（之后不再变化），圆环仍按完整 progress
+    // 继续走到整圈离开视口（p=1）。
+    let content = |p: f64| 1.0 - (1.0 - (p / 0.6).min(1.0)).powi(3);
+    assert!(
+        (content(0.6) - 1.0).abs() < 1e-9,
+        "p=0.6 时内容必须恰好到 1"
+    );
+    assert!(
+        content(0.5) < 1.0 && (content(1.0) - content(0.6)).abs() < 1e-9,
+        "内容先到 1 后停住，不再跟圆环继续放大"
+    );
+    assert!(
+        src.contains("ringVisible: active && progress < 1"),
+        "圆环必须继续按完整 progress 走到整圈离开可见视口才停止绘制"
     );
 }
 
@@ -367,11 +401,12 @@ fn canvas_freezes_the_outgoing_scene_before_switching_the_route() {
         "取得新 route / camera 后必须启动同一份演出，实际窗口:\n{enter}"
     );
 
-    let exit = function_window(&src, "function exitCanvasViaCore(", 2400);
+    let exit = function_window(&src, "function exitCanvasViaCore(", 2600);
     assert!(
         exit.contains("starmapBackendRef.exit_starmap_canvas(")
             && exit.contains("var cam = cameraStack[parentKey]")
-            && exit.contains("beginCanvasTransition(false, childStarmapId, childRoute, childCamera, cam,"),
+            && exit
+                .contains("beginCanvasTransition(false, childStarmapId, childRoute, childCamera,"),
         "退出必须走 Core 路由并启动反向演出，实际窗口:\n{exit}"
     );
 }
@@ -379,7 +414,7 @@ fn canvas_freezes_the_outgoing_scene_before_switching_the_route() {
 #[test]
 fn transition_moves_border_and_content_in_the_same_progress() {
     let src = read_src(CANVAS);
-    let begin = function_window(&src, "function beginCanvasTransition(", 2200);
+    let begin = function_window(&src, "function beginCanvasTransition(", 3000);
     assert!(
         begin.contains("viewportMotion.beginEnter(") && begin.contains("viewportMotion.beginExit("),
         "进 / 退场都必须经同一个演出组件启动，实际窗口:\n{begin}"
@@ -389,14 +424,20 @@ fn transition_moves_border_and_content_in_the_same_progress() {
         "切画布后滚轮累计目标必须在新画布尺度上重新起步，实际窗口:\n{begin}"
     );
 
-    let frame = function_window(&src, "function applyMotionFrame(", 900);
+    let frame = function_window(&src, "function applyMotionFrame(", 1400);
     assert!(
-        frame.contains("applyCamera(cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera, p))"),
-        "活动画布镜头必须逐帧按同一个 progress 插值（命中与显示同源），实际窗口:\n{frame}"
+        frame.contains("cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera,")
+            && frame.contains("viewportMotion.contentProgress)"),
+        "进场活动画布镜头必须按 contentProgress 插值到可读镜头（内容先到、圆环后到），实际窗口:\n{frame}"
     );
     assert!(
-        frame.contains("cameraLerp(outgoingFromCamera, outgoingToCamera, p)"),
-        "旧画面层必须用同一份父子对应连续运动（不硬切），实际窗口:\n{frame}"
+        frame.contains("cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera, p)"),
+        "出场活动画布（父图）镜头必须按完整 progress 连续缩回，实际窗口:\n{frame}"
+    );
+    assert!(
+        frame.contains("parentCameraForChild(childCam, motionContext)")
+            && frame.contains("childCameraForParent(nextParentCam, motionContext)"),
+        "旧画面层必须逐帧用同一份父子对应推（不做端点独立插值），实际窗口:\n{frame}"
     );
 
     assert!(
@@ -670,12 +711,12 @@ fn motion_cancel_clears_the_landing_snapshot() {
 }
 
 #[test]
-fn enter_transition_moves_the_camera_from_entry_preview_to_ring_landing() {
-    // 问题 3：from = 入口预览相机（父图当前显示帧里 Embed 圆壳的投影映射），
-    // to = 按"圆环边框离开可见视口"倍率等比放大的子相机；内容与圆环同一个
-    // progress 一起放大，内容锚点钉在圆环圆心路径上（不能先全屏居中再补圆环）。
+fn enter_transition_moves_from_entry_preview_to_the_readable_camera() {
+    // 复查 6250468319：from = 入口预览相机（父图当前显示帧里 Embed 圆壳的投影
+    // 映射），to = 子图正常可读 / 可交互镜头；不再使用"内容 = 预览倍率 × 圆环
+    // 退场半径 / 原半径"的落点公式（入口很小时会把节点放大几十倍）。
     let canvas = strip_line_comments(&read_src(CANVAS));
-    let begin = function_window(&canvas, "function beginCanvasTransition(", 3200);
+    let begin = function_window(&canvas, "function beginCanvasTransition(", 3000);
     assert!(
         begin.contains("var previewCam = context && context.ratio > 0")
             && begin.contains("? childCameraForParent(outgoingCam, context) : incomingCam")
@@ -684,50 +725,153 @@ fn enter_transition_moves_the_camera_from_entry_preview_to_ring_landing() {
         "进场起点必须是与入口预览同一份几何的预览相机，落点另算，实际窗口:\n{begin}"
     );
     assert!(
-        begin.contains("outgoingToCamera = context && context.ratio > 0")
-            && begin.contains("? parentCameraForChild(incomingCam, context) : outgoingCam"),
-        "旧父画面层不再原地不动：与子内容同倍率放大到「圆壳铺满视口」的对应帧，实际窗口:\n{begin}"
+        !begin.contains("outgoingToCamera"),
+        "旧父画面层不做端点独立插值（每帧由 parentCameraForChild(子层相机(t)) 推），实际窗口:\n{begin}"
     );
 
-    let enter = function_window(&canvas, "function enterEmbedViaCore(", 6400);
+    let enter = function_window(&canvas, "function enterEmbedViaCore(", 6200);
     assert!(
-        enter.contains("var previewCamera = childCameraForParent(parentCamera, context)"),
-        "落点相机必须以入口预览相机为基准，实际窗口:\n{enter}"
-    );
-    assert!(
-        enter.contains("viewportMotion.discTargetRadiusFor(entryGeometry.screenRadius)")
-            && enter.contains("previewCamera.zoom * discTarget / discStart"),
-        "落点倍率 = 圆环目标半径 / 入口投影半径（内容与边框同步放大），实际窗口:\n{enter}"
-    );
-    assert!(
-        enter.contains("panX: width / 2 - context.boundsCenterX * landingZoom")
-            && enter.contains("panY: height / 2 - context.boundsCenterY * landingZoom"),
-        "落点圆心对齐视口中心（内容锚点 = 入口圆心对应的子图坐标），实际窗口:\n{enter}"
+        enter.contains("var childCamera = readableChildCamera(childKey, context)"),
+        "进场落点必须取子图可读镜头，实际窗口:\n{enter}"
     );
     assert!(
         enter.contains("storeCamera(childKey, childCamera)"),
-        "进入后 cameraStack 记的必须是真实落点相机，实际窗口:\n{enter}"
+        "进入后 cameraStack 记的必须是这个可读落点相机，实际窗口:\n{enter}"
+    );
+    for forbidden in [
+        "discTargetRadiusFor",
+        "discTarget",
+        "discStart",
+        "landingZoom",
+        "previewCamera",
+    ] {
+        assert!(
+            !enter.contains(forbidden),
+            "进场不得再从圆圈需要撑出屏幕的倍数反算落点（{forbidden}），实际窗口:\n{enter}"
+        );
+    }
+
+    // 可读镜头的两条来源：优先该子图已有的合法镜头，否则作者尺度 100% +
+    // 内容包围盒居中。
+    let readable = function_window(&canvas, "function readableChildCamera(", 900);
+    assert!(
+        readable.contains("var saved = childKey ? cameraStack[childKey] : null")
+            && readable.contains("if (saved && saved.zoom > 0)")
+            && readable.contains("return { zoom: saved.zoom, panX: saved.panX, panY: saved.panY }"),
+        "可读镜头必须优先沿用该子图已有的合法镜头，实际窗口:\n{readable}"
+    );
+    assert!(
+        readable.contains("Math.min(_cameraScaleMax, 1.0)")
+            && readable.contains("panX: width / 2 - cx * zoom")
+            && readable.contains("panY: height / 2 - cy * zoom"),
+        "没有既有镜头时用作者尺度 100% + 内容包围盒居中的合理默认，实际窗口:\n{readable}"
     );
 
-    // 圆环目标半径口径只有一份（与 ringTargetRadius 同公式）。
+    // 圆环"离开可见视口"的公式只剩进场圆环用，不再被人拿去反算内容倍率。
     let motion = strip_line_comments(&read_src(MOTION));
     assert!(
-        motion.contains("function discTargetRadiusFor(screenRadius)")
-            && motion.contains("return cornerDistance + margin")
-            && motion.contains("ringTargetRadius: ringCornerDistance + ringMargin"),
-        "落点半径必须复用圆环「离开可见视口」的同一公式"
+        motion.contains("ringTargetRadius: ringCornerDistance + ringMargin")
+            && !motion.contains("function discTargetRadiusFor(screenRadius)")
+            && !canvas.contains("discTargetRadiusFor"),
+        "落点倍率公式（discTargetRadiusFor）必须删除，圆环目标半径只归圆环自己"
+    );
+}
+
+#[test]
+fn exits_connect_from_the_currently_displayed_frame() {
+    // 复查 6250468319：滚轮退出 = 沿当前显示帧连续缩小（目标父镜头 = 反推
+    // 帧，不得回到进入前保存的父镜头）；按钮退出 = 目标仍是保存的父镜头，
+    // 但从当前可见帧平滑移动 / 缩放过去。
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let exit = function_window(&canvas, "function exitCanvasViaCore(", 3400);
+    assert!(
+        exit.contains("var parentStartCam = ctx && ctx.ratio > 0")
+            && exit.contains("? parentCameraForChild(childCamera, ctx) : childCamera"),
+        "出场起始父帧必须由当前正在显示的子镜头按 entryContexts 反推，实际窗口:\n{exit}"
+    );
+    assert!(
+        exit.contains("var parentTargetCam = parentStartCam")
+            && exit.contains("if (!continuous) {")
+            && exit.contains("var cam = cameraStack[parentKey]")
+            && exit.contains("parentTargetCam = cam ? { zoom: cam.zoom, panX: cam.panX, panY: cam.panY }")
+            && exit.contains(": defaultCamera()"),
+        "滚轮出场目标 = 反推帧本身（零跳变）；按钮出场目标 = cameraStack 保存的父镜头，实际窗口:\n{exit}"
+    );
+    assert!(
+        exit.contains("beginCanvasTransition(false, childStarmapId, childRoute, childCamera,")
+            && exit.contains("parentTargetCam, exitGeometry, ctx)"),
+        "出场必须把目标父帧 / 入口几何交给同一份演出，实际窗口:\n{exit}"
+    );
+    // 结束才更新 cameraStack：起始帧写入由 applyCamera 逐帧完成，这里不预写。
+    assert!(
+        !exit.contains("storeCamera(parentKey"),
+        "出场不得在开始时预写 cameraStack（结束才更新），实际窗口:\n{exit}"
+    );
+    assert!(
+        !exit.contains("applyCamera(cam)") && !exit.contains("applyCamera(parentTargetCam)"),
+        "出场不得先把活动镜头跳到目标帧（那是演出终点，由 applyMotionFrame 落），实际窗口:\n{exit}"
+    );
+}
+
+#[test]
+fn exit_ring_spans_the_entry_circle_between_the_two_parent_frames() {
+    // 复查 6250468319：圆环起点 = 子图当前显示边界圆投影（与 60% 判定同一
+    // "正在显示的投影直径"几何；屏外则覆盖整个视口），终点 = 目标父帧下
+    // Embed 圆壳投影。父相机线性插值下端点圆线性插值 = Embed 投影，所以
+    // 圆环与父相机共用同一个 progress。
+    let motion = strip_line_comments(&read_src(MOTION));
+    for field in [
+        "property real exitRingStartX: 0",
+        "property real exitRingStartY: 0",
+        "property real exitRingStartRadius: 0",
+        "property real exitRingEndX: 0",
+        "property real exitRingEndY: 0",
+        "property real exitRingEndRadius: 0",
+    ] {
+        assert!(
+            motion.contains(field),
+            "演出组件必须保存出场圆环端点 {field}"
+        );
+    }
+    assert!(
+        motion.contains("exitRingStartX + (exitRingEndX - exitRingStartX) * progress")
+            && motion.contains(
+                "exitRingStartRadius + (exitRingEndRadius - exitRingStartRadius) * progress"
+            ),
+        "出场圆环必须按完整 progress 在两端之间线性插值（= 父相机线性插值下的 Embed 投影）"
+    );
+    let begin_exit = function_window(&motion, "function beginExit(", 1600);
+    assert!(
+        begin_exit.contains(
+            "_begin(false, fromCamera, toCamera, embedGeometry, childRoute, parentRoute)"
+        ) && begin_exit.contains("exitRingStartX = g.startScreenX")
+            && begin_exit.contains("exitRingStartRadius = g.startScreenRadius"),
+        "出场圆环端点必须经 beginExit 一次性写入，实际窗口:\n{begin_exit}"
     );
 
-    // 出场镜像：to = 进入前保存的父镜头；反推只用于父画面层的起始帧。
-    let exit = function_window(&canvas, "function exitCanvasViaCore(", 2600);
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let transition = function_window(&canvas, "function beginCanvasTransition(", 3000);
     assert!(
-        exit.contains("var cam = cameraStack[parentKey]")
-            && exit.contains("beginCanvasTransition(false, childStarmapId, childRoute, childCamera, cam,"),
-        "出场必须恢复到进入前保存的父镜头并启动反向演出，实际窗口:\n{exit}"
+        transition
+            .contains("embedScreenGeometry(parentStartCam, g.centerX, g.centerY, g.diameter)")
+            && transition.contains("exitGeometry.startScreenX = startGeo.screenX")
+            && transition.contains("exitGeometry.startScreenRadius = startGeo.screenRadius"),
+        "出场圆环起点必须由当前帧父镜头下的入口圆投影给出，实际窗口:\n{transition}"
     );
+
+    let exit = function_window(&canvas, "function exitCanvasViaCore(", 3400);
     assert!(
-        !exit.contains("cam = parentCameraForChild(childCamera, ctx)"),
-        "恢复后的父镜头不得被当前子镜头的连续反推改掉（那是演出起点，不是落点），实际窗口:\n{exit}"
+        exit.contains("embedScreenGeometry(parentTargetCam, ctx.embedCenterX, ctx.embedCenterY,")
+            && exit.contains("exitGeometry.diameter = ctx.embedDiameter"),
+        "出场圆环终点必须是目标父帧下入口圆（真实 Embed 圆壳）的投影，实际窗口:\n{exit}"
+    );
+
+    // 同一个「正在显示的投影直径」几何：60% 判定用虚拟父镜头反推投影直径。
+    let maybe_exit = function_window(&canvas, "function maybeExitCanvas(", 900);
+    assert!(
+        maybe_exit.contains("var virtualParentZoom = zoomLevel / ctx.ratio")
+            && maybe_exit.contains("ctx.embedDiameter * virtualParentZoom"),
+        "退场 60% 判定仍必须用正在显示的投影直径反推父入口，实际窗口:\n{maybe_exit}"
     );
 }
 
@@ -751,7 +895,7 @@ fn transition_ring_clips_the_inside_scene_via_platform_circle_clip() {
         active_clip.contains("clipEnabled: canvasArea.activeSceneIsInsideRing")
             && active_clip.contains("clipCenterX: viewportMotion.ringCenterX")
             && active_clip.contains("clipCenterY: viewportMotion.ringCenterY")
-            && active_clip.contains("clipRadius: viewportMotion.ringRadius")
+            && active_clip.contains("clipRadius: viewportMotion.ringClipRadius")
             && active_clip.contains("id: activeSceneLoader"),
         "进场时「圆内」的新子场景 Loader 必须被裁到圆环圆内（同一 progress），实际窗口:\n{active_clip}"
     );
@@ -759,7 +903,7 @@ fn transition_ring_clips_the_inside_scene_via_platform_circle_clip() {
     assert!(
         outgoing_clip.contains("clipEnabled: canvasArea.outgoingSceneIsInsideRing")
             && outgoing_clip.contains("clipCenterX: viewportMotion.ringCenterX")
-            && outgoing_clip.contains("clipRadius: viewportMotion.ringRadius")
+            && outgoing_clip.contains("clipRadius: viewportMotion.ringClipRadius")
             && outgoing_clip.contains("id: outgoingSceneLoader"),
         "出场时「圆内」的旧子场景 Loader 必须反向裁到圆环圆内，实际窗口:\n{outgoing_clip}"
     );
@@ -769,6 +913,13 @@ fn transition_ring_clips_the_inside_scene_via_platform_circle_clip() {
             && canvas.contains("outgoingSceneIsInsideRing:")
             && canvas.contains("viewportMotion.active && !viewportMotion.entering"),
         "圆形裁剪必须只在过渡期对「圆内那一层」启用"
+    );
+    // 裁剪半径只给圆环外半条描边留 1~2 逻辑像素余量：不改圆环大小 /
+    // 世界尺寸 / 70% / 60% 穿越阈值（复查 6250468319）。
+    let motion = strip_line_comments(&read_src(MOTION));
+    assert!(
+        motion.contains("ringClipRadius: ringRadius + ringStrokeWidth / 2 + 1"),
+        "裁剪半径必须 = ringRadius + 描边宽/2 + 1~2 逻辑像素"
     );
 
     // 平台 item：native 模块登记 + main.rs qml_register_type + 公共 QSGClipNode

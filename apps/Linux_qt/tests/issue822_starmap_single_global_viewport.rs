@@ -585,8 +585,10 @@ fn canvas_enter_exit_transition_is_coverage_only_and_never_writes_back() {
     assert!(
         exit_core.contains("starmapBackendRef.exit_starmap_canvas(")
             && exit_core.contains("var cam = cameraStack[parentKey]")
-            && exit_core.contains("applyCamera(cam)"),
-        "退出必须走 Core 导航路由并恢复父画面的镜头，实际窗口:\n{exit_core}"
+            && exit_core.contains(
+                "parentTargetCam = cam ? { zoom: cam.zoom, panX: cam.panX, panY: cam.panY }"
+            ),
+        "退出必须走 Core 导航路由并从平台相机槽取父画面镜头（按钮落点；滚轮落点 = 当前帧反推），实际窗口:\n{exit_core}"
     );
 
     // 旧 LOD 档位机制必须整体消失。

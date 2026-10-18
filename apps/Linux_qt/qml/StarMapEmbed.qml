@@ -52,12 +52,12 @@ Item {
     property var starmapBackendRef: null
 
     // Issue #949：过渡演出进度（<0 = 不在过渡中）。圆壳仍然是父图里的真实
-    // Embed、世界直径仍是 200。过渡期间"同一个圆壳"由过渡层在同一几何上接手：
-    // 进度 0 时放大描边与本圆壳完全重合（没有一帧突变），之后半径按同一个
-    // progress 一直放大到整圈离开可见视口；过渡结束（进度 1）再交回真实圆壳。
-    // 这里绝不用覆盖率阈值决定圆壳可见性 —— 切换瞬间不是"关掉描边"，而是把
-    // 描边换成同一位置上继续放大的那一个。同一个进度也透给圆内概览，让
-    // 圆点 → 节点在母图与活动画布两层里同步展开。
+    // Embed、世界直径仍是 200。过渡期间"同一个圆壳"由过渡层的圆环接手：
+    // 进场时圆环在进度 0 与本圆壳完全重合（没有一帧突变），之后按完整
+    // progress 放大到整圈离开可见视口；出场时圆环从当前帧入口圆投影收回到
+    // 目标父帧的 Embed 圆壳投影，过渡结束（进度 1）再交回真实圆壳。
+    // revealProgress 是内容态（跟随 contentProgress）：圆内概览的圆点 →
+    // 节点在两层里同步展开，不用覆盖率阈值决定圆壳可见性。
     property real revealProgress: -1
     readonly property bool revealActive: revealProgress >= 0
     readonly property bool revealOnScreen: revealActive && revealProgress < 1
