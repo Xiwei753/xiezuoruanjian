@@ -45,8 +45,14 @@ Item {
     readonly property int _embedDiameter: 200
     // 概览线宽的屏幕口径：概览是父图投影的一部分，线宽恒定在屏幕像素上。
     readonly property real _previewStrokeWidth: 1.5
+
+    // Issue #949：展开进度（只影响显示层，不改 authored 坐标 / 图关系）。
+    // 1 = 概览本来样子；过渡期间与活动画布同一个 progress，圆点在两层里同步
+    // 长大 / 收回，圆点半径公式与活动画布 _revealDotRadius 同一份。
+    property real detailReveal: 1.0
     readonly property real _overviewDotRadius:
         Math.max(2, Math.min(6, Math.min(width, height) * 0.018))
+        * Math.max(0, Math.min(1, detailReveal))
 
     // ── 目标图数据（只读快照，不写 Core）──
     property var graphData: null

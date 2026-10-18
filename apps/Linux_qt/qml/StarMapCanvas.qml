@@ -220,6 +220,7 @@ Item {
 
     // 切回根图：清所有层相机，镜头回默认。
     function resetToRoot() {
+        settleViewportMotion()
         cameraStack = ({})
         entryContexts = ({})
         _zoomEntryKey = ""
@@ -228,6 +229,7 @@ Item {
         var route = { rootStarmapId: starmapId, segments: [] }
         applyRoute(route)
         applyCamera(defaultCamera())
+        resetZoomRound()
         storeCamera(routeKeyOf(route), cameraSnapshot())
         visualFocusChanged()
     }
@@ -292,42 +294,354 @@ Item {
     readonly property real _edgeScreenStrokeWidth:
         Math.max(1.0, Math.min(_edgeLineWorldWidth * zoomLevel, 6.0))
 
+    // Issue #949：连续缩放的演出状态。只属于当前显示帧，不是第二套相机模型：
+    //   - _zoomAnchorX/Y 是本轮缩放的屏幕锚点（滚轮 / 捏合 / 按钮的指针位置）；
+    //   - _zoomRoundWorldX/Y 是锚点的 world 位置，用"正在显示的帧"现算，
+    //     于是 panX(t)=anchorX-worldX*z(t)、panY(t)=anchorY-worldY*z(t)，
+    //     鼠标指向的对象在整段动画里不会滑走；
+    //   - _zoomTargetLevel 是滚轮累计出的目标比例（一档一档连续累积，而不是
+    //     每次从还没走完的显示帧重新硬跳）；
+    //   - 补间只有一个：连续滚轮只重定它，不排队堆积互相打断的补间。
+    property real _zoomAnchorX: 0
+    property real _zoomAnchorY: 0
+    property real _zoomRoundWorldX: 0
+    property real _zoomRoundWorldY: 0
+    property real _zoomTargetLevel: 1.0
+    // 滚轮累计的目标比例（下一档从它继续乘，滚轮手感连续）。
+    readonly property real zoomTargetLevel: _zoomTargetLevel
+    // 只由缩放补间写的显示帧值；变化时推进显示镜头。
+    property real zoomTweenValue: 1.0
+
     // 唯一缩放入口：滚轮、捏合、+/- 按钮都走这里，只改当前活动画布的镜头。
-    // 随后按"指针瞄准的入口"评估画布穿越（70% 进 / 60% 出），zoom 数值本身
-    // 不参与判断。穿越按缩放方向过滤：只有放大才评估进场，只有缩小才评估退场；
-    // 缩小经过入口不进入子画布，任意层同样规则（双击不受方向过滤）。
+    // Issue #949：这里只记"累计目标 + 屏幕锚点"，显示镜头由单一补间从**正在
+    // 显示的**帧连续插值；随后按"指针瞄准的入口"评估画布穿越（70% 进 / 60% 出），
+    // zoom 数值本身不参与判断，判定一律用正在显示的投影直径：放大只评估进场、
+    // 缩小只评估退场（缩小经过入口不进入子画布），任意层同规则，双击不受方向过滤。
     function zoomAt(screenX, screenY, nextZoom) {
+        var pinchInput = interaction && interaction.pointerMode === "pinch"
+        if (viewportMotion.active && pinchInput) {
+            // 捏合实时跟手：先收尾演出，再从这一帧继续。
+            settleViewportMotion()
+        }
         var requested = nextZoom
-        if (interaction && interaction.pointerMode === "pinch" && _pinchSwitchBaseZoom > 0)
+        if (pinchInput && _pinchSwitchBaseZoom > 0)
             requested = _pinchSwitchCanvasZoom * (nextZoom / _pinchSwitchBaseZoom)
         var target = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, requested))
         var oldZoom = zoomLevel
-        if (target === oldZoom)
+        if (target === oldZoom && !zoomTween.running)
             return
         var zoomingIn = target > oldZoom
         var zoomingOut = target < oldZoom
+        _zoomTargetLevel = target
+        if (!zoomingIn && !zoomingOut) {
+            stopZoomTween()
+            return
+        }
+        if (viewportMotion.active) {
+            // 演出进行中（滚轮 / 按钮）：只累计目标与锚点，收尾后再从"那时的
+            // 显示帧"连续走完，不从未来帧硬跳、也不堆积补间。
+            anchorRoundAt(screenX, screenY)
+            return
+        }
+        if (pinchInput || zoomTweenDuration() <= 0) {
+            // 捏合实时跟手 / 关闭动画：不插值，本帧直接落到目标帧，穿越按正在
+            // 显示的投影直径评估（放大只进场、缩小只退场）。
+            stopZoomTween()
+            zoomLevel = target
+            applyPan(screenX - _zoomRoundWorldX * target,
+                     screenY - _zoomRoundWorldY * target)
+            var switched = -1
+            if (zoomingIn) {
+                switched = maybeEnterEmbedAt(screenX, screenY)
+            } else if (zoomingOut) {
+                switched = maybeExitCanvas()
+            }
+            if (switched > 0 && pinchInput) {
+                // 基准配对（#929）：nextZoom 是旧基准累计值；记新画布 zoomLevel
+                // 会让下一帧 requested = switched * (next / switched) 换算失效。
+                _pinchSwitchBaseZoom = nextZoom
+                _pinchSwitchCanvasZoom = switched
+            }
+            return
+        }
+        startZoomTween(target, screenX, screenY)
+    }
+
+    // 显示镜头每帧的唯一推进：先确定 z(t)，再按本轮锚点的世界位置反推 pan，
+    // 然后只用**正在显示**的投影直径评估画布穿越（放大只进场、缩小只退场）。
+    // 命中与穿越因此永远与看得见的画面一致，绝不从尚未显示的未来缩放值跳过。
+    function applyDisplayedZoom(target, screenX, screenY) {
+        target = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, target))
+        var previous = zoomLevel
+        if (target === previous)
+            return -1
         zoomLevel = target
-        applyPan(
-            screenX - (screenX - panX) * (zoomLevel / oldZoom),
-            screenY - (screenY - panY) * (zoomLevel / oldZoom)
-        )
+        applyPan(screenX - _zoomRoundWorldX * target,
+                 screenY - _zoomRoundWorldY * target)
+        var zoomingIn = target > previous
+        var zoomingOut = target < previous
         var switched = -1
         if (zoomingIn) {
-            // 放大：任意层只评估进场（根→子、子→孙同理）。
             switched = maybeEnterEmbedAt(screenX, screenY)
         } else if (zoomingOut) {
-            // 缩小：任意层只评估退场，不评估进场。
             switched = maybeExitCanvas()
         }
-        if (switched > 0 && interaction && interaction.pointerMode === "pinch") {
-            // 基准配对（#929 新评论）：nextZoom 是 PinchHandler 在旧基准下的累计值，
-            // 尚未转换到新画布；enterEmbedViaCore/exitCanvasViaCore 已把 zoomLevel
-            // 设为新画布 zoom。若这里记 zoomLevel 作基准，下一帧
-            // requested = switched * (nextZoom / switched) = nextZoom，跨画布尺度
-            // 换算失效、刚穿越就跳变。父→子、子→父、子→孙每次新穿越都重设该配对。
-            _pinchSwitchBaseZoom = nextZoom
-            _pinchSwitchCanvasZoom = switched
+        return switched
+    }
+
+    // 锚点世界位置：用"当前显示帧"现算一次。演出 / 切画布之后锚点不会指向
+    // 错误的世界坐标（滚轮记锚点、补间起步前都走它）。
+    function anchorRoundAt(screenX, screenY) {
+        var z = zoomLevel > 0 ? zoomLevel : 1
+        _zoomAnchorX = screenX
+        _zoomAnchorY = screenY
+        _zoomRoundWorldX = (screenX - panX) / z
+        _zoomRoundWorldY = (screenY - panY) / z
+    }
+
+    // 缩放补间：只有这一条，每次重定起点（当前显示帧）与目标，不排队。
+    NumberAnimation {
+        id: zoomTween
+        target: canvasArea
+        property: "zoomTweenValue"
+        easing.type: Easing.OutCubic
+    }
+
+    onZoomTweenValueChanged: applyDisplayedZoom(zoomTweenValue, _zoomAnchorX, _zoomAnchorY)
+
+    function startZoomTween(target, screenX, screenY) {
+        anchorRoundAt(screenX, screenY)
+        var duration = zoomTweenDuration()
+        if (duration <= 0) {
+            applyDisplayedZoom(target, screenX, screenY)
+            return
         }
+        zoomTween.stop()
+        zoomTween.from = zoomLevel
+        zoomTween.to = target
+        zoomTween.duration = duration
+        zoomTween.restart()
+    }
+
+    function stopZoomTween() {
+        if (zoomTween.running)
+            zoomTween.stop()
+    }
+
+    // KDE 一致性：缩放用 shortDuration 量级；关闭动画时 0（直接落到目标帧）。
+    function zoomTweenDuration() {
+        if (!viewportMotion.animationsEnabled)
+            return 0
+        return Kirigami.Units.shortDuration
+    }
+
+    // 切画布 / 复位后，本轮缩放的锚点与目标属于旧画布：整体复位到新显示帧。
+    function resetZoomRound() {
+        stopZoomTween()
+        _zoomTargetLevel = zoomLevel
+        _zoomAnchorX = width / 2
+        _zoomAnchorY = height / 2
+        _zoomRoundWorldX = screenToWorldX(width / 2)
+        _zoomRoundWorldY = screenToWorldY(height / 2)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Issue #949：画布穿越的过渡演出（只影响显示层）
+    //   - 唯一时间线在 StarMapViewportMotion 里；本文件只按同一个 progress
+    //     逐帧推进镜头（applyCamera），命中因此永远换算自"看得见的当前镜头"；
+    //   - route / 相机真相仍是 currentRoute + 镜头标量 + cameraStack；演出不写
+    //     Core、不新建第二套导航，也不为动画另建图数据；
+    //   - 旧活动场景在过渡期间以冻结身份 / 镜头继续绘制（只绘制、禁交互），
+    //     圆壳描边由真实 Embed 随镜头继续放大，直到整圈离开可见视口才结束
+    //     显示：覆盖率 70% 的切换瞬间绝不把入场的圆壳描边关掉。
+    // ---------------------------------------------------------------------------
+    StarMapViewportMotion {
+        id: viewportMotion
+        viewportWidth: canvasArea.width
+        viewportHeight: canvasArea.height
+        onProgressChanged: canvasArea.applyMotionFrame()
+        onFinished: function(entering, generation) {
+            canvasArea.finishViewportMotion(entering, generation)
+        }
+    }
+
+    // 过渡期间的旧画面层身份 + 镜头（Loader 直接绑这些标量，逐帧刷新）。
+    property var outgoingRoute: null
+    property string outgoingStarmapId: ""
+    property var outgoingFromCamera: null
+    property var outgoingToCamera: null
+    property real outgoingZoom: 1
+    property real outgoingPanX: 0
+    property real outgoingPanY: 0
+    // 本次过渡用的父子镜头对应（entryContexts 里的那一份快照）。
+    property var motionContext: null
+    // 防晚到回调：每次启动新演出都 ++，旧时间线的 finished 不再生效。
+    property int motionGeneration: 0
+
+    readonly property string outgoingRouteKey: outgoingRoute ? routeKeyOf(outgoingRoute) : ""
+
+    // 显示层派生：圆环放大描边只画在"圆内"的那一层（进场 = 活动子画布，
+    // 出场 = 旧子画面层）；母图侧的真实圆壳由 transitionEmbedInstanceId 标出。
+    readonly property bool activeSceneIsInsideRing:
+        viewportMotion.active && viewportMotion.entering
+    readonly property bool outgoingSceneIsInsideRing:
+        viewportMotion.active && !viewportMotion.entering
+    readonly property real activeDetailReveal:
+        viewportMotion.active && viewportMotion.entering ? viewportMotion.detailReveal : 1
+    readonly property real outgoingDetailReveal:
+        viewportMotion.active ? viewportMotion.outgoingReveal : 1
+    readonly property string motionFocusInstanceId:
+        viewportMotion.active ? viewportMotion.instanceId : ""
+
+    // 父 ↔ 子镜头对应（与 enterEmbedViaCore / exitCanvasViaCore 的连续换算同一份
+    // 比例）：子镜头 = 父镜头 × ratio，子视口中心 = 父视口中心在子图 bounds 坐标
+    // 里的对应点。进出场共用它，双击进入和滚轮穿越因此是同一份空间关系。
+    function childCameraForParent(parentCam, ctx) {
+        if (!parentCam || !ctx || !(ctx.ratio > 0))
+            return parentCam
+        var zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, parentCam.zoom * ctx.ratio))
+        var screenX = parentCam.panX + ctx.embedCenterX * parentCam.zoom
+        var screenY = parentCam.panY + ctx.embedCenterY * parentCam.zoom
+        return { zoom: zoom, panX: screenX - ctx.boundsCenterX * zoom,
+                 panY: screenY - ctx.boundsCenterY * zoom }
+    }
+
+    function parentCameraForChild(childCam, ctx) {
+        if (!childCam || !ctx || !(ctx.ratio > 0))
+            return childCam
+        var zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, childCam.zoom / ctx.ratio))
+        var screenX = childCam.panX + ctx.boundsCenterX * childCam.zoom
+        var screenY = childCam.panY + ctx.boundsCenterY * childCam.zoom
+        return { zoom: zoom, panX: screenX - ctx.embedCenterX * zoom,
+                 panY: screenY - ctx.embedCenterY * zoom }
+    }
+
+    function cameraLerp(from, to, p) {
+        if (!from)
+            return to
+        if (!to)
+            return from
+        return { zoom: from.zoom + (to.zoom - from.zoom) * p,
+                 panX: from.panX + (to.panX - from.panX) * p,
+                 panY: from.panY + (to.panY - from.panY) * p }
+    }
+
+    // 入口圆壳在给定镜头下的屏幕几何（世界直径恒定 200，屏幕半径随镜头放大；
+    // 进场时圆环从这里起步，出场时缩回这里后由真实圆壳接管）。
+    function embedScreenGeometry(cam, centerX, centerY, diameter) {
+        var z = cam && cam.zoom > 0 ? cam.zoom : 1
+        return { screenX: cam.panX + centerX * z,
+                 screenY: cam.panY + centerY * z,
+                 screenRadius: Math.max(diameter, 1) * z / 2 }
+    }
+
+    // 启动一次过渡：route / 相机真相已由调用方确定，这里只准备展示快照。
+    // outgoing* = 旧活动场景（冻结身份 + 冻结镜头，只绘制、禁交互），
+    // viewportMotion = 新活动画布从 fromCamera 连续插值到 toCamera；圆壳由
+    // 真实 Embed（母图侧）继续画到整圈离开可见视口，圆环放大描边由 inside*
+    // 那一层（"圆内"的画布）按同一个 progress 画在内容之下。
+    function beginCanvasTransition(entering, outgoingStarmapIdIn, outgoingRouteIn,
+                                   outgoingCam, incomingCam, geometry, context) {
+        viewportMotion.generation = ++motionGeneration
+        stopZoomTween()
+        outgoingStarmapId = outgoingStarmapIdIn
+        outgoingRoute = outgoingRouteIn
+        motionContext = context
+        // 滚轮累计目标在新画布上重新起步（跨画布尺度不混用）。
+        _zoomTargetLevel = incomingCam.zoom
+        if (entering) {
+            // 进场：新活动画布就是子图，起点 = 入口内同一片坐标（几何精确的
+            // 概览 fit 映射），落点 = Core 已确认的子镜头；圆环从入口在旧父
+            // 镜头下的屏幕几何放大到整圈离开视口。
+            // 子图内容起点 / 落点都是 Core 已确认的子镜头（内容停在入口内的
+            // 原位），这一段的空间展开由圆环放大 + 节点展开承担。
+            viewportMotion.beginEnter(incomingCam, incomingCam, geometry, outgoingRouteIn,
+                                      normalizeRoute(currentRoute))
+            outgoingFromCamera = outgoingCam
+            outgoingToCamera = outgoingCam
+        } else {
+            // 出场：新活动画布是父图，从"当前子内容对应的父镜头"连续缩回
+            // 恢复后的父镜头；旧子画面用同一份对应缩回入口概览位置。
+            var parentStartCam = context && context.ratio > 0
+                    ? parentCameraForChild(outgoingCam, context) : incomingCam
+            viewportMotion.beginExit(parentStartCam, incomingCam, geometry,
+                                      outgoingRouteIn, normalizeRoute(currentRoute))
+            outgoingFromCamera = outgoingCam
+            outgoingToCamera = context && context.ratio > 0
+                    ? childCameraForParent(incomingCam, context) : outgoingCam
+        }
+        if (!viewportMotion.active) {
+            // 关闭动画 / 有效时长为 0：直接落在最终状态，不留半截演出。
+            finishViewportMotion(entering)
+            return
+        }
+        applyMotionFrame()
+        logInteraction(entering ? "viewport_enter" : "viewport_exit", "scene", "", {
+            "instanceId": geometry ? geometry.instanceId : "",
+            "duration": viewportMotion.effectiveDuration,
+            "toRouteKey": routeKey
+        })
+    }
+
+    // 过渡每帧：活动画布镜头按 progress 插值（命中同一份可见相机），旧画面层
+    // 用同一份父子对应连续放大 / 缩小 —— 圆壳、内部内容、镜头一起运动。
+    function applyMotionFrame() {
+        if (!viewportMotion.active)
+            return
+        var p = viewportMotion.progress
+        applyCamera(cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera, p))
+        if (!outgoingStarmapId)
+            return
+        var cam = cameraLerp(outgoingFromCamera, outgoingToCamera, p)
+        outgoingZoom = cam.zoom
+        outgoingPanX = cam.panX
+        outgoingPanY = cam.panY
+    }
+
+    // 过渡收尾：落最终镜头、销毁临时层，不持久化、不写 Core。演出期间累计的
+    // 滚轮目标（如果有）从这一刻的显示帧继续走完，不从未来帧硬跳。晚到的旧
+    // 时间线（generation 不匹配）直接忽略，不许把用户拉回上一层。
+    function finishViewportMotion(enteringFlag, generation) {
+        if (generation !== undefined && generation !== motionGeneration)
+            return
+        var to = viewportMotion.toCamera
+        if (to)
+            applyCamera(to)
+        var pending = _zoomTargetLevel
+        var anchorX = _zoomAnchorX
+        var anchorY = _zoomAnchorY
+        viewportMotion.cancel()
+        outgoingStarmapId = ""
+        outgoingRoute = null
+        outgoingFromCamera = null
+        outgoingToCamera = null
+        motionContext = null
+        resetZoomRound()
+        if (pending > 0 && pending !== zoomLevel && zoomTweenDuration() > 0) {
+            _zoomTargetLevel = pending
+            startZoomTween(pending, anchorX, anchorY)
+        }
+    }
+
+    // 用户在新一帧输入（捏合继续 / 点按）：从当前已显示的帧收尾旧演出，
+    // 晚到的旧动画（onFinished）不会再改任何状态。
+    function settleViewportMotion() {
+        motionGeneration++
+        var to = viewportMotion.toCamera
+        viewportMotion.cancel()
+        outgoingStarmapId = ""
+        outgoingRoute = null
+        outgoingFromCamera = null
+        outgoingToCamera = null
+        motionContext = null
+        if (to)
+            applyCamera(to)
+        resetZoomRound()
+    }
+
+    // 立即结束过渡（供输入入口在按下时调用；不改 route / Core）。
+    function cancelViewportMotion() {
+        settleViewportMotion()
     }
 
     function viewportShortSide() {
@@ -378,8 +692,13 @@ Item {
         return exitCanvasViaCore(true)
     }
 
-    // 进入子画布（双击、连续缩放都用这一个入口）。返回新画布的 zoom，失败 -1。
+    // 进入子画布（双击、连续缩放都用这一个入口）。返回新画布的落点 zoom，失败 -1。
+    // Issue #949：切换前先冻结旧活动场景身份 / 镜头 / 入口几何，切换后启动
+    // 过渡演出 —— 旧父画面在位停留（只绘制），子画布从入口内同一片坐标继续
+    // 展开，圆壳描边随同一个进度放大到整圈离开可见视口。
     function enterEmbedViaCore(instanceId, trigger) {
+        // 过渡还没收尾就继续进入孙图：先从当前已显示帧收尾，再冻结新快照。
+        settleViewportMotion()
         var scene = activeScene()
         if (!scene || !starmapBackendRef || !instanceId)
             return -1
@@ -387,6 +706,22 @@ Item {
         if (!info)
             return -1
         var parentZoom = zoomLevel
+        var parentCamera = cameraSnapshot()
+        var parentStarmapId = currentStarmapId
+        var parentRoute = normalizeRoute(currentRoute)
+        // 入口在"正在显示的"旧镜头下的屏幕几何：圆环起点、"入口内同一片坐标"
+        // 的换算来源。只能用当前显示帧，不能用尚未显示的目标帧。
+        var entryGeometry = {
+            instanceId: instanceId,
+            centerX: info.centerX,
+            centerY: info.centerY,
+            diameter: Math.min(info.width, info.height),
+            screenX: worldToScreenX(info.centerX),
+            screenY: worldToScreenY(info.centerY),
+            screenRadius: Math.min(info.width, info.height) * parentZoom / 2,
+            bounds: info.bounds,
+            fitScale: info.fitScale
+        }
         var res = starmapBackendRef.enter_starmap_embed(
                     currentRoute.rootStarmapId,
                     JSON.stringify(currentRoute.segments),
@@ -405,60 +740,60 @@ Item {
         if (!newRoute)
             return -1
         var childKey = routeKeyOf(newRoute)
-        // 连续性：子图 world→屏幕比例 = 概览的 fit 比例（进入后画面与概览同尺寸）；
-        // 子图视口中心由父画布视口中心映射过去，入口切画布前后停在同一屏幕位置。
-        var k = (info.fitScale > 0 && parentZoom > 0) ? info.fitScale / parentZoom : 1.0
-        var boundsCX = info.bounds ? (info.bounds.minX + info.bounds.maxX) / 2 : 0
-        var boundsCY = info.bounds ? (info.bounds.minY + info.bounds.maxY) / 2 : 0
-        var childZoom = info.fitScale > 0 ? info.fitScale : parentZoom
-        childZoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, childZoom))
-        var parentCenterX = screenToWorldX(width / 2)
-        var parentCenterY = screenToWorldY(height / 2)
-        var childCenterX = boundsCX + (parentCenterX - info.centerX) * k
-        var childCenterY = boundsCY + (parentCenterY - info.centerY) * k
-        var childCamera = {
-            zoom: childZoom,
-            panX: width / 2 - childCenterX * childZoom,
-            panY: height / 2 - childCenterY * childZoom
-        }
-        storeEntryContext(childKey, {
+        // 连续性：子图 world→屏幕比例 = 概览的 fit 比例（进入后画面与概览同尺寸），
+        // 并且入口圆心在子图上对应的那一小片坐标正好停在入口原来的屏幕位置
+        // （childCameraForParent 与概览 fit 投影是同一份几何）。
+        var context = {
             parentRouteKey: routeKey,
             instanceId: instanceId,
-            ratio: k,
+            ratio: (info.fitScale > 0 && parentZoom > 0) ? info.fitScale / parentZoom : 1.0,
             embedDiameter: Math.min(info.width, info.height),
             embedCenterX: info.centerX,
             embedCenterY: info.centerY,
-            boundsCenterX: boundsCX,
-            boundsCenterY: boundsCY,
+            boundsCenterX: info.bounds ? (info.bounds.minX + info.bounds.maxX) / 2 : 0,
+            boundsCenterY: info.bounds ? (info.bounds.minY + info.bounds.maxY) / 2 : 0,
             // 进入瞬间入口的投影覆盖率：双击在很小的入口上进入时可能低于 60%，
             // 退场阈值必须再受它约束（见 maybeExitCanvas），否则一进子图、
             // 甚至继续放大都会立刻被退场判定弹回父图。
             entryCoverage: coverageOfScreenPx(Math.min(info.width, info.height) * parentZoom)
-        })
+        }
+        var childCamera = childCameraForParent(parentCamera, context)
+        childCamera.zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, childCamera.zoom))
+        storeEntryContext(childKey, context)
         storeCamera(routeKey, cameraSnapshot())
         storeCamera(childKey, childCamera)
         prepareCanvasSwitch()
         applyRoute(newRoute)
         applyCamera(childCamera)
+        beginCanvasTransition(true, parentStarmapId, parentRoute, parentCamera,
+                              childCamera, entryGeometry, context)
         logInteraction("scene_enter", "embed", instanceId, {
             "trigger": trigger || "",
             "zoomEntryKey": _zoomEntryKey,
             "childRouteKey": childKey,
             "childStarmapId": res.data.location.currentStarmapId,
             "parentZoom": parentZoom,
-            "childZoom": childZoom
+            "childZoom": childCamera.zoom,
+            "frozenScreenRadius": entryGeometry.screenRadius
         })
         visualFocusChanged()
-        return childZoom
+        return childCamera.zoom
     }
 
     // 退出当前画布，回到 Core 返回的父 route。continuous=true 时按当前镜头
     // 反推连续父镜头（缩放穿越用）；false 时恢复进入前的父镜头（返回按钮用）。
+    // Issue #949：切换前冻结旧子画布身份 / 镜头 / 入口几何，切换后启动反向
+    // 过渡演出 —— 圆环从屏幕外收回，父图其余部分逐步露出，最后落回原圆壳。
     function exitCanvasViaCore(continuous) {
         if (focusIsRoot || !starmapBackendRef)
             return -1
+        // 过渡还没收尾就立即反向缩小：先从当前已显示帧收尾，再冻结新快照。
+        settleViewportMotion()
         var childKey = routeKey
         var childZoom = zoomLevel
+        var childCamera = cameraSnapshot()
+        var childStarmapId = currentStarmapId
+        var childRoute = normalizeRoute(currentRoute)
         var res = starmapBackendRef.exit_starmap_canvas(JSON.stringify(currentRoute))
         if (!res || res.success !== true || !res.data || !res.data.rootStarmapId) {
             routeError = qsTr("返回父星图失败")
@@ -475,24 +810,25 @@ Item {
         var ctx = entryContexts[childKey]
         var cam = cameraStack[parentKey]
         if (continuous && ctx && ctx.ratio > 0) {
-            var parentZoom = Math.max(_cameraScaleMin,
-                                      Math.min(_cameraScaleMax, childZoom / ctx.ratio))
-            var childCenterX = screenToWorldX(width / 2)
-            var childCenterY = screenToWorldY(height / 2)
-            var parentCenterX = ctx.embedCenterX + (childCenterX - ctx.boundsCenterX) / ctx.ratio
-            var parentCenterY = ctx.embedCenterY + (childCenterY - ctx.boundsCenterY) / ctx.ratio
-            cam = {
-                zoom: parentZoom,
-                panX: width / 2 - parentCenterX * parentZoom,
-                panY: height / 2 - parentCenterY * parentZoom
-            }
+            // 连续缩小：父镜头 = 当前子镜头在同一份父子对应里的对应点。
+            cam = parentCameraForChild(childCamera, ctx)
         }
         if (!cam)
             cam = defaultCamera()
+        // 圆环缩小落点：入口在恢复后的父镜头下的屏幕几何（与概览圆壳同一处）。
+        var exitGeometry = ctx && ctx.embedDiameter > 0
+                ? embedScreenGeometry(cam, ctx.embedCenterX, ctx.embedCenterY, ctx.embedDiameter)
+                : null
+        if (ctx && exitGeometry) {
+            exitGeometry.instanceId = ctx.instanceId
+            exitGeometry.bounds = ctx.bounds
+        }
         storeCamera(parentKey, cam)
         prepareCanvasSwitch()
         applyRoute(parentRoute)
         applyCamera(cam)
+        beginCanvasTransition(false, childStarmapId, childRoute, childCamera, cam,
+                              exitGeometry, ctx)
         logInteraction("scene_exit", "scene", "", {
             "parentRouteKey": parentKey,
             "continuous": !!continuous,
@@ -521,8 +857,11 @@ Item {
     }
 
     // 切画布前清掉旧画布上的瞬时业务手势与编辑汇总键；捏合穿越时保留 pinch
-    // 状态，让同一次捏合继续作用在新画布上。
+    // 状态，让同一次捏合继续作用在新画布上。Issue #949：旧画面层与它的时间线
+    // 一起收尾，新画布的显示镜头从它自己的帧重新起步。
     function prepareCanvasSwitch() {
+        settleViewportMotion()
+        resetZoomRound()
         setInlineEditingKey("")
         hideTouchPreview()
         if (inputRouter)
@@ -667,6 +1006,46 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
+    // Issue #949：过渡期间的旧画面层。冻结的 route / 镜头（不再交互、不再是
+    // activeScene()），只负责把"切换前一帧"留在屏幕上，直到圆环整圈离开
+    // 可见视口；过渡结束（或用户新一帧输入）立即销毁，不持久化任何状态。
+    // ---------------------------------------------------------------------------
+    Loader {
+        id: outgoingSceneLoader
+        anchors.fill: parent
+        z: viewportMotion.entering ? 0 : 2
+        active: canvasArea.outgoingStarmapId !== "" && viewportMotion.active
+        sourceComponent: outgoingSceneComponent
+    }
+
+    Component {
+        id: outgoingSceneComponent
+        StarMapActiveScene {
+            dt: canvasArea.dt
+            starmapId: canvasArea.outgoingStarmapId
+            rootStarmapId: canvasArea.outgoingRoute
+                    ? canvasArea.outgoingRoute.rootStarmapId : ""
+            pathSegments: canvasArea.outgoingRoute ? canvasArea.outgoingRoute.segments : []
+            scenePathKey: canvasArea.outgoingRouteKey
+            starmapBackendRef: canvasArea.starmapBackendRef
+            selectionController: canvasArea.selectionController
+            interactionController: canvasArea.sharedInteraction
+            menuHost: canvasArea
+            interactive: false
+            zoomLevel: canvasArea.outgoingZoom
+            panX: canvasArea.outgoingPanX
+            panY: canvasArea.outgoingPanY
+            detailReveal: canvasArea.outgoingDetailReveal
+            transitionEmbedId: canvasArea.motionFocusInstanceId
+            ringVisible: canvasArea.outgoingSceneIsInsideRing && viewportMotion.ringVisible
+            ringCenterX: viewportMotion.ringCenterX
+            ringCenterY: viewportMotion.ringCenterY
+            ringRadius: viewportMotion.ringRadius
+            ringStrokeWidth: viewportMotion.ringStrokeWidth
+        }
+    }
+
+    // ---------------------------------------------------------------------------
     // 活动画布：本文件只加载 currentStarmapId 的一张 StarMapActiveScene。
     // 相机只是注入给它的两个标量（zoom / pan），内容自己按投影实时绘制。
     // ---------------------------------------------------------------------------
@@ -693,6 +1072,14 @@ Item {
             zoomLevel: canvasArea.zoomLevel
             panX: canvasArea.panX
             panY: canvasArea.panY
+            // Issue #949：过渡显示层（只影响绘制，不改 authored 坐标 / 图关系）。
+            detailReveal: canvasArea.activeDetailReveal
+            transitionEmbedId: canvasArea.motionFocusInstanceId
+            ringVisible: canvasArea.activeSceneIsInsideRing && viewportMotion.ringVisible
+            ringCenterX: viewportMotion.ringCenterX
+            ringCenterY: viewportMotion.ringCenterY
+            ringRadius: viewportMotion.ringRadius
+            ringStrokeWidth: viewportMotion.ringStrokeWidth
 
             onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
             onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }

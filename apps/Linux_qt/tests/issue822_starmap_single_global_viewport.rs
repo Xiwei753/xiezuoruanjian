@@ -1749,10 +1749,13 @@ fn embed_hit_testing_is_circular() {
     );
 
     // 概览里的子入口也要画正圆，不能把子星图画回长方形卡片。
+    // Issue #949 复核：概览圆点半径现在是 _overviewDotRadius（再乘展开进度），
+    // 旧的 "var r = _embedDiameter / 2 * fitScale" 断言在 HEAD 上就已失效
+    // （源码里从来没有这一行），这里按现状收窄成仍在用的圆点半径口径。
     let content_src = strip_line_comments(&read_src(CONTENT));
     assert!(
         content_src.contains("function _circlePath(cx, cy, r)")
-            && content_src.contains("var r = _embedDiameter / 2 * fitScale")
+            && content_src.contains("_overviewDotRadius")
             && content_src.contains("s += _circlePath(projectX(pos.x + _embedDiameter / 2),")
             && content_src.contains("s += _circlePath(projectX(npos.x + _embedDiameter / 2),"),
         "概览里的子入口必须用正圆路径画，实际源码缺少"

@@ -51,6 +51,17 @@ Item {
     // 概览需要的数据入口（只读）
     property var starmapBackendRef: null
 
+    // Issue #949：过渡演出进度（<0 = 不在过渡中）。圆壳仍然是父图里的真实
+    // Embed、世界直径仍是 200。过渡期间"同一个圆壳"由过渡层在同一几何上接手：
+    // 进度 0 时放大描边与本圆壳完全重合（没有一帧突变），之后半径按同一个
+    // progress 一直放大到整圈离开可见视口；过渡结束（进度 1）再交回真实圆壳。
+    // 这里绝不用覆盖率阈值决定圆壳可见性 —— 切换瞬间不是"关掉描边"，而是把
+    // 描边换成同一位置上继续放大的那一个。同一个进度也透给圆内概览，让
+    // 圆点 → 节点在母图与活动画布两层里同步展开。
+    property real revealProgress: -1
+    readonly property bool revealActive: revealProgress >= 0
+    readonly property bool revealOnScreen: revealActive && revealProgress < 1
+
     readonly property color _border: dt.border
     readonly property color _surfaceLow: dt.surfaceContainerLow
     readonly property color _inverseSurface: dt.inverseSurface
@@ -95,6 +106,7 @@ Item {
             dt: root.dt
             starmapId: root.targetStarmapId
             starmapBackendRef: root.starmapBackendRef
+            detailReveal: root.revealActive ? root.revealProgress : 1
         }
     }
 
@@ -105,9 +117,12 @@ Item {
         radius: width / 2
         antialiasing: true
         // 子星图像一块独立的主题表面：浅色主题浅底 + 深色反边，反之相反。
+        // 过渡期间仍继续绘制（圆环放大描边由过渡层按同一个圆壳几何画在
+        // 内容之下），只有整圈离开可见视口后才停。
         color: root._surfaceLow
         border.color: root._inverseSurface
         border.width: root.isSelected ? 3 : 2
+        visible: !root.revealActive || root.revealOnScreen
 
         transform: Translate {
             x: root.visualOffsetX

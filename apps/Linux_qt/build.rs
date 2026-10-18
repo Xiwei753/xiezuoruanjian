@@ -557,6 +557,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StarMapCanvas.qml");
     // Issue #929: 独立画布的活动场景
     println!("cargo:rerun-if-changed=qml/StarMapActiveScene.qml");
+    // Issue #949: 星图穿越过渡的演出状态（唯一时间线）
+    println!("cargo:rerun-if-changed=qml/StarMapViewportMotion.qml");
     // Issue #832: 星图唯一原始输入路由
     println!("cargo:rerun-if-changed=qml/StarMapInputRouter.qml");
     println!("cargo:rerun-if-changed=qml/StarMapGraphController.qml");

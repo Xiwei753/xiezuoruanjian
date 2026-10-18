@@ -99,12 +99,21 @@ fn canvas_mounts_camera_as_scalars_on_the_single_active_scene() {
         "整棵星图不得再有任何相机 scale transform：相机只以标量注入活动画布"
     );
 
-    // 任意时刻只有一张活动画布：Canvas 只加载 currentStarmapId 的一张
+    // 任意时刻只有一张**活动**画布：Canvas 只按 currentStarmapId 加载一张
     // StarMapActiveScene，没有第二张带相机的子画布。
+    // Issue #949 更新：穿越过渡期间会临时多一张"旧画面层"（冻结 route / 镜头、
+    // interactive: false，过渡结束立即销毁），它同样是整屏单画布、不是递归
+    // 子视口；活动画布仍然只有一张。
     assert_eq!(
-        count_occurrences(&src, "StarMapActiveScene {"),
+        count_occurrences(&src, "sourceComponent: activeSceneComponent"),
         1,
-        "Canvas 只能创建一张 StarMapActiveScene（当前活动画布），实际源码不符"
+        "Canvas 只能有一个活动画布加载器（currentStarmapId 的那张 StarMapActiveScene）"
+    );
+    assert!(
+        count_occurrences(&src, "StarMapActiveScene {") <= 2
+            && src.contains("id: outgoingSceneComponent")
+            && src.contains("interactive: false"),
+        "除唯一活动画布外，最多只允许 Issue #949 的旧画面层（禁交互、过渡后销毁）"
     );
     let loader = slice_between(&src, "id: activeSceneLoader", "Component {");
     assert!(

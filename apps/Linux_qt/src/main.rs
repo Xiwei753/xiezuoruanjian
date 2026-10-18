@@ -142,6 +142,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     // Issue #929: 独立画布的活动场景（当前活动图的实时矢量渲染层）。
     // Canvas 直接实例化它，漏登记时开发目录碰巧能找到，打包后组件不存在。
     "qml/StarMapActiveScene.qml" as "StarMapActiveScene.qml",
+    // Issue #949: 星图穿越过渡的演出状态（唯一时间线：镜头 / 圆环 / 节点展开）
+    "qml/StarMapViewportMotion.qml" as "StarMapViewportMotion.qml",
     // Issue #832: 星图唯一原始输入路由（单击/双击/右键/拖动/长按/连线/捏合/滚轮）
     "qml/StarMapInputRouter.qml" as "StarMapInputRouter.qml",
     "qml/StarMapGraphController.qml" as "StarMapGraphController.qml",

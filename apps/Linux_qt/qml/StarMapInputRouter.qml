@@ -114,6 +114,9 @@ Item {
         // connectArmed 时 pointerMode 是 connect，release 会提前 endConnect。
         if (ic.linkArmed || ic.connectArmed)
             return
+        // Issue #949：新一次按下先让过渡演出落到最终状态，命中与业务都按
+        // 最新 Core route + 看得见的那一帧算（旧动画不再把画面拉回去）。
+        canvas.cancelViewportMotion()
         pressScreenX = point.position.x
         pressScreenY = point.position.y
         var hit = hitAt(pressScreenX, pressScreenY)
@@ -158,6 +161,7 @@ Item {
         if (!canvas || !ic || ic.pointerMode !== "idle" ||
             ic.linkArmed || ic.connectArmed || editingBlocks)
             return
+        canvas.cancelViewportMotion()
 
         rightPressScreenX = point.position.x
         rightPressScreenY = point.position.y
@@ -709,7 +713,10 @@ Item {
         }
     }
 
-    // ── 滚轮：只改根相机 zoom，永远不改某个子图自己的尺寸状态 ──
+    // ── 滚轮：只改当前活动画布的相机 zoom，永远不改某个子图自己的尺寸状态 ──
+    // Issue #949：滚轮一档只更新"累计目标"（下一档从上一档的目标继续乘），
+    // 显示镜头由 Canvas 的单一补间连续追上去；连续滚动不会重起一堆互相
+    // 打断的补间。
     WheelHandler {
         id: wheelHandler
         target: null
@@ -724,7 +731,7 @@ Item {
                 : event.pixelDelta.y / 120.0
             if (delta === 0)
                 return
-            var oldZoom = canvas.zoomLevel
+            var oldZoom = canvas.zoomTargetLevel
             var newZoom = oldZoom * Math.pow(canvas._zoomFactor, delta)
             if (newZoom === oldZoom)
                 return

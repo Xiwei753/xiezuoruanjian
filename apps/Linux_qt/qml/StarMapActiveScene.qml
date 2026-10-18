@@ -59,6 +59,24 @@ Item {
     property real panX: 0
     property real panY: 0
 
+    // ── Issue #949：过渡的显示层开关（不参与命中 / 业务状态）──
+    // detailReveal：0 时节点画成概览同款小圆点，1 时是当前层完整节点
+    //   （连线跟随同一几何、标题随后显现）。过渡期间只改显示，不改 authored
+    //   坐标、图关系、选中对象或碰撞算法。
+    property real detailReveal: 1.0
+    // interactive=false 时本层只是过渡期间的旧画面：不参与 inline-edit 汇总
+    //   （命中 / 菜单 / 编辑都不走它）。
+    property bool interactive: true
+    // 母图侧要"继续画到整圈离开可见视口"的入口圆壳（进场 / 出场那一层标它）。
+    property string transitionEmbedId: ""
+    // 过渡圆环（同一个圆壳的放大描边 + 圆内表面）：圆心 / 半径按同一时间线现算，
+    //   只画在"圆内"的那一层（进场 = 活动子画布，出场 = 旧子画面层）。
+    property bool ringVisible: false
+    property real ringCenterX: 0
+    property real ringCenterY: 0
+    property real ringRadius: 0
+    property real ringStrokeWidth: 2
+
     // ── 单一投影入口 ──
     // 数学上 worldToScreenX(w) === panX + w * zoom，渲染时改写成
     // "视口中心 + (w - 视口中心世界坐标) × zoom"：中心偏移在 double 里现算，
@@ -92,6 +110,13 @@ Item {
     // 文字口径：用户字号 token × 镜头比例，夹在 0.6~8 倍（字形缓存安全边界，
     // 不是层级边界）。投影太小的对象直接不画文字。
     readonly property real _textScale: Math.max(0.6, Math.min(8.0, _safeZoom))
+
+    // Issue #949：概览圆点口径（与 StarMapSceneContent 的概览圆点同一公式），
+    // 展开进度 0 时活动画布的节点先以这个屏幕半径的圆点出现，逐步长成完整节点。
+    readonly property real _revealDotRadius:
+        Math.max(2, Math.min(6, Math.min(width, height) * 0.018))
+    // 展开进度（夹取，显示层安全）。
+    readonly property real _reveal: Math.max(0, Math.min(1, detailReveal))
 
     readonly property color _accent: dt.accent
     readonly property color _border: dt.border
@@ -142,6 +167,9 @@ Item {
     property string inlineEditingKey: ""
 
     function noteInlineEditing(nodeId, editing) {
+        // 过渡期间的旧画面层只绘制：不认领内联编辑汇总键。
+        if (!interactive)
+            return
         var key = scenePathKey + "/node_" + nodeId
         if (editing) {
             inlineEditingKey = key
@@ -855,6 +883,8 @@ Item {
                 anchors.fill: parent
                 antialiasing: true
                 preferredRendererType: Shape.CurveRenderer
+                // Issue #949：连线跟随同一个展开进度逐帧显现（几何不变）。
+                opacity: scene._reveal
 
                 // 线段
                 ShapePath {
@@ -947,10 +977,12 @@ Item {
             readonly property real worldY: isMoving && scene.interactionController
                     ? scene.interactionController.moveY : nodeData.y
 
-            x: scene.worldToScreenX(worldX)
-            y: scene.worldToScreenY(worldY)
-            width: nodeData.width * scene._safeZoom
-            height: nodeData.height * scene._safeZoom
+            x: scene.worldToScreenX(worldX) + (nodeData.width * scene._safeZoom - width) / 2
+            y: scene.worldToScreenY(worldY) + (nodeData.height * scene._safeZoom - height) / 2
+            width: nodeData.width * scene._safeZoom * scene._reveal
+                   + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            height: nodeData.height * scene._safeZoom * scene._reveal
+                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
             z: 1
 
             function beginEdit() {
@@ -1003,8 +1035,10 @@ Item {
                     anchors.margins: 8 * scene._safeZoom
                     readOnly: !nodeItem.editing
                     enabled: nodeItem.editing
-                    // 投影太小就不画文字（只省文字，不改形状）。
-                    visible: nodeItem.editing || nodeItem.height >= 18
+                    // 投影太小就不画文字（只省文字，不改形状）；展开进度到
+                    // 一半以后标题才显出来。
+                    visible: nodeItem.editing
+                             || (nodeItem.height >= 18 && scene.detailReveal > 0.6)
                     color: scene._textPrimary
                     font.pointSize: scene.dt.fontSmPt * scene._textScale
                     selectByMouse: nodeItem.editing
@@ -1073,12 +1107,36 @@ Item {
                     : false
             starmapBackendRef: scene.starmapBackendRef
 
-            x: scene.worldToScreenX(worldX)
-            y: scene.worldToScreenY(worldY)
-            width: embedData.width * scene._safeZoom
-            height: embedData.height * scene._safeZoom
+            x: scene.worldToScreenX(worldX) + (embedData.width * scene._safeZoom - width) / 2
+            y: scene.worldToScreenY(worldY) + (embedData.height * scene._safeZoom - height) / 2
+            width: embedData.width * scene._safeZoom * scene._reveal
+                   + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            height: embedData.height * scene._safeZoom * scene._reveal
+                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
             z: 2
+            // Issue #949：只有走过渡的那个入口按同一个展开进度继续画圆壳。
+            revealProgress: embedData.instanceId === scene.transitionEmbedId
+                    ? scene.detailReveal : -1
         }
+    }
+
+    // ── Issue #949：过渡圆环（同一圆壳的放大描边 + 圆内表面）──
+    // 只影响显示：圆心 / 半径由同一个 progress 现算，圆心向视口中心对齐、
+    // 半径放大到整圈离开可见视口才停止绘制；圆内这段画面就是本层真实矢量
+    // 内容（不是把圆点预览截图放大）。画在本层内容之下：圆外留给旧画面层。
+    Rectangle {
+        id: transitionRing
+        visible: scene.ringVisible
+        x: scene.ringCenterX - scene.ringRadius
+        y: scene.ringCenterY - scene.ringRadius
+        width: Math.max(0, scene.ringRadius) * 2
+        height: Math.max(0, scene.ringRadius) * 2
+        radius: width / 2
+        color: scene.dt.surfaceContainerLow
+        border.color: scene.dt.inverseSurface
+        border.width: scene.ringStrokeWidth
+        antialiasing: true
+        z: -1
     }
 
     // ── 加载 / 错误提示 ──
