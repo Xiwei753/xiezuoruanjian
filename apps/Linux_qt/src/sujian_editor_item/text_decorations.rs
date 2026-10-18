@@ -180,6 +180,13 @@ pub(crate) fn build_geometry(
         return geometry;
     }
 
+    let mut prefix_max_end = Vec::with_capacity(spans.len());
+    let mut max_end = 0;
+    for span in spans {
+        max_end = max_end.max(span.end_byte);
+        prefix_max_end.push(max_end);
+    }
+
     let visible_lines = snapshot.resolve_viewport_lines(scroll_y, viewport_height.max(1.0));
     geometry.visible_line_keys = visible_lines.iter().map(decoration_line_key).collect();
     let Some(canonical) =
@@ -210,7 +217,13 @@ pub(crate) fn build_geometry(
             continue;
         }
         geometry.line_geometries.push(build_line_geometry(
-            snapshot, canonical, spans, line, key, dpr,
+            snapshot,
+            canonical,
+            spans,
+            &prefix_max_end,
+            line,
+            key,
+            dpr,
         ));
     }
 
@@ -244,6 +257,7 @@ fn build_line_geometry(
     snapshot: &LayoutSnapshot,
     canonical: &CanonicalDocumentVisualSnapshot,
     spans: &[TextDecorationSpan],
+    prefix_max_end: &[usize],
     line: &VisualLine,
     key: DecorationLineKey,
     dpr: f64,
@@ -252,10 +266,11 @@ fn build_line_geometry(
     let mut warning_vertices = Vec::new();
     if line.has_qt_layout && line.byte_start < line.byte_end {
         if let Some(canonical_line) = canonical_line_for(canonical, line) {
-            let first_span = spans.partition_point(|span| span.end_byte <= line.byte_start);
-            for span in &spans[first_span..] {
-                if span.start_byte >= line.byte_end {
-                    break;
+            let first_span = prefix_max_end.partition_point(|&max_end| max_end <= line.byte_start);
+            let last_span = spans.partition_point(|span| span.start_byte < line.byte_end);
+            for span in &spans[first_span..last_span] {
+                if span.end_byte <= line.byte_start {
+                    continue;
                 }
                 if span.text_revision != snapshot.text_revision {
                     continue;
