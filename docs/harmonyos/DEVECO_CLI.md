@@ -395,7 +395,7 @@ devecocli auth status
 ```bash
 devecocli device list
 devecocli device view
-devecocli run --device <serial>              # 构建 + 安装 + 启动
+devecocli run --device <serial> --module entry   # 构建 + 安装 + 启动（必须显式 --module）
 devecocli run --device <serial> --skip-build --build-mode debug
 devecocli run --build-mode release
 devecocli log --bundle-name com.xiwei.sujian --tail 200
@@ -405,6 +405,19 @@ devecocli ui screenshot --path ./shot.png
 ```
 
 模拟器：`devecocli emulator list|start|stop|create`（首次可能需 `devecocli emulator license`）。
+
+### 常连测试设备（无线调试）
+
+- HUAWEI Pocket 2：`192.168.43.19:46857`（无线调试地址；端口以手机「开发者选项 → 无线调试」显示为准，可能变化）。
+- 连接与安装：
+
+```bash
+hdc tconn 192.168.43.19:46857
+devecocli run --device 192.168.43.19:46857 --module entry
+```
+
+- 签名不一致（`9568332 install sign info inconsistent`）时先卸载再装：`devecocli run --device 192.168.43.19:46857 --module entry --uninstall`。
+- 该设备 UDID 已在 `apps/harmony/signature/sujian-debug.p7b` 白名单内（签名件不入 git）。
 
 ## 本地构建 → AGC 测试版自动化（已落地）
 
