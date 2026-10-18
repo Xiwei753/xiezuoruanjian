@@ -107,6 +107,26 @@ pub(crate) fn apply_commit_plan_with_sync_state_merge(
     merged_conflicts: &[crate::sync::types::SyncConflict],
     backup_mode: bool,
 ) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
+    apply_commit_plan_with_sync_state_merge_for_group(
+        live_root,
+        content_actions,
+        engine_state_actions,
+        merged_state,
+        merged_conflicts,
+        None,
+        backup_mode,
+    )
+}
+
+fn apply_commit_plan_with_sync_state_merge_for_group(
+    live_root: &Path,
+    content_actions: &[crate::sync::staging::CommitAction],
+    engine_state_actions: &[crate::sync::staging::CommitAction],
+    merged_state: &crate::sync::types::SyncState,
+    merged_conflicts: &[crate::sync::types::SyncConflict],
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+    backup_mode: bool,
+) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
     // 注意：此处不像 apply_commit_plan_to_live 那样对
     // `content_actions.is_empty() && engine_state_actions.is_empty() && !backup_mode`
     // 做 early return。进入本函数本身就说明 `plan.needs_sync_state_merge == true`，
@@ -136,8 +156,15 @@ pub(crate) fn apply_commit_plan_with_sync_state_merge(
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
     let conflicts_json = serde_json::to_string_pretty(merged_conflicts)
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-    tx.add_bytes("app-meta/sync/state.local.json", state_json.as_bytes())?;
-    tx.add_bytes("app-meta/sync/conflicts.json", conflicts_json.as_bytes())?;
+    let (state_path, conflicts_path) = match app_group {
+        Some(group) => (group.local_state_path(), group.local_conflicts_path()),
+        None => (
+            "app-meta/sync/state.local.json".to_string(),
+            "app-meta/sync/conflicts.json".to_string(),
+        ),
+    };
+    tx.add_bytes(&state_path, state_json.as_bytes())?;
+    tx.add_bytes(&conflicts_path, conflicts_json.as_bytes())?;
     // content_actions（安全正文）。
     for action in content_actions {
         match action {
@@ -181,18 +208,21 @@ fn apply_commit_plan_with_optional_merge(
     if plan.needs_sync_state_merge {
         let base_root = run.base_root();
         let staging_root = run.staging_root();
+        let app_group = run.app_group();
         let (merged_state, merged_conflicts) =
-            crate::sync::staging::sync_state_merge::merge_sync_state_three_way(
+            crate::sync::staging::sync_state_merge::merge_sync_state_three_way_for_target(
                 &base_root,
                 live_root,
                 &staging_root,
+                app_group,
             )?;
-        apply_commit_plan_with_sync_state_merge(
+        apply_commit_plan_with_sync_state_merge_for_group(
             live_root,
             content_actions,
             &plan.engine_state_actions,
             &merged_state,
             &merged_conflicts,
+            app_group,
             backup_mode,
         )
     } else {

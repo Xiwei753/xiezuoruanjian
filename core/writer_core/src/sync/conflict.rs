@@ -26,7 +26,20 @@ pub(crate) fn load_conflicts_json_for_group(
     sync_root: &Path,
     group: &crate::sync::types::AppDataGroup,
 ) -> crate::Result<Vec<SyncConflict>> {
-    load_conflicts_json_at_path(&sync_root.join(group.local_conflicts_path()))
+    let group_path = sync_root.join(group.local_conflicts_path());
+    if group_path.exists() {
+        return Ok(load_conflicts_json_at_path(&group_path)?
+            .into_iter()
+            .filter(|conflict| group.owns_path(&conflict.local_path))
+            .collect());
+    }
+
+    // The old flat conflict file is migration input only. Once a group's
+    // canonical file exists, it is the sole source for that group's conflicts.
+    Ok(load_conflicts_json(sync_root)?
+        .into_iter()
+        .filter(|conflict| group.owns_path(&conflict.local_path))
+        .collect())
 }
 
 fn load_conflicts_json_at_path(conflicts_path: &Path) -> crate::Result<Vec<SyncConflict>> {
@@ -49,15 +62,98 @@ fn persist_conflict_state(
     state: &crate::sync::types::SyncState,
     conflicts: &[SyncConflict],
 ) -> crate::Result<()> {
+    persist_conflict_state_at_paths(
+        sync_root,
+        "app-meta/sync/state.local.json",
+        state,
+        "app-meta/sync/conflicts.json",
+        conflicts,
+    )
+}
+
+fn persist_conflict_state_for_group(
+    sync_root: &Path,
+    group: &crate::sync::types::AppDataGroup,
+    state: &crate::sync::types::SyncState,
+    conflicts: &[SyncConflict],
+) -> crate::Result<()> {
+    persist_conflict_state_at_paths(
+        sync_root,
+        &group.local_state_path(),
+        state,
+        &group.local_conflicts_path(),
+        conflicts,
+    )
+}
+
+fn persist_conflict_state_at_paths(
+    sync_root: &Path,
+    state_path: &str,
+    state: &crate::sync::types::SyncState,
+    conflicts_path: &str,
+    conflicts: &[SyncConflict],
+) -> crate::Result<()> {
     let state_json = serde_json::to_string_pretty(state)
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
     let conflicts_json = serde_json::to_string_pretty(conflicts)
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
     let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
-    tx.add_bytes("app-meta/sync/state.local.json", state_json.as_bytes())?;
-    tx.add_bytes("app-meta/sync/conflicts.json", conflicts_json.as_bytes())?;
+    tx.add_bytes(state_path, state_json.as_bytes())?;
+    tx.add_bytes(conflicts_path, conflicts_json.as_bytes())?;
     tx.commit()?;
+    Ok(())
+}
+
+fn load_conflict_state(
+    sync_root: &Path,
+    group: Option<&crate::sync::types::AppDataGroup>,
+) -> crate::Result<crate::sync::types::SyncState> {
+    match group {
+        Some(group) => crate::sync::SyncService::load_sync_state_for_target(
+            sync_root,
+            &crate::sync::types::SyncTarget::app_data_group(group.clone()),
+        ),
+        None => crate::sync::SyncService::load_sync_state(sync_root),
+    }
+}
+
+fn load_conflicts_for_target(
+    sync_root: &Path,
+    group: Option<&crate::sync::types::AppDataGroup>,
+) -> crate::Result<Vec<SyncConflict>> {
+    match group {
+        Some(group) => load_conflicts_json_for_group(sync_root, group),
+        None => load_conflicts_json(sync_root),
+    }
+}
+
+fn persist_conflict_state_for_target(
+    sync_root: &Path,
+    group: Option<&crate::sync::types::AppDataGroup>,
+    state: &crate::sync::types::SyncState,
+    conflicts: &[SyncConflict],
+) -> crate::Result<()> {
+    match group {
+        Some(group) => persist_conflict_state_for_group(sync_root, group, state, conflicts),
+        None => persist_conflict_state(sync_root, state, conflicts),
+    }
+}
+
+fn validate_group_conflict_path(
+    group: Option<&crate::sync::types::AppDataGroup>,
+    path: &str,
+    operation: &str,
+) -> crate::Result<()> {
+    if let Some(group) = group {
+        if !group.owns_path(path) {
+            return Err(crate::Error::Other(format!(
+                "{operation}: path '{}' is outside App data group '{}'",
+                path,
+                group.id()
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -229,7 +325,44 @@ pub fn record_staging_conflicts(
     staging_conflicts: &[crate::sync::staging::StagingConflict],
     existing_conflicts: &[SyncConflict],
 ) -> crate::Result<Vec<SyncConflict>> {
-    if staging_conflicts.is_empty() && existing_conflicts.is_empty() {
+    record_staging_conflicts_for_group(
+        sync_root,
+        remote_prefix,
+        staging_conflicts,
+        existing_conflicts,
+        None,
+    )
+}
+
+/// Group-aware App variant. A `None` group preserves the flat Project/legacy path;
+/// an App group reads and writes only its own state and canonical conflicts file.
+pub fn record_staging_conflicts_for_group(
+    sync_root: &Path,
+    remote_prefix: &str,
+    staging_conflicts: &[crate::sync::staging::StagingConflict],
+    existing_conflicts: &[SyncConflict],
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+) -> crate::Result<Vec<SyncConflict>> {
+    let group_conflicts: Vec<SyncConflict> = existing_conflicts
+        .iter()
+        .filter(|conflict| app_group.map_or(true, |group| group.owns_path(&conflict.local_path)))
+        .cloned()
+        .collect();
+
+    if let Some(group) = app_group {
+        for conflict in staging_conflicts {
+            let path = conflict.rel_path.to_string_lossy();
+            if !group.owns_path(&path) {
+                return Err(crate::Error::Other(format!(
+                    "record_staging_conflicts: path '{}' is outside App data group '{}'",
+                    path,
+                    group.id()
+                )));
+            }
+        }
+    }
+
+    if staging_conflicts.is_empty() && group_conflicts.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -239,12 +372,12 @@ pub fn record_staging_conflicts(
         .unwrap_or(0);
 
     // 先在内存里构造完整的新状态。
-    let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
-    let mut conflicts_json = load_conflicts_json(sync_root)?;
+    let mut state = load_conflict_state(sync_root, app_group)?;
+    let mut conflicts_json = load_conflicts_for_target(sync_root, app_group)?;
 
     // 先把 existing_conflicts（Transfer 冲突）合并进来，
     // 确保持久化状态包含两层冲突。
-    for ec in existing_conflicts {
+    for ec in &group_conflicts {
         upsert_conflict(
             &mut conflicts_json,
             &mut state.conflicts,
@@ -293,11 +426,11 @@ pub fn record_staging_conflicts(
     }
 
     // 一次事务写 state + conflicts.json。
-    persist_conflict_state(sync_root, &state, &conflicts_json)?;
+    persist_conflict_state_for_target(sync_root, app_group, &state, &conflicts_json)?;
 
     // 返回合并后的完整冲突列表（existing new staging）。
     Ok(merge_sync_conflicts(
-        existing_conflicts,
+        &group_conflicts,
         &new_staging_conflicts,
     ))
 }
@@ -447,6 +580,31 @@ impl crate::sync::SyncService {
         conflict: SyncConflict,
         local_content: Option<&str>,
     ) -> crate::Result<()> {
+        Self::record_sync_conflict_at_target(sync_root, conflict, local_content, None)
+    }
+
+    pub fn record_sync_conflict_for_group(
+        sync_root: &Path,
+        conflict: SyncConflict,
+        local_content: Option<&str>,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<()> {
+        if !group.owns_path(&conflict.local_path) {
+            return Err(crate::Error::Other(format!(
+                "record_sync_conflict: path '{}' is outside App data group '{}'",
+                conflict.local_path,
+                group.id()
+            )));
+        }
+        Self::record_sync_conflict_at_target(sync_root, conflict, local_content, Some(group))
+    }
+
+    fn record_sync_conflict_at_target(
+        sync_root: &Path,
+        conflict: SyncConflict,
+        local_content: Option<&str>,
+        group: Option<&crate::sync::types::AppDataGroup>,
+    ) -> crate::Result<()> {
         // 备份本地内容（事务外，辅助文件）。
         if let Some(content) = local_content {
             let conflict_file_path = sync_root.join(format!(
@@ -460,8 +618,8 @@ impl crate::sync::SyncService {
         }
 
         // 先在内存里构造完整的新状态。
-        let mut state = Self::load_sync_state(sync_root)?;
-        let mut conflicts_json = load_conflicts_json(sync_root)?;
+        let mut state = load_conflict_state(sync_root, group)?;
+        let mut conflicts_json = load_conflicts_for_target(sync_root, group)?;
 
         upsert_conflict(
             &mut conflicts_json,
@@ -471,7 +629,7 @@ impl crate::sync::SyncService {
         );
 
         // 一次事务写 state + conflicts.json。
-        persist_conflict_state(sync_root, &state, &conflicts_json)?;
+        persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
         Ok(())
     }
 
@@ -497,8 +655,25 @@ impl crate::sync::SyncService {
     /// - **`BothChanged`**：只有 `canonical_known_hash()` 返回可证明的远端 MD5
     ///   时才覆盖 `known_files`。返回 `None` 时不拿本地 hash 冒充远端 hash。
     pub fn resolve_conflict_keep_local(sync_root: &Path, path: &str) -> crate::Result<()> {
-        let mut state = Self::load_sync_state(sync_root)?;
-        let mut conflicts_json = load_conflicts_json(sync_root)?;
+        Self::resolve_conflict_keep_local_at_target(sync_root, path, None)
+    }
+
+    pub fn resolve_conflict_keep_local_for_group(
+        sync_root: &Path,
+        path: &str,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<()> {
+        Self::resolve_conflict_keep_local_at_target(sync_root, path, Some(group))
+    }
+
+    fn resolve_conflict_keep_local_at_target(
+        sync_root: &Path,
+        path: &str,
+        group: Option<&crate::sync::types::AppDataGroup>,
+    ) -> crate::Result<()> {
+        validate_group_conflict_path(group, path, "resolve_conflict_keep_local")?;
+        let mut state = load_conflict_state(sync_root, group)?;
+        let mut conflicts_json = load_conflicts_for_target(sync_root, group)?;
 
         // 以 conflicts.json 为 canonical record：找不到直接返回 Err，
         // 不再回退到读本地文件算 MD5 的 fallback（那会用本地 MD5 冒充远端基线）。
@@ -557,7 +732,7 @@ impl crate::sync::SyncService {
         // Remove the conflict record from state.conflicts and conflicts.json
         // via the shared in-memory helper.
         remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
-        persist_conflict_state(sync_root, &state, &conflicts_json)?;
+        persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
         Ok(())
     }
 
@@ -627,8 +802,25 @@ impl crate::sync::SyncService {
     /// - `Ok(false)`：仅排队 `pending_take_remote`（老数据兼容，live 正文未变），
     ///   平台层不应触发编辑器重载。
     pub fn resolve_conflict_take_remote(sync_root: &Path, path: &str) -> crate::Result<bool> {
-        let mut state = Self::load_sync_state(sync_root)?;
-        let mut conflicts_json = load_conflicts_json(sync_root)?;
+        Self::resolve_conflict_take_remote_at_target(sync_root, path, None)
+    }
+
+    pub fn resolve_conflict_take_remote_for_group(
+        sync_root: &Path,
+        path: &str,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<bool> {
+        Self::resolve_conflict_take_remote_at_target(sync_root, path, Some(group))
+    }
+
+    fn resolve_conflict_take_remote_at_target(
+        sync_root: &Path,
+        path: &str,
+        group: Option<&crate::sync::types::AppDataGroup>,
+    ) -> crate::Result<bool> {
+        validate_group_conflict_path(group, path, "resolve_conflict_take_remote")?;
+        let mut state = load_conflict_state(sync_root, group)?;
+        let mut conflicts_json = load_conflicts_for_target(sync_root, group)?;
 
         // 以 conflicts.json 为 canonical record：找不到直接返回 Err，
         // 不再回退到读本地文件算 MD5 的 fallback。如果 state mirror 缺这条，用 canonical conflict 补齐。
@@ -669,7 +861,7 @@ impl crate::sync::SyncService {
             Self::cleanup_subobject_conflicts(&mut state, &mut conflicts_json, path);
         }
 
-        persist_conflict_state(sync_root, &state, &conflicts_json)?;
+        persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
         // applied_live = !use_pending_fallback：
         // - use_pending_fallback=false → 已立即应用 live 正文（snapshot 替换/移入 trash）。
         // - use_pending_fallback=true → 仅排队 pending_take_remote，live 正文未变。
@@ -2276,8 +2468,25 @@ impl crate::sync::SyncService {
     /// - **`BothChanged`**：只有 `canonical_known_hash()` 返回可证明的远端 MD5
     ///   时才覆盖 `known_files`。返回 `None` 时不拿本地 hash 冒充远端 hash。
     pub fn resolve_conflict_mark_merged(sync_root: &Path, path: &str) -> crate::Result<()> {
-        let mut state = Self::load_sync_state(sync_root)?;
-        let mut conflicts_json = load_conflicts_json(sync_root)?;
+        Self::resolve_conflict_mark_merged_at_target(sync_root, path, None)
+    }
+
+    pub fn resolve_conflict_mark_merged_for_group(
+        sync_root: &Path,
+        path: &str,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<()> {
+        Self::resolve_conflict_mark_merged_at_target(sync_root, path, Some(group))
+    }
+
+    fn resolve_conflict_mark_merged_at_target(
+        sync_root: &Path,
+        path: &str,
+        group: Option<&crate::sync::types::AppDataGroup>,
+    ) -> crate::Result<()> {
+        validate_group_conflict_path(group, path, "resolve_conflict_mark_merged")?;
+        let mut state = load_conflict_state(sync_root, group)?;
+        let mut conflicts_json = load_conflicts_for_target(sync_root, group)?;
 
         // 以 conflicts.json 为 canonical record：找不到直接返回 Err，
         // 不再回退到读本地文件算 MD5 的 fallback（那会用本地 MD5 冒充远端基线）。
@@ -2333,7 +2542,7 @@ impl crate::sync::SyncService {
         // Remove the conflict record from state.conflicts and conflicts.json
         // via the shared in-memory helper.
         remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
-        persist_conflict_state(sync_root, &state, &conflicts_json)?;
+        persist_conflict_state_for_target(sync_root, group, &state, &conflicts_json)?;
         Ok(())
     }
 
@@ -2346,7 +2555,24 @@ impl crate::sync::SyncService {
         sync_root: &Path,
         path: &str,
     ) -> crate::Result<crate::sync::types::SyncConflictPreview> {
-        let conflicts = load_conflicts_json(sync_root)?;
+        Self::load_conflict_preview_at_target(sync_root, path, None)
+    }
+
+    pub fn load_conflict_preview_for_group(
+        sync_root: &Path,
+        path: &str,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<crate::sync::types::SyncConflictPreview> {
+        Self::load_conflict_preview_at_target(sync_root, path, Some(group))
+    }
+
+    fn load_conflict_preview_at_target(
+        sync_root: &Path,
+        path: &str,
+        group: Option<&crate::sync::types::AppDataGroup>,
+    ) -> crate::Result<crate::sync::types::SyncConflictPreview> {
+        validate_group_conflict_path(group, path, "load_conflict_preview")?;
+        let conflicts = load_conflicts_for_target(sync_root, group)?;
         let conflict = conflicts
             .iter()
             .find(|c| c.local_path == path)
@@ -2402,6 +2628,13 @@ impl crate::sync::SyncService {
     /// 从 `conflicts.json` 读取，供平台层展示冲突列表。
     pub fn list_conflicts(sync_root: &Path) -> crate::Result<Vec<SyncConflict>> {
         load_conflicts_json(sync_root)
+    }
+
+    pub fn list_conflicts_for_group(
+        sync_root: &Path,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> crate::Result<Vec<SyncConflict>> {
+        load_conflicts_json_for_group(sync_root, group)
     }
 }
 

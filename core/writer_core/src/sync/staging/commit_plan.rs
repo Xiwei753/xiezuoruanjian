@@ -170,6 +170,37 @@ pub(crate) fn classify_staging_commit_path(raw_path: &str) -> StagingCommitClass
     StagingCommitClass::Content
 }
 
+/// App group variant of the staging classifier. Group-local manifest/state/conflicts
+/// are routed through this run, while the old aggregate App metadata remains a
+/// read-only migration input and is never replayed by a group commit.
+pub(crate) fn classify_staging_commit_path_for_group(
+    raw_path: &str,
+    group: &crate::sync::types::AppDataGroup,
+) -> StagingCommitClass {
+    let path = raw_path.replace('\\', "/");
+    if path == group.local_manifest_path() {
+        return StagingCommitClass::EngineState;
+    }
+    if path == group.local_state_path() || path == group.local_conflicts_path() {
+        return StagingCommitClass::EngineStateMerge;
+    }
+
+    // Legacy aggregate files can be read by group migration code but are not owned
+    // by a single group and must not be written back from this staging run.
+    if path == "app-meta/sync/manifest.sync.json"
+        || path == "app-meta/sync/state.local.json"
+        || path == "app-meta/sync/conflicts.json"
+    {
+        return StagingCommitClass::Skip;
+    }
+
+    if group.owns_path(&path) {
+        classify_staging_commit_path(&path)
+    } else {
+        StagingCommitClass::Skip
+    }
+}
+
 /// 比较两个 `Option<Vec<u8>>` 是否相等。
 /// `None == None` → true，`None == Some(_)` → false。
 pub(crate) fn opt_bytes_eq(a: &Option<Vec<u8>>, b: &Option<Vec<u8>>) -> bool {

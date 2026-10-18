@@ -1,8 +1,8 @@
 //! 同步状态查询 facade — per-target 本地状态 + 全量同步持久状态。
 //!
 //! 分层：
-//! - per-target `state.local.json`（`<root>/app-meta/sync/state.local.json`）记录每个
-//!   target 自己的 manifest/LWW 状态；
+//! - Project target 的 `state.local.json` 位于 `<root>/app-meta/sync/`；App v2
+//!   则将 manifest/LWW/conflict 状态分别保存在各自的 group 目录中；
 //! - `full_state.local.json`（`<app_data_root>/app-meta/sync/full_state.local.json`）
 //!   只记录"这一次全量事务整体是什么结果"，由 [`super::sync_ops`] 在事务开始 /
 //!   提前失败 / 聚合完成时写入，本模块只负责读取与原子落盘。
@@ -38,6 +38,33 @@ impl super::WriterCore {
                 target_kind
             ))),
         }
+    }
+
+    fn app_conflict_groups(&self) -> crate::error::Result<Vec<crate::sync::types::AppDataGroup>> {
+        crate::sync::app_data_group_catalog::discover_local_app_data_groups(&self.app_data_root)
+    }
+
+    fn app_conflict_group_for_path(
+        &self,
+        path: &str,
+    ) -> crate::error::Result<crate::sync::types::AppDataGroup> {
+        let mut owners = self
+            .app_conflict_groups()?
+            .into_iter()
+            .filter(|group| group.owns_path(path));
+        let group = owners.next().ok_or_else(|| {
+            crate::Error::Other(format!(
+                "App conflict path '{}' does not belong to a known data group",
+                path
+            ))
+        })?;
+        if owners.next().is_some() {
+            return Err(crate::Error::Other(format!(
+                "App conflict path '{}' belongs to multiple data groups",
+                path
+            )));
+        }
+        Ok(group)
     }
 
     pub fn scan_sync_files(
@@ -97,7 +124,12 @@ impl super::WriterCore {
         path: &str,
     ) -> crate::error::Result<()> {
         let root = self.conflict_target_root(target_kind, project_id)?;
-        crate::sync::SyncService::resolve_conflict_keep_local(&root, path)
+        if target_kind == "app" {
+            let group = self.app_conflict_group_for_path(path)?;
+            crate::sync::SyncService::resolve_conflict_keep_local_for_group(&root, path, &group)
+        } else {
+            crate::sync::SyncService::resolve_conflict_keep_local(&root, path)
+        }
     }
 
     /// 冲突解决：采用远端版本。
@@ -111,7 +143,12 @@ impl super::WriterCore {
         path: &str,
     ) -> crate::error::Result<bool> {
         let root = self.conflict_target_root(target_kind, project_id)?;
-        crate::sync::SyncService::resolve_conflict_take_remote(&root, path)
+        if target_kind == "app" {
+            let group = self.app_conflict_group_for_path(path)?;
+            crate::sync::SyncService::resolve_conflict_take_remote_for_group(&root, path, &group)
+        } else {
+            crate::sync::SyncService::resolve_conflict_take_remote(&root, path)
+        }
     }
 
     /// 冲突解决：标记为已合并。
@@ -125,7 +162,12 @@ impl super::WriterCore {
         path: &str,
     ) -> crate::error::Result<()> {
         let root = self.conflict_target_root(target_kind, project_id)?;
-        crate::sync::SyncService::resolve_conflict_mark_merged(&root, path)
+        if target_kind == "app" {
+            let group = self.app_conflict_group_for_path(path)?;
+            crate::sync::SyncService::resolve_conflict_mark_merged_for_group(&root, path, &group)
+        } else {
+            crate::sync::SyncService::resolve_conflict_mark_merged(&root, path)
+        }
     }
 
     /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
@@ -139,7 +181,12 @@ impl super::WriterCore {
         path: &str,
     ) -> crate::error::Result<crate::sync::types::SyncConflictPreview> {
         let root = self.conflict_target_root(target_kind, project_id)?;
-        crate::sync::SyncService::load_conflict_preview(&root, path)
+        if target_kind == "app" {
+            let group = self.app_conflict_group_for_path(path)?;
+            crate::sync::SyncService::load_conflict_preview_for_group(&root, path, &group)
+        } else {
+            crate::sync::SyncService::load_conflict_preview(&root, path)
+        }
     }
 
     /// 列出指定 target 的所有冲突记录。
@@ -152,7 +199,17 @@ impl super::WriterCore {
         project_id: Option<&str>,
     ) -> crate::error::Result<Vec<crate::sync::SyncConflict>> {
         let root = self.conflict_target_root(target_kind, project_id)?;
-        crate::sync::SyncService::list_conflicts(&root)
+        if target_kind == "app" {
+            let mut conflicts = Vec::new();
+            for group in self.app_conflict_groups()? {
+                conflicts.extend(crate::sync::SyncService::list_conflicts_for_group(
+                    &root, &group,
+                )?);
+            }
+            Ok(conflicts)
+        } else {
+            crate::sync::SyncService::list_conflicts(&root)
+        }
     }
 
     /// 列出所有 target 的所有冲突（聚合），只返回摘要条目，不含正文/快照。
@@ -167,7 +224,7 @@ impl super::WriterCore {
         let mut entries = Vec::new();
 
         // App target（星图等应用级数据）。读取失败不阻断全局聚合。
-        match crate::sync::SyncService::list_conflicts(&self.app_data_root) {
+        match self.list_sync_conflicts("app", None) {
             Ok(conflicts) => {
                 for c in conflicts {
                     let kind = match c.kind {

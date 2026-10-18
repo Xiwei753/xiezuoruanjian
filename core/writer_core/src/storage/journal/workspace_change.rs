@@ -137,7 +137,31 @@ pub fn ensure_sync_tombstones_from_facts(
     if facts.is_empty() {
         return Ok(());
     }
-    let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
+    let target = app_group_target_for_delete_facts(facts)?;
+    ensure_sync_tombstones_for_target(sync_root, facts, target.as_ref())
+}
+
+/// Persist Project delete facts in the legacy flat state, without inferring an
+/// App group from Project-relative paths that may happen to share App names.
+pub fn ensure_sync_tombstones_from_facts_flat(
+    sync_root: &Path,
+    facts: &[SyncDeleteFact],
+) -> crate::error::Result<()> {
+    ensure_sync_tombstones_for_target(sync_root, facts, None)
+}
+
+fn ensure_sync_tombstones_for_target(
+    sync_root: &Path,
+    facts: &[SyncDeleteFact],
+    target: Option<&crate::sync::types::SyncTarget>,
+) -> crate::error::Result<()> {
+    if facts.is_empty() {
+        return Ok(());
+    }
+    let mut state = match target {
+        Some(target) => crate::sync::SyncService::load_sync_state_for_target(sync_root, target)?,
+        None => crate::sync::SyncService::load_sync_state(sync_root)?,
+    };
     let mut changed = false;
     for fact in facts {
         let exists = state
@@ -163,9 +187,56 @@ pub fn ensure_sync_tombstones_from_facts(
         changed = true;
     }
     if changed {
-        crate::sync::SyncService::save_sync_state(sync_root, &state)?;
+        match target {
+            Some(target) => {
+                crate::sync::SyncService::save_sync_state_for_target(sync_root, target, &state)?
+            }
+            None => crate::sync::SyncService::save_sync_state(sync_root, &state)?,
+        }
     }
     Ok(())
+}
+
+/// App deletion facts are stored beside the LWW state for the group that owns
+/// their paths. Facts outside the App group layout retain the Project state path.
+fn app_group_target_for_delete_facts(
+    facts: &[SyncDeleteFact],
+) -> crate::error::Result<Option<crate::sync::types::SyncTarget>> {
+    let mut group = None;
+    for fact in facts {
+        let path = fact.original_path.replace('\\', "/");
+        let candidate = crate::sync::config_store::app_data_group_for_path(&path);
+        if let Some(candidate) = candidate {
+            if group.as_ref().is_some_and(|current| current != &candidate) {
+                return Err(crate::error::Error::Other(
+                    "ensure_sync_tombstones_from_facts: App delete facts span multiple data groups"
+                        .to_string(),
+                ));
+            }
+            group = Some(candidate);
+        } else if path.starts_with("starmaps/")
+            || path == "settings.sync.json"
+            || path.starts_with("themes/palettes/")
+        {
+            return Err(crate::error::Error::Other(format!(
+                "ensure_sync_tombstones_from_facts: cannot resolve App data group for {path}"
+            )));
+        }
+    }
+
+    let Some(group) = group else {
+        return Ok(None);
+    };
+    if facts
+        .iter()
+        .any(|fact| !group.owns_path(&fact.original_path))
+    {
+        return Err(crate::error::Error::Other(
+            "ensure_sync_tombstones_from_facts: delete facts mix App and Project paths or groups"
+                .to_string(),
+        ));
+    }
+    Ok(Some(crate::sync::types::SyncTarget::app_data_group(group)))
 }
 
 impl PlannedWorkspaceDelete {

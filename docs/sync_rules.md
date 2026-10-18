@@ -36,6 +36,8 @@ App target 内部按数据组独立扫描、合并、记录状态并发布不可
 
 远端 `app/app-meta/sync/app_groups.sync.json` 选择每个数据组的当前 generation，与 project 生命周期清单 `targets.sync.json` 分离。没有该目录清单时，从旧 `app/app-meta/sync/manifest.sync.json` 推导数据组；各组在迁移完成前继续从旧 `app/` 读取。成功发布一组 generation 后才通过版本条件更新目录清单切换该组，尚未迁移的组和旧文件继续保留。
 
+**客户端升级是一次协调切换，不支持新旧客户端同时写同一 App 数据。** 启用 v2 catalog 前，先在所有旧客户端暂停同步并升级到支持 App 数据组的版本，再恢复同步。首个新客户端从旧 manifest 推导组并逐组迁移：catalog 未登记的组继续以旧 `app/` 为只读迁移源；catalog 选中某组 generation 后，该 generation 成为唯一有效源，旧 `app/` 中的后续写入不会回流。迁移保留旧文件用于恢复，不把它们作为并行写入副本。若 v2 catalog 已创建，恢复同步前必须确保所有活跃客户端都已升级；不要让旧客户端在 flat `app/` 上继续写。
+
 每个 App 数据组使用独立的本地 `manifest.sync.json`、`state.local.json` 与 `conflicts.json`。缺少本地文件且没有对应删除 tombstone 时，只将该组报告为失败，不把缺文件推断成删除，也不阻断其他独立组。星图索引依赖检查失败时保留旧索引 generation，避免它引用尚未完成的数据组。
 
 ## 作品级同步白名单/黑名单

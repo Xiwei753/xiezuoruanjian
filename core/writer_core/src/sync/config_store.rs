@@ -34,6 +34,31 @@ fn normalize_rel_path(rel_path: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Resolve an App data-group owner for one local relative path.
+///
+/// `AppDataGroup::owns_path` remains the ownership check; parsing only extracts
+/// the StarMap id needed to construct its candidate group.
+pub(crate) fn app_data_group_for_path(rel_path: &str) -> Option<AppDataGroup> {
+    let rel_path = normalize_rel_path(rel_path);
+    for group in [AppDataGroup::Global, AppDataGroup::StarmapIndex] {
+        if group.owns_path(&rel_path) {
+            return Some(group);
+        }
+    }
+
+    let suffix = rel_path.strip_prefix("starmaps/")?;
+    let starmap_id = if let Some((directory_id, _)) = suffix.split_once('/') {
+        directory_id
+    } else {
+        suffix.strip_suffix(".meta.json")?
+    };
+    if starmap_id.is_empty() {
+        return None;
+    }
+    let group = AppDataGroup::Starmap(starmap_id.to_string());
+    group.owns_path(&rel_path).then_some(group)
+}
+
 impl crate::sync::SyncService {
     /// 判断路径是否在同步黑名单中。
     ///
@@ -487,7 +512,12 @@ impl crate::sync::SyncService {
         };
         let path = sync_root.join(group.local_state_path());
         if path.exists() {
-            return read_state_file(&path);
+            let (state, changed) =
+                merge_legacy_tombstones_for_group(sync_root, group, read_state_file(&path)?)?;
+            if changed {
+                save_state_at_path(&path, &state)?;
+            }
+            return Ok(state);
         }
         let legacy = Self::load_sync_state_read_only(sync_root, None)?;
         let state = filter_state_for_app_group(legacy, group);
@@ -504,6 +534,7 @@ impl crate::sync::SyncService {
         let path = sync_root.join(group.local_state_path());
         if path.exists() {
             let mut state = read_state_file(&path)?;
+            state = merge_legacy_tombstones_for_group(sync_root, group, state)?.0;
             if state.device_id.is_empty() {
                 if let Some(id) = preferred_device_id.filter(|id| !id.is_empty()) {
                     state.device_id = id.to_string();
@@ -526,8 +557,40 @@ impl crate::sync::SyncService {
         let Some(group) = &target.app_group else {
             return Self::save_sync_state(sync_root, state);
         };
-        save_state_at_path(&sync_root.join(group.local_state_path()), state)
+        let path = sync_root.join(group.local_state_path());
+        let (state, _) = merge_legacy_tombstones_for_group(sync_root, group, state.clone())?;
+        save_state_at_path(&path, &state)
     }
+}
+
+/// Import tombstones left in the old flat App state. The old queue may still
+/// write flat state after a group state was created, so repeat this idempotent
+/// merge on every group load/save. Existing group baselines remain authoritative;
+/// only missing path/trash identities are copied, preserving each fact's
+/// original timestamp, device, and trash path.
+fn merge_legacy_tombstones_for_group(
+    sync_root: &Path,
+    group: &AppDataGroup,
+    mut state: SyncState,
+) -> crate::Result<(SyncState, bool)> {
+    let legacy_state = crate::sync::SyncService::load_sync_state_read_only(sync_root, None)?;
+    let now = chrono::Utc::now().timestamp();
+    let mut changed = false;
+    for tombstone in legacy_state.tombstones.into_iter().filter(|tombstone| {
+        tombstone.purge_after > now && group.owns_path(&tombstone.original_path)
+    }) {
+        if state
+            .tombstones
+            .iter()
+            .any(|current| current.original_path == tombstone.original_path)
+        {
+            continue;
+        }
+        state.tombstones.push(tombstone);
+        changed = true;
+    }
+
+    Ok((state, changed))
 }
 
 fn read_state_file(path: &Path) -> crate::Result<SyncState> {

@@ -800,11 +800,12 @@ impl WriterCoreApi {
             return;
         }
         let existing_conflicts = target_sync_result.result.conflicts.clone();
-        match crate::sync::conflict::record_staging_conflicts(
+        match crate::sync::conflict::record_staging_conflicts_for_group(
             run.target_live_root(),
             &target_sync_result.remote_prefix,
             conflicts,
             &existing_conflicts,
+            run.app_group(),
         ) {
             Ok(merged) => {
                 target_with_conflicts.result.conflicts = merged;

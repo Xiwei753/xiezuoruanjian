@@ -447,14 +447,13 @@ pub fn apply_planned_delete_volume(
 ///
 /// 已存在的 tombstone（按 original_path + trash_path 匹配）跳过，保证幂等。
 ///
-/// 实现已提升为共用能力
-/// [`crate::storage::journal::workspace_change::ensure_sync_tombstones_from_facts`]，
-/// 本函数保留为 `pub(crate)` thin wrapper 供卷/章节删除链路向后兼容调用。
+/// 通过显式 flat helper 保持 Project state 路径；Project 内任意相对路径都不应
+/// 仅因名称类似 App 数据就被重定向到 App group state。
 pub(crate) fn ensure_tombstones_from_facts(
     project_root: &Path,
     facts: &[crate::storage::journal::workspace_change::SyncDeleteFact],
 ) -> Result<()> {
-    crate::storage::journal::workspace_change::ensure_sync_tombstones_from_facts(
+    crate::storage::journal::workspace_change::ensure_sync_tombstones_from_facts_flat(
         project_root,
         facts,
     )

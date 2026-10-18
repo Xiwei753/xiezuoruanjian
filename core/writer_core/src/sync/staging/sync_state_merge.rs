@@ -26,6 +26,118 @@ use crate::error::Result;
 use crate::sync::conflict::load_conflicts_json;
 use crate::sync::types::{SyncConflict, SyncState};
 
+/// Three-way merge one group's LWW manifest. Membership is keyed by relative
+/// path; independent live changes survive, while concurrent records use the same
+/// timestamp/device-id winner as file LWW. The caller commits these bytes together
+/// with the group's merged state and conflicts.
+pub(crate) fn merge_app_group_manifest_three_way(
+    base: Option<&[u8]>,
+    live: Option<&[u8]>,
+    incoming: Option<&[u8]>,
+    group: &crate::sync::types::AppDataGroup,
+) -> Result<Option<Vec<u8>>> {
+    use crate::sync::content_class::{resolve_lww, LwwRecord, LwwWinner};
+    use crate::sync::types::{ManifestFileRecord, SyncManifest};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn parse(
+        bytes: Option<&[u8]>,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> Result<Option<BTreeMap<String, ManifestFileRecord>>> {
+        let Some(bytes) = bytes else {
+            return Ok(None);
+        };
+        let manifest: SyncManifest = serde_json::from_slice(bytes).map_err(|error| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "merge_app_group_manifest_three_way: invalid manifest: {error}"
+            )))
+        })?;
+        Ok(Some(
+            manifest
+                .files
+                .into_iter()
+                .filter(|record| group.owns_path(&record.path))
+                .map(|record| (record.path.clone(), record))
+                .collect(),
+        ))
+    }
+
+    fn records_equal(
+        left: Option<&ManifestFileRecord>,
+        right: Option<&ManifestFileRecord>,
+    ) -> bool {
+        match (left, right) {
+            (Some(left), Some(right)) => {
+                left.path == right.path
+                    && left.content_hash == right.content_hash
+                    && left.updated_at_ms == right.updated_at_ms
+                    && left.deleted_at_ms == right.deleted_at_ms
+                    && left.device_id == right.device_id
+                    && left.op == right.op
+                    && left.schema_version == right.schema_version
+            }
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn to_lww(record: &ManifestFileRecord) -> LwwRecord {
+        LwwRecord {
+            content_hash: record.content_hash.clone(),
+            updated_at_ms: record.updated_at_ms,
+            deleted_at_ms: record.deleted_at_ms,
+            device_id: record.device_id.clone(),
+            op: record.op.clone(),
+        }
+    }
+
+    let base = parse(base, group)?;
+    let live = parse(live, group)?;
+    let incoming = parse(incoming, group)?;
+    let mut paths = BTreeSet::new();
+    for records in [&base, &live, &incoming].into_iter().flatten() {
+        paths.extend(records.keys().cloned());
+    }
+
+    let mut merged = Vec::new();
+    for path in paths {
+        let base_record = base.as_ref().and_then(|records| records.get(&path));
+        let live_record = live.as_ref().and_then(|records| records.get(&path));
+        let incoming_record = incoming.as_ref().and_then(|records| records.get(&path));
+        let selected = if records_equal(live_record, base_record) {
+            incoming_record.cloned()
+        } else if records_equal(incoming_record, base_record)
+            || records_equal(live_record, incoming_record)
+        {
+            live_record.cloned()
+        } else {
+            match (live_record, incoming_record) {
+                (Some(live), Some(incoming)) => match resolve_lww(&to_lww(live), &to_lww(incoming))
+                {
+                    LwwWinner::Remote => Some(incoming.clone()),
+                    LwwWinner::Local | LwwWinner::Tie => Some(live.clone()),
+                },
+                // A manifest record's absence is not a newer delete (deletes are
+                // represented by an explicit tombstone record). Preserve the side
+                // that still has its record if concurrent pruning removed the other.
+                (Some(live), None) => Some(live.clone()),
+                (None, Some(incoming)) => Some(incoming.clone()),
+                (None, None) => None,
+            }
+        };
+        if let Some(record) = selected {
+            merged.push(record);
+        }
+    }
+
+    if merged.is_empty() && base.is_none() && live.is_none() && incoming.is_none() {
+        return Ok(None);
+    }
+    let bytes = serde_json::to_vec_pretty(&SyncManifest { files: merged })
+        .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?;
+    Ok(Some(bytes))
+}
+
 /// 三方语义合并 `SyncState` + `conflicts`。
 ///
 /// - `base_root` = Seed 时的冲突/SyncState（staging run 的 `base_root` 下）
@@ -57,30 +169,42 @@ pub(crate) fn merge_sync_state_three_way(
     live_root: &Path,
     staging_root: &Path,
 ) -> Result<(SyncState, Vec<SyncConflict>)> {
+    merge_sync_state_three_way_for_target(base_root, live_root, staging_root, None)
+}
+
+/// App-group counterpart. It reads a group's state/conflicts (falling back to a
+/// filtered legacy aggregate when the group has not migrated yet) while preserving
+/// the same three-way protection against conflict resolutions made during transfer.
+pub(crate) fn merge_sync_state_three_way_for_target(
+    base_root: &Path,
+    live_root: &Path,
+    staging_root: &Path,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+) -> Result<(SyncState, Vec<SyncConflict>)> {
     // 读取三方 SyncState。严格区分"文件不存在"（首次同步，回退 default 空状态
     // 参与合并）与"文件存在但损坏"（必须返回 Err 让该 target Commit 失败，
     // 不能伪装成随机 device_id 的默认状态，参见 Issue #762 评论 5831990584）。
-    let base_state = read_sync_state(base_root)?.unwrap_or_default();
-    let live_state = read_sync_state(live_root)?.unwrap_or_default();
+    let base_state = read_sync_state_for_target(base_root, app_group)?.unwrap_or_default();
+    let live_state = read_sync_state_for_target(live_root, app_group)?.unwrap_or_default();
 
     // staging 的 state.local.json 不存在 → Transfer 没产生新状态，
     // 直接返回 live 状态（无变更）。
-    let staging_state_path = staging_root.join("app-meta/sync/state.local.json");
+    let staging_state_path = state_path(staging_root, app_group);
     if !staging_state_path.exists() {
-        let live_conflicts = load_conflicts_json(live_root).unwrap_or_default();
+        let live_conflicts = load_conflicts_for_target(live_root, app_group);
         return Ok((live_state, live_conflicts));
     }
     // staging_state_path 已确认存在；read_sync_state 返回 Err 则传播（staging
     // 损坏必须让该 target Commit 失败）。理论上 None 不会到达（已确认 exists），
     // 但为防御 TOCTOU 竞态（文件在 exists() 与 read 之间被删），回退 default
     // 空状态——等价于"staging 不存在"语义，不引入随机 device_id。
-    let staging_state = read_sync_state(staging_root)?.unwrap_or_default();
+    let staging_state = read_sync_state_for_target(staging_root, app_group)?.unwrap_or_default();
 
     // 读取三方 conflicts.json。文件不存在/损坏时回退空 Vec。
     // base/live 的 conflicts.json 不需要读取——合并只依赖 base_state.conflicted_files
     // 和 live_state.conflicted_files（SyncState 内的 HashSet）来判断哪些路径
     // 被用户解决，以及 staging_conflicts 作为合并基准。
-    let staging_conflicts = load_conflicts_json(staging_root).unwrap_or_default();
+    let staging_conflicts = load_conflicts_for_target(staging_root, app_group);
 
     // 计算"用户在同步期间已解决"的路径集合：
     // `p in base.conflicted_files && p not in live.conflicted_files`
@@ -166,6 +290,7 @@ pub(crate) fn merge_sync_state_three_way(
         &base_state,
         &live_state,
         &staging_state,
+        app_group,
     )?;
 
     // tombstones / deleted_files：按 staging 同步结果合并（同步引擎管理的）。
@@ -222,16 +347,19 @@ fn merge_device_id_three_way(
     base_state: &SyncState,
     live_state: &SyncState,
     staging_state: &SyncState,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
 ) -> Result<String> {
-    let live_state_path = live_root.join("app-meta/sync/state.local.json");
-    let base_state_path = base_root.join("app-meta/sync/state.local.json");
-    if live_state_path.exists() && !live_state.device_id.is_empty() {
+    let live_state_path = state_path(live_root, app_group);
+    let base_state_path = state_path(base_root, app_group);
+    let live_state_exists = has_state_file(live_root, &live_state_path, app_group.is_some());
+    let base_state_exists = has_state_file(base_root, &base_state_path, app_group.is_some());
+    if live_state_exists && !live_state.device_id.is_empty() {
         Ok(live_state.device_id.clone())
     } else if !staging_state.device_id.is_empty() {
         // staging_state_path 在调用方已确认存在（不存在则早期返回），
         // 此处只需检查字段非空。
         Ok(staging_state.device_id.clone())
-    } else if base_state_path.exists() && !base_state.device_id.is_empty() {
+    } else if base_state_exists && !base_state.device_id.is_empty() {
         Ok(base_state.device_id.clone())
     } else {
         Err(crate::Error::Io(std::io::Error::other(
@@ -255,24 +383,143 @@ fn merge_device_id_three_way(
 /// 后者可能落盘迁移结果）。合并阶段不应有副作用。
 ///
 /// 错误格式参考 `config_store.rs::load_sync_state`（行 335-343）。
-fn read_sync_state(root: &Path) -> Result<Option<SyncState>> {
-    let state_path = root.join("app-meta/sync/state.local.json");
-    if !state_path.exists() {
+fn read_sync_state_for_target(
+    root: &Path,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+) -> Result<Option<SyncState>> {
+    if let Some(group) = app_group {
+        return load_app_group_state_with_legacy(root, group);
+    }
+    let path = state_path(root, app_group);
+    if !path.exists() {
         return Ok(None);
     }
-    let content = std::fs::read_to_string(&state_path).map_err(|e| {
+    let state = read_sync_state_at(root, &path)?;
+    Ok(state)
+}
+
+/// Read an App group's state while merging newly recorded legacy tombstones into
+/// an already-migrated group snapshot. Older queue writers may still append a
+/// group-owned tombstone to the aggregate file during rollout; ignoring it when a
+/// group file exists can turn that deletion into an apparent missing-file error.
+pub(crate) fn load_app_group_state_with_legacy(
+    root: &Path,
+    group: &crate::sync::types::AppDataGroup,
+) -> Result<Option<SyncState>> {
+    let grouped = read_sync_state_at(root, Path::new(&group.local_state_path()))?
+        .map(|state| filter_state_for_group(state, group));
+    let legacy_path = if root.join("app-meta/sync/state.local.json").exists() {
+        Path::new("app-meta/sync/state.local.json")
+    } else {
+        Path::new("app-meta/sync/sync_state.json")
+    };
+    let legacy =
+        read_sync_state_at(root, legacy_path)?.map(|state| filter_state_for_group(state, group));
+
+    let Some(mut grouped_state) = grouped else {
+        return Ok(legacy);
+    };
+    let Some(legacy_state) = legacy else {
+        return Ok(Some(grouped_state));
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    let mut tombstones = std::collections::BTreeMap::new();
+    for tombstone in legacy_state
+        .tombstones
+        .into_iter()
+        .filter(|tombstone| tombstone.purge_after > now)
+        .chain(grouped_state.tombstones.into_iter())
+    {
+        let key = tombstone.original_path.clone();
+        let replace =
+            tombstones
+                .get(&key)
+                .map_or(true, |current: &crate::sync::types::Tombstone| {
+                    tombstone.deleted_at > current.deleted_at
+                        || (tombstone.deleted_at == current.deleted_at
+                            && tombstone.purge_after > current.purge_after)
+                });
+        if replace {
+            tombstones.insert(key, tombstone);
+        }
+    }
+    grouped_state.tombstones = tombstones.into_values().collect();
+    if grouped_state.device_id.is_empty() {
+        grouped_state.device_id = legacy_state.device_id;
+    }
+    Ok(Some(grouped_state))
+}
+
+fn has_state_file(root: &Path, group_path: &Path, app_group: bool) -> bool {
+    group_path.exists()
+        || (app_group
+            && (root.join("app-meta/sync/state.local.json").exists()
+                || root.join("app-meta/sync/sync_state.json").exists()))
+}
+
+fn read_sync_state_at(root: &Path, rel_path: &Path) -> Result<Option<SyncState>> {
+    let path = root.join(rel_path);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "read_sync_state: state.local.json read failed at {}: {e}",
-            state_path.display()
+            path.display()
         )))
     })?;
     let state: SyncState = serde_json::from_str(&content).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "read_sync_state: state.local.json parse failed at {}: {e}",
-            state_path.display()
+            path.display()
         )))
     })?;
     Ok(Some(state))
+}
+
+fn state_path(
+    root: &Path,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+) -> std::path::PathBuf {
+    match app_group {
+        Some(group) => root.join(group.local_state_path()),
+        None => root.join("app-meta/sync/state.local.json"),
+    }
+}
+
+fn load_conflicts_for_target(
+    root: &Path,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+) -> Vec<SyncConflict> {
+    match app_group {
+        Some(group) => {
+            crate::sync::conflict::load_conflicts_json_for_group(root, group).unwrap_or_default()
+        }
+        None => load_conflicts_json(root).unwrap_or_default(),
+    }
+}
+
+fn filter_state_for_group(
+    mut state: SyncState,
+    group: &crate::sync::types::AppDataGroup,
+) -> SyncState {
+    state.known_files.retain(|path, _| group.owns_path(path));
+    state
+        .known_files_updated_at
+        .retain(|path, _| group.owns_path(path));
+    state
+        .tombstones
+        .retain(|t| group.owns_path(&t.original_path));
+    state.deleted_files.retain(|path| group.owns_path(path));
+    state.conflicted_files.retain(|path| group.owns_path(path));
+    state
+        .conflicts
+        .retain(|conflict| group.owns_path(&conflict.local_path));
+    state
+        .pending_take_remote
+        .retain(|path| group.owns_path(path));
+    state
 }
 
 #[cfg(test)]

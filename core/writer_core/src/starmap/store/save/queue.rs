@@ -315,7 +315,12 @@ impl StarMapStore {
                 trash_rel_path = format!("sync/trash/{trash_token}");
 
                 let (sync_facts, plan_prepared) =
-                    match crate::sync::SyncService::load_sync_state(&self.app_data_root) {
+                    match crate::sync::SyncService::load_sync_state_for_target(
+                        &self.app_data_root,
+                        &crate::sync::types::SyncTarget::app_data_group(
+                            crate::sync::types::AppDataGroup::Starmap(self.starmap_id.clone()),
+                        ),
+                    ) {
                         Ok(state) => {
                             let device_id = state.device_id.clone();
                             let now = chrono::Utc::now().timestamp();

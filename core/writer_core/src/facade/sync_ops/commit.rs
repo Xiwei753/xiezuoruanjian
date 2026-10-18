@@ -163,11 +163,12 @@ impl crate::facade::WriterCore {
                 let live_root = staging_runs[idx].target_live_root();
                 // 保留 Transfer 阶段已有的冲突（如 GitHub LWW 发现的正文冲突）。
                 let existing_conflicts = target.result.conflicts.clone();
-                match crate::sync::conflict::record_staging_conflicts(
+                match crate::sync::conflict::record_staging_conflicts_for_group(
                     live_root,
                     &target.remote_prefix,
                     target_conflicts,
                     &existing_conflicts,
+                    staging_runs[idx].app_group(),
                 ) {
                     Ok(merged_conflicts) => {
                         // 合并后的完整冲突列表

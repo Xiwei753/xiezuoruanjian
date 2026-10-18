@@ -106,6 +106,13 @@ impl AppDataGroupCatalog {
 
 /// Load the group catalog. Before v2 exists, seed it with legacy group ids that
 /// remain mapped to the old flat `app/` source until each group is published.
+///
+/// This is a one-way client upgrade boundary: once the first v2 catalog is
+/// published, every active client must understand the catalog. Older clients
+/// continue writing the flat `app/` tree, and those writes are deliberately not
+/// treated as a second live source for groups already pointing at generations.
+/// Keep old clients paused until all of them have upgraded; legacy objects stay
+/// available as migration input and recovery data.
 pub fn load_remote_app_data_group_catalog(
     provider: &dyn SyncProvider,
 ) -> crate::Result<RemoteAppDataGroupCatalogSnapshot> {

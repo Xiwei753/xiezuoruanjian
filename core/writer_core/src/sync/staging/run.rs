@@ -39,6 +39,9 @@ pub struct StagingRun {
     /// Commit 阶段需要知道这个 staging run 对应的 live root，
     /// 才能调 `compute_commit_plan(live_root)` 做三方比较并把变更写回 live。
     target_live_root: PathBuf,
+    /// App group whose files and engine state this staging run may commit.
+    /// `None` preserves the legacy App / Project staging behavior.
+    app_group: Option<crate::sync::types::AppDataGroup>,
 }
 
 impl StagingRun {
@@ -53,7 +56,19 @@ impl StagingRun {
             run_root,
             run_id,
             target_live_root,
+            app_group: None,
         })
+    }
+
+    /// Create a staging run scoped to one versioned App data group.
+    pub(crate) fn create_for_app_group(
+        parent: &Path,
+        target_live_root: PathBuf,
+        app_group: crate::sync::types::AppDataGroup,
+    ) -> Result<Self> {
+        let mut run = Self::create(parent, target_live_root)?;
+        run.app_group = Some(app_group);
+        Ok(run)
     }
 
     pub fn run_root(&self) -> &Path {
@@ -67,6 +82,11 @@ impl StagingRun {
     /// Commit 阶段要写回的 live root。
     pub fn target_live_root(&self) -> &Path {
         &self.target_live_root
+    }
+
+    /// App group associated with this run, if it is a grouped App target.
+    pub fn app_group(&self) -> Option<&crate::sync::types::AppDataGroup> {
+        self.app_group.as_ref()
     }
 
     /// staging 子目录（Transfer 阶段写入远端内容的目标）。
@@ -114,7 +134,29 @@ impl StagingRun {
     ///    能读到 live 的 known_files / device_id / pending / conflict 状态，
     ///    不会重新生成设备身份。
     pub fn seed_from_live(&self, live_root: &Path) -> Result<()> {
-        let rel_paths = list_live_file_paths(live_root)?;
+        let mut rel_paths = list_live_file_paths(live_root)?;
+        if let Some(group) = &self.app_group {
+            rel_paths.retain(|rel| group.owns_path(&rel.to_string_lossy().replace('\\', "/")));
+            // The aggregate App manifest remains a read-only migration input for the
+            // group-scoped LWW snapshot path. It is deliberately excluded from this
+            // run's commit candidate set below.
+            let legacy_manifest = PathBuf::from("app-meta/sync/manifest.sync.json");
+            if live_root.join(&legacy_manifest).is_file() {
+                rel_paths.push(legacy_manifest);
+            }
+            for metadata_path in [
+                group.local_manifest_path(),
+                group.local_state_path(),
+                group.local_conflicts_path(),
+            ] {
+                let path = PathBuf::from(metadata_path);
+                if live_root.join(&path).is_file() {
+                    rel_paths.push(path);
+                }
+            }
+            rel_paths.sort();
+            rel_paths.dedup();
+        }
         // 1. base snapshot
         self.build_base_snapshot_from_live(live_root, &rel_paths)?;
         // 2. staging clone（Transfer 在这份上执行）
@@ -127,6 +169,54 @@ impl StagingRun {
             if fs::hard_link(&live_path, &staging_path).is_err() {
                 fs::copy(&live_path, &staging_path)?;
             }
+        }
+        if let Some(group) = &self.app_group {
+            self.seed_legacy_group_state(live_root, group)?;
+        }
+        Ok(())
+    }
+
+    /// Materialize a filtered view of legacy App state in this run only. This keeps
+    /// group transfer's existing migration reads available without copying or
+    /// committing the aggregate state into another group's staging tree.
+    fn seed_legacy_group_state(
+        &self,
+        live_root: &Path,
+        group: &crate::sync::types::AppDataGroup,
+    ) -> Result<()> {
+        let group_state_path = PathBuf::from(group.local_state_path());
+        if let Some(state) =
+            super::sync_state_merge::load_app_group_state_with_legacy(live_root, group)?
+        {
+            self.write_seed_file(
+                &group_state_path,
+                &serde_json::to_vec_pretty(&state)
+                    .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?,
+            )?;
+        }
+
+        let legacy_conflicts_path = PathBuf::from("app-meta/sync/conflicts.json");
+        let group_conflicts_path = PathBuf::from(group.local_conflicts_path());
+        if live_root.join(&legacy_conflicts_path).is_file()
+            && !live_root.join(&group_conflicts_path).is_file()
+        {
+            let conflicts = crate::sync::conflict::load_conflicts_json_for_group(live_root, group)?;
+            self.write_seed_file(
+                &group_conflicts_path,
+                &serde_json::to_vec_pretty(&conflicts)
+                    .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn write_seed_file(&self, rel: &Path, bytes: &[u8]) -> Result<()> {
+        for root in [self.base_root(), self.staging_root()] {
+            let path = root.join(rel);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(path, bytes)?;
         }
         Ok(())
     }
@@ -177,11 +267,20 @@ impl StagingRun {
 
         // 读取 live 的 device_id（用于 LWW 决胜）。读取失败时回退空字符串，
         // 退化为纯时间戳比较（仍优于固定 remote-wins）。
-        let live_device_id = read_live_device_id(live_root).unwrap_or_default();
-
         // 加载 live 的 SyncState，获取 tombstones。
         // delete 参与 LWW 时需要 tombstones 里的 deleted_at 时间戳。
-        let live_sync_state = read_live_sync_state(live_root);
+        let live_sync_state = match &self.app_group {
+            Some(group) => {
+                super::sync_state_merge::load_app_group_state_with_legacy(live_root, group)?
+            }
+            None => read_live_sync_state(live_root),
+        };
+        let live_device_id = live_sync_state
+            .as_ref()
+            .map(|state| state.device_id.clone())
+            .filter(|device_id| !device_id.is_empty())
+            .or_else(|| read_live_device_id(live_root))
+            .unwrap_or_default();
         let live_tombstones = live_sync_state
             .as_ref()
             .map(|s| s.tombstones.clone())
@@ -195,7 +294,11 @@ impl StagingRun {
         // staging 不再按 active_provider 分支。
         // 通用 Provider 的 manifest 是 LWW 决策依据但不是硬性事实来源——
         // 缺失或损坏时回退到 mtime-based LWW，让同步继续而不是直接失败。
-        let staging_manifest = match read_staging_manifest(&staging_root) {
+        let staging_manifest_result = match &self.app_group {
+            Some(group) => read_staging_manifest_for_group(&staging_root, group),
+            None => read_staging_manifest(&staging_root),
+        };
+        let staging_manifest = match staging_manifest_result {
             Ok(Some(map)) => map,
             Ok(None) => {
                 // manifest 不存在 → mtime fallback（空 HashMap）。
@@ -238,6 +341,19 @@ impl StagingRun {
             all_paths.insert(p.clone());
         }
 
+        if let Some(group) = &self.app_group {
+            let manifest_path = group.local_manifest_path();
+            let state_path = group.local_state_path();
+            let conflicts_path = group.local_conflicts_path();
+            all_paths.retain(|path| {
+                let path = path.to_string_lossy().replace('\\', "/");
+                group.owns_path(&path)
+                    || path == manifest_path
+                    || path == state_path
+                    || path == conflicts_path
+            });
+        }
+
         // 收集星图 graph.json 和对象文件路径，按 starmap_id 分组。
         // 这些文件需要在循环后统一处理，确保 graph.json 成员表合并与
         // 对象文件决策一致（issue #902 第九轮复核）。
@@ -277,22 +393,34 @@ impl StagingRun {
             //   按 StagingCommitClass 决定 staging commit 写回语义。
             // 远端同步语义（ContentClass）和 staging commit 写回语义（StagingCommitClass）
             // 是两个正交维度，不再复用 LocalOnly。
-            match classify_staging_commit_path(&rel_str) {
+            let commit_class = match &self.app_group {
+                Some(group) => classify_staging_commit_path_for_group(&rel_str, group),
+                None => classify_staging_commit_path(&rel_str),
+            };
+            match commit_class {
                 StagingCommitClass::Skip => {
                     // .git/、full-sync-staging/、app-meta/transactions/、
                     // config.local.json、secrets：永不进 commit。
                     continue;
                 }
                 StagingCommitClass::EngineState => {
-                    // app-meta/sync/manifest.sync.json：
-                    // Transfer 在 staging 里更新了它，Commit 必须写回 live。
-                    // 直接 apply incoming（无三方比较——这是同步引擎自己产生的状态，
-                    // staging 里的就是最新权威值）。
                     let staging_path = staging_root.join(&rel);
-                    let incoming: Option<Vec<u8>> = if staging_path.exists() {
-                        Some(read_bytes(&staging_path)?)
+                    let incoming: Option<Vec<u8>> = if let Some(group) = &self.app_group {
+                        if rel_str == group.local_manifest_path() {
+                            let base = read_opt_bytes(&base_root.join(&rel))?;
+                            let live = read_opt_bytes(&live_root.join(&rel))?;
+                            let incoming = read_opt_bytes(&staging_path)?;
+                            super::sync_state_merge::merge_app_group_manifest_three_way(
+                                base.as_deref(),
+                                live.as_deref(),
+                                incoming.as_deref(),
+                                group,
+                            )?
+                        } else {
+                            read_opt_bytes(&staging_path)?
+                        }
                     } else {
-                        None
+                        read_opt_bytes(&staging_path)?
                     };
                     apply_incoming(&mut plan, rel, incoming, StagingCommitClass::EngineState);
                     continue;
@@ -791,7 +919,14 @@ pub fn prepare_staging_runs(
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
     for planned in &mut plan.targets {
-        let run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
+        let run = match &planned.target.app_group {
+            Some(group) => StagingRun::create_for_app_group(
+                &plan.app_data_root,
+                planned.target_live_root.clone(),
+                group.clone(),
+            )?,
+            None => StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?,
+        };
         //   deleted target 不 seed（不读本地目录，
         // 只枚举远端删除）。创建空 staging run 保持索引对齐，commit 阶段
         // compute_commit_plan 会发现 staging 为空，自然 Skip。

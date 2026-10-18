@@ -219,6 +219,7 @@ fn recover_single_starmap_object_delete(
     use crate::storage::journal::starmap_object_delete::{
         PlannedStarMapObjectDelete, StarMapObjectDeletePhase,
     };
+    use crate::storage::journal::workspace_change::ensure_sync_tombstones_from_facts;
 
     match plan.phase {
         StarMapObjectDeletePhase::Planned => {
@@ -237,13 +238,15 @@ fn recover_single_starmap_object_delete(
         }
         StarMapObjectDeletePhase::Tombstoned => {
             // 文件已进 trash、tombstone 已写，但 GraphMeta 没完成。
-            // 按 journal 里的 objects 补 GraphMeta 删除记录。
+            // 用 journal 原始 facts 将 tombstone 幂等写入其 App group，再补 GraphMeta。
+            ensure_sync_tombstones_from_facts(app_data_root, &plan.sync_delete_facts)?;
             recover_starmap_object_delete_graph_meta(app_data_root, starmap_id, plan)?;
             // GraphMeta 补完，清 journal。
             PlannedStarMapObjectDelete::clear(app_data_root, starmap_id)?;
         }
         StarMapObjectDeletePhase::GraphMetaWritten => {
-            // 全部完成，直接清 journal。
+            // GraphMeta 已提交；仍以原始 facts 补齐新分组状态后再清 journal。
+            ensure_sync_tombstones_from_facts(app_data_root, &plan.sync_delete_facts)?;
             log::debug!(
                 "recover_single_starmap_object_delete: starmap {} phase=GraphMetaWritten — \
                  clearing journal",
@@ -592,6 +595,22 @@ fn recover_local_applied_phase(
     rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
     message: &str,
 ) {
+    if matches!(
+        rec.delete_target.as_ref(),
+        Some(crate::storage::journal::workspace_change::DeleteTarget::StarMap { .. })
+    ) && !rec.sync_delete_facts.is_empty()
+    {
+        if let Err(e) = ensure_starmap_tombstones_persisted(app_data_root, &rec.sync_delete_facts) {
+            log::warn!(
+                "recover_workspace_change_transactions: StarMap tombstone migration failed \
+                 for {}: {} — journal retained",
+                rec.journal_token,
+                e
+            );
+            return;
+        }
+    }
+
     match crate::storage::workspace_git::record_workspace_change_set(layout, &rec.changes, message)
     {
         Ok(result) => {

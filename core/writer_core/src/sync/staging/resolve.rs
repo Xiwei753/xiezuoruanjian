@@ -72,7 +72,31 @@ pub(crate) struct ManifestRecord {
 pub(crate) fn read_staging_manifest(
     staging_root: &Path,
 ) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
-    let manifest_path = staging_root.join("app-meta/sync/manifest.sync.json");
+    read_staging_manifest_at(&staging_root.join("app-meta/sync/manifest.sync.json"))
+}
+
+/// Read this App group's manifest, falling back to the aggregate manifest as a
+/// read-only migration source. Records outside the group are discarded.
+pub(crate) fn read_staging_manifest_for_group(
+    staging_root: &Path,
+    group: &crate::sync::types::AppDataGroup,
+) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
+    let grouped_path = staging_root.join(group.local_manifest_path());
+    let manifest_path = if grouped_path.exists() {
+        grouped_path
+    } else {
+        staging_root.join("app-meta/sync/manifest.sync.json")
+    };
+    let Some(mut records) = read_staging_manifest_at(&manifest_path)? else {
+        return Ok(None);
+    };
+    records.retain(|path, _| group.owns_path(path));
+    Ok(Some(records))
+}
+
+fn read_staging_manifest_at(
+    manifest_path: &Path,
+) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
     if !manifest_path.exists() {
         return Ok(None);
     }
