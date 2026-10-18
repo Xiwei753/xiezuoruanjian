@@ -1,9 +1,9 @@
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import {
+  CorrectionChapterSnapshotDto,
   CorrectionModelPathStatusDto,
-  CorrectionResourceStatusDto,
-  CorrectionSuggestionDto
+  CorrectionResourceStatusDto
 } from './CorrectionDtos'
 
 export type CorrectionIgnoreScope = 'once' | 'chapter' | 'permanent' | 'rule'
@@ -14,9 +14,11 @@ export interface ICorrectionBridge {
   getResourceStatus(): Promise<ResultEnvelope<CorrectionResourceStatusDto>>
   getModelPathStatus(path: string): Promise<ResultEnvelope<CorrectionModelPathStatusDto>>
   checkSegment(sessionId: number, projectId: string, chapterId: string, textRevision: number,
-    startByte: number, endByte: number): Promise<ResultEnvelope<CorrectionSuggestionDto[]>>
+    startByte: number, endByte: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
   checkChapter(sessionId: number, projectId: string, chapterId: string,
-    textRevision: number): Promise<ResultEnvelope<CorrectionSuggestionDto[]>>
+    textRevision: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
+  getChapterSnapshot(sessionId: number, projectId: string, chapterId: string,
+    textRevision: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
   ignore(projectId: string, chapterId: string, ruleId: string, original: string,
     scope: CorrectionIgnoreScope, textRevision: number, startByte: number,
     endByte: number): Promise<ResultEnvelope<boolean>>

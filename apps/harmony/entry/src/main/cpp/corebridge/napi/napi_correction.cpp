@@ -10,6 +10,7 @@ enum class CorrectionOperation {
     GetModelPathStatus,
     CheckSegment,
     CheckChapter,
+    GetChapterSnapshot,
     Ignore,
     AddDictionaryEntry,
     Apply,
@@ -75,6 +76,11 @@ static void correction_execute(napi_env /*env*/, void* data) {
             break;
         case CorrectionOperation::CheckChapter:
             call->json = writer_core_check_correction_chapter(
+                call->session_id, call->project_id.c_str(), call->chapter_id.c_str(),
+                call->text_revision);
+            break;
+        case CorrectionOperation::GetChapterSnapshot:
+            call->json = writer_core_get_correction_chapter_snapshot(
                 call->session_id, call->project_id.c_str(), call->chapter_id.c_str(),
                 call->text_revision);
             break;
@@ -261,6 +267,24 @@ static napi_value NativeCorrectionCheckChapter(napi_env env, napi_callback_info 
     return correction_queue(env, call);
 }
 
+static napi_value NativeCorrectionGetChapterSnapshot(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 4) {
+        return correction_invalid_args(env, "Expected 4 arguments: sessionId, projectId, chapterId, textRevision");
+    }
+    CorrectionAsyncWork* call = new CorrectionAsyncWork();
+    call->operation = CorrectionOperation::GetChapterSnapshot;
+    if (!correction_read_session_and_revision(env, args[0], args[3], call) ||
+        !correction_read_string(env, args[1], &call->project_id) ||
+        !correction_read_string(env, args[2], &call->chapter_id)) {
+        delete call;
+        return correction_invalid_args(env, "Invalid correction chapter snapshot request");
+    }
+    return correction_queue(env, call);
+}
+
 static napi_value NativeCorrectionIgnore(napi_env env, napi_callback_info info) {
     size_t argc = 8;
     napi_value args[8];
@@ -336,6 +360,7 @@ napi_property_descriptor* getCorrectionDescriptors(size_t* count) {
         {"nativeCorrectionGetModelPathStatus", nullptr, NativeCorrectionGetModelPathStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckSegment", nullptr, NativeCorrectionCheckSegment, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckChapter", nullptr, NativeCorrectionCheckChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeCorrectionGetChapterSnapshot", nullptr, NativeCorrectionGetChapterSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionIgnore", nullptr, NativeCorrectionIgnore, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionAddDictionaryEntry", nullptr, NativeCorrectionAddDictionaryEntry, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionApply", nullptr, NativeCorrectionApply, nullptr, nullptr, nullptr, napi_default, nullptr},

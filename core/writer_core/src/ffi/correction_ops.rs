@@ -137,6 +137,34 @@ pub unsafe extern "C" fn writer_core_check_correction_chapter(
 }
 
 /// # Safety
+/// `project_id` and `chapter_id` must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned JSON C string; free it with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_correction_chapter_snapshot(
+    session_id: u64,
+    project_id: *const c_char,
+    chapter_id: *const c_char,
+    text_revision: u64,
+) -> *mut c_char {
+    let project_id = match c_str_to_rust(project_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid project id: {error}")),
+    };
+    let chapter_id = match c_str_to_rust(chapter_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid chapter id: {error}")),
+    };
+    match with_app_service(|service| {
+        service
+            .get_correction_chapter_snapshot(session_id, project_id, chapter_id, text_revision)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(error) => err_json("CORRECTION_ERROR", &error),
+    }
+}
+
+/// # Safety
 /// All string arguments must be valid null-terminated UTF-8 C strings.
 /// Returns a caller-owned JSON C string; free it with `writer_core_free_string`.
 #[no_mangle]

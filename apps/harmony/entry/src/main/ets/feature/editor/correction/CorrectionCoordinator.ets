@@ -4,6 +4,7 @@ import { utf16ToUtf8, utf8ToUtf16 } from '../input/text_offset_mapper'
 import { EditorSessionCoordinator } from '../session/EditorSessionCoordinator'
 import { CorrectionIgnoreScope, ICorrectionBridge } from './ICorrectionBridge'
 import {
+  CorrectionChapterSnapshotDto,
   CorrectionModelPathStatusDto,
   CorrectionResourceStatusDto,
   CorrectionSuggestionDto,
@@ -81,7 +82,11 @@ export class CorrectionCoordinator {
     this.listener(state)
   }
 
-  /** Called after each Core editor snapshot; edits invalidate old marks immediately. */
+  /**
+   * Called after each Core editor snapshot. Issue #954: old marks are not
+   * discarded unconditionally; Core repositions cached results for the new
+   * revision and only the edited sentence is rescanned.
+   */
   acceptSnapshot(projectId: string, chapterId: string, snapshot: EditorSessionSnapshot): void {
     const sessionId = this.editor.getSessionId()
     if (sessionId === null || projectId.length === 0 || chapterId.length === 0) {
@@ -120,10 +125,10 @@ export class CorrectionCoordinator {
     this.requestGeneration++
     const generation = this.requestGeneration
     this.cancelDebounce()
-    this.suggestions = []
     this.isChecking = false
     this.errorMessage = ''
     this.notify()
+    void this.restoreChapterSnapshot(generation)
     this.debounceTimer = setTimeout((): void => {
       this.debounceTimer = -1
       void this.checkCurrentSegment(generation)
@@ -174,6 +179,20 @@ export class CorrectionCoordinator {
       return null
     }
     return this.current
+  }
+
+  /**
+   * Issue #954: read Core's cached, still-valid marks for the current revision.
+   * This never runs the model; chapter open and plain edits restore instantly.
+   */
+  private async restoreChapterSnapshot(generation: number): Promise<void> {
+    const snapshot = this.currentRequest(generation)
+    if (snapshot === null) {
+      return
+    }
+    const result = await this.bridge.getChapterSnapshot(
+      snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision)
+    this.acceptCheckResult(generation, snapshot, result, true)
   }
 
   private sentenceByteRange(snapshot: CorrectionRequestSnapshot): CorrectionByteRange | null {
@@ -231,7 +250,7 @@ export class CorrectionCoordinator {
       const result = await this.bridge.checkSegment(
         snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision,
         range.startByte, range.endByte)
-      this.acceptCheckResult(generation, snapshot, result)
+      this.acceptCheckResult(generation, snapshot, result, false)
     } finally {
       this.notifyScanCompleted()
     }
@@ -246,47 +265,56 @@ export class CorrectionCoordinator {
     }
     this.requestGeneration++
     const generation = this.requestGeneration
-    this.suggestions = []
     this.isChecking = true
     this.errorMessage = ''
     this.notify()
     try {
       const result = await this.bridge.checkChapter(
         snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision)
-      this.acceptCheckResult(generation, snapshot, result)
+      this.acceptCheckResult(generation, snapshot, result, false)
     } finally {
       this.notifyScanCompleted()
     }
   }
 
   private acceptCheckResult(generation: number, snapshot: CorrectionRequestSnapshot,
-    result: ResultEnvelope<CorrectionSuggestionDto[]>): void {
+    result: ResultEnvelope<CorrectionChapterSnapshotDto>, silent: boolean): void {
     if (generation !== this.requestGeneration) {
       return
     }
     const current = this.currentRequest(generation)
     if (current === null) {
-      this.invalidate()
+      if (!silent) {
+        this.invalidate()
+      }
       return
     }
     if (current.revision !== snapshot.revision || current.chapterId !== snapshot.chapterId ||
         current.projectId !== snapshot.projectId || current.sessionId !== snapshot.sessionId) {
       return
     }
-    this.isChecking = false
-    if (!result.success || result.data === undefined) {
+    const data = result.data
+    if (!result.success || data === undefined || data.textRevision !== snapshot.revision) {
+      if (silent) {
+        return
+      }
+      this.isChecking = false
       this.suggestions = []
       this.errorMessage = result.userMessage ?? result.errorCode ?? '校对暂不可用'
       this.notify()
       return
     }
+    if (!silent) {
+      this.isChecking = false
+    }
     const mapped: MappedCorrectionSuggestion[] = []
-    for (let i = 0; i < result.data.length; i++) {
-      const suggestion = this.mapSuggestion(snapshot.text, snapshot.revision, result.data[i])
+    for (let i = 0; i < data.suggestions.length; i++) {
+      const suggestion = this.mapSuggestion(snapshot.text, snapshot.revision, data.suggestions[i])
       if (suggestion !== null) {
         mapped.push(suggestion)
       }
     }
+    // Core already merged cached and freshly scanned segments; replace wholesale.
     this.suggestions = mapped
     this.errorMessage = ''
     this.notify()

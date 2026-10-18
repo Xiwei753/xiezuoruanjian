@@ -534,6 +534,17 @@ class EditorViewModel(
         }
     }
 
+    /** Restore Core's cached chapter suggestions for the current revision without rescanning. */
+    fun restoreCorrectionSnapshot(targetId: String) {
+        if (inputFrozen || isLoadingChapter) return
+        val identity = currentCorrectionIdentity() ?: return
+        if (identity.targetId != targetId) return
+        val correction = correctionCoordinator ?: return
+        viewModelScope.launch {
+            correction.restoreChapterSnapshot(identity)
+        }
+    }
+
     fun clearCorrectionSuggestions(targetId: String) {
         correctionCoordinator?.clear(targetId)
     }

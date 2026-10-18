@@ -59,6 +59,28 @@ impl TryFrom<(sujian_proof::CorrectionDiagnostic, u64)> for CorrectionSuggestion
     }
 }
 
+/// A half-open UTF-8 byte range whose cached correction results are verified
+/// against the text revision the snapshot was requested with.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionCheckedRangeDto {
+    pub start_byte: u32,
+    pub end_byte: u32,
+}
+
+/// Correction results for one chapter at a single text revision.
+///
+/// `suggestions` is the merged result of every checked segment; `checked_ranges`
+/// reports which byte ranges are verified for that revision, so an empty
+/// `suggestions` list is never mistaken for "never checked".
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionChapterSnapshotDto {
+    pub text_revision: u64,
+    pub suggestions: Vec<CorrectionSuggestionDto>,
+    pub checked_ranges: Vec<CorrectionCheckedRangeDto>,
+}
+
 /// Scope of an explicit user ignore action.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

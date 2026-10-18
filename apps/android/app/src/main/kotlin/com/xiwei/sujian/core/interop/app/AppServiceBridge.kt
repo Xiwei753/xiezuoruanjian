@@ -721,7 +721,7 @@ open class AppServiceBridge(
         textRevision: ULong,
         startByte: UInt,
         endByte: UInt,
-    ): BridgeResult<List<uniffi.writer_core.CorrectionSuggestionDto>> =
+    ): BridgeResult<uniffi.writer_core.CorrectionChapterSnapshotDto> =
         holder.wrapResult {
             holder.service.checkCorrectionSegment(
                 sessionId,
@@ -738,9 +738,20 @@ open class AppServiceBridge(
         projectId: String,
         chapterId: String,
         textRevision: ULong,
-    ): BridgeResult<List<uniffi.writer_core.CorrectionSuggestionDto>> =
+    ): BridgeResult<uniffi.writer_core.CorrectionChapterSnapshotDto> =
         holder.wrapResult {
             holder.service.checkCorrectionChapter(sessionId, projectId, chapterId, textRevision)
+        }
+
+    /** Restore Core's cached chapter suggestions for the given revision without rescanning. */
+    fun getCorrectionChapterSnapshot(
+        sessionId: ULong,
+        projectId: String,
+        chapterId: String,
+        textRevision: ULong,
+    ): BridgeResult<uniffi.writer_core.CorrectionChapterSnapshotDto> =
+        holder.wrapResult {
+            holder.service.getCorrectionChapterSnapshot(sessionId, projectId, chapterId, textRevision)
         }
 
     fun ignoreCorrection(

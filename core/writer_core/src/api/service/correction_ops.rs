@@ -2,10 +2,10 @@ use std::path::Path;
 
 use crate::api::service::{ApiResult, WriterCoreApi};
 use crate::api::types::{
-    CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto, CorrectionResourceStatusDto,
-    CorrectionSuggestionDto,
+    CorrectionChapterSnapshotDto, CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto,
+    CorrectionResourceStatusDto,
 };
-use crate::correction::{scan_text, CorrectionScanner, CorrectionStore};
+use crate::correction::{CorrectionScanner, CorrectionStore};
 
 impl WriterCoreApi {
     fn correction_store(&self) -> ApiResult<CorrectionStore> {
@@ -101,58 +101,32 @@ impl WriterCoreApi {
         text: String,
         start_byte: u32,
         end_byte: u32,
-    ) -> ApiResult<Vec<CorrectionSuggestionDto>> {
-        self.check_correction_segment_with_base(
-            project_id,
-            chapter_id,
-            text_revision,
-            text,
-            start_byte,
-            end_byte,
-            0,
-        )
+    ) -> ApiResult<CorrectionChapterSnapshotDto> {
+        self.correction_scanner(project_id, chapter_id, text_revision)?
+            .ensure_checked(&text, start_byte, end_byte)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn check_correction_segment_with_base(
+    /// Cached chapter snapshot for instant restore; never scans.
+    pub fn correction_chapter_snapshot(
         &self,
         project_id: String,
         chapter_id: String,
         text_revision: u64,
         text: String,
-        start_byte: u32,
-        end_byte: u32,
-        offset_base: u32,
-    ) -> ApiResult<Vec<CorrectionSuggestionDto>> {
-        if project_id.trim().is_empty() || chapter_id.trim().is_empty() {
-            return Err(crate::api::WriterError::Other(
-                "project id and chapter id must be non-empty".into(),
-            ));
-        }
-        scan_text(
-            &self.correction_store()?,
-            &project_id,
-            &chapter_id,
-            text_revision,
-            &text,
-            (start_byte, end_byte),
-            offset_base,
-        )
+    ) -> ApiResult<CorrectionChapterSnapshotDto> {
+        self.correction_scanner(project_id, chapter_id, text_revision)?
+            .chapter_snapshot(&text)
     }
 
+    /// Checks every missing or invalid segment and returns the merged snapshot.
     pub fn check_correction_chapter(
         &self,
         project_id: String,
         chapter_id: String,
         text_revision: u64,
         text: String,
-    ) -> ApiResult<Vec<CorrectionSuggestionDto>> {
-        if project_id.trim().is_empty() || chapter_id.trim().is_empty() {
-            return Err(crate::api::WriterError::Other(
-                "project id and chapter id must be non-empty".into(),
-            ));
-        }
+    ) -> ApiResult<CorrectionChapterSnapshotDto> {
         self.correction_scanner(project_id, chapter_id, text_revision)?
-            .scan_chapter(&text)
+            .check_chapter(&text)
     }
 }

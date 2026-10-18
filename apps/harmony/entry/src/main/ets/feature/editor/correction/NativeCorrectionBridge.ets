@@ -2,12 +2,12 @@ import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import {
+  CorrectionChapterSnapshotDto,
   CorrectionModelPathStatusDto,
   CorrectionResourceStatusDto,
-  CorrectionSuggestionDto,
+  decodeCorrectionChapterSnapshot,
   decodeCorrectionModelPathStatus,
-  decodeCorrectionResourceStatus,
-  decodeCorrectionSuggestions
+  decodeCorrectionResourceStatus
 } from './CorrectionDtos'
 import { CorrectionIgnoreScope, ICorrectionBridge } from './ICorrectionBridge'
 import { decodeEditorEditResult } from '../../../corebridge/codec/CoreWireDecoders'
@@ -50,26 +50,38 @@ export class NativeCorrectionBridge implements ICorrectionBridge {
   }
 
   async checkSegment(sessionId: number, projectId: string, chapterId: string, textRevision: number,
-    startByte: number, endByte: number): Promise<ResultEnvelope<CorrectionSuggestionDto[]>> {
+    startByte: number, endByte: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>> {
     try {
       const pending: Promise<string> = this.core.getNativeModule().nativeCorrectionCheckSegment(
         sessionId, projectId, chapterId, textRevision, startByte, endByte) as Promise<string>
       const jsonStr: string = await pending
-      return this.core.decodeEnvelope<CorrectionSuggestionDto[]>(jsonStr, decodeCorrectionSuggestions)
+      return this.core.decodeEnvelope<CorrectionChapterSnapshotDto>(jsonStr, decodeCorrectionChapterSnapshot)
     } catch (e) {
-      return this.nativeError<CorrectionSuggestionDto[]>(e)
+      return this.nativeError<CorrectionChapterSnapshotDto>(e)
     }
   }
 
   async checkChapter(sessionId: number, projectId: string, chapterId: string,
-    textRevision: number): Promise<ResultEnvelope<CorrectionSuggestionDto[]>> {
+    textRevision: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>> {
     try {
       const pending: Promise<string> = this.core.getNativeModule().nativeCorrectionCheckChapter(
         sessionId, projectId, chapterId, textRevision) as Promise<string>
       const jsonStr: string = await pending
-      return this.core.decodeEnvelope<CorrectionSuggestionDto[]>(jsonStr, decodeCorrectionSuggestions)
+      return this.core.decodeEnvelope<CorrectionChapterSnapshotDto>(jsonStr, decodeCorrectionChapterSnapshot)
     } catch (e) {
-      return this.nativeError<CorrectionSuggestionDto[]>(e)
+      return this.nativeError<CorrectionChapterSnapshotDto>(e)
+    }
+  }
+
+  async getChapterSnapshot(sessionId: number, projectId: string, chapterId: string,
+    textRevision: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>> {
+    try {
+      const pending: Promise<string> = this.core.getNativeModule().nativeCorrectionGetChapterSnapshot(
+        sessionId, projectId, chapterId, textRevision) as Promise<string>
+      const jsonStr: string = await pending
+      return this.core.decodeEnvelope<CorrectionChapterSnapshotDto>(jsonStr, decodeCorrectionChapterSnapshot)
+    } catch (e) {
+      return this.nativeError<CorrectionChapterSnapshotDto>(e)
     }
   }
 

@@ -81,11 +81,13 @@ class EditorCorrectionCoordinator(
         visibleText: String,
     ) {
         val generation = requestGeneration.incrementAndGet()
-        _state.value = EditorCorrectionState(
-            targetId = identity.targetId,
-            projectId = identity.projectId,
-            chapterId = identity.chapterId,
-        )
+        if (!_state.value.matchesIdentity(identity)) {
+            _state.value = EditorCorrectionState(
+                targetId = identity.targetId,
+                projectId = identity.projectId,
+                chapterId = identity.chapterId,
+            )
+        }
         val lease = sessionCoordinator.currentInputLease() ?: return
         _state.value = _state.value.copy(sessionId = lease.sessionId)
         if (lease.targetId != identity.targetId || currentIdentity() != identity) return
@@ -105,7 +107,7 @@ class EditorCorrectionCoordinator(
                     endByte = endByte.toUInt(),
                 )
             }
-        val suggestions = (response as? BridgeResult.Success)?.data ?: return
+        val snapshot = (response as? BridgeResult.Success)?.data ?: return
 
         val stillCurrent =
             withContext(Dispatchers.IO) {
@@ -114,46 +116,27 @@ class EditorCorrectionCoordinator(
                 currentLease == lease && currentSnapshot?.revision == before.revision
             }
         if (!stillCurrent || generation != requestGeneration.get() || currentIdentity() != identity) return
+        if (snapshot.textRevision.toLong() != before.revision) return
 
-        val mapped =
-            suggestions.mapNotNull { suggestion ->
-                val start = suggestion.startByte.toInt()
-                val end = suggestion.endByte.toInt()
-                if (suggestion.textRevision.toLong() != before.revision ||
-                    start < startByte || end > endByte || !validByteRange(before.text, start, end) ||
-                    rangeText(before.text, start, end) != suggestion.original
-                ) {
-                    null
-                } else {
-                    EditorCorrectionSuggestion(
-                        startByte = start,
-                        endByte = end,
-                        original = suggestion.original,
-                        replacement = suggestion.replacement,
-                        source = suggestion.source,
-                        ruleId = suggestion.ruleId,
-                        severity = suggestion.severity,
-                        textRevision = suggestion.textRevision.toLong(),
-                    )
-                }
-            }
         _state.value = EditorCorrectionState(
             targetId = identity.targetId,
             projectId = identity.projectId,
             chapterId = identity.chapterId,
             sessionId = lease.sessionId,
             textRevision = before.revision,
-            suggestions = mapped,
+            suggestions = mappedSuggestions(before.text, before.revision, snapshot.suggestions),
         )
     }
 
     suspend fun checkChapter(identity: EditorCorrectionIdentity) {
         val generation = requestGeneration.incrementAndGet()
-        _state.value = EditorCorrectionState(
-            targetId = identity.targetId,
-            projectId = identity.projectId,
-            chapterId = identity.chapterId,
-        )
+        if (!_state.value.matchesIdentity(identity)) {
+            _state.value = EditorCorrectionState(
+                targetId = identity.targetId,
+                projectId = identity.projectId,
+                chapterId = identity.chapterId,
+            )
+        }
         val lease = sessionCoordinator.currentInputLease() ?: return
         _state.value = _state.value.copy(sessionId = lease.sessionId)
         if (lease.targetId != identity.targetId || currentIdentity() != identity) return
@@ -169,41 +152,59 @@ class EditorCorrectionCoordinator(
                     textRevision = before.revision.toULong(),
                 )
             }
-        val suggestions = (response as? BridgeResult.Success)?.data ?: return
+        val snapshot = (response as? BridgeResult.Success)?.data ?: return
         val stillCurrent =
             withContext(Dispatchers.IO) {
                 sessionCoordinator.currentInputLease() == lease &&
                     sessionCoordinator.queryTargetSnapshot(identity.targetId)?.revision == before.revision
             }
         if (!stillCurrent || generation != requestGeneration.get() || currentIdentity() != identity) return
+        if (snapshot.textRevision.toLong() != before.revision) return
 
-        val mapped = suggestions.mapNotNull { suggestion ->
-            val start = suggestion.startByte.toInt()
-            val end = suggestion.endByte.toInt()
-            if (suggestion.textRevision.toLong() != before.revision ||
-                !validByteRange(before.text, start, end) || rangeText(before.text, start, end) != suggestion.original
-            ) {
-                null
-            } else {
-                EditorCorrectionSuggestion(
-                    start,
-                    end,
-                    suggestion.original,
-                    suggestion.replacement,
-                    suggestion.source,
-                    suggestion.ruleId,
-                    suggestion.severity,
-                    suggestion.textRevision.toLong(),
-                )
-            }
-        }
         _state.value = EditorCorrectionState(
             targetId = identity.targetId,
             projectId = identity.projectId,
             chapterId = identity.chapterId,
             sessionId = lease.sessionId,
             textRevision = before.revision,
-            suggestions = mapped,
+            suggestions = mappedSuggestions(before.text, before.revision, snapshot.suggestions),
+        )
+    }
+
+    /** Restore Core's cached chapter suggestions without scanning; failures leave state untouched. */
+    suspend fun restoreChapterSnapshot(identity: EditorCorrectionIdentity) {
+        val generation = requestGeneration.incrementAndGet()
+        val lease = sessionCoordinator.currentInputLease() ?: return
+        if (lease.targetId != identity.targetId || currentIdentity() != identity) return
+        val before = withContext(Dispatchers.IO) { sessionCoordinator.queryTargetSnapshot(identity.targetId) } ?: return
+        if (!snapshotMatchesLease(before, lease)) return
+
+        val response =
+            withContext(Dispatchers.IO) {
+                appServiceBridge.getCorrectionChapterSnapshot(
+                    sessionId = lease.sessionId,
+                    projectId = identity.projectId,
+                    chapterId = identity.chapterId,
+                    textRevision = before.revision.toULong(),
+                )
+            }
+        val snapshot = (response as? BridgeResult.Success)?.data ?: return
+
+        val stillCurrent =
+            withContext(Dispatchers.IO) {
+                sessionCoordinator.currentInputLease() == lease &&
+                    sessionCoordinator.queryTargetSnapshot(identity.targetId)?.revision == before.revision
+            }
+        if (!stillCurrent || generation != requestGeneration.get() || currentIdentity() != identity) return
+        if (snapshot.textRevision.toLong() != before.revision) return
+
+        _state.value = EditorCorrectionState(
+            targetId = identity.targetId,
+            projectId = identity.projectId,
+            chapterId = identity.chapterId,
+            sessionId = lease.sessionId,
+            textRevision = before.revision,
+            suggestions = mappedSuggestions(before.text, before.revision, snapshot.suggestions),
         )
     }
 
@@ -363,6 +364,36 @@ class EditorCorrectionCoordinator(
         val end = TextOffsetUtils.utf16OffsetForUtf8Byte(text, endByte)
         return text.substring(start, end)
     }
+
+    private fun mappedSuggestions(
+        text: String,
+        revision: Long,
+        suggestions: List<uniffi.writer_core.CorrectionSuggestionDto>,
+    ): List<EditorCorrectionSuggestion> =
+        suggestions.mapNotNull { suggestion ->
+            val start = suggestion.startByte.toInt()
+            val end = suggestion.endByte.toInt()
+            if (suggestion.textRevision.toLong() != revision ||
+                !validByteRange(text, start, end) ||
+                rangeText(text, start, end) != suggestion.original
+            ) {
+                null
+            } else {
+                EditorCorrectionSuggestion(
+                    startByte = start,
+                    endByte = end,
+                    original = suggestion.original,
+                    replacement = suggestion.replacement,
+                    source = suggestion.source,
+                    ruleId = suggestion.ruleId,
+                    severity = suggestion.severity,
+                    textRevision = suggestion.textRevision.toLong(),
+                )
+            }
+        }
+
+    private fun EditorCorrectionState.matchesIdentity(identity: EditorCorrectionIdentity): Boolean =
+        targetId == identity.targetId && projectId == identity.projectId && chapterId == identity.chapterId
 
     private fun EditorCorrectionIgnoreScope.toDto(): uniffi.writer_core.CorrectionIgnoreScopeDto =
         when (this) {

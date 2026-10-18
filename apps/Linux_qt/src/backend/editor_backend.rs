@@ -75,9 +75,10 @@ pub struct EditorBackend {
     writing_status_ready: qt_signal!(request_id: u32, status: QJsonObject),
     #[allow(dead_code)]
     writing_status_failed: qt_signal!(request_id: u32, message: QString),
-    /// Issue #943：校对后台任务完成；结果仅含建议和 byte/Qt 坐标标注。
+    /// Issue #943/#954：校对后台任务完成；结果仅含建议和 byte/Qt 坐标标注。
+    /// #954 起第三个参数是整章快照 JSON（textRevision/suggestions/checkedRanges）。
     #[allow(dead_code)]
-    correction_check_ready: qt_signal!(request_id: u32, text_revision: u64, suggestions_json: QString),
+    correction_check_ready: qt_signal!(request_id: u32, text_revision: u64, snapshot_json: QString),
     #[allow(dead_code)]
     correction_check_failed: qt_signal!(request_id: u32, text_revision: u64, message: QString),
     #[allow(dead_code)]
@@ -217,6 +218,18 @@ pub struct EditorBackend {
             text: QString,
             start_byte: u32,
             end_byte: u32,
+        )
+    ),
+    /// Issue #954：读取 Core 已缓存且仍有效的校对结果，不触发模型扫描。
+    #[allow(dead_code)]
+    request_correction_snapshot: qt_method!(
+        fn(
+            &mut self,
+            request_id: u32,
+            project_id: QString,
+            chapter_id: QString,
+            text_revision: u64,
+            text: QString,
         )
     ),
     #[allow(dead_code)]
@@ -750,6 +763,55 @@ impl EditorBackend {
                 text.to_string(),
                 start_byte,
                 end_byte,
+                completion,
+            )
+        });
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                self.correction_check_failed(request_id, text_revision, message.into());
+            }
+            Err(error) => {
+                self.correction_check_failed(request_id, text_revision, error.to_string().into());
+            }
+        }
+    }
+
+    fn request_correction_snapshot(
+        &mut self,
+        request_id: u32,
+        project_id: QString,
+        chapter_id: QString,
+        text_revision: u64,
+        text: QString,
+    ) {
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, text_revision, result): (u32, u64, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => {
+                            this.correction_check_ready(request_id, text_revision, json.into())
+                        }
+                        Err(message) => {
+                            this.correction_check_failed(request_id, text_revision, message.into())
+                        }
+                    }
+                }
+            },
+        );
+        let completion: super::correction_operations::CorrectionQueryCallback =
+            Box::new(move |request_id, text_revision, result| {
+                callback((request_id, text_revision, result));
+            });
+        let result = self.with_app(|app| {
+            app.request_correction_snapshot(
+                request_id,
+                project_id.to_string(),
+                chapter_id.to_string(),
+                text_revision,
+                text.to_string(),
                 completion,
             )
         });

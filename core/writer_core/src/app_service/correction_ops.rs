@@ -1,6 +1,6 @@
 use crate::api::{
-    CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto, CorrectionResourceStatusDto,
-    CorrectionSuggestionDto, EditorEditResultDto, EditorTransactionCauseDto, WriterError,
+    CorrectionChapterSnapshotDto, CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto,
+    CorrectionResourceStatusDto, EditorEditResultDto, EditorTransactionCauseDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -54,49 +54,6 @@ impl super::WriterAppService {
         Ok(session.kernel.clone())
     }
 
-    fn correction_session_context(
-        &self,
-        session_id: u64,
-        project_id: &str,
-        chapter_id: &str,
-        expected_revision: u64,
-        start_byte: u32,
-        end_byte: u32,
-    ) -> Result<(String, u32), WriterError> {
-        let kernel =
-            self.correction_session_kernel(session_id, project_id, chapter_id, expected_revision)?;
-        let start =
-            usize::try_from(start_byte).map_err(|error| WriterError::Other(error.to_string()))?;
-        let end =
-            usize::try_from(end_byte).map_err(|error| WriterError::Other(error.to_string()))?;
-        let byte_len = kernel.byte_len();
-        if start >= end
-            || end > byte_len
-            || !kernel.is_char_boundary(start)
-            || !kernel.is_char_boundary(end)
-        {
-            return Err(WriterError::Other(format!(
-                "invalid correction byte range {start_byte}..{end_byte} for text of {byte_len} bytes"
-            )));
-        }
-
-        // Copy just the active sentence and a small amount of neighboring context.
-        // The editor rope lets this stay independent of the full chapter size.
-        const CONTEXT_BYTES: usize = 256;
-        let mut context_start = start.saturating_sub(CONTEXT_BYTES);
-        while !kernel.is_char_boundary(context_start) {
-            context_start -= 1;
-        }
-        let mut context_end = end.saturating_add(CONTEXT_BYTES).min(byte_len);
-        while !kernel.is_char_boundary(context_end) {
-            context_end -= 1;
-        }
-        let context = kernel.byte_slice(context_start, context_end).to_string();
-        let context_start =
-            u32::try_from(context_start).map_err(|error| WriterError::Other(error.to_string()))?;
-        Ok((context, context_start))
-    }
-
     fn correction_session_target_revision(
         &self,
         session_id: u64,
@@ -117,24 +74,48 @@ impl super::WriterAppService {
         text_revision: u64,
         start_byte: u32,
         end_byte: u32,
-    ) -> Result<Vec<CorrectionSuggestionDto>, WriterError> {
-        let (text, context_start) = self.correction_session_context(
-            session_id,
-            &project_id,
-            &chapter_id,
-            text_revision,
-            start_byte,
-            end_byte,
-        )?;
-        self.api.check_correction_segment_with_base(
+    ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+        let kernel =
+            self.correction_session_kernel(session_id, &project_id, &chapter_id, text_revision)?;
+        let start =
+            usize::try_from(start_byte).map_err(|error| WriterError::Other(error.to_string()))?;
+        let end =
+            usize::try_from(end_byte).map_err(|error| WriterError::Other(error.to_string()))?;
+        let byte_len = kernel.byte_len();
+        if start > end
+            || end > byte_len
+            || !kernel.is_char_boundary(start)
+            || !kernel.is_char_boundary(end)
+        {
+            return Err(WriterError::Other(format!(
+                "invalid correction byte range {start_byte}..{end_byte} for text of {byte_len} bytes"
+            )));
+        }
+        let text = kernel.snapshot_text();
+        self.api.check_correction_segment(
             project_id,
             chapter_id,
             text_revision,
             text,
-            start_byte - context_start,
-            end_byte - context_start,
-            context_start,
+            start_byte,
+            end_byte,
         )
+    }
+
+    /// Cached chapter snapshot for instant restore; never scans and never
+    /// reruns the model for segments that are still valid.
+    pub fn get_correction_chapter_snapshot(
+        &self,
+        session_id: u64,
+        project_id: String,
+        chapter_id: String,
+        text_revision: u64,
+    ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+        let kernel =
+            self.correction_session_kernel(session_id, &project_id, &chapter_id, text_revision)?;
+        let text = kernel.snapshot_text();
+        self.api
+            .correction_chapter_snapshot(project_id, chapter_id, text_revision, text)
     }
 
     pub fn check_correction_chapter(
@@ -143,55 +124,12 @@ impl super::WriterAppService {
         project_id: String,
         chapter_id: String,
         text_revision: u64,
-    ) -> Result<Vec<CorrectionSuggestionDto>, WriterError> {
+    ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
         let kernel =
             self.correction_session_kernel(session_id, &project_id, &chapter_id, text_revision)?;
-        let byte_len = kernel.byte_len();
-        u32::try_from(byte_len).map_err(|error| {
-            WriterError::Other(format!("chapter exceeds correction byte limit: {error}"))
-        })?;
-        if byte_len == 0 {
-            return Ok(Vec::new());
-        }
-
-        let scanner = self
-            .api
-            .correction_scanner(project_id, chapter_id, text_revision)?;
-        const CORE_CHUNK_BYTES: usize = 16 * 1024;
-        const CONTEXT_BYTES: usize = 256;
-        let mut suggestions = Vec::new();
-        let mut core_start = 0usize;
-        while core_start < byte_len {
-            let mut core_end = core_start.saturating_add(CORE_CHUNK_BYTES).min(byte_len);
-            while !kernel.is_char_boundary(core_end) {
-                core_end -= 1;
-            }
-
-            let mut context_start = core_start.saturating_sub(CONTEXT_BYTES);
-            while !kernel.is_char_boundary(context_start) {
-                context_start -= 1;
-            }
-            let mut context_end = core_end.saturating_add(CONTEXT_BYTES).min(byte_len);
-            while !kernel.is_char_boundary(context_end) {
-                context_end -= 1;
-            }
-            let context = kernel.byte_slice(context_start, context_end).to_string();
-            let context_len = u32::try_from(context.len())
-                .map_err(|error| WriterError::Other(error.to_string()))?;
-            let base = u32::try_from(context_start)
-                .map_err(|error| WriterError::Other(error.to_string()))?;
-            let chunk_suggestions = scanner.scan_range(&context, (0, context_len), base)?;
-            let core_start_byte =
-                u32::try_from(core_start).map_err(|error| WriterError::Other(error.to_string()))?;
-            let core_end_byte =
-                u32::try_from(core_end).map_err(|error| WriterError::Other(error.to_string()))?;
-            suggestions.extend(chunk_suggestions.into_iter().filter(|suggestion| {
-                suggestion.start_byte >= core_start_byte && suggestion.start_byte < core_end_byte
-            }));
-            core_start = usize::try_from(core_end_byte)
-                .map_err(|error| WriterError::Other(error.to_string()))?;
-        }
-        Ok(suggestions)
+        let text = kernel.snapshot_text();
+        self.api
+            .check_correction_chapter(project_id, chapter_id, text_revision, text)
     }
 
     #[allow(clippy::too_many_arguments)]
