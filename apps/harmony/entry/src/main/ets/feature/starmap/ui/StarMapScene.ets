@@ -153,6 +153,7 @@ import {
 } from '../platform/StarMapMotion'
 import { GestureState, StarMapGestureMode, StarMapGestureStateTracker } from '../platform/StarMapGestureState'
 import { StarMapSelectionState } from '../platform/StarMapSelectionState'
+import { StarMapSyncBarrier } from '../platform/StarMapSyncBarrier'
 import {
   StarMapSceneNode, StarMapSceneRegistry, Viewport,
   ContentBounds, computeContentBounds, computeFittedViewport,
@@ -1974,6 +1975,21 @@ private refitAfterContentAdded(): void {
   }
 
   /**
+   * Issue #988：星图 CRUD 是异步 bridge 写入。附近设备同步提交前必须等这些
+   * 在途写入落盘；提交期间新的星图写入也不能插进合并中间。这里用统一包装
+   * 记录 pendingWrites，失败也保证 endWrite。
+   */
+  private async withPeerWriteBarrier<T>(action: () => Promise<T>): Promise<T> {
+    const barrier: StarMapSyncBarrier = StarMapSyncBarrier.getInstance()
+    await barrier.beginWrite()
+    try {
+      return await action()
+    } finally {
+      barrier.endWrite()
+    }
+  }
+
+  /**
    * 落一条边：通过 bridge 的星图 CRUD API 写回**宿主 Scene**的图。
    *
    * 端点路径已经由 Core 的 plan_cross_layer_connection 换算成相对本 Scene，
@@ -1982,10 +1998,12 @@ private refitAfterContentAdded(): void {
    * （facade/starmap_ops/graph.rs::add_starmap_edge 把边写进 starmap_id 自己的图）。
    */
   async createEdgeBetween(from: StarMapTargetPath, to: StarMapTargetPath): Promise<boolean> {
-    if (!this.bridge) {
+    const bridge: IWriterCoreBridge | null = this.bridge
+    if (!bridge) {
       return false
     }
-    const result = await this.bridge.addStarMapEdge(this.starmapId, from, to, 'RelatedTo', null)
+    const result = await this.withPeerWriteBarrier(
+      async () => bridge.addStarMapEdge(this.starmapId, from, to, 'RelatedTo', null))
     if (result.success && result.data) {
       // 成功分支必须留痕：Issue #813 的诊断包里只有 create_starmap_child_embed，
       // 无法判断是"没画线"还是"画了线但没落库"。这条日志同时覆盖普通节点和 Embed 端点。
@@ -2021,10 +2039,12 @@ private refitAfterContentAdded(): void {
    */
   async saveNodePosition(nodeId: string) {
     const ln = this.getPlatformLayoutNode(nodeId)
-    if (!ln || !this.bridge) return
+    const bridge: IWriterCoreBridge | null = this.bridge
+    if (!ln || !bridge) return
     hilog.info(0x0000, 'StarMapScene', `saveNodePosition: ${nodeId} → (${ln.x}, ${ln.y})`)
-    const result = await this.bridge.updateStarMapNode(this.starmapId, nodeId,
-      { position: { x: ln.x, y: ln.y } })
+    const result = await this.withPeerWriteBarrier(
+      async () => bridge.updateStarMapNode(this.starmapId, nodeId,
+        { position: { x: ln.x, y: ln.y } }))
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene', `saveNodePosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
     }
@@ -2227,7 +2247,8 @@ private refitAfterContentAdded(): void {
     body: string,
     editContent: boolean
   ): Promise<StarMapNodeSaveResult> {
-    if (!this.graph || !this.bridge) {
+    const bridge: IWriterCoreBridge | null = this.bridge
+    if (!this.graph || !bridge) {
       return { success: false, message: '星图尚未加载，暂时无法保存' }
     }
     const node: StarMapNode | undefined = this.graph.nodes.find((item: StarMapNode) => item.id === nodeId)
@@ -2255,7 +2276,8 @@ private refitAfterContentAdded(): void {
       nextContent = this.buildInlineNodeContent(node, body)
       patch.content = nextContent
     }
-    const result = await this.bridge.updateStarMapNode(this.starmapId, nodeId, patch)
+    const result = await this.withPeerWriteBarrier(
+      async () => bridge.updateStarMapNode(this.starmapId, nodeId, patch))
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene',
         `saveNodeEdits failed: ${nodeId}, ${result.errorCode ?? ''}, ${result.userMessage}`)
@@ -2328,11 +2350,13 @@ private refitAfterContentAdded(): void {
    */
   async saveEmbedPosition(embedId: string) {
     const ln = this.getPlatformLayoutNode(embedId)
-    if (!ln || !this.bridge) return
+    const bridge: IWriterCoreBridge | null = this.bridge
+    if (!ln || !bridge) return
     hilog.info(0x0000, 'StarMapScene',
       `saveEmbedPosition: ${embedId} → authored(${ln.x}, ${ln.y})`)
-    const result = await this.bridge.updateStarMapEmbed(this.starmapId, embedId,
-      { x: ln.x, y: ln.y })
+    const result = await this.withPeerWriteBarrier(
+      async () => bridge.updateStarMapEmbed(this.starmapId, embedId,
+        { x: ln.x, y: ln.y }))
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene', `saveEmbedPosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
     }
@@ -2350,7 +2374,8 @@ private refitAfterContentAdded(): void {
   async performCreateNode(title: string) {
     const trimmed: string = title.trim()
     if (trimmed.length === 0) return
-    if (!this.bridge) return
+    const bridge: IWriterCoreBridge | null = this.bridge
+    if (!bridge) return
     const candidate = this.createMenuCanvasPosition
     // #984：新建节点是文字卡片，安全区 clamp 用与布局 / UI 同一份标题 + 正文度量，
     // 不能再拿固定的 DEFAULT_NODE_WIDTH / DEFAULT_NODE_HEIGHT 去夹。
@@ -2362,7 +2387,8 @@ private refitAfterContentAdded(): void {
       x: clampedNode.x,
       y: clampedNode.y
     }
-    const result = await this.bridge.addStarMapNode(this.starmapId, trimmed, 'Custom', position)
+    const result = await this.withPeerWriteBarrier(
+      async () => bridge.addStarMapNode(this.starmapId, trimmed, 'Custom', position))
     if (result.success && result.data) {
       if (this.graph) {
         this.graph = {
@@ -2401,7 +2427,8 @@ private refitAfterContentAdded(): void {
   async performCreateEmbed(title: string) {
     const trimmed: string = title.trim()
     if (trimmed.length === 0) return
-    if (!this.bridge) return
+    const bridge: IWriterCoreBridge | null = this.bridge
+    if (!bridge) return
     const candidate = this.createMenuCanvasPosition
     // 新建子星图的位置是 **authored 口径**（Core 的 embed.position 定义就是
     // "DEFAULT_EMBED_DIAMETER 方框的左上角"），而 #821 之后布局矩形和
@@ -2412,7 +2439,8 @@ private refitAfterContentAdded(): void {
       x: clampedEmbed.x,
       y: clampedEmbed.y
     }
-    const result = await this.bridge.createStarmapChildEmbed(this.starmapId, trimmed, position)
+    const result = await this.withPeerWriteBarrier(
+      async () => bridge.createStarmapChildEmbed(this.starmapId, trimmed, position))
     if (result.success && result.data) {
       if (this.graph) {
         this.graph = {

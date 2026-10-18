@@ -28,6 +28,7 @@ import {
 } from '../platform/StarMapViewport'
 import { StarMapSelectionState } from '../platform/StarMapSelectionState'
 import { StarMapSelectionKind } from '../platform/StarMapSelectionState'
+import { StarMapSyncBarrier } from '../platform/StarMapSyncBarrier'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { StarMapScene } from './StarMapScene'
@@ -97,6 +98,10 @@ export struct StarMapScreen {
 
   // 加载序号：防止切层后旧异步结果覆盖新层
   private graphLoadGeneration: number = 0
+  // Issue #988：附近设备提交期间先等在途星图写入，提交后重载当前图。
+  private unregisterPeerSync: (() => void) | null = null
+  private peerReloadTimerId: number = -1
+  private peerReloadConflicts: number = 0
 
   // 画布尺寸（用于 zoomAround 计算可视中心）
   // 同时也是**根 StarMap 实际视口**（#820）：不是物理屏幕，是这张星图真正能画东西的那块区域。
@@ -130,6 +135,14 @@ export struct StarMapScreen {
 
   async aboutToAppear() {
     hilog.info(0x0000, 'StarMapScreen', 'route name=StarMap')
+    // Issue #988：附近设备同步不能只靠 Home 刷新；活跃星图要先等在途 CRUD 落盘，
+    // 提交完成后按磁盘最新 graph.json 重载，避免旧内存图在后续保存时覆盖同步结果。
+    this.unregisterPeerSync = StarMapSyncBarrier.getInstance().register({
+      afterPeerCommit: async (paths: string[], applied: number,
+        conflicts: number): Promise<void> => {
+        await this.reloadAfterPeerCommit(paths, applied, conflicts)
+      }
+    })
     // Issue #988：用户点选节点/Embed/边时立即冻结当前星图快照，而不是只等相机变化。
     this.selectionState.setChangedListener((): void => {
       this.updateContinuationSnapshot()
@@ -197,6 +210,14 @@ export struct StarMapScreen {
   aboutToDisappear() {
     this.canvasActive = false
     this.stopWobbleAnimation()
+    if (this.unregisterPeerSync !== null) {
+      this.unregisterPeerSync()
+      this.unregisterPeerSync = null
+    }
+    if (this.peerReloadTimerId !== -1) {
+      clearTimeout(this.peerReloadTimerId)
+      this.peerReloadTimerId = -1
+    }
     this.selectionState.setChangedListener(null)
     this.gestureTracker.reset()
     if (this.searchFocusTimerId !== -1) {
@@ -244,6 +265,38 @@ export struct StarMapScreen {
     if (this.wobbleAnimator) {
       this.wobbleAnimator.cancel()
       this.wobbleAnimator = null
+    }
+  }
+
+  private async reloadAfterPeerCommit(paths: string[], applied: number,
+    conflicts: number): Promise<void> {
+    if (applied <= 0) {
+      return
+    }
+    const currentPrefix: string = `app/starmaps/${this.starmapId}/`
+    const affectsCurrent: boolean = paths.some((path: string): boolean =>
+      path === 'app/starmaps/index.json' || path === `${currentPrefix}graph.json` ||
+      path.startsWith(currentPrefix))
+    if (!affectsCurrent) {
+      return
+    }
+    this.peerReloadConflicts += conflicts
+    // 一条清单可能连续提交多个星图对象；合并成一次重载，避免每落一个文件就重建整张图。
+    if (this.peerReloadTimerId !== -1) {
+      clearTimeout(this.peerReloadTimerId)
+    }
+    this.peerReloadTimerId = setTimeout((): void => {
+      this.peerReloadTimerId = -1
+      void this.applyPeerReload()
+    }, 120)
+  }
+
+  private async applyPeerReload(): Promise<void> {
+    const conflicts: number = this.peerReloadConflicts
+    this.peerReloadConflicts = 0
+    await this.loadStarMap()
+    if (conflicts > 0) {
+      this.showSearchFocusToast(`附近设备同步完成，有 ${conflicts} 个星图冲突待处理`)
     }
   }
 

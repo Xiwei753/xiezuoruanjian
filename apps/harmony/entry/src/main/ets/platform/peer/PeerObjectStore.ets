@@ -14,8 +14,25 @@ import emitter from '@ohos.events.emitter'
 import { getAppDataRoot, getAppContext } from '../../app/AppContext'
 import { HarmonyDeviceIdentity } from '../identity/HarmonyDeviceIdentity'
 import { PeerCrypto } from './PeerCrypto'
+import { PeerStarMapMerge, PeerStarMapMergeResult } from './PeerStarMapMerge'
 
 const SYNC_CONTENT_CHANGED_EVENT_ID: number = 1001
+
+// 用户正文：不能按 mtime 直接跳过来自附近设备的版本，必须进入三路保护。
+export function isPeerDocumentPath(path: string): boolean {
+  return path.endsWith('/chapter.md')
+}
+
+// 星图索引 / GraphMeta：必须按稳定 ID 合并，不能整文件 LWW。
+export function isPeerStarMapSemanticPath(path: string): boolean {
+  return PeerStarMapMerge.isSemanticPath(path)
+}
+
+// 星图节点/边/嵌入等对象文件：按对象 ID 独立存在，双方都改时保留本机并记录冲突。
+export function isPeerStarMapObjectPath(path: string): boolean {
+  return path.startsWith('app/starmaps/') && !isPeerStarMapSemanticPath(path) &&
+    !path.endsWith('/manifest.sync.json')
+}
 
 export interface PeerStoredObject {
   path: string
@@ -131,6 +148,22 @@ export class PeerObjectStore {
     return Array.from(objects.values())
   }
 
+  stagedPaths(): string[] {
+    return Array.from(this.staged.keys())
+  }
+
+  // 是否存在同步共同基线。章节三路保护依赖它；没有基线时不拿当前文件冒充。
+  hasKnownBase(path: string): boolean {
+    const target: LocalObjectTarget | null = this.resolveTarget(path)
+    if (target === null) {
+      return false
+    }
+    const state: SyncStateFile = this.readSyncState(this.syncStatePaths(target).statePath)
+    return state.known_files !== undefined &&
+      state.known_files[target.relativePath] !== undefined &&
+      (state.known_files[target.relativePath] as string).length > 0
+  }
+
   readLocalObject(path: string): PeerStoredContent | null {
     const target: LocalObjectTarget | null = this.resolveTarget(path)
     if (target === null || target.relativePath.endsWith('manifest.sync.json')) {
@@ -195,6 +228,10 @@ export class PeerObjectStore {
     let conflicts: number = 0
     try {
       const pending: StagedPeerObject[] = Array.from(this.staged.values())
+      // 星图 graph/index 必须最后落盘：先把节点/边/嵌入对象文件提交完，
+      // 再按稳定 ID 合并成员表，避免短暂出现 graph 指向尚未落盘的对象。
+      pending.sort((left: StagedPeerObject, right: StagedPeerObject): number =>
+        this.commitOrder(left.path) - this.commitOrder(right.path))
       // 先全部完成规则判断，再逐个原子落盘；单文件 rename 不是整轮两阶段事务，
       // 但不会在判断阶段中途改写 live 数据。
       for (const object of pending) {
@@ -211,42 +248,108 @@ export class PeerObjectStore {
         const localRecord: ManifestFileRecord | null = this.findManifestRecord(target, object.path)
         const localBytes: Uint8Array | null = this.readIfExists(target.absolutePath)
         const localHash: string = localBytes === null ? '' : PeerCrypto.md5Hex(localBytes)
-        const baseHash: string = localRecord !== null && localRecord.content_hash !== undefined
-          ? localRecord.content_hash : ''
-        const localChanged: boolean = localHash.length > 0 && localHash !== baseHash
+        const protectedPath: boolean = isPeerDocumentPath(object.path) ||
+          isPeerStarMapSemanticPath(object.path) || isPeerStarMapObjectPath(object.path)
+        const baseHash: string = this.knownBase(target, localRecord, localHash, protectedPath)
+        const localModifiedAt: number = this.localModifiedAt(target, localRecord, localHash)
+        const localChanged: boolean = localHash.length > 0 &&
+          (baseHash.length === 0 || localHash !== baseHash)
         const localExists: boolean = localBytes !== null
 
         if (object.deleted) {
-          // 删除墓碑遇到本地修改（或未登记的本地文件）时不能直接删，保留本地事实。
-          if (localChanged || (localExists && localRecord === null)) {
-            this.writeConflict(object, target, 'delete', localHash, baseHash)
-            conflicts++
-            continue
+          // 删除墓碑遇到本地修改时不能直接删，保留本地事实并记录 remote_deleted。
+          // 普通元数据仍遵守 LWW：本机修改严格晚于远端删除时，删除不生效。
+          if (localExists) {
+            if (localRecord === null) {
+              if (!protectedPath && localModifiedAt > object.modifiedAtMs) {
+                continue
+              }
+              this.writeConflict(object, target, 'delete', localHash, baseHash)
+              conflicts++
+              continue
+            }
+            if (localChanged) {
+              if (!protectedPath && localModifiedAt > object.modifiedAtMs) {
+                continue
+              }
+              this.writeConflict(object, target, 'delete', localHash, baseHash)
+              conflicts++
+              continue
+            }
           }
           if (fs.accessSync(target.absolutePath)) {
             fs.unlinkSync(target.absolutePath)
           }
           this.updateManifest(target, object, true)
+          this.removeKnown(target)
           applied++
           continue
         }
 
-        // 章节正文：本地和远端相对共同基线都变化时，绝不静默覆盖本地。
-        if (this.isChapterText(object.path) && localChanged && localHash !== object.contentHash) {
+        if (localHash.length > 0 && localHash === object.contentHash) {
+          continue
+        }
+
+        // 星图索引 / GraphMeta：按稳定对象 ID 合并，绝不整文件 mtime LWW。
+        if (isPeerStarMapSemanticPath(object.path)) {
+          if (localBytes !== null) {
+            let merged: PeerStarMapMergeResult
+            try {
+              merged = PeerStarMapMerge.merge(object.path, localBytes, object.bytes)
+            } catch (e) {
+              throw new Error(`星图语义合并失败：${String(e)}`)
+            }
+            if (merged.changed) {
+              this.atomicWrite(target.absolutePath, merged.bytes)
+              const mergedHash: string = PeerCrypto.md5Hex(merged.bytes)
+              this.updateManifest(target, object, false, mergedHash)
+              if (!merged.conflict) {
+                this.markKnown(target, mergedHash)
+              }
+              applied++
+            }
+            if (merged.conflict) {
+              this.writeConflict(object, target, 'update', localHash, baseHash,
+                merged.description)
+              conflicts++
+            }
+            continue
+          }
+          this.applyRemoteObject(target, object)
+          applied++
+          continue
+        }
+
+        // 用户正文与星图对象文件：本地和远端相对共同基线都变化时，
+        // 绝不静默覆盖本地。没有基线时也保留本机并记录冲突。
+        const remoteChanged: boolean = baseHash.length === 0 ||
+          object.contentHash !== baseHash
+        const protectedObject: boolean = isPeerDocumentPath(object.path) ||
+          isPeerStarMapObjectPath(object.path)
+        if (protectedObject && localChanged && remoteChanged) {
           this.writeConflict(object, target, 'update', localHash, baseHash)
           conflicts++
           continue
         }
-
-        if (!this.remoteWins(object, localRecord, localHash)) {
+        if (!remoteChanged) {
           continue
         }
-        this.atomicWrite(target.absolutePath, object.bytes)
-        this.updateManifest(target, object, false)
+        // 本地相对共同基线未变，远端有变化：三路语义下直接采用远端，
+        // 不能再拿文件 mtime 把远端新内容挡掉（本地 mtime 可能只是复制/打开时间）。
+        if (!localChanged) {
+          this.applyRemoteObject(target, object)
+          applied++
+          continue
+        }
+
+        if (!this.remoteWins(object, localRecord, localHash, localModifiedAt)) {
+          continue
+        }
+        this.applyRemoteObject(target, object)
         applied++
       }
       this.staged.clear()
-      if (applied > 0) {
+      if (applied > 0 || conflicts > 0) {
         emitter.emit({ eventId: SYNC_CONTENT_CHANGED_EVENT_ID })
       }
       return { success: true, applied: applied, conflicts: conflicts,
@@ -254,6 +357,97 @@ export class PeerObjectStore {
     } catch (e) {
       return failed(`提交附近设备对象失败：${String(e)}`)
     }
+  }
+
+  private commitOrder(path: string): number {
+    if (path === 'app/starmaps/index.json') {
+      return 3
+    }
+    if (isPeerStarMapSemanticPath(path)) {
+      return 2
+    }
+    return path.startsWith('app/starmaps/') ? 1 : 0
+  }
+
+  private applyRemoteObject(target: LocalObjectTarget, object: StagedPeerObject): void {
+    this.atomicWrite(target.absolutePath, object.bytes)
+    this.updateManifest(target, object, false)
+    this.markKnown(target, object.contentHash)
+  }
+
+  private knownBase(target: LocalObjectTarget, localRecord: ManifestFileRecord | null,
+    localHash: string, requireStateBaseline: boolean): string {
+    const state: SyncStateFile = this.readSyncState(this.syncStatePaths(target).statePath)
+    const known: string | undefined = state.known_files === undefined
+      ? undefined : state.known_files[target.relativePath]
+    if (known !== undefined && known.length > 0) {
+      return known
+    }
+    // 正文、星图对象与星图语义文件必须使用 Core 维护的共同基线 known_files；
+    // manifest 里的 hash 可能只是本机当前版本，不能冒充三方合并的 base，
+    // 否则会把“本机有新内容”误判成未修改，被远端 LWW 覆盖。
+    if (requireStateBaseline) {
+      return ''
+    }
+    // 旧数据可能还没有 state.local.json；普通 LWW 元数据允许 manifest 作兼容回退。
+    return localRecord !== null && localRecord.op === 'upsert' &&
+      localRecord.content_hash !== undefined && localRecord.content_hash !== localHash
+      ? localRecord.content_hash : ''
+  }
+
+  private localModifiedAt(target: LocalObjectTarget, localRecord: ManifestFileRecord | null,
+    localHash: string): number {
+    if (localHash.length === 0) {
+      return localRecord !== null ? (localRecord.deleted_at_ms ?? localRecord.updated_at_ms ?? 0) : 0
+    }
+    if (localRecord !== null && localRecord.op === 'upsert' &&
+      localRecord.content_hash === localHash && localRecord.updated_at_ms !== undefined) {
+      return localRecord.updated_at_ms
+    }
+    try {
+      return fs.statSync(target.absolutePath).mtime * 1000
+    } catch (_e) {
+      return 0
+    }
+  }
+
+  private markKnown(target: LocalObjectTarget, contentHash: string): void {
+    const paths: SyncStatePaths = this.syncStatePaths(target)
+    const state: SyncStateFile = this.readSyncState(paths.statePath)
+    const known: Record<string, string> = state.known_files ?? {}
+    known[target.relativePath] = contentHash
+    state.known_files = known
+    const updated: Record<string, number> = state.known_files_updated_at ?? {}
+    updated[target.relativePath] = Date.now()
+    state.known_files_updated_at = updated
+    if (state.device_id === undefined || state.device_id.length === 0) {
+      state.device_id = this.localDeviceId
+    }
+    this.atomicWrite(paths.statePath, PeerCrypto.utf8Encode(JSON.stringify(state)))
+  }
+
+  private removeKnown(target: LocalObjectTarget): void {
+    const paths: SyncStatePaths = this.syncStatePaths(target)
+    const state: SyncStateFile = this.readSyncState(paths.statePath)
+    const known: Record<string, string> = {}
+    if (state.known_files !== undefined) {
+      Object.keys(state.known_files).forEach((key: string): void => {
+        if (key !== target.relativePath) {
+          known[key] = (state.known_files as Record<string, string>)[key]
+        }
+      })
+    }
+    state.known_files = known
+    const updated: Record<string, number> = {}
+    if (state.known_files_updated_at !== undefined) {
+      Object.keys(state.known_files_updated_at).forEach((key: string): void => {
+        if (key !== target.relativePath) {
+          updated[key] = (state.known_files_updated_at as Record<string, number>)[key]
+        }
+      })
+    }
+    state.known_files_updated_at = updated
+    this.atomicWrite(paths.statePath, PeerCrypto.utf8Encode(JSON.stringify(state)))
   }
 
   private commitMessage(applied: number, conflicts: number): string {
@@ -438,11 +632,12 @@ export class PeerObjectStore {
     }
   }
 
-  private updateManifest(target: LocalObjectTarget, object: StagedPeerObject, deleted: boolean): void {
+  private updateManifest(target: LocalObjectTarget, object: StagedPeerObject,
+    deleted: boolean, contentHashOverride: string = ''): void {
     const manifest: SyncManifest = this.readManifest(target.manifestPath)
     const next: ManifestFileRecord = {
       path: target.relativePath,
-      content_hash: object.contentHash,
+      content_hash: contentHashOverride.length > 0 ? contentHashOverride : object.contentHash,
       updated_at_ms: object.modifiedAtMs,
       deleted_at_ms: deleted ? object.modifiedAtMs : null,
       device_id: object.deviceId,
@@ -499,26 +694,29 @@ export class PeerObjectStore {
   }
 
   private remoteWins(object: StagedPeerObject, local: ManifestFileRecord | null,
-    localHash: string): boolean {
+    localHash: string, localModifiedAtMs: number): boolean {
     if (localHash.length === 0 && local === null) {
       return true
     }
-    if (local === null) {
+    if (localHash.length === 0) {
       return true
     }
-    const localTime: number = local.deleted_at_ms ?? local.updated_at_ms ?? 0
+    const localTime: number = local !== null && local.op === 'upsert' &&
+      local.content_hash === localHash
+      ? (local.updated_at_ms ?? localModifiedAtMs) : localModifiedAtMs
     if (object.modifiedAtMs > localTime) {
       return true
     }
     if (object.modifiedAtMs < localTime) {
       return false
     }
-    const localDevice: string = local.device_id ?? ''
+    const localDevice: string = local !== null && local.device_id !== undefined
+      ? local.device_id : this.localDeviceId
     return object.deviceId >= localDevice
   }
 
   private writeConflict(object: StagedPeerObject, target: LocalObjectTarget, action: string,
-    localHash: string, baseHash: string): void {
+    localHash: string, baseHash: string, descriptionOverride: string = ''): void {
     const paths: SyncStatePaths = this.syncStatePaths(target)
     const kind: string = action === 'delete' ? 'remote_deleted' : 'both_changed'
     let remoteSnapshotPath: string | null = null
@@ -530,9 +728,10 @@ export class PeerObjectStore {
       this.atomicWrite(snapshotPath, object.bytes)
       remoteSnapshotPath = this.relativeToSyncRoot(snapshotPath, paths.syncRoot)
     }
-    const description: string = kind === 'remote_deleted'
-      ? `附近设备同步：远端已删除 ${target.relativePath}，本地仍有修改`
-      : `附近设备同步：本地和远端都修改了 ${target.relativePath}`
+    const description: string = descriptionOverride.length > 0 ? descriptionOverride
+      : (kind === 'remote_deleted'
+        ? `附近设备同步：远端已删除 ${target.relativePath}，本地仍有修改`
+        : `附近设备同步：本地和远端都修改了 ${target.relativePath}`)
     const record: SyncConflictRecord = {
       local_path: target.relativePath,
       remote_path: object.path,
@@ -627,10 +826,6 @@ export class PeerObjectStore {
     const rest: string = target.absolutePath.substring(marker.length)
     const slash: number = rest.indexOf('/')
     return slash < 0 ? rest : rest.substring(0, slash)
-  }
-
-  private isChapterText(path: string): boolean {
-    return path.endsWith('/chapter.md')
   }
 
   private isLocalOwnedStatsPartition(path: string): boolean {

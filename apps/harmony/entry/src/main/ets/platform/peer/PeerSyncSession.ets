@@ -13,11 +13,19 @@ import {
 import { PeerCrypto } from './PeerCrypto'
 import { ContinuationSnapshotStore } from '../continuity/ContinuationSnapshotStore'
 import {
+  isPeerDocumentPath,
+  isPeerStarMapObjectPath,
+  isPeerStarMapSemanticPath,
   PeerObjectCommitResult,
   PeerObjectStore,
   PeerStoredContent,
   PeerStoredObject
 } from './PeerObjectStore'
+import {
+  ActiveWritingSessionRegistry,
+  SyncBarrierScope
+} from '../../feature/editor/session/ActiveWritingSessionRegistry'
+import { StarMapSyncBarrier } from '../../feature/starmap/platform/StarMapSyncBarrier'
 
 export const PEER_PROTOCOL_VERSION: number = 1
 const CONTINUATION_OBJECT_PREFIX: string = '__continuation__/'
@@ -87,6 +95,8 @@ export class PeerSyncSession {
   // 双向同步以双方清单都到达为准；只收到单方清单不能宣告收敛。
   private localManifestSent: boolean = false
   private remoteManifestReceived: boolean = false
+  // 上一次提交成功后活跃写作会话未对齐：重试时即使对象已无 diff 也要继续回填。
+  private pendingWritingReconcile: boolean = false
 
   constructor(
     deviceNetworkId: string,
@@ -250,6 +260,49 @@ export class PeerSyncSession {
     }
   }
 
+  private async commitStagedObjects(): Promise<PeerObjectCommitResult> {
+    const paths: string[] = this.corePort.stagedPaths()
+    if (paths.length === 0) {
+      return { success: true, applied: 0, conflicts: 0, message: '没有待提交对象' }
+    }
+    try {
+      return await StarMapSyncBarrier.getInstance().withSyncBarrier(paths,
+        async (): Promise<PeerObjectCommitResult> => {
+          return await ActiveWritingSessionRegistry.getInstance().withSyncBarrier(
+            async (scope: SyncBarrierScope): Promise<PeerObjectCommitResult> => {
+              const committed: PeerObjectCommitResult =
+                await this.corePort.commitRemoteObjects()
+              if (!committed.success) {
+                return committed
+              }
+              if (committed.applied > 0) {
+                this.pendingWritingReconcile = true
+              }
+              if (this.pendingWritingReconcile) {
+                const reconciled: boolean = await scope.reconcileAfterSync()
+                if (!reconciled) {
+                  return {
+                    success: false,
+                    applied: committed.applied,
+                    conflicts: committed.conflicts,
+                    message: '活跃写作会话未能与附近设备新内容对齐，本次提交未确认'
+                  }
+                }
+                this.pendingWritingReconcile = false
+              }
+              return committed
+            })
+        })
+    } catch (_e) {
+      return {
+        success: false,
+        applied: 0,
+        conflicts: 0,
+        message: '活跃写作会话仍在对齐中，附近设备对象暂未提交'
+      }
+    }
+  }
+
   private async acceptWriteEnd(message: PeerWireMessage): Promise<void> {
     if (message.chunk === undefined || message.path === undefined ||
       message.contentHash === undefined) {
@@ -300,8 +353,10 @@ export class PeerSyncSession {
       await this.sendAck(message.requestId, false, staged.message)
       return
     }
-    const committed: PeerObjectCommitResult = await this.corePort.commitRemoteObjects()
+    const committed: PeerObjectCommitResult = await this.commitStagedObjects()
     if (!committed.success) {
+      // 不 remember 这笔 requestId：发送端会用同一 requestId 重试，
+      // 接收端重新暂存/提交，不能在持久化失败后回成功 ACK。
       await this.sendAck(message.requestId, false, committed.message)
       return
     }
@@ -343,8 +398,10 @@ export class PeerSyncSession {
       await this.sendAck(message.requestId, false, staged.message)
       return
     }
-    const committed: PeerObjectCommitResult = await this.corePort.commitRemoteObjects()
+    const committed: PeerObjectCommitResult = await this.commitStagedObjects()
     if (!committed.success) {
+      // 不 remember 这笔 requestId：发送端会用同一 requestId 重试，
+      // 接收端重新暂存/提交，不能在持久化失败后回成功 ACK。
       await this.sendAck(message.requestId, false, committed.message)
       return
     }
@@ -419,31 +476,34 @@ export class PeerSyncSession {
     })
     this.setState('syncing', '正在同步附近设备对象')
     let requested: number = 0
-    for (const entry of Array.from(this.remoteObjects.entries())) {
+    const entries: Array<[string, PeerObjectDescriptor]> =
+      Array.from(this.remoteObjects.entries())
+    // 先拿节点/边/嵌入对象，再合 GraphMeta，最后合 index：单条消息仍按对象 ACK，
+    // 但请求顺序保证活跃星图重载时依赖对象已经落盘。
+    entries.sort((left: [string, PeerObjectDescriptor],
+      right: [string, PeerObjectDescriptor]): number =>
+      this.requestOrder(left[0]) - this.requestOrder(right[0]))
+    for (const entry of entries) {
       const path: string = entry[0]
       const remote: PeerObjectDescriptor = entry[1]
       const current: PeerStoredObject | undefined = local.get(path)
       if (remote.deleted) {
-        const remoteDeleteWins: boolean = current === undefined || current.deleted ||
-          current.modifiedAtMs < remote.modifiedAtMs ||
-          (current.modifiedAtMs === remote.modifiedAtMs &&
-            remote.deviceId >= current.deviceId)
-        if (remoteDeleteWins) {
-          const staged: PeerObjectCommitResult = this.corePort.stageRemoteObject(
-            path, new Uint8Array(0), remote.contentHash, remote.modifiedAtMs, true,
-            remote.deviceId ?? 'unknown')
-          if (!staged.success) {
-            this.fail(staged.message)
-            return
-          }
-          const committed: PeerObjectCommitResult = await this.corePort.commitRemoteObjects()
-          if (!committed.success) {
-            this.fail(committed.message)
-            return
-          }
-          if (committed.conflicts > 0) {
-            this.unresolvedConflicts += committed.conflicts
-          }
+        // 墓碑不能因为“本地 mtime 更新”就被跳过：正文/星图对象的删除-修改
+        // 必须交给 PeerObjectStore 记录冲突；普通元数据由 store 按 LWW 决定。
+        const staged: PeerObjectCommitResult = this.corePort.stageRemoteObject(
+          path, new Uint8Array(0), remote.contentHash, remote.modifiedAtMs, true,
+          remote.deviceId ?? 'unknown')
+        if (!staged.success) {
+          this.fail(staged.message)
+          return
+        }
+        const committed: PeerObjectCommitResult = await this.commitStagedObjects()
+        if (!committed.success) {
+          this.fail(committed.message)
+          return
+        }
+        if (committed.conflicts > 0) {
+          this.unresolvedConflicts += committed.conflicts
         }
         continue
       }
@@ -451,11 +511,19 @@ export class PeerSyncSession {
         current.contentHash === remote.contentHash) {
         continue
       }
-      if (current !== undefined && current.modifiedAtMs > remote.modifiedAtMs) {
-        continue
-      }
-      if (current !== undefined && current.deleted && current.modifiedAtMs > remote.modifiedAtMs) {
-        continue
+      // 用户正文、星图索引/GraphMeta、已有共同基线的星图对象必须拉取远端内容：
+      // 只在 store 里做三路判断，发送端不能自己按 mtime 提前跳过冲突。
+      const mustFetch: boolean = current === undefined ||
+        isPeerDocumentPath(path) || isPeerStarMapSemanticPath(path) ||
+        (isPeerStarMapObjectPath(path) && this.corePort.hasKnownBase(path))
+      if (!mustFetch) {
+        if (current !== undefined && current.modifiedAtMs > remote.modifiedAtMs) {
+          continue
+        }
+        if (current !== undefined && current.deleted &&
+          current.modifiedAtMs > remote.modifiedAtMs) {
+          continue
+        }
       }
       if (this.requestObject(path, remote.contentHash)) {
         requested++
@@ -466,6 +534,16 @@ export class PeerSyncSession {
     } else {
       this.setState('syncing', `正在接收 ${this.pendingReads.size} 个附近设备对象`)
     }
+  }
+
+  private requestOrder(path: string): number {
+    if (path === 'app/starmaps/index.json') {
+      return 3
+    }
+    if (isPeerStarMapSemanticPath(path)) {
+      return 2
+    }
+    return path.startsWith('app/starmaps/') ? 1 : 0
   }
 
   private requestObject(path: string, contentHash: string): boolean {
