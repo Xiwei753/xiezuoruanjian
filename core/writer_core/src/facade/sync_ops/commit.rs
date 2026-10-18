@@ -52,14 +52,18 @@ impl crate::facade::WriterCore {
         // deleted target 远端清理成功后，从 pending_deleted_targets.json 移除该条目。
         self.cleanup_completed_deleted_targets(&result);
 
+        let report_time = now_epoch_seconds();
         let previous_state = self.load_full_sync_state().unwrap_or(None);
         let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
             &result,
             previous_state.as_ref(),
-            now_epoch_seconds(),
+            report_time,
         );
         if let Err(e) = self.save_full_sync_state(&new_state) {
             log::warn!("Failed to persist full sync state: {e}");
+        }
+        if let Err(e) = self.record_latest_full_sync_report(&result, report_time) {
+            log::warn!("Failed to persist latest full sync report: {e}");
         }
 
         if matches!(
@@ -201,14 +205,18 @@ impl crate::facade::WriterCore {
         // 从 pending_deleted_targets.json 移除该条目。
         self.cleanup_completed_deleted_targets(&result);
 
+        let report_time = now_epoch_seconds();
         let previous_state = self.load_full_sync_state().unwrap_or(None);
         let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
             &result,
             previous_state.as_ref(),
-            now_epoch_seconds(),
+            report_time,
         );
         if let Err(e) = self.save_full_sync_state(&new_state) {
             log::warn!("Failed to persist full sync state: {e}");
+        }
+        if let Err(e) = self.record_latest_full_sync_report(&result, report_time) {
+            log::warn!("Failed to persist latest full sync report: {e}");
         }
 
         if matches!(
@@ -428,15 +436,22 @@ impl crate::facade::WriterCore {
         status: crate::sync::SyncStatus,
         failed_target: &str,
     ) {
+        let report_time = now_epoch_seconds();
+        let report_status = status.clone();
         let previous = self.load_full_sync_state().unwrap_or(None);
         let state = crate::sync::full_sync_state::FullSyncState::failed_before_targets(
             previous.as_ref(),
             status,
-            now_epoch_seconds(),
+            report_time,
             failed_target,
         );
         if let Err(e) = self.save_full_sync_state(&state) {
             log::warn!("Failed to persist full sync early failure state: {e}");
+        }
+        if let Err(e) =
+            self.record_full_sync_early_failure_report(&report_status, failed_target, report_time)
+        {
+            log::warn!("Failed to persist early full sync report: {e}");
         }
     }
 
@@ -448,15 +463,22 @@ impl crate::facade::WriterCore {
     /// 变体，避免补全 260+ 处 match 分支）。复用 failed_before_targets 模式，
     /// failed_target 标 "cancelled"。写失败只记录警告。
     pub(crate) fn persist_full_sync_cancelled(&self) {
+        let report_time = now_epoch_seconds();
+        let status = crate::sync::SyncStatus::Error("cancelled".to_string());
         let previous = self.load_full_sync_state().unwrap_or(None);
         let state = crate::sync::full_sync_state::FullSyncState::failed_before_targets(
             previous.as_ref(),
-            crate::sync::SyncStatus::Error("cancelled".to_string()),
-            now_epoch_seconds(),
+            status.clone(),
+            report_time,
             "cancelled",
         );
         if let Err(e) = self.save_full_sync_state(&state) {
             log::warn!("Failed to persist full sync cancelled state: {e}");
+        }
+        if let Err(e) =
+            self.record_full_sync_early_failure_report(&status, "cancelled", report_time)
+        {
+            log::warn!("Failed to persist cancelled full sync report: {e}");
         }
     }
 }

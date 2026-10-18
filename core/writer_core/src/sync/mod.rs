@@ -28,6 +28,8 @@
 
 #![allow(clippy::module_inception)]
 
+/// Versioned App data-group catalog and legacy layout discovery.
+pub mod app_data_group_catalog;
 /// 同步取消令牌 — 平台无关的同步生命周期标记（Issue #729）。
 pub mod cancellation_token;
 pub(crate) mod commit_helpers;

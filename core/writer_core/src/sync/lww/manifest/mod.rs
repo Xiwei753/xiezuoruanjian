@@ -83,8 +83,9 @@ pub(crate) fn snapshot_local_records_for_merge(
     sync_root: &Path,
     scope: SyncScope,
     preferred_device_id: &str,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
 ) -> crate::error::Result<LocalSnapshot> {
-    build_local_snapshot(sync_root, scope, preferred_device_id)
+    build_local_snapshot(sync_root, scope, preferred_device_id, app_group)
 }
 
 ///   真正的只读 local record 投影 helper（严格版）。
@@ -113,7 +114,7 @@ pub fn snapshot_local_records_read_only(
     scope: SyncScope,
     preferred_device_id: &str,
 ) -> crate::error::Result<HashMap<String, ManifestFileRecord>> {
-    let snapshot = build_local_snapshot(sync_root, scope, preferred_device_id)?;
+    let snapshot = build_local_snapshot(sync_root, scope, preferred_device_id, None)?;
     if let Some(missing) = snapshot.missing_without_delete_fact.first() {
         let message = match missing.cause {
             MissingCause::KnownFile => format!(
@@ -133,6 +134,23 @@ pub fn snapshot_local_records_read_only(
     Ok(snapshot.records)
 }
 
+/// Strict read-only projection for one App group.
+pub fn snapshot_app_group_records_read_only(
+    sync_root: &Path,
+    group: &crate::sync::types::AppDataGroup,
+    preferred_device_id: &str,
+) -> crate::error::Result<HashMap<String, ManifestFileRecord>> {
+    let snapshot =
+        build_local_snapshot(sync_root, SyncScope::App, preferred_device_id, Some(group))?;
+    if let Some(missing) = snapshot.missing_without_delete_fact.first() {
+        return Err(crate::Error::Io(std::io::Error::other(format!(
+            "snapshot_app_group_records_read_only: local file {} missing without tombstone",
+            missing.path
+        ))));
+    }
+    Ok(snapshot.records)
+}
+
 /// 共享实现：宽松投影 + 缺失文件收集。
 #[allow(
     clippy::too_many_lines,
@@ -143,29 +161,45 @@ fn build_local_snapshot(
     sync_root: &Path,
     scope: SyncScope,
     preferred_device_id: &str,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
 ) -> crate::error::Result<LocalSnapshot> {
     // 1. 读 old manifest（manifest.sync.json）→ HashMap<path, ManifestFileRecord>。
     //   manifest 存在但损坏 → 返回 Err（不静默 fallback）。
     // 调用方（compute_local_project_lifecycle_candidate）据此返回 Retry，
     // 避免在无可靠本地 LWW 证据时做破坏性 DeleteLocalProject 决策。
     // manifest 不存在 → 空 HashMap（首次同步，正常）。
-    let manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
-    let old_manifest_records: HashMap<String, ManifestFileRecord> = if manifest_path.exists() {
-        let content = std::fs::read(&manifest_path).map_err(|e| {
+    let manifest_rel_path = app_group
+        .map(crate::sync::types::AppDataGroup::local_manifest_path)
+        .unwrap_or_else(|| SYNC_MANIFEST_PATH.to_string());
+    let manifest_path = sync_root.join(&manifest_rel_path);
+    let legacy_manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
+    let source_manifest_path = if manifest_path.exists() {
+        manifest_path.as_path()
+    } else if app_group.is_some() && legacy_manifest_path.exists() {
+        // Local v1 state is read-only migration input. The first successful group
+        // merge writes its own manifest and leaves the aggregate manifest intact.
+        legacy_manifest_path.as_path()
+    } else {
+        manifest_path.as_path()
+    };
+    let old_manifest_records: HashMap<String, ManifestFileRecord> = if source_manifest_path.exists()
+    {
+        let content = std::fs::read(source_manifest_path).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
                 "snapshot_local_records_read_only: manifest read failed at {}: {e}",
-                manifest_path.display()
+                source_manifest_path.display()
             )))
         })?;
         serde_json::from_slice::<SyncManifest>(&content)
             .map_err(|e| {
                 crate::Error::Io(std::io::Error::other(format!(
                     "snapshot_local_records_read_only: manifest corrupt at {}: {e}",
-                    manifest_path.display()
+                    source_manifest_path.display()
                 )))
             })?
             .files
             .into_iter()
+            .filter(|record| app_group.map_or(true, |group| group.owns_path(&record.path)))
             .map(|r| (r.path.clone(), r))
             .collect()
     } else {
@@ -173,17 +207,23 @@ fn build_local_snapshot(
     };
 
     // 2. 读 SyncState（read-only，不写文件）。
-    let state = SyncService::load_sync_state_read_only(
-        sync_root,
-        if preferred_device_id.is_empty() {
-            None
-        } else {
-            Some(preferred_device_id)
-        },
-    )?;
+    let preferred = if preferred_device_id.is_empty() {
+        None
+    } else {
+        Some(preferred_device_id)
+    };
+    let state = match app_group {
+        Some(group) => {
+            SyncService::load_sync_state_read_only_for_group(sync_root, group, preferred)?
+        }
+        None => SyncService::load_sync_state_read_only(sync_root, preferred)?,
+    };
 
     // 3. scan 当前文件。
-    let local_entries = crate::sync::scanner::scan_for_sync(sync_root, scope)?;
+    let local_entries = match app_group {
+        Some(group) => crate::sync::scanner::scan_for_sync_group(sync_root, scope, Some(group))?,
+        None => crate::sync::scanner::scan_for_sync(sync_root, scope)?,
+    };
 
     let mut records = HashMap::new();
 
@@ -362,6 +402,7 @@ pub(super) fn build_remote_records(
     remote_manifest: SyncManifest,
     remote_tree_files: &HashMap<String, String>,
     scope: SyncScope,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
     provider: &dyn SyncProvider,
     source_remote_prefix: &str,
 ) -> crate::Result<HashMap<String, ManifestFileRecord>> {
@@ -381,9 +422,11 @@ pub(super) fn build_remote_records(
         if normalized == SYNC_MANIFEST_PATH {
             continue;
         }
-        if !SyncService::is_whitelisted_path(normalized, scope)
-            || SyncService::is_blacklisted_path(normalized, scope)
-        {
+        let whitelisted = app_group.map_or_else(
+            || SyncService::is_whitelisted_path(normalized, scope),
+            |group| SyncService::is_whitelisted_app_group_path(normalized, group),
+        );
+        if !whitelisted || SyncService::is_blacklisted_path(normalized, scope) {
             continue;
         }
         rec.path = normalized.to_string();
@@ -417,9 +460,11 @@ pub(super) fn build_remote_records(
         if normalized == SYNC_MANIFEST_PATH || remote_records.contains_key(normalized) {
             continue;
         }
-        if !SyncService::is_whitelisted_path(normalized, scope)
-            || SyncService::is_blacklisted_path(normalized, scope)
-        {
+        let whitelisted = app_group.map_or_else(
+            || SyncService::is_whitelisted_path(normalized, scope),
+            |group| SyncService::is_whitelisted_app_group_path(normalized, group),
+        );
+        if !whitelisted || SyncService::is_blacklisted_path(normalized, scope) {
             continue;
         }
         // tree 有文件但 manifest 无记录：读远端正文算 MD5 作为 content_hash，

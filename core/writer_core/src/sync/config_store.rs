@@ -18,7 +18,7 @@
 //! 同步状态存储在 `app-meta/sync/state.local.json`，使用 atomic write（写临时文件后 rename）
 //! 防止写入中断导致文件损坏。旧格式 `sync_state.json` 在首次加载时自动迁移并删除。
 
-use crate::sync::types::{SyncScope, SyncState};
+use crate::sync::types::{AppDataGroup, SyncScope, SyncState, SyncTarget};
 use std::path::Path;
 
 /// Normalize a relative path to use forward slashes.
@@ -163,6 +163,8 @@ impl crate::sync::SyncService {
             || rel_path == "app-meta/sync/sync_state.json"
             || rel_path == "app-meta/sync/config.local.json"
             || rel_path == "app-meta/sync/conflicts.json"
+            || rel_path == "app-meta/sync/last_report.local.json"
+            || rel_path.starts_with("app-meta/sync/groups/")
             || rel_path.starts_with("app-meta/sync/secrets")
         {
             return true;
@@ -209,6 +211,20 @@ impl crate::sync::SyncService {
         match scope {
             SyncScope::Project => Self::is_project_whitelisted_path(&rel_path),
             SyncScope::App => Self::is_app_whitelisted_path(&rel_path),
+        }
+    }
+
+    /// 判断路径是否属于某个可同步 App group。
+    pub fn is_whitelisted_app_group_path(rel_path: &str, group: &AppDataGroup) -> bool {
+        let rel_path = normalize_rel_path(rel_path);
+        Self::is_whitelisted_path(&rel_path, SyncScope::App) && group.owns_path(&rel_path)
+    }
+
+    /// 按 target 的组范围检查同步白名单。
+    pub fn is_whitelisted_target_path(rel_path: &str, target: &SyncTarget) -> bool {
+        match &target.app_group {
+            Some(group) => Self::is_whitelisted_app_group_path(rel_path, group),
+            None => Self::is_whitelisted_path(rel_path, target.scope),
         }
     }
 
@@ -459,6 +475,98 @@ impl crate::sync::SyncService {
 
         Ok(())
     }
+
+    /// Load state for one target. App data groups keep independent known-file and
+    /// conflict baselines so one group's staging commit cannot replace another's.
+    pub fn load_sync_state_for_target(
+        sync_root: &Path,
+        target: &SyncTarget,
+    ) -> crate::Result<SyncState> {
+        let Some(group) = &target.app_group else {
+            return Self::load_sync_state(sync_root);
+        };
+        let path = sync_root.join(group.local_state_path());
+        if path.exists() {
+            return read_state_file(&path);
+        }
+        let legacy = Self::load_sync_state_read_only(sync_root, None)?;
+        let state = filter_state_for_app_group(legacy, group);
+        save_state_at_path(&path, &state)?;
+        Ok(state)
+    }
+
+    /// Read-only counterpart used by the manifest planner/merge path.
+    pub fn load_sync_state_read_only_for_group(
+        sync_root: &Path,
+        group: &AppDataGroup,
+        preferred_device_id: Option<&str>,
+    ) -> crate::Result<SyncState> {
+        let path = sync_root.join(group.local_state_path());
+        if path.exists() {
+            let mut state = read_state_file(&path)?;
+            if state.device_id.is_empty() {
+                if let Some(id) = preferred_device_id.filter(|id| !id.is_empty()) {
+                    state.device_id = id.to_string();
+                }
+            }
+            return Ok(state);
+        }
+        Ok(filter_state_for_app_group(
+            Self::load_sync_state_read_only(sync_root, preferred_device_id)?,
+            group,
+        ))
+    }
+
+    /// Save state to the target-specific path.
+    pub fn save_sync_state_for_target(
+        sync_root: &Path,
+        target: &SyncTarget,
+        state: &SyncState,
+    ) -> crate::Result<()> {
+        let Some(group) = &target.app_group else {
+            return Self::save_sync_state(sync_root, state);
+        };
+        save_state_at_path(&sync_root.join(group.local_state_path()), state)
+    }
+}
+
+fn read_state_file(path: &Path) -> crate::Result<SyncState> {
+    let content = std::fs::read_to_string(path)?;
+    serde_json::from_str(&content).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "load_sync_state_for_target: parse {}: {e}",
+            path.display()
+        )))
+    })
+}
+
+fn save_state_at_path(path: &Path, state: &SyncState) -> crate::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(state)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    crate::storage::transaction::atomic_write_string(path, &content)?;
+    Ok(())
+}
+
+fn filter_state_for_app_group(mut state: SyncState, group: &AppDataGroup) -> SyncState {
+    state.known_files.retain(|path, _| group.owns_path(path));
+    state
+        .known_files_updated_at
+        .retain(|path, _| group.owns_path(path));
+    state
+        .tombstones
+        .retain(|t| group.owns_path(&t.original_path));
+    state.deleted_files.retain(|path| group.owns_path(path));
+    state.conflicted_files.retain(|path| group.owns_path(path));
+    state
+        .conflicts
+        .retain(|conflict| group.owns_path(&conflict.local_path));
+    state
+        .pending_take_remote
+        .retain(|path| group.owns_path(path));
+    state
 }
 
 impl crate::sync::SyncService {

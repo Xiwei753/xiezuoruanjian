@@ -31,31 +31,56 @@ pub fn build_full_sync_target_plan(
     app_data_root: &Path,
     projects_root: &Path,
     live_projects: &[crate::project::Project],
+    remote_app_data_groups: &[crate::sync::types::AppDataGroup],
     pending_deleted: &[crate::sync::types::PendingDeletedTarget],
     remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
     _sync_policy: &crate::sync::types::SyncPolicy,
     _force_sync: bool,
     device_id: &str,
     pending_remote_cleanups: &[crate::sync::pending_remote_cleanup::PendingRemoteTargetCleanup],
-) -> Vec<PlannedTarget> {
+) -> crate::Result<Vec<PlannedTarget>> {
     use crate::sync::types::PlannedTargetKind;
 
     let mut targets = Vec::new();
 
-    // App target
-    let app_target = crate::sync::types::SyncTarget::app();
-    targets.push(PlannedTarget {
-        target: app_target,
-        local_root: app_data_root.to_path_buf(),
-        staging_root: None,
-        target_kind: PlannedTargetKind::App,
-        project_id: None,
-        target_live_root: app_data_root.to_path_buf(),
-        deleted_journal_token: None,
-        deleted_lww: None,
-        live_lww: None,
-        expected_delete_lww: None,
+    // App is planned per independent data group. Always retain the local groups
+    // and union them with remote ids so remote-only groups can be restored.
+    let mut app_groups = std::collections::BTreeMap::new();
+    for group in crate::sync::app_data_group_catalog::discover_local_app_data_groups(app_data_root)?
+    {
+        app_groups.insert(group.id(), group);
+    }
+    for group in remote_app_data_groups {
+        app_groups.insert(group.id(), group.clone());
+    }
+    if app_groups
+        .values()
+        .any(|group| matches!(group, crate::sync::types::AppDataGroup::Starmap(_)))
+    {
+        let index_group = crate::sync::types::AppDataGroup::StarmapIndex;
+        app_groups.insert(index_group.id(), index_group);
+    }
+    let mut app_groups: Vec<_> = app_groups.into_values().collect();
+    app_groups.sort_by_key(|group| match group {
+        crate::sync::types::AppDataGroup::Global => (0_u8, group.id()),
+        crate::sync::types::AppDataGroup::Starmap(_) => (1, group.id()),
+        crate::sync::types::AppDataGroup::StarmapIndex => (2, group.id()),
     });
+    for group in app_groups {
+        let target = crate::sync::types::SyncTarget::app_data_group(group);
+        targets.push(PlannedTarget {
+            target,
+            local_root: app_data_root.to_path_buf(),
+            staging_root: None,
+            target_kind: PlannedTargetKind::App,
+            project_id: None,
+            target_live_root: app_data_root.to_path_buf(),
+            deleted_journal_token: None,
+            deleted_lww: None,
+            live_lww: None,
+            expected_delete_lww: None,
+        });
+    }
 
     // Project targets —   按 remote catalog 决策。
     for project in live_projects {
@@ -262,7 +287,7 @@ pub fn build_full_sync_target_plan(
         }
     }
 
-    targets
+    Ok(targets)
 }
 
 ///   本地 project lifecycle candidate。

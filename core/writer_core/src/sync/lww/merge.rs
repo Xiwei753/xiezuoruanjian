@@ -121,6 +121,50 @@ pub(crate) fn merge_remote_into_local_snapshot(
     scope: SyncScope,
     state: &mut SyncState,
 ) -> crate::error::Result<LwwMergeOutcome> {
+    merge_remote_into_local_snapshot_with_group(
+        sync_root,
+        provider,
+        source_remote_prefix,
+        scope,
+        None,
+        state,
+    )
+}
+
+/// Group-scoped App merge using the same per-file LWW and missing-file recovery rules.
+pub(crate) fn merge_remote_into_local_app_group(
+    sync_root: &Path,
+    provider: &dyn SyncProvider,
+    source_remote_prefix: &str,
+    group: &crate::sync::types::AppDataGroup,
+    state: &mut SyncState,
+) -> crate::error::Result<LwwMergeOutcome> {
+    merge_remote_into_local_snapshot_with_group(
+        sync_root,
+        provider,
+        source_remote_prefix,
+        SyncScope::App,
+        Some(group),
+        state,
+    )
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+fn merge_remote_into_local_snapshot_with_group(
+    sync_root: &Path,
+    provider: &dyn SyncProvider,
+    source_remote_prefix: &str,
+    scope: SyncScope,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
+    state: &mut SyncState,
+) -> crate::error::Result<LwwMergeOutcome> {
     log::debug!(
         "[sync] merge_remote_into_local_snapshot: source_remote_prefix={}",
         source_remote_prefix
@@ -134,12 +178,14 @@ pub(crate) fn merge_remote_into_local_snapshot(
 
     // 宽松投影：known file 缺失且无 tombstone 时不整体 Err，而是先尝试从远端
     // blob 恢复；无法恢复的路径显式报 local_missing_without_tombstone（见下方）。
-    let local_snapshot = snapshot_local_records_for_merge(sync_root, scope, &state.device_id)?;
+    let local_snapshot =
+        snapshot_local_records_for_merge(sync_root, scope, &state.device_id, app_group)?;
     let local_records = local_snapshot.records;
     let remote_records = build_remote_records(
         remote_manifest,
         &remote_tree_files,
         scope,
+        app_group,
         provider,
         source_remote_prefix,
     )?;
@@ -212,7 +258,10 @@ pub(crate) fn merge_remote_into_local_snapshot(
     // 提前加载 conflicts_json，让它一直带到最后的 persist_sync_merge_result，
     // 不要末尾再重新读一份。旧基线归一化和主循环都操作这一份 conflicts_json，
     // 保证归一化清除的假冲突不会在末尾 persist 时被重新加载的旧 conflicts.json 覆盖。
-    let mut conflicts_json = crate::sync::conflict::load_conflicts_json(sync_root)?;
+    let mut conflicts_json = match app_group {
+        Some(group) => crate::sync::conflict::load_conflicts_json_for_group(sync_root, group)?,
+        None => crate::sync::conflict::load_conflicts_json(sync_root)?,
+    };
 
     // ── 对齐冲突事实源 ──
     // conflicts.json 是用户可见/可解决的 canonical record，state.conflicts + conflicted_files
@@ -703,7 +752,8 @@ pub(crate) fn merge_remote_into_local_snapshot(
         ))
     };
 
-    let post_local_entries = scan_for_sync(sync_root, scope)?;
+    let post_local_entries =
+        crate::sync::scanner::scan_for_sync_group(sync_root, scope, app_group)?;
 
     // ── 同步后重建 known_files ──
     let conflicted_known_files: std::collections::HashMap<String, String> = state
@@ -774,13 +824,25 @@ pub(crate) fn merge_remote_into_local_snapshot(
 
     // 一次事务原子提交 manifest + state + conflicts.json，
     // 避免分多次独立写入中间崩溃导致三者不一致。
-    crate::sync::conflict::persist_sync_merge_result(
-        sync_root,
-        SYNC_MANIFEST_PATH,
-        &manifest_json,
-        state,
-        &conflicts_json,
-    )?;
+    if let Some(group) = app_group {
+        crate::sync::conflict::persist_sync_merge_result_at_paths(
+            sync_root,
+            &group.local_manifest_path(),
+            &manifest_json,
+            &group.local_state_path(),
+            state,
+            &group.local_conflicts_path(),
+            &conflicts_json,
+        )?;
+    } else {
+        crate::sync::conflict::persist_sync_merge_result(
+            sync_root,
+            SYNC_MANIFEST_PATH,
+            &manifest_json,
+            state,
+            &conflicts_json,
+        )?;
+    }
 
     let mut all_downloaded = pending_take_remote_downloaded;
     all_downloaded.extend(recovered_missing_files);
@@ -860,7 +922,8 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
     // 1. 用 snapshot_local_records_for_merge 取本地快照（与 merge 同源）。
     //    #931：已知文件缺失且无墓碑时不再整体 Err。缺失路径单独收集，向上层
     //    显式报告 local_missing_without_tombstone；不允许伪造删除记录。
-    let local_snapshot = snapshot_local_records_for_merge(sync_root, scope, preferred_device_id)?;
+    let local_snapshot =
+        snapshot_local_records_for_merge(sync_root, scope, preferred_device_id, None)?;
     let local_records = local_snapshot.records;
     let unresolved_missing_paths: Vec<String> = local_snapshot
         .missing_without_delete_fact

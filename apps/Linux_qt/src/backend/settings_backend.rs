@@ -292,6 +292,12 @@ fn build_export_attachments(
                 content: json.into_bytes(),
             });
         }
+        let report = api.load_latest_full_sync_report().ok().flatten();
+        let json = serde_json::to_string_pretty(&report).unwrap_or_else(|_| "null".to_string());
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "last_sync_report.json".to_string(),
+            content: json.into_bytes(),
+        });
         if let Ok(state) = api.load_app_sync_state() {
             let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
             attachments.push(writer_diagnostics::PlatformAttachment {

@@ -105,6 +105,14 @@ impl SyncService {
         scanner::build_sync_plan(sync_root, scope)
     }
 
+    /// Build a dry-run plan limited to one App data group when the target is grouped.
+    pub fn build_sync_plan_for_target(
+        sync_root: &Path,
+        target: &crate::sync::types::SyncTarget,
+    ) -> crate::Result<SyncPlan> {
+        scanner::build_sync_plan_for_target(sync_root, target)
+    }
+
     /// 占位同步方法——当前返回 NotImplemented，实际同步通过 perform_lww_sync 执行。
     pub fn sync(&self) -> crate::Result<()> {
         Err(crate::Error::NotImplemented)

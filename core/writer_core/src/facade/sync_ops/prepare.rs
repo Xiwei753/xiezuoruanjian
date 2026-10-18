@@ -22,6 +22,7 @@ impl crate::facade::WriterCore {
         force_sync: bool,
         _secrets: crate::sync::SyncSecrets,
         remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
+        remote_app_data_groups: &[crate::sync::types::AppDataGroup],
         remote_catalog_snapshot: crate::sync::types::RemoteTargetCatalogSnapshot,
     ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
         use crate::sync::full_sync::FullSyncPlan;
@@ -73,13 +74,14 @@ impl crate::facade::WriterCore {
             &self.app_data_root,
             &self.projects_root,
             &projects,
+            remote_app_data_groups,
             &pending_deleted,
             remote_catalog,
             &sync_policy,
             force_sync,
             &device_id,
             &pending_remote_cleanups,
-        );
+        )?;
 
         // 不再携带 workspace_git_layout。
         // 本地 Git 仓库由 bootstrap 阶段初始化，同步计划不负责 Git 生命周期。
@@ -106,6 +108,7 @@ impl crate::facade::WriterCore {
         config: &crate::sync::SyncConfig,
         force_sync: bool,
         remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
+        remote_app_data_groups: &[crate::sync::types::AppDataGroup],
         remote_catalog_snapshot: crate::sync::types::RemoteTargetCatalogSnapshot,
     ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
         use crate::sync::full_sync::FullSyncPlan;
@@ -129,13 +132,14 @@ impl crate::facade::WriterCore {
             app_data_root,
             projects_root,
             &projects,
+            remote_app_data_groups,
             &pending_deleted,
             remote_catalog,
             &sync_policy,
             force_sync,
             &device_id,
             &pending_remote_cleanups,
-        );
+        )?;
 
         Ok(FullSyncPlan {
             sync_policy,

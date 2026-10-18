@@ -164,6 +164,108 @@ pub enum SyncScope {
     App,
 }
 
+/// 独立发布的 App 数据组。每张星图的业务对象在同一组；现有单体索引作为
+/// dependent group，仅在本轮所有星图组成功后才允许发布。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "starmap_id", rename_all = "snake_case")]
+pub enum AppDataGroup {
+    /// 设置、主题调色板和其他全局应用数据。
+    Global,
+    /// 全局星图成员索引；因物理文件是单体聚合记录，作为 dependent group
+    /// 与每张图分开版本化，并由 transfer guard 等待所有图组成功。
+    StarmapIndex,
+    /// 一张星图的 graph/meta 与 nodes/edges/embeds 等对象。
+    Starmap(String),
+}
+
+impl AppDataGroup {
+    /// 稳定、可持久化的 group id。
+    pub fn id(&self) -> String {
+        match self {
+            Self::Global => "global".to_string(),
+            Self::StarmapIndex => "starmap_index".to_string(),
+            Self::Starmap(id) => format!("starmap:{id}"),
+        }
+    }
+
+    /// 用作远端路径 segment / 本地同步元数据目录的安全编码。
+    pub fn storage_key(&self) -> String {
+        match self {
+            Self::Global => "global".to_string(),
+            Self::StarmapIndex => "starmap-index".to_string(),
+            Self::Starmap(id) => format!("starmap-{}", encode_path_segment(id)),
+        }
+    }
+
+    /// group 专属的本地 manifest 路径。旧 App 目标仍使用旧总 manifest。
+    pub fn local_manifest_path(&self) -> String {
+        format!(
+            "app-meta/sync/groups/{}/manifest.sync.json",
+            self.storage_key()
+        )
+    }
+
+    pub fn local_state_path(&self) -> String {
+        format!(
+            "app-meta/sync/groups/{}/state.local.json",
+            self.storage_key()
+        )
+    }
+
+    pub fn local_conflicts_path(&self) -> String {
+        format!("app-meta/sync/groups/{}/conflicts.json", self.storage_key())
+    }
+
+    /// 当前 group 是否拥有相对 App 根的路径。
+    pub fn owns_path(&self, path: &str) -> bool {
+        let path = path.replace('\\', "/");
+        match self {
+            Self::Global => path == "settings.sync.json" || path.starts_with("themes/palettes/"),
+            Self::StarmapIndex => path == "starmaps/index.json",
+            Self::Starmap(id) => {
+                path == format!("starmaps/{id}.meta.json")
+                    || path.starts_with(&format!("starmaps/{id}/"))
+            }
+        }
+    }
+
+    /// 从远端 catalog 中的稳定 id 解析 group。
+    pub fn from_id(id: &str) -> crate::Result<Self> {
+        match id {
+            "global" => Ok(Self::Global),
+            "starmap_index" => Ok(Self::StarmapIndex),
+            _ => {
+                let Some(starmap_id) = id.strip_prefix("starmap:") else {
+                    return Err(crate::Error::Other(format!(
+                        "invalid app data group id: {id}"
+                    )));
+                };
+                if starmap_id.is_empty()
+                    || starmap_id == "."
+                    || starmap_id == ".."
+                    || starmap_id.contains('/')
+                    || starmap_id.contains('\\')
+                {
+                    return Err(crate::Error::Other(format!(
+                        "invalid starmap group id: {id}"
+                    )));
+                }
+                Ok(Self::Starmap(starmap_id.to_string()))
+            }
+        }
+    }
+}
+
+fn encode_path_segment(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(value.len() * 2);
+    for byte in value.bytes() {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
 /// 同步目标 — 一次全量同步中的一个本地根 → 远端前缀映射。
 ///
 /// 一个远端仓库内部按目录分流：
@@ -177,6 +279,9 @@ pub enum SyncScope {
 pub struct SyncTarget {
     pub scope: SyncScope,
     pub remote_prefix: String,
+    /// `Some` 时表示版本化 App group；`None` 保持旧 App / Project 语义。
+    #[serde(default)]
+    pub app_group: Option<AppDataGroup>,
 }
 
 impl SyncTarget {
@@ -185,6 +290,16 @@ impl SyncTarget {
         Self {
             scope: SyncScope::App,
             remote_prefix: "app".to_string(),
+            app_group: None,
+        }
+    }
+
+    /// 版本化 App 数据组目标。
+    pub fn app_data_group(group: AppDataGroup) -> Self {
+        Self {
+            scope: SyncScope::App,
+            remote_prefix: format!("app/__groups__/{}", group.storage_key()),
+            app_group: Some(group),
         }
     }
 
@@ -193,6 +308,7 @@ impl SyncTarget {
         Self {
             scope: SyncScope::Project,
             remote_prefix: format!("projects/{}", project_id),
+            app_group: None,
         }
     }
 

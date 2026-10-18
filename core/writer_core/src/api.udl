@@ -469,6 +469,25 @@ dictionary FullSyncStateDto {
     sequence<string> failed_targets;
 };
 
+dictionary FullSyncReportFailureDto {
+    string target_kind;
+    string group_id;
+    string path;
+    string phase;
+    string error_category;
+    string message_key;
+    string detail;
+    i64 occurred_at;
+};
+
+dictionary FullSyncReportDto {
+    i64 attempted_at;
+    u32 completed_groups;
+    u32 failed_groups;
+    u32 pending_groups;
+    sequence<FullSyncReportFailureDto> failures;
+};
+
 // 旧→新同步 profile 迁移结果。
 // outcome_kind: "not_needed" | "migrated" | "needs_reconfigure" | "no_legacy_config"
 dictionary LegacyMigrationOutcomeDto {
@@ -1197,6 +1216,10 @@ interface WriterAppService {
     // 全量同步持久状态。
     [Throws=WriterError]
     FullSyncStateDto? load_full_sync_state();
+
+    // 最近一次持久化的完整同步报告（按独立数据组记录失败详情）。
+    [Throws=WriterError]
+    FullSyncReportDto? load_latest_full_sync_report();
 
     // 冷启动恢复中断的 Syncing 状态。
     // 只有旧状态是 Syncing 才原子改成 RecoverableError("previous_full_sync_interrupted")。

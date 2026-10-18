@@ -131,6 +131,65 @@ impl PlannedStarMapObjectDelete {
             .join(format!("{starmap_id}.json"))
     }
 
+    /// Reject a journal that could move an object without retaining its matching
+    /// durable delete fact, or pair that fact with a different trash destination.
+    fn validate(&self) -> Result<()> {
+        if self.objects.len() != self.sync_delete_facts.len() {
+            return Err(crate::error::Error::Io(std::io::Error::other(format!(
+                "PlannedStarMapObjectDelete: {} objects but {} sync delete facts for starmap {}",
+                self.objects.len(),
+                self.sync_delete_facts.len(),
+                self.starmap_id
+            ))));
+        }
+
+        let trash_prefix = format!("{}/", self.trash_rel_path.trim_end_matches('/'));
+        let mut object_paths = std::collections::HashSet::new();
+        for object in &self.objects {
+            if !object_paths.insert(object.original_path.as_str()) {
+                return Err(crate::error::Error::Io(std::io::Error::other(format!(
+                    "PlannedStarMapObjectDelete: duplicate object path {} for starmap {}",
+                    object.original_path, self.starmap_id
+                ))));
+            }
+            let matching_fact = self
+                .sync_delete_facts
+                .iter()
+                .find(|fact| fact.original_path == object.original_path);
+            let Some(fact) = matching_fact else {
+                return Err(crate::error::Error::Io(std::io::Error::other(format!(
+                    "PlannedStarMapObjectDelete: no sync delete fact for {} in starmap {}",
+                    object.original_path, self.starmap_id
+                ))));
+            };
+            let expected_trash_path = format!("{trash_prefix}{}", object.original_path);
+            if fact.trash_path != expected_trash_path {
+                return Err(crate::error::Error::Io(std::io::Error::other(format!(
+                    "PlannedStarMapObjectDelete: trash path mismatch for {} in starmap {}",
+                    object.original_path, self.starmap_id
+                ))));
+            }
+        }
+
+        let mut fact_paths = std::collections::HashSet::new();
+        for fact in &self.sync_delete_facts {
+            if !fact_paths.insert(fact.original_path.as_str()) {
+                return Err(crate::error::Error::Io(std::io::Error::other(format!(
+                    "PlannedStarMapObjectDelete: duplicate sync delete fact for {} in starmap {}",
+                    fact.original_path, self.starmap_id
+                ))));
+            }
+            if !object_paths.contains(fact.original_path.as_str()) {
+                return Err(crate::error::Error::Io(std::io::Error::other(format!(
+                    "PlannedStarMapObjectDelete: orphan sync delete fact for {} in starmap {}",
+                    fact.original_path, self.starmap_id
+                ))));
+            }
+        }
+
+        Ok(())
+    }
+
     /// durable 写入 journal 文件（原子写入）。
     ///
     /// 在执行任何 `rename()` 之前调用，确保崩溃后能恢复。
@@ -146,6 +205,7 @@ impl PlannedStarMapObjectDelete {
     /// 正常流程中 `flush_save_queue` 在生成新 plan 前会先检查已有 journal，
     /// 有则 resume 而不调 `save_planned`，所以这里拒绝覆盖是安全的。
     pub fn save_planned(app_data_root: &Path, plan: &Self) -> Result<()> {
+        plan.validate()?;
         let path = Self::journal_file_path(app_data_root, &plan.starmap_id);
         if path.exists() {
             return Err(crate::error::Error::Io(std::io::Error::other(format!(
@@ -181,6 +241,7 @@ impl PlannedStarMapObjectDelete {
                 path.display()
             )))
         })?;
+        plan.validate()?;
         Ok(Some(plan))
     }
 
@@ -210,6 +271,7 @@ impl PlannedStarMapObjectDelete {
                 path.display()
             )))
         })?;
+        plan.validate()?;
         plan.phase = phase;
         let new_content = serde_json::to_vec(&plan).map_err(|e| {
             crate::error::Error::Io(std::io::Error::other(format!(

@@ -753,6 +753,53 @@ impl From<crate::sync::full_sync_state::FullSyncState> for FullSyncStateDto {
     }
 }
 
+/// 最近一次完整同步报告 DTO。路径仅为相对路径或远端组路径，detail 已脱敏。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FullSyncReportDto {
+    pub attempted_at: i64,
+    pub completed_groups: u32,
+    pub failed_groups: u32,
+    pub pending_groups: u32,
+    pub failures: Vec<FullSyncReportFailureDto>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct FullSyncReportFailureDto {
+    pub target_kind: String,
+    pub group_id: String,
+    pub path: String,
+    pub phase: String,
+    pub error_category: String,
+    pub message_key: String,
+    pub detail: String,
+    pub occurred_at: i64,
+}
+
+impl From<crate::sync::full_sync_state::FullSyncReport> for FullSyncReportDto {
+    fn from(report: crate::sync::full_sync_state::FullSyncReport) -> Self {
+        Self {
+            attempted_at: report.attempted_at,
+            completed_groups: report.completed_groups,
+            failed_groups: report.failed_groups,
+            pending_groups: report.pending_groups,
+            failures: report
+                .failures
+                .into_iter()
+                .map(|failure| FullSyncReportFailureDto {
+                    target_kind: failure.target_kind,
+                    group_id: failure.group_id,
+                    path: failure.path,
+                    phase: failure.phase,
+                    error_category: failure.error_category,
+                    message_key: failure.message_key,
+                    detail: failure.detail,
+                    occurred_at: failure.occurred_at,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// 旧→新同步 profile 迁移结果 DTO（  / D）。
 ///
 /// 用 `outcome_kind` 字段区分变体，避免 UniFFI enum-with-data 的复杂性：

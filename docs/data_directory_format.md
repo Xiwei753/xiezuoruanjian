@@ -74,7 +74,14 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 │  │  ├── config.local.json        # 应用级同步配置（不同步）
 │  │  ├── state.local.json         # 本地同步状态（不同步）
 │  │  ├── conflicts.json           # 冲突记录（不同步）
-│  │  └── manifest.sync.json       # 同步清单（不同步）
+│  │  ├── full_state.local.json    # 全量同步总体状态（不同步）
+│  │  ├── last_report.local.json   # 最近一次按数据组记录的同步报告（不同步）
+│  │  ├── manifest.sync.json       # 旧 App 同步清单（迁移期间保留）
+│  │  └── groups/                  # 按 App 数据组隔离的本地同步元数据
+│  │     └── <group-key>/
+│  │        ├── manifest.sync.json
+│  │        ├── state.local.json
+│  │        └── conflicts.json
 │  ├── stats/
 │  │  ├── events.local/            # 本地写作事件（不同步）
 │  │  └── daily/                   # 统计日报（不同步）

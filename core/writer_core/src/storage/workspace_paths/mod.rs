@@ -117,6 +117,7 @@ fn is_workspace_secret_path(path: &str) -> bool {
 /// - `app-meta/sync/state.local.json`：App target 同步状态；
 /// - `app-meta/sync/full_state.local.json`：全量同步持久状态；
 /// - `app-meta/sync/conflicts.json`：冲突记录；
+/// - `app-meta/sync/groups/`：分组 manifest、状态与冲突记录；
 /// - `app-meta/sync/config.local.json`：同步配置；
 /// - `app-meta/sync/pending_deleted_targets.json`：待删除 target tombstone 列表
 ///   （  deleted target durable handoff 的 provider-neutral
@@ -129,7 +130,9 @@ fn is_sync_engine_state_path(path: &str) -> bool {
     path == "app-meta/sync/manifest.sync.json"
         || path == "app-meta/sync/state.local.json"
         || path == "app-meta/sync/full_state.local.json"
+        || path == "app-meta/sync/last_report.local.json"
         || path == "app-meta/sync/conflicts.json"
+        || path.starts_with("app-meta/sync/groups/")
         || path == "app-meta/sync/config.local.json"
         || path == "app-meta/sync/pending_deleted_targets.json"
 }

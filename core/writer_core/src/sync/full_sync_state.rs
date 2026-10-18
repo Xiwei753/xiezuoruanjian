@@ -18,6 +18,186 @@
 //! 该动作只在启动时执行一次，不塞进 `load_full_sync_state()`。
 use super::types::{FullSyncResult, SyncStatus};
 use serde::{Deserialize, Serialize};
+
+/// 最近一次全量同步报告，单独保存在 `last_report.local.json`。
+///
+/// `FullSyncState` 保持顶部状态的轻量契约；这份报告保存每个独立数据组的
+/// 完成计数和失败根因，供 UI 与诊断附件跨重启读取。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FullSyncReport {
+    pub attempted_at: i64,
+    pub completed_groups: u32,
+    pub failed_groups: u32,
+    pub pending_groups: u32,
+    pub failures: Vec<FullSyncReportFailure>,
+}
+
+/// 一个失败数据组的可诊断信息。`path` 使用相对路径或远端组路径。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FullSyncReportFailure {
+    pub target_kind: String,
+    pub group_id: String,
+    pub path: String,
+    pub phase: String,
+    pub error_category: String,
+    pub message_key: String,
+    pub detail: String,
+    pub occurred_at: i64,
+}
+
+impl FullSyncReport {
+    /// 从一轮已聚合的同步结果生成持久报告。
+    pub fn from_result(
+        result: &FullSyncResult,
+        now_epoch_seconds: i64,
+        app_data_root: &std::path::Path,
+        projects_root: &std::path::Path,
+    ) -> Self {
+        use super::types::SyncStatus;
+
+        let mut report = Self {
+            attempted_at: now_epoch_seconds,
+            ..Self::default()
+        };
+
+        for target in &result.targets {
+            if matches!(target.result.status, SyncStatus::Syncing) {
+                report.pending_groups = report.pending_groups.saturating_add(1);
+                continue;
+            }
+            if matches!(
+                target.result.status,
+                SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
+            ) {
+                report.completed_groups = report.completed_groups.saturating_add(1);
+                continue;
+            }
+
+            report.failed_groups = report.failed_groups.saturating_add(1);
+            let raw_detail = target
+                .result
+                .error
+                .as_deref()
+                .or_else(|| status_detail(&target.result.status))
+                .unwrap_or("sync group did not complete");
+            let detail = sanitize_report_detail(raw_detail, app_data_root, projects_root);
+            let error_category = target
+                .result
+                .error_category
+                .clone()
+                .or_else(|| inferred_error_category(&target.result.status, raw_detail))
+                .unwrap_or_else(|| "other".to_string());
+            let message_key = target
+                .result
+                .message_key
+                .clone()
+                .unwrap_or_else(|| message_key_for_category(&error_category));
+
+            report.failures.push(FullSyncReportFailure {
+                target_kind: target.target_kind.clone(),
+                group_id: target
+                    .group_id
+                    .clone()
+                    .or_else(|| target.project_id.clone())
+                    .unwrap_or_else(|| target.remote_prefix.clone()),
+                path: target
+                    .failure_path
+                    .clone()
+                    .unwrap_or_else(|| target.remote_prefix.clone()),
+                phase: target
+                    .failure_phase
+                    .clone()
+                    .unwrap_or_else(|| "transfer".to_string()),
+                error_category,
+                message_key,
+                detail,
+                occurred_at: now_epoch_seconds,
+            });
+        }
+
+        report
+    }
+
+    /// 为尚未执行 target 的全局或预处理失败生成一份持久报告。
+    pub fn early_failure(
+        status: &SyncStatus,
+        failed_target: &str,
+        now_epoch_seconds: i64,
+        app_data_root: &std::path::Path,
+        projects_root: &std::path::Path,
+    ) -> Self {
+        let raw_detail = status_detail(status).unwrap_or("sync failed before data groups ran");
+        let error_category =
+            inferred_error_category(status, raw_detail).unwrap_or_else(|| match status {
+                SyncStatus::FatalError(_) => "auth_failed".to_string(),
+                SyncStatus::RecoverableError(_) => "network".to_string(),
+                _ => "other".to_string(),
+            });
+        Self {
+            attempted_at: now_epoch_seconds,
+            completed_groups: 0,
+            failed_groups: 1,
+            pending_groups: 0,
+            failures: vec![FullSyncReportFailure {
+                target_kind: "global".to_string(),
+                group_id: failed_target.to_string(),
+                path: failed_target.to_string(),
+                phase: "preflight".to_string(),
+                message_key: message_key_for_category(&error_category),
+                error_category,
+                detail: sanitize_report_detail(raw_detail, app_data_root, projects_root),
+                occurred_at: now_epoch_seconds,
+            }],
+        }
+    }
+}
+
+fn status_detail(status: &SyncStatus) -> Option<&str> {
+    match status {
+        SyncStatus::RecoverableError(s) | SyncStatus::FatalError(s) | SyncStatus::Error(s) => {
+            Some(s)
+        }
+        _ => None,
+    }
+}
+
+fn inferred_error_category(status: &SyncStatus, detail: &str) -> Option<String> {
+    match status {
+        SyncStatus::Conflict | SyncStatus::PartialConflict => Some("conflict".to_string()),
+        _ if detail.contains("local_missing_without_tombstone") => {
+            Some("local_missing".to_string())
+        }
+        _ => None,
+    }
+}
+
+fn message_key_for_category(category: &str) -> String {
+    match category {
+        "conflict" => "sync.result.conflict_summary".to_string(),
+        "network" | "temporary_unavailable" => "sync.result.network_failed".to_string(),
+        "permission_denied" => "sync.result.token_permission_denied".to_string(),
+        "local_missing" => "sync.result.local_missing_without_tombstone".to_string(),
+        "auth_failed" => "sync.result.auth_failed".to_string(),
+        _ => "sync.result.generic_error".to_string(),
+    }
+}
+
+fn sanitize_report_detail(
+    detail: &str,
+    app_data_root: &std::path::Path,
+    projects_root: &std::path::Path,
+) -> String {
+    let redacted = crate::sync::url::redact_secrets_from_message(detail, None, None);
+    let redacted = writer_diagnostics::redact::redact(&redacted);
+    let redacted = redacted.replace(
+        &app_data_root.to_string_lossy().to_string(),
+        "<app_data_root>",
+    );
+    redacted.replace(
+        &projects_root.to_string_lossy().to_string(),
+        "<projects_root>",
+    )
+}
 /// 全量同步持久状态 — 一次全量同步事务的总体结果。
 ///
 /// - `overall_status`：总体状态（Success/NoChanges/LatestWinsApplied

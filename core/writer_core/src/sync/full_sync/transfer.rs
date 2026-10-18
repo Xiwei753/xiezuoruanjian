@@ -90,6 +90,7 @@ pub fn run_transfer(
             target_index,
             &mut catalog_snapshot,
             cancellation_token,
+            &targets,
         ) else {
             // 取消（或索引越界）→ 停止本轮，已完成的 targets 保留。
             break;
@@ -214,6 +215,7 @@ pub fn run_single_target_transfer(
     target_index: usize,
     catalog_snapshot: &mut crate::sync::types::RemoteTargetCatalogSnapshot,
     cancellation_token: Option<&SyncCancellationToken>,
+    completed_targets: &[TargetSyncResult],
 ) -> Option<(
     TargetSyncResult,
     Option<DeletedTargetResolution>,
@@ -248,20 +250,88 @@ pub fn run_single_target_transfer(
 
     let planned = &plan.targets[target_index];
 
+    // The existing on-disk StarMap index is one aggregate record. Do not publish
+    // its generation while any graph group it may reference failed or is absent.
+    if matches!(
+        planned.target.app_group.as_ref(),
+        Some(crate::sync::types::AppDataGroup::StarmapIndex)
+    ) {
+        let blocked_groups: Vec<String> = plan
+            .targets
+            .iter()
+            .filter_map(|candidate| match &candidate.target.app_group {
+                Some(group @ crate::sync::types::AppDataGroup::Starmap(_)) => {
+                    let group_id = group.id();
+                    let successful = completed_targets
+                        .iter()
+                        .find(|result| result.group_id.as_deref() == Some(group_id.as_str()))
+                        .is_some_and(|result| {
+                            matches!(
+                                &result.result.status,
+                                crate::sync::SyncStatus::Success
+                                    | crate::sync::SyncStatus::NoChanges
+                                    | crate::sync::SyncStatus::LatestWinsApplied
+                            )
+                        });
+                    (!successful).then_some(group_id)
+                }
+                _ => None,
+            })
+            .collect();
+        if !blocked_groups.is_empty() {
+            let message = format!(
+                "starmap index publication blocked because graph groups did not complete: {}",
+                blocked_groups.join(", ")
+            );
+            let mut result = SyncResult::error(
+                crate::sync::SyncStatus::RecoverableError(message.clone()),
+                message,
+                None,
+            );
+            result.error_category = Some("dependency_check".to_string());
+            return Some((
+                TargetSyncResult {
+                    target_kind: planned.target_kind.as_target_kind_str().to_string(),
+                    project_id: planned.project_id.clone(),
+                    remote_prefix: planned.target.remote_prefix.clone(),
+                    group_id: planned.target.app_group.as_ref().map(|group| group.id()),
+                    failure_path: Some("starmaps/index.json".to_string()),
+                    failure_phase: Some("dependency_check".to_string()),
+                    result,
+                    deleted_resolution: None,
+                    local_lifecycle_action: Default::default(),
+                },
+                None,
+                None,
+            ));
+        }
+    }
+
     let (result, resolution, action) = match planned.target_kind {
         PlannedTargetKind::App => {
             let sync_root = planned
                 .staging_root
                 .as_deref()
                 .unwrap_or(&planned.local_root);
-            let r = run_single_target(
-                provider,
-                sync_root,
-                &plan.sync_policy,
-                &planned.target,
-                plan.force_sync,
-                cancellation_token,
-            );
+            let r = if planned.target.app_group.is_some() {
+                transfer_app_data_group(
+                    provider,
+                    sync_root,
+                    &plan.sync_policy,
+                    &planned.target,
+                    plan.force_sync,
+                    cancellation_token,
+                )
+            } else {
+                run_single_target(
+                    provider,
+                    sync_root,
+                    &plan.sync_policy,
+                    &planned.target,
+                    plan.force_sync,
+                    cancellation_token,
+                )
+            };
             (r, None, None)
         }
         PlannedTargetKind::LiveProject => transfer_live_project(
@@ -301,10 +371,81 @@ pub fn run_single_target_transfer(
         target_kind: planned.target_kind.as_target_kind_str().to_string(),
         project_id: planned.project_id.clone(),
         remote_prefix: planned.target.remote_prefix.clone(),
+        group_id: planned.target.app_group.as_ref().map(|group| group.id()),
+        failure_path: app_group_failure_path(&planned.target, &result),
+        failure_phase: app_group_failure_phase(&planned.target, &result),
         result,
         deleted_resolution: resolution,
         local_lifecycle_action: action.clone().unwrap_or_default(),
     };
 
     Some((target_sync_result, resolution, action))
+}
+
+fn app_group_failure_path(
+    target: &crate::sync::types::SyncTarget,
+    result: &SyncResult,
+) -> Option<String> {
+    target.app_group.as_ref()?;
+    let error = result.error.as_deref()?;
+    if error.contains("local_missing_without_tombstone") {
+        if let Some((_, encoded_path)) = error.split_once("failure_path_json=") {
+            let mut deserializer = serde_json::Deserializer::from_str(encoded_path);
+            if let Ok(path) = <String as serde::Deserialize>::deserialize(&mut deserializer) {
+                if !path.is_empty() {
+                    return Some(path);
+                }
+            }
+        }
+        let paths = error.split_once("paths=[")?.1.split_once(']')?.0;
+        return paths
+            .split(',')
+            .next()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string);
+    }
+
+    // Provider errors include the exact remote object path in forms such as
+    // `not found: path=...` and `precondition failed: path=..., reason=...`.
+    // Preserve that evidence when present; otherwise identify the group prefix.
+    let path = error
+        .split_once("path=")
+        .map(|(_, provider_path)| {
+            provider_path
+                .split(|character: char| {
+                    character == ',' || character == ')' || character.is_whitespace()
+                })
+                .next()
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    Some(if path.is_empty() {
+        target.remote_prefix.clone()
+    } else {
+        path.to_string()
+    })
+}
+
+fn app_group_failure_phase(
+    target: &crate::sync::types::SyncTarget,
+    result: &SyncResult,
+) -> Option<String> {
+    target.app_group.as_ref()?;
+    let error = result.error.as_deref()?;
+    if error.contains("local_missing_without_tombstone") {
+        return Some("merge".to_string());
+    }
+    [
+        "catalog_read",
+        "merge",
+        "generation_upload",
+        "catalog_publish",
+    ]
+    .iter()
+    .find(|phase| error.starts_with(&format!("{phase}:")))
+    .map_or_else(
+        || Some("transfer".to_string()),
+        |phase| Some((*phase).to_string()),
+    )
 }

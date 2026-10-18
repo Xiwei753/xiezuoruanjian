@@ -100,6 +100,8 @@ pub struct SyncBackend {
     #[allow(dead_code)]
     sync_operation_state: qt_property!(QString; READ sync_operation_state NOTIFY sync_action_completed),
     #[allow(dead_code)]
+    last_sync_report: qt_property!(QString; READ last_sync_report NOTIFY sync_status_changed),
+    #[allow(dead_code)]
     sync_status: qt_property!(QString; READ sync_status WRITE set_sync_status NOTIFY sync_status_changed),
     #[allow(dead_code)]
     sync_in_progress: qt_property!(bool; READ sync_in_progress NOTIFY sync_status_changed),
@@ -304,6 +306,10 @@ impl SyncBackend {
     }
     fn sync_operation_state(&self) -> QString {
         self.with_app(|app| app.sync_operation_state())
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn last_sync_report(&self) -> QString {
+        self.with_app(|app| app.last_sync_report_json())
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn sync_status(&self) -> QString {
@@ -797,6 +803,19 @@ impl AppBackend {
     // AppBackend::sync_action_result
     pub(crate) fn sync_operation_state(&self) -> QString {
         self.current_sync_operation_state.clone().into()
+    }
+
+    // AppBackend::last_sync_report_json
+    pub(crate) fn last_sync_report_json(&self) -> QString {
+        let Some(api) = self.core_api() else {
+            return QString::from("");
+        };
+        match api.load_latest_full_sync_report() {
+            Ok(Some(report)) => serde_json::to_string(&report)
+                .unwrap_or_default()
+                .into(),
+            Ok(None) | Err(_) => QString::from(""),
+        }
     }
 
     // AppBackend::perform_sync_diagnostics

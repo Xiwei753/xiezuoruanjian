@@ -117,6 +117,9 @@ impl super::WriterCore {
             target_kind: "app".to_string(),
             project_id: None,
             remote_prefix: app_target.remote_prefix.clone(),
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
             result: app_result,
             deleted_resolution: None,
             local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
@@ -136,6 +139,9 @@ impl super::WriterCore {
                 target_kind: "project".to_string(),
                 project_id: Some(project.id.clone()),
                 remote_prefix: target.remote_prefix.clone(),
+                group_id: None,
+                failure_path: None,
+                failure_phase: None,
                 result,
                 deleted_resolution: None,
                 local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
@@ -149,14 +155,18 @@ impl super::WriterCore {
         // 时写入的 Syncing。每次尝试更新 last_attempt_time；仅整体成功类更新
         // last_success_time；部分失败保留旧值。
         // 写失败只记录警告，不覆盖同步结果（同步本身已成功，状态持久化是副作用）。
+        let report_time = now_epoch_seconds();
         let previous_state = self.load_full_sync_state().unwrap_or(None);
         let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
             &result,
             previous_state.as_ref(),
-            now_epoch_seconds(),
+            report_time,
         );
         if let Err(e) = self.save_full_sync_state(&new_state) {
             log::warn!("Failed to persist full sync state: {e}");
+        }
+        if let Err(e) = self.record_latest_full_sync_report(&result, report_time) {
+            log::warn!("Failed to persist latest full sync report: {e}");
         }
 
         // 同步成功后重建搜索索引

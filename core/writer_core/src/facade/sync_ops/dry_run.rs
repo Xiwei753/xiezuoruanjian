@@ -36,7 +36,13 @@ impl crate::facade::WriterCore {
         } else {
             crate::sync::types::TargetLifecycleCatalog::default()
         };
-        self.perform_full_sync_dry_run_with_catalog(config, &remote_catalog)
+        self.perform_full_sync_dry_run_with_catalog(
+            config,
+            &remote_catalog,
+            &crate::sync::app_data_group_catalog::discover_local_app_data_groups(
+                &self.app_data_root,
+            )?,
+        )
     }
 
     ///   dry-run plan 构建（纯本地 IO，不做网络 IO）。
@@ -46,6 +52,7 @@ impl crate::facade::WriterCore {
         &self,
         config: &crate::sync::SyncConfig,
         remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
+        remote_app_data_groups: &[crate::sync::types::AppDataGroup],
     ) -> crate::error::Result<crate::sync::types::FullSyncDryRunResult> {
         use crate::sync::types::{FullSyncDryRunResult, SyncPlan, TargetSyncPlan};
 
@@ -73,13 +80,14 @@ impl crate::facade::WriterCore {
             &self.app_data_root,
             &self.projects_root,
             &projects,
+            remote_app_data_groups,
             &pending_deleted,
             remote_catalog,
             &sync_policy,
             false,
             &device_id,
             &pending_remote_cleanups,
-        );
+        )?;
 
         let mut targets: Vec<TargetSyncPlan> = Vec::new();
         for planned in &planned_targets {
@@ -147,6 +155,7 @@ impl crate::facade::WriterCore {
         projects_root: &std::path::Path,
         config: &crate::sync::SyncConfig,
         remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
+        remote_app_data_groups: &[crate::sync::types::AppDataGroup],
     ) -> crate::error::Result<crate::sync::types::FullSyncDryRunResult> {
         use crate::sync::types::{FullSyncDryRunResult, SyncPlan, TargetSyncPlan};
 
@@ -169,13 +178,14 @@ impl crate::facade::WriterCore {
             app_data_root,
             projects_root,
             &projects,
+            remote_app_data_groups,
             &pending_deleted,
             remote_catalog,
             &sync_policy,
             false,
             &device_id,
             &pending_remote_cleanups,
-        );
+        )?;
 
         let mut targets: Vec<TargetSyncPlan> = Vec::new();
         for planned in &planned_targets {

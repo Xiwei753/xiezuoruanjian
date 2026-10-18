@@ -285,6 +285,78 @@ impl super::WriterCore {
         crate::storage::atomic_write_string(&path, &content)
     }
 
+    /// 加载最近一次完整同步报告。报告损坏时返回 None，不阻断同步恢复。
+    pub fn load_latest_full_sync_report(
+        &self,
+    ) -> crate::error::Result<Option<crate::sync::full_sync_state::FullSyncReport>> {
+        let path = self
+            .app_data_root
+            .join("app-meta/sync/last_report.local.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(crate::Error::Io(e)),
+        };
+        match serde_json::from_str::<crate::sync::full_sync_state::FullSyncReport>(&content) {
+            Ok(report) => Ok(Some(report)),
+            Err(_) => {
+                log::warn!("last_report.local.json corrupted — returning None");
+                Ok(None)
+            }
+        }
+    }
+
+    /// 原子保存最近一次全量同步报告。
+    pub fn save_latest_full_sync_report(
+        &self,
+        report: &crate::sync::full_sync_state::FullSyncReport,
+    ) -> crate::error::Result<()> {
+        let path = self
+            .app_data_root
+            .join("app-meta/sync/last_report.local.json");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(report)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        crate::storage::atomic_write_string(&path, &content)
+    }
+
+    /// 从本轮 target 结果生成并原子保存完整同步报告。
+    pub fn record_latest_full_sync_report(
+        &self,
+        result: &crate::sync::types::FullSyncResult,
+        now_epoch_seconds: i64,
+    ) -> crate::error::Result<()> {
+        let report = crate::sync::full_sync_state::FullSyncReport::from_result(
+            result,
+            now_epoch_seconds,
+            &self.app_data_root,
+            &self.projects_root,
+        );
+        self.save_latest_full_sync_report(&report)
+    }
+
+    /// 为全局初始化或平台预处理失败保留可诊断报告。
+    pub fn record_full_sync_early_failure_report(
+        &self,
+        status: &crate::sync::SyncStatus,
+        failed_target: &str,
+        now_epoch_seconds: i64,
+    ) -> crate::error::Result<()> {
+        let report = crate::sync::full_sync_state::FullSyncReport::early_failure(
+            status,
+            failed_target,
+            now_epoch_seconds,
+            &self.app_data_root,
+            &self.projects_root,
+        );
+        self.save_latest_full_sync_report(&report)
+    }
+
     /// 冷启动恢复中断的 `Syncing` 状态。
     ///
     /// 读取 `full_state.local.json`，只有旧状态是 `Syncing` 才原子改成

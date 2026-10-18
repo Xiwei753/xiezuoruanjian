@@ -15,9 +15,11 @@ use super::{FullSyncPlan, LiveTargetLww, PlannedTarget};
 //   - transfer_live.rs：正常上传 live 项目
 //   - transfer_project_ops.rs：恢复 / 删除本地 / 删除远端
 // 两个子模块在这里整体重导出，`use super::transfer_helpers::*` 的调用方不受影响。
+mod transfer_app_group;
 mod transfer_live;
 mod transfer_project_ops;
 
+pub(super) use transfer_app_group::transfer_app_data_group;
 pub(super) use transfer_live::transfer_live_project;
 pub(super) use transfer_project_ops::{
     transfer_delete_local_project, transfer_delete_remote_project, transfer_restore_project,

@@ -56,12 +56,13 @@ pub(crate) use transfer::save_conflict_copy;
 //   re-export 只读 local record 投影 helper，
 // 供 `build_sync_plan`（plan/dry-run 路径）复用，保持 plan 与 LWW execute attempt
 // 同一 source of truth（per-file 真实 winner device_id + 真实删除时间）。
-pub(crate) use manifest::snapshot_local_records_read_only;
+pub(crate) use manifest::{snapshot_app_group_records_read_only, snapshot_local_records_read_only};
 
 // re-export 统一 merge 核心，
 // 供 `execute_lww_sync_attempt`（普通 LWW）和 `full_sync.rs` LiveProject 复用。
 pub(crate) use merge::{
-    materialize_local_snapshot_for_empty_remote, merge_remote_into_local_snapshot, LwwMergeOutcome,
+    materialize_local_snapshot_for_empty_remote, merge_remote_into_local_app_group,
+    merge_remote_into_local_snapshot, LwwMergeOutcome,
 };
 
 // re-export SYNC_MANIFEST_PATH，

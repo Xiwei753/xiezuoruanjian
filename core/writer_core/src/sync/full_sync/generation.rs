@@ -75,6 +75,7 @@ pub(super) fn publish_generation(
     generation_id: &str,
     project_id: &str,
     scope: crate::sync::types::SyncScope,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
     sync_policy: &SyncPolicy,
     force_sync: bool,
     merge_outcome: Option<&crate::sync::lww::LwwMergeOutcome>,
@@ -97,6 +98,7 @@ pub(super) fn publish_generation(
             generation_id,
             project_id,
             scope,
+            app_group,
             merge_outcome,
             cancellation_token,
         );
@@ -150,6 +152,7 @@ pub(super) fn publish_generation(
             generation_prefix,
             &outcome.merged_manifest,
             scope,
+            app_group,
             cancellation_token,
         ) {
             Ok(()) => {
@@ -178,6 +181,7 @@ pub(super) fn publish_generation(
         let generation_target = crate::sync::types::SyncTarget {
             scope,
             remote_prefix: generation_prefix.to_string(),
+            app_group: app_group.cloned(),
         };
         super::transfer_helpers::run_single_target(
             provider,
@@ -282,6 +286,7 @@ fn publish_generation_batch(
     generation_id: &str,
     project_id: &str,
     scope: crate::sync::types::SyncScope,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
     merge_outcome: Option<&crate::sync::lww::LwwMergeOutcome>,
     cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::sync::types::SyncResult {
@@ -302,7 +307,7 @@ fn publish_generation_batch(
     // 本次 generation 的完整 manifest：merge 后的快照，或首次同步时 staging 的本地 manifest。
     let manifest: crate::sync::types::SyncManifest = match merge_outcome {
         Some(outcome) => outcome.merged_manifest.clone(),
-        None => match read_staging_generation_manifest(sync_root) {
+        None => match read_staging_generation_manifest(sync_root, app_group) {
             Ok(manifest) => manifest,
             Err(e) => return super::transfer_helpers::sync_result_from_error(e),
         },
@@ -336,7 +341,11 @@ fn publish_generation_batch(
         }
 
         // 路径白名单检查。
-        if !crate::sync::SyncService::is_whitelisted_path(&record.path, scope) {
+        let whitelisted = app_group.map_or_else(
+            || crate::sync::SyncService::is_whitelisted_path(&record.path, scope),
+            |group| crate::sync::SyncService::is_whitelisted_app_group_path(&record.path, group),
+        );
+        if !whitelisted {
             return super::transfer_helpers::sync_result_from_error(crate::Error::Io(
                 std::io::Error::other(format!(
                     "publish_generation_batch: path {} not whitelisted for scope {:?}",
@@ -523,8 +532,12 @@ fn publish_generation_batch(
 /// 文件集合来自 staging 自己的 manifest（prepare 阶段由本地扫描 + tombstone 生成）。
 fn read_staging_generation_manifest(
     sync_root: &Path,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
 ) -> crate::error::Result<crate::sync::types::SyncManifest> {
-    let manifest_path = sync_root.join(crate::sync::lww::SYNC_MANIFEST_PATH);
+    let manifest_rel_path = app_group
+        .map(crate::sync::types::AppDataGroup::local_manifest_path)
+        .unwrap_or_else(|| crate::sync::lww::SYNC_MANIFEST_PATH.to_string());
+    let manifest_path = sync_root.join(manifest_rel_path);
     let bytes = std::fs::read(&manifest_path).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "publish_generation_batch: read local manifest {}: {e}",
@@ -588,6 +601,7 @@ fn upload_complete_generation_snapshot(
     generation_prefix: &str,
     merged_manifest: &crate::sync::types::SyncManifest,
     scope: crate::sync::types::SyncScope,
+    app_group: Option<&crate::sync::types::AppDataGroup>,
     cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::error::Result<()> {
     use crate::sync::provider::model::WritePrecondition;
@@ -608,7 +622,11 @@ fn upload_complete_generation_snapshot(
         }
 
         // 1. 路径白名单检查。
-        if !crate::sync::SyncService::is_whitelisted_path(&record.path, scope) {
+        let whitelisted = app_group.map_or_else(
+            || crate::sync::SyncService::is_whitelisted_path(&record.path, scope),
+            |group| crate::sync::SyncService::is_whitelisted_app_group_path(&record.path, group),
+        );
+        if !whitelisted {
             return Err(crate::Error::Io(std::io::Error::other(format!(
                 "upload_complete_generation_snapshot: path {} not whitelisted for scope {:?}",
                 record.path, scope

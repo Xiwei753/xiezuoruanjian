@@ -41,6 +41,7 @@ ColumnLayout {
 
     // 结果区与原始诊断文本（原 TextArea/TextEdit 的文本源）。
     property string resultText: ""
+    property string lastSyncReport: ""
     property string rawErrorText: ""
     property bool showRawError: false
 
@@ -194,6 +195,60 @@ ColumnLayout {
         }
     }
 
+    function syncReportCategoryLabel(category) {
+        switch (category) {
+        case "conflict":
+        case "precondition_failed": return qsTr("冲突")
+        case "network":
+        case "temporary_unavailable": return qsTr("网络")
+        case "auth_failed": return qsTr("认证")
+        case "permission_denied": return qsTr("权限")
+        case "local_missing": return qsTr("本地文件缺少删除记录")
+        case "dependency_check": return qsTr("依赖数据组未完成")
+        case "local_io": return qsTr("本地存储")
+        case "rate_limited": return qsTr("请求限流")
+        default: return qsTr("其他")
+        }
+    }
+
+    function updatePersistedSyncReportText() {
+        var report = null
+        try { report = JSON.parse(root.lastSyncReport) } catch(e) {}
+        if (!report)
+            return
+
+        var completed = report.completed_groups || 0
+        var failed = report.failed_groups || 0
+        var pending = report.pending_groups || 0
+        var text = ""
+        if (failed > 0 && completed > 0) {
+            text = qsTr("部分同步：成功 %1 组，失败 %2 组").arg(completed).arg(failed)
+        } else if (failed > 0) {
+            text = qsTr("同步未完成：成功 %1 组，失败 %2 组").arg(completed).arg(failed)
+        } else if (pending > 0) {
+            text = qsTr("同步待处理：成功 %1 组，待处理 %2 组").arg(completed).arg(pending)
+        } else {
+            text = qsTr("同步完成：成功 %1 组").arg(completed)
+        }
+
+        var failures = report.failures || []
+        for (var i = 0; i < failures.length; i++) {
+            var failure = failures[i]
+            text += "\n\n" + qsTr("失败：%1").arg(failure.group_id || failure.target_kind)
+            text += "\n" + qsTr("路径：%1").arg(failure.path || "")
+            text += "\n" + qsTr("阶段：%1").arg(failure.phase || "transfer")
+            text += "\n" + qsTr("类别：%1").arg(syncReportCategoryLabel(failure.error_category || "other"))
+            if (failure.detail)
+                text += "\n" + failure.detail
+        }
+        if (failed > 0 && completed > 0)
+            text += "\n\n" + qsTr("其余数据组已完成同步")
+
+        root.resultText = text
+        root.rawErrorText = ""
+        root.showRawError = false
+    }
+
     function showConfigFeedback(message, isError) {
         syncConfigFeedback.message = message
         syncConfigFeedback.isError = isError
@@ -206,9 +261,12 @@ ColumnLayout {
             root.currentSyncStatus = root.syncBackendRef.sync_status || "not_configured";
             root.currentSyncInProgress = root.syncBackendRef.sync_in_progress || false;
             root.currentSyncOperationState = root.syncBackendRef.sync_operation_state || "";
+            root.lastSyncReport = root.syncBackendRef.last_sync_report || "";
             autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false;
             syncIntervalSpin.value = Math.round((root.syncBackendRef.sync_interval || 300) / 60);
             root.updateSyncResultText();
+            if (!root.currentSyncInProgress && root.lastSyncReport.trim() !== "")
+                root.updatePersistedSyncReportText();
             // 同步失败时，如果结果区为空，则显示错误信息
             if (root.isFailureStatus(root.currentSyncStatus) && root.resultText.trim() === "") {
                 var opState = root.currentSyncOperationState.trim();
@@ -808,6 +866,11 @@ ColumnLayout {
             root.refreshAllSyncConflicts()
         }
         root.refreshLocalSyncState();
+    }
+
+    onVisibleChanged: {
+        if (visible)
+            root.refreshLocalSyncState()
     }
 
     // Issue #762 评论 5826175490 第 2/5 点：SyncBackend 在同步开始前、每个 target

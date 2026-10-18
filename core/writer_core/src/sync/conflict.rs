@@ -19,6 +19,17 @@ type ObjectContentMap = std::collections::HashMap<(String, String), Vec<u8>>;
 /// 阻塞后续同步更可接受。
 pub(crate) fn load_conflicts_json(sync_root: &Path) -> crate::Result<Vec<SyncConflict>> {
     let conflicts_path = sync_root.join("app-meta/sync/conflicts.json");
+    load_conflicts_json_at_path(&conflicts_path)
+}
+
+pub(crate) fn load_conflicts_json_for_group(
+    sync_root: &Path,
+    group: &crate::sync::types::AppDataGroup,
+) -> crate::Result<Vec<SyncConflict>> {
+    load_conflicts_json_at_path(&sync_root.join(group.local_conflicts_path()))
+}
+
+fn load_conflicts_json_at_path(conflicts_path: &Path) -> crate::Result<Vec<SyncConflict>> {
     if !conflicts_path.exists() {
         return Ok(Vec::new());
     }
@@ -61,6 +72,27 @@ pub(crate) fn persist_sync_merge_result(
     state: &crate::sync::types::SyncState,
     conflicts: &[SyncConflict],
 ) -> crate::Result<()> {
+    persist_sync_merge_result_at_paths(
+        sync_root,
+        manifest_path,
+        manifest_json,
+        "app-meta/sync/state.local.json",
+        state,
+        "app-meta/sync/conflicts.json",
+        conflicts,
+    )
+}
+
+/// Group-aware variant that keeps each App group's local sync metadata isolated.
+pub(crate) fn persist_sync_merge_result_at_paths(
+    sync_root: &Path,
+    manifest_path: &str,
+    manifest_json: &str,
+    state_path: &str,
+    state: &crate::sync::types::SyncState,
+    conflicts_path: &str,
+    conflicts: &[SyncConflict],
+) -> crate::Result<()> {
     let state_json = serde_json::to_string_pretty(state)
         .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
     let conflicts_json = serde_json::to_string_pretty(conflicts)
@@ -68,8 +100,8 @@ pub(crate) fn persist_sync_merge_result(
 
     let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
     tx.add_bytes(manifest_path, manifest_json.as_bytes())?;
-    tx.add_bytes("app-meta/sync/state.local.json", state_json.as_bytes())?;
-    tx.add_bytes("app-meta/sync/conflicts.json", conflicts_json.as_bytes())?;
+    tx.add_bytes(state_path, state_json.as_bytes())?;
+    tx.add_bytes(conflicts_path, conflicts_json.as_bytes())?;
     tx.commit()?;
     Ok(())
 }

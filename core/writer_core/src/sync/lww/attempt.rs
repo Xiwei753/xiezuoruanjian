@@ -12,7 +12,9 @@ use crate::sync::provider::SyncProvider;
 use crate::sync::types::{SyncResult, SyncState, SyncStatus, SyncTarget};
 use std::path::Path;
 
-use super::merge::{merge_remote_into_local_snapshot, LwwMergeOutcome};
+use super::merge::{
+    merge_remote_into_local_app_group, merge_remote_into_local_snapshot, LwwMergeOutcome,
+};
 use super::transfer::{delete_remote_files, upload_local_files, upload_manifest};
 
 /// 按 merge 结果决定单次尝试的终态。
@@ -85,8 +87,12 @@ pub(crate) fn execute_lww_sync_attempt(
     log::debug!("[sync] lww step=正在合并 remote_prefix={}", remote_prefix);
 
     // 调用统一 merge 核心。
-    let outcome =
-        merge_remote_into_local_snapshot(sync_root, provider, remote_prefix, scope, state)?;
+    let outcome = match &target.app_group {
+        Some(group) => {
+            merge_remote_into_local_app_group(sync_root, provider, remote_prefix, group, state)?
+        }
+        None => merge_remote_into_local_snapshot(sync_root, provider, remote_prefix, scope, state)?,
+    };
 
     // Issue #729 评论 5765306162 问题4：merge 后检查取消令牌。
     // 取消则返回空成功，不继续 upload/delete/upload_manifest。

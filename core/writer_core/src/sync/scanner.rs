@@ -20,7 +20,7 @@
 //! - **远端删除**：本地已不存在但远端仍有的文件
 //! - **墓碑清理**：超过 `purge_after` 时间的本地 trash 文件
 
-use crate::sync::types::{SyncFileEntry, SyncKind, SyncPlan, SyncScope};
+use crate::sync::types::{AppDataGroup, SyncFileEntry, SyncKind, SyncPlan, SyncScope, SyncTarget};
 use crate::sync::SyncService;
 use std::path::Path;
 
@@ -40,6 +40,22 @@ use std::path::Path;
 pub(crate) fn scan_for_sync(
     sync_root: &Path,
     scope: SyncScope,
+) -> crate::Result<Vec<SyncFileEntry>> {
+    scan_for_sync_group(sync_root, scope, None)
+}
+
+/// Scan a target, restricting App paths to the target's independently published group.
+pub(crate) fn scan_for_sync_target(
+    sync_root: &Path,
+    target: &SyncTarget,
+) -> crate::Result<Vec<SyncFileEntry>> {
+    scan_for_sync_group(sync_root, target.scope, target.app_group.as_ref())
+}
+
+pub(crate) fn scan_for_sync_group(
+    sync_root: &Path,
+    scope: SyncScope,
+    app_group: Option<&AppDataGroup>,
 ) -> crate::Result<Vec<SyncFileEntry>> {
     let mut entries = Vec::new();
 
@@ -66,7 +82,10 @@ pub(crate) fn scan_for_sync(
             continue;
         }
 
-        let is_whitelisted = SyncService::is_whitelisted_path(&rel_path, scope);
+        let is_whitelisted = SyncService::is_whitelisted_path(&rel_path, scope)
+            && app_group.map_or(true, |group| {
+                SyncService::is_whitelisted_app_group_path(&rel_path, group)
+            });
         let sync_kind = if is_whitelisted {
             SyncKind::Upload
         } else {
@@ -168,27 +187,59 @@ pub(crate) fn scan_for_sync(
     clippy::type_complexity
 )]
 pub(crate) fn build_sync_plan(sync_root: &Path, scope: SyncScope) -> crate::Result<SyncPlan> {
+    build_sync_plan_for_scope(sync_root, scope, None)
+}
+
+pub(crate) fn build_sync_plan_for_target(
+    sync_root: &Path,
+    target: &SyncTarget,
+) -> crate::Result<SyncPlan> {
+    build_sync_plan_for_scope(sync_root, target.scope, target.app_group.as_ref())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::excessive_nesting,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+fn build_sync_plan_for_scope(
+    sync_root: &Path,
+    scope: SyncScope,
+    app_group: Option<&AppDataGroup>,
+) -> crate::Result<SyncPlan> {
     let mut plan = SyncPlan::new();
 
     // scan_for_sync 仍用于收集 ignored_files（黑名单/非白名单路径）。
-    let entries = scan_for_sync(sync_root, scope)?;
+    let entries = scan_for_sync_group(sync_root, scope, app_group)?;
     //   build_sync_plan 是 plan/dry-run helper，
     // 用 read-only state loader，不写文件（旧 state 迁移/device_id 补写只在内存）。
     // state 加载失败 → 直接返回 Err，
     // 不再 unwrap_or_default() 把损坏的 state.local.json 当成"首次同步"。
-    let state = SyncService::load_sync_state_read_only(sync_root, None)?;
+    let state = match app_group {
+        Some(group) => SyncService::load_sync_state_read_only_for_group(sync_root, group, None)?,
+        None => SyncService::load_sync_state_read_only(sync_root, None)?,
+    };
     let is_first_sync = state.known_files.is_empty();
 
     // 用 snapshot_local_records_read_only 获取只读 records，
     // 与 LWW execute attempt 同源。snapshot 失败直接返回 Err（不再 fallback）。
     // upload/delete 动作直接从 snapshot_records 推导，不再用 state.known_files /
     // scan / local_files 重新推一遍。
-    let snapshot_records =
-        crate::sync::lww::snapshot_local_records_read_only(sync_root, scope, "")?;
+    let snapshot_records = match app_group {
+        Some(group) => {
+            crate::sync::lww::snapshot_app_group_records_read_only(sync_root, group, "")?
+        }
+        None => crate::sync::lww::snapshot_local_records_read_only(sync_root, scope, "")?,
+    };
 
     // ignored_files：黑名单路径 + 非 Upload/ConflictCandidate kind。
     // snapshot_records 只含白名单且非黑名单的路径，所以这些辅助信息仍需从 entries 收集。
     for entry in entries {
+        if app_group.is_some_and(|group| !group.owns_path(&entry.relative_path)) {
+            continue;
+        }
         if SyncService::is_blacklisted_path(&entry.relative_path, scope) {
             plan.ignored_files.push(entry.relative_path.clone());
             continue;

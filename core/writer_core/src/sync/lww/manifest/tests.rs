@@ -154,7 +154,8 @@ fn test_snapshot_local_records_for_merge_collects_missing_known_file() {
 
     // 宽松版：不 Err，收集缺失文件并保留恢复所需证据。
     let snapshot =
-        snapshot_local_records_for_merge(sync_root, SyncScope::Project, "current-device").unwrap();
+        snapshot_local_records_for_merge(sync_root, SyncScope::Project, "current-device", None)
+            .unwrap();
     assert!(snapshot.records.is_empty());
     assert_eq!(snapshot.missing_without_delete_fact.len(), 1);
     let missing = &snapshot.missing_without_delete_fact[0];
@@ -210,7 +211,8 @@ fn test_snapshot_local_records_for_merge_collects_missing_old_manifest_upsert() 
     .unwrap();
 
     let snapshot =
-        snapshot_local_records_for_merge(sync_root, SyncScope::Project, "current-device").unwrap();
+        snapshot_local_records_for_merge(sync_root, SyncScope::Project, "current-device", None)
+            .unwrap();
     assert_eq!(snapshot.missing_without_delete_fact.len(), 1);
     assert_eq!(
         snapshot.missing_without_delete_fact[0].cause,
@@ -258,7 +260,8 @@ fn test_snapshot_local_records_for_merge_tombstone_still_produces_delete_record(
     crate::sync::SyncService::save_sync_state(sync_root, &state).unwrap();
 
     let snapshot =
-        snapshot_local_records_for_merge(sync_root, SyncScope::Project, "current-device").unwrap();
+        snapshot_local_records_for_merge(sync_root, SyncScope::Project, "current-device", None)
+            .unwrap();
     assert!(snapshot.missing_without_delete_fact.is_empty());
     let rec = snapshot.records.get("project.json").unwrap();
     assert_eq!(rec.op, "delete");

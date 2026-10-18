@@ -1,8 +1,8 @@
 use crate::api::{
     AllSyncConflictEntryDto, FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto,
-    FullSyncResultDto, FullSyncStateDto, LegacyMigrationOutcomeDto, LegacyProfileMetadataDto,
-    SyncConfigDto, SyncConflictDto, SyncConflictPreviewDto, SyncSecretsDto, SyncStateDto,
-    WriterError,
+    FullSyncReportDto, FullSyncResultDto, FullSyncStateDto, LegacyMigrationOutcomeDto,
+    LegacyProfileMetadataDto, SyncConfigDto, SyncConflictDto, SyncConflictPreviewDto,
+    SyncSecretsDto, SyncStateDto, WriterError,
 };
 use crate::sync::{SyncConfig, SyncSecrets};
 
@@ -251,6 +251,11 @@ impl super::WriterAppService {
     /// 全量同步持久状态。
     pub fn load_full_sync_state(&self) -> Result<Option<FullSyncStateDto>, WriterError> {
         self.api.load_full_sync_state()
+    }
+
+    /// 读取最近一次持久化的完整同步报告。
+    pub fn load_latest_full_sync_report(&self) -> Result<Option<FullSyncReportDto>, WriterError> {
+        self.api.load_latest_full_sync_report()
     }
 
     /// 冷启动恢复中断的 Syncing 状态。

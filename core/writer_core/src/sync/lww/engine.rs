@@ -60,10 +60,10 @@ pub(crate) fn perform_lww_sync(
         return Ok(result);
     }
 
-    let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
+    let mut state = crate::sync::SyncService::load_sync_state_for_target(sync_root, target)?;
     if state.device_id.is_empty() {
         state.device_id = uuid::Uuid::new_v4().to_string();
-        crate::sync::SyncService::save_sync_state(sync_root, &state)?;
+        crate::sync::SyncService::save_sync_state_for_target(sync_root, target, &state)?;
     }
 
     // P1-4: Core-level debounce. Even if clients call sync too often,

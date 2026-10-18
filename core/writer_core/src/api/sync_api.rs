@@ -165,6 +165,14 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 最近一次持久化的完整同步报告，供各平台页面和诊断包读取。
+    pub fn load_latest_full_sync_report(&self) -> ApiResult<Option<FullSyncReportDto>> {
+        self.core_read()
+            .load_latest_full_sync_report()
+            .map(|opt| opt.map(Into::into))
+            .map_err(Into::into)
+    }
+
     /// 冷启动恢复中断的 Syncing 状态。
     ///
     /// 读取 `full_state.local.json`，只有旧状态是 `Syncing` 才原子改成
@@ -248,6 +256,7 @@ impl WriterCoreApi {
                 &projects_root,
                 &sync_config,
                 &crate::sync::types::TargetLifecycleCatalog::default(),
+                &[],
             )
             .map(Into::into)
             .map_err(Into::into);
@@ -263,6 +272,13 @@ impl WriterCoreApi {
                     crate::api::error::WriterError::from(e)
                 })?;
 
+        let remote_app_data_groups =
+            crate::sync::app_data_group_catalog::discover_remote_app_data_groups(provider.as_ref())
+                .map_err(|e| {
+                    log::warn!("[sync] dry-run: discover_remote_app_data_groups failed: {e}");
+                    crate::api::error::WriterError::from(e)
+                })?;
+
         // 1c. 短锁 B（read）：snapshot paths，锁外扫描。
         //   回退问题：恢复短锁+锁外扫描。
         let (app_data_root, projects_root) = {
@@ -274,6 +290,7 @@ impl WriterCoreApi {
             &projects_root,
             &sync_config,
             &remote_catalog_snapshot.catalog,
+            &remote_app_data_groups,
         )
         .map(Into::into)
         .map_err(Into::into)
@@ -409,6 +426,25 @@ impl WriterCoreApi {
             } else {
                 remote_catalog_snapshot
             };
+
+        // App data-group catalog is independent from the project lifecycle catalog.
+        // A malformed/unreadable group catalog fails Prepare instead of guessing a
+        // flat App layout and risking a mixed or destructive merge.
+        let remote_app_data_groups =
+            match crate::sync::app_data_group_catalog::discover_remote_app_data_groups(
+                provider.as_ref(),
+            ) {
+                Ok(groups) => groups,
+                Err(e) => {
+                    let msg = format!("discover_remote_app_data_groups failed: {e}");
+                    log::warn!("[sync] prepare: {msg}");
+                    let _ = self.record_full_sync_preflight_failure(
+                        "recoverable_error".to_string(),
+                        "app_group_catalog".to_string(),
+                    );
+                    return Err(crate::api::error::WriterError::from(e));
+                }
+            };
         // Issue #729：persist_bootstrap_catalog 返回后检查取消令牌。
         if let Some(ref token) = cancellation_token {
             if token.is_cancelled() {
@@ -435,6 +471,7 @@ impl WriterCoreApi {
             &sync_config,
             force_sync,
             &remote_catalog_snapshot.catalog,
+            &remote_app_data_groups,
             remote_catalog_snapshot.clone(),
         ) {
             Ok(plan) => plan,
@@ -616,6 +653,7 @@ impl WriterCoreApi {
                     target_index,
                     &mut catalog_snapshot,
                     cancellation_token.as_ref(),
+                    &all_targets,
                 )
             else {
                 // target 未执行（取消或索引越界），跳过。

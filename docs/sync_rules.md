@@ -30,6 +30,14 @@ Supersedes: None
 - **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`。
 - **黑名单（绝不参与）**：`作品/`（projects_root）、`日志/`（log_dir）、`导出/`、`备份/`、`settings.local.json`、`recent_edits.json`、`app-meta/sync/config.local.json`、`app-meta/sync/conflicts.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
 
+### App 数据组与独立发布
+
+App target 内部按数据组独立扫描、合并、记录状态并发布不可变 generation：`global` 包含跨设备设置和调色板；每张星图是一个组，包含该图的 meta、graph 和对象文件。`starmaps/index.json` 当前仍是跨图聚合记录，因此作为依赖组，在本轮所有星图组成功后才发布。
+
+远端 `app/app-meta/sync/app_groups.sync.json` 选择每个数据组的当前 generation，与 project 生命周期清单 `targets.sync.json` 分离。没有该目录清单时，从旧 `app/app-meta/sync/manifest.sync.json` 推导数据组；各组在迁移完成前继续从旧 `app/` 读取。成功发布一组 generation 后才通过版本条件更新目录清单切换该组，尚未迁移的组和旧文件继续保留。
+
+每个 App 数据组使用独立的本地 `manifest.sync.json`、`state.local.json` 与 `conflicts.json`。缺少本地文件且没有对应删除 tombstone 时，只将该组报告为失败，不把缺文件推断成删除，也不阻断其他独立组。星图索引依赖检查失败时保留旧索引 generation，避免它引用尚未完成的数据组。
+
 ## 作品级同步白名单/黑名单
 
 同步根 = 作品目录（`project_root`），路径相对作品目录：

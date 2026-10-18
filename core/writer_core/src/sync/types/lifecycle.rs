@@ -22,6 +22,15 @@ pub struct TargetSyncResult {
     pub target_kind: String,
     pub project_id: Option<String>,
     pub remote_prefix: String,
+    /// App 数据组的稳定 id；Project targets 为 `None`。
+    #[serde(default)]
+    pub group_id: Option<String>,
+    /// 失败路径，相对本地数据根；成功时为空。
+    #[serde(default)]
+    pub failure_path: Option<String>,
+    /// 失败阶段，例如 `merge`、`upload`、`delete`、`manifest_publish`。
+    #[serde(default)]
+    pub failure_phase: Option<String>,
     pub result: SyncResult,
     ///   deleted target 的 LWW 决策结果。
     ///

@@ -27,13 +27,15 @@ fn build_plan_includes_pending_deleted_targets() {
         &app_root,
         &projects_root,
         &[],
+        &[],
         &pending,
         &TargetLifecycleCatalog::default(),
         &sync_policy,
         false,
         "dev-1",
         &[],
-    );
+    )
+    .unwrap();
 
     // App target + 1 deleted target。
     assert_eq!(planned.len(), 2);
@@ -85,12 +87,14 @@ fn build_plan_includes_live_projects() {
         &projects_root,
         &projects,
         &[],
+        &[],
         &TargetLifecycleCatalog::default(),
         &sync_policy,
         false,
         "dev-1",
         &[],
-    );
+    )
+    .unwrap();
 
     // App target + 1 project target。
     assert_eq!(planned.len(), 2);
@@ -159,12 +163,14 @@ fn build_plan_live_project_with_remote_delete_local_wins() {
         &projects_root,
         &projects,
         &[],
+        &[],
         &catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-1",
         &[],
-    );
+    )
+    .unwrap();
 
     assert_eq!(planned[1].target_kind, PlannedTargetKind::LiveProject);
 }
@@ -226,12 +232,14 @@ fn build_plan_live_project_with_remote_delete_remote_wins() {
         &projects_root,
         &projects,
         &[],
+        &[],
         &catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-1",
         &[],
-    );
+    )
+    .unwrap();
 
     assert_eq!(
         planned[1].target_kind,
@@ -269,13 +277,15 @@ fn build_plan_pending_delete_local_tombstone_wins() {
         &app_root,
         &projects_root,
         &[],
+        &[],
         &pending,
         &catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-1",
         &[],
-    );
+    )
+    .unwrap();
 
     assert_eq!(
         planned[1].target_kind,
@@ -313,13 +323,15 @@ fn build_plan_pending_delete_remote_upsert_wins() {
         &app_root,
         &projects_root,
         &[],
+        &[],
         &pending,
         &catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-1",
         &[],
-    );
+    )
+    .unwrap();
 
     assert_eq!(planned[1].target_kind, PlannedTargetKind::RestoreProject);
 }
@@ -355,12 +367,14 @@ fn repro_issue_645_q1_remote_only_project_not_in_plan() {
         &projects_root,
         &[],
         &[],
+        &[],
         &remote_catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-B",
         &[],
-    );
+    )
+    .unwrap();
 
     let has_remote_only = planned
         .iter()
@@ -424,12 +438,14 @@ fn repro_issue_645_q2_manifest_missing_fakes_lww_now() {
         &projects_root,
         &projects,
         &[],
+        &[],
         &remote_catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-B",
         &[],
-    );
+    )
+    .unwrap();
 
     let p_target = planned
         .iter()
@@ -554,12 +570,14 @@ fn q6_build_plan_skips_invalid_remote_target_id() {
         &projects_root,
         &[],
         &[],
+        &[],
         &remote_catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-B",
         &[],
-    );
+    )
+    .unwrap();
 
     let has_traversal = planned
         .iter()
@@ -593,6 +611,7 @@ fn q6_build_plan_skips_invalid_pending_deleted_target_id() {
         target: crate::sync::types::SyncTarget {
             scope: crate::sync::types::SyncScope::Project,
             remote_prefix: "projects/../app".to_string(),
+            app_group: None,
         },
         deleted_at_ms: 1000,
         journal_token: "tok-1".to_string(),
@@ -604,13 +623,15 @@ fn q6_build_plan_skips_invalid_pending_deleted_target_id() {
         &app_root,
         &projects_root,
         &[],
+        &[],
         &pending,
         &TargetLifecycleCatalog::default(),
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-1",
         &[],
-    );
+    )
+    .unwrap();
 
     assert_eq!(
         planned.len(),
@@ -666,12 +687,14 @@ fn q2_manifest_corrupt_returns_retry() {
         &projects_root,
         &projects,
         &[],
+        &[],
         &remote_catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-B",
         &[],
-    );
+    )
+    .unwrap();
 
     let p_target = planned
         .iter()
@@ -714,12 +737,14 @@ fn q2_first_sync_establishes_initial_manifest() {
         &projects_root,
         &[project],
         &[],
+        &[],
         &TargetLifecycleCatalog::default(),
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-B",
         &[],
-    );
+    )
+    .unwrap();
 
     let p_target = planned
         .iter()
@@ -769,12 +794,14 @@ fn q2_no_manifest_and_corrupt_project_json_returns_retry() {
         &projects_root,
         &projects,
         &[],
+        &[],
         &TargetLifecycleCatalog::default(),
         &crate::sync::types::SyncPolicy::default(),
         false,
         "dev-B",
         &[],
-    );
+    )
+    .unwrap();
 
     let p_target = planned
         .iter()
@@ -844,12 +871,14 @@ fn q5_dry_run_uses_real_catalog_for_target_decision() {
         &projects_root,
         &projects,
         &[],
+        &[],
         &catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "device-1",
         &[],
-    );
+    )
+    .unwrap();
 
     let p_target = planned
         .iter()
@@ -891,12 +920,14 @@ fn q5_dry_run_empty_catalog_first_sync() {
         &projects_root,
         &projects,
         &[],
+        &[],
         &TargetLifecycleCatalog::default(),
         &crate::sync::types::SyncPolicy::default(),
         false,
         "device-1",
         &[],
-    );
+    )
+    .unwrap();
 
     let p_target = planned
         .iter()
@@ -929,12 +960,14 @@ fn test_remote_only_delete_generates_cleanup_target() {
         &projects_root,
         &[],
         &[],
+        &[],
         &catalog,
         &crate::sync::types::SyncPolicy::default(),
         false,
         "device-local",
         &[],
-    );
+    )
+    .unwrap();
 
     let p_target = planned
         .iter()
