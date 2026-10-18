@@ -156,6 +156,11 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapPathPlanner.js" as "StarMapPathPlanner.js",
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
     "qml/StatCard.qml" as "StatCard.qml",
+    // Issue #946：统计页 Explorer 主体组件（时段卡 / 纪录面板 / 趋势折线图），
+    // qrc 是显式列表，漏登记时开发目录碰巧能找到、打包后组件不存在。
+    "qml/StatsPeriodCard.qml" as "StatsPeriodCard.qml",
+    "qml/StatsRecordPanel.qml" as "StatsRecordPanel.qml",
+    "qml/StatsTrendChart.qml" as "StatsTrendChart.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",
     // Issue #790 评论 5875963057: 全局顶栏公共入口组件
     "qml/GlobalTopActions.qml" as "GlobalTopActions.qml",

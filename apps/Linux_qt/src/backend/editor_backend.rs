@@ -65,6 +65,11 @@ pub struct EditorBackend {
     writing_stats_dashboard_ready: qt_signal!(request_id: u32, snapshot: QJsonObject),
     #[allow(dead_code)]
     writing_stats_dashboard_failed: qt_signal!(request_id: u32, message: QString),
+    /// Issue #946：统计页 Explorer 快照异步查询完成（生涯 + 四时段卡 + 选中时段详情）。
+    #[allow(dead_code)]
+    writing_stats_explorer_ready: qt_signal!(request_id: u32, snapshot: QJsonObject),
+    #[allow(dead_code)]
+    writing_stats_explorer_failed: qt_signal!(request_id: u32, message: QString),
     /// Issue #935：实时速度 + 今日汇总异步查询完成。
     #[allow(dead_code)]
     writing_status_ready: qt_signal!(request_id: u32, status: QJsonObject),
@@ -163,6 +168,16 @@ pub struct EditorBackend {
     /// `writing_stats_dashboard_failed` 携 `request_id` 发回。
     #[allow(dead_code)]
     request_writing_stats_dashboard: qt_method!(fn(&mut self, request_id: u32)),
+    /// Issue #946：异步请求统计页 Explorer 快照。
+    ///
+    /// `preset` 为 `last7Days` / `last30Days` / `last6Months` / `lifetime` /
+    /// `custom`；自选区间必须带两个 `YYYY-MM-DD` 日期，其余预设两端传空字符串。
+    /// 立即返回；结果经 `writing_stats_explorer_ready` /
+    /// `writing_stats_explorer_failed` 携 `request_id` 发回。
+    #[allow(dead_code)]
+    request_writing_stats_explorer: qt_method!(
+        fn(&mut self, request_id: u32, preset: QString, start_date: QString, end_date: QString)
+    ),
     /// Issue #935：异步请求「实时速度 + 今日汇总」。
     #[allow(dead_code)]
     request_writing_status: qt_method!(fn(&mut self, request_id: u32, window_seconds: u32)),
@@ -447,6 +462,61 @@ impl EditorBackend {
                     "request_writing_stats_dashboard skipped due to borrow conflict",
                 );
                 self.writing_stats_dashboard_failed(request_id, "stats backend busy".into());
+            }
+        }
+    }
+
+    /// Issue #946：异步请求统计页 Explorer 快照（非阻塞，结果走信号回 GUI 线程）。
+    ///
+    /// QML 传空字符串表示「该端没有自选日期」（非 custom 预设），这里转成
+    /// `Option`；custom 的两端必须都非空，Core 会校验非法参数并报错。
+    fn request_writing_stats_explorer(
+        &mut self,
+        request_id: u32,
+        preset: QString,
+        start_date: QString,
+        end_date: QString,
+    ) {
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, result): (u32, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => this.writing_stats_explorer_ready(
+                            request_id,
+                            qjson_object_from_json(&json),
+                        ),
+                        Err(message) => {
+                            this.writing_stats_explorer_failed(request_id, message.into());
+                        }
+                    }
+                }
+            },
+        );
+        let completion: crate::backend::stats_writer::StatsQueryCallback =
+            Box::new(move |request_id: u32, result: Result<String, String>| {
+                callback((request_id, result));
+            });
+        let start = start_date.to_string();
+        let start = if start.is_empty() { None } else { Some(start) };
+        let end = end_date.to_string();
+        let end = if end.is_empty() { None } else { Some(end) };
+        let preset = preset.to_string();
+        match self.with_app(|app| {
+            app.request_writing_stats_explorer(request_id, preset, start, end, completion)
+        }) {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                self.writing_stats_explorer_failed(request_id, message.into());
+            }
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "editor_backend",
+                    "BORROW_CONFLICT",
+                    "request_writing_stats_explorer skipped due to borrow conflict",
+                );
+                self.writing_stats_explorer_failed(request_id, "stats backend busy".into());
             }
         }
     }

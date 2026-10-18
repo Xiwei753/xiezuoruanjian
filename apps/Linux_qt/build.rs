@@ -600,6 +600,10 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/CreateProjectCard.qml");
     println!("cargo:rerun-if-changed=qml/ProjectHomePage.qml");
     println!("cargo:rerun-if-changed=qml/StatCard.qml");
+    // Issue #946：统计页 Explorer 主体组件，与 StatsPreviewPage 同批重编译。
+    println!("cargo:rerun-if-changed=qml/StatsPeriodCard.qml");
+    println!("cargo:rerun-if-changed=qml/StatsRecordPanel.qml");
+    println!("cargo:rerun-if-changed=qml/StatsTrendChart.qml");
     println!("cargo:rerun-if-changed=qml/DashboardGrid.qml");
     println!("cargo:rerun-if-changed=qml/DashboardSection.qml");
     // Components

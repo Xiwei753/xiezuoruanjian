@@ -73,6 +73,18 @@ enum StatsWriterMessage {
         window_seconds: u32,
         completion: StatsQueryCallback,
     },
+    /// Issue #946：统计页 Explorer 快照（生涯摘要 + 四个时段卡 + 选中时段详情）。
+    ///
+    /// `preset` 为固定字符串（`last7Days` / `last30Days` / `last6Months` /
+    /// `lifetime` / `custom`）；`custom` 必须同时携带 `start` / `end`
+    /// （`YYYY-MM-DD`，两端包含），其余预设两端为 `None`。
+    QueryStatsExplorer {
+        request_id: u32,
+        preset: String,
+        start: Option<String>,
+        end: Option<String>,
+        completion: StatsQueryCallback,
+    },
 }
 
 /// 把一条编辑事实写进 Core 统计；失败时记录日志并保留原始命令供补写。
@@ -212,6 +224,29 @@ impl StatsWriterHandle {
                                 completion(request_id, result);
                             }
                         }
+                        StatsWriterMessage::QueryStatsExplorer {
+                            request_id,
+                            preset,
+                            start,
+                            end,
+                            completion,
+                        } => {
+                            // Issue #946：与 QueryDashboard 同口径——先补写尚未落盘的
+                            // 编辑事实，再在 worker thread 里生成 Explorer 快照。
+                            if let Some(err) = pending_records_failure(&api, &mut pending_records) {
+                                completion(request_id, Err(err));
+                            } else {
+                                completion(
+                                    request_id,
+                                    api.get_writing_stats_explorer_json(
+                                        &preset,
+                                        start.as_deref(),
+                                        end.as_deref(),
+                                    )
+                                    .map_err(|e| e.to_string()),
+                                );
+                            }
+                        }
                     }
                 }
                 // 退出前最后再补写一次，尽量不丢尾部失败事实。
@@ -271,6 +306,33 @@ impl StatsWriterHandle {
             .send(StatsWriterMessage::QueryWritingStatus {
                 request_id,
                 window_seconds,
+                completion,
+            })
+            .map_err(|_| "stats writer worker has exited".to_string())
+    }
+
+    /// Issue #946：把「统计页 Explorer 快照」查询排进同一条串行队列。
+    ///
+    /// 与 [`Self::query_dashboard`] 同一队列口径：worker 消费到它时此前全部
+    /// Record 已处理完，在 worker thread 里调用 Core 的 Explorer 入口，
+    /// UI 线程不阻塞。
+    pub(crate) fn query_stats_explorer(
+        &self,
+        request_id: u32,
+        preset: String,
+        start: Option<String>,
+        end: Option<String>,
+        completion: StatsQueryCallback,
+    ) -> Result<(), String> {
+        let Some(sender) = self.sender.as_ref() else {
+            return Err("stats writer is shut down".to_string());
+        };
+        sender
+            .send(StatsWriterMessage::QueryStatsExplorer {
+                request_id,
+                preset,
+                start,
+                end,
                 completion,
             })
             .map_err(|_| "stats writer worker has exited".to_string())

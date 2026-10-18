@@ -389,4 +389,27 @@ impl AppBackend {
         };
         writer.query_writing_status(request_id, window_seconds, completion)
     }
+
+    /// Issue #946：异步请求统计页 Explorer 快照。
+    ///
+    /// 查询排进与写入相同的串行队列，worker 消费到它时此前全部编辑事实已处理完，
+    /// 一次性生成「生涯摘要 + 四个时段卡 + 选中时段详情」后通过 completion 交回。
+    /// 本方法立即返回；completion 在 worker thread 上执行，调用方
+    /// （editor_backend）负责用 `queued_callback` 把结果投递回 GUI 线程。
+    ///
+    /// `custom` 必须携带 `start_date` / `end_date`（`YYYY-MM-DD`，两端包含）；
+    /// 其余预设两端为 `None`。统计口径（预设范围、纪录、趋势）全在 Core。
+    pub(crate) fn request_writing_stats_explorer(
+        &self,
+        request_id: u32,
+        preset: String,
+        start_date: Option<String>,
+        end_date: Option<String>,
+        completion: crate::backend::stats_writer::StatsQueryCallback,
+    ) -> Result<(), String> {
+        let Some(writer) = self.stats_writer.as_ref() else {
+            return Err("stats writer is not available".to_string());
+        };
+        writer.query_stats_explorer(request_id, preset, start_date, end_date, completion)
+    }
 }
