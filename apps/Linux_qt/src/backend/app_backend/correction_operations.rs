@@ -199,4 +199,57 @@ impl AppBackend {
             .map(|_| ())
             .map_err(|error| format!("无法启动校对任务: {error}"))
     }
+
+    /// Queue proofreading for one UTF-8 byte range in an immutable chapter
+    /// snapshot. Core expands the range with nearby context and returns only
+    /// suggestions whose source spans fall inside the requested range.
+    pub(crate) fn request_correction_segment(
+        &self,
+        request_id: u32,
+        project_id: String,
+        chapter_id: String,
+        text_revision: u64,
+        text: String,
+        start_byte: u32,
+        end_byte: u32,
+        completion: CorrectionQueryCallback,
+    ) -> Result<(), String> {
+        let (data_root, projects_root, layout) =
+            if self.current_has_data_root && !self.current_data_root.is_empty() {
+                let layout = self
+                    .current_workspace_git_layout
+                    .clone()
+                    .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
+                (
+                    self.current_data_root.clone(),
+                    self.current_projects_root.clone(),
+                    layout,
+                )
+            } else {
+                return Err("Core 尚未打开工作区".to_string());
+            };
+
+        std::thread::Builder::new()
+            .name("correction-segment".to_string())
+            .spawn(move || {
+                let api = with_layout_core_api(&data_root, &projects_root, &layout);
+                let result = api
+                    .check_correction_segment(
+                        project_id,
+                        chapter_id,
+                        text_revision,
+                        text,
+                        start_byte,
+                        end_byte,
+                    )
+                    .map_err(|error| error.to_string())
+                    .and_then(|suggestions| {
+                        serde_json::to_string(&suggestions)
+                            .map_err(|error| format!("无法编码校对结果: {error}"))
+                    });
+                completion(request_id, text_revision, result);
+            })
+            .map(|_| ())
+            .map_err(|error| format!("无法启动校对任务: {error}"))
+    }
 }

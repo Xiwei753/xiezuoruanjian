@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use jieba_rs::Jieba;
+use std::sync::OnceLock;
+
+static SHARED_JIEBA: OnceLock<Jieba> = OnceLock::new();
 
 /// A token and its UTF-8 byte range in the original input.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,7 +25,7 @@ pub(crate) struct TextSegment {
 /// token; Jieba's word output is only used for OOV detection.
 #[derive(Clone, Debug)]
 pub(crate) struct Segmenter {
-    jieba: Jieba,
+    jieba: &'static Jieba,
 }
 
 impl Default for Segmenter {
@@ -34,7 +37,7 @@ impl Default for Segmenter {
 impl Segmenter {
     pub(crate) fn new() -> Self {
         Self {
-            jieba: Jieba::new(),
+            jieba: SHARED_JIEBA.get_or_init(Jieba::new),
         }
     }
 

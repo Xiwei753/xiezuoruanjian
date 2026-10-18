@@ -190,6 +190,20 @@ pub struct EditorBackend {
             text: QString,
         )
     ),
+    /// Issue #943：对正文快照中的 UTF-8 byte 半开范围做后台增量检查。
+    #[allow(dead_code)]
+    request_correction_segment: qt_method!(
+        fn(
+            &mut self,
+            request_id: u32,
+            project_id: QString,
+            chapter_id: QString,
+            text_revision: u64,
+            text: QString,
+            start_byte: u32,
+            end_byte: u32,
+        )
+    ),
     #[allow(dead_code)]
     ignore_correction: qt_method!(
         fn(
@@ -613,6 +627,59 @@ impl EditorBackend {
                 chapter_id.to_string(),
                 text_revision,
                 text.to_string(),
+                completion,
+            )
+        });
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                self.correction_check_failed(request_id, text_revision, message.into());
+            }
+            Err(error) => {
+                self.correction_check_failed(request_id, text_revision, error.to_string().into());
+            }
+        }
+    }
+
+    fn request_correction_segment(
+        &mut self,
+        request_id: u32,
+        project_id: QString,
+        chapter_id: QString,
+        text_revision: u64,
+        text: QString,
+        start_byte: u32,
+        end_byte: u32,
+    ) {
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, text_revision, result): (u32, u64, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => {
+                            this.correction_check_ready(request_id, text_revision, json.into())
+                        }
+                        Err(message) => {
+                            this.correction_check_failed(request_id, text_revision, message.into())
+                        }
+                    }
+                }
+            },
+        );
+        let completion: super::correction_operations::CorrectionQueryCallback =
+            Box::new(move |request_id, text_revision, result| {
+                callback((request_id, text_revision, result));
+            });
+        let result = self.with_app(|app| {
+            app.request_correction_segment(
+                request_id,
+                project_id.to_string(),
+                chapter_id.to_string(),
+                text_revision,
+                text.to_string(),
+                start_byte,
+                end_byte,
                 completion,
             )
         });

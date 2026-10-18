@@ -60,10 +60,12 @@ crate. The detector asks the same Jieba instance used for segmentation whether
 a token is in that default dictionary.
 
 THUOCL remains the specialist source for correction candidate words and proper
-name evidence. Candidate ordering uses an explicit source priority and compares
-frequencies only inside the same source. A token absent from THUOCL is not by
-itself considered an error; OOV detection checks Jieba's general dictionary,
-explicit names, ignored terms, and author-protected project vocabulary.
+name evidence. The runtime retains each word's frequency separately for every
+THUOCL category; category IDs do not establish ranking priority, and a frequency
+comparison is made only when both candidates share a comparable source. A token
+absent from THUOCL is not by itself considered an error; OOV detection checks
+Jieba's general dictionary, explicit names, ignored terms, and author-protected
+project vocabulary.
 
 The generated word, name, and pronunciation files can be reproduced with
 `crates/sujian-proof/tools/build_correction_assets.py` by providing the
@@ -74,10 +76,11 @@ empty `ignored_words.txt` are intentionally maintained separately.
 Core reports whether the bundled lexicon is available and which optional
 user dictionary files are installed through `get_correction_resource_status`.
 User files below Core's app data root supplement the bundled data; word/name
-frequencies override matching built-in entries, confusion rules override
-matching typo keys, and pronunciation/stroke groups merge. Importing an asset
-copies it once to the persistent `correction-data/` directory; scans read the
-saved resource state rather than re-importing it.
+frequencies are retained under their own source (name frequencies replace a
+matching entry from the same name source), confusion rules override matching
+typo keys, and pronunciation/stroke groups merge. Importing an asset copies it
+once to the persistent `correction-data/` directory; scans read the saved
+resource state rather than re-importing it.
 
 - `word_freq.txt`, `person_name.txt`, `place_name.txt`: one `word frequency`
   pair per line; the frequency may be omitted.
@@ -96,8 +99,10 @@ Model-backed alternatives follow pycorrector's
 behavior: score the unchanged text together with replacements by perplexity,
 keep candidates within the default 57-point PPL tolerance of the best candidate,
 and do not flag the source as an error if it remains in that acceptable set.
-Perplexity differences rank suggestions; they are not confidence percentages.
-Fixed rules continue to run when no model has been configured.
+All generated candidates are scored before the configured per-error candidate
+limit is applied. Perplexity differences rank suggestions; they are not
+confidence percentages. Fixed rules continue to run when no model has been
+configured.
 
 ## Optional local dictionaries
 

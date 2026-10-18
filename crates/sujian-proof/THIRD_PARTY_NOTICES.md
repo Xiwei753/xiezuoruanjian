@@ -34,8 +34,10 @@ as this crate's third-party notice for the translated components.
   `a30ce79d895d01ab5132a5c74c29703ff7efb4cc`, MIT License, copyright
   THUNLP (2018). `assets/correction-data/thuocl_candidates.txt` preserves all
   eleven category-specific `word<TAB>THUOCL_category<TAB>frequency` rows;
-  duplicate words are coalesced by maximum only within the same category at
-  runtime, and category frequencies are never compared. `person_name.txt` uses
+  the runtime keeps each word's frequency by category, coalescing duplicates
+  with the maximum only within the same category. Category IDs do not set
+  ranking priority; frequency comparisons only use a shared source.
+  `person_name.txt` uses
   `data/THUOCL_lishimingren.txt`; `place_name.txt` uses
   `data/THUOCL_diming.txt`; and `proper_name.txt` is their union. The MIT text
   is included in `LICENSES/THUOCL-MIT.txt`. Required attribution: Han Shiyi,
@@ -49,7 +51,8 @@ as this crate's third-party notice for the translated components.
   `139519822fe8ab9e10d9d07e68ea0451045380aedaf54ecc51e2a28c6b42a13f`). It is
   queried in place by the segmenter's existing `Jieba` instance; no additional
   copy or transformed frequency file is bundled by this crate. The package
-  declares MIT and its license text is included above.
+  declares MIT and its license text is included above. The immutable base
+  lexicon/indexes and Jieba instance are shared across project snapshots.
 - Unicode Unihan: `assets/correction-data/same_pinyin.txt` is derived only from
   the `kMandarin` field of `Unihan_Readings.txt` in Unicode 18.0.0 `Unihan.zip`
   (SHA-256

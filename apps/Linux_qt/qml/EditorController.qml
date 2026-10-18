@@ -161,6 +161,13 @@ QtObject {
         }
     }
 
+    // Issue #943：输入停顿后仅检查光标所在句子，Core 会为语言模型补充邻近上下文。
+    property var correctionSegmentDebounceTimer: Timer {
+        interval: 500
+        repeat: false
+        onTriggered: controller.requestCorrectionSegment()
+    }
+
     // NOTE: sync is NOT triggered by save. Auto-sync has been removed
     // (Issue #729). This is intentional: save ≠ sync.
 
@@ -168,6 +175,7 @@ QtObject {
         target: targetEditorItem ? targetEditorItem : null
         function onText_changed() {
             controller.invalidateCorrectionResults();
+            controller.scheduleCorrectionSegment();
             controller.handlePlainTextChanged("sujian_editor_text_changed");
             Qt.callLater(targetEditorItem.flush_content_height);
         }
@@ -203,6 +211,7 @@ QtObject {
     }
 
     function invalidateCorrectionResults() {
+        correctionSegmentDebounceTimer.stop();
         correctionRequestSerial += 1;
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
         pendingCorrectionRequestId = correctionRequestSerial;
@@ -225,6 +234,8 @@ QtObject {
             correctionError = qsTr("当前版本不支持校对。");
             return;
         }
+
+        correctionSegmentDebounceTimer.stop();
 
         var snapshotText = getEditorPlainText();
         var revision = Number(targetEditorItem.text_revision);
@@ -249,6 +260,159 @@ QtObject {
             chapterId,
             revision,
             snapshotText);
+    }
+
+    // SujianEditorItem exposes its logical caret as a Unicode scalar count;
+    // QML string indices are UTF-16 code units. Convert through the same text
+    // snapshot before deriving any Core byte offsets.
+    function correctionUtf16OffsetForCharIndex(text, characterIndex) {
+        var target = Number(characterIndex);
+        if (!isFinite(target) || Math.floor(target) !== target || target < 0) {
+            throw new Error("无法读取当前光标位置");
+        }
+        var textIndex = 0;
+        var count = 0;
+        while (count < target && textIndex < text.length) {
+            var first = text.charCodeAt(textIndex);
+            if (first >= 0xD800 && first <= 0xDBFF) {
+                if (textIndex + 1 >= text.length) throw new Error("正文包含无效 UTF-16 代理项");
+                var second = text.charCodeAt(textIndex + 1);
+                if (second < 0xDC00 || second > 0xDFFF) throw new Error("正文包含无效 UTF-16 代理项");
+                textIndex += 2;
+            } else {
+                if (first >= 0xDC00 && first <= 0xDFFF) throw new Error("正文包含无效 UTF-16 代理项");
+                textIndex += 1;
+            }
+            count += 1;
+        }
+        if (count !== target) throw new Error("光标位置超出正文");
+        return textIndex;
+    }
+
+    function correctionUtf8ByteOffset(text, utf16Offset) {
+        var target = Number(utf16Offset);
+        if (!isFinite(target) || Math.floor(target) !== target || target < 0 || target > text.length) {
+            throw new Error("校对句子位置无效");
+        }
+        var textIndex = 0;
+        var byteOffset = 0;
+        while (textIndex < target) {
+            var first = text.charCodeAt(textIndex);
+            var codePoint = first;
+            var units = 1;
+            if (first >= 0xD800 && first <= 0xDBFF) {
+                if (textIndex + 1 >= text.length) throw new Error("正文包含无效 UTF-16 代理项");
+                var second = text.charCodeAt(textIndex + 1);
+                if (second < 0xDC00 || second > 0xDFFF) throw new Error("正文包含无效 UTF-16 代理项");
+                codePoint = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
+                units = 2;
+            } else if (first >= 0xDC00 && first <= 0xDFFF) {
+                throw new Error("正文包含无效 UTF-16 代理项");
+            }
+            if (textIndex + units > target) throw new Error("校对位置落在 UTF-16 代理项中间");
+            byteOffset += codePoint <= 0x7F ? 1
+                        : codePoint <= 0x7FF ? 2
+                        : codePoint <= 0xFFFF ? 3 : 4;
+            textIndex += units;
+        }
+        if (textIndex !== target) throw new Error("校对位置不是字符边界");
+        return byteOffset;
+    }
+
+    function correctionSentenceRange(text, cursorUtf16) {
+        var separators = ["。", "！", "？", "!", "?", ".", ";", "；", "…", "\n", "\r", "\u2028", "\u2029"];
+        var closingMarks = ["”", "’", "」", "』", "》", "】", ")", "）", "\"", "'"];
+        var rangeCursor = cursorUtf16;
+        var finishedSentenceEnd = -1;
+        var trailingIndex = cursorUtf16;
+        while (trailingIndex > 0 && closingMarks.indexOf(text.charAt(trailingIndex - 1)) >= 0) {
+            trailingIndex -= 1;
+        }
+        if (trailingIndex > 0 && separators.indexOf(text.charAt(trailingIndex - 1)) >= 0) {
+            rangeCursor = trailingIndex - 1;
+            finishedSentenceEnd = cursorUtf16;
+        }
+
+        var previousBoundary = -1;
+        var nextBoundary = text.length;
+        if (rangeCursor > 0) {
+            for (var leftIndex = 0; leftIndex < separators.length; leftIndex += 1) {
+                previousBoundary = Math.max(
+                    previousBoundary,
+                    text.lastIndexOf(separators[leftIndex], rangeCursor - 1));
+            }
+        }
+        if (finishedSentenceEnd >= 0) {
+            nextBoundary = rangeCursor;
+        } else {
+            for (var rightIndex = 0; rightIndex < separators.length; rightIndex += 1) {
+                var found = text.indexOf(separators[rightIndex], cursorUtf16);
+                if (found >= 0) nextBoundary = Math.min(nextBoundary, found);
+            }
+        }
+        return {
+            startUtf16: previousBoundary + 1,
+            endUtf16: finishedSentenceEnd >= 0
+                    ? finishedSentenceEnd
+                    : nextBoundary < text.length ? nextBoundary + 1 : text.length
+        };
+    }
+
+    function scheduleCorrectionSegment() {
+        if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
+        if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
+        correctionSegmentDebounceTimer.restart();
+    }
+
+    function requestCorrectionSegment() {
+        if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
+        if (!editorBackendRef.request_correction_segment) {
+            correctionError = qsTr("当前版本不支持实时校对。");
+            return;
+        }
+        if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
+
+        var snapshotText = getEditorPlainText();
+        if (snapshotText.length === 0) return;
+        var revision = Number(targetEditorItem.text_revision);
+        if (!isFinite(revision) || revision < 0) {
+            correctionError = qsTr("无法读取正文版本。");
+            return;
+        }
+
+        try {
+            var cursorUtf16 = correctionUtf16OffsetForCharIndex(
+                snapshotText, targetEditorItem.cursor_position);
+            var sentence = correctionSentenceRange(snapshotText, cursorUtf16);
+            var startByte = correctionUtf8ByteOffset(snapshotText, sentence.startUtf16);
+            var endByte = correctionUtf8ByteOffset(snapshotText, sentence.endUtf16);
+            if (startByte >= endByte) return;
+
+            correctionRequestSerial += 1;
+            if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
+            pendingCorrectionRequestId = correctionRequestSerial;
+            pendingCorrectionRevision = revision;
+            pendingCorrectionProjectId = projectId;
+            pendingCorrectionChapterId = chapterId;
+            pendingCorrectionText = snapshotText;
+            correctionSuggestions = [];
+            correctionError = "";
+            correctionStatus = qsTr("正在检查当前句子…");
+            correctionCheckPending = true;
+            editorBackendRef.request_correction_segment(
+                pendingCorrectionRequestId,
+                projectId,
+                chapterId,
+                revision,
+                snapshotText,
+                startByte,
+                endByte);
+        } catch (error) {
+            correctionCheckPending = false;
+            correctionSuggestions = [];
+            correctionError = String(error);
+            correctionStatus = "";
+        }
     }
 
     function correctionResponseIsCurrent(requestId, textRevision) {

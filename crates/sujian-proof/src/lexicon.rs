@@ -9,11 +9,13 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::SystemTime;
 
 // Behavioral port of pycorrector's detector/corrector dictionary loading
 // (Apache-2.0). Bundled and user-provided data are loaded by the same parsers.
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct LexiconPaths {
     pub word_freq: Option<PathBuf>,
     pub same_pinyin: Option<PathBuf>,
@@ -25,7 +27,7 @@ pub struct LexiconPaths {
     pub ignored_words: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum WordFrequencySource {
     UserDictionary,
     CustomConfusion,
@@ -33,7 +35,6 @@ enum WordFrequencySource {
     PlaceName,
     ProperName,
     Thuocl(u8),
-    Missing,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -44,7 +45,8 @@ struct WordFrequency {
 
 #[derive(Clone, Debug, Default)]
 pub struct Lexicon {
-    word_freq: HashMap<String, WordFrequency>,
+    base: Option<Arc<Lexicon>>,
+    word_freq: HashMap<String, Vec<WordFrequency>>,
     words_by_pinyin: HashMap<(usize, Vec<char>), Vec<String>>,
     same_pinyin: HashMap<char, HashSet<char>>,
     pinyin_representatives: HashMap<char, char>,
@@ -61,6 +63,44 @@ pub struct Lexicon {
     protected_word_index: ProtectedWordTrie,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct LexiconBaseCacheKey(Vec<(Option<PathBuf>, Option<u64>, Option<SystemTime>)>);
+
+static LEXICON_BASE_CACHE: OnceLock<Mutex<Option<(LexiconBaseCacheKey, Arc<Lexicon>)>>> =
+    OnceLock::new();
+
+fn lexicon_base_cache_key(paths: &LexiconPaths) -> io::Result<LexiconBaseCacheKey> {
+    let paths = [
+        paths.word_freq.as_ref(),
+        paths.same_pinyin.as_ref(),
+        paths.same_stroke.as_ref(),
+        paths.custom_confusion.as_ref(),
+        paths.person_name.as_ref(),
+        paths.place_name.as_ref(),
+        paths.proper_name.as_ref(),
+        paths.ignored_words.as_ref(),
+    ];
+    let mut key = Vec::with_capacity(paths.len());
+    for path in paths {
+        let Some(path) = path else {
+            key.push((None, None, None));
+            continue;
+        };
+        match std::fs::metadata(path) {
+            Ok(metadata) => key.push((
+                Some(path.clone()),
+                Some(metadata.len()),
+                metadata.modified().ok(),
+            )),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                key.push((Some(path.clone()), None, None));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(LexiconBaseCacheKey(key))
+}
+
 #[derive(Clone, Debug, Default)]
 struct ProtectedWordTrie {
     children: HashMap<char, ProtectedWordTrie>,
@@ -69,22 +109,52 @@ struct ProtectedWordTrie {
 
 impl Lexicon {
     pub fn from_paths(paths: &LexiconPaths) -> io::Result<Self> {
-        let mut lexicon = Self::from_embedded()?;
+        let key = lexicon_base_cache_key(paths)?;
+        let cache = LEXICON_BASE_CACHE.get_or_init(|| Mutex::new(None));
+        let mut cache = cache
+            .lock()
+            .map_err(|_| io::Error::other("correction lexicon base cache lock poisoned"))?;
+        let base = if let Some((cached_key, base)) = cache.as_ref() {
+            if *cached_key == key {
+                Arc::clone(base)
+            } else {
+                let mut base = Self::from_embedded()?;
+                base.load_paths(paths)?;
+                base.rebuild_candidate_indexes();
+                let base = Arc::new(base);
+                *cache = Some((key, Arc::clone(&base)));
+                base
+            }
+        } else {
+            let mut base = Self::from_embedded()?;
+            base.load_paths(paths)?;
+            base.rebuild_candidate_indexes();
+            let base = Arc::new(base);
+            *cache = Some((key, Arc::clone(&base)));
+            base
+        };
+        Ok(Self {
+            base: Some(base),
+            ..Self::default()
+        })
+    }
+
+    fn load_paths(&mut self, paths: &LexiconPaths) -> io::Result<()> {
         if let Some(path) = &paths.word_freq {
             for (word, frequency) in read_word_freq(path)? {
-                lexicon.insert_word_frequency(word, frequency);
+                self.insert_word_frequency(word, frequency);
             }
         }
         if let Some(path) = &paths.same_pinyin {
-            merge_character_groups(&mut lexicon.same_pinyin, read_same_pinyin(path)?);
+            merge_character_groups(&mut self.same_pinyin, read_same_pinyin(path)?);
         }
         if let Some(path) = &paths.same_stroke {
-            merge_character_groups(&mut lexicon.same_stroke, read_same_stroke(path)?);
+            merge_character_groups(&mut self.same_stroke, read_same_stroke(path)?);
         }
         if let Some(path) = &paths.custom_confusion {
             for (wrong, correct, frequency) in read_custom_confusion(path)? {
-                lexicon.insert_confusion(wrong, correct.clone());
-                lexicon.insert_word_frequency_from(
+                self.insert_confusion(wrong, correct.clone());
+                self.insert_word_frequency_from(
                     correct,
                     frequency,
                     WordFrequencySource::CustomConfusion,
@@ -94,8 +164,8 @@ impl Lexicon {
         if let Some(path) = &paths.person_name {
             let person_names = read_word_freq(path)?;
             for (word, frequency) in &person_names {
-                lexicon.person_names.insert(word.clone(), *frequency);
-                lexicon.insert_word_frequency_from(
+                self.person_names.insert(word.clone(), *frequency);
+                self.insert_word_frequency_from(
                     word.clone(),
                     *frequency,
                     WordFrequencySource::PersonName,
@@ -105,8 +175,8 @@ impl Lexicon {
         if let Some(path) = &paths.place_name {
             let place_names = read_word_freq(path)?;
             for (word, frequency) in &place_names {
-                lexicon.place_names.insert(word.clone(), *frequency);
-                lexicon.insert_word_frequency_from(
+                self.place_names.insert(word.clone(), *frequency);
+                self.insert_word_frequency_from(
                     word.clone(),
                     *frequency,
                     WordFrequencySource::PlaceName,
@@ -115,16 +185,15 @@ impl Lexicon {
         }
         if let Some(path) = &paths.proper_name {
             for name in read_word_set(path)? {
-                lexicon.insert_proper_name(name);
+                self.insert_proper_name(name);
             }
         }
         if let Some(path) = &paths.ignored_words {
             for word in read_word_set(path)? {
-                lexicon.insert_ignored_word(word);
+                self.insert_ignored_word(word);
             }
         }
-        lexicon.rebuild_candidate_indexes();
-        Ok(lexicon)
+        Ok(())
     }
 
     fn from_embedded() -> io::Result<Self> {
@@ -200,48 +269,38 @@ impl Lexicon {
         frequency: u64,
         source: WordFrequencySource,
     ) {
-        let char_len = word.chars().count();
-        match self.word_freq.get_mut(&word) {
-            Some(current) if current.source == source => {
-                if matches!(source, WordFrequencySource::Thuocl(_)) {
-                    current.value = current.value.max(frequency);
-                } else {
-                    current.value = frequency;
-                }
-                return;
+        let is_new_word = !self.word_freq.contains_key(&word)
+            && !self
+                .base
+                .as_ref()
+                .is_some_and(|base| base.word_freq.contains_key(&word));
+        let sources = self.word_freq.entry(word.clone()).or_default();
+        if let Some(current) = sources.iter_mut().find(|current| current.source == source) {
+            if matches!(source, WordFrequencySource::Thuocl(_)) {
+                current.value = current.value.max(frequency);
+            } else {
+                current.value = frequency;
             }
-            Some(current) if current.source < source => return,
-            Some(_) => {
-                self.word_freq.insert(
-                    word,
-                    WordFrequency {
-                        source,
-                        value: frequency,
-                    },
-                );
-                return;
-            }
-            None => {}
+            return;
         }
-        let signature = self.pinyin_signature(&word);
-        self.words_by_pinyin
-            .entry((char_len, signature))
-            .or_default()
-            .push(word.clone());
-        self.word_freq.insert(
-            word,
-            WordFrequency {
-                source,
-                value: frequency,
-            },
-        );
+        sources.push(WordFrequency {
+            source,
+            value: frequency,
+        });
+
+        if is_new_word {
+            let char_len = word.chars().count();
+            let signature = self.pinyin_signature(&word);
+            self.words_by_pinyin
+                .entry((char_len, signature))
+                .or_default()
+                .push(word);
+        }
     }
 
     pub fn insert_confusion(&mut self, wrong: String, correct: String) {
         self.custom_confusion.insert(wrong, correct.clone());
-        if !self.word_freq.contains_key(&correct) {
-            self.insert_word_frequency_from(correct, 1, WordFrequencySource::CustomConfusion);
-        }
+        self.insert_word_frequency_from(correct, 1, WordFrequencySource::CustomConfusion);
     }
 
     pub fn insert_proper_name(&mut self, name: String) {
@@ -249,9 +308,7 @@ impl Lexicon {
         if self.proper_names.insert(name.clone()) {
             self.index_proper_name(&name, char_len);
         }
-        if !self.word_freq.contains_key(&name) {
-            self.insert_word_frequency_from(name, 1, WordFrequencySource::ProperName);
-        }
+        self.insert_word_frequency_from(name, 1, WordFrequencySource::ProperName);
     }
 
     pub fn insert_ignored_word(&mut self, word: String) {
@@ -295,10 +352,21 @@ impl Lexicon {
             || self.proper_names.contains(word)
             || self.ignored_words.contains(word)
             || self.protected_words.contains(word)
+            || self.base.as_ref().is_some_and(|base| {
+                base.person_names.contains_key(word)
+                    || base.place_names.contains_key(word)
+                    || base.proper_names.contains(word)
+                    || base.ignored_words.contains(word)
+                    || base.protected_words.contains(word)
+            })
     }
 
     pub(crate) fn is_ignored(&self, word: &str) -> bool {
         self.ignored_words.contains(word)
+            || self
+                .base
+                .as_ref()
+                .is_some_and(|base| base.ignored_words.contains(word))
     }
 
     pub(crate) fn is_protected_name_component(&self, word: &str) -> bool {
@@ -306,15 +374,44 @@ impl Lexicon {
             || self.ignored_word_components.contains(word)
             || self.protected_words.contains(word)
             || self.protected_word_components.contains(word)
+            || self.base.as_ref().is_some_and(|base| {
+                base.ignored_words.contains(word)
+                    || base.ignored_word_components.contains(word)
+                    || base.protected_words.contains(word)
+                    || base.protected_word_components.contains(word)
+            })
     }
 
     /// Return merged UTF-8 byte ranges of protected entries and their
     /// 2–4-character windows found in `text`.
     pub(crate) fn protected_word_ranges(&self, text: &str) -> Vec<(usize, usize)> {
+        let mut ranges = self.protected_word_ranges_in(&self.protected_word_index, text);
+        if let Some(base) = &self.base {
+            ranges.extend(base.protected_word_ranges_in(&base.protected_word_index, text));
+        }
+        ranges.sort_unstable();
+        let mut merged = Vec::<(usize, usize)>::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            if let Some(last) = merged.last_mut() {
+                if start <= last.1 {
+                    last.1 = last.1.max(end);
+                    continue;
+                }
+            }
+            merged.push((start, end));
+        }
+        merged
+    }
+
+    fn protected_word_ranges_in(
+        &self,
+        index: &ProtectedWordTrie,
+        text: &str,
+    ) -> Vec<(usize, usize)> {
         let chars = text.char_indices().collect::<Vec<_>>();
         let mut ranges = Vec::new();
         for start in 0..chars.len() {
-            let Some(mut node) = self.protected_word_index.children.get(&chars[start].1) else {
+            let Some(mut node) = index.children.get(&chars[start].1) else {
                 continue;
             };
             for end in start..chars.len() {
@@ -331,56 +428,103 @@ impl Lexicon {
             }
         }
 
-        ranges.sort_unstable();
-        let mut merged = Vec::<(usize, usize)>::with_capacity(ranges.len());
-        for (start, end) in ranges {
-            if let Some(last) = merged.last_mut() {
-                if start <= last.1 {
-                    last.1 = last.1.max(end);
-                    continue;
-                }
-            }
-            merged.push((start, end));
-        }
-        merged
+        ranges
     }
 
     pub(crate) fn is_proper_name(&self, word: &str) -> bool {
         self.proper_names.contains(word)
+            || self
+                .base
+                .as_ref()
+                .is_some_and(|base| base.proper_names.contains(word))
     }
 
-    /// Compare candidates by explicit source precedence, then by frequency
-    /// only when both words use the same source. Counts from separate corpora
-    /// are never compared directly.
+    /// Compare frequency only if the candidates share exactly one source.
+    /// Frequencies from unrelated corpora/categories never establish priority.
     pub(crate) fn compare_word_frequency(&self, left: &str, right: &str) -> Ordering {
-        let left = self.word_freq.get(left).copied().unwrap_or(WordFrequency {
-            source: WordFrequencySource::Missing,
-            value: 0,
+        let left = self.word_frequency_sources(left);
+        let right = self.word_frequency_sources(right);
+        let mut shared = left.iter().filter_map(|left_source| {
+            right
+                .iter()
+                .find(|right_source| right_source.source == left_source.source)
+                .map(|right_source| (left_source.value, right_source.value))
         });
-        let right = self.word_freq.get(right).copied().unwrap_or(WordFrequency {
-            source: WordFrequencySource::Missing,
-            value: 0,
-        });
-        left.source
-            .cmp(&right.source)
-            .then_with(|| right.value.cmp(&left.value))
+        let Some((left_frequency, right_frequency)) = shared.next() else {
+            return Ordering::Equal;
+        };
+        if shared.next().is_some() {
+            return Ordering::Equal;
+        }
+        right_frequency.cmp(&left_frequency)
+    }
+
+    fn word_frequency_sources(&self, word: &str) -> Vec<WordFrequency> {
+        let mut sources = self
+            .base
+            .as_ref()
+            .and_then(|base| base.word_freq.get(word))
+            .cloned()
+            .unwrap_or_default();
+        if let Some(overlay) = self.word_freq.get(word) {
+            for frequency in overlay {
+                if let Some(existing) = sources
+                    .iter_mut()
+                    .find(|existing| existing.source == frequency.source)
+                {
+                    *existing = *frequency;
+                } else {
+                    sources.push(*frequency);
+                }
+            }
+        }
+        sources
     }
 
     pub(crate) fn confusion_target(&self, wrong: &str) -> Option<&str> {
-        self.custom_confusion.get(wrong).map(String::as_str)
+        self.custom_confusion
+            .get(wrong)
+            .or_else(|| {
+                self.base
+                    .as_ref()
+                    .and_then(|base| base.custom_confusion.get(wrong))
+            })
+            .map(String::as_str)
     }
 
     pub(crate) fn confusion_entries(&self) -> Vec<(String, String)> {
-        let mut entries = self
-            .custom_confusion
-            .iter()
-            .map(|(wrong, correct)| (wrong.clone(), correct.clone()))
+        let mut entries = self.custom_confusion.clone();
+        if let Some(base) = &self.base {
+            for (wrong, correct) in &base.custom_confusion {
+                entries
+                    .entry(wrong.clone())
+                    .or_insert_with(|| correct.clone());
+            }
+        }
+        let mut entries = entries
+            .into_iter()
+            .map(|(wrong, correct)| (wrong, correct))
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
         entries
     }
 
-    pub(crate) fn word_candidates_by_pinyin(&self, word: &str) -> impl Iterator<Item = &str> {
+    pub(crate) fn word_candidates_by_pinyin(
+        &self,
+        word: &str,
+    ) -> Box<dyn Iterator<Item = &str> + '_> {
+        let base_candidates: Box<dyn Iterator<Item = &str>> = if let Some(base) = &self.base {
+            Box::new(base.local_word_candidates_by_pinyin(word))
+        } else {
+            Box::new(std::iter::empty())
+        };
+        Box::new(base_candidates.chain(self.local_word_candidates_by_pinyin(word)))
+    }
+
+    fn local_word_candidates_by_pinyin<'a>(
+        &'a self,
+        word: &str,
+    ) -> impl Iterator<Item = &'a str> {
         let char_len = word.chars().count();
         let signature = self.pinyin_signature(word);
         self.words_by_pinyin
@@ -390,8 +534,21 @@ impl Lexicon {
     }
 
     pub(crate) fn near_proper_name_candidates<'a>(&'a self, source: &[char]) -> Vec<&'a str> {
-        let char_len = source.len();
         let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        if let Some(base) = &self.base {
+            candidates.extend(base.local_near_proper_name_candidates(source, &mut seen));
+        }
+        candidates.extend(self.local_near_proper_name_candidates(source, &mut seen));
+        candidates
+    }
+
+    fn local_near_proper_name_candidates<'a>(
+        &'a self,
+        source: &[char],
+        seen: &mut HashSet<&'a str>,
+    ) -> Vec<&'a str> {
+        let char_len = source.len();
         let mut candidates = Vec::new();
         for position in 0..char_len {
             let remainder = source
@@ -418,7 +575,13 @@ impl Lexicon {
         if let Some(same) = self.same_pinyin.get(&ch) {
             chars.extend(same.iter().copied());
         }
+        if let Some(same) = self.base.as_ref().and_then(|base| base.same_pinyin.get(&ch)) {
+            chars.extend(same.iter().copied());
+        }
         if let Some(same) = self.same_stroke.get(&ch) {
+            chars.extend(same.iter().copied());
+        }
+        if let Some(same) = self.base.as_ref().and_then(|base| base.same_stroke.get(&ch)) {
             chars.extend(same.iter().copied());
         }
         chars.remove(&ch);
@@ -429,6 +592,11 @@ impl Lexicon {
         self.same_pinyin
             .get(&left)
             .is_some_and(|chars| chars.contains(&right))
+            || self.base.as_ref().is_some_and(|base| {
+                base.same_pinyin
+                    .get(&left)
+                    .is_some_and(|chars| chars.contains(&right))
+            })
     }
 
     pub(crate) fn is_confusable(&self, left: char, right: char) -> bool {
@@ -437,11 +605,26 @@ impl Lexicon {
                 .same_stroke
                 .get(&left)
                 .is_some_and(|chars| chars.contains(&right))
+            || self.base.as_ref().is_some_and(|base| {
+                base.same_stroke
+                    .get(&left)
+                    .is_some_and(|chars| chars.contains(&right))
+            })
     }
 
     fn pinyin_signature(&self, word: &str) -> Vec<char> {
         word.chars()
-            .map(|ch| self.pinyin_representatives.get(&ch).copied().unwrap_or(ch))
+            .map(|ch| {
+                self.pinyin_representatives
+                    .get(&ch)
+                    .or_else(|| {
+                        self.base
+                            .as_ref()
+                            .and_then(|base| base.pinyin_representatives.get(&ch))
+                    })
+                    .copied()
+                    .unwrap_or(ch)
+            })
             .collect()
     }
 

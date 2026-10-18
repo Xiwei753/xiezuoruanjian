@@ -123,10 +123,12 @@ impl TraditionalCorrector {
                 continue;
             }
 
+            if self.config.max_candidates_per_error == 0 {
+                continue;
+            }
             let candidate_generator = CandidateGenerator::new(1);
-            let mut candidates = candidate_generator.generate(&suspect.original, &self.lexicon);
-            candidates.truncate(self.config.max_candidates_per_error);
-            if candidates.is_empty() || self.config.max_candidates_per_error == 0 {
+            let candidates = candidate_generator.generate(&suspect.original, &self.lexicon);
+            if candidates.is_empty() {
                 continue;
             }
 
@@ -163,6 +165,7 @@ impl TraditionalCorrector {
                     .total_cmp(&right.1)
                     .then_with(|| left.0.cmp(&right.0))
             });
+            ranked.truncate(self.config.max_candidates_per_error.saturating_add(1));
 
             let Some((_, best_ppl)) = ranked.first() else {
                 continue;

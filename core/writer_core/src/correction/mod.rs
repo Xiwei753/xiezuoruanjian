@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::SystemTime;
 
@@ -20,7 +21,7 @@ use crate::api::{
 
 mod engine;
 
-pub(crate) use engine::{scan_text, CorrectionScanner};
+pub(crate) use engine::{CorrectionScanner, scan_text};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,8 +67,15 @@ struct CorrectionStoreInner {
     path: PathBuf,
     preferences: Mutex<PersistedCorrectionPreferences>,
     once_ignored: Mutex<HashSet<OnceIgnoredDiagnostic>>,
+    active_project: Mutex<ActiveCorrectionProject>,
+    next_lexicon_version: AtomicU64,
     lexicons: Mutex<HashMap<String, CachedLexicon>>,
     engines: Mutex<HashMap<String, CachedCorrectionEngine>>,
+}
+
+struct ActiveCorrectionProject {
+    project_id: Option<String>,
+    generation: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,6 +160,11 @@ impl CorrectionStore {
                 path,
                 preferences: Mutex::new(preferences),
                 once_ignored: Mutex::new(HashSet::new()),
+                active_project: Mutex::new(ActiveCorrectionProject {
+                    project_id: None,
+                    generation: 0,
+                }),
+                next_lexicon_version: AtomicU64::new(1),
                 lexicons: Mutex::new(HashMap::new()),
                 engines: Mutex::new(HashMap::new()),
             });
@@ -338,6 +351,7 @@ impl CorrectionStore {
         &self,
         project_id: &str,
     ) -> Result<(u64, Arc<Lexicon>), WriterError> {
+        let project_generation = self.activate_project_cache(project_id)?;
         let dictionary_entries = self.dictionary_entries(project_id)?;
         let data_root = self
             .inner
@@ -371,14 +385,21 @@ impl CorrectionStore {
             ignored_words_stamp,
         ];
 
-        let mut cache = self
-            .inner
-            .lexicons
-            .lock()
-            .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))?;
-        if let Some(cached) = cache.get(project_id) {
-            if cached.files == files && cached.dictionary_entries == dictionary_entries {
-                return Ok((cached.version, Arc::clone(&cached.lexicon)));
+        {
+            let active_project = self.inner.active_project.lock().map_err(|_| {
+                WriterError::Other("active correction project lock poisoned".into())
+            })?;
+            if active_project.project_id.as_deref() == Some(project_id)
+                && active_project.generation == project_generation
+            {
+                let cache = self.inner.lexicons.lock().map_err(|_| {
+                    WriterError::Other("correction lexicon cache lock poisoned".into())
+                })?;
+                if let Some(cached) = cache.get(project_id) {
+                    if cached.files == files && cached.dictionary_entries == dictionary_entries {
+                        return Ok((cached.version, Arc::clone(&cached.lexicon)));
+                    }
+                }
             }
         }
 
@@ -397,13 +418,38 @@ impl CorrectionStore {
             lexicon.insert_protected_word(entry.clone());
         }
         let lexicon = Arc::new(lexicon);
-        let version = match cache.get(project_id) {
-            Some(cached) => cached
-                .version
-                .checked_add(1)
-                .ok_or_else(|| WriterError::Other("correction lexicon version exhausted".into()))?,
-            None => 1,
-        };
+
+        // File loading can overlap a switch to another project. In that case
+        // keep this snapshot local to the in-flight scanner instead of
+        // repopulating the strong cache for a project that is no longer active.
+        let active_project =
+            self.inner.active_project.lock().map_err(|_| {
+                WriterError::Other("active correction project lock poisoned".into())
+            })?;
+        if active_project.project_id.as_deref() != Some(project_id)
+            || active_project.generation != project_generation
+        {
+            return Ok((self.next_lexicon_version()?, lexicon));
+        }
+
+        let mut cache = self
+            .inner
+            .lexicons
+            .lock()
+            .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))?;
+        if let Some(cached) = cache.get(project_id) {
+            if cached.files == files && cached.dictionary_entries == dictionary_entries {
+                return Ok((cached.version, Arc::clone(&cached.lexicon)));
+            }
+        }
+
+        let version = self.next_lexicon_version()?;
+        let mut engines = self
+            .inner
+            .engines
+            .lock()
+            .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
+        engines.remove(project_id);
         cache.insert(
             project_id.to_string(),
             CachedLexicon {
@@ -414,6 +460,47 @@ impl CorrectionStore {
             },
         );
         Ok((version, lexicon))
+    }
+
+    fn activate_project_cache(&self, project_id: &str) -> Result<u64, WriterError> {
+        let mut active_project =
+            self.inner.active_project.lock().map_err(|_| {
+                WriterError::Other("active correction project lock poisoned".into())
+            })?;
+        if active_project.project_id.as_deref() == Some(project_id) {
+            return Ok(active_project.generation);
+        }
+        let generation = active_project.generation.checked_add(1).ok_or_else(|| {
+            WriterError::Other("active correction project generation exhausted".into())
+        })?;
+
+        // Keep the lock order consistent with cache publication. Dropping the
+        // maps releases idle projects immediately; scans already holding their
+        // own Arcs can finish without being interrupted.
+        let mut lexicons = self
+            .inner
+            .lexicons
+            .lock()
+            .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))?;
+        let mut engines = self
+            .inner
+            .engines
+            .lock()
+            .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
+        lexicons.clear();
+        engines.clear();
+        active_project.project_id = Some(project_id.to_string());
+        active_project.generation = generation;
+        Ok(generation)
+    }
+
+    fn next_lexicon_version(&self) -> Result<u64, WriterError> {
+        self.inner
+            .next_lexicon_version
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |version| {
+                version.checked_add(1)
+            })
+            .map_err(|_| WriterError::Other("correction lexicon version exhausted".into()))
     }
 
     pub(super) fn configured_model_snapshot(
@@ -447,6 +534,24 @@ impl CorrectionStore {
         lexicon_version: u64,
         model_path: Option<&Path>,
     ) -> Result<Option<Arc<CorrectionEngine>>, WriterError> {
+        let active_project =
+            self.inner.active_project.lock().map_err(|_| {
+                WriterError::Other("active correction project lock poisoned".into())
+            })?;
+        if active_project.project_id.as_deref() != Some(project_id) {
+            return Ok(None);
+        }
+        let lexicons = self
+            .inner
+            .lexicons
+            .lock()
+            .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))?;
+        if !lexicons
+            .get(project_id)
+            .is_some_and(|cached| cached.version == lexicon_version)
+        {
+            return Ok(None);
+        }
         let engines = self
             .inner
             .engines
@@ -481,6 +586,24 @@ impl CorrectionStore {
             .as_deref()
             .map(|path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
         if current_path != model_path {
+            return Ok(engine);
+        }
+        let active_project =
+            self.inner.active_project.lock().map_err(|_| {
+                WriterError::Other("active correction project lock poisoned".into())
+            })?;
+        if active_project.project_id.as_deref() != Some(project_id) {
+            return Ok(engine);
+        }
+        let lexicons = self
+            .inner
+            .lexicons
+            .lock()
+            .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))?;
+        if !lexicons
+            .get(project_id)
+            .is_some_and(|cached| cached.version == lexicon_version)
+        {
             return Ok(engine);
         }
         let mut engines = self
