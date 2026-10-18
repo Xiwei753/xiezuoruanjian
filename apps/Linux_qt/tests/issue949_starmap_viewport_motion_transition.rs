@@ -1213,3 +1213,97 @@ fn wheel_during_transition_keeps_the_visible_camera_following() {
         "未被打断时相机参数必须就是进场的 contentProgress / 出场的完整 progress，实际窗口:\n{cam_progress}"
     );
 }
+
+#[test]
+fn motion_frames_rerun_crossing_checks_only_after_wheel_retarget() {
+    // Issue #949 复核评论 6251370089：动画进行中反向滚轮跨 70%/60% 立即换层。
+    // retargetViewportMotion 只重锚相机；每帧推进后必须按**上一帧 / 本帧实际
+    // 显示**的 zoom 方向重跑既有 maybeEnterEmbedAt / maybeExitCanvas，而不是按
+    // 尚未显示的 pending 目标判定；命中后由既有路径 settle 取消本过渡、保留
+    // 这一帧镜头与鼠标锚点，再走 Core route + beginCanvasTransition。
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let frame = window_between(
+        &canvas,
+        "function applyMotionFrame(",
+        "function checkTransitionThresholds(",
+    );
+    assert!(
+        frame.contains("var previousZoom = zoomLevel")
+            && frame.contains("checkTransitionThresholds(previousZoom)"),
+        "每帧必须先记下上一帧的显示 zoom，再在相机推进后按这一帧的显示 zoom 判定，\
+         实际窗口:\n{frame}"
+    );
+    let camera_at = frame
+        .find("applyCamera(")
+        .expect("applyMotionFrame 必须更新相机");
+    let check_at = frame
+        .find("checkTransitionThresholds(previousZoom)")
+        .expect("applyMotionFrame 必须在相机推进后重跑穿越判定");
+    assert!(
+        check_at > camera_at,
+        "阈值判定必须发生在相机推进之后（用刚显示的这一帧，而不是未来的目标帧），\
+         实际窗口:\n{frame}"
+    );
+    assert_eq!(
+        count_occurrences(&frame, "checkTransitionThresholds("),
+        1,
+        "applyMotionFrame 每帧只允许通过唯一的 checkTransitionThresholds 判定一次"
+    );
+    assert_eq!(
+        count_occurrences(&canvas, "checkTransitionThresholds("),
+        2,
+        "阈值判定只能由 applyMotionFrame 调用（另一个是函数定义本身），不新增第二处入口"
+    );
+
+    let check = window_between(
+        &canvas,
+        "function checkTransitionThresholds(",
+        "function finishViewportMotion(",
+    );
+    assert!(
+        check.contains("!viewportMotion.active || !viewportMotion.userRetargeted"),
+        "只有收到过滚轮重定的演出才逐帧重跑穿越判定（按钮返回 / 双击进入这类纯演出\
+         自身的运动不是滚动意图），实际窗口:\n{check}"
+    );
+    assert!(
+        check.contains("var delta = zoomLevel - previousZoom")
+            && check.contains("if (delta > 0)")
+            && check.contains("maybeEnterEmbedAt(_zoomAnchorX, _zoomAnchorY)")
+            && check.contains("maybeExitCanvas()"),
+        "方向由显示帧变化决定：放大只评估进场、缩小只评估退场；复用既有 \
+         maybeEnterEmbedAt / maybeExitCanvas（沿用同一鼠标锚点），实际窗口:\n{check}"
+    );
+    for forbidden in [
+        "enter_starmap_embed",
+        "exit_starmap_canvas",
+        "applyCamera(",
+        "startZoomTween",
+        "settleViewportMotion(",
+        "beginCanvasTransition(",
+    ] {
+        assert!(
+            !check.contains(forbidden),
+            "阈值判定不得直接写 Core / 落镜头 / 自己起演出：换层必须交给既有 \
+             maybeEnterEmbedAt / maybeExitCanvas（内部先 settle 保留这一帧），\
+             实际窗口:\n{check}"
+        );
+    }
+
+    // 演出组件：重定标记由 retargetCamera 置位，新演出与取消都复位——保证
+    // 「相机更新、方向阈值判定、Core 切换」在一次启动里只发生一次。
+    let motion = strip_line_comments(&read_src(MOTION));
+    assert!(
+        motion.contains("property bool userRetargeted: false"),
+        "演出组件必须提供滚轮重定标记，供 Canvas 每帧判定是否允许换层"
+    );
+    let retarget = function_window(&motion, "function retargetCamera(", 700);
+    assert!(
+        retarget.contains("userRetargeted = true"),
+        "滚轮重定必须点亮该标记（这是「过渡期滚轮意图」的唯一来源），实际窗口:\n{retarget}"
+    );
+    assert_eq!(
+        count_occurrences(&motion, "userRetargeted = false"),
+        2,
+        "新一次演出（_begin）与 cancel() 都必须复位标记，防止同一条演出重复判定自己"
+    );
+}

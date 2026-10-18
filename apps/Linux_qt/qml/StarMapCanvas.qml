@@ -702,28 +702,56 @@ Item {
     function applyMotionFrame() {
         if (!viewportMotion.active)
             return
+        var previousZoom = zoomLevel
         var camProgress = viewportMotion.cameraProgress
         if (viewportMotion.entering) {
             var childCam = cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera,
                                       camProgress)
             applyCamera(childCam)
-            if (!outgoingStarmapId || !motionContext)
-                return
-            var parentCam = parentCameraForChild(childCam, motionContext)
-            outgoingZoom = parentCam.zoom
-            outgoingPanX = parentCam.panX
-            outgoingPanY = parentCam.panY
-            return
+            if (outgoingStarmapId && motionContext) {
+                var parentCam = parentCameraForChild(childCam, motionContext)
+                outgoingZoom = parentCam.zoom
+                outgoingPanX = parentCam.panX
+                outgoingPanY = parentCam.panY
+            }
+        } else {
+            var nextParentCam = cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera,
+                                           camProgress)
+            applyCamera(nextParentCam)
+            if (outgoingStarmapId && motionContext) {
+                var nextChildCam = childCameraForParent(nextParentCam, motionContext)
+                outgoingZoom = nextChildCam.zoom
+                outgoingPanX = nextChildCam.panX
+                outgoingPanY = nextChildCam.panY
+            }
         }
-        var nextParentCam = cameraLerp(viewportMotion.fromCamera, viewportMotion.toCamera,
-                                       camProgress)
-        applyCamera(nextParentCam)
-        if (!outgoingStarmapId || !motionContext)
+        checkTransitionThresholds(previousZoom)
+    }
+
+    // Issue #949 复核评论 6251370089：动画进行中反向滚轮跨 70%/60% 立即换层。
+    // 过渡期滚轮只把相机重锚到可见帧（retargetViewportMotion），这里在每帧相机
+    // 推进之后按**上一帧/本帧实际显示的 zoom** 的方向重跑既有的 maybeEnterEmbedAt
+    // / maybeExitCanvas 判定——不得按尚未显示的 pending 目标判定，方向由显示帧的
+    // 变化决定。只对收到过滚轮重定的演出生效（userRetargeted）：按钮返回 /
+    // 双击进入这类纯演出自身的运动不是滚动意图，不参与换层判定。
+    // 命中后走的就是现有路径：maybeExit / maybeEnter 内部先 settle 取消本过渡、
+    // 保留这一刻的镜头与鼠标锚点，再走 Core route + beginCanvasTransition 开启
+    // 新演出；新演出起点 _begin 会复位 userRetargeted，所以"相机更新、方向阈值
+    // 判定、Core 切换"这条链在一次启动里只发生一次，不会在 applyMotionFrame
+    // 启动下一次演出期间重复触发自己。同方向尚未越界时两个 maybe* 均返回 -1，
+    // 演出照常继续（只 retarget 相机）。
+    function checkTransitionThresholds(previousZoom) {
+        if (!viewportMotion.active || !viewportMotion.userRetargeted)
             return
-        var nextChildCam = childCameraForParent(nextParentCam, motionContext)
-        outgoingZoom = nextChildCam.zoom
-        outgoingPanX = nextChildCam.panX
-        outgoingPanY = nextChildCam.panY
+        if (!(previousZoom > 0) || !(zoomLevel > 0))
+            return
+        var delta = zoomLevel - previousZoom
+        if (Math.abs(delta) <= previousZoom * 1e-6)
+            return
+        if (delta > 0)
+            maybeEnterEmbedAt(_zoomAnchorX, _zoomAnchorY)
+        else
+            maybeExitCanvas()
     }
 
     // 过渡自然收尾（唯一时间线跑到 progress=1 的 finished 回调）：落最终镜头、

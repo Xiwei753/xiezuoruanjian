@@ -124,6 +124,12 @@ QtObject {
     //    参数改为"从重定进度起的剩余时间"——仍沿这一条进度线继续推进，不重启
     //    进度、不排队第二条动画，圆环（出场）与相机严格同参。──
     property real retargetAt: -1
+    // 本条演出是否收到过滚轮重定（Issue #949 复核评论 6251370089）：只有收到
+    // 滚轮重定的演出，才允许 Canvas 在每帧按实际显示镜头的方向重跑 70%/60%
+    // 穿越判定——按钮返回 / 双击进入这类纯演出自身的运动不是滚动意图，不得
+    // 触发换层；每次 beginEnter / beginExit（_begin）与 cancel() 都复位它，
+    // 同一条演出不会在启动下一次穿越后重复判定自己。
+    property bool userRetargeted: false
     readonly property real cameraProgress: {
         if (retargetAt < 0)
             return entering ? contentProgress : progress
@@ -201,6 +207,7 @@ QtObject {
         fromCamera = snapshotOf(fromCameraIn)
         toCamera = snapshotOf(toCameraIn)
         retargetAt = Math.max(0, Math.min(1, atProgress))
+        userRetargeted = true
     }
 
     function _begin(direction, outgoingCamera, incomingCamera, embedGeometry, outgoingRoute, incomingRoute) {
@@ -227,8 +234,10 @@ QtObject {
         exitRingEndRadius = embedScreenRadius
         childBounds = g.bounds || null
         fitScale = g.fitScale || 0
-        // 新一次演出从默认参数起步（进场 contentProgress / 出场 progress）。
+        // 新一次演出从默认参数起步（进场 contentProgress / 出场 progress），
+        // 滚轮重定标记一并复位。
         retargetAt = -1
+        userRetargeted = false
         active = true
         if (effectiveDuration <= 0) {
             // 系统关闭动画 / 有效时长为 0：直接完成到 1（不留半截演出）。
@@ -249,6 +258,7 @@ QtObject {
         active = false
         progress = 0
         retargetAt = -1
+        userRetargeted = false
         fromCamera = null
         toCamera = null
     }
