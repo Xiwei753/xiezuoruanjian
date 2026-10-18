@@ -1499,9 +1499,11 @@ interface WriterAppService {
     [Throws=WriterError]
     void set_correction_model_path(string path);
     [Throws=WriterError]
-    sequence<CorrectionSuggestionDto> check_correction_segment(u64 session_id, string project_id, string chapter_id, u64 text_revision, u32 start_byte, u32 end_byte);
+    CorrectionChapterSnapshotDto check_correction_segment(u64 session_id, string project_id, string chapter_id, u64 text_revision, u32 start_byte, u32 end_byte);
     [Throws=WriterError]
-    sequence<CorrectionSuggestionDto> check_correction_chapter(u64 session_id, string project_id, string chapter_id, u64 text_revision);
+    CorrectionChapterSnapshotDto check_correction_chapter(u64 session_id, string project_id, string chapter_id, u64 text_revision);
+    [Throws=WriterError]
+    CorrectionChapterSnapshotDto get_correction_chapter_snapshot(u64 session_id, string project_id, string chapter_id, u64 text_revision);
     [Throws=WriterError]
     boolean ignore_correction(string project_id, string chapter_id, string rule_id, string original, CorrectionIgnoreScopeDto scope, u64 text_revision, u32 start_byte, u32 end_byte);
     [Throws=WriterError]
@@ -1691,6 +1693,17 @@ dictionary CorrectionSuggestionDto {
     string rule_id;
     string severity;
     u64 text_revision;
+};
+
+dictionary CorrectionCheckedRangeDto {
+    u32 start_byte;
+    u32 end_byte;
+};
+
+dictionary CorrectionChapterSnapshotDto {
+    u64 text_revision;
+    sequence<CorrectionSuggestionDto> suggestions;
+    sequence<CorrectionCheckedRangeDto> checked_ranges;
 };
 
 dictionary CorrectionResourceStatusDto {

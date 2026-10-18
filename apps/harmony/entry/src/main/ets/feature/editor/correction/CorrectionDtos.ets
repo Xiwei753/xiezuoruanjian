@@ -12,6 +12,23 @@ export interface CorrectionSuggestionDto {
   textRevision: number
 }
 
+/** One chapter byte range Core verified against the current text. */
+export interface CorrectionCheckedRangeDto {
+  startByte: number
+  endByte: number
+}
+
+/**
+ * Core merged chapter snapshot (issue #954). Suggestions are repositioned to the
+ * requested revision; unchanged segments reuse cached results without rerunning
+ * the model. checkedRanges lists ranges already verified against current text.
+ */
+export interface CorrectionChapterSnapshotDto {
+  textRevision: number
+  suggestions: CorrectionSuggestionDto[]
+  checkedRanges: CorrectionCheckedRangeDto[]
+}
+
 export interface CorrectionResourceStatusDto {
   modelConfigured: boolean
   modelFileAvailable: boolean
@@ -72,19 +89,56 @@ function decodeSuggestion(value: Object, index: number): DecodeResult<Correction
   }
 }
 
-export function decodeCorrectionSuggestions(data: Object): DecodeResult<CorrectionSuggestionDto[]> {
-  if (!Array.isArray(data)) {
-    return { ok: false, error: 'data: expected CorrectionSuggestionDto[]' }
+function decodeCheckedRange(value: Object, index: number): DecodeResult<CorrectionCheckedRangeDto> {
+  if (!isRecord(value)) {
+    return { ok: false, error: `checkedRanges[${index}]: expected object` }
+  }
+  const record = value as Record<string, Object>
+  const startByte = record['startByte']
+  const endByte = record['endByte']
+  if (typeof startByte !== 'number' || typeof endByte !== 'number') {
+    return { ok: false, error: `checkedRanges[${index}]: invalid CorrectionCheckedRangeDto fields` }
+  }
+  return { ok: true, value: { startByte: startByte, endByte: endByte } }
+}
+
+/** Strict decoder for the Core merged chapter snapshot returned by every correction check. */
+export function decodeCorrectionChapterSnapshot(data: Object): DecodeResult<CorrectionChapterSnapshotDto> {
+  if (!isRecord(data)) {
+    return { ok: false, error: 'data: expected CorrectionChapterSnapshotDto' }
+  }
+  const record = data as Record<string, Object>
+  const textRevision = record['textRevision']
+  const suggestionsValue = record['suggestions']
+  const checkedRangesValue = record['checkedRanges']
+  if (typeof textRevision !== 'number' || !Array.isArray(suggestionsValue) ||
+      !Array.isArray(checkedRangesValue)) {
+    return { ok: false, error: 'data: invalid CorrectionChapterSnapshotDto fields' }
   }
   const suggestions: CorrectionSuggestionDto[] = []
-  for (let i = 0; i < data.length; i++) {
-    const decoded = decodeSuggestion(data[i], i)
+  for (let i = 0; i < suggestionsValue.length; i++) {
+    const decoded = decodeSuggestion(suggestionsValue[i], i)
     if (!decoded.ok || decoded.value === undefined) {
       return { ok: false, error: decoded.error ?? `suggestions[${i}]: decode failed` }
     }
     suggestions.push(decoded.value)
   }
-  return { ok: true, value: suggestions }
+  const checkedRanges: CorrectionCheckedRangeDto[] = []
+  for (let i = 0; i < checkedRangesValue.length; i++) {
+    const decoded = decodeCheckedRange(checkedRangesValue[i], i)
+    if (!decoded.ok || decoded.value === undefined) {
+      return { ok: false, error: decoded.error ?? `checkedRanges[${i}]: decode failed` }
+    }
+    checkedRanges.push(decoded.value)
+  }
+  return {
+    ok: true,
+    value: {
+      textRevision: textRevision,
+      suggestions: suggestions,
+      checkedRanges: checkedRanges
+    }
+  }
 }
 
 export function decodeCorrectionResourceStatus(data: Object): DecodeResult<CorrectionResourceStatusDto> {

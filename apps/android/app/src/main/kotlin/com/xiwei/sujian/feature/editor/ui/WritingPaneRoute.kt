@@ -691,8 +691,12 @@ private fun SetupCorrectionRequests(
                 composing = bridge.state.composition != null,
             )
         }.collectLatest { snapshot ->
-            viewModel.clearCorrectionSuggestions(targetId)
-            if (snapshot.composing) return@collectLatest
+            if (snapshot.composing) {
+                viewModel.clearCorrectionSuggestions(targetId)
+                return@collectLatest
+            }
+            // 先恢复 Core 缓存结果（章节打开/编辑后即时显示已检查的波浪线），再防抖补算脏区。
+            viewModel.restoreCorrectionSnapshot(targetId)
             kotlinx.coroutines.delay(450)
             val range = sentenceRangeAroundCaret(snapshot.text, snapshot.caretUtf16) ?: return@collectLatest
             val startByte = TextOffsetUtils.utf8OffsetForCharIndex(snapshot.text, range.first)

@@ -20,8 +20,12 @@ use crate::api::{
 };
 
 mod engine;
+mod result_cache;
 
-pub(crate) use engine::{CorrectionScanner, scan_text};
+pub(crate) use engine::CorrectionScanner;
+use result_cache::{
+    cache_file_name, modified_stamp, parts_fingerprint, ChapterCorrectionCacheState,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +67,9 @@ struct PersistedCorrectionPreferences {
     projects: BTreeMap<String, ProjectCorrectionPreferences>,
 }
 
+type ChapterResultCacheRegistry =
+    HashMap<(String, String), Arc<Mutex<ChapterCorrectionCacheState>>>;
+
 struct CorrectionStoreInner {
     path: PathBuf,
     preferences: Mutex<PersistedCorrectionPreferences>,
@@ -71,6 +78,7 @@ struct CorrectionStoreInner {
     next_lexicon_version: AtomicU64,
     lexicons: Mutex<HashMap<String, CachedLexicon>>,
     engines: Mutex<HashMap<String, CachedCorrectionEngine>>,
+    result_caches: Mutex<ChapterResultCacheRegistry>,
 }
 
 struct ActiveCorrectionProject {
@@ -167,6 +175,7 @@ impl CorrectionStore {
                 next_lexicon_version: AtomicU64::new(1),
                 lexicons: Mutex::new(HashMap::new()),
                 engines: Mutex::new(HashMap::new()),
+                result_caches: Mutex::new(HashMap::new()),
             });
             stores.insert(key, Arc::clone(&inner));
             inner
@@ -342,6 +351,86 @@ impl CorrectionStore {
             .unwrap_or_default())
     }
 
+    /// Root directory for per-chapter correction result caches. The cache holds
+    /// derived data only; it never stores chapter text and never syncs.
+    fn result_cache_dir(&self) -> PathBuf {
+        self.inner
+            .path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("correction-cache")
+    }
+
+    /// Process-shared state for one chapter's correction result cache.
+    pub(super) fn chapter_result_cache(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+    ) -> Result<Arc<Mutex<ChapterCorrectionCacheState>>, WriterError> {
+        let key = (project_id.to_string(), chapter_id.to_string());
+        let mut caches = self.inner.result_caches.lock().map_err(|_| {
+            WriterError::Other("correction result cache registry lock poisoned".into())
+        })?;
+        if let Some(existing) = caches.get(&key) {
+            return Ok(Arc::clone(existing));
+        }
+        let path = self
+            .result_cache_dir()
+            .join(cache_file_name(project_id, chapter_id));
+        let state = Arc::new(Mutex::new(ChapterCorrectionCacheState::load(path)));
+        caches.insert(key, Arc::clone(&state));
+        Ok(state)
+    }
+
+    /// Stable identity of everything that changes scan results except the text
+    /// itself: the model file, the lexicon files, and project dictionary
+    /// entries. Ignore choices are applied when a snapshot is assembled and are
+    /// deliberately excluded so they never force a rescan.
+    pub(super) fn scanner_fingerprint(&self, project_id: &str) -> Result<String, WriterError> {
+        let model_path = {
+            let guard =
+                self.inner.preferences.lock().map_err(|_| {
+                    WriterError::Other("correction preferences lock poisoned".into())
+                })?;
+            guard.model_path.clone()
+        };
+        let mut parts = vec![
+            "correction-scanner-v1".to_string(),
+            model_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "no-model".to_string()),
+        ];
+        if let Some(path) = &model_path {
+            match std::fs::metadata(path) {
+                Ok(metadata) => parts.push(format!(
+                    "model:{}:{}",
+                    metadata.len(),
+                    modified_stamp(metadata.modified().ok())
+                )),
+                Err(_) => parts.push("model:missing".to_string()),
+            }
+        }
+        let data_root = self
+            .inner
+            .path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("correction-data");
+        for name in CORRECTION_DICTIONARY_FILES {
+            let (_, stamp) = optional_lexicon_file(&data_root, name)?;
+            parts.push(format!(
+                "lexicon:{name}:{:?}:{}",
+                stamp.len,
+                modified_stamp(stamp.modified)
+            ));
+        }
+        for entry in self.dictionary_entries(project_id)? {
+            parts.push(format!("dictionary:{entry}"));
+        }
+        Ok(parts_fingerprint(&parts))
+    }
+
     pub fn lexicon_for_project(&self, project_id: &str) -> Result<Arc<Lexicon>, WriterError> {
         self.lexicon_snapshot_for_project(project_id)
             .map(|(_, lexicon)| lexicon)
@@ -487,8 +576,12 @@ impl CorrectionStore {
             .engines
             .lock()
             .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
+        let mut result_caches = self.inner.result_caches.lock().map_err(|_| {
+            WriterError::Other("correction result cache registry lock poisoned".into())
+        })?;
         lexicons.clear();
         engines.clear();
+        result_caches.retain(|(cached_project, _), _| cached_project.as_str() == project_id);
         active_project.project_id = Some(project_id.to_string());
         active_project.generation = generation;
         Ok(generation)
