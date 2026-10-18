@@ -15,10 +15,19 @@
 //!    `AppSyncState.status` 猜。
 //! 2. `SyncPage` 结果区只有一个优先级：本轮运行中 > 本轮操作（operation_id 过滤）
 //!    终态 > Core 持久化历史；历史时间戳按本地时间显示「上次同步（…）」。
-//! 3. 没有 FullSyncReport 时不猜测失败原因：用 full_sync_state 说明历史状态与
-//!    失败 target，并明确「历史记录没有分组详情」，不再回退到笼统的「同步失败」。
+//! 3. 没有 FullSyncReport（或报告不属于最后尝试那一轮）时不猜测失败原因：用
+//!    full_sync_state 说明历史状态与失败 target，并明确「历史记录没有分组详情」，
+//!    不再回退到笼统的「同步失败」。
 //! 4. 持久报告与诊断导出同源：导出附件仍直读 Core 的 full_sync_state /
 //!    last_report，Qt 侧不另存第二份同步历史。
+//!
+//! 2026-10-18 复核轮补强（评审结论「暂不可关闭」）：
+//! - `updatePersistedSyncReportText` 开头必须有「报告属于最近一次」门禁，
+//!   日期对不上/解析异常都退回 `updateHistorySyncResultText` 历史文案；
+//! - `opIsCurrent` 只有非空 `activeOperationId` + operation_id 相等 +
+//!   operation_kind 相等才算本轮，空 ID 不通配后端残留操作；
+//! - 「运行诊断」按钮的 `activeOperationKind` 必须是后端实际返回的
+//!   `"diagnose"`（不是试运行的 `"dry_run"`）。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -192,7 +201,7 @@ fn sync_completion_notifies_and_logs_report_gap() {
 #[test]
 fn sync_result_priority_running_then_current_then_history() {
     let src = read_src(SYNC_PAGE);
-    let func = window_from(&src, "function updateSyncResultText()", 2100);
+    let func = window_from(&src, "function updateSyncResultText()", 2600);
 
     let running = func
         .find("if (root.currentSyncInProgress)")
@@ -213,8 +222,16 @@ fn sync_result_priority_running_then_current_then_history() {
     );
 
     assert!(
-        func.contains("\"\" || obj.operation_id === root.activeOperationId"),
-        "必须保留按 operation_id 过滤本轮操作的机制，实际窗口:\n{func}"
+        func.contains("root.activeOperationId !== \"\""),
+        "空 activeOperationId 表示本页没有可归属的操作，不得通配后端残留操作，实际窗口:\n{func}"
+    );
+    assert!(
+        func.contains("obj.operation_id === root.activeOperationId"),
+        "本轮过滤必须精确比较 operation_id，实际窗口:\n{func}"
+    );
+    assert!(
+        func.contains("obj.operation_kind === root.activeOperationKind"),
+        "本轮过滤必须精确比较 operation_kind（诊断/试运行不得冒充本轮同步），实际窗口:\n{func}"
     );
     assert!(
         func.contains("root.applyOperationStateText(obj)"),
@@ -245,10 +262,37 @@ fn new_operation_result_replaces_history() {
         "点击执行同步必须标记操作类型，实际窗口:\n{click}"
     );
 
-    let func = window_from(&src, "function updateSyncResultText()", 2400);
+    let func = window_from(&src, "function updateSyncResultText()", 2600);
     assert!(
         !func.replace('\n', " ").contains("\"同步状态解析失败\""),
         "本轮操作状态解析失败不应当作结果文字覆盖，实际窗口:\n{func}"
+    );
+}
+
+/// 「运行诊断」按钮的 activeOperationKind 必须与后端实际返回的 operation_kind 一致。
+#[test]
+fn diagnose_button_kind_matches_backend_diagnose_literal() {
+    let src = read_src(SYNC_PAGE);
+    let click = window_from(&src, "text: qsTr(\"运行诊断\")", 1600);
+    assert!(
+        click.contains("perform_sync_diagnostics()"),
+        "运行诊断按钮必须调用后端诊断入口，实际窗口:\n{click}"
+    );
+    assert!(
+        click.contains("root.activeOperationKind = \"diagnose\""),
+        "运行诊断的 activeOperationKind 必须写后端实际返回的 \"diagnose\"，实际窗口:\n{click}"
+    );
+    let stripped = strip_line_comments(&src);
+    assert!(
+        !stripped.contains("activeOperationKind = \"dry_run\""),
+        "诊断与试运行是两种操作，QML 不得把诊断标成 \"dry_run\""
+    );
+
+    let backend = read_src(BACKEND);
+    let diagnose = window_from(&backend, "pub(crate) fn perform_sync_diagnostics(", 3000);
+    assert!(
+        diagnose.contains("operation_kind: \"diagnose\""),
+        "后端诊断操作的 operation_kind 事实来源是 \"diagnose\"，实际窗口:\n{diagnose}"
     );
 }
 
@@ -256,17 +300,50 @@ fn new_operation_result_replaces_history() {
 #[test]
 fn persisted_report_overrides_only_when_it_belongs_to_latest_attempt() {
     let src = read_src(SYNC_PAGE);
-    let func = window_from(&src, "function updateSyncResultText()", 2400);
+    let func = window_from(&src, "function updateSyncResultText()", 2600);
     assert!(
         func.contains("obj.operation_kind === \"sync\"")
             && func.contains("root.syncReportBelongsToLatestAttempt()"),
         "本轮同步用报告详情覆盖终态前，必须确认报告属于最后这一轮，实际窗口:\n{func}"
     );
 
-    let guard = window_from(&src, "function syncReportBelongsToLatestAttempt()", 900);
+    let guard = window_from(&src, "function syncReportBelongsToLatestAttempt()", 1900);
     assert!(
         guard.contains("report.attempted_at") && guard.contains("state.last_attempt_time"),
         "必须比较报告 attempted_at 与 Core 记录的 last_attempt_time，实际窗口:\n{guard}"
+    );
+    assert!(
+        guard.contains("report.attempted_at <= 0") && guard.contains("state.last_attempt_time <= 0"),
+        "attempted_at / last_attempt_time 缺失或为 0（无历史）必须按不属于本轮处理，\
+         实际窗口:\n{guard}"
+    );
+}
+
+/// 持久报告展示前必须有「报告属于最近一次」门禁，失败/解析异常退回历史文案。
+#[test]
+fn persisted_report_requires_latest_attempt_gate() {
+    let src = read_src(SYNC_PAGE);
+    let func = window_from(&src, "function updatePersistedSyncReportText()", 800);
+    let gate = func
+        .find("root.syncReportBelongsToLatestAttempt()")
+        .unwrap_or_else(|| panic!("开头必须有属于最近一次的门禁，实际窗口:\n{func}"));
+    let body = func
+        .find("JSON.parse(root.lastSyncReport)")
+        .unwrap_or_else(|| panic!("门禁之后解析报告 JSON，实际窗口:\n{func}"));
+    assert!(
+        gate < body,
+        "门禁必须在解析/展示报告详情之前，实际窗口:\n{func}"
+    );
+    let gate_window = &func[gate..body];
+    assert!(
+        gate_window.contains("root.updateHistorySyncResultText()"),
+        "门禁不通过（日期对不上/缺 lastFullSyncState）必须退回历史文案，实际窗口:\n{gate_window}"
+    );
+
+    let parse = window_from(&func, "JSON.parse(root.lastSyncReport)", 260);
+    assert!(
+        parse.contains("root.updateHistorySyncResultText()"),
+        "报告解析异常必须退回历史文案，不得继续展示，实际窗口:\n{parse}"
     );
 }
 
@@ -337,7 +414,7 @@ fn history_text_uses_core_full_sync_state_facts() {
 #[test]
 fn missing_report_explains_absent_group_detail() {
     let src = read_src(SYNC_PAGE);
-    let func = window_from(&src, "function updatePersistedSyncReportText()", 2200);
+    let func = window_from(&src, "function updatePersistedSyncReportText()", 2800);
     let no_report = func
         .find("if (!report)")
         .unwrap_or_else(|| panic!("必须有报告为空的处理分支，实际窗口:\n{func}"));
@@ -384,7 +461,7 @@ fn refresh_local_state_does_not_render_history_as_fresh_failure() {
 #[test]
 fn persisted_report_detail_is_preserved() {
     let src = read_src(SYNC_PAGE);
-    let func = window_from(&src, "function updatePersistedSyncReportText()", 2200);
+    let func = window_from(&src, "function updatePersistedSyncReportText()", 2800);
     for marker in [
         "report.completed_groups",
         "report.failed_groups",

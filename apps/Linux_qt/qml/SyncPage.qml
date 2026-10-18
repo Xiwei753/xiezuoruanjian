@@ -213,8 +213,13 @@ ColumnLayout {
                 if (typeof window !== "undefined" && typeof window.debugWarn === "function") window.debugWarn("sync", "operation_state_json_error", e.toString())
             }
         }
-        // 按 operation_id 过滤本轮操作（未发起过操作时 activeOperationId 为空）。
-        var opIsCurrent = obj !== null && (root.activeOperationId === "" || obj.operation_id === root.activeOperationId)
+        // Issue #948 复核：activeOperationId 为空表示当前页面没有发起可归属的操作，
+        // 不能把后端同一进程内残留的上一条操作（诊断/试运行/早前手动同步）当成"本轮"。
+        // 只有 operation_id 与 operation_kind 都命中当前页面发起的操作，才进入本轮终态。
+        var opIsCurrent = obj !== null
+            && root.activeOperationId !== ""
+            && obj.operation_id === root.activeOperationId
+            && obj.operation_kind === root.activeOperationKind
 
         // 优先级 1：本轮同步正在运行 —— 显示实际运行阶段。
         if (root.currentSyncInProgress) {
@@ -271,7 +276,11 @@ ColumnLayout {
         try { state = JSON.parse(root.lastFullSyncState) } catch(e) { return false }
         if (!report || !state)
             return false
-        if (typeof report.attempted_at !== "number" || typeof state.last_attempt_time !== "number")
+        // Issue #948 复核：attempted_at / last_attempt_time 缺失（null）或为 0（无历史）
+        // 都按「不属于本轮」处理，退回历史文案；0 与 0 不能互相匹配成本轮。
+        if (typeof report.attempted_at !== "number" || report.attempted_at <= 0)
+            return false
+        if (typeof state.last_attempt_time !== "number" || state.last_attempt_time <= 0)
             return false
         // 同一轮写入的两个 Unix 秒时间戳，允许 1 秒取整误差。
         return Math.abs(report.attempted_at - state.last_attempt_time) <= 1
@@ -279,14 +288,27 @@ ColumnLayout {
 
     /// 持久同步结果的展示（只在本轮没有运行/终态时使用）。
     ///
-    /// - 最新 FullSyncReport 存在：显示 completed_groups/failed_groups 与每条
-    ///   failure 的 group_id/path/phase/error_category/detail。
+    /// - 先经 `syncReportBelongsToLatestAttempt()` 门禁：最新报告不属于最后尝试
+    ///   那一轮（或 lastFullSyncState 缺失、时间对不上）时直接退回历史文案，
+    ///   不让旧轮报告冒充最新结果。
+    /// - 最新 FullSyncReport 存在且属于最后尝试那一轮：显示 completed_groups/
+    ///   failed_groups 与每条 failure 的 group_id/path/phase/error_category/detail。
     /// - 报告为空（旧格式历史，或本轮没有写出报告）：用 Core 持久化的
     ///   full_sync_state 明确历史状态与失败 target，并说明「历史记录没有分组详情」，
     ///   不用笼统的「同步失败」冒充结果，也不猜测失败原因。
     function updatePersistedSyncReportText() {
+        // Issue #948 复核：最新一次同步失败未写出报告、旧报告却仍存在时，
+        // 重新打开设置页不能把旧轮报告显示成最新结果 —— 以 lastFullSyncState 为准。
+        if (!root.syncReportBelongsToLatestAttempt()) {
+            root.updateHistorySyncResultText()
+            return
+        }
         var report = null
-        try { report = JSON.parse(root.lastSyncReport) } catch(e) {}
+        try { report = JSON.parse(root.lastSyncReport) } catch(e) {
+            // 解析异常（含 lastSyncReport 为空串）同样退回 full_sync_state 历史文案。
+            root.updateHistorySyncResultText()
+            return
+        }
         if (!report) {
             root.updateHistorySyncResultText()
             return
@@ -728,7 +750,10 @@ ColumnLayout {
                 if (root.syncBackendRef) {
                     var opId = root.syncBackendRef.perform_sync_diagnostics()
                     root.activeOperationId = opId
-                    root.activeOperationKind = "dry_run"
+                    // Issue #948 复核：perform_sync_diagnostics 返回的 operation_kind 是
+                    // "diagnose"（sync_backend.rs 的 SyncOperationStateDto），不是试运行的
+                    // "dry_run"（sync_operations/dry_run.rs），两者不能混用，否则本轮过滤永远不命中。
+                    root.activeOperationKind = "diagnose"
                     // 如果 opId 为空，显示即时错误
                     if (!opId || opId.length === 0) {
                         root.resultText = root.syncBackendRef.sync_operation_state || qsTr("诊断启动失败")
