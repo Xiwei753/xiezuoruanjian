@@ -1,5 +1,6 @@
 use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
 use super::qt_text_node::AnimationClipRect;
+use super::text_decorations::TextDecorationGeometry;
 use super::text_motion::{ClipDirection, MotionKind};
 use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
@@ -76,6 +77,8 @@ pub(crate) struct PreparedEditorFrame {
     pub layout_snapshot: LayoutSnapshot,
     /// 从同一个 snapshot 算好的选区/preedit 文档坐标几何（不含颜色/scroll_y）。
     pub selection_preedit: SelectionPreeditPlan,
+    /// 同一 layout generation 上的文档坐标装饰几何；只绘制当前视口附近行。
+    pub text_decorations: TextDecorationGeometry,
 }
 
 #[derive(Clone, Debug)]
@@ -202,6 +205,8 @@ pub struct RenderPlan {
     // 光标采样在 CursorController 内完成，RenderPlan 只保存最终要显示的位置。
     pub(crate) local_text: LocalTextPlan,
     pub(crate) selection_preedit: SelectionPreeditPlan,
+    /// GUI 线程预备好的独立文字装饰；渲染线程只更新 child[3] 的几何。
+    pub(crate) text_decorations: TextDecorationGeometry,
     /// Issue #679 评论 5657313927: 改为纯显示数据 CursorRenderState，
     /// 不再携带 CursorAnimationPlan（Snap/Tween/driver 由 GUI 线程消费）。
     pub(crate) cursor: CursorRenderState,

@@ -298,7 +298,7 @@ impl QQuickItem for SujianEditorItem {
         // Issue #677 评论 5653315696: 先取得或创建 editor root。
         // 第一帧旧节点为 null 时，ensure_editor_root 创建新的 QSGTransformNode 根节点，
         // 不再因为 root 为空就整帧跳过渲染。这把"根节点是否为空"的判断从
-        // ensure_four_layer_nodes 收口到 ensure_editor_root。
+        // ensure_five_layer_nodes 收口到 ensure_editor_root。
         // Issue #677 评论 5653790560: 不再通过 into_raw / from_raw 做所有权往返，
         // 直接读写 node.raw（SGNode.raw 是 pub 字段）。第一帧 node.raw 为 null 时
         // ensure_editor_root 创建根节点并写回 node.raw；后续渲染统一用 node.raw。
@@ -306,7 +306,7 @@ impl QQuickItem for SujianEditorItem {
         let editor_root = node.raw;
 
         if !editor_root.is_null() && !item_ptr.is_null() {
-            scene_graph::ensure_four_layer_nodes(editor_root, item_ptr);
+            scene_graph::ensure_five_layer_nodes(editor_root, item_ptr);
 
             // Issue #679 评论 5657313927: 删除 render thread 的第二次 build_cursor_plan()
             // 调用。不再把 cursor_ctrl.visual_x/y 同时当"当前值"和"目标值"传进去。
@@ -386,6 +386,18 @@ impl QQuickItem for SujianEditorItem {
                 None
             };
 
+            let text_decorations = prepared_frame
+                .filter(|_| prepared_frame_matches_canonical)
+                .map(|frame| frame.text_decorations.clone())
+                .filter(|geometry| {
+                    geometry.document_session == self.document_session
+                        && geometry.text_revision == self.pipeline.text_revision()
+                        && prepared_frame.is_some_and(|frame| {
+                            geometry.layout_generation == frame.layout_snapshot.layout_generation
+                        })
+                })
+                .unwrap_or_default();
+
             // Issue #904 评论 1/3: 本帧局部动画的静态挖孔是否活跃（有需要从
             // canonical 里挖掉的接管目标）。挖孔只在动画 begin/target-change/end
             // 变化，不随 progress 每帧刷新；状态翻转那一帧必须强制刷新静态裁剪：
@@ -398,6 +410,7 @@ impl QQuickItem for SujianEditorItem {
                     paragraph_y_offsets: motion_frame.paragraph_y_offsets.clone(),
                 },
                 selection_preedit,
+                text_decorations,
                 cursor: cursor_render_state,
                 cursor_style,
                 selection_preedit_style,

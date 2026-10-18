@@ -121,6 +121,7 @@ fn emit_content_changed_invalidates_old_prepared_frame() {
         item.prepared_frame = Some(PreparedEditorFrame {
             layout_snapshot: snapshot,
             selection_preedit: SelectionPreeditPlan::default(),
+            text_decorations: super::text_decorations::TextDecorationGeometry::default(),
         });
         assert!(
             item.prepared_frame.is_some(),

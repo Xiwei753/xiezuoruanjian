@@ -573,7 +573,23 @@ pub(crate) fn render_frame(
         static_text.scroll_y,
         static_text.viewport_height,
     );
-    // Layer 3: 光标
+    // Layer 3: 正文装饰（纠错波浪线）
+    // 只消费 GUI 线程已从 canonical LayoutSnapshot 生成的可见段落几何；段落动画偏移与
+    // 静态层孔洞沿用本帧局部文字计划，不触碰静态 QTextNode 或动画纹理。
+    let decoration_holes = if animation_resources_ready {
+        plan.local_text.static_holes.as_slice()
+    } else {
+        &[]
+    };
+    scene_graph::update_text_decoration_layer(
+        root_raw,
+        item_ptr,
+        &plan.text_decorations.paragraphs,
+        &plan.local_text.paragraph_y_offsets,
+        decoration_holes,
+        static_text.scroll_y,
+    );
+    // Layer 4: 光标
     // Issue #727 评论 5755858583 问题1: scroll_y 传给 render_cursor_layer，
     // cursor layer 的 QSGTransformNode 统一做 translate(0, -scroll_y)。
     render_cursor_layer(root_raw, item_ptr, plan, static_text.scroll_y);

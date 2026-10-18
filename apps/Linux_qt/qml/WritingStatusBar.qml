@@ -4,7 +4,7 @@
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
 // 职责：正文列底部一条只读状态带，三段布局
-//   左：写作速度「86 字/分」   中：写作进度   右：时间 + 保存状态
+//   左：写作速度「5,160 字/时」   中：写作进度   右：时间 + 保存状态
 //
 // 手稿基准（docs/ui/reference/widescreen/宽屏全打开.png、左右缩回.png）：
 //   底部一行横贯「章节树右缘 ~ 工具面板左缘」，也就是只属于 Editor 这一列——
@@ -30,8 +30,8 @@ Rectangle {
     required property var dt
 
     // ── 注入的状态数据（全部由 WritingWorkspace 提供）──
-    // 左段：Core「当前写作速度」的 charsPerMinute（最近 N 秒窗口折算成字/分）。
-    // 手稿的「86 字/分」是"最近一分钟写了多少字"，不是本章字数；
+    // 左段：Core「当前写作速度」的 charsPerMinute（最近 N 秒窗口折算成字/分），
+    // 展示时换算为字/时；它表示最近一分钟的速度折算到一小时，不是本章字数。
     // 也不用"字数 / 时长"自己除——Core 的会话/空闲口径才作数。
     // 也不能读写作速度曲线的最后一个桶：曲线是历史分桶，桶只生成到最后一个
     // 输入事件，停笔后它会一直挂着停笔前的非零值。
@@ -64,7 +64,7 @@ Rectangle {
     TextMetrics {
         id: statusMetrics
         font: Kirigami.Theme.defaultFont
-        text: "00:00  字/分  0/2,000"
+        text: "00:00  字/时  0/2,000"
     }
 
     // 与正文纸面上缘呼应的一条分隔线。
@@ -85,7 +85,7 @@ Rectangle {
 
         // ── 左：写作速度 ──
         Label {
-            text: root.charsPerMinute + " " + qsTr("字/分")
+            text: Math.round(root.charsPerMinute * 60).toLocaleString(Qt.locale(), "f", 0) + " " + qsTr("字/时")
             color: Kirigami.Theme.disabledTextColor
             Layout.alignment: Qt.AlignVCenter
         }

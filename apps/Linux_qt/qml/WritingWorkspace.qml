@@ -321,13 +321,13 @@ Rectangle {
         return editorController.flushActiveEditorBeforeSync();
     }
 
-    // Issue #829：手稿「86 字/分」是"最近一分钟写了多少字"。
-    // 用 Core 的「当前写作速度」查询（window_seconds=60），窗口长度就是 60 秒。
+    // Issue #829：Core 的当前写作速度以「最近一分钟写了多少字」为计算口径，
+    // 查询窗口仍为 60 秒；底栏展示时再折算为字/时。
     readonly property int statusSpeedWindowSeconds: 60
 
     // ── Issue #829：写作页底部状态栏的数据 ──
     // 全部取自 Core 的写作统计，不在端侧自己算，也不用章节字数顶替：
-    //   左段 = Core 当前写作速度的 charsPerMinute（手稿「86 字/分」）；
+    //   左段 = Core 当前写作速度的 charsPerMinute（底栏折算为字/时）；
     //   中段 = 今日纯输入字数 summary.totalHumanTypedChars。
     // 统计按 Core 的 writing event 落盘，所以只在打开 / 切章 / 定时器到点时重拉，
     // 不做逐键刷新——每敲一个字去查一次只会拿到同一个值。

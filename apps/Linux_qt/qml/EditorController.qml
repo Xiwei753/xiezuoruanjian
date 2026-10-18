@@ -227,6 +227,22 @@ QtObject {
         correctionCheckPending = false;
     }
 
+    function updateCorrectionSuggestions(suggestions) {
+        correctionSuggestions = suggestions;
+        if (!targetEditorItem || !targetEditorItem.set_text_decorations_json) return;
+        var spans = [];
+        for (var i = 0; i < suggestions.length; i += 1) {
+            var suggestion = suggestions[i];
+            spans.push({
+                startByte: suggestion.startByte,
+                endByte: suggestion.endByte,
+                severity: suggestion.severity,
+                textRevision: suggestion.textRevision
+            });
+        }
+        targetEditorItem.set_text_decorations_json(JSON.stringify(spans));
+    }
+
     function invalidateCorrectionResults() {
         cancelPendingCorrectionRequest();
         pendingCorrectionRevision = -1;
@@ -236,7 +252,7 @@ QtObject {
         pendingCorrectionIsChapter = false;
         pendingCorrectionRangeStartByte = 0;
         pendingCorrectionRangeEndByte = 0;
-        correctionSuggestions = [];
+        updateCorrectionSuggestions([]);
         correctionError = "";
         correctionStatus = "";
     }
@@ -253,7 +269,7 @@ QtObject {
                 && correctionTrackedRevision === Number(revision)
                 && correctionTrackedProjectId === projectId
                 && correctionTrackedChapterId === chapterId) return true;
-        correctionSuggestions = [];
+        updateCorrectionSuggestions([]);
         syncCorrectionTracking(text, revision);
         return false;
     }
@@ -633,7 +649,7 @@ QtObject {
                 || base !== correctionTrackedRevision
                 || correctionTrackedProjectId !== projectId
                 || correctionTrackedChapterId !== chapterId) {
-            correctionSuggestions = [];
+            updateCorrectionSuggestions([]);
             syncCorrectionTracking(newText, actualRevision);
             scheduleCorrectionSegment();
             return;
@@ -685,7 +701,7 @@ QtObject {
                 retained.push(item);
             }
             retained.sort(function(a, b) { return a.startByte - b.startByte; });
-            correctionSuggestions = retained;
+            updateCorrectionSuggestions(retained);
             syncCorrectionTracking(newText, next);
             pendingCorrectionRevision = next;
             pendingCorrectionProjectId = projectId;
@@ -696,7 +712,7 @@ QtObject {
             pendingCorrectionRangeEndByte = editedRange.endByte;
             correctionError = "";
         } catch (error) {
-            correctionSuggestions = [];
+            updateCorrectionSuggestions([]);
             syncCorrectionTracking(newText, actualRevision);
             correctionError = String(error);
         }
@@ -733,7 +749,7 @@ QtObject {
                 merged.push(parsed[parsedIndex]);
             }
             merged.sort(function(a, b) { return a.startByte - b.startByte; });
-            correctionSuggestions = merged;
+            updateCorrectionSuggestions(merged);
             syncCorrectionTracking(pendingCorrectionText, textRevision);
             correctionStatus = merged.length > 0
                     ? qsTr("发现 %1 条建议").arg(merged.length)
@@ -741,6 +757,7 @@ QtObject {
         } catch (error) {
             correctionError = String(error);
             correctionStatus = "";
+            updateCorrectionSuggestions(correctionSuggestions);
         }
     }
 
@@ -754,6 +771,7 @@ QtObject {
         }
         correctionStatus = "";
         correctionError = String(message || qsTr("校对失败。"));
+        updateCorrectionSuggestions(correctionSuggestions);
     }
 
     function suggestionIsCurrent(suggestion) {
@@ -822,6 +840,7 @@ QtObject {
             return false;
         }
         correctionStatus = qsTr("已应用建议。");
+        updateCorrectionSuggestions(correctionSuggestions);
         return true;
     }
 
@@ -857,7 +876,7 @@ QtObject {
                 remaining.push(item);
             }
         }
-        correctionSuggestions = remaining;
+        updateCorrectionSuggestions(remaining);
         correctionStatus = scope === "once" ? qsTr("已忽略这一次。")
                 : scope === "chapter" ? qsTr("已在本章忽略此类建议。")
                 : qsTr("已停用此规则。") ;
@@ -880,7 +899,7 @@ QtObject {
         for (var i = 0; i < correctionSuggestions.length; i += 1) {
             if (correctionSuggestions[i].original !== suggestion.original) remaining.push(correctionSuggestions[i]);
         }
-        correctionSuggestions = remaining;
+        updateCorrectionSuggestions(remaining);
         correctionError = "";
         correctionStatus = qsTr("已加入作品词典；下次检查会使用该词条。");
         return true;

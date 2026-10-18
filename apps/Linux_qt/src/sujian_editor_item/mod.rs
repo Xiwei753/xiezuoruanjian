@@ -53,6 +53,7 @@ pub(crate) mod rendering;
 mod runtime_tests;
 pub(crate) mod scene_graph_renderer;
 pub(crate) mod snapshot_id;
+pub(crate) mod text_decorations;
 pub(crate) mod text_motion;
 pub(crate) mod text_utils;
 pub(crate) mod texture_cache;
@@ -429,6 +430,9 @@ pub struct SujianEditorItem {
             expected_revision: u64,
         ) -> bool
     ),
+    /// Issue #951：更新与当前正文 revision 绑定的文字装饰范围。
+    #[allow(dead_code)]
+    set_text_decorations_json: qt_method!(fn(&mut self, decorations_json: QString)),
     #[allow(dead_code)]
     undo: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
@@ -532,6 +536,10 @@ pub struct SujianEditorItem {
     last_summary: QString,
     last_event_count: u32,
     editor_layout: EditorLayout,
+    /// Issue #951：当前文档收到的校对范围；几何由 GUI 线程根据 canonical layout 准备。
+    annotation_spans: Vec<text_decorations::TextDecorationSpan>,
+    annotation_revision: Option<u64>,
+    annotation_session: u64,
     /// 正文/字体/宽度变化时为 true，GUI 线程预计算 snapshot 并置为 false。
     layout_dirty: bool,
     /// 动画裁剪开始/结束时为 true，仅重建 Scene Graph，不重新排版。
@@ -682,6 +690,7 @@ impl Default for SujianEditorItem {
             select_all: Default::default(),
             selected_text: Default::default(),
             accept_correction: Default::default(),
+            set_text_decorations_json: Default::default(),
             undo: Default::default(),
             redo: Default::default(),
             handle_key: Default::default(),
@@ -739,6 +748,9 @@ impl Default for SujianEditorItem {
             last_summary: Default::default(),
             last_event_count: 0,
             editor_layout: EditorLayout::default(),
+            annotation_spans: Vec::new(),
+            annotation_revision: None,
+            annotation_session: 0,
             layout_dirty: true,
             scene_dirty: true,
             force_full_relayout_pending: true,
@@ -843,10 +855,71 @@ impl SujianEditorItem {
             )
             .clone();
         let selection_preedit = self.build_selection_preedit_plan_from_snapshot(&snapshot);
+        let text_decorations = self.build_text_decoration_geometry(&snapshot);
         self.prepared_frame = Some(render_plan::PreparedEditorFrame {
             layout_snapshot: snapshot,
             selection_preedit,
+            text_decorations,
         });
+    }
+
+    /// 用已准备好的快照重算当前视口的装饰范围；不重新排版正文。
+    pub(crate) fn refresh_text_decoration_geometry(&mut self) {
+        let geometry = self
+            .prepared_frame
+            .as_ref()
+            .map(|frame| self.build_text_decoration_geometry(&frame.layout_snapshot));
+        if let (Some(frame), Some(geometry)) = (self.prepared_frame.as_mut(), geometry) {
+            frame.text_decorations = geometry;
+        }
+    }
+
+    fn build_text_decoration_geometry(
+        &self,
+        snapshot: &LayoutSnapshot,
+    ) -> text_decorations::TextDecorationGeometry {
+        if self.annotation_session != self.document_session
+            || self.annotation_revision != Some(snapshot.text_revision)
+        {
+            return text_decorations::TextDecorationGeometry {
+                document_session: self.document_session,
+                text_revision: snapshot.text_revision,
+                layout_generation: snapshot.layout_generation,
+                ..text_decorations::TextDecorationGeometry::default()
+            };
+        }
+        let item_ptr = self.get_cpp_object();
+        let dpr = if item_ptr.is_null() {
+            1.0
+        } else {
+            crate::editor::renderer::sujian_item_dpr(item_ptr)
+        };
+        text_decorations::build_geometry(
+            snapshot,
+            &self.annotation_spans,
+            self.document_session,
+            f64::from(self.current_scroll_y),
+            f64::from(self.current_viewport_height.max(1.0)),
+            dpr,
+        )
+    }
+
+    /// Issue #951：QML 只传 byte 范围与 severity；native 绑定当前 document session，
+    /// 校验 UTF-8 边界和正文 revision，再在已有布局快照上更新独立装饰几何。
+    pub(crate) fn set_text_decorations_json(&mut self, decorations_json: QString) {
+        let current_revision = self.pipeline.text_revision();
+        let Some(spans) = text_decorations::parse_spans(
+            &decorations_json.to_string(),
+            self.pipeline.committed_text(),
+            current_revision,
+        ) else {
+            return;
+        };
+        self.annotation_spans = spans;
+        self.annotation_revision = Some(current_revision);
+        self.annotation_session = self.document_session;
+        self.refresh_text_decoration_geometry();
+        self.request_frame_update();
     }
 
     pub(crate) fn request_frame_update(&mut self) {
@@ -900,6 +973,9 @@ impl SujianEditorItem {
         // Issue #901 问题3：切章/清文档时递增 document_session，
         // 使唯一的局部动画与帧回执只接受新 session 的数据，忽略旧 session 的迟到帧。
         self.document_session = self.document_session.wrapping_add(1);
+        self.annotation_spans.clear();
+        self.annotation_revision = None;
+        self.annotation_session = self.document_session;
         // Issue #904：丢弃旧章唯一的局部动画与纹理租约。
         *self.pipeline.text_motion_mut() = None;
         self.last_drawn_local_frame = None;
