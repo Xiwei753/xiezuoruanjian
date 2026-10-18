@@ -101,6 +101,12 @@ pub struct SyncBackend {
     sync_operation_state: qt_property!(QString; READ sync_operation_state NOTIFY sync_action_completed),
     #[allow(dead_code)]
     last_sync_report: qt_property!(QString; READ last_sync_report NOTIFY sync_status_changed),
+    // Issue #948：Core 持久化的最近一次全量同步历史状态（FullSyncStateDto JSON，只读）。
+    // 与 last_sync_report 相互独立：旧格式失败可能没有分组报告。无历史时为空串。
+    // 这是"持久化的最近一次历史结果"，不是"本轮刚失败"。
+    #[allow(dead_code)]
+    last_full_sync_state:
+        qt_property!(QString; READ last_full_sync_state NOTIFY sync_status_changed),
     #[allow(dead_code)]
     sync_status: qt_property!(QString; READ sync_status WRITE set_sync_status NOTIFY sync_status_changed),
     #[allow(dead_code)]
@@ -194,6 +200,10 @@ impl SyncBackend {
     ///    QML 监听的 SyncBackend signal 能正确触发。
     pub(crate) fn handle_outcome(&mut self, outcome: SyncTaskOutcome) {
         let qptr = QPointer::from(&*self);
+        // Issue #948 第 3 点：终态快照在 move 进 AppBackend 前留下，结束后核对
+        // Core 是否真的产出了最新 FullSyncReport。
+        let outcome_status = outcome.sync_status.clone();
+        let outcome_action_result = outcome.action_result.clone();
         // Issue #754 评论 5816335613: 明确区分成功与 AppBackend 借用失败。
         // 借用失败直接 return，不发任何"已完成"类 signal——
         // StatusOnly 只表示 outcome 已成功进入 AppBackend 并完成处理、但无工作区内容变化，
@@ -210,6 +220,9 @@ impl SyncBackend {
                 return;
             }
         };
+        // Issue #948 第 3 点：完成时只发通知，QML 的 getter（sync_operation_state /
+        // last_sync_report / last_full_sync_state）重新直读 Core。运行终态与持久历史
+        // 只有一个状态源，不在 Qt 侧另存一套同步历史。
         self.sync_status_changed();
         self.sync_action_completed();
         if effect == sync_operations::SyncOutcomeEffect::ContentChanged {
@@ -218,6 +231,70 @@ impl SyncBackend {
         // Issue #762 评论 5826175490 / 5828791004：同步结束后刷新全局冲突状态。
         // 冲突是持久状态，无论同步成功还是冲突都需刷新。
         self.refresh_sync_conflict_state();
+        self.log_full_sync_report_gap(&outcome_status, &outcome_action_result);
+    }
+
+    /// Issue #948 第 3 点：本轮同步确实结束但 Core 没有产出最新 FullSyncReport 时，
+    /// 记录操作 ID / 阶段 / 失败目标 / 错误码，便于沿当前分组报告写入链路追真正原因。
+    ///
+    /// 只做诊断记录：空报告既不等于本轮成功也不等于本轮失败，不改任何状态、
+    /// 不让 UI 猜测失败原因（UI 仍按本轮 operation_id 的终态展示）。
+    fn log_full_sync_report_gap(&self, outcome_status: &str, action_result: &str) {
+        // 只有真实同步操作才会写 FullSyncReport；诊断 / 保存配置等终态跳过。
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(action_result) else {
+            return;
+        };
+        if parsed.get("operation_kind").and_then(|v| v.as_str()) != Some("sync") {
+            return;
+        }
+        // 成功类终态本来就没有失败分组可写，不要求报告存在。
+        if matches!(
+            outcome_status,
+            "success"
+                | "no_changes"
+                | "latest_wins_applied"
+                | "branch_missing_recovered"
+                | "configured_not_tested"
+        ) {
+            return;
+        }
+        // 只有"明确读到没有报告"才算缺口；读取失败（借用冲突 / IO 错误）属于
+        // 基础设施问题，不在这里误报成报告缺失。
+        let report_missing = matches!(
+            self.with_app(|app| app.core_api().map(|api| api.load_latest_full_sync_report())),
+            Ok(Some(Ok(None)))
+        );
+        if !report_missing {
+            return;
+        }
+        let phase = parsed
+            .get("phase_key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let failed_targets = parsed
+            .get("summary_args")
+            .and_then(|v| v.get("failed_targets"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let raw_error = parsed
+            .get("raw_error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        crate::backend::app_backend::debug_error_static(
+            "sync",
+            "full_sync_report_missing_after_sync",
+            &format!(
+                "operation_id={}, status={}, phase={}, failed_targets={}, raw_error={}",
+                parsed
+                    .get("operation_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+                outcome_status,
+                phase,
+                failed_targets,
+                raw_error
+            ),
+        );
     }
 
     fn with_app<R>(
@@ -310,6 +387,16 @@ impl SyncBackend {
     }
     fn last_sync_report(&self) -> QString {
         self.with_app(|app| app.last_sync_report_json())
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    /// Issue #948：Core 持久化的全量同步历史状态（只读 JSON 快照）。
+    ///
+    /// getter 每次经 `with_app` 直读 Core 的 FullSyncState（overall_status /
+    /// last_attempt_time / last_success_time / failed_targets），与诊断包导出的
+    /// `full_sync_state.json` 同源，不另存一套 Qt 侧同步历史。
+    /// Core 无历史时返回空串，不从 AppSyncState.status 猜整轮结果。
+    fn last_full_sync_state(&self) -> QString {
+        self.with_app(|app| app.last_full_sync_state_json())
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn sync_status(&self) -> QString {
@@ -710,6 +797,9 @@ impl AppBackend {
             return;
         }
         // 第 4 步：当前配置仍有效，再读取 full_sync_state，有历史就恢复真实 overall_status。
+        // Issue #948：这里恢复的是"持久化的最近一次历史结果"，不代表本轮刚刚失败。
+        // 同步运行互斥与操作结果处理保持不变；QML 通过只读的 last_full_sync_state
+        // 单独展示这次历史的最后尝试/成功时间与失败目标。
         if let Some(api) = self.core_api() {
             if let Ok(Some(state)) = api.load_full_sync_state() {
                 self.current_sync_status = state.overall_status;
@@ -811,9 +901,24 @@ impl AppBackend {
             return QString::from("");
         };
         match api.load_latest_full_sync_report() {
-            Ok(Some(report)) => serde_json::to_string(&report)
-                .unwrap_or_default()
-                .into(),
+            Ok(Some(report)) => serde_json::to_string(&report).unwrap_or_default().into(),
+            Ok(None) | Err(_) => QString::from(""),
+        }
+    }
+
+    // AppBackend::last_full_sync_state_json
+    /// Issue #948：Core 持久化的最近一次全量同步历史状态（FullSyncStateDto JSON）。
+    ///
+    /// 只陈述 Core 已有事实：`overall_status` / `last_attempt_time` /
+    /// `last_success_time` / `failed_targets`，供 QML 与诊断包共用同一状态源
+    /// （`full_sync_state.json` 也直接来自本接口）。没有工作区或没有历史时返回空串，
+    /// 由调用方按"无历史"处理，不回退到其它字段猜整轮结果。
+    pub(crate) fn last_full_sync_state_json(&self) -> QString {
+        let Some(api) = self.core_api() else {
+            return QString::from("");
+        };
+        match api.load_full_sync_state() {
+            Ok(Some(state)) => serde_json::to_string(&state).unwrap_or_default().into(),
             Ok(None) | Err(_) => QString::from(""),
         }
     }

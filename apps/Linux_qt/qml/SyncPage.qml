@@ -42,6 +42,10 @@ ColumnLayout {
     // 结果区与原始诊断文本（原 TextArea/TextEdit 的文本源）。
     property string resultText: ""
     property string lastSyncReport: ""
+    // Issue #948：Core 持久化的最近一次全量同步历史状态（FullSyncStateDto JSON）。
+    // 与 lastSyncReport 相互独立（旧格式失败可能没有分组报告）；
+    // 没有触发新同步时结果区按它显示「上次同步（本地时间）」。
+    property string lastFullSyncState: ""
     property string rawErrorText: ""
     property bool showRawError: false
 
@@ -142,57 +146,101 @@ ColumnLayout {
         return msg
     }
 
+    /// Issue #948：Unix 秒 → 本地时间字符串。
+    /// Core 存的是 Unix 秒数，QML 用 new Date(seconds*1000) 按用户本地时区显示。
+    function formatSyncLocalTime(seconds) {
+        if (typeof seconds !== "number" || seconds <= 0)
+            return ""
+        return new Date(seconds * 1000).toLocaleString()
+    }
+
+    /// 本轮操作状态（SyncOperationStateDto JSON）→ 结果区文本与原始错误。
+    /// 只用于本轮（正在运行或刚结束）的操作，不承担持久历史的展示。
+    function applyOperationStateText(obj) {
+        var text = ""
+        if (obj.phase_key) {
+            text += syncMessageForKey(obj.phase_key, obj.summary_args) + "\n"
+        }
+        if (obj.summary_key) {
+            text += syncMessageForKey(obj.summary_key, obj.summary_args)
+        }
+
+        // Display counts if it's a summary
+        if (obj.counts && (obj.counts.uploaded > 0 || obj.counts.downloaded > 0 || obj.counts.local_deleted > 0 || obj.counts.remote_deleted > 0 || obj.counts.conflicts > 0)) {
+            text += "\n\n" + qsTr("上传: ") + obj.counts.uploaded
+            text += "\n" + qsTr("下载: ") + obj.counts.downloaded
+            text += "\n" + qsTr("本地删除: ") + obj.counts.local_deleted
+            text += "\n" + qsTr("远端删除: ") + obj.counts.remote_deleted
+            if (obj.counts.overwritten > 0) text += "\n" + qsTr("覆盖: ") + obj.counts.overwritten
+            if (obj.counts.conflicts > 0) text += "\n" + qsTr("冲突: ") + obj.counts.conflicts
+        }
+
+        if (obj.summary_args && obj.summary_args.conflict_files) {
+            text += "\n\n" + qsTr("冲突文件:") + "\n  - " + obj.summary_args.conflict_files
+        }
+
+        // Issue #931 第 4 点：失败目标分开显示（含 App target 的具体
+        // 错误与 path），不能只显示笼统的“同步失败”。
+        if (obj.summary_args && obj.summary_args.failed_targets) {
+            text += "\n\n" + qsTr("失败目标:") + "\n  - " + obj.summary_args.failed_targets
+        }
+
+        root.resultText = text
+
+        if (obj.raw_error) {
+            root.rawErrorText = obj.raw_error
+            root.showRawError = true
+        } else {
+            root.rawErrorText = ""
+            root.showRawError = false
+        }
+    }
+
+    /// Issue #948：结果区唯一优先级 —— 本轮运行中 > 本轮操作终态 > Core 持久化历史。
+    ///
+    /// 从 Core 恢复出来的 currentSyncStatus（如 recoverable_error）是持久历史，
+    /// 不代表本轮刚刚失败。只有确实触发了新同步（sync_in_progress 或本轮
+    /// operation_id 命中的终态）才按运行阶段/终态展示；否则读 last_full_sync_state
+    /// 表述「上次同步（本地时间）」，不暗示今天再次失败。
     function updateSyncResultText() {
-        if (root.syncBackendRef) {
-            try {
-                var obj = JSON.parse(root.currentSyncOperationState);
-                if (root.activeOperationId === "" || obj.operation_id === root.activeOperationId) {
-                    var text = ""
-                    if (obj.phase_key) {
-                        text += syncMessageForKey(obj.phase_key, obj.summary_args) + "\n"
-                    }
-                    if (obj.summary_key) {
-                        text += syncMessageForKey(obj.summary_key, obj.summary_args)
-                    }
+        if (!root.syncBackendRef) return
 
-                    // Display counts if it's a summary
-                    if (obj.counts && (obj.counts.uploaded > 0 || obj.counts.downloaded > 0 || obj.counts.local_deleted > 0 || obj.counts.remote_deleted > 0 || obj.counts.conflicts > 0)) {
-                        text += "\n\n" + qsTr("上传: ") + obj.counts.uploaded
-                        text += "\n" + qsTr("下载: ") + obj.counts.downloaded
-                        text += "\n" + qsTr("本地删除: ") + obj.counts.local_deleted
-                        text += "\n" + qsTr("远端删除: ") + obj.counts.remote_deleted
-                        if (obj.counts.overwritten > 0) text += "\n" + qsTr("覆盖: ") + obj.counts.overwritten
-                        if (obj.counts.conflicts > 0) text += "\n" + qsTr("冲突: ") + obj.counts.conflicts
-                    }
-
-                    if (obj.summary_args && obj.summary_args.conflict_files) {
-                        text += "\n\n" + qsTr("冲突文件:") + "\n  - " + obj.summary_args.conflict_files
-                    }
-
-                    // Issue #931 第 4 点：失败目标分开显示（含 App target 的具体
-                    // 错误与 path），不能只显示笼统的“同步失败”。
-                    if (obj.summary_args && obj.summary_args.failed_targets) {
-                        text += "\n\n" + qsTr("失败目标:") + "\n  - " + obj.summary_args.failed_targets
-                    }
-
-                    root.resultText = text;
-
-                    if (obj.raw_error) {
-                        root.rawErrorText = obj.raw_error
-                        root.showRawError = true
-                    } else {
-                        root.rawErrorText = ""
-                        root.showRawError = false
-                    }
-                } else {
-                    root.resultText = qsTr("同步状态解析失败，请复制诊断信息反馈");
-                    if (typeof window !== "undefined" && typeof window.debugWarn === "function") window.debugWarn("sync", "operation_state_parse_failed", root.currentSyncOperationState);
-                }
-            } catch(e) {
-                root.resultText = qsTr("同步状态解析失败，请复制诊断信息反馈");
-                if (typeof window !== "undefined" && typeof window.debugWarn === "function") window.debugWarn("sync", "operation_state_json_error", e.toString());
+        var obj = null
+        var raw = root.currentSyncOperationState.trim()
+        if (raw !== "") {
+            try { obj = JSON.parse(raw) } catch(e) {
+                obj = null
+                if (typeof window !== "undefined" && typeof window.debugWarn === "function") window.debugWarn("sync", "operation_state_json_error", e.toString())
             }
         }
+        // 按 operation_id 过滤本轮操作（未发起过操作时 activeOperationId 为空）。
+        var opIsCurrent = obj !== null && (root.activeOperationId === "" || obj.operation_id === root.activeOperationId)
+
+        // 优先级 1：本轮同步正在运行 —— 显示实际运行阶段。
+        if (root.currentSyncInProgress) {
+            if (opIsCurrent) {
+                root.applyOperationStateText(obj)
+            } else {
+                root.resultText = qsTr("正在同步...")
+                root.rawErrorText = ""
+                root.showRawError = false
+            }
+            return
+        }
+
+        // 优先级 2：本轮操作（按 operation_id 过滤）的终态。
+        if (opIsCurrent) {
+            root.applyOperationStateText(obj)
+            // 本轮同步已产出持久报告（且报告确属最后这一轮）时，改用报告的分组/
+            // path/phase 详情展示（同一次运行的更细视图）；报告缺失或来自更早的
+            // 运行则保留本轮终态，不让旧报告冒充本轮结果。
+            if (obj.operation_kind === "sync" && root.syncReportBelongsToLatestAttempt())
+                root.updatePersistedSyncReportText()
+            return
+        }
+
+        // 优先级 3：没有触发新同步 —— Core 持久化的最近一次历史结果。
+        root.updatePersistedSyncReportText()
     }
 
     function syncReportCategoryLabel(category) {
@@ -211,11 +259,38 @@ ColumnLayout {
         }
     }
 
+    /// Issue #948：最新 FullSyncReport 是否属于"最后尝试的那一轮"。
+    ///
+    /// Core 在同一个聚合入口用同一个 report_time 同时写 full_sync_state
+    /// （last_attempt_time）与 last_report（attempted_at）；两者不一致说明报告
+    /// 来自更早的运行，不能拿它的分组详情冒充本轮结果。
+    function syncReportBelongsToLatestAttempt() {
+        var report = null
+        var state = null
+        try { report = JSON.parse(root.lastSyncReport) } catch(e) { return false }
+        try { state = JSON.parse(root.lastFullSyncState) } catch(e) { return false }
+        if (!report || !state)
+            return false
+        if (typeof report.attempted_at !== "number" || typeof state.last_attempt_time !== "number")
+            return false
+        // 同一轮写入的两个 Unix 秒时间戳，允许 1 秒取整误差。
+        return Math.abs(report.attempted_at - state.last_attempt_time) <= 1
+    }
+
+    /// 持久同步结果的展示（只在本轮没有运行/终态时使用）。
+    ///
+    /// - 最新 FullSyncReport 存在：显示 completed_groups/failed_groups 与每条
+    ///   failure 的 group_id/path/phase/error_category/detail。
+    /// - 报告为空（旧格式历史，或本轮没有写出报告）：用 Core 持久化的
+    ///   full_sync_state 明确历史状态与失败 target，并说明「历史记录没有分组详情」，
+    ///   不用笼统的「同步失败」冒充结果，也不猜测失败原因。
     function updatePersistedSyncReportText() {
         var report = null
         try { report = JSON.parse(root.lastSyncReport) } catch(e) {}
-        if (!report)
+        if (!report) {
+            root.updateHistorySyncResultText()
             return
+        }
 
         var completed = report.completed_groups || 0
         var failed = report.failed_groups || 0
@@ -249,6 +324,36 @@ ColumnLayout {
         root.showRawError = false
     }
 
+    /// Issue #948：没有 FullSyncReport 时，用 Core 持久化的 FullSyncState 表述
+    /// 「上次同步（本地时间）」：最后尝试时间、上次成功时间、历史失败 target。
+    ///
+    /// 只陈述 Core 存储的事实，不猜测失败原因；旧记录没有分组明细时明确说明。
+    function updateHistorySyncResultText() {
+        var state = null
+        try { state = JSON.parse(root.lastFullSyncState) } catch(e) {}
+        if (!state || !state.overall_status)
+            return
+
+        var attemptTime = root.formatSyncLocalTime(state.last_attempt_time)
+        var text = attemptTime !== ""
+            ? qsTr("上次同步（%1）").arg(attemptTime)
+            : qsTr("上次同步")
+        text += "\n" + qsTr("结果：%1").arg(root.syncStatusLabel(state.overall_status))
+        var successTime = root.formatSyncLocalTime(state.last_success_time)
+        if (successTime !== "")
+            text += "\n" + qsTr("上次成功：%1").arg(successTime)
+        var failedTargets = state.failed_targets || []
+        if (failedTargets.length > 0)
+            text += "\n" + qsTr("失败目标：%1").arg(failedTargets.join("、"))
+        // 旧格式历史没有分组的 path/phase 明细，明确说明而不是让页面只写「同步失败」。
+        if (failedTargets.length > 0 || root.isFailureStatus(state.overall_status))
+            text += "\n\n" + qsTr("历史记录没有分组详情，无法列出具体文件与阶段")
+
+        root.resultText = text
+        root.rawErrorText = ""
+        root.showRawError = false
+    }
+
     function showConfigFeedback(message, isError) {
         syncConfigFeedback.message = message
         syncConfigFeedback.isError = isError
@@ -262,28 +367,14 @@ ColumnLayout {
             root.currentSyncInProgress = root.syncBackendRef.sync_in_progress || false;
             root.currentSyncOperationState = root.syncBackendRef.sync_operation_state || "";
             root.lastSyncReport = root.syncBackendRef.last_sync_report || "";
+            // Issue #948：Core 持久化的全量同步历史（只读），与 last_sync_report 独立。
+            root.lastFullSyncState = root.syncBackendRef.last_full_sync_state || "";
             autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false;
             syncIntervalSpin.value = Math.round((root.syncBackendRef.sync_interval || 300) / 60);
+            // Issue #948：结果区只在这一个入口决定优先级（本轮运行中 > 本轮终态 >
+            // 持久历史），不再用 isFailureStatus(currentSyncStatus) 把恢复出来的
+            // 历史状态写成「同步失败」。
             root.updateSyncResultText();
-            if (!root.currentSyncInProgress && root.lastSyncReport.trim() !== "")
-                root.updatePersistedSyncReportText();
-            // 同步失败时，如果结果区为空，则显示错误信息
-            if (root.isFailureStatus(root.currentSyncStatus) && root.resultText.trim() === "") {
-                var opState = root.currentSyncOperationState.trim();
-                var parsed = null;
-                try { parsed = JSON.parse(opState); } catch(e) {}
-                if (parsed && parsed.summary_key) {
-                    root.resultText = syncMessageForKey(parsed.summary_key, parsed.summary_args);
-                } else if (parsed && parsed.phase_key) {
-                    root.resultText = syncMessageForKey(parsed.phase_key, parsed.summary_args);
-                } else {
-                    root.resultText = qsTr("同步失败");
-                }
-                if (parsed && parsed.raw_error) {
-                    root.rawErrorText = parsed.raw_error;
-                    root.showRawError = true;
-                }
-            }
         }
     }
 
@@ -406,8 +497,9 @@ ColumnLayout {
         return s === "conflict" || s === "partial_conflict"
     }
 
-    function statusText() {
-        var s = root.currentSyncStatus
+    /// 同步状态码 → 展示文案。状态徽标（statusText）与历史结果共用同一映射，
+    /// 避免「上次同步」的历史状态出现第二套文案。
+    function syncStatusLabel(s) {
         if (s === "success") return qsTr("已同步")
         // Issue #782 评论 5856119763: 补齐 Core 合法同步终态的展示映射。
         // no_changes / latest_wins_applied 之前会一路掉到"同步"，不是完成状态。
@@ -431,6 +523,10 @@ ColumnLayout {
         if (s === "configured_not_tested") return qsTr("已配置")
         if (root.syncBackendRef && root.syncBackendRef.sync_enabled) return qsTr("同步")
         return qsTr("配置同步")
+    }
+
+    function statusText() {
+        return root.syncStatusLabel(root.currentSyncStatus)
     }
 
     Connections {
@@ -710,7 +806,9 @@ ColumnLayout {
         border.width: 1
         radius: Kirigami.Units.smallSpacing
         clip: true
-        visible: (root.currentSyncOperationState !== "" || root.currentSyncStatus === "syncing" || root.isFailureStatus(root.currentSyncStatus))
+        // Issue #948：有 Core 持久化的同步历史时也展示结果区（显示上次尝试/成功时间），
+        // 不再只依赖"当前状态像失败"才可见。
+        visible: (root.currentSyncOperationState !== "" || root.currentSyncStatus === "syncing" || root.isFailureStatus(root.currentSyncStatus) || root.lastFullSyncState !== "")
 
         ScrollView {
             id: logScroll
