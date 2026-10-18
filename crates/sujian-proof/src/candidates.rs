@@ -116,8 +116,7 @@ impl CandidateGenerator {
         let mut ordered = candidates.into_iter().collect::<Vec<_>>();
         ordered.sort_by(|left, right| {
             lexicon
-                .word_frequency(right)
-                .cmp(&lexicon.word_frequency(left))
+                .compare_word_frequency(left, right)
                 .then_with(|| left.cmp(right))
         });
         let keep = ordered.len() / self.fragment + usize::from(!ordered.is_empty());

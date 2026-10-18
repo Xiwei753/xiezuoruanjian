@@ -2,11 +2,11 @@
 // Modified behavioral port of pycorrector/pycorrector/detector.py by XuMing
 // (xuming624); this Rust implementation does not bundle upstream data files.
 
+use crate::CorrectionError;
 use crate::confusion::ConfusionMatcher;
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
-use crate::segment::{is_chinese_string, is_han, Segmenter, TokenSpan};
-use crate::CorrectionError;
+use crate::segment::{Segmenter, TokenSpan, is_chinese_string, is_han};
 
 // Behavioral port of pycorrector Detector._detect and _get_maybe_error_index
 // (Apache-2.0): confusion terms, near proper names, dictionary OOV tokens,
@@ -59,8 +59,15 @@ impl Detector {
         }
 
         let mut candidates = Vec::new();
+        let mut protected_ranges = Vec::new();
         for segment in segmenter.sentence_segments(text) {
             let sentence = &text[segment.start_byte..segment.end_byte];
+            protected_ranges.extend(
+                lexicon
+                    .protected_word_ranges(sentence)
+                    .into_iter()
+                    .map(|(start, end)| (segment.start_byte + start, segment.start_byte + end)),
+            );
 
             for matched in confusion_matcher.scan_text(sentence) {
                 if lexicon.is_ignored(&matched.original_text) {
@@ -92,7 +99,8 @@ impl Detector {
                 for token in segmenter.words(sentence) {
                     if !is_chinese_string(&token.text)
                         || lexicon.is_ignored(&token.text)
-                        || lexicon.is_known(&token.text)
+                        || lexicon.is_oov_exception(&token.text)
+                        || segmenter.has_word(&token.text)
                     {
                         continue;
                     }
@@ -117,6 +125,11 @@ impl Detector {
             }
         }
 
+        candidates.retain(|candidate| {
+            !protected_ranges
+                .iter()
+                .any(|(start, end)| candidate.start_byte < *end && *start < candidate.end_byte)
+        });
         Ok(resolve_overlaps(candidates))
     }
 }
@@ -153,9 +166,8 @@ fn detect_near_proper_names(
                 let replace = best.as_ref().map_or(true, |(best_name, best_score)| {
                     score > *best_score
                         || (score == *best_score
-                            && (lexicon.word_frequency(proper) > lexicon.word_frequency(best_name)
-                                || (lexicon.word_frequency(proper)
-                                    == lexicon.word_frequency(best_name)
+                            && (lexicon.compare_word_frequency(proper, best_name).is_lt()
+                                || (lexicon.compare_word_frequency(proper, best_name).is_eq()
                                     && proper < best_name.as_str())))
                 });
                 if replace {

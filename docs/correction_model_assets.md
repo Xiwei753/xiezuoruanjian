@@ -20,13 +20,17 @@ model as an application asset based only on the repository license label.
 
 ## Bundled and user-added lexicons
 
-The correction engine embeds a reusable baseline lexicon in `sujian-proof`;
-no network download or user setup is needed for fixed rules, word frequency,
-proper names, or character-confusion candidates. The bundled resources are:
+The correction engine uses Jieba-RS's bundled general-purpose dictionary as
+the OOV/segmentation baseline, plus the bundled THUOCL candidate lexicon and
+project-authored rules. No network download or user setup is needed. Jieba
+dictionary membership is kept separate from THUOCL candidate frequencies; the
+two sources use different frequency scales and are never merged or compared.
+The bundled resources are:
 
 | File | Source and transformation | License |
 | --- | --- | --- |
-| `word_freq.txt` | All eleven THUOCL categories; duplicate document-frequency values are merged by maximum because their source corpora differ. | MIT, THUNLP |
+| General-word baseline | `jieba-rs` 0.11.0 default dictionary, queried through `Jieba::has_word`; no data copy or frequency transformation. The locked crate includes 349,045 entries. | MIT, `jieba-rs` |
+| `thuocl_candidates.txt` | Eleven THUOCL specialist categories kept as separate `word<TAB>THUOCL_category<TAB>frequency` rows. Duplicate words within one category retain the highest same-category frequency; values from different categories are never compared. | MIT, THUNLP |
 | `person_name.txt` | THUOCL historical-people category. | MIT, THUNLP |
 | `place_name.txt` | THUOCL place-name category. | MIT, THUNLP |
 | `proper_name.txt` | Union of the THUOCL historical-people and place-name categories. | MIT, THUNLP |
@@ -47,6 +51,19 @@ The complete upstream notices are shipped in
 `crates/sujian-proof/LICENSES/THUOCL-MIT.txt` and
 `crates/sujian-proof/LICENSES/Unicode-v3.txt`; file mapping and attribution
 are also recorded in `crates/sujian-proof/THIRD_PARTY_NOTICES.md`.
+The general OOV baseline is the default dictionary shipped by the already
+locked [`jieba-rs` 0.11.0](https://github.com/messense/jieba-rs), whose package
+metadata declares MIT. Its embedded `src/data/dict.txt` has SHA-256
+`139519822fe8ab9e10d9d07e68ea0451045380aedaf54ecc51e2a28c6b42a13f`; the
+upstream dictionary and its original package license are not copied into this
+crate. The detector asks the same Jieba instance used for segmentation whether
+a token is in that default dictionary.
+
+THUOCL remains the specialist source for correction candidate words and proper
+name evidence. Candidate ordering uses an explicit source priority and compares
+frequencies only inside the same source. A token absent from THUOCL is not by
+itself considered an error; OOV detection checks Jieba's general dictionary,
+explicit names, ignored terms, and author-protected project vocabulary.
 
 The generated word, name, and pronunciation files can be reproduced with
 `crates/sujian-proof/tools/build_correction_assets.py` by providing the

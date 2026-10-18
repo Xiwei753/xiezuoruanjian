@@ -10,7 +10,7 @@ or the optional KenLM model are MIT-compatible.
 | --- | --- | --- |
 | [pycorrector](https://github.com/shibing624/pycorrector) | Apache-2.0 | Modified behavioral ports are in `src/detector.rs` (`pycorrector/detector.py`), `src/candidates.rs` (`pycorrector/corrector.py::generate_items`), `src/corrector.rs` (`pycorrector/corrector.py::correct` and `get_lm_correct_item`), and `src/lexicon.rs` (dictionary loaders from `detector.py` and `proper_corrector.py`). The upstream files identify XuMing (`xuming624`) as author. These Rust files include source and modification notices. No Python runtime or upstream dictionary data is copied. The Apache license is included in `LICENSES/Apache-2.0.txt`. |
 | [KenLM](https://github.com/kpu/kenlm) | LGPL-2.1-or-later for the translated files below; check upstream `LICENSE` for file-specific exceptions | `src/lm/binary.rs` is based on `lm/binary_format.hh`, `lm/binary_format.cc`, and `lm/model_type.hh`; `probing.rs` on `lm/search_hashed.hh`, `lm/value.hh`, and `util/probing_hash_table.hh`; `score.rs` on `lm/model.cc`, `lm/search_hashed.hh`, `lm/value.hh`, and `lm/blank.hh`; `vocab.rs` on `lm/vocab.hh` and `lm/vocab.cc`. Each Rust file names its source and SPDX license. `vocab.rs` also identifies the `util/murmur_hash.cc` public-domain/MIT exception. These are modified Rust translations of query-format and scoring behavior, not linked KenLM code. In this GPL-3.0-only crate, the LGPL-covered portions retain their LGPL notices and are distributed under the GPL-compatible terms. The LGPL text is included in `LICENSES/LGPL-2.1-or-later.txt`; no KenLM C++ or `kenlm-rs` bridge is linked. |
-| [jieba-rs](https://github.com/messense/jieba-rs) | MIT | Used as the Chinese word segmenter where word-level candidate generation needs segmentation. The wrapper and character-token path are local Rust code. The upstream MIT text is included in `LICENSES/MIT-jieba-rs.txt`. |
+| [jieba-rs](https://github.com/messense/jieba-rs) | MIT | Used as the Chinese word segmenter and as the general dictionary membership check for OOV detection (`Jieba::has_word`). THUOCL candidate frequencies are kept separate from Jieba segmentation weights. The upstream MIT text is included in `LICENSES/MIT-jieba-rs.txt`. |
 
 ## Cargo dependencies
 
@@ -32,14 +32,24 @@ as this crate's third-party notice for the translated components.
 
 - THUOCL: [THUOCL repository](https://github.com/thunlp/THUOCL), commit
   `a30ce79d895d01ab5132a5c74c29703ff7efb4cc`, MIT License, copyright
-  THUNLP (2018). `assets/correction-data/word_freq.txt` combines the eleven
-  files under `data/` by maximum document frequency; `person_name.txt` uses
+  THUNLP (2018). `assets/correction-data/thuocl_candidates.txt` preserves all
+  eleven category-specific `word<TAB>THUOCL_category<TAB>frequency` rows;
+  duplicate words are coalesced by maximum only within the same category at
+  runtime, and category frequencies are never compared. `person_name.txt` uses
   `data/THUOCL_lishimingren.txt`; `place_name.txt` uses
-  `data/THUOCL_diming.txt`; and `proper_name.txt` is their union. No other
-  THUOCL categories are copied as separate files. The MIT text is included in
-  `LICENSES/THUOCL-MIT.txt`. Required attribution: Han Shiyi, Zhang Yuhui, Ma
+  `data/THUOCL_diming.txt`; and `proper_name.txt` is their union. The MIT text
+  is included in `LICENSES/THUOCL-MIT.txt`. Required attribution: Han Shiyi,
+  Zhang Yuhui, Ma
   Yunshan, Tu Cunchao, Guo Zhipeng, Liu Zhiyuan, and Sun Maosong, “THUOCL:
   Tsinghua Open Chinese Lexicon,” 2016.
+- General Chinese dictionary: the default `src/data/dict.txt` shipped in
+  `jieba-rs` 0.11.0 (Cargo.lock package checksum
+  `0a3a7d02ea31e6fc6f2fe10495dc7c5efcf381e1f21d7172f58ba792efa1c2fd`;
+  dictionary SHA-256
+  `139519822fe8ab9e10d9d07e68ea0451045380aedaf54ecc51e2a28c6b42a13f`). It is
+  queried in place by the segmenter's existing `Jieba` instance; no additional
+  copy or transformed frequency file is bundled by this crate. The package
+  declares MIT and its license text is included above.
 - Unicode Unihan: `assets/correction-data/same_pinyin.txt` is derived only from
   the `kMandarin` field of `Unihan_Readings.txt` in Unicode 18.0.0 `Unihan.zip`
   (SHA-256

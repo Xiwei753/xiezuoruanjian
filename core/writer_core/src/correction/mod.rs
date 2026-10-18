@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -98,9 +98,9 @@ pub struct CorrectionStore {
 
 static STORE_REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<CorrectionStoreInner>>>> =
     OnceLock::new();
-static MODEL_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<KenlmModel>>>> = OnceLock::new();
+static MODEL_CACHE: OnceLock<Mutex<HashMap<PathBuf, Weak<KenlmModel>>>> = OnceLock::new();
 
-fn model_cache() -> &'static Mutex<HashMap<PathBuf, Arc<KenlmModel>>> {
+fn model_cache() -> &'static Mutex<HashMap<PathBuf, Weak<KenlmModel>>> {
     MODEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -204,11 +204,13 @@ impl CorrectionStore {
         crate::storage::atomic_write_string(&self.inner.path, &json)
             .map_err(|error| WriterError::Io(error.to_string()))?;
 
-        // The candidate is already validated. Keep one model mapping per
-        // immutable canonical path; other models remain available to existing
-        // scans and are reclaimed by the path-status query after their final
-        // engine reference is gone.
-        models.entry(key.clone()).or_insert(candidate);
+        // The candidate is already validated. Cache only a weak mapping: an
+        // active engine/scanner owns the strong reference, and idle models can
+        // be released as soon as their last engine is dropped.
+        models.retain(|_, model| model.strong_count() > 0);
+        if models.get(&key).and_then(Weak::upgrade).is_none() {
+            models.insert(key.clone(), Arc::downgrade(&candidate));
+        }
         *preferences = next;
         if old_path.as_ref() != Some(&key) {
             engines.clear();
@@ -302,9 +304,7 @@ impl CorrectionStore {
             }
         }
 
-        let in_use = models
-            .get(&key)
-            .is_some_and(|model| Arc::strong_count(model) > 1);
+        let in_use = models.get(&key).and_then(Weak::upgrade).is_some();
         if !configured && !in_use {
             models.remove(&key);
         }
@@ -394,7 +394,7 @@ impl CorrectionStore {
         })
         .map_err(|error| WriterError::Io(error.to_string()))?;
         for entry in &dictionary_entries {
-            lexicon.insert_word_frequency(entry.clone(), 1);
+            lexicon.insert_protected_word(entry.clone());
         }
         let lexicon = Arc::new(lexicon);
         let version = match cache.get(project_id) {
@@ -431,13 +431,13 @@ impl CorrectionStore {
             return Ok((None, None));
         };
         let key = canonical_model_path(&path)?;
-        if let Some(model) = models.get(&key) {
-            return Ok((Some(key), Some(Arc::clone(model))));
+        if let Some(model) = models.get(&key).and_then(Weak::upgrade) {
+            return Ok((Some(key), Some(model)));
         }
         let model = KenlmModel::open(&key)
             .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")))?;
         let model = Arc::new(model);
-        models.insert(key.clone(), Arc::clone(&model));
+        models.insert(key.clone(), Arc::downgrade(&model));
         Ok((Some(key), Some(model)))
     }
 

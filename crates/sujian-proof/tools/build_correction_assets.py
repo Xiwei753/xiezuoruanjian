@@ -24,23 +24,34 @@ CATEGORIES = (
 )
 
 
-def read_category(path: Path) -> dict[str, int]:
-    words: dict[str, int] = {}
+def read_category_rows(path: Path) -> list[tuple[str, int]]:
+    rows: list[tuple[str, int]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         fields = line.strip().split()
         if len(fields) < 2:
             continue
         try:
-            words[fields[0]] = int(fields[1])
+            rows.append((fields[0], int(fields[1])))
         except ValueError:
             continue
-    return words
+    return rows
 
 
 def write_word_frequencies(path: Path, values: dict[str, int], description: str) -> None:
     path.write_text(
         f"# {description}\n"
         + "".join(f"{word}\t{values[word]}\n" for word in sorted(values)),
+        encoding="utf-8",
+    )
+
+
+def write_thuocl_candidates(path: Path, rows: list[tuple[str, str, int]]) -> None:
+    path.write_text(
+        "# TSV: word\tsource/category\tfrequency; source names identify the upstream THUOCL category.\n"
+        + "".join(
+            f"{word}\t{category}\t{frequency}\n"
+            for word, category, frequency in sorted(rows)
+        ),
         encoding="utf-8",
     )
 
@@ -53,19 +64,27 @@ def main() -> None:
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
 
-    categories = {
-        name: read_category(args.thuocl_data / f"THUOCL_{name}.txt")
+    category_rows = {
+        name: read_category_rows(args.thuocl_data / f"THUOCL_{name}.txt")
         for name in CATEGORIES
     }
-    frequencies: dict[str, int] = {}
-    for words in categories.values():
-        for word, count in words.items():
-            frequencies[word] = max(count, frequencies.get(word, 0))
-    write_word_frequencies(
-        args.output / "word_freq.txt",
-        frequencies,
-        "THUOCL DF values merged by maximum across source corpora.",
+    categories = {name: dict(rows) for name, rows in category_rows.items()}
+    candidates = [
+        (word, f"THUOCL_{name}", frequency)
+        for name in CATEGORIES
+        for word, frequency in category_rows[name]
+    ]
+    write_thuocl_candidates(
+        args.output / "thuocl_candidates.txt",
+        candidates,
     )
+    # Remove only the exact legacy generated table when rebuilding in place;
+    # arbitrary user-provided word_freq.txt files remain untouched.
+    legacy_word_freq = args.output / "word_freq.txt"
+    if legacy_word_freq.is_file():
+        first_line = legacy_word_freq.read_text(encoding="utf-8").partition("\n")[0]
+        if first_line == "# THUOCL DF values merged by maximum across source corpora.":
+            legacy_word_freq.unlink()
     write_word_frequencies(
         args.output / "person_name.txt",
         categories["lishimingren"],
@@ -83,7 +102,9 @@ def main() -> None:
         "Union of THUOCL_lishimingren.txt and THUOCL_diming.txt.",
     )
 
-    lexicon_chars = {character for word in frequencies for character in word}
+    lexicon_chars = {
+        character for words in categories.values() for word in words for character in word
+    }
     readings: dict[str, set[str]] = defaultdict(set)
     with zipfile.ZipFile(args.unihan_zip) as archive:
         with archive.open("Unihan_Readings.txt") as source:

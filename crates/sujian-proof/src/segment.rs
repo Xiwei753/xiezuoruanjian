@@ -97,6 +97,12 @@ impl Segmenter {
             .collect()
     }
 
+    /// Whether a token belongs to Jieba's bundled general-purpose dictionary.
+    /// Its segmentation weights remain separate from THUOCL candidate scores.
+    pub(crate) fn has_word(&self, word: &str) -> bool {
+        self.jieba.has_word(word)
+    }
+
     pub(crate) fn char_tokens<'a>(&self, text: &'a str) -> Vec<&'a str> {
         text.char_indices()
             .map(|(start, ch)| &text[start..start + ch.len_utf8()])
