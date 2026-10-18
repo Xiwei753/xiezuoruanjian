@@ -60,6 +60,11 @@ pub struct EditorBackend {
     writing_status_ready: qt_signal!(request_id: u32, status: QJsonObject),
     #[allow(dead_code)]
     writing_status_failed: qt_signal!(request_id: u32, message: QString),
+    /// Issue #943：校对后台任务完成；结果仅含建议和 byte/Qt 坐标标注。
+    #[allow(dead_code)]
+    correction_check_ready: qt_signal!(request_id: u32, text_revision: u64, suggestions_json: QString),
+    #[allow(dead_code)]
+    correction_check_failed: qt_signal!(request_id: u32, text_revision: u64, message: QString),
     #[allow(dead_code)]
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
     /// Issue #920：正文段落格式化规则归 Core，Qt 只触发此操作。
@@ -151,6 +156,38 @@ pub struct EditorBackend {
     /// Issue #935：异步请求「实时速度 + 今日汇总」。
     #[allow(dead_code)]
     request_writing_status: qt_method!(fn(&mut self, request_id: u32, window_seconds: u32)),
+    /// Issue #943：存储用户提供的本地 KenLM 文件路径；Core 负责懒加载与错误返回。
+    #[allow(dead_code)]
+    set_correction_model_path: qt_method!(fn(&self, path: QString) -> QJsonObject),
+    /// Issue #943：对当前章节快照做后台检查，不在 GUI 线程扫描正文或加载模型。
+    #[allow(dead_code)]
+    request_correction_chapter: qt_method!(
+        fn(
+            &mut self,
+            request_id: u32,
+            project_id: QString,
+            chapter_id: QString,
+            text_revision: u64,
+            text: QString,
+        )
+    ),
+    #[allow(dead_code)]
+    ignore_correction: qt_method!(
+        fn(
+            &self,
+            project_id: QString,
+            chapter_id: QString,
+            rule_id: QString,
+            original: QString,
+            scope: QString,
+            text_revision: u64,
+            start_byte: u32,
+            end_byte: u32,
+        ) -> QJsonObject
+    ),
+    #[allow(dead_code)]
+    add_correction_dictionary_entry:
+        qt_method!(fn(&self, project_id: QString, entry: QString) -> QJsonObject),
     #[allow(dead_code)]
     flush_recent_edits: qt_method!(fn(&self)),
     #[allow(dead_code)]
@@ -418,6 +455,123 @@ impl EditorBackend {
                 );
                 self.writing_status_failed(request_id, "stats backend busy".into());
             }
+        }
+    }
+
+    fn set_correction_model_path(&self, path: QString) -> QJsonObject {
+        let result = self.with_app(|app| app.set_correction_model_path(path.to_string()));
+        match result {
+            Ok(Ok(())) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": true, "data": { "configured": true } }),
+            ),
+            Ok(Err(message)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "CORE_ERROR", "rawError": message }),
+            ),
+            Err(error) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "APP_BUSY", "rawError": error.to_string() }),
+            ),
+        }
+    }
+
+    fn request_correction_chapter(
+        &mut self,
+        request_id: u32,
+        project_id: QString,
+        chapter_id: QString,
+        text_revision: u64,
+        text: QString,
+    ) {
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, text_revision, result): (u32, u64, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => {
+                            this.correction_check_ready(request_id, text_revision, json.into())
+                        }
+                        Err(message) => {
+                            this.correction_check_failed(request_id, text_revision, message.into())
+                        }
+                    }
+                }
+            },
+        );
+        let completion: super::correction_operations::CorrectionQueryCallback =
+            Box::new(move |request_id, text_revision, result| {
+                callback((request_id, text_revision, result));
+            });
+        let result = self.with_app(|app| {
+            app.request_correction_chapter(
+                request_id,
+                project_id.to_string(),
+                chapter_id.to_string(),
+                text_revision,
+                text.to_string(),
+                completion,
+            )
+        });
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                self.correction_check_failed(request_id, text_revision, message.into());
+            }
+            Err(error) => {
+                self.correction_check_failed(request_id, text_revision, error.to_string().into());
+            }
+        }
+    }
+
+    fn ignore_correction(
+        &self,
+        project_id: QString,
+        chapter_id: QString,
+        rule_id: QString,
+        original: QString,
+        scope: QString,
+        text_revision: u64,
+        start_byte: u32,
+        end_byte: u32,
+    ) -> QJsonObject {
+        let result = self.with_app(|app| {
+            app.ignore_correction(
+                project_id.to_string(),
+                chapter_id.to_string(),
+                rule_id.to_string(),
+                original.to_string(),
+                scope.to_string(),
+                text_revision,
+                start_byte,
+                end_byte,
+            )
+        });
+        match result {
+            Ok(Ok(ignored)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": true, "data": { "ignored": ignored } }),
+            ),
+            Ok(Err(message)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "CORE_ERROR", "rawError": message }),
+            ),
+            Err(error) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "APP_BUSY", "rawError": error.to_string() }),
+            ),
+        }
+    }
+
+    fn add_correction_dictionary_entry(&self, project_id: QString, entry: QString) -> QJsonObject {
+        let result = self.with_app(|app| {
+            app.add_correction_dictionary_entry(project_id.to_string(), entry.to_string())
+        });
+        match result {
+            Ok(Ok(added)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": true, "data": { "added": added } }),
+            ),
+            Ok(Err(message)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "CORE_ERROR", "rawError": message }),
+            ),
+            Err(error) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "APP_BUSY", "rawError": error.to_string() }),
+            ),
         }
     }
 

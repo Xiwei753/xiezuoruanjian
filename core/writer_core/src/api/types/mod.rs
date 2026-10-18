@@ -6,6 +6,7 @@
 //! 转换回内部类型时由 Core 验证。
 
 mod action;
+mod correction;
 mod diagnostics;
 mod editor;
 mod platform;
@@ -30,6 +31,7 @@ mod stats_tests;
 mod volume_tests;
 
 pub use action::*;
+pub use correction::*;
 pub use diagnostics::*;
 pub use editor::*;
 pub use platform::*;

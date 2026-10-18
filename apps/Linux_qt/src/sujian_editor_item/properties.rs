@@ -25,6 +25,11 @@ impl SujianEditorItem {
         self.pipeline.committed_text().to_string().into()
     }
 
+    /// Issue #943: expose the Core EditorKernel revision for stale-result checks.
+    pub(crate) fn text_revision(&self) -> u64 {
+        self.pipeline.text_revision()
+    }
+
     pub(crate) fn set_plain_text(&mut self, text: QString) {
         self.set_plain_text_from_qml(text);
     }

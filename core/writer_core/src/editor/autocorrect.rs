@@ -16,7 +16,7 @@
 //!
 //! ## 依赖关系
 //!
-//! - `aho_corasick`: 高效的多模式字符串匹配库
+//! - `sujian_proof`: 共享的不可变混淆词匹配实现
 //! - `serde`: 序列化支持，用于 JSON 交互
 //!
 //! ## 使用场景
@@ -25,8 +25,8 @@
 //! - 批量文本纠错处理
 //! - 输入法候选词纠正
 
-use aho_corasick::AhoCorasick;
 use serde::Serialize;
+use sujian_proof::confusion::ConfusionMatcher;
 
 use crate::editor::strong_types::Utf8ByteOffset;
 
@@ -52,40 +52,25 @@ pub struct TypoCorrection {
 /// 初始化时构建匹配器和替换规则，之后可反复调用 `scan_text` 扫描文本。
 /// 不持有可变状态，线程安全（只要求 &self）。
 pub struct AutoCorrectEngine {
-    matcher: AhoCorasick,
-    replacements: Vec<String>,
+    matcher: ConfusionMatcher,
 }
 
 impl AutoCorrectEngine {
     pub fn new(dictionary: &[(String, String)]) -> Result<Self, String> {
-        let patterns: Vec<&str> = dictionary.iter().map(|(k, _)| k.as_str()).collect();
-        let replacements: Vec<String> = dictionary.iter().map(|(_, v)| v.clone()).collect();
-
-        let matcher = AhoCorasick::new(&patterns).map_err(|e| e.to_string())?;
-
         Ok(Self {
-            matcher,
-            replacements,
+            matcher: ConfusionMatcher::new(dictionary)?,
         })
     }
 
     pub fn scan_text(&self, text: &str) -> Vec<TypoCorrection> {
         self.matcher
-            .find_iter(text)
-            .map(|mat| {
-                let start = mat.start();
-                let end = mat.end();
-                let pattern_index = mat.pattern().as_usize();
-
-                let original_text = text[start..end].to_string();
-                let suggestion = self.replacements[pattern_index].clone();
-
-                TypoCorrection {
-                    start_index: Utf8ByteOffset::unchecked(start),
-                    end_index: Utf8ByteOffset::unchecked(end),
-                    original_text,
-                    suggestion,
-                }
+            .scan_text(text)
+            .into_iter()
+            .map(|matched| TypoCorrection {
+                start_index: Utf8ByteOffset::unchecked(matched.start_byte),
+                end_index: Utf8ByteOffset::unchecked(matched.end_byte),
+                original_text: matched.original_text,
+                suggestion: matched.suggestion,
             })
             .collect()
     }

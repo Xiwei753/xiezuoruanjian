@@ -17,6 +17,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextDecoration
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.layout.EditorViewportState
 import com.xiwei.sujian.feature.editor.projection.TextRange
@@ -38,6 +39,8 @@ data class WritingEditorContentParams(
     val onSurfaceReady: () -> Boolean,
     val searchHighlights: List<TextRange>,
     val searchHighlightColor: Color,
+    val correctionHighlights: List<TextRange>,
+    val correctionHighlightColor: Color,
     val modifier: Modifier,
 )
 
@@ -111,7 +114,7 @@ fun editorSurfaceMode(
  * #708 评论 5723410606 第一节：删除整屏旧帧缓存（stableFrameLayer + ComposeLocalFrameBarrier）—
  * EditorTextFieldDrawLayer 不再记录上一稳定帧、不再有 local barrier 重放分支。
  * 每一帧都先画当前 BasicTextField，只对真正由动画接管的 range 做 Difference clip，
- * 再画局部动画层。OutputTransformation 继续只做搜索高亮。
+ * 再画局部动画层。OutputTransformation 只增加搜索/校对标记，不修改正文或坐标。
  *
  * #641 评论 问题4b：[inputEnabled] 是 [EditorViewModel.inputFrozen] 之外的第二层门控 —
  * BasicTextField 的 readOnly = !inputEnabled，章节切换冻结期间禁止 IME 写入 TextFieldState。
@@ -132,6 +135,8 @@ fun WritingEditorSurface(
     searchHighlights: List<TextRange> = emptyList(),
     searchHighlightColor: Color =
         androidx.compose.material3.MaterialTheme.colorScheme.secondaryContainer,
+    correctionHighlights: List<TextRange> = emptyList(),
+    correctionHighlightColor: Color = androidx.compose.material3.MaterialTheme.colorScheme.error,
     modifier: Modifier = Modifier,
 ) {
     WritingEditorContent(
@@ -147,6 +152,8 @@ fun WritingEditorSurface(
                 onSurfaceReady = onSurfaceReady,
                 searchHighlights = searchHighlights,
                 searchHighlightColor = searchHighlightColor,
+                correctionHighlights = correctionHighlights,
+                correctionHighlightColor = correctionHighlightColor,
                 modifier = modifier,
             ),
     )
@@ -168,6 +175,8 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val onSurfaceReady = params.onSurfaceReady
     val searchHighlights = params.searchHighlights
     val searchHighlightColor = params.searchHighlightColor
+    val correctionHighlights = params.correctionHighlights
+    val correctionHighlightColor = params.correctionHighlightColor
     val modifier = params.modifier
     val scope = rememberCoroutineScope()
 
@@ -176,9 +185,11 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     // Issue #728 评论 5754045689：删除西文软断行 U+200B 插入 —
     // 不再用 EditorSoftBreakProjection / EditorSoftBreakLayoutBinding 做 raw↔display 映射，
     // BasicTextField 直接消费 TextLayoutResult，正文始终是纯文本。
-    // OutputTransformation 只保留 searchHighlights 部分。
+    // OutputTransformation 只应用搜索背景与校对下划线，不改变正文坐标。
     val latestSearchHighlights = rememberUpdatedState(searchHighlights)
     val latestSearchHighlightColor = rememberUpdatedState(searchHighlightColor)
+    val latestCorrectionHighlights = rememberUpdatedState(correctionHighlights)
+    val latestCorrectionHighlightColor = rememberUpdatedState(correctionHighlightColor)
 
     val outputTransformation =
         remember(bridge) {
@@ -186,6 +197,8 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                 applyOutputTransformation(
                     searchHighlights = latestSearchHighlights.value,
                     searchHighlightColor = latestSearchHighlightColor.value,
+                    correctionHighlights = latestCorrectionHighlights.value,
+                    correctionHighlightColor = latestCorrectionHighlightColor.value,
                 )
             }
         }
@@ -285,25 +298,41 @@ fun shouldConfirmEditorAttached(
 
 /**
  * Issue #728 评论 5754045689：OutputTransformation 内容 —
- * 只保留搜索高亮，不再插入 U+200B 西文软断行占位符。
+ * 只应用搜索/校对显示标记，不再插入 U+200B 西文软断行占位符。
  *
  * 删除 EditorSoftBreakProjection / EditorSoftBreakLayoutBinding 后，
  * 正文始终是纯文本，BasicTextField 直接消费 TextLayoutResult，
- * 搜索高亮 range 直接是正文坐标，不需要 raw→display 映射。
+ * 搜索与校对 range 直接是正文坐标，不需要 raw→display 映射。
  *
  * 不改变 TextFieldState 存储的正文（纯显示层）。
  */
 private fun androidx.compose.foundation.text.input.TextFieldBuffer.applyOutputTransformation(
     searchHighlights: List<TextRange>,
     searchHighlightColor: Color,
+    correctionHighlights: List<TextRange>,
+    correctionHighlightColor: Color,
 ) {
-    // 搜索高亮 range 直接是正文坐标（不再经过 projection 转换）。
+    // 搜索与校对 range 直接是正文坐标（不再经过 projection 转换）。
     searchHighlights.forEach { range ->
         val start = range.start
         val end = range.end
         if (start < end && end <= length) {
             addStyle(
                 SpanStyle(background = searchHighlightColor),
+                start,
+                end,
+            )
+        }
+    }
+    correctionHighlights.forEach { range ->
+        val start = range.start
+        val end = range.end
+        if (start < end && end <= length) {
+            addStyle(
+                SpanStyle(
+                    color = correctionHighlightColor,
+                    textDecoration = TextDecoration.Underline,
+                ),
                 start,
                 end,
             )

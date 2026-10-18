@@ -30,7 +30,7 @@ chrono = { version = "0.4", features = ["serde"] }
 md5 = "0.7"
 sha2 = "0.10"
 tempfile = "3.8"
-aho-corasick = "1.1.4"
+sujian-proof = { path = "../../crates/sujian-proof" }
 once_cell = { version = "1.19", optional = true }
 git2 = { version = "0.20.4", default-features = false, features = ["vendored-libgit2"] }
 # #644 评论 5486167472 问题3：直接依赖 libgit2-sys，与 git2 0.20.4 对齐

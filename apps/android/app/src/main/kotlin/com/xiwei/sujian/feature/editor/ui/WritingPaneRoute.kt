@@ -1,21 +1,45 @@
 package com.xiwei.sujian.feature.editor.ui
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
+import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.confirmEditorAttached
 import com.xiwei.sujian.feature.editor.presentation.isCurrentChapter
 import com.xiwei.sujian.feature.editor.presentation.onEditorApplied
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionIgnoreScope
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionSuggestion
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
+import kotlinx.coroutines.flow.collectLatest
 
 /**
  * 正文编辑窗格 — 「正文」一级内容（#624 评论17 第2部分 Route 层）。
@@ -65,6 +89,7 @@ fun WritingPane(
                     "Ensure the host Activity or Fragment provides one via CompositionLocalProvider.",
             )
     val viewModel = rememberWritingPaneViewModel(context, deps, coordinator)
+    WritingPaneCorrectionHintCollector(viewModel, context)
 
     val targetId =
         remember(projectId, volumeId, chapterId) {
@@ -86,6 +111,7 @@ fun WritingPane(
     )
 
     val sessionState by coordinator.sessionStateFlow.collectAsStateWithLifecycle()
+    val correctionState by viewModel.correctionState.collectAsStateWithLifecycle()
     val currentUiState by rememberUpdatedState(uiState)
     val currentViewModel by rememberUpdatedState(viewModel)
 
@@ -124,9 +150,12 @@ fun WritingPane(
         WritingPaneEditorContent(
             coordinator = coordinator,
             viewModel = currentViewModel,
+            projectId = projectId,
+            chapterId = chapterId,
             targetId = targetId,
             isActivePane = isActivePane,
             sessionState = sessionState,
+            correctionState = correctionState,
             uiState = uiState,
             modifier = editorModifier,
         )
@@ -145,9 +174,12 @@ fun WritingPane(
 private fun WritingPaneEditorContent(
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
     viewModel: EditorViewModel,
+    projectId: String,
+    chapterId: String,
     targetId: String,
     isActivePane: Boolean,
     sessionState: com.xiwei.sujian.feature.editor.session.EditorSessionState,
+    correctionState: com.xiwei.sujian.feature.editor.session.EditorCorrectionState,
     uiState: com.xiwei.sujian.feature.editor.presentation.EditorUiState,
     modifier: Modifier,
 ) {
@@ -158,6 +190,8 @@ private fun WritingPaneEditorContent(
     when (surfaceMode) {
         EditorSurfaceMode.EditorHost -> {
             val bridge = viewModel.bridgeForTarget(targetId, uiState.content)
+
+            SetupCorrectionRequests(viewModel, targetId, bridge)
 
             val projection = coordinator.sessionCoordinator.getProjectionSnapshot(targetId)
             val viewportState =
@@ -206,23 +240,95 @@ private fun WritingPaneEditorContent(
             )
 
             val searchHighlightsUtf16 = collectSearchHighlightsUtf16(coordinator, targetId, bridge)
+            val activeCorrectionSuggestions =
+                if (correctionState.targetId == targetId &&
+                    correctionState.projectId == projectId &&
+                    correctionState.chapterId == chapterId &&
+                    correctionState.sessionId == sessionState.sessionId &&
+                    correctionState.textRevision == sessionState.revision
+                ) {
+                    correctionState.suggestions
+                } else {
+                    emptyList()
+                }
+            val correctionHighlightsUtf16 =
+                bridge.state.text.toString().let { text ->
+                    activeCorrectionSuggestions.mapNotNull { suggestion ->
+                        val range =
+                            TextOffsetUtils.utf16TextRangeForUtf8(
+                                text,
+                                suggestion.startByte,
+                                suggestion.endByte,
+                            )
+                        if (range.collapsed || range.end > text.length) {
+                            null
+                        } else {
+                            com.xiwei.sujian.feature.editor.projection.TextRange(range.start, range.end)
+                        }
+                    }
+                }
 
-            WritingEditorSurface(
-                bridge = bridge,
-                visualState = visualState,
-                viewportState = viewportState,
-                textStyle = rememberEditorTextStyle(uiState.settings),
-                textColor = androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
-                cursorColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
-                inputEnabled = inputEnabled,
-                onSurfaceReady = {
-                    val lease = coordinator.attachSurface(targetId) ?: return@WritingEditorSurface false
-                    viewModel.confirmEditorAttached(targetId, lease)
-                    true
-                },
-                searchHighlights = searchHighlightsUtf16,
-                modifier = modifier,
-            )
+            var selectedCorrection by remember(targetId, sessionState.sessionId) {
+                mutableStateOf<EditorCorrectionSuggestion?>(null)
+            }
+            val selected =
+                selectedCorrection?.takeIf { it in activeCorrectionSuggestions }
+                    ?: activeCorrectionSuggestions.firstOrNull()
+
+            Column(modifier = modifier) {
+                if (activeCorrectionSuggestions.isNotEmpty() && selected != null) {
+                    CorrectionSuggestionPanel(
+                        suggestions = activeCorrectionSuggestions,
+                        selectedSuggestion = selected,
+                        onSelect = { selectedCorrection = it },
+                        onReplace = { viewModel.acceptCorrectionSuggestion(targetId, selected) },
+                        onIgnoreOnce = {
+                            viewModel.ignoreCorrectionSuggestion(
+                                targetId,
+                                selected,
+                                EditorCorrectionIgnoreScope.ONCE,
+                            )
+                        },
+                        onIgnoreChapter = {
+                            viewModel.ignoreCorrectionSuggestion(
+                                targetId,
+                                selected,
+                                EditorCorrectionIgnoreScope.CHAPTER,
+                            )
+                        },
+                        onAddDictionary = {
+                            viewModel.addCorrectionDictionaryEntry(targetId, selected.original)
+                        },
+                        onDisableRule = {
+                            viewModel.ignoreCorrectionSuggestion(
+                                targetId,
+                                selected,
+                                EditorCorrectionIgnoreScope.RULE,
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                    )
+                }
+                WritingEditorSurface(
+                    bridge = bridge,
+                    visualState = visualState,
+                    viewportState = viewportState,
+                    textStyle = rememberEditorTextStyle(uiState.settings),
+                    textColor = MaterialTheme.colorScheme.onSurface,
+                    cursorColor = MaterialTheme.colorScheme.primary,
+                    inputEnabled = inputEnabled,
+                    onSurfaceReady = {
+                        val lease = coordinator.attachSurface(targetId) ?: return@WritingEditorSurface false
+                        viewModel.confirmEditorAttached(targetId, lease)
+                        true
+                    },
+                    searchHighlights = searchHighlightsUtf16,
+                    correctionHighlights = correctionHighlightsUtf16,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
         EditorSurfaceMode.Preview -> {
             val previewState = coordinator.getChapterPreviewState(targetId)
@@ -232,6 +338,196 @@ private fun WritingPaneEditorContent(
         }
     }
 }
+
+@Composable
+private fun CorrectionSuggestionPanel(
+    suggestions: List<EditorCorrectionSuggestion>,
+    selectedSuggestion: EditorCorrectionSuggestion,
+    onSelect: (EditorCorrectionSuggestion) -> Unit,
+    onReplace: () -> Unit,
+    onIgnoreOnce: () -> Unit,
+    onIgnoreChapter: () -> Unit,
+    onAddDictionary: () -> Unit,
+    onDisableRule: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier = modifier) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(
+                text = stringResource(R.string.editor_correction_suggestions),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+            ) {
+                suggestions.forEach { suggestion ->
+                    val isSelected = suggestion == selectedSuggestion
+                    Surface(
+                        modifier = Modifier
+                            .padding(end = 6.dp, top = 6.dp, bottom = 4.dp)
+                            .clickable { onSelect(suggestion) },
+                        shape = MaterialTheme.shapes.small,
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                    ) {
+                        Text(
+                            text = "${suggestion.original} → ${suggestion.replacement}",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                }
+            }
+            Text(
+                text = "${selectedSuggestion.original} → ${selectedSuggestion.replacement}",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = stringResource(
+                    R.string.editor_correction_reason,
+                    localizedCorrectionSource(selectedSuggestion.source),
+                    localizedCorrectionRule(selectedSuggestion.ruleId),
+                    localizedCorrectionSeverity(selectedSuggestion.severity),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                TextButton(onClick = onReplace) {
+                    Text(stringResource(R.string.editor_correction_replace))
+                }
+                TextButton(onClick = onIgnoreOnce) {
+                    Text(stringResource(R.string.editor_correction_ignore_once))
+                }
+                TextButton(onClick = onIgnoreChapter) {
+                    Text(stringResource(R.string.editor_correction_ignore_chapter))
+                }
+            }
+            Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                TextButton(onClick = onAddDictionary) {
+                    Text(stringResource(R.string.editor_correction_add_dictionary))
+                }
+                TextButton(onClick = onDisableRule) {
+                    Text(stringResource(R.string.editor_correction_disable_rule))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun localizedCorrectionSource(source: String): String =
+    when (source) {
+        "confusion_word" -> stringResource(R.string.editor_correction_source_confusion_word)
+        "proper_name" -> stringResource(R.string.editor_correction_source_proper_name)
+        "oov" -> stringResource(R.string.editor_correction_source_oov)
+        "character_ngram" -> stringResource(R.string.editor_correction_source_character_ngram)
+        "rule" -> stringResource(R.string.editor_correction_source_rule)
+        else -> if (source.isBlank()) stringResource(R.string.editor_correction_unknown) else source
+    }
+
+@Composable
+private fun localizedCorrectionRule(ruleId: String): String =
+    when (ruleId) {
+        "confusion.custom" -> stringResource(R.string.editor_correction_rule_confusion_custom)
+        "proper.similarity" -> stringResource(R.string.editor_correction_rule_proper_similarity)
+        "detector.exact" -> stringResource(R.string.editor_correction_rule_detector_exact)
+        "detector.oov" -> stringResource(R.string.editor_correction_rule_detector_oov)
+        "detector.char_mad" -> stringResource(R.string.editor_correction_rule_detector_char_mad)
+        "detector.candidate" -> stringResource(R.string.editor_correction_rule_detector_candidate)
+        "punctuation.repeated" -> stringResource(R.string.editor_correction_rule_punctuation_repeated)
+        "character.repeated" -> stringResource(R.string.editor_correction_rule_character_repeated)
+        "fixed.should" -> stringResource(R.string.editor_correction_rule_fixed_should)
+        "fixed.already" -> stringResource(R.string.editor_correction_rule_fixed_already)
+        "particle.dei.urgent" -> stringResource(R.string.editor_correction_rule_particle_dei_urgent)
+        "particle.dei.run" -> stringResource(R.string.editor_correction_rule_particle_dei_run)
+        "particle.dei.slow" -> stringResource(R.string.editor_correction_rule_particle_dei_slow)
+        else -> if (ruleId.isBlank()) stringResource(R.string.editor_correction_unknown) else ruleId
+    }
+
+@Composable
+private fun localizedCorrectionSeverity(severity: String): String =
+    when (severity) {
+        "error" -> stringResource(R.string.editor_correction_severity_error)
+        "warning" -> stringResource(R.string.editor_correction_severity_warning)
+        "hint" -> stringResource(R.string.editor_correction_severity_hint)
+        else -> if (severity.isBlank()) stringResource(R.string.editor_correction_unknown) else severity
+    }
+
+@Composable
+private fun WritingPaneCorrectionHintCollector(
+    viewModel: EditorViewModel,
+    context: android.content.Context,
+) {
+    LaunchedEffect(viewModel, context) {
+        viewModel.correctionHintEvents.collect { message ->
+            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+/** Debounced check of the sentence containing the caret; suggestions stay tied to the Core revision. */
+@Composable
+private fun SetupCorrectionRequests(
+    viewModel: EditorViewModel,
+    targetId: String,
+    bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
+) {
+    LaunchedEffect(viewModel, targetId, bridge) {
+        androidx.compose.runtime.snapshotFlow {
+            CorrectionCaretSnapshot(
+                text = bridge.state.text.toString(),
+                caretUtf16 = bridge.state.selection.end,
+                composing = bridge.state.composition != null,
+            )
+        }.collectLatest { snapshot ->
+            viewModel.clearCorrectionSuggestions(targetId)
+            if (snapshot.composing) return@collectLatest
+            kotlinx.coroutines.delay(450)
+            val range = sentenceRangeAroundCaret(snapshot.text, snapshot.caretUtf16) ?: return@collectLatest
+            val startByte = TextOffsetUtils.utf8OffsetForCharIndex(snapshot.text, range.first)
+            val endByte = TextOffsetUtils.utf8OffsetForCharIndex(snapshot.text, range.last + 1)
+            viewModel.requestCorrectionSegment(
+                targetId = targetId,
+                startByte = startByte,
+                endByte = endByte,
+                visibleText = snapshot.text.substring(range.first, range.last + 1),
+            )
+        }
+    }
+}
+
+private data class CorrectionCaretSnapshot(
+    val text: String,
+    val caretUtf16: Int,
+    val composing: Boolean,
+)
+
+private fun sentenceRangeAroundCaret(text: String, caretUtf16: Int): IntRange? {
+    if (text.isEmpty()) return null
+    val caret = TextOffsetUtils.safeCharIndex(text, caretUtf16)
+    var start = caret
+    while (start > 0 && !isCorrectionSentenceBoundary(text[start - 1])) start--
+    var end = caret
+    while (end < text.length && !isCorrectionSentenceBoundary(text[end])) end++
+    if (end < text.length && text[end] != '\n' && text[end] != '\r') end++
+    while (start < end && text[start].isWhitespace()) start++
+    while (end > start && text[end - 1].isWhitespace()) end--
+    return if (start < end) start until end else null
+}
+
+private fun isCorrectionSentenceBoundary(char: Char): Boolean =
+    char == '。' || char == '！' || char == '？' || char == '!' || char == '?' ||
+        char == '.' || char == '\n' || char == '\r'
 
 /**
  * 设置 viewport snapshot 保存 — 提取以降低 [WritingPaneEditorContent] 长度。

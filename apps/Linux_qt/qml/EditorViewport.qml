@@ -13,6 +13,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import org.kde.kirigami as Kirigami
 import Sujian 1.0
 
 Item {
@@ -331,6 +332,174 @@ Item {
         }
 
         // Cursor is now rendered in SujianEditorItem Scene Graph (child[3])
+    }
+
+    // Issue #943：校对只展示 Core 返回的 byte-range 建议，不在后台改正文。
+    ToolButton {
+        id: correctionToolButton
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.rightMargin: Kirigami.Units.smallSpacing
+        anchors.topMargin: Kirigami.Units.smallSpacing
+        z: 40
+        text: root.editorControllerRef && root.editorControllerRef.correctionCheckPending
+              ? qsTr("校对中…") : qsTr("校对")
+        enabled: !!(root.editorControllerRef && root.editorControllerRef.chapterId)
+        onClicked: correctionPopup.open()
+    }
+
+    Popup {
+        id: correctionPopup
+        parent: root
+        x: Math.max(8, root.width - width - 8)
+        y: correctionToolButton.y + correctionToolButton.height + 4
+        width: Math.max(280, Math.min(root.width - 16, 400))
+        height: Math.max(220, Math.min(root.height - y - 8, 430))
+        padding: 12
+        modal: false
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            radius: Kirigami.Units.cornerRadius
+            color: Kirigami.Theme.backgroundColor
+            border.width: 1
+            border.color: Kirigami.Theme.textColor
+            opacity: 0.98
+        }
+
+        contentItem: Column {
+            spacing: 8
+            width: correctionPopup.availableWidth
+            height: correctionPopup.availableHeight
+
+            Row {
+                width: parent.width
+                spacing: 8
+
+                Button {
+                    text: root.editorControllerRef && root.editorControllerRef.correctionCheckPending
+                          ? qsTr("正在检查") : qsTr("检查本章")
+                    enabled: !!(root.editorControllerRef
+                                && root.editorControllerRef.chapterId
+                                && !root.editorControllerRef.correctionCheckPending)
+                    onClicked: root.editorControllerRef.requestCorrectionChapter()
+                }
+                Button {
+                    text: qsTr("清除标注")
+                    enabled: !!(root.editorControllerRef
+                                && root.editorControllerRef.correctionSuggestions.length)
+                    onClicked: root.editorControllerRef.invalidateCorrectionResults()
+                }
+            }
+
+            Row {
+                width: parent.width
+                spacing: 6
+
+                TextField {
+                    id: correctionModelPathField
+                    width: parent.width - setModelPathButton.implicitWidth - parent.spacing
+                    placeholderText: qsTr("本地 .klm 模型文件路径")
+                    selectByMouse: true
+                    onAccepted: root.editorControllerRef.setCorrectionModelPath(text)
+                }
+                Button {
+                    id: setModelPathButton
+                    text: qsTr("设置")
+                    onClicked: root.editorControllerRef.setCorrectionModelPath(correctionModelPathField.text)
+                }
+            }
+
+            Label {
+                width: parent.width
+                visible: !!(root.editorControllerRef
+                            && (root.editorControllerRef.correctionError
+                                || root.editorControllerRef.correctionStatus))
+                text: root.editorControllerRef
+                      ? (root.editorControllerRef.correctionError
+                         || root.editorControllerRef.correctionStatus) : ""
+                color: root.editorControllerRef && root.editorControllerRef.correctionError
+                       ? "#C52222" : Kirigami.Theme.textColor
+                wrapMode: Text.Wrap
+            }
+
+            ListView {
+                id: correctionSuggestionList
+                width: parent.width
+                height: Math.max(0, parent.height - 94)
+                clip: true
+                spacing: 6
+                model: root.editorControllerRef
+                       ? root.editorControllerRef.correctionSuggestions : []
+
+                delegate: Rectangle {
+                    required property var modelData
+                    width: correctionSuggestionList.width
+                    height: correctionSuggestionColumn.implicitHeight + 16
+                    radius: Kirigami.Units.cornerRadius
+                    color: Kirigami.Theme.alternateBackgroundColor
+
+                    Column {
+                        id: correctionSuggestionColumn
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 4
+
+                        Label {
+                            width: parent.width
+                            text: qsTr("“%1” → “%2”")
+                                  .arg(modelData.original)
+                                  .arg(modelData.replacement)
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            width: parent.width
+                            text: qsTr("byte [%1, %2) · 字符 [%3, %4) · UTF-16 [%5, %6)")
+                                  .arg(modelData.startByte)
+                                  .arg(modelData.endByte)
+                                  .arg(modelData.startChar)
+                                  .arg(modelData.endChar)
+                                  .arg(modelData.startUtf16)
+                                  .arg(modelData.endUtf16)
+                            font.pixelSize: 11
+                            color: Kirigami.Theme.disabledTextColor
+                        }
+                        Label {
+                            width: parent.width
+                            text: root.editorControllerRef
+                                  ? root.editorControllerRef.correctionReason(modelData) : ""
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 12
+                        }
+                        Flow {
+                            width: parent.width
+                            spacing: 4
+                            Button {
+                                text: qsTr("替换")
+                                onClicked: root.editorControllerRef.acceptCorrection(modelData)
+                            }
+                            Button {
+                                text: qsTr("忽略一次")
+                                onClicked: root.editorControllerRef.ignoreCorrection(modelData, "once")
+                            }
+                            Button {
+                                text: qsTr("忽略本章")
+                                onClicked: root.editorControllerRef.ignoreCorrection(modelData, "chapter")
+                            }
+                            Button {
+                                text: qsTr("加入作品词典")
+                                onClicked: root.editorControllerRef.addCorrectionWord(modelData)
+                            }
+                            Button {
+                                text: qsTr("停用此规则")
+                                onClicked: root.editorControllerRef.ignoreCorrection(modelData, "rule")
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // 编辑器上下文菜单

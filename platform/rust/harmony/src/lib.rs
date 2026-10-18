@@ -26,12 +26,14 @@ pub use writer_core::ffi::{
     writer_core_init, writer_core_update_network_state,
 };
 
+mod correction;
 mod diagnostics;
 mod init;
 mod secure_storage;
 mod services;
 mod transport;
 
+pub use correction::*;
 pub use diagnostics::*;
 pub use init::*;
 pub use secure_storage::HarmonyHuksSecureStorage;

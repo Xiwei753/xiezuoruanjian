@@ -616,6 +616,49 @@ impl SujianEditorItem {
         }
     }
 
+    /// Apply a proofreading suggestion as the editor's ordinary Core Replace
+    /// transaction. Both revision and source text are checked on the GUI thread
+    /// immediately before the transaction is submitted.
+    pub(crate) fn accept_correction(
+        &mut self,
+        start_byte: u32,
+        end_byte: u32,
+        original: QString,
+        replacement: QString,
+        expected_revision: u64,
+    ) -> bool {
+        if !self.current_editor_enabled || self.pipeline.text_revision() != expected_revision {
+            return false;
+        }
+
+        let start = start_byte as usize;
+        let end = end_byte as usize;
+        let original = original.to_string();
+        let text = self.pipeline.committed_text();
+        if start > end
+            || end > text.len()
+            || !text.is_char_boundary(start)
+            || !text.is_char_boundary(end)
+            || text.get(start..end) != Some(original.as_str())
+        {
+            return false;
+        }
+
+        let op = EditOp::Replace {
+            start,
+            end,
+            text: replacement.to_string(),
+            pipeline_cause: EditorTransactionCause::Programmatic,
+        };
+        let outcome = self.apply_edit_with_visuals(op, EditorTransactionCause::Programmatic, None);
+        if outcome.applied {
+            self.cursor_ctrl.last_move_source =
+                cursor_controller::CursorMoveSource::TextTransaction;
+            self.emit_content_changed();
+        }
+        outcome.applied
+    }
+
     pub(crate) fn select_all(&mut self) {
         // Issue #705 评论 5717380886: 全选是非正文事务导致的逻辑 cursor 移动。
         let text_len = self.pipeline.committed_text().len();

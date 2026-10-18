@@ -69,7 +69,17 @@ import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.interop.TextEditSessionBridge
 import com.xiwei.sujian.feature.editor.session.CoreEditFactEvent
 import com.xiwei.sujian.feature.editor.session.DocumentSaveReceiptTracker
+import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionAcceptResult
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionCoordinator
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionIgnoreScope
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionIdentity
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionState
+import com.xiwei.sujian.feature.editor.session.EditorCorrectionSuggestion
 import com.xiwei.sujian.feature.editor.session.EditorDocumentUpdate
+import com.xiwei.sujian.feature.editor.session.EditorEditSource
+import com.xiwei.sujian.feature.editor.session.toEditorOperationKind
+import com.xiwei.sujian.feature.editor.session.toSessionDelta
 import com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator
 import com.xiwei.sujian.feature.editor.session.TargetDocumentFact
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
@@ -83,7 +93,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
@@ -110,6 +122,14 @@ class EditorViewModel(
      * 经 [TextEditSessionBridge] 调 Rust Core replace。由 [initialize] 注入。
      */
     internal var _appServiceBridge: AppServiceBridge? = null
+
+    private var correctionCoordinator: EditorCorrectionCoordinator? = null
+    private val emptyCorrectionState = MutableStateFlow(EditorCorrectionState())
+    val correctionState: StateFlow<EditorCorrectionState>
+        get() = correctionCoordinator?.state ?: emptyCorrectionState.asStateFlow()
+
+    private val _correctionHintEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val correctionHintEvents = _correctionHintEvents.asSharedFlow()
 
     /**
      * #641 评论1 第2节：ViewModel 拥有的 TextFieldState bridge 映射 —
@@ -195,6 +215,14 @@ class EditorViewModel(
         }
         if (appServiceBridge != null) {
             _appServiceBridge = appServiceBridge
+        }
+        if (correctionCoordinator == null && _sessionCoordinator != null && _appServiceBridge != null) {
+            correctionCoordinator =
+                EditorCorrectionCoordinator(
+                    appServiceBridge = _appServiceBridge!!,
+                    sessionCoordinator = _sessionCoordinator!!,
+                    currentIdentity = ::currentCorrectionIdentity,
+                )
         }
         if (firstSettingsRepositoryAttach) {
             viewModelScope.launch {
@@ -471,6 +499,133 @@ class EditorViewModel(
                 commitToCore = commitToCore,
             )
         }
+    }
+
+    /** Request correction for the sentence currently visible around the caret. */
+    fun requestCorrectionSegment(
+        targetId: String,
+        startByte: Int,
+        endByte: Int,
+        visibleText: String,
+    ) {
+        if (inputFrozen || isLoadingChapter) return
+        val identity = currentCorrectionIdentity() ?: return
+        if (identity.targetId != targetId) return
+        val correction = correctionCoordinator ?: return
+        viewModelScope.launch {
+            correction.checkSegment(identity, startByte, endByte, visibleText)
+        }
+    }
+
+    fun clearCorrectionSuggestions(targetId: String) {
+        correctionCoordinator?.clear(targetId)
+    }
+
+    fun requestCorrectionChapter(targetId: String) {
+        if (inputFrozen || isLoadingChapter) return
+        val identity = currentCorrectionIdentity() ?: return
+        if (identity.targetId != targetId) return
+        val correction = correctionCoordinator ?: return
+        viewModelScope.launch { correction.checkChapter(identity) }
+    }
+
+    fun ignoreCorrectionSuggestion(
+        targetId: String,
+        suggestion: EditorCorrectionSuggestion,
+        scope: EditorCorrectionIgnoreScope,
+    ) {
+        val identity = currentCorrectionIdentity() ?: return
+        if (identity.targetId != targetId) return
+        val correction = correctionCoordinator ?: return
+        viewModelScope.launch {
+            if (correction.ignore(identity, suggestion, scope)) {
+                _correctionHintEvents.tryEmit(
+                    getApplication<Application>().getString(R.string.editor_correction_ignored),
+                )
+            }
+        }
+    }
+
+    fun addCorrectionDictionaryEntry(targetId: String, entry: String) {
+        val identity = currentCorrectionIdentity() ?: return
+        if (identity.targetId != targetId) return
+        val correction = correctionCoordinator ?: return
+        viewModelScope.launch {
+            if (correction.addDictionaryEntry(identity, entry)) {
+                _correctionHintEvents.tryEmit(
+                    getApplication<Application>().getString(R.string.editor_correction_added_to_dictionary),
+                )
+            }
+        }
+    }
+
+    /** Accept a Core suggestion through the session's programmatic transaction reducer. */
+    fun acceptCorrectionSuggestion(
+        targetId: String,
+        suggestion: EditorCorrectionSuggestion,
+    ) {
+        if (inputFrozen || isLoadingChapter) return
+        val identity = currentCorrectionIdentity() ?: return
+        if (identity.targetId != targetId) return
+        val correction = correctionCoordinator ?: return
+        viewModelScope.launch {
+            when (val result = correction.accept(identity, suggestion)) {
+                is EditorCorrectionAcceptResult.Applied -> {
+                    applyAuthoritativeToBridge(
+                        targetId,
+                        result.after.text,
+                        result.after.selectionAnchorUtf8,
+                        result.after.selectionHeadUtf8,
+                    )
+                    val edit = result.edit
+                    onEditorApplied(
+                        EditorAppliedEvent(
+                            revision = edit.newRevision,
+                            transactionId = edit.transactionId,
+                            operationKind = edit.operationKind.toEditorOperationKind(),
+                            source = EditorEditSource.PROGRAMMATIC,
+                            cause = edit.cause,
+                            contentChanged = edit.displayPatches.isNotEmpty(),
+                            contentDelta = edit.contentDelta.toSessionDelta(),
+                            selectionAnchorUtf8 = edit.newSelectionAnchor,
+                            selectionHeadUtf8 = edit.newSelectionHead,
+                        ),
+                    )
+                    _editFactEvents.send(
+                        CoreEditFactEvent(
+                            targetId = targetId,
+                            transactionId = edit.transactionId,
+                            baseRevision = edit.baseRevision,
+                            newRevision = edit.newRevision,
+                            oldText = result.before.text,
+                            newText = result.after.text,
+                            cause = edit.cause,
+                            operationKind = result.edit.operationKind,
+                            offsetMap = edit.offsetMap,
+                            oldSelectionHeadUtf8 = edit.oldSelectionHead,
+                            newSelectionHeadUtf8 = edit.newSelectionHead,
+                        ),
+                    )
+                    _correctionHintEvents.tryEmit(
+                        getApplication<Application>().getString(R.string.editor_correction_applied),
+                    )
+                }
+                EditorCorrectionAcceptResult.Stale,
+                EditorCorrectionAcceptResult.Rejected,
+                -> Unit
+            }
+        }
+    }
+
+    private fun currentCorrectionIdentity(): EditorCorrectionIdentity? {
+        if (inputFrozen || isLoadingChapter) return null
+        val session = currentSession ?: return null
+        return EditorCorrectionIdentity(
+            projectId = session.projectId,
+            volumeId = session.volumeId,
+            chapterId = session.chapterId,
+            targetId = chapterTargetId(session.projectId, session.volumeId, session.chapterId),
+        )
     }
 
     /**

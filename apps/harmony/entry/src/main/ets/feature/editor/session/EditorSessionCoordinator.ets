@@ -171,6 +171,17 @@ export class EditorSessionCoordinator {
   }
 
   /**
+   * Serialize an editor transaction issued by another Core domain through this session's queue.
+   * Correction acceptance uses this path so it cannot race normal typing and its EditorEditResult
+   * still updates the single EditorSessionState/listener flow.
+   */
+  enqueueExternalEdit(
+    bridgeCall: (sessionId: number, expectedRevision: number) => Promise<ResultEnvelope<EditorEditResult>>
+  ): Promise<ResultEnvelope<EditorEditResult>> {
+    return this.enqueueEdit(bridgeCall)
+  }
+
+  /**
    * 从 Core snapshot() 重建 state：用于 patch 失败或 StaleRevision 恢复。
    * 拿到 Core 完整 snapshot 后替换 this.state 并 notifyListener。
    * snapshot 调用本身失败时无法恢复，保留旧 state（best effort）；不吞错误，记入 warnings 不阻塞后续命令。

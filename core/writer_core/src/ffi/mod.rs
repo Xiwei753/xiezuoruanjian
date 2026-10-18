@@ -12,6 +12,7 @@
 
 // pub：供 writer-platform-harmony cdylib re-export 并导出 `writer_core_*` 符号。
 pub mod app_state_ops;
+pub mod correction_ops;
 pub mod editor_session_ops;
 pub mod project_ops;
 pub mod search_ops;

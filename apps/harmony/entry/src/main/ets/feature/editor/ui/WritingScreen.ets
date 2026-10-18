@@ -57,6 +57,11 @@ import { WritingToolRail } from './WritingToolRail'
 import { EditorPresentationUpdate } from '../motion/EditorPresentationUpdate'
 import { EditorMotionPolicy } from '../motion/EditorMotionPolicy'
 import { ProjectWorkspaceViewModel } from '../../project/presentation/ProjectWorkspaceViewModel'
+import { CorrectionCoordinator, CorrectionPresentationState } from '../correction/CorrectionCoordinator'
+import { MappedCorrectionSuggestion } from '../correction/CorrectionDtos'
+import { CorrectionIgnoreScope } from '../correction/ICorrectionBridge'
+import { NativeCorrectionBridge } from '../correction/NativeCorrectionBridge'
+import { CorrectionSuggestionsPanel } from '../correction/CorrectionSuggestionsPanel'
 
 // Issue #920 A：写作页不再向 Core 要七角色 bounds，布局由 ArkUI 自适应自行决定。
 // Issue #932：宽窄形态统一由 AdaptiveContext.prefersWideLayout（与导航/设置同一口径）判定，
@@ -94,6 +99,9 @@ export struct WritingScreen {
   @State projectId: string = ''
   @State volumeId: string = ''
   @State content: string = ''
+  @State correctionSuggestions: MappedCorrectionSuggestion[] = []
+  @State correctionIsChecking: boolean = false
+  @State correctionErrorMessage: string = ''
   @State wordCount: number = 0
   @State isLoading: boolean = true
   @State isSaving: boolean = false
@@ -209,6 +217,8 @@ export struct WritingScreen {
   private adaptiveObserver: AdaptiveObserver | null = null
   // 编辑会话协调器（唯一编辑命令入口），由协调器持有并驱动。
   private editorCoordinator: EditorSessionCoordinator = new EditorSessionCoordinator(new NativeEditorSessionBridge())
+  private correctionCoordinator: CorrectionCoordinator = new CorrectionCoordinator(
+    new NativeCorrectionBridge(), this.editorCoordinator)
   private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.editorCoordinator)
   private selectionController: SelectionController = new SelectionController(this.editorCoordinator)
   private harmonyImeConnection: HarmonyImeConnection = new HarmonyImeConnection()
@@ -268,6 +278,12 @@ export struct WritingScreen {
       this.chapterTitle = params.chapterTitle || ''
       this.continuationParams = params
     }
+
+    this.correctionCoordinator.setStateListener((state: CorrectionPresentationState): void => {
+      this.correctionSuggestions = state.suggestions
+      this.correctionIsChecking = state.isChecking
+      this.correctionErrorMessage = state.errorMessage
+    })
 
     // Issue #920 A：把路由上下文交给协调器，并注册显示状态回流 + 会话打开后的平台侧恢复。
     const workflowConfig: WritingWorkflowConfig = {
@@ -369,6 +385,7 @@ export struct WritingScreen {
 
     const snap = update.snapshot
     if (snap !== null) {
+      this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap)
       // Issue #879：把 snapshot + editResult + sessionId 保存在一个 @State presentationUpdate 中。
       const layoutSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
         snap,
@@ -385,9 +402,14 @@ export struct WritingScreen {
       this.updateContinuationState()
       // 内容变化时更新碰一碰/隔空传送 payload（Issue #629 评论 5 第 7 节）。
       this.updateSharePayload()
-    } else if (hashChanged) {
-      // 保存成功后 contentHash 前进：更新接续状态（此时 hasUnsavedChanges=false 带完整 selection/cursor）。
-      this.updateContinuationState()
+    } else {
+      if (state.isLoading || state.errorMessage.length > 0) {
+        this.correctionCoordinator.clear()
+      }
+      if (hashChanged) {
+        // 保存成功后 contentHash 前进：更新接续状态（此时 hasUnsavedChanges=false 带完整 selection/cursor）。
+        this.updateContinuationState()
+      }
     }
   }
 
@@ -413,6 +435,7 @@ export struct WritingScreen {
     }
     // 清除协调器监听器（避免 close 后回调）。
     this.writingWorkflow.dispose()
+    this.correctionCoordinator.dispose()
 
     // Issue #629 评论 5 第 7 节：页面离开时 stop 碰一碰/隔空传送（成对，不留监听）。
     this.stopShareLifecycle()
@@ -1392,28 +1415,70 @@ export struct WritingScreen {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        SujianEditor({
-          scroller: this.editorScroller,
-          presentationUpdate: this.presentationUpdate,
-          motionPolicy: this.motionPolicy,
-          harmonyImeConnection: this.harmonyImeConnection,
-          inputAdapter: this.inputAdapter,
-          selectionController: this.selectionController,
-          dispatcher: this.dispatcher,
-          viewportController: this.viewportController,
-          onViewportChange: (state: EditorViewportState): void => {
-            this.currentViewport = state
-            this.updateContinuationState()
-          }
-        })
-          .width('100%')
-          .layoutWeight(1)
-          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+        Column() {
+          CorrectionSuggestionsPanel({
+            suggestions: this.correctionSuggestions,
+            isChecking: this.correctionIsChecking,
+            errorMessage: this.correctionErrorMessage,
+            onCheckChapter: (): void => { void this.correctionCoordinator.checkChapter() },
+            onApply: (suggestion: MappedCorrectionSuggestion): void => { void this.applyCorrection(suggestion) },
+            onIgnore: (suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): void => {
+              void this.ignoreCorrection(suggestion, scope)
+            },
+            onAddDictionary: (suggestion: MappedCorrectionSuggestion): void => {
+              void this.addCorrectionDictionaryEntry(suggestion)
+            }
+          })
+            .width('100%')
+            .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+
+          SujianEditor({
+            scroller: this.editorScroller,
+            presentationUpdate: this.presentationUpdate,
+            correctionSuggestions: this.correctionSuggestions,
+            motionPolicy: this.motionPolicy,
+            harmonyImeConnection: this.harmonyImeConnection,
+            inputAdapter: this.inputAdapter,
+            selectionController: this.selectionController,
+            dispatcher: this.dispatcher,
+            viewportController: this.viewportController,
+            onViewportChange: (state: EditorViewportState): void => {
+              this.currentViewport = state
+              this.updateContinuationState()
+            }
+          })
+            .width('100%')
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
       }
     }
     .width('100%')
     .height('100%')
     .alignItems(HorizontalAlign.Center)
+  }
+
+  private async applyCorrection(suggestion: MappedCorrectionSuggestion): Promise<void> {
+    const result = await this.correctionCoordinator.apply(suggestion)
+    if (!result.success) {
+      this.correctionErrorMessage = result.userMessage ?? result.errorCode ?? '校对建议已过期，请重新检查'
+    }
+  }
+
+  private async ignoreCorrection(suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): Promise<void> {
+    const result = await this.correctionCoordinator.ignore(suggestion, scope)
+    if (!result.success) {
+      this.correctionErrorMessage = result.userMessage ?? result.errorCode ?? '忽略操作未完成'
+    }
+  }
+
+  private async addCorrectionDictionaryEntry(suggestion: MappedCorrectionSuggestion): Promise<void> {
+    const result = await this.correctionCoordinator.addToDictionary(suggestion)
+    if (!result.success) {
+      this.correctionErrorMessage = result.userMessage ?? result.errorCode ?? '加入词典未完成'
+    }
   }
 
   // 窄屏专用底栏（Issue #767 评论 5828146609 第 2 节：字数显示合并到底部保存状态栏）。

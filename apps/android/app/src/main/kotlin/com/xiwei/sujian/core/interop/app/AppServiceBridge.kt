@@ -699,6 +699,94 @@ open class AppServiceBridge(
             )
         }
 
+    fun setCorrectionModelPath(path: String): BridgeResult<Unit> =
+        holder.wrapResult {
+            holder.service.setCorrectionModelPath(path)
+        }
+
+    fun checkCorrectionSegment(
+        sessionId: ULong,
+        projectId: String,
+        chapterId: String,
+        textRevision: ULong,
+        startByte: UInt,
+        endByte: UInt,
+    ): BridgeResult<List<uniffi.writer_core.CorrectionSuggestionDto>> =
+        holder.wrapResult {
+            holder.service.checkCorrectionSegment(
+                sessionId,
+                projectId,
+                chapterId,
+                textRevision,
+                startByte,
+                endByte,
+            )
+        }
+
+    fun checkCorrectionChapter(
+        sessionId: ULong,
+        projectId: String,
+        chapterId: String,
+        textRevision: ULong,
+    ): BridgeResult<List<uniffi.writer_core.CorrectionSuggestionDto>> =
+        holder.wrapResult {
+            holder.service.checkCorrectionChapter(sessionId, projectId, chapterId, textRevision)
+        }
+
+    fun ignoreCorrection(
+        projectId: String,
+        chapterId: String,
+        ruleId: String,
+        original: String,
+        scope: uniffi.writer_core.CorrectionIgnoreScopeDto,
+        textRevision: ULong,
+        startByte: UInt,
+        endByte: UInt,
+    ): BridgeResult<Boolean> =
+        holder.wrapResult {
+            holder.service.ignoreCorrection(
+                projectId,
+                chapterId,
+                ruleId,
+                original,
+                scope,
+                textRevision,
+                startByte,
+                endByte,
+            )
+        }
+
+    fun addCorrectionDictionaryEntry(
+        projectId: String,
+        entry: String,
+    ): BridgeResult<Boolean> =
+        holder.wrapResult {
+            holder.service.addCorrectionDictionaryEntry(projectId, entry)
+        }
+
+    fun applyCorrection(
+        sessionId: ULong,
+        projectId: String,
+        chapterId: String,
+        textRevision: ULong,
+        startByte: UInt,
+        endByte: UInt,
+        original: String,
+        replacement: String,
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> =
+        holder.wrapResult {
+            holder.service.applyCorrection(
+                sessionId,
+                projectId,
+                chapterId,
+                textRevision,
+                startByte,
+                endByte,
+                original,
+                replacement,
+            )
+        }
+
     // ── #649 评论 5561286861：恢复专用写入接口（不触发 MirrorChangeSink）──
 
     /**

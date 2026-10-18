@@ -61,6 +61,7 @@ pub mod app_config;
 pub mod settings_registry;
 
 pub mod chapter;
+pub mod correction;
 pub mod editor;
 pub mod error;
 pub mod history;

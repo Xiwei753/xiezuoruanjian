@@ -55,6 +55,19 @@ QtObject {
     property string previousEditorText: ""
     property string lastSavedEditorText: ""
 
+    // Issue #943：proofreading results are revision-scoped annotations only.
+    // The editor item remains the sole owner of editable text and transactions.
+    property var correctionSuggestions: []
+    property string correctionError: ""
+    property string correctionStatus: ""
+    property bool correctionCheckPending: false
+    property int correctionRequestSerial: 0
+    property int pendingCorrectionRequestId: 0
+    property double pendingCorrectionRevision: -1
+    property string pendingCorrectionProjectId: ""
+    property string pendingCorrectionChapterId: ""
+    property string pendingCorrectionText: ""
+
     // Autosave timer
     property var autoSaveTimer: Timer {
         interval: controller.settingsBackendRef ? controller.settingsBackendRef.setting_auto_save_delay_ms : 1500
@@ -152,6 +165,7 @@ QtObject {
     property var editorItemConnections: Connections {
         target: targetEditorItem ? targetEditorItem : null
         function onText_changed() {
+            controller.invalidateCorrectionResults();
             controller.handlePlainTextChanged("sujian_editor_text_changed");
             Qt.callLater(targetEditorItem.flush_content_height);
         }
@@ -165,6 +179,16 @@ QtObject {
         }
     }
 
+    property var correctionBackendConnections: Connections {
+        target: editorBackendRef ? editorBackendRef : null
+        function onCorrection_check_ready(requestId, textRevision, suggestionsJson) {
+            controller.receiveCorrectionSuggestions(requestId, textRevision, suggestionsJson);
+        }
+        function onCorrection_check_failed(requestId, textRevision, message) {
+            controller.receiveCorrectionFailure(requestId, textRevision, message);
+        }
+    }
+
     // Safe plain text extraction via SujianEditorItem in Rust.
     // Never returns HTML regardless of textFormat setting.
     function getEditorPlainText() {
@@ -174,6 +198,302 @@ QtObject {
     function normalizePlainText(text) {
         if (text === undefined || text === null) return "";
         return String(text).replace(/\u2029/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    }
+
+    function invalidateCorrectionResults() {
+        correctionRequestSerial += 1;
+        if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
+        pendingCorrectionRequestId = correctionRequestSerial;
+        pendingCorrectionRevision = -1;
+        pendingCorrectionProjectId = "";
+        pendingCorrectionChapterId = "";
+        pendingCorrectionText = "";
+        correctionSuggestions = [];
+        correctionCheckPending = false;
+        correctionError = "";
+        correctionStatus = "";
+    }
+
+    function requestCorrectionChapter() {
+        if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) {
+            correctionError = qsTr("请先打开一个章节。");
+            return;
+        }
+        if (!editorBackendRef.request_correction_chapter) {
+            correctionError = qsTr("当前版本不支持校对。");
+            return;
+        }
+
+        var snapshotText = getEditorPlainText();
+        var revision = Number(targetEditorItem.text_revision);
+        if (!isFinite(revision) || revision < 0) {
+            correctionError = qsTr("无法读取正文版本。");
+            return;
+        }
+        correctionRequestSerial += 1;
+        if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
+        pendingCorrectionRequestId = correctionRequestSerial;
+        pendingCorrectionRevision = revision;
+        pendingCorrectionProjectId = projectId;
+        pendingCorrectionChapterId = chapterId;
+        pendingCorrectionText = snapshotText;
+        correctionSuggestions = [];
+        correctionError = "";
+        correctionStatus = qsTr("正在校对本章…");
+        correctionCheckPending = true;
+        editorBackendRef.request_correction_chapter(
+            pendingCorrectionRequestId,
+            projectId,
+            chapterId,
+            revision,
+            snapshotText);
+    }
+
+    function correctionResponseIsCurrent(requestId, textRevision) {
+        if (requestId !== pendingCorrectionRequestId) return false;
+        if (textRevision !== pendingCorrectionRevision) return false;
+        if (projectId !== pendingCorrectionProjectId || chapterId !== pendingCorrectionChapterId) return false;
+        if (!targetEditorItem || Number(targetEditorItem.text_revision) !== textRevision) return false;
+        if (getEditorPlainText() !== pendingCorrectionText) return false;
+        return true;
+    }
+
+    // QML QString indices count UTF-16 code units. Convert only the small set
+    // of returned byte-range endpoints while walking the immutable snapshot
+    // once; do not build a character map or copy a transformed chapter.
+    function annotateCorrectionPositions(text, suggestions) {
+        var endpoints = [];
+        for (var index = 0; index < suggestions.length; index += 1) {
+            var startByte = Number(suggestions[index].startByte);
+            var endByte = Number(suggestions[index].endByte);
+            if (!isFinite(startByte) || !isFinite(endByte)
+                    || Math.floor(startByte) !== startByte
+                    || Math.floor(endByte) !== endByte
+                    || startByte < 0 || endByte < startByte) {
+                throw new Error("校对 byte range 无效");
+            }
+            endpoints.push({ byte: startByte, index: index, edge: "start" });
+            endpoints.push({ byte: endByte, index: index, edge: "end" });
+        }
+        endpoints.sort(function(a, b) { return a.byte - b.byte; });
+
+        var textIndex = 0;
+        var byteOffset = 0;
+        var utf16Offset = 0;
+        var charOffset = 0;
+        for (var endpointIndex = 0; endpointIndex < endpoints.length; endpointIndex += 1) {
+            var endpoint = endpoints[endpointIndex];
+            while (byteOffset < endpoint.byte) {
+                if (textIndex >= text.length) throw new Error("校对 byte range 超出正文");
+                var first = text.charCodeAt(textIndex);
+                var codePoint = first;
+                var units = 1;
+                if (first >= 0xD800 && first <= 0xDBFF) {
+                    if (textIndex + 1 >= text.length) throw new Error("正文包含无效 UTF-16 代理项");
+                    var second = text.charCodeAt(textIndex + 1);
+                    if (second < 0xDC00 || second > 0xDFFF) throw new Error("正文包含无效 UTF-16 代理项");
+                    codePoint = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
+                    units = 2;
+                } else if (first >= 0xDC00 && first <= 0xDFFF) {
+                    throw new Error("正文包含无效 UTF-16 代理项");
+                }
+                var utf8Bytes = codePoint <= 0x7F ? 1
+                              : codePoint <= 0x7FF ? 2
+                              : codePoint <= 0xFFFF ? 3 : 4;
+                byteOffset += utf8Bytes;
+                utf16Offset += units;
+                charOffset += 1;
+                textIndex += units;
+            }
+            if (byteOffset !== endpoint.byte) throw new Error("校对位置不在 UTF-8 字符边界");
+            var suggestion = suggestions[endpoint.index];
+            if (endpoint.edge === "start") {
+                suggestion.startUtf16 = utf16Offset;
+                suggestion.startChar = charOffset;
+            } else {
+                suggestion.endUtf16 = utf16Offset;
+                suggestion.endChar = charOffset;
+            }
+        }
+
+        for (var suggestionIndex = 0; suggestionIndex < suggestions.length; suggestionIndex += 1) {
+            var item = suggestions[suggestionIndex];
+            if (text.slice(item.startUtf16, item.endUtf16) !== item.original) {
+                throw new Error("校对原文与 byte range 不匹配");
+            }
+        }
+        return suggestions;
+    }
+
+    function receiveCorrectionSuggestions(requestId, textRevision, suggestionsJson) {
+        if (requestId !== pendingCorrectionRequestId) return;
+        correctionCheckPending = false;
+        if (!correctionResponseIsCurrent(requestId, textRevision)) {
+            invalidateCorrectionResults();
+            correctionStatus = qsTr("正文已变化，请重新校对。");
+            return;
+        }
+        try {
+            var parsed = JSON.parse(String(suggestionsJson));
+            if (!Array.isArray(parsed)) throw new Error("校对结果格式无效");
+            for (var i = 0; i < parsed.length; i += 1) {
+                var suggestion = parsed[i];
+                if (Number(suggestion.textRevision) !== textRevision) throw new Error("校对正文版本无效");
+            }
+            parsed.sort(function(a, b) { return a.startByte - b.startByte; });
+            annotateCorrectionPositions(pendingCorrectionText, parsed);
+            correctionSuggestions = parsed;
+            correctionStatus = parsed.length > 0
+                    ? qsTr("发现 %1 条建议").arg(parsed.length)
+                    : qsTr("未发现建议。");
+        } catch (error) {
+            correctionSuggestions = [];
+            correctionError = String(error);
+            correctionStatus = "";
+        }
+    }
+
+    function receiveCorrectionFailure(requestId, textRevision, message) {
+        if (requestId !== pendingCorrectionRequestId) return;
+        correctionCheckPending = false;
+        if (!correctionResponseIsCurrent(requestId, textRevision)) {
+            invalidateCorrectionResults();
+            correctionStatus = qsTr("正文已变化，请重新校对。");
+            return;
+        }
+        correctionSuggestions = [];
+        correctionStatus = "";
+        correctionError = String(message || qsTr("校对失败。"));
+    }
+
+    function suggestionIsCurrent(suggestion) {
+        if (!(targetEditorItem
+                && Number(suggestion.textRevision) === Number(targetEditorItem.text_revision)
+                && projectId === pendingCorrectionProjectId
+                && chapterId === pendingCorrectionChapterId)) return false;
+        var currentText = getEditorPlainText();
+        return currentText.slice(suggestion.startUtf16, suggestion.endUtf16) === suggestion.original;
+    }
+
+    function correctionReason(suggestion) {
+        var reasons = {
+            "confusion.custom": qsTr("命中作品中的自定义易混词替换。"),
+            "proper.similarity": qsTr("与作品中已有专名相似，请核对人名或地名。"),
+            "detector.exact": qsTr("词典检测给出了明确替换。"),
+            "detector.oov": qsTr("该词未收录在作品词典中，替换后的句子语言模型评分更高。"),
+            "detector.char_mad": qsTr("字符组合偏离语言模型习惯，替换后的句子评分更高。"),
+            "detector.candidate": qsTr("替换后的句子语言模型评分更高。"),
+            "punctuation.repeated": qsTr("发现连续重复标点；这也可能是有意的表达。"),
+            "character.repeated": qsTr("发现连续重复汉字；请结合语境确认。")
+        };
+        var sourceNames = {
+            "confusion_word": qsTr("易混词"),
+            "proper_name": qsTr("专名相似度"),
+            "oov": qsTr("词典与语言模型"),
+            "character_ngram": qsTr("字符语言模型"),
+            "rule": qsTr("文本规则")
+        };
+        var reason = reasons[suggestion.ruleId]
+                || qsTr("命中规则 %1。需结合上下文判断。 ").arg(suggestion.ruleId);
+        var sourceName = sourceNames[suggestion.source] || suggestion.source;
+        return qsTr("%1（来源：%2）").arg(reason).arg(sourceName);
+    }
+
+    function acceptCorrection(suggestion) {
+        if (!suggestionIsCurrent(suggestion)) {
+            invalidateCorrectionResults();
+            correctionStatus = qsTr("正文已变化，请重新校对。");
+            return false;
+        }
+        var applied = targetEditorItem.accept_correction(
+            suggestion.startByte,
+            suggestion.endByte,
+            suggestion.original,
+            suggestion.replacement,
+            suggestion.textRevision);
+        if (!applied) {
+            invalidateCorrectionResults();
+            correctionStatus = qsTr("建议已过期或原文不匹配，请重新校对。");
+            return false;
+        }
+        correctionStatus = qsTr("已应用建议。");
+        return true;
+    }
+
+    function ignoreCorrection(suggestion, scope) {
+        if (!suggestionIsCurrent(suggestion)) {
+            invalidateCorrectionResults();
+            correctionStatus = qsTr("正文已变化，请重新校对。");
+            return false;
+        }
+        if (!editorBackendRef || !editorBackendRef.ignore_correction) return false;
+        var result = editorBackendRef.ignore_correction(
+            projectId,
+            chapterId,
+            suggestion.ruleId,
+            suggestion.original,
+            scope,
+            suggestion.textRevision,
+            suggestion.startByte,
+            suggestion.endByte);
+        if (!result || !result.success) {
+            correctionError = result && result.rawError ? result.rawError : qsTr("忽略建议失败。");
+            return false;
+        }
+        var remaining = [];
+        for (var i = 0; i < correctionSuggestions.length; i += 1) {
+            var item = correctionSuggestions[i];
+            var remove = scope === "once"
+                    ? item.startByte === suggestion.startByte && item.endByte === suggestion.endByte
+                    : scope === "chapter"
+                      ? item.ruleId === suggestion.ruleId && item.original === suggestion.original
+                      : item.ruleId === suggestion.ruleId;
+            if (!remove) {
+                remaining.push(item);
+            }
+        }
+        correctionSuggestions = remaining;
+        correctionStatus = scope === "once" ? qsTr("已忽略这一次。")
+                : scope === "chapter" ? qsTr("已在本章忽略此类建议。")
+                : qsTr("已停用此规则。") ;
+        return true;
+    }
+
+    function addCorrectionWord(suggestion) {
+        if (!suggestionIsCurrent(suggestion)) {
+            invalidateCorrectionResults();
+            correctionStatus = qsTr("正文已变化，请重新校对。");
+            return false;
+        }
+        if (!editorBackendRef || !editorBackendRef.add_correction_dictionary_entry) return false;
+        var result = editorBackendRef.add_correction_dictionary_entry(projectId, suggestion.original);
+        if (!result || !result.success) {
+            correctionError = result && result.rawError ? result.rawError : qsTr("加入作品词典失败。");
+            return false;
+        }
+        var remaining = [];
+        for (var i = 0; i < correctionSuggestions.length; i += 1) {
+            if (correctionSuggestions[i].original !== suggestion.original) remaining.push(correctionSuggestions[i]);
+        }
+        correctionSuggestions = remaining;
+        correctionError = "";
+        correctionStatus = qsTr("已加入作品词典；下次检查会使用该词条。");
+        return true;
+    }
+
+    function setCorrectionModelPath(path) {
+        if (!editorBackendRef || !editorBackendRef.set_correction_model_path) {
+            correctionError = qsTr("当前版本不支持配置校对模型。");
+            return false;
+        }
+        var result = editorBackendRef.set_correction_model_path(path);
+        if (!result || !result.success) {
+            correctionError = result && result.rawError ? result.rawError : qsTr("模型路径设置失败。");
+            return false;
+        }
+        correctionError = "";
+        correctionStatus = qsTr("模型路径已保存。");
+        return true;
     }
 
     function readEditorItemPlainText() {

@@ -678,6 +678,7 @@ impl AppBackend {
     // Deprecated compatibility forwarding surface is split by domain.
 }
 
+pub(crate) mod correction_operations;
 #[path = "editor_backend.rs"]
 pub mod editor_backend;
 #[path = "project_backend.rs"]

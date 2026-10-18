@@ -36,7 +36,7 @@
 
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { EditorRenderBackend, EditorRenderResult } from '../render/EditorRenderBackend'
-import { SelectionRect, CaretRect, CompositionUnderlineRect, LineLayout } from '../render/editor_render_geometry'
+import { SelectionRect, CaretRect, CompositionUnderlineRect, LineLayout, computeSelectionRectsFromLineLayouts } from '../render/editor_render_geometry'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
@@ -64,6 +64,7 @@ import { RevisionPositionMap, PositionMapStep } from '../motion/editor_revision_
 import { EditorMotionLayer, ClipRect, MotionTextOverlayBuilder, MotionTextOverlayParams, MotionWindowSource } from '../motion/EditorMotionLayer'
 // Issue #879 最新复核评论修复（问题1）：EditorEditResult 用于收集事务链。
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
+import { MappedCorrectionSuggestion } from '../correction/CorrectionDtos'
 // Issue #879 复核评论修复（问题1/3/4）：前后台排版隔离 + 稳定运动字形源池。
 import { EditorPendingLayoutHost, PendingLayoutRequest } from './EditorPendingLayoutHost'
 import { EditorMotionSourcePool, MotionSourceRoots } from '../motion/EditorMotionSourcePool'
@@ -128,6 +129,7 @@ export struct SujianEditor {
   // Issue #879：接收 EditorPresentationUpdate（含 layoutSnapshot + editResult + sessionId），
   // 不再只接收 EditorLayoutSnapshot。
   @Prop @Watch('onPresentationUpdateChanged') presentationUpdate: EditorPresentationUpdate | null = null
+  @Prop @Watch('onCorrectionSuggestionsChanged') correctionSuggestions: MappedCorrectionSuggestion[] = []
   // Issue #879：运动策略，由父组件（WritingScreen）从 LocalSettings 构造后传入。
   motionPolicy: EditorMotionPolicy = new EditorMotionPolicy(
     100, 80, MotionMode.Independent, false, false, false, false
@@ -268,6 +270,7 @@ export struct SujianEditor {
   // 改为 ResourceColor 引用系统颜色资源，随系统 light/dark 自动适配。
   selectionBackgroundColor: ResourceColor = $r('sys.color.ohos_id_color_text_highlight_bg')
   compositionUnderlineColor: ResourceColor = $r('sys.color.ohos_id_color_emphasize')
+  correctionUnderlineColor: ResourceColor = $r('sys.color.ohos_id_color_warning')
   caretColor: ResourceColor = $r('sys.color.ohos_id_color_text_primary')
   // Issue #879 本轮复核评论修复（问题1）：删除 editorBackgroundColor——不再用背景色 Rect 遮罩。
   // 主 Text 仍完整排版，但其绘制输出按 staticVisibleRanges 用 clipShape/maskShape 裁切——
@@ -277,6 +280,7 @@ export struct SujianEditor {
   @State selectionRects: SelectionRect[] = []
   @State caretRect: CaretRect | null = null
   @State compositionUnderlineRects: CompositionUnderlineRect[] = []
+  @State correctionUnderlineRects: SelectionRect[] = []
   // Issue #629 评论6 Part C：分开 viewport 与 content 尺寸。
   // viewportWidth/viewportHeight：外层 Scroll 可视区域尺寸（px），来自 Scroll onAreaChange。
   // contentWidth/contentHeight：内层正文实际渲染尺寸（px），来自 Text onAreaChange。
@@ -723,6 +727,7 @@ export struct SujianEditor {
       this.selectionRects = []
       this.caretRect = null
       this.compositionUnderlineRects = []
+      this.correctionUnderlineRects = []
       this.displayedVisualFrame = null
       this.candidateVisualFrame = null
       // Issue #879 最新复核评论问题4：会话失效时丢弃候选句柄。
@@ -926,6 +931,10 @@ export struct SujianEditor {
 
     // Issue #768 评论5837824666：推送诊断快照（布局相关字段从缓存读取）。
     this.pushDiagnosticsSnapshot()
+  }
+
+  private onCorrectionSuggestionsChanged(): void {
+    this.refreshCorrectionUnderlineRects()
   }
 
   // Issue #879 复核评论修复（问题1）：EditorPendingLayoutHost 排版完成回调。
@@ -1981,11 +1990,13 @@ export struct SujianEditor {
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
+      this.refreshCorrectionUnderlineRects()
     } else {
       this.renderResult = null
       this.selectionRects = []
       this.caretRect = null
       this.compositionUnderlineRects = []
+      this.correctionUnderlineRects = []
       // snapshot 为 null 时清空 resolver + 取消等待（无文本无布局）。
       this.lineResolver.cancelWait()
       this.lineResolver.updateLayout(null)
@@ -2029,6 +2040,38 @@ export struct SujianEditor {
       }
       this.refreshRenderLayoutFallback(snap)
     }
+  }
+
+  /** Draw revision-matched Core suggestions as thin warning underlines in editor coordinates. */
+  private refreshCorrectionUnderlineRects(): void {
+    const snapshot = this.displayedSnapshot
+    const result = this.renderResult
+    if (snapshot === null || result === null || this.contentWidth <= 0 ||
+        result.revision !== snapshot.revision || result.lines.length === 0 ||
+        snapshot.compositionStart !== null || this.correctionSuggestions.length === 0) {
+      this.correctionUnderlineRects = []
+      return
+    }
+    const measureUtils = this.getUIContext().getMeasureUtils()
+    const measureTextFn = (text: string): number => {
+      return this.getUIContext().px2vp(measureUtils.measureText({ textContent: text, fontSize: snapshot.fontSize }))
+    }
+    const rects: SelectionRect[] = []
+    for (let i = 0; i < this.correctionSuggestions.length; i++) {
+      const suggestion = this.correctionSuggestions[i]
+      if (suggestion.textRevision !== snapshot.revision || suggestion.startUtf16 < 0 ||
+          suggestion.endUtf16 <= suggestion.startUtf16 ||
+          snapshot.text.substring(suggestion.startUtf16, suggestion.endUtf16) !== suggestion.original) {
+        continue
+      }
+      const suggestionRects = computeSelectionRectsFromLineLayouts(
+        snapshot.text, result.lines, this.contentWidth,
+        suggestion.startUtf16, suggestion.endUtf16, measureTextFn)
+      for (let j = 0; j < suggestionRects.length; j++) {
+        rects.push(suggestionRects[j])
+      }
+    }
+    this.correctionUnderlineRects = rects
   }
 
   // Issue #768 任务10：从系统 LayoutManager 获取真实布局。
@@ -2077,6 +2120,7 @@ export struct SujianEditor {
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
       this.compositionUnderlineRects = result.compositionUnderlineRects
+      this.refreshCorrectionUnderlineRects()
 
       // 3. 更新行级导航解析器（带身份）
       // Issue #768 评论5836390597 第2项：传入 measureTextFn 让 buildLayoutStateFromSystem
@@ -2137,6 +2181,7 @@ export struct SujianEditor {
     this.selectionRects = result.selectionRects
     this.caretRect = result.caretRect
     this.compositionUnderlineRects = result.compositionUnderlineRects
+    this.refreshCorrectionUnderlineRects()
     const navigationLines: NavigationLine[] = result.lines
     const layoutState: LineLayoutState = {
       revision: snap.revision,
@@ -2858,6 +2903,15 @@ export struct SujianEditor {
               .height(rect.height)
               .fill(this.compositionUnderlineColor)
           }, (rect: CompositionUnderlineRect, index: number) => index.toString())
+
+          // Current-revision correction diagnostics use the same committed line geometry as text.
+          ForEach(this.correctionUnderlineRects, (rect: SelectionRect, index: number) => {
+            Rect()
+              .position({ x: rect.x, y: rect.y + Math.max(0, rect.height - 2) })
+              .width(rect.width)
+              .height(Math.min(2, rect.height))
+              .fill(this.correctionUnderlineColor)
+          }, (rect: SelectionRect, index: number) => `correction_${index}`)
 
           // 5. caret（最上层）— Issue #879：单一视觉光标。
           // 动画中：光标位置由 displayedVisualFrame 决定（画在裁切前沿 front）。

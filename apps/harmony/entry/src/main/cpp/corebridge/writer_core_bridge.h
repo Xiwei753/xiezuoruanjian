@@ -213,6 +213,16 @@ char* writer_core_editor_session_composition_move_grapheme_right(uint64_t sessio
 char* writer_core_editor_session_composition_delete_grapheme_backward(uint64_t session_id, uint64_t composition_session_id, uint64_t composition_generation, uint64_t expected_revision);
 char* writer_core_editor_session_composition_delete_grapheme_forward(uint64_t session_id, uint64_t composition_session_id, uint64_t composition_generation, uint64_t expected_revision);
 
+// ── Chinese correction ──
+// All methods return ResultEnvelope JSON; the returned string must be released with
+// writer_core_free_string. Ranges and revisions are Core UTF-8 byte offsets/revisions.
+char* writer_core_set_correction_model_path(const char* path);
+char* writer_core_check_correction_segment(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision, uint32_t start_byte, uint32_t end_byte);
+char* writer_core_check_correction_chapter(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision);
+char* writer_core_ignore_correction(const char* project_id, const char* chapter_id, const char* rule_id, const char* original, const char* scope, uint64_t text_revision, uint32_t start_byte, uint32_t end_byte);
+char* writer_core_add_correction_dictionary_entry(const char* project_id, const char* entry);
+char* writer_core_apply_correction(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision, uint32_t start_byte, uint32_t end_byte, const char* original, const char* replacement);
+
 #ifdef __cplusplus
 }
 #endif

@@ -9,6 +9,8 @@ use crate::facade::WriterCore;
 
 pub type ApiResult<T> = Result<T, WriterError>;
 
+mod correction_ops;
+
 pub struct WriterCoreApi {
     pub(crate) app_data_root: PathBuf,
     pub(crate) projects_root: PathBuf,

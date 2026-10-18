@@ -1,0 +1,49 @@
+//! Correction diagnostics and user actions exposed across platform boundaries.
+
+/// A correction suggestion tied to the exact Core text revision that produced it.
+/// Byte ranges are UTF-8 half-open intervals; UI indices are computed by the platform.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionSuggestionDto {
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub original: String,
+    pub replacement: String,
+    pub source: String,
+    pub rule_id: String,
+    pub severity: String,
+    pub text_revision: u64,
+}
+
+impl TryFrom<(sujian_proof::CorrectionDiagnostic, u64)> for CorrectionSuggestionDto {
+    type Error = crate::api::WriterError;
+
+    fn try_from(
+        (diagnostic, text_revision): (sujian_proof::CorrectionDiagnostic, u64),
+    ) -> Result<Self, Self::Error> {
+        let start_byte = u32::try_from(diagnostic.start_byte)
+            .map_err(|error| crate::api::WriterError::Other(error.to_string()))?;
+        let end_byte = u32::try_from(diagnostic.end_byte)
+            .map_err(|error| crate::api::WriterError::Other(error.to_string()))?;
+        Ok(Self {
+            start_byte,
+            end_byte,
+            original: diagnostic.original,
+            replacement: diagnostic.replacement,
+            source: diagnostic.source,
+            rule_id: diagnostic.rule_id,
+            severity: diagnostic.severity,
+            text_revision,
+        })
+    }
+}
+
+/// Scope of an explicit user ignore action.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrectionIgnoreScopeDto {
+    Once,
+    Chapter,
+    Permanent,
+    Rule,
+}

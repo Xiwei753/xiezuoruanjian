@@ -1,3 +1,4 @@
+mod correction_ops;
 mod project_ops;
 mod search_ops;
 mod settings_ops;

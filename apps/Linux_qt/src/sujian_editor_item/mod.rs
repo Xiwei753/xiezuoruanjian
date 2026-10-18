@@ -262,6 +262,9 @@ pub struct SujianEditorItem {
 
     #[allow(dead_code)]
     plain_text: qt_property!(QString; READ plain_text WRITE set_plain_text NOTIFY plain_text_changed),
+    /// Issue #943: the authoritative Core EditorKernel text revision.
+    #[allow(dead_code)]
+    text_revision: qt_property!(u64; READ text_revision NOTIFY text_changed),
     #[allow(dead_code)]
     content_height: qt_property!(f32; READ content_height NOTIFY content_height_changed),
     #[allow(dead_code)]
@@ -407,6 +410,18 @@ pub struct SujianEditorItem {
     select_all: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     selected_text: qt_method!(fn(&self) -> QString),
+    /// Accepts one proofreading marker through the normal Core Replace transaction.
+    #[allow(dead_code)]
+    accept_correction: qt_method!(
+        fn(
+            &mut self,
+            start_byte: u32,
+            end_byte: u32,
+            original: QString,
+            replacement: QString,
+            expected_revision: u64,
+        ) -> bool
+    ),
     #[allow(dead_code)]
     undo: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
@@ -593,6 +608,7 @@ impl Default for SujianEditorItem {
         Self {
             base: Default::default(),
             plain_text: Default::default(),
+            text_revision: Default::default(),
             content_height: Default::default(),
             cursor_position: Default::default(),
             has_selection: Default::default(),
@@ -658,6 +674,7 @@ impl Default for SujianEditorItem {
             delete_selection: Default::default(),
             select_all: Default::default(),
             selected_text: Default::default(),
+            accept_correction: Default::default(),
             undo: Default::default(),
             redo: Default::default(),
             handle_key: Default::default(),
