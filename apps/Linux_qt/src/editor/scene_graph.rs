@@ -434,7 +434,7 @@ cpp! {{
         return hash;
     }
 
-    static QSGGeometryNode *create_text_decoration_node(QSGTransformNode *layer, const QColor &color) {
+    static QSGGeometryNode *create_text_decoration_node(const QColor &color) {
         auto *node = new QSGGeometryNode;
         auto *geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 0);
         geometry->setDrawingMode(QSGGeometry::DrawTriangles);
@@ -447,7 +447,6 @@ cpp! {{
         node->setMaterial(material);
         node->setFlag(QSGNode::OwnsMaterial);
         node->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-        layer->appendChildNode(node);
         return node;
     }
 
@@ -456,21 +455,20 @@ cpp! {{
         int index,
         const QColor &color
     ) {
-        QSGGeometryNode *node = nullptr;
-        if (index < layer->childCount()) {
-            node = dynamic_cast<QSGGeometryNode*>(child_at(layer, index));
+        if (auto *existing = dynamic_cast<QSGGeometryNode*>(child_at(layer, index))) {
+            return existing;
         }
-        if (node) return node;
 
-        if (index < layer->childCount()) {
-            QSGNode *oldNode = child_at(layer, index);
-            layer->removeChildNode(oldNode);
-            delete oldNode;
+        if (QSGNode *old = child_at(layer, index)) {
+            layer->removeChildNode(old);
+            delete old;
         }
-        node = create_text_decoration_node(layer, color);
-        if (layer->childCount() > index) {
-            layer->removeChildNode(node);
-            layer->insertChildNodeBefore(node, child_at(layer, index));
+
+        auto *node = create_text_decoration_node(color);
+        if (QSGNode *before = child_at(layer, index)) {
+            layer->insertChildNodeBefore(node, before);
+        } else {
+            layer->appendChildNode(node);
         }
         return node;
     }
