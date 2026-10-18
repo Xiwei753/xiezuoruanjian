@@ -17,6 +17,9 @@ use super::types::{CaretAffinity, CaretRect, ParagraphId, VisualLine};
 pub struct CanonicalClusterSnapshot {
     pub document_byte_start: usize,
     pub document_byte_end: usize,
+    /// Paragraph-local QChar range used by the QTextLine that shaped this cluster.
+    pub qchar_start: usize,
+    pub qchar_end: usize,
     pub source_rect_x: f64,
     pub source_rect_y: f64,
     pub source_rect_w: f64,
@@ -48,6 +51,8 @@ pub struct CanonicalLineSnapshot {
     pub x_end_trailing: f64,
     pub image: Option<qmetaobject::QImage>,
     pub clusters: Vec<CanonicalClusterSnapshot>,
+    /// Indices into `clusters`, sorted by paragraph-local UTF-8 byte range for range queries.
+    pub cluster_byte_order: Vec<usize>,
     pub cursor_x_map: Vec<CursorXMapEntry>,
     // Issue #785 评论 5857873894 修改 2a: 稳定行身份字段。
     // prepare_animation_visuals_from_layout 按 (generation, cache_slot, qtextline_idx)

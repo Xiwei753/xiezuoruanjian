@@ -559,6 +559,8 @@ pub struct SujianEditorItem {
     /// - render thread（`update_paint_node()`）只读，不调用任何排版方法。
     /// - `None` 表示需要 GUI 侧重新准备，render thread 跳过静态正文渲染。
     prepared_frame: Option<render_plan::PreparedEditorFrame>,
+    /// 上次提交到当前 QSG root 的装饰几何/孔洞/段落位移签名。
+    last_text_decoration_render_signature: Option<u64>,
     /// Render-thread publication and Qt afterFrameEnd acknowledgment channel.
     frame_submission_mailbox: Arc<frame_submission::FrameSubmissionMailbox>,
     /// Window signal connections are rebound on QQuickItem::windowChanged.
@@ -755,6 +757,7 @@ impl Default for SujianEditorItem {
             scene_dirty: true,
             force_full_relayout_pending: true,
             prepared_frame: None,
+            last_text_decoration_render_signature: None,
             frame_submission_mailbox,
             frame_window_connections: Rc::default(),
             window_changed_connection: None,
@@ -855,39 +858,51 @@ impl SujianEditorItem {
             )
             .clone();
         let selection_preedit = self.build_selection_preedit_plan_from_snapshot(&snapshot);
-        let text_decorations = self.build_text_decoration_geometry(&snapshot);
+        let text_decorations = self.build_text_decoration_geometry(&snapshot, None);
         self.prepared_frame = Some(render_plan::PreparedEditorFrame {
             layout_snapshot: snapshot,
             selection_preedit,
-            text_decorations,
+            text_decorations: Arc::new(text_decorations),
         });
     }
 
     /// 用已准备好的快照重算当前视口的装饰范围；不重新排版正文。
     pub(crate) fn refresh_text_decoration_geometry(&mut self) {
-        let geometry = self
-            .prepared_frame
-            .as_ref()
-            .map(|frame| self.build_text_decoration_geometry(&frame.layout_snapshot));
-        if let (Some(frame), Some(geometry)) = (self.prepared_frame.as_mut(), geometry) {
-            frame.text_decorations = geometry;
+        let Some(frame) = self.prepared_frame.as_ref() else {
+            return;
+        };
+        let snapshot = &frame.layout_snapshot;
+        let spans = self.current_text_decoration_spans(snapshot.text_revision);
+        let item_ptr = self.get_cpp_object();
+        let dpr = if item_ptr.is_null() {
+            1.0
+        } else {
+            crate::editor::renderer::sujian_item_dpr(item_ptr)
+        };
+        if !text_decorations::geometry_needs_refresh(
+            snapshot,
+            spans,
+            self.document_session,
+            f64::from(self.current_scroll_y),
+            f64::from(self.current_viewport_height.max(1.0)),
+            dpr,
+            frame.text_decorations.as_ref(),
+        ) {
+            return;
+        }
+        let geometry =
+            self.build_text_decoration_geometry(snapshot, Some(frame.text_decorations.as_ref()));
+        if let Some(frame) = self.prepared_frame.as_mut() {
+            frame.text_decorations = Arc::new(geometry);
         }
     }
 
     fn build_text_decoration_geometry(
         &self,
         snapshot: &LayoutSnapshot,
+        previous: Option<&text_decorations::TextDecorationGeometry>,
     ) -> text_decorations::TextDecorationGeometry {
-        if self.annotation_session != self.document_session
-            || self.annotation_revision != Some(snapshot.text_revision)
-        {
-            return text_decorations::TextDecorationGeometry {
-                document_session: self.document_session,
-                text_revision: snapshot.text_revision,
-                layout_generation: snapshot.layout_generation,
-                ..text_decorations::TextDecorationGeometry::default()
-            };
-        }
+        let spans = self.current_text_decoration_spans(snapshot.text_revision);
         let item_ptr = self.get_cpp_object();
         let dpr = if item_ptr.is_null() {
             1.0
@@ -896,12 +911,27 @@ impl SujianEditorItem {
         };
         text_decorations::build_geometry(
             snapshot,
-            &self.annotation_spans,
+            self.editor_layout.last_canonical_snapshot(),
+            spans,
             self.document_session,
             f64::from(self.current_scroll_y),
             f64::from(self.current_viewport_height.max(1.0)),
             dpr,
+            previous,
         )
+    }
+
+    fn current_text_decoration_spans(
+        &self,
+        text_revision: u64,
+    ) -> &[text_decorations::TextDecorationSpan] {
+        if self.annotation_session == self.document_session
+            && self.annotation_revision == Some(text_revision)
+        {
+            &self.annotation_spans
+        } else {
+            &[]
+        }
     }
 
     /// Issue #951：QML 只传 byte 范围与 severity；native 绑定当前 document session，

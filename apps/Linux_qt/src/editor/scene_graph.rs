@@ -21,6 +21,7 @@ cpp! {{
     #include <algorithm>
     #include <climits>
     #include <cmath>
+    #include <cstring>
     #include <iterator>
     #include <utility>
     #include <vector>
@@ -345,7 +346,93 @@ cpp! {{
             : m_paragraph_id(paragraph_id) {}
 
         quint64 m_paragraph_id;
+        quint64 m_error_signature = 0;
+        quint64 m_warning_signature = 0;
+        quint64 m_error_hole_signature = 0;
+        quint64 m_warning_hole_signature = 0;
+        bool m_has_geometry_signatures = false;
     };
+
+    static void set_text_decoration_scroll(QSGTransformNode *root, double scroll_y) {
+        auto *decorationLayer = dynamic_cast<QSGTransformNode*>(
+            child_at(root, LAYER_DECORATION)
+        );
+        if (!decorationLayer) return;
+
+        QMatrix4x4 decorationMatrix;
+        decorationMatrix.translate(0, -static_cast<qreal>(scroll_y));
+        if (decorationLayer->matrix() != decorationMatrix) {
+            decorationLayer->setMatrix(decorationMatrix);
+            decorationLayer->markDirty(QSGNode::DirtyMatrix);
+        }
+    }
+
+    static quint64 decoration_values_signature(const double *values, size_t count) {
+        // FNV-1a over the exact IEEE-754 payloads. This is a render-cache key, not
+        // a security boundary; bitwise hashing also distinguishes signed zero.
+        quint64 hash = 14695981039346656037ULL;
+        for (size_t i = 0; i < count; i++) {
+            quint64 bits = 0;
+            std::memcpy(&bits, values + i, sizeof(bits));
+            hash ^= bits;
+            hash *= 1099511628211ULL;
+        }
+        hash ^= static_cast<quint64>(count);
+        hash *= 1099511628211ULL;
+        return hash;
+    }
+
+    static bool decoration_bounds_intersect_hole(
+        double min_x,
+        double min_y,
+        double max_x,
+        double max_y,
+        const double *hole
+    ) {
+        const double left = hole[0];
+        const double top = hole[1];
+        const double right = left + hole[2];
+        const double bottom = top + hole[3];
+        return hole[2] > 0.0 && hole[3] > 0.0
+            && max_x > left && min_x < right
+            && max_y > top && min_y < bottom;
+    }
+
+    static quint64 decoration_holes_signature(
+        const double *vertices,
+        size_t flat_value_count,
+        const double *holes,
+        int hole_count
+    ) {
+        if (!vertices || flat_value_count < 2 || hole_count <= 0) return 0;
+
+        double min_x = vertices[0], max_x = vertices[0];
+        double min_y = vertices[1], max_y = vertices[1];
+        for (size_t i = 2; i + 1 < flat_value_count; i += 2) {
+            min_x = std::min(min_x, vertices[i]);
+            max_x = std::max(max_x, vertices[i]);
+            min_y = std::min(min_y, vertices[i + 1]);
+            max_y = std::max(max_y, vertices[i + 1]);
+        }
+
+        quint64 hash = 14695981039346656037ULL;
+        size_t relevant_holes = 0;
+        for (int i = 0; i < hole_count; i++) {
+            const double *hole = holes + i * 4;
+            if (!decoration_bounds_intersect_hole(min_x, min_y, max_x, max_y, hole)) continue;
+            for (int coordinate = 0; coordinate < 4; coordinate++) {
+                quint64 bits = 0;
+                std::memcpy(&bits, hole + coordinate, sizeof(bits));
+                hash ^= bits;
+                hash *= 1099511628211ULL;
+            }
+            relevant_holes++;
+        }
+        if (relevant_holes == 0) return 0;
+        hash ^= static_cast<quint64>(relevant_holes);
+        hash *= 1099511628211ULL;
+        return hash;
+    }
 
     static QSGGeometryNode *create_text_decoration_node(QSGTransformNode *layer, const QColor &color) {
         auto *node = new QSGGeometryNode;
@@ -550,6 +637,29 @@ cpp! {{
         const size_t triangle_count = flat_value_count / 6;
         for (size_t triangle = 0; triangle < triangle_count; triangle++) {
             const size_t start = triangle * 6;
+            double min_x = vertices[start], max_x = vertices[start];
+            double min_y = vertices[start + 1], max_y = vertices[start + 1];
+            for (size_t point = 1; point < 3; point++) {
+                min_x = std::min(min_x, vertices[start + point * 2]);
+                max_x = std::max(max_x, vertices[start + point * 2]);
+                min_y = std::min(min_y, vertices[start + point * 2 + 1]);
+                max_y = std::max(max_y, vertices[start + point * 2 + 1]);
+            }
+            bool intersects_hole = false;
+            for (int hole_index = 0; hole_index < hole_count; hole_index++) {
+                if (decoration_bounds_intersect_hole(
+                        min_x, min_y, max_x, max_y, holes + hole_index * 4)) {
+                    intersects_hole = true;
+                    break;
+                }
+            }
+            if (!intersects_hole) {
+                const size_t max_values = static_cast<size_t>(INT_MAX / 3) * 6;
+                if (clipped.size() + 6 > max_values) return clipped;
+                clipped.insert(clipped.end(), vertices + start, vertices + start + 6);
+                continue;
+            }
+
             std::vector<std::vector<QPointF>> pieces = {{
                 QPointF(vertices[start], vertices[start + 1]),
                 QPointF(vertices[start + 2], vertices[start + 3]),
@@ -855,6 +965,25 @@ pub fn clear_animation_layer(root_raw: *mut std::ffi::c_void, item_ptr: *mut std
 /// Update the text decoration layer (child[3]) with paragraph-grouped wave geometry.
 /// Vertices and static holes use document coordinates. Paragraph offsets are applied
 /// by reusable per-paragraph transforms; the decoration layer applies scroll_y.
+pub(crate) fn update_text_decoration_scroll(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+    scroll_y: f64,
+) {
+    // SAFETY: root/item are Qt-owned scene graph pointers used on the render thread by
+    // the caller; the helper only updates the decoration layer translation.
+    cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*",
+        scroll_y as "double"
+    ] {
+        auto *root = static_cast<QSGTransformNode*>(root_raw);
+        if (!root || !item_ptr) return;
+        ensure_five_layer_nodes(root, item_ptr);
+        set_text_decoration_scroll(root, scroll_y);
+    })
+}
+
 pub(crate) fn update_text_decoration_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
@@ -864,19 +993,31 @@ pub(crate) fn update_text_decoration_layer(
     scroll_y: f64,
 ) {
     let paragraph_ids: Vec<u64> = paragraphs.iter().map(|group| group.paragraph_id).collect();
-    let mut error_offsets = Vec::with_capacity(paragraphs.len());
     let mut error_lengths = Vec::with_capacity(paragraphs.len());
-    let mut error_vertices = Vec::new();
-    let mut warning_offsets = Vec::with_capacity(paragraphs.len());
+    let error_vertex_ptrs: Vec<*const f64> = paragraphs
+        .iter()
+        .map(|group| {
+            if group.error_vertices.is_empty() {
+                std::ptr::null()
+            } else {
+                group.error_vertices.as_ptr()
+            }
+        })
+        .collect();
     let mut warning_lengths = Vec::with_capacity(paragraphs.len());
-    let mut warning_vertices = Vec::new();
+    let warning_vertex_ptrs: Vec<*const f64> = paragraphs
+        .iter()
+        .map(|group| {
+            if group.warning_vertices.is_empty() {
+                std::ptr::null()
+            } else {
+                group.warning_vertices.as_ptr()
+            }
+        })
+        .collect();
     for group in paragraphs {
-        error_offsets.push(error_vertices.len());
         error_lengths.push(group.error_vertices.len());
-        error_vertices.extend_from_slice(&group.error_vertices);
-        warning_offsets.push(warning_vertices.len());
         warning_lengths.push(group.warning_vertices.len());
-        warning_vertices.extend_from_slice(&group.warning_vertices);
     }
 
     let offset_ids: Vec<u64> = paragraph_y_offsets.iter().map(|(id, _)| *id).collect();
@@ -890,12 +1031,10 @@ pub(crate) fn update_text_decoration_layer(
     }
 
     let paragraph_ids_ptr = paragraph_ids.as_ptr();
-    let error_offsets_ptr = error_offsets.as_ptr();
     let error_lengths_ptr = error_lengths.as_ptr();
-    let error_vertices_ptr = error_vertices.as_ptr();
-    let warning_offsets_ptr = warning_offsets.as_ptr();
+    let error_vertices_ptrs_ptr = error_vertex_ptrs.as_ptr();
     let warning_lengths_ptr = warning_lengths.as_ptr();
-    let warning_vertices_ptr = warning_vertices.as_ptr();
+    let warning_vertices_ptrs_ptr = warning_vertex_ptrs.as_ptr();
     let offset_ids_ptr = offset_ids.as_ptr();
     let offset_values_ptr = offset_values.as_ptr();
     let hole_values_ptr = hole_values.as_ptr();
@@ -903,18 +1042,18 @@ pub(crate) fn update_text_decoration_layer(
     let offset_count = paragraph_y_offsets.len();
     let hole_count = static_holes.len() as i32;
 
-    // SAFETY: all packed-array pointers refer to Rust vectors kept alive for this call;
+    // SAFETY: metadata pointers refer to Rust vectors kept alive for this call; each
+    // vertex pointer refers to its corresponding paragraph slice, also alive for the
+    // duration of the call. Qt consumes the pointers synchronously on the render thread.
     // root/item are Qt-owned scene graph pointers used on the render thread by the caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
         paragraph_ids_ptr as "const quint64*",
-        error_offsets_ptr as "const size_t*",
         error_lengths_ptr as "const size_t*",
-        error_vertices_ptr as "const double*",
-        warning_offsets_ptr as "const size_t*",
+        error_vertices_ptrs_ptr as "const double *const*",
         warning_lengths_ptr as "const size_t*",
-        warning_vertices_ptr as "const double*",
+        warning_vertices_ptrs_ptr as "const double *const*",
         offset_ids_ptr as "const quint64*",
         offset_values_ptr as "const double*",
         hole_values_ptr as "const double*",
@@ -931,13 +1070,7 @@ pub(crate) fn update_text_decoration_layer(
             child_at(root, LAYER_DECORATION)
         );
         if (!decorationLayer) return;
-
-        QMatrix4x4 decorationMatrix;
-        decorationMatrix.translate(0, -static_cast<qreal>(scroll_y));
-        if (decorationLayer->matrix() != decorationMatrix) {
-            decorationLayer->setMatrix(decorationMatrix);
-            decorationLayer->markDirty(QSGNode::DirtyMatrix);
-        }
+        set_text_decoration_scroll(root, scroll_y);
 
         const QColor errorColor(220, 38, 38);
         const QColor warningColor(245, 124, 0);
@@ -946,19 +1079,11 @@ pub(crate) fn update_text_decoration_layer(
             const quint64 paragraphId = paragraph_ids_ptr[i];
             if (activeParagraphs.contains(paragraphId)) continue;
 
-            const double *errorData = error_lengths_ptr[i] > 0
-                ? error_vertices_ptr + error_offsets_ptr[i]
-                : nullptr;
-            const double *warningData = warning_lengths_ptr[i] > 0
-                ? warning_vertices_ptr + warning_offsets_ptr[i]
-                : nullptr;
-            std::vector<double> clippedErrors = clip_decoration_triangles(
-                errorData, error_lengths_ptr[i], hole_values_ptr, hole_count
-            );
-            std::vector<double> clippedWarnings = clip_decoration_triangles(
-                warningData, warning_lengths_ptr[i], hole_values_ptr, hole_count
-            );
-            if (clippedErrors.empty() && clippedWarnings.empty()) continue;
+            const double *errorData = error_vertices_ptrs_ptr[i];
+            const double *warningData = warning_vertices_ptrs_ptr[i];
+            const size_t errorLength = error_lengths_ptr[i];
+            const size_t warningLength = warning_lengths_ptr[i];
+            if (errorLength == 0 && warningLength == 0) continue;
 
             TextDecorationParagraphNode *paragraphNode = nullptr;
             for (int child = 0; child < decorationLayer->childCount(); child++) {
@@ -970,6 +1095,25 @@ pub(crate) fn update_text_decoration_layer(
                     break;
                 }
             }
+
+            const quint64 errorSignature = decoration_values_signature(errorData, errorLength);
+            const quint64 warningSignature = decoration_values_signature(warningData, warningLength);
+            const quint64 errorHoleSignature = decoration_holes_signature(
+                errorData, errorLength, hole_values_ptr, hole_count
+            );
+            const quint64 warningHoleSignature = decoration_holes_signature(
+                warningData, warningLength, hole_values_ptr, hole_count
+            );
+            const bool hasGeometryNodes = paragraphNode
+                && dynamic_cast<QSGGeometryNode*>(child_at(paragraphNode, 0))
+                && dynamic_cast<QSGGeometryNode*>(child_at(paragraphNode, 1));
+            const bool geometryUnchanged = hasGeometryNodes
+                && paragraphNode->m_has_geometry_signatures
+                && paragraphNode->m_error_signature == errorSignature
+                && paragraphNode->m_warning_signature == warningSignature
+                && paragraphNode->m_error_hole_signature == errorHoleSignature
+                && paragraphNode->m_warning_hole_signature == warningHoleSignature;
+
             if (!paragraphNode) {
                 paragraphNode = new TextDecorationParagraphNode(paragraphId);
                 decorationLayer->appendChildNode(paragraphNode);
@@ -989,6 +1133,36 @@ pub(crate) fn update_text_decoration_layer(
                 paragraphNode->markDirty(QSGNode::DirtyMatrix);
             }
 
+            if (geometryUnchanged) {
+                activeParagraphs.insert(paragraphId);
+                continue;
+            }
+
+            // Static geometry is passed directly to QSG when no hole overlaps it.
+            // Only the paragraphs and individual triangles touched by animation
+            // holes pay for polygon clipping and temporary geometry storage.
+            std::vector<double> clippedErrors;
+            const double *errorGeometry = errorData;
+            size_t errorGeometryLength = errorLength;
+            if (errorHoleSignature != 0) {
+                clippedErrors = clip_decoration_triangles(
+                    errorData, errorLength, hole_values_ptr, hole_count
+                );
+                errorGeometry = clippedErrors.empty() ? nullptr : clippedErrors.data();
+                errorGeometryLength = clippedErrors.size();
+            }
+            std::vector<double> clippedWarnings;
+            const double *warningGeometry = warningData;
+            size_t warningGeometryLength = warningLength;
+            if (warningHoleSignature != 0) {
+                clippedWarnings = clip_decoration_triangles(
+                    warningData, warningLength, hole_values_ptr, hole_count
+                );
+                warningGeometry = clippedWarnings.empty() ? nullptr : clippedWarnings.data();
+                warningGeometryLength = clippedWarnings.size();
+            }
+            if (errorGeometryLength == 0 && warningGeometryLength == 0) continue;
+
             QSGGeometryNode *errorNode = text_decoration_node_at_or_create(
                 paragraphNode, 0, errorColor
             );
@@ -1003,14 +1177,19 @@ pub(crate) fn update_text_decoration_layer(
 
             update_text_decoration_geometry(
                 errorNode,
-                clippedErrors.empty() ? nullptr : clippedErrors.data(),
-                clippedErrors.size()
+                errorGeometry,
+                errorGeometryLength
             );
             update_text_decoration_geometry(
                 warningNode,
-                clippedWarnings.empty() ? nullptr : clippedWarnings.data(),
-                clippedWarnings.size()
+                warningGeometry,
+                warningGeometryLength
             );
+            paragraphNode->m_error_signature = errorSignature;
+            paragraphNode->m_warning_signature = warningSignature;
+            paragraphNode->m_error_hole_signature = errorHoleSignature;
+            paragraphNode->m_warning_hole_signature = warningHoleSignature;
+            paragraphNode->m_has_geometry_signatures = true;
             activeParagraphs.insert(paragraphId);
         }
 

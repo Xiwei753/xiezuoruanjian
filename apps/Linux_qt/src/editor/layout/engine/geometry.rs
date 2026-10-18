@@ -383,6 +383,8 @@ pub fn prepare_paragraph_visual_snapshot(
             clusters.push(CanonicalClusterSnapshot {
                 document_byte_start: c_doc_byte_start,
                 document_byte_end: c_doc_byte_end,
+                qchar_start: c_qchar_start,
+                qchar_end: c_qchar_end,
                 source_rect_x: c_src_x,
                 source_rect_y: c_src_y,
                 source_rect_w: c_src_w,
@@ -436,6 +438,12 @@ pub fn prepare_paragraph_visual_snapshot(
             });
         }
 
+        let mut cluster_byte_order: Vec<usize> = (0..clusters.len()).collect();
+        cluster_byte_order.sort_unstable_by_key(|&cluster_index| {
+            let cluster = &clusters[cluster_index];
+            (cluster.document_byte_start, cluster.document_byte_end)
+        });
+
         lines.push(CanonicalLineSnapshot {
             qchar_start,
             qchar_end,
@@ -448,6 +456,7 @@ pub fn prepare_paragraph_visual_snapshot(
             x_end_trailing,
             image,
             clusters,
+            cluster_byte_order,
             cursor_x_map,
             // Issue #785 评论 5857873894 修改 2a: 填充稳定行身份。
             // paragraph_document_byte_start 是函数参数（段落文档 byte 起始），

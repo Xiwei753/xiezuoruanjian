@@ -1,11 +1,13 @@
 use crate::editor::layout::{
-    byte_offset_to_qchar_offset, get_paragraph_layout_cursor_to_x_on_line_checked, text_baseline_y,
-    LayoutSnapshot, VisualLine,
+    get_paragraph_layout_cursor_to_x_on_line_checked, text_baseline_y,
+    CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, LayoutSnapshot, VisualLine,
 };
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(dead_code)]
 pub(crate) enum TextDecorationKind {
     SpellErrorWave,
@@ -14,7 +16,7 @@ pub(crate) enum TextDecorationKind {
     Underline,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct TextDecorationSpan {
     pub start_byte: usize,
     pub end_byte: usize,
@@ -31,11 +33,39 @@ pub(crate) struct DecorationParagraphGeometry {
     pub warning_vertices: Vec<f64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct DecorationLineKey {
+    line_id: usize,
+    paragraph_id: u64,
+    cache_slot: i32,
+    layout_epoch: u64,
+    qtextline_idx: i32,
+    byte_start: usize,
+    byte_end: usize,
+    x_bits: u64,
+    y_bits: u64,
+    width_bits: u64,
+    height_bits: u64,
+}
+
+#[derive(Clone, Debug)]
+struct DecorationLineGeometry {
+    key: DecorationLineKey,
+    paragraph_id: u64,
+    error_vertices: Arc<[f64]>,
+    warning_vertices: Arc<[f64]>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TextDecorationGeometry {
     pub document_session: u64,
     pub text_revision: u64,
     pub layout_generation: u64,
+    pub signature: u64,
+    span_signature: u64,
+    dpr_bits: u64,
+    visible_line_keys: Vec<DecorationLineKey>,
+    line_geometries: Vec<DecorationLineGeometry>,
     pub paragraphs: Vec<DecorationParagraphGeometry>,
 }
 
@@ -95,103 +125,227 @@ pub(crate) fn parse_spans(
     Some(spans)
 }
 
-/// 从 canonical 布局生成视口附近的装饰几何；不创建或重排 QTextLayout。
-pub(crate) fn build_geometry(
+/// 判断同一批标记的视口可见行是否变化。小幅滚动仍落在原有行集合时不触发几何生成。
+pub(crate) fn geometry_needs_refresh(
     snapshot: &LayoutSnapshot,
     spans: &[TextDecorationSpan],
     document_session: u64,
     scroll_y: f64,
     viewport_height: f64,
     device_pixel_ratio: f64,
+    current: &TextDecorationGeometry,
+) -> bool {
+    let metadata_matches = current.document_session == document_session
+        && current.text_revision == snapshot.text_revision
+        && current.layout_generation == snapshot.layout_generation
+        && current.span_signature == spans_signature(spans)
+        && current.dpr_bits == normalized_dpr(device_pixel_ratio).to_bits();
+    if !metadata_matches {
+        return true;
+    }
+    if spans.is_empty() || snapshot.layout_generation == 0 {
+        return false;
+    }
+    snapshot
+        .resolve_viewport_lines(scroll_y, viewport_height.max(1.0))
+        .iter()
+        .map(decoration_line_key)
+        .ne(current.visible_line_keys.iter().cloned())
+}
+
+/// 从 canonical 布局生成视口附近的装饰几何；不创建或重排 QTextLayout。
+/// 滚动改变可见行时复用仍在视口内的行几何，只对新进入视口的行读取 QTextLine。
+pub(crate) fn build_geometry(
+    snapshot: &LayoutSnapshot,
+    canonical: Option<&CanonicalDocumentVisualSnapshot>,
+    spans: &[TextDecorationSpan],
+    document_session: u64,
+    scroll_y: f64,
+    viewport_height: f64,
+    device_pixel_ratio: f64,
+    previous: Option<&TextDecorationGeometry>,
 ) -> TextDecorationGeometry {
+    let dpr = normalized_dpr(device_pixel_ratio);
+    let span_signature = spans_signature(spans);
     let mut geometry = TextDecorationGeometry {
         document_session,
         text_revision: snapshot.text_revision,
         layout_generation: snapshot.layout_generation,
-        paragraphs: Vec::new(),
+        span_signature,
+        dpr_bits: dpr.to_bits(),
+        ..TextDecorationGeometry::default()
     };
-    if spans.is_empty() || snapshot.layout_generation == 0 {
+    if snapshot.layout_generation == 0 || spans.is_empty() {
+        geometry.signature = geometry_signature(&geometry);
         return geometry;
     }
 
-    let dpr = if device_pixel_ratio.is_finite() && device_pixel_ratio > 0.0 {
-        device_pixel_ratio
-    } else {
-        1.0
+    let visible_lines = snapshot.resolve_viewport_lines(scroll_y, viewport_height.max(1.0));
+    geometry.visible_line_keys = visible_lines.iter().map(decoration_line_key).collect();
+    let Some(canonical) =
+        canonical.filter(|canonical| canonical.text_revision == snapshot.text_revision)
+    else {
+        geometry.signature = geometry_signature(&geometry);
+        return geometry;
     };
-    let lines = snapshot.resolve_viewport_lines(scroll_y, viewport_height.max(1.0));
-    let mut by_paragraph = BTreeMap::<u64, DecorationParagraphGeometry>::new();
 
-    for line in &lines {
-        if !line.has_qt_layout || line.byte_start >= line.byte_end {
+    let can_reuse_previous = previous.is_some_and(|previous| {
+        previous.document_session == document_session
+            && previous.text_revision == snapshot.text_revision
+            && previous.layout_generation == snapshot.layout_generation
+            && previous.span_signature == span_signature
+            && previous.dpr_bits == dpr.to_bits()
+    });
+    let reusable: HashMap<DecorationLineKey, &DecorationLineGeometry> = previous
+        .filter(|_| can_reuse_previous)
+        .into_iter()
+        .flat_map(|previous| previous.line_geometries.iter())
+        .map(|line| (line.key.clone(), line))
+        .collect();
+
+    for line in &visible_lines {
+        let key = decoration_line_key(line);
+        if let Some(cached) = reusable.get(&key) {
+            geometry.line_geometries.push((*cached).clone());
             continue;
         }
-        for span in spans {
-            if span.text_revision != snapshot.text_revision {
-                continue;
-            }
-            let byte_start = span.start_byte.max(line.byte_start);
-            let byte_end = span.end_byte.min(line.byte_end);
-            if byte_start >= byte_end {
-                continue;
-            }
-            let local_start = byte_start.saturating_sub(line.para_start);
-            let local_end = byte_end.saturating_sub(line.para_start);
-            if local_start >= local_end
-                || local_end > line.para_text.len()
-                || !line.para_text.is_char_boundary(local_start)
-                || !line.para_text.is_char_boundary(local_end)
-            {
-                continue;
-            }
+        geometry.line_geometries.push(build_line_geometry(
+            snapshot, canonical, spans, line, key, dpr,
+        ));
+    }
 
-            let intervals = visual_intervals(snapshot, line, local_start, local_end);
-            if intervals.is_empty() {
-                continue;
-            }
-            let baseline =
-                text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
-            let available_descent = (line.y + line.height - baseline).max(0.0);
-            if available_descent <= 0.35 / dpr {
-                continue;
-            }
-            let stroke = (0.9 / dpr).min(available_descent * 0.5);
-            let amplitude = (0.8 / dpr).min((available_descent - stroke).max(0.0) * 0.5);
-            let center_y = baseline + (available_descent - stroke) * 0.5;
-            let paragraph = by_paragraph
-                .entry(line.paragraph_id.as_u64())
+    let mut by_paragraph = BTreeMap::<u64, DecorationParagraphGeometry>::new();
+    for line in &geometry.line_geometries {
+        let paragraph =
+            by_paragraph
+                .entry(line.paragraph_id)
                 .or_insert_with(|| DecorationParagraphGeometry {
-                    paragraph_id: line.paragraph_id.as_u64(),
+                    paragraph_id: line.paragraph_id,
                     ..DecorationParagraphGeometry::default()
                 });
-            let vertices = match span.kind {
-                TextDecorationKind::SpellErrorWave => &mut paragraph.error_vertices,
-                TextDecorationKind::SpellWarningWave => &mut paragraph.warning_vertices,
-                TextDecorationKind::Highlight | TextDecorationKind::Underline => continue,
-            };
-            for (left, right) in intervals {
-                append_wave_strip(vertices, left, right, center_y, amplitude, stroke, dpr);
+        paragraph
+            .error_vertices
+            .extend_from_slice(&line.error_vertices);
+        paragraph
+            .warning_vertices
+            .extend_from_slice(&line.warning_vertices);
+    }
+    geometry.paragraphs = by_paragraph
+        .into_values()
+        .filter(|paragraph| {
+            !paragraph.error_vertices.is_empty() || !paragraph.warning_vertices.is_empty()
+        })
+        .collect();
+    geometry.signature = geometry_signature(&geometry);
+    geometry
+}
+
+fn build_line_geometry(
+    snapshot: &LayoutSnapshot,
+    canonical: &CanonicalDocumentVisualSnapshot,
+    spans: &[TextDecorationSpan],
+    line: &VisualLine,
+    key: DecorationLineKey,
+    dpr: f64,
+) -> DecorationLineGeometry {
+    let mut error_vertices = Vec::new();
+    let mut warning_vertices = Vec::new();
+    if line.has_qt_layout && line.byte_start < line.byte_end {
+        if let Some(canonical_line) = canonical_line_for(canonical, line) {
+            let first_span = spans.partition_point(|span| span.end_byte <= line.byte_start);
+            for span in &spans[first_span..] {
+                if span.start_byte >= line.byte_end {
+                    break;
+                }
+                if span.text_revision != snapshot.text_revision {
+                    continue;
+                }
+                let byte_start = span.start_byte.max(line.byte_start);
+                let byte_end = span.end_byte.min(line.byte_end);
+                if byte_start >= byte_end {
+                    continue;
+                }
+                let local_start = byte_start.saturating_sub(line.para_start);
+                let local_end = byte_end.saturating_sub(line.para_start);
+                if local_start >= local_end
+                    || local_end > line.para_text.len()
+                    || !line.para_text.is_char_boundary(local_start)
+                    || !line.para_text.is_char_boundary(local_end)
+                {
+                    continue;
+                }
+
+                let intervals =
+                    visual_intervals(snapshot, line, canonical_line, local_start, local_end);
+                if intervals.is_empty() {
+                    continue;
+                }
+                let baseline =
+                    text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
+                let available_descent = (line.y + line.height - baseline).max(0.0);
+                if available_descent <= 0.35 / dpr {
+                    continue;
+                }
+                let stroke = (0.9 / dpr).min(available_descent * 0.5);
+                let amplitude = (0.8 / dpr).min((available_descent - stroke).max(0.0) * 0.5);
+                let center_y = baseline + (available_descent - stroke) * 0.5;
+                let vertices = match span.kind {
+                    TextDecorationKind::SpellErrorWave => &mut error_vertices,
+                    TextDecorationKind::SpellWarningWave => &mut warning_vertices,
+                    TextDecorationKind::Highlight | TextDecorationKind::Underline => continue,
+                };
+                for (left, right) in intervals {
+                    append_wave_strip(vertices, left, right, center_y, amplitude, stroke, dpr);
+                }
             }
         }
     }
-    geometry.paragraphs = by_paragraph.into_values().collect();
-    geometry
+
+    DecorationLineGeometry {
+        key,
+        paragraph_id: line.paragraph_id.as_u64(),
+        error_vertices: Arc::from(error_vertices.into_boxed_slice()),
+        warning_vertices: Arc::from(warning_vertices.into_boxed_slice()),
+    }
+}
+
+fn canonical_line_for<'a>(
+    canonical: &'a CanonicalDocumentVisualSnapshot,
+    line: &VisualLine,
+) -> Option<&'a CanonicalLineSnapshot> {
+    let paragraph_slot = usize::try_from(line.logical_slot).ok()?;
+    let line_slot = usize::try_from(line.qtextline_idx).ok()?;
+    canonical
+        .paragraphs
+        .get(paragraph_slot)?
+        .lines
+        .get(line_slot)
 }
 
 fn visual_intervals(
     snapshot: &LayoutSnapshot,
     line: &VisualLine,
+    canonical_line: &CanonicalLineSnapshot,
     byte_start: usize,
     byte_end: usize,
 ) -> Vec<(f64, f64)> {
     let mut intervals = Vec::new();
-    for (char_byte, character) in line.para_text.char_indices() {
-        let char_end = char_byte + character.len_utf8();
-        if char_byte < byte_start || char_end > byte_end {
+    let first_cluster = canonical_line
+        .cluster_byte_order
+        .partition_point(|&index| canonical_line.clusters[index].document_byte_end <= byte_start);
+    for &cluster_index in &canonical_line.cluster_byte_order[first_cluster..] {
+        let cluster = &canonical_line.clusters[cluster_index];
+        if cluster.document_byte_start >= byte_end {
+            break;
+        }
+        if cluster.document_byte_end <= byte_start {
             continue;
         }
-        let start_qchar = byte_offset_to_qchar_offset(&line.para_text, char_byte) as i32;
-        let end_qchar = byte_offset_to_qchar_offset(&line.para_text, char_end) as i32;
+
+        // Query both sides of this canonical glyph cluster from its logical start. In Qt,
+        // Trailing advances from a cluster start to that cluster's next visual caret; using
+        // it at the half-open end boundary would advance one more cluster.
+        let start_qchar = cluster.qchar_start as i32;
         let leading_x = line.x
             + get_paragraph_layout_cursor_to_x_on_line_checked(
                 snapshot.layout_generation,
@@ -207,7 +361,7 @@ fn visual_intervals(
                 line.cache_slot,
                 line.layout_epoch,
                 line.qtextline_idx,
-                end_qchar,
+                start_qchar,
                 true,
             );
         let left = leading_x.min(trailing_x);
@@ -217,13 +371,13 @@ fn visual_intervals(
         }
     }
 
-    // 按实际视觉位置合并相邻字形。双向文字会形成互不相邻的区间，不会误连成一条横跨
-    // 其他视觉 run 的下划线。
+    // Merge only visually touching clusters. Bidi runs that are separated in x remain
+    // separate intervals even when their logical byte ranges are adjacent.
     intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut merged: Vec<(f64, f64)> = Vec::with_capacity(intervals.len());
     for (left, right) in intervals {
         if let Some(last) = merged.last_mut() {
-            if left <= last.1 + 0.35 {
+            if left <= last.1 + 0.05 {
                 last.1 = last.1.max(right);
                 continue;
             }
@@ -231,6 +385,58 @@ fn visual_intervals(
         merged.push((left, right));
     }
     merged
+}
+
+fn decoration_line_key(line: &VisualLine) -> DecorationLineKey {
+    DecorationLineKey {
+        line_id: line.id,
+        paragraph_id: line.paragraph_id.as_u64(),
+        cache_slot: line.cache_slot,
+        layout_epoch: line.layout_epoch,
+        qtextline_idx: line.qtextline_idx,
+        byte_start: line.byte_start,
+        byte_end: line.byte_end,
+        x_bits: line.x.to_bits(),
+        y_bits: line.y.to_bits(),
+        width_bits: line.width.to_bits(),
+        height_bits: line.height.to_bits(),
+    }
+}
+
+fn normalized_dpr(device_pixel_ratio: f64) -> f64 {
+    if device_pixel_ratio.is_finite() && device_pixel_ratio > 0.0 {
+        device_pixel_ratio
+    } else {
+        1.0
+    }
+}
+
+fn spans_signature(spans: &[TextDecorationSpan]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    spans.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn geometry_signature(geometry: &TextDecorationGeometry) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    geometry.document_session.hash(&mut hasher);
+    geometry.text_revision.hash(&mut hasher);
+    geometry.layout_generation.hash(&mut hasher);
+    geometry.span_signature.hash(&mut hasher);
+    geometry.dpr_bits.hash(&mut hasher);
+    geometry.visible_line_keys.hash(&mut hasher);
+    for paragraph in &geometry.paragraphs {
+        paragraph.paragraph_id.hash(&mut hasher);
+        paragraph.error_vertices.len().hash(&mut hasher);
+        for vertex in &paragraph.error_vertices {
+            vertex.to_bits().hash(&mut hasher);
+        }
+        paragraph.warning_vertices.len().hash(&mut hasher);
+        for vertex in &paragraph.warning_vertices {
+            vertex.to_bits().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 fn append_wave_strip(

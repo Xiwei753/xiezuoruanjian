@@ -206,6 +206,7 @@ impl QQuickItem for SujianEditorItem {
     /// 安全清理 `g_incremental_para_map[item_ptr]`。erase 只按指针值移除 map 条目，
     /// 不解引用 item_ptr，即使 job 执行时 item 已被销毁也安全。
     fn release_resources(&mut self) {
+        self.last_text_decoration_render_signature = None;
         let item_ptr = self.get_cpp_object();
         if !item_ptr.is_null() {
             qt_text_node::schedule_clear_incremental_para_map(item_ptr);
@@ -302,6 +303,9 @@ impl QQuickItem for SujianEditorItem {
         // Issue #677 评论 5653790560: 不再通过 into_raw / from_raw 做所有权往返，
         // 直接读写 node.raw（SGNode.raw 是 pub 字段）。第一帧 node.raw 为 null 时
         // ensure_editor_root 创建根节点并写回 node.raw；后续渲染统一用 node.raw。
+        if node.raw.is_null() {
+            self.last_text_decoration_render_signature = None;
+        }
         node.raw = scene_graph::ensure_editor_root(node.raw);
         let editor_root = node.raw;
 
@@ -388,7 +392,7 @@ impl QQuickItem for SujianEditorItem {
 
             let text_decorations = prepared_frame
                 .filter(|_| prepared_frame_matches_canonical)
-                .map(|frame| frame.text_decorations.clone())
+                .map(|frame| std::sync::Arc::clone(&frame.text_decorations))
                 .filter(|geometry| {
                     geometry.document_session == self.document_session
                         && geometry.text_revision == self.pipeline.text_revision()
@@ -497,6 +501,7 @@ impl QQuickItem for SujianEditorItem {
                 &static_text,
                 &render_plan,
                 self.pipeline.texture_cache(),
+                &mut self.last_text_decoration_render_signature,
             );
             let static_rebuild_ok = render_outcome.static_rebuild_ok;
 

@@ -462,8 +462,8 @@ impl SujianEditorItem {
         // 进度采样，整体换 viewport offset（rendering.rs / Scene Graph 用 QSGTransformNode
         // 矩阵做 translate(0, -scroll_y)）。
         self.update_cursor_visual_position();
-        // Issue #951：滚动时只用现有 canonical snapshot 刷新视口附近的装饰几何，
-        // 不触发正文排版或静态 QTextNode 重建。
+        // Issue #951：可见行集合变化时才从现有 canonical snapshot 补入新行几何；
+        // 同一组行内的小幅滚动只更新装饰层位移，不触发 QTextLayout 查询。
         self.refresh_text_decoration_geometry();
         // Issue #658: 滚动不重新排版 QSGTextNode，只请求帧更新（位移由 QSGTransformNode 矩阵处理）。
         // Issue #901 第八轮问题3: request_frame_update 触发下一帧 update_paint_node →

@@ -3,6 +3,7 @@ use super::render_plan::RenderPlan;
 use super::texture_cache::TextureCache;
 use crate::editor::layout::{LayoutSnapshot, ParagraphHeightIndex};
 use crate::editor::scene_graph;
+use std::hash::{Hash, Hasher};
 
 /// Issue #904：`render_frame` 的渲染结果。
 ///
@@ -197,6 +198,7 @@ pub(crate) fn render_frame(
     static_text: &StaticTextParams<'_>,
     plan: &RenderPlan,
     texture_cache: &TextureCache,
+    last_text_decoration_signature: &mut Option<u64>,
 ) -> FrameRenderOutcome {
     if root_raw.is_null() || item_ptr.is_null() {
         return FrameRenderOutcome::failed();
@@ -581,14 +583,19 @@ pub(crate) fn render_frame(
     } else {
         &[]
     };
-    scene_graph::update_text_decoration_layer(
-        root_raw,
-        item_ptr,
-        &plan.text_decorations.paragraphs,
-        &plan.local_text.paragraph_y_offsets,
-        decoration_holes,
-        static_text.scroll_y,
-    );
+    scene_graph::update_text_decoration_scroll(root_raw, item_ptr, static_text.scroll_y);
+    let decoration_signature = text_decoration_render_signature(plan, decoration_holes);
+    if *last_text_decoration_signature != Some(decoration_signature) {
+        scene_graph::update_text_decoration_layer(
+            root_raw,
+            item_ptr,
+            &plan.text_decorations.paragraphs,
+            &plan.local_text.paragraph_y_offsets,
+            decoration_holes,
+            static_text.scroll_y,
+        );
+        *last_text_decoration_signature = Some(decoration_signature);
+    }
     // Layer 4: 光标
     // Issue #727 评论 5755858583 问题1: scroll_y 传给 render_cursor_layer，
     // cursor layer 的 QSGTransformNode 统一做 translate(0, -scroll_y)。
@@ -601,6 +608,25 @@ pub(crate) fn render_frame(
         committed_holes,
         animation_layer_ok,
     }
+}
+
+fn text_decoration_render_signature(
+    plan: &RenderPlan,
+    holes: &[qt_text_node::AnimationClipRect],
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    plan.text_decorations.signature.hash(&mut hasher);
+    for (paragraph_id, offset) in &plan.local_text.paragraph_y_offsets {
+        paragraph_id.hash(&mut hasher);
+        offset.to_bits().hash(&mut hasher);
+    }
+    for hole in holes {
+        hole.x.to_bits().hash(&mut hasher);
+        hole.y.to_bits().hash(&mut hasher);
+        hole.w.to_bits().hash(&mut hasher);
+        hole.h.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Issue #904 复核 5：**预备**动画层（两阶段提交的第一阶段，不改动场景图）。
