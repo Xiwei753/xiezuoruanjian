@@ -126,8 +126,20 @@ Rectangle {
         if (!root.lifetime) return "—"
         var first = root.formatDate(root.lifetime.firstWritingDate)
         var last = root.formatDate(root.lifetime.lastWritingDate)
-        if (first === "" && last === "") return qsTr("暂无本机记录")
+        if (first === "" && last === "") {
+            return root.historyScope === "localEvents" ? qsTr("暂无本机记录") : qsTr("暂无记录")
+        }
         return first + " – " + last
+    }
+
+    // 历史口径标注：Core 返回 localEvents / syncedDevices / partialSync，未知值不显示。
+    function historyScopeText() {
+        switch (root.historyScope) {
+        case "localEvents": return qsTr("本机记录")
+        case "syncedDevices": return qsTr("已同步设备记录")
+        case "partialSync": return qsTr("同步不完整")
+        }
+        return ""
     }
 
     function selectedRangeText() {
@@ -428,10 +440,10 @@ Rectangle {
                                     }
                                 }
 
-                                // events.local 不同步：生涯只代表本机可读历史，页面明确标注。
+                                // 历史口径来自 Core：本机 / 已同步设备 / 同步不完整，不因打开同步开关就宣称全量。
                                 Label {
-                                    visible: root.historyScope === "localEvents"
-                                    text: qsTr("本机记录")
+                                    visible: root.historyScopeText() !== ""
+                                    text: root.historyScopeText()
                                     color: Kirigami.Theme.disabledTextColor
                                     font: Kirigami.Theme.smallFont
                                 }

@@ -382,6 +382,39 @@ pub fn run_single_target_transfer(
     Some((target_sync_result, resolution, action))
 }
 
+/// Prepare 阶段已失败的 target 结果（#955：本机统计事件库迁移失败）。
+///
+/// 调用方跳过该 target 的 Transfer / Commit，但仍继续同步其它独立组；
+/// 失败沿用既有 `failure_phase` / `failure_path` 反馈，不新建同步协议。
+pub(crate) fn prepare_failed_target_result(
+    plan: &FullSyncPlan,
+    target_index: usize,
+    error: &str,
+) -> TargetSyncResult {
+    let planned = &plan.targets[target_index];
+    let failure_path = match planned.target.app_group.as_ref() {
+        Some(crate::sync::types::AppDataGroup::StatsDevice(device_id)) => {
+            Some(format!("stats/events/{device_id}"))
+        }
+        _ => None,
+    };
+    TargetSyncResult {
+        target_kind: planned.target_kind.as_target_kind_str().to_string(),
+        project_id: planned.project_id.clone(),
+        remote_prefix: planned.target.remote_prefix.clone(),
+        group_id: planned.target.app_group.as_ref().map(|group| group.id()),
+        failure_path,
+        failure_phase: Some("migration".to_string()),
+        result: SyncResult::error(
+            crate::sync::SyncStatus::RecoverableError(error.to_string()),
+            error.to_string(),
+            None,
+        ),
+        deleted_resolution: None,
+        local_lifecycle_action: Default::default(),
+    }
+}
+
 fn app_group_failure_path(
     target: &crate::sync::types::SyncTarget,
     result: &SyncResult,

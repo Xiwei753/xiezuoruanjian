@@ -9,9 +9,10 @@
 //! Explorer 一次性快照（#944）返回强类型 DTO，由服务层统一转 JSON。
 
 use crate::api::types::{
-    DateRangeDto, WritingStatsExplorerDto, WritingStatsLifetimeDto, WritingStatsPeriodCardDto,
-    WritingStatsRecordDto, WritingStatsRecordsDto, WritingStatsSelectedPeriodDto,
-    WritingStatsTrendDto, WritingStatsTrendPointDto,
+    DateRangeDto, WritingStatsExplorerDto, WritingStatsHeatmapDayDto, WritingStatsHeatmapDto,
+    WritingStatsLifetimeDto, WritingStatsPeriodCardDto, WritingStatsRecordDto,
+    WritingStatsRecordsDto, WritingStatsSelectedPeriodDto, WritingStatsTrendDto,
+    WritingStatsTrendPointDto,
 };
 use crate::error::Result;
 use crate::writing_stats::calendar::{self, StatsPreset};
@@ -24,6 +25,19 @@ use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::{DateRange, WritingInputEvent};
 use serde_json::Value;
 use std::path::Path;
+
+/// 每日码字日历（#956）接受的公历年份范围：早于此范围或过远的年份直接报错，
+/// 不伪造成全年零数据。
+pub(crate) const HEATMAP_MIN_YEAR: i32 = 1970;
+pub(crate) const HEATMAP_MAX_YEAR: i32 = 2100;
+
+/// 校验每日日历查询的年份范围；Core 查询与 FFI 参数校验共用同一份规则。
+pub(crate) fn validate_heatmap_year(year: i32) -> Result<()> {
+    if (HEATMAP_MIN_YEAR..=HEATMAP_MAX_YEAR).contains(&year) {
+        return Ok(());
+    }
+    Err(crate::Error::Other(format!("invalid heatmap year: {year}")))
+}
 
 /// 把写作汇总构造成稳定 camelCase JSON —— 现有区间查询与面板快照共用同一口径。
 fn summary_json(range: &DateRange, summary: &StatsSummary) -> Value {
@@ -138,18 +152,28 @@ fn speed_buckets_json(projection: &StatsProjection) -> Vec<Value> {
 /// 写作统计 API 入口 — 直接持有 `StatsStore`，所有查询走 projection。
 pub struct StatsApi {
     store: StatsStore,
+    /// 旧事件库迁移失败状态。
+    ///
+    /// 非空表示旧单机事件库尚未完整并入按设备分区的新事件库：
+    /// 此时读取查询必须显式失败（统计页显示明确原因），不能把旧历史
+    /// 静默当成 0 字。下一次查询会重试迁移，成功后清除。
+    migration_error: std::sync::Mutex<Option<String>>,
 }
 
 impl StatsApi {
     pub fn new(app_data_root: &Path) -> Self {
-        // 迁移：补齐旧事件的 local_date（不再重建 daily）
-        if let Err(e) =
-            crate::writing_stats::migration::migrate_stats_to_local_calendar(app_data_root)
+        // 迁移：把旧版单机事件库一次性并入按设备分区的新事件库。
+        let migration_error = if let Err(e) =
+            crate::writing_stats::migration::migrate_stats_event_store(app_data_root)
         {
-            eprintln!("[writing_stats] calendar migration skipped: {}", e);
-        }
+            eprintln!("[writing_stats] event store migration failed: {}", e);
+            Some(e.to_string())
+        } else {
+            None
+        };
         Self {
             store: StatsStore::new(app_data_root),
+            migration_error: std::sync::Mutex::new(migration_error),
         }
     }
 
@@ -157,8 +181,112 @@ impl StatsApi {
         &self.store
     }
 
+    /// 读取查询前的迁移闸门：失败时显式报错并允许下一次重试。
+    ///
+    /// 迁移成功前不能把新目录当成唯一事实源；`record_event` 不受此限制，
+    /// 迁移重试会按 `event_id` 幂等并入旧事件，不会重复计数。
+    fn ensure_migrated(&self) -> Result<()> {
+        let pending = self
+            .migration_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if pending.is_none() {
+            return Ok(());
+        }
+        match crate::writing_stats::migration::migrate_stats_event_store(self.store.app_data_root())
+        {
+            Ok(()) => {
+                *self
+                    .migration_error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+                Ok(())
+            }
+            Err(e) => {
+                *self
+                    .migration_error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(e.to_string());
+                Err(crate::Error::Other(format!(
+                    "writing stats migration incomplete: {e}"
+                )))
+            }
+        }
+    }
+
+    /// 统计数据的真实覆盖范围。
+    ///
+    /// - `localEvents`：只有本机事件，且统计设备同步没有报错；
+    /// - `syncedDevices`：已包含其它设备的事件，且同步没有报错；
+    /// - `partialSync`：任一统计设备同步组最近同步失败，历史可能不完整。
+    ///
+    /// 不因「同步开关已打开」就宣称全量成功：只有真实拿到的事件参与聚合。
+    pub fn history_scope(&self) -> String {
+        if self.stats_sync_incomplete() {
+            return "partialSync".to_string();
+        }
+        let local_origin = self.store.load_origin_device_id();
+        let has_remote_data = match self.store.list_event_origins() {
+            Ok(origins) => origins
+                .iter()
+                .any(|origin| Some(origin.as_str()) != local_origin.as_deref()),
+            Err(e) => {
+                eprintln!("[writing_stats] list event origins failed: {e}");
+                false
+            }
+        };
+        if has_remote_data {
+            "syncedDevices".to_string()
+        } else {
+            "localEvents".to_string()
+        }
+    }
+
+    /// 任一统计设备同步组最近一次同步是否报错。
+    ///
+    /// 读不到组状态时按「未报错」处理，避免把正常的首次同步误标为不完整。
+    fn stats_sync_incomplete(&self) -> bool {
+        let groups_dir = self.store.app_data_root().join("app-meta/sync/groups");
+        let Ok(entries) = std::fs::read_dir(&groups_dir) else {
+            return false;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("stats-device-") {
+                continue;
+            }
+            if !entry
+                .file_type()
+                .map(|file_type| file_type.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let state_path = entry.path().join("state.local.json");
+            let Ok(bytes) = std::fs::read(&state_path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            let last_error = value
+                .get("last_error")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if !last_error.is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 「今天」的写作汇总 —— 今天是哪一天由 **Core 的本地日历口径**决定。
     pub fn get_today_stats_summary(&self) -> Result<Value> {
+        self.ensure_migrated()?;
         let today = crate::writing_stats::calendar::local_today_date();
         let range = DateRange {
             start_date: today.clone(),
@@ -168,6 +296,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_summary(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -177,6 +306,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_project(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -208,6 +338,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_chapter(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -239,6 +370,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_device(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -273,6 +405,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_device_class(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -306,6 +439,7 @@ impl StatsApi {
     /// 只读本地事件历史（`events.local` 不同步），不写任何缓存账本；
     /// 作品没有任何人工输入时返回全 0 且无首次写作日期。
     pub fn get_project_lifetime_stats(&self, project_id: &str) -> Result<ProjectLifetimeStatsAgg> {
+        self.ensure_migrated()?;
         let events = self.store.load_events_for_project(project_id)?;
         Ok(project_lifetime_stats(&events, project_id))
     }
@@ -325,6 +459,7 @@ impl StatsApi {
         custom_start: Option<&str>,
         custom_end: Option<&str>,
     ) -> Result<WritingStatsExplorerDto> {
+        self.ensure_migrated()?;
         let (preset, custom_range) =
             calendar::parse_explorer_query(preset, custom_start, custom_end)?;
         let today = calendar::local_today_date();
@@ -399,7 +534,7 @@ impl StatsApi {
         let selected_days = calendar::day_span_inclusive(&range.start_date, &range.end_date)?;
 
         Ok(WritingStatsExplorerDto {
-            history_scope: "localEvents".to_string(),
+            history_scope: self.history_scope(),
             lifetime,
             period_cards,
             selected: WritingStatsSelectedPeriodDto {
@@ -425,6 +560,96 @@ impl StatsApi {
         })
     }
 
+    /// 每日码字日历快照（#956）：指定公历年的逐日人工输入真值。
+    ///
+    /// 与 Explorer 一样一次 [`StatsStore::load_all_events`] 读盘，复用
+    /// `project_range_stats` 的 `daily_human_typed_chars` 投影；不把周/月
+    /// 趋势点拆成假每日值。已过但无记录的日期为 0；未来日期按日期字段
+    /// 原样给出，由端侧标记为「未到」而不是「没写作」。
+    ///
+    /// `intensity` 由 Core 从该年正数日的字数分布分级（0–4，见
+    /// [`heatmap_intensity_thresholds`]），端侧不重算人工字数；非法年份
+    /// 返回结构化错误，不造全年零数据。
+    pub fn get_heatmap_snapshot(&self, year: i32) -> Result<WritingStatsHeatmapDto> {
+        self.ensure_migrated()?;
+        validate_heatmap_year(year)?;
+        let start_date = format!("{year:04}-01-01");
+        let end_date = format!("{year:04}-12-31");
+
+        let events = self.store.load_all_events()?;
+        // 覆盖范围与 Explorer 同源：更早未建立记录、或统计同步失败的区间不能画成真实 0。
+        let history_scope = self.history_scope();
+        let sync_incomplete = history_scope == "partialSync";
+        let coverage_anchor = events
+            .iter()
+            .filter_map(|event| {
+                let date = event.business_date();
+                if date.is_empty() {
+                    None
+                } else {
+                    Some(date)
+                }
+            })
+            .min();
+        let today = calendar::local_today_date();
+        let stats = project_range_stats(&events, &start_date, &end_date)?;
+        let positive: Vec<u64> = stats
+            .daily_human_typed_chars
+            .values()
+            .copied()
+            .filter(|value| *value > 0)
+            .collect();
+        let thresholds = heatmap_intensity_thresholds(positive);
+
+        let start = calendar::parse_date(&start_date)?;
+        let end = calendar::parse_date(&end_date)?;
+        let mut days = Vec::with_capacity(366);
+        let mut date = start;
+        while date <= end {
+            let date_str = date.format("%Y-%m-%d").to_string();
+            let human_typed_chars = stats
+                .daily_human_typed_chars
+                .get(&date_str)
+                .copied()
+                .unwrap_or(0);
+            // 单元格覆盖状态：未来未到 / 已确认（可为真实 0）/ 覆盖不完整或同步失败。
+            let status = if date_str.as_str() > today.as_str() {
+                "future"
+            } else if human_typed_chars > 0 {
+                "known"
+            } else if sync_incomplete {
+                "unknown"
+            } else if coverage_anchor
+                .as_deref()
+                .is_some_and(|anchor| date_str.as_str() >= anchor)
+            {
+                "known"
+            } else {
+                "unknown"
+            };
+            days.push(WritingStatsHeatmapDayDto {
+                date: date_str,
+                human_typed_chars,
+                intensity: heatmap_intensity(human_typed_chars, thresholds),
+                status: status.to_string(),
+            });
+            if date == end {
+                break;
+            }
+            date = date.checked_add_days(chrono::Days::new(1)).ok_or_else(|| {
+                crate::Error::Other(format!("heatmap date overflow for year {year}"))
+            })?;
+        }
+
+        Ok(WritingStatsHeatmapDto {
+            year,
+            start_date,
+            end_date,
+            history_scope,
+            days,
+        })
+    }
+
     /// 统计面板一次性快照（#935）：一次读盘，按 Core 本地业务日历切分
     /// 今日 / 本周（周一开始）/ 本月，本周范围的作品、章节、设备与速度曲线
     /// 都从同一份投影取。
@@ -432,6 +657,7 @@ impl StatsApi {
     /// 面板不再逐个 Getter 重复 `load_events_range + project_events` 连续扫描
     /// 事件文件；日期口径统一由 Core 日历决定，平台端不自己算周一起始。
     pub fn get_dashboard_snapshot(&self) -> Result<Value> {
+        self.ensure_migrated()?;
         let today = crate::writing_stats::calendar::local_today_date();
         let week_start = crate::writing_stats::calendar::week_start_date(&today)?;
         let month_start = crate::writing_stats::calendar::month_start_date(&today)?;
@@ -491,6 +717,7 @@ impl StatsApi {
     pub fn get_speed_curve(&self, range: &DateRange, bucket_minutes: u32) -> Result<Value> {
         // 钳到至少 1 分钟，避免 bucket_ms = 0 导致速度曲线死循环
         let bucket_minutes = bucket_minutes.max(1);
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -527,6 +754,7 @@ impl StatsApi {
 
     /// 「当前写作速度」：以调用时刻为终点的实时纯输入速度。
     pub fn get_current_speed(&self, window_seconds: u32) -> Result<CurrentWritingSpeed> {
+        self.ensure_migrated()?;
         let now_ms = chrono::Utc::now().timestamp_millis();
         let window_seconds = window_seconds.max(1);
         let start_ms = now_ms - i64::from(window_seconds) * 1_000;
@@ -544,6 +772,40 @@ impl StatsApi {
     /// 本机当前的业务日历日（本地时区，非 UTC）。
     pub fn today_date() -> String {
         crate::writing_stats::calendar::local_today_date()
+    }
+}
+
+/// 每日码字日历的强度阈值：该年正数日字数的 25% / 50% / 75% 分位（最近阶）。
+///
+/// 没有正数日时三个阈值都是 0（所有日期强度为 0）。所有正数相同（或只有
+/// 一个正数日）时三个阈值相等：判定用严格小于，这些日期都会拿到最高强度 4，
+/// 同一组数据的显示始终稳定，不出现除零或 NaN。
+fn heatmap_intensity_thresholds(mut positive: Vec<u64>) -> [u64; 3] {
+    if positive.is_empty() {
+        return [0; 3];
+    }
+    positive.sort_unstable();
+    let last = positive.len() - 1;
+    let pick = |quarter: usize| -> u64 {
+        let index = positive.len() * quarter / 4;
+        positive[index.min(last)]
+    };
+    [pick(1), pick(2), pick(3)]
+}
+
+/// 单日强度：0（无输入）恒为 0；正数按分位阈值落入 1–4，最高档为 4。
+fn heatmap_intensity(value: u64, thresholds: [u64; 3]) -> u8 {
+    if value == 0 {
+        return 0;
+    }
+    if value < thresholds[0] {
+        1
+    } else if value < thresholds[1] {
+        2
+    } else if value < thresholds[2] {
+        3
+    } else {
+        4
     }
 }
 

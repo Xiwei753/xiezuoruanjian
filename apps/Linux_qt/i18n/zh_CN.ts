@@ -1490,6 +1490,18 @@
         <translation>本机记录</translation>
     </message>
     <message>
+        <source>已同步设备记录</source>
+        <translation>已同步设备记录</translation>
+    </message>
+    <message>
+        <source>同步不完整</source>
+        <translation>同步不完整</translation>
+    </message>
+    <message>
+        <source>暂无记录</source>
+        <translation>暂无记录</translation>
+    </message>
+    <message>
         <source>平均 %1 字/分 · %2 字/天 · 有写作 %3 天</source>
         <translation>平均 %1 字/分 · %2 字/天 · 有写作 %3 天</translation>
     </message>

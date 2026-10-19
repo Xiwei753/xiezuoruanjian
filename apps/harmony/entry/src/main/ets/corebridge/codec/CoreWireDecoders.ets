@@ -14,7 +14,7 @@
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { DateRange, Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
-import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint } from '../dto/StatsDtos'
+import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint, WritingStatsHeatmap, WritingStatsHeatmapDay } from '../dto/StatsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
@@ -825,6 +825,60 @@ export function decodeWritingStatsExplorer(data: Object): DecodeResult<WritingSt
     selected: selectedR.value
   }
   return ok<WritingStatsExplorer>(value)
+}
+
+// ─── Issue #956：每日码字日历（WritingStatsHeatmapDto） ───
+
+function decodeWritingStatsHeatmapDay(data: Object): DecodeResult<WritingStatsHeatmapDay> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsHeatmapDay>('WritingStatsHeatmapDay: expected object')
+  }
+  const date: string | null = reqStr(data, 'date')
+  if (date === null) { return err<WritingStatsHeatmapDay>('day.date missing or not string') }
+  const humanTypedChars: number | null = reqNum(data, 'humanTypedChars')
+  if (humanTypedChars === null || humanTypedChars < 0) {
+    return err<WritingStatsHeatmapDay>('day.humanTypedChars missing or negative')
+  }
+  const intensity: number | null = reqNum(data, 'intensity')
+  if (intensity === null || intensity < 0 || intensity > 4) {
+    return err<WritingStatsHeatmapDay>('day.intensity missing or outside 0..4')
+  }
+  const status: string | null = reqStr(data, 'status')
+  if (status === null || (status !== 'known' && status !== 'unknown' && status !== 'future')) {
+    return err<WritingStatsHeatmapDay>('day.status missing or invalid')
+  }
+  return ok<WritingStatsHeatmapDay>({
+    date: date,
+    humanTypedChars: humanTypedChars,
+    intensity: intensity,
+    status: status
+  })
+}
+
+export function decodeWritingStatsHeatmap(data: Object): DecodeResult<WritingStatsHeatmap> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WritingStatsHeatmap>('WritingStatsHeatmap: expected object')
+  }
+  const year: number | null = reqNum(data, 'year')
+  if (year === null) { return err<WritingStatsHeatmap>('year missing or not number') }
+  const startDate: string | null = reqStr(data, 'startDate')
+  if (startDate === null) { return err<WritingStatsHeatmap>('startDate missing or not string') }
+  const endDate: string | null = reqStr(data, 'endDate')
+  if (endDate === null) { return err<WritingStatsHeatmap>('endDate missing or not string') }
+  const historyScope: string | null = reqStr(data, 'historyScope')
+  if (historyScope === null) { return err<WritingStatsHeatmap>('historyScope missing or not string') }
+  const daysArr: Array<Object> | null = reqArray(data, 'days')
+  if (daysArr === null) { return err<WritingStatsHeatmap>('days missing or not array') }
+  const daysR: DecodeResult<WritingStatsHeatmapDay[]> =
+    decodeArray<WritingStatsHeatmapDay>(daysArr as Object, decodeWritingStatsHeatmapDay, 'days')
+  if (!daysR.ok || daysR.value === undefined) { return err<WritingStatsHeatmap>(daysR.error ?? 'decode failed') }
+  return ok<WritingStatsHeatmap>({
+    year: year,
+    startDate: startDate,
+    endDate: endDate,
+    historyScope: historyScope,
+    days: daysR.value
+  })
 }
 
 export function decodeSpeedCurvePoint(data: Object): DecodeResult<SpeedCurvePoint> {

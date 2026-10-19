@@ -1,7 +1,8 @@
 use crate::api::{
     ChapterStatsSummaryDto, CurrentWritingSpeedDto, DeviceInfoDto, DeviceStatsSummaryDto,
     EditorChangeStatsInputDto, ProjectStatsSummaryDto, ProjectWritingLifetimeStatsDto,
-    SpeedCurveSummaryDto, WriterError, WritingStatsExplorerDto, WritingStatsSummaryDto,
+    SpeedCurveSummaryDto, WriterError, WritingStatsExplorerDto, WritingStatsHeatmapDto,
+    WritingStatsSummaryDto,
 };
 
 impl super::WriterAppService {
@@ -135,5 +136,16 @@ impl super::WriterAppService {
     ) -> Result<WritingStatsExplorerDto, WriterError> {
         self.api
             .get_writing_stats_explorer(&preset, custom_start.as_deref(), custom_end.as_deref())
+    }
+
+    /// 每日码字日历（#956）：指定公历年的逐日人工输入真值。
+    ///
+    /// 与 Explorer 同源（本机 + 已同步设备事件分区去重后的全部已到达事件）；
+    /// 非法年份由 Core 返回结构化错误，C ABI 边界映射为 `INVALID_ARGUMENT`。
+    pub fn get_writing_stats_heatmap(
+        &self,
+        year: i32,
+    ) -> Result<WritingStatsHeatmapDto, WriterError> {
+        self.api.get_writing_stats_heatmap(year)
     }
 }

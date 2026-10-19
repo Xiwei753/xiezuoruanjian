@@ -11,12 +11,15 @@
 //   日期原样传给 Core（未来结束日不改写成今天），错误在页内显示。
 
 import hilog from '@ohos.hilog'
+import emitter from '@ohos.events.emitter'
 import { UIContext } from '@kit.ArkUI'
-import { NativeStatsBridge, StatsExplorerRequestResult } from '../../../corebridge/native/NativeStatsBridge'
+import { NativeStatsBridge, StatsExplorerRequestResult, StatsHeatmapRequestResult } from '../../../corebridge/native/NativeStatsBridge'
+import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../settings/presentation/SyncOperationController'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import {
   WritingStatsExplorer,
+  WritingStatsHeatmap,
   STATS_PRESET_LAST_7_DAYS,
   STATS_PRESET_LIFETIME,
   STATS_PRESET_CUSTOM
@@ -47,6 +50,10 @@ export struct StatsScreen {
   @State customEndDate: string = ''
   @State isLoading: boolean = true
   @State errorMessage: string = ''
+  // 码字日历（#956）：独立年份维度，与 Explorer 选中时段并存。
+  @State heatmapYear: number = new Date().getFullYear()
+  @State heatmap: WritingStatsHeatmap | null = null
+  @State heatmapError: string = ''
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State useHdsNav: boolean = false
   @State headerActions: ActionSlot[] = []
@@ -54,10 +61,19 @@ export struct StatsScreen {
   private adaptiveObserver: AdaptiveObserver | null = null
   // 请求序号在 Bridge 内维护：旧范围的晚到结果由 isLatestExplorerRequest 过滤。
   private statsBridge: NativeStatsBridge = new NativeStatsBridge(new NativeCoreModule())
+  // #936 SYNC_CONTENT_CHANGED 监听器：保存回调本体，退订时只移除本页（emitter.on 返回 void）。
+  private syncChangedHandler: ((event: emitter.InnerEvent) => void) | null = null
 
   async aboutToAppear() {
     hilog.info(0x0000, 'StatsScreen', 'route name=Stats')
     this.loadExplorer(STATS_PRESET_LAST_7_DAYS, '', '')
+    this.loadHeatmap(this.heatmapYear)
+
+    // #936：统计页保活期间，同步下载新内容或重新进入本页时，由同一条事件刷新 Explorer 与当前年份的日历快照。
+    this.syncChangedHandler = (_event: emitter.InnerEvent): void => {
+      this.refreshStatsSnapshots()
+    }
+    emitter.on({ eventId: SYNC_CONTENT_CHANGED_EVENT_ID }, this.syncChangedHandler)
 
     // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳；API < 23 用 NavDestination .menus() 接入 HeaderTrailing。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
@@ -76,6 +92,10 @@ export struct StatsScreen {
   aboutToDisappear() {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
+    }
+    if (this.syncChangedHandler !== null) {
+      emitter.off(SYNC_CONTENT_CHANGED_EVENT_ID, this.syncChangedHandler)
+      this.syncChangedHandler = null
     }
   }
 
@@ -100,6 +120,52 @@ export struct StatsScreen {
         ? result.userMessage
         : (result.errorCode !== undefined ? result.errorCode : '加载统计失败')
     }
+  }
+
+  /**
+   * 请求指定年份的每日码字快照（#956）。与 Explorer 是两个独立维度：
+   * 只加载该年的每日列表，不重算折线；旧请求晚到结果由请求序号过滤。
+   */
+  private async loadHeatmap(year: number): Promise<void> {
+    this.heatmapError = ''
+    const response: StatsHeatmapRequestResult = await this.statsBridge.getWritingStatsHeatmap(year)
+    if (!this.statsBridge.isLatestHeatmapRequest(response.requestSeq)) {
+      return
+    }
+    const result: ResultEnvelope<WritingStatsHeatmap> = response.envelope
+    if (result.success && result.data !== undefined) {
+      this.heatmap = result.data
+    } else {
+      this.heatmap = null
+      this.heatmapError = result.userMessage !== undefined && result.userMessage.length > 0
+        ? result.userMessage
+        : (result.errorCode !== undefined ? result.errorCode : '加载码字日历失败')
+    }
+  }
+
+  /**
+   * #936 统一刷新入口：重新拉取 Explorer 与当前年份的码字日历快照。
+   * 两个请求各自的晚到结果由 Bridge 请求序号过滤，导航返回 / 同步内容变更都不会显示旧数据。
+   */
+  private refreshStatsSnapshots(): void {
+    this.loadExplorer(this.selectedPeriod, this.customStartDate, this.customEndDate)
+    this.loadHeatmap(this.heatmapYear)
+  }
+
+  /** 切换热力图年份：只加载该年快照，不改变 Explorer 选中时段。 */
+  private changeHeatmapYear(year: number): void {
+    if (year === this.heatmapYear) {
+      return
+    }
+    this.heatmapYear = year
+    // 先清空，避免短暂显示上一年数据；加载完成后写入新年份快照。
+    this.heatmap = null
+    this.loadHeatmap(year)
+  }
+
+  /** 热力图日格选择：页内文字由组件显示，这里记录选择用于诊断。 */
+  private onHeatmapSelectDay(date: string, chars: number): void {
+    hilog.debug(0x0000, 'StatsScreen', 'heatmap day selected date=%{public}s chars=%{public}d', date, chars)
   }
 
   /** 窄屏顶部范围切换 / 宽屏点非自选卡：切时段并重新取快照。 */
@@ -222,6 +288,15 @@ export struct StatsScreen {
           expandedPanel: this.expandedPanel,
           isLoading: this.isLoading,
           errorMessage: this.errorMessage,
+          heatmap: this.heatmap,
+          heatmapYear: this.heatmapYear,
+          heatmapError: this.heatmapError,
+          onChangeHeatmapYear: (year: number): void => {
+            this.changeHeatmapYear(year)
+          },
+          onSelectHeatmapDay: (date: string, chars: number): void => {
+            this.onHeatmapSelectDay(date, chars)
+          },
           onOpenPeriod: (preset: string): void => {
             this.openPeriodInWide(preset)
           },
@@ -244,6 +319,15 @@ export struct StatsScreen {
           selectedPeriod: this.selectedPeriod,
           isLoading: this.isLoading,
           errorMessage: this.errorMessage,
+          heatmap: this.heatmap,
+          heatmapYear: this.heatmapYear,
+          heatmapError: this.heatmapError,
+          onChangeHeatmapYear: (year: number): void => {
+            this.changeHeatmapYear(year)
+          },
+          onSelectHeatmapDay: (date: string, chars: number): void => {
+            this.onHeatmapSelectDay(date, chars)
+          },
           onSelectPeriod: (preset: string): void => {
             this.selectPeriod(preset)
           },
@@ -272,7 +356,10 @@ export struct StatsScreen {
         title: '统计',
         screenRole: ScreenRole.Stats,
         screenTabIndex: 2,
-        showTitleBar: !this.adaptiveState.prefersWideLayout
+        showTitleBar: !this.adaptiveState.prefersWideLayout,
+        onShown: (): void => {
+          this.refreshStatsSnapshots()
+        }
       }) {
         this.StatsContent()
       }
@@ -287,6 +374,7 @@ export struct StatsScreen {
       .menus(buildNavMenuItems(this.headerActions))
       .onShown(() => {
         NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Stats, 2)
+        this.refreshStatsSnapshots()
       })
     }
   }

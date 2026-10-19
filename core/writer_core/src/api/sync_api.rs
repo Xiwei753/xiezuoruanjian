@@ -646,7 +646,18 @@ impl WriterCoreApi {
             }
 
             // 2. Transfer（不持锁）。
-            let Some((target_sync_result, _resolution, _action)) =
+            // #955：Prepare 阶段失败的 target（例如本机统计事件库迁移失败）只让
+            // 该组失败，其余独立组继续同步；不进入 Transfer / Commit。
+            let prepared_failure = staging_runs
+                .get(target_index)
+                .and_then(|run| run.prepare_error());
+            let transfer_result = if prepared_failure.is_some() {
+                Some(crate::sync::full_sync::prepare_failed_target_result(
+                    plan,
+                    target_index,
+                    prepared_failure.unwrap_or_default(),
+                ))
+            } else {
                 crate::sync::full_sync::run_single_target_transfer(
                     provider,
                     plan,
@@ -655,7 +666,9 @@ impl WriterCoreApi {
                     cancellation_token.as_ref(),
                     &all_targets,
                 )
-            else {
+                .map(|(result, _resolution, _action)| result)
+            };
+            let Some(target_sync_result) = transfer_result else {
                 // target 未执行（取消或索引越界），跳过。
                 continue;
             };
@@ -670,14 +683,12 @@ impl WriterCoreApi {
             }
 
             // 4. Commit（短写锁）— 该 target 的 state/conflicts 成为 live 终态。
-            let (target_with_conflicts, target_committed_paths) =
-                match staging_runs.get(target_index) {
-                    Some(run) => self.commit_target_after_transfer(run, &target_sync_result),
-                    None => {
-                        // 没有 staging run（不应发生），直接使用 transfer result。
-                        (target_sync_result.clone(), Vec::new())
-                    }
-                };
+            let (target_with_conflicts, target_committed_paths) = self.commit_transferred_target(
+                target_index,
+                prepared_failure.is_some(),
+                &staging_runs,
+                &target_sync_result,
+            );
 
             // Store 协调与索引失效已在 commit_target_after_transfer 内的
             // 同一写锁持有期完成（问题1+2），不再在循环体中单独执行。
@@ -818,6 +829,27 @@ impl WriterCoreApi {
                 target_with_conflicts.result.error =
                     Some(format!("failed to persist staging conflicts: {}", e));
             }
+        }
+    }
+
+    /// Commit 已 Transfer 的 target；Prepare 阶段失败的目标跳过 Commit（#955）。
+    fn commit_transferred_target(
+        &self,
+        target_index: usize,
+        prepared_failure: bool,
+        staging_runs: &[crate::sync::staging::StagingRun],
+        target_sync_result: &crate::sync::types::TargetSyncResult,
+    ) -> (
+        crate::sync::types::TargetSyncResult,
+        Vec<std::path::PathBuf>,
+    ) {
+        if prepared_failure {
+            // 迁移失败时 staging 未 seed，本组本次不上传也不 Commit。
+            return (target_sync_result.clone(), Vec::new());
+        }
+        match staging_runs.get(target_index) {
+            Some(run) => self.commit_target_after_transfer(run, target_sync_result),
+            None => (target_sync_result.clone(), Vec::new()),
         }
     }
 

@@ -176,6 +176,9 @@ pub enum AppDataGroup {
     StarmapIndex,
     /// 一张星图的 graph/meta 与 nodes/edges/embeds 等对象。
     Starmap(String),
+    /// 一台来源设备的写作统计事件分区（`stats/events/<device_id>/**`）。
+    /// 每个设备独立一组：本机只写自己的分区，其他设备的分区只读下载。
+    StatsDevice(String),
 }
 
 impl AppDataGroup {
@@ -185,6 +188,7 @@ impl AppDataGroup {
             Self::Global => "global".to_string(),
             Self::StarmapIndex => "starmap_index".to_string(),
             Self::Starmap(id) => format!("starmap:{id}"),
+            Self::StatsDevice(id) => format!("stats_device:{id}"),
         }
     }
 
@@ -194,6 +198,7 @@ impl AppDataGroup {
             Self::Global => "global".to_string(),
             Self::StarmapIndex => "starmap-index".to_string(),
             Self::Starmap(id) => format!("starmap-{}", encode_path_segment(id)),
+            Self::StatsDevice(id) => format!("stats-device-{}", encode_path_segment(id)),
         }
     }
 
@@ -226,34 +231,68 @@ impl AppDataGroup {
                 path == format!("starmaps/{id}.meta.json")
                     || path.starts_with(&format!("starmaps/{id}/"))
             }
+            Self::StatsDevice(id) => path.starts_with(&format!("stats/events/{id}/")),
         }
     }
 
     /// 从远端 catalog 中的稳定 id 解析 group。
     pub fn from_id(id: &str) -> crate::Result<Self> {
-        match id {
-            "global" => Ok(Self::Global),
-            "starmap_index" => Ok(Self::StarmapIndex),
-            _ => {
-                let Some(starmap_id) = id.strip_prefix("starmap:") else {
-                    return Err(crate::Error::Other(format!(
-                        "invalid app data group id: {id}"
-                    )));
-                };
-                if starmap_id.is_empty()
-                    || starmap_id == "."
-                    || starmap_id == ".."
-                    || starmap_id.contains('/')
-                    || starmap_id.contains('\\')
-                {
-                    return Err(crate::Error::Other(format!(
-                        "invalid starmap group id: {id}"
-                    )));
-                }
-                Ok(Self::Starmap(starmap_id.to_string()))
-            }
+        if id == "global" {
+            return Ok(Self::Global);
         }
+        if id == "starmap_index" {
+            return Ok(Self::StarmapIndex);
+        }
+        if let Some(starmap_id) = id.strip_prefix("starmap:") {
+            let segment = validated_group_segment(starmap_id, id, "invalid starmap group id")?;
+            return Ok(Self::Starmap(segment.to_string()));
+        }
+        if let Some(device_id) = id.strip_prefix("stats_device:") {
+            let segment = validated_group_segment(device_id, id, "invalid stats device group id")?;
+            return Ok(Self::StatsDevice(segment.to_string()));
+        }
+        Err(crate::Error::Other(format!(
+            "invalid app data group id: {id}"
+        )))
     }
+}
+
+/// 校验 group 身份片段；不合法时返回携带原文的错误。
+fn validated_group_segment<'a>(
+    segment: &'a str,
+    id: &str,
+    message: &str,
+) -> crate::Result<&'a str> {
+    if validate_group_segment(segment) {
+        Ok(segment)
+    } else {
+        Err(crate::Error::Other(format!("{message}: {id}")))
+    }
+}
+
+/// group 身份片段：必须是单个安全路径 segment。
+fn validate_group_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\')
+}
+
+/// 从相对 App 根路径解析统计事件文件所属的设备分区：
+/// 仅认可 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl`。
+pub(crate) fn stats_device_id_for_event_path(rel_path: &str) -> Option<String> {
+    let path = rel_path.replace('\\', "/");
+    let rest = path.strip_prefix("stats/events/")?;
+    let (device_id, file_name) = rest.split_once('/')?;
+    if !validate_group_segment(device_id) {
+        return None;
+    }
+    let date = file_name.strip_suffix(".events.jsonl")?;
+    if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+        return None;
+    }
+    Some(device_id.to_string())
 }
 
 fn encode_path_segment(value: &str) -> String {

@@ -314,6 +314,29 @@ pub unsafe extern "C" fn writer_core_get_writing_stats_explorer(
     }
 }
 
+/// 每日码字日历（#956）：指定公历年的逐日人工输入真值快照。
+///
+/// `year` 必须在 Core 允许的公历年份范围内（与 `get_heatmap_snapshot`
+/// 共用同一份校验规则），越界返回 `INVALID_ARGUMENT`；其余失败返回
+/// `UNKNOWN_ERROR`。
+///
+/// # Safety
+/// 该函数没有需要解引用的指针参数；返回的 C 字符串由调用方所有，
+/// 用 `writer_core_free_string` 释放。
+#[no_mangle]
+pub extern "C" fn writer_core_get_writing_stats_heatmap(year: i32) -> *mut c_char {
+    if let Err(e) = crate::writing_stats::api::validate_heatmap_year(year) {
+        return err_json("INVALID_ARGUMENT", &e.to_string());
+    }
+    match with_app_service(|svc| {
+        svc.get_writing_stats_heatmap(year)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("UNKNOWN_ERROR", &e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -365,10 +365,11 @@ pub struct RangeStatsAgg {
     pub longest_streak: Option<StatsRecord>,
 }
 
-/// 全应用生涯聚合（#944）：不过滤日期，口径是「本机可读的全部本地事件」。
+/// 全应用生涯聚合（#944）：不过滤日期，口径是「全部已到达的事件」。
 ///
-/// `events.local` 不参与跨设备同步，这个结果不是跨设备完整生涯；
-/// DTO 用 `historyScope = "localEvents"` 显式说明。
+/// 事件来自本机分区与已同步设备的只读分区，按 `event_id` 去重；
+/// DTO 用 `historyScope` 显式说明真实覆盖范围（`localEvents` /
+/// `syncedDevices` / `partialSync`）。
 pub fn project_all_time_stats(events: &[WritingInputEvent]) -> Result<RangeStatsAgg> {
     aggregate_range_stats(events, None)
 }

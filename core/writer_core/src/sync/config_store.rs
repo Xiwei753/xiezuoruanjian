@@ -37,13 +37,18 @@ fn normalize_rel_path(rel_path: &str) -> std::borrow::Cow<'_, str> {
 /// Resolve an App data-group owner for one local relative path.
 ///
 /// `AppDataGroup::owns_path` remains the ownership check; parsing only extracts
-/// the StarMap id needed to construct its candidate group.
+/// the StarMap id / stats source device id needed to construct its candidate group.
 pub(crate) fn app_data_group_for_path(rel_path: &str) -> Option<AppDataGroup> {
     let rel_path = normalize_rel_path(rel_path);
     for group in [AppDataGroup::Global, AppDataGroup::StarmapIndex] {
         if group.owns_path(&rel_path) {
             return Some(group);
         }
+    }
+
+    if let Some(device_id) = super::types::stats_device_id_for_event_path(&rel_path) {
+        let group = AppDataGroup::StatsDevice(device_id.to_string());
+        return group.owns_path(&rel_path).then_some(group);
     }
 
     let suffix = rel_path.strip_prefix("starmaps/")?;
@@ -280,7 +285,7 @@ impl crate::sync::SyncService {
         false
     }
 
-    /// 应用级白名单：设置/全局星图/主题调色板/应用级同步清单。
+    /// 应用级白名单：设置/全局星图/主题调色板/统计事件分区/应用级同步清单。
     fn is_app_whitelisted_path(rel_path: &str) -> bool {
         // 可同步设置
         if rel_path == "settings.sync.json" {
@@ -294,6 +299,12 @@ impl crate::sync::SyncService {
 
         // 主题调色板
         if rel_path.starts_with("themes/palettes/") {
+            return true;
+        }
+
+        // 写作统计事件分区（仅认可 <device>/YYYY-MM-DD.events.jsonl 结构；
+        // 该设备的 group 归属由 is_whitelisted_app_group_path 再校验）。
+        if super::types::stats_device_id_for_event_path(rel_path).is_some() {
             return true;
         }
 

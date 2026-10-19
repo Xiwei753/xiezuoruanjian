@@ -31,7 +31,8 @@ export interface ProjectStats {
 
 // 单作品写作档案（#934）— Core ProjectWritingLifetimeStatsDto（api/types/stats.rs，camelCase）。
 // firstWrittenAt / bestWritingDay 是 Core `Option<String>`（未标 skip_serializing_if，
-// 键恒出现，无值时为 null）→ `string | null`；historyScope 原样透传（当前固定 "localEvents"）。
+// 键恒出现，无值时为 null）→ `string | null`；historyScope 原样透传
+//（"localEvents" 本机 / "syncedDevices" 已同步设备 / "partialSync" 同步不完整）。
 export interface ProjectWritingLifetimeStats {
   projectId: string
   createdAt: string

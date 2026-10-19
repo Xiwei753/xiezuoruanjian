@@ -157,6 +157,91 @@ static napi_value NativeGetWritingStatsExplorer(napi_env env, napi_callback_info
     return promise;
 }
 
+// Issue #956：每日码字日历快照。与 Explorer 同一条链（Core 读合并后的事件库
+// 做投影，磁盘 I/O 不轻），因此同样走 Node-API async work。
+// 年份合法性由 Rust 侧校验并返回 INVALID_ARGUMENT，C++ 这层不重复判参。
+struct StatsHeatmapWork {
+    // 入参年号的堆拷贝（这里只是值，无堆分配；保持与 Explorer 一致的载荷形状）。
+    int32_t year = 0;
+    // Rust 返回的 ResultEnvelope JSON（须 writer_core_free_string 释放）。
+    char* result_json = nullptr;
+    // create_promise 给的 deferred，随 work 一起活到 complete 回调。
+    napi_deferred deferred = nullptr;
+    // 设置了 complete 回调时，官方要求在 complete 里调 napi_delete_async_work。
+    napi_async_work async_work = nullptr;
+};
+
+// Execute 回调 — 运行在线程池线程，可以安全调用 Rust（含文件 I/O）。
+static void StatsHeatmapExecute(napi_env env, void* data) {
+    (void)env;
+    auto* work = static_cast<StatsHeatmapWork*>(data);
+    work->result_json = writer_core_get_writing_stats_heatmap(work->year);
+}
+
+// Complete 回调 — 回到主线程，把 JSON 字符串 resolve 成 Promise，然后释放 work。
+static void StatsHeatmapComplete(napi_env env, napi_status status, void* data) {
+    auto* work = static_cast<StatsHeatmapWork*>(data);
+    if (status == napi_ok) {
+        const char* json = work->result_json != nullptr
+            ? work->result_json
+            : "{\"success\":false,\"errorCode\":\"NULL_RESULT\"}";
+        napi_value value = nullptr;
+        napi_create_string_utf8(env, json, NAPI_AUTO_LENGTH, &value);
+        napi_resolve_deferred(env, work->deferred, value);
+    } else {
+        napi_value message = nullptr;
+        const char* text = "get_writing_stats_heatmap async work aborted";
+        napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message);
+        napi_reject_deferred(env, work->deferred, message);
+    }
+    if (work->result_json != nullptr) {
+        writer_core_free_string(work->result_json);
+    }
+    napi_delete_async_work(env, work->async_work);
+    delete work;
+}
+
+static napi_value NativeGetWritingStatsHeatmap(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    auto* work = new StatsHeatmapWork();
+    if (argc >= 1 && args[0] != nullptr) {
+        napi_get_value_int32(env, args[0], &work->year);
+    }
+
+    napi_value promise = nullptr;
+    if (napi_create_promise(env, &work->deferred, &promise) != napi_ok) {
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_promise failed");
+        return nullptr;
+    }
+
+    napi_value resource_name = nullptr;
+    const char* name = "WriterCoreGetWritingStatsHeatmap";
+    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resource_name);
+
+    napi_async_work async_work = nullptr;
+    if (napi_create_async_work(env, nullptr, resource_name, StatsHeatmapExecute,
+                               StatsHeatmapComplete, work, &async_work) != napi_ok) {
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_async_work failed");
+        return nullptr;
+    }
+    work->async_work = async_work;
+
+    if (napi_queue_async_work(env, async_work) != napi_ok) {
+        napi_delete_async_work(env, async_work);
+        delete work;
+        napi_throw_error(env, nullptr, "napi_queue_async_work failed");
+        return nullptr;
+    }
+
+    // 调用方（ArkTS）拿到 Promise，await 它就是等 Core 的每日查询真正完成。
+    return promise;
+}
+
 static napi_value NativeGetWritingSpeedCurve(napi_env env, napi_callback_info info) {
     size_t argc = 3;
     napi_value args[3] = {nullptr, nullptr, nullptr};
@@ -305,6 +390,7 @@ napi_property_descriptor* getStatsDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {
         {"nativeGetWritingStats", nullptr, NativeGetWritingStats, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingStatsExplorer", nullptr, NativeGetWritingStatsExplorer, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetWritingStatsHeatmap", nullptr, NativeGetWritingStatsHeatmap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetTodayWritingStatsSummary", nullptr, NativeGetTodayWritingStatsSummary, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingStatsSummary", nullptr, NativeGetWritingStatsSummary, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingSpeedCurve", nullptr, NativeGetWritingSpeedCurve, nullptr, nullptr, nullptr, napi_default, nullptr},

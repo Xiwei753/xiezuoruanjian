@@ -11,9 +11,19 @@
 //!
 //! ## 模块结构
 //!
-//! - `aggregate`: 统计数据聚合模块，负责将原始事件汇总为每日统计
-//! - `api`: 统计 API 模块，提供对外的查询接口
-//! - `store`: 数据存储模块，负责事件和统计数据的持久化
+//! - `api`: 统计查询接口，统一从合并后的事件库投影读数
+//! - `calendar`: 业务日历（本地日、周/月边界、预设区间解析）
+//! - `migration`: 旧版单机事件库到按来源设备分区事件库的一次性迁移
+//! - `projection`: 从原始事件投影出汇总、纪录、趋势
+//! - `store`: 事件持久化（按来源设备分区的 JSONL，按 `event_id` 去重）
+//!
+//! ## 跨设备事件库
+//!
+//! 原始事件按来源设备分区持久化：每台设备只写自己的
+//! `stats/events/<device_id>/` 分区，其它设备下载来的分区只读；聚合时扫描
+//! 全部已到达事件并按 `event_id` 去重。跨设备重复 ID 只保留先读到的一条，
+//! 并把结构化冲突信息写入 `app-meta/stats/event_conflicts.local.jsonl` 供诊断。
+//! 「正文当前字数」与「累计人工实际输入字数」是两种口径，不能用前者回推后者。
 //!
 //! ## 核心结构
 //!
@@ -75,6 +85,7 @@ pub type Platform = writer_platform_api::PlatformKind;
 pub struct WritingInputEvent {
     pub event_id: String,
     pub timestamp_ms: i64,
+    /// 事件来源设备的稳定标识；事件持久化在它的来源分区，跨设备同步后不重算。
     pub device_id: String,
     pub platform: Platform,
     /// phone / tablet / desktop

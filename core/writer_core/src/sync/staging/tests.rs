@@ -587,3 +587,139 @@ fn starmap_graph_meta_semantic_merge_both_add_node() {
         "merged nodeIds should contain all three IDs"
     );
 }
+
+/// #955：本机统计设备组在 seed 之前完成旧事件库迁移，迁移结果进入 staging。
+#[test]
+fn prepare_staging_runs_migrates_local_stats_group_before_seed() {
+    use crate::sync::full_sync::{FullSyncPlan, PlannedTarget};
+    use crate::sync::types::{AppDataGroup, PlannedTargetKind, SyncPolicy, SyncTarget};
+
+    let tmp = TempDir::new().unwrap();
+    let live = tmp.path().join("app");
+    let legacy_dir = live.join("app-meta/stats/events.local");
+    fs::create_dir_all(&legacy_dir).unwrap();
+    let event = crate::writing_stats::WritingInputEvent::with_identity(
+        "evt-1".to_string(),
+        1_714_550_400_000,
+        "device_1",
+        crate::writing_stats::Platform::Desktop,
+        "desktop",
+        "proj",
+        "vol",
+        "chap",
+        crate::writing_stats::EventSource::HumanTyped,
+        10,
+        0,
+        0,
+        0,
+        0,
+        "session",
+    );
+    fs::write(
+        legacy_dir.join("2024-05-01.events.jsonl"),
+        format!("{}\n", serde_json::to_string(&event).unwrap()),
+    )
+    .unwrap();
+    crate::settings::ensure_device_info(&live, "", "", Some("device_1")).unwrap();
+
+    let planned = PlannedTarget {
+        target: SyncTarget::app_data_group(AppDataGroup::StatsDevice("device_1".to_string())),
+        local_root: live.clone(),
+        staging_root: None,
+        target_kind: PlannedTargetKind::App,
+        project_id: None,
+        target_live_root: live.clone(),
+        deleted_journal_token: None,
+        deleted_lww: None,
+        live_lww: None,
+        expected_delete_lww: None,
+    };
+    let mut plan = FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: false,
+        targets: vec![planned],
+        app_data_root: tmp.path().to_path_buf(),
+        remote_catalog_snapshot: crate::sync::full_sync::tests::test_empty_catalog_snapshot(),
+    };
+
+    let runs = prepare_staging_runs(&mut plan).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].prepare_error().is_none());
+    // 迁移写进 live 的新分区，随后 seed 进入 staging。
+    assert!(live
+        .join("stats/events/device_1/2024-05-01.events.jsonl")
+        .is_file());
+    assert!(runs[0]
+        .staging_root()
+        .join("stats/events/device_1/2024-05-01.events.jsonl")
+        .is_file());
+    assert!(plan.targets[0].staging_root.is_some());
+}
+
+/// #955：本机统计迁移失败只让该组带上 prepare_error，不终止整轮同步。
+#[test]
+fn prepare_staging_runs_records_stats_migration_failure_per_group() {
+    use crate::sync::full_sync::{FullSyncPlan, PlannedTarget};
+    use crate::sync::types::{AppDataGroup, PlannedTargetKind, SyncPolicy, SyncTarget};
+
+    let tmp = TempDir::new().unwrap();
+    let live = tmp.path().join("app");
+    let legacy_dir = live.join("app-meta/stats/events.local");
+    fs::create_dir_all(&legacy_dir).unwrap();
+    // 损坏的旧事件行让迁移失败。
+    fs::write(legacy_dir.join("2024-05-01.events.jsonl"), "{\"bad\":}\n").unwrap();
+    crate::settings::ensure_device_info(&live, "", "", Some("device_1")).unwrap();
+
+    let stats_target = PlannedTarget {
+        target: SyncTarget::app_data_group(AppDataGroup::StatsDevice("device_1".to_string())),
+        local_root: live.clone(),
+        staging_root: None,
+        target_kind: PlannedTargetKind::App,
+        project_id: None,
+        target_live_root: live.clone(),
+        deleted_journal_token: None,
+        deleted_lww: None,
+        live_lww: None,
+        expected_delete_lww: None,
+    };
+    let global_target = PlannedTarget {
+        target: SyncTarget::app_data_group(AppDataGroup::Global),
+        local_root: live.clone(),
+        staging_root: None,
+        target_kind: PlannedTargetKind::App,
+        project_id: None,
+        target_live_root: live.clone(),
+        deleted_journal_token: None,
+        deleted_lww: None,
+        live_lww: None,
+        expected_delete_lww: None,
+    };
+    let mut plan = FullSyncPlan {
+        sync_policy: SyncPolicy {
+            enabled: true,
+            ..Default::default()
+        },
+        force_sync: false,
+        targets: vec![stats_target, global_target],
+        app_data_root: tmp.path().to_path_buf(),
+        remote_catalog_snapshot: crate::sync::full_sync::tests::test_empty_catalog_snapshot(),
+    };
+
+    let runs = prepare_staging_runs(&mut plan).unwrap();
+    assert_eq!(runs.len(), 2);
+    let error = runs[0]
+        .prepare_error()
+        .expect("stats group must record migration failure");
+    assert!(
+        error.starts_with("migration: "),
+        "unexpected error: {error}"
+    );
+    // 迁移失败不写新分区，该组 staging 也不会带上半迁移数据。
+    assert!(!live.join("stats/events").exists());
+    assert!(!runs[0].staging_root().join("stats/events").exists());
+    // 其它独立组照常 seed，不受影响。
+    assert!(runs[1].prepare_error().is_none());
+}

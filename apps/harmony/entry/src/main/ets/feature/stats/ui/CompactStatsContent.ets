@@ -1,14 +1,15 @@
 // CompactStatsContent — 窄屏统计正文（Issue #945，按「手机统计七天 / 手机统计」手稿）。
 //
 // 从上到下：顶部时间范围切换（7 天 / 30 天 / 半年 / 生涯 / 自选）→ 大号总人工码字 +
-// 日期区间 → 纪录 2×2（最多 / 最快 / 最长 / 连续）→ 真实字数折线图；
+// 日期区间 → 纪录 2×2（最多 / 最快 / 最长 / 连续）→ 真实字数折线图 → 码字日历热力图
+// （#956，同一年每日真值 + 年份切换）。
 // 内容可垂直滚动并给 HDS 悬浮底栏留空间。生涯与近七天只是同一页面换快照，
 // 不另建导航栈。
 //
 // 本组件只画已解码的 Core Explorer 快照：不做统计口径计算、不补假数据；
-// 区间切换 / 自选日期 / 重试都通过回调交给 StatsScreen。
+// 区间切换 / 自选日期 / 重试 / 码字日历年份切换都通过回调交给 StatsScreen。
 
-import { WritingStatsExplorer, WritingStatsRecord, WritingStatsSelectedPeriod, STATS_PRESET_LAST_7_DAYS, STATS_PRESET_LAST_30_DAYS, STATS_PRESET_LAST_6_MONTHS, STATS_PRESET_LIFETIME, STATS_PRESET_CUSTOM } from '../../../corebridge/dto/StatsDtos'
+import { WritingStatsExplorer, WritingStatsHeatmap, WritingStatsRecord, WritingStatsSelectedPeriod, STATS_PRESET_LAST_7_DAYS, STATS_PRESET_LAST_30_DAYS, STATS_PRESET_LAST_6_MONTHS, STATS_PRESET_LIFETIME, STATS_PRESET_CUSTOM } from '../../../corebridge/dto/StatsDtos'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import {
   COMPACT_CARD_PADDING_VP,
@@ -16,7 +17,8 @@ import {
   COMPACT_CARD_TITLE_FONT_VP,
   COMPACT_LIST_BOTTOM_INSET_VP
 } from '../../../ui/theme/LayoutTokens'
-import { EMPTY_STATS_EXPLORER, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatInt, formatRecordValue } from './StatsFormat'
+import { EMPTY_STATS_EXPLORER, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatHistoryScope, formatInt, formatRecordValue } from './StatsFormat'
+import { WritingStatsCalendarHeatmap } from './WritingStatsCalendarHeatmap'
 import { WritingStatsTrendChart } from './WritingStatsTrendChart'
 
 // 折线图在窄屏的固定高度（vp）。
@@ -44,6 +46,12 @@ export struct CompactStatsContent {
   onSelectPeriod: (preset: string) => void = (_preset: string) => {}
   onPickCustomRange: () => void = () => {}
   onRetry: () => void = () => {}
+  // #956 码字日历：消费同一份每日快照 + 年份切换 / 日格选择回调，组件自己不查 Core。
+  @Prop heatmap: WritingStatsHeatmap | null = null
+  @Prop heatmapYear: number = new Date().getFullYear()
+  @Prop heatmapError: string = ''
+  onChangeHeatmapYear: (year: number) => void = (_year: number) => {}
+  onSelectHeatmapDay: (date: string, chars: number) => void = (_date: string, _chars: number) => {}
 
   private selected(): WritingStatsSelectedPeriod {
     return this.explorer.selected
@@ -95,6 +103,7 @@ export struct CompactStatsContent {
         this.SummarySection()
         this.RecordsSection()
         this.TrendSection()
+        this.HeatmapSection()
       }
       .width('100%')
       .padding({
@@ -166,7 +175,7 @@ export struct CompactStatsContent {
     .margin({ bottom: 8 })
   }
 
-  /** 大号总人工码字 + 日期区间 + 「本机记录」标注。 */
+  /** 大号总人工码字 + 日期区间 + 历史口径标注（本机 / 已同步设备 / 同步不完整）。 */
   @Builder
   SummarySection() {
     Column() {
@@ -200,7 +209,7 @@ export struct CompactStatsContent {
       .width('100%')
       .margin({ top: 6 })
 
-      Text('本机记录')
+      Text(formatHistoryScope(this.explorer.historyScope))
         .fontSize(11)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: 4 })
@@ -298,6 +307,46 @@ export struct CompactStatsContent {
         .height(COMPACT_CHART_HEIGHT_VP)
     }
     .width('100%')
+    .padding(COMPACT_CARD_PADDING_VP)
+    .borderRadius(DesignTokens.cardRadius)
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .margin({ top: COMPACT_CARD_PADDING_VP })
+  }
+
+  /** #956 码字日历：每年的每日真值热力图；年份切换与日格选择复用回调。 */
+  @Builder
+  HeatmapSection() {
+    Column() {
+      if (this.heatmap !== null) {
+        WritingStatsCalendarHeatmap({
+          heatmap: this.heatmap,
+          cellSizeVp: 12,
+          onChangeYear: (year: number) => {
+            this.onChangeHeatmapYear(year)
+          },
+          onSelectDay: (date: string, chars: number) => {
+            this.onSelectHeatmapDay(date, chars)
+          }
+        })
+      } else if (this.heatmapError.length > 0) {
+        Text(this.heatmapError)
+          .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+          .fontColor($r('sys.color.ohos_id_color_alert'))
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      } else {
+        Row({ space: 8 }) {
+          LoadingProgress()
+            .width(16)
+            .height(16)
+          Text(`${this.heatmapYear} 年 · 加载中...`)
+            .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+            .fontColor($r('sys.color.font_tertiary'))
+        }
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
     .padding(COMPACT_CARD_PADDING_VP)
     .borderRadius(DesignTokens.cardRadius)
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))

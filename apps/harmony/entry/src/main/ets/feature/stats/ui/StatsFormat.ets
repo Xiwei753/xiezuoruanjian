@@ -131,6 +131,20 @@ export function formatRecordValue(value: number | null, unit: string): string {
   return `${formatInt(value)} ${unit}`
 }
 
+/** 历史口径标注：Core 返回 localEvents / syncedDevices / partialSync。未知值返回空串。 */
+export function formatHistoryScope(scope: string): string {
+  if (scope === 'syncedDevices') {
+    return '已同步设备记录'
+  }
+  if (scope === 'partialSync') {
+    return '同步不完整'
+  }
+  if (scope === 'localEvents') {
+    return '本机记录'
+  }
+  return ''
+}
+
 function pad2(value: number): string {
   return value < 10 ? `0${value}` : `${value}`
 }

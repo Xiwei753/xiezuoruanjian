@@ -82,6 +82,10 @@ pub struct WriterCore {
     /// 是跨 API 调用长期存在的实例，与 `starmap_stores` 一致都是持久化状态。
     pub(crate) path_dependency_index:
         std::sync::Mutex<Option<crate::starmap::store::PathDependencyIndex>>,
+    /// 平台提供的稳定设备标识（如鸿蒙 `HarmonyDeviceIdentity` 的 device_id）。
+    /// 由 `WriterCoreApi` 在初始化时注入；写作统计事件分区首次解析来源设备时
+    /// 优先使用它，避免 Core 先随机生成 UUID 导致同一台设备出现两个身份。
+    pub(crate) preferred_device_id: std::sync::Mutex<Option<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -95,7 +99,10 @@ pub struct ChapterOpenResult {
 /// 数据源语义分开，不能互相回推：
 /// - `created_at` 来自 `project.json`；`current_word_count` 是现有章节存量；
 /// - `total_human_typed_chars` / `first_written_at_ms` / `best_writing_day` /
-///   `writing_days` 来自本地事件历史（`events.local` 不同步，只是本机可读历史）。
+///   `writing_days` 来自合并后的写作事件历史（本机分区 + 已同步设备的只读分区，
+///   按 `event_id` 去重）；
+/// - `history_scope` 说明事件覆盖范围：`localEvents`（仅本机）、
+///   `syncedDevices`（本机 + 已同步设备）、`partialSync`（有设备同步不完整）。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProjectWritingLifetimeStats {
     pub project_id: String,
@@ -106,6 +113,7 @@ pub struct ProjectWritingLifetimeStats {
     pub best_writing_day: Option<String>,
     pub best_writing_day_chars: u64,
     pub writing_days: u64,
+    pub history_scope: String,
 }
 
 impl WriterCore {
@@ -119,10 +127,34 @@ impl WriterCore {
             search_service: std::sync::Mutex::new(SearchIndexService::new()),
             starmap_stores: std::sync::Mutex::new(HashMap::new()),
             path_dependency_index: std::sync::Mutex::new(None),
+            preferred_device_id: std::sync::Mutex::new(None),
         }
     }
 
+    /// 注入平台提供的稳定设备标识；空字符串忽略。
+    pub(crate) fn set_preferred_device_id(&self, device_id: &str) {
+        if device_id.is_empty() {
+            return;
+        }
+        if let Ok(mut guard) = self.preferred_device_id.lock() {
+            *guard = Some(device_id.to_string());
+        }
+    }
+
+    pub(crate) fn preferred_device_id(&self) -> Option<String> {
+        self.preferred_device_id
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
     pub(crate) fn get_stats_api(&self) -> &StatsApi {
+        let preferred = self.preferred_device_id();
+        if let Err(e) =
+            crate::settings::ensure_device_info(&self.app_data_root, "", "", preferred.as_deref())
+        {
+            eprintln!("[writing_stats] ensure device info failed: {}", e);
+        }
         self.stats_api
             .get_or_init(|| StatsApi::new(&self.app_data_root))
     }

@@ -168,6 +168,11 @@ char*  writer_core_get_writing_stats_summary(const char* start_date, const char*
 //   custom_start_date / custom_end_date 仅在 preset == "custom" 时是用户所选日期
 //   （按业务日 YYYY-MM-DD 原样透传，不把未来结束日改写成今天），其余可为 NULL 或空串。
 char*  writer_core_get_writing_stats_explorer(const char* preset, const char* custom_start_date, const char* custom_end_date);
+// 每日码字日历（#956）：指定公历年（1970–2100）的逐日人工输入真值快照。
+//   一年返回 365/366 项，按日期升序；没有记录的已过日期返回 0，未来日期
+//   由日期字段交给 UI 标记「未到」；intensity 0–4 由 Core 按当年正数日
+//   分布统一分级，端侧不做二次计算。非法年份返回 INVALID_ARGUMENT。
+char*  writer_core_get_writing_stats_heatmap(int32_t year);
 char*  writer_core_get_writing_speed_curve(const char* start_date, const char* end_date, uint32_t bucket_minutes);
 // 实时写作速度：与上面的历史曲线分工，速度由 Core 以「最近 window_seconds 秒」重算。
 char*  writer_core_get_current_writing_speed(uint32_t window_seconds);

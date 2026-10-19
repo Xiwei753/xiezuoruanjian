@@ -9,17 +9,21 @@
 // 一层导航（左侧栏 / 顶部动作）由 PrimaryTabShell 提供，本组件不另画同步 / 设置，
 // 也不新增页面内导航；数据、纪录与速度全部来自 Core Explorer 快照。
 
-import { WritingStatsExplorer, WritingStatsPeriodCard, WritingStatsRecord, WritingStatsSelectedPeriod, STATS_PRESET_LAST_7_DAYS, STATS_PRESET_LAST_30_DAYS, STATS_PRESET_LAST_6_MONTHS, STATS_PRESET_LIFETIME, STATS_PRESET_CUSTOM } from '../../../corebridge/dto/StatsDtos'
+import { WritingStatsExplorer, WritingStatsHeatmap, WritingStatsPeriodCard, WritingStatsRecord, WritingStatsSelectedPeriod, STATS_PRESET_LAST_7_DAYS, STATS_PRESET_LAST_30_DAYS, STATS_PRESET_LAST_6_MONTHS, STATS_PRESET_LIFETIME, STATS_PRESET_CUSTOM } from '../../../corebridge/dto/StatsDtos'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { COMPACT_CARD_PADDING_VP, COMPACT_CARD_SUPPORTING_FONT_VP, COMPACT_CARD_TITLE_FONT_VP } from '../../../ui/theme/LayoutTokens'
-import { EMPTY_STATS_EXPLORER, STATS_PANEL_NONE, STATS_PANEL_RANGE, STATS_PANEL_LIFETIME, formatAverage, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatInt, formatRecordValue } from './StatsFormat'
+import { EMPTY_STATS_EXPLORER, STATS_PANEL_NONE, STATS_PANEL_RANGE, STATS_PANEL_LIFETIME, formatAverage, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatHistoryScope, formatInt, formatRecordValue } from './StatsFormat'
 import { WritingStatsTrendChart } from './WritingStatsTrendChart'
+import { WritingStatsCalendarHeatmap } from './WritingStatsCalendarHeatmap'
 
 // 宽屏页面边距与卡片间距（vp）。
 const WIDE_PAGE_PADDING_VP: number = 24
 const WIDE_CARD_GAP_VP: number = 12
 // 顶部生涯横条的最大宽度（vp）：手稿里它比四卡区窄、居中。
 const WIDE_LIFETIME_BAR_MAX_WIDTH_VP: number = 900
+// 四卡区与展开面板的最小可读高度（vp）：小高度窗口改为纵向滚动，不压缩卡片与图表。
+const WIDE_PERIOD_CARDS_HEIGHT_VP: number = 190
+const WIDE_EXPANDED_PANEL_HEIGHT_VP: number = 280
 
 @Component
 export struct WideStatsContent {
@@ -37,6 +41,12 @@ export struct WideStatsContent {
   /** 点展开面板的返回箭头：回到四卡总览。 */
   onCloseExpanded: () => void = () => {}
   onRetry: () => void = () => {}
+  // #956 码字日历：消费同一份每日快照 + 年份切换 / 日格选择回调，组件自己不查 Core。
+  @Prop heatmap: WritingStatsHeatmap | null = null
+  @Prop heatmapYear: number = new Date().getFullYear()
+  @Prop heatmapError: string = ''
+  onChangeHeatmapYear: (year: number) => void = (_year: number) => {}
+  onSelectHeatmapDay: (date: string, chars: number) => void = (_date: string, _chars: number) => {}
 
   private selected(): WritingStatsSelectedPeriod {
     return this.explorer.selected
@@ -91,12 +101,25 @@ export struct WideStatsContent {
         this.ErrorStrip()
       }
       this.LifetimeBar()
-      if (this.expandedPanel === STATS_PANEL_NONE) {
-        this.PeriodCardsRow()
-      } else {
-        this.ExpandedPanel()
+      // 内容超出可用高度时纵向滚动，卡片与图表保持最小可读高度；
+      // 热力图年份格子由组件内部横向滚动，这里不再叠加横向滚动。
+      Scroll() {
+        Column() {
+          if (this.expandedPanel === STATS_PANEL_NONE) {
+            this.PeriodCardsRow()
+          } else {
+            this.ExpandedPanel()
+          }
+          this.HeatmapSection()
+          this.CompanionshipFooter()
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
       }
-      this.CompanionshipFooter()
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .align(Alignment.Top)
     }
     .width('100%')
     .height('100%')
@@ -107,6 +130,49 @@ export struct WideStatsContent {
       bottom: 16
     })
     .alignItems(HorizontalAlign.Center)
+  }
+
+  /** #956 码字日历：全年网格，年份箭头切换只加载该年快照；横向滚动查看全年。 */
+  @Builder
+  HeatmapSection() {
+    Column() {
+      if (this.heatmap !== null) {
+        WritingStatsCalendarHeatmap({
+          heatmap: this.heatmap,
+          cellSizeVp: 14,
+          onChangeYear: (year: number) => {
+            this.onChangeHeatmapYear(year)
+          },
+          onSelectDay: (date: string, chars: number) => {
+            this.onSelectHeatmapDay(date, chars)
+          }
+        })
+      } else if (this.heatmapError.length > 0) {
+        Text(this.heatmapError)
+          .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+          .fontColor($r('sys.color.ohos_id_color_alert'))
+          .width('100%')
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      } else {
+        Row({ space: 8 }) {
+          LoadingProgress()
+            .width(16)
+            .height(16)
+          Text(`${this.heatmapYear} 年 · 加载中...`)
+            .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+            .fontColor($r('sys.color.font_tertiary'))
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding(COMPACT_CARD_PADDING_VP)
+    .borderRadius(DesignTokens.cardRadius)
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .margin({ bottom: WIDE_CARD_GAP_VP })
   }
 
   /** 页内错误提示：自选日期非法 / Core 查询失败都在这里显示，附重试。 */
@@ -188,7 +254,7 @@ export struct WideStatsContent {
       }, (card: WritingStatsPeriodCard) => card.preset)
     }
     .width('100%')
-    .layoutWeight(1)
+    .height(WIDE_PERIOD_CARDS_HEIGHT_VP)
     .alignItems(VerticalAlign.Top)
   }
 
@@ -280,7 +346,7 @@ export struct WideStatsContent {
       }
     }
     .width('100%')
-    .layoutWeight(1)
+    .height(WIDE_EXPANDED_PANEL_HEIGHT_VP)
     .alignItems(VerticalAlign.Top)
   }
 
@@ -343,7 +409,7 @@ export struct WideStatsContent {
   @Builder
   RecordsColumn(weight: number) {
     Column() {
-      Text('本机记录')
+      Text(formatHistoryScope(this.explorer.historyScope))
         .fontSize(12)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ bottom: 8 })

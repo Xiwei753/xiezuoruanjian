@@ -232,7 +232,7 @@ impl WriterCoreApi {
             best_writing_day: stats.best_writing_day,
             best_writing_day_chars: stats.best_writing_day_chars,
             writing_days: stats.writing_days,
-            history_scope: "localEvents".to_string(),
+            history_scope: stats.history_scope,
         })
     }
 
@@ -282,6 +282,24 @@ impl WriterCoreApi {
         custom_end: Option<&str>,
     ) -> ApiResult<String> {
         let snapshot = self.get_writing_stats_explorer(preset, custom_start, custom_end)?;
+        Self::json_string(&snapshot)
+    }
+
+    /// 每日码字日历（#956）：指定公历年的逐日人工输入真值。
+    ///
+    /// 与 Explorer 同源：本机分区与已同步设备分区按 `event_id` 去重后的
+    /// 全部已到达事件。非法年份返回结构化错误，不造零数据。
+    pub fn get_writing_stats_heatmap(
+        &self,
+        year: i32,
+    ) -> ApiResult<crate::api::types::WritingStatsHeatmapDto> {
+        self.core_read()
+            .get_writing_stats_heatmap(year)
+            .map_err(Into::<WriterError>::into)
+    }
+
+    pub fn get_writing_stats_heatmap_json(&self, year: i32) -> ApiResult<String> {
+        let snapshot = self.get_writing_stats_heatmap(year)?;
         Self::json_string(&snapshot)
     }
 }

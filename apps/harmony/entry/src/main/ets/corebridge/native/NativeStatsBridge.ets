@@ -1,9 +1,9 @@
 import { WritingStats, SpeedCurve, CurrentWritingSpeed } from '../dto/ProjectDtos'
-import { WritingStatsExplorer } from '../dto/StatsDtos'
+import { WritingStatsExplorer, WritingStatsHeatmap } from '../dto/StatsDtos'
 import { EditorChangeStatsInput } from '../dto/EditorDtos'
 import { ResultEnvelope, RecentEdit } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeWritingStats, decodeSpeedCurve, decodeCurrentWritingSpeed, decodeRecentEdit, decodeArray, decodeWritingStatsExplorer } from '../codec/CoreWireDecoders'
+import { decodeWritingStats, decodeSpeedCurve, decodeCurrentWritingSpeed, decodeRecentEdit, decodeArray, decodeWritingStatsExplorer, decodeWritingStatsHeatmap } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
@@ -17,10 +17,19 @@ export interface StatsExplorerRequestResult {
   envelope: ResultEnvelope<WritingStatsExplorer>
 }
 
+// 每日码字日历请求结果（Issue #956）：与 Explorer 同一套旧请求过滤机制。
+// 用户快速切换年份时旧年份的响应可能晚到；调用方拿到结果后先用
+// isLatestHeatmapRequest 过滤旧序号，不覆盖当前年份快照。
+export interface StatsHeatmapRequestResult {
+  requestSeq: number
+  envelope: ResultEnvelope<WritingStatsHeatmap>
+}
+
 export class NativeStatsBridge {
   private isInitialized: boolean = false
   private core: NativeCoreModule
   private explorerRequestSeq: number = 0
+  private heatmapRequestSeq: number = 0
 
   constructor(core: NativeCoreModule) {
     this.core = core
@@ -59,6 +68,30 @@ export class NativeStatsBridge {
   /** 该请求序号是否仍是最新一次统计查询（旧范围晚到结果返回 false）。 */
   isLatestExplorerRequest(requestSeq: number): boolean {
     return requestSeq === this.explorerRequestSeq
+  }
+
+  // Issue #956：每日码字日历——指定公历年的逐日人工输入真值（本机 + 已同步设备
+  // 事件去重后）。year 是本地年份；Core 只接受 1970–2100，越界返回结构化错误，
+  // 这里原样把 envelope 交给页面错误区域，不用假 0 数据遮盖失败。
+  //
+  // nativeGetWritingStatsHeatmap 返回的是 Promise——真正切线程点在 C++ 侧
+  // （Node-API async work，execute 回调跑在线程池），必须 await。
+  async getWritingStatsHeatmap(year: number): Promise<StatsHeatmapRequestResult> {
+    this.heatmapRequestSeq += 1
+    const requestSeq: number = this.heatmapRequestSeq
+    let envelope: ResultEnvelope<WritingStatsHeatmap>
+    try {
+      const jsonStr: string = await this.core.getNativeModule().nativeGetWritingStatsHeatmap(year)
+      envelope = this.core.decodeEnvelope<WritingStatsHeatmap>(jsonStr, decodeWritingStatsHeatmap)
+    } catch (e) {
+      envelope = nativeError<WritingStatsHeatmap>(e)
+    }
+    return { requestSeq: requestSeq, envelope: envelope }
+  }
+
+  /** 该请求序号是否仍是最新一次日历查询（旧年份晚到结果返回 false）。 */
+  isLatestHeatmapRequest(requestSeq: number): boolean {
+    return requestSeq === this.heatmapRequestSeq
   }
 
   // Issue #829：写作页状态栏的「今日进度」要当日口径，writer_core_get_writing_stats
