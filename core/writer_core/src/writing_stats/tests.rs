@@ -1489,6 +1489,72 @@ fn test_explorer_rejects_invalid_preset_and_custom_dates() {
 }
 
 #[test]
+fn test_history_scope_reports_synced_devices_when_remote_partition_present() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    crate::settings::ensure_device_info(dir, "", "", Some("device_local")).unwrap();
+    let remote_dir = dir.join("stats/events/device_remote");
+    std::fs::create_dir_all(&remote_dir).unwrap();
+    let event = explorer_event(1_714_550_400_000, "2024-05-01", EventSource::HumanTyped, 7);
+    std::fs::write(
+        remote_dir.join("2024-05-01.events.jsonl"),
+        format!("{}\n", serde_json::to_string(&event).unwrap()),
+    )
+    .unwrap();
+
+    let api = StatsApi::new(dir);
+    let snapshot = api.get_explorer_snapshot("lifetime", None, None).unwrap();
+
+    // 已到达其它设备的事件分区：如实声明范围，并参与聚合。
+    assert_eq!(snapshot.history_scope, "syncedDevices");
+    assert_eq!(snapshot.lifetime.total_human_typed_chars, 7);
+}
+
+#[test]
+fn test_history_scope_reports_partial_sync_when_stats_group_failed() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    crate::settings::ensure_device_info(dir, "", "", Some("device_local")).unwrap();
+    let remote_dir = dir.join("stats/events/device_remote");
+    std::fs::create_dir_all(&remote_dir).unwrap();
+    let event = explorer_event(1_714_550_400_000, "2024-05-01", EventSource::HumanTyped, 7);
+    std::fs::write(
+        remote_dir.join("2024-05-01.events.jsonl"),
+        format!("{}\n", serde_json::to_string(&event).unwrap()),
+    )
+    .unwrap();
+
+    // 该设备的统计同步组最近一次同步失败：不能宣称已同步完整。
+    let group_dir = dir.join("app-meta/sync/groups/stats-device-6465766963655f72656d6f7465");
+    std::fs::create_dir_all(&group_dir).unwrap();
+    std::fs::write(
+        group_dir.join("state.local.json"),
+        "{\"last_error\":\"network timeout\"}",
+    )
+    .unwrap();
+
+    let api = StatsApi::new(dir);
+    let snapshot = api.get_explorer_snapshot("lifetime", None, None).unwrap();
+    assert_eq!(snapshot.history_scope, "partialSync");
+}
+
+#[test]
+fn test_history_scope_partial_when_local_only_and_sync_failed() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    let group_dir = dir.join("app-meta/sync/groups/stats-device-6465766963655f72656d6f7465");
+    std::fs::create_dir_all(&group_dir).unwrap();
+    std::fs::write(
+        group_dir.join("state.local.json"),
+        "{\"last_error\":\"offline\"}",
+    )
+    .unwrap();
+
+    let api = StatsApi::new(dir);
+    assert_eq!(api.history_scope(), "partialSync");
+}
+
+#[test]
 fn test_explorer_custom_card_filled_even_when_selected_is_other_preset() {
     let temp_dir = tempdir().unwrap();
     let api = StatsApi::new(temp_dir.path());
@@ -1881,4 +1947,123 @@ fn test_explorer_multi_device_same_window_not_one_long_session() {
     // 字/分 = 40 字 × 60 / 120 秒 = 20。
     let per_minute = snapshot.selected.average_chars_per_minute.unwrap();
     assert!((per_minute - 20.0).abs() < 0.001);
+}
+
+// ---------------------------------------------------------------------------
+// #956 每日码字日历：完整自然年逐日真值 + 强度分级
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_heatmap_year_length_follows_gregorian_calendar() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let leap = api.get_heatmap_snapshot(2024).unwrap();
+    assert_eq!(leap.year, 2024);
+    assert_eq!(leap.start_date, "2024-01-01");
+    assert_eq!(leap.end_date, "2024-12-31");
+    assert_eq!(leap.days.len(), 366, "2024 是闰年，应返回 366 个自然日");
+    assert_eq!(leap.days.first().unwrap().date, "2024-01-01");
+    assert_eq!(leap.days.last().unwrap().date, "2024-12-31");
+    // 按日期升序且每天唯一。
+    for pair in leap.days.windows(2) {
+        assert!(pair[0].date < pair[1].date);
+    }
+
+    let common = api.get_heatmap_snapshot(2025).unwrap();
+    assert_eq!(common.days.len(), 365, "2025 是平年，应返回 365 个自然日");
+    assert_eq!(common.start_date, "2025-01-01");
+    assert_eq!(common.end_date, "2025-12-31");
+}
+
+#[test]
+fn test_heatmap_reports_daily_chars_and_four_levels() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    for (ts, date, chars) in [
+        (1_714_550_400_000_i64, "2024-05-01", 10_u32),
+        (1_714_636_800_000, "2024-05-02", 20),
+        (1_714_723_200_000, "2024-05-03", 30),
+        (1_714_809_600_000, "2024-05-04", 40),
+    ] {
+        api.record_event(explorer_event(ts, date, EventSource::HumanTyped, chars))
+            .unwrap();
+    }
+
+    let heatmap = api.get_heatmap_snapshot(2024).unwrap();
+    let mut by_date = std::collections::HashMap::new();
+    for day in &heatmap.days {
+        by_date.insert(day.date.as_str(), day.clone());
+    }
+
+    assert_eq!(by_date["2024-05-01"].human_typed_chars, 10);
+    assert_eq!(by_date["2024-05-01"].intensity, 1);
+    assert_eq!(by_date["2024-05-02"].intensity, 2);
+    assert_eq!(by_date["2024-05-03"].intensity, 3);
+    assert_eq!(by_date["2024-05-04"].intensity, 4, "最大正数日应到最高一级");
+    // 没有记录的已过日期是真实 0，不是缺失。
+    assert_eq!(by_date["2024-06-01"].human_typed_chars, 0);
+    assert_eq!(by_date["2024-06-01"].intensity, 0);
+}
+
+#[test]
+fn test_heatmap_all_equal_positive_days_grade_stably() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    for (ts, date) in [
+        (1_714_550_400_000_i64, "2024-05-01"),
+        (1_714_636_800_000, "2024-05-02"),
+    ] {
+        api.record_event(explorer_event(ts, date, EventSource::HumanTyped, 50))
+            .unwrap();
+    }
+
+    let heatmap = api.get_heatmap_snapshot(2024).unwrap();
+    let graded: Vec<u8> = heatmap
+        .days
+        .iter()
+        .filter(|day| day.human_typed_chars > 0)
+        .map(|day| day.intensity)
+        .collect();
+    assert_eq!(graded, vec![4, 4], "正数全相同也要确定性分级，不除零");
+}
+
+#[test]
+fn test_heatmap_rejects_invalid_year() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    assert!(api.get_heatmap_snapshot(1900).is_err());
+    assert!(api.get_heatmap_snapshot(2200).is_err());
+}
+
+#[test]
+fn test_heatmap_merges_remote_device_partition_and_keeps_future_days() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    let remote_dir = dir.join("stats/events/device_remote");
+    std::fs::create_dir_all(&remote_dir).unwrap();
+    let event = explorer_event(1_714_550_400_000, "2024-05-01", EventSource::HumanTyped, 7);
+    std::fs::write(
+        remote_dir.join("2024-05-01.events.jsonl"),
+        format!("{}\n", serde_json::to_string(&event).unwrap()),
+    )
+    .unwrap();
+
+    let api = StatsApi::new(dir);
+    let heatmap = api.get_heatmap_snapshot(2024).unwrap();
+    let day = heatmap
+        .days
+        .iter()
+        .find(|day| day.date == "2024-05-01")
+        .unwrap();
+    assert_eq!(day.human_typed_chars, 7, "已同步设备的事件也应计入每日真值");
+
+    // 尚未到来的日期仍在列表里，由日期字段交给 UI 标记未到，不伪造成 0 字历史。
+    let future_year = api.get_heatmap_snapshot(2100).unwrap();
+    assert_eq!(future_year.days.len(), 365);
+    assert_eq!(future_year.days.first().unwrap().date, "2100-01-01");
+    assert_eq!(future_year.days.last().unwrap().date, "2100-12-31");
 }

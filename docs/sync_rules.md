@@ -1,7 +1,7 @@
 # 同步规则
 
 Status: active
-Last verified: 2026-08-08
+Last verified: 2026-10-18
 Truth source: product decision / protocol / code
 Supersedes: None
 
@@ -27,8 +27,8 @@ Supersedes: None
 
 同步根 = `app_data_root`，路径相对应用数据根：
 
-- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`。
-- **黑名单（绝不参与）**：`作品/`（projects_root）、`日志/`（log_dir）、`导出/`、`备份/`、`settings.local.json`、`recent_edits.json`、`app-meta/sync/config.local.json`、`app-meta/sync/conflicts.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
+- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`、写作统计事件 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl`（仅通过对应设备的统计数据组同步，见下文「统计设备组」）。
+- **黑名单（绝不参与）**：`作品/`（projects_root）、`日志/`（log_dir）、`导出/`、`备份/`、`settings.local.json`、`recent_edits.json`、`app-meta/sync/config.local.json`、`app-meta/sync/conflicts.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`（旧版单机事件库、迁移标记与冲突诊断文件，只作为一次性迁移输入）、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
 
 ### App 数据组与独立发布
 
@@ -39,6 +39,14 @@ App target 内部按数据组独立扫描、合并、记录状态并发布不可
 **客户端升级是一次协调切换，不支持新旧客户端同时写同一 App 数据。** 启用 v2 catalog 前，先在所有旧客户端暂停同步并升级到支持 App 数据组的版本，再恢复同步。首个新客户端从旧 manifest 推导组并逐组迁移：catalog 未登记的组继续以旧 `app/` 为只读迁移源；catalog 选中某组 generation 后，该 generation 成为唯一有效源，旧 `app/` 中的后续写入不会回流。迁移保留旧文件用于恢复，不把它们作为并行写入副本。若 v2 catalog 已创建，恢复同步前必须确保所有活跃客户端都已升级；不要让旧客户端在 flat `app/` 上继续写。
 
 每个 App 数据组使用独立的本地 `manifest.sync.json`、`state.local.json` 与 `conflicts.json`。缺少本地文件且没有对应删除 tombstone 时，只将该组报告为失败，不把缺文件推断成删除，也不阻断其他独立组。星图索引依赖检查失败时保留旧索引 generation，避免它引用尚未完成的数据组。
+
+### 统计设备组
+
+写作统计的原始事件以「来源设备」为粒度独立同步：本机事件写在 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl`，每台设备独占写入自己的分区，其它设备下载后只读，永不重写同分区；同步组 id 为 `stats_device:<device_id>`（远端 storage key `stats-device-<hex>`），与 `global`、星图组一样参与远端目录清单、独立 generation 发布和按组失败隔离。一次数据组传输只上传本机新增/变化的事件文件，下载不会触发自动重传，也不重复写事件。
+
+聚合永远从原始事件投影派生：Core 读取全部已到达的来源分区，按 `event_id` 去重（本机分区优先保留）。跨分区意外重复的 `event_id` 只计数一次，结构化冲突信息追加到 `app-meta/stats/event_conflicts.local.jsonl` 供诊断，绝不静默覆盖原始事实。不维护可被 LWW 覆写的每日汇总账本，也不把合计数直接相加。
+
+旧版单机事件库 `app-meta/stats/events.local/` 作为一次性迁移输入：首次升级时把旧事件按原 `event_id`、`timestamp_ms`、`local_date`、`source`、`inserted_chars` 原样迁入本机来源分区，迁移完成标记 `events.device_partitions.v1` 写入后旧目录不再参与读写。迁移不把同步下载的正文、正文当前字数或缺失事件制造成人工输入。`historyScope` 如实返回 `localEvents`（仅本机）、`syncedDevices`（已收到其它设备事件且统计组无失败）或 `partialSync`（存在未完成的统计设备组同步），平台页面按此标示范围，不得仅因打开同步开关就宣称历史全量可达。
 
 ## 作品级同步白名单/黑名单
 
@@ -57,6 +65,8 @@ App target 内部按数据组独立扫描、合并、记录状态并发布不可
 | `Metadata` | `project.json`、`volume.json`、`chapter.meta.json`、`starmap.json`、`writing_stats.json` | LWW |
 | `LocalOnly` | `app-meta/*`（回收站/备份等本地内容） | 不同步 |
 | `GeneratedCache` | 其他所有文件 | LWW |
+
+> 写作统计原始事件 `stats/events/<device_id>/*.events.jsonl` 落在 `GeneratedCache`：每个来源分区由该设备独占写入、其它设备只读，LWW 不会合并事件内容；跨设备历史由 Core 读取全部分区并按 `event_id` 去重派生，不依赖 LWW 合并单体统计文件。
 
 判断函数：`lww::classify_content_path(path)` → `ContentClass`
 兼容函数：`lww::is_document_content_path(path)` → `classify_content_path(path) == ContentClass::UserTextDocument`

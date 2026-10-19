@@ -1,7 +1,7 @@
 # 数据目录格式定义
 
 Status: active
-Last verified: 2026-08-08
+Last verified: 2026-10-18
 Truth source: protocol
 Supersedes: None
 
@@ -59,7 +59,7 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 
 ## 应用数据根目录（应用级 Git 仓库根）
 
-应用级数据全部位于 `app_data_root`。`app_data_root` 自身是一个独立 Git 仓库（应用级仓库），仅同步真正需要跨设备的数据：设置、全局星图、主题调色板。作品正文、日志、导出、备份、设备专属数据、同步凭证、缓存、统计本地状态均不进入应用级仓库。
+应用级数据全部位于 `app_data_root`。`app_data_root` 自身是一个独立 Git 仓库（应用级仓库），仅同步真正需要跨设备的数据：设置、全局星图、主题调色板，以及按来源设备分区的写作统计事件（见「统计设备组」）。作品正文、日志、导出、备份、设备专属数据、同步凭证、缓存、旧版统计本地状态均不进入应用级仓库。
 
 ```text
 <app_data_root>/                  ← 应用级 Git 仓库根
@@ -83,8 +83,13 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 │  │        ├── state.local.json
 │  │        └── conflicts.json
 │  ├── stats/
-│  │  ├── events.local/            # 本地写作事件（不同步）
-│  │  └── daily/                   # 统计日报（不同步）
+│  │  ├── events/                  # 按来源设备分区的写作事件（经统计设备组同步）
+│  │  │  └── <device_id>/
+│  │  │     └── YYYY-MM-DD.events.jsonl
+│  │  ├── events.local/            # 旧版本地写作事件（迁移后只读保留，不同步）
+│  │  ├── daily/                   # 统计日报（不同步）
+│  │  ├── events.device_partitions.v1  # 事件库迁移完成标记（不同步）
+│  │  └── event_conflicts.local.jsonl  # 跨分区重复 event_id 诊断（不同步）
 │  └── transactions/               # 写入事务记录（不同步）
 ├── themes/palettes/               # 按设备与指纹保存的调色板记录（应用级白名单）
 ├── starmaps/                      # 星图数据（应用级白名单）
@@ -94,8 +99,17 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 
 同步根 = `app_data_root`，路径相对应用数据根：
 
-- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`。
-- **黑名单（绝不参与）**：`projects/`（projects_root）、`logs/`（log_dir）、`exports/`、`backups/`、`settings.local.json`、`recent_edits.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
+- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`、`stats/events/<device_id>/YYYY-MM-DD.events.jsonl`（仅通过对应设备数据组同步，本机只写自己的分区）。
+- **黑名单（绝不参与）**：`projects/`（projects_root）、`logs/`（log_dir）、`exports/`、`backups/`、`settings.local.json`、`recent_edits.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`（旧版单机事件库、迁移标记与冲突诊断文件）、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
+
+### 统计设备组
+
+写作统计事件按来源设备独立成组同步（详见 `docs/sync_rules.md`「统计设备组」）：
+
+- 事件目录：`stats/events/<device_id>/YYYY-MM-DD.events.jsonl`，文件按 UTC 日命名，事件内 `local_date` 仍是事件发生地的业务日，两个日期概念不混用。
+- 组 id `stats_device:<device_id>`，远端 storage key `stats-device-<hex>`；每台设备独占写入自己的分区，下载分区只读，其它设备不重写。
+- 聚合时 Core 扫描全部分区并按 `event_id` 去重（本机优先），不维护可被 LWW 覆写的每日汇总账本；合计数永远从原始事件投影派生。
+- 旧 `app-meta/stats/events.local/` 只作为一次性迁移输入，迁移标记写入后不再读写。
 
 `log_dir` 由平台提供，与 `app_data_root` 相互独立（Android 为 `Sujian/logs/`），不位于数据根目录下。
 
@@ -112,7 +126,9 @@ app/
   settings.sync.json
   starmaps/**
   themes/palettes/**
-  app-meta/sync/manifest.sync.json
+  app-meta/sync/app_groups.sync.json    # App 数据组当前 generation 目录清单
+  __groups__/<group-key>/
+    __generations__/<generation>/**     # 该数据组当前 generation 内容
 projects/<project_id>/
   project.json
   volumes/**
@@ -120,9 +136,11 @@ projects/<project_id>/
   app-meta/sync/manifest.sync.json
 ```
 
+统计设备组的远端路径为 `app/__groups__/stats-device-<hex>/__generations__/<generation>/stats/events/<device_id>/...`，由对应设备独占写入。
+
 | 内部 target | 本地同步根 | 远端前缀 | 白名单 | 同步内容 |
 |-------------|-----------|----------|--------|----------|
-| **App** | `app_data_root` | `app/` | `settings.sync.json`/`starmaps/**`/`themes/palettes/**` | 设置、全局星图、主题调色板 |
+| **App** | `app_data_root` | `app/` | `settings.sync.json`/`starmaps/**`/`themes/palettes/**`/`stats/events/<device_id>/**` | 设置、全局星图、主题调色板、写作统计事件分区 |
 | **Project** | `project_root`（`projects_root/<project_id>`） | `projects/<project_id>/` | `project.json`/`volumes/**`/`characters/**`/`app-meta/sync/manifest.sync.json` | 单部作品正文、元数据、作品自己的同步状态 |
 
 全局同步配置只存在一份：`<app_data_root>/app-meta/sync/config.local.json`。作品目录下不再保存用户同步 config/secrets，只保留该 target 的本地 `state.local.json / manifest.sync.json / conflicts.json`。

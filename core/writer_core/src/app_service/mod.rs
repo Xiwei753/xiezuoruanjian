@@ -60,8 +60,10 @@ impl WriterAppService {
         projects_root: String,
         init: writer_platform_api::PlatformInit,
     ) -> Self {
+        let api = WriterCoreApi::new(app_data_root, projects_root);
+        api.set_preferred_device_id(&init.device_id);
         Self {
-            api: WriterCoreApi::new(app_data_root, projects_root),
+            api,
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: Some(init),
             network_state: Mutex::new(None),
@@ -85,6 +87,8 @@ impl WriterAppService {
         if let Some(config_store) = services.config_store {
             crate::app_config::set_default_config_store(config_store);
         }
+
+        api.set_preferred_device_id(&services.init.device_id);
 
         Self {
             api,
@@ -125,6 +129,7 @@ impl WriterAppService {
     }
 
     pub fn set_platform_init(&mut self, init: writer_platform_api::PlatformInit) {
+        self.api.set_preferred_device_id(&init.device_id);
         self.platform_init = Some(init);
     }
 

@@ -12,11 +12,12 @@
 
 import hilog from '@ohos.hilog'
 import { UIContext } from '@kit.ArkUI'
-import { NativeStatsBridge, StatsExplorerRequestResult } from '../../../corebridge/native/NativeStatsBridge'
+import { NativeStatsBridge, StatsExplorerRequestResult, StatsHeatmapRequestResult } from '../../../corebridge/native/NativeStatsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import {
   WritingStatsExplorer,
+  WritingStatsHeatmap,
   STATS_PRESET_LAST_7_DAYS,
   STATS_PRESET_LIFETIME,
   STATS_PRESET_CUSTOM
@@ -47,6 +48,10 @@ export struct StatsScreen {
   @State customEndDate: string = ''
   @State isLoading: boolean = true
   @State errorMessage: string = ''
+  // 码字日历（#956）：独立年份维度，与 Explorer 选中时段并存。
+  @State heatmapYear: number = new Date().getFullYear()
+  @State heatmap: WritingStatsHeatmap | null = null
+  @State heatmapError: string = ''
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State useHdsNav: boolean = false
   @State headerActions: ActionSlot[] = []
@@ -58,6 +63,7 @@ export struct StatsScreen {
   async aboutToAppear() {
     hilog.info(0x0000, 'StatsScreen', 'route name=Stats')
     this.loadExplorer(STATS_PRESET_LAST_7_DAYS, '', '')
+    this.loadHeatmap(this.heatmapYear)
 
     // Issue #784：API23+ 用 HdsAppDestinationApi23 共享根页面壳；API < 23 用 NavDestination .menus() 接入 HeaderTrailing。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
@@ -100,6 +106,43 @@ export struct StatsScreen {
         ? result.userMessage
         : (result.errorCode !== undefined ? result.errorCode : '加载统计失败')
     }
+  }
+
+  /**
+   * 请求指定年份的每日码字快照（#956）。与 Explorer 是两个独立维度：
+   * 只加载该年的每日列表，不重算折线；旧请求晚到结果由请求序号过滤。
+   */
+  private async loadHeatmap(year: number): Promise<void> {
+    this.heatmapError = ''
+    const response: StatsHeatmapRequestResult = await this.statsBridge.getWritingStatsHeatmap(year)
+    if (!this.statsBridge.isLatestHeatmapRequest(response.requestSeq)) {
+      return
+    }
+    const result: ResultEnvelope<WritingStatsHeatmap> = response.envelope
+    if (result.success && result.data !== undefined) {
+      this.heatmap = result.data
+    } else {
+      this.heatmap = null
+      this.heatmapError = result.userMessage !== undefined && result.userMessage.length > 0
+        ? result.userMessage
+        : (result.errorCode !== undefined ? result.errorCode : '加载码字日历失败')
+    }
+  }
+
+  /** 切换热力图年份：只加载该年快照，不改变 Explorer 选中时段。 */
+  private changeHeatmapYear(year: number): void {
+    if (year === this.heatmapYear) {
+      return
+    }
+    this.heatmapYear = year
+    // 先清空，避免短暂显示上一年数据；加载完成后写入新年份快照。
+    this.heatmap = null
+    this.loadHeatmap(year)
+  }
+
+  /** 热力图日格选择：页内文字由组件显示，这里记录选择用于诊断。 */
+  private onHeatmapSelectDay(date: string, chars: number): void {
+    hilog.debug(0x0000, 'StatsScreen', 'heatmap day selected date=%{public}s chars=%{public}d', date, chars)
   }
 
   /** 窄屏顶部范围切换 / 宽屏点非自选卡：切时段并重新取快照。 */
@@ -222,6 +265,15 @@ export struct StatsScreen {
           expandedPanel: this.expandedPanel,
           isLoading: this.isLoading,
           errorMessage: this.errorMessage,
+          heatmap: this.heatmap,
+          heatmapYear: this.heatmapYear,
+          heatmapError: this.heatmapError,
+          onChangeHeatmapYear: (year: number): void => {
+            this.changeHeatmapYear(year)
+          },
+          onSelectHeatmapDay: (date: string, chars: number): void => {
+            this.onHeatmapSelectDay(date, chars)
+          },
           onOpenPeriod: (preset: string): void => {
             this.openPeriodInWide(preset)
           },
@@ -244,6 +296,15 @@ export struct StatsScreen {
           selectedPeriod: this.selectedPeriod,
           isLoading: this.isLoading,
           errorMessage: this.errorMessage,
+          heatmap: this.heatmap,
+          heatmapYear: this.heatmapYear,
+          heatmapError: this.heatmapError,
+          onChangeHeatmapYear: (year: number): void => {
+            this.changeHeatmapYear(year)
+          },
+          onSelectHeatmapDay: (date: string, chars: number): void => {
+            this.onHeatmapSelectDay(date, chars)
+          },
           onSelectPeriod: (preset: string): void => {
             this.selectPeriod(preset)
           },

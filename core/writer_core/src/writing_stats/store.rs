@@ -6,36 +6,59 @@
 //! ## 存储结构
 //!
 //! ```text
-//! app-meta/stats/
-//!   events.local/
-//!     2024-01-01.events.jsonl    # 原始事件（JSONL 格式）
+//! stats/
+//!   events/
+//!     <origin_device_id>/
+//!       2024-01-01.events.jsonl    # 原始事件（JSONL 格式，一天一个文件）
 //! ```
 //!
-//! 事件按 UTC 日期分文件存储，业务日历日（每日统计分桶、「今天」查询）走
-//! [`crate::writing_stats::calendar`] 模块。
+//! - 事件按 UTC 日期分文件存储；业务日历日（每日统计分桶、「今天」查询）走
+//!   [`crate::writing_stats::calendar`] 模块，事件中的 `local_date` 保持事件
+//!   发生地当时的值。
+//! - 每台设备只向自己的 `origin_device_id` 分区追加事件；其他设备同步下载来的
+//!   分区只读。读取时扫描全部分区，按 `event_id` 去重后组成同一份聚合输入。
+//! - 旧版单分区事件库由 [`crate::writing_stats::migration`] 一次性迁入本结构。
 
 use crate::error::Result;
+use crate::writing_stats::calendar;
 use crate::writing_stats::WritingInputEvent;
 use chrono::NaiveDate;
+use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// 写作统计数据存储引擎 — 只负责事件存储和按日期范围读取事件。
+/// 统计事件根目录（相对 app_data_root）。
+const EVENTS_ROOT: &str = "stats/events";
+
+/// 跨分区重复 `event_id` 的结构化诊断记录。
 ///
-/// 不再持有内存缓冲区：`record_event` 直接追加写入 JSONL。
-/// 不再管理 daily stats：所有统计计算由 projection 模块完成。
-///
-/// 写入按 `event_id` 幂等：同一事件（同 ID）重复落盘只写一行，
-/// 平台端重发未确认事件不会翻倍字数。
+/// 只记录事实用于诊断，不覆盖任何原始行；聚合保留先出现的事件（本机分区优先）。
+#[derive(Debug, Serialize)]
+struct EventIdConflict {
+    event_id: String,
+    kept_origin_device_id: String,
+    dropped_origin_device_id: String,
+    dropped_file: String,
+    detected_at_ms: i64,
+}
+
+/// 单个来源设备分区里的一个事件文件。
+#[derive(Debug, Clone)]
+struct EventFile {
+    origin: String,
+    date: String,
+    path: PathBuf,
+}
+
+/// 写作统计事件存储。
 pub struct StatsStore {
     app_data_root: PathBuf,
-    /// 每个 UTC 日期文件里已持久化的事件 ID（惰性扫描、写入时维护）。
-    ///
-    /// 只用于写入判重；查询仍以文件内容为准。`rewrite_events_for_date`
-    /// 会清掉对应日期，避免整体改写后缓存过期。
+    /// 本机来源分区标识（懒解析后缓存）。
+    origin_device_id: Mutex<Option<String>>,
+    /// 按「分区/UTC 日期」缓存已持久化的 event_id，避免每次全量重扫。
     written_ids: Mutex<HashMap<String, HashSet<String>>>,
 }
 
@@ -43,164 +66,263 @@ impl StatsStore {
     pub fn new(app_data_root: &Path) -> Self {
         Self {
             app_data_root: app_data_root.to_path_buf(),
+            origin_device_id: Mutex::new(None),
             written_ids: Mutex::new(HashMap::new()),
         }
     }
 
-    fn events_dir(&self) -> PathBuf {
-        self.app_data_root.join("app-meta/stats/events.local")
+    fn events_root(&self) -> PathBuf {
+        self.app_data_root.join(EVENTS_ROOT)
     }
 
-    /// 列出 `events.local/` 下所有事件文件的日期部分（升序）。
-    pub fn list_event_file_dates(&self) -> Result<Vec<String>> {
-        let dir = self.events_dir();
-        if !dir.exists() {
-            return Ok(Vec::new());
-        }
-        let mut dates = Vec::new();
-        for entry in fs::read_dir(&dir)? {
-            let path = entry?.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            let Some(date) = name.strip_suffix(".events.jsonl") else {
-                continue;
-            };
-            if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok() {
-                dates.push(date.to_string());
+    /// 本机数据根路径（供同 crate 的统计覆盖范围查询读取同步状态）。
+    pub(crate) fn app_data_root(&self) -> &Path {
+        &self.app_data_root
+    }
+
+    fn event_file_path(&self, origin: &str, date: &str) -> PathBuf {
+        self.events_root()
+            .join(origin)
+            .join(format!("{date}.events.jsonl"))
+    }
+
+    /// 仅读取本机设备标识，不创建任何设备信息。
+    pub fn load_origin_device_id(&self) -> Option<String> {
+        match crate::settings::load_device_info(&self.app_data_root) {
+            Ok(info) if validate_device_segment(&info.device_id) => Some(info.device_id),
+            Ok(_) => None,
+            Err(e) => {
+                eprintln!("[writing_stats] load device info failed: {e}");
+                None
             }
         }
-        dates.sort();
-        Ok(dates)
     }
 
-    /// 用给定内容整体覆盖某个日期的事件文件（先写 tmp 再 rename）。
-    pub fn rewrite_events_for_date(&self, date: &str, contents: &str) -> Result<()> {
-        let file_path = self.events_dir().join(format!("{}.events.jsonl", date));
-        fs::create_dir_all(self.events_dir())?;
-        let tmp_path = file_path.with_extension("jsonl.tmp");
-        fs::write(&tmp_path, contents)?;
-        fs::rename(&tmp_path, &file_path)?;
-        // 整体改写后缓存的 ID 集合作废，下次写入重新扫描。
-        self.written_ids
+    /// 解析本机来源分区标识；设备信息缺失时按需生成本机设备身份。
+    pub fn resolve_origin_device_id(&self) -> Result<String> {
+        if let Some(id) = self.cached_origin_device_id() {
+            return Ok(id);
+        }
+        if let Some(id) = self.load_origin_device_id() {
+            self.cache_origin_device_id(&id);
+            return Ok(id);
+        }
+        let info = crate::settings::ensure_device_info(&self.app_data_root, "", "", None)?;
+        if !validate_device_segment(&info.device_id) {
+            return Err(crate::Error::Other(format!(
+                "invalid device id for stats event partition: {:?}",
+                info.device_id
+            )));
+        }
+        self.cache_origin_device_id(&info.device_id);
+        Ok(info.device_id)
+    }
+
+    fn cached_origin_device_id(&self) -> Option<String> {
+        self.origin_device_id
             .lock()
-            .map_err(|_| crate::Error::Other("stats event id cache poisoned".to_string()))?
-            .remove(date);
-        Ok(())
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
-    /// 记录一个写作输入事件 — 直接追加写入 JSONL，无缓冲。
-    ///
-    /// 一次编辑事务就是追加一行 JSONL。不再有内存缓冲或防抖逻辑。
-    /// 同一 `event_id` 重复调用不重复落盘（幂等）。
-    pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {
-        self.record_events(vec![event]).map(|_| ())
+    fn cache_origin_device_id(&self, id: &str) {
+        if let Ok(mut guard) = self.origin_device_id.lock() {
+            *guard = Some(id.to_string());
+        }
     }
 
-    /// 幂等批量记录事件，返回真正新落盘的事件数。
-    ///
-    /// 平台端排队上报的事件可能重发（保存失败、进程重启恢复），
-    /// 判重按稳定 `event_id`：文件里已有同 ID 的行就跳过。
-    /// 事件按**事件发生时间**的 UTC 日期分文件（与 [`Self::timestamp_to_date`] 一致），
-    /// 重发旧事件仍落在它原本的日期文件里，不会篡改归属日。
+    /// 已存在事件文件的来源设备分区，按名称排序。
+    pub fn list_event_origins(&self) -> Result<Vec<String>> {
+        let mut origins: Vec<String> = self
+            .list_event_files()?
+            .into_iter()
+            .map(|file| file.origin)
+            .collect();
+        origins.dedup();
+        Ok(origins)
+    }
+
+    /// 追加一批事件，只写入本机来源分区。按 `event_id` 幂等：已存在的事件跳过，
+    /// 返回真正新写入的事件数。
     pub fn record_events(&self, events: Vec<WritingInputEvent>) -> Result<usize> {
         if events.is_empty() {
             return Ok(0);
         }
+        let origin = self.resolve_origin_device_id()?;
 
-        // 先按存储分区（UTC 日）聚拢，写入顺序与调用顺序无关。
         let mut by_date: BTreeMap<String, Vec<WritingInputEvent>> = BTreeMap::new();
         for event in events {
             let date = self.timestamp_to_date(event.timestamp_ms)?;
             by_date.entry(date).or_default().push(event);
         }
 
-        let mut guard = self
-            .written_ids
-            .lock()
-            .map_err(|_| crate::Error::Other("stats event id cache poisoned".to_string()))?;
-        let mut written = 0usize;
-        for (date, day_events) in by_date {
-            // 惰性加载该日期文件的已有 ID；坏行跳过（严格报错留给读取路径），
-            // 一个历史坏行不该阻塞新事件的写入。
-            if !guard.contains_key(&date) {
-                let ids = self.scan_event_ids(&date)?;
-                guard.insert(date.clone(), ids);
-            }
-            let ids = guard
-                .get_mut(&date)
-                .expect("stats event id cache must contain the date");
+        let partition_dir = self.events_root().join(&origin);
+        fs::create_dir_all(&partition_dir)?;
 
-            let fresh: Vec<WritingInputEvent> = day_events
-                .into_iter()
-                .filter(|event| event.event_id.is_empty() || !ids.contains(&event.event_id))
-                .collect();
+        let mut written = 0usize;
+        for (date, events) in by_date {
+            let fresh = self.take_fresh_events(&origin, &date, events)?;
             if fresh.is_empty() {
                 continue;
             }
-
-            let events_dir = self.events_dir();
-            fs::create_dir_all(&events_dir)?;
-            let file_path = events_dir.join(format!("{}.events.jsonl", date));
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&file_path)?;
-            for event in &fresh {
-                writeln!(file, "{}", serde_json::to_string(event)?)?;
-                if !event.event_id.is_empty() {
-                    ids.insert(event.event_id.clone());
-                }
-                written += 1;
-            }
+            self.append_events_to_file(&origin, &date, &fresh)?;
+            written += fresh.len();
         }
         Ok(written)
     }
 
-    /// 扫描某个日期文件里已存在的事件 ID（用于写入判重缓存）。
-    ///
-    /// 只提取 `event_id` 字段，解析不了的行直接跳过：这是判重的尽力缓存，
-    /// 与 [`Self::load_events_for_date`] 的「坏行严格报错」职责不同。
-    fn scan_event_ids(&self, date: &str) -> Result<HashSet<String>> {
-        let file_path = self.events_dir().join(format!("{}.events.jsonl", date));
-        if !file_path.exists() {
-            return Ok(HashSet::new());
+    /// 过滤掉本机分区里已经写入过的 `event_id`，并为本次写入占位。
+    fn take_fresh_events(
+        &self,
+        origin: &str,
+        date: &str,
+        events: Vec<WritingInputEvent>,
+    ) -> Result<Vec<WritingInputEvent>> {
+        let mut cache = self
+            .written_ids
+            .lock()
+            .map_err(|_| crate::Error::Other("stats event id cache poisoned".into()))?;
+        let cache_key = format!("{origin}/{date}");
+        if !cache.contains_key(&cache_key) {
+            let ids = self.scan_event_ids(origin, date)?;
+            cache.insert(cache_key.clone(), ids);
         }
-        let file = File::open(&file_path)?;
-        let reader = BufReader::new(file);
-        let mut ids = HashSet::new();
-        for line in reader.lines() {
-            let line = line?;
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
+        let Some(ids) = cache.get_mut(&cache_key) else {
+            return Err(crate::Error::Other("stats event id cache poisoned".into()));
+        };
+
+        let mut fresh = Vec::new();
+        for event in events {
+            if !event.event_id.is_empty() && ids.contains(&event.event_id) {
                 continue;
             }
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                if let Some(id) = value.get("event_id").and_then(|v| v.as_str()) {
-                    if !id.is_empty() {
-                        ids.insert(id.to_string());
-                    }
-                }
+            if !event.event_id.is_empty() {
+                ids.insert(event.event_id.clone());
             }
+            fresh.push(event);
         }
-        Ok(ids)
+        Ok(fresh)
     }
 
-    /// 读取某个 UTC 分区的事件文件，**任何一行解析失败都返回 Err**。
-    ///
-    /// raw event 是统计的唯一事实源，宽松跳过坏行会让迁移回写时永久删掉
-    /// 解析不了的原始数据，也会让查询返回不完整结果而不报错。严格读取
-    /// 带文件名 + 行号报错，调用方可以据此中止或降级。
+    /// 把新事件追加到本机来源分区的当日文件。
+    fn append_events_to_file(
+        &self,
+        origin: &str,
+        date: &str,
+        events: &[WritingInputEvent],
+    ) -> Result<()> {
+        let file_path = self.event_file_path(origin, date);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)?;
+        for event in events {
+            writeln!(file, "{}", serde_json::to_string(event)?)?;
+        }
+        Ok(())
+    }
+
+    /// 追加单个事件。
+    pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {
+        self.record_events(vec![event]).map(|_| ())
+    }
+
+    /// 读取某个 UTC 日期在全部来源分区中的事件（按 `event_id` 去重）。
     pub fn load_events_for_date(&self, date: &str) -> Result<Vec<WritingInputEvent>> {
-        let file_path = self.events_dir().join(format!("{}.events.jsonl", date));
-        if !file_path.exists() {
+        let files: Vec<EventFile> = self
+            .list_event_files()?
+            .into_iter()
+            .filter(|file| file.date == date)
+            .collect();
+        self.load_merged_files(files)
+    }
+
+    /// 读取全部来源分区的事件（按 `event_id` 去重）。
+    pub fn load_all_events(&self) -> Result<Vec<WritingInputEvent>> {
+        let files = self.list_event_files()?;
+        self.load_merged_files(files)
+    }
+
+    /// 读取指定作品的全部事件。
+    pub fn load_events_for_project(&self, project_id: &str) -> Result<Vec<WritingInputEvent>> {
+        let events = self.load_all_events()?;
+        Ok(events
+            .into_iter()
+            .filter(|event| event.project_id == project_id)
+            .collect())
+    }
+
+    /// 读取业务日期 `[start_date, end_date]`（含两端）的事件。
+    pub fn load_events_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<WritingInputEvent>> {
+        let start = calendar::parse_date(start_date)
+            .map_err(|e| crate::Error::Other(format!("Invalid start date: {e}")))?;
+        let end = calendar::parse_date(end_date)
+            .map_err(|e| crate::Error::Other(format!("Invalid end date: {e}")))?;
+        if start > end {
             return Ok(Vec::new());
         }
+        // 事件的存储分区按 UTC 日期：本地日期会在 UTC 日期前后一天内浮动。
+        let utc_start = start.pred_opt().unwrap_or(start);
+        let utc_end = end.succ_opt().unwrap_or(end);
 
-        let file = File::open(&file_path)?;
-        let reader = BufReader::new(file);
+        let files: Vec<EventFile> = self
+            .list_event_files()?
+            .into_iter()
+            .filter(|file| {
+                NaiveDate::parse_from_str(&file.date, "%Y-%m-%d")
+                    .map(|date| date >= utc_start && date <= utc_end)
+                    .unwrap_or(false)
+            })
+            .collect();
+        let mut events = self.load_merged_files(files)?;
+        events.retain(|event| {
+            let date = event.business_date();
+            !date.is_empty() && date.as_str() >= start_date && date.as_str() <= end_date
+        });
+        Ok(events)
+    }
+
+    /// 读取发生时间在 `[start_ms, end_ms]`（含两端）的事件，按时间升序。
+    pub fn load_events_in_window(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<Vec<WritingInputEvent>> {
+        let start_date = calendar::local_date_at(start_ms)?;
+        let end_date = calendar::local_date_at(end_ms)?;
+        let mut events = self.load_events_range(&start_date, &end_date)?;
+        events.retain(|event| event.timestamp_ms >= start_ms && event.timestamp_ms <= end_ms);
+        events.sort_by_key(|event| event.timestamp_ms);
+        Ok(events)
+    }
+
+    /// 把时间戳转换为存储分区使用的 UTC 日期。
+    pub fn timestamp_to_date(&self, timestamp_ms: i64) -> Result<String> {
+        calendar::utc_date_at(timestamp_ms)
+    }
+
+    /// 扫描事件库里的全部 `<origin>/<date>.events.jsonl` 文件。
+    fn list_event_files(&self) -> Result<Vec<EventFile>> {
+        let root = self.events_root();
+        if !root.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut files = Vec::new();
+        for origin in list_origin_dirs(&root)? {
+            files.extend(list_origin_event_files(&root, &origin)?);
+        }
+        Ok(files)
+    }
+
+    /// 严格读取单个事件文件（任何一行解析失败都报错）。
+    fn parse_events_file(&self, file: &EventFile) -> Result<Vec<WritingInputEvent>> {
+        let handle = File::open(&file.path)?;
+        let reader = BufReader::new(handle);
         let mut events = Vec::new();
-
         for (idx, line) in reader.lines().enumerate() {
             let line = line?;
             let trimmed = line.trim();
@@ -209,125 +331,189 @@ impl StatsStore {
             }
             let event: WritingInputEvent = serde_json::from_str(trimmed).map_err(|e| {
                 crate::Error::Other(format!(
-                    "Corrupt event at {}.events.jsonl:{}: {}",
-                    date,
+                    "Corrupt event at stats/events/{}/{}.events.jsonl:{}: {}",
+                    file.origin,
+                    file.date,
                     idx + 1,
                     e
                 ))
             })?;
             events.push(event);
         }
-
         Ok(events)
     }
 
-    /// 读取本地事件历史上的**全部**事件（遍历真实存在的日期文件，升序）。
-    ///
-    /// 供统计页 Explorer 这类「一次拿到全量历史再在内存里切区间」的查询使用：
-    /// 只遍历 [`StatsStore::list_event_file_dates`] 里真实存在的日期文件，
-    /// 绝不按「某天到今天」逐日枚举空文件。任一分区文件损坏仍返回明确错误，
-    /// 不把错误当「0 字」吞掉。
-    pub fn load_all_events(&self) -> Result<Vec<WritingInputEvent>> {
-        let mut events = Vec::new();
-        for date in self.list_event_file_dates()? {
-            let mut day_events = self.load_events_for_date(&date)?;
-            events.append(&mut day_events);
-        }
-        Ok(events)
-    }
-
-    /// 读取指定作品的全部本地事件（跨所有已有事件文件的 UTC 分区）。
-    ///
-    /// 只遍历 [`StatsStore::list_event_file_dates`] 里真实存在的日期文件，
-    /// 不按「作品创建日到今天」逐日枚举空文件。任一分区文件损坏仍返回
-    /// 明确错误，不把错误当「0 字」吞掉。
-    pub fn load_events_for_project(&self, project_id: &str) -> Result<Vec<WritingInputEvent>> {
-        let mut events = self.load_all_events()?;
-        events.retain(|e| e.project_id == project_id);
-        Ok(events)
-    }
-
-    /// 读取 UTC 存储分区落在 `[start_date, end_date]` ± 1 天内的事件，
-    /// 再按事件的 [`WritingInputEvent::business_date`] 过滤到真正的业务日范围。
-    ///
-    /// 事件文件按 UTC 日期分目录（见 [`StatsStore::timestamp_to_date`]），
-    /// 业务日历日按本地午夜算。查询本地日范围时，真实事件可能住在
-    /// 相邻的 UTC 日期文件里（东八区本地 10/6 00:30 的事件在 UTC 10/5
-    /// 文件）。读 ±1 天后按 `business_date` 精确过滤，避免既漏读又
-    /// 多读；`load_events_in_window` 走纯时间戳路径，不受此影响。
-    ///
-    /// 调用方传入的 `start_date`/`end_date` 视为业务日历日（本地日）。
-    pub fn load_events_range(
-        &self,
-        start_date: &str,
-        end_date: &str,
-    ) -> Result<Vec<WritingInputEvent>> {
-        let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
-            .map_err(|e| crate::Error::Other(format!("Invalid start date: {}", e)))?;
-        let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
-            .map_err(|e| crate::Error::Other(format!("Invalid end date: {}", e)))?;
-
-        // 业务日 [start, end] 最多跨 UTC 日期 [start-1, end+1]。
-        let utc_start = start - chrono::Duration::days(1);
-        let utc_end = end + chrono::Duration::days(1);
-        let mut all_events = Vec::new();
-        let mut current = utc_start;
-        while current <= utc_end {
-            let date_str = current.format("%Y-%m-%d").to_string();
-            let mut events = self.load_events_for_date(&date_str)?;
-            all_events.append(&mut events);
-            current += chrono::Duration::days(1);
-        }
-
-        let start_owned = start.to_string();
-        let end_owned = end.to_string();
-        all_events.retain(|e| {
-            let d = e.business_date();
-            !d.is_empty() && d.as_str() >= start_owned.as_str() && d.as_str() <= end_owned.as_str()
+    /// 合并多个分区的事件并按 `event_id` 去重：本机分区排在最前，跨分区重复
+    /// 保留先出现的事件，并把冲突事实写入诊断日志。
+    fn load_merged_files(&self, mut files: Vec<EventFile>) -> Result<Vec<WritingInputEvent>> {
+        let local_origin = self.load_origin_device_id();
+        files.sort_by(|a, b| {
+            let a_local = local_origin.as_deref() == Some(a.origin.as_str());
+            let b_local = local_origin.as_deref() == Some(b.origin.as_str());
+            b_local
+                .cmp(&a_local)
+                .then_with(|| a.origin.cmp(&b.origin))
+                .then_with(|| a.date.cmp(&b.date))
         });
 
-        Ok(all_events)
+        let mut merged = MergeAccumulator::default();
+        for file in &files {
+            for event in self.parse_events_file(file)? {
+                merged.ingest(file, event);
+            }
+        }
+
+        if let Err(e) = self.append_conflicts(&merged.conflicts) {
+            log::warn!("[writing_stats] failed to append event id conflicts: {e}");
+        }
+        Ok(merged.events)
     }
 
-    /// 读取 `[start_ms, end_ms]` 窗口内的事件。
-    ///
-    /// 日期口径用业务日历日（本地午夜），不是 UTC：东八区本地 10/6 00:30
-    /// 的输入若按 UTC 日期 10/5 查窗口，会被错误排除。
-    ///
-    /// 不再合并内存缓冲（缓冲已删除），只读磁盘事件。
-    pub fn load_events_in_window(
-        &self,
-        start_ms: i64,
-        end_ms: i64,
-    ) -> Result<Vec<WritingInputEvent>> {
-        let start_date = crate::writing_stats::calendar::local_date_at(start_ms)?;
-        let end_date = crate::writing_stats::calendar::local_date_at(end_ms)?;
-
-        let mut events = self.load_events_range(&start_date, &end_date)?;
-        events.retain(|e| e.timestamp_ms >= start_ms && e.timestamp_ms <= end_ms);
-
-        events.sort_by_key(|e| e.timestamp_ms);
-        Ok(events)
+    /// 把跨分区重复 `event_id` 的结构化事实追加到本机诊断日志（best-effort）。
+    fn append_conflicts(&self, conflicts: &[EventIdConflict]) -> Result<()> {
+        if conflicts.is_empty() {
+            return Ok(());
+        }
+        let dir = self.app_data_root.join("app-meta/stats");
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("event_conflicts.local.jsonl");
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        for conflict in conflicts {
+            writeln!(file, "{}", serde_json::to_string(conflict)?)?;
+        }
+        Ok(())
     }
 
-    /// 事件**存储分区**用的 UTC 日期（`events.local/YYYY-MM-DD.events.jsonl`）。
-    ///
-    /// 刻意保留 UTC：改分文件规则要搬历史原始文件，收益不抵风险。
-    /// 业务日历日（每日统计分桶、「今天」查询）走
-    /// [`crate::writing_stats::calendar`]，两者分工见该模块文档。
-    pub fn timestamp_to_date(&self, timestamp_ms: i64) -> Result<String> {
-        crate::writing_stats::calendar::utc_date_at(timestamp_ms)
+    /// best-effort 扫描已写入的 event_id，损坏行跳过。
+    fn scan_event_ids(&self, origin: &str, date: &str) -> Result<HashSet<String>> {
+        let path = self.event_file_path(origin, date);
+        let mut ids = HashSet::new();
+        if !path.is_file() {
+            return Ok(ids);
+        }
+        let handle = File::open(&path)?;
+        for line in BufReader::new(handle).lines() {
+            let Ok(line) = line else {
+                continue;
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                continue;
+            };
+            let Some(id) = value.get("event_id").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if !id.is_empty() {
+                ids.insert(id.to_string());
+            }
+        }
+        Ok(ids)
     }
+}
+
+/// 去重合并的中间状态：保留每个 `event_id` 的首次出现，记录跨分区重复。
+#[derive(Default)]
+struct MergeAccumulator {
+    seen: HashMap<String, String>,
+    events: Vec<WritingInputEvent>,
+    conflicts: Vec<EventIdConflict>,
+}
+
+impl MergeAccumulator {
+    fn ingest(&mut self, file: &EventFile, event: WritingInputEvent) {
+        if event.event_id.is_empty() {
+            self.events.push(event);
+            return;
+        }
+        match self.seen.get(&event.event_id) {
+            Some(kept_origin) => {
+                if kept_origin != &file.origin {
+                    self.conflicts.push(EventIdConflict {
+                        event_id: event.event_id.clone(),
+                        kept_origin_device_id: kept_origin.clone(),
+                        dropped_origin_device_id: file.origin.clone(),
+                        dropped_file: format!(
+                            "stats/events/{}/{}.events.jsonl",
+                            file.origin, file.date
+                        ),
+                        detected_at_ms: chrono::Utc::now().timestamp_millis(),
+                    });
+                }
+            }
+            None => {
+                self.seen
+                    .insert(event.event_id.clone(), file.origin.clone());
+                self.events.push(event);
+            }
+        }
+    }
+}
+
+/// 事件根目录下合法的来源设备分区名（按名称排序）。
+fn list_origin_dirs(root: &Path) -> Result<Vec<String>> {
+    let mut origins: Vec<String> = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if validate_device_segment(&name) {
+            origins.push(name);
+        }
+    }
+    origins.sort();
+    Ok(origins)
+}
+
+/// 单个来源分区内合法的 `<date>.events.jsonl` 文件（按日期升序）。
+fn list_origin_event_files(root: &Path, origin: &str) -> Result<Vec<EventFile>> {
+    let dir = root.join(origin);
+    let mut dates: Vec<(String, PathBuf)> = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(date) = name.strip_suffix(".events.jsonl") else {
+            continue;
+        };
+        if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+            continue;
+        }
+        dates.push((date.to_string(), entry.path()));
+    }
+    dates.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(dates
+        .into_iter()
+        .map(|(date, path)| EventFile {
+            origin: origin.to_string(),
+            date,
+            path,
+        })
+        .collect())
+}
+
+/// 设备标识必须是单个安全路径 segment。
+fn validate_device_segment(id: &str) -> bool {
+    !id.is_empty() && id != "." && id != ".." && !id.contains('/') && !id.contains('\\')
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::writing_stats::{EventSource, Platform, WritingInputEvent};
+    use crate::writing_stats::{EventSource, Platform};
+    use tempfile::TempDir;
 
-    fn create_mock_store() -> (StatsStore, tempfile::TempDir) {
-        let tmp = tempfile::tempdir().expect("failed to create temp dir for mock store");
-        (StatsStore::new(tmp.path()), tmp)
+    fn create_mock_store() -> (TempDir, StatsStore) {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::settings::ensure_device_info(tmp.path(), "", "", Some("device_1")).unwrap();
+        let store = StatsStore::new(tmp.path());
+        (tmp, store)
     }
 
     fn create_mock_event() -> WritingInputEvent {
@@ -350,181 +536,196 @@ mod tests {
 
     #[test]
     fn test_record_event_direct_append() {
-        let (store, _tmp) = create_mock_store();
+        let (tmp, store) = create_mock_store();
         let event = create_mock_event();
-        store.record_event(event.clone()).unwrap();
-
-        // 直接落盘，不需要 flush
         let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
+        store.record_event(event).unwrap();
+
+        let path = tmp
+            .path()
+            .join("stats/events/device_1")
+            .join(format!("{date}.events.jsonl"));
+        assert!(path.exists());
         let events = store.load_events_for_date(&date).unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].inserted_chars, 10);
     }
 
     #[test]
     fn test_record_event_multiple() {
-        let (store, _tmp) = create_mock_store();
-        for i in 0..5 {
+        let (_tmp, store) = create_mock_store();
+        store.record_event(create_mock_event()).unwrap();
+        let other = {
             let mut event = create_mock_event();
-            event.inserted_chars = i + 1;
-            store.record_event(event).unwrap();
-        }
-
-        let date = store
-            .timestamp_to_date(chrono::Utc::now().timestamp_millis())
-            .unwrap();
-        let events = store.load_events_for_date(&date).unwrap();
-        assert_eq!(events.len(), 5);
+            event.event_id = "event-2".to_string();
+            event
+        };
+        store.record_event(other).unwrap();
+        assert_eq!(store.load_all_events().unwrap().len(), 2);
     }
 
     #[test]
     fn test_load_events_for_date_corrupt_line() {
-        let (store, _tmp) = create_mock_store();
+        let (tmp, store) = create_mock_store();
         let event = create_mock_event();
+        let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
         store.record_event(event).unwrap();
 
-        // 往文件追加一行坏数据
-        let date = store
-            .timestamp_to_date(chrono::Utc::now().timestamp_millis())
-            .unwrap();
-        let file_path = store.events_dir().join(format!("{}.events.jsonl", date));
-        let mut file = OpenOptions::new().append(true).open(&file_path).unwrap();
+        let path = tmp
+            .path()
+            .join("stats/events/device_1")
+            .join(format!("{date}.events.jsonl"));
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(file, "{{\"bad\":}}").unwrap();
 
-        // 严格 loader 遇到坏行应返回 Err（带文件名 + 行号）
-        let result = store.load_events_for_date(&date);
-        assert!(result.is_err());
+        let err = store.load_events_for_date(&date).unwrap_err();
+        assert!(err.to_string().contains("Corrupt event at stats/events/"));
     }
 
     #[test]
-    fn test_list_event_file_dates() {
-        let (store, _tmp) = create_mock_store();
-        let event = create_mock_event();
-        store.record_event(event).unwrap();
-
-        let dates = store.list_event_file_dates().unwrap();
-        assert_eq!(dates.len(), 1);
+    fn test_list_event_origins() {
+        let (_tmp, store) = create_mock_store();
+        store.record_event(create_mock_event()).unwrap();
+        assert_eq!(store.list_event_origins().unwrap(), vec!["device_1"]);
     }
-
-    #[test]
-    fn test_rewrite_events_for_date() {
-        let (store, _tmp) = create_mock_store();
-        let event = create_mock_event();
-        store.record_event(event).unwrap();
-
-        let date = store
-            .timestamp_to_date(chrono::Utc::now().timestamp_millis())
-            .unwrap();
-        let new_content = serde_json::to_string(&create_mock_event()).unwrap();
-        store.rewrite_events_for_date(&date, &new_content).unwrap();
-
-        let events = store.load_events_for_date(&date).unwrap();
-        assert_eq!(events.len(), 1);
-    }
-
-    // ── 幂等写入（#936）──
 
     #[test]
     fn test_record_events_dedup_by_event_id() {
-        let (store, _tmp) = create_mock_store();
+        let (_tmp, store) = create_mock_store();
         let mut event = create_mock_event();
-        event.event_id = "fixed-event-id".to_string();
+        event.event_id = "evt-1".to_string();
 
-        // 同一事件重发三次，只落一条。
         store.record_event(event.clone()).unwrap();
         store.record_event(event.clone()).unwrap();
         store.record_event(event.clone()).unwrap();
+        assert_eq!(store.load_all_events().unwrap().len(), 1);
 
-        let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
-        let events = store.load_events_for_date(&date).unwrap();
-        assert_eq!(events.len(), 1);
-
-        // 重新构造 store（缓存冷启动）再重发，仍不重复写。
-        let store2 = StatsStore::new(_tmp.path());
-        store2.record_event(event.clone()).unwrap();
-        let events = store2.load_events_for_date(&date).unwrap();
-        assert_eq!(events.len(), 1);
+        // 冷缓存（模拟重启）后再次写入仍不会重复。
+        let cold = StatsStore::new(&store.app_data_root);
+        cold.record_event(event).unwrap();
+        assert_eq!(cold.load_all_events().unwrap().len(), 1);
     }
 
     #[test]
     fn test_record_events_resend_keeps_original_storage_date() {
-        let (store, _tmp) = create_mock_store();
-        // 事件发生在昨天（UTC），重发也落在昨天的文件里。
-        let occurred_at_ms = (chrono::Utc::now() - chrono::Duration::days(1)).timestamp_millis();
-        let event = WritingInputEvent::with_identity(
-            "old-event-id".to_string(),
-            occurred_at_ms,
-            "device_1",
-            Platform::Desktop,
-            "desktop",
-            "proj_1",
-            "vol_1",
-            "ch_1",
-            EventSource::HumanTyped,
-            10,
-            0,
-            0,
-            0,
-            0,
-            "",
-        );
-        let date = store.timestamp_to_date(occurred_at_ms).unwrap();
+        let (tmp, store) = create_mock_store();
+        let yesterday_ms = chrono::Utc::now().timestamp_millis() - 86_400_000;
+        let mut event = create_mock_event();
+        event.event_id = "old-event-id".to_string();
+        event.timestamp_ms = yesterday_ms;
+        event.local_date = String::new();
+
+        let yesterday = store.timestamp_to_date(yesterday_ms).unwrap();
+        let today = store
+            .timestamp_to_date(chrono::Utc::now().timestamp_millis())
+            .unwrap();
+
         store.record_event(event.clone()).unwrap();
         store.record_event(event).unwrap();
 
-        let events = store.load_events_for_date(&date).unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].timestamp_ms, occurred_at_ms);
+        let yesterday_path = tmp
+            .path()
+            .join("stats/events/device_1")
+            .join(format!("{yesterday}.events.jsonl"));
+        assert!(yesterday_path.exists());
+        assert!(!tmp
+            .path()
+            .join("stats/events/device_1")
+            .join(format!("{today}.events.jsonl"))
+            .exists());
+        assert_eq!(store.load_events_for_date(&yesterday).unwrap().len(), 1);
     }
 
     #[test]
     fn test_record_events_counts_only_new_writes() {
-        let (store, _tmp) = create_mock_store();
-        let mut first = create_mock_event();
-        first.event_id = "e1".to_string();
-        let second = create_mock_event();
-
+        let (_tmp, store) = create_mock_store();
+        let first = create_mock_event();
         assert_eq!(store.record_events(vec![first.clone()]).unwrap(), 1);
-        // 一条重复 + 一条新的：只新写 1 条。
-        assert_eq!(store.record_events(vec![first, second]).unwrap(), 1);
+
+        let mut fresh = create_mock_event();
+        fresh.event_id = "event-new".to_string();
+        assert_eq!(store.record_events(vec![first, fresh]).unwrap(), 1);
     }
 
     #[test]
     fn test_record_events_tolerates_corrupt_history_lines() {
-        let (store, _tmp) = create_mock_store();
-        let date = store
-            .timestamp_to_date(chrono::Utc::now().timestamp_millis())
-            .unwrap();
-        let file_path = store.events_dir().join(format!("{}.events.jsonl", date));
-        std::fs::create_dir_all(store.events_dir()).unwrap();
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)
-            .unwrap();
-        writeln!(file, "{{\"bad\":}}").unwrap();
-        drop(file);
-
-        // 历史坏行不让新事件写入失败（严格报错留给读取路径）。
+        let (tmp, store) = create_mock_store();
         let event = create_mock_event();
-        store.record_event(event).unwrap();
-        assert!(store.load_events_for_date(&date).is_err());
+        let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
+        let dir = tmp.path().join("stats/events/device_1");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{date}.events.jsonl"));
+        fs::write(&path, "{\"bad\":}\n").unwrap();
+
+        let mut fresh = create_mock_event();
+        fresh.event_id = "event-after-corrupt".to_string();
+        assert_eq!(store.record_events(vec![fresh]).unwrap(), 1);
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("event-after-corrupt"));
+        assert!(content.contains("{\"bad\":}"));
     }
 
     #[test]
-    fn test_rewrite_events_for_date_invalidates_id_cache() {
-        let (store, _tmp) = create_mock_store();
-        let mut event = create_mock_event();
-        event.event_id = "rewritten-id".to_string();
-        store.record_event(event.clone()).unwrap();
+    fn test_cross_partition_dedup_keeps_local_and_logs_conflict() {
+        let (tmp, store) = create_mock_store();
+        let dir = tmp.path().join("stats/events");
+        let date = "2024-05-01";
 
-        let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
-        // 整体改写把这条事件清掉后，同 ID 再写应重新落盘。
-        store.rewrite_events_for_date(&date, "").unwrap();
-        store.record_event(event.clone()).unwrap();
+        let mut remote_event = create_mock_event();
+        remote_event.event_id = "shared-event".to_string();
+        remote_event.timestamp_ms = 1_714_550_400_000;
+        remote_event.local_date = String::new();
+        remote_event.inserted_chars = 30;
 
-        let events = store.load_events_for_date(&date).unwrap();
+        let mut local_event = remote_event.clone();
+        local_event.device_id = "device_1".to_string();
+        local_event.inserted_chars = 20;
+
+        let remote_dir = dir.join("device-remote");
+        fs::create_dir_all(&remote_dir).unwrap();
+        fs::write(
+            remote_dir.join(format!("{date}.events.jsonl")),
+            format!("{}\n", serde_json::to_string(&remote_event).unwrap()),
+        )
+        .unwrap();
+        let local_dir = dir.join("device_1");
+        fs::create_dir_all(&local_dir).unwrap();
+        fs::write(
+            local_dir.join(format!("{date}.events.jsonl")),
+            format!("{}\n", serde_json::to_string(&local_event).unwrap()),
+        )
+        .unwrap();
+
+        let events = store.load_events_for_date(date).unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_id, "rewritten-id");
+        assert_eq!(events[0].inserted_chars, 20);
+        assert_eq!(events[0].device_id, "device_1");
+
+        let log = fs::read_to_string(
+            tmp.path()
+                .join("app-meta/stats/event_conflicts.local.jsonl"),
+        )
+        .unwrap();
+        assert!(log.contains("shared-event"));
+        assert!(log.contains("device-remote"));
+    }
+
+    #[test]
+    fn test_load_origin_device_id_without_device_info_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = StatsStore::new(tmp.path());
+        assert!(store.load_origin_device_id().is_none());
+        assert!(store.list_event_origins().unwrap().is_empty());
+        assert!(store.load_all_events().unwrap().is_empty());
+        assert!(!tmp.path().join("device").exists());
+    }
+
+    #[test]
+    fn test_resolve_origin_device_id_creates_device_info() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = StatsStore::new(tmp.path());
+        let origin = store.resolve_origin_device_id().unwrap();
+        assert!(!origin.is_empty());
+        assert!(tmp.path().join("device/current_device.json").exists());
     }
 }

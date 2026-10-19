@@ -98,10 +98,34 @@ export interface WritingStatsSelectedPeriod {
 // ─── WritingStatsExplorerDto：统计页一次性快照 ───
 
 export interface WritingStatsExplorer {
-  /** 历史口径，当前固定 "localEvents"（本机记录） */
+  /** 历史口径："localEvents"（本机）/ "syncedDevices"（已同步设备）/ "partialSync"（同步不完整） */
   historyScope: string
   lifetime: WritingStatsLifetime
   /** 近七天 / 近三十天 / 近半年 / 自选区间，顺序固定 */
   periodCards: WritingStatsPeriodCard[]
   selected: WritingStatsSelectedPeriod
+}
+
+// ─── WritingStatsHeatmapDto：每日码字日历（Issue #956） ───
+//
+// 与 Core `api/types/stats.rs` 的 WritingStatsHeatmapDto 系列一字不差对齐。
+// 每个真实公历日一项，按日期升序，全年 365/366 项。
+
+export interface WritingStatsHeatmapDay {
+  /** 本地日历日 YYYY-MM-DD（按日期升序、每天唯一） */
+  date: string
+  /** 当天人工输入字数真值；没有记录的已过日期为 0，不是「缺失」 */
+  humanTypedChars: number
+  /** Core 按当年正数日分布统一分级：0–4（0 表示没有人工输入） */
+  intensity: number
+}
+
+export interface WritingStatsHeatmap {
+  /** 公历年 */
+  year: number
+  /** 该年第一天 YYYY-MM-DD */
+  startDate: string
+  /** 该年最后一天 YYYY-MM-DD */
+  endDate: string
+  days: WritingStatsHeatmapDay[]
 }

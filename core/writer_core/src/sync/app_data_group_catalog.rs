@@ -373,6 +373,42 @@ pub fn discover_local_app_data_groups(root: &std::path::Path) -> crate::Result<V
         }
     }
 
+    // Each local stats event partition (`stats/events/<device_id>/`) is an
+    // independent group; invalid directory names are not treated as groups.
+    let stats_events_root = root.join("stats/events");
+    if stats_events_root.is_dir() {
+        let entries = std::fs::read_dir(&stats_events_root).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "discover_local_app_data_groups: read {}: {e}",
+                stats_events_root.display()
+            )))
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "discover_local_app_data_groups: enumerate {}: {e}",
+                    stats_events_root.display()
+                )))
+            })?;
+            if !entry
+                .file_type()
+                .map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "discover_local_app_data_groups: metadata {}: {e}",
+                        entry.path().display()
+                    )))
+                })?
+                .is_dir()
+            {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Ok(group) = AppDataGroup::from_id(&format!("stats_device:{name}")) {
+                groups.insert(group.id(), group);
+            }
+        }
+    }
+
     // The aggregate index is a dependent publication target even when its local
     // file is missing; transfer must attempt recovery or report the damaged path.
     if groups
@@ -392,16 +428,27 @@ fn group_from_storage_key(key: &str) -> Option<AppDataGroup> {
         "starmap-index" => return Some(AppDataGroup::StarmapIndex),
         _ => {}
     }
-    let encoded_id = key.strip_prefix("starmap-")?.as_bytes();
-    if encoded_id.is_empty() || encoded_id.len() % 2 != 0 {
+    if let Some(encoded) = key.strip_prefix("starmap-") {
+        let id = decode_hex_segment(encoded)?;
+        return AppDataGroup::from_id(&format!("starmap:{id}")).ok();
+    }
+    if let Some(encoded) = key.strip_prefix("stats-device-") {
+        let id = decode_hex_segment(encoded)?;
+        return AppDataGroup::from_id(&format!("stats_device:{id}")).ok();
+    }
+    None
+}
+
+fn decode_hex_segment(encoded: &str) -> Option<String> {
+    let encoded = encoded.as_bytes();
+    if encoded.is_empty() || !encoded.len().is_multiple_of(2) {
         return None;
     }
-    let bytes: Option<Vec<u8>> = encoded_id
+    let bytes: Option<Vec<u8>> = encoded
         .chunks_exact(2)
         .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
         .collect();
-    let id = String::from_utf8(bytes?).ok()?;
-    AppDataGroup::from_id(&format!("starmap:{id}")).ok()
+    String::from_utf8(bytes?).ok()
 }
 
 fn hex_nibble(value: u8) -> Option<u8> {
@@ -466,6 +513,9 @@ pub fn groups_from_manifest_records(records: &[ManifestFileRecord]) -> Vec<AppDa
         } else if path == "starmaps/index.json" {
             let group = AppDataGroup::StarmapIndex;
             groups.insert(group.id(), group);
+        } else if let Some(device_id) = super::types::stats_device_id_for_event_path(&path) {
+            let group = AppDataGroup::StatsDevice(device_id.to_string());
+            groups.insert(group.id(), group);
         } else if let Some(id) = starmap_id_for_path(&path) {
             let group = AppDataGroup::Starmap(id);
             groups.insert(group.id(), group);
@@ -513,5 +563,102 @@ pub fn resolve_group_source_prefix(
             generation
         )),
         None => Ok("app".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stats_record(path: &str, device_id: &str) -> ManifestFileRecord {
+        ManifestFileRecord {
+            path: path.to_string(),
+            content_hash: "hash".to_string(),
+            updated_at_ms: 0,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+            op: "upsert".to_string(),
+            schema_version: 2,
+        }
+    }
+
+    #[test]
+    fn test_stats_device_group_round_trip() {
+        let group = AppDataGroup::StatsDevice("device-abc".to_string());
+        assert_eq!(group.id(), "stats_device:device-abc");
+        assert_eq!(group.storage_key(), "stats-device-6465766963652d616263");
+        assert_eq!(AppDataGroup::from_id(&group.id()).unwrap(), group);
+        assert!(group.owns_path("stats/events/device-abc/2024-05-01.events.jsonl"));
+        assert!(!group.owns_path("stats/events/device-other/2024-05-01.events.jsonl"));
+        assert!(!group.owns_path("stats/events/device-abc"));
+    }
+
+    #[test]
+    fn test_group_from_stats_device_storage_key() {
+        let key = AppDataGroup::StatsDevice("device-abc".to_string()).storage_key();
+        assert_eq!(
+            group_from_storage_key(&key),
+            Some(AppDataGroup::StatsDevice("device-abc".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_stats_event_path_maps_to_stats_device_group() {
+        let Some(device_id) = crate::sync::types::stats_device_id_for_event_path(
+            "stats/events/device-abc/2024-05-01.events.jsonl",
+        ) else {
+            panic!("valid stats event path must map to a device id");
+        };
+        assert_eq!(device_id, "device-abc");
+        // 目录名、非法日期与非事件文件都不属于统计设备组。
+        assert!(crate::sync::types::stats_device_id_for_event_path(
+            "stats/events/device-abc/readme.txt"
+        )
+        .is_none());
+        assert!(crate::sync::types::stats_device_id_for_event_path(
+            "stats/events/device-abc/2024-13-01.events.jsonl"
+        )
+        .is_none());
+
+        let records = [stats_record(
+            "stats/events/device-abc/2024-05-01.events.jsonl",
+            "device-abc",
+        )];
+        assert_eq!(
+            groups_from_manifest_records(&records),
+            vec![AppDataGroup::StatsDevice("device-abc".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_discover_local_app_data_groups_includes_stats_devices() {
+        let temp = tempfile::tempdir().unwrap();
+        let partition = temp.path().join("stats/events/device-abc");
+        std::fs::create_dir_all(&partition).unwrap();
+        std::fs::write(partition.join("2024-05-01.events.jsonl"), "").unwrap();
+
+        let groups = discover_local_app_data_groups(temp.path()).unwrap();
+        assert!(groups.contains(&AppDataGroup::StatsDevice("device-abc".to_string())));
+    }
+
+    #[test]
+    fn test_resolve_group_source_prefix_uses_stats_device_storage_key() {
+        let group = AppDataGroup::StatsDevice("device-abc".to_string());
+        let catalog = AppDataGroupCatalog {
+            schema_version: APP_DATA_GROUP_CATALOG_SCHEMA_VERSION,
+            groups: vec![AppDataGroupRecord {
+                group_id: group.id(),
+                active_generation: Some("a".repeat(40)),
+            }],
+        };
+        let prefix = resolve_group_source_prefix(Some(&catalog), &group).unwrap();
+        assert_eq!(
+            prefix,
+            format!(
+                "app/__groups__/{}/__generations__/{}",
+                group.storage_key(),
+                "a".repeat(40)
+            )
+        );
     }
 }

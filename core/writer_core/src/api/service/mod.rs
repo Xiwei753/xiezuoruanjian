@@ -107,6 +107,13 @@ impl WriterCoreApi {
         }
     }
 
+    /// 注入平台提供的稳定设备标识，转发给 `WriterCore`。
+    /// 平台初始化（`WriterAppService`）时调用，保证写作统计事件分区
+    /// 首次解析来源设备时直接采用平台身份。
+    pub(crate) fn set_preferred_device_id(&self, device_id: &str) {
+        self.core_write().set_preferred_device_id(device_id);
+    }
+
     ///   在写事务完成后记录本地历史（显式 paths）。
     ///
     /// `paths` 为 workspace-relative paths。**空 paths 直接返回空结果，

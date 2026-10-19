@@ -43,13 +43,14 @@ impl super::WriterCore {
     ) -> Result<()> {
         use crate::editor::EditorTransactionCause;
 
-        // 设备身份由 Core 读/建，不让平台端传。
+        // 设备身份由 Core 读/建，不让平台端传；平台初始化注入的稳定 ID 优先。
         let platform = writer_platform_api::PlatformKind::from_str_name(platform_str)
             .unwrap_or(writer_platform_api::PlatformKind::Desktop);
+        let preferred_device_id = self.preferred_device_id();
         let device_info = self.ensure_device_info(
             platform.to_str_name(),
             platform.default_device_class(),
-            None,
+            preferred_device_id.as_deref(),
         )?;
         let device_id = device_info.device_id.as_str();
         let device_class = device_info.device_class.as_str();
@@ -172,16 +173,16 @@ impl super::WriterCore {
     /// 单作品写作档案（#934）：作品元数据 + 历史累计人工码字 + 当前正文字数。
     ///
     /// 数据源语义分开：`created_at` 来自作品元数据；`current_word_count` 来自
-    /// 现有章节存量（`get_project_stats`）；其余字段来自本地事件历史。
+    /// 现有章节存量（`get_project_stats`）；其余字段来自合并后的写作事件历史，
+    /// `history_scope` 说明覆盖范围（仅本机 / 已同步设备 / 同步不完整）。
     /// 作品不存在时返回 `ProjectNotFound`，不返回「0 字作品」。
     pub fn get_project_writing_lifetime_stats(
         &self,
         project_id: &str,
     ) -> Result<super::ProjectWritingLifetimeStats> {
         let project = crate::project::get_project(self.projects_root(), project_id)?;
-        let lifetime = self
-            .get_stats_api()
-            .get_project_lifetime_stats(project_id)?;
+        let stats_api = self.get_stats_api();
+        let lifetime = stats_api.get_project_lifetime_stats(project_id)?;
         let stats = self.get_project_stats(project_id)?;
 
         Ok(super::ProjectWritingLifetimeStats {
@@ -193,6 +194,7 @@ impl super::WriterCore {
             best_writing_day: lifetime.best_writing_day,
             best_writing_day_chars: lifetime.best_writing_day_chars,
             writing_days: lifetime.writing_days,
+            history_scope: stats_api.history_scope(),
         })
     }
 
@@ -218,5 +220,16 @@ impl super::WriterCore {
             self.get_stats_api()
                 .get_explorer_snapshot(preset, custom_start, custom_end)?;
         serde_json::to_value(snapshot).map_err(Into::into)
+    }
+
+    /// 每日码字日历（#956）：指定公历年的逐日人工输入真值。
+    ///
+    /// 与 Explorer 同一份合并去重事件投影，端侧只做位置和色彩渲染；
+    /// 非法年份返回错误，不静默补全年零数据。
+    pub fn get_writing_stats_heatmap(
+        &self,
+        year: i32,
+    ) -> Result<crate::api::types::WritingStatsHeatmapDto> {
+        self.get_stats_api().get_heatmap_snapshot(year)
     }
 }

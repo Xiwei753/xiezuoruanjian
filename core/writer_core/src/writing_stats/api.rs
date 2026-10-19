@@ -9,9 +9,10 @@
 //! Explorer 一次性快照（#944）返回强类型 DTO，由服务层统一转 JSON。
 
 use crate::api::types::{
-    DateRangeDto, WritingStatsExplorerDto, WritingStatsLifetimeDto, WritingStatsPeriodCardDto,
-    WritingStatsRecordDto, WritingStatsRecordsDto, WritingStatsSelectedPeriodDto,
-    WritingStatsTrendDto, WritingStatsTrendPointDto,
+    DateRangeDto, WritingStatsExplorerDto, WritingStatsHeatmapDayDto, WritingStatsHeatmapDto,
+    WritingStatsLifetimeDto, WritingStatsPeriodCardDto, WritingStatsRecordDto,
+    WritingStatsRecordsDto, WritingStatsSelectedPeriodDto, WritingStatsTrendDto,
+    WritingStatsTrendPointDto,
 };
 use crate::error::Result;
 use crate::writing_stats::calendar::{self, StatsPreset};
@@ -24,6 +25,19 @@ use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::{DateRange, WritingInputEvent};
 use serde_json::Value;
 use std::path::Path;
+
+/// 每日码字日历（#956）接受的公历年份范围：早于此范围或过远的年份直接报错，
+/// 不伪造成全年零数据。
+pub(crate) const HEATMAP_MIN_YEAR: i32 = 1970;
+pub(crate) const HEATMAP_MAX_YEAR: i32 = 2100;
+
+/// 校验每日日历查询的年份范围；Core 查询与 FFI 参数校验共用同一份规则。
+pub(crate) fn validate_heatmap_year(year: i32) -> Result<()> {
+    if (HEATMAP_MIN_YEAR..=HEATMAP_MAX_YEAR).contains(&year) {
+        return Ok(());
+    }
+    Err(crate::Error::Other(format!("invalid heatmap year: {year}")))
+}
 
 /// 把写作汇总构造成稳定 camelCase JSON —— 现有区间查询与面板快照共用同一口径。
 fn summary_json(range: &DateRange, summary: &StatsSummary) -> Value {
@@ -142,11 +156,9 @@ pub struct StatsApi {
 
 impl StatsApi {
     pub fn new(app_data_root: &Path) -> Self {
-        // 迁移：补齐旧事件的 local_date（不再重建 daily）
-        if let Err(e) =
-            crate::writing_stats::migration::migrate_stats_to_local_calendar(app_data_root)
-        {
-            eprintln!("[writing_stats] calendar migration skipped: {}", e);
+        // 迁移：把旧版单机事件库一次性并入按设备分区的新事件库。
+        if let Err(e) = crate::writing_stats::migration::migrate_stats_event_store(app_data_root) {
+            eprintln!("[writing_stats] event store migration skipped: {}", e);
         }
         Self {
             store: StatsStore::new(app_data_root),
@@ -155,6 +167,75 @@ impl StatsApi {
 
     pub fn store(&self) -> &StatsStore {
         &self.store
+    }
+
+    /// 统计数据的真实覆盖范围。
+    ///
+    /// - `localEvents`：只有本机事件，且统计设备同步没有报错；
+    /// - `syncedDevices`：已包含其它设备的事件，且同步没有报错；
+    /// - `partialSync`：任一统计设备同步组最近同步失败，历史可能不完整。
+    ///
+    /// 不因「同步开关已打开」就宣称全量成功：只有真实拿到的事件参与聚合。
+    pub fn history_scope(&self) -> String {
+        if self.stats_sync_incomplete() {
+            return "partialSync".to_string();
+        }
+        let local_origin = self.store.load_origin_device_id();
+        let has_remote_data = match self.store.list_event_origins() {
+            Ok(origins) => origins
+                .iter()
+                .any(|origin| Some(origin.as_str()) != local_origin.as_deref()),
+            Err(e) => {
+                eprintln!("[writing_stats] list event origins failed: {e}");
+                false
+            }
+        };
+        if has_remote_data {
+            "syncedDevices".to_string()
+        } else {
+            "localEvents".to_string()
+        }
+    }
+
+    /// 任一统计设备同步组最近一次同步是否报错。
+    ///
+    /// 读不到组状态时按「未报错」处理，避免把正常的首次同步误标为不完整。
+    fn stats_sync_incomplete(&self) -> bool {
+        let groups_dir = self.store.app_data_root().join("app-meta/sync/groups");
+        let Ok(entries) = std::fs::read_dir(&groups_dir) else {
+            return false;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("stats-device-") {
+                continue;
+            }
+            if !entry
+                .file_type()
+                .map(|file_type| file_type.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let state_path = entry.path().join("state.local.json");
+            let Ok(bytes) = std::fs::read(&state_path) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            let last_error = value
+                .get("last_error")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if !last_error.is_empty() {
+                return true;
+            }
+        }
+        false
     }
 
     /// 「今天」的写作汇总 —— 今天是哪一天由 **Core 的本地日历口径**决定。
@@ -399,7 +480,7 @@ impl StatsApi {
         let selected_days = calendar::day_span_inclusive(&range.start_date, &range.end_date)?;
 
         Ok(WritingStatsExplorerDto {
-            history_scope: "localEvents".to_string(),
+            history_scope: self.history_scope(),
             lifetime,
             period_cards,
             selected: WritingStatsSelectedPeriodDto {
@@ -422,6 +503,63 @@ impl StatsApi {
                     points,
                 },
             },
+        })
+    }
+
+    /// 每日码字日历快照（#956）：指定公历年的逐日人工输入真值。
+    ///
+    /// 与 Explorer 一样一次 [`StatsStore::load_all_events`] 读盘，复用
+    /// `project_range_stats` 的 `daily_human_typed_chars` 投影；不把周/月
+    /// 趋势点拆成假每日值。已过但无记录的日期为 0；未来日期按日期字段
+    /// 原样给出，由端侧标记为「未到」而不是「没写作」。
+    ///
+    /// `intensity` 由 Core 从该年正数日的字数分布分级（0–4，见
+    /// [`heatmap_intensity_thresholds`]），端侧不重算人工字数；非法年份
+    /// 返回结构化错误，不造全年零数据。
+    pub fn get_heatmap_snapshot(&self, year: i32) -> Result<WritingStatsHeatmapDto> {
+        validate_heatmap_year(year)?;
+        let start_date = format!("{year:04}-01-01");
+        let end_date = format!("{year:04}-12-31");
+
+        let events = self.store.load_all_events()?;
+        let stats = project_range_stats(&events, &start_date, &end_date)?;
+        let positive: Vec<u64> = stats
+            .daily_human_typed_chars
+            .values()
+            .copied()
+            .filter(|value| *value > 0)
+            .collect();
+        let thresholds = heatmap_intensity_thresholds(positive);
+
+        let start = calendar::parse_date(&start_date)?;
+        let end = calendar::parse_date(&end_date)?;
+        let mut days = Vec::with_capacity(366);
+        let mut date = start;
+        while date <= end {
+            let date_str = date.format("%Y-%m-%d").to_string();
+            let human_typed_chars = stats
+                .daily_human_typed_chars
+                .get(&date_str)
+                .copied()
+                .unwrap_or(0);
+            days.push(WritingStatsHeatmapDayDto {
+                date: date_str,
+                human_typed_chars,
+                intensity: heatmap_intensity(human_typed_chars, thresholds),
+            });
+            if date == end {
+                break;
+            }
+            date = date.checked_add_days(chrono::Days::new(1)).ok_or_else(|| {
+                crate::Error::Other(format!("heatmap date overflow for year {year}"))
+            })?;
+        }
+
+        Ok(WritingStatsHeatmapDto {
+            year,
+            start_date,
+            end_date,
+            days,
         })
     }
 
@@ -544,6 +682,40 @@ impl StatsApi {
     /// 本机当前的业务日历日（本地时区，非 UTC）。
     pub fn today_date() -> String {
         crate::writing_stats::calendar::local_today_date()
+    }
+}
+
+/// 每日码字日历的强度阈值：该年正数日字数的 25% / 50% / 75% 分位（最近阶）。
+///
+/// 没有正数日时三个阈值都是 0（所有日期强度为 0）。所有正数相同（或只有
+/// 一个正数日）时三个阈值相等：判定用严格小于，这些日期都会拿到最高强度 4，
+/// 同一组数据的显示始终稳定，不出现除零或 NaN。
+fn heatmap_intensity_thresholds(mut positive: Vec<u64>) -> [u64; 3] {
+    if positive.is_empty() {
+        return [0; 3];
+    }
+    positive.sort_unstable();
+    let last = positive.len() - 1;
+    let pick = |quarter: usize| -> u64 {
+        let index = positive.len() * quarter / 4;
+        positive[index.min(last)]
+    };
+    [pick(1), pick(2), pick(3)]
+}
+
+/// 单日强度：0（无输入）恒为 0；正数按分位阈值落入 1–4，最高档为 4。
+fn heatmap_intensity(value: u64, thresholds: [u64; 3]) -> u8 {
+    if value == 0 {
+        return 0;
+    }
+    if value < thresholds[0] {
+        1
+    } else if value < thresholds[1] {
+        2
+    } else if value < thresholds[2] {
+        3
+    } else {
+        4
     }
 }
 

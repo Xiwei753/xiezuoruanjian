@@ -129,8 +129,9 @@ pub struct CurrentWritingSpeedDto {
 /// - `best_writing_day` / `best_writing_day_chars`：本地业务日中单日人工输入
 ///   最多的一天及其字数；并列取更早日期；无输入时为 null / 0；
 /// - `writing_days`：有人工输入的不同本地业务日数量；
-/// - `history_scope`：历史口径说明，当前固定 `"localEvents"`
-///   （`events.local` 不参与跨设备同步，只代表本机可读历史）。
+/// - `history_scope`：历史口径说明，取 `"localEvents"` / `"syncedDevices"` /
+///   `"partialSync"`：事件历史来自本机分区与已同步设备分区按 `event_id` 去重的
+///   合并结果，缺失或同步不完整时如实标注，不宣称为全量。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectWritingLifetimeStatsDto {
@@ -168,8 +169,8 @@ pub struct WritingStatsDashboardDto {
 /// 宽屏总览、窄屏单页都从这同一个 DTO 取数，端侧只做格式化与绘制，
 /// 不再自行统计天数、纪录或速度。
 ///
-/// - `history_scope`：历史口径，当前固定 `"localEvents"`（`events.local`
-///   不参与跨设备同步，生涯代表本机可读的事件历史）。
+/// - `history_scope`：历史口径，取 `"localEvents"` / `"syncedDevices"` /
+///   `"partialSync"`（本机 + 已同步设备事件分区合并去重的真实覆盖范围）。
 /// - `lifetime`：全应用生涯摘要。
 /// - `period_cards`：近七天 / 近三十天 / 近半年 / 自选区间四张卡，顺序固定。
 /// - `selected`：当前选中时段（可以是生涯或任一预设/自选区间）的汇总、纪录与趋势。
@@ -295,4 +296,35 @@ pub struct WritingStatsTrendDto {
 pub struct WritingStatsTrendPointDto {
     pub date: String,
     pub human_typed_chars: u64,
+}
+
+/// 每日码字日历（#956）：一个公历年的逐日人工输入真值。
+///
+/// - `days`：该公历年的全部自然日（365/366 日），日期升序，每天只出现一次；
+/// - 已过但无记录的日期 `human_typed_chars` 为 0；
+/// - 未来日期同样按日期字段给出，由端侧决定标记为「未到」而不是「没写作」；
+/// - `intensity` 由 Core 从该年正数日的字数分布分级（0–4），端侧不重算人工字数；
+/// - `human_typed_chars` 保留原值，点格子时显示实际数值。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsHeatmapDayDto {
+    /// 公历日期（`YYYY-MM-DD`，本地业务日）。
+    pub date: String,
+    /// 当天人工输入字符数。
+    pub human_typed_chars: u64,
+    /// 显示强度分级：0（无输入）到 4（该年最多）。
+    pub intensity: u8,
+}
+
+/// 每日码字日历快照（#956）。一次查询返回指定年份的完整自然日列表。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsHeatmapDto {
+    /// 查询的公历年。
+    pub year: i32,
+    /// 该年第一天（`YYYY-01-01`）。
+    pub start_date: String,
+    /// 该年最后一天（`YYYY-12-31`）。
+    pub end_date: String,
+    pub days: Vec<WritingStatsHeatmapDayDto>,
 }

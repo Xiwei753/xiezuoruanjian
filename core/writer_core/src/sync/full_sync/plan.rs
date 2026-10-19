@@ -65,6 +65,7 @@ pub fn build_full_sync_target_plan(
         crate::sync::types::AppDataGroup::Global => (0_u8, group.id()),
         crate::sync::types::AppDataGroup::Starmap(_) => (1, group.id()),
         crate::sync::types::AppDataGroup::StarmapIndex => (2, group.id()),
+        crate::sync::types::AppDataGroup::StatsDevice(_) => (3, group.id()),
     });
     for group in app_groups {
         let target = crate::sync::types::SyncTarget::app_data_group(group);
