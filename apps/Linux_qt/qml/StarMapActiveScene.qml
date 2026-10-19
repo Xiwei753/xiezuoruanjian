@@ -41,6 +41,7 @@ Item {
     id: scene
 
     required property var dt
+    required property color canvasBackgroundColor
     // 当前活动画布 ID：由 Canvas 用 Core 导航路由解析后传入，QML 不自己猜目标 ID。
     required property string starmapId
     // 导航路由身份（日志 / 选中身份用；同一目标图的不同 Embed 入口靠完整 route 区分）。
@@ -76,6 +77,17 @@ Item {
     property real ringCenterY: 0
     property real ringRadius: 0
     property real ringStrokeWidth: 2
+    // 圆内表面在同一穿越进度上从入口壳颜色过渡到画布底色。
+    property real ringBackgroundProgress: 0.0
+    readonly property color transitionRingColor: {
+        var from = dt.surfaceContainerLow
+        var to = canvasBackgroundColor
+        var p = Math.max(0, Math.min(1, ringBackgroundProgress))
+        return Qt.rgba(from.r + (to.r - from.r) * p,
+                       from.g + (to.g - from.g) * p,
+                       from.b + (to.b - from.b) * p,
+                       from.a + (to.a - from.a) * p)
+    }
 
     // ── 单一投影入口 ──
     // 数学上 worldToScreenX(w) === panX + w * zoom，渲染时改写成
@@ -1133,7 +1145,7 @@ Item {
         width: Math.max(0, scene.ringRadius) * 2
         height: Math.max(0, scene.ringRadius) * 2
         radius: width / 2
-        color: scene.dt.surfaceContainerLow
+        color: scene.transitionRingColor
         border.color: scene.dt.inverseSurface
         border.width: scene.ringStrokeWidth
         antialiasing: true

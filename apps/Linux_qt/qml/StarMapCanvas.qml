@@ -16,8 +16,8 @@
 //     同一目标图的不同 Embed 入口由完整 route 区分。
 //   - 按 routeKey（根 ID + 完整 segments）保存每一层进入前的父相机
 //     {zoom, panX, panY}；不以子图 ID 做 key。
-//   - 连续缩放穿越：入口投影直径占当前视口短边 ≥ 70% 进入子画布；
-//     反向缩小到 ≤ 60% 恢复父镜头。进入只在放大方向评估，退出只在缩小
+//   - 连续缩放穿越：入口投影直径按视口宽高双条件标尺达到 100% 进入子画布；
+//     反向缩小到 ≤ 82% 恢复父镜头。进入只在放大方向评估，退出只在缩小
 //     方向评估（任意层同规则）；双击 Embed 走同一个 enter 函数，不受方向过滤。
 //     阈值只比较"指针瞄准（或已锁定）的那个入口"，zoom 数值本身绝不触发层级切换。
 //   - 相机只有数值安全边界（1e-4 ~ 1e5），边界不是层级切换依据。
@@ -47,6 +47,7 @@ Item {
     // 根星图 ID：整条导航路由的起点（Core 的 rootStarmapId）。
     property string starmapId: ""
     required property var dt
+    required property color canvasBackgroundColor
 
     readonly property color _primary: dt.primary
     readonly property color _onPrimary: dt.onPrimary
@@ -110,15 +111,24 @@ Item {
     // 本次连续缩放瞄准的入口（routeKey/instanceId）。只比较这个入口，
     // 不会因为鼠标停在别处缩放而进入别的子图。
     property string _zoomEntryKey: ""
+    // 一次 zoomAt 固定使用它开始时的 route 与指针入口；切换画布后旧事件
+    // 不能把父画布剩余目标当成对子画布新入口的选择。
+    property int _zoomInputGeneration: 0
+    property int _lastLayerSwitchInputGeneration: -1
+    property int _lastRejectedEntryInputGeneration: -1
+    property int _lastIgnoredEntryInputGeneration: -1
+    property string _zoomInputRouteKey: ""
+    property string _zoomInputEntryKey: ""
+    property string _zoomInputEntryId: ""
     // 捏合穿越补偿：Router 的捏合是"捏合开始 zoom × 累计比例"的绝对值，
     // 画布切换后把这一次绝对值换算成新画布上的连续比例。
     property real _pinchSwitchBaseZoom: -1
     property real _pinchSwitchCanvasZoom: 1
     property bool _initialized: false
 
-    // 画布穿越阈值：入口投影直径占当前视口短边。
-    readonly property real _enterRatio: 0.70
-    readonly property real _exitRatio: 0.60
+    // 画布穿越阈值使用同一宽高双条件标尺，进入与退出基于同一比值。
+    readonly property real _enterRatio: 1.0
+    readonly property real _exitRatio: 0.82
 
     // ── 路由工具 ──
     function routeKeyOf(route) {
@@ -315,9 +325,31 @@ Item {
     // 只由缩放补间写的显示帧值；变化时推进显示镜头。
     property real zoomTweenValue: 1.0
 
+    // 每轮真实放大输入只瞄准输入开始时命中的入口和 route。
+    function captureZoomInput(screenX, screenY) {
+        _zoomInputGeneration++
+        _zoomInputRouteKey = routeKey
+        _zoomInputEntryKey = ""
+        _zoomInputEntryId = ""
+        _zoomEntryKey = ""
+        _lastRejectedEntryInputGeneration = -1
+        _lastIgnoredEntryInputGeneration = -1
+        var scene = activeScene()
+        if (!scene || !scene.ready)
+            return
+        var target = scene.embedAtWorld(screenToWorldX(screenX), screenToWorldY(screenY))
+        if (!target)
+            return
+        _zoomInputEntryId = target.instanceId || ""
+        if (_zoomInputEntryId !== "") {
+            _zoomInputEntryKey = _zoomInputRouteKey + "/" + _zoomInputEntryId
+            _zoomEntryKey = _zoomInputEntryKey
+        }
+    }
+
     // 唯一缩放入口：滚轮、捏合、+/- 按钮都走这里，只改当前活动画布的镜头。
     // Issue #949：这里只记"累计目标 + 屏幕锚点"，显示镜头由单一补间从**正在
-    // 显示的**帧连续插值；随后按"指针瞄准的入口"评估画布穿越（70% 进 / 60% 出），
+    // 显示的**帧连续插值；随后按"指针瞄准的入口"评估画布穿越，
     // zoom 数值本身不参与判断，判定一律用正在显示的投影直径：放大只评估进场、
     // 缩小只评估退场（缩小经过入口不进入子画布），任意层同规则，双击不受方向过滤。
     function zoomAt(screenX, screenY, nextZoom) {
@@ -344,6 +376,7 @@ Item {
             stopZoomTween()
             return
         }
+        captureZoomInput(screenX, screenY)
         if (viewportMotion.active) {
             // 演出进行中（滚轮）：不能冻结整个 longDuration —— 继续改这台可见
             // 相机：把新目标按"当前显示帧 + 本次鼠标屏幕锚点"算出来，沿同一条
@@ -508,7 +541,7 @@ Item {
     //     Core、不新建第二套导航，也不为动画另建图数据；
     //   - 旧活动场景在过渡期间以冻结身份 / 镜头继续绘制（只绘制、禁交互），
     //     圆壳描边由真实 Embed 随镜头继续放大，直到整圈离开可见视口才结束
-    //     显示：覆盖率 70% 的切换瞬间绝不把入场的圆壳描边关掉。
+    //     显示：阈值切换瞬间绝不把入场的圆壳描边关掉。
     // ---------------------------------------------------------------------------
     StarMapViewportMotion {
         id: viewportMotion
@@ -728,7 +761,7 @@ Item {
         checkTransitionThresholds(previousZoom)
     }
 
-    // Issue #949 复核评论 6251370089：动画进行中反向滚轮跨 70%/60% 立即换层。
+    // Issue #949 复核评论 6251370089：动画进行中滚轮仍按当前投影阈值换层。
     // 过渡期滚轮只把相机重锚到可见帧（retargetViewportMotion），这里在每帧相机
     // 推进之后按**上一帧/本帧实际显示的 zoom** 的方向重跑既有的 maybeEnterEmbedAt
     // / maybeExitCanvas 判定——不得按尚未显示的 pending 目标判定，方向由显示帧的
@@ -814,37 +847,86 @@ Item {
         settleViewportMotion()
     }
 
-    function viewportShortSide() {
-        return Math.min(width, height)
+    function enterDiameterPx() {
+        return Math.max(width * 0.70, height * 0.90)
     }
 
-    // 覆盖率口径：入口投影直径 / 当前视口短边。
-    function coverageOfScreenPx(px) {
-        var short = viewportShortSide()
-        return short > 0 ? px / short : 0
+    // 入口投影直径 / 同一宽高双条件阈值；窗口 resize 后按真实尺寸计算。
+    function entryScaleForDiameter(px) {
+        var threshold = enterDiameterPx()
+        return threshold > 0 ? px / threshold : 0
     }
 
-    // 缩放后：只比较指针瞄准的那个入口。没瞄准任何入口就不进入任何子图。
+    function entryDecisionFields(candidate, projectedPx, reason) {
+        return {
+            "reason": reason || "",
+            "trigger": "zoom",
+            "zoomInputGeneration": _zoomInputGeneration,
+            "zoomInputRouteKey": _zoomInputRouteKey,
+            "zoomInputEntryKey": _zoomInputEntryKey,
+            "zoomInputEntryId": _zoomInputEntryId,
+            "routeKey": routeKey,
+            "zoomEntryKey": _zoomEntryKey,
+            "candidateInstanceId": candidate ? (candidate.instanceId || "") : "",
+            "viewportWidth": width,
+            "viewportHeight": height,
+            "projectedDiameterPx": projectedPx,
+            "enterDiameterPx": enterDiameterPx(),
+            "entryScale": entryScaleForDiameter(projectedPx),
+            "enterRatio": _enterRatio
+        }
+    }
+
+    function logEntryDecision(event, reason, candidate, projectedPx) {
+        var marker = event === "scene_enter_ignored"
+                ? _lastIgnoredEntryInputGeneration : _lastRejectedEntryInputGeneration
+        if (marker === _zoomInputGeneration)
+            return
+        if (event === "scene_enter_ignored")
+            _lastIgnoredEntryInputGeneration = _zoomInputGeneration
+        else
+            _lastRejectedEntryInputGeneration = _zoomInputGeneration
+        logInteraction(event, "embed", candidate ? candidate.instanceId : "",
+                       entryDecisionFields(candidate, projectedPx, reason))
+    }
+
+    // 缩放后：只比较 zoomAt 开始时指针瞄准的入口。一个输入最多切换一次层级。
     function maybeEnterEmbedAt(screenX, screenY) {
         var scene = activeScene()
-        if (!scene || !scene.ready) {
-            _zoomEntryKey = ""
+        var emb = scene && scene.ready
+                ? scene.embedAtWorld(screenToWorldX(screenX), screenToWorldY(screenY)) : null
+        var projectedPx = emb ? Math.min(emb.width, emb.height) * zoomLevel : 0
+        if (_lastLayerSwitchInputGeneration === _zoomInputGeneration) {
+            logEntryDecision("scene_enter_ignored", "same_zoom_input_already_switched",
+                             emb, projectedPx)
             return -1
         }
-        var emb = scene.embedAtWorld(screenToWorldX(screenX), screenToWorldY(screenY))
-        if (!emb) {
-            _zoomEntryKey = ""
+        if (_zoomInputGeneration <= 0 || _zoomInputRouteKey !== routeKey) {
+            logEntryDecision("scene_enter_rejected", "zoom_input_route_mismatch", emb,
+                             projectedPx)
             return -1
         }
-        _zoomEntryKey = routeKey + "/" + emb.instanceId
-        var projectedPx = Math.min(emb.width, emb.height) * zoomLevel
-        if (coverageOfScreenPx(projectedPx) < _enterRatio)
+        if (_zoomInputEntryId === "") {
+            logEntryDecision("scene_enter_rejected", "no_embed_at_zoom_input", emb,
+                             projectedPx)
             return -1
+        }
+        if (!emb || emb.instanceId !== _zoomInputEntryId) {
+            logEntryDecision("scene_enter_rejected", "pointer_target_changed", emb,
+                             projectedPx)
+            return -1
+        }
+        if (entryScaleForDiameter(projectedPx) < _enterRatio) {
+            logEntryDecision("scene_enter_rejected", "below_entry_threshold", emb,
+                             projectedPx)
+            return -1
+        }
+        _lastLayerSwitchInputGeneration = _zoomInputGeneration
         return enterEmbedViaCore(emb.instanceId, "zoom")
     }
 
-    // 反向缩小：按进入上下文反推父入口的投影直径，≤ 60% 时恢复父画布。
-    // 双击可能在远低于 70% 的入口上进入：退场阈值取 min(60%, 进入时的覆盖率)，
+    // 反向缩小：按进入上下文反推父入口投影，≤ 82% 时恢复父画布。
+    // 双击可能在远低于进入阈值的入口上进入：退场阈值取 min(82%, 进入时的比例)，
     // 保证"至少要从进入状态继续缩小"才会退场，不会一进子图就被弹回父图。
     function maybeExitCanvas() {
         if (focusIsRoot)
@@ -853,12 +935,15 @@ Item {
         if (!ctx || !(ctx.ratio > 0))
             return -1
         var virtualParentZoom = zoomLevel / ctx.ratio
-        var coverageNow = coverageOfScreenPx(ctx.embedDiameter * virtualParentZoom)
+        var coverageNow = entryScaleForDiameter(ctx.embedDiameter * virtualParentZoom)
         var entryCoverage = ctx.entryCoverage > 0 ? ctx.entryCoverage : _exitRatio
+        if (_lastLayerSwitchInputGeneration === _zoomInputGeneration)
+            return -1
         if (coverageNow >= entryCoverage)
             return -1
         if (coverageNow > Math.min(_exitRatio, entryCoverage))
             return -1
+        _lastLayerSwitchInputGeneration = _zoomInputGeneration
         return exitCanvasViaCore(true)
     }
 
@@ -878,7 +963,11 @@ Item {
         var info = scene.embedEntryInfo(instanceId)
         if (!info)
             return -1
+        var zoomEntryKeyUsed = _zoomEntryKey
         var parentZoom = zoomLevel
+        var projectedDiameterPx = Math.min(info.width, info.height) * parentZoom
+        var enterThresholdPx = enterDiameterPx()
+        var entryScale = entryScaleForDiameter(projectedDiameterPx)
         var parentCamera = cameraSnapshot()
         var parentStarmapId = currentStarmapId
         var parentRoute = normalizeRoute(currentRoute)
@@ -914,7 +1003,13 @@ Item {
                     + ((res && res.errorCode) ? " (" + res.errorCode + ")" : "")
             logInteraction("scene_enter_failed", "embed", instanceId, {
                 "trigger": trigger || "",
-                "errorCode": (res && res.errorCode) ? res.errorCode : ""
+                "errorCode": (res && res.errorCode) ? res.errorCode : "",
+                "viewportWidth": width,
+                "viewportHeight": height,
+                "projectedDiameterPx": projectedDiameterPx,
+                "enterDiameterPx": enterThresholdPx,
+                "entryScale": entryScale,
+                "enterRatio": _enterRatio
             })
             return -1
         }
@@ -934,10 +1029,10 @@ Item {
             embedCenterY: info.centerY,
             boundsCenterX: info.bounds ? (info.bounds.minX + info.bounds.maxX) / 2 : 0,
             boundsCenterY: info.bounds ? (info.bounds.minY + info.bounds.maxY) / 2 : 0,
-            // 进入瞬间入口的投影覆盖率：双击在很小的入口上进入时可能低于 60%，
+            // 进入瞬间入口的投影比例：双击在很小的入口上进入时可能低于 82%，
             // 退场阈值必须再受它约束（见 maybeExitCanvas），否则一进子图、
             // 甚至继续放大都会立刻被退场判定弹回父图。
-            entryCoverage: coverageOfScreenPx(Math.min(info.width, info.height) * parentZoom)
+            entryCoverage: entryScale
         }
         // Issue #949 复核评论 6250468319：落点 = 子图正常可读 / 可交互镜头
         // （优先沿用该子图已有的合法镜头，否则作者尺度 100% + 内容包围盒
@@ -962,13 +1057,20 @@ Item {
                               hasPendingZoom ? { x: pendingAnchorX, y: pendingAnchorY } : null)
         logInteraction("scene_enter", "embed", instanceId, {
             "trigger": trigger || "",
-            "zoomEntryKey": _zoomEntryKey,
+            "zoomEntryKey": zoomEntryKeyUsed,
             "childRouteKey": childKey,
             "childStarmapId": res.data.location.currentStarmapId,
             "parentZoom": parentZoom,
             "childZoom": childCamera.zoom,
             "childTargetZoom": childTargetCamera.zoom,
-            "frozenScreenRadius": entryGeometry.screenRadius
+            "frozenScreenRadius": entryGeometry.screenRadius,
+            "viewportWidth": width,
+            "viewportHeight": height,
+            "projectedDiameterPx": projectedDiameterPx,
+            "enterDiameterPx": enterThresholdPx,
+            "entryScale": entryScale,
+            "enterRatio": _enterRatio,
+            "parentRouteKey": routeKeyOf(parentRoute)
         })
         visualFocusChanged()
         return childCamera.zoom
@@ -981,11 +1083,11 @@ Item {
     //   - 滚轮：落点 = 未走完的滚轮目标按 entryContexts 换算出的父镜头
     //     （parentTargetZoom = clamp(childPendingZoom / ratio)，仍锚在同一鼠标
     //     屏幕位置）；没有未完成目标时就是由当前子镜头反推的父镜头本身。沿用户
-    //     正在看的这一帧连续缩小，不得跨 60% 边界瞬间回到进入前保存的父镜头，
+    //     正在看的这一帧连续缩小，不得跨 82% 边界瞬间回到进入前保存的父镜头，
     //     也不得冻结相机把后续滚轮丢给过渡结束后的补间；
     //   - 按钮：落点 = cameraStack 保存的父镜头，不接滚轮未完成目标，但从当前
     //     可见帧平滑移动 / 缩放过去（用户拖到多远都不会直接跳回）。
-    // 圆环起点 = 当前帧入口圆的投影（与 60% 判定同一"正在显示的投影直径"
+    // 圆环起点 = 当前帧入口圆的投影（与退出阈值判定同一"正在显示的投影直径"
     // 几何），终点 = 目标父帧下入口圆投影；圆内子图 / 圆外父图按同一帧接上，
     // 结束才由 applyCamera 更新 cameraStack、才销毁临时层。
     function exitCanvasViaCore(continuous) {
@@ -1018,7 +1120,7 @@ Item {
             return -1
         var parentKey = routeKeyOf(parentRoute)
         var ctx = entryContexts[childKey]
-        // 起始父帧：当前子镜头按同一份父子对应反推（与 60% 判定同几何）。
+        // 起始父帧：当前子镜头按同一份父子对应反推（与退出阈值同几何）。
         var parentStartCam = ctx && ctx.ratio > 0
                 ? parentCameraForChild(childCamera, ctx) : childCamera
         // 目标父帧（Issue #949 复核评论 6250932011 问题 1/2）：滚轮退出时若还有
@@ -1090,6 +1192,7 @@ Item {
     function prepareCanvasSwitch() {
         settleViewportMotion()
         resetZoomRound()
+        _zoomEntryKey = ""
         setInlineEditingKey("")
         hideTouchPreview()
         if (inputRouter)
@@ -1261,6 +1364,7 @@ Item {
         id: outgoingSceneComponent
         StarMapActiveScene {
             dt: canvasArea.dt
+            canvasBackgroundColor: canvasArea.canvasBackgroundColor
             starmapId: canvasArea.outgoingStarmapId
             rootStarmapId: canvasArea.outgoingRoute
                     ? canvasArea.outgoingRoute.rootStarmapId : ""
@@ -1281,6 +1385,8 @@ Item {
             ringCenterY: viewportMotion.ringCenterY
             ringRadius: viewportMotion.ringRadius
             ringStrokeWidth: viewportMotion.ringStrokeWidth
+            ringBackgroundProgress: canvasArea.outgoingSceneIsInsideRing
+                    ? 1 - viewportMotion.progress : 0
         }
     }
 
@@ -1311,6 +1417,7 @@ Item {
         id: activeSceneComponent
         StarMapActiveScene {
             dt: canvasArea.dt
+            canvasBackgroundColor: canvasArea.canvasBackgroundColor
             starmapId: canvasArea.currentStarmapId
             rootStarmapId: canvasArea.currentRoute.rootStarmapId
             pathSegments: canvasArea.currentRoute.segments
@@ -1330,6 +1437,8 @@ Item {
             ringCenterY: viewportMotion.ringCenterY
             ringRadius: viewportMotion.ringRadius
             ringStrokeWidth: viewportMotion.ringStrokeWidth
+            ringBackgroundProgress: canvasArea.activeSceneIsInsideRing
+                    ? viewportMotion.progress : 0
 
             onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
             onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }

@@ -75,6 +75,10 @@ mod gc;
 mod perform;
 
 impl AppBackend {
+    pub(crate) fn sync_source_for_operation_id(&self, operation_id: &str) -> Option<String> {
+        (self.current_sync_operation_id == operation_id).then(|| self.current_sync_source.clone())
+    }
+
     pub(crate) fn handle_sync_outcome(
         &mut self,
         outcome: SyncTaskOutcome,
@@ -206,12 +210,17 @@ impl AppBackend {
         // 排队的同步还没执行，当前 outcome 的 effect 才是返回值。
         if self.manual_sync_pending {
             self.manual_sync_pending = false;
+            let queued_operation_id = self.manual_sync_pending_operation_id.take();
+            self.current_sync_source = std::mem::take(&mut self.manual_sync_pending_source);
             self.debug_log(
                 "sync",
                 "manual_sync_pending_triggered",
-                "starting queued manual sync after previous sync completed",
+                &format!(
+                    "operation_id={}, starting queued manual sync after previous sync completed",
+                    queued_operation_id.as_deref().unwrap_or("")
+                ),
             );
-            self.perform_sync_internal("manual", false, sync_qptr);
+            self.perform_sync_internal_with_id("manual", false, sync_qptr, queued_operation_id);
         }
         effect
     }
@@ -228,6 +237,49 @@ impl AppBackend {
     }
     pub(crate) fn perform_sync(&mut self, sync_qptr: Option<QPointer<SyncBackend>>) -> QString {
         self.perform_sync_internal("manual", false, sync_qptr)
+    }
+
+    /// 手动同步 QML 边界的统一入口：返回 operation ID，并给请求日志/导出摘要
+    /// 提供与该 ID 对应的排队、启动或前置失败状态。
+    pub(crate) fn perform_sync_for_request(
+        &mut self,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+        source: &str,
+        request_id: &str,
+    ) -> (QString, bool, bool, String) {
+        self.record_manual_sync_request(source, request_id);
+        self.update_manual_sync_request_status(request_id, "dispatching");
+        if self.current_sync_in_progress {
+            if !self.manual_sync_pending {
+                self.manual_sync_pending_source = source.to_string();
+            }
+        } else {
+            self.current_sync_source = source.to_string();
+        }
+        let operation_id = self.perform_sync_internal("manual", false, sync_qptr);
+        let operation_id = operation_id.to_string();
+        let state = serde_json::from_str::<serde_json::Value>(&self.current_sync_operation_state)
+            .unwrap_or(serde_json::Value::Null);
+        let status = state
+            .get("status_code")
+            .and_then(|value| value.as_str())
+            .unwrap_or(if self.current_sync_in_progress {
+                "syncing"
+            } else {
+                "error"
+            })
+            .to_string();
+        let queued = self.manual_sync_pending;
+        let started = self.current_sync_in_progress && !queued;
+        let request_status = if queued {
+            "queued".to_string()
+        } else if started {
+            "started".to_string()
+        } else {
+            status.clone()
+        };
+        self.update_manual_sync_request_status(request_id, &request_status);
+        (operation_id.into(), started, queued, status)
     }
 }
 

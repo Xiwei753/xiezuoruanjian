@@ -23,7 +23,7 @@
 //   - detailReveal 是显示层展开进度：概览小圆点 → 当前层完整节点；
 //     进场 0→1，出场 1→0（退回概览圆点），跟随 contentProgress。
 //
-// KDE 一致性：时间从 Kirigami.Units.longDuration 派生，缓动 OutCubic，
+// KDE 一致性：时间从 Kirigami.Units.veryLongDuration 派生，缓动 InOutCubic，
 //   不加弹簧；系统 / 应用关闭动画或有效时长为 0 时直接落到最终状态。
 
 import QtQuick
@@ -108,15 +108,17 @@ QtObject {
     readonly property bool ringVisible: active && progress < 1
     readonly property real ringStrokeWidth: 2
     // 圆形裁剪半径：只给圆环外半条描边留 1~2 逻辑像素余量，不改圆环大小 /
-    // 世界尺寸 / 70% / 60% 阈值（Issue #949 复核评论 6250468319）。
+    // 世界尺寸 / 进出场阈值（Issue #949 复核评论 6250468319）。
     readonly property real ringClipRadius: ringRadius + ringStrokeWidth / 2 + 1
 
-    // ── 内容进度：只驱动内容（子镜头 / 圆点展开），前段（约 60%）平滑到达
-    //    目标镜头后停住；末端速度趋 0（1-(1-p/0.6)^3），停下的瞬间不跳速。
+    // ── 内容进度：只驱动内容（子镜头 / 圆点展开），在时间线前 80% 平滑到达
+    //    目标镜头后停住；两端速度为 0，避免缩放在穿越开头就完成大半。
     //    圆环继续按完整 progress 走到离开视口，共用同一条时间线。──
-    readonly property real contentSpan: 0.6
-    readonly property real contentProgress:
-        1 - Math.pow(1 - Math.min(1, progress / contentSpan), 3)
+    readonly property real contentSpan: 0.8
+    readonly property real contentProgress: {
+        var p = Math.min(1, progress / contentSpan)
+        return p * p * (3 - 2 * p)
+    }
 
     // ── 相机参数（Issue #949 复核评论 6250932011 问题 3）：默认进场跟随
     //    contentProgress（内容先停）、出场跟随 progress；过渡期收到滚动滚轮时
@@ -125,7 +127,7 @@ QtObject {
     //    进度、不排队第二条动画，圆环（出场）与相机严格同参。──
     property real retargetAt: -1
     // 本条演出是否收到过滚轮重定（Issue #949 复核评论 6251370089）：只有收到
-    // 滚轮重定的演出，才允许 Canvas 在每帧按实际显示镜头的方向重跑 70%/60%
+    // 滚轮重定的演出，才允许 Canvas 在每帧按实际显示镜头的方向重跑进出场阈值
     // 穿越判定——按钮返回 / 双击进入这类纯演出自身的运动不是滚动意图，不得
     // 触发换层；每次 beginEnter / beginExit（_begin）与 cancel() 都复位它，
     // 同一条演出不会在启动下一次穿越后重复判定自己。
@@ -146,14 +148,14 @@ QtObject {
     // 应用侧开关：宿主（StarMapCanvas）可用它整体关掉演出。
     property bool animationsEnabled: true
 
-    // 演出时长：KDE 长时长量级。Kirigami.Units 的时长已经带系统动画速度
-    // 因子（KDE 关闭动画时为 0），这里只把"关闭动画 / 有效时长为 0"归一到 0，
+    // 演出时长：veryLongDuration 再留少量穿越余量。Kirigami.Units 的时长已经
+    // 带系统动画速度因子（KDE 关闭动画时为 0），这里只把有效时长归一到 0，
     // 让 _begin 直接完成到 1。
     readonly property int effectiveDuration: {
         if (!animationsEnabled)
             return 0
-        var d = Kirigami.Units.longDuration
-        return d > 0 ? d : 0
+        var d = Kirigami.Units.veryLongDuration
+        return d > 0 ? Math.round(d * 1.2) : 0
     }
 
     // ── 唯一时间线：一个 NumberAnimation on progress，三部分共用 ──
@@ -163,7 +165,7 @@ QtObject {
         from: 0
         to: 1
         duration: motion.effectiveDuration
-        easing.type: Easing.OutCubic
+        easing.type: Easing.InOutCubic
         onFinished: motion._onTimelineFinished()
     }
 

@@ -282,22 +282,38 @@ fn build_export_attachments(
         });
     }
 
-    // full_sync_state.json — 全量同步持久状态。core_api() 返回 None（无工作区）时跳过。
-    // app_sync_state.json — App target 同步状态（含 last_error），让诊断包脱敏流程统一处理。
-    if let Some(api) = app.core_api() {
-        if let Ok(Some(state)) = api.load_full_sync_state() {
-            let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
-            attachments.push(writer_diagnostics::PlatformAttachment {
-                relative_path: "full_sync_state.json".to_string(),
-                content: json.into_bytes(),
-            });
-        }
-        let report = api.load_latest_full_sync_report().ok().flatten();
-        let json = serde_json::to_string_pretty(&report).unwrap_or_else(|_| "null".to_string());
+    // 持久历史仍保留为原始附件；同时复用同一份读取结果生成导出时摘要，
+    // 避免用旧 overall_status 推断本轮是否真的发起了同步。
+    let (full_sync_state, latest_sync_report) = app
+        .core_api()
+        .map(|api| {
+            (
+                api.load_full_sync_state().ok().flatten(),
+                api.load_latest_full_sync_report().ok().flatten(),
+            )
+        })
+        .unwrap_or_default();
+
+    // full_sync_state.json — 全量同步持久状态。
+    if let Some(state) = full_sync_state.as_ref() {
+        let json = serde_json::to_string_pretty(state).unwrap_or_else(|_| "{}".to_string());
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "full_sync_state.json".to_string(),
+            content: json.into_bytes(),
+        });
+    }
+    // last_sync_report.json — 最近一次报告，历史原件继续单独保留。
+    if app.core_api().is_some() {
+        let json = serde_json::to_string_pretty(&latest_sync_report)
+            .unwrap_or_else(|_| "null".to_string());
         attachments.push(writer_diagnostics::PlatformAttachment {
             relative_path: "last_sync_report.json".to_string(),
             content: json.into_bytes(),
         });
+    }
+
+    // app_sync_state.json — App target 同步状态（含 last_error），让诊断包脱敏流程统一处理。
+    if let Some(api) = app.core_api() {
         if let Ok(state) = api.load_app_sync_state() {
             let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
             attachments.push(writer_diagnostics::PlatformAttachment {
@@ -323,12 +339,71 @@ fn build_export_attachments(
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
         .to_string();
+    let operation_state =
+        serde_json::from_str::<serde_json::Value>(&app.current_sync_operation_state).ok();
+    let operation_id = operation_state
+        .as_ref()
+        .and_then(|state| state.get("operation_id"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            (!app.current_sync_operation_id.is_empty())
+                .then_some(app.current_sync_operation_id.as_str())
+        });
+    let operation_kind = operation_state
+        .as_ref()
+        .and_then(|state| state.get("operation_kind"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            (!app.current_sync_operation_kind.is_empty())
+                .then_some(app.current_sync_operation_kind.as_str())
+        });
+    let operation_status = operation_state
+        .as_ref()
+        .and_then(|state| state.get("status_code"))
+        .and_then(|value| value.as_str());
+    let exported_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let last_attempt_time = full_sync_state
+        .as_ref()
+        .and_then(|state| state.last_attempt_time);
+    let last_success_time = full_sync_state
+        .as_ref()
+        .and_then(|state| state.last_success_time);
+    let last_report_attempted_at = latest_sync_report
+        .as_ref()
+        .map(|report| report.attempted_at);
+    let report_is_latest_attempt = match (last_attempt_time, last_report_attempted_at) {
+        (Some(last_attempt), Some(report_attempt)) => Some(last_attempt == report_attempt),
+        _ => None,
+    };
     let runtime = serde_json::json!({
         "syncInProgress": app.current_sync_in_progress,
         "operationId": app.current_sync_operation_id,
         "syncStatus": app.current_sync_status,
         "workspaceGeneration": app.current_workspace_generation,
         "dataRootBasename": data_root_basename,
+        "exported_at": exported_at,
+        "sync_in_progress": app.current_sync_in_progress,
+        "operation_id": operation_id,
+        "operation_kind": operation_kind,
+        "operation_status": operation_status,
+        "last_attempt_time": last_attempt_time,
+        "last_success_time": last_success_time,
+        "last_report_attempted_at": last_report_attempted_at,
+        "report_is_latest_attempt": report_is_latest_attempt,
+        "manual_sync_request_seen": app.manual_sync_request_seen_this_startup,
+        "last_manual_sync_request_id": (!app.last_manual_sync_request_id.is_empty())
+            .then_some(app.last_manual_sync_request_id.as_str()),
+        "last_manual_sync_request_source": (!app.last_manual_sync_request_source.is_empty())
+            .then_some(app.last_manual_sync_request_source.as_str()),
+        "last_manual_sync_request_at": (app.last_manual_sync_request_at > 0)
+            .then_some(app.last_manual_sync_request_at),
+        "last_manual_sync_request_status": (!app.last_manual_sync_request_status.is_empty())
+            .then_some(app.last_manual_sync_request_status.as_str()),
     });
     attachments.push(writer_diagnostics::PlatformAttachment {
         relative_path: "sync_runtime.json".to_string(),

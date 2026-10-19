@@ -11,27 +11,55 @@ impl AppBackend {
         silent_success: bool,
         sync_qptr: Option<QPointer<SyncBackend>>,
     ) -> QString {
-        let op_id = uuid::Uuid::new_v4().to_string();
+        self.perform_sync_internal_with_id(trigger, silent_success, sync_qptr, None)
+    }
+
+    pub(super) fn perform_sync_internal_with_id(
+        &mut self,
+        trigger: &str,
+        silent_success: bool,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+        operation_id: Option<String>,
+    ) -> QString {
+        let op_id = operation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        if trigger == "manual" && !self.manual_sync_request_seen_this_startup {
+            self.record_manual_sync_request("backend_manual", &op_id);
+        }
         if self.current_sync_in_progress {
             // 手动同步请求到来时正在运行同步：排队等待，不丢点击，不并行启动第二个同步。
             // 连续点击只保留一次 pending（已经是 true 就不再重复设），不堆无限队列。
             if trigger == "manual" {
                 if !self.manual_sync_pending {
                     self.manual_sync_pending = true;
+                    self.manual_sync_pending_operation_id = Some(op_id.clone());
                     self.debug_log(
                         "sync",
                         "manual_sync_pending_set",
-                        "sync already running, manual sync queued",
+                        &format!(
+                            "operation_id={}, sync already running, manual sync queued",
+                            op_id
+                        ),
                     );
                 } else {
+                    let queued_operation_id = self
+                        .manual_sync_pending_operation_id
+                        .clone()
+                        .unwrap_or_else(|| op_id.clone());
                     self.debug_log(
                         "sync",
                         "manual_sync_pending_already_set",
-                        "sync already running and pending already queued",
+                        &format!(
+                            "operation_id={}, sync already running and pending already queued",
+                            queued_operation_id
+                        ),
                     );
                 }
+                let queued_operation_id = self
+                    .manual_sync_pending_operation_id
+                    .clone()
+                    .unwrap_or_else(|| op_id.clone());
                 let state = writer_core::api::SyncOperationStateDto {
-                    operation_id: op_id.clone(),
+                    operation_id: queued_operation_id.clone(),
                     operation_kind: "sync".to_string(),
                     status_code: "syncing".to_string(),
                     phase_key: None,
@@ -45,14 +73,25 @@ impl AppBackend {
                 };
                 self.current_sync_operation_state =
                     serde_json::to_string(&state).unwrap_or_default();
+                return queued_operation_id.into();
             } else {
                 self.debug_log(
                     "sync",
                     "perform_sync_skipped",
-                    &format!("sync already running (trigger={})", trigger),
+                    &format!(
+                        "operation_id={}, trigger={}, started=false, queued=false, reason=already_running",
+                        self.current_sync_operation_id, trigger
+                    ),
                 );
             }
             return self.current_sync_operation_id.clone().into();
+        }
+        if self.current_sync_source.is_empty() || trigger != "manual" {
+            self.current_sync_source = if trigger == "manual" {
+                "backend_manual".to_string()
+            } else {
+                trigger.to_string()
+            };
         }
         let token_present = !self.current_sync_token.is_empty();
         let masked_url = mask_sync_error(&self.current_sync_remote_url);
@@ -60,8 +99,8 @@ impl AppBackend {
             "sync",
             "perform_sync_start",
             &format!(
-                "trigger={}, remote_url={}, branch={}, token_present={}",
-                trigger, masked_url, self.current_sync_branch, token_present
+                "operation_id={}, source={}, trigger={}, remote_url={}, branch={}, token_present={}",
+                op_id, self.current_sync_source, trigger, masked_url, self.current_sync_branch, token_present
             ),
         );
         let data_root = self.current_data_root.clone();
@@ -81,7 +120,14 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.debug_error("sync", "perform_sync_failed", "workspace_empty");
+            self.debug_error(
+                "sync",
+                "perform_sync_failed",
+                &format!(
+                    "operation_id={}, source={}, phase=preflight, category=workspace_empty",
+                    op_id, self.current_sync_source
+                ),
+            );
             return op_id.into();
         }
 
@@ -101,7 +147,14 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.debug_error("sync", "perform_sync_failed", "remote_url_empty");
+            self.debug_error(
+                "sync",
+                "perform_sync_failed",
+                &format!(
+                    "operation_id={}, source={}, phase=preflight, category=remote_url_empty",
+                    op_id, self.current_sync_source
+                ),
+            );
             return op_id.into();
         }
 
@@ -121,7 +174,14 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.debug_error("sync", "perform_sync_failed", "token_empty");
+            self.debug_error(
+                "sync",
+                "perform_sync_failed",
+                &format!(
+                    "operation_id={}, source={}, phase=preflight, category=token_empty",
+                    op_id, self.current_sync_source
+                ),
+            );
             return op_id.into();
         }
 
@@ -194,7 +254,14 @@ impl AppBackend {
                 };
                 self.current_sync_operation_state =
                     serde_json::to_string(&state).unwrap_or_default();
-                self.debug_error("sync", "perform_sync_failed", "no_workspace_git_layout");
+                self.debug_error(
+                    "sync",
+                    "perform_sync_failed",
+                    &format!(
+                        "operation_id={}, source={}, phase=workspace, category=no_workspace_git_layout",
+                        op_id, self.current_sync_source
+                    ),
+                );
                 return op_id.into();
             }
         };
