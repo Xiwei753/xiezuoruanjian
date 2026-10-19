@@ -2,18 +2,22 @@
 
 use std::io::{self, BufRead};
 
-use crate::segment::is_han;
-
 // Rule entries are data, not a second language model. Literal particle rules
 // are deliberately narrow; no general classifier guesses 的/地/得 from one
 // character of context. Upstream pycorrector license applies only to behavior
 // modeled in detector/corrector; the small default table below is curated data.
+//
+// Rule detection deliberately has no "two identical adjacent Han characters
+// must be a typo" rule: AA, AABB, AABC and ABB are ordinary Chinese word
+// formations (好好学习, 正正经经, 津津有味, 亮晶晶), and spoken repetition in
+// running prose is a rhetorical device, not an error. Deciding that one
+// character was typed twice needs whole-sentence model evidence (see
+// corrector.rs) and is never inferred from adjacency alone.
 
 #[derive(Clone, Debug)]
 pub struct RuleSet {
     literal_rules: Vec<LiteralRule>,
     enable_punctuation_runs: bool,
-    enable_repeated_han: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -46,19 +50,17 @@ impl RuleSet {
         Self {
             literal_rules: Vec::new(),
             enable_punctuation_runs: false,
-            enable_repeated_han: false,
         }
     }
 
     /// A compact, conservative baseline: a few high-signal fixed forms,
-    /// repeated Chinese punctuation/characters as weak hints, and explicit
-    /// particle examples. Applications can add licensed correction data with
+    /// repeated Chinese punctuation as weak hints, and explicit particle
+    /// examples. Applications can add licensed correction data with
     /// `load_tsv` instead of embedding upstream datasets in this crate.
     pub fn with_common_rules() -> Self {
         let mut rules = Self {
             literal_rules: Vec::new(),
             enable_punctuation_runs: true,
-            enable_repeated_han: true,
         };
         rules.add_literal("fixed.should", "因该", "应该", "error", [] as [&str; 0]);
         rules.add_literal("fixed.already", "以经", "已经", "error", [] as [&str; 0]);
@@ -180,9 +182,6 @@ impl RuleSet {
         if self.enable_punctuation_runs {
             matches.extend(detect_repeated_punctuation(text));
         }
-        if self.enable_repeated_han {
-            matches.extend(detect_repeated_han(text));
-        }
         matches.sort_by(|left, right| {
             severity_rank(&left.severity)
                 .cmp(&severity_rank(&right.severity))
@@ -257,90 +256,6 @@ fn detect_repeated_punctuation(text: &str) -> Vec<RuleMatch> {
     result
 }
 
-fn detect_repeated_han(text: &str) -> Vec<RuleMatch> {
-    let chars = text.char_indices().collect::<Vec<_>>();
-    let mut result = Vec::new();
-    let mut index = 0;
-    while index < chars.len() {
-        let (start, ch) = chars[index];
-        if !is_han(ch) {
-            index += 1;
-            continue;
-        }
-        let mut end = index + 1;
-        while end < chars.len() && chars[end].1 == ch {
-            end += 1;
-        }
-        if end - index > 1 {
-            let end_byte = if end < chars.len() {
-                chars[end].0
-            } else {
-                text.len()
-            };
-            let original = &text[start..end_byte];
-            if !is_common_reduplication(original) {
-                result.push(RuleMatch {
-                    start_byte: start,
-                    end_byte,
-                    original: original.to_owned(),
-                    replacement: ch.to_string(),
-                    rule_id: "character.repeated".to_owned(),
-                    severity: "warning".to_owned(),
-                });
-            }
-        }
-        index = end;
-    }
-    result
-}
-
-fn is_common_reduplication(word: &str) -> bool {
-    const ANTI_RULES: &[&str] = &[
-        "人人",
-        "年年",
-        "天天",
-        "日日",
-        "时时",
-        "处处",
-        "事事",
-        "家家",
-        "户户",
-        "个个",
-        "种种",
-        "点点",
-        "慢慢",
-        "渐渐",
-        "常常",
-        "往往",
-        "仅仅",
-        "刚刚",
-        "久久",
-        "看看",
-        "听听",
-        "想想",
-        "说说",
-        "走走",
-        "跳跳",
-        "星星",
-        "妹妹",
-        "弟弟",
-        "姐姐",
-        "哥哥",
-        "爸爸",
-        "妈妈",
-        "爷爷",
-        "奶奶",
-        "叔叔",
-        "姑姑",
-        "舅舅",
-        "谢谢",
-        "试试",
-        "休息休息",
-        "研究研究",
-    ];
-    ANTI_RULES.contains(&word)
-}
-
 fn normalize_severity(severity: &str) -> String {
     match severity {
         "error" | "warning" | "hint" => severity.to_owned(),
@@ -353,5 +268,74 @@ fn severity_rank(severity: &str) -> u8 {
         "error" => 0,
         "warning" => 1,
         _ => 2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuleSet;
+
+    fn detect(text: &str) -> Vec<super::RuleMatch> {
+        RuleSet::with_common_rules().detect(text)
+    }
+
+    /// AA, AABB, AABC and ABB formations, kinship words, and spoken
+    /// repetition are ordinary Chinese; none of them is a typo merely because
+    /// two Han characters are adjacent and identical.
+    #[test]
+    fn adjacent_repeated_han_is_not_flagged() {
+        for text in [
+            "好好学习。",
+            "她说话正正经经。",
+            "慢慢走。",
+            "明明白白地讲。",
+            "人人都有机会。",
+            "她说“我我我”时有些结巴。",
+            "今天的的天气很好。",
+            "正正好好。",
+            "普普通通。",
+            "平平常常。",
+            "津津有味。",
+            "高高在上。",
+            "念念不忘。",
+            "亮晶晶。",
+            "静悄悄。",
+            "看看再说。",
+        ] {
+            let matches = detect(text);
+            assert!(
+                matches
+                    .iter()
+                    .all(|matched| matched.rule_id != "character.repeated"),
+                "{text} must not report a repeated-character typo: {matches:?}"
+            );
+            assert!(
+                matches.is_empty(),
+                "{text} produced unexpected rule matches: {matches:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_literal_rules_still_fire() {
+        let matches = detect("这因该以经算好了。");
+        assert_eq!(matches.len(), 2, "unexpected matches: {matches:?}");
+        assert_eq!(matches[0].rule_id, "fixed.should");
+        assert_eq!(matches[0].original, "因该");
+        assert_eq!(matches[0].replacement, "应该");
+        assert_eq!(matches[0].severity, "error");
+        assert_eq!(matches[1].rule_id, "fixed.already");
+        assert_eq!(matches[1].original, "以经");
+        assert_eq!(matches[1].replacement, "已经");
+        assert_eq!(matches[1].severity, "error");
+    }
+
+    #[test]
+    fn repeated_punctuation_remains_a_hint() {
+        let matches = detect("真的吗？？");
+        assert_eq!(matches.len(), 1, "unexpected matches: {matches:?}");
+        assert_eq!(matches[0].rule_id, "punctuation.repeated");
+        assert_eq!(matches[0].severity, "hint");
+        assert_eq!(matches[0].replacement, "？");
     }
 }
