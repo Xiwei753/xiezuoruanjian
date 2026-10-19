@@ -176,7 +176,7 @@ Rectangle {
         }
     }
 
-    Menu {
+    MotionMenu {
         id: projectContextMenu
         property string projectId: ""
         property string projectTitle: ""
@@ -186,7 +186,7 @@ Rectangle {
         MenuItem { text: qsTr("删除"); onTriggered: root.deleteProjectRequested(projectContextMenu.projectId, projectContextMenu.projectTitle) }
     }
 
-    Dialog {
+    MotionDialog {
         id: renameProjectDialog
         property string projectId: ""
         property string currentTitle: ""

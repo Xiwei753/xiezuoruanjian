@@ -33,6 +33,7 @@ Rectangle {
     property int cardHeight: 240
 
     property bool hovered: false
+    property bool pressVisual: false
 
     signal clicked()
 
@@ -46,8 +47,18 @@ Rectangle {
     border.color: hovered ? Kirigami.Theme.focusColor : Kirigami.Theme.disabledTextColor
     border.width: 1
 
-    Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
-    Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+    MotionTokens { id: motion }
+
+    scale: pressVisual ? 0.985 : (hovered ? 1.01 : 1.0)
+
+    Behavior on border.color { ColorAnimation { duration: motion.hoverMs } }
+    Behavior on color { ColorAnimation { duration: motion.hoverMs } }
+    Behavior on scale {
+        NumberAnimation {
+            duration: motion.hoverMs
+            easing.type: Easing.OutCubic
+        }
+    }
 
     Kirigami.Icon {
         anchors.centerIn: parent
@@ -62,6 +73,9 @@ Rectangle {
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
         onContainsMouseChanged: root.hovered = containsMouse
+        onPressed: root.pressVisual = true
+        onReleased: root.pressVisual = false
+        onCanceled: root.pressVisual = false
         onClicked: function(mouse) {
             if (mouse.button === Qt.LeftButton) root.clicked();
         }
