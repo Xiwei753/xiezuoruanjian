@@ -612,6 +612,7 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/MotionToolButton.qml");
     println!("cargo:rerun-if-changed=qml/MotionDialog.qml");
     println!("cargo:rerun-if-changed=qml/MotionMenu.qml");
+    println!("cargo:rerun-if-changed=qml/MotionDisclosure.qml");
     println!("cargo:rerun-if-changed=qml/SectionHeader.qml");
     println!("cargo:rerun-if-changed=qml/DesktopWheelScrollHandler.qml");
     println!("cargo:rerun-if-changed=qml/StatusPill.qml");

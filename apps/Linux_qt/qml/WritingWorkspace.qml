@@ -73,6 +73,16 @@ Rectangle {
     // 不参与 RowLayout 宽度分配；多栏工作台下章节导航由 leftPaneCollapsed 管理，
     // 这个属性只在 SinglePane 下生效。
     property bool singlePaneNavOpen: false
+    // SinglePane 浮层的显示进度只驱动视觉反馈，不改变业务开关状态。
+    property real navReveal: root.singlePaneMode && root.singlePaneNavOpen ? 1 : 0
+    property real toolReveal: root.singlePaneMode && root.drawerOpen
+                              && root.drawerTool === "correction" ? 1 : 0
+    Behavior on navReveal {
+        NumberAnimation { duration: 210; easing.type: Easing.OutCubic }
+    }
+    Behavior on toolReveal {
+        NumberAnimation { duration: 210; easing.type: Easing.OutCubic }
+    }
 
     // ── Issue #920：Qt 平台本地布局断点与尺寸 ──
     // 布局完全由 Qt 自己决定（Qt Quick Layouts + 本地断点），不再让 Core 收窗口
@@ -1125,16 +1135,17 @@ Rectangle {
         anchors.fill: parent
         // Issue #833 复核3：只在 SinglePane 模式且浮层打开时可见，
         // Workbench 下恒不可见，避免两套壳互相覆盖。
-        visible: root.singlePaneMode && root.singlePaneNavOpen
+        visible: root.singlePaneMode && (root.singlePaneNavOpen || root.navReveal > 0)
         z: 60
 
         // 半透明遮罩，点击关闭抽屉。用主题文本色做暗化，避免写死颜色。
         Rectangle {
             anchors.fill: parent
             color: Kirigami.Theme.textColor
-            opacity: 0.4
+            opacity: 0.4 * root.navReveal
             MouseArea {
                 anchors.fill: parent
+                enabled: root.singlePaneNavOpen
                 onClicked: root.closeChapterNavigation()
             }
         }
@@ -1145,8 +1156,9 @@ Rectangle {
             id: singlePaneNavPanel
             width: Math.min(parent.width, root.listPaneWidth)
             height: parent.height
-            x: 0
+            x: (root.navReveal - 1) * width
             y: 0
+            enabled: root.singlePaneNavOpen
             dt: root.dt
             tree: root.tree
             workspaceProjectId: root.workspaceProjectId
@@ -1177,16 +1189,18 @@ Rectangle {
     Item {
         id: singlePaneToolOverlay
         anchors.fill: parent
-        visible: root.singlePaneMode && root.drawerOpen && root.drawerTool === "correction"
+        visible: root.singlePaneMode && (root.drawerOpen && root.drawerTool === "correction"
+                                         || root.toolReveal > 0)
         z: 61
 
         Rectangle {
             anchors.fill: parent
             color: Kirigami.Theme.textColor
-            opacity: 0.4
+            opacity: 0.4 * root.toolReveal
 
             MouseArea {
                 anchors.fill: parent
+                enabled: root.drawerOpen && root.drawerTool === "correction"
                 onClicked: root.closeToolPane()
             }
         }
@@ -1194,8 +1208,9 @@ Rectangle {
         Rectangle {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            anchors.right: parent.right
             width: Math.min(parent.width, 240)
+            x: parent.width - width + (1 - root.toolReveal) * width
+            enabled: root.drawerOpen && root.drawerTool === "correction"
             color: Kirigami.Theme.alternateBackgroundColor
 
             ColumnLayout {
