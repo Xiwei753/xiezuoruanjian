@@ -20,6 +20,8 @@ import org.kde.kirigami as Kirigami
 Item {
     id: root
 
+    MotionTokens { id: motion }
+
     required property var dt
 
     // 分组标题（卷名）。
@@ -52,11 +54,18 @@ Item {
 
         // 折叠箭头。手稿里就是一个细的箭头，不承担选中态。
         Kirigami.Icon {
-            source: root.expanded ? "arrow-down" : "arrow-right"
+            source: "arrow-right"
+            rotation: root.expanded ? 90 : 0
             implicitWidth: Kirigami.Units.iconSizes.smallMedium
             implicitHeight: Kirigami.Units.iconSizes.smallMedium
             color: Kirigami.Theme.textColor
             Layout.alignment: Qt.AlignVCenter
+            Behavior on rotation {
+                NumberAnimation {
+                    duration: motion.hoverMs
+                    easing.type: Easing.OutCubic
+                }
+            }
         }
 
         Label {
@@ -70,7 +79,7 @@ Item {
             Layout.alignment: Qt.AlignVCenter
         }
 
-        ToolButton {
+        MotionToolButton {
             visible: root.showAddButton
             icon.name: "list-add"
             icon.width: Kirigami.Units.iconSizes.smallMedium

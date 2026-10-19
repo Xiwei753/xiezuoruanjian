@@ -16,7 +16,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
-Dialog {
+MotionDialog {
     id: root
     modal: true
     // Issue #912：Dialog 是 Popup，位置坐标属于 Popup 父级（Overlay）而非普通
