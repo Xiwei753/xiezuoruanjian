@@ -88,14 +88,16 @@ Kirigami.ShadowedRectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Kirigami.Units.largeSpacing
+        anchors.margins: Math.round(Kirigami.Units.largeSpacing * 1.5)
         spacing: Kirigami.Units.smallSpacing
 
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
 
-            Label {
+            // Issue #960：按宽屏手稿放大字号层次（标题 / 总字数 / 速度 / 日均 / 日期）。
+            Kirigami.Heading {
+                level: 4
                 Layout.fillWidth: true
                 text: root.title
                 color: Kirigami.Theme.disabledTextColor
@@ -111,22 +113,27 @@ Kirigami.ShadowedRectangle {
             }
         }
 
+        // 手稿的四卡在标题与数值、数值与日期之间都留白，随卡片高度伸展。
+        Item { Layout.fillHeight: true }
+
         Kirigami.Heading {
-            level: 2
+            level: 1
             Layout.fillWidth: true
             text: root.formatNum(root.val(root.periodSummary, "totalHumanTypedChars")) + " " + qsTr("字")
             color: Kirigami.Theme.highlightColor
             elide: Text.ElideRight
         }
 
-        Label {
+        Kirigami.Heading {
+            level: 3
             Layout.fillWidth: true
             text: root.formatAverage(root.val(root.periodSummary, "averageCharsPerMinute")) + " " + qsTr("字/分")
             color: Kirigami.Theme.textColor
             elide: Text.ElideRight
         }
 
-        Label {
+        Kirigami.Heading {
+            level: 3
             Layout.fillWidth: true
             text: root.formatAverage(root.val(root.periodSummary, "averageCharsPerDay")) + " " + qsTr("字/天")
             color: Kirigami.Theme.textColor

@@ -604,6 +604,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StatsPeriodCard.qml");
     println!("cargo:rerun-if-changed=qml/StatsRecordPanel.qml");
     println!("cargo:rerun-if-changed=qml/StatsTrendChart.qml");
+    // Issue #960：每日码字日历热力图。
+    println!("cargo:rerun-if-changed=qml/StatsCalendarHeatmap.qml");
     println!("cargo:rerun-if-changed=qml/DashboardGrid.qml");
     println!("cargo:rerun-if-changed=qml/DashboardSection.qml");
     // Components

@@ -3,19 +3,22 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML 页面）
-// 职责（Issue #946）：按新宽屏手稿重做统计主体 ——
+// 职责（Issue #946 / #960）：按新宽屏手稿重做统计主体 ——
 //   - 顶部生涯条：累积人工码字、首末记录日期、平均字/分、平均字/天、
 //     已持续自然日历天数；点击原位展开「左纪录 / 右趋势」；
 //   - 四个时段卡横排（近七天 / 近三十天 / 近半年 / 自选区间）；点一张后
 //     四卡区域原位替换为「左摘要 / 中纪录 / 右趋势」，可返回四卡总览；
 //   - 自选区间先弹起止日期 Dialog，确认后以实际区间请求；
 //   - 窄窗口改为纵向滚动：范围切换 → 总量与区间 → 2×2 纪录 → 趋势图；
+//   - 统计主体横向填满导航与顶栏之外的主画布，不再套 Hub 的限宽阅读栏；
+//   - 主体下方新增独立的每日码字日历热力图（52/53 周 × 7 天），
+//     与按字数的趋势折线图同时保留；
 //   - 作品 / 章节 / 设备排行与本周速度曲线收进可折叠「详细统计」。
 // 约束：
-//   - 纯展示层：只消费 editorBackendRef 的 Explorer / Dashboard 快照，
-//     不读文件系统、不做统计聚合（纪录、速度、连续天数全在 Core）；
-//     字段缺失显示 "—"，不用 0 冒充。
-//   - 两次异步请求各自用递增 requestId 过滤迟到结果；失败保留上次数据，
+//   - 纯展示层：只消费 editorBackendRef 的 Explorer / Dashboard / 每日日历
+//     快照，不读文件系统、不做统计聚合（每日字数、纪录、速度、连续天数全在
+//     Core）；字段缺失显示 "—"，不用 0 冒充。
+//   - 三次异步请求各自用递增 requestId 过滤迟到结果；失败保留上次数据，
 //     只提示本次读取失败；不在 UI 线程同步读盘（沿用 #935 的 worker 队列）。
 //   - 一级导航由 CreativeHub 桌面外壳负责，本页不造手机式底栏。
 // 历史：
@@ -42,6 +45,13 @@ Rectangle {
     property var explorer: null
     property string statsError: ""
 
+    // ── 每日码字日历请求簿记（Issue #960）：与 Explorer 各自过滤迟到结果 ──
+    property int calendarRequestSerial: 0
+    property int activeCalendarRequestId: 0
+    property var calendar: null
+    property string calendarError: ""
+    readonly property int calendarYear: new Date().getFullYear()
+
     // ── 页面选择状态 ──
     // selectedPeriod：当前选中时段（窄屏范围切换与详情请求都以它为准）；
     // expandedPanel：宽屏展开项（"" 四卡总览、"lifetime" 生涯、其余为 preset）。
@@ -59,7 +69,9 @@ Rectangle {
 
     // ── 布局断点与尺寸（Qt 本地宽度断点，不向 Core 要布局计划） ──
     readonly property bool narrowLayout: width < 840
-    readonly property int detailHeight: Kirigami.Units.gridUnit * 19
+    // 宽屏展开区的最小可读高度；有余量时由 Layout.fillHeight 继续伸展。
+    readonly property int detailMinHeight: Kirigami.Units.gridUnit * 20
+    readonly property int lifetimeCollapsedHeight: Kirigami.Units.gridUnit * 7.5
 
     // ── 派生数据：字段缺失时退化为空，渲染层再决定显示 "—" ──
     readonly property var lifetime: explorer && explorer.lifetime ? explorer.lifetime : null
@@ -171,6 +183,16 @@ Rectangle {
         root.editorBackendRef.request_writing_stats_explorer(root.activeRequestId, preset, customStart, customEnd)
     }
 
+    // 每日日历独立请求：与 Explorer 同一串行队列，但不共用 requestId。
+    function requestCalendar() {
+        if (!root.editorBackendRef) return
+        root.calendarRequestSerial += 1
+        root.activeCalendarRequestId = root.calendarRequestSerial
+        root.calendarError = ""
+        root.editorBackendRef.request_writing_stats_calendar(
+            root.activeCalendarRequestId, root.calendarYear)
+    }
+
     function openPeriod(preset) {
         if (preset === "custom") {
             // 手稿约定：自选卡点开先弹起止日期 Dialog，确认后才以实际区间展开。
@@ -245,8 +267,14 @@ Rectangle {
             .arg(root.formatDate(root.dashboard.range.endDate))
     }
 
-    Component.onCompleted: requestStats()
-    onVisibleChanged: if (visible) requestStats()
+    Component.onCompleted: {
+        requestStats()
+        requestCalendar()
+    }
+    onVisibleChanged: if (visible) {
+        requestStats()
+        requestCalendar()
+    }
 
     // ── 旧 Dashboard 快照 / 新 Explorer 快照，各自按 requestId 过滤迟到结果 ──
     Connections {
@@ -262,6 +290,18 @@ Rectangle {
             if (requestId !== root.activeRequestId) return
             // 保留旧快照数字，只提示本次读取失败；不清空 explorer 冒充 0。
             root.statsError = String(message || qsTr("统计数据读取失败"))
+        }
+
+        function onWriting_stats_calendar_ready(requestId, snapshot) {
+            if (requestId !== root.activeCalendarRequestId) return
+            root.calendar = snapshot
+            root.calendarError = ""
+        }
+
+        function onWriting_stats_calendar_failed(requestId, message) {
+            if (requestId !== root.activeCalendarRequestId) return
+            // 保留上次日历快照，只提示本次读取失败。
+            root.calendarError = String(message || qsTr("日历数据读取失败"))
         }
 
         function onWriting_stats_dashboard_ready(requestId, snapshot) {
@@ -340,6 +380,8 @@ Rectangle {
     HubPageFrame {
         anchors.fill: parent
         dt: root.dt
+        // Issue #960：统计页填满导航与顶栏之外的主画布，不再套限宽阅读栏。
+        useFullContentWidth: true
         headerData: [ HubPageHeader { dt: root.dt; title: qsTr("统计"); subtitle: qsTr("追踪你的写作节奏与习惯") } ]
 
         Flickable {
@@ -347,7 +389,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             contentWidth: width
-            contentHeight: pageColumn.implicitHeight
+            contentHeight: pageColumn.height
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             // Issue #842：桌面鼠标左键不能按住空白处拖页面，保留滚轮/触摸板/滚动条。
@@ -356,6 +398,9 @@ Rectangle {
             ColumnLayout {
                 id: pageColumn
                 width: pageFlick.width
+                // Flickable 不是 Layout，可直接给高度；内容不足时至少铺满视口，
+                // 多余高度交给带 Layout.fillHeight 的主内容块。
+                height: Math.max(implicitHeight, pageFlick.height)
                 spacing: Kirigami.Units.largeSpacing
 
                 // ── 错误条：与正常数据无关，独立显示，不遮住上次快照 ──
@@ -377,6 +422,14 @@ Rectangle {
                 Kirigami.ShadowedRectangle {
                     id: lifetimeBox
                     Layout.fillWidth: true
+                    // 宽屏生涯展开时由 Layout 把余量分给这条主展示区；窄屏保持自然高度滚动。
+                    Layout.fillHeight: !root.narrowLayout && root.expandedPanel === "lifetime"
+                    Layout.minimumHeight: root.expandedPanel === "lifetime"
+                        ? root.detailMinHeight : root.lifetimeCollapsedHeight
+                    Layout.preferredHeight: root.expandedPanel === "lifetime"
+                        ? Math.max(Kirigami.Units.gridUnit * 26, Math.round(pageFlick.height * 0.55))
+                        : Math.max(root.lifetimeCollapsedHeight,
+                                   lifetimeColumn.implicitHeight + Kirigami.Units.largeSpacing * 2)
                     radius: Kirigami.Units.cornerRadius
                     color: Kirigami.Theme.alternateBackgroundColor
                     border.color: root.expandedPanel === "lifetime" ? Kirigami.Theme.highlightColor : Kirigami.Theme.disabledTextColor
@@ -385,9 +438,7 @@ Rectangle {
 
                     ColumnLayout {
                         id: lifetimeColumn
-                        anchors.top: parent.top
-                        anchors.left: parent.left
-                        anchors.right: parent.right
+                        anchors.fill: parent
                         anchors.margins: Kirigami.Units.largeSpacing
                         spacing: Kirigami.Units.largeSpacing
 
@@ -401,13 +452,13 @@ Rectangle {
                                 spacing: Kirigami.Units.largeSpacing
 
                                 Kirigami.Heading {
-                                    level: 2
+                                    level: 1
                                     text: qsTr("生涯")
                                     color: Kirigami.Theme.textColor
                                 }
 
                                 Kirigami.Heading {
-                                    level: 2
+                                    level: 1
                                     text: root.formatNum(root.val(root.lifetime, "totalHumanTypedChars")) + " " + qsTr("字")
                                     color: Kirigami.Theme.highlightColor
                                 }
@@ -462,21 +513,27 @@ Rectangle {
                             }
                         }
 
-                        RowLayout {
+                        // 宽屏「左约 42% 纪录 / 右约 58% 趋势」；窄屏改为单列自然高度。
+                        GridLayout {
                             Layout.fillWidth: true
+                            Layout.fillHeight: !root.narrowLayout && root.expandedPanel === "lifetime"
+                            Layout.minimumHeight: root.narrowLayout ? 0 : root.detailMinHeight
                             visible: root.expandedPanel === "lifetime"
-                            Layout.preferredHeight: visible ? root.detailHeight : 0
-                            spacing: Kirigami.Units.largeSpacing
+                            columns: root.narrowLayout ? 1 : 2
+                            columnSpacing: Kirigami.Units.largeSpacing
+                            rowSpacing: Kirigami.Units.largeSpacing
 
                             StatsRecordPanel {
                                 Layout.fillWidth: true
-                                Layout.fillHeight: true
+                                Layout.fillHeight: !root.narrowLayout
+                                Layout.preferredWidth: 42
                                 records: root.selectedRecords
                             }
 
                             StatsTrendChart {
                                 Layout.fillWidth: true
-                                Layout.fillHeight: true
+                                Layout.fillHeight: !root.narrowLayout
+                                Layout.preferredWidth: 58
                                 trend: root.selectedTrend
                             }
                         }
@@ -486,11 +543,15 @@ Rectangle {
                 // ── 宽屏：四卡横排总览，点一张原位展开三栏（生涯展开在顶部条内）──
                 ColumnLayout {
                     Layout.fillWidth: true
+                    // 宽屏总览/时段展开吃掉视口余量；窄屏按内容自然高度滚动。
+                    Layout.fillHeight: !root.narrowLayout && root.expandedPanel !== "lifetime"
                     visible: !root.narrowLayout && root.expandedPanel !== "lifetime"
                     spacing: Kirigami.Units.largeSpacing
 
                     GridLayout {
                         Layout.fillWidth: true
+                        Layout.fillHeight: root.expandedPanel === ""
+                        Layout.minimumHeight: Kirigami.Units.gridUnit * 16
                         visible: root.expandedPanel === ""
                         columns: 4
                         columnSpacing: Kirigami.Units.largeSpacing
@@ -502,7 +563,8 @@ Rectangle {
                             delegate: StatsPeriodCard {
                                 required property var modelData
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: Kirigami.Units.gridUnit * 10
+                                Layout.fillHeight: true
+                                Layout.preferredHeight: Kirigami.Units.gridUnit * 18
                                 periodSummary: modelData
                                 expanded: false
                                 onClicked: root.openPeriod(modelData.preset)
@@ -512,14 +574,18 @@ Rectangle {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: root.detailHeight
+                        Layout.fillHeight: root.expandedPanel !== ""
+                        Layout.minimumHeight: root.detailMinHeight
+                        Layout.preferredHeight: Math.max(root.detailMinHeight,
+                                                         Math.round(pageFlick.height * 0.48))
                         visible: root.expandedPanel !== ""
                         spacing: Kirigami.Units.largeSpacing
 
                         // 左：当前时段摘要；点它返回四卡总览。
                         StatsPeriodCard {
-                            Layout.preferredWidth: Kirigami.Units.gridUnit * 11
+                            Layout.fillWidth: true
                             Layout.fillHeight: true
+                            Layout.preferredWidth: 24
                             periodSummary: root.selected
                             expanded: true
                             onClicked: root.collapsePanel()
@@ -529,6 +595,7 @@ Rectangle {
                         StatsRecordPanel {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            Layout.preferredWidth: 36
                             records: root.selectedRecords
                         }
 
@@ -536,6 +603,7 @@ Rectangle {
                         StatsTrendChart {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            Layout.preferredWidth: 40
                             trend: root.selectedTrend
                         }
                     }
@@ -605,17 +673,33 @@ Rectangle {
                     }
                 }
 
+                // ── 每日码字日历热力图（#960）：手稿既有生涯/四卡结构之外的独立区域，
+                //    横跨主画布全宽，随主内容纵向滚动；折线趋势图继续保留。
+                StatsCalendarHeatmap {
+                    Layout.fillWidth: true
+                    calendar: root.calendar
+                    errorText: root.calendarError
+                }
+
+                // 窄屏内容不足一屏时，把陪伴条压到画布底部。
+                Item {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: root.narrowLayout
+                    visible: root.narrowLayout
+                }
+
                 // ── 底部陪伴条：口径是自然日历跨度，不是实际写作天数 ──
                 Kirigami.ShadowedRectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Kirigami.Units.gridUnit * 2.6
+                    Layout.preferredHeight: Kirigami.Units.gridUnit * 4
                     radius: Kirigami.Units.cornerRadius
                     color: Kirigami.Theme.alternateBackgroundColor
                     border.color: Kirigami.Theme.disabledTextColor
                     border.width: 1
 
-                    Label {
+                    Kirigami.Heading {
                         anchors.centerIn: parent
+                        level: 3
                         text: qsTr("素笺写作已陪伴您 %1 天").arg(root.formatNum(root.val(root.lifetime, "elapsedCalendarDays")))
                         color: Kirigami.Theme.textColor
                     }
