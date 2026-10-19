@@ -199,6 +199,15 @@ impl SyncBackend {
         }
     }
 
+    pub(crate) fn mark_core_attempt_started(&mut self, operation_id: &str) {
+        if self
+            .with_app_mut(|app| app.mark_sync_core_attempt_started(operation_id))
+            .is_ok()
+        {
+            self.sync_action_completed();
+        }
+    }
+
     /// 异步同步结果的统一处理入口。
     ///
     /// 后台线程的 queued callback 通过 QPointer<SyncBackend> 进入此方法，
@@ -218,6 +227,9 @@ impl SyncBackend {
             .ok()
             .flatten()
             .unwrap_or_else(|| "unknown".to_string());
+        let core_attempt_started = self
+            .with_app(|app| app.sync_core_attempt_started_for_operation_id(&outcome_operation_id))
+            .unwrap_or(false);
         // Issue #754 评论 5816335613: 明确区分成功与 AppBackend 借用失败。
         // 借用失败直接 return，不发任何"已完成"类 signal——
         // StatusOnly 只表示 outcome 已成功进入 AppBackend 并完成处理、但无工作区内容变化，
@@ -243,6 +255,7 @@ impl SyncBackend {
             &outcome_operation_id,
             &outcome_source,
             &outcome_action_result,
+            core_attempt_started,
         );
         if effect == sync_operations::SyncOutcomeEffect::ContentChanged {
             self.sync_content_applied();
@@ -340,7 +353,13 @@ impl SyncBackend {
         }
     }
 
-    fn log_sync_operation_terminal(&self, operation_id: &str, source: &str, action_result: &str) {
+    fn log_sync_operation_terminal(
+        &self,
+        operation_id: &str,
+        source: &str,
+        action_result: &str,
+        core_attempt_started: bool,
+    ) {
         let Ok(state) = serde_json::from_str::<serde_json::Value>(action_result) else {
             return;
         };
@@ -368,19 +387,22 @@ impl SyncBackend {
             .map(mask_sync_error)
             .unwrap_or_default();
 
-        let persisted_report = self
-            .with_app(|app| {
-                app.core_api().map(|api| {
-                    let last_attempt = api
-                        .load_full_sync_state()
-                        .ok()
-                        .flatten()
-                        .and_then(|full_state| full_state.last_attempt_time);
-                    let report = api.load_latest_full_sync_report().ok().flatten();
-                    (last_attempt, report)
+        let persisted_report = core_attempt_started
+            .then(|| {
+                self.with_app(|app| {
+                    app.core_api().map(|api| {
+                        let last_attempt = api
+                            .load_full_sync_state()
+                            .ok()
+                            .flatten()
+                            .and_then(|full_state| full_state.last_attempt_time);
+                        let report = api.load_latest_full_sync_report().ok().flatten();
+                        (last_attempt, report)
+                    })
                 })
+                .ok()
+                .flatten()
             })
-            .ok()
             .flatten();
         let report_failures = persisted_report
             .and_then(|(last_attempt, report)| {
@@ -1056,7 +1078,25 @@ impl AppBackend {
 
     // AppBackend::sync_action_result
     pub(crate) fn sync_operation_state(&self) -> QString {
-        self.current_sync_operation_state.clone().into()
+        let Ok(mut state) =
+            serde_json::from_str::<serde_json::Value>(&self.current_sync_operation_state)
+        else {
+            return self.current_sync_operation_state.clone().into();
+        };
+        let Some(object) = state.as_object_mut() else {
+            return self.current_sync_operation_state.clone().into();
+        };
+        let operation_id = object
+            .get("operation_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        object.insert(
+            "core_attempt_started".to_string(),
+            serde_json::Value::Bool(self.sync_core_attempt_started_for_operation_id(operation_id)),
+        );
+        serde_json::to_string(&state)
+            .unwrap_or_else(|_| self.current_sync_operation_state.clone())
+            .into()
     }
 
     // AppBackend::last_sync_report_json

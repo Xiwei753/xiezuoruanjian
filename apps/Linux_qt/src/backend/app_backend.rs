@@ -388,6 +388,8 @@ pub struct AppBackend {
     current_sync_operation_state: String,
     /// 当前同步操作的唯一 ID（由 Core 分配），用于跟踪操作生命周期
     current_sync_operation_id: String,
+    /// 最近一次真正进入 Core 同步执行的 operation ID；用于区分 Qt 前置失败与 Core 报告。
+    current_sync_core_attempt_operation_id: String,
     /// 当前同步操作类型（如 "full_sync"、"lww_sync"、"git_sync"）
     current_sync_operation_kind: String,
     current_sync_source: String,

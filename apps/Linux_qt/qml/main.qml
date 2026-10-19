@@ -152,7 +152,10 @@ Kirigami.ApplicationWindow {
             editorBackend.flush_recent_edits()
         }
         if (settingsBackend) {
-            settingsBackend.flush_pending_settings_save()
+            if (!settingsBackend.flush_pending_settings_save()) {
+                manualSyncBarrierFailureReason = qsTr("保存应用设置失败")
+                return false
+            }
         }
         return true
     }
@@ -161,6 +164,9 @@ Kirigami.ApplicationWindow {
     // 的操作日志（即使 QML debug 日志关闭也会进入诊断日志），再执行编辑保存屏障，
     // 最后按后端返回的操作 ID 跟踪同一条 sync_operation_state。
     property string manualSyncOperationId: ""
+    // 最近一次手动同步对应的状态 ID（包含后端前置检查失败的请求）。
+    // 只有 manualSyncOperationId 才表示已接受执行，用于顶栏反馈和终态追踪。
+    property string manualSyncDisplayOperationId: ""
     property string manualSyncRequestId: ""
     property string manualSyncSource: ""
     property string manualSyncFeedbackText: ""
@@ -284,14 +290,18 @@ Kirigami.ApplicationWindow {
         }
     }
 
-    function showManualSyncNotStarted(message, event) {
+    function showManualSyncNotStarted(message, event, operationId) {
         manualSyncOperationId = ""
+        manualSyncDisplayOperationId = isManualSyncOperationId(operationId) ? operationId : ""
         manualSyncFeedbackText = qsTr("同步未开始：%1").arg(message)
         manualSyncFeedbackIsError = true
         manualSyncFeedbackVisible = true
+        var trackedOperationId = isManualSyncOperationId(operationId) ? operationId : ""
         logManualSyncEvent(event,
-            "source=" + manualSyncSource + " request_id=" + manualSyncRequestId)
-        return ""
+            "source=" + manualSyncSource
+                + " request_id=" + manualSyncRequestId
+                + " operation_id=" + trackedOperationId)
+        return manualSyncDisplayOperationId
     }
 
     function requestManualSync(source) {
@@ -299,6 +309,7 @@ Kirigami.ApplicationWindow {
         manualSyncSource = validSources.indexOf(source) >= 0 ? source : "unknown"
         manualSyncRequestSerial += 1
         manualSyncOperationId = ""
+        manualSyncDisplayOperationId = ""
         manualSyncRequestId = ""
         manualSyncLastLoggedTerminalStatus = ""
         manualSyncFeedbackText = qsTr("正在准备同步…")
@@ -368,6 +379,42 @@ Kirigami.ApplicationWindow {
                           || callError.message || errorCode)
                 : qsTr("后端未返回有效的同步操作编号")
             return showManualSyncNotStarted(reason, "manual_sync_backend_call_failed")
+        }
+
+        manualSyncDisplayOperationId = manualSyncOperationId
+
+        // perform_sync 会为前置校验失败也返回 operation_id。只有同一 ID 的
+        // 状态确认为 Core 未启动、且当前没有排队/运行中的手动同步时，才将它
+        // 反馈为“同步未开始”；不能把旧状态或其它操作的 busy 标记套到本次请求。
+        var operationStateMatchesRequest = state && state.operation_kind === "sync"
+            && state.operation_id === manualSyncOperationId
+        var thisAttemptStarted = operationStateMatchesRequest
+            && state.core_attempt_started === true
+        var syncIsInProgress = Boolean(syncBackend.sync_in_progress)
+        var manualSyncIsPending = Boolean(syncBackend.manual_sync_pending)
+        var thisAttemptIsQueued = operationStateMatchesRequest
+            && (state.status_code === "syncing" || manualSyncIsPending)
+        if (operationStateMatchesRequest && state.status_code === "error"
+                && state.core_attempt_started === false
+                && !syncIsInProgress && !manualSyncIsPending) {
+            var summary = manualSyncMessageForKey(state.summary_key)
+            var rawError = state.raw_error ? String(state.raw_error) : ""
+            var preflightReason = rawError && summary
+                ? summary + "：" + rawError
+                : (rawError || summary || qsTr("同步前置检查失败"))
+            manualSyncOperationId = ""
+            return showManualSyncNotStarted(
+                preflightReason, "manual_sync_preflight_failed", manualSyncDisplayOperationId)
+        }
+        if (!operationStateMatchesRequest
+                || (!thisAttemptStarted && !thisAttemptIsQueued && !syncIsInProgress)) {
+            var unconfirmedReason = operationStateMatchesRequest
+                ? (state.raw_error || manualSyncMessageForKey(state.summary_key)
+                    || qsTr("未能确认本次同步已启动或排队"))
+                : qsTr("未能确认本次同步状态")
+            return showManualSyncNotStarted(
+                unconfirmedReason, "manual_sync_state_unconfirmed",
+                operationStateMatchesRequest ? manualSyncDisplayOperationId : "")
         }
 
         logManualSyncEvent("manual_sync_accepted",

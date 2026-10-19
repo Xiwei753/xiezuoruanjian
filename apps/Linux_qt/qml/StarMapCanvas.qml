@@ -108,18 +108,8 @@ Item {
     property var cameraStack: ({})
     // childRouteKey -> 进入上下文（父/子比例、入口世界几何），退场反推父镜头用。
     property var entryContexts: ({})
-    // 本次连续缩放瞄准的入口（routeKey/instanceId）。只比较这个入口，
-    // 不会因为鼠标停在别处缩放而进入别的子图。
+    // 最近一次鼠标命中的入口（routeKey/instanceId），用于记录实际 scene_enter。
     property string _zoomEntryKey: ""
-    // 一次 zoomAt 固定使用它开始时的 route 与指针入口；切换画布后旧事件
-    // 不能把父画布剩余目标当成对子画布新入口的选择。
-    property int _zoomInputGeneration: 0
-    property int _lastLayerSwitchInputGeneration: -1
-    property int _lastRejectedEntryInputGeneration: -1
-    property int _lastIgnoredEntryInputGeneration: -1
-    property string _zoomInputRouteKey: ""
-    property string _zoomInputEntryKey: ""
-    property string _zoomInputEntryId: ""
     // 捏合穿越补偿：Router 的捏合是"捏合开始 zoom × 累计比例"的绝对值，
     // 画布切换后把这一次绝对值换算成新画布上的连续比例。
     property real _pinchSwitchBaseZoom: -1
@@ -325,28 +315,6 @@ Item {
     // 只由缩放补间写的显示帧值；变化时推进显示镜头。
     property real zoomTweenValue: 1.0
 
-    // 每轮真实放大输入只瞄准输入开始时命中的入口和 route。
-    function captureZoomInput(screenX, screenY) {
-        _zoomInputGeneration++
-        _zoomInputRouteKey = routeKey
-        _zoomInputEntryKey = ""
-        _zoomInputEntryId = ""
-        _zoomEntryKey = ""
-        _lastRejectedEntryInputGeneration = -1
-        _lastIgnoredEntryInputGeneration = -1
-        var scene = activeScene()
-        if (!scene || !scene.ready)
-            return
-        var target = scene.embedAtWorld(screenToWorldX(screenX), screenToWorldY(screenY))
-        if (!target)
-            return
-        _zoomInputEntryId = target.instanceId || ""
-        if (_zoomInputEntryId !== "") {
-            _zoomInputEntryKey = _zoomInputRouteKey + "/" + _zoomInputEntryId
-            _zoomEntryKey = _zoomInputEntryKey
-        }
-    }
-
     // 唯一缩放入口：滚轮、捏合、+/- 按钮都走这里，只改当前活动画布的镜头。
     // Issue #949：这里只记"累计目标 + 屏幕锚点"，显示镜头由单一补间从**正在
     // 显示的**帧连续插值；随后按"指针瞄准的入口"评估画布穿越，
@@ -376,7 +344,6 @@ Item {
             stopZoomTween()
             return
         }
-        captureZoomInput(screenX, screenY)
         if (viewportMotion.active) {
             // 演出进行中（滚轮）：不能冻结整个 longDuration —— 继续改这台可见
             // 相机：把新目标按"当前显示帧 + 本次鼠标屏幕锚点"算出来，沿同一条
@@ -857,71 +824,23 @@ Item {
         return threshold > 0 ? px / threshold : 0
     }
 
-    function entryDecisionFields(candidate, projectedPx, reason) {
-        return {
-            "reason": reason || "",
-            "trigger": "zoom",
-            "zoomInputGeneration": _zoomInputGeneration,
-            "zoomInputRouteKey": _zoomInputRouteKey,
-            "zoomInputEntryKey": _zoomInputEntryKey,
-            "zoomInputEntryId": _zoomInputEntryId,
-            "routeKey": routeKey,
-            "zoomEntryKey": _zoomEntryKey,
-            "candidateInstanceId": candidate ? (candidate.instanceId || "") : "",
-            "viewportWidth": width,
-            "viewportHeight": height,
-            "projectedDiameterPx": projectedPx,
-            "enterDiameterPx": enterDiameterPx(),
-            "entryScale": entryScaleForDiameter(projectedPx),
-            "enterRatio": _enterRatio
-        }
-    }
-
-    function logEntryDecision(event, reason, candidate, projectedPx) {
-        var marker = event === "scene_enter_ignored"
-                ? _lastIgnoredEntryInputGeneration : _lastRejectedEntryInputGeneration
-        if (marker === _zoomInputGeneration)
-            return
-        if (event === "scene_enter_ignored")
-            _lastIgnoredEntryInputGeneration = _zoomInputGeneration
-        else
-            _lastRejectedEntryInputGeneration = _zoomInputGeneration
-        logInteraction(event, "embed", candidate ? candidate.instanceId : "",
-                       entryDecisionFields(candidate, projectedPx, reason))
-    }
-
-    // 缩放后：只比较 zoomAt 开始时指针瞄准的入口。一个输入最多切换一次层级。
+    // 缩放后：只比较当前活动画布上鼠标锚点命中的入口。
     function maybeEnterEmbedAt(screenX, screenY) {
         var scene = activeScene()
-        var emb = scene && scene.ready
-                ? scene.embedAtWorld(screenToWorldX(screenX), screenToWorldY(screenY)) : null
-        var projectedPx = emb ? Math.min(emb.width, emb.height) * zoomLevel : 0
-        if (_lastLayerSwitchInputGeneration === _zoomInputGeneration) {
-            logEntryDecision("scene_enter_ignored", "same_zoom_input_already_switched",
-                             emb, projectedPx)
+        if (!scene || !scene.ready) {
+            _zoomEntryKey = ""
             return -1
         }
-        if (_zoomInputGeneration <= 0 || _zoomInputRouteKey !== routeKey) {
-            logEntryDecision("scene_enter_rejected", "zoom_input_route_mismatch", emb,
-                             projectedPx)
+        var emb = scene.embedAtWorld(screenToWorldX(screenX), screenToWorldY(screenY))
+        if (!emb) {
+            _zoomEntryKey = ""
             return -1
         }
-        if (_zoomInputEntryId === "") {
-            logEntryDecision("scene_enter_rejected", "no_embed_at_zoom_input", emb,
-                             projectedPx)
-            return -1
-        }
-        if (!emb || emb.instanceId !== _zoomInputEntryId) {
-            logEntryDecision("scene_enter_rejected", "pointer_target_changed", emb,
-                             projectedPx)
-            return -1
-        }
+        _zoomEntryKey = routeKey + "/" + emb.instanceId
+        var projectedPx = Math.min(emb.width, emb.height) * zoomLevel
         if (entryScaleForDiameter(projectedPx) < _enterRatio) {
-            logEntryDecision("scene_enter_rejected", "below_entry_threshold", emb,
-                             projectedPx)
             return -1
         }
-        _lastLayerSwitchInputGeneration = _zoomInputGeneration
         return enterEmbedViaCore(emb.instanceId, "zoom")
     }
 
@@ -937,13 +856,10 @@ Item {
         var virtualParentZoom = zoomLevel / ctx.ratio
         var coverageNow = entryScaleForDiameter(ctx.embedDiameter * virtualParentZoom)
         var entryCoverage = ctx.entryCoverage > 0 ? ctx.entryCoverage : _exitRatio
-        if (_lastLayerSwitchInputGeneration === _zoomInputGeneration)
-            return -1
         if (coverageNow >= entryCoverage)
             return -1
         if (coverageNow > Math.min(_exitRatio, entryCoverage))
             return -1
-        _lastLayerSwitchInputGeneration = _zoomInputGeneration
         return exitCanvasViaCore(true)
     }
 
@@ -1003,13 +919,7 @@ Item {
                     + ((res && res.errorCode) ? " (" + res.errorCode + ")" : "")
             logInteraction("scene_enter_failed", "embed", instanceId, {
                 "trigger": trigger || "",
-                "errorCode": (res && res.errorCode) ? res.errorCode : "",
-                "viewportWidth": width,
-                "viewportHeight": height,
-                "projectedDiameterPx": projectedDiameterPx,
-                "enterDiameterPx": enterThresholdPx,
-                "entryScale": entryScale,
-                "enterRatio": _enterRatio
+                "errorCode": (res && res.errorCode) ? res.errorCode : ""
             })
             return -1
         }
@@ -1067,10 +977,7 @@ Item {
             "viewportWidth": width,
             "viewportHeight": height,
             "projectedDiameterPx": projectedDiameterPx,
-            "enterDiameterPx": enterThresholdPx,
-            "entryScale": entryScale,
-            "enterRatio": _enterRatio,
-            "parentRouteKey": routeKeyOf(parentRoute)
+            "enterDiameterPx": enterThresholdPx
         })
         visualFocusChanged()
         return childCamera.zoom
