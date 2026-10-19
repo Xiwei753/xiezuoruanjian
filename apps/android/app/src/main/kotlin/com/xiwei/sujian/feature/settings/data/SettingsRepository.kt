@@ -11,6 +11,7 @@ import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.IOException
 
 /**
  * SettingsRepository — 设置仓库层
@@ -67,6 +68,21 @@ class SettingsRepository(
      * 供设置页"关于"分类展示，调用方无需自己持有 [android.content.Context]。
      */
     fun dataRootPath(): String = AndroidPrivateDataRoot.root(appContext).absolutePath
+
+    /**
+     * #958：读取随 APK 打包的内置校对模型第三方来源声明与许可全文。
+     * 文本由构建任务复制到 assets/correction/，读取失败时记录警告并跳过。
+     */
+    fun bundledCorrectionNoticesText(): String {
+        return BUNDLED_CORRECTION_NOTICE_ASSETS.joinToString("\n\n") { assetPath ->
+            try {
+                appContext.assets.open(assetPath).bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } catch (e: IOException) {
+                warn("Failed to read bundled correction notice $assetPath: ${e.message}")
+                ""
+            }
+        }
+    }
 
     fun consumeWarning(): String? {
         val w = lastWarning
@@ -210,5 +226,14 @@ class SettingsRepository(
 
     fun dismissMigrationWarning() {
         settingsBridge.dismissMigrationWarning()
+    }
+
+    private companion object {
+        /** #958：随包分发的第三方来源声明与许可全文在 APK assets 中的路径。 */
+        val BUNDLED_CORRECTION_NOTICE_ASSETS =
+            listOf(
+                "correction/THIRD_PARTY_MODEL_NOTICES.md",
+                "correction/BLOOM-RAIL-1.0.txt",
+            )
     }
 }

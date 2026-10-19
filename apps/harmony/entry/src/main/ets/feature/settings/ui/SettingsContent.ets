@@ -29,6 +29,8 @@ import { SyncOperationController } from '../presentation/SyncOperationController
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { SyncConflictViewModel } from '../presentation/SyncConflictViewModel'
 import { createSyncConflictsPanelContent, SyncConflictsPanelArgs } from './SyncConflictsPanel'
+// Issue #958：内置模型第三方资源（来源声明 + 许可全文）面板工厂。
+import { createThirdPartyNoticesPanelContent, ThirdPartyNoticesPanelArgs } from './ThirdPartyNoticesPanel'
 // Issue #932：窄屏页面状态（加载中 / 出错重试 / 空）复用公共组件。
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 
@@ -103,6 +105,8 @@ export struct SettingsContent {
   private syncStateBridge: NativeSyncBridge = new NativeSyncBridge(new NativeCoreModule())
   // Issue #926：冲突面板（窗口层级对话框）句柄。
   private conflictsPanelContent: ComponentContent<SyncConflictsPanelArgs> | null = null
+  // Issue #958：内置模型第三方资源面板（窗口层级对话框）句柄。
+  private thirdPartyNoticesPanelContent: ComponentContent<ThirdPartyNoticesPanelArgs> | null = null
   // Issue #926：入口计数探针——同步结果带冲突时从 Core 全局列表取剩余冲突数，
   // 与面板同一数据源，保证"N 处"和面板列表一致。
   private conflictProbe: SyncConflictViewModel = new SyncConflictViewModel()
@@ -546,6 +550,46 @@ export struct SettingsContent {
       return
     }
     this.conflictsPanelContent = null
+    content.dispose()
+  }
+
+  // Issue #958：打开内置模型第三方资源面板（来源声明 + 许可全文，纯本地 rawfile 文本）。
+  private openThirdPartyNoticesPanel(): void {
+    if (this.thirdPartyNoticesPanelContent !== null) {
+      return
+    }
+    const uiContext = this.getUIContext()
+    const args: ThirdPartyNoticesPanelArgs = {
+      onRequestClose: () => { this.closeThirdPartyNoticesPanel() }
+    }
+    const content = createThirdPartyNoticesPanelContent(uiContext, args)
+    this.thirdPartyNoticesPanelContent = content
+    uiContext.getPromptAction().openCustomDialog(content, {
+      alignment: DialogAlignment.Center,
+      maskColor: '#80000000',
+      autoCancel: true,
+      onDidDisappear: () => { this.releaseThirdPartyNoticesPanel(content) }
+    }).catch((e: Error) => {
+      this.releaseThirdPartyNoticesPanel(content)
+      hilog.error(DOMAIN, TAG, 'openThirdPartyNoticesPanel failed: %{public}s', String(e))
+    })
+  }
+
+  private closeThirdPartyNoticesPanel(): void {
+    if (this.thirdPartyNoticesPanelContent === null) {
+      return
+    }
+    const content = this.thirdPartyNoticesPanelContent
+    this.getUIContext().getPromptAction().closeCustomDialog(content).catch((e: Error) => {
+      hilog.error(DOMAIN, TAG, 'closeThirdPartyNoticesPanel failed: %{public}s', String(e))
+    })
+  }
+
+  private releaseThirdPartyNoticesPanel(content: ComponentContent<ThirdPartyNoticesPanelArgs>): void {
+    if (this.thirdPartyNoticesPanelContent !== content) {
+      return
+    }
+    this.thirdPartyNoticesPanelContent = null
     content.dispose()
   }
 
@@ -1450,6 +1494,15 @@ export struct SettingsContent {
           .layoutWeight(1)
         Text($r('app.string.about_license'))
           .fontSize(14)
+      }
+      .width('100%')
+      .margin({ bottom: 8 })
+
+      // Issue #958：内置模型的第三方来源声明与完整许可（随包分发的文本）。
+      Column() {
+        this.SettingsNeutralAction($r('app.string.about_third_party_resources'), () => {
+          this.openThirdPartyNoticesPanel()
+        })
       }
       .width('100%')
       .margin({ bottom: 8 })

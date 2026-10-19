@@ -59,6 +59,8 @@ apps/harmony/package-lock.json
 packaging/correction/bundled/
 apps/harmony/entry/src/main/resources/rawfile/people2014corpus_chars.klm
 apps/harmony/entry/src/main/resources/rawfile/.people2014corpus_chars.klm.*
+apps/harmony/entry/src/main/resources/rawfile/THIRD_PARTY_MODEL_NOTICES.md
+apps/harmony/entry/src/main/resources/rawfile/BLOOM-RAIL-1.0.txt
 
 # IDE / OS
 .idea/
