@@ -161,65 +161,103 @@ impl StatsStore {
 
         let mut written = 0usize;
         for (date, events) in by_date {
-            let fresh = self.take_fresh_events(&origin, &date, events)?;
-            if fresh.is_empty() {
-                continue;
+            match self.append_confirmed_events(&origin, &date, events) {
+                Ok(count) => written += count,
+                Err(error) => {
+                    // 写入失败后丢弃该日期的 ID 缓存：重试时以磁盘真值重新判重，
+                    // 不能把「调用过写入」当成「持久化完成」而漏字。
+                    self.invalidate_written_ids(&origin, &date);
+                    return Err(error);
+                }
             }
-            self.append_events_to_file(&origin, &date, &fresh)?;
-            written += fresh.len();
         }
         Ok(written)
     }
 
-    /// 过滤掉本机分区里已经写入过的 `event_id`，并为本次写入占位。
-    fn take_fresh_events(
+    /// 追加一批新事件，并在**写入确认后**才登记 `event_id`。
+    ///
+    /// 筛选只读、不改缓存；整批序列化后一次写盘，成功后统一登记 ID。
+    /// 失败时调用方丢弃该日期缓存，让重试从磁盘真值重新判重，
+    /// `event_id` 不变且重试不会重复计数。
+    fn append_confirmed_events(
+        &self,
+        origin: &str,
+        date: &str,
+        events: Vec<WritingInputEvent>,
+    ) -> Result<usize> {
+        let fresh = self.select_fresh_events(origin, date, events)?;
+        if fresh.is_empty() {
+            return Ok(0);
+        }
+        let mut buffer = String::new();
+        for event in &fresh {
+            buffer.push_str(&serde_json::to_string(event)?);
+            buffer.push('\n');
+        }
+        {
+            let file_path = self.event_file_path(origin, date);
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file_path)?;
+            file.write_all(buffer.as_bytes())?;
+        }
+
+        let mut cache = self.lock_written_ids();
+        let ids = cache
+            .entry(format!("{origin}/{date}"))
+            .or_insert_with(HashSet::new);
+        for event in &fresh {
+            if !event.event_id.is_empty() {
+                ids.insert(event.event_id.clone());
+            }
+        }
+        Ok(fresh.len())
+    }
+
+    /// 只读筛选本机分区里尚未写入过的 `event_id`（含本批次内部重复）。
+    fn select_fresh_events(
         &self,
         origin: &str,
         date: &str,
         events: Vec<WritingInputEvent>,
     ) -> Result<Vec<WritingInputEvent>> {
-        let mut cache = self
-            .written_ids
-            .lock()
-            .map_err(|_| crate::Error::Other("stats event id cache poisoned".into()))?;
+        let mut cache = self.lock_written_ids();
         let cache_key = format!("{origin}/{date}");
         if !cache.contains_key(&cache_key) {
             let ids = self.scan_event_ids(origin, date)?;
             cache.insert(cache_key.clone(), ids);
         }
-        let Some(ids) = cache.get_mut(&cache_key) else {
-            return Err(crate::Error::Other("stats event id cache poisoned".into()));
+        let Some(ids) = cache.get(&cache_key) else {
+            return Ok(Vec::new());
         };
 
+        let mut batch_ids: HashSet<String> = HashSet::new();
         let mut fresh = Vec::new();
         for event in events {
-            if !event.event_id.is_empty() && ids.contains(&event.event_id) {
-                continue;
-            }
             if !event.event_id.is_empty() {
-                ids.insert(event.event_id.clone());
+                if ids.contains(&event.event_id) || batch_ids.contains(&event.event_id) {
+                    continue;
+                }
+                batch_ids.insert(event.event_id.clone());
             }
             fresh.push(event);
         }
         Ok(fresh)
     }
 
-    /// 把新事件追加到本机来源分区的当日文件。
-    fn append_events_to_file(
-        &self,
-        origin: &str,
-        date: &str,
-        events: &[WritingInputEvent],
-    ) -> Result<()> {
-        let file_path = self.event_file_path(origin, date);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)?;
-        for event in events {
-            writeln!(file, "{}", serde_json::to_string(event)?)?;
-        }
-        Ok(())
+    /// 丢弃某个 `origin/date` 的 ID 缓存，让下一次写入以磁盘真值重建。
+    fn invalidate_written_ids(&self, origin: &str, date: &str) {
+        let mut cache = self.lock_written_ids();
+        cache.remove(&format!("{origin}/{date}"));
+    }
+
+    /// 事件 ID 缓存只是幂等去重的加速器，磁盘始终是事实源：
+    /// 锁中毒时接管内部数据，不让缓存状态阻塞写入。
+    fn lock_written_ids(&self) -> std::sync::MutexGuard<'_, HashMap<String, HashSet<String>>> {
+        self.written_ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// 追加单个事件。
@@ -343,18 +381,13 @@ impl StatsStore {
         Ok(events)
     }
 
-    /// 合并多个分区的事件并按 `event_id` 去重：本机分区排在最前，跨分区重复
-    /// 保留先出现的事件，并把冲突事实写入诊断日志。
+    /// 合并多个分区的事件并按 `event_id` 去重。
+    ///
+    /// 选择顺序与本机身份无关（来源设备 ID、UTC 日期），两台设备拿到相同
+    /// 文件集合时对同 ID 冲突会保留同一条事实，聚合结果一致。跨分区重复
+    /// 写一次性冲突诊断，不在每次读取时重复追加。
     fn load_merged_files(&self, mut files: Vec<EventFile>) -> Result<Vec<WritingInputEvent>> {
-        let local_origin = self.load_origin_device_id();
-        files.sort_by(|a, b| {
-            let a_local = local_origin.as_deref() == Some(a.origin.as_str());
-            let b_local = local_origin.as_deref() == Some(b.origin.as_str());
-            b_local
-                .cmp(&a_local)
-                .then_with(|| a.origin.cmp(&b.origin))
-                .then_with(|| a.date.cmp(&b.date))
-        });
+        files.sort_by(|a, b| a.origin.cmp(&b.origin).then_with(|| a.date.cmp(&b.date)));
 
         let mut merged = MergeAccumulator::default();
         for file in &files {
@@ -370,6 +403,9 @@ impl StatsStore {
     }
 
     /// 把跨分区重复 `event_id` 的结构化事实追加到本机诊断日志（best-effort）。
+    ///
+    /// 先读出日志里已记录过的 `event_id`，同一次冲突只写一次，避免统计查询
+    /// 越频繁日志越大。
     fn append_conflicts(&self, conflicts: &[EventIdConflict]) -> Result<()> {
         if conflicts.is_empty() {
             return Ok(());
@@ -377,10 +413,24 @@ impl StatsStore {
         let dir = self.app_data_root.join("app-meta/stats");
         fs::create_dir_all(&dir)?;
         let path = dir.join("event_conflicts.local.jsonl");
-        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let logged = load_logged_conflict_ids(&path)?;
+
+        let mut batch_seen: HashSet<&str> = HashSet::new();
+        let mut pending = String::new();
         for conflict in conflicts {
-            writeln!(file, "{}", serde_json::to_string(conflict)?)?;
+            let event_id = conflict.event_id.as_str();
+            if event_id.is_empty() || logged.contains(event_id) || !batch_seen.insert(event_id) {
+                continue;
+            }
+            pending.push_str(&serde_json::to_string(conflict)?);
+            pending.push('\n');
         }
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        file.write_all(pending.as_bytes())?;
         Ok(())
     }
 
@@ -501,6 +551,34 @@ fn list_origin_event_files(root: &Path, origin: &str) -> Result<Vec<EventFile>> 
 /// 设备标识必须是单个安全路径 segment。
 fn validate_device_segment(id: &str) -> bool {
     !id.is_empty() && id != "." && id != ".." && !id.contains('/') && !id.contains('\\')
+}
+
+/// 读出冲突诊断日志里已经记录过的 `event_id`（best-effort，坏行跳过）。
+fn load_logged_conflict_ids(path: &Path) -> Result<HashSet<String>> {
+    let mut ids = HashSet::new();
+    if !path.is_file() {
+        return Ok(ids);
+    }
+    let handle = File::open(path)?;
+    for line in BufReader::new(handle).lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        let Some(id) = value.get("event_id").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if !id.is_empty() {
+            ids.insert(id.to_string());
+        }
+    }
+    Ok(ids)
 }
 
 #[cfg(test)]
@@ -666,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cross_partition_dedup_keeps_local_and_logs_conflict() {
+    fn test_cross_partition_dedup_uses_deterministic_order_and_logs_conflict_once() {
         let (tmp, store) = create_mock_store();
         let dir = tmp.path().join("stats/events");
         let date = "2024-05-01";
@@ -675,6 +753,7 @@ mod tests {
         remote_event.event_id = "shared-event".to_string();
         remote_event.timestamp_ms = 1_714_550_400_000;
         remote_event.local_date = String::new();
+        remote_event.device_id = "device-remote".to_string();
         remote_event.inserted_chars = 30;
 
         let mut local_event = remote_event.clone();
@@ -698,9 +777,14 @@ mod tests {
 
         let events = store.load_events_for_date(date).unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].inserted_chars, 20);
-        assert_eq!(events[0].device_id, "device_1");
+        // 与本机身份无关的确定性顺序：origin 字典序在前的分区胜出。
+        // "device-remote" < "device_1"，两台设备读到同一份同步输入必得同一结果。
+        assert_eq!(events[0].inserted_chars, 30);
+        assert_eq!(events[0].device_id, "device-remote");
 
+        // 同一冲突只在首次发现时写一次诊断日志，重复读取不追加。
+        let again = store.load_events_for_date(date).unwrap();
+        assert_eq!(again.len(), 1);
         let log = fs::read_to_string(
             tmp.path()
                 .join("app-meta/stats/event_conflicts.local.jsonl"),
@@ -708,6 +792,30 @@ mod tests {
         .unwrap();
         assert!(log.contains("shared-event"));
         assert!(log.contains("device-remote"));
+        assert_eq!(log.lines().count(), 1);
+    }
+
+    #[test]
+    fn test_write_failure_does_not_mark_event_written_so_retry_persists() {
+        let (tmp, store) = create_mock_store();
+        let mut event = create_mock_event();
+        event.event_id = "retry-event".to_string();
+        let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
+        let partition = tmp.path().join("stats/events/device_1");
+        fs::create_dir_all(&partition).unwrap();
+        // 在目标文件路径上放一个目录，强制追加打开失败。
+        let blocked_path = partition.join(format!("{date}.events.jsonl"));
+        fs::create_dir_all(&blocked_path).unwrap();
+
+        assert!(store.record_event(event.clone()).is_err());
+
+        // 障碍移除后原样重发：必须真正落盘，且不重复计数。
+        fs::remove_dir(&blocked_path).unwrap();
+        store.record_event(event.clone()).unwrap();
+        store.record_event(event).unwrap();
+        let events = store.load_events_for_date(&date).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "retry-event");
     }
 
     #[test]

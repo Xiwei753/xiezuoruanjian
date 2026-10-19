@@ -843,10 +843,15 @@ function decodeWritingStatsHeatmapDay(data: Object): DecodeResult<WritingStatsHe
   if (intensity === null || intensity < 0 || intensity > 4) {
     return err<WritingStatsHeatmapDay>('day.intensity missing or outside 0..4')
   }
+  const status: string | null = reqStr(data, 'status')
+  if (status === null || (status !== 'known' && status !== 'unknown' && status !== 'future')) {
+    return err<WritingStatsHeatmapDay>('day.status missing or invalid')
+  }
   return ok<WritingStatsHeatmapDay>({
     date: date,
     humanTypedChars: humanTypedChars,
-    intensity: intensity
+    intensity: intensity,
+    status: status
   })
 }
 
@@ -860,6 +865,8 @@ export function decodeWritingStatsHeatmap(data: Object): DecodeResult<WritingSta
   if (startDate === null) { return err<WritingStatsHeatmap>('startDate missing or not string') }
   const endDate: string | null = reqStr(data, 'endDate')
   if (endDate === null) { return err<WritingStatsHeatmap>('endDate missing or not string') }
+  const historyScope: string | null = reqStr(data, 'historyScope')
+  if (historyScope === null) { return err<WritingStatsHeatmap>('historyScope missing or not string') }
   const daysArr: Array<Object> | null = reqArray(data, 'days')
   if (daysArr === null) { return err<WritingStatsHeatmap>('days missing or not array') }
   const daysR: DecodeResult<WritingStatsHeatmapDay[]> =
@@ -869,6 +876,7 @@ export function decodeWritingStatsHeatmap(data: Object): DecodeResult<WritingSta
     year: year,
     startDate: startDate,
     endDate: endDate,
+    historyScope: historyScope,
     days: daysR.value
   })
 }

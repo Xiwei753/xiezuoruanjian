@@ -3,9 +3,11 @@
  *
  * 用 Core 的逐日人工输入真值快照静态绘制一年：
  * - 横向按连续自然周排列，纵向固定七行（周一 → 周日）；
- * - 每格是一个真实公历日，未来日期更浅且不可点击，与真实「0 字」区分；
+ * - 每格是一个真实公历日：未来日期更浅且不可点击；覆盖未知（数据不完整）
+ *   的日期画空心格，与已确认的真实「0 字」区分；
  * - 颜色强度 0–4 由 Core 统一分级，这里只做主题色映射（不硬编码绿色）；
- * - 点按某日显示本地日期与当天人工输入字数；不依赖悬停，手机触屏可用。
+ * - 点按某日显示本地日期与当天人工输入字数；不覆盖未知的日期显示为
+ *   数据不完整，不依赖悬停，手机触屏可用。
  *
  * 只做静态绘制：不用定时器、不逐帧刷新；宽度变化由声明式布局自然重排，
  * 外部输入更新不会导致整页重绘。
@@ -20,6 +22,8 @@ interface HeatmapCell {
   date: string;
   chars: number;
   intensity: number;
+  /** Core 覆盖状态：known / unknown / future；空位为空串。 */
+  status: string;
   future: boolean;
   inYear: boolean;
 }
@@ -34,6 +38,7 @@ interface HeatmapWeek {
 interface HeatmapCellStyle {
   color: ResourceColor;
   opacity: number;
+  borderWidth: number;
 }
 
 /** 横向滚动初始定位到最新周的滚动器。 */
@@ -49,13 +54,14 @@ const EMPTY_HEATMAP: WritingStatsHeatmap = {
   year: HEATMAP_MAX_YEAR,
   startDate: '',
   endDate: '',
+  historyScope: 'localEvents',
   days: [],
 };
 
 @Component
 export struct WritingStatsCalendarHeatmap {
   /** Core 每日真值快照（同一年 365/366 项，日期升序）。 */
-  @Prop heatmap: WritingStatsHeatmap = EMPTY_HEATMAP;
+  @Prop @Watch('onHeatmapChanged') heatmap: WritingStatsHeatmap = EMPTY_HEATMAP;
   /** 窄屏约 10–13vp；宽屏可略大。 */
   @Prop cellSizeVp: number = 12;
   /** 年份切换回调：由统计页统一重新查询该年快照。 */
@@ -63,7 +69,6 @@ export struct WritingStatsCalendarHeatmap {
   /** 日格选择回调：用于统计页需要感知选中日期的场景。 */
   onSelectDay: (date: string, chars: number) => void = (date: string, chars: number) => {};
   @State private selectedDate: string = '';
-  @State private selectedChars: number = 0;
   private scroller: Scroller = new Scroller();
 
   build() {
@@ -107,14 +112,46 @@ export struct WritingStatsCalendarHeatmap {
 
   @Builder
   private SelectedDayRow() {
-    Text(
-      this.selectedDate !== ''
-        ? `${this.selectedDate} · ${formatInt(this.selectedChars)} 字`
-        : '点按方格查看当天人工输入字数'
-    )
+    Text(this.selectedDayText())
       .fontSize(12)
       .fontColor(this.selectedDate !== '' ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
       .margin({ bottom: 8 })
+  }
+
+  /** 选中日期的实时字数：每次渲染从当前快照查找，外部同步刷新后立即反映。 */
+  private selectedDayText(): string {
+    if (this.selectedDate === '') {
+      return '点按方格查看当天人工输入字数';
+    }
+    const day = this.selectedDay();
+    if (day === null) {
+      return this.selectedDate;
+    }
+    if (day.status === 'unknown') {
+      // 覆盖不完整：不能把缺失当没写作。
+      return `${day.date} · 数据不完整`;
+    }
+    if (day.status === 'future') {
+      return `${day.date} · 未到`;
+    }
+    return `${day.date} · ${formatInt(day.humanTypedChars)} 字`;
+  }
+
+  /** 当前快照中选中日期对应的记录；不在该年快照中时返回 null。 */
+  private selectedDay(): WritingStatsHeatmapDay | null {
+    for (const day of this.heatmap.days) {
+      if (day.date === this.selectedDate) {
+        return day;
+      }
+    }
+    return null;
+  }
+
+  /** 快照换年或刷新后，选中日期已不在当前年份时清掉选中。 */
+  private onHeatmapChanged(): void {
+    if (this.selectedDate !== '' && this.selectedDay() === null) {
+      this.selectedDate = '';
+    }
   }
 
   @Builder
@@ -169,6 +206,8 @@ export struct WritingStatsCalendarHeatmap {
             .borderRadius(HEATMAP_CELL_RADIUS_VP)
             .backgroundColor(this.cellStyle(cell).color)
             .opacity(this.cellStyle(cell).opacity)
+            .borderWidth(this.cellStyle(cell).borderWidth)
+            .borderColor($r('sys.color.comp_divider'))
             .margin({ bottom: HEATMAP_CELL_GAP_VP })
             .onClick(() => this.selectCell(cell))
         } else {
@@ -224,7 +263,6 @@ export struct WritingStatsCalendarHeatmap {
       return;
     }
     this.selectedDate = '';
-    this.selectedChars = 0;
     this.onChangeYear(this.heatmap.year + delta);
   }
 
@@ -234,20 +272,24 @@ export struct WritingStatsCalendarHeatmap {
       return;
     }
     this.selectedDate = cell.date;
-    this.selectedChars = cell.chars;
     this.onSelectDay(cell.date, cell.chars);
   }
 
   private cellStyle(cell: HeatmapCell): HeatmapCellStyle {
     if (cell.future) {
-      return { color: $r('sys.color.comp_background_gray'), opacity: 0.35 };
+      return { color: $r('sys.color.comp_background_gray'), opacity: 0.35, borderWidth: 0 };
+    }
+    if (cell.status === 'unknown') {
+      // 覆盖未知：空心/中性色，区别于已确认的真实 0。
+      return { color: Color.Transparent, opacity: 1, borderWidth: 1 };
     }
     if (cell.intensity === 0) {
-      return { color: $r('sys.color.comp_background_gray'), opacity: 0.8 };
+      return { color: $r('sys.color.comp_background_gray'), opacity: 0.8, borderWidth: 0 };
     }
     return {
       color: $r('sys.color.ohos_id_color_emphasize'),
       opacity: 0.25 + cell.intensity * 0.18,
+      borderWidth: 0,
     };
   }
 
@@ -277,6 +319,7 @@ export struct WritingStatsCalendarHeatmap {
             date: '',
             chars: 0,
             intensity: 0,
+            status: '',
             future: false,
             inYear: false,
           });
@@ -284,12 +327,16 @@ export struct WritingStatsCalendarHeatmap {
         }
         const dateKey = this.formatLocalDate(date);
         const day = dayByDate.get(dateKey);
+        const status = day !== undefined
+          ? day.status
+          : (dateKey > todayKey ? 'future' : 'unknown');
         days.push({
           key: dateKey,
           date: dateKey,
           chars: day !== undefined ? day.humanTypedChars : 0,
           intensity: day !== undefined ? day.intensity : 0,
-          future: dateKey > todayKey,
+          status,
+          future: status === 'future',
           inYear: true,
         });
         if (date.getDate() === 1) {

@@ -21,6 +21,9 @@ const WIDE_PAGE_PADDING_VP: number = 24
 const WIDE_CARD_GAP_VP: number = 12
 // 顶部生涯横条的最大宽度（vp）：手稿里它比四卡区窄、居中。
 const WIDE_LIFETIME_BAR_MAX_WIDTH_VP: number = 900
+// 四卡区与展开面板的最小可读高度（vp）：小高度窗口改为纵向滚动，不压缩卡片与图表。
+const WIDE_PERIOD_CARDS_HEIGHT_VP: number = 190
+const WIDE_EXPANDED_PANEL_HEIGHT_VP: number = 280
 
 @Component
 export struct WideStatsContent {
@@ -98,13 +101,25 @@ export struct WideStatsContent {
         this.ErrorStrip()
       }
       this.LifetimeBar()
-      if (this.expandedPanel === STATS_PANEL_NONE) {
-        this.PeriodCardsRow()
-      } else {
-        this.ExpandedPanel()
+      // 内容超出可用高度时纵向滚动，卡片与图表保持最小可读高度；
+      // 热力图年份格子由组件内部横向滚动，这里不再叠加横向滚动。
+      Scroll() {
+        Column() {
+          if (this.expandedPanel === STATS_PANEL_NONE) {
+            this.PeriodCardsRow()
+          } else {
+            this.ExpandedPanel()
+          }
+          this.HeatmapSection()
+          this.CompanionshipFooter()
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
       }
-      this.HeatmapSection()
-      this.CompanionshipFooter()
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .align(Alignment.Top)
     }
     .width('100%')
     .height('100%')
@@ -239,7 +254,7 @@ export struct WideStatsContent {
       }, (card: WritingStatsPeriodCard) => card.preset)
     }
     .width('100%')
-    .layoutWeight(1)
+    .height(WIDE_PERIOD_CARDS_HEIGHT_VP)
     .alignItems(VerticalAlign.Top)
   }
 
@@ -331,7 +346,7 @@ export struct WideStatsContent {
       }
     }
     .width('100%')
-    .layoutWeight(1)
+    .height(WIDE_EXPANDED_PANEL_HEIGHT_VP)
     .alignItems(VerticalAlign.Top)
   }
 

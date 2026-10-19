@@ -2065,5 +2065,90 @@ fn test_heatmap_merges_remote_device_partition_and_keeps_future_days() {
     let future_year = api.get_heatmap_snapshot(2100).unwrap();
     assert_eq!(future_year.days.len(), 365);
     assert_eq!(future_year.days.first().unwrap().date, "2100-01-01");
+    assert_eq!(future_year.days.first().unwrap().status, "future");
     assert_eq!(future_year.days.last().unwrap().date, "2100-12-31");
+    assert_eq!(future_year.days.last().unwrap().status, "future");
+}
+
+#[test]
+fn test_heatmap_status_distinguishes_known_unknown_and_future() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    // 2024-05-10T08:00Z，业务日 2024-05-10。
+    api.record_event(explorer_event(
+        1_715_328_000_000,
+        "2024-05-10",
+        EventSource::HumanTyped,
+        6,
+    ))
+    .unwrap();
+
+    let heatmap = api.get_heatmap_snapshot(2024).unwrap();
+    let status = |date: &str| -> String {
+        heatmap
+            .days
+            .iter()
+            .find(|day| day.date == date)
+            .unwrap()
+            .status
+            .clone()
+    };
+
+    assert_eq!(
+        status("2024-05-10"),
+        "known",
+        "有记录的日子必须是已确认覆盖"
+    );
+    assert_eq!(
+        status("2024-05-11"),
+        "known",
+        "覆盖锚点之后的已过日期可确认为真实 0"
+    );
+    assert_eq!(
+        status("2024-05-09"),
+        "unknown",
+        "锚点之前没有覆盖依据，不得当没写"
+    );
+}
+
+#[test]
+fn test_heatmap_marks_unconfirmed_days_unknown_when_sync_incomplete() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    // 任一统计设备同步组最近同步失败：历史可能不完整。
+    let group_dir = dir.join("app-meta/sync/groups/stats-device-6465766963655f72656d6f7465");
+    std::fs::create_dir_all(&group_dir).unwrap();
+    std::fs::write(
+        group_dir.join("state.local.json"),
+        "{\"last_error\":\"network timeout\"}",
+    )
+    .unwrap();
+
+    let api = StatsApi::new(dir);
+    api.record_event(explorer_event(
+        1_715_328_000_000,
+        "2024-05-10",
+        EventSource::HumanTyped,
+        6,
+    ))
+    .unwrap();
+
+    let heatmap = api.get_heatmap_snapshot(2024).unwrap();
+    assert_eq!(heatmap.history_scope, "partialSync");
+    let recorded = heatmap
+        .days
+        .iter()
+        .find(|day| day.date == "2024-05-10")
+        .unwrap();
+    assert_eq!(recorded.status, "known");
+    let unconfirmed = heatmap
+        .days
+        .iter()
+        .find(|day| day.date == "2024-05-11")
+        .unwrap();
+    assert_eq!(
+        unconfirmed.status, "unknown",
+        "同步不完整时，没记录的日子不能当真实 0"
+    );
 }

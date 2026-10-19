@@ -114,10 +114,12 @@ export interface WritingStatsExplorer {
 export interface WritingStatsHeatmapDay {
   /** 本地日历日 YYYY-MM-DD（按日期升序、每天唯一） */
   date: string
-  /** 当天人工输入字数真值；没有记录的已过日期为 0，不是「缺失」 */
+  /** 当天人工输入字数真值；仅 status = known 的已过日期为真实 0 */
   humanTypedChars: number
   /** Core 按当年正数日分布统一分级：0–4（0 表示没有人工输入） */
   intensity: number
+  /** 覆盖状态："known"（已确认覆盖，可为真实 0）/ "unknown"（覆盖不完整或同步失败，不是没写作）/ "future"（未来日期未到） */
+  status: string
 }
 
 export interface WritingStatsHeatmap {
@@ -127,5 +129,7 @@ export interface WritingStatsHeatmap {
   startDate: string
   /** 该年最后一天 YYYY-MM-DD */
   endDate: string
+  /** 历史口径：同 Explorer 的三值（本机 / 已同步设备 / 同步不完整），端侧据此标注范围 */
+  historyScope: string
   days: WritingStatsHeatmapDay[]
 }

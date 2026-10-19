@@ -152,21 +152,67 @@ fn speed_buckets_json(projection: &StatsProjection) -> Vec<Value> {
 /// 写作统计 API 入口 — 直接持有 `StatsStore`，所有查询走 projection。
 pub struct StatsApi {
     store: StatsStore,
+    /// 旧事件库迁移失败状态。
+    ///
+    /// 非空表示旧单机事件库尚未完整并入按设备分区的新事件库：
+    /// 此时读取查询必须显式失败（统计页显示明确原因），不能把旧历史
+    /// 静默当成 0 字。下一次查询会重试迁移，成功后清除。
+    migration_error: std::sync::Mutex<Option<String>>,
 }
 
 impl StatsApi {
     pub fn new(app_data_root: &Path) -> Self {
         // 迁移：把旧版单机事件库一次性并入按设备分区的新事件库。
-        if let Err(e) = crate::writing_stats::migration::migrate_stats_event_store(app_data_root) {
-            eprintln!("[writing_stats] event store migration skipped: {}", e);
-        }
+        let migration_error = if let Err(e) =
+            crate::writing_stats::migration::migrate_stats_event_store(app_data_root)
+        {
+            eprintln!("[writing_stats] event store migration failed: {}", e);
+            Some(e.to_string())
+        } else {
+            None
+        };
         Self {
             store: StatsStore::new(app_data_root),
+            migration_error: std::sync::Mutex::new(migration_error),
         }
     }
 
     pub fn store(&self) -> &StatsStore {
         &self.store
+    }
+
+    /// 读取查询前的迁移闸门：失败时显式报错并允许下一次重试。
+    ///
+    /// 迁移成功前不能把新目录当成唯一事实源；`record_event` 不受此限制，
+    /// 迁移重试会按 `event_id` 幂等并入旧事件，不会重复计数。
+    fn ensure_migrated(&self) -> Result<()> {
+        let pending = self
+            .migration_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if pending.is_none() {
+            return Ok(());
+        }
+        match crate::writing_stats::migration::migrate_stats_event_store(self.store.app_data_root())
+        {
+            Ok(()) => {
+                *self
+                    .migration_error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+                Ok(())
+            }
+            Err(e) => {
+                *self
+                    .migration_error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(e.to_string());
+                Err(crate::Error::Other(format!(
+                    "writing stats migration incomplete: {e}"
+                )))
+            }
+        }
     }
 
     /// 统计数据的真实覆盖范围。
@@ -240,6 +286,7 @@ impl StatsApi {
 
     /// 「今天」的写作汇总 —— 今天是哪一天由 **Core 的本地日历口径**决定。
     pub fn get_today_stats_summary(&self) -> Result<Value> {
+        self.ensure_migrated()?;
         let today = crate::writing_stats::calendar::local_today_date();
         let range = DateRange {
             start_date: today.clone(),
@@ -249,6 +296,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_summary(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -258,6 +306,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_project(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -289,6 +338,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_chapter(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -320,6 +370,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_device(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -354,6 +405,7 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_device_class(&self, range: &DateRange) -> Result<Value> {
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -387,6 +439,7 @@ impl StatsApi {
     /// 只读本地事件历史（`events.local` 不同步），不写任何缓存账本；
     /// 作品没有任何人工输入时返回全 0 且无首次写作日期。
     pub fn get_project_lifetime_stats(&self, project_id: &str) -> Result<ProjectLifetimeStatsAgg> {
+        self.ensure_migrated()?;
         let events = self.store.load_events_for_project(project_id)?;
         Ok(project_lifetime_stats(&events, project_id))
     }
@@ -406,6 +459,7 @@ impl StatsApi {
         custom_start: Option<&str>,
         custom_end: Option<&str>,
     ) -> Result<WritingStatsExplorerDto> {
+        self.ensure_migrated()?;
         let (preset, custom_range) =
             calendar::parse_explorer_query(preset, custom_start, custom_end)?;
         let today = calendar::local_today_date();
@@ -517,11 +571,27 @@ impl StatsApi {
     /// [`heatmap_intensity_thresholds`]），端侧不重算人工字数；非法年份
     /// 返回结构化错误，不造全年零数据。
     pub fn get_heatmap_snapshot(&self, year: i32) -> Result<WritingStatsHeatmapDto> {
+        self.ensure_migrated()?;
         validate_heatmap_year(year)?;
         let start_date = format!("{year:04}-01-01");
         let end_date = format!("{year:04}-12-31");
 
         let events = self.store.load_all_events()?;
+        // 覆盖范围与 Explorer 同源：更早未建立记录、或统计同步失败的区间不能画成真实 0。
+        let history_scope = self.history_scope();
+        let sync_incomplete = history_scope == "partialSync";
+        let coverage_anchor = events
+            .iter()
+            .filter_map(|event| {
+                let date = event.business_date();
+                if date.is_empty() {
+                    None
+                } else {
+                    Some(date)
+                }
+            })
+            .min();
+        let today = calendar::local_today_date();
         let stats = project_range_stats(&events, &start_date, &end_date)?;
         let positive: Vec<u64> = stats
             .daily_human_typed_chars
@@ -542,10 +612,26 @@ impl StatsApi {
                 .get(&date_str)
                 .copied()
                 .unwrap_or(0);
+            // 单元格覆盖状态：未来未到 / 已确认（可为真实 0）/ 覆盖不完整或同步失败。
+            let status = if date_str.as_str() > today.as_str() {
+                "future"
+            } else if human_typed_chars > 0 {
+                "known"
+            } else if sync_incomplete {
+                "unknown"
+            } else if coverage_anchor
+                .as_deref()
+                .is_some_and(|anchor| date_str.as_str() >= anchor)
+            {
+                "known"
+            } else {
+                "unknown"
+            };
             days.push(WritingStatsHeatmapDayDto {
                 date: date_str,
                 human_typed_chars,
                 intensity: heatmap_intensity(human_typed_chars, thresholds),
+                status: status.to_string(),
             });
             if date == end {
                 break;
@@ -559,6 +645,7 @@ impl StatsApi {
             year,
             start_date,
             end_date,
+            history_scope,
             days,
         })
     }
@@ -570,6 +657,7 @@ impl StatsApi {
     /// 面板不再逐个 Getter 重复 `load_events_range + project_events` 连续扫描
     /// 事件文件；日期口径统一由 Core 日历决定，平台端不自己算周一起始。
     pub fn get_dashboard_snapshot(&self) -> Result<Value> {
+        self.ensure_migrated()?;
         let today = crate::writing_stats::calendar::local_today_date();
         let week_start = crate::writing_stats::calendar::week_start_date(&today)?;
         let month_start = crate::writing_stats::calendar::month_start_date(&today)?;
@@ -629,6 +717,7 @@ impl StatsApi {
     pub fn get_speed_curve(&self, range: &DateRange, bucket_minutes: u32) -> Result<Value> {
         // 钳到至少 1 分钟，避免 bucket_ms = 0 导致速度曲线死循环
         let bucket_minutes = bucket_minutes.max(1);
+        self.ensure_migrated()?;
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
@@ -665,6 +754,7 @@ impl StatsApi {
 
     /// 「当前写作速度」：以调用时刻为终点的实时纯输入速度。
     pub fn get_current_speed(&self, window_seconds: u32) -> Result<CurrentWritingSpeed> {
+        self.ensure_migrated()?;
         let now_ms = chrono::Utc::now().timestamp_millis();
         let window_seconds = window_seconds.max(1);
         let start_ms = now_ms - i64::from(window_seconds) * 1_000;

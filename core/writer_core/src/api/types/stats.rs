@@ -301,10 +301,11 @@ pub struct WritingStatsTrendPointDto {
 /// 每日码字日历（#956）：一个公历年的逐日人工输入真值。
 ///
 /// - `days`：该公历年的全部自然日（365/366 日），日期升序，每天只出现一次；
-/// - 已过但无记录的日期 `human_typed_chars` 为 0；
-/// - 未来日期同样按日期字段给出，由端侧决定标记为「未到」而不是「没写作」；
+/// - `status = "known"`：已确认覆盖的日期，`human_typed_chars` 是真实值（可为真实 0）；
+/// - `status = "unknown"`：历史覆盖不完整或统计同步失败，不得当成「确实没写」；
+/// - `status = "future"`：未来日期，尚未到来；
 /// - `intensity` 由 Core 从该年正数日的字数分布分级（0–4），端侧不重算人工字数；
-/// - `human_typed_chars` 保留原值，点格子时显示实际数值。
+/// - `human_typed_chars` 保留原值，点格子时显示实际数值（unknown 日期仅在确认为 0 时才画实心 0 档）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WritingStatsHeatmapDayDto {
@@ -314,6 +315,8 @@ pub struct WritingStatsHeatmapDayDto {
     pub human_typed_chars: u64,
     /// 显示强度分级：0（无输入）到 4（该年最多）。
     pub intensity: u8,
+    /// 覆盖状态：`known` / `unknown` / `future`（见类型文档）。
+    pub status: String,
 }
 
 /// 每日码字日历快照（#956）。一次查询返回指定年份的完整自然日列表。
@@ -326,5 +329,8 @@ pub struct WritingStatsHeatmapDto {
     pub start_date: String,
     /// 该年最后一天（`YYYY-12-31`）。
     pub end_date: String,
+    /// 本份快照的历史覆盖范围，与 Explorer 同源的三值：
+    /// `localEvents` / `syncedDevices` / `partialSync`，供端侧标注数据范围。
+    pub history_scope: String,
     pub days: Vec<WritingStatsHeatmapDayDto>,
 }
