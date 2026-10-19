@@ -59,6 +59,16 @@ pub fn migrate_stats_event_store(app_data_root: &Path) -> Result<()> {
     write_marker(&stats_dir)
 }
 
+/// 旧库是否还存在待迁移的合法事件文件（仅枚举，不触发迁移、不写盘）。
+///
+/// 供同步组发现使用：升级后若自动同步先于统计页发生，本机统计设备组
+/// 必须仍能出现在计划里，旧历史才有机会被上传。
+pub fn legacy_events_present(app_data_root: &Path) -> bool {
+    list_legacy_event_files(&app_data_root.join(LEGACY_EVENTS_DIR))
+        .map(|files| !files.is_empty())
+        .unwrap_or(false)
+}
+
 fn write_marker(stats_dir: &Path) -> Result<()> {
     fs::create_dir_all(stats_dir)?;
     fs::write(stats_dir.join(MARKER_NAME), MARKER_CONTENT)?;

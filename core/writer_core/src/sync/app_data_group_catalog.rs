@@ -409,6 +409,17 @@ pub fn discover_local_app_data_groups(root: &std::path::Path) -> crate::Result<V
         }
     }
 
+    // 旧版单机统计库（#955）：升级后若自动同步先于统计页发生，
+    // 也必须把真实本机设备纳入 StatsDevice 枚举，旧历史才能进入增量上传计划。
+    // 这里只枚举目标：不迁移、不写盘（迁移由统计页或本组同步入口完成）。
+    if crate::writing_stats::migration::legacy_events_present(root) {
+        if let Ok(info) = crate::settings::load_device_info(root) {
+            if let Ok(group) = AppDataGroup::from_id(&format!("stats_device:{}", info.device_id)) {
+                groups.insert(group.id(), group);
+            }
+        }
+    }
+
     // The aggregate index is a dependent publication target even when its local
     // file is missing; transfer must attempt recovery or report the damaged path.
     if groups
@@ -639,6 +650,22 @@ mod tests {
 
         let groups = discover_local_app_data_groups(temp.path()).unwrap();
         assert!(groups.contains(&AppDataGroup::StatsDevice("device-abc".to_string())));
+    }
+
+    #[test]
+    fn test_discover_local_app_data_groups_enumerates_legacy_stats_device() {
+        let temp = tempfile::tempdir().unwrap();
+        // 旧版单机事件库存在时，即使还没有 stats/events 分区，
+        // 也必须枚举出本机统计设备组，旧历史才能进入增量上传计划。
+        let legacy_dir = temp.path().join("app-meta/stats/events.local");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("2024-05-01.events.jsonl"), "").unwrap();
+        crate::settings::ensure_device_info(temp.path(), "", "", Some("device_1")).unwrap();
+
+        let groups = discover_local_app_data_groups(temp.path()).unwrap();
+        assert!(groups.contains(&AppDataGroup::StatsDevice("device_1".to_string())));
+        // 只枚举目标，不触发迁移：不产生新的 stats/events 分区目录。
+        assert!(!temp.path().join("stats/events").exists());
     }
 
     #[test]
