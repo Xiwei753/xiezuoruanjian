@@ -42,6 +42,7 @@ QtObject {
     property string chapterId: ""
     property string chapterTitle: ""
     property string saveStatus: editorBackendRef ? editorBackendRef.save_status : ""
+    property string syncFlushFailureReason: ""
 
     // Internal state
     property bool isLoadingChapter: false
@@ -953,6 +954,7 @@ QtObject {
     }
 
     function flushActiveEditorBeforeSync() {
+        syncFlushFailureReason = ""
         if (!editorBackendRef || !chapterId || !projectId || !volumeId) return true;
         if (saveGuardActive()) {
             pendingAutoSaveAfterGuard = false;
@@ -960,6 +962,7 @@ QtObject {
         }
         var read = readEditorPlainText();
         if (read.suspiciousEmpty) {
+            syncFlushFailureReason = qsTr("检测到可疑空正文，已阻止保存")
             logWriterWarning("flush_before_sync_blocked_empty", "blocked suspicious empty save before sync");
             return false;
         }
@@ -976,6 +979,9 @@ QtObject {
             }
             return true;
         }
+        syncFlushFailureReason = result
+            ? (result.rawError || result.messageKey || result.errorCode || qsTr("保存当前章节失败"))
+            : qsTr("保存当前章节失败")
         logWriterWarning("flush_before_sync_failed", "save failed before sync, blocking sync");
         return false;
     }

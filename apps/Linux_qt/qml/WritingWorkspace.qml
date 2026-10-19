@@ -51,6 +51,7 @@ Rectangle {
     property var settingsBackendRef: null
     property var workspaceBackendRef: null
     property var appState: ({})
+    property string preSyncFlushFailureReason: ""
     // Issue #835：星图后端透传给 RightDrawer（任务 4 已为 RightDrawer 加 starmapBackendRef 属性）。
     // 由 main.qml 注入，WritingWorkspace 只做透传，不在本地伪造星图业务状态。
     property var starmapBackendRef: null
@@ -317,8 +318,11 @@ Rectangle {
     }
 
     function flushActiveEditorBeforeSync() {
+        root.preSyncFlushFailureReason = ""
         if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId) return true;
-        return editorController.flushActiveEditorBeforeSync();
+        var saved = editorController.flushActiveEditorBeforeSync();
+        root.preSyncFlushFailureReason = editorController.syncFlushFailureReason || "";
+        return saved;
     }
 
     // Issue #829：Core 的当前写作速度以「最近一分钟写了多少字」为计算口径，

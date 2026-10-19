@@ -390,6 +390,7 @@ pub struct AppBackend {
     current_sync_operation_id: String,
     /// 当前同步操作类型（如 "full_sync"、"lww_sync"、"git_sync"）
     current_sync_operation_kind: String,
+    current_sync_source: String,
     current_sync_status: String,
     current_sync_in_progress: bool,
     /// 同步进度共享状态 — 后台线程写 target 进度，诊断导出时主线程读。
@@ -400,6 +401,16 @@ pub struct AppBackend {
     /// 设为 true 排队等待当前同步完成后再执行一次 manual sync。
     /// 连续点击只保留一次 pending，不堆无限队列。
     manual_sync_pending: bool,
+    /// 被 single-flight 合并后的那次手动同步使用的 ID；使排队反馈与最终结果相关联。
+    manual_sync_pending_operation_id: Option<String>,
+    manual_sync_pending_source: String,
+    /// 当前进程启动后是否收到过手动同步请求。用于区分诊断包中的持久历史
+    /// 与本次启动实际触发的操作；不从 FullSyncState 的历史状态推断。
+    manual_sync_request_seen_this_startup: bool,
+    last_manual_sync_request_id: String,
+    last_manual_sync_request_source: String,
+    last_manual_sync_request_at: i64,
+    last_manual_sync_request_status: String,
     current_last_sync_time: i64,
 
     current_system_color_scheme: String,
@@ -435,6 +446,22 @@ pub struct AppBackend {
 }
 
 impl AppBackend {
+    /// 记录统一手动同步入口收到的点击，即使后续保存屏障失败也保留本轮证据。
+    pub(crate) fn record_manual_sync_request(&mut self, source: &str, request_id: &str) {
+        self.manual_sync_request_seen_this_startup = true;
+        self.last_manual_sync_request_id = request_id.to_string();
+        self.last_manual_sync_request_source = source.to_string();
+        self.last_manual_sync_request_at = Self::now_epoch_seconds();
+        self.last_manual_sync_request_status = "requested".to_string();
+    }
+
+    /// 手动请求完成前置保存并进入后端后，更新导出摘要里的请求阶段。
+    pub(crate) fn update_manual_sync_request_status(&mut self, request_id: &str, status: &str) {
+        if self.last_manual_sync_request_id == request_id {
+            self.last_manual_sync_request_status = status.to_string();
+        }
+    }
+
     /// 将 AppBackend 当前状态同步到 DomainSnapshot。
     ///
     /// 调用时机：QML 属性变更后、同步操作完成后等需要刷新 QML 绑定的场景。

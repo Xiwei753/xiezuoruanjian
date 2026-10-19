@@ -119,6 +119,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 dt: root.dt
+                canvasBackgroundColor: Kirigami.Theme.backgroundColor
                 starmapId: root.starmapId
                 starmapBackendRef: root.starmapBackendRef
                 // Issue #814 评论 5935285879: 传共享选中控制器给 Canvas。

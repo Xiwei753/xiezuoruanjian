@@ -38,6 +38,7 @@ ColumnLayout {
 
     property string activeOperationId: ""
     property string activeOperationKind: ""
+    property int lastManualSyncRequestSerial: -1
 
     // 结果区与原始诊断文本（原 TextArea/TextEdit 的文本源）。
     property string resultText: ""
@@ -196,6 +197,31 @@ ColumnLayout {
         }
     }
 
+    // #963：顶栏动作由 main.qml 统一发起。页面打开时同步采纳该入口记录的本轮
+    // operation_id；只有 operation_kind=sync 才能按本轮全量同步展示。
+    function adoptLatestManualSyncRequest() {
+        if (typeof window === "undefined" || window.manualSyncRequestSerial === undefined)
+            return
+        if (root.lastManualSyncRequestSerial === window.manualSyncRequestSerial)
+            return
+        root.lastManualSyncRequestSerial = window.manualSyncRequestSerial
+        root.activeOperationId = window.manualSyncOperationId || ""
+        root.activeOperationKind = root.activeOperationId ? "sync" : ""
+    }
+
+    function operationStateMatchesCurrentAction(obj) {
+        if (!obj) return false
+        if (root.activeOperationId !== ""
+                && obj.operation_id === root.activeOperationId
+                && obj.operation_kind === root.activeOperationKind)
+            return true
+        if (typeof window !== "undefined" && window.manualSyncOperationId
+                && obj.operation_id === window.manualSyncOperationId
+                && obj.operation_kind === "sync")
+            return true
+        return false
+    }
+
     /// Issue #948：结果区唯一优先级 —— 本轮运行中 > 本轮操作终态 > Core 持久化历史。
     ///
     /// 从 Core 恢复出来的 currentSyncStatus（如 recoverable_error）是持久历史，
@@ -203,6 +229,7 @@ ColumnLayout {
     /// operation_id 命中的终态）才按运行阶段/终态展示；否则读 last_full_sync_state
     /// 表述「上次同步（本地时间）」，不暗示今天再次失败。
     function updateSyncResultText() {
+        root.adoptLatestManualSyncRequest()
         if (!root.syncBackendRef) return
 
         var obj = null
@@ -216,13 +243,11 @@ ColumnLayout {
         // Issue #948 复核：activeOperationId 为空表示当前页面没有发起可归属的操作，
         // 不能把后端同一进程内残留的上一条操作（诊断/试运行/早前手动同步）当成"本轮"。
         // 只有 operation_id 与 operation_kind 都命中当前页面发起的操作，才进入本轮终态。
-        var opIsCurrent = obj !== null
-            && root.activeOperationId !== ""
-            && obj.operation_id === root.activeOperationId
-            && obj.operation_kind === root.activeOperationKind
+        var opIsCurrent = root.operationStateMatchesCurrentAction(obj)
 
-        // 优先级 1：本轮同步正在运行 —— 显示实际运行阶段。
-        if (root.currentSyncInProgress) {
+        // 优先级 1：本轮全量同步正在运行。运行诊断也会占用后端 single-flight，
+        // 但不能因此被写成「正在同步」或套用全量同步的历史报告。
+        if (root.currentSyncInProgress && obj !== null && obj.operation_kind === "sync") {
             if (opIsCurrent) {
                 root.applyOperationStateText(obj)
             } else {
@@ -233,7 +258,7 @@ ColumnLayout {
             return
         }
 
-        // 优先级 2：本轮操作（按 operation_id 过滤）的终态。
+        // 优先级 2：本轮操作（按 operation_id + operation_kind 过滤）的终态。
         if (opIsCurrent) {
             root.applyOperationStateText(obj)
             // 本轮同步已产出持久报告（且报告确属最后这一轮）时，改用报告的分组/
@@ -580,6 +605,22 @@ ColumnLayout {
         }
     }
 
+    Connections {
+        target: typeof window !== "undefined" ? window : null
+        function onManualSyncRequestSerialChanged() {
+            root.refreshLocalSyncState()
+            if (window.manualSyncFeedbackIsError && window.manualSyncFeedbackText.indexOf(qsTr("同步未开始：")) === 0)
+                root.resultText = window.manualSyncFeedbackText
+        }
+        function onManualSyncOperationIdChanged() {
+            root.refreshLocalSyncState()
+        }
+        function onManualSyncFeedbackTextChanged() {
+            if (window.manualSyncFeedbackIsError && window.manualSyncFeedbackText.indexOf(qsTr("同步未开始：")) === 0)
+                root.resultText = window.manualSyncFeedbackText
+        }
+    }
+
     // ── 状态行 ──
     RowLayout {
         Layout.fillWidth: true
@@ -720,22 +761,23 @@ ColumnLayout {
                     root.syncBackendRef.save_sync_config()
                     root.syncBackendRef.load_sync_config()
                 }
-                // 再执行同步
-                if (typeof root.beforeSyncHook === "function") {
-                    if (!root.beforeSyncHook()) {
-                        root.resultText = qsTr("同步已取消：保存当前章节失败，请检查编辑器内容后重试")
-                        return
-                    }
-                }
+                // 统一经过窗口入口执行保存屏障并记录本轮手动同步来源。
                 root.resultText = qsTr("正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件")
                 if (root.syncBackendRef) {
-                    var opId = root.syncBackendRef.perform_sync()
+                    var opId = ""
+                    if (typeof window !== "undefined" && typeof window.requestManualSync === "function") {
+                        opId = window.requestManualSync("settings")
+                    } else {
+                        root.resultText = qsTr("同步未开始：窗口同步入口不可用")
+                    }
                     root.activeOperationId = opId
-                    root.activeOperationKind = "sync"
+                    root.activeOperationKind = opId ? "sync" : ""
                     root.refreshLocalSyncState()
                     // 如果 opId 为空，显示即时错误
                     if (!opId || opId.length === 0) {
-                        root.resultText = root.syncBackendRef.sync_operation_state || qsTr("同步启动失败")
+                        root.resultText = typeof window !== "undefined" && window.manualSyncFeedbackText
+                            ? window.manualSyncFeedbackText
+                            : (root.syncBackendRef.sync_operation_state || qsTr("同步启动失败"))
                     }
                 }
             }

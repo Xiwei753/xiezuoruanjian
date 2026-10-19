@@ -141,8 +141,12 @@ Kirigami.ApplicationWindow {
     }
 
     function preSyncBarrier() {
+        manualSyncBarrierFailureReason = ""
         if (appController.inWriting && writingWorkspaceLoader.item) {
-            if (!writingWorkspaceLoader.item.flushActiveEditorBeforeSync()) return false
+            if (!writingWorkspaceLoader.item.flushActiveEditorBeforeSync()) {
+                manualSyncBarrierFailureReason = writingWorkspaceLoader.item.preSyncFlushFailureReason || ""
+                return false
+            }
         }
         if (editorBackend) {
             editorBackend.flush_recent_edits()
@@ -151,6 +155,229 @@ Kirigami.ApplicationWindow {
             settingsBackend.flush_pending_settings_save()
         }
         return true
+    }
+
+    // Issue #963：三个工作区顶栏共用这一条手动同步入口。先留下一条正常级别
+    // 的操作日志（即使 QML debug 日志关闭也会进入诊断日志），再执行编辑保存屏障，
+    // 最后按后端返回的操作 ID 跟踪同一条 sync_operation_state。
+    property string manualSyncOperationId: ""
+    property string manualSyncRequestId: ""
+    property string manualSyncSource: ""
+    property string manualSyncFeedbackText: ""
+    property bool manualSyncFeedbackVisible: false
+    property bool manualSyncFeedbackIsError: false
+    property string manualSyncLastLoggedTerminalStatus: ""
+    property int manualSyncRequestSerial: 0
+    property string manualSyncBarrierFailureReason: ""
+
+    function logManualSyncEvent(event, message) {
+        if (!appBackend || typeof appBackend.log_qml !== "function") return
+        try {
+            appBackend.log_qml("info", "sync", event, message)
+        } catch (e) {
+            console.warn("Unable to log manual sync event", event, e)
+        }
+    }
+
+    function isManualSyncOperationId(value) {
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || "")
+    }
+
+    function manualSyncMessageForKey(key) {
+        switch (key || "") {
+        case "sync.block.no_workspace": return qsTr("未打开工作区")
+        case "sync.block.no_workspace_layout": return qsTr("工作区同步布局尚未就绪")
+        case "sync.block.disabled": return qsTr("同步已禁用")
+        case "sync.block.remote_url_missing": return qsTr("未设置远程仓库地址")
+        case "sync.block.token_missing": return qsTr("未设置访问 Token")
+        case "sync.block.invalid_directory": return qsTr("工作区目录无效")
+        case "sync.status.already_running": return qsTr("当前同步正在运行，本次请求已排队")
+        case "sync.phase.syncing": return qsTr("正在同步")
+        case "sync.phase.background_syncing": return qsTr("正在同步")
+        case "sync.phase.github_init": return qsTr("正在初始化同步连接")
+        case "sync.result.success_summary": return qsTr("同步完成")
+        case "sync.result.latest_wins_summary": return qsTr("同步完成（已应用较新版本）")
+        case "sync.result.no_changes_summary": return qsTr("无需同步，本地与远端一致")
+        case "sync.result.conflict_summary": return qsTr("同步完成，存在冲突文件")
+        case "sync.result.partial_conflict_summary": return qsTr("部分同步，仍有冲突待处理")
+        case "sync.result.dirty_repo_blocked": return qsTr("同步被阻止：本地有未提交的更改")
+        case "sync.result.branch_recovered_summary": return qsTr("分支已恢复并同步完成")
+        case "sync.result.generic_error": return qsTr("同步出错")
+        case "error.sync_panic": return qsTr("同步过程异常终止")
+        case "error.other": return qsTr("操作失败")
+        default: return key || ""
+        }
+    }
+
+    function parseManualSyncOperationState() {
+        if (!syncBackend) return null
+        var raw = syncBackend.sync_operation_state || ""
+        if (raw === "") return null
+        try { return JSON.parse(raw) } catch (e) { return null }
+    }
+
+    function manualSyncStateFeedback(state) {
+        var status = state.status_code || ""
+        var pending = syncBackend && syncBackend.manual_sync_pending
+        var isRunning = status === "syncing"
+        var knownSuccess = status === "success" || status === "no_changes"
+            || status === "latest_wins_applied" || status === "branch_missing_recovered"
+        var isError = !isRunning && !knownSuccess
+        var lines = []
+
+        if (isRunning) {
+            lines.push(pending ? qsTr("已排队：当前同步结束后开始") : qsTr("正在同步"))
+            if (!pending && state.phase_key) {
+                var phase = manualSyncMessageForKey(state.phase_key)
+                if (phase && phase !== lines[0]) lines.push(phase)
+            }
+        } else {
+            var summary = manualSyncMessageForKey(state.summary_key)
+            if (!summary) summary = knownSuccess ? qsTr("同步完成") : qsTr("同步失败")
+            lines.push(summary)
+            if (state.status_code && summary === state.summary_key)
+                lines.push(qsTr("状态：%1").arg(state.status_code))
+        }
+
+        var failedTargets = state.summary_args ? state.summary_args.failed_targets : ""
+        if (failedTargets) {
+            var failedTargetCount = 0
+            if (Array.isArray(failedTargets)) {
+                failedTargetCount = failedTargets.length
+                failedTargets = failedTargets.join("\n  - ")
+            } else {
+                failedTargets = String(failedTargets)
+                failedTargetCount = failedTargets.split(/\n\s*-\s*/).filter(function(item) {
+                    return item.trim().length > 0
+                }).length
+            }
+            lines.push(qsTr("失败目标（%1）：\n%2").arg(failedTargetCount).arg(failedTargets))
+        }
+        var currentTarget = state.current_target
+        if (isError && currentTarget && currentTarget.path)
+            lines.push(qsTr("路径：%1").arg(currentTarget.path))
+        if (state.raw_error)
+            lines.push(qsTr("错误详情：%1").arg(state.raw_error))
+
+        return { text: lines.join("\n"), isError: isError }
+    }
+
+    function refreshManualSyncFeedback() {
+        if (!manualSyncOperationId) return
+        var state = parseManualSyncOperationState()
+        if (!state || state.operation_kind !== "sync"
+                || state.operation_id !== manualSyncOperationId) return
+
+        var feedback = manualSyncStateFeedback(state)
+        manualSyncFeedbackText = feedback.text
+        manualSyncFeedbackIsError = feedback.isError
+        manualSyncFeedbackVisible = true
+
+        var status = state.status_code || "unknown"
+        if (status !== "syncing" && status !== manualSyncLastLoggedTerminalStatus) {
+            manualSyncLastLoggedTerminalStatus = status
+            logManualSyncEvent("manual_sync_result",
+                "source=" + manualSyncSource
+                    + " operation_id=" + manualSyncOperationId
+                    + " status=" + status
+                    + " phase=" + (state.phase_key || state.summary_key || ""))
+        }
+    }
+
+    function showManualSyncNotStarted(message, event) {
+        manualSyncOperationId = ""
+        manualSyncFeedbackText = qsTr("同步未开始：%1").arg(message)
+        manualSyncFeedbackIsError = true
+        manualSyncFeedbackVisible = true
+        logManualSyncEvent(event,
+            "source=" + manualSyncSource + " request_id=" + manualSyncRequestId)
+        return ""
+    }
+
+    function requestManualSync(source) {
+        var validSources = ["starmap", "hub", "writing", "settings"]
+        manualSyncSource = validSources.indexOf(source) >= 0 ? source : "unknown"
+        manualSyncRequestSerial += 1
+        manualSyncOperationId = ""
+        manualSyncRequestId = ""
+        manualSyncLastLoggedTerminalStatus = ""
+        manualSyncFeedbackText = qsTr("正在准备同步…")
+        manualSyncFeedbackIsError = false
+        manualSyncFeedbackVisible = true
+
+        if (!syncBackend)
+            return showManualSyncNotStarted(qsTr("同步服务当前不可用"), "manual_sync_backend_unavailable")
+
+        try {
+            manualSyncRequestId = String(syncBackend.record_manual_sync_request(manualSyncSource) || "").trim()
+        } catch (e) {
+            var recordReason = e && e.toString ? e.toString() : qsTr("无法记录同步请求")
+            return showManualSyncNotStarted(recordReason, "manual_sync_request_record_failed")
+        }
+        if (!isManualSyncOperationId(manualSyncRequestId))
+            return showManualSyncNotStarted(qsTr("未能取得有效的同步请求编号"), "manual_sync_request_record_failed")
+
+        var barrierPassed = false
+        try {
+            barrierPassed = window.preSyncBarrier()
+        } catch (e) {
+            var exceptionReason = e && e.toString ? e.toString() : qsTr("编辑内容保存过程发生异常")
+            return showManualSyncNotStarted(
+                qsTr("当前编辑内容尚未保存。%1").arg(exceptionReason),
+                "manual_sync_precondition_failed")
+        }
+        if (!barrierPassed) {
+            var saveReason = manualSyncBarrierFailureReason
+                || (editorBackend && editorBackend.save_status
+                    ? String(editorBackend.save_status) : "")
+            if (!manualSyncBarrierFailureReason
+                    && !/失败|error|failed|阻止|拒绝|未保存/i.test(saveReason))
+                saveReason = qsTr("编辑器未能保存当前章节")
+            return showManualSyncNotStarted(
+                qsTr("当前编辑内容尚未保存。原因：%1").arg(saveReason),
+                "manual_sync_precondition_failed")
+        }
+        var returnedOperationId = ""
+        try {
+            returnedOperationId = String(syncBackend.perform_sync(manualSyncSource, manualSyncRequestId) || "").trim()
+        } catch (e) {
+            var callReason = e && e.toString ? e.toString() : qsTr("后端调用失败")
+            return showManualSyncNotStarted(callReason, "manual_sync_backend_call_failed")
+        }
+
+        var state = parseManualSyncOperationState()
+        var stateOperationId = state && state.operation_kind === "sync"
+            && isManualSyncOperationId(state.operation_id) ? state.operation_id : ""
+        if (isManualSyncOperationId(returnedOperationId))
+            manualSyncOperationId = returnedOperationId
+        else if (returnedOperationId === "" && stateOperationId
+                && state.status_code === "syncing")
+            manualSyncOperationId = stateOperationId
+
+        if (!manualSyncOperationId) {
+            var callError = null
+            try { callError = JSON.parse(returnedOperationId) } catch (e) { callError = null }
+            var errorKey = callError
+                ? (callError.message_key || callError.messageKey || "") : ""
+            var errorCode = callError
+                ? (callError.error_code || callError.errorCode || "") : ""
+            var reason = callError && (callError.raw_error || callError.rawError
+                    || errorKey || errorCode || callError.message)
+                ? String(callError.raw_error || callError.rawError
+                          || manualSyncMessageForKey(errorKey)
+                          || callError.message || errorCode)
+                : qsTr("后端未返回有效的同步操作编号")
+            return showManualSyncNotStarted(reason, "manual_sync_backend_call_failed")
+        }
+
+        logManualSyncEvent("manual_sync_accepted",
+            "source=" + manualSyncSource
+                + " request_id=" + manualSyncRequestId
+                + " operation_id=" + manualSyncOperationId)
+        manualSyncFeedbackText = qsTr("同步请求已接收，正在确认执行状态")
+        manualSyncFeedbackVisible = true
+        refreshManualSyncFeedback()
+        return manualSyncOperationId
     }
 
     function openSettingsDialog() {
@@ -345,6 +572,7 @@ Kirigami.ApplicationWindow {
     Connections {
         target: syncBackend
         function onSync_action_completed() {
+            window.refreshManualSyncFeedback()
             if (settingsBackend) settingsBackend.refresh_theme_data()
             // Issue #724 评论 5750911834 问题 3: 改用 reload_from_backend_if_changed()
             // 避免重复 resolve。同步完成后主题输入可能未变，跳过 resolve。
@@ -366,6 +594,9 @@ Kirigami.ApplicationWindow {
                         : null
                 );
             }
+        }
+        function onSync_status_changed() {
+            window.refreshManualSyncFeedback()
         }
     }
 
@@ -555,10 +786,7 @@ Kirigami.ApplicationWindow {
                 }
                 // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索/设置入口
                 onRequestSync: {
-                    if (!window.preSyncBarrier()) return;
-                    if (syncBackend) {
-                        syncBackend.perform_sync();
-                    }
+                    window.requestManualSync("starmap")
                 }
                 onRequestSearch: {
                     window.debugLog("search", "request_search", "");
@@ -618,13 +846,7 @@ Kirigami.ApplicationWindow {
                 }
 
                 onRequestSync: {
-                    if (!window.preSyncBarrier()) return;
-                    // 顶栏手动同步入口：基础配置可用时直接把请求交给 syncBackend。
-                    // 不再用 !syncBackend.sync_in_progress 拦截——syncBackend 自己排队
-                    // （manual_sync_pending）。
-                    if (syncBackend) {
-                        syncBackend.perform_sync();
-                    }
+                    window.requestManualSync("hub")
                 }
 
                 onRequestSearch: {
@@ -678,10 +900,7 @@ Kirigami.ApplicationWindow {
 
                 // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索入口
                 onRequestSync: {
-                    if (!window.preSyncBarrier()) return;
-                    if (syncBackend) {
-                        syncBackend.perform_sync();
-                    }
+                    window.requestManualSync("writing")
                 }
                 onRequestSearch: {
                     // 全局搜索正式 UI 继续接 #477，搜索页还没接完时保留入口
@@ -759,6 +978,57 @@ Kirigami.ApplicationWindow {
                     window.openSyncDialog()
                 }
 
+            }
+        }
+    }
+
+    // 非模态状态条：持续显示本轮同步的排队、运行或终态信息，不阻挡编辑区操作。
+    Rectangle {
+        id: manualSyncFeedbackBanner
+        visible: window.manualSyncFeedbackVisible && window.manualSyncFeedbackText.length > 0
+        z: 1000
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 16
+        width: Math.min(parent.width - 32, 620)
+        height: feedbackColumn.implicitHeight + 24
+        radius: 8
+        color: Kirigami.Theme.backgroundColor
+        border.width: 1
+        border.color: window.manualSyncFeedbackIsError
+            ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.highlightColor
+
+        ColumnLayout {
+            id: feedbackColumn
+            anchors.fill: parent
+            anchors.margins: 12
+            spacing: 6
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    Layout.fillWidth: true
+                    text: window.manualSyncFeedbackIsError
+                        ? (window.manualSyncOperationId ? qsTr("同步未完成") : qsTr("同步未开始"))
+                        : qsTr("同步状态")
+                    font.bold: true
+                    color: window.manualSyncFeedbackIsError
+                        ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
+                }
+                ToolButton {
+                    text: qsTr("关闭")
+                    onClicked: window.manualSyncFeedbackVisible = false
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                Layout.maximumHeight: Math.max(80, Math.min(220, window.height * 0.32))
+                text: window.manualSyncFeedbackText
+                wrapMode: Text.Wrap
+                maximumLineCount: 9
+                elide: Text.ElideRight
+                color: Kirigami.Theme.textColor
             }
         }
     }

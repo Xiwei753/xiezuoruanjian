@@ -50,6 +50,13 @@ impl SyncProfileError {
     }
 }
 
+fn normalize_manual_sync_source(source: &str) -> String {
+    match source.trim() {
+        "starmap" | "hub" | "writing" | "settings" => source.trim().to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
 /// Linux 同步操作共用的 profile 准备。
 ///
 /// 职责（严格只做这三步，不要复制到三个入口）：
@@ -105,8 +112,7 @@ pub struct SyncBackend {
     // 与 last_sync_report 相互独立：旧格式失败可能没有分组报告。无历史时为空串。
     // 这是"持久化的最近一次历史结果"，不是"本轮刚失败"。
     #[allow(dead_code)]
-    last_full_sync_state:
-        qt_property!(QString; READ last_full_sync_state NOTIFY sync_status_changed),
+    last_full_sync_state: qt_property!(QString; READ last_full_sync_state NOTIFY sync_status_changed),
     #[allow(dead_code)]
     sync_status: qt_property!(QString; READ sync_status WRITE set_sync_status NOTIFY sync_status_changed),
     #[allow(dead_code)]
@@ -143,7 +149,9 @@ pub struct SyncBackend {
     #[allow(dead_code)]
     perform_sync_dry_run: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
-    perform_sync: qt_method!(fn(&mut self) -> QString),
+    record_manual_sync_request: qt_method!(fn(&mut self, source: QString) -> QString),
+    #[allow(dead_code)]
+    perform_sync: qt_method!(fn(&mut self, source: QString, request_id: QString) -> QString),
     #[allow(dead_code)]
     perform_sync_diagnostics: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
@@ -203,7 +211,13 @@ impl SyncBackend {
         // Issue #948 第 3 点：终态快照在 move 进 AppBackend 前留下，结束后核对
         // Core 是否真的产出了最新 FullSyncReport。
         let outcome_status = outcome.sync_status.clone();
+        let outcome_operation_id = outcome.operation_id.clone();
         let outcome_action_result = outcome.action_result.clone();
+        let outcome_source = self
+            .with_app(|app| app.sync_source_for_operation_id(&outcome_operation_id))
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "unknown".to_string());
         // Issue #754 评论 5816335613: 明确区分成功与 AppBackend 借用失败。
         // 借用失败直接 return，不发任何"已完成"类 signal——
         // StatusOnly 只表示 outcome 已成功进入 AppBackend 并完成处理、但无工作区内容变化，
@@ -225,6 +239,11 @@ impl SyncBackend {
         // 只有一个状态源，不在 Qt 侧另存一套同步历史。
         self.sync_status_changed();
         self.sync_action_completed();
+        self.log_sync_operation_terminal(
+            &outcome_operation_id,
+            &outcome_source,
+            &outcome_action_result,
+        );
         if effect == sync_operations::SyncOutcomeEffect::ContentChanged {
             self.sync_content_applied();
         }
@@ -319,6 +338,88 @@ impl SyncBackend {
         if self.with_app_mut(|app| app.set_sync_enabled(val)).is_ok() {
             self.sync_config_changed();
         }
+    }
+
+    fn log_sync_operation_terminal(&self, operation_id: &str, source: &str, action_result: &str) {
+        let Ok(state) = serde_json::from_str::<serde_json::Value>(action_result) else {
+            return;
+        };
+        if state.get("operation_kind").and_then(|value| value.as_str()) != Some("sync") {
+            return;
+        }
+        let status = state
+            .get("status_code")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let phase = state
+            .get("phase_key")
+            .and_then(|value| value.as_str())
+            .unwrap_or("remote_sync");
+        let error_category = crate::sync_bridge::sync_error_category_from_code(Some(status), "");
+        let raw_error = state
+            .get("raw_error")
+            .and_then(|value| value.as_str())
+            .map(mask_sync_error)
+            .unwrap_or_default();
+        let failed_targets = state
+            .get("summary_args")
+            .and_then(|value| value.get("failed_targets"))
+            .and_then(|value| value.as_str())
+            .map(mask_sync_error)
+            .unwrap_or_default();
+
+        let persisted_report = self
+            .with_app(|app| {
+                app.core_api().map(|api| {
+                    let last_attempt = api
+                        .load_full_sync_state()
+                        .ok()
+                        .flatten()
+                        .and_then(|full_state| full_state.last_attempt_time);
+                    let report = api.load_latest_full_sync_report().ok().flatten();
+                    (last_attempt, report)
+                })
+            })
+            .ok()
+            .flatten();
+        let report_failures = persisted_report
+            .and_then(|(last_attempt, report)| {
+                report.filter(|report| Some(report.attempted_at) == last_attempt)
+            })
+            .map(|report| {
+                report
+                    .failures
+                    .into_iter()
+                    .map(|failure| {
+                        format!(
+                            "{}:{} phase={} category={} detail={}",
+                            failure.target_kind,
+                            mask_sync_error(&failure.path),
+                            failure.phase,
+                            failure.error_category,
+                            mask_sync_error(&failure.detail)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .unwrap_or_default();
+
+        crate::backend::app_backend::debug_log_static(
+            "sync",
+            "perform_sync_terminal",
+            &format!(
+                "operation_id={}, source={}, started=true, queued=false, status={}, phase={}, error_category={}, raw_error={}, failed_targets={}, report_failures={}",
+                operation_id,
+                source,
+                status,
+                phase,
+                error_category,
+                raw_error,
+                failed_targets,
+                report_failures
+            ),
+        );
     }
     fn sync_backend_type(&self) -> QString {
         self.with_app(|app| app.sync_backend_type())
@@ -472,16 +573,79 @@ impl SyncBackend {
         }
         result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
-    fn perform_sync(&mut self) -> QString {
+    fn record_manual_sync_request(&mut self, source: QString) -> QString {
+        let source = normalize_manual_sync_source(&source.to_string());
+        let request_id = uuid::Uuid::new_v4().to_string();
+        crate::backend::app_backend::debug_log_static(
+            "sync",
+            "manual_sync_request_received",
+            &format!(
+                "request_id={}, source={}, stage=clicked",
+                request_id, source
+            ),
+        );
+        if self
+            .with_app_mut(|app| app.record_manual_sync_request(&source, &request_id))
+            .is_err()
+        {
+            crate::backend::app_backend::debug_error_static(
+                "sync_backend",
+                "manual_sync_request_record_failed",
+                &format!(
+                    "request_id={}, source={}, phase=request_record, category=BORROW_CONFLICT",
+                    request_id, source
+                ),
+            );
+        }
+        request_id.into()
+    }
+
+    fn perform_sync(&mut self, source: QString, request_id: QString) -> QString {
         // Issue #762 评论 5826175490 / 5828791004：同步开始前刷新全局冲突状态，
         // 让 QML 在同步运行期间就显示当前持久冲突状态。
         self.refresh_sync_conflict_state();
+        let source = normalize_manual_sync_source(&source.to_string());
+        let request_id = request_id.to_string();
         let qptr = QPointer::from(&*self);
-        let result = self.with_app_mut(|app| app.perform_sync(Some(qptr)));
-        if result.is_ok() {
-            self.sync_status_changed();
+        crate::backend::app_backend::debug_log_static(
+            "sync",
+            "perform_sync_request_received",
+            &format!("request_id={}, source={}", request_id, source),
+        );
+        let result =
+            self.with_app_mut(|app| app.perform_sync_for_request(Some(qptr), &source, &request_id));
+        match result {
+            Ok((operation_id, started, queued, status)) => {
+                crate::backend::app_backend::debug_log_static(
+                    "sync",
+                    "perform_sync_request_dispatched",
+                    &format!(
+                        "request_id={}, operation_id={}, source={}, started={}, queued={}, status={}",
+                        request_id, operation_id, source, started, queued, status
+                    ),
+                );
+                self.sync_status_changed();
+                if !started && !queued {
+                    // Preflight failures update the operation state synchronously and need an
+                    // immediate notification; active operations notify on their terminal callback.
+                    self.sync_action_completed();
+                }
+                operation_id
+            }
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "sync_backend",
+                    "perform_sync_request_failed",
+                    &format!(
+                        "request_id={}, source={}, operation_id=, phase=app_backend_dispatch, category=BORROW_CONFLICT",
+                        request_id, source
+                    ),
+                );
+                self.sync_status_changed();
+                self.sync_action_completed();
+                crate::backend::json_utils::borrow_conflict_error_json().into()
+            }
         }
-        result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn perform_sync_diagnostics(&mut self) -> QString {
         let qptr = QPointer::from(&*self);
