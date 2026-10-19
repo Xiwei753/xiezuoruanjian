@@ -51,6 +51,8 @@ export class CorrectionCoordinator {
   private errorMessage: string = ''
   private requestGeneration: number = 0
   private debounceTimer: number = -1
+  // Issue #958：内置模型兜底每个协调器实例只尝试一次（幂等），失败不重试也不阻断编辑。
+  private bundledModelAttempted: boolean = false
 
   constructor(bridge: ICorrectionBridge, editor: EditorSessionCoordinator) {
     this.bridge = bridge
@@ -167,6 +169,42 @@ export class CorrectionCoordinator {
 
   async getModelPathStatus(path: string): Promise<ResultEnvelope<CorrectionModelPathStatusDto>> {
     return this.bridge.getModelPathStatus(path)
+  }
+
+  /**
+   * Issue #958: 内置 KenLM 模型兜底。每会话只尝试一次：
+   * - Core 已配置用户模型（`modelConfigured`）时直接跳过，用户模型优先、不覆盖；
+   * - 未配置时先让调用方准备内置模型文件（prepare 返回沙箱路径），再走既有
+   *   `setModelPath` 交给 Core 校验切换；
+   * - 准备或切换失败返回错误 envelope，由调用方记 warning；编辑与固定规则不受影响。
+   * `data === true` 表示本次真正配置了内置模型。
+   */
+  async ensureBundledModel(prepare: () => Promise<string>): Promise<ResultEnvelope<boolean>> {
+    if (this.bundledModelAttempted) {
+      return { success: true, data: false }
+    }
+    this.bundledModelAttempted = true
+    const status = await this.bridge.getResourceStatus()
+    if (!status.success || status.data === undefined) {
+      return {
+        success: false,
+        errorCode: status.errorCode ?? 'RESOURCE_STATUS_UNAVAILABLE',
+        userMessage: status.userMessage
+      }
+    }
+    if (status.data.modelConfigured) {
+      return { success: true, data: false }
+    }
+    let path = ''
+    try {
+      path = await prepare()
+    } catch (e) {
+      return { success: false, errorCode: 'BUNDLED_MODEL_PREPARE_FAILED', userMessage: String(e) }
+    }
+    if (path.length === 0) {
+      return { success: false, errorCode: 'BUNDLED_MODEL_PREPARE_FAILED', userMessage: '内置模型路径为空' }
+    }
+    return await this.bridge.setModelPath(path)
   }
 
   private currentRequest(generation: number): CorrectionRequestSnapshot | null {

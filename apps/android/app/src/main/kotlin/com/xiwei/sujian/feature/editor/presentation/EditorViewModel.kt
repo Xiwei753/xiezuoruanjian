@@ -241,7 +241,10 @@ class EditorViewModel(
         }
         if (!correctionResourcesLoaded && _appServiceBridge != null) {
             correctionResourcesLoaded = true
-            viewModelScope.launch { refreshCorrectionResourceState() }
+            viewModelScope.launch {
+                prepareBundledCorrectionModelIfNeeded()
+                refreshCorrectionResourceState()
+            }
         }
         // #595 三/四：同步前统一 flush 活动正文（ActiveDocumentGate）。
         registerActiveDocumentGateIfNeeded()
@@ -671,6 +674,32 @@ class EditorViewModel(
                     ),
                 )
             }
+        }
+    }
+
+    /**
+     * #958：启动时准备内置中文 KenLM 模型兜底 — 随 APK 打包的模型在首次使用时
+     * 拷到应用私有目录（只拷一次），再交给 Core 作为纠错语言模型。
+     *
+     * 用户自行导入的模型始终优先：已有 active 模型时直接返回，不覆盖。
+     * 任何一步失败（assets 缺失、拷贝/校验失败、桥接失败）都静默跳过 —
+     * 没有语言模型时 Core 继续使用规则纠错，不阻断编辑。
+     */
+    private suspend fun prepareBundledCorrectionModelIfNeeded() {
+        if (correctionResourceRepository.activeModelFile() != null) return
+        val model =
+            try {
+                withContext(Dispatchers.IO) { correctionResourceRepository.ensureBundledModel() }
+            } catch (_: Exception) {
+                return
+            }
+        val result =
+            withContext(Dispatchers.IO) {
+                runCatching { _appServiceBridge?.setCorrectionModelPath(model.absolutePath) }.getOrNull()
+            }
+        if (result !is com.xiwei.sujian.core.interop.common.BridgeResult.Success) {
+            // 内置模型交给 Core 失败时不写任何应用状态：Core 继续用规则纠错。
+            return
         }
     }
 

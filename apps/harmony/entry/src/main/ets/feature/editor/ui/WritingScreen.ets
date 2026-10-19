@@ -298,7 +298,11 @@ export struct WritingScreen {
         void this.cleanupInactiveCorrectionModels().catch(() => {})
       }
     })
-    this.refreshCorrectionResourceStatus()
+    // Issue #958：无用户模型时用 HAP 内置模型兜底（每会话一次，失败不阻断编辑），
+    // 兜底尝试结束后统一刷新校对资源状态显示。
+    void this.ensureBundledCorrectionModel().then((): void => {
+      this.refreshCorrectionResourceStatus()
+    })
 
     // Issue #920 A：把路由上下文交给协调器，并注册显示状态回流 + 会话打开后的平台侧恢复。
     const workflowConfig: WritingWorkflowConfig = {
@@ -1485,6 +1489,25 @@ export struct WritingScreen {
     const result = await this.correctionCoordinator.apply(suggestion)
     if (!result.success) {
       this.correctionErrorMessage = result.userMessage ?? result.errorCode ?? '校对建议已过期，请重新检查'
+    }
+  }
+
+  /**
+   * Issue #958：内置 KenLM 模型兜底。用户导入的模型始终优先；只有 Core 尚未
+   * 配置模型时才把 HAP 内置模型流式复制到沙箱并交给 Core（协调器每会话只做一次）。
+   * 资源管理器沿用现有 UIAbilityContext 获取方式；失败只记 warning，不阻断编辑。
+   */
+  private async ensureBundledCorrectionModel(): Promise<void> {
+    const context = getAppContext().getAbilityContext()
+    const appDataRoot = getAppDataRoot()
+    if (context === null || appDataRoot.length === 0) {
+      return
+    }
+    const result = await this.correctionCoordinator.ensureBundledModel(
+      (): Promise<string> => CorrectionResourceImporter.ensureBundledModel(context.resourceManager, appDataRoot))
+    if (!result.success) {
+      hilog.warn(0x0000, 'WritingScreen', 'bundled correction model fallback skipped: %{public}s',
+        result.userMessage ?? result.errorCode ?? 'unknown')
     }
   }
 

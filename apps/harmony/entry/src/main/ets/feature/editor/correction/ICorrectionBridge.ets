@@ -1,3 +1,4 @@
+import { resourceManager } from '@kit.LocalizationKit'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import {
@@ -13,6 +14,13 @@ export interface ICorrectionBridge {
   setModelPath(path: string): Promise<ResultEnvelope<boolean>>
   getResourceStatus(): Promise<ResultEnvelope<CorrectionResourceStatusDto>>
   getModelPathStatus(path: string): Promise<ResultEnvelope<CorrectionModelPathStatusDto>>
+  /**
+   * Issue #958: stream the bundled KenLM model out of the HAP rawfile via the
+   * native OH_ResourceManager APIs and resolve the verified sandbox path.
+   * Rejects with an Error when the rawfile or the copy/digest check fails.
+   */
+  prepareBundledCorrectionModel(manager: resourceManager.ResourceManager, rawFileName: string,
+    destinationPath: string, expectedSize: number, expectedSha256: string): Promise<string>
   checkSegment(sessionId: number, projectId: string, chapterId: string, textRevision: number,
     startByte: number, endByte: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
   checkChapter(sessionId: number, projectId: string, chapterId: string,

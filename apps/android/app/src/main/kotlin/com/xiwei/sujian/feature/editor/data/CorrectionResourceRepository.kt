@@ -1,14 +1,16 @@
 package com.xiwei.sujian.feature.editor.data
 
 import android.content.Context
+import android.content.res.AssetManager
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.AtomicFile
 import androidx.core.content.edit
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
-import java.io.DigestInputStream
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
+import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -103,6 +105,46 @@ class CorrectionResourceRepository(context: Context) {
             .apply()
     }
 
+    /**
+     * #958：确保随 APK 打包的内置中文 KenLM 模型已就位并返回其文件。
+     *
+     * 用户导入的模型始终优先 — 调用方先看 [activeModelFile]；只有没有 active
+     * 用户模型、且私有模型目录里也没有摘要一致的副本时，才从 APK assets 流式
+     * 拷贝内置模型，成功后按摘要复用（只拷一次）。内置模型不是用户模型，
+     * 因此不写 [KEY_ACTIVE_MODEL] 偏好、不调用 [setActiveModel]。
+     */
+    @Throws(IOException::class)
+    fun ensureBundledModel(): File {
+        synchronized(modelImportLock) {
+            findModelWithHash(BUNDLED_MODEL_SHA256, BUNDLED_MODEL_SIZE)?.let { return it }
+            val namedCopy = File(modelDirectory, BUNDLED_MODEL_FILE_NAME)
+            if (namedCopy.isFile && namedCopy.length() == BUNDLED_MODEL_SIZE &&
+                hashFile(namedCopy) == BUNDLED_MODEL_SHA256
+            ) {
+                return namedCopy
+            }
+            if (!modelDirectory.isDirectory && !modelDirectory.mkdirs()) {
+                throw IOException("Unable to create the private correction model directory")
+            }
+            if (!modelStagingDirectory.isDirectory && !modelStagingDirectory.mkdirs()) {
+                throw IOException("Unable to create the private correction model staging directory")
+            }
+            val stagingFile = File(modelStagingDirectory, "${UUID.randomUUID()}.part")
+            try {
+                copyBundledModelToStaging(stagingFile)
+                if (namedCopy.exists() && !namedCopy.delete()) {
+                    throw IOException("Unable to replace the existing bundled correction model")
+                }
+                if (!stagingFile.renameTo(namedCopy)) {
+                    throw IOException("Unable to install the bundled correction model")
+                }
+                return namedCopy
+            } finally {
+                stagingFile.delete()
+            }
+        }
+    }
+
     /** Lists installed model copies, excluding temporary candidates under the staging directory. */
     fun installedModels(): List<File> =
         modelDirectory.listFiles()
@@ -122,6 +164,9 @@ class CorrectionResourceRepository(context: Context) {
         if (configured || inUse || !deletionEligible) return false
         val canonicalModelDirectory = modelDirectory.canonicalFile
         val canonicalFile = file.canonicalFile
+        // #958：内置模型是兜底资源，不是用户导入被取代的旧副本 — 用户改选其他模型后
+        // 删掉它只会让下次启动重新从 assets 拷贝 148MB。
+        if (canonicalFile.name == BUNDLED_MODEL_FILE_NAME) return false
         if (canonicalFile.parentFile != canonicalModelDirectory ||
             !canonicalFile.extension.equals("klm", ignoreCase = true) ||
             preferences.getString(KEY_ACTIVE_MODEL, null) == canonicalFile.name
@@ -217,6 +262,45 @@ class CorrectionResourceRepository(context: Context) {
         return digest.digest().toLowerHex()
     }
 
+    /**
+     * #958：把内置模型从 APK assets 流式拷到临时文件，边写边累计字节数与 SHA-256；
+     * 长度或摘要不符时抛 IOException，由 [ensureBundledModel] 删除临时文件。
+     * 148MB 模型不能整块读进内存，因此不使用 readBytes()/copyTo()。
+     */
+    private fun copyBundledModelToStaging(stagingFile: File) {
+        val digest = MessageDigest.getInstance(SHA_256)
+        val copiedBytes = stagingFile.outputStream().use { output -> streamBundledModel(output, digest) }
+        if (copiedBytes != BUNDLED_MODEL_SIZE) {
+            throw IOException("The bundled correction model has an unexpected byte count")
+        }
+        if (digest.digest().toLowerHex() != BUNDLED_MODEL_SHA256) {
+            throw IOException("The bundled correction model failed its checksum")
+        }
+    }
+
+    /** #958：assets → 输出流的固定缓冲拷贝循环；超出期望字节数立即失败，避免无界写入。 */
+    private fun streamBundledModel(
+        output: OutputStream,
+        digest: MessageDigest,
+    ): Long {
+        var copiedBytes = 0L
+        appContext.assets.open(BUNDLED_MODEL_ASSET_PATH, AssetManager.ACCESS_STREAMING).use { input ->
+            val buffer = ByteArray(BUNDLED_MODEL_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (count == 0) continue
+                copiedBytes += count
+                if (copiedBytes > BUNDLED_MODEL_SIZE) {
+                    throw IOException("The bundled correction model exceeds the expected size")
+                }
+                digest.update(buffer, 0, count)
+                output.write(buffer, 0, count)
+            }
+        }
+        return copiedBytes
+    }
+
     private fun findModelWithHash(
         contentHash: String,
         expectedLength: Long,
@@ -252,6 +336,16 @@ class CorrectionResourceRepository(context: Context) {
         private const val SHA_256 = "SHA-256"
         private const val HASH_BUFFER_SIZE = 64 * 1024
         private val modelImportLock = Any()
+
+        // #958：随 APK 打包的内置中文 KenLM 模型，与
+        // packaging/correction/kenlm-model.lock 及 app/build.gradle.kts 中的
+        // fetchBundledCorrectionModel 保持一致（文件名、assets 路径、字节数、摘要）。
+        internal const val BUNDLED_MODEL_FILE_NAME = "people2014corpus_chars.klm"
+        internal const val BUNDLED_MODEL_ASSET_PATH = "correction/people2014corpus_chars.klm"
+        internal const val BUNDLED_MODEL_SIZE = 147_608_010L
+        internal const val BUNDLED_MODEL_SHA256 =
+            "1d4ad3975144619a5bddc4ac53fcf319ec27d37dccb4ba58674af3a068d835a9"
+        private const val BUNDLED_MODEL_BUFFER_SIZE = 1024 * 1024
 
         val SUPPORTED_DICTIONARIES = listOf(
             "word_freq.txt",
