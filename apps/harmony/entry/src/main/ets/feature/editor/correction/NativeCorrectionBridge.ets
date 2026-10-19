@@ -1,3 +1,4 @@
+import { resourceManager } from '@kit.LocalizationKit'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
@@ -47,6 +48,22 @@ export class NativeCorrectionBridge implements ICorrectionBridge {
     } catch (e) {
       return this.nativeError<CorrectionModelPathStatusDto>(e)
     }
+  }
+
+  /**
+   * Issue #958: the native handler resolves the final sandbox path directly
+   * (no envelope) and rejects with an Error when the rawfile copy or its
+   * size/SHA-256 check fails; errors propagate to the caller.
+   */
+  async prepareBundledCorrectionModel(manager: resourceManager.ResourceManager, rawFileName: string,
+    destinationPath: string, expectedSize: number, expectedSha256: string): Promise<string> {
+    const pending: Promise<string> = this.core.getNativeModule().nativeCorrectionPrepareBundledModel(
+      manager, rawFileName, destinationPath, expectedSize, expectedSha256) as Promise<string>
+    const path: string = await pending
+    if (path.length === 0) {
+      throw new Error('内置模型准备未返回沙箱路径')
+    }
+    return path
   }
 
   async checkSegment(sessionId: number, projectId: string, chapterId: string, textRevision: number,

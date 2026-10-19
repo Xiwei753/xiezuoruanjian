@@ -104,16 +104,25 @@ install -Dpm 0644 packaging/linux/icons/hicolor/scalable/apps/sujian.svg \
 install -Dpm 0644 packaging/rpm/io.github.Xiwei753.Sujian.metainfo.xml \
     %{buildroot}%{_datadir}/metainfo/io.github.Xiwei753.Sujian.metainfo.xml
 
+# Issue #958：内置中文 KenLM 校对模型装到只读共享目录，运行时直接 mmap 读取，
+# 不复制到用户目录。模型由 build-rpm.sh 在生成 Source0 tarball 前下载校验。
+install -Dpm 0644 packaging/correction/bundled/people2014corpus_chars.klm \
+    %{buildroot}%{_datadir}/sujian/models/people2014corpus_chars.klm
+
 %files
-%license LICENSE
-%doc README.md
+%license LICENSE packaging/correction/BLOOM-RAIL-1.0.txt
+%doc README.md packaging/correction/THIRD_PARTY_MODEL_NOTICES.md
 %{_bindir}/sujian
 %{_libexecdir}/sujian/sujian-linux-qt
 %{_datadir}/applications/io.github.Xiwei753.Sujian.desktop
 %{_datadir}/icons/hicolor/scalable/apps/io.github.Xiwei753.Sujian.svg
 %{_datadir}/metainfo/io.github.Xiwei753.Sujian.metainfo.xml
+# Issue #958：内置中文 KenLM 模型与第三方来源/许可说明。
+%{_datadir}/sujian/models/people2014corpus_chars.klm
 
 %changelog
+* Sun Oct 18 2026 Xiwei753 <xiwei753@users.noreply.github.com> - 0.1.0-1
+- 内置中文 KenLM 校对模型 people2014corpus_chars.klm，随包分发 BigScience RAIL v1.0 许可与第三方来源说明（Issue #958）
 * Thu Oct 15 2026 Xiwei753 <xiwei753@users.noreply.github.com> - 0.1.0-1
 - 界面全面迁移到 KDE Kirigami 6 + Breeze + Kirigami Addons（Issue #900）
 - 新增运行依赖：kf6-kirigami、kf6-kirigami-addons、qqc2-breeze-style、breeze-icon-theme

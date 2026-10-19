@@ -33,6 +33,7 @@
 | Core File Kit (fileUri) | @kit.CoreFileKit (fileUri) | 12 | SystemCapability.FileManagement.File.FileUri | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets |
 | 校对资源文件选择与导入 | @kit.CoreFileKit (picker.DocumentViewPicker, fileIo) | 12 | SystemCapability.FileManagement.UserFileService; SystemCapability.FileManagement.File.FileIO | 无（系统 Picker 授权用户所选 URI） | 否 | feature/editor/correction/CorrectionResourceImporter.ets, feature/editor/ui/WritingScreen.ets, feature/editor/correction/CorrectionSuggestionsPanel.ets |
 | 校对资源状态查询 | WriterCore `get_correction_resource_status` | 1 | NAPI async worker | 无 | 否 | feature/editor/correction/CorrectionDtos.ets, feature/editor/correction/NativeCorrectionBridge.ets, corebridge/napi/napi_correction.cpp |
+| 内置校对模型（native rawfile 流式复制） | 无 ArkTS Kit（`resourceManager.ResourceManager` 仅作 NAPI 参数；读取走 native `rawfile/raw_file*.h` C 接口） | 8 | SystemCapability.Global.ResourceManager | 无 | 否 | cpp/corebridge/napi/napi_correction.cpp, cpp/CMakeLists.txt, feature/editor/correction/CorrectionResourceImporter.ets, feature/editor/correction/NativeCorrectionBridge.ets, feature/editor/correction/CorrectionCoordinator.ets, feature/editor/ui/WritingScreen.ets |
 | 系统剪贴板 | @ohos.pasteboard | 12 | SystemCapability.MiscServices.Pasteboard | 无 | 否 | feature/settings/presentation/SettingsViewModel.ets |
 | Application 颜色模式 | @kit.AbilityKit (ApplicationContext) | 11 | 无独立 SystemCapability（随 @kit.AbilityKit Application 生命周期） | 无 | 否 | ui/theme/HarmonyColorModeController.ets |
 | HDS Tabs（悬浮页签） | @kit.UIDesignKit (HdsTabs) | 23 | SystemCapability.UIDesign.HDSComponent.Core | 无 | 否 | app/navigation/impl/api23/HdsPrimaryTabsApi23.ets, app/navigation/PrimaryTabShell.ets |
@@ -244,6 +245,21 @@
 - 词典映射：仅接受 `word_freq.txt`、`same_pinyin.txt`、`same_stroke.txt`、`custom_confusion.txt`、`person_name.txt`、`place_name.txt`、`proper_name.txt`、`ignored_words.txt`，复制到 Core `app_data_root/correction-data/`；更新后由 Core 在下一次校对请求中重读。
 - 模型映射：`.klm` 文件复制到同一应用私有资源目录下的唯一文件名，并通过现有 `nativeCorrectionSetModelPath` 配置 Core；模型格式由首次校对时验证。
 - 官方参考：[@ohos.file.picker](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-file-picker)、[@ohos.file.fs](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-file-fs)
+
+## 内置校对模型（native rawfile 流式复制）
+
+- Kit：无 ArkTS Kit。`resourceManager.ResourceManager`（`@kit.LocalizationKit`）只作为参数从 JS 传给 NAPI，实际读取走 native rawfile C 接口（`rawfile/raw_file_manager.h`、`rawfile/raw_file.h`）。
+- 接口：
+  - `OH_ResourceManager_InitNativeResourceManager(env, jsResMgr)` / `OH_ResourceManager_ReleaseNativeResourceManager(mgr)`（JS 线程创建与释放）
+  - `OH_ResourceManager_OpenRawFile(mgr, fileName)` / `OH_ResourceManager_ReadRawFile(rawFile, buf, length)` / `OH_ResourceManager_CloseRawFile(rawFile)`（异步线程按固定 1MB 缓冲分块读取）
+- 最低 API：8（`OH_ResourceManager_*` 与 `librawfile.z.so` 自 API 8 起可用；工程最低安装基线 12 始终满足）
+- SystemCapability：`SystemCapability.Global.ResourceManager`
+- 权限：无
+- ACL：否
+- 模型来源：构建期由 `tools/build_harmony.sh` 调 `packaging/correction/fetch-model.sh`，按 `packaging/correction/kenlm-model.lock` 生成 `entry/src/main/resources/rawfile/people2014corpus_chars.klm`（147,608,010 字节，SHA-256 固定），随 entry HAP 打包；模型二进制不入库。
+- fallback：用户导入的 `.klm` 路径始终优先（Core 已 `modelConfigured` 时不做内置兜底）；沙箱内已有字节数与 SHA-256 匹配的成品直接复用，不重复复制；准备或切换失败只记 warning（hilog），不阻断编辑，固定规则仍可用。
+- 实现文件：`cpp/corebridge/napi/napi_correction.cpp`（`nativeCorrectionPrepareBundledModel`）、`cpp/CMakeLists.txt`（链接 `librawfile.z.so`）、`feature/editor/correction/CorrectionResourceImporter.ets`（`ensureBundledModel`）、`feature/editor/correction/NativeCorrectionBridge.ets`、`feature/editor/correction/CorrectionCoordinator.ets`（一次性兜底入口）、`feature/editor/ui/WritingScreen.ets`（会话初始化调用点，resourceManager 来自现有 UIAbilityContext）
+- 说明：不使用 ArkTS `getRawFileContent`（会把 148MB 读进 ArkTS 内存），也不把 `getRawFd` 句柄当普通 fd 交给 `fs.copyFile`（华为 FAQ 明确该用法内容错误：https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-local-file-manager-62）。native 侧自包含 SHA-256（FIPS 180-4，不依赖 OpenSSL）在复制同时增量计算摘要，校验通过后原子改名落盘。
 
 ## 系统剪贴板
 

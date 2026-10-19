@@ -7,6 +7,11 @@
 # 应用的 prebuilt 目录：
 #   apps/harmony/entry/src/main/prebuilt/arm64-v8a/libwriter_core_ffi.so
 #
+# 同时按 packaging/correction/kenlm-model.lock 准备内置中文 KenLM 模型
+# （Issue #958），写入 entry 的 rawfile 资源目录，随 HAP 一起打包：
+#   apps/harmony/entry/src/main/resources/rawfile/people2014corpus_chars.klm
+# 模型二进制不入库，运行时由 native OH_ResourceManager 接口流式复制到沙箱。
+#
 # 使用方法：
 #   ./tools/build_harmony.sh
 #
@@ -151,9 +156,37 @@ if [ ! -f "$PREBUILT_DIR/libwriter_core_ffi.so" ]; then
     exit 1
 fi
 
+# -----------------------------------------------------------------------------
+# 5. 内置纠错模型（Issue #958）
+# -----------------------------------------------------------------------------
+# 中文 KenLM 模型随 entry HAP 打包：构建期按 packaging/correction/kenlm-model.lock
+# 下载并校验（已有摘要正确的文件直接复用），写入 entry 的 rawfile 资源目录。
+# 模型二进制不入库；运行时由 native OH_ResourceManager 接口分块流式复制到应用
+# 沙箱，再由 Core mmap 读取；校验失败时构建中止，不允许打出缺少内置模型的包。
+BUNDLED_MODEL_DIR="$WORKSPACE_ROOT/apps/harmony/entry/src/main/resources/rawfile"
+BUNDLED_MODEL_FILE="$BUNDLED_MODEL_DIR/people2014corpus_chars.klm"
+BUNDLED_MODEL_BYTES=147608010
+
+echo ""
+echo "--- 内置纠错模型 ---"
+"$WORKSPACE_ROOT/packaging/correction/fetch-model.sh" "$BUNDLED_MODEL_DIR"
+
+if [ ! -f "$BUNDLED_MODEL_FILE" ]; then
+    echo "错误：内置纠错模型不存在：$BUNDLED_MODEL_FILE" >&2
+    exit 1
+fi
+BUNDLED_MODEL_ACTUAL_BYTES="$(wc -c < "$BUNDLED_MODEL_FILE" | tr -d ' ')"
+if [ "$BUNDLED_MODEL_ACTUAL_BYTES" != "$BUNDLED_MODEL_BYTES" ]; then
+    echo "错误：内置纠错模型字节数不符（期望 $BUNDLED_MODEL_BYTES，实际 $BUNDLED_MODEL_ACTUAL_BYTES）。" >&2
+    exit 1
+fi
+echo "  内置纠错模型: $BUNDLED_MODEL_FILE"
+ls -lh "$BUNDLED_MODEL_FILE"
+
 echo ""
 echo "=== 构建成功 ==="
 echo "  FFI 库: $PREBUILT_DIR/libwriter_core_ffi.so"
+echo "  内置纠错模型: $BUNDLED_MODEL_FILE"
 ls -lh "$PREBUILT_DIR/libwriter_core_ffi.so"
 file "$PREBUILT_DIR/libwriter_core_ffi.so" 2>/dev/null || true
 echo ""

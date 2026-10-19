@@ -1,22 +1,53 @@
 # Chinese correction model assets
 
-The Rust reader accepts a user-provided local model path. Model bytes are not
-embedded in the Rust library, shared libraries, or platform packages.
+The Rust reader accepts a user-provided local model path. Starting with Issue
+#958, every installer (Linux Qt RPM, Android APK, HarmonyOS HAP) also bundles
+the upstream KenLM Chinese model at build time, so offline proofreading works
+right after install. Bundled and user-imported models are read by the same
+pure-Rust `sujian-proof` reader (mmap plus CPU query); a user-configured model
+path always wins over the bundled one, and the model file itself is never
+parsed or copied by platform UI code.
 
-## `people2014corpus_chars.klm`
+## Bundled `people2014corpus_chars.klm`
 
-- Upstream page: <https://huggingface.co/shibing624/chinese-kenlm-klm/blob/main/people2014corpus_chars.klm>
+- Upstream model repository: <https://huggingface.co/shibing624/chinese-kenlm-klm>
+- Publisher: shibing624 (Ming Xu, author of pycorrector).
+- Upstream file URL:
+  <https://huggingface.co/shibing624/chinese-kenlm-klm/resolve/main/people2014corpus_chars.klm>
 - Declared size: 147,608,010 bytes (about 148 MB decimal).
 - SHA-256: `1d4ad3975144619a5bddc4ac53fcf319ec27d37dccb4ba58674af3a068d835a9`.
-- The Hugging Face model repository currently labels its license `bigscience-bloom-rail-1.0`.
-- That license label does not establish GPL-3.0 compatibility or the uploader's
-  right to redistribute the training corpus. Keep the model separate from this
-  repository and from installer resources until a clear redistribution grant
-  is documented.
+- The Hugging Face model repository labels its license
+  `bigscience-bloom-rail-1.0` (BigScience RAIL License v1.0). The complete
+  license text ships with every package and is kept in
+  `packaging/correction/BLOOM-RAIL-1.0.txt`; the required attribution,
+  redistribution conditions, use restrictions, and the separate software
+  sources (pycorrector, KenLM) are documented in
+  `packaging/correction/THIRD_PARTY_MODEL_NOTICES.md`,
+  `crates/sujian-proof/THIRD_PARTY_NOTICES.md`, and this file.
+- Training data per the upstream pycorrector README (“Language Model” section,
+  <https://github.com/shibing624/pycorrector#language-model>): the 2014 People's
+  Daily corpus. The Rust reader's ability to open and query a file is separate
+  from the model's own license; the package does not relicense the model and
+  never relabels it as GPL-3.0-only.
 
-The Rust reader's ability to open and query a file is separate from any right to
-redistribute the file. Device packages must not download, include, or copy this
-model as an application asset based only on the repository license label.
+Build-time fetching (Issue #958):
+
+- `packaging/correction/kenlm-model.lock` pins the file name, URL, byte size,
+  SHA-256, publisher, source page, and license label.
+- `packaging/correction/fetch-model.sh <output-dir>` reuses an existing file
+  whose size and SHA-256 match, otherwise downloads it with `curl` and verifies
+  both before atomically renaming it to `people2014corpus_chars.klm`. Any
+  mismatch fails the build; packages never ship without the verified model.
+- All three platform builds call that same script and never download the model
+  at runtime. The 148 MB binary is a build artifact and is not committed.
+- Install locations: RPM installs
+  `/usr/share/sujian/models/people2014corpus_chars.klm` and the app mmaps it
+  read-only from the install directory; the Android APK carries
+  `assets/correction/people2014corpus_chars.klm`, copied once to the app's
+  private `correction-models/` directory; the HarmonyOS entry HAP carries
+  `resources/rawfile/people2014corpus_chars.klm`, streamed once through the
+  native `OH_ResourceManager` APIs into the app sandbox. All copies are
+  verified against the pinned SHA-256 and reused when already correct.
 
 ## Bundled and user-added lexicons
 
@@ -110,5 +141,6 @@ User-provided dictionaries may add or override the bundled data. Their
 contents are not automatically uploaded. Import only files whose licenses
 permit the intended use.
 
-Changed files are reloaded on the next correction request. The model remains
-separate and is never included in application packages.
+Changed files are reloaded on the next correction request. The bundled model is
+kept separate from user dictionaries and user-imported `.klm` models; importing
+another model switches the configured path to the user's copy.

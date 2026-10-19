@@ -29,6 +29,7 @@ target_include_directories(writer_core_napi PRIVATE
 target_link_libraries(writer_core_napi PUBLIC
     libace_napi.z.so
     libhilog_ndk.z.so
+    librawfile.z.so
     writer_core_ffi
 )
 

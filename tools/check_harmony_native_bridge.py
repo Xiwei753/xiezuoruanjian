@@ -305,6 +305,7 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
 
     # 6a: 提取所有 napi_*.cpp 中注册的函数名
     # #629 迁移后：napi_*.cpp 从 cpp/ 移到 cpp/corebridge/napi/，并新增 napi_editor_session.cpp。
+    # Issue #958：补上 napi_correction.cpp，否则校对域新函数完全不在守卫内。
     napi_files = [
         "napi_init.cpp",
         "napi_app_state.cpp",
@@ -315,6 +316,7 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
         "napi_stats.cpp",
         "napi_starmap.cpp",
         "napi_editor_session.cpp",
+        "napi_correction.cpp",
     ]
     cpp_napi_dir = "entry/src/main/cpp/corebridge/napi"
     napi_content = ""
@@ -349,6 +351,8 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
         ("NativeStarMapBridge.ets", "entry/src/main/ets/corebridge/native"),
         ("NativeDiagnosticsBridge.ets", "entry/src/main/ets/corebridge/native"),
         ("NativeEditorSessionBridge.ets", "entry/src/main/ets/feature/editor/interop"),
+        # Issue #958：校对域的 ArkTS 调用也必须与 NAPI 注册名对齐。
+        ("NativeCorrectionBridge.ets", "entry/src/main/ets/feature/editor/correction"),
     ]
     bridge_content = ""
     for bf, subdir in bridge_locations:
@@ -418,16 +422,19 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
     platform_harmony_dir = os.path.join(repo_root, "platform/rust/harmony/src")
 
     rust_funcs = set()
-    # 提取 #[no_mangle] ... pub unsafe extern "C" fn writer_core_XXX。
+    # 提取 #[no_mangle] ... pub [unsafe] extern "C" fn writer_core_XXX。
+    # `unsafe` 不是 C 导出的必要条件：`#[no_mangle] pub extern "C" fn` 同样是合法导出，
+    # 仓库两种写法并存（如 writer_core_get_correction_resource_status）。把 unsafe
+    # 当硬条件会把真实存在的导出误报成“C header 有但 Rust 缺失”。
     # 分步匹配以避免嵌套量词导致的指数回溯 (CodeQL py/redos)：
     # 旧的单正则 `#[no_mangle]\s*(?:(?:#\[[^\]]*\]|//[^\n]*\n\s*)\s*)*pub\s+...`
     # 中 `(?:(?:...)\s*)*` 是嵌套量词，在 `#[no_mangle]//\n` 后跟多个 ` //\n`
     # 重复时可能触发指数回溯。
     # 第一步定位 #[no_mangle]；第二步顺序跳过空白/属性宏 #[...]/行注释 //...\n；
-    # 第三步匹配 pub unsafe extern "C" fn writer_core_XXX。三个正则均无嵌套量词。
+    # 第三步匹配 pub [unsafe] extern "C" fn writer_core_XXX。三个正则均无嵌套量词。
     no_mangle_re = re.compile(r"#\[no_mangle\]")
     skip_re = re.compile(r"\s+|#\[[^\]]*\]|//[^\n]*\n")
-    export_re = re.compile(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+(writer_core_\w+)')
+    export_re = re.compile(r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(writer_core_\w+)')
 
     scan_dirs = []
     if os.path.isdir(ffi_dir):

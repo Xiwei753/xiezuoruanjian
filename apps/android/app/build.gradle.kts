@@ -75,6 +75,16 @@ val abiSuffix =
         )
     }
 
+// #958：内置中文 KenLM 模型（packaging/correction/kenlm-model.lock 锁定）只作为构建
+// 产物进入 APK：fetch-model.sh 复用或下载校验后写入
+// build/generated/correction-assets/correction/people2014corpus_chars.klm，
+// 该目录是 main 源集的 assets 根，APK 内路径为
+// assets/correction/people2014corpus_chars.klm。build/ 已被忽略，模型不入库。
+val bundledCorrectionAssetsDir = layout.buildDirectory.dir("generated/correction-assets")
+val bundledCorrectionModelDir = layout.buildDirectory.dir("generated/correction-assets/correction")
+val bundledCorrectionModelFileName = "people2014corpus_chars.klm"
+val bundledCorrectionModelSize = 147_608_010L
+
 android {
     namespace = "com.xiwei.sujian"
     compileSdk = 36
@@ -132,6 +142,9 @@ android {
         // ABI 残留混入或陈旧原生库覆盖新产物。
         getByName("main") {
             jniLibs.setSrcDirs(emptyList<Any>())
+            // #958：内置纠错语言模型从构建产物目录进入 assets
+            // （APK 内 assets/correction/people2014corpus_chars.klm）。
+            assets.srcDir(bundledCorrectionAssetsDir)
         }
         getByName("noAi") {
             jniLibs.srcDirs(layout.buildDirectory.dir("generated/writer-native/noAiDebug"))
@@ -183,6 +196,11 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    // #958：内置语言模型是 Core mmap 读取的 148MB 独立资产，保持不压缩，
+    // 避免打包时压缩、运行时再解压的额外开销。
+    androidResources {
+        noCompress("klm")
+    }
 }
 
 android.applicationVariants.all {
@@ -209,6 +227,47 @@ android.applicationVariants.all {
 tasks.register("buildWriterNative") {
     group = "build"
     description = "Build Rust native libraries for writer core (lifecycle task)"
+}
+
+// #958：随 APK 打包的内置中文 KenLM 模型获取任务，只在顶层注册一次。
+// 声明锁文件与脚本为输入、模型输出目录为输出，让 Gradle 自行判断 UP-TO-DATE；
+// 各变体的 merge<Variant>Assets 都依赖本任务，保证 debug/release 打包前模型已就位。
+val fetchBundledCorrectionModel =
+    tasks.register("fetchBundledCorrectionModel") {
+        group = "build"
+        description = "Fetch and verify the bundled correction language model (Issue #958)"
+
+        val repoRoot = rootProject.projectDir.resolve("../..").canonicalFile
+        inputs.files(
+            File(repoRoot, "packaging/correction/kenlm-model.lock"),
+            File(repoRoot, "packaging/correction/fetch-model.sh"),
+        )
+        outputs.dir(bundledCorrectionModelDir)
+
+        doLast {
+            val scriptPath = File(repoRoot, "packaging/correction/fetch-model.sh")
+            if (!scriptPath.exists()) {
+                throw GradleException("fetch-model.sh not found at ${scriptPath.absolutePath}")
+            }
+            val outputDir = bundledCorrectionModelDir.get().asFile
+            exec {
+                commandLine("bash", scriptPath.absolutePath, outputDir.absolutePath)
+            }
+            val modelFile = File(outputDir, bundledCorrectionModelFileName)
+            if (!modelFile.isFile || modelFile.length() != bundledCorrectionModelSize) {
+                throw GradleException(
+                    "Bundled correction model missing or of unexpected size at ${modelFile.absolutePath}",
+                )
+            }
+        }
+    }
+
+android.applicationVariants.all {
+    val variant = this
+    val variantCapitalized = variant.name.replaceFirstChar { it.uppercase() }
+    tasks.named("merge${variantCapitalized}Assets").configure {
+        dependsOn(fetchBundledCorrectionModel)
+    }
 }
 
 android.applicationVariants.all {
