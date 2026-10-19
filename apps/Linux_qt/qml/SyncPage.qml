@@ -81,6 +81,15 @@ ColumnLayout {
         case "sync.block.remote_url_missing": msg = qsTr("未设置远程仓库地址"); break;
         case "sync.block.token_missing": msg = qsTr("未设置访问 Token"); break;
         case "sync.block.invalid_directory": msg = qsTr("工作区目录无效"); break;
+        case "sync.result.token_missing": msg = qsTr("未设置访问 Token"); break;
+        case "sync.result.token_invalid": msg = qsTr("GitHub Token 无效或已过期，请检查 Token 是否正确"); break;
+        case "sync.result.token_permission_denied": msg = qsTr("GitHub Token 权限不足，请为目标仓库授予 Contents 读写权限"); break;
+        case "sync.result.repo_not_found_or_no_permission": msg = qsTr("仓库不存在或无访问权限"); break;
+        case "sync.result.branch_missing": msg = qsTr("远程分支不存在"); break;
+        case "sync.result.network_failed": msg = qsTr("网络连接失败"); break;
+        case "sync.result.auth_failed": msg = qsTr("身份验证失败"); break;
+        case "sync.result.non_fast_forward": msg = qsTr("推送被拒绝：远端包含本地尚未同步的提交"); break;
+        case "sync.result.unrelated_histories": msg = qsTr("本地与远端仓库历史不相关，无法自动同步"); break;
         case "sync.phase.diagnose": msg = qsTr("正在诊断..."); break;
         case "sync.phase.dry_run": msg = qsTr("正在试运行..."); break;
         case "sync.phase.syncing": msg = qsTr("正在同步..."); break;
@@ -261,15 +270,6 @@ ColumnLayout {
         // 优先级 2：本轮操作（按 operation_id + operation_kind 过滤）的终态。
         if (opIsCurrent) {
             root.applyOperationStateText(obj)
-            // 本轮同步已产出持久报告（且报告确属最后这一轮）时，改用报告的分组/
-            // path/phase 详情展示（同一次运行的更细视图）；报告缺失或来自更早的
-            // 运行则保留本轮终态，不让旧报告冒充本轮结果。
-            // Core 的持久报告只有在本轮确实进入 Core 同步后才能细化本轮结果。
-            // Qt 前置检查失败仍有 operation_id，但 core_attempt_started=false；
-            // 此时保留该操作的具体错误，不能被上一轮历史报告覆盖。
-            if (obj.operation_kind === "sync" && obj.core_attempt_started === true
-                    && root.syncReportBelongsToLatestAttempt())
-                root.updatePersistedSyncReportText()
             return
         }
 

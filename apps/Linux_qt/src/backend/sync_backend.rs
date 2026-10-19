@@ -227,9 +227,6 @@ impl SyncBackend {
             .ok()
             .flatten()
             .unwrap_or_else(|| "unknown".to_string());
-        let core_attempt_started = self
-            .with_app(|app| app.sync_core_attempt_started_for_operation_id(&outcome_operation_id))
-            .unwrap_or(false);
         // Issue #754 评论 5816335613: 明确区分成功与 AppBackend 借用失败。
         // 借用失败直接 return，不发任何"已完成"类 signal——
         // StatusOnly 只表示 outcome 已成功进入 AppBackend 并完成处理、但无工作区内容变化，
@@ -255,7 +252,6 @@ impl SyncBackend {
             &outcome_operation_id,
             &outcome_source,
             &outcome_action_result,
-            core_attempt_started,
         );
         if effect == sync_operations::SyncOutcomeEffect::ContentChanged {
             self.sync_content_applied();
@@ -353,13 +349,7 @@ impl SyncBackend {
         }
     }
 
-    fn log_sync_operation_terminal(
-        &self,
-        operation_id: &str,
-        source: &str,
-        action_result: &str,
-        core_attempt_started: bool,
-    ) {
+    fn log_sync_operation_terminal(&self, operation_id: &str, source: &str, action_result: &str) {
         let Ok(state) = serde_json::from_str::<serde_json::Value>(action_result) else {
             return;
         };
@@ -387,59 +377,18 @@ impl SyncBackend {
             .map(mask_sync_error)
             .unwrap_or_default();
 
-        let persisted_report = core_attempt_started
-            .then(|| {
-                self.with_app(|app| {
-                    app.core_api().map(|api| {
-                        let last_attempt = api
-                            .load_full_sync_state()
-                            .ok()
-                            .flatten()
-                            .and_then(|full_state| full_state.last_attempt_time);
-                        let report = api.load_latest_full_sync_report().ok().flatten();
-                        (last_attempt, report)
-                    })
-                })
-                .ok()
-                .flatten()
-            })
-            .flatten();
-        let report_failures = persisted_report
-            .and_then(|(last_attempt, report)| {
-                report.filter(|report| Some(report.attempted_at) == last_attempt)
-            })
-            .map(|report| {
-                report
-                    .failures
-                    .into_iter()
-                    .map(|failure| {
-                        format!(
-                            "{}:{} phase={} category={} detail={}",
-                            failure.target_kind,
-                            mask_sync_error(&failure.path),
-                            failure.phase,
-                            failure.error_category,
-                            mask_sync_error(&failure.detail)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" | ")
-            })
-            .unwrap_or_default();
-
         crate::backend::app_backend::debug_log_static(
             "sync",
             "perform_sync_terminal",
             &format!(
-                "operation_id={}, source={}, started=true, queued=false, status={}, phase={}, error_category={}, raw_error={}, failed_targets={}, report_failures={}",
+                "operation_id={}, source={}, started=true, queued=false, status={}, phase={}, error_category={}, raw_error={}, failed_targets={}",
                 operation_id,
                 source,
                 status,
                 phase,
                 error_category,
                 raw_error,
-                failed_targets,
-                report_failures
+                failed_targets
             ),
         );
     }
