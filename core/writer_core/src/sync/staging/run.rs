@@ -42,6 +42,9 @@ pub struct StagingRun {
     /// App group whose files and engine state this staging run may commit.
     /// `None` preserves the legacy App / Project staging behavior.
     app_group: Option<crate::sync::types::AppDataGroup>,
+    /// Prepare 阶段在 seed 之前记录的目标级失败（例如本机统计事件库迁移失败）。
+    /// 这类失败只属于当前 target：Transfer/Commit 跳过该组，其余独立组继续同步。
+    prepare_error: Option<String>,
 }
 
 impl StagingRun {
@@ -57,6 +60,7 @@ impl StagingRun {
             run_id,
             target_live_root,
             app_group: None,
+            prepare_error: None,
         })
     }
 
@@ -87,6 +91,16 @@ impl StagingRun {
     /// App group associated with this run, if it is a grouped App target.
     pub fn app_group(&self) -> Option<&crate::sync::types::AppDataGroup> {
         self.app_group.as_ref()
+    }
+
+    /// Prepare 阶段在 seed 之前记录的目标级失败。
+    pub fn record_prepare_error(&mut self, message: String) {
+        self.prepare_error = Some(message);
+    }
+
+    /// Prepare 阶段记录的目标级失败原因。
+    pub fn prepare_error(&self) -> Option<&str> {
+        self.prepare_error.as_deref()
     }
 
     /// staging 子目录（Transfer 阶段写入远端内容的目标）。
@@ -921,6 +935,9 @@ impl StagingRun {
 /// 任何一个 target 的 seed 失败都意味着该 target 的 staging 是半成品，
 /// 不能拿来做三方比较。seed 失败直接返回 Err，让调用方终止本次 full sync。
 ///
+/// 例外：本机统计设备组（#955）的旧事件库迁移发生在 seed 之前，失败记录在该
+/// run 的 [StagingRun::prepare_error] 上，只让这一组本次失败，不终止整轮同步。
+///
 /// 不再在此函数中初始化 workspace Git。
 /// 本地 Git 仓库由 bootstrap 阶段初始化，staging 只负责文件级快照。
 /// 不再按 `active_provider` 分 Git/GithubApi 走不同 seed 路径。
@@ -932,7 +949,7 @@ pub fn prepare_staging_runs(
     let mut staging_runs: Vec<StagingRun> = Vec::new();
 
     for planned in &mut plan.targets {
-        let run = match &planned.target.app_group {
+        let mut run = match &planned.target.app_group {
             Some(group) => StagingRun::create_for_app_group(
                 &plan.app_data_root,
                 planned.target_live_root.clone(),
@@ -940,10 +957,16 @@ pub fn prepare_staging_runs(
             )?,
             None => StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?,
         };
-        //   deleted target 不 seed（不读本地目录，
-        // 只枚举远端删除）。创建空 staging run 保持索引对齐，commit 阶段
-        // compute_commit_plan 会发现 staging 为空，自然 Skip。
-        if !planned.is_deleted_target() {
+        // #955：本机统计设备组必须在 seed 之前完成旧事件库迁移。
+        // 迁移写的是 live 的 `stats/events/<device_id>/`；放到 Transfer 的 staging
+        // 里执行时，staging 既没有 `device/` 也没有旧事件目录，条件永远不成立。
+        // 迁移失败只记录到该 run：本组本次跳过 Transfer/Commit，其它组继续同步。
+        if let Some(error) = migrate_local_stats_group_before_seed(planned) {
+            run.record_prepare_error(error);
+        } else if !planned.is_deleted_target() {
+            //   deleted target 不 seed（不读本地目录，
+            // 只枚举远端删除）。创建空 staging run 保持索引对齐，commit 阶段
+            // compute_commit_plan 会发现 staging 为空，自然 Skip。
             // seed 失败必须传播，不能继续拿半成品 staging。
             // 统一调 seed_from_live，不再按 backend 分支。
             run.seed_from_live(&planned.target_live_root)?;
@@ -953,6 +976,35 @@ pub fn prepare_staging_runs(
     }
 
     Ok(staging_runs)
+}
+
+/// 本机统计设备组的旧事件库迁移（#955）。
+///
+/// 对 `AppDataGroup::StatsDevice(device_id)` 且 `device_id` 等于 live 根
+/// `device/current_device.json` 中设备 ID 的 target，在 `seed_from_live` 之前
+/// 调用幂等迁移，把 `app-meta/stats/events.local/` 写入 live 的
+/// `stats/events/<device_id>/`。
+///
+/// 返回 `Some(error)` 表示迁移失败；调用方只让该组失败，不扩大为整轮同步失败。
+fn migrate_local_stats_group_before_seed(
+    planned: &crate::sync::full_sync::PlannedTarget,
+) -> Option<String> {
+    let crate::sync::types::AppDataGroup::StatsDevice(device_id) =
+        planned.target.app_group.as_ref()?
+    else {
+        return None;
+    };
+    let local_device_id = crate::settings::load_device_info(&planned.target_live_root)
+        .ok()
+        .map(|info| info.device_id)
+        .filter(|id| !id.is_empty());
+    if local_device_id.as_deref() != Some(device_id.as_str()) {
+        return None;
+    }
+    match crate::writing_stats::migration::migrate_stats_event_store(&planned.target_live_root) {
+        Ok(()) => None,
+        Err(error) => Some(format!("migration: {error}")),
+    }
 }
 
 impl Drop for StagingRun {

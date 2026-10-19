@@ -20,24 +20,6 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
         ));
     };
 
-    // #955：本机统计设备组在本地合并 / 上传之前，先完成旧事件库到
-    // `stats/events/<device_id>/` 的幂等迁移；否则自动同步可能先于统计页发生，
-    // 旧历史不会进入上传计划。其它设备的统计组只下载，不触发本机迁移。
-    // 迁移失败只让本组返回明确错误，不吞掉、也不中断其余独立组。
-    if let crate::sync::types::AppDataGroup::StatsDevice(device_id) = group {
-        let local_device_id = crate::settings::load_device_info(sync_root)
-            .ok()
-            .map(|info| info.device_id)
-            .filter(|id| !id.is_empty());
-        if local_device_id.as_deref() == Some(device_id.as_str()) {
-            if let Err(error) =
-                crate::writing_stats::migration::migrate_stats_event_store(sync_root)
-            {
-                return mark_app_group_failure(sync_result_from_error(error), "merge");
-            }
-        }
-    }
-
     let mut retry_failure_phase = "catalog_publish";
     for attempt in 0..MAX_CAS_RETRIES {
         if cancellation_token.is_some_and(SyncCancellationToken::is_cancelled) {

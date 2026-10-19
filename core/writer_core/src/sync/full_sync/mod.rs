@@ -38,6 +38,7 @@ pub use aggregate::{
     aggregate_full_sync_result, error_to_persist_status, transport_init_failure_error,
 };
 pub use plan::build_full_sync_target_plan;
+pub(crate) use transfer::prepare_failed_target_result;
 pub use transfer::{run_single_target_transfer, run_transfer};
 
 /// 单个 target 完成后的进度回调载荷。

@@ -204,9 +204,7 @@ impl StatsStore {
         }
 
         let mut cache = self.lock_written_ids();
-        let ids = cache
-            .entry(format!("{origin}/{date}"))
-            .or_insert_with(HashSet::new);
+        let ids = cache.entry(format!("{origin}/{date}")).or_default();
         for event in &fresh {
             if !event.event_id.is_empty() {
                 ids.insert(event.event_id.clone());
@@ -235,12 +233,14 @@ impl StatsStore {
         let mut batch_ids: HashSet<String> = HashSet::new();
         let mut fresh = Vec::new();
         for event in events {
-            if !event.event_id.is_empty() {
-                if ids.contains(&event.event_id) || batch_ids.contains(&event.event_id) {
-                    continue;
-                }
-                batch_ids.insert(event.event_id.clone());
+            if event.event_id.is_empty() {
+                fresh.push(event);
+                continue;
             }
+            if ids.contains(&event.event_id) || batch_ids.contains(&event.event_id) {
+                continue;
+            }
+            batch_ids.insert(event.event_id.clone());
             fresh.push(event);
         }
         Ok(fresh)
