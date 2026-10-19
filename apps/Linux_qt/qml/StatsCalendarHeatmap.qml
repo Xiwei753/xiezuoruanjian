@@ -115,6 +115,8 @@ Kirigami.ShadowedRectangle {
     onWeeksChanged: heatmapCanvas.requestPaint()
     onCellSizeChanged: heatmapCanvas.requestPaint()
     onGridOffsetChanged: heatmapCanvas.requestPaint()
+    // 选中框由 Canvas 绘制，选中/取消选中后必须主动重绘。
+    onSelectedDateChanged: heatmapCanvas.requestPaint()
     onThemeTextColorChanged: heatmapCanvas.requestPaint()
     onThemeHighlightColorChanged: heatmapCanvas.requestPaint()
 
