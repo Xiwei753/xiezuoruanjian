@@ -569,6 +569,22 @@
       "value": "GPLv3"
     },
     {
+      "name": "about_third_party_resources",
+      "value": "第三方资源（内置模型来源与许可证）"
+    },
+    {
+      "name": "third_party_notices_title",
+      "value": "第三方资源"
+    },
+    {
+      "name": "third_party_notices_close",
+      "value": "关闭"
+    },
+    {
+      "name": "third_party_notices_load_failed",
+      "value": "无法读取内置的许可文本。"
+    },
+    {
       "name": "about_mirror_note",
       "value": "GitHub 为主仓库。Gitee 为镜像同步仓库，方便国内访问。"
     },

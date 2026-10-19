@@ -84,6 +84,8 @@ val bundledCorrectionAssetsDir = layout.buildDirectory.dir("generated/correction
 val bundledCorrectionModelDir = layout.buildDirectory.dir("generated/correction-assets/correction")
 val bundledCorrectionModelFileName = "people2014corpus_chars.klm"
 val bundledCorrectionModelSize = 147_608_010L
+// #958：与模型随包分发的第三方来源声明与许可全文（与 RPM/HAP 打包同一份文件）。
+val bundledCorrectionNoticeFileNames = listOf("THIRD_PARTY_MODEL_NOTICES.md", "BLOOM-RAIL-1.0.txt")
 
 android {
     namespace = "com.xiwei.sujian"
@@ -242,6 +244,7 @@ val fetchBundledCorrectionModel =
             File(repoRoot, "packaging/correction/kenlm-model.lock"),
             File(repoRoot, "packaging/correction/fetch-model.sh"),
         )
+        inputs.files(bundledCorrectionNoticeFileNames.map { File(repoRoot, "packaging/correction/$it") })
         outputs.dir(bundledCorrectionModelDir)
 
         doLast {
@@ -258,6 +261,13 @@ val fetchBundledCorrectionModel =
                 throw GradleException(
                     "Bundled correction model missing or of unexpected size at ${modelFile.absolutePath}",
                 )
+            }
+            bundledCorrectionNoticeFileNames.forEach { name ->
+                val sourceFile = File(repoRoot, "packaging/correction/$name")
+                if (!sourceFile.isFile) {
+                    throw GradleException("Bundled correction notice missing at ${sourceFile.absolutePath}")
+                }
+                sourceFile.copyTo(File(outputDir, name), overwrite = true)
             }
         }
     }

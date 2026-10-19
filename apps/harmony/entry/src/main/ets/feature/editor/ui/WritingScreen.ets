@@ -298,12 +298,6 @@ export struct WritingScreen {
         void this.cleanupInactiveCorrectionModels().catch(() => {})
       }
     })
-    // Issue #958：无用户模型时用 HAP 内置模型兜底（每会话一次，失败不阻断编辑），
-    // 兜底尝试结束后统一刷新校对资源状态显示。
-    void this.ensureBundledCorrectionModel().then((): void => {
-      this.refreshCorrectionResourceStatus()
-    })
-
     // Issue #920 A：把路由上下文交给协调器，并注册显示状态回流 + 会话打开后的平台侧恢复。
     const workflowConfig: WritingWorkflowConfig = {
       chapterId: this.chapterId,
@@ -313,6 +307,11 @@ export struct WritingScreen {
     }
     this.writingWorkflow.configure(workflowConfig)
     this.writingWorkflow.setSessionOpenedHook((snap: EditorSessionSnapshot): Promise<void> => {
+      // Issue #958：Core 就绪、会话打开后再尝试内置模型兜底；不阻塞会话恢复，
+      // 失败保持可重试（由 CorrectionCoordinator 判定是否已处理）。
+      void this.ensureBundledCorrectionModel().then((): void => {
+        this.refreshCorrectionResourceStatus()
+      })
       return this.restoreContinuationEditorState(snap)
     })
     this.writingWorkflow.setListener((update: WritingWorkflowUpdate): void => {

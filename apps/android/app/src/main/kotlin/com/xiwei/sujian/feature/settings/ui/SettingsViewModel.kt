@@ -209,6 +209,9 @@ class SettingsViewModel(
                 ),
             )
 
+    /** #958：读取随包分发的内置模型第三方来源声明与许可全文（关于页展示）。 */
+    fun bundledCorrectionNoticesText(): String = settingsRepo.bundledCorrectionNoticesText()
+
     // #630 评论15 项2：行级状态投影 — 每个 Lazy item 只 collect 自己那份最小字段，
     // 避免任一字段变化导致同分类所有可见 item 重组。
     // 统一 helper：selector 从 SettingsUiState 提取 T，distinctUntilChanged 过滤重复。

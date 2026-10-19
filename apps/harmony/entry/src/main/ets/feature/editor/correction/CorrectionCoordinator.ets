@@ -51,7 +51,8 @@ export class CorrectionCoordinator {
   private errorMessage: string = ''
   private requestGeneration: number = 0
   private debounceTimer: number = -1
-  // Issue #958：内置模型兜底每个协调器实例只尝试一次（幂等），失败不重试也不阻断编辑。
+  // Issue #958：内置模型兜底由会话打开回调触发；只有确认已有用户模型或内置模型
+  // 成功交给 Core 后，本实例才不再重复尝试（失败保持可重试，不阻断编辑）。
   private bundledModelAttempted: boolean = false
 
   constructor(bridge: ICorrectionBridge, editor: EditorSessionCoordinator) {
@@ -172,18 +173,19 @@ export class CorrectionCoordinator {
   }
 
   /**
-   * Issue #958: 内置 KenLM 模型兜底。每会话只尝试一次：
+   * Issue #958: 内置 KenLM 模型兜底，由会话打开回调触发：
    * - Core 已配置用户模型（`modelConfigured`）时直接跳过，用户模型优先、不覆盖；
    * - 未配置时先让调用方准备内置模型文件（prepare 返回沙箱路径），再走既有
    *   `setModelPath` 交给 Core 校验切换；
-   * - 准备或切换失败返回错误 envelope，由调用方记 warning；编辑与固定规则不受影响。
+   * - 只有确认已有用户模型或内置模型成功交给 Core 后才记为已处理；首次初始化
+   *   失败（状态不可用 / 准备失败 / 切换失败）保持可重试，由后续会话打开再试；
+   * - 失败返回错误 envelope，由调用方记 warning；编辑与固定规则不受影响。
    * `data === true` 表示本次真正配置了内置模型。
    */
   async ensureBundledModel(prepare: () => Promise<string>): Promise<ResultEnvelope<boolean>> {
     if (this.bundledModelAttempted) {
       return { success: true, data: false }
     }
-    this.bundledModelAttempted = true
     const status = await this.bridge.getResourceStatus()
     if (!status.success || status.data === undefined) {
       return {
@@ -193,6 +195,7 @@ export class CorrectionCoordinator {
       }
     }
     if (status.data.modelConfigured) {
+      this.bundledModelAttempted = true
       return { success: true, data: false }
     }
     let path = ''
@@ -204,7 +207,11 @@ export class CorrectionCoordinator {
     if (path.length === 0) {
       return { success: false, errorCode: 'BUNDLED_MODEL_PREPARE_FAILED', userMessage: '内置模型路径为空' }
     }
-    return await this.bridge.setModelPath(path)
+    const result = await this.bridge.setModelPath(path)
+    if (result.success) {
+      this.bundledModelAttempted = true
+    }
+    return result
   }
 
   private currentRequest(generation: number): CorrectionRequestSnapshot | null {
