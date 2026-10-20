@@ -75,7 +75,7 @@ Kirigami.ShadowedRectangle {
             spacing: Kirigami.Units.smallSpacing
 
             Kirigami.Heading {
-                level: 5
+                level: 4
                 Layout.fillWidth: true
                 text: root.title
                 color: Kirigami.Theme.textColor
@@ -149,8 +149,8 @@ Kirigami.ShadowedRectangle {
                     ctx.fillText(root.formatNum(Math.round(maxValue * ratio)), padLeft - Kirigami.Units.smallSpacing, y)
                 }
 
-                // Y 轴单位。
-                ctx.fillText(qsTr("字"), padLeft - Kirigami.Units.smallSpacing, padTop - fontSize * 0.6)
+                // Y 轴单位已由标题行的「单位：字」标注，不再画在左上角，
+                // 避免与最高刻度文字重叠。
 
                 // 曲线：x 按桶序均分，y 按峰值归一化。
                 var xAt = function(index) {
