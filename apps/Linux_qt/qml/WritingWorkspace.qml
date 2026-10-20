@@ -1260,7 +1260,6 @@ Rectangle {
                 }
 
                 CorrectionPanel {
-                    visible: root.drawerOpen && root.drawerTool === "correction"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     editorControllerRef: editorController
