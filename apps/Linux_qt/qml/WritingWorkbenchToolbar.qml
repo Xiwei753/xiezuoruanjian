@@ -9,7 +9,7 @@
 //   - 下层是内容区，装「章节导航 | 正文 | 工具 pane | 工具 rail」。
 // 约束（Issue #825 / #922）：
 //   - 条带高度和三个分组的宽度由 WritingWorkspace（Qt 本地布局）注入：宽窗口跟随
-//     SplitView 三栏实时宽度；窗口低于 640vp 时左右核心入口按图标尺寸收窄，隐藏中间排版组。
+//     SplitView 三栏实时宽度；三组自然宽度超出可用空间时，左右核心入口收窄并隐藏中间排版组。
 //   - 宽窗口三个分组严格占注入宽度；段间 spacing=0，条带外层不再加 margin/padding；
 //     窄窗口只保留左右入口的自然宽度。视觉内边距只加在各组内部。
 //   - Qt Quick Layouts 的 Layout.*Margin 是 item **外部** margin，会放大该 item 在
@@ -35,7 +35,12 @@ ColumnLayout {
     property real leadingWidth: -1
     property real centerWidth: -1
     property real trailingWidth: -1
-    readonly property bool compactActions: width < 640
+    readonly property real expandedRequiredWidth:
+        Math.max(root.leadingWidth, leadingSlot.implicitWidth)
+        // 右侧完整动作组用固定下界，避免依赖 compact 后会收缩的 implicitWidth。
+        + Math.max(root.trailingWidth, Kirigami.Units.gridUnit * 14)
+        + formatControls.implicitWidth
+    readonly property bool compactActions: width < expandedRequiredWidth
 
     // Center 组（WritingFormatGroup）的入参
     property real currentFontSize: 16
@@ -145,6 +150,7 @@ ColumnLayout {
                 Layout.maximumWidth: root.centerWidth > 0 ? root.centerWidth : Number.POSITIVE_INFINITY
 
                 WritingFormatGroup {
+                    id: formatControls
                     anchors.fill: parent
                     anchors.leftMargin: Kirigami.Units.smallSpacing
                     anchors.rightMargin: Kirigami.Units.smallSpacing
