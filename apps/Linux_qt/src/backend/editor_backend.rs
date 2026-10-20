@@ -70,6 +70,11 @@ pub struct EditorBackend {
     writing_stats_explorer_ready: qt_signal!(request_id: u32, snapshot: QJsonObject),
     #[allow(dead_code)]
     writing_stats_explorer_failed: qt_signal!(request_id: u32, message: QString),
+    /// Issue #960：统计页每日码字日历异步查询完成（指定公历年的逐日快照）。
+    #[allow(dead_code)]
+    writing_stats_calendar_ready: qt_signal!(request_id: u32, snapshot: QJsonObject),
+    #[allow(dead_code)]
+    writing_stats_calendar_failed: qt_signal!(request_id: u32, message: QString),
     /// Issue #935：实时速度 + 今日汇总异步查询完成。
     #[allow(dead_code)]
     writing_status_ready: qt_signal!(request_id: u32, status: QJsonObject),
@@ -179,6 +184,12 @@ pub struct EditorBackend {
     request_writing_stats_explorer: qt_method!(
         fn(&mut self, request_id: u32, preset: QString, start_date: QString, end_date: QString)
     ),
+    /// Issue #960：异步请求每日码字日历（指定公历年）。
+    ///
+    /// 立即返回；结果经 `writing_stats_calendar_ready` /
+    /// `writing_stats_calendar_failed` 携 `request_id` 发回。
+    #[allow(dead_code)]
+    request_writing_stats_calendar: qt_method!(fn(&mut self, request_id: u32, year: i32)),
     /// Issue #935：异步请求「实时速度 + 今日汇总」。
     #[allow(dead_code)]
     request_writing_status: qt_method!(fn(&mut self, request_id: u32, window_seconds: u32)),
@@ -530,6 +541,49 @@ impl EditorBackend {
                     "request_writing_stats_explorer skipped due to borrow conflict",
                 );
                 self.writing_stats_explorer_failed(request_id, "stats backend busy".into());
+            }
+        }
+    }
+
+    /// Issue #960：异步请求每日码字日历（非阻塞，结果走信号回 GUI 线程）。
+    ///
+    /// 与 Explorer 使用同一条串行统计队列；Core 决定每日口径、色阶与覆盖状态，
+    /// Qt 只负责定位和绘制。
+    fn request_writing_stats_calendar(&mut self, request_id: u32, year: i32) {
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, result): (u32, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => this.writing_stats_calendar_ready(
+                            request_id,
+                            qjson_object_from_json(&json),
+                        ),
+                        Err(message) => {
+                            this.writing_stats_calendar_failed(request_id, message.into());
+                        }
+                    }
+                }
+            },
+        );
+        let completion: crate::backend::stats_writer::StatsQueryCallback =
+            Box::new(move |request_id: u32, result: Result<String, String>| {
+                callback((request_id, result));
+            });
+        match self.with_app(|app| app.request_writing_stats_calendar(request_id, year, completion))
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                self.writing_stats_calendar_failed(request_id, message.into());
+            }
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "editor_backend",
+                    "BORROW_CONFLICT",
+                    "request_writing_stats_calendar skipped due to borrow conflict",
+                );
+                self.writing_stats_calendar_failed(request_id, "stats backend busy".into());
             }
         }
     }

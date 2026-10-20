@@ -109,7 +109,7 @@ Kirigami.ShadowedRectangle {
         spacing: Kirigami.Units.smallSpacing
 
         Kirigami.Heading {
-            level: 5
+            level: 4
             Layout.fillWidth: true
             text: root.title
             color: Kirigami.Theme.textColor
@@ -133,7 +133,7 @@ Kirigami.ShadowedRectangle {
                     spacing: Kirigami.Units.smallSpacing
 
                     Kirigami.Heading {
-                        level: 3
+                        level: 2
                         Layout.fillWidth: true
                         text: modelData.value
                         color: Kirigami.Theme.textColor
