@@ -87,8 +87,12 @@ export class AdaptiveContext {
   private state: AdaptiveState = AdaptiveContext.createDefaultState()
   private observers: Set<AdaptiveObserver> = new Set()
   private mainWindow: window.Window | null = null
+  private mainWindowStage: window.WindowStage | null = null
   private isListening: boolean = false
   private isAvoidAreaListening: boolean = false
+  private isStageEventListening: boolean = false
+  private isDisplayChangeListening: boolean = false
+  private initialSizeProbeTimers: number[] = []
 
   // 缓存平台真实值，avoidAreaChange 时增量更新
   private cachedSafeTopVp: number = 0
@@ -120,6 +124,7 @@ export class AdaptiveContext {
   async initialize(windowStage: window.WindowStage): Promise<void> {
     try {
       this.mainWindow = await windowStage.getMainWindow()
+      this.mainWindowStage = windowStage
       hilog.info(DOMAIN, TAG, 'Got main window')
 
       // 初始化专用横屏平板判定（只算一次设备能力）
@@ -159,30 +164,26 @@ export class AdaptiveContext {
       }
 
       // Issue #752 评论 5808818396：先注册窗口尺寸变化监听，再读取当前 windowRect。
-      // 监听先挂上，保证后续尺寸变化不会漏；当前 windowRect 若仍是 0x0 则什么都不提交，
-      // 等已经注册好的监听收到第一组有效尺寸。
+      // Issue #968：windowSizeChange 只覆盖之后的尺寸变化；冷启动时 loadContent 回调早于
+      // 这里，窗口从启动尺寸切到全屏的事件可能已经错过，首帧 windowRect 也可能还是旧值。
+      // 因此初始读取、窗口舞台恢复、屏幕密度变化和两次延迟探测都走同一个
+      // refreshWindowSizeFromProperties()，保证送进 updateState() 的宽高与实机窗口一致。
       this.registerWindowSizeChange()
-
-      // 读取初始尺寸
-      const properties = this.mainWindow.getWindowProperties()
-      const rect = properties.windowRect
-      const displayInfo = display.getDefaultDisplaySync()
-      const density = displayInfo.densityPixels
-      const widthVp = rect.width / density
-      const heightVp = rect.height / density
-      // Issue #752：实机冷启动首帧 windowRect 可能是 0x0，不当作有效尺寸写入布局状态。
-      // 只注册监听，等 windowSizeChange 回调带来真实尺寸，避免 "Initialized: Compact 0x0"。
-      if (widthVp <= 0 || heightVp <= 0) {
-        hilog.info(DOMAIN, TAG, 'Window rect not ready: %{public}sx%{public}s, deferring until first valid size', `${widthVp}`, `${heightVp}`)
+      if (this.refreshWindowSizeFromProperties('initial')) {
+        hilog.info(DOMAIN, TAG, `Initialized: ${this.state.sizeClass} ${this.state.widthVp}x${this.state.heightVp} wide=${this.state.prefersWideLayout}`)
       } else {
-        this.updateState(widthVp, heightVp)
-        hilog.info(DOMAIN, TAG, `Initialized: ${this.state.sizeClass} ${this.state.widthVp}x${this.state.heightVp}`)
+        hilog.info(DOMAIN, TAG, 'Window rect not ready on initialize, deferring until first valid size')
       }
 
       // 注册避让区域变化监听（安全区域 + 键盘）
       this.registerAvoidAreaChange()
       // 注册折叠状态变化监听
       this.registerFoldStatusChange()
+      // Issue #968：补上窗口舞台事件和屏幕密度变化两条通知路径，并做短期探测，
+      // 避免“窗口已经是全屏宽屏，AdaptiveContext 却停留在启动时的窄屏尺寸”。
+      this.registerWindowStageEvent()
+      this.registerDisplayChange()
+      this.scheduleInitialSizeProbes()
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to initialize: ${JSON.stringify(err)}`)
     }
@@ -248,8 +249,12 @@ export class AdaptiveContext {
     this.unregisterAvoidAreaChange()
     this.unregisterFoldStatusChange()
     this.unregisterWindowStatusChange()
+    this.unregisterWindowStageEvent()
+    this.unregisterDisplayChange()
+    this.clearInitialSizeProbes()
     this.observers.clear()
     this.mainWindow = null
+    this.mainWindowStage = null
     this.cachedSafeTopVp = 0
     this.cachedSafeBottomVp = 0
     this.cachedKeyboardVisible = false
@@ -296,6 +301,123 @@ export class AdaptiveContext {
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to unregister windowSizeChange: ${JSON.stringify(err)}`)
     }
+  }
+
+  /**
+   * Issue #968：以当前窗口属性为唯一事实重新计算 vp 尺寸并通知观察者。
+   * 不只看 windowSizeChange：loadContent 前后的启动尺寸切换、窗口恢复、显示缩放
+   * 都可能不产生新的 windowSizeChange，只靠监听会把宽屏窗口锁在窄屏状态。
+   */
+  private refreshWindowSizeFromProperties(source: string): boolean {
+    if (!this.mainWindow) {
+      return false
+    }
+    try {
+      const rect = this.mainWindow.getWindowProperties().windowRect
+      const displayInfo = display.getDefaultDisplaySync()
+      const density = displayInfo.densityPixels
+      if (density <= 0 || rect.width <= 0 || rect.height <= 0) {
+        return false
+      }
+      const widthVp: number = rect.width / density
+      const heightVp: number = rect.height / density
+      const roundedWidth: number = Math.round(widthVp * 100) / 100
+      const roundedHeight: number = Math.round(heightVp * 100) / 100
+      // 尺寸没有变化时不重复通知，避免首帧探测引发多余重绘。
+      if (Math.abs(this.state.widthVp - roundedWidth) < 0.01 &&
+        Math.abs(this.state.heightVp - roundedHeight) < 0.01) {
+        return true
+      }
+      hilog.info(DOMAIN, TAG,
+        'Window size sync (%{public}s): px=%{public}sx%{public}s density=%{public}s vp=%{public}sx%{public}s',
+        source, `${rect.width}`, `${rect.height}`, `${density}`, `${roundedWidth}`, `${roundedHeight}`)
+      this.updateState(widthVp, heightVp)
+      return true
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `refreshWindowSizeFromProperties(${source}) failed: ${JSON.stringify(err)}`)
+      return false
+    }
+  }
+
+  /** 窗口舞台恢复 / 前台时补一次窗口属性读取。 */
+  private registerWindowStageEvent(): void {
+    if (this.isStageEventListening || this.mainWindowStage === null) {
+      return
+    }
+    try {
+      this.mainWindowStage.on('windowStageEvent', (event: window.WindowStageEventType) => {
+        if (event === window.WindowStageEventType.SHOWN ||
+          event === window.WindowStageEventType.ACTIVE ||
+          event === window.WindowStageEventType.RESUMED) {
+          this.refreshWindowSizeFromProperties(`windowStageEvent:${event}`)
+        }
+      })
+      this.isStageEventListening = true
+      hilog.info(DOMAIN, TAG, 'Registered windowStageEvent listener')
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `Failed to register windowStageEvent: ${JSON.stringify(err)}`)
+    }
+  }
+
+  private unregisterWindowStageEvent(): void {
+    if (!this.isStageEventListening || this.mainWindowStage === null) {
+      return
+    }
+    try {
+      this.mainWindowStage.off('windowStageEvent')
+      this.isStageEventListening = false
+      hilog.info(DOMAIN, TAG, 'Unregistered windowStageEvent listener')
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `Failed to unregister windowStageEvent: ${JSON.stringify(err)}`)
+    }
+  }
+
+  /** 屏幕缩放 / 分辨率变化时，窗口物理像素不变也要重新换算 vp。 */
+  private registerDisplayChange(): void {
+    if (this.isDisplayChangeListening) {
+      return
+    }
+    try {
+      display.on('change', () => {
+        this.refreshWindowSizeFromProperties('displayChange')
+      })
+      this.isDisplayChangeListening = true
+      hilog.info(DOMAIN, TAG, 'Registered display change listener')
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `Failed to register display change: ${JSON.stringify(err)}`)
+    }
+  }
+
+  private unregisterDisplayChange(): void {
+    if (!this.isDisplayChangeListening) {
+      return
+    }
+    try {
+      display.off('change')
+      this.isDisplayChangeListening = false
+      hilog.info(DOMAIN, TAG, 'Unregistered display change listener')
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `Failed to unregister display change: ${JSON.stringify(err)}`)
+    }
+  }
+
+  /** 冷启动时的窗口尺寸可能在 loadContent 回调之后才稳定，做两次短期探测。 */
+  private scheduleInitialSizeProbes(): void {
+    const self = this
+    const delays: number[] = [120, 600]
+    for (const delay of delays) {
+      const timerId: number = setTimeout((): void => {
+        self.refreshWindowSizeFromProperties(`initialProbe:${delay}ms`)
+      }, delay)
+      this.initialSizeProbeTimers.push(timerId)
+    }
+  }
+
+  private clearInitialSizeProbes(): void {
+    for (const timerId of this.initialSizeProbeTimers) {
+      clearTimeout(timerId)
+    }
+    this.initialSizeProbeTimers = []
   }
 
   // Issue #920 D：按 Harmony 平台自己的断点本地推导布局状态，不再调用 Core。
