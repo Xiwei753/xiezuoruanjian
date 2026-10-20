@@ -168,8 +168,16 @@ Item {
                                 onTriggered: root.editorControllerRef.ignoreCorrection(modelData, "chapter")
                             }
                             MenuItem {
-                                text: qsTr("加入作品词典")
-                                onTriggered: root.editorControllerRef.addCorrectionWord(modelData)
+                                text: qsTr("加入作品词典（人物）")
+                                onTriggered: root.editorControllerRef.addCorrectionWord(modelData, "person")
+                            }
+                            MenuItem {
+                                text: qsTr("加入作品词典（地点）")
+                                onTriggered: root.editorControllerRef.addCorrectionWord(modelData, "place")
+                            }
+                            MenuItem {
+                                text: qsTr("加入作品词典（普通术语）")
+                                onTriggered: root.editorControllerRef.addCorrectionWord(modelData, "term")
                             }
                             MenuSeparator {}
                             MenuItem {

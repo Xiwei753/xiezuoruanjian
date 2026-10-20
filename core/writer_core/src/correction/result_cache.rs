@@ -164,6 +164,10 @@ pub(crate) struct ChapterCorrectionCacheState {
     pub(crate) last_revision: u64,
     /// Loaded entries have no offsets until the first full reconciliation.
     pub(crate) needs_reconcile: bool,
+    /// Byte windows made dirty by lightweight edit transactions. They are
+    /// re-segmented against the newest text by the next scan request, so a
+    /// keystroke never has to copy or fingerprint the whole chapter.
+    pub(crate) pending_windows: Vec<(usize, usize)>,
     pub(crate) path: PathBuf,
 }
 
@@ -204,6 +208,7 @@ impl ChapterCorrectionCacheState {
             last_session_id: 0,
             last_revision: 0,
             needs_reconcile: false,
+            pending_windows: Vec::new(),
             path,
         };
         let content = match std::fs::read_to_string(&state.path) {
@@ -577,6 +582,7 @@ pub(crate) fn reconcile_full(text: &str, state: &mut ChapterCorrectionCacheState
     dropped |= by_key.values().any(|entries| !entries.is_empty());
     state.segments = segments;
     state.needs_reconcile = false;
+    state.pending_windows.clear();
     state.semantic_dirty |= dropped;
     dropped
 }
@@ -604,14 +610,13 @@ pub(crate) fn mark_unseen_segments_in_edit_windows(
     }
 }
 
-fn validate_edits(text: &str, edits: &[EditRange]) -> Result<(), WriterError> {
+fn validate_edit_order(edits: &[EditRange]) -> Result<(), WriterError> {
     let mut previous_old_end = 0usize;
     let mut previous_new_end = 0usize;
     let mut delta: i128 = 0;
     for edit in edits {
         if edit.old_start > edit.old_end
             || edit.new_start > edit.new_end
-            || edit.new_end > text.len()
             || edit.old_start < previous_old_end
             || edit.new_start < previous_new_end
         {
@@ -629,12 +634,244 @@ fn validate_edits(text: &str, edits: &[EditRange]) -> Result<(), WriterError> {
         previous_old_end = edit.old_end;
         previous_new_end = edit.new_end;
     }
+    Ok(())
+}
+
+fn validate_edits(text: &str, edits: &[EditRange]) -> Result<(), WriterError> {
+    validate_edit_order(edits)?;
+    let delta: i128 = edits
+        .iter()
+        .map(|edit| {
+            (edit.new_end - edit.new_start) as i128 - (edit.old_end - edit.old_start) as i128
+        })
+        .sum();
     let old_len = text.len() as i128 - delta;
-    if old_len < 0 {
+    if edits.iter().any(|edit| edit.new_end > text.len()) || old_len < 0 {
         return Err(WriterError::Other(
             "correction edit ranges exceed the previous text length".into(),
         ));
     }
+    Ok(())
+}
+
+fn merge_windows(windows: &mut Vec<(usize, usize)>) {
+    windows.retain(|(start, end)| start < end);
+    windows.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(windows.len());
+    for (start, end) in windows.drain(..) {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    *windows = merged;
+}
+
+/// First phase of an edit check: move untouched segments and remember the
+/// windows that must be re-segmented. No chapter text, fingerprinting, or model
+/// scan is needed here, so every editor transaction can be applied cheaply and
+/// in order. The second phase ([`apply_pending_windows`]) runs on the latest
+/// text before scanning.
+pub(crate) fn apply_edits_light(
+    state: &mut ChapterCorrectionCacheState,
+    edits: &[EditRange],
+) -> Result<(), WriterError> {
+    let mut ordered = edits.to_vec();
+    ordered.sort_by_key(|edit| (edit.old_start, edit.new_start));
+    let edits = ordered.as_slice();
+    validate_edit_order(edits)?;
+    if edits.is_empty() {
+        return Ok(());
+    }
+    if state.needs_reconcile {
+        // Existing windows describe an older text; the full reconcile below
+        // rebuilds the index from the newest text, so only the current edits
+        // need to be carried forward as scan hints.
+        state.pending_windows.clear();
+        state.pending_windows.extend(edits.iter().map(|edit| {
+            (
+                edit.new_start.saturating_sub(SEGMENT_CONTEXT_BYTES),
+                edit.new_end.saturating_add(SEGMENT_CONTEXT_BYTES),
+            )
+        }));
+        merge_windows(&mut state.pending_windows);
+        return Ok(());
+    }
+
+    // A stage-one call does not receive text, so pending windows recorded by
+    // earlier keystrokes must be shifted through this transaction before the
+    // second stage re-segments them.
+    let mut shifted_windows = Vec::with_capacity(state.pending_windows.len());
+    for (start, end) in std::mem::take(&mut state.pending_windows) {
+        let shifted_start = map_offset(start, edits, false);
+        let shifted_end = map_offset(end, edits, true);
+        if shifted_start < shifted_end {
+            shifted_windows.push((shifted_start, shifted_end));
+        }
+    }
+    state.pending_windows = shifted_windows;
+
+    let mut translated = Vec::with_capacity(state.segments.len());
+    let mut semantic_dropped = false;
+    for mut segment in std::mem::take(&mut state.segments) {
+        let was_checked = segment.checked.is_some();
+        let start = map_offset(segment.start_byte as usize, edits, false);
+        let end = map_offset(segment.end_byte as usize, edits, true);
+        if start < end {
+            segment.start_byte = start as u32;
+            segment.end_byte = end as u32;
+            translated.push(segment);
+        } else if was_checked {
+            semantic_dropped = true;
+        }
+    }
+
+    let affected = translated
+        .iter()
+        .enumerate()
+        .filter(|(_, segment)| {
+            let start = segment.start_byte as usize;
+            let end = segment.end_byte as usize;
+            edits.iter().any(|edit| {
+                start < edit.new_end.saturating_add(SEGMENT_CONTEXT_BYTES)
+                    && edit.new_start.saturating_sub(SEGMENT_CONTEXT_BYTES) < end
+            })
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let mut windows = Vec::new();
+    let mut kept = Vec::with_capacity(translated.len());
+    if affected.is_empty() {
+        kept = translated;
+        windows.extend(edits.iter().map(|edit| {
+            (
+                edit.new_start.saturating_sub(SEGMENT_CONTEXT_BYTES),
+                edit.new_end.saturating_add(SEGMENT_CONTEXT_BYTES),
+            )
+        }));
+    } else {
+        let mut groups: Vec<(usize, usize)> = Vec::new();
+        for index in affected {
+            let group = (
+                index.saturating_sub(1),
+                (index + 1).min(translated.len() - 1),
+            );
+            match groups.last_mut() {
+                Some(last) if group.0 <= last.1 + 1 => last.1 = last.1.max(group.1),
+                _ => groups.push(group),
+            }
+        }
+        let mut replaced = vec![false; translated.len()];
+        for (group_start, group_end) in groups {
+            let mut window_start = translated[group_start].start_byte as usize;
+            let mut window_end = translated[group_end].end_byte as usize;
+            for edit in edits {
+                if edit.new_start <= window_end && edit.new_end >= window_start {
+                    window_start = window_start.min(edit.new_start);
+                    window_end = window_end.max(edit.new_end);
+                }
+            }
+            windows.push((window_start, window_end));
+            for index in group_start..=group_end {
+                if translated[index].checked.is_some() {
+                    semantic_dropped = true;
+                }
+                replaced[index] = true;
+            }
+        }
+        kept.extend(
+            translated
+                .into_iter()
+                .zip(replaced)
+                .filter(|(_, replaced)| !replaced)
+                .map(|(segment, _)| segment),
+        );
+    }
+
+    merge_windows(&mut windows);
+    state.pending_windows.extend(windows);
+    merge_windows(&mut state.pending_windows);
+    state.segments = kept;
+    state.needs_reconcile = false;
+    state.semantic_dirty |= semantic_dropped;
+    Ok(())
+}
+
+/// Second phase: segment the dirty windows against the newest chapter text.
+/// Existing checked segments outside those windows keep their cached results.
+pub(crate) fn apply_pending_windows(
+    text: &str,
+    state: &mut ChapterCorrectionCacheState,
+    force_reconcile: bool,
+) -> Result<(), WriterError> {
+    let pending = std::mem::take(&mut state.pending_windows);
+    if force_reconcile || state.needs_reconcile {
+        reconcile_full(text, state);
+    }
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let mut windows = pending
+        .into_iter()
+        .map(|(start, end)| {
+            (
+                floor_char_boundary(text, start.min(text.len())),
+                floor_char_boundary(text, end.min(text.len())),
+            )
+        })
+        .collect::<Vec<_>>();
+    // A dirty window may start inside an existing segment. Expand it to that
+    // segment's full extent before replacing segments, otherwise the prefix
+    // outside the window would become an unscanned hole.
+    for window in &mut windows {
+        for segment in &state.segments {
+            let start = segment.start_byte as usize;
+            let end = segment.end_byte as usize;
+            if window.0 < end && start < window.1 {
+                window.0 = window.0.min(start);
+                window.1 = window.1.max(end);
+            }
+        }
+    }
+    merge_windows(&mut windows);
+
+    let mut added = Vec::new();
+    for (window_start, window_end) in windows {
+        for (local_start, local_end) in canonical_segments(&text[window_start..window_end]) {
+            let start = window_start + local_start;
+            let end = window_start + local_end;
+            let text_fingerprint = content_fingerprint(&text[start..end]);
+            let (context_start, context_end) = context_range(text, start, end);
+            let context_fingerprint = content_fingerprint(&text[context_start..context_end]);
+            added.push(CachedSegment {
+                start_byte: to_u32(start)?,
+                end_byte: to_u32(end)?,
+                text_fingerprint,
+                context_fingerprint,
+                checked: None,
+                dirty: true,
+            });
+        }
+    }
+
+    let mut semantic_dropped = false;
+    let mut kept = std::mem::take(&mut state.segments);
+    kept.retain(|segment| {
+        let start = segment.start_byte as usize;
+        let end = segment.end_byte as usize;
+        let overlaps_added = added
+            .iter()
+            .any(|added| start < added.end_byte as usize && (added.start_byte as usize) < end);
+        if overlaps_added && segment.checked.is_some() {
+            semantic_dropped = true;
+        }
+        !overlaps_added
+    });
+    kept.extend(added);
+    kept.sort_by_key(|segment| (segment.start_byte, segment.end_byte));
+    state.segments = kept;
+    state.semantic_dirty |= semantic_dropped;
     Ok(())
 }
 
@@ -857,6 +1094,27 @@ mod tests {
             needs_reconcile: false,
             path: PathBuf::new(),
         }
+    }
+
+    #[test]
+    fn stage_one_edits_shift_existing_pending_windows() {
+        let text = "甲".repeat(400);
+        let mut state = empty_state(&text);
+        state.pending_windows = vec![(300, 320)];
+        apply_edits_light(
+            &mut state,
+            &[EditRange {
+                old_start: 0,
+                old_end: 0,
+                new_start: 0,
+                new_end: 1,
+            }],
+        )
+        .expect("stage one edit should apply");
+        assert!(
+            state.pending_windows.contains(&(301, 321)),
+            "pending windows from an earlier keystroke must follow later insertions"
+        );
     }
 
     #[test]

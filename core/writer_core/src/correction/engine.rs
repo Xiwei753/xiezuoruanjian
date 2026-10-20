@@ -9,8 +9,9 @@ use crate::api::{
 };
 
 use super::result_cache::{
-    context_range, mark_unseen_segments_in_edit_windows, reconcile_edits, reconcile_full,
-    CachedSuggestion, ChapterCorrectionCacheState, ChapterCorrectionSlot, EditRange,
+    apply_pending_windows, context_range, mark_unseen_segments_in_edit_windows, reconcile_edits,
+    reconcile_full, CachedSuggestion, ChapterCorrectionCacheState, ChapterCorrectionSlot,
+    EditRange,
 };
 use super::CorrectionStore;
 
@@ -38,6 +39,10 @@ pub(crate) enum CorrectionCheckRequest {
         base_revision: u64,
         edits: Vec<EditRange>,
     },
+    /// Segment the dirty windows recorded by lightweight edit updates and
+    /// scan only those segments. This is the model phase of the two-stage
+    /// editor flow.
+    Pending,
     /// Recompute only unchecked segments overlapping the requested byte range.
     Range(usize, usize),
     /// Fill every unseen or invalid segment.
@@ -148,6 +153,15 @@ impl CorrectionScanner {
         )
     }
 
+    /// Segments the dirty windows applied by the lightweight edit phase and
+    /// scans only those segments.
+    pub(crate) fn scan_pending(
+        &self,
+        text: &str,
+    ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+        self.check(text, CorrectionCheckRequest::Pending)
+    }
+
     /// Verifies the cache, recomputes the requested range, and returns the
     /// merged chapter snapshot.
     pub(crate) fn ensure_checked(
@@ -248,6 +262,15 @@ impl CorrectionScanner {
         guard.scanning = false;
         slot.condvar.notify_all();
         let scanned = scanned?;
+        // A lightweight edit transaction may have advanced the revision while
+        // the model ran outside the lock. Those results belong to the old text
+        // and must not be committed over the newer index.
+        if guard.last_session_id != self.session_id
+            || guard.last_revision != self.text_revision
+            || guard.needs_reconcile
+        {
+            return self.empty_snapshot();
+        }
         // Never label old-engine results with a newer generation: if the
         // model, dictionary, or disabled-rule set changed while the scan ran,
         // discard these results and let the caller retry on a fresh scanner.
@@ -363,15 +386,21 @@ impl CorrectionScanner {
                     mark_unseen_segments_in_edit_windows(guard, edits);
                 }
             }
+            CorrectionCheckRequest::Pending => {
+                apply_pending_windows(
+                    text,
+                    guard,
+                    !same_session || guard.last_revision != self.text_revision,
+                )?;
+            }
             CorrectionCheckRequest::RestoreOnly
             | CorrectionCheckRequest::Range(_, _)
             | CorrectionCheckRequest::All => {
-                if !same_session
-                    || guard.last_revision != self.text_revision
-                    || guard.needs_reconcile
-                {
-                    reconcile_full(text, guard);
-                }
+                apply_pending_windows(
+                    text,
+                    guard,
+                    !same_session || guard.last_revision != self.text_revision,
+                )?;
             }
         }
         guard.last_session_id = self.session_id;
@@ -386,7 +415,7 @@ impl CorrectionScanner {
     ) -> Vec<usize> {
         match request {
             CorrectionCheckRequest::RestoreOnly => Vec::new(),
-            CorrectionCheckRequest::Edits { .. } => guard
+            CorrectionCheckRequest::Edits { .. } | CorrectionCheckRequest::Pending => guard
                 .segments
                 .iter()
                 .enumerate()

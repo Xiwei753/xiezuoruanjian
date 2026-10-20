@@ -59,6 +59,27 @@ impl TryFrom<(sujian_proof::CorrectionDiagnostic, u64)> for CorrectionSuggestion
     }
 }
 
+/// Author-declared meaning of a work-dictionary entry. Legacy string entries
+/// migrate as ordinary terms; a term is protected text but never treated as a
+/// person or place name.
+#[derive(
+    Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrectionDictionaryEntryKindDto {
+    Term,
+    Person,
+    Place,
+}
+
+/// One work-dictionary entry together with its author-declared kind.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionDictionaryEntryDto {
+    pub text: String,
+    pub kind: CorrectionDictionaryEntryKindDto,
+}
+
 /// One real edit mapping from an editor transaction. `old` addresses the
 /// previous text revision and `new` addresses the revision supplied with the
 /// edit check request. All ranges are half-open UTF-8 byte intervals.

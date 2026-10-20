@@ -250,6 +250,32 @@ pub struct EditorBackend {
             text: QString,
         )
     ),
+    /// Issue #954：编辑事务的第一阶段，只更新 Core 内存段索引，不跑模型。
+    #[allow(dead_code)]
+    apply_correction_edits: qt_method!(
+        fn(
+            &mut self,
+            project_id: QString,
+            chapter_id: QString,
+            session_id: u64,
+            text_revision: u64,
+            base_revision: u64,
+            edits_json: QString,
+        ) -> QJsonObject
+    ),
+    /// Issue #954：编辑事务的第二阶段，只扫描已记录的脏段。
+    #[allow(dead_code)]
+    request_correction_pending: qt_method!(
+        fn(
+            &mut self,
+            request_id: u32,
+            project_id: QString,
+            chapter_id: QString,
+            session_id: u64,
+            text_revision: u64,
+            text: QString,
+        )
+    ),
     #[allow(dead_code)]
     ignore_correction: qt_method!(
         fn(
@@ -267,6 +293,9 @@ pub struct EditorBackend {
     #[allow(dead_code)]
     add_correction_dictionary_entry:
         qt_method!(fn(&self, project_id: QString, entry: QString) -> QJsonObject),
+    #[allow(dead_code)]
+    add_correction_dictionary_entry_with_kind:
+        qt_method!(fn(&self, project_id: QString, entry: QString, kind: QString) -> QJsonObject),
     #[allow(dead_code)]
     flush_recent_edits: qt_method!(fn(&self)),
     #[allow(dead_code)]
@@ -905,6 +934,93 @@ impl EditorBackend {
         }
     }
 
+    fn apply_correction_edits(
+        &mut self,
+        project_id: QString,
+        chapter_id: QString,
+        session_id: u64,
+        text_revision: u64,
+        base_revision: u64,
+        edits_json: QString,
+    ) -> QJsonObject {
+        let result = self.with_app(|app| {
+            app.request_correction_edits_apply(
+                project_id.to_string(),
+                chapter_id.to_string(),
+                session_id,
+                text_revision,
+                base_revision,
+                edits_json.to_string(),
+            )
+        });
+        let mut response = qjson_object_from_json("{}");
+        match result {
+            Ok(Ok(())) => {
+                response.insert("ok", true.into());
+            }
+            Ok(Err(message)) => {
+                response.insert("ok", false.into());
+                response.insert("error", QString::from(message).into());
+            }
+            Err(error) => {
+                response.insert("ok", false.into());
+                response.insert("error", QString::from(error.to_string()).into());
+            }
+        }
+        response
+    }
+
+    fn request_correction_pending(
+        &mut self,
+        request_id: u32,
+        project_id: QString,
+        chapter_id: QString,
+        session_id: u64,
+        text_revision: u64,
+        text: QString,
+    ) {
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, text_revision, result): (u32, u64, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => {
+                            this.correction_check_ready(request_id, text_revision, json.into())
+                        }
+                        Err(message) => {
+                            this.correction_check_failed(request_id, text_revision, message.into())
+                        }
+                    }
+                }
+            },
+        );
+        let completion: super::correction_operations::CorrectionQueryCallback =
+            Box::new(move |request_id, text_revision, result| {
+                callback((request_id, text_revision, result));
+            });
+        let result = self.with_app(|app| {
+            app.request_correction_pending(
+                request_id,
+                project_id.to_string(),
+                chapter_id.to_string(),
+                session_id,
+                text_revision,
+                text.to_string(),
+                completion,
+            )
+        });
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                self.correction_check_failed(request_id, text_revision, message.into());
+            }
+            Err(error) => {
+                self.correction_check_failed(request_id, text_revision, error.to_string().into());
+            }
+        }
+    }
+
     fn ignore_correction(
         &self,
         project_id: QString,
@@ -944,6 +1060,37 @@ impl EditorBackend {
     fn add_correction_dictionary_entry(&self, project_id: QString, entry: QString) -> QJsonObject {
         let result = self.with_app(|app| {
             app.add_correction_dictionary_entry(project_id.to_string(), entry.to_string())
+        });
+        match result {
+            Ok(Ok(added)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": true, "data": { "added": added } }),
+            ),
+            Ok(Err(message)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "CORE_ERROR", "rawError": message }),
+            ),
+            Err(error) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "APP_BUSY", "rawError": error.to_string() }),
+            ),
+        }
+    }
+
+    fn add_correction_dictionary_entry_with_kind(
+        &self,
+        project_id: QString,
+        entry: QString,
+        kind: QString,
+    ) -> QJsonObject {
+        let kind = match kind.to_string().to_ascii_lowercase().as_str() {
+            "person" => writer_core::api::types::CorrectionDictionaryEntryKindDto::Person,
+            "place" => writer_core::api::types::CorrectionDictionaryEntryKindDto::Place,
+            _ => writer_core::api::types::CorrectionDictionaryEntryKindDto::Term,
+        };
+        let result = self.with_app(|app| {
+            app.add_correction_dictionary_entry_with_kind(
+                project_id.to_string(),
+                entry.to_string(),
+                kind,
+            )
         });
         match result {
             Ok(Ok(added)) => crate::backend::json_utils::serde_to_qjson_object(

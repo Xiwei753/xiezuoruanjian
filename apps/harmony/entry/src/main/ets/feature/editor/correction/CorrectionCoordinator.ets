@@ -42,6 +42,9 @@ export class CorrectionCoordinator {
   private isChecking: boolean = false
   private errorMessage: string = ''
   private requestGeneration: number = 0
+  private pendingScanTimer: number = -1
+  private pendingScanSnapshot: CorrectionRequestSnapshot | null = null
+  private pendingScanGeneration: number = 0
   // Issue #958：内置模型兜底由会话打开回调触发；只有确认已有用户模型或内置模型
   // 成功交给 Core 后，本实例才不再重复尝试（失败保持可重试，不阻断编辑）。
   private bundledModelAttempted: boolean = false
@@ -121,7 +124,7 @@ export class CorrectionCoordinator {
         editResult.baseRevision <= snapshot.revision) {
       this.isChecking = true
       this.notify()
-      void this.checkEdits(generation, nextSnapshot, editResult)
+      void this.applyEdits(generation, nextSnapshot, editResult)
     } else {
       this.isChecking = false
       this.notify()
@@ -131,6 +134,11 @@ export class CorrectionCoordinator {
 
   private invalidate(): void {
     this.requestGeneration++
+    if (this.pendingScanTimer >= 0) {
+      clearTimeout(this.pendingScanTimer)
+      this.pendingScanTimer = -1
+    }
+    this.pendingScanSnapshot = null
     this.suggestions = []
     this.isChecking = false
     this.errorMessage = ''
@@ -223,7 +231,7 @@ export class CorrectionCoordinator {
     this.acceptCheckResult(generation, snapshot, result, true)
   }
 
-  private async checkEdits(generation: number, snapshot: CorrectionRequestSnapshot,
+  private async applyEdits(generation: number, snapshot: CorrectionRequestSnapshot,
     editResult: EditorEditResult): Promise<void> {
     const ranges: number[][] = []
     for (let i = 0; i < editResult.displayPatches.length; i++) {
@@ -244,11 +252,33 @@ export class CorrectionCoordinator {
       void this.restoreChapterSnapshot(generation)
       return
     }
-    const editsJson = JSON.stringify(ranges)
+    const result = await this.bridge.applyEdits(
+      snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision,
+      editResult.baseRevision, JSON.stringify(ranges))
+    if (!result.success || generation !== this.requestGeneration) {
+      return
+    }
+    this.pendingScanSnapshot = snapshot
+    this.pendingScanGeneration = generation
+    if (this.pendingScanTimer >= 0) {
+      clearTimeout(this.pendingScanTimer)
+    }
+    this.pendingScanTimer = setTimeout(() => {
+      this.pendingScanTimer = -1
+      const pending = this.pendingScanSnapshot
+      if (pending === null || this.pendingScanGeneration !== this.requestGeneration) {
+        return
+      }
+      this.pendingScanSnapshot = null
+      void this.scanPending(this.pendingScanGeneration, pending)
+    }, 250)
+  }
+
+  private async scanPending(generation: number, snapshot: CorrectionRequestSnapshot): Promise<void> {
     try {
-      const result = await this.bridge.checkEdits(
-        snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision,
-        editResult.baseRevision, snapshot.text, editsJson)
+      const result = await this.bridge.scanPending(
+        snapshot.sessionId, snapshot.projectId, snapshot.chapterId,
+        snapshot.revision, snapshot.text)
       this.acceptCheckResult(generation, snapshot, result, false)
     } finally {
       this.notifyScanCompleted()
@@ -261,6 +291,11 @@ export class CorrectionCoordinator {
     if (snapshot === null) {
       return
     }
+    if (this.pendingScanTimer >= 0) {
+      clearTimeout(this.pendingScanTimer)
+      this.pendingScanTimer = -1
+    }
+    this.pendingScanSnapshot = null
     this.requestGeneration++
     const generation = this.requestGeneration
     this.isChecking = true

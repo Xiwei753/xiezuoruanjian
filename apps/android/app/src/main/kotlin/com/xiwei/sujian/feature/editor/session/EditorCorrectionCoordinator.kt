@@ -4,12 +4,19 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.projection.EditResult
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
+
+private const val CORRECTION_SCAN_DEBOUNCE_MS = 250L
 
 /** Stable document identity captured for each correction request and accept action. */
 data class EditorCorrectionIdentity(
@@ -73,6 +80,16 @@ class EditorCorrectionCoordinator(
     private val requestGeneration = AtomicLong(0L)
     private val _state = MutableStateFlow(EditorCorrectionState())
     val state: StateFlow<EditorCorrectionState> = _state.asStateFlow()
+    private val pendingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var pendingScanJob: Job? = null
+
+    private data class PendingScan(
+        val identity: EditorCorrectionIdentity,
+        val lease: EditorInputLease,
+        val generation: Long,
+        val textRevision: Long,
+        val text: String,
+    )
 
     /**
      * Apply the editor transaction's real display patches; never infer edits from the caret.
@@ -122,41 +139,68 @@ class EditorCorrectionCoordinator(
             return
         }
 
-        val response =
+        val applied =
             withContext(Dispatchers.IO) {
-                appServiceBridge.checkCorrectionEdits(
+                appServiceBridge.applyCorrectionEdits(
                     sessionId = lease.sessionId,
                     projectId = identity.projectId,
                     chapterId = identity.chapterId,
                     textRevision = edit.newRevision.toULong(),
                     baseRevision = edit.baseRevision.toULong(),
-                    text = text,
                     edits = edits,
                 )
             }
-        val snapshot = (response as? BridgeResult.Success)?.data ?: return
+        if (applied !is BridgeResult.Success) return
 
+        // The model scan is debounced; rapid edits only apply cheap offset/dirty
+        // updates and the latest text is scanned once after input settles.
+        pendingScanJob?.cancel()
+        val pending = PendingScan(identity, lease, generation, edit.newRevision, text)
+        pendingScanJob =
+            pendingScope.launch {
+                delay(CORRECTION_SCAN_DEBOUNCE_MS)
+                scanPending(pending)
+            }
+    }
+
+    private suspend fun scanPending(pending: PendingScan) {
+        if (pending.generation != requestGeneration.get() || currentIdentity() != pending.identity) return
+        if (sessionCoordinator.currentInputLease() != pending.lease) return
+        val response =
+            withContext(Dispatchers.IO) {
+                appServiceBridge.scanCorrectionPending(
+                    sessionId = pending.lease.sessionId,
+                    projectId = pending.identity.projectId,
+                    chapterId = pending.identity.chapterId,
+                    textRevision = pending.textRevision.toULong(),
+                    text = pending.text,
+                )
+            }
+        val snapshot = (response as? BridgeResult.Success)?.data ?: return
         val stillCurrent =
             withContext(Dispatchers.IO) {
-                sessionCoordinator.currentInputLease() == lease
+                sessionCoordinator.currentInputLease() == pending.lease
             }
-        if (!stillCurrent || generation != requestGeneration.get() || currentIdentity() != identity) return
-        // A newer transaction may already be committed. Its own check publishes the
-        // merged snapshot; this older response must not roll annotations back.
-        if (sessionCoordinator.sessionState.revision != edit.newRevision) return
-        if (snapshot.textRevision.toLong() != edit.newRevision) return
+        if (!stillCurrent || pending.generation != requestGeneration.get() ||
+            currentIdentity() != pending.identity
+        ) {
+            return
+        }
+        if (sessionCoordinator.sessionState.revision != pending.textRevision) return
+        if (snapshot.textRevision.toLong() != pending.textRevision) return
 
         _state.value = EditorCorrectionState(
-            targetId = identity.targetId,
-            projectId = identity.projectId,
-            chapterId = identity.chapterId,
-            sessionId = lease.sessionId,
-            textRevision = edit.newRevision,
-            suggestions = mappedSuggestions(text, edit.newRevision, snapshot.suggestions),
+            targetId = pending.identity.targetId,
+            projectId = pending.identity.projectId,
+            chapterId = pending.identity.chapterId,
+            sessionId = pending.lease.sessionId,
+            textRevision = pending.textRevision,
+            suggestions = mappedSuggestions(pending.text, pending.textRevision, snapshot.suggestions),
         )
     }
 
     suspend fun checkChapter(identity: EditorCorrectionIdentity) {
+        pendingScanJob?.cancel()
         val lease = sessionCoordinator.currentInputLease() ?: return
         if (lease.targetId != identity.targetId || currentIdentity() != identity) return
         val generation = requestGeneration.incrementAndGet()
@@ -201,6 +245,7 @@ class EditorCorrectionCoordinator(
 
     /** Restore Core's cached chapter suggestions without scanning; failures leave state untouched. */
     suspend fun restoreChapterSnapshot(identity: EditorCorrectionIdentity) {
+        pendingScanJob?.cancel()
         val lease = sessionCoordinator.currentInputLease() ?: return
         if (lease.targetId != identity.targetId || currentIdentity() != identity) return
         val generation = requestGeneration.incrementAndGet()
@@ -241,6 +286,7 @@ class EditorCorrectionCoordinator(
         suggestion: EditorCorrectionSuggestion,
     ): EditorCorrectionAcceptResult {
         requestGeneration.incrementAndGet()
+        pendingScanJob?.cancel()
         val lease = sessionCoordinator.currentInputLease() ?: return EditorCorrectionAcceptResult.Stale
         if (lease.targetId != identity.targetId || currentIdentity() != identity) {
             return EditorCorrectionAcceptResult.Stale
@@ -366,6 +412,7 @@ class EditorCorrectionCoordinator(
 
     fun clear(targetId: String? = null) {
         requestGeneration.incrementAndGet()
+        pendingScanJob?.cancel()
         if (targetId == null || _state.value.targetId == targetId) _state.value = EditorCorrectionState()
     }
 

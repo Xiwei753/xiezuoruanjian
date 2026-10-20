@@ -1501,6 +1501,10 @@ interface WriterAppService {
     [Throws=WriterError]
     CorrectionChapterSnapshotDto check_correction_segment(u64 session_id, string project_id, string chapter_id, u64 text_revision, u32 start_byte, u32 end_byte);
     [Throws=WriterError]
+    void apply_correction_edits(u64 session_id, string project_id, string chapter_id, u64 text_revision, u64 base_revision, sequence<CorrectionEditRangeDto> edits);
+    [Throws=WriterError]
+    CorrectionChapterSnapshotDto scan_correction_pending(u64 session_id, string project_id, string chapter_id, u64 text_revision, string text);
+    [Throws=WriterError]
     CorrectionChapterSnapshotDto check_correction_edits(u64 session_id, string project_id, string chapter_id, u64 text_revision, u64 base_revision, string text, sequence<CorrectionEditRangeDto> edits);
     [Throws=WriterError]
     CorrectionChapterSnapshotDto check_correction_chapter(u64 session_id, string project_id, string chapter_id, u64 text_revision);
@@ -1510,6 +1514,10 @@ interface WriterAppService {
     boolean ignore_correction(string project_id, string chapter_id, string rule_id, string original, CorrectionIgnoreScopeDto scope, u64 text_revision, u32 start_byte, u32 end_byte);
     [Throws=WriterError]
     boolean add_correction_dictionary_entry(string project_id, string entry);
+    [Throws=WriterError]
+    boolean add_correction_dictionary_entry_with_kind(string project_id, string entry, CorrectionDictionaryEntryKindDto kind);
+    [Throws=WriterError]
+    sequence<CorrectionDictionaryEntryDto> get_correction_dictionary_entries(string project_id);
     EditorEditResultDto apply_correction(u64 session_id, string project_id, string chapter_id, u64 text_revision, u32 start_byte, u32 end_byte, string original, string replacement);
 
     // ── Search Index ──
@@ -1547,6 +1555,12 @@ enum CorrectionIgnoreScopeDto {
     "Chapter",
     "Permanent",
     "Rule",
+};
+
+enum CorrectionDictionaryEntryKindDto {
+    "Term",
+    "Person",
+    "Place",
 };
 
 // 平台端按编辑事务上报写作统计的入参。
@@ -1707,6 +1721,11 @@ dictionary CorrectionEditRangeDto {
     u32 old_end_byte;
     u32 new_start_byte;
     u32 new_end_byte;
+};
+
+dictionary CorrectionDictionaryEntryDto {
+    string text;
+    CorrectionDictionaryEntryKindDto kind;
 };
 
 dictionary CorrectionChapterSnapshotDto {

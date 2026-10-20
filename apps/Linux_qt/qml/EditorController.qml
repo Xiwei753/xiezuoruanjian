@@ -83,6 +83,13 @@ QtObject {
     property var correctionRequestEpochs: ({})
     property var editorViewportRef: null
 
+    // Issue #954：编辑事务先走轻量位置更新，模型扫描防抖到输入停顿后一次。
+    property var correctionScanDebounceTimer: Timer {
+        interval: 250
+        repeat: false
+        onTriggered: controller.requestCorrectionPendingNow()
+    }
+
     // Autosave timer
     property var autoSaveTimer: Timer {
         interval: controller.settingsBackendRef ? controller.settingsBackendRef.setting_auto_save_delay_ms : 1500
@@ -218,6 +225,7 @@ QtObject {
     }
 
     function cancelPendingCorrectionRequest() {
+        correctionScanDebounceTimer.stop();
         correctionRequestSerial += 1;
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
         pendingCorrectionRequestId = correctionRequestSerial;
@@ -345,6 +353,7 @@ QtObject {
         if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
         if (!editorBackendRef.request_correction_snapshot) return;
         if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
+        correctionScanDebounceTimer.stop();
 
         var snapshotText = getEditorPlainText();
         var revision = Number(targetEditorItem.text_revision);
@@ -443,11 +452,10 @@ QtObject {
         return suggestions;
     }
 
-    // Issue #954：编辑事务的真实 patch 范围直接交给 Core。Core 增量平移未受影响
-    // 的缓存段，只重扫被改句及其邻句；QML 不再从光标推断句子，也不清空已有标注。
+    // Issue #954：编辑事务先只把真实 patch 范围交给 Core 更新内存段索引，
+    // 不读取/复制整章正文，也不立刻运行模型。输入停顿后再提交一次“扫描脏段”。
     function reconcileCorrectionEdit(baseRevision, newRevision, patchRangesJson) {
         if (!targetEditorItem || isLoadingChapter || isApplyingFormat) return;
-        var newText = getEditorPlainText();
         var actualRevision = Number(targetEditorItem.text_revision);
         var base = Number(baseRevision);
         var next = Number(newRevision);
@@ -456,34 +464,60 @@ QtObject {
                 || base !== correctionTrackedRevision
                 || correctionTrackedProjectId !== projectId
                 || correctionTrackedChapterId !== chapterId
-                || !editorBackendRef || !editorBackendRef.request_correction_edits) {
-            syncCorrectionTracking(newText, actualRevision);
+                || !editorBackendRef || !editorBackendRef.apply_correction_edits) {
+            syncCorrectionTracking(getEditorPlainText(), actualRevision);
             requestCorrectionSnapshot();
             return;
         }
 
-        syncCorrectionTracking(newText, next);
-        correctionRequestSerial += 1;
-        if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
-        pendingCorrectionRequestId = correctionRequestSerial;
-        registerCorrectionRequest(pendingCorrectionRequestId);
-        pendingCorrectionRevision = next;
-        pendingCorrectionProjectId = projectId;
-        pendingCorrectionChapterId = chapterId;
-        pendingCorrectionText = newText;
-        pendingCorrectionSilent = false;
-        correctionError = "";
-        correctionStatus = qsTr("正在校对修改段落…");
-        correctionCheckPending = true;
-        editorBackendRef.request_correction_edits(
-            pendingCorrectionRequestId,
+        correctionTrackedRevision = next;
+        correctionTrackedProjectId = projectId;
+        correctionTrackedChapterId = chapterId;
+        var applied = editorBackendRef.apply_correction_edits(
             projectId,
             chapterId,
             correctionDocumentEpoch,
             next,
             base,
-            String(patchRangesJson || "[]"),
-            newText);
+            String(patchRangesJson || "[]"));
+        if (applied && applied.ok === false) {
+            syncCorrectionTracking(getEditorPlainText(), actualRevision);
+            requestCorrectionSnapshot();
+            return;
+        }
+        correctionError = "";
+        correctionStatus = qsTr("正在校对修改段落…");
+        correctionScanDebounceTimer.restart();
+    }
+
+    // Issue #954：模型阶段。仅在输入停顿后取一次当前正文，Core 只扫描第一阶段
+    // 记录的脏窗口；连续输入不会为每个按键排队一次全文模型任务。
+    function requestCorrectionPendingNow() {
+        if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
+        if (!editorBackendRef.request_correction_pending) return;
+        if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
+        var snapshotText = getEditorPlainText();
+        var revision = Number(targetEditorItem.text_revision);
+        if (!isFinite(revision) || revision < 0) return;
+        syncCorrectionTracking(snapshotText, revision);
+
+        correctionRequestSerial += 1;
+        if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
+        pendingCorrectionRequestId = correctionRequestSerial;
+        registerCorrectionRequest(pendingCorrectionRequestId);
+        pendingCorrectionRevision = revision;
+        pendingCorrectionProjectId = projectId;
+        pendingCorrectionChapterId = chapterId;
+        pendingCorrectionText = snapshotText;
+        pendingCorrectionSilent = false;
+        correctionCheckPending = true;
+        editorBackendRef.request_correction_pending(
+            pendingCorrectionRequestId,
+            projectId,
+            chapterId,
+            correctionDocumentEpoch,
+            revision,
+            snapshotText);
     }
 
     // Issue #954：Core 返回整章合并快照 { textRevision, suggestions, checkedRanges }，
@@ -711,14 +745,23 @@ QtObject {
         return true;
     }
 
-    function addCorrectionWord(suggestion) {
+    function addCorrectionWord(suggestion, kind) {
         if (!suggestionIsCurrent(suggestion)) {
             invalidateCorrectionResults();
             correctionStatus = qsTr("正文已变化，请重新校对。");
             return false;
         }
-        if (!editorBackendRef || !editorBackendRef.add_correction_dictionary_entry) return false;
-        var result = editorBackendRef.add_correction_dictionary_entry(projectId, suggestion.original);
+        if (!editorBackendRef) return false;
+        var entryKind = String(kind || "term");
+        var result;
+        if (editorBackendRef.add_correction_dictionary_entry_with_kind) {
+            result = editorBackendRef.add_correction_dictionary_entry_with_kind(
+                projectId, suggestion.original, entryKind);
+        } else if (editorBackendRef.add_correction_dictionary_entry) {
+            result = editorBackendRef.add_correction_dictionary_entry(projectId, suggestion.original);
+        } else {
+            return false;
+        }
         if (!result || !result.success) {
             correctionError = result && result.rawError ? result.rawError : qsTr("加入作品词典失败。");
             return false;
@@ -729,7 +772,11 @@ QtObject {
         }
         updateCorrectionSuggestions(remaining);
         correctionError = "";
-        correctionStatus = qsTr("已加入作品词典；下次检查会使用该词条。");
+        correctionStatus = entryKind === "person"
+                ? qsTr("已作为人物加入作品词典。")
+                : entryKind === "place"
+                  ? qsTr("已作为地点加入作品词典。")
+                  : qsTr("已作为普通术语加入作品词典。");
         return true;
     }
 

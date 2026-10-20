@@ -26,6 +26,12 @@ export interface ICorrectionBridge {
   checkEdits(sessionId: number, projectId: string, chapterId: string, textRevision: number,
     baseRevision: number, text: string,
     editsJson: string): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
+  /** Lightweight edit phase: update Core's segment index without running the model. */
+  applyEdits(sessionId: number, projectId: string, chapterId: string, textRevision: number,
+    baseRevision: number, editsJson: string): Promise<ResultEnvelope<boolean>>
+  /** Model phase: scan only the dirty windows recorded by applyEdits. */
+  scanPending(sessionId: number, projectId: string, chapterId: string, textRevision: number,
+    text: string): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
   checkChapter(sessionId: number, projectId: string, chapterId: string,
     textRevision: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
   getChapterSnapshot(sessionId: number, projectId: string, chapterId: string,

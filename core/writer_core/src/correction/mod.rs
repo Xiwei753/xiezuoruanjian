@@ -15,8 +15,8 @@ use sujian_proof::lm::KenlmModel;
 use sujian_proof::{CorrectionEngine, Lexicon, LexiconPaths};
 
 use crate::api::{
-    CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto, CorrectionResourceStatusDto,
-    WriterError,
+    CorrectionDictionaryEntryDto, CorrectionDictionaryEntryKindDto, CorrectionIgnoreScopeDto,
+    CorrectionModelPathStatusDto, CorrectionResourceStatusDto, WriterError,
 };
 
 mod engine;
@@ -25,8 +25,8 @@ mod result_cache;
 pub(crate) use engine::CorrectionScanner;
 pub(crate) use result_cache::EditRange;
 use result_cache::{
-    cache_file_name, modified_stamp, parts_fingerprint, ChapterCorrectionCacheState,
-    ChapterCorrectionSlot,
+    apply_edits_light, cache_file_name, mark_unseen_segments_in_edit_windows, modified_stamp,
+    parts_fingerprint, ChapterCorrectionCacheState, ChapterCorrectionSlot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -50,8 +50,15 @@ struct OnceIgnoredDiagnostic {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectCorrectionPreferences {
+    /// Every author-added word. All entries protect their exact text.
     #[serde(default)]
     dictionary_entries: BTreeSet<String>,
+    /// Explicitly typed subsets. Legacy settings do not populate these, so an
+    /// old string entry never silently becomes a person or place name.
+    #[serde(default)]
+    dictionary_person_entries: BTreeSet<String>,
+    #[serde(default)]
+    dictionary_place_entries: BTreeSet<String>,
     #[serde(default)]
     ignored_permanently: BTreeSet<IgnoredDiagnostic>,
     #[serde(default)]
@@ -96,7 +103,7 @@ struct LexiconFileStamp {
 
 struct CachedLexicon {
     files: Vec<LexiconFileStamp>,
-    dictionary_entries: Vec<String>,
+    dictionary_entries: Vec<CorrectionDictionaryEntryDto>,
     version: u64,
     lexicon: Arc<Lexicon>,
 }
@@ -386,16 +393,59 @@ impl CorrectionStore {
     }
 
     pub fn dictionary_entries(&self, project_id: &str) -> Result<Vec<String>, WriterError> {
+        Ok(self
+            .dictionary_entry_records(project_id)?
+            .into_iter()
+            .map(|entry| entry.text)
+            .collect())
+    }
+
+    pub fn dictionary_entry_records(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<CorrectionDictionaryEntryDto>, WriterError> {
         let guard = self
             .inner
             .preferences
             .lock()
             .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
-        Ok(guard
-            .projects
-            .get(project_id)
-            .map(|project| project.dictionary_entries.iter().cloned().collect())
-            .unwrap_or_default())
+        let Some(project) = guard.projects.get(project_id) else {
+            return Ok(Vec::new());
+        };
+        let mut records = project
+            .dictionary_entries
+            .iter()
+            .map(|entry| CorrectionDictionaryEntryDto {
+                text: entry.clone(),
+                kind: if project.dictionary_person_entries.contains(entry) {
+                    CorrectionDictionaryEntryKindDto::Person
+                } else if project.dictionary_place_entries.contains(entry) {
+                    CorrectionDictionaryEntryKindDto::Place
+                } else {
+                    CorrectionDictionaryEntryKindDto::Term
+                },
+            })
+            .collect::<Vec<_>>();
+        // Preserve a typed entry even if a malformed/older settings file did
+        // not also contain it in the general set.
+        for entry in &project.dictionary_person_entries {
+            if !project.dictionary_entries.contains(entry) {
+                records.push(CorrectionDictionaryEntryDto {
+                    text: entry.clone(),
+                    kind: CorrectionDictionaryEntryKindDto::Person,
+                });
+            }
+        }
+        for entry in &project.dictionary_place_entries {
+            if !project.dictionary_entries.contains(entry) {
+                records.push(CorrectionDictionaryEntryDto {
+                    text: entry.clone(),
+                    kind: CorrectionDictionaryEntryKindDto::Place,
+                });
+            }
+        }
+        records.sort_by(|left, right| left.text.cmp(&right.text));
+        Ok(records)
     }
 
     /// Root directory for per-chapter correction result caches. The cache holds
@@ -429,6 +479,53 @@ impl CorrectionStore {
         ));
         caches.insert(key, Arc::clone(&state));
         Ok(state)
+    }
+
+    /// Lightweight edit phase: apply the transaction's byte mappings to the
+    /// committed segment index without running the model or fingerprinting the
+    /// chapter. The next pending-scan request re-segments these windows against
+    /// the newest text.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_correction_edits(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        session_id: u64,
+        text_revision: u64,
+        base_revision: u64,
+        edits: &[EditRange],
+    ) -> Result<(), WriterError> {
+        if base_revision > text_revision {
+            return Err(WriterError::Other(
+                "correction edit base revision is newer than the current revision".into(),
+            ));
+        }
+        let slot = self.chapter_result_cache(project_id, chapter_id)?;
+        let mut guard = slot
+            .state
+            .lock()
+            .map_err(|_| WriterError::Other("correction result cache lock poisoned".into()))?;
+        if guard.last_session_id != 0 && session_id < guard.last_session_id {
+            return Ok(());
+        }
+        let same_session = guard.last_session_id == session_id;
+        if same_session && text_revision < guard.last_revision {
+            return Ok(());
+        }
+        if same_session && text_revision == guard.last_revision {
+            // A restore may already have rebuilt this revision. Keep the
+            // transaction's local windows scannable without replaying it into
+            // an index that already describes the same text.
+            mark_unseen_segments_in_edit_windows(&mut guard, edits);
+            return Ok(());
+        }
+        if !same_session || guard.last_revision != base_revision || guard.needs_reconcile {
+            guard.needs_reconcile = true;
+        }
+        apply_edits_light(&mut guard, edits)?;
+        guard.last_session_id = session_id;
+        guard.last_revision = text_revision;
+        Ok(())
     }
 
     /// Stable identity of everything that changes scan results except the text
@@ -481,8 +578,8 @@ impl CorrectionStore {
                 modified_stamp(stamp.modified)
             ));
         }
-        for entry in self.dictionary_entries(project_id)? {
-            parts.push(format!("dictionary:{entry}"));
+        for entry in self.dictionary_entry_records(project_id)? {
+            parts.push(format!("dictionary:{:?}:{}", entry.kind, entry.text));
         }
         for rule in disabled_rules {
             parts.push(format!("disabled-rule:{rule}"));
@@ -500,7 +597,7 @@ impl CorrectionStore {
         project_id: &str,
     ) -> Result<(u64, Arc<Lexicon>), WriterError> {
         let project_generation = self.activate_project_cache(project_id)?;
-        let dictionary_entries = self.dictionary_entries(project_id)?;
+        let dictionary_entries = self.dictionary_entry_records(project_id)?;
         let data_root = self
             .inner
             .path
@@ -563,7 +660,23 @@ impl CorrectionStore {
         })
         .map_err(|error| WriterError::Io(error.to_string()))?;
         for entry in &dictionary_entries {
-            lexicon.insert_protected_word(entry.clone());
+            match entry.kind {
+                CorrectionDictionaryEntryKindDto::Person => {
+                    lexicon.insert_work_entity(
+                        entry.text.clone(),
+                        sujian_proof::ProperNameKind::Person,
+                    );
+                }
+                CorrectionDictionaryEntryKindDto::Place => {
+                    lexicon.insert_work_entity(
+                        entry.text.clone(),
+                        sujian_proof::ProperNameKind::Place,
+                    );
+                }
+                CorrectionDictionaryEntryKindDto::Term => {
+                    lexicon.insert_protected_word(entry.text.clone());
+                }
+            }
         }
         let lexicon = Arc::new(lexicon);
 
@@ -796,6 +909,19 @@ impl CorrectionStore {
     }
 
     pub fn add_dictionary_entry(&self, project_id: &str, entry: &str) -> Result<bool, WriterError> {
+        self.add_dictionary_entry_with_kind(
+            project_id,
+            entry,
+            CorrectionDictionaryEntryKindDto::Term,
+        )
+    }
+
+    pub fn add_dictionary_entry_with_kind(
+        &self,
+        project_id: &str,
+        entry: &str,
+        kind: CorrectionDictionaryEntryKindDto,
+    ) -> Result<bool, WriterError> {
         let entry = entry.trim();
         if entry.is_empty() || entry.chars().any(char::is_control) {
             return Err(WriterError::Other(
@@ -803,12 +929,33 @@ impl CorrectionStore {
             ));
         }
         self.update_preferences(|preferences| {
-            preferences
+            let project = preferences
                 .projects
                 .entry(project_id.to_string())
-                .or_default()
-                .dictionary_entries
-                .insert(entry.to_string())
+                .or_default();
+            let previous_kind = if project.dictionary_person_entries.contains(entry) {
+                CorrectionDictionaryEntryKindDto::Person
+            } else if project.dictionary_place_entries.contains(entry) {
+                CorrectionDictionaryEntryKindDto::Place
+            } else {
+                CorrectionDictionaryEntryKindDto::Term
+            };
+            let was_present = project.dictionary_entries.contains(entry);
+            project.dictionary_entries.insert(entry.to_string());
+            // The type is exclusive: re-adding an existing word as a different
+            // kind updates its meaning instead of keeping stale membership.
+            project.dictionary_person_entries.remove(entry);
+            project.dictionary_place_entries.remove(entry);
+            match kind {
+                CorrectionDictionaryEntryKindDto::Term => {}
+                CorrectionDictionaryEntryKindDto::Person => {
+                    project.dictionary_person_entries.insert(entry.to_string());
+                }
+                CorrectionDictionaryEntryKindDto::Place => {
+                    project.dictionary_place_entries.insert(entry.to_string());
+                }
+            }
+            !was_present || previous_kind != kind
         })
     }
 

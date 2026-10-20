@@ -231,6 +231,8 @@ char* writer_core_get_correction_resource_status(void);
 char* writer_core_get_correction_model_path_status(const char* path);
 char* writer_core_check_correction_segment(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision, uint32_t start_byte, uint32_t end_byte);
 char* writer_core_check_correction_edits(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision, uint64_t base_revision, const char* text, const char* edits_json);
+char* writer_core_apply_correction_edits(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision, uint64_t base_revision, const char* edits_json);
+char* writer_core_scan_correction_pending(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision, const char* text);
 char* writer_core_check_correction_chapter(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision);
 char* writer_core_get_correction_chapter_snapshot(uint64_t session_id, const char* project_id, const char* chapter_id, uint64_t text_revision);
 char* writer_core_ignore_correction(const char* project_id, const char* chapter_id, const char* rule_id, const char* original, const char* scope, uint64_t text_revision, uint32_t start_byte, uint32_t end_byte);

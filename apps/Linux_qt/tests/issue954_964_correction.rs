@@ -21,7 +21,8 @@ fn read_src(rel: &str) -> String {
 #[test]
 fn edits_are_forwarded_instead_of_cursor_sentence_scans() {
     let controller = read_src("qml/EditorController.qml");
-    assert!(controller.contains("request_correction_edits("));
+    assert!(controller.contains("apply_correction_edits("));
+    assert!(controller.contains("request_correction_pending("));
     assert!(controller
         .contains("function reconcileCorrectionEdit(baseRevision, newRevision, patchRangesJson)"));
     assert!(

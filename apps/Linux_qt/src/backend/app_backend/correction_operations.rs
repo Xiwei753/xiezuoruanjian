@@ -4,12 +4,13 @@
 //! This module only sends immutable text snapshots to WriterCoreApi. QML maps
 //! the returned UTF-8 byte-range endpoints onto Qt's UTF-16 string positions.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use super::*;
-use writer_core::api::types::CorrectionIgnoreScopeDto;
+use writer_core::api::types::{
+    CorrectionDictionaryEntryKindDto, CorrectionEditRangeDto, CorrectionIgnoreScopeDto,
+};
 
 /// Issue #958：RPM 包内自带的中文 KenLM 模型安装路径。
 ///
@@ -34,30 +35,104 @@ const CORRECTION_DICTIONARY_FILES: [&str; 8] = [
 pub(crate) type CorrectionQueryCallback =
     Box<dyn FnOnce(u32, u64, Result<String, String>) + Send + Sync>;
 
-/// One chapter owns one worker thread and one FIFO. Requests therefore reach
-/// Core in editor order. Display-only jobs may be skipped, but every edit
-/// transaction runs: a skipped revision would force a whole-chapter reconcile
-/// instead of the local edit mapping.
+/// A bounded, process-wide correction executor. One FIFO thread serializes
+/// model work for every chapter; lightweight edit mappings run on the caller's
+/// thread and never wait for that thread. The executor owns no per-chapter
+/// sender or idle thread, so browsing chapters cannot accumulate threads.
 struct CorrectionJob {
+    project_id: String,
+    chapter_id: String,
+    session_id: u64,
     text_revision: u64,
     coalescable: bool,
     run: Box<dyn FnOnce() + Send>,
 }
 
-struct CorrectionWorker {
-    sender: mpsc::Sender<CorrectionJob>,
-    latest_revision: Arc<AtomicU64>,
-    /// Set when a newer document session supersedes this chapter worker. The
-    /// worker stops before running any further queued job, so an old editor
-    /// session can never send results to Core after the new one has started.
-    superseded: Arc<AtomicBool>,
+struct CorrectionQueue {
+    jobs: Mutex<VecDeque<CorrectionJob>>,
+    wake: Condvar,
+    /// Newest `(session, revision)` submitted for each chapter. Used only to
+    /// skip obsolete display/scan jobs; edit mappings are never skipped.
+    latest: Mutex<HashMap<(String, String), (u64, u64)>>,
 }
 
-static CORRECTION_WORKERS: OnceLock<Mutex<HashMap<(String, String, u64), CorrectionWorker>>> =
-    OnceLock::new();
+static CORRECTION_QUEUE: OnceLock<Arc<CorrectionQueue>> = OnceLock::new();
 
-fn correction_workers() -> &'static Mutex<HashMap<(String, String, u64), CorrectionWorker>> {
-    CORRECTION_WORKERS.get_or_init(|| Mutex::new(HashMap::new()))
+fn correction_queue() -> &'static Arc<CorrectionQueue> {
+    CORRECTION_QUEUE.get_or_init(|| {
+        let queue = Arc::new(CorrectionQueue {
+            jobs: Mutex::new(VecDeque::new()),
+            wake: Condvar::new(),
+            latest: Mutex::new(HashMap::new()),
+        });
+        let worker = Arc::clone(&queue);
+        if let Err(error) = std::thread::Builder::new()
+            .name("correction-executor".to_string())
+            .spawn(move || correction_executor(worker))
+        {
+            log::error!("failed to start correction executor: {error}");
+        }
+        queue
+    })
+}
+
+fn correction_executor(queue: Arc<CorrectionQueue>) {
+    loop {
+        let mut jobs = match queue.jobs.lock() {
+            Ok(jobs) => jobs,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        while jobs.is_empty() {
+            jobs = match queue.wake.wait(jobs) {
+                Ok(jobs) => jobs,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+        }
+        let job = match jobs.pop_front() {
+            Some(job) => job,
+            None => continue,
+        };
+        drop(jobs);
+
+        if job.coalescable {
+            let latest = queue
+                .latest
+                .lock()
+                .map(|latest| {
+                    latest
+                        .get(&(job.project_id.clone(), job.chapter_id.clone()))
+                        .copied()
+                })
+                .unwrap_or(None);
+            if latest.is_some_and(|(session_id, text_revision)| {
+                job.session_id < session_id
+                    || (job.session_id == session_id && job.text_revision < text_revision)
+            }) {
+                continue;
+            }
+        }
+        (job.run)();
+    }
+}
+
+fn record_correction_latest(
+    project_id: &str,
+    chapter_id: &str,
+    session_id: u64,
+    text_revision: u64,
+) {
+    let queue = correction_queue();
+    let mut latest = match queue.latest.lock() {
+        Ok(latest) => latest,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let entry = latest
+        .entry((project_id.to_string(), chapter_id.to_string()))
+        .or_insert((session_id, text_revision));
+    if session_id < entry.0 || (session_id == entry.0 && text_revision < entry.1) {
+        return;
+    }
+    *entry = (session_id, text_revision);
 }
 
 fn submit_correction_job(
@@ -68,75 +143,38 @@ fn submit_correction_job(
     coalescable: bool,
     run: impl FnOnce() + Send + 'static,
 ) -> Result<(), String> {
-    // The editor session is part of the worker identity: reopening a chapter
-    // starts a new Core cache session whose revisions begin below the previous
-    // session's. Sharing one watermark would silently drop the new session's
-    // restore and edit jobs.
-    let key = (project_id.clone(), chapter_id.clone(), session_id);
-    let mut workers = correction_workers()
+    record_correction_latest(&project_id, &chapter_id, session_id, text_revision);
+    let queue = correction_queue();
+    let mut jobs = queue
+        .jobs
         .lock()
         .map_err(|_| "校对任务队列锁已损坏".to_string())?;
-    // A newer editor session supersedes older workers for the same chapter.
-    // Signal them to stop before draining queued jobs; their callbacks are
-    // also rejected by the QML document epoch.
-    workers.retain(|(worker_project, worker_chapter, worker_session), worker| {
-        let keep = worker_project != &project_id
-            || worker_chapter != &chapter_id
-            || *worker_session == session_id;
-        if !keep {
-            worker.superseded.store(true, Ordering::Release);
-        }
-        keep
+    jobs.push_back(CorrectionJob {
+        project_id,
+        chapter_id,
+        session_id,
+        text_revision,
+        coalescable,
+        run: Box::new(run),
     });
-    if !workers.contains_key(&key) {
-        let (sender, receiver) = mpsc::channel::<CorrectionJob>();
-        let latest_revision = Arc::new(AtomicU64::new(text_revision));
-        let worker_latest = Arc::clone(&latest_revision);
-        let superseded = Arc::new(AtomicBool::new(false));
-        let worker_superseded = Arc::clone(&superseded);
-        std::thread::Builder::new()
-            .name("correction-chapter".to_string())
-            .spawn(move || {
-                while let Ok(job) = receiver.recv() {
-                    if worker_superseded.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if job.coalescable && job.text_revision < worker_latest.load(Ordering::Acquire)
-                    {
-                        continue;
-                    }
-                    let run = job.run;
-                    run();
-                }
-            })
-            .map_err(|error| format!("无法启动校对任务: {error}"))?;
-        workers.insert(
-            key.clone(),
-            CorrectionWorker {
-                sender,
-                latest_revision,
-                superseded,
+    queue.wake.notify_one();
+    Ok(())
+}
+
+fn parse_correction_edits_json(edits_json: &str) -> Result<Vec<CorrectionEditRangeDto>, String> {
+    let ranges = serde_json::from_str::<Vec<[u32; 4]>>(edits_json)
+        .map_err(|error| format!("校对编辑范围格式无效: {error}"))?;
+    Ok(ranges
+        .into_iter()
+        .map(
+            |[old_start, old_end, new_start, new_end]| CorrectionEditRangeDto {
+                old_start_byte: old_start,
+                old_end_byte: old_end,
+                new_start_byte: new_start,
+                new_end_byte: new_end,
             },
-        );
-    }
-    let worker = workers
-        .get(&key)
-        .ok_or_else(|| "校对任务队列不可用".to_string())?;
-    worker.latest_revision.store(
-        worker
-            .latest_revision
-            .load(Ordering::Acquire)
-            .max(text_revision),
-        Ordering::Release,
-    );
-    worker
-        .sender
-        .send(CorrectionJob {
-            text_revision,
-            coalescable,
-            run: Box::new(run),
-        })
-        .map_err(|_| "校对任务队列已关闭".to_string())
+        )
+        .collect())
 }
 
 impl AppBackend {
@@ -298,6 +336,19 @@ impl AppBackend {
             .map_err(|error| error.to_string())
     }
 
+    pub(crate) fn add_correction_dictionary_entry_with_kind(
+        &self,
+        project_id: String,
+        entry: String,
+        kind: CorrectionDictionaryEntryKindDto,
+    ) -> Result<bool, String> {
+        let api = self
+            .core_api()
+            .ok_or_else(|| "Core 尚未打开工作区".to_string())?;
+        api.add_correction_dictionary_entry_with_kind(project_id, entry, kind)
+            .map_err(|error| error.to_string())
+    }
+
     /// Queue one whole-chapter proofreading request without blocking the Qt UI.
     ///
     /// Issue #954: Core returns a merged chapter snapshot. Segments whose
@@ -363,7 +414,8 @@ impl AppBackend {
     /// every wave position from the current text fingerprints, so insert and
     /// delete edits only shift byte offsets. `EditorController` uses it to
     /// restore waves instantly on chapter open; edits go through
-    /// `request_correction_edits` so Core can update only the changed segments.
+    /// `request_correction_edits_apply` and `request_correction_pending` so
+    /// Core maps only changed ranges and scans only dirty segments.
     pub(crate) fn request_correction_snapshot(
         &self,
         request_id: u32,
@@ -470,6 +522,98 @@ impl AppBackend {
                     .map_err(|error| error.to_string())
                     .and_then(|suggestions| {
                         serde_json::to_string(&suggestions)
+                            .map_err(|error| format!("无法编码校对结果: {error}"))
+                    });
+                completion(request_id, text_revision, result);
+            },
+        )
+    }
+
+    /// Lightweight half of the two-stage edit flow. Runs on the caller thread
+    /// and only maps byte ranges in the committed segment index; it does not
+    /// copy the chapter or touch the model.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn request_correction_edits_apply(
+        &self,
+        project_id: String,
+        chapter_id: String,
+        session_id: u64,
+        text_revision: u64,
+        base_revision: u64,
+        edits_json: String,
+    ) -> Result<(), String> {
+        let layout = if self.current_has_data_root && !self.current_data_root.is_empty() {
+            self.current_workspace_git_layout
+                .clone()
+                .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?
+        } else {
+            return Err("Core 尚未打开工作区".to_string());
+        };
+        let edits = parse_correction_edits_json(&edits_json)?;
+        let api = with_layout_core_api(
+            &self.current_data_root,
+            &self.current_projects_root,
+            &layout,
+        );
+        api.apply_correction_edits(
+            project_id.clone(),
+            chapter_id.clone(),
+            session_id,
+            text_revision,
+            base_revision,
+            edits,
+        )
+        .map_err(|error| error.to_string())?;
+        record_correction_latest(&project_id, &chapter_id, session_id, text_revision);
+        Ok(())
+    }
+
+    /// Model half of the two-stage edit flow. The executor coalesces queued
+    /// scans and only the newest revision that still matches the editor
+    /// snapshot reaches Core; an older queued scan is skipped.
+    pub(crate) fn request_correction_pending(
+        &self,
+        request_id: u32,
+        project_id: String,
+        chapter_id: String,
+        session_id: u64,
+        text_revision: u64,
+        text: String,
+        completion: CorrectionQueryCallback,
+    ) -> Result<(), String> {
+        let (data_root, projects_root, layout) =
+            if self.current_has_data_root && !self.current_data_root.is_empty() {
+                let layout = self
+                    .current_workspace_git_layout
+                    .clone()
+                    .ok_or_else(|| "当前工作区缺少 Core 存储布局".to_string())?;
+                (
+                    self.current_data_root.clone(),
+                    self.current_projects_root.clone(),
+                    layout,
+                )
+            } else {
+                return Err("Core 尚未打开工作区".to_string());
+            };
+        submit_correction_job(
+            project_id.clone(),
+            chapter_id.clone(),
+            session_id,
+            text_revision,
+            true,
+            move || {
+                let api = with_layout_core_api(&data_root, &projects_root, &layout);
+                let result = api
+                    .scan_correction_pending(
+                        project_id,
+                        chapter_id,
+                        session_id,
+                        text_revision,
+                        text,
+                    )
+                    .map_err(|error| error.to_string())
+                    .and_then(|snapshot| {
+                        serde_json::to_string(&snapshot)
                             .map_err(|error| format!("无法编码校对结果: {error}"))
                     });
                 completion(request_id, text_revision, result);
