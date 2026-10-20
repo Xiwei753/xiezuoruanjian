@@ -421,7 +421,12 @@ Rectangle {
                 // ── 生涯顶部条：收起时只显示摘要；展开后原位显示「左纪录 / 右趋势」──
                 Kirigami.ShadowedRectangle {
                     id: lifetimeBox
-                    Layout.fillWidth: true
+                    Layout.fillWidth: root.narrowLayout || root.expandedPanel === "lifetime"
+                    Layout.preferredWidth: root.narrowLayout || root.expandedPanel === "lifetime"
+                        ? pageFlick.width
+                        : Math.min(pageFlick.width,
+                                   Math.max(Kirigami.Units.gridUnit * 46, pageFlick.width * 0.70))
+                    Layout.alignment: Qt.AlignHCenter
                     // 宽屏生涯展开时由 Layout 把余量分给这条主展示区；窄屏保持自然高度滚动。
                     Layout.fillHeight: !root.narrowLayout && root.expandedPanel === "lifetime"
                     Layout.minimumHeight: root.expandedPanel === "lifetime"
@@ -449,22 +454,39 @@ Rectangle {
                             RowLayout {
                                 id: lifetimeHeaderRow
                                 anchors.fill: parent
-                                spacing: Kirigami.Units.largeSpacing
+                                spacing: root.narrowLayout ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
 
-                                Kirigami.Heading {
-                                    level: 1
-                                    text: qsTr("生涯")
-                                    color: Kirigami.Theme.textColor
+                                RowLayout {
+                                    Layout.fillWidth: root.narrowLayout
+                                    Layout.preferredWidth: root.narrowLayout ? parent.width * 0.42 : implicitWidth
+                                    spacing: root.narrowLayout ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
+
+                                    Kirigami.Heading {
+                                        level: 1
+                                        text: qsTr("生涯")
+                                        color: Kirigami.Theme.textColor
+                                    }
+
+                                    Kirigami.Heading {
+                                        level: 1
+                                        Layout.fillWidth: true
+                                        text: root.formatNum(root.val(root.lifetime, "totalHumanTypedChars")) + " " + qsTr("字")
+                                        color: Kirigami.Theme.highlightColor
+                                        elide: Text.ElideRight
+                                    }
                                 }
 
-                                Kirigami.Heading {
-                                    level: 1
-                                    text: root.formatNum(root.val(root.lifetime, "totalHumanTypedChars")) + " " + qsTr("字")
-                                    color: Kirigami.Theme.highlightColor
+                                Item {
+                                    Layout.fillWidth: !root.narrowLayout
+                                    visible: !root.narrowLayout
                                 }
 
                                 ColumnLayout {
-                                    Layout.fillWidth: true
+                                    Layout.fillWidth: root.narrowLayout
+                                    Layout.preferredWidth: root.narrowLayout
+                                        ? parent.width * 0.42
+                                        : Math.min(parent.width * 0.58,
+                                                   Math.max(Kirigami.Units.gridUnit * 24, implicitWidth))
                                     spacing: 1
 
                                     Label {
@@ -489,17 +511,20 @@ Rectangle {
                                         color: Kirigami.Theme.disabledTextColor
                                         elide: Text.ElideRight
                                     }
+
+                                    // 历史口径来自 Core：本机 / 已同步设备 / 同步不完整，不因打开同步开关就宣称全量。
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: root.historyScopeText() !== ""
+                                        text: root.historyScopeText()
+                                        color: Kirigami.Theme.disabledTextColor
+                                        font: Kirigami.Theme.smallFont
+                                        elide: Text.ElideRight
+                                    }
                                 }
 
-                                // 历史口径来自 Core：本机 / 已同步设备 / 同步不完整，不因打开同步开关就宣称全量。
                                 Label {
-                                    visible: root.historyScopeText() !== ""
-                                    text: root.historyScopeText()
-                                    color: Kirigami.Theme.disabledTextColor
-                                    font: Kirigami.Theme.smallFont
-                                }
-
-                                Label {
+                                    Layout.alignment: Qt.AlignVCenter
                                     text: root.expandedPanel === "lifetime" ? "▲" : "▼"
                                     color: Kirigami.Theme.disabledTextColor
                                 }
@@ -528,6 +553,7 @@ Rectangle {
                                 Layout.fillHeight: !root.narrowLayout
                                 Layout.preferredWidth: 42
                                 records: root.selectedRecords
+                                flat: true
                             }
 
                             StatsTrendChart {
@@ -572,39 +598,49 @@ Rectangle {
                         }
                     }
 
-                    RowLayout {
+                    Kirigami.ShadowedRectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: root.expandedPanel !== ""
                         Layout.minimumHeight: root.detailMinHeight
                         Layout.preferredHeight: Math.max(root.detailMinHeight,
                                                          Math.round(pageFlick.height * 0.48))
                         visible: root.expandedPanel !== ""
-                        spacing: Kirigami.Units.largeSpacing
+                        color: Kirigami.Theme.alternateBackgroundColor
+                        radius: Kirigami.Units.cornerRadius
+                        border.color: Kirigami.Theme.disabledTextColor
+                        border.width: 1
 
-                        // 左：当前时段摘要；点它返回四卡总览。
-                        StatsPeriodCard {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.preferredWidth: 24
-                            periodSummary: root.selected
-                            expanded: true
-                            onClicked: root.collapsePanel()
-                        }
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: Kirigami.Units.largeSpacing
+                            spacing: Kirigami.Units.largeSpacing
 
-                        // 中：纪录。
-                        StatsRecordPanel {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.preferredWidth: 36
-                            records: root.selectedRecords
-                        }
+                            // 左：当前时段摘要；点它返回四卡总览。
+                            StatsPeriodCard {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.preferredWidth: 24
+                                periodSummary: root.selected
+                                expanded: true
+                                onClicked: root.collapsePanel()
+                            }
 
-                        // 右：按日/周/月人工字数趋势（与旧本周速度曲线语义不同）。
-                        StatsTrendChart {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.preferredWidth: 40
-                            trend: root.selectedTrend
+                            // 中：纪录；背景与边界由整张展开卡统一提供。
+                            StatsRecordPanel {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.preferredWidth: 36
+                                records: root.selectedRecords
+                                flat: true
+                            }
+
+                            // 右：按日/周/月人工字数趋势（与旧本周速度曲线语义不同）。
+                            StatsTrendChart {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.preferredWidth: 40
+                                trend: root.selectedTrend
+                            }
                         }
                     }
                 }
@@ -673,21 +709,6 @@ Rectangle {
                     }
                 }
 
-                // ── 每日码字日历热力图（#960）：手稿既有生涯/四卡结构之外的独立区域，
-                //    横跨主画布全宽，随主内容纵向滚动；折线趋势图继续保留。
-                StatsCalendarHeatmap {
-                    Layout.fillWidth: true
-                    calendar: root.calendar
-                    errorText: root.calendarError
-                }
-
-                // 窄屏内容不足一屏时，把陪伴条压到画布底部。
-                Item {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: root.narrowLayout
-                    visible: root.narrowLayout
-                }
-
                 // ── 底部陪伴条：口径是自然日历跨度，不是实际写作天数 ──
                 Kirigami.ShadowedRectangle {
                     Layout.fillWidth: true
@@ -703,6 +724,14 @@ Rectangle {
                         text: qsTr("素笺写作已陪伴您 %1 天").arg(root.formatNum(root.val(root.lifetime, "elapsedCalendarDays")))
                         color: Kirigami.Theme.textColor
                     }
+                }
+
+                // ── 每日码字日历热力图（#960）：独立位于手稿原有统计区与陪伴条之后，
+                //    横跨主画布全宽，随主内容纵向滚动；折线趋势图继续保留。
+                StatsCalendarHeatmap {
+                    Layout.fillWidth: true
+                    calendar: root.calendar
+                    errorText: root.calendarError
                 }
 
                 // ── 详细统计（折叠）：作品 / 章节 / 设备排行与本周速度曲线 ──

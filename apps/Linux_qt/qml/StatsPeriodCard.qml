@@ -101,6 +101,7 @@ Kirigami.ShadowedRectangle {
                 Layout.fillWidth: true
                 text: root.title
                 color: Kirigami.Theme.disabledTextColor
+                font.pixelSize: Math.round(Kirigami.Units.gridUnit * 1.2)
                 elide: Text.ElideRight
             }
 
@@ -113,7 +114,7 @@ Kirigami.ShadowedRectangle {
             }
         }
 
-        // 手稿的四卡在标题与数值、数值与日期之间都留白，随卡片高度伸展。
+        // 柔性间距只放在信息段之间，避免标题上方或日期下方出现大空洞。
         Item { Layout.fillHeight: true }
 
         Kirigami.Heading {
@@ -121,22 +122,29 @@ Kirigami.ShadowedRectangle {
             Layout.fillWidth: true
             text: root.formatNum(root.val(root.periodSummary, "totalHumanTypedChars")) + " " + qsTr("字")
             color: Kirigami.Theme.highlightColor
+            font.pixelSize: Math.round(Kirigami.Units.gridUnit * 1.65)
             elide: Text.ElideRight
         }
+
+        Item { Layout.fillHeight: true }
 
         Kirigami.Heading {
             level: 3
             Layout.fillWidth: true
             text: root.formatAverage(root.val(root.periodSummary, "averageCharsPerMinute")) + " " + qsTr("字/分")
             color: Kirigami.Theme.textColor
+            font.pixelSize: Math.round(Kirigami.Units.gridUnit * 1.1)
             elide: Text.ElideRight
         }
+
+        Item { Layout.fillHeight: true }
 
         Kirigami.Heading {
             level: 3
             Layout.fillWidth: true
             text: root.formatAverage(root.val(root.periodSummary, "averageCharsPerDay")) + " " + qsTr("字/天")
             color: Kirigami.Theme.textColor
+            font.pixelSize: Math.round(Kirigami.Units.gridUnit * 1.1)
             elide: Text.ElideRight
         }
 
@@ -146,6 +154,7 @@ Kirigami.ShadowedRectangle {
             Layout.fillWidth: true
             text: root.rangeText
             color: Kirigami.Theme.disabledTextColor
+            font: Kirigami.Theme.smallFont
             elide: Text.ElideRight
         }
     }
