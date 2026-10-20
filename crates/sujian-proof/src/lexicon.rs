@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
-use crate::proper_names::WorkEntityLexicon;
+use crate::proper_names::{ProperNameKind, WorkEntityLexicon};
 
 // Behavioral port of pycorrector's detector/corrector dictionary loading
 // (Apache-2.0). Bundled and user-provided data are loaded by the same parsers.
@@ -58,9 +58,6 @@ pub struct Lexicon {
     proper_names: HashSet<String>,
     ignored_words: HashSet<String>,
     protected_words: HashSet<String>,
-    /// 2–4-character windows derived from protected entries. They are matching
-    /// helpers only and never protect text or become replacement candidates.
-    protected_word_components: HashSet<String>,
     protected_word_index: ProtectedWordTrie,
     work_entity_lexicon: WorkEntityLexicon,
 }
@@ -317,31 +314,23 @@ impl Lexicon {
     /// Protect an author's work-dictionary entry from correction candidates
     /// without adding it to the ordinary word-frequency candidate index.
     ///
-    /// Only the full entry protects text. Its 2–4-character windows are kept
-    /// separately for matching heuristics and never enter the protected trie,
-    /// so an ordinary word inside a longer name is not silently protected.
+    /// Only the full entry protects text, so an ordinary word inside a longer
+    /// name is not silently protected.
     pub fn insert_protected_word(&mut self, word: String) {
         if word.is_empty() || !self.protected_words.insert(word.clone()) {
             return;
         }
 
-        let chars = word.chars().collect::<Vec<_>>();
         self.index_protected_word(&word);
-        let kind = if self.person_names.contains_key(&word) {
-            crate::proper_names::ProperNameKind::Person
-        } else if self.place_names.contains_key(&word) {
-            crate::proper_names::ProperNameKind::Place
-        } else {
-            crate::proper_names::ProperNameKind::Other
-        };
-        self.work_entity_lexicon.insert(word, kind);
+    }
 
-        for length in 2..=4.min(chars.len()) {
-            for start in 0..=chars.len() - length {
-                let component = chars[start..start + length].iter().collect::<String>();
-                self.protected_word_components.insert(component);
-            }
-        }
+    /// Record an author-confirmed person or place name. This is deliberately
+    /// separate from [`Self::insert_protected_word`]: ordinary work-dictionary
+    /// entries are protected, but only explicitly typed names may ever become
+    /// replacement targets or participate in entity-aware checks.
+    pub fn insert_work_entity(&mut self, word: String, kind: ProperNameKind) {
+        self.insert_protected_word(word.clone());
+        self.work_entity_lexicon.insert(word, kind);
     }
 
     /// Names and explicit protections exempt from OOV detection. Ordinary
@@ -367,26 +356,6 @@ impl Lexicon {
                 .base
                 .as_ref()
                 .is_some_and(|base| base.ignored_words.contains(word))
-    }
-
-    pub(crate) fn is_protected_name_component(&self, word: &str) -> bool {
-        // Only full ignored/protected entries count. Derived 2–4-character
-        // windows must never protect an ordinary word on their own.
-        self.ignored_words.contains(word)
-            || self.protected_words.contains(word)
-            || self.base.as_ref().is_some_and(|base| {
-                base.ignored_words.contains(word) || base.protected_words.contains(word)
-            })
-    }
-
-    /// True when `word` is a derived window of a longer work-dictionary entry.
-    /// This is a matching guard only; it does not protect text by itself.
-    pub(crate) fn is_protected_word_window(&self, word: &str) -> bool {
-        self.protected_word_components.contains(word)
-            || self
-                .base
-                .as_ref()
-                .is_some_and(|base| base.protected_word_components.contains(word))
     }
 
     /// Return merged UTF-8 byte ranges of protected full entries found in
@@ -438,27 +407,13 @@ impl Lexicon {
         ranges
     }
 
-    /// True when `word` is already established by a dictionary source. Such a
-    /// form is never treated as a typo of a work entity.
-    pub(crate) fn is_known_word(&self, word: &str) -> bool {
-        self.word_freq.contains_key(word)
-            || self.proper_names.contains(word)
-            || self.person_names.contains_key(word)
-            || self.place_names.contains_key(word)
-            || self.ignored_words.contains(word)
-            || self.protected_words.contains(word)
-            || self.base.as_ref().is_some_and(|base| {
-                base.word_freq.contains_key(word)
-                    || base.proper_names.contains(word)
-                    || base.person_names.contains_key(word)
-                    || base.place_names.contains_key(word)
-                    || base.ignored_words.contains(word)
-                    || base.protected_words.contains(word)
-            })
-    }
-
     /// Author-confirmed entities for the current project. The shared base
     /// lexicon deliberately never carries work-dictionary entries.
+    ///
+    /// The read-only index is retained for future entity-aware checks. It is
+    /// intentionally not consumed by a similarity scan today: a typed name is
+    /// protected as exact text, never guessed from a nearby similar span.
+    #[allow(dead_code)]
     pub(crate) fn work_entity_lexicon(&self) -> &WorkEntityLexicon {
         &self.work_entity_lexicon
     }
@@ -544,19 +499,6 @@ impl Lexicon {
             .is_some_and(|chars| chars.contains(&right))
             || self.base.as_ref().is_some_and(|base| {
                 base.same_pinyin
-                    .get(&left)
-                    .is_some_and(|chars| chars.contains(&right))
-            })
-    }
-
-    pub(crate) fn is_confusable(&self, left: char, right: char) -> bool {
-        self.same_pinyin(left, right)
-            || self
-                .same_stroke
-                .get(&left)
-                .is_some_and(|chars| chars.contains(&right))
-            || self.base.as_ref().is_some_and(|base| {
-                base.same_stroke
                     .get(&left)
                     .is_some_and(|chars| chars.contains(&right))
             })

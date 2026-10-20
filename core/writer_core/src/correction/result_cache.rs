@@ -681,7 +681,9 @@ pub(crate) fn reconcile_edits(
     }
 
     let mut translated = Vec::with_capacity(state.segments.len());
+    let mut semantic_dropped = false;
     for mut segment in std::mem::take(&mut state.segments) {
+        let was_checked = segment.checked.is_some();
         let start = map_offset(segment.start_byte as usize, edits, false);
         let end = map_offset(segment.end_byte as usize, edits, true);
         if start < end
@@ -692,6 +694,11 @@ pub(crate) fn reconcile_edits(
             segment.start_byte = start as u32;
             segment.end_byte = end as u32;
             translated.push(segment);
+        } else if was_checked {
+            // The segment no longer exists in the edited text; its persisted
+            // suggestions must be removed even when no replacement segment is
+            // scannable (for example, deleting the whole chapter).
+            semantic_dropped = true;
         }
     }
 
@@ -749,8 +756,11 @@ pub(crate) fn reconcile_edits(
                 }
             }
             windows.push((window_start, window_end));
-            for flag in &mut replaced[group_start..=group_end] {
-                *flag = true;
+            for index in group_start..=group_end {
+                if translated[index].checked.is_some() {
+                    semantic_dropped = true;
+                }
+                replaced[index] = true;
             }
         }
         kept.extend(
@@ -798,18 +808,22 @@ pub(crate) fn reconcile_edits(
     kept.retain(|segment| {
         let start = segment.start_byte as usize;
         let end = segment.end_byte as usize;
-        !added
+        let overlaps_added = added
             .iter()
-            .any(|added| start < added.end_byte as usize && (added.start_byte as usize) < end)
+            .any(|added| start < added.end_byte as usize && (added.start_byte as usize) < end);
+        if overlaps_added && segment.checked.is_some() {
+            semantic_dropped = true;
+        }
+        !overlaps_added
     });
     kept.extend(added);
     kept.sort_by_key(|segment| (segment.start_byte, segment.end_byte));
     state.segments = kept;
     state.needs_reconcile = false;
-    // Shifting offsets and replacing in-memory segments is not a semantic
-    // change. The batch scan persists its results after the check completes;
-    // pure caret/edit churn without new results must not rewrite the chapter
-    // cache file.
+    // Pure offset shifts do not rewrite the chapter cache. Removing or
+    // replacing checked segments does: their persisted suggestions must not
+    // survive an edit that made them invalid.
+    state.semantic_dirty |= semantic_dropped;
     Ok(())
 }
 
@@ -977,6 +991,24 @@ mod tests {
         let last = state.segments.last().expect("segment");
         assert_eq!(last.start_byte as usize, last_start_before + "新".len());
         assert!(last.checked.is_some());
+    }
+
+    #[test]
+    fn deleting_all_text_marks_the_persisted_result_set_dirty() {
+        let text = "甲。乙。丙。";
+        let mut state = empty_state(text);
+        let edits = [EditRange {
+            old_start: 0,
+            old_end: text.len(),
+            new_start: 0,
+            new_end: 0,
+        }];
+        reconcile_edits("", &mut state, &edits).expect("edit should apply");
+        assert!(state.segments.is_empty());
+        assert!(
+            state.semantic_dirty,
+            "removing checked segments must persist the deletion"
+        );
     }
 
     #[test]

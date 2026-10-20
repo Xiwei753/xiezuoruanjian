@@ -92,39 +92,22 @@ impl TraditionalCorrector {
             for suspect in suspects {
                 let source = match suspect.kind {
                     DetectionKind::ConfusionWord => "confusion_word",
-                    DetectionKind::ProperName => "proper_name",
                     DetectionKind::OutOfVocabularyWord => "oov",
                     DetectionKind::Character => "character_ngram",
                 };
                 if let Some(replacement) = suspect.exact_replacement {
                     if replacement != suspect.original {
-                        // A near match of an author-confirmed work entity is
-                        // evidence for a check, not proof of a typo. Only an
-                        // explicit custom confusion entry keeps error severity.
-                        let (rule_id, severity) = match suspect.kind {
-                            DetectionKind::ConfusionWord => ("confusion.custom", "error"),
-                            DetectionKind::ProperName => (
-                                match suspect.entity_kind {
-                                    Some(crate::proper_names::ProperNameKind::Person) => {
-                                        "proper.person_check"
-                                    }
-                                    Some(crate::proper_names::ProperNameKind::Place) => {
-                                        "proper.place_check"
-                                    }
-                                    _ => "proper.entity_check",
-                                },
-                                "warning",
-                            ),
-                            _ => ("detector.exact", "error"),
-                        };
+                        // Only explicit custom confusion entries carry exact
+                        // replacement semantics. Work-dictionary names are
+                        // protected, not guessed from a similar span.
                         diagnostics.push(CorrectionDiagnostic {
                             start_byte: suspect.start_byte,
                             end_byte: suspect.end_byte,
                             original: suspect.original,
                             replacement,
                             source: source.to_owned(),
-                            rule_id: rule_id.to_owned(),
-                            severity: severity.to_owned(),
+                            rule_id: "confusion.custom".to_owned(),
+                            severity: "error".to_owned(),
                             confidence: None,
                         });
                     }
@@ -396,9 +379,9 @@ mod tests {
     use super::*;
     use crate::lexicon::LexiconPaths;
 
-    /// A flat model deliberately provides no language evidence. Proper-name
-    /// findings must still be warning-level checks and ordinary words must
-    /// never be rewritten merely because they resemble a work entity.
+    /// A flat model deliberately provides no language evidence. Work-dictionary
+    /// terms are protection only, so a similar span must not be rewritten just
+    /// because it resembles a confirmed entity.
     struct FlatScorer;
 
     impl LanguageScorer for FlatScorer {
@@ -422,19 +405,18 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_entity_variant_is_warning_not_error() {
+    fn work_dictionary_terms_are_protected_not_replacement_targets() {
         let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
         lexicon.insert_protected_word("祁门客栈".to_string());
         let diagnostics = corrector(lexicon)
             .suggest("他住进了奇门客栈。")
             .expect("scan");
-        let finding = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.original == "奇门客栈")
-            .expect("entity check");
-        assert_eq!(finding.replacement, "祁门客栈");
-        assert_eq!(finding.severity, "warning");
-        assert_eq!(finding.rule_id, "proper.entity_check");
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.original != "奇门客栈"),
+            "an unconfirmed similar span must not be replaced by a work term"
+        );
     }
 
     #[test]

@@ -48,6 +48,20 @@ fn to_u32(value: usize) -> Result<u32, WriterError> {
     u32::try_from(value).map_err(|error| WriterError::Other(error.to_string()))
 }
 
+/// Cached suggestion offsets are relative to the segment start, including the
+/// end offset. Convert both endpoints from the same base.
+fn absolute_suggestion_range(
+    segment_start: u32,
+    suggestion: &CachedSuggestion,
+) -> Result<(usize, usize), WriterError> {
+    let start = usize::try_from(suggestion.start_byte)
+        .map_err(|error| WriterError::Other(error.to_string()))?;
+    let end = usize::try_from(suggestion.end_byte)
+        .map_err(|error| WriterError::Other(error.to_string()))?;
+    let base = segment_start as usize;
+    Ok((base + start, base + end))
+}
+
 fn lock_slot(
     slot: &ChapterCorrectionSlot,
 ) -> Result<MutexGuard<'_, ChapterCorrectionCacheState>, WriterError> {
@@ -449,13 +463,11 @@ impl CorrectionScanner {
                 end_byte: segment.end_byte,
             });
             for suggestion in suggestions {
+                let (start_byte, end_byte) =
+                    absolute_suggestion_range(segment.start_byte, suggestion)?;
                 diagnostics.push(CorrectionDiagnostic {
-                    start_byte: segment.start_byte as usize
-                        + usize::try_from(suggestion.start_byte)
-                            .map_err(|error| WriterError::Other(error.to_string()))?,
-                    end_byte: segment.end_byte as usize
-                        + usize::try_from(suggestion.end_byte)
-                            .map_err(|error| WriterError::Other(error.to_string()))?,
+                    start_byte,
+                    end_byte,
                     original: suggestion.original.clone(),
                     replacement: suggestion.replacement.clone(),
                     source: suggestion.source.clone(),
@@ -494,5 +506,27 @@ impl CorrectionScanner {
             suggestions: Vec::new(),
             checked_ranges: Vec::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_suggestion_offsets_are_both_relative_to_the_segment_start() {
+        let suggestion = CachedSuggestion {
+            start_byte: 3,
+            end_byte: 8,
+            original: "甲乙".to_string(),
+            replacement: "丙丁".to_string(),
+            source: "test".to_string(),
+            rule_id: "test".to_string(),
+            severity: "warning".to_string(),
+        };
+        assert_eq!(
+            absolute_suggestion_range(100, &suggestion).expect("range"),
+            (103, 108)
+        );
     }
 }

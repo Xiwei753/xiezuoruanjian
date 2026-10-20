@@ -450,8 +450,8 @@ impl CorrectionStore {
             (guard.model_path.clone(), disabled_rules)
         };
         let mut parts = vec![
-            "correction-scanner-v2".to_string(),
-            "correction-work-entities-v1".to_string(),
+            "correction-scanner-v3".to_string(),
+            "correction-work-entities-v2".to_string(),
             model_path
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())

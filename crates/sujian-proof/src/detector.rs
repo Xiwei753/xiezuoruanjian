@@ -5,19 +5,17 @@
 use crate::confusion::ConfusionMatcher;
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
-use crate::proper_names::ProperNameKind;
 use crate::segment::{is_chinese_string, is_han, Segmenter};
 use crate::CorrectionError;
 
 // Behavioral port of pycorrector Detector._detect and _get_maybe_error_index
-// (Apache-2.0): confusion terms, near proper names, dictionary OOV tokens,
+// (Apache-2.0): confusion terms, dictionary OOV tokens,
 // then character-level 2/3-gram MAD outliers. All returned offsets are UTF-8
 // byte ranges; pycorrector's character indices are converted at the boundary.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DetectionKind {
     ConfusionWord,
-    ProperName,
     OutOfVocabularyWord,
     Character,
 }
@@ -29,7 +27,6 @@ pub(crate) struct Suspect {
     pub(crate) original: String,
     pub(crate) kind: DetectionKind,
     pub(crate) exact_replacement: Option<String>,
-    pub(crate) entity_kind: Option<ProperNameKind>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,27 +78,11 @@ impl Detector {
                     original: matched.original_text,
                     kind: DetectionKind::ConfusionWord,
                     exact_replacement: Some(matched.suggestion),
-                    entity_kind: None,
                 });
             }
 
             if !sentence.chars().any(is_han) {
                 continue;
-            }
-
-            if is_chinese_string(sentence) {
-                candidates.extend(
-                    crate::proper_names::detect_work_entity_variants(sentence, lexicon, segmenter)
-                        .into_iter()
-                        .map(|candidate| Suspect {
-                            start_byte: segment.start_byte + candidate.start_byte,
-                            end_byte: segment.start_byte + candidate.end_byte,
-                            original: candidate.original,
-                            kind: DetectionKind::ProperName,
-                            exact_replacement: Some(candidate.replacement),
-                            entity_kind: Some(candidate.kind),
-                        }),
-                );
             }
 
             if self.detect_words {
@@ -119,7 +100,6 @@ impl Detector {
                         original: token.text,
                         kind: DetectionKind::OutOfVocabularyWord,
                         exact_replacement: None,
-                        entity_kind: None,
                     });
                 }
             }
@@ -196,7 +176,6 @@ fn detect_character_outliers(
             original: token.text.clone(),
             kind: DetectionKind::Character,
             exact_replacement: None,
-            entity_kind: None,
         });
     }
     Ok(matches)
@@ -279,8 +258,7 @@ fn resolve_overlaps(mut candidates: Vec<Suspect>) -> Vec<Suspect> {
 fn detection_priority(kind: DetectionKind) -> u8 {
     match kind {
         DetectionKind::ConfusionWord => 0,
-        DetectionKind::ProperName => 1,
-        DetectionKind::OutOfVocabularyWord => 2,
-        DetectionKind::Character => 3,
+        DetectionKind::OutOfVocabularyWord => 1,
+        DetectionKind::Character => 2,
     }
 }
