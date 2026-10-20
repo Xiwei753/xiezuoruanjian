@@ -294,7 +294,7 @@ Kirigami.ShadowedRectangle {
                     var gap = root.cellGap
                     var step = cell + gap
                     var labelColor = Kirigami.Theme.disabledTextColor
-                    var unknownColor = Qt.rgba(labelColor.r, labelColor.g, labelColor.b, 0.45)
+                    var unknownColor = Qt.rgba(labelColor.r, labelColor.g, labelColor.b, 0.20)
                     var fontSize = Math.max(9, Math.round(Kirigami.Units.gridUnit * 0.5))
 
                     ctx.font = fontSize + "px sans-serif"
@@ -346,11 +346,9 @@ Kirigami.ShadowedRectangle {
                             if (day.status === "unknown") {
                                 ctx.beginPath()
                                 roundedRect(ctx, x0 + 0.5, y0 + 0.5, cell - 1, cell - 1, 2)
-                                ctx.setLineDash([2, 2])
                                 ctx.strokeStyle = unknownColor
                                 ctx.lineWidth = 1
                                 ctx.stroke()
-                                ctx.setLineDash([])
                             } else {
                                 ctx.beginPath()
                                 roundedRect(ctx, x0, y0, cell, cell, 2)

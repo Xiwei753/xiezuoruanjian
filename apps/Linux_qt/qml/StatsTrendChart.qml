@@ -86,7 +86,7 @@ Kirigami.ShadowedRectangle {
                 visible: root.granularityText.length > 0 && root.points.length > 0
                 text: root.granularityText + " · " + qsTr("单位：字")
                 color: Kirigami.Theme.disabledTextColor
-                font: Kirigami.Theme.smallFont
+                font.pixelSize: Math.max(11, Math.round(Kirigami.Units.gridUnit * 0.65))
             }
         }
 
@@ -112,13 +112,13 @@ Kirigami.ShadowedRectangle {
                 if (points.length === 0)
                     return
 
-                var fontSize = Math.max(8, Math.round(Kirigami.Units.gridUnit * 0.55))
+                var fontSize = Math.max(12, Math.round(Kirigami.Units.gridUnit * 0.70))
                 ctx.font = fontSize + "px sans-serif"
 
-                var padLeft = Math.max(Kirigami.Units.gridUnit * 1.6, fontSize * 3)
+                var padLeft = Math.max(Kirigami.Units.gridUnit * 1.8, fontSize * 3.1)
                 var padRight = Kirigami.Units.smallSpacing * 2
-                var padTop = fontSize * 1.6
-                var padBottom = fontSize * 1.8
+                var padTop = fontSize * 1.1
+                var padBottom = fontSize * 1.9
                 var plotWidth = Math.max(1, width - padLeft - padRight)
                 var plotHeight = Math.max(1, height - padTop - padBottom)
 
@@ -185,7 +185,7 @@ Kirigami.ShadowedRectangle {
                     else ctx.lineTo(lx, ly)
                 }
                 ctx.strokeStyle = lineColor
-                ctx.lineWidth = 2
+                ctx.lineWidth = 2.5
                 ctx.lineJoin = "round"
                 ctx.lineCap = "round"
                 ctx.stroke()
@@ -195,7 +195,7 @@ Kirigami.ShadowedRectangle {
                     ctx.fillStyle = lineColor
                     for (var d = 0; d < points.length; d++) {
                         ctx.beginPath()
-                        ctx.arc(xAt(d), yAt(points[d] && points[d].humanTypedChars), 2, 0, Math.PI * 2)
+                        ctx.arc(xAt(d), yAt(points[d] && points[d].humanTypedChars), 3, 0, Math.PI * 2)
                         ctx.fill()
                     }
                 }

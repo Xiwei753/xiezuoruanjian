@@ -26,11 +26,13 @@ Kirigami.ShadowedRectangle {
     property var records: null
     property string title: qsTr("纪录")
     property int columns: 1
+    /// 在页面统一外框内作为无边界数据列显示。
+    property bool flat: false
 
     radius: Kirigami.Units.cornerRadius
-    color: Kirigami.Theme.alternateBackgroundColor
-    border.color: Kirigami.Theme.disabledTextColor
-    border.width: 1
+    color: root.flat ? "transparent" : Kirigami.Theme.alternateBackgroundColor
+    border.color: root.flat ? "transparent" : Kirigami.Theme.disabledTextColor
+    border.width: root.flat ? 0 : 1
 
     // 窄屏自然高度按内容算；宽屏展开态由页面给 fillHeight。
     implicitHeight: panelColumn.implicitHeight + Kirigami.Units.largeSpacing * 2
@@ -113,15 +115,66 @@ Kirigami.ShadowedRectangle {
             Layout.fillWidth: true
             text: root.title
             color: Kirigami.Theme.textColor
+            visible: !root.flat
+        }
+
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: root.columns === 1
+            visible: root.columns === 1
+
+            ColumnLayout {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Kirigami.Units.smallSpacing
+
+                Repeater {
+                    model: root.entries
+
+                    delegate: RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.largeSpacing
+
+                        Label {
+                            Layout.preferredWidth: Kirigami.Units.gridUnit * 7
+                            text: modelData.label
+                            color: Kirigami.Theme.disabledTextColor
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            Kirigami.Heading {
+                                level: 3
+                                Layout.fillWidth: true
+                                text: modelData.value
+                                color: Kirigami.Theme.textColor
+                                wrapMode: Text.Wrap
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData.date.length ? modelData.date : qsTr("暂无记录")
+                                font: Kirigami.Theme.smallFont
+                                color: Kirigami.Theme.disabledTextColor
+                                wrapMode: Text.Wrap
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         GridLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            columns: root.columns
+            visible: root.columns === 2
+            columns: 2
             columnSpacing: Kirigami.Units.largeSpacing
-            // 单列（宽屏中列）压缩行距，四行纪录不撑高展开区。
-            rowSpacing: root.columns === 1 ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
+            rowSpacing: Kirigami.Units.largeSpacing
 
             Repeater {
                 model: root.entries
