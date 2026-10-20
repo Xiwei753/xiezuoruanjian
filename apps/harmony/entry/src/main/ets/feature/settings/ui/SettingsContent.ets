@@ -69,8 +69,9 @@ export struct SettingsContent {
   // 只有平台自己的窗口断点判定一级导航在侧栏（>=840vp）才两列；600–839vp 那档虽是
   // 工作台但一级导航仍是 Bottom，用单列。平板旋转 / 自由窗口在两档之间移动时，浮层会跟着换布局。
   // Issue #932：只有宽屏浮层消费这个判定；路由页不再分叉宽屏版式（见 NavContent）。
+  // Issue #932 / #968：与导航外壳、页面正文共用 prefersWideLayout，不再读第二个导航布尔。
   private get twoColumn(): boolean {
-    return this.adaptiveState.isWidePrimaryNavigation
+    return this.adaptiveState.prefersWideLayout
   }
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）

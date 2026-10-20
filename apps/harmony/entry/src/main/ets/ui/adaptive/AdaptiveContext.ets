@@ -33,10 +33,6 @@ export interface AdaptiveState {
   // Issue #932：只服务页面内部内容（纸面宽度 / 内边距 / 双栏与否），
   // 不再参与外层导航外壳与设置呈现方式的判定——那是 prefersWideLayout 的职责。
   isWorkbenchLayout: boolean
-  // 一级导航放侧栏（宽窗口，>=840vp），否则放底部。
-  // Issue #932：与 prefersWideLayout 同源；壳层的外壳判定统一用 prefersWideLayout，
-  // 本字段保留给页面内部既有调用点。
-  isWidePrimaryNavigation: boolean
   contentMaxWidth: number
   pagePadding: number
   // 底部安全区域高度（导航栏避让），单位 vp
@@ -44,8 +40,9 @@ export interface AdaptiveState {
   // 顶部安全区域高度（状态栏避让），单位 vp
   safeTopVp: number
   // 当前是否偏好宽屏布局（窗口宽度 >= 840vp）。
-  // Issue #932：这是外层导航外壳（窄屏 Tabs / 宽屏侧栏）、页头形态与设置呈现方式
-  // （路由页 / 浮层）的唯一模式判定；专用横屏平板在 600-839vp 不再为外层 UI 单开规则。
+  // Issue #932 / #968：这是外层导航外壳（窄屏 Tabs / 宽屏侧栏）、页头形态、设置呈现方式
+  // 以及作品 / 星图 / 统计正文宽窄分流的唯一模式判定。不再保留第二个导航布尔字段，
+  // 避免外层走底部 Tabs、页面却进入宽屏骨架。
   prefersWideLayout: boolean
   // 是否是专用横屏平板（deviceType=tablet + 非折叠 + 宽高比>=1.25）
   isDedicatedLandscapeTablet: boolean
@@ -200,7 +197,6 @@ export class AdaptiveContext {
       heightVp: this.state.heightVp,
       sizeClass: this.state.sizeClass,
       isWorkbenchLayout: this.state.isWorkbenchLayout,
-      isWidePrimaryNavigation: this.state.isWidePrimaryNavigation,
       contentMaxWidth: this.state.contentMaxWidth,
       pagePadding: this.state.pagePadding,
       safeBottomVp: this.cachedSafeBottomVp,
@@ -322,8 +318,6 @@ export class AdaptiveContext {
       heightVp: Math.round(heightVp * 100) / 100,
       sizeClass: sizeClass,
       isWorkbenchLayout: isWorkbenchLayout,
-      // 一级导航放侧栏与宽屏外壳同源（>=840vp）；壳层判定统一用 prefersWideLayout。
-      isWidePrimaryNavigation: prefersWideLayout,
       contentMaxWidth: isWorkbenchLayout ? WORKBENCH_CONTENT_MAX_WIDTH_VP : Number.MAX_SAFE_INTEGER,
       pagePadding: isWorkbenchLayout ? WIDE_PAGE_PADDING_VP : COMPACT_PAGE_PADDING_VP,
       safeBottomVp: this.cachedSafeBottomVp,
@@ -378,7 +372,6 @@ export class AdaptiveContext {
       heightVp: 0,
       sizeClass: WidthClass.Compact,
       isWorkbenchLayout: false,
-      isWidePrimaryNavigation: false,
       contentMaxWidth: Number.MAX_SAFE_INTEGER,
       pagePadding: COMPACT_PAGE_PADDING_VP,
       safeBottomVp: 0,

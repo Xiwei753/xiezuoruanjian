@@ -1,10 +1,11 @@
-// WideStatsContent — 宽屏统计正文（Issue #945，按「统计页 / 近七天 / 统计页生涯」手稿）。
+// WideStatsContent — 宽屏统计正文（Issue #945 / #968，按「统计页 / 近七天 / 统计页生涯」手稿）。
 //
 // - 顶部生涯横条：总字、起止日期、平均字/分、平均字/天、共计自然日天数 + 展开箭头；
 // - 收起（expandedPanel = none）：下方四张时段卡横排（近七天 / 近三十天 / 近半年 / 自选区间）；
 // - 点时段卡：卡区原地变成「左摘要 / 中纪录 / 右图表」三栏，点返回箭头还原；
-// - 点生涯横条：原地变成「左生涯纪录 / 右图表」，四卡暂收起；
-// - 底部常驻「素笺写作已陪伴你 N 天」（N = Core elapsedCalendarDays，不是码字天数）。
+// - 点生涯横条：横条原地变成「生涯头部 / 左纪录 / 右大图表」，四卡暂收起；
+// - 四卡 / 展开区之后是常驻「素笺写作已陪伴你 N 天」，再往下才是码字日历；
+// - 码字日历是独立的滚动模块，不与上面的生涯 / 四卡结构混排。
 //
 // 一层导航（左侧栏 / 顶部动作）由 PrimaryTabShell 提供，本组件不另画同步 / 设置，
 // 也不新增页面内导航；数据、纪录与速度全部来自 Core Explorer 快照。
@@ -18,12 +19,16 @@ import { WritingStatsCalendarHeatmap } from './WritingStatsCalendarHeatmap'
 
 // 宽屏页面边距与卡片间距（vp）。
 const WIDE_PAGE_PADDING_VP: number = 24
+const WIDE_CONTENT_VERTICAL_PADDING_VP: number = 16
 const WIDE_CARD_GAP_VP: number = 12
 // 顶部生涯横条的最大宽度（vp）：手稿里它比四卡区窄、居中。
-const WIDE_LIFETIME_BAR_MAX_WIDTH_VP: number = 900
-// 四卡区与展开面板的最小可读高度（vp）：小高度窗口改为纵向滚动，不压缩卡片与图表。
-const WIDE_PERIOD_CARDS_HEIGHT_VP: number = 190
-const WIDE_EXPANDED_PANEL_HEIGHT_VP: number = 280
+const WIDE_LIFETIME_BAR_MAX_WIDTH_VP: number = 720
+// 近似高度只用于从整页高度里扣掉固定的页头 / 页脚，真实高度仍由内容撑开。
+const WIDE_LIFETIME_BAR_RESERVED_HEIGHT_VP: number = 76
+const WIDE_COMPANIONSHIP_RESERVED_HEIGHT_VP: number = 56
+// 短窗口下四卡 / 展开区的最小可读高度；不足时整页纵向滚动，不压缩卡片与图表。
+const WIDE_OVERVIEW_MIN_HEIGHT_VP: number = 250
+const WIDE_OVERVIEW_FALLBACK_HEIGHT_VP: number = 380
 
 @Component
 export struct WideStatsContent {
@@ -47,6 +52,9 @@ export struct WideStatsContent {
   @Prop heatmapError: string = ''
   onChangeHeatmapYear: (year: number) => void = (_year: number) => {}
   onSelectHeatmapDay: (date: string, chars: number) => void = (_date: string, _chars: number) => {}
+
+  // 页面实际可用高度：四卡 / 展开区据此占用除生涯条、陪伴条之外的剩余空间。
+  @State private availableHeightVp: number = 0
 
   private selected(): WritingStatsSelectedPeriod {
     return this.explorer.selected
@@ -95,14 +103,34 @@ export struct WideStatsContent {
     return '按天'
   }
 
+  /**
+   * 四卡 / 展开区高度 = 页面高度 - 页边距 - 生涯条 - 陪伴条。
+   * 短窗口仍保底 250vp，让 Scroll 接管纵向滚动，而不是把卡片压成一条。
+   */
+  private get overviewHeightVp(): number {
+    if (this.availableHeightVp <= 0) {
+      return WIDE_OVERVIEW_FALLBACK_HEIGHT_VP
+    }
+    const lifetimeReserve: number = this.expandedPanel === STATS_PANEL_LIFETIME
+      ? 0
+      : WIDE_LIFETIME_BAR_RESERVED_HEIGHT_VP
+    const available: number = this.availableHeightVp
+      - WIDE_CONTENT_VERTICAL_PADDING_VP * 2
+      - lifetimeReserve
+      - WIDE_COMPANIONSHIP_RESERVED_HEIGHT_VP
+    return Math.max(WIDE_OVERVIEW_MIN_HEIGHT_VP, available)
+  }
+
   build() {
     Column() {
       if (this.errorMessage.length > 0) {
         this.ErrorStrip()
       }
-      this.LifetimeBar()
-      // 内容超出可用高度时纵向滚动，卡片与图表保持最小可读高度；
-      // 热力图年份格子由组件内部横向滚动，这里不再叠加横向滚动。
+      // 生涯展开时，标题与摘要并进大面板，不再重复画一条横条。
+      if (this.expandedPanel !== STATS_PANEL_LIFETIME) {
+        this.LifetimeBar()
+      }
+      // 四卡 / 展开区 → 陪伴条 → 热力图。热力图保持独立模块，不插进四卡结构里。
       Scroll() {
         Column() {
           if (this.expandedPanel === STATS_PANEL_NONE) {
@@ -110,8 +138,8 @@ export struct WideStatsContent {
           } else {
             this.ExpandedPanel()
           }
-          this.HeatmapSection()
           this.CompanionshipFooter()
+          this.HeatmapSection()
         }
         .width('100%')
         .alignItems(HorizontalAlign.Center)
@@ -126,20 +154,25 @@ export struct WideStatsContent {
     .padding({
       left: WIDE_PAGE_PADDING_VP,
       right: WIDE_PAGE_PADDING_VP,
-      top: 16,
-      bottom: 16
+      top: WIDE_CONTENT_VERTICAL_PADDING_VP,
+      bottom: WIDE_CONTENT_VERTICAL_PADDING_VP
     })
     .alignItems(HorizontalAlign.Center)
+    .onAreaChange((_oldArea: Area, newArea: Area): void => {
+      const nextHeight: number = Number(newArea.height)
+      if (nextHeight > 0 && Math.abs(nextHeight - this.availableHeightVp) >= 0.5) {
+        this.availableHeightVp = nextHeight
+      }
+    })
   }
 
-  /** #956 码字日历：全年网格，年份箭头切换只加载该年快照；横向滚动查看全年。 */
+  /** #968 码字日历：全年网格，宽度自适应；年份切换与日格选择仍走 Core 快照回调。 */
   @Builder
   HeatmapSection() {
     Column() {
       if (this.heatmap !== null) {
         WritingStatsCalendarHeatmap({
           heatmap: this.heatmap,
-          cellSizeVp: 14,
           onChangeYear: (year: number) => {
             this.onChangeHeatmapYear(year)
           },
@@ -172,7 +205,7 @@ export struct WideStatsContent {
     .padding(COMPACT_CARD_PADDING_VP)
     .borderRadius(DesignTokens.cardRadius)
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-    .margin({ bottom: WIDE_CARD_GAP_VP })
+    .margin({ top: WIDE_CARD_GAP_VP, bottom: WIDE_CARD_GAP_VP })
   }
 
   /** 页内错误提示：自选日期非法 / Core 查询失败都在这里显示，附重试。 */
@@ -209,7 +242,7 @@ export struct WideStatsContent {
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
         Text(`${formatInt(this.explorer.lifetime.totalHumanTypedChars)} 字`)
-          .fontSize(22)
+          .fontSize(24)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
         Column({ space: 2 }) {
@@ -245,7 +278,7 @@ export struct WideStatsContent {
     .margin({ bottom: WIDE_CARD_GAP_VP })
   }
 
-  /** 折叠态：四张时段卡横排。 */
+  /** 折叠态：四张时段卡横排，按页面剩余高度撑满。 */
   @Builder
   PeriodCardsRow() {
     Row({ space: WIDE_CARD_GAP_VP }) {
@@ -254,7 +287,7 @@ export struct WideStatsContent {
       }, (card: WritingStatsPeriodCard) => card.preset)
     }
     .width('100%')
-    .height(WIDE_PERIOD_CARDS_HEIGHT_VP)
+    .height(this.overviewHeightVp)
     .alignItems(VerticalAlign.Top)
   }
 
@@ -268,17 +301,18 @@ export struct WideStatsContent {
         .fontColor($r('sys.color.font_primary'))
 
       if (card.hasSelection && card.range !== null) {
+        Blank()
         Text(`${formatInt(card.totalHumanTypedChars)} 字`)
-          .fontSize(26)
+          .fontSize(32)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .margin({ top: 10 })
+          .margin({ top: 12 })
 
         Row() {
           Text(`${formatAverage(card.averageCharsPerMinute)} 字/分`)
-            .fontSize(14)
+            .fontSize(15)
             .fontColor($r('sys.color.font_secondary'))
             .layoutWeight(1)
             .maxLines(1)
@@ -289,33 +323,32 @@ export struct WideStatsContent {
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
-        .margin({ top: 6 })
+        .margin({ top: 18 })
 
         Text(`${formatAverage(card.averageCharsPerDay)} 字/天`)
-          .fontSize(14)
+          .fontSize(15)
           .fontColor($r('sys.color.font_secondary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .margin({ top: 4 })
+          .margin({ top: 12 })
 
+        Blank()
         Text(this.cardRangeText(card))
-          .fontSize(12)
+          .fontSize(13)
           .fontColor($r('sys.color.font_tertiary'))
           .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .margin({ top: 6 })
       } else {
+        Blank()
         Text('未选择')
-          .fontSize(16)
+          .fontSize(20)
           .fontColor($r('sys.color.font_secondary'))
-          .margin({ top: 10 })
         Text('点按选择日期区间')
-          .fontSize(12)
+          .fontSize(13)
           .fontColor($r('sys.color.font_tertiary'))
-          .margin({ top: 4 })
+          .margin({ top: 8 })
+        Blank()
       }
-
-      Blank()
     }
     .layoutWeight(1)
     .height('100%')
@@ -332,22 +365,90 @@ export struct WideStatsContent {
     })
   }
 
-  /** 展开态：时段卡 → 左摘要 / 中纪录 / 右图表；生涯 → 左生涯纪录 / 右图表。 */
+  /** 展开态：时段卡 → 左侧摘要 / 中纪录 / 右大图；生涯 → 头部 / 左纪录 / 右大图。 */
   @Builder
   ExpandedPanel() {
-    Row({ space: WIDE_CARD_GAP_VP }) {
-      if (this.expandedPanel === STATS_PANEL_LIFETIME) {
-        this.RecordsColumn(4)
-        this.ChartColumn(6)
-      } else {
-        this.SelectedSummaryColumn(3)
-        this.RecordsColumn(4)
-        this.ChartColumn(6)
+    if (this.expandedPanel === STATS_PANEL_LIFETIME) {
+      this.LifetimeExpandedPanel()
+    } else {
+      this.RangeExpandedPanel()
+    }
+  }
+
+  /** 生涯展开：横条原地变成一张大卡，标题在上，纪录在左下，图表占右侧。 */
+  @Builder
+  LifetimeExpandedPanel() {
+    Column() {
+      Row({ space: 16 }) {
+        Text('生涯')
+          .fontSize(24)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary'))
+        Text(`${formatInt(this.explorer.lifetime.totalHumanTypedChars)} 字`)
+          .fontSize(30)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary'))
+        Column({ space: 3 }) {
+          Text(formatDateRangeHuman(this.explorer.lifetime.firstWritingDate, this.explorer.lifetime.lastWritingDate))
+            .fontSize(13)
+            .fontColor($r('sys.color.font_secondary'))
+          Text(`平均 ${formatAverage(this.explorer.lifetime.averageCharsPerMinute)} 字/分 · ${formatAverage(this.explorer.lifetime.averageCharsPerDay)} 字/天 · 共计 ${formatInt(this.explorer.lifetime.elapsedCalendarDays)} 天`)
+            .fontSize(13)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        if (this.isLoading) {
+          LoadingProgress()
+            .width(18)
+            .height(18)
+        }
+        SymbolGlyph($r('sys.symbol.chevron_down'))
+          .fontSize(20)
+          .fontColor([$r('sys.color.icon_secondary')])
+          .onClick(() => {
+            this.onCloseExpanded()
+          })
       }
+      .width('100%')
+      .padding({ left: 24, right: 24, top: 20, bottom: 18 })
+      .alignItems(VerticalAlign.Center)
+
+      Divider().color($r('sys.color.comp_divider'))
+
+      Row({ space: WIDE_CARD_GAP_VP }) {
+        this.RecordsBody(4)
+        this.ChartBody(6)
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .padding({ left: 16, right: 16, top: 12, bottom: 16 })
+      .alignItems(VerticalAlign.Top)
     }
     .width('100%')
-    .height(WIDE_EXPANDED_PANEL_HEIGHT_VP)
-    .alignItems(VerticalAlign.Top)
+    .height(this.overviewHeightVp)
+    .borderRadius(DesignTokens.cardRadius)
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .clip(true)
+  }
+
+  /** 时段展开：一张大卡内部分成左摘要 / 中纪录 / 右大图，不再摆三张独立小卡。 */
+  @Builder
+  RangeExpandedPanel() {
+    Row() {
+      this.SelectedSummaryColumn(3)
+      Divider()
+        .vertical(true)
+        .height('100%')
+        .color($r('sys.color.comp_divider'))
+      this.RecordsBody(4)
+      this.ChartBody(5)
+    }
+    .width('100%')
+    .height(this.overviewHeightVp)
+    .borderRadius(DesignTokens.cardRadius)
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .clip(true)
   }
 
   /** 左摘要：已选时段的总量与均速 + 返回四卡的箭头。 */
@@ -370,49 +471,46 @@ export struct WideStatsContent {
       .width('100%')
       .alignItems(VerticalAlign.Center)
 
+      Blank()
       Text(`${formatInt(this.selected().totalHumanTypedChars)} 字`)
-        .fontSize(26)
+        .fontSize(30)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('sys.color.font_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .margin({ top: 10 })
+        .margin({ top: 12 })
 
       Text(`${formatAverage(this.selected().averageCharsPerMinute)} 字/分 · ${formatAverage(this.selected().averageCharsPerDay)} 字/天`)
-        .fontSize(13)
+        .fontSize(14)
+        .fontColor($r('sys.color.font_secondary'))
+        .margin({ top: 10 })
+
+      Text(`写作 ${formatInt(this.selected().writingDays)} 天`)
+        .fontSize(14)
         .fontColor($r('sys.color.font_secondary'))
         .margin({ top: 6 })
 
-      Text(`写作 ${formatInt(this.selected().writingDays)} 天`)
-        .fontSize(13)
-        .fontColor($r('sys.color.font_secondary'))
-        .margin({ top: 4 })
-
+      Blank()
       Text(formatDateRangeHuman(this.selected().range.startDate, this.selected().range.endDate))
         .fontSize(12)
         .fontColor($r('sys.color.font_tertiary'))
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .margin({ top: 6 })
-
-      Blank()
     }
     .layoutWeight(weight)
     .height('100%')
     .alignItems(HorizontalAlign.Start)
-    .padding(COMPACT_CARD_PADDING_VP)
-    .borderRadius(DesignTokens.cardRadius)
-    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .padding({ left: 20, right: 20, top: 20, bottom: 16 })
   }
 
-  /** 纪录列：最多 / 最快 / 最长 / 连续，单位分别为字、字/时、时分、天。 */
+  /** 纪录正文：最多 / 最快 / 最长 / 连续，单位分别为字、字/时、时分、天。 */
   @Builder
-  RecordsColumn(weight: number) {
+  RecordsBody(weight: number) {
     Column() {
       Text(formatHistoryScope(this.explorer.historyScope))
         .fontSize(12)
         .fontColor($r('sys.color.font_tertiary'))
-        .margin({ bottom: 8 })
+        .margin({ bottom: 10 })
 
       this.RecordRow('最多码字', this.recordDateText(this.selected().records.bestDay),
         this.recordValueText(this.selected().records.bestDay, '字'))
@@ -428,16 +526,14 @@ export struct WideStatsContent {
     .layoutWeight(weight)
     .height('100%')
     .alignItems(HorizontalAlign.Start)
-    .padding(COMPACT_CARD_PADDING_VP)
-    .borderRadius(DesignTokens.cardRadius)
-    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .padding({ left: 20, right: 20, top: 20, bottom: 16 })
   }
 
   @Builder
   RecordRow(label: string, dateText: string, valueText: string) {
     Row() {
       Text(label)
-        .fontSize(14)
+        .fontSize(15)
         .fontColor($r('sys.color.font_primary'))
         .layoutWeight(3)
         .maxLines(1)
@@ -453,7 +549,7 @@ export struct WideStatsContent {
           .margin({ left: 8 })
       }
       Text(valueText)
-        .fontSize(14)
+        .fontSize(15)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('sys.color.font_primary'))
         .layoutWeight(2)
@@ -463,36 +559,42 @@ export struct WideStatsContent {
         .margin({ left: 8 })
     }
     .width('100%')
-    .padding({ top: 8, bottom: 8 })
+    .padding({ top: 10, bottom: 10 })
     .alignItems(VerticalAlign.Center)
   }
 
-  /** 图表列：宽屏数据区按剩余空间弹性伸缩（layoutWeight）。 */
+  /** 图表正文：宽屏数据区按剩余空间弹性伸缩。 */
   @Builder
-  ChartColumn(weight: number) {
+  ChartBody(weight: number) {
     Column() {
-      Row() {
-        Text('写作趋势')
-          .fontSize(COMPACT_CARD_TITLE_FONT_VP)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('sys.color.font_primary'))
+      Column() {
+        Row() {
+          Text('写作趋势')
+            .fontSize(COMPACT_CARD_TITLE_FONT_VP)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('sys.color.font_primary'))
+            .layoutWeight(1)
+          Text(this.trendGranularityLabel())
+            .fontSize(12)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        .width('100%')
+        .margin({ bottom: 8 })
+
+        WritingStatsTrendChart({ trend: this.selected().trend })
+          .width('100%')
           .layoutWeight(1)
-        Text(this.trendGranularityLabel())
-          .fontSize(12)
-          .fontColor($r('sys.color.font_secondary'))
       }
       .width('100%')
-      .margin({ bottom: 8 })
-
-      WritingStatsTrendChart({ trend: this.selected().trend })
-        .width('100%')
-        .layoutWeight(1)
+      .height('100%')
+      .padding(16)
+      .borderRadius(DesignTokens.radiusLg)
+      .border({ width: 1, color: $r('sys.color.comp_divider') })
+      .backgroundColor($r('sys.color.background_secondary'))
     }
     .layoutWeight(weight)
     .height('100%')
-    .padding(COMPACT_CARD_PADDING_VP)
-    .borderRadius(DesignTokens.cardRadius)
-    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .padding({ left: 12, right: 16, top: 16, bottom: 16 })
   }
 
   /** 底部常驻：自然日历天数（含首次写作日到今天两端），不是码字天数。 */
@@ -500,11 +602,11 @@ export struct WideStatsContent {
   CompanionshipFooter() {
     Row() {
       Text(`素笺写作已陪伴你 ${formatInt(this.explorer.lifetime.elapsedCalendarDays)} 天`)
-        .fontSize(14)
+        .fontSize(15)
         .fontColor($r('sys.color.font_secondary'))
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+    .padding({ left: 20, right: 20, top: 14, bottom: 14 })
     .margin({ top: WIDE_CARD_GAP_VP })
     .borderRadius(DesignTokens.cardRadius)
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))

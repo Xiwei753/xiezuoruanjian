@@ -480,9 +480,10 @@ export struct PrimaryTabShell {
   // 只要进入侧栏档，就直接走左侧 rail，绝不再实例化 HDS 底部 Tabs。
   // 这样不会出现“页面已经是宽屏骨架，但底下还挂着一个沉浸光感底栏”的双导航。
   // 沉浸光感不是布局理由：侧栏没有系统 HDS TabBar 光感能力时，侧栏就用普通系统 token。
-  // Issue #932：外壳判定统一为 prefersWideLayout（与各页 showTitleBar 判定同一来源），
-  // 不再在这里组合 isWidePrimaryNavigation / isDedicatedLandscapeTablet。
-  private get isWidePrimaryNavigation(): boolean {
+  // Issue #932 / #968：外壳判定统一为 prefersWideLayout（与各页 showTitleBar / 正文分流同一来源），
+  // 不再组合第二个导航布尔或设备形态。宽屏只实例化左侧 rail，窄屏只实例化 HDS 底栏，
+  // 两者不会同时存在，也不存在第三套中屏外壳。
+  private get usesWideNavigation(): boolean {
     return this.adaptiveState.prefersWideLayout
   }
 
@@ -707,7 +708,7 @@ export struct PrimaryTabShell {
     // 窄屏 CompactPrimaryShell（HDS Tabs / 普通 Tabs），宽屏 WidePrimaryShell（左栏 + 右上动作组）。
     // 600–839vp（Workbench 但一级导航仍为 Bottom）留在窄屏外壳；设置浮层由窗口级
     // custom dialog 承载（见 aboutToAppear 的 attachUIContext），与本 Stack 无关。
-    if (this.isWidePrimaryNavigation) {
+    if (this.usesWideNavigation) {
       this.WidePrimaryShell()
     } else {
       Column() {

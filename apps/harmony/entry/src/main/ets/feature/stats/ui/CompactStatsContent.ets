@@ -320,7 +320,6 @@ export struct CompactStatsContent {
       if (this.heatmap !== null) {
         WritingStatsCalendarHeatmap({
           heatmap: this.heatmap,
-          cellSizeVp: 12,
           onChangeYear: (year: number) => {
             this.onChangeHeatmapYear(year)
           },
