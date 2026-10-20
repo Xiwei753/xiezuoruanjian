@@ -9,7 +9,6 @@
 //   - 四个时段卡横排（近七天 / 近三十天 / 近半年 / 自选区间）；点一张后
 //     四卡区域原位替换为「左摘要 / 中纪录 / 右趋势」，可返回四卡总览；
 //   - 自选区间先弹起止日期 Dialog，确认后以实际区间请求；
-//   - 窄窗口改为纵向滚动：范围切换 → 总量与区间 → 2×2 纪录 → 趋势图；
 //   - 统计主体横向填满导航与顶栏之外的主画布，不再套 Hub 的限宽阅读栏；
 //   - 主体下方新增独立的每日码字日历热力图（52/53 周 × 7 天），
 //     与按字数的趋势折线图同时保留；
@@ -53,8 +52,8 @@ Rectangle {
     readonly property int calendarYear: new Date().getFullYear()
 
     // ── 页面选择状态 ──
-    // selectedPeriod：当前选中时段（窄屏范围切换与详情请求都以它为准）；
-    // expandedPanel：宽屏展开项（"" 四卡总览、"lifetime" 生涯、其余为 preset）。
+    // selectedPeriod：当前选中时段；expandedPanel："" 四卡总览、"lifetime" 生涯，
+    // 其余为原位展开的 preset。
     property string selectedPeriod: "last7Days"
     property string expandedPanel: ""
     property string startDate: ""
@@ -67,8 +66,7 @@ Rectangle {
     property string dashboardError: ""
     property bool detailedStatsExpanded: false
 
-    // ── 布局断点与尺寸（Qt 本地宽度断点，不向 Core 要布局计划） ──
-    readonly property bool narrowLayout: width < 840
+    // ── 桌面统计布局尺寸 ──
     // 宽屏展开区的最小可读高度；有余量时由 Layout.fillHeight 继续伸展。
     readonly property int detailMinHeight: Kirigami.Units.gridUnit * 20
     readonly property int lifetimeCollapsedHeight: Kirigami.Units.gridUnit * 7.5
@@ -123,17 +121,6 @@ Rectangle {
         return Number(parts[0]) + "/" + Number(parts[1]) + "/" + Number(parts[2])
     }
 
-    function periodTitle(preset) {
-        switch (preset) {
-        case "last7Days": return qsTr("近七天")
-        case "last30Days": return qsTr("近三十天")
-        case "last6Months": return qsTr("近半年")
-        case "custom": return qsTr("自选区间")
-        case "lifetime": return qsTr("生涯")
-        }
-        return ""
-    }
-
     function lifetimeRangeText() {
         if (!root.lifetime) return "—"
         var first = root.formatDate(root.lifetime.firstWritingDate)
@@ -152,11 +139,6 @@ Rectangle {
         case "partialSync": return qsTr("同步不完整")
         }
         return ""
-    }
-
-    function selectedRangeText() {
-        if (!root.selected || !root.selected.range) return "—"
-        return root.formatDate(root.selected.range.startDate) + " – " + root.formatDate(root.selected.range.endDate)
     }
 
     // 当前详情需要请求的 preset：生涯展开优先，其次展开的时段卡，最后是选中时段。
@@ -205,23 +187,6 @@ Rectangle {
         root.requestStats()
     }
 
-    function selectNarrowPeriod(preset) {
-        if (preset === "custom") {
-            if (root.startDate === "" || root.endDate === "") {
-                customRangeDialog.prepare("", "")
-                customRangeDialog.open()
-                return
-            }
-            root.selectedPeriod = "custom"
-            root.expandedPanel = ""
-            root.requestStats()
-            return
-        }
-        root.selectedPeriod = preset
-        root.expandedPanel = ""
-        root.requestStats()
-    }
-
     function collapsePanel() {
         root.expandedPanel = ""
     }
@@ -229,9 +194,6 @@ Rectangle {
     function toggleLifetime() {
         if (root.expandedPanel === "lifetime") {
             root.expandedPanel = ""
-            // 窄屏收起生涯后回到选中时段：立即把 `selected` 换回该时段，
-            // 避免图表继续挂着生涯数据冒充区间数据。
-            if (root.narrowLayout) root.requestStats()
             return
         }
         root.expandedPanel = "lifetime"
@@ -242,7 +204,7 @@ Rectangle {
         root.startDate = startIso
         root.endDate = endIso
         root.selectedPeriod = "custom"
-        if (!root.narrowLayout) root.expandedPanel = "custom"
+        root.expandedPanel = "custom"
         root.requestStats()
     }
 
@@ -421,14 +383,14 @@ Rectangle {
                 // ── 生涯顶部条：收起时只显示摘要；展开后原位显示「左纪录 / 右趋势」──
                 Kirigami.ShadowedRectangle {
                     id: lifetimeBox
-                    Layout.fillWidth: root.narrowLayout || root.expandedPanel === "lifetime"
-                    Layout.preferredWidth: root.narrowLayout || root.expandedPanel === "lifetime"
+                    Layout.fillWidth: root.expandedPanel === "lifetime"
+                    Layout.preferredWidth: root.expandedPanel === "lifetime"
                         ? pageFlick.width
                         : Math.min(pageFlick.width,
                                    Math.max(Kirigami.Units.gridUnit * 46, pageFlick.width * 0.70))
                     Layout.alignment: Qt.AlignHCenter
-                    // 宽屏生涯展开时由 Layout 把余量分给这条主展示区；窄屏保持自然高度滚动。
-                    Layout.fillHeight: !root.narrowLayout && root.expandedPanel === "lifetime"
+                    // 生涯展开时由 Layout 把余量分给这条主展示区。
+                    Layout.fillHeight: root.expandedPanel === "lifetime"
                     Layout.minimumHeight: root.expandedPanel === "lifetime"
                         ? root.detailMinHeight : root.lifetimeCollapsedHeight
                     Layout.preferredHeight: root.expandedPanel === "lifetime"
@@ -454,12 +416,11 @@ Rectangle {
                             RowLayout {
                                 id: lifetimeHeaderRow
                                 anchors.fill: parent
-                                spacing: root.narrowLayout ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
+                                spacing: Kirigami.Units.largeSpacing
 
                                 RowLayout {
-                                    Layout.fillWidth: root.narrowLayout
-                                    Layout.preferredWidth: root.narrowLayout ? parent.width * 0.42 : implicitWidth
-                                    spacing: root.narrowLayout ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
+                                    Layout.preferredWidth: implicitWidth
+                                    spacing: Kirigami.Units.largeSpacing
 
                                     Kirigami.Heading {
                                         level: 1
@@ -477,16 +438,12 @@ Rectangle {
                                 }
 
                                 Item {
-                                    Layout.fillWidth: !root.narrowLayout
-                                    visible: !root.narrowLayout
+                                    Layout.fillWidth: true
                                 }
 
                                 ColumnLayout {
-                                    Layout.fillWidth: root.narrowLayout
-                                    Layout.preferredWidth: root.narrowLayout
-                                        ? parent.width * 0.42
-                                        : Math.min(parent.width * 0.58,
-                                                   Math.max(Kirigami.Units.gridUnit * 24, implicitWidth))
+                                    Layout.preferredWidth: Math.min(parent.width * 0.58,
+                                                                   Math.max(Kirigami.Units.gridUnit * 24, implicitWidth))
                                     spacing: 1
 
                                     Label {
@@ -538,29 +495,46 @@ Rectangle {
                             }
                         }
 
-                        // 宽屏「左约 42% 纪录 / 右约 58% 趋势」；窄屏改为单列自然高度。
-                        GridLayout {
+                        // 桌面生涯展开固定为双列；窗口较窄时只滚动此局部内容。
+                        Flickable {
+                            id: lifetimeDetailFlick
                             Layout.fillWidth: true
-                            Layout.fillHeight: !root.narrowLayout && root.expandedPanel === "lifetime"
-                            Layout.minimumHeight: root.narrowLayout ? 0 : root.detailMinHeight
+                            Layout.fillHeight: root.expandedPanel === "lifetime"
+                            Layout.minimumHeight: root.detailMinHeight
                             visible: root.expandedPanel === "lifetime"
-                            columns: root.narrowLayout ? 1 : 2
-                            columnSpacing: Kirigami.Units.largeSpacing
-                            rowSpacing: Kirigami.Units.largeSpacing
-
-                            StatsRecordPanel {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: !root.narrowLayout
-                                Layout.preferredWidth: 42
-                                records: root.selectedRecords
-                                flat: true
+                            clip: true
+                            contentWidth: Math.max(width, lifetimeDetailGrid.implicitWidth)
+                            contentHeight: height
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.horizontal: ScrollBar {
+                                policy: lifetimeDetailFlick.contentWidth > lifetimeDetailFlick.width
+                                        ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
                             }
 
-                            StatsTrendChart {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: !root.narrowLayout
-                                Layout.preferredWidth: 58
-                                trend: root.selectedTrend
+                            GridLayout {
+                                id: lifetimeDetailGrid
+                                width: lifetimeDetailFlick.contentWidth
+                                height: lifetimeDetailFlick.height
+                                columns: 2
+                                columnSpacing: Kirigami.Units.largeSpacing
+                                rowSpacing: Kirigami.Units.largeSpacing
+
+                                StatsRecordPanel {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumWidth: Kirigami.Units.gridUnit * 18
+                                    Layout.preferredWidth: 42
+                                    records: root.selectedRecords
+                                    flat: true
+                                }
+
+                                StatsTrendChart {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumWidth: Kirigami.Units.gridUnit * 24
+                                    Layout.preferredWidth: 58
+                                    trend: root.selectedTrend
+                                }
                             }
                         }
                     }
@@ -569,31 +543,47 @@ Rectangle {
                 // ── 宽屏：四卡横排总览，点一张原位展开三栏（生涯展开在顶部条内）──
                 ColumnLayout {
                     Layout.fillWidth: true
-                    // 宽屏总览/时段展开吃掉视口余量；窄屏按内容自然高度滚动。
-                    Layout.fillHeight: !root.narrowLayout && root.expandedPanel !== "lifetime"
-                    visible: !root.narrowLayout && root.expandedPanel !== "lifetime"
+                    // 总览/时段展开吃掉视口余量。
+                    Layout.fillHeight: root.expandedPanel !== "lifetime"
+                    visible: root.expandedPanel !== "lifetime"
                     spacing: Kirigami.Units.largeSpacing
 
-                    GridLayout {
+                    Flickable {
+                        id: periodCardsFlick
                         Layout.fillWidth: true
                         Layout.fillHeight: root.expandedPanel === ""
                         Layout.minimumHeight: Kirigami.Units.gridUnit * 16
                         visible: root.expandedPanel === ""
-                        columns: 4
-                        columnSpacing: Kirigami.Units.largeSpacing
-                        rowSpacing: Kirigami.Units.largeSpacing
+                        clip: true
+                        contentWidth: Math.max(width, periodCardGrid.implicitWidth)
+                        contentHeight: height
+                        boundsBehavior: Flickable.StopAtBounds
+                        ScrollBar.horizontal: ScrollBar {
+                            policy: periodCardsFlick.contentWidth > periodCardsFlick.width
+                                    ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+                        }
 
-                        Repeater {
-                            model: root.periodCards
+                        GridLayout {
+                            id: periodCardGrid
+                            width: periodCardsFlick.contentWidth
+                            height: periodCardsFlick.height
+                            columns: 4
+                            columnSpacing: Kirigami.Units.largeSpacing
+                            rowSpacing: Kirigami.Units.largeSpacing
 
-                            delegate: StatsPeriodCard {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                Layout.preferredHeight: Kirigami.Units.gridUnit * 18
-                                periodSummary: modelData
-                                expanded: false
-                                onClicked: root.openPeriod(modelData.preset)
+                            Repeater {
+                                model: root.periodCards
+
+                                delegate: StatsPeriodCard {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumWidth: Kirigami.Units.gridUnit * 12
+                                    Layout.preferredHeight: Kirigami.Units.gridUnit * 18
+                                    periodSummary: modelData
+                                    expanded: false
+                                    onClicked: root.openPeriod(modelData.preset)
+                                }
                             }
                         }
                     }
@@ -610,102 +600,59 @@ Rectangle {
                         border.color: Kirigami.Theme.disabledTextColor
                         border.width: 1
 
-                        RowLayout {
+                        Flickable {
+                            id: periodDetailFlick
                             anchors.fill: parent
-                            anchors.margins: Kirigami.Units.largeSpacing
-                            spacing: Kirigami.Units.largeSpacing
-
-                            // 左：当前时段摘要；点它返回四卡总览。
-                            StatsPeriodCard {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                Layout.preferredWidth: 24
-                                periodSummary: root.selected
-                                expanded: true
-                                onClicked: root.collapsePanel()
+                            clip: true
+                            contentWidth: Math.max(width, periodDetailRow.implicitWidth
+                                                   + Kirigami.Units.largeSpacing * 2)
+                            contentHeight: height
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.horizontal: ScrollBar {
+                                policy: periodDetailFlick.contentWidth > periodDetailFlick.width
+                                        ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
                             }
 
-                            // 中：纪录；背景与边界由整张展开卡统一提供。
-                            StatsRecordPanel {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                Layout.preferredWidth: 36
-                                records: root.selectedRecords
-                                flat: true
+                            RowLayout {
+                                id: periodDetailRow
+                                x: Kirigami.Units.largeSpacing
+                                y: Kirigami.Units.largeSpacing
+                                width: Math.max(periodDetailFlick.width - Kirigami.Units.largeSpacing * 2,
+                                                implicitWidth)
+                                height: Math.max(0, periodDetailFlick.height - Kirigami.Units.largeSpacing * 2)
+                                spacing: Kirigami.Units.largeSpacing
+
+                                // 左：当前时段摘要；点它返回四卡总览。
+                                StatsPeriodCard {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumWidth: Kirigami.Units.gridUnit * 18
+                                    Layout.preferredWidth: 24
+                                    periodSummary: root.selected
+                                    expanded: true
+                                    onClicked: root.collapsePanel()
+                                }
+
+                                // 中：纪录；背景与边界由整张展开卡统一提供。
+                                StatsRecordPanel {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumWidth: Kirigami.Units.gridUnit * 21
+                                    Layout.preferredWidth: Kirigami.Units.gridUnit * 21
+                                    records: root.selectedRecords
+                                    flat: true
+                                }
+
+                                // 右：按日/周/月人工字数趋势（与旧本周速度曲线语义不同）。
+                                StatsTrendChart {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumWidth: Kirigami.Units.gridUnit * 23
+                                    Layout.preferredWidth: Kirigami.Units.gridUnit * 23
+                                    trend: root.selectedTrend
+                                }
                             }
-
-                            // 右：按日/周/月人工字数趋势（与旧本周速度曲线语义不同）。
-                            StatsTrendChart {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                Layout.preferredWidth: 40
-                                trend: root.selectedTrend
-                            }
                         }
-                    }
-                }
-
-                // ── 窄屏：范围切换 → 总量与区间 → 2×2 纪录 → 趋势，整体纵向滚动 ──
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    visible: root.narrowLayout && root.expandedPanel !== "lifetime"
-                    spacing: Kirigami.Units.largeSpacing
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Kirigami.Units.smallSpacing
-
-                        Repeater {
-                            model: root.periodCards
-
-                            delegate: Button {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                text: root.periodTitle(modelData.preset)
-                                highlighted: root.selectedPeriod === modelData.preset
-                                onClicked: root.selectNarrowPeriod(modelData.preset)
-                            }
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: Kirigami.Units.smallSpacing
-
-                        Kirigami.Heading {
-                            level: 1
-                            Layout.fillWidth: true
-                            text: root.formatNum(root.val(root.selected, "totalHumanTypedChars")) + " " + qsTr("字")
-                            color: Kirigami.Theme.highlightColor
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.selectedRangeText()
-                            color: Kirigami.Theme.textColor
-                            elide: Text.ElideRight
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: qsTr("平均 %1 字/分 · %2 字/天 · 有写作 %3 天")
-                                .arg(root.formatAverage(root.val(root.selected, "averageCharsPerMinute")))
-                                .arg(root.formatAverage(root.val(root.selected, "averageCharsPerDay")))
-                                .arg(root.formatNum(root.val(root.selected, "writingDays")))
-                            color: Kirigami.Theme.disabledTextColor
-                            elide: Text.ElideRight
-                        }
-                    }
-
-                    StatsRecordPanel {
-                        Layout.fillWidth: true
-                        records: root.selectedRecords
-                        columns: 2
-                    }
-
-                    StatsTrendChart {
-                        Layout.fillWidth: true
-                        trend: root.selectedTrend
                     }
                 }
 
