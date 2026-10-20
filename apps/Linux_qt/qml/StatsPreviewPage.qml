@@ -503,6 +503,7 @@ Rectangle {
                             Layout.minimumHeight: root.detailMinHeight
                             visible: root.expandedPanel === "lifetime"
                             clip: true
+                            acceptedButtons: Qt.NoButton
                             contentWidth: Math.max(width, lifetimeDetailGrid.implicitWidth)
                             contentHeight: height
                             boundsBehavior: Flickable.StopAtBounds
@@ -555,6 +556,7 @@ Rectangle {
                         Layout.minimumHeight: Kirigami.Units.gridUnit * 16
                         visible: root.expandedPanel === ""
                         clip: true
+                        acceptedButtons: Qt.NoButton
                         contentWidth: Math.max(width, periodCardGrid.implicitWidth)
                         contentHeight: height
                         boundsBehavior: Flickable.StopAtBounds
@@ -604,6 +606,7 @@ Rectangle {
                             id: periodDetailFlick
                             anchors.fill: parent
                             clip: true
+                            acceptedButtons: Qt.NoButton
                             contentWidth: Math.max(width, periodDetailRow.implicitWidth
                                                    + Kirigami.Units.largeSpacing * 2)
                             contentHeight: height

@@ -162,6 +162,7 @@ Rectangle {
                             dt: root.dt
                             appState: root.appState
                             syncSource: "hub"
+                            compact: parent.width < 640
                             onRequestSync: root.requestSync()
                             onRequestSearch: root.requestSearch()
                             onOpenSettings: root.openSettings()

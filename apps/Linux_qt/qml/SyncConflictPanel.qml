@@ -240,6 +240,7 @@ Rectangle {
                     id: comparisonFlick
                     anchors.fill: parent
                     clip: true
+                    acceptedButtons: Qt.NoButton
                     contentWidth: Math.max(width, sideBySide.implicitWidth + Kirigami.Units.smallSpacing * 2)
                     contentHeight: height
                     boundsBehavior: Flickable.StopAtBounds
