@@ -517,26 +517,6 @@ class EditorViewModel(
         }
     }
 
-    /** Request correction for the sentence currently visible around the caret. */
-    fun requestCorrectionSegment(
-        targetId: String,
-        startByte: Int,
-        endByte: Int,
-        visibleText: String,
-    ) {
-        if (inputFrozen || isLoadingChapter) return
-        val identity = currentCorrectionIdentity() ?: return
-        if (identity.targetId != targetId) return
-        val correction = correctionCoordinator ?: return
-        viewModelScope.launch {
-            try {
-                correction.checkSegment(identity, startByte, endByte, visibleText)
-            } finally {
-                withContext(NonCancellable + Dispatchers.IO) { removeReleasedCorrectionModels() }
-            }
-        }
-    }
-
     /** Restore Core's cached chapter suggestions for the current revision without rescanning. */
     fun restoreCorrectionSnapshot(targetId: String) {
         if (inputFrozen || isLoadingChapter) return
@@ -888,12 +868,22 @@ class EditorViewModel(
             // ComposeEditorVisualState.onEditFact。
             // 必须用完整 old/new 文本：删除范围用完整 oldText，插入/移动范围用完整 newText。
             val editResult = com.xiwei.sujian.feature.editor.projection.EditResult.fromDto(result)
+            // 完整提交后的正文；校对增量请求必须带事务时捕获的文本，避免排队期间
+            // Core 内核已推进后重新读取到更新版本而丢失本地增量。
             val fullNewText =
                 buildString {
                     append(edit.oldText.substring(0, edit.replaceStart))
                     append(edit.newText)
                     append(edit.oldText.substring(edit.replaceEndExclusive))
                 }
+            val correctionIdentity = currentCorrectionIdentity()
+            if (correctionIdentity != null && correctionIdentity.targetId == targetId &&
+                editResult.displayPatches.isNotEmpty()
+            ) {
+                viewModelScope.launch {
+                    correctionCoordinator?.checkEdits(correctionIdentity, editResult, fullNewText, lease)
+                }
+            }
             viewModelScope.launch {
                 _editFactEvents.send(
                     CoreEditFactEvent(

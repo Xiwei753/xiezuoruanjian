@@ -1,5 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, MutexGuard};
 
 use sujian_proof::{
     CorrectionConfig, CorrectionDiagnostic, CorrectionEngine, LanguageScorer, RuleSet,
@@ -10,8 +9,8 @@ use crate::api::{
 };
 
 use super::result_cache::{
-    canonical_segments, content_fingerprint, context_range, CachedSegment, CachedSuggestion,
-    ChapterCorrectionCacheState,
+    context_range, mark_unseen_segments_in_edit_windows, reconcile_edits, reconcile_full,
+    CachedSuggestion, ChapterCorrectionCacheState, ChapterCorrectionSlot, EditRange,
 };
 use super::CorrectionStore;
 
@@ -19,79 +18,61 @@ pub(crate) struct CorrectionScanner {
     store: CorrectionStore,
     project_id: String,
     chapter_id: String,
+    session_id: u64,
     text_revision: u64,
     engine: Arc<CorrectionEngine>,
+    /// Fingerprint of the exact lexicon/model/dictionary snapshot captured
+    /// when this scanner was built. It must travel with the engine so a
+    /// preference change between construction and `check` cannot label old
+    /// results with a newer scanner generation.
+    scanner_fingerprint: String,
 }
 
-/// Which invalid segments a check request recomputes.
-enum ScanSelection {
-    /// Restore only: verify the cache but never run the engine.
+/// What a check request is allowed to recompute.
+pub(crate) enum CorrectionCheckRequest {
+    /// Restore only: verify the committed cache but never run the engine.
     RestoreOnly,
-    /// Recompute every missing or invalid segment.
-    All,
-    /// Recompute only segments overlapping the requested byte range.
+    /// Apply the edit transaction's real change ranges, then scan only the
+    /// segments those edits touched.
+    Edits {
+        base_revision: u64,
+        edits: Vec<EditRange>,
+    },
+    /// Recompute only unchecked segments overlapping the requested byte range.
     Range(usize, usize),
-}
-
-impl ScanSelection {
-    fn covers(&self, start: usize, end: usize) -> bool {
-        match self {
-            ScanSelection::RestoreOnly => false,
-            ScanSelection::All => true,
-            ScanSelection::Range(range_start, range_end) => {
-                start < *range_end && *range_start < end
-            }
-        }
-    }
-}
-
-/// One canonical segment of the current text plus its cache lookup result.
-struct SegmentPlan {
-    start: usize,
-    end: usize,
-    context_start: usize,
-    context_end: usize,
-    text_fingerprint: String,
-    context_fingerprint: String,
-    /// `Some` once the segment is checked for the current text, by a valid
-    /// cache hit or by a fresh scan. `None` keeps it unchecked.
-    checked: Option<Vec<CachedSuggestion>>,
-    /// True while `checked` came from the persistent cache unchanged.
-    cached_hit: bool,
+    /// Fill every unseen or invalid segment.
+    All,
 }
 
 fn to_u32(value: usize) -> Result<u32, WriterError> {
     u32::try_from(value).map_err(|error| WriterError::Other(error.to_string()))
 }
 
-/// A cached entry is reusable only while its suggestions still describe the
-/// current text slice at the segment's new position.
-fn cached_segment_matches(text: &str, plan: &SegmentPlan, cached: &CachedSegment) -> bool {
-    let segment_len = plan.end - plan.start;
-    cached.suggestions.iter().all(|suggestion| {
-        let (Ok(start), Ok(end)) = (
-            usize::try_from(suggestion.start_byte),
-            usize::try_from(suggestion.end_byte),
-        ) else {
-            return false;
-        };
-        start < end
-            && end <= segment_len
-            && text.get(plan.start + start..plan.start + end) == Some(suggestion.original.as_str())
-    })
+fn lock_slot(
+    slot: &ChapterCorrectionSlot,
+) -> Result<MutexGuard<'_, ChapterCorrectionCacheState>, WriterError> {
+    slot.state
+        .lock()
+        .map_err(|_| WriterError::Other("correction result cache lock poisoned".into()))
 }
 
 impl CorrectionScanner {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         store: CorrectionStore,
         project_id: String,
         chapter_id: String,
+        session_id: u64,
         text_revision: u64,
     ) -> Result<Self, WriterError> {
+        // Bracket resource loading with the fingerprint so the captured
+        // generation always describes the exact lexicon/model the engine was
+        // built from, even if a dictionary or settings change races setup.
+        let scanner_fingerprint_before = store.scanner_fingerprint(&project_id)?;
         let (lexicon_version, lexicon) = store.lexicon_snapshot_for_project(&project_id)?;
-        let (model_path, model) = store.configured_model_snapshot()?;
+        let (model_key, model) = store.configured_model_snapshot()?;
         let engine = if let Some(engine) =
-            store.cached_engine(&project_id, lexicon_version, model_path.as_deref())?
+            store.cached_engine(&project_id, lexicon_version, model_key.as_ref())?
         {
             engine
         } else {
@@ -107,16 +88,24 @@ impl CorrectionScanner {
             store.cache_engine_if_model_current(
                 &project_id,
                 lexicon_version,
-                model_path,
+                model_key,
                 Arc::new(engine),
             )?
         };
+        let scanner_fingerprint = store.scanner_fingerprint(&project_id)?;
+        if scanner_fingerprint != scanner_fingerprint_before {
+            return Err(WriterError::Other(
+                "correction scanner configuration changed during setup; retry the request".into(),
+            ));
+        }
         Ok(Self {
             store,
             project_id,
             chapter_id,
+            session_id,
             text_revision,
             engine,
+            scanner_fingerprint,
         })
     }
 
@@ -125,7 +114,24 @@ impl CorrectionScanner {
         &self,
         text: &str,
     ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
-        self.check(text, ScanSelection::RestoreOnly)
+        self.check(text, CorrectionCheckRequest::RestoreOnly)
+    }
+
+    /// Applies the edit transaction's real change ranges and returns the
+    /// merged chapter snapshot. Only touched segments run the model.
+    pub(crate) fn apply_edits(
+        &self,
+        text: &str,
+        base_revision: u64,
+        edits: Vec<EditRange>,
+    ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+        self.check(
+            text,
+            CorrectionCheckRequest::Edits {
+                base_revision,
+                edits,
+            },
+        )
     }
 
     /// Verifies the cache, recomputes the requested range, and returns the
@@ -150,75 +156,248 @@ impl CorrectionScanner {
                 text.len()
             )));
         }
-        self.check(text, ScanSelection::Range(start, end))
+        self.check(text, CorrectionCheckRequest::Range(start, end))
     }
 
-    /// Recomputes every missing or invalid segment.
+    /// Fills every unseen or invalid segment.
     pub(crate) fn check_chapter(
         &self,
         text: &str,
     ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
-        self.check(text, ScanSelection::All)
+        self.check(text, CorrectionCheckRequest::All)
     }
 
     fn check(
         &self,
         text: &str,
-        selection: ScanSelection,
+        request: CorrectionCheckRequest,
     ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
         u32::try_from(text.len()).map_err(|error| {
             WriterError::Other(format!("chapter exceeds correction byte limit: {error}"))
         })?;
 
-        let state = self
+        let slot = self
             .store
             .chapter_result_cache(&self.project_id, &self.chapter_id)?;
-        let scanner_fingerprint = self.store.scanner_fingerprint(&self.project_id)?;
-        let (mut plans, mut dirty) = plan_segments(text, &state, &scanner_fingerprint)?;
+        // Refuse a scanner built before a dictionary/model/rule change. Its
+        // engine still contains the old resource snapshot; letting it mutate
+        // the chapter cache would clear or overwrite results generated by a
+        // newer scanner generation.
+        self.ensure_scanner_current()?;
+        let scanner_fingerprint = &self.scanner_fingerprint;
 
-        for plan in plans.iter_mut() {
-            if plan.checked.is_some() || !selection.covers(plan.start, plan.end) {
-                continue;
-            }
-            plan.checked = Some(self.scan_segment(text, plan)?);
-            plan.cached_hit = false;
-            dirty = true;
+        if matches!(request, CorrectionCheckRequest::RestoreOnly) {
+            return self.restore_snapshot(&slot, text, scanner_fingerprint);
         }
 
-        let mut next_segments = Vec::new();
-        let mut seen_keys = HashSet::new();
-        for plan in &plans {
-            let Some(suggestions) = &plan.checked else {
-                continue;
-            };
-            let key = (
-                plan.text_fingerprint.clone(),
-                plan.context_fingerprint.clone(),
-            );
-            if !seen_keys.insert(key) {
-                continue;
-            }
-            if !plan.cached_hit {
-                dirty = true;
-            }
-            next_segments.push(CachedSegment {
-                start_byte: to_u32(plan.start)?,
-                end_byte: to_u32(plan.end)?,
-                text_fingerprint: plan.text_fingerprint.clone(),
-                context_fingerprint: plan.context_fingerprint.clone(),
-                suggestions: suggestions.clone(),
-            });
+        let mut guard = lock_slot(&slot)?;
+        while guard.scanning {
+            guard = slot
+                .condvar
+                .wait(guard)
+                .map_err(|_| WriterError::Other("correction result cache lock poisoned".into()))?;
+        }
+        // Preferences or dictionaries may have changed while this request was
+        // waiting behind another scan.
+        self.ensure_scanner_current()?;
+        if self.is_stale(&guard) {
+            return self.empty_snapshot();
+        }
+        self.prepare_state(&mut guard, text, &request, scanner_fingerprint)?;
+        let dirty = self.dirty_indices(&guard, &request);
+        if dirty.is_empty() {
+            guard.save()?;
+            return self.assemble_snapshot(&guard);
         }
 
-        let mut guard = state
-            .lock()
-            .map_err(|_| WriterError::Other("correction result cache lock poisoned".into()))?;
-        guard.scanner_fingerprint = scanner_fingerprint;
-        guard.segments = next_segments;
-        guard.dirty |= dirty;
+        // The model scan runs outside the cache lock. Competing edit and
+        // chapter requests wait on the condvar; restore requests keep
+        // reading the committed view.
+        guard.scanning = true;
+        let jobs = dirty
+            .iter()
+            .filter_map(|index| {
+                guard
+                    .segments
+                    .get(*index)
+                    .map(|segment| (segment.start_byte as usize, segment.end_byte as usize))
+            })
+            .collect::<Vec<_>>();
+        drop(guard);
+
+        let scanned = jobs
+            .iter()
+            .map(|(start, end)| self.scan_segment(text, *start, *end))
+            .collect::<Result<Vec<_>, _>>();
+
+        let mut guard = lock_slot(&slot)?;
+        guard.scanning = false;
+        slot.condvar.notify_all();
+        let scanned = scanned?;
+        // Never label old-engine results with a newer generation: if the
+        // model, dictionary, or disabled-rule set changed while the scan ran,
+        // discard these results and let the caller retry on a fresh scanner.
+        self.ensure_scanner_current()?;
+        let mut changed = false;
+        for (index, suggestions) in dirty.iter().zip(scanned) {
+            if let Some(segment) = guard.segments.get_mut(*index) {
+                if segment.checked.as_ref() != Some(&suggestions) {
+                    changed = true;
+                }
+                segment.checked = Some(suggestions);
+                segment.dirty = false;
+            }
+        }
+        // A rescan that produces the same suggestions and only shifted offsets
+        // does not need to rewrite the chapter cache file.
+        guard.semantic_dirty |= changed;
         guard.save()?;
+        self.assemble_snapshot(&guard)
+    }
 
-        self.assemble_snapshot(&plans)
+    fn ensure_scanner_current(&self) -> Result<(), WriterError> {
+        if self.store.scanner_fingerprint(&self.project_id)? != self.scanner_fingerprint {
+            return Err(WriterError::Other(
+                "correction scanner configuration changed; retry the request".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn restore_snapshot(
+        &self,
+        slot: &ChapterCorrectionSlot,
+        text: &str,
+        scanner_fingerprint: &str,
+    ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+        let mut guard = lock_slot(slot)?;
+        if guard.scanning {
+            // A scan has already prepared the newest text view. Restoring it
+            // must never wait for the model, and an older revision must not be
+            // presented with newer byte offsets.
+            if guard.last_session_id == self.session_id && guard.last_revision == self.text_revision
+            {
+                return self.assemble_snapshot(&guard);
+            }
+            return self.empty_snapshot();
+        }
+        if self.is_stale(&guard) {
+            return self.empty_snapshot();
+        }
+        self.prepare_state(
+            &mut guard,
+            text,
+            &CorrectionCheckRequest::RestoreOnly,
+            scanner_fingerprint,
+        )?;
+        // Restoring is a read-only display refresh: never save here, even when
+        // the in-memory offset index had to be rebuilt.
+        self.assemble_snapshot(&guard)
+    }
+
+    fn is_stale(&self, guard: &ChapterCorrectionCacheState) -> bool {
+        // Editor sessions are allocated monotonically by the platform. A
+        // request from an older session can still be queued while a reopened
+        // document is already scanning; it must never replace the newer
+        // session's cache. A freshly loaded cache has session 0, which accepts
+        // the first request after an application restart.
+        if guard.last_session_id != 0 && self.session_id < guard.last_session_id {
+            return true;
+        }
+        guard.last_session_id == self.session_id && self.text_revision < guard.last_revision
+    }
+
+    fn prepare_state(
+        &self,
+        guard: &mut ChapterCorrectionCacheState,
+        text: &str,
+        request: &CorrectionCheckRequest,
+        scanner_fingerprint: &str,
+    ) -> Result<(), WriterError> {
+        if guard.scanner_fingerprint != scanner_fingerprint {
+            guard.segments.clear();
+            guard.scanner_fingerprint = scanner_fingerprint.to_string();
+            guard.needs_reconcile = true;
+            guard.semantic_dirty = true;
+            guard.last_session_id = 0;
+            guard.last_revision = 0;
+        }
+
+        let same_session = guard.last_session_id == self.session_id;
+        match request {
+            CorrectionCheckRequest::Edits {
+                base_revision,
+                edits,
+            } => {
+                if same_session && guard.last_revision == self.text_revision {
+                    // A restore may already have rebuilt the index for this
+                    // revision. Mark only unseen segments touched by the real
+                    // transaction; never rescan the whole chapter.
+                    mark_unseen_segments_in_edit_windows(guard, edits);
+                } else if same_session
+                    && guard.last_revision == *base_revision
+                    && !guard.needs_reconcile
+                {
+                    reconcile_edits(text, guard, edits)?;
+                } else {
+                    reconcile_full(text, guard);
+                    // A lost edit notification or a new editor session is not
+                    // the normal path. The rebuilt index covers the whole
+                    // chapter, but this transaction may only run locally;
+                    // unseen segments elsewhere wait for a manual chapter
+                    // check.
+                    mark_unseen_segments_in_edit_windows(guard, edits);
+                }
+            }
+            CorrectionCheckRequest::RestoreOnly
+            | CorrectionCheckRequest::Range(_, _)
+            | CorrectionCheckRequest::All => {
+                if !same_session
+                    || guard.last_revision != self.text_revision
+                    || guard.needs_reconcile
+                {
+                    reconcile_full(text, guard);
+                }
+            }
+        }
+        guard.last_session_id = self.session_id;
+        guard.last_revision = self.text_revision;
+        Ok(())
+    }
+
+    fn dirty_indices(
+        &self,
+        guard: &ChapterCorrectionCacheState,
+        request: &CorrectionCheckRequest,
+    ) -> Vec<usize> {
+        match request {
+            CorrectionCheckRequest::RestoreOnly => Vec::new(),
+            CorrectionCheckRequest::Edits { .. } => guard
+                .segments
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| segment.dirty && segment.checked.is_none())
+                .map(|(index, _)| index)
+                .collect(),
+            CorrectionCheckRequest::All => guard
+                .segments
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| segment.checked.is_none())
+                .map(|(index, _)| index)
+                .collect(),
+            CorrectionCheckRequest::Range(range_start, range_end) => guard
+                .segments
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| {
+                    segment.checked.is_none()
+                        && (segment.start_byte as usize) < *range_end
+                        && *range_start < segment.end_byte as usize
+                })
+                .map(|(index, _)| index)
+                .collect(),
+        }
     }
 
     /// Cache-miss compute entry: scans one segment with its context and keeps
@@ -226,14 +405,15 @@ impl CorrectionScanner {
     fn scan_segment(
         &self,
         text: &str,
-        plan: &SegmentPlan,
+        start: usize,
+        end: usize,
     ) -> Result<Vec<CachedSuggestion>, WriterError> {
-        let context = &text[plan.context_start..plan.context_end];
-        let local_start = plan.start - plan.context_start;
-        let local_end = plan.end - plan.context_start;
+        let (context_start, context_end) = context_range(text, start, end);
+        let local_start = start - context_start;
+        let local_end = end - context_start;
         let diagnostics = self
             .engine
-            .scan(context)
+            .scan(&text[context_start..context_end])
             .map_err(|error| WriterError::Other(error.to_string()))?;
         diagnostics
             .into_iter()
@@ -256,24 +436,24 @@ impl CorrectionScanner {
 
     fn assemble_snapshot(
         &self,
-        plans: &[SegmentPlan],
+        guard: &ChapterCorrectionCacheState,
     ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
         let mut diagnostics = Vec::new();
         let mut checked_ranges = Vec::new();
-        for plan in plans {
-            let Some(suggestions) = &plan.checked else {
+        for segment in &guard.segments {
+            let Some(suggestions) = &segment.checked else {
                 continue;
             };
             checked_ranges.push(CorrectionCheckedRangeDto {
-                start_byte: to_u32(plan.start)?,
-                end_byte: to_u32(plan.end)?,
+                start_byte: segment.start_byte,
+                end_byte: segment.end_byte,
             });
             for suggestion in suggestions {
                 diagnostics.push(CorrectionDiagnostic {
-                    start_byte: plan.start
+                    start_byte: segment.start_byte as usize
                         + usize::try_from(suggestion.start_byte)
                             .map_err(|error| WriterError::Other(error.to_string()))?,
-                    end_byte: plan.start
+                    end_byte: segment.end_byte as usize
                         + usize::try_from(suggestion.end_byte)
                             .map_err(|error| WriterError::Other(error.to_string()))?,
                     original: suggestion.original.clone(),
@@ -285,6 +465,8 @@ impl CorrectionScanner {
                 });
             }
         }
+        checked_ranges.sort_by_key(|range| (range.start_byte, range.end_byte));
+        checked_ranges.dedup();
 
         // Ignore choices are applied on the response so changing them never
         // requires rescanning the chapter.
@@ -305,138 +487,12 @@ impl CorrectionScanner {
             checked_ranges,
         })
     }
-}
 
-/// Verifies cached entries against the current text and reports whether the
-/// in-memory cache drifted from what is on disk.
-fn plan_segments(
-    text: &str,
-    state: &Arc<Mutex<ChapterCorrectionCacheState>>,
-    scanner_fingerprint: &str,
-) -> Result<(Vec<SegmentPlan>, bool), WriterError> {
-    let mut guard = state
-        .lock()
-        .map_err(|_| WriterError::Other("correction result cache lock poisoned".into()))?;
-    let mut dirty = false;
-    if guard.scanner_fingerprint != scanner_fingerprint {
-        if !guard.segments.is_empty() {
-            guard.segments.clear();
-        }
-        guard.scanner_fingerprint = scanner_fingerprint.to_string();
-        guard.dirty = true;
-    }
-    let cached_segments = std::mem::take(&mut guard.segments);
-    drop(guard);
-
-    let mut index: HashMap<(String, String), CachedSegment> = HashMap::new();
-    for segment in cached_segments {
-        let key = (
-            segment.text_fingerprint.clone(),
-            segment.context_fingerprint.clone(),
-        );
-        if index.insert(key, segment).is_some() {
-            // Duplicate keys can only come from an older, larger segmentation.
-            dirty = true;
-        }
-    }
-
-    let mut used_keys = HashSet::new();
-    let mut plans = Vec::new();
-    for (start, end) in canonical_segments(text) {
-        let text_fingerprint = content_fingerprint(&text[start..end]);
-        let (context_start, context_end) = context_range(text, start, end);
-        let context_fingerprint = content_fingerprint(&text[context_start..context_end]);
-        let key = (text_fingerprint.clone(), context_fingerprint.clone());
-        let mut plan = SegmentPlan {
-            start,
-            end,
-            context_start,
-            context_end,
-            text_fingerprint,
-            context_fingerprint,
-            checked: None,
-            cached_hit: false,
-        };
-        let Some(cached) = index.get(&key) else {
-            plans.push(plan);
-            continue;
-        };
-        if !cached_segment_matches(text, &plan, cached) {
-            dirty = true;
-            plans.push(plan);
-            continue;
-        }
-        used_keys.insert(key);
-        if cached.start_byte != to_u32(start)? || cached.end_byte != to_u32(end)? {
-            // The content moved; keep the result but persist new offsets.
-            dirty = true;
-        }
-        plan.checked = Some(cached.suggestions.clone());
-        plan.cached_hit = true;
-        plans.push(plan);
-    }
-    if index.len() != used_keys.len() {
-        // Entries that no longer match any segment of the current text.
-        dirty = true;
-    }
-    Ok((plans, dirty))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scan_selection_coverage() {
-        assert!(!ScanSelection::RestoreOnly.covers(0, 10));
-        assert!(ScanSelection::All.covers(0, 10));
-        assert!(ScanSelection::Range(5, 8).covers(0, 10));
-        assert!(!ScanSelection::Range(10, 12).covers(0, 10));
-        assert!(!ScanSelection::Range(0, 0).covers(0, 10));
-    }
-
-    #[test]
-    fn cached_matches_requires_current_original_text() {
-        let text = "甲乙丙丁";
-        let plan = SegmentPlan {
-            start: 3,
-            end: 12,
-            context_start: 0,
-            context_end: 12,
-            text_fingerprint: String::new(),
-            context_fingerprint: String::new(),
-            checked: None,
-            cached_hit: false,
-        };
-        let cached = CachedSegment {
-            start_byte: 3,
-            end_byte: 12,
-            text_fingerprint: String::new(),
-            context_fingerprint: String::new(),
-            suggestions: vec![CachedSuggestion {
-                start_byte: 0,
-                end_byte: 3,
-                original: "乙".to_string(),
-                replacement: "已".to_string(),
-                source: "rule".to_string(),
-                rule_id: "test".to_string(),
-                severity: "error".to_string(),
-            }],
-        };
-        assert!(cached_segment_matches(text, &plan, &cached));
-
-        let mismatch = CachedSegment {
-            suggestions: vec![CachedSuggestion {
-                start_byte: 0,
-                end_byte: 3,
-                original: "甲".to_string(),
-                replacement: "已".to_string(),
-                source: "rule".to_string(),
-                rule_id: "test".to_string(),
-                severity: "error".to_string(),
-            }],
-            ..cached
-        };
-        assert!(!cached_segment_matches(text, &plan, &mismatch));
+    fn empty_snapshot(&self) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+        Ok(CorrectionChapterSnapshotDto {
+            text_revision: self.text_revision,
+            suggestions: Vec::new(),
+            checked_ranges: Vec::new(),
+        })
     }
 }

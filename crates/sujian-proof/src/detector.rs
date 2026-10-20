@@ -2,11 +2,12 @@
 // Modified behavioral port of pycorrector/pycorrector/detector.py by XuMing
 // (xuming624); this Rust implementation does not bundle upstream data files.
 
-use crate::CorrectionError;
 use crate::confusion::ConfusionMatcher;
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
-use crate::segment::{Segmenter, TokenSpan, is_chinese_string, is_han};
+use crate::proper_names::ProperNameKind;
+use crate::segment::{is_chinese_string, is_han, Segmenter};
+use crate::CorrectionError;
 
 // Behavioral port of pycorrector Detector._detect and _get_maybe_error_index
 // (Apache-2.0): confusion terms, near proper names, dictionary OOV tokens,
@@ -28,6 +29,7 @@ pub(crate) struct Suspect {
     pub(crate) original: String,
     pub(crate) kind: DetectionKind,
     pub(crate) exact_replacement: Option<String>,
+    pub(crate) entity_kind: Option<ProperNameKind>,
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +81,7 @@ impl Detector {
                     original: matched.original_text,
                     kind: DetectionKind::ConfusionWord,
                     exact_replacement: Some(matched.suggestion),
+                    entity_kind: None,
                 });
             }
 
@@ -87,12 +90,18 @@ impl Detector {
             }
 
             if is_chinese_string(sentence) {
-                candidates.extend(detect_near_proper_names(
-                    sentence,
-                    segment.start_byte,
-                    lexicon,
-                    segmenter,
-                ));
+                candidates.extend(
+                    crate::proper_names::detect_work_entity_variants(sentence, lexicon, segmenter)
+                        .into_iter()
+                        .map(|candidate| Suspect {
+                            start_byte: segment.start_byte + candidate.start_byte,
+                            end_byte: segment.start_byte + candidate.end_byte,
+                            original: candidate.original,
+                            kind: DetectionKind::ProperName,
+                            exact_replacement: Some(candidate.replacement),
+                            entity_kind: Some(candidate.kind),
+                        }),
+                );
             }
 
             if self.detect_words {
@@ -110,6 +119,7 @@ impl Detector {
                         original: token.text,
                         kind: DetectionKind::OutOfVocabularyWord,
                         exact_replacement: None,
+                        entity_kind: None,
                     });
                 }
             }
@@ -132,94 +142,6 @@ impl Detector {
         });
         Ok(resolve_overlaps(candidates))
     }
-}
-
-fn detect_near_proper_names(
-    sentence: &str,
-    base_byte: usize,
-    lexicon: &Lexicon,
-    segmenter: &Segmenter,
-) -> Vec<Suspect> {
-    let chars = segmenter.characters(sentence);
-    let mut matches = Vec::new();
-    for len in 2..=4.min(chars.len()) {
-        for start in 0..=chars.len() - len {
-            let source_chars = &chars[start..start + len];
-            let source = source_chars
-                .iter()
-                .map(|token| token.text.as_str())
-                .collect::<String>();
-            if lexicon.is_proper_name(&source) || lexicon.is_protected_name_component(&source) {
-                continue;
-            }
-
-            let source_char_values = source_chars
-                .iter()
-                .filter_map(|token| token.text.chars().next())
-                .collect::<Vec<_>>();
-            let mut best: Option<(String, f32)> = None;
-            for proper in lexicon.near_proper_name_candidates(&source_char_values) {
-                let score = proper_name_similarity(source_chars, proper, lexicon);
-                if score <= 0.85 || proper == source {
-                    continue;
-                }
-                let replace = best.as_ref().map_or(true, |(best_name, best_score)| {
-                    score > *best_score
-                        || (score == *best_score
-                            && (lexicon.compare_word_frequency(proper, best_name).is_lt()
-                                || (lexicon.compare_word_frequency(proper, best_name).is_eq()
-                                    && proper < best_name.as_str())))
-                });
-                if replace {
-                    best = Some((proper.to_owned(), score));
-                }
-            }
-            if let Some((replacement, _)) = best {
-                let local_start = source_chars
-                    .first()
-                    .map(|token| token.start_byte)
-                    .unwrap_or(0);
-                let local_end = source_chars
-                    .last()
-                    .map(|token| token.end_byte)
-                    .unwrap_or(local_start);
-                matches.push(Suspect {
-                    start_byte: base_byte + local_start,
-                    end_byte: base_byte + local_end,
-                    original: source,
-                    kind: DetectionKind::ProperName,
-                    exact_replacement: Some(replacement),
-                });
-            }
-        }
-    }
-    matches
-}
-
-fn proper_name_similarity(source: &[TokenSpan], proper: &str, lexicon: &Lexicon) -> f32 {
-    let expected = proper.chars().collect::<Vec<_>>();
-    if expected.len() != source.len() {
-        return 0.0;
-    }
-    let mut score = 0.0;
-    let mut differences = 0usize;
-    for (token, expected) in source.iter().zip(expected) {
-        let actual = token.text.chars().next().unwrap_or_default();
-        if actual == expected {
-            score += 1.0;
-        } else if lexicon.is_confusable(actual, expected) {
-            differences += 1;
-            // The upstream threshold is 0.85; the supplied tables only encode
-            // a boolean relation, so allow only one table-supported change.
-            score += 0.9;
-        } else {
-            return 0.0;
-        }
-    }
-    if differences > 1 {
-        return 0.0;
-    }
-    score / source.len() as f32
 }
 
 fn detect_character_outliers(
@@ -274,6 +196,7 @@ fn detect_character_outliers(
             original: token.text.clone(),
             kind: DetectionKind::Character,
             exact_replacement: None,
+            entity_kind: None,
         });
     }
     Ok(matches)

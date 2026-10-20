@@ -41,6 +41,20 @@ Item {
     function snapNextCursorUpdate() {
         sujianEditor.snap_next_cursor_update();
     }
+    // Issue #964: one-shot reveal for a proofreading jump. Center the caret once,
+    // then leave the existing minimal scroll-follow logic in charge.
+    function revealCurrentCaret() {
+        requestEditorFocus();
+        var flick = editorScroll.contentItem;
+        if (flick) {
+            var caretY = Number(sujianEditor.cursor_rect_y) + Number(flick.contentY);
+            var targetY = caretY - editorScroll.height / 2
+                    + Number(sujianEditor.cursor_rect_height) / 2;
+            var maxY = Math.max(0, editorScroll.contentHeight - editorScroll.height);
+            flick.contentY = Math.max(0, Math.min(maxY, targetY));
+        }
+        editorScroll.scheduleEnsureCursorVisible();
+    }
     function undo() {
         sujianEditor.undo();
     }

@@ -16,6 +16,7 @@ impl WriterCoreApi {
         &self,
         project_id: String,
         chapter_id: String,
+        session_id: u64,
         text_revision: u64,
     ) -> ApiResult<CorrectionScanner> {
         if project_id.trim().is_empty() || chapter_id.trim().is_empty() {
@@ -27,6 +28,7 @@ impl WriterCoreApi {
             self.correction_store()?,
             project_id,
             chapter_id,
+            session_id,
             text_revision,
         )
     }
@@ -97,12 +99,13 @@ impl WriterCoreApi {
         &self,
         project_id: String,
         chapter_id: String,
+        session_id: u64,
         text_revision: u64,
         text: String,
         start_byte: u32,
         end_byte: u32,
     ) -> ApiResult<CorrectionChapterSnapshotDto> {
-        self.correction_scanner(project_id, chapter_id, text_revision)?
+        self.correction_scanner(project_id, chapter_id, session_id, text_revision)?
             .ensure_checked(&text, start_byte, end_byte)
     }
 
@@ -111,10 +114,11 @@ impl WriterCoreApi {
         &self,
         project_id: String,
         chapter_id: String,
+        session_id: u64,
         text_revision: u64,
         text: String,
     ) -> ApiResult<CorrectionChapterSnapshotDto> {
-        self.correction_scanner(project_id, chapter_id, text_revision)?
+        self.correction_scanner(project_id, chapter_id, session_id, text_revision)?
             .chapter_snapshot(&text)
     }
 
@@ -123,10 +127,43 @@ impl WriterCoreApi {
         &self,
         project_id: String,
         chapter_id: String,
+        session_id: u64,
         text_revision: u64,
         text: String,
     ) -> ApiResult<CorrectionChapterSnapshotDto> {
-        self.correction_scanner(project_id, chapter_id, text_revision)?
+        self.correction_scanner(project_id, chapter_id, session_id, text_revision)?
             .check_chapter(&text)
+    }
+
+    /// Applies the editor transaction's real change ranges and scans only the
+    /// dirty canonical segments, returning the merged chapter snapshot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_correction_edits(
+        &self,
+        project_id: String,
+        chapter_id: String,
+        session_id: u64,
+        text_revision: u64,
+        base_revision: u64,
+        text: String,
+        edits: Vec<crate::api::types::CorrectionEditRangeDto>,
+    ) -> ApiResult<CorrectionChapterSnapshotDto> {
+        let edits = edits
+            .into_iter()
+            .map(|edit| {
+                Ok(crate::correction::EditRange {
+                    old_start: usize::try_from(edit.old_start_byte)
+                        .map_err(|error| crate::api::WriterError::Other(error.to_string()))?,
+                    old_end: usize::try_from(edit.old_end_byte)
+                        .map_err(|error| crate::api::WriterError::Other(error.to_string()))?,
+                    new_start: usize::try_from(edit.new_start_byte)
+                        .map_err(|error| crate::api::WriterError::Other(error.to_string()))?,
+                    new_end: usize::try_from(edit.new_end_byte)
+                        .map_err(|error| crate::api::WriterError::Other(error.to_string()))?,
+                })
+            })
+            .collect::<Result<Vec<_>, crate::api::WriterError>>()?;
+        self.correction_scanner(project_id, chapter_id, session_id, text_revision)?
+            .apply_edits(&text, base_revision, edits)
     }
 }

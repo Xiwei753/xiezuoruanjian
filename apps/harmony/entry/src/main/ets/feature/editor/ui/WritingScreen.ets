@@ -403,7 +403,7 @@ export struct WritingScreen {
 
     const snap = update.snapshot
     if (snap !== null) {
-      this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap)
+      this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap, update.editResult)
       // Issue #879：把 snapshot + editResult + sessionId 保存在一个 @State presentationUpdate 中。
       const layoutSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
         snap,

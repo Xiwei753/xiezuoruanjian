@@ -28,6 +28,15 @@ Item {
         anchors.margins: Kirigami.Units.smallSpacing
         spacing: Kirigami.Units.smallSpacing
 
+        Label {
+            Layout.fillWidth: true
+            text: qsTr("校对 · %1 条建议").arg(
+                      root.editorControllerRef
+                      ? root.editorControllerRef.correctionSuggestions.length : 0)
+            font.bold: true
+            elide: Text.ElideRight
+        }
+
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
@@ -47,7 +56,7 @@ Item {
                 text: qsTr("清除标注")
                 enabled: !!(root.editorControllerRef
                             && root.editorControllerRef.correctionSuggestions.length)
-                onClicked: root.editorControllerRef.invalidateCorrectionResults()
+                onClicked: root.editorControllerRef.clearCorrectionAnnotations()
             }
         }
 
@@ -60,7 +69,7 @@ Item {
                   ? (root.editorControllerRef.correctionError
                      || root.editorControllerRef.correctionStatus) : ""
             color: root.editorControllerRef && root.editorControllerRef.correctionError
-                   ? "#C52222" : Kirigami.Theme.textColor
+                   ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
             wrapMode: Text.Wrap
         }
 
@@ -74,11 +83,14 @@ Item {
                    ? root.editorControllerRef.correctionSuggestions : []
 
             delegate: Rectangle {
+                id: suggestionItem
                 required property var modelData
                 width: correctionSuggestionList.width
                 height: suggestionContent.implicitHeight + Kirigami.Units.largeSpacing
                 radius: Kirigami.Units.cornerRadius
                 color: Kirigami.Theme.alternateBackgroundColor
+                // Uncertain checks must read as hints, not as red errors.
+                opacity: String(modelData.severity || "").toLowerCase() === "error" ? 1.0 : 0.86
 
                 ColumnLayout {
                     id: suggestionContent
@@ -86,35 +98,31 @@ Item {
                     anchors.margins: Kirigami.Units.smallSpacing
                     spacing: Kirigami.Units.smallSpacing / 2
 
+                    // Clicking the highlighted source jumps the sole editor to
+                    // this exact byte span. No offsets are exposed to the user.
                     Label {
                         Layout.fillWidth: true
-                        text: root.editorControllerRef
-                              ? root.editorControllerRef.correctionSeverityLabel(modelData) : ""
-                        color: root.editorControllerRef
-                               ? root.editorControllerRef.correctionSeverityColor(modelData)
-                               : Kirigami.Theme.disabledTextColor
-                        font.bold: true
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: qsTr("“%1” → “%2”")
-                              .arg(modelData.original)
-                              .arg(modelData.replacement)
+                        text: modelData.contextHtml !== undefined
+                              ? modelData.contextHtml
+                              : (root.editorControllerRef
+                                 ? root.editorControllerRef.correctionContextHtml(modelData)
+                                 : String(modelData.original || ""))
+                        textFormat: Text.RichText
                         wrapMode: Text.Wrap
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (root.editorControllerRef)
+                                    root.editorControllerRef.jumpToCorrection(modelData)
+                            }
+                        }
                     }
 
                     Label {
                         Layout.fillWidth: true
-                        text: qsTr("byte [%1, %2) · 字符 [%3, %4) · UTF-16 [%5, %6)")
-                              .arg(modelData.startByte)
-                              .arg(modelData.endByte)
-                              .arg(modelData.startChar)
-                              .arg(modelData.endChar)
-                              .arg(modelData.startUtf16)
-                              .arg(modelData.endUtf16)
-                        font.pixelSize: 11
-                        color: Kirigami.Theme.disabledTextColor
+                        text: qsTr("建议：%1").arg(String(modelData.replacement || ""))
                         wrapMode: Text.Wrap
                     }
 
@@ -123,32 +131,51 @@ Item {
                         text: root.editorControllerRef
                               ? root.editorControllerRef.correctionReason(modelData) : ""
                         wrapMode: Text.Wrap
-                        font.pixelSize: 12
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                        font.pixelSize: Kirigami.Units.gridUnit * 0.75
+                        color: Kirigami.Theme.disabledTextColor
                     }
 
-                    Flow {
+                    RowLayout {
                         Layout.fillWidth: true
-                        spacing: Kirigami.Units.smallSpacing / 2
+                        spacing: Kirigami.Units.smallSpacing
 
                         Button {
                             text: qsTr("替换")
+                            highlighted: true
                             onClicked: root.editorControllerRef.acceptCorrection(modelData)
                         }
-                        Button {
-                            text: qsTr("忽略一次")
-                            onClicked: root.editorControllerRef.ignoreCorrection(modelData, "once")
+
+                        Item { Layout.fillWidth: true }
+
+                        ToolButton {
+                            id: overflowButton
+                            text: qsTr("⋯")
+                            Accessible.name: qsTr("更多校对操作")
+                            onClicked: suggestionMenu.popup()
                         }
-                        Button {
-                            text: qsTr("忽略本章")
-                            onClicked: root.editorControllerRef.ignoreCorrection(modelData, "chapter")
-                        }
-                        Button {
-                            text: qsTr("加入作品词典")
-                            onClicked: root.editorControllerRef.addCorrectionWord(modelData)
-                        }
-                        Button {
-                            text: qsTr("停用此规则")
-                            onClicked: root.editorControllerRef.ignoreCorrection(modelData, "rule")
+
+                        Menu {
+                            id: suggestionMenu
+
+                            MenuItem {
+                                text: qsTr("忽略一次")
+                                onTriggered: root.editorControllerRef.ignoreCorrection(modelData, "once")
+                            }
+                            MenuItem {
+                                text: qsTr("忽略本章")
+                                onTriggered: root.editorControllerRef.ignoreCorrection(modelData, "chapter")
+                            }
+                            MenuItem {
+                                text: qsTr("加入作品词典")
+                                onTriggered: root.editorControllerRef.addCorrectionWord(modelData)
+                            }
+                            MenuSeparator {}
+                            MenuItem {
+                                text: qsTr("停用此规则")
+                                onTriggered: root.editorControllerRef.ignoreCorrection(modelData, "rule")
+                            }
                         }
                     }
                 }
@@ -229,8 +256,9 @@ Item {
                         text: qsTr("%1 · %2")
                               .arg(modelData.name)
                               .arg(modelData.ready ? qsTr("已准备") : qsTr("待准备"))
-                        color: modelData.ready ? "#238636" : Kirigami.Theme.disabledTextColor
-                        font.pixelSize: 11
+                        color: modelData.ready ? Kirigami.Theme.positiveTextColor
+                                               : Kirigami.Theme.disabledTextColor
+                        font.pixelSize: Kirigami.Units.gridUnit * 0.75
                     }
                 }
             }
@@ -241,7 +269,7 @@ Item {
                             && root.editorControllerRef.correctionDictionaryError)
                 text: root.editorControllerRef
                       ? root.editorControllerRef.correctionDictionaryError : ""
-                color: "#C52222"
+                color: Kirigami.Theme.negativeTextColor
                 wrapMode: Text.Wrap
             }
         }

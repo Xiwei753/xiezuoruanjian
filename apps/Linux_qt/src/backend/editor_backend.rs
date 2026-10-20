@@ -202,6 +202,7 @@ pub struct EditorBackend {
             request_id: u32,
             project_id: QString,
             chapter_id: QString,
+            session_id: u64,
             text_revision: u64,
             text: QString,
         )
@@ -214,6 +215,7 @@ pub struct EditorBackend {
             request_id: u32,
             project_id: QString,
             chapter_id: QString,
+            session_id: u64,
             text_revision: u64,
             text: QString,
             start_byte: u32,
@@ -228,7 +230,23 @@ pub struct EditorBackend {
             request_id: u32,
             project_id: QString,
             chapter_id: QString,
+            session_id: u64,
             text_revision: u64,
+            text: QString,
+        )
+    ),
+    /// Issue #954：按编辑事务的真实 patch 范围增量更新并只扫描脏段。
+    #[allow(dead_code)]
+    request_correction_edits: qt_method!(
+        fn(
+            &mut self,
+            request_id: u32,
+            project_id: QString,
+            chapter_id: QString,
+            session_id: u64,
+            text_revision: u64,
+            base_revision: u64,
+            edits_json: QString,
             text: QString,
         )
     ),
@@ -680,6 +698,7 @@ impl EditorBackend {
         request_id: u32,
         project_id: QString,
         chapter_id: QString,
+        session_id: u64,
         text_revision: u64,
         text: QString,
     ) {
@@ -708,6 +727,7 @@ impl EditorBackend {
                 request_id,
                 project_id.to_string(),
                 chapter_id.to_string(),
+                session_id,
                 text_revision,
                 text.to_string(),
                 completion,
@@ -729,6 +749,7 @@ impl EditorBackend {
         request_id: u32,
         project_id: QString,
         chapter_id: QString,
+        session_id: u64,
         text_revision: u64,
         text: QString,
         start_byte: u32,
@@ -759,6 +780,7 @@ impl EditorBackend {
                 request_id,
                 project_id.to_string(),
                 chapter_id.to_string(),
+                session_id,
                 text_revision,
                 text.to_string(),
                 start_byte,
@@ -782,6 +804,7 @@ impl EditorBackend {
         request_id: u32,
         project_id: QString,
         chapter_id: QString,
+        session_id: u64,
         text_revision: u64,
         text: QString,
     ) {
@@ -810,7 +833,63 @@ impl EditorBackend {
                 request_id,
                 project_id.to_string(),
                 chapter_id.to_string(),
+                session_id,
                 text_revision,
+                text.to_string(),
+                completion,
+            )
+        });
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(message)) => {
+                self.correction_check_failed(request_id, text_revision, message.into());
+            }
+            Err(error) => {
+                self.correction_check_failed(request_id, text_revision, error.to_string().into());
+            }
+        }
+    }
+
+    fn request_correction_edits(
+        &mut self,
+        request_id: u32,
+        project_id: QString,
+        chapter_id: QString,
+        session_id: u64,
+        text_revision: u64,
+        base_revision: u64,
+        edits_json: QString,
+        text: QString,
+    ) {
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(request_id, text_revision, result): (u32, u64, Result<String, String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let this = pinned.borrow_mut();
+                    match result {
+                        Ok(json) => {
+                            this.correction_check_ready(request_id, text_revision, json.into())
+                        }
+                        Err(message) => {
+                            this.correction_check_failed(request_id, text_revision, message.into())
+                        }
+                    }
+                }
+            },
+        );
+        let completion: super::correction_operations::CorrectionQueryCallback =
+            Box::new(move |request_id, text_revision, result| {
+                callback((request_id, text_revision, result));
+            });
+        let result = self.with_app(|app| {
+            app.request_correction_edits(
+                request_id,
+                project_id.to_string(),
+                chapter_id.to_string(),
+                session_id,
+                text_revision,
+                base_revision,
+                edits_json.to_string(),
                 text.to_string(),
                 completion,
             )
