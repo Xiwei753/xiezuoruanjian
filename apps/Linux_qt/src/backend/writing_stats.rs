@@ -412,4 +412,21 @@ impl AppBackend {
         };
         writer.query_stats_explorer(request_id, preset, start_date, end_date, completion)
     }
+
+    /// Issue #960：异步请求指定公历年的每日码字日历快照。
+    ///
+    /// 与 [`Self::request_writing_stats_explorer`] 同一串行队列；Core 返回
+    /// 该年 365/366 个真实业务日的 `humanTypedChars` / `intensity` / `status`，
+    /// Qt 只用 Canvas 绘制，不在端侧重算每日字数。
+    pub(crate) fn request_writing_stats_calendar(
+        &self,
+        request_id: u32,
+        year: i32,
+        completion: crate::backend::stats_writer::StatsQueryCallback,
+    ) -> Result<(), String> {
+        let Some(writer) = self.stats_writer.as_ref() else {
+            return Err("stats writer is not available".to_string());
+        };
+        writer.query_stats_calendar(request_id, year, completion)
+    }
 }
