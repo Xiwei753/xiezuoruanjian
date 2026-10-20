@@ -31,11 +31,11 @@ pub const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
 /// 回退到 `updated_at_ms`（删除操作记录的更新时间）。
 /// 对于 upsert 操作，直接使用 `updated_at_ms`。
 pub(super) fn lww_record_time(record: &ManifestFileRecord) -> i64 {
-    if record.op == "delete" {
-        record.deleted_at_ms.unwrap_or(record.updated_at_ms)
-    } else {
-        record.updated_at_ms
-    }
+    crate::sync::content_class::lww_effective_time(
+        &record.op,
+        record.updated_at_ms,
+        record.deleted_at_ms,
+    )
 }
 
 /// 本地文件快照：正常可判定的记录 + 缺失且无删除证据的文件。

@@ -173,6 +173,7 @@ ColumnLayout {
                     anchors.verticalCenter: parent.verticalCenter
                     dt: root.dt
                     appState: root.appState
+                    syncSource: "writing"
                     onRequestSync: root.requestSync()
                     onRequestSearch: root.requestSearch()
                     onOpenSettings: root.openSettings()

@@ -195,6 +195,44 @@ pub fn run_transfer(
     }
 }
 
+/// Read the starmap IDs referenced by this round's staged `starmaps/index.json`.
+///
+/// - `Some(empty)` when there is no index file (nothing to publish/block).
+/// - `Some(ids)` when the staged index parsed successfully.
+/// - `None` when the file exists but cannot be read/parsed; callers fall back
+///   to the conservative "all planned graph groups" check.
+fn starmap_index_referenced_ids(
+    planned: &crate::sync::full_sync::PlannedTarget,
+) -> Option<std::collections::HashSet<String>> {
+    let staging_root = planned.staging_root.as_deref()?;
+    let index_path = staging_root.join("starmaps/index.json");
+    let bytes = match std::fs::read(&index_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Some(std::collections::HashSet::new());
+        }
+        Err(error) => {
+            log::warn!(
+                "[sync] starmap index dependency check: failed to read {}: {}",
+                index_path.display(),
+                error
+            );
+            return None;
+        }
+    };
+    match serde_json::from_slice::<crate::starmap::StarMapIndexRecord>(&bytes) {
+        Ok(index) => Some(index.starmap_ids.into_iter().collect()),
+        Err(error) => {
+            log::warn!(
+                "[sync] starmap index dependency check: failed to parse {}: {}",
+                index_path.display(),
+                error
+            );
+            None
+        }
+    }
+}
+
 /// 执行单个 target 的 Transfer — 新编排入口。
 ///
 /// 与 `run_transfer` 的区别：
@@ -250,18 +288,26 @@ pub fn run_single_target_transfer(
 
     let planned = &plan.targets[target_index];
 
-    // The existing on-disk StarMap index is one aggregate record. Do not publish
-    // its generation while any graph group it may reference failed or is absent.
+    // The existing on-disk StarMap index is one aggregate record. Only block
+    // its publication for graph groups that this index actually references;
+    // unrelated starmap groups must not turn a completed index into a failure.
     if matches!(
         planned.target.app_group.as_ref(),
         Some(crate::sync::types::AppDataGroup::StarmapIndex)
     ) {
+        let referenced_ids = starmap_index_referenced_ids(planned);
         let blocked_groups: Vec<String> = plan
             .targets
             .iter()
             .filter_map(|candidate| match &candidate.target.app_group {
                 Some(group @ crate::sync::types::AppDataGroup::Starmap(_)) => {
                     let group_id = group.id();
+                    if referenced_ids
+                        .as_ref()
+                        .is_some_and(|ids| !ids.contains(&group_id))
+                    {
+                        return None;
+                    }
                     let successful = completed_targets
                         .iter()
                         .find(|result| result.group_id.as_deref() == Some(group_id.as_str()))

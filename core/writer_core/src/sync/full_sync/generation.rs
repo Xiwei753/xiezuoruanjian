@@ -138,14 +138,13 @@ pub(super) fn publish_generation(
 
     // 2. 上传 staging 内容到 generation prefix。
     let content_result = if let Some(outcome) = merge_outcome {
-        // 已 merge → 上传完整快照到新
-        // generation prefix，不再做第二次 LWW 同步。
-        // 关键：必须上传 merged_manifest 里所有 upsert 文件，不能只上传
-        // outcome.remote_upload_paths（delta 动作）。NoOp/DownloadRemote/
-        // LwwRemoteWinsDownload/pending_take_remote 成功下载的文件都不在
-        // remote_upload_paths 里，但它们在 merged_manifest 中，新 generation
-        // 必须包含这些文件对象，否则 catalog 指向一个 manifest 声称文件存在
-        // 但实际对象不存在的 generation。
+        // 已 merge → 上传完整快照到新 generation prefix，不做第二次 LWW 同步。
+        // 新 generation 必须包含 manifest 声称存在的所有 upsert 对象，否则 catalog
+        // 会指向一个 manifest 与 blob 不一致的 generation。batch provider 走
+        // `publish_generation_batch`，用 `ReuseVersion` 复用未变化对象在远端已有
+        // generation 中的 blob；这里是非 batch 兜底路径，provider 没有跨 generation
+        // 引用旧 blob 的能力，因此只能重传快照中的文件。当前所有内置 provider 都
+        // 声明 batch=true，生产发布不会落到该分支。
         match upload_complete_generation_snapshot(
             provider,
             sync_root,

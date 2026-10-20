@@ -104,6 +104,7 @@ Item {
                     GlobalTopActions {
                         dt: root.dt
                         appState: root.appState
+                        syncSource: "starmap"
                         onRequestSync: root.requestSync()
                         onRequestSearch: root.requestSearch()
                         onOpenSettings: root.openSettings()

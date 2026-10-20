@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use super::event::{DiagnosticEvent, DiagnosticOrigin};
+use super::event::{DiagnosticEvent, DiagnosticLevel, DiagnosticOrigin};
 use super::writer;
 
 /// 全局 session_id，由 init 设置。
@@ -19,6 +19,10 @@ static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// logger 是否已安装。
 static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// 是否允许 Debug/Trace 结构化事件。`log::set_max_level` 只约束 `log::*`，
+/// 直接调用 [`record_event`] 的 Debug/Trace 事件必须在这里统一过滤。
+static VERBOSE: AtomicBool = AtomicBool::new(false);
 
 /// `log::Log` 实现 — 把 `log::Record` 转成 `DiagnosticEvent` 并入队。
 struct SharedLogger;
@@ -67,6 +71,12 @@ static SHARED_LOGGER: SharedLogger = SharedLogger;
 /// 全链路（log::*、record_event、平台 record_diagnostic_event）走同一份计数器
 /// 和 session_id，不会出现 sequence=0 / session_id="" 的事件。
 pub fn record_event(mut event: DiagnosticEvent) {
+    if !writer::is_enabled() {
+        return;
+    }
+    if event.level > DiagnosticLevel::Info && !VERBOSE.load(Ordering::SeqCst) {
+        return;
+    }
     // 统一补全 sequence / session_id — Issue #670 评论 5651816143 修改 2。
     // 此处是唯一补全点：SharedLogger::log、lib::init、diagnostics_api、Linux_qt
     // 都把 sequence=0 / session_id="" 的事件交进来，由本函数统一填充。
@@ -109,9 +119,10 @@ pub(crate) fn install(
     verbose: bool,
 ) {
     let _ = SESSION_ID.set(session_id);
+    VERBOSE.store(verbose, Ordering::SeqCst);
     writer::init(log_dir, build_key, enabled);
     if LOGGER_INSTALLED.swap(true, Ordering::SeqCst) {
-        // 已安装：只更新 enabled。
+        // 已安装：更新 enabled。
         writer::set_enabled(enabled);
         return;
     }
@@ -129,6 +140,7 @@ pub(crate) fn install(
 
 /// 更新 enabled / verbose 配置（运行时切换）。
 pub(crate) fn set_config(enabled: bool, verbose: bool) {
+    VERBOSE.store(verbose, Ordering::SeqCst);
     writer::set_enabled(enabled);
     let max_level = if verbose {
         log::LevelFilter::Trace

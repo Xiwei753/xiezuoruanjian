@@ -308,6 +308,9 @@ Kirigami.ApplicationWindow {
         if (!syncBackend)
             return showManualSyncNotStarted(qsTr("同步服务当前不可用"), "manual_sync_backend_unavailable")
 
+        logManualSyncEvent("manual_sync_requested",
+            "source=" + manualSyncSource + " phase=entry")
+
         try {
             manualSyncRequestId = String(syncBackend.record_manual_sync_request(manualSyncSource) || "").trim()
         } catch (e) {
@@ -316,6 +319,11 @@ Kirigami.ApplicationWindow {
         }
         if (!isManualSyncOperationId(manualSyncRequestId))
             return showManualSyncNotStarted(qsTr("未能取得有效的同步请求编号"), "manual_sync_request_record_failed")
+
+        logManualSyncEvent("manual_sync_request_recorded",
+            "source=" + manualSyncSource
+                + " request_id=" + manualSyncRequestId
+                + " phase=request_recorded")
 
         var barrierPassed = false
         try {

@@ -39,8 +39,21 @@ struct DiagnosticsManifest {
 
 #[derive(Serialize)]
 struct CollectionStatus {
-    logs: String,
+    logs: LogCollectionStatus,
     attachments: Vec<String>,
+}
+
+/// 日志收集结果。除总状态外，明确记录本次包内实际包含哪些 build、
+/// 覆盖的历史时间范围，以及读取/复制失败的文件名，避免只写一个 `logs=ok`
+/// 却无法判断旧版本事故现场是否真的进包。
+#[derive(Serialize)]
+struct LogCollectionStatus {
+    status: String,
+    file_count: usize,
+    builds: Vec<String>,
+    first_log_time: Option<String>,
+    last_log_time: Option<String>,
+    missing_files: Vec<String>,
 }
 
 /// 导出诊断包到 `output_dir`，返回生成的 zip 文件路径。
@@ -112,39 +125,86 @@ pub fn export_diagnostics(
 }
 
 /// 复制 writer 已落盘的日志文件到 `dest_dir/logs/`，对内容做脱敏。
-/// 返回 `"ok"` / `"missing"` / `"error"`。
-fn write_logs(dest_dir: &Path) -> String {
+///
+/// 收集本机仍保留的所有 build 日志（不只是当前 build），按时间排序复制；
+/// 读取或写入失败的文件逐个记入 `missing_files`，不静默变成 `logs=ok`。
+fn write_logs(dest_dir: &Path) -> LogCollectionStatus {
     let logs_dir = dest_dir.join("logs");
     if fs::create_dir_all(&logs_dir).is_err() {
-        return "error".to_string();
+        return LogCollectionStatus {
+            status: "error".to_string(),
+            file_count: 0,
+            builds: Vec::new(),
+            first_log_time: None,
+            last_log_time: None,
+            missing_files: vec!["<logs directory>".to_string()],
+        };
     }
     let log_files = writer::log_files();
     if log_files.is_empty() {
-        return "missing".to_string();
+        return LogCollectionStatus {
+            status: "missing".to_string(),
+            file_count: 0,
+            builds: Vec::new(),
+            first_log_time: None,
+            last_log_time: None,
+            missing_files: Vec::new(),
+        };
     }
-    let mut all_ok = true;
+
+    let mut copied = 0usize;
+    let mut missing_files = Vec::new();
+    let mut builds = Vec::new();
+    let mut first_time = None;
+    let mut last_time = None;
     for log_file in &log_files {
+        let file_name = log_file
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("unknown"))
+            .to_string_lossy()
+            .to_string();
         let content = match fs::read_to_string(log_file) {
             Ok(c) => c,
             Err(_) => {
-                all_ok = false;
+                missing_files.push(file_name);
                 continue;
             }
         };
-        let redacted = super::redact::redact(&content);
-        let dest = logs_dir.join(
-            log_file
-                .file_name()
-                .unwrap_or_else(|| std::ffi::OsStr::new("unknown")),
-        );
-        if fs::write(&dest, redacted).is_err() {
-            all_ok = false;
+        if let Some(build) = writer::log_file_build_key(log_file) {
+            if !builds.iter().any(|existing| existing == &build) {
+                builds.push(build);
+            }
         }
+        if let Ok(modified) = fs::metadata(log_file).and_then(|m| m.modified()) {
+            let time = chrono::DateTime::<chrono::Local>::from(modified).to_rfc3339();
+            if first_time.is_none() {
+                first_time = Some(time.clone());
+            }
+            last_time = Some(time);
+        }
+        let redacted = super::redact::redact(&content);
+        let dest = logs_dir.join(&file_name);
+        if fs::write(&dest, redacted).is_err() {
+            missing_files.push(file_name);
+            continue;
+        }
+        copied += 1;
     }
-    if all_ok {
-        "ok".to_string()
+
+    let status = if missing_files.is_empty() {
+        "ok"
+    } else if copied > 0 {
+        "partial"
     } else {
-        "error".to_string()
+        "error"
+    };
+    LogCollectionStatus {
+        status: status.to_string(),
+        file_count: copied,
+        builds,
+        first_log_time: first_time,
+        last_log_time: last_time,
+        missing_files,
     }
 }
 

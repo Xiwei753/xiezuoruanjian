@@ -3,15 +3,17 @@
 //! 从 `lww/compare.rs` 提升为 `sync` 的直接子模块，让 `staging.rs`（不在
 //! `github-api` feature gate 下）也能调用纯分类/比较逻辑。
 //!
-//! 本模块只包含**不依赖** `ManifestFileRecord` / `github_api_client` 的纯路径
-//! 分类和哈希比较：
+//! 本模块包含不依赖 `github_api_client` 的纯路径分类、哈希比较和 LWW 决策：
 //! - [`ContentClass`] / [`classify_content_path`] / [`is_document_content_path`]
 //! - [`three_way_resolve`] / [`ThreeWayResult`]
 //! - [`LwwRecord`] / [`LwwWinner`] / [`resolve_lww`] / [`lww_record_time`]
-//!   （  纯 LWW 决策提升到始终可用的模块）
+//! - [`lww_record_from_manifest`]：把持久 `ManifestFileRecord` 投影为统一 LWW 记录
 //!
-//! 依赖 `ManifestFileRecord` 的 `PathDecision` / `resolve_path_decision` 仍留在
-//! `lww/compare.rs`（在 `github-api` feature gate 下）。
+//! `PathDecision` / `resolve_path_decision` 仍在 `lww/compare.rs`，但其 LWW
+//! 分支只把两侧记录投影为 [`LwwRecord`] 后调用 [`resolve_lww`]，不再保留第二套
+//! 时间戳比较。staging commit 同样复用这套记录与决策。
+
+use crate::sync::types::ManifestFileRecord;
 
 /// 内容分类 — 决定同步策略。
 ///
@@ -194,19 +196,36 @@ pub(crate) enum LwwWinner {
     Tie,
 }
 
-/// 获取 LWW 比较时间戳。
+/// 把持久 `ManifestFileRecord` 投影为统一的 LWW 记录。
+///
+/// 同步的版本事实只来自 manifest（`updated_at_ms` / `deleted_at_ms` /
+/// `device_id`），不能在这一步用当前文件系统 mtime 或扫描时间覆盖。
+pub(crate) fn lww_record_from_manifest(record: &ManifestFileRecord) -> LwwRecord {
+    LwwRecord {
+        content_hash: record.content_hash.clone(),
+        updated_at_ms: record.updated_at_ms,
+        deleted_at_ms: record.deleted_at_ms,
+        device_id: record.device_id.clone(),
+        op: record.op.clone(),
+    }
+}
+
+/// 获取 LWW 比较时间戳（字段级纯函数，供各 record 类型复用）。
 ///
 /// 对于 delete 操作，优先使用 `deleted_at_ms`（精确的删除时间），
 /// 回退到 `updated_at_ms`（删除操作记录的更新时间）。
 /// 对于 upsert 操作，直接使用 `updated_at_ms`。
-///
-/// 与 `lww/manifest.rs::lww_record_time` 语义完全一致，提升为始终可用。
-pub(crate) fn lww_record_time(record: &LwwRecord) -> i64 {
-    if record.op == "delete" {
-        record.deleted_at_ms.unwrap_or(record.updated_at_ms)
+pub(crate) fn lww_effective_time(op: &str, updated_at_ms: i64, deleted_at_ms: Option<i64>) -> i64 {
+    if op == "delete" {
+        deleted_at_ms.unwrap_or(updated_at_ms)
     } else {
-        record.updated_at_ms
+        updated_at_ms
     }
+}
+
+/// 获取 LWW 比较时间戳。
+pub(crate) fn lww_record_time(record: &LwwRecord) -> i64 {
+    lww_effective_time(&record.op, record.updated_at_ms, record.deleted_at_ms)
 }
 
 /// 纯 LWW 决策 — 时间戳较大方获胜；同时间 device_id 字典序决胜。

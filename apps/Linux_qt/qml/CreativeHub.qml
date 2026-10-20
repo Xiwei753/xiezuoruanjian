@@ -208,6 +208,7 @@ Rectangle {
                         GlobalTopActions {
                             dt: root.dt
                             appState: root.appState
+                            syncSource: "hub"
                             onRequestSync: root.requestSync()
                             onRequestSearch: root.requestSearch()
                             onOpenSettings: root.openSettings()

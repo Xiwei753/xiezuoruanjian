@@ -393,8 +393,17 @@ ColumnLayout {
         if (failedTargets.length > 0)
             text += "\n" + qsTr("失败目标：%1").arg(failedTargets.join("、"))
         // 旧格式历史没有分组的 path/phase 明细，明确说明而不是让页面只写「同步失败」。
-        if (failedTargets.length > 0 || root.isFailureStatus(state.overall_status))
-            text += "\n\n" + qsTr("历史记录没有分组详情，无法列出具体文件与阶段")
+        if (failedTargets.length > 0 || root.isFailureStatus(state.overall_status)) {
+            var reportRaw = String(root.lastSyncReport || "").trim()
+            var reportMissing = reportRaw === "" || reportRaw === "null"
+            if (reportMissing) {
+                text += "\n\n" + qsTr("存在旧失败但缺少当时的完整报告（last_report.local.json 缺失或为空），无法列出具体数据组、路径与阶段。")
+            } else if (!root.syncReportBelongsToLatestAttempt()) {
+                text += "\n\n" + qsTr("最近一次失败缺少对应的完整报告；现有报告来自更早的同步，不能作为本轮失败详情。")
+            } else {
+                text += "\n\n" + qsTr("历史记录没有分组详情，无法列出具体文件与阶段")
+            }
+        }
 
         root.resultText = text
         root.rawErrorText = ""
@@ -750,6 +759,11 @@ ColumnLayout {
             text: qsTr("执行同步")
             enabled: root.syncBackendRef && root.syncBackendRef.sync_can_run
             onClicked: {
+                if (typeof appBackend !== "undefined" && appBackend
+                        && typeof appBackend.log_qml === "function") {
+                    appBackend.log_qml("info", "sync", "manual_sync_button_clicked",
+                        "source=settings phase=button_clicked")
+                }
                 if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
                 // 先保存当前 UI 配置
                 if (root.syncBackendRef) {

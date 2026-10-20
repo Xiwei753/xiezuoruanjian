@@ -284,8 +284,8 @@ impl StagingRun {
         };
         use crate::sync::staging::starmap_merge::{
             is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_meta_path,
-            is_starmap_object_file_path, merge_starmap_graph_with_objects, parse_object_path,
-            ObjectMergeDecision, StarmapMergeResult,
+            is_starmap_object_file_path, merge_starmap_graph_with_object_versions,
+            parse_object_path, ObjectMergeDecision, StarmapMergeResult,
         };
 
         let staging_root = self.staging_root();
@@ -312,6 +312,25 @@ impl StagingRun {
             .as_ref()
             .map(|s| s.tombstones.clone())
             .unwrap_or_default();
+
+        // 读取 live 的持久 manifest。它才是本地对象的版本事实；
+        // 不能用当前文件系统 mtime 覆盖已有记录。
+        let live_manifest_result = match &self.app_group {
+            Some(group) => read_live_manifest_for_group(live_root, group),
+            None => read_live_manifest(live_root),
+        };
+        let live_manifest = match live_manifest_result {
+            Ok(Some(map)) => map,
+            Ok(None) => std::collections::HashMap::new(),
+            Err(e) => {
+                log::warn!(
+                    "compute_commit_plan: live manifest parse failed ({}), \
+                     existing version facts are unavailable",
+                    e
+                );
+                std::collections::HashMap::new()
+            }
+        };
 
         // 读取 staging 的 manifest.sync.json，
         // 获取远端文件的真实 LWW 元数据（updated_at_ms、device_id、op）。
@@ -577,12 +596,13 @@ impl StagingRun {
                     //
                     // delete 时从 tombstones 查找 deleted_at。
                     // 若本地 delete 无 tombstone 记录，跳过此路径（不参与 LWW）。
-                    let local_rec = build_local_lww_record(
+                    let local_rec = build_local_lww_record_with_manifest(
                         live_root,
                         &rel,
                         &local,
                         &live_device_id,
                         &live_tombstones,
+                        Some(&live_manifest),
                     );
                     let Some(local_rec) = local_rec else {
                         // 本地 delete 无 tombstone → 无法确定删除时间，
@@ -592,22 +612,27 @@ impl StagingRun {
                     };
                     let rel_str = rel.to_string_lossy().to_string();
                     let remote_rec = if let Some(manifest_rec) = staging_manifest.get(&rel_str) {
-                        build_remote_lww_record_from_manifest(manifest_rec, &incoming)
+                        match build_remote_lww_record_from_manifest(manifest_rec, &incoming) {
+                            Some(record) => record,
+                            None => {
+                                // manifest 声明 upsert 但本轮没有内容，或 op 未知：
+                                // 没有可应用的远端版本，保留本地并等待后续同步。
+                                plan.keep_local.push(rel);
+                                continue;
+                            }
+                        }
                     } else {
-                        // manifest 中无此路径（manifest 缺失），
-                        // 回退到 mtime-based LWW。远端侧不需要 tombstones。
-                        build_local_lww_record(&staging_root, &rel, &incoming, "remote", &[])
-                            .unwrap_or_else(|| {
-                                // 远端 delete 无 tombstone → 用当前时间兜底。
-                                use crate::sync::content_class::LwwRecord;
-                                LwwRecord {
-                                    content_hash: String::new(),
-                                    updated_at_ms: 0,
-                                    deleted_at_ms: Some(0),
-                                    device_id: "remote".to_string(),
-                                    op: "delete".to_string(),
-                                }
-                            })
+                        // manifest 中无此路径（首次导入/旧 manifest），
+                        // 回退到 staging 文件 mtime 建立初始记录；没有真实
+                        // delete 事实时绝不合成远端删除记录。
+                        match build_local_lww_record(&staging_root, &rel, &incoming, "remote", &[])
+                        {
+                            Some(record) => record,
+                            None => {
+                                plan.keep_local.push(rel);
+                                continue;
+                            }
+                        }
                     };
                     match resolve_lww(&local_rec, &remote_rec) {
                         LwwWinner::Remote => {
@@ -683,6 +708,7 @@ impl StagingRun {
                             &staging_root,
                             &live_device_id,
                             &live_tombstones,
+                            &live_manifest,
                             &staging_manifest,
                         )?;
 
@@ -746,7 +772,28 @@ impl StagingRun {
                 ));
             }
 
-            let output = merge_starmap_graph_with_objects(
+            // 对象版本事实：本地来自 live manifest，远端来自 staging manifest。
+            // 只有内容无法判断胜负时才用它们做 LWW。
+            let mut object_versions = std::collections::HashMap::new();
+            for (obj_rel, _, _, _, obj_local, obj_incoming) in &objects {
+                let rel_str = obj_rel.to_string_lossy().to_string();
+                let local_record = build_local_lww_record_with_manifest(
+                    live_root,
+                    obj_rel,
+                    obj_local,
+                    &live_device_id,
+                    &live_tombstones,
+                    Some(&live_manifest),
+                );
+                let incoming_record = staging_manifest
+                    .get(&rel_str)
+                    .and_then(|record| build_remote_lww_record_from_manifest(record, obj_incoming));
+                if local_record.is_some() || incoming_record.is_some() {
+                    object_versions.insert(rel_str, (local_record, incoming_record));
+                }
+            }
+
+            let output = merge_starmap_graph_with_object_versions(
                 &starmap_id,
                 graph_base.as_deref(),
                 graph_local.as_deref(),
@@ -755,6 +802,7 @@ impl StagingRun {
                 meta_local.as_deref(),
                 meta_incoming.as_deref(),
                 &objects,
+                &object_versions,
             )?;
 
             // 收集生命周期决策，供 index.json 合并使用（issue #902 第十二轮复核）。
@@ -871,6 +919,7 @@ impl StagingRun {
                     &staging_root,
                     &live_device_id,
                     &live_tombstones,
+                    &live_manifest,
                     &staging_manifest,
                 )?;
             }
@@ -1047,6 +1096,10 @@ fn apply_meta_lifecycle_decision(
     staging_root: &Path,
     live_device_id: &str,
     live_tombstones: &[crate::sync::types::Tombstone],
+    live_manifest: &std::collections::HashMap<
+        String,
+        crate::sync::staging::resolve::ManifestRecord,
+    >,
     staging_manifest: &std::collections::HashMap<
         String,
         crate::sync::staging::resolve::ManifestRecord,
@@ -1164,14 +1217,15 @@ fn apply_meta_lifecycle_decision(
                 // 双方都改 → 复用现有 LWW resolver
                 // （issue #902 第十九轮复核问题3）。
                 // 不能悄悄将既有同步语义改为 local-wins。
-                use crate::sync::content_class::{resolve_lww, LwwRecord, LwwWinner};
+                use crate::sync::content_class::{resolve_lww, LwwWinner};
 
-                let local_rec = build_local_lww_record(
+                let local_rec = build_local_lww_record_with_manifest(
                     live_root,
                     meta_rel,
                     meta_local,
                     live_device_id,
                     live_tombstones,
+                    Some(live_manifest),
                 );
                 let Some(local_rec) = local_rec else {
                     // 本地 delete 无 tombstone → 保留本地
@@ -1193,16 +1247,51 @@ fn apply_meta_lifecycle_decision(
                 };
                 let meta_rel_str = meta_rel.to_string_lossy().to_string();
                 let remote_rec = if let Some(manifest_rec) = staging_manifest.get(&meta_rel_str) {
-                    build_remote_lww_record_from_manifest(manifest_rec, meta_incoming)
+                    match build_remote_lww_record_from_manifest(manifest_rec, meta_incoming) {
+                        Some(record) => record,
+                        None => {
+                            let early_action = if meta_local.is_some() {
+                                MetaFinalAction::KeepLocal
+                            } else {
+                                MetaFinalAction::NoOp
+                            };
+                            return finalize_meta_action(
+                                plan,
+                                meta_rel,
+                                early_action,
+                                graph_still_exists,
+                                meta_local,
+                                meta_incoming,
+                            );
+                        }
+                    }
                 } else {
-                    build_local_lww_record(staging_root, meta_rel, meta_incoming, "remote", &[])
-                        .unwrap_or_else(|| LwwRecord {
-                            content_hash: String::new(),
-                            updated_at_ms: 0,
-                            deleted_at_ms: Some(0),
-                            device_id: "remote".to_string(),
-                            op: "delete".to_string(),
-                        })
+                    // 首次导入没有版本记录：用 staging 文件 mtime 建立初始记录。
+                    // 没有真实删除事实时保留本地，绝不合成远端 delete。
+                    match build_local_lww_record(
+                        staging_root,
+                        meta_rel,
+                        meta_incoming,
+                        "remote",
+                        &[],
+                    ) {
+                        Some(record) => record,
+                        None => {
+                            let early_action = if meta_local.is_some() {
+                                MetaFinalAction::KeepLocal
+                            } else {
+                                MetaFinalAction::NoOp
+                            };
+                            return finalize_meta_action(
+                                plan,
+                                meta_rel,
+                                early_action,
+                                graph_still_exists,
+                                meta_local,
+                                meta_incoming,
+                            );
+                        }
+                    }
                 };
                 match resolve_lww(&local_rec, &remote_rec) {
                     LwwWinner::Remote => {

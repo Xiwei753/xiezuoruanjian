@@ -10,7 +10,9 @@
 //! `resolve_path_decision` 对单个路径做三方或 LWW 决策，返回 `PathDecision`，
 //! 由调用方（`mod.rs`）执行实际 IO（下载/上传/冲突副本保存）。
 
-use crate::sync::content_class::{three_way_resolve, ThreeWayResult};
+use crate::sync::content_class::{
+    lww_record_from_manifest, resolve_lww, three_way_resolve, LwwWinner, ThreeWayResult,
+};
 use crate::sync::types::ManifestFileRecord;
 
 /// 单个路径的同步决策结果。
@@ -94,42 +96,34 @@ fn resolve_lww_path(
     local_rec: &ManifestFileRecord,
     remote_rec: &ManifestFileRecord,
 ) -> (PathDecision, bool) {
-    use super::manifest::lww_record_time;
+    let local = lww_record_from_manifest(local_rec);
+    let remote = lww_record_from_manifest(remote_rec);
 
-    let local_time = lww_record_time(local_rec);
-    let remote_time = lww_record_time(remote_rec);
-    let mut remote_wins = false;
-
-    if remote_time > local_time {
-        remote_wins = true;
-    } else if remote_time == local_time {
-        if remote_rec.content_hash == local_rec.content_hash && remote_rec.op == local_rec.op {
-            return (PathDecision::NoOp, false);
+    match resolve_lww(&local, &remote) {
+        LwwWinner::Tie => (PathDecision::NoOp, false),
+        LwwWinner::Remote => {
+            let overwritten =
+                local_rec.op == "delete" || local_rec.content_hash != remote_rec.content_hash;
+            if remote_rec.op == "upsert" {
+                (PathDecision::LwwRemoteWinsDownload, overwritten)
+            } else if remote_rec.op == "delete" {
+                let overwritten = local_rec.op == "upsert";
+                (PathDecision::LwwRemoteWinsDelete, overwritten)
+            } else {
+                (PathDecision::NoOp, false)
+            }
         }
-        remote_wins = remote_rec.device_id > local_rec.device_id;
-    }
-
-    if remote_wins {
-        let overwritten =
-            local_rec.op == "delete" || local_rec.content_hash != remote_rec.content_hash;
-        if remote_rec.op == "upsert" {
-            (PathDecision::LwwRemoteWinsDownload, overwritten)
-        } else if remote_rec.op == "delete" {
-            let overwritten = local_rec.op == "upsert";
-            (PathDecision::LwwRemoteWinsDelete, overwritten)
-        } else {
-            (PathDecision::NoOp, false)
-        }
-    } else {
-        let overwritten =
-            remote_rec.op == "delete" || remote_rec.content_hash != local_rec.content_hash;
-        if local_rec.op == "upsert" {
-            (PathDecision::LwwLocalWinsUpload, overwritten)
-        } else if local_rec.op == "delete" {
-            let overwritten = remote_rec.op == "upsert";
-            (PathDecision::LwwLocalWinsDeleteRecord, overwritten)
-        } else {
-            (PathDecision::NoOp, false)
+        LwwWinner::Local => {
+            let overwritten =
+                remote_rec.op == "delete" || remote_rec.content_hash != local_rec.content_hash;
+            if local_rec.op == "upsert" {
+                (PathDecision::LwwLocalWinsUpload, overwritten)
+            } else if local_rec.op == "delete" {
+                let overwritten = remote_rec.op == "upsert";
+                (PathDecision::LwwLocalWinsDeleteRecord, overwritten)
+            } else {
+                (PathDecision::NoOp, false)
+            }
         }
     }
 }

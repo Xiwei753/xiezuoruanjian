@@ -427,11 +427,23 @@ pub(crate) fn record_event(
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
         sequence: 0,
         session_id: String::new(),
-        level: writer_diagnostics::DiagnosticLevel::Info,
+        level: pointer_event_level(event),
         origin: writer_diagnostics::DiagnosticOrigin::App,
         event: event.to_string(),
         target: "editor.pointer".to_string(),
         message: None,
         fields,
     });
+}
+
+/// 连续移动/滚轮轨迹属于高频采样，只在 verbose（Debug）日志中保留。
+/// 单击、双击、按下/释放、帧结束等关键操作仍保持 Info。
+fn pointer_event_level(event: &str) -> writer_diagnostics::DiagnosticLevel {
+    match event {
+        "editor.pointer.move"
+        | "editor.pointer.move_summary"
+        | "editor.pointer.window_move"
+        | "editor.pointer.window_wheel" => writer_diagnostics::DiagnosticLevel::Debug,
+        _ => writer_diagnostics::DiagnosticLevel::Info,
+    }
 }

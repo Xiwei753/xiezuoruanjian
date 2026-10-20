@@ -22,6 +22,8 @@ RowLayout {
     id: root
     required property var dt
     property var appState: ({})
+    // 当前页面来源，用于把真实按钮点击与后续 request_id/source 关联起来。
+    property string syncSource: "unknown"
 
     signal requestSync()
     signal requestSearch()
@@ -32,7 +34,18 @@ RowLayout {
     // 同步状态入口：Breeze refresh 图标 + 状态圆点 + 状态文案
     MotionToolButton {
         id: syncButton
-        onClicked: root.requestSync()
+        onClicked: {
+            // Issue #970 诊断配套：在真正接收点击的按钮上留下用户发起记录。
+            // 这里还没有 request_id（由 main.qml 的统一入口创建），因此记录
+            // source + phase；main.qml 的 manual_sync_request_received 会带上
+            // 同一 source 和新生成的 request_id，形成完整链路。
+            if (typeof appBackend !== "undefined" && appBackend
+                    && typeof appBackend.log_qml === "function") {
+                appBackend.log_qml("info", "sync", "manual_sync_button_clicked",
+                    "source=" + root.syncSource + " phase=button_clicked")
+            }
+            root.requestSync()
+        }
         ToolTip.visible: hovered
         ToolTip.text: qsTr("立即同步")
 

@@ -28,6 +28,7 @@ use crate::starmap::store::relation_index::{
     EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
 };
 use crate::starmap::StarMapIndexRecord;
+use crate::sync::content_class::{resolve_lww, LwwRecord, LwwWinner};
 
 // ===========================================================================
 // 路径识别
@@ -167,7 +168,53 @@ pub(crate) enum ObjectMergeDecision {
 /// | Some | Some  | Some     | l==b, i!=b | ApplyIncoming |
 /// | Some | Some  | Some     | l!=b, i==b | KeepLocal |
 /// | Some | Some  | Some     | l!=b, i!=b, l!=i | Conflict(BothChanged) |
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn merge_starmap_object(
+    base: Option<&[u8]>,
+    local: Option<&[u8]>,
+    incoming: Option<&[u8]>,
+) -> ObjectMergeDecision {
+    merge_starmap_object_with_versions(base, local, incoming, None, None)
+}
+
+/// 带持久版本记录的对象级三方合并。
+///
+/// 内容三方比较能确定“只有一侧修改”时仍直接采用该侧；只有真正无法由
+/// 内容判断的双侧修改（含删除-修改）才用两侧 manifest 的持久
+/// `updated_at_ms` / `deleted_at_ms` + `device_id` 做统一 LWW 决胜。
+/// 记录缺失时保留原有冲突行为，不凭空制造版本。
+pub(crate) fn merge_starmap_object_with_versions(
+    base: Option<&[u8]>,
+    local: Option<&[u8]>,
+    incoming: Option<&[u8]>,
+    local_record: Option<&LwwRecord>,
+    incoming_record: Option<&LwwRecord>,
+) -> ObjectMergeDecision {
+    let decision = merge_starmap_object_by_content(base, local, incoming);
+    if !matches!(decision, ObjectMergeDecision::Conflict(_)) {
+        return decision;
+    }
+    let (Some(local_record), Some(incoming_record)) = (local_record, incoming_record) else {
+        return decision;
+    };
+    match resolve_lww(local_record, incoming_record) {
+        LwwWinner::Remote => match incoming {
+            Some(content) => ObjectMergeDecision::ApplyIncoming(content.to_vec()),
+            None => ObjectMergeDecision::Delete,
+        },
+        LwwWinner::Local => {
+            if local.is_some() {
+                ObjectMergeDecision::KeepLocal
+            } else {
+                ObjectMergeDecision::Delete
+            }
+        }
+        LwwWinner::Tie => ObjectMergeDecision::NoOp,
+    }
+}
+
+/// 纯内容三方比较（不读取版本记录）。
+fn merge_starmap_object_by_content(
     base: Option<&[u8]>,
     local: Option<&[u8]>,
     incoming: Option<&[u8]>,
@@ -1381,6 +1428,7 @@ pub(crate) fn resolve_graph_lifecycle(
     clippy::too_many_lines,
     clippy::too_many_arguments
 )]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn merge_starmap_graph_with_objects(
     starmap_id: &str,
     graph_base: Option<&[u8]>,
@@ -1398,6 +1446,41 @@ pub(crate) fn merge_starmap_graph_with_objects(
         Option<Vec<u8>>,
     )],
 ) -> Result<StarmapGraphMergeOutput> {
+    merge_starmap_graph_with_object_versions(
+        starmap_id,
+        graph_base,
+        graph_local,
+        graph_incoming,
+        meta_base,
+        meta_local,
+        meta_incoming,
+        objects,
+        &HashMap::new(),
+    )
+}
+
+/// 带对象版本记录的星图 graph 合并。
+///
+/// `object_versions` 以对象文件相对路径为键，值为 `(local 记录, incoming 记录)`。
+/// 对象内容无法判断胜负时使用记录做 LWW；记录缺失时仍按内容冲突处理。
+pub(crate) fn merge_starmap_graph_with_object_versions(
+    starmap_id: &str,
+    graph_base: Option<&[u8]>,
+    graph_local: Option<&[u8]>,
+    graph_incoming: Option<&[u8]>,
+    meta_base: Option<&[u8]>,
+    meta_local: Option<&[u8]>,
+    meta_incoming: Option<&[u8]>,
+    objects: &[(
+        std::path::PathBuf,
+        String,
+        String,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+    )],
+    object_versions: &HashMap<String, (Option<LwwRecord>, Option<LwwRecord>)>,
+) -> Result<StarmapGraphMergeOutput> {
     // --- 1. 对每个对象做三方决策，收集最终胜出 bytes ---
     let mut object_decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)> = Vec::new();
     let mut final_objects: HashMap<(String, String), Vec<u8>> = HashMap::new();
@@ -1408,7 +1491,20 @@ pub(crate) fn merge_starmap_graph_with_objects(
     let mut hyperlink_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
 
     for (rel_path, object_type, object_id, base, local, incoming) in objects {
-        let decision = merge_starmap_object(base.as_deref(), local.as_deref(), incoming.as_deref());
+        let version_key = rel_path.to_string_lossy().to_string();
+        let (local_record, incoming_record) = object_versions
+            .get(&version_key)
+            .map(|(local_record, incoming_record)| {
+                (local_record.as_ref(), incoming_record.as_ref())
+            })
+            .unwrap_or((None, None));
+        let decision = merge_starmap_object_with_versions(
+            base.as_deref(),
+            local.as_deref(),
+            incoming.as_deref(),
+            local_record,
+            incoming_record,
+        );
 
         // 收集胜出 bytes：ApplyIncoming/ApplyMerged 用新内容，KeepLocal/Conflict 用 local，
         // NoOp 用 local（== incoming），Delete 无 bytes。

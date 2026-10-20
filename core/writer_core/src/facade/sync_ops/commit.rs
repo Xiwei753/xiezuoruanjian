@@ -63,7 +63,12 @@ impl crate::facade::WriterCore {
             log::warn!("Failed to persist full sync state: {e}");
         }
         if let Err(e) = self.record_latest_full_sync_report(&result, report_time) {
-            log::warn!("Failed to persist latest full sync report: {e}");
+            log::warn!(
+                "Failed to persist latest full sync report to {}: {e}",
+                self.app_data_root
+                    .join("app-meta/sync/last_report.local.json")
+                    .display()
+            );
         }
 
         if matches!(
@@ -217,7 +222,12 @@ impl crate::facade::WriterCore {
             log::warn!("Failed to persist full sync state: {e}");
         }
         if let Err(e) = self.record_latest_full_sync_report(&result, report_time) {
-            log::warn!("Failed to persist latest full sync report: {e}");
+            log::warn!(
+                "Failed to persist latest full sync report to {}: {e}",
+                self.app_data_root
+                    .join("app-meta/sync/last_report.local.json")
+                    .display()
+            );
         }
 
         if matches!(

@@ -119,6 +119,11 @@ pub(crate) fn set_enabled(enabled: bool) {
     state().enabled.store(enabled, Ordering::SeqCst);
 }
 
+/// 当前是否启用诊断写入。
+pub(crate) fn is_enabled() -> bool {
+    state().enabled.load(Ordering::SeqCst)
+}
+
 /// 把一条 JSONL 事件入队。非阻塞。
 /// 未初始化或被禁用时直接丢弃。
 pub(crate) fn enqueue(event_json: String) {
@@ -389,8 +394,11 @@ fn current_log_path(log_dir: &Path, build_key: &str) -> PathBuf {
     log_dir.join(format!("{LOG_PREFIX}-{build_key}.log"))
 }
 
-/// 返回当前 build_key 对应的 current + rotated 日志文件路径（供 export 复制）。
-/// 旧版本日志留在本机全局保留窗口里还有意义，但新诊断包只应该携带当前 build 的日志。
+/// 返回日志目录中所有 build 的 current + rotated 日志文件路径（供 export 复制）。
+///
+/// 诊断包必须包含仍在本机保留窗口内的旧 build 日志：失败发生后用户可能已经
+/// 升级版本，只导出当前 build 会把真正的事故现场排除在 ZIP 之外。文件按
+/// modified 时间从旧到新排序，导出侧据此记录历史时间范围。
 pub(crate) fn log_files() -> Vec<PathBuf> {
     let s = state();
     let cfg = match s.config.lock() {
@@ -400,21 +408,58 @@ pub(crate) fn log_files() -> Vec<PathBuf> {
     let Some(cfg) = cfg else {
         return Vec::new();
     };
-    let prefix = format!("{LOG_PREFIX}-{}", cfg.build_key);
     let entries = match fs::read_dir(&cfg.log_dir) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
     };
-    let mut files = Vec::new();
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with(&prefix) && name_str.ends_with(".log") {
-            files.push(entry.path());
+        if name_str.starts_with(LOG_PREFIX) && name_str.ends_with(".log") {
+            let modified = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            files.push((modified, entry.path()));
         }
     }
-    files.sort();
-    files
+    files.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    files.into_iter().map(|(_, path)| path).collect()
+}
+
+/// 从 `sujian-current-{build_key}[-YYYYMMDD-HHMMSS.mmm].log` 提取 build_key。
+pub(crate) fn log_file_build_key(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name.strip_prefix(LOG_PREFIX)?.strip_prefix('-')?;
+    let stem = stem.strip_suffix(".log")?;
+    Some(strip_rotation_timestamp(stem).to_string())
+}
+
+/// 去掉轮转文件名末尾的 `-YYYYMMDD-HHMMSS.mmm`。
+fn strip_rotation_timestamp(stem: &str) -> &str {
+    const SUFFIX_LEN: usize = 19;
+    if stem.len() <= SUFFIX_LEN + 1 {
+        return stem;
+    }
+    let suffix = &stem[stem.len() - SUFFIX_LEN..];
+    let bytes = suffix.as_bytes();
+    let digits = |range: std::ops::Range<usize>| {
+        bytes
+            .get(range)
+            .is_some_and(|part| part.iter().all(u8::is_ascii_digit))
+    };
+    if bytes.get(8) == Some(&b'-')
+        && bytes.get(15) == Some(&b'.')
+        && digits(0..8)
+        && digits(9..15)
+        && digits(16..19)
+        && stem.as_bytes().get(stem.len() - SUFFIX_LEN - 1) == Some(&b'-')
+    {
+        &stem[..stem.len() - SUFFIX_LEN - 1]
+    } else {
+        stem
+    }
 }
 
 /// 仅用于测试：把单例恢复到干净状态（清空队列、删除日志文件）。

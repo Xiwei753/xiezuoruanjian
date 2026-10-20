@@ -16,6 +16,23 @@ pub(crate) fn build_local_lww_record(
     device_id: &str,
     tombstones: &[crate::sync::types::Tombstone],
 ) -> Option<crate::sync::content_class::LwwRecord> {
+    build_local_lww_record_with_manifest(root, rel, content, device_id, tombstones, None)
+}
+
+/// 基于持久 manifest 事实构造本地 LWW 记录。
+///
+/// 已存在 manifest 记录且当前内容哈希未变时，直接复用 manifest 的
+/// `updated_at_ms` / `deleted_at_ms` / `device_id`；只有真正发生本地变化
+/// （新文件或内容变化）才用文件 mtime 建立新记录。文件缺失只有在存在真实
+/// tombstone 时才产生 delete 记录；否则返回 `None`，调用方不得伪造删除。
+pub(crate) fn build_local_lww_record_with_manifest(
+    root: &Path,
+    rel: &Path,
+    content: &Option<Vec<u8>>,
+    device_id: &str,
+    tombstones: &[crate::sync::types::Tombstone],
+    manifest: Option<&std::collections::HashMap<String, ManifestRecord>>,
+) -> Option<crate::sync::content_class::LwwRecord> {
     use crate::sync::content_class::LwwRecord;
 
     let rel_str = rel.to_string_lossy().to_string();
@@ -23,6 +40,11 @@ pub(crate) fn build_local_lww_record(
     let (content_hash, op, updated_at_ms, deleted_at_ms) = match content {
         Some(bytes) => {
             let hash = md5_hex(&Some(bytes.clone()));
+            if let Some(record) = manifest.and_then(|records| records.get(&rel_str)) {
+                if record.op == "upsert" && record.content_hash == hash {
+                    return Some(record.to_lww_record());
+                }
+            }
             let mtime = read_mtime_ms(root, rel).unwrap_or(0);
             (hash, "upsert", mtime, None)
         }
@@ -50,14 +72,26 @@ pub(crate) fn build_local_lww_record(
 /// 仅用于从 staging 的 `manifest.sync.json` 读取远端 LWW 元数据。
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct ManifestRecord {
-    path: String,
+    pub(crate) path: String,
     #[serde(rename = "content_hash")]
-    _content_hash: String,
-    updated_at_ms: i64,
+    pub(crate) content_hash: String,
+    pub(crate) updated_at_ms: i64,
     #[serde(default)]
-    deleted_at_ms: Option<i64>,
-    device_id: String,
-    op: String,
+    pub(crate) deleted_at_ms: Option<i64>,
+    pub(crate) device_id: String,
+    pub(crate) op: String,
+}
+
+impl ManifestRecord {
+    fn to_lww_record(&self) -> crate::sync::content_class::LwwRecord {
+        crate::sync::content_class::LwwRecord {
+            content_hash: self.content_hash.clone(),
+            updated_at_ms: self.updated_at_ms,
+            deleted_at_ms: self.deleted_at_ms,
+            device_id: self.device_id.clone(),
+            op: self.op.clone(),
+        }
+    }
 }
 
 /// 从 staging 的 manifest.sync.json 读取远端 LWW 记录。
@@ -72,7 +106,26 @@ pub(crate) struct ManifestRecord {
 pub(crate) fn read_staging_manifest(
     staging_root: &Path,
 ) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
-    read_staging_manifest_at(&staging_root.join("app-meta/sync/manifest.sync.json"))
+    read_manifest_at(&staging_root.join("app-meta/sync/manifest.sync.json"))
+}
+
+/// 读取 live 的持久 manifest，作为本轮比较的本地版本事实。
+///
+/// 与 staging manifest 使用同一套解析规则；不存在返回 `Ok(None)`，
+/// 解析失败返回 `Err`，不能静默退回 mtime。
+pub(crate) fn read_live_manifest(
+    live_root: &Path,
+) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
+    read_manifest_at(&live_root.join("app-meta/sync/manifest.sync.json"))
+}
+
+/// 读取 live 中某个 App group 的持久 manifest，缺少分组 manifest 时
+/// 只读回退到聚合 manifest 并过滤出该组路径。
+pub(crate) fn read_live_manifest_for_group(
+    live_root: &Path,
+    group: &crate::sync::types::AppDataGroup,
+) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
+    read_manifest_for_group(live_root, group)
 }
 
 /// Read this App group's manifest, falling back to the aggregate manifest as a
@@ -81,20 +134,27 @@ pub(crate) fn read_staging_manifest_for_group(
     staging_root: &Path,
     group: &crate::sync::types::AppDataGroup,
 ) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
-    let grouped_path = staging_root.join(group.local_manifest_path());
+    read_manifest_for_group(staging_root, group)
+}
+
+fn read_manifest_for_group(
+    root: &Path,
+    group: &crate::sync::types::AppDataGroup,
+) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
+    let grouped_path = root.join(group.local_manifest_path());
     let manifest_path = if grouped_path.exists() {
         grouped_path
     } else {
-        staging_root.join("app-meta/sync/manifest.sync.json")
+        root.join("app-meta/sync/manifest.sync.json")
     };
-    let Some(mut records) = read_staging_manifest_at(&manifest_path)? else {
+    let Some(mut records) = read_manifest_at(&manifest_path)? else {
         return Ok(None);
     };
     records.retain(|path, _| group.owns_path(path));
     Ok(Some(records))
 }
 
-fn read_staging_manifest_at(
+fn read_manifest_at(
     manifest_path: &Path,
 ) -> Result<Option<std::collections::HashMap<String, ManifestRecord>>> {
     if !manifest_path.exists() {
@@ -127,26 +187,24 @@ fn read_staging_manifest_at(
 
 /// 从 manifest 记录构造远端侧 LWW 记录。
 ///
-/// 使用 manifest 中的真实 `updated_at_ms`、`device_id`、`op`，
-/// 而非文件系统 mtime 和固定 "remote" 字符串。
+/// 只使用持久 manifest 中的 `content_hash`、`updated_at_ms`、`deleted_at_ms`、
+/// `device_id`、`op`，不根据本轮内容重算哈希或扫描时间。
+///
+/// 返回 `None` 表示 manifest 没有可用的远端事实：
+/// - `op == "upsert"` 但本轮没有 incoming 内容（内容缺失，不能当作删除）；
+/// - 未知 op。
+/// 调用方遇到 `None` 时必须保留本地/报告缺失，不能伪造一个远端删除记录。
 pub(crate) fn build_remote_lww_record_from_manifest(
     manifest_record: &ManifestRecord,
     incoming_content: &Option<Vec<u8>>,
-) -> crate::sync::content_class::LwwRecord {
-    use crate::sync::content_class::LwwRecord;
-
-    let content_hash = match incoming_content {
-        Some(bytes) => md5_hex(&Some(bytes.clone())),
-        None => String::new(),
-    };
-
-    LwwRecord {
-        content_hash,
-        updated_at_ms: manifest_record.updated_at_ms,
-        deleted_at_ms: manifest_record.deleted_at_ms,
-        device_id: manifest_record.device_id.clone(),
-        op: manifest_record.op.clone(),
+) -> Option<crate::sync::content_class::LwwRecord> {
+    if manifest_record.op == "upsert" && incoming_content.is_none() {
+        return None;
     }
+    if manifest_record.op != "upsert" && manifest_record.op != "delete" {
+        return None;
+    }
+    Some(manifest_record.to_lww_record())
 }
 
 /// 读取文件 mtime（Unix 毫秒），失败返回 None。
