@@ -85,6 +85,15 @@ enum StatsWriterMessage {
         end: Option<String>,
         completion: StatsQueryCallback,
     },
+    /// Issue #960：统计页每日码字日历（指定公历年的逐日人工输入快照）。
+    ///
+    /// 与 Explorer 同队列：worker 消费到它时此前全部 Record 已落盘，
+    /// 直接复用 Core 的 `get_writing_stats_heatmap_json`，不在 Qt 端重算每日字数。
+    QueryStatsCalendar {
+        request_id: u32,
+        year: i32,
+        completion: StatsQueryCallback,
+    },
 }
 
 /// 把一条编辑事实写进 Core 统计；失败时记录日志并保留原始命令供补写。
@@ -247,6 +256,23 @@ impl StatsWriterHandle {
                                 );
                             }
                         }
+                        StatsWriterMessage::QueryStatsCalendar {
+                            request_id,
+                            year,
+                            completion,
+                        } => {
+                            // Issue #960：与 Explorer 同口径——先补写尚未落盘的编辑
+                            // 事实，再让 Core 生成该年的逐日人工输入快照。
+                            if let Some(err) = pending_records_failure(&api, &mut pending_records) {
+                                completion(request_id, Err(err));
+                            } else {
+                                completion(
+                                    request_id,
+                                    api.get_writing_stats_heatmap_json(year)
+                                        .map_err(|e| e.to_string()),
+                                );
+                            }
+                        }
                     }
                 }
                 // 退出前最后再补写一次，尽量不丢尾部失败事实。
@@ -333,6 +359,28 @@ impl StatsWriterHandle {
                 preset,
                 start,
                 end,
+                completion,
+            })
+            .map_err(|_| "stats writer worker has exited".to_string())
+    }
+
+    /// Issue #960：把「指定公历年的每日码字日历」查询排进同一条串行队列。
+    ///
+    /// 与 [`Self::query_stats_explorer`] 同一队列口径：worker 消费到它时此前全部
+    /// Record 已处理完，在 worker thread 里调用 Core 的每日快照入口。
+    pub(crate) fn query_stats_calendar(
+        &self,
+        request_id: u32,
+        year: i32,
+        completion: StatsQueryCallback,
+    ) -> Result<(), String> {
+        let Some(sender) = self.sender.as_ref() else {
+            return Err("stats writer is shut down".to_string());
+        };
+        sender
+            .send(StatsWriterMessage::QueryStatsCalendar {
+                request_id,
+                year,
                 completion,
             })
             .map_err(|_| "stats writer worker has exited".to_string())
