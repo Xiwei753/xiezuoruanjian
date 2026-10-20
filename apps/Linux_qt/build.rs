@@ -609,6 +609,12 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/DashboardGrid.qml");
     println!("cargo:rerun-if-changed=qml/DashboardSection.qml");
     // Components
+    // Issue #965：稳定界面的轻量交互动效组件。
+    println!("cargo:rerun-if-changed=qml/MotionTokens.qml");
+    println!("cargo:rerun-if-changed=qml/MotionToolButton.qml");
+    println!("cargo:rerun-if-changed=qml/MotionDialog.qml");
+    println!("cargo:rerun-if-changed=qml/MotionMenu.qml");
+    println!("cargo:rerun-if-changed=qml/MotionDisclosure.qml");
     println!("cargo:rerun-if-changed=qml/SectionHeader.qml");
     println!("cargo:rerun-if-changed=qml/DesktopWheelScrollHandler.qml");
     println!("cargo:rerun-if-changed=qml/StatusPill.qml");

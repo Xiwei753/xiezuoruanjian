@@ -30,7 +30,7 @@ RowLayout {
     spacing: Kirigami.Units.smallSpacing
 
     // 同步状态入口：Breeze refresh 图标 + 状态圆点 + 状态文案
-    ToolButton {
+    MotionToolButton {
         id: syncButton
         onClicked: root.requestSync()
         ToolTip.visible: hovered
@@ -78,7 +78,7 @@ RowLayout {
     }
 
     // 搜索按钮（固定显示）
-    ToolButton {
+    MotionToolButton {
         icon.name: "search"
         text: qsTr("搜索")
         display: AbstractButton.TextBesideIcon
@@ -86,7 +86,7 @@ RowLayout {
     }
 
     // 设置按钮
-    ToolButton {
+    MotionToolButton {
         icon.name: "configure"
         text: qsTr("设置")
         display: AbstractButton.TextBesideIcon

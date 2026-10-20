@@ -96,7 +96,7 @@ ColumnLayout {
 
                     // Issue #825 复核5第4点：标题不进 ToolbarLeading。
                     // Leading 只放返回 / 撤销 / 重做，作品名由章节树自己承担。
-                    ToolButton {
+                    MotionToolButton {
                         icon.name: "go-previous"
                         icon.width: Kirigami.Units.iconSizes.smallMedium
                         icon.height: Kirigami.Units.iconSizes.smallMedium
@@ -109,7 +109,7 @@ ColumnLayout {
                     // 撤销 / 重做：走 SujianEditorItem 真实实现的 undo()/redo()，
                     // 没有可撤销的事务时 Rust 侧直接 no-op，所以按钮不必做可用态判断
                     // （端侧不再自己维护一份"能不能撤"的状态）。
-                    ToolButton {
+                    MotionToolButton {
                         icon.name: "edit-undo"
                         icon.width: Kirigami.Units.iconSizes.smallMedium
                         icon.height: Kirigami.Units.iconSizes.smallMedium
@@ -119,7 +119,7 @@ ColumnLayout {
                         onClicked: root.undoRequested()
                     }
 
-                    ToolButton {
+                    MotionToolButton {
                         icon.name: "edit-redo"
                         icon.width: Kirigami.Units.iconSizes.smallMedium
                         icon.height: Kirigami.Units.iconSizes.smallMedium

@@ -29,6 +29,7 @@ import org.kde.kirigamiaddons.formcard as FormCard
 
 ScrollView {
     id: root
+    MotionTokens { id: motion }
 
     clip: true
     // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面，
@@ -261,113 +262,122 @@ ScrollView {
                     }
 
                     ToolButton {
-                        icon.name: root.appearanceExpanded ? "arrow-down" : "arrow-right"
+                        icon.name: "arrow-right"
+                        rotation: root.appearanceExpanded ? 90 : 0
+                        Behavior on rotation {
+                            NumberAnimation { duration: motion.hoverMs; easing.type: Easing.OutCubic }
+                        }
                         onClicked: root.appearanceExpanded = !root.appearanceExpanded
                         Accessible.name: qsTr("展开或收起外观")
                     }
                 }
 
-                FormCard.FormCard {
-                    visible: root.appearanceExpanded
-                    FormCard.FormComboBoxDelegate {
-                        id: themeCombo
-                        text: qsTr("主题模式")
-                        description: qsTr("切换系统、浅色或深色")
-                        model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
-                        onActivated: function(index) {
-                            if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
-                                return
-                            themeControllerRef.set_appearance_mode(["system", "light", "dark"][index])
-                            root.settingsDirty = true
-                            root.saveAndNotify()
-                        }
-                    }
-                    FormCard.FormSpinBoxDelegate {
-                        id: fontSizeSpin
-                        label: qsTr("字体大小")
-                        // range from Core settings_presentation: min=12, max=72, step=1
-                        from: 12
-                        to: 72
-                        stepSize: 1
-                        textFromValue: function(value) { return value + " px" }
-                        onValueModified: {
-                            if (!settingsBackendRef || root.updatingValues)
-                                return
-                            settingsBackendRef.setting_font_size = value
-                            root.debouncedSave()
-                        }
-                    }
-                    FormCard.FormSpinBoxDelegate {
-                        id: lineSpacingSpin
-                        label: qsTr("行距倍数")
-                        // range from Core settings_presentation: min=1.0, max=3.0, step=0.1（以 0.1 为整数刻度）
-                        from: 10
-                        to: 30
-                        stepSize: 1
-                        textFromValue: function(value) { return (value / 10).toFixed(1) + "x" }
-                        valueFromText: function(text) { return Math.round(parseFloat(text) * 10) }
-                        onValueModified: {
-                            if (!settingsBackendRef || root.updatingValues)
-                                return
-                            settingsBackendRef.setting_line_spacing = value / 10
-                            root.debouncedSave()
-                        }
-                    }
-                    FormCard.FormComboBoxDelegate {
-                        id: colorSourceCombo
-                        text: qsTr("颜色来源")
-                        description: qsTr("选择素笺默认主题或已保存的设备配色")
-                        model: [qsTr("素笺默认"), qsTr("已保存的设备配色")]
-                        onActivated: function(index) {
-                            if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
-                                return
-                            themeControllerRef.set_color_source(["built_in", "saved_palette"][index])
-                            root.settingsDirty = true
-                            root.saveAndNotify()
-                        }
-                    }
-                    FormCard.FormComboBoxDelegate {
-                        id: builtinThemeCombo
-                        visible: themeControllerRef ? themeControllerRef.color_source === "built_in" : false
-                        text: qsTr("内置主题")
-                        description: qsTr("选择内置主题配色方案")
-                        property var _themes: {
-                            if (!settingsBackendRef) return []
-                            try { return JSON.parse(settingsBackendRef.list_builtin_themes_json()) } catch (e) { return [] }
-                        }
-                        model: _themes.map(function(t) { return t.name || t.theme_id })
-                        onActivated: function(index) {
-                            if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
-                                return
-                            var themeId = _themes[index] ? _themes[index].theme_id : ""
-                            if (themeId.length > 0) {
-                                themeControllerRef.set_selected_builtin_theme_id(themeId)
+                MotionDisclosure {
+                    Layout.fillWidth: true
+                    expanded: root.appearanceExpanded
+
+                    FormCard.FormCard {
+                        Layout.fillWidth: true
+                        FormCard.FormComboBoxDelegate {
+                            id: themeCombo
+                            text: qsTr("主题模式")
+                            description: qsTr("切换系统、浅色或深色")
+                            model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
+                            onActivated: function(index) {
+                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
+                                    return
+                                themeControllerRef.set_appearance_mode(["system", "light", "dark"][index])
                                 root.settingsDirty = true
                                 root.saveAndNotify()
                             }
                         }
-                    }
-                    FormCard.FormComboBoxDelegate {
-                        id: paletteRecordCombo
-                        visible: themeControllerRef ? themeControllerRef.color_source === "saved_palette" : false
-                        text: qsTr("已保存配色")
-                        description: qsTr("选择已保存的设备调色板")
-                        property var _records: {
-                            if (!settingsBackendRef) return []
-                            try { return JSON.parse(settingsBackendRef.list_palette_records_json()) } catch (e) { return [] }
+                        FormCard.FormSpinBoxDelegate {
+                            id: fontSizeSpin
+                            label: qsTr("字体大小")
+                            // range from Core settings_presentation: min=12, max=72, step=1
+                            from: 12
+                            to: 72
+                            stepSize: 1
+                            textFromValue: function(value) { return value + " px" }
+                            onValueModified: {
+                                if (!settingsBackendRef || root.updatingValues)
+                                    return
+                                settingsBackendRef.setting_font_size = value
+                                root.debouncedSave()
+                            }
                         }
-                        model: _records.map(function(r) {
-                            var d = new Date(r.captured_at_ms)
-                            return (r.source_platform || "") + " · " + (r.source_device_class || "") + " · " + (r.source_device_id || "") + " · " + d.toLocaleDateString()
-                        })
-                        onActivated: function(index) {
-                            if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
-                                return
-                            var paletteId = _records[index] ? _records[index].palette_id : ""
-                            if (paletteId.length > 0) {
-                                themeControllerRef.set_selected_palette_id(paletteId)
+                        FormCard.FormSpinBoxDelegate {
+                            id: lineSpacingSpin
+                            label: qsTr("行距倍数")
+                            // range from Core settings_presentation: min=1.0, max=3.0, step=0.1（以 0.1 为整数刻度）
+                            from: 10
+                            to: 30
+                            stepSize: 1
+                            textFromValue: function(value) { return (value / 10).toFixed(1) + "x" }
+                            valueFromText: function(text) { return Math.round(parseFloat(text) * 10) }
+                            onValueModified: {
+                                if (!settingsBackendRef || root.updatingValues)
+                                    return
+                                settingsBackendRef.setting_line_spacing = value / 10
+                                root.debouncedSave()
+                            }
+                        }
+                        FormCard.FormComboBoxDelegate {
+                            id: colorSourceCombo
+                            text: qsTr("颜色来源")
+                            description: qsTr("选择素笺默认主题或已保存的设备配色")
+                            model: [qsTr("素笺默认"), qsTr("已保存的设备配色")]
+                            onActivated: function(index) {
+                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
+                                    return
+                                themeControllerRef.set_color_source(["built_in", "saved_palette"][index])
                                 root.settingsDirty = true
                                 root.saveAndNotify()
+                            }
+                        }
+                        FormCard.FormComboBoxDelegate {
+                            id: builtinThemeCombo
+                            visible: themeControllerRef ? themeControllerRef.color_source === "built_in" : false
+                            text: qsTr("内置主题")
+                            description: qsTr("选择内置主题配色方案")
+                            property var _themes: {
+                                if (!settingsBackendRef) return []
+                                try { return JSON.parse(settingsBackendRef.list_builtin_themes_json()) } catch (e) { return [] }
+                            }
+                            model: _themes.map(function(t) { return t.name || t.theme_id })
+                            onActivated: function(index) {
+                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
+                                    return
+                                var themeId = _themes[index] ? _themes[index].theme_id : ""
+                                if (themeId.length > 0) {
+                                    themeControllerRef.set_selected_builtin_theme_id(themeId)
+                                    root.settingsDirty = true
+                                    root.saveAndNotify()
+                                }
+                            }
+                        }
+                        FormCard.FormComboBoxDelegate {
+                            id: paletteRecordCombo
+                            visible: themeControllerRef ? themeControllerRef.color_source === "saved_palette" : false
+                            text: qsTr("已保存配色")
+                            description: qsTr("选择已保存的设备调色板")
+                            property var _records: {
+                                if (!settingsBackendRef) return []
+                                try { return JSON.parse(settingsBackendRef.list_palette_records_json()) } catch (e) { return [] }
+                            }
+                            model: _records.map(function(r) {
+                                var d = new Date(r.captured_at_ms)
+                                return (r.source_platform || "") + " · " + (r.source_device_class || "") + " · " + (r.source_device_id || "") + " · " + d.toLocaleDateString()
+                            })
+                            onActivated: function(index) {
+                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
+                                    return
+                                var paletteId = _records[index] ? _records[index].palette_id : ""
+                                if (paletteId.length > 0) {
+                                    themeControllerRef.set_selected_palette_id(paletteId)
+                                    root.settingsDirty = true
+                                    root.saveAndNotify()
+                                }
                             }
                         }
                     }
@@ -392,98 +402,107 @@ ScrollView {
                     }
 
                     ToolButton {
-                        icon.name: root.editorAnimationExpanded ? "arrow-down" : "arrow-right"
+                        icon.name: "arrow-right"
+                        rotation: root.editorAnimationExpanded ? 90 : 0
+                        Behavior on rotation {
+                            NumberAnimation { duration: motion.hoverMs; easing.type: Easing.OutCubic }
+                        }
                         onClicked: root.editorAnimationExpanded = !root.editorAnimationExpanded
                         Accessible.name: qsTr("展开或收起编辑器和动画")
                     }
                 }
 
-                FormCard.FormCard {
-                    visible: root.editorAnimationExpanded
-                    FormCard.FormSwitchDelegate {
-                        id: autoIndent
-                        text: qsTr("自动首行缩进")
-                        description: qsTr("回车时自动添加缩进")
-                        onToggled: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", autoIndent.checked)
-                    }
-                    FormCard.FormSpinBoxDelegate {
-                        id: autoIndentWidthSpin
-                        label: qsTr("首行缩进宽度")
-                        // range from Core settings_presentation: min=0.0, max=8.0, step=0.5（以 0.5 为整数刻度）
-                        from: 0
-                        to: 16
-                        stepSize: 1
-                        textFromValue: function(value) { return (value / 2).toFixed(1) + qsTr(" 字符") }
-                        valueFromText: function(text) { return Math.round(parseFloat(text) * 2) }
-                        onValueModified: {
-                            if (!settingsBackendRef || root.updatingValues)
-                                return
-                            settingsBackendRef.setting_auto_indent_width = value / 2
-                            root.debouncedSave()
+                MotionDisclosure {
+                    Layout.fillWidth: true
+                    expanded: root.editorAnimationExpanded
+
+                    FormCard.FormCard {
+                        Layout.fillWidth: true
+                        FormCard.FormSwitchDelegate {
+                            id: autoIndent
+                            text: qsTr("自动首行缩进")
+                            description: qsTr("回车时自动添加缩进")
+                            onToggled: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", autoIndent.checked)
                         }
-                    }
-                    // Issue #756 / #785 / #815: 协同动画（吞字/吐字）显式模式开关。
-                    FormCard.FormSwitchDelegate {
-                        id: coordinatedAnim
-                        text: qsTr("协同动画（吞字/吐字）")
-                        description: qsTr("完整模式：文字吐吞/位移与光标共用同一条时间线；关闭后恢复下方各自开关之前的设置")
-                        onToggled: root.setCoordinatedAnimation(coordinatedAnim.checked)
-                    }
-                    // Issue #815 评论 5955090551: 协同动画时长 = caret track 时长 = 打字动画时长。
-                    FormCard.FormSpinBoxDelegate {
-                        id: coordinatedAnimDuration
-                        visible: coordinatedAnim.checked
-                        label: qsTr("协同动画时长")
-                        // 与打字动画时长同一区间（Core settings_presentation: min=30, max=1000, step=10）
-                        from: 30
-                        to: 1000
-                        stepSize: 10
-                        textFromValue: function(value) { return value + " ms" }
-                        onValueModified: {
-                            root.setTextAnimationDuration(value)
-                            root.debouncedSave()
+                        FormCard.FormSpinBoxDelegate {
+                            id: autoIndentWidthSpin
+                            label: qsTr("首行缩进宽度")
+                            // range from Core settings_presentation: min=0.0, max=8.0, step=0.5（以 0.5 为整数刻度）
+                            from: 0
+                            to: 16
+                            stepSize: 1
+                            textFromValue: function(value) { return (value / 2).toFixed(1) + qsTr(" 字符") }
+                            valueFromText: function(text) { return Math.round(parseFloat(text) * 2) }
+                            onValueModified: {
+                                if (!settingsBackendRef || root.updatingValues)
+                                    return
+                                settingsBackendRef.setting_auto_indent_width = value / 2
+                                root.debouncedSave()
+                            }
                         }
-                    }
-                    FormCard.FormSwitchDelegate {
-                        id: typingAnim
-                        visible: !coordinatedAnim.checked
-                        text: qsTr("打字动画")
-                        description: qsTr("输入时字符从光标处吐出")
-                        onToggled: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", typingAnim.checked)
-                    }
-                    FormCard.FormSpinBoxDelegate {
-                        id: typingAnimDuration
-                        visible: !coordinatedAnim.checked
-                        label: qsTr("打字动画持续时间")
-                        from: 30
-                        to: 1000
-                        stepSize: 10
-                        textFromValue: function(value) { return value + " ms" }
-                        onValueModified: {
-                            root.setTextAnimationDuration(value)
-                            root.debouncedSave()
+                        // Issue #756 / #785 / #815: 协同动画（吞字/吐字）显式模式开关。
+                        FormCard.FormSwitchDelegate {
+                            id: coordinatedAnim
+                            text: qsTr("协同动画（吞字/吐字）")
+                            description: qsTr("完整模式：文字吐吞/位移与光标共用同一条时间线；关闭后恢复下方各自开关之前的设置")
+                            onToggled: root.setCoordinatedAnimation(coordinatedAnim.checked)
                         }
-                    }
-                    FormCard.FormSwitchDelegate {
-                        id: smoothCursor
-                        visible: !coordinatedAnim.checked
-                        text: qsTr("平滑光标")
-                        description: qsTr("光标移动更顺滑")
-                        onToggled: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", smoothCursor.checked)
-                    }
-                    FormCard.FormSpinBoxDelegate {
-                        id: smoothCursorDuration
-                        visible: !coordinatedAnim.checked
-                        label: qsTr("平滑光标持续时间")
-                        from: 30
-                        to: 1000
-                        stepSize: 10
-                        textFromValue: function(value) { return value + " ms" }
-                        onValueModified: {
-                            if (!settingsBackendRef || root.updatingValues)
-                                return
-                            settingsBackendRef.setting_smooth_cursor_duration_ms = value
-                            root.debouncedSave()
+                        // Issue #815 评论 5955090551: 协同动画时长 = caret track 时长 = 打字动画时长。
+                        FormCard.FormSpinBoxDelegate {
+                            id: coordinatedAnimDuration
+                            visible: coordinatedAnim.checked
+                            label: qsTr("协同动画时长")
+                            // 与打字动画时长同一区间（Core settings_presentation: min=30, max=1000, step=10）
+                            from: 30
+                            to: 1000
+                            stepSize: 10
+                            textFromValue: function(value) { return value + " ms" }
+                            onValueModified: {
+                                root.setTextAnimationDuration(value)
+                                root.debouncedSave()
+                            }
+                        }
+                        FormCard.FormSwitchDelegate {
+                            id: typingAnim
+                            visible: !coordinatedAnim.checked
+                            text: qsTr("打字动画")
+                            description: qsTr("输入时字符从光标处吐出")
+                            onToggled: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", typingAnim.checked)
+                        }
+                        FormCard.FormSpinBoxDelegate {
+                            id: typingAnimDuration
+                            visible: !coordinatedAnim.checked
+                            label: qsTr("打字动画持续时间")
+                            from: 30
+                            to: 1000
+                            stepSize: 10
+                            textFromValue: function(value) { return value + " ms" }
+                            onValueModified: {
+                                root.setTextAnimationDuration(value)
+                                root.debouncedSave()
+                            }
+                        }
+                        FormCard.FormSwitchDelegate {
+                            id: smoothCursor
+                            visible: !coordinatedAnim.checked
+                            text: qsTr("平滑光标")
+                            description: qsTr("光标移动更顺滑")
+                            onToggled: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", smoothCursor.checked)
+                        }
+                        FormCard.FormSpinBoxDelegate {
+                            id: smoothCursorDuration
+                            visible: !coordinatedAnim.checked
+                            label: qsTr("平滑光标持续时间")
+                            from: 30
+                            to: 1000
+                            stepSize: 10
+                            textFromValue: function(value) { return value + " ms" }
+                            onValueModified: {
+                                if (!settingsBackendRef || root.updatingValues)
+                                    return
+                                settingsBackendRef.setting_smooth_cursor_duration_ms = value
+                                root.debouncedSave()
+                            }
                         }
                     }
                 }
@@ -508,19 +527,28 @@ ScrollView {
                     }
 
                     ToolButton {
-                        icon.name: root.aiExpanded ? "arrow-down" : "arrow-right"
+                        icon.name: "arrow-right"
+                        rotation: root.aiExpanded ? 90 : 0
+                        Behavior on rotation {
+                            NumberAnimation { duration: motion.hoverMs; easing.type: Easing.OutCubic }
+                        }
                         onClicked: root.aiExpanded = !root.aiExpanded
                         Accessible.name: qsTr("展开或收起AI")
                     }
                 }
 
-                FormCard.FormCard {
-                    visible: root.aiExpanded
-                    FormCard.FormSwitchDelegate {
-                        id: aiSwitch
-                        text: qsTr("启用 AI 功能")
-                        description: qsTr("控制 AI 功能入口显示")
-                        onToggled: root.setSwitchValue(aiSwitch, "ai_enabled", aiSwitch.checked)
+                MotionDisclosure {
+                    Layout.fillWidth: true
+                    expanded: root.aiExpanded
+
+                    FormCard.FormCard {
+                        Layout.fillWidth: true
+                        FormCard.FormSwitchDelegate {
+                            id: aiSwitch
+                            text: qsTr("启用 AI 功能")
+                            description: qsTr("控制 AI 功能入口显示")
+                            onToggled: root.setSwitchValue(aiSwitch, "ai_enabled", aiSwitch.checked)
+                        }
                     }
                 }
             }
@@ -551,57 +579,65 @@ ScrollView {
                     }
 
                     ToolButton {
-                        icon.name: root.saveSyncExpanded ? "arrow-down" : "arrow-right"
+                        icon.name: "arrow-right"
+                        rotation: root.saveSyncExpanded ? 90 : 0
+                        Behavior on rotation {
+                            NumberAnimation { duration: motion.hoverMs; easing.type: Easing.OutCubic }
+                        }
                         onClicked: root.saveSyncExpanded = !root.saveSyncExpanded
                         Accessible.name: qsTr("展开或收起保存和同步")
                     }
                 }
 
-                FormCard.FormCard {
-                    visible: root.saveSyncExpanded
-                    FormCard.FormSwitchDelegate {
-                        id: autoSave
-                        text: qsTr("自动保存")
-                        description: qsTr("编辑时自动保存到本地")
-                        onToggled: root.setSwitchValue(autoSave, "setting_auto_save_enabled", autoSave.checked)
-                    }
-                    // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
-                    FormCard.FormButtonDelegate {
-                        text: qsTr("切换工作区")
-                        description: qsTr("切换到另一个工作区目录")
-                        onClicked: root.switchWorkspaceRequested()
-                    }
-                    FormCard.FormSpinBoxDelegate {
-                        id: autoSaveDelaySpin
-                        label: qsTr("自动保存延迟")
-                        // range from Core settings_presentation: min=1, max=10, step=1
-                        from: 1
-                        to: 10
-                        stepSize: 1
-                        textFromValue: function(value) { return value + qsTr(" 秒") }
-                        onValueModified: {
-                            if (!settingsBackendRef || root.updatingValues)
-                                return
-                            settingsBackendRef.setting_auto_save_delay_ms = value * 1000
-                            root.debouncedSave()
+                MotionDisclosure {
+                    Layout.fillWidth: true
+                    expanded: root.saveSyncExpanded
+
+                    FormCard.FormCard {
+                        Layout.fillWidth: true
+                        FormCard.FormSwitchDelegate {
+                            id: autoSave
+                            text: qsTr("自动保存")
+                            description: qsTr("编辑时自动保存到本地")
+                            onToggled: root.setSwitchValue(autoSave, "setting_auto_save_enabled", autoSave.checked)
+                        }
+                        // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
+                        FormCard.FormButtonDelegate {
+                            text: qsTr("切换工作区")
+                            description: qsTr("切换到另一个工作区目录")
+                            onClicked: root.switchWorkspaceRequested()
+                        }
+                        FormCard.FormSpinBoxDelegate {
+                            id: autoSaveDelaySpin
+                            label: qsTr("自动保存延迟")
+                            // range from Core settings_presentation: min=1, max=10, step=1
+                            from: 1
+                            to: 10
+                            stepSize: 1
+                            textFromValue: function(value) { return value + qsTr(" 秒") }
+                            onValueModified: {
+                                if (!settingsBackendRef || root.updatingValues)
+                                    return
+                                settingsBackendRef.setting_auto_save_delay_ms = value * 1000
+                                root.debouncedSave()
+                            }
                         }
                     }
-                }
 
-                SyncPage {
-                    // Issue #900 复核：与「保存和同步」卡片一起折叠。
-                    visible: root.saveSyncExpanded
-                    Layout.fillWidth: true
-                    syncBackendRef: root.syncBackendRef
-                    workspaceBackendRef: root.workspaceBackendRef
-                    beforeSyncHook: function() {
-                        if (typeof root.beforeSyncHook === "function")
-                            return root.beforeSyncHook()
-                        return true
+                    SyncPage {
+                        // Issue #900 复核：与「保存和同步」卡片一起折叠。
+                        Layout.fillWidth: true
+                        syncBackendRef: root.syncBackendRef
+                        workspaceBackendRef: root.workspaceBackendRef
+                        beforeSyncHook: function() {
+                            if (typeof root.beforeSyncHook === "function")
+                                return root.beforeSyncHook()
+                            return true
+                        }
+                        onSettingsChanged: root.settingsChanged()
+                        // Issue #902：转发 targetKind 给上层，保持信号链一致。
+                        onOpenConflict: function(targetKind, projectId, path) { root.openConflict(targetKind, projectId, path) }
                     }
-                    onSettingsChanged: root.settingsChanged()
-                    // Issue #902：转发 targetKind 给上层，保持信号链一致。
-                    onOpenConflict: function(targetKind, projectId, path) { root.openConflict(targetKind, projectId, path) }
                 }
             }
 
@@ -623,127 +659,136 @@ ScrollView {
                     }
 
                     ToolButton {
-                        icon.name: root.diagnosticsExpanded ? "arrow-down" : "arrow-right"
+                        icon.name: "arrow-right"
+                        rotation: root.diagnosticsExpanded ? 90 : 0
+                        Behavior on rotation {
+                            NumberAnimation { duration: motion.hoverMs; easing.type: Easing.OutCubic }
+                        }
                         onClicked: root.diagnosticsExpanded = !root.diagnosticsExpanded
                         Accessible.name: qsTr("展开或收起诊断与日志")
                     }
                 }
 
-                FormCard.FormCard {
-                    visible: root.diagnosticsExpanded
-                    FormCard.FormSwitchDelegate {
-                        id: diagnosticsEnabled
-                        text: qsTr("启用诊断日志")
-                        description: qsTr("记录应用运行日志，用于问题排查")
-                        onToggled: {
-                            root.setSwitchValue(diagnosticsEnabled, "setting_diagnostics_enabled", diagnosticsEnabled.checked)
-                            diagnosticsVerbose.enabled = diagnosticsEnabled.checked
-                            if (!diagnosticsEnabled.checked) {
-                                diagnosticsVerbose.checked = false
-                                root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", false)
-                            }
-                        }
-                    }
-                    FormCard.FormSwitchDelegate {
-                        id: diagnosticsVerbose
-                        text: qsTr("详细日志")
-                        description: qsTr("记录更详细的调试信息")
-                        onToggled: root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", diagnosticsVerbose.checked)
-                    }
-                    FormCard.FormButtonDelegate {
-                        text: qsTr("清空日志")
-                        description: qsTr("删除所有日志文件")
-                        onClicked: { if (root.settingsBackendRef) root.settingsBackendRef.clear_logs() }
-                    }
-                    FormCard.FormButtonDelegate {
-                        text: qsTr("导出诊断包")
-                        description: qsTr("打包日志与设备信息为 ZIP")
-                        onClicked: {
-                            if (!root.settingsBackendRef) return
-                            var result = root.settingsBackendRef.export_diagnostics_pack()
-                            try {
-                                var obj = JSON.parse(result)
-                                if (obj.success) {
-                                    var zipPath = obj.nativeZipPath || obj.zipPath || obj.nativePath || obj.path || ""
-                                    var exportDir = obj.nativeExportDir || obj.exportDir || ""
-                                    diagnosticsFeedback.message = qsTr("日志 zip: ") + zipPath + "\n" + qsTr("导出目录: ") + exportDir
-                                    if (obj.openedExportDir === false && obj.openExportDirError)
-                                        diagnosticsFeedback.message += "\n" + qsTr("打开目录失败：") + obj.openExportDirError
-                                    diagnosticsFeedback.isError = false
-                                    if (obj.openedExportDir === false && obj.exportDirUrl)
-                                        Qt.openUrlExternally(obj.exportDirUrl)
-                                } else {
-                                    diagnosticsFeedback.message = qsTr("导出失败：") + (obj.error || qsTr("未知错误"))
-                                    diagnosticsFeedback.isError = true
-                                }
-                            } catch (e) {
-                                if (result && result.length > 0 && !result.startsWith("error.")) {
-                                    diagnosticsFeedback.message = qsTr("已导出到: ") + result
-                                    diagnosticsFeedback.isError = false
-                                } else {
-                                    diagnosticsFeedback.message = qsTr("导出失败")
-                                    diagnosticsFeedback.isError = true
-                                }
-                            }
-                        }
-                    }
-                    // 长路径可换行反馈，受卡片宽度约束，不横向撑开设置视图。
-                    Label {
-                        id: diagnosticsFeedback
-                        property string message: ""
-                        property bool isError: false
-                        visible: message.length > 0
-                        text: message
-                        color: isError ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.disabledTextColor
-                        wrapMode: Text.WrapAnywhere
+                MotionDisclosure {
+                    Layout.fillWidth: true
+                    expanded: root.diagnosticsExpanded
+
+                    FormCard.FormCard {
                         Layout.fillWidth: true
-                        Layout.minimumWidth: 0
-                        Layout.leftMargin: Kirigami.Units.largeSpacing
-                        Layout.rightMargin: Kirigami.Units.largeSpacing
-                        Layout.bottomMargin: Kirigami.Units.smallSpacing
-                    }
-                    FormCard.FormButtonDelegate {
-                        text: qsTr("复制设备信息")
-                        description: qsTr("将设备信息复制到剪贴板")
-                        onClicked: {
-                            if (!root.settingsBackendRef) return
-                            var info = root.settingsBackendRef.copy_device_info()
-                            if (info && info.length > 0) {
-                                var result = root.settingsBackendRef.copy_text_to_clipboard(info)
+                        FormCard.FormSwitchDelegate {
+                            id: diagnosticsEnabled
+                            text: qsTr("启用诊断日志")
+                            description: qsTr("记录应用运行日志，用于问题排查")
+                            onToggled: {
+                                root.setSwitchValue(diagnosticsEnabled, "setting_diagnostics_enabled", diagnosticsEnabled.checked)
+                                diagnosticsVerbose.enabled = diagnosticsEnabled.checked
+                                if (!diagnosticsEnabled.checked) {
+                                    diagnosticsVerbose.checked = false
+                                    root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", false)
+                                }
+                            }
+                        }
+                        FormCard.FormSwitchDelegate {
+                            id: diagnosticsVerbose
+                            text: qsTr("详细日志")
+                            description: qsTr("记录更详细的调试信息")
+                            onToggled: root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", diagnosticsVerbose.checked)
+                        }
+                        FormCard.FormButtonDelegate {
+                            text: qsTr("清空日志")
+                            description: qsTr("删除所有日志文件")
+                            onClicked: { if (root.settingsBackendRef) root.settingsBackendRef.clear_logs() }
+                        }
+                        FormCard.FormButtonDelegate {
+                            text: qsTr("导出诊断包")
+                            description: qsTr("打包日志与设备信息为 ZIP")
+                            onClicked: {
+                                if (!root.settingsBackendRef) return
+                                var result = root.settingsBackendRef.export_diagnostics_pack()
                                 try {
                                     var obj = JSON.parse(result)
-                                    if (obj.success)
-                                        deviceInfoFeedback.message = qsTr("已复制")
-                                    else
-                                        deviceInfoFeedback.message = qsTr("复制失败：") + (obj.messageKey || obj.rawError || qsTr("未知错误"))
+                                    if (obj.success) {
+                                        var zipPath = obj.nativeZipPath || obj.zipPath || obj.nativePath || obj.path || ""
+                                        var exportDir = obj.nativeExportDir || obj.exportDir || ""
+                                        diagnosticsFeedback.message = qsTr("日志 zip: ") + zipPath + "\n" + qsTr("导出目录: ") + exportDir
+                                        if (obj.openedExportDir === false && obj.openExportDirError)
+                                            diagnosticsFeedback.message += "\n" + qsTr("打开目录失败：") + obj.openExportDirError
+                                        diagnosticsFeedback.isError = false
+                                        if (obj.openedExportDir === false && obj.exportDirUrl)
+                                            Qt.openUrlExternally(obj.exportDirUrl)
+                                    } else {
+                                        diagnosticsFeedback.message = qsTr("导出失败：") + (obj.error || qsTr("未知错误"))
+                                        diagnosticsFeedback.isError = true
+                                    }
                                 } catch (e) {
-                                    if (result === "ok" || result.length > 0)
-                                        deviceInfoFeedback.message = qsTr("已复制")
-                                    else
-                                        deviceInfoFeedback.message = qsTr("复制失败")
+                                    if (result && result.length > 0 && !result.startsWith("error.")) {
+                                        diagnosticsFeedback.message = qsTr("已导出到: ") + result
+                                        diagnosticsFeedback.isError = false
+                                    } else {
+                                        diagnosticsFeedback.message = qsTr("导出失败")
+                                        diagnosticsFeedback.isError = true
+                                    }
                                 }
-                            } else {
-                                deviceInfoFeedback.message = qsTr("获取设备信息失败")
                             }
                         }
-                    }
-                    Label {
-                        id: deviceInfoFeedback
-                        property string message: ""
-                        visible: message.length > 0
-                        text: message
-                        color: Kirigami.Theme.disabledTextColor
-                        wrapMode: Text.WrapAnywhere
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: 0
-                        Layout.leftMargin: Kirigami.Units.largeSpacing
-                        Layout.rightMargin: Kirigami.Units.largeSpacing
-                        Layout.bottomMargin: Kirigami.Units.smallSpacing
-                    }
-                    FormCard.FormButtonDelegate {
-                        text: qsTr("打开日志目录")
-                        description: qsTr("在文件管理器中打开日志目录")
-                        onClicked: { if (root.settingsBackendRef) root.settingsBackendRef.open_log_directory() }
+                        // 长路径可换行反馈，受卡片宽度约束，不横向撑开设置视图。
+                        Label {
+                            id: diagnosticsFeedback
+                            property string message: ""
+                            property bool isError: false
+                            visible: message.length > 0
+                            text: message
+                            color: isError ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.disabledTextColor
+                            wrapMode: Text.WrapAnywhere
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.leftMargin: Kirigami.Units.largeSpacing
+                            Layout.rightMargin: Kirigami.Units.largeSpacing
+                            Layout.bottomMargin: Kirigami.Units.smallSpacing
+                        }
+                        FormCard.FormButtonDelegate {
+                            text: qsTr("复制设备信息")
+                            description: qsTr("将设备信息复制到剪贴板")
+                            onClicked: {
+                                if (!root.settingsBackendRef) return
+                                var info = root.settingsBackendRef.copy_device_info()
+                                if (info && info.length > 0) {
+                                    var result = root.settingsBackendRef.copy_text_to_clipboard(info)
+                                    try {
+                                        var obj = JSON.parse(result)
+                                        if (obj.success)
+                                            deviceInfoFeedback.message = qsTr("已复制")
+                                        else
+                                            deviceInfoFeedback.message = qsTr("复制失败：") + (obj.messageKey || obj.rawError || qsTr("未知错误"))
+                                    } catch (e) {
+                                        if (result === "ok" || result.length > 0)
+                                            deviceInfoFeedback.message = qsTr("已复制")
+                                        else
+                                            deviceInfoFeedback.message = qsTr("复制失败")
+                                    }
+                                } else {
+                                    deviceInfoFeedback.message = qsTr("获取设备信息失败")
+                                }
+                            }
+                        }
+                        Label {
+                            id: deviceInfoFeedback
+                            property string message: ""
+                            visible: message.length > 0
+                            text: message
+                            color: Kirigami.Theme.disabledTextColor
+                            wrapMode: Text.WrapAnywhere
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.leftMargin: Kirigami.Units.largeSpacing
+                            Layout.rightMargin: Kirigami.Units.largeSpacing
+                            Layout.bottomMargin: Kirigami.Units.smallSpacing
+                        }
+                        FormCard.FormButtonDelegate {
+                            text: qsTr("打开日志目录")
+                            description: qsTr("在文件管理器中打开日志目录")
+                            onClicked: { if (root.settingsBackendRef) root.settingsBackendRef.open_log_directory() }
+                        }
                     }
                 }
             }
@@ -766,29 +811,38 @@ ScrollView {
                     }
 
                     ToolButton {
-                        icon.name: root.aboutExpanded ? "arrow-down" : "arrow-right"
+                        icon.name: "arrow-right"
+                        rotation: root.aboutExpanded ? 90 : 0
+                        Behavior on rotation {
+                            NumberAnimation { duration: motion.hoverMs; easing.type: Easing.OutCubic }
+                        }
                         onClicked: root.aboutExpanded = !root.aboutExpanded
                         Accessible.name: qsTr("展开或收起关于")
                     }
                 }
 
-                FormCard.FormCard {
-                    visible: root.aboutExpanded
-                    FormCard.FormTextDelegate { text: qsTr("应用名"); description: qsTr("素笺写作") }
-                    FormCard.FormTextDelegate { text: qsTr("作者"); description: "Xiwei753" }
-                    FormCard.FormTextDelegate { text: qsTr("项目地址"); description: "github.com/Xiwei753/xiezuoruanjian" }
-                    FormCard.FormTextDelegate { text: qsTr("开源协议"); description: "GPLv3" }
-                    FormCard.FormTextDelegate { text: qsTr("版本信息"); description: qsTr("Linux_qt 客户端") }
-                    // 工作区路径可能很长：用只读文本框承载，不横向撑开设置视图。
-                    FormCard.FormTextFieldDelegate {
-                        label: qsTr("工作区路径")
-                        readOnly: true
-                        text: root.workspaceBackendRef ? root.workspaceBackendRef.workspace_path : qsTr("未加载")
-                    }
-                    FormCard.FormButtonDelegate {
-                        text: qsTr("动作注册表")
-                        description: qsTr("查看已注册的动作")
-                        onClicked: { /* Navigate to ActionRegistryPage later */ }
+                MotionDisclosure {
+                    Layout.fillWidth: true
+                    expanded: root.aboutExpanded
+
+                    FormCard.FormCard {
+                        Layout.fillWidth: true
+                        FormCard.FormTextDelegate { text: qsTr("应用名"); description: qsTr("素笺写作") }
+                        FormCard.FormTextDelegate { text: qsTr("作者"); description: "Xiwei753" }
+                        FormCard.FormTextDelegate { text: qsTr("项目地址"); description: "github.com/Xiwei753/xiezuoruanjian" }
+                        FormCard.FormTextDelegate { text: qsTr("开源协议"); description: "GPLv3" }
+                        FormCard.FormTextDelegate { text: qsTr("版本信息"); description: qsTr("Linux_qt 客户端") }
+                        // 工作区路径可能很长：用只读文本框承载，不横向撑开设置视图。
+                        FormCard.FormTextFieldDelegate {
+                            label: qsTr("工作区路径")
+                            readOnly: true
+                            text: root.workspaceBackendRef ? root.workspaceBackendRef.workspace_path : qsTr("未加载")
+                        }
+                        FormCard.FormButtonDelegate {
+                            text: qsTr("动作注册表")
+                            description: qsTr("查看已注册的动作")
+                            onClicked: { /* Navigate to ActionRegistryPage later */ }
+                        }
                     }
                 }
             }

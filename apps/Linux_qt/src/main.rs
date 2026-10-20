@@ -208,6 +208,12 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/SyncMessageKeys.qml" as "SyncMessageKeys.qml",
     "qml/EmptyWorkspace.qml" as "EmptyWorkspace.qml",
     // Components
+    // Issue #965：稳定界面的轻量交互动效组件。
+    "qml/MotionTokens.qml" as "MotionTokens.qml",
+    "qml/MotionToolButton.qml" as "MotionToolButton.qml",
+    "qml/MotionDialog.qml" as "MotionDialog.qml",
+    "qml/MotionMenu.qml" as "MotionMenu.qml",
+    "qml/MotionDisclosure.qml" as "MotionDisclosure.qml",
     "qml/SectionHeader.qml" as "SectionHeader.qml",
     "qml/DesktopWheelScrollHandler.qml" as "DesktopWheelScrollHandler.qml",
     "qml/WorkspaceTree.qml" as "WorkspaceTree.qml",

@@ -68,6 +68,8 @@ Rectangle {
     signal clicked()
     signal rightClicked()
 
+    property bool pressVisual: false
+
     width: cardWidth
     height: cardHeight
     radius: Kirigami.Units.cornerRadius
@@ -77,14 +79,27 @@ Rectangle {
 
     property bool hovered: false
 
-    Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
-    Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+    MotionTokens { id: motion }
+
+    scale: pressVisual ? 0.985 : (hovered ? 1.01 : 1.0)
+
+    Behavior on color { ColorAnimation { duration: motion.hoverMs } }
+    Behavior on border.color { ColorAnimation { duration: motion.hoverMs } }
+    Behavior on scale {
+        NumberAnimation {
+            duration: motion.hoverMs
+            easing.type: Easing.OutCubic
+        }
+    }
 
     MouseArea {
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         onContainsMouseChanged: root.hovered = containsMouse
+        onPressed: root.pressVisual = true
+        onReleased: root.pressVisual = false
+        onCanceled: root.pressVisual = false
         onClicked: function(mouse) {
             if (mouse.button === Qt.LeftButton) root.clicked();
             else if (mouse.button === Qt.RightButton) root.rightClicked();
