@@ -67,8 +67,8 @@ Thumbs.db
 writer_app_workspace/
 /workspace/
 /data/
-backups/
-trash/
+/backups/
+/trash/
 sqlite_cache/
 *.db
 *.sqlite
