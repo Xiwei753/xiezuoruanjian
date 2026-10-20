@@ -8,8 +8,11 @@
 //   - 纯布局组件，内容通过 default property 传入
 //   - 自动适配宽屏/窄屏边距
 // Issue #900：边距/间距改用 Kirigami.Units，不再读 DesignTokens 的 M3 间距。
-// 公共 API（dt / pageMargin / maxContentWidth / contentWidth / sideMargin /
-// contentData / headerData）保持不变，供 StarMapPage / StatsPreviewPage 复用。
+// 公共 API（dt / pageMargin / maxContentWidth / useFullContentWidth /
+// contentWidth / sideMargin / contentData / headerData）保持不变，供
+// StarMapPage / StatsPreviewPage 复用。
+// Issue #960：统计页需要填满导航与顶栏之外的主画布，页面可声明
+// `useFullContentWidth: true` 改用全宽内容；默认仍保留限宽阅读栏。
 // =============================================================================
 
 import QtQuick
@@ -21,7 +24,11 @@ Item {
     required property var dt
     readonly property int pageMargin: width >= 980 ? Kirigami.Units.largeSpacing * 2 : Kirigami.Units.largeSpacing
     property int maxContentWidth: Kirigami.Units.gridUnit * 60
-    readonly property int contentWidth: Math.min(Math.max(1, width - pageMargin * 2), maxContentWidth)
+    // Issue #960：页面声明后不再套 Hub 的限宽阅读栏，只保留常规页边距。
+    property bool useFullContentWidth: false
+    readonly property int contentWidth: useFullContentWidth
+        ? Math.max(1, width - pageMargin * 2)
+        : Math.min(Math.max(1, width - pageMargin * 2), maxContentWidth)
     readonly property int sideMargin: Math.max(pageMargin, Math.floor((width - contentWidth) / 2))
     default property alias contentData: contentColumn.data
     property alias headerData: headerContainer.data
