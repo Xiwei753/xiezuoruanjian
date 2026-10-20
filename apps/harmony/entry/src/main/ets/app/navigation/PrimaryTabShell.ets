@@ -94,7 +94,7 @@ export struct PrimaryTabShell {
   @Link @Watch('onCurrentTabChanged') currentTab: number
 
   // 响应式布局状态（用于判断是否显示底部 Tab Bar）
-  @State adaptiveState: AdaptiveState = getAdaptiveState()
+  @State @Watch('onAdaptiveStateChanged') adaptiveState: AdaptiveState = getAdaptiveState()
   // 主题配置（底部 Tab 配色）
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   // 当前页面对应的 ScreenRole
@@ -132,6 +132,8 @@ export struct PrimaryTabShell {
   private gestureLockObserver: ((locked: boolean) => void) | null = null
   private syncRunUnsubscribe: (() => void) | null = null
   private syncStatusHideTimerId: number = -1
+  // Issue #968：记录最近一次已上报的导航布局判定，避免 build 每帧写诊断。
+  private lastReportedLayoutMode: string = ''
 
   aboutToAppear(): void {
     hilog.info(0x0000, 'PrimaryTabShell', 'aboutToAppear: stacks initialized with root routes')
@@ -180,6 +182,7 @@ export struct PrimaryTabShell {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
+    this.recordLayoutDecision()
 
     // 订阅 NavigationChromeStore，根据 ScreenRole 变化更新底栏显隐
     this.navChromeObserver = (role: ScreenRole) => {
@@ -485,6 +488,28 @@ export struct PrimaryTabShell {
   // 两者不会同时存在，也不存在第三套中屏外壳。
   private get usesWideNavigation(): boolean {
     return this.adaptiveState.prefersWideLayout
+  }
+
+  // Issue #968：把外壳实际收到的窗口 vp 和最终选择的外壳写进现有诊断通道，
+  // 用于区分「vp 本来就在窄屏档」「状态未更新」和「状态宽屏但页面树没切换」。
+  private onAdaptiveStateChanged(): void {
+    this.recordLayoutDecision()
+  }
+
+  private recordLayoutDecision(): void {
+    const signature: string = `${this.adaptiveState.widthVp}x${this.adaptiveState.heightVp}:${this.adaptiveState.prefersWideLayout}`
+    if (signature === this.lastReportedLayoutMode) {
+      return
+    }
+    this.lastReportedLayoutMode = signature
+    const fields: DiagnosticField[] = [
+      { key: 'widthVp', value: String(this.adaptiveState.widthVp) },
+      { key: 'heightVp', value: String(this.adaptiveState.heightVp) },
+      { key: 'prefersWideLayout', value: String(this.adaptiveState.prefersWideLayout) },
+      { key: 'shell', value: this.adaptiveState.prefersWideLayout ? 'WidePrimaryShell' : 'CompactPrimaryShell' },
+      { key: 'currentTab', value: String(this.currentTab) }
+    ]
+    HarmonyDiagnosticEvents.record('Info', 'App', 'layout.primary_shell', 'PrimaryTabShell', fields)
   }
 
   // 宽屏顶部固定动作区（同步 / 搜索 / 设置）的动作来源是平台动作表，

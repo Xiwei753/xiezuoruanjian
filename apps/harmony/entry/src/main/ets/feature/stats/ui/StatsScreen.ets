@@ -32,6 +32,7 @@ import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAp
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../../../platform/diagnostics/HarmonyDiagnosticEvents'
 import { STATS_PANEL_NONE, STATS_PANEL_RANGE, STATS_PANEL_LIFETIME, formatIsoDate, parseIsoDate } from './StatsFormat'
 import { CompactStatsContent } from './CompactStatsContent'
 import { WideStatsContent } from './WideStatsContent'
@@ -54,15 +55,17 @@ export struct StatsScreen {
   @State heatmapYear: number = new Date().getFullYear()
   @State heatmap: WritingStatsHeatmap | null = null
   @State heatmapError: string = ''
-  @State adaptiveState: AdaptiveState = getAdaptiveState()
+  @State @Watch('onAdaptiveStateChanged') adaptiveState: AdaptiveState = getAdaptiveState()
   @State useHdsNav: boolean = false
   @State headerActions: ActionSlot[] = []
 
   private adaptiveObserver: AdaptiveObserver | null = null
+  // Issue #968：最近一次上报的宽窄分流签名，避免重复写诊断。
+  private lastReportedLayoutMode: string = ''
   // 请求序号在 Bridge 内维护：旧范围的晚到结果由 isLatestExplorerRequest 过滤。
   private statsBridge: NativeStatsBridge = new NativeStatsBridge(new NativeCoreModule())
   // #936 SYNC_CONTENT_CHANGED 监听器：保存回调本体，退订时只移除本页（emitter.on 返回 void）。
-  private syncChangedHandler: ((event: emitter.InnerEvent) => void) | null = null
+  private syncChangedHandler: ((data: emitter.EventData) => void) | null = null
 
   async aboutToAppear() {
     hilog.info(0x0000, 'StatsScreen', 'route name=Stats')
@@ -70,7 +73,7 @@ export struct StatsScreen {
     this.loadHeatmap(this.heatmapYear)
 
     // #936：统计页保活期间，同步下载新内容或重新进入本页时，由同一条事件刷新 Explorer 与当前年份的日历快照。
-    this.syncChangedHandler = (_event: emitter.InnerEvent): void => {
+    this.syncChangedHandler = (_data: emitter.EventData): void => {
       this.refreshStatsSnapshots()
     }
     emitter.on({ eventId: SYNC_CONTENT_CHANGED_EVENT_ID }, this.syncChangedHandler)
@@ -87,6 +90,29 @@ export struct StatsScreen {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
+    this.recordLayoutDecision()
+  }
+
+  // Issue #968：把统计页实际收到的窗口 vp 和最终选择的正文写进诊断，
+  // 与 PrimaryTabShell 的 layout.primary_shell 对照即可定位分叉。
+  private onAdaptiveStateChanged(): void {
+    this.recordLayoutDecision()
+  }
+
+  private recordLayoutDecision(): void {
+    const signature: string = `${this.adaptiveState.widthVp}x${this.adaptiveState.heightVp}:${this.adaptiveState.prefersWideLayout}`
+    if (signature === this.lastReportedLayoutMode) {
+      return
+    }
+    this.lastReportedLayoutMode = signature
+    const fields: DiagnosticField[] = [
+      { key: 'widthVp', value: String(this.adaptiveState.widthVp) },
+      { key: 'heightVp', value: String(this.adaptiveState.heightVp) },
+      { key: 'prefersWideLayout', value: String(this.adaptiveState.prefersWideLayout) },
+      { key: 'content', value: this.adaptiveState.prefersWideLayout ? 'WideStatsContent' : 'CompactStatsContent' },
+      { key: 'showTitleBar', value: String(!this.adaptiveState.prefersWideLayout) }
+    ]
+    HarmonyDiagnosticEvents.record('Info', 'App', 'layout.stats_content', 'StatsScreen', fields)
   }
 
   aboutToDisappear() {

@@ -217,6 +217,9 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageDestroy() {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageDestroy')
+    // Issue #968：窗口舞台销毁时解除 AdaptiveContext 在旧 Window / display 上的监听，
+    // 恢复或重建拿到新 WindowStage 时 initialize() 才会重新绑定。
+    getAdaptiveContext().dispose()
     // Issue #927：与 onBackground 可能连续触发，这里仍只派发一次全局事件；
     // 后台保存事务的重复由 AutoSaveLifecycleObserver 的 in-flight 标志在 observer 层去重，
     // 不删除任何生命周期事件。保存由平台短时任务托管，这里不 await 保存 Promise。

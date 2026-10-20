@@ -87,12 +87,13 @@ export class AdaptiveContext {
   private state: AdaptiveState = AdaptiveContext.createDefaultState()
   private observers: Set<AdaptiveObserver> = new Set()
   private mainWindow: window.Window | null = null
-  private mainWindowStage: window.WindowStage | null = null
   private isListening: boolean = false
   private isAvoidAreaListening: boolean = false
-  private isStageEventListening: boolean = false
-  private isDisplayChangeListening: boolean = false
-  private initialSizeProbeTimers: number[] = []
+  private windowSizeChangeCallback: ((data: window.Size) => void) | null = null
+  private avoidAreaChangeCallback: ((data: window.AvoidAreaOptions) => void) | null = null
+  private windowStatusChangeCallback: ((status: window.WindowStatusType) => void) | null = null
+  private foldStatusChangeCallback: ((foldStatus: number) => void) | null = null
+  private displayChangeCallback: ((displayId: number) => void) | null = null
 
   // 缓存平台真实值，avoidAreaChange 时增量更新
   private cachedSafeTopVp: number = 0
@@ -123,8 +124,12 @@ export class AdaptiveContext {
    */
   async initialize(windowStage: window.WindowStage): Promise<void> {
     try {
-      this.mainWindow = await windowStage.getMainWindow()
-      this.mainWindowStage = windowStage
+      const nextWindow: window.Window = await windowStage.getMainWindow()
+      // Issue #968：创建 / 恢复可能给同一个单例换一个 Window/WindowStage。
+      // 先按注册时的回调解除旧窗口上的监听，再绑定新窗口，避免旧 isListening 标志
+      // 让新主窗口拿不到 windowSizeChange。
+      this.releaseWindowBindings()
+      this.mainWindow = nextWindow
       hilog.info(DOMAIN, TAG, 'Got main window')
 
       // 初始化专用横屏平板判定（只算一次设备能力）
@@ -179,11 +184,9 @@ export class AdaptiveContext {
       this.registerAvoidAreaChange()
       // 注册折叠状态变化监听
       this.registerFoldStatusChange()
-      // Issue #968：补上窗口舞台事件和屏幕密度变化两条通知路径，并做短期探测，
-      // 避免“窗口已经是全屏宽屏，AdaptiveContext 却停留在启动时的窄屏尺寸”。
-      this.registerWindowStageEvent()
+      // Issue #968：屏幕缩放 / 分辨率变化会改变 px→vp 结果，需要重新换算；
+      // 不再用窗口舞台事件或定时探测赌窗口稳定时间。
       this.registerDisplayChange()
-      this.scheduleInitialSizeProbes()
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to initialize: ${JSON.stringify(err)}`)
     }
@@ -245,30 +248,32 @@ export class AdaptiveContext {
    * 停止监听并清理资源
    */
   dispose(): void {
-    this.unregisterWindowSizeChange()
-    this.unregisterAvoidAreaChange()
-    this.unregisterFoldStatusChange()
-    this.unregisterWindowStatusChange()
-    this.unregisterWindowStageEvent()
-    this.unregisterDisplayChange()
-    this.clearInitialSizeProbes()
+    this.releaseWindowBindings()
     this.observers.clear()
     this.mainWindow = null
-    this.mainWindowStage = null
     this.cachedSafeTopVp = 0
     this.cachedSafeBottomVp = 0
     this.cachedKeyboardVisible = false
     this.cachedFoldPosture = FoldPosture.Unknown
   }
 
+  /** 解除当前主窗口 / 显示器上的全部监听；重建窗口或销毁时必须先走这里。 */
+  private releaseWindowBindings(): void {
+    this.unregisterWindowSizeChange()
+    this.unregisterAvoidAreaChange()
+    this.unregisterWindowStatusChange()
+    this.unregisterFoldStatusChange()
+    this.unregisterDisplayChange()
+  }
+
   // ========== 私有方法 ==========
 
   private registerWindowSizeChange(): void {
-    if (this.isListening || !this.mainWindow) {
+    if (this.windowSizeChangeCallback !== null || !this.mainWindow) {
       return
     }
     try {
-      this.mainWindow.on('windowSizeChange', (data: window.Size) => {
+      const callback = (data: window.Size): void => {
         if (!this.mainWindow) {
           return
         }
@@ -279,10 +284,18 @@ export class AdaptiveContext {
         }
         const displayInfo = display.getDefaultDisplaySync()
         const density = displayInfo.densityPixels
+        if (density <= 0) {
+          return
+        }
         const widthVp = data.width / density
         const heightVp = data.height / density
+        hilog.info(DOMAIN, TAG,
+          'windowSizeChange: px=%{public}sx%{public}s density=%{public}s vp=%{public}sx%{public}s',
+          `${data.width}`, `${data.height}`, `${density}`, `${widthVp}`, `${heightVp}`)
         this.updateState(widthVp, heightVp)
-      })
+      }
+      this.mainWindow.on('windowSizeChange', callback)
+      this.windowSizeChangeCallback = callback
       this.isListening = true
       hilog.info(DOMAIN, TAG, 'Registered windowSizeChange listener')
     } catch (err) {
@@ -291,12 +304,14 @@ export class AdaptiveContext {
   }
 
   private unregisterWindowSizeChange(): void {
-    if (!this.isListening || !this.mainWindow) {
+    const callback = this.windowSizeChangeCallback
+    this.windowSizeChangeCallback = null
+    this.isListening = false
+    if (callback === null || !this.mainWindow) {
       return
     }
     try {
-      this.mainWindow.off('windowSizeChange')
-      this.isListening = false
+      this.mainWindow.off('windowSizeChange', callback)
       hilog.info(DOMAIN, TAG, 'Unregistered windowSizeChange listener')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to unregister windowSizeChange: ${JSON.stringify(err)}`)
@@ -304,9 +319,8 @@ export class AdaptiveContext {
   }
 
   /**
-   * Issue #968：以当前窗口属性为唯一事实重新计算 vp 尺寸并通知观察者。
-   * 不只看 windowSizeChange：loadContent 前后的启动尺寸切换、窗口恢复、显示缩放
-   * 都可能不产生新的 windowSizeChange，只靠监听会把宽屏窗口锁在窄屏状态。
+   * Issue #968：以当前窗口属性为准读取一次 px / density / vp。
+   * 只负责初始值和屏幕密度变化，之后的尺寸变化由 windowSizeChange 更新。
    */
   private refreshWindowSizeFromProperties(source: string): boolean {
     if (!this.mainWindow) {
@@ -323,7 +337,7 @@ export class AdaptiveContext {
       const heightVp: number = rect.height / density
       const roundedWidth: number = Math.round(widthVp * 100) / 100
       const roundedHeight: number = Math.round(heightVp * 100) / 100
-      // 尺寸没有变化时不重复通知，避免首帧探测引发多余重绘。
+      // 尺寸没有变化时不重复通知，避免屏幕事件引发多余重绘。
       if (Math.abs(this.state.widthVp - roundedWidth) < 0.01 &&
         Math.abs(this.state.heightVp - roundedHeight) < 0.01) {
         return true
@@ -339,49 +353,17 @@ export class AdaptiveContext {
     }
   }
 
-  /** 窗口舞台恢复 / 前台时补一次窗口属性读取。 */
-  private registerWindowStageEvent(): void {
-    if (this.isStageEventListening || this.mainWindowStage === null) {
-      return
-    }
-    try {
-      this.mainWindowStage.on('windowStageEvent', (event: window.WindowStageEventType) => {
-        if (event === window.WindowStageEventType.SHOWN ||
-          event === window.WindowStageEventType.ACTIVE ||
-          event === window.WindowStageEventType.RESUMED) {
-          this.refreshWindowSizeFromProperties(`windowStageEvent:${event}`)
-        }
-      })
-      this.isStageEventListening = true
-      hilog.info(DOMAIN, TAG, 'Registered windowStageEvent listener')
-    } catch (err) {
-      hilog.error(DOMAIN, TAG, `Failed to register windowStageEvent: ${JSON.stringify(err)}`)
-    }
-  }
-
-  private unregisterWindowStageEvent(): void {
-    if (!this.isStageEventListening || this.mainWindowStage === null) {
-      return
-    }
-    try {
-      this.mainWindowStage.off('windowStageEvent')
-      this.isStageEventListening = false
-      hilog.info(DOMAIN, TAG, 'Unregistered windowStageEvent listener')
-    } catch (err) {
-      hilog.error(DOMAIN, TAG, `Failed to unregister windowStageEvent: ${JSON.stringify(err)}`)
-    }
-  }
-
   /** 屏幕缩放 / 分辨率变化时，窗口物理像素不变也要重新换算 vp。 */
   private registerDisplayChange(): void {
-    if (this.isDisplayChangeListening) {
+    if (this.displayChangeCallback !== null) {
       return
     }
     try {
-      display.on('change', () => {
+      const callback = (_displayId: number): void => {
         this.refreshWindowSizeFromProperties('displayChange')
-      })
-      this.isDisplayChangeListening = true
+      }
+      display.on('change', callback)
+      this.displayChangeCallback = callback
       hilog.info(DOMAIN, TAG, 'Registered display change listener')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to register display change: ${JSON.stringify(err)}`)
@@ -389,35 +371,17 @@ export class AdaptiveContext {
   }
 
   private unregisterDisplayChange(): void {
-    if (!this.isDisplayChangeListening) {
+    const callback = this.displayChangeCallback
+    this.displayChangeCallback = null
+    if (callback === null) {
       return
     }
     try {
-      display.off('change')
-      this.isDisplayChangeListening = false
+      display.off('change', callback)
       hilog.info(DOMAIN, TAG, 'Unregistered display change listener')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to unregister display change: ${JSON.stringify(err)}`)
     }
-  }
-
-  /** 冷启动时的窗口尺寸可能在 loadContent 回调之后才稳定，做两次短期探测。 */
-  private scheduleInitialSizeProbes(): void {
-    const self = this
-    const delays: number[] = [120, 600]
-    for (const delay of delays) {
-      const timerId: number = setTimeout((): void => {
-        self.refreshWindowSizeFromProperties(`initialProbe:${delay}ms`)
-      }, delay)
-      this.initialSizeProbeTimers.push(timerId)
-    }
-  }
-
-  private clearInitialSizeProbes(): void {
-    for (const timerId of this.initialSizeProbeTimers) {
-      clearTimeout(timerId)
-    }
-    this.initialSizeProbeTimers = []
   }
 
   // Issue #920 D：按 Harmony 平台自己的断点本地推导布局状态，不再调用 Core。
@@ -451,6 +415,9 @@ export class AdaptiveContext {
     if (isFirstValidSize) {
       hilog.info(DOMAIN, TAG, 'First valid window size: %{public}sx%{public}s vp', `${this.state.widthVp}`, `${this.state.heightVp}`)
     }
+    hilog.info(DOMAIN, TAG,
+      'Layout state: vp=%{public}sx%{public}s wide=%{public}s workbench=%{public}s',
+      `${this.state.widthVp}`, `${this.state.heightVp}`, `${prefersWideLayout}`, `${isWorkbenchLayout}`)
     this.notifyObservers()
   }
 
@@ -588,11 +555,11 @@ export class AdaptiveContext {
   // ========== 避让区域变化监听 ==========
 
   private registerAvoidAreaChange(): void {
-    if (this.isAvoidAreaListening || !this.mainWindow) {
+    if (this.avoidAreaChangeCallback !== null || !this.mainWindow) {
       return
     }
     try {
-      this.mainWindow.on('avoidAreaChange', (data: window.AvoidAreaOptions) => {
+      const callback = (data: window.AvoidAreaOptions): void => {
         if (!this.mainWindow) {
           return
         }
@@ -635,7 +602,9 @@ export class AdaptiveContext {
             this.updateState(widthVp, heightVp)
           }
         }
-      })
+      }
+      this.mainWindow.on('avoidAreaChange', callback)
+      this.avoidAreaChangeCallback = callback
       this.isAvoidAreaListening = true
       hilog.info(DOMAIN, TAG, 'Registered avoidAreaChange listener')
     } catch (err) {
@@ -644,12 +613,14 @@ export class AdaptiveContext {
   }
 
   private unregisterAvoidAreaChange(): void {
-    if (!this.isAvoidAreaListening || !this.mainWindow) {
+    const callback = this.avoidAreaChangeCallback
+    this.avoidAreaChangeCallback = null
+    this.isAvoidAreaListening = false
+    if (callback === null || !this.mainWindow) {
       return
     }
     try {
-      this.mainWindow.off('avoidAreaChange')
-      this.isAvoidAreaListening = false
+      this.mainWindow.off('avoidAreaChange', callback)
       hilog.info(DOMAIN, TAG, 'Unregistered avoidAreaChange listener')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to unregister avoidAreaChange: ${JSON.stringify(err)}`)
@@ -659,8 +630,11 @@ export class AdaptiveContext {
   // ========== 折叠状态变化监听 ==========
 
   private registerFoldStatusChange(): void {
+    if (this.foldStatusChangeCallback !== null) {
+      return
+    }
     try {
-      display.on('foldStatusChange', (foldStatus: number) => {
+      const callback = (foldStatus: number): void => {
         let newPosture: FoldPosture
         // display.FoldStatus 枚举值：FOLD_STATUS_EXPANDED=2, FOLD_STATUS_HALF_FOLDED=3, FOLD_STATUS_FOLDED=1
         if (foldStatus === 2) {
@@ -691,7 +665,9 @@ export class AdaptiveContext {
             }
           }
         }
-      })
+      }
+      display.on('foldStatusChange', callback)
+      this.foldStatusChangeCallback = callback
       hilog.info(DOMAIN, TAG, 'Registered foldStatusChange listener')
     } catch (err) {
       // 非折叠设备或不支持该 API，静默忽略
@@ -700,8 +676,13 @@ export class AdaptiveContext {
   }
 
   private unregisterFoldStatusChange(): void {
+    const callback = this.foldStatusChangeCallback
+    this.foldStatusChangeCallback = null
+    if (callback === null) {
+      return
+    }
     try {
-      display.off('foldStatusChange')
+      display.off('foldStatusChange', callback)
       hilog.info(DOMAIN, TAG, 'Unregistered foldStatusChange listener')
     } catch (err) {
       // 静默忽略
@@ -716,13 +697,15 @@ export class AdaptiveContext {
   // 国产折叠屏 / 阔直屏不执行这套强制政策（cachedIsDedicatedLandscapeTablet 恒为 false）。
   // 窗口尺寸本身仍由 windowSizeChange 驱动，本监听不改布局状态。
   private registerWindowStatusChange(): void {
-    if (!this.mainWindow) {
+    if (this.windowStatusChangeCallback !== null || !this.mainWindow) {
       return
     }
     try {
-      this.mainWindow.on('windowStatusChange', (windowStatus: window.WindowStatusType) => {
+      const callback = (windowStatus: window.WindowStatusType): void => {
         this.handleWindowStatusChange(windowStatus)
-      })
+      }
+      this.mainWindow.on('windowStatusChange', callback)
+      this.windowStatusChangeCallback = callback
       hilog.info(DOMAIN, TAG, 'Registered windowStatusChange listener')
     } catch (err) {
       // windowStatusChange 依赖 SystemCapability.Window.SessionManager，部分设备不可用，静默忽略
@@ -731,11 +714,13 @@ export class AdaptiveContext {
   }
 
   private unregisterWindowStatusChange(): void {
-    if (!this.mainWindow) {
+    const callback = this.windowStatusChangeCallback
+    this.windowStatusChangeCallback = null
+    if (callback === null || !this.mainWindow) {
       return
     }
     try {
-      this.mainWindow.off('windowStatusChange')
+      this.mainWindow.off('windowStatusChange', callback)
       hilog.info(DOMAIN, TAG, 'Unregistered windowStatusChange listener')
     } catch (err) {
       // 静默忽略
