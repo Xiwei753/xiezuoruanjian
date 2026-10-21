@@ -77,9 +77,33 @@ Rectangle {
                 text: modelData.label
                 highlighted: root.selectedTool === modelData.key
                 enabled: modelData.enabled !== false
+                scale: pressed ? 0.97 : 1.0
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: 140
+                        easing.type: Easing.OutCubic
+                    }
+                }
                 // Issue #835 评论 6020221770: disabled 入口（如 AI）降 opacity，
                 // 保留 rail 位置但不诱导点击。
                 opacity: modelData.enabled !== false ? 1.0 : 0.4
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Kirigami.Units.smallSpacing / 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Kirigami.Units.smallSpacing / 2
+                    height: Kirigami.Units.gridUnit * 1.5
+                    radius: width / 2
+                    color: Kirigami.Theme.highlightColor
+                    opacity: root.selectedTool === modelData.key ? 1.0 : 0.0
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: 180
+                            easing.type: Easing.OutCubic
+                        }
+                    }
+                }
 
                 ToolTip.visible: hovered
                 ToolTip.text: modelData.label

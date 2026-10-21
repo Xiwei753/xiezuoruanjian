@@ -395,7 +395,7 @@ impl CorrectionStore {
             guard.model_path.clone()
         };
         let mut parts = vec![
-            "correction-scanner-v1".to_string(),
+            "correction-scanner-v2".to_string(),
             model_path
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())

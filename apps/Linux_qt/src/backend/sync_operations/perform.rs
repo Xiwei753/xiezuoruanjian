@@ -86,6 +86,9 @@ impl AppBackend {
             }
             return self.current_sync_operation_id.clone().into();
         }
+        // 通过 busy 检查后立即登记本轮 ID，确保所有同步前置失败也归属于本轮操作。
+        self.current_sync_operation_id = op_id.clone();
+        self.current_sync_operation_kind = "sync".to_string();
         if self.current_sync_source.is_empty() || trigger != "manual" {
             self.current_sync_source = if trigger == "manual" {
                 "backend_manual".to_string()
@@ -188,9 +191,6 @@ impl AppBackend {
         if self.current_sync_branch.is_empty() {
             self.current_sync_branch = "main".to_string();
         }
-
-        self.current_sync_operation_id = op_id.clone();
-        self.current_sync_operation_kind = "sync".to_string();
 
         let state = writer_core::api::SyncOperationStateDto {
             operation_id: op_id.clone(),
@@ -306,6 +306,24 @@ impl AppBackend {
                     main_thread_cb(progress);
                 })
             });
+        let core_attempt_op_id = op_id.clone();
+        let core_attempt_callback: Box<dyn Fn(()) + Send> =
+            if let Some(sync_qptr) = sync_qptr.clone() {
+                Box::new(qmetaobject::queued_callback(move |_result: ()| {
+                    sync_qptr.as_pinned().map(|this| {
+                        let mut this = this.borrow_mut();
+                        this.mark_core_attempt_started(&core_attempt_op_id);
+                    });
+                }))
+            } else {
+                let app_qptr = app_qptr.clone();
+                Box::new(qmetaobject::queued_callback(move |_result: ()| {
+                    app_qptr.as_pinned().map(|this| {
+                        let mut this = this.borrow_mut();
+                        this.mark_sync_core_attempt_started(&core_attempt_op_id);
+                    });
+                }))
+            };
         let callback = make_outcome_callback(app_qptr, sync_qptr);
 
         let op_id_capture = op_id.clone();
@@ -362,6 +380,7 @@ impl AppBackend {
                     &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
                 );
 
+                core_attempt_callback(());
                 match api.perform_full_sync(
                     config,
                     trigger == "manual",

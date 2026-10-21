@@ -106,6 +106,16 @@ directory = "vendor"
 VENDOR_TOML
 
 # ---------------------------------------------------------------------------
+# 3.5. 获取并校验内置中文 KenLM 模型（Issue #958）
+# ---------------------------------------------------------------------------
+# 模型二进制不入库；在生成 Source0 tarball 之前放进 staging，使 rpmbuild 的
+# %install 能从源码树装入 /usr/share/sujian/models/。下载或校验不符时脚本
+# 以非零状态退出，构建失败，而不是打出缺少内置模型的 RPM。
+BUNDLED_MODEL_DIR="${STAGING_DIR}/packaging/correction/bundled"
+echo "==> 获取内置中文校对模型到: ${BUNDLED_MODEL_DIR}"
+"${SCRIPT_DIR}/../correction/fetch-model.sh" "${BUNDLED_MODEL_DIR}"
+
+# ---------------------------------------------------------------------------
 # 4. 从 staging 目录生成 Source0 tarball
 # ---------------------------------------------------------------------------
 TARBALL="${RPM_TOPDIR}/SOURCES/${NAME}-${VERSION}.tar.gz"

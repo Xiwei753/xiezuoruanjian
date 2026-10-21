@@ -158,6 +158,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     // Issue #822 评论 5972557963: 跨层连线的宿主规划（纯路径算法）
     "qml/StarMapPathPlanner.js" as "StarMapPathPlanner.js",
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
+    "qml/MotionDisclosure.qml" as "MotionDisclosure.qml",
     "qml/StatCard.qml" as "StatCard.qml",
     // Issue #946：统计页 Explorer 主体组件（时段卡 / 纪录面板 / 趋势折线图），
     // qrc 是显式列表，漏登记时开发目录碰巧能找到、打包后组件不存在。

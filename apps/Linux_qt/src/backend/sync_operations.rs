@@ -79,6 +79,16 @@ impl AppBackend {
         (self.current_sync_operation_id == operation_id).then(|| self.current_sync_source.clone())
     }
 
+    pub(crate) fn sync_core_attempt_started_for_operation_id(&self, operation_id: &str) -> bool {
+        !operation_id.is_empty() && self.current_sync_core_attempt_operation_id == operation_id
+    }
+
+    pub(crate) fn mark_sync_core_attempt_started(&mut self, operation_id: &str) {
+        if self.current_sync_operation_id == operation_id {
+            self.current_sync_core_attempt_operation_id = operation_id.to_string();
+        }
+    }
+
     pub(crate) fn handle_sync_outcome(
         &mut self,
         outcome: SyncTaskOutcome,

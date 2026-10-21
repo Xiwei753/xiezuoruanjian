@@ -1,0 +1,11 @@
+# 内置中文 KenLM 模型锁定信息（Issue #958）。
+# fetch-model.sh 读取本文件；RPM / APK / HAP 三个平台的构建脚本统一调用它。
+# 模型二进制不入库：构建期从固定上游下载并按下面的字节数与 SHA-256 校验后
+# 打入安装包；校验不符时构建失败，不允许打出缺少内置模型的包。
+filename=people2014corpus_chars.klm
+source=https://huggingface.co/shibing624/chinese-kenlm-klm/resolve/main/people2014corpus_chars.klm
+size=147608010
+sha256=1d4ad3975144619a5bddc4ac53fcf319ec27d37dccb4ba58674af3a068d835a9
+publisher=shibing624
+source_page=https://huggingface.co/shibing624/chinese-kenlm-klm
+license_label=bigscience-bloom-rail-1.0

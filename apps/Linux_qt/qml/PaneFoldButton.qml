@@ -30,8 +30,8 @@ ToolButton {
     // 手稿里手绘的三角：展开态朝下（可往下收），收起态朝上（可往上拉）。
     property string glyph: "\u2304" // ⌄
 
-    // 方向语义 → Breeze 图标名（不改变 glyph 的公有签名）。
-    readonly property string _iconName: root.glyph === "\u2303" ? "arrow-up" : "arrow-down"
+    // 方向语义由同一个 Breeze 箭头的旋转表达（不改变 glyph 的公有签名）。
+    readonly property string _iconName: "arrow-down"
 
     signal triggered()
 
@@ -42,6 +42,23 @@ ToolButton {
     icon.name: root._iconName
     icon.width: Kirigami.Units.iconSizes.small
     icon.height: Kirigami.Units.iconSizes.small
+
+    contentItem: Item {
+        Kirigami.Icon {
+            anchors.centerIn: parent
+            source: root._iconName
+            width: root.icon.width
+            height: root.icon.height
+            color: Kirigami.Theme.textColor
+            rotation: root.glyph === "\u2303" ? 180 : 0
+            Behavior on rotation {
+                NumberAnimation {
+                    duration: 180
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+    }
 
     onClicked: root.triggered()
 }

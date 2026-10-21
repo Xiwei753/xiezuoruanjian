@@ -54,6 +54,14 @@ apps/harmony/.clangd
 apps/harmony/oh-package-lock.json5
 apps/harmony/package-lock.json
 
+# Issue #958：内置校对模型在各平台构建期生成，二进制不入库
+# （RPM staging、Harmony entry rawfile；Android 用 app/build/ 现有忽略规则）
+packaging/correction/bundled/
+apps/harmony/entry/src/main/resources/rawfile/people2014corpus_chars.klm
+apps/harmony/entry/src/main/resources/rawfile/.people2014corpus_chars.klm.*
+apps/harmony/entry/src/main/resources/rawfile/THIRD_PARTY_MODEL_NOTICES.md
+apps/harmony/entry/src/main/resources/rawfile/BLOOM-RAIL-1.0.txt
+
 # IDE / OS
 .idea/
 .vscode/

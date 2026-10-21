@@ -258,6 +258,8 @@
     <string name="about_app_name">素笺写作</string>
     <string name="about_author">作者：Xiwei753</string>
     <string name="about_license">开源协议：GPLv3</string>
+    <string name="about_third_party_resources">第三方资源（内置模型来源与许可证）</string>
+    <string name="about_third_party_close">关闭</string>
 
     <!-- Stats page -->    <string name="loading">加载中…</string>
 
