@@ -94,7 +94,7 @@ export struct PrimaryTabShell {
   @Link @Watch('onCurrentTabChanged') currentTab: number
 
   // 响应式布局状态（用于判断是否显示底部 Tab Bar）
-  @State @Watch('onAdaptiveStateChanged') adaptiveState: AdaptiveState = getAdaptiveState()
+  @State adaptiveState: AdaptiveState = getAdaptiveState()
   // 主题配置（底部 Tab 配色）
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   // 当前页面对应的 ScreenRole
@@ -182,7 +182,6 @@ export struct PrimaryTabShell {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
-    this.recordLayoutDecision()
 
     // 订阅 NavigationChromeStore，根据 ScreenRole 变化更新底栏显隐
     this.navChromeObserver = (role: ScreenRole) => {
@@ -490,14 +489,10 @@ export struct PrimaryTabShell {
     return this.adaptiveState.prefersWideLayout
   }
 
-  // Issue #968：把外壳实际收到的窗口 vp 和最终选择的外壳写进现有诊断通道，
-  // 用于区分「vp 本来就在窄屏档」「状态未更新」和「状态宽屏但页面树没切换」。
-  private onAdaptiveStateChanged(): void {
-    this.recordLayoutDecision()
-  }
-
-  private recordLayoutDecision(): void {
-    const signature: string = `${this.adaptiveState.widthVp}x${this.adaptiveState.heightVp}:${this.adaptiveState.prefersWideLayout}`
+  // Issue #968：诊断只记录实际挂载的外壳根容器，而不是根据布尔值预计会挂哪一个。
+  // 宽屏 Row 和窄屏 HdsTabs / Tabs 的 onAppear 各自调用这里，日志与同一份 widthVp 对照。
+  private recordMountedShell(shell: string): void {
+    const signature: string = `${this.adaptiveState.widthVp}x${this.adaptiveState.heightVp}:${this.adaptiveState.prefersWideLayout}:${shell}`
     if (signature === this.lastReportedLayoutMode) {
       return
     }
@@ -506,7 +501,7 @@ export struct PrimaryTabShell {
       { key: 'widthVp', value: String(this.adaptiveState.widthVp) },
       { key: 'heightVp', value: String(this.adaptiveState.heightVp) },
       { key: 'prefersWideLayout', value: String(this.adaptiveState.prefersWideLayout) },
-      { key: 'shell', value: this.adaptiveState.prefersWideLayout ? 'WidePrimaryShell' : 'CompactPrimaryShell' },
+      { key: 'mountedShell', value: shell },
       { key: 'currentTab', value: String(this.currentTab) }
     ]
     HarmonyDiagnosticEvents.record('Info', 'App', 'layout.primary_shell', 'PrimaryTabShell', fields)
@@ -647,6 +642,9 @@ export struct PrimaryTabShell {
     }
     .width('100%')
     .height('100%')
+    .onAppear(() => {
+      this.recordMountedShell('WidePrimaryShell')
+    })
   }
 
   // Issue #932：窄屏外壳——API23+ 用 HdsPrimaryTabsApi23（沉浸光感底栏），低版本用普通 Tabs。
@@ -662,6 +660,10 @@ export struct PrimaryTabShell {
         safeBottomVp: this.adaptiveState.safeBottomVp,
         currentShowPrimaryNav: this.currentShowPrimaryNav,
         currentPrimaryNavInteractive: this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked,
+        // Issue #968：实际挂载的 HdsTabs 根容器回报窄屏外壳。
+        onMounted: (): void => {
+          this.recordMountedShell('CompactPrimaryShell/HdsTabs')
+        },
         // Issue #906：HdsTabs 的用户点击入口，转发到只记用户意图的方法（不改 currentTab）。
         onUserTabClick: (index: number): void => {
           this.recordTabIntent(index)
@@ -722,6 +724,9 @@ export struct PrimaryTabShell {
       .onChange((index: number) => {
         // Issue #906：onChange 只管真实状态提交（用户点击与程序化恢复都会走到这里）。
         this.onTabChange(index)
+      })
+      .onAppear(() => {
+        this.recordMountedShell('CompactPrimaryShell/Tabs')
       })
       .width('100%')
       .height('100%')

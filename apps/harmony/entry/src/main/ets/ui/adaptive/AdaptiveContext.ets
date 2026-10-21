@@ -169,9 +169,8 @@ export class AdaptiveContext {
       }
 
       // Issue #752 评论 5808818396：先注册窗口尺寸变化监听，再读取当前 windowRect。
-      // Issue #968：windowSizeChange 只覆盖之后的尺寸变化；冷启动时 loadContent 回调早于
-      // 这里，窗口从启动尺寸切到全屏的事件可能已经错过，首帧 windowRect 也可能还是旧值。
-      // 因此初始读取、窗口舞台恢复、屏幕密度变化和两次延迟探测都走同一个
+      // Issue #968：windowSizeChange 只覆盖之后的尺寸变化，冷启动时从启动尺寸切到全屏的
+      // 事件可能已经错过，因此初始读取和屏幕密度变化都走同一个
       // refreshWindowSizeFromProperties()，保证送进 updateState() 的宽高与实机窗口一致。
       this.registerWindowSizeChange()
       if (this.refreshWindowSizeFromProperties('initial')) {
@@ -251,10 +250,19 @@ export class AdaptiveContext {
     this.releaseWindowBindings()
     this.observers.clear()
     this.mainWindow = null
+    // Issue #968：窗口销毁后单例不能再把旧窗口的宽高和宽窄判定留给下一次建窗。
+    // 页面重新订阅时必须先拿到默认状态，等新窗口的初始属性 / 尺寸事件再生成布局。
+    this.state = AdaptiveContext.createDefaultState()
     this.cachedSafeTopVp = 0
     this.cachedSafeBottomVp = 0
     this.cachedKeyboardVisible = false
     this.cachedFoldPosture = FoldPosture.Unknown
+    this.cachedIsDedicatedLandscapeTablet = false
+    this.cachedWindowStatus = window.WindowStatusType.UNDEFINED
+    // 使旧窗口尚未完成的策略任务失效，不能把旧窗口的政策应用到新窗口。
+    this.windowStatusGeneration++
+    this.windowStatusTask = Promise.resolve()
+    hilog.info(DOMAIN, TAG, 'Disposed adaptive context and reset window state')
   }
 
   /** 解除当前主窗口 / 显示器上的全部监听；重建窗口或销毁时必须先走这里。 */

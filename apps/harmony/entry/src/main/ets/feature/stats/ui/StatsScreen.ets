@@ -55,7 +55,7 @@ export struct StatsScreen {
   @State heatmapYear: number = new Date().getFullYear()
   @State heatmap: WritingStatsHeatmap | null = null
   @State heatmapError: string = ''
-  @State @Watch('onAdaptiveStateChanged') adaptiveState: AdaptiveState = getAdaptiveState()
+  @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State useHdsNav: boolean = false
   @State headerActions: ActionSlot[] = []
 
@@ -90,17 +90,12 @@ export struct StatsScreen {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
-    this.recordLayoutDecision()
   }
 
-  // Issue #968：把统计页实际收到的窗口 vp 和最终选择的正文写进诊断，
-  // 与 PrimaryTabShell 的 layout.primary_shell 对照即可定位分叉。
-  private onAdaptiveStateChanged(): void {
-    this.recordLayoutDecision()
-  }
-
-  private recordLayoutDecision(): void {
-    const signature: string = `${this.adaptiveState.widthVp}x${this.adaptiveState.heightVp}:${this.adaptiveState.prefersWideLayout}`
+  // Issue #968：诊断只记录实际挂载的统计正文根容器，而不是根据布尔值预计会挂哪一个。
+  // WideStatsContent / CompactStatsContent 的根容器 onAppear 回报这里，并带上同一份窗口 vp。
+  private recordMountedContent(content: string): void {
+    const signature: string = `${this.adaptiveState.widthVp}x${this.adaptiveState.heightVp}:${this.adaptiveState.prefersWideLayout}:${content}`
     if (signature === this.lastReportedLayoutMode) {
       return
     }
@@ -109,7 +104,7 @@ export struct StatsScreen {
       { key: 'widthVp', value: String(this.adaptiveState.widthVp) },
       { key: 'heightVp', value: String(this.adaptiveState.heightVp) },
       { key: 'prefersWideLayout', value: String(this.adaptiveState.prefersWideLayout) },
-      { key: 'content', value: this.adaptiveState.prefersWideLayout ? 'WideStatsContent' : 'CompactStatsContent' },
+      { key: 'mountedContent', value: content },
       { key: 'showTitleBar', value: String(!this.adaptiveState.prefersWideLayout) }
     ]
     HarmonyDiagnosticEvents.record('Info', 'App', 'layout.stats_content', 'StatsScreen', fields)
@@ -317,6 +312,9 @@ export struct StatsScreen {
           heatmap: this.heatmap,
           heatmapYear: this.heatmapYear,
           heatmapError: this.heatmapError,
+          onMounted: (): void => {
+            this.recordMountedContent('WideStatsContent')
+          },
           onChangeHeatmapYear: (year: number): void => {
             this.changeHeatmapYear(year)
           },
@@ -348,6 +346,9 @@ export struct StatsScreen {
           heatmap: this.heatmap,
           heatmapYear: this.heatmapYear,
           heatmapError: this.heatmapError,
+          onMounted: (): void => {
+            this.recordMountedContent('CompactStatsContent')
+          },
           onChangeHeatmapYear: (year: number): void => {
             this.changeHeatmapYear(year)
           },

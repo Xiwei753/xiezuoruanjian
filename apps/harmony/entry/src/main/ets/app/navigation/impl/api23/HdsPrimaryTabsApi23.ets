@@ -72,6 +72,9 @@ export struct HdsPrimaryTabsApi23 {
   // 与 onChange（只提交 currentTab，程序化切换也会触发）区分，避免把恢复伪装成点击。
   onUserTabClick: (index: number) => void = (): void => {}
 
+  // Issue #968：HdsTabs 根容器实际挂载后回报父组件，诊断不依赖预计的布尔分支。
+  onMounted: () => void = (): void => {}
+
   // Issue #773 评论5844518092 第2项：长期持有的 HdsTabsController，创建 HdsTabs 时经 options 传入，
   // 修复真机日志 "GetHdsTabsController no hdsTabsControllerClass prop"。
   private controller: HdsTabsController = new HdsTabsController()
@@ -245,6 +248,9 @@ export struct HdsPrimaryTabsApi23 {
       // Issue #768 评论5835171266 第1项：onChange 只写 currentTab（@Link 双向绑定到父组件），
       // 父组件 PrimaryTabShell 的 @Watch 会触发 syncActiveTab，不再在此处调 syncActiveTab。
       this.currentTab = index
+    })
+    .onAppear(() => {
+      this.onMounted()
     })
     .width('100%')
     .height('100%')
