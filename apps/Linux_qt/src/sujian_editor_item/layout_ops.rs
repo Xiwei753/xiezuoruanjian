@@ -126,6 +126,32 @@ impl SujianEditorItem {
         self.pipeline.set_current_layout_snapshot(Some(snapshot));
     }
 
+    /// Issue #978 新评论: 滚动/加载/套用格式期间的编辑只安装轻量静态快照，
+    /// 不保留旧动画行图。最后一个抑制状态结束时，若文字动画开启且当前快照
+    /// 已没有可用旧动画源，则在已提交正文上补建一次；正常编辑路径不重复生成。
+    pub(crate) fn ensure_animation_source_after_suppression(&mut self) {
+        if !self.effective_animation().text
+            || self.current_is_scrolling
+            || self.current_is_loading
+            || self.current_is_applying_format
+        {
+            return;
+        }
+        let has_source = self
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .map_or(false, |snapshot| {
+                snapshot
+                    .line_snapshots
+                    .iter()
+                    .any(|line| line.image.is_some())
+            });
+        if !has_source {
+            self.initialize_current_animation_source();
+        }
+    }
+
     /// Issue #978: 文字动画从关闭切到开启时，在当前正文上建立一次动画源。
     ///
     /// 关闭期间普通按键不再保留每键 QImage/快照；开启后的第一笔编辑需要一份

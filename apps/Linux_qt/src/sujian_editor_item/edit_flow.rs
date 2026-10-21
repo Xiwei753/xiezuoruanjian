@@ -303,6 +303,19 @@ impl SujianEditorItem {
             };
         }
 
+        // Issue #978 新评论: 在发出 `editor_change_applied` 之前先把 pipeline 的
+        // text_revision 推进到 Core 的 new_revision。QML 的同步 signal handler
+        // 会立即读取 targetEditorItem.text_revision 判断校对事务连续性；若等到
+        // record_transaction 才推进，这里必然读到旧 revision，退回整章快照。
+        // 普通输入与 IME commit 都走这个唯一入口；undo/redo 自己在下文推进。
+        self.pipeline.set_text_revision(
+            edit_result
+                .as_ref()
+                .expect("edit_result is Some when applied is true")
+                .new_revision
+                .value(),
+        );
+
         // 4. 记录 editor.edit.applied 诊断事件（Applied 路径）。
         // Issue #819 评论 5968240881 问题 3：诊断字段全部来自 Core EditorEditResult，
         // 不再从平台 EditOp 猜 inserted_range/deleted_range。

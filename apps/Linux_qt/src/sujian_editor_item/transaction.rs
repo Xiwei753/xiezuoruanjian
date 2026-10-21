@@ -19,10 +19,8 @@ impl SujianEditorItem {
         result: &EditorEditResult,
         emit: bool,
     ) -> VisualPrepareOutcome {
-        // Issue #901 第五轮阻塞4：先用 Core new_revision 更新 text_revision，
-        // 再排版，禁止 cache 用字节数命中旧布局。
-        let core_new_revision = result.new_revision.value();
-        self.pipeline.set_text_revision(core_new_revision);
+        // Issue #978 新评论：text_revision 已由 `apply_edit_with_visuals()` 在
+        // Core Applied 后、发出 `editor_change_applied` 前推进；这里不再重复设置。
 
         // 从 Core display_patches 提取受影响字节范围（取旧/新坐标的并集仅用于
         // 定位受影响段落；动画侧仍分别使用旧/新坐标，不混用）。

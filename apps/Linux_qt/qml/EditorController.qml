@@ -376,6 +376,9 @@ QtObject {
         pendingCorrectionChapterId = chapterId;
         pendingCorrectionText = snapshotText;
         pendingCorrectionSilent = true;
+        // Issue #978 新评论: 快照请求本身也要标记在途，避免连续性丢失时连续按键
+        // 反复触发整章读取。
+        correctionCheckPending = true;
         editorBackendRef.request_correction_snapshot(
             pendingCorrectionRequestId,
             projectId,
@@ -467,8 +470,10 @@ QtObject {
         var base = Number(baseRevision);
         var next = Number(newRevision);
 
-        // Issue #978: 连续性判断不读取正文；不连续时由快照请求自行读取一次，
-        // 且已有请求在途时不重复触发整章同步。
+        // Issue #978 新评论: apply_edit_with_visuals 已在发出
+        // editor_change_applied 前把 text_revision 推进到 next，因此这里的
+        // actualRevision 应直接等于 next，正常输入走 patch-only 路径。
+        // 只有真正失去连续性时才由快照请求读取一次正文；已有请求在途时不重复。
         if (!isFinite(base) || !isFinite(next) || actualRevision !== next
                 || base !== correctionTrackedRevision
                 || correctionTrackedProjectId !== projectId

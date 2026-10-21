@@ -89,11 +89,10 @@ impl SujianEditorItem {
         let candidate_range = (candidate_byte_start, candidate_byte_end);
         let change_count = result.display_patches.len();
 
-        // Issue #901 第六轮阻塞1: composition commit 与 record_transaction 一样，
-        // 用 Core EditorEditResult.new_revision 唯一绑定 pipeline.text_revision。
-        let core_new_revision = result.new_revision.value();
-        self.pipeline.set_text_revision(core_new_revision);
-        let canonical_text_revision = core_new_revision;
+        // Issue #978 新评论: text_revision 已由 `apply_edit_with_visuals()`
+        // 在发出 `editor_change_applied` 前推进；这里只读取同一个 Core revision
+        // 作为 canonical 排版版本，不再重复设置。
+        let canonical_text_revision = result.new_revision.value();
 
         let text_animation_requested = self.effective_animation().text;
         let suppressed =
@@ -424,11 +423,16 @@ impl SujianEditorItem {
         }
 
         let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
+        // Issue #978 新评论: 只有文字动画真实开启时才需要 virtual_text 快照。
+        // 关闭文字动画时 IME commit 仍保留原子 replace range/候选范围语义，
+        // 但不再复制整章虚拟文本。
+        let text_animation_requested = self.effective_animation().text;
         let commit = self.pipeline.prepare_composition_commit(
             &inserted,
             self.pipeline.cursor(),
             preedit_byte_start,
             preedit_byte_end,
+            text_animation_requested,
         );
 
         // visual_cause 用于视觉事务分类；pipeline_cause（在 EditOp 内）用于 Core
@@ -448,7 +452,7 @@ impl SujianEditorItem {
         // Issue #756: composition commit follows the shared effective animation policy.
         // Issue #978: 用 effective text 开关判断，避免关闭文字动画时仍为每次 commit
         // 克隆 saved_virtual_text 并计算 composition 段落范围。
-        let composition = if commit.was_composing && self.effective_animation().text {
+        let composition = if commit.was_composing && text_animation_requested {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
@@ -537,11 +541,14 @@ impl SujianEditorItem {
         }
 
         let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
+        // Issue #978 新评论: 同上，无文字动画时不构造整章 virtual_text。
+        let text_animation_requested = self.effective_animation().text;
         let commit = self.pipeline.prepare_composition_commit(
             &inserted,
             self.pipeline.cursor(),
             preedit_byte_start,
             preedit_byte_end,
+            text_animation_requested,
         );
 
         let selection_byte_range = event.selection_byte_range;
@@ -575,7 +582,7 @@ impl SujianEditorItem {
         // Issue #756: composition commit follows the shared effective animation policy.
         // Issue #978: 只有文字动画真实开启才需要 composition 动画快照；
         // 光标动画独立跟随，不需要暂存整段虚拟文本。
-        let composition = if commit.was_composing && self.effective_animation().text {
+        let composition = if commit.was_composing && text_animation_requested {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
@@ -797,6 +804,8 @@ impl SujianEditorItem {
         if let Some(result) = self.pipeline.perform_undo() {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             // Issue #978: 不再为 undo 保存整章 old/new snapshot。
+            // text_revision 必须在视觉事务前推进，保证 QML 拿到新 revision。
+            self.pipeline.set_text_revision(result.new_revision.value());
             let _ = self.record_transaction(&result, true);
             self.cursor_ctrl.last_move_source =
                 cursor_controller::CursorMoveSource::TextTransaction;
@@ -813,6 +822,8 @@ impl SujianEditorItem {
         if let Some(result) = self.pipeline.perform_redo() {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             // Issue #978: 不再为 redo 保存整章 old/new snapshot。
+            // text_revision 必须在视觉事务前推进，保证 QML 拿到新 revision。
+            self.pipeline.set_text_revision(result.new_revision.value());
             let _ = self.record_transaction(&result, true);
             self.cursor_ctrl.last_move_source =
                 cursor_controller::CursorMoveSource::TextTransaction;

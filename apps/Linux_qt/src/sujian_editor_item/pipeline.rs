@@ -606,9 +606,12 @@ impl LinuxEditorPipeline {
     /// Issue #901 第五轮阻塞4：用 Core `EditorEditResult.new_revision` 直接设置
     /// text_revision，使排版版本在 Core 编辑完成时立即一致。
     ///
-    /// 普通编辑流程是先 Core edit → `record_transaction`（调 `set_text_revision`）
-    /// → 后续 `emit_content_changed` 只做 UI 通知。如果 `record_transaction` 内部
-    /// 用尚未更新的 `text_revision()` 调 `EditorLayout::snapshot`，等字节长度替换
+    /// 普通编辑流程是 Core edit → `apply_edit_with_visuals` 在发出
+    /// `editor_change_applied` 前调用本方法 → `record_transaction` 建增量目标
+    /// → 后续 `emit_content_changed` 只做 UI 通知。如果等到 `record_transaction`
+    /// 内部才设置，QML 的同步 signal handler 会读到旧 revision，误判校对事务
+    /// 失去连续性并退化为整章快照。若 `record_transaction` 内部用尚未更新的
+    /// `text_revision()` 调 `EditorLayout::snapshot`，等字节长度替换
     ///（text_ptr + text_len 不变）会命中 cache 直接返回旧布局，导致中段同宽替换/
     /// IME 替换的光标、字形和正文版本脱节。
     ///
@@ -618,9 +621,10 @@ impl LinuxEditorPipeline {
     ///
     /// Issue #901 第六轮阻塞1: `emit_content_changed` 不再 `bump_text_revision`，
     /// `set_text_revision` 是 text_revision 唯一的推进入口。所有编辑路径
-    ///（record_transaction / IME commit / Load）都通过它绑定 Core Applied 的
-    /// new_revision，确保 EditorLayout cache、    /// current_layout_snapshot、TargetLayoutDescriptor 同一次编辑全部绑定同一
-    /// Core revision。
+    ///（普通输入/IME commit 由 `apply_edit_with_visuals` 提前设置，undo/redo 在
+    /// 视觉事务前设置，Load 路径自行设置）都通过它绑定 Core Applied 的
+    /// new_revision，确保 EditorLayout cache、current_layout_snapshot、
+    /// TargetLayoutDescriptor 同一次编辑全部绑定同一 Core revision。
     pub fn set_text_revision(&mut self, revision: u64) {
         self.text_revision = revision;
     }
@@ -933,10 +937,17 @@ impl LinuxEditorPipeline {
         fallback_cursor: usize,
         preedit_byte_start: usize,
         preedit_byte_end: usize,
+        needs_visual_snapshot: bool,
     ) -> CompositionCommitResult {
         self.composition.save_pending_preedit_cursor_rect();
         let was_composing = self.composition.is_composing();
-        let saved_virtual_text = self.composition.virtual_text();
+        // Issue #978 新评论: 只有真正需要 composition 动画时才复制整章 virtual_text。
+        // 普通 IME commit 仍保存 replace/candidate range 与 composition 状态。
+        let saved_virtual_text = if needs_visual_snapshot {
+            self.composition.virtual_text()
+        } else {
+            String::new()
+        };
         let (session_replace_start, session_replace_end) =
             self.composition.session_replace_range(fallback_cursor);
         let candidate_byte_start = session_replace_start;

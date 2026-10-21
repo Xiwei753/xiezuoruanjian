@@ -543,6 +543,7 @@ impl SujianEditorItem {
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
             self.update_cursor_visual_position();
             self.request_static_repaint();
+            self.ensure_animation_source_after_suppression();
         }
     }
 
@@ -567,6 +568,7 @@ impl SujianEditorItem {
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.update_cursor_visual_position();
         self.request_static_repaint();
+        self.ensure_animation_source_after_suppression();
     }
 
     pub(crate) fn is_applying_format(&self) -> bool {
@@ -590,6 +592,7 @@ impl SujianEditorItem {
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.update_cursor_visual_position();
         self.request_static_repaint();
+        self.ensure_animation_source_after_suppression();
     }
 
     pub(crate) fn last_transaction_summary(&self) -> QString {
@@ -802,11 +805,12 @@ impl SujianEditorItem {
         // this shared notification only refreshes canonical layout and cursor target.
         //
         // Issue #901 第六轮阻塞1: 不再在此处 bump_text_revision。
-        // text_revision 由编辑入口（record_transaction / IME commit / Load）通过
-        // pipeline.set_text_revision(core_new_revision) 唯一绑定 Core Applied 的
-        // new_revision。emit_content_changed 只做 UI 通知与 prepared frame/caret
+        // text_revision 由编辑入口在 Core Applied 后、发出变更信号前唯一绑定：
+        // apply_edit_with_visuals() 对普通输入/IME commit 提前 set_text_revision，
+        // undo/redo 在 record_transaction 前推进，Load 路径自行设置。
+        // emit_content_changed 只做 UI 通知与 prepared frame/caret
         // 刷新，不因通知来了才造新正文版本。否则一次 Core 编辑会推进两次
-        // text_revision（record_transaction set 一次 + emit bump 一次），破坏
+        // text_revision（编辑入口 set 一次 + emit bump 一次），破坏
         // Core/排版版本一致性：target layout 是 revision N，UI 随后变成 N+1，
         // canonical_needs_rebuild 与 EditorLayout::snapshot 都会因 revision 不符
         // 再次排版，刚构造的 frame/target 还可能被当作过期。
