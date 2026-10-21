@@ -229,9 +229,10 @@ pub struct WritingStatsPeriodCardDto {
     pub average_chars_per_minute: Option<f64>,
 }
 
-/// 当前选中时段的完整详情：区间汇总 + 纪录 + 趋势。
+/// 当前选中时段的完整详情：区间汇总 + 逐日热力格 + 纪录 + 趋势。
 ///
 /// `preset` 额外允许 `"lifetime"`（生涯逐月趋势）。
+/// `heatmap_days` 与 `range` 同源，不受 `trend` 聚合粒度影响。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WritingStatsSelectedPeriodDto {
@@ -245,6 +246,10 @@ pub struct WritingStatsSelectedPeriodDto {
     pub average_chars_per_day: Option<f64>,
     /// 平均写作速度（字/分）= 区间人工输入 / 区间有效写作时长；零时长时为 null。
     pub average_chars_per_minute: Option<f64>,
+    /// 当前区间内的逐日热力格（日期升序、每天一项），由 Core 从同一份区间
+    /// 投影生成；时长区间不会用趋势的周/月聚合点伪造每日值。
+    #[serde(default)]
+    pub heatmap_days: Vec<WritingStatsHeatmapDayDto>,
     pub records: WritingStatsRecordsDto,
     pub trend: WritingStatsTrendDto,
 }

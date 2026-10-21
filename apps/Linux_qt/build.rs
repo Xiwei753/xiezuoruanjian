@@ -575,8 +575,8 @@ fn main() {
     // Issue #833 复核3：章节导航内容组件，与 WritingWorkspace 同批重编译。
     println!("cargo:rerun-if-changed=qml/WritingChapterNavigation.qml");
     println!("cargo:rerun-if-changed=qml/EditorController.qml");
-    // Issue #825：TopWritingToolbar.qml 已拆成工作台工具条带三段组件。
-    println!("cargo:rerun-if-changed=qml/WritingWorkbenchToolbar.qml");
+    // Issue #977：全窗口桌面顶栏，与 main.qml 同批重编译；旧工作台外壳组件已删除。
+    println!("cargo:rerun-if-changed=qml/DesktopTopBar.qml");
     println!("cargo:rerun-if-changed=qml/WritingFormatGroup.qml");
     println!("cargo:rerun-if-changed=qml/WritingToolRail.qml");
     println!("cargo:rerun-if-changed=qml/PaneFoldButton.qml");
@@ -604,8 +604,7 @@ fn main() {
     // Issue #946：统计页 Explorer 主体组件，与 StatsPreviewPage 同批重编译。
     println!("cargo:rerun-if-changed=qml/StatsPeriodCard.qml");
     println!("cargo:rerun-if-changed=qml/StatsRecordPanel.qml");
-    println!("cargo:rerun-if-changed=qml/StatsTrendChart.qml");
-    // Issue #960：每日码字日历热力图。
+    // Issue #976：展开区的时间范围热力图（折线趋势组件已移除）。
     println!("cargo:rerun-if-changed=qml/StatsCalendarHeatmap.qml");
     println!("cargo:rerun-if-changed=qml/DashboardGrid.qml");
     println!("cargo:rerun-if-changed=qml/DashboardSection.qml");

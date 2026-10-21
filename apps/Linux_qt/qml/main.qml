@@ -515,6 +515,11 @@ Kirigami.ApplicationWindow {
 
     property alias appState: appController.appState
     readonly property bool rootHasWorkspace: workspaceBackend !== null && workspaceBackend.has_workspace === true
+    // Issue #977：全窗口顶栏与左侧一级导航共用同一宽度，品牌区不再单独猜 160/64。
+    readonly property int desktopNavigationWidth: 200
+    readonly property string desktopTopBarMode: appController.inWriting
+        ? "writing"
+        : (appController.inStarmap ? "starmap" : "hub")
 
     property string previousEditorText: ""
 
@@ -831,8 +836,75 @@ Kirigami.ApplicationWindow {
     }
 
     // === Main Content ===
-    Item {
+    // Issue #977：全窗口只剩这一条 DesktopTopBar。三个工作区 Loader 都放在
+    // workspaceBody 里，只负责顶栏底线以下的内容和交互，不再各自画顶栏。
+    ColumnLayout {
         anchors.fill: parent
+        spacing: 0
+
+        DesktopTopBar {
+            Layout.fillWidth: true
+            visible: rootHasWorkspace
+            mode: window.desktopTopBarMode
+            navigationWidth: window.desktopNavigationWidth
+            dt: designTokens
+            appState: window.appState
+            starmapTitle: appController.starmapTitle
+            starmapFocusIsRoot: starmapWorkspaceLoader.item
+                && starmapWorkspaceLoader.item.focusIsRoot !== undefined
+                ? starmapWorkspaceLoader.item.focusIsRoot : true
+            toolbarLeadingWidth: writingWorkspaceLoader.item
+                ? writingWorkspaceLoader.item.toolbarLeadingWidth : 200
+            toolbarTrailingWidth: writingWorkspaceLoader.item
+                ? writingWorkspaceLoader.item.toolbarTrailingWidth : 200
+            currentFontSize: settingsBackend ? settingsBackend.setting_font_size : 16
+            currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
+            firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
+            saveStatus: writingWorkspaceLoader.item
+                ? writingWorkspaceLoader.item.saveStatus : ""
+
+            onBackRequested: {
+                if (window.desktopTopBarMode === "writing") {
+                    appController.openHub(0);
+                    window.debugLog("workspace", "exit_writing_mode", "");
+                } else if (window.desktopTopBarMode === "starmap"
+                           && starmapWorkspaceLoader.item) {
+                    starmapWorkspaceLoader.item.navigateBack();
+                }
+            }
+            onUndoRequested: {
+                var ws = writingWorkspaceLoader.item;
+                if (ws) ws.undoActiveEditor();
+            }
+            onRedoRequested: {
+                var ws = writingWorkspaceLoader.item;
+                if (ws) ws.redoActiveEditor();
+            }
+            onFontSizeChanged: function(size) {
+                var ws = writingWorkspaceLoader.item;
+                if (ws) ws.setWritingFontSize(size);
+            }
+            onLineSpacingChanged: function(spacing) {
+                var ws = writingWorkspaceLoader.item;
+                if (ws) ws.setWritingLineSpacing(spacing);
+            }
+            onFirstLineIndentToggled: {
+                var ws = writingWorkspaceLoader.item;
+                if (ws) ws.toggleWritingFirstLineIndent();
+            }
+            onFormatOneClick: {
+                var ws = writingWorkspaceLoader.item;
+                if (ws) ws.formatActiveEditor();
+            }
+            onRequestSync: window.requestManualSync(window.desktopTopBarMode)
+            onRequestSearch: window.debugLog("search", "request_search", "")
+            onOpenSettings: window.openSettingsDialog()
+        }
+
+        Item {
+            id: workspaceBody
+            Layout.fillWidth: true
+            Layout.fillHeight: true
 
         // StarMapWorkspace: shown when in starmap editor mode
         Loader {
@@ -869,6 +941,7 @@ Kirigami.ApplicationWindow {
             active: rootHasWorkspace && appController.route === "hub"
             sourceComponent: CreativeHub {
                 dt: designTokens
+                navigationWidth: window.desktopNavigationWidth
                 projectBackendRef: projectBackend
             editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
@@ -1044,6 +1117,7 @@ Kirigami.ApplicationWindow {
                 }
 
             }
+        }
         }
     }
 

@@ -127,24 +127,24 @@ TestCase {
         backend.destroy()
     }
 
-    function test_trend_chart_component() {
-        let component = Qt.createComponent("StatsTrendChart.qml")
+    function test_heatmap_component_uses_explicit_range() {
+        let component = Qt.createComponent("StatsCalendarHeatmap.qml")
         verify(component.status === Component.Ready, component.errorString())
-        let chart = component.createObject(window.contentItem, {
-            "width": 400,
-            "height": 200,
-            "trend": {
-                "granularity": "day",
-                "points": [
-                    { "date": "2026-10-12", "humanTypedChars": 512 },
-                    { "date": "2026-10-13", "humanTypedChars": 0 },
-                    { "date": "2026-10-14", "humanTypedChars": 906 }
-                ]
-            }
+        let heatmap = component.createObject(window.contentItem, {
+            "width": 480,
+            "height": 260,
+            "startDate": "2026-10-12",
+            "endDate": "2026-10-18",
+            "days": [
+                { "date": "2026-10-12", "humanTypedChars": 512, "intensity": 2, "status": "known" },
+                { "date": "2026-10-14", "humanTypedChars": 906, "intensity": 4, "status": "known" }
+            ]
         })
-        verify(chart !== null, component.errorString())
-        compare(chart.points.length, 3)
-        chart.destroy()
+        verify(heatmap !== null, component.errorString())
+        compare(heatmap.hasData, true)
+        compare(heatmap.writingDays, 2)
+        compare(heatmap.dayByDate["2026-10-14"].humanTypedChars, 906)
+        heatmap.destroy()
     }
 
     function test_record_panel_component() {
@@ -205,6 +205,11 @@ TestCase {
                     "longestSession": { "date": "2026-10-13", "endDate": null, "value": 11040 },
                     "longestStreak": { "date": "2026-10-09", "endDate": "2026-10-11", "value": 3 }
                 },
+                "heatmapDays": [
+                    { "date": "2026-10-12", "humanTypedChars": 512, "intensity": 2, "status": "known" },
+                    { "date": "2026-10-13", "humanTypedChars": 0, "intensity": 0, "status": "known" },
+                    { "date": "2026-10-14", "humanTypedChars": 906, "intensity": 4, "status": "known" }
+                ],
                 "trend": {
                     "granularity": "day",
                     "points": [
@@ -223,8 +228,6 @@ TestCase {
             QtObject {
                 signal writing_stats_explorer_ready(int requestId, var snapshot)
                 signal writing_stats_explorer_failed(int requestId, string message)
-                signal writing_stats_dashboard_ready(int requestId, var snapshot)
-                signal writing_stats_dashboard_failed(int requestId, string message)
                 property int lastRequestId: 0
                 property string lastPreset: ""
                 property string lastStart: ""
@@ -235,7 +238,6 @@ TestCase {
                     lastStart = start
                     lastEnd = end
                 }
-                function request_writing_stats_dashboard(requestId) {}
             }', testCase)
     }
 
@@ -274,7 +276,7 @@ TestCase {
         compare(page.periodCards.length, 4)
         compare(page.periodCards[3].hasSelection, false, "unselected custom card must not look like a 0-char range")
         compare(page.selectedRecords.bestDay.value, 906)
-        compare(page.selectedTrend.points.length, 3)
+        compare(page.selected.heatmapDays.length, 3)
 
         // 失败提示不清空上次快照。
         page.expandedPanel = "last30Days"

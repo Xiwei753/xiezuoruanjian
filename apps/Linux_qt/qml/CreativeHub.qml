@@ -12,6 +12,10 @@
 // Controls.Button / Controls.Label），颜色与间距统一取 Kirigami.Theme /
 // Kirigami.Units，不再读 DesignTokens 的 M3 字段。
 // 保留：宽屏左侧一级导航 + 内容区（无底部导航），以及全部公共 API。
+//
+// Issue #977：顶栏与品牌区上移到 main.qml 的 DesktopTopBar。本页只负责
+// 「一级导航 + 当前 tab 内容」，不再自绘第二条 64px 顶栏或独立 divider；
+// 导航宽度由 main.qml 注入，和顶栏品牌区保持同宽。
 // =============================================================================
 
 import QtQuick
@@ -28,6 +32,8 @@ Rectangle {
     property var starMapController: null
     property var appState: ({})
     property var tree: []
+    // Issue #977：与 DesktopTopBar.navigationWidth 共用同一个窗口级宽度。
+    property int navigationWidth: 200
     // Issue #796 评论 5886483653: Hub tab 由 appController.hubTab 驱动，
     // 不要 Loader 重建后永远回默认 0。
     property var appControllerRef: null
@@ -35,10 +41,6 @@ Rectangle {
     property bool aiCapable: false
     property bool aiEnabled: false
     // Linux Qt 始终使用桌面外壳：一级导航固定在左栏，窗口宽度只影响内容区。
-
-    // Issue #827 评论 3 第 1 点：桌面顶栏高度。左栏「素笺」行与右侧动作条
-    // 必须用同一个值，两条分隔线才能落在同一个 y 上。
-    readonly property int topBarHeight: 64
 
     signal openProject(string projectId, string projectTitle)
     signal createProject()
@@ -52,6 +54,7 @@ Rectangle {
 
     color: Kirigami.Theme.backgroundColor
 
+    // 顶栏已在 main.qml 统一绘制，本页内容从顶栏底线之下开始。
     RowLayout {
         anchors.fill: parent
         spacing: 0
@@ -59,181 +62,110 @@ Rectangle {
         // Issue #829：宽屏一级导航只放左侧。这里就是手稿里的“作品 / 星图 / 统计”纵栏，
         // 作品/星图/统计仍复用原来的 currentTab + 三个 Loader，不另做第二套路由。
         // 宽屏不再有任何底部导航；侧栏也不为了追求沉浸光感改回底栏。
+        // Issue #977：导航加宽到 navigationWidth，条目使用 44–48px 行高与
+        // 12–16px 左右内边距，不把文字挤在固定 160px 的窄栏里。
         Rectangle {
             Layout.fillHeight: true
-            Layout.preferredWidth: 160
+            Layout.preferredWidth: root.navigationWidth
+            Layout.minimumWidth: root.navigationWidth
+            Layout.maximumWidth: root.navigationWidth
             color: Kirigami.Theme.alternateBackgroundColor
-            border.color: Kirigami.Theme.disabledTextColor
-            border.width: 1
 
-            // Issue #827 评论 3 第 1 点：品牌行固定 64 高，与右侧 Top bar 同高，
-            // divider 紧随其后 —— 左上「素笺」和右上动作属于同一行高度，
-            // 横线才能像草图那样从最左贯通到最右。
-            // 外层不加 anchors.margins（左右），divider 才能铺满整个左栏宽度。
             ColumnLayout {
                 anchors.fill: parent
-                spacing: 0
+                anchors.leftMargin: Kirigami.Units.largeSpacing
+                anchors.rightMargin: Kirigami.Units.largeSpacing
+                anchors.topMargin: Kirigami.Units.largeSpacing
+                anchors.bottomMargin: Kirigami.Units.smallSpacing
+                spacing: Kirigami.Units.smallSpacing
 
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: root.topBarHeight
-                    color: Kirigami.Theme.alternateBackgroundColor
+                Repeater {
+                    model: [
+                        { label: qsTr("作品"), icon: "folder-documents", idx: 0 },
+                        { label: qsTr("星图"), icon: "draw-star", idx: 1 },
+                        { label: qsTr("统计"), icon: "office-chart-bar", idx: 2 }
+                    ]
 
-                    Kirigami.Heading {
-                        anchors.left: parent.left
-                        anchors.leftMargin: Kirigami.Units.largeSpacing
-                        anchors.verticalCenter: parent.verticalCenter
-                        level: 3
-                        text: qsTr("素笺")
-                        color: Kirigami.Theme.highlightColor
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 1
-                    color: Kirigami.Theme.disabledTextColor
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.leftMargin: Kirigami.Units.smallSpacing
-                    Layout.rightMargin: Kirigami.Units.smallSpacing
-                    Layout.topMargin: Kirigami.Units.smallSpacing
-                    Layout.bottomMargin: Kirigami.Units.smallSpacing
-                    spacing: Kirigami.Units.smallSpacing
-
-                    Repeater {
-                        model: [
-                            { label: qsTr("作品"), icon: "folder-documents", idx: 0 },
-                            { label: qsTr("星图"), icon: "draw-star", idx: 1 },
-                            { label: qsTr("统计"), icon: "office-chart-bar", idx: 2 }
-                        ]
-
-                        ItemDelegate {
-                            readonly property bool selected: root.currentTab === modelData.idx
-                            Layout.fillWidth: true
-                            text: modelData.label
-                            icon.name: modelData.icon
-                            highlighted: selected
-                            onClicked: {
-                                if (root.appControllerRef) root.appControllerRef.hubTab = modelData.idx
-                                else root.currentTab = modelData.idx
-                            }
+                    ItemDelegate {
+                        readonly property bool selected: root.currentTab === modelData.idx
+                        Layout.fillWidth: true
+                        implicitHeight: Math.max(44, Kirigami.Units.gridUnit * 2.6)
+                        leftPadding: Kirigami.Units.largeSpacing
+                        rightPadding: Kirigami.Units.largeSpacing
+                        text: modelData.label
+                        icon.name: modelData.icon
+                        icon.width: Kirigami.Units.iconSizes.smallMedium
+                        icon.height: Kirigami.Units.iconSizes.smallMedium
+                        icon.color: selected ? Kirigami.Theme.highlightColor
+                                             : Kirigami.Theme.textColor
+                        font.weight: selected ? Font.DemiBold : Font.Normal
+                        highlighted: selected
+                        onClicked: {
+                            if (root.appControllerRef) root.appControllerRef.hubTab = modelData.idx
+                            else root.currentTab = modelData.idx
                         }
                     }
-
-                    Item { Layout.fillHeight: true }
                 }
+
+                Item { Layout.fillHeight: true }
             }
         }
 
-        ColumnLayout {
+        // Content：三个 tab 仍复用原 Loader，不因顶栏上移重建页面状态。
+        StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 0
+            currentIndex: root.currentTab
 
-            // Top navigation bar
-            // Issue #827 评论 3 第 1 点：高度与左栏「素笺」行共用 root.topBarHeight。
-            // Issue #827 评论 4 第 2 点：divider 不能再画在 64 高 Rectangle 内部
-            // （那样落在 y=63..64，而左栏是 64+1=64..65，两条线差 1px 错格）。
-            // 改成和左栏完全同构的「64 高面 + 1px divider 兄弟项」，
-            // 横线才真正从最左贯通到最右。
-            ColumnLayout {
+            Loader {
                 Layout.fillWidth: true
-                spacing: 0
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: root.topBarHeight
-                    color: Kirigami.Theme.alternateBackgroundColor
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: Kirigami.Units.largeSpacing
-                        anchors.rightMargin: Kirigami.Units.largeSpacing
-                        spacing: Kirigami.Units.largeSpacing
-
-                        Item { Layout.fillWidth: true }
-
-                        // Right actions — 收口到 GlobalTopActions（同步 / 搜索 / 设置）
-                        GlobalTopActions {
-                            dt: root.dt
-                            appState: root.appState
-                            syncSource: "hub"
-                            compact: parent.width < 640
-                            onRequestSync: root.requestSync()
-                            onRequestSearch: root.requestSearch()
-                            onOpenSettings: root.openSettings()
+                Layout.fillHeight: true
+                active: root.currentTab === 0
+                sourceComponent: ProjectHomePage {
+                    dt: root.dt
+                    editorBackendRef: root.editorBackendRef
+                    projectBackendRef: root.projectBackendRef
+                    appState: root.appState
+                    tree: root.tree
+                    onOpenProject: function(projectId) {
+                        var title = "";
+                        for (var i = 0; i < root.tree.length; i++) {
+                            if (root.tree[i].id === projectId) {
+                                title = root.tree[i].title;
+                                break;
+                            }
                         }
+                        root.openProject(projectId, title);
                     }
-                }
-
-                // 1px divider 作为 64 高顶栏的兄弟项，和左栏那条严格同一 y。
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 1
-                    color: Kirigami.Theme.disabledTextColor
+                    onCreateProject: root.createProject()
+                    onRenameProjectRequested: function(projectId, title) { root.renameProjectRequested(projectId, title) }
+                    onDeleteProjectRequested: function(projectId, title) { root.deleteProjectRequested(projectId, title) }
                 }
             }
 
-            // Content
-            StackLayout {
+            Loader {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: root.currentTab
+                active: root.currentTab === 1
+                sourceComponent: StarMapPage {
+                    dt: root.dt
+                    starMapController: root.starMapController
+                    appState: root.appState
 
-                Loader {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    active: root.currentTab === 0
-                    sourceComponent: ProjectHomePage {
-                        dt: root.dt
-                        editorBackendRef: root.editorBackendRef
-                        projectBackendRef: root.projectBackendRef
-                        appState: root.appState
-                        tree: root.tree
-                        onOpenProject: function(projectId) {
-                            var title = "";
-                            for (var i = 0; i < root.tree.length; i++) {
-                                if (root.tree[i].id === projectId) {
-                                    title = root.tree[i].title;
-                                    break;
-                                }
-                            }
-                            root.openProject(projectId, title);
-                        }
-                        onCreateProject: root.createProject()
-                        onRenameProjectRequested: function(projectId, title) { root.renameProjectRequested(projectId, title) }
-                        onDeleteProjectRequested: function(projectId, title) { root.deleteProjectRequested(projectId, title) }
+                    onOpenStarmap: function(starmapId, title) {
+                        root.openStarmapWorkspace(starmapId, title);
                     }
                 }
+            }
 
-                Loader {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    active: root.currentTab === 1
-                    sourceComponent: StarMapPage {
-                        dt: root.dt
-                        starMapController: root.starMapController
-                        appState: root.appState
-
-                        onOpenStarmap: function(starmapId, title) {
-                            root.openStarmapWorkspace(starmapId, title);
-                        }
-                    }
-                }
-
-                Loader {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    active: root.currentTab === 2
-                    sourceComponent: StatsPreviewPage {
-                        dt: root.dt
-                        editorBackendRef: root.editorBackendRef
-                        appState: root.appState
-                    }
+            Loader {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                active: root.currentTab === 2
+                sourceComponent: StatsPreviewPage {
+                    dt: root.dt
+                    editorBackendRef: root.editorBackendRef
+                    appState: root.appState
                 }
             }
         }
