@@ -71,8 +71,10 @@ Rectangle {
     color: "transparent"
 
     implicitHeight: Kirigami.Units.gridUnit * 2.6
+    implicitWidth: formatControlsRow.implicitWidth + Kirigami.Units.smallSpacing * 2
 
     RowLayout {
+        id: formatControlsRow
         anchors.fill: parent
         spacing: Kirigami.Units.smallSpacing
 

@@ -550,6 +550,7 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StarMapController.qml");
     println!("cargo:rerun-if-changed=qml/ProjectHomePage.qml");
     println!("cargo:rerun-if-changed=qml/StatsPreviewPage.qml");
+    println!("cargo:rerun-if-changed=qml/MotionDisclosure.qml");
     println!("cargo:rerun-if-changed=qml/StarMapPage.qml");
     println!("cargo:rerun-if-changed=qml/StarMapWorkspace.qml");
     // Issue #822: 递归内容容器，替代已删除的 StarMapScene.qml

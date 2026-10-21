@@ -7,6 +7,15 @@
 use super::*;
 use writer_core::api::types::CorrectionIgnoreScopeDto;
 
+/// Issue #958：RPM 包内自带的中文 KenLM 模型安装路径。
+///
+/// RPM spec 把 `people2014corpus_chars.klm` 装到 `%{_datadir}/sujian/models/`，
+/// 即 `/usr/share/sujian/models/`。运行时直接从这个只读安装目录 mmap 读取，
+/// 不做每用户拷贝。源码运行/开发环境通常没有这个文件，见
+/// `provision_bundled_correction_model`。
+pub(crate) const BUNDLED_CORRECTION_MODEL_PATH: &str =
+    "/usr/share/sujian/models/people2014corpus_chars.klm";
+
 const CORRECTION_DICTIONARY_FILES: [&str; 8] = [
     "word_freq.txt",
     "same_pinyin.txt",
@@ -105,6 +114,33 @@ impl AppBackend {
             .core_api()
             .ok_or_else(|| "Core 尚未打开工作区".to_string())?;
         api.set_correction_model_path(path.to_string())
+            .map_err(|error| error.to_string())
+    }
+
+    /// Issue #958：把 RPM 安装的内置中文 KenLM 模型作为兜底交给 Core。
+    ///
+    /// 判定语义：
+    /// - 内置模型文件不存在（源码运行/开发环境）→ 什么都不做；
+    /// - Core 已配置过模型（`model_configured == true`，即使配置文件当前缺失）→
+    ///   直接返回，绝不覆盖用户自己的模型设置；
+    /// - 仅当 Core 从未配置过模型、且内置文件存在时，才把内置安装路径交给 Core。
+    ///
+    /// 由打开/切换工作区的启动路径调用一次。首次写入后 Core 会把该路径持久化，
+    /// 后续启动 `model_configured` 即为 true，不会反复覆盖。
+    pub(crate) fn provision_bundled_correction_model(&self) -> Result<(), String> {
+        if !std::path::Path::new(BUNDLED_CORRECTION_MODEL_PATH).is_file() {
+            return Ok(());
+        }
+        let api = self
+            .core_api()
+            .ok_or_else(|| "Core 尚未打开工作区".to_string())?;
+        let status = api
+            .get_correction_resource_status()
+            .map_err(|error| error.to_string())?;
+        if status.model_configured {
+            return Ok(());
+        }
+        api.set_correction_model_path(BUNDLED_CORRECTION_MODEL_PATH.to_string())
             .map_err(|error| error.to_string())
     }
 

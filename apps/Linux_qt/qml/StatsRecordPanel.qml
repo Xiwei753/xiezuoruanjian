@@ -135,34 +135,33 @@ Kirigami.ShadowedRectangle {
                     delegate: RowLayout {
                         required property var modelData
                         Layout.fillWidth: true
-                        spacing: Kirigami.Units.smallSpacing
+                        spacing: Kirigami.Units.largeSpacing
 
                         Label {
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: Kirigami.Units.gridUnit * 9
+                            Layout.preferredWidth: Kirigami.Units.gridUnit * 7
                             text: modelData.label
                             color: Kirigami.Theme.disabledTextColor
-                            elide: Text.ElideRight
                         }
 
-                        Kirigami.Heading {
-                            level: 3
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            Layout.preferredWidth: Kirigami.Units.gridUnit * 9
-                            text: modelData.value
-                            color: Kirigami.Theme.textColor
-                            horizontalAlignment: Text.AlignRight
-                            elide: Text.ElideRight
-                        }
+                            spacing: 2
 
-                        Label {
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: Kirigami.Units.gridUnit * 11
-                            text: modelData.date.length > 0 ? modelData.date : qsTr("暂无记录")
-                            color: Kirigami.Theme.disabledTextColor
-                            font: Kirigami.Theme.smallFont
-                            horizontalAlignment: Text.AlignRight
-                            elide: Text.ElideRight
+                            Kirigami.Heading {
+                                level: 3
+                                Layout.fillWidth: true
+                                text: modelData.value
+                                color: Kirigami.Theme.textColor
+                                wrapMode: Text.Wrap
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData.date.length ? modelData.date : qsTr("暂无记录")
+                                font: Kirigami.Theme.smallFont
+                                color: Kirigami.Theme.disabledTextColor
+                                wrapMode: Text.Wrap
+                            }
                         }
                     }
                 }

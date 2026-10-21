@@ -199,6 +199,15 @@ impl SyncBackend {
         }
     }
 
+    pub(crate) fn mark_core_attempt_started(&mut self, operation_id: &str) {
+        if self
+            .with_app_mut(|app| app.mark_sync_core_attempt_started(operation_id))
+            .is_ok()
+        {
+            self.sync_action_completed();
+        }
+    }
+
     /// 异步同步结果的统一处理入口。
     ///
     /// 后台线程的 queued callback 通过 QPointer<SyncBackend> 进入此方法，
@@ -1056,7 +1065,25 @@ impl AppBackend {
 
     // AppBackend::sync_action_result
     pub(crate) fn sync_operation_state(&self) -> QString {
-        self.current_sync_operation_state.clone().into()
+        let Ok(mut state) =
+            serde_json::from_str::<serde_json::Value>(&self.current_sync_operation_state)
+        else {
+            return self.current_sync_operation_state.clone().into();
+        };
+        let Some(object) = state.as_object_mut() else {
+            return self.current_sync_operation_state.clone().into();
+        };
+        let operation_id = object
+            .get("operation_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        object.insert(
+            "core_attempt_started".to_string(),
+            serde_json::Value::Bool(self.sync_core_attempt_started_for_operation_id(operation_id)),
+        );
+        serde_json::to_string(&state)
+            .unwrap_or_else(|_| self.current_sync_operation_state.clone())
+            .into()
     }
 
     // AppBackend::last_sync_report_json

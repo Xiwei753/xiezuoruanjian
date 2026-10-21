@@ -24,6 +24,7 @@ RowLayout {
     property var appState: ({})
     // 当前页面来源，用于把真实按钮点击与后续 request_id/source 关联起来。
     property string syncSource: "unknown"
+    property bool compact: false
 
     signal requestSync()
     signal requestSearch()
@@ -75,6 +76,7 @@ RowLayout {
 
             Label {
                 Layout.alignment: Qt.AlignVCenter
+                visible: !root.compact
                 text: {
                     var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
                     if (s === "success") return qsTr("已同步");
@@ -94,7 +96,9 @@ RowLayout {
     MotionToolButton {
         icon.name: "search"
         text: qsTr("搜索")
-        display: AbstractButton.TextBesideIcon
+        display: root.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
+        ToolTip.visible: hovered
+        ToolTip.text: qsTr("搜索")
         onClicked: root.requestSearch()
     }
 
@@ -102,7 +106,9 @@ RowLayout {
     MotionToolButton {
         icon.name: "configure"
         text: qsTr("设置")
-        display: AbstractButton.TextBesideIcon
+        display: root.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
+        ToolTip.visible: hovered
+        ToolTip.text: qsTr("设置")
         onClicked: root.openSettings()
     }
 }

@@ -376,6 +376,14 @@ impl AppBackend {
         self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
         // 保存 layout 快照，供普通 core_api() getter 和后台同步线程使用。
         self.current_workspace_git_layout = Some(layout.clone());
+        // Issue #958：把 RPM 安装的内置中文 KenLM 模型作为兜底交给 Core。
+        // 此时 current_data_root/current_workspace_git_layout 已设置完毕，
+        // core_api() 可用。方法内部只在 Core 从未配置过模型且内置文件存在时写入，
+        // 用户配置的模型始终优先。失败按 warning 记录，不阻断工作区打开，
+        // 也不弹错误对话框、不改动用户可见状态。
+        if let Err(e) = self.provision_bundled_correction_model() {
+            self.debug_warn("workspace", "provision_bundled_correction_model_failed", &e);
+        }
         // Issue #843 复核评论 6045207375：先完整结束旧 writer（如果有），避免两个
         // writer 生命周期重叠、旧 workspace 事件写进新 root。shutdown_and_join 先 drop
         // sender 让 worker 消费完队列后退出，再 join worker 等待尾部事件落盘。

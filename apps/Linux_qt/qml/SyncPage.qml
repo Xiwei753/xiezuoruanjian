@@ -81,6 +81,15 @@ ColumnLayout {
         case "sync.block.remote_url_missing": msg = qsTr("未设置远程仓库地址"); break;
         case "sync.block.token_missing": msg = qsTr("未设置访问 Token"); break;
         case "sync.block.invalid_directory": msg = qsTr("工作区目录无效"); break;
+        case "sync.result.token_missing": msg = qsTr("未设置访问 Token"); break;
+        case "sync.result.token_invalid": msg = qsTr("GitHub Token 无效或已过期，请检查 Token 是否正确"); break;
+        case "sync.result.token_permission_denied": msg = qsTr("GitHub Token 权限不足，请为目标仓库授予 Contents 读写权限"); break;
+        case "sync.result.repo_not_found_or_no_permission": msg = qsTr("仓库不存在或无访问权限"); break;
+        case "sync.result.branch_missing": msg = qsTr("远程分支不存在"); break;
+        case "sync.result.network_failed": msg = qsTr("网络连接失败"); break;
+        case "sync.result.auth_failed": msg = qsTr("身份验证失败"); break;
+        case "sync.result.non_fast_forward": msg = qsTr("推送被拒绝：远端包含本地尚未同步的提交"); break;
+        case "sync.result.unrelated_histories": msg = qsTr("本地与远端仓库历史不相关，无法自动同步"); break;
         case "sync.phase.diagnose": msg = qsTr("正在诊断..."); break;
         case "sync.phase.dry_run": msg = qsTr("正在试运行..."); break;
         case "sync.phase.syncing": msg = qsTr("正在同步..."); break;
@@ -205,7 +214,7 @@ ColumnLayout {
         if (root.lastManualSyncRequestSerial === window.manualSyncRequestSerial)
             return
         root.lastManualSyncRequestSerial = window.manualSyncRequestSerial
-        root.activeOperationId = window.manualSyncOperationId || ""
+        root.activeOperationId = window.manualSyncDisplayOperationId || ""
         root.activeOperationKind = root.activeOperationId ? "sync" : ""
     }
 
@@ -215,8 +224,8 @@ ColumnLayout {
                 && obj.operation_id === root.activeOperationId
                 && obj.operation_kind === root.activeOperationKind)
             return true
-        if (typeof window !== "undefined" && window.manualSyncOperationId
-                && obj.operation_id === window.manualSyncOperationId
+        if (typeof window !== "undefined" && window.manualSyncDisplayOperationId
+                && obj.operation_id === window.manualSyncDisplayOperationId
                 && obj.operation_kind === "sync")
             return true
         return false
@@ -261,11 +270,6 @@ ColumnLayout {
         // 优先级 2：本轮操作（按 operation_id + operation_kind 过滤）的终态。
         if (opIsCurrent) {
             root.applyOperationStateText(obj)
-            // 本轮同步已产出持久报告（且报告确属最后这一轮）时，改用报告的分组/
-            // path/phase 详情展示（同一次运行的更细视图）；报告缺失或来自更早的
-            // 运行则保留本轮终态，不让旧报告冒充本轮结果。
-            if (obj.operation_kind === "sync" && root.syncReportBelongsToLatestAttempt())
-                root.updatePersistedSyncReportText()
             return
         }
 
@@ -624,6 +628,10 @@ ColumnLayout {
         function onManualSyncOperationIdChanged() {
             root.refreshLocalSyncState()
         }
+        function onManualSyncDisplayOperationIdChanged() {
+            root.adoptLatestManualSyncRequest()
+            root.refreshLocalSyncState()
+        }
         function onManualSyncFeedbackTextChanged() {
             if (window.manualSyncFeedbackIsError && window.manualSyncFeedbackText.indexOf(qsTr("同步未开始：")) === 0)
                 root.resultText = window.manualSyncFeedbackText
@@ -770,10 +778,17 @@ ColumnLayout {
                     root.syncBackendRef.sync_remote_url = urlField.text
                     if (tokenField.text.trim().length > 0) {
                         root.syncBackendRef.set_sync_token(tokenField.text.trim())
-                        tokenField.text = ""
                     }
-                    root.syncBackendRef.save_sync_config()
+                    var configSaved = root.syncBackendRef.save_sync_config()
+                    if (!configSaved) {
+                        // 与“保存配置”按钮共用失败展示；保留 URL/Token 输入，
+                        // 且不要 reload 将用户尚未成功保存的内容覆盖掉。
+                        root.resultText = root.syncBackendRef.sync_operation_state || qsTr("保存配置失败")
+                        root.showConfigFeedback(qsTr("保存配置失败"), true)
+                        return
+                    }
                     root.syncBackendRef.load_sync_config()
+                    tokenField.text = ""
                 }
                 // 统一经过窗口入口执行保存屏障并记录本轮手动同步来源。
                 root.resultText = qsTr("正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件")

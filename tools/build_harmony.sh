@@ -7,6 +7,9 @@
 # 应用的 prebuilt 目录：
 #   apps/harmony/entry/src/main/prebuilt/arm64-v8a/libwriter_core_ffi.so
 #
+# 内置中文 KenLM 模型（Issue #958）改由 entry 模块的 Hvigor 构建钩子在 HAP
+# 资源打包前获取并校验（见 apps/harmony/entry/hvigorfile.ts），本脚本只负责 FFI。
+#
 # 使用方法：
 #   ./tools/build_harmony.sh
 #

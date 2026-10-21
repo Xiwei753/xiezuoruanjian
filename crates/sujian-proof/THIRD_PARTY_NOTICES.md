@@ -2,7 +2,7 @@
 
 `sujian-proof` is distributed as part of Sujian under GPL-3.0-only. The crate
 does not claim that its upstream dependencies, translated algorithms, word data,
-or the optional KenLM model are MIT-compatible.
+or the KenLM model are MIT-compatible.
 
 ## Code and implementation references
 
@@ -69,7 +69,22 @@ as this crate's third-party notice for the translated components.
   the THUOCL and Unihan transformations. The source tables are not included in
   this repository; the derived runtime files and their licenses/attribution
   are included.
-- `people2014corpus_chars.klm` is not included. Its repository page declares
-  `bigscience-bloom-rail-1.0`; see `docs/correction_model_assets.md`. That
-  declaration is not treated as GPL-3.0 compatibility or permission to bundle
-  the model.
+- `people2014corpus_chars.klm` (bundled with the platform packages since Issue
+  #958): the upstream KenLM Chinese model published at
+  <https://huggingface.co/shibing624/chinese-kenlm-klm> by shibing624 (Ming Xu,
+  the pycorrector author), 147,608,010 bytes, SHA-256
+  `1d4ad3975144619a5bddc4ac53fcf319ec27d37dccb4ba58674af3a068d835a9`. Packages
+  ship this upstream file byte-for-byte: it is fetched at build time by
+  `packaging/correction/fetch-model.sh` against
+  `packaging/correction/kenlm-model.lock` and is never modified. The model is
+  distributed under the license label on its upstream page,
+  `bigscience-bloom-rail-1.0` (BigScience RAIL License v1.0). The complete
+  license text is in `packaging/correction/BLOOM-RAIL-1.0.txt`, and the
+  model-specific attribution, redistribution conditions, use restrictions, and
+  separation from the pycorrector/KenLM software notices are documented in
+  `packaging/correction/THIRD_PARTY_MODEL_NOTICES.md` and
+  `docs/correction_model_assets.md`. The model is not relicensed as
+  GPL-3.0-only. Training data per the upstream pycorrector README (“Language
+  Model” section,
+  <https://github.com/shibing624/pycorrector#language-model>): the 2014
+  People's Daily corpus.

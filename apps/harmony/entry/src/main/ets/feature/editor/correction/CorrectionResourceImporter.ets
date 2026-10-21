@@ -1,7 +1,9 @@
 import { common } from '@kit.AbilityKit'
+import { resourceManager } from '@kit.LocalizationKit'
 import { fileIo, fileUri, picker } from '@kit.CoreFileKit'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { CorrectionModelPathStatusDto } from './CorrectionDtos'
+import { NativeCorrectionBridge } from './NativeCorrectionBridge'
 
 const LEXICON_FILES: string[] = [
   'word_freq.txt',
@@ -15,6 +17,15 @@ const LEXICON_FILES: string[] = [
 ]
 
 const MODEL_FILE_PREFIX = 'sujian-correction-model-'
+
+// Issue #958：内置中文 KenLM 模型随 entry HAP 打包，构建期由
+// tools/build_harmony.sh 调 packaging/correction/fetch-model.sh 生成到
+// resources/rawfile/。运行时由 native OH_ResourceManager 接口分块流式复制到
+// 应用私有目录，这里只声明锁定文件的名称、字节数与 SHA-256。
+const BUNDLED_MODEL_RAW_FILE = 'people2014corpus_chars.klm'
+const BUNDLED_MODEL_SIZE = 147608010
+const BUNDLED_MODEL_SHA256 = '1d4ad3975144619a5bddc4ac53fcf319ec27d37dccb4ba58674af3a068d835a9'
+const BUNDLED_MODEL_DIRECTORY = 'correction-models'
 
 export interface CorrectionResourceSnapshot {
   directory: string
@@ -35,6 +46,10 @@ export interface CorrectionResourceImportResult {
  */
 export class CorrectionResourceImporter {
   private static nextModelId: number = 0
+  private static bundledModelBridge: NativeCorrectionBridge = new NativeCorrectionBridge()
+  // 同一应用会话内已校验的沙箱模型路径；模型文件在 correction-models/ 下，
+  // 不参与 correction-data/ 的旧模型清理，缓存不会失效。
+  private static bundledModelPath: string = ''
 
   static inspect(appDataRoot: string): CorrectionResourceSnapshot {
     const directory = `${appDataRoot}/correction-data`
@@ -196,6 +211,25 @@ export class CorrectionResourceImporter {
       }
       return { status: 'failed', message: `词典导入失败：${String(e)}` }
     }
+  }
+
+  /**
+   * Issue #958: 把 HAP 内置 KenLM 模型复制到 `${appDataRoot}/correction-models/`。
+   * 目录先创建；native 侧按固定缓冲分块流式复制并校验字节数与 SHA-256，
+   * 返回校验后的沙箱绝对路径；任何失败都 reject，由调用方决定是否只记 warning。
+   * 用户导入的模型始终优先，本方法只在调用方确认 Core 未配置模型时使用。
+   */
+  static async ensureBundledModel(manager: resourceManager.ResourceManager, appDataRoot: string): Promise<string> {
+    if (CorrectionResourceImporter.bundledModelPath.length > 0) {
+      return CorrectionResourceImporter.bundledModelPath
+    }
+    const directory = `${appDataRoot}/${BUNDLED_MODEL_DIRECTORY}`
+    CorrectionResourceImporter.ensureDirectory(directory)
+    const destination = `${directory}/${BUNDLED_MODEL_RAW_FILE}`
+    const path = await CorrectionResourceImporter.bundledModelBridge.prepareBundledCorrectionModel(
+      manager, BUNDLED_MODEL_RAW_FILE, destination, BUNDLED_MODEL_SIZE, BUNDLED_MODEL_SHA256)
+    CorrectionResourceImporter.bundledModelPath = path
+    return path
   }
 
   static removeModelIfEligible(appDataRoot: string, path: string,

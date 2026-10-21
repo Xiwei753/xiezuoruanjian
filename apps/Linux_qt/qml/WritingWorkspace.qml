@@ -9,10 +9,10 @@
 //   - 通过 WritingTreeController 管理章节树
 //   - 不包含保存、格式化等业务操作
 //
-// 关于布局（Issue #920）
+// 关于布局（Issue #920 / #971）
 //
-// 布局完全由 Qt 平台层自己决定：本组件的 RowLayout + 本地断点 + 本地尺寸常量。
-// Core 不再接收窗口尺寸，也不返回布局模式 / 栏宽 / bounds / 角色矩形。
+// Linux Qt 始终使用桌面 SplitView + 工具轨骨架；可用宽度不足时只隐藏次要侧栏。
+// Core 不接收窗口尺寸，也不返回布局模式 / 栏宽 / bounds / 角色矩形。
 //
 // 本地布局不直接控制以下内容：
 //   - 自研 SujianEditorItem 的 QSG 渲染
@@ -59,30 +59,21 @@ Rectangle {
     // 由 main.qml 注入 globalStarMapController，透传给 RightDrawer.starMapControllerRef。
     property var starMapControllerRef: null
     property var tree: []
-    // 左右 pane 的展开状态只是端侧 UI 状态（不进 Core、不进同步）。
+    // 左右 pane 的展开意图只是端侧 UI 状态（不进 Core、不进同步）。
     // 工具 pane 用「选中的工具 key」表达："" = 收起，非空 = 展开并显示该工具。
     // Issue #829 / #950：手稿里的常驻入口是 starmap / ai / correction；冲突只作为动态附加工具。
     // 不再保留 drawerOpen + drawerTab 两份状态，避免第二套开关。
     // Issue #842 任务3：drawerTool 只表示当前工具选择，不再同时表达折叠状态。
-    // rightPaneCollapsed 独立控制右栏折叠；drawerOpen 由 rightPaneCollapsed 派生。
+    // rightPaneCollapsed 独立保存右栏展开意图；drawerOpen 表示当前确实可见。
     property string drawerTool: "starmap"
     property bool rightPaneCollapsed: true
-    readonly property bool drawerOpen: !root.rightPaneCollapsed
     property bool leftPaneCollapsed: false
-    // Issue #833 复核：SinglePane 下章节导航作为覆盖在正文上的浮层打开，
-    // 不参与 RowLayout 宽度分配；多栏工作台下章节导航由 leftPaneCollapsed 管理，
-    // 这个属性只在 SinglePane 下生效。
-    property bool singlePaneNavOpen: false
+    readonly property bool chapterNavigationShown:
+        !root.leftPaneCollapsed && root.workbenchFitsFor(true, false)
+    readonly property bool drawerOpen:
+        !root.rightPaneCollapsed && root.workbenchFitsFor(root.chapterNavigationShown, true)
 
-    // ── Issue #920：Qt 平台本地布局断点与尺寸 ──
-    // 布局完全由 Qt 自己决定（Qt Quick Layouts + 本地断点），不再让 Core 收窗口
-    // 尺寸 / 返回布局模式、栏宽、bounds。数值沿用旧 Core LayoutMetrics，断点沿用
-    // 旧窗口宽度分类，保证视觉等价：
-    //   width < 600 或 height < 480：单栏；
-    //   >= 600 且 >= 480：多栏工作台（当前 pane 组合放不下时退回单栏）。
-    readonly property int workbenchMinWidth: 600
-    readonly property int workbenchMinHeight: 480
-    readonly property int listPaneWidth: 320
+    // ── Issue #920 / #971：桌面 SplitView 尺寸与次要栏的有效可见状态 ──
     readonly property int listPaneMinWidth: 200
     readonly property int toolPaneMinWidth: 200
     readonly property int toolRailWidth: 56
@@ -93,16 +84,9 @@ Rectangle {
     // Issue #922：SplitView 原生分隔线宽度（vp）。拖动条由 Qt 接管，只看得到这条线。
     readonly property int splitHandleWidth: 6
 
-    // 一级断点：窗口够宽够高才进入多栏工作台。
-    readonly property bool wideWorkbench: root.width >= root.workbenchMinWidth
-                                            && root.height >= root.workbenchMinHeight
-
-    // 当前可见 pane 的多栏最小需求宽度。放不下就退回单栏，不把栏压成细线。
-    // 展开的每个可见 pane 各需一条可见分隔线，预算里要算上 splitHandleWidth，
-    // 否则刚好卡阈值时正文会被 handle 挤小。
+    // 请求展开的面板是否能与正文、最右工具轨共存；空间不足时只让面板让位。
+    // 每个可见 pane 的预算都包含其原生 SplitView 分隔线。
     function workbenchFitsFor(chapterVisible, toolVisible) {
-        if (!root.wideWorkbench)
-            return false
         var needed = (chapterVisible ? root.listPaneMinWidth + root.splitHandleWidth : 0)
                    + (toolVisible ? root.toolPaneMinWidth + root.splitHandleWidth : 0)
                    + root.toolRailWidth
@@ -110,46 +94,20 @@ Rectangle {
         return root.width >= needed
     }
 
-    // 多栏工作台是否成立（等价于旧 Core 的 workbenchPlan.mode === "Workbench"）。
-    readonly property bool multiPane: root.workbenchFitsFor(!root.leftPaneCollapsed, root.drawerOpen)
+    // 左右栏保存用户展开意图；窄窗只改变有效可见状态，空间恢复后自动还原。
+    // 空间不足时始终优先保留正文 + 56vp 工具轨，再让右工具栏、左章节栏依次让位。
+    readonly property bool toolRailVisible: true
 
-    // Issue #833 复核3：SinglePane 和 Workbench 是两套壳结构，状态互不污染。
-    // singlePaneMode：窗口不够大，或当前 pane 组合放不下。
-    readonly property bool singlePaneMode: !root.multiPane
-    readonly property bool chapterNavigationShown:
-        root.singlePaneMode ? root.singlePaneNavOpen : !root.leftPaneCollapsed
-    // 从 SinglePane 切回多栏时清掉浮层状态，避免 overlay 继续盖在工作台上。
-    onSinglePaneModeChanged: {
-        if (!root.singlePaneMode) {
-            root.singlePaneNavOpen = false;
-        }
-    }
-
-    // 最右工具 rail 与两个折叠把手只在多栏工作台出现；单栏时工具 pane
-    // 由正文区里那个箭头按钮收起/展开。
-    readonly property bool toolRailVisible: root.multiPane
-
-    // 工具条带三个分组的尺寸。多栏时 leading/trailing 跟随左右栏分割线，
-    // 让顶栏分段与内容栏边界对齐；单栏时交给组件按内容自适应（-1）。
+    // 工具条带三个分组的尺寸；leading/trailing 跟随桌面 SplitView 的有效栏宽。
     // SplitView 拖动时会自己更新 sidebarRect/rightDrawerRect 的实际宽度，
     // 这里直接读当前实际显示宽度，与 SplitView 原生布局保持同一尺度。
-    readonly property real toolbarHeight: root.multiPane ? root.toolbarMinHeight : -1
+    readonly property real toolbarHeight: root.toolbarMinHeight
     readonly property real toolbarCenterWidth: -1
-    readonly property real toolbarLeadingWidth: root.multiPane
-        ? Math.max(root.toolbarLeadingMinWidth,
-                   root.leftPaneCollapsed ? 0 : (sidebarRect.visible ? sidebarRect.width : 0))
-        : -1
-    readonly property real toolbarTrailingWidth: root.multiPane
-        ? Math.max(root.toolbarTrailingMinWidth,
-                   root.toolRailWidth + (root.drawerOpen && rightDrawerRect.visible
-                                         ? rightDrawerRect.width : 0))
-        : -1
-
-    // 单栏时正文纸面的最大宽度（多栏时正文跟随 Editor 列宽度，不额外限宽）。
-    // 与旧 Core Workbench 的 contentMaxWidthVp 口径一致：min(840, width - 2*32)。
-    readonly property real contentMaxWidthVp: (root.wideWorkbench && root.singlePaneMode)
-        ? Math.min(840, Math.max(0, root.width - 64))
-        : 0
+    readonly property real toolbarLeadingWidth:
+        Math.max(root.toolbarLeadingMinWidth, root.chapterNavigationShown ? sidebarRect.width : 0)
+    readonly property real toolbarTrailingWidth:
+        Math.max(root.toolbarTrailingMinWidth,
+                 root.toolRailWidth + (root.drawerOpen ? rightDrawerRect.width : 0))
 
     // Issue #922：SplitView 拖动与折叠/收起状态之间只互补、不互相写回。
     // sidebarRect / rightDrawerRect 的 SplitView.preferredWidth 是唯一宽度状态源，
@@ -191,13 +149,6 @@ Rectangle {
     // 先按本地最小宽度算一遍，放得下才整体提交；放不下就什么都不改，
     // 不留「已展开但看不见」的端侧状态，也没有中间态闪烁。
     function requestToolPaneOpen(toolKey, allowCollapseLeft) {
-        // SinglePane 使用覆盖式侧栏承载当前工具，不参与 SplitView 宽度预算。
-        if (root.singlePaneMode) {
-            if (toolKey !== "correction") return;
-            root.drawerTool = toolKey || "correction";
-            root.rightPaneCollapsed = false;
-            return;
-        }
         var targetLeftCollapsed = root.leftPaneCollapsed;
         var fits = root.workbenchFitsFor(!root.leftPaneCollapsed, true);
         if (!fits && allowCollapseLeft === true) {
@@ -212,10 +163,6 @@ Rectangle {
 
     // 左目录栏的展开请求，与右侧对称：必要时让右 pane 让位，仍放不下就不改任何状态。
     function requestChapterNavigationOpen() {
-        if (root.singlePaneMode) {
-            root.singlePaneNavOpen = true;
-            return;
-        }
         var targetRightPaneCollapsed = root.rightPaneCollapsed;
         var fits = root.workbenchFitsFor(true, !root.rightPaneCollapsed);
         if (!fits) {
@@ -233,13 +180,7 @@ Rectangle {
     }
 
     function closeChapterNavigation() {
-        // Issue #833 复核3：按 singlePaneMode 分支，SinglePane 只收浮层，
-        // 多栏只收 leftPaneCollapsed，两套状态互不污染。
-        if (root.singlePaneMode) {
-            root.singlePaneNavOpen = false;
-        } else {
-            root.leftPaneCollapsed = true;
-        }
+        root.leftPaneCollapsed = true;
     }
 
     // 展开/收起工具 pane 的统一入口（rail 的展开收起按钮 + 右侧折叠把手）。
@@ -624,8 +565,7 @@ Rectangle {
             anchors.fill: parent
             spacing: 0
 
-            // SplitView 的一级断点逻辑（multiPane / singlePane）保持在外层，
-            // 这里只负责把三栏内容交给 Qt 原生分栏器布局。
+            // SplitView 始终承载章节树、正文与右工具 pane；次要 pane 按有效宽度让位。
             SplitView {
                 id: paneSplitView
                 Layout.fillWidth: true
@@ -668,15 +608,10 @@ Rectangle {
                 }
 
                 // Left sidebar: volume/chapter tree
-                // Issue #833 复核：章节导航内容抽成 WritingChapterNavigation 组件，
-                // 多栏工作台下作为 SplitView 子项，宽度由 SplitView.preferredWidth 表达。
-                // SinglePane 下章节导航作为覆盖浮层打开（见文件末尾 singlePaneNavOverlay），
-                // 不参与宽度分配。
+                // 章节导航作为 SplitView 子项，宽度由 preferredWidth 表达。
                 WritingChapterNavigation {
                     id: sidebarRect
-                    // Issue #833 复核3：多栏工作台下才参与 SplitView 布局，
-                    // SinglePane 下章节导航走 singlePaneNavOverlay 浮层，不占宽度。
-                    visible: !root.singlePaneMode && !root.leftPaneCollapsed
+                    visible: root.chapterNavigationShown
                     // Issue #922：只有一份宽度状态就是 SplitView.preferredWidth，
                     // 用户期望宽度保存于此；最小宽度钳制在这里表达。
                     SplitView.minimumWidth: root.listPaneMinWidth
@@ -707,10 +642,9 @@ Rectangle {
 
                 // Middle Area: Toolbar + Editor
                 ColumnLayout {
-                    // Issue #922：正文列吃满剩余宽度，左右拖动都会改变它；
-                    // 多栏时用 minimumWidth 保证正文不小于 editorMinWidth。
+                    // 正文列吃满剩余宽度，左右拖动都会改变它；工具轨和正文优先保留。
                     SplitView.fillWidth: true
-                    SplitView.minimumWidth: root.multiPane ? root.editorMinWidth : 0
+                    SplitView.minimumWidth: root.editorMinWidth
                     spacing: 0
 
                 // Editor Container Area
@@ -753,20 +687,12 @@ Rectangle {
                         anchors.topMargin: Kirigami.Units.smallSpacing
                         anchors.bottomMargin: Kirigami.Units.smallSpacing
 
-                        // Paper background — Issue #920：单栏时最多夹到 contentMaxWidthVp，
-                        // 多栏时正文直接跟随 Editor 列可用宽度，不额外限宽。
+                        // Paper background 跟随正文列的可用宽度。
                         // 编辑区组件（SujianEditorItem）跟随 paperBg 宽度；
                         // 编辑器交互由 EditorController + SujianEditorItem 直接管理。
                         Rectangle {
                             id: paperBg
-                            // 不再有 480 的平台端最小值：多栏时正文跟随 parent.width，
-                            // 单栏时只在 contentMaxWidthVp > 0 时夹一下，避免正文溢出。
-                            width: root.multiPane
-                                   ? parent.width
-                                   : Math.min(parent.width,
-                                              root.contentMaxWidthVp > 0
-                                                  ? root.contentMaxWidthVp
-                                                  : parent.width)
+                            width: parent.width
                             height: parent.height
                             anchors.horizontalCenter: parent.horizontalCenter
                             color: dt.editorBackground
@@ -808,31 +734,6 @@ Rectangle {
                         }
                     }
 
-                    // Right drawer button (when closed).
-                    // 宽屏 Workbench 由最右竖向 WritingToolRail + 贴边悬浮把手接管收起/展开，
-                    // 这里不再重复画一个，避免同一入口出现两份。窄屏保持原来的右侧箭头按钮。
-                    Rectangle {
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        width: Kirigami.Units.gridUnit * 2
-                        visible: !root.drawerOpen && !root.toolRailVisible && !root.wideWorkbench
-                        color: "transparent"
-
-                        ColumnLayout {
-                            anchors.centerIn: parent
-                            spacing: Kirigami.Units.smallSpacing
-
-                            ToolButton {
-                                Layout.alignment: Qt.AlignHCenter
-                                // Left arrow to indicate it opens from the right
-                                icon.name: "go-previous"
-                                display: AbstractButton.IconOnly
-                                flat: true
-                                onClicked: root.requestToolPaneOpen("correction", true)
-                            }
-                        }
-                    }
                 }
 
                 // Issue #829：底部状态栏。挂在中间 Editor 这一列的末尾，
@@ -858,8 +759,8 @@ Rectangle {
                 // SplitView 拖动时自动更新它；最小宽度钳制在这里表达。
                 SplitView.minimumWidth: root.toolPaneMinWidth
                 SplitView.preferredWidth: 240
-                // Issue #922：只有多栏工作台且工具 pane 展开时才存在。
-                visible: root.multiPane && root.drawerOpen
+                // 只有用户请求展开且当前空间容纳得下时才参与 SplitView。
+                visible: root.drawerOpen
                 dt: root.dt
                 editorBackendRef: root.editorBackendRef
                 editorControllerRef: editorController
@@ -909,8 +810,7 @@ Rectangle {
                 hasConflicts: root.hasConflicts
                 selectedTool: root.drawerTool
                 toolPaneOpen: root.drawerOpen
-                // Issue #920：rail 宽度取 Qt 本地常量（多栏时 56vp，单栏不显示）。
-                railWidth: root.multiPane ? root.toolRailWidth : 56
+                railWidth: root.toolRailWidth
                 onToolRequested: function(toolKey) { root.requestToolPaneOpen(toolKey, true); }
                 onToolPaneToggled: {
                     root.toggleToolPane();
@@ -1036,7 +936,7 @@ Rectangle {
         border.color: leftPaneHandleHover.containsMouse ? Kirigami.Theme.focusColor
                                                         : Kirigami.Theme.disabledTextColor
         border.width: 1
-        x: root.leftPaneCollapsed
+        x: !root.chapterNavigationShown
            ? Kirigami.Units.smallSpacing
            : Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing, sidebarRect.width - width / 2))
         y: Math.round((root.height - height) / 2)
@@ -1046,7 +946,7 @@ Rectangle {
 
         Kirigami.Icon {
             anchors.centerIn: parent
-            source: root.leftPaneCollapsed ? "arrow-right" : "arrow-left"
+            source: root.chapterNavigationShown ? "arrow-left" : "arrow-right"
             color: Kirigami.Theme.textColor
             implicitWidth: Kirigami.Units.iconSizes.smallMedium
             implicitHeight: Kirigami.Units.iconSizes.smallMedium
@@ -1059,13 +959,12 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                if (root.leftPaneCollapsed) {
-                    root.requestChapterNavigationOpen();
-                } else {
+                if (root.chapterNavigationShown) {
                     root.closeChapterNavigation();
+                    root.requestEditorFocus();
+                } else {
+                    root.requestChapterNavigationOpen();
                 }
-                // 收起后把手贴到左边缘，留出边距；不需要动编辑会话。
-                if (root.leftPaneCollapsed) root.requestEditorFocus()
             }
         }
     }
@@ -1116,141 +1015,4 @@ Rectangle {
         }
     }
 
-    // Issue #833 复核：SinglePane 章节导航浮层。
-    // SinglePane（非 Workbench 或 Core 退回单栏）下章节导航不参与 RowLayout 宽度分配，
-    // 作为覆盖在正文上的抽屉打开。点遮罩或选章后自动关闭。
-    // Workbench 下 singlePaneNavOpen 恒为 false，这整块不可见。
-    Item {
-        id: singlePaneNavOverlay
-        anchors.fill: parent
-        // Issue #833 复核3：只在 SinglePane 模式且浮层打开时可见，
-        // Workbench 下恒不可见，避免两套壳互相覆盖。
-        visible: root.singlePaneMode && root.singlePaneNavOpen
-        z: 60
-
-        // 半透明遮罩，点击关闭抽屉。用主题文本色做暗化，避免写死颜色。
-        Rectangle {
-            anchors.fill: parent
-            color: Kirigami.Theme.textColor
-            opacity: 0.4
-            MouseArea {
-                anchors.fill: parent
-                onClicked: root.closeChapterNavigation()
-            }
-        }
-
-        // 左侧抽屉：复用 WritingChapterNavigation，宽度取可用宽度与 Qt 本地
-        // listPaneWidth 的较小值（SinglePane 正文占满，抽屉只是临时覆盖）。
-        WritingChapterNavigation {
-            id: singlePaneNavPanel
-            width: Math.min(parent.width, root.listPaneWidth)
-            height: parent.height
-            x: 0
-            y: 0
-            dt: root.dt
-            tree: root.tree
-            workspaceProjectId: root.workspaceProjectId
-            workspaceProjectTitle: root.workspaceProjectTitle
-            currentChapterId: editorController.chapterId
-
-            onOpenChapter: function(pId, vId, cId, cTitle) {
-                root.openChapter(pId, vId, cId, cTitle)
-                root.closeChapterNavigation()
-            }
-            onCreateVolumeRequested: function(pId) {
-                root.createVolumeRequested(pId)
-            }
-            onCreateChapterRequested: function(pId, vId) {
-                root.createChapterRequested(pId, vId)
-            }
-            onRenameItemRequested: function(itemData) {
-                root.renameItemRequested(itemData)
-            }
-            onDeleteItemRequested: function(itemData) {
-                root.deleteItemRequested(itemData)
-            }
-        }
-    }
-
-    // Issue #950：SinglePane 沿用 drawerTool 和同一个 CorrectionPanel，
-    // 以覆盖式侧栏显示工具内容，不把校对入口放回正文。
-    Item {
-        id: singlePaneToolOverlay
-        anchors.fill: parent
-        visible: root.singlePaneMode && root.drawerOpen && root.drawerTool === "correction"
-        z: 61
-
-        Rectangle {
-            anchors.fill: parent
-            color: Kirigami.Theme.textColor
-            opacity: 0.4
-
-            MouseArea {
-                anchors.fill: parent
-                onClicked: root.closeToolPane()
-            }
-        }
-
-        Rectangle {
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            anchors.right: parent.right
-            width: Math.min(parent.width, 240)
-            color: Kirigami.Theme.alternateBackgroundColor
-
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 0
-
-                Item {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: Kirigami.Units.gridUnit * 2.4
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: Kirigami.Units.smallSpacing
-                        anchors.rightMargin: Kirigami.Units.smallSpacing
-                        spacing: Kirigami.Units.smallSpacing
-
-                        PaneFoldButton {
-                            dt: root.dt
-                            Layout.alignment: Qt.AlignVCenter
-                            onTriggered: root.closeToolPane()
-                        }
-
-                        Label {
-                            text: qsTr("校对")
-                            color: Kirigami.Theme.textColor
-                            font.bold: true
-                            Layout.fillWidth: true
-                        }
-
-                        ToolButton {
-                            icon.name: "window-close"
-                            icon.width: Kirigami.Units.iconSizes.small
-                            icon.height: Kirigami.Units.iconSizes.small
-                            display: AbstractButton.IconOnly
-                            flat: true
-                            Layout.alignment: Qt.AlignVCenter
-                            onClicked: root.closeToolPane()
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 1
-                    color: Kirigami.Theme.disabledTextColor
-                    opacity: 0.3
-                }
-
-                CorrectionPanel {
-                    visible: root.drawerOpen && root.drawerTool === "correction"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    editorControllerRef: editorController
-                }
-            }
-        }
-    }
 }

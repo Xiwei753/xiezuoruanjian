@@ -237,6 +237,16 @@ fn build_export_attachments(
             match serde_json::from_str::<serde_json::Value>(&app.current_sync_operation_state) {
                 Ok(mut v) => {
                     if let Some(obj) = v.as_object_mut() {
+                        let operation_id = obj
+                            .get("operation_id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default();
+                        obj.insert(
+                            "core_attempt_started".to_string(),
+                            serde_json::Value::Bool(
+                                app.sync_core_attempt_started_for_operation_id(operation_id),
+                            ),
+                        );
                         // 合并 progress sink 的 target 进度（同步运行中才有）。
                         if let Some(ref sink) = app.current_sync_progress {
                             let progress = sink.snapshot();
@@ -363,6 +373,9 @@ fn build_export_attachments(
         .as_ref()
         .and_then(|state| state.get("status_code"))
         .and_then(|value| value.as_str());
+    let core_attempt_started = operation_id
+        .map(|id| app.sync_core_attempt_started_for_operation_id(id))
+        .unwrap_or(false);
     let exported_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
@@ -391,6 +404,7 @@ fn build_export_attachments(
         "operation_id": operation_id,
         "operation_kind": operation_kind,
         "operation_status": operation_status,
+        "core_attempt_started": core_attempt_started,
         "last_attempt_time": last_attempt_time,
         "last_success_time": last_success_time,
         "last_report_attempted_at": last_report_attempted_at,

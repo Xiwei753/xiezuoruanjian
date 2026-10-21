@@ -34,13 +34,9 @@ Rectangle {
     property int currentTab: appControllerRef ? appControllerRef.hubTab : 0
     property bool aiCapable: false
     property bool aiEnabled: false
-    // Issue #920：一级导航放左侧（宽屏）还是放顶部（窄屏）由 Qt 自己按窗口宽度
-    // 断点决定，不再从 Core 读 primaryNavigationPlacement。840vp 与旧 Core
-    // breakpoints 的 Wide 起点一致：≥840 用左侧导航栏，否则用顶部导航条。
-    readonly property int wideShellBreakpoint: 840
-    readonly property bool wideShell: root.width >= root.wideShellBreakpoint
+    // Linux Qt 始终使用桌面外壳：一级导航固定在左栏，窗口宽度只影响内容区。
 
-    // Issue #827 评论 3 第 1 点：宽屏顶栏高度。左栏「素笺」行与右侧动作条
+    // Issue #827 评论 3 第 1 点：桌面顶栏高度。左栏「素笺」行与右侧动作条
     // 必须用同一个值，两条分隔线才能落在同一个 y 上。
     readonly property int topBarHeight: 64
 
@@ -64,7 +60,6 @@ Rectangle {
         // 作品/星图/统计仍复用原来的 currentTab + 三个 Loader，不另做第二套路由。
         // 宽屏不再有任何底部导航；侧栏也不为了追求沉浸光感改回底栏。
         Rectangle {
-            visible: root.wideShell
             Layout.fillHeight: true
             Layout.preferredWidth: 160
             color: Kirigami.Theme.alternateBackgroundColor
@@ -160,48 +155,6 @@ Rectangle {
                         anchors.rightMargin: Kirigami.Units.largeSpacing
                         spacing: Kirigami.Units.largeSpacing
 
-                        // Logo（窄屏顶栏；宽屏标题已移到左侧导航）
-                        Row {
-                            visible: !root.wideShell
-                            spacing: Kirigami.Units.smallSpacing
-                            Layout.alignment: Qt.AlignVCenter
-                            Kirigami.Heading {
-                                level: 2
-                                text: qsTr("素笺")
-                                color: Kirigami.Theme.highlightColor
-                            }
-                        }
-
-                        // Navigation tabs（窄屏顶栏；宽屏使用左侧一级导航）
-                        Row {
-                            visible: !root.wideShell
-                            spacing: Kirigami.Units.smallSpacing
-                            Layout.alignment: Qt.AlignVCenter
-
-                            Repeater {
-                                model: [
-                                    { label: qsTr("作品"), idx: 0 },
-                                    { label: qsTr("星图"), idx: 1 },
-                                    { label: qsTr("统计"), idx: 2 }
-                                ]
-
-                                Button {
-                                    text: modelData.label
-                                    flat: true
-                                    highlighted: root.currentTab === modelData.idx
-                                    // Issue #796 评论 5886483653: 点击改 appControllerRef.hubTab，
-                                    // currentTab 由绑定跟随，Loader 重建后不丢。
-                                    onClicked: {
-                                        if (root.appControllerRef) {
-                                            root.appControllerRef.hubTab = modelData.idx
-                                        } else {
-                                            root.currentTab = modelData.idx
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
                         Item { Layout.fillWidth: true }
 
                         // Right actions — 收口到 GlobalTopActions（同步 / 搜索 / 设置）
@@ -209,6 +162,7 @@ Rectangle {
                             dt: root.dt
                             appState: root.appState
                             syncSource: "hub"
+                            compact: parent.width < 640
                             onRequestSync: root.requestSync()
                             onRequestSearch: root.requestSearch()
                             onOpenSettings: root.openSettings()
