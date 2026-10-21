@@ -57,9 +57,13 @@ ColumnLayout {
         writingLeadingInner.implicitWidth + Kirigami.Units.largeSpacing + Kirigami.Units.smallSpacing
     readonly property real writingTrailingNaturalWidth:
         topActions.implicitWidth + Kirigami.Units.largeSpacing * 2
+    // 展开阈值只使用不受 compactActions 影响的完整态预算，避免
+    // compactActions → GlobalTopActions.compact → implicitWidth → 阈值
+    // 反过来改变 compactActions 的绑定环。完整态右侧至少按 14 个
+    // gridUnit 预留，覆盖同步状态文案 / 搜索 / 设置同时显示的情况。
     readonly property real writingExpandedWidth:
         Math.max(root.toolbarLeadingWidth, writingLeadingNaturalWidth)
-        + Math.max(root.toolbarTrailingWidth, writingTrailingNaturalWidth)
+        + Math.max(root.toolbarTrailingWidth, Kirigami.Units.gridUnit * 14)
         + formatGroup.implicitWidth
         + Kirigami.Units.largeSpacing * 2
 

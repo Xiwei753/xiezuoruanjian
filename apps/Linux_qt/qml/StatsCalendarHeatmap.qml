@@ -304,6 +304,9 @@ Item {
             contentHeight: heatmapCanvas.height
             clip: true
             boundsBehavior: Flickable.StopAtBounds
+            // 桌面统计页禁止鼠标左键拖拽画布；横向移动交给滚轮/触摸板
+            // 与下方滚动条，左键保留给 MouseArea 选日期。
+            acceptedButtons: Qt.NoButton
 
             Canvas {
                 id: heatmapCanvas
