@@ -934,7 +934,7 @@ impl CorrectionStore {
         ) && !sujian_proof::is_valid_work_entity(entry)
         {
             return Err(WriterError::Other(
-                "人物/地点词条必须是 2–8 个汉字的完整名称".into(),
+                "人物/地点词条必须是完整的作品名称（不超过 64 个字符）".into(),
             ));
         }
         self.update_preferences(|preferences| {

@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 private const val CORRECTION_SCAN_DEBOUNCE_MS = 250L
@@ -92,6 +94,8 @@ class EditorCorrectionCoordinator(
      */
     private val applyChannel = Channel<PendingApply>(Channel.UNLIMITED)
     private val applyScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** Set once the owning ViewModel is destroyed; no later work may publish or enqueue. */
+    private val disposed = AtomicBoolean(false)
 
     private data class PendingScan(
         val identity: EditorCorrectionIdentity,
@@ -134,6 +138,7 @@ class EditorCorrectionCoordinator(
         text: String,
         lease: EditorInputLease,
     ) {
+        if (disposed.get()) return
         // Use the lease captured by the edit transaction, never a lease sampled
         // when this queued coroutine happens to run. Reopening the chapter changes
         // the epoch (and usually the session id); replaying an old text/range pair
@@ -472,12 +477,30 @@ class EditorCorrectionCoordinator(
     }
 
     fun clear(targetId: String? = null) {
+        if (disposed.get()) return
         requestGeneration.incrementAndGet()
         pendingScanJob?.cancel()
         if (targetId == null || _state.value.targetId == targetId) {
             applyEpoch.incrementAndGet()
             _state.value = EditorCorrectionState()
         }
+    }
+
+    /**
+     * Final teardown when the owning ViewModel is destroyed. Unlike [clear],
+     * this closes the ordered apply channel and cancels both standalone
+     * scopes, so no coroutine or session reference survives the editor.
+     */
+    fun dispose() {
+        if (!disposed.compareAndSet(false, true)) return
+        applyEpoch.incrementAndGet()
+        requestGeneration.incrementAndGet()
+        pendingScanJob?.cancel()
+        pendingScanJob = null
+        applyChannel.close()
+        applyScope.cancel()
+        pendingScope.cancel()
+        _state.value = EditorCorrectionState()
     }
 
     private fun snapshotMatchesLease(

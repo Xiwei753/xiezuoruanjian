@@ -982,6 +982,8 @@ class EditorViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        correctionCoordinator?.dispose()
+        correctionCoordinator = null
         syncObserverJob?.cancel()
         autoSaveJob?.cancel()
         statsRefreshJob?.cancel()

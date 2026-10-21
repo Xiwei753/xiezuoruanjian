@@ -10,18 +10,18 @@
 
 #![allow(dead_code)]
 
-use crate::segment::is_chinese_string;
-
-/// Maximum length considered for a work entity. Longer entries are still
-/// protected as exact text but are not treated as name candidates.
-const MAX_ENTITY_CHARS: usize = 8;
+/// Upper bound for an author-confirmed work entity. This is only a sanity
+/// limit for the inventory; exact protection handles arbitrary text.
+const MAX_ENTITY_CHARS: usize = 64;
 
 /// Whether an author-declared person or place is a complete work name that
-/// the entity inventory can accept. Ordinary terms may be shorter or contain
-/// punctuation; person/place entries must be a whole Chinese name.
+/// the entity inventory can accept. Names may mix scripts and use punctuation
+/// (`A-17`, `阿尔托莉雅·潘德拉贡`), so the only requirements are non-empty
+/// content without control characters and a reasonable length.
 pub fn is_valid_work_entity(text: &str) -> bool {
-    let char_len = text.chars().count();
-    (2..=MAX_ENTITY_CHARS).contains(&char_len) && is_chinese_string(text)
+    !text.trim().is_empty()
+        && !text.chars().any(char::is_control)
+        && text.chars().count() <= MAX_ENTITY_CHARS
 }
 
 /// Explicit author-confirmed type of a work-dictionary entry.
@@ -72,18 +72,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_explicitly_typed_chinese_names_are_recorded() {
+    fn mixed_script_and_punctuated_names_are_recorded() {
         let mut lexicon = WorkEntityLexicon::default();
         lexicon.insert("宿泽柳".to_string(), ProperNameKind::Person);
         lexicon.insert("祁门客栈".to_string(), ProperNameKind::Place);
-        lexicon.insert("设定术语".to_string(), ProperNameKind::Person);
-        lexicon.insert("a".to_string(), ProperNameKind::Place);
+        lexicon.insert("阿尔托莉雅·潘德拉贡".to_string(), ProperNameKind::Person);
+        lexicon.insert("A-17".to_string(), ProperNameKind::Person);
+        lexicon.insert("第十七研究所".to_string(), ProperNameKind::Place);
         let texts = lexicon
             .entities()
             .iter()
             .map(|entity| entity.text.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(texts, vec!["宿泽柳", "祁门客栈", "设定术语"]);
+        assert_eq!(
+            texts,
+            vec![
+                "宿泽柳",
+                "祁门客栈",
+                "阿尔托莉雅·潘德拉贡",
+                "A-17",
+                "第十七研究所"
+            ]
+        );
     }
 
     #[test]
@@ -96,9 +106,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_or_long_entries_are_ignored() {
+    fn empty_control_or_long_entries_are_ignored() {
         let mut lexicon = WorkEntityLexicon::default();
         lexicon.insert(String::new(), ProperNameKind::Person);
+        lexicon.insert("   ".to_string(), ProperNameKind::Place);
+        lexicon.insert("宿\n泽柳".to_string(), ProperNameKind::Person);
         lexicon.insert("很".repeat(MAX_ENTITY_CHARS + 1), ProperNameKind::Place);
         assert!(lexicon.is_empty());
     }
