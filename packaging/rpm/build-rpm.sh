@@ -12,11 +12,12 @@
 # 依赖 (Fedora/RHEL):
 #   sudo dnf install rpm-build rpmdevtools \
 #       qt6-qtbase-devel qt6-qtdeclarative-devel \
-#       qt6-qttools-devel \
+#       qt6-qttools-devel kf6-kcolorscheme-devel \
 #       rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel
 #
 # 运行时依赖 (由 spec 的 Requires 拉取，供本地运行/验证时手动安装):
-#   Fedora/RHEL: kf6-kirigami kf6-kirigami-addons qqc2-breeze-style breeze-icon-theme
+#   Fedora/RHEL: qt6-qtwayland kf6-kirigami kf6-kirigami-addons kf6-kcolorscheme \
+#                plasma-breeze-common qqc2-breeze-style breeze-icon-theme
 #   Debian/Ubuntu: kirigami2 kirigami-addons qqc2-breeze-style breeze-icon-theme
 #
 set -euo pipefail
@@ -49,10 +50,11 @@ if ! command -v rpmbuild >/dev/null 2>&1; then
     echo "    sudo dnf install rpm-build rpmdevtools" >&2
     echo "  构建依赖:" >&2
     echo "    sudo dnf install qt6-qtbase-devel qt6-qtdeclarative-devel \\" >&2
-    echo "        qt6-qttools-devel \\" >&2
+    echo "        qt6-qttools-devel kf6-kcolorscheme-devel \\" >&2
     echo "        rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel" >&2
     echo "  运行时依赖 (运行已打好的包时需要, 由 spec Requires 声明):" >&2
-    echo "    sudo dnf install kf6-kirigami kf6-kirigami-addons qqc2-breeze-style breeze-icon-theme" >&2
+    echo "    sudo dnf install qt6-qtwayland kf6-kirigami kf6-kirigami-addons \\" >&2
+    echo "        kf6-kcolorscheme plasma-breeze-common qqc2-breeze-style breeze-icon-theme" >&2
     exit 1
 fi
 
