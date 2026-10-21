@@ -46,6 +46,8 @@ export struct WideStatsContent {
   /** 点展开面板的返回箭头：回到四卡总览。 */
   onCloseExpanded: () => void = () => {}
   onRetry: () => void = () => {}
+  /** Issue #968：根容器实际挂载后回报，诊断不依赖预计分支。 */
+  onMounted: () => void = () => {}
   // #956 码字日历：消费同一份每日快照 + 年份切换 / 日格选择回调，组件自己不查 Core。
   @Prop heatmap: WritingStatsHeatmap | null = null
   @Prop heatmapYear: number = new Date().getFullYear()
@@ -163,6 +165,9 @@ export struct WideStatsContent {
       if (nextHeight > 0 && Math.abs(nextHeight - this.availableHeightVp) >= 0.5) {
         this.availableHeightVp = nextHeight
       }
+    })
+    .onAppear(() => {
+      this.onMounted()
     })
   }
 

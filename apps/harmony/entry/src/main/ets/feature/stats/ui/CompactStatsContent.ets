@@ -46,6 +46,8 @@ export struct CompactStatsContent {
   onSelectPeriod: (preset: string) => void = (_preset: string) => {}
   onPickCustomRange: () => void = () => {}
   onRetry: () => void = () => {}
+  /** Issue #968：根容器实际挂载后回报，诊断不依赖预计分支。 */
+  onMounted: () => void = () => {}
   // #956 码字日历：消费同一份每日快照 + 年份切换 / 日格选择回调，组件自己不查 Core。
   @Prop heatmap: WritingStatsHeatmap | null = null
   @Prop heatmapYear: number = new Date().getFullYear()
@@ -119,6 +121,9 @@ export struct CompactStatsContent {
     .width('100%')
     .scrollBar(BarState.Off)
     .align(Alignment.Top)
+    .onAppear(() => {
+      this.onMounted()
+    })
   }
 
   /** 页内错误提示（自选日期非法 / Core 查询失败都在这里显示，附重试）。 */
