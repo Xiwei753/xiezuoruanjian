@@ -94,6 +94,14 @@ class EditorCorrectionCoordinator(
      */
     private val applyChannel = Channel<PendingApply>(Channel.UNLIMITED)
     private val applyScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * Only the newest transaction keeps a full-text candidate for the debounced
+     * model scan. Older stage-one queue entries deliberately hold no chapter
+     * text, so a slow consumer cannot retain one full copy per keystroke.
+     */
+    @Volatile
+    private var pendingScanCandidate: PendingScan? = null
+    private val pendingScanCandidateLock = Any()
     /** Set once the owning ViewModel is destroyed; no later work may publish or enqueue. */
     private val disposed = AtomicBoolean(false)
 
@@ -112,7 +120,6 @@ class EditorCorrectionCoordinator(
         val applyEpoch: Long,
         val textRevision: Long,
         val baseRevision: Long,
-        val text: String,
         val edits: List<uniffi.writer_core.CorrectionEditRangeDto>,
     )
 
@@ -127,10 +134,12 @@ class EditorCorrectionCoordinator(
     /**
      * Queue the editor transaction's real display patches; never infer edits from the caret.
      *
-     * [text] is the full committed text at [EditResult.newRevision], captured with the
-     * transaction. The live kernel may already be at a newer revision when this queued
-     * request reaches Core, so the revision must not be re-read here: Core applies the
-     * patches against the captured text and advances its own segment index incrementally.
+     * The stage-one queue carries only revision/ranges/lease. [text] is the full
+     * committed text at [EditResult.newRevision], but it is kept in the single
+     * [pendingScanCandidate] slot for the debounced model scan rather than copied
+     * into every queued transaction. The live kernel may already be at a newer
+     * revision when this request reaches Core, so the revision must not be re-read
+     * here: Core applies the patches against its committed segment index.
      */
     fun enqueueEdits(
         identity: EditorCorrectionIdentity,
@@ -168,6 +177,9 @@ class EditorCorrectionCoordinator(
             )
         }
         _state.value = _state.value.copy(sessionId = lease.sessionId)
+        setPendingScanCandidate(
+            PendingScan(identity, lease, generation, edit.newRevision, text),
+        )
         applyChannel.trySend(
             PendingApply(
                 identity = identity,
@@ -176,7 +188,6 @@ class EditorCorrectionCoordinator(
                 applyEpoch = applyEpoch.get(),
                 textRevision = edit.newRevision,
                 baseRevision = edit.baseRevision,
-                text = text,
                 edits = edits,
             ),
         )
@@ -202,7 +213,14 @@ class EditorCorrectionCoordinator(
                         edits = request.edits,
                     )
                 }
-            if (applied !is BridgeResult.Success) return
+            if (applied !is BridgeResult.Success) {
+                if (request.generation == requestGeneration.get() &&
+                    request.applyEpoch == applyEpoch.get()
+                ) {
+                    clearPendingScanCandidate(request)
+                }
+                return
+            }
         }
         if (request.applyEpoch != applyEpoch.get()) return
         // Only the latest revision runs the model. Older mappings have already
@@ -214,20 +232,44 @@ class EditorCorrectionCoordinator(
             return
         }
         pendingScanJob?.cancel()
-        val pending =
-            PendingScan(
-                request.identity,
-                request.lease,
-                request.generation,
-                request.textRevision,
-                request.text,
-            )
+        val pending = takePendingScanCandidate(request) ?: return
         pendingScanJob =
             pendingScope.launch {
                 delay(CORRECTION_SCAN_DEBOUNCE_MS)
                 scanPending(pending)
             }
     }
+
+    private fun setPendingScanCandidate(candidate: PendingScan?) {
+        synchronized(pendingScanCandidateLock) {
+            pendingScanCandidate = candidate
+        }
+    }
+
+    private fun takePendingScanCandidate(request: PendingApply): PendingScan? =
+        synchronized(pendingScanCandidateLock) {
+            val candidate = pendingScanCandidate ?: return@synchronized null
+            if (!pendingScanMatches(candidate, request)) {
+                return@synchronized null
+            }
+            pendingScanCandidate = null
+            candidate
+        }
+
+    private fun clearPendingScanCandidate(request: PendingApply) {
+        synchronized(pendingScanCandidateLock) {
+            val candidate = pendingScanCandidate ?: return@synchronized
+            if (pendingScanMatches(candidate, request)) {
+                pendingScanCandidate = null
+            }
+        }
+    }
+
+    private fun pendingScanMatches(candidate: PendingScan, request: PendingApply): Boolean =
+        candidate.generation == request.generation &&
+            candidate.textRevision == request.textRevision &&
+            candidate.identity == request.identity &&
+            candidate.lease == request.lease
 
     private suspend fun scanPending(pending: PendingScan) {
         if (pending.generation != requestGeneration.get() || currentIdentity() != pending.identity) return
@@ -267,6 +309,7 @@ class EditorCorrectionCoordinator(
 
     suspend fun checkChapter(identity: EditorCorrectionIdentity) {
         pendingScanJob?.cancel()
+        setPendingScanCandidate(null)
         val lease = sessionCoordinator.currentInputLease() ?: return
         if (lease.targetId != identity.targetId || currentIdentity() != identity) return
         val generation = requestGeneration.incrementAndGet()
@@ -482,6 +525,7 @@ class EditorCorrectionCoordinator(
         pendingScanJob?.cancel()
         if (targetId == null || _state.value.targetId == targetId) {
             applyEpoch.incrementAndGet()
+            setPendingScanCandidate(null)
             _state.value = EditorCorrectionState()
         }
     }
@@ -497,6 +541,7 @@ class EditorCorrectionCoordinator(
         requestGeneration.incrementAndGet()
         pendingScanJob?.cancel()
         pendingScanJob = null
+        setPendingScanCandidate(null)
         applyChannel.close()
         applyScope.cancel()
         pendingScope.cancel()

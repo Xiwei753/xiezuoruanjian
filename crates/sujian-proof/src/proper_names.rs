@@ -7,6 +7,8 @@
 // text. This module deliberately does not guess that a similar span is a typo:
 // without reliable entity-usage evidence, a near match must produce no
 // suggestion at all rather than a warning that the author has to dismiss.
+// Known-entity consistency checks likewise need independent entity-usage
+// evidence; until such a source exists, registered names are protection-only.
 
 #![allow(dead_code)]
 
