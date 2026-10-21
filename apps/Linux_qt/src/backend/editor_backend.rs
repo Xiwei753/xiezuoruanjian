@@ -165,7 +165,7 @@ pub struct EditorBackend {
     get_writing_speed_curve_object: qt_method!(
         fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QJsonObject
     ),
-    /// 实时写作速度（最近 N 秒）。状态栏左段「N 字/分」走这里，不读速度曲线。
+    /// 实时写作速度（最近 N 秒）。状态栏左段「N 字/时」走这里，不读速度曲线。
     #[allow(dead_code)]
     get_current_writing_speed: qt_method!(fn(&self, window_seconds: u32) -> QJsonObject),
     /// Issue #935：异步请求统计面板快照。

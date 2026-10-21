@@ -3,7 +3,7 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：展示 Core Explorer 快照里的一张时段卡（字数 / 字每分 / 字每天 / 区间），
+// 职责：展示 Core Explorer 快照里的一张时段卡（字数 / 字每时 / 字每天 / 区间），
 //   展开态下同一组件作为左侧当前时段摘要条。
 // 约束：
 //   - 纯展示组件：只消费 periodSummary（WritingStatsPeriodCardDto 或选中时段
@@ -60,6 +60,14 @@ Kirigami.ShadowedRectangle {
         var v = Number(n)
         if (isNaN(v)) return "—"
         return String(Math.round(v * 10) / 10)
+    }
+
+    // 每分钟均值折算每小时；null 保持 "—"，不能把空值当成 0。
+    function formatAveragePerHour(n) {
+        if (n === null || n === undefined) return "—"
+        var v = Number(n)
+        if (isNaN(v)) return "—"
+        return formatAverage(v * 60)
     }
 
     function formatDate(iso) {
@@ -131,7 +139,7 @@ Kirigami.ShadowedRectangle {
         Kirigami.Heading {
             level: 3
             Layout.fillWidth: true
-            text: root.formatAverage(root.val(root.periodSummary, "averageCharsPerMinute")) + " " + qsTr("字/分")
+            text: root.formatAveragePerHour(root.val(root.periodSummary, "averageCharsPerMinute")) + " " + qsTr("字/时")
             color: Kirigami.Theme.textColor
             font.pixelSize: Math.round(Kirigami.Units.gridUnit * 1.1)
             elide: Text.ElideRight

@@ -89,7 +89,7 @@ export interface IWriterCoreBridge {
   // Issue #829 评论10：「今天」由 Core 本地日历口径决定，端侧不传日期字符串。
   getTodayWritingStatsSummary(): Promise<ResultEnvelope<WritingStats>>
   getWritingSpeedCurve(startDate: string, endDate: string, bucketMinutes: number): Promise<ResultEnvelope<SpeedCurve>>
-  // Issue #829：实时写作速度（最近 windowSeconds 秒），状态栏左段「字/分」走这里。
+  // Issue #829：实时写作速度（最近 windowSeconds 秒），状态栏左段「字/时」由其折算。
   getCurrentWritingSpeed(windowSeconds: number): Promise<ResultEnvelope<CurrentWritingSpeed>>
   // Issue #829 评论5：按编辑事务上报写作统计。透传 cause + contentDelta，
   // source 分类由 Core 决定，端侧不要自己拼 source 字符串。

@@ -21,6 +21,7 @@ import {
 import {
   EMPTY_STATS_EXPLORER,
   formatAverage,
+  formatAveragePerHour,
   formatDateHuman,
   formatDateRangeHuman,
   formatDurationHuman,
@@ -165,7 +166,7 @@ export struct WideLifetimeSummary {
           .fontColor($r('sys.color.font_secondary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(`平均 ${formatAverage(this.explorer.lifetime.averageCharsPerMinute)} 字/分 · 日均 ${formatAverage(this.explorer.lifetime.averageCharsPerDay)} 字/天`)
+        Text(`平均 ${formatAveragePerHour(this.explorer.lifetime.averageCharsPerMinute)} 字/时 · 日均 ${formatAverage(this.explorer.lifetime.averageCharsPerDay)} 字/天`)
           .fontSize(14)
           .fontColor($r('sys.color.font_secondary'))
           .maxLines(1)

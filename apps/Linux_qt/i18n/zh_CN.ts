@@ -1478,8 +1478,8 @@
         <translation>详细统计读取失败</translation>
     </message>
     <message>
-        <source>平均 %1 字/分 · %2 字/天</source>
-        <translation>平均 %1 字/分 · %2 字/天</translation>
+        <source>平均 %1 字/时 · %2 字/天</source>
+        <translation>平均 %1 字/时 · %2 字/天</translation>
     </message>
     <message>
         <source>共计 %1 天</source>
@@ -1502,8 +1502,8 @@
         <translation>暂无记录</translation>
     </message>
     <message>
-        <source>平均 %1 字/分 · %2 字/天 · 有写作 %3 天</source>
-        <translation>平均 %1 字/分 · %2 字/天 · 有写作 %3 天</translation>
+        <source>平均 %1 字/时 · %2 字/天 · 有写作 %3 天</source>
+        <translation>平均 %1 字/时 · %2 字/天 · 有写作 %3 天</translation>
     </message>
     <message>
         <source>素笺写作已陪伴您 %1 天</source>
@@ -1522,8 +1522,8 @@
         <translation>本周速度曲线</translation>
     </message>
     <message>
-        <source>峰值 %1 字/分 · %2 段</source>
-        <translation>峰值 %1 字/分 · %2 段</translation>
+        <source>峰值 %1 字/时 · %2 段</source>
+        <translation>峰值 %1 字/时 · %2 段</translation>
     </message>
     <message>
         <source> 字</source>
@@ -2509,8 +2509,8 @@
         <translation>点击选择区间</translation>
     </message>
     <message>
-        <source>字/分</source>
-        <translation>字/分</translation>
+        <source>字/时</source>
+        <translation>字/时</translation>
     </message>
     <message>
         <source>字/天</source>

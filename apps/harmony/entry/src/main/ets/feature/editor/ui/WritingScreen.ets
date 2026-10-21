@@ -75,7 +75,7 @@ const EDITOR_MIN_WIDTH_VP: number = 360
 
 // 时钟刷新间隔（ms）。秒级跳动对手稿里的 HH:mm 没有意义，30s 对齐即可。
 const STATUS_CLOCK_INTERVAL_MS: number = 30000
-// Issue #829 评论3第2项：状态栏左段「字/分」的速度窗口（最近一分钟）。
+// Issue #829 评论3第2项：状态栏左段「字/时」的速度窗口（最近一分钟）。
 const WRITING_SPEED_WINDOW_SECONDS: number = 60
 
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
@@ -258,7 +258,7 @@ export struct WritingScreen {
     this.refreshClockText()
     this.clockTimer = setInterval(() => {
       this.refreshClockText()
-      // Issue #829 评论2第2项：「字/分」是分钟级速度，必须跟着时间走。
+      // Issue #829 评论2第2项：「字/时」展示的是分钟级速度折算，必须跟着时间走。
       this.refreshWritingStatusData().catch(() => {})
     }, STATUS_CLOCK_INTERVAL_MS)
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。

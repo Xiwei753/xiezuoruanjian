@@ -4,7 +4,7 @@
 //
 // 层级：Linux_qt UI 层（QML 页面）
 // 职责（Issue #946 / #960 / #976）：按宽屏手稿重做统计主体 ——
-//   - 顶部生涯条：累积人工码字、首末记录日期、平均字/分、平均字/天、
+//   - 顶部生涯条：累积人工码字、首末记录日期、平均字/时、平均字/天、
 //     已持续自然日历天数；点击原位展开「左纪录 / 右热力图」；
 //   - 四个时段卡横排（近七天 / 近三十天 / 近半年 / 自选区间）；点一张后
 //     四卡区域原位替换为「左摘要 / 中纪录 / 右热力图」，可返回四卡总览；
@@ -86,6 +86,14 @@ Rectangle {
         if (n === null || n === undefined) return "—"
         var v = Number(n)
         return isNaN(v) ? "—" : v.toLocaleString()
+    }
+
+    // 每分钟均值折算每小时；null 保持 "—"，不伪造 0。
+    function formatAveragePerHour(n) {
+        if (n === null || n === undefined) return "—"
+        var v = Number(n)
+        if (isNaN(v)) return "—"
+        return formatAverage(v * 60)
     }
 
     // 平均值最多保留一位小数；null 显示 "—"，不伪造 0。
@@ -323,8 +331,8 @@ Rectangle {
 
                                     Label {
                                         Layout.fillWidth: true
-                                        text: qsTr("平均 %1 字/分 · %2 字/天")
-                                            .arg(root.formatAverage(root.val(root.lifetime, "averageCharsPerMinute")))
+                                        text: qsTr("平均 %1 字/时 · %2 字/天")
+                                            .arg(root.formatAveragePerHour(root.val(root.lifetime, "averageCharsPerMinute")))
                                             .arg(root.formatAverage(root.val(root.lifetime, "averageCharsPerDay")))
                                         color: Kirigami.Theme.disabledTextColor
                                         elide: Text.ElideRight

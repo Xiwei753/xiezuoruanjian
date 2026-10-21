@@ -19,6 +19,7 @@ import {
 import {
   EMPTY_STATS_EXPLORER,
   formatAverage,
+  formatAveragePerHour,
   formatDateRangeHuman,
   formatDurationHuman,
   formatHistoryScope,
@@ -136,7 +137,7 @@ export struct WidePeriodExpanded {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-      Text(`${formatAverage(this.selected.averageCharsPerMinute)} 字/分`)
+      Text(`${formatAveragePerHour(this.selected.averageCharsPerMinute)} 字/时`)
         .fontSize(16)
         .fontColor($r('sys.color.font_secondary'))
         .margin({ top: 12 })

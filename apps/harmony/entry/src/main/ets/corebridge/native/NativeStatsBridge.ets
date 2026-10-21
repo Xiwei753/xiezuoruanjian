@@ -114,7 +114,7 @@ export class NativeStatsBridge {
   }
 
   // Issue #829：历史写作速度曲线（按日期区间 + 分桶粒度）。曲线只负责历史形状，
-  // 状态栏左段的实时「字/分」走 getCurrentWritingSpeed。
+  // 状态栏左段的实时「字/时」由分钟速度折算。
   async getWritingSpeedCurve(startDate: string, endDate: string,
     bucketMinutes: number): Promise<ResultEnvelope<SpeedCurve>> {
     try {
@@ -123,7 +123,7 @@ export class NativeStatsBridge {
     } catch (e) { return nativeError<SpeedCurve>(e) }
   }
 
-  // Issue #829：状态栏左段的实时「字/分」。Core 以调用时刻为终点重算最近
+  // Issue #829：状态栏左段的实时「字/时」由分钟速度折算。Core 以调用时刻为终点重算最近
   // windowSeconds 秒的窗口速度，停笔超过一个窗口后自然回落到 0。
   // 不读速度曲线最后一桶——曲线桶只生成到最后一个输入事件，停笔后会一直
   // 挂着非零值。也不在这里判断桶是否过期或强制 flush 统计事件。

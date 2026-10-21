@@ -1,7 +1,7 @@
 // StatsFormat — 统计页共享常量与纯格式化工具（Issue #945）。
 //
 // 页面只负责把 Core Explorer 快照转成人类可读文本：千分位、人类可读日期、
-// 时长（时/分）、字/时、字/分、字/天。null 一律渲染成占位符 "—"，
+// 时长（时/分）、字/时、字/天。null 一律渲染成占位符 "—"，
 // 不用 0 顶替「没有样本」——纪录字段为 null 就是没有纪录。
 //
 // 本文件不做任何统计口径计算：天数、纪录、平均速度全部来自 Core。
@@ -77,6 +77,14 @@ export function formatAverage(value: number | null): string {
     return formatInt(Math.round(roundedToTenth))
   }
   return roundedToTenth.toFixed(1)
+}
+
+/** 每分钟均速折算每小时；null 保持 "—"，不把空数据当成 0。 */
+export function formatAveragePerHour(value: number | null): string {
+  if (value === null) {
+    return '—'
+  }
+  return formatAverage(value * 60)
 }
 
 /** "2026-09-13" → "2026/09/13"；null/空串 → "—"。 */
