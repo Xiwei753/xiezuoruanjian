@@ -121,6 +121,10 @@ export struct PrimaryTabShell {
   aboutToAppear(): void {
     hilog.info(0x0000, 'PrimaryTabShell', 'aboutToAppear: stacks initialized with root routes')
 
+    // Issue #972：新窗口/新壳层首帧允许用当前平台窗口宽度播种一次；
+    // 之后运行时只由根容器 onAreaChange 更新，避免旧窗口模式影响新窗口首帧。
+    getWideLayoutState().resetForNewShell()
+
     // Issue #768：检测 API Level，决定是否使用 HdsTabs。
     this.useHdsTabs = PlatformApiResolver.getInstance().isApiAtLeast(23)
 
@@ -159,14 +163,14 @@ export struct PrimaryTabShell {
     })
     this.themeAdapter.addObserver(this.themeObserver!)
 
-    // 注册响应式布局观察者，窗口尺寸变化时更新 adaptiveState。
+    // 注册响应式布局观察者，窗口尺寸变化时更新 safe area / 主题等基础数据。
+    // Issue #972：shellWidthVp 的运行时更新只归根容器 onAreaChange，
+    // 观察者不能再写一份，否则会和实测宽度争夺宽窄模式。
     this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
       self.adaptiveState = state
-      self.shellWidthVp = state.widthVp
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
-    this.shellWidthVp = this.adaptiveState.widthVp
 
     // 订阅 NavigationChromeStore，根据 ScreenRole 变化更新底栏显隐
     this.navChromeObserver = (role: ScreenRole) => {
@@ -437,7 +441,8 @@ export struct PrimaryTabShell {
     } else if (name === Routes.StarMapList) {
       StarMapListScreen({ navPathStack: ownerStack, layoutMode: this.wideLayoutMode })
     } else if (name === Routes.StarMap) {
-      StarMapScreen()
+      // Issue #972：星图详情沿用打开它的真实一级 Tab；写作工作台打开时 ownerTabIndex=0。
+      StarMapScreen({ screenTabIndex: ownerTabIndex })
     } else if (name === Routes.Settings) {
       SettingsScreen({ navPathStack: ownerStack, screenTabIndex: ownerTabIndex })
     } else if (name === Routes.Stats) {

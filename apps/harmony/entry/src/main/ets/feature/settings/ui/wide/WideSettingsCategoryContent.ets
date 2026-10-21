@@ -9,6 +9,7 @@ import { BuiltinThemeDto, LocalSettings, ThemePaletteRecordDto } from '../../../
 import { SyncConfig } from '../../../../corebridge/dto/SyncDtos'
 import { ThemeMode } from '../../../../ui/theme/HarmonyThemeTypes'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
+import { MessageKeyMapper } from '../../../../ui/i18n/MessageKeyMapper'
 import { SettingsSectionId, SettingsViewModel } from '../../presentation/SettingsViewModel'
 
 interface WideSelectOption {
@@ -556,7 +557,76 @@ export struct WideSettingsCategoryContent {
             this.onOpenConflicts()
           })
       }
+
+      // Issue #972 复核：读取现有 ViewModel 的诊断结果，不重新发起诊断。
+      if (this.viewModel.syncDiagnostics) {
+        this.SyncDiagnosticsCard()
+      }
     }
+  }
+
+  @Builder
+  SyncDiagnosticsCard() {
+    Column({ space: 8 }) {
+      Text($r('app.string.diagnostics_result'))
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .width('100%')
+
+      Row() {
+        this.SyncDiagnosticItem($r('app.string.network'), this.viewModel.syncDiagnostics!.networkOk,
+          this.viewModel.syncDiagnostics!.networkStatus)
+        this.SyncDiagnosticItem($r('app.string.auth'), this.viewModel.syncDiagnostics!.authOk,
+          this.viewModel.syncDiagnostics!.authStatus)
+        this.SyncDiagnosticItem($r('app.string.repository'), this.viewModel.syncDiagnostics!.remoteOk,
+          this.viewModel.syncDiagnostics!.networkStatus)
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.SpaceAround)
+
+      if ((this.viewModel.syncDiagnostics!.errorCategory ?? '').length > 0) {
+        Text(MessageKeyMapper.resolveMessage(getContext(this),
+          `error.${this.viewModel.syncDiagnostics!.errorCategory}`, undefined, undefined))
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+        Text(`错误分类：${this.viewModel.syncDiagnostics!.errorCategory}`)
+          .fontSize(11)
+          .fontColor($r('sys.color.font_tertiary'))
+          .width('100%')
+      } else if ((this.viewModel.syncDiagnostics!.rawError ?? this.viewModel.syncDiagnostics!.providerDetails ?? '').length > 0) {
+        Text(this.viewModel.syncDiagnostics!.rawError ?? this.viewModel.syncDiagnostics!.providerDetails ?? '')
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .padding(10)
+    .margin({ top: 6 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor($r('sys.color.comp_background_gray'))
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  SyncDiagnosticItem(label: ResourceStr, ok: boolean, status: string) {
+    Column() {
+      Text(ok ? 'OK' : 'FAIL')
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(ok ? $r('sys.color.font_primary') : '#E84026')
+      Text(label)
+        .fontSize(11)
+        .margin({ top: 2 })
+      if (status.length > 0) {
+        Text(status)
+          .fontSize(10)
+          .fontColor($r('sys.color.font_tertiary'))
+          .margin({ top: 2 })
+      }
+    }
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder
@@ -595,6 +665,9 @@ export struct WideSettingsCategoryContent {
         .onChange((isOn: boolean) => {
           this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
             settings.diagnosticsEnabled = isOn
+            if (!isOn) {
+              settings.diagnosticsVerbose = false
+            }
             return settings
           })
           this.viewModel.saveSettings()
@@ -609,6 +682,7 @@ export struct WideSettingsCategoryContent {
         .fontSize(15)
         .layoutWeight(1)
       Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.diagnosticsVerbose })
+        .enabled(this.viewModel.settings.diagnosticsEnabled)
         .onChange((isOn: boolean) => {
           this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
             settings.diagnosticsVerbose = isOn

@@ -44,6 +44,10 @@ export struct StarMapScreen {
   // 导航
   @Consume("navPathStack") navPathStack: NavPathStack
 
+  // Issue #972：详情页可能从星图 Tab 打开，也可能从写作工作台（作品 Tab）打开。
+  // 角色上报必须使用真实 owner Tab，否则 NavigationChromeStore 会把详情写进错误的标签缓存。
+  @Prop screenTabIndex: number = 1
+
   // 根星图状态
   @State rootStarmapId: string = ''
   @State starmapId: string = ''
@@ -448,7 +452,7 @@ export struct StarMapScreen {
       HdsAppDestinationApi23({
         title: this.rootStarmapTitle,
         screenRole: ScreenRole.StarMapDetail,
-        screenTabIndex: 1,
+        screenTabIndex: this.screenTabIndex,
         isRoot: false,
         onBack: () => {
           this.navPathStack.pop()
@@ -470,7 +474,7 @@ export struct StarMapScreen {
       .title(this.rootStarmapTitle)
       .menus(buildNavMenuItems(this.headerActions))
       .onShown(() => {
-        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMapDetail, 1)
+        NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.StarMapDetail, this.screenTabIndex)
       })
     }
   }

@@ -45,6 +45,11 @@ export class WideLayoutState {
     return this.mode
   }
 
+  /** 新窗口/新壳层首帧前清掉旧窗口的实测模式，下一次 current 用新的平台窗口宽度播种。 */
+  resetForNewShell(): void {
+    this.seeded = false
+  }
+
   update(widthVp: number): void {
     if (widthVp > 0) {
       this.mode = resolveWideLayoutMode(widthVp)
