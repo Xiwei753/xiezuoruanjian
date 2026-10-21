@@ -17,8 +17,9 @@ Item {
     onVisibleChanged: {
         if (visible && root.editorControllerRef) {
             Qt.callLater(function() {
-                if (root.visible && root.editorControllerRef)
-                    root.editorControllerRef.refreshCorrectionDictionaryStatus();
+                if (!root.visible || !root.editorControllerRef) return;
+                root.editorControllerRef.refreshCorrectionDictionaryStatus();
+                root.editorControllerRef.refreshCorrectionEntityNames();
             });
         }
     }
@@ -196,7 +197,11 @@ Item {
             Layout.fillWidth: true
             text: root.resourcesExpanded ? qsTr("收起校对资源") : qsTr("校对资源")
             icon.name: root.resourcesExpanded ? "go-up" : "go-down"
-            onClicked: root.resourcesExpanded = !root.resourcesExpanded
+            onClicked: {
+                root.resourcesExpanded = !root.resourcesExpanded;
+                if (root.resourcesExpanded && root.editorControllerRef)
+                    root.editorControllerRef.refreshCorrectionEntityNames();
+            }
         }
 
         ColumnLayout {
@@ -281,6 +286,50 @@ Item {
                       ? root.editorControllerRef.correctionDictionaryError : ""
                 color: Kirigami.Theme.negativeTextColor
                 wrapMode: Text.Wrap
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: !!(root.editorControllerRef
+                            && root.editorControllerRef.correctionEntityNames.length > 0)
+                text: qsTr("名称对应关系")
+                font.bold: true
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                visible: !!(root.editorControllerRef
+                            && root.editorControllerRef.correctionEntityNames.length > 0)
+
+                Repeater {
+                    model: root.editorControllerRef
+                           ? root.editorControllerRef.correctionEntityNames : []
+                    delegate: RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.smallSpacing
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("%1 · %2 · %3")
+                                  .arg(modelData.canonical)
+                                  .arg(modelData.name)
+                                  .arg(modelData.kind === "misspelling"
+                                       ? qsTr("错误写法") : qsTr("别名"))
+                            wrapMode: Text.Wrap
+                        }
+
+                        ToolButton {
+                            text: qsTr("删除")
+                            onClicked: {
+                                if (root.editorControllerRef)
+                                    root.editorControllerRef.removeCorrectionEntityName(
+                                                modelData.canonical, modelData.name);
+                            }
+                        }
+                    }
+                }
             }
         }
     }

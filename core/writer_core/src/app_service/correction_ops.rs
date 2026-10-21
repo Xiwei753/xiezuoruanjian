@@ -291,6 +291,16 @@ impl super::WriterAppService {
         self.api.get_correction_entity_names(project_id)
     }
 
+    pub fn remove_correction_entity_name(
+        &self,
+        project_id: String,
+        canonical: String,
+        name: String,
+    ) -> Result<bool, WriterError> {
+        self.api
+            .remove_correction_entity_name(project_id, canonical, name)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn apply_correction(
         &self,

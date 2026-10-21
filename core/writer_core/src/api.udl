@@ -1522,6 +1522,8 @@ interface WriterAppService {
     boolean add_correction_entity_name(string project_id, string canonical, string name, CorrectionEntityNameKindDto kind);
     [Throws=WriterError]
     sequence<CorrectionEntityNameDto> get_correction_entity_names(string project_id);
+    [Throws=WriterError]
+    boolean remove_correction_entity_name(string project_id, string canonical, string name);
     EditorEditResultDto apply_correction(u64 session_id, string project_id, string chapter_id, u64 text_revision, u32 start_byte, u32 end_byte, string original, string replacement);
 
     // ── Search Index ──

@@ -539,6 +539,33 @@ impl CorrectionStore {
         })?
     }
 
+    /// Remove one author-confirmed alias or misspelling relation. The
+    /// canonical person/place entry and any other relations are preserved.
+    pub fn remove_entity_name(
+        &self,
+        project_id: &str,
+        canonical: &str,
+        name: &str,
+    ) -> Result<bool, WriterError> {
+        let canonical = canonical.trim();
+        let name = name.trim();
+        if canonical.is_empty() || name.is_empty() {
+            return Err(WriterError::Other(
+                "entity canonical name and written form must be non-empty".into(),
+            ));
+        }
+        self.update_preferences(|preferences| {
+            let Some(project) = preferences.projects.get_mut(project_id) else {
+                return Ok(false);
+            };
+            let before = project.entity_names.len();
+            project
+                .entity_names
+                .retain(|entry| entry.canonical != canonical || entry.name != name);
+            Ok(project.entity_names.len() != before)
+        })?
+    }
+
     /// Root directory for per-chapter correction result caches. The cache holds
     /// derived data only; it never stores chapter text and never syncs.
     fn result_cache_dir(&self) -> PathBuf {

@@ -118,6 +118,21 @@ impl WriterCoreApi {
         self.correction_store()?.entity_name_records(&project_id)
     }
 
+    pub fn remove_correction_entity_name(
+        &self,
+        project_id: String,
+        canonical: String,
+        name: String,
+    ) -> ApiResult<bool> {
+        if project_id.trim().is_empty() {
+            return Err(crate::api::WriterError::Other(
+                "project id must be non-empty".into(),
+            ));
+        }
+        self.correction_store()?
+            .remove_entity_name(&project_id, &canonical, &name)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn ignore_correction(
         &self,

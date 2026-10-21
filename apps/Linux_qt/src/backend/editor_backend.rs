@@ -310,6 +310,14 @@ pub struct EditorBackend {
             kind: QString,
         ) -> QJsonObject
     ),
+    /// Issue #964：列出当前作品已登记的人物/地点名称对应关系。
+    #[allow(dead_code)]
+    get_correction_entity_names: qt_method!(fn(&self, project_id: QString) -> QJsonObject),
+    /// Issue #964：删除一条人物/地点名称对应关系。
+    #[allow(dead_code)]
+    remove_correction_entity_name: qt_method!(
+        fn(&self, project_id: QString, canonical: QString, name: QString) -> QJsonObject
+    ),
     #[allow(dead_code)]
     flush_recent_edits: qt_method!(fn(&self)),
     #[allow(dead_code)]
@@ -1148,6 +1156,47 @@ impl EditorBackend {
         match result {
             Ok(Ok(added)) => crate::backend::json_utils::serde_to_qjson_object(
                 serde_json::json!({ "success": true, "data": { "added": added } }),
+            ),
+            Ok(Err(message)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "CORE_ERROR", "rawError": message }),
+            ),
+            Err(error) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "APP_BUSY", "rawError": error.to_string() }),
+            ),
+        }
+    }
+
+    fn get_correction_entity_names(&self, project_id: QString) -> QJsonObject {
+        let result = self.with_app(|app| app.get_correction_entity_names(project_id.to_string()));
+        match result {
+            Ok(Ok(entities)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": true, "data": { "entities": entities } }),
+            ),
+            Ok(Err(message)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "CORE_ERROR", "rawError": message }),
+            ),
+            Err(error) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": false, "errorCode": "APP_BUSY", "rawError": error.to_string() }),
+            ),
+        }
+    }
+
+    fn remove_correction_entity_name(
+        &self,
+        project_id: QString,
+        canonical: QString,
+        name: QString,
+    ) -> QJsonObject {
+        let result = self.with_app(|app| {
+            app.remove_correction_entity_name(
+                project_id.to_string(),
+                canonical.to_string(),
+                name.to_string(),
+            )
+        });
+        match result {
+            Ok(Ok(removed)) => crate::backend::json_utils::serde_to_qjson_object(
+                serde_json::json!({ "success": true, "data": { "removed": removed } }),
             ),
             Ok(Err(message)) => crate::backend::json_utils::serde_to_qjson_object(
                 serde_json::json!({ "success": false, "errorCode": "CORE_ERROR", "rawError": message }),

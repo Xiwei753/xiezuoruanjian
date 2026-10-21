@@ -63,6 +63,7 @@ QtObject {
     property string correctionStatus: ""
     property string correctionDictionaryError: ""
     property var correctionDictionaryResources: []
+    property var correctionEntityNames: []
     property bool correctionCheckPending: false
     property int correctionRequestSerial: 0
     property int pendingCorrectionRequestId: 0
@@ -778,6 +779,42 @@ QtObject {
         return suggestion ? String(suggestion.original || "").trim() : "";
     }
 
+    function refreshCorrectionEntityNames(projectIdOverride) {
+        var targetProjectId = String(projectIdOverride || projectId || "").trim();
+        if (!editorBackendRef || !editorBackendRef.get_correction_entity_names
+                || !targetProjectId) {
+            correctionEntityNames = [];
+            return;
+        }
+        var result = editorBackendRef.get_correction_entity_names(targetProjectId);
+        if (!result || !result.success) {
+            correctionEntityNames = [];
+            return;
+        }
+        var data = result.data || {};
+        correctionEntityNames = data.entities || [];
+    }
+
+    function removeCorrectionEntityName(canonical, name) {
+        var canonicalName = String(canonical || "").trim();
+        var writtenForm = String(name || "").trim();
+        if (!canonicalName || !writtenForm) return false;
+        if (!editorBackendRef || !editorBackendRef.remove_correction_entity_name) return false;
+        var result = editorBackendRef.remove_correction_entity_name(
+            projectId, canonicalName, writtenForm);
+        if (!result || !result.success) {
+            correctionDictionaryError = result && result.rawError
+                    ? result.rawError : qsTr("删除名称对应失败。");
+            return false;
+        }
+        correctionDictionaryError = "";
+        refreshCorrectionEntityNames();
+        invalidateCorrectionResults();
+        requestCorrectionChapter();
+        correctionStatus = qsTr("已删除名称对应关系，正在重新校对本章。");
+        return true;
+    }
+
     function addCorrectionEntityName(canonical, name, kind) {
         var canonicalName = String(canonical || "").trim();
         var writtenForm = String(name || "").trim();
@@ -793,6 +830,7 @@ QtObject {
             return false;
         }
         correctionError = "";
+        refreshCorrectionEntityNames();
         invalidateCorrectionResults();
         requestCorrectionChapter();
         correctionStatus = kind === "alias"
@@ -1100,6 +1138,7 @@ QtObject {
         releaseCorrectionSession(controller.projectId, controller.chapterId);
         invalidateCorrectionResults();
         syncCorrectionTracking(content, Number(targetEditorItem.text_revision), pId, cId);
+        refreshCorrectionEntityNames(pId);
         isLoadingChapter = false;
         // Issue #954：章节打开只恢复 Core 缓存中仍有效的校对结果；未校对过的
         // 段落由后续编辑事务或手动“检查本章”补算，不因切章重扫整章。
@@ -1128,6 +1167,7 @@ QtObject {
             lastSavedEditorText = "";
             explicitEmptySavePending = false;
             lastPotentialExplicitClearAtMs = 0;
+            correctionEntityNames = [];
             invalidateCorrectionResults();
             syncCorrectionTracking("", targetEditorItem ? Number(targetEditorItem.text_revision) : -1, "", "");
         } finally {

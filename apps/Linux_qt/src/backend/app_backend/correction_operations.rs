@@ -9,8 +9,8 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use super::*;
 use writer_core::api::types::{
-    CorrectionDictionaryEntryKindDto, CorrectionEditRangeDto, CorrectionEntityNameKindDto,
-    CorrectionIgnoreScopeDto,
+    CorrectionDictionaryEntryKindDto, CorrectionEditRangeDto, CorrectionEntityNameDto,
+    CorrectionEntityNameKindDto, CorrectionIgnoreScopeDto,
 };
 
 /// Issue #958：RPM 包内自带的中文 KenLM 模型安装路径。
@@ -378,6 +378,30 @@ impl AppBackend {
             .core_api()
             .ok_or_else(|| "Core 尚未打开工作区".to_string())?;
         api.add_correction_entity_name(project_id, canonical, name, kind)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn get_correction_entity_names(
+        &self,
+        project_id: String,
+    ) -> Result<Vec<CorrectionEntityNameDto>, String> {
+        let api = self
+            .core_api()
+            .ok_or_else(|| "Core 尚未打开工作区".to_string())?;
+        api.get_correction_entity_names(project_id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn remove_correction_entity_name(
+        &self,
+        project_id: String,
+        canonical: String,
+        name: String,
+    ) -> Result<bool, String> {
+        let api = self
+            .core_api()
+            .ok_or_else(|| "Core 尚未打开工作区".to_string())?;
+        api.remove_correction_entity_name(project_id, canonical, name)
             .map_err(|error| error.to_string())
     }
 
