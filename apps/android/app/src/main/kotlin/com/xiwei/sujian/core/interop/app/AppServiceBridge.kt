@@ -733,6 +733,27 @@ open class AppServiceBridge(
             )
         }
 
+    fun checkCorrectionEdits(
+        sessionId: ULong,
+        projectId: String,
+        chapterId: String,
+        textRevision: ULong,
+        baseRevision: ULong,
+        text: String,
+        edits: List<uniffi.writer_core.CorrectionEditRangeDto>,
+    ): BridgeResult<uniffi.writer_core.CorrectionChapterSnapshotDto> =
+        holder.wrapResult {
+            holder.service.checkCorrectionEdits(
+                sessionId,
+                projectId,
+                chapterId,
+                textRevision,
+                baseRevision,
+                text,
+                edits,
+            )
+        }
+
     fun checkCorrectionChapter(
         sessionId: ULong,
         projectId: String,

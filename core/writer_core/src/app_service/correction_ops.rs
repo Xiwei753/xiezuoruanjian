@@ -1,6 +1,7 @@
 use crate::api::{
-    CorrectionChapterSnapshotDto, CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto,
-    CorrectionResourceStatusDto, EditorEditResultDto, EditorTransactionCauseDto, WriterError,
+    CorrectionChapterSnapshotDto, CorrectionEditRangeDto, CorrectionIgnoreScopeDto,
+    CorrectionModelPathStatusDto, CorrectionResourceStatusDto, EditorEditResultDto,
+    EditorTransactionCauseDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -21,12 +22,11 @@ impl super::WriterAppService {
         self.api.get_correction_model_path_status(path)
     }
 
-    fn correction_session_kernel(
+    fn correction_session_identity(
         &self,
         session_id: u64,
         project_id: &str,
         chapter_id: &str,
-        expected_revision: u64,
     ) -> Result<crate::editor::EditorKernel, WriterError> {
         let mut registry = self
             .session_registry
@@ -45,13 +45,24 @@ impl super::WriterAppService {
                 "correction request does not match the active chapter session".into(),
             ));
         }
-        let actual_revision = session.kernel.revision();
+        Ok(session.kernel.clone())
+    }
+
+    fn correction_session_kernel(
+        &self,
+        session_id: u64,
+        project_id: &str,
+        chapter_id: &str,
+        expected_revision: u64,
+    ) -> Result<crate::editor::EditorKernel, WriterError> {
+        let kernel = self.correction_session_identity(session_id, project_id, chapter_id)?;
+        let actual_revision = kernel.revision();
         if actual_revision != expected_revision {
             return Err(WriterError::Other(format!(
                 "stale correction request: expected revision {expected_revision}, current revision {actual_revision}"
             )));
         }
-        Ok(session.kernel.clone())
+        Ok(kernel)
     }
 
     fn correction_session_target_revision(
@@ -95,6 +106,7 @@ impl super::WriterAppService {
         self.api.check_correction_segment(
             project_id,
             chapter_id,
+            session_id,
             text_revision,
             text,
             start_byte,
@@ -114,8 +126,13 @@ impl super::WriterAppService {
         let kernel =
             self.correction_session_kernel(session_id, &project_id, &chapter_id, text_revision)?;
         let text = kernel.snapshot_text();
-        self.api
-            .correction_chapter_snapshot(project_id, chapter_id, text_revision, text)
+        self.api.correction_chapter_snapshot(
+            project_id,
+            chapter_id,
+            session_id,
+            text_revision,
+            text,
+        )
     }
 
     pub fn check_correction_chapter(
@@ -129,7 +146,44 @@ impl super::WriterAppService {
             self.correction_session_kernel(session_id, &project_id, &chapter_id, text_revision)?;
         let text = kernel.snapshot_text();
         self.api
-            .check_correction_chapter(project_id, chapter_id, text_revision, text)
+            .check_correction_chapter(project_id, chapter_id, session_id, text_revision, text)
+    }
+
+    /// Applies the actual edit transaction ranges and returns the merged
+    /// chapter snapshot. Only segments touched by those edits run the model.
+    ///
+    /// `text` is captured together with the transaction by the platform. The
+    /// kernel may already be at a newer revision when this queued request is
+    /// processed; rejecting it would leave a hole that forces the next request
+    /// to rebuild the whole index. The correction engine validates revisions
+    /// and edits against this text, so only the session identity is checked
+    /// against the live kernel here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_correction_edits(
+        &self,
+        session_id: u64,
+        project_id: String,
+        chapter_id: String,
+        text_revision: u64,
+        base_revision: u64,
+        text: String,
+        edits: Vec<CorrectionEditRangeDto>,
+    ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+        self.correction_session_identity(session_id, &project_id, &chapter_id)?;
+        if base_revision > text_revision {
+            return Err(WriterError::Other(
+                "correction edit base revision is newer than the current revision".into(),
+            ));
+        }
+        self.api.check_correction_edits(
+            project_id,
+            chapter_id,
+            session_id,
+            text_revision,
+            base_revision,
+            text,
+            edits,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

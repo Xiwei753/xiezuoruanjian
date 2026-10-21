@@ -433,6 +433,17 @@ pub struct SujianEditorItem {
     /// Issue #951：更新与当前正文 revision 绑定的文字装饰范围。
     #[allow(dead_code)]
     set_text_decorations_json: qt_method!(fn(&mut self, decorations_json: QString)),
+    /// Issue #964：滚动/选中校对建议对应的正文范围，不修改正文。
+    #[allow(dead_code)]
+    reveal_correction: qt_method!(
+        fn(
+            &mut self,
+            start_byte: u32,
+            end_byte: u32,
+            original: QString,
+            expected_revision: u64,
+        ) -> bool
+    ),
     #[allow(dead_code)]
     undo: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
@@ -693,6 +704,7 @@ impl Default for SujianEditorItem {
             selected_text: Default::default(),
             accept_correction: Default::default(),
             set_text_decorations_json: Default::default(),
+            reveal_correction: Default::default(),
             undo: Default::default(),
             redo: Default::default(),
             handle_key: Default::default(),

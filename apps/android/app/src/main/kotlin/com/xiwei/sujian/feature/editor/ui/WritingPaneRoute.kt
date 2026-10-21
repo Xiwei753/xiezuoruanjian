@@ -49,7 +49,6 @@ import com.xiwei.sujian.feature.editor.session.EditorCorrectionSuggestion
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
-import kotlinx.coroutines.flow.collectLatest
 
 /**
  * 正文编辑窗格 — 「正文」一级内容（#624 评论17 第2部分 Route 层）。
@@ -676,7 +675,7 @@ private fun WritingPaneCorrectionHintCollector(
     }
 }
 
-/** Debounced check of the sentence containing the caret; suggestions stay tied to the Core revision. */
+/** Chapter open restores Core's committed cache; edits use their real transaction ranges. */
 @Composable
 private fun SetupCorrectionRequests(
     viewModel: EditorViewModel,
@@ -684,55 +683,9 @@ private fun SetupCorrectionRequests(
     bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
 ) {
     LaunchedEffect(viewModel, targetId, bridge) {
-        androidx.compose.runtime.snapshotFlow {
-            CorrectionCaretSnapshot(
-                text = bridge.state.text.toString(),
-                caretUtf16 = bridge.state.selection.end,
-                composing = bridge.state.composition != null,
-            )
-        }.collectLatest { snapshot ->
-            if (snapshot.composing) {
-                viewModel.clearCorrectionSuggestions(targetId)
-                return@collectLatest
-            }
-            // 先恢复 Core 缓存结果（章节打开/编辑后即时显示已检查的波浪线），再防抖补算脏区。
-            viewModel.restoreCorrectionSnapshot(targetId)
-            kotlinx.coroutines.delay(450)
-            val range = sentenceRangeAroundCaret(snapshot.text, snapshot.caretUtf16) ?: return@collectLatest
-            val startByte = TextOffsetUtils.utf8OffsetForCharIndex(snapshot.text, range.first)
-            val endByte = TextOffsetUtils.utf8OffsetForCharIndex(snapshot.text, range.last + 1)
-            viewModel.requestCorrectionSegment(
-                targetId = targetId,
-                startByte = startByte,
-                endByte = endByte,
-                visibleText = snapshot.text.substring(range.first, range.last + 1),
-            )
-        }
+        viewModel.restoreCorrectionSnapshot(targetId)
     }
 }
-
-private data class CorrectionCaretSnapshot(
-    val text: String,
-    val caretUtf16: Int,
-    val composing: Boolean,
-)
-
-private fun sentenceRangeAroundCaret(text: String, caretUtf16: Int): IntRange? {
-    if (text.isEmpty()) return null
-    val caret = TextOffsetUtils.safeCharIndex(text, caretUtf16)
-    var start = caret
-    while (start > 0 && !isCorrectionSentenceBoundary(text[start - 1])) start--
-    var end = caret
-    while (end < text.length && !isCorrectionSentenceBoundary(text[end])) end++
-    if (end < text.length && text[end] != '\n' && text[end] != '\r') end++
-    while (start < end && text[start].isWhitespace()) start++
-    while (end > start && text[end - 1].isWhitespace()) end--
-    return if (start < end) start until end else null
-}
-
-private fun isCorrectionSentenceBoundary(char: Char): Boolean =
-    char == '。' || char == '！' || char == '？' || char == '!' || char == '?' ||
-        char == '.' || char == '\n' || char == '\r'
 
 /**
  * 设置 viewport snapshot 保存 — 提取以降低 [WritingPaneEditorContent] 长度。

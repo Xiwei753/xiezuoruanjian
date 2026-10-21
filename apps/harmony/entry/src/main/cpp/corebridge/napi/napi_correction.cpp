@@ -16,6 +16,7 @@ enum class CorrectionOperation {
     GetResourceStatus,
     GetModelPathStatus,
     CheckSegment,
+    CheckEdits,
     CheckChapter,
     GetChapterSnapshot,
     Ignore,
@@ -30,16 +31,19 @@ struct CorrectionAsyncWork {
     CorrectionOperation operation = CorrectionOperation::CheckSegment;
     uint64_t session_id = 0;
     uint64_t text_revision = 0;
+    uint64_t base_revision = 0;
     uint32_t start_byte = 0;
     uint32_t end_byte = 0;
     std::string path;
     std::string project_id;
     std::string chapter_id;
+    std::string text;
     std::string rule_id;
     std::string original;
     std::string replacement;
     std::string scope;
     std::string entry;
+    std::string edits_json;
     char* json = nullptr;
     // PrepareBundledModel（Issue #958）：resource_manager 由 JS 线程创建并在完成
     // 回调（JS 线程）释放；其余字段在 JS 线程读入、异步线程只读。
@@ -356,6 +360,11 @@ static void correction_execute(napi_env /*env*/, void* data) {
                 call->session_id, call->project_id.c_str(), call->chapter_id.c_str(),
                 call->text_revision, call->start_byte, call->end_byte);
             break;
+        case CorrectionOperation::CheckEdits:
+            call->json = writer_core_check_correction_edits(
+                call->session_id, call->project_id.c_str(), call->chapter_id.c_str(),
+                call->text_revision, call->base_revision, call->text.c_str(), call->edits_json.c_str());
+            break;
         case CorrectionOperation::CheckChapter:
             call->json = writer_core_check_correction_chapter(
                 call->session_id, call->project_id.c_str(), call->chapter_id.c_str(),
@@ -555,6 +564,27 @@ static napi_value NativeCorrectionCheckSegment(napi_env env, napi_callback_info 
     return correction_queue(env, call);
 }
 
+static napi_value NativeCorrectionCheckEdits(napi_env env, napi_callback_info info) {
+    size_t argc = 7;
+    napi_value args[7];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 7) {
+        return correction_invalid_args(env, "Expected 7 arguments: sessionId, projectId, chapterId, textRevision, baseRevision, text, editsJson");
+    }
+    CorrectionAsyncWork* call = new CorrectionAsyncWork();
+    call->operation = CorrectionOperation::CheckEdits;
+    if (!correction_read_session_and_revision(env, args[0], args[3], call) ||
+        !correction_read_uint64(env, args[4], &call->base_revision) ||
+        !correction_read_string(env, args[1], &call->project_id) ||
+        !correction_read_string(env, args[2], &call->chapter_id) ||
+        !correction_read_string(env, args[5], &call->text) ||
+        !correction_read_string(env, args[6], &call->edits_json)) {
+        delete call;
+        return correction_invalid_args(env, "Invalid correction edits request");
+    }
+    return correction_queue(env, call);
+}
+
 static napi_value NativeCorrectionCheckChapter(napi_env env, napi_callback_info info) {
     size_t argc = 4;
     napi_value args[4];
@@ -701,6 +731,7 @@ napi_property_descriptor* getCorrectionDescriptors(size_t* count) {
         {"nativeCorrectionGetResourceStatus", nullptr, NativeCorrectionGetResourceStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionGetModelPathStatus", nullptr, NativeCorrectionGetModelPathStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckSegment", nullptr, NativeCorrectionCheckSegment, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeCorrectionCheckEdits", nullptr, NativeCorrectionCheckEdits, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckChapter", nullptr, NativeCorrectionCheckChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionGetChapterSnapshot", nullptr, NativeCorrectionGetChapterSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionIgnore", nullptr, NativeCorrectionIgnore, nullptr, nullptr, nullptr, napi_default, nullptr},

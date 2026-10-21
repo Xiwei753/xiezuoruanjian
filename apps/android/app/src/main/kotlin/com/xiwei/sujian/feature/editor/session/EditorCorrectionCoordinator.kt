@@ -74,12 +74,28 @@ class EditorCorrectionCoordinator(
     private val _state = MutableStateFlow(EditorCorrectionState())
     val state: StateFlow<EditorCorrectionState> = _state.asStateFlow()
 
-    suspend fun checkSegment(
+    /**
+     * Apply the editor transaction's real display patches; never infer edits from the caret.
+     *
+     * [text] is the full committed text at [EditResult.newRevision], captured with the
+     * transaction. The live kernel may already be at a newer revision when this queued
+     * request reaches Core, so the revision must not be re-read here: Core applies the
+     * patches against the captured text and advances its own segment index incrementally.
+     */
+    suspend fun checkEdits(
         identity: EditorCorrectionIdentity,
-        startByte: Int,
-        endByte: Int,
-        visibleText: String,
+        edit: EditResult,
+        text: String,
+        lease: EditorInputLease,
     ) {
+        // Use the lease captured by the edit transaction, never a lease sampled
+        // when this queued coroutine happens to run. Reopening the chapter changes
+        // the epoch (and usually the session id); replaying an old text/range pair
+        // under the new session would poison the new chapter's incremental cache.
+        if (lease.targetId != identity.targetId || currentIdentity() != identity) return
+        if (sessionCoordinator.currentInputLease() != lease) return
+        // Validate before advancing the generation. A stale queued request must
+        // not invalidate the response of a newer request that is still in flight.
         val generation = requestGeneration.incrementAndGet()
         if (!_state.value.matchesIdentity(identity)) {
             _state.value = EditorCorrectionState(
@@ -88,47 +104,61 @@ class EditorCorrectionCoordinator(
                 chapterId = identity.chapterId,
             )
         }
-        val lease = sessionCoordinator.currentInputLease() ?: return
         _state.value = _state.value.copy(sessionId = lease.sessionId)
-        if (lease.targetId != identity.targetId || currentIdentity() != identity) return
 
-        val before = withContext(Dispatchers.IO) { sessionCoordinator.queryTargetSnapshot(identity.targetId) } ?: return
-        if (!snapshotMatchesLease(before, lease) || !validByteRange(before.text, startByte, endByte)) return
-        if (rangeText(before.text, startByte, endByte) != visibleText) return
+        val edits =
+            edit.displayPatches
+                .filter { it.newRevision == edit.newRevision }
+                .map {
+                    uniffi.writer_core.CorrectionEditRangeDto(
+                        it.replaceByteStart.toUInt(),
+                        it.replaceByteEndExclusive.toUInt(),
+                        it.insertedByteStart.toUInt(),
+                        it.insertedByteEndExclusive.toUInt(),
+                    )
+                }
+        if (edits.isEmpty()) {
+            restoreChapterSnapshot(identity)
+            return
+        }
 
         val response =
             withContext(Dispatchers.IO) {
-                appServiceBridge.checkCorrectionSegment(
+                appServiceBridge.checkCorrectionEdits(
                     sessionId = lease.sessionId,
                     projectId = identity.projectId,
                     chapterId = identity.chapterId,
-                    textRevision = before.revision.toULong(),
-                    startByte = startByte.toUInt(),
-                    endByte = endByte.toUInt(),
+                    textRevision = edit.newRevision.toULong(),
+                    baseRevision = edit.baseRevision.toULong(),
+                    text = text,
+                    edits = edits,
                 )
             }
         val snapshot = (response as? BridgeResult.Success)?.data ?: return
 
         val stillCurrent =
             withContext(Dispatchers.IO) {
-                val currentLease = sessionCoordinator.currentInputLease()
-                val currentSnapshot = sessionCoordinator.queryTargetSnapshot(identity.targetId)
-                currentLease == lease && currentSnapshot?.revision == before.revision
+                sessionCoordinator.currentInputLease() == lease
             }
         if (!stillCurrent || generation != requestGeneration.get() || currentIdentity() != identity) return
-        if (snapshot.textRevision.toLong() != before.revision) return
+        // A newer transaction may already be committed. Its own check publishes the
+        // merged snapshot; this older response must not roll annotations back.
+        if (sessionCoordinator.sessionState.revision != edit.newRevision) return
+        if (snapshot.textRevision.toLong() != edit.newRevision) return
 
         _state.value = EditorCorrectionState(
             targetId = identity.targetId,
             projectId = identity.projectId,
             chapterId = identity.chapterId,
             sessionId = lease.sessionId,
-            textRevision = before.revision,
-            suggestions = mappedSuggestions(before.text, before.revision, snapshot.suggestions),
+            textRevision = edit.newRevision,
+            suggestions = mappedSuggestions(text, edit.newRevision, snapshot.suggestions),
         )
     }
 
     suspend fun checkChapter(identity: EditorCorrectionIdentity) {
+        val lease = sessionCoordinator.currentInputLease() ?: return
+        if (lease.targetId != identity.targetId || currentIdentity() != identity) return
         val generation = requestGeneration.incrementAndGet()
         if (!_state.value.matchesIdentity(identity)) {
             _state.value = EditorCorrectionState(
@@ -137,9 +167,7 @@ class EditorCorrectionCoordinator(
                 chapterId = identity.chapterId,
             )
         }
-        val lease = sessionCoordinator.currentInputLease() ?: return
         _state.value = _state.value.copy(sessionId = lease.sessionId)
-        if (lease.targetId != identity.targetId || currentIdentity() != identity) return
         val before = withContext(Dispatchers.IO) { sessionCoordinator.queryTargetSnapshot(identity.targetId) } ?: return
         if (!snapshotMatchesLease(before, lease)) return
 
@@ -173,9 +201,9 @@ class EditorCorrectionCoordinator(
 
     /** Restore Core's cached chapter suggestions without scanning; failures leave state untouched. */
     suspend fun restoreChapterSnapshot(identity: EditorCorrectionIdentity) {
-        val generation = requestGeneration.incrementAndGet()
         val lease = sessionCoordinator.currentInputLease() ?: return
         if (lease.targetId != identity.targetId || currentIdentity() != identity) return
+        val generation = requestGeneration.incrementAndGet()
         val before = withContext(Dispatchers.IO) { sessionCoordinator.queryTargetSnapshot(identity.targetId) } ?: return
         if (!snapshotMatchesLease(before, lease)) return
 

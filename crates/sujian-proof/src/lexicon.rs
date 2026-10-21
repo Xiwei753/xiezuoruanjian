@@ -4,13 +4,14 @@
 // (xuming624); dictionary data assets and their licenses are listed separately
 // in THIRD_PARTY_NOTICES.md.
 
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
+
+use crate::proper_names::WorkEntityLexicon;
 
 // Behavioral port of pycorrector's detector/corrector dictionary loading
 // (Apache-2.0). Bundled and user-provided data are loaded by the same parsers.
@@ -55,12 +56,13 @@ pub struct Lexicon {
     person_names: HashMap<String, u64>,
     place_names: HashMap<String, u64>,
     proper_names: HashSet<String>,
-    proper_name_wildcards: HashMap<(usize, usize, String), Vec<String>>,
     ignored_words: HashSet<String>,
-    ignored_word_components: HashSet<String>,
     protected_words: HashSet<String>,
+    /// 2–4-character windows derived from protected entries. They are matching
+    /// helpers only and never protect text or become replacement candidates.
     protected_word_components: HashSet<String>,
     protected_word_index: ProtectedWordTrie,
+    work_entity_lexicon: WorkEntityLexicon,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -304,28 +306,20 @@ impl Lexicon {
     }
 
     pub fn insert_proper_name(&mut self, name: String) {
-        let char_len = name.chars().count();
-        if self.proper_names.insert(name.clone()) {
-            self.index_proper_name(&name, char_len);
-        }
+        self.proper_names.insert(name.clone());
         self.insert_word_frequency_from(name, 1, WordFrequencySource::ProperName);
     }
 
     pub fn insert_ignored_word(&mut self, word: String) {
-        if !self.ignored_words.insert(word.clone()) {
-            return;
-        }
-        let chars = word.chars().collect::<Vec<_>>();
-        for length in 2..=4.min(chars.len()) {
-            for start in 0..=chars.len() - length {
-                self.ignored_word_components
-                    .insert(chars[start..start + length].iter().collect());
-            }
-        }
+        self.ignored_words.insert(word);
     }
 
     /// Protect an author's work-dictionary entry from correction candidates
     /// without adding it to the ordinary word-frequency candidate index.
+    ///
+    /// Only the full entry protects text. Its 2–4-character windows are kept
+    /// separately for matching heuristics and never enter the protected trie,
+    /// so an ordinary word inside a longer name is not silently protected.
     pub fn insert_protected_word(&mut self, word: String) {
         if word.is_empty() || !self.protected_words.insert(word.clone()) {
             return;
@@ -333,13 +327,19 @@ impl Lexicon {
 
         let chars = word.chars().collect::<Vec<_>>();
         self.index_protected_word(&word);
+        let kind = if self.person_names.contains_key(&word) {
+            crate::proper_names::ProperNameKind::Person
+        } else if self.place_names.contains_key(&word) {
+            crate::proper_names::ProperNameKind::Place
+        } else {
+            crate::proper_names::ProperNameKind::Other
+        };
+        self.work_entity_lexicon.insert(word, kind);
 
         for length in 2..=4.min(chars.len()) {
             for start in 0..=chars.len() - length {
                 let component = chars[start..start + length].iter().collect::<String>();
-                if self.protected_word_components.insert(component.clone()) {
-                    self.index_protected_word(&component);
-                }
+                self.protected_word_components.insert(component);
             }
         }
     }
@@ -370,20 +370,27 @@ impl Lexicon {
     }
 
     pub(crate) fn is_protected_name_component(&self, word: &str) -> bool {
+        // Only full ignored/protected entries count. Derived 2–4-character
+        // windows must never protect an ordinary word on their own.
         self.ignored_words.contains(word)
-            || self.ignored_word_components.contains(word)
             || self.protected_words.contains(word)
-            || self.protected_word_components.contains(word)
             || self.base.as_ref().is_some_and(|base| {
-                base.ignored_words.contains(word)
-                    || base.ignored_word_components.contains(word)
-                    || base.protected_words.contains(word)
-                    || base.protected_word_components.contains(word)
+                base.ignored_words.contains(word) || base.protected_words.contains(word)
             })
     }
 
-    /// Return merged UTF-8 byte ranges of protected entries and their
-    /// 2–4-character windows found in `text`.
+    /// True when `word` is a derived window of a longer work-dictionary entry.
+    /// This is a matching guard only; it does not protect text by itself.
+    pub(crate) fn is_protected_word_window(&self, word: &str) -> bool {
+        self.protected_word_components.contains(word)
+            || self
+                .base
+                .as_ref()
+                .is_some_and(|base| base.protected_word_components.contains(word))
+    }
+
+    /// Return merged UTF-8 byte ranges of protected full entries found in
+    /// `text`. Derived windows are intentionally excluded.
     pub(crate) fn protected_word_ranges(&self, text: &str) -> Vec<(usize, usize)> {
         let mut ranges = self.protected_word_ranges_in(&self.protected_word_index, text);
         if let Some(base) = &self.base {
@@ -431,54 +438,29 @@ impl Lexicon {
         ranges
     }
 
-    pub(crate) fn is_proper_name(&self, word: &str) -> bool {
-        self.proper_names.contains(word)
-            || self
-                .base
-                .as_ref()
-                .is_some_and(|base| base.proper_names.contains(word))
+    /// True when `word` is already established by a dictionary source. Such a
+    /// form is never treated as a typo of a work entity.
+    pub(crate) fn is_known_word(&self, word: &str) -> bool {
+        self.word_freq.contains_key(word)
+            || self.proper_names.contains(word)
+            || self.person_names.contains_key(word)
+            || self.place_names.contains_key(word)
+            || self.ignored_words.contains(word)
+            || self.protected_words.contains(word)
+            || self.base.as_ref().is_some_and(|base| {
+                base.word_freq.contains_key(word)
+                    || base.proper_names.contains(word)
+                    || base.person_names.contains_key(word)
+                    || base.place_names.contains_key(word)
+                    || base.ignored_words.contains(word)
+                    || base.protected_words.contains(word)
+            })
     }
 
-    /// Compare frequency only if the candidates share exactly one source.
-    /// Frequencies from unrelated corpora/categories never establish priority.
-    pub(crate) fn compare_word_frequency(&self, left: &str, right: &str) -> Ordering {
-        let left = self.word_frequency_sources(left);
-        let right = self.word_frequency_sources(right);
-        let mut shared = left.iter().filter_map(|left_source| {
-            right
-                .iter()
-                .find(|right_source| right_source.source == left_source.source)
-                .map(|right_source| (left_source.value, right_source.value))
-        });
-        let Some((left_frequency, right_frequency)) = shared.next() else {
-            return Ordering::Equal;
-        };
-        if shared.next().is_some() {
-            return Ordering::Equal;
-        }
-        right_frequency.cmp(&left_frequency)
-    }
-
-    fn word_frequency_sources(&self, word: &str) -> Vec<WordFrequency> {
-        let mut sources = self
-            .base
-            .as_ref()
-            .and_then(|base| base.word_freq.get(word))
-            .cloned()
-            .unwrap_or_default();
-        if let Some(overlay) = self.word_freq.get(word) {
-            for frequency in overlay {
-                if let Some(existing) = sources
-                    .iter_mut()
-                    .find(|existing| existing.source == frequency.source)
-                {
-                    *existing = *frequency;
-                } else {
-                    sources.push(*frequency);
-                }
-            }
-        }
-        sources
+    /// Author-confirmed entities for the current project. The shared base
+    /// lexicon deliberately never carries work-dictionary entries.
+    pub(crate) fn work_entity_lexicon(&self) -> &WorkEntityLexicon {
+        &self.work_entity_lexicon
     }
 
     pub(crate) fn confusion_target(&self, wrong: &str) -> Option<&str> {
@@ -521,10 +503,7 @@ impl Lexicon {
         Box::new(base_candidates.chain(self.local_word_candidates_by_pinyin(word)))
     }
 
-    fn local_word_candidates_by_pinyin<'a>(
-        &'a self,
-        word: &str,
-    ) -> impl Iterator<Item = &'a str> {
+    fn local_word_candidates_by_pinyin<'a>(&'a self, word: &str) -> impl Iterator<Item = &'a str> {
         let char_len = word.chars().count();
         let signature = self.pinyin_signature(word);
         self.words_by_pinyin
@@ -533,55 +512,26 @@ impl Lexicon {
             .flat_map(|words| words.iter().map(String::as_str))
     }
 
-    pub(crate) fn near_proper_name_candidates<'a>(&'a self, source: &[char]) -> Vec<&'a str> {
-        let mut seen = HashSet::new();
-        let mut candidates = Vec::new();
-        if let Some(base) = &self.base {
-            candidates.extend(base.local_near_proper_name_candidates(source, &mut seen));
-        }
-        candidates.extend(self.local_near_proper_name_candidates(source, &mut seen));
-        candidates
-    }
-
-    fn local_near_proper_name_candidates<'a>(
-        &'a self,
-        source: &[char],
-        seen: &mut HashSet<&'a str>,
-    ) -> Vec<&'a str> {
-        let char_len = source.len();
-        let mut candidates = Vec::new();
-        for position in 0..char_len {
-            let remainder = source
-                .iter()
-                .enumerate()
-                .filter_map(|(index, ch)| (index != position).then_some(*ch))
-                .collect::<String>();
-            if let Some(names) = self
-                .proper_name_wildcards
-                .get(&(char_len, position, remainder))
-            {
-                for name in names {
-                    if seen.insert(name.as_str()) {
-                        candidates.push(name.as_str());
-                    }
-                }
-            }
-        }
-        candidates
-    }
-
     pub(crate) fn confusable_chars(&self, ch: char) -> Vec<char> {
         let mut chars = HashSet::new();
         if let Some(same) = self.same_pinyin.get(&ch) {
             chars.extend(same.iter().copied());
         }
-        if let Some(same) = self.base.as_ref().and_then(|base| base.same_pinyin.get(&ch)) {
+        if let Some(same) = self
+            .base
+            .as_ref()
+            .and_then(|base| base.same_pinyin.get(&ch))
+        {
             chars.extend(same.iter().copied());
         }
         if let Some(same) = self.same_stroke.get(&ch) {
             chars.extend(same.iter().copied());
         }
-        if let Some(same) = self.base.as_ref().and_then(|base| base.same_stroke.get(&ch)) {
+        if let Some(same) = self
+            .base
+            .as_ref()
+            .and_then(|base| base.same_stroke.get(&ch))
+        {
             chars.extend(same.iter().copied());
         }
         chars.remove(&ch);
@@ -655,31 +605,6 @@ impl Lexicon {
                 .entry((char_len, signature))
                 .or_default()
                 .push(word);
-        }
-
-        self.proper_name_wildcards.clear();
-        let proper_names = self.proper_names.iter().cloned().collect::<Vec<_>>();
-        for name in proper_names {
-            let char_len = name.chars().count();
-            self.index_proper_name(&name, char_len);
-        }
-    }
-
-    fn index_proper_name(&mut self, name: &str, char_len: usize) {
-        if !(2..=4).contains(&char_len) {
-            return;
-        }
-        let chars = name.chars().collect::<Vec<_>>();
-        for position in 0..char_len {
-            let remainder = chars
-                .iter()
-                .enumerate()
-                .filter_map(|(index, ch)| (index != position).then_some(*ch))
-                .collect::<String>();
-            self.proper_name_wildcards
-                .entry((char_len, position, remainder))
-                .or_default()
-                .push(name.to_owned());
         }
     }
 
