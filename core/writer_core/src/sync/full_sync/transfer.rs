@@ -195,42 +195,35 @@ pub fn run_transfer(
     }
 }
 
-/// Read the starmap IDs referenced by this round's staged `starmaps/index.json`.
-///
-/// - `Some(empty)` when there is no index file (nothing to publish/block).
-/// - `Some(ids)` when the staged index parsed successfully.
-/// - `None` when the file exists but cannot be read/parsed; callers fall back
-///   to the conservative "all planned graph groups" check.
-fn starmap_index_referenced_ids(
-    planned: &crate::sync::full_sync::PlannedTarget,
-) -> Option<std::collections::HashSet<String>> {
-    let staging_root = planned.staging_root.as_deref()?;
-    let index_path = staging_root.join("starmaps/index.json");
-    let bytes = match std::fs::read(&index_path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Some(std::collections::HashSet::new());
-        }
-        Err(error) => {
-            log::warn!(
-                "[sync] starmap index dependency check: failed to read {}: {}",
-                index_path.display(),
-                error
-            );
-            return None;
-        }
-    };
-    match serde_json::from_slice::<crate::starmap::StarMapIndexRecord>(&bytes) {
-        Ok(index) => Some(index.starmap_ids.into_iter().collect()),
-        Err(error) => {
-            log::warn!(
-                "[sync] starmap index dependency check: failed to parse {}: {}",
-                index_path.display(),
-                error
-            );
-            None
-        }
+/// Build the completion table for planned StarMap graph groups, keyed by the
+/// BARE starmap id stored in `StarMapIndexRecord`. `AppDataGroup::id()` returns
+/// `starmap:<id>` and must only be used to look up target results.
+fn build_starmap_group_completion(
+    plan: &FullSyncPlan,
+    completed_targets: &[TargetSyncResult],
+) -> std::collections::HashMap<String, bool> {
+    use crate::sync::types::AppDataGroup;
+
+    let mut completion = std::collections::HashMap::new();
+    for candidate in &plan.targets {
+        let Some(group @ AppDataGroup::Starmap(starmap_id)) = &candidate.target.app_group else {
+            continue;
+        };
+        let group_id = group.id();
+        let completed = completed_targets
+            .iter()
+            .find(|result| result.group_id.as_deref() == Some(group_id.as_str()))
+            .is_some_and(|result| {
+                matches!(
+                    &result.result.status,
+                    crate::sync::SyncStatus::Success
+                        | crate::sync::SyncStatus::NoChanges
+                        | crate::sync::SyncStatus::LatestWinsApplied
+                )
+            });
+        completion.insert(starmap_id.clone(), completed);
     }
+    completion
 }
 
 /// 执行单个 target 的 Transfer — 新编排入口。
@@ -288,70 +281,17 @@ pub fn run_single_target_transfer(
 
     let planned = &plan.targets[target_index];
 
-    // The existing on-disk StarMap index is one aggregate record. Only block
-    // its publication for graph groups that this index actually references;
-    // unrelated starmap groups must not turn a completed index into a failure.
-    if matches!(
+    // StarmapIndex publication is checked inside `transfer_app_data_group`
+    // against the FINAL merged index. Build the bare-id completion table here;
+    // `AppDataGroup::id()` uses the separate `starmap:<id>` namespace.
+    let starmap_group_completion = if matches!(
         planned.target.app_group.as_ref(),
         Some(crate::sync::types::AppDataGroup::StarmapIndex)
     ) {
-        let referenced_ids = starmap_index_referenced_ids(planned);
-        let blocked_groups: Vec<String> = plan
-            .targets
-            .iter()
-            .filter_map(|candidate| match &candidate.target.app_group {
-                Some(group @ crate::sync::types::AppDataGroup::Starmap(_)) => {
-                    let group_id = group.id();
-                    if referenced_ids
-                        .as_ref()
-                        .is_some_and(|ids| !ids.contains(&group_id))
-                    {
-                        return None;
-                    }
-                    let successful = completed_targets
-                        .iter()
-                        .find(|result| result.group_id.as_deref() == Some(group_id.as_str()))
-                        .is_some_and(|result| {
-                            matches!(
-                                &result.result.status,
-                                crate::sync::SyncStatus::Success
-                                    | crate::sync::SyncStatus::NoChanges
-                                    | crate::sync::SyncStatus::LatestWinsApplied
-                            )
-                        });
-                    (!successful).then_some(group_id)
-                }
-                _ => None,
-            })
-            .collect();
-        if !blocked_groups.is_empty() {
-            let message = format!(
-                "starmap index publication blocked because graph groups did not complete: {}",
-                blocked_groups.join(", ")
-            );
-            let mut result = SyncResult::error(
-                crate::sync::SyncStatus::RecoverableError(message.clone()),
-                message,
-                None,
-            );
-            result.error_category = Some("dependency_check".to_string());
-            return Some((
-                TargetSyncResult {
-                    target_kind: planned.target_kind.as_target_kind_str().to_string(),
-                    project_id: planned.project_id.clone(),
-                    remote_prefix: planned.target.remote_prefix.clone(),
-                    group_id: planned.target.app_group.as_ref().map(|group| group.id()),
-                    failure_path: Some("starmaps/index.json".to_string()),
-                    failure_phase: Some("dependency_check".to_string()),
-                    result,
-                    deleted_resolution: None,
-                    local_lifecycle_action: Default::default(),
-                },
-                None,
-                None,
-            ));
-        }
-    }
+        build_starmap_group_completion(plan, completed_targets)
+    } else {
+        std::collections::HashMap::new()
+    };
 
     let (result, resolution, action) = match planned.target_kind {
         PlannedTargetKind::App => {
@@ -367,6 +307,7 @@ pub fn run_single_target_transfer(
                     &planned.target,
                     plan.force_sync,
                     cancellation_token,
+                    &starmap_group_completion,
                 )
             } else {
                 run_single_target(
@@ -516,6 +457,7 @@ fn app_group_failure_phase(
         return Some("merge".to_string());
     }
     [
+        "dependency_check",
         "catalog_read",
         "merge",
         "generation_upload",

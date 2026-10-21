@@ -10,6 +10,7 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
     target: &SyncTarget,
     force_sync: bool,
     cancellation_token: Option<&SyncCancellationToken>,
+    starmap_group_completion: &std::collections::HashMap<String, bool>,
 ) -> SyncResult {
     use crate::sync::types::SyncStatus;
 
@@ -114,6 +115,45 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
             return SyncResult::error(SyncStatus::RecoverableError(message.clone()), message, None);
         }
 
+        if matches!(group, crate::sync::types::AppDataGroup::StarmapIndex)
+            && sync_root.join("starmaps/index.json").is_file()
+        {
+            let referenced_ids = match read_final_starmap_index_ids(sync_root) {
+                Ok(ids) => ids,
+                Err(reason) => {
+                    let message = format!(
+                        "dependency_check: failed to read final starmaps/index.json path=starmaps/index.json reason={reason}"
+                    );
+                    let mut result = SyncResult::error(
+                        SyncStatus::RecoverableError(message.clone()),
+                        message,
+                        None,
+                    );
+                    result.error_category = Some("dependency_check".to_string());
+                    return result;
+                }
+            };
+            let mut blocked: Vec<String> = referenced_ids
+                .into_iter()
+                .filter(|starmap_id| {
+                    starmap_group_completion
+                        .get(starmap_id)
+                        .is_some_and(|completed| !completed)
+                })
+                .collect();
+            blocked.sort();
+            if !blocked.is_empty() {
+                let message = format!(
+                    "dependency_check: starmap index publication blocked because referenced graph groups did not complete: {} path=starmaps/index.json",
+                    blocked.join(", ")
+                );
+                let mut result =
+                    SyncResult::error(SyncStatus::RecoverableError(message.clone()), message, None);
+                result.error_category = Some("dependency_check".to_string());
+                return result;
+            }
+        }
+
         let generation_id = uuid::Uuid::new_v4().to_string();
         let generation_prefix = match super::super::generation::generation_remote_prefix(
             &target.remote_prefix,
@@ -194,6 +234,19 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
         ),
         retry_failure_phase,
     )
+}
+
+fn read_final_starmap_index_ids(
+    sync_root: &Path,
+) -> Result<std::collections::HashSet<String>, String> {
+    let index_path = sync_root.join("starmaps/index.json");
+    let bytes = std::fs::read(&index_path).map_err(|error| error.to_string())?;
+    let index: crate::starmap::StarMapIndexRecord =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    let mut ids: std::collections::HashSet<String> = index.starmap_ids.into_iter().collect();
+    ids.extend(index.root_starmap_ids);
+    ids.extend(index.main_starmap_by_project.into_values());
+    Ok(ids)
 }
 
 fn mark_app_group_failure(mut result: SyncResult, phase: &str) -> SyncResult {

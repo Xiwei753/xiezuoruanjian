@@ -143,11 +143,7 @@ impl crate::facade::WriterCore {
             if let crate::sync::commit_helpers::TargetCommitResult::Failed(msg) = commit_result {
                 if let Some(target) = targets.get_mut(idx) {
                     // commit 失败视为 RecoverableError（下次同步可重试）
-                    target.result.status = crate::sync::SyncStatus::RecoverableError(format!(
-                        "staging_commit_failed: {}",
-                        msg
-                    ));
-                    target.result.error = Some(format!("staging commit failed: {}", msg));
+                    crate::sync::commit_helpers::apply_commit_failure_to_target(target, msg);
                 }
             }
         }

@@ -896,11 +896,10 @@ impl WriterCoreApi {
 
             // commit 失败注入错误状态。
             if let crate::sync::commit_helpers::TargetCommitResult::Failed(msg) = &commit_result {
-                target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
-                    format!("staging_commit_failed: {}", msg),
+                crate::sync::commit_helpers::apply_commit_failure_to_target(
+                    &mut target_with_conflicts,
+                    msg,
                 );
-                target_with_conflicts.result.error =
-                    Some(format!("staging commit failed: {}", msg));
             }
 
             // 同一写锁持有期内完成 Store 协调与索引失效（问题1+2）：

@@ -162,7 +162,8 @@ fn read_manifest_at(
     }
     let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "read_staging_manifest: failed to read manifest.sync.json: {}",
+            "manifest_read_failed: path={} reason=failed to read manifest: {}",
+            manifest_path.display(),
             e
         )))
     })?;
@@ -172,7 +173,8 @@ fn read_manifest_at(
     }
     let container: ManifestContainer = serde_json::from_str(&content).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "read_staging_manifest: manifest.sync.json parse error: {}",
+            "manifest_read_failed: path={} reason=manifest parse error: {}",
+            manifest_path.display(),
             e
         )))
     })?;

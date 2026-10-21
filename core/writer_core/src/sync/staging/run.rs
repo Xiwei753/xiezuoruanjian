@@ -321,43 +321,33 @@ impl StagingRun {
         };
         let live_manifest = match live_manifest_result {
             Ok(Some(map)) => map,
-            Ok(None) => std::collections::HashMap::new(),
-            Err(e) => {
-                log::warn!(
-                    "compute_commit_plan: live manifest parse failed ({}), \
-                     existing version facts are unavailable",
-                    e
-                );
+            Ok(None) => {
+                // 首次导入/旧数据迁移：尚无版本记录，允许按当前文件建立初始版本。
                 std::collections::HashMap::new()
+            }
+            Err(e) => {
+                // manifest 已存在但读取/解析失败：版本事实未知，不能用 mtime 猜胜负。
+                return Err(crate::Error::Other(format!(
+                    "compute_commit_plan: live manifest unavailable: {e}"
+                )));
             }
         };
 
         // 读取 staging 的 manifest.sync.json，
         // 获取远端文件的真实 LWW 元数据（updated_at_ms、device_id、op）。
-        // Transfer 阶段会写入 manifest；manifest 不存在或解析失败时回退到
-        // mtime-based LWW（空 HashMap），不再区分 Git/GithubApi backend 的不同错误处理。
-        //
-        // staging 不再按 active_provider 分支。
-        // 通用 Provider 的 manifest 是 LWW 决策依据但不是硬性事实来源——
-        // 缺失或损坏时回退到 mtime-based LWW，让同步继续而不是直接失败。
+        // Transfer 阶段会写入 manifest；不存在时才允许按首次导入建立初始版本。
+        // 存在但损坏时必须让本组 Commit 失败，不能退回 mtime 决策。
         let staging_manifest_result = match &self.app_group {
             Some(group) => read_staging_manifest_for_group(&staging_root, group),
             None => read_staging_manifest(&staging_root),
         };
         let staging_manifest = match staging_manifest_result {
             Ok(Some(map)) => map,
-            Ok(None) => {
-                // manifest 不存在 → mtime fallback（空 HashMap）。
-                std::collections::HashMap::new()
-            }
+            Ok(None) => std::collections::HashMap::new(),
             Err(e) => {
-                // manifest 解析失败 → warn + mtime fallback（空 HashMap）。
-                log::warn!(
-                    "compute_commit_plan: manifest parse failed ({}), \
-                     falling back to mtime-based LWW",
-                    e
-                );
-                std::collections::HashMap::new()
+                return Err(crate::Error::Other(format!(
+                    "compute_commit_plan: staging manifest unavailable: {e}"
+                )));
             }
         };
 

@@ -188,6 +188,33 @@ pub(crate) enum TargetCommitResult {
     Failed(String),
 }
 
+/// Inject a staging-commit failure into the target result.
+///
+/// Manifest read/parse failures carry `manifest_read_failed: path=... cause=...`
+/// from the staging layer. Preserve that concrete path and report the failure
+/// as `merge`, so a corrupted manifest is not misreported as a transfer error.
+pub(crate) fn apply_commit_failure_to_target(
+    target: &mut crate::sync::types::TargetSyncResult,
+    message: &str,
+) {
+    target.result.status =
+        crate::sync::SyncStatus::RecoverableError(format!("staging_commit_failed: {message}"));
+    target.result.error = Some(format!("staging commit failed: {message}"));
+
+    if message.contains("manifest_read_failed:") {
+        target.failure_phase = Some("merge".to_string());
+        if let Some((_, path)) = message.split_once("path=") {
+            let path = path
+                .split(|character: char| character.is_whitespace() || character == ',')
+                .next()
+                .unwrap_or_default();
+            if !path.is_empty() {
+                target.failure_path = Some(path.to_string());
+            }
+        }
+    }
+}
+
 /// 根据 `plan.needs_sync_state_merge` 选择走三方语义合并还是直接 apply。
 ///
 /// - `needs_sync_state_merge == true`：调
