@@ -5,7 +5,7 @@
 use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_app_service};
-use crate::api::CorrectionIgnoreScopeDto;
+use crate::api::{CorrectionEditRangeDto, CorrectionIgnoreScopeDto};
 
 fn parse_ignore_scope(scope: &str) -> Result<CorrectionIgnoreScopeDto, String> {
     match scope {
@@ -100,6 +100,87 @@ pub unsafe extern "C" fn writer_core_check_correction_segment(
                 text_revision,
                 start_byte,
                 end_byte,
+            )
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(error) => err_json("CORRECTION_ERROR", &error),
+    }
+}
+
+/// Applies the editor transaction's real change ranges. `edits_json` is a JSON
+/// array of `[oldStart, oldEnd, newStart, newEnd]` UTF-8 byte ranges.
+///
+/// # Safety
+/// `project_id`, `chapter_id`, `text`, and `edits_json` must be valid
+/// null-terminated UTF-8 C strings. Returns a caller-owned JSON C string;
+/// free it with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_check_correction_edits(
+    session_id: u64,
+    project_id: *const c_char,
+    chapter_id: *const c_char,
+    text_revision: u64,
+    base_revision: u64,
+    text: *const c_char,
+    edits_json: *const c_char,
+) -> *mut c_char {
+    let project_id = match c_str_to_rust(project_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid project id: {error}")),
+    };
+    let chapter_id = match c_str_to_rust(chapter_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid chapter id: {error}")),
+    };
+    let text = match c_str_to_rust(text) {
+        Ok(value) => value,
+        Err(error) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid correction text: {error}"),
+            )
+        }
+    };
+    let edits_json = match c_str_to_rust(edits_json) {
+        Ok(value) => value,
+        Err(error) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid correction edits: {error}"),
+            )
+        }
+    };
+    let ranges = match serde_json::from_str::<Vec<[u32; 4]>>(&edits_json) {
+        Ok(ranges) => ranges,
+        Err(error) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid correction edits JSON: {error}"),
+            )
+        }
+    };
+    let edits = ranges
+        .into_iter()
+        .map(
+            |[old_start, old_end, new_start, new_end]| CorrectionEditRangeDto {
+                old_start_byte: old_start,
+                old_end_byte: old_end,
+                new_start_byte: new_start,
+                new_end_byte: new_end,
+            },
+        )
+        .collect();
+    match with_app_service(|service| {
+        service
+            .check_correction_edits(
+                session_id,
+                project_id,
+                chapter_id,
+                text_revision,
+                base_revision,
+                text,
+                edits,
             )
             .map_err(|error| error.to_string())
     }) {

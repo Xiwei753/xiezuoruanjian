@@ -26,15 +26,7 @@ interface CorrectionRequestSnapshot {
   sessionId: number
   text: string
   revision: number
-  cursorByte: number
 }
-
-interface CorrectionByteRange {
-  startByte: number
-  endByte: number
-}
-
-const SENTENCE_ENDINGS = '。！？!?\n'
 
 /**
  * Coordinates background correction requests and projects Core byte ranges to ArkTS UTF-16.
@@ -50,7 +42,6 @@ export class CorrectionCoordinator {
   private isChecking: boolean = false
   private errorMessage: string = ''
   private requestGeneration: number = 0
-  private debounceTimer: number = -1
   // Issue #958：内置模型兜底由会话打开回调触发；只有确认已有用户模型或内置模型
   // 成功交给 Core 后，本实例才不再重复尝试（失败保持可重试，不阻断编辑）。
   private bundledModelAttempted: boolean = false
@@ -86,11 +77,12 @@ export class CorrectionCoordinator {
   }
 
   /**
-   * Called after each Core editor snapshot. Issue #954: old marks are not
-   * discarded unconditionally; Core repositions cached results for the new
-   * revision and only the edited sentence is rescanned.
+   * Called after each Core editor snapshot. The edit transaction's real
+   * `displayPatches` are forwarded to Core; cursor movement only restores
+   * cached results and never implies an edit.
    */
-  acceptSnapshot(projectId: string, chapterId: string, snapshot: EditorSessionSnapshot): void {
+  acceptSnapshot(projectId: string, chapterId: string, snapshot: EditorSessionSnapshot,
+    editResult: EditorEditResult | null = null): void {
     const sessionId = this.editor.getSessionId()
     if (sessionId === null || projectId.length === 0 || chapterId.length === 0) {
       this.invalidate()
@@ -108,39 +100,37 @@ export class CorrectionCoordinator {
       chapterId: chapterId,
       sessionId: sessionId,
       text: snapshot.text,
-      revision: snapshot.revision,
-      cursorByte: snapshot.cursor
+      revision: snapshot.revision
     }
     const previous = this.current
     if (previous !== null && previous.projectId === projectId && previous.chapterId === chapterId &&
-        previous.sessionId === sessionId && previous.revision === snapshot.revision && previous.text === snapshot.text) {
-      const previousRange = this.sentenceByteRange(previous)
-      const nextRange = this.sentenceByteRange(nextSnapshot)
-      if ((previousRange === null && nextRange === null) ||
-          (previousRange !== null && nextRange !== null &&
-            previousRange.startByte === nextRange.startByte && previousRange.endByte === nextRange.endByte)) {
-        this.current = nextSnapshot
-        return
-      }
+        previous.sessionId === sessionId && previous.revision === snapshot.revision &&
+        previous.text === snapshot.text) {
+      this.current = nextSnapshot
+      return
     }
 
     this.current = nextSnapshot
     this.requestGeneration++
     const generation = this.requestGeneration
-    this.cancelDebounce()
-    this.isChecking = false
     this.errorMessage = ''
     this.notify()
-    void this.restoreChapterSnapshot(generation)
-    this.debounceTimer = setTimeout((): void => {
-      this.debounceTimer = -1
-      void this.checkCurrentSegment(generation)
-    }, 420)
+
+    if (editResult !== null && editResult.displayPatches.length > 0 &&
+        editResult.newRevision === snapshot.revision &&
+        editResult.baseRevision <= snapshot.revision) {
+      this.isChecking = true
+      this.notify()
+      void this.checkEdits(generation, nextSnapshot, editResult)
+    } else {
+      this.isChecking = false
+      this.notify()
+      void this.restoreChapterSnapshot(generation)
+    }
   }
 
   private invalidate(): void {
     this.requestGeneration++
-    this.cancelDebounce()
     this.suggestions = []
     this.isChecking = false
     this.errorMessage = ''
@@ -150,13 +140,6 @@ export class CorrectionCoordinator {
   clear(): void {
     this.current = null
     this.invalidate()
-  }
-
-  private cancelDebounce(): void {
-    if (this.debounceTimer >= 0) {
-      clearTimeout(this.debounceTimer)
-      this.debounceTimer = -1
-    }
   }
 
   /** Forward a user-selected local model file to Core; no model path is assumed by the platform. */
@@ -240,61 +223,32 @@ export class CorrectionCoordinator {
     this.acceptCheckResult(generation, snapshot, result, true)
   }
 
-  private sentenceByteRange(snapshot: CorrectionRequestSnapshot): CorrectionByteRange | null {
-    const text = snapshot.text
-    if (text.length === 0) {
-      return null
-    }
-    const cursor = Math.min(text.length, Math.max(0, utf8ToUtf16(text, snapshot.cursorByte)))
-    let startUtf16 = 0
-    for (let i = Math.min(cursor, text.length) - 1; i >= 0; i--) {
-      if (SENTENCE_ENDINGS.indexOf(text.charAt(i)) >= 0) {
-        startUtf16 = i + 1
-        break
+  private async checkEdits(generation: number, snapshot: CorrectionRequestSnapshot,
+    editResult: EditorEditResult): Promise<void> {
+    const ranges: number[][] = []
+    for (let i = 0; i < editResult.displayPatches.length; i++) {
+      const patch = editResult.displayPatches[i]
+      if (patch.newRevision !== snapshot.revision) {
+        continue
       }
+      ranges.push([
+        patch.replaceByteStart,
+        patch.replaceByteEndExclusive,
+        patch.insertedByteStart,
+        patch.insertedByteEndExclusive
+      ])
     }
-    let endUtf16 = text.length
-    for (let i = cursor; i < text.length; i++) {
-      if (SENTENCE_ENDINGS.indexOf(text.charAt(i)) >= 0) {
-        endUtf16 = i + 1
-        break
-      }
-    }
-    while (startUtf16 < endUtf16 && /\s/.test(text.charAt(startUtf16))) {
-      startUtf16++
-    }
-    if (startUtf16 >= endUtf16) {
-      return null
-    }
-    const range: CorrectionByteRange = {
-      startByte: utf16ToUtf8(text, startUtf16),
-      endByte: utf16ToUtf8(text, endUtf16)
-    }
-    return range
-  }
-
-  private async checkCurrentSegment(generation: number): Promise<void> {
-    const snapshot = this.currentRequest(generation)
-    if (snapshot === null) {
-      if (generation === this.requestGeneration) {
-        this.invalidate()
-      }
-      return
-    }
-    const range = this.sentenceByteRange(snapshot)
-    if (range === null) {
-      this.suggestions = []
+    if (ranges.length === 0) {
       this.isChecking = false
       this.notify()
+      void this.restoreChapterSnapshot(generation)
       return
     }
-    this.isChecking = true
-    this.errorMessage = ''
-    this.notify()
+    const editsJson = JSON.stringify(ranges)
     try {
-      const result = await this.bridge.checkSegment(
+      const result = await this.bridge.checkEdits(
         snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision,
-        range.startByte, range.endByte)
+        editResult.baseRevision, snapshot.text, editsJson)
       this.acceptCheckResult(generation, snapshot, result, false)
     } finally {
       this.notifyScanCompleted()
@@ -303,7 +257,6 @@ export class CorrectionCoordinator {
 
   /** User-triggered whole-chapter correction uses the same Core engine and snapshot identity. */
   async checkChapter(): Promise<void> {
-    this.cancelDebounce()
     const snapshot = this.current
     if (snapshot === null) {
       return

@@ -8,8 +8,10 @@ on:
     paths:
       - 'apps/Linux_qt/**'
       - 'core/**'
+      - 'crates/**'
       - 'platform/rust/linux/**'
       - 'packaging/rpm/**'
+      - 'packaging/linux/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/linux_rpm_build.yml'

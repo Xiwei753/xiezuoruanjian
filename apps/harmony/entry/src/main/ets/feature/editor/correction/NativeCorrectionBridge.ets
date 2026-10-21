@@ -78,6 +78,19 @@ export class NativeCorrectionBridge implements ICorrectionBridge {
     }
   }
 
+  async checkEdits(sessionId: number, projectId: string, chapterId: string, textRevision: number,
+    baseRevision: number, text: string,
+    editsJson: string): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>> {
+    try {
+      const pending: Promise<string> = this.core.getNativeModule().nativeCorrectionCheckEdits(
+        sessionId, projectId, chapterId, textRevision, baseRevision, text, editsJson) as Promise<string>
+      const jsonStr: string = await pending
+      return this.core.decodeEnvelope<CorrectionChapterSnapshotDto>(jsonStr, decodeCorrectionChapterSnapshot)
+    } catch (e) {
+      return this.nativeError<CorrectionChapterSnapshotDto>(e)
+    }
+  }
+
   async checkChapter(sessionId: number, projectId: string, chapterId: string,
     textRevision: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>> {
     try {

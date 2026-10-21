@@ -359,6 +359,7 @@ Rectangle {
     EditorController {
         id: editorController
         targetEditorItem: editorViewport.editorItem
+        editorViewportRef: editorViewport
         editorBackendRef: root.editorBackendRef
         dt: root.dt
         // Issue #709 评论 issue-body-709: 传入 themeController 使

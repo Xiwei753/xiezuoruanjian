@@ -659,6 +659,42 @@ impl SujianEditorItem {
         outcome.applied
     }
 
+    /// Reveal a proofreading span without editing text. Selection, caret and
+    /// repaint only; revision, undo history and word statistics stay unchanged.
+    pub(crate) fn reveal_correction(
+        &mut self,
+        start_byte: u32,
+        end_byte: u32,
+        original: QString,
+        expected_revision: u64,
+    ) -> bool {
+        if !self.current_editor_enabled || self.pipeline.text_revision() != expected_revision {
+            return false;
+        }
+        let start = start_byte as usize;
+        let end = end_byte as usize;
+        let original = original.to_string();
+        let text = self.pipeline.committed_text();
+        if start >= end
+            || end > text.len()
+            || !text.is_char_boundary(start)
+            || !text.is_char_boundary(end)
+            || text.get(start..end) != Some(original.as_str())
+        {
+            return false;
+        }
+
+        let _ = self.pipeline.set_selection(start, end);
+        self.bump_visual_revision();
+        self.adjust_affinity_at_wrap_boundary();
+        self.cursor_position_changed();
+        self.selection_changed();
+        self.cursor_ctrl.dirty = true;
+        self.update_cursor_visual_position();
+        self.request_static_repaint();
+        true
+    }
+
     pub(crate) fn select_all(&mut self) {
         // Issue #705 评论 5717380886: 全选是非正文事务导致的逻辑 cursor 移动。
         let text_len = self.pipeline.committed_text().len();

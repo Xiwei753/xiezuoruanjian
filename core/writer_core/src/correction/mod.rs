@@ -23,8 +23,10 @@ mod engine;
 mod result_cache;
 
 pub(crate) use engine::CorrectionScanner;
+pub(crate) use result_cache::EditRange;
 use result_cache::{
     cache_file_name, modified_stamp, parts_fingerprint, ChapterCorrectionCacheState,
+    ChapterCorrectionSlot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -67,8 +69,7 @@ struct PersistedCorrectionPreferences {
     projects: BTreeMap<String, ProjectCorrectionPreferences>,
 }
 
-type ChapterResultCacheRegistry =
-    HashMap<(String, String), Arc<Mutex<ChapterCorrectionCacheState>>>;
+type ChapterResultCacheRegistry = HashMap<(String, String), Arc<ChapterCorrectionSlot>>;
 
 struct CorrectionStoreInner {
     path: PathBuf,
@@ -100,9 +101,29 @@ struct CachedLexicon {
     lexicon: Arc<Lexicon>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ModelFileStamp {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+struct CachedModel {
+    stamp: ModelFileStamp,
+    model: Weak<KenlmModel>,
+}
+
+/// Identity of the exact model file an engine was built from. The path alone is
+/// not enough: replacing the model at the same path must invalidate both the
+/// scanner result cache and the process-wide engine cache.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ModelCacheKey {
+    path: PathBuf,
+    stamp: ModelFileStamp,
+}
+
 struct CachedCorrectionEngine {
     lexicon_version: u64,
-    model_path: Option<PathBuf>,
+    model_key: Option<ModelCacheKey>,
     engine: Arc<CorrectionEngine>,
 }
 
@@ -114,9 +135,9 @@ pub struct CorrectionStore {
 
 static STORE_REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<CorrectionStoreInner>>>> =
     OnceLock::new();
-static MODEL_CACHE: OnceLock<Mutex<HashMap<PathBuf, Weak<KenlmModel>>>> = OnceLock::new();
+static MODEL_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedModel>>> = OnceLock::new();
 
-fn model_cache() -> &'static Mutex<HashMap<PathBuf, Weak<KenlmModel>>> {
+fn model_cache() -> &'static Mutex<HashMap<PathBuf, CachedModel>> {
     MODEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -125,13 +146,34 @@ fn canonical_model_path(path: &Path) -> Result<PathBuf, WriterError> {
         .map_err(|error| WriterError::Io(error.to_string()))
 }
 
-fn open_model_candidate(path: &Path) -> Result<(PathBuf, Arc<KenlmModel>), WriterError> {
+fn model_file_stamp(path: &Path) -> Result<ModelFileStamp, WriterError> {
+    let metadata = std::fs::metadata(path).map_err(|error| WriterError::Io(error.to_string()))?;
+    Ok(ModelFileStamp {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn open_model_candidate(path: &Path) -> Result<(ModelCacheKey, Arc<KenlmModel>), WriterError> {
     // KenlmModel::open is the sole format validator. Validate before taking any
     // preference/cache lock so rejected candidates cannot disturb active state.
-    let model = KenlmModel::open(path)
+    let path = canonical_model_path(path)?;
+    let stamp_before = model_file_stamp(&path)?;
+    let model = KenlmModel::open(&path)
         .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")))?;
-    let key = canonical_model_path(path)?;
-    Ok((key, Arc::new(model)))
+    let stamp_after = model_file_stamp(&path)?;
+    if stamp_before != stamp_after {
+        return Err(WriterError::Other(
+            "correction model changed while it was being opened; retry the request".into(),
+        ));
+    }
+    Ok((
+        ModelCacheKey {
+            path,
+            stamp: stamp_after,
+        },
+        Arc::new(model),
+    ))
 }
 
 const CORRECTION_DICTIONARY_FILES: [&str; 8] = [
@@ -218,9 +260,8 @@ impl CorrectionStore {
             .lock()
             .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
 
-        let old_path = preferences.model_path.clone();
         let mut next = preferences.clone();
-        next.model_path = Some(key.clone());
+        next.model_path = Some(key.path.clone());
         let json = serde_json::to_string_pretty(&next)
             .map_err(|error| WriterError::Json(error.to_string()))?;
         crate::storage::atomic_write_string(&self.inner.path, &json)
@@ -229,14 +270,18 @@ impl CorrectionStore {
         // The candidate is already validated. Cache only a weak mapping: an
         // active engine/scanner owns the strong reference, and idle models can
         // be released as soon as their last engine is dropped.
-        models.retain(|_, model| model.strong_count() > 0);
-        if models.get(&key).and_then(Weak::upgrade).is_none() {
-            models.insert(key.clone(), Arc::downgrade(&candidate));
-        }
+        models.retain(|_, model| model.model.strong_count() > 0);
+        models.insert(
+            key.path.clone(),
+            CachedModel {
+                stamp: key.stamp,
+                model: Arc::downgrade(&candidate),
+            },
+        );
         *preferences = next;
-        if old_path.as_ref() != Some(&key) {
-            engines.clear();
-        }
+        // Selecting a model always starts a fresh engine, even when the path is
+        // unchanged but the file behind it was replaced.
+        engines.clear();
         Ok(())
     }
 
@@ -320,13 +365,15 @@ impl CorrectionStore {
                     WriterError::Other("correction engine cache lock poisoned".into())
                 })?;
                 engines.retain(|_, cached| {
-                    cached.model_path.as_ref() != Some(&key)
+                    cached.model_key.as_ref().map(|model| &model.path) != Some(&key)
                         || Arc::strong_count(&cached.engine) > 1
                 });
             }
         }
 
-        let in_use = models.get(&key).and_then(Weak::upgrade).is_some();
+        let in_use = models
+            .get(&key)
+            .is_some_and(|cached| cached.model.strong_count() > 0);
         if !configured && !in_use {
             models.remove(&key);
         }
@@ -361,12 +408,12 @@ impl CorrectionStore {
             .join("correction-cache")
     }
 
-    /// Process-shared state for one chapter's correction result cache.
+    /// Process-shared single-flight state for one chapter's correction cache.
     pub(super) fn chapter_result_cache(
         &self,
         project_id: &str,
         chapter_id: &str,
-    ) -> Result<Arc<Mutex<ChapterCorrectionCacheState>>, WriterError> {
+    ) -> Result<Arc<ChapterCorrectionSlot>, WriterError> {
         let key = (project_id.to_string(), chapter_id.to_string());
         let mut caches = self.inner.result_caches.lock().map_err(|_| {
             WriterError::Other("correction result cache registry lock poisoned".into())
@@ -377,7 +424,9 @@ impl CorrectionStore {
         let path = self
             .result_cache_dir()
             .join(cache_file_name(project_id, chapter_id));
-        let state = Arc::new(Mutex::new(ChapterCorrectionCacheState::load(path)));
+        let state = Arc::new(ChapterCorrectionSlot::new(
+            ChapterCorrectionCacheState::load(path),
+        ));
         caches.insert(key, Arc::clone(&state));
         Ok(state)
     }
@@ -387,15 +436,22 @@ impl CorrectionStore {
     /// entries. Ignore choices are applied when a snapshot is assembled and are
     /// deliberately excluded so they never force a rescan.
     pub(super) fn scanner_fingerprint(&self, project_id: &str) -> Result<String, WriterError> {
-        let model_path = {
+        let (model_path, disabled_rules) = {
             let guard =
                 self.inner.preferences.lock().map_err(|_| {
                     WriterError::Other("correction preferences lock poisoned".into())
                 })?;
-            guard.model_path.clone()
+            let mut disabled_rules = guard
+                .projects
+                .get(project_id)
+                .map(|project| project.disabled_rules.iter().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            disabled_rules.sort();
+            (guard.model_path.clone(), disabled_rules)
         };
         let mut parts = vec![
             "correction-scanner-v2".to_string(),
+            "correction-work-entities-v1".to_string(),
             model_path
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())
@@ -427,6 +483,9 @@ impl CorrectionStore {
         }
         for entry in self.dictionary_entries(project_id)? {
             parts.push(format!("dictionary:{entry}"));
+        }
+        for rule in disabled_rules {
+            parts.push(format!("disabled-rule:{rule}"));
         }
         Ok(parts_fingerprint(&parts))
     }
@@ -598,7 +657,7 @@ impl CorrectionStore {
 
     pub(super) fn configured_model_snapshot(
         &self,
-    ) -> Result<(Option<PathBuf>, Option<Arc<KenlmModel>>), WriterError> {
+    ) -> Result<(Option<ModelCacheKey>, Option<Arc<KenlmModel>>), WriterError> {
         let mut models = model_cache()
             .lock()
             .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
@@ -610,22 +669,39 @@ impl CorrectionStore {
         let Some(path) = preferences.model_path.clone() else {
             return Ok((None, None));
         };
-        let key = canonical_model_path(&path)?;
-        if let Some(model) = models.get(&key).and_then(Weak::upgrade) {
-            return Ok((Some(key), Some(model)));
+        let path = canonical_model_path(&path)?;
+        let stamp = model_file_stamp(&path)?;
+        if let Some(cached) = models.get(&path) {
+            if cached.stamp == stamp {
+                if let Some(model) = cached.model.upgrade() {
+                    return Ok((Some(ModelCacheKey { path, stamp }), Some(model)));
+                }
+            }
         }
-        let model = KenlmModel::open(&key)
+        let model = KenlmModel::open(&path)
             .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")))?;
+        let stamp_after = model_file_stamp(&path)?;
+        if stamp_after != stamp {
+            return Err(WriterError::Other(
+                "correction model changed while it was being opened; retry the request".into(),
+            ));
+        }
         let model = Arc::new(model);
-        models.insert(key.clone(), Arc::downgrade(&model));
-        Ok((Some(key), Some(model)))
+        models.insert(
+            path.clone(),
+            CachedModel {
+                stamp,
+                model: Arc::downgrade(&model),
+            },
+        );
+        Ok((Some(ModelCacheKey { path, stamp }), Some(model)))
     }
 
     pub(super) fn cached_engine(
         &self,
         project_id: &str,
         lexicon_version: u64,
-        model_path: Option<&Path>,
+        model_key: Option<&ModelCacheKey>,
     ) -> Result<Option<Arc<CorrectionEngine>>, WriterError> {
         let active_project =
             self.inner.active_project.lock().map_err(|_| {
@@ -651,8 +727,7 @@ impl CorrectionStore {
             .lock()
             .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
         Ok(engines.get(project_id).and_then(|cached| {
-            (cached.lexicon_version == lexicon_version
-                && cached.model_path.as_deref() == model_path)
+            (cached.lexicon_version == lexicon_version && cached.model_key.as_ref() == model_key)
                 .then(|| Arc::clone(&cached.engine))
         }))
     }
@@ -661,7 +736,7 @@ impl CorrectionStore {
         &self,
         project_id: &str,
         lexicon_version: u64,
-        model_path: Option<PathBuf>,
+        model_key: Option<ModelCacheKey>,
         engine: Arc<CorrectionEngine>,
     ) -> Result<Arc<CorrectionEngine>, WriterError> {
         // Match set_model_path's lock order and keep the preference stable while
@@ -678,7 +753,7 @@ impl CorrectionStore {
             .model_path
             .as_deref()
             .map(|path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
-        if current_path != model_path {
+        if current_path != model_key.as_ref().map(|key| key.path.clone()) {
             return Ok(engine);
         }
         let active_project =
@@ -705,7 +780,7 @@ impl CorrectionStore {
             .lock()
             .map_err(|_| WriterError::Other("correction engine cache lock poisoned".into()))?;
         if let Some(cached) = engines.get(project_id) {
-            if cached.lexicon_version == lexicon_version && cached.model_path == model_path {
+            if cached.lexicon_version == lexicon_version && cached.model_key == model_key {
                 return Ok(Arc::clone(&cached.engine));
             }
         }
@@ -713,7 +788,7 @@ impl CorrectionStore {
             project_id.to_string(),
             CachedCorrectionEngine {
                 lexicon_version,
-                model_path,
+                model_key,
                 engine: Arc::clone(&engine),
             },
         );

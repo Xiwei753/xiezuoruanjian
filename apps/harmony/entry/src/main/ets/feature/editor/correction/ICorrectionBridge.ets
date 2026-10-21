@@ -23,6 +23,9 @@ export interface ICorrectionBridge {
     destinationPath: string, expectedSize: number, expectedSha256: string): Promise<string>
   checkSegment(sessionId: number, projectId: string, chapterId: string, textRevision: number,
     startByte: number, endByte: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
+  checkEdits(sessionId: number, projectId: string, chapterId: string, textRevision: number,
+    baseRevision: number, text: string,
+    editsJson: string): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
   checkChapter(sessionId: number, projectId: string, chapterId: string,
     textRevision: number): Promise<ResultEnvelope<CorrectionChapterSnapshotDto>>
   getChapterSnapshot(sessionId: number, projectId: string, chapterId: string,

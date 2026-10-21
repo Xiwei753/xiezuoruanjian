@@ -59,6 +59,18 @@ impl TryFrom<(sujian_proof::CorrectionDiagnostic, u64)> for CorrectionSuggestion
     }
 }
 
+/// One real edit mapping from an editor transaction. `old` addresses the
+/// previous text revision and `new` addresses the revision supplied with the
+/// edit check request. All ranges are half-open UTF-8 byte intervals.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionEditRangeDto {
+    pub old_start_byte: u32,
+    pub old_end_byte: u32,
+    pub new_start_byte: u32,
+    pub new_end_byte: u32,
+}
+
 /// A half-open UTF-8 byte range whose cached correction results are verified
 /// against the text revision the snapshot was requested with.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
