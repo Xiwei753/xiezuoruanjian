@@ -13,7 +13,7 @@ const STATUS_BAR_CONTENT_HEIGHT_VP: number = 28
 export struct WideWritingStatus {
   @Param charsPerMinute: number = 0
   @Param progressCurrent: number = 0
-  @Param progressTarget: number = 2000
+  @Param progressTarget: number = 0
   @Param clockText: string = ''
   @Param saveStatus: string = ''
   @Param saveStatusColor: ResourceColor = '#0A59F7'
@@ -23,6 +23,9 @@ export struct WideWritingStatus {
   }
 
   private progressText(): string {
+    if (this.progressTarget <= 0) {
+      return `${this.progressCurrent.toLocaleString()} 字 · 目标未设置`
+    }
     return `${this.progressCurrent.toLocaleString()} / ${this.progressTarget.toLocaleString()}`
   }
 

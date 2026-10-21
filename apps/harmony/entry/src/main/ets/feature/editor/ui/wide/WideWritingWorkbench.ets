@@ -73,6 +73,9 @@ export struct WideWritingWorkbench {
   @Param toolPaneMinWidthVp: number = 0
   @Param toolPaneMaxWidthVp: number = 0
   @Param selectedToolKey: string = 'starmap'
+  @Param projectId: string = ''
+  @Param onOpenStarMap: (starmapId: string, starmapTitle: string) => void =
+    (_starmapId: string, _starmapTitle: string): void => {}
   @Param onChapterNavResize: (widthVp: number) => void = () => {}
   @Param onToolPaneResize: (widthVp: number) => void = () => {}
   @Param onCollapseChapterTree: () => void = () => {}
@@ -86,7 +89,8 @@ export struct WideWritingWorkbench {
   // ── 正文列底部状态 ──
   @Param charsPerMinute: number = 0
   @Param progressCurrent: number = 0
-  @Param progressTarget: number = 2000
+  // Core 没有「目标字数」字段；默认 0 表示未设置，状态栏不伪造分母。
+  @Param progressTarget: number = 0
   @Param clockText: string = ''
   @Param saveStatus: string = ''
   @Param saveStatusColor: ResourceColor = '#0A59F7'
@@ -309,8 +313,12 @@ export struct WideWritingWorkbench {
 
           WideToolPanel({
             toolKey: this.selectedToolKey,
+            projectId: this.projectId,
             onClose: (): void => {
               this.onCollapseToolPane()
+            },
+            onOpenStarMap: (starmapId: string, starmapTitle: string): void => {
+              this.onOpenStarMap(starmapId, starmapTitle)
             }
           })
             .width(this.toolPaneWidthVp)

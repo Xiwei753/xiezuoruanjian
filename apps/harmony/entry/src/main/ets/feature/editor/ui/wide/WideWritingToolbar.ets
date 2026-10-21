@@ -185,7 +185,7 @@ export struct WideWritingToolbar {
         Row() {
           if (this.fontSizePt > 0) {
             this.Stepper('字体',
-              `${Math.round(this.fontSizePt)}px`,
+              `${Math.round(this.fontSizePt)}pt`,
               (): void => {
                 this.onFontSizeChange(this.clampFontSize(this.fontSizePt - FONT_SIZE_STEP_PT))
               },
@@ -203,17 +203,23 @@ export struct WideWritingToolbar {
               })
           }
 
-          // 替换命令目前没有会话级实现：保留按钮占位、明确禁用，
+          // 替换命令目前没有会话级实现：保留按钮、明确禁用并标注“暂未实现”，
           // 不伪造替代表单、不往 Core 写假状态。
-          Button('替换', { type: ButtonType.Normal })
-            .height(32)
-            .padding({ left: 12, right: 12 })
-            .fontSize(13)
-            .fontColor($r('sys.color.font_secondary'))
-            .borderRadius(DesignTokens.radiusPill)
-            .backgroundColor($r('sys.color.comp_background_gray'))
-            .enabled(false)
-            .opacity(0.45)
+          Column({ space: 1 }) {
+            Button('替换', { type: ButtonType.Normal })
+              .height(30)
+              .padding({ left: 12, right: 12 })
+              .fontSize(13)
+              .fontColor($r('sys.color.font_secondary'))
+              .borderRadius(DesignTokens.radiusPill)
+              .backgroundColor($r('sys.color.comp_background_gray'))
+              .enabled(false)
+              .opacity(0.55)
+              .accessibilityText('替换（暂未实现）')
+            Text('未实现')
+              .fontSize(9)
+              .fontColor($r('sys.color.font_tertiary'))
+          }
         }
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)

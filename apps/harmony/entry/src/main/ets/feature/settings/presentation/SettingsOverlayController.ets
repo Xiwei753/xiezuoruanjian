@@ -23,7 +23,7 @@
 // - close() 只关闭对话框，不触碰任何 NavPathStack，下面原页面和原路由栈保持原位置。
 import hilog from '@ohos.hilog'
 import { UIContext, ComponentContent } from '@kit.ArkUI'
-import { AdaptiveContext } from '../../../ui/adaptive/AdaptiveContext'
+import { WideLayoutMode, getWideLayoutState } from '../../../app/navigation/wide/WideLayoutMode'
 import { createSettingsOverlayContent, SettingsOverlayArgs } from '../ui/wide/WideSettingsOverlay'
 
 const TAG = 'SettingsOverlayController'
@@ -62,12 +62,12 @@ export class SettingsOverlayController {
 
   /**
    * 当前窗口是否用悬浮设置。窄屏仍然走 Routes.Settings 路由页。
-   * Issue #932 A：判定统一为 prefersWideLayout——与外层导航外壳是同一模式判定。
+   * Issue #932 A：判定统一为外层导航壳写入的 WideLayoutMode。
    * 600–839vp 但仍使用底栏的窗口不再算浮层档，设置进入窄屏路由页；
    * isWorkbenchLayout 只服务页面内部内容，不再决定设置呈现方式。
    */
   isOverlayLayout(): boolean {
-    return AdaptiveContext.getInstance().getCurrentState().prefersWideLayout
+    return getWideLayoutState().current() === WideLayoutMode.Wide
   }
 
   /** 当前是否已经有设置浮层在（含正在关闭的那一段）。 */

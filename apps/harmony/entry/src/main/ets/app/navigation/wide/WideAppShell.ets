@@ -16,6 +16,9 @@ import { SyncStatusStrip } from '../../../ui/components/SyncStatusStrip'
 
 const SYNC_STRIP_TOP_GAP_VP: number = 8
 const SYNC_STRIP_MAX_WIDTH_VP: number = 560
+// 参考图统一页头：品牌与右侧动作共用同一高度和同一条底部分隔线。
+// 用窗口高度比例而不是某台平板的 vp 数值。
+const WIDE_HEADER_HEIGHT_RATIO: string = '14.2%'
 
 @Component
 export struct WideAppShell {
@@ -52,10 +55,6 @@ export struct WideAppShell {
 
   @BuilderParam pageBuilder: () => void = this.emptyPage
 
-  private get actionTopInsetVp(): number {
-    return this.showSyncStatus ? SYNC_STRIP_TOP_GAP_VP : Math.max(this.safeTopVp, SYNC_STRIP_TOP_GAP_VP)
-  }
-
   @Builder
   SyncStatusBanner() {
     Row() {
@@ -83,6 +82,7 @@ export struct WideAppShell {
         WidePrimaryRail({
           currentTab: this.currentTab,
           safeTopVp: this.safeTopVp,
+          headerHeight: WIDE_HEADER_HEIGHT_RATIO,
           onTabRequest: (index: number): void => {
             this.onTabRequest(index)
           }
@@ -97,19 +97,17 @@ export struct WideAppShell {
 
       Column() {
         if (this.showPrimaryNavigation) {
-          if (this.showSyncStatus) {
-            this.SyncStatusBanner()
-          }
-
           WideTopActions({
             actionSlots: this.headerActions,
-            topInsetVp: this.actionTopInsetVp,
+            headerHeight: WIDE_HEADER_HEIGHT_RATIO,
+            safeTopVp: this.safeTopVp,
             visible: true
           })
 
-          Divider()
-            .strokeWidth(0.5)
-            .color($r('sys.color.comp_divider'))
+          // 同步状态条在页头之下出现；页头与左栏品牌始终共用同一条底部分隔线。
+          if (this.showSyncStatus) {
+            this.SyncStatusBanner()
+          }
         }
 
         Stack() {

@@ -47,6 +47,7 @@ import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActio
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 // Issue #972：宽屏作品页正文（书封卡片网格 + 同尺寸「+」卡）。
 import { WideProjectHome } from './wide/WideProjectHome'
+import { WideLayoutMode } from '../../../app/navigation/wide/WideLayoutMode'
 
 // Issue #827 评论 1 第 7 点：命名框 / 确认框的内容最大宽度（vp）。
 // 原来写 .width('80%')，在 1244vp 宽屏上对话框会被拉到近 1000vp 宽，
@@ -61,6 +62,8 @@ export struct HomeScreen {
   // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab，不再 push 进 homeStack。
   // 星图已是一级 tab，push 进作品栈会制造 currentTab/screenRole 分叉。
   @Param onOpenStarMap: () => void = (): void => {}
+  // Issue #972：外壳唯一布局模式，由 Root 的 PageMapForStack 传入；页面不再自行读窗口宽度。
+  @Param layoutMode: WideLayoutMode = WideLayoutMode.Compact
 
   // navPathStack 通过 NavigationTransactionCoordinator 获取，不使用 @Consume（V1 装饰器，V2 中不可用）
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
@@ -126,12 +129,16 @@ export struct HomeScreen {
     this.viewModel.retry()
   }
 
+  private get usesWideLayout(): boolean {
+    return this.layoutMode === WideLayoutMode.Wide
+  }
+
   private navigateToWorkspace(projectId: string, projectName: string): void {
     const navPathStack = this.navCoordinator.getNavPathStack()
     if (!navPathStack) {
       return
     }
-    if (this.adaptiveState.prefersWideLayout) {
+    if (this.usesWideLayout) {
       // 宽屏：直接进入写作工作台
       this.navigateToWritingFromProject(projectId, projectName)
     } else {
@@ -447,7 +454,7 @@ export struct HomeScreen {
   HomeContent() {
     Stack() {
       Column() {
-        if (this.adaptiveState.prefersWideLayout) {
+        if (this.usesWideLayout) {
           // ── 宽屏：书封卡片网格，从内容区左上开始排（Issue #972） ──
           WideProjectHome({
             projects: this.viewModel.projects,
@@ -504,13 +511,13 @@ export struct HomeScreen {
       // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 的 WideAppShell
       // 统一提供（同步 / 搜索 / 设置 常驻右上），页面再画一条 HDS 标题栏
       // 就会在内容上方留出一条整宽空白。
-      // Issue #905：窄屏恢复 HDS 原生标题栏（showTitleBar = !prefersWideLayout），
+      // Issue #905：窄屏恢复 HDS 原生标题栏（showTitleBar = !usesWideLayout），
       // 与星图页 / 统计页共用同一个壳，标题栏外观保持一致。
       HdsAppDestinationApi23({
         title: $r('app.string.app_title'),
         screenRole: ScreenRole.ProjectList,
         screenTabIndex: 0,
-        showTitleBar: !this.adaptiveState.prefersWideLayout
+        showTitleBar: !this.usesWideLayout
       }) {
         this.HomeContent()
       }
@@ -518,7 +525,7 @@ export struct HomeScreen {
       NavDestination() {
         this.HomeContent()
       }
-      .hideTitleBar(this.adaptiveState.prefersWideLayout)
+      .hideTitleBar(this.usesWideLayout)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title($r('app.string.app_title'))

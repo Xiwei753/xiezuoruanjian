@@ -5,7 +5,7 @@
 // - 持有页面状态：selectedPeriod（7d / 30d / 6mo / lifetime / custom）、
 //   expandedPanel（none / range / lifetime，宽屏展开位置）、自选起止日期、
 //   isLoading 与 errorMessage；宽窄两套正文只读同一份状态，不复制两份；
-// - 宽窄分流只按 adaptiveState.prefersWideLayout；旋转 / 展开设备后沿用
+// - 宽窄分流只按外层传入的 layoutMode；旋转 / 展开设备后沿用
 //   selectedPeriod，不重建导航栈（生涯与近七天只是同一页面换快照）；
 // - 自选区间用系统日期选择（UIContext.showDatePickerDialog），确认后把用户所选
 //   日期原样传给 Core（未来结束日不改写成今天），错误在页内显示。
@@ -36,10 +36,13 @@ import { HarmonyDiagnosticEvents, DiagnosticField } from '../../../platform/diag
 import { STATS_PANEL_NONE, STATS_PANEL_RANGE, STATS_PANEL_LIFETIME, formatIsoDate, parseIsoDate } from './StatsFormat'
 import { CompactStatsContent } from './CompactStatsContent'
 import { WideStatisticsPage } from './wide/WideStatisticsPage'
+import { WideLayoutMode } from '../../../app/navigation/wide/WideLayoutMode'
 
 @Component
 export struct StatsScreen {
   @Consume("navPathStack") navPathStack: NavPathStack
+  // Issue #972：外壳唯一布局模式，由 PageMapForStack 传入。
+  @Prop layoutMode: WideLayoutMode = WideLayoutMode.Compact
   // Core Explorer 快照（生涯摘要 + 四卡 + 选中时段详情），宽窄共用同一份。
   @State explorer: WritingStatsExplorer | null = null
   // 当前选中时段：Core 固定 preset 字符串。
@@ -58,6 +61,10 @@ export struct StatsScreen {
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State useHdsNav: boolean = false
   @State headerActions: ActionSlot[] = []
+
+  private get usesWideLayout(): boolean {
+    return this.layoutMode === WideLayoutMode.Wide
+  }
 
   private adaptiveObserver: AdaptiveObserver | null = null
   // Issue #968：最近一次上报的宽窄分流签名，避免重复写诊断。
@@ -95,7 +102,7 @@ export struct StatsScreen {
   // Issue #968：诊断只记录实际挂载的统计正文根容器，而不是根据布尔值预计会挂哪一个。
   // WideStatisticsPage / CompactStatsContent 的根容器 onAppear 回报这里，并带上同一份窗口 vp。
   private recordMountedContent(content: string): void {
-    const signature: string = `${this.adaptiveState.widthVp}x${this.adaptiveState.heightVp}:${this.adaptiveState.prefersWideLayout}:${content}`
+    const signature: string = `${this.adaptiveState.widthVp}x${this.adaptiveState.heightVp}:${this.usesWideLayout}:${content}`
     if (signature === this.lastReportedLayoutMode) {
       return
     }
@@ -103,9 +110,9 @@ export struct StatsScreen {
     const fields: DiagnosticField[] = [
       { key: 'widthVp', value: String(this.adaptiveState.widthVp) },
       { key: 'heightVp', value: String(this.adaptiveState.heightVp) },
-      { key: 'prefersWideLayout', value: String(this.adaptiveState.prefersWideLayout) },
+      { key: 'prefersWideLayout', value: String(this.usesWideLayout) },
       { key: 'mountedContent', value: content },
-      { key: 'showTitleBar', value: String(!this.adaptiveState.prefersWideLayout) }
+      { key: 'showTitleBar', value: String(!this.usesWideLayout) }
     ]
     HarmonyDiagnosticEvents.record('Info', 'App', 'layout.stats_content', 'StatsScreen', fields)
   }
@@ -263,7 +270,7 @@ export struct StatsScreen {
         this.customEndDate = endText
         this.selectedPeriod = STATS_PRESET_CUSTOM
         // 宽屏确认自选后在原卡区展开三栏；窄屏保持单页换快照。
-        this.expandedPanel = this.adaptiveState.prefersWideLayout ? STATS_PANEL_RANGE : STATS_PANEL_NONE
+        this.expandedPanel = this.usesWideLayout ? STATS_PANEL_RANGE : STATS_PANEL_NONE
         // 用户所选日期原样传 Core：未来结束日不在这里改写成今天。
         this.loadExplorer(STATS_PRESET_CUSTOM, startText, endText)
       }
@@ -307,7 +314,7 @@ export struct StatsScreen {
             }
           })
         }
-      } else if (this.adaptiveState.prefersWideLayout) {
+      } else if (this.usesWideLayout) {
         WideStatisticsPage({
           explorer: this.explorer,
           selectedPeriod: this.selectedPeriod,
@@ -391,7 +398,7 @@ export struct StatsScreen {
         title: '统计',
         screenRole: ScreenRole.Stats,
         screenTabIndex: 2,
-        showTitleBar: !this.adaptiveState.prefersWideLayout,
+        showTitleBar: !this.usesWideLayout,
         onShown: (): void => {
           this.refreshStatsSnapshots()
         }
@@ -402,7 +409,7 @@ export struct StatsScreen {
       NavDestination() {
         this.StatsContent()
       }
-      .hideTitleBar(this.adaptiveState.prefersWideLayout)
+      .hideTitleBar(this.usesWideLayout)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title('统计')

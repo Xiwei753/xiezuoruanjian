@@ -34,6 +34,7 @@ import { createThirdPartyNoticesPanelContent, ThirdPartyNoticesPanelArgs } from 
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 // Issue #972：宽屏浮层的两列分类卡片。
 import { WideSettingsSection } from './wide/WideSettingsSection'
+import { WideSettingsCategoryContent } from './wide/WideSettingsCategoryContent'
 
 const TAG = 'SettingsContent'
 const DOMAIN = 0x0000
@@ -1842,7 +1843,67 @@ export struct SettingsContent {
             expanded: this.isSectionExpandedForDisplay(sectionId),
             onToggle: () => { this.viewModel.toggleSection(sectionId) }
           }) {
-            this.SectionContent(sectionId)
+            WideSettingsCategoryContent({
+              sectionId: sectionId,
+              viewModel: this.viewModel,
+              conflictRemaining: this.conflictRemaining,
+              onSetThemeMode: (mode: ThemeMode): void => {
+                this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+                  s.appearanceMode = mode
+                  s.themeMode = mode
+                  return s
+                })
+                this.themeAdapter.setMode(mode)
+                this.viewModel.saveSettings()
+              },
+              onSetColorSource: (source: string): void => {
+                this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+                  s.colorSource = source
+                  return s
+                })
+                this.themeAdapter.setColorSource(source as ColorSource)
+                this.viewModel.saveSettings()
+              },
+              onSetBuiltinTheme: (themeId: string): void => {
+                this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+                  s.selectedBuiltinThemeId = themeId
+                  return s
+                })
+                this.themeAdapter.setSelectedBuiltinThemeId(themeId)
+                this.viewModel.saveSettings()
+              },
+              onSetPalette: (paletteId: string): void => {
+                this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+                  s.selectedPaletteId = paletteId
+                  return s
+                })
+                this.themeAdapter.setSelectedPaletteId(paletteId)
+                this.viewModel.saveSettings()
+              },
+              onRequestSync: (): void => {
+                void this.requestSync()
+              },
+              onOpenConflicts: (): void => {
+                this.openConflictsPanel()
+              },
+              onOpenThirdPartyNotices: (): void => {
+                this.openThirdPartyNoticesPanel()
+              },
+              onExportDiagnostics: (): void => {
+                void this.viewModel.exportDiagnostics().then((result) => {
+                  promptAction.showToast({ message: result.status === 'success' ? '诊断包已导出' : '诊断包导出失败' })
+                })
+              },
+              onClearLogs: (): void => {
+                this.viewModel.clearLogs()
+              },
+              onCopyDeviceInfo: (): void => {
+                void this.viewModel.copyDeviceInfoToClipboard().then((ok: boolean) => {
+                  this.copyMessage = ok ? '已复制' : '复制失败'
+                  setTimeout(() => { this.copyMessage = '' }, 2000)
+                })
+              }
+            })
           }
         }, (sectionId: SettingsSectionId) => `wide_${columnIndex}_${sectionId}`)
       }

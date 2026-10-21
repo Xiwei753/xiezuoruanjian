@@ -8,7 +8,7 @@
 // Issue #932：窄屏内容层 + FAB 统一走 CompactPrimaryActionLayer（动作来自 ScreenSemantics），
 // 加载/错误/空状态走 CompactPageState，创建/改名/删除框走窗口级 CompactDialogs。
 // Issue #932 复核：窄屏（CompactPrimaryActionLayer）与宽屏（WideStarMapHome）
-// 是两个并列形态，由 prefersWideLayout 分流——与导航壳 WideAppShell 同一门槛。
+// 是两个并列形态，由外层传入的 layoutMode 分流——与导航壳 WideAppShell 同一门槛。
 // Issue #972：宽屏不再复用窄屏内容层 + 右下角 FAB，改为独立内容区：
 // 卡片网格 + 同尺寸「新建星图」卡，壳层（左栏 / 右上动作）由 WideAppShell 提供。
 
@@ -39,10 +39,13 @@ import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActio
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 // Issue #972：宽屏星图首页独立内容区（网格 + 创建卡），不再复用窄屏 FAB 内容层。
 import { WideStarMapHome } from './wide/WideStarMapHome'
+import { WideLayoutMode } from '../../../app/navigation/wide/WideLayoutMode'
 @ComponentV2
 export struct StarMapListScreen {
   // 由 PageMapForStack 显式传入 ownerStack，不使用全局 NavigationTransactionCoordinator
   @Param navPathStack: NavPathStack = new NavPathStack()
+  // Issue #972：外壳唯一布局模式，由 PageMapForStack 传入。
+  @Param layoutMode: WideLayoutMode = WideLayoutMode.Compact
 
   // 页面 UI 状态（V2 @Local）
   @Local starMaps: StarMapMeta[] = []
@@ -63,6 +66,10 @@ export struct StarMapListScreen {
 
   // 更多菜单上下文
   @Local currentMenuStarMapId: string = ''
+
+  private get usesWideLayout(): boolean {
+    return this.layoutMode === WideLayoutMode.Wide
+  }
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -339,10 +346,10 @@ export struct StarMapListScreen {
 
   @Builder
   StarMapListContent() {
-    // Issue #932 复核：与作品页 HomeContent 的 prefersWideLayout 分流对齐。
+    // Issue #932 复核：与作品页 HomeContent 的 layoutMode 分流对齐。
     // 判定与 PrimaryTabShell 的 WideAppShell 同源（下一轮精确等于 widthVp >= 840）。
     // Issue #972：宽屏进入独立 WideStarMapHome，不复用窄屏内容层与右下角 FAB。
-    if (this.adaptiveState.prefersWideLayout) {
+    if (this.usesWideLayout) {
       WideStarMapHome({
         starMaps: this.starMaps,
         isLoading: this.isLoading,
@@ -419,7 +426,7 @@ export struct StarMapListScreen {
         title: '星图',
         screenRole: ScreenRole.StarMap,
         screenTabIndex: 1,
-        showTitleBar: !this.adaptiveState.prefersWideLayout
+        showTitleBar: !this.usesWideLayout
       }) {
         this.StarMapListContent()
       }
@@ -427,7 +434,7 @@ export struct StarMapListScreen {
       NavDestination() {
         this.StarMapListContent()
       }
-      .hideTitleBar(this.adaptiveState.prefersWideLayout)
+      .hideTitleBar(this.usesWideLayout)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title('星图')

@@ -15,8 +15,7 @@ import hilog from '@ohos.hilog'
 import { ContinuationPayload } from '../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { PrimaryTabShell } from './PrimaryTabShell'
-import { WideLayoutMode, resolveWideLayoutMode } from './wide/WideLayoutMode'
-import { getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
+import { WideLayoutMode, getWideLayoutState } from './wide/WideLayoutMode'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
@@ -84,7 +83,7 @@ export struct AppNavigation {
       // 有章节时带上原会话参数；只有项目时由写作台自己的章节树选择章节。
       // 窄屏继续保留 Workspace → Writing 的既有恢复路径。
       const wideMode: boolean =
-        resolveWideLayoutMode(getAdaptiveState().widthVp) === WideLayoutMode.Wide
+        getWideLayoutState().current() === WideLayoutMode.Wide
       if (hasProject && !wideMode) {
         const wsParam: WorkspaceRouteParams = {
           projectId: payload.projectId as string,

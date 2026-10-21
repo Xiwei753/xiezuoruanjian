@@ -1,4 +1,5 @@
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
+import { WideLayoutMode } from '../../../app/navigation/wide/WideLayoutMode'
 import hilog from '@ohos.hilog'
 import emitter from '@ohos.events.emitter'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -45,6 +46,8 @@ import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActio
 export struct WorkspaceScreen {
   // Issue #768 评论5838296806：通过 @Param 从父组件接收 NavPathStack，不再依赖全局 activeTabStack
   @Param navPathStack: NavPathStack = new NavPathStack()
+  // Issue #972 复核：宽窄形态由外壳唯一传入，页面不再读取 AdaptiveContext 自行判断。
+  @Param layoutMode: WideLayoutMode = WideLayoutMode.Compact
   // 保留 navCoordinator 用于 safePopWithStack 调用
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
 
@@ -394,9 +397,9 @@ export struct WorkspaceScreen {
         screenRole: ScreenRole.ProjectWorkspace,
         // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 提供，
         // 工作区页再画一条 HDS 标题栏就会在双栏内容上方留出整宽空白。
-        // Issue #905：窄屏恢复 HDS 原生标题栏（showTitleBar = !prefersWideLayout），
+        // Issue #905：窄屏恢复 HDS 原生标题栏（showTitleBar = !wideLayout），
         // 与作品页 / 星图页 / 统计页共用同一个壳。
-        showTitleBar: !this.adaptiveState.prefersWideLayout
+        showTitleBar: this.layoutMode !== WideLayoutMode.Wide
       }) {
         this.NavContent()
       }
@@ -404,7 +407,7 @@ export struct WorkspaceScreen {
       NavDestination() {
         this.NavContent()
       }
-      .hideTitleBar(this.adaptiveState.prefersWideLayout)
+      .hideTitleBar(this.layoutMode === WideLayoutMode.Wide)
       .title(this.viewModel.projectName)
       .menus(buildNavMenuItems(this.headerActions))
       .onBackPressed(() => {

@@ -1,4 +1,5 @@
-import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
+import { Routes, StarMapRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
+import { WideLayoutMode } from '../../../app/navigation/wide/WideLayoutMode'
 import hilog from '@ohos.hilog'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
@@ -60,7 +61,7 @@ import { CorrectionSuggestionsPanel } from '../correction/CorrectionSuggestionsP
 import { CorrectionResourceImporter } from '../correction/CorrectionResourceImporter'
 
 // Issue #920 A：写作页不再向 Core 要七角色 bounds，布局由 ArkUI 自适应自行决定。
-// Issue #932：宽窄形态统一由 AdaptiveContext.prefersWideLayout（与导航/设置同一口径）判定，
+// Issue #932 / #972 复核：宽窄形态统一由 PrimaryTabShell 传入的 WideLayoutMode 判定，
 // 不再维护写作页私有的宽屏断点（原 WORKBENCH_MIN_WIDTH_VP = 696 已删除）。
 // 下面是平台自己的面板尺寸与正文最小宽度（vp），不再从 Core 的 WorkbenchLayoutPlan 取。
 // 参考图：章节树占工作台约 18%，工具面板约 14%，最右工具轨约 3.8%。
@@ -72,9 +73,6 @@ const TOOL_RAIL_WIDTH_RATIO: number = 0.038
 const PANE_HANDLE_WIDTH_VP: number = 2
 const EDITOR_MIN_WIDTH_VP: number = 360
 
-// Issue #829 手稿：底部状态栏中段「434 / 2,000」的分母。
-// Core 目前没有目标字数字段，这一轮按手稿取 2000 作为占位，不在端侧造一个假的 Core 字段。
-const WRITING_PROGRESS_TARGET_PLACEHOLDER: number = 2000
 // 时钟刷新间隔（ms）。秒级跳动对手稿里的 HH:mm 没有意义，30s 对齐即可。
 const STATUS_CLOCK_INTERVAL_MS: number = 30000
 // Issue #829 评论3第2项：状态栏左段「字/分」的速度窗口（最近一分钟）。
@@ -86,6 +84,8 @@ const WRITING_SPEED_WINDOW_SECONDS: number = 60
 @Component
 export struct WritingScreen {
   navPathStack: NavPathStack = new NavPathStack()
+  // Issue #972 复核：宽窄形态由 PrimaryTabShell 唯一判定后传入，页面不再自行推断。
+  @Prop layoutMode: WideLayoutMode = WideLayoutMode.Compact
   @State chapterId: string = ''
   @State chapterTitle: string = ''
   @State projectId: string = ''
@@ -493,6 +493,12 @@ export struct WritingScreen {
     this.writingWorkflow.requestLeave()
   }
 
+  // 宽屏工具面板里的星图条目复用现有星图详情路由和 Core 数据，不另造详情页。
+  private openStarMapFromWorkbench(starmapId: string, starmapTitle: string): void {
+    const param: StarMapRouteParams = { starmapId, starmapTitle }
+    this.navPathStack.pushPath({ name: Routes.StarMap, param })
+  }
+
   // Issue #829：HH:mm。两位补零，手稿里就是「14:26」这种宽度。只做展示。
   private refreshClockText(): void {
     const now = new Date()
@@ -625,11 +631,10 @@ export struct WritingScreen {
     this.shareService.stopAirTransferSharing().then(() => {})
   }
 
-  // Issue #932：宽屏形态改与外层导航 / 设置同一口径 —— AdaptiveContext.prefersWideLayout，
-  // 不再在写作页独立维护 696vp 断点；窄屏 / 中屏一律走 HDS 标题栏 + 正文 + 底部状态栏，
-  // 只有宽屏继续 WideWritingWorkbench 整页工作台。
+  // Issue #972 复核：宽屏形态只认外壳传入的 layoutMode，页面不再读取
+  // 外层导航壳传入的 layoutMode；窄屏 / 中屏仍走 HDS 标题栏 + 正文 + 底部状态栏。
   private get isWideWorkbench(): boolean {
-    return this.adaptiveState.prefersWideLayout
+    return this.layoutMode === WideLayoutMode.Wide
   }
 
   // Issue #825 复核第2项 / #920 D：HeaderTrailing 动作只在这里解析一次（平台动作表）。
@@ -639,6 +644,11 @@ export struct WritingScreen {
 
   private getWorkbenchWidthVp(): number {
     return this.workbenchRowWidthVp > 0 ? this.workbenchRowWidthVp : this.adaptiveState.widthVp
+  }
+
+  // 宽屏正文由中央工作台列决定宽度，不再套 840vp 阅读栏；窄屏保持原阅读宽度。
+  private editorMaxWidthVp(): number {
+    return this.isWideWorkbench ? this.getWorkbenchWidthVp() : this.adaptiveState.contentMaxWidth
   }
 
   private toolRailWidthVp(): number {
@@ -1069,6 +1079,10 @@ export struct WritingScreen {
         toolPaneMinWidthVp: this.getWorkbenchWidthVp() * 0.1,
         toolPaneMaxWidthVp: this.maximumToolPaneWidthVp(),
         selectedToolKey: this.selectedToolKey,
+        projectId: this.projectId,
+        onOpenStarMap: (starmapId: string, starmapTitle: string): void => {
+          this.openStarMapFromWorkbench(starmapId, starmapTitle)
+        },
         onChapterNavResize: (widthVp: number): void => { this.resizeChapterNavigation(widthVp) },
         onToolPaneResize: (widthVp: number): void => { this.resizeToolPane(widthVp) },
         onCollapseChapterTree: (): void => { this.closeChapterNavigation() },
@@ -1082,7 +1096,8 @@ export struct WritingScreen {
         // 硬约束 6：正文列底部只放状态信息，不承担页面导航。
         charsPerMinute: this.latestCharsPerMinute,
         progressCurrent: this.todayTypedChars,
-        progressTarget: WRITING_PROGRESS_TARGET_PLACEHOLDER,
+        // Core 没有目标字数字段，不伪造分母；宽屏状态条会显示「目标未设置」。
+        progressTarget: 0,
         clockText: this.clockText,
         saveStatus: this.getSaveStatusText(),
         saveStatusColor: this.getSaveStatusColor()
@@ -1322,7 +1337,7 @@ export struct WritingScreen {
             }
           })
             .width('100%')
-            .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+            .constraintSize({ maxWidth: this.editorMaxWidthVp() })
 
           SujianEditor({
             scroller: this.editorScroller,
@@ -1344,7 +1359,7 @@ export struct WritingScreen {
         }
         .width('100%')
         .layoutWeight(1)
-        .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+        .constraintSize({ maxWidth: this.editorMaxWidthVp() })
       }
     }
     .width('100%')

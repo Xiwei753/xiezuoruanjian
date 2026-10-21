@@ -9,15 +9,15 @@ import { NavigationHeaderActionDispatcher } from '../NavigationHeaderActionDispa
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
 const TOP_ACTION_HEIGHT_VP: number = 40
-// 参考图顶部动作区约占窗口高度 14.2%，随窗口高度缩放而不是固定 64vp。
-const TOP_ACTION_ROW_HEIGHT_RATIO: string = '14.2%'
 
 @Component
 export struct WideTopActions {
   /** 平台动作表下发的页头动作槽 */
   @Prop actionSlots: ActionSlot[] = []
-  /** 顶部安全区高度（vp）；同步状态条已经避让时由壳层传较小的间距 */
-  @Prop topInsetVp: number = 0
+  /** 与左侧品牌共用的页头高度；由 WideAppShell 唯一决定 */
+  @Prop headerHeight: string = '14.2%'
+  /** 顶部安全区高度（vp） */
+  @Prop safeTopVp: number = 0
   /** 是否显示右上同步 / 搜索 / 设置。写作页等由壳层整体隐藏一级导航时不会渲染。 */
   @Prop visible: boolean = true
 
@@ -75,14 +75,15 @@ export struct WideTopActions {
         }, (slot: ActionSlot) => `${slot.role}`)
       }
       .width('100%')
-      .height(TOP_ACTION_ROW_HEIGHT_RATIO)
+      .height(this.headerHeight)
       .padding({
         left: 24,
         right: 24,
-        top: this.topInsetVp
+        top: this.safeTopVp
       })
       .justifyContent(FlexAlign.End)
       .alignItems(VerticalAlign.Center)
+      .border({ width: { bottom: 0.5 }, color: $r('sys.color.comp_divider') })
     }
   }
 }

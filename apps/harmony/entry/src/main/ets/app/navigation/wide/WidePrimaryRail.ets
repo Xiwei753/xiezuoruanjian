@@ -29,6 +29,8 @@ export struct WidePrimaryRail {
   @Prop currentTab: number = 0
   /** 顶部安全区高度（vp） */
   @Prop safeTopVp: number = 0
+  /** 与右侧动作条共用的页头高度；由 WideAppShell 唯一决定 */
+  @Prop headerHeight: string = '14.2%'
   /** 用户明确点击一级导航时交给壳层记录并切换 */
   onTabRequest: (index: number) => void = (_index: number): void => {}
 
@@ -85,9 +87,10 @@ export struct WidePrimaryRail {
           .textAlign(TextAlign.Start)
       }
       .width('100%')
-      .height(56)
-      .padding({ left: 20, right: 20 })
+      .height(this.headerHeight)
+      .padding({ left: 20, right: 20, top: this.safeTopVp })
       .alignItems(VerticalAlign.Center)
+      .border({ width: { bottom: 0.5 }, color: $r('sys.color.comp_divider') })
 
       Column({ space: 4 }) {
         ForEach(RAIL_ENTRIES, (entry: WideRailEntry) => {
@@ -101,13 +104,12 @@ export struct WidePrimaryRail {
       .padding({
         left: RAIL_HORIZONTAL_PADDING_VP,
         right: RAIL_HORIZONTAL_PADDING_VP,
-        top: 24,
+        top: 12,
         bottom: 16
       })
     }
     .width(WIDE_RAIL_WIDTH_RATIO)
     .height('100%')
-    .padding({ top: this.safeTopVp })
     .backgroundColor($r('sys.color.background_secondary'))
   }
 }

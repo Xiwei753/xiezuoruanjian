@@ -16,10 +16,12 @@ import { CompactPageState, CompactPageStateKind } from '../../../../ui/component
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
 import { WideProjectCoverCard } from './WideProjectCoverCard'
 
-// 宽屏网格：7 等分列，卡片宽度由列宽决定，不再使用固定 vp。
-// 页边距与卡片间距取父容器宽度的百分比，随窗口一起缩放。
-const WIDE_PROJECT_COLUMNS: string = '1fr 1fr 1fr 1fr 1fr 1fr 1fr'
+// 宽屏网格：列数由主画布实测宽度和书封最小可读宽度共同决定，不再固定 7 列。
+// 1244vp 平板（右栏约 1101vp）正好落回设计稿的 7 列；窄一些的宽屏会自动降到 6/5/4 列。
+const MIN_PROJECT_COVER_WIDTH_VP: number = 140
 const WIDE_PROJECT_PAGE_PADDING_PERCENT: string = '2%'
+const WIDE_PROJECT_PAGE_PADDING_RATIO: number = 0.04
+const WIDE_PROJECT_CARD_GAP_RATIO: number = 0.011
 
 @ComponentV2
 export struct WideProjectHome {
@@ -40,9 +42,29 @@ export struct WideProjectHome {
 
   @Local gridWidthVp: number = 0
 
-  /** 卡片间距按网格实测宽度缩放，约为参考图的 1.6%，不写死某一台平板的 vp。 */
+  /** 卡片间距按网格实测宽度缩放，不写死某一台平板的 vp。 */
   private cardGapVp(): number {
-    return this.gridWidthVp * 0.016
+    return this.gridWidthVp * WIDE_PROJECT_CARD_GAP_RATIO
+  }
+
+  /** 列数由去掉左右 2% 页边距后的可用宽度决定；至少保留一列可读书封。 */
+  private projectColumnCount(): number {
+    if (this.gridWidthVp <= 0) {
+      return 7
+    }
+    const contentWidth: number = this.gridWidthVp * (1 - WIDE_PROJECT_PAGE_PADDING_RATIO)
+    const gap: number = this.cardGapVp()
+    const fitCount: number = Math.floor((contentWidth + gap) / (MIN_PROJECT_COVER_WIDTH_VP + gap))
+    return Math.max(1, fitCount)
+  }
+
+  private projectColumnsTemplate(): string {
+    const count: number = this.projectColumnCount()
+    let template: string = '1fr'
+    for (let index: number = 1; index < count; index++) {
+      template += ' 1fr'
+    }
+    return template
   }
 
   private onGridAreaChange(area: Area): void {
@@ -93,7 +115,7 @@ export struct WideProjectHome {
             this.CreateCoverCard()
           }
         }
-        .columnsTemplate(WIDE_PROJECT_COLUMNS)
+        .columnsTemplate(this.projectColumnsTemplate())
         .columnsGap(this.cardGapVp())
         .rowsGap(this.cardGapVp())
         .width('100%')
