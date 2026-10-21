@@ -13,6 +13,11 @@ Item {
     // 校对状态只由 WritingWorkspace 的 EditorController 持有。
     property var editorControllerRef: null
     property bool resourcesExpanded: false
+    // Keep the resources pane independently scrollable instead of letting a
+    // long registered-name list push the suggestion list out of the sidebar.
+    property real correctionResourcesMaxHeight: Math.max(
+            Kirigami.Units.gridUnit * 6,
+            Math.min(Kirigami.Units.gridUnit * 22, root.height * 0.5))
 
     onVisibleChanged: {
         if (visible && root.editorControllerRef) {
@@ -204,10 +209,20 @@ Item {
             }
         }
 
-        ColumnLayout {
+        ScrollView {
+            id: correctionResourcesScroll
             Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(correctionResourcesContent.implicitHeight,
+                                             root.correctionResourcesMaxHeight)
+            Layout.maximumHeight: root.correctionResourcesMaxHeight
             visible: root.resourcesExpanded
-            spacing: Kirigami.Units.smallSpacing
+            clip: true
+            ScrollBar.vertical.policy: ScrollBar.AsNeeded
+
+            ColumnLayout {
+                id: correctionResourcesContent
+                width: correctionResourcesScroll.availableWidth
+                spacing: Kirigami.Units.smallSpacing
 
             TextField {
                 id: correctionModelPathField
@@ -330,6 +345,7 @@ Item {
                         }
                     }
                 }
+            }
             }
         }
     }
