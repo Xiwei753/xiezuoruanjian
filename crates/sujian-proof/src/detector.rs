@@ -60,11 +60,18 @@ impl Detector {
 
         let mut candidates = Vec::new();
         let mut protected_ranges = Vec::new();
+        let mut protected_entries = Vec::new();
         for segment in segmenter.sentence_segments(text) {
             let sentence = &text[segment.start_byte..segment.end_byte];
             protected_ranges.extend(
                 lexicon
                     .protected_word_ranges(sentence)
+                    .into_iter()
+                    .map(|(start, end)| (segment.start_byte + start, segment.start_byte + end)),
+            );
+            protected_entries.extend(
+                lexicon
+                    .protected_word_ranges_unmerged(sentence)
                     .into_iter()
                     .map(|(start, end)| (segment.start_byte + start, segment.start_byte + end)),
             );
@@ -131,16 +138,28 @@ impl Detector {
         }
 
         candidates.retain(|candidate| {
-            !protected_ranges
+            let overlaps_protected = protected_ranges
                 .iter()
-                .any(|(start, end)| candidate.start_byte < *end && *start < candidate.end_byte)
+                .any(|(start, end)| candidate.start_byte < *end && *start < candidate.end_byte);
+            if !overlaps_protected {
+                return true;
+            }
+            // An explicitly registered misspelling may contain a protected
+            // canonical name as a prefix. Only drop it when a single complete
+            // protected entry actually wraps the whole confirmed spelling.
+            if candidate.kind != DetectionKind::ConfirmedEntitySpelling {
+                return false;
+            }
+            !protected_entries.iter().any(|(start, end)| {
+                *start <= candidate.start_byte && candidate.end_byte <= *end
+            })
         });
         Ok(resolve_overlaps(candidates))
     }
 }
 
 /// Exact byte occurrences of an author-confirmed wrong spelling. ASCII edges
-/// do not match inside a longer Latin identifier (`A-17` in `XA-17B`).
+/// do not match inside a longer Latin identifier (`X-42` in `ZX-42B`).
 pub(crate) fn exact_name_occurrences(text: &str, name: &str) -> Vec<(usize, usize)> {
     if name.is_empty() {
         return Vec::new();

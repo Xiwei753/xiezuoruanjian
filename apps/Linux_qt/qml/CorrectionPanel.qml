@@ -326,7 +326,7 @@ Item {
                 id: dictionaryEntryField
                 Layout.fillWidth: true
                 selectByMouse: true
-                placeholderText: qsTr("例如：宿泽柳、祁门客栈")
+                placeholderText: qsTr("输入完整词条")
             }
 
             Label {
@@ -383,14 +383,14 @@ Item {
                 id: entityCanonicalField
                 Layout.fillWidth: true
                 selectByMouse: true
-                placeholderText: qsTr("完整原名，例如：宿泽柳")
+                placeholderText: qsTr("输入已登记的正式名称")
             }
 
             TextField {
                 id: entityWrittenField
                 Layout.fillWidth: true
                 selectByMouse: true
-                placeholderText: qsTr("正文中的对应写法，例如：宿泽枊")
+                placeholderText: qsTr("输入别名或已确认的错误写法")
             }
 
             Label {

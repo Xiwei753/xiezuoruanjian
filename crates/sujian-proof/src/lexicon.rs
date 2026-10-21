@@ -382,11 +382,7 @@ impl Lexicon {
     /// Return merged UTF-8 byte ranges of protected full entries found in
     /// `text`. Derived windows are intentionally excluded.
     pub(crate) fn protected_word_ranges(&self, text: &str) -> Vec<(usize, usize)> {
-        let mut ranges = self.protected_word_ranges_in(&self.protected_word_index, text);
-        if let Some(base) = &self.base {
-            ranges.extend(base.protected_word_ranges_in(&base.protected_word_index, text));
-        }
-        ranges.sort_unstable();
+        let ranges = self.protected_word_ranges_unmerged(text);
         let mut merged = Vec::<(usize, usize)>::with_capacity(ranges.len());
         for (start, end) in ranges {
             if let Some(last) = merged.last_mut() {
@@ -398,6 +394,30 @@ impl Lexicon {
             merged.push((start, end));
         }
         merged
+    }
+
+    /// Unmerged ranges of complete protected entries. Callers that must
+    /// distinguish a genuine complete-entry containment from two adjacent
+    /// entries whose merged range happens to cover a candidate use this.
+    pub(crate) fn protected_word_ranges_unmerged(&self, text: &str) -> Vec<(usize, usize)> {
+        let mut ranges = self.protected_word_ranges_in(&self.protected_word_index, text);
+        if let Some(base) = &self.base {
+            ranges.extend(base.protected_word_ranges_in(&base.protected_word_index, text));
+        }
+        ranges.sort_unstable();
+        ranges
+    }
+
+    /// Whether one complete protected entry fully wraps `start..end`.
+    pub(crate) fn protected_entry_wraps_range(
+        &self,
+        text: &str,
+        start: usize,
+        end: usize,
+    ) -> bool {
+        self.protected_word_ranges_unmerged(text)
+            .into_iter()
+            .any(|(entry_start, entry_end)| entry_start <= start && end <= entry_end)
     }
 
     fn protected_word_ranges_in(

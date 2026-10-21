@@ -220,6 +220,13 @@ impl TraditionalCorrector {
 
         let protected_ranges = self.lexicon.protected_word_ranges(text);
         diagnostics.retain(|diagnostic| {
+            if diagnostic.rule_id == "proper.confirmed_misspelling" {
+                return !self.lexicon.protected_entry_wraps_range(
+                    text,
+                    diagnostic.start_byte,
+                    diagnostic.end_byte,
+                );
+            }
             !protected_ranges
                 .iter()
                 .any(|(start, end)| diagnostic.start_byte < *end && *start < diagnostic.end_byte)
@@ -384,8 +391,10 @@ fn filter_diagnostics(
 
 fn source_priority(source: &str) -> u8 {
     match source {
-        "confusion_word" => 0,
-        "proper_name" => 1,
+        // Only explicit author-confirmed misspellings use `proper_name`; they
+        // must outrank ordinary confusion candidates, matching the detector.
+        "proper_name" => 0,
+        "confusion_word" => 1,
         "rule" => 2,
         "oov" => 3,
         "character_ngram" => 4,
@@ -431,48 +440,57 @@ mod tests {
         .expect("corrector")
     }
 
+    fn rules_only(lexicon: Lexicon) -> TraditionalCorrector {
+        TraditionalCorrector::rules_only(
+            Arc::new(lexicon),
+            RuleSet::empty(),
+            CorrectionConfig::default(),
+        )
+        .expect("corrector")
+    }
+
     #[test]
     fn work_dictionary_terms_are_protected_not_replacement_targets() {
         let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_protected_word("祁门客栈".to_string());
+        lexicon.insert_protected_word("甲地乙坊".to_string());
         let diagnostics = corrector(lexicon)
-            .suggest("他住进了奇门客栈。")
+            .suggest("他住进了甲地乙房。")
             .expect("scan");
         assert!(
             diagnostics
                 .iter()
-                .all(|diagnostic| diagnostic.original != "奇门客栈"),
+                .all(|diagnostic| diagnostic.original != "甲地乙房"),
             "an unconfirmed similar span must not be replaced by a work term"
         );
     }
 
     fn entity_lexicon() -> Lexicon {
         let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_work_entity("宿泽柳".to_string(), crate::ProperNameKind::Person);
-        lexicon.insert_work_entity_alias("宿泽柳", "柳儿".to_string());
-        lexicon.insert_work_entity_misspelling("宿泽柳", "宿泽枊".to_string());
+        lexicon.insert_work_entity("甲乙丙".to_string(), crate::ProperNameKind::Person);
+        lexicon.insert_work_entity_alias("甲乙丙", "乙丙".to_string());
+        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丁".to_string());
         lexicon
     }
 
     #[test]
     fn explicit_wrong_spelling_is_replaced_but_alias_is_protected() {
         let diagnostics = corrector(entity_lexicon())
-            .suggest("宿泽枊说道。")
+            .suggest("甲乙丁说道。")
             .expect("scan");
         assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.original == "宿泽枊"
-                && diagnostic.replacement == "宿泽柳"
+            diagnostic.original == "甲乙丁"
+                && diagnostic.replacement == "甲乙丙"
                 && diagnostic.rule_id == "proper.confirmed_misspelling"
                 && diagnostic.severity == "error"
         }));
 
         let alias_diagnostics = corrector(entity_lexicon())
-            .suggest("柳儿说道。")
+            .suggest("乙丙说道。")
             .expect("scan");
         assert!(
             alias_diagnostics
                 .iter()
-                .all(|diagnostic| diagnostic.original != "柳儿"),
+                .all(|diagnostic| diagnostic.original != "乙丙"),
             "a confirmed alias is protected and must not be flagged"
         );
     }
@@ -480,10 +498,56 @@ mod tests {
     #[test]
     fn valid_ordinary_words_are_not_replaced_by_work_entities() {
         let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_protected_word("祁门".to_string());
-        lexicon.insert_protected_word("周于".to_string());
+        lexicon.insert_protected_word("甲乙".to_string());
+        lexicon.insert_protected_word("乙丙".to_string());
         let corrector = corrector(lexicon);
-        assert!(corrector.suggest("奇门").expect("scan").is_empty());
-        assert!(corrector.suggest("周围").expect("scan").is_empty());
+        assert!(corrector.suggest("甲丁").expect("scan").is_empty());
+        assert!(corrector.suggest("乙丁").expect("scan").is_empty());
+    }
+
+    #[test]
+    fn canonical_prefixed_misspelling_is_still_replaced_in_both_paths() {
+        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
+        lexicon.insert_work_entity("甲乙丙".to_string(), crate::ProperNameKind::Person);
+        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丙丁".to_string());
+
+        for diagnostics in [
+            corrector(lexicon.clone())
+                .suggest("甲乙丙丁说道。")
+                .expect("scan"),
+            rules_only(lexicon)
+                .suggest("甲乙丙丁说道。")
+                .expect("scan"),
+        ] {
+            assert!(diagnostics.iter().any(|diagnostic| {
+                diagnostic.original == "甲乙丙丁"
+                    && diagnostic.replacement == "甲乙丙"
+                    && diagnostic.rule_id == "proper.confirmed_misspelling"
+            }));
+        }
+    }
+
+    #[test]
+    fn confirmed_misspelling_outranks_confusion_in_both_paths() {
+        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
+        lexicon.insert_work_entity("甲乙丙".to_string(), crate::ProperNameKind::Person);
+        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丁".to_string());
+        lexicon.insert_confusion("甲乙丁".to_string(), "甲乙戊".to_string());
+
+        for diagnostics in [
+            corrector(lexicon.clone())
+                .suggest("甲乙丁说道。")
+                .expect("scan"),
+            rules_only(lexicon)
+                .suggest("甲乙丁说道。")
+                .expect("scan"),
+        ] {
+            let chosen = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.original == "甲乙丁")
+                .expect("confirmed misspelling diagnostic");
+            assert_eq!(chosen.replacement, "甲乙丙");
+            assert_eq!(chosen.rule_id, "proper.confirmed_misspelling");
+        }
     }
 }

@@ -19,7 +19,7 @@ const MAX_ENTITY_CHARS: usize = 64;
 
 /// Whether an author-declared person or place is a complete work name that
 /// the entity inventory can accept. Names may mix scripts and use punctuation
-/// (`A-17`, `阿尔托莉雅·潘德拉贡`), so the only requirements are non-empty
+/// (`X-42`, `甲·乙`), so the only requirements are non-empty
 /// content without control characters and a reasonable length.
 pub fn is_valid_work_entity(text: &str) -> bool {
     !text.trim().is_empty()
@@ -135,11 +135,11 @@ mod tests {
     #[test]
     fn mixed_script_and_punctuated_names_are_recorded() {
         let mut lexicon = WorkEntityLexicon::default();
-        lexicon.insert("宿泽柳".to_string(), ProperNameKind::Person);
-        lexicon.insert("祁门客栈".to_string(), ProperNameKind::Place);
-        lexicon.insert("阿尔托莉雅·潘德拉贡".to_string(), ProperNameKind::Person);
-        lexicon.insert("A-17".to_string(), ProperNameKind::Person);
-        lexicon.insert("第十七研究所".to_string(), ProperNameKind::Place);
+        lexicon.insert("甲乙丙".to_string(), ProperNameKind::Person);
+        lexicon.insert("甲地乙坊".to_string(), ProperNameKind::Place);
+        lexicon.insert("甲·乙".to_string(), ProperNameKind::Person);
+        lexicon.insert("X-42".to_string(), ProperNameKind::Person);
+        lexicon.insert("乙丙研究所".to_string(), ProperNameKind::Place);
         let texts = lexicon
             .entities()
             .iter()
@@ -147,21 +147,15 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             texts,
-            vec![
-                "宿泽柳",
-                "祁门客栈",
-                "阿尔托莉雅·潘德拉贡",
-                "A-17",
-                "第十七研究所"
-            ]
+            vec!["甲乙丙", "甲地乙坊", "甲·乙", "X-42", "乙丙研究所"]
         );
     }
 
     #[test]
     fn duplicate_entries_keep_the_first_confirmed_type() {
         let mut lexicon = WorkEntityLexicon::default();
-        lexicon.insert("宿泽柳".to_string(), ProperNameKind::Person);
-        lexicon.insert("宿泽柳".to_string(), ProperNameKind::Place);
+        lexicon.insert("甲乙丙".to_string(), ProperNameKind::Person);
+        lexicon.insert("甲乙丙".to_string(), ProperNameKind::Place);
         assert_eq!(lexicon.entities().len(), 1);
         assert_eq!(lexicon.entities()[0].kind, ProperNameKind::Person);
     }
@@ -169,21 +163,21 @@ mod tests {
     #[test]
     fn aliases_and_explicit_misspellings_require_a_registered_canonical() {
         let mut lexicon = WorkEntityLexicon::default();
-        assert!(!lexicon.insert_alias("宿泽柳", "柳儿".to_string()));
-        assert!(!lexicon.insert_misspelling("宿泽柳", "宿泽枊".to_string()));
+        assert!(!lexicon.insert_alias("甲乙丙", "乙丙".to_string()));
+        assert!(!lexicon.insert_misspelling("甲乙丙", "甲乙丁".to_string()));
 
-        lexicon.insert("宿泽柳".to_string(), ProperNameKind::Person);
-        assert!(lexicon.insert_alias("宿泽柳", "柳儿".to_string()));
-        assert!(lexicon.insert_misspelling("宿泽柳", "宿泽枊".to_string()));
-        assert_eq!(lexicon.aliases(), ["柳儿"]);
+        lexicon.insert("甲乙丙".to_string(), ProperNameKind::Person);
+        assert!(lexicon.insert_alias("甲乙丙", "乙丙".to_string()));
+        assert!(lexicon.insert_misspelling("甲乙丙", "甲乙丁".to_string()));
+        assert_eq!(lexicon.aliases(), ["乙丙"]);
         assert_eq!(lexicon.misspellings().len(), 1);
-        assert_eq!(lexicon.misspellings()[0].original, "宿泽枊");
-        assert_eq!(lexicon.misspellings()[0].replacement, "宿泽柳");
+        assert_eq!(lexicon.misspellings()[0].original, "甲乙丁");
+        assert_eq!(lexicon.misspellings()[0].replacement, "甲乙丙");
 
         // A canonical spelling cannot also be its own alias, and a wrong
         // spelling cannot silently become another registered entity.
-        assert!(!lexicon.insert_alias("宿泽柳", "宿泽柳".to_string()));
-        assert!(!lexicon.insert_misspelling("宿泽柳", "柳儿".to_string()));
+        assert!(!lexicon.insert_alias("甲乙丙", "甲乙丙".to_string()));
+        assert!(!lexicon.insert_misspelling("甲乙丙", "乙丙".to_string()));
     }
 
     #[test]
@@ -191,7 +185,7 @@ mod tests {
         let mut lexicon = WorkEntityLexicon::default();
         lexicon.insert(String::new(), ProperNameKind::Person);
         lexicon.insert("   ".to_string(), ProperNameKind::Place);
-        lexicon.insert("宿\n泽柳".to_string(), ProperNameKind::Person);
+        lexicon.insert("甲\n乙".to_string(), ProperNameKind::Person);
         lexicon.insert("很".repeat(MAX_ENTITY_CHARS + 1), ProperNameKind::Place);
         assert!(lexicon.is_empty());
     }
