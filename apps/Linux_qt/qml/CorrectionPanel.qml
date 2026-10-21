@@ -174,6 +174,13 @@ Item {
                                     dictionaryEntryDialog.open();
                                 }
                             }
+                            MenuItem {
+                                text: qsTr("登记名称对应…")
+                                onTriggered: {
+                                    entityNameDialog.suggestion = modelData;
+                                    entityNameDialog.open();
+                                }
+                            }
                             MenuSeparator {}
                             MenuItem {
                                 text: qsTr("停用此规则")
@@ -331,6 +338,70 @@ Item {
                 id: dictionaryKindBox
                 Layout.fillWidth: true
                 model: [qsTr("普通术语"), qsTr("人物"), qsTr("地点")]
+                currentIndex: 0
+            }
+        }
+    }
+
+    // Only explicit author relations are allowed. There is no automatic
+    // similarity lookup for names that were never registered.
+    Dialog {
+        id: entityNameDialog
+        property var suggestion: null
+        title: qsTr("登记名称对应")
+        modal: true
+        focus: true
+        width: Math.min(root.width - Kirigami.Units.largeSpacing * 2,
+                        Kirigami.Units.gridUnit * 27)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            entityCanonicalField.text = "";
+            entityWrittenField.text = root.editorControllerRef
+                    ? root.editorControllerRef.correctionEntityWrittenDraft(suggestion) : "";
+            entityRelationKindBox.currentIndex = 0;
+            entityCanonicalField.forceActiveFocus();
+        }
+        onAccepted: {
+            if (root.editorControllerRef) {
+                root.editorControllerRef.addCorrectionEntityName(
+                    entityCanonicalField.text,
+                    entityWrittenField.text,
+                    entityRelationKindBox.currentIndex === 1 ? "alias" : "misspelling");
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.smallSpacing
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("完整原名必须是作品词典中的人物或地点；此操作不会自动识别未登记的名字。")
+                wrapMode: Text.Wrap
+            }
+
+            TextField {
+                id: entityCanonicalField
+                Layout.fillWidth: true
+                selectByMouse: true
+                placeholderText: qsTr("完整原名，例如：宿泽柳")
+            }
+
+            TextField {
+                id: entityWrittenField
+                Layout.fillWidth: true
+                selectByMouse: true
+                placeholderText: qsTr("正文中的对应写法，例如：宿泽枊")
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("对应关系")
+            }
+
+            ComboBox {
+                id: entityRelationKindBox
+                Layout.fillWidth: true
+                model: [qsTr("错误写法（建议替换为原名）"), qsTr("别名（保护，不提示）")]
                 currentIndex: 0
             }
         }

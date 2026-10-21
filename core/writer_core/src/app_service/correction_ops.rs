@@ -273,6 +273,24 @@ impl super::WriterAppService {
         self.api.get_correction_dictionary_entries(project_id)
     }
 
+    pub fn add_correction_entity_name(
+        &self,
+        project_id: String,
+        canonical: String,
+        name: String,
+        kind: crate::api::CorrectionEntityNameKindDto,
+    ) -> Result<bool, WriterError> {
+        self.api
+            .add_correction_entity_name(project_id, canonical, name, kind)
+    }
+
+    pub fn get_correction_entity_names(
+        &self,
+        project_id: String,
+    ) -> Result<Vec<crate::api::CorrectionEntityNameDto>, WriterError> {
+        self.api.get_correction_entity_names(project_id)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn apply_correction(
         &self,

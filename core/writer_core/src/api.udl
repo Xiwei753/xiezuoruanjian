@@ -1518,6 +1518,10 @@ interface WriterAppService {
     boolean add_correction_dictionary_entry_with_kind(string project_id, string entry, CorrectionDictionaryEntryKindDto kind);
     [Throws=WriterError]
     sequence<CorrectionDictionaryEntryDto> get_correction_dictionary_entries(string project_id);
+    [Throws=WriterError]
+    boolean add_correction_entity_name(string project_id, string canonical, string name, CorrectionEntityNameKindDto kind);
+    [Throws=WriterError]
+    sequence<CorrectionEntityNameDto> get_correction_entity_names(string project_id);
     EditorEditResultDto apply_correction(u64 session_id, string project_id, string chapter_id, u64 text_revision, u32 start_byte, u32 end_byte, string original, string replacement);
 
     // ── Search Index ──
@@ -1561,6 +1565,11 @@ enum CorrectionDictionaryEntryKindDto {
     "Term",
     "Person",
     "Place",
+};
+
+enum CorrectionEntityNameKindDto {
+    "Alias",
+    "Misspelling",
 };
 
 // 平台端按编辑事务上报写作统计的入参。
@@ -1726,6 +1735,12 @@ dictionary CorrectionEditRangeDto {
 dictionary CorrectionDictionaryEntryDto {
     string text;
     CorrectionDictionaryEntryKindDto kind;
+};
+
+dictionary CorrectionEntityNameDto {
+    string canonical;
+    string name;
+    CorrectionEntityNameKindDto kind;
 };
 
 dictionary CorrectionChapterSnapshotDto {

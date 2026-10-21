@@ -15,6 +15,7 @@ use crate::CorrectionError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DetectionKind {
+    ConfirmedEntitySpelling,
     ConfusionWord,
     OutOfVocabularyWord,
     Character,
@@ -81,6 +82,20 @@ impl Detector {
                 });
             }
 
+            // Exact, author-confirmed wrong spellings only. There is no
+            // similarity scan over registered names.
+            for relation in lexicon.work_entity_lexicon().misspellings() {
+                for (start, end) in exact_name_occurrences(sentence, &relation.original) {
+                    candidates.push(Suspect {
+                        start_byte: segment.start_byte + start,
+                        end_byte: segment.start_byte + end,
+                        original: relation.original.clone(),
+                        kind: DetectionKind::ConfirmedEntitySpelling,
+                        exact_replacement: Some(relation.replacement.clone()),
+                    });
+                }
+            }
+
             if !sentence.chars().any(is_han) {
                 continue;
             }
@@ -122,6 +137,43 @@ impl Detector {
         });
         Ok(resolve_overlaps(candidates))
     }
+}
+
+/// Exact byte occurrences of an author-confirmed wrong spelling. ASCII edges
+/// do not match inside a longer Latin identifier (`A-17` in `XA-17B`).
+pub(crate) fn exact_name_occurrences(text: &str, name: &str) -> Vec<(usize, usize)> {
+    if name.is_empty() {
+        return Vec::new();
+    }
+    let mut occurrences = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(relative) = text[search_from..].find(name) {
+        let start = search_from + relative;
+        let end = start + name.len();
+        let left_ok = !name.chars().next().is_some_and(is_ascii_name_char)
+            || text[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|previous| !is_ascii_name_char(previous));
+        let right_ok = !name.chars().next_back().is_some_and(is_ascii_name_char)
+            || text[end..]
+                .chars()
+                .next()
+                .is_none_or(|next| !is_ascii_name_char(next));
+        // For mixed-script names, only treat the edge as an ASCII identifier
+        // when that edge character itself participates in an ASCII token.
+        let left_ok = left_ok || !name.chars().next().is_some_and(|first| first.is_ascii());
+        let right_ok = right_ok || !name.chars().next_back().is_some_and(|last| last.is_ascii());
+        if left_ok && right_ok {
+            occurrences.push((start, end));
+        }
+        search_from = end.max(start + 1);
+    }
+    occurrences
+}
+
+fn is_ascii_name_char(value: char) -> bool {
+    value.is_ascii_alphanumeric() || value == '_'
 }
 
 fn detect_character_outliers(
@@ -257,8 +309,9 @@ fn resolve_overlaps(mut candidates: Vec<Suspect>) -> Vec<Suspect> {
 
 fn detection_priority(kind: DetectionKind) -> u8 {
     match kind {
-        DetectionKind::ConfusionWord => 0,
-        DetectionKind::OutOfVocabularyWord => 1,
-        DetectionKind::Character => 2,
+        DetectionKind::ConfirmedEntitySpelling => 0,
+        DetectionKind::ConfusionWord => 1,
+        DetectionKind::OutOfVocabularyWord => 2,
+        DetectionKind::Character => 3,
     }
 }

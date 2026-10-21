@@ -333,6 +333,27 @@ impl Lexicon {
         self.work_entity_lexicon.insert(word, kind);
     }
 
+    /// Register an author-confirmed alternative exact spelling for an existing
+    /// person/place. The alias is protected and never reported itself.
+    pub fn insert_work_entity_alias(&mut self, canonical: &str, alias: String) -> bool {
+        if !self
+            .work_entity_lexicon
+            .insert_alias(canonical, alias.clone())
+        {
+            return false;
+        }
+        self.insert_protected_word(alias);
+        true
+    }
+
+    /// Register an author-confirmed wrong spelling. Unlike aliases, the wrong
+    /// spelling is deliberately not protected: an exact occurrence is reported
+    /// with the canonical name as its replacement.
+    pub fn insert_work_entity_misspelling(&mut self, canonical: &str, original: String) -> bool {
+        self.work_entity_lexicon
+            .insert_misspelling(canonical, original)
+    }
+
     /// Names and explicit protections exempt from OOV detection. Ordinary
     /// THUOCL candidate membership is deliberately not a general-word test.
     pub(crate) fn is_oov_exception(&self, word: &str) -> bool {
@@ -410,10 +431,8 @@ impl Lexicon {
     /// Author-confirmed entities for the current project. The shared base
     /// lexicon deliberately never carries work-dictionary entries.
     ///
-    /// The read-only index is retained for future entity-aware checks. It is
-    /// intentionally not consumed by a similarity scan today: a typed name is
-    /// protected as exact text, never guessed from a nearby similar span.
-    #[allow(dead_code)]
+    /// Read-only entity relations. The detector consumes only explicit
+    /// misspelling relations; it never performs a similarity scan.
     pub(crate) fn work_entity_lexicon(&self) -> &WorkEntityLexicon {
         &self.work_entity_lexicon
     }

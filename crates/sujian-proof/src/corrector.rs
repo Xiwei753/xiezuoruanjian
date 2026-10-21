@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::candidates::CandidateGenerator;
 use crate::confusion::ConfusionMatcher;
-use crate::detector::{DetectionKind, Detector};
+use crate::detector::{exact_name_occurrences, DetectionKind, Detector};
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
 use crate::rules::RuleSet;
@@ -91,26 +91,30 @@ impl TraditionalCorrector {
 
             for suspect in suspects {
                 let source = match suspect.kind {
+                    DetectionKind::ConfirmedEntitySpelling => "proper_name",
                     DetectionKind::ConfusionWord => "confusion_word",
                     DetectionKind::OutOfVocabularyWord => "oov",
                     DetectionKind::Character => "character_ngram",
                 };
                 if let Some(replacement) = suspect.exact_replacement {
-                    if replacement != suspect.original {
-                        // Only explicit custom confusion entries carry exact
-                        // replacement semantics. Work-dictionary names are
-                        // protected, not guessed from a similar span.
-                        diagnostics.push(CorrectionDiagnostic {
-                            start_byte: suspect.start_byte,
-                            end_byte: suspect.end_byte,
-                            original: suspect.original,
-                            replacement,
-                            source: source.to_owned(),
-                            rule_id: "confusion.custom".to_owned(),
-                            severity: "error".to_owned(),
-                            confidence: None,
-                        });
+                    if replacement == suspect.original {
+                        continue;
                     }
+                    let rule_id = match suspect.kind {
+                        DetectionKind::ConfirmedEntitySpelling => "proper.confirmed_misspelling",
+                        DetectionKind::ConfusionWord => "confusion.custom",
+                        _ => continue,
+                    };
+                    diagnostics.push(CorrectionDiagnostic {
+                        start_byte: suspect.start_byte,
+                        end_byte: suspect.end_byte,
+                        original: suspect.original,
+                        replacement,
+                        source: source.to_owned(),
+                        rule_id: rule_id.to_owned(),
+                        severity: "error".to_owned(),
+                        confidence: None,
+                    });
                     continue;
                 }
 
@@ -206,6 +210,7 @@ impl TraditionalCorrector {
                 diagnostics.extend(self.rule_diagnostics(text));
             }
         } else {
+            diagnostics.extend(self.confirmed_misspelling_diagnostics(text));
             diagnostics.extend(self.confusion_diagnostics(text));
             diagnostics.extend(self.rule_diagnostics(text));
             if !self.config.include_weak_hints {
@@ -228,6 +233,28 @@ impl TraditionalCorrector {
             .as_ref()
             .ok_or(CorrectionError::ModelUnavailable)?
             .perplexity(&tokens)
+    }
+
+    fn confirmed_misspelling_diagnostics(&self, text: &str) -> Vec<CorrectionDiagnostic> {
+        let mut diagnostics = Vec::new();
+        for segment in self.segmenter.sentence_segments(text) {
+            let sentence = &text[segment.start_byte..segment.end_byte];
+            for relation in self.lexicon.work_entity_lexicon().misspellings() {
+                for (start, end) in exact_name_occurrences(sentence, &relation.original) {
+                    diagnostics.push(CorrectionDiagnostic {
+                        start_byte: segment.start_byte + start,
+                        end_byte: segment.start_byte + end,
+                        original: relation.original.clone(),
+                        replacement: relation.replacement.clone(),
+                        source: "proper_name".to_owned(),
+                        rule_id: "proper.confirmed_misspelling".to_owned(),
+                        severity: "error".to_owned(),
+                        confidence: None,
+                    });
+                }
+            }
+        }
+        diagnostics
     }
 
     fn rule_diagnostics(&self, text: &str) -> Vec<CorrectionDiagnostic> {
@@ -416,6 +443,37 @@ mod tests {
                 .iter()
                 .all(|diagnostic| diagnostic.original != "奇门客栈"),
             "an unconfirmed similar span must not be replaced by a work term"
+        );
+    }
+
+    fn entity_lexicon() -> Lexicon {
+        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
+        lexicon.insert_work_entity("宿泽柳".to_string(), crate::ProperNameKind::Person);
+        lexicon.insert_work_entity_alias("宿泽柳", "柳儿".to_string());
+        lexicon.insert_work_entity_misspelling("宿泽柳", "宿泽枊".to_string());
+        lexicon
+    }
+
+    #[test]
+    fn explicit_wrong_spelling_is_replaced_but_alias_is_protected() {
+        let diagnostics = corrector(entity_lexicon())
+            .suggest("宿泽枊说道。")
+            .expect("scan");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.original == "宿泽枊"
+                && diagnostic.replacement == "宿泽柳"
+                && diagnostic.rule_id == "proper.confirmed_misspelling"
+                && diagnostic.severity == "error"
+        }));
+
+        let alias_diagnostics = corrector(entity_lexicon())
+            .suggest("柳儿说道。")
+            .expect("scan");
+        assert!(
+            alias_diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.original != "柳儿"),
+            "a confirmed alias is protected and must not be flagged"
         );
     }
 

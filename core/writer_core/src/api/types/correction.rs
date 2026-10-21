@@ -80,6 +80,26 @@ pub struct CorrectionDictionaryEntryDto {
     pub kind: CorrectionDictionaryEntryKindDto,
 }
 
+/// Author-confirmed exact spelling relation for a registered person or place.
+#[derive(
+    Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrectionEntityNameKindDto {
+    /// Another legitimate spelling of the same entity. It is protected, not flagged.
+    Alias,
+    /// An explicitly wrong spelling that should be replaced by the canonical name.
+    Misspelling,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionEntityNameDto {
+    pub canonical: String,
+    pub name: String,
+    pub kind: CorrectionEntityNameKindDto,
+}
+
 /// One real edit mapping from an editor transaction. `old` addresses the
 /// previous text revision and `new` addresses the revision supplied with the
 /// edit check request. All ranges are half-open UTF-8 byte intervals.

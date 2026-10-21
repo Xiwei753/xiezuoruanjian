@@ -672,6 +672,7 @@ QtObject {
     function correctionReason(suggestion) {
         var reasons = {
             "confusion.custom": qsTr("命中作品中的自定义易混词替换。"),
+            "proper.confirmed_misspelling": qsTr("这是你为该专名登记的错误写法，建议改为完整原名。"),
             "proper.entity_check": qsTr("与作品词典中的专名相近，请核对。"),
             "proper.person_check": qsTr("与作品词典中的人名相近，请核对。"),
             "proper.place_check": qsTr("与作品词典中的地名相近，请核对。"),
@@ -767,6 +768,36 @@ QtObject {
         correctionStatus = scope === "once" ? qsTr("已忽略这一次。")
                 : scope === "chapter" ? qsTr("已在本章忽略此类建议。")
                 : qsTr("已停用此规则。") ;
+        return true;
+    }
+
+    function correctionEntityWrittenDraft(suggestion) {
+        var selected = targetEditorItem && targetEditorItem.selected_text
+                ? String(targetEditorItem.selected_text()).trim() : "";
+        if (selected.length > 0) return selected;
+        return suggestion ? String(suggestion.original || "").trim() : "";
+    }
+
+    function addCorrectionEntityName(canonical, name, kind) {
+        var canonicalName = String(canonical || "").trim();
+        var writtenForm = String(name || "").trim();
+        if (!canonicalName || !writtenForm) {
+            correctionError = qsTr("请填写完整原名和对应写法。");
+            return false;
+        }
+        if (!editorBackendRef || !editorBackendRef.add_correction_entity_name) return false;
+        var result = editorBackendRef.add_correction_entity_name(
+            projectId, canonicalName, writtenForm, String(kind || "misspelling"));
+        if (!result || !result.success) {
+            correctionError = result && result.rawError ? result.rawError : qsTr("登记名称对应失败。");
+            return false;
+        }
+        correctionError = "";
+        invalidateCorrectionResults();
+        requestCorrectionChapter();
+        correctionStatus = kind === "alias"
+                ? qsTr("已登记为同一名称的别名，正在重新校对本章。")
+                : qsTr("已登记为错误写法，正在重新校对本章。");
         return true;
     }
 

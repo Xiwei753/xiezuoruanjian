@@ -90,6 +90,34 @@ impl WriterCoreApi {
             .dictionary_entry_records(&project_id)
     }
 
+    pub fn add_correction_entity_name(
+        &self,
+        project_id: String,
+        canonical: String,
+        name: String,
+        kind: crate::api::CorrectionEntityNameKindDto,
+    ) -> ApiResult<bool> {
+        if project_id.trim().is_empty() {
+            return Err(crate::api::WriterError::Other(
+                "project id must be non-empty".into(),
+            ));
+        }
+        self.correction_store()?
+            .add_entity_name(&project_id, &canonical, &name, kind)
+    }
+
+    pub fn get_correction_entity_names(
+        &self,
+        project_id: String,
+    ) -> ApiResult<Vec<crate::api::CorrectionEntityNameDto>> {
+        if project_id.trim().is_empty() {
+            return Err(crate::api::WriterError::Other(
+                "project id must be non-empty".into(),
+            ));
+        }
+        self.correction_store()?.entity_name_records(&project_id)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn ignore_correction(
         &self,

@@ -15,8 +15,9 @@ use sujian_proof::lm::KenlmModel;
 use sujian_proof::{CorrectionEngine, Lexicon, LexiconPaths};
 
 use crate::api::{
-    CorrectionDictionaryEntryDto, CorrectionDictionaryEntryKindDto, CorrectionIgnoreScopeDto,
-    CorrectionModelPathStatusDto, CorrectionResourceStatusDto, WriterError,
+    CorrectionDictionaryEntryDto, CorrectionDictionaryEntryKindDto, CorrectionEntityNameDto,
+    CorrectionEntityNameKindDto, CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto,
+    CorrectionResourceStatusDto, WriterError,
 };
 
 mod engine;
@@ -59,6 +60,9 @@ struct ProjectCorrectionPreferences {
     dictionary_person_entries: BTreeSet<String>,
     #[serde(default)]
     dictionary_place_entries: BTreeSet<String>,
+    /// Exact author-confirmed aliases/wrong spellings for registered names.
+    #[serde(default)]
+    entity_names: BTreeSet<CorrectionEntityNameDto>,
     #[serde(default)]
     ignored_permanently: BTreeSet<IgnoredDiagnostic>,
     #[serde(default)]
@@ -104,6 +108,7 @@ struct LexiconFileStamp {
 struct CachedLexicon {
     files: Vec<LexiconFileStamp>,
     dictionary_entries: Vec<CorrectionDictionaryEntryDto>,
+    entity_names: Vec<CorrectionEntityNameDto>,
     version: u64,
     lexicon: Arc<Lexicon>,
 }
@@ -448,6 +453,92 @@ impl CorrectionStore {
         Ok(records)
     }
 
+    pub fn entity_name_records(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<CorrectionEntityNameDto>, WriterError> {
+        let guard = self
+            .inner
+            .preferences
+            .lock()
+            .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
+        Ok(guard
+            .projects
+            .get(project_id)
+            .map(|project| project.entity_names.iter().cloned().collect())
+            .unwrap_or_default())
+    }
+
+    pub fn add_entity_name(
+        &self,
+        project_id: &str,
+        canonical: &str,
+        name: &str,
+        kind: CorrectionEntityNameKindDto,
+    ) -> Result<bool, WriterError> {
+        let canonical = canonical.trim();
+        let name = name.trim();
+        if canonical.is_empty() || name.is_empty() {
+            return Err(WriterError::Other(
+                "entity canonical name and written form must be non-empty".into(),
+            ));
+        }
+        if canonical.chars().any(char::is_control) || name.chars().any(char::is_control) {
+            return Err(WriterError::Other(
+                "entity names must not contain control characters".into(),
+            ));
+        }
+        if !sujian_proof::is_valid_work_entity(name) {
+            return Err(WriterError::Other(
+                "entity written form must be a complete name (at most 64 characters)".into(),
+            ));
+        }
+        if canonical == name {
+            return Err(WriterError::Other(
+                "entity written form must differ from the canonical name".into(),
+            ));
+        }
+        self.update_preferences(|preferences| {
+            let project = preferences
+                .projects
+                .entry(project_id.to_string())
+                .or_default();
+            if !project.dictionary_person_entries.contains(canonical)
+                && !project.dictionary_place_entries.contains(canonical)
+            {
+                return Err(WriterError::Other(
+                    "entity canonical name must be a registered person or place".into(),
+                ));
+            }
+            if project.dictionary_entries.contains(name)
+                || project.dictionary_person_entries.contains(name)
+                || project.dictionary_place_entries.contains(name)
+            {
+                return Err(WriterError::Other(
+                    "entity written form is already another work-dictionary entry".into(),
+                ));
+            }
+            if let Some(existing) = project
+                .entity_names
+                .iter()
+                .find(|existing| existing.name == name)
+            {
+                if existing.canonical == canonical && existing.kind == kind {
+                    return Ok(false);
+                }
+                return Err(WriterError::Other(
+                    "entity written form is already registered for another name".into(),
+                ));
+            }
+            project.entity_names.insert(CorrectionEntityNameDto {
+                canonical: canonical.to_string(),
+                name: name.to_string(),
+                kind,
+            });
+            Ok(true)
+        })?
+    }
+
     /// Root directory for per-chapter correction result caches. The cache holds
     /// derived data only; it never stores chapter text and never syncs.
     fn result_cache_dir(&self) -> PathBuf {
@@ -547,8 +638,8 @@ impl CorrectionStore {
             (guard.model_path.clone(), disabled_rules)
         };
         let mut parts = vec![
-            "correction-scanner-v3".to_string(),
-            "correction-work-entities-v2".to_string(),
+            "correction-scanner-v4".to_string(),
+            "correction-work-entities-v3".to_string(),
             model_path
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())
@@ -581,6 +672,12 @@ impl CorrectionStore {
         for entry in self.dictionary_entry_records(project_id)? {
             parts.push(format!("dictionary:{:?}:{}", entry.kind, entry.text));
         }
+        for relation in self.entity_name_records(project_id)? {
+            parts.push(format!(
+                "entity-name:{:?}:{}:{}",
+                relation.kind, relation.canonical, relation.name
+            ));
+        }
         for rule in disabled_rules {
             parts.push(format!("disabled-rule:{rule}"));
         }
@@ -598,6 +695,7 @@ impl CorrectionStore {
     ) -> Result<(u64, Arc<Lexicon>), WriterError> {
         let project_generation = self.activate_project_cache(project_id)?;
         let dictionary_entries = self.dictionary_entry_records(project_id)?;
+        let entity_names = self.entity_name_records(project_id)?;
         let data_root = self
             .inner
             .path
@@ -641,7 +739,10 @@ impl CorrectionStore {
                     WriterError::Other("correction lexicon cache lock poisoned".into())
                 })?;
                 if let Some(cached) = cache.get(project_id) {
-                    if cached.files == files && cached.dictionary_entries == dictionary_entries {
+                    if cached.files == files
+                        && cached.dictionary_entries == dictionary_entries
+                        && cached.entity_names == entity_names
+                    {
                         return Ok((cached.version, Arc::clone(&cached.lexicon)));
                     }
                 }
@@ -678,6 +779,17 @@ impl CorrectionStore {
                 }
             }
         }
+        for relation in &entity_names {
+            match relation.kind {
+                CorrectionEntityNameKindDto::Alias => {
+                    lexicon.insert_work_entity_alias(&relation.canonical, relation.name.clone());
+                }
+                CorrectionEntityNameKindDto::Misspelling => {
+                    lexicon
+                        .insert_work_entity_misspelling(&relation.canonical, relation.name.clone());
+                }
+            }
+        }
         let lexicon = Arc::new(lexicon);
 
         // File loading can overlap a switch to another project. In that case
@@ -699,7 +811,10 @@ impl CorrectionStore {
             .lock()
             .map_err(|_| WriterError::Other("correction lexicon cache lock poisoned".into()))?;
         if let Some(cached) = cache.get(project_id) {
-            if cached.files == files && cached.dictionary_entries == dictionary_entries {
+            if cached.files == files
+                && cached.dictionary_entries == dictionary_entries
+                && cached.entity_names == entity_names
+            {
                 return Ok((cached.version, Arc::clone(&cached.lexicon)));
             }
         }
@@ -716,6 +831,7 @@ impl CorrectionStore {
             CachedLexicon {
                 files,
                 dictionary_entries,
+                entity_names,
                 version,
                 lexicon: Arc::clone(&lexicon),
             },

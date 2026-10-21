@@ -7,8 +7,9 @@
 // text. This module deliberately does not guess that a similar span is a typo:
 // without reliable entity-usage evidence, a near match must produce no
 // suggestion at all rather than a warning that the author has to dismiss.
-// Known-entity consistency checks likewise need independent entity-usage
-// evidence; until such a source exists, registered names are protection-only.
+// A known-entity consistency check is available only through an explicit
+// author-confirmed alias or misspelling relation. There is no automatic
+// similarity scan and no unknown-name recognition.
 
 #![allow(dead_code)]
 
@@ -39,14 +40,25 @@ pub(crate) struct WorkEntity {
     pub(crate) kind: ProperNameKind,
 }
 
+/// Author-confirmed exact spelling relation for one work entity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConfirmedEntityMisspelling {
+    pub(crate) original: String,
+    pub(crate) replacement: String,
+}
+
 /// Author-confirmed full names from the current project's work dictionary.
 ///
 /// Ordinary work-dictionary terms are intentionally absent. They are still
 /// protected by [`crate::lexicon::Lexicon::insert_protected_word`], but they
-/// can never become the replacement target for another span.
+/// can never become the replacement target for another span. Exact aliases and
+/// explicitly marked misspellings are authored relations, not similarity
+/// guesses.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WorkEntityLexicon {
     entities: Vec<WorkEntity>,
+    aliases: Vec<String>,
+    misspellings: Vec<ConfirmedEntityMisspelling>,
 }
 
 impl WorkEntityLexicon {
@@ -60,12 +72,59 @@ impl WorkEntityLexicon {
         self.entities.push(WorkEntity { text, kind });
     }
 
+    pub(crate) fn insert_alias(&mut self, canonical: &str, alias: String) -> bool {
+        if !is_valid_work_entity(&alias)
+            || alias == canonical
+            || self.aliases.iter().any(|existing| existing == &alias)
+            || self.entities.iter().any(|entity| entity.text == alias)
+        {
+            return false;
+        }
+        if !self.entities.iter().any(|entity| entity.text == canonical) {
+            return false;
+        }
+        self.aliases.push(alias);
+        true
+    }
+
+    pub(crate) fn insert_misspelling(&mut self, canonical: &str, original: String) -> bool {
+        if !is_valid_work_entity(&original)
+            || original == canonical
+            || self
+                .misspellings
+                .iter()
+                .any(|existing| existing.original == original)
+            || self.aliases.iter().any(|alias| alias == &original)
+            || self.entities.iter().any(|entity| entity.text == original)
+        {
+            return false;
+        }
+        if !self.entities.iter().any(|entity| entity.text == canonical) {
+            return false;
+        }
+        self.misspellings.push(ConfirmedEntityMisspelling {
+            original,
+            replacement: canonical.to_string(),
+        });
+        true
+    }
+
     pub(crate) fn entities(&self) -> &[WorkEntity] {
         &self.entities
     }
 
+    pub(crate) fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    /// Exact wrong-spelling relations. `original` is not protected text; the
+    /// replacement is an author-confirmed canonical name.
+    pub(crate) fn misspellings(&self) -> &[ConfirmedEntityMisspelling] {
+        &self.misspellings
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
-        self.entities.is_empty()
+        self.entities.is_empty() && self.aliases.is_empty() && self.misspellings.is_empty()
     }
 }
 
@@ -105,6 +164,26 @@ mod tests {
         lexicon.insert("宿泽柳".to_string(), ProperNameKind::Place);
         assert_eq!(lexicon.entities().len(), 1);
         assert_eq!(lexicon.entities()[0].kind, ProperNameKind::Person);
+    }
+
+    #[test]
+    fn aliases_and_explicit_misspellings_require_a_registered_canonical() {
+        let mut lexicon = WorkEntityLexicon::default();
+        assert!(!lexicon.insert_alias("宿泽柳", "柳儿".to_string()));
+        assert!(!lexicon.insert_misspelling("宿泽柳", "宿泽枊".to_string()));
+
+        lexicon.insert("宿泽柳".to_string(), ProperNameKind::Person);
+        assert!(lexicon.insert_alias("宿泽柳", "柳儿".to_string()));
+        assert!(lexicon.insert_misspelling("宿泽柳", "宿泽枊".to_string()));
+        assert_eq!(lexicon.aliases(), ["柳儿"]);
+        assert_eq!(lexicon.misspellings().len(), 1);
+        assert_eq!(lexicon.misspellings()[0].original, "宿泽枊");
+        assert_eq!(lexicon.misspellings()[0].replacement, "宿泽柳");
+
+        // A canonical spelling cannot also be its own alias, and a wrong
+        // spelling cannot silently become another registered entity.
+        assert!(!lexicon.insert_alias("宿泽柳", "宿泽柳".to_string()));
+        assert!(!lexicon.insert_misspelling("宿泽柳", "柳儿".to_string()));
     }
 
     #[test]
