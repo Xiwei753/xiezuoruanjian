@@ -12,7 +12,9 @@
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 // Issue #932：窄屏列表 / FAB / 对话框统一走共享构件
 // （CompactPrimaryActionLayer / CompactPageState / CompactDialogs），
-// 页面不再自绘遮罩、对话框卡片与 FAB 定位；宽屏作品网格保持不变。
+// 页面不再自绘遮罩、对话框卡片与 FAB 定位。
+// Issue #972：宽屏作品页拆到 wide/WideProjectHome + wide/WideProjectCoverCard，
+// 页面只把列表数据和现有 ViewModel 命令接过去；本文件不再保留旧宽屏布局 / 卡片几何。
 
 import hilog from '@ohos.hilog'
 import emitter from '@ohos.events.emitter'
@@ -26,8 +28,7 @@ import {
   COMPACT_CARD_SPACING_VP,
   COMPACT_CARD_SUPPORTING_FONT_VP,
   COMPACT_CARD_TITLE_FONT_VP,
-  COMPACT_LIST_BOTTOM_INSET_VP,
-  PROJECT_CARD_MIN_WIDTH_VP
+  COMPACT_LIST_BOTTOM_INSET_VP
 } from '../../../ui/theme/LayoutTokens'
 // Issue #932：窄屏共享构件 — 内容层 + 右下角 FAB、公共状态视图、窗口级对话框。
 import { CompactPrimaryActionLayer } from '../../../ui/components/CompactPrimaryActionLayer'
@@ -44,6 +45,8 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
+// Issue #972：宽屏作品页正文（书封卡片网格 + 同尺寸「+」卡）。
+import { WideProjectHome } from './wide/WideProjectHome'
 
 // Issue #827 评论 1 第 7 点：命名框 / 确认框的内容最大宽度（vp）。
 // 原来写 .width('80%')，在 1244vp 宽屏上对话框会被拉到近 1000vp 宽，
@@ -52,15 +55,6 @@ import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 // Issue #932 后创建/改名/删除框已迁到窗口级 CompactDialogs（COMPACT_DIALOG_MAX_WIDTH_VP），
 // 这个常量只服务留在页面内的「目录读取失败」提示框。
 const DIALOG_CONTENT_MAX_WIDTH: number = 420
-
-// Issue #827 评论 2：宽屏作品卡之间的间距（vp），作品卡与「+」卡共用同一份。
-const WIDE_PROJECT_CARD_GAP: number = 16
-
-// Issue #827 评论 4 第 3 点：草图里作品卡顶部标题区本身是一块小标题栏，
-// 最右端收成一个三角折角，所以标题区高度和折角边长都固定。
-// 标题区底线只画到折角之前，正文从标题区下面开始。
-const WIDE_PROJECT_CARD_HEADER_HEIGHT: number = 40
-const WIDE_PROJECT_CARD_FOLD_SIZE: number = 16
 
 @ComponentV2
 export struct HomeScreen {
@@ -311,6 +305,20 @@ export struct HomeScreen {
     }
   }
 
+  // Issue #972：宽屏书封卡的长按菜单只回传被操作的作品，
+  // 这里沿用同一组 ViewModel 命令与窗口级对话框，不新增第二套改名 / 删除流程。
+  private handleWideRename(project: ProjectSummary): void {
+    this.viewModel.startRenameProject(project.id)
+    this.openRenameDialog()
+  }
+
+  private handleWideDelete(project: ProjectSummary): void {
+    const slot: ActionSlot | null = this.viewModel.findContextAction(ActionTarget.Project, ActionRole.Delete)
+    const requiresConfirmation: boolean = slot === null ? true : slot.requiresConfirmation
+    this.viewModel.startDeleteProject(project.id, requiresConfirmation)
+    this.openDeleteConfirmDialog()
+  }
+
   /** 获取 action 的显示标签 */
   private getActionLabel(role: ActionRole): string {
     if (role === ActionRole.Rename) {
@@ -343,26 +351,6 @@ export struct HomeScreen {
     }
     const wan = count / 10000.0
     return `${wan.toFixed(1)} 万字`
-  }
-
-  // Issue #827 评论 3 第 2 点：宽屏作品卡的最后编辑时间用绝对时间，
-  // 形如 26/8/11 22:37 —— 与手绘稿一致，也与 Linux_Qt ProjectCard.qml 同格式。
-  // 刻意不复用上面的相对时间 formatTime()/formatDate()：
-  // 那两个是窄屏列表用的「3分钟前 / 2天前」，作品封面要的是可定位的日历时间。
-  private formatProjectCardTime(isoString: string): string {
-    if (!isoString) {
-      return ''
-    }
-    const date = new Date(isoString)
-    if (isNaN(date.getTime())) {
-      return ''
-    }
-    const year = String(date.getFullYear()).slice(-2)
-    const month = String(date.getMonth() + 1)
-    const day = String(date.getDate())
-    const hour = String(date.getHours()).padStart(2, '0')
-    const minute = String(date.getMinutes()).padStart(2, '0')
-    return `${year}/${month}/${day} ${hour}:${minute}`
   }
 
   private formatDate(isoString: string): string {
@@ -460,8 +448,27 @@ export struct HomeScreen {
     Stack() {
       Column() {
         if (this.adaptiveState.prefersWideLayout) {
-          // ── 宽屏：只有作品卡流，从内容区左上开始排 ──
-          this.WideHomeLayout()
+          // ── 宽屏：书封卡片网格，从内容区左上开始排（Issue #972） ──
+          WideProjectHome({
+            projects: this.viewModel.projects,
+            isLoading: this.viewModel.isLoading,
+            errorMessage: this.viewModel.errorMessage,
+            onOpenProject: (projectId: string, projectTitle: string): void => {
+              this.navigateToWorkspace(projectId, projectTitle)
+            },
+            onCreateProject: (): void => {
+              this.requestCreateProject()
+            },
+            onRenameProject: (project: ProjectSummary): void => {
+              this.handleWideRename(project)
+            },
+            onDeleteProject: (project: ProjectSummary): void => {
+              this.handleWideDelete(project)
+            },
+            onRetry: (): void => {
+              this.handleRetry()
+            }
+          })
         } else {
           // ── 窄屏 / 中屏：作品卡列表 + 右下 FAB ──
           this.SinglePaneLayout()
@@ -494,7 +501,7 @@ export struct HomeScreen {
 
   build() {
     if (this.useHdsNav) {
-      // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 的 WidePrimaryShell
+      // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 的 WideAppShell
       // 统一提供（同步 / 搜索 / 设置 常驻右上），页面再画一条 HDS 标题栏
       // 就会在内容上方留出一条整宽空白。
       // Issue #905：窄屏恢复 HDS 原生标题栏（showTitleBar = !prefersWideLayout），
@@ -521,175 +528,6 @@ export struct HomeScreen {
         NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectList, 0)
       })
     }
-  }
-
-  // ────────────────────────────────────────
-  // 宽屏布局（Issue #827 评论 2 结构图）
-  // ────────────────────────────────────────
-
-  // 作品卡宽度：平台自己的最小宽度常量（项目卡共享尺寸），不在平台端另写一套 180。
-  private get wideProjectCardWidth(): number {
-    return PROJECT_CARD_MIN_WIDTH_VP
-  }
-
-  // 书封面卡是竖向的：高 / 宽 = 4 / 3，与手绘稿一致。
-  private get wideProjectCardHeight(): number {
-    return this.wideProjectCardWidth * (4 / 3)
-  }
-
-  // 宽屏首页：内容区只有作品卡流，从左上开始排，不居中、不锁 maxWidth。
-  // 「+」卡是网格里的一张普通卡（不是 FAB、不是按钮），永远跟在最后一张作品后面。
-  @Builder
-  WideHomeLayout() {
-    Column() {
-      if (this.viewModel.isLoading) {
-        this.LoadingView()
-      } else if (this.viewModel.errorMessage) {
-        this.ErrorView()
-      } else {
-        Scroll() {
-          // Issue #941：作品卡和新建卡共用从内容区左上开始的同一网格，
-          // 换行及行内对齐都固定在起点，避免卡片视觉上偏离页面边距。
-          Flex({
-            wrap: FlexWrap.Wrap,
-            justifyContent: FlexAlign.Start,
-            alignItems: ItemAlign.Start,
-            alignContent: FlexAlign.Start
-          }) {
-            ForEach(this.viewModel.projects, (project: ProjectSummary) => {
-              this.WideProjectCard(project)
-            }, (project: ProjectSummary) => project.id)
-
-            this.CreateProjectCard()
-          }
-          .width('100%')
-          .padding({
-            left: this.adaptiveState.pagePadding,
-            right: this.adaptiveState.pagePadding,
-            top: this.adaptiveState.pagePadding,
-            bottom: this.adaptiveState.pagePadding
-          })
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .scrollBar(BarState.Off)
-        .align(Alignment.Top)
-      }
-    }
-    .width('100%')
-    .height('100%')
-  }
-
-  // 宽屏作品卡：竖向书封面 —— 作品名 / 卷章数 / 右下总字数 / 左下最后编辑时间。
-  // 排版语义与 Linux_Qt 的 ProjectCard.qml 一致，右上折角是书封面的视觉身份。
-  @Builder
-  WideProjectCard(project: ProjectSummary) {
-    Stack({ alignContent: Alignment.TopEnd }) {
-      Column() {
-        // 封面标题区：固定高度的小标题栏，正文从它下面开始。
-        Column() {
-          Text(project.title)
-            .fontSize(17)
-            .fontWeight(FontWeight.Medium)
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-            .textAlign(TextAlign.Start)
-        }
-        .width('100%')
-        .height(WIDE_PROJECT_CARD_HEADER_HEIGHT)
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Start)
-
-        // 标题区底线：右端留出折角宽度，画成草图里到折角断开的那一条。
-        Divider()
-          .width('100%')
-          .color($r('sys.color.comp_background_gray'))
-          .margin({ right: WIDE_PROJECT_CARD_FOLD_SIZE })
-
-        // 卷 / 章数量
-        Text(`${project.volumeCount}卷 ${project.chapterCount}章`)
-          .fontSize(13)
-          .width('100%')
-          .textAlign(TextAlign.Start)
-          .margin({ top: 12 })
-
-        Blank()
-
-        // 右下：总字数
-        Text(this.formatWordCount(project.totalWordCount))
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .width('100%')
-          .textAlign(TextAlign.End)
-
-        // 左下：最后编辑时间（绝对时间，与 Qt 端同格式）
-        Text(this.formatProjectCardTime(project.updatedAt))
-          .fontSize(12)
-          .fontColor($r('sys.color.font_secondary'))
-          .width('100%')
-          .textAlign(TextAlign.Start)
-          .margin({ top: 4 })
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ left: 16, right: 16, bottom: 16 })
-      .alignItems(HorizontalAlign.Start)
-      .justifyContent(FlexAlign.Start)
-
-      // Issue #827 评论 4 第 3 点：右上角是真正的三角折角，属于标题区本身的一部分，
-      // 不是整张卡下方挂一个圆角小方块。用 ArkUI 自带的 Polygon 画直角三角，
-      // 不为一个折角上 Canvas 或自己写像素绘制。
-      Polygon()
-        .width(WIDE_PROJECT_CARD_FOLD_SIZE)
-        .height(WIDE_PROJECT_CARD_FOLD_SIZE)
-        .points([[0, 0], [WIDE_PROJECT_CARD_FOLD_SIZE, 0], [WIDE_PROJECT_CARD_FOLD_SIZE, WIDE_PROJECT_CARD_FOLD_SIZE]])
-        .fill($r('sys.color.comp_background_gray'))
-    }
-    .width(this.wideProjectCardWidth)
-    .height(this.wideProjectCardHeight)
-    .borderRadius(DesignTokens.cardRadius)
-    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-    .margin({ right: WIDE_PROJECT_CARD_GAP, bottom: WIDE_PROJECT_CARD_GAP })
-    .shadow({ radius: DesignTokens.shadowLight.radius, color: DesignTokens.shadowLight.color, offsetY: DesignTokens.shadowLight.offsetY })
-    .onClick(() => this.navigateToWorkspace(project.id, project.title))
-    // Issue #827 评论 3 第 3 点：宽屏卡不能丢掉重命名 / 删除入口，
-    // 但草图里没有常驻三点按钮，所以走系统长按菜单，与 Qt 端整卡右键菜单同语义。
-    // 普通作品卡不是星图的「长按后继续拖动拉线」场景，可以直接用 LongPress。
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        this.viewModel.currentMenuProjectId = project.id
-      }
-    })
-    .bindContextMenu(this.ProjectMoreMenu, ResponseType.LongPress)
-  }
-
-  // 「+」卡：与作品卡同宽同高，卡片中央只有一个大「+」。
-  // 它是网格成员而不是工具按钮，所以跟真实作品一起排版、一起换行、一起滚动；
-  // 点击只打开命名框，输入名称后才真正创建作品。
-  @Builder
-  CreateProjectCard() {
-    Column() {
-      Text('+')
-        .fontSize(44)
-        .fontWeight(FontWeight.Normal)
-        .fontColor($r('sys.color.icon_primary'))
-    }
-    .width(this.wideProjectCardWidth)
-    .height(this.wideProjectCardHeight)
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Center)
-    .borderRadius(DesignTokens.cardRadius)
-    // Issue #827 评论 3 第 5 点：普通 1px 边框。草图里它和作品卡是同一种外框，
-    // 区别只在中央一个大「+」，不要自行发明虚线这一种卡片视觉。
-    .border({ width: 1, color: $r('sys.color.icon_secondary') })
-    // Issue #827 评论 5：「+」卡和真实作品卡共用同一个卡片面与同一份阴影，
-    // 否则浅灰页面上它一眼就是一张空心卡。区别只应该在里面的内容。
-    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-    .shadow({ radius: DesignTokens.shadowLight.radius, color: DesignTokens.shadowLight.color, offsetY: DesignTokens.shadowLight.offsetY })
-    .margin({ right: WIDE_PROJECT_CARD_GAP, bottom: WIDE_PROJECT_CARD_GAP })
-    .accessibilityText('新建作品')
-    .onClick(() => this.requestCreateProject())
   }
 
   // ────────────────────────────────────────

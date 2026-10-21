@@ -5,7 +5,7 @@
 //   解决后重新从 Core 拉取剩余冲突；面板不维护第二份冲突列表。
 // - "合并"是真实合并流程：以本地版本（或本地为空时的远端版本）为草稿人工编辑，
 //   保存时先真实写回章节、Core 确认成功后才清除冲突标记（见 viewModel.saveMerged）。
-// - 面板挂在窗口层级（openCustomDialog + ComponentContent），与 SettingsOverlayPanel /
+// - 面板挂在窗口层级（openCustomDialog + ComponentContent），与 WideSettingsOverlay /
 //   CreateTitleDialog 同一套写法：由系统负责遮罩、居中与返回拦截。
 // - "重新同步"只走 SyncOperationController.performSync()：#923 的 withSyncBarrier 会在
 //   同步前保存活跃正文、同步后按落盘身份回填打开中的章节，面板不复制编辑器会话逻辑。

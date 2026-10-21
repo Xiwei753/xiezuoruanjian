@@ -15,6 +15,8 @@ import hilog from '@ohos.hilog'
 import { ContinuationPayload } from '../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { PrimaryTabShell } from './PrimaryTabShell'
+import { WideLayoutMode, resolveWideLayoutMode } from './wide/WideLayoutMode'
+import { getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
@@ -78,7 +80,12 @@ export struct AppNavigation {
       const hasChapter: boolean = payload.chapterId !== undefined && payload.chapterId !== ''
       const hasVolume: boolean = payload.volumeId !== undefined && payload.volumeId !== ''
 
-      if (hasProject) {
+      // Issue #972：宽屏恢复不再先塞一个手机卷/章工作区。只要有项目就直达宽屏写作台，
+      // 有章节时带上原会话参数；只有项目时由写作台自己的章节树选择章节。
+      // 窄屏继续保留 Workspace → Writing 的既有恢复路径。
+      const wideMode: boolean =
+        resolveWideLayoutMode(getAdaptiveState().widthVp) === WideLayoutMode.Wide
+      if (hasProject && !wideMode) {
         const wsParam: WorkspaceRouteParams = {
           projectId: payload.projectId as string,
           projectName: '' // payload 不带 projectName；WorkspaceScreen 会从 core 加载。
@@ -86,13 +93,13 @@ export struct AppNavigation {
         homeStack.pushPath({ name: Routes.Workspace, param: wsParam })
       }
 
-      if (hasChapter && hasProject && hasVolume) {
+      if (hasProject && (wideMode || (hasChapter && hasVolume))) {
         // 携带 selection/cursor/viewport/contentHash 到 WritingScreen 入口。
         const wParam: WritingRouteParams = {
-          chapterId: payload.chapterId as string,
+          chapterId: hasChapter ? payload.chapterId as string : '',
           chapterTitle: '',
           projectId: payload.projectId as string,
-          volumeId: payload.volumeId as string
+          volumeId: hasVolume ? payload.volumeId as string : ''
         }
         if (payload.selection !== undefined) {
           wParam.selection = payload.selection
@@ -116,7 +123,8 @@ export struct AppNavigation {
 
   build() {
     Column() {
-      // Issue #767：装载 PrimaryTabShell（真正的横向 Tabs + BottomTabBarStyle）。
+      // Issue #972：应用只有一个导航宿主 PrimaryTabShell；
+      // 它内部按根窗口宽度只挂载 WideAppShell（宽屏）或 CompactPrimaryShell（窄屏）之一。
       // currentTab 通过 @Link 共享，接续恢复时可从 AppNavigation 切到 Home tab。
       PrimaryTabShell({ currentTab: $currentTab })
     }

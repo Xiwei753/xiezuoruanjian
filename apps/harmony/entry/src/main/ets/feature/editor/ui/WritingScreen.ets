@@ -24,7 +24,7 @@ import { SelectionController } from '../selection/SelectionController'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { SujianEditor } from './SujianEditor'
-import { WritingWorkbenchToolbar } from './WritingWorkbenchToolbar'
+import { WideWritingWorkbench } from './wide/WideWritingWorkbench'
 // Issue #825 复核8第 3 点：订阅"刚落盘的 LocalSettings"广播，
 // 让宽屏设置浮层的改动实时回流到本页（对齐 Linux 的 settingsBackend.onSettings_changed）。
 import { LocalSettingsStore } from '../../../feature/settings/presentation/LocalSettingsStore'
@@ -37,9 +37,6 @@ import { SharePayload } from '../../../platform/share/SharePayload'
 import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
-import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
-import { PaneFoldButton } from './PaneFoldButton'
-import { WritingStatusBar } from './WritingStatusBar'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import {
@@ -52,8 +49,6 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWritingDestinationApi23'
 import { sortedHeaderTrailingActions } from '../../../app/navigation/NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
-import { DesignTokens } from '../../../ui/theme/DesignTokens'
-import { WritingToolRail } from './WritingToolRail'
 import { EditorPresentationUpdate } from '../motion/EditorPresentationUpdate'
 import { EditorMotionPolicy } from '../motion/EditorMotionPolicy'
 import { ProjectWorkspaceViewModel } from '../../project/presentation/ProjectWorkspaceViewModel'
@@ -68,17 +63,13 @@ import { CorrectionResourceImporter } from '../correction/CorrectionResourceImpo
 // Issue #932：宽窄形态统一由 AdaptiveContext.prefersWideLayout（与导航/设置同一口径）判定，
 // 不再维护写作页私有的宽屏断点（原 WORKBENCH_MIN_WIDTH_VP = 696 已删除）。
 // 下面是平台自己的面板尺寸与正文最小宽度（vp），不再从 Core 的 WorkbenchLayoutPlan 取。
-const CHAPTER_NAV_WIDTH_VP: number = 320
-const CHAPTER_NAV_MIN_WIDTH_VP: number = 200
-const CHAPTER_NAV_MAX_WIDTH_VP: number = 480
-const TOOL_PANE_WIDTH_VP: number = 240
-const TOOL_PANE_MIN_WIDTH_VP: number = 180
-const TOOL_PANE_MAX_WIDTH_VP: number = 420
-const TOOL_RAIL_WIDTH_VP: number = 56
-const TOOLBAR_HEIGHT_VP: number = 64
+// 参考图：章节树占工作台约 18%，工具面板约 14%，最右工具轨约 3.8%。
+const CHAPTER_NAV_WIDTH_RATIO: number = 0.18
+const TOOL_PANE_WIDTH_RATIO: number = 0.14
+const TOOL_RAIL_WIDTH_RATIO: number = 0.038
 // 分隔条只占面板边缘，拖动手势不会覆盖正文或移动窗口。
-const PANE_HANDLE_WIDTH_VP: number = 18
-const PANE_HANDLE_HEIGHT_VP: number = 64
+// 参考图分栏线约 2vp；视觉把手溢出，不额外占正文宽度。
+const PANE_HANDLE_WIDTH_VP: number = 2
 const EDITOR_MIN_WIDTH_VP: number = 360
 
 // Issue #829 手稿：底部状态栏中段「434 / 2,000」的分母。
@@ -182,16 +173,14 @@ export struct WritingScreen {
   @State todayTypedChars: number = 0
   @State expandedVolumes: Set<string> = new Set()
   @State isTreeLoading: boolean = false
-  // Issue #880 修复2：目录树加载失败标志，ChapterTreePane 据此显示错误提示和重试按钮。
+  // Issue #880 修复2：目录树加载失败标志，WideChapterTree 据此显示错误提示和重试按钮。
   @State projectTreeError: boolean = false
   // Issue #920 A：左右 pane 的展开状态只属于 ArkUI，纯平台 UI 状态，不进 Core。
   @State leftPaneCollapsed: boolean = false
   @State rightPaneCollapsed: boolean = true
-  @State chapterNavWidthVp: number = CHAPTER_NAV_WIDTH_VP
-  @State toolPaneWidthVp: number = TOOL_PANE_WIDTH_VP
+  @State chapterNavWidthVp: number = 0
+  @State toolPaneWidthVp: number = 0
   @State workbenchRowWidthVp: number = 0
-  private chapterNavDragStartWidthVp: number = CHAPTER_NAV_WIDTH_VP
-  private toolPaneDragStartWidthVp: number = TOOL_PANE_WIDTH_VP
   // Issue #829：手稿把最右 ToolRail 固定成“星图 / AI”。
   @State selectedToolKey: string = 'starmap'
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
@@ -199,7 +188,7 @@ export struct WritingScreen {
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination。
   @State useHdsNav: boolean = false
   // Issue #784 评论5857397503 第4点 / Issue #825 复核第2项：headerActions 由 WritingScreen
-  // 唯一持有（窄屏页头胶囊与宽屏右侧工具区读同一份数组）。
+  // 唯一持有（窄屏页头胶囊与宽屏顶部工具条右侧动作读同一份数组）。
   @State headerActions: ActionSlot[] = []
   // Issue #825 复核第1项：窗口由窄变宽时，adaptive observer 第一次进入 Workbench
   // 也要触发一次目录树加载，不能只在 aboutToAppear 加载。
@@ -321,6 +310,9 @@ export struct WritingScreen {
     // Issue #923：把本页工作流登记为活跃写作会话（宽窄屏共用同一实例，
     // 不按布局创建第二份同步会话）；同步事务从这里取得保存屏障与同步后的会话回填入口。
     this.activeSessionToken = ActiveWritingSessionRegistry.getInstance().register(this.writingWorkflow)
+
+    // 宽屏左右栏初始宽度从当前工作台宽度按参考图比例推导，不写死某一台平板的 vp。
+    this.initializeWidePaneWidths()
 
     if (params) {
       // 只要有 projectId 就加载目录树；有有效 chapterId 才加载正文和打开编辑会话。
@@ -635,7 +627,7 @@ export struct WritingScreen {
 
   // Issue #932：宽屏形态改与外层导航 / 设置同一口径 —— AdaptiveContext.prefersWideLayout，
   // 不再在写作页独立维护 696vp 断点；窄屏 / 中屏一律走 HDS 标题栏 + 正文 + 底部状态栏，
-  // 只有宽屏继续 WritingWorkbenchToolbar + 多栏工具面板。
+  // 只有宽屏继续 WideWritingWorkbench 整页工作台。
   private get isWideWorkbench(): boolean {
     return this.adaptiveState.prefersWideLayout
   }
@@ -649,9 +641,26 @@ export struct WritingScreen {
     return this.workbenchRowWidthVp > 0 ? this.workbenchRowWidthVp : this.adaptiveState.widthVp
   }
 
+  private toolRailWidthVp(): number {
+    return this.getWorkbenchWidthVp() * TOOL_RAIL_WIDTH_RATIO
+  }
+
+  private initializeWidePaneWidths(): void {
+    const width: number = this.getWorkbenchWidthVp()
+    if (!this.isWideWorkbench || width <= 0) {
+      return
+    }
+    if (this.chapterNavWidthVp <= 0) {
+      this.chapterNavWidthVp = width * CHAPTER_NAV_WIDTH_RATIO
+    }
+    if (this.toolPaneWidthVp <= 0) {
+      this.toolPaneWidthVp = width * TOOL_PANE_WIDTH_RATIO
+    }
+  }
+
   private canKeepBothPanesOpen(): boolean {
     const requiredWidth: number = this.chapterNavWidthVp + this.toolPaneWidthVp +
-      PANE_HANDLE_WIDTH_VP * 2 + EDITOR_MIN_WIDTH_VP + TOOL_RAIL_WIDTH_VP
+      PANE_HANDLE_WIDTH_VP * 2 + EDITOR_MIN_WIDTH_VP + this.toolRailWidthVp()
     return this.getWorkbenchWidthVp() >= requiredWidth
   }
 
@@ -659,18 +668,22 @@ export struct WritingScreen {
     const rightWidth: number = this.rightPaneCollapsed
       ? PANE_HANDLE_WIDTH_VP
       : this.toolPaneWidthVp + PANE_HANDLE_WIDTH_VP
-    const available: number = this.getWorkbenchWidthVp() - EDITOR_MIN_WIDTH_VP - TOOL_RAIL_WIDTH_VP -
+    const available: number = this.getWorkbenchWidthVp() - EDITOR_MIN_WIDTH_VP - this.toolRailWidthVp() -
       rightWidth - PANE_HANDLE_WIDTH_VP
-    return Math.max(CHAPTER_NAV_MIN_WIDTH_VP, Math.min(CHAPTER_NAV_MAX_WIDTH_VP, available))
+    const minimum: number = this.getWorkbenchWidthVp() * 0.14
+    const maximum: number = this.getWorkbenchWidthVp() * 0.34
+    return Math.max(minimum, Math.min(maximum, available))
   }
 
   private maximumToolPaneWidthVp(): number {
     const leftWidth: number = this.leftPaneCollapsed
       ? PANE_HANDLE_WIDTH_VP
       : this.chapterNavWidthVp + PANE_HANDLE_WIDTH_VP
-    const available: number = this.getWorkbenchWidthVp() - EDITOR_MIN_WIDTH_VP - TOOL_RAIL_WIDTH_VP -
+    const available: number = this.getWorkbenchWidthVp() - EDITOR_MIN_WIDTH_VP - this.toolRailWidthVp() -
       leftWidth - PANE_HANDLE_WIDTH_VP
-    return Math.max(TOOL_PANE_MIN_WIDTH_VP, Math.min(TOOL_PANE_MAX_WIDTH_VP, available))
+    const minimum: number = this.getWorkbenchWidthVp() * 0.1
+    const maximum: number = this.getWorkbenchWidthVp() * 0.28
+    return Math.max(minimum, Math.min(maximum, available))
   }
 
   private reconcilePaneSpace(): void {
@@ -683,12 +696,12 @@ export struct WritingScreen {
       // Keep chapter navigation available when a resized window can no longer fit both panes.
       this.rightPaneCollapsed = true
     }
-    if (!this.leftPaneCollapsed && available < CHAPTER_NAV_MIN_WIDTH_VP + PANE_HANDLE_WIDTH_VP * 2 +
-      EDITOR_MIN_WIDTH_VP + TOOL_RAIL_WIDTH_VP) {
+    if (!this.leftPaneCollapsed && available < available * 0.14 + PANE_HANDLE_WIDTH_VP * 2 +
+      EDITOR_MIN_WIDTH_VP + this.toolRailWidthVp()) {
       this.leftPaneCollapsed = true
     }
-    if (!this.rightPaneCollapsed && available < TOOL_PANE_MIN_WIDTH_VP + PANE_HANDLE_WIDTH_VP * 2 +
-      EDITOR_MIN_WIDTH_VP + TOOL_RAIL_WIDTH_VP) {
+    if (!this.rightPaneCollapsed && available < available * 0.1 + PANE_HANDLE_WIDTH_VP * 2 +
+      EDITOR_MIN_WIDTH_VP + this.toolRailWidthVp()) {
       this.rightPaneCollapsed = true
     }
 
@@ -731,6 +744,28 @@ export struct WritingScreen {
     this.leftPaneCollapsed = true
   }
 
+  // 拖拽分隔条：宽度仍由页面持有，组件只上报目标宽度；这里再套一次现有上下限，
+  // 然后跑原有 reconcile，避免拖到挤掉正文或两侧互相重叠。
+  private resizeChapterNavigation(widthVp: number): void {
+    const maximum: number = this.maximumChapterNavWidthVp()
+    const minimum: number = this.getWorkbenchWidthVp() * 0.14
+    this.chapterNavWidthVp = Math.max(minimum, Math.min(maximum, widthVp))
+    this.reconcilePaneSpace()
+  }
+
+  private resizeToolPane(widthVp: number): void {
+    const maximum: number = this.maximumToolPaneWidthVp()
+    const minimum: number = this.getWorkbenchWidthVp() * 0.1
+    this.toolPaneWidthVp = Math.max(minimum, Math.min(maximum, widthVp))
+    this.reconcilePaneSpace()
+  }
+
+  // 宽屏工作台内容行宽度变化：只更新平台侧布局状态，不改编辑会话。
+  private handleWorkbenchRowWidth(widthVp: number): void {
+    this.workbenchRowWidthVp = widthVp
+    this.reconcilePaneSpace()
+  }
+
   // Issue #880 复核第 2 项：宽屏工作台目录树只有这一个加载入口，在途请求复用同一个 Promise。
   private ensureWorkbenchProjectTree(): Promise<boolean> {
     if (!this.isWideWorkbench || this.wideWorkbenchTreeLoaded) {
@@ -764,14 +799,19 @@ export struct WritingScreen {
         // Issue #829 手稿：章节树最上面一组是作品名，不是笼统的"章节"。
         this.projectTitle = result.data.project.title
         // 展开包含当前章节的卷
+        const expanded: Set<string> = new Set<string>()
+        this.expandedVolumes.forEach((id: string): void => {
+          expanded.add(id)
+        })
         for (const vt of this.volumeTrees) {
           for (const ch of vt.chapters) {
             if (ch.id === this.chapterId) {
-              this.expandedVolumes.add(vt.volume.id)
+              expanded.add(vt.volume.id)
               break
             }
           }
         }
+        this.expandedVolumes = expanded
         this.wideWorkbenchTreeLoaded = true
         return true
       }
@@ -793,11 +833,17 @@ export struct WritingScreen {
 
   // Issue #629 评论14 第1项：展开/折叠卷。
   private toggleVolume(volumeId: string): void {
-    if (this.expandedVolumes.has(volumeId)) {
-      this.expandedVolumes.delete(volumeId)
+    const next: Set<string> = new Set<string>()
+    this.expandedVolumes.forEach((id: string): void => {
+      next.add(id)
+    })
+    if (next.has(volumeId)) {
+      next.delete(volumeId)
     } else {
-      this.expandedVolumes.add(volumeId)
+      next.add(volumeId)
     }
+    // 整体赋值触发子组件 @Param 更新；Set 原地增删不保证宽屏树重绘。
+    this.expandedVolumes = next
   }
 
   // Issue #920 A：创建/删除卷章复用 ProjectWorkspaceViewModel 的共享业务入口，
@@ -979,129 +1025,70 @@ export struct WritingScreen {
   @Builder
   NavContent() {
     if (this.isWideWorkbench) {
-      // Issue #920 A：宽屏结构由 ArkUI 自适应摆：顶部工具带 + 左目录 / 正文 / 右工具面板 / 最右 rail。
-      // 屏幕宽度变化只改布局，不换 TextEditSession owner（同一个 coordinator/dispatcher/IME/save）。
-      Column() {
-        WritingWorkbenchToolbar({
-          toolbarHeightVp: TOOLBAR_HEIGHT_VP,
-          headerActions: this.headerActions,
-          // Issue #825 复核8第 3 点：步进器显示并基于"编辑中草稿"，不是最后一次已落盘值。
-          fontSizePt: this.editorFormatDraftFontSize,
-          lineSpacing: this.editorFormatDraftLineSpacing,
-          onBack: () => { this.handleTitleBack() },
-          onUndo: () => { this.applyUndo() },
-          onRedo: () => { this.applyRedo() },
-          onFontSizeChange: (value: number) => { this.changeEditorFontSize(value) },
-          onLineSpacingChange: (value: number) => { this.changeEditorLineSpacing(value) }
-        })
-          .width('100%')
+      // Issue #972：宽屏只挂一个整页工作台。上下左右都是同一个布局流，
+      // 折叠/拖动只改变列宽；编辑会话仍是本页唯一的 coordinator/dispatcher/IME。
+      WideWritingWorkbench({
+        headerActions: this.headerActions,
+        // Issue #825 复核8第 3 点：步进器显示并基于"编辑中草稿"，不是最后一次已落盘值。
+        fontSizePt: this.editorFormatDraftFontSize,
+        lineSpacing: this.editorFormatDraftLineSpacing,
+        onBack: (): void => { this.handleTitleBack() },
+        onUndo: (): void => { this.applyUndo() },
+        onRedo: (): void => { this.applyRedo() },
+        onFontSizeChange: (value: number): void => { this.changeEditorFontSize(value) },
+        onLineSpacingChange: (value: number): void => { this.changeEditorLineSpacing(value) },
+        onHeaderAction: (role: ActionRole): void => {
+          NavigationHeaderActionDispatcher.getInstance().dispatchAction(role)
+        },
 
-        Stack() {
-          Row() {
-            // ChapterNavigation：分隔条位于目录栏边缘；折叠后只保留贴正文边缘的把手。
-            if (this.leftPaneCollapsed) {
-              this.CollapsedLeftPaneHandle()
-            } else {
-              ChapterTreePane({
-                volumeTrees: this.volumeTrees,
-                projectTitle: this.projectTitle,
-                expandedVolumes: this.expandedVolumes,
-                selectedChapterId: this.chapterId,
-                isLoading: this.isTreeLoading,
-                loadError: this.projectTreeError,
-                onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
-                onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
-                  this.switchChapter(chapterId, chapterTitle, volumeId)
-                },
-                onCreateVolume: (): void => { this.createVolume() },
-                onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
-                onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
-                onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) },
-                onRetry: (): void => { this.ensureWorkbenchProjectTree() }
-              })
-                .width(this.chapterNavWidthVp)
-                .height('100%')
-              this.LeftPaneDivider()
-            }
+        projectTitle: this.projectTitle,
+        volumeTrees: this.volumeTrees,
+        expandedVolumes: this.expandedVolumes,
+        selectedChapterId: this.chapterId,
+        isTreeLoading: this.isTreeLoading,
+        projectTreeError: this.projectTreeError,
+        onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
+        onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
+          this.switchChapter(chapterId, chapterTitle, volumeId)
+        },
+        onCreateVolume: (): void => { this.createVolume() },
+        onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
+        onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
+        onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) },
+        onRetryTree: (): void => {
+          void this.ensureWorkbenchProjectTree()
+        },
 
-            // Editor：占剩余空间，纸面限宽居中；左右 pane 展开/收起只改变可用空间，不改变编辑会话。
-            Column() {
-              // 正文区顶部的折叠钮：手稿里正文区自己带一个三角。用 Stack 浮在正文上方，不占正文高度。
-              Stack({ alignContent: Alignment.Top }) {
-                if (this.chapterId.length === 0) {
-                  Column() {
-                    Text('从左侧选择或新建章节')
-                      .fontSize(16)
-                      .fontColor($r('sys.color.font_secondary'))
-                  }
-                  .width('100%')
-                  .layoutWeight(1)
-                  .justifyContent(FlexAlign.Center)
-                } else {
-                  this.EditorBody()
-                }
+        hasChapter: this.chapterId.length > 0,
+        leftPaneCollapsed: this.leftPaneCollapsed,
+        rightPaneCollapsed: this.rightPaneCollapsed,
+        chapterNavWidthVp: this.chapterNavWidthVp,
+        chapterNavMinWidthVp: this.getWorkbenchWidthVp() * 0.14,
+        chapterNavMaxWidthVp: this.maximumChapterNavWidthVp(),
+        toolPaneWidthVp: this.toolPaneWidthVp,
+        toolPaneMinWidthVp: this.getWorkbenchWidthVp() * 0.1,
+        toolPaneMaxWidthVp: this.maximumToolPaneWidthVp(),
+        selectedToolKey: this.selectedToolKey,
+        onChapterNavResize: (widthVp: number): void => { this.resizeChapterNavigation(widthVp) },
+        onToolPaneResize: (widthVp: number): void => { this.resizeToolPane(widthVp) },
+        onCollapseChapterTree: (): void => { this.closeChapterNavigation() },
+        onExpandChapterTree: (): void => { this.requestChapterNavigationOpen() },
+        onCollapseToolPane: (): void => { this.closeToolPane() },
+        onExpandToolPane: (): void => { this.requestToolPaneOpen(this.selectedToolKey || 'starmap') },
+        onSelectTool: (key: string): void => { this.onSelectTool(key) },
+        onToggleToolPane: (): void => { this.onToggleToolPane() },
+        onRowWidthChange: (widthVp: number): void => { this.handleWorkbenchRowWidth(widthVp) },
 
-                PaneFoldButton({
-                  glyph: this.leftPaneCollapsed ? '⌃' : '⌄',
-                  onTriggered: (): void => {
-                    if (this.leftPaneCollapsed) {
-                      this.requestChapterNavigationOpen()
-                    } else {
-                      this.closeChapterNavigation()
-                    }
-                  }
-                })
-                  .margin({ top: 4 })
-              }
-              .width('100%')
-              .layoutWeight(1)
-
-              // Issue #829 手稿：底部状态栏只属于 Editor 这一列。硬约束 6：只放展示，不做导航。
-              WritingStatusBar({
-                charsPerMinute: this.latestCharsPerMinute,
-                progressCurrent: this.todayTypedChars,
-                progressTarget: WRITING_PROGRESS_TARGET_PLACEHOLDER,
-                clockText: this.clockText,
-                saveStatus: this.getSaveStatusText(),
-                saveStatusIsError: this.lastSaveFailed
-              })
-                .width('100%')
-            }
-            .layoutWeight(1)
-            .height('100%')
-
-            // ToolPane：右侧工具 rail 常驻；分隔条仅出现在展开的工具面板旁。
-            if (this.rightPaneCollapsed) {
-              this.CollapsedRightPaneHandle()
-            } else {
-              this.RightPaneDivider()
-              this.RightToolPane()
-            }
-
-            // ToolRail：最右竖向 rail，宽度由平台常量决定。
-            WritingToolRail({
-              railWidthVp: TOOL_RAIL_WIDTH_VP,
-              selectedToolKey: this.selectedToolKey,
-              toolPaneVisible: !this.rightPaneCollapsed,
-              onSelectTool: (key: string): void => { this.onSelectTool(key) },
-              onToggleToolPane: () => { this.onToggleToolPane() }
-            })
-              .height('100%')
-          }
-          .width('100%')
-          .height('100%')
-          .onAreaChange((_oldArea: Area, newArea: Area): void => {
-            this.workbenchRowWidthVp = Number(newArea.width)
-            this.reconcilePaneSpace()
-          })
-        }
-          .width('100%')
-          .layoutWeight(1)
+        // 硬约束 6：正文列底部只放状态信息，不承担页面导航。
+        charsPerMinute: this.latestCharsPerMinute,
+        progressCurrent: this.todayTypedChars,
+        progressTarget: WRITING_PROGRESS_TARGET_PLACEHOLDER,
+        clockText: this.clockText,
+        saveStatus: this.getSaveStatusText(),
+        saveStatusColor: this.getSaveStatusColor()
+      }) {
+        this.EditorBody()
       }
-        .width('100%')
-        .height('100%')
-        // Issue #932 复核：宽屏工作台的根容器补页面底色（showTitleBar=false，底色调性仍与全仓统一）。
-        .backgroundColor($r('sys.color.background_secondary'))
     } else {
       // Issue #629 评论9 第3项：窄屏单栏布局（或窄窗口）。
       this.EditorPane()
@@ -1206,127 +1193,8 @@ export struct WritingScreen {
     }
   }
 
-  // 面板分隔条只在面板边缘接收水平拖动，不覆盖正文空白，也不接管窗口拖动。
-  @Builder
-  LeftPaneDivider() {
-    Stack({ alignContent: Alignment.Center }) {
-      Column()
-        .width(1)
-        .height('100%')
-        .backgroundColor($r('sys.color.comp_background_gray'))
-
-      Button('‹', { type: ButtonType.Normal })
-        .width(PANE_HANDLE_WIDTH_VP)
-        .height(PANE_HANDLE_HEIGHT_VP)
-        .fontSize(14)
-        .fontColor($r('sys.color.font_primary'))
-        .backgroundColor($r('sys.color.comp_background_gray'))
-        .borderRadius(DesignTokens.radiusPill)
-        .onClick(() => { this.closeChapterNavigation() })
-        .gesture(
-          PanGesture()
-            .onActionStart(() => { this.chapterNavDragStartWidthVp = this.chapterNavWidthVp })
-            .onActionUpdate((event: GestureEvent) => {
-              this.chapterNavWidthVp = Math.max(CHAPTER_NAV_MIN_WIDTH_VP,
-                Math.min(this.maximumChapterNavWidthVp(), this.chapterNavDragStartWidthVp + event.offsetX))
-            })
-        )
-    }
-    .width(PANE_HANDLE_WIDTH_VP)
-    .height('100%')
-  }
-
-  @Builder
-  RightPaneDivider() {
-    Stack({ alignContent: Alignment.Center }) {
-      Column()
-        .width(1)
-        .height('100%')
-        .backgroundColor($r('sys.color.comp_background_gray'))
-
-      Button('›', { type: ButtonType.Normal })
-        .width(PANE_HANDLE_WIDTH_VP)
-        .height(PANE_HANDLE_HEIGHT_VP)
-        .fontSize(14)
-        .fontColor($r('sys.color.font_primary'))
-        .backgroundColor($r('sys.color.comp_background_gray'))
-        .borderRadius(DesignTokens.radiusPill)
-        .onClick(() => { this.closeToolPane() })
-        .gesture(
-          PanGesture()
-            .onActionStart(() => { this.toolPaneDragStartWidthVp = this.toolPaneWidthVp })
-            .onActionUpdate((event: GestureEvent) => {
-              this.toolPaneWidthVp = Math.max(TOOL_PANE_MIN_WIDTH_VP,
-                Math.min(this.maximumToolPaneWidthVp(), this.toolPaneDragStartWidthVp - event.offsetX))
-            })
-        )
-    }
-    .width(PANE_HANDLE_WIDTH_VP)
-    .height('100%')
-  }
-
-  @Builder
-  CollapsedLeftPaneHandle() {
-    Button('›', { type: ButtonType.Normal })
-      .width(PANE_HANDLE_WIDTH_VP)
-      .height(PANE_HANDLE_HEIGHT_VP)
-      .fontSize(14)
-      .fontColor($r('sys.color.font_primary'))
-      .backgroundColor($r('sys.color.comp_background_gray'))
-      .borderRadius(DesignTokens.radiusPill)
-      .onClick(() => { this.requestChapterNavigationOpen() })
-  }
-
-  @Builder
-  CollapsedRightPaneHandle() {
-    Button('‹', { type: ButtonType.Normal })
-      .width(PANE_HANDLE_WIDTH_VP)
-      .height(PANE_HANDLE_HEIGHT_VP)
-      .fontSize(14)
-      .fontColor($r('sys.color.font_primary'))
-      .backgroundColor($r('sys.color.comp_background_gray'))
-      .borderRadius(DesignTokens.radiusPill)
-      .onClick(() => { this.onToggleToolPane() })
-  }
-
-  // Issue #829：ToolPane 骨架固定下来。rail 只切“星图 / AI”，这里负责承载内容。
-  @Builder
-  RightToolPane() {
-    Column() {
-      Row() {
-        PaneFoldButton({
-          glyph: '⌄',
-          onTriggered: (): void => { this.closeToolPane() }
-        })
-
-        Text(this.selectedToolKey === 'ai' ? 'AI' : '星图')
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('sys.color.font_primary'))
-          .margin({ left: 8 })
-
-        Blank()
-      }
-      .width('100%')
-      .height(48)
-      .padding({ left: 16, right: 12 })
-      .alignItems(VerticalAlign.Center)
-
-      Column()
-        .width('100%')
-        .height(1)
-        .backgroundColor($r('sys.color.comp_background_gray'))
-
-      Stack() {
-        // 星图 / AI 的真实内容后续直接填到这里。
-      }
-      .width('100%')
-      .layoutWeight(1)
-    }
-    .width(this.toolPaneWidthVp)
-    .height('100%')
-    .backgroundColor($r('sys.color.background_secondary'))
-  }
+  // Issue #972：旧宽屏分隔条 / 收起把手 / 右侧工具面板已迁到
+  // ui/wide/WidePaneDivider 与 ui/wide/WideToolPanel；本页只保留布局状态和业务回调。
 
   build() {
     // Issue #768 评论5835171266 第3项：API23+ 用 HdsNavDestination，API < 23 保持普通 NavDestination。
@@ -1340,7 +1208,7 @@ export struct WritingScreen {
         },
         scroller: this.editorScroller,
         headerActions: this.headerActions,
-        // Issue #920 A：宽屏由 WritingWorkbenchToolbar 画工具条带，HDS 标题栏必须让位。
+        // Issue #920 A / #972：宽屏由 WideWritingWorkbench 整页排版，HDS 标题栏必须让位。
         showTitleBar: !this.isWideWorkbench
       }) {
         this.NavContent()
@@ -1348,7 +1216,7 @@ export struct WritingScreen {
     } else {
       NavDestination() {
         Column() {
-          // 宽屏这条自绘标题行让位给 WritingWorkbenchToolbar。
+          // 宽屏这条自绘标题行让位给 WideWritingWorkbench 的顶部工具条。
           if (!this.isWideWorkbench) {
             // Issue #783 评论5856245403：自定义标题行 — 圆形返回按钮 + 标题。
             Row() {

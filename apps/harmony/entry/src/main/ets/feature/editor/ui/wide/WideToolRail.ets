@@ -1,22 +1,20 @@
-// Issue #829：宽屏写作区最右侧 ToolRail。
+// WideToolRail — 宽屏写作工作台最右常驻工具轨（Issue #972）。
 //
-// 手稿固定为：顶部工具条 + 左章节树 + 中间正文 + 右工具面板 + 最右窄 rail。
-// rail 本身只负责“选哪个工具”和“展开/收起 ToolPane”，不承载同步 / 搜索 / 设置。
-// 手稿里最右侧 rail 明确是“星图 / AI”，所以骨架先固定这两个入口；
-// 真实星图 / AI 内容由 ToolPane 后续接入，不再改 rail 的空间结构。
-//
-// 宽度由平台自己的宽屏断点与常量决定（WritingScreen），不再从 Core 取 bounds。
+// 手稿固定为「星图 / AI」两轨 + 底部折叠按钮：
+//   - 选中工具与 WritingScreen.selectedToolKey 对齐；
+//   - 底部按钮与 toolPaneVisible / onToggleToolPane 对齐；
+//   - 右侧工具面板收起后这条 rail 仍然保留，是重新展开面板的入口之一。
+// rail 不承载同步 / 搜索 / 设置，那些只在顶部贯通工具条里。
 
-import { DesignTokens } from '../../../ui/theme/DesignTokens'
+import { DesignTokens } from '../../../../ui/theme/DesignTokens'
 
-export interface ToolRailEntry {
+interface ToolRailEntry {
   key: string
   label: string
 }
 
 @ComponentV2
-export struct WritingToolRail {
-  @Param railWidthVp: number = 56
+export struct WideToolRail {
   @Param selectedToolKey: string = 'starmap'
   @Param toolPaneVisible: boolean = false
   @Param onSelectTool: (key: string) => void = () => {}
@@ -57,21 +55,24 @@ export struct WritingToolRail {
 
       Blank()
 
-      Button(this.toolPaneVisible ? '›' : '‹', { type: ButtonType.Normal })
-        .width(36)
-        .height(36)
-        .fontSize(16)
-        .fontColor($r('sys.color.font_primary'))
-        .backgroundColor($r('sys.color.comp_background_gray'))
-        .borderRadius(DesignTokens.radiusPill)
-        .onClick(() => {
-          this.onToggleToolPane()
-        })
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Text(this.toolPaneVisible ? '›' : '‹')
+          .fontSize(16)
+          .fontColor($r('sys.color.icon_secondary'))
+      }
+      .width(32)
+      .height(32)
+      .borderRadius(DesignTokens.radiusPill)
+      .backgroundColor($r('sys.color.comp_background_gray'))
+      .onClick(() => {
+        this.onToggleToolPane()
+      })
     }
-    .width(this.railWidthVp)
+    .width('100%')
     .height('100%')
     .padding({ top: 8, bottom: 8 })
     .alignItems(HorizontalAlign.Center)
+    .border({ width: { left: 1 }, color: $r('sys.color.comp_divider') })
     .backgroundColor($r('sys.color.background_secondary'))
   }
 }

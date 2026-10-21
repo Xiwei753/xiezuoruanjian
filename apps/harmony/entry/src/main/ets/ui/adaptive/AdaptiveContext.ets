@@ -9,7 +9,8 @@ import { TabletWindowPolicy } from '../../platform/window/TabletWindowPolicy'
 // Issue #920 D：页面结构完全由平台 UI 层决定，不再向 Core 要布局模式。
 // 断点沿用产品既有的响应式设计，保证窗口尺寸变化时页面结构与改动前等价。
 const WIDTH_MEDIUM_MIN_VP: number = 600
-const WIDTH_WIDE_MIN_VP: number = 840
+// Issue #972：840vp 是根窗口宽屏外壳的唯一断点；WideLayoutMode 直接复用该值。
+export const WIDTH_WIDE_MIN_VP: number = 840
 // 宽屏工作区内容的纸面最大宽度（vp）。
 const WORKBENCH_CONTENT_MAX_WIDTH_VP: number = 840
 // 页面水平内边距（vp）：工作台档 32，其他档 16。
@@ -39,10 +40,9 @@ export interface AdaptiveState {
   safeBottomVp: number
   // 顶部安全区域高度（状态栏避让），单位 vp
   safeTopVp: number
-  // 当前是否偏好宽屏布局（窗口宽度 >= 840vp）。
-  // Issue #932 / #968：这是外层导航外壳（窄屏 Tabs / 宽屏侧栏）、页头形态、设置呈现方式
-  // 以及作品 / 星图 / 统计正文宽窄分流的唯一模式判定。不再保留第二个导航布尔字段，
-  // 避免外层走底部 Tabs、页面却进入宽屏骨架。
+  // 当前是否偏好宽屏布局（根窗口实际宽度 >= 840vp）。
+  // Issue #972：外层只能据此解析一个 WideLayoutMode 并传给 WideAppShell；
+  // 页面可以按内容宽度排网格列数，但不得再自行决定外层外壳形状，也不得保留第二套宽屏布尔。
   prefersWideLayout: boolean
   // 是否是专用横屏平板（deviceType=tablet + 非折叠 + 宽高比>=1.25）
   isDedicatedLandscapeTablet: boolean

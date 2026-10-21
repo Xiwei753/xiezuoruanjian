@@ -28,13 +28,13 @@ import { StatsScreen } from '../../feature/stats/ui/StatsScreen'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
-import { DesignTokens } from '../../ui/theme/DesignTokens'
 import { ActionRole, ActionSlot, ScreenRole, resolveScreenPolicy, resolveShowPrimaryNavigation } from './ScreenSemantics'
 import { NavigationChromeStore } from './NavigationChromeStore'
 import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 import { HdsPrimaryTabsApi23 } from './impl/api23/HdsPrimaryTabsApi23'
-import { HeaderActionCapsule } from './impl/api23/HeaderActionCapsule'
+import { WideAppShell } from './wide/WideAppShell'
+import { WideLayoutMode, resolveWideLayoutMode } from './wide/WideLayoutMode'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 import { SyncRunPresentationState, SyncRunSnapshot } from '../../feature/settings/presentation/SyncRunPresentationState'
 import { SyncOutcomePresenter } from '../../feature/settings/presentation/SyncOutcomePresenter'
@@ -51,27 +51,8 @@ const NORMAL_BAR_HEIGHT: number = 56
 // 隐藏底栏时的高度（vp）
 const HIDDEN_BAR_HEIGHT: number = 0
 
-// Issue #825：宽屏左侧一级导航项。和底部 Tabs 用同一组 tab 索引，
-// 只决定“摆在哪里”，不新增第四套路由栈，也不新增 Core 枚举。
-interface WideRailEntry {
-  index: number
-  label: string
-}
-
-const WIDE_RAIL_ENTRIES: WideRailEntry[] = [
-  { index: TAB_HOME, label: '作品' },
-  { index: TAB_STARMAP, label: '星图' },
-  { index: TAB_STATS, label: '统计' }
-]
-
-// 宽屏左侧一级导航的固定宽度（vp）
-const WIDE_RAIL_WIDTH: number = 160
-const WIDE_ACTION_CAPSULE_HEIGHT: number = 48
 const SYNC_STATUS_SUCCESS_VISIBLE_MS: number = 3200
 const SYNC_STATUS_MAX_WIDTH_VP: number = 560
-
-// Issue #827 评论 3 第 1 点：左栏「素笺」行的左右内边距。
-const WIDE_RAIL_BRAND_PADDING: number = 20
 
 // Issue #767：工厂函数，在字段初始化时创建已经带根路由的 NavPathStack。
 // 避免 aboutToAppear() 里 pushPath 导致 "State variable has changed during render" 错误。
@@ -95,6 +76,8 @@ export struct PrimaryTabShell {
 
   // 响应式布局状态（用于判断是否显示底部 Tab Bar）
   @State adaptiveState: AdaptiveState = getAdaptiveState()
+  // 外壳形状只看这一个原始宽度值；用基础类型单独存一份，避免对象状态在首帧/重建时不同步。
+  @State shellWidthVp: number = getAdaptiveState().widthVp
   // 主题配置（底部 Tab 配色）
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   // 当前页面对应的 ScreenRole
@@ -179,9 +162,11 @@ export struct PrimaryTabShell {
     // 注册响应式布局观察者，窗口尺寸变化时更新 adaptiveState。
     this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
       self.adaptiveState = state
+      self.shellWidthVp = state.widthVp
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
+    this.shellWidthVp = this.adaptiveState.widthVp
 
     // 订阅 NavigationChromeStore，根据 ScreenRole 变化更新底栏显隐
     this.navChromeObserver = (role: ScreenRole) => {
@@ -478,15 +463,14 @@ export struct PrimaryTabShell {
     this.PageMapForStack(name, this.statsStack, TAB_STATS)
   }
 
-  // Issue #829：宽屏一级导航只认平台自己的窗口断点。
-  // 只要进入侧栏档，就直接走左侧 rail，绝不再实例化 HDS 底部 Tabs。
-  // 这样不会出现“页面已经是宽屏骨架，但底下还挂着一个沉浸光感底栏”的双导航。
-  // 沉浸光感不是布局理由：侧栏没有系统 HDS TabBar 光感能力时，侧栏就用普通系统 token。
-  // Issue #932 / #968：外壳判定统一为 prefersWideLayout（与各页 showTitleBar / 正文分流同一来源），
-  // 不再组合第二个导航布尔或设备形态。宽屏只实例化左侧 rail，窄屏只实例化 HDS 底栏，
-  // 两者不会同时存在，也不存在第三套中屏外壳。
+  // Issue #972：宽屏外壳只由根窗口实际宽度按 840vp 断点解析一次。
+  // 宽屏只实例化 WideAppShell，窄屏只实例化 CompactPrimaryShell，两者不会同时挂载。
+  private get wideLayoutMode(): WideLayoutMode {
+    return resolveWideLayoutMode(this.shellWidthVp)
+  }
+
   private get usesWideNavigation(): boolean {
-    return this.adaptiveState.prefersWideLayout
+    return this.wideLayoutMode === WideLayoutMode.Wide
   }
 
   // Issue #968：诊断只记录实际挂载的外壳根容器，而不是根据布尔值预计会挂哪一个。
@@ -513,73 +497,10 @@ export struct PrimaryTabShell {
     this.wideHeaderActions = resolveScreenPolicy(role).actionSlots
   }
 
-  // 宽屏：一级导航固定在左侧，作品 / 星图 / 统计纵向排列，选中态沿用现有系统 token。
+  // 宽屏页面画布：仍然只承载现有的三个 NavPathStack。
+  // 一级导航位置变了，栈、路由、事务协调器都不变；当前 tab 只实例化自己的 Navigation。
   @Builder
-  WidePrimaryRail() {
-    Column() {
-      Row() {
-        Text('素笺')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('sys.color.font_primary'))
-          .textAlign(TextAlign.Start)
-      }
-      .width('100%')
-      .height(48)
-      .padding({ left: WIDE_RAIL_BRAND_PADDING, right: WIDE_RAIL_BRAND_PADDING })
-      .alignItems(VerticalAlign.Center)
-
-      // 导航项区：左右内边距只作用在导航项上。
-      Column({ space: 4 }) {
-        ForEach(WIDE_RAIL_ENTRIES, (entry: WideRailEntry) => {
-          this.WideRailItem(entry)
-        }, (entry: WideRailEntry) => `${entry.index}`)
-
-        Blank()
-      }
-      .width('100%')
-      .layoutWeight(1)
-      .padding({ left: 12, right: 12, top: 24, bottom: 16 })
-    }
-    .width(WIDE_RAIL_WIDTH)
-    .height('100%')
-    .padding({ top: this.adaptiveState.safeTopVp })
-    .backgroundColor($r('sys.color.background_secondary'))
-  }
-
-  // 宽屏左侧一级导航单项：选中时加粗 + 左侧强调条，与底部 Tabs 保持同一套语义。
-  @Builder
-  WideRailItem(entry: WideRailEntry) {
-    Row() {
-      Column()
-        .width(3)
-        .height(20)
-        .borderRadius(DesignTokens.radiusXs)
-        .backgroundColor($r('sys.color.ohos_id_color_emphasize'))
-        .opacity(this.currentTab === entry.index ? 1 : 0)
-        .margin({ right: 12 })
-
-      Text(entry.label)
-        .fontSize(16)
-        .fontWeight(this.currentTab === entry.index ? FontWeight.Bold : FontWeight.Normal)
-        .fontColor($r('sys.color.font_primary'))
-        .textAlign(TextAlign.Start)
-        .layoutWeight(1)
-    }
-    .width('100%')
-    .height(44)
-    .padding({ left: 12, right: 12 })
-    .alignItems(VerticalAlign.Center)
-    .borderRadius(DesignTokens.radiusSm)
-    .backgroundColor(this.currentTab === entry.index ? $r('sys.color.comp_background_gray') : Color.Transparent)
-    .onClick(() => {
-      // Issue #906：宽屏左栏点击是明确的用户入口，走统一的用户 Tab 请求记录。
-      this.recordUserTabRequest(entry.index)
-    })
-  }
-
-  @Builder
-  WideCurrentNavigation() {
+  WidePageCanvas() {
     if (this.currentTab === TAB_HOME) {
       Navigation(this.homeStack) {}
         .navDestination(this.HomePageMap)
@@ -604,47 +525,33 @@ export struct PrimaryTabShell {
     }
   }
 
-  private get wideActionTopInset(): number {
-    return this.shouldShowSyncStatus() ? 8 : Math.max(this.adaptiveState.safeTopVp, 8)
-  }
-
-  // 宽屏壳：一级导航在左，右侧动作区单独占据顶部空间，内容从其下方开始。
-  // 写进 Writing 这类 showPrimaryNavigation=false 的页面时左栏与动作区一起消失，
-  // 内容占满（写作页有自己那套七角色工作台顶栏，不该再叠一条）。
+  // Issue #972：宽屏唯一外壳入口。左栏 / 顶部全局动作条 / 页面画布由 WideAppShell 真实布局承载，
+  // 不再在 PrimaryTabShell 里画旧 rail 或退出 HDS 标题栏的 HeaderActionCapsule。
   @Builder
-  WidePrimaryShell() {
-    Row() {
-      if (this.currentShowPrimaryNav) {
-        this.WidePrimaryRail()
+  WideShell() {
+    WideAppShell({
+      currentTab: this.currentTab,
+      layoutMode: this.wideLayoutMode,
+      showPrimaryNavigation: this.currentShowPrimaryNav,
+      headerActions: this.wideHeaderActions,
+      safeTopVp: this.adaptiveState.safeTopVp,
+      showSyncStatus: this.currentShowPrimaryNav && this.shouldShowSyncStatus(),
+      syncSnapshot: this.syncRunSnapshot,
+      onTabRequest: (index: number): void => {
+        this.recordUserTabRequest(index)
+      },
+      onOpenSyncDetails: (): void => {
+        this.openSyncSettings()
+      },
+      onDismissSyncStatus: (): void => {
+        this.dismissSyncStatus()
+      },
+      onMounted: (): void => {
+        this.recordMountedShell('WideAppShell')
       }
-      Column() {
-        this.SyncStatusBanner()
-        if (this.currentShowPrimaryNav) {
-          Row() {
-            HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
-          }
-          .width('100%')
-          .height(this.wideActionTopInset + WIDE_ACTION_CAPSULE_HEIGHT)
-          // 状态条已避开安全区时只留间距；否则本行自行避开状态栏。
-          .padding({ top: this.wideActionTopInset, right: 16 })
-          .justifyContent(FlexAlign.End)
-          .alignItems(VerticalAlign.Center)
-        }
-        Stack() {
-          this.WideCurrentNavigation()
-        }
-        .layoutWeight(1)
-        .width('100%')
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .height('100%')
+    }) {
+      this.WidePageCanvas()
     }
-    .width('100%')
-    .height('100%')
-    .onAppear(() => {
-      this.recordMountedShell('WidePrimaryShell')
-    })
   }
 
   // Issue #932：窄屏外壳——API23+ 用 HdsPrimaryTabsApi23（沉浸光感底栏），低版本用普通 Tabs。
@@ -734,12 +641,11 @@ export struct PrimaryTabShell {
   }
 
   build() {
-    // Issue #932：全应用只有两种外壳入口，判定统一来自 prefersWideLayout——
-    // 窄屏 CompactPrimaryShell（HDS Tabs / 普通 Tabs），宽屏 WidePrimaryShell（左栏 + 右上动作组）。
-    // 600–839vp（Workbench 但一级导航仍为 Bottom）留在窄屏外壳；设置浮层由窗口级
-    // custom dialog 承载（见 aboutToAppear 的 attachUIContext），与本 Stack 无关。
+    // Issue #972：全应用只有两种外壳入口，判定统一来自根窗口宽度（840vp）解析出的 WideLayoutMode。
+    // 宽屏只挂 WideAppShell（新左栏 + 右上动作条 + 页面画布），窄屏只挂 CompactPrimaryShell。
+    // 设置浮层由窗口级 custom dialog 承载（见 aboutToAppear 的 attachUIContext），与本 Stack 无关。
     if (this.usesWideNavigation) {
-      this.WidePrimaryShell()
+      this.WideShell()
     } else {
       Column() {
         this.SyncStatusBanner()

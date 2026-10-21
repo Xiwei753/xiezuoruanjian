@@ -1,14 +1,13 @@
-// SettingsContent — 设置内容（宽屏大号悬浮层与窄屏路由页共用）。
+// SettingsContent — 设置内容（宽屏浮层与窄屏路由页共用）。
 // Issue #825：把设置内容、搜索、分组折叠布局从 SettingsScreen 抽出来，
 // 让宽屏设置可以直接悬浮在打开前的页面之上，而不是再压一层路由页。
+// Issue #972：宽屏浮层的外框、标题、返回与搜索由 WideSettingsOverlay 拥有；
+// 本组件在 overlayLayout=true 时只绘制两列 WideSettingsSection 分类卡片，
+// 搜索词由浮层通过 overlaySearchText 传入，不再自己画宽屏标题栏。
 // - 本组件只负责内容与折叠状态，不持有导航栈；
 // - 唯一关闭入口是 onRequestClose 回调，由外壳注入
-//   （窄屏路由外壳注入 safePopWithStack，宽屏模态浮层注入 SettingsOverlayController.close()）。
-// - twoColumn=true 时用大号浮层布局：顶部搜索 + 两列折叠分组。
-//   是否两列由 SettingsOverlayController 按 Core 的 primaryNavigationPlacement 决定，
-//   只有一级导航在 Side（>=840vp）才两列，Bottom 那档用单列。
-// - Issue #932：路由页（overlayLayout=false）不再按 sizeClass 分叉宽屏版式，
-//   窄屏 / 中屏一律 CompactSettingsHeader + CompactScreenLayout；宽屏完整设置只由宽屏浮层承载。
+//   （窄屏路由外壳注入 safePopWithStack，宽屏浮层注入 SettingsOverlayController.close()）。
+// - 窄屏 / 中屏路由页（overlayLayout=false）保持 CompactSettingsHeader + CompactScreenLayout。
 // 设置内容、保存逻辑、主题逻辑仍然全部走现有 SettingsViewModel 和 backend。
 
 import { promptAction, ComponentContent } from '@kit.ArkUI'
@@ -33,6 +32,8 @@ import { createSyncConflictsPanelContent, SyncConflictsPanelArgs } from './SyncC
 import { createThirdPartyNoticesPanelContent, ThirdPartyNoticesPanelArgs } from './ThirdPartyNoticesPanel'
 // Issue #932：窄屏页面状态（加载中 / 出错重试 / 空）复用公共组件。
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
+// Issue #972：宽屏浮层的两列分类卡片。
+import { WideSettingsSection } from './wide/WideSettingsSection'
 
 const TAG = 'SettingsContent'
 const DOMAIN = 0x0000
@@ -64,17 +65,11 @@ interface SettingsSelectOption {
 export struct SettingsContent {
   // Issue #825：唯一的关闭入口回调。内容组件自己不碰导航栈。
   @Param onRequestClose: () => void = () => {}
-  // Issue #825：是否由宽屏模态浮层承载（标题 + 关闭 + 搜索由本组件自己画）。
-  // 窄屏路由页传 false，标题栏由 NavDestination 承载。
+  // Issue #825：是否由宽屏浮层承载。
+  // Issue #972：浮层外框、标题和搜索由 WideSettingsOverlay 拥有；本组件只画两列卡片主体。
   @Param overlayLayout: boolean = false
-  // Issue #825 复核第3项：两列与否不作为打开时快照传进来，改成按最新 AdaptiveContext 派生。
-  // 只有平台自己的窗口断点判定一级导航在侧栏（>=840vp）才两列；600–839vp 那档虽是
-  // 工作台但一级导航仍是 Bottom，用单列。平板旋转 / 自由窗口在两档之间移动时，浮层会跟着换布局。
-  // Issue #932：只有宽屏浮层消费这个判定；路由页不再分叉宽屏版式（见 NavContent）。
-  // Issue #932 / #968：与导航外壳、页面正文共用 prefersWideLayout，不再读第二个导航布尔。
-  private get twoColumn(): boolean {
-    return this.adaptiveState.prefersWideLayout
-  }
+  // Issue #972：宽屏浮层的搜索词由浮层持有并传入；窄屏 overlayLayout=false 时仍用本地 searchText。
+  @Param overlaySearchText: string = ''
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
   @Local viewModel: SettingsViewModel = new SettingsViewModel()
@@ -348,8 +343,8 @@ export struct SettingsContent {
     .alignItems(HorizontalAlign.Start)
   }
 
-  // ── 搜索过滤设置项（窄屏搜索用） ──
-  // 纯函数：只按当前 searchText 派生可见分组，不写任何 @Local/@Trace，也不改展开状态。
+  // ── 搜索过滤设置项 ──
+  // 纯函数：只按当前生效搜索词派生可见分组，不写任何 @Local/@Trace，也不改展开状态。
   // 展开状态只由用户点击分类标题触发的 toggleSection（见 ExpandableCategory.onClick）修改。
   // 搜索命中的分类在显示层临时展开（isSectionExpandedForDisplay），不落持久化折叠状态。
   private deriveFilteredGroups(keyword: string): GroupDefinition[] {
@@ -393,10 +388,15 @@ export struct SettingsContent {
     return false
   }
 
+  // 当前生效的搜索词：宽屏浮层用外壳传入的 overlaySearchText，窄屏路由页用本地 searchText。
+  private activeSearchText(): string {
+    return this.overlayLayout ? this.overlaySearchText : this.searchText
+  }
+
   // 显示层展开判断：搜索激活且当前分类命中时临时展开，否则读用户折叠状态。
   // 这是纯读取，不在渲染期写状态，避免 re-render 期间往更新队列塞新节点。
   private isSectionExpandedForDisplay(sectionId: SettingsSectionId): boolean {
-    const keyword = this.searchText.trim().toLowerCase()
+    const keyword = this.activeSearchText().trim().toLowerCase()
     if (keyword.length > 0 && this.sectionMatchesKeyword(sectionId, keyword)) {
       return true
     }
@@ -606,16 +606,15 @@ export struct SettingsContent {
 
   // Issue #825：设置内容的唯一根 Builder。
   // 窄屏 / 中屏由 SettingsScreen 的 NavDestination/HdsSettingsDestination 外壳调用（overlayLayout=false），
-  // 宽屏由 SettingsOverlayPanel 调用（overlayLayout=true，标题 + 关闭 + 搜索由本组件自己画）。
+  // 宽屏由 WideSettingsOverlay 调用（overlayLayout=true，外框 / 标题 / 搜索由浮层承载）。
   // Issue #932：overlayLayout=false 不再按 sizeClass 分叉宽屏版式，一律
-  // CompactSettingsHeader + CompactScreenLayout；只有宽屏浮层按 twoColumn 决定单列 / 双列分组。
+  // CompactSettingsHeader + CompactScreenLayout。
+  // Issue #972：overlayLayout=true 只画两列 WideSettingsSection 分类卡片。
   @Builder
   NavContent() {
     Column() {
-      // ── 顶部 Header：宽屏浮层有标题、关闭和搜索，路由页只有保存状态提示 + 搜索框 ──
-      if (this.overlayLayout) {
-        this.OverlaySettingsHeader()
-      } else {
+      // ── 窄屏 Header：保存状态提示 + 搜索框；宽屏浮层的标题与搜索由 WideSettingsOverlay 承担 ──
+      if (!this.overlayLayout) {
         this.CompactSettingsHeader()
       }
 
@@ -626,9 +625,8 @@ export struct SettingsContent {
           kind: CompactPageStateKind.Loading,
           title: getContext(this).resourceManager.getStringSync($r('app.string.loading').id)
         })
-      } else if (this.overlayLayout && this.twoColumn) {
-        // 只有宽屏浮层决定单列 / 双列分组（列数来自最新 AdaptiveContext，窗口改档会即时重排）。
-        this.TwoColumnSettingsLayout()
+      } else if (this.overlayLayout) {
+        this.WideOverlaySettingsBody()
       } else {
         this.CompactScreenLayout()
       }
@@ -636,7 +634,7 @@ export struct SettingsContent {
     .width('100%')
     .height('100%')
     // Issue #932 复核：设置页根容器补页面底色，避免 HDS NavDestination 的内部 surface 透出白底。
-    // 宽屏浮层外壳 SettingsOverlayPanel 本已画同色，这里无条件补同色不改变其观感。
+    // Issue #972：宽屏浮层外壳 WideSettingsOverlay 与本组件共用同一底色。
     .backgroundColor($r('sys.color.background_secondary'))
   }
 
@@ -1752,116 +1750,108 @@ export struct SettingsContent {
   }
 
   // ════════════════════════════════════════════
-  // Issue #825：宽屏大号悬浮层布局（顶部搜索 + 两列分组）
+  // Issue #972：宽屏浮层主体 — 两列分类卡片
+  // 外框 / 标题 / 搜索由 WideSettingsOverlay 拥有；这里只负责把现有分类
+  // 拆成两列，并用 WideSettingsSection 包裹现有设置项 builder。
   // ════════════════════════════════════════════
-  @Builder
-  OverlaySettingsHeader() {
-    Column() {
-      Row() {
-        Text($r('app.string.settings'))
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('sys.color.font_primary'))
-        Blank()
-        if (this.viewModel.saveMessage) {
-          Text(this.resolveSaveMessage())
-            .fontSize(12)
-        }
-        if (this.copyMessage) {
-          Text(this.copyMessage)
-            .fontSize(12)
-            .margin({ left: 8 })
-        }
-        Button('关闭', { type: ButtonType.Normal })
-          .height(32)
-          .fontSize(14)
-          .fontColor($r('sys.color.font_primary'))
-          .backgroundColor($r('sys.color.comp_background_gray'))
-          .borderRadius(DesignTokens.radiusSm)
-          .margin({ left: 12 })
-          .onClick(() => { this.onRequestClose() })
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
 
-      Row() {
-        Image($r('app.media.ic_search'))
-          .width(20)
-          .height(20)
-          .fillColor($r('sys.color.icon_primary'))
-          .margin({ left: 12 })
-        TextInput({
-          placeholder: '',
-          text: this.searchText
-        })
-          .layoutWeight(1)
-          .height(36)
-          .fontSize(14)
-          .backgroundColor(Color.Transparent)
-          .onChange((value: string) => {
-            // 只更新搜索词；可见分组由 deriveFilteredGroups(searchText) 纯派生，
-            // 不再在事件里改写 filteredGroups / 展开状态，避免一次事件多次响应式写入。
-            this.searchText = value
-          })
+  // 搜索过滤后的分类顺序：沿用窄屏分组定义，但宽屏每张卡片直接对应一个分类。
+  private overlaySectionIds(): SettingsSectionId[] {
+    const groups: GroupDefinition[] = this.deriveFilteredGroups(this.activeSearchText())
+    const result: SettingsSectionId[] = []
+    for (const groupDef of groups) {
+      for (const sectionId of groupDef.sections) {
+        result.push(sectionId)
       }
-      .width('100%')
-      .height(40)
-      .margin({ top: 12, bottom: 4 })
-      .backgroundColor($r('sys.color.comp_background_gray'))
-      .borderRadius(DesignTokens.radiusSm)
     }
-    .width('100%')
-    .padding({ left: 24, right: 24, top: 20, bottom: 8 })
+    return result
   }
 
-  // 把过滤后的分组按列数均分，第一列多一个。
-  private columnGroups(groups: GroupDefinition[], index: number): GroupDefinition[] {
-    const split = Math.ceil(groups.length / 2)
-    return index === 0 ? groups.slice(0, split) : groups.slice(split)
+  // 两列按分类数量均分，第一列多一个；列内各自滚动，长分类不会把另一列顶走。
+  private overlayColumnSections(columnIndex: number): SettingsSectionId[] {
+    const sections: SettingsSectionId[] = this.overlaySectionIds()
+    const split: number = Math.ceil(sections.length / 2)
+    return columnIndex === 0 ? sections.slice(0, split) : sections.slice(split)
   }
 
   @Builder
-  SettingsGroupColumn(groups: GroupDefinition[], columnIndex: number) {
+  WideOverlaySettingsBody() {
     Column() {
-      ForEach(groups, (groupDef: GroupDefinition) => {
-        Column() {
-          if (this.shouldShowGroupHeader(groupDef)) {
-            this.SettingsGroupHeader(groupDef.id)
+      // 浮层 header 由外壳拥有；保存 / 复制结果仍来自本组件的 ViewModel，在这里轻量提示。
+      if (this.viewModel.saveMessage || this.copyMessage) {
+        Row() {
+          Blank()
+          if (this.viewModel.saveMessage) {
+            Text(this.resolveSaveMessage())
+              .fontSize(12)
           }
-          ForEach(groupDef.sections, (sectionId: SettingsSectionId) => {
-            this.ExpandableCategory(sectionId)
-          }, (sectionId: SettingsSectionId) => sectionId)
+          if (this.copyMessage) {
+            Text(this.copyMessage)
+              .fontSize(12)
+              .margin({ left: 8 })
+          }
         }
         .width('100%')
-        .margin({ bottom: 16 })
-      }, (groupDef: GroupDefinition) => `c${columnIndex}_${groupDef.id}`)
-    }
-    .width('100%')
-  }
-
-  @Builder
-  TwoColumnSettingsLayout() {
-    Row() {
-      Scroll() {
-        this.SettingsGroupColumn(this.columnGroups(this.deriveFilteredGroups(this.searchText), 0), 0)
+        .padding({ left: '11.5%', right: '11.5%', bottom: 4 })
       }
-      .layoutWeight(1)
-      .height('100%')
-      .scrollBar(BarState.Off)
-      .align(Alignment.Top)
-      .padding({ left: this.adaptiveState.pagePadding, right: 12 })
 
-      Scroll() {
-        this.SettingsGroupColumn(this.columnGroups(this.deriveFilteredGroups(this.searchText), 1), 1)
+      if (this.overlaySectionIds().length === 0) {
+        Column() {
+          Text('没有匹配的设置')
+            .fontSize(14)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else {
+        // 两列各 layoutWeight(1)；左右留白各占浮层宽 11.5%，中间留白占 6.3% 作为列间距
+        // （参考图约 118 / 65 / 118vp）。留白用百分比占位而不是固定 vp，窗口变化时同比缩放。
+        Row() {
+          Column() {}
+            .width('11.5%')
+
+          this.WideOverlaySettingsColumn(this.overlayColumnSections(0), 0)
+
+          Column() {}
+            .width('6.3%')
+
+          this.WideOverlaySettingsColumn(this.overlayColumnSections(1), 1)
+
+          Column() {}
+            .width('11.5%')
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .alignItems(VerticalAlign.Top)
       }
-      .layoutWeight(1)
-      .height('100%')
-      .scrollBar(BarState.Off)
-      .align(Alignment.Top)
-      .padding({ left: 12, right: this.adaptiveState.pagePadding, bottom: 24 })
     }
     .width('100%')
     .layoutWeight(1)
+    .padding({ bottom: '3%' })
+  }
+
+  @Builder
+  WideOverlaySettingsColumn(sectionIds: SettingsSectionId[], columnIndex: number) {
+    Scroll() {
+      Column({ space: 12 }) {
+        ForEach(sectionIds, (sectionId: SettingsSectionId) => {
+          WideSettingsSection({
+            title: this.getSectionTitle(sectionId),
+            summary: this.getSectionValueSummary(sectionId),
+            expanded: this.isSectionExpandedForDisplay(sectionId),
+            onToggle: () => { this.viewModel.toggleSection(sectionId) }
+          }) {
+            this.SectionContent(sectionId)
+          }
+        }, (sectionId: SettingsSectionId) => `wide_${columnIndex}_${sectionId}`)
+      }
+      .width('100%')
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .scrollBar(BarState.Off)
+    .align(Alignment.Top)
   }
 
   build() {

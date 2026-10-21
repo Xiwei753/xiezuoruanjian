@@ -35,7 +35,7 @@ import { CompactPageState, CompactPageStateKind } from '../../../ui/components/C
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../../platform/diagnostics/HarmonyDiagnosticEvents'
 import { STATS_PANEL_NONE, STATS_PANEL_RANGE, STATS_PANEL_LIFETIME, formatIsoDate, parseIsoDate } from './StatsFormat'
 import { CompactStatsContent } from './CompactStatsContent'
-import { WideStatsContent } from './WideStatsContent'
+import { WideStatisticsPage } from './wide/WideStatisticsPage'
 
 @Component
 export struct StatsScreen {
@@ -93,7 +93,7 @@ export struct StatsScreen {
   }
 
   // Issue #968：诊断只记录实际挂载的统计正文根容器，而不是根据布尔值预计会挂哪一个。
-  // WideStatsContent / CompactStatsContent 的根容器 onAppear 回报这里，并带上同一份窗口 vp。
+  // WideStatisticsPage / CompactStatsContent 的根容器 onAppear 回报这里，并带上同一份窗口 vp。
   private recordMountedContent(content: string): void {
     const signature: string = `${this.adaptiveState.widthVp}x${this.adaptiveState.heightVp}:${this.adaptiveState.prefersWideLayout}:${content}`
     if (signature === this.lastReportedLayoutMode) {
@@ -182,6 +182,11 @@ export struct StatsScreen {
     // 先清空，避免短暂显示上一年数据；加载完成后写入新年份快照。
     this.heatmap = null
     this.loadHeatmap(year)
+  }
+
+  /** 宽屏日历区查询失败后的原地重试：只重取当前年份日历，不打断 Explorer 时段。 */
+  private retryHeatmap(): void {
+    this.loadHeatmap(this.heatmapYear)
   }
 
   /** 热力图日格选择：页内文字由组件显示，这里记录选择用于诊断。 */
@@ -303,7 +308,7 @@ export struct StatsScreen {
           })
         }
       } else if (this.adaptiveState.prefersWideLayout) {
-        WideStatsContent({
+        WideStatisticsPage({
           explorer: this.explorer,
           selectedPeriod: this.selectedPeriod,
           expandedPanel: this.expandedPanel,
@@ -313,7 +318,7 @@ export struct StatsScreen {
           heatmapYear: this.heatmapYear,
           heatmapError: this.heatmapError,
           onMounted: (): void => {
-            this.recordMountedContent('WideStatsContent')
+            this.recordMountedContent('WideStatisticsPage')
           },
           onChangeHeatmapYear: (year: number): void => {
             this.changeHeatmapYear(year)
@@ -335,6 +340,9 @@ export struct StatsScreen {
           },
           onRetry: (): void => {
             this.retrySelected()
+          },
+          onRetryHeatmap: (): void => {
+            this.retryHeatmap()
           }
         })
       } else {

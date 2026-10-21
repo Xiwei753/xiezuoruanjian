@@ -1,5 +1,6 @@
 // NavigationHeaderActionDispatcher — ActionRole → 行为的唯一映射。
-// Sync 调共享 bridge 的 performSync()，Settings 从当前活动 NavPathStack 进入 Routes.Settings，
+// Sync 调共享 bridge 的 performSync()，Settings 交给 SettingsOverlayController：
+// 宽屏由后者用 WideSettingsOverlay 打开窗口级浮层，窄屏进入 Routes.Settings，
 // Search 走全局搜索入口（功能未接完也不删 slot）。
 //
 // Issue #784 评论 5856805657：同步行为由全局 dispatcher 持有，不再各页面各写一份。
@@ -96,10 +97,11 @@ export class NavigationHeaderActionDispatcher {
     this.showSyncEntryToast(SyncOutcomePresenter.present(context, outcome))
   }
 
-  /** 设置 — 宽屏开模态浮层，窄屏进 Routes.Settings 路由页 */
-  // Issue #825 复核第2点：宽屏（平台工作台档 isWorkbenchLayout）设置悬浮在打开前页面之上，
+  /** 设置 — 宽屏开模态浮层（SettingsOverlayController + WideSettingsOverlay），窄屏进 Routes.Settings 路由页 */
+  // Issue #825 复核第2点：宽屏设置悬浮在打开前页面之上，
   // 走 SettingsOverlayController 的窗口层级 custom dialog——系统返回 / 遮罩都由对话框容器保证；
   // 窄屏保持原来的 pushPath(Routes.Settings) 行为，不留第二套入口。
+  // Issue #972：浮层内容工厂已迁移到 ui/wide/WideSettingsOverlay，由 controller 独占创建与释放。
   private navigateToSettings(): void {
     // Issue #906：记录打开设置的入口形态（浮层/路由），只用于诊断，不改变 UI 分支逻辑。
     const path: string = SettingsOverlayController.getInstance().isOverlayLayout() ? 'overlay' : 'route'

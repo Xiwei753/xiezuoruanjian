@@ -5,14 +5,17 @@
 // 系统返回 / 侧滑返回 / 遮罩 / 「背景仍是打开设置前的页面」都由对话框容器保证，
 // 所以这里不再自己画常驻 Stack，也不需要在各个页面分别补 back 判断。
 //
+// Issue #972：浮层内容改为 WideSettingsOverlay（顶部返回/标题/搜索 + 两列分类卡片），
+// 本控制器仍唯一拥有 customDialog 生命周期，不参与浮层内部的版式与业务状态。
+//
 // Issue #825 复核第3项：ComponentContent 的生命周期按官方要求收口——
 // - 关闭时先 dispose 再清字段：官方文档要求弹窗关闭后调用 dispose()，
 //   否则每开一次设置就丢掉一个没释放的 BuilderNode。
 // - close() 不在 closeCustomDialog 成功前清字段，字段由 onDidDisappear 统一回收，
 //   这样快速连点不会在旧弹窗还没消失时又开一层。
 // - open() 失败（Promise reject）时也 dispose 刚创建的 content。
-// - 面板宽度档位不作为打开时快照传进去：平板旋转 / 自由窗口从 Bottom 档拉到
-//   Side 档时，SettingsContent 自己按最新 AdaptiveContext 派生列数。
+// - 不在这里判断 / 快照窗口宽度档位：是否浮层由 isOverlayLayout() 的唯一模式判定决定，
+//   浮层内部布局也跟随窗口尺寸自行重排。
 //
 // 边界：
 // - 只持有 UIContext 和对话框句柄，不放任何设置业务数据
@@ -21,7 +24,7 @@
 import hilog from '@ohos.hilog'
 import { UIContext, ComponentContent } from '@kit.ArkUI'
 import { AdaptiveContext } from '../../../ui/adaptive/AdaptiveContext'
-import { createSettingsOverlayContent, SettingsOverlayArgs } from '../ui/SettingsOverlayPanel'
+import { createSettingsOverlayContent, SettingsOverlayArgs } from '../ui/wide/WideSettingsOverlay'
 
 const TAG = 'SettingsOverlayController'
 const DOMAIN = 0x0000
@@ -74,8 +77,8 @@ export class SettingsOverlayController {
 
   /**
    * 打开宽屏设置浮层。重复调用幂等：已开着、或正在关闭，都直接返回。
-   * 列数不在这里算：SettingsContent 自己按最新 AdaptiveContext 的
-   * primaryNavigationPlacement 派生，窗口旋转/自由窗口改档时会跟着变。
+   * 浮层内容固定为 WideSettingsOverlay；宽屏模式判定不在这里重复推导，
+   * 调用方只在 isOverlayLayout() 为真时进入本方法。
    */
   open(): void {
     if (this.dialogContent !== null || this.closing) {

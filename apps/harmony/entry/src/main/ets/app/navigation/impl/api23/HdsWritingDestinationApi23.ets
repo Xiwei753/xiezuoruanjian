@@ -34,7 +34,7 @@ export struct HdsWritingDestinationApi23 {
   @Param scroller: Scroller = new Scroller()
   // Issue #784 评论5857397503：动作表解析结果由 WritingScreen 统一持有并透传。
   @Param headerActions: ActionSlot[] = []
-  // Issue #825 复核第 3 项：宽屏由 WritingWorkbenchToolbar 画整条工具条带
+  // Issue #825 复核第 3 项：宽屏由 WideWritingToolbar 画整条工具条带
   // （返回归左组、HeaderTrailing 归右组），HDS 标题栏必须整条让位——它只有章节
   // 标题 + 尾部胶囊，高度也不等于工作台工具条，两者并存就会出现两套返回、
   // 两套尾部动作和两条工具条带。Issue #920 D：这条工具条带由 ArkUI 自适应布局决定。

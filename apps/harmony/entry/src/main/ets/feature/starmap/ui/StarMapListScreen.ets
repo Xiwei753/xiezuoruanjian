@@ -2,14 +2,15 @@
 // 作为一级"星图"tab 的真正根页面：
 // - aboutToAppear 调 bridge.listStarMaps() 只加载列表，不打开任何星图
 // - 卡片列表展示星图（标题/描述/更新时间），点击进入画布
-// - 右下角 FAB 新建星图（必须先询问名称，不允许无名星图）
+// - 窄屏右下角 FAB / 宽屏网格末尾「新建星图」卡（必须先询问名称，不允许无名星图）
 // - 卡片更多菜单支持重命名/删除
 // - 空列表显示"暂无星图"
 // Issue #932：窄屏内容层 + FAB 统一走 CompactPrimaryActionLayer（动作来自 ScreenSemantics），
 // 加载/错误/空状态走 CompactPageState，创建/改名/删除框走窗口级 CompactDialogs。
-// Issue #932 复核：窄屏（CompactPrimaryActionLayer）与宽屏（自绘内容层 + 右下角 FAB）
-// 是两个并列形态，由 prefersWideLayout 分流——与导航壳 WidePrimaryShell 同一门槛，
-// 宽屏不再借名为 Compact 的组件布局。
+// Issue #932 复核：窄屏（CompactPrimaryActionLayer）与宽屏（WideStarMapHome）
+// 是两个并列形态，由 prefersWideLayout 分流——与导航壳 WideAppShell 同一门槛。
+// Issue #972：宽屏不再复用窄屏内容层 + 右下角 FAB，改为独立内容区：
+// 卡片网格 + 同尺寸「新建星图」卡，壳层（左栏 / 右上动作）由 WideAppShell 提供。
 
 import hilog from '@ohos.hilog'
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
@@ -22,13 +23,10 @@ import {
   COMPACT_CARD_SPACING_VP,
   COMPACT_CARD_SUPPORTING_FONT_VP,
   COMPACT_CARD_TITLE_FONT_VP,
-  COMPACT_LIST_BOTTOM_INSET_VP,
-  PRIMARY_FAB_BOTTOM_INSET_VP
+  COMPACT_LIST_BOTTOM_INSET_VP
 } from '../../../ui/theme/LayoutTokens'
 // Issue #932：窄屏共享构件 — 内容层 + 右下角 FAB、公共状态视图、窗口级对话框。
 import { CompactPrimaryActionLayer } from '../../../ui/components/CompactPrimaryActionLayer'
-// Issue #932 复核：宽屏内容层直接复用 PrimaryFab 本体，与 CompactPrimaryActionLayer 内部是同一个按钮。
-import { PrimaryFab } from '../../../ui/components/PrimaryFab'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 import { CompactConfirmDialogArgs, CompactTextDialogArgs, openCompactConfirmDialog, openCompactTextDialog } from '../../../ui/components/CompactDialogs'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -39,6 +37,8 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
+// Issue #972：宽屏星图首页独立内容区（网格 + 创建卡），不再复用窄屏 FAB 内容层。
+import { WideStarMapHome } from './wide/WideStarMapHome'
 @ComponentV2
 export struct StarMapListScreen {
   // 由 PageMapForStack 显式传入 ownerStack，不使用全局 NavigationTransactionCoordinator
@@ -156,7 +156,8 @@ export struct StarMapListScreen {
   }
 
   /**
-   * 检查星图页 PrimaryAction 中是否有 CreateStarMap（决定 FAB 是否显示）。
+   * 检查星图页 PrimaryAction 中是否有 CreateStarMap。
+   * 窄屏据此决定 FAB 是否显示，宽屏据此决定是否给创建卡 / 空状态创建按钮。
    * Issue #932：星图「+」的动作语义由 ScreenSemantics 统一声明，页面只按同名动作槽消费。
    */
   private hasCreateStarMapPrimaryAction(): boolean {
@@ -170,8 +171,8 @@ export struct StarMapListScreen {
   }
 
   /**
-   * 主操作 FAB 的显示条件：加载完成、无错误、且动作表里确实有 CreateStarMap。
-   * Issue #932 复核：窄屏 / 宽屏两个内容层共用这一份判定，不各自抄一份条件式。
+   * 窄屏主操作 FAB 的显示条件：加载完成、无错误、且动作表里确实有 CreateStarMap。
+   * 宽屏组件自己按加载 / 错误状态切换内容，创建入口只消费同一个动作判定。
    */
   private hasStarMapPrimaryAction(): boolean {
     return !this.isLoading && !this.errorMessage && this.hasCreateStarMapPrimaryAction()
@@ -339,10 +340,30 @@ export struct StarMapListScreen {
   @Builder
   StarMapListContent() {
     // Issue #932 复核：与作品页 HomeContent 的 prefersWideLayout 分流对齐。
-    // 判定与 PrimaryTabShell 的 WidePrimaryShell 同源（下一轮精确等于 widthVp >= 840），
-    // 宽屏不再无条件套窄屏的 CompactPrimaryActionLayer 位置约定。
+    // 判定与 PrimaryTabShell 的 WideAppShell 同源（下一轮精确等于 widthVp >= 840）。
+    // Issue #972：宽屏进入独立 WideStarMapHome，不复用窄屏内容层与右下角 FAB。
     if (this.adaptiveState.prefersWideLayout) {
-      this.WideStarMapListContent()
+      WideStarMapHome({
+        starMaps: this.starMaps,
+        isLoading: this.isLoading,
+        errorMessage: this.errorMessage,
+        canCreate: this.hasCreateStarMapPrimaryAction(),
+        onOpenStarMap: (starmapId: string, starmapTitle: string): void => {
+          this.navigateToStarMap(starmapId, starmapTitle)
+        },
+        onCreate: (): void => {
+          this.requestCreateStarMap()
+        },
+        onRename: (starmap: StarMapMeta): void => {
+          this.startRename(starmap)
+        },
+        onDelete: (starmap: StarMapMeta): void => {
+          this.startDelete(starmap)
+        },
+        onRetry: (): void => {
+          this.loadStarMaps()
+        }
+      })
     } else {
       this.CompactStarMapListContent()
     }
@@ -364,32 +385,8 @@ export struct StarMapListScreen {
     }
   }
 
-  // Issue #932 复核：宽屏内容层只负责宽屏自己的创建入口位置与布局（列表 + 右下角主 FAB），
-  // 与窄屏分支是并列形态——宽屏下用户实际看到的就是这个视觉，不再借名为 Compact 的组件。
-  // 「+」按钮本体仍是共享的 PrimaryFab（毛玻璃 / 按压视效 / 圆环边缘高光只有一份），
-  // 位置口径与 CompactPrimaryActionLayer 完全一致：Stack BottomEnd + pagePadding + 底部偏移。
-  @Builder
-  WideStarMapListContent() {
-    Stack({ alignContent: Alignment.BottomEnd }) {
-      this.StarMapListBody()
-
-      if (this.hasStarMapPrimaryAction()) {
-        PrimaryFab({
-          onTap: () => {
-            this.requestCreateStarMap()
-          }
-        })
-          .margin({
-            right: this.adaptiveState.pagePadding,
-            bottom: PRIMARY_FAB_BOTTOM_INSET_VP
-          })
-      }
-    }
-    .width('100%')
-    .height('100%')
-  }
-
-  // 列表主体：加载 / 出错重试 / 星图列表；窄屏与宽屏两个内容层共用，不复制业务。
+  // 列表主体：加载 / 出错重试 / 星图列表。Issue #972 后只服务窄屏内容层；
+  // 宽屏状态与网格由 WideStarMapHome 自行呈现，加载 / 错误仍走同一份页面状态。
   // 外层背景保持 background_secondary。
   @Builder
   StarMapListBody() {
