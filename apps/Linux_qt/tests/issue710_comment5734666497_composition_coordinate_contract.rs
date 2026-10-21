@@ -67,10 +67,11 @@ fn issue710_commit_new_snapshot_uses_candidate_range_not_preedit_range() {
         body.contains("(candidate_byte_start, candidate_byte_end),"),
         "commit: compute_affected_paragraph_ranges 的 new_edit_range 必须用 candidate 坐标"
     );
-    // old_text 用 saved_virtual_text，new_text 用 &new.text
+    // old_text 用 saved_virtual_text；Issue #978 起 new_text 直接读取当前
+    // committed text（不再为每键克隆整章 EditorSnapshot）。
     assert!(
-        body.contains("saved_virtual_text,") && body.contains("&new.text,"),
-        "commit: compute_affected_paragraph_ranges 的 old_text=saved_virtual_text, new_text=&new.text"
+        body.contains("saved_virtual_text,") && body.contains("new_text,"),
+        "commit: compute_affected_paragraph_ranges 的 old_text=saved_virtual_text, new_text=committed text"
     );
     // old/new composition_range 用扩展后的 affected range
     assert!(

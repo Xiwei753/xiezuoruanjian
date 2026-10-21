@@ -466,7 +466,7 @@ ScrollView {
                             id: typingAnim
                             visible: !coordinatedAnim.checked
                             text: qsTr("打字动画")
-                            description: qsTr("输入时字符从光标处吐出")
+                            description: qsTr("输入时字符从光标处吐出；关闭后正文仍即时更新，平滑光标可独立生效")
                             onToggled: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", typingAnim.checked)
                         }
                         FormCard.FormSpinBoxDelegate {
@@ -486,7 +486,7 @@ ScrollView {
                             id: smoothCursor
                             visible: !coordinatedAnim.checked
                             text: qsTr("平滑光标")
-                            description: qsTr("光标移动更顺滑")
+                            description: qsTr("光标移动更顺滑，与打字动画相互独立")
                             onToggled: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", smoothCursor.checked)
                         }
                         FormCard.FormSpinBoxDelegate {

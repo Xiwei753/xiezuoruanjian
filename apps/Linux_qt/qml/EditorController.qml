@@ -188,7 +188,7 @@ QtObject {
     property var editorItemConnections: Connections {
         target: targetEditorItem ? targetEditorItem : null
         function onText_changed() {
-            controller.handlePlainTextChanged("sujian_editor_text_changed");
+            controller.handlePlainTextChanged();
             Qt.callLater(targetEditorItem.flush_content_height);
         }
         // Issue #843: 编辑事务事实从 Rust EditorEditResult 直接传来，
@@ -467,19 +467,24 @@ QtObject {
         var base = Number(baseRevision);
         var next = Number(newRevision);
 
+        // Issue #978: 连续性判断不读取正文；不连续时由快照请求自行读取一次，
+        // 且已有请求在途时不重复触发整章同步。
         if (!isFinite(base) || !isFinite(next) || actualRevision !== next
                 || base !== correctionTrackedRevision
                 || correctionTrackedProjectId !== projectId
                 || correctionTrackedChapterId !== chapterId
                 || !editorBackendRef || !editorBackendRef.apply_correction_edits) {
-            syncCorrectionTracking(getEditorPlainText(), actualRevision);
-            requestCorrectionSnapshot();
+            if (!correctionCheckPending) {
+                requestCorrectionSnapshot();
+            }
             return;
         }
 
         correctionTrackedRevision = next;
         correctionTrackedProjectId = projectId;
         correctionTrackedChapterId = chapterId;
+        // Issue #954/#978: 只把 patch/revision 交给 Core 更新内存段索引，
+        // 不复制整章正文；模型阶段由 requestCorrectionPendingNow 在停顿后读取一次。
         var applied = editorBackendRef.apply_correction_edits(
             projectId,
             chapterId,
@@ -488,8 +493,9 @@ QtObject {
             base,
             String(patchRangesJson || "[]"));
         if (applied && applied.ok === false) {
-            syncCorrectionTracking(getEditorPlainText(), actualRevision);
-            requestCorrectionSnapshot();
+            if (!correctionCheckPending) {
+                requestCorrectionSnapshot();
+            }
             return;
         }
         correctionError = "";
@@ -1010,17 +1016,20 @@ QtObject {
         return false;
     }
 
-    function handlePlainTextChanged(reason) {
+    function handlePlainTextChanged() {
         if (controller.saveGuardActive()) return;
 
-        var read = controller.readEditorPlainText();
-        if (read.suspiciousEmpty) {
-            controller.blockUnsafeEmptySave(reason, read);
-            return;
+        // Issue #978: 每键只更新轻量事实并重启防抖计时器，不读取整章正文。
+        // 空正文保护在 saveCurrentChapter / flushActiveEditorBeforeSync 等保存边界执行。
+        var editorItemLength = -1;
+        if (targetEditorItem) {
+            if (targetEditorItem.plain_text_length !== undefined) {
+                editorItemLength = Number(targetEditorItem.plain_text_length);
+            } else if (targetEditorItem.content_empty !== undefined) {
+                editorItemLength = targetEditorItem.content_empty === true ? 0 : 1;
+            }
         }
-
-        var plainText = read.text;
-        if (plainText.length > 0) {
+        if (isFinite(editorItemLength) && editorItemLength > 0) {
             controller.explicitEmptySavePending = false;
         }
         // Debounce stats + word count — batch into 300ms timer instead of per-keystroke FFI

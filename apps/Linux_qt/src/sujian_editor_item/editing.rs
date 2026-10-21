@@ -58,8 +58,6 @@ impl SujianEditorItem {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_composition_commit_transaction(
         &mut self,
-        old: &EditorSnapshot,
-        new: &EditorSnapshot,
         result: &writer_core::editor::EditorEditResult,
         cause: EditorTransactionCause,
         preedit_byte_start: usize,
@@ -75,19 +73,49 @@ impl SujianEditorItem {
         // （preedit 在 old virtualText 中的范围）；new snapshot 只接 new committed
         // text range。视觉提取范围必须扩到段落边界，纯删除（candidate 是零长度）
         // 也要有非空视觉范围。
-        let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
+        // Issue #978: 不再为每次 IME commit 克隆 old/new 整章 EditorSnapshot。
+        // 范围计算直接读取当前 committed text（new.text 的唯一来源）。
+        let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) = {
+            let new_text = self.pipeline.committed_text();
             crate::editor::layout::compute_affected_paragraph_ranges(
                 saved_virtual_text,
-                &new.text,
+                new_text,
                 (preedit_byte_start, preedit_byte_end),
                 (candidate_byte_start, candidate_byte_end),
-            );
+            )
+        };
         let old_composition_range = Some((old_affected_start, old_affected_end));
         let new_composition_range = Some((new_affected_start, new_affected_end));
         let candidate_range = (candidate_byte_start, candidate_byte_end);
+        let change_count = result.display_patches.len();
+
+        // Issue #901 第六轮阻塞1: composition commit 与 record_transaction 一样，
+        // 用 Core EditorEditResult.new_revision 唯一绑定 pipeline.text_revision。
+        let core_new_revision = result.new_revision.value();
+        self.pipeline.set_text_revision(core_new_revision);
+        let canonical_text_revision = core_new_revision;
+
+        let text_animation_requested = self.effective_animation().text;
+        let suppressed =
+            self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
+
+        // Issue #978: 文字动画未真实开启或被抑制时，只更新 canonical 静态布局，
+        // 不排 old/new 动画快照、不生成 QImage。光标动画由 CursorController 独立跟随。
+        if !text_animation_requested || suppressed {
+            return self.record_composition_commit_static_only(
+                cause,
+                change_count,
+                width,
+                new_affected_start,
+                new_affected_end,
+                suppressed,
+                cancel_reason,
+            );
+        }
 
         // Issue #810 评论 5933167246: build_editor_layout_snapshot 返回 Result，
         // Err 时记诊断并结束本次 commit，不伪装成功。
+        // Issue #978: 在安装本笔 canonical 快照之前先取旧动画源，避免拿到空壳。
         let old_snapshot = self.pipeline.current_layout_snapshot().clone().or_else(|| {
             match self.build_editor_layout_snapshot(width, false, old_composition_range) {
                 // Issue #904 评论 5: promote=false 的 generation 已在函数末尾 retire，
@@ -107,6 +135,14 @@ impl SujianEditorItem {
             }
         });
         let Some(old_snapshot) = old_snapshot else {
+            // Issue #978: 即使动画旧源不可用，也必须先把 Core 已提交的新正文
+            // 放进 canonical 静态布局；动画失败不能拖累正文跟手。
+            self.update_canonical_layout_after_edit(
+                width,
+                Some((new_affected_start, new_affected_end)),
+            );
+            *self.pipeline.text_motion_mut() = None;
+            self.request_scene_rebuild();
             record_composition_commit_skip(
                 self,
                 "composition_commit_old_snapshot_unavailable",
@@ -117,18 +153,13 @@ impl SujianEditorItem {
             );
         };
 
-        let change_count = result.display_patches.len();
+        // 动画开启：先立即更新 canonical 静态布局（轻量快照稍后被完整动画快照替换），
+        // 再建立动画视觉。
+        self.update_canonical_layout_after_edit(
+            width,
+            Some((new_affected_start, new_affected_end)),
+        );
 
-        // Issue #901 第六轮阻塞1: composition commit 与 record_transaction 一样，
-        // 用 Core EditorEditResult.new_revision 唯一绑定 pipeline.text_revision。
-        // 不再预测 text_revision().wrapping_add(1)——那依赖 emit_content_changed 事后
-        // bump，而 emit_content_changed 中的 bump_text_revision 已删除。canonical
-        // text_revision 与 pipeline.text_revision() 共享同一个 Core new_revision，
-        // 确保 EditorLayout cache、current_canonical_snapshot、TargetLayoutDescriptor
-        // 同一次编辑全部绑定同一 Core revision。
-        let core_new_revision = result.new_revision.value();
-        self.pipeline.set_text_revision(core_new_revision);
-        let canonical_text_revision = core_new_revision;
         let (new_snapshot, new_source) = match self.build_editor_layout_snapshot_with_canonical(
             width,
             true,
@@ -161,9 +192,6 @@ impl SujianEditorItem {
         // Issue #904：IME commit 与普通编辑走同一个局部动画入口。
         // old_snapshot / new_snapshot 分别给出编辑前后的局部 cluster 几何，
         // 只对受影响片段建立唯一的局部动画计划。
-        let animations_requested = self.effective_animation().text;
-        let suppressed =
-            self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
         let now_ms = Self::frame_now_ms(&self.last_frame_now);
 
         self.pipeline
@@ -175,7 +203,7 @@ impl SujianEditorItem {
             .as_ref()
             .map_or(false, |frame| frame.session == session);
 
-        let motion = if animations_requested && !suppressed {
+        let motion = if text_animation_requested {
             let viewport = super::layout_snapshot::SourceRect {
                 x: 0.0,
                 y: f64::from(self.current_scroll_y),
@@ -250,14 +278,12 @@ impl SujianEditorItem {
 
         let visual_outcome = if has_motion {
             super::pipeline::VisualPrepareOutcome::Created
-        } else if animations_requested && !suppressed {
+        } else {
             // Issue #904 复核: begin_or_retarget 返回 None（本次编辑没有可动画
             // 局部片段）不能报 Created；如实报 BuilderEmptyTransaction。
             super::pipeline::VisualPrepareOutcome::Skipped(
                 super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
             )
-        } else {
-            super::pipeline::VisualPrepareOutcome::AnimationDisabled
         };
         // 从当前 layout snapshot 和 previous layout snapshot 的 line_snapshots
         // 提取所有 LineSnapshotId，保证动画过渡期间新旧行纹理都被保留。
@@ -290,6 +316,55 @@ impl SujianEditorItem {
         // Issue #819 评论 5968931455 问题 2.2: 返回 VisualPrepareOutcome，
         // 透传 skip reason，不再让 edit_flow.rs 猜。
         visual_outcome
+    }
+
+    /// Issue #978: composition commit 在文字动画关闭或动画被抑制时的轻量路径。
+    ///
+    /// 只把 Core 已提交的正文放进 canonical 静态布局，不构造 old/new 动画快照、
+    /// 不生成 QImage。仍推进 layout revision 并发出事务事件，保持 #919 的
+    /// “每笔编辑都有新 canonical revision”约定。
+    #[allow(clippy::too_many_arguments)]
+    fn record_composition_commit_static_only(
+        &mut self,
+        cause: EditorTransactionCause,
+        change_count: usize,
+        width: f64,
+        new_affected_start: usize,
+        new_affected_end: usize,
+        suppressed: bool,
+        cancel_reason: &str,
+    ) -> super::pipeline::VisualPrepareOutcome {
+        self.update_canonical_layout_after_edit(
+            width,
+            Some((new_affected_start, new_affected_end)),
+        );
+        *self.pipeline.text_motion_mut() = None;
+        self.request_scene_rebuild();
+
+        let new_revision = LayoutRevision::next();
+        self.pipeline.set_layout_revision(new_revision);
+        self.last_event_count = 0;
+        self.last_summary = format!(
+            "cause={:?};changes={};visual_edit=0;animate=false",
+            cause, change_count,
+        )
+        .into();
+        editor_animation_debug_log(&format!(
+            "record_composition_commit_transaction: cancel_reason={}, cause={:?}, changes={}, text_animation=0",
+            cancel_reason, cause, change_count,
+        ));
+        self.transaction_created();
+        if suppressed {
+            super::pipeline::VisualPrepareOutcome::Skipped(if self.current_is_scrolling {
+                super::edit_flow::EditVisualSkipReason::ScrollingSuppressed
+            } else if self.current_is_loading {
+                super::edit_flow::EditVisualSkipReason::LoadingSuppressed
+            } else {
+                super::edit_flow::EditVisualSkipReason::FormatApplyingSuppressed
+            })
+        } else {
+            super::pipeline::VisualPrepareOutcome::AnimationDisabled
+        }
     }
 
     /// Issue #901 问题6：从 pipeline 的 current/previous layout snapshot
@@ -367,10 +442,13 @@ impl SujianEditorItem {
             }
         });
 
-        // composition commit 仅在 was_composing 且动画开启时走 composition 专属路径；
+        // composition commit 仅在 was_composing 且**文字动画**真实开启时走
+        // composition 专属路径；仅光标动画不需要暂存 old/new 正文范围与虚拟文本。
         // 否则走普通 record_transaction，与普通输入/删除同一种 VisualTransaction。
         // Issue #756: composition commit follows the shared effective animation policy.
-        let composition = if commit.was_composing && self.animation_requested() {
+        // Issue #978: 用 effective text 开关判断，避免关闭文字动画时仍为每次 commit
+        // 克隆 saved_virtual_text 并计算 composition 段落范围。
+        let composition = if commit.was_composing && self.effective_animation().text {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
@@ -495,7 +573,9 @@ impl SujianEditorItem {
         };
 
         // Issue #756: composition commit follows the shared effective animation policy.
-        let composition = if commit.was_composing && self.animation_requested() {
+        // Issue #978: 只有文字动画真实开启才需要 composition 动画快照；
+        // 光标动画独立跟随，不需要暂存整段虚拟文本。
+        let composition = if commit.was_composing && self.effective_animation().text {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
@@ -711,14 +791,13 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn undo(&mut self) {
-        let old = self.pipeline.snapshot();
         // Issue #810 评论 5934658350: Undo 会修改 committed text 并可能生成文字动画，
         // 必须在 Core 修改前固定 old canonical（与 Insert/Delete/Replace 同一不变量）。
         self.ensure_current_canonical_before_edit();
         if let Some(result) = self.pipeline.perform_undo() {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-            let new = self.pipeline.snapshot();
-            let _ = self.record_transaction(old, new, &result, true);
+            // Issue #978: 不再为 undo 保存整章 old/new snapshot。
+            let _ = self.record_transaction(&result, true);
             self.cursor_ctrl.last_move_source =
                 cursor_controller::CursorMoveSource::TextTransaction;
             self.emit_content_changed();
@@ -729,13 +808,12 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn redo(&mut self) {
-        let old = self.pipeline.snapshot();
         // Issue #810 评论 5934658350: Redo 同 Undo，在 Core 修改前固定 old canonical。
         self.ensure_current_canonical_before_edit();
         if let Some(result) = self.pipeline.perform_redo() {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-            let new = self.pipeline.snapshot();
-            let _ = self.record_transaction(old, new, &result, true);
+            // Issue #978: 不再为 redo 保存整章 old/new snapshot。
+            let _ = self.record_transaction(&result, true);
             self.cursor_ctrl.last_move_source =
                 cursor_controller::CursorMoveSource::TextTransaction;
             self.emit_content_changed();

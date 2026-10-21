@@ -73,7 +73,83 @@ impl SujianEditorItem {
             .clone()
     }
 
-    /// Issue #901 问题4: 增量排版入口 — 普通编辑走此路径，不全章重排。
+    /// Issue #978: 普通编辑后只更新 canonical 静态布局。
+    ///
+    /// 这一步是正文跟手的必要条件：无论文字动画是否开启，Core 提交的新正文
+    /// 都必须立即进入 `EditorLayout`，且只增量重排受影响段落。
+    /// 它不物化动画视觉行、不生成 QImage、不建立纹理。
+    ///
+    /// Issue #919 兼容：关闭文字动画时仍提交一份新的 canonical layout snapshot
+    /// （revision 推进），但只带段落几何索引和 caret，不物化任何行/图。
+    pub(crate) fn update_canonical_layout_after_edit(
+        &mut self,
+        width: f64,
+        affected_range: Option<(usize, usize)>,
+    ) {
+        if let Some((start, end)) = affected_range {
+            self.editor_layout.set_last_edit_affected_range(start, end);
+        }
+        let params = self.layout_params(width);
+        let _ = self.editor_layout.snapshot(
+            self.pipeline.committed_text(),
+            params,
+            self.pipeline.text_revision(),
+        );
+
+        let cursor_byte = self.pipeline.cursor();
+        let affinity = self.cursor_ctrl.affinity;
+        let scroll_y = f64::from(self.current_scroll_y);
+        let viewport_h = f64::from(self.current_viewport_height.max(1.0));
+        let (height_index, paragraph_slot_map, paragraph_padding, caret_rect, caret_rect_doc) = {
+            let Some(doc_snapshot) = self.editor_layout.last_canonical_snapshot() else {
+                self.pipeline.set_current_layout_snapshot(None);
+                return;
+            };
+            (
+                std::sync::Arc::clone(&doc_snapshot.height_index),
+                std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot),
+                doc_snapshot.padding,
+                doc_snapshot.cursor_rect(cursor_byte, affinity, scroll_y, viewport_h),
+                doc_snapshot.cursor_rect_doc(cursor_byte, affinity),
+            )
+        };
+        let snapshot = super::layout_snapshot::EditorLayoutSnapshot {
+            revision: LayoutRevision::next(),
+            line_snapshots: Vec::new(),
+            paragraph_height_index: Some(height_index),
+            paragraph_slot_map: Some(paragraph_slot_map),
+            paragraph_padding,
+            caret_rect: Some(caret_rect),
+            caret_rect_doc: Some(caret_rect_doc),
+            caret_affinity: affinity,
+        };
+        self.pipeline.set_current_layout_snapshot(Some(snapshot));
+    }
+
+    /// Issue #978: 文字动画从关闭切到开启时，在当前正文上建立一次动画源。
+    ///
+    /// 关闭期间普通按键不再保留每键 QImage/快照；开启后的第一笔编辑需要一份
+    /// 与当前正文一致的旧布局作为动画起点。此方法只在开关切换边界调用，
+    /// 不在每键路径上。
+    pub(crate) fn initialize_current_animation_source(&mut self) {
+        let width = self.bounding_width();
+        self.update_canonical_layout_after_edit(width, None);
+        let source_snapshot = match self.build_incremental_animation_snapshot(width, None) {
+            Ok((snapshot, _source)) => Some(snapshot),
+            // 增量动画视觉失败时退回完整布局，至少保证第一笔开启后的编辑
+            // 有可用的旧布局图像源，而不是空壳。
+            Err(_) => self
+                .build_editor_layout_snapshot(width, false, None)
+                .ok()
+                .map(|(snapshot, _source)| snapshot),
+        };
+        if let Some(snapshot) = source_snapshot {
+            self.pipeline.set_current_layout_snapshot(Some(snapshot));
+        }
+        self.request_scene_rebuild();
+    }
+
+    /// Issue #901 问题4: 增量动画视觉入口 — 文字动画开启时走此路径，不全章重排。
     ///
     /// 与 [`build_editor_layout_snapshot`] 的区别：
     /// - 不调用 `prepare_document_visual_snapshot_scoped`（全篇排版），
@@ -87,12 +163,15 @@ impl SujianEditorItem {
     ///   避免为准备动画 target 再全章排版一次。
     ///
     /// `affected_range` 是 Core `display_patches` 提供的受影响字节范围。
-    /// `None` 表示无明确范围（fallback 到全篇重排）。
+    /// `None` 表示无明确范围（fallback 到视口/全篇重排语义）。
+    ///
+    /// Issue #978: canonical 布局已由 [`Self::update_canonical_layout_after_edit`]
+    /// 提前更新；本方法只负责动画视觉物化，因此这里不再设置受影响范围。
     ///
     /// Issue #904 评论 5: 返回值额外携带本版布局的 `LocalLayoutSource`
     ///（generation + 物化视觉行），供局部动画只在**同一版**布局上补图，
     /// 绝不用当前 live cache 的另一版正文冒充旧快照行。
-    pub(crate) fn build_incremental_layout_snapshot(
+    pub(crate) fn build_incremental_animation_snapshot(
         &mut self,
         width: f64,
         affected_range: Option<(usize, usize)>,
@@ -103,12 +182,7 @@ impl SujianEditorItem {
         ),
         String,
     > {
-        // 1. 设置受影响范围，让 EditorLayout::snapshot() 增量路径能定位受影响段落。
-        if let Some((start, end)) = affected_range {
-            self.editor_layout.set_last_edit_affected_range(start, end);
-        }
-
-        // 2. 走增量排版。EditorLayout::snapshot() 内部判断：
+        // 1. 走增量排版。EditorLayout::snapshot() 内部判断：
         //    - 排版参数变化 → 全局失效 + 全篇重排
         //    - 仅 text_revision 变化 → 增量排版（只重排受影响段落）
         //    - 都没变 → cache hit，直接返回
@@ -128,7 +202,7 @@ impl SujianEditorItem {
             Some(s) => s,
             None => {
                 return Err(
-                    "build_incremental_layout_snapshot: no canonical snapshot after layout"
+                    "build_incremental_animation_snapshot: no canonical snapshot after layout"
                         .to_string(),
                 );
             }
@@ -559,7 +633,7 @@ impl SujianEditorItem {
         // 已对全篇 generate_animation_visuals=false，无动画视觉需提取）。
         // Issue #904 清理: 不再按旧 reflow diff 挑行，也不再合并 active rebind ranges。
         // IME commit 的纹理提取只取"包含 Core 受影响字节范围的段落所覆盖的行"，
-        // 与普通输入的 `build_incremental_layout_snapshot` 同一范围语义；下游纯 y
+        // 与普通输入的 `build_incremental_animation_snapshot` 同一范围语义；下游纯 y
         // 位移段落由 `TextMotion.paragraph_moves` 处理。
         if affected_start < affected_end {
             // Issue #904 清理: 不再用旧 reflow diff（`compare_old_new_visual_lines` /
@@ -709,20 +783,16 @@ impl SujianEditorItem {
     pub(crate) fn adjust_affinity_at_wrap_boundary(&mut self) {
         let width = self.bounding_width();
         let cursor = self.pipeline.cursor();
-        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
-        // TODO(issue-901): 后续优化为按需查询 — 遍历找换行边界可先用二分定位再 resolve_line。
-        let params = self.layout_params(width);
-        let snapshot = self.editor_layout.snapshot(
+        // Issue #978: 只查光标所在段落的 QTextLayout 软换行边界，
+        // 不再 resolved_lines() 物化整章后线性扫描所有行。
+        // 取 O(1) 的 LayoutSnapshot 副本释放对 EditorLayout 的可变借用，
+        // 以便随后只读查询段落布局缓存；不复制正文。
+        let snapshot = self.layout_snapshot(width);
+        let is_wrap_boundary = self.editor_layout.is_at_soft_wrap_boundary(
+            &snapshot,
             self.pipeline.committed_text(),
-            params,
-            self.pipeline.text_revision(),
+            cursor,
         );
-        let resolved = snapshot.resolved_lines();
-        let lines = resolved.as_ref();
-
-        let is_wrap_boundary = lines.iter().enumerate().any(|(idx, line)| {
-            idx + 1 < lines.len() && line.byte_end == cursor && lines[idx + 1].byte_start == cursor
-        });
 
         if is_wrap_boundary {
             self.cursor_ctrl.affinity = CaretAffinity::Upstream;

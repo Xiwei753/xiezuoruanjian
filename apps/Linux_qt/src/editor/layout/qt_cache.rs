@@ -314,6 +314,31 @@ cpp! {{
         return pos;
     }
 
+    // Issue #978: 只查询光标所在段落的 QTextLayout，判断给定 QChar offset
+    // 是否正好位于软换行边界（上一行 textStart+textLength == offset 且下一行
+    // textStart == offset）。不再由 Rust 侧物化整章视觉行扫描相邻行。
+    bool paragraph_has_soft_wrap_boundary_at(
+        uint64_t gen, int slot, uint64_t epoch, int qchar_offset
+    ) {
+        if (qchar_offset < 0) return false;
+        QTextLayout* layout = get_paragraph_layout_checked(gen, slot, epoch);
+        if (!layout) return false;
+        int line_count = layout->lineCount();
+        if (line_count <= 1) return false;
+        int line_index = layout->lineForTextPosition(qchar_offset).lineNumber();
+        auto is_boundary_at = [&](int i) {
+            if (i < 0 || i + 1 >= line_count) return false;
+            QTextLine current = layout->lineAt(i);
+            QTextLine next = layout->lineAt(i + 1);
+            if (!current.isValid() || !next.isValid()) return false;
+            return current.textStart() + current.textLength() == qchar_offset
+                && next.textStart() == qchar_offset;
+        };
+        return is_boundary_at(line_index)
+            || is_boundary_at(line_index - 1)
+            || is_boundary_at(line_index + 1);
+    }
+
     // Issue #658 评论 5620035970 问题 1+2: 按 generation + cache_slot 写指定位置，
     // 不再 push_back。空段落也占一个明确的 null slot，
     // 保持 cache_slot 与文档段落一一对应，避免越界访问。
@@ -688,6 +713,28 @@ pub fn get_paragraph_layout_x_to_cursor_on_line_checked(
         x as "double"
     ] -> i32 as "int" {
         return get_paragraph_layout_x_to_cursor_on_line_checked(gen, slot, epoch, qline, x);
+    })
+}
+
+/// Issue #978: 判断 QChar offset 是否正好位于该段落某个软换行边界。
+///
+/// 通过 C++ `paragraph_has_soft_wrap_boundary_at` 只检查光标所在段落的
+/// `QTextLayout` 相邻 `QTextLine` 边界，不再物化整章视觉行。
+///
+/// SAFETY: GUI thread only; gen/slot/epoch 必须来自当前有效的段落布局条目。
+pub fn paragraph_has_soft_wrap_boundary_at(
+    gen: u64,
+    slot: i32,
+    epoch: u64,
+    qchar_offset: i32,
+) -> bool {
+    cpp!(unsafe [
+        gen as "uint64_t",
+        slot as "int",
+        epoch as "uint64_t",
+        qchar_offset as "int"
+    ] -> bool as "bool" {
+        return paragraph_has_soft_wrap_boundary_at(gen, slot, epoch, qchar_offset);
     })
 }
 

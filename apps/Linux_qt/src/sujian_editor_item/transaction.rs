@@ -11,10 +11,11 @@ impl SujianEditorItem {
     /// Issue #904：单入口。编辑先由 Core 落地，再用 Qt 增量排版得到局部新旧几何，
     /// 最后只为受影响片段建立**一个** `text_motion::TextMotion`。
     /// 不再遍历整章建立 `TargetLayoutDescriptor`，也不再有整屏 ownership 状态机。
+    ///
+    /// Issue #978：普通按键不再保存整章 `EditorSnapshot`。正文静态布局始终更新；
+    /// 只有文字动画真实开启且未被抑制时，才物化动画视觉/QImage 并建立局部动画。
     pub(crate) fn record_transaction(
         &mut self,
-        old: EditorSnapshot,
-        new: EditorSnapshot,
         result: &EditorEditResult,
         emit: bool,
     ) -> VisualPrepareOutcome {
@@ -22,9 +23,6 @@ impl SujianEditorItem {
         // 再排版，禁止 cache 用字节数命中旧布局。
         let core_new_revision = result.new_revision.value();
         self.pipeline.set_text_revision(core_new_revision);
-
-        // Issue #904：编辑前的当前布局即"旧局部图片"的来源。
-        let old_layout = self.pipeline.current_layout_snapshot().clone();
 
         // 从 Core display_patches 提取受影响字节范围（取旧/新坐标的并集仅用于
         // 定位受影响段落；动画侧仍分别使用旧/新坐标，不混用）。
@@ -47,18 +45,34 @@ impl SujianEditorItem {
         };
 
         let width = self.bounding_width();
-
-        // Issue #904：先增量排版得到新布局，再据此建立唯一的局部动画。
-        // Issue #904 评论 5：同时拿到本版布局事实源（generation + 物化视觉行），
-        // 供新一侧只在同一版布局上补图。
-        let new_layout = match self.build_incremental_layout_snapshot(width, affected_range) {
-            Ok(pair) => Some(pair),
-            Err(_err) => self.build_editor_layout_snapshot(width, false, None).ok(),
-        };
-
-        let animations_requested = self.effective_animation().text;
+        let text_animation_requested = self.effective_animation().text;
         let suppressed =
             self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
+        let prepare_animation = text_animation_requested && !suppressed;
+
+        // Issue #904：编辑前的当前布局即"旧局部图片"的来源。
+        // Issue #978: 必须在 `update_canonical_layout_after_edit` 安装本笔静态
+        // 快照之前取走，否则会拿到本笔正文的空壳快照，而不是上一笔的动画源。
+        let old_layout = if prepare_animation {
+            self.pipeline.current_layout_snapshot().clone()
+        } else {
+            None
+        };
+
+        // Issue #978：先只更新 canonical 静态布局（受影响段落增量重排）。
+        // 无论文字动画是否开启，这一步都必须发生，保证正文立即跟手。
+        self.update_canonical_layout_after_edit(width, affected_range);
+
+        // Issue #904：文字动画开启时才准备新布局事实源（generation + 物化视觉行），
+        // 供新一侧只在同一版布局上补图。
+        let new_layout = if prepare_animation {
+            match self.build_incremental_animation_snapshot(width, affected_range) {
+                Ok(pair) => Some(pair),
+                Err(_err) => self.build_editor_layout_snapshot(width, false, None).ok(),
+            }
+        } else {
+            None
+        };
 
         // Issue #904 评论 4：先建立唯一的局部动画计划，再按计划真正引用的源快照 id
         // 准备纹理；不再用编辑字节范围预判几行，也不在计划之前无差别补图。
@@ -71,7 +85,7 @@ impl SujianEditorItem {
                 .as_ref()
                 .map_or(false, |frame| frame.session == session);
 
-            if animations_requested && !suppressed {
+            if prepare_animation {
                 let now_ms = Self::frame_now_ms(&self.last_frame_now);
                 let viewport = crate::sujian_editor_item::layout_snapshot::SourceRect {
                     x: 0.0,
@@ -148,12 +162,14 @@ impl SujianEditorItem {
         if let Some((new_snap, _new_source)) = new_layout {
             self.pipeline.set_current_layout_snapshot(Some(new_snap));
         }
+        // Issue #978：文字动画关闭时保留上面安装的轻量 canonical 快照（#919），
+        // 不携带行图/旧几何；下一次开启文字动画时由开关边界显式重建动画源。
         *self.pipeline.text_motion_mut() = motion;
         self.request_scene_rebuild();
 
         // Issue #815 评论 6042062633 修改 8: 滚动/加载/套用格式期间抑制动画是显式规则，
         // 但必须留下正式事件，否则诊断包里"编辑发生了却没有动画"没有任何线索。
-        let outcome = if !animations_requested {
+        let outcome = if !text_animation_requested {
             VisualPrepareOutcome::AnimationDisabled
         } else if self.current_is_scrolling {
             editor_animation_transaction_skipped_event(&AnimationSkipFields {
@@ -210,7 +226,6 @@ impl SujianEditorItem {
             self.current_typing_animation_enabled,
             self.current_is_scrolling,
         ));
-        let _ = (&old, &new);
         if emit {
             self.transaction_created();
         }

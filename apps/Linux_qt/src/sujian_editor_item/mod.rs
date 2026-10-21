@@ -67,7 +67,6 @@ use crate::editor::layout::{
 use crate::editor::renderer;
 use crate::editor::scene_graph;
 use cpp::cpp;
-use edit_snapshot::EditorSnapshot;
 use qmetaobject::prelude::*;
 use qmetaobject::{QQuickItem, QRectF, QString};
 use std::cell::{Cell, RefCell};
@@ -263,6 +262,11 @@ pub struct SujianEditorItem {
 
     #[allow(dead_code)]
     plain_text: qt_property!(QString; READ plain_text WRITE set_plain_text NOTIFY plain_text_changed),
+    /// Issue #978: 轻量正文长度/空事实，供 QML 每键更新，不复制整章正文。
+    #[allow(dead_code)]
+    plain_text_length: qt_property!(u32; READ plain_text_length NOTIFY text_changed),
+    #[allow(dead_code)]
+    content_empty: qt_property!(bool; READ content_empty NOTIFY text_changed),
     /// Issue #943: the authoritative Core EditorKernel text revision.
     #[allow(dead_code)]
     text_revision: qt_property!(u64; READ text_revision NOTIFY text_changed),
@@ -636,6 +640,8 @@ impl Default for SujianEditorItem {
         Self {
             base: Default::default(),
             plain_text: Default::default(),
+            plain_text_length: Default::default(),
+            content_empty: Default::default(),
             text_revision: Default::default(),
             content_height: Default::default(),
             cursor_position: Default::default(),

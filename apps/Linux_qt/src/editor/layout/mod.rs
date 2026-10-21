@@ -952,6 +952,60 @@ impl EditorLayout {
         calculate_cursor_x_for_line(line, cursor, affinity, snapshot)
     }
 
+    /// Issue #978: 光标是否正好位于软换行边界。
+    ///
+    /// 旧实现每键调用 `snapshot.resolved_lines()` 物化整章并线性扫描所有相邻行。
+    /// 新实现用段落偏移索引 O(log n) 定位光标所在段落，再只查询该段落自己的
+    /// `QTextLayout`（`lineForTextPosition` + 相邻 `QTextLine` 边界）。
+    /// 不创建第二份布局，也不遍历整章视觉行。
+    pub fn is_at_soft_wrap_boundary(
+        &self,
+        snapshot: &LayoutSnapshot,
+        text: &str,
+        cursor: usize,
+    ) -> bool {
+        if snapshot.paragraph_offset_index.is_empty() {
+            return false;
+        }
+        let para_index = snapshot.paragraph_offset_index.byte_to_paragraph(cursor);
+        let Some(entry) = self.paragraph_store.entry(para_index) else {
+            return false;
+        };
+        // 未受影响段落的 QTextLayout 会跨 generation 复用，因此不能用
+        // entry.layout_generation == snapshot.layout_generation 过滤；真正校验
+        // 有效性的是 entry 自己的 generation/cache_slot/epoch。
+        if entry.cache_slot < 0 {
+            return false;
+        }
+        let para_start = snapshot.paragraph_offset_index.paragraph_byte_start(para_index);
+        let Some(relative_byte) = cursor.checked_sub(para_start) else {
+            return false;
+        };
+        if relative_byte > entry.paragraph_text_len {
+            return false;
+        }
+        let para_end = para_start + entry.paragraph_text_len;
+        if para_end > text.len() {
+            return false;
+        }
+        let Some(para_text) = text.get(para_start..para_end) else {
+            return false;
+        };
+        if !para_text.is_char_boundary(relative_byte) {
+            return false;
+        }
+        let qchar_offset = byte_offset_to_qchar_offset(para_text, relative_byte);
+        let Ok(qchar_offset) = i32::try_from(qchar_offset) else {
+            return false;
+        };
+        qt_cache::paragraph_has_soft_wrap_boundary_at(
+            entry.layout_generation,
+            entry.cache_slot,
+            entry.layout_epoch,
+            qchar_offset,
+        )
+    }
+
     /// Issue #901 问题4: 获取上一次排版产生的 `CanonicalDocumentVisualSnapshot` 的只读引用。
     ///
     /// `snapshot()` 在增量排版路径中会把结果存入 `last_snapshot`。

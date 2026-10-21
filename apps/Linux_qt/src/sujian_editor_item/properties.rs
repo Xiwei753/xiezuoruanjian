@@ -25,6 +25,18 @@ impl SujianEditorItem {
         self.pipeline.committed_text().to_string().into()
     }
 
+    /// Issue #978: 轻量正文长度，供 QML 每键判断是否仍为空/有内容，
+    /// 避免为了这一个布尔事实调用 `get_plain_text()` 复制整章正文。
+    /// UTF-8 byte 长度，只用于空/非空判断。
+    pub(crate) fn plain_text_length(&self) -> u32 {
+        u32::try_from(self.pipeline.committed_text().len()).unwrap_or(u32::MAX)
+    }
+
+    /// Issue #978: 轻量正文是否为空，O(1)。
+    pub(crate) fn content_empty(&self) -> bool {
+        self.pipeline.committed_text().is_empty()
+    }
+
     /// Issue #943: expose the Core EditorKernel revision for stale-result checks.
     pub(crate) fn text_revision(&self) -> u64 {
         self.pipeline.text_revision()
@@ -321,12 +333,6 @@ impl SujianEditorItem {
         )
     }
 
-    /// Issue #904 复核三：是否请求任一动画（正文或光标）。
-    pub(crate) fn animation_requested(&self) -> bool {
-        let policy = self.effective_animation();
-        policy.text || policy.cursor
-    }
-
     pub(crate) fn set_smooth_cursor_enabled(&mut self, value: bool) {
         if self.current_smooth_cursor_enabled == value {
             return;
@@ -377,6 +383,10 @@ impl SujianEditorItem {
         if was_enabled && !is_enabled {
             self.clear_active_text_animations();
             self.request_static_repaint();
+        } else if !was_enabled && is_enabled {
+            // Issue #978: 关闭期间不再每键保留动画快照；开启边界显式建立一次
+            // 当前正文的动画源，保证第一笔开启后的编辑有正确旧布局。
+            self.initialize_current_animation_source();
         }
         // Issue #904：把文字动画开关同步到唯一的 text_motion 计划。
         self.sync_animation_settings_to_text_motion();
@@ -429,7 +439,9 @@ impl SujianEditorItem {
         if self.current_coordinated_animation_enabled == value {
             return;
         }
+        let was_text_enabled = self.effective_animation().text;
         self.current_coordinated_animation_enabled = value;
+        let is_text_enabled = self.effective_animation().text;
         // Issue #756: 协同模式切换时清活动动画，避免旧事务按旧模式继续播放。
         // Issue #819: 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
         // 的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
@@ -440,6 +452,11 @@ impl SujianEditorItem {
         self.request_static_repaint();
         // Issue #904：协同模式只决定两个动画是否共享采样时间，不覆盖各自的开关。
         self.sync_animation_settings_to_text_motion();
+        // Issue #978: 协调模式把 effective text 从关切到开时，在边界建立一次
+        // 动画源；日常按键仍走轻量无文字动画路径。
+        if !was_text_enabled && is_text_enabled {
+            self.initialize_current_animation_source();
+        }
         editor_animation_debug_log(&format!("coordinated_animation_enabled_changed: {}", value));
         self.visual_settings_changed();
     }

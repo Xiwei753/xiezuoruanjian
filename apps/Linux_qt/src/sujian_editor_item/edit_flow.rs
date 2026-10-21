@@ -4,16 +4,17 @@
 //! IME commit/replace 都收口到 [`SujianEditorItem::apply_edit_with_visuals`] 这一个入口。
 //!
 //! 顺序固定：
-//! 1. 保存 old snapshot
-//! 2. `ensure_current_canonical_before_edit`
-//! 3. 调 Core edit command（由 [`EditOp`] 描述）
-//! 4. 记录 `editor.edit.applied`
-//! 5. 保存 new snapshot
-//! 6. 动画开启时调视觉流水线
-//! 7. 明确返回 `Created` / `Skipped(reason)` / `AnimationDisabled`
-//! 8. 发 content/cursor/selection changed（由调用方决定）
+//! 1. `ensure_current_canonical_before_edit`
+//! 2. 调 Core edit command（由 [`EditOp`] 描述）
+//! 3. 记录 `editor.edit.applied`
+//! 4. 动画真实开启时调视觉流水线
+//! 5. 明确返回 `Created` / `Skipped(reason)` / `AnimationDisabled`
+//! 6. 发 content/cursor/selection changed（由调用方决定）
 //!
-//! 硬约束：Core Applied + animations_requested 时不允许返回裸 `None`——
+//! Issue #978：普通按键不再保存整章 old/new `EditorSnapshot`。Core edit 结果本身
+//! 携带 revision / display_patches / selection，视觉流水线直接消费这些事实。
+//!
+//! 硬约束：Core Applied + 文字动画请求时不允许返回裸 `None`——
 //! 必须有明确的 `Created` 或 `Skipped`。
 
 use super::*;
@@ -164,13 +165,11 @@ impl SujianEditorItem {
     /// `insert_text_with_cause` / `delete_backward` / `delete_forward` /
     /// `ime_replace_and_insert` / `delete_selection` 全部收口到这一个 helper。
     /// 固定顺序：
-    /// 1. 保存 old text/selection/caret（`self.pipeline.snapshot()`）；
-    /// 2. `ensure_current_canonical_before_edit`；
-    /// 3. 调一次 pipeline edit command（由 `op` 描述）；
-    /// 4. 记录 `editor.edit.applied`；
-    /// 5. 读取 new text/selection/caret；
-    /// 6. 动画开启时调视觉流水线；
-    /// 7. 明确返回 `Created` / `Skipped(reason)` / `AnimationDisabled`。
+    /// 1. `ensure_current_canonical_before_edit`；
+    /// 2. 调一次 pipeline edit command（由 `op` 描述）；
+    /// 3. 记录 `editor.edit.applied`；
+    /// 4. 文字动画真实开启时调视觉流水线；
+    /// 5. 明确返回 `Created` / `Skipped(reason)` / `AnimationDisabled`。
     ///
     /// - `composition` 不带 composition commit 参数（`None`）时走
     ///   `record_transaction`，由 `text_motion` 内部排版 old/new 并建立局部动画计划。
@@ -178,7 +177,7 @@ impl SujianEditorItem {
     ///   处理 preedit 区间收进、candidate 提示、committed replace range 等
     ///   composition 专属语义。
     ///
-    /// 硬约束：Core Applied + animations_requested 时不允许返回裸 `None`——
+    /// 硬约束：Core Applied + 文字动画请求时不允许返回裸 `None`——
     /// 必须有明确的 `Created` 或 `Skipped`。
     pub(crate) fn apply_edit_with_visuals(
         &mut self,
@@ -186,13 +185,10 @@ impl SujianEditorItem {
         visual_cause: EditorTransactionCause,
         composition: Option<CompositionCommitParams>,
     ) -> EditApplyOutcome {
-        // 1. 保存 old snapshot
-        let old = self.pipeline.snapshot();
-
-        // 2. 在 Core edit command 之前保证 old/current canonical 已建立且属于当前 text revision。
+        // 1. 在 Core edit command 之前保证 old/current canonical 已建立且属于当前 text revision。
         self.ensure_current_canonical_before_edit();
 
-        // 3. 调 Core edit command
+        // 2. 调 Core edit command
         // Issue #819 评论 5967250411 问题 3：pipeline edit 方法现在返回 PipelineEditOutcome，
         // 保留 Core EditorEditOutcome 的完整分类。只有 Applied / AppliedWithAdjustedSelection
         // 才算真正应用了编辑，NoChange/StaleRevision/InvalidOffset/InvalidRange 都是 NotApplied。
@@ -428,20 +424,17 @@ impl SujianEditorItem {
             self.emit_editor_change_fact(visual_cause, result);
         }
 
-        // 5. 保存 new snapshot
-        let new = self.pipeline.snapshot();
+        // 4. 文字动画是否真实生效（不受协调模式/独立开关表面值影响）。
+        // Issue #978: 使用 effective_animation().text 而不是 animation_requested()；
+        // 后者包含光标动画，仅光标动画时不应把普通编辑误报为文字动画跳过。
+        let text_animation_requested = self.effective_animation().text;
 
-        // 6. 算 animations_requested
-        let animations_requested = self.animation_requested();
-
-        // 7. 调视觉流水线，构造明确的 visual outcome
+        // 5. 调视觉流水线，构造明确的 visual outcome
         let visual = if let Some(params) = composition {
             // composition commit 路径 — record_composition_commit_transaction
             // 内部自己处理动画开关和跳过事件，返回 VisualPrepareOutcome。
             // Issue #826: 直接透传 outcome，不再猜。
             let outcome = self.record_composition_commit_transaction(
-                &old,
-                &new,
                 edit_result.expect("edit_result is Some when applied is true"),
                 visual_cause,
                 params.preedit_byte_start,
@@ -452,7 +445,7 @@ impl SujianEditorItem {
                 params.cancel_reason,
                 params.summary_tag,
             );
-            if !animations_requested {
+            if !text_animation_requested {
                 EditVisualOutcome::AnimationDisabled
             } else {
                 match outcome {
@@ -471,12 +464,10 @@ impl SujianEditorItem {
             // 直接透传，不再用 self.current_is_scrolling 猜 ScrollingSuppressed、
             // 不再把 None 猜成 BuilderEmptyTransaction。
             let outcome = self.record_transaction(
-                old,
-                new,
                 edit_result.expect("edit_result is Some when applied is true"),
                 true,
             );
-            if !animations_requested {
+            if !text_animation_requested {
                 EditVisualOutcome::AnimationDisabled
             } else {
                 match outcome {
@@ -485,9 +476,8 @@ impl SujianEditorItem {
                         EditVisualOutcome::Skipped(reason)
                     }
                     super::pipeline::VisualPrepareOutcome::AnimationDisabled => {
-                        // record_transaction 返回 AnimationDisabled 但 animations_requested
-                        // 为 true——这只发生在三个开关全关但 animations_requested 计算为 true
-                        // 的矛盾状态（不应该发生）。保守返回 BuilderEmptyTransaction。
+                        // 文字动画已请求但 record_transaction 返回 AnimationDisabled，
+                        // 只可能是动画状态在两步之间变化；按空事务保守处理。
                         EditVisualOutcome::Skipped(EditVisualSkipReason::BuilderEmptyTransaction)
                     }
                 }
