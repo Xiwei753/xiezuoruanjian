@@ -26,6 +26,8 @@ Item {
     property int maxContentWidth: Kirigami.Units.gridUnit * 60
     // Issue #960：页面声明后不再套 Hub 的限宽阅读栏，只保留常规页边距。
     property bool useFullContentWidth: false
+    // Issue #980：页面可隐藏页内头部；默认为 true，其他页面保持原状。
+    property bool showHeader: true
     readonly property int contentWidth: useFullContentWidth
         ? Math.max(1, width - pageMargin * 2)
         : Math.min(Math.max(1, width - pageMargin * 2), maxContentWidth)
@@ -46,6 +48,7 @@ Item {
 
         Item {
             id: headerContainer
+            visible: root.showHeader
             Layout.fillWidth: true
             Layout.preferredHeight: Kirigami.Units.gridUnit * 4
         }

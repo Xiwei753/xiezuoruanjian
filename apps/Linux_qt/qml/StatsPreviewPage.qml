@@ -25,6 +25,7 @@
 //   - Issue #960：填满主画布，并按手稿恢复比例。
 //   - Issue #976：右侧恢复为区间热力图，移除折线图、页底全年热力图与
 //     折叠「详细统计」；逐日热力格随 Explorer 一次返回。
+//   - Issue #980：移除页内追踪副标题，主体含底部陪伴条整体上移，横条下留白。
 // =============================================================================
 
 import QtQuick
@@ -208,7 +209,9 @@ Rectangle {
         dt: root.dt
         // Issue #960：统计页填满导航与顶栏之外的主画布，不再套限宽阅读栏。
         useFullContentWidth: true
-        headerData: [ HubPageHeader { dt: root.dt; title: qsTr("统计"); subtitle: qsTr("追踪你的写作节奏与习惯") } ]
+        // Issue #980：统计页不再显示页内“统计 / 追踪你的写作节奏与习惯”头部，
+        // 让生涯条、四张卡片和底部陪伴条整体上移。
+        showHeader: false
 
         Flickable {
             id: pageFlick
@@ -224,9 +227,10 @@ Rectangle {
             ColumnLayout {
                 id: pageColumn
                 width: pageFlick.width
-                // Flickable 不是 Layout，可直接给高度；内容不足时至少铺满视口，
-                // 多余高度交给带 Layout.fillHeight 的主内容块。
-                height: Math.max(implicitHeight, pageFlick.height)
+                // Flickable 不是 Layout，可直接给高度；内容不足时略短于视口，
+                // 使底部陪伴条下方留出自然空白（Issue #980）。
+                height: Math.max(implicitHeight,
+                                 pageFlick.height - Kirigami.Units.gridUnit * 4)
                 spacing: Kirigami.Units.largeSpacing
 
                 // ── 错误条：与正常数据无关，独立显示，不遮住上次快照 ──
