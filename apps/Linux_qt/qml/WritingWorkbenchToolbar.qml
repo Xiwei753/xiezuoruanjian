@@ -166,6 +166,12 @@ ColumnLayout {
                 }
             }
 
+            Item {
+                visible: root.compactActions
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+            }
+
             // ── ToolbarTrailing 角色 wrapper：宽度严格等于 Core 的 ToolbarTrailing ──
             Item {
                 id: trailingSlot
