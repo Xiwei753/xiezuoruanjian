@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::candidates::CandidateGenerator;
 use crate::confusion::ConfusionMatcher;
-use crate::detector::{DetectionKind, Detector};
+use crate::detector::{exact_name_occurrences, DetectionKind, Detector};
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
 use crate::rules::RuleSet;
@@ -91,43 +91,30 @@ impl TraditionalCorrector {
 
             for suspect in suspects {
                 let source = match suspect.kind {
+                    DetectionKind::ConfirmedEntitySpelling => "proper_name",
                     DetectionKind::ConfusionWord => "confusion_word",
-                    DetectionKind::ProperName => "proper_name",
                     DetectionKind::OutOfVocabularyWord => "oov",
                     DetectionKind::Character => "character_ngram",
                 };
                 if let Some(replacement) = suspect.exact_replacement {
-                    if replacement != suspect.original {
-                        // A near match of an author-confirmed work entity is
-                        // evidence for a check, not proof of a typo. Only an
-                        // explicit custom confusion entry keeps error severity.
-                        let (rule_id, severity) = match suspect.kind {
-                            DetectionKind::ConfusionWord => ("confusion.custom", "error"),
-                            DetectionKind::ProperName => (
-                                match suspect.entity_kind {
-                                    Some(crate::proper_names::ProperNameKind::Person) => {
-                                        "proper.person_check"
-                                    }
-                                    Some(crate::proper_names::ProperNameKind::Place) => {
-                                        "proper.place_check"
-                                    }
-                                    _ => "proper.entity_check",
-                                },
-                                "warning",
-                            ),
-                            _ => ("detector.exact", "error"),
-                        };
-                        diagnostics.push(CorrectionDiagnostic {
-                            start_byte: suspect.start_byte,
-                            end_byte: suspect.end_byte,
-                            original: suspect.original,
-                            replacement,
-                            source: source.to_owned(),
-                            rule_id: rule_id.to_owned(),
-                            severity: severity.to_owned(),
-                            confidence: None,
-                        });
+                    if replacement == suspect.original {
+                        continue;
                     }
+                    let rule_id = match suspect.kind {
+                        DetectionKind::ConfirmedEntitySpelling => "proper.confirmed_misspelling",
+                        DetectionKind::ConfusionWord => "confusion.custom",
+                        _ => continue,
+                    };
+                    diagnostics.push(CorrectionDiagnostic {
+                        start_byte: suspect.start_byte,
+                        end_byte: suspect.end_byte,
+                        original: suspect.original,
+                        replacement,
+                        source: source.to_owned(),
+                        rule_id: rule_id.to_owned(),
+                        severity: "error".to_owned(),
+                        confidence: None,
+                    });
                     continue;
                 }
 
@@ -223,6 +210,7 @@ impl TraditionalCorrector {
                 diagnostics.extend(self.rule_diagnostics(text));
             }
         } else {
+            diagnostics.extend(self.confirmed_misspelling_diagnostics(text));
             diagnostics.extend(self.confusion_diagnostics(text));
             diagnostics.extend(self.rule_diagnostics(text));
             if !self.config.include_weak_hints {
@@ -232,6 +220,13 @@ impl TraditionalCorrector {
 
         let protected_ranges = self.lexicon.protected_word_ranges(text);
         diagnostics.retain(|diagnostic| {
+            if diagnostic.rule_id == "proper.confirmed_misspelling" {
+                return !self.lexicon.protected_entry_wraps_range(
+                    text,
+                    diagnostic.start_byte,
+                    diagnostic.end_byte,
+                );
+            }
             !protected_ranges
                 .iter()
                 .any(|(start, end)| diagnostic.start_byte < *end && *start < diagnostic.end_byte)
@@ -245,6 +240,28 @@ impl TraditionalCorrector {
             .as_ref()
             .ok_or(CorrectionError::ModelUnavailable)?
             .perplexity(&tokens)
+    }
+
+    fn confirmed_misspelling_diagnostics(&self, text: &str) -> Vec<CorrectionDiagnostic> {
+        let mut diagnostics = Vec::new();
+        for segment in self.segmenter.sentence_segments(text) {
+            let sentence = &text[segment.start_byte..segment.end_byte];
+            for relation in self.lexicon.work_entity_lexicon().misspellings() {
+                for (start, end) in exact_name_occurrences(sentence, &relation.original) {
+                    diagnostics.push(CorrectionDiagnostic {
+                        start_byte: segment.start_byte + start,
+                        end_byte: segment.start_byte + end,
+                        original: relation.original.clone(),
+                        replacement: relation.replacement.clone(),
+                        source: "proper_name".to_owned(),
+                        rule_id: "proper.confirmed_misspelling".to_owned(),
+                        severity: "error".to_owned(),
+                        confidence: None,
+                    });
+                }
+            }
+        }
+        diagnostics
     }
 
     fn rule_diagnostics(&self, text: &str) -> Vec<CorrectionDiagnostic> {
@@ -374,8 +391,10 @@ fn filter_diagnostics(
 
 fn source_priority(source: &str) -> u8 {
     match source {
-        "confusion_word" => 0,
-        "proper_name" => 1,
+        // Only explicit author-confirmed misspellings use `proper_name`; they
+        // must outrank ordinary confusion candidates, matching the detector.
+        "proper_name" => 0,
+        "confusion_word" => 1,
         "rule" => 2,
         "oov" => 3,
         "character_ngram" => 4,
@@ -396,9 +415,9 @@ mod tests {
     use super::*;
     use crate::lexicon::LexiconPaths;
 
-    /// A flat model deliberately provides no language evidence. Proper-name
-    /// findings must still be warning-level checks and ordinary words must
-    /// never be rewritten merely because they resemble a work entity.
+    /// A flat model deliberately provides no language evidence. Work-dictionary
+    /// terms are protection only, so a similar span must not be rewritten just
+    /// because it resembles a confirmed entity.
     struct FlatScorer;
 
     impl LanguageScorer for FlatScorer {
@@ -421,29 +440,114 @@ mod tests {
         .expect("corrector")
     }
 
+    fn rules_only(lexicon: Lexicon) -> TraditionalCorrector {
+        TraditionalCorrector::rules_only(
+            Arc::new(lexicon),
+            RuleSet::empty(),
+            CorrectionConfig::default(),
+        )
+        .expect("corrector")
+    }
+
     #[test]
-    fn confirmed_entity_variant_is_warning_not_error() {
+    fn work_dictionary_terms_are_protected_not_replacement_targets() {
         let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_protected_word("祁门客栈".to_string());
+        lexicon.insert_protected_word("甲地乙坊".to_string());
         let diagnostics = corrector(lexicon)
-            .suggest("他住进了奇门客栈。")
+            .suggest("他住进了甲地乙房。")
             .expect("scan");
-        let finding = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.original == "奇门客栈")
-            .expect("entity check");
-        assert_eq!(finding.replacement, "祁门客栈");
-        assert_eq!(finding.severity, "warning");
-        assert_eq!(finding.rule_id, "proper.entity_check");
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.original != "甲地乙房"),
+            "an unconfirmed similar span must not be replaced by a work term"
+        );
+    }
+
+    fn entity_lexicon() -> Lexicon {
+        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
+        lexicon.insert_work_entity("甲乙丙".to_string(), crate::ProperNameKind::Person);
+        lexicon.insert_work_entity_alias("甲乙丙", "乙丙".to_string());
+        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丁".to_string());
+        lexicon
+    }
+
+    #[test]
+    fn explicit_wrong_spelling_is_replaced_but_alias_is_protected() {
+        let diagnostics = corrector(entity_lexicon())
+            .suggest("甲乙丁说道。")
+            .expect("scan");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.original == "甲乙丁"
+                && diagnostic.replacement == "甲乙丙"
+                && diagnostic.rule_id == "proper.confirmed_misspelling"
+                && diagnostic.severity == "error"
+        }));
+
+        let alias_diagnostics = corrector(entity_lexicon())
+            .suggest("乙丙说道。")
+            .expect("scan");
+        assert!(
+            alias_diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.original != "乙丙"),
+            "a confirmed alias is protected and must not be flagged"
+        );
     }
 
     #[test]
     fn valid_ordinary_words_are_not_replaced_by_work_entities() {
         let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_protected_word("祁门".to_string());
-        lexicon.insert_protected_word("周于".to_string());
+        lexicon.insert_protected_word("甲乙".to_string());
+        lexicon.insert_protected_word("乙丙".to_string());
         let corrector = corrector(lexicon);
-        assert!(corrector.suggest("奇门").expect("scan").is_empty());
-        assert!(corrector.suggest("周围").expect("scan").is_empty());
+        assert!(corrector.suggest("甲丁").expect("scan").is_empty());
+        assert!(corrector.suggest("乙丁").expect("scan").is_empty());
+    }
+
+    #[test]
+    fn canonical_prefixed_misspelling_is_still_replaced_in_both_paths() {
+        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
+        lexicon.insert_work_entity("甲乙丙".to_string(), crate::ProperNameKind::Person);
+        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丙丁".to_string());
+
+        for diagnostics in [
+            corrector(lexicon.clone())
+                .suggest("甲乙丙丁说道。")
+                .expect("scan"),
+            rules_only(lexicon)
+                .suggest("甲乙丙丁说道。")
+                .expect("scan"),
+        ] {
+            assert!(diagnostics.iter().any(|diagnostic| {
+                diagnostic.original == "甲乙丙丁"
+                    && diagnostic.replacement == "甲乙丙"
+                    && diagnostic.rule_id == "proper.confirmed_misspelling"
+            }));
+        }
+    }
+
+    #[test]
+    fn confirmed_misspelling_outranks_confusion_in_both_paths() {
+        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
+        lexicon.insert_work_entity("甲乙丙".to_string(), crate::ProperNameKind::Person);
+        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丁".to_string());
+        lexicon.insert_confusion("甲乙丁".to_string(), "甲乙戊".to_string());
+
+        for diagnostics in [
+            corrector(lexicon.clone())
+                .suggest("甲乙丁说道。")
+                .expect("scan"),
+            rules_only(lexicon)
+                .suggest("甲乙丁说道。")
+                .expect("scan"),
+        ] {
+            let chosen = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.original == "甲乙丁")
+                .expect("confirmed misspelling diagnostic");
+            assert_eq!(chosen.replacement, "甲乙丙");
+            assert_eq!(chosen.rule_id, "proper.confirmed_misspelling");
+        }
     }
 }

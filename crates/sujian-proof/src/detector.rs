@@ -5,19 +5,18 @@
 use crate::confusion::ConfusionMatcher;
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
-use crate::proper_names::ProperNameKind;
 use crate::segment::{is_chinese_string, is_han, Segmenter};
 use crate::CorrectionError;
 
 // Behavioral port of pycorrector Detector._detect and _get_maybe_error_index
-// (Apache-2.0): confusion terms, near proper names, dictionary OOV tokens,
+// (Apache-2.0): confusion terms, dictionary OOV tokens,
 // then character-level 2/3-gram MAD outliers. All returned offsets are UTF-8
 // byte ranges; pycorrector's character indices are converted at the boundary.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DetectionKind {
+    ConfirmedEntitySpelling,
     ConfusionWord,
-    ProperName,
     OutOfVocabularyWord,
     Character,
 }
@@ -29,7 +28,6 @@ pub(crate) struct Suspect {
     pub(crate) original: String,
     pub(crate) kind: DetectionKind,
     pub(crate) exact_replacement: Option<String>,
-    pub(crate) entity_kind: Option<ProperNameKind>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,11 +60,18 @@ impl Detector {
 
         let mut candidates = Vec::new();
         let mut protected_ranges = Vec::new();
+        let mut protected_entries = Vec::new();
         for segment in segmenter.sentence_segments(text) {
             let sentence = &text[segment.start_byte..segment.end_byte];
             protected_ranges.extend(
                 lexicon
                     .protected_word_ranges(sentence)
+                    .into_iter()
+                    .map(|(start, end)| (segment.start_byte + start, segment.start_byte + end)),
+            );
+            protected_entries.extend(
+                lexicon
+                    .protected_word_ranges_unmerged(sentence)
                     .into_iter()
                     .map(|(start, end)| (segment.start_byte + start, segment.start_byte + end)),
             );
@@ -81,27 +86,25 @@ impl Detector {
                     original: matched.original_text,
                     kind: DetectionKind::ConfusionWord,
                     exact_replacement: Some(matched.suggestion),
-                    entity_kind: None,
                 });
+            }
+
+            // Exact, author-confirmed wrong spellings only. There is no
+            // similarity scan over registered names.
+            for relation in lexicon.work_entity_lexicon().misspellings() {
+                for (start, end) in exact_name_occurrences(sentence, &relation.original) {
+                    candidates.push(Suspect {
+                        start_byte: segment.start_byte + start,
+                        end_byte: segment.start_byte + end,
+                        original: relation.original.clone(),
+                        kind: DetectionKind::ConfirmedEntitySpelling,
+                        exact_replacement: Some(relation.replacement.clone()),
+                    });
+                }
             }
 
             if !sentence.chars().any(is_han) {
                 continue;
-            }
-
-            if is_chinese_string(sentence) {
-                candidates.extend(
-                    crate::proper_names::detect_work_entity_variants(sentence, lexicon, segmenter)
-                        .into_iter()
-                        .map(|candidate| Suspect {
-                            start_byte: segment.start_byte + candidate.start_byte,
-                            end_byte: segment.start_byte + candidate.end_byte,
-                            original: candidate.original,
-                            kind: DetectionKind::ProperName,
-                            exact_replacement: Some(candidate.replacement),
-                            entity_kind: Some(candidate.kind),
-                        }),
-                );
             }
 
             if self.detect_words {
@@ -119,7 +122,6 @@ impl Detector {
                         original: token.text,
                         kind: DetectionKind::OutOfVocabularyWord,
                         exact_replacement: None,
-                        entity_kind: None,
                     });
                 }
             }
@@ -136,12 +138,61 @@ impl Detector {
         }
 
         candidates.retain(|candidate| {
-            !protected_ranges
+            let overlaps_protected = protected_ranges
                 .iter()
-                .any(|(start, end)| candidate.start_byte < *end && *start < candidate.end_byte)
+                .any(|(start, end)| candidate.start_byte < *end && *start < candidate.end_byte);
+            if !overlaps_protected {
+                return true;
+            }
+            // An explicitly registered misspelling may contain a protected
+            // canonical name as a prefix. Only drop it when a single complete
+            // protected entry actually wraps the whole confirmed spelling.
+            if candidate.kind != DetectionKind::ConfirmedEntitySpelling {
+                return false;
+            }
+            !protected_entries.iter().any(|(start, end)| {
+                *start <= candidate.start_byte && candidate.end_byte <= *end
+            })
         });
         Ok(resolve_overlaps(candidates))
     }
+}
+
+/// Exact byte occurrences of an author-confirmed wrong spelling. ASCII edges
+/// do not match inside a longer Latin identifier (`X-42` in `ZX-42B`).
+pub(crate) fn exact_name_occurrences(text: &str, name: &str) -> Vec<(usize, usize)> {
+    if name.is_empty() {
+        return Vec::new();
+    }
+    let mut occurrences = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(relative) = text[search_from..].find(name) {
+        let start = search_from + relative;
+        let end = start + name.len();
+        let left_ok = !name.chars().next().is_some_and(is_ascii_name_char)
+            || text[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|previous| !is_ascii_name_char(previous));
+        let right_ok = !name.chars().next_back().is_some_and(is_ascii_name_char)
+            || text[end..]
+                .chars()
+                .next()
+                .is_none_or(|next| !is_ascii_name_char(next));
+        // For mixed-script names, only treat the edge as an ASCII identifier
+        // when that edge character itself participates in an ASCII token.
+        let left_ok = left_ok || !name.chars().next().is_some_and(|first| first.is_ascii());
+        let right_ok = right_ok || !name.chars().next_back().is_some_and(|last| last.is_ascii());
+        if left_ok && right_ok {
+            occurrences.push((start, end));
+        }
+        search_from = end.max(start + 1);
+    }
+    occurrences
+}
+
+fn is_ascii_name_char(value: char) -> bool {
+    value.is_ascii_alphanumeric() || value == '_'
 }
 
 fn detect_character_outliers(
@@ -196,7 +247,6 @@ fn detect_character_outliers(
             original: token.text.clone(),
             kind: DetectionKind::Character,
             exact_replacement: None,
-            entity_kind: None,
         });
     }
     Ok(matches)
@@ -278,8 +328,8 @@ fn resolve_overlaps(mut candidates: Vec<Suspect>) -> Vec<Suspect> {
 
 fn detection_priority(kind: DetectionKind) -> u8 {
     match kind {
-        DetectionKind::ConfusionWord => 0,
-        DetectionKind::ProperName => 1,
+        DetectionKind::ConfirmedEntitySpelling => 0,
+        DetectionKind::ConfusionWord => 1,
         DetectionKind::OutOfVocabularyWord => 2,
         DetectionKind::Character => 3,
     }

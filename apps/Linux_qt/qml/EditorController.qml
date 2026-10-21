@@ -63,6 +63,7 @@ QtObject {
     property string correctionStatus: ""
     property string correctionDictionaryError: ""
     property var correctionDictionaryResources: []
+    property var correctionEntityNames: []
     property bool correctionCheckPending: false
     property int correctionRequestSerial: 0
     property int pendingCorrectionRequestId: 0
@@ -82,6 +83,13 @@ QtObject {
     // previous document cannot overwrite the current chapter's annotations.
     property var correctionRequestEpochs: ({})
     property var editorViewportRef: null
+
+    // Issue #954：编辑事务先走轻量位置更新，模型扫描防抖到输入停顿后一次。
+    property var correctionScanDebounceTimer: Timer {
+        interval: 250
+        repeat: false
+        onTriggered: controller.requestCorrectionPendingNow()
+    }
 
     // Autosave timer
     property var autoSaveTimer: Timer {
@@ -218,6 +226,7 @@ QtObject {
     }
 
     function cancelPendingCorrectionRequest() {
+        correctionScanDebounceTimer.stop();
         correctionRequestSerial += 1;
         if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
         pendingCorrectionRequestId = correctionRequestSerial;
@@ -264,6 +273,12 @@ QtObject {
         updateCorrectionSuggestions([]);
         correctionError = "";
         correctionStatus = "";
+    }
+
+    function releaseCorrectionSession(releaseProjectId, releaseChapterId) {
+        if (!releaseProjectId || !releaseChapterId) return;
+        if (!editorBackendRef || !editorBackendRef.release_correction_session) return;
+        editorBackendRef.release_correction_session(releaseProjectId, releaseChapterId);
     }
 
     function invalidateCorrectionResults() {
@@ -345,6 +360,7 @@ QtObject {
         if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
         if (!editorBackendRef.request_correction_snapshot) return;
         if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
+        correctionScanDebounceTimer.stop();
 
         var snapshotText = getEditorPlainText();
         var revision = Number(targetEditorItem.text_revision);
@@ -443,11 +459,10 @@ QtObject {
         return suggestions;
     }
 
-    // Issue #954：编辑事务的真实 patch 范围直接交给 Core。Core 增量平移未受影响
-    // 的缓存段，只重扫被改句及其邻句；QML 不再从光标推断句子，也不清空已有标注。
+    // Issue #954：编辑事务先只把真实 patch 范围交给 Core 更新内存段索引，
+    // 不读取/复制整章正文，也不立刻运行模型。输入停顿后再提交一次“扫描脏段”。
     function reconcileCorrectionEdit(baseRevision, newRevision, patchRangesJson) {
         if (!targetEditorItem || isLoadingChapter || isApplyingFormat) return;
-        var newText = getEditorPlainText();
         var actualRevision = Number(targetEditorItem.text_revision);
         var base = Number(baseRevision);
         var next = Number(newRevision);
@@ -456,34 +471,60 @@ QtObject {
                 || base !== correctionTrackedRevision
                 || correctionTrackedProjectId !== projectId
                 || correctionTrackedChapterId !== chapterId
-                || !editorBackendRef || !editorBackendRef.request_correction_edits) {
-            syncCorrectionTracking(newText, actualRevision);
+                || !editorBackendRef || !editorBackendRef.apply_correction_edits) {
+            syncCorrectionTracking(getEditorPlainText(), actualRevision);
             requestCorrectionSnapshot();
             return;
         }
 
-        syncCorrectionTracking(newText, next);
-        correctionRequestSerial += 1;
-        if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
-        pendingCorrectionRequestId = correctionRequestSerial;
-        registerCorrectionRequest(pendingCorrectionRequestId);
-        pendingCorrectionRevision = next;
-        pendingCorrectionProjectId = projectId;
-        pendingCorrectionChapterId = chapterId;
-        pendingCorrectionText = newText;
-        pendingCorrectionSilent = false;
-        correctionError = "";
-        correctionStatus = qsTr("正在校对修改段落…");
-        correctionCheckPending = true;
-        editorBackendRef.request_correction_edits(
-            pendingCorrectionRequestId,
+        correctionTrackedRevision = next;
+        correctionTrackedProjectId = projectId;
+        correctionTrackedChapterId = chapterId;
+        var applied = editorBackendRef.apply_correction_edits(
             projectId,
             chapterId,
             correctionDocumentEpoch,
             next,
             base,
-            String(patchRangesJson || "[]"),
-            newText);
+            String(patchRangesJson || "[]"));
+        if (applied && applied.ok === false) {
+            syncCorrectionTracking(getEditorPlainText(), actualRevision);
+            requestCorrectionSnapshot();
+            return;
+        }
+        correctionError = "";
+        correctionStatus = qsTr("正在校对修改段落…");
+        correctionScanDebounceTimer.restart();
+    }
+
+    // Issue #954：模型阶段。仅在输入停顿后取一次当前正文，Core 只扫描第一阶段
+    // 记录的脏窗口；连续输入不会为每个按键排队一次全文模型任务。
+    function requestCorrectionPendingNow() {
+        if (!editorBackendRef || !targetEditorItem || !projectId || !chapterId) return;
+        if (!editorBackendRef.request_correction_pending) return;
+        if (isLoadingChapter || isApplyingFormat || saveGuardActive()) return;
+        var snapshotText = getEditorPlainText();
+        var revision = Number(targetEditorItem.text_revision);
+        if (!isFinite(revision) || revision < 0) return;
+        syncCorrectionTracking(snapshotText, revision);
+
+        correctionRequestSerial += 1;
+        if (correctionRequestSerial > 2147483000) correctionRequestSerial = 1;
+        pendingCorrectionRequestId = correctionRequestSerial;
+        registerCorrectionRequest(pendingCorrectionRequestId);
+        pendingCorrectionRevision = revision;
+        pendingCorrectionProjectId = projectId;
+        pendingCorrectionChapterId = chapterId;
+        pendingCorrectionText = snapshotText;
+        pendingCorrectionSilent = false;
+        correctionCheckPending = true;
+        editorBackendRef.request_correction_pending(
+            pendingCorrectionRequestId,
+            projectId,
+            chapterId,
+            correctionDocumentEpoch,
+            revision,
+            snapshotText);
     }
 
     // Issue #954：Core 返回整章合并快照 { textRevision, suggestions, checkedRanges }，
@@ -595,6 +636,25 @@ QtObject {
         return correctionContextHtmlForText(getEditorPlainText(), suggestion);
     }
 
+    // The dictionary stores complete, author-confirmed words, never the
+    // engine's suspicious span. Prefer the writing selection; otherwise show a
+    // short editable context around the suggestion.
+    function correctionDictionaryEntryDraft(suggestion) {
+        var selected = targetEditorItem && targetEditorItem.selected_text
+                ? String(targetEditorItem.selected_text()).trim() : "";
+        if (selected.length > 0) return selected;
+        if (!suggestion) return "";
+        var text = getEditorPlainText();
+        var start = Number(suggestion.startUtf16);
+        var end = Number(suggestion.endUtf16);
+        if (isFinite(start) && isFinite(end) && start >= 0 && end >= start && end <= text.length) {
+            var before = text.slice(Math.max(0, start - 4), start).replace(/[\r\n\u2028\u2029]/g, " ");
+            var after = text.slice(end, Math.min(text.length, end + 4)).replace(/[\r\n\u2028\u2029]/g, " ");
+            return (before + String(suggestion.original || "") + after).trim();
+        }
+        return String(suggestion.original || "").trim();
+    }
+
     function jumpToCorrection(suggestion) {
         if (!suggestion || !suggestionIsCurrent(suggestion)) return false;
         if (!targetEditorItem || !targetEditorItem.reveal_correction) return false;
@@ -613,6 +673,7 @@ QtObject {
     function correctionReason(suggestion) {
         var reasons = {
             "confusion.custom": qsTr("命中作品中的自定义易混词替换。"),
+            "proper.confirmed_misspelling": qsTr("这是你为该专名登记的错误写法，建议改为完整原名。"),
             "proper.entity_check": qsTr("与作品词典中的专名相近，请核对。"),
             "proper.person_check": qsTr("与作品词典中的人名相近，请核对。"),
             "proper.place_check": qsTr("与作品词典中的地名相近，请核对。"),
@@ -711,25 +772,105 @@ QtObject {
         return true;
     }
 
-    function addCorrectionWord(suggestion) {
-        if (!suggestionIsCurrent(suggestion)) {
-            invalidateCorrectionResults();
-            correctionStatus = qsTr("正文已变化，请重新校对。");
+    function correctionEntityWrittenDraft(suggestion) {
+        var selected = targetEditorItem && targetEditorItem.selected_text
+                ? String(targetEditorItem.selected_text()).trim() : "";
+        if (selected.length > 0) return selected;
+        return suggestion ? String(suggestion.original || "").trim() : "";
+    }
+
+    function refreshCorrectionEntityNames(projectIdOverride) {
+        var targetProjectId = String(projectIdOverride || projectId || "").trim();
+        if (!editorBackendRef || !editorBackendRef.get_correction_entity_names
+                || !targetProjectId) {
+            correctionEntityNames = [];
+            return;
+        }
+        var result = editorBackendRef.get_correction_entity_names(targetProjectId);
+        if (!result || !result.success) {
+            correctionEntityNames = [];
+            return;
+        }
+        var data = result.data || {};
+        correctionEntityNames = data.entities || [];
+    }
+
+    function removeCorrectionEntityName(canonical, name) {
+        var canonicalName = String(canonical || "").trim();
+        var writtenForm = String(name || "").trim();
+        if (!canonicalName || !writtenForm) return false;
+        if (!editorBackendRef || !editorBackendRef.remove_correction_entity_name) return false;
+        var result = editorBackendRef.remove_correction_entity_name(
+            projectId, canonicalName, writtenForm);
+        if (!result || !result.success) {
+            correctionDictionaryError = result && result.rawError
+                    ? result.rawError : qsTr("删除名称对应失败。");
             return false;
         }
-        if (!editorBackendRef || !editorBackendRef.add_correction_dictionary_entry) return false;
-        var result = editorBackendRef.add_correction_dictionary_entry(projectId, suggestion.original);
+        correctionDictionaryError = "";
+        refreshCorrectionEntityNames();
+        invalidateCorrectionResults();
+        requestCorrectionChapter();
+        correctionStatus = qsTr("已删除名称对应关系，正在重新校对本章。");
+        return true;
+    }
+
+    function addCorrectionEntityName(canonical, name, kind) {
+        var canonicalName = String(canonical || "").trim();
+        var writtenForm = String(name || "").trim();
+        if (!canonicalName || !writtenForm) {
+            correctionError = qsTr("请填写完整原名和对应写法。");
+            return false;
+        }
+        if (!editorBackendRef || !editorBackendRef.add_correction_entity_name) return false;
+        var result = editorBackendRef.add_correction_entity_name(
+            projectId, canonicalName, writtenForm, String(kind || "misspelling"));
+        if (!result || !result.success) {
+            correctionError = result && result.rawError ? result.rawError : qsTr("登记名称对应失败。");
+            return false;
+        }
+        correctionError = "";
+        refreshCorrectionEntityNames();
+        invalidateCorrectionResults();
+        requestCorrectionChapter();
+        correctionStatus = kind === "alias"
+                ? qsTr("已登记为同一名称的别名，正在重新校对本章。")
+                : qsTr("已登记为错误写法，正在重新校对本章。");
+        return true;
+    }
+
+    function addCorrectionWord(entry, kind) {
+        var fullEntry = String(entry || "").trim();
+        if (!fullEntry) {
+            correctionError = qsTr("请填写完整的作品词条。");
+            return false;
+        }
+        if (!editorBackendRef) return false;
+        var entryKind = String(kind || "term");
+        var result;
+        if (editorBackendRef.add_correction_dictionary_entry_with_kind) {
+            result = editorBackendRef.add_correction_dictionary_entry_with_kind(
+                projectId, fullEntry, entryKind);
+        } else if (editorBackendRef.add_correction_dictionary_entry) {
+            result = editorBackendRef.add_correction_dictionary_entry(projectId, fullEntry);
+        } else {
+            return false;
+        }
         if (!result || !result.success) {
             correctionError = result && result.rawError ? result.rawError : qsTr("加入作品词典失败。");
             return false;
         }
-        var remaining = [];
-        for (var i = 0; i < correctionSuggestions.length; i += 1) {
-            if (correctionSuggestions[i].original !== suggestion.original) remaining.push(correctionSuggestions[i]);
-        }
-        updateCorrectionSuggestions(remaining);
         correctionError = "";
-        correctionStatus = qsTr("已加入作品词典；下次检查会使用该词条。");
+        // The dictionary changed the scanner fingerprint. Rebuild the visible
+        // results against the new protection set instead of hiding unrelated
+        // suggestions by matching their original text.
+        invalidateCorrectionResults();
+        requestCorrectionChapter();
+        correctionStatus = entryKind === "person"
+                ? qsTr("已作为人物加入作品词典，正在重新校对本章。")
+                : entryKind === "place"
+                  ? qsTr("已作为地点加入作品词典，正在重新校对本章。")
+                  : qsTr("已作为普通术语加入作品词典，正在重新校对本章。");
         return true;
     }
 
@@ -994,8 +1135,10 @@ QtObject {
         lastSavedEditorText = content;
         explicitEmptySavePending = false;
         lastPotentialExplicitClearAtMs = 0;
+        releaseCorrectionSession(controller.projectId, controller.chapterId);
         invalidateCorrectionResults();
         syncCorrectionTracking(content, Number(targetEditorItem.text_revision), pId, cId);
+        refreshCorrectionEntityNames(pId);
         isLoadingChapter = false;
         // Issue #954：章节打开只恢复 Core 缓存中仍有效的校对结果；未校对过的
         // 段落由后续编辑事务或手动“检查本章”补算，不因切章重扫整章。
@@ -1011,6 +1154,7 @@ QtObject {
     function clearActiveChapter() {
         isLoadingChapter = true;
         try {
+            releaseCorrectionSession(projectId, chapterId);
             if (targetEditorItem) {
                 targetEditorItem.load_document_text("");
                 targetEditorItem.clear_undo_stack();
@@ -1023,6 +1167,7 @@ QtObject {
             lastSavedEditorText = "";
             explicitEmptySavePending = false;
             lastPotentialExplicitClearAtMs = 0;
+            correctionEntityNames = [];
             invalidateCorrectionResults();
             syncCorrectionTracking("", targetEditorItem ? Number(targetEditorItem.text_revision) : -1, "", "");
         } finally {

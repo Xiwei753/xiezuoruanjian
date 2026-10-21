@@ -9,8 +9,9 @@ use crate::api::{
 };
 
 use super::result_cache::{
-    context_range, mark_unseen_segments_in_edit_windows, reconcile_edits, reconcile_full,
-    CachedSuggestion, ChapterCorrectionCacheState, ChapterCorrectionSlot, EditRange,
+    apply_pending_windows, context_range, mark_unseen_segments_in_edit_windows, reconcile_edits,
+    reconcile_full, CachedSuggestion, ChapterCorrectionCacheState, ChapterCorrectionSlot,
+    EditRange,
 };
 use super::CorrectionStore;
 
@@ -38,6 +39,10 @@ pub(crate) enum CorrectionCheckRequest {
         base_revision: u64,
         edits: Vec<EditRange>,
     },
+    /// Segment the dirty windows recorded by lightweight edit updates and
+    /// scan only those segments. This is the model phase of the two-stage
+    /// editor flow.
+    Pending,
     /// Recompute only unchecked segments overlapping the requested byte range.
     Range(usize, usize),
     /// Fill every unseen or invalid segment.
@@ -46,6 +51,20 @@ pub(crate) enum CorrectionCheckRequest {
 
 fn to_u32(value: usize) -> Result<u32, WriterError> {
     u32::try_from(value).map_err(|error| WriterError::Other(error.to_string()))
+}
+
+/// Cached suggestion offsets are relative to the segment start, including the
+/// end offset. Convert both endpoints from the same base.
+fn absolute_suggestion_range(
+    segment_start: u32,
+    suggestion: &CachedSuggestion,
+) -> Result<(usize, usize), WriterError> {
+    let start = usize::try_from(suggestion.start_byte)
+        .map_err(|error| WriterError::Other(error.to_string()))?;
+    let end = usize::try_from(suggestion.end_byte)
+        .map_err(|error| WriterError::Other(error.to_string()))?;
+    let base = segment_start as usize;
+    Ok((base + start, base + end))
 }
 
 fn lock_slot(
@@ -132,6 +151,15 @@ impl CorrectionScanner {
                 edits,
             },
         )
+    }
+
+    /// Segments the dirty windows applied by the lightweight edit phase and
+    /// scans only those segments.
+    pub(crate) fn scan_pending(
+        &self,
+        text: &str,
+    ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+        self.check(text, CorrectionCheckRequest::Pending)
     }
 
     /// Verifies the cache, recomputes the requested range, and returns the
@@ -234,6 +262,15 @@ impl CorrectionScanner {
         guard.scanning = false;
         slot.condvar.notify_all();
         let scanned = scanned?;
+        // A lightweight edit transaction may have advanced the revision while
+        // the model ran outside the lock. Those results belong to the old text
+        // and must not be committed over the newer index.
+        if guard.last_session_id != self.session_id
+            || guard.last_revision != self.text_revision
+            || guard.needs_reconcile
+        {
+            return self.empty_snapshot();
+        }
         // Never label old-engine results with a newer generation: if the
         // model, dictionary, or disabled-rule set changed while the scan ran,
         // discard these results and let the caller retry on a fresh scanner.
@@ -349,15 +386,21 @@ impl CorrectionScanner {
                     mark_unseen_segments_in_edit_windows(guard, edits);
                 }
             }
+            CorrectionCheckRequest::Pending => {
+                apply_pending_windows(
+                    text,
+                    guard,
+                    !same_session || guard.last_revision != self.text_revision,
+                )?;
+            }
             CorrectionCheckRequest::RestoreOnly
             | CorrectionCheckRequest::Range(_, _)
             | CorrectionCheckRequest::All => {
-                if !same_session
-                    || guard.last_revision != self.text_revision
-                    || guard.needs_reconcile
-                {
-                    reconcile_full(text, guard);
-                }
+                apply_pending_windows(
+                    text,
+                    guard,
+                    !same_session || guard.last_revision != self.text_revision,
+                )?;
             }
         }
         guard.last_session_id = self.session_id;
@@ -372,7 +415,7 @@ impl CorrectionScanner {
     ) -> Vec<usize> {
         match request {
             CorrectionCheckRequest::RestoreOnly => Vec::new(),
-            CorrectionCheckRequest::Edits { .. } => guard
+            CorrectionCheckRequest::Edits { .. } | CorrectionCheckRequest::Pending => guard
                 .segments
                 .iter()
                 .enumerate()
@@ -449,13 +492,11 @@ impl CorrectionScanner {
                 end_byte: segment.end_byte,
             });
             for suggestion in suggestions {
+                let (start_byte, end_byte) =
+                    absolute_suggestion_range(segment.start_byte, suggestion)?;
                 diagnostics.push(CorrectionDiagnostic {
-                    start_byte: segment.start_byte as usize
-                        + usize::try_from(suggestion.start_byte)
-                            .map_err(|error| WriterError::Other(error.to_string()))?,
-                    end_byte: segment.end_byte as usize
-                        + usize::try_from(suggestion.end_byte)
-                            .map_err(|error| WriterError::Other(error.to_string()))?,
+                    start_byte,
+                    end_byte,
                     original: suggestion.original.clone(),
                     replacement: suggestion.replacement.clone(),
                     source: suggestion.source.clone(),
@@ -494,5 +535,27 @@ impl CorrectionScanner {
             suggestions: Vec::new(),
             checked_ranges: Vec::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_suggestion_offsets_are_both_relative_to_the_segment_start() {
+        let suggestion = CachedSuggestion {
+            start_byte: 3,
+            end_byte: 8,
+            original: "甲乙".to_string(),
+            replacement: "丙丁".to_string(),
+            source: "test".to_string(),
+            rule_id: "test".to_string(),
+            severity: "warning".to_string(),
+        };
+        assert_eq!(
+            absolute_suggestion_range(100, &suggestion).expect("range"),
+            (103, 108)
+        );
     }
 }

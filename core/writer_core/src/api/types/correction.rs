@@ -59,6 +59,47 @@ impl TryFrom<(sujian_proof::CorrectionDiagnostic, u64)> for CorrectionSuggestion
     }
 }
 
+/// Author-declared meaning of a work-dictionary entry. Legacy string entries
+/// migrate as ordinary terms; a term is protected text but never treated as a
+/// person or place name.
+#[derive(
+    Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrectionDictionaryEntryKindDto {
+    Term,
+    Person,
+    Place,
+}
+
+/// One work-dictionary entry together with its author-declared kind.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionDictionaryEntryDto {
+    pub text: String,
+    pub kind: CorrectionDictionaryEntryKindDto,
+}
+
+/// Author-confirmed exact spelling relation for a registered person or place.
+#[derive(
+    Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrectionEntityNameKindDto {
+    /// Another legitimate spelling of the same entity. It is protected, not flagged.
+    Alias,
+    /// An explicitly wrong spelling that should be replaced by the canonical name.
+    Misspelling,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionEntityNameDto {
+    pub canonical: String,
+    pub name: String,
+    pub kind: CorrectionEntityNameKindDto,
+}
+
 /// One real edit mapping from an editor transaction. `old` addresses the
 /// previous text revision and `new` addresses the revision supplied with the
 /// edit check request. All ranges are half-open UTF-8 byte intervals.

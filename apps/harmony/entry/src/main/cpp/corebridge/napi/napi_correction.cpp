@@ -17,6 +17,8 @@ enum class CorrectionOperation {
     GetModelPathStatus,
     CheckSegment,
     CheckEdits,
+    ApplyEdits,
+    ScanPending,
     CheckChapter,
     GetChapterSnapshot,
     Ignore,
@@ -365,6 +367,16 @@ static void correction_execute(napi_env /*env*/, void* data) {
                 call->session_id, call->project_id.c_str(), call->chapter_id.c_str(),
                 call->text_revision, call->base_revision, call->text.c_str(), call->edits_json.c_str());
             break;
+        case CorrectionOperation::ApplyEdits:
+            call->json = writer_core_apply_correction_edits(
+                call->session_id, call->project_id.c_str(), call->chapter_id.c_str(),
+                call->text_revision, call->base_revision, call->edits_json.c_str());
+            break;
+        case CorrectionOperation::ScanPending:
+            call->json = writer_core_scan_correction_pending(
+                call->session_id, call->project_id.c_str(), call->chapter_id.c_str(),
+                call->text_revision, call->text.c_str());
+            break;
         case CorrectionOperation::CheckChapter:
             call->json = writer_core_check_correction_chapter(
                 call->session_id, call->project_id.c_str(), call->chapter_id.c_str(),
@@ -585,6 +597,45 @@ static napi_value NativeCorrectionCheckEdits(napi_env env, napi_callback_info in
     return correction_queue(env, call);
 }
 
+static napi_value NativeCorrectionApplyEdits(napi_env env, napi_callback_info info) {
+    size_t argc = 6;
+    napi_value args[6];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 6) {
+        return correction_invalid_args(env, "Expected 6 arguments: sessionId, projectId, chapterId, textRevision, baseRevision, editsJson");
+    }
+    CorrectionAsyncWork* call = new CorrectionAsyncWork();
+    call->operation = CorrectionOperation::ApplyEdits;
+    if (!correction_read_session_and_revision(env, args[0], args[3], call) ||
+        !correction_read_uint64(env, args[4], &call->base_revision) ||
+        !correction_read_string(env, args[1], &call->project_id) ||
+        !correction_read_string(env, args[2], &call->chapter_id) ||
+        !correction_read_string(env, args[5], &call->edits_json)) {
+        delete call;
+        return correction_invalid_args(env, "Invalid correction apply edits request");
+    }
+    return correction_queue(env, call);
+}
+
+static napi_value NativeCorrectionScanPending(napi_env env, napi_callback_info info) {
+    size_t argc = 5;
+    napi_value args[5];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 5) {
+        return correction_invalid_args(env, "Expected 5 arguments: sessionId, projectId, chapterId, textRevision, text");
+    }
+    CorrectionAsyncWork* call = new CorrectionAsyncWork();
+    call->operation = CorrectionOperation::ScanPending;
+    if (!correction_read_session_and_revision(env, args[0], args[3], call) ||
+        !correction_read_string(env, args[1], &call->project_id) ||
+        !correction_read_string(env, args[2], &call->chapter_id) ||
+        !correction_read_string(env, args[4], &call->text)) {
+        delete call;
+        return correction_invalid_args(env, "Invalid correction scan pending request");
+    }
+    return correction_queue(env, call);
+}
+
 static napi_value NativeCorrectionCheckChapter(napi_env env, napi_callback_info info) {
     size_t argc = 4;
     napi_value args[4];
@@ -732,6 +783,8 @@ napi_property_descriptor* getCorrectionDescriptors(size_t* count) {
         {"nativeCorrectionGetModelPathStatus", nullptr, NativeCorrectionGetModelPathStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckSegment", nullptr, NativeCorrectionCheckSegment, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckEdits", nullptr, NativeCorrectionCheckEdits, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeCorrectionApplyEdits", nullptr, NativeCorrectionApplyEdits, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeCorrectionScanPending", nullptr, NativeCorrectionScanPending, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionCheckChapter", nullptr, NativeCorrectionCheckChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionGetChapterSnapshot", nullptr, NativeCorrectionGetChapterSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCorrectionIgnore", nullptr, NativeCorrectionIgnore, nullptr, nullptr, nullptr, napi_default, nullptr},

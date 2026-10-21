@@ -1,24 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
-// Work-scoped proper-name protection.
+// Work-scoped proper-name inventory.
 //
 // External person/place/proper-name files are candidate corpora, not proof
 // that a name belongs to the current work. Only entries the author explicitly
-// added to a project's work dictionary are confirmed entities. A near match to
-// such an entity may be surfaced as a low-severity check, while ordinary words
-// and unconfirmed variants are never force-replaced by a corpus name.
+// marked as a person or place are recorded here. They are protected as exact
+// text. This module deliberately does not guess that a similar span is a typo:
+// without reliable entity-usage evidence, a near match must produce no
+// suggestion at all rather than a warning that the author has to dismiss.
+// A known-entity consistency check is available only through an explicit
+// author-confirmed alias or misspelling relation. There is no automatic
+// similarity scan and no unknown-name recognition.
 
-use crate::lexicon::Lexicon;
-use crate::segment::{is_chinese_string, Segmenter, TokenSpan};
+#![allow(dead_code)]
 
-/// Maximum length considered for a work entity. Longer dictionary entries are
-/// still protected as exact text but are not used for near-match checks.
-const MAX_ENTITY_CHARS: usize = 8;
+/// Upper bound for an author-confirmed work entity. This is only a sanity
+/// limit for the inventory; exact protection handles arbitrary text.
+const MAX_ENTITY_CHARS: usize = 64;
 
+/// Whether an author-declared person or place is a complete work name that
+/// the entity inventory can accept. Names may mix scripts and use punctuation
+/// (`X-42`, `甲·乙`), so the only requirements are non-empty
+/// content without control characters and a reasonable length.
+pub fn is_valid_work_entity(text: &str) -> bool {
+    !text.trim().is_empty()
+        && !text.chars().any(char::is_control)
+        && text.chars().count() <= MAX_ENTITY_CHARS
+}
+
+/// Explicit author-confirmed type of a work-dictionary entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProperNameKind {
+pub enum ProperNameKind {
     Person,
     Place,
-    Other,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,19 +40,30 @@ pub(crate) struct WorkEntity {
     pub(crate) kind: ProperNameKind,
 }
 
+/// Author-confirmed exact spelling relation for one work entity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConfirmedEntityMisspelling {
+    pub(crate) original: String,
+    pub(crate) replacement: String,
+}
+
 /// Author-confirmed full names from the current project's work dictionary.
+///
+/// Ordinary work-dictionary terms are intentionally absent. They are still
+/// protected by [`crate::lexicon::Lexicon::insert_protected_word`], but they
+/// can never become the replacement target for another span. Exact aliases and
+/// explicitly marked misspellings are authored relations, not similarity
+/// guesses.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WorkEntityLexicon {
     entities: Vec<WorkEntity>,
+    aliases: Vec<String>,
+    misspellings: Vec<ConfirmedEntityMisspelling>,
 }
 
 impl WorkEntityLexicon {
     pub(crate) fn insert(&mut self, text: String, kind: ProperNameKind) {
-        if text.is_empty() || !is_chinese_string(&text) {
-            return;
-        }
-        let char_len = text.chars().count();
-        if !(2..=MAX_ENTITY_CHARS).contains(&char_len) {
+        if !is_valid_work_entity(&text) {
             return;
         }
         if self.entities.iter().any(|entity| entity.text == text) {
@@ -48,175 +72,121 @@ impl WorkEntityLexicon {
         self.entities.push(WorkEntity { text, kind });
     }
 
+    pub(crate) fn insert_alias(&mut self, canonical: &str, alias: String) -> bool {
+        if !is_valid_work_entity(&alias)
+            || alias == canonical
+            || self.aliases.iter().any(|existing| existing == &alias)
+            || self.entities.iter().any(|entity| entity.text == alias)
+        {
+            return false;
+        }
+        if !self.entities.iter().any(|entity| entity.text == canonical) {
+            return false;
+        }
+        self.aliases.push(alias);
+        true
+    }
+
+    pub(crate) fn insert_misspelling(&mut self, canonical: &str, original: String) -> bool {
+        if !is_valid_work_entity(&original)
+            || original == canonical
+            || self
+                .misspellings
+                .iter()
+                .any(|existing| existing.original == original)
+            || self.aliases.iter().any(|alias| alias == &original)
+            || self.entities.iter().any(|entity| entity.text == original)
+        {
+            return false;
+        }
+        if !self.entities.iter().any(|entity| entity.text == canonical) {
+            return false;
+        }
+        self.misspellings.push(ConfirmedEntityMisspelling {
+            original,
+            replacement: canonical.to_string(),
+        });
+        true
+    }
+
     pub(crate) fn entities(&self) -> &[WorkEntity] {
         &self.entities
     }
 
+    pub(crate) fn aliases(&self) -> &[String] {
+        &self.aliases
+    }
+
+    /// Exact wrong-spelling relations. `original` is not protected text; the
+    /// replacement is an author-confirmed canonical name.
+    pub(crate) fn misspellings(&self) -> &[ConfirmedEntityMisspelling] {
+        &self.misspellings
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
-        self.entities.is_empty()
+        self.entities.is_empty() && self.aliases.is_empty() && self.misspellings.is_empty()
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ProperNameCandidate {
-    pub(crate) start_byte: usize,
-    pub(crate) end_byte: usize,
-    pub(crate) original: String,
-    pub(crate) replacement: String,
-    pub(crate) kind: ProperNameKind,
-}
-
-/// Finds text spans that differ from one confirmed work entity by exactly one
-/// table-supported confusable character.
-///
-/// The variant must not be a known word, an ignored word, or another protected
-/// entity. When those conditions do not hold the function returns nothing: an
-/// uncertain name is not an error.
-pub(crate) fn detect_work_entity_variants(
-    sentence: &str,
-    lexicon: &Lexicon,
-    segmenter: &Segmenter,
-) -> Vec<ProperNameCandidate> {
-    let entity_lexicon = lexicon.work_entity_lexicon();
-    if entity_lexicon.is_empty() || !is_chinese_string(sentence) {
-        return Vec::new();
-    }
-
-    let chars = segmenter.characters(sentence);
-    if chars.len() < 2 {
-        return Vec::new();
-    }
-
-    let mut candidates = Vec::new();
-    for entity in entity_lexicon.entities() {
-        let expected = entity.text.chars().collect::<Vec<_>>();
-        if expected.len() < 2 || expected.len() > chars.len() {
-            continue;
-        }
-        for start in 0..=chars.len() - expected.len() {
-            let window = &chars[start..start + expected.len()];
-            let source = window
-                .iter()
-                .map(|token| token.text.as_str())
-                .collect::<String>();
-            if source == entity.text
-                || lexicon.is_ignored(&source)
-                || lexicon.is_protected_name_component(&source)
-                || lexicon.is_protected_word_window(&source)
-                || lexicon.is_known_word(&source)
-                || segmenter.has_word(&source)
-            {
-                continue;
-            }
-
-            if !has_single_confusable_substitution(window, &expected, lexicon) {
-                continue;
-            }
-
-            let local_start = window.first().map_or(0, |token| token.start_byte);
-            let local_end = window.last().map_or(local_start, |token| token.end_byte);
-            candidates.push(ProperNameCandidate {
-                start_byte: local_start,
-                end_byte: local_end,
-                original: source,
-                replacement: entity.text.clone(),
-                kind: entity.kind,
-            });
-        }
-    }
-
-    candidates.sort_by_key(|candidate| (candidate.start_byte, candidate.end_byte));
-    candidates.dedup_by(|left, right| {
-        left.start_byte == right.start_byte
-            && left.end_byte == right.end_byte
-            && left.replacement == right.replacement
-    });
-    candidates
-}
-
-/// A near match is evidence only when exactly one character differs and that
-/// difference is in the confusion table. Known homophones with two or more
-/// differences are not attributable to the author-confirmed entity.
-fn has_single_confusable_substitution(
-    window: &[TokenSpan],
-    expected: &[char],
-    lexicon: &Lexicon,
-) -> bool {
-    let mut difference_found = false;
-    for (token, expected_char) in window.iter().zip(expected.iter().copied()) {
-        let Some(actual) = token.text.chars().next() else {
-            return false;
-        };
-        if actual == expected_char {
-            continue;
-        }
-        if difference_found || !lexicon.is_confusable(actual, expected_char) {
-            return false;
-        }
-        difference_found = true;
-    }
-    difference_found
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexicon::LexiconPaths;
-
-    fn lexicon() -> Lexicon {
-        Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon")
-    }
 
     #[test]
-    fn external_proper_names_alone_never_create_replacements() {
-        let mut lexicon = lexicon();
-        lexicon.insert_proper_name("祁门".to_string());
-        let segmenter = Segmenter::new();
-        assert!(detect_work_entity_variants("奇门", &lexicon, &segmenter).is_empty());
-    }
-
-    #[test]
-    fn work_dictionary_full_entry_protects_only_the_full_name() {
-        let mut lexicon = lexicon();
-        lexicon.insert_protected_word("祁门".to_string());
-        assert_eq!(lexicon.protected_word_ranges("祁门"), vec![(0, 6)]);
-        assert!(lexicon.protected_word_ranges("奇门").is_empty());
-    }
-
-    #[test]
-    fn valid_ordinary_words_are_never_flagged_as_entity_variants() {
-        let mut lexicon = lexicon();
-        lexicon.insert_protected_word("祁门".to_string());
-        lexicon.insert_protected_word("周于".to_string());
-        let segmenter = Segmenter::new();
-        assert!(
-            detect_work_entity_variants("奇门", &lexicon, &segmenter).is_empty(),
-            "奇门 is a valid ordinary word"
-        );
-        assert!(
-            detect_work_entity_variants("周围", &lexicon, &segmenter).is_empty(),
-            "周围 is a valid ordinary word"
+    fn mixed_script_and_punctuated_names_are_recorded() {
+        let mut lexicon = WorkEntityLexicon::default();
+        lexicon.insert("甲乙丙".to_string(), ProperNameKind::Person);
+        lexicon.insert("甲地乙坊".to_string(), ProperNameKind::Place);
+        lexicon.insert("甲·乙".to_string(), ProperNameKind::Person);
+        lexicon.insert("X-42".to_string(), ProperNameKind::Person);
+        lexicon.insert("乙丙研究所".to_string(), ProperNameKind::Place);
+        let texts = lexicon
+            .entities()
+            .iter()
+            .map(|entity| entity.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            texts,
+            vec!["甲乙丙", "甲地乙坊", "甲·乙", "X-42", "乙丙研究所"]
         );
     }
 
     #[test]
-    fn novel_person_name_is_protected_as_a_full_entry() {
-        let mut lexicon = lexicon();
-        lexicon.insert_protected_word("宿泽柳".to_string());
-        assert_eq!(lexicon.protected_word_ranges("宿泽柳说道"), vec![(0, 9)]);
-        assert!(lexicon.protected_word_ranges("宿泽").is_empty());
-        let segmenter = Segmenter::new();
-        assert!(detect_work_entity_variants("宿泽柳", &lexicon, &segmenter).is_empty());
+    fn duplicate_entries_keep_the_first_confirmed_type() {
+        let mut lexicon = WorkEntityLexicon::default();
+        lexicon.insert("甲乙丙".to_string(), ProperNameKind::Person);
+        lexicon.insert("甲乙丙".to_string(), ProperNameKind::Place);
+        assert_eq!(lexicon.entities().len(), 1);
+        assert_eq!(lexicon.entities()[0].kind, ProperNameKind::Person);
     }
 
     #[test]
-    fn confirmed_work_entity_variant_is_only_a_check_candidate() {
-        let mut lexicon = lexicon();
-        lexicon.insert_protected_word("祁门客栈".to_string());
-        let segmenter = Segmenter::new();
-        let candidates = detect_work_entity_variants("奇门客栈", &lexicon, &segmenter);
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].original, "奇门客栈");
-        assert_eq!(candidates[0].replacement, "祁门客栈");
+    fn aliases_and_explicit_misspellings_require_a_registered_canonical() {
+        let mut lexicon = WorkEntityLexicon::default();
+        assert!(!lexicon.insert_alias("甲乙丙", "乙丙".to_string()));
+        assert!(!lexicon.insert_misspelling("甲乙丙", "甲乙丁".to_string()));
+
+        lexicon.insert("甲乙丙".to_string(), ProperNameKind::Person);
+        assert!(lexicon.insert_alias("甲乙丙", "乙丙".to_string()));
+        assert!(lexicon.insert_misspelling("甲乙丙", "甲乙丁".to_string()));
+        assert_eq!(lexicon.aliases(), ["乙丙"]);
+        assert_eq!(lexicon.misspellings().len(), 1);
+        assert_eq!(lexicon.misspellings()[0].original, "甲乙丁");
+        assert_eq!(lexicon.misspellings()[0].replacement, "甲乙丙");
+
+        // A canonical spelling cannot also be its own alias, and a wrong
+        // spelling cannot silently become another registered entity.
+        assert!(!lexicon.insert_alias("甲乙丙", "甲乙丙".to_string()));
+        assert!(!lexicon.insert_misspelling("甲乙丙", "乙丙".to_string()));
+    }
+
+    #[test]
+    fn empty_control_or_long_entries_are_ignored() {
+        let mut lexicon = WorkEntityLexicon::default();
+        lexicon.insert(String::new(), ProperNameKind::Person);
+        lexicon.insert("   ".to_string(), ProperNameKind::Place);
+        lexicon.insert("甲\n乙".to_string(), ProperNameKind::Person);
+        lexicon.insert("很".repeat(MAX_ENTITY_CHARS + 1), ProperNameKind::Place);
+        assert!(lexicon.is_empty());
     }
 }

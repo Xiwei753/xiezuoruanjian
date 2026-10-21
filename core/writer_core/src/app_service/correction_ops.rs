@@ -149,6 +149,44 @@ impl super::WriterAppService {
             .check_correction_chapter(project_id, chapter_id, session_id, text_revision, text)
     }
 
+    /// Lightweight edit phase used by editors: records the transaction ranges
+    /// without reading or fingerprinting the chapter. No model runs here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_correction_edits(
+        &self,
+        session_id: u64,
+        project_id: String,
+        chapter_id: String,
+        text_revision: u64,
+        base_revision: u64,
+        edits: Vec<CorrectionEditRangeDto>,
+    ) -> Result<(), WriterError> {
+        self.correction_session_identity(session_id, &project_id, &chapter_id)?;
+        self.api.apply_correction_edits(
+            project_id,
+            chapter_id,
+            session_id,
+            text_revision,
+            base_revision,
+            edits,
+        )
+    }
+
+    /// Model phase for the two-stage edit flow. The caller supplies the text
+    /// captured with the newest transaction; the live kernel may be ahead.
+    pub fn scan_correction_pending(
+        &self,
+        session_id: u64,
+        project_id: String,
+        chapter_id: String,
+        text_revision: u64,
+        text: String,
+    ) -> Result<CorrectionChapterSnapshotDto, WriterError> {
+        self.correction_session_identity(session_id, &project_id, &chapter_id)?;
+        self.api
+            .scan_correction_pending(project_id, chapter_id, session_id, text_revision, text)
+    }
+
     /// Applies the actual edit transaction ranges and returns the merged
     /// chapter snapshot. Only segments touched by those edits run the model.
     ///
@@ -216,6 +254,51 @@ impl super::WriterAppService {
         entry: String,
     ) -> Result<bool, WriterError> {
         self.api.add_correction_dictionary_entry(project_id, entry)
+    }
+
+    pub fn add_correction_dictionary_entry_with_kind(
+        &self,
+        project_id: String,
+        entry: String,
+        kind: crate::api::CorrectionDictionaryEntryKindDto,
+    ) -> Result<bool, WriterError> {
+        self.api
+            .add_correction_dictionary_entry_with_kind(project_id, entry, kind)
+    }
+
+    pub fn get_correction_dictionary_entries(
+        &self,
+        project_id: String,
+    ) -> Result<Vec<crate::api::CorrectionDictionaryEntryDto>, WriterError> {
+        self.api.get_correction_dictionary_entries(project_id)
+    }
+
+    pub fn add_correction_entity_name(
+        &self,
+        project_id: String,
+        canonical: String,
+        name: String,
+        kind: crate::api::CorrectionEntityNameKindDto,
+    ) -> Result<bool, WriterError> {
+        self.api
+            .add_correction_entity_name(project_id, canonical, name, kind)
+    }
+
+    pub fn get_correction_entity_names(
+        &self,
+        project_id: String,
+    ) -> Result<Vec<crate::api::CorrectionEntityNameDto>, WriterError> {
+        self.api.get_correction_entity_names(project_id)
+    }
+
+    pub fn remove_correction_entity_name(
+        &self,
+        project_id: String,
+        canonical: String,
+        name: String,
+    ) -> Result<bool, WriterError> {
+        self.api
+            .remove_correction_entity_name(project_id, canonical, name)
     }
 
     #[allow(clippy::too_many_arguments)]

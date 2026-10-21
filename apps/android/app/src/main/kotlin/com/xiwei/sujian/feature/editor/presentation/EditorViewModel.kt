@@ -880,9 +880,9 @@ class EditorViewModel(
             if (correctionIdentity != null && correctionIdentity.targetId == targetId &&
                 editResult.displayPatches.isNotEmpty()
             ) {
-                viewModelScope.launch {
-                    correctionCoordinator?.checkEdits(correctionIdentity, editResult, fullNewText, lease)
-                }
+                // Stage-one mappings are queued into one ordered consumer; the
+                // model scan stays debounced and latest-only inside the coordinator.
+                correctionCoordinator?.enqueueEdits(correctionIdentity, editResult, fullNewText, lease)
             }
             viewModelScope.launch {
                 _editFactEvents.send(
@@ -982,6 +982,8 @@ class EditorViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        correctionCoordinator?.dispose()
+        correctionCoordinator = null
         syncObserverJob?.cancel()
         autoSaveJob?.cancel()
         statsRefreshJob?.cancel()

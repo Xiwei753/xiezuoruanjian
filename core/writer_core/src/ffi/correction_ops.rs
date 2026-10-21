@@ -5,7 +5,9 @@
 use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, with_app_service};
-use crate::api::{CorrectionEditRangeDto, CorrectionIgnoreScopeDto};
+use crate::api::{
+    CorrectionDictionaryEntryKindDto, CorrectionEditRangeDto, CorrectionIgnoreScopeDto,
+};
 
 fn parse_ignore_scope(scope: &str) -> Result<CorrectionIgnoreScopeDto, String> {
     match scope {
@@ -190,6 +192,110 @@ pub unsafe extern "C" fn writer_core_check_correction_edits(
 }
 
 /// # Safety
+/// `project_id`, `chapter_id`, and `edits_json` must be valid null-terminated
+/// UTF-8 C strings. Returns a caller-owned JSON C string.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_apply_correction_edits(
+    session_id: u64,
+    project_id: *const c_char,
+    chapter_id: *const c_char,
+    text_revision: u64,
+    base_revision: u64,
+    edits_json: *const c_char,
+) -> *mut c_char {
+    let project_id = match c_str_to_rust(project_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid project id: {error}")),
+    };
+    let chapter_id = match c_str_to_rust(chapter_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid chapter id: {error}")),
+    };
+    let edits_json = match c_str_to_rust(edits_json) {
+        Ok(value) => value,
+        Err(error) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid correction edits: {error}"),
+            )
+        }
+    };
+    let ranges = match serde_json::from_str::<Vec<[u32; 4]>>(&edits_json) {
+        Ok(ranges) => ranges,
+        Err(error) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid correction edits JSON: {error}"),
+            )
+        }
+    };
+    let edits = ranges
+        .into_iter()
+        .map(
+            |[old_start, old_end, new_start, new_end]| CorrectionEditRangeDto {
+                old_start_byte: old_start,
+                old_end_byte: old_end,
+                new_start_byte: new_start,
+                new_end_byte: new_end,
+            },
+        )
+        .collect();
+    match with_app_service(|service| {
+        service
+            .apply_correction_edits(
+                session_id,
+                project_id,
+                chapter_id,
+                text_revision,
+                base_revision,
+                edits,
+            )
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(()) => ok_json(true),
+        Err(error) => err_json("CORRECTION_ERROR", &error),
+    }
+}
+
+/// # Safety
+/// `project_id`, `chapter_id`, and `text` must be valid null-terminated UTF-8
+/// C strings. Returns a caller-owned JSON C string.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_scan_correction_pending(
+    session_id: u64,
+    project_id: *const c_char,
+    chapter_id: *const c_char,
+    text_revision: u64,
+    text: *const c_char,
+) -> *mut c_char {
+    let project_id = match c_str_to_rust(project_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid project id: {error}")),
+    };
+    let chapter_id = match c_str_to_rust(chapter_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid chapter id: {error}")),
+    };
+    let text = match c_str_to_rust(text) {
+        Ok(value) => value,
+        Err(error) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid correction text: {error}"),
+            )
+        }
+    };
+    match with_app_service(|service| {
+        service
+            .scan_correction_pending(session_id, project_id, chapter_id, text_revision, text)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(error) => err_json("CORRECTION_ERROR", &error),
+    }
+}
+
+/// # Safety
 /// `project_id` and `chapter_id` must be valid null-terminated UTF-8 C strings.
 /// Returns a caller-owned JSON C string; free it with `writer_core_free_string`.
 #[no_mangle]
@@ -336,6 +442,78 @@ pub unsafe extern "C" fn writer_core_add_correction_dictionary_entry(
     match with_app_service(|service| {
         service
             .add_correction_dictionary_entry(project_id, entry)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(error) => err_json("CORRECTION_ERROR", &error),
+    }
+}
+
+/// # Safety
+/// `project_id`, `entry`, and `kind` must be valid null-terminated UTF-8 C
+/// strings. Returns a caller-owned JSON C string.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_add_correction_dictionary_entry_with_kind(
+    project_id: *const c_char,
+    entry: *const c_char,
+    kind: *const c_char,
+) -> *mut c_char {
+    let project_id = match c_str_to_rust(project_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid project id: {error}")),
+    };
+    let entry = match c_str_to_rust(entry) {
+        Ok(value) => value,
+        Err(error) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid dictionary entry: {error}"),
+            )
+        }
+    };
+    let kind = match c_str_to_rust(kind) {
+        Ok(value) => match value.to_ascii_lowercase().as_str() {
+            "term" => CorrectionDictionaryEntryKindDto::Term,
+            "person" => CorrectionDictionaryEntryKindDto::Person,
+            "place" => CorrectionDictionaryEntryKindDto::Place,
+            _ => {
+                return err_json(
+                    "INVALID_ARGUMENT",
+                    &format!("unknown dictionary entry kind: {value}"),
+                )
+            }
+        },
+        Err(error) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid dictionary entry kind: {error}"),
+            )
+        }
+    };
+    match with_app_service(|service| {
+        service
+            .add_correction_dictionary_entry_with_kind(project_id, entry, kind)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(error) => err_json("CORRECTION_ERROR", &error),
+    }
+}
+
+/// # Safety
+/// `project_id` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned JSON C string.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_correction_dictionary_entries(
+    project_id: *const c_char,
+) -> *mut c_char {
+    let project_id = match c_str_to_rust(project_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &format!("Invalid project id: {error}")),
+    };
+    match with_app_service(|service| {
+        service
+            .get_correction_dictionary_entries(project_id)
             .map_err(|error| error.to_string())
     }) {
         Ok(data) => ok_json(data),

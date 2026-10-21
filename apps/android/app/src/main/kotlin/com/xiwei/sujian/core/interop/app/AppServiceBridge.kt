@@ -806,6 +806,42 @@ open class AppServiceBridge(
             holder.service.addCorrectionDictionaryEntry(projectId, entry)
         }
 
+    fun applyCorrectionEdits(
+        sessionId: ULong,
+        projectId: String,
+        chapterId: String,
+        textRevision: ULong,
+        baseRevision: ULong,
+        edits: List<uniffi.writer_core.CorrectionEditRangeDto>,
+    ): BridgeResult<Unit> =
+        holder.wrapResult {
+            holder.service.applyCorrectionEdits(
+                sessionId,
+                projectId,
+                chapterId,
+                textRevision,
+                baseRevision,
+                edits,
+            )
+        }
+
+    fun scanCorrectionPending(
+        sessionId: ULong,
+        projectId: String,
+        chapterId: String,
+        textRevision: ULong,
+        text: String,
+    ): BridgeResult<uniffi.writer_core.CorrectionChapterSnapshotDto> =
+        holder.wrapResult {
+            holder.service.scanCorrectionPending(
+                sessionId,
+                projectId,
+                chapterId,
+                textRevision,
+                text,
+            )
+        }
+
     fun applyCorrection(
         sessionId: ULong,
         projectId: String,
