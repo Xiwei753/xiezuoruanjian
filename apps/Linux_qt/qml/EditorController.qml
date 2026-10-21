@@ -274,6 +274,12 @@ QtObject {
         correctionStatus = "";
     }
 
+    function releaseCorrectionSession(releaseProjectId, releaseChapterId) {
+        if (!releaseProjectId || !releaseChapterId) return;
+        if (!editorBackendRef || !editorBackendRef.release_correction_session) return;
+        editorBackendRef.release_correction_session(releaseProjectId, releaseChapterId);
+    }
+
     function invalidateCorrectionResults() {
         cancelPendingCorrectionRequest();
         correctionDocumentEpoch += 1;
@@ -629,6 +635,25 @@ QtObject {
         return correctionContextHtmlForText(getEditorPlainText(), suggestion);
     }
 
+    // The dictionary stores complete, author-confirmed words, never the
+    // engine's suspicious span. Prefer the writing selection; otherwise show a
+    // short editable context around the suggestion.
+    function correctionDictionaryEntryDraft(suggestion) {
+        var selected = targetEditorItem && targetEditorItem.selected_text
+                ? String(targetEditorItem.selected_text()).trim() : "";
+        if (selected.length > 0) return selected;
+        if (!suggestion) return "";
+        var text = getEditorPlainText();
+        var start = Number(suggestion.startUtf16);
+        var end = Number(suggestion.endUtf16);
+        if (isFinite(start) && isFinite(end) && start >= 0 && end >= start && end <= text.length) {
+            var before = text.slice(Math.max(0, start - 4), start).replace(/[\r\n\u2028\u2029]/g, " ");
+            var after = text.slice(end, Math.min(text.length, end + 4)).replace(/[\r\n\u2028\u2029]/g, " ");
+            return (before + String(suggestion.original || "") + after).trim();
+        }
+        return String(suggestion.original || "").trim();
+    }
+
     function jumpToCorrection(suggestion) {
         if (!suggestion || !suggestionIsCurrent(suggestion)) return false;
         if (!targetEditorItem || !targetEditorItem.reveal_correction) return false;
@@ -745,10 +770,10 @@ QtObject {
         return true;
     }
 
-    function addCorrectionWord(suggestion, kind) {
-        if (!suggestionIsCurrent(suggestion)) {
-            invalidateCorrectionResults();
-            correctionStatus = qsTr("正文已变化，请重新校对。");
+    function addCorrectionWord(entry, kind) {
+        var fullEntry = String(entry || "").trim();
+        if (!fullEntry) {
+            correctionError = qsTr("请填写完整的作品词条。");
             return false;
         }
         if (!editorBackendRef) return false;
@@ -756,9 +781,9 @@ QtObject {
         var result;
         if (editorBackendRef.add_correction_dictionary_entry_with_kind) {
             result = editorBackendRef.add_correction_dictionary_entry_with_kind(
-                projectId, suggestion.original, entryKind);
+                projectId, fullEntry, entryKind);
         } else if (editorBackendRef.add_correction_dictionary_entry) {
-            result = editorBackendRef.add_correction_dictionary_entry(projectId, suggestion.original);
+            result = editorBackendRef.add_correction_dictionary_entry(projectId, fullEntry);
         } else {
             return false;
         }
@@ -766,17 +791,17 @@ QtObject {
             correctionError = result && result.rawError ? result.rawError : qsTr("加入作品词典失败。");
             return false;
         }
-        var remaining = [];
-        for (var i = 0; i < correctionSuggestions.length; i += 1) {
-            if (correctionSuggestions[i].original !== suggestion.original) remaining.push(correctionSuggestions[i]);
-        }
-        updateCorrectionSuggestions(remaining);
         correctionError = "";
+        // The dictionary changed the scanner fingerprint. Rebuild the visible
+        // results against the new protection set instead of hiding unrelated
+        // suggestions by matching their original text.
+        invalidateCorrectionResults();
+        requestCorrectionChapter();
         correctionStatus = entryKind === "person"
-                ? qsTr("已作为人物加入作品词典。")
+                ? qsTr("已作为人物加入作品词典，正在重新校对本章。")
                 : entryKind === "place"
-                  ? qsTr("已作为地点加入作品词典。")
-                  : qsTr("已作为普通术语加入作品词典。");
+                  ? qsTr("已作为地点加入作品词典，正在重新校对本章。")
+                  : qsTr("已作为普通术语加入作品词典，正在重新校对本章。");
         return true;
     }
 
@@ -1041,6 +1066,7 @@ QtObject {
         lastSavedEditorText = content;
         explicitEmptySavePending = false;
         lastPotentialExplicitClearAtMs = 0;
+        releaseCorrectionSession(controller.projectId, controller.chapterId);
         invalidateCorrectionResults();
         syncCorrectionTracking(content, Number(targetEditorItem.text_revision), pId, cId);
         isLoadingChapter = false;
@@ -1058,6 +1084,7 @@ QtObject {
     function clearActiveChapter() {
         isLoadingChapter = true;
         try {
+            releaseCorrectionSession(projectId, chapterId);
             if (targetEditorItem) {
                 targetEditorItem.load_document_text("");
                 targetEditorItem.clear_undo_stack();

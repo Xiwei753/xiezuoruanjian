@@ -16,6 +16,14 @@ use crate::segment::is_chinese_string;
 /// protected as exact text but are not treated as name candidates.
 const MAX_ENTITY_CHARS: usize = 8;
 
+/// Whether an author-declared person or place is a complete work name that
+/// the entity inventory can accept. Ordinary terms may be shorter or contain
+/// punctuation; person/place entries must be a whole Chinese name.
+pub fn is_valid_work_entity(text: &str) -> bool {
+    let char_len = text.chars().count();
+    (2..=MAX_ENTITY_CHARS).contains(&char_len) && is_chinese_string(text)
+}
+
 /// Explicit author-confirmed type of a work-dictionary entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProperNameKind {
@@ -41,11 +49,7 @@ pub(crate) struct WorkEntityLexicon {
 
 impl WorkEntityLexicon {
     pub(crate) fn insert(&mut self, text: String, kind: ProperNameKind) {
-        if text.is_empty() || !is_chinese_string(&text) {
-            return;
-        }
-        let char_len = text.chars().count();
-        if !(2..=MAX_ENTITY_CHARS).contains(&char_len) {
+        if !is_valid_work_entity(&text) {
             return;
         }
         if self.entities.iter().any(|entity| entity.text == text) {

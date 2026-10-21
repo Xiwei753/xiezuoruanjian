@@ -168,16 +168,11 @@ Item {
                                 onTriggered: root.editorControllerRef.ignoreCorrection(modelData, "chapter")
                             }
                             MenuItem {
-                                text: qsTr("加入作品词典（人物）")
-                                onTriggered: root.editorControllerRef.addCorrectionWord(modelData, "person")
-                            }
-                            MenuItem {
-                                text: qsTr("加入作品词典（地点）")
-                                onTriggered: root.editorControllerRef.addCorrectionWord(modelData, "place")
-                            }
-                            MenuItem {
-                                text: qsTr("加入作品词典（普通术语）")
-                                onTriggered: root.editorControllerRef.addCorrectionWord(modelData, "term")
+                                text: qsTr("加入作品词典…")
+                                onTriggered: {
+                                    dictionaryEntryDialog.suggestion = modelData;
+                                    dictionaryEntryDialog.open();
+                                }
                             }
                             MenuSeparator {}
                             MenuItem {
@@ -279,6 +274,64 @@ Item {
                       ? root.editorControllerRef.correctionDictionaryError : ""
                 color: Kirigami.Theme.negativeTextColor
                 wrapMode: Text.Wrap
+            }
+        }
+    }
+
+    // The engine's suggested span may be only one character, while a work
+    // dictionary entry must be the author-confirmed complete name or term.
+    Dialog {
+        id: dictionaryEntryDialog
+        property var suggestion: null
+        title: qsTr("加入作品词典")
+        modal: true
+        focus: true
+        width: Math.min(root.width - Kirigami.Units.largeSpacing * 2,
+                        Kirigami.Units.gridUnit * 26)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            var draft = root.editorControllerRef
+                    ? root.editorControllerRef.correctionDictionaryEntryDraft(suggestion) : "";
+            dictionaryEntryField.text = draft;
+            dictionaryKindBox.currentIndex = 0;
+            dictionaryEntryField.forceActiveFocus();
+            dictionaryEntryField.selectAll();
+        }
+        onAccepted: {
+            if (root.editorControllerRef) {
+                root.editorControllerRef.addCorrectionWord(
+                    dictionaryEntryField.text,
+                    dictionaryKindBox.currentIndex === 1 ? "person"
+                    : dictionaryKindBox.currentIndex === 2 ? "place" : "term");
+            }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.smallSpacing
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("完整词条（可修改为作品中实际使用的完整名称）")
+                wrapMode: Text.Wrap
+            }
+
+            TextField {
+                id: dictionaryEntryField
+                Layout.fillWidth: true
+                selectByMouse: true
+                placeholderText: qsTr("例如：宿泽柳、祁门客栈")
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("类型")
+            }
+
+            ComboBox {
+                id: dictionaryKindBox
+                Layout.fillWidth: true
+                model: [qsTr("普通术语"), qsTr("人物"), qsTr("地点")]
+                currentIndex: 0
             }
         }
     }

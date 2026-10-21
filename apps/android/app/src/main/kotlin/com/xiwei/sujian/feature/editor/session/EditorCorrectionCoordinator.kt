@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,6 +83,15 @@ class EditorCorrectionCoordinator(
     val state: StateFlow<EditorCorrectionState> = _state.asStateFlow()
     private val pendingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var pendingScanJob: Job? = null
+    /** Invalidated on session close so queued edit mappings cannot target a reopened chapter. */
+    private val applyEpoch = AtomicLong(0L)
+    /**
+     * Stage-one edit mappings must reach Core in transaction order. A single
+     * consumer applies them sequentially; the debounced model scan remains a
+     * separate latest-only step, so rapid typing still coalesces.
+     */
+    private val applyChannel = Channel<PendingApply>(Channel.UNLIMITED)
+    private val applyScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private data class PendingScan(
         val identity: EditorCorrectionIdentity,
@@ -91,15 +101,34 @@ class EditorCorrectionCoordinator(
         val text: String,
     )
 
+    private data class PendingApply(
+        val identity: EditorCorrectionIdentity,
+        val lease: EditorInputLease,
+        val generation: Long,
+        val applyEpoch: Long,
+        val textRevision: Long,
+        val baseRevision: Long,
+        val text: String,
+        val edits: List<uniffi.writer_core.CorrectionEditRangeDto>,
+    )
+
+    init {
+        applyScope.launch {
+            for (request in applyChannel) {
+                applyEdits(request)
+            }
+        }
+    }
+
     /**
-     * Apply the editor transaction's real display patches; never infer edits from the caret.
+     * Queue the editor transaction's real display patches; never infer edits from the caret.
      *
      * [text] is the full committed text at [EditResult.newRevision], captured with the
      * transaction. The live kernel may already be at a newer revision when this queued
      * request reaches Core, so the revision must not be re-read here: Core applies the
      * patches against the captured text and advances its own segment index incrementally.
      */
-    suspend fun checkEdits(
+    fun enqueueEdits(
         identity: EditorCorrectionIdentity,
         edit: EditResult,
         text: String,
@@ -111,18 +140,6 @@ class EditorCorrectionCoordinator(
         // under the new session would poison the new chapter's incremental cache.
         if (lease.targetId != identity.targetId || currentIdentity() != identity) return
         if (sessionCoordinator.currentInputLease() != lease) return
-        // Validate before advancing the generation. A stale queued request must
-        // not invalidate the response of a newer request that is still in flight.
-        val generation = requestGeneration.incrementAndGet()
-        if (!_state.value.matchesIdentity(identity)) {
-            _state.value = EditorCorrectionState(
-                targetId = identity.targetId,
-                projectId = identity.projectId,
-                chapterId = identity.chapterId,
-            )
-        }
-        _state.value = _state.value.copy(sessionId = lease.sessionId)
-
         val edits =
             edit.displayPatches
                 .filter { it.newRevision == edit.newRevision }
@@ -134,28 +151,72 @@ class EditorCorrectionCoordinator(
                         it.insertedByteEndExclusive.toUInt(),
                     )
                 }
-        if (edits.isEmpty()) {
-            restoreChapterSnapshot(identity)
+        val generation = requestGeneration.incrementAndGet()
+        // A newer edit supersedes the pending model scan immediately; its own
+        // ordered apply will schedule the next scan after committing.
+        pendingScanJob?.cancel()
+        if (!_state.value.matchesIdentity(identity)) {
+            _state.value = EditorCorrectionState(
+                targetId = identity.targetId,
+                projectId = identity.projectId,
+                chapterId = identity.chapterId,
+            )
+        }
+        _state.value = _state.value.copy(sessionId = lease.sessionId)
+        applyChannel.trySend(
+            PendingApply(
+                identity = identity,
+                lease = lease,
+                generation = generation,
+                applyEpoch = applyEpoch.get(),
+                textRevision = edit.newRevision,
+                baseRevision = edit.baseRevision,
+                text = text,
+                edits = edits,
+            ),
+        )
+    }
+
+    private suspend fun applyEdits(request: PendingApply) {
+        if (request.applyEpoch != applyEpoch.get()) return
+        if (request.lease.targetId != request.identity.targetId ||
+            currentIdentity() != request.identity ||
+            sessionCoordinator.currentInputLease() != request.lease
+        ) {
             return
         }
-
-        val applied =
-            withContext(Dispatchers.IO) {
-                appServiceBridge.applyCorrectionEdits(
-                    sessionId = lease.sessionId,
-                    projectId = identity.projectId,
-                    chapterId = identity.chapterId,
-                    textRevision = edit.newRevision.toULong(),
-                    baseRevision = edit.baseRevision.toULong(),
-                    edits = edits,
-                )
-            }
-        if (applied !is BridgeResult.Success) return
-
-        // The model scan is debounced; rapid edits only apply cheap offset/dirty
-        // updates and the latest text is scanned once after input settles.
+        if (request.edits.isNotEmpty()) {
+            val applied =
+                withContext(Dispatchers.IO) {
+                    appServiceBridge.applyCorrectionEdits(
+                        sessionId = request.lease.sessionId,
+                        projectId = request.identity.projectId,
+                        chapterId = request.identity.chapterId,
+                        textRevision = request.textRevision.toULong(),
+                        baseRevision = request.baseRevision.toULong(),
+                        edits = request.edits,
+                    )
+                }
+            if (applied !is BridgeResult.Success) return
+        }
+        if (request.applyEpoch != applyEpoch.get()) return
+        // Only the latest revision runs the model. Older mappings have already
+        // reached Core above, so no transaction is lost.
+        if (request.generation != requestGeneration.get() ||
+            currentIdentity() != request.identity ||
+            sessionCoordinator.currentInputLease() != request.lease
+        ) {
+            return
+        }
         pendingScanJob?.cancel()
-        val pending = PendingScan(identity, lease, generation, edit.newRevision, text)
+        val pending =
+            PendingScan(
+                request.identity,
+                request.lease,
+                request.generation,
+                request.textRevision,
+                request.text,
+            )
         pendingScanJob =
             pendingScope.launch {
                 delay(CORRECTION_SCAN_DEBOUNCE_MS)
@@ -413,7 +474,10 @@ class EditorCorrectionCoordinator(
     fun clear(targetId: String? = null) {
         requestGeneration.incrementAndGet()
         pendingScanJob?.cancel()
-        if (targetId == null || _state.value.targetId == targetId) _state.value = EditorCorrectionState()
+        if (targetId == null || _state.value.targetId == targetId) {
+            applyEpoch.incrementAndGet()
+            _state.value = EditorCorrectionState()
+        }
     }
 
     private fun snapshotMatchesLease(

@@ -161,6 +161,23 @@ fn submit_correction_job(
     Ok(())
 }
 
+/// Drops a closed chapter's queue bookkeeping. Queued work for the closing
+/// chapter is discarded so opening many chapters never grows the `latest`
+/// map or leaves obsolete jobs waiting behind the shared executor.
+pub(crate) fn release_correction_queue(project_id: &str, chapter_id: &str) {
+    let queue = correction_queue();
+    let mut latest = match queue.latest.lock() {
+        Ok(latest) => latest,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    latest.remove(&(project_id.to_string(), chapter_id.to_string()));
+    let mut jobs = match queue.jobs.lock() {
+        Ok(jobs) => jobs,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    jobs.retain(|job| job.project_id != project_id || job.chapter_id != chapter_id);
+}
+
 fn parse_correction_edits_json(edits_json: &str) -> Result<Vec<CorrectionEditRangeDto>, String> {
     let ranges = serde_json::from_str::<Vec<[u32; 4]>>(edits_json)
         .map_err(|error| format!("校对编辑范围格式无效: {error}"))?;

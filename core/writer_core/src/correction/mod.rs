@@ -928,6 +928,15 @@ impl CorrectionStore {
                 "dictionary entry must be non-empty text without control characters".into(),
             ));
         }
+        if matches!(
+            kind,
+            CorrectionDictionaryEntryKindDto::Person | CorrectionDictionaryEntryKindDto::Place
+        ) && !sujian_proof::is_valid_work_entity(entry)
+        {
+            return Err(WriterError::Other(
+                "人物/地点词条必须是 2–8 个汉字的完整名称".into(),
+            ));
+        }
         self.update_preferences(|preferences| {
             let project = preferences
                 .projects

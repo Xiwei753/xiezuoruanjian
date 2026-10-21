@@ -263,6 +263,10 @@ pub struct EditorBackend {
             edits_json: QString,
         ) -> QJsonObject
     ),
+    /// Issue #954：章节关闭/切换后释放共享校对队列中的章节记录。
+    #[allow(dead_code)]
+    release_correction_session:
+        qt_method!(fn(&self, project_id: QString, chapter_id: QString)),
     /// Issue #954：编辑事务的第二阶段，只扫描已记录的脏段。
     #[allow(dead_code)]
     request_correction_pending: qt_method!(
@@ -968,6 +972,13 @@ impl EditorBackend {
             }
         }
         response
+    }
+
+    fn release_correction_session(&self, project_id: QString, chapter_id: QString) {
+        super::correction_operations::release_correction_queue(
+            &project_id.to_string(),
+            &chapter_id.to_string(),
+        );
     }
 
     fn request_correction_pending(

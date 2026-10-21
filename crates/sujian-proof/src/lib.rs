@@ -20,7 +20,7 @@ mod segment;
 pub use diagnostic::CorrectionDiagnostic;
 pub use lexicon::{Lexicon, LexiconPaths};
 pub use lm::LanguageScorer;
-pub use proper_names::ProperNameKind;
+pub use proper_names::{is_valid_work_entity, ProperNameKind};
 pub use rules::RuleSet;
 
 use std::sync::Arc;

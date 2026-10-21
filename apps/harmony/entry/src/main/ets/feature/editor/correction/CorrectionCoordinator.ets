@@ -45,6 +45,10 @@ export class CorrectionCoordinator {
   private pendingScanTimer: number = -1
   private pendingScanSnapshot: CorrectionRequestSnapshot | null = null
   private pendingScanGeneration: number = 0
+  /** Stage-one edit mappings run one at a time in transaction order. */
+  private applyChain: Promise<void> = Promise.resolve()
+  /** Cleared on chapter/session reset so old mappings cannot target a new document. */
+  private applyEpoch: number = 0
   // Issue #958：内置模型兜底由会话打开回调触发；只有确认已有用户模型或内置模型
   // 成功交给 Core 后，本实例才不再重复尝试（失败保持可重试，不阻断编辑）。
   private bundledModelAttempted: boolean = false
@@ -88,16 +92,24 @@ export class CorrectionCoordinator {
     editResult: EditorEditResult | null = null): void {
     const sessionId = this.editor.getSessionId()
     if (sessionId === null || projectId.length === 0 || chapterId.length === 0) {
+      this.applyEpoch++
       this.invalidate()
       return
     }
 
     if (snapshot.composition !== undefined) {
       this.current = null
+      this.applyEpoch++
       this.invalidate()
       return
     }
 
+    const previous = this.current
+    if (previous !== null && (previous.projectId !== projectId || previous.chapterId !== chapterId ||
+        previous.sessionId !== sessionId)) {
+      // A reopened chapter must not receive queued mappings from the old one.
+      this.applyEpoch++
+    }
     const nextSnapshot: CorrectionRequestSnapshot = {
       projectId: projectId,
       chapterId: chapterId,
@@ -105,7 +117,6 @@ export class CorrectionCoordinator {
       text: snapshot.text,
       revision: snapshot.revision
     }
-    const previous = this.current
     if (previous !== null && previous.projectId === projectId && previous.chapterId === chapterId &&
         previous.sessionId === sessionId && previous.revision === snapshot.revision &&
         previous.text === snapshot.text) {
@@ -124,7 +135,7 @@ export class CorrectionCoordinator {
         editResult.baseRevision <= snapshot.revision) {
       this.isChecking = true
       this.notify()
-      void this.applyEdits(generation, nextSnapshot, editResult)
+      this.enqueueApplyEdits(generation, nextSnapshot, editResult)
     } else {
       this.isChecking = false
       this.notify()
@@ -147,6 +158,7 @@ export class CorrectionCoordinator {
 
   clear(): void {
     this.current = null
+    this.applyEpoch++
     this.invalidate()
   }
 
@@ -231,8 +243,22 @@ export class CorrectionCoordinator {
     this.acceptCheckResult(generation, snapshot, result, true)
   }
 
+  private enqueueApplyEdits(generation: number, snapshot: CorrectionRequestSnapshot,
+    editResult: EditorEditResult): void {
+    const epoch = this.applyEpoch
+    this.applyChain = this.applyChain
+      .then(async (): Promise<void> => {
+        if (epoch !== this.applyEpoch) {
+          return
+        }
+        await this.applyEdits(generation, snapshot, editResult)
+      })
+      .catch((): void => {})
+  }
+
   private async applyEdits(generation: number, snapshot: CorrectionRequestSnapshot,
     editResult: EditorEditResult): Promise<void> {
+    const epoch = this.applyEpoch
     const ranges: number[][] = []
     for (let i = 0; i < editResult.displayPatches.length; i++) {
       const patch = editResult.displayPatches[i]
@@ -255,7 +281,15 @@ export class CorrectionCoordinator {
     const result = await this.bridge.applyEdits(
       snapshot.sessionId, snapshot.projectId, snapshot.chapterId, snapshot.revision,
       editResult.baseRevision, JSON.stringify(ranges))
+    if (epoch !== this.applyEpoch) {
+      return
+    }
     if (!result.success || generation !== this.requestGeneration) {
+      if (!result.success && generation === this.requestGeneration) {
+        this.isChecking = false
+        this.errorMessage = result.userMessage ?? result.errorCode ?? '校对暂不可用'
+        this.notify()
+      }
       return
     }
     this.pendingScanSnapshot = snapshot
