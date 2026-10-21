@@ -5,7 +5,7 @@
 // 层级：Linux_qt UI 层（QML UI 组件）
 // 职责：Core 七角色里的 ToolbarCenter 内容——字号 / 行距 / 首行缩进 / 一键排版 + 保存状态
 // 约束（Issue #825）：
-//   - 由 WritingWorkbenchToolbar 挂在工具条带的中间组里，本组件自己不画工具条外框；
+//   - 由 DesktopTopBar 挂在工具条带的中间组里，本组件自己不画工具条外框；
 //   - 只发出信号，不直接修改 backend，所有设置变更交给 EditorController；
 //   - 同步 / 搜索 / 设置 不在这里，归 ToolbarTrailing 的 GlobalTopActions；
 //   - 使用 DesignTokens 统一样式，禁止硬编码颜色 / 间距。
@@ -67,7 +67,7 @@ Rectangle {
     onCurrentFontSizeChanged: root.syncFontSizeInput()
 
     // Issue #825：本组件只提供 Center 组内容，工具条带背景/高度由
-    // WritingWorkbenchToolbar 统一画，这里保持透明。
+    // DesktopTopBar 统一画，这里保持透明。
     color: "transparent"
 
     implicitHeight: Kirigami.Units.gridUnit * 2.6
@@ -81,7 +81,9 @@ Rectangle {
         // Font button (triggers popover)
         ToolButton {
             id: fontButton
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            Layout.preferredHeight: Math.max(40, Kirigami.Units.gridUnit * 2)
+            Layout.minimumHeight: 40
+            Layout.alignment: Qt.AlignVCenter
             text: "A " + Math.round(root.currentFontSize) + " px"
             icon.name: "draw-text"
             icon.width: Kirigami.Units.iconSizes.smallMedium
@@ -98,7 +100,9 @@ Rectangle {
         // Line Spacing button (triggers lineSpacingPopover)
         ToolButton {
             id: spacingButton
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            Layout.preferredHeight: Math.max(40, Kirigami.Units.gridUnit * 2)
+            Layout.minimumHeight: 40
+            Layout.alignment: Qt.AlignVCenter
             text: Number(root.currentLineSpacing).toFixed(1) + "×"
             icon.name: "format-line-spacing-normal"
             icon.width: Kirigami.Units.iconSizes.smallMedium
@@ -115,7 +119,9 @@ Rectangle {
         // Paragraph Layout button (triggers layoutPopover)
         ToolButton {
             id: layoutButton
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            Layout.preferredHeight: Math.max(40, Kirigami.Units.gridUnit * 2)
+            Layout.minimumHeight: 40
+            Layout.alignment: Qt.AlignVCenter
             text: qsTr("段落")
             icon.name: "format-justify-left"
             icon.width: Kirigami.Units.iconSizes.smallMedium
@@ -131,7 +137,9 @@ Rectangle {
 
         // Format button
         ToolButton {
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            Layout.preferredHeight: Math.max(40, Kirigami.Units.gridUnit * 2)
+            Layout.minimumHeight: 40
+            Layout.alignment: Qt.AlignVCenter
             text: qsTr("一键排版")
             icon.name: "format-text-bold"
             icon.width: Kirigami.Units.iconSizes.smallMedium

@@ -23,11 +23,9 @@
 // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
 // 直接管理，不走 Qt QSG 渲染管线，不受本地布局断点约束
 //
-// 组成（按七个产品语义角色组织）：
-//   WritingWorkbenchToolbar：上方一条贯通工具条带
-//     （ToolbarLeading 返回/撤销/重做 | ToolbarCenter 字号/行距/段落/排版 |
-//       ToolbarTrailing 同步/搜索/设置）
-//   下方内容区 RowLayout：
+// 组成（Issue #977 起）：
+//   全窗口 DesktopTopBar 由 main.qml 统一挂载，不在本页绘制。
+//   本页只负责顶栏以下内容区 RowLayout：
 //     ChapterNavigation (章节树) | Editor (SujianEditorItem) |
 //     ToolPane (工具内容) | ToolRail (最右竖向工具栏)
 // =============================================================================
@@ -191,6 +189,42 @@ Rectangle {
         } else {
             root.requestToolPaneOpen(root.drawerTool || "starmap", true);
         }
+    }
+
+    // ── Issue #977：供 main.qml 的统一 DesktopTopBar 调用的公共动作 ──
+    // 顶栏上移后不能再直接访问编辑器内部 id / 设置 backend；由本工作区把
+    // 撤销、重做、排版和格式设置收口成公开方法，壳层只负责转发点击。
+    readonly property string saveStatus: editorController.saveStatus
+
+    function undoActiveEditor() {
+        editorViewport.undo()
+    }
+
+    function redoActiveEditor() {
+        editorViewport.redo()
+    }
+
+    function formatActiveEditor() {
+        editorController.formatText()
+    }
+
+    function setWritingFontSize(size) {
+        if (!root.settingsBackendRef) return
+        root.settingsBackendRef.setting_font_size = size
+        root.settingsBackendRef.debounced_save_local_settings()
+    }
+
+    function setWritingLineSpacing(spacing) {
+        if (!root.settingsBackendRef) return
+        root.settingsBackendRef.setting_line_spacing = spacing
+        root.settingsBackendRef.debounced_save_local_settings()
+    }
+
+    function toggleWritingFirstLineIndent() {
+        if (!root.settingsBackendRef) return
+        root.settingsBackendRef.setting_auto_indent_enabled =
+            !root.settingsBackendRef.setting_auto_indent_enabled
+        root.settingsBackendRef.debounced_save_local_settings()
     }
 
     // Issue #828：根对象上只能有一个 Component.onCompleted。
@@ -509,62 +543,14 @@ Rectangle {
 
     color: Kirigami.Theme.backgroundColor
 
-    // Issue #825 复核第3项：Core 的 plan 明确是「最上面一整条 Toolbar，下面才是
-    // ChapterNavigation | Editor | ToolPane | ToolRail」。这里由 WritingWorkbenchToolbar
-    // 把这个结构落成真实的 QML 树：SplitView 整体只占内容区，不再自己从窗口顶端开始。
-    WritingWorkbenchToolbar {
-        id: workbenchToolbar
-        dt: root.dt
+    // Issue #977：顶栏已上移到 main.qml 的 DesktopTopBar。本页只负责顶栏以下的
+    // 写作主体：「章节导航 | 正文 | 工具 pane | 最右工具 rail」。
+    // Issue #922：内容区改用 Qt 原生 SplitView 管理三栏，两道分隔线由 Qt 自己生成
+    // 并驱动宽度；最右 WritingToolRail 仍固定宽度，留在外层 RowLayout
+    // （不放进 SplitView，避免造第三条可拖动线）。
+    RowLayout {
         anchors.fill: parent
-
-        // Core 的 ToolbarLeading / ToolbarCenter / ToolbarTrailing bounds
-        // （-1 = Core 没给，按内容自适应）
-        toolbarHeight: root.toolbarHeight
-        leadingWidth: root.toolbarLeadingWidth
-        centerWidth: root.toolbarCenterWidth
-        trailingWidth: root.toolbarTrailingWidth
-
-        appState: root.appState
-
-        // Center 组（WritingFormatGroup）入参
-        currentFontSize: root.settingsBackendRef ? root.settingsBackendRef.setting_font_size : 16
-        currentLineSpacing: root.settingsBackendRef ? root.settingsBackendRef.setting_line_spacing : 1.5
-        firstLineIndent: root.settingsBackendRef ? root.settingsBackendRef.setting_auto_indent_enabled : false
-        saveStatus: editorController.saveStatus
-
-        onBackRequested: root.backToProjects()
-        // 撤销 / 重做走 SujianEditorItem 的真实实现，和键盘 Ctrl+Z/Ctrl+Y 同一条路径。
-        onUndoRequested: editorViewport.undo()
-        onRedoRequested: editorViewport.redo()
-        onFontSizeChanged: function(size) {
-            if (root.settingsBackendRef) {
-                root.settingsBackendRef.setting_font_size = size;
-                root.settingsBackendRef.debounced_save_local_settings();
-            }
-        }
-        onLineSpacingChanged: function(spacing) {
-            if (root.settingsBackendRef) {
-                root.settingsBackendRef.setting_line_spacing = spacing;
-                root.settingsBackendRef.debounced_save_local_settings();
-            }
-        }
-        onFirstLineIndentToggled: {
-            if (root.settingsBackendRef) {
-                root.settingsBackendRef.setting_auto_indent_enabled = !root.settingsBackendRef.setting_auto_indent_enabled;
-                root.settingsBackendRef.debounced_save_local_settings();
-            }
-        }
-        onFormatOneClick: editorController.formatText()
-        onRequestSync: root.requestSync()
-        onRequestSearch: root.requestSearch()
-        onOpenSettings: root.openSettings()
-
-        // Issue #922：内容区改用 Qt 原生 SplitView 管理「章节导航 | 正文 | 工具 pane」
-        // 三栏，两道分隔线由 Qt 自己生成并驱动宽度；最右 WritingToolRail 仍固定宽度，
-        // 留在外层 RowLayout（不放进 SplitView，避免造第三条可拖动线）。
-        RowLayout {
-            anchors.fill: parent
-            spacing: 0
+        spacing: 0
 
             // SplitView 始终承载章节树、正文与右工具 pane；次要 pane 按有效宽度让位。
             SplitView {
@@ -819,7 +805,6 @@ Rectangle {
                 }
             }
         }
-    }
 
     Connections {
         target: root.settingsBackendRef

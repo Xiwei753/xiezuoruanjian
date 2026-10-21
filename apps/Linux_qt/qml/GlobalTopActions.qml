@@ -56,8 +56,8 @@ RowLayout {
             Kirigami.Icon {
                 Layout.alignment: Qt.AlignVCenter
                 source: "view-refresh"
-                implicitWidth: Kirigami.Units.iconSizes.smallMedium
-                implicitHeight: Kirigami.Units.iconSizes.smallMedium
+                implicitWidth: 20
+                implicitHeight: 20
             }
 
             Rectangle {
@@ -95,6 +95,8 @@ RowLayout {
     // 搜索按钮（固定显示）
     MotionToolButton {
         icon.name: "search"
+        icon.width: 20
+        icon.height: 20
         text: qsTr("搜索")
         display: root.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
         ToolTip.visible: hovered
@@ -105,6 +107,8 @@ RowLayout {
     // 设置按钮
     MotionToolButton {
         icon.name: "configure"
+        icon.width: 20
+        icon.height: 20
         text: qsTr("设置")
         display: root.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
         ToolTip.visible: hovered

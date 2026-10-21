@@ -466,6 +466,9 @@ impl StatsApi {
 
         let events = self.store.load_all_events()?;
         let career = project_all_time_stats(&events)?;
+        let history_scope = self.history_scope();
+        // 覆盖起点必须来自完整事件集合，不能用被区间截断后的 daily 投影。
+        let coverage_anchor = events_coverage_anchor(&events);
         let first_writing_date = career.daily_human_typed_chars.keys().next().cloned();
         let last_writing_date = career.daily_human_typed_chars.keys().next_back().cloned();
 
@@ -532,9 +535,18 @@ impl StatsApi {
 
         // 选中时段的日均按区间自然日历天数均摊（含无输入日），与时段卡同口径。
         let selected_days = calendar::day_span_inclusive(&range.start_date, &range.end_date)?;
+        // 逐日热力格与 selected 同一份区间投影，和 trend 的周/月聚合无关。
+        let heatmap_days = build_heatmap_days(
+            &range.start_date,
+            &range.end_date,
+            &selected_stats.daily_human_typed_chars,
+            coverage_anchor.as_deref(),
+            &today,
+            history_scope == "partialSync",
+        )?;
 
         Ok(WritingStatsExplorerDto {
-            history_scope: self.history_scope(),
+            history_scope,
             lifetime,
             period_cards,
             selected: WritingStatsSelectedPeriodDto {
@@ -551,6 +563,7 @@ impl StatsApi {
                     selected_stats.total_human_typed_chars,
                     selected_stats.total_active_seconds,
                 ),
+                heatmap_days,
                 records: records_dto(&selected_stats),
                 trend: WritingStatsTrendDto {
                     granularity: granularity.as_str().to_string(),
@@ -580,66 +593,17 @@ impl StatsApi {
         // 覆盖范围与 Explorer 同源：更早未建立记录、或统计同步失败的区间不能画成真实 0。
         let history_scope = self.history_scope();
         let sync_incomplete = history_scope == "partialSync";
-        let coverage_anchor = events
-            .iter()
-            .filter_map(|event| {
-                let date = event.business_date();
-                if date.is_empty() {
-                    None
-                } else {
-                    Some(date)
-                }
-            })
-            .min();
+        let coverage_anchor = events_coverage_anchor(&events);
         let today = calendar::local_today_date();
         let stats = project_range_stats(&events, &start_date, &end_date)?;
-        let positive: Vec<u64> = stats
-            .daily_human_typed_chars
-            .values()
-            .copied()
-            .filter(|value| *value > 0)
-            .collect();
-        let thresholds = heatmap_intensity_thresholds(positive);
-
-        let start = calendar::parse_date(&start_date)?;
-        let end = calendar::parse_date(&end_date)?;
-        let mut days = Vec::with_capacity(366);
-        let mut date = start;
-        while date <= end {
-            let date_str = date.format("%Y-%m-%d").to_string();
-            let human_typed_chars = stats
-                .daily_human_typed_chars
-                .get(&date_str)
-                .copied()
-                .unwrap_or(0);
-            // 单元格覆盖状态：未来未到 / 已确认（可为真实 0）/ 覆盖不完整或同步失败。
-            let status = if date_str.as_str() > today.as_str() {
-                "future"
-            } else if human_typed_chars > 0 {
-                "known"
-            } else if sync_incomplete {
-                "unknown"
-            } else if coverage_anchor
-                .as_deref()
-                .is_some_and(|anchor| date_str.as_str() >= anchor)
-            {
-                "known"
-            } else {
-                "unknown"
-            };
-            days.push(WritingStatsHeatmapDayDto {
-                date: date_str,
-                human_typed_chars,
-                intensity: heatmap_intensity(human_typed_chars, thresholds),
-                status: status.to_string(),
-            });
-            if date == end {
-                break;
-            }
-            date = date.checked_add_days(chrono::Days::new(1)).ok_or_else(|| {
-                crate::Error::Other(format!("heatmap date overflow for year {year}"))
-            })?;
-        }
+        let days = build_heatmap_days(
+            &start_date,
+            &end_date,
+            &stats.daily_human_typed_chars,
+            coverage_anchor.as_deref(),
+            &today,
+            sync_incomplete,
+        )?;
 
         Ok(WritingStatsHeatmapDto {
             year,
@@ -775,7 +739,79 @@ impl StatsApi {
     }
 }
 
-/// 每日码字日历的强度阈值：该年正数日字数的 25% / 50% / 75% 分位（最近阶）。
+/// 完整事件集合的最早业务日（不受查询区间截断）。
+///
+/// 用于区分「该日早于统计起点、覆盖未知」与「已确认覆盖且确实没写」。
+fn events_coverage_anchor(events: &[WritingInputEvent]) -> Option<String> {
+    events
+        .iter()
+        .map(|event| event.business_date())
+        .filter(|date| !date.is_empty())
+        .min()
+}
+
+/// 生成一段闭区间内的逐日热力格，供全年日历与 Explorer 选中时段共用。
+///
+/// - `daily_human_typed_chars` 必须是该区间的逐日人工输入投影；
+/// - `coverage_anchor` 必须来自未截断的完整事件集合；
+/// - 未来未到 / 已确认（可为真实 0）/ 覆盖不完整或同步失败三种状态在此判定；
+/// - `intensity` 按本区间正数日的分位阈值分级，端侧不重算。
+fn build_heatmap_days(
+    start_date: &str,
+    end_date: &str,
+    daily_human_typed_chars: &std::collections::BTreeMap<String, u64>,
+    coverage_anchor: Option<&str>,
+    today: &str,
+    sync_incomplete: bool,
+) -> Result<Vec<WritingStatsHeatmapDayDto>> {
+    let positive: Vec<u64> = daily_human_typed_chars
+        .values()
+        .copied()
+        .filter(|value| *value > 0)
+        .collect();
+    let thresholds = heatmap_intensity_thresholds(positive);
+
+    let start = calendar::parse_date(start_date)?;
+    let end = calendar::parse_date(end_date)?;
+    let mut days = Vec::new();
+    let mut date = start;
+    while date <= end {
+        let date_str = date.format("%Y-%m-%d").to_string();
+        let human_typed_chars = daily_human_typed_chars
+            .get(&date_str)
+            .copied()
+            .unwrap_or(0);
+        // 单元格覆盖状态：未来未到 / 已确认（可为真实 0）/ 覆盖不完整或同步失败。
+        let status = if date_str.as_str() > today {
+            "future"
+        } else if human_typed_chars > 0 {
+            "known"
+        } else if sync_incomplete {
+            "unknown"
+        } else if coverage_anchor.is_some_and(|anchor| date_str.as_str() >= anchor) {
+            "known"
+        } else {
+            "unknown"
+        };
+        days.push(WritingStatsHeatmapDayDto {
+            date: date_str,
+            human_typed_chars,
+            intensity: heatmap_intensity(human_typed_chars, thresholds),
+            status: status.to_string(),
+        });
+        if date == end {
+            break;
+        }
+        date = date.checked_add_days(chrono::Days::new(1)).ok_or_else(|| {
+            crate::Error::Other(format!(
+                "heatmap date overflow for {start_date}..={end_date}"
+            ))
+        })?;
+    }
+    Ok(days)
+}
+
+/// 每日码字热力图的强度阈值：给定范围正数日字数的 25% / 50% / 75% 分位（最近阶）。
 ///
 /// 没有正数日时三个阈值都是 0（所有日期强度为 0）。所有正数相同（或只有
 /// 一个正数日）时三个阈值相等：判定用严格小于，这些日期都会拿到最高强度 4，

@@ -160,14 +160,15 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
     "qml/MotionDisclosure.qml" as "MotionDisclosure.qml",
     "qml/StatCard.qml" as "StatCard.qml",
-    // Issue #946：统计页 Explorer 主体组件（时段卡 / 纪录面板 / 趋势折线图），
+    // Issue #946：统计页 Explorer 主体组件（时段卡 / 纪录面板），
     // qrc 是显式列表，漏登记时开发目录碰巧能找到、打包后组件不存在。
     "qml/StatsPeriodCard.qml" as "StatsPeriodCard.qml",
     "qml/StatsRecordPanel.qml" as "StatsRecordPanel.qml",
-    "qml/StatsTrendChart.qml" as "StatsTrendChart.qml",
-    // Issue #960：每日码字日历热力图。
+    // Issue #976：展开区的时间范围热力图（不再登记折线趋势组件）。
     "qml/StatsCalendarHeatmap.qml" as "StatsCalendarHeatmap.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",
+    // Issue #977：一级 / 二级主页面共用的全窗口桌面顶栏。
+    "qml/DesktopTopBar.qml" as "DesktopTopBar.qml",
     // Issue #790 评论 5875963057: 全局顶栏公共入口组件
     "qml/GlobalTopActions.qml" as "GlobalTopActions.qml",
     "qml/AppController.qml" as "AppController.qml",
@@ -181,10 +182,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/EditorController.qml" as "EditorController.qml",
     // Issue #904：编辑区视口层组件，WritingWorkspace 直接实例化，漏登记时开发目录碰巧能找到、打包后组件不存在。
     "qml/EditorViewport.qml" as "EditorViewport.qml",
-    // Issue #825 复核4 第3项：工具条带拆成 ToolbarLeading/Center/Trailing 三组，
-    // TopWritingToolbar 被 WritingWorkbenchToolbar + WritingFormatGroup 取代，
-    // 这里同步换掉 qrc 登记，不留第二个入口。
-    "qml/WritingWorkbenchToolbar.qml" as "WritingWorkbenchToolbar.qml",
+    // Issue #977：顶栏上移到 main.qml 的 DesktopTopBar，旧工作台外壳组件已删除；
+    // WritingFormatGroup 仍是 DesktopTopBar 的写作中间组。
     "qml/WritingFormatGroup.qml" as "WritingFormatGroup.qml",
     "qml/EditorContextMenu.qml" as "EditorContextMenu.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",

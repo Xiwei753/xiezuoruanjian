@@ -3,26 +3,28 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML 页面）
-// 职责（Issue #946 / #960）：按新宽屏手稿重做统计主体 ——
+// 职责（Issue #946 / #960 / #976）：按宽屏手稿重做统计主体 ——
 //   - 顶部生涯条：累积人工码字、首末记录日期、平均字/分、平均字/天、
-//     已持续自然日历天数；点击原位展开「左纪录 / 右趋势」；
+//     已持续自然日历天数；点击原位展开「左纪录 / 右热力图」；
 //   - 四个时段卡横排（近七天 / 近三十天 / 近半年 / 自选区间）；点一张后
-//     四卡区域原位替换为「左摘要 / 中纪录 / 右趋势」，可返回四卡总览；
+//     四卡区域原位替换为「左摘要 / 中纪录 / 右热力图」，可返回四卡总览；
 //   - 自选区间先弹起止日期 Dialog，确认后以实际区间请求；
 //   - 统计主体横向填满导航与顶栏之外的主画布，不再套 Hub 的限宽阅读栏；
-//   - 主体下方新增独立的每日码字日历热力图（52/53 周 × 7 天），
-//     与按字数的趋势折线图同时保留；
-//   - 作品 / 章节 / 设备排行与本周速度曲线收进可折叠「详细统计」。
+//   - 热力图只出现在展开区右侧，随当前区间切换日期，不再另占页底一行；
+//   - 不展示折线趋势图与「详细统计」。
 // 约束：
-//   - 纯展示层：只消费 editorBackendRef 的 Explorer / Dashboard / 每日日历
-//     快照，不读文件系统、不做统计聚合（每日字数、纪录、速度、连续天数全在
-//     Core）；字段缺失显示 "—"，不用 0 冒充。
-//   - 三次异步请求各自用递增 requestId 过滤迟到结果；失败保留上次数据，
+//   - 纯展示层：只消费 editorBackendRef 的 Explorer 快照，不读文件系统、
+//     不做统计聚合（每日字数、纪录、热力强度、连续天数全在 Core）；
+//     字段缺失显示 "—"，不用 0 冒充。
+//   - Explorer 异步请求用递增 requestId 过滤迟到结果；失败保留上次数据，
 //     只提示本次读取失败；不在 UI 线程同步读盘（沿用 #935 的 worker 队列）。
 //   - 一级导航由 CreativeHub 桌面外壳负责，本页不造手机式底栏。
 // 历史：
-//   - Issue #935：统计页改为「单次异步 dashboard 快照」，本页保留旧 Dashboard
-//     请求/信号，只服务下方「详细统计」；主体改用 Explorer 快照（#946）。
+//   - Issue #935：统计页改为「单次异步 dashboard 快照」。
+//   - Issue #946：主体改用 Explorer 快照（生涯条 + 四卡 + 原位展开）。
+//   - Issue #960：填满主画布，并按手稿恢复比例。
+//   - Issue #976：右侧恢复为区间热力图，移除折线图、页底全年热力图与
+//     折叠「详细统计」；逐日热力格随 Explorer 一次返回。
 // =============================================================================
 
 import QtQuick
@@ -44,13 +46,6 @@ Rectangle {
     property var explorer: null
     property string statsError: ""
 
-    // ── 每日码字日历请求簿记（Issue #960）：与 Explorer 各自过滤迟到结果 ──
-    property int calendarRequestSerial: 0
-    property int activeCalendarRequestId: 0
-    property var calendar: null
-    property string calendarError: ""
-    readonly property int calendarYear: new Date().getFullYear()
-
     // ── 页面选择状态 ──
     // selectedPeriod：当前选中时段；expandedPanel："" 四卡总览、"lifetime" 生涯，
     // 其余为原位展开的 preset。
@@ -58,13 +53,6 @@ Rectangle {
     property string expandedPanel: ""
     property string startDate: ""
     property string endDate: ""
-
-    // ── 详细统计：旧 Dashboard 快照，独立请求，不与 Explorer 区间混显示 ──
-    property int dashboardRequestSerial: 0
-    property int activeDashboardRequestId: 0
-    property var dashboard: null
-    property string dashboardError: ""
-    property bool detailedStatsExpanded: false
 
     // ── 桌面统计布局尺寸 ──
     // 宽屏展开区的最小可读高度；有余量时由 Layout.fillHeight 继续伸展。
@@ -75,7 +63,6 @@ Rectangle {
     readonly property var lifetime: explorer && explorer.lifetime ? explorer.lifetime : null
     readonly property var selected: explorer && explorer.selected ? explorer.selected : null
     readonly property var selectedRecords: selected ? selected.records : null
-    readonly property var selectedTrend: selected ? selected.trend : null
     readonly property string historyScope: explorer && explorer.historyScope ? String(explorer.historyScope) : ""
     // 首个快照到达前先摆四张空卡（只有预设名，数值显示 "—"）。
     readonly property var periodCards: explorer && explorer.periodCards && explorer.periodCards.length > 0
@@ -92,12 +79,6 @@ Rectangle {
         if (!obj || obj[key] === undefined || obj[key] === null) return null
         var n = Number(obj[key])
         return isNaN(n) ? null : n
-    }
-
-    // 从对象读字符串；字段缺失返回 ""。
-    function fieldString(obj, key) {
-        if (!obj || obj[key] === undefined || obj[key] === null) return ""
-        return String(obj[key])
     }
 
     function formatNum(n) {
@@ -165,16 +146,6 @@ Rectangle {
         root.editorBackendRef.request_writing_stats_explorer(root.activeRequestId, preset, customStart, customEnd)
     }
 
-    // 每日日历独立请求：与 Explorer 同一串行队列，但不共用 requestId。
-    function requestCalendar() {
-        if (!root.editorBackendRef) return
-        root.calendarRequestSerial += 1
-        root.activeCalendarRequestId = root.calendarRequestSerial
-        root.calendarError = ""
-        root.editorBackendRef.request_writing_stats_calendar(
-            root.activeCalendarRequestId, root.calendarYear)
-    }
-
     function openPeriod(preset) {
         if (preset === "custom") {
             // 手稿约定：自选卡点开先弹起止日期 Dialog，确认后才以实际区间展开。
@@ -208,37 +179,14 @@ Rectangle {
         root.requestStats()
     }
 
-    // ── 详细统计（旧 Dashboard）：只在此折叠区使用，数据范围与上方区间无关 ──
-    function requestDashboard() {
-        if (!root.editorBackendRef) return
-        root.dashboardRequestSerial += 1
-        root.activeDashboardRequestId = root.dashboardRequestSerial
-        root.dashboardError = ""
-        root.editorBackendRef.request_writing_stats_dashboard(root.activeDashboardRequestId)
-    }
-
-    function toggleDetailedStats() {
-        root.detailedStatsExpanded = !root.detailedStatsExpanded
-        if (root.detailedStatsExpanded) requestDashboard()
-    }
-
-    function dashboardRangeText() {
-        if (!root.dashboard || !root.dashboard.range) return ""
-        return qsTr("数据范围 %1 – %2（本周口径，与上方区间选择分开）")
-            .arg(root.formatDate(root.dashboard.range.startDate))
-            .arg(root.formatDate(root.dashboard.range.endDate))
-    }
-
     Component.onCompleted: {
         requestStats()
-        requestCalendar()
     }
     onVisibleChanged: if (visible) {
         requestStats()
-        requestCalendar()
     }
 
-    // ── 旧 Dashboard 快照 / 新 Explorer 快照，各自按 requestId 过滤迟到结果 ──
+    // ── Explorer 快照按 requestId 过滤迟到结果 ──
     Connections {
         target: root.editorBackendRef
 
@@ -253,90 +201,6 @@ Rectangle {
             // 保留旧快照数字，只提示本次读取失败；不清空 explorer 冒充 0。
             root.statsError = String(message || qsTr("统计数据读取失败"))
         }
-
-        function onWriting_stats_calendar_ready(requestId, snapshot) {
-            if (requestId !== root.activeCalendarRequestId) return
-            root.calendar = snapshot
-            root.calendarError = ""
-        }
-
-        function onWriting_stats_calendar_failed(requestId, message) {
-            if (requestId !== root.activeCalendarRequestId) return
-            // 保留上次日历快照，只提示本次读取失败。
-            root.calendarError = String(message || qsTr("日历数据读取失败"))
-        }
-
-        function onWriting_stats_dashboard_ready(requestId, snapshot) {
-            if (requestId !== root.activeDashboardRequestId) return
-            root.dashboard = snapshot
-            root.dashboardError = ""
-        }
-
-        function onWriting_stats_dashboard_failed(requestId, message) {
-            if (requestId !== root.activeDashboardRequestId) return
-            root.dashboardError = String(message || qsTr("详细统计读取失败"))
-        }
-    }
-
-    // ── 详细统计里作品 / 章节 / 设备排行与本周速度曲线仍消费旧 Dashboard 快照 ──
-    readonly property var sortedProjects: root.sortByHumanTypedChars(root.dashboard && root.dashboard.projects ? root.dashboard.projects : [])
-    readonly property var sortedChapters: root.sortByHumanTypedChars(root.dashboard && root.dashboard.chapters ? root.dashboard.chapters : [])
-    readonly property var sortedDevices: root.sortByHumanTypedChars(root.dashboard && root.dashboard.devices ? root.dashboard.devices : [])
-    readonly property var speedBuckets: root.dashboard && root.dashboard.speedCurve && root.dashboard.speedCurve.buckets ? root.dashboard.speedCurve.buckets : []
-
-    function sortByHumanTypedChars(list) {
-        var copy = (list || []).slice()
-        copy.sort(function(a, b) {
-            var av = Number(a && a.humanTypedChars)
-            var bv = Number(b && b.humanTypedChars)
-            if (isNaN(av)) av = 0
-            if (isNaN(bv)) bv = 0
-            return bv - av
-        })
-        return copy
-    }
-
-    // 作品/章节标题：遍历 appState.tree，找不到时回退显示 ID 本身。
-    function projectTitleById(projectId) {
-        var tree = root.appState && root.appState.tree ? root.appState.tree : []
-        for (var i = 0; i < tree.length; i++) {
-            var node = tree[i]
-            if (node && node.type === "project" && node.id === projectId) {
-                return node.title ? String(node.title) : String(projectId)
-            }
-        }
-        return String(projectId)
-    }
-
-    function chapterTitleById(chapterId) {
-        var tree = root.appState && root.appState.tree ? root.appState.tree : []
-        for (var i = 0; i < tree.length; i++) {
-            var node = tree[i]
-            if (node && node.type === "chapter" && node.id === chapterId) {
-                return node.title ? String(node.title) : String(chapterId)
-            }
-        }
-        return String(chapterId)
-    }
-
-    // 设备标签：platform · deviceClass · deviceId，空字段跳过，不编造名字。
-    function deviceLabel(device) {
-        if (!device) return ""
-        var parts = []
-        if (device.platform) parts.push(String(device.platform))
-        if (device.deviceClass) parts.push(String(device.deviceClass))
-        if (device.deviceId) parts.push(String(device.deviceId))
-        return parts.join(" · ")
-    }
-
-    function speedPeak() {
-        var maxRate = 0
-        var buckets = root.speedBuckets
-        for (var i = 0; i < buckets.length; i++) {
-            var rate = Number(buckets[i] && buckets[i].charsPerMinute)
-            if (!isNaN(rate) && rate > maxRate) maxRate = rate
-        }
-        return maxRate
     }
 
     HubPageFrame {
@@ -380,7 +244,7 @@ Rectangle {
                     }
                 }
 
-                // ── 生涯顶部条：收起时只显示摘要；展开后原位显示「左纪录 / 右趋势」──
+                // ── 生涯顶部条：收起时只显示摘要；展开后原位显示「左纪录 / 右热力图」──
                 Kirigami.ShadowedRectangle {
                     id: lifetimeBox
                     Layout.fillWidth: root.expandedPanel === "lifetime"
@@ -529,12 +393,15 @@ Rectangle {
                                     flat: true
                                 }
 
-                                StatsTrendChart {
+                                StatsCalendarHeatmap {
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    Layout.minimumWidth: Kirigami.Units.gridUnit * 24
+                                    Layout.minimumWidth: Kirigami.Units.gridUnit * 23
                                     Layout.preferredWidth: 58
-                                    trend: root.selectedTrend
+                                    startDate: root.selected && root.selected.range ? root.selected.range.startDate : ""
+                                    endDate: root.selected && root.selected.range ? root.selected.range.endDate : ""
+                                    days: root.selected && root.selected.heatmapDays ? root.selected.heatmapDays : []
+                                    historyScope: root.historyScope
                                 }
                             }
                         }
@@ -641,18 +508,21 @@ Rectangle {
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     Layout.minimumWidth: Kirigami.Units.gridUnit * 21
-                                    Layout.preferredWidth: Kirigami.Units.gridUnit * 21
+                                    Layout.preferredWidth: 32
                                     records: root.selectedRecords
                                     flat: true
                                 }
 
-                                // 右：按日/周/月人工字数趋势（与旧本周速度曲线语义不同）。
-                                StatsTrendChart {
+                                // 右：当前区间逐日热力图（与旧趋势折线图是两种图表）。
+                                StatsCalendarHeatmap {
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     Layout.minimumWidth: Kirigami.Units.gridUnit * 23
-                                    Layout.preferredWidth: Kirigami.Units.gridUnit * 23
-                                    trend: root.selectedTrend
+                                    Layout.preferredWidth: 44
+                                    startDate: root.selected && root.selected.range ? root.selected.range.startDate : ""
+                                    endDate: root.selected && root.selected.range ? root.selected.range.endDate : ""
+                                    days: root.selected && root.selected.heatmapDays ? root.selected.heatmapDays : []
+                                    historyScope: root.historyScope
                                 }
                             }
                         }
@@ -676,297 +546,6 @@ Rectangle {
                     }
                 }
 
-                // ── 每日码字日历热力图（#960）：独立位于手稿原有统计区与陪伴条之后，
-                //    横跨主画布全宽，随主内容纵向滚动；折线趋势图继续保留。
-                StatsCalendarHeatmap {
-                    Layout.fillWidth: true
-                    calendar: root.calendar
-                    errorText: root.calendarError
-                }
-
-                // ── 详细统计（折叠）：作品 / 章节 / 设备排行与本周速度曲线 ──
-                Kirigami.ShadowedRectangle {
-                    id: detailedStatsBox
-                    Layout.fillWidth: true
-                    radius: Kirigami.Units.cornerRadius
-                    color: Kirigami.Theme.alternateBackgroundColor
-                    border.color: detailedHoverArea.containsMouse ? Kirigami.Theme.highlightColor : Kirigami.Theme.disabledTextColor
-                    border.width: 1
-                    implicitHeight: detailedStatsColumn.implicitHeight + Kirigami.Units.largeSpacing * 2
-
-                    ColumnLayout {
-                        id: detailedStatsColumn
-                        anchors.top: parent.top
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.margins: Kirigami.Units.largeSpacing
-                        spacing: Kirigami.Units.smallSpacing
-
-                        Item {
-                            Layout.fillWidth: true
-                            implicitHeight: detailedStatsHeaderRow.implicitHeight
-
-                            RowLayout {
-                                id: detailedStatsHeaderRow
-                                anchors.fill: parent
-                                spacing: Kirigami.Units.smallSpacing
-
-                                Kirigami.Heading {
-                                    level: 5
-                                    Layout.fillWidth: true
-                                    text: qsTr("详细统计")
-                                    color: Kirigami.Theme.textColor
-                                }
-
-                                Label {
-                                    visible: root.detailedStatsExpanded
-                                    text: qsTr("作品 / 章节 / 设备 · 本周速度")
-                                    color: Kirigami.Theme.disabledTextColor
-                                    font: Kirigami.Theme.smallFont
-                                }
-
-                                Label {
-                                    text: root.detailedStatsExpanded ? "▲" : "▼"
-                                    color: Kirigami.Theme.disabledTextColor
-                                }
-                            }
-
-                            MouseArea {
-                                id: detailedHoverArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.toggleDetailedStats()
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: root.detailedStatsExpanded && root.dashboardRangeText().length > 0
-                            text: root.dashboardRangeText()
-                            color: Kirigami.Theme.disabledTextColor
-                            font: Kirigami.Theme.smallFont
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: root.detailedStatsExpanded && root.dashboardError.length > 0
-                            text: root.dashboardError
-                            color: Kirigami.Theme.negativeTextColor
-                            wrapMode: Text.Wrap
-                        }
-
-                        DashboardGrid {
-                            id: dashboardGrid
-                            Layout.fillWidth: true
-                            visible: root.detailedStatsExpanded
-                            dt: root.dt
-
-                            GridLayout {
-                                Layout.fillWidth: true
-                                columns: dashboardGrid.wide ? 3 : (dashboardGrid.medium ? 2 : 1)
-                                columnSpacing: dashboardGrid.gap
-                                rowSpacing: dashboardGrid.gap
-
-                                DashboardSection {
-                                    dt: root.dt
-                                    title: qsTr("本周速度曲线")
-                                    Layout.fillWidth: true
-                                    Layout.columnSpan: dashboardGrid.wide ? 2 : 1
-
-                                    Canvas {
-                                        id: speedCanvas
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 136
-                                        visible: root.speedBuckets.length > 0
-
-                                        onPaint: {
-                                            var ctx = getContext("2d")
-                                            ctx.clearRect(0, 0, width, height)
-                                            var buckets = root.speedBuckets
-                                            if (buckets.length === 0)
-                                                return
-                                            // Issue #935 复核：x 按 startMs 实际时间轴映射，
-                                            // 断档按真实时间留白；y 按本页峰值归一化，峰值 0 时画底部平线。
-                                            var peak = root.speedPeak()
-                                            var pad = 6
-                                            var innerWidth = Math.max(1, width - pad * 2)
-                                            var innerHeight = Math.max(1, height - pad * 2)
-                                            var minMs = Number(buckets[0].startMs)
-                                            var maxMs = minMs
-                                            for (var i = 1; i < buckets.length; i++) {
-                                                var bucketStart = Number(buckets[i].startMs)
-                                                if (bucketStart < minMs) minMs = bucketStart
-                                                if (bucketStart > maxMs) maxMs = bucketStart
-                                            }
-                                            if (isNaN(minMs)) minMs = 0
-                                            if (isNaN(maxMs)) maxMs = minMs
-                                            var span = maxMs - minMs
-                                            var bucketMs = Math.max(1, Number(root.dashboard && root.dashboard.speedCurve ? root.dashboard.speedCurve.bucketMinutes : 60) || 60) * 60000
-                                            ctx.strokeStyle = Kirigami.Theme.highlightColor
-                                            ctx.lineWidth = 2
-                                            ctx.lineJoin = "round"
-                                            ctx.lineCap = "round"
-                                            ctx.beginPath()
-                                            var previousMs = -1
-                                            for (var j = 0; j < buckets.length; j++) {
-                                                var rate = Number(buckets[j] && buckets[j].charsPerMinute)
-                                                if (isNaN(rate) || rate < 0) rate = 0
-                                                var bucketStartMs = Number(buckets[j].startMs)
-                                                var x = span > 0 ? pad + innerWidth * (bucketStartMs - minMs) / span : pad + innerWidth / 2
-                                                var y = pad + innerHeight * (1 - (peak > 0 ? rate / peak : 0))
-                                                // 断档（超过 1.5 个桶宽没有数据）断开折线，按真实时间留白。
-                                                if (previousMs < 0 || bucketStartMs - previousMs > bucketMs * 1.5)
-                                                    ctx.moveTo(x, y)
-                                                else
-                                                    ctx.lineTo(x, y)
-                                                previousMs = bucketStartMs
-                                            }
-                                            ctx.stroke()
-                                            if (buckets.length === 1) {
-                                                // 单点没有线段，画一个圆点让数据可见。
-                                                ctx.beginPath()
-                                                ctx.arc(pad + innerWidth / 2, pad + innerHeight * (1 - (peak > 0 ? Number(buckets[0].charsPerMinute) / peak : 0)), 3, 0, Math.PI * 2)
-                                                ctx.fillStyle = Kirigami.Theme.highlightColor
-                                                ctx.fill()
-                                            }
-                                        }
-
-                                        Connections {
-                                            target: root
-                                            function onDashboardChanged() { speedCanvas.requestPaint() }
-                                        }
-                                        onWidthChanged: requestPaint()
-                                        onHeightChanged: requestPaint()
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        visible: root.speedBuckets.length === 0
-                                        text: qsTr("暂无数据")
-                                        color: Kirigami.Theme.disabledTextColor
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        visible: root.speedBuckets.length > 0
-                                        text: qsTr("峰值 %1 字/分 · %2 段").arg(Math.round(root.speedPeak())).arg(root.speedBuckets.length)
-                                        color: Kirigami.Theme.disabledTextColor
-                                        font: Kirigami.Theme.smallFont
-                                    }
-                                }
-
-                                DashboardSection {
-                                    dt: root.dt
-                                    title: qsTr("设备统计")
-                                    Layout.fillWidth: true
-
-                                    Repeater {
-                                        model: root.sortedDevices.slice(0, 4)
-
-                                        delegate: RowLayout {
-                                            required property var modelData
-                                            Layout.fillWidth: true
-
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: root.deviceLabel(modelData)
-                                                color: Kirigami.Theme.textColor
-                                                elide: Text.ElideRight
-                                            }
-                                            Label {
-                                                text: root.formatNum(root.val(modelData, "humanTypedChars")) + qsTr(" 字")
-                                                color: Kirigami.Theme.disabledTextColor
-                                            }
-                                        }
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        visible: root.sortedDevices.length === 0
-                                        text: qsTr("暂无数据")
-                                        color: Kirigami.Theme.disabledTextColor
-                                    }
-                                }
-                            }
-
-                            GridLayout {
-                                Layout.fillWidth: true
-                                columns: dashboardGrid.wide || dashboardGrid.medium ? 2 : 1
-                                columnSpacing: dashboardGrid.gap
-                                rowSpacing: dashboardGrid.gap
-
-                                DashboardSection {
-                                    dt: root.dt
-                                    title: qsTr("作品排行")
-                                    Layout.fillWidth: true
-
-                                    Repeater {
-                                        model: root.sortedProjects.slice(0, 5)
-
-                                        delegate: RowLayout {
-                                            required property int index
-                                            required property var modelData
-                                            Layout.fillWidth: true
-
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: (index + 1) + ". " + root.projectTitleById(root.fieldString(modelData, "projectId"))
-                                                color: Kirigami.Theme.textColor
-                                                elide: Text.ElideRight
-                                            }
-                                            Label {
-                                                text: root.formatNum(root.val(modelData, "humanTypedChars")) + qsTr(" 字")
-                                                color: Kirigami.Theme.disabledTextColor
-                                            }
-                                        }
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        visible: root.sortedProjects.length === 0
-                                        text: qsTr("暂无数据")
-                                        color: Kirigami.Theme.disabledTextColor
-                                    }
-                                }
-
-                                DashboardSection {
-                                    dt: root.dt
-                                    title: qsTr("章节排行")
-                                    Layout.fillWidth: true
-
-                                    Repeater {
-                                        model: root.sortedChapters.slice(0, 5)
-
-                                        delegate: RowLayout {
-                                            required property int index
-                                            required property var modelData
-                                            Layout.fillWidth: true
-
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: (index + 1) + ". " + root.chapterTitleById(root.fieldString(modelData, "chapterId"))
-                                                color: Kirigami.Theme.textColor
-                                                elide: Text.ElideRight
-                                            }
-                                            Label {
-                                                text: root.formatNum(root.val(modelData, "humanTypedChars")) + qsTr(" 字")
-                                                color: Kirigami.Theme.disabledTextColor
-                                            }
-                                        }
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        visible: root.sortedChapters.length === 0
-                                        text: qsTr("暂无数据")
-                                        color: Kirigami.Theme.disabledTextColor
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
     }

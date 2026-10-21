@@ -1,17 +1,17 @@
 // =============================================================================
-// StatsCalendarHeatmap.qml — 统计页每日码字日历热力图（Issue #960）
+// StatsCalendarHeatmap.qml — 统计页展开区的时间范围热力图（Issue #976）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：用 Qt Quick Canvas 绘制 Core 每日快照（WritingStatsHeatmapDto）：
-//   - X 轴一列一个自然周（52/53 列），Y 轴固定周一至周日七行；
-//   - 首尾不完整周按真实星期对齐，顶部标月份、左侧标星期；
+// 职责：用 Qt Quick Canvas 绘制 Core Explorer 快照 selected.heatmapDays：
+//   - 只画当前选中区间 [startDate, endDate] 的逐日真值，不固定成某个公历年；
+//   - X 轴一列一个自然周，Y 轴固定周一至周日七行；
+//   - 短区间放大格子并居中，长区间保持可辨认格宽并让热力图自身横向滚动；
 //   - 已确认的日期按 Core 下发的 intensity（0–4）着色，未知/未来单独呈现；
 //   - 悬停或点击日期时显示当天日期与实际人工输入字数。
 // 约束：
-//   - 纯展示组件：不查询磁盘、不重算每日字数或色阶，只消费 `calendar`；
-//   - 与 StatsTrendChart 的按字数折线图是两种图表，不互相替代；
-//   - 宽度不足时按最小可辨认格宽横向滚动，不为压进一屏把格子缩成细线；
+//   - 纯展示组件：不查询磁盘、不重算每日字数或色阶，只消费 days；
+//   - 不把趋势的周/月聚合点拆成每日格子，也不补造区间外的日期；
 //   - 颜色全部来自 Kirigami.Theme，深浅色切换时重绘，不硬编码绿色。
 // 参考：Qt Canvas https://doc.qt.io/qt-6/qml-qtquick-canvas.html
 // =============================================================================
@@ -21,19 +21,17 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
-Kirigami.ShadowedRectangle {
+Item {
     id: root
 
-    /// Core 每日快照（WritingStatsHeatmapDto）；加载前为 null。
-    property var calendar: null
-    /// 本次读取失败时的提示；保留上次快照继续显示。
-    property string errorText: ""
+    /// 当前区间的首末日期（YYYY-MM-DD，均来自 Core Explorer selected.range）。
+    property string startDate: ""
+    property string endDate: ""
+    /// Core 下发的逐日热力格（WritingStatsHeatmapDayDto 列表，日期升序）。
+    property var days: []
+    /// 历史口径：localEvents / syncedDevices / partialSync。
+    property string historyScope: ""
 
-    readonly property var days: calendar && calendar.days ? calendar.days : []
-    readonly property int year: calendar && calendar.year !== undefined ? Number(calendar.year) : 0
-    readonly property string historyScope: calendar && calendar.historyScope ? String(calendar.historyScope) : ""
-
-    // 日期字符串 → 当日 DTO，供格子反查；不把缺失日期伪造成真实 0。
     readonly property var dayByDate: {
         var map = ({})
         for (var i = 0; i < days.length; i++) {
@@ -44,9 +42,9 @@ Kirigami.ShadowedRectangle {
         return map
     }
 
-    // 一周一列：从该年 1 月 1 日所在自然周的周一开始，到 12 月 31 日所在周结束。
-    // 首尾不属于本年的格子标记为 outside，不画成已写作/未写作。
+    // 一周一列：严格按区间首末日期组成所需周列，首尾不完整周保留 outside 占位。
     readonly property var weeks: buildWeeks()
+    readonly property bool hasData: weeks.length > 0
 
     readonly property int writingDays: {
         var count = 0
@@ -67,58 +65,51 @@ Kirigami.ShadowedRectangle {
         return ""
     }
 
-    // 格子尺寸：优先铺满可用宽度；低于最小可辨认尺寸时改为横向滚动。
+    readonly property string rangeText: {
+        if (startDate === "" || endDate === "")
+            return ""
+        return formatDateLabel(startDate) + " – " + formatDateLabel(endDate)
+    }
+
+    // 格子尺寸：同时受可用宽高约束；短区间放大到可读上限并居中。
     readonly property int minCellSize: 12
-    readonly property int maxCellSize: 30
+    readonly property int maxCellSize: 36
     readonly property int cellGap: 3
     readonly property int rightPadding: Kirigami.Units.smallSpacing * 2
     readonly property int leftGutter: Kirigami.Units.gridUnit * 1.8
     readonly property int topGutter: Kirigami.Units.gridUnit * 1.5
-    // 给横向滚动条留空间，避免盖住最下面一行周日格子。
-    readonly property int bottomPadding: Kirigami.Units.gridUnit
+    readonly property int bottomPadding: Kirigami.Units.smallSpacing * 2
+    readonly property int chartMinHeight: topGutter + 7 * 16 + 6 * cellGap + bottomPadding
 
     readonly property int cellSize: {
         var columns = Math.max(1, weeks.length)
-        var available = Math.max(1, chartFlick.width - leftGutter - rightPadding)
         var gaps = Math.max(0, columns - 1) * cellGap
-        var size = Math.floor((available - gaps) / columns)
+        var availableWidth = Math.max(1, chartFlick.width - leftGutter - rightPadding)
+        var widthSize = Math.floor((availableWidth - gaps) / columns)
+        var availableHeight = Math.max(1, chartFlick.height - topGutter - bottomPadding)
+        var heightSize = Math.floor((availableHeight - 6 * cellGap) / 7)
+        var size = Math.min(widthSize, heightSize)
         return Math.max(minCellSize, Math.min(maxCellSize, size))
     }
     readonly property int gridWidth: leftGutter + weeks.length * cellSize + Math.max(0, weeks.length - 1) * cellGap
-    // 超宽窗口封顶格宽后把整块网格居中，避免所有格子挤在左侧。
+    // 宽视口封顶格宽后把整块网格居中，避免所有格子挤在左侧。
     readonly property int gridOffset: Math.max(0, Math.floor((chartFlick.width - gridWidth) / 2))
+    readonly property int gridHeight: topGutter + 7 * cellSize + 6 * cellGap + bottomPadding
     readonly property int canvasWidth: Math.max(1, Math.max(chartFlick.width, gridWidth + rightPadding))
-    readonly property int canvasHeight: topGutter + 7 * cellSize + 6 * cellGap + bottomPadding
+    readonly property int canvasHeight: Math.max(gridHeight, chartFlick.height)
+    readonly property int gridOffsetY: Math.max(0, Math.floor((canvasHeight - gridHeight) / 2))
 
     // 悬停 / 点击的日期只存字符串，快照刷新后仍从最新 dayByDate 取字数。
     property string hoveredDate: ""
     property string selectedDate: ""
     readonly property var activeDay: dayByDate[hoveredDate !== "" ? hoveredDate : selectedDate] || null
 
-    // 主题颜色变化会更新这两个绑定；Canvas 用它们作为重绘触发器，
-    // 不依赖 Attached Property 上是否存在可直接连接的 change signal。
+    // 主题颜色变化会更新这两个绑定；Canvas 用它们作为重绘触发器。
     readonly property color themeTextColor: Kirigami.Theme.textColor
     readonly property color themeHighlightColor: Kirigami.Theme.highlightColor
 
-    radius: Kirigami.Units.cornerRadius
-    color: Kirigami.Theme.alternateBackgroundColor
-    border.color: Kirigami.Theme.disabledTextColor
-    border.width: 1
-
-    implicitHeight: panelColumn.implicitHeight + Kirigami.Units.largeSpacing * 2
-
-    onCalendarChanged: {
-        if (selectedDate !== "" && !dayByDate[selectedDate])
-            selectedDate = ""
-        heatmapCanvas.requestPaint()
-    }
-    onWeeksChanged: heatmapCanvas.requestPaint()
-    onCellSizeChanged: heatmapCanvas.requestPaint()
-    onGridOffsetChanged: heatmapCanvas.requestPaint()
-    // 选中框由 Canvas 绘制，选中/取消选中后必须主动重绘。
-    onSelectedDateChanged: heatmapCanvas.requestPaint()
-    onThemeTextColorChanged: heatmapCanvas.requestPaint()
-    onThemeHighlightColorChanged: heatmapCanvas.requestPaint()
+    implicitWidth: panelColumn.implicitWidth
+    implicitHeight: panelColumn.implicitHeight
 
     function dateFromIso(iso) {
         if (!iso) return null
@@ -136,30 +127,54 @@ Kirigami.ShadowedRectangle {
         return date.getFullYear() + "-" + month + "-" + day
     }
 
+    function formatDateLabel(iso) {
+        var parts = String(iso).split("-")
+        if (parts.length !== 3) return String(iso)
+        return Number(parts[0]) + "/" + Number(parts[1]) + "/" + Number(parts[2])
+    }
+
+    function mondayOf(date) {
+        var cursor = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+        cursor.setDate(cursor.getDate() - ((cursor.getDay() + 6) % 7))
+        return cursor
+    }
+
     function buildWeeks() {
-        if (days.length === 0)
-            return []
-        var first = dateFromIso(days[0].date)
-        var last = dateFromIso(days[days.length - 1].date)
-        if (!first || !last)
+        var first = dateFromIso(startDate)
+        var last = dateFromIso(endDate)
+        if (!first || !last) {
+            // 页面尚未给出区间时，退回 Core 日格的首末日期（不自行发明范围）。
+            if (days.length === 0)
+                return []
+            first = dateFromIso(days[0].date)
+            last = dateFromIso(days[days.length - 1].date)
+        }
+        if (!first || !last || first.getTime() > last.getTime())
             return []
 
-        // 回到该周周一；首尾不完整的周保留 outside 占位。
-        var cursor = new Date(first.getFullYear(), first.getMonth(), first.getDate())
-        cursor.setDate(cursor.getDate() - ((cursor.getDay() + 6) % 7))
+        var cursor = mondayOf(first)
         var result = []
         while (cursor.getTime() <= last.getTime()) {
             var week = []
             for (var row = 0; row < 7; row++) {
                 var date = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + row)
                 var iso = isoFromDate(date)
-                var known = dayByDate[iso]
-                week.push(known || {
-                    "date": iso,
-                    "humanTypedChars": 0,
-                    "intensity": 0,
-                    "status": "outside"
-                })
+                if (date.getTime() < first.getTime() || date.getTime() > last.getTime()) {
+                    week.push({
+                        "date": iso,
+                        "humanTypedChars": 0,
+                        "intensity": 0,
+                        "status": "outside"
+                    })
+                } else {
+                    // 区间内缺失的日期按「未知」处理，不伪造真实 0。
+                    week.push(dayByDate[iso] || {
+                        "date": iso,
+                        "humanTypedChars": 0,
+                        "intensity": 0,
+                        "status": "unknown"
+                    })
+                }
             }
             result.push(week)
             cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 7)
@@ -196,17 +211,18 @@ Kirigami.ShadowedRectangle {
         return day.date + " · " + formatNum(day.humanTypedChars) + " " + qsTr("字（人工输入）")
     }
 
-    // 鼠标坐标 → 格子：行列内的实际日期；落在间隙或本年第 0 周之外返回 null。
+    // 鼠标坐标 → 格子：行列内的实际日期；落在间隙或区间外返回 null。
     function dayAt(px, py) {
         var localX = px - gridOffset
-        if (weeks.length === 0 || localX < leftGutter || py < topGutter)
+        var localY = py - gridOffsetY
+        if (weeks.length === 0 || localX < leftGutter || localY < topGutter)
             return null
         var step = cellSize + cellGap
         var column = Math.floor((localX - leftGutter) / step)
-        var row = Math.floor((py - topGutter) / step)
+        var row = Math.floor((localY - topGutter) / step)
         if (column < 0 || column >= weeks.length || row < 0 || row >= 7)
             return null
-        if (localX - leftGutter - column * step > cellSize || py - topGutter - row * step > cellSize)
+        if (localX - leftGutter - column * step > cellSize || localY - topGutter - row * step > cellSize)
             return null
         var day = weeks[column][row]
         return day && day.status !== "outside" ? day : null
@@ -217,12 +233,31 @@ Kirigami.ShadowedRectangle {
         hoveredDate = day ? String(day.date) : ""
     }
 
+    onStartDateChanged: {
+        selectedDate = ""
+        heatmapCanvas.requestPaint()
+    }
+    onEndDateChanged: {
+        selectedDate = ""
+        heatmapCanvas.requestPaint()
+    }
+    onDaysChanged: {
+        if (selectedDate !== "" && !dayByDate[selectedDate])
+            selectedDate = ""
+        heatmapCanvas.requestPaint()
+    }
+    onWeeksChanged: heatmapCanvas.requestPaint()
+    onCellSizeChanged: heatmapCanvas.requestPaint()
+    onGridOffsetChanged: heatmapCanvas.requestPaint()
+    onGridOffsetYChanged: heatmapCanvas.requestPaint()
+    // 选中框与悬停由 Canvas 绘制，状态变化后必须主动重绘。
+    onSelectedDateChanged: heatmapCanvas.requestPaint()
+    onThemeTextColorChanged: heatmapCanvas.requestPaint()
+    onThemeHighlightColorChanged: heatmapCanvas.requestPaint()
+
     ColumnLayout {
         id: panelColumn
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.margins: Kirigami.Units.largeSpacing
+        anchors.fill: parent
         spacing: Kirigami.Units.smallSpacing
 
         RowLayout {
@@ -236,8 +271,8 @@ Kirigami.ShadowedRectangle {
             }
 
             Label {
-                visible: root.year > 0
-                text: root.year + qsTr(" 年")
+                visible: root.rangeText.length > 0
+                text: root.rangeText
                 color: Kirigami.Theme.disabledTextColor
             }
 
@@ -258,23 +293,20 @@ Kirigami.ShadowedRectangle {
             }
         }
 
-        Label {
-            Layout.fillWidth: true
-            visible: root.errorText.length > 0
-            text: root.errorText
-            color: Kirigami.Theme.negativeTextColor
-            wrapMode: Text.Wrap
-        }
-
-        // 窄视口横向滚动；宽视口由格子尺寸铺满整行。
+        // 窄视口或长区间横向滚动；短区间由格子尺寸铺满内框并居中。
         Flickable {
             id: chartFlick
             Layout.fillWidth: true
-            Layout.preferredHeight: root.canvasHeight
+            Layout.fillHeight: true
+            Layout.minimumHeight: root.chartMinHeight
+            visible: root.hasData
             contentWidth: heatmapCanvas.width
-            contentHeight: root.canvasHeight
+            contentHeight: heatmapCanvas.height
             clip: true
             boundsBehavior: Flickable.StopAtBounds
+            // 桌面统计页禁止鼠标左键拖拽画布；横向移动交给滚轮/触摸板
+            // 与下方滚动条，左键保留给 MouseArea 选日期。
+            acceptedButtons: Qt.NoButton
 
             Canvas {
                 id: heatmapCanvas
@@ -305,7 +337,7 @@ Kirigami.ShadowedRectangle {
                     for (var w = 0; w < 7; w++) {
                         ctx.fillText(weekdayLabels[w],
                                      root.gridOffset + root.leftGutter - Kirigami.Units.smallSpacing,
-                                     root.topGutter + w * step + cell / 2)
+                                     root.gridOffsetY + root.topGutter + w * step + cell / 2)
                     }
 
                     // 月份标在该月 1 日所在的列；过近的标签跳过，避免重叠。
@@ -331,7 +363,7 @@ Kirigami.ShadowedRectangle {
                         var labelWidth = ctx.measureText(label).width
                         var labelX = Math.min(x, width - labelWidth - 2)
                         ctx.fillStyle = labelColor
-                        ctx.fillText(label, labelX, root.topGutter - Kirigami.Units.smallSpacing)
+                        ctx.fillText(label, labelX, root.gridOffsetY + root.topGutter - Kirigami.Units.smallSpacing)
                         lastMonthX = x
                     }
 
@@ -342,7 +374,7 @@ Kirigami.ShadowedRectangle {
                             if (!day || day.status === "outside" || day.status === "future")
                                 continue
                             var x0 = root.gridOffset + root.leftGutter + c * step
-                            var y0 = root.topGutter + r * step
+                            var y0 = root.gridOffsetY + root.topGutter + r * step
                             if (day.status === "unknown") {
                                 ctx.beginPath()
                                 roundedRect(ctx, x0 + 0.5, y0 + 0.5, cell - 1, cell - 1, 2)
@@ -397,8 +429,18 @@ Kirigami.ShadowedRectangle {
             }
         }
 
+        // 没有历史时保持简洁空状态，不画假热度。
         Label {
             Layout.fillWidth: true
+            visible: !root.hasData
+            text: qsTr("暂无每日写作数据")
+            color: Kirigami.Theme.disabledTextColor
+            horizontalAlignment: Text.AlignHCenter
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: root.hasData
             text: root.dayDescription(root.activeDay)
             color: root.activeDay && root.activeDay.status === "unknown"
                 ? Kirigami.Theme.disabledTextColor
@@ -408,6 +450,7 @@ Kirigami.ShadowedRectangle {
 
         RowLayout {
             Layout.fillWidth: true
+            visible: root.hasData
             spacing: Kirigami.Units.smallSpacing
 
             Label {

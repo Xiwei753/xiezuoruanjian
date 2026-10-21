@@ -225,7 +225,7 @@ fi
 
 # --- Check 9: QML required property binding (qmllint [required]) ---
 # Issue #830：旧实现按组件名白名单（AppText / AppButton / HubPageHeader）grep 调用点，
-# 再猜 5 行上下文里有没有 `dt:`。白名单漏登记一个组件（比如 WritingWorkbenchToolbar），
+# 再猜 5 行上下文里有没有 `dt:`。白名单漏登记一个组件（比如 DesktopTopBar），
 # 漏传就一路进到运行时：QML 创建组件时报 "Required property dt was not initialized"，
 # 页面整片白屏（#830 的启动白屏就是这个）。
 # 现在直接用 Qt 自带的 qmllint：required 属性诊断由组件自身声明驱动，

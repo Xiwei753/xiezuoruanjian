@@ -298,6 +298,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
             writing_days: 0,
             average_chars_per_day: None,
             average_chars_per_minute: None,
+            heatmap_days: Vec::new(),
             records: WritingStatsRecordsDto {
                 best_day: WritingStatsRecordDto {
                     date: None,
@@ -359,6 +360,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
                 "writingDays": 0,
                 "averageCharsPerDay": null,
                 "averageCharsPerMinute": null,
+                "heatmapDays": [],
                 "records": {
                     "bestDay": { "date": null, "endDate": null, "value": null },
                     "fastestHour": { "date": null, "endDate": null, "value": null },
@@ -410,6 +412,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
             writing_days: 5,
             average_chars_per_day: Some(60.0),
             average_chars_per_minute: Some(30.0),
+            heatmap_days: Vec::new(),
             records: WritingStatsRecordsDto {
                 best_day: WritingStatsRecordDto {
                     date: Some("2026-10-15".to_string()),
@@ -480,6 +483,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
                 "writingDays": 5,
                 "averageCharsPerDay": 60.0,
                 "averageCharsPerMinute": 30.0,
+                "heatmapDays": [],
                 "records": {
                     "bestDay": { "date": "2026-10-15", "endDate": null, "value": 120 },
                     "fastestHour": { "date": "2026-10-15", "endDate": null, "value": 90 },
