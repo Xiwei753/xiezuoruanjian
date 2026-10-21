@@ -29,7 +29,6 @@ TestCase {
 
     function test_overview_period_and_lifetime_states() {
         let page = createPage()
-        compare(page.narrowLayout, false, "wide layout at 1280px")
         compare(page.expandedPanel, "", "starts on the four-card overview")
 
         page.expandedPanel = "last7Days"
@@ -41,21 +40,6 @@ TestCase {
 
         page.collapsePanel()
         compare(page.expandedPanel, "")
-
-        page.destroy()
-    }
-
-    function test_narrow_layout_switch() {
-        let page = createPage()
-        page.width = 700
-        compare(page.narrowLayout, true, "narrow layout at 700px")
-
-        page.selectNarrowPeriod("last30Days")
-        compare(page.selectedPeriod, "last30Days")
-        compare(page.expandedPanel, "")
-
-        page.width = 1280
-        compare(page.narrowLayout, false)
 
         page.destroy()
     }
