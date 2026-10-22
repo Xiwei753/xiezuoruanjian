@@ -24,6 +24,8 @@ QtObject {
     id: controller
 
     signal emptySaveBlocked(string message)
+    signal chapterLoaded(string projectId, string volumeId, string chapterId)
+    signal chapterLoadFailed(string projectId, string volumeId, string chapterId, string reason)
 
     // Target UI bindings
     property var targetEditorItem: null
@@ -1161,6 +1163,7 @@ QtObject {
         if (!result.success) {
             console.error("[SujianDebug] Failed to open chapter:", result.errorCode || result.rawError);
             isLoadingChapter = false;
+            chapterLoadFailed(pId, vId, cId, String(result.rawError || result.errorCode || "open_failed"));
             return null;
         }
 
@@ -1190,6 +1193,8 @@ QtObject {
         // Issue #954：章节打开只恢复 Core 缓存中仍有效的校对结果；未校对过的
         // 段落由后续编辑事务或手动“检查本章”补算，不因切章重扫整章。
         requestCorrectionSnapshot();
+
+        chapterLoaded(pId, vId, cId);
 
         // Return full result so caller updates chapter state from authoritative source
         return result;

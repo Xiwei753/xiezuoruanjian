@@ -279,6 +279,8 @@ Rectangle {
     // Issue #770 评论 5842877986: 作品切到位后发出，main.qml 据此消费
     // pendingConflictPath（projectId 匹配才消费），不靠猜 Loader 是否已存在。
     signal projectReady()
+    signal chapterLoaded(string projectId, string volumeId, string chapterId)
+    signal chapterLoadFailed(string projectId, string volumeId, string chapterId, string reason)
 
     // Issue #762 评论 5826175490 第 4 点：当外部设置 conflictPath 时，
     // 刷新冲突列表并打开右侧抽屉到冲突 tab，把 conflictPath 透传给 RightDrawer。
@@ -391,6 +393,12 @@ Rectangle {
         editorViewportRef: editorViewport
         editorBackendRef: root.editorBackendRef
         dt: root.dt
+        onChapterLoaded: function(projectId, volumeId, chapterId) {
+            root.chapterLoaded(projectId, volumeId, chapterId)
+        }
+        onChapterLoadFailed: function(projectId, volumeId, chapterId, reason) {
+            root.chapterLoadFailed(projectId, volumeId, chapterId, reason)
+        }
         // Issue #709 评论 issue-body-709: 传入 themeController 使
         // logRenderColorProbe 能读取 runtime state。
         themeControllerRef: root.themeController

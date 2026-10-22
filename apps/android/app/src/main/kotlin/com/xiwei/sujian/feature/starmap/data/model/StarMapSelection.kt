@@ -70,6 +70,8 @@ fun StarMapData.resolveSelectionTarget(target: StarMapSelectionTarget): StarMapR
                     ?.source
                     ?.let { resolvePathOwner(it) }
         } ?: return null
+    // 目标存在但端点无法解析时没有可定位几何，不能当作可成功定位。
+    if (ownerCenter(owner) == null) return null
     return StarMapResolvedSelection(requested = target, owner = owner)
 }
 
@@ -79,7 +81,7 @@ fun StarMapData.selectionCenter(target: StarMapSelectionTarget): StarMapPointDat
     return ownerCenter(resolved.owner)
 }
 
-fun StarMapData.ownerCenter(owner: StarMapSelectionOwner): StarMapPointData =
+fun StarMapData.ownerCenter(owner: StarMapSelectionOwner): StarMapPointData? =
     when (owner) {
         is StarMapSelectionOwner.Node -> owner.node.position
         is StarMapSelectionOwner.Embed -> owner.embed.position
@@ -87,7 +89,7 @@ fun StarMapData.ownerCenter(owner: StarMapSelectionOwner): StarMapPointData =
             val from = positionForPath(owner.edge.from)
             val to = positionForPath(owner.edge.to)
             if (from == null || to == null) {
-                StarMapPointData()
+                null
             } else {
                 StarMapPointData(
                     x = (from.x + to.x) / 2f,

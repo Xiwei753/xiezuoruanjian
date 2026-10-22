@@ -4,49 +4,73 @@ use std::hash::{Hash, Hasher};
 
 use super::types::*;
 
-/// 原文折叠大小写后的字节位置 -> 原始 UTF-8 字节位置映射。
+/// 原文折叠大小写后的字节位置 -> 原始 UTF-8 字符范围映射。
 ///
-/// `to_lowercase()` 可能改变字节长度（例如 `İ`），因此不能把折叠文本上的
-/// 偏移直接当作原文偏移。这里逐字符记录每个折叠字节对应的原始字节起点。
-fn fold_with_offsets(text: &str) -> (String, Vec<usize>) {
+/// `to_lowercase()` 可能改变字节长度（例如 `İ` 折叠为 `i\u{307}`），因此不能把
+/// 折叠文本上的偏移直接当作原文偏移。这里逐个折叠字节记录其来源字符的完整
+/// UTF-8 范围，命中跨越字符内部时也能还原为完整原文字符。
+fn fold_with_offsets(text: &str) -> (String, Vec<(usize, usize)>) {
     let mut folded = String::with_capacity(text.len());
-    let mut map = Vec::with_capacity(text.len() + 1);
+    let mut map = Vec::with_capacity(text.len());
     for (byte_index, ch) in text.char_indices() {
+        let char_end = byte_index + ch.len_utf8();
         let before = folded.len();
         for lower in ch.to_lowercase() {
             folded.push(lower);
         }
         for _ in before..folded.len() {
-            map.push(byte_index);
+            map.push((byte_index, char_end));
         }
     }
-    map.push(text.len());
     (folded, map)
 }
 
-fn find_all_occurrences(folded: &str, needle: &str, map: Option<&[usize]>) -> Vec<(usize, usize)> {
+fn next_char_boundary(text: &str, pos: usize) -> usize {
+    if pos >= text.len() {
+        return text.len().saturating_add(1);
+    }
+    pos + text[pos..].chars().next().map(char::len_utf8).unwrap_or(1)
+}
+
+fn find_all_occurrences(
+    folded: &str,
+    needle: &str,
+    map: Option<&[(usize, usize)]>,
+) -> Vec<(usize, usize)> {
     if needle.is_empty() || folded.is_empty() {
         return Vec::new();
     }
     let mut matches = Vec::new();
+    let mut seen = HashSet::new();
     let mut search_from = 0;
-    while search_from <= folded.len() {
+    while search_from < folded.len() {
         let Some(relative) = folded[search_from..].find(needle) else {
             break;
         };
         let start = search_from + relative;
         let end = start + needle.len();
         let (orig_start, orig_end) = match map {
-            Some(map) => (
-                map.get(start).copied().unwrap_or(0),
-                map.get(end).copied().unwrap_or_else(|| map.last().copied().unwrap_or(0)),
-            ),
+            Some(map) => {
+                let orig_start = map
+                    .get(start)
+                    .map(|(start, _)| *start)
+                    .unwrap_or_else(|| map.last().map(|(_, end)| *end).unwrap_or(0));
+                let orig_end = if end == start {
+                    orig_start
+                } else {
+                    map.get(end - 1)
+                        .map(|(_, end)| *end)
+                        .unwrap_or(orig_start)
+                };
+                (orig_start, orig_end)
+            }
             None => (start, end),
         };
-        if orig_end > orig_start {
+        if orig_end > orig_start && seen.insert((orig_start, orig_end)) {
             matches.push((orig_start, orig_end));
         }
-        search_from = end.max(start + 1);
+        // 允许重叠命中：下一次只前进一个原文字符，而不是跳过整个命中。
+        search_from = next_char_boundary(folded, start);
     }
     matches
 }

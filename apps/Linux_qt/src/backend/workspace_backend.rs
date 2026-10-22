@@ -41,6 +41,7 @@ pub struct WorkspaceBackend {
     base: qt_base_class!(trait QObject),
     workspace_path: qt_property!(QString; READ workspace_path NOTIFY workspace_opened),
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
+    workspace_generation_value: qt_property!(u64; READ workspace_generation_value NOTIFY workspace_state_changed),
     workspace_opened: qt_signal!(),
     workspace_content_changed: qt_signal!(),
     workspace_state_changed: qt_signal!(),
@@ -106,6 +107,9 @@ impl WorkspaceBackend {
     }
     fn has_workspace(&self) -> bool {
         self.snap().has_workspace
+    }
+    fn workspace_generation_value(&self) -> u64 {
+        self.with_app(|app| app.workspace_generation()).unwrap_or(0)
     }
     fn try_restore_last_workspace(&mut self) {
         let restored = self

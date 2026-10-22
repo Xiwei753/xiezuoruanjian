@@ -621,6 +621,9 @@ Kirigami.ApplicationWindow {
             window.debugLog("search", "pre_search_flush_failed", String(e))
         }
 
+        window.searchNavigationSerial += 1
+        window.cancelPendingSearchNavigation("")
+
         var selected = window.appState && window.appState.selected
             ? window.appState.selected : ({})
         var origin = "general"
@@ -689,22 +692,39 @@ Kirigami.ApplicationWindow {
         return parts.length > 0 ? parts[parts.length - 1] : ""
     }
 
+    function currentWorkspaceGeneration() {
+        return workspaceBackend ? workspaceBackend.workspace_generation_value : 0
+    }
+
+    function cancelPendingSearchNavigation(message) {
+        window.pendingSearchReveal = null
+        window.pendingStarmapSearchTarget = null
+        if (message && globalSearchOverlay.visible) {
+            globalSearchOverlay.showMessage(message)
+        }
+    }
+
     function schedulePendingSearchReveal(pId, vId, cId, startByte, endByte) {
+        window.pendingStarmapSearchTarget = null
         window.pendingSearchReveal = {
             projectId: pId,
             volumeId: vId,
             chapterId: cId,
             startByte: Number(startByte),
-            endByte: Number(endByte)
+            endByte: Number(endByte),
+            workspaceGeneration: window.currentWorkspaceGeneration(),
+            serial: window.searchNavigationSerial
         }
-        window.pendingSearchRevealAttempts = 0
-        searchRevealRetryTimer.restart()
         window.applyPendingSearchReveal()
     }
 
     function applyPendingSearchReveal() {
         var pending = window.pendingSearchReveal
         if (!pending) return false
+        if (pending.serial !== window.searchNavigationSerial) {
+            window.pendingSearchReveal = null
+            return false
+        }
         var workspace = writingWorkspaceLoader.item
         if (!workspace || !workspace.requestSearchReveal) return false
         var revealed = workspace.requestSearchReveal(
@@ -716,31 +736,87 @@ Kirigami.ApplicationWindow {
         )
         if (revealed) {
             window.pendingSearchReveal = null
-            searchRevealRetryTimer.stop()
+            // 只有正文真正选中并滚动后才关闭搜索；打开章节本身不算成功。
+            if (globalSearchOverlay.visible) globalSearchOverlay.close()
         }
         return revealed
     }
 
+    function handleWritingWorkspaceReady() {
+        var pending = window.pendingSearchReveal
+        if (!pending || pending.serial !== window.searchNavigationSerial) return
+        var workspace = writingWorkspaceLoader.item
+        if (!workspace) return
+        if (workspace.workspaceProjectId
+                && pending.projectId
+                && workspace.workspaceProjectId !== pending.projectId) {
+            window.cancelPendingSearchNavigation(qsTr("无法打开目标作品，请重新搜索"))
+            return
+        }
+        // 工作区已切到目标作品，记录新的 generation 后再尝试打开/定位章节。
+        pending.workspaceGeneration = window.currentWorkspaceGeneration()
+        window.applyPendingSearchReveal()
+    }
+
+    function handleSearchChapterLoaded(pId, vId, cId) {
+        var pending = window.pendingSearchReveal
+        if (!pending || pending.serial !== window.searchNavigationSerial) return
+        if (pending.projectId !== pId
+                || pending.volumeId !== vId
+                || pending.chapterId !== cId) return
+        pending.workspaceGeneration = window.currentWorkspaceGeneration()
+        window.applyPendingSearchReveal()
+    }
+
+    function handleSearchChapterLoadFailed(pId, vId, cId, reason) {
+        var pending = window.pendingSearchReveal
+        if (!pending || pending.serial !== window.searchNavigationSerial) return
+        if (pending.projectId !== pId
+                || pending.volumeId !== vId
+                || pending.chapterId !== cId) return
+        window.cancelPendingSearchNavigation(
+            qsTr("无法打开目标章节：%1").arg(String(reason || qsTr("未知错误")))
+        )
+        window.debugLog("search", "chapter_reveal_failed", String(reason || ""))
+    }
+
     function schedulePendingStarmapSearchTarget(target) {
-        window.pendingStarmapSearchTarget = target || null
-        window.pendingStarmapSearchAttempts = 0
-        starmapSearchRevealRetryTimer.restart()
+        window.pendingSearchReveal = null
+        window.pendingStarmapSearchTarget = {
+            target: target || null,
+            starmapId: target && target.starmapId ? String(target.starmapId) : "",
+            workspaceGeneration: window.currentWorkspaceGeneration(),
+            serial: window.searchNavigationSerial
+        }
         window.applyPendingStarmapSearchTarget()
     }
 
     function applyPendingStarmapSearchTarget() {
         var pending = window.pendingStarmapSearchTarget
-        if (!pending) return false
+        if (!pending || !pending.target) return false
+        if (pending.serial !== window.searchNavigationSerial) {
+            window.pendingStarmapSearchTarget = null
+            return false
+        }
         var workspace = starmapWorkspaceLoader.item
         if (!workspace || !workspace.revealSearchTarget) return false
-        if (workspace.revealSearchTarget(pending)) {
+        if (workspace.revealSearchTarget(pending.target)) {
             window.pendingStarmapSearchTarget = null
-            starmapSearchRevealRetryTimer.stop()
             // 星图目标真正选中并进入视野后才关闭搜索；只打开星图不算成功。
             if (globalSearchOverlay.visible) globalSearchOverlay.close()
             return true
         }
         return false
+    }
+
+    function handleStarmapSceneReady(starmapId, routeKey) {
+        var pending = window.pendingStarmapSearchTarget
+        if (!pending || !pending.target) return
+        if (pending.serial !== window.searchNavigationSerial) return
+        if (pending.starmapId && starmapId && pending.starmapId !== starmapId) return
+        if (window.applyPendingStarmapSearchTarget()) return
+        window.cancelPendingSearchNavigation(qsTr("无法定位该星图目标，请重新搜索"))
+        window.debugLog("search", "starmap_reveal_unavailable", String(routeKey || ""))
     }
 
     function navigateToSearchResult(result) {
@@ -784,6 +860,8 @@ Kirigami.ApplicationWindow {
                     result.byteStart,
                     result.byteEnd
                 )
+                // 正文定位由章节加载完成信号驱动；真正选中后才关闭搜索。
+                return true
             }
             globalSearchOverlay.close()
             return true
@@ -823,37 +901,6 @@ Kirigami.ApplicationWindow {
 
         globalSearchOverlay.showMessage(qsTr("该结果没有可导航的目标"))
         return false
-    }
-
-    Timer {
-        id: searchRevealRetryTimer
-        interval: 40
-        repeat: true
-        onTriggered: {
-            window.pendingSearchRevealAttempts += 1
-            if (window.applyPendingSearchReveal()) return
-            if (window.pendingSearchRevealAttempts < 25) return
-            window.pendingSearchReveal = null
-            window.pendingSearchRevealAttempts = 0
-            searchRevealRetryTimer.stop()
-            window.debugLog("search", "reveal_target_unavailable", "")
-        }
-    }
-
-    Timer {
-        id: starmapSearchRevealRetryTimer
-        interval: 40
-        repeat: true
-        onTriggered: {
-            window.pendingStarmapSearchAttempts += 1
-            if (window.applyPendingStarmapSearchTarget()) return
-            if (window.pendingStarmapSearchAttempts < 25) return
-            window.pendingStarmapSearchTarget = null
-            window.pendingStarmapSearchAttempts = 0
-            starmapSearchRevealRetryTimer.stop()
-            globalSearchOverlay.showMessage(qsTr("无法定位该星图目标，请重新搜索"))
-            window.debugLog("search", "starmap_reveal_unavailable", "")
-        }
     }
 
     function openConflictInProject(targetKind, projectId, path) {
@@ -897,9 +944,8 @@ Kirigami.ApplicationWindow {
     property bool globalSearchVisible: false
     property var globalSearchContext: ({})
     property var pendingSearchReveal: null
-    property int pendingSearchRevealAttempts: 0
     property var pendingStarmapSearchTarget: null
-    property int pendingStarmapSearchAttempts: 0
+    property int searchNavigationSerial: 0
 
     SystemPalette {
         id: systemPalette
@@ -1347,6 +1393,9 @@ Kirigami.ApplicationWindow {
                 onOpenSettings: {
                     window.openSettingsDialog();
                 }
+                onSceneGeometryReady: function(starmapId, routeKey) {
+                    window.handleStarmapSceneReady(starmapId, routeKey)
+                }
             }
         }
 
@@ -1418,7 +1467,6 @@ Kirigami.ApplicationWindow {
             // Loader 到这里才有 item，补交待选中的冲突路径。
             onLoaded: {
                 window.applyPendingConflictPath()
-                window.applyPendingSearchReveal()
             }
             sourceComponent: WritingWorkspace {
                 dt: designTokens
@@ -1445,7 +1493,13 @@ Kirigami.ApplicationWindow {
                 // main.qml 据此消费 pendingConflictPath（项目 id 匹配才消费）。
                 onProjectReady: {
                     window.applyPendingConflictPath()
-                    window.applyPendingSearchReveal()
+                    window.handleWritingWorkspaceReady()
+                }
+                onChapterLoaded: function(projectId, volumeId, chapterId) {
+                    window.handleSearchChapterLoaded(projectId, volumeId, chapterId)
+                }
+                onChapterLoadFailed: function(projectId, volumeId, chapterId, reason) {
+                    window.handleSearchChapterLoadFailed(projectId, volumeId, chapterId, reason)
                 }
 
                 onBackToProjects: {

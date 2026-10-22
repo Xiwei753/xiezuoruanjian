@@ -47,6 +47,7 @@ Item {
     signal requestSync()
     signal requestSearch()
     signal openSettings()
+    signal sceneGeometryReady(string starmapId, string routeKey)
 
     // Issue #977：壳层统一返回入口。根画布退出星图工作区；子画布走 Core
     // 导航路由返回父画布，并恢复进入父画布时保存的镜头。
@@ -77,6 +78,9 @@ Item {
             id: canvas
             anchors.fill: parent
             dt: root.dt
+            onSceneGeometryReady: function(starmapId, routeKey) {
+                root.sceneGeometryReady(starmapId, routeKey)
+            }
             canvasBackgroundColor: Kirigami.Theme.backgroundColor
             starmapId: root.starmapId
             starmapBackendRef: root.starmapBackendRef

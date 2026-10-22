@@ -87,6 +87,8 @@ Item {
         !currentRoute.segments || currentRoute.segments.length === 0
     readonly property string focusScenePathKey: routeKey
     signal visualFocusChanged()
+    // Issue #982：活动画布图数据/几何可用，供全局搜索按真实就绪时机定位。
+    signal sceneGeometryReady(string starmapId, string routeKey)
 
     readonly property string errorMessage:
         routeError.length > 0
@@ -1384,6 +1386,22 @@ Item {
             anchors.fill: parent
             active: canvasArea.currentStarmapId !== ""
             sourceComponent: activeSceneComponent
+            onLoaded: {
+                if (item && item.ready) {
+                    canvasArea.sceneGeometryReady(String(item.starmapId || ""), canvasArea.routeKey)
+                }
+            }
+        }
+
+        Connections {
+            target: activeSceneLoader.item
+            ignoreUnknownSignals: true
+            function onReadyChanged() {
+                var scene = activeSceneLoader.item
+                if (scene && scene.ready) {
+                    canvasArea.sceneGeometryReady(String(scene.starmapId || ""), canvasArea.routeKey)
+                }
+            }
         }
     }
 
