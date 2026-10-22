@@ -2,7 +2,10 @@ package com.xiwei.sujian.feature.project.ui
 
 import android.os.Parcelable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import com.xiwei.sujian.app.state.ActiveDocumentGate
 import kotlinx.parcelize.Parcelize
@@ -135,6 +138,13 @@ internal class WorkspaceNavigator {
 internal class ProjectNavigationState(
     val navigator: WorkspaceNavigator,
 ) {
+    /**
+     * 一次性卷定位请求 — 搜索结果跳章节树时写入，由章节树消费后立即清空。
+     * 不进入 [WorkspacePaneKey] 身份，避免定位动作改变返回栈的历史语义。
+     */
+    var chapterTreeFocusVolumeId by mutableStateOf<String?>(null)
+        private set
+
     val currentLocation: WorkspaceLocation
         get() = navigator.currentLocation
 
@@ -145,8 +155,19 @@ internal class ProjectNavigationState(
         navigator.navigateTo(WorkspacePaneKey.ProjectList)
     }
 
-    fun navigateToChapterTree(projectId: String) {
-        navigator.navigateTo(WorkspacePaneKey.ChapterTree(projectId))
+    fun navigateToChapterTree(
+        projectId: String,
+        focusVolumeId: String? = null,
+    ) {
+        chapterTreeFocusVolumeId = focusVolumeId
+        val target = WorkspacePaneKey.ChapterTree(projectId)
+        if (navigator.currentDestination != target) {
+            navigator.navigateTo(target)
+        }
+    }
+
+    fun clearChapterTreeFocusVolume() {
+        chapterTreeFocusVolumeId = null
     }
 
     fun navigateToEditor(

@@ -48,6 +48,7 @@
 
     <!-- Settings top compact global search entry -->
     <string name="settings_search_hint">Search settings</string>
+    <string name="settings_search_key_unavailable">This setting is unavailable on the Android settings page in this version</string>
 
     <!-- Global search -->
     <string name="search_title">Search</string>
@@ -230,6 +231,9 @@
     <string name="sync_diag_ok">OK</string>
     <string name="sync_diag_fail">Fail</string>
     <string name="starmap_not_implemented">Star Map is under development</string>
+    <string name="starmap_empty">No star maps yet</string>
+    <string name="starmap_load_failed">Failed to load star map</string>
+    <string name="starmap_link_focus_owner">“%1$s” belongs to: %2$s</string>
 
     <!-- #625 第二段: writing workspace toolbar / tool pane / tool rail placeholders -->
     <string name="action_undo">Undo</string>

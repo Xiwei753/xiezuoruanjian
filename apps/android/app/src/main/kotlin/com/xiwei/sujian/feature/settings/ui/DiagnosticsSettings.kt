@@ -51,6 +51,7 @@ fun DiagnosticsSettingsContent(vm: SettingsViewModel) {
                     },
                 )
             },
+            modifier = Modifier.settingsControlAnchor(SettingsControlKeys.DiagnosticsEnabled),
         )
         SujianSwitchRow(
             title = stringResource(id = R.string.pref_diagnostics_verbose),
@@ -64,6 +65,7 @@ fun DiagnosticsSettingsContent(vm: SettingsViewModel) {
                     },
                 )
             },
+            modifier = Modifier.settingsControlAnchor(SettingsControlKeys.DiagnosticsVerbose),
         )
     }
 

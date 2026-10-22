@@ -57,6 +57,83 @@ const GROUP_DEFINITIONS: GroupDefinition[] = [
   { id: 'about', sections: ['about'] }
 ]
 
+// Issue #982：Core 设置索引里的 section（save_sync）与平台分类（save / sync）不同名，
+// 统一在这里折算；未知值返回空串，不再把非法字符串强转成 SettingsSectionId。
+function normalizeSettingsSectionId(section: string): SettingsSectionId | null {
+  if (section === 'appearance' || section === 'editor' || section === 'save' ||
+    section === 'sync' || section === 'recovery' || section === 'ai' ||
+    section === 'diagnostics' || section === 'laboratory' || section === 'about') {
+    return section
+  }
+  if (section === 'save_sync') {
+    return 'save'
+  }
+  return null
+}
+
+// Issue #982：settingKey → 实际存在的设置分类。旧同步别名（fontSize/themeMode/monetColor/themePalette）
+// 指到当前平台真实控件，不额外造第二套设置项。
+function resolveSettingSectionForKey(settingKey: string): SettingsSectionId | null {
+  switch (settingKey) {
+    case 'appearanceMode':
+    case 'themeMode':
+    case 'colorSource':
+    case 'dynamicColorEnabled':
+    case 'monetColor':
+    case 'selectedBuiltinThemeId':
+    case 'selectedPaletteId':
+    case 'themePalette':
+    case 'locale':
+    case 'editorFontSize':
+    case 'fontSize':
+    case 'editorLineSpacingMultiplier':
+      return 'appearance'
+    case 'autoIndentEnabled':
+    case 'autoIndentWidth':
+    case 'editorTypingAnimationEnabled':
+    case 'editorSmoothCursorEnabled':
+    case 'editorTypingAnimationDurationMs':
+    case 'editorSmoothCursorDurationMs':
+    case 'editorCoordinatedTextCursorAnimationEnabled':
+      return 'editor'
+    case 'autoSaveEnabled':
+    case 'autoSaveDelayMs':
+      return 'save'
+    case 'aiEnabled':
+      return 'ai'
+    case 'diagnosticsEnabled':
+    case 'diagnosticsVerbose':
+    case 'statsDeviceId':
+      return 'diagnostics'
+    default:
+      return null
+  }
+}
+
+const SETTING_HIGHLIGHT_DURATION_MS: number = 1600
+
+// 同一时刻可能有多份 SettingsContent（例如路由页 + 浮层/隐藏页面），
+// 组件 id 加实例序号，避免 getRectangleById 命中到不可见的那一份。
+let settingsContentInstanceSeq: number = 0
+
+// 旧同步键 / Core 别名 → 平台当前真实控件 id。
+// 定位和高亮必须落在真实控件上，不能拿别名去找一个不存在的设置项。
+function resolveSettingItemAnchorKey(settingKey: string): string {
+  if (settingKey === 'themeMode') {
+    return 'appearanceMode'
+  }
+  if (settingKey === 'monetColor') {
+    return 'dynamicColorEnabled'
+  }
+  if (settingKey === 'themePalette') {
+    return 'selectedPaletteId'
+  }
+  if (settingKey === 'fontSize') {
+    return 'editorFontSize'
+  }
+  return settingKey
+}
+
 // ── 下拉选择选项类型 ──
 interface SettingsSelectOption {
   value: string
@@ -76,6 +153,8 @@ export struct SettingsContent {
   @Param onOpenGlobalSearch: (section: string) => void = (_section: string): void => {}
   // 搜索结果跳到具体设置分类时由路由/浮层传入。
   @Param initialSection: string = ''
+  // Issue #982：搜索结果跳到具体设置项；与 initialSection 一起构成一次性定位意图。
+  @Param initialSettingKey: string = ''
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
   @Local viewModel: SettingsViewModel = new SettingsViewModel()
@@ -98,11 +177,24 @@ export struct SettingsContent {
   @Local latestFullSyncReportReadError: string = ''
   // Issue #952：同步失败明细是否展开；默认收起，避免报告挤占设置列表。
   @Local syncDetailsExpanded: boolean = false
+  // Issue #982：精确定位后短暂高亮的设置项 key。
+  @Local highlightedSettingKey: string = ''
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
   private sectionContextListener: ((section: string) => void) | null = null
+  private locateContextListener: ((section: string, settingKey: string) => void) | null = null
+  private pendingLocateSection: string = ''
+  private pendingLocateKey: string = ''
+  private pendingRequestedSettingKey: string = ''
+  private locateTimerId: number = -1
+  private locateAttempt: number = 0
+  private highlightTimerId: number = -1
+  private narrowScroller: Scroller = new Scroller()
+  private wideColumnScroller0: Scroller = new Scroller()
+  private wideColumnScroller1: Scroller = new Scroller()
+  private instanceToken: string = ''
   private syncRunPresentation: SyncRunPresentationState = SyncRunPresentationState.getInstance()
   private unsubscribeSyncRun: (() => void) | null = null
   private syncStateBridge: NativeSyncBridge = new NativeSyncBridge(new NativeCoreModule())
@@ -115,16 +207,38 @@ export struct SettingsContent {
   private conflictProbe: SyncConflictViewModel = new SyncConflictViewModel()
 
   aboutToAppear() {
+    settingsContentInstanceSeq++
+    this.instanceToken = String(settingsContentInstanceSeq)
     // Issue #982：搜索结果跳转到具体设置分类时展开该分类；普通进入不改变用户折叠状态。
-    if (this.initialSection.length > 0) {
-      SettingsSectionContext.setCurrentSection(this.initialSection)
-      this.viewModel.expandSection(this.initialSection as SettingsSectionId)
+    // 有精确 settingKey 时以真实控件所在分类为准（Core 索引的 section 可能仍是旧分类名）。
+    const keySection: SettingsSectionId | null = this.initialSettingKey.length > 0
+      ? resolveSettingSectionForKey(this.initialSettingKey)
+      : null
+    const normalizedInitialSection: SettingsSectionId | null =
+      keySection !== null ? keySection : normalizeSettingsSectionId(this.initialSection)
+    if (normalizedInitialSection !== null) {
+      SettingsSectionContext.setCurrentSection(normalizedInitialSection)
+      this.viewModel.expandSection(normalizedInitialSection)
     }
     // 搜索从设置页发起后点击设置结果：不重建设置页，只展开目标分类。
     this.sectionContextListener = (section: string): void => {
-      this.viewModel.expandSection(section as SettingsSectionId)
+      const normalized: SettingsSectionId | null = normalizeSettingsSectionId(section)
+      if (normalized !== null) {
+        this.viewModel.expandSection(normalized)
+      }
     }
     SettingsSectionContext.subscribe(this.sectionContextListener)
+    // Issue #982：精确设置项定位；列表数据加载完成前只记下意图，加载后再滚动/高亮。
+    this.locateContextListener = (section: string, settingKey: string): void => {
+      this.acceptLocateRequest(section, settingKey)
+    }
+    SettingsSectionContext.subscribeLocate(this.locateContextListener)
+    const pendingLocate = SettingsSectionContext.peekPendingLocate()
+    if (pendingLocate !== null) {
+      this.acceptLocateRequest(pendingLocate.section, pendingLocate.settingKey)
+    } else if (this.initialSettingKey.length > 0) {
+      this.acceptLocateRequest(this.initialSection, this.initialSettingKey)
+    }
     // 注册主题观察者
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       this.themeConfig = theme
@@ -162,6 +276,18 @@ export struct SettingsContent {
       SettingsSectionContext.unsubscribe(this.sectionContextListener)
       this.sectionContextListener = null
     }
+    if (this.locateContextListener !== null) {
+      SettingsSectionContext.unsubscribeLocate(this.locateContextListener)
+      this.locateContextListener = null
+    }
+    if (this.locateTimerId !== -1) {
+      clearTimeout(this.locateTimerId)
+      this.locateTimerId = -1
+    }
+    if (this.highlightTimerId !== -1) {
+      clearTimeout(this.highlightTimerId)
+      this.highlightTimerId = -1
+    }
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
     }
@@ -178,7 +304,177 @@ export struct SettingsContent {
 
   private async loadSettingsAndSyncState(): Promise<void> {
     await this.viewModel.loadData()
+    // Issue #982：数据到位后再尝试精确设置项定位，避免在静态默认值上滚动/高亮。
+    this.tryApplyPendingLocate()
     await Promise.all([this.refreshFullSyncState(), this.refreshLatestFullSyncReport()])
+  }
+
+  // ── Issue #982：搜索结果精确设置项定位 ──
+
+  private acceptLocateRequest(section: string, settingKey: string): void {
+    if (settingKey.length === 0) {
+      // 新的“只跳分类”请求取消尚未完成的精确项定位。
+      this.pendingLocateSection = ''
+      this.pendingLocateKey = ''
+      this.pendingRequestedSettingKey = ''
+      this.locateAttempt = 0
+      if (this.locateTimerId !== -1) {
+        clearTimeout(this.locateTimerId)
+        this.locateTimerId = -1
+      }
+      const normalized: SettingsSectionId | null = normalizeSettingsSectionId(section)
+      if (normalized !== null) {
+        SettingsSectionContext.setCurrentSection(normalized)
+        this.viewModel.expandSection(normalized)
+      }
+      return
+    }
+    const targetSection: SettingsSectionId | null = resolveSettingSectionForKey(settingKey)
+    if (targetSection === null) {
+      // 设置项已移除或 Core 索引与平台控件不一致：明确反馈，不只打开分类。
+      SettingsSectionContext.consumePendingLocate(settingKey)
+      this.showLocateToast(`未找到设置项：${settingKey}`)
+      return
+    }
+    this.pendingLocateSection = targetSection
+    this.pendingRequestedSettingKey = settingKey
+    this.pendingLocateKey = resolveSettingItemAnchorKey(settingKey)
+    this.locateAttempt = 0
+    SettingsSectionContext.setCurrentSection(targetSection)
+    this.viewModel.expandSection(targetSection)
+    if (!this.viewModel.isLoading) {
+      this.scheduleLocateApply(30)
+    }
+  }
+
+  private tryApplyPendingLocate(): void {
+    if (this.pendingLocateKey.length === 0 || this.viewModel.isLoading) {
+      return
+    }
+    this.scheduleLocateApply(30)
+  }
+
+  private scheduleLocateApply(delayMs: number): void {
+    if (this.pendingLocateKey.length === 0) {
+      return
+    }
+    if (this.locateTimerId !== -1) {
+      clearTimeout(this.locateTimerId)
+    }
+    this.locateTimerId = setTimeout((): void => {
+      this.locateTimerId = -1
+      this.applyLocateNow()
+    }, delayMs)
+  }
+
+  private applyLocateNow(): void {
+    const settingKey: string = this.pendingLocateKey
+    if (settingKey.length === 0 || this.viewModel.isLoading) {
+      return
+    }
+    const targetSection: SettingsSectionId | null = resolveSettingSectionForKey(settingKey)
+    if (targetSection === null) {
+      this.failLocate(settingKey)
+      return
+    }
+    SettingsSectionContext.setCurrentSection(targetSection)
+    this.viewModel.expandSection(targetSection)
+    if (this.scrollToSettingItem(settingKey)) {
+      this.finishLocate(settingKey)
+      return
+    }
+    // 展开动画 / 首次布局可能还没产出目标节点，允许有限次重试后再反馈失败。
+    this.locateAttempt++
+    if (this.locateAttempt < 4) {
+      this.scheduleLocateApply(80)
+    } else {
+      this.failLocate(settingKey)
+    }
+  }
+
+  private finishLocate(settingKey: string): void {
+    const requestedKey: string = this.pendingRequestedSettingKey
+    this.pendingLocateSection = ''
+    this.pendingLocateKey = ''
+    this.pendingRequestedSettingKey = ''
+    this.locateAttempt = 0
+    SettingsSectionContext.consumePendingLocate(requestedKey)
+    this.highlightedSettingKey = settingKey
+    if (this.highlightTimerId !== -1) {
+      clearTimeout(this.highlightTimerId)
+    }
+    this.highlightTimerId = setTimeout((): void => {
+      this.highlightTimerId = -1
+      if (this.highlightedSettingKey === settingKey) {
+        this.highlightedSettingKey = ''
+      }
+    }, SETTING_HIGHLIGHT_DURATION_MS)
+  }
+
+  private failLocate(settingKey: string): void {
+    const requestedKey: string = this.pendingRequestedSettingKey.length > 0
+      ? this.pendingRequestedSettingKey
+      : settingKey
+    this.pendingLocateSection = ''
+    this.pendingLocateKey = ''
+    this.pendingRequestedSettingKey = ''
+    this.locateAttempt = 0
+    SettingsSectionContext.consumePendingLocate(requestedKey)
+    this.showLocateToast(`未找到设置项：${requestedKey}`)
+  }
+
+  private showLocateToast(message: string): void {
+    try {
+      promptAction.showToast({ message: message })
+    } catch (_e) {
+      // Toast 失败不影响分类展开本身。
+    }
+  }
+
+  private settingItemId(settingKey: string): string {
+    return `setting_${this.instanceToken}_${settingKey}`
+  }
+
+  private settingHighlightColor(settingKey: string): ResourceColor {
+    return this.highlightedSettingKey === settingKey
+      ? $r('sys.color.comp_background_gray')
+      : Color.Transparent
+  }
+
+  /**
+   * 滚动到当前已渲染的设置项。窄屏用唯一 Scroll；宽屏按分类所在列选择对应 Scroller。
+   * 目标还没渲染（分类刚展开）时返回 false，由调用方重试。
+   */
+  private scrollToSettingItem(settingKey: string): boolean {
+    try {
+      const componentUtils = this.getUIContext().getComponentUtils()
+      const targetRect = componentUtils.getRectangleById(this.settingItemId(settingKey))
+      if (targetRect.size.width <= 0 || targetRect.size.height <= 0) {
+        return false
+      }
+      let viewportId: string = `settings_${this.instanceToken}_narrow_scroll`
+      let scroller: Scroller = this.narrowScroller
+      if (this.overlayLayout) {
+        const section: SettingsSectionId | null = resolveSettingSectionForKey(settingKey)
+        const columnIndex: number = section !== null &&
+          this.overlayColumnSections(0).indexOf(section) >= 0 ? 0 : 1
+        viewportId = `settings_${this.instanceToken}_wide_scroll_${columnIndex}`
+        scroller = columnIndex === 0 ? this.wideColumnScroller0 : this.wideColumnScroller1
+      }
+      const viewportRect = componentUtils.getRectangleById(viewportId)
+      if (viewportRect.size.height <= 0) {
+        return false
+      }
+      const targetCenterY: number = targetRect.windowOffset.y + targetRect.size.height / 2
+      const viewportCenterY: number = viewportRect.windowOffset.y + viewportRect.size.height / 2
+      const deltaVp: number = this.getUIContext().px2vp(targetCenterY - viewportCenterY)
+      if (Math.abs(deltaVp) > 1) {
+        scroller.scrollBy(0, deltaVp)
+      }
+      return true
+    } catch (_e) {
+      return false
+    }
   }
 
   private async refreshFullSyncState(): Promise<void> {
@@ -725,7 +1021,7 @@ export struct SettingsContent {
   // ════════════════════════════════════════════
   @Builder
   CompactScreenLayout() {
-    Scroll() {
+    Scroll(this.narrowScroller) {
       Column() {
         // 按分组渲染：外观→写作→数据与同步→高级→关于
         this.SettingsGroupList()
@@ -734,6 +1030,7 @@ export struct SettingsContent {
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
       .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
     }
+    .id(`settings_${this.instanceToken}_narrow_scroll`)
     .layoutWeight(1)
     .scrollBar(BarState.Off)
     .align(Alignment.Top)
@@ -890,7 +1187,11 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('appearanceMode'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('appearanceMode'))
       .margin({ bottom: 16 })
 
       // 颜色主题来源（实验性：当前页面默认使用系统 token，自定义颜色暂不生效）
@@ -913,11 +1214,36 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('colorSource'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('colorSource'))
       .margin({ bottom: 16 })
 
-      // 内置主题选择（实验性）
-      if (this.viewModel.settings.colorSource === 'built_in' && this.viewModel.builtinThemes.length > 0) {
+      // 动态取色（旧版 monetColor 别名也定位到这里）
+      Row() {
+        Text('动态取色（实验性）')
+          .fontSize(16)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.dynamicColorEnabled })
+          .onChange((isOn: boolean) => {
+            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+              s.dynamicColorEnabled = isOn
+              return s
+            })
+            this.viewModel.saveSettings()
+          })
+      }
+      .id(this.settingItemId('dynamicColorEnabled'))
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('dynamicColorEnabled'))
+      .margin({ bottom: 16 })
+
+      // 内置主题选择（实验性）。始终保留可定位项；只有 built_in 来源时可用。
+      if (this.viewModel.builtinThemes.length > 0) {
         Row() {
           Text('内置主题（实验性）')
             .fontSize(16)
@@ -926,6 +1252,7 @@ export struct SettingsContent {
           Select(this.getBuiltinThemeOptions())
             .selected(this.getSelectedBuiltinThemeIndex())
             .value(this.getSelectedBuiltinThemeName())
+            .enabled(this.viewModel.settings.colorSource === 'built_in')
             .onSelect((index: number) => {
               if (index < this.viewModel.builtinThemes.length) {
                 const themeId = this.viewModel.builtinThemes[index].theme_id
@@ -938,12 +1265,16 @@ export struct SettingsContent {
               }
             })
         }
+        .id(this.settingItemId('selectedBuiltinThemeId'))
         .width('100%')
+        .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+        .borderRadius(DesignTokens.radiusSm)
+        .backgroundColor(this.settingHighlightColor('selectedBuiltinThemeId'))
         .margin({ bottom: 16 })
       }
 
-      // 已保存调色板选择（实验性）
-      if (this.viewModel.settings.colorSource === 'saved_palette' && this.viewModel.paletteRecords.length > 0) {
+      // 已保存调色板选择（实验性）。始终保留可定位项；只有 saved_palette 来源时可用。
+      if (this.viewModel.paletteRecords.length > 0) {
         Row() {
           Text('设备配色（实验性）')
             .fontSize(16)
@@ -956,6 +1287,7 @@ export struct SettingsContent {
           }))
             .selected(this.getSelectedPaletteIndex())
             .value(this.getSelectedPaletteName())
+            .enabled(this.viewModel.settings.colorSource === 'saved_palette')
             .onSelect((index: number) => {
               if (index < this.viewModel.paletteRecords.length) {
                 const paletteId = this.viewModel.paletteRecords[index].palette_id
@@ -968,11 +1300,40 @@ export struct SettingsContent {
               }
             })
         }
+        .id(this.settingItemId('selectedPaletteId'))
         .width('100%')
+        .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+        .borderRadius(DesignTokens.radiusSm)
+        .backgroundColor(this.settingHighlightColor('selectedPaletteId'))
         .margin({ bottom: 16 })
       }
 
-      // 字体大小
+      // 界面语言
+      Row() {
+        Text('界面语言')
+          .fontSize(16)
+          .layoutWeight(1)
+        Select(this.getLocaleOptions())
+          .selected(this.getLocaleIndex())
+          .value(this.getLocaleName())
+          .onSelect((index: number) => {
+            const locales: string[] = ['', 'zh-CN', 'en-US']
+            const selected: string = index >= 0 && index < locales.length ? locales[index] : ''
+            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+              s.locale = selected.length > 0 ? selected : null
+              return s
+            })
+            this.viewModel.saveSettings()
+          })
+      }
+      .id(this.settingItemId('locale'))
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('locale'))
+      .margin({ bottom: 16 })
+
+      // 字体大小（旧同步键 fontSize 也定位到这里）
       Row() {
         Text($r('app.string.font_size'))
           .fontSize(16)
@@ -990,7 +1351,11 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('editorFontSize'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('editorFontSize'))
       .margin({ bottom: 16 })
 
       // 行距倍数
@@ -1012,7 +1377,11 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('editorLineSpacingMultiplier'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('editorLineSpacingMultiplier'))
     }
   }
 
@@ -1036,7 +1405,11 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('autoIndentEnabled'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('autoIndentEnabled'))
       .margin({ bottom: 16 })
 
       // 缩进宽度
@@ -1057,10 +1430,126 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('autoIndentWidth'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('autoIndentWidth'))
       .margin({ bottom: 16 })
 
+      // 打字动画
+      Row() {
+        Text('打字动画')
+          .fontSize(16)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.editorTypingAnimationEnabled })
+          .onChange((isOn: boolean) => {
+            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+              s.editorTypingAnimationEnabled = isOn
+              return s
+            })
+            this.viewModel.saveSettings()
+          })
+      }
+      .id(this.settingItemId('editorTypingAnimationEnabled'))
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('editorTypingAnimationEnabled'))
+      .margin({ bottom: 16 })
 
+      // 打字动画时长
+      Row() {
+        Text('打字动画时长')
+          .fontSize(16)
+          .layoutWeight(1)
+        Text(`${this.viewModel.settings.editorTypingAnimationDurationMs}ms`)
+          .fontSize(14)
+          .margin({ right: 16 })
+        Slider({ value: this.viewModel.settings.editorTypingAnimationDurationMs, min: 20, max: 500, step: 10 })
+          .width(120)
+          .enabled(this.viewModel.settings.editorTypingAnimationEnabled)
+          .onChange((value: number) => {
+            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+              s.editorTypingAnimationDurationMs = value
+              return s
+            })
+            this.viewModel.saveSettings()
+          })
+      }
+      .id(this.settingItemId('editorTypingAnimationDurationMs'))
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('editorTypingAnimationDurationMs'))
+      .margin({ bottom: 16 })
+
+      // 平滑光标
+      Row() {
+        Text('平滑光标')
+          .fontSize(16)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.editorSmoothCursorEnabled })
+          .onChange((isOn: boolean) => {
+            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+              s.editorSmoothCursorEnabled = isOn
+              return s
+            })
+            this.viewModel.saveSettings()
+          })
+      }
+      .id(this.settingItemId('editorSmoothCursorEnabled'))
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('editorSmoothCursorEnabled'))
+      .margin({ bottom: 16 })
+
+      // 平滑光标时长
+      Row() {
+        Text('平滑光标时长')
+          .fontSize(16)
+          .layoutWeight(1)
+        Text(`${this.viewModel.settings.editorSmoothCursorDurationMs}ms`)
+          .fontSize(14)
+          .margin({ right: 16 })
+        Slider({ value: this.viewModel.settings.editorSmoothCursorDurationMs, min: 20, max: 500, step: 10 })
+          .width(120)
+          .enabled(this.viewModel.settings.editorSmoothCursorEnabled)
+          .onChange((value: number) => {
+            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+              s.editorSmoothCursorDurationMs = value
+              return s
+            })
+            this.viewModel.saveSettings()
+          })
+      }
+      .id(this.settingItemId('editorSmoothCursorDurationMs'))
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('editorSmoothCursorDurationMs'))
+      .margin({ bottom: 16 })
+
+      // 协同文本动画
+      Row() {
+        Text('协同动画')
+          .fontSize(16)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.editorCoordinatedTextCursorAnimationEnabled })
+          .onChange((isOn: boolean) => {
+            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+              s.editorCoordinatedTextCursorAnimationEnabled = isOn
+              return s
+            })
+            this.viewModel.saveSettings()
+          })
+      }
+      .id(this.settingItemId('editorCoordinatedTextCursorAnimationEnabled'))
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('editorCoordinatedTextCursorAnimationEnabled'))
     }
   }
 
@@ -1084,31 +1573,38 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('autoSaveEnabled'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('autoSaveEnabled'))
       .margin({ bottom: 16 })
 
-      // 自动保存延迟
-      if (this.viewModel.settings.autoSaveEnabled) {
-        Row() {
-          Text($r('app.string.auto_save_delay'))
-            .fontSize(16)
-            .layoutWeight(1)
-          Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id)
-            .replace('%s', `${Math.round(this.viewModel.settings.autoSaveDelayMs / 1000)}`))
-            .fontSize(14)
-            .margin({ right: 16 })
-          Slider({ value: this.viewModel.settings.autoSaveDelayMs / 1000, min: 1, max: 10, step: 1 })
-            .width(120)
-            .onChange((value: number) => {
-              this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-                s.autoSaveDelayMs = value * 1000
-                return s
-              })
-              this.viewModel.saveSettings()
+      // 自动保存延迟：始终渲染，关闭自动保存时禁用，保证搜索能定位到实际设置项。
+      Row() {
+        Text($r('app.string.auto_save_delay'))
+          .fontSize(16)
+          .layoutWeight(1)
+        Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id)
+          .replace('%s', `${Math.round(this.viewModel.settings.autoSaveDelayMs / 1000)}`))
+          .fontSize(14)
+          .margin({ right: 16 })
+        Slider({ value: this.viewModel.settings.autoSaveDelayMs / 1000, min: 1, max: 10, step: 1 })
+          .width(120)
+          .enabled(this.viewModel.settings.autoSaveEnabled)
+          .onChange((value: number) => {
+            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+              s.autoSaveDelayMs = value * 1000
+              return s
             })
-        }
-        .width('100%')
+            this.viewModel.saveSettings()
+          })
       }
+      .id(this.settingItemId('autoSaveDelayMs'))
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('autoSaveDelayMs'))
     }
   }
 
@@ -1383,7 +1879,11 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('aiEnabled'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('aiEnabled'))
     }
   }
 
@@ -1410,7 +1910,11 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('diagnosticsEnabled'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('diagnosticsEnabled'))
       .margin({ bottom: 16 })
 
       // 详细日志
@@ -1428,7 +1932,30 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .id(this.settingItemId('diagnosticsVerbose'))
       .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('diagnosticsVerbose'))
+      .margin({ bottom: 16 })
+
+      // 统计设备标识（只读：由 Core/设备信息决定，不在设置页改写）
+      Row() {
+        Text('统计设备标识')
+          .fontSize(16)
+          .layoutWeight(1)
+        Text(this.viewModel.settings.statsDeviceId ?? '未设置')
+          .fontSize(13)
+          .fontColor($r('sys.color.font_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .constraintSize({ maxWidth: '55%' })
+      }
+      .id(this.settingItemId('statsDeviceId'))
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.settingHighlightColor('statsDeviceId'))
       .margin({ bottom: 16 })
 
       // 导出诊断包
@@ -1737,6 +2264,26 @@ export struct SettingsContent {
     return getContext(this).resourceManager.getStringSync($r('app.string.follow_system').id)
   }
 
+  getLocaleOptions(): SettingsSelectOption[] {
+    return [
+      { value: '跟随系统', icon: '' },
+      { value: '简体中文', icon: '' },
+      { value: 'English', icon: '' }
+    ]
+  }
+
+  getLocaleIndex(): number {
+    const locales: string[] = ['', 'zh-CN', 'en-US']
+    const current: string = this.viewModel.settings.locale ?? ''
+    const index: number = locales.indexOf(current)
+    return index >= 0 ? index : 0
+  }
+
+  getLocaleName(): string {
+    const names: string[] = ['跟随系统', '简体中文', 'English']
+    return names[this.getLocaleIndex()]
+  }
+
   getColorSourceIndex(): number {
     const sources: string[] = ['built_in', 'saved_palette']
     return sources.indexOf(this.viewModel.settings.colorSource || 'built_in')
@@ -1866,7 +2413,7 @@ export struct SettingsContent {
 
   @Builder
   WideOverlaySettingsColumn(sectionIds: SettingsSectionId[], columnIndex: number) {
-    Scroll() {
+    Scroll(columnIndex === 0 ? this.wideColumnScroller0 : this.wideColumnScroller1) {
       Column({ space: 12 }) {
         ForEach(sectionIds, (sectionId: SettingsSectionId) => {
           WideSettingsSection({
@@ -1881,6 +2428,8 @@ export struct SettingsContent {
             WideSettingsCategoryContent({
               sectionId: sectionId,
               viewModel: this.viewModel,
+              idPrefix: this.instanceToken,
+              highlightedSettingKey: this.highlightedSettingKey,
               conflictRemaining: this.conflictRemaining,
               onSetThemeMode: (mode: ThemeMode): void => {
                 this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
@@ -1944,6 +2493,7 @@ export struct SettingsContent {
       }
       .width('100%')
     }
+    .id(`settings_${this.instanceToken}_wide_scroll_${columnIndex}`)
     .layoutWeight(1)
     .height('100%')
     .scrollBar(BarState.Off)

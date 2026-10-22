@@ -6,7 +6,10 @@
 // 结果列表来自 Core 分页结果；每个 item 是一次独立命中（同一章多个命中逐条显示）。
 // summaryMatchRanges 是 UTF-8 byte 偏移，先按真实 summary 原文转成 UTF-16 再切片高亮。
 
-import { Routes, SearchRouteParams, WritingRouteParams, WorkspaceRouteParams, StarMapRouteParams, SettingsRouteParams } from '../../../app/navigation/Routes'
+import {
+  Routes, TAB_HOME, TAB_STARMAP, SearchRouteParams, WritingRouteParams, WorkspaceRouteParams,
+  StarMapRouteParams, SettingsRouteParams
+} from '../../../app/navigation/Routes'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole } from '../../../app/navigation/ScreenSemantics'
@@ -15,6 +18,7 @@ import { TextOffsetMapper } from '../../editor/input/TextOffsetMapper'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 import { SettingsSectionContext } from '../../settings/presentation/SettingsSectionContext'
+import { SettingsOverlayController } from '../../settings/presentation/SettingsOverlayController'
 import { SearchController } from '../presentation/SearchController'
 
 interface SummarySegment {
@@ -115,19 +119,8 @@ export struct SearchScreen {
 
     if (item.scope === 'setting' || target.settingKey !== null) {
       const section: string = target.settingSection !== null ? target.settingSection : ''
-      if (this.openedWithSettingsOrigin) {
-        // 已从设置页发起：关闭搜索即回到原来的设置页，不叠第二层设置。
-        if (section.length > 0) {
-          SettingsSectionContext.requestSection(section)
-        }
-        this.closeSearch()
-        return
-      }
-      const settingsParams: SettingsRouteParams = {}
-      if (section.length > 0) {
-        settingsParams.section = section
-      }
-      this.pushRoute(Routes.Settings, settingsParams)
+      const settingKey: string = target.settingKey !== null ? target.settingKey : ''
+      this.navigateToSetting(section, settingKey)
       return
     }
 
@@ -143,7 +136,8 @@ export struct SearchScreen {
         writingParams.searchByteEnd = item.byteEnd
         writingParams.searchField = item.field
       }
-      this.pushRoute(Routes.Writing, writingParams)
+      // 正文/章节属于作品 tab；即使搜索从星图 tab 发起也不能压到星图栈。
+      void this.pushRoute(TAB_HOME, Routes.Writing, writingParams, this.resultDedupeKey(item))
       return
     }
 
@@ -158,11 +152,18 @@ export struct SearchScreen {
       } else if (target.edgeId !== null) {
         starmapParams.focusKind = 'edge'
         starmapParams.focusId = target.edgeId
+      } else if (target.linkId !== null) {
+        starmapParams.focusKind = 'link'
+        starmapParams.focusId = target.linkId
+      } else if (target.hyperlinkId !== null) {
+        starmapParams.focusKind = 'hyperlink'
+        starmapParams.focusId = target.hyperlinkId
       } else if (target.embedId !== null) {
         starmapParams.focusKind = 'embed'
         starmapParams.focusId = target.embedId
       }
-      this.pushRoute(Routes.StarMap, starmapParams)
+      // 星图目标固定进入星图 tab 自己的栈。
+      void this.pushRoute(TAB_STARMAP, Routes.StarMap, starmapParams, this.resultDedupeKey(item))
       return
     }
 
@@ -174,16 +175,75 @@ export struct SearchScreen {
       if (target.volumeId !== null) {
         workspaceParams.focusVolumeId = target.volumeId
       }
-      this.pushRoute(Routes.Workspace, workspaceParams)
+      void this.pushRoute(TAB_HOME, Routes.Workspace, workspaceParams, this.resultDedupeKey(item))
     }
   }
 
-  private pushRoute(name: string, param: Object): void {
-    this.navPathStack.pushPath({ name: name, param: param })
+  // Issue #982：设置目标走现有设置页 / 宽屏浮层；settingKey 作为一次性定位意图，
+  // 不再只展开分类。已从设置页发起搜索时只更新原设置页并关闭搜索。
+  private navigateToSetting(section: string, settingKey: string): void {
+    if (this.openedWithSettingsOrigin) {
+      SettingsSectionContext.requestLocate(section, settingKey)
+      this.closeSearch()
+      return
+    }
+    if (SettingsOverlayController.getInstance().isOverlayLayout()) {
+      SettingsSectionContext.requestLocate(section, settingKey)
+      SettingsOverlayController.getInstance().open(section, settingKey)
+      if (this.overlayLayout) {
+        this.onNavigateAway()
+        this.onRequestClose()
+      } else {
+        // 窄屏搜索路由页浮在页面上时切换成宽屏：设置以窗口浮层出现，搜索页只关闭自己。
+        this.navPathStack.removeByName(Routes.Search)
+      }
+      return
+    }
+    const settingsParams: SettingsRouteParams = {}
+    if (section.length > 0) {
+      settingsParams.section = section
+    }
+    if (settingKey.length > 0) {
+      settingsParams.settingKey = settingKey
+    }
+    void this.pushRoute(
+      this.screenTabIndex, Routes.Settings, settingsParams, `setting:${settingKey}:${section}`
+    )
+  }
+
+  private resultDedupeKey(item: SearchResult): string {
+    return `${item.scope}:${item.objectId}:${item.field}:${item.byteStart}`
+  }
+
+  // Issue #982：所有路由目标都通过 coordinator 进入正确的一级 tab 栈。
+  // coordinator 内部先走 leave/save guard，再切 tab、取目标栈、push；只有 push 成功后才关闭搜索。
+  private async pushRoute(
+    tabIndex: number,
+    name: string,
+    param: Object,
+    dedupeKey: string
+  ): Promise<void> {
+    const navigated: boolean = await this.navCoordinator.navigateToTabStack(tabIndex, name, param, dedupeKey)
+    if (!navigated) {
+      this.showToast('无法打开目标页面')
+      return
+    }
     if (this.overlayLayout) {
-      // 浮层只是窗口级展示层；目标已压入底层页面栈，关闭浮层即露出新页面。
+      // 浮层只是窗口级展示层；目标已压入目标 tab 栈，关闭浮层即露出新页面。
       this.onNavigateAway()
       this.onRequestClose()
+      return
+    }
+    // 窄屏搜索路由页：目标已经进入正确 tab 栈，再移除来源栈上的搜索页。
+    // removeByName 只移除 Search destination，不重建底层页面，原页面与滚动状态保持不变。
+    this.navPathStack.removeByName(Routes.Search)
+  }
+
+  private showToast(message: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message })
+    } catch (_e) {
+      // Toast 失败不影响搜索结果保留。
     }
   }
 

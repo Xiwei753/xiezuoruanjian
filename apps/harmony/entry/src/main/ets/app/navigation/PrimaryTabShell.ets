@@ -113,6 +113,9 @@ export struct PrimaryTabShell {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
   private navChromeObserver: ((role: ScreenRole) => void) | null = null
+  // Issue #982：coordinator 跨 tab 导航时由壳层提交真实 currentTab 切换。
+  // 必须持有稳定引用，注销时按实例相等清理。
+  private tabSelectionHandler: ((tabIndex: number) => void) | null = null
   private gestureLockObserver: ((locked: boolean) => void) | null = null
   private syncRunUnsubscribe: (() => void) | null = null
   private syncStatusHideTimerId: number = -1
@@ -146,6 +149,12 @@ export struct PrimaryTabShell {
     coordinator.registerTabStack(TAB_HOME, this.homeStack)
     coordinator.registerTabStack(TAB_STARMAP, this.starMapStack)
     coordinator.registerTabStack(TAB_STATS, this.statsStack)
+    // Issue #982：跨一级 Tab 导航（例如从星图搜索命中正文）需要壳层提交真实的
+    // currentTab 变更；coordinator 只操作 tab stack，不能直接改 @Link 状态。
+    this.tabSelectionHandler = (index: number): void => {
+      this.recordUserTabRequest(index)
+    }
+    coordinator.registerTabSelectionHandler(this.tabSelectionHandler)
 
     // Issue #767 评论5831949869 第2项：注册完三个栈后按真实 currentTab 同步，
     // 不要硬写 TAB_HOME——组件可能只是重新 appear、状态仍是 StarMap/Stats。
@@ -230,6 +239,10 @@ export struct PrimaryTabShell {
     coordinator.unregisterTabStack(TAB_HOME, this.homeStack)
     coordinator.unregisterTabStack(TAB_STARMAP, this.starMapStack)
     coordinator.unregisterTabStack(TAB_STATS, this.statsStack)
+    if (this.tabSelectionHandler !== null) {
+      coordinator.unregisterTabSelectionHandler(this.tabSelectionHandler)
+      this.tabSelectionHandler = null
+    }
     // Issue #825 复核第3项：壳层销毁时如果还持有当前窗口的设置浮层，先关掉再摘 UIContext，
     // 否则 controller 会攥着一个已经失效的 UIContext，下个窗口 open() 直接失败。
     SettingsOverlayController.getInstance().detachUIContext(this.getUIContext())

@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.settings.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.R
@@ -23,6 +24,7 @@ fun AiSettingsContent(vm: SettingsViewModel) {
             onCheckedChange = { c ->
                 vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(aiEnabled = c) })
             },
+            modifier = Modifier.settingsControlAnchor(SettingsControlKeys.AiEnabled),
         )
     }
 }

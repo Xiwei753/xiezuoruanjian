@@ -18,6 +18,20 @@
 use super::*;
 use crate::backend::AppRef;
 use crate::backend::DomainSnapshot;
+
+fn setting_upserts(group: &str, json: &str) -> Vec<writer_core::search::SearchIndexUpdate> {
+    writer_core::search::extractor::extract_settings_from_json(group, json)
+        .into_iter()
+        .map(|entry| writer_core::search::SearchIndexUpdate {
+            action: writer_core::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id,
+            scope: entry.scope,
+            title: entry.title,
+            body: entry.body,
+            target: Some(entry.target),
+        })
+        .collect()
+}
 use crate::platform::linux_qt::desktop_settings;
 
 #[allow(non_snake_case)] // Qt QML naming convention
@@ -1332,6 +1346,7 @@ impl AppBackend {
     pub(crate) fn save_local_settings(&mut self) -> bool {
         self.debug_log("settings", "save_local_settings_start", "");
         let mut error_msg: Option<String> = None;
+        let mut settings_updates: Vec<writer_core::search::SearchIndexUpdate> = Vec::new();
         // Issue #920：窗口 / 栏宽是 Qt 平台本地状态，写入平台层 JSON，
         // 不再写 Core LocalSettings（Core 已删除这些字段）。
         let sidebar_width = self.current_setting_desktop_sidebar_width;
@@ -1401,6 +1416,11 @@ impl AppBackend {
                     "error.other".to_string()
                 };
                 error_msg = Some(format!("{} ({})", resolved_key, error_code));
+            } else {
+                settings_updates.extend(setting_upserts(
+                    "local",
+                    &serde_json::to_string(&local).unwrap_or_default(),
+                ));
             }
 
             let mut syncable = core.load_syncable_settings().unwrap_or_else(|_| {
@@ -1436,6 +1456,11 @@ impl AppBackend {
                     "error.other".to_string()
                 };
                 error_msg = Some(format!("{} ({})", resolved_key, error_code));
+            } else {
+                settings_updates.extend(setting_upserts(
+                    "sync",
+                    &serde_json::to_string(&syncable).unwrap_or_default(),
+                ));
             }
         } else {
             error_msg = Some("Core 未初始化".to_string());
@@ -1447,9 +1472,11 @@ impl AppBackend {
             false
         } else {
             self.debug_log("settings", "save_local_settings_success", "");
-            // 设置也是全局搜索的数据源；下一次查询前让常驻搜索 worker
-            // 重建一次索引，避免读到保存前的设置描述。
-            self.search_bridge().mark_dirty();
+            // 设置也是全局搜索的数据源；只提交设置条目的增量更新，
+            // 让常驻搜索 worker 的索引立即反映保存后的名称/描述。
+            if !settings_updates.is_empty() {
+                self.search_bridge().apply_updates(settings_updates);
+            }
             true
         }
     }

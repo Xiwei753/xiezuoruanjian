@@ -34,6 +34,20 @@ export struct WideSettingsCategoryContent {
   @Param onClearLogs: () => void = () => {}
   @Param onCopyDeviceInfo: () => void = () => {}
   @Param conflictRemaining: number = -1
+  // Issue #982：搜索结果精确定位后，父组件传入需要短暂高亮的设置项 key。
+  @Param highlightedSettingKey: string = ''
+  /** 与父 SettingsContent 实例序号一致，避免多份设置页产生重复组件 id。 */
+  @Param idPrefix: string = ''
+
+  private rowId(settingKey: string): string {
+    return `setting_${this.idPrefix}_${settingKey}`
+  }
+
+  private rowBackground(settingKey: string): ResourceColor {
+    return this.highlightedSettingKey === settingKey
+      ? $r('sys.color.comp_background_gray')
+      : Color.Transparent
+  }
 
   private themeLabels(): string[] {
     return [
@@ -50,6 +64,36 @@ export struct WideSettingsCategoryContent {
       options.push({ value: labels[index], icon: '' })
     }
     return options
+  }
+
+  private localeLabels(): string[] {
+    return ['跟随系统', '简体中文', 'English']
+  }
+
+  private localeSelectOptions(): WideSelectOption[] {
+    const labels: string[] = this.localeLabels()
+    const options: WideSelectOption[] = []
+    for (let index: number = 0; index < labels.length; index++) {
+      options.push({ value: labels[index], icon: '' })
+    }
+    return options
+  }
+
+  private localeIndex(): number {
+    const locales: string[] = ['', 'zh-CN', 'en-US']
+    const current: string = this.viewModel.settings.locale ?? ''
+    const index: number = locales.indexOf(current)
+    return index >= 0 ? index : 0
+  }
+
+  private applyLocale(index: number): void {
+    const locales: string[] = ['', 'zh-CN', 'en-US']
+    const selected: string = index >= 0 && index < locales.length ? locales[index] : ''
+    this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+      settings.locale = selected.length > 0 ? selected : null
+      return settings
+    })
+    this.viewModel.saveSettings()
   }
 
   private colorSourceOptions(): WideSelectOption[] {
@@ -202,8 +246,11 @@ export struct WideSettingsCategoryContent {
           this.onSetThemeMode(modes[index])
         })
     }
+    .id(this.rowId('appearanceMode'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('appearanceMode'))
     .alignItems(VerticalAlign.Center)
 
     // 颜色来源（实验性）
@@ -219,11 +266,35 @@ export struct WideSettingsCategoryContent {
           this.onSetColorSource(index === 1 ? 'saved_palette' : 'built_in')
         })
     }
+    .id(this.rowId('colorSource'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('colorSource'))
     .alignItems(VerticalAlign.Center)
 
-    if (this.viewModel.settings.colorSource === 'built_in' && this.viewModel.builtinThemes.length > 0) {
+    // 动态取色（旧版 monetColor 别名也定位到这里）
+    Row({ space: 12 }) {
+      Text('动态取色（实验性）')
+        .fontSize(15)
+        .layoutWeight(1)
+      Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.dynamicColorEnabled })
+        .onChange((isOn: boolean) => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.dynamicColorEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        })
+    }
+    .id(this.rowId('dynamicColorEnabled'))
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('dynamicColorEnabled'))
+    .alignItems(VerticalAlign.Center)
+
+    if (this.viewModel.builtinThemes.length > 0) {
       Row({ space: 12 }) {
         Text('内置主题（实验性）')
           .fontSize(15)
@@ -232,18 +303,22 @@ export struct WideSettingsCategoryContent {
           .selected(this.builtinThemeIndex())
           .value(this.builtinThemeName())
           .width('32%')
+          .enabled(this.viewModel.settings.colorSource === 'built_in')
           .onSelect((index: number) => {
             if (index < this.viewModel.builtinThemes.length) {
               this.onSetBuiltinTheme(this.viewModel.builtinThemes[index].theme_id)
             }
           })
       }
+      .id(this.rowId('selectedBuiltinThemeId'))
       .width('100%')
-      .padding({ top: 7, bottom: 7 })
+      .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.rowBackground('selectedBuiltinThemeId'))
       .alignItems(VerticalAlign.Center)
     }
 
-    if (this.viewModel.settings.colorSource === 'saved_palette' && this.viewModel.paletteRecords.length > 0) {
+    if (this.viewModel.paletteRecords.length > 0) {
       Row({ space: 12 }) {
         Text('设备配色（实验性）')
           .fontSize(15)
@@ -252,18 +327,42 @@ export struct WideSettingsCategoryContent {
           .selected(this.paletteIndex())
           .value(this.paletteName())
           .width('32%')
+          .enabled(this.viewModel.settings.colorSource === 'saved_palette')
           .onSelect((index: number) => {
             if (index < this.viewModel.paletteRecords.length) {
               this.onSetPalette(this.viewModel.paletteRecords[index].palette_id)
             }
           })
       }
+      .id(this.rowId('selectedPaletteId'))
       .width('100%')
-      .padding({ top: 7, bottom: 7 })
+      .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+      .borderRadius(DesignTokens.radiusSm)
+      .backgroundColor(this.rowBackground('selectedPaletteId'))
       .alignItems(VerticalAlign.Center)
     }
 
-    // 字体大小
+    // 界面语言
+    Row({ space: 12 }) {
+      Text('界面语言')
+        .fontSize(15)
+        .layoutWeight(1)
+      Select(this.localeSelectOptions())
+        .selected(this.localeIndex())
+        .value(this.localeLabels()[this.localeIndex()])
+        .width('32%')
+        .onSelect((index: number) => {
+          this.applyLocale(index)
+        })
+    }
+    .id(this.rowId('locale'))
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('locale'))
+    .alignItems(VerticalAlign.Center)
+
+    // 字体大小（旧同步键 fontSize 也定位到这里）
     Row({ space: 12 }) {
       Column({ space: 2 }) {
         Text($r('app.string.font_size'))
@@ -284,8 +383,11 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .id(this.rowId('editorFontSize'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('editorFontSize'))
     .alignItems(VerticalAlign.Center)
 
     // 行距倍数
@@ -310,8 +412,11 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .id(this.rowId('editorLineSpacingMultiplier'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('editorLineSpacingMultiplier'))
     .alignItems(VerticalAlign.Center)
   }
 
@@ -330,8 +435,11 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .id(this.rowId('autoIndentEnabled'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('autoIndentEnabled'))
     .alignItems(VerticalAlign.Center)
 
     Row({ space: 12 }) {
@@ -354,8 +462,127 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .id(this.rowId('autoIndentWidth'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('autoIndentWidth'))
+    .alignItems(VerticalAlign.Center)
+
+    Row({ space: 12 }) {
+      Text('打字动画')
+        .fontSize(15)
+        .layoutWeight(1)
+      Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.editorTypingAnimationEnabled })
+        .onChange((isOn: boolean) => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.editorTypingAnimationEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        })
+    }
+    .id(this.rowId('editorTypingAnimationEnabled'))
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('editorTypingAnimationEnabled'))
+    .alignItems(VerticalAlign.Center)
+
+    Row({ space: 12 }) {
+      Column({ space: 2 }) {
+        Text('打字动画时长')
+          .fontSize(15)
+        Text(`${this.viewModel.settings.editorTypingAnimationDurationMs}ms`)
+          .fontSize(11)
+          .fontColor($r('sys.color.font_tertiary'))
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Slider({ value: this.viewModel.settings.editorTypingAnimationDurationMs, min: 20, max: 500, step: 10 })
+        .width('42%')
+        .enabled(this.viewModel.settings.editorTypingAnimationEnabled)
+        .onChange((value: number) => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.editorTypingAnimationDurationMs = value
+            return settings
+          })
+          this.viewModel.saveSettings()
+        })
+    }
+    .id(this.rowId('editorTypingAnimationDurationMs'))
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('editorTypingAnimationDurationMs'))
+    .alignItems(VerticalAlign.Center)
+
+    Row({ space: 12 }) {
+      Text('平滑光标')
+        .fontSize(15)
+        .layoutWeight(1)
+      Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.editorSmoothCursorEnabled })
+        .onChange((isOn: boolean) => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.editorSmoothCursorEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        })
+    }
+    .id(this.rowId('editorSmoothCursorEnabled'))
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('editorSmoothCursorEnabled'))
+    .alignItems(VerticalAlign.Center)
+
+    Row({ space: 12 }) {
+      Column({ space: 2 }) {
+        Text('平滑光标时长')
+          .fontSize(15)
+        Text(`${this.viewModel.settings.editorSmoothCursorDurationMs}ms`)
+          .fontSize(11)
+          .fontColor($r('sys.color.font_tertiary'))
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Slider({ value: this.viewModel.settings.editorSmoothCursorDurationMs, min: 20, max: 500, step: 10 })
+        .width('42%')
+        .enabled(this.viewModel.settings.editorSmoothCursorEnabled)
+        .onChange((value: number) => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.editorSmoothCursorDurationMs = value
+            return settings
+          })
+          this.viewModel.saveSettings()
+        })
+    }
+    .id(this.rowId('editorSmoothCursorDurationMs'))
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('editorSmoothCursorDurationMs'))
+    .alignItems(VerticalAlign.Center)
+
+    Row({ space: 12 }) {
+      Text('协同动画')
+        .fontSize(15)
+        .layoutWeight(1)
+      Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.editorCoordinatedTextCursorAnimationEnabled })
+        .onChange((isOn: boolean) => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.editorCoordinatedTextCursorAnimationEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        })
+    }
+    .id(this.rowId('editorCoordinatedTextCursorAnimationEnabled'))
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('editorCoordinatedTextCursorAnimationEnabled'))
     .alignItems(VerticalAlign.Center)
   }
 
@@ -374,35 +601,41 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .id(this.rowId('autoSaveEnabled'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('autoSaveEnabled'))
     .alignItems(VerticalAlign.Center)
 
-    if (this.viewModel.settings.autoSaveEnabled) {
-      Row({ space: 12 }) {
-        Column({ space: 2 }) {
-          Text($r('app.string.auto_save_delay'))
-            .fontSize(15)
-          Text(`${Math.round(this.viewModel.settings.autoSaveDelayMs / 1000)} 秒`)
-            .fontSize(11)
-            .fontColor($r('sys.color.font_tertiary'))
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-        Slider({ value: this.viewModel.settings.autoSaveDelayMs / 1000, min: 1, max: 10, step: 1 })
-          .width('42%')
-          .onChange((value: number) => {
-            this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-              settings.autoSaveDelayMs = value * 1000
-              return settings
-            })
-            this.viewModel.saveSettings()
-          })
+    // 自动保存延迟始终渲染；关闭自动保存时禁用，保证搜索能定位到实际设置项。
+    Row({ space: 12 }) {
+      Column({ space: 2 }) {
+        Text($r('app.string.auto_save_delay'))
+          .fontSize(15)
+        Text(`${Math.round(this.viewModel.settings.autoSaveDelayMs / 1000)} 秒`)
+          .fontSize(11)
+          .fontColor($r('sys.color.font_tertiary'))
       }
-      .width('100%')
-      .padding({ top: 7, bottom: 7 })
-      .alignItems(VerticalAlign.Center)
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Slider({ value: this.viewModel.settings.autoSaveDelayMs / 1000, min: 1, max: 10, step: 1 })
+        .width('42%')
+        .enabled(this.viewModel.settings.autoSaveEnabled)
+        .onChange((value: number) => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.autoSaveDelayMs = value * 1000
+            return settings
+          })
+          this.viewModel.saveSettings()
+        })
     }
+    .id(this.rowId('autoSaveDelayMs'))
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('autoSaveDelayMs'))
+    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
@@ -652,8 +885,11 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .id(this.rowId('aiEnabled'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('aiEnabled'))
     .alignItems(VerticalAlign.Center)
   }
 
@@ -675,8 +911,11 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .id(this.rowId('diagnosticsEnabled'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('diagnosticsEnabled'))
     .alignItems(VerticalAlign.Center)
 
     Row({ space: 12 }) {
@@ -693,8 +932,29 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .id(this.rowId('diagnosticsVerbose'))
     .width('100%')
-    .padding({ top: 7, bottom: 7 })
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('diagnosticsVerbose'))
+    .alignItems(VerticalAlign.Center)
+
+    Row({ space: 12 }) {
+      Text('统计设备标识')
+        .fontSize(15)
+        .layoutWeight(1)
+      Text(this.viewModel.settings.statsDeviceId ?? '未设置')
+        .fontSize(13)
+        .fontColor($r('sys.color.font_secondary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ maxWidth: '55%' })
+    }
+    .id(this.rowId('statsDeviceId'))
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.rowBackground('statsDeviceId'))
     .alignItems(VerticalAlign.Center)
 
     Row({ space: 10 }) {

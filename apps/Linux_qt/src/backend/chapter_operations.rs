@@ -172,8 +172,23 @@ impl AppBackend {
                 Ok(receipt) => {
                     self.debug_log("chapter", "save_chapter_success", &format!("len={}", len));
                     self.current_save_status = "已保存".to_string();
-                    // Issue #982：正文变化只标脏，下一次搜索时统一重建一次索引。
-                    self.search_bridge().mark_dirty();
+                    // Issue #982：只更新本章正文条目，不重建整个工作区索引。
+                    let title = self
+                        .chapter_title_from_tree(&p, &v, &c)
+                        .unwrap_or_default();
+                    let entry = writer_core::search::extractor::extract_chapter_body_entry(
+                        &p, &v, &c, &title, &text_str,
+                    );
+                    self.search_bridge().apply_updates(vec![
+                        writer_core::search::SearchIndexUpdate {
+                            action: writer_core::search::SearchIndexAction::Upsert,
+                            object_id: entry.object_id.clone(),
+                            scope: entry.scope,
+                            title: entry.title.clone(),
+                            body: entry.body.clone(),
+                            target: Some(entry.target.clone()),
+                        },
+                    ]);
                     // 正文保存不触发 workspace_state_changed，避免 reload_tree 刷新整棵树。
                     // 保存只改变章节内容，不改变工作区结构（项目/卷/章节增删改）。
                     serde_to_qjson_object(serde_json::json!({

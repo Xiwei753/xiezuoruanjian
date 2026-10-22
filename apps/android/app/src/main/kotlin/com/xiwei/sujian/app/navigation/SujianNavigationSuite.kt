@@ -46,7 +46,7 @@ import com.xiwei.sujian.feature.search.data.model.SearchContext
 import com.xiwei.sujian.feature.search.data.model.SearchOriginScreens
 import com.xiwei.sujian.feature.search.ui.SearchScreen
 import com.xiwei.sujian.feature.settings.ui.SettingsRoute
-import com.xiwei.sujian.feature.starmap.ui.StarMapPlaceholderScreen
+import com.xiwei.sujian.feature.starmap.ui.StarMapScreen
 import com.xiwei.sujian.feature.stats.ui.StatsScreen
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
@@ -91,14 +91,14 @@ private fun SujianRoute.toTopDestination(): SujianDestination =
 internal fun SujianDestination.toRoute(): SujianRoute =
     when (this) {
         SujianDestination.Works -> SujianRoute.Works
-        SujianDestination.StarMap -> SujianRoute.StarMap
+        SujianDestination.StarMap -> SujianRoute.StarMap()
         SujianDestination.Stats -> SujianRoute.Stats
     }
 
 private fun rememberInitialNavStack(initialDestination: String?): Pair<SujianDestination, List<SujianRoute>> =
     when (initialDestination) {
         "settings" -> SujianDestination.Works to listOf(SujianRoute.Works, SujianRoute.Settings)
-        "starmap" -> SujianDestination.StarMap to listOf(SujianRoute.StarMap)
+        "starmap" -> SujianDestination.StarMap to listOf(SujianRoute.StarMap())
         "stats" -> SujianDestination.Stats to listOf(SujianRoute.Stats)
         else -> SujianDestination.Works to listOf(SujianRoute.Works)
     }
@@ -191,8 +191,18 @@ private fun rememberSujianEntryProvider(
                         is SujianRoute.Works ->
                             rememberWorksEntry(key, context, topLevelBackStack, deps, editorCallbacks)
                         is SujianRoute.StarMap ->
-                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
-                                StarMapPlaceholderScreen(
+                            NavEntry(key, metadata = noPageTransitionMetadata) {
+                                StarMapScreen(
+                                    starmapId = key.starmapId,
+                                    target = key.selectionTarget(),
+                                    onOpenStarmap = { starmapId, projectId ->
+                                        topLevelBackStack.add(
+                                            SujianRoute.StarMap(
+                                                starmapId = starmapId,
+                                                projectId = projectId,
+                                            ),
+                                        )
+                                    },
                                     modifier = Modifier.testTag(SujianSemanticIds.StarMapScreen),
                                 )
                             }

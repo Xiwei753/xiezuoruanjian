@@ -4,6 +4,93 @@
 //! 布局算法本身在 `crate::starmap_view`（Linux 平台端），Core 只保存节点坐标。
 
 use super::*;
+use writer_core::api::types::{
+    CreateStarMapChildEmbedResultDto, StarMapEdgeDto, StarMapEmbedDto, StarMapNodeDto,
+};
+use writer_core::api::WriterCoreApi;
+use writer_core::search::extractor;
+use writer_core::search::SearchIndexUpdate;
+
+fn node_search_content(node: &StarMapNodeDto) -> String {
+    let content =
+        match writer_core::starmap::semantic::StarMapNodeContent::try_from(node.content.clone()) {
+            Ok(content) => content,
+            Err(error) => {
+                log::warn!(
+                    "starmap node {} content is invalid for search indexing: {}",
+                    node.id,
+                    error
+                );
+                writer_core::starmap::semantic::StarMapNodeContent::Empty
+            }
+        };
+    let mut parts = Vec::new();
+    let text = content.search_text();
+    if !text.is_empty() {
+        parts.push(text);
+    }
+    for tag in &node.tags {
+        if !tag.is_empty() {
+            parts.push(tag.clone());
+        }
+    }
+    parts.join(" ")
+}
+
+fn node_search_update(
+    core: &WriterCoreApi,
+    starmap_id: &str,
+    node_id: &str,
+) -> Option<SearchIndexUpdate> {
+    let project_scope = AppBackend::starmap_project_scope(core, starmap_id)?;
+    let graph = core.get_starmap_graph(starmap_id).ok()?;
+    let node = graph.nodes.iter().find(|node| node.id == node_id)?;
+    let entry = extractor::extract_starmap_node_entry(
+        starmap_id,
+        node_id,
+        project_scope.as_deref(),
+        &node.title,
+        &node_search_content(node),
+    );
+    Some(AppBackend::search_upsert_from_entry(entry))
+}
+
+fn edge_search_update(
+    core: &WriterCoreApi,
+    starmap_id: &str,
+    edge_id: &str,
+) -> Option<SearchIndexUpdate> {
+    let project_scope = AppBackend::starmap_project_scope(core, starmap_id)?;
+    let graph = core.get_starmap_graph(starmap_id).ok()?;
+    let edge = graph.edges.iter().find(|edge| edge.id == edge_id)?;
+    let entry = extractor::extract_starmap_edge_entry(
+        starmap_id,
+        edge_id,
+        project_scope.as_deref(),
+        edge.label.as_deref().unwrap_or(""),
+    );
+    Some(AppBackend::search_upsert_from_entry(entry))
+}
+
+fn embed_search_update(
+    core: &WriterCoreApi,
+    starmap_id: &str,
+    instance_id: &str,
+) -> Option<SearchIndexUpdate> {
+    let project_scope = AppBackend::starmap_project_scope(core, starmap_id)?;
+    let graph = core.get_starmap_graph(starmap_id).ok()?;
+    let embed = graph
+        .embeds
+        .iter()
+        .find(|embed| embed.instance_id == instance_id)?;
+    let entry = extractor::extract_starmap_embed_entry(
+        starmap_id,
+        instance_id,
+        project_scope.as_deref(),
+        embed.label.as_deref().unwrap_or(""),
+    );
+    Some(AppBackend::search_upsert_from_entry(entry))
+}
 
 impl AppBackend {
     // AppBackend::create_starmap_node_json
@@ -18,14 +105,26 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let t = title.to_string();
         let k = kind.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::create_starmap_node(&core, &sid, &t, &k, x, y).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::create_starmap_node(core, &sid, &t, &k, x, y),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let node_id = Self::starmap_mutation_data(&raw)
+                .and_then(|data| serde_json::from_value::<StarMapNodeDto>(data).ok())
+                .map(|node| node.id);
+            let updates = match (core.as_ref(), node_id.as_deref()) {
+                (Some(core), Some(node_id)) => {
+                    node_search_update(core, &sid, node_id).map(|update| vec![update])
+                }
+                _ => None,
+            };
+            self.finish_starmap_search_update(&sid, updates);
         }
+        raw.into()
     }
 
     // AppBackend::update_starmap_node_json
@@ -38,14 +137,20 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let nid = node_id.to_string();
         let p = patch_json.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::update_starmap_node(&core, &sid, &nid, &p).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::update_starmap_node(core, &sid, &nid, &p),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let updates = core
+                .as_ref()
+                .and_then(|core| node_search_update(core, &sid, &nid).map(|update| vec![update]));
+            self.finish_starmap_search_update(&sid, updates);
         }
+        raw.into()
     }
 
     // AppBackend::delete_starmap_node_json
@@ -56,14 +161,20 @@ impl AppBackend {
     ) -> QString {
         let sid = starmap_id.to_string();
         let nid = node_id.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::delete_starmap_node(&core, &sid, &nid).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::delete_starmap_node(core, &sid, &nid),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            self.submit_search_updates(vec![Self::search_delete_update(format!(
+                "starmap_node:{}:{}",
+                sid, nid
+            ))]);
         }
+        raw.into()
     }
 
     // AppBackend::resolve_starmap_path_json
@@ -232,14 +343,26 @@ impl AppBackend {
         let to_id = to_node_id.to_string();
         let k = kind.to_string();
         let l = label.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::create_starmap_edge(&core, &sid, &from_id, &to_id, &k, &l).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::create_starmap_edge(core, &sid, &from_id, &to_id, &k, &l),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let edge_id = Self::starmap_mutation_data(&raw)
+                .and_then(|data| serde_json::from_value::<StarMapEdgeDto>(data).ok())
+                .map(|edge| edge.id);
+            let updates = match (core.as_ref(), edge_id.as_deref()) {
+                (Some(core), Some(edge_id)) => {
+                    edge_search_update(core, &sid, edge_id).map(|update| vec![update])
+                }
+                _ => None,
+            };
+            self.finish_starmap_search_update(&sid, updates);
         }
+        raw.into()
     }
 
     // AppBackend::create_starmap_edge_with_paths_json
@@ -256,14 +379,28 @@ impl AppBackend {
         let tp = to_path_json.to_string();
         let k = kind.to_string();
         let l = label.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::create_starmap_edge_with_paths(&core, &sid, &fp, &tp, &k, &l).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => {
+                starmap_bridge::create_starmap_edge_with_paths(core, &sid, &fp, &tp, &k, &l)
+            }
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let edge_id = Self::starmap_mutation_data(&raw)
+                .and_then(|data| serde_json::from_value::<StarMapEdgeDto>(data).ok())
+                .map(|edge| edge.id);
+            let updates = match (core.as_ref(), edge_id.as_deref()) {
+                (Some(core), Some(edge_id)) => {
+                    edge_search_update(core, &sid, edge_id).map(|update| vec![update])
+                }
+                _ => None,
+            };
+            self.finish_starmap_search_update(&sid, updates);
         }
+        raw.into()
     }
 
     // AppBackend::update_starmap_edge_json
@@ -276,14 +413,20 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let eid = edge_id.to_string();
         let p = patch_json.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::update_starmap_edge(&core, &sid, &eid, &p).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::update_starmap_edge(core, &sid, &eid, &p),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let updates = core
+                .as_ref()
+                .and_then(|core| edge_search_update(core, &sid, &eid).map(|update| vec![update]));
+            self.finish_starmap_search_update(&sid, updates);
         }
+        raw.into()
     }
 
     // AppBackend::delete_starmap_edge_json
@@ -294,14 +437,20 @@ impl AppBackend {
     ) -> QString {
         let sid = starmap_id.to_string();
         let eid = edge_id.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::delete_starmap_edge(&core, &sid, &eid).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::delete_starmap_edge(core, &sid, &eid),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            self.submit_search_updates(vec![Self::search_delete_update(format!(
+                "starmap_edge:{}:{}",
+                sid, eid
+            ))]);
         }
+        raw.into()
     }
 
     // -------------------------------------------------------------------------
@@ -320,14 +469,26 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let tid = target_starmap_id.to_string();
         let l = label.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::create_starmap_embed(&core, &sid, &tid, &l, x, y).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::create_starmap_embed(core, &sid, &tid, &l, x, y),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let instance_id = Self::starmap_mutation_data(&raw)
+                .and_then(|data| serde_json::from_value::<StarMapEmbedDto>(data).ok())
+                .map(|embed| embed.instance_id);
+            let updates = match (core.as_ref(), instance_id.as_deref()) {
+                (Some(core), Some(instance_id)) => {
+                    embed_search_update(core, &sid, instance_id).map(|update| vec![update])
+                }
+                _ => None,
+            };
+            self.finish_starmap_search_update(&sid, updates);
         }
+        raw.into()
     }
 
     // AppBackend::update_starmap_embed_json
@@ -340,14 +501,20 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let iid = instance_id.to_string();
         let p = patch_json.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::update_starmap_embed(&core, &sid, &iid, &p).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::update_starmap_embed(core, &sid, &iid, &p),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let updates = core
+                .as_ref()
+                .and_then(|core| embed_search_update(core, &sid, &iid).map(|update| vec![update]));
+            self.finish_starmap_search_update(&sid, updates);
         }
+        raw.into()
     }
 
     // AppBackend::create_starmap_child_embed_json
@@ -362,14 +529,48 @@ impl AppBackend {
     ) -> QString {
         let hid = host_starmap_id.to_string();
         let t = title.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::create_starmap_child_embed(&core, &hid, &t, x, y).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::create_starmap_child_embed(core, &hid, &t, x, y),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let result = Self::starmap_mutation_data(&raw).and_then(|data| {
+                serde_json::from_value::<CreateStarMapChildEmbedResultDto>(data).ok()
+            });
+            let updates = match (core.as_ref(), result) {
+                (Some(core), Some(result)) => {
+                    Self::starmap_project_scope(core, &hid).map(|host_scope| {
+                        vec![
+                            Self::search_upsert_from_entry(extractor::extract_starmap_title_entry(
+                                &result.starmap.starmap_id,
+                                result.starmap.project_id.as_deref(),
+                                &result.starmap.title,
+                            )),
+                            Self::search_upsert_from_entry(extractor::extract_starmap_embed_entry(
+                                &hid,
+                                &result.embed.instance_id,
+                                host_scope.as_deref(),
+                                result.embed.label.as_deref().unwrap_or(""),
+                            )),
+                        ]
+                    })
+                }
+                _ => None,
+            };
+            if updates.is_some() {
+                self.finish_starmap_search_update(&hid, updates);
+            } else {
+                // 子星图结果无法解析时只能完整重建，确保新星图标题与 Embed 都可见。
+                log::warn!(
+                    "create_starmap_child_embed succeeded but response could not be indexed; falling back to full search rebuild"
+                );
+                self.search_bridge().rebuild_all();
+            }
         }
+        raw.into()
     }
 
     // AppBackend::delete_starmap_embed_json
@@ -380,13 +581,19 @@ impl AppBackend {
     ) -> QString {
         let sid = starmap_id.to_string();
         let iid = instance_id.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::delete_starmap_embed(&core, &sid, &iid).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::delete_starmap_embed(core, &sid, &iid),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            self.submit_search_updates(vec![Self::search_delete_update(format!(
+                "starmap_embed:{}:{}",
+                sid, iid
+            ))]);
         }
+        raw.into()
     }
 }

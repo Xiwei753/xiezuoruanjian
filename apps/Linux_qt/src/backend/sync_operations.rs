@@ -242,6 +242,9 @@ impl AppBackend {
     }
     pub(crate) fn handle_sync_content_refresh(&mut self) {
         self.reload_tree();
+        // 同步来自外部数据替换，可能改写正文而不经过本地保存路径；
+        // 这里做一次完整重建，其他本地编辑仍只提交增量更新。
+        self.search_bridge().rebuild_all();
         let chapter_deleted = self.reconcile_selection_after_tree_reload();
         // Issue #754 评论 5815901258: trigger_projects_reloaded 已删除，
         // 领域通知由 ProjectBackend::emit_changed() 负责。

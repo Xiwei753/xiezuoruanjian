@@ -195,11 +195,9 @@ ScrollView {
     }
 
     // 全局搜索结果定位到设置分组。Core 只给分组语义，具体设置项仍由本页现有控件承载。
-    function revealSection(section) {
-        var id = String(section || "")
-        if (id.length === 0)
-            return
-        root.resetSearch()
+    property string locateMessage: ""
+
+    function expandSection(id) {
         if (id === "appearance") {
             root.appearanceExpanded = true
         } else if (id === "editor") {
@@ -210,14 +208,131 @@ ScrollView {
             root.saveSyncExpanded = true
         } else if (id === "diagnostics") {
             root.diagnosticsExpanded = true
-        } else {
+        }
+    }
+
+    function sectionForSettingKey(key) {
+        if (key === "appearanceMode" || key === "themeMode"
+                || key === "colorSource" || key === "monetColor"
+                || key === "dynamicColorEnabled" || key === "selectedBuiltinThemeId"
+                || key === "selectedPaletteId" || key === "locale"
+                || key === "themePalette" || key === "editorFontSize"
+                || key === "fontSize" || key === "editorLineSpacingMultiplier")
+            return "appearance"
+        if (key === "autoSaveEnabled" || key === "autoSaveDelayMs")
+            return "save_sync"
+        if (key === "aiEnabled")
+            return "ai"
+        if (key === "diagnosticsEnabled" || key === "diagnosticsVerbose"
+                || key === "statsDeviceId")
+            return "diagnostics"
+        return "editor"
+    }
+
+    function controlForSettingKey(key) {
+        switch (key) {
+        case "appearanceMode":
+        case "themeMode":
+            return themeCombo
+        case "colorSource":
+        case "monetColor":
+            return colorSourceCombo
+        case "selectedBuiltinThemeId":
+            return builtinThemeCombo
+        case "selectedPaletteId":
+        case "themePalette":
+            return paletteRecordCombo
+        case "editorFontSize":
+        case "fontSize":
+            return fontSizeSpin
+        case "editorLineSpacingMultiplier":
+            return lineSpacingSpin
+        case "autoIndentEnabled":
+            return autoIndent
+        case "autoIndentWidth":
+            return autoIndentWidthSpin
+        case "editorCoordinatedTextCursorAnimationEnabled":
+            return coordinatedAnim
+        case "editorTypingAnimationEnabled":
+            return typingAnim
+        case "editorTypingAnimationDurationMs":
+            return typingAnimDuration
+        case "editorSmoothCursorEnabled":
+            return smoothCursor
+        case "editorSmoothCursorDurationMs":
+            return smoothCursorDuration
+        case "autoSaveEnabled":
+            return autoSave
+        case "autoSaveDelayMs":
+            return autoSaveDelaySpin
+        case "aiEnabled":
+            return aiSwitch
+        case "diagnosticsEnabled":
+            return diagnosticsEnabled
+        case "diagnosticsVerbose":
+            return diagnosticsVerbose
+        default:
+            return null
+        }
+    }
+
+    function showLocateFeedback(text) {
+        root.locateMessage = String(text || "")
+        if (root.contentItem)
+            root.contentItem.contentY = 0
+        locateFeedback.opacity = 1
+        locateFeedbackTimer.restart()
+    }
+
+    function revealSection(section, settingKey) {
+        var id = String(section || "")
+        var key = String(settingKey || "")
+        if (id.length === 0 && key.length === 0)
+            return
+        root.resetSearch()
+        if (id.length > 0)
+            root.expandSection(id)
+        if (key.length === 0) {
+            root.scrollToSection(id)
             return
         }
+
+        var control = root.controlForSettingKey(key)
+        if (!control) {
+            root.showLocateFeedback(qsTr("未找到设置项：%1").arg(key))
+            return
+        }
+        var actualSection = root.sectionForSettingKey(key)
+        root.expandSection(actualSection)
+        Qt.callLater(function() {
+            Qt.callLater(function() {
+                var flickable = root.contentItem
+                if (!control || !flickable || !control.visible) {
+                    root.showLocateFeedback(qsTr("设置项当前不可用：%1").arg(key))
+                    return
+                }
+                var posContent = control.mapToItem(settingsColumns, 0, 0)
+                var posFlickable = control.mapToItem(flickable.contentItem, 0, 0)
+                flickable.contentY = Math.max(0, posFlickable.y - Kirigami.Units.gridUnit)
+                settingHighlight.x = Math.max(0, posContent.x - 2)
+                settingHighlight.y = Math.max(0, posContent.y - 2)
+                settingHighlight.width = Math.max(0, control.width + 4)
+                settingHighlight.height = Math.max(0, control.height + 4)
+                settingHighlight.opacity = 1
+                settingHighlightTimer.restart()
+            })
+        })
+    }
+
+    function scrollToSection(id) {
         var target = id === "appearance" ? appearanceSection
             : id === "editor" ? editorAnimationSection
             : id === "ai" ? aiSection
             : id === "save_sync" ? saveSyncSection
-            : diagnosticsSection
+            : id === "diagnostics" ? diagnosticsSection
+            : null
+        if (!target)
+            return
         Qt.callLater(function() {
             var flickable = root.contentItem
             if (!flickable || !flickable.contentItem || !target)
@@ -894,5 +1009,62 @@ ScrollView {
         targetFlickable: root.contentItem
         lineSpacingPx: 56
         anchors.fill: root
+    }
+
+    Rectangle {
+        id: settingHighlight
+        parent: settingsColumns
+        z: 200
+        visible: opacity > 0
+        opacity: 0
+        color: "transparent"
+        border.color: Kirigami.Theme.highlightColor
+        border.width: 2
+        radius: Kirigami.Units.smallSpacing
+        enabled: false
+        Behavior on opacity {
+            NumberAnimation { duration: motion.hoverMs; easing.type: Easing.OutCubic }
+        }
+    }
+
+    Rectangle {
+        id: locateFeedback
+        parent: settingsColumns
+        z: 210
+        x: 0
+        y: 0
+        width: settingsColumns.width
+        height: 44
+        visible: opacity > 0
+        opacity: 0
+        color: Kirigami.Theme.backgroundColor
+        border.color: Kirigami.Theme.negativeTextColor
+        border.width: 1
+        radius: Kirigami.Units.smallSpacing
+        enabled: false
+        Behavior on opacity {
+            NumberAnimation { duration: motion.hoverMs; easing.type: Easing.OutCubic }
+        }
+        Text {
+            anchors.fill: parent
+            anchors.leftMargin: Kirigami.Units.gridUnit
+            anchors.rightMargin: Kirigami.Units.gridUnit
+            text: root.locateMessage
+            color: Kirigami.Theme.negativeTextColor
+            elide: Text.ElideRight
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    Timer {
+        id: settingHighlightTimer
+        interval: 1800
+        onTriggered: settingHighlight.opacity = 0
+    }
+
+    Timer {
+        id: locateFeedbackTimer
+        interval: 3200
+        onTriggered: locateFeedback.opacity = 0
     }
 }

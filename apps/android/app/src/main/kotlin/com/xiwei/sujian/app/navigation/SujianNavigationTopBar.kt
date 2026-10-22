@@ -90,7 +90,13 @@ private fun rememberSujianTopBarNavigation(
                     null
                 }
             }
-            is SujianRoute.StarMap -> null
+            is SujianRoute.StarMap -> {
+                if (currentRoute.starmapId != null) {
+                    { env.topLevelBackStack.removeLastOrNull() }
+                } else {
+                    null
+                }
+            }
             is SujianRoute.Stats -> null
             is SujianRoute.Search -> {
                 { env.topLevelBackStack.removeLastOrNull() }

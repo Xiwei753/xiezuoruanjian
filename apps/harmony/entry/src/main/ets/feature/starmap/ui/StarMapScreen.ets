@@ -1,7 +1,7 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapPathSegment, StarMapPoint } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapGraph, StarMapPathSegment, StarMapPoint, StarMapTargetPath } from '../../../corebridge/dto/StarMapDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
@@ -15,6 +15,7 @@ import Animator, { AnimatorResult } from '@ohos.animator'
 import { StarMapGestureStateTracker } from '../platform/StarMapGestureState'
 import {
   RecursiveSceneSource, EmbedFocusProbe,
+  PlatformEdgeRender, PlatformNodeRect, resolveEdgeEndpointAnchor,
   buildRecursiveSceneContext, collectEmbedFocusProbes
 } from '../platform/StarMapGeometry'
 import {
@@ -38,6 +39,13 @@ import { CompactPageState, CompactPageStateKind } from '../../../ui/components/C
  * 边界交给 computeCameraZoomAround 内部的 clampCameraScale 处理，这里不重复夹一次。
  */
 const ZOOM_FACTOR: number = 1.2
+
+interface StarMapSearchFocusGeometry {
+  kind: 'node' | 'embed' | 'edge'
+  itemId: string
+  centerX: number
+  centerY: number
+}
 
 @Component
 export struct StarMapScreen {
@@ -78,9 +86,11 @@ export struct StarMapScreen {
   // Canvas 生命周期
   @State canvasActive: boolean = false
 
-  // Issue #982：搜索结果精确落到节点/边/嵌入时，图加载完成后写入全树共享选中态。
+  // Issue #982：搜索结果精确落到节点/边/嵌入/链接时，图加载完成后解析几何、选中并居中。
   private searchFocusKind: string = ''
   private searchFocusId: string = ''
+  private searchFocusHandled: boolean = false
+  private searchFocusTimerId: number = -1
 
   // 加载序号：防止切层后旧异步结果覆盖新层
   private graphLoadGeneration: number = 0
@@ -162,6 +172,10 @@ export struct StarMapScreen {
     this.canvasActive = false
     this.stopWobbleAnimation()
     this.gestureTracker.reset()
+    if (this.searchFocusTimerId !== -1) {
+      clearTimeout(this.searchFocusTimerId)
+      this.searchFocusTimerId = -1
+    }
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
     }
@@ -223,7 +237,9 @@ export struct StarMapScreen {
 
       if (result.success && result.data) {
         this.graph = result.data
-        this.applySearchFocus()
+        // Issue #982：子 Scene 完成布局后会回调 onSceneGeometryReady；这里先排一次，
+        // 视口尺寸或图数据哪个先到位都能触发同一条幂等定位。
+        this.scheduleSearchFocus()
       } else {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap').id)
       }
@@ -242,19 +258,154 @@ export struct StarMapScreen {
   }
 
   /**
-   * Issue #982：搜索结果跳转星图对象。选中态是页面唯一真相，Scene 会据 scenePath+kind+id
-   * 在所有层里找到对应对象；定位属于显示层，不改星图数据。
+   * Issue #982：搜索结果跳转星图对象。
+   * 不把「打开星图」当成功：必须把稳定 Core id 解析成当前根 Scene 的画布几何，
+   * 写入全树共享选中态，并按几何中心移动全局相机。link / hyperlink 没有独立位置，
+   * 解析 source 到所属 node/embed 后选中/居中宿主对象。
    */
-  private applySearchFocus(): void {
-    if (this.searchFocusKind.length === 0 || this.searchFocusId.length === 0) {
+  private scheduleSearchFocus(): void {
+    if (this.searchFocusHandled || this.searchFocusKind.length === 0 ||
+      this.searchFocusId.length === 0 || this.searchFocusTimerId !== -1) {
       return
     }
-    if (this.searchFocusKind === 'node') {
-      this.selectionState.select([], 'node', this.searchFocusId)
-    } else if (this.searchFocusKind === 'edge') {
-      this.selectionState.select([], 'edge', this.searchFocusId)
-    } else if (this.searchFocusKind === 'embed') {
-      this.selectionState.select([], 'embed', this.searchFocusId)
+    // 不在 build / 图数据 watch 的同步回调里直接改相机和选中，延后到下一帧。
+    this.searchFocusTimerId = setTimeout((): void => {
+      this.searchFocusTimerId = -1
+      this.applySearchFocus()
+    }, 0)
+  }
+
+  private applySearchFocus(): void {
+    if (this.searchFocusHandled || this.searchFocusKind.length === 0 || this.searchFocusId.length === 0) {
+      return
+    }
+    if (this.graph === null || this.canvasWidth <= 0 || this.canvasHeight <= 0) {
+      return
+    }
+    const root: RecursiveSceneSource | null = this.sceneRegistry.getRoot()
+    if (root === null) {
+      return
+    }
+    // 根 Scene 句柄已注册但几何还没产出时继续等 onSceneGeometryReady / onAreaChange。
+    if (root.rects.length === 0 && (this.graph.nodes.length > 0 || this.graph.embeds.length > 0)) {
+      return
+    }
+    const focus: StarMapSearchFocusGeometry | null = this.resolveSearchFocusGeometry(root)
+    if (focus === null) {
+      // 图已经可用但目标不在当前星图（已删除/跨层不可见）：明确反馈，而不是只打开星图。
+      this.searchFocusHandled = true
+      this.showSearchFocusToast('未能在星图中定位目标')
+      return
+    }
+
+    this.selectionState.select([], focus.kind, focus.itemId)
+    if (this.sceneRegistry !== null) {
+      this.sceneRegistry.redrawAllEdges()
+    }
+    const cameraScale: number = this.cameraScale > 0 ? this.cameraScale : 1
+    this.applyCamera(
+      cameraScale,
+      this.canvasWidth / 2 - focus.centerX * cameraScale,
+      this.canvasHeight / 2 - focus.centerY * cameraScale
+    )
+    this.searchFocusHandled = true
+  }
+
+  private resolveSearchFocusGeometry(
+    root: RecursiveSceneSource
+  ): StarMapSearchFocusGeometry | null {
+    if (this.searchFocusKind === 'node' || this.searchFocusKind === 'embed') {
+      const rect: PlatformNodeRect | null = this.findFocusRect(root, this.searchFocusId)
+      if (rect === null) {
+        return null
+      }
+      return {
+        kind: this.searchFocusKind === 'embed' ? 'embed' : 'node',
+        itemId: this.searchFocusId,
+        centerX: rect.x + rect.width / 2,
+        centerY: rect.y + rect.height / 2
+      }
+    }
+
+    if (this.searchFocusKind === 'edge') {
+      const edge: PlatformEdgeRender | undefined =
+        root.edges.find((item: PlatformEdgeRender): boolean => item.edgeId === this.searchFocusId)
+      if (edge === undefined) {
+        return null
+      }
+      return {
+        kind: 'edge',
+        itemId: edge.edgeId,
+        // 边的中心必须是线段中点，不能只选中不移动相机。
+        centerX: (edge.startX + edge.endX) / 2,
+        centerY: (edge.startY + edge.endY) / 2
+      }
+    }
+
+    if (this.searchFocusKind === 'link' || this.searchFocusKind === 'hyperlink') {
+      const source: StarMapTargetPath | null = this.resolveLinkSource(this.searchFocusKind, this.searchFocusId)
+      if (source === null) {
+        return null
+      }
+      const ownerId: string = this.resolveLinkOwnerId(source, root)
+      if (ownerId.length === 0) {
+        return null
+      }
+      const rect: PlatformNodeRect | null = this.findFocusRect(root, ownerId)
+      if (rect === null) {
+        return null
+      }
+      return {
+        // link/hyperlink 没有独立坐标，选中并居中它所属的 node / embed。
+        kind: root.embedInstanceIds.has(ownerId) ? 'embed' : 'node',
+        itemId: ownerId,
+        centerX: rect.x + rect.width / 2,
+        centerY: rect.y + rect.height / 2
+      }
+    }
+    return null
+  }
+
+  private findFocusRect(root: RecursiveSceneSource, itemId: string): PlatformNodeRect | null {
+    const rect: PlatformNodeRect | undefined =
+      root.rects.find((item: PlatformNodeRect): boolean => item.nodeId === itemId)
+    return rect !== undefined ? rect : null
+  }
+
+  private resolveLinkSource(kind: string, id: string): StarMapTargetPath | null {
+    if (this.graph === null) {
+      return null
+    }
+    if (kind === 'link') {
+      const link = this.graph.links.find((item): boolean => item.linkId === id)
+      return link !== undefined ? link.source : null
+    }
+    const hyperlink = this.graph.hyperlinks.find((item): boolean => item.hyperlinkId === id)
+    return hyperlink !== undefined ? hyperlink.source : null
+  }
+
+  /**
+   * 解析 link/hyperlink 的 source 到当前根画布上可绘制的对象。
+   * 优先复用边端点同一套规则（本地 node/anchor，深路径取第一段 enterEmbed/enterPortal），
+   * 规则不适用时再退回 source.target.nodeId。
+   */
+  private resolveLinkOwnerId(source: StarMapTargetPath, root: RecursiveSceneSource): string {
+    const visibleAnchor: string | null = resolveEdgeEndpointAnchor(source, this.starmapId)
+    if (visibleAnchor !== null && this.findFocusRect(root, visibleAnchor) !== null) {
+      return visibleAnchor
+    }
+    const directNodeId: string | null = source.target.nodeId
+    if (directNodeId !== null && this.findFocusRect(root, directNodeId) !== null) {
+      return directNodeId
+    }
+    return ''
+  }
+
+  private showSearchFocusToast(message: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message })
+    } catch (_e) {
+      // Toast 失败不影响星图本身打开。
     }
   }
 
@@ -386,6 +537,10 @@ export struct StarMapScreen {
         onFocusRecomputeRequested: () => {
           this.recomputeVisualFocus()
         },
+        // Issue #982：根 Scene 完成几何重算后通知页面把搜索目标解析成相机/选中。
+        onSceneGeometryReady: () => {
+          this.scheduleSearchFocus()
+        },
         bridge: this.bridge,
         themeConfig: this.themeConfig,
         motionConfig: this.motionConfig,
@@ -440,6 +595,8 @@ export struct StarMapScreen {
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.canvasWidth = Number(newArea.width)
       this.canvasHeight = Number(newArea.height)
+      // Issue #982：视口尺寸是相机居中的必要条件；图可能先于尺寸加载完成。
+      this.scheduleSearchFocus()
       // 视口变了（分屏 / 折叠屏展开 / 横竖屏）：**只**更新视口尺寸。
       // 相机不动、focusScenePath 不动、不重新 fit 根图 —— 用户不会因为
       // 转个屏就被拽回根层看全局，那等于把正在写的内容从眼前搬走。

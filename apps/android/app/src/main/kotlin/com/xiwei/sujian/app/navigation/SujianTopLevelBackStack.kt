@@ -141,7 +141,7 @@ fun rememberSujianTopLevelBackStack(
     val worksInitial: List<SujianRoute> =
         if (initialTopLevel == SujianDestination.Works) initialStack else listOf(SujianRoute.Works)
     val starMapInitial: List<SujianRoute> =
-        if (initialTopLevel == SujianDestination.StarMap) initialStack else listOf(SujianRoute.StarMap)
+        if (initialTopLevel == SujianDestination.StarMap) initialStack else listOf(SujianRoute.StarMap())
     val statsInitial: List<SujianRoute> =
         if (initialTopLevel == SujianDestination.Stats) initialStack else listOf(SujianRoute.Stats)
     val worksStack = rememberNavBackStack(*worksInitial.toTypedArray())

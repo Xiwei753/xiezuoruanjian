@@ -31,8 +31,9 @@ export struct SettingsScreen {
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
   // 获得 HDS 沉浸光感材质效果。
   @Local useHdsNav: boolean = false
-  // Issue #982：搜索结果跳到具体分类时从路由参数读取。
+  // Issue #982：搜索结果跳到具体分类 / 具体设置项时从路由参数读取。
   private initialSection: string = ''
+  private initialSettingKey: string = ''
 
   aboutToAppear() {
     hilog.info(0x0000, 'SettingsScreen', 'route name=Settings')
@@ -41,6 +42,11 @@ export struct SettingsScreen {
     if (params !== null && params.section !== undefined) {
       this.initialSection = params.section
       SettingsSectionContext.setCurrentSection(params.section)
+    }
+    if (params !== null && params.settingKey !== undefined) {
+      this.initialSettingKey = params.settingKey
+      // 精确设置项定位：等 SettingsContent 创建后消费；普通进入不触发。
+      SettingsSectionContext.requestLocate(this.initialSection, params.settingKey)
     }
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
@@ -78,6 +84,7 @@ export struct SettingsScreen {
       }) {
         SettingsContent({
           initialSection: this.initialSection,
+          initialSettingKey: this.initialSettingKey,
           onOpenGlobalSearch: (section: string): void => { this.openGlobalSearch(section) },
           onRequestClose: () => { this.goBack() }
         })
@@ -86,6 +93,7 @@ export struct SettingsScreen {
       NavDestination() {
         SettingsContent({
           initialSection: this.initialSection,
+          initialSettingKey: this.initialSettingKey,
           onOpenGlobalSearch: (section: string): void => { this.openGlobalSearch(section) },
           onRequestClose: () => { this.goBack() }
         })

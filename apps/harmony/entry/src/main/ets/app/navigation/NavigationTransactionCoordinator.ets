@@ -15,7 +15,7 @@ import { ContinuationPayload } from '../../platform/continuity/ContinuationPaylo
 // Issue #629 评论14 第2项：导航意图类型。
 // 区分 Pop / ClearAndRebuild / ReplacePath，相同 intent + 相同目标可复用同一 task；
 // 不同 intent 必须串行排到前一个之后执行，不能丢。
-type NavigationIntentKind = 'Pop' | 'ClearAndRebuild' | 'ReplacePath'
+type NavigationIntentKind = 'Pop' | 'ClearAndRebuild' | 'ReplacePath' | 'TabNavigate'
 
 interface NavigationIntent {
   readonly kind: NavigationIntentKind
@@ -35,7 +35,8 @@ interface NavigationTaskEntry {
   intent: NavigationIntent
   task: Promise<boolean>
   resolve: (v: boolean) => void
-  execute: () => void
+  // false 表示目标栈尚未注册等无法执行的客观原因，调用方据此保留当前页面/浮层。
+  execute: () => boolean | void
 }
 
 // Issue #629 评论14 第2项：正在执行的导航事务（命名 interface，避免对象字面量类型）。
@@ -96,6 +97,9 @@ export class NavigationTransactionCoordinator {
   // 新的相同 dedupeKey 的请求可以直接复用 activeTask 的 Promise。
   private activeTask: ActiveNavigationTask | null = null
   private isProcessingQueue: boolean = false
+  // Issue #982：跨一级 Tab 导航时，coordinator 只负责事务和 tab stack，
+  // 真正的 currentTab 切换由 PrimaryTabShell 注册的选择器完成（@Link 状态在壳层）。
+  private tabSelectionHandler: ((tabIndex: number) => void) | null = null
 
   static getInstance(): NavigationTransactionCoordinator {
     if (!NavigationTransactionCoordinator.instance) {
@@ -134,6 +138,25 @@ export class NavigationTransactionCoordinator {
     const stack: NavPathStack | null = this.getTabStack(tabIndex)
     if (stack !== null) {
       this.activeTabStack = stack
+    }
+  }
+
+  // Issue #982：当前活动 tab index。跨 tab 搜索导航和设置页 owner tab 需要它，
+  // 不再从 activeStack 反猜。
+  getActiveTabIndex(): number {
+    return this.activeTabIndex
+  }
+
+  // Issue #982：由 PrimaryTabShell 注册 currentTab 选择器。
+  // coordinator 自己改不了 @Link 状态，跨 tab 导航必须由壳层提交真实 tab 切换。
+  registerTabSelectionHandler(handler: (tabIndex: number) => void): void {
+    this.tabSelectionHandler = handler
+  }
+
+  // 按实例相等注销，避免旧 Shell 的迟到 disappear 清掉新 Shell 的选择器。
+  unregisterTabSelectionHandler(handler: (tabIndex: number) => void): void {
+    if (this.tabSelectionHandler === handler) {
+      this.tabSelectionHandler = null
     }
   }
 
@@ -272,8 +295,8 @@ export class NavigationTransactionCoordinator {
         }
 
         if (canLeave) {
-          entry.execute()
-          entry.resolve(true)
+          const accepted: boolean | void = entry.execute()
+          entry.resolve(accepted !== false)
         } else {
           entry.resolve(false)
         }
@@ -333,5 +356,30 @@ export class NavigationTransactionCoordinator {
   safeReplacePathWithStack(targetStack: NavPathStack, targetKey: string, replace: () => void): Promise<boolean> {
     const intent: NavigationIntent = { kind: 'ReplacePath', dedupeKey: `replace:${targetKey}` }
     return this.enqueueNavigation(intent, replace)
+  }
+
+  // Issue #982：跨一级 Tab 导航。
+  // 先走统一 leave/save guard，再切到目标 tab、取目标 tab 的 NavPathStack，
+  // 最后把路由压到目标栈上；绝不把 Writing/StarMap 等目标压到来源栈。
+  // 返回值 false 表示目标栈未注册或 guard 未通过，调用方必须保持搜索浮层/搜索页不动。
+  navigateToTabStack(
+    tabIndex: number,
+    routeName: string,
+    param: Object,
+    dedupeKey: string
+  ): Promise<boolean> {
+    const intent: NavigationIntent = { kind: 'TabNavigate', dedupeKey: `tabnav:${dedupeKey}` }
+    return this.enqueueNavigation(intent, (): boolean => {
+      const targetStack: NavPathStack | null = this.getTabStack(tabIndex)
+      if (targetStack === null) {
+        return false
+      }
+      this.setActiveTab(tabIndex)
+      if (this.tabSelectionHandler !== null) {
+        this.tabSelectionHandler(tabIndex)
+      }
+      targetStack.pushPath({ name: routeName, param: param })
+      return true
+    })
   }
 }

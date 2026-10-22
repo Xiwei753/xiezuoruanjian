@@ -35,6 +35,7 @@ fun SaveSettingsContent(vm: SettingsViewModel) {
             onCheckedChange = { c ->
                 vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(autoSaveEnabled = c) })
             },
+            modifier = Modifier.settingsControlAnchor(SettingsControlKeys.AutoSaveEnabled),
         )
         SujianSlider(
             title = stringResource(id = R.string.pref_auto_save_delay),
@@ -53,7 +54,10 @@ fun SaveSettingsContent(vm: SettingsViewModel) {
                     autoSaveDelay.toInt(),
                     autoSaveDelay.toInt(),
                 ),
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .settingsControlAnchor(SettingsControlKeys.AutoSaveDelayMs),
         )
     }
 }

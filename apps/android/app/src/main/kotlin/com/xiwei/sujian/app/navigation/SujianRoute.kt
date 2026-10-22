@@ -2,6 +2,7 @@ package com.xiwei.sujian.app.navigation
 
 import android.os.Parcelable
 import androidx.navigation3.runtime.NavKey
+import com.xiwei.sujian.feature.starmap.data.model.StarMapSelectionTarget
 import kotlinx.parcelize.Parcelize
 import kotlinx.serialization.Serializable
 
@@ -16,9 +17,34 @@ sealed interface SujianRoute : Parcelable, NavKey {
     @Serializable
     data object Works : SujianRoute
 
+    /**
+     * 星图目的地。
+     *
+     * [starmapId] 为空时是一级星图根页；带 starmapId 时是详情页，
+     * 其余 ID 字段是全局搜索的一次性定位目标。链接/超链接没有独立几何，
+     * 由详情页解析 source 路径后高亮其 owner。
+     */
     @Parcelize
     @Serializable
-    data object StarMap : SujianRoute
+    data class StarMap(
+        val starmapId: String? = null,
+        val projectId: String? = null,
+        val nodeId: String? = null,
+        val edgeId: String? = null,
+        val embedId: String? = null,
+        val linkId: String? = null,
+        val hyperlinkId: String? = null,
+    ) : SujianRoute {
+        fun selectionTarget(): StarMapSelectionTarget? =
+            when {
+                nodeId != null -> StarMapSelectionTarget.Node(nodeId)
+                edgeId != null -> StarMapSelectionTarget.Edge(edgeId)
+                embedId != null -> StarMapSelectionTarget.Embed(embedId)
+                linkId != null -> StarMapSelectionTarget.Link(linkId)
+                hyperlinkId != null -> StarMapSelectionTarget.Hyperlink(hyperlinkId)
+                else -> null
+            }
+    }
 
     @Parcelize
     @Serializable

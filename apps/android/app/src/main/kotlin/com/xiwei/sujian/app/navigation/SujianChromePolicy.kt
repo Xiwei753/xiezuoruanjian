@@ -36,6 +36,7 @@ internal fun resolveSujianChrome(
         when (currentRoute) {
             is SujianRoute.Settings, is SujianRoute.Search -> true
             is SujianRoute.Works -> isChapterTreeOrEditor && canWorkspaceNavigateBack
+            is SujianRoute.StarMap -> currentRoute.starmapId != null
             else -> false
         }
     val showPrimaryNavigation =

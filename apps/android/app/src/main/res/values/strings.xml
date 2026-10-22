@@ -76,6 +76,7 @@
 
     <!-- 设置页顶部紧凑全局搜索入口 -->
     <string name="settings_search_hint">搜索设置</string>
+    <string name="settings_search_key_unavailable">该设置项在当前版本的 Android 设置页不可用</string>
 
     <!-- 全局搜索 -->
     <string name="search_title">搜索</string>
@@ -288,6 +289,9 @@
     <string name="pref_color_source_builtin">素笺默认</string>
     <string name="word_count_format">%1$d字</string>
     <string name="starmap_not_implemented">星图功能开发中</string>
+    <string name="starmap_empty">暂无星图</string>
+    <string name="starmap_load_failed">星图加载失败</string>
+    <string name="starmap_link_focus_owner">「%1$s」所属：%2$s</string>
     <string name="stats_recent_30_days">近 30 天写作统计</string>
     <string name="stats_total_words_label">总字数</string>
     <string name="stats_active_days">活跃天数</string>

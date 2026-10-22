@@ -243,6 +243,11 @@ internal fun ProjectWorkspaceScreen(
     }
 
     val currentProjectId = appState.currentProjectId
+    val chapterTreeFocusVolumeId = workspaceNavState.chapterTreeFocusVolumeId
+    val onChapterTreeFocusConsumed: () -> Unit =
+        remember(workspaceNavState) {
+            { workspaceNavState.clearChapterTreeFocusVolume() }
+        }
 
     if (isWideLayout) {
         WideLayoutContent(
@@ -269,6 +274,8 @@ internal fun ProjectWorkspaceScreen(
             onBack = { coroutineScope.launch { workspaceNavState.guardedBack() } },
             onChapterSwitchFailed = onChapterSwitchFailed,
             editorCallbacks = editorCallbacks,
+            chapterTreeFocusVolumeId = chapterTreeFocusVolumeId,
+            onChapterTreeFocusConsumed = onChapterTreeFocusConsumed,
             modifier = modifier,
         )
     } else {
@@ -295,6 +302,8 @@ internal fun ProjectWorkspaceScreen(
             onBack = { coroutineScope.launch { workspaceNavState.guardedBack() } },
             onChapterSwitchFailed = onChapterSwitchFailed,
             editorCallbacks = editorCallbacks,
+            chapterTreeFocusVolumeId = chapterTreeFocusVolumeId,
+            onChapterTreeFocusConsumed = onChapterTreeFocusConsumed,
             modifier = modifier.fillMaxSize(),
         )
     }
@@ -318,6 +327,8 @@ private fun SinglePaneContent(
         oldChapterId: String?,
         oldChapterTitle: String,
     ) -> Unit,
+    chapterTreeFocusVolumeId: String? = null,
+    onChapterTreeFocusConsumed: () -> Unit = {},
     editorCallbacks: EditorWorkspaceCallbacks? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -345,6 +356,8 @@ private fun SinglePaneContent(
                         workspaceActions = WorkspaceActions.ProjectWorkspace,
                         onSelectChapter = onSelectChapter,
                         onError = appState::reportWorkspaceError,
+                        focusVolumeId = chapterTreeFocusVolumeId,
+                        onFocusConsumed = onChapterTreeFocusConsumed,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -390,6 +403,8 @@ private fun WideLayoutContent(
         oldChapterId: String?,
         oldChapterTitle: String,
     ) -> Unit,
+    chapterTreeFocusVolumeId: String? = null,
+    onChapterTreeFocusConsumed: () -> Unit = {},
     editorCallbacks: EditorWorkspaceCallbacks? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -416,6 +431,8 @@ private fun WideLayoutContent(
                         workspaceActions = WorkspaceActions.ProjectWorkspace,
                         onSelectChapter = onSelectChapter,
                         onError = appState::reportWorkspaceError,
+                        focusVolumeId = chapterTreeFocusVolumeId,
+                        onFocusConsumed = onChapterTreeFocusConsumed,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

@@ -18,6 +18,7 @@ export interface SearchOverlayArgs {
   context: SearchContext
   initialQuery: string
   navPathStack: NavPathStack
+  screenTabIndex: number
   onRequestClose: () => void
   onNavigateAway: () => void
 }
@@ -26,6 +27,7 @@ export interface SearchOverlayArgs {
 function SearchOverlayBuilder(args: SearchOverlayArgs) {
   SearchScreen({
     navPathStack: args.navPathStack,
+    screenTabIndex: args.screenTabIndex,
     overlayLayout: true,
     originContext: args.context,
     initialQuery: args.initialQuery,
@@ -67,7 +69,8 @@ export class SearchOverlayController {
       hilog.error(DOMAIN, TAG, 'UIContext is not attached; cannot open search overlay')
       return
     }
-    const stack: NavPathStack | null = NavigationTransactionCoordinator.getInstance().getNavPathStack()
+    const coordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
+    const stack: NavPathStack | null = coordinator.getNavPathStack()
     if (stack === null) {
       hilog.error(DOMAIN, TAG, 'active NavPathStack is null; cannot open search overlay')
       return
@@ -77,6 +80,7 @@ export class SearchOverlayController {
       context: context,
       initialQuery: initialQuery,
       navPathStack: stack,
+      screenTabIndex: coordinator.getActiveTabIndex(),
       onRequestClose: (): void => { this.close() },
       onNavigateAway: onNavigateAway
     }

@@ -556,6 +556,29 @@ impl AppBackend {
         Arc::clone(&self.search_bridge)
     }
 
+    /// 从当前树快照取章节标题，供保存正文时构造增量搜索更新。
+    pub(crate) fn chapter_title_from_tree(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> Option<String> {
+        self.cached_tree_json.as_array().and_then(|nodes| {
+            nodes.iter().find_map(|node| {
+                if node.get("type")?.as_str()? != "chapter" {
+                    return None;
+                }
+                if node.get("id")?.as_str()? != chapter_id
+                    || node.get("projectId")?.as_str()? != project_id
+                    || node.get("volumeId")?.as_str()? != volume_id
+                {
+                    return None;
+                }
+                Some(node.get("title")?.as_str()?.to_string())
+            })
+        })
+    }
+
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
         if self.current_has_data_root && !self.current_data_root.is_empty() {
             // 用打开 workspace 时保存的 layout 快照构造 API，不再重新 bootstrap。

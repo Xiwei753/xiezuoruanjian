@@ -6,8 +6,138 @@
 //! `starmap_bridge` 自由函数，真正的业务真相仍在 Core。
 
 use super::*;
+use writer_core::api::types::StarMapMetaDto;
+use writer_core::api::WriterCoreApi;
+use writer_core::search::extractor;
+use writer_core::search::{IndexEntry, SearchIndexAction, SearchIndexUpdate, SearchScope};
 
 impl AppBackend {
+    /// 仅在增量索引查询失败时兜底：重建受影响项目；根星图则完整重建。
+    pub(crate) fn reindex_starmap_after_mutation(&mut self, starmap_id: &str) {
+        let project_id = self
+            .core_api()
+            .and_then(|core| core.get_starmap(starmap_id).ok())
+            .and_then(|meta| meta.project_id);
+        match project_id {
+            Some(project_id) => self.search_bridge().rebuild_project(project_id),
+            None => self.search_bridge().rebuild_all(),
+        }
+    }
+
+    /// 成功信封返回 `data`，失败或非法 JSON 返回 `None`。
+    pub(crate) fn starmap_mutation_data(raw: &str) -> Option<serde_json::Value> {
+        let value = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+        if value.get("success").and_then(|success| success.as_bool()) != Some(true) {
+            return None;
+        }
+        value.get("data").cloned()
+    }
+
+    pub(crate) fn starmap_mutation_succeeded(raw: &str) -> bool {
+        serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .and_then(|value| value.get("success").and_then(|success| success.as_bool()))
+            .unwrap_or(false)
+    }
+
+    /// `Some(None)` 表示星图存在且是根星图；`None` 表示查询失败。
+    pub(crate) fn starmap_project_scope(
+        core: &WriterCoreApi,
+        starmap_id: &str,
+    ) -> Option<Option<String>> {
+        core.get_starmap(starmap_id)
+            .ok()
+            .map(|meta| meta.project_id)
+    }
+
+    pub(crate) fn search_upsert_from_entry(entry: IndexEntry) -> SearchIndexUpdate {
+        SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: entry.object_id,
+            scope: entry.scope,
+            title: entry.title,
+            body: entry.body,
+            target: Some(entry.target),
+        }
+    }
+
+    pub(crate) fn search_delete_update(object_id: String) -> SearchIndexUpdate {
+        SearchIndexUpdate {
+            action: SearchIndexAction::Delete,
+            object_id,
+            scope: SearchScope::All,
+            title: String::new(),
+            body: String::new(),
+            target: None,
+        }
+    }
+
+    /// 星图 mutation 提交增量索引的唯一出口。
+    pub(crate) fn submit_search_updates(&mut self, updates: Vec<SearchIndexUpdate>) {
+        self.search_bridge().apply_updates(updates);
+    }
+
+    /// 增量更新已构造时直接提交；查询失败时记录并退回项目/全量重建。
+    pub(crate) fn finish_starmap_search_update(
+        &mut self,
+        starmap_id: &str,
+        updates: Option<Vec<SearchIndexUpdate>>,
+    ) {
+        match updates {
+            Some(updates) => self.submit_search_updates(updates),
+            None => {
+                log::warn!(
+                    "starmap search index lookup failed after mutation (starmap={}); falling back to rebuild",
+                    starmap_id
+                );
+                self.reindex_starmap_after_mutation(starmap_id);
+            }
+        }
+    }
+
+    /// 删除星图前抓取图元 ID，成功删除后逐条移除索引条目。
+    fn starmap_delete_updates(
+        core: &WriterCoreApi,
+        starmap_id: &str,
+    ) -> Option<Vec<SearchIndexUpdate>> {
+        let graph = core.get_starmap_graph(starmap_id).ok()?;
+        let mut updates = vec![Self::search_delete_update(format!(
+            "starmap:{}",
+            starmap_id
+        ))];
+        for node in &graph.nodes {
+            updates.push(Self::search_delete_update(format!(
+                "starmap_node:{}:{}",
+                starmap_id, node.id
+            )));
+        }
+        for edge in &graph.edges {
+            updates.push(Self::search_delete_update(format!(
+                "starmap_edge:{}:{}",
+                starmap_id, edge.id
+            )));
+        }
+        for link in &graph.links {
+            updates.push(Self::search_delete_update(format!(
+                "starmap_link:{}:{}",
+                starmap_id, link.link_id
+            )));
+        }
+        for hyperlink in &graph.hyperlinks {
+            updates.push(Self::search_delete_update(format!(
+                "starmap_hyperlink:{}:{}",
+                starmap_id, hyperlink.hyperlink_id
+            )));
+        }
+        for embed in &graph.embeds {
+            updates.push(Self::search_delete_update(format!(
+                "starmap_embed:{}:{}",
+                starmap_id, embed.instance_id
+            )));
+        }
+        Some(updates)
+    }
+
     // AppBackend::list_starmaps_json
     pub(crate) fn list_starmaps_json(&self) -> QString {
         if let Some(core) = self.core_api() {
@@ -80,14 +210,34 @@ impl AppBackend {
         } else {
             Some(ac.as_str())
         };
-        if let Some(core) = self.core_api() {
-            starmap_bridge::create_starmap(&core, &t, &d, color_ref).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::create_starmap(core, &t, &d, color_ref),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let meta = Self::starmap_mutation_data(&raw)
+                .and_then(|data| serde_json::from_value::<StarMapMetaDto>(data).ok());
+            match meta {
+                Some(meta) => {
+                    let entry = extractor::extract_starmap_title_entry(
+                        &meta.starmap_id,
+                        meta.project_id.as_deref(),
+                        &meta.title,
+                    );
+                    self.submit_search_updates(vec![Self::search_upsert_from_entry(entry)]);
+                }
+                None => {
+                    log::warn!(
+                        "create_starmap succeeded but response data is not StarMapMetaDto; falling back to full search rebuild"
+                    );
+                    self.search_bridge().rebuild_all();
+                }
+            }
         }
+        raw.into()
     }
 
     // AppBackend::create_starmap
@@ -111,27 +261,43 @@ impl AppBackend {
     ) -> QString {
         let sid = starmap_id.to_string();
         let t = new_title.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::rename_starmap(&core, &sid, &t).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let project_scope = core
+            .as_ref()
+            .and_then(|core| Self::starmap_project_scope(core, &sid));
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::rename_starmap(core, &sid, &t),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let updates = project_scope.map(|project_id| {
+                let entry = extractor::extract_starmap_title_entry(&sid, project_id.as_deref(), &t);
+                vec![Self::search_upsert_from_entry(entry)]
+            });
+            self.finish_starmap_search_update(&sid, updates);
         }
+        raw.into()
     }
 
     // AppBackend::delete_starmap_json
     pub(crate) fn delete_starmap_json(&mut self, starmap_id: QString) -> QString {
         let sid = starmap_id.to_string();
-        if let Some(core) = self.core_api() {
-            starmap_bridge::delete_starmap(&core, &sid).into()
-        } else {
-            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-                "core api not available".to_string(),
-            ))
-            .into()
+        let core = self.core_api();
+        let deletes = core
+            .as_ref()
+            .and_then(|core| Self::starmap_delete_updates(core, &sid));
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::delete_starmap(core, &sid),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            self.finish_starmap_search_update(&sid, deletes);
         }
+        raw.into()
     }
 
     // AppBackend::get_starmap_graph_json

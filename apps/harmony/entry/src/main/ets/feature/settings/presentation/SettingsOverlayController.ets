@@ -81,8 +81,9 @@ export class SettingsOverlayController {
    * 打开宽屏设置浮层。重复调用幂等：已开着、或正在关闭，都直接返回。
    * 浮层内容固定为 WideSettingsOverlay；宽屏模式判定不在这里重复推导，
    * 调用方只在 isOverlayLayout() 为真时进入本方法。
+   * Issue #982：initialSection / initialSettingKey 供全局搜索直接定位到具体设置项。
    */
-  open(): void {
+  open(initialSection: string = '', initialSettingKey: string = ''): void {
     if (this.dialogContent !== null || this.closing) {
       return
     }
@@ -103,7 +104,9 @@ export class SettingsOverlayController {
           // 搜索命中并导航到其他页面时，设置浮层也一起退出，避免遮住目标页面。
           this.close()
         })
-      }
+      },
+      initialSection: initialSection,
+      initialSettingKey: initialSettingKey
     }
     const content = createSettingsOverlayContent(this.uiContext, args)
     this.dialogContent = content

@@ -2,6 +2,7 @@ package com.xiwei.sujian.app.navigation
 
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.SujianAppDependencies
+import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.ui.EditorSearchReveal
 import com.xiwei.sujian.feature.editor.ui.EditorSearchRevealGate
 import com.xiwei.sujian.feature.project.ui.ProjectNavigationState
@@ -9,7 +10,10 @@ import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
 import com.xiwei.sujian.feature.search.data.model.SearchHit
 import com.xiwei.sujian.feature.search.data.model.SearchOriginScreens
 import com.xiwei.sujian.feature.search.data.model.SearchScopes
+import com.xiwei.sujian.feature.search.data.model.SearchTarget
 import com.xiwei.sujian.feature.settings.ui.SettingsSectionRequest
+import com.xiwei.sujian.feature.starmap.data.model.StarMapData
+import com.xiwei.sujian.feature.starmap.data.model.resolveSelectionTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -80,11 +84,8 @@ internal suspend fun openSearchResult(
 ): Boolean {
     val target = hit.target
     return when {
-        hit.scope.startsWith("starmap") && target.starmapId != null -> {
-            topLevelBackStack.closeSearchRoute()
-            topLevelBackStack.addTopLevel(SujianDestination.StarMap)
-            true
-        }
+        target.starmapId != null ->
+            openStarMapSearchResult(target, topLevelBackStack, deps)
         target.chapterId != null && target.projectId != null && target.volumeId != null ->
             openChapterSearchResult(
                 hit = hit,
@@ -97,7 +98,10 @@ internal suspend fun openSearchResult(
                 deps = deps,
             )
         target.settingKey != null || target.settingSection != null -> {
-            SettingsSectionRequest.request(settingsSectionFor(target.settingSection, target.settingKey))
+            SettingsSectionRequest.request(
+                section = settingsSectionFor(target.settingSection, target.settingKey),
+                settingKey = target.settingKey,
+            )
             topLevelBackStack.closeSearchRoute()
             topLevelBackStack.addTopLevel(SujianDestination.Works)
             if (topLevelBackStack.worksStack.lastOrNull() !is SujianRoute.Settings) {
@@ -116,12 +120,57 @@ internal suspend fun openSearchResult(
             )
         target.projectId != null ->
             openProjectSearchResult(target.projectId, appState, workspaceNavState, topLevelBackStack, deps)
-        target.starmapId != null -> {
-            topLevelBackStack.closeSearchRoute()
-            topLevelBackStack.addTopLevel(SujianDestination.StarMap)
-            true
-        }
         else -> false
+    }
+}
+
+/**
+ * 星图搜索结果 — 必须先读 repository 确认目标仍存在，链接/超链接还要确认
+ * source 能解析到当前画布上的 owner；确认成功后才关闭搜索页。
+ */
+private suspend fun openStarMapSearchResult(
+    target: SearchTarget,
+    topLevelBackStack: SujianTopLevelBackStack,
+    deps: SujianAppDependencies,
+): Boolean {
+    val starmapId = target.starmapId ?: return false
+    val route =
+        SujianRoute.StarMap(
+            starmapId = starmapId,
+            projectId = target.projectId,
+            nodeId = target.nodeId,
+            edgeId = target.edgeId,
+            embedId = target.embedId,
+            linkId = target.linkId,
+            hyperlinkId = target.hyperlinkId,
+        )
+    val data = loadStarMapForSearch(deps, starmapId) ?: return false
+    val selection = route.selectionTarget()
+    if (selection != null && data.resolveSelectionTarget(selection) == null) return false
+
+    topLevelBackStack.closeSearchRoute()
+    topLevelBackStack.openStarMapTarget(route)
+    return true
+}
+
+private suspend fun loadStarMapForSearch(
+    deps: SujianAppDependencies,
+    starmapId: String,
+): StarMapData? =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            when (val result = deps.starmapRepository.getStarmapPhasedSnapshot(starmapId)) {
+                is BridgeResult.Success -> result.data.data
+                is BridgeResult.Error, BridgeResult.NotLoaded -> null
+            }
+        }.getOrNull()
+    }
+
+/** 切到星图一级页；保留原有的星图页栈，只在栈顶追加本次目标。 */
+private fun SujianTopLevelBackStack.openStarMapTarget(route: SujianRoute.StarMap) {
+    addTopLevel(SujianDestination.StarMap)
+    if (starMapStack.lastOrNull() != route) {
+        starMapStack.add(route)
     }
 }
 
@@ -188,7 +237,7 @@ private suspend fun openVolumeSearchResult(
     topLevelBackStack.showWorksRoot()
     appState.selectProject(projectId)
     appState.clearChapterSelection()
-    workspaceNavState.navigateToChapterTree(projectId)
+    workspaceNavState.navigateToChapterTree(projectId, focusVolumeId = volumeId)
     return true
 }
 
@@ -248,10 +297,47 @@ private fun settingsSectionFor(
             }
         "ai" -> SettingsSection.Ai
         "diagnostics" -> SettingsSection.Diagnostics
-        else ->
-            when {
-                settingKey == "themeMode" || settingKey == "monetColor" -> SettingsSection.Appearance
-                settingKey?.contains("sync", ignoreCase = true) == true -> SettingsSection.Sync
-                else -> SettingsSection.Save
-            }
+        else -> settingsSectionForKey(settingKey)
     }
+
+private fun settingsSectionForKey(settingKey: String?): SettingsSection =
+    when {
+        settingKey != null && settingKey in appearanceSettingKeys -> SettingsSection.Appearance
+        settingKey != null && settingKey in editorSettingKeys -> SettingsSection.Editor
+        settingKey != null && settingKey in aiSettingKeys -> SettingsSection.Ai
+        settingKey != null && settingKey in diagnosticsSettingKeys -> SettingsSection.Diagnostics
+        settingKey?.contains("sync", ignoreCase = true) == true -> SettingsSection.Sync
+        else -> SettingsSection.Save
+    }
+
+private val appearanceSettingKeys: Set<String> =
+    setOf(
+        "appearanceMode",
+        "colorSource",
+        "dynamicColorEnabled",
+        "selectedBuiltinThemeId",
+        "selectedPaletteId",
+        "locale",
+        "themeMode",
+        "monetColor",
+        "themePalette",
+    )
+
+private val editorSettingKeys: Set<String> =
+    setOf(
+        "editorFontSize",
+        "fontSize",
+        "editorLineSpacingMultiplier",
+        "autoIndentEnabled",
+        "autoIndentWidth",
+        "editorTypingAnimationEnabled",
+        "editorSmoothCursorEnabled",
+        "editorTypingAnimationDurationMs",
+        "editorSmoothCursorDurationMs",
+        "editorCoordinatedTextCursorAnimationEnabled",
+    )
+
+private val aiSettingKeys: Set<String> = setOf("aiEnabled")
+
+private val diagnosticsSettingKeys: Set<String> =
+    setOf("diagnosticsEnabled", "diagnosticsVerbose", "statsDeviceId")

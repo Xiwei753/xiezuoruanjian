@@ -25,6 +25,9 @@ export interface SettingsOverlayArgs {
   onRequestClose: () => void
   /** Issue #982：设置顶部搜索打开全局搜索（originScreen=settings）。 */
   onOpenGlobalSearch: (section: string) => void
+  /** Issue #982：搜索结果直接打开设置浮层时携带的一次性定位目标。 */
+  initialSection: string
+  initialSettingKey: string
 }
 
 @ComponentV2
@@ -33,6 +36,9 @@ export struct WideSettingsOverlay {
   @Param onRequestClose: () => void = () => {}
   /** Issue #982：顶部搜索统一走全局搜索，不在设置浮层里另做过滤器。 */
   @Param onOpenGlobalSearch: (section: string) => void = (_section: string): void => {}
+  /** Issue #982：搜索命中设置项时由浮层直接传给内容。 */
+  @Param initialSection: string = ''
+  @Param initialSettingKey: string = ''
 
   // ── 顶部返回 + 标题 ──
   @Builder
@@ -106,6 +112,8 @@ export struct WideSettingsOverlay {
         SettingsContent({
           overlayLayout: true,
           overlaySearchText: '',
+          initialSection: this.initialSection,
+          initialSettingKey: this.initialSettingKey,
           onOpenGlobalSearch: this.onOpenGlobalSearch,
           onRequestClose: () => { this.onRequestClose() }
         })
@@ -129,7 +137,9 @@ export struct WideSettingsOverlay {
 function WideSettingsOverlayBuilder(args: SettingsOverlayArgs) {
   WideSettingsOverlay({
     onRequestClose: args.onRequestClose,
-    onOpenGlobalSearch: args.onOpenGlobalSearch
+    onOpenGlobalSearch: args.onOpenGlobalSearch,
+    initialSection: args.initialSection,
+    initialSettingKey: args.initialSettingKey
   })
 }
 

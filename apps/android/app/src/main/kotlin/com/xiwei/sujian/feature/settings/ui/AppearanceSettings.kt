@@ -47,7 +47,10 @@ fun AppearanceSettingsContent(vm: SettingsViewModel) {
                     }
                 vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(appearanceMode = m) })
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .settingsControlAnchor(SettingsControlKeys.AppearanceMode),
         )
         SujianDropdownMenu(
             label = stringResource(id = R.string.pref_hint_color_theme),
@@ -90,7 +93,10 @@ fun AppearanceSettingsContent(vm: SettingsViewModel) {
                     )
                 }
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .settingsControlAnchor(SettingsControlKeys.ColorSource),
         )
     }
 }

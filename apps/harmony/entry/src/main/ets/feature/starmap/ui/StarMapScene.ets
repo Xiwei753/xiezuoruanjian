@@ -315,6 +315,12 @@ export struct StarMapScene {
   onFocusRecomputeRequested: () => void = () => {}
 
   /**
+   * Issue #982：根 Scene 完成几何重算后通知页面。
+   * 搜索结果定位需要等 nodeRects / localEdgeRenders 真正产出后才能算中心点。
+   */
+  onSceneGeometryReady: () => void = () => {}
+
+  /**
    * 全树唯一选中态。根 Scene 持有唯一一份，沿组件树传到每个子 Scene。
    * @ObjectLink 而不是 @State：它是共享对象，@State 会在每层各存一份拷贝。
    */
@@ -453,6 +459,7 @@ export struct StarMapScene {
     this.recomputeLayoutAndGeometry()
     this.registerSceneHandle()
     this.maybeFitView()
+    this.notifySceneGeometryReady()
   }
 
   aboutToDisappear() {
@@ -1346,6 +1353,14 @@ private refitAfterContentAdded(): void {
     // 布局变了就同步快照：递归命中要读的是最新 rects
     this.buildSceneHandle()
     this.drawEdges()
+    this.notifySceneGeometryReady()
+  }
+
+  /** 只有根 Scene 需要向页面报告几何就绪；子 Scene 的布局由父层负责。 */
+  private notifySceneGeometryReady(): void {
+    if (this.sceneDepth === 0) {
+      this.onSceneGeometryReady()
+    }
   }
 
   // ─── 坐标计算 ───

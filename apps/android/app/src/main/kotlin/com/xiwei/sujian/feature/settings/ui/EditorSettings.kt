@@ -54,7 +54,10 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
             steps = 59,
             valueLabel = "${fontSize.toInt()}sp",
             semanticId = SujianSemanticIds.SettingsFontSize,
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .settingsControlAnchor(SettingsControlKeys.FontSize),
         )
         SujianSlider(
             title = stringResource(id = R.string.pref_line_spacing),
@@ -68,7 +71,10 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
             valueRange = 1f..3f,
             steps = 19,
             valueLabel = String.format(java.util.Locale.ROOT, "%.1fx", lineSpacing),
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .settingsControlAnchor(SettingsControlKeys.LineSpacing),
         )
     }
 
@@ -83,6 +89,7 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
             onCheckedChange = { c ->
                 vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(autoIndentEnabled = c) })
             },
+            modifier = Modifier.settingsControlAnchor(SettingsControlKeys.AutoIndentEnabled),
         )
         SujianSlider(
             title = stringResource(id = R.string.pref_auto_indent_width),
@@ -96,7 +103,10 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
             valueRange = 0f..8f,
             steps = 15,
             valueLabel = stringResource(id = R.string.auto_indent_width_chars, autoIndentWidthState.toInt()),
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .settingsControlAnchor(SettingsControlKeys.AutoIndentWidth),
         )
     }
 
@@ -122,6 +132,7 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
                     },
                 )
             },
+            modifier = Modifier.settingsControlAnchor(SettingsControlKeys.CoordinatedAnimationEnabled),
         )
         if (coordinatedAnimationChecked) {
             // 协同开启：只显示一个"协同动画时长"，直接写 editorTypingAnimationDurationMs。
@@ -141,7 +152,10 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
                 valueRange = 30f..1000f,
                 steps = 96,
                 valueLabel = "${typingDuration.toInt()}ms",
-                modifier = Modifier.fillMaxWidth(),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .settingsControlAnchor(SettingsControlKeys.TypingAnimationDurationMs),
             )
         } else {
             // 协同关闭：显示独立控件（输入动效 + 输入时长）。
@@ -152,6 +166,7 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
                     vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(editorTypingAnimationEnabled = c) })
                 },
                 semanticId = SujianSemanticIds.SettingsTypingAnimation,
+                modifier = Modifier.settingsControlAnchor(SettingsControlKeys.TypingAnimationEnabled),
             )
             SujianSlider(
                 title = stringResource(id = R.string.pref_editor_typing_animation_duration),
@@ -168,7 +183,10 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
                 steps = 96,
                 valueLabel = "${typingDuration.toInt()}ms",
                 enabled = typingAnimationChecked,
-                modifier = Modifier.fillMaxWidth(),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .settingsControlAnchor(SettingsControlKeys.TypingAnimationDurationMs),
             )
         }
     }

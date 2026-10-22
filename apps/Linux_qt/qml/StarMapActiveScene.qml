@@ -288,6 +288,40 @@ Item {
         return _sameTarget(a.target || {}, b.target || {})
     }
 
+    // Link / Hyperlink 没有独立位置：把 source path 解析成真正可画、可选的
+    // 宿主对象（node 或 embed）。返回 null 表示该来源不是本画布可定位对象。
+    function sourcePathOwner(sourcePath) {
+        if (!sourcePath)
+            return null
+        var target = sourcePath.target || {}
+        if (target.type === "node" && target.nodeId)
+            return { kind: "node", id: target.nodeId }
+        if (target.type === "anchor" && target.nodeId)
+            return { kind: "node", id: target.nodeId }
+        var segments = sourcePath.segments || []
+        for (var i = segments.length - 1; i >= 0; i--) {
+            if (segments[i].type === "enterEmbed" && segments[i].instanceId)
+                return { kind: "embed", id: segments[i].instanceId }
+        }
+        return null
+    }
+    function linkOwner(linkId) {
+        var items = graphController.listLinks()
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].linkId === linkId)
+                return sourcePathOwner(items[i].source)
+        }
+        return null
+    }
+    function hyperlinkOwner(hyperlinkId) {
+        var items = graphController.listHyperlinks()
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].hyperlinkId === hyperlinkId)
+                return sourcePathOwner(items[i].source)
+        }
+        return null
+    }
+
     // ── 本画布可操作对象 ──
     function hitNode(nodeId) { return graphController.getNode(nodeId) }
     function hitEmbed(instanceId) { return graphController.getEmbed(instanceId) }
@@ -298,11 +332,26 @@ Item {
         }
         return null
     }
+    // 连线没有独立 item；用 Core 渲染后的两端世界坐标取中点。
+    function edgeCenterScene(edgeId) {
+        var renders = graphController.edgeRenders || []
+        for (var i = 0; i < renders.length; i++) {
+            if (renders[i].edgeId === edgeId) {
+                return {
+                    x: (renders[i].startX + renders[i].endX) / 2,
+                    y: (renders[i].startY + renders[i].endY) / 2
+                }
+            }
+        }
+        return null
+    }
     function itemOf(kind, id) {
         return kind === "node" ? graphController.getNode(id) : graphController.getEmbed(id)
     }
     // 命中对象在本画布 world 坐标里的中心 / 矩形（scene 坐标 == world 坐标）。
     function itemCenterScene(kind, id) {
+        if (kind === "edge")
+            return edgeCenterScene(id)
         var item = itemOf(kind, id)
         if (!item)
             return null

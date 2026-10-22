@@ -559,17 +559,17 @@ Kirigami.ApplicationWindow {
         return manualSyncOperationId
     }
 
-    function openSettingsDialog(section) {
+    function openSettingsDialog(section, settingKey) {
         if (!settingsDialogLoader.active) {
             settingsDialogLoader.active = true;
         }
         if (settingsDialogLoader.item) {
             settingsDialogLoader.item.open();
-            if (section) {
+            if (section || settingKey) {
                 Qt.callLater(function() {
                     var dialog = settingsDialogLoader.item
                     if (dialog && dialog.revealSection) {
-                        dialog.revealSection(String(section))
+                        dialog.revealSection(String(section || ""), String(settingKey || ""))
                     }
                 })
             }
@@ -736,6 +736,8 @@ Kirigami.ApplicationWindow {
         if (workspace.revealSearchTarget(pending)) {
             window.pendingStarmapSearchTarget = null
             starmapSearchRevealRetryTimer.stop()
+            // 星图目标真正选中并进入视野后才关闭搜索；只打开星图不算成功。
+            if (globalSearchOverlay.visible) globalSearchOverlay.close()
             return true
         }
         return false
@@ -792,16 +794,20 @@ Kirigami.ApplicationWindow {
                 target.starmapId,
                 window.searchPathTail(result.path) || qsTr("星图")
             )
-            if ((target.nodeId || target.edgeId || target.embedId)
+            if ((target.nodeId || target.edgeId || target.embedId
+                    || target.linkId || target.hyperlinkId)
                     && result.scope !== "starmapTitle") {
+                // 不立即关闭浮层：等目标真正选中并居中后再关闭；
+                // 链接/超链接无法解析 owner 时保留搜索并提示，而不是只打开星图。
                 window.schedulePendingStarmapSearchTarget(target)
+            } else {
+                globalSearchOverlay.close()
             }
-            globalSearchOverlay.close()
             return true
         }
 
         if (target.settingKey || target.settingSection) {
-            window.openSettingsDialog(target.settingSection || "")
+            window.openSettingsDialog(target.settingSection || "", target.settingKey || "")
             globalSearchOverlay.close()
             return true
         }
@@ -845,6 +851,7 @@ Kirigami.ApplicationWindow {
             window.pendingStarmapSearchTarget = null
             window.pendingStarmapSearchAttempts = 0
             starmapSearchRevealRetryTimer.stop()
+            globalSearchOverlay.showMessage(qsTr("无法定位该星图目标，请重新搜索"))
             window.debugLog("search", "starmap_reveal_unavailable", "")
         }
     }
@@ -1124,8 +1131,9 @@ Kirigami.ApplicationWindow {
 
     onClosing: {
         if (editorBackend) {
-            // 关闭会话后等统计 writer 落盘，避免 process::exit 丢掉最后不足 30 秒的切片。
-            // 失败时不能假装已保存：保持窗口打开并明确提示，稳定 eventId 会在下次关闭时重试。
+            // 先结算当前计时切片并等统计 writer 落盘，确认成功后才正式结束会话，
+            // 避免 process::exit 丢掉最后不足 30 秒的切片。
+            // 失败时保持窗口和计时会话打开，稳定 eventId 会在稍后心跳/下次关闭时重试。
             var statsCloseError = editorBackend.close_writing_session_and_wait("close")
             if (statsCloseError && statsCloseError.length > 0) {
                 close.accepted = false

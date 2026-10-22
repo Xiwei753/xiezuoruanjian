@@ -5,6 +5,53 @@
 use super::*;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use writer_core::api::{ChangedEntityDto, ChapterMetaDto, ResultEnvelope, VolumeDto, WriterError};
+use writer_core::search::{
+    extractor, IndexEntry, SearchIndexAction, SearchIndexUpdate,
+};
+
+fn tree_field<'a>(node: &'a serde_json::Value, key: &str) -> &'a str {
+    node.get(key).and_then(serde_json::Value::as_str).unwrap_or("")
+}
+
+fn search_upsert(entry: IndexEntry) -> SearchIndexUpdate {
+    SearchIndexUpdate {
+        action: SearchIndexAction::Upsert,
+        object_id: entry.object_id,
+        scope: entry.scope,
+        title: entry.title,
+        body: entry.body,
+        target: Some(entry.target),
+    }
+}
+
+fn search_delete(object_id: String) -> SearchIndexUpdate {
+    SearchIndexUpdate {
+        action: SearchIndexAction::Delete,
+        object_id,
+        scope: writer_core::search::SearchScope::All,
+        title: String::new(),
+        body: String::new(),
+        target: None,
+    }
+}
+
+fn chapter_delete_updates(
+    updates: &mut Vec<SearchIndexUpdate>,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+) {
+    updates.push(search_delete(format!(
+        "chapter_title:{project_id}:{volume_id}:{chapter_id}"
+    )));
+    updates.push(search_delete(format!(
+        "chapter_body:{project_id}:{volume_id}:{chapter_id}"
+    )));
+    updates.push(search_delete(format!(
+        "chapter_note:{project_id}:{volume_id}:{chapter_id}"
+    )));
+}
+
 
 impl AppBackend {
     pub(crate) fn reconcile_selection_after_tree_reload(&mut self) -> bool {
@@ -56,8 +103,13 @@ impl AppBackend {
     }
 
     pub(crate) fn reload_tree(&mut self) {
-        // Issue #982：结构增删改后让下一次搜索重建一次索引，不每次按键扫描磁盘。
-        self.search_bridge().mark_dirty();
+        // Issue #982：结构增删改只提交有变化的标题条目和删除项，
+        // 不再让搜索 worker 全量扫盘重建索引。
+        let old_nodes = self
+            .cached_tree_json
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         let before_count = self.cached_tree.len();
         let mut list = QJsonArray::default();
         // Issue #765：并行构建 serde_json::Value 镜像，供 appState/tree model 纯转换路径使用。
@@ -138,8 +190,100 @@ impl AppBackend {
                 }
             }
         }
+        let new_tree_value = serde_json::Value::Array(tree_vec);
+        let new_nodes = new_tree_value
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let mut updates: Vec<SearchIndexUpdate> = Vec::new();
+        let mut projects_to_rebuild: Vec<String> = Vec::new();
+
+        for node in &new_nodes {
+            let kind = tree_field(node, "type");
+            let id = tree_field(node, "id");
+            if id.is_empty() {
+                continue;
+            }
+            let project_id = tree_field(node, "projectId");
+            let volume_id = tree_field(node, "volumeId");
+            let title = tree_field(node, "title");
+            let previous = old_nodes
+                .iter()
+                .find(|old| tree_field(old, "type") == kind && tree_field(old, "id") == id);
+            let changed = previous
+                .map(|old| {
+                    tree_field(old, "title") != title
+                        || tree_field(old, "projectId") != project_id
+                        || tree_field(old, "volumeId") != volume_id
+                })
+                .unwrap_or(true);
+            if !changed {
+                continue;
+            }
+            let title_changed = previous
+                .map(|old| tree_field(old, "title") != title)
+                .unwrap_or(false);
+            if title_changed {
+                // 章/卷/作品改名后，正文/备注条目的展示标题也要跟着变；
+                // 只重建受影响作品，不扫整个工作区。
+                let rebuild_pid = if kind == "project" {
+                    id.to_string()
+                } else {
+                    project_id.to_string()
+                };
+                if !rebuild_pid.is_empty() && !projects_to_rebuild.contains(&rebuild_pid) {
+                    projects_to_rebuild.push(rebuild_pid);
+                }
+            }
+            let entry = match kind {
+                "project" => extractor::extract_project_title_entry(id, title),
+                "volume" => extractor::extract_volume_title_entry(project_id, id, title),
+                "chapter" => {
+                    extractor::extract_chapter_title_entry(project_id, volume_id, id, title)
+                }
+                _ => continue,
+            };
+            updates.push(search_upsert(entry));
+        }
+
+        for node in &old_nodes {
+            let kind = tree_field(node, "type");
+            let id = tree_field(node, "id");
+            if id.is_empty() {
+                continue;
+            }
+            let still_exists = new_nodes
+                .iter()
+                .any(|new| tree_field(new, "type") == kind && tree_field(new, "id") == id);
+            if still_exists {
+                continue;
+            }
+            match kind {
+                "project" => updates.push(search_delete(format!("project:{id}"))),
+                "volume" => updates.push(search_delete(format!(
+                    "volume:{}:{id}",
+                    tree_field(node, "projectId")
+                ))),
+                "chapter" => chapter_delete_updates(
+                    &mut updates,
+                    tree_field(node, "projectId"),
+                    tree_field(node, "volumeId"),
+                    id,
+                ),
+                _ => {}
+            }
+        }
+        if !updates.is_empty() {
+            self.search_bridge().apply_updates(updates);
+        }
+        // 标题变化会影响该作品下正文/备注条目的展示路径，按作品做一次
+        // 范围重建；不扫描其他作品。
+        for project_id in projects_to_rebuild {
+            self.search_bridge().rebuild_project(project_id);
+        }
+
         self.cached_tree = list;
-        self.cached_tree_json = serde_json::Value::Array(tree_vec);
+        self.cached_tree_json = new_tree_value;
         let after_count = self.cached_tree.len();
         self.debug_log(
             "tree",

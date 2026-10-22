@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -34,7 +35,9 @@ import com.xiwei.sujian.app.navigation.SettingsSection
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** JankStats PerformanceMetricsState key for interaction context (settings_scroll / settings_expand / settings_collapse). */
 private const val SETTINGS_JANK_INTERACTION_KEY = "interaction"
@@ -139,16 +142,29 @@ fun SettingsRoute(
         )
     val snackbarHostState = rememberSettingsSnackbarHost(vm)
     val dims = LocalSujianDimensions.current
+    val context = LocalContext.current
+    val controlRegistry = remember { SettingsControlRegistry() }
 
     val expansionState =
         rememberSaveable(saver = SettingsExpansionState.Saver) {
             SettingsExpansionState()
         }
-    val requestedSection = SettingsSectionRequest.requestedSection
-    LaunchedEffect(requestedSection) {
-        val section = requestedSection ?: return@LaunchedEffect
-        expansionState.setExpanded(section, true)
-        SettingsSectionRequest.consume(section)
+    val locationRequest = SettingsSectionRequest.pending
+    LaunchedEffect(locationRequest) {
+        val request = locationRequest ?: return@LaunchedEffect
+        try {
+            revealSettingsLocationRequest(
+                request = request,
+                expansionState = expansionState,
+                controlRegistry = controlRegistry,
+                snackbarHostState = snackbarHostState,
+                context = context,
+            )
+        } finally {
+            // 先完成滚动/提示再消费；提前消费会改变 LaunchedEffect key，
+            // 立刻取消本协程，导致定位动作只展开分类。
+            SettingsSectionRequest.consume(request)
+        }
     }
 
     // #630 评论5324547885项3：Settings 自身绘制层动画 — 120~140ms alpha + translationY。
@@ -184,16 +200,61 @@ fun SettingsRoute(
                     .padding(horizontal = dims.space16, vertical = dims.space8)
                     .testTag(SujianSemanticIds.SettingsScreen),
         ) {
-            SettingsSearchEntry(onClick = { onOpenSearch(expansionState.currentSection()) })
-            Spacer(Modifier.height(dims.space16))
+            CompositionLocalProvider(LocalSettingsControlRegistry provides controlRegistry) {
+                SettingsSearchEntry(onClick = { onOpenSearch(expansionState.currentSection()) })
+                Spacer(Modifier.height(dims.space16))
 
-            SettingsGroupList(expansionState, vm)
+                SettingsGroupList(expansionState, vm)
+            }
         }
         androidx.compose.material3.SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
     }
+}
+
+/** 展开分类并定位到具体设置项；找不到控件时给出明确反馈。 */
+@SuppressLint("LocalContextGetResourceValueCall")
+private suspend fun revealSettingsLocationRequest(
+    request: SettingsLocationRequest,
+    expansionState: SettingsExpansionState,
+    controlRegistry: SettingsControlRegistry,
+    snackbarHostState: androidx.compose.material3.SnackbarHostState,
+    context: android.content.Context,
+) {
+    expansionState.setExpanded(request.section, true)
+    val settingKey = request.settingKey ?: return
+    val controlKey = settingsControlKeyFor(settingKey)
+    if (controlKey == null) {
+        snackbarHostState.showSnackbar(context.getString(R.string.settings_search_key_unavailable))
+        return
+    }
+
+    // 分类展开有 150ms 动画；等控件真正进入组合并拿到边界后再滚动。
+    val anchor =
+        withTimeoutOrNull(2_000L) {
+            var found: SettingsControlAnchor? = null
+            while (found == null) {
+                val candidate = controlRegistry.anchor(controlKey)
+                if (candidate != null && candidate.bounds.height > 0f) {
+                    found = candidate
+                } else {
+                    delay(50L)
+                }
+            }
+            found
+        }
+    if (anchor == null) {
+        snackbarHostState.showSnackbar(context.getString(R.string.settings_search_key_unavailable))
+        return
+    }
+
+    delay(180L)
+    controlRegistry.anchor(controlKey)?.requester?.bringIntoView()
+    controlRegistry.highlight(controlKey)
+    delay(1_400L)
+    controlRegistry.clearHighlight(controlKey)
 }
 
 /**

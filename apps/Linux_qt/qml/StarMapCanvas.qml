@@ -1159,7 +1159,8 @@ Item {
         var scene = activeScene()
         if (!target || !scene)
             return false
-        if (!target.nodeId && !target.edgeId && !target.embedId)
+        if (!target.nodeId && !target.edgeId && !target.embedId
+                && !target.linkId && !target.hyperlinkId)
             return false
         if (!focusIsRoot)
             resetToRoot()
@@ -1175,9 +1176,27 @@ Item {
         } else if (target.edgeId) {
             kind = "edge"
             itemId = target.edgeId
-        } else {
+        } else if (target.embedId) {
             kind = "embed"
             itemId = target.embedId
+        } else if (target.linkId) {
+            kind = "link"
+            itemId = target.linkId
+        } else {
+            kind = "hyperlink"
+            itemId = target.hyperlinkId
+        }
+
+        // Link / Hyperlink 是挂在 node 或 embed 上的附属对象，没有独立几何。
+        // 定位时选中并居中其宿主，避免“打开了星图但什么也没高亮”。
+        if (kind === "link" || kind === "hyperlink") {
+            var owner = kind === "link"
+                    ? scene.linkOwner(itemId)
+                    : scene.hyperlinkOwner(itemId)
+            if (!owner)
+                return false
+            kind = owner.kind
+            itemId = owner.id
         }
 
         var item = kind === "node" ? scene.hitNode(itemId)
@@ -1198,7 +1217,7 @@ Item {
             applyPan(width / 2 - center.x * zoomLevel,
                      height / 2 - center.y * zoomLevel)
         }
-        return true
+        return center !== null
     }
 
     function hitTargetAtScreen(sx, sy) {

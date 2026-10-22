@@ -68,7 +68,7 @@ MotionDialog {
 
     function flushSave() { settingsPage.flushSave() }
 
-    function revealSection(section) { settingsPage.revealSection(section) }
+    function revealSection(section, settingKey) { settingsPage.revealSection(section, settingKey) }
 
     KdeSettingsPage {
         id: settingsPage

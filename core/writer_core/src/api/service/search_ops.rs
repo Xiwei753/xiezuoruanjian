@@ -87,4 +87,10 @@ impl WriterCoreApi {
         });
         Ok(true)
     }
+
+    /// 平台端常驻搜索 worker 直接提交结构化索引更新。
+    /// 索引是缓存，调用方只提交变化对象，不触发磁盘扫描。
+    pub fn apply_search_index_update(&self, update: crate::search::SearchIndexUpdate) {
+        self.enqueue_search_index_update(update);
+    }
 }

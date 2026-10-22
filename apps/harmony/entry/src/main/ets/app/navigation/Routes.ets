@@ -18,6 +18,15 @@ export enum Routes {
   Search = 'Search'
 }
 
+// 一级 Tab 索引（与 PrimaryTabShell 的 Tabs 顺序一致）。
+export const TAB_HOME: number = 0
+export const TAB_STARMAP: number = 1
+export const TAB_STATS: number = 2
+
+// 搜索结果在星图里需要精确定位的对象类型。
+// link / hyperlink 没有独立位置，由页面解析 source 后选中其所属 node/embed。
+export type StarMapFocusKind = 'node' | 'edge' | 'embed' | 'link' | 'hyperlink'
+
 export interface WorkspaceRouteParams {
   projectId: string
   projectName: string
@@ -49,8 +58,8 @@ export interface StarMapRouteParams {
   starmapTitle: string
   parentStarmapId?: string
   parentStarmapTitle?: string
-  // 搜索结果精确落到节点/边/嵌入；页面加载图后写入共享 selectionState。
-  focusKind?: string
+  // 搜索结果精确落到节点/边/嵌入/链接；页面加载图后解析几何并选中、居中。
+  focusKind?: StarMapFocusKind
   focusId?: string
 }
 
@@ -61,7 +70,8 @@ export interface SearchRouteParams {
 }
 
 // Settings 页是应用级页面（Issue #784 评论 5856805657）。
-// section 仅用于搜索结果跳转到具体设置分类。
+// section 仅用于搜索结果跳转到具体设置分类；settingKey（Issue #982）进一步定位到具体设置项。
 export interface SettingsRouteParams {
   section?: string
+  settingKey?: string
 }

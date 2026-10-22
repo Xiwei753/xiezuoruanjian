@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -146,6 +147,7 @@ private fun handleChapterAction(
     }
 }
 
+@Suppress("LongParameterList")
 @Composable
 internal fun ChapterTreeContent(
     projectId: String,
@@ -154,6 +156,8 @@ internal fun ChapterTreeContent(
     onSelectChapter: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit,
     modifier: Modifier = Modifier,
     onError: (String) -> Unit = {},
+    focusVolumeId: String? = null,
+    onFocusConsumed: () -> Unit = {},
 ) {
     val viewModel: ProjectViewModel = viewModel()
     // #617 评论一：初始化从组合阶段移入副作用 — 避免随重组反复进入初始化判断；
@@ -171,6 +175,7 @@ internal fun ChapterTreeContent(
         }
     }
     val uiState by viewModel.uiState.collectAsState()
+    val listState = rememberLazyListState()
 
     var dialogState by remember { mutableStateOf<WorkspaceDialogState>(WorkspaceDialogState.None) }
 
@@ -193,6 +198,25 @@ internal fun ChapterTreeContent(
             }
             items
         }
+
+    // 搜索结果卷定位：展开目标卷并滚到对应卷行，然后消费一次性请求。
+    LaunchedEffect(focusVolumeId, uiState.volumes, uiState.isLoading) {
+        val targetVolumeId = focusVolumeId ?: return@LaunchedEffect
+        if (uiState.volumes.any { it.id == targetVolumeId }) {
+            if (targetVolumeId !in uiState.expandedVolumeIds) {
+                viewModel.toggleVolumeExpand(targetVolumeId)
+            }
+            val index =
+                flatItems.indexOfFirst {
+                    it is VolumeChapterListItem.VolumeItem && it.volume.id == targetVolumeId
+                }
+            if (index >= 0) listState.animateScrollToItem(index)
+            onFocusConsumed()
+        } else if (!uiState.isLoading && uiState.volumes.isNotEmpty()) {
+            // 卷已不存在时不要留下永久待定位状态。
+            onFocusConsumed()
+        }
+    }
 
     // #625 第二段 4b：CreateVolume 改为 FAB（BottomEnd），由 primaryActions 守护。
     // Rust 侧 CreateVolume region 已从 ListHeader 改为 PrimaryAction（与 CreateProject 同 region）。
@@ -251,6 +275,7 @@ internal fun ChapterTreeContent(
                 }
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.testTag(SujianSemanticIds.WorkspaceVolumeList),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                 ) {

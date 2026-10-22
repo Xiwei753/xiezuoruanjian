@@ -7,7 +7,7 @@
 // 构造的 Core API 交给一个常驻 worker 线程独占：
 //   - 打开工作区后重建一次索引；
 //   - 之后的搜索都在该索引上执行，按键查询不再读盘；
-//   - 正文保存/结构变更只标脏，下一次打开搜索时重建一次；
+//   - 保存/结构/设置变化提交增量索引更新，只有外部数据替换才整体重建；
 //   - QML 只拿结果 JSON，不接触整章正文。
 // =============================================================================
 
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use qmetaobject::prelude::*;
 use writer_core::api::WriterCoreApi;
-use writer_core::search::SearchContext;
+use writer_core::search::{SearchContext, SearchIndexUpdate};
 use writer_core::storage::git_repo_layout::GitRepoLayout;
 
 enum SearchCommand {
@@ -25,7 +25,9 @@ enum SearchCommand {
         projects_root: String,
         layout: GitRepoLayout,
     },
-    MarkDirty,
+    ApplyUpdates(Vec<SearchIndexUpdate>),
+    RebuildProject(String),
+    RebuildAll,
     Query {
         request_id: String,
         query: String,
@@ -89,8 +91,18 @@ impl SearchBridge {
         });
     }
 
-    pub(crate) fn mark_dirty(&self) {
-        let _ = self.send(SearchCommand::MarkDirty);
+    pub(crate) fn apply_updates(&self, updates: Vec<SearchIndexUpdate>) {
+        if !updates.is_empty() {
+            let _ = self.send(SearchCommand::ApplyUpdates(updates));
+        }
+    }
+
+    pub(crate) fn rebuild_project(&self, project_id: String) {
+        let _ = self.send(SearchCommand::RebuildProject(project_id));
+    }
+
+    pub(crate) fn rebuild_all(&self) {
+        let _ = self.send(SearchCommand::RebuildAll);
     }
 
     pub(crate) fn close(&self) {
@@ -123,7 +135,6 @@ impl SearchBridge {
 
 struct WorkerState {
     api: Option<WriterCoreApi>,
-    dirty: bool,
 }
 
 impl WorkerState {
@@ -131,9 +142,24 @@ impl WorkerState {
         if let Some(api) = self.api.as_ref() {
             api.search_service_rebuild(None)
                 .map_err(|error| error.to_string())?;
-            self.dirty = false;
         }
         Ok(())
+    }
+
+    fn apply_updates(&mut self, updates: Vec<SearchIndexUpdate>) {
+        if let Some(api) = self.api.as_ref() {
+            for update in updates {
+                api.apply_search_index_update(update);
+            }
+        }
+    }
+
+    fn rebuild_project(&mut self, project_id: &str) {
+        if let Some(api) = self.api.as_ref() {
+            if let Err(error) = api.search_service_rebuild(Some(project_id)) {
+                log::warn!("global search project rebuild failed for {project_id}: {error}");
+            }
+        }
     }
 
     fn query(
@@ -144,9 +170,6 @@ impl WorkerState {
         cursor: Option<&str>,
         context_json: &str,
     ) -> Result<String, String> {
-        if self.dirty {
-            self.rebuild()?;
-        }
         let Some(api) = self.api.as_ref() else {
             return Err("search.index.not_ready".to_string());
         };
@@ -157,10 +180,7 @@ impl WorkerState {
 }
 
 fn search_worker_loop(rx: Receiver<SearchCommand>) {
-    let mut state = WorkerState {
-        api: None,
-        dirty: false,
-    };
+    let mut state = WorkerState { api: None };
     while let Ok(command) = rx.recv() {
         match command {
             SearchCommand::Open {
@@ -171,14 +191,17 @@ fn search_worker_loop(rx: Receiver<SearchCommand>) {
                 let api =
                     crate::backend::app_backend::with_layout_core_api(&data_root, &projects_root, &layout);
                 state.api = Some(api);
-                state.dirty = true;
                 if let Err(error) = state.rebuild() {
                     log::warn!("global search index rebuild failed on open: {error}");
                 }
             }
-            SearchCommand::MarkDirty => {
-                if state.api.is_some() {
-                    state.dirty = true;
+            SearchCommand::ApplyUpdates(updates) => state.apply_updates(updates),
+            SearchCommand::RebuildProject(project_id) => {
+                state.rebuild_project(&project_id);
+            }
+            SearchCommand::RebuildAll => {
+                if let Err(error) = state.rebuild() {
+                    log::warn!("global search index full rebuild failed: {error}");
                 }
             }
             SearchCommand::Query {
@@ -211,7 +234,6 @@ fn search_worker_loop(rx: Receiver<SearchCommand>) {
             }
             SearchCommand::Close => {
                 state.api = None;
-                state.dirty = false;
             }
         }
     }
