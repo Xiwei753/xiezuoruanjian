@@ -5,6 +5,7 @@ import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
+import { WritingActivitySegmentInput } from './dto/StatsDtos'
 import { NativeCoreModule } from './native/NativeCoreModule'
 import { NativeAppStateBridge } from './native/NativeAppStateBridge'
 import { NativeProjectBridge } from './native/NativeProjectBridge'
@@ -394,6 +395,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>> {
     return this.statsBridge.recordEditorChangeStats(input)
+  }
+
+  async recordWritingActivitySegment(input: WritingActivitySegmentInput): Promise<ResultEnvelope<boolean>> {
+    return this.statsBridge.recordWritingActivitySegment(input)
   }
 
   async calculateWordCount(text: string): Promise<number> {

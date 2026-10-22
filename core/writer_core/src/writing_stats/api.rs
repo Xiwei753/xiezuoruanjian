@@ -17,12 +17,14 @@ use crate::api::types::{
 use crate::error::Result;
 use crate::writing_stats::calendar::{self, StatsPreset};
 use crate::writing_stats::projection::{
-    bucket_trend, project_all_time_stats, project_events, project_lifetime_stats,
-    project_range_stats, CurrentWritingSpeed, ProjectLifetimeStatsAgg, RangeStatsAgg,
-    StatsProjection, StatsRecord, StatsSummary, TrendGranularity,
+    apply_measured_session_breakdown, bucket_trend, project_all_time_stats_with_sessions,
+    project_events, project_lifetime_stats, project_measured_session_breakdown,
+    project_measured_sessions, project_range_stats, project_range_stats_with_sessions,
+    CurrentWritingSpeed, ProjectLifetimeStatsAgg, RangeStatsAgg, StatsProjection, StatsRecord,
+    StatsSummary, TrendGranularity,
 };
 use crate::writing_stats::store::StatsStore;
-use crate::writing_stats::{DateRange, WritingInputEvent};
+use crate::writing_stats::{DateRange, WritingActivitySegment, WritingInputEvent};
 use serde_json::Value;
 use std::path::Path;
 
@@ -300,7 +302,18 @@ impl StatsApi {
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
-        let proj = project_events(&events, 60, None);
+        let segments = self
+            .store
+            .load_segments_range(&range.start_date, &range.end_date)?;
+        let measured = project_measured_sessions(
+            &events,
+            &segments,
+            Some((&range.start_date, &range.end_date)),
+        )?;
+        let mut proj = project_events(&events, 60, None);
+        proj.summary.total_active_seconds = measured.total_active_seconds;
+        proj.summary.total_sessions =
+            u32::try_from(measured.session_count).unwrap_or(u32::MAX);
 
         Ok(summary_json(range, &proj.summary))
     }
@@ -310,8 +323,15 @@ impl StatsApi {
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
-        let proj = project_events(&events, 60, None);
-
+        let segments = self
+            .store
+            .load_segments_range(&range.start_date, &range.end_date)?;
+        let breakdown = project_measured_session_breakdown(
+            &segments,
+            Some((&range.start_date, &range.end_date)),
+        );
+        let mut proj = project_events(&events, 60, None);
+        apply_measured_session_breakdown(&mut proj, &breakdown);
         let projects: Vec<Value> = proj
             .per_project
             .values()
@@ -342,8 +362,15 @@ impl StatsApi {
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
-        let proj = project_events(&events, 60, None);
-
+        let segments = self
+            .store
+            .load_segments_range(&range.start_date, &range.end_date)?;
+        let breakdown = project_measured_session_breakdown(
+            &segments,
+            Some((&range.start_date, &range.end_date)),
+        );
+        let mut proj = project_events(&events, 60, None);
+        apply_measured_session_breakdown(&mut proj, &breakdown);
         let chapters: Vec<Value> = proj
             .per_chapter
             .values()
@@ -374,8 +401,15 @@ impl StatsApi {
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
-        let proj = project_events(&events, 60, None);
-
+        let segments = self
+            .store
+            .load_segments_range(&range.start_date, &range.end_date)?;
+        let breakdown = project_measured_session_breakdown(
+            &segments,
+            Some((&range.start_date, &range.end_date)),
+        );
+        let mut proj = project_events(&events, 60, None);
+        apply_measured_session_breakdown(&mut proj, &breakdown);
         let devices: Vec<Value> = proj
             .per_device
             .values()
@@ -409,8 +443,15 @@ impl StatsApi {
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;
-        let proj = project_events(&events, 60, None);
-
+        let segments = self
+            .store
+            .load_segments_range(&range.start_date, &range.end_date)?;
+        let breakdown = project_measured_session_breakdown(
+            &segments,
+            Some((&range.start_date, &range.end_date)),
+        );
+        let mut proj = project_events(&events, 60, None);
+        apply_measured_session_breakdown(&mut proj, &breakdown);
         let classes: Vec<Value> = proj
             .per_device_class
             .values()
@@ -465,7 +506,8 @@ impl StatsApi {
         let today = calendar::local_today_date();
 
         let events = self.store.load_all_events()?;
-        let career = project_all_time_stats(&events)?;
+        let segments = self.store.load_all_segments()?;
+        let career = project_all_time_stats_with_sessions(&events, &segments)?;
         let history_scope = self.history_scope();
         // 覆盖起点必须来自完整事件集合，不能用被区间截断后的 daily 投影。
         let coverage_anchor = events_coverage_anchor(&events);
@@ -484,10 +526,13 @@ impl StatsApi {
                 career.total_human_typed_chars,
                 elapsed_days,
             ),
-            average_chars_per_minute: average_chars_per_minute(
-                career.total_human_typed_chars,
+            timed_human_typed_chars: career.timed_human_typed_chars,
+            measured_writing_seconds: career.total_active_seconds,
+            average_chars_per_hour: average_chars_per_hour(
+                career.timed_human_typed_chars,
                 career.total_active_seconds,
             ),
+            has_measured_timing: career.total_active_seconds > 0,
         };
 
         // 四张时段卡顺序固定：近七天、近三十天、近半年、自选区间。
@@ -496,6 +541,7 @@ impl StatsApi {
             period_cards.push(period_card(
                 card_preset,
                 &events,
+                &segments,
                 &today,
                 first_writing_date.as_deref(),
                 custom_range.as_ref(),
@@ -511,7 +557,12 @@ impl StatsApi {
         // 生涯在上面已经聚合过，直接复用；其余时段在区间过滤后独立聚合。
         let selected_stats = match preset {
             StatsPreset::Lifetime => career,
-            _ => project_range_stats(&events, &range.start_date, &range.end_date)?,
+            _ => project_range_stats_with_sessions(
+                &events,
+                &segments,
+                &range.start_date,
+                &range.end_date,
+            )?,
         };
         let granularity = trend_granularity(preset, &range)?;
         let points = if preset == StatsPreset::Lifetime && first_writing_date.is_none() {
@@ -559,10 +610,13 @@ impl StatsApi {
                     selected_stats.total_human_typed_chars,
                     selected_days,
                 ),
-                average_chars_per_minute: average_chars_per_minute(
-                    selected_stats.total_human_typed_chars,
+                timed_human_typed_chars: selected_stats.timed_human_typed_chars,
+                measured_writing_seconds: selected_stats.total_active_seconds,
+                average_chars_per_hour: average_chars_per_hour(
+                    selected_stats.timed_human_typed_chars,
                     selected_stats.total_active_seconds,
                 ),
+                has_measured_timing: selected_stats.total_active_seconds > 0,
                 heatmap_days,
                 records: records_dto(&selected_stats),
                 trend: WritingStatsTrendDto {
@@ -638,9 +692,37 @@ impl StatsApi {
         let week_events = events_within(&events, &week_start, &today);
         let month_events = events_within(&events, &month_start, &today);
 
-        let today_summary = project_events(&today_events, 60, None).summary;
-        let week_projection = project_events(&week_events, 60, None);
-        let month_summary = project_events(&month_events, 60, None).summary;
+        let segments = self.store.load_segments_range(load_start, &today)?;
+        let measured_today =
+            project_measured_sessions(&today_events, &segments, Some((&today, &today)))?;
+        let measured_week = project_measured_sessions(
+            &week_events,
+            &segments,
+            Some((&week_start, &today)),
+        )?;
+        let measured_month = project_measured_sessions(
+            &month_events,
+            &segments,
+            Some((&month_start, &today)),
+        )?;
+
+        let mut today_summary = project_events(&today_events, 60, None).summary;
+        let mut week_projection = project_events(&week_events, 60, None);
+        let mut month_summary = project_events(&month_events, 60, None).summary;
+        let week_breakdown = project_measured_session_breakdown(
+            &segments,
+            Some((&week_start, &today)),
+        );
+        apply_measured_session_breakdown(&mut week_projection, &week_breakdown);
+        week_projection.summary.total_active_seconds = measured_week.total_active_seconds;
+        week_projection.summary.total_sessions =
+            u32::try_from(measured_week.session_count).unwrap_or(u32::MAX);
+        today_summary.total_active_seconds = measured_today.total_active_seconds;
+        today_summary.total_sessions =
+            u32::try_from(measured_today.session_count).unwrap_or(u32::MAX);
+        month_summary.total_active_seconds = measured_month.total_active_seconds;
+        month_summary.total_sessions =
+            u32::try_from(measured_month.session_count).unwrap_or(u32::MAX);
 
         let today_range = DateRange {
             start_date: today.clone(),
@@ -714,6 +796,25 @@ impl StatsApi {
     pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {
         self.store.record_event(event)?;
         Ok(())
+    }
+
+    /// 记录一段平台已测量的前台写作计时切片。
+    ///
+    /// Core 负责补齐设备身份、按本地日期切分并幂等持久化；平台端只上报
+    /// 单调时钟测得的真实片段，不自行计算速度。
+    pub fn record_activity_segment(&self, segment: WritingActivitySegment) -> Result<()> {
+        self.ensure_migrated()?;
+        self.store.record_activity_segments(vec![segment])?;
+        Ok(())
+    }
+
+    /// 批量记录计时切片（用于异步队列一次提交多段）。
+    pub fn record_activity_segments(
+        &self,
+        segments: Vec<WritingActivitySegment>,
+    ) -> Result<usize> {
+        self.ensure_migrated()?;
+        self.store.record_activity_segments(segments)
     }
 
     /// 「当前写作速度」：以调用时刻为终点的实时纯输入速度。
@@ -849,6 +950,7 @@ fn heatmap_intensity(value: u64, thresholds: [u64; 3]) -> u8 {
 fn period_card(
     preset: StatsPreset,
     events: &[WritingInputEvent],
+    segments: &[WritingActivitySegment],
     today: &str,
     first_writing_date: Option<&str>,
     custom_range: Option<&DateRange>,
@@ -862,11 +964,19 @@ fn period_card(
             total_active_seconds: 0,
             writing_days: 0,
             average_chars_per_day: None,
-            average_chars_per_minute: None,
+            timed_human_typed_chars: 0,
+            measured_writing_seconds: 0,
+            average_chars_per_hour: None,
+            has_measured_timing: false,
         });
     }
     let range = calendar::resolve_range(preset, today, first_writing_date, custom_range)?;
-    let stats = project_range_stats(events, &range.start_date, &range.end_date)?;
+    let stats = project_range_stats_with_sessions(
+        events,
+        segments,
+        &range.start_date,
+        &range.end_date,
+    )?;
     // 卡片日均按区间自然日历天数均摊（含无输入日），不按实际写作天数。
     let calendar_days = calendar::day_span_inclusive(&range.start_date, &range.end_date)?;
     Ok(WritingStatsPeriodCardDto {
@@ -877,10 +987,13 @@ fn period_card(
         total_active_seconds: stats.total_active_seconds,
         writing_days: stats.writing_days,
         average_chars_per_day: average_chars_per_day(stats.total_human_typed_chars, calendar_days),
-        average_chars_per_minute: average_chars_per_minute(
-            stats.total_human_typed_chars,
+        timed_human_typed_chars: stats.timed_human_typed_chars,
+        measured_writing_seconds: stats.total_active_seconds,
+        average_chars_per_hour: average_chars_per_hour(
+            stats.timed_human_typed_chars,
             stats.total_active_seconds,
         ),
+        has_measured_timing: stats.total_active_seconds > 0,
     })
 }
 
@@ -915,12 +1028,15 @@ fn average_chars_per_day(total_chars: u64, calendar_days: u64) -> Option<f64> {
     Some(total_chars as f64 / calendar_days as f64)
 }
 
-/// 平均写作速度（字/分）= 区间人工输入 × 60 / 区间有效写作时长；零时长时为 null。
-fn average_chars_per_minute(total_chars: u64, active_seconds: u64) -> Option<f64> {
-    if active_seconds == 0 {
+/// 真实平均写作速度（字/时）= 计时覆盖的人工输入 × 3600 / 已测量秒数。
+///
+/// 分子必须是 [`RangeStatsAgg::timed_human_typed_chars`]，不能再用累计总字数；
+/// 没有计时样本时返回 null，界面显示「—」，不拿旧事件时间差凑分母。
+fn average_chars_per_hour(timed_chars: u64, measured_seconds: u64) -> Option<f64> {
+    if measured_seconds == 0 {
         return None;
     }
-    Some(total_chars as f64 * 60.0 / active_seconds as f64)
+    Some(timed_chars as f64 * 3600.0 / measured_seconds as f64)
 }
 
 fn date_range_dto(range: &DateRange) -> DateRangeDto {

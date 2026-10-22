@@ -11,6 +11,7 @@ import com.xiwei.sujian.feature.stats.data.model.WritingSpeedCurve
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
 import uniffi.writer_core.EditorChangeStatsInputDto
 import uniffi.writer_core.EditorTransactionCauseDto
+import uniffi.writer_core.WritingActivitySegmentInputDto
 
 /**
  * 统计 领域 Bridge。
@@ -89,5 +90,11 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
     fun getProjectStats(projectId: String): BridgeResult<ProjectStats> =
         holder.wrapResult {
             holder.service.getProjectStats(projectId).toModel()
+        }
+
+    /** Issue #981：上报一段已测量的前台写作计时，Core 负责幂等落盘与字/时聚合。 */
+    fun recordWritingActivitySegment(input: WritingActivitySegmentInputDto): BridgeResult<Unit> =
+        holder.wrapResult {
+            holder.service.recordWritingActivitySegment(input)
         }
 }

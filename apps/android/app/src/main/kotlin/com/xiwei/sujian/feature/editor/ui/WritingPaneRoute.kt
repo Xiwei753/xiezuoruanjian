@@ -21,6 +21,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,6 +34,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
@@ -99,6 +103,7 @@ fun WritingPane(
             )
     val viewModel = rememberWritingPaneViewModel(context, deps, coordinator)
     WritingPaneCorrectionHintCollector(viewModel, context)
+    WritingPaneSessionLifecycle(viewModel)
 
     val targetId =
         remember(projectId, volumeId, chapterId) {
@@ -168,6 +173,30 @@ fun WritingPane(
             uiState = uiState,
             modifier = editorModifier,
         )
+    }
+}
+
+/**
+ * Issue #981：正文页/Activity 真实前后台状态驱动写作计时。
+ * 页面离开 Composition 时关闭本次会话；回到前台只解除暂停，不补算离开期间。
+ */
+@Composable
+private fun WritingPaneSessionLifecycle(viewModel: EditorViewModel) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer =
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> viewModel.onWritingForeground()
+                    Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> viewModel.onWritingBackground()
+                    else -> Unit
+                }
+            }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.closeWritingSession()
+        }
     }
 }
 

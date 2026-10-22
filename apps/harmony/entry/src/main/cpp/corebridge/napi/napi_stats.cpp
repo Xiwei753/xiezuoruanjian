@@ -384,6 +384,89 @@ static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info
     return promise;
 }
 
+// Issue #981：上报一段真实前台编辑计时。与编辑事务一样走 async work，原因是
+// Core 会按本地日期切片并追加 sessions 文件，不能让磁盘 I/O 落回 ArkUI 主线程。
+// event_id 由端侧一次生成并固定，Core 侧幂等去重；这里只透传 JSON。
+struct ActivitySegmentWork {
+    char* json = nullptr;
+    napi_deferred deferred = nullptr;
+    napi_async_work async_work = nullptr;
+    bool ok = false;
+};
+
+static void ActivitySegmentExecute(napi_env env, void* data) {
+    (void)env;
+    auto* work = static_cast<ActivitySegmentWork*>(data);
+    work->ok = writer_core_record_writing_activity_segment(work->json);
+}
+
+static void ActivitySegmentComplete(napi_env env, napi_status status, void* data) {
+    auto* work = static_cast<ActivitySegmentWork*>(data);
+    if (status == napi_ok) {
+        if (work->ok) {
+            napi_value result = nullptr;
+            napi_get_boolean(env, true, &result);
+            napi_resolve_deferred(env, work->deferred, result);
+        } else {
+            napi_value message = nullptr;
+            const char* text = "record_writing_activity_segment failed";
+            napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message);
+            napi_reject_deferred(env, work->deferred, message);
+        }
+    } else {
+        napi_value message = nullptr;
+        const char* text = "record_writing_activity_segment async work aborted";
+        napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message);
+        napi_reject_deferred(env, work->deferred, message);
+    }
+    napi_delete_async_work(env, work->async_work);
+    delete[] work->json;
+    delete work;
+}
+
+static napi_value NativeRecordWritingActivitySegment(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char* json = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
+
+    auto* work = new ActivitySegmentWork();
+    work->json = json;
+
+    napi_value promise = nullptr;
+    if (napi_create_promise(env, &work->deferred, &promise) != napi_ok) {
+        delete[] json;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_promise failed");
+        return nullptr;
+    }
+
+    napi_value resource_name = nullptr;
+    const char* name = "WriterCoreRecordWritingActivitySegment";
+    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resource_name);
+
+    napi_async_work async_work = nullptr;
+    if (napi_create_async_work(env, nullptr, resource_name, ActivitySegmentExecute,
+                               ActivitySegmentComplete, work, &async_work) != napi_ok) {
+        delete[] json;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_async_work failed");
+        return nullptr;
+    }
+    work->async_work = async_work;
+
+    if (napi_queue_async_work(env, async_work) != napi_ok) {
+        napi_delete_async_work(env, async_work);
+        delete[] json;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_queue_async_work failed");
+        return nullptr;
+    }
+
+    return promise;
+}
+
 // ── Stats property descriptors ──
 
 napi_property_descriptor* getStatsDescriptors(size_t* count) {
@@ -396,6 +479,7 @@ napi_property_descriptor* getStatsDescriptors(size_t* count) {
         {"nativeGetWritingSpeedCurve", nullptr, NativeGetWritingSpeedCurve, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetCurrentWritingSpeed", nullptr, NativeGetCurrentWritingSpeed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRecordEditorChangeStats", nullptr, NativeRecordEditorChangeStats, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeRecordWritingActivitySegment", nullptr, NativeRecordWritingActivitySegment, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(desc) / sizeof(desc[0]);
     return desc;

@@ -309,6 +309,23 @@ class EditorViewModel(
     internal var initialWordCount = 0
     internal var sessionStartTime = System.currentTimeMillis()
 
+    /** Issue #981：真实前台写作计时；只上报已测片段，速度仍由 Core 计算。 */
+    internal val writingSessionTracker: WritingSessionTracker by lazy {
+        WritingSessionTracker { segment -> statsRepository.recordWritingActivitySegment(segment) }
+    }
+
+    internal fun onWritingForeground() {
+        writingSessionTracker.resume()
+    }
+
+    internal fun onWritingBackground() {
+        writingSessionTracker.pause("background")
+    }
+
+    internal fun closeWritingSession() {
+        writingSessionTracker.close("leftEditor")
+    }
+
     internal val saveMutex = Mutex()
 
     // #624 评论9：pendingSaveContent 已删除 — 保存期间继续输入只标记 dirty（session store）。

@@ -140,6 +140,55 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    // Issue #981：正文页 + 应用/窗口前台才允许累计写作计时。离开正文、切应用、
+    // 锁屏、最小化或隐藏窗口立即结束当前切片；回到前台只解除暂停，不补算离开时间。
+    readonly property bool writingSessionApplicationActive: Qt.application.state === Qt.ApplicationActive
+    readonly property bool writingSessionForeground: rootHasWorkspace
+        && appController.inWriting
+        && window.writingSessionApplicationActive
+        && window.active
+        && window.visibility !== Window.Minimized
+        && window.visibility !== Window.Hidden
+
+    function syncWritingSessionLifecycle() {
+        if (!editorBackend) return
+        if (!appController.inWriting) {
+            editorBackend.close_writing_session("leftEditor")
+            return
+        }
+        if (!window.writingSessionApplicationActive) {
+            editorBackend.pause_writing_session("background")
+        } else if (!window.active || window.visibility === Window.Minimized
+                || window.visibility === Window.Hidden) {
+            editorBackend.pause_writing_session("windowInactive")
+        } else {
+            editorBackend.resume_writing_session()
+        }
+    }
+
+    onActiveChanged: syncWritingSessionLifecycle()
+    onVisibilityChanged: syncWritingSessionLifecycle()
+    onWritingSessionForegroundChanged: syncWritingSessionLifecycle()
+
+    Connections {
+        target: appController
+        function onInWritingChanged() {
+            window.syncWritingSessionLifecycle()
+        }
+    }
+
+    // Issue #981：写作中每 30 秒把已经测量的前台切片交给 Core；没有输入也继续
+    // 计时（思考时间不能因为“最近没按键”被扣掉）。
+    Timer {
+        id: writingSessionHeartbeatTimer
+        interval: 30000
+        repeat: true
+        running: window.writingSessionForeground
+        onTriggered: {
+            if (editorBackend) editorBackend.writing_session_heartbeat()
+        }
+    }
+
     function preSyncBarrier() {
         manualSyncBarrierFailureReason = ""
         if (appController.inWriting && writingWorkspaceLoader.item) {

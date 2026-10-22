@@ -1,11 +1,11 @@
 // =============================================================================
-// StatsRecordPanel.qml — 统计页纪录面板（最多码字日 / 最快码字 / 最长会话 / 连续码字）
+// StatsRecordPanel.qml — 统计页纪录面板（最多码字日 / 单小时最多码字 / 最长会话 / 连续码字）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
 // 职责：复用的纪录数据列，渲染 Core Explorer 快照 selected.records：
 //   - 最多码字日：日期 + 字数（字）；
-//   - 最快码字：窗口起始日 + 60 分钟窗口字数（字/时）；
+//   - 单小时最多码字：窗口起始日 + 60 分钟窗口字数（字）；
 //   - 最长码字会话：开始日 + 时长（时/分）；
 //   - 连续码字：起止日期段 + 天数（天）。
 // 约束：
@@ -82,8 +82,8 @@ Kirigami.ShadowedRectangle {
                 "date": bestDay && bestDay.date ? root.formatDate(bestDay.date) : ""
             },
             {
-                "label": qsTr("最快码字"),
-                "value": fastestHour && fastestHour.value !== null && fastestHour.value !== undefined ? (root.formatNum(fastestHour.value) + " " + qsTr("字/时")) : "—",
+                "label": qsTr("单小时最多码字"),
+                "value": fastestHour && fastestHour.value !== null && fastestHour.value !== undefined ? (root.formatNum(fastestHour.value) + " " + qsTr("字")) : "—",
                 "date": fastestHour && fastestHour.date ? root.formatDate(fastestHour.date) : ""
             },
             {

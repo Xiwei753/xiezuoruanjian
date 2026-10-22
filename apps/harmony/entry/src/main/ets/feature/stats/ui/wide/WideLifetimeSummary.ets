@@ -27,6 +27,7 @@ import {
   formatDurationHuman,
   formatHistoryScope,
   formatInt,
+  formatMeasuredDuration,
   formatRecordValue
 } from '../StatsFormat'
 import { WritingStatsTrendChart } from '../WritingStatsTrendChart'
@@ -166,12 +167,14 @@ export struct WideLifetimeSummary {
           .fontColor($r('sys.color.font_secondary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(`平均 ${formatAveragePerHour(this.explorer.lifetime.averageCharsPerMinute)} 字/时 · 日均 ${formatAverage(this.explorer.lifetime.averageCharsPerDay)} 字/天`)
+        Text(`平均 ${formatAveragePerHour(this.explorer.lifetime.averageCharsPerHour)} 字/时 · 日均 ${formatAverage(this.explorer.lifetime.averageCharsPerDay)} 字/天`)
           .fontSize(14)
           .fontColor($r('sys.color.font_secondary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(`写作 ${formatInt(this.explorer.lifetime.writingDays)} 天 · 历时 ${formatInt(this.explorer.lifetime.elapsedCalendarDays)} 天`)
+        Text(this.explorer.lifetime.hasMeasuredTiming
+          ? `写作 ${formatInt(this.explorer.lifetime.writingDays)} 天 · 实际计时 ${formatMeasuredDuration(this.explorer.lifetime.measuredWritingSeconds)}`
+          : `写作 ${formatInt(this.explorer.lifetime.writingDays)} 天 · 仅统计新记录`)
           .fontSize(14)
           .fontColor($r('sys.color.font_tertiary'))
           .maxLines(1)
@@ -220,9 +223,9 @@ export struct WideLifetimeSummary {
           this.recordDateText(this.selected().records.bestDay),
           this.recordValueText(this.selected().records.bestDay, '字'))
         this.RecordRow(
-          '最快码字',
+          '单小时最多码字',
           this.recordDateText(this.selected().records.fastestHour),
-          this.recordValueText(this.selected().records.fastestHour, '字/时'))
+          this.recordValueText(this.selected().records.fastestHour, '字'))
         this.RecordRow(
           '最长码字',
           this.recordDateText(this.selected().records.longestSession),

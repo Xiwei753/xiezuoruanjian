@@ -22,7 +22,8 @@ impl super::WriterCore {
     /// 一次事件只让一个来源的「插入」字段非零，这样
     /// `net_delta_chars = inserted + pasted + ai_inserted - deleted` 才成立。
     ///
-    /// 不再接受 `duration_seconds` 和 `session_id` 参数：Core 从事件时间间隔自己算会话。
+    /// 不再接受 `duration_seconds` 和 `session_id` 参数：事件只提供字数事实，
+    /// 真实时长由平台端通过 [`Self::record_writing_activity_segment`] 上报。
     /// 设备身份从 Core 的 `current_device.json` 取。
     ///
     /// `event_id` / `occurred_at_ms` 由平台端为编辑事务固定并原样重发：同一
@@ -93,11 +94,43 @@ impl super::WriterCore {
             deleted,
             pasted,
             0,  // ai_inserted_chars
-            0,  // duration_seconds — Core 从事件时间间隔自己算
-            "", // session_id — Core 从事件时间间隔自己算
+            0,  // duration_seconds — 已弃用；真实时长只来自 writing activity segment
+            "", // session_id — 真实计时切片上报，不从事件时间差推算
         );
 
         self.get_stats_api().record_event(event)
+    }
+
+    /// 上报一段平台前台状态测得的写作计时切片。
+    ///
+    /// 平台端只传本机观察到的真实前台区间；设备身份、设备类别和本地日期
+    /// 都由 Core 补齐。Core 按 `event_id` 幂等去重，重发不会重复累计。
+    pub fn record_writing_activity_segment(
+        &self,
+        input: crate::api::WritingActivitySegmentInputDto,
+    ) -> Result<()> {
+        let platform = writer_platform_api::PlatformKind::from_str_name(&input.platform)
+            .unwrap_or(writer_platform_api::PlatformKind::Desktop);
+        let preferred_device_id = self.preferred_device_id();
+        let device_info = self.ensure_device_info(
+            platform.to_str_name(),
+            platform.default_device_class(),
+            preferred_device_id.as_deref(),
+        )?;
+        let segment = crate::writing_stats::WritingActivitySegment::new(
+            input.event_id,
+            &device_info.device_id,
+            platform,
+            &device_info.device_class,
+            &input.project_id,
+            &input.volume_id,
+            &input.chapter_id,
+            &input.session_id,
+            input.start_at_ms,
+            input.end_at_ms,
+            &input.pause_reason,
+        )?;
+        self.get_stats_api().record_activity_segment(segment)
     }
 
     pub fn get_writing_stats_summary(&self, start_date: &str, end_date: &str) -> Result<Value> {

@@ -279,8 +279,9 @@ fn validate_group_segment(value: &str) -> bool {
         && !value.contains('\\')
 }
 
-/// 从相对 App 根路径解析统计事件文件所属的设备分区：
-/// 仅认可 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl`。
+/// 从相对 App 根路径解析统计文件所属的设备分区：
+/// 仅认可 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl` 与同目录下的
+/// `YYYY-MM-DD.sessions.jsonl`（真实计时切片）。
 pub(crate) fn stats_device_id_for_event_path(rel_path: &str) -> Option<String> {
     let path = rel_path.replace('\\', "/");
     let rest = path.strip_prefix("stats/events/")?;
@@ -288,7 +289,9 @@ pub(crate) fn stats_device_id_for_event_path(rel_path: &str) -> Option<String> {
     if !validate_group_segment(device_id) {
         return None;
     }
-    let date = file_name.strip_suffix(".events.jsonl")?;
+    let date = file_name
+        .strip_suffix(".events.jsonl")
+        .or_else(|| file_name.strip_suffix(".sessions.jsonl"))?;
     if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
         return None;
     }

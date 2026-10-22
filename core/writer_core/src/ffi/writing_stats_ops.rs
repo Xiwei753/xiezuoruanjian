@@ -153,6 +153,28 @@ pub unsafe extern "C" fn writer_core_record_editor_change_stats(event_json: *con
     .is_ok()
 }
 
+/// 上报一段平台已测量的前台写作计时切片。
+///
+/// # Safety
+/// `segment_json` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串，内容为
+/// [`crate::api::WritingActivitySegmentInputDto`] 的 JSON。返回 false 表示解析或落盘失败。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_record_writing_activity_segment(
+    segment_json: *const c_char,
+) -> bool {
+    let json_str = match c_str_to_rust(segment_json) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    with_app_service(|svc| {
+        let input: crate::api::WritingActivitySegmentInputDto = serde_json::from_str(&json_str)
+            .map_err(|e| format!("invalid writing activity segment input: {}", e))?;
+        svc.record_writing_activity_segment(input)
+            .map_err(|e| format!("{}", e))
+    })
+    .is_ok()
+}
+
 /// 单作品写作档案（#934）：开写日期、累计人工码字、单日最高纪录、写作天数。
 ///
 /// # Safety

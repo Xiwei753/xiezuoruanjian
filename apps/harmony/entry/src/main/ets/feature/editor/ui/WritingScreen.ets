@@ -18,8 +18,10 @@ import {
 } from '../session/WritingWorkflowCoordinator'
 import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
+import { WritingSessionTracker } from '../stats/WritingSessionTracker'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
+import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
@@ -80,6 +82,36 @@ const WRITING_SPEED_WINDOW_SECONDS: number = 60
 
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // 返回入口和标题改由 NavDestination 原生标题栏承载。
+
+// Issue #981：写作计时生命周期观察者。ArkTS 不允许把接口实现写成无类型对象字面量，
+// 这里用显式类承载同一组前后台/焦点回调。
+class WritingSessionLifecycleObserver implements LifecycleObserver {
+  private tracker: WritingSessionTracker
+
+  constructor(tracker: WritingSessionTracker) {
+    this.tracker = tracker
+  }
+
+  onForeground(): void {
+    this.tracker.resume()
+  }
+
+  onBackground(): void {
+    this.tracker.pause('background')
+  }
+
+  onFocus(): void {
+    this.tracker.resume()
+  }
+
+  onBlur(): void {
+    this.tracker.pause('windowInactive')
+  }
+
+  onDestroy(): void {
+    this.tracker.close('close')
+  }
+}
 
 @Component
 export struct WritingScreen {
@@ -224,6 +256,9 @@ export struct WritingScreen {
   private shareService: HarmonyShareService = HarmonyShareService.getInstance()
   // Issue #829 评论 #5995146525：写作统计上报队列（串行、异步、与编辑事务同源）。
   private editorStatsQueue: EditorStatsQueue = new EditorStatsQueue(this.bridge, 'harmony')
+  // Issue #981：真实前台写作计时；只上报已测片段，字/时仍由 Core 计算。
+  private writingSessionTracker: WritingSessionTracker = new WritingSessionTracker(this.bridge, 'harmony')
+  private writingSessionLifecycleObserver: LifecycleObserver | null = null
   // Issue #920 A：写作流程协调器。页面只把事件交给它，并映射它产出的显示状态。
   private writingTextProvider: WritingTextProvider = (key: WritingTextKey): string => this.resolveWritingText(key)
   private writingWorkflow: WritingWorkflowCoordinator = new WritingWorkflowCoordinator(
@@ -260,6 +295,8 @@ export struct WritingScreen {
       this.refreshClockText()
       // Issue #829 评论2第2项：「字/时」展示的是分钟级速度折算，必须跟着时间走。
       this.refreshWritingStatusData().catch(() => {})
+      // Issue #981：写作中每约 30 秒落一段已测时间，异常退出最多丢一个片段。
+      this.writingSessionTracker.heartbeat()
     }, STATUS_CLOCK_INTERVAL_MS)
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
@@ -356,6 +393,11 @@ export struct WritingScreen {
       this.lifecycle.isForeground()
     )
 
+    // Issue #981：窗口前后台/焦点变化立即结算计时片段；回到前台只解灰，不补算离开期间。
+    const sessionObserver: LifecycleObserver = new WritingSessionLifecycleObserver(this.writingSessionTracker)
+    this.writingSessionLifecycleObserver = sessionObserver
+    this.lifecycle.addObserver(sessionObserver)
+
     // Issue #825 复核8第 3 点：订阅 LocalSettings 落盘广播，让宽屏设置浮层的改动实时回流到本页。
     this.unsubscribeLocalSettings = LocalSettingsStore.getInstance().subscribe(
       (latest: LocalSettings): void => { this.applyPublishedSettings(latest) }
@@ -395,6 +437,16 @@ export struct WritingScreen {
 
     const snap = update.snapshot
     if (snap !== null) {
+      const edit = update.editResult
+      if (edit !== null
+        && (edit.cause === EditorTransactionCause.Typing
+          || edit.cause === EditorTransactionCause.TypingCommit
+          || edit.cause === EditorTransactionCause.ImeComposition
+          || edit.cause === EditorTransactionCause.Delete)
+        && (edit.contentDelta.insertedChars > 0 || edit.contentDelta.deletedChars > 0)) {
+        // 第一次真人编辑才开始计时；纯光标/选区/程序化写入不建立会话。
+        this.writingSessionTracker.onHumanEdit(this.projectId, this.volumeId, this.chapterId)
+      }
       this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap, update.editResult)
       // Issue #879：把 snapshot + editResult + sessionId 保存在一个 @State presentationUpdate 中。
       const layoutSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(

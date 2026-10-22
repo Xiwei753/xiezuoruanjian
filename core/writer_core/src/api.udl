@@ -1301,6 +1301,11 @@ interface WriterAppService {
     [Throws=WriterError]
     void record_editor_change_stats(EditorChangeStatsInputDto input);
 
+    // 上报一段平台已测量的前台写作计时切片。平台端只上报真实前台区间，
+    // Core 负责设备身份、本地日期切分和按 eventId 幂等去重。
+    [Throws=WriterError]
+    void record_writing_activity_segment(WritingActivitySegmentInputDto input);
+
     [Throws=WriterError]
     boolean ensure_device_info(string platform, string device_class);
 
@@ -1580,7 +1585,8 @@ enum CorrectionEntityNameKindDto {
 // 只带 inserted/deleted 不带 pasted：Paste 记哪个字段由 Core 从 cause 推出。
 // 不带 device_id：设备身份是 Core 的持久化事实，由 Core 自己读/建。平台端
 // 构造这个入参时页面设置往往还没加载完，传进来的多半是空串或占位值。
-// 不带 duration_seconds / session_id：Core 从事件时间间隔自己算会话和活跃时间。
+// 不带 duration_seconds / session_id：事件只回答字数；真实时长由平台端通过
+// record_writing_activity_segment 上报已测量的前台计时切片。
 dictionary EditorChangeStatsInputDto {
     string platform;
     string project_id;
@@ -1595,6 +1601,26 @@ dictionary EditorChangeStatsInputDto {
     // 事件发生时间（Unix 毫秒），重发保留原值，Core 按它算业务日历日；
     // 0 表示老客户端，Core 用当前时间。
     i64 occurred_at_ms = 0;
+};
+
+// 平台端上报的一段已测量前台写作计时切片。
+// 平台端用单调时钟测出真实前台区间；device_id / device_class / local_date
+// 由 Core 补齐，端侧不传。同一 eventId 重发只落一次，不重复计时。
+dictionary WritingActivitySegmentInputDto {
+    string platform;
+    string project_id;
+    string volume_id;
+    string chapter_id;
+    // 本次前台写作会话 ID；暂停后恢复仍沿用同一会话。
+    string session_id;
+    // 切片墙钟起点/终点（Unix 毫秒）。
+    i64 start_at_ms;
+    i64 end_at_ms;
+    // 结束原因：background / windowInactive / leftEditor / manual / lock /
+    // close / heartbeat 等。
+    string pause_reason = "";
+    // 平台固定的幂等 ID；空串时 Core 生成 UUID（无法去重）。
+    string event_id = "";
 };
 
 // ── Editor V2 Kernel DTOs ──

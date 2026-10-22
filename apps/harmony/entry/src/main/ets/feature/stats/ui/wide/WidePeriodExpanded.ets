@@ -24,6 +24,7 @@ import {
   formatDurationHuman,
   formatHistoryScope,
   formatInt,
+  formatMeasuredDuration,
   formatRecordValue
 } from '../StatsFormat'
 import { WritingStatsTrendChart } from '../WritingStatsTrendChart'
@@ -137,7 +138,7 @@ export struct WidePeriodExpanded {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-      Text(`${formatAveragePerHour(this.selected.averageCharsPerMinute)} 字/时`)
+      Text(`${formatAveragePerHour(this.selected.averageCharsPerHour)} 字/时`)
         .fontSize(16)
         .fontColor($r('sys.color.font_secondary'))
         .margin({ top: 12 })
@@ -147,7 +148,9 @@ export struct WidePeriodExpanded {
         .fontColor($r('sys.color.font_secondary'))
         .margin({ top: 8 })
 
-      Text(`写作 ${formatInt(this.selected.writingDays)} 天`)
+      Text(this.selected.hasMeasuredTiming
+        ? `写作 ${formatInt(this.selected.writingDays)} 天 · 实际计时 ${formatMeasuredDuration(this.selected.measuredWritingSeconds)}`
+        : `写作 ${formatInt(this.selected.writingDays)} 天 · 仅统计新记录`)
         .fontSize(14)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: 8 })
@@ -182,7 +185,7 @@ export struct WidePeriodExpanded {
         .margin({ bottom: 10 })
 
       this.RecordRow('最多码字', this.recordValueText(this.selected.records.bestDay, '字'))
-      this.RecordRow('最快码字', this.recordValueText(this.selected.records.fastestHour, '字/时'))
+      this.RecordRow('单小时最多码字', this.recordValueText(this.selected.records.fastestHour, '字'))
       this.RecordRow('最长码字', this.recordDurationText(this.selected.records.longestSession))
       this.RecordRow('连续码字', this.recordValueText(this.selected.records.longestStreak, '天'))
 

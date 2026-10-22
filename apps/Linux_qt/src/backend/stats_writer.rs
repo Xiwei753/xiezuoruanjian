@@ -35,18 +35,23 @@ use std::sync::mpsc::{self, Sender};
 use writer_core::editor::EditorTransactionCause;
 use writer_core::storage::git_repo_layout::GitRepoLayout;
 
-/// UI 线程构造的写统计命令。只带编辑事实，不带 QObject/QML 引用。
-pub(crate) struct StatsWriteCommand {
-    pub project_id: String,
-    pub volume_id: String,
-    pub chapter_id: String,
-    pub cause: EditorTransactionCause,
-    pub inserted_chars: u32,
-    pub deleted_chars: u32,
-    /// Issue #935 复核：编辑事实首次入队就固定稳定身份与发生时间，
-    /// 写盘失败重发时原样带回，避免每次重发都被 Core 当成新事件。
-    pub event_id: String,
-    pub occurred_at_ms: i64,
+/// UI 线程构造的写统计命令。只带统计事实，不带 QObject/QML 引用。
+pub(crate) enum StatsWriteCommand {
+    /// 一次编辑事务（字数事实）。
+    Editor {
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        cause: EditorTransactionCause,
+        inserted_chars: u32,
+        deleted_chars: u32,
+        /// Issue #935 复核：编辑事实首次入队就固定稳定身份与发生时间，
+        /// 写盘失败重发时原样带回，避免每次重发都被 Core 当成新事件。
+        event_id: String,
+        occurred_at_ms: i64,
+    },
+    /// Issue #981：一段已经测量完成的前台写作时长。
+    ActivitySegment(writer_core::api::WritingActivitySegmentInputDto),
 }
 
 /// 统计查询完成回调：worker 在 worker thread 上调用，交回 `(request_id, 结果)`。
@@ -96,29 +101,50 @@ enum StatsWriterMessage {
     },
 }
 
-/// 把一条编辑事实写进 Core 统计；失败时记录日志并保留原始命令供补写。
-fn try_record_editor_change_stats(
+/// 把一条统计命令写进 Core；失败时记录日志并保留原始命令供补写。
+fn try_record_stats(
     api: &writer_core::api::WriterCoreApi,
     cmd: &StatsWriteCommand,
 ) -> Result<(), String> {
-    crate::writing_bridge::record_editor_change_stats(
-        api,
-        &cmd.project_id,
-        &cmd.volume_id,
-        &cmd.chapter_id,
-        cmd.cause,
-        cmd.inserted_chars,
-        cmd.deleted_chars,
-        &cmd.event_id,
-        cmd.occurred_at_ms,
-    )
-    .map_err(|e| {
-        log::error!(
-            "stats-writer: record_editor_change_stats failed (event_id={}): {e}",
-            cmd.event_id
-        );
-        format!("record_editor_change_stats: {e}")
-    })
+    match cmd {
+        StatsWriteCommand::Editor {
+            project_id,
+            volume_id,
+            chapter_id,
+            cause,
+            inserted_chars,
+            deleted_chars,
+            event_id,
+            occurred_at_ms,
+        } => crate::writing_bridge::record_editor_change_stats(
+            api,
+            project_id,
+            volume_id,
+            chapter_id,
+            *cause,
+            *inserted_chars,
+            *deleted_chars,
+            event_id,
+            *occurred_at_ms,
+        )
+        .map_err(|e| {
+            log::error!(
+                "stats-writer: record_editor_change_stats failed (event_id={}): {e}",
+                event_id
+            );
+            format!("record_editor_change_stats: {e}")
+        }),
+        StatsWriteCommand::ActivitySegment(segment) => {
+            let input = segment.clone();
+            crate::writing_bridge::record_writing_activity_segment(api, input).map_err(|e| {
+                log::error!(
+                    "stats-writer: record_writing_activity_segment failed (event_id={}): {e}",
+                    segment.event_id
+                );
+                format!("record_writing_activity_segment: {e}")
+            })
+        }
+    }
 }
 
 /// 按入队顺序重放待补写命令，返回仍未成功的数量。
@@ -131,7 +157,7 @@ fn flush_pending_records(
     }
     let mut still_failed = Vec::new();
     for cmd in pending_records.drain(..) {
-        if try_record_editor_change_stats(api, &cmd).is_err() {
+        if try_record_stats(api, &cmd).is_err() {
             still_failed.push(cmd);
         }
     }
@@ -188,7 +214,7 @@ impl StatsWriterHandle {
                 for msg in receiver.iter() {
                     match msg {
                         StatsWriterMessage::Record(cmd) => {
-                            if try_record_editor_change_stats(&api, &cmd).is_err() {
+                            if try_record_stats(&api, &cmd).is_err() {
                                 pending_records.push(cmd);
                             }
                         }

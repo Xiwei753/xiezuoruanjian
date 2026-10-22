@@ -9,8 +9,13 @@
 //! stats/
 //!   events/
 //!     <origin_device_id>/
-//!       2024-01-01.events.jsonl    # 原始事件（JSONL 格式，一天一个文件）
+//!       2024-01-01.events.jsonl     # 原始输入事件（一天一个文件）
+//!       2024-01-01.sessions.jsonl   # 已测量的前台写作计时切片（一天一个文件）
 //! ```
+//!
+//! 两类文件同属该设备的同步分区，但事实含义不同：`.events.jsonl` 只回答
+//! 「输入了多少字」，`.sessions.jsonl` 只回答「真实计时了多久」。读取时各自
+//! 按 `event_id` 去重，绝不把事件时间差反推成会话时长。
 //!
 //! - 事件按 UTC 日期分文件存储；业务日历日（每日统计分桶、「今天」查询）走
 //!   [`crate::writing_stats::calendar`] 模块，事件中的 `local_date` 保持事件
@@ -21,7 +26,7 @@
 
 use crate::error::Result;
 use crate::writing_stats::calendar;
-use crate::writing_stats::WritingInputEvent;
+use crate::writing_stats::{WritingActivitySegment, WritingInputEvent};
 use chrono::NaiveDate;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -86,6 +91,12 @@ impl StatsStore {
             .join(format!("{date}.events.jsonl"))
     }
 
+    fn session_file_path(&self, origin: &str, date: &str) -> PathBuf {
+        self.events_root()
+            .join(origin)
+            .join(format!("{date}.sessions.jsonl"))
+    }
+
     /// 仅读取本机设备标识，不创建任何设备信息。
     pub fn load_origin_device_id(&self) -> Option<String> {
         match crate::settings::load_device_info(&self.app_data_root) {
@@ -131,13 +142,19 @@ impl StatsStore {
         }
     }
 
-    /// 已存在事件文件的来源设备分区，按名称排序。
+    /// 已存在统计文件（输入事件或计时切片）的来源设备分区，按名称排序。
     pub fn list_event_origins(&self) -> Result<Vec<String>> {
         let mut origins: Vec<String> = self
             .list_event_files()?
             .into_iter()
             .map(|file| file.origin)
+            .chain(
+                self.list_session_files()?
+                    .into_iter()
+                    .map(|file| file.origin),
+            )
             .collect();
+        origins.sort();
         origins.dedup();
         Ok(origins)
     }
@@ -166,7 +183,7 @@ impl StatsStore {
                 Err(error) => {
                     // 写入失败后丢弃该日期的 ID 缓存：重试时以磁盘真值重新判重，
                     // 不能把「调用过写入」当成「持久化完成」而漏字。
-                    self.invalidate_written_ids(&origin, &date);
+                    self.invalidate_written_ids(&format!("{origin}/{date}"));
                     return Err(error);
                 }
             }
@@ -223,7 +240,7 @@ impl StatsStore {
         let mut cache = self.lock_written_ids();
         let cache_key = format!("{origin}/{date}");
         if !cache.contains_key(&cache_key) {
-            let ids = self.scan_event_ids(origin, date)?;
+            let ids = self.scan_ids(&self.event_file_path(origin, date))?;
             cache.insert(cache_key.clone(), ids);
         }
         let Some(ids) = cache.get(&cache_key) else {
@@ -246,10 +263,10 @@ impl StatsStore {
         Ok(fresh)
     }
 
-    /// 丢弃某个 `origin/date` 的 ID 缓存，让下一次写入以磁盘真值重建。
-    fn invalidate_written_ids(&self, origin: &str, date: &str) {
+    /// 丢弃某个缓存键的 ID 缓存，让下一次写入以磁盘真值重建。
+    fn invalidate_written_ids(&self, cache_key: &str) {
         let mut cache = self.lock_written_ids();
-        cache.remove(&format!("{origin}/{date}"));
+        cache.remove(cache_key);
     }
 
     /// 事件 ID 缓存只是幂等去重的加速器，磁盘始终是事实源：
@@ -263,6 +280,115 @@ impl StatsStore {
     /// 追加单个事件。
     pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {
         self.record_events(vec![event]).map(|_| ())
+    }
+
+    /// 追加一批已测量的前台写作计时切片，只写入本机来源分区。
+    ///
+    /// 切片先按写作设备本地日期切开，再按切片起点的 UTC 日期落到
+    /// `.sessions.jsonl`。派生 ID 由切片原始 `event_id` 与本地日期确定，
+    /// 同一批数据重发时不会重复累计时长。
+    pub fn record_activity_segments(
+        &self,
+        segments: Vec<WritingActivitySegment>,
+    ) -> Result<usize> {
+        if segments.is_empty() {
+            return Ok(0);
+        }
+        let origin = self.resolve_origin_device_id()?;
+        let mut by_date: BTreeMap<String, Vec<WritingActivitySegment>> = BTreeMap::new();
+        for segment in segments {
+            for slice in segment.split_by_local_date()? {
+                let date = self.timestamp_to_date(slice.start_at_ms)?;
+                by_date.entry(date).or_default().push(slice);
+            }
+        }
+        if by_date.is_empty() {
+            return Ok(0);
+        }
+
+        let partition_dir = self.events_root().join(&origin);
+        fs::create_dir_all(&partition_dir)?;
+
+        let mut written = 0usize;
+        for (date, segments) in by_date {
+            match self.append_confirmed_segments(&origin, &date, segments) {
+                Ok(count) => written += count,
+                Err(error) => {
+                    self.invalidate_written_ids(&format!("sessions:{origin}/{date}"));
+                    return Err(error);
+                }
+            }
+        }
+        Ok(written)
+    }
+
+    /// 追加一批新计时切片，写入确认后才登记 `event_id`。
+    fn append_confirmed_segments(
+        &self,
+        origin: &str,
+        date: &str,
+        segments: Vec<WritingActivitySegment>,
+    ) -> Result<usize> {
+        let fresh = self.select_fresh_segments(origin, date, segments)?;
+        if fresh.is_empty() {
+            return Ok(0);
+        }
+        let mut buffer = String::new();
+        for segment in &fresh {
+            buffer.push_str(&serde_json::to_string(segment)?);
+            buffer.push('\n');
+        }
+        {
+            let file_path = self.session_file_path(origin, date);
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file_path)?;
+            file.write_all(buffer.as_bytes())?;
+        }
+
+        let mut cache = self.lock_written_ids();
+        let ids = cache
+            .entry(format!("sessions:{origin}/{date}"))
+            .or_default();
+        for segment in &fresh {
+            if !segment.event_id.is_empty() {
+                ids.insert(segment.event_id.clone());
+            }
+        }
+        Ok(fresh.len())
+    }
+
+    fn select_fresh_segments(
+        &self,
+        origin: &str,
+        date: &str,
+        segments: Vec<WritingActivitySegment>,
+    ) -> Result<Vec<WritingActivitySegment>> {
+        let mut cache = self.lock_written_ids();
+        let cache_key = format!("sessions:{origin}/{date}");
+        if !cache.contains_key(&cache_key) {
+            let ids = self.scan_ids(&self.session_file_path(origin, date))?;
+            cache.insert(cache_key.clone(), ids);
+        }
+        let Some(ids) = cache.get(&cache_key) else {
+            return Ok(Vec::new());
+        };
+
+        let mut batch_ids: HashSet<String> = HashSet::new();
+        let mut fresh = Vec::new();
+        for segment in segments {
+            if segment.event_id.is_empty() {
+                fresh.push(segment);
+                continue;
+            }
+            if ids.contains(&segment.event_id) || batch_ids.contains(&segment.event_id) {
+                continue;
+            }
+            batch_ids.insert(segment.event_id.clone());
+            fresh.push(segment);
+        }
+        Ok(fresh)
     }
 
     /// 读取某个 UTC 日期在全部来源分区中的事件（按 `event_id` 去重）。
@@ -279,6 +405,48 @@ impl StatsStore {
     pub fn load_all_events(&self) -> Result<Vec<WritingInputEvent>> {
         let files = self.list_event_files()?;
         self.load_merged_files(files)
+    }
+
+    /// 读取全部来源分区的已测量写作计时切片（按 `event_id` 去重）。
+    pub fn load_all_segments(&self) -> Result<Vec<WritingActivitySegment>> {
+        let files = self.list_session_files()?;
+        self.load_merged_segments(files)
+    }
+
+    /// 读取业务日期 `[start_date, end_date]`（含两端）内的计时切片。
+    ///
+    /// 切片在写入时已按本地午夜切开，所以按切片的 `local_date` 过滤即可；
+    /// 仍按 UTC 文件日期前后各扩一天，覆盖时区差异。
+    pub fn load_segments_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<WritingActivitySegment>> {
+        let start = calendar::parse_date(start_date)
+            .map_err(|e| crate::Error::Other(format!("Invalid start date: {e}")))?;
+        let end = calendar::parse_date(end_date)
+            .map_err(|e| crate::Error::Other(format!("Invalid end date: {e}")))?;
+        if start > end {
+            return Ok(Vec::new());
+        }
+        let utc_start = start.pred_opt().unwrap_or(start);
+        let utc_end = end.succ_opt().unwrap_or(end);
+
+        let files: Vec<EventFile> = self
+            .list_session_files()?
+            .into_iter()
+            .filter(|file| {
+                NaiveDate::parse_from_str(&file.date, "%Y-%m-%d")
+                    .map(|date| date >= utc_start && date <= utc_end)
+                    .unwrap_or(false)
+            })
+            .collect();
+        let mut segments = self.load_merged_segments(files)?;
+        segments.retain(|segment| {
+            let date = segment.business_date();
+            !date.is_empty() && date.as_str() >= start_date && date.as_str() <= end_date
+        });
+        Ok(segments)
     }
 
     /// 读取指定作品的全部事件。
@@ -351,7 +519,20 @@ impl StatsStore {
         }
         let mut files = Vec::new();
         for origin in list_origin_dirs(&root)? {
-            files.extend(list_origin_event_files(&root, &origin)?);
+            files.extend(list_origin_files(&root, &origin, ".events.jsonl")?);
+        }
+        Ok(files)
+    }
+
+    /// 扫描事件库里的全部 `<origin>/<date>.sessions.jsonl` 文件。
+    fn list_session_files(&self) -> Result<Vec<EventFile>> {
+        let root = self.events_root();
+        if !root.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut files = Vec::new();
+        for origin in list_origin_dirs(&root)? {
+            files.extend(list_origin_files(&root, &origin, ".sessions.jsonl")?);
         }
         Ok(files)
     }
@@ -434,9 +615,52 @@ impl StatsStore {
         Ok(())
     }
 
+    /// 严格读取单个计时切片文件（任何一行解析失败都报错）。
+    fn parse_session_file(&self, file: &EventFile) -> Result<Vec<WritingActivitySegment>> {
+        let handle = File::open(&file.path)?;
+        let reader = BufReader::new(handle);
+        let mut segments = Vec::new();
+        for (idx, line) in reader.lines().enumerate() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let segment: WritingActivitySegment =
+                serde_json::from_str(trimmed).map_err(|e| {
+                    crate::Error::Other(format!(
+                        "Corrupt writing activity segment at stats/events/{}/{}.sessions.jsonl:{}: {}",
+                        file.origin,
+                        file.date,
+                        idx + 1,
+                        e
+                    ))
+                })?;
+            segments.push(segment);
+        }
+        Ok(segments)
+    }
+
+    /// 合并多个分区的计时切片并按 `event_id` 去重。
+    fn load_merged_segments(
+        &self,
+        mut files: Vec<EventFile>,
+    ) -> Result<Vec<WritingActivitySegment>> {
+        files.sort_by(|a, b| a.origin.cmp(&b.origin).then_with(|| a.date.cmp(&b.date)));
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut merged = Vec::new();
+        for file in &files {
+            for segment in self.parse_session_file(file)? {
+                if segment.event_id.is_empty() || seen.insert(segment.event_id.clone()) {
+                    merged.push(segment);
+                }
+            }
+        }
+        Ok(merged)
+    }
+
     /// best-effort 扫描已写入的 event_id，损坏行跳过。
-    fn scan_event_ids(&self, origin: &str, date: &str) -> Result<HashSet<String>> {
-        let path = self.event_file_path(origin, date);
+    fn scan_ids(&self, path: &Path) -> Result<HashSet<String>> {
         let mut ids = HashSet::new();
         if !path.is_file() {
             return Ok(ids);
@@ -519,8 +743,8 @@ fn list_origin_dirs(root: &Path) -> Result<Vec<String>> {
     Ok(origins)
 }
 
-/// 单个来源分区内合法的 `<date>.events.jsonl` 文件（按日期升序）。
-fn list_origin_event_files(root: &Path, origin: &str) -> Result<Vec<EventFile>> {
+/// 单个来源分区内合法的 `<date><suffix>` 文件（按日期升序）。
+fn list_origin_files(root: &Path, origin: &str, suffix: &str) -> Result<Vec<EventFile>> {
     let dir = root.join(origin);
     let mut dates: Vec<(String, PathBuf)> = Vec::new();
     for entry in fs::read_dir(&dir)? {
@@ -529,7 +753,7 @@ fn list_origin_event_files(root: &Path, origin: &str) -> Result<Vec<EventFile>> 
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(date) = name.strip_suffix(".events.jsonl") else {
+        let Some(date) = name.strip_suffix(suffix) else {
             continue;
         };
         if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {

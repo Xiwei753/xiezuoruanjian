@@ -4,6 +4,7 @@ import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
+import { WritingActivitySegmentInput } from './dto/StatsDtos'
 
 export interface IWriterCoreBridge {
   // App State 查询
@@ -94,6 +95,8 @@ export interface IWriterCoreBridge {
   // Issue #829 评论5：按编辑事务上报写作统计。透传 cause + contentDelta，
   // source 分类由 Core 决定，端侧不要自己拼 source 字符串。
   recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>>
+  // Issue #981：上报已由平台单调时钟测量完成的前台写作切片。
+  recordWritingActivitySegment(input: WritingActivitySegmentInput): Promise<ResultEnvelope<boolean>>
   calculateWordCount(text: string): Promise<number>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
 

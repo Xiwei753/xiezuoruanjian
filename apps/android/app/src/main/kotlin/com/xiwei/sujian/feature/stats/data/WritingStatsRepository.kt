@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import uniffi.writer_core.EditorTransactionCauseDto
+import uniffi.writer_core.WritingActivitySegmentInputDto
 
 /**
  * WritingStatsRepository — 统计仓库层
@@ -46,6 +47,9 @@ class WritingStatsRepository(
     /** #843：writer actor 串行命令。 */
     sealed interface StatsWriteCommand {
         data class Record(val seq: Long, val event: PendingWritingEvent) : StatsWriteCommand
+
+        /** Issue #981：已测量的前台写作计时片段，与编辑事件共用同一串行 actor。 */
+        data class ActivitySegment(val seq: Long, val segment: WritingActivitySegmentInputDto) : StatsWriteCommand
 
         /**
          * #843 复核评论 6045538399：查询 barrier — actor 处理到 Barrier 时，它前面的 Record 已全部执行完。
@@ -118,6 +122,14 @@ class WritingStatsRepository(
                         val clean = firstFailedSeq == 0L || firstFailedSeq > cmd.barrierSeq
                         cmd.ack.complete(clean)
                     }
+                    is StatsWriteCommand.ActivitySegment -> {
+                        val result = statsBridge.recordWritingActivitySegment(cmd.segment)
+                        if (result is BridgeResult.Success) {
+                            markChanged()
+                        } else if (firstFailedSeq == 0L) {
+                            firstFailedSeq = cmd.seq
+                        }
+                    }
                 }
             }
         }
@@ -181,6 +193,13 @@ class WritingStatsRepository(
                     ),
                 ),
             )
+        }
+    }
+
+    /** Issue #981：计时片段也走同一 actor，保证与编辑事件同序，查询 barrier 覆盖它。 */
+    fun recordWritingActivitySegment(segment: WritingActivitySegmentInputDto) {
+        synchronized(enqueueLock) {
+            commands.trySend(StatsWriteCommand.ActivitySegment(++seqCounter, segment))
         }
     }
 

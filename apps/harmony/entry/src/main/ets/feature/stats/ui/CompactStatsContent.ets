@@ -1,7 +1,7 @@
 // CompactStatsContent — 窄屏统计正文（Issue #945，按「手机统计七天 / 手机统计」手稿）。
 //
 // 从上到下：顶部时间范围切换（7 天 / 30 天 / 半年 / 生涯 / 自选）→ 大号总人工码字 +
-// 日期区间 → 纪录 2×2（最多 / 最快 / 最长 / 连续）→ 真实字数折线图 → 码字日历热力图
+// 日期区间 → 纪录 2×2（最多 / 单小时最多 / 最长 / 连续）→ 真实字数折线图 → 码字日历热力图
 // （#956，同一年每日真值 + 年份切换）。
 // 内容可垂直滚动并给 HDS 悬浮底栏留空间。生涯与近七天只是同一页面换快照，
 // 不另建导航栈。
@@ -17,7 +17,7 @@ import {
   COMPACT_CARD_TITLE_FONT_VP,
   COMPACT_LIST_BOTTOM_INSET_VP
 } from '../../../ui/theme/LayoutTokens'
-import { EMPTY_STATS_EXPLORER, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatHistoryScope, formatInt, formatRecordValue } from './StatsFormat'
+import { EMPTY_STATS_EXPLORER, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatHistoryScope, formatInt, formatMeasuredDuration, formatRecordValue } from './StatsFormat'
 import { WritingStatsCalendarHeatmap } from './WritingStatsCalendarHeatmap'
 import { WritingStatsTrendChart } from './WritingStatsTrendChart'
 
@@ -207,7 +207,9 @@ export struct CompactStatsContent {
           .fontSize(14)
           .fontColor($r('sys.color.font_secondary'))
           .layoutWeight(1)
-        Text(`陪伴 ${formatInt(this.explorer.lifetime.elapsedCalendarDays)} 天`)
+        Text(this.selected().hasMeasuredTiming
+          ? `陪伴 ${formatInt(this.explorer.lifetime.elapsedCalendarDays)} 天 · 实际计时 ${formatMeasuredDuration(this.selected().measuredWritingSeconds)}`
+          : `陪伴 ${formatInt(this.explorer.lifetime.elapsedCalendarDays)} 天 · 仅统计新记录`)
           .fontSize(14)
           .fontColor($r('sys.color.font_secondary'))
       }
@@ -224,7 +226,7 @@ export struct CompactStatsContent {
     .margin({ bottom: COMPACT_CARD_PADDING_VP })
   }
 
-  /** 纪录 2×2：最多码字 / 最快码字 / 最长码字 / 连续码字。 */
+  /** 纪录 2×2：最多码字 / 单小时最多码字 / 最长码字 / 连续码字。 */
   @Builder
   RecordsSection() {
     Column() {
@@ -236,8 +238,8 @@ export struct CompactStatsContent {
         )
         Divider().vertical(true).height(56).color($r('sys.color.comp_divider'))
         this.RecordCell(
-          '最快码字',
-          this.recordValueText(this.selected().records.fastestHour, '字/时'),
+          '单小时最多码字',
+          this.recordValueText(this.selected().records.fastestHour, '字'),
           this.recordDateText(this.selected().records.fastestHour)
         )
       }

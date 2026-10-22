@@ -1,7 +1,7 @@
 use crate::writing_stats::api::StatsApi;
 use crate::writing_stats::projection::{project_events, CurrentWritingSpeed};
 use crate::writing_stats::store::StatsStore;
-use crate::writing_stats::{DateRange, EventSource, Platform, WritingInputEvent};
+use crate::writing_stats::{DateRange, EventSource, Platform, WritingActivitySegment, WritingInputEvent};
 use tempfile::tempdir;
 
 #[test]
@@ -1416,7 +1416,7 @@ fn test_explorer_empty_history_lifetime() {
     assert_eq!(snapshot.lifetime.writing_days, 0);
     // 完全空生涯没有「首次输入日」：生涯日均仍是 null，不是 0。
     assert_eq!(snapshot.lifetime.average_chars_per_day, None);
-    assert_eq!(snapshot.lifetime.average_chars_per_minute, None);
+    assert_eq!(snapshot.lifetime.average_chars_per_hour, None);
 
     // 空历史：range 退化成 今天..今天，趋势为空，纪录全 null，不用 0 冒充。
     assert_eq!(snapshot.selected.preset, "lifetime");
@@ -1452,11 +1452,11 @@ fn test_explorer_empty_history_lifetime() {
         assert_eq!(card.total_human_typed_chars, 0);
         // 范围有效但没有输入：区间日均是 0，不是 null。
         assert_eq!(card.average_chars_per_day, Some(0.0));
-        assert_eq!(card.average_chars_per_minute, None);
+        assert_eq!(card.average_chars_per_hour, None);
     }
     // 选中生涯的区间退化成 今天..今天，同样按 1 个自然日算：0 / 1 = 0。
     assert_eq!(snapshot.selected.average_chars_per_day, Some(0.0));
-    assert_eq!(snapshot.selected.average_chars_per_minute, None);
+    assert_eq!(snapshot.selected.average_chars_per_hour, None);
     let custom = &snapshot.period_cards[3];
     assert!(!custom.has_selection);
     assert!(custom.range.is_none());
@@ -1573,7 +1573,7 @@ fn test_explorer_custom_card_filled_even_when_selected_is_other_preset() {
     // 区间里没有数据时数值为 0；日均按 2 个自然日算为 0，字/分为 null，range 仍是用户选的。
     assert_eq!(custom.total_human_typed_chars, 0);
     assert_eq!(custom.average_chars_per_day, Some(0.0));
-    assert_eq!(custom.average_chars_per_minute, None);
+    assert_eq!(custom.average_chars_per_hour, None);
 }
 
 #[test]
@@ -1861,7 +1861,7 @@ fn test_explorer_zero_human_input_keeps_records_null() {
     assert_eq!(snapshot.selected.writing_days, 0);
     // 区间有效（1 个自然日）但没写字：日均是 0，不是 null。
     assert_eq!(snapshot.selected.average_chars_per_day, Some(0.0));
-    assert_eq!(snapshot.selected.average_chars_per_minute, None);
+    assert_eq!(snapshot.selected.average_chars_per_hour, None);
     assert!(snapshot.selected.records.best_day.value.is_none());
     assert!(snapshot.selected.records.fastest_hour.value.is_none());
     assert!(snapshot.selected.records.longest_streak.value.is_none());
@@ -1905,7 +1905,7 @@ fn test_explorer_duplicate_event_resend_counts_once() {
     assert_eq!(snapshot["selected"]["totalHumanTypedChars"], 10);
     assert_eq!(snapshot["selected"]["writingDays"], 1);
     // 单条事件没有会话时长：不捏造「字/分」。
-    assert!(snapshot["selected"]["averageCharsPerMinute"].is_null());
+    assert!(snapshot["selected"]["averageCharsPerHour"].is_null());
     assert_eq!(
         snapshot["selected"]["records"]["longestSession"]["date"],
         serde_json::Value::Null
@@ -1931,6 +1931,28 @@ fn test_explorer_multi_device_same_window_not_one_long_session() {
         api.record_event(event).unwrap();
     }
 
+    // 真实计时来自平台切片，不是首末按键时间差：两台设备各 60 秒，并列最长。
+    for (event_id, device_id, session_id, start, end) in [
+        ("seg-a", "dev-a", "sess-a", base, base + 60_000),
+        ("seg-b", "dev-b", "sess-b", base + 30_000, base + 90_000),
+    ] {
+        let segment = WritingActivitySegment::new(
+            event_id.to_string(),
+            device_id,
+            Platform::Desktop,
+            "desktop",
+            "proj1",
+            "vol1",
+            "chap1",
+            session_id,
+            start,
+            end,
+            "heartbeat",
+        )
+        .unwrap();
+        api.record_activity_segment(segment).unwrap();
+    }
+
     let snapshot = api
         .get_explorer_snapshot("custom", Some("2026-05-10"), Some("2026-05-10"))
         .unwrap();
@@ -1944,9 +1966,11 @@ fn test_explorer_multi_device_same_window_not_one_long_session() {
         snapshot.selected.records.longest_session.date.as_deref(),
         Some("2026-05-10")
     );
-    // 字/分 = 40 字 × 60 / 120 秒 = 20。
-    let per_minute = snapshot.selected.average_chars_per_minute.unwrap();
-    assert!((per_minute - 20.0).abs() < 0.001);
+    // 落在计时窗口内的 30 字 × 3600 / 120 秒 = 900 字/时。
+    assert_eq!(snapshot.selected.timed_human_typed_chars, 30);
+    assert_eq!(snapshot.selected.measured_writing_seconds, 120);
+    let per_hour = snapshot.selected.average_chars_per_hour.unwrap();
+    assert!((per_hour - 900.0).abs() < 0.001);
 }
 
 // ---------------------------------------------------------------------------

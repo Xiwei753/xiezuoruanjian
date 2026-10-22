@@ -5,18 +5,17 @@
 //!
 //! ## 关键规则
 //!
-//! - **会话和活跃时间按各自分组里的事件时间线独立计算**：project 的活跃时间
-//!   只看该 project 的事件，chapter 只看该 chapter 的事件，不能把设备整天时间
-//!   复制进去。
+//! - **真实活跃时间只来自 `.sessions.jsonl` 的已测量切片**：同设备重叠切片
+//!   取并集，跨设备相加；不再用两次输入的时间差推算。
 //! - **历史速度和当前速度都只统计 `EventSource::HumanTyped`**：Undo/Redo/
 //!   Programmatic 的 inserted 不进入速度。
 //! - **速度曲线分桶为半开区间 `[bucket_start, bucket_end)`**。
-//! - **会话边界**：两次事件间隔超过 `SESSION_GAP_MS`（5分钟）视为不同会话。
-//! - **活跃时间**：会话内从第一个事件到最后一个事件的时长。
+//! - **`SESSION_GAP_MS` 仅保留给旧数据读取/兼容聚合**：它无法区分思考与离开，
+//!   不得再作为速度分母或真实最长会话依据。
 
 use crate::error::{Error, Result};
 use crate::writing_stats::calendar;
-use crate::writing_stats::{EventSource, WritingInputEvent};
+use crate::writing_stats::{EventSource, WritingActivitySegment, WritingInputEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -335,8 +334,8 @@ pub fn project_lifetime_stats(
 /// 单条统计纪录（区间聚合结果）。
 ///
 /// `date` / `end_date` 是业务日历日；`value` 单位随纪录种类变化
-/// （最多码字日=当天字数、最快码字=窗口内字数、最长会话=秒数、
-/// 最长连续段=天数）。
+/// （最多码字日=当天字数、单小时最多码字=自然 60 分钟窗口内字数、
+/// 最长会话=已测量秒数、最长连续段=天数）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatsRecord {
     pub date: String,
@@ -348,13 +347,18 @@ pub struct StatsRecord {
 ///
 /// 只统计 `EventSource::HumanTyped` 的 `inserted_chars` 作为「人工码字」：
 /// 粘贴 / AI / 同步 / 撤销不计，后来被删掉的字仍计入。
-/// 会话沿用 [`SESSION_GAP_MS`] 定义，按 device 独立分组，不把多设备并发
-/// 揉成一条会话。
+/// `total_active_seconds` 和会话数只来自真实计时切片；老事件时间差只保留在
+/// 旧投影兼容字段里，绝不参与速度和最长会话。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RangeStatsAgg {
     pub total_human_typed_chars: u64,
-    /// 各设备会话时长（毫秒）逐设备截断到秒后累加，与既有面板口径一致。
+    /// 真实的已测量写作秒数。带 `*_with_sessions` 的投影会覆盖成切片并集；
+    /// 旧投影无计时事实时保持 0，绝不拿事件时间差冒充。
     pub total_active_seconds: u64,
+    /// 实际计时覆盖的人工输入字数（落在已测量切片内）。
+    pub timed_human_typed_chars: u64,
+    /// 已测量会话数量（按 `session_id` 去重）。
+    pub measured_session_count: u64,
     /// 区间内有人工输入的不同业务日数量（= `daily_human_typed_chars` 的长度）。
     pub writing_days: u64,
     /// 有人工输入的日期 → 当天字数；没有输入的日期不在表里（由趋势补 0）。
@@ -370,13 +374,28 @@ pub struct RangeStatsAgg {
 /// 事件来自本机分区与已同步设备的只读分区，按 `event_id` 去重；
 /// DTO 用 `historyScope` 显式说明真实覆盖范围（`localEvents` /
 /// `syncedDevices` / `partialSync`）。
+///
+/// **注意**：这个旧入口没有计时切片，`total_active_seconds` 是事件时间差
+/// 推算值，只能用于历史展示；速度、真实活跃时长和最长会话请用
+/// [`project_all_time_stats_with_sessions`]。
 pub fn project_all_time_stats(events: &[WritingInputEvent]) -> Result<RangeStatsAgg> {
     aggregate_range_stats(events, None)
 }
 
+/// 全应用生涯聚合 + 真实前台计时切片。
+pub fn project_all_time_stats_with_sessions(
+    events: &[WritingInputEvent],
+    segments: &[WritingActivitySegment],
+) -> Result<RangeStatsAgg> {
+    let mut agg = aggregate_range_stats(events, None)?;
+    apply_measured_sessions(&mut agg, events, segments, None)?;
+    Ok(agg)
+}
+
 /// 区间聚合：只统计业务日落在 `[start_date, end_date]`（含两端）内的写作。
 ///
-/// 会话/最快码字只看区间内的事件；`start_date > end_date` 直接报错。
+/// 字数和单小时最多码字只看区间内的事件；真实计时请用
+/// [`project_range_stats_with_sessions`]；`start_date > end_date` 直接报错。
 pub fn project_range_stats(
     events: &[WritingInputEvent],
     start_date: &str,
@@ -389,6 +408,29 @@ pub fn project_range_stats(
         )));
     }
     aggregate_range_stats(events, Some((start_date, end_date)))
+}
+
+/// 区间聚合 + 真实前台计时切片。
+pub fn project_range_stats_with_sessions(
+    events: &[WritingInputEvent],
+    segments: &[WritingActivitySegment],
+    start_date: &str,
+    end_date: &str,
+) -> Result<RangeStatsAgg> {
+    if start_date > end_date {
+        return Err(Error::Other(format!(
+            "Invalid stats range: {} .. {} (start must not be after end)",
+            start_date, end_date
+        )));
+    }
+    let mut agg = aggregate_range_stats(events, Some((start_date, end_date)))?;
+    apply_measured_sessions(
+        &mut agg,
+        events,
+        segments,
+        Some((start_date, end_date)),
+    )?;
+    Ok(agg)
 }
 
 /// 趋势聚合粒度。
@@ -612,6 +654,8 @@ fn aggregate_range_stats(
     Ok(RangeStatsAgg {
         total_human_typed_chars: daily.values().sum(),
         total_active_seconds,
+        timed_human_typed_chars: 0,
+        measured_session_count: 0,
         writing_days: u64::try_from(daily.len()).unwrap_or(0),
         best_day,
         fastest_hour: compute_fastest_hour(&mut human_events),
@@ -619,6 +663,319 @@ fn aggregate_range_stats(
         longest_streak: compute_longest_streak(&daily)?,
         daily_human_typed_chars: daily,
     })
+}
+
+/// 按设备/作品/章节拆分的真实计时聚合。
+///
+/// 每组的时长都按“同设备切片并集、跨设备相加”计算；没有计时切片的组保持
+/// 缺省值，调用方应保留该组原有的展示字段，而不是用事件时间差补齐。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeasuredSessionBreakdown {
+    pub by_device: HashMap<String, MeasuredDeviceAgg>,
+    pub by_project: HashMap<String, u64>,
+    pub by_chapter: HashMap<String, u64>,
+    pub by_device_class: HashMap<String, u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeasuredDeviceAgg {
+    pub active_seconds: u64,
+    pub session_count: u64,
+}
+
+/// 按来源设备/作品/章节/设备类别聚合真实计时切片（#981）。
+pub fn project_measured_session_breakdown(
+    segments: &[WritingActivitySegment],
+    range: Option<(&str, &str)>,
+) -> MeasuredSessionBreakdown {
+    let mut device_intervals: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
+    let mut project_groups: HashMap<String, HashMap<String, Vec<(i64, i64)>>> = HashMap::new();
+    let mut chapter_groups: HashMap<String, HashMap<String, Vec<(i64, i64)>>> = HashMap::new();
+    let mut class_groups: HashMap<String, HashMap<String, Vec<(i64, i64)>>> = HashMap::new();
+    let mut device_sessions: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+
+    for segment in segments {
+        let date = segment.business_date();
+        if date.is_empty()
+            || !date_in_range(&date, range)
+            || segment.end_at_ms <= segment.start_at_ms
+            || segment.device_id.is_empty()
+        {
+            continue;
+        }
+        let interval = (segment.start_at_ms, segment.end_at_ms);
+        device_intervals
+            .entry(segment.device_id.clone())
+            .or_default()
+            .push(interval);
+        if !segment.session_id.is_empty() {
+            device_sessions
+                .entry(segment.device_id.clone())
+                .or_default()
+                .insert(segment.session_id.clone());
+        }
+        if !segment.project_id.is_empty() {
+            project_groups
+                .entry(segment.project_id.clone())
+                .or_default()
+                .entry(segment.device_id.clone())
+                .or_default()
+                .push(interval);
+        }
+        if !segment.chapter_id.is_empty() {
+            chapter_groups
+                .entry(segment.chapter_id.clone())
+                .or_default()
+                .entry(segment.device_id.clone())
+                .or_default()
+                .push(interval);
+        }
+        class_groups
+            .entry(segment.device_class.clone())
+            .or_default()
+            .entry(segment.device_id.clone())
+            .or_default()
+            .push(interval);
+    }
+
+    let mut breakdown = MeasuredSessionBreakdown::default();
+    for (device_id, intervals) in device_intervals {
+        let seconds = merged_seconds(&intervals);
+        let session_count = device_sessions
+            .get(&device_id)
+            .map(|sessions| u64::try_from(sessions.len()).unwrap_or(0))
+            .unwrap_or(0);
+        breakdown.by_device.insert(
+            device_id,
+            MeasuredDeviceAgg {
+                active_seconds: seconds,
+                session_count,
+            },
+        );
+    }
+    breakdown.by_project = summed_group_seconds(project_groups);
+    breakdown.by_chapter = summed_group_seconds(chapter_groups);
+    breakdown.by_device_class = summed_group_seconds(class_groups);
+    breakdown
+}
+
+/// 组内先按设备并集，再跨设备相加。
+fn summed_group_seconds(
+    groups: HashMap<String, HashMap<String, Vec<(i64, i64)>>>,
+) -> HashMap<String, u64> {
+    groups
+        .into_iter()
+        .map(|(key, devices)| {
+            let seconds = devices
+                .values()
+                .map(|intervals| merged_seconds(intervals))
+                .sum();
+            (key, seconds)
+        })
+        .collect()
+}
+
+fn merged_seconds(intervals: &[(i64, i64)]) -> u64 {
+    let total_ms: i64 = merge_intervals(intervals)
+        .iter()
+        .map(|(start, end)| end - start)
+        .sum();
+    u64::try_from(total_ms / 1000).unwrap_or(0)
+}
+
+/// 把真实计时拆分覆盖到既有投影的分组字段上。
+pub fn apply_measured_session_breakdown(
+    projection: &mut StatsProjection,
+    breakdown: &MeasuredSessionBreakdown,
+) {
+    for project in projection.per_project.values_mut() {
+        project.active_seconds = breakdown
+            .by_project
+            .get(&project.project_id)
+            .copied()
+            .unwrap_or(0);
+    }
+    for chapter in projection.per_chapter.values_mut() {
+        chapter.active_seconds = breakdown
+            .by_chapter
+            .get(&chapter.chapter_id)
+            .copied()
+            .unwrap_or(0);
+    }
+    for device in projection.per_device.values_mut() {
+        let measured = breakdown.by_device.get(&device.device_id);
+        device.active_seconds = measured.map_or(0, |value| value.active_seconds);
+        device.sessions_count = measured
+            .map(|value| u32::try_from(value.session_count).unwrap_or(u32::MAX))
+            .unwrap_or(0);
+    }
+    for class in projection.per_device_class.values_mut() {
+        class.active_seconds = breakdown
+            .by_device_class
+            .get(&class.device_class)
+            .copied()
+            .unwrap_or(0);
+    }
+}
+
+/// 真实计时切片聚合结果。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeasuredSessionAgg {
+    /// 同设备切片并集后，跨设备相加的真实写作秒数。
+    pub total_active_seconds: u64,
+    /// 落在这些切片内的人工输入字数。
+    pub timed_human_typed_chars: u64,
+    /// 按 `session_id` 去重的已测量会话数。
+    pub session_count: u64,
+    /// 最长已测量会话。
+    pub longest_session: Option<StatsRecord>,
+}
+
+/// 汇总真实前台计时切片，并把人工输入对时到切片窗口。
+///
+/// - 同一设备上重叠/重复的切片取并集，绝不重复累计；
+/// - 不同设备并行写作按各自设备计时相加；
+/// - 只统计业务日落在 `range` 内、且 `end > start` 的切片；
+/// - 人工输入只有在同设备某个已测量窗口内才计入 `timed_human_typed_chars`，
+///   历史数据没有计时覆盖就只保留总字数，不进入速度分母。
+pub fn project_measured_sessions(
+    events: &[WritingInputEvent],
+    segments: &[WritingActivitySegment],
+    range: Option<(&str, &str)>,
+) -> Result<MeasuredSessionAgg> {
+    let mut by_device: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
+    let mut by_session: HashMap<(String, String), Vec<(i64, i64)>> = HashMap::new();
+    let mut session_dates: HashMap<(String, String), String> = HashMap::new();
+
+    for segment in segments {
+        let date = segment.business_date();
+        if date.is_empty()
+            || !date_in_range(&date, range)
+            || segment.end_at_ms <= segment.start_at_ms
+        {
+            continue;
+        }
+        let interval = (segment.start_at_ms, segment.end_at_ms);
+        by_device
+            .entry(segment.device_id.clone())
+            .or_default()
+            .push(interval);
+        if !segment.session_id.is_empty() {
+            by_session
+                .entry((segment.device_id.clone(), segment.session_id.clone()))
+                .or_default()
+                .push(interval);
+            session_dates
+                .entry((segment.device_id.clone(), segment.session_id.clone()))
+                .and_modify(|existing| {
+                    if date < *existing {
+                        *existing = date.clone();
+                    }
+                })
+                .or_insert(date);
+        }
+    }
+
+    let mut total_ms: i64 = 0;
+    let mut merged_by_device: HashMap<&str, Vec<(i64, i64)>> = HashMap::new();
+    for (device, intervals) in &by_device {
+        let merged = merge_intervals(intervals);
+        total_ms = total_ms.saturating_add(merged.iter().map(|(s, e)| e - s).sum::<i64>());
+        merged_by_device.insert(device.as_str(), merged);
+    }
+
+    let mut timed_human_typed_chars: u64 = 0;
+    for event in events {
+        if event.source != EventSource::HumanTyped || event.inserted_chars == 0 {
+            continue;
+        }
+        let date = event.business_date();
+        if date.is_empty() || !date_in_range(&date, range) {
+            continue;
+        }
+        if merged_by_device
+            .get(event.device_id.as_str())
+            .is_some_and(|intervals| interval_contains(intervals, event.timestamp_ms))
+        {
+            timed_human_typed_chars += u64::from(event.inserted_chars);
+        }
+    }
+
+    let mut longest: Option<(i64, String)> = None;
+    for (key, intervals) in &by_session {
+        let duration_ms: i64 = merge_intervals(intervals)
+            .iter()
+            .map(|(start, end)| end - start)
+            .sum();
+        if duration_ms <= 0 {
+            continue;
+        }
+        let date = session_dates.get(key).cloned().unwrap_or_default();
+        let is_better = match &longest {
+            None => true,
+            Some((best_ms, best_date)) => {
+                duration_ms > *best_ms
+                    || (duration_ms == *best_ms && date.as_str() < best_date.as_str())
+            }
+        };
+        if is_better {
+            longest = Some((duration_ms, date));
+        }
+    }
+
+    let longest_session = longest.map(|(duration_ms, date)| StatsRecord {
+        date,
+        end_date: None,
+        value: u64::try_from(duration_ms / 1000).unwrap_or(0),
+    });
+
+    Ok(MeasuredSessionAgg {
+        total_active_seconds: u64::try_from(total_ms / 1000).unwrap_or(0),
+        timed_human_typed_chars,
+        session_count: u64::try_from(by_session.len()).unwrap_or(0),
+        longest_session,
+    })
+}
+
+fn apply_measured_sessions(
+    agg: &mut RangeStatsAgg,
+    events: &[WritingInputEvent],
+    segments: &[WritingActivitySegment],
+    range: Option<(&str, &str)>,
+) -> Result<()> {
+    let measured = project_measured_sessions(events, segments, range)?;
+    agg.total_active_seconds = measured.total_active_seconds;
+    agg.timed_human_typed_chars = measured.timed_human_typed_chars;
+    agg.measured_session_count = measured.session_count;
+    agg.longest_session = measured.longest_session;
+    Ok(())
+}
+
+/// 合并同设备上重叠或相接的时间区间，返回按起点升序的并集。
+fn merge_intervals(intervals: &[(i64, i64)]) -> Vec<(i64, i64)> {
+    let mut sorted = intervals.to_vec();
+    sorted.sort_unstable();
+    let mut merged: Vec<(i64, i64)> = Vec::new();
+    for (start, end) in sorted {
+        if end <= start {
+            continue;
+        }
+        match merged.last_mut() {
+            Some((_, current_end)) if start <= *current_end => {
+                if end > *current_end {
+                    *current_end = end;
+                }
+            }
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
+/// 半开区间 `[start, end)` 是否包含某时间戳。
+fn interval_contains(intervals: &[(i64, i64)], timestamp_ms: i64) -> bool {
+    let index = intervals.partition_point(|(start, _)| *start <= timestamp_ms);
+    index > 0 && timestamp_ms < intervals[index - 1].1
 }
 
 /// 业务日是否落在可选区间内（闭区间，ISO 日期字符串可直接比较）。
@@ -629,7 +986,7 @@ fn date_in_range(date: &str, range: Option<(&str, &str)>) -> bool {
     }
 }
 
-/// 最快码字：连续 60 分钟**半开**窗口 `[t, t+60min)` 的最高人工输入量。
+/// 单小时最多码字：自然 60 分钟**半开**窗口 `[t, t+60min)` 内最高人工输入量。
 ///
 /// 以每条人工输入事件时间戳为锚，恰好落在 `t + 60min` 的事件不算入。
 /// 并列时取更早的窗口（严格大于才替换）。
@@ -1418,7 +1775,7 @@ mod tests {
     #[test]
     fn test_range_stats_fastest_hour_window_is_half_open() {
         // 第二条事件恰好在第一条的 start+60min：不算进第一个窗口。
-        // 若窗口写成闭区间，最快码字会变成 150。
+        // 若窗口写成闭区间，单小时最多码字会变成 150。
         let base = 1_000_000_i64;
         let events = vec![
             pinned_event(base, "2026-05-01", "dev-1", 50),

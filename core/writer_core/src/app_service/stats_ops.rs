@@ -1,8 +1,8 @@
 use crate::api::{
     ChapterStatsSummaryDto, CurrentWritingSpeedDto, DeviceInfoDto, DeviceStatsSummaryDto,
     EditorChangeStatsInputDto, ProjectStatsSummaryDto, ProjectWritingLifetimeStatsDto,
-    SpeedCurveSummaryDto, WriterError, WritingStatsExplorerDto, WritingStatsHeatmapDto,
-    WritingStatsSummaryDto,
+    SpeedCurveSummaryDto, WriterError, WritingActivitySegmentInputDto, WritingStatsExplorerDto,
+    WritingStatsHeatmapDto, WritingStatsSummaryDto,
 };
 
 impl super::WriterAppService {
@@ -73,6 +73,14 @@ impl super::WriterAppService {
         input: EditorChangeStatsInputDto,
     ) -> Result<(), WriterError> {
         self.api.record_editor_change_stats(input)
+    }
+
+    /// 上报一段平台已测量的前台写作计时切片。
+    pub fn record_writing_activity_segment(
+        &self,
+        input: WritingActivitySegmentInputDto,
+    ) -> Result<(), WriterError> {
+        self.api.record_writing_activity_segment(input)
     }
 
     /// 正文保存 + 未确认统计事件一次提交（正文保存事务的统计对齐入口）。

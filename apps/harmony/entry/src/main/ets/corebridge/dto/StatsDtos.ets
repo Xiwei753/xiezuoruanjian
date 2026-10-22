@@ -28,7 +28,14 @@ export interface WritingStatsLifetime {
   elapsedCalendarDays: number
   writingDays: number
   averageCharsPerDay: number | null
-  averageCharsPerMinute: number | null
+  /** 有真实计时样本覆盖的人工输入字数 */
+  timedHumanTypedChars: number
+  /** 真实前台写作计时秒数；没有计时样本时为 0 */
+  measuredWritingSeconds: number
+  /** 仅用真实计时覆盖的字数与秒数计算；没有分母时 null */
+  averageCharsPerHour: number | null
+  /** 是否存在可用的真实计时样本 */
+  hasMeasuredTiming: boolean
 }
 
 // ─── WritingStatsPeriodCardDto：四张预设时段卡 ───
@@ -41,7 +48,10 @@ export interface WritingStatsPeriodCard {
   totalActiveSeconds: number
   writingDays: number
   averageCharsPerDay: number | null
-  averageCharsPerMinute: number | null
+  timedHumanTypedChars: number
+  measuredWritingSeconds: number
+  averageCharsPerHour: number | null
+  hasMeasuredTiming: boolean
 }
 
 // ─── WritingStatsRecordDto / WritingStatsRecordsDto：时段纪录 ───
@@ -58,7 +68,7 @@ export interface WritingStatsRecord {
 export interface WritingStatsRecords {
   /** 最多码字日：value = 当天人工输入字数 */
   bestDay: WritingStatsRecord
-  /** 最快码字：value = 连续 60 分钟窗口内字数（显示为字/时） */
+  /** 单小时最多码字：value = 连续 60 分钟窗口内字数（单位字，不是持续字/时） */
   fastestHour: WritingStatsRecord
   /** 最长写作会话：value = 时长秒数 */
   longestSession: WritingStatsRecord
@@ -90,7 +100,10 @@ export interface WritingStatsSelectedPeriod {
   totalActiveSeconds: number
   writingDays: number
   averageCharsPerDay: number | null
-  averageCharsPerMinute: number | null
+  timedHumanTypedChars: number
+  measuredWritingSeconds: number
+  averageCharsPerHour: number | null
+  hasMeasuredTiming: boolean
   records: WritingStatsRecords
   trend: WritingStatsTrend
 }
@@ -104,6 +117,21 @@ export interface WritingStatsExplorer {
   /** 近七天 / 近三十天 / 近半年 / 自选区间，顺序固定 */
   periodCards: WritingStatsPeriodCard[]
   selected: WritingStatsSelectedPeriod
+}
+
+// ─── WritingActivitySegmentInputDto：平台端已测量完成的前台写作切片 ───
+
+/** 与 Core `WritingActivitySegmentInputDto` 对齐；设备身份由 Core 补齐。 */
+export interface WritingActivitySegmentInput {
+  eventId: string
+  platform: string
+  projectId: string
+  volumeId: string
+  chapterId: string
+  sessionId: string
+  startAtMs: number
+  endAtMs: number
+  pauseReason: string
 }
 
 // ─── WritingStatsHeatmapDto：每日码字日历（Issue #956） ───

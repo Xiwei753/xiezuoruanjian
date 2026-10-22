@@ -1,5 +1,5 @@
 import { WritingStats, SpeedCurve, CurrentWritingSpeed } from '../dto/ProjectDtos'
-import { WritingStatsExplorer, WritingStatsHeatmap } from '../dto/StatsDtos'
+import { WritingStatsExplorer, WritingStatsHeatmap, WritingActivitySegmentInput } from '../dto/StatsDtos'
 import { EditorChangeStatsInput } from '../dto/EditorDtos'
 import { ResultEnvelope, RecentEdit } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
@@ -148,6 +148,16 @@ export class NativeStatsBridge {
       const jsonStr: string = JSON.stringify(input)
       const ok: boolean = await this.core.getNativeModule().nativeRecordEditorChangeStats(jsonStr)
       return { success: ok, data: ok, userMessage: ok ? undefined : 'record_editor_change_stats failed' }
+    } catch (e) { return nativeError<boolean>(e) }
+  }
+
+  // Issue #981：真实前台编辑计时片段。eventId 由端侧一次生成并固定，Core 幂等去重；
+  // 这里同样 await C++ 侧 async work，失败不能被当成已写入。
+  async recordWritingActivitySegment(input: WritingActivitySegmentInput): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = JSON.stringify(input)
+      const ok: boolean = await this.core.getNativeModule().nativeRecordWritingActivitySegment(jsonStr)
+      return { success: ok, data: ok, userMessage: ok ? undefined : 'record_writing_activity_segment failed' }
     } catch (e) { return nativeError<boolean>(e) }
   }
 

@@ -27,7 +27,7 @@ Supersedes: None
 
 同步根 = `app_data_root`，路径相对应用数据根：
 
-- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`、写作统计事件 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl`（仅通过对应设备的统计数据组同步，见下文「统计设备组」）。
+- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`、写作统计事件 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl` 与计时切片 `stats/events/<device_id>/YYYY-MM-DD.sessions.jsonl`（仅通过对应设备的统计数据组同步，见下文「统计设备组」）。
 - **黑名单（绝不参与）**：`作品/`（projects_root）、`日志/`（log_dir）、`导出/`、`备份/`、`settings.local.json`、`recent_edits.json`、`app-meta/sync/config.local.json`、`app-meta/sync/conflicts.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`（旧版单机事件库、迁移标记与冲突诊断文件，只作为一次性迁移输入）、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
 
 ### App 数据组与独立发布
@@ -42,9 +42,9 @@ App target 内部按数据组独立扫描、合并、记录状态并发布不可
 
 ### 统计设备组
 
-写作统计的原始事件以「来源设备」为粒度独立同步：本机事件写在 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl`，每台设备独占写入自己的分区，其它设备下载后只读，永不重写同分区；同步组 id 为 `stats_device:<device_id>`（远端 storage key `stats-device-<hex>`），与 `global`、星图组一样参与远端目录清单、独立 generation 发布和按组失败隔离。一次数据组传输只上传本机新增/变化的事件文件，下载不会触发自动重传，也不重复写事件。
+写作统计的原始事件以「来源设备」为粒度独立同步：本机事件写在 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl`，本机真实前台写作计时切片写在同分区 `YYYY-MM-DD.sessions.jsonl`；每台设备独占写入自己的分区，其它设备下载后只读，永不重写同分区；同步组 id 为 `stats_device:<device_id>`（远端 storage key `stats-device-<hex>`），与 `global`、星图组一样参与远端目录清单、独立 generation 发布和按组失败隔离。一次数据组传输只上传本机新增/变化的文件，下载不会触发自动重传，也不重复写文件。计时切片按 `event_id` 幂等去重，同一切片只计一次时长；同一设备重叠切片按区间并集计，跨设备分别累加，统计范围与本地午夜边界处裁剪。
 
-聚合永远从原始事件投影派生：Core 读取全部已到达的来源分区，按 `event_id` 去重（本机分区优先保留）。跨分区意外重复的 `event_id` 只计数一次，结构化冲突信息追加到 `app-meta/stats/event_conflicts.local.jsonl` 供诊断，绝不静默覆盖原始事实。不维护可被 LWW 覆写的每日汇总账本，也不把合计数直接相加。
+聚合永远从原始事实投影派生：字数从事件投影，真实写作秒数从计时切片投影；Core 读取全部已到达的来源分区，按 `event_id` 去重（本机分区优先保留）。旧事件只有输入时间戳，无法判断当时是思考还是离开应用，因此不反推历史计时，也不把旧事件的时间差与新计时切片混算速度。跨分区意外重复的 `event_id` 只计数一次，结构化冲突信息追加到 `app-meta/stats/event_conflicts.local.jsonl` 供诊断，绝不静默覆盖原始事实。不维护可被 LWW 覆写的每日汇总账本，也不把合计数直接相加。
 
 旧版单机事件库 `app-meta/stats/events.local/` 作为一次性迁移输入：首次升级时把旧事件按原 `event_id`、`timestamp_ms`、`local_date`、`source`、`inserted_chars` 原样迁入本机来源分区，迁移完成标记 `events.device_partitions.v1` 写入后旧目录不再参与读写。迁移不把同步下载的正文、正文当前字数或缺失事件制造成人工输入。`historyScope` 如实返回 `localEvents`（仅本机）、`syncedDevices`（已收到其它设备事件且统计组无失败）或 `partialSync`（存在未完成的统计设备组同步），平台页面按此标示范围，不得仅因打开同步开关就宣称历史全量可达。
 

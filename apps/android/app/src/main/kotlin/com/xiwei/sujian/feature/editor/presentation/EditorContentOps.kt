@@ -67,6 +67,12 @@ fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
         event.contentDelta.insertedChars,
         event.contentDelta.deletedChars,
     )
+    // Issue #981：真人输入/删除建立并延续真实计时会话；粘贴/AI/撤销重做不建立。
+    if (event.cause.isHumanWritingActivity() &&
+        (event.contentDelta.insertedChars > 0 || event.contentDelta.deletedChars > 0)
+    ) {
+        writingSessionTracker.onHumanEdit(session.projectId, session.volumeId, session.chapterId)
+    }
 }
 
 /**

@@ -637,8 +637,14 @@ function decodeWritingStatsLifetime(data: Object): DecodeResult<WritingStatsLife
   if (writingDays === null) { return err<WritingStatsLifetime>('lifetime.writingDays missing or not number') }
   const averageCharsPerDayR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerDay')
   if (!averageCharsPerDayR.ok || averageCharsPerDayR.value === undefined) { return err<WritingStatsLifetime>(`lifetime.${averageCharsPerDayR.error ?? 'averageCharsPerDay decode failed'}`) }
-  const averageCharsPerMinuteR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerMinute')
-  if (!averageCharsPerMinuteR.ok || averageCharsPerMinuteR.value === undefined) { return err<WritingStatsLifetime>(`lifetime.${averageCharsPerMinuteR.error ?? 'averageCharsPerMinute decode failed'}`) }
+  const timedHumanTypedChars: number | null = reqNum(data, 'timedHumanTypedChars')
+  if (timedHumanTypedChars === null) { return err<WritingStatsLifetime>('lifetime.timedHumanTypedChars missing or not number') }
+  const measuredWritingSeconds: number | null = reqNum(data, 'measuredWritingSeconds')
+  if (measuredWritingSeconds === null) { return err<WritingStatsLifetime>('lifetime.measuredWritingSeconds missing or not number') }
+  const averageCharsPerHourR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerHour')
+  if (!averageCharsPerHourR.ok || averageCharsPerHourR.value === undefined) { return err<WritingStatsLifetime>(`lifetime.${averageCharsPerHourR.error ?? 'averageCharsPerHour decode failed'}`) }
+  const hasMeasuredTiming: boolean | null = reqBool(data, 'hasMeasuredTiming')
+  if (hasMeasuredTiming === null) { return err<WritingStatsLifetime>('lifetime.hasMeasuredTiming missing or not boolean') }
   const value: WritingStatsLifetime = {
     totalHumanTypedChars: totalHumanTypedChars,
     firstWritingDate: firstWritingDateR.value,
@@ -646,7 +652,10 @@ function decodeWritingStatsLifetime(data: Object): DecodeResult<WritingStatsLife
     elapsedCalendarDays: elapsedCalendarDays,
     writingDays: writingDays,
     averageCharsPerDay: averageCharsPerDayR.value,
-    averageCharsPerMinute: averageCharsPerMinuteR.value
+    timedHumanTypedChars: timedHumanTypedChars,
+    measuredWritingSeconds: measuredWritingSeconds,
+    averageCharsPerHour: averageCharsPerHourR.value,
+    hasMeasuredTiming: hasMeasuredTiming
   }
   return ok<WritingStatsLifetime>(value)
 }
@@ -675,8 +684,14 @@ function decodeWritingStatsPeriodCard(data: Object): DecodeResult<WritingStatsPe
   if (writingDays === null) { return err<WritingStatsPeriodCard>('periodCard.writingDays missing or not number') }
   const averageCharsPerDayR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerDay')
   if (!averageCharsPerDayR.ok || averageCharsPerDayR.value === undefined) { return err<WritingStatsPeriodCard>(`periodCard.${averageCharsPerDayR.error ?? 'averageCharsPerDay decode failed'}`) }
-  const averageCharsPerMinuteR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerMinute')
-  if (!averageCharsPerMinuteR.ok || averageCharsPerMinuteR.value === undefined) { return err<WritingStatsPeriodCard>(`periodCard.${averageCharsPerMinuteR.error ?? 'averageCharsPerMinute decode failed'}`) }
+  const timedHumanTypedChars: number | null = reqNum(data, 'timedHumanTypedChars')
+  if (timedHumanTypedChars === null) { return err<WritingStatsPeriodCard>('periodCard.timedHumanTypedChars missing or not number') }
+  const measuredWritingSeconds: number | null = reqNum(data, 'measuredWritingSeconds')
+  if (measuredWritingSeconds === null) { return err<WritingStatsPeriodCard>('periodCard.measuredWritingSeconds missing or not number') }
+  const averageCharsPerHourR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerHour')
+  if (!averageCharsPerHourR.ok || averageCharsPerHourR.value === undefined) { return err<WritingStatsPeriodCard>(`periodCard.${averageCharsPerHourR.error ?? 'averageCharsPerHour decode failed'}`) }
+  const hasMeasuredTiming: boolean | null = reqBool(data, 'hasMeasuredTiming')
+  if (hasMeasuredTiming === null) { return err<WritingStatsPeriodCard>('periodCard.hasMeasuredTiming missing or not boolean') }
   const value: WritingStatsPeriodCard = {
     preset: preset,
     hasSelection: hasSelection,
@@ -685,7 +700,10 @@ function decodeWritingStatsPeriodCard(data: Object): DecodeResult<WritingStatsPe
     totalActiveSeconds: totalActiveSeconds,
     writingDays: writingDays,
     averageCharsPerDay: averageCharsPerDayR.value,
-    averageCharsPerMinute: averageCharsPerMinuteR.value
+    timedHumanTypedChars: timedHumanTypedChars,
+    measuredWritingSeconds: measuredWritingSeconds,
+    averageCharsPerHour: averageCharsPerHourR.value,
+    hasMeasuredTiming: hasMeasuredTiming
   }
   return ok<WritingStatsPeriodCard>(value)
 }
@@ -775,8 +793,14 @@ function decodeWritingStatsSelectedPeriod(data: Object): DecodeResult<WritingSta
   if (writingDays === null) { return err<WritingStatsSelectedPeriod>('selected.writingDays missing or not number') }
   const averageCharsPerDayR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerDay')
   if (!averageCharsPerDayR.ok || averageCharsPerDayR.value === undefined) { return err<WritingStatsSelectedPeriod>(`selected.${averageCharsPerDayR.error ?? 'averageCharsPerDay decode failed'}`) }
-  const averageCharsPerMinuteR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerMinute')
-  if (!averageCharsPerMinuteR.ok || averageCharsPerMinuteR.value === undefined) { return err<WritingStatsSelectedPeriod>(`selected.${averageCharsPerMinuteR.error ?? 'averageCharsPerMinute decode failed'}`) }
+  const timedHumanTypedChars: number | null = reqNum(data, 'timedHumanTypedChars')
+  if (timedHumanTypedChars === null) { return err<WritingStatsSelectedPeriod>('selected.timedHumanTypedChars missing or not number') }
+  const measuredWritingSeconds: number | null = reqNum(data, 'measuredWritingSeconds')
+  if (measuredWritingSeconds === null) { return err<WritingStatsSelectedPeriod>('selected.measuredWritingSeconds missing or not number') }
+  const averageCharsPerHourR: DecodeResult<number | null> = nullNum(data, 'averageCharsPerHour')
+  if (!averageCharsPerHourR.ok || averageCharsPerHourR.value === undefined) { return err<WritingStatsSelectedPeriod>(`selected.${averageCharsPerHourR.error ?? 'averageCharsPerHour decode failed'}`) }
+  const hasMeasuredTiming: boolean | null = reqBool(data, 'hasMeasuredTiming')
+  if (hasMeasuredTiming === null) { return err<WritingStatsSelectedPeriod>('selected.hasMeasuredTiming missing or not boolean') }
   const recordsObj: Object | null = reqObj(data, 'records')
   if (recordsObj === null) { return err<WritingStatsSelectedPeriod>('selected.records missing or not object') }
   const recordsR: DecodeResult<WritingStatsRecords> = decodeWritingStatsRecords(recordsObj)
@@ -792,7 +816,10 @@ function decodeWritingStatsSelectedPeriod(data: Object): DecodeResult<WritingSta
     totalActiveSeconds: totalActiveSeconds,
     writingDays: writingDays,
     averageCharsPerDay: averageCharsPerDayR.value,
-    averageCharsPerMinute: averageCharsPerMinuteR.value,
+    timedHumanTypedChars: timedHumanTypedChars,
+    measuredWritingSeconds: measuredWritingSeconds,
+    averageCharsPerHour: averageCharsPerHourR.value,
+    hasMeasuredTiming: hasMeasuredTiming,
     records: recordsR.value,
     trend: trendR.value
   }

@@ -339,6 +339,10 @@ pub struct AppBackend {
     /// workspace 切换时旧 writer drop（worker 自然退出），新 writer 用新 root 重建。
     /// `Option<StatsWriterHandle>` 的 `Default` 是 `None`，满足 `#[derive(Default)]`。
     stats_writer: Option<crate::backend::stats_writer::StatsWriterHandle>,
+    /// Issue #981：前台写作计时状态机。时长用 `Instant` 单调时钟测量；
+    /// 只有窗口前台且正文页可交互时才会产生切片。
+    writing_session:
+        std::sync::Mutex<crate::backend::app_backend::editor_backend::writing_stats::LinuxWritingSession>,
     /// Issue #729：workspace 身份 generation。每次成功打开工作区或重置工作区时递增。
     /// 同步线程启动时捕获此值，回调时校验是否仍等于当前 generation，
     /// 不相等说明工作区已切换，旧同步结果必须丢弃，避免污染新工作区状态。

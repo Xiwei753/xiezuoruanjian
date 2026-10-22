@@ -62,12 +62,27 @@ Kirigami.ShadowedRectangle {
         return String(Math.round(v * 10) / 10)
     }
 
-    // 每分钟均值折算每小时；null 保持 "—"，不能把空值当成 0。
+    // Core 已按真实计时样本返回字/时；null 保持 "—"，不能把空值当成 0。
     function formatAveragePerHour(n) {
         if (n === null || n === undefined) return "—"
         var v = Number(n)
         if (isNaN(v)) return "—"
-        return formatAverage(v * 60)
+        return formatAverage(v)
+    }
+
+    // 实际计时秒数 → 「X 时 Y 分」；null 表示尚无真实计时样本。
+    function formatMeasuredDuration(seconds) {
+        if (seconds === null || seconds === undefined) return "—"
+        var s = Number(seconds)
+        if (isNaN(s)) return "—"
+        s = Math.max(0, s)
+        var h = Math.floor(s / 3600)
+        var m = Math.round((s % 3600) / 60)
+        if (m === 60) {
+            h += 1
+            m = 0
+        }
+        return h > 0 ? (h + qsTr("时") + m + qsTr("分")) : (m + qsTr("分"))
     }
 
     function formatDate(iso) {
@@ -139,7 +154,7 @@ Kirigami.ShadowedRectangle {
         Kirigami.Heading {
             level: 3
             Layout.fillWidth: true
-            text: root.formatAveragePerHour(root.val(root.periodSummary, "averageCharsPerMinute")) + " " + qsTr("字/时")
+            text: root.formatAveragePerHour(root.val(root.periodSummary, "averageCharsPerHour")) + " " + qsTr("字/时")
             color: Kirigami.Theme.textColor
             font.pixelSize: Math.round(Kirigami.Units.gridUnit * 1.1)
             elide: Text.ElideRight
@@ -153,6 +168,16 @@ Kirigami.ShadowedRectangle {
             text: root.formatAverage(root.val(root.periodSummary, "averageCharsPerDay")) + " " + qsTr("字/天")
             color: Kirigami.Theme.textColor
             font.pixelSize: Math.round(Kirigami.Units.gridUnit * 1.1)
+            elide: Text.ElideRight
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: root.val(root.periodSummary, "hasMeasuredTiming") === true
+                ? qsTr("实际计时 %1").arg(root.formatMeasuredDuration(root.val(root.periodSummary, "measuredWritingSeconds")))
+                : qsTr("仅统计新记录")
+            color: Kirigami.Theme.disabledTextColor
+            font: Kirigami.Theme.smallFont
             elide: Text.ElideRight
         }
 

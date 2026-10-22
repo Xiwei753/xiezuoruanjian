@@ -16,7 +16,7 @@ import {
 } from '../../../../corebridge/dto/StatsDtos'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
 import { COMPACT_CARD_TITLE_FONT_VP } from '../../../../ui/theme/LayoutTokens'
-import { formatAverage, formatAveragePerHour, formatDateRangeHuman, formatInt } from '../StatsFormat'
+import { formatAverage, formatAveragePerHour, formatDateRangeHuman, formatInt, formatMeasuredDuration } from '../StatsFormat'
 
 // 四卡横排的间距与单卡宽高比：卡间距约为内容宽的 3.2%，单卡约 218 x 351vp。
 // 卡片宽度由 layoutWeight 等分，高度由 aspectRatio 派生，行高自然跟随卡片。
@@ -137,7 +137,7 @@ export struct WidePeriodCards {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         Row() {
-          Text(`${formatAveragePerHour(card.averageCharsPerMinute)} 字/时`)
+          Text(`${formatAveragePerHour(card.averageCharsPerHour)} 字/时`)
             .fontSize(16)
             .fontColor($r('sys.color.font_secondary'))
             .layoutWeight(1)
@@ -157,6 +157,15 @@ export struct WidePeriodCards {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .margin({ top: 10 })
+
+        Text(card.hasMeasuredTiming
+          ? `实际计时 ${formatMeasuredDuration(card.measuredWritingSeconds)}`
+          : '仅统计新记录')
+          .fontSize(13)
+          .fontColor($r('sys.color.font_tertiary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .margin({ top: 6 })
 
         Blank()
 

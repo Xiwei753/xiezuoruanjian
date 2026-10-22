@@ -302,8 +302,9 @@ impl crate::sync::SyncService {
             return true;
         }
 
-        // 写作统计事件分区（仅认可 <device>/YYYY-MM-DD.events.jsonl 结构；
-        // 该设备的 group 归属由 is_whitelisted_app_group_path 再校验）。
+        // 写作统计分区（仅认可 <device>/YYYY-MM-DD.events.jsonl 与
+        // <device>/YYYY-MM-DD.sessions.jsonl 结构；该设备的 group 归属由
+        // is_whitelisted_app_group_path 再校验）。
         if super::types::stats_device_id_for_event_path(rel_path).is_some() {
             return true;
         }

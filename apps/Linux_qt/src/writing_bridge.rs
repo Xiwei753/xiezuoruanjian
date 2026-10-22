@@ -96,3 +96,15 @@ pub fn record_editor_change_stats(
     api.record_editor_change_stats(input)
         .map_err(WriterError::from)
 }
+
+/// Issue #981：上报一段平台端已用单调时钟测量完成的前台写作时长。
+///
+/// 平台只提供会话、时间范围和章节事实；设备身份、平台归类和本地日期由 Core
+/// 补齐并按 `event_id` 幂等落盘。
+pub fn record_writing_activity_segment(
+    api: &WriterCoreApi,
+    input: writer_core::api::WritingActivitySegmentInputDto,
+) -> Result<(), WriterError> {
+    api.record_writing_activity_segment(input)
+        .map_err(WriterError::from)
+}

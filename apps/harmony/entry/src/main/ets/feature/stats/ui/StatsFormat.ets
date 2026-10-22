@@ -34,7 +34,10 @@ export const EMPTY_STATS_EXPLORER: WritingStatsExplorer = {
     elapsedCalendarDays: 0,
     writingDays: 0,
     averageCharsPerDay: null,
-    averageCharsPerMinute: null
+    timedHumanTypedChars: 0,
+    measuredWritingSeconds: 0,
+    averageCharsPerHour: null,
+    hasMeasuredTiming: false
   },
   periodCards: [],
   selected: {
@@ -44,7 +47,10 @@ export const EMPTY_STATS_EXPLORER: WritingStatsExplorer = {
     totalActiveSeconds: 0,
     writingDays: 0,
     averageCharsPerDay: null,
-    averageCharsPerMinute: null,
+    timedHumanTypedChars: 0,
+    measuredWritingSeconds: 0,
+    averageCharsPerHour: null,
+    hasMeasuredTiming: false,
     records: EMPTY_RECORDS,
     trend: EMPTY_TREND
   }
@@ -79,12 +85,20 @@ export function formatAverage(value: number | null): string {
   return roundedToTenth.toFixed(1)
 }
 
-/** 每分钟均速折算每小时；null 保持 "—"，不把空数据当成 0。 */
+/** Core 已按真实计时样本返回字/时；null 保持 "—"，不把空数据当成 0。 */
 export function formatAveragePerHour(value: number | null): string {
-  if (value === null) {
-    return '—'
+  return formatAverage(value)
+}
+
+/** 真实计时秒数 → 「X 时 Y 分」；无样本返回 "—"。 */
+export function formatMeasuredDuration(seconds: number): string {
+  const totalMinutes: number = Math.round(seconds / 60)
+  if (totalMinutes <= 0) {
+    return '0 分'
   }
-  return formatAverage(value * 60)
+  const hours: number = Math.floor(totalMinutes / 60)
+  const minutes: number = totalMinutes % 60
+  return hours > 0 ? `${hours} 时 ${minutes} 分` : `${minutes} 分`
 }
 
 /** "2026-09-13" → "2026/09/13"；null/空串 → "—"。 */

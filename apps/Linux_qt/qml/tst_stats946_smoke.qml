@@ -167,38 +167,41 @@ TestCase {
                 "elapsedCalendarDays": 1093,
                 "writingDays": 112,
                 "averageCharsPerDay": 263.0,
-                "averageCharsPerMinute": 90.0
+                "timedHumanTypedChars": 29000,
+                "measuredWritingSeconds": 116000,
+                "averageCharsPerHour": 900.0,
+                "hasMeasuredTiming": true
             },
             "periodCards": [
                 {
                     "preset": "last7Days", "hasSelection": true,
                     "range": { "startDate": "2026-10-12", "endDate": "2026-10-18" },
                     "totalHumanTypedChars": 3635, "totalActiveSeconds": 7270, "writingDays": 5,
-                    "averageCharsPerDay": 727.0, "averageCharsPerMinute": 30.0
+                    "averageCharsPerDay": 727.0, "timedHumanTypedChars": 3635, "measuredWritingSeconds": 7270, "averageCharsPerHour": 1800.0, "hasMeasuredTiming": true
                 },
                 {
                     "preset": "last30Days", "hasSelection": true,
                     "range": { "startDate": "2026-09-19", "endDate": "2026-10-18" },
                     "totalHumanTypedChars": 39060, "totalActiveSeconds": 60000, "writingDays": 20,
-                    "averageCharsPerDay": 1953.0, "averageCharsPerMinute": 60.0
+                    "averageCharsPerDay": 1953.0, "timedHumanTypedChars": 39060, "measuredWritingSeconds": 60000, "averageCharsPerHour": 2343.6, "hasMeasuredTiming": true
                 },
                 {
                     "preset": "last6Months", "hasSelection": true,
                     "range": { "startDate": "2026-04-18", "endDate": "2026-10-18" },
                     "totalHumanTypedChars": 65434, "totalActiveSeconds": 90000, "writingDays": 70,
-                    "averageCharsPerDay": 934.0, "averageCharsPerMinute": 43.0
+                    "averageCharsPerDay": 934.0, "timedHumanTypedChars": 65434, "measuredWritingSeconds": 90000, "averageCharsPerHour": 2617.4, "hasMeasuredTiming": true
                 },
                 {
                     "preset": "custom", "hasSelection": false, "range": null,
                     "totalHumanTypedChars": 0, "totalActiveSeconds": 0, "writingDays": 0,
-                    "averageCharsPerDay": null, "averageCharsPerMinute": null
+                    "averageCharsPerDay": null, "timedHumanTypedChars": 0, "measuredWritingSeconds": 0, "averageCharsPerHour": null, "hasMeasuredTiming": false
                 }
             ],
             "selected": {
                 "preset": "last7Days",
                 "range": { "startDate": "2026-10-12", "endDate": "2026-10-18" },
                 "totalHumanTypedChars": 3635, "totalActiveSeconds": 7270, "writingDays": 5,
-                "averageCharsPerDay": 727.0, "averageCharsPerMinute": 30.0,
+                "averageCharsPerDay": 727.0, "timedHumanTypedChars": 3635, "measuredWritingSeconds": 7270, "averageCharsPerHour": 1800.0, "hasMeasuredTiming": true,
                 "records": {
                     "bestDay": { "date": "2026-10-15", "endDate": null, "value": 906 },
                     "fastestHour": { "date": "2026-10-14", "endDate": null, "value": 36 },

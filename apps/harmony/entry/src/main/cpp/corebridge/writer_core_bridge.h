@@ -79,6 +79,17 @@ char*  writer_core_save_chapter(const char* project_id, const char* volume_id, c
 // ── Recent edits ──
 char*  writer_core_get_recent_edits(void);
 
+// ── Global search ──
+// writer_core_global_search_page: 统一全局搜索（作品/卷/章/星图/设置）。
+//   query/scope 为 UTF-8 字符串；scope 取 chapterBody、chapterTitle、chapterNote、
+//   projectTitle、volumeTitle、starmapTitle、starmapNode、starmapEdgeLabel、
+//   starmapHyperlink、starmapLink、starmapEmbed、setting 或 all。
+//   cursor 为空时从第一页开始；context_json 为 SearchContext camelCase JSON（可为 null）。
+//   返回 ResultEnvelope JSON，data 为 { items, nextCursor }；正文 byteStart/byteEnd
+//   是原文 UTF-8 字节偏移。返回值由 Core 分配，必须用 writer_core_free_string 释放。
+char*  writer_core_global_search_page(const char* query, const char* scope, uint32_t limit,
+                                      const char* cursor, const char* context_json);
+
 // ── Settings ──
 char*  writer_core_load_local_settings(void);
 char*  writer_core_save_local_settings(const char* settings_json);
@@ -180,6 +191,10 @@ char*  writer_core_get_current_writing_speed(uint32_t window_seconds);
 // C 层只透传编辑事实。event_json 里带平台端固定并重发的 eventId/occurredAtMs，
 // Core 按 eventId 幂等去重。
 bool  writer_core_record_editor_change_stats(const char* event_json);
+// 上报一条已测量的前台编辑器写作计时切片。平台只给 session_id / 起止毫秒 /
+// 项目卷章 / 暂停原因与固定 event_id；device_id、业务日由 Core 补齐。Core 按
+// event_id 幂等去重，同一设备重叠切片按并集计。
+bool  writer_core_record_writing_activity_segment(const char* segment_json);
 // 正文保存 + 未确认统计事件一次提交：先走正文保存事务，成功后再幂等记录
 // events_json（[EditorChangeStatsInputDto] 数组，可为 NULL/空串）里的事件。
 // 正文保存失败则不记任何事件；重复提交同一批事件不会重复计字。

@@ -203,8 +203,16 @@ pub struct WritingStatsLifetimeDto {
     /// 平均每天字数 = 累计人工输入 / 首次写作日到今天（含两端）的自然日历
     /// 天数（同 `elapsed_calendar_days`，不排除休息日）；完全空生涯时为 null。
     pub average_chars_per_day: Option<f64>,
-    /// 平均写作速度（字/分）= 累计人工输入 / 有效写作时长；零时长时为 null。
-    pub average_chars_per_minute: Option<f64>,
+    /// 实际计时覆盖的人工输入字数：只统计落在已测量前台写作切片内的人工输入。
+    /// 与 `total_human_typed_chars` 的差额是没有计时证据的历史字数。
+    pub timed_human_typed_chars: u64,
+    /// 已测量的真实写作秒数（同设备重叠切片取并集，跨设备相加）。
+    pub measured_writing_seconds: u64,
+    /// 真实平均速度（字/时）= `timed_human_typed_chars * 3600 / measured_writing_seconds`。
+    /// 没有可信用时样本时为 null，不用 0 或旧事件时间差冒充。
+    pub average_chars_per_hour: Option<f64>,
+    /// 是否存在可信用时样本；false 时界面应显示「— / 仅统计新记录」。
+    pub has_measured_timing: bool,
 }
 
 /// 预设时段卡（近七天 / 近三十天 / 近半年 / 自选区间）。
@@ -225,8 +233,15 @@ pub struct WritingStatsPeriodCardDto {
     /// 平均每天字数 = 区间人工输入 / 该区间的自然日历天数（含无输入日、
     /// 不排除休息日）；区间有效但没有输入时为 0，自选区间未选择时为 null。
     pub average_chars_per_day: Option<f64>,
-    /// 平均写作速度（字/分）= 区间人工输入 / 区间有效写作时长；零时长时为 null。
-    pub average_chars_per_minute: Option<f64>,
+    /// 实际计时覆盖的人工输入字数（只算落在真实写作切片内的输入）。
+    pub timed_human_typed_chars: u64,
+    /// 已测量的真实写作秒数；历史事件的时间差不算。
+    pub measured_writing_seconds: u64,
+    /// 真实平均速度（字/时）= timed_human_typed_chars * 3600 / measured_writing_seconds；
+    /// 没有计时样本时为 null。
+    pub average_chars_per_hour: Option<f64>,
+    /// 是否存在可信用时样本。
+    pub has_measured_timing: bool,
 }
 
 /// 当前选中时段的完整详情：区间汇总 + 逐日热力格 + 纪录 + 趋势。
@@ -244,8 +259,15 @@ pub struct WritingStatsSelectedPeriodDto {
     /// 平均每天字数 = 区间人工输入 / 该区间的自然日历天数（含无输入日、
     /// 不排除休息日）；区间有效但没有输入时为 0。
     pub average_chars_per_day: Option<f64>,
-    /// 平均写作速度（字/分）= 区间人工输入 / 区间有效写作时长；零时长时为 null。
-    pub average_chars_per_minute: Option<f64>,
+    /// 实际计时覆盖的人工输入字数（只算落在真实写作切片内的输入）。
+    pub timed_human_typed_chars: u64,
+    /// 已测量的真实写作秒数；历史事件的时间差不算。
+    pub measured_writing_seconds: u64,
+    /// 真实平均速度（字/时）= timed_human_typed_chars * 3600 / measured_writing_seconds；
+    /// 没有计时样本时为 null。
+    pub average_chars_per_hour: Option<f64>,
+    /// 是否存在可信用时样本。
+    pub has_measured_timing: bool,
     /// 当前区间内的逐日热力格（日期升序、每天一项），由 Core 从同一份区间
     /// 投影生成；时长区间不会用趋势的周/月聚合点伪造每日值。
     #[serde(default)]
@@ -272,12 +294,13 @@ pub struct WritingStatsRecordDto {
 pub struct WritingStatsRecordsDto {
     /// 最多码字日：`date` 为日期，`value` 为当天人工输入字数；并列取更早日期。
     pub best_day: WritingStatsRecordDto,
-    /// 最快码字：连续 60 分钟半开窗口 `[start, start+60min)` 内的最高人工输入量；
-    /// `date` 为窗口起始业务日，`value` 即窗口内字数（显示为字/时）。
+    /// 单小时最多码字：自然连续 60 分钟半开窗口 `[start, start+60min)` 内的最高
+    /// 人工输入量；`date` 为窗口起始业务日，`value` 是窗口内字数（单位「字」，
+    /// 不是持续一小时的平均效率，界面不得标成「字/时」）。
     pub fastest_hour: WritingStatsRecordDto,
-    /// 最长写作会话：沿用现有 `SESSION_GAP_MS` 会话定义（按设备独立分组，不把
-    /// 不同设备并发事件接成一条）；`date` 为会话开始业务日，`value` 为时长秒数。
-    /// 只有时长大于 0 的会话才算有效样本；没有时为 null。
+    /// 最长写作会话：来自平台上报的真实前台计时切片（按会话 ID 汇总，会话内
+    /// 重叠切片取并集）；`date` 为会话开始业务日，`value` 为时长秒数。
+    /// 只有大于 0 的已测量会话才算有效样本；没有时为 null。
     pub longest_session: WritingStatsRecordDto,
     /// 最长连续有输入日期段：`date` / `end_date` 为起止日期，`value` 为连续天数；
     /// 并列时取更早的一段。
@@ -338,4 +361,34 @@ pub struct WritingStatsHeatmapDto {
     /// `localEvents` / `syncedDevices` / `partialSync`，供端侧标注数据范围。
     pub history_scope: String,
     pub days: Vec<WritingStatsHeatmapDayDto>,
+}
+
+/// 平台端上报的一段已测量前台写作计时切片。
+///
+/// 平台端只负责用单调时钟测出 `start_at_ms..end_at_ms` 的真实前台片段；
+/// `device_id`、`device_class`、`local_date` 由 Core 从本机设备信息补齐，
+/// 不接受端侧伪造。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingActivitySegmentInputDto {
+    /// 平台固定的幂等 ID；重发同一片段时保持不变。
+    #[serde(default)]
+    pub event_id: String,
+    #[serde(default)]
+    pub platform: String,
+    pub project_id: String,
+    #[serde(default)]
+    pub volume_id: String,
+    #[serde(default)]
+    pub chapter_id: String,
+    /// 本次前台写作会话 ID；暂停恢复后仍是同一次会话。
+    pub session_id: String,
+    /// 切片墙钟起点（Unix 毫秒）。
+    pub start_at_ms: i64,
+    /// 切片墙钟终点（Unix 毫秒）。
+    pub end_at_ms: i64,
+    /// 暂停/结束原因：`background` / `windowInactive` / `leftEditor` /
+    /// `manual` / `lock` / `close` / `heartbeat` 等。
+    #[serde(default)]
+    pub pause_reason: String,
 }

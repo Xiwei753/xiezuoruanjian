@@ -275,7 +275,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
             elapsed_calendar_days: 0,
             writing_days: 0,
             average_chars_per_day: None,
-            average_chars_per_minute: None,
+            timed_human_typed_chars: 0,
+            measured_writing_seconds: 0,
+            average_chars_per_hour: None,
+            has_measured_timing: false,
         },
         period_cards: vec![WritingStatsPeriodCardDto {
             preset: "custom".to_string(),
@@ -285,7 +288,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
             total_active_seconds: 0,
             writing_days: 0,
             average_chars_per_day: None,
-            average_chars_per_minute: None,
+            timed_human_typed_chars: 0,
+            measured_writing_seconds: 0,
+            average_chars_per_hour: None,
+            has_measured_timing: false,
         }],
         selected: WritingStatsSelectedPeriodDto {
             preset: "lifetime".to_string(),
@@ -297,7 +303,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
             total_active_seconds: 0,
             writing_days: 0,
             average_chars_per_day: None,
-            average_chars_per_minute: None,
+            timed_human_typed_chars: 0,
+            measured_writing_seconds: 0,
+            average_chars_per_hour: None,
+            has_measured_timing: false,
             heatmap_days: Vec::new(),
             records: WritingStatsRecordsDto {
                 best_day: WritingStatsRecordDto {
@@ -340,7 +349,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
                 "elapsedCalendarDays": 0,
                 "writingDays": 0,
                 "averageCharsPerDay": null,
-                "averageCharsPerMinute": null
+                "timedHumanTypedChars": 0,
+                "measuredWritingSeconds": 0,
+                "averageCharsPerHour": null,
+                "hasMeasuredTiming": false
             },
             "periodCards": [{
                 "preset": "custom",
@@ -350,7 +362,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
                 "totalActiveSeconds": 0,
                 "writingDays": 0,
                 "averageCharsPerDay": null,
-                "averageCharsPerMinute": null
+                "timedHumanTypedChars": 0,
+                "measuredWritingSeconds": 0,
+                "averageCharsPerHour": null,
+                "hasMeasuredTiming": false
             }],
             "selected": {
                 "preset": "lifetime",
@@ -359,7 +374,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
                 "totalActiveSeconds": 0,
                 "writingDays": 0,
                 "averageCharsPerDay": null,
-                "averageCharsPerMinute": null,
+                "timedHumanTypedChars": 0,
+                "measuredWritingSeconds": 0,
+                "averageCharsPerHour": null,
+                "hasMeasuredTiming": false,
                 "heatmapDays": [],
                 "records": {
                     "bestDay": { "date": null, "endDate": null, "value": null },
@@ -386,7 +404,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
             elapsed_calendar_days: 223,
             writing_days: 42,
             average_chars_per_day: Some(29.38),
-            average_chars_per_minute: Some(18.5),
+            timed_human_typed_chars: 1234,
+            measured_writing_seconds: 4000,
+            average_chars_per_hour: Some(1110.6),
+            has_measured_timing: true,
         },
         period_cards: vec![WritingStatsPeriodCardDto {
             preset: "last7Days".to_string(),
@@ -399,7 +420,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
             total_active_seconds: 600,
             writing_days: 5,
             average_chars_per_day: Some(60.0),
-            average_chars_per_minute: Some(30.0),
+            timed_human_typed_chars: 300,
+            measured_writing_seconds: 600,
+            average_chars_per_hour: Some(1800.0),
+            has_measured_timing: true,
         }],
         selected: WritingStatsSelectedPeriodDto {
             preset: "last7Days".to_string(),
@@ -411,7 +435,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
             total_active_seconds: 600,
             writing_days: 5,
             average_chars_per_day: Some(60.0),
-            average_chars_per_minute: Some(30.0),
+            timed_human_typed_chars: 300,
+            measured_writing_seconds: 600,
+            average_chars_per_hour: Some(1800.0),
+            has_measured_timing: true,
             heatmap_days: Vec::new(),
             records: WritingStatsRecordsDto {
                 best_day: WritingStatsRecordDto {
@@ -463,7 +490,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
                 "elapsedCalendarDays": 223,
                 "writingDays": 42,
                 "averageCharsPerDay": 29.38,
-                "averageCharsPerMinute": 18.5
+                "timedHumanTypedChars": 1234,
+                "measuredWritingSeconds": 4000,
+                "averageCharsPerHour": 1110.6,
+                "hasMeasuredTiming": true
             },
             "periodCards": [{
                 "preset": "last7Days",
@@ -473,7 +503,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
                 "totalActiveSeconds": 600,
                 "writingDays": 5,
                 "averageCharsPerDay": 60.0,
-                "averageCharsPerMinute": 30.0
+                "timedHumanTypedChars": 300,
+                "measuredWritingSeconds": 600,
+                "averageCharsPerHour": 1800.0,
+                "hasMeasuredTiming": true
             }],
             "selected": {
                 "preset": "last7Days",
@@ -482,7 +515,10 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
                 "totalActiveSeconds": 600,
                 "writingDays": 5,
                 "averageCharsPerDay": 60.0,
-                "averageCharsPerMinute": 30.0,
+                "timedHumanTypedChars": 300,
+                "measuredWritingSeconds": 600,
+                "averageCharsPerHour": 1800.0,
+                "hasMeasuredTiming": true,
                 "heatmapDays": [],
                 "records": {
                     "bestDay": { "date": "2026-10-15", "endDate": null, "value": 120 },

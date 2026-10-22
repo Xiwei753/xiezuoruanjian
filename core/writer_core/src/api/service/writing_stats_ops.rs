@@ -24,6 +24,19 @@ impl WriterCoreApi {
             .map_err(WriterError::from)
     }
 
+    /// 上报一段平台已测量的前台写作计时切片。
+    ///
+    /// 平台端固定 `eventId` 并原样重发；Core 负责设备身份、本地日期切分和
+    /// 幂等持久化，重发不会重复计时。
+    pub fn record_writing_activity_segment(
+        &self,
+        input: crate::api::WritingActivitySegmentInputDto,
+    ) -> ApiResult<()> {
+        self.core_write()
+            .record_writing_activity_segment(input)
+            .map_err(WriterError::from)
+    }
+
     /// 正文保存 + 未确认统计事件一次提交（按正文保存事务对齐）。
     ///
     /// 顺序：**先保存正文**（沿用既有的空覆盖保护、搜索索引与变更集逻辑），

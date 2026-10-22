@@ -49,7 +49,12 @@ pub mod api;
 pub mod calendar;
 pub mod migration;
 pub mod projection;
+pub mod session;
 pub mod store;
+
+pub use session::{
+    WritingActivitySegment, WritingSessionClock, WritingSessionState,
+};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -100,7 +105,16 @@ pub struct WritingInputEvent {
     pub pasted_chars: u32,
     pub ai_inserted_chars: u32,
     pub net_delta_chars: i32,
+    /// 已废弃：旧客户端上报的时长，不能作为真实写作时长的依据。
+    ///
+    /// 真实计时以 [`WritingActivitySegment`] 为准；这里的值只保留用于读取
+    /// 历史事件，不参与速度分母、活跃时长或最长会话。
+    #[serde(default)]
     pub duration_seconds: u32,
+    /// 已废弃：旧客户端会话 ID，不再代表真实前台写作会话。
+    ///
+    /// 真实会话 ID 见 [`WritingActivitySegment::session_id`]。
+    #[serde(default)]
     pub session_id: String,
     /// 事件发生时的**本机本地**日历日（`YYYY-MM-DD`），每日统计按它分桶。
     ///

@@ -85,7 +85,8 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 │  ├── stats/
 │  │  ├── events/                  # 按来源设备分区的写作事件（经统计设备组同步）
 │  │  │  └── <device_id>/
-│  │  │     └── YYYY-MM-DD.events.jsonl
+│  │  │     ├── YYYY-MM-DD.events.jsonl
+│  │  │     └── YYYY-MM-DD.sessions.jsonl
 │  │  ├── events.local/            # 旧版本地写作事件（迁移后只读保留，不同步）
 │  │  ├── daily/                   # 统计日报（不同步）
 │  │  ├── events.device_partitions.v1  # 事件库迁移完成标记（不同步）
@@ -99,7 +100,7 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 
 同步根 = `app_data_root`，路径相对应用数据根：
 
-- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`、`stats/events/<device_id>/YYYY-MM-DD.events.jsonl`（仅通过对应设备数据组同步，本机只写自己的分区）。
+- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`、`stats/events/<device_id>/YYYY-MM-DD.events.jsonl` 与 `stats/events/<device_id>/YYYY-MM-DD.sessions.jsonl`（仅通过对应设备数据组同步，本机只写自己的分区）。
 - **黑名单（绝不参与）**：`projects/`（projects_root）、`logs/`（log_dir）、`exports/`、`backups/`、`settings.local.json`、`recent_edits.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`（旧版单机事件库、迁移标记与冲突诊断文件）、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
 
 ### 统计设备组
@@ -107,8 +108,9 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 写作统计事件按来源设备独立成组同步（详见 `docs/sync_rules.md`「统计设备组」）：
 
 - 事件目录：`stats/events/<device_id>/YYYY-MM-DD.events.jsonl`，文件按 UTC 日命名，事件内 `local_date` 仍是事件发生地的业务日，两个日期概念不混用。
+- 计时目录：同分区 `YYYY-MM-DD.sessions.jsonl`，每行是一条已测量的前台编辑器写作切片（`event_id`、`session_id`、起止毫秒、项目/卷/章、来源本地日、暂停原因）。切片不是两次按键时间差；本机只追加自己的分区并按 `event_id` 幂等去重。
 - 组 id `stats_device:<device_id>`，远端 storage key `stats-device-<hex>`；每台设备独占写入自己的分区，下载分区只读，其它设备不重写。
-- 聚合时 Core 扫描全部分区并按 `event_id` 去重（本机优先），不维护可被 LWW 覆写的每日汇总账本；合计数永远从原始事件投影派生。
+- 聚合时 Core 扫描全部分区并按 `event_id` 去重（本机优先），不维护可被 LWW 覆写的每日汇总账本；字数仍从事件投影派生，真实写作秒数只从计时切片派生。旧事件没有计时切片，不得反推或补写时长，也不与新计时样本混算字/时。
 - 旧 `app-meta/stats/events.local/` 只作为一次性迁移输入，迁移标记写入后不再读写。
 
 `log_dir` 由平台提供，与 `app_data_root` 相互独立（Android 为 `Sujian/logs/`），不位于数据根目录下。

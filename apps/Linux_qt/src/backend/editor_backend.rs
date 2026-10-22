@@ -34,7 +34,7 @@ fn correction_dictionary_resources_value(resources: Vec<(String, bool)>) -> serd
 #[path = "chapter_operations.rs"]
 mod chapter_operations;
 #[path = "writing_stats.rs"]
-mod writing_stats;
+pub(crate) mod writing_stats;
 
 /// 编辑器 QML 后端——桥接 QML 前端与 Core API。
 ///
@@ -331,6 +331,15 @@ pub struct EditorBackend {
     ),
     #[allow(dead_code)]
     flush_recent_edits: qt_method!(fn(&self)),
+    /// Issue #981：前台写作计时心跳 / 暂停 / 恢复 / 结束。
+    #[allow(dead_code)]
+    writing_session_heartbeat: qt_method!(fn(&self)),
+    #[allow(dead_code)]
+    pause_writing_session: qt_method!(fn(&self, reason: QString)),
+    #[allow(dead_code)]
+    resume_writing_session: qt_method!(fn(&self)),
+    #[allow(dead_code)]
+    close_writing_session: qt_method!(fn(&self, reason: QString)),
     #[allow(dead_code)]
     has_selected_chapter: qt_method!(fn(&self) -> bool),
     #[allow(dead_code)]
@@ -499,6 +508,22 @@ impl EditorBackend {
                 return;
             }
         };
+        if matches!(
+            parsed_cause,
+            writer_core::editor::EditorTransactionCause::Typing
+                | writer_core::editor::EditorTransactionCause::TypingCommit
+                | writer_core::editor::EditorTransactionCause::ImeComposition
+                | writer_core::editor::EditorTransactionCause::Delete
+        ) && (inserted_chars > 0 || deleted_chars > 0)
+        {
+            let _ = self.with_app(|app| {
+                app.on_human_writing_edit(
+                    &project_id.to_string(),
+                    &volume_id.to_string(),
+                    &chapter_id.to_string(),
+                )
+            });
+        }
         if self
             .with_app(|app| {
                 app.record_editor_change_stats(
@@ -1358,6 +1383,56 @@ impl EditorBackend {
                 "editor_backend",
                 "BORROW_CONFLICT",
                 "flush_recent_edits skipped due to borrow conflict",
+            );
+        }
+    }
+    fn writing_session_heartbeat(&self) {
+        if self
+            .with_app(|app| app.writing_session_heartbeat())
+            .is_err()
+        {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "writing_session_heartbeat skipped due to borrow conflict",
+            );
+        }
+    }
+    fn pause_writing_session(&self, reason: QString) {
+        let reason = reason.to_string();
+        if self
+            .with_app(|app| app.pause_writing_session(&reason))
+            .is_err()
+        {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "pause_writing_session skipped due to borrow conflict",
+            );
+        }
+    }
+    fn resume_writing_session(&self) {
+        if self
+            .with_app(|app| app.resume_writing_session())
+            .is_err()
+        {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "resume_writing_session skipped due to borrow conflict",
+            );
+        }
+    }
+    fn close_writing_session(&self, reason: QString) {
+        let reason = reason.to_string();
+        if self
+            .with_app(|app| app.close_writing_session(&reason))
+            .is_err()
+        {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "close_writing_session skipped due to borrow conflict",
             );
         }
     }

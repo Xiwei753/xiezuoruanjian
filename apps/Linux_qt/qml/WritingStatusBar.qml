@@ -30,8 +30,9 @@ Rectangle {
     required property var dt
 
     // ── 注入的状态数据（全部由 WritingWorkspace 提供）──
-    // 左段：Core「当前写作速度」的 charsPerMinute（最近 N 秒窗口的分钟速度），
-    // 展示时乘 60 折算为字/时；它表示最近一分钟的速度折算到一小时，不是本章字数。
+    // 左段：Core「当前写作速度」的 charsPerMinute（最近 N 秒窗口的分钟速度）。
+    // Issue #981：这只是最近一分钟输入折算到一小时，不能当作真实写作效率；
+    // 展示时必须带「最近一分钟折算」定语。真实效率由统计页按已测会话计算。
     // 也不用"字数 / 时长"自己除——Core 的会话/空闲口径才作数。
     // 也不能读写作速度曲线的最后一个桶：曲线是历史分桶，桶只生成到最后一个
     // 输入事件，停笔后它会一直挂着停笔前的非零值。
@@ -85,7 +86,7 @@ Rectangle {
 
         // ── 左：写作速度 ──
         Label {
-            text: Math.round(root.charsPerMinute * 60).toLocaleString(Qt.locale(), "f", 0) + " " + qsTr("字/时")
+            text: qsTr("最近一分钟折算 %1 字/时").arg(Math.round(root.charsPerMinute * 60).toLocaleString(Qt.locale(), "f", 0))
             color: Kirigami.Theme.disabledTextColor
             Layout.alignment: Qt.AlignVCenter
         }

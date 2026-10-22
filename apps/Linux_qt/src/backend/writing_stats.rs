@@ -4,7 +4,166 @@
 
 use super::*;
 
+/// Issue #981：Linux Qt 前台写作会话运行时。
+///
+/// `WritingSessionClock` 只接收单调毫秒，这里用进程启动后的 `Instant` 提供；
+/// 墙钟只在会话第一次输入时锚定一次。统计数据提交走异步串行 writer，不在输入
+/// 热路径做磁盘 I/O。
+pub(crate) struct LinuxWritingSession {
+    clock: writer_core::writing_stats::WritingSessionClock,
+    started_at: std::time::Instant,
+}
+
+impl Default for LinuxWritingSession {
+    fn default() -> Self {
+        Self {
+            clock: writer_core::writing_stats::WritingSessionClock::new(),
+            started_at: std::time::Instant::now(),
+        }
+    }
+}
+
+impl LinuxWritingSession {
+    fn now_mono_ms(&self) -> i64 {
+        i64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(i64::MAX)
+    }
+
+    fn now_wall_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or(0)
+    }
+}
+
 impl AppBackend {
+    fn enqueue_writing_activity_segments(
+        &self,
+        segments: Vec<writer_core::writing_stats::WritingActivitySegment>,
+    ) {
+        if segments.is_empty() {
+            return;
+        }
+        let Some(ref writer) = self.stats_writer else {
+            return;
+        };
+        for segment in segments {
+            let input = writer_core::api::WritingActivitySegmentInputDto {
+                event_id: segment.event_id,
+                platform: "linux".to_string(),
+                project_id: segment.project_id,
+                volume_id: segment.volume_id,
+                chapter_id: segment.chapter_id,
+                session_id: segment.session_id,
+                start_at_ms: segment.start_at_ms,
+                end_at_ms: segment.end_at_ms,
+                pause_reason: segment.pause_reason,
+            };
+            if let Err(e) = writer.enqueue(
+                crate::backend::stats_writer::StatsWriteCommand::ActivitySegment(input),
+            ) {
+                self.debug_error("stats", "record_writing_activity_segment_enqueue_failed", &e);
+            }
+        }
+    }
+
+    /// Issue #981：首次人工输入开始计时；暂停后再次输入恢复计时。
+    ///
+    /// 只有真人输入/删除会走到这里；粘贴、撤销、格式化等事务不算人工输入，
+    /// 也不启动写作计时。
+    pub(crate) fn on_human_writing_edit(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) {
+        let segments = {
+            let mut session = self
+                .writing_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let mono_ms = session.now_mono_ms();
+            let wall_ms = LinuxWritingSession::now_wall_ms();
+            session.clock.on_first_human_edit(
+                mono_ms,
+                wall_ms,
+                project_id,
+                volume_id,
+                chapter_id,
+                "",
+                writer_core::writing_stats::Platform::Desktop,
+                "",
+            )
+        };
+        self.enqueue_writing_activity_segments(segments);
+    }
+
+    /// Issue #981：30 秒心跳把已完成切片异步落盘，保持会话继续。
+    pub(crate) fn writing_session_heartbeat(&self) {
+        let segments = {
+            let mut session = self
+                .writing_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let mono_ms = session.now_mono_ms();
+            session.clock.on_heartbeat(
+                mono_ms,
+                "",
+                writer_core::writing_stats::Platform::Desktop,
+                "",
+            )
+        };
+        self.enqueue_writing_activity_segments(segments);
+    }
+
+    /// Issue #981：切换应用/最小化/锁屏/离开正文/手动暂停，立即结束当前切片。
+    pub(crate) fn pause_writing_session(&self, reason: &str) {
+        let segments = {
+            let mut session = self
+                .writing_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let mono_ms = session.now_mono_ms();
+            session.clock.on_pause(
+                mono_ms,
+                reason,
+                "",
+                writer_core::writing_stats::Platform::Desktop,
+                "",
+            )
+        };
+        self.enqueue_writing_activity_segments(segments);
+    }
+
+    /// Issue #981：回到前台只解除暂停标记，不补算离开期间；等下一次输入/显式继续。
+    pub(crate) fn resume_writing_session(&self) {
+        let mut session = self
+            .writing_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        session.clock.on_resume();
+    }
+
+    /// Issue #981：离开正文或退出应用，结束会话并落下最后一段切片。
+    pub(crate) fn close_writing_session(&self, _reason: &str) {
+        let segments = {
+            let mut session = self
+                .writing_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let mono_ms = session.now_mono_ms();
+            session
+                .clock
+                .on_close(
+                    mono_ms,
+                    "",
+                    writer_core::writing_stats::Platform::Desktop,
+                    "",
+                )
+        };
+        self.enqueue_writing_activity_segments(segments);
+    }
+
     /// 按编辑事务上报写作统计。
     ///
     /// 平台端只透传编辑事实（cause + inserted/deleted），不自己拼 source、device_id、session_id。
@@ -29,7 +188,7 @@ impl AppBackend {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
                 .unwrap_or(0);
-            if let Err(e) = writer.enqueue(crate::backend::stats_writer::StatsWriteCommand {
+            if let Err(e) = writer.enqueue(crate::backend::stats_writer::StatsWriteCommand::Editor {
                 project_id: project_id.to_string(),
                 volume_id: volume_id.to_string(),
                 chapter_id: chapter_id.to_string(),
