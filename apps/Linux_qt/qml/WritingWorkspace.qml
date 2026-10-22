@@ -506,6 +506,10 @@ Rectangle {
             // Issue #829：切章后重拉今日统计（统计按 writing event 落盘，
             // 切章是天然的刷新点，不必逐键去查）。
             root.refreshWritingStatusData();
+            // Issue #982 第三轮复核：身份、选中状态、视口和统计都提交完成后，
+            // 才宣布章节加载成功。搜索定位回调此时重入 requestSearchReveal(),
+            // 章节 ID 已一致，只会选中/滚动，不会再次打开同一章。
+            root.chapterLoaded(pId, vId, cId);
         }
     }
 
@@ -530,11 +534,20 @@ Rectangle {
     function reloadActiveChapter() {
         if (editorController.projectId && editorController.volumeId && editorController.chapterId) {
             editorViewport.snapNextCursorUpdate();
-            editorController.loadChapterContentWithIds(
+            var result = editorController.loadChapterContentWithIds(
                 editorController.projectId,
                 editorController.volumeId,
                 editorController.chapterId
             );
+            // 直接重载当前章不改变章节身份；载入完成后由外层发出成功信号，
+            // 不依赖通用 loader 内部提前发射。
+            if (result) {
+                root.chapterLoaded(
+                    editorController.projectId,
+                    editorController.volumeId,
+                    editorController.chapterId
+                );
+            }
         }
     }
 

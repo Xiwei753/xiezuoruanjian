@@ -1194,7 +1194,8 @@ QtObject {
         // 段落由后续编辑事务或手动“检查本章”补算，不因切章重扫整章。
         requestCorrectionSnapshot();
 
-        chapterLoaded(pId, vId, cId);
+        // 成功信号由外层 WritingWorkspace 在章节身份、选中状态和视口都提交后发出。
+        // 这里只负责载入正文，避免搜索定位回调在身份尚未更新时重入 openChapter。
 
         // Return full result so caller updates chapter state from authoritative source
         return result;
