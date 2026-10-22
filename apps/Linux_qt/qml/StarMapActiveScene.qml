@@ -14,8 +14,8 @@
 //     渲染时以视口中心为相对原点（视口中心的世界坐标现算），避免巨大世界坐标
 //     乘极大 zoom 后的浮点抖动；镜头尺度只有数值安全边界，边界不触发层级切换。
 //   - 节点 / 子星图入口是 Qt Quick 矢量几何（矩形 / 正圆），连线由
-//     QtQuick.Shapes 的 ShapePath 按当前投影实时绘制，文字由实时 Text/TextInput
-//     绘制。没有 layer FBO、没有缩略图纹理、没有把 1x 位图放大 N 倍。
+//     QtQuick.Shapes 的 ShapePath 按当前投影实时绘制，文字由实时 Text/TextInput/
+//     TextEdit 绘制。没有 layer FBO、没有缩略图纹理、没有把 1x 位图放大 N 倍。
 //   - 线宽 / 文字字号是确定的屏幕口径：线宽 = world 线宽 × 镜头比例（夹在
 //     1~6 屏幕像素）；字号 = 用户字号 token × 镜头比例（夹在 0.6~8 倍），
 //     都在屏幕像素上现算，不依赖任何预栅格化纹理。
@@ -36,6 +36,7 @@
 import QtQuick
 import QtQuick.Shapes
 import "StarMapPathPlanner.js" as StarMapPathPlanner
+import "StarMapNodeMetrics.js" as StarMapNodeMetrics
 
 Item {
     id: scene
@@ -373,7 +374,24 @@ Item {
     function deleteEdge(edgeId) { graphController.deleteEdge(edgeId) }
     function updateEmbedLabel(instanceId, label) { graphController.updateEmbed(instanceId, { label: label }) }
     function deleteEmbed(instanceId) { graphController.deleteEmbed(instanceId) }
-    function commitNodeTitle(nodeId, title) { graphController.updateNode(nodeId, { title: title }) }
+    // Issue #984：普通节点名称 + 正文统一保存入口。
+    // body === null 表示该内容类型只允许改名称（引用类型不写 content，
+    // 绝不把 chapterRef/entityRef/externalRef 改写成 inline）。
+    function commitNodeEdit(nodeId, title, body) {
+        var patch = { title: title }
+        if (body !== null && body !== undefined) {
+            var node = graphController.getNode(nodeId)
+            var summary = node && node.content && node.content.summary !== undefined
+                    ? node.content.summary : null
+            patch.content = {
+                type: "inline",
+                summary: summary,
+                // body 不 trim：空行、段落空白必须原样保存。
+                body: body
+            }
+        }
+        graphController.updateNode(nodeId, patch)
+    }
 
     // Repeater.itemAt() 的静态类型是 QQuickItem（qmllint 会把这些 delegate 属性
     // 报成 missing-property，属静态分析的已知误报），运行时取的是真实 delegate。
@@ -845,7 +863,10 @@ Item {
             }
         }
         for (var i = 0; i < candidates.length; i++) {
-            if (!overlapsExistingNode(candidates[i].x, candidates[i].y, 150, 60, 12))
+            // Issue #984：新建节点也用统一卡片度量，不写死旧尺寸。
+            if (!overlapsExistingNode(candidates[i].x, candidates[i].y,
+                                      StarMapNodeMetrics.defaultNodeWidth(),
+                                      StarMapNodeMetrics.defaultNodeHeight(), 12))
                 return candidates[i]
         }
         return { x: wx, y: wy }
@@ -1025,6 +1046,9 @@ Item {
             property bool editing: false
             property real _wobbleAnimX: 0
             property real _wobbleAnimY: 0
+            // Issue #984：编辑态草稿。正文保持原始文本，不做 trim。
+            property string editTitleDraft: ""
+            property string editBodyDraft: ""
 
             readonly property bool isSelected: scene.selectionController
                     ? scene.selectionController.matches(scene.scenePathKey, "node", nodeData.id)
@@ -1038,19 +1062,47 @@ Item {
             readonly property real worldY: isMoving && scene.interactionController
                     ? scene.interactionController.moveY : nodeData.y
 
-            x: scene.worldToScreenX(worldX) + (nodeData.width * scene._safeZoom - width) / 2
-            y: scene.worldToScreenY(worldY) + (nodeData.height * scene._safeZoom - height) / 2
-            width: nodeData.width * scene._safeZoom * scene._reveal
+            // Issue #984：普通节点是「名称 + 正文」文字卡片，宽高只认
+            // StarMapNodeMetrics；nodesModel 里的 width/height 也来自同一函数。
+            readonly property real cardWidth: nodeData.width !== undefined
+                    ? nodeData.width : StarMapNodeMetrics.nodeWidth(nodeData)
+            readonly property real cardHeight: nodeData.height !== undefined
+                    ? nodeData.height : StarMapNodeMetrics.nodeHeight(nodeData, false)
+            readonly property bool bodyEditable: StarMapNodeMetrics.canEditBody(nodeData)
+            readonly property string bodyText: StarMapNodeMetrics.bodyOf(nodeData)
+            readonly property string titleText: nodeData.title && nodeData.title.length > 0
+                    ? nodeData.title : qsTr("未命名")
+            // 编辑态按完整正文计高，保证多行正文完整可见；左上角 world 位置不变。
+            readonly property real editCardHeight: StarMapNodeMetrics.nodeHeight({
+                title: editTitleDraft,
+                content: {
+                    type: "inline",
+                    summary: StarMapNodeMetrics.summaryOf(nodeData),
+                    body: bodyEditable ? editBodyDraft : ""
+                }
+            }, true)
+            readonly property real currentCardWidth: cardWidth
+            readonly property real currentCardHeight: editing ? editCardHeight : cardHeight
+
+            x: scene.worldToScreenX(worldX)
+               + (editing ? 0 : (cardWidth * scene._safeZoom - width) / 2)
+            y: scene.worldToScreenY(worldY)
+               + (editing ? 0 : (cardHeight * scene._safeZoom - height) / 2)
+            width: currentCardWidth * scene._safeZoom * scene._reveal
                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            height: nodeData.height * scene._safeZoom * scene._reveal
+            height: currentCardHeight * scene._safeZoom * scene._reveal
                     + scene._revealDotRadius * 2 * (1 - scene._reveal)
             z: 1
 
             function beginEdit() {
                 if (editing)
                     return
+                // 先填草稿再进入 editing，卡片高度一次性按完整正文展开，避免闪动。
+                editTitleDraft = nodeData.title || ""
+                editBodyDraft = bodyText
+                titleInput.text = editTitleDraft
+                bodyEdit.text = bodyEditable ? editBodyDraft : ""
                 editing = true
-                titleInput.text = nodeItem.nodeData.title
                 titleInput.forceActiveFocus()
                 titleInput.selectAll()
             }
@@ -1059,18 +1111,47 @@ Item {
                     return
                 editing = false
                 titleInput.focus = false
-                titleInput.text = nodeItem.nodeData.title
+                bodyEdit.focus = false
+                editTitleDraft = nodeData.title || ""
+                editBodyDraft = bodyText
+            }
+            function moveFocusToBodyOrCommit() {
+                if (bodyEditable) {
+                    bodyEdit.forceActiveFocus()
+                    bodyEdit.cursorPosition = bodyEdit.text.length
+                } else {
+                    commitEdit()
+                }
             }
             function commitEdit() {
                 if (!editing)
                     return
-                var next = titleInput.text.trim()
-                var changed = next.length > 0 && next !== nodeItem.nodeData.title
+                // Issue #984：中文输入法预编辑（拼音/候选）期间不得提交，
+                // 否则会把未上屏的 composing 文本当成正文落盘。
+                if (titleInput.inputMethodComposing || bodyEdit.inputMethodComposing)
+                    return
+
+                var nextTitle = titleInput.text.trim()
+                // 名称沿用既有规则：trim 后为空则不保存，直接还原。
+                if (nextTitle.length === 0) {
+                    cancelEdit()
+                    return
+                }
+                // 正文不 trim：换行、空行、段落空白原样保存。
+                var nextBody = bodyEditable ? bodyEdit.text : null
+                var titleChanged = nextTitle !== (nodeData.title || "")
+                var bodyChanged = bodyEditable && nextBody !== bodyText
+
                 editing = false
                 titleInput.focus = false
-                titleInput.text = nodeItem.nodeData.title
-                if (changed)
-                    scene.commitNodeTitle(nodeItem.nodeData.id, next)
+                bodyEdit.focus = false
+                editTitleDraft = nextTitle
+                editBodyDraft = bodyEditable ? nextBody : bodyText
+                if (titleChanged || bodyChanged) {
+                    // 引用类型（chapterRef/entityRef/externalRef）body 传 null，
+                    // 只改名称，绝不把引用内容改写成 inline。
+                    scene.commitNodeEdit(nodeData.id, nextTitle, nextBody)
+                }
             }
             onEditingChanged: scene.noteInlineEditing(nodeData.id, editing)
 
@@ -1082,6 +1163,7 @@ Item {
                 color: scene._surfaceContainer
                 border.color: nodeItem.isSelected || nodeItem.editing ? scene._accent : scene._border
                 border.width: (nodeItem.isSelected || nodeItem.editing) ? 2 : 1
+                clip: true
 
                 transform: Translate {
                     x: (nodeItem.isSelected || nodeItem.isPressed || nodeItem.editing)
@@ -1090,35 +1172,133 @@ Item {
                        ? 0 : nodeItem._wobbleAnimY
                 }
 
-                TextInput {
-                    id: titleInput
+                // ── 显示态：名称在上，正文预览在下 ──
+                Item {
+                    id: displayLayer
                     anchors.fill: parent
-                    anchors.margins: 8 * scene._safeZoom
-                    readOnly: !nodeItem.editing
-                    enabled: nodeItem.editing
-                    // 投影太小就不画文字（只省文字，不改形状）；展开进度到
-                    // 一半以后标题才显出来。
-                    visible: nodeItem.editing
-                             || (nodeItem.height >= 18 && scene.detailReveal > 0.6)
-                    color: scene._textPrimary
-                    font.pointSize: scene.dt.fontSmPt * scene._textScale
-                    selectByMouse: nodeItem.editing
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    clip: true
-                    padding: 0
+                    anchors.margins: StarMapNodeMetrics.PADDING * scene._safeZoom
+                    visible: !nodeItem.editing
+                             && nodeItem.height >= 18 && scene.detailReveal > 0.6
 
-                    Binding {
-                        target: titleInput
-                        property: "text"
-                        value: nodeItem.nodeData.title
-                        when: !nodeItem.editing
-                        restoreMode: Binding.RestoreBindingOrValue
+                    Column {
+                        width: parent.width
+                        spacing: nodeItem.bodyText.length > 0
+                                 ? StarMapNodeMetrics.TITLE_BODY_GAP * scene._textScale : 0
+
+                        Text {
+                            id: titleText
+                            width: parent.width
+                            text: nodeItem.titleText
+                            textFormat: Text.PlainText
+                            color: scene._textPrimary
+                            font.pixelSize: Math.max(1,
+                                StarMapNodeMetrics.TITLE_FONT_SIZE * scene._textScale)
+                            font.weight: Font.DemiBold
+                            wrapMode: Text.Wrap
+                            maximumLineCount: StarMapNodeMetrics.TITLE_MAX_LINES
+                            elide: Text.ElideRight
+                            lineHeightMode: Text.FixedHeight
+                            lineHeight: StarMapNodeMetrics.TITLE_LINE_HEIGHT * scene._textScale
+                        }
+
+                        Text {
+                            id: bodyPreview
+                            width: parent.width
+                            text: nodeItem.bodyText
+                            textFormat: Text.PlainText
+                            visible: text.length > 0
+                            color: scene._textMuted
+                            font.pixelSize: Math.max(1,
+                                StarMapNodeMetrics.BODY_FONT_SIZE * scene._textScale)
+                            wrapMode: Text.Wrap
+                            maximumLineCount: StarMapNodeMetrics.PREVIEW_MAX_LINES
+                            elide: Text.ElideRight
+                            lineHeightMode: Text.FixedHeight
+                            lineHeight: StarMapNodeMetrics.BODY_LINE_HEIGHT * scene._textScale
+                        }
+                    }
+                }
+
+                // ── 编辑态：名称单行 TextInput + 正文多行 TextEdit ──
+                Item {
+                    id: editLayer
+                    anchors.fill: parent
+                    anchors.margins: StarMapNodeMetrics.PADDING * scene._safeZoom
+                    visible: nodeItem.editing
+
+                    TextInput {
+                        id: titleInput
+                        width: parent.width
+                        height: Math.max(
+                            StarMapNodeMetrics.TITLE_LINE_HEIGHT * scene._textScale,
+                            implicitHeight)
+                        color: scene._textPrimary
+                        font.pixelSize: Math.max(1,
+                            StarMapNodeMetrics.TITLE_FONT_SIZE * scene._textScale)
+                        font.weight: Font.DemiBold
+                        selectByMouse: true
+                        clip: true
+                        padding: 0
+
+                        onTextChanged: {
+                            if (nodeItem.editing)
+                                nodeItem.editTitleDraft = text
+                        }
+                        Keys.onReturnPressed: function(event) {
+                            // IME 预编辑期间不移动焦点 / 不提交，把 Enter 留给候选确认。
+                            if (titleInput.inputMethodComposing)
+                                return
+                            if (event.modifiers & Qt.ControlModifier)
+                                nodeItem.commitEdit()
+                            else
+                                nodeItem.moveFocusToBodyOrCommit()
+                            event.accepted = true
+                        }
+                        Keys.onEnterPressed: function(event) {
+                            if (titleInput.inputMethodComposing)
+                                return
+                            if (event.modifiers & Qt.ControlModifier)
+                                nodeItem.commitEdit()
+                            else
+                                nodeItem.moveFocusToBodyOrCommit()
+                            event.accepted = true
+                        }
+                        Keys.onEscapePressed: function(event) {
+                            nodeItem.cancelEdit()
+                            event.accepted = true
+                        }
                     }
 
-                    onAccepted: nodeItem.commitEdit()
-                    onEditingFinished: nodeItem.commitEdit()
-                    Keys.onEscapePressed: nodeItem.cancelEdit()
+                    TextEdit {
+                        id: bodyEdit
+                        visible: nodeItem.bodyEditable
+                        width: parent.width
+                        y: titleInput.height + StarMapNodeMetrics.TITLE_BODY_GAP * scene._textScale
+                        height: Math.max(0, parent.height - y)
+                        color: scene._textPrimary
+                        font.pixelSize: Math.max(1,
+                            StarMapNodeMetrics.BODY_FONT_SIZE * scene._textScale)
+                        wrapMode: TextEdit.Wrap
+                        textFormat: TextEdit.PlainText
+                        selectByMouse: true
+                        clip: true
+
+                        onTextChanged: {
+                            if (nodeItem.editing)
+                                nodeItem.editBodyDraft = text
+                        }
+                        // 正文里 Enter 插入换行；Ctrl+Enter 提交；Esc 取消。
+                        Keys.onPressed: function(event) {
+                            if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                                    && (event.modifiers & Qt.ControlModifier)) {
+                                nodeItem.commitEdit()
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_Escape) {
+                                nodeItem.cancelEdit()
+                                event.accepted = true
+                            }
+                        }
+                    }
                 }
             }
 

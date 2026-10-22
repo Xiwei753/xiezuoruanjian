@@ -3,7 +3,7 @@ import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from './dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 import { SearchContext, SearchResultPage } from './dto/SearchDtos'
 import { WritingActivitySegmentInput } from './dto/StatsDtos'
@@ -267,8 +267,8 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   // StarMap Node/Edge/Embed mutations
-  async updateStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>> {
-    return this.starMapBridge.updateStarMapNode(starmapId, nodeId, position)
+  async updateStarMapNode(starmapId: string, nodeId: string, patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>> {
+    return this.starMapBridge.updateStarMapNode(starmapId, nodeId, patch)
   }
 
   async addStarMapEdge(starmapId: string, from: StarMapTargetPath, to: StarMapTargetPath, kind: string, label: string | null): Promise<ResultEnvelope<StarMapEdge>> {

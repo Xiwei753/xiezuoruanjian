@@ -18,7 +18,7 @@ sceneDeltaToCanvas 作为 Router pan 的统一 scene→canvas 入口。守卫随
 sceneDeltaToWorld 改为锁定 sceneDeltaToCanvas。
 
 本守卫锁定三件事，防止回归：
-  1. StarMapNode.qml / StarMapEmbed.qml 不含 canvasZoomLevel（属性已删）。
+  1. StarMapActiveScene.qml / StarMapEmbed.qml 不含 canvasZoomLevel（属性已删）。
   2. StarMapCanvas.qml 含 mapFromItem(null 的 scene→canvas 映射，且含
      sceneDeltaToCanvas 统一入口。
   3. StarMapCanvas.qml 的 onContextMenuRequested 处不能出现
@@ -43,7 +43,7 @@ def check(qml_dir: Path) -> list[tuple[bool, str]]:
     """对 qml_dir 下三个星图 QML 文件执行守卫检查，返回 (passed, detail) 列表。"""
     results: list[tuple[bool, str]] = []
 
-    node_path = qml_dir / "StarMapNode.qml"
+    node_path = qml_dir / "StarMapActiveScene.qml"
     embed_path = qml_dir / "StarMapEmbed.qml"
     canvas_path = qml_dir / "StarMapCanvas.qml"
 
@@ -51,14 +51,14 @@ def check(qml_dir: Path) -> list[tuple[bool, str]]:
     embed = read_file(embed_path)
     canvas = read_file(canvas_path)
 
-    # ── 检查 1a: StarMapNode.qml 不含 canvasZoomLevel ──
+    # ── 检查 1a: StarMapActiveScene.qml 不含 canvasZoomLevel ──
     if node is None:
-        results.append((False, f"StarMapNode.qml 不存在: {node_path}"))
+        results.append((False, f"StarMapActiveScene.qml 不存在: {node_path}"))
     else:
         has = "canvasZoomLevel" in node
         results.append((
             not has,
-            f"StarMapNode.qml 不含 canvasZoomLevel — {'不含' if not has else '发现 canvasZoomLevel'}",
+            f"StarMapActiveScene.qml 不含 canvasZoomLevel — {'不含' if not has else '发现 canvasZoomLevel'}",
         ))
 
     # ── 检查 1b: StarMapEmbed.qml 不含 canvasZoomLevel ──

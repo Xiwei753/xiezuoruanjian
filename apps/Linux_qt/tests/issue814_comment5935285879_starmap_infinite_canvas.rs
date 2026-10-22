@@ -28,12 +28,11 @@
 #[path = "common/source_guard.rs"]
 mod source_guard;
 
-use source_guard::{count_occurrences, function_window, read_src};
+use source_guard::{count_occurrences, function_window, read_src, starmap_node_delegate_src};
 
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
-const NODE: &str = "qml/StarMapNode.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
 
 /// 去掉整行 `//` 注释，只留可执行语句。
@@ -330,7 +329,7 @@ fn content_begin_move_uses_model_world_coordinates() {
 /// #929：归属画布从递归 Content 换成唯一活动画布。
 #[test]
 fn node_does_not_self_convert_drag_delta() {
-    let stripped = strip_line_comments(&read_src(NODE));
+    let stripped = strip_line_comments(&starmap_node_delegate_src());
     assert!(
         !stripped.contains("root.parent.scale"),
         "StarMapNode 不得再用 root.parent.scale 猜缩放（会与相机双重缩放）"

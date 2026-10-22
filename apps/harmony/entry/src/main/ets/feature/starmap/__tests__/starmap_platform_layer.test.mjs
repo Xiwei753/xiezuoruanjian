@@ -27,14 +27,111 @@
 //
 // 被测规格与对应 .ets 内联实现严格一致。
 
-// ── 常量（与 StarMapLayout.ets 一致）──
-const DEFAULT_NODE_WIDTH = 160
-const DEFAULT_NODE_HEIGHT = 80
+// ── 常量（与 StarMapLayout.ets 一致，#984）──
+const NODE_CARD_WIDTH = 208
+const NODE_CARD_MIN_HEIGHT = 64
+const NODE_CARD_PADDING = 12
+const NODE_CARD_TITLE_FONT_SIZE = 16
+const NODE_CARD_TITLE_LINE_HEIGHT = 22
+const NODE_CARD_TITLE_MAX_LINES = 2
+const NODE_CARD_BODY_FONT_SIZE = 12
+const NODE_CARD_BODY_LINE_HEIGHT = 17
+const NODE_CARD_BODY_PREVIEW_MAX_LINES = 5
+const NODE_CARD_TITLE_BODY_GAP = 6
+const NODE_CARD_ACCENT_SIZE = 8
+const NODE_CARD_ACCENT_GAP = 6
+const DEFAULT_NODE_WIDTH = NODE_CARD_WIDTH
+const DEFAULT_NODE_HEIGHT = NODE_CARD_MIN_HEIGHT
 const DEFAULT_NODE_RADIUS = 16
 const DEFAULT_NODE_ZINDEX = 0
 const DEFAULT_EMBED_DIAMETER = 200
-const GRID_HORIZONTAL_SPACING = 200
-const GRID_VERTICAL_SPACING = 120
+const GRID_HORIZONTAL_GAP = 40
+const GRID_VERTICAL_GAP = 40
+
+function estimatedCharWidthRatio(charCode) {
+  if (charCode === 32) {
+    return 0.4
+  }
+  if (charCode === 9) {
+    return 1.0
+  }
+  if (charCode >= 0x1100 && (
+    charCode <= 0x115F ||
+    (charCode >= 0x2E80 && charCode <= 0xA4CF) ||
+    (charCode >= 0xAC00 && charCode <= 0xD7A3) ||
+    (charCode >= 0xF900 && charCode <= 0xFAFF) ||
+    (charCode >= 0xFE30 && charCode <= 0xFE4F) ||
+    (charCode >= 0xFF00 && charCode <= 0xFF60) ||
+    (charCode >= 0xFFE0 && charCode <= 0xFFE6)
+  )) {
+    return 1.0
+  }
+  return 0.62
+}
+
+function estimateWrappedLineCount(text, fontSize, maxWidth, maxLines) {
+  if (text.length === 0 || maxWidth <= 0 || maxLines <= 0) {
+    return 0
+  }
+  let lines = 1
+  let usedWidth = 0
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code === 13) {
+      if (i + 1 < text.length && text.charCodeAt(i + 1) === 10) {
+        continue
+      }
+      lines += 1
+      usedWidth = 0
+      if (lines >= maxLines) {
+        return maxLines
+      }
+      continue
+    }
+    if (code === 10) {
+      lines += 1
+      usedWidth = 0
+      if (lines >= maxLines) {
+        return maxLines
+      }
+      continue
+    }
+    const charWidth = estimatedCharWidthRatio(code) * fontSize
+    if (usedWidth > 0 && usedWidth + charWidth > maxWidth) {
+      lines += 1
+      usedWidth = charWidth
+      if (lines >= maxLines) {
+        return maxLines
+      }
+    } else {
+      usedWidth += charWidth
+    }
+  }
+  return Math.min(lines, maxLines)
+}
+
+// ── 被测规格：measureStarMapNodeCard（#984）──
+function measureStarMapNodeCard(node) {
+  const title = node.title ?? ''
+  const body = node.content !== null && node.content !== undefined &&
+    (node.content.type === 'inline' || node.content.type === 'empty')
+    ? (node.content.body ?? '') : ''
+  const titleMaxWidth =
+    NODE_CARD_WIDTH - NODE_CARD_PADDING * 2 - NODE_CARD_ACCENT_SIZE - NODE_CARD_ACCENT_GAP
+  const bodyMaxWidth = NODE_CARD_WIDTH - NODE_CARD_PADDING * 2
+  const titleLines = Math.max(1, estimateWrappedLineCount(
+    title, NODE_CARD_TITLE_FONT_SIZE, titleMaxWidth, NODE_CARD_TITLE_MAX_LINES))
+  const bodyLines = estimateWrappedLineCount(
+    body, NODE_CARD_BODY_FONT_SIZE, bodyMaxWidth, NODE_CARD_BODY_PREVIEW_MAX_LINES)
+  let height = NODE_CARD_PADDING * 2 + titleLines * NODE_CARD_TITLE_LINE_HEIGHT
+  if (bodyLines > 0) {
+    height += NODE_CARD_TITLE_BODY_GAP + bodyLines * NODE_CARD_BODY_LINE_HEIGHT
+  }
+  return {
+    width: NODE_CARD_WIDTH,
+    height: Math.max(NODE_CARD_MIN_HEIGHT, height)
+  }
+}
 
 // ── 常量（与 StarMapViewport.ets 一致，#821）──
 const CAMERA_SCALE_MIN = 1e-4
@@ -45,12 +142,13 @@ const ZOOM_FACTOR = 1.2
 function buildFreeformLayout(nodes) {
   const result = []
   for (const node of nodes) {
+    const metrics = measureStarMapNodeCard(node)
     result.push({
       nodeId: node.id,
       x: node.position.x,
       y: node.position.y,
-      width: DEFAULT_NODE_WIDTH,
-      height: DEFAULT_NODE_HEIGHT,
+      width: metrics.width,
+      height: metrics.height,
       radius: DEFAULT_NODE_RADIUS,
       zIndex: DEFAULT_NODE_ZINDEX,
       collapsed: false
@@ -86,8 +184,20 @@ function autoGridLayoutNodes(nodes, canvasWidth, canvasHeight) {
   }
   const cols = Math.ceil(Math.sqrt(nodeCount))
   const rows = Math.ceil(nodeCount / cols)
-  const gridWidth = (cols - 1) * GRID_HORIZONTAL_SPACING + DEFAULT_NODE_WIDTH
-  const gridHeight = (rows - 1) * GRID_VERTICAL_SPACING + DEFAULT_NODE_HEIGHT
+  let maxWidth = DEFAULT_NODE_WIDTH
+  let maxHeight = DEFAULT_NODE_HEIGHT
+  for (const node of nodes) {
+    if (node.width > maxWidth) {
+      maxWidth = node.width
+    }
+    if (node.height > maxHeight) {
+      maxHeight = node.height
+    }
+  }
+  const horizontalStep = maxWidth + GRID_HORIZONTAL_GAP
+  const verticalStep = maxHeight + GRID_VERTICAL_GAP
+  const gridWidth = (cols - 1) * horizontalStep + maxWidth
+  const gridHeight = (rows - 1) * verticalStep + maxHeight
   const offsetX = (canvasWidth - gridWidth) / 2
   const offsetY = (canvasHeight - gridHeight) / 2
   const result = []
@@ -96,8 +206,8 @@ function autoGridLayoutNodes(nodes, canvasWidth, canvasHeight) {
     const row = Math.floor(i / cols)
     result.push({
       nodeId: nodes[i].nodeId,
-      x: offsetX + col * GRID_HORIZONTAL_SPACING,
-      y: offsetY + row * GRID_VERTICAL_SPACING,
+      x: offsetX + col * horizontalStep,
+      y: offsetY + row * verticalStep,
       width: nodes[i].width,
       height: nodes[i].height,
       radius: nodes[i].radius,
@@ -502,8 +612,8 @@ console.log('1. freeform 直接用 node.position，位置不被重排')
     'n1 的 authored position (137.5, -42) 原样进布局')
   assert(find(layout, 'n2').x === 0 && find(layout, 'n2').y === 0,
     'n2 的 (0, 0) 原样进布局（不被当成"未布局"覆盖）')
-  assert(find(layout, 'n1').width === 160 && find(layout, 'n1').height === 80,
-    '节点显示尺寸由平台层定义')
+  assert(find(layout, 'n1').width === 208 && find(layout, 'n1').height === 64,
+    '节点卡片宽度固定、无正文时取平台最小高度')
 }
 
 console.log('2. 加载路径不排网格：freeform 结果 ≠ 自动网格结果')
@@ -531,13 +641,21 @@ console.log('3. 自动网格布局：保留 nodeId 与尺寸，居中排布')
   ])
   const grid = autoGridLayoutNodes(nodes, 800, 600)
   assert(eq(grid.map(n => n.nodeId), ['a', 'b', 'c', 'd']), 'nodeId 顺序保留')
-  assert(grid.every(n => n.width === 160 && n.height === 80 && n.radius === 16),
+  assert(grid.every(n => n.width === 208 && n.height === 64 && n.radius === 16),
     '尺寸/圆角保留')
-  // cols = ceil(sqrt(4)) = 2；gridWidth = 200 + 160 = 360 → offsetX = 220
-  assert(grid[0].x === 220 && grid[1].x === 420, '第一行按 200 水平间距排布')
-  // rows = 2；gridHeight = 120 + 80 = 200 → offsetY = 200
-  assert(grid[0].y === 200 && grid[2].y === 320, '第二行按 120 垂直间距排布')
+  // cols = ceil(sqrt(4)) = 2；stepX = 208 + 40 = 248，gridWidth = 248 + 208 = 456
+  // → offsetX = (800 - 456) / 2 = 172
+  assert(grid[0].x === 172 && grid[1].x === 420, '第一行按 248 水平步长排布')
+  // rows = 2；stepY = 64 + 40 = 104，gridHeight = 104 + 64 = 168
+  // → offsetY = (600 - 168) / 2 = 216
+  assert(grid[0].y === 216 && grid[2].y === 320, '第二行按 104 垂直步长排布')
   assert(autoGridLayoutNodes([], 800, 600).length === 0, '空图返回空布局')
+  const withBody = buildFreeformLayout([{
+    id: 'body', position: { x: 0, y: 0 }, title: '标题',
+    content: { type: 'inline', body: '第一行\n第二行\n第三行' }
+  }])
+  assert(withBody[0].width === 208 && withBody[0].height > 64,
+    '多行正文让卡片高度按内容增长，position 仍是左上角')
 }
 
 console.log('4. position patch 写回：nodeId + 新坐标')

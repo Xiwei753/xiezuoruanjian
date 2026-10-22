@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.starmap.data
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
 import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridgeOps
+import com.xiwei.sujian.feature.starmap.data.interop.toContentDto
 import com.xiwei.sujian.feature.starmap.data.interop.toDto
 import com.xiwei.sujian.feature.starmap.data.interop.toGraphEdge
 import com.xiwei.sujian.feature.starmap.data.interop.toGraphNode
@@ -17,6 +18,7 @@ import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphNode
 import com.xiwei.sujian.feature.starmap.data.model.StarMapHyperlinkData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapLinkData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapMeta
+import com.xiwei.sujian.feature.starmap.data.model.StarMapNodeContentData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapNodeKind
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPhasedSnapshotResult
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPointData
@@ -119,6 +121,8 @@ class StarMapRepository internal constructor(
         kind: StarMapNodeKind? = null,
         tags: List<String>? = null,
         position: StarMapPointData? = null,
+        // Issue #984：null 表示省略，不修改 Core 中已有的正文/引用类型。
+        content: StarMapNodeContentData? = null,
     ): BridgeResult<StarMapGraphNode> {
         val patch =
             StarMapNodePatchInputDto(
@@ -127,7 +131,7 @@ class StarMapRepository internal constructor(
                 payload = null,
                 clearPayload = false,
                 tags = tags,
-                content = null,
+                content = content?.toContentDto(),
                 anchors = null,
                 portal = null,
                 clearPortal = false,

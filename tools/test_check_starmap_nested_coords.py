@@ -23,8 +23,8 @@ SPEC.loader.exec_module(MODULE)
 
 
 # 合法模板：满足守卫全部检查的三个文件内容。
-CLEAN_NODE = """Item {
-    function moveDelta(dx, dy) { root.moveDelta(dx, dy) }
+CLEAN_ACTIVE_SCENE = """Item {
+    function worldToScreenX(x) { return x }
 }
 """
 
@@ -45,7 +45,7 @@ CLEAN_CANVAS = """Item {
 
 
 def _write_clean(tmp: Path) -> None:
-    (tmp / "StarMapNode.qml").write_text(CLEAN_NODE, encoding="utf-8")
+    (tmp / "StarMapActiveScene.qml").write_text(CLEAN_ACTIVE_SCENE, encoding="utf-8")
     (tmp / "StarMapEmbed.qml").write_text(CLEAN_EMBED, encoding="utf-8")
     (tmp / "StarMapCanvas.qml").write_text(CLEAN_CANVAS, encoding="utf-8")
 
@@ -62,17 +62,17 @@ class StarMapNestedCoordsGuardTests(unittest.TestCase):
         for passed, detail in results:
             self.assertTrue(passed, msg=f"clean source check failed: {detail}")
 
-    def test_flags_canvasZoomLevel_in_node(self) -> None:
-        """Node 含 canvasZoomLevel 应被标记失败。"""
+    def test_flags_canvasZoomLevel_in_active_scene(self) -> None:
+        """ActiveScene 含 canvasZoomLevel 应被标记失败。"""
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
             _write_clean(tmp)
-            (tmp / "StarMapNode.qml").write_text(
+            (tmp / "StarMapActiveScene.qml").write_text(
                 "Item {\n    property real canvasZoomLevel: 1.0\n}\n",
                 encoding="utf-8",
             )
             results = MODULE.check(tmp)
-            self.assertFalse(self._all_passed(results), msg="canvasZoomLevel in Node not flagged")
+            self.assertFalse(self._all_passed(results), msg="canvasZoomLevel in ActiveScene not flagged")
 
     def test_flags_canvasZoomLevel_in_embed(self) -> None:
         """Embed 含 canvasZoomLevel 应被标记失败。"""

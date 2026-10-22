@@ -61,8 +61,8 @@
 //     再进 applyFreeformLayout、再存进 Core —— 存进数据的也必须是夹好的那份坐标，
 //     不能只在显示层夹住然后靠 clip 藏错误。根层对象仍然自由移动。
 // 19. 新建也要守边界（#818 复审）：performCreateNode / performCreateEmbed 写 Core 之前
-//     先过 `clampItemToLocalSafeArea()`（尺寸取 StarMapLayout 导出的
-//     DEFAULT_NODE_WIDTH/HEIGHT、DEFAULT_EMBED_DIAMETER，UI 侧不手写）。
+//     先过 `clampItemToLocalSafeArea()`（节点尺寸取 StarMapLayout 的节点卡片度量（#984），
+//     Embed 取 DEFAULT_EMBED_DIAMETER，UI 侧不手写）。
 //     clamp 之外还必须 `refitAfterContentAdded()`：空子星图首次 fitView() 时没有内容，
 //     fitScale 会停在 1 且 hasFittedView 已为 true，之后第一次新建时 maybeFitView 不再跑，
 //     新对象会比当前安全区还大。重算的是 local fit，不是 global camera，
@@ -79,7 +79,8 @@
 //     不重建任何布局矩形、不重算 fit。禁止 opacity(0) 假装折叠，也禁止"先建好再缩"。
 //     档位按 scenePath 判，不按 sceneDepth——递归链里一层 Embed 要加两次 sceneDepth。
 // 22. 放大必须走**显示变换**，不许撑大布局（#821）：节点 / Embed 的 `.width()/.height()`
-//     和 `.fontSize()` 一律保持局部基准常量，缩放只通过 `.scale()`（配合 boxPositionX/Y
+//     和 `.fontSize()` 一律保持局部基准尺寸（普通节点用每节点卡片度量（#984），
+//     Embed 用固定直径），缩放只通过 `.scale()`（配合 boxPositionX/Y
 //     的中心补偿）实现。旧写法 `.width(160 * viewportScaleValue())` 在相机放大到几十倍时
 //     会让 RenderService 按巨大的组件缓冲去分配，那正是 #820 里 3× 天花板的真正原因。
 // 23. Scene 的盒子尺寸恒等于局部尺寸（#821）：子 Scene 的布局盒子永远是父 Embed 的局部
@@ -97,23 +98,30 @@
 // 26. 缩放不是布局变化（#821）：正常相机缩放不触发任何避让、不推开邻居。
 //     同层对象按同一个相机比例等比放大，包括互相重叠也照画。避让 / 找空位只在用户
 //     真的创建、移动、缩放了某个对象的 world bounds 时才发生。
-// 27. preview 和 interactive 是**同一张图**（#821 复审第二轮）：节点圆形色块的直径、
-//     标题字号 / 宽度 / 行高 / 间距、kind → 颜色表、Embed fit 留白，全部读
-//     ./StarMapVisualTokens，本文件不再各写一份。圆心位置也必须是共享常量：
-//     本组件是 Column + 居中排版，preview 是 Canvas 手绘，两边如果各算各的，
-//     跨 70% 门槛时缩略图会"变形/跳一下"——那就是换皮，不是视觉缩小。
-//     本地禁止再出现 56 / 13 / 80 / 6 / 8 这类散落的视觉数字副本。
+// 27. preview 和 interactive 是**同一张图**（#821 复审第二轮）：kind → 颜色表、
+//     preview 圆形降级的直径 / 字号、Embed fit 留白，全部读 ./StarMapVisualTokens，
+//     本文件不再各写一份。
+//     #984 之后普通节点在 interactive 档是文字卡片（标题 + 正文预览），宽高由
+//     StarMapLayout 按内容度量；preview 档仍是低倍率下的圆形缩略图，按同一份平台
+//     布局矩形居中。这是有意的视觉降级，不改对象身份、坐标和命中区域。
 
 import hilog from '@ohos.hilog'
-import { ComponentContent } from '@kit.ArkUI'
+import { ComponentContent, UIContext } from '@kit.ArkUI'
 import { CreateTitleDialogArgs, createTitleDialogContent } from './CreateTitleDialog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import {
   StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed,
-  StarMapTargetPath, StarMapPoint, StarMapPathSegment
+  StarMapTargetPath, StarMapPoint, StarMapPathSegment,
+  StarMapNodeContent, StarMapNodeUpdatePatch
 } from '../../../corebridge/dto/StarMapDtos'
 import { ThemeConfig } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
+import {
+  COMPACT_DIALOG_CONTENT_PADDING_VP,
+  COMPACT_DIALOG_MAX_WIDTH_VP,
+  COMPACT_DIALOG_SIDE_INSET_VP,
+  COMPACT_TEXT_INPUT_HEIGHT_VP
+} from '../../../ui/theme/LayoutTokens'
 import {
   PlatformNodeRect, PlatformEdgeRender,
   RecursiveSceneContext, RecursiveSceneSource, RecursiveHit,
@@ -130,7 +138,13 @@ import {
 import {
   PlatformLayoutNode, PlatformPoint,
   buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout,
-  DEFAULT_EMBED_DIAMETER, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT
+  DEFAULT_EMBED_DIAMETER,
+  DEFAULT_NODE_RADIUS, measureStarMapNodeCard, measureStarMapNodeCardByContent,
+  StarMapNodeCardMetrics,
+  NODE_CARD_PADDING, NODE_CARD_TITLE_FONT_SIZE, NODE_CARD_TITLE_LINE_HEIGHT,
+  NODE_CARD_TITLE_MAX_LINES, NODE_CARD_BODY_FONT_SIZE, NODE_CARD_BODY_LINE_HEIGHT,
+  NODE_CARD_BODY_PREVIEW_MAX_LINES, NODE_CARD_TITLE_BODY_GAP,
+  NODE_CARD_ACCENT_SIZE, NODE_CARD_ACCENT_GAP
 } from '../platform/StarMapLayout'
 import {
   PlatformMotionConfig,
@@ -156,9 +170,6 @@ import {
 import { StarMapEmbedScene } from './StarMapEmbedScene'
 import { StarMapEmbedPreview } from './StarMapEmbedPreview'
 import {
-  STARMAP_NODE_GLYPH_DIAMETER, STARMAP_NODE_LABEL_FONT_SIZE,
-  STARMAP_NODE_LABEL_WIDTH, STARMAP_NODE_LABEL_MAX_LINES,
-  STARMAP_NODE_LABEL_BLOCK_HEIGHT, STARMAP_NODE_LABEL_MARGIN_TOP,
   STARMAP_EMBED_FIT_PADDING_VP, starmapNodeColor
 } from './StarMapVisualTokens'
 
@@ -166,6 +177,142 @@ import {
 interface WobbleOffset {
   dx: number
   dy: number
+}
+
+// ─── 节点编辑对话框（#984）───
+
+/**
+ * 节点编辑对话框参数。
+ *
+ * `body` 是**原样文本**：进入编辑时不做 trim，保存时也原样交回宿主 Scene。
+ * `showBody === false` 用于 chapterRef / entityRef / externalRef：只改名称，
+ * 不发送 content，绝不把引用型内容覆盖成 inline。
+ */
+interface StarMapNodeEditDialogArgs {
+  initialTitle: string
+  initialBody: string
+  showBody: boolean
+  onSave: (title: string, body: string) => void
+  onCancel: () => void
+}
+
+/**
+ * 节点编辑对话框：挂在窗口层级（openCustomDialog），不会被圆形 Embed 的 clip(true) 裁掉。
+ *
+ * 名称单行 TextInput；正文多行 TextArea，不设硬行数上限，Enter 由 TextArea 自己插入换行。
+ * 这里**不监听 onSubmit / 不自动保存**，中文输入法组合期间不会触发写 Core；
+ * 只有用户明确点"保存"才把当前文本交回宿主。
+ */
+@Component
+struct StarMapNodeEditDialog {
+  @Prop initialTitle: string = ''
+  @Prop initialBody: string = ''
+  @Prop showBody: boolean = true
+  onSave: (title: string, body: string) => void = (_title: string, _body: string) => {}
+  onCancel: () => void = () => {}
+  @State inputTitle: string = ''
+  @State inputBody: string = ''
+
+  aboutToAppear() {
+    this.inputTitle = this.initialTitle
+    this.inputBody = this.initialBody
+  }
+
+  build() {
+    Row() {
+      Column() {
+        Text($r('app.string.edit_node'))
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .margin({ bottom: 16 })
+
+        Text($r('app.string.node_name_label'))
+          .fontSize(14)
+          .fontColor($r('sys.color.font_secondary'))
+          .margin({ bottom: 6 })
+
+        TextInput({ text: this.inputTitle, placeholder: $r('app.string.node_name_placeholder') })
+          .width('100%')
+          .height(COMPACT_TEXT_INPUT_HEIGHT_VP)
+          .fontSize(16)
+          .borderRadius(DesignTokens.inputFieldRadius)
+          .onChange((value: string) => {
+            this.inputTitle = value
+          })
+
+        if (this.showBody) {
+          Text($r('app.string.node_body_label'))
+            .fontSize(14)
+            .fontColor($r('sys.color.font_secondary'))
+            .margin({ top: 12, bottom: 6 })
+
+          // 多行正文：TextArea 编辑态默认 maxLines=3，会截断较长正文，这里显式放到足够大；
+          // Enter 插入换行，不接 onSubmit 保存。文本原样保存在 inputBody，
+          // 换行和连续空行不会被对话框改写。
+          TextArea({ text: this.inputBody, placeholder: $r('app.string.node_body_placeholder') })
+            .width('100%')
+            .height(180)
+            .fontSize(14)
+            .maxLines(9999)
+            .borderRadius(DesignTokens.inputFieldRadius)
+            .onChange((value: string) => {
+              this.inputBody = value
+            })
+        }
+
+        Row() {
+          Button($r('app.string.cancel'))
+            .fontSize(14)
+            .height(36)
+            .onClick(() => {
+              this.onCancel()
+            })
+
+          Blank()
+
+          Button($r('app.string.save'))
+            .fontSize(14)
+            .height(36)
+            .enabled(this.inputTitle.trim().length > 0)
+            .onClick(() => {
+              // 名称允许 trim；正文字段不 trim，原样交给 Core。
+              this.onSave(this.inputTitle, this.inputBody)
+            })
+        }
+        .width('100%')
+        .margin({ top: 16 })
+      }
+      .width('100%')
+      .constraintSize({ maxWidth: COMPACT_DIALOG_MAX_WIDTH_VP })
+      .padding(COMPACT_DIALOG_CONTENT_PADDING_VP)
+      .borderRadius(DesignTokens.dialogRadius)
+      .backgroundColor($r('sys.color.background_secondary'))
+    }
+    .width('100%')
+    .padding({ left: COMPACT_DIALOG_SIDE_INSET_VP, right: COMPACT_DIALOG_SIDE_INSET_VP })
+    .justifyContent(FlexAlign.Center)
+  }
+}
+
+/** 文件级 @Builder：ComponentContent 的 wrapBuilder 只接受直接函数引用。 */
+@Builder
+function StarMapNodeEditDialogBuilder(args: StarMapNodeEditDialogArgs) {
+  StarMapNodeEditDialog({
+    initialTitle: args.initialTitle,
+    initialBody: args.initialBody,
+    showBody: args.showBody,
+    onSave: args.onSave,
+    onCancel: args.onCancel
+  })
+}
+
+/** 构造节点编辑对话框的 ComponentContent（窗口层级打开，见调用点）。 */
+function createStarMapNodeEditDialogContent(
+  uiContext: UIContext,
+  args: StarMapNodeEditDialogArgs
+): ComponentContent<StarMapNodeEditDialogArgs> {
+  return new ComponentContent<StarMapNodeEditDialogArgs>(
+    uiContext, wrapBuilder(StarMapNodeEditDialogBuilder), args)
 }
 
 
@@ -372,6 +519,12 @@ export struct StarMapScene {
   @State showNodeMenu: boolean = false
   /** 节点菜单对应的 nodeId */
   @State nodeMenuNodeId: string = ''
+  /**
+   * 当前正在编辑的节点 key（#984）：'<scenePath>#<nodeId>'。
+   * 非空时节点卡片不参与画布手势，文本输入控件独占触摸 / 键盘；
+   * 对话框关闭后清空，画布手势恢复。
+   */
+  @State inlineEditingKey: string = ''
   /** 节点菜单锚点（Scene 局部屏幕坐标）：长按时手指所在处，菜单从这儿弹出 */
   @State nodeMenuAnchor: PlatformPoint = { x: 0, y: 0 }
   /** 预览连线起点 */
@@ -445,6 +598,8 @@ export struct StarMapScene {
   private createNodeDialogContent: ComponentContent<CreateTitleDialogArgs> | null = null
   /** 新建子星图对话框的 ComponentContent */
   private createEmbedDialogContent: ComponentContent<CreateTitleDialogArgs> | null = null
+  /** 节点编辑对话框（#984）：窗口层级，不能被递归 Scene 的 clip 裁掉 */
+  private nodeEditDialogContent: ComponentContent<StarMapNodeEditDialogArgs> | null = null
 
   // ─── Canvas 上下文 ───
   private canvasSettings: RenderingContextSettings = new RenderingContextSettings(true)
@@ -477,7 +632,9 @@ export struct StarMapScene {
     this.showNodeMenu = false
     this.showCreateMenu = false
     this.nodeMenuNodeId = ''
+    this.inlineEditingKey = ''
     this.closeCreateDialogs()
+    this.closeNodeEditDialog()
   }
 
   // ─── Deep Zoom 细节档位与显示变换（#821）───
@@ -1815,16 +1972,244 @@ private refitAfterContentAdded(): void {
   /**
    * 保存节点位置：通过 bridge 的星图节点更新 API 写回。
    * 使用 this.starmapId。
+   *
+   * #984：updateStarMapNode 接收完整 patch，位置写入也要显式包成 `{ position }`；
+   * title / content 字段不传（undefined），Core 不会把它们当成清空。
    */
   async saveNodePosition(nodeId: string) {
     const ln = this.getPlatformLayoutNode(nodeId)
     if (!ln || !this.bridge) return
     hilog.info(0x0000, 'StarMapScene', `saveNodePosition: ${nodeId} → (${ln.x}, ${ln.y})`)
-    const result = await this.bridge.updateStarMapNode(this.starmapId, nodeId, { x: ln.x, y: ln.y })
+    const result = await this.bridge.updateStarMapNode(this.starmapId, nodeId,
+      { position: { x: ln.x, y: ln.y } })
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene', `saveNodePosition failed: ${result.errorCode ?? ''}, ${result.userMessage}`)
     }
     this.onMoveNode(this.scenePath, this.starmapId, nodeId, { x: ln.x, y: ln.y })
+  }
+
+  // ─── 节点编辑（#984） ───
+
+  /** 节点编辑的稳定 key：同一 nodeId 在不同 Scene 里是不同对象。 */
+  private nodeEditKey(nodeId: string): string {
+    return `${describeScenePath(this.scenePath)}#${nodeId}`
+  }
+
+  /** 当前是否正在编辑这个节点（#984：编辑期间节点卡片让出画布手势）。 */
+  private isEditingNode(nodeId: string): boolean {
+    return this.inlineEditingKey === this.nodeEditKey(nodeId)
+  }
+
+  /** 普通节点可编辑的正文：empty / inline 有正文区；引用型内容只改名称。 */
+  private canEditNodeBody(node: StarMapNode): boolean {
+    return node.content.type === 'empty' || node.content.type === 'inline'
+  }
+
+  /**
+   * 卡片正文预览文本（#984）：只读 inline / empty 的 body，完整正文仍在 Core。
+   * 这里不做 trim、不折叠空行；换行和连续空行原样交给 Text。
+   */
+  private nodePreviewBody(node: StarMapNode): string {
+    if (node.content.type === 'inline' || node.content.type === 'empty') {
+      return node.content.body ?? ''
+    }
+    return ''
+  }
+
+  /**
+   * 节点卡片宽度（#984）：优先读平台布局里该节点的 width，保证 UI 与命中 / 边端点
+   * 用的是同一个矩形；布局尚未建立时退回同一份度量函数，绝不另写一套尺寸。
+   */
+  private nodeCardWidth(node: StarMapNode): number {
+    const layoutNode: PlatformLayoutNode | undefined = this.getPlatformLayoutNode(node.id)
+    if (layoutNode !== undefined) {
+      return layoutNode.width
+    }
+    return measureStarMapNodeCard(node).width
+  }
+
+  /** 节点卡片高度（#984）：取自平台布局矩形，布局未建立时退回同一份度量函数。 */
+  private nodeCardHeight(node: StarMapNode): number {
+    const layoutNode: PlatformLayoutNode | undefined = this.getPlatformLayoutNode(node.id)
+    if (layoutNode !== undefined) {
+      return layoutNode.height
+    }
+    return measureStarMapNodeCard(node).height
+  }
+
+  /**
+   * 用标题 + 正文构造 inline 内容（#984）。
+   *
+   * 保留原 summary 与引用字段；type 字段是 Core JSON 的判别式（不是 kind）。
+   * body 原样写入，绝不 trim。
+   */
+  private buildInlineNodeContent(node: StarMapNode, body: string): StarMapNodeContent {
+    return {
+      type: 'inline',
+      summary: node.content.summary,
+      body: body,
+      projectId: node.content.projectId,
+      volumeId: node.content.volumeId,
+      chapterId: node.content.chapterId,
+      rangeStart: node.content.rangeStart,
+      rangeEnd: node.content.rangeEnd,
+      entityType: node.content.entityType,
+      entityId: node.content.entityId,
+      uri: node.content.uri,
+      label: node.content.label
+    }
+  }
+
+  /**
+   * 打开节点编辑对话框（#984）：双击节点或节点菜单"编辑节点"进入。
+   *
+   * 对话框挂在窗口层级，文字控件独占触摸 / 键盘；Scene 里的卡片手势在
+   * `inlineEditingKey` 非空时让位，关闭后恢复。
+   * chapterRef / entityRef / externalRef 只显示名称输入，不编辑也不发送 content。
+   */
+  private openNodeEditDialog(nodeId: string) {
+    if (!this.graph) {
+      return
+    }
+    const node: StarMapNode | undefined = this.graph.nodes.find((item: StarMapNode) => item.id === nodeId)
+    if (node === undefined) {
+      return
+    }
+    // 从长按菜单进入时，菜单的 nodeMenu 手势直接收掉，避免对话框和菜单抢触摸。
+    this.showNodeMenu = false
+    if (this.gestureTracker.clearIfOwnedBy('nodeMenu', this.scenePath)) {
+      this.gestureMode = 'idle'
+    }
+    this.inlineEditingKey = this.nodeEditKey(nodeId)
+    const canEditBody: boolean = this.canEditNodeBody(node)
+    const content: ComponentContent<StarMapNodeEditDialogArgs> = createStarMapNodeEditDialogContent(
+      this.getUIContext(),
+      {
+        initialTitle: node.title,
+        initialBody: canEditBody ? (node.content.body ?? '') : '',
+        showBody: canEditBody,
+        onSave: (title: string, body: string) => {
+          this.closeNodeEditDialog()
+          void this.saveNodeEdits(nodeId, title, body, canEditBody)
+        },
+        onCancel: () => {
+          this.closeNodeEditDialog()
+        }
+      }
+    )
+    // 先把新内容登记为当前对话框，再关旧的：旧对话框的 onDidDisappear 看到
+    // nodeEditDialogContent 已经不是自己，就不会把新编辑态和 inlineEditingKey 清掉。
+    const previous: ComponentContent<StarMapNodeEditDialogArgs> | null = this.nodeEditDialogContent
+    this.nodeEditDialogContent = content
+    if (previous !== null) {
+      this.getUIContext().getPromptAction().closeCustomDialog(previous)
+    }
+    this.getUIContext().getPromptAction().openCustomDialog(content, {
+      alignment: DialogAlignment.Center,
+      maskColor: '#80000000',
+      autoCancel: true,
+      onDidDisappear: () => {
+        if (this.nodeEditDialogContent === content) {
+          this.nodeEditDialogContent = null
+          this.inlineEditingKey = ''
+        }
+      }
+    })
+  }
+
+  /** 关闭节点编辑对话框并恢复画布手势（#984）。 */
+  private closeNodeEditDialog() {
+    if (this.nodeEditDialogContent !== null) {
+      this.getUIContext().getPromptAction().closeCustomDialog(this.nodeEditDialogContent)
+      this.nodeEditDialogContent = null
+    }
+    this.inlineEditingKey = ''
+  }
+
+  /**
+   * 保存节点名称 / 正文（#984）。
+   *
+   * - empty / inline：patch 带 `content: { type: 'inline', summary, body }`，body 不 trim；
+   * - chapterRef / entityRef / externalRef：只发 title，content 字段保持 undefined，
+   *   绝不会被覆盖成 inline。
+   * 成功后优先采用 Core 返回的更新后节点，更新本地 graph 并重算几何；
+   * 卡片高度会随正文行数变化，所以必须重新布局，不能只改文字。
+   */
+  async saveNodeEdits(nodeId: string, title: string, body: string, editContent: boolean) {
+    if (!this.graph || !this.bridge) {
+      return
+    }
+    const node: StarMapNode | undefined = this.graph.nodes.find((item: StarMapNode) => item.id === nodeId)
+    if (node === undefined) {
+      return
+    }
+    const trimmedTitle: string = title.trim()
+    if (trimmedTitle.length === 0) {
+      return
+    }
+    const patch: StarMapNodeUpdatePatch = { title: trimmedTitle }
+    let nextContent: StarMapNodeContent = node.content
+    if (editContent) {
+      nextContent = this.buildInlineNodeContent(node, body)
+      patch.content = nextContent
+    }
+    const result = await this.bridge.updateStarMapNode(this.starmapId, nodeId, patch)
+    if (!result.success) {
+      hilog.error(0x0000, 'StarMapScene',
+        `saveNodeEdits failed: ${nodeId}, ${result.errorCode ?? ''}, ${result.userMessage}`)
+      return
+    }
+    // await 之后重新取图：期间 Scene 可能已经被父层移除 / 换图。
+    if (!this.graph) {
+      return
+    }
+    const currentGraph: StarMapGraph = this.graph
+    const updated: StarMapNode = result.data !== undefined && result.data !== null
+      ? result.data
+      : {
+        id: node.id,
+        title: trimmedTitle,
+        kind: node.kind,
+        payload: node.payload,
+        tags: node.tags,
+        content: nextContent,
+        anchors: node.anchors,
+        portal: node.portal,
+        position: node.position,
+        style: node.style,
+        provenance: node.provenance,
+        createdAt: node.createdAt,
+        updatedAt: node.updatedAt
+      }
+    const nextNodes: StarMapNode[] = currentGraph.nodes.map((item: StarMapNode) => {
+      return item.id === nodeId ? updated : item
+    })
+    // 本地 graph.nodes 的 position 可能落后于平台布局（移动落盘只更新了平台矩形），
+    // 重建布局前先把仍在本 Scene 里的节点位置同步回布局坐标，避免编辑一个节点时
+    // 其它刚移动过的卡片被旧 position 拉回去。
+    const syncedNodes: StarMapNode[] = nextNodes.map((item: StarMapNode) => {
+      const layoutNode: PlatformLayoutNode | undefined =
+        this.platformLayoutNodes.find((ln: PlatformLayoutNode) => ln.nodeId === item.id)
+      if (layoutNode !== undefined) {
+        item.position = { x: layoutNode.x, y: layoutNode.y }
+      }
+      return item
+    })
+    this.graph = {
+      schemaVersion: currentGraph.schemaVersion,
+      starmapId: currentGraph.starmapId,
+      nodes: syncedNodes,
+      edges: currentGraph.edges,
+      embeds: currentGraph.embeds,
+      links: currentGraph.links,
+      hyperlinks: currentGraph.hyperlinks
+    }
+    this.platformLayoutNodes = buildFreeformLayout(syncedNodes)
+    this.recomputeGeometry()
+    // 卡片高度变了：子 Scene 里还要重新塞回父 Embed 的安全区（根 Scene 无局部 fit）。
+    this.refitAfterContentAdded()
+    hilog.info(0x0000, 'StarMapScene',
+      `saveNodeEdits ok: ${nodeId}, title=${trimmedTitle}, content=${editContent ? 'inline' : 'unchanged'}`)
   }
 
   /**
@@ -1853,15 +2238,20 @@ private refitAfterContentAdded(): void {
    * 标题由窗口层级的对话框通过参数传入。
    *
    * 新建点同样要过安全区（#818 复审）：在子星图边缘长按新建，菜单锚点虽然在圆内，
-   * 但 160×80 的整块节点可能已经伸出圆外被 clip 掉；存进 Core 的也必须是夹好的坐标。
+   * 但整块文字卡片可能已经伸出圆外被 clip 掉；存进 Core 的也必须是夹好的坐标。
+   * #984：卡片宽高按标题 / 正文实测，不再用固定 160×80。
    */
   async performCreateNode(title: string) {
     const trimmed: string = title.trim()
     if (trimmed.length === 0) return
     if (!this.bridge) return
     const candidate = this.createMenuCanvasPosition
+    // #984：新建节点是文字卡片，安全区 clamp 用与布局 / UI 同一份标题 + 正文度量，
+    // 不能再拿固定的 DEFAULT_NODE_WIDTH / DEFAULT_NODE_HEIGHT 去夹。
+    const cardMetrics: StarMapNodeCardMetrics =
+      measureStarMapNodeCardByContent(trimmed, null)
     const clampedNode = this.clampItemToLocalSafeArea(candidate.x, candidate.y,
-      DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT)
+      cardMetrics.width, cardMetrics.height)
     const position: StarMapPoint = {
       x: clampedNode.x,
       y: clampedNode.y
@@ -2145,47 +2535,77 @@ private refitAfterContentAdded(): void {
   // 两边各写一张表就一定会漂，统一读 StarMapVisualTokens.starmapNodeColor（#821 复审第二轮）。
 
   /**
-   * 节点组件：长按 → 菜单（连线预备态）→ 继续拖动 → connect。
-   * 所有 gestureTracker.begin* 调用传入 this.scenePath 作为 ownerScenePath。
+   * 节点卡片（#984）：上方名称、下方正文预览。
+   *
+   * 卡片宽高来自 `measureStarMapNodeCard`（与布局 / 命中同一份），position 仍是卡片左上角。
+   * 颜色图标降级为左上角小点缀，不再是主体；正文只预览前几行，完整正文保存在 Core，
+   * 双击卡片或节点菜单"编辑节点"进入窗口层级编辑器。
+   * 所有 `gestureTracker.begin*` 调用传入 this.scenePath 作为 ownerScenePath。
    */
   @Builder
   StarMapNodeItem(node: StarMapNode) {
     Column() {
-      Circle({ width: STARMAP_NODE_GLYPH_DIAMETER, height: STARMAP_NODE_GLYPH_DIAMETER })
-        .fill(starmapNodeColor(node.kind))
-        .stroke(this.isNodeSelected(node.id) ? STARMAP_SELECTED_STROKE_COLOR : 'transparent')
-        .strokeWidth(4)
-        .shadow({
-          radius: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
-            DesignTokens.shadowStrong.radius :
-            (this.isNodeSelected(node.id) ? DesignTokens.shadowMedium.radius : DesignTokens.shadowLight.radius),
-          color: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
-            '#40000000' :
-            (this.isNodeSelected(node.id) ? '#40FF6B6B' : '#20000000'),
-          offsetX: 0,
-          offsetY: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
-            DesignTokens.shadowStrong.offsetY : DesignTokens.shadowLight.offsetY
-        })
+      Row() {
+        Circle({ width: NODE_CARD_ACCENT_SIZE, height: NODE_CARD_ACCENT_SIZE })
+          .fill(starmapNodeColor(node.kind))
+          // 小点缀与标题首行视觉居中，不参与正文卡片主体
+          .margin({ top: (NODE_CARD_TITLE_LINE_HEIGHT - NODE_CARD_ACCENT_SIZE) / 2 })
 
-      Text(node.title)
-        .fontSize(STARMAP_NODE_LABEL_FONT_SIZE)
-        .fontWeight(this.isNodeSelected(node.id) ? FontWeight.Bold : FontWeight.Normal)
-        .margin({ top: STARMAP_NODE_LABEL_MARGIN_TOP })
-        .maxLines(STARMAP_NODE_LABEL_MAX_LINES)
-        .textAlign(TextAlign.Center)
-        .width(STARMAP_NODE_LABEL_WIDTH)
-        // 标题块高度必须固定，否则 1 行 / 2 行会让 Column 的居中排版把整颗圆带着上下移，
-        // preview 档就算照抄公式也算不出同一个圆心（#821 复审第二轮）。
-        .height(STARMAP_NODE_LABEL_BLOCK_HEIGHT)
+        Text(node.title)
+          .fontSize(NODE_CARD_TITLE_FONT_SIZE)
+          .lineHeight(NODE_CARD_TITLE_LINE_HEIGHT)
+          .fontWeight(this.isNodeSelected(node.id) ? FontWeight.Bold : FontWeight.Medium)
+          .fontColor(this.themeConfig.colors.onSurface)
+          .maxLines(NODE_CARD_TITLE_MAX_LINES)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+          .margin({ left: NODE_CARD_ACCENT_GAP })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Top)
+
+      if (this.nodePreviewBody(node).length > 0) {
+        // 正文预览：保留 \n 与连续空行，超出预览行数用省略号；完整正文仍在 Core。
+        Text(this.nodePreviewBody(node))
+          .fontSize(NODE_CARD_BODY_FONT_SIZE)
+          .lineHeight(NODE_CARD_BODY_LINE_HEIGHT)
+          .fontColor(this.themeConfig.colors.onSurfaceVariant)
+          .maxLines(NODE_CARD_BODY_PREVIEW_MAX_LINES)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .margin({ top: NODE_CARD_TITLE_BODY_GAP })
+      }
     }
-    .width(160)
-    .height(80)
-    .justifyContent(FlexAlign.Center)
-    // #821：尺寸全是局部基准常量，缩放只走 .scale()（放大到几十倍也不会撑大布局矩形），
-    // .position() 用盒子坐标 + 中心补偿，见 boxPositionX/Y。
+    .width(this.nodeCardWidth(node))
+    .height(this.nodeCardHeight(node))
+    .padding(NODE_CARD_PADDING)
+    .alignItems(HorizontalAlign.Start)
+    .justifyContent(FlexAlign.Start)
+    .borderRadius(DEFAULT_NODE_RADIUS)
+    // 卡片底色跟随主题；选中时用统一选中色加粗描边。
+    .backgroundColor(this.themeConfig.colors.surfaceContainerLowest)
+    .border({
+      width: this.isNodeSelected(node.id) ? 2 : 1,
+      color: this.isNodeSelected(node.id)
+        ? STARMAP_SELECTED_STROKE_COLOR
+        : this.themeConfig.colors.outlineVariant
+    })
+    .shadow({
+      radius: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
+        DesignTokens.shadowStrong.radius :
+        (this.isNodeSelected(node.id) ? DesignTokens.shadowMedium.radius : DesignTokens.shadowLight.radius),
+      color: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
+        '#40000000' :
+        (this.isNodeSelected(node.id) ? '#40FF6B6B' : '#20000000'),
+      offsetX: 0,
+      offsetY: this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id ?
+        DesignTokens.shadowStrong.offsetY : DesignTokens.shadowLight.offsetY
+    })
+    // #821：尺寸是局部基准（每节点实测宽高），缩放只走 .scale()；
+    // .position() 用盒子坐标 + 该节点自己的中心补偿，见 boxPositionX/Y。
     .position({
-      x: this.boxPositionX(this.getNodeBoxX(node.id), DEFAULT_NODE_WIDTH),
-      y: this.boxPositionY(this.getNodeBoxY(node.id), DEFAULT_NODE_HEIGHT)
+      x: this.boxPositionX(this.getNodeBoxX(node.id), this.nodeCardWidth(node)),
+      y: this.boxPositionY(this.getNodeBoxY(node.id), this.nodeCardHeight(node))
     })
     .scale(
       this.gestureTracker.isDraggingNode() && this.gestureTracker.getState().activeItemId === node.id
@@ -2193,8 +2613,9 @@ private refitAfterContentAdded(): void {
         : { x: this.boxScale(), y: this.boxScale() }
     )
     .onClick(() => {
-              // 双指已接管时不再改选中态（#818 复审）
+              // 双指已接管 / 正在编辑时不再改选中态（#818 复审、#984）
               if (this.gestureTracker.isPinching()) return
+              if (this.isEditingNode(node.id)) return
               this.selectItem('node', node.id)
             })
     // 菜单不挂在本 Column 上：bindMenu 按被绑定组件定位，节点本体位置会随节点移动而变化，
@@ -2202,11 +2623,21 @@ private refitAfterContentAdded(): void {
     // 这里只负责翻转 showNodeMenu 并记下锚点，菜单内容通过 this.nodeMenuNodeId 区分节点 / Embed。
     .gesture(
       GestureGroup(GestureMode.Exclusive,
+        // 双击节点 → 进入编辑（#984）。放在最前面，不改变下面长按 / 拖动 / 连线的手势序列；
+        // 单击仍由 onClick 负责选中，双击第二次按下不会再触发单击识别。
+        TapGesture({ count: 2 })
+          .onAction(() => {
+            if (this.gestureTracker.isPinching()) return
+            if (this.isEditingNode(node.id)) return
+            this.selectItem('node', node.id)
+            this.openNodeEditDialog(node.id)
+          }),
         // 长按 → 菜单（连线预备态）→ 继续拖动 → connect
         GestureGroup(GestureMode.Sequence,
           LongPressGesture({ repeat: false, duration: 500 })
             .onAction((event: GestureEvent) => {
               if (this.gestureTracker.isPinching()) return
+              if (this.isEditingNode(node.id)) return
               if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
               const point = this.gestureScreenPoint(event, this.getNodeBoxX(node.id), this.getNodeBoxY(node.id))
               this.gestureTracker.beginNodeMenu(this.scenePath, node.id, point.x, point.y)
@@ -2221,6 +2652,7 @@ private refitAfterContentAdded(): void {
           PanGesture()
             .onActionStart((event: GestureEvent) => {
               if (this.gestureTracker.isPinching()) return
+              if (this.isEditingNode(node.id)) return
               if (!this.gestureTracker.isOwnedByScene(this.scenePath) && !this.gestureTracker.isIdle()) return
               const point = this.gestureScreenPoint(event, this.getNodeBoxX(node.id), this.getNodeBoxY(node.id))
               // 起点存完整路径，跨层连线要靠它和终点求最近公共祖先（#816）
@@ -2251,6 +2683,7 @@ private refitAfterContentAdded(): void {
           .onActionStart((event: GestureEvent) => {
             // 双指一旦接管，移动节点和拖画布都要让位（#818 复审）
             if (this.gestureTracker.isPinching()) return
+            if (this.isEditingNode(node.id)) return
             const state = this.gestureTracker.getState()
             if (state.mode === 'moveNode' && state.activeItemId === node.id) {
               this.motionPauseTracker.pauseNode(node.id)
@@ -2678,6 +3111,12 @@ private refitAfterContentAdded(): void {
             this.motionPauseTracker.pauseNode(this.nodeMenuNodeId)
           })
       } else {
+        // #984：普通节点菜单增加"编辑节点"，双击节点也走同一个窗口层级编辑器。
+        MenuItem({ content: $r('app.string.edit_node') })
+          .onClick(() => {
+            const editingNodeId: string = this.nodeMenuNodeId
+            this.openNodeEditDialog(editingNodeId)
+          })
         MenuItem({ content: $r('app.string.move_node') })
           .onClick(() => {
             this.gestureTracker.beginMoveNode(this.scenePath, this.nodeMenuNodeId, 0, 0)

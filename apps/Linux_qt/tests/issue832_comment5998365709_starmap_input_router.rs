@@ -34,13 +34,14 @@
 #[path = "common/source_guard.rs"]
 mod source_guard;
 
-use source_guard::{count_occurrences, function_window, linux_qt_root, read_src};
+use source_guard::{
+    count_occurrences, function_window, linux_qt_root, read_src, starmap_node_delegate_src,
+};
 
 const ROUTER: &str = "qml/StarMapInputRouter.qml";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
-const NODE: &str = "qml/StarMapNode.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
 const INTERACTION: &str = "qml/StarMapInteractionController.qml";
 const MAIN_RS: &str = "src/main.rs";
@@ -142,8 +143,12 @@ fn canvas_has_no_raw_input_handlers_left() {
 
 #[test]
 fn recursive_delegates_carry_no_business_gestures() {
-    for rel in [NODE, EMBED, CONTENT] {
-        let src = strip_line_comments(&read_src(rel));
+    for (label, source) in [
+        ("节点卡片 delegate", starmap_node_delegate_src()),
+        (EMBED, read_src(EMBED)),
+        (CONTENT, read_src(CONTENT)),
+    ] {
+        let src = strip_line_comments(&source);
         for forbidden in [
             "TapHandler",
             "DragHandler",
@@ -153,14 +158,17 @@ fn recursive_delegates_carry_no_business_gestures() {
         ] {
             assert!(
                 !src.contains(forbidden),
-                "{rel} 不得再挂业务手势 {forbidden}：递归 delegate 不解释输入"
+                "{label} 不得再挂业务手势 {forbidden}：递归 delegate 不解释输入"
             );
         }
     }
 
     // Node/Embed 也不再上抛任何手势信号。
-    for rel in [NODE, EMBED] {
-        let src = strip_line_comments(&read_src(rel));
+    for (label, source) in [
+        ("节点卡片 delegate", starmap_node_delegate_src()),
+        (EMBED, read_src(EMBED)),
+    ] {
+        let src = strip_line_comments(&source);
         for forbidden in [
             "itemPressed",
             "moveDelta",
@@ -170,7 +178,7 @@ fn recursive_delegates_carry_no_business_gestures() {
         ] {
             assert!(
                 !src.contains(forbidden),
-                "{rel} 不得再上抛 {forbidden}：手势信号已整体删除"
+                "{label} 不得再上抛 {forbidden}：手势信号已整体删除"
             );
         }
     }
@@ -250,8 +258,12 @@ fn state_promotion_only_happens_in_the_router() {
     ] {
         assert!(router.contains(call), "状态提升必须在 Router：缺 {call}");
     }
-    for rel in [CONTENT, NODE, EMBED] {
-        let src = strip_line_comments(&read_src(rel));
+    for (label, source) in [
+        (CONTENT, read_src(CONTENT)),
+        ("节点卡片 delegate", starmap_node_delegate_src()),
+        (EMBED, read_src(EMBED)),
+    ] {
+        let src = strip_line_comments(&source);
         for forbidden in [
             "pressPendingToMove(",
             "pressPendingToConnect(",
@@ -261,7 +273,7 @@ fn state_promotion_only_happens_in_the_router() {
         ] {
             assert!(
                 !src.contains(forbidden),
-                "{rel} 不得自行提升手势状态：{forbidden} 只允许 Router 调用"
+                "{label} 不得自行提升手势状态：{forbidden} 只允许 Router 调用"
             );
         }
     }
@@ -294,17 +306,17 @@ fn state_promotion_only_happens_in_the_router() {
         "活动画布的 Embed 按下视觉必须绑定共享 InteractionController.isPressedTarget"
     );
 
-    let node = strip_line_comments(&read_src(NODE));
+    let node = strip_line_comments(&starmap_node_delegate_src());
     let embed = strip_line_comments(&read_src(EMBED));
     assert!(
-        node.contains("interactionController.isPressedTarget(scenePathKey,"),
-        "StarMapNode 的按下视觉必须绑定共享 InteractionController.isPressedTarget"
+        node.contains("interactionController.isPressedTarget(scene.scenePathKey,"),
+        "节点卡片 delegate 的按下视觉必须绑定共享 InteractionController.isPressedTarget"
     );
     assert!(
         embed.contains("property bool isPressed: false"),
         "StarMapEmbed 的按下状态必须是活动画布注入的输入属性"
     );
-    for (name, src) in [("StarMapNode", &node), ("StarMapEmbed", &embed)] {
+    for (name, src) in [("节点卡片", &node), ("StarMapEmbed", &embed)] {
         assert!(
             !src.contains(".pressed"),
             "{name} 不得再依赖自己的 Handler.pressed 暂停动画"
@@ -430,14 +442,20 @@ fn inline_editing_gets_the_router_out_of_the_way() {
         !content.contains("noteInlineEditing") && !content.contains("TextInput"),
         "StarMapSceneContent 不得再承载内联编辑"
     );
-    let node = strip_line_comments(&read_src(NODE));
+    let node = strip_line_comments(&starmap_node_delegate_src());
     assert!(
-        node.contains("TextInput {") && node.contains("readOnly: !root.editing"),
-        "节点内联编辑的 TextInput 必须保留"
+        node.contains("TextInput {")
+            && node.contains("id: titleInput")
+            && node.contains("TextEdit {")
+            && node.contains("id: bodyEdit"),
+        "节点卡片内联编辑必须同时保留名称 TextInput 与正文 TextEdit"
     );
     assert!(
-        active.contains("TextInput {") && active.contains("readOnly: !nodeItem.editing"),
-        "活动画布的节点内联编辑 TextInput 必须保留"
+        active.contains("TextInput {")
+            && active.contains("id: titleInput")
+            && active.contains("TextEdit {")
+            && active.contains("id: bodyEdit"),
+        "活动画布的节点内联编辑输入必须保留"
     );
 }
 

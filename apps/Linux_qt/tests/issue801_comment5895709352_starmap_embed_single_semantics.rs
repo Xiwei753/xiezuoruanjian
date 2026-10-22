@@ -10,7 +10,7 @@
 //!    一种子星图入口语义：Embed。
 //! 2. `label` 不再把对象类型（"子星图"）当标题/占位文案，统一用 `qsTr("未命名")`。
 //! 3. `StarMapEmbed.qml` 默认 `label` 为空。
-//! 4. `StarMapNode.qml` / `StarMapCanvas.qml` 不再有 `isPortal` 语义，
+//! 4. 普通节点卡片 delegate / `StarMapCanvas.qml` 不再有 `isPortal` 语义，
 //!    Node 双击统一走归属层内联编辑（#929 起 Node delegate 位于 StarMapActiveScene），
 //!    不再特判 `portal.destinationStarmapId` 下钻；下钻入口只剩 Embed。
 //! 5. `computeEdgeRenders()` 把归一后的旧 portal 节点几何补进边锚点 layout，
@@ -31,13 +31,12 @@
 #[path = "common/source_guard.rs"]
 mod source_guard;
 
-use source_guard::{function_window, read_src};
+use source_guard::{function_window, read_src, starmap_node_delegate_src};
 
 const GRAPH_CONTROLLER: &str = "qml/StarMapGraphController.qml";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
-const NODE: &str = "qml/StarMapNode.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
 
 /// 去掉整行 `//` 注释，只留可执行语句。
@@ -126,13 +125,13 @@ fn sub_starmap_entries_do_not_use_object_type_as_label() {
     );
 }
 
-/// 3. StarMapNode 不再有 portal/isPortal 语义。
+/// 3. 普通节点卡片 delegate 不再有 portal/isPortal 语义。
 #[test]
 fn node_component_has_no_portal_flag() {
-    let src = strip_line_comments(&read_src(NODE));
+    let src = strip_line_comments(&starmap_node_delegate_src());
     assert!(
         !src.contains("isPortal") && !src.contains("portal") && !src.contains("Portal"),
-        "StarMapNode 不得再保留 isPortal/portal 语义"
+        "节点卡片 delegate 不得再保留 isPortal/portal 语义"
     );
 }
 
@@ -374,14 +373,14 @@ fn legacy_portal_operations_route_to_node_api() {
 /// Canvas 的 Node delegate 不再下发 `kind`。
 #[test]
 fn node_component_has_no_type_label_leftovers() {
-    let node = strip_line_comments(&read_src(NODE));
+    let node = strip_line_comments(&starmap_node_delegate_src());
     assert!(
         !node.contains("property string kind"),
-        "StarMapNode 不得再保留无消费者的 kind 属性"
+        "节点卡片 delegate 不得再保留无消费者的 kind 属性"
     );
     assert!(
         !node.contains("getKindLabel") && !node.contains("getKindColor"),
-        "StarMapNode 不得再保留类型标签 helper（getKindLabel/getKindColor）"
+        "节点卡片 delegate 不得再保留类型标签 helper（getKindLabel/getKindColor）"
     );
 
     let canvas = strip_line_comments(&read_src(CANVAS));

@@ -97,8 +97,8 @@ const EMBED_TITLE_HIT_HEIGHT = 24
 const EMBED_BORDER_HIT_WIDTH = 12
 const DEFAULT_EMBED_DIAMETER = 200
 // 与 platform/StarMapLayout.ets 导出的常量保持一致（UI 侧不手写尺寸）
-const DEFAULT_NODE_WIDTH = 160
-const DEFAULT_NODE_HEIGHT = 80
+const DEFAULT_NODE_WIDTH = 208
+const DEFAULT_NODE_HEIGHT = 64
 
 function computeContentBounds(rects) {
   if (rects.length === 0) { return null }
@@ -2163,7 +2163,7 @@ console.log('24g. 拖画布必须按"起手基准 + 累计位移"算目标，不
 console.log('24h. 空子星图第一次新建也要守边界：先 clamp 再整体重新 local fit（#818 复审）')
 {
   // 场景：空 child 首次 fitView() 时没有内容 → fitScale = 1 且 hasFittedView = true，
-  // 之后 maybeFitView 不再跑。少了重新 fit，新建的 160×80 节点会直接大于当前安全区。
+  // 之后 maybeFitView 不再跑。少了重新 fit，新建的 208×64 卡片会直接大于当前安全区。
   const safeSize = computeEmbedInnerContentSafeSide(200, EMBED_FIT_PADDING_VP)
   const center = 100
   const minEdge = center - safeSize / 2
@@ -2174,8 +2174,8 @@ console.log('24h. 空子星图第一次新建也要守边界：先 clamp 再整�
   assert(near(view.fitScale, 1) && view.hasFittedView === true,
     '空子星图首次 fit：没有内容 → fitScale 停在 1，且已经算过一次')
 
-  // 在圆边缘长按新建：160×80 的节点比当前安全区（≈89.4）还宽，X 方向 clamp 只能把它居中；
-  // Y 方向还放得下（80 < 89.4），照常夹到下边界。真正让它完整进圆的是后面的重新 local fit。
+  // 在圆边缘长按新建：208×64 的卡片比当前安全区（≈89.4）还宽，X 方向 clamp 只能把它居中；
+  // Y 方向还放得下（64 < 89.4），照常夹到下边界。真正让它完整进圆的是后面的重新 local fit。
   const nodeCandidate = { x: 196, y: 196 }
   const clampedNode = view.clampItemToLocalSafeArea(
     nodeCandidate.x, nodeCandidate.y, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT)
@@ -2184,7 +2184,7 @@ console.log('24h. 空子星图第一次新建也要守边界：先 clamp 再整�
   assert(near(clampedNode.y + DEFAULT_NODE_HEIGHT, maxEdge),
   '放得下的 Y 方向仍被夹到安全区下边界，不再往圆外落')
 
-  // 新建成功后重新 local fit：160×80 的内容会缩到刚好塞进安全区
+  // 新建成功后重新 local fit：208×64 的卡片会缩到刚好塞进安全区
   const nodeRects = [{ nodeId: 'n1', x: clampedNode.x, y: clampedNode.y, width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT, radius: 0 }]
   const fitBeforeCreate = view.fitScale
   assert(view.refitAfterContentAdded(nodeRects) === true && !near(view.fitScale, fitBeforeCreate),
@@ -4237,9 +4237,9 @@ console.log('39. preview 和 interactive 共用同一份视觉真相（#821 复�
   const previewSrc39 = readStarmapSource('ui/StarMapEmbedPreview.ets')
 
   // 1. 视觉常量集中在一个文件里，两层都从它读
-  for (const token of ['STARMAP_NODE_GLYPH_DIAMETER', 'STARMAP_NODE_LABEL_FONT_SIZE',
-    'STARMAP_NODE_LABEL_WIDTH', 'STARMAP_NODE_LABEL_MARGIN_TOP', 'STARMAP_EMBED_FIT_PADDING_VP',
-    'STARMAP_NODE_GLYPH_CENTER_X', 'STARMAP_NODE_GLYPH_CENTER_Y']) {
+  for (const token of ['STARMAP_NODE_GLYPH_DIAMETER', 'STARMAP_NODE_GLYPH_RADIUS',
+    'STARMAP_NODE_LABEL_FONT_SIZE', 'STARMAP_NODE_LABEL_MIN_PROJECTED_DIAMETER_VP',
+    'STARMAP_EMBED_FIT_PADDING_VP']) {
     assert(tokensSrc.includes(`export const ${token}`), `${token} 集中在 StarMapVisualTokens`)
   }
   assert(tokensSrc.includes('export function starmapNodeColor(') &&
@@ -4249,16 +4249,18 @@ console.log('39. preview 和 interactive 共用同一份视觉真相（#821 复�
     previewSrc39.includes("from './StarMapVisualTokens'"),
     'interactive 层和 preview 层都读同一份视觉真相')
 
-  // 2. 圆心是显式共享常量，不是 preview 猜排版
-  assert(tokensSrc.includes('STARMAP_NODE_LABEL_BLOCK_HEIGHT') &&
-    tokensSrc.includes('STARMAP_NODE_LABEL_LINE_HEIGHT'),
-    '标题块高度固定（否则 1 行 / 2 行会让圆心在两层里算出不同结果）')
-  assert(sceneSrc39.includes('.height(STARMAP_NODE_LABEL_BLOCK_HEIGHT)'),
-    'interactive 的标题块用固定高度，和 token 公式同源')
-  assert(previewSrc39.includes('STARMAP_NODE_GLYPH_CENTER_X') &&
-    previewSrc39.includes('STARMAP_NODE_GLYPH_CENTER_Y') &&
-    previewSrc39.includes('STARMAP_NODE_GLYPH_RADIUS'),
-    'preview 的圆心直接读共享常量，不按 160×80 矩形猜')
+  // 2. #984：interactive 是文字卡片，preview 是低倍率圆点；
+  //    两层共用同一份平台布局矩形，preview 不再猜固定圆心。
+  assert(sceneSrc39.includes('measureStarMapNodeCard(') &&
+    sceneSrc39.includes('this.nodeCardWidth(node)') &&
+    sceneSrc39.includes('this.nodeCardHeight(node)'),
+    'interactive 卡片宽高统一读布局度量，position 仍是卡片左上角')
+  assert(previewSrc39.includes('const rect = this.rectOf(node.id)') &&
+    previewSrc39.includes('rect.x + rect.width / 2') &&
+    previewSrc39.includes('rect.y + rect.height / 2') &&
+    !previewSrc39.includes('STARMAP_NODE_GLYPH_CENTER_X') &&
+    !previewSrc39.includes('STARMAP_NODE_GLYPH_CENTER_Y'),
+    'preview 按实际布局矩形居中，不再依赖 160×80 固定圆心')
 
   // 3. preview 不再把普通节点画成灰圆角矩形，也不再另造一套颜色
   // 断言只看真正的代码行：注释里会解释"以前是什么样"，默认 themeConfig 字面量

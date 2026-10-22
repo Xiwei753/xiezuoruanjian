@@ -46,8 +46,7 @@ import {
   computeFittedViewport
 } from '../platform/StarMapViewport'
 import {
-  STARMAP_NODE_GLYPH_RADIUS, STARMAP_NODE_GLYPH_CENTER_X, STARMAP_NODE_GLYPH_CENTER_Y,
-  STARMAP_NODE_LABEL_CENTER_Y, STARMAP_NODE_LABEL_FONT_SIZE,
+  STARMAP_NODE_GLYPH_RADIUS, STARMAP_NODE_LABEL_FONT_SIZE,
   STARMAP_NODE_LABEL_MIN_PROJECTED_DIAMETER_VP,
   STARMAP_EMBED_FIT_PADDING_VP, starmapNodeColor
 } from './StarMapVisualTokens'
@@ -271,10 +270,10 @@ export struct StarMapEmbedPreview {
       ctx.stroke()
     }
 
-    // 2. 子节点：和 interactive 层一模一样的"56vp 彩色圆 + 下方标题"。
-    //    圆心不是猜的：读 StarMapVisualTokens 里那份显式几何
-    //    （STARMAP_NODE_GLYPH_CENTER_X/Y），和 StarMapScene 的 Column 排版同源。
-    //    这里绝不能再把 160×80 布局矩形画成灰圆角矩形——那就是"换皮"（#821 复审第二轮）。
+    // 2. 子节点：低倍率下只画彩色圆点。圆点必须在**本节点自己的布局矩形**里居中：
+    //    #984 之后卡片宽度固定、高度随标题 / 正文行数变化，不能再读旧的 160×80
+    //    圆心常量，否则概览里的圆点会和 interactive 层错位。
+    //    这里绝不能再把布局矩形画成灰圆角矩形——那就是"换皮"（#821 复审第二轮）。
     //    选中描边和拖拽浮起阴影是 interactive 的交互态装饰，跟着 selection / drag 每帧变，
     //    画进缩略图只会让缩略图自己也在闪，所以不画——它们不属于"这张图长什么样"。
     const labelReadable: boolean =
@@ -284,11 +283,15 @@ export struct StarMapEmbedPreview {
       if (!rect) {
         continue
       }
+      const radius: number = Math.min(
+        STARMAP_NODE_GLYPH_RADIUS,
+        Math.max(2, Math.min(rect.width, rect.height) / 2 - 2)
+      )
       ctx.beginPath()
       ctx.arc(
-        rect.x + STARMAP_NODE_GLYPH_CENTER_X,
-        rect.y + STARMAP_NODE_GLYPH_CENTER_Y,
-        STARMAP_NODE_GLYPH_RADIUS, 0, Math.PI * 2
+        rect.x + rect.width / 2,
+        rect.y + rect.height / 2,
+        radius, 0, Math.PI * 2
       )
       ctx.fillStyle = starmapNodeColor(node.kind)
       ctx.fill()
@@ -323,10 +326,18 @@ export struct StarMapEmbedPreview {
         if (!rect) {
           continue
         }
+        const radius: number = Math.min(
+          STARMAP_NODE_GLYPH_RADIUS,
+          Math.max(2, Math.min(rect.width, rect.height) / 2 - 2)
+        )
+        // 卡片高度不够时只保留圆点：低倍率允许视觉降级，但不许把标题画到卡片外。
+        if (rect.height < radius * 2 + STARMAP_NODE_LABEL_FONT_SIZE * 2) {
+          continue
+        }
         ctx.fillText(
           this.nodeLabel(node.title),
-          rect.x + STARMAP_NODE_GLYPH_CENTER_X,
-          rect.y + STARMAP_NODE_LABEL_CENTER_Y
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2 + radius + STARMAP_NODE_LABEL_FONT_SIZE
         )
       }
     }

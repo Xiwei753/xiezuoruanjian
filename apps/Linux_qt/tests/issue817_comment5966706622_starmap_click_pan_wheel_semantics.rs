@@ -45,10 +45,9 @@
 #[path = "common/source_guard.rs"]
 mod source_guard;
 
-use source_guard::{count_occurrences, function_window, read_src};
+use source_guard::{count_occurrences, function_window, read_src, starmap_node_delegate_src};
 
 const CANVAS: &str = "qml/StarMapCanvas.qml";
-const NODE: &str = "qml/StarMapNode.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
 const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
@@ -70,7 +69,7 @@ fn strip_line_comments(source: &str) -> String {
 // 1. 选中 TapHandler 不得重新声明 SingleTap | DoubleTap
 // ─────────────────────────────────────────────────────────────────────────
 
-/// `StarMapNode.qml` 的 `nodeMouseTap` / `nodeTouchTap` 是 #817 的单击选中入口，
+/// 普通节点卡片 delegate 的 `nodeMouseTap` / `nodeTouchTap` 是 #817 的单击选中入口，
 /// 不得重新声明 `exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap`。
 ///
 /// Qt 官方文档（https://doc.qt.io/qt-6/qml-qtquick-taphandler.html#exclusiveSignals-prop）：
@@ -84,10 +83,10 @@ fn strip_line_comments(source: &str) -> String {
 fn node_selection_tap_handlers_not_readd_single_tap_double_tap() {
     // Issue #832：Node 不再挂选中 TapHandler；单击选中由唯一 Router 的
     // TapHandler 完成，仍必须是默认 NotExclusive（立即发 singleTapped）。
-    let node = strip_line_comments(&read_src(NODE));
+    let node = strip_line_comments(&starmap_node_delegate_src());
     assert!(
         !node.contains("TapHandler"),
-        "StarMapNode 不得再挂 TapHandler：输入只有一个主人（Router）"
+        "节点卡片 delegate 不得再挂 TapHandler：输入只有一个主人（Router）"
     );
 
     let router = read_src("qml/StarMapInputRouter.qml");

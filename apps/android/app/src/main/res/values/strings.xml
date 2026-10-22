@@ -9,6 +9,7 @@
     <string name="action_new_chapter">新建章节</string>
     <string name="action_settings">设置</string>
     <string name="action_cancel">取消</string>
+    <string name="action_save">保存</string>
     <string name="action_create">创建</string>
 
     <string name="status_saved">已保存</string>
@@ -292,6 +293,10 @@
     <string name="starmap_empty">暂无星图</string>
     <string name="starmap_load_failed">星图加载失败</string>
     <string name="starmap_link_focus_owner">「%1$s」所属：%2$s</string>
+    <string name="starmap_node_edit_title">编辑星图节点</string>
+    <string name="starmap_node_name_label">名称</string>
+    <string name="starmap_node_body_label">正文</string>
+    <string name="starmap_node_title_required">名称不能为空</string>
     <string name="stats_recent_30_days">近 30 天写作统计</string>
     <string name="stats_total_words_label">总字数</string>
     <string name="stats_active_days">活跃天数</string>

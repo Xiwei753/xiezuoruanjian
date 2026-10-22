@@ -3,7 +3,7 @@ import { EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorD
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from '../../../main/ets/corebridge/dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
@@ -442,13 +442,22 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async updateStarMapNode(starmapId: string, nodeId: string,
-    position: { x: number, y: number }): Promise<ResultEnvelope<StarMapNode>> {
+    patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>> {
     await this.delay(100)
     const node = this.mockStarMapGraph.nodes.find(n => n.id === nodeId)
     if (!node) {
       return this.error('STARMAP_NOT_FOUND', '节点不存在')
     }
-    node.position = { x: position.x, y: position.y }
+    // #984：按 patch 语义只覆盖实际传入的字段。
+    if (patch.title !== undefined) {
+      node.title = patch.title
+    }
+    if (patch.content !== undefined) {
+      node.content = patch.content
+    }
+    if (patch.position !== undefined) {
+      node.position = { x: patch.position.x, y: patch.position.y }
+    }
     node.updatedAt = Date.now()
     return this.success(node)
   }

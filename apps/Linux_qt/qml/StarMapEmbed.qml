@@ -173,7 +173,7 @@ Item {
         z: 10
     }
 
-    // wobble 降速，和 StarMapNode.qml 一致；选中/按下/拖动时动画暂停。
+    // wobble 降速，和普通节点一致；选中/按下/拖动时动画暂停。
     SequentialAnimation on _wobbleAnimX {
         loops: Animation.Infinite
         running: !root.isSelected && !root.isPressed

@@ -793,6 +793,26 @@
       "value": "移动节点"
     },
     {
+      "name": "edit_node",
+      "value": "编辑节点"
+    },
+    {
+      "name": "node_name_label",
+      "value": "名称"
+    },
+    {
+      "name": "node_name_placeholder",
+      "value": "请输入节点名称"
+    },
+    {
+      "name": "node_body_label",
+      "value": "正文"
+    },
+    {
+      "name": "node_body_placeholder",
+      "value": "输入正文，可手动换行"
+    },
+    {
       "name": "connect_node",
       "value": "创建关系"
     },

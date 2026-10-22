@@ -40,13 +40,14 @@
 #[path = "common/source_guard.rs"]
 mod source_guard;
 
-use source_guard::{count_occurrences, function_window, linux_qt_root, read_src};
+use source_guard::{
+    count_occurrences, function_window, linux_qt_root, read_src, starmap_node_delegate_src,
+};
 
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
-const NODE: &str = "qml/StarMapNode.qml";
 const INTERACTION: &str = "qml/StarMapInteractionController.qml";
 const CONTROLLER: &str = "qml/StarMapGraphController.qml";
 const WORKSPACE: &str = "qml/StarMapWorkspace.qml";
@@ -872,8 +873,12 @@ fn drag_threshold_and_long_press_are_the_only_two_ways_out_of_press_pending() {
     );
 
     // 状态提升只允许 Router 调：递归层与 delegate 都不得出现这些入口。
-    for rel in [CONTENT, NODE, EMBED] {
-        let src = strip_line_comments(&read_src(rel));
+    for (label, source) in [
+        ("StarMapSceneContent.qml", read_src(CONTENT)),
+        ("节点卡片 delegate", starmap_node_delegate_src()),
+        ("StarMapEmbed.qml", read_src(EMBED)),
+    ] {
+        let src = strip_line_comments(&source);
         for forbidden in [
             "pressPendingToMove(",
             "pressPendingToConnect(",
@@ -882,7 +887,7 @@ fn drag_threshold_and_long_press_are_the_only_two_ways_out_of_press_pending() {
         ] {
             assert!(
                 !src.contains(forbidden),
-                "{rel} 不得自行提升手势状态：{forbidden} 只允许唯一 Router 调用"
+                "{label} 不得自行提升手势状态：{forbidden} 只允许唯一 Router 调用"
             );
         }
     }
@@ -1149,59 +1154,78 @@ fn path_planner_no_longer_ports_lca_rules() {
 
 #[test]
 fn node_title_is_edited_inline_with_a_text_input() {
-    let src = strip_line_comments(&read_src(NODE));
+    let src = strip_line_comments(&starmap_node_delegate_src());
     assert!(
         src.contains("property bool editing: false"),
-        "StarMapNode 必须有 editing 状态"
+        "节点卡片 delegate 必须有 editing 状态"
     );
     assert!(
         src.contains("TextInput {") && src.contains("id: titleInput"),
-        "节点框内必须是 TextInput（需要多行时再换 TextEdit），不是只读 AppText"
+        "节点卡片内必须有名称 TextInput"
     );
     assert!(
-        src.contains("readOnly: !root.editing") && src.contains("enabled: root.editing"),
-        "TextInput 平时只读显示，只有 editing 时才接管输入，实际源码缺少"
+        src.contains("TextEdit {") && src.contains("id: bodyEdit"),
+        "节点卡片内必须有正文多行 TextEdit"
+    );
+    assert!(
+        src.contains("visible: nodeItem.editing"),
+        "编辑层只在 editing 时显示并接管输入，实际源码缺少"
     );
 
-    let begin = function_window(&src, "function beginEdit(", 400);
+    let begin = function_window(&src, "function beginEdit(", 500);
     assert!(
         begin.contains("editing = true") && begin.contains("titleInput.forceActiveFocus()"),
-        "进入编辑必须把光标放进节点框内（forceActiveFocus），实际窗口:\n{begin}"
+        "进入编辑必须把光标放进名称输入框（forceActiveFocus），实际窗口:\n{begin}"
     );
-    let commit = function_window(&src, "function commitEdit(", 700);
+    let commit = function_window(&src, "function commitEdit(", 900);
     assert!(
-        commit.contains("root.titleCommitted(next)"),
-        "Enter / editingFinished 必须把 title 提交给归属层，实际窗口:\n{commit}"
+        commit.contains("scene.commitNodeEdit(nodeData.id, nextTitle, nextBody)"),
+        "提交必须把名称与正文交给归属层保存，实际窗口:\n{commit}"
     );
-    let cancel = function_window(&src, "function cancelEdit(", 400);
+    let cancel = function_window(&src, "function cancelEdit(", 500);
     assert!(
-        cancel.contains("titleInput.text = root.title"),
-        "Esc 必须还原原值，实际窗口:\n{cancel}"
+        cancel.contains("editing = false")
+            && cancel.contains("editTitleDraft = nodeData.title")
+            && cancel.contains("editBodyDraft = bodyText"),
+        "Esc 必须退出编辑并还原名称/正文草稿，实际窗口:\n{cancel}"
     );
 
-    // accepted / editingFinished 是 Qt TextInput 自带的信号，够用，不需要 Popup。
+    // 名称 Enter 移到正文；Ctrl+Enter 提交；Esc 取消；正文 Enter 保留换行。
     assert!(
-        src.contains("onAccepted: root.commitEdit()")
-            && src.contains("onEditingFinished: root.commitEdit()")
-            && src.contains("Keys.onEscapePressed: root.cancelEdit()"),
-        "提交/取消必须绑定 TextInput 的 accepted / editingFinished 与 Esc"
+        src.contains("Keys.onReturnPressed:")
+            && src.contains("Keys.onEnterPressed:")
+            && src.contains("Keys.onEscapePressed:")
+            && src.contains("event.modifiers & Qt.ControlModifier")
+            && src.contains("nodeItem.commitEdit()")
+            && src.contains("nodeItem.cancelEdit()"),
+        "提交/取消必须绑定名称输入与 Ctrl+Enter / Esc"
+    );
+    assert!(
+        !src.contains("onAccepted:")
+            && !src.contains("onEditingFinished:")
+            && src.contains("if (titleInput.inputMethodComposing)"),
+        "不得沿用 accepted/editingFinished 自动提交，IME 预编辑期间必须挡住提交"
     );
 }
 
 #[test]
 fn node_gestures_are_disabled_while_editing() {
     // Issue #832：Node 自身不再挂任何业务手势，输入统一由 Router 解释；
-    // 编辑期间由 Router 的拖动 Handler 整体让位给 TextInput。
-    let node = strip_line_comments(&read_src(NODE));
+    // 编辑期间由 Router 的拖动 Handler 整体让位给文本输入。
+    let node = strip_line_comments(&starmap_node_delegate_src());
     for forbidden in ["TapHandler", "DragHandler", "PointHandler", "MouseArea"] {
         assert!(
             !node.contains(forbidden),
-            "StarMapNode 不得再挂业务手势 {forbidden}：输入只有一个主人（Router）"
+            "节点卡片 delegate 不得再挂业务手势 {forbidden}：输入只有一个主人（Router）"
         );
     }
     assert!(
-        node.contains("enabled: root.editing"),
-        "TextInput 必须只在编辑时接管输入"
+        node.contains("id: editLayer") && node.contains("visible: nodeItem.editing"),
+        "名称/正文输入层必须只在编辑时显示并接管输入"
+    );
+    assert!(
+        node.contains("id: titleInput") && node.contains("id: bodyEdit"),
+        "编辑层必须同时提供名称单行输入与正文多行输入"
     );
 
     // 编辑期间所有单指业务 Handler（鼠标/触屏 tap、drag、release 观察、
@@ -1224,10 +1248,10 @@ fn node_gestures_are_disabled_while_editing() {
 
 #[test]
 fn no_external_node_edit_popup_route_remains() {
-    let node = strip_line_comments(&read_src(NODE));
+    let node = strip_line_comments(&starmap_node_delegate_src());
     assert!(
         !node.contains("editNodeRequested"),
-        "StarMapNode 不得再上抛 editNodeRequested：标题编辑已在节点自身内联完成"
+        "节点卡片 delegate 不得再上抛 editNodeRequested：名称/正文编辑已在卡片内联完成"
     );
 
     let canvas = strip_line_comments(&read_src(CANVAS));
@@ -1272,8 +1296,15 @@ fn deleted_scene_canvas_hints_are_cleaned_up() {
 #[test]
 fn no_source_documents_a_per_scene_viewport_abstraction() {
     // 旧注释会诱导后来者继续按“每个 Scene 自带 pan/zoom”写代码。
-    for rel in [CANVAS, CONTENT, EMBED, NODE, INTERACTION, WORKSPACE] {
-        let src = read_src(rel);
+    for (label, source) in [
+        (CANVAS, read_src(CANVAS)),
+        (CONTENT, read_src(CONTENT)),
+        (EMBED, read_src(EMBED)),
+        ("节点卡片 delegate", starmap_node_delegate_src()),
+        (INTERACTION, read_src(INTERACTION)),
+        (WORKSPACE, read_src(WORKSPACE)),
+    ] {
+        let src = &source;
         for forbidden in [
             "每个 Scene 实例都有自己的",
             "子 Scene 自己的 pan",
@@ -1282,7 +1313,7 @@ fn no_source_documents_a_per_scene_viewport_abstraction() {
         ] {
             assert!(
                 !src.contains(forbidden),
-                "{rel} 不得再出现 {forbidden}：整棵星图只有一个全局视口，\
+                "{label} 不得再出现 {forbidden}：整棵星图只有一个全局视口，\
                  递归的是内容不是视口"
             );
         }
@@ -1616,11 +1647,15 @@ fn overview_geometry_rebinds_without_manual_transform_signal() {
 /// `point.position` 就是 Canvas 局部坐标，命中与日志都从这一份坐标出发。
 #[test]
 fn press_handlers_pass_true_scene_coordinates() {
-    for rel in [NODE, EMBED, CONTENT] {
-        let src = strip_line_comments(&read_src(rel));
+    for (label, source) in [
+        ("节点卡片 delegate", starmap_node_delegate_src()),
+        (EMBED, read_src(EMBED)),
+        (CONTENT, read_src(CONTENT)),
+    ] {
+        let src = strip_line_comments(&source);
         assert!(
             !src.contains("itemPressed") && !src.contains("scenePressPosition"),
-            "{rel} 不得再保留 delegate press 通道 / scenePressPosition"
+            "{label} 不得再保留 delegate press 通道 / scenePressPosition"
         );
     }
 
@@ -1846,11 +1881,14 @@ fn overview_fit_uses_the_circle_inscribed_safe_area_without_world_clamp() {
         !scene.contains("clamp"),
         "活动画布不得有任何安全区 clamp（无限画布），实际源码不符"
     );
-    let spawn = function_window(&scene, "function findFreeSpawnPoint(", 900);
+    let spawn = function_window(&scene, "function findFreeSpawnPoint(", 1200);
     assert!(
-        spawn.contains("if (!overlapsExistingNode(candidates[i].x, candidates[i].y, 150, 60, 12))")
+        spawn.contains("overlapsExistingNode(candidates[i].x, candidates[i].y,")
+            && spawn.contains("StarMapNodeMetrics.defaultNodeWidth()")
+            && spawn.contains("StarMapNodeMetrics.defaultNodeHeight(), 12)")
+            && !spawn.contains(", 150, 60,")
             && spawn.contains("return { x: wx, y: wy }"),
-        "空位选择只避开已有对象，不把新建拽回圆内安全区，实际窗口:\n{spawn}"
+        "空位选择只避开已有对象，并用统一卡片度量，不把新建拽回圆内安全区，实际窗口:\n{spawn}"
     );
     let create_node = function_window(&scene, "function createNodeWithName(", 400);
     assert!(
@@ -2368,11 +2406,14 @@ fn node_and_embed_single_click_wire_to_selection() {
                 .contains("hit.owner.logInteraction(\"selection_changed\", \"embed\", hit.id, {})"),
         "embed 单击必须选中并记 selection_changed，实际窗口:\n{select}"
     );
-    for rel in [NODE, EMBED] {
-        let src = strip_line_comments(&read_src(rel));
+    for (label, source) in [
+        ("节点卡片 delegate", starmap_node_delegate_src()),
+        (EMBED, read_src(EMBED)),
+    ] {
+        let src = strip_line_comments(&source);
         assert!(
             !src.contains("singleClicked") && !src.contains("signal clicked"),
-            "{rel} 不得再上抛点击信号：输入只有一个主人"
+            "{label} 不得再上抛点击信号：输入只有一个主人"
         );
     }
 }
@@ -2413,11 +2454,15 @@ fn pinch_disables_touch_taps_at_the_handler_level() {
     );
 
     // 递归 delegate 不再持有触屏手势，也就不需要 touchGestureBlocked。
-    for rel in [NODE, EMBED, CONTENT] {
-        let src = strip_line_comments(&read_src(rel));
+    for (label, source) in [
+        ("节点卡片 delegate", starmap_node_delegate_src()),
+        (EMBED, read_src(EMBED)),
+        (CONTENT, read_src(CONTENT)),
+    ] {
+        let src = strip_line_comments(&source);
         assert!(
             !src.contains("touchGestureBlocked"),
-            "{rel} 不得再保留 touchGestureBlocked：delegate 已没有触屏 Handler"
+            "{label} 不得再保留 touchGestureBlocked：delegate 已没有触屏 Handler"
         );
     }
 }

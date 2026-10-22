@@ -181,11 +181,31 @@ data class StarMapNodeStyleData(
     val fillColor: String? = null,
 )
 
+/**
+ * 节点正文内容 — 对应 Core 的 `StarMapNodeContent`。
+ *
+ * Issue #984：名称 `title` 与正文 `content` 是两份独立数据。Android 编辑正文时
+ * 只构造 [TYPE_INLINE]；引用类型（chapterRef/entityRef/externalRef）不会被这个
+ * 模型覆盖，保存时省略 content 即可保留 Core 中的原引用。
+ */
+data class StarMapNodeContentData(
+    val type: String = TYPE_EMPTY,
+    val summary: String? = null,
+    val body: String? = null,
+) {
+    companion object {
+        const val TYPE_EMPTY = "empty"
+        const val TYPE_INLINE = "inline"
+    }
+}
+
 data class StarMapNodePatch(
     val title: String? = null,
     val kind: StarMapNodeKind? = null,
     val payload: Map<String, Any>? = null,
     val tags: List<String>? = null,
+    /** Issue #984：省略表示不修改 Core 中的正文/引用内容。 */
+    val content: StarMapNodeContentData? = null,
 )
 
 data class StarMapEdgePatch(

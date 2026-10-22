@@ -26,6 +26,7 @@
 
 import QtQuick
 import QtQuick.Shapes
+import "StarMapNodeMetrics.js" as StarMapNodeMetrics
 
 Item {
     id: overview
@@ -39,9 +40,8 @@ Item {
     // 概览包围盒最大边 = 短边 × 该比例。内接正方形是 1/√2 ≈ 0.707，
     // 取 0.66 留出边距，概览不贴到圆边。
     readonly property real _safeRatio: 0.66
-    // 与 StarMapGraphController.buildModels 一致的显示尺寸（Core 只存 position）。
-    readonly property int _nodeWidth: 150
-    readonly property int _nodeHeight: 60
+    // Issue #984：普通节点宽高统一由 StarMapNodeMetrics 度量（读原始
+    // graphData 节点的 title/content），这里不再保留第二套固定几何。
     readonly property int _embedDiameter: 200
     // 概览线宽的屏幕口径：概览是父图投影的一部分，线宽恒定在屏幕像素上。
     readonly property real _previewStrokeWidth: 1.5
@@ -74,8 +74,10 @@ Item {
             var n = nodes[i]
             var np = n.position || { x: 0, y: 0 }
             var isPortal = n.portal && n.portal.destinationStarmapId
-            var nw = isPortal ? _embedDiameter : _nodeWidth
-            var nh = isPortal ? _embedDiameter : _nodeHeight
+            // Issue #984：普通节点读原始 graphData 节点的 content 度量，
+            // 旧 portal 仍按 Embed 直径处理。
+            var nw = isPortal ? _embedDiameter : StarMapNodeMetrics.nodeWidth(n)
+            var nh = isPortal ? _embedDiameter : StarMapNodeMetrics.nodeHeight(n, false)
             if (!has) {
                 minX = np.x; minY = np.y
                 maxX = np.x + nw; maxY = np.y + nh
@@ -129,12 +131,13 @@ Item {
             var n = nodes[i]
             var pos = n.position || { x: 0, y: 0 }
             // 旧 portal 归一到 Embed 几何，和活动画布同一口径。
+            // Issue #984：普通节点与 StarMapGraphController.buildModels 共用度量。
             var isPortal = n.portal && n.portal.destinationStarmapId
             out.push({
                 id: n.id,
                 x: pos.x, y: pos.y,
-                width: isPortal ? _embedDiameter : _nodeWidth,
-                height: isPortal ? _embedDiameter : _nodeHeight
+                width: isPortal ? _embedDiameter : StarMapNodeMetrics.nodeWidth(n),
+                height: isPortal ? _embedDiameter : StarMapNodeMetrics.nodeHeight(n, false)
             })
         }
         return out
@@ -214,8 +217,9 @@ Item {
             var pos = n.position || { x: 0, y: 0 }
             if (n.portal && n.portal.destinationStarmapId)
                 continue
-            s += _circlePath(projectX(pos.x + _nodeWidth / 2),
-                             projectY(pos.y + _nodeHeight / 2), _overviewDotRadius)
+            s += _circlePath(projectX(pos.x + StarMapNodeMetrics.nodeWidth(n) / 2),
+                             projectY(pos.y + StarMapNodeMetrics.nodeHeight(n, false) / 2),
+                             _overviewDotRadius)
         }
         return s
     }

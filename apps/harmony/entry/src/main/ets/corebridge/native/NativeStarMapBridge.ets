@@ -1,5 +1,5 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, StarMapNodeContent, StarMapAnchor, StarMapPortal, StarMapNodeStyle, StarMapProvenance, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from '../dto/StarMapDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeStarMapMeta, decodeStarMapGraph, decodeStarMapNode, decodeStarMapEdge, decodeStarMapEmbed, decodeCreateStarmapChildEmbedResult, decodeArray } from '../codec/CoreWireDecoders'
 import util from '@ohos.util'
@@ -8,9 +8,16 @@ function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
 }
 
-/** StarMapNodePatchInputDto 请求体：platform 只发要改的字段（position）。 */
+/**
+ * StarMapNodePatchInputDto 请求体（#984）：platform 只发要改的字段。
+ *
+ * 字段都是可选的，不传的字段用 undefined 表示；JSON.stringify 会省略 undefined，
+ * Core 的 patch 语义是"省略 = 不改"，所以不能拿 null 占位（null 表示要清空）。
+ */
 interface StarMapNodePatchBody {
-  position: StarMapPoint
+  title?: string
+  content?: StarMapNodeContent
+  position?: StarMapPoint
 }
 
 /** StarMapEmbedPatchInputDto 请求体：platform 只发要改的字段（position）。 */
@@ -125,10 +132,23 @@ export class NativeStarMapBridge {
     } catch (e) { return nativeError<boolean>(e) }
   }
 
-  async updateStarMapNode(starmapId: string, nodeId: string, position: StarMapPoint): Promise<ResultEnvelope<StarMapNode>> {
+  /**
+   * 更新节点（#984）：按 patch 只发 title / content / position 里实际要改的字段。
+   * 仍然统一走 nativeUpdateStarMapNode(starmapId, nodeId, JSON.stringify(body))，
+   * 不另建第二套 Core 调用。
+   */
+  async updateStarMapNode(starmapId: string, nodeId: string, patch: StarMapNodeUpdatePatch): Promise<ResultEnvelope<StarMapNode>> {
     try {
-      // StarMapNodePatchInputDto：只发 position（position 是节点位置的唯一真相）
-      const body: StarMapNodePatchBody = { position: position }
+      const body: StarMapNodePatchBody = {}
+      if (patch.title !== undefined) {
+        body.title = patch.title
+      }
+      if (patch.content !== undefined) {
+        body.content = patch.content
+      }
+      if (patch.position !== undefined) {
+        body.position = patch.position
+      }
       const jsonStr: string = this.core.getNativeModule().nativeUpdateStarMapNode(starmapId, nodeId, JSON.stringify(body))
       return this.core.decodeEnvelope<StarMapNode>(jsonStr, decodeStarMapNode)
     } catch (e) { return nativeError<StarMapNode>(e) }

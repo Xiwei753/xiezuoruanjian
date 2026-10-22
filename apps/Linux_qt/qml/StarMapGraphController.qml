@@ -13,6 +13,7 @@
 // =============================================================================
 
 import QtQuick
+import "StarMapNodeMetrics.js" as StarMapNodeMetrics
 
 QtObject {
     id: controller
@@ -97,7 +98,8 @@ QtObject {
 
     function buildModels() {
         // graph.nodes[].position 是节点位置唯一真相，直接从 graph 派生平台显示模型。
-        // 宽高/圆角是纯显示参数，用默认值（与 starmap_bridge.rs DEFAULT_NODE_* 一致）。
+        // Issue #984：普通节点是「名称 + 正文」文字卡片，宽高统一由
+        // StarMapNodeMetrics 度量（与 ActiveScene / SceneContent 同一口径）。
         var newNodes = [];
         // Issue #801 评论 5895625744: newEmbeds 提前声明，旧 portal Node 也往这里归一。
         var newEmbeds = [];
@@ -106,7 +108,7 @@ QtObject {
             var gn = graphNodes[i];
             var pos = gn.position || { x: 0, y: 0 };
             // Issue #801 评论 5895625744: 旧 portal Node 在模型转换层归一到 Embed，
-            // 不作为普通 Node 下发给 StarMapNode。保留旧节点的位置、标题和目标 starmap。
+            // 不作为普通 Node 下发给活动画布 delegate。保留旧节点的位置、标题和目标 starmap。
             // Canvas 以后只有一种子星图语义：Embed。
             if (gn.portal && gn.portal.destinationStarmapId) {
                 // Issue #801 评论 5896594591: 旧 portal 真实身份是 Node，操作必须走 Node API。
@@ -128,10 +130,13 @@ QtObject {
                     id: gn.id,
                     title: gn.title,
                     kind: gn.kind,
+                    // Issue #984：完整 content（type/summary/body 等）必须带给
+                    // delegate 与度量函数，不能只留标题。
+                    content: gn.content || { type: "empty" },
                     x: pos.x,
                     y: pos.y,
-                    width: 150,
-                    height: 60,
+                    width: StarMapNodeMetrics.nodeWidth(gn),
+                    height: StarMapNodeMetrics.nodeHeight(gn, false),
                     payload: gn.payload,
                     tags: gn.tags
                 });
@@ -394,21 +399,64 @@ QtObject {
         }
     }
 
+    // Issue #984：patch 原样交给后端（content 也是 patch 的一部分）。
+    // 成功后用 Core 返回的更新后 StarMapNodeDto 刷新模型，不能只浅拷贝 title；
+    // 同时同步 graphData.nodes 并重算边端点，让正文、尺寸、连线立即刷新。
     function updateNode(nodeId, patch) {
         if (!ensureBackend()) return;
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(patch)), qsTr("更新节点失败"));
         if (res.success) {
             clearError();
+            var updated = res.data;
+            if (!updated || updated.id !== nodeId) {
+                // 返回结构不可用时退回全量加载，仍然不能只改 title。
+                loadGraph();
+                return;
+            }
+
             var nextNodes = [];
             for (var i = 0; i < nodesModel.length; i++) {
                 var n = copyObject(nodesModel[i]);
                 if (n.id === nodeId) {
-                    if (patch.title !== undefined) n.title = patch.title;
-                    if (patch.kind !== undefined) n.kind = patch.kind;
+                    if (updated.title !== undefined) n.title = updated.title;
+                    if (updated.kind !== undefined) n.kind = updated.kind;
+                    if (updated.payload !== undefined) n.payload = updated.payload;
+                    if (updated.tags !== undefined) n.tags = updated.tags;
+                    n.content = updated.content !== undefined
+                            ? (updated.content || { type: "empty" })
+                            : n.content;
+                    // Issue #984：尺寸跟随同一份度量函数，不在更新路径另写固定值。
+                    // 用合并后的节点度量，部分字段缺失时也不会把卡片压回标题高度。
+                    n.width = StarMapNodeMetrics.nodeWidth(n);
+                    n.height = StarMapNodeMetrics.nodeHeight(n, false);
                 }
                 nextNodes.push(n);
             }
             nodesModel = nextNodes;
+
+            // graphData 是边渲染与子图概览的事实输入，节点内容必须同步。
+            if (graphData && graphData.nodes) {
+                var nextGraphNodes = [];
+                for (var j = 0; j < graphData.nodes.length; j++) {
+                    var gn = graphData.nodes[j];
+                    if (gn.id === nodeId) {
+                        var nextGraphNode = copyObject(gn);
+                        if (updated.title !== undefined) nextGraphNode.title = updated.title;
+                        if (updated.kind !== undefined) nextGraphNode.kind = updated.kind;
+                        if (updated.payload !== undefined) nextGraphNode.payload = updated.payload;
+                        if (updated.tags !== undefined) nextGraphNode.tags = updated.tags;
+                        if (updated.content !== undefined) nextGraphNode.content = updated.content;
+                        nextGraphNodes.push(nextGraphNode);
+                    } else {
+                        nextGraphNodes.push(gn);
+                    }
+                }
+                var nextGraph = copyObject(graphData);
+                nextGraph.nodes = nextGraphNodes;
+                graphData = nextGraph;
+            }
+
+            computeEdgeRenders(null);
             graphChanged();
         } else {
             setError(backendErrorText(res, qsTr("更新节点失败")));

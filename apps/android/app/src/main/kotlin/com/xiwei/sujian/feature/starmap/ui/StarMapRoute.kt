@@ -9,12 +9,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -24,22 +28,35 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.center
+import androidx.compose.ui.geometry.height
+import androidx.compose.ui.geometry.size
+import androidx.compose.ui.geometry.topLeft
+import androidx.compose.ui.geometry.width
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,18 +67,23 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.starmap.data.StarMapRepository
 import com.xiwei.sujian.feature.starmap.data.model.StarMapData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphEdge
+import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphNode
 import com.xiwei.sujian.feature.starmap.data.model.StarMapMeta
+import com.xiwei.sujian.feature.starmap.data.model.StarMapNodeContentData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPointData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapSelectionOwner
 import com.xiwei.sujian.feature.starmap.data.model.StarMapSelectionTarget
 import com.xiwei.sujian.feature.starmap.data.model.StarMapTargetPathData
+import com.xiwei.sujian.feature.starmap.data.model.ownerCenter
 import com.xiwei.sujian.feature.starmap.data.model.positionForPath
 import com.xiwei.sujian.feature.starmap.data.model.resolveSelectionTarget
-import com.xiwei.sujian.feature.starmap.data.model.selectionCenter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
@@ -168,8 +190,14 @@ private fun StarMapDetailScreen(
             )
         is StarMapDetailState.Ready ->
             StarMapCanvas(
+                starmapId = starmapId,
+                repository = repository,
                 data = current.data,
                 target = target,
+                onNodeUpdated = { updated ->
+                    // Issue #984：保存后立即用 Core 返回的节点刷新当前画布。
+                    state = StarMapDetailState.Ready(current.data.withUpdatedNode(updated))
+                },
                 modifier = modifier.fillMaxSize(),
             )
     }
@@ -241,17 +269,101 @@ private data class StarMapCamera(
     val offset: Offset,
 )
 
+// Issue #984：普通节点是文字卡片。卡片尺寸按内容测量，position 始终是左上角。
+private val StarMapCardWidth = 200.dp
+private val StarMapCardMinHeight = 56.dp
+private val StarMapCardPadding = 12.dp
+private val StarMapCardTitleBodyGap = 6.dp
+private val StarMapCardCorner = 10.dp
+private const val StarMapCardTitleMaxLines = 2
+private const val StarMapCardBodyMaxLines = 5
+private const val StarMapCardBodyPreviewMinScale = 0.55f
+
+private data class StarMapNodeCard(
+    val node: StarMapGraphNode,
+    val rect: Rect,
+    val title: TextLayoutResult,
+    val titleTopLeft: Offset,
+    val body: TextLayoutResult?,
+    val bodyTopLeft: Offset,
+)
+
+private fun buildNodeCards(
+    nodes: List<StarMapGraphNode>,
+    textMeasurer: TextMeasurer,
+    density: Density,
+    titleStyle: TextStyle,
+    bodyStyle: TextStyle,
+): List<StarMapNodeCard> {
+    val width = with(density) { StarMapCardWidth.toPx() }
+    val padding = with(density) { StarMapCardPadding.toPx() }
+    val gap = with(density) { StarMapCardTitleBodyGap.toPx() }
+    val minHeight = with(density) { StarMapCardMinHeight.toPx() }
+    val maxTextWidth = (width - padding * 2f).roundToInt().coerceAtLeast(1)
+    val constraints = Constraints(maxWidth = maxTextWidth)
+
+    return nodes.map { node ->
+        val title =
+            textMeasurer.measure(
+                text = node.title,
+                style = titleStyle,
+                overflow = TextOverflow.Ellipsis,
+                maxLines = StarMapCardTitleMaxLines,
+                constraints = constraints,
+            )
+        // 正文只来自 empty / inline 内容；按原文本测量，保留 \n 与连续空行。
+        val body =
+            node.contentBody
+                ?.takeIf {
+                    it.isNotEmpty() &&
+                        (node.contentKind == null ||
+                            node.contentKind == StarMapNodeContentData.TYPE_EMPTY ||
+                            node.contentKind == StarMapNodeContentData.TYPE_INLINE)
+                }
+                ?.let { bodyText ->
+                    textMeasurer.measure(
+                        text = bodyText,
+                        style = bodyStyle,
+                        overflow = TextOverflow.Ellipsis,
+                        maxLines = StarMapCardBodyMaxLines,
+                        constraints = constraints,
+                    )
+                }
+        val contentHeight = title.size.height + (body?.let { gap + it.size.height } ?: 0f)
+        val height = max(minHeight, contentHeight + padding * 2f)
+        val contentTop = node.position.y + padding
+        StarMapNodeCard(
+            node = node,
+            rect =
+                Rect(
+                    left = node.position.x,
+                    top = node.position.y,
+                    right = node.position.x + width,
+                    bottom = node.position.y + height,
+                ),
+            title = title,
+            titleTopLeft = Offset(node.position.x + padding, contentTop),
+            body = body,
+            bodyTopLeft = Offset(node.position.x + padding, contentTop + title.size.height + gap),
+        )
+    }
+}
+
 @Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
 @Composable
 private fun StarMapCanvas(
+    starmapId: String,
+    repository: StarMapRepository,
     data: StarMapData,
     target: StarMapSelectionTarget?,
+    onNodeUpdated: (StarMapGraphNode) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val resolvedTarget = remember(data, target) { target?.let { data.resolveSelectionTarget(it) } }
     var selectedOwner by remember(data, target) { mutableStateOf(resolvedTarget?.owner) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     var camera by remember { mutableStateOf(StarMapCamera(1f, Offset.Zero)) }
+    var editingNode by remember(data) { mutableStateOf<StarMapGraphNode?>(null) }
     val currentCamera by rememberUpdatedState(camera)
 
     val textMeasurer = rememberTextMeasurer()
@@ -263,11 +375,35 @@ private fun StarMapCanvas(
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
         )
+    val nodeTitleStyle =
+        TextStyle(
+            color = MaterialTheme.colorScheme.onSurface,
+            fontSize = 13.sp,
+            lineHeight = 17.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    val nodeBodyStyle =
+        TextStyle(
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+        )
     val edgeLabelStyle =
         TextStyle(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 10.sp,
         )
+    val nodeCards =
+        remember(data.graph.nodes, textMeasurer, density, nodeTitleStyle, nodeBodyStyle) {
+            buildNodeCards(
+                nodes = data.graph.nodes,
+                textMeasurer = textMeasurer,
+                density = density,
+                titleStyle = nodeTitleStyle,
+                bodyStyle = nodeBodyStyle,
+            )
+        }
+    val cardsById = remember(nodeCards) { nodeCards.associateBy { it.node.id } }
     val nodeFill = MaterialTheme.colorScheme.secondaryContainer
     val nodeBorder = MaterialTheme.colorScheme.secondary
     val edgeColor = MaterialTheme.colorScheme.outline
@@ -276,10 +412,18 @@ private fun StarMapCanvas(
     val embedBorder = MaterialTheme.colorScheme.tertiary
     val surfaceColor = MaterialTheme.colorScheme.surface
 
-    LaunchedEffect(data, viewport, target) {
+    LaunchedEffect(data.graph.starmapId, viewport, target) {
         if (viewport.width <= 0 || viewport.height <= 0) return@LaunchedEffect
-        val fit = fitCamera(data, viewport, padding = 48f)
-        val targetCenter = target?.let { data.selectionCenter(it) }
+        val fit = fitCamera(data, viewport, padding = 48f, cards = nodeCards)
+        val targetCenter =
+            resolvedTarget?.owner?.let { owner ->
+                when (owner) {
+                    is StarMapSelectionOwner.Node ->
+                        cardsById[owner.id]?.rect?.center?.let { StarMapPointData(it.x, it.y) }
+                    is StarMapSelectionOwner.Embed -> data.ownerCenter(owner)
+                    is StarMapSelectionOwner.Edge -> data.ownerCenter(owner)
+                }
+            }
         camera =
             if (targetCenter == null) {
                 fit
@@ -294,21 +438,33 @@ private fun StarMapCanvas(
                 Modifier
                     .fillMaxSize()
                     .onSizeChanged { viewport = it }
-                    .pointerInput(data, nodeRadius) {
-                        detectTapGestures { tap ->
-                            val activeCamera = currentCamera
-                            val world =
-                                Offset(
-                                    x = (tap.x - activeCamera.offset.x) / activeCamera.scale,
-                                    y = (tap.y - activeCamera.offset.y) / activeCamera.scale,
-                                )
-                            selectedOwner =
-                                hitTest(
-                                    data = data,
-                                    world = world,
-                                    nodeTolerance = nodeRadius / activeCamera.scale,
-                                )
-                        }
+                    .pointerInput(data, nodeCards, nodeRadius) {
+                        detectTapGestures(
+                            onTap = { tap ->
+                                val activeCamera = currentCamera
+                                selectedOwner =
+                                    hitTest(
+                                        data = data,
+                                        world = tap.toWorld(activeCamera),
+                                        cardsById = cardsById,
+                                        proximityTolerance = nodeRadius / activeCamera.scale,
+                                    )
+                            },
+                            onDoubleTap = { tap ->
+                                val activeCamera = currentCamera
+                                val hit =
+                                    hitTest(
+                                        data = data,
+                                        world = tap.toWorld(activeCamera),
+                                        cardsById = cardsById,
+                                        proximityTolerance = nodeRadius / activeCamera.scale,
+                                    )
+                                selectedOwner = hit
+                                if (hit is StarMapSelectionOwner.Node) {
+                                    editingNode = hit.node
+                                }
+                            },
+                        )
                     }
                     .pointerInput(Unit) {
                         detectTransformGestures { centroid, pan, zoom, _ ->
@@ -324,8 +480,7 @@ private fun StarMapCanvas(
             drawRect(color = surfaceColor)
 
             data.graph.edges.forEach { edge ->
-                val from = data.selectionCenterOf(edge.from) ?: return@forEach
-                val to = data.selectionCenterOf(edge.to) ?: return@forEach
+                val (from, to) = data.edgeEndpoints(edge, cardsById) ?: return@forEach
                 val start = from.toScreen(camera)
                 val end = to.toScreen(camera)
                 val isSelected = selectedOwner?.key == "edge:${edge.id}"
@@ -381,33 +536,51 @@ private fun StarMapCanvas(
                 )
             }
 
-            data.graph.nodes.forEach { node ->
-                val center = node.position.toScreen(camera)
-                val isSelected = selectedOwner?.key == "node:${node.id}"
-                drawCircle(
-                    color = nodeFill,
-                    radius = nodeRadius,
-                    center = center,
-                )
-                drawCircle(
-                    color = if (isSelected) selectedColor else nodeBorder,
-                    radius = nodeRadius,
-                    center = center,
-                    style = Stroke(width = if (isSelected) 4.dp.toPx() else 2.dp.toPx()),
-                )
-                if (isSelected) {
-                    drawCircle(
-                        color = selectedColor.copy(alpha = 0.35f),
-                        radius = nodeRadius + 8.dp.toPx(),
-                        center = center,
-                        style = Stroke(width = 3.dp.toPx()),
+            // 卡片和文字一起随相机缩放，保证卡片矩形就是视觉边界。
+            withTransform({
+                translate(camera.offset.x, camera.offset.y)
+                scale(camera.scale, camera.scale, pivot = Offset.Zero)
+            }) {
+                val cornerRadius = CornerRadius(StarMapCardCorner.toPx())
+                data.graph.nodes.forEach { node ->
+                    val card = cardsById[node.id] ?: return@forEach
+                    val isSelected = selectedOwner?.key == "node:${node.id}"
+                    drawRoundRect(
+                        color = nodeFill,
+                        topLeft = card.rect.topLeft,
+                        size = card.rect.size,
+                        cornerRadius = cornerRadius,
                     )
+                    if (isSelected) {
+                        val halo = 4.dp.toPx()
+                        drawRoundRect(
+                            color = selectedColor.copy(alpha = 0.35f),
+                            topLeft = Offset(card.rect.left - halo, card.rect.top - halo),
+                            size = Size(card.rect.width + halo * 2f, card.rect.height + halo * 2f),
+                            cornerRadius = CornerRadius(StarMapCardCorner.toPx() + halo),
+                            style = Stroke(width = 3.dp.toPx()),
+                        )
+                    }
+                    drawRoundRect(
+                        color = if (isSelected) selectedColor else nodeBorder,
+                        topLeft = card.rect.topLeft,
+                        size = card.rect.size,
+                        cornerRadius = cornerRadius,
+                        style = Stroke(width = if (isSelected) 4.dp.toPx() else 2.dp.toPx()),
+                    )
+                    drawText(
+                        textLayoutResult = card.title,
+                        topLeft = card.titleTopLeft,
+                    )
+                    if (camera.scale >= StarMapCardBodyPreviewMinScale) {
+                        card.body?.let { body ->
+                            drawText(
+                                textLayoutResult = body,
+                                topLeft = card.bodyTopLeft,
+                            )
+                        }
+                    }
                 }
-                val text = textMeasurer.measure(node.title, nodeLabelStyle)
-                drawText(
-                    textLayoutResult = text,
-                    topLeft = Offset(center.x - text.size.width / 2f, center.y + nodeRadius + 4.dp.toPx()),
-                )
             }
         }
 
@@ -447,13 +620,165 @@ private fun StarMapCanvas(
                 )
             }
         }
+
+        editingNode?.let { node ->
+            StarMapNodeEditorDialog(
+                starmapId = starmapId,
+                repository = repository,
+                node = node,
+                onDismiss = { editingNode = null },
+                onSaved = { updated ->
+                    editingNode = null
+                    onNodeUpdated(updated)
+                },
+            )
+        }
     }
+}
+
+@Suppress("LongMethod")
+@Composable
+private fun StarMapNodeEditorDialog(
+    starmapId: String,
+    repository: StarMapRepository,
+    node: StarMapGraphNode,
+    onDismiss: () -> Unit,
+    onSaved: (StarMapGraphNode) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var title by remember(node.id, node.title) { mutableStateOf(node.title) }
+    var body by remember(node.id, node.contentBody) { mutableStateOf(node.contentBody.orEmpty()) }
+    var saving by remember(node.id) { mutableStateOf(false) }
+    var errorDetail by remember(node.id) { mutableStateOf<String?>(null) }
+    val trimmedTitle = title.trim()
+    // 引用类型只允许改名称；保存时不传 content，Core 会保留原引用。
+    val editableBody =
+        node.contentKind == null ||
+            node.contentKind == StarMapNodeContentData.TYPE_EMPTY ||
+            node.contentKind == StarMapNodeContentData.TYPE_INLINE
+
+    fun save() {
+        if (saving || trimmedTitle.isEmpty()) return
+        saving = true
+        errorDetail = null
+        val content =
+            if (editableBody) {
+                StarMapNodeContentData(
+                    type = StarMapNodeContentData.TYPE_INLINE,
+                    summary = node.contentSummary,
+                    // Issue #984：正文不 trim，段落空白与连续空行原样交给 Core。
+                    body = body,
+                )
+            } else {
+                null
+            }
+        scope.launch {
+            val result =
+                withContext(Dispatchers.IO) {
+                    repository.updateStarmapNode(
+                        starmapId = starmapId,
+                        nodeId = node.id,
+                        title = trimmedTitle,
+                        content = content,
+                    )
+                }
+            when (result) {
+                is BridgeResult.Success -> {
+                    saving = false
+                    onSaved(result.data)
+                }
+                is BridgeResult.Error -> {
+                    saving = false
+                    errorDetail = result.envelope.rawError ?: result.message
+                }
+                is BridgeResult.NotLoaded -> {
+                    saving = false
+                    errorDetail = result.envelope.rawError ?: result.envelope.errorCode
+                }
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text(stringResource(R.string.starmap_node_edit_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.starmap_node_name_label)) },
+                    singleLine = true,
+                    isError = trimmedTitle.isEmpty(),
+                    supportingText =
+                        if (trimmedTitle.isEmpty()) {
+                            { Text(stringResource(R.string.starmap_node_title_required)) }
+                        } else {
+                            null
+                        },
+                )
+                if (editableBody) {
+                    OutlinedTextField(
+                        value = body,
+                        onValueChange = { body = it },
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 120.dp),
+                        label = { Text(stringResource(R.string.starmap_node_body_label)) },
+                        singleLine = false,
+                        minLines = 4,
+                        maxLines = 8,
+                    )
+                }
+                errorDetail?.let { detail ->
+                    Text(
+                        text = stringResource(R.string.error_save_failed, detail),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = ::save,
+                enabled = trimmedTitle.isNotEmpty() && !saving,
+            ) {
+                Text(
+                    if (saving) {
+                        stringResource(R.string.status_saving)
+                    } else {
+                        stringResource(R.string.action_save)
+                    },
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !saving) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
 }
 
 private fun StarMapPointData.toScreen(camera: StarMapCamera): Offset =
     Offset(
         x = x * camera.scale + camera.offset.x,
         y = y * camera.scale + camera.offset.y,
+    )
+
+private fun Offset.toScreen(camera: StarMapCamera): Offset =
+    Offset(
+        x = x * camera.scale + camera.offset.x,
+        y = y * camera.scale + camera.offset.y,
+    )
+
+private fun Offset.toWorld(camera: StarMapCamera): Offset =
+    Offset(
+        x = (x - camera.offset.x) / camera.scale,
+        y = (y - camera.offset.y) / camera.scale,
     )
 
 private fun StarMapCamera.centerOn(
@@ -468,26 +793,37 @@ private fun StarMapCamera.centerOn(
             ),
     )
 
+/** Issue #984：节点包围盒使用卡片矩形（position 是左上角），嵌入仍使用自身落点。 */
 private fun fitCamera(
     data: StarMapData,
     viewport: IntSize,
     padding: Float,
+    cards: List<StarMapNodeCard>,
 ): StarMapCamera {
-    val points =
+    val bounds =
         buildList {
-            addAll(data.graph.nodes.map { it.position })
-            addAll(data.embeds.map { it.position })
+            addAll(cards.map { it.rect })
+            addAll(
+                data.embeds.map { embed ->
+                    Rect(
+                        left = embed.position.x,
+                        top = embed.position.y,
+                        right = embed.position.x,
+                        bottom = embed.position.y,
+                    )
+                },
+            )
         }
-    if (points.isEmpty() || viewport.width <= 0 || viewport.height <= 0) {
+    if (bounds.isEmpty() || viewport.width <= 0 || viewport.height <= 0) {
         return StarMapCamera(
             scale = 1f,
             offset = Offset(viewport.width / 2f, viewport.height / 2f),
         )
     }
-    val minX = points.minOf { it.x }
-    val maxX = points.maxOf { it.x }
-    val minY = points.minOf { it.y }
-    val maxY = points.maxOf { it.y }
+    val minX = bounds.minOf { it.left }
+    val maxX = bounds.maxOf { it.right }
+    val minY = bounds.minOf { it.top }
+    val maxY = bounds.maxOf { it.bottom }
     val width = max(maxX - minX, 1f)
     val height = max(maxY - minY, 1f)
     val availableWidth = max(viewport.width - padding * 2f, 1f)
@@ -502,29 +838,36 @@ private fun fitCamera(
     )
 }
 
-private fun StarMapData.selectionCenterOf(path: StarMapTargetPathData): StarMapPointData? = positionForPath(path)
+private fun StarMapData.withUpdatedNode(updated: StarMapGraphNode): StarMapData =
+    copy(
+        graph =
+            graph.copy(
+                nodes = graph.nodes.map { node -> if (node.id == updated.id) updated else node },
+            ),
+    )
 
 private fun hitTest(
     data: StarMapData,
     world: Offset,
-    nodeTolerance: Float,
+    cardsById: Map<String, StarMapNodeCard>,
+    proximityTolerance: Float,
 ): StarMapSelectionOwner? {
+    // Issue #984：普通节点按卡片矩形命中，和绘制边界保持同一份几何。
     data.graph.nodes
-        .map { node -> node to distance(world, node.position) }
-        .filter { (_, distance) -> distance <= nodeTolerance }
-        .minByOrNull { (_, distance) -> distance }
+        .mapNotNull { node -> cardsById[node.id]?.let { card -> node to card } }
+        .filter { (_, card) -> card.rect.contains(world) }
+        .minByOrNull { (_, card) -> distance(world, card.rect.center) }
         ?.let { (node, _) -> return StarMapSelectionOwner.Node(node) }
 
-    val embedTolerance = nodeTolerance
     data.embeds
         .map { embed -> embed to distance(world, embed.position) }
-        .filter { (_, distance) -> distance <= embedTolerance }
+        .filter { (_, distance) -> distance <= proximityTolerance }
         .minByOrNull { (_, distance) -> distance }
         ?.let { (embed, _) -> return StarMapSelectionOwner.Embed(embed) }
 
     return data.graph.edges
-        .map { edge -> edge to edge.distanceTo(data, world) }
-        .filter { (_, distance) -> distance <= nodeTolerance }
+        .map { edge -> edge to edge.distanceTo(data, world, cardsById) }
+        .filter { (_, distance) -> distance <= proximityTolerance }
         .minByOrNull { (_, distance) -> distance }
         ?.let { (edge, _) -> StarMapSelectionOwner.Edge(edge) }
 }
@@ -538,12 +881,86 @@ private fun distance(
     return sqrt(dx * dx + dy * dy)
 }
 
+private fun distance(
+    point: Offset,
+    target: Offset,
+): Float {
+    val dx = point.x - target.x
+    val dy = point.y - target.y
+    return sqrt(dx * dx + dy * dy)
+}
+
+private data class StarMapEdgeAnchor(
+    val center: Offset,
+    val card: StarMapNodeCard?,
+)
+
+private fun StarMapData.edgeEndpoints(
+    edge: StarMapGraphEdge,
+    cardsById: Map<String, StarMapNodeCard>,
+): Pair<Offset, Offset>? {
+    val from = edgeAnchor(edge.from, cardsById) ?: return null
+    val to = edgeAnchor(edge.to, cardsById) ?: return null
+    // 连线落在卡片边界而不是卡片中心。
+    val start = from.card?.rect?.edgePointToward(to.center) ?: from.center
+    val end = to.card?.rect?.edgePointToward(from.center) ?: to.center
+    return start to end
+}
+
+private fun StarMapData.edgeAnchor(
+    path: StarMapTargetPathData,
+    cardsById: Map<String, StarMapNodeCard>,
+): StarMapEdgeAnchor? {
+    path.segments.firstOrNull()?.instanceId?.let { instanceId ->
+        embeds.firstOrNull { it.instanceId == instanceId }?.let { embed ->
+            return StarMapEdgeAnchor(
+                center = Offset(embed.position.x, embed.position.y),
+                card = null,
+            )
+        }
+    }
+    path.target.nodeId?.let { nodeId ->
+        cardsById[nodeId]?.let { card ->
+            return StarMapEdgeAnchor(center = card.rect.center, card = card)
+        }
+    }
+    path.target.entityId?.let { entityId ->
+        cardsById[entityId]?.let { card ->
+            return StarMapEdgeAnchor(center = card.rect.center, card = card)
+        }
+    }
+    return positionForPath(path)?.let { point ->
+        StarMapEdgeAnchor(center = Offset(point.x, point.y), card = null)
+    }
+}
+
+private fun Rect.edgePointToward(target: Offset): Offset {
+    val center = center
+    val dx = target.x - center.x
+    val dy = target.y - center.y
+    if (abs(dx) < 0.001f && abs(dy) < 0.001f) return center
+    val tx =
+        when {
+            dx > 0f -> (right - center.x) / dx
+            dx < 0f -> (left - center.x) / dx
+            else -> Float.POSITIVE_INFINITY
+        }
+    val ty =
+        when {
+            dy > 0f -> (bottom - center.y) / dy
+            dy < 0f -> (top - center.y) / dy
+            else -> Float.POSITIVE_INFINITY
+        }
+    val t = min(tx, ty).coerceIn(0f, 1f)
+    return Offset(center.x + dx * t, center.y + dy * t)
+}
+
 private fun StarMapGraphEdge.distanceTo(
     data: StarMapData,
     point: Offset,
+    cardsById: Map<String, StarMapNodeCard>,
 ): Float {
-    val from = data.selectionCenterOf(from) ?: return Float.MAX_VALUE
-    val to = data.selectionCenterOf(to) ?: return Float.MAX_VALUE
+    val (from, to) = data.edgeEndpoints(this, cardsById) ?: return Float.MAX_VALUE
     return distanceToSegment(
         px = point.x,
         py = point.y,

@@ -27,6 +27,21 @@ pub fn count_occurrences(src: &str, needle: &str) -> usize {
     src.matches(needle).count()
 }
 
+/// Issue #984：普通节点的 delegate 已并入 `StarMapActiveScene.qml`，
+/// 旧 `StarMapNode.qml` 删除。白盒守卫统一截取这段 delegate，避免把
+/// 活动画布的场景级逻辑（例如日志、进出场动画）误当成节点自身行为。
+pub fn starmap_node_delegate_src() -> String {
+    let src = read_src("qml/StarMapActiveScene.qml");
+    let start = src
+        .find("id: nodeItem")
+        .expect("StarMapActiveScene.qml 必须包含节点 delegate id: nodeItem");
+    let end = src[start..]
+        .find("SequentialAnimation on _wobbleAnimX {")
+        .map(|i| start + i)
+        .expect("节点 delegate 必须以 wobble 动画收尾");
+    src[start..end].to_string()
+}
+
 /// 从 `src` 中定位 `fn_marker` 并返回从该处起 `window_chars` 字符的函数体窗口。
 /// 窗口结束位置回退到最近的 UTF-8 字符边界。
 pub fn function_window(src: &str, fn_marker: &str, window_chars: usize) -> String {

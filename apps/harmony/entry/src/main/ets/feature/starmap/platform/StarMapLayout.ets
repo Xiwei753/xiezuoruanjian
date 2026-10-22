@@ -1,12 +1,13 @@
 // ─── StarMapLayout.ets ───
-// 平台层显示布局模块：freeform 直接用 node.position、自动网格布局、节点宽高圆角层级、保存时生成 position patch。
+// 平台层显示布局模块：freeform 直接用 node.position、自动网格布局、节点卡片宽高（#984）、
+// 圆角层级、保存时生成 position patch。
 // Embed 的 world 几何**恒定**（#821）：位置直接读 embed.position，尺寸恒为
 // DEFAULT_EMBED_DIAMETER × DEFAULT_EMBED_DIAMETER，圆角 = 半径，永远是正圆。
 // Deep Zoom 档位只决定"圆里渲染多少细节"，绝不参与这里的任何尺寸或位置计算，
 // 所以缩放、掉档、视口 resize 都不会让星图里的 Embed 跳一下或换形状。
 // 不依赖 Core bridge，不依赖 ArkUI 组件。所有函数都是纯函数，无副作用。
 
-import { StarMapNode, StarMapEmbed } from '../../../corebridge/dto/StarMapDtos'
+import { StarMapNode, StarMapEmbed, StarMapNodeContent } from '../../../corebridge/dto/StarMapDtos'
 
 // ─── 接口定义 ───
 
@@ -38,12 +39,45 @@ export interface NodePositionPatch {
 // ─── 常量 ───
 
 /**
- * 节点在画布坐标系里的显示尺寸（vp）。
+ * 普通节点卡片宽度（vp，#984）。
+ *
+ * 普通节点不再是"圆形图标 + 名称"的 160×80 固定块，而是固定宽度的文字卡片：
+ * 标题在上、正文预览在下。宽度恒定，高度由 `measureStarMapNodeCard` 按标题 / 正文
+ * 行数算出来，布局命中与 UI 渲染共用同一份度量结果。
+ */
+export const NODE_CARD_WIDTH: number = 208
+/** 卡片内边距（vp）：四边同宽。 */
+export const NODE_CARD_PADDING: number = 12
+/** 标题字号（vp）。 */
+export const NODE_CARD_TITLE_FONT_SIZE: number = 16
+/** 标题固定行高（vp）：测量与 Text.lineHeight 必须一致。 */
+export const NODE_CARD_TITLE_LINE_HEIGHT: number = 22
+/** 标题最多展示 2 行（视觉折行，不改写 title 字段）。 */
+export const NODE_CARD_TITLE_MAX_LINES: number = 2
+/** 正文预览字号（vp）。 */
+export const NODE_CARD_BODY_FONT_SIZE: number = 12
+/** 正文预览固定行高（vp）。 */
+export const NODE_CARD_BODY_LINE_HEIGHT: number = 17
+/** 正文预览最多 5 行，超出的正文仍完整保存在 Core。 */
+export const NODE_CARD_BODY_PREVIEW_MAX_LINES: number = 5
+/** 标题与正文之间的间距（vp）。 */
+export const NODE_CARD_TITLE_BODY_GAP: number = 6
+/** 左上角 kind 颜色点缀的直径 / 与标题的间距（vp）。 */
+export const NODE_CARD_ACCENT_SIZE: number = 8
+export const NODE_CARD_ACCENT_GAP: number = 6
+/** 卡片最小高度（vp）：只有标题时也保留一块可点击的卡片。 */
+export const NODE_CARD_MIN_HEIGHT: number = 64
+
+/**
+ * 节点在画布坐标系里的默认显示尺寸（vp）。
  * 和 DEFAULT_EMBED_DIAMETER 一样导出：子星图里新建 / 移动节点要拿真实尺寸去过安全区
  * clamp（#818 复审），UI 侧禁止再手写 160 / 80。
+ *
+ * #984：普通节点实际几何以每个节点自己的 `measureStarMapNodeCard` 结果为准；
+ * 这两个常量只保留给"还没有节点内容可测"的兜底 / 其它引用方，不能再当作所有节点的固定尺寸。
  */
-export const DEFAULT_NODE_WIDTH: number = 160
-export const DEFAULT_NODE_HEIGHT: number = 80
+export const DEFAULT_NODE_WIDTH: number = NODE_CARD_WIDTH
+export const DEFAULT_NODE_HEIGHT: number = NODE_CARD_MIN_HEIGHT
 /**
  * 节点圆角（vp）。UI 侧禁止再手写 16。
  *
@@ -59,8 +93,153 @@ const DEFAULT_NODE_ZINDEX: number = 0
  * （`.scale()`）而不是把布局矩形撑大，所以组件宽高永远是 DEFAULT_EMBED_DIAMETER。
  */
 export const DEFAULT_EMBED_DIAMETER: number = 200
-const GRID_HORIZONTAL_SPACING: number = 200
-const GRID_VERTICAL_SPACING: number = 120
+/** 自动网格的额外间距（vp）：在节点自身实测宽高之外留出的空档。 */
+const GRID_HORIZONTAL_GAP: number = 40
+const GRID_VERTICAL_GAP: number = 40
+
+// ─── 普通节点卡片度量（#984）───
+
+/** 节点卡片度量结果。宽高是画布坐标下的真实布局矩形，UI 与命中都读这一份。 */
+export interface StarMapNodeCardMetrics {
+  width: number
+  height: number
+  titleLines: number
+  bodyLines: number
+  hasBody: boolean
+}
+
+/**
+ * 估算单个字符占几个"字号宽度"。
+ *
+ * 只用确定性的字符类别估算，不依赖字体文件、不调用异步文本测量：
+ * - CJK / 全角字符按 1 个字号宽；
+ * - 空格按 0.4；
+ * - 其余拉丁字母 / 数字 / 标点按 0.62（略偏保守，避免实际折行比估算多）。
+ */
+function estimatedCharWidthRatio(charCode: number): number {
+  if (charCode === 32) {
+    return 0.4
+  }
+  if (charCode === 9) {
+    // Tab 的视觉宽度随制表位变化，按 1 个字号宽保守估算，避免正文实际折行更多。
+    return 1.0
+  }
+  if (charCode >= 0x1100 && (
+    charCode <= 0x115F ||
+    (charCode >= 0x2E80 && charCode <= 0xA4CF) ||
+    (charCode >= 0xAC00 && charCode <= 0xD7A3) ||
+    (charCode >= 0xF900 && charCode <= 0xFAFF) ||
+    (charCode >= 0xFE30 && charCode <= 0xFE4F) ||
+    (charCode >= 0xFF00 && charCode <= 0xFF60) ||
+    (charCode >= 0xFFE0 && charCode <= 0xFFE6)
+  )) {
+    return 1.0
+  }
+  return 0.62
+}
+
+/**
+ * 估算文本在给定宽度下会占几行（视觉折行，保留 `\n` 与连续空行）。
+ *
+ * 规则与 Text 的排版口径一致：每个 `\n` 强制换行；空段落也占一行；
+ * 连续空行不会被折叠；超过 maxLines 后不再继续累加（返回 maxLines）。
+ *
+ * @param text 原始文本（不做 trim，正文里的首尾空行也是内容）
+ * @param fontSize 字号（vp）
+ * @param maxWidth 可用宽度（vp）
+ * @param maxLines 最多统计到几行
+ * @returns 视觉行数，范围 [0, maxLines]
+ */
+export function estimateWrappedLineCount(
+  text: string,
+  fontSize: number,
+  maxWidth: number,
+  maxLines: number
+): number {
+  if (text.length === 0 || maxWidth <= 0 || maxLines <= 0) {
+    return 0
+  }
+  let lines: number = 1
+  let usedWidth: number = 0
+  for (let i = 0; i < text.length; i++) {
+    const code: number = text.charCodeAt(i)
+    if (code === 13) {
+      // CRLF / 单独 CR 都按一个换行处理，避免 Windows 换行被算成两行。
+      if (i + 1 < text.length && text.charCodeAt(i + 1) === 10) {
+        continue
+      }
+      lines += 1
+      usedWidth = 0
+      if (lines >= maxLines) {
+        return maxLines
+      }
+      continue
+    }
+    if (code === 10) {
+      lines += 1
+      usedWidth = 0
+      if (lines >= maxLines) {
+        return maxLines
+      }
+      continue
+    }
+    const charWidth: number = estimatedCharWidthRatio(code) * fontSize
+    if (usedWidth > 0 && usedWidth + charWidth > maxWidth) {
+      lines += 1
+      usedWidth = charWidth
+      if (lines >= maxLines) {
+        return maxLines
+      }
+    } else {
+      usedWidth += charWidth
+    }
+  }
+  return Math.min(lines, maxLines)
+}
+
+/**
+ * 按标题 + 正文内容计算普通节点卡片度量（#984）。
+ *
+ * @param title 节点名称（原始字段，不做 trim）
+ * @param content 节点内容；只有 inline / empty 的 body 会进入预览
+ * @returns 卡片宽高与标题 / 正文实际占用的预览行数
+ */
+export function measureStarMapNodeCardByContent(
+  title: string,
+  content: StarMapNodeContent | null
+): StarMapNodeCardMetrics {
+  const titleMaxWidth: number =
+    NODE_CARD_WIDTH - NODE_CARD_PADDING * 2 - NODE_CARD_ACCENT_SIZE - NODE_CARD_ACCENT_GAP
+  const bodyMaxWidth: number = NODE_CARD_WIDTH - NODE_CARD_PADDING * 2
+  const titleLines: number = Math.max(1,
+    estimateWrappedLineCount(title, NODE_CARD_TITLE_FONT_SIZE, titleMaxWidth, NODE_CARD_TITLE_MAX_LINES))
+  let body: string = ''
+  if (content !== null && (content.type === 'inline' || content.type === 'empty')) {
+    body = content.body ?? ''
+  }
+  const bodyLines: number = estimateWrappedLineCount(
+    body, NODE_CARD_BODY_FONT_SIZE, bodyMaxWidth, NODE_CARD_BODY_PREVIEW_MAX_LINES)
+  const hasBody: boolean = bodyLines > 0
+  let height: number = NODE_CARD_PADDING * 2 + titleLines * NODE_CARD_TITLE_LINE_HEIGHT
+  if (hasBody) {
+    height += NODE_CARD_TITLE_BODY_GAP + bodyLines * NODE_CARD_BODY_LINE_HEIGHT
+  }
+  return {
+    width: NODE_CARD_WIDTH,
+    height: Math.max(NODE_CARD_MIN_HEIGHT, height),
+    titleLines: titleLines,
+    bodyLines: bodyLines,
+    hasBody: hasBody
+  }
+}
+
+/**
+ * 计算一个普通节点的卡片度量。布局、UI 渲染、创建时的安全区 clamp 都走这里，
+ * 禁止再各自按固定 160×80 或另一套字符宽度公式计算。
+ */
+export function measureStarMapNodeCard(node: StarMapNode): StarMapNodeCardMetrics {
+  return measureStarMapNodeCardByContent(node.title, node.content)
+}
 
 // ─── Freeform 布局 ───
 
@@ -69,18 +248,22 @@ const GRID_VERTICAL_SPACING: number = 120
  * position 是唯一真相来源 — Core 已保存的 authored position 直接映射到 PlatformLayoutNode.x/y。
  * 不重新计算、不排网格。
  *
+ * #984：宽高来自每个节点自己的标题 / 正文度量，不再是统一的 160×80。
+ * position 仍然是卡片左上角，语义不变。
+ *
  * @param nodes 星图节点列表（每个节点有 position.x/y）
  * @returns 平台层布局节点列表
  */
 export function buildFreeformLayout(nodes: StarMapNode[]): PlatformLayoutNode[] {
   const result: PlatformLayoutNode[] = []
   for (const node of nodes) {
+    const metrics: StarMapNodeCardMetrics = measureStarMapNodeCard(node)
     result.push({
       nodeId: node.id,
       x: node.position.x,
       y: node.position.y,
-      width: DEFAULT_NODE_WIDTH,
-      height: DEFAULT_NODE_HEIGHT,
+      width: metrics.width,
+      height: metrics.height,
       radius: DEFAULT_NODE_RADIUS,
       zIndex: DEFAULT_NODE_ZINDEX,
       collapsed: false
@@ -160,7 +343,8 @@ export function applyFreeformLayout(
 /**
  * 自动网格布局：按行列排布节点，保留每个节点的 nodeId 与尺寸。
  * 默认列数：Math.ceil(Math.sqrt(nodeCount))，行数：Math.ceil(nodeCount / cols)。
- * 节点间距：水平 200vp，垂直 120vp。
+ * 网格步长按本批节点的**最大实测宽高** + 固定空档计算（#984）：
+ * 卡片高度随正文行数变化，不能再拿一个全局固定高度当步长，否则高卡片会互相压住。
  * 起始偏移：让网格在画布中居中。
  *
  * 这是"自动布局"按钮的唯一入口；加载页面不许再排网格，freeform 直接读 position。
@@ -183,9 +367,22 @@ export function autoGridLayoutNodes(
   const cols: number = Math.ceil(Math.sqrt(nodeCount))
   const rows: number = Math.ceil(nodeCount / cols)
 
-  // 网格总宽高（以间距为步长，最后一列/行不需要额外间距，但简化处理用完整网格尺寸）
-  const gridWidth: number = (cols - 1) * GRID_HORIZONTAL_SPACING + DEFAULT_NODE_WIDTH
-  const gridHeight: number = (rows - 1) * GRID_VERTICAL_SPACING + DEFAULT_NODE_HEIGHT
+  let maxWidth: number = DEFAULT_NODE_WIDTH
+  let maxHeight: number = DEFAULT_NODE_HEIGHT
+  for (const node of nodes) {
+    if (node.width > maxWidth) {
+      maxWidth = node.width
+    }
+    if (node.height > maxHeight) {
+      maxHeight = node.height
+    }
+  }
+  const horizontalStep: number = maxWidth + GRID_HORIZONTAL_GAP
+  const verticalStep: number = maxHeight + GRID_VERTICAL_GAP
+
+  // 网格总宽高（以最大卡片 + 空档为步长，最后一列/行不需要额外空档）
+  const gridWidth: number = (cols - 1) * horizontalStep + maxWidth
+  const gridHeight: number = (rows - 1) * verticalStep + maxHeight
 
   // 居中偏移：让网格中心对齐画布中心
   const offsetX: number = (canvasWidth - gridWidth) / 2
@@ -198,8 +395,8 @@ export function autoGridLayoutNodes(
 
     result.push({
       nodeId: nodes[i].nodeId,
-      x: offsetX + col * GRID_HORIZONTAL_SPACING,
-      y: offsetY + row * GRID_VERTICAL_SPACING,
+      x: offsetX + col * horizontalStep,
+      y: offsetY + row * verticalStep,
       width: nodes[i].width,
       height: nodes[i].height,
       radius: nodes[i].radius,

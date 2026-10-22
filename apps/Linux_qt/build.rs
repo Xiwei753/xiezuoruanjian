@@ -563,9 +563,10 @@ fn main() {
     // Issue #832: 星图唯一原始输入路由
     println!("cargo:rerun-if-changed=qml/StarMapInputRouter.qml");
     println!("cargo:rerun-if-changed=qml/StarMapGraphController.qml");
+    // Issue #984: 普通节点卡片统一度量函数
+    println!("cargo:rerun-if-changed=qml/StarMapNodeMetrics.js");
     // Issue #798: 星图鼠标交互状态机
     println!("cargo:rerun-if-changed=qml/StarMapInteractionController.qml");
-    println!("cargo:rerun-if-changed=qml/StarMapNode.qml");
     // Issue #796 评论 5886483653: 子星图 Embed 组件
     println!("cargo:rerun-if-changed=qml/StarMapEmbed.qml");
     // Issue #822 评论 5972557963: 跨层连线的宿主规划（纯路径算法）

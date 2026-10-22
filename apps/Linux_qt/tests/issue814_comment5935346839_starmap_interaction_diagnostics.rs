@@ -20,7 +20,7 @@
 //! 4. 画布穿越的真相由 `StarMapCanvas` 记录：scene_enter / scene_exit /
 //!    scene_enter_failed / scene_exit_failed（带 routeKey、trigger、覆盖率）。
 //! 5. `StarMapEmbed.qml` 是父图里的纯渲染对象：不观察输入、不落交互日志。
-//! 6. `StarMapNode.qml` 不自己直接落盘，避免同一次点击记两份。
+//! 6. 普通节点 delegate 不自己直接落盘，避免同一次点击记两份。
 //!
 //! #822 更新：`StarMapScene.qml` 已删除，根层由 `StarMapCanvas.qml` 直接创建。
 //! #929 更新：独立画布协议删除递归 Content 交互层。pointer_press /
@@ -34,14 +34,13 @@
 #[path = "common/source_guard.rs"]
 mod source_guard;
 
-use source_guard::{function_window, read_src};
+use source_guard::{function_window, read_src, starmap_node_delegate_src};
 
 const BACKEND: &str = "src/backend/starmap_backend.rs";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
-const NODE: &str = "qml/StarMapNode.qml";
 
 /// 取从 `start`（含）到 `end`（不含）之间的源码片段；缺任一 marker 直接失败。
 fn slice_between(src: &str, start: &str, end: &str) -> String {
@@ -343,7 +342,7 @@ fn embed_no_longer_logs_interactions() {
 
 #[test]
 fn node_does_not_write_diagnostics_directly() {
-    let src = read_src(NODE);
+    let src = starmap_node_delegate_src();
     assert!(
         !src.contains("record_interaction") && !src.contains("writer_diagnostics"),
         "StarMapNode 不得自己直接落盘诊断日志，避免与 Canvas 重复记录"

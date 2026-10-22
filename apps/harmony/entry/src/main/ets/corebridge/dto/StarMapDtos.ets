@@ -143,6 +143,16 @@ export interface StarMapNode {
   updatedAt: number
 }
 
+// StarMapNodeUpdatePatch（#984）
+// 平台端更新节点时只带要改的字段：JSON.stringify 会省略 undefined，
+// Core 的 StarMapNodePatchInputDto 语义是"省略 = 不改"。
+// content 是完整 StarMapNodeContent（字段名是 type，与 Core 线格式一致）。
+export interface StarMapNodeUpdatePatch {
+  title?: string
+  content?: StarMapNodeContent
+  position?: StarMapPoint
+}
+
 // ─── 边 ───
 
 // StarMapEdgeKindDto

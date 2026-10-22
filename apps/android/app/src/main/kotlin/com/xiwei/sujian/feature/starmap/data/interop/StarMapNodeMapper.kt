@@ -2,6 +2,7 @@ package com.xiwei.sujian.feature.starmap.data.interop
 
 import com.xiwei.sujian.feature.starmap.data.model.StarMapAnchorData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphNode
+import com.xiwei.sujian.feature.starmap.data.model.StarMapNodeContentData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapNodeStyleData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPathSegmentData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapPointData
@@ -108,7 +109,7 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
     val dtoKind = kind.toDto()
     val dtoCreatedAt = createdAt.toULong()
     val dtoUpdatedAt = updatedAt.toULong()
-    val dtoContent = contentToDto()
+    val dtoContent = contentToDto(base?.content)
     val dtoAnchors = anchors.map { it.anchorToDto() }
     val dtoPortal = portal?.portalToDto()
     val dtoPosition = StarMapPointDto(x = position.x.toDouble(), y = position.y.toDouble())
@@ -158,9 +159,24 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
     }
 }
 
-internal fun StarMapGraphNode.contentToDto(): StarMapNodeContentDto =
-    StarMapNodeContentDto(
-        kind = contentKind ?: "note",
+internal fun StarMapGraphNode.contentToDto(base: StarMapNodeContentDto? = null): StarMapNodeContentDto {
+    val suppliedKind = contentKind?.takeIf { it.isNotBlank() }
+    // Issue #984：没有提供任何内容信息时沿用 Core 原内容，避免把已有
+    // chapterRef/entityRef/externalRef 覆盖成 empty。
+    if (suppliedKind == null && contentBody == null) {
+        base?.let { return it }
+    }
+    // contentKind 是 Core 内容类型（empty/inline/chapterRef/entityRef/externalRef），
+    // 不是节点种类 Note。只有旧数据缺少 contentKind 时才按 body 推断 inline。
+    val resolvedKind =
+        suppliedKind
+            ?: if (contentBody != null) {
+                StarMapNodeContentData.TYPE_INLINE
+            } else {
+                StarMapNodeContentData.TYPE_EMPTY
+            }
+    return StarMapNodeContentDto(
+        kind = resolvedKind,
         summary = contentSummary,
         body = contentBody,
         projectId = contentProjectId,
@@ -172,6 +188,24 @@ internal fun StarMapGraphNode.contentToDto(): StarMapNodeContentDto =
         entityId = contentEntityId,
         uri = contentUri,
         label = contentLabel,
+    )
+}
+
+/** Issue #984：编辑正文时只走 typed DTO，不经 JSON。 */
+internal fun StarMapNodeContentData.toContentDto(): StarMapNodeContentDto =
+    StarMapNodeContentDto(
+        kind = type,
+        summary = summary,
+        body = body,
+        projectId = null,
+        volumeId = null,
+        chapterId = null,
+        rangeStart = null,
+        rangeEnd = null,
+        entityType = null,
+        entityId = null,
+        uri = null,
+        label = null,
     )
 
 internal fun StarMapAnchorData.anchorToDto(): StarMapAnchorDto =
