@@ -14,7 +14,7 @@
 //!    last_success_time / failed_targets），无历史时为空；整轮结果不从
 //!    `AppSyncState.status` 猜。
 //! 2. `SyncPage` 结果区只有一个优先级：本轮运行中 > 本轮操作（operation_id 过滤）
-//!    终态 > Core 持久化历史；历史时间戳按本地时间显示「上次同步（…）」。
+//!    终态 > Core 持久化历史；历史时间戳按本地时间显示「最近一次实际开始（…）」。
 //! 3. 没有 FullSyncReport（或报告不属于最后尝试那一轮）时不猜测失败原因：用
 //!    full_sync_state 说明历史状态与失败 target，并明确「历史记录没有分组详情」，
 //!    不再回退到笼统的「同步失败」。
@@ -366,7 +366,7 @@ fn history_timestamps_are_rendered_in_local_time() {
     );
 }
 
-/// 没有新一轮同步时，读 Core 持久化的 full_sync_state 表述"上次同步"。
+/// 没有新一轮同步时，读 Core 持久化的 full_sync_state 表述「最近一次实际开始」。
 #[test]
 fn history_text_uses_core_full_sync_state_facts() {
     let src = read_src(SYNC_PAGE);
@@ -379,7 +379,7 @@ fn history_text_uses_core_full_sync_state_facts() {
         "QML 不得写回历史状态，只读展示"
     );
 
-    let func = window_from(&src, "function updateHistorySyncResultText()", 1600);
+    let func = window_from(&src, "function updateHistorySyncResultText()", 2000);
     for marker in [
         "root.lastFullSyncState",
         "state.last_attempt_time",
@@ -393,8 +393,8 @@ fn history_text_uses_core_full_sync_state_facts() {
         );
     }
     assert!(
-        func.contains("上次同步"),
-        "历史标题必须写明这是上次同步，实际窗口:\n{func}"
+        func.contains("最近一次实际开始"),
+        "历史标题必须写明这是最近一次实际开始，实际窗口:\n{func}"
     );
     assert!(
         func.contains("formatSyncLocalTime(state.last_attempt_time)"),
@@ -425,7 +425,7 @@ fn missing_report_explains_absent_group_detail() {
         "报告为空必须转到 full_sync_state 历史展示，实际窗口:\n{branch}"
     );
 
-    let history = window_from(&src, "function updateHistorySyncResultText()", 1600);
+    let history = window_from(&src, "function updateHistorySyncResultText()", 2000);
     assert!(
         history.contains("历史记录没有分组详情"),
         "旧记录没有分组明细时必须明确说明，实际窗口:\n{history}"

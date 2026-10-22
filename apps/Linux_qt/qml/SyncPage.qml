@@ -787,8 +787,11 @@ ColumnLayout {
                     }
                     var configSaved = root.syncBackendRef.save_sync_config()
                     if (!configSaved) {
-                        // 与“保存配置”按钮共用失败展示；保留 URL/Token 输入，
-                        // 且不要 reload 将用户尚未成功保存的内容覆盖掉。
+                        // Issue #983：保存失败时重新读取 Core 持久化配置，回退开关/间隔，
+                        // 避免自动调度按未保存成功的表单状态启动；URL/Token 输入框保留。
+                        root.syncBackendRef.load_sync_config()
+                        autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false
+                        syncIntervalSpin.value = Math.round((root.syncBackendRef.sync_interval || 300) / 60)
                         root.resultText = root.syncBackendRef.sync_operation_state || qsTr("保存配置失败")
                         root.showConfigFeedback(qsTr("保存配置失败"), true)
                         return
