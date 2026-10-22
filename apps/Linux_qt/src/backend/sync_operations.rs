@@ -168,7 +168,13 @@ impl AppBackend {
         // Issue #754 评论 5814866116 改动2: handle_sync_outcome 返回 SyncOutcomeEffect，
         // 由 SyncBackend::handle_outcome 据此决定是否发 sync_content_applied。
         // 改动3: github init 旧路径已删除，不再有 pending_github_init_path 特判。
-        let sync_success = matches!(status_str, "success" | "branch_missing_recovered");
+        // Issue #983 复核：latest_wins_applied 也是成功类终态，可能已经下载并应用远端
+        // 较新内容（remote upsert winner + downloaded_files），必须和 success 一样
+        // 刷新正文/作品树；no_changes 不在此列。
+        let sync_success = matches!(
+            status_str,
+            "success" | "latest_wins_applied" | "branch_missing_recovered"
+        );
         // Issue #754 评论 5816573119: 所有"内容已变化"的同步结果统一走同一个刷新入口，
         // 确保 reload_tree + reconcile_selection_after_tree_reload 成对执行。
         // conflict/partial_conflict/unrelated_histories 也会真实修改本地工作区内容
@@ -192,8 +198,8 @@ impl AppBackend {
         // 还包括 no_changes / latest_wins_applied / branch_missing_recovered —
         // 这些都是 Core aggregate_full_sync_result() 的成功类终态。LWW 正常覆盖时
         // overall_status 就是 latest_wins_applied，无变化时是 no_changes，都应启动 GC。
-        // 注意：sync_success（用于 content_changed）保持原义 success|branch_missing_recovered，
-        // 不在此扩展，避免 no_changes 触发无意义的 content refresh。
+        // 注意：sync_success（用于 content_changed）不包含 no_changes，
+        // 避免无变化时也触发 content refresh。
         let gc_success = matches!(
             status_str,
             "success" | "no_changes" | "latest_wins_applied" | "branch_missing_recovered"
