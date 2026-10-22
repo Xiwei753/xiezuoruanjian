@@ -135,4 +135,4 @@ StarMapEndpointSelection {
 
 ## 相关显示规范
 
-StarMap 的视口协议、Embed 入口标识的显示策略见 [starmap_viewport.md](starmap_viewport.md)。这些都属于平台显示层，不改变本文定义的 Core 语义对象与引用关系。镜头位置、比例、阈值、动画和矢量绘制**仍归各平台**，不要回写 Core。
+StarMap 的视口协议、Embed 入口标识的显示策略见 [starmap_viewport.md](starmap_viewport.md)。普通节点的名称/正文双字段、卡片呈现、预览折叠与编辑行为见 [starmap_node_presentation.md](starmap_node_presentation.md)。这些都属于平台显示层，不改变本文定义的 Core 语义对象与引用关系。镜头位置、比例、阈值、动画和矢量绘制**仍归各平台**，不要回写 Core。
