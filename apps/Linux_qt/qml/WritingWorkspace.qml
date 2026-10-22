@@ -331,11 +331,6 @@ Rectangle {
         root.clockText = hh + ":" + mm
     }
 
-    // 保存状态是不是异常态：Core 的 save_status 是自由文本，
-    // 只有明确是失败时才用 error 色，其余（已保存 / 未保存 / 保存中）走中性色，
-    // 免得「未保存」这种正常中间态被画成红色。
-    readonly property bool saveStatusIsError: /失败|error|failed/i.test(editorController.saveStatus || "")
-
     // 一次性刷新状态栏的左段（速度）和中段（今日进度）。
     // Issue #935：同样改为异步请求——计算在 stats worker 串行队列里完成，
     // 结果经 editorBackendRef 的 writing_status_ready / writing_status_failed
@@ -726,7 +721,7 @@ Rectangle {
                 // Issue #829：底部状态栏。挂在中间 Editor 这一列的末尾，
                 // 所以它只横贯「章节树右缘 ~ 工具面板左缘」，和手稿一致——
                 // 左树 / 右工具面板 / 最右 rail 都不参与这条带子。
-                // 硬约束 6：只放字数 / 进度 / 时间 / 保存状态，不放任何导航。
+                // 硬约束 6：只放字数 / 进度 / 时间 / 本章字数，不放任何导航。
                 WritingStatusBar {
                     Layout.fillWidth: true
                     Layout.preferredHeight: implicitHeight
@@ -734,8 +729,8 @@ Rectangle {
                     charsPerMinute: root.latestCharsPerMinute
                     progressCurrent: root.todayTypedChars
                     clockText: root.clockText
-                    saveStatus: editorController.saveStatus
-                    saveStatusIsError: root.saveStatusIsError
+                    chapterWordCount: editorController.chapterWordCount
+                    chapterOpen: editorController.chapterId !== ""
                 }
             }
 

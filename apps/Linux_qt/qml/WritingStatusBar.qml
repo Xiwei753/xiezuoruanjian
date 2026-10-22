@@ -4,12 +4,12 @@
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
 // 职责：正文列底部一条只读状态带，三段布局
-//   左：写作速度「5,160 字/时」   中：写作进度   右：时间 + 保存状态
+//   左：写作速度「5,160 字/时」   中：写作进度   右：时间 + 本章字数
 //
 // 手稿基准（docs/ui/reference/widescreen/宽屏全打开.png、左右缩回.png）：
 //   底部一行横贯「章节树右缘 ~ 工具面板左缘」，也就是只属于 Editor 这一列——
 //   章节树、右侧工具面板、最右工具 rail 都不参与这条带子。
-//   硬约束 6：这一行只放状态信息（速度 / 进度 / 时间 / 保存状态），不承担任何页面导航。
+//   硬约束 6：这一行只放状态信息（速度 / 进度 / 时间 / 本章字数），不承担任何页面导航。
 //
 // 边界：本组件是纯展示件，不查后端、不持有业务状态。
 // 所有数值由 WritingWorkspace 注入（那边才是持有 Core 数据的地方），
@@ -47,10 +47,10 @@ Rectangle {
     property int progressTarget: 2000
     // 右段：HH:mm。WritingWorkspace 每分钟推一次，不在本组件里起定时器。
     property string clockText: ""
-    // 右段：保存状态（已保存 / 未保存 / 保存中 / 保存失败）。
-    property string saveStatus: ""
-    // 保存状态是否异常（失败）——决定用 error 还是 success 色。
-    property bool saveStatusIsError: false
+    // 右段：本章字数，由 Core 的 word_count 计算后经 WritingWorkspace 注入。
+    property int chapterWordCount: 0
+    // 是否已打开章节——未打开章节时不显示本章字数。
+    property bool chapterOpen: false
 
     // 状态带高度跟手稿的细条比例；不跟 Core 的七角色走——手稿里它只是
     // Editor 列底部的一条信息带，不是任何一个角色，所以不占 Core bounds。
@@ -102,7 +102,7 @@ Rectangle {
 
         Item { Layout.fillWidth: true }
 
-        // ── 右：时间 + 保存状态 ──
+        // ── 右：时间 + 本章字数 ──
         RowLayout {
             spacing: Kirigami.Units.largeSpacing
             Layout.alignment: Qt.AlignVCenter
@@ -114,10 +114,9 @@ Rectangle {
             }
 
             Label {
-                text: root.saveStatus
-                color: root.saveStatusIsError ? Kirigami.Theme.negativeTextColor
-                                              : Kirigami.Theme.positiveTextColor
-                visible: root.saveStatus !== ""
+                text: qsTr("本章 %1 字").arg(root.chapterWordCount.toLocaleString(Qt.locale(), "f", 0))
+                color: Kirigami.Theme.disabledTextColor
+                visible: root.chapterOpen
             }
         }
     }

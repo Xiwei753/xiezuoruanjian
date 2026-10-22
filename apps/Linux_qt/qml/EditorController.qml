@@ -42,6 +42,8 @@ QtObject {
     property string chapterId: ""
     property string chapterTitle: ""
     property string saveStatus: editorBackendRef ? editorBackendRef.save_status : ""
+    // 本章字数：Core 在 statsTimer 防抖后计算 word_count，开章加载文本同样会触发刷新。
+    readonly property int chapterWordCount: editorBackendRef ? editorBackendRef.word_count : 0
     property string syncFlushFailureReason: ""
 
     // Internal state
