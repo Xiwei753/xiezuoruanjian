@@ -36,6 +36,13 @@ const MAX_QUEUE_SIZE: number = 512
 /** 单条写入失败后的重发次数（Issue #981：eventId 稳定，重发由 Core 幂等去重）。 */
 const MAX_SEND_ATTEMPTS: number = 3
 
+/** 一次 barrier 触发的失败重试；done 在这一次重试尝试结束后 resolve。 */
+interface RetryJob<T> {
+  item: T
+  done: Promise<void>
+  finish: () => void
+}
+
 /**
  * 串行 drain + barrier 等待的调度层。
  *
@@ -49,8 +56,10 @@ export class SerialStatsDrain<T extends SequencedPayload> {
   private pending: T[] = []
   // 已失败但必须保留原命令/eventId 的项；后续 barrier/查询会重试，成功后才移除。
   private failed: T[] = []
-  // 重试串行链，避免多个统计读取同时重发同一批失败项。
-  private retryChain: Promise<void> = Promise.resolve()
+  // 失败重试也必须经过唯一的 drain 执行器：这里只是优先队列，不是第二条发送链。
+  private retryQueue: RetryJob<T>[] = []
+  // seq -> 当前这次重试任务；并发的 flushThrough 共享同一个 done，不能在第二条发送链上重跑。
+  private retryJobs: Map<number, RetryJob<T>> = new Map<number, RetryJob<T>>()
   // 当前那一轮的 Promise。null 表示没有 drain 在跑。
   // 只覆盖「当前这一条」，这是 flushThrough 能按 barrier 提前返回的前提。
   private drainPromise: Promise<void> | null = null
@@ -114,8 +123,13 @@ export class SerialStatsDrain<T extends SequencedPayload> {
    * 丢弃）。失败项保留原命令与稳定 eventId，下一次查询/关闭会继续重试。
    */
   async flushThrough(barrier: number): Promise<boolean> {
-    // 先重试此前失败、且属于本次查询范围的项；失败的命令和 eventId 原样保留。
-    await this.retryFailedThrough(barrier)
+    // 把此前失败、且属于本次查询范围的项交给同一个 drain 执行器优先处理。
+    // 不是另开 send 链：这些重试仍由 ensureDraining/drainOne 串行消费。
+    const retryJobs: RetryJob<T>[] = this.scheduleRetriesThrough(barrier)
+    if (retryJobs.length > 0) {
+      this.ensureDraining()
+      await Promise.all(retryJobs.map((job: RetryJob<T>): Promise<void> => job.done))
+    }
     while (!this.ledger.isCompleteThrough(barrier)) {
       if (this.drainPromise === null) {
         // 没有 drain 在跑但 barrier 还没完成：说明剩余的都是被丢弃的（不推进完成序号）
@@ -127,25 +141,41 @@ export class SerialStatsDrain<T extends SequencedPayload> {
     return this.ledger.isCleanThrough(barrier)
   }
 
-  /** 串行重试 barrier 内仍未写入的项；成功后清账，失败则继续保留。 */
-  private retryFailedThrough(barrier: number): Promise<void> {
-    const task: Promise<void> = this.retryChain.then((): Promise<void> => this.retryFailed(barrier))
-    this.retryChain = task.catch((): void => {})
-    return task
-  }
-
-  private async retryFailed(barrier: number): Promise<void> {
-    const snapshot: T[] = this.failed.filter((item: T): boolean => item.seq <= barrier)
-    for (const item of snapshot) {
-      const ok: boolean = await this.sendWithRetry(item)
-      if (ok) {
-        const index: number = this.failed.indexOf(item)
-        if (index >= 0) {
-          this.failed.splice(index, 1)
+  /** 把 barrier 内的失败项移入优先重试队列；同一 seq 不会被重复调度。 */
+  private scheduleRetriesThrough(barrier: number): RetryJob<T>[] {
+    const jobs: RetryJob<T>[] = []
+    const retained: T[] = []
+    for (const item of this.failed) {
+      if (item.seq > barrier) {
+        retained.push(item)
+        continue
+      }
+      // 失败项在成功前一直留在 failed 里；并发的查询只共享已存在的任务，
+      // 不能因为 failed 被移走就误以为“没有待重试项”并提前返回。
+      retained.push(item)
+      const existing: RetryJob<T> | undefined = this.retryJobs.get(item.seq)
+      if (existing !== undefined) {
+        jobs.push(existing)
+        continue
+      }
+      let finish: () => void = (): void => {}
+      const done: Promise<void> = new Promise<void>((resolve: () => void): void => {
+        finish = resolve
+      })
+      const job: RetryJob<T> = {
+        item: item,
+        done: done,
+        finish: (): void => {
+          this.retryJobs.delete(item.seq)
+          finish()
         }
       }
-      this.ledger.complete(item.seq, ok)
+      this.retryJobs.set(item.seq, job)
+      this.retryQueue.push(job)
+      jobs.push(job)
     }
+    this.failed = retained
+    return jobs
   }
 
   /** 同一 payload/eventId 最多尝试 MAX_SEND_ATTEMPTS 次，失败后交由 failed 保留。 */
@@ -176,7 +206,7 @@ export class SerialStatsDrain<T extends SequencedPayload> {
       // 清掉 in-flight 标记。drainPromise 只可能被 ensureDraining 在为 null 时
       // 替换，所以这里无条件置空不会踩掉别的一轮。
       this.drainPromise = null
-      if (this.pending.length > 0) {
+      if (this.retryQueue.length > 0 || this.pending.length > 0) {
         this.ensureDraining()
       }
     })
@@ -185,16 +215,23 @@ export class SerialStatsDrain<T extends SequencedPayload> {
 
   /** 只处理一条就返回（#5997254152 第 2 项）。见文件头第 2 条。 */
   private async drainOne(): Promise<void> {
-    const item: T | undefined = this.pending.shift()
+    // 失败重试优先于新输入，但同样走这唯一一条串行执行路径。
+    const retryJob: RetryJob<T> | undefined = this.retryQueue.shift()
+    const item: T | undefined = retryJob !== undefined ? retryJob.item : this.pending.shift()
     if (item === undefined) {
       return
     }
     const ok: boolean = await this.sendWithRetry(item)
     // 无论成败都要推进完成序号：否则 flushThrough 会一直等这条。
     this.ledger.complete(item.seq, ok)
-    if (!ok) {
+    if (ok) {
+      this.failed = this.failed.filter((failed: T): boolean => failed.seq !== item.seq)
+    } else if (!this.failed.some((failed: T): boolean => failed.seq === item.seq)) {
       // 保留原 item（含稳定 eventId），交由下一次 barrier/查询重试，不因页面销毁丢弃。
       this.failed.push(item)
+    }
+    if (retryJob !== undefined) {
+      retryJob.finish()
     }
   }
 }

@@ -1123,8 +1123,6 @@ Kirigami.ApplicationWindow {
     }
 
     onClosing: {
-        window.autoSyncShutdown = true
-        if (autoSyncWakeTimer) autoSyncWakeTimer.stop()
         if (editorBackend) {
             // 关闭会话后等统计 writer 落盘，避免 process::exit 丢掉最后不足 30 秒的切片。
             // 失败时不能假装已保存：保持窗口打开并明确提示，稳定 eventId 会在下次关闭时重试。
@@ -1135,6 +1133,9 @@ Kirigami.ApplicationWindow {
                 return
             }
         }
+        // 只有确认统计已写入、真正要退出时才停自动同步；被拒绝关窗后继续写作不能失去自动同步。
+        window.autoSyncShutdown = true
+        if (autoSyncWakeTimer) autoSyncWakeTimer.stop()
         if (appController.inWriting) {
             editorBackend.flush_recent_edits();
         }
