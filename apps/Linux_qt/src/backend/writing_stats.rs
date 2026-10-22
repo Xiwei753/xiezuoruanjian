@@ -44,11 +44,19 @@ impl AppBackend {
         &self,
         segments: Vec<writer_core::writing_stats::WritingActivitySegment>,
     ) {
+        let _ = self.try_enqueue_writing_activity_segments(segments);
+    }
+
+    /// 把计时切片排进 stats writer；失败时保留具体原因，供退出流程拒绝关窗。
+    fn try_enqueue_writing_activity_segments(
+        &self,
+        segments: Vec<writer_core::writing_stats::WritingActivitySegment>,
+    ) -> Result<(), String> {
         if segments.is_empty() {
-            return;
+            return Ok(());
         }
         let Some(ref writer) = self.stats_writer else {
-            return;
+            return Ok(());
         };
         for segment in segments {
             let input = writer_core::api::WritingActivitySegmentInputDto {
@@ -66,8 +74,10 @@ impl AppBackend {
                 crate::backend::stats_writer::StatsWriteCommand::ActivitySegment(input),
             ) {
                 self.debug_error("stats", "record_writing_activity_segment_enqueue_failed", &e);
+                return Err(e);
             }
         }
+        Ok(())
     }
 
     /// Issue #981：首次人工输入开始计时；暂停后再次输入恢复计时。
@@ -173,11 +183,53 @@ impl AppBackend {
         self.enqueue_writing_activity_segments(segments);
     }
 
-    /// Issue #981：正常退出时先关闭会话，再等统计 writer 把包括最后不足 30 秒的
-    /// 切片在内的所有前置记录落盘。仅 close（入队）不能保证 `process::exit` 前写完。
+    /// Issue #981：正常退出时先结算当前切片并等 stats writer 落盘，确认成功后才
+    /// 正式结束会话。barrier 失败时保持 Writing/Paused 状态与 foreground，用户继续
+    /// 留在正文里仍会从刚才的结算点继续计时，不会因一次退出失败丢后续写作时长。
     pub(crate) fn close_writing_session_and_wait(&self, reason: &str) -> Result<(), String> {
-        self.close_writing_session(reason);
-        self.stats_barrier_result()
+        let mono_ms = {
+            let session = self
+                .writing_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            session.now_mono_ms()
+        };
+        let segments = {
+            let mut session = self
+                .writing_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            session.clock.flush(
+                mono_ms,
+                reason,
+                "",
+                writer_core::writing_stats::Platform::Desktop,
+                "",
+            )
+        };
+        self.try_enqueue_writing_activity_segments(segments)?;
+        self.stats_barrier_result()?;
+
+        // 前面已经用同一个单调时刻结算过当前片段，这里只做正式复位，不会再产生
+        // 一段未确认的尾时长；若 Core 仍返回尾段，必须再 barrier 确认后才能退出。
+        let tail = {
+            let mut session = self
+                .writing_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            session.foreground = false;
+            session.clock.on_close(
+                mono_ms,
+                "",
+                writer_core::writing_stats::Platform::Desktop,
+                "",
+            )
+        };
+        if !tail.is_empty() {
+            self.try_enqueue_writing_activity_segments(tail)?;
+            self.stats_barrier_result()?;
+        }
+        Ok(())
     }
 
     /// 按编辑事务上报写作统计。
