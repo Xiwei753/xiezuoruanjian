@@ -578,8 +578,10 @@ export struct WideSettingsCategoryContent {
           this.viewModel.syncDiagnostics!.networkStatus)
         this.SyncDiagnosticItem($r('app.string.auth'), this.viewModel.syncDiagnostics!.authOk,
           this.viewModel.syncDiagnostics!.authStatus)
+        // SyncDiagnosticsResult 没有 remoteStatus 字段；仓库状态只能由 remoteOk 单独给出，
+        // 不能复用 networkStatus，否则网络正常但仓库失败时会显示自相矛盾的文案。
         this.SyncDiagnosticItem($r('app.string.repository'), this.viewModel.syncDiagnostics!.remoteOk,
-          this.viewModel.syncDiagnostics!.networkStatus)
+          this.viewModel.syncDiagnostics!.remoteOk ? '可访问' : '不可访问')
       }
       .width('100%')
       .justifyContent(FlexAlign.SpaceAround)

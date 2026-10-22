@@ -34,7 +34,7 @@ import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 import { HdsPrimaryTabsApi23 } from './impl/api23/HdsPrimaryTabsApi23'
 import { WideAppShell } from './wide/WideAppShell'
-import { WideLayoutMode, getWideLayoutState } from './wide/WideLayoutMode'
+import { WideLayoutMode, getWideLayoutState, resolveWideLayoutMode } from './wide/WideLayoutMode'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 import { SyncRunPresentationState, SyncRunSnapshot } from '../../feature/settings/presentation/SyncRunPresentationState'
 import { SyncOutcomePresenter } from '../../feature/settings/presentation/SyncOutcomePresenter'
@@ -484,8 +484,12 @@ export struct PrimaryTabShell {
 
   // Issue #972：宽屏外壳只由根容器实测宽度按 840vp 断点解析一次。
   // 宽屏只实例化 WideAppShell，窄屏只实例化 CompactPrimaryShell，两者不会同时挂载。
+  //
+  // 这里必须读取 @State shellWidthVp 派生模式，而不是读 WideLayoutState 单例：
+  // ArkUI 只在渲染期间读取状态变量时建立依赖，单例普通字段变化不会标脏 build()。
+  // WideLayoutState 仍由 onAreaChange 同步写入，作为设置浮层/接续恢复的只读投影。
   private get wideLayoutMode(): WideLayoutMode {
-    return getWideLayoutState().current()
+    return resolveWideLayoutMode(this.shellWidthVp)
   }
 
   private get usesWideNavigation(): boolean {
