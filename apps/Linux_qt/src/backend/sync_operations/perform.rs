@@ -213,6 +213,24 @@ impl AppBackend {
 
         self.current_sync_status = "syncing".to_string();
         self.current_sync_in_progress = true;
+        // Issue #983：记录本轮真实开始时间。自动调度以实际开始时间（而不是上次成功
+        // 时间）作为到期基准，失败后也不会每 30 秒重复上传。
+        let sync_started_at = Self::now_epoch_seconds();
+        self.last_actual_sync_started_at = sync_started_at;
+        if trigger == "auto" {
+            self.last_auto_sync_dispatch_at = sync_started_at;
+            self.last_auto_sync_operation_id = op_id.clone();
+            self.last_auto_sync_failure_at = 0;
+            self.last_auto_sync_failure_reason.clear();
+            self.debug_log(
+                "sync",
+                "auto_sync_dispatch",
+                &format!(
+                    "source=auto, started=true, operation_id={}, interval_source=persisted_config",
+                    op_id
+                ),
+            );
+        }
 
         // Issue #779 评论 5854082763：新用户同步开始时，取消已有 GC maintenance。
         // GC maintenance 会尽快停止发起新的远端操作（token 取消后 run_generation_gc

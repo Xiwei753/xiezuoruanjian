@@ -160,6 +160,71 @@ Kirigami.ApplicationWindow {
         return true
     }
 
+    // Issue #983：自动同步的唯一 QML 定时入口。QML 只负责每 30 秒唤醒一次；
+    // 是否到期、工作区身份和单任务互斥全部由 SyncBackend/AppBackend 判断。
+    // 真正启动沿用已有 perform_sync_internal("auto", ...)，不复用手动请求链路。
+    property bool autoSyncShutdown: false
+    property string autoSyncLastPreflightFailureReason: ""
+
+    function logAutoSyncEvent(level, event, message) {
+        if (!appBackend || typeof appBackend.log_qml !== "function") return
+        try {
+            appBackend.log_qml(level, "sync", event, message)
+        } catch (e) {
+            console.warn("Unable to log auto sync event", event, e)
+        }
+    }
+
+    function maybeStartAutoSync(trigger) {
+        if (autoSyncShutdown || !syncBackend || typeof syncBackend.auto_sync_due !== "function")
+            return false
+        var due = false
+        try {
+            due = syncBackend.auto_sync_due() === true
+        } catch (e) {
+            window.logAutoSyncEvent("warn", "auto_sync_due_failed",
+                                    "trigger=" + trigger + ", error=" + e)
+            return false
+        }
+        if (!due) return false
+
+        var barrierPassed = false
+        try {
+            barrierPassed = window.preSyncBarrier()
+        } catch (e) {
+            barrierPassed = false
+            window.manualSyncBarrierFailureReason = String(e)
+        }
+        if (!barrierPassed) {
+            var reason = window.manualSyncBarrierFailureReason || qsTr("保存失败")
+            // 同一失败原因不每 30 秒重复刷日志；原因变化时再记一次。
+            if (reason !== autoSyncLastPreflightFailureReason) {
+                autoSyncLastPreflightFailureReason = reason
+                window.logAutoSyncEvent("warn", "auto_sync_preflight_failed",
+                                        "trigger=" + trigger + ", reason=" + reason)
+            }
+            return false
+        }
+        autoSyncLastPreflightFailureReason = ""
+
+        var operationId = ""
+        try {
+            operationId = String(syncBackend.start_auto_sync() || "").trim()
+        } catch (e) {
+            window.logAutoSyncEvent("warn", "auto_sync_dispatch_failed",
+                                    "trigger=" + trigger + ", error=" + e)
+            return false
+        }
+        if (operationId.length > 0) {
+            window.logAutoSyncEvent("info", "auto_sync_started",
+                                    "trigger=" + trigger + ", operation_id=" + operationId)
+            return true
+        }
+        window.logAutoSyncEvent("info", "auto_sync_not_started",
+                                "trigger=" + trigger + ", reason=backend_recheck")
+        return false
+    }
+
     // Issue #963：三个工作区顶栏共用这一条手动同步入口。先留下一条正常级别
     // 的操作日志（即使 QML debug 日志关闭也会进入诊断日志），再执行编辑保存屏障，
     // 最后按后端返回的操作 ID 跟踪同一条 sync_operation_state。
@@ -668,6 +733,13 @@ Kirigami.ApplicationWindow {
         function onSync_status_changed() {
             window.refreshManualSyncFeedback()
         }
+        // Issue #983：保存配置/重新加载配置后立即重新检查一次到期条件。
+        // 用 callLater 等本轮配置通知结束再启动，避免与设置页保存流程重入。
+        function onSync_config_changed() {
+            Qt.callLater(function() {
+                window.maybeStartAutoSync("config_changed")
+            })
+        }
     }
 
     // Issue #912：只有当实际显示的 KDE/Breeze 调色板深浅变化时才写入
@@ -743,6 +815,11 @@ Kirigami.ApplicationWindow {
     }
 
     onClosing: {
+        window.autoSyncShutdown = true
+        if (autoSyncWakeTimer) autoSyncWakeTimer.stop()
+        if (editorBackend) {
+            editorBackend.close_writing_session("close")
+        }
         if (appController.inWriting) {
             editorBackend.flush_recent_edits();
         }
@@ -750,6 +827,17 @@ Kirigami.ApplicationWindow {
         if (settingsBackend) {
             settingsBackend.flush_pending_settings_save();
         }
+    }
+
+    // ── Issue #983：自动同步唤醒 Timer ──
+    // 只做唤醒；后端按持久化配置、Core last_attempt_time 和本进程实际开始时间
+    // 判断是否到期。设置关闭、无工作区、同步进行中或手动 pending 时后端返回 false。
+    Timer {
+        id: autoSyncWakeTimer
+        interval: 30000
+        repeat: true
+        running: !window.autoSyncShutdown
+        onTriggered: window.maybeStartAutoSync("timer")
     }
 
     // ── Debounced settings save Timer ──
@@ -801,6 +889,10 @@ Kirigami.ApplicationWindow {
             if (themeController) {
                 themeController.reload();
             }
+            // Issue #983：工作区已成功打开且同步配置已加载，立即检查一次是否到期。
+            Qt.callLater(function() {
+                window.maybeStartAutoSync("workspace_opened")
+            })
         }
         function onWorkspace_content_changed() {
             appController.refreshState(qsTr("刷新工作区内容失败"));

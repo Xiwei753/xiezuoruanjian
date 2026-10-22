@@ -249,6 +249,191 @@ impl AppBackend {
         self.perform_sync_internal("manual", false, sync_qptr)
     }
 
+    /// Issue #983：读取 Core 持久化的真实同步配置。自动调度必须按用户已保存的配置
+    /// 判断，不能只信 QML 表单里的未保存开关。
+    fn saved_sync_config(&self) -> Option<writer_core::api::types::SyncConfigDto> {
+        self.core_api().and_then(|api| api.load_sync_config().ok())
+    }
+
+    fn provider_remote_url(config: &writer_core::api::types::SyncConfigDto) -> &str {
+        match config.provider_config.as_ref() {
+            Some(writer_core::api::types::ProviderConfigDto::GitHub { remote_url, .. }) => {
+                remote_url.as_str()
+            }
+            None => "",
+        }
+    }
+
+    /// Issue #983：自动同步的统一门禁。工作区、单任务互斥、真实配置和凭据状态
+    /// 全部在这里判断；`auto_sync_due` 与 `start_auto_sync` 共用，后者再校验一次，
+    /// 挡住 QML 检查到真正启动之间的状态变化。
+    fn auto_sync_gate(&self) -> Result<writer_core::api::types::SyncConfigDto, String> {
+        if !self.current_has_data_root || self.current_data_root.is_empty() {
+            return Err("no_workspace".to_string());
+        }
+        if self.current_workspace_git_layout.is_none() {
+            return Err("no_workspace_layout".to_string());
+        }
+        if self.current_sync_in_progress {
+            return Err("already_running".to_string());
+        }
+        if self.manual_sync_pending {
+            return Err("manual_pending".to_string());
+        }
+        let config = self
+            .saved_sync_config()
+            .ok_or_else(|| "config_unavailable".to_string())?;
+        if !config.enabled {
+            return Err("sync_disabled".to_string());
+        }
+        if !config.auto_sync {
+            return Err("auto_sync_disabled".to_string());
+        }
+        if config.sync_interval_seconds == 0 {
+            return Err("interval_zero".to_string());
+        }
+        if Self::provider_remote_url(&config).trim().is_empty() {
+            return Err("remote_url_missing".to_string());
+        }
+        if self.current_sync_token.trim().is_empty() {
+            return Err("token_missing".to_string());
+        }
+        Ok(config)
+    }
+
+    fn auto_sync_interval_seconds(config: &writer_core::api::types::SyncConfigDto) -> i64 {
+        i64::from(config.sync_interval_seconds.max(60))
+    }
+
+    /// 自动调度允许下一次启动的最早基准时间。取 Core 最近尝试、本进程最近一次真实
+    /// 开始、自动调度发起和自动启动失败时间的最大值；不按 last_success_time 计算，
+    /// 否则一次失败后会每 30 秒重复重试。
+    fn auto_sync_earliest_start(&self) -> i64 {
+        let core_last_attempt = self
+            .core_api()
+            .and_then(|api| api.load_full_sync_state().ok().flatten())
+            .and_then(|state| state.last_attempt_time)
+            .unwrap_or(0);
+        core_last_attempt
+            .max(self.last_actual_sync_started_at)
+            .max(self.last_auto_sync_dispatch_at)
+            .max(self.last_auto_sync_failure_at)
+    }
+
+    /// 记录自动调度跳过原因。同一原因只在变化时写一条日志，避免设置关闭/未打开
+    /// 工作区时每 30 秒刷屏；`not_due` 的 elapsed 每次都会变，不单独记录。
+    fn record_auto_sync_skip(&mut self, reason: String) {
+        let changed = self.last_auto_sync_skip_reason != reason;
+        let should_log = changed && !reason.starts_with("not_due");
+        self.last_auto_sync_skip_reason = reason.clone();
+        if should_log {
+            self.debug_log(
+                "sync",
+                "auto_sync_skipped",
+                &format!("source=auto, started=false, reason={reason}"),
+            );
+        }
+    }
+
+    /// Issue #983：QML 定时器只负责唤醒，到期判定与去重全部在这里完成。
+    pub(crate) fn auto_sync_due(&mut self) -> bool {
+        let now = Self::now_epoch_seconds();
+        self.last_auto_sync_decision_at = now;
+        let config = match self.auto_sync_gate() {
+            Ok(config) => config,
+            Err(reason) => {
+                self.last_auto_sync_due = false;
+                self.record_auto_sync_skip(reason);
+                return false;
+            }
+        };
+        let interval = Self::auto_sync_interval_seconds(&config);
+        let elapsed = now.saturating_sub(self.auto_sync_earliest_start());
+        if elapsed < interval {
+            self.last_auto_sync_due = false;
+            self.record_auto_sync_skip(format!("not_due:elapsed={elapsed},interval={interval}"));
+            return false;
+        }
+        self.last_auto_sync_due = true;
+        self.last_auto_sync_skip_reason.clear();
+        true
+    }
+
+    /// Issue #983：真正启动一轮自动同步。复用已有 `perform_sync_internal` 执行器，
+    /// 自动触发 `trigger=auto`（非强制、非手动），并返回实际启动的 operation ID。
+    pub(crate) fn start_auto_sync(
+        &mut self,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) -> (String, bool) {
+        let now = Self::now_epoch_seconds();
+        self.last_auto_sync_decision_at = now;
+        let config = match self.auto_sync_gate() {
+            Ok(config) => config,
+            Err(reason) => {
+                self.last_auto_sync_due = false;
+                self.last_auto_sync_skip_reason = reason.clone();
+                self.debug_log(
+                    "sync",
+                    "auto_sync_dispatch",
+                    &format!("source=auto, started=false, reason={reason}"),
+                );
+                return (String::new(), false);
+            }
+        };
+        let interval = Self::auto_sync_interval_seconds(&config);
+        let elapsed = now.saturating_sub(self.auto_sync_earliest_start());
+        if elapsed < interval {
+            let reason = format!("not_due:elapsed={elapsed},interval={interval}");
+            self.last_auto_sync_due = false;
+            self.last_auto_sync_skip_reason = reason.clone();
+            self.debug_log(
+                "sync",
+                "auto_sync_dispatch",
+                &format!("source=auto, started=false, reason={reason}"),
+            );
+            return (String::new(), false);
+        }
+        self.last_auto_sync_due = true;
+        self.last_auto_sync_skip_reason.clear();
+        let operation_id = self
+            .perform_sync_internal("auto", true, sync_qptr)
+            .to_string();
+        let started = !operation_id.is_empty()
+            && self.current_sync_in_progress
+            && self.current_sync_operation_id == operation_id;
+        if !operation_id.is_empty() {
+            self.last_auto_sync_operation_id = operation_id.clone();
+        }
+        if started {
+            self.debug_log(
+                "sync",
+                "auto_sync_dispatch",
+                &format!("source=auto, started=true, operation_id={operation_id}"),
+            );
+        } else {
+            self.last_auto_sync_failure_at = now;
+            let failure_reason =
+                serde_json::from_str::<serde_json::Value>(&self.current_sync_operation_state)
+                    .ok()
+                    .and_then(|state| {
+                        state
+                            .get("summary_key")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| "start_rejected".to_string());
+            self.debug_warn(
+                "sync",
+                "auto_sync_dispatch",
+                &format!(
+                    "source=auto, started=false, reason={failure_reason}, operation_id={operation_id}"
+                ),
+            );
+            self.last_auto_sync_failure_reason = failure_reason;
+        }
+        (operation_id, started)
+    }
+
     /// 手动同步 QML 边界的统一入口：返回 operation ID，并给请求日志/导出摘要
     /// 提供与该 ID 对应的排队、启动或前置失败状态。
     pub(crate) fn perform_sync_for_request(

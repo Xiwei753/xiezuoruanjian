@@ -131,16 +131,26 @@ App target 内部按数据组独立扫描、合并、记录状态并发布不可
 ### 设计原则
 
 - **保存 ≠ 同步**：章节保存只写本地磁盘，不触发网络同步
-- **自动同步仅在特定时机**：数据根打开、应用回到前台
-- **Core 层防抖**：`perform_lww_sync` 内置最小间隔检查（`sync_interval_seconds`，最小 60 秒）
+- **Linux Qt 自动同步由应用内调度器驱动**：QML 只负责定时唤醒，到期判定、工作区身份校验和单任务互斥都在后端完成
+- **自动触发不冒充手动请求**：自动同步使用 `trigger=auto`（非强制同步），不写 `manual_sync_request` 记录；手动同步仍走 `manual` 与既有优先队列
 
-### 防抖层级
+### Linux Qt 调度路径（Issue #983）
+
+| 层级 | 机制 | 间隔 / 条件 |
+|------|------|-------------|
+| `main.qml` | 长期存在的 `autoSyncWakeTimer` 调 `syncBackend.auto_sync_due()`；工作区打开、配置变化后立即补一次检查 | 每 30 秒唤醒 |
+| `sync_operations.rs` | `auto_sync_gate` 读取 Core 持久化配置并检查工作区、layout、单任务互斥、远端与 Token | `enabled && auto_sync && sync_interval_seconds > 0` 且工作区有效 |
+| 到期基准 | `max(FullSyncState.last_attempt_time, last_actual_sync_started_at, last_auto_sync_dispatch_at, last_auto_sync_failure_at)` | `max(sync_interval_seconds, 60)`；不按 `last_success_time` 反复重试 |
+| 保存屏障 | QML 到期后先执行既有 `preSyncBarrier()`：刷新当前正文、`flush_recent_edits`、`flush_pending_settings_save` | 保存失败只记录 `auto_sync_preflight_failed`，不启动、不上传旧正文 |
+| 执行 | 复用 `perform_sync_internal("auto", true, ...)` | 进入同一个 Core 全量/分组增量同步、进度回调与报告落盘路径 |
+| 互斥与取消 | 现有 single-flight、`manual_sync_pending` 优先、`SyncCancellationToken`、workspace generation、data_root、operation_id 校验 | 自动到期遇到现有任务跳过本次；切/关工作区取消旧任务 |
+
+QML 定时器只做唤醒，不计算 LWW、分组或网络请求；`sync_runtime.json` 记录当前构建的已保存开关、间隔、最近调度判定、跳过原因、最近自动 operation_id 与失败原因。
+
+### Android
 
 | 层级 | 机制 | 间隔 |
 |------|------|------|
-| Core | `perform_lww_sync` 入口检查 `last_sync_time` | `max(sync_interval_seconds, 60)` |
-| Linux_qt Rust | `can_start_auto_sync(reason, 60)` | 同 reason 60 秒 |
-| Linux_qt QML | `workspaceOpenAutoSyncTimer` / `foregroundAutoSyncTimer` | 1.5s / 1.2s 延迟 |
 | Android | `AutoSyncWorker` 读取全局 profile，检查一次 interval/elapsed + WorkManager 周期 | `syncIntervalSeconds`（默认 300s） |
 
 `AutoSyncWorker` 只读取一份全局 `snapshotSyncProfile()`，判断一次 `enabled && autoSync`，调用一次 `runFullSync(...)`。作品枚举由 Core 的 full-sync 完成，不再逐作品读取不同 profile、不再依赖单一 `ActiveProjectGate`。

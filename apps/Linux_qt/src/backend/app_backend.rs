@@ -414,6 +414,19 @@ pub struct AppBackend {
     last_manual_sync_request_at: i64,
     last_manual_sync_request_status: String,
     current_last_sync_time: i64,
+    /// Issue #983：最近一次真正进入执行（通过前置检查、开始跑 Core 同步）的时间。
+    /// 自动调度以它和 Core `last_attempt_time` 的最大值判断到期，避免失败后每 30 秒重复上传。
+    last_actual_sync_started_at: i64,
+    /// Issue #983：自动调度最近一次判定时间、结论和未启动原因。
+    last_auto_sync_decision_at: i64,
+    last_auto_sync_due: bool,
+    last_auto_sync_skip_reason: String,
+    /// Issue #983：最近一次自动调度实际发起的时间和 operation ID。
+    last_auto_sync_dispatch_at: i64,
+    last_auto_sync_operation_id: String,
+    /// Issue #983：自动启动在通过到期检查后仍失败的时间/原因，用于推迟下一轮。
+    last_auto_sync_failure_at: i64,
+    last_auto_sync_failure_reason: String,
 
     current_system_color_scheme: String,
     pub current_ai_enabled: bool,

@@ -387,8 +387,8 @@ ColumnLayout {
 
         var attemptTime = root.formatSyncLocalTime(state.last_attempt_time)
         var text = attemptTime !== ""
-            ? qsTr("上次同步（%1）").arg(attemptTime)
-            : qsTr("上次同步")
+            ? qsTr("最近一次实际开始：%1").arg(attemptTime)
+            : qsTr("最近一次实际开始：未知")
         text += "\n" + qsTr("结果：%1").arg(root.syncStatusLabel(state.overall_status))
         var successTime = root.formatSyncLocalTime(state.last_success_time)
         if (successTime !== "")
@@ -698,7 +698,7 @@ ColumnLayout {
         FormCard.FormSwitchDelegate {
             id: autoSyncSwitch
             text: qsTr("自动同步")
-            description: qsTr("启用后按设定间隔自动执行同步")
+            description: qsTr("保存配置后按设定间隔自动执行同步；修改开关或间隔后需点击「保存配置」")
             onToggled: {
                 if (root.syncBackendRef) {
                     root.syncBackendRef.sync_auto_sync = autoSyncSwitch.checked
@@ -757,6 +757,12 @@ ColumnLayout {
                     root.settingsChanged()
                     root.showConfigFeedback(qsTr("配置已保存"), false)
                 } else {
+                    // Issue #983：保存失败不能把表单里的开关/间隔显示成已生效。
+                    // 重新读取 Core 持久化配置，回退控件到真实已保存值；URL/Token
+                    // 输入框保留，方便用户修正后再次保存。
+                    root.syncBackendRef.load_sync_config()
+                    autoSyncSwitch.checked = root.syncBackendRef.sync_auto_sync || false
+                    syncIntervalSpin.value = Math.round((root.syncBackendRef.sync_interval || 300) / 60)
                     root.resultText = root.syncBackendRef.sync_operation_state || qsTr("保存配置失败")
                     root.showConfigFeedback(qsTr("保存配置失败"), true)
                 }

@@ -515,6 +515,16 @@ impl AppBackend {
         self.current_sync_in_progress = false;
         // 清进度共享状态：旧同步的进度 sink 不再有意义，丢弃避免诊断导出读到过期进度。
         self.current_sync_progress = None;
+        // Issue #983：工作区身份已变，自动调度状态必须属于新工作区，不能沿用旧工作区的
+        // 到期基准或 operation ID。
+        self.last_actual_sync_started_at = 0;
+        self.last_auto_sync_decision_at = 0;
+        self.last_auto_sync_due = false;
+        self.last_auto_sync_skip_reason.clear();
+        self.last_auto_sync_dispatch_at = 0;
+        self.last_auto_sync_operation_id.clear();
+        self.last_auto_sync_failure_at = 0;
+        self.last_auto_sync_failure_reason.clear();
 
         self.flush_recent_edits();
         // Issue #843 复核评论 6045207375：先等旧 writer 尾部事件落盘，再清掉，

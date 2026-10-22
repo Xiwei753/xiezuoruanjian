@@ -152,6 +152,12 @@ pub struct SyncBackend {
     record_manual_sync_request: qt_method!(fn(&mut self, source: QString) -> QString),
     #[allow(dead_code)]
     perform_sync: qt_method!(fn(&mut self, source: QString, request_id: QString) -> QString),
+    // Issue #983：自动同步的 QML 边界。QML 只负责定时唤醒；到期判定、工作区身份
+    // 校验和真正启动都在 AppBackend 内完成，不把自动触发冒充成手动请求。
+    #[allow(dead_code)]
+    auto_sync_due: qt_method!(fn(&mut self) -> bool),
+    #[allow(dead_code)]
+    start_auto_sync: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
     perform_sync_diagnostics: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
@@ -656,6 +662,44 @@ impl SyncBackend {
             }
         }
     }
+    fn auto_sync_due(&mut self) -> bool {
+        match self.with_app_mut(|app| app.auto_sync_due()) {
+            Ok(due) => due,
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "sync_backend",
+                    "auto_sync_due_failed",
+                    "auto sync due check skipped due to AppBackend borrow conflict",
+                );
+                false
+            }
+        }
+    }
+
+    fn start_auto_sync(&mut self) -> QString {
+        let qptr = QPointer::from(&*self);
+        match self.with_app_mut(|app| app.start_auto_sync(Some(qptr))) {
+            Ok((operation_id, started)) => {
+                if started {
+                    self.sync_status_changed();
+                } else if !operation_id.is_empty() {
+                    // 到期检查通过但真正启动被前置条件拒绝：同步更新操作终态。
+                    self.sync_status_changed();
+                    self.sync_action_completed();
+                }
+                operation_id.into()
+            }
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "sync_backend",
+                    "auto_sync_dispatch_failed",
+                    "auto sync dispatch skipped due to AppBackend borrow conflict",
+                );
+                QString::from("")
+            }
+        }
+    }
+
     fn perform_sync_diagnostics(&mut self) -> QString {
         let qptr = QPointer::from(&*self);
         let result = self.with_app_mut(|app| app.perform_sync_diagnostics(Some(qptr)));

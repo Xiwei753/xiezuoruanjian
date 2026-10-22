@@ -294,12 +294,13 @@ fn build_export_attachments(
 
     // 持久历史仍保留为原始附件；同时复用同一份读取结果生成导出时摘要，
     // 避免用旧 overall_status 推断本轮是否真的发起了同步。
-    let (full_sync_state, latest_sync_report) = app
+    let (full_sync_state, latest_sync_report, saved_sync_config) = app
         .core_api()
         .map(|api| {
             (
                 api.load_full_sync_state().ok().flatten(),
                 api.load_latest_full_sync_report().ok().flatten(),
+                api.load_sync_config().ok(),
             )
         })
         .unwrap_or_default();
@@ -393,6 +394,24 @@ fn build_export_attachments(
         (Some(last_attempt), Some(report_attempt)) => Some(last_attempt == report_attempt),
         _ => None,
     };
+    // Issue #983：导出当前构建实际读到的已保存自动同步配置与调度判定。
+    // 开关是否真的生效以 Core 配置为准，不把 QML 未保存的表单值写进来。
+    let saved_sync_remote_ready = saved_sync_config
+        .as_ref()
+        .map(|config| match config.provider_config.as_ref() {
+            Some(writer_core::api::types::ProviderConfigDto::GitHub { remote_url, .. }) => {
+                !remote_url.trim().is_empty()
+            }
+            None => false,
+        })
+        .unwrap_or(false);
+    let auto_sync_effective_enabled = app.current_has_data_root
+        && saved_sync_remote_ready
+        && !app.current_sync_token.trim().is_empty()
+        && saved_sync_config
+            .as_ref()
+            .map(|config| config.enabled && config.auto_sync && config.sync_interval_seconds > 0)
+            .unwrap_or(false);
     let runtime = serde_json::json!({
         "syncInProgress": app.current_sync_in_progress,
         "operationId": app.current_sync_operation_id,
@@ -418,6 +437,28 @@ fn build_export_attachments(
             .then_some(app.last_manual_sync_request_at),
         "last_manual_sync_request_status": (!app.last_manual_sync_request_status.is_empty())
             .then_some(app.last_manual_sync_request_status.as_str()),
+        "saved_sync_enabled": saved_sync_config.as_ref().map(|config| config.enabled),
+        "saved_sync_auto_sync": saved_sync_config.as_ref().map(|config| config.auto_sync),
+        "saved_sync_interval_seconds": saved_sync_config
+            .as_ref()
+            .map(|config| config.sync_interval_seconds),
+        "saved_sync_remote_ready": saved_sync_remote_ready,
+        "auto_sync_effective_enabled": auto_sync_effective_enabled,
+        "auto_sync_last_decision_at": (app.last_auto_sync_decision_at > 0)
+            .then_some(app.last_auto_sync_decision_at),
+        "auto_sync_due": app.last_auto_sync_due,
+        "auto_sync_skip_reason": (!app.last_auto_sync_skip_reason.is_empty())
+            .then_some(app.last_auto_sync_skip_reason.as_str()),
+        "auto_sync_last_dispatch_at": (app.last_auto_sync_dispatch_at > 0)
+            .then_some(app.last_auto_sync_dispatch_at),
+        "auto_sync_last_operation_id": (!app.last_auto_sync_operation_id.is_empty())
+            .then_some(app.last_auto_sync_operation_id.as_str()),
+        "auto_sync_last_failure_at": (app.last_auto_sync_failure_at > 0)
+            .then_some(app.last_auto_sync_failure_at),
+        "auto_sync_last_failure_reason": (!app.last_auto_sync_failure_reason.is_empty())
+            .then_some(app.last_auto_sync_failure_reason.as_str()),
+        "last_actual_sync_started_at": (app.last_actual_sync_started_at > 0)
+            .then_some(app.last_actual_sync_started_at),
     });
     attachments.push(writer_diagnostics::PlatformAttachment {
         relative_path: "sync_runtime.json".to_string(),
