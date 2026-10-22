@@ -4,7 +4,8 @@
 // 页面、另一个 NativeStatsBridge 实例发起查询。读取前必须等待查询时刻之前已入队的
 // 全部写入完成，否则会读到半套字数/时长。
 //
-// 这里只保存“把队列刷到当前序号”的轻量回调，不持有页面或 UI 状态。
+// 这里只保存“把队列刷到当前序号”的回调，不持有页面或 UI 状态。写入失败时页面
+// 不会注销回调，队列和稳定 eventId 会保留到后续读取重试成功。
 
 export type StatsWriteFlusher = () => Promise<boolean>
 
@@ -40,8 +41,12 @@ export class StatsWriteBarrierRegistry {
     const snapshot: StatsWriteFlusher[] = this.flushers.slice()
     let clean: boolean = true
     for (const flusher of snapshot) {
-      const result: boolean = await flusher()
-      if (!result) {
+      try {
+        const result: boolean = await flusher()
+        if (!result) {
+          clean = false
+        }
+      } catch (e) {
         clean = false
       }
     }

@@ -19,7 +19,7 @@
 //    同一轮 while，「保存只等自己的 barrier」实际上根本没成立。一条一轮之后，
 //    drainPromise 只覆盖「当前这一条」，barrier 一到就能立刻返回。仍然严格串行，
 //    也不会增加 Native 调用次数。
-// 3. flushThrough(barrier) 只等 barrier 及之前的事件，并按账本判 1..=barrier 里有没有脏事件。
+// 3. flushThrough(barrier) 只等 barrier 及之前的事件，并重试其中失败的项；只有全部成功才返回 true。
 //
 // 运行测试：node --experimental-strip-types __tests__/editor_stats_drain.test.mjs
 
@@ -47,6 +47,10 @@ export class SerialStatsDrain<T extends SequencedPayload> {
   private readonly ledger: StatsBarrierLedger
   private readonly send: (item: T) => Promise<boolean>
   private pending: T[] = []
+  // 已失败但必须保留原命令/eventId 的项；后续 barrier/查询会重试，成功后才移除。
+  private failed: T[] = []
+  // 重试串行链，避免多个统计读取同时重发同一批失败项。
+  private retryChain: Promise<void> = Promise.resolve()
   // 当前那一轮的 Promise。null 表示没有 drain 在跑。
   // 只覆盖「当前这一条」，这是 flushThrough 能按 barrier 提前返回的前提。
   private drainPromise: Promise<void> | null = null
@@ -106,11 +110,12 @@ export class SerialStatsDrain<T extends SequencedPayload> {
    * 重新看 barrier —— 队列在 await 期间被新事件填满也不影响返回，barrier 之前的那批
    * 处理完就 resolve，不会追着后面的 seq 跑。
    *
-   * 返回 false 表示 barrier 以内有事件没写进 Core（send 返回 false、Promise reject，
-   * 或被积压上限丢弃）。判据是账本里「最早的脏序号 > barrier」—— 问的是 1..=barrier
-   * 区间内有没有缺失，与调用时机无关，也不会被更晚的失败洗掉更早的失败。
+   * 返回 false 表示 barrier 以内仍有事件没写进 Core（重试后仍失败，或被积压上限
+   * 丢弃）。失败项保留原命令与稳定 eventId，下一次查询/关闭会继续重试。
    */
   async flushThrough(barrier: number): Promise<boolean> {
+    // 先重试此前失败、且属于本次查询范围的项；失败的命令和 eventId 原样保留。
+    await this.retryFailedThrough(barrier)
     while (!this.ledger.isCompleteThrough(barrier)) {
       if (this.drainPromise === null) {
         // 没有 drain 在跑但 barrier 还没完成：说明剩余的都是被丢弃的（不推进完成序号）
@@ -120,6 +125,46 @@ export class SerialStatsDrain<T extends SequencedPayload> {
       await this.drainPromise
     }
     return this.ledger.isCleanThrough(barrier)
+  }
+
+  /** 串行重试 barrier 内仍未写入的项；成功后清账，失败则继续保留。 */
+  private retryFailedThrough(barrier: number): Promise<void> {
+    const task: Promise<void> = this.retryChain.then((): Promise<void> => this.retryFailed(barrier))
+    this.retryChain = task.catch((): void => {})
+    return task
+  }
+
+  private async retryFailed(barrier: number): Promise<void> {
+    const snapshot: T[] = this.failed.filter((item: T): boolean => item.seq <= barrier)
+    for (const item of snapshot) {
+      const ok: boolean = await this.sendWithRetry(item)
+      if (ok) {
+        const index: number = this.failed.indexOf(item)
+        if (index >= 0) {
+          this.failed.splice(index, 1)
+        }
+      }
+      this.ledger.complete(item.seq, ok)
+    }
+  }
+
+  /** 同一 payload/eventId 最多尝试 MAX_SEND_ATTEMPTS 次，失败后交由 failed 保留。 */
+  private async sendWithRetry(item: T): Promise<boolean> {
+    let ok: boolean = false
+    for (let attempt: number = 1; attempt <= MAX_SEND_ATTEMPTS && !ok; attempt++) {
+      try {
+        ok = await this.send(item)
+      } catch (e) {
+        ok = false
+      }
+      if (!ok && attempt < MAX_SEND_ATTEMPTS) {
+        // 稳定 eventId 让重发是幂等的；短暂退避避免 Core 短暂不可用时立刻丢事实。
+        await new Promise<void>((resolve: () => void): void => {
+          setTimeout(resolve, attempt * 100)
+        })
+      }
+    }
+    return ok
   }
 
   private ensureDraining(): void {
@@ -144,21 +189,12 @@ export class SerialStatsDrain<T extends SequencedPayload> {
     if (item === undefined) {
       return
     }
-    let ok: boolean = false
-    for (let attempt: number = 1; attempt <= MAX_SEND_ATTEMPTS && !ok; attempt++) {
-      try {
-        ok = await this.send(item)
-      } catch (e) {
-        ok = false
-      }
-      if (!ok && attempt < MAX_SEND_ATTEMPTS) {
-        // 稳定 eventId 让重发是幂等的；短暂退避避免 Core 短暂不可用时立刻丢事实。
-        await new Promise<void>((resolve: () => void): void => {
-          setTimeout(resolve, attempt * 100)
-        })
-      }
-    }
+    const ok: boolean = await this.sendWithRetry(item)
     // 无论成败都要推进完成序号：否则 flushThrough 会一直等这条。
     this.ledger.complete(item.seq, ok)
+    if (!ok) {
+      // 保留原 item（含稳定 eventId），交由下一次 barrier/查询重试，不因页面销毁丢弃。
+      this.failed.push(item)
+    }
   }
 }

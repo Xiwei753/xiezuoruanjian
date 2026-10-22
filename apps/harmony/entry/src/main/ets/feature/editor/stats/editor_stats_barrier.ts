@@ -18,8 +18,8 @@
 // 问的是「1..=barrier 区间内有没有任何一条缺失」，不是「最后一次缺失在哪」。用最大值判
 // 会把更早的失败洗掉：seq=2 失败、后来 seq=5 又失败，此时 lastFailedSeq=5，
 // isCleanThrough(4) 会因为 5 > 4 判成 true，而 seq=2 明明缺了一条，barrier=4 必须是 false。
-// 当前没有重试/补写，一条事件脏了就是永久缺失，所以只需要记最早的那条；
-// 以后若支持「失败后重试成功」，再升级成区间/集合，现在不提前复杂化。
+// 失败事件会保留原命令和稳定 eventId，后续 barrier/查询会重试；重试成功后必须把
+// 对应序号从失败集合里移除，否则一次短暂失败会让统计永远读不到。
 //
 // 生产代码：feature/editor/stats/EditorStatsQueue.ets。
 // 运行测试：node --experimental-strip-types editor_stats_barrier.test.mjs
@@ -34,8 +34,8 @@ export class StatsBarrierLedger {
   private lastEnqueuedSeq: number = 0
   // 已处理完的最后一个序号（无论成功失败）。0 表示还没处理完过任何事件。
   private completedSeq: number = 0
-  // 失败事件里**最早**的序号。0 表示至今没有失败。
-  private firstFailedSeq: number = 0
+  // 仍未成功写入的失败序号。重试成功后移除；只有全部清除才恢复「干净」。
+  private failedSeqs: number[] = []
   // 被丢弃（没写进 Core）事件里**最早**的序号。0 表示至今没有丢弃。
   // 丢弃也是一种「这条统计没进 Core」，与失败同口径。
   private firstDroppedSeq: number = 0
@@ -57,8 +57,13 @@ export class StatsBarrierLedger {
    */
   complete(seq: number, ok: boolean): void {
     this.completedSeq = Math.max(this.completedSeq, seq)
-    if (!ok) {
-      this.firstFailedSeq = keepEarliest(this.firstFailedSeq, seq)
+    if (ok) {
+      const index: number = this.failedSeqs.indexOf(seq)
+      if (index >= 0) {
+        this.failedSeqs.splice(index, 1)
+      }
+    } else if (this.failedSeqs.indexOf(seq) < 0) {
+      this.failedSeqs.push(seq)
     }
   }
 
@@ -78,13 +83,13 @@ export class StatsBarrierLedger {
   /**
    * barrier 及之前是否全部成功写进 Core（丢弃也算不干净）。
    *
-   * 判据是「1..=barrier 区间内有没有脏事件」：最早的脏序号 > barrier 才干净。
-   * 0 是「至今没有失败/丢弃」的哨兵，所以要单独放行。
-   * 纯按序号比较，与谁在什么时候调用 flush 无关，也不会被更晚的失败洗掉更早的失败。
+   * 判据是「1..=barrier 区间内是否仍有失败/丢弃」：失败重试成功会从集合移除，
+   * 因此一次短暂失败不会永久污染统计；丢弃仍按最早序号记脏。
    */
   isCleanThrough(barrier: number): boolean {
-    const firstDirty: number = earliestDirty(this.firstFailedSeq, this.firstDroppedSeq)
-    return firstDirty === 0 || firstDirty > barrier
+    const hasFailedInRange: boolean = this.failedSeqs.some((seq: number): boolean => seq <= barrier)
+    const hasDroppedInRange: boolean = this.firstDroppedSeq !== 0 && this.firstDroppedSeq <= barrier
+    return !hasFailedInRange && !hasDroppedInRange
   }
 }
 
@@ -97,21 +102,4 @@ function keepEarliest(currentFirst: number, seq: number): number {
     return seq
   }
   return Math.min(currentFirst, seq)
-}
-
-/**
- * 合并「失败」与「丢弃」两路的脏序号，取最早的一个。
- *
- * 注意不能直接 `Math.min(a, b)`：0 是「这一路还没有脏事件」的哨兵，
- * 而 Math.min(1, 0) === 0 会被 isCleanThrough 当成「什么都没脏」，把 seq=1 的失败洗掉。
- * 所以 0 必须先短路掉再比较。
- */
-function earliestDirty(a: number, b: number): number {
-  if (a === 0) {
-    return b
-  }
-  if (b === 0) {
-    return a
-  }
-  return Math.min(a, b)
 }

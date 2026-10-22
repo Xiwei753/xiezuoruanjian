@@ -505,12 +505,15 @@ export struct WritingScreen {
     // 确认尾部片段落盘后再解除统计读取屏障，避免统计页读到半套数据。
     const statsBarrier: number = this.editorStatsQueue.currentSeq()
     void this.editorStatsQueue.flushThrough(statsBarrier).then((clean: boolean): void => {
-      if (!clean) {
-        console.warn('[WritingScreen] 关闭正文时仍有写作统计数据未落盘')
+      if (clean) {
+        this.editorStatsQueue.releaseWriteBarrier()
+      } else {
+        // 失败项仍保留在进程级队列/屏障里，后续统计读取会重试同一 eventId；
+        // 不能因页面销毁就注销屏障，否则失败会被悄悄丢掉。
+        console.warn('[WritingScreen] 关闭正文时仍有写作统计数据未落盘，保留队列待重试')
       }
-      this.editorStatsQueue.releaseWriteBarrier()
     }).catch((): void => {
-      this.editorStatsQueue.releaseWriteBarrier()
+      console.warn('[WritingScreen] 关闭正文时统计队列刷新失败，保留队列待重试')
     })
     // Issue #923：精确注销自身的活跃会话 token（不影响切章时新页面已完成的注册）。
     if (this.activeSessionToken !== null) {

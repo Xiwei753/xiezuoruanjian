@@ -1127,7 +1127,13 @@ Kirigami.ApplicationWindow {
         if (autoSyncWakeTimer) autoSyncWakeTimer.stop()
         if (editorBackend) {
             // 关闭会话后等统计 writer 落盘，避免 process::exit 丢掉最后不足 30 秒的切片。
-            editorBackend.close_writing_session_and_wait("close")
+            // 失败时不能假装已保存：保持窗口打开并明确提示，稳定 eventId 会在下次关闭时重试。
+            var statsCloseError = editorBackend.close_writing_session_and_wait("close")
+            if (statsCloseError && statsCloseError.length > 0) {
+                close.accepted = false
+                window.showPassiveNotification(qsTr("写作统计尚未保存：%1").arg(statsCloseError), 8000)
+                return
+            }
         }
         if (appController.inWriting) {
             editorBackend.flush_recent_edits();

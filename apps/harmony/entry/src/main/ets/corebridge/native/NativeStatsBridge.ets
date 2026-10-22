@@ -38,9 +38,26 @@ export class NativeStatsBridge {
 
   setInitialized(v: boolean) { this.isInitialized = v }
 
+  /**
+   * Issue #981：统计读取前的统一写入屏障。失败时返回明确的错误 envelope，
+   * 不能把未落盘的队列当成完整数据继续向 Core 查询。
+   */
+  private async statsWritesBlocked<T>(): Promise<ResultEnvelope<T> | null> {
+    const clean: boolean = await StatsWriteBarrierRegistry.getInstance().awaitCurrentWrites()
+    if (clean) {
+      return null
+    }
+    return {
+      success: false,
+      errorCode: 'STATS_WRITE_PENDING',
+      userMessage: '写作统计尚有记录未保存'
+    }
+  }
+
   async getWritingStats(): Promise<ResultEnvelope<WritingStats>> {
     try {
-      await StatsWriteBarrierRegistry.getInstance().awaitCurrentWrites()
+      const blocked = await this.statsWritesBlocked<WritingStats>()
+      if (blocked !== null) return blocked
       const jsonStr: string = this.core.getNativeModule().nativeGetWritingStats()
       return this.core.decodeEnvelope<WritingStats>(jsonStr, decodeWritingStats)
     } catch (e) { return nativeError<WritingStats>(e) }
@@ -60,9 +77,13 @@ export class NativeStatsBridge {
     let envelope: ResultEnvelope<WritingStatsExplorer>
     try {
       // Issue #981：统计读取前先等编辑字数事件和计时片段共用队列刷到本次查询时刻。
-      await StatsWriteBarrierRegistry.getInstance().awaitCurrentWrites()
-      const jsonStr: string = await this.core.getNativeModule().nativeGetWritingStatsExplorer(preset, customStartDate, customEndDate)
-      envelope = this.core.decodeEnvelope<WritingStatsExplorer>(jsonStr, decodeWritingStatsExplorer)
+      const blocked = await this.statsWritesBlocked<WritingStatsExplorer>()
+      if (blocked !== null) {
+        envelope = blocked
+      } else {
+        const jsonStr: string = await this.core.getNativeModule().nativeGetWritingStatsExplorer(preset, customStartDate, customEndDate)
+        envelope = this.core.decodeEnvelope<WritingStatsExplorer>(jsonStr, decodeWritingStatsExplorer)
+      }
     } catch (e) {
       envelope = nativeError<WritingStatsExplorer>(e)
     }
@@ -85,9 +106,13 @@ export class NativeStatsBridge {
     const requestSeq: number = this.heatmapRequestSeq
     let envelope: ResultEnvelope<WritingStatsHeatmap>
     try {
-      await StatsWriteBarrierRegistry.getInstance().awaitCurrentWrites()
-      const jsonStr: string = await this.core.getNativeModule().nativeGetWritingStatsHeatmap(year)
-      envelope = this.core.decodeEnvelope<WritingStatsHeatmap>(jsonStr, decodeWritingStatsHeatmap)
+      const blocked = await this.statsWritesBlocked<WritingStatsHeatmap>()
+      if (blocked !== null) {
+        envelope = blocked
+      } else {
+        const jsonStr: string = await this.core.getNativeModule().nativeGetWritingStatsHeatmap(year)
+        envelope = this.core.decodeEnvelope<WritingStatsHeatmap>(jsonStr, decodeWritingStatsHeatmap)
+      }
     } catch (e) {
       envelope = nativeError<WritingStatsHeatmap>(e)
     }
@@ -103,7 +128,8 @@ export class NativeStatsBridge {
   // 把区间写死成最近 30 天，所以这里把区间交给 Core 侧同一份汇总查询。
   async getWritingStatsSummary(startDate: string, endDate: string): Promise<ResultEnvelope<WritingStats>> {
     try {
-      await StatsWriteBarrierRegistry.getInstance().awaitCurrentWrites()
+      const blocked = await this.statsWritesBlocked<WritingStats>()
+      if (blocked !== null) return blocked
       const jsonStr: string = this.core.getNativeModule().nativeGetWritingStatsSummary(startDate, endDate)
       return this.core.decodeEnvelope<WritingStats>(jsonStr, decodeWritingStats)
     } catch (e) { return nativeError<WritingStats>(e) }
@@ -114,7 +140,8 @@ export class NativeStatsBridge {
   // 凌晨就会出现「今日进度提前清零」。
   async getTodayWritingStatsSummary(): Promise<ResultEnvelope<WritingStats>> {
     try {
-      await StatsWriteBarrierRegistry.getInstance().awaitCurrentWrites()
+      const blocked = await this.statsWritesBlocked<WritingStats>()
+      if (blocked !== null) return blocked
       const jsonStr: string = this.core.getNativeModule().nativeGetTodayWritingStatsSummary()
       return this.core.decodeEnvelope<WritingStats>(jsonStr, decodeWritingStats)
     } catch (e) { return nativeError<WritingStats>(e) }
@@ -125,7 +152,8 @@ export class NativeStatsBridge {
   async getWritingSpeedCurve(startDate: string, endDate: string,
     bucketMinutes: number): Promise<ResultEnvelope<SpeedCurve>> {
     try {
-      await StatsWriteBarrierRegistry.getInstance().awaitCurrentWrites()
+      const blocked = await this.statsWritesBlocked<SpeedCurve>()
+      if (blocked !== null) return blocked
       const jsonStr: string = this.core.getNativeModule().nativeGetWritingSpeedCurve(startDate, endDate, bucketMinutes)
       return this.core.decodeEnvelope<SpeedCurve>(jsonStr, decodeSpeedCurve)
     } catch (e) { return nativeError<SpeedCurve>(e) }
@@ -137,7 +165,8 @@ export class NativeStatsBridge {
   // 挂着非零值。也不在这里判断桶是否过期或强制 flush 统计事件。
   async getCurrentWritingSpeed(windowSeconds: number): Promise<ResultEnvelope<CurrentWritingSpeed>> {
     try {
-      await StatsWriteBarrierRegistry.getInstance().awaitCurrentWrites()
+      const blocked = await this.statsWritesBlocked<CurrentWritingSpeed>()
+      if (blocked !== null) return blocked
       const jsonStr: string = this.core.getNativeModule().nativeGetCurrentWritingSpeed(windowSeconds)
       return this.core.decodeEnvelope<CurrentWritingSpeed>(jsonStr, decodeCurrentWritingSpeed)
     } catch (e) { return nativeError<CurrentWritingSpeed>(e) }
@@ -179,7 +208,8 @@ export class NativeStatsBridge {
 
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
     try {
-      await StatsWriteBarrierRegistry.getInstance().awaitCurrentWrites()
+      const blocked = await this.statsWritesBlocked<RecentEdit[]>()
+      if (blocked !== null) return blocked
       const jsonStr: string = this.core.getNativeModule().nativeGetRecentEdits()
       return this.core.decodeEnvelope<RecentEdit[]>(jsonStr,
         (d: Object) => decodeArray<RecentEdit>(d, decodeRecentEdit, 'RecentEdit'))

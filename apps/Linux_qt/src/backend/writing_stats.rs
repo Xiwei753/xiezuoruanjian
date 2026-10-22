@@ -175,9 +175,9 @@ impl AppBackend {
 
     /// Issue #981：正常退出时先关闭会话，再等统计 writer 把包括最后不足 30 秒的
     /// 切片在内的所有前置记录落盘。仅 close（入队）不能保证 `process::exit` 前写完。
-    pub(crate) fn close_writing_session_and_wait(&self, reason: &str) -> bool {
+    pub(crate) fn close_writing_session_and_wait(&self, reason: &str) -> Result<(), String> {
         self.close_writing_session(reason);
-        self.stats_barrier()
+        self.stats_barrier_result()
     }
 
     /// 按编辑事务上报写作统计。
@@ -232,10 +232,16 @@ impl AppBackend {
     /// 返回 `false` 表示 worker 已退出，调用方应走明确错误/空结果，不能拿旧磁盘
     /// 数据冒充最新结果。
     fn stats_barrier(&self) -> bool {
+        self.stats_barrier_result().is_ok()
+    }
+
+    /// 与 [`Self::stats_barrier`] 相同，但保留 worker 回报的具体失败原因，
+    /// 供退出流程提示用户“统计未保存”，而不是静默关窗。
+    fn stats_barrier_result(&self) -> Result<(), String> {
         if let Some(ref writer) = self.stats_writer {
-            writer.barrier().is_ok()
+            writer.barrier()
         } else {
-            true
+            Ok(())
         }
     }
 
