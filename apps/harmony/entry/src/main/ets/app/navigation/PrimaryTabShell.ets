@@ -23,6 +23,7 @@ import { WritingScreen } from '../../feature/editor/ui/WritingScreen'
 import { StarMapScreen } from '../../feature/starmap/ui/StarMapScreen'
 import { StarMapListScreen } from '../../feature/starmap/ui/StarMapListScreen'
 import { SettingsScreen } from '../../feature/settings/ui/SettingsScreen'
+import { SearchScreen } from '../../feature/search/ui/SearchScreen'
 import { SettingsOverlayController } from '../../feature/settings/presentation/SettingsOverlayController'
 import { StatsScreen } from '../../feature/stats/ui/StatsScreen'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
@@ -445,6 +446,8 @@ export struct PrimaryTabShell {
       StarMapScreen({ screenTabIndex: ownerTabIndex })
     } else if (name === Routes.Settings) {
       SettingsScreen({ navPathStack: ownerStack, screenTabIndex: ownerTabIndex })
+    } else if (name === Routes.Search) {
+      SearchScreen({ navPathStack: ownerStack, screenTabIndex: ownerTabIndex })
     } else if (name === Routes.Stats) {
       StatsScreen({ layoutMode: this.wideLayoutMode })
     }

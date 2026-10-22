@@ -22,7 +22,7 @@ import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
  * （SujianEditorHost → WritingPane → BasicTextField），不恢复旧 EditorPresentationHost。
  *
  * 顶栏用 Material3 [SujianTopAppBar]：返回按钮 + 章节标题 + 搜索/同步/设置图标。
- * 同步/搜索/设置回调由调用方注入（窄屏暂用空实现占位，真实导航由上层 workspaceNavState 接管）。
+ * 同步/搜索/设置回调由调用方注入（全局搜索与导航由上层导航套件接管）。
  *
  * #644 评论 5462826712 第7节：窄屏正文高度改成 Column 的剩余空间。
  * 顶栏占自己的高度，正文只拿剩余高度。IME 改窗口可用高度时只重算这一块。
@@ -93,7 +93,7 @@ private fun CompactWritingTopBar(
             SujianIconButton(
                 onClick = onSearch,
                 icon = SujianIcons.Search,
-                contentDescription = stringResource(id = R.string.cd_search_dev),
+                contentDescription = stringResource(id = R.string.cd_search),
             )
             SujianIconButton(
                 onClick = onSettings,

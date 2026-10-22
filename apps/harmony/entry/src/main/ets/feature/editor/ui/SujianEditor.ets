@@ -418,9 +418,35 @@ export struct SujianEditor {
           }
         }
       )
+      // Issue #982：搜索命中的 UTF-16 offset 按当前行布局滚到视口内。
+      this.viewportController.registerReveal((utf16Offset: number): void => {
+        this.revealUtf16Offset(utf16Offset)
+      })
     }
     // Issue #768：会话创建时推送诊断快照。
     this.pushDiagnosticsSnapshot()
+  }
+
+  // Issue #982：全局搜索命中定位。用当前已显示行布局找到包含 offset 的视觉行，
+  // 把该行滚到视口上方约 1/3 处；行布局未就绪时保留 0，不做假定位。
+  private revealUtf16Offset(utf16Offset: number): void {
+    const layouts: LineLayout[] = this.displayedLineLayouts
+    if (layouts.length === 0) {
+      return
+    }
+    let targetY: number = 0
+    for (let i = 0; i < layouts.length; i++) {
+      const line: LineLayout = layouts[i]
+      if (utf16Offset <= line.endUtf16) {
+        targetY = line.y
+        break
+      }
+      targetY = line.y
+    }
+    const maxScroll: number = Math.max(0,
+      this.contentHeight + EDITOR_TOP_PADDING_VP + EDITOR_BOTTOM_PADDING_VP - this.viewportHeight)
+    const y: number = Math.max(0, Math.min(targetY + EDITOR_TOP_PADDING_VP - this.viewportHeight / 3, maxScroll))
+    this.scroller.scrollTo({ xOffset: 0, yOffset: y })
   }
 
   aboutToDisappear(): void {

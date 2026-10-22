@@ -57,6 +57,11 @@ Item {
             canvas.focusParentScene()
     }
 
+    // Issue #982：全局搜索点击星图结果时定位到具体节点 / 边 / 嵌入。
+    function revealSearchTarget(target) {
+        return canvas.revealSearchTarget(target)
+    }
+
     // Issue #814 评论 5935285879: 当前活动画布共享的唯一选中状态控制器。
     // 由 Workspace 创建，传给 Canvas；切换活动画布时选中身份带新的 routeKey。
     StarMapSelectionController {

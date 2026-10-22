@@ -24,9 +24,8 @@ import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
  * 用 [Surface]（surfaceContainerHighest + [MaterialTheme.shapes.extraLarge]）呈现
  * 草图里的圆角搜索条，而不是没有背景的 clickable Row。
  *
- * 它只是 #477 全局搜索的入口占位：不在这里实现设置过滤，
- * 也不维护 query/results 状态。#477 接入后只需在调用处替换 [onClick] 回调，
- * 不重做设置页面结构。
+ * 它只负责打开全局搜索页，不在这里实现设置过滤，
+ * 也不维护 query/results 状态；搜索请求与结果页统一由 feature/search 承担。
  */
 @Composable
 internal fun SettingsSearchEntry(
@@ -52,7 +51,7 @@ internal fun SettingsSearchEntry(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                text = stringResource(R.string.settings_search_hint),
+                text = stringResource(R.string.search_input_hint),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = dims.space8),

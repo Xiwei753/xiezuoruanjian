@@ -33,21 +33,20 @@ internal fun resolveSujianChrome(
     val isChapterTreeOrEditor =
         workspaceLocation is WorkspaceLocation.ChapterTree || workspaceLocation is WorkspaceLocation.Editor
     val showBack =
-        when {
-            currentRoute is SujianRoute.Settings -> true
-            currentRoute is SujianRoute.Works && isChapterTreeOrEditor -> canWorkspaceNavigateBack
+        when (currentRoute) {
+            is SujianRoute.Settings, is SujianRoute.Search -> true
+            is SujianRoute.Works -> isChapterTreeOrEditor && canWorkspaceNavigateBack
             else -> false
         }
     val showPrimaryNavigation =
-        when {
-            currentRoute is SujianRoute.Settings -> false
-            isEditor -> false
-            else -> true
+        when (currentRoute) {
+            is SujianRoute.Settings, is SujianRoute.Search -> false
+            else -> !isEditor
         }
     val actions =
         when (currentRoute) {
-            is SujianRoute.Settings -> emptyList()
-            is SujianRoute.Works, is SujianRoute.StarMap, is SujianRoute.Stats -> GlobalHeaderTrailingActions
+            is SujianRoute.Settings, is SujianRoute.Search -> emptyList()
+            else -> GlobalHeaderTrailingActions
         }
     return SujianChromeSpec(
         showBack = showBack,

@@ -343,6 +343,9 @@ pub struct AppBackend {
     /// 只有窗口前台且正文页可交互时才会产生切片。
     writing_session:
         std::sync::Mutex<crate::backend::app_backend::editor_backend::writing_stats::LinuxWritingSession>,
+    /// Issue #982：全局搜索 worker。搜索索引只存在于该 worker 持有的 Core 实例中，
+    /// 普通 core_api() getter 每次新建 API（索引为空），不能用于搜索。
+    search_bridge: Arc<crate::backend::search_backend::SearchBridge>,
     /// Issue #729：workspace 身份 generation。每次成功打开工作区或重置工作区时递增。
     /// 同步线程启动时捕获此值，回调时校验是否仍等于当前 generation，
     /// 不相等说明工作区已切换，旧同步结果必须丢弃，避免污染新工作区状态。
@@ -547,6 +550,10 @@ impl AppBackend {
                 false
             }
         };
+    }
+
+    pub(crate) fn search_bridge(&self) -> Arc<crate::backend::search_backend::SearchBridge> {
+        Arc::clone(&self.search_bridge)
     }
 
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {

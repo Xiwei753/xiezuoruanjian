@@ -26,8 +26,26 @@ impl SearchIndexService {
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<SearchResult> {
+        self.search_page(
+            query,
+            scope,
+            limit,
+            cursor,
+            &SearchContext::default(),
+        )
+        .items
+    }
+
+    pub fn search_page(
+        &mut self,
+        query: &str,
+        scope: SearchScope,
+        limit: usize,
+        cursor: Option<&str>,
+        context: &SearchContext,
+    ) -> SearchResultPage {
         self.apply_queue();
-        self.backend.search(query, scope, limit, cursor)
+        self.backend.search(query, scope, limit, cursor, context)
     }
 
     pub fn status(&self) -> SearchIndexStatus {
@@ -62,14 +80,7 @@ impl SearchIndexService {
                         scope: update.scope,
                         title: update.title,
                         body: update.body,
-                        target: update.target.unwrap_or(SearchTarget {
-                            project_id: None,
-                            volume_id: None,
-                            chapter_id: None,
-                            starmap_id: None,
-                            node_id: None,
-                            setting_key: None,
-                        }),
+                        target: update.target.unwrap_or_default(),
                     });
                 }
             }

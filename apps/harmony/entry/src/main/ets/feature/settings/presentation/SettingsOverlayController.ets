@@ -25,6 +25,8 @@ import hilog from '@ohos.hilog'
 import { UIContext, ComponentContent } from '@kit.ArkUI'
 import { WideLayoutMode, getWideLayoutState } from '../../../app/navigation/wide/WideLayoutMode'
 import { createSettingsOverlayContent, SettingsOverlayArgs } from '../ui/wide/WideSettingsOverlay'
+import { SearchOverlayController } from '../../search/presentation/SearchOverlayController'
+import { SearchContext } from '../../../corebridge/dto/SearchDtos'
 
 const TAG = 'SettingsOverlayController'
 const DOMAIN = 0x0000
@@ -90,7 +92,18 @@ export class SettingsOverlayController {
     }
 
     const args: SettingsOverlayArgs = {
-      onRequestClose: () => { this.close() }
+      onRequestClose: () => { this.close() },
+      onOpenGlobalSearch: (section: string) => {
+        const context: SearchContext = { originScreen: 'settings' }
+        if (section.length > 0) {
+          context.currentSettingsSection = section
+        }
+        // 搜索浮层叠在设置浮层之上；关闭搜索后仍回到原来的设置浮层与分类位置。
+        SearchOverlayController.getInstance().open(context, '', (): void => {
+          // 搜索命中并导航到其他页面时，设置浮层也一起退出，避免遮住目标页面。
+          this.close()
+        })
+      }
     }
     const content = createSettingsOverlayContent(this.uiContext, args)
     this.dialogContent = content

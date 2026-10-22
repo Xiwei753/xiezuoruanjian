@@ -376,6 +376,10 @@ impl AppBackend {
         self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
         // 保存 layout 快照，供普通 core_api() getter 和后台同步线程使用。
         self.current_workspace_git_layout = Some(layout.clone());
+        // Issue #982：把当前工作区交给常驻搜索 worker。索引在该线程重建，
+        // 后续按键查询只查内存索引，不读盘也不阻塞 UI。
+        self.search_bridge()
+            .open(path.to_string(), projects_root_str.clone(), layout.clone());
         // Issue #958：把 RPM 安装的内置中文 KenLM 模型作为兜底交给 Core。
         // 此时 current_data_root/current_workspace_git_layout 已设置完毕，
         // core_api() 可用。方法内部只在 Core 从未配置过模型且内置文件存在时写入，
@@ -495,6 +499,8 @@ impl AppBackend {
     // 关闭/切换工作区的共享内部逻辑：清数据根状态、清选区、清树、重置同步状态、清编辑器、发信号。
     // 不清 last_workspace_path，由调用方（close_workspace / switch_workspace）决定是否清。
     fn reset_workspace_state(&mut self) {
+        // Issue #982：工作区关闭/切换时释放搜索 worker 持有的 Core 实例和索引。
+        self.search_bridge().close();
         // Issue #729：切工作区/关闭工作区时，先取消正在运行的同步并使其回调失效。
         // a. 取消当前同步令牌：标记旧同步已取消（平台层持有，core sync 本轮不检查，
         //    但 cancel 是同步语义的一部分，未来 core sync 可集成 is_cancelled 提前终止）。

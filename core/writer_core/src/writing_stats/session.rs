@@ -150,6 +150,7 @@ impl WritingActivitySegment {
             let mut slice = self.clone();
             slice.event_id = format!("{}@{}", self.event_id, date);
             slice.local_date = date;
+            slice.start_at_ms = cursor;
             slice.end_at_ms = slice_end;
             slice.duration_ms = u64::try_from(slice_end - cursor).unwrap_or(0);
             slices.push(slice);
@@ -578,6 +579,39 @@ mod tests {
         assert_eq!(flushed.len(), 1);
         assert_eq!(flushed[0].duration_ms, 30_000);
         assert_ne!(flushed[0].session_id, closed[0].session_id);
+    }
+
+    #[test]
+    fn segment_split_by_local_date_moves_each_slice_start() {
+        let base = 1_700_000_000_000;
+        let midnight = next_local_midnight_ms(base).unwrap().unwrap();
+        let start = midnight - 60_000;
+        let end = midnight + 60_000;
+        let segment = WritingActivitySegment::new(
+            "segment-midnight".to_string(),
+            "device",
+            Platform::Desktop,
+            "desktop",
+            "project",
+            "volume",
+            "chapter",
+            "session",
+            start,
+            end,
+            PAUSE_REASON_CLOSE,
+        )
+        .unwrap();
+        let slices = segment.split_by_local_date().unwrap();
+        assert_eq!(slices.len(), 2);
+        assert_eq!(slices[0].start_at_ms, start);
+        assert_eq!(slices[0].end_at_ms, midnight);
+        assert_eq!(slices[1].start_at_ms, midnight);
+        assert_eq!(slices[1].end_at_ms, end);
+        assert_eq!(
+            slices.iter().map(|slice| slice.duration_ms).sum::<u64>(),
+            120_000
+        );
+        assert_ne!(slices[0].local_date, slices[1].local_date);
     }
 
     #[test]

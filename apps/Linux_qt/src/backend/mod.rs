@@ -10,6 +10,8 @@ pub mod linux_theme_controller;
 pub(crate) mod message_key_mapper;
 /// Issue #727 评论 5755858583 问题3: 统一深色主题链为 ResolvedThemeUiSnapshot。
 pub mod resolved_theme_snapshot;
+/// Issue #982：全局搜索 worker 与 QML SearchBackend。
+pub(crate) mod search_backend;
 /// Issue #843：异步串行统计写入器，避免统计 I/O 阻塞 UI 线程。
 pub(crate) mod stats_writer;
 
@@ -241,6 +243,7 @@ pub struct BackendRuntime {
     settings_backend: QObjectBox<SettingsBackend>,
     sync_backend: QObjectBox<SyncBackend>,
     starmap_backend: QObjectBox<StarMapBackend>,
+    search_backend: QObjectBox<search_backend::SearchBackend>,
     theme_controller: QObjectBox<LinuxThemeController>,
     app: std::rc::Rc<std::cell::RefCell<AppBackend>>,
 }
@@ -265,6 +268,7 @@ impl BackendRuntime {
         }
         let app_ref = AppRef::new(app.clone());
         app_ref.init_snapshot();
+        let search_bridge = app.borrow().search_bridge();
 
         Self {
             workspace_backend: QObjectBox::new(WorkspaceBackend::new(app_ref.clone())),
@@ -273,6 +277,7 @@ impl BackendRuntime {
             settings_backend: QObjectBox::new(SettingsBackend::new(app_ref.clone())),
             sync_backend: QObjectBox::new(SyncBackend::new(app_ref.clone())),
             starmap_backend: QObjectBox::new(StarMapBackend::new(app_ref.clone())),
+            search_backend: QObjectBox::new(search_backend::SearchBackend::new(search_bridge)),
             theme_controller: QObjectBox::new(LinuxThemeController::new(app_ref)),
             app,
         }
@@ -298,6 +303,8 @@ impl BackendRuntime {
         engine.set_object_property("settingsBackend".into(), self.settings_backend.pinned());
         engine.set_object_property("syncBackend".into(), self.sync_backend.pinned());
         engine.set_object_property("starmapBackend".into(), self.starmap_backend.pinned());
+        // Issue #982：只给主窗口的全局搜索 overlay 使用。
+        engine.set_object_property("searchBackend".into(), self.search_backend.pinned());
         engine.set_object_property("themeController".into(), self.theme_controller.pinned());
     }
 }

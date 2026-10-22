@@ -1262,6 +1262,9 @@ pub fn bootstrap_core_api<P1: AsRef<Path>, P2: AsRef<Path>>(
         secure_storage,
     );
     api.set_workspace_git_layout(layout);
+    if let Err(e) = api.search_service_rebuild(None) {
+        log::warn!("Failed to rebuild search index on bootstrap_core_api: {e}");
+    }
     Ok(api)
 }
 

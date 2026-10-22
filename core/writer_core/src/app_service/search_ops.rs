@@ -12,6 +12,28 @@ impl super::WriterAppService {
             .global_search_json(&query, &scope, limit, cursor.as_deref())
     }
 
+    /// 带来源上下文与完整命中定位的搜索页。
+    pub fn global_search_page(
+        &self,
+        query: String,
+        scope: String,
+        limit: u32,
+        cursor: Option<String>,
+        context_json: Option<String>,
+    ) -> Result<String, WriterError> {
+        let context = context_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<crate::search::SearchContext>(json).ok())
+            .unwrap_or_default();
+        self.api.global_search_page_json(
+            &query,
+            &scope,
+            limit,
+            cursor.as_deref(),
+            Some(&context),
+        )
+    }
+
     pub fn rebuild_search_index(&self, project_id: Option<String>) -> Result<String, WriterError> {
         self.api.rebuild_search_index_json(project_id.as_deref())
     }

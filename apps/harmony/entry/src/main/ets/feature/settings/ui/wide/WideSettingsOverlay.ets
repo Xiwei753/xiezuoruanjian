@@ -9,12 +9,13 @@
 //   本组件只画内容，关闭只回调 onRequestClose，不操作 NavPathStack。
 // - 不判断窗口是否宽屏：进入这里就代表壳层已按唯一模式判定选择了浮层。
 // - 设置项、保存、主题、同步、诊断等状态与行为仍全部在 SettingsContent / SettingsViewModel，
-//   本组件只额外持有搜索框文本并通过 overlaySearchText 传给 SettingsContent。
+//   本组件只画外框并把顶部搜索接到全局搜索（Issue #982），不再维护设置页私有搜索词。
 // - 面板是窗口层级对话框，关闭后下面的页面、路由栈和滚动位置保持原状。
 
 import { UIContext, ComponentContent } from '@kit.ArkUI'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
 import { SettingsContent } from '../SettingsContent'
+import { SettingsSectionContext } from '../../presentation/SettingsSectionContext'
 
 /**
  * 宽屏设置浮层参数
@@ -22,16 +23,16 @@ import { SettingsContent } from '../SettingsContent'
 export interface SettingsOverlayArgs {
   /** 关闭回调：只关对话框，不动下面的 NavPathStack */
   onRequestClose: () => void
+  /** Issue #982：设置顶部搜索打开全局搜索（originScreen=settings）。 */
+  onOpenGlobalSearch: (section: string) => void
 }
 
 @ComponentV2
 export struct WideSettingsOverlay {
   /** 关闭回调：只关对话框 */
   @Param onRequestClose: () => void = () => {}
-
-  // 浮层自己的搜索词。窄屏路由页仍使用 SettingsContent 内部的 searchText，
-  // 宽屏把这里的最新值通过 overlaySearchText 传入内容层做纯派生过滤。
-  @Local searchText: string = ''
+  /** Issue #982：顶部搜索统一走全局搜索，不在设置浮层里另做过滤器。 */
+  @Param onOpenGlobalSearch: (section: string) => void = (_section: string): void => {}
 
   // ── 顶部返回 + 标题 ──
   @Builder
@@ -71,15 +72,12 @@ export struct WideSettingsOverlay {
         .fillColor($r('sys.color.icon_primary'))
         .margin({ left: 14, right: 8 })
 
-      TextInput({ placeholder: $r('app.string.search_settings'), text: this.searchText })
+      Text('搜索设置、作品、章节与星图')
         .layoutWeight(1)
         .height(40)
         .fontSize(14)
-        .backgroundColor(Color.Transparent)
-        .onChange((value: string) => {
-          // 只更新搜索词；可见分类卡片由 SettingsContent 纯派生，不在这里改写展开状态。
-          this.searchText = value
-        })
+        .fontColor($r('sys.color.font_secondary'))
+        .textAlign(TextAlign.Start)
     }
     .width('100%')
     .height(44)
@@ -87,6 +85,9 @@ export struct WideSettingsOverlay {
     .margin({ top: '1.5%' })
     .backgroundColor($r('sys.color.comp_background_gray'))
     .borderRadius(DesignTokens.inputFieldRadius)
+    .onClick((): void => {
+      this.onOpenGlobalSearch(SettingsSectionContext.getCurrentSection())
+    })
   }
 
   build() {
@@ -104,7 +105,8 @@ export struct WideSettingsOverlay {
       Column() {
         SettingsContent({
           overlayLayout: true,
-          overlaySearchText: this.searchText,
+          overlaySearchText: '',
+          onOpenGlobalSearch: this.onOpenGlobalSearch,
           onRequestClose: () => { this.onRequestClose() }
         })
       }
@@ -126,7 +128,8 @@ export struct WideSettingsOverlay {
 @Builder
 function WideSettingsOverlayBuilder(args: SettingsOverlayArgs) {
   WideSettingsOverlay({
-    onRequestClose: args.onRequestClose
+    onRequestClose: args.onRequestClose,
+    onOpenGlobalSearch: args.onOpenGlobalSearch
   })
 }
 

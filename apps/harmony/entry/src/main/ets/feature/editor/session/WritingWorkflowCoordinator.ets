@@ -16,6 +16,7 @@
 // Issue #629 评论6/7/8/9/11/14 的各项 close / save / leave 语义原样迁移到这里。
 
 import hilog from '@ohos.hilog'
+import { util } from '@kit.ArkTS'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { EditorSessionSnapshot, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { EditorSessionCoordinator, EditorStateUpdate } from './EditorSessionCoordinator'
@@ -63,6 +64,10 @@ export interface WritingWorkflowUpdate {
   readonly state: WritingWorkflowState
   readonly snapshot: EditorSessionSnapshot | null
   readonly editResult: EditorEditResult | null
+  // Issue #981：本条编辑事务固定下来的统计事件身份与发生时刻。
+  // 页面据此用同一时刻启动真实写作计时，避免异步写盘补时刻把首笔字数漏掉。
+  readonly statsEventId: string
+  readonly statsOccurredAtMs: number
 }
 
 export type WritingWorkflowListener = (update: WritingWorkflowUpdate) => void
@@ -173,7 +178,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
 
   // ── 显示状态回流 ──
 
-  private emit(snapshot: EditorSessionSnapshot | null, editResult: EditorEditResult | null): void {
+  private emit(snapshot: EditorSessionSnapshot | null, editResult: EditorEditResult | null,
+    statsEventId: string = '', statsOccurredAtMs: number = 0): void {
     const listener = this.listener
     if (listener === null) {
       return
@@ -192,7 +198,13 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       lastSaveFailed: this.lastSaveFailed,
       saveMessage: this.saveMessage
     }
-    const update: WritingWorkflowUpdate = { state: state, snapshot: snapshot, editResult: editResult }
+    const update: WritingWorkflowUpdate = {
+      state: state,
+      snapshot: snapshot,
+      editResult: editResult,
+      statsEventId: statsEventId,
+      statsOccurredAtMs: statsOccurredAtMs
+    }
     listener(update)
   }
 
@@ -206,12 +218,19 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     if (update.editResult !== null) {
       const delta = update.editResult.contentDelta
       this.wordCount = Math.max(0, this.wordCount + delta.insertedNonWhitespaceChars - delta.deletedNonWhitespaceChars)
+      // Issue #981：统计事件身份和发生时刻在编辑事务当场固定，异步队列不再补时刻；
+      // 页面用同一时刻锚定真实写作计时，首笔输入不会落在片段起点之前。
+      const statsOccurredAtMs: number = Date.now()
+      const statsEventId: string = util.generateRandomUUID(false)
       // Issue #829 评论 #5995146525：正文每次真实变化就在这里产出统计事件，
       // 不再等保存后比较整章。enqueueChange 只入内存队列，不跨 NAPI、不 await。
       this.statsQueue.enqueueChange(
         this.projectId, this.volumeId, this.chapterId,
-        update.editResult.cause, delta.insertedChars, delta.deletedChars
+        update.editResult.cause, delta.insertedChars, delta.deletedChars,
+        statsEventId, statsOccurredAtMs
       )
+      this.emit(snap, update.editResult, statsEventId, statsOccurredAtMs)
+      return
     }
     this.emit(snap, update.editResult)
   }

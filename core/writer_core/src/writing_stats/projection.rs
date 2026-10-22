@@ -844,6 +844,8 @@ pub fn project_measured_sessions(
     range: Option<(&str, &str)>,
 ) -> Result<MeasuredSessionAgg> {
     let mut by_device: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
+    let mut by_chapter: HashMap<(String, String, String, String), Vec<(i64, i64)>> =
+        HashMap::new();
     let mut by_session: HashMap<(String, String), Vec<(i64, i64)>> = HashMap::new();
     let mut session_dates: HashMap<(String, String), String> = HashMap::new();
 
@@ -860,6 +862,17 @@ pub fn project_measured_sessions(
             .entry(segment.device_id.clone())
             .or_default()
             .push(interval);
+        if !segment.chapter_id.is_empty() {
+            by_chapter
+                .entry((
+                    segment.device_id.clone(),
+                    segment.project_id.clone(),
+                    segment.volume_id.clone(),
+                    segment.chapter_id.clone(),
+                ))
+                .or_default()
+                .push(interval);
+        }
         if !segment.session_id.is_empty() {
             by_session
                 .entry((segment.device_id.clone(), segment.session_id.clone()))
@@ -877,12 +890,16 @@ pub fn project_measured_sessions(
     }
 
     let mut total_ms: i64 = 0;
-    let mut merged_by_device: HashMap<&str, Vec<(i64, i64)>> = HashMap::new();
-    for (device, intervals) in &by_device {
+    for intervals in by_device.values() {
         let merged = merge_intervals(intervals);
         total_ms = total_ms.saturating_add(merged.iter().map(|(s, e)| e - s).sum::<i64>());
-        merged_by_device.insert(device.as_str(), merged);
     }
+    let merged_by_chapter: HashMap<&(String, String, String, String), Vec<(i64, i64)>> =
+        by_chapter
+            .iter()
+            .filter(|(_, intervals)| !intervals.is_empty())
+            .map(|(key, intervals)| (key, merge_intervals(intervals)))
+            .collect();
 
     let mut timed_human_typed_chars: u64 = 0;
     for event in events {
@@ -893,8 +910,14 @@ pub fn project_measured_sessions(
         if date.is_empty() || !date_in_range(&date, range) {
             continue;
         }
-        if merged_by_device
-            .get(event.device_id.as_str())
+        let key = (
+            event.device_id.clone(),
+            event.project_id.clone(),
+            event.volume_id.clone(),
+            event.chapter_id.clone(),
+        );
+        if merged_by_chapter
+            .get(&key)
             .is_some_and(|intervals| interval_contains(intervals, event.timestamp_ms))
         {
             timed_human_typed_chars += u64::from(event.inserted_chars);

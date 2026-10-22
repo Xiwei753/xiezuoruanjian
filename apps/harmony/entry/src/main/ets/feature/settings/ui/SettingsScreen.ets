@@ -8,6 +8,9 @@
 
 import hilog from '@ohos.hilog'
 import { SettingsContent } from './SettingsContent'
+import { Routes, SearchRouteParams, SettingsRouteParams } from '../../../app/navigation/Routes'
+import { SearchContext } from '../../../corebridge/dto/SearchDtos'
+import { SettingsSectionContext } from '../presentation/SettingsSectionContext'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { ScreenRole } from '../../../app/navigation/ScreenSemantics'
@@ -28,11 +31,31 @@ export struct SettingsScreen {
   // Issue #768 评论5835171266 第3项：API23+ 时用 HdsNavDestination 替代 NavDestination，
   // 获得 HDS 沉浸光感材质效果。
   @Local useHdsNav: boolean = false
+  // Issue #982：搜索结果跳到具体分类时从路由参数读取。
+  private initialSection: string = ''
 
   aboutToAppear() {
     hilog.info(0x0000, 'SettingsScreen', 'route name=Settings')
+    const paramsArr = this.navPathStack.getParamByName(Routes.Settings) as SettingsRouteParams[]
+    const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
+    if (params !== null && params.section !== undefined) {
+      this.initialSection = params.section
+      SettingsSectionContext.setCurrentSection(params.section)
+    }
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+  }
+
+  // Issue #982：设置页顶部搜索调用同一全局搜索，只改变来源上下文。
+  private openGlobalSearch(section: string): void {
+    const resolvedSection: string = section.length > 0 ? section : this.initialSection
+    const context: SearchContext = { originScreen: 'settings' }
+    if (resolvedSection.length > 0) {
+      context.currentSettingsSection = resolvedSection
+      SettingsSectionContext.setCurrentSection(resolvedSection)
+    }
+    const params: SearchRouteParams = { context: context }
+    this.navPathStack.pushPath({ name: Routes.Search, param: params })
   }
 
   // ── 安全返回 ──
@@ -53,11 +76,19 @@ export struct SettingsScreen {
         onBack: () => { this.goBack() },
         onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.Settings, this.screenTabIndex) }
       }) {
-        SettingsContent({ onRequestClose: () => { this.goBack() } })
+        SettingsContent({
+          initialSection: this.initialSection,
+          onOpenGlobalSearch: (section: string): void => { this.openGlobalSearch(section) },
+          onRequestClose: () => { this.goBack() }
+        })
       }
     } else {
       NavDestination() {
-        SettingsContent({ onRequestClose: () => { this.goBack() } })
+        SettingsContent({
+          initialSection: this.initialSection,
+          onOpenGlobalSearch: (section: string): void => { this.openGlobalSearch(section) },
+          onRequestClose: () => { this.goBack() }
+        })
       }
       // Issue #768：启用 NavDestination 原生标题栏（含系统返回按钮），删除手写返回 Image。
       .hideTitleBar(false)

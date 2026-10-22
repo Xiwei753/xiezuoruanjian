@@ -70,6 +70,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
 
@@ -96,6 +101,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
 
@@ -135,6 +145,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
 
@@ -160,6 +175,11 @@ mod tests {
                     starmap_id: None,
                     node_id: None,
                     setting_key: None,
+                    edge_id: None,
+                    link_id: None,
+                    hyperlink_id: None,
+                    embed_id: None,
+                    setting_section: None,
                 }),
             });
         }
@@ -203,6 +223,11 @@ mod tests {
                     starmap_id: None,
                     node_id: None,
                     setting_key: None,
+                    edge_id: None,
+                    link_id: None,
+                    hyperlink_id: None,
+                    embed_id: None,
+                    setting_section: None,
                 }),
             });
         }
@@ -233,6 +258,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
 
@@ -266,6 +296,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
 
@@ -303,6 +338,11 @@ mod tests {
                 starmap_id: Some("sm1".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
 
@@ -382,6 +422,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         let results = search_with_service(
@@ -411,6 +456,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -426,6 +476,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: Some("n1".to_string()),
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -441,6 +496,11 @@ mod tests {
                 starmap_id: Some("s2".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
 
@@ -473,6 +533,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -488,6 +553,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: Some("n1".to_string()),
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -503,6 +573,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: Some("n2".to_string()),
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -518,6 +593,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -533,6 +613,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -548,6 +633,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -563,6 +653,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
 
@@ -1671,6 +1766,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -1686,6 +1786,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         service.enqueue_update(SearchIndexUpdate {
@@ -1701,6 +1806,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         assert_eq!(service.backend().entry_count(), 3);
@@ -1764,6 +1874,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         queue.enqueue(SearchIndexUpdate {
@@ -1779,6 +1894,11 @@ mod tests {
                 starmap_id: None,
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         queue.enqueue(SearchIndexUpdate {
@@ -1794,6 +1914,11 @@ mod tests {
                 starmap_id: Some("s1".to_string()),
                 node_id: None,
                 setting_key: None,
+                edge_id: None,
+                link_id: None,
+                hyperlink_id: None,
+                embed_id: None,
+                setting_section: None,
             }),
         });
         assert_eq!(queue.len(), 3);

@@ -42,6 +42,9 @@ import com.xiwei.sujian.feature.project.ui.WorkspaceLocation
 import com.xiwei.sujian.feature.project.ui.WorkspaceNavigator
 import com.xiwei.sujian.feature.project.ui.buildInitialHistory
 import com.xiwei.sujian.feature.project.ui.deriveRestoreDestination
+import com.xiwei.sujian.feature.search.data.model.SearchContext
+import com.xiwei.sujian.feature.search.data.model.SearchOriginScreens
+import com.xiwei.sujian.feature.search.ui.SearchScreen
 import com.xiwei.sujian.feature.settings.ui.SettingsRoute
 import com.xiwei.sujian.feature.starmap.ui.StarMapPlaceholderScreen
 import com.xiwei.sujian.feature.stats.ui.StatsScreen
@@ -80,6 +83,9 @@ private fun SujianRoute.toTopDestination(): SujianDestination =
         is SujianRoute.StarMap -> SujianDestination.StarMap
         is SujianRoute.Stats -> SujianDestination.Stats
         is SujianRoute.Settings -> SujianDestination.Works
+        is SujianRoute.Search ->
+            runCatching { SujianDestination.valueOf(topLevel) }
+                .getOrDefault(SujianDestination.Works)
     }
 
 internal fun SujianDestination.toRoute(): SujianRoute =
@@ -165,12 +171,16 @@ private fun rememberSujianEntryProvider(
     // rememberCoroutineScope 必须在 Composable 里调用，所以回调创建在这里而不是 rememberWorksEntry。
     val coroutineScope = rememberCoroutineScope()
     val editorCallbacks =
-        remember(coroutineScope, deps, topLevelBackStack) {
+        remember(coroutineScope, deps, topLevelBackStack, context) {
             EditorWorkspaceCallbacks(
                 onSync = { coroutineScope.launch { deps.syncCoordinator.runFullSync(SyncTrigger.Manual) } },
                 onSettings = { topLevelBackStack.add(SujianRoute.Settings) },
-                // 后续实现全局搜索入口
-                onSearch = { },
+                onSearch = {
+                    topLevelBackStack.openSearch(
+                        appState = context.appState,
+                        workspaceLocation = context.workspaceNavState.currentLocation,
+                    )
+                },
             )
         }
     return remember(context, editorCallbacks) {
@@ -195,7 +205,32 @@ private fun rememberSujianEntryProvider(
                         // 过渡由 SettingsRoute 自身 graphicsLayer 绘制层动画提供。
                         is SujianRoute.Settings ->
                             NavEntry(key, metadata = noPageTransitionMetadata) { route ->
-                                SettingsRoute()
+                                SettingsRoute(
+                                    onOpenSearch = { section ->
+                                        topLevelBackStack.openSearch(
+                                            appState = context.appState,
+                                            workspaceLocation = context.workspaceNavState.currentLocation,
+                                            settingsSection = section?.searchContextValue(),
+                                            originScreenOverride = SearchOriginScreens.Settings,
+                                        )
+                                    },
+                                )
+                            }
+                        is SujianRoute.Search ->
+                            NavEntry(key, metadata = noPageTransitionMetadata) { route ->
+                                SearchScreen(
+                                    searchContext = key.toSearchContext(),
+                                    scope = key.scope,
+                                    onOpenResult = { hit ->
+                                        openSearchResult(
+                                            hit = hit,
+                                            appState = context.appState,
+                                            workspaceNavState = context.workspaceNavState,
+                                            topLevelBackStack = topLevelBackStack,
+                                            deps = deps,
+                                        )
+                                    },
+                                )
                             }
                     }
                 else -> NavEntry(key) {}
@@ -432,7 +467,13 @@ fun SujianNavigationSuite(
 
     SujianWorkspaceBackEffects(currentRoute, workspaceNavState)
     SujianRouteEffects(currentRoute, currentTopDestination)
-    val env = SujianTopBarEnv(syncState, coroutineScope, deps, topLevelBackStack)
+    val onOpenSearch: () -> Unit = {
+        topLevelBackStack.openSearch(
+            appState = appState,
+            workspaceLocation = workspaceNavState.currentLocation,
+        )
+    }
+    val env = SujianTopBarEnv(syncState, coroutineScope, deps, topLevelBackStack, onOpenSearch)
     val topBarInfo = rememberSujianTopBarInfo(currentRoute, appState, chrome, env, workspaceNavState)
 
     // 底栏点击只调 addTopLevel；同一已选中项由 addTopLevel 内部早退。
@@ -634,6 +675,7 @@ internal fun resolveScreenState(
 ): String =
     when {
         currentRoute is SujianRoute.Settings -> "Settings"
+        currentRoute is SujianRoute.Search -> "Search"
         currentRoute is SujianRoute.Works &&
             workspaceNavState.currentLocation is WorkspaceLocation.Editor -> "Editor"
         else -> currentTopDestination.name
@@ -665,6 +707,21 @@ private fun SujianProcessStateEffect(
         }
     }
 }
+
+/**
+ * 搜索路由 → Core SearchContext。
+ *
+ * 路由字段在打开搜索页时固化，保证返回后 origin 状态不被后续选择变化改写。
+ */
+private fun SujianRoute.Search.toSearchContext(): SearchContext =
+    SearchContext(
+        originScreen = originScreen,
+        currentProjectId = projectId,
+        currentVolumeId = volumeId,
+        currentChapterId = chapterId,
+        currentStarmapId = starmapId,
+        currentSettingsSection = settingsSection,
+    )
 
 /**
  * 同步状态摘要字符串。提取为 internal 便于单测正反验证。

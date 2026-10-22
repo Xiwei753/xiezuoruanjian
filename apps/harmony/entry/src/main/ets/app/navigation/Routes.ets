@@ -5,6 +5,7 @@
 // 不用 TextEditSession.revision；viewport 用强类型 EditorViewportState，不用裸 object。
 
 import { EditorViewportState } from '../../feature/editor/render/EditorViewportState'
+import { SearchContext } from '../../corebridge/dto/SearchDtos'
 
 export enum Routes {
   Home = 'Home',
@@ -13,12 +14,15 @@ export enum Routes {
   StarMapList = 'StarMapList',
   StarMap = 'StarMap',
   Settings = 'Settings',
-  Stats = 'Stats'
+  Stats = 'Stats',
+  Search = 'Search'
 }
 
 export interface WorkspaceRouteParams {
   projectId: string
   projectName: string
+  // 搜索结果跳到卷时展开对应卷卡；普通进入不传。
+  focusVolumeId?: string
 }
 
 export interface WritingRouteParams {
@@ -33,6 +37,11 @@ export interface WritingRouteParams {
   cursor?: number                   // UTF-16 code unit offset
   viewport?: EditorViewportState    // UI 滚动位置（强类型，不写 Core）
   contentHash?: string              // 跨设备稳定内容身份（不用 revision）
+  // 全局搜索命中（Issue #982）。searchByteStart/searchByteEnd 是 Core 原文 UTF-8 byte 偏移；
+  // searchField='body' 时 WritingScreen 在正文中转 UTF-16 后选中并滚动到该范围。
+  searchByteStart?: number
+  searchByteEnd?: number
+  searchField?: string
 }
 
 export interface StarMapRouteParams {
@@ -40,6 +49,19 @@ export interface StarMapRouteParams {
   starmapTitle: string
   parentStarmapId?: string
   parentStarmapTitle?: string
+  // 搜索结果精确落到节点/边/嵌入；页面加载图后写入共享 selectionState。
+  focusKind?: string
+  focusId?: string
 }
 
-// Settings 页是应用级页面，不需要路由参数（Issue #784 评论 5856805657）。
+// 全局搜索路由参数：打开搜索页时携带来源上下文，不改变底层页面状态。
+export interface SearchRouteParams {
+  context: SearchContext
+  initialQuery?: string
+}
+
+// Settings 页是应用级页面（Issue #784 评论 5856805657）。
+// section 仅用于搜索结果跳转到具体设置分类。
+export interface SettingsRouteParams {
+  section?: string
+}

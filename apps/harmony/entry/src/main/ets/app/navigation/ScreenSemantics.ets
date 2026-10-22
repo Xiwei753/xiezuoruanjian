@@ -20,7 +20,8 @@ export enum ScreenRole {
   StarMapDetail = 'StarMapDetail',
   Stats = 'Stats',
   Settings = 'Settings',
-  Sync = 'Sync'
+  Sync = 'Sync',
+  Search = 'Search'
 }
 
 /** 动作角色 — 平台侧真实存在的产品动作。 */
@@ -158,6 +159,10 @@ export function resolveActionSlots(screenRole: ScreenRole): ActionSlot[] {
   if (screenRole === ScreenRole.Settings) {
     return [slot(ActionRole.Back, ActionTarget.App, ActionRegion.HeaderLeading, 10, false)]
   }
+  if (screenRole === ScreenRole.Search) {
+    // 搜索页使用 NavDestination 原生标题栏返回，不注册额外全局动作。
+    return []
+  }
   // Sync
   return [
     slot(ActionRole.Back, ActionTarget.App, ActionRegion.HeaderLeading, 10, false),
@@ -169,6 +174,7 @@ export function resolveActionSlots(screenRole: ScreenRole): ActionSlot[] {
 export function resolveShowPrimaryNavigation(screenRole: ScreenRole): boolean {
   return !(screenRole === ScreenRole.Writing ||
     screenRole === ScreenRole.Settings ||
+    screenRole === ScreenRole.Search ||
     screenRole === ScreenRole.StarMapDetail)
 }
 

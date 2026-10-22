@@ -158,6 +158,14 @@ export class SettingsViewModel {
     return this.presentationStore.isSectionExpanded(section)
   }
 
+  /** 搜索结果定位到设置分类：只展开，不翻转用户已有状态。 */
+  expandSection(section: SettingsSectionId): void {
+    if (this.presentationStore.isSectionExpanded(section)) {
+      return
+    }
+    this.presentationStore.toggleSection(section)
+  }
+
   // ── 加载数据 ──
 
   async loadData(): Promise<void> {

@@ -5,6 +5,7 @@ import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
+import { SearchContext, SearchResultPage } from './dto/SearchDtos'
 import { WritingActivitySegmentInput } from './dto/StatsDtos'
 import { NativeCoreModule } from './native/NativeCoreModule'
 import { NativeAppStateBridge } from './native/NativeAppStateBridge'
@@ -14,6 +15,7 @@ import { NativeSettingsBridge } from './native/NativeSettingsBridge'
 import { NativeSyncBridge } from './native/NativeSyncBridge'
 import { NativeStatsBridge } from './native/NativeStatsBridge'
 import { NativeStarMapBridge } from './native/NativeStarMapBridge'
+import { NativeSearchBridge } from './native/NativeSearchBridge'
 import { NativeDiagnosticsBridge } from './native/NativeDiagnosticsBridge'
 import { NativeInitParams } from '../platform/init/NativeInitParams'
 
@@ -32,6 +34,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private syncBridge = new NativeSyncBridge(this.core)
   private statsBridge = new NativeStatsBridge(this.core)
   private starMapBridge = new NativeStarMapBridge(this.core)
+  private searchBridge = new NativeSearchBridge(this.core)
   private diagnosticsBridge = new NativeDiagnosticsBridge(this.core)
 
   static getInstance(): NativeWriterCoreBridge {
@@ -407,6 +410,18 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
     return this.statsBridge.getRecentEdits()
+  }
+
+  // ── Global search ──
+
+  async globalSearchPage(
+    query: string,
+    scope: string,
+    limit: number,
+    cursor: string | null,
+    context: SearchContext
+  ): Promise<ResultEnvelope<SearchResultPage>> {
+    return this.searchBridge.globalSearchPage(query, scope, limit, cursor, context)
   }
 
   // ── Native Status ──

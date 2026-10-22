@@ -33,6 +33,8 @@ interface QueuedEditorChange {
   cause: EditorTransactionCause
   insertedChars: number
   deletedChars: number
+  eventId: string
+  occurredAtMs: number
 }
 
 export class EditorStatsQueue {
@@ -50,7 +52,9 @@ export class EditorStatsQueue {
           chapterId: item.chapterId,
           cause: item.cause,
           insertedChars: item.insertedChars,
-          deletedChars: item.deletedChars
+          deletedChars: item.deletedChars,
+          eventId: item.eventId,
+          occurredAtMs: item.occurredAtMs
         }
         // 这里 await 的 Promise 背后是 Node-API async work：Rust 调用跑在线程池，
         // 磁盘 I/O 不在 ArkUI 主线程上。串行保证同时只有一条在飞。
@@ -64,7 +68,8 @@ export class EditorStatsQueue {
    * 所以 state listener 调它不会阻塞编辑主链。
    */
   enqueueChange(projectId: string, volumeId: string, chapterId: string,
-    cause: EditorTransactionCause, insertedChars: number, deletedChars: number): void {
+    cause: EditorTransactionCause, insertedChars: number, deletedChars: number,
+    eventId: string, occurredAtMs: number): void {
     // 纯光标移动 / 选区变化：Core 那侧也不落盘，这里直接不进队列。
     if (insertedChars <= 0 && deletedChars <= 0) {
       return
@@ -81,7 +86,9 @@ export class EditorStatsQueue {
       chapterId: chapterId,
       cause: cause,
       insertedChars: insertedChars,
-      deletedChars: deletedChars
+      deletedChars: deletedChars,
+      eventId: eventId,
+      occurredAtMs: occurredAtMs
     })
   }
 

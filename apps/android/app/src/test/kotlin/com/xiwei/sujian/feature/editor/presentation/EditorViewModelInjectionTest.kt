@@ -81,6 +81,8 @@ class EditorViewModelInjectionTest {
                 override val projectRepository: ProjectRepository = ProjectRepository(app, bridge)
                 override val chapterRepository: ChapterRepository = ChapterRepository(app, bridge)
                 override val recentEditsRepository: RecentEditsRepository = RecentEditsRepository(app, bridge)
+                override val searchRepository: com.xiwei.sujian.feature.search.data.SearchRepository =
+                    com.xiwei.sujian.feature.search.data.SearchRepository(app, bridge.searchBridge)
                 override val statsRepository: WritingStatsRepository =
                     WritingStatsRepository(bridge.statsBridge, statsWriterScope())
                 override val settingsRepository: SettingsRepository = SettingsRepository(app, bridge)

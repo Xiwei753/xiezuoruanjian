@@ -340,6 +340,9 @@ pub struct EditorBackend {
     resume_writing_session: qt_method!(fn(&self)),
     #[allow(dead_code)]
     close_writing_session: qt_method!(fn(&self, reason: QString)),
+    /// Issue #981：关闭会话并等统计 writer 落盘，供正常退出路径使用。
+    #[allow(dead_code)]
+    close_writing_session_and_wait: qt_method!(fn(&self, reason: QString) -> bool),
     #[allow(dead_code)]
     has_selected_chapter: qt_method!(fn(&self) -> bool),
     #[allow(dead_code)]
@@ -1435,6 +1438,18 @@ impl EditorBackend {
                 "close_writing_session skipped due to borrow conflict",
             );
         }
+    }
+    fn close_writing_session_and_wait(&self, reason: QString) -> bool {
+        let reason = reason.to_string();
+        self.with_app(|app| app.close_writing_session_and_wait(&reason))
+            .unwrap_or_else(|_| {
+                crate::backend::app_backend::debug_error_static(
+                    "editor_backend",
+                    "BORROW_CONFLICT",
+                    "close_writing_session_and_wait skipped due to borrow conflict",
+                );
+                false
+            })
     }
     fn has_selected_chapter(&self) -> bool {
         self.snap().has_selected_chapter

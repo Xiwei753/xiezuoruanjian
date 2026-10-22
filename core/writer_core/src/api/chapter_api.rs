@@ -49,6 +49,17 @@ impl WriterCoreApi {
             .core_write()
             .create_chapter_with_id(project_id, volume_id, id, title, order)
             .map_err(WriterError::from)?;
+        let title_entry = crate::search::extractor::extract_chapter_title_entry(
+            project_id, volume_id, id, title,
+        );
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: title_entry.object_id.clone(),
+            scope: title_entry.scope,
+            title: title_entry.title.clone(),
+            body: title_entry.body.clone(),
+            target: Some(title_entry.target.clone()),
+        });
         Ok(chapter.into())
     }
 

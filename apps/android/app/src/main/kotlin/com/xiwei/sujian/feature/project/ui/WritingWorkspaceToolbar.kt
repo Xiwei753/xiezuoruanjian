@@ -165,7 +165,7 @@ private fun WritingToolbarTrailingAction(
             SujianIconButton(
                 onClick = callbacks.onSearch,
                 icon = SujianIcons.Search,
-                contentDescription = stringResource(id = R.string.cd_search_dev),
+                contentDescription = stringResource(id = R.string.cd_search),
                 semanticId = SujianSemanticIds.NavigationSearch,
             )
         SujianChromeAction.Settings ->

@@ -1,6 +1,25 @@
 use super::*;
 
+fn parse_scope(scope: &str) -> crate::search::SearchScope {
+    match scope {
+        "chapterBody" => crate::search::SearchScope::ChapterBody,
+        "chapterTitle" => crate::search::SearchScope::ChapterTitle,
+        "chapterNote" => crate::search::SearchScope::ChapterNote,
+        "projectTitle" => crate::search::SearchScope::ProjectTitle,
+        "volumeTitle" => crate::search::SearchScope::VolumeTitle,
+        "starmapTitle" => crate::search::SearchScope::StarmapTitle,
+        "starmapNode" => crate::search::SearchScope::StarmapNode,
+        "starmapEdgeLabel" => crate::search::SearchScope::StarmapEdgeLabel,
+        "starmapHyperlink" => crate::search::SearchScope::StarmapHyperlink,
+        "starmapLink" => crate::search::SearchScope::StarmapLink,
+        "starmapEmbed" => crate::search::SearchScope::StarmapEmbed,
+        "setting" => crate::search::SearchScope::Setting,
+        _ => crate::search::SearchScope::All,
+    }
+}
+
 impl WriterCoreApi {
+    /// 旧接口：只返回当前页条目数组，供尚未迁移的调用方使用。
     pub fn global_search_json(
         &self,
         query: &str,
@@ -8,23 +27,28 @@ impl WriterCoreApi {
         limit: u32,
         cursor: Option<&str>,
     ) -> ApiResult<String> {
-        let scope = match scope {
-            "chapterBody" => crate::search::SearchScope::ChapterBody,
-            "chapterTitle" => crate::search::SearchScope::ChapterTitle,
-            "chapterNote" => crate::search::SearchScope::ChapterNote,
-            "projectTitle" => crate::search::SearchScope::ProjectTitle,
-            "volumeTitle" => crate::search::SearchScope::VolumeTitle,
-            "starmapTitle" => crate::search::SearchScope::StarmapTitle,
-            "starmapNode" => crate::search::SearchScope::StarmapNode,
-            "starmapEdgeLabel" => crate::search::SearchScope::StarmapEdgeLabel,
-            "starmapHyperlink" => crate::search::SearchScope::StarmapHyperlink,
-            "starmapLink" => crate::search::SearchScope::StarmapLink,
-            "starmapEmbed" => crate::search::SearchScope::StarmapEmbed,
-            "setting" => crate::search::SearchScope::Setting,
-            _ => crate::search::SearchScope::All,
-        };
-        let results = self.search_service_search(query, scope, limit as usize, cursor);
+        let results = self.search_service_search(query, parse_scope(scope), limit as usize, cursor);
         Self::json_string(&results)
+    }
+
+    /// 带来源上下文与翻页游标的完整搜索页。
+    pub fn global_search_page_json(
+        &self,
+        query: &str,
+        scope: &str,
+        limit: u32,
+        cursor: Option<&str>,
+        context: Option<&crate::search::SearchContext>,
+    ) -> ApiResult<String> {
+        let context = context.cloned().unwrap_or_default();
+        let page = self.search_service_page(
+            query,
+            parse_scope(scope),
+            limit as usize,
+            cursor,
+            &context,
+        );
+        Self::json_string(&page)
     }
 
     pub fn rebuild_search_index_json(&self, project_id: Option<&str>) -> ApiResult<String> {
@@ -52,26 +76,11 @@ impl WriterCoreApi {
             "delete" => crate::search::SearchIndexAction::Delete,
             _ => crate::search::SearchIndexAction::Upsert,
         };
-        let scope = match scope {
-            "chapterBody" => crate::search::SearchScope::ChapterBody,
-            "chapterTitle" => crate::search::SearchScope::ChapterTitle,
-            "chapterNote" => crate::search::SearchScope::ChapterNote,
-            "projectTitle" => crate::search::SearchScope::ProjectTitle,
-            "volumeTitle" => crate::search::SearchScope::VolumeTitle,
-            "starmapTitle" => crate::search::SearchScope::StarmapTitle,
-            "starmapNode" => crate::search::SearchScope::StarmapNode,
-            "starmapEdgeLabel" => crate::search::SearchScope::StarmapEdgeLabel,
-            "starmapHyperlink" => crate::search::SearchScope::StarmapHyperlink,
-            "starmapLink" => crate::search::SearchScope::StarmapLink,
-            "starmapEmbed" => crate::search::SearchScope::StarmapEmbed,
-            "setting" => crate::search::SearchScope::Setting,
-            _ => crate::search::SearchScope::All,
-        };
         let target = target.cloned();
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action,
             object_id: object_id.to_string(),
-            scope,
+            scope: parse_scope(scope),
             title: title.to_string(),
             body: body.to_string(),
             target,

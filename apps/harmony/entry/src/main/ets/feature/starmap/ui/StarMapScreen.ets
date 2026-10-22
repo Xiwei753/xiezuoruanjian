@@ -78,6 +78,10 @@ export struct StarMapScreen {
   // Canvas 生命周期
   @State canvasActive: boolean = false
 
+  // Issue #982：搜索结果精确落到节点/边/嵌入时，图加载完成后写入全树共享选中态。
+  private searchFocusKind: string = ''
+  private searchFocusId: string = ''
+
   // 加载序号：防止切层后旧异步结果覆盖新层
   private graphLoadGeneration: number = 0
 
@@ -120,6 +124,10 @@ export struct StarMapScreen {
       this.rootStarmapId = params.starmapId
       this.starmapTitle = params.starmapTitle
       this.rootStarmapTitle = params.starmapTitle
+      if (params.focusKind !== undefined && params.focusId !== undefined) {
+        this.searchFocusKind = params.focusKind
+        this.searchFocusId = params.focusId
+      }
       this.loadStarMap()
     } else {
       // 没有路由参数时不自动选择第一张星图，直接显示空状态
@@ -215,6 +223,7 @@ export struct StarMapScreen {
 
       if (result.success && result.data) {
         this.graph = result.data
+        this.applySearchFocus()
       } else {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap').id)
       }
@@ -229,6 +238,23 @@ export struct StarMapScreen {
           requestedStarmapId === this.starmapId) {
         this.isLoading = false
       }
+    }
+  }
+
+  /**
+   * Issue #982：搜索结果跳转星图对象。选中态是页面唯一真相，Scene 会据 scenePath+kind+id
+   * 在所有层里找到对应对象；定位属于显示层，不改星图数据。
+   */
+  private applySearchFocus(): void {
+    if (this.searchFocusKind.length === 0 || this.searchFocusId.length === 0) {
+      return
+    }
+    if (this.searchFocusKind === 'node') {
+      this.selectionState.select([], 'node', this.searchFocusId)
+    } else if (this.searchFocusKind === 'edge') {
+      this.selectionState.select([], 'edge', this.searchFocusId)
+    } else if (this.searchFocusKind === 'embed') {
+      this.selectionState.select([], 'embed', this.searchFocusId)
     }
   }
 

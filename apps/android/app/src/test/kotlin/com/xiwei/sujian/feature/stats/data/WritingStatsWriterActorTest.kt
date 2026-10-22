@@ -51,6 +51,8 @@ class WritingStatsWriterActorTest {
                 cause = EditorTransactionCauseDto.TYPING,
                 insertedChars = 5,
                 deletedChars = 0,
+                eventId = "test-event-1",
+                occurredAtMs = 1_700_000_000_000,
             )
             assertEquals(
                 "#843：recordEditorChangeStats 只 enqueue — 返回时不得已同步写盘",
@@ -92,6 +94,8 @@ class WritingStatsWriterActorTest {
                 cause = EditorTransactionCauseDto.TYPING,
                 insertedChars = 5,
                 deletedChars = 0,
+                eventId = "test-event-1",
+                occurredAtMs = 1_700_000_000_000,
             )
 
             assertFalse(

@@ -8,12 +8,13 @@ impl super::WriterCore {
         scope: SearchScope,
         limit: usize,
         cursor: Option<&str>,
-    ) -> Vec<SearchResult> {
+        context: &SearchContext,
+    ) -> SearchResultPage {
         let mut service = self
             .search_service
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        service.search(query, scope, limit, cursor)
+        service.search_page(query, scope, limit, cursor, context)
     }
 
     pub fn rebuild_search_index(&self, project_id: Option<&str>) -> Result<SearchIndexStatus> {

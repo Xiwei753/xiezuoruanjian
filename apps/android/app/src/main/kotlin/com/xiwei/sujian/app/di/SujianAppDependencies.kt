@@ -7,6 +7,7 @@ import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
+import com.xiwei.sujian.feature.search.data.SearchRepository
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import com.xiwei.sujian.feature.sync.data.AppSyncDataBarrier
@@ -20,6 +21,7 @@ interface AppServiceContainer {
     val projectRepository: ProjectRepository
     val chapterRepository: ChapterRepository
     val recentEditsRepository: RecentEditsRepository
+    val searchRepository: SearchRepository
     val statsRepository: WritingStatsRepository
     val settingsRepository: SettingsRepository
     val themeRepository: ThemeRepository
@@ -63,6 +65,8 @@ class DefaultAppServiceContainer(context: Context) : AppServiceContainer {
     override val projectRepository: ProjectRepository = ProjectRepository(appContext, appServiceBridge)
     override val chapterRepository: ChapterRepository = ChapterRepository(appContext, appServiceBridge)
     override val recentEditsRepository: RecentEditsRepository = RecentEditsRepository(appContext, appServiceBridge)
+    override val searchRepository: SearchRepository =
+        SearchRepository(appContext, appServiceBridge.searchBridge)
     override val statsRepository: WritingStatsRepository =
         WritingStatsRepository(appServiceBridge.statsBridge, statsWriterScope)
     override val settingsRepository: SettingsRepository = SettingsRepository(appContext, appServiceBridge)

@@ -195,6 +195,8 @@ class TestSujianAppDependencies(
         com.xiwei.sujian.feature.project.data.ChapterRepository(appContext, appServiceBridge)
     override val recentEditsRepository: com.xiwei.sujian.feature.project.data.RecentEditsRepository =
         com.xiwei.sujian.feature.project.data.RecentEditsRepository(appContext, appServiceBridge)
+    override val searchRepository: com.xiwei.sujian.feature.search.data.SearchRepository =
+        com.xiwei.sujian.feature.search.data.SearchRepository(appContext, appServiceBridge.searchBridge)
 
     // 测试环境 stats writer actor scope，与生产 DefaultAppServiceContainer
     // 同语义（SupervisorJob + Dispatchers.IO）；releaseRuntime 时取消以隔离测试，避免跨用例泄漏。

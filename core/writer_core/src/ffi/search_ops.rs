@@ -14,6 +14,7 @@ fn parse_scope(s: &str) -> crate::search::SearchScope {
         "starmapEdgeLabel" => crate::search::SearchScope::StarmapEdgeLabel,
         "starmapHyperlink" => crate::search::SearchScope::StarmapHyperlink,
         "starmapLink" => crate::search::SearchScope::StarmapLink,
+        "starmapEmbed" => crate::search::SearchScope::StarmapEmbed,
         "setting" => crate::search::SearchScope::Setting,
         _ => crate::search::SearchScope::All,
     }
@@ -60,6 +61,45 @@ pub unsafe extern "C" fn writer_core_global_search(
             .global_search(query_str, scope_str, limit, cursor_opt)
             .map_err(|e| format!("{}", e))?;
         Ok(results)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SEARCH_ERROR", &e),
+    }
+}
+
+/// # Safety
+/// `query`, `scope`, optional `cursor` and optional `context_json` must be valid
+/// null-terminated UTF-8 C strings. Returns a caller-owned C string. Free with
+/// `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_global_search_page(
+    query: *const c_char,
+    scope: *const c_char,
+    limit: u32,
+    cursor: *const c_char,
+    context_json: *const c_char,
+) -> *mut c_char {
+    let query_str = match c_str_to_rust(query) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid query: error {}", e)),
+    };
+    let scope_str = match c_str_to_rust(scope) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid scope: error {}", e)),
+    };
+    let cursor_opt = if cursor.is_null() {
+        None
+    } else {
+        c_str_to_rust(cursor).ok()
+    };
+    let context_opt = if context_json.is_null() {
+        None
+    } else {
+        c_str_to_rust(context_json).ok()
+    };
+    match with_app_service(|svc| {
+        svc.global_search_page(query_str, scope_str, limit, cursor_opt, context_opt)
+            .map_err(|e| format!("{}", e))
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("SEARCH_ERROR", &e),

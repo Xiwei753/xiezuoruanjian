@@ -171,6 +171,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/DesktopTopBar.qml" as "DesktopTopBar.qml",
     // Issue #790 评论 5875963057: 全局顶栏公共入口组件
     "qml/GlobalTopActions.qml" as "GlobalTopActions.qml",
+    "qml/GlobalSearchOverlay.qml" as "GlobalSearchOverlay.qml",
     "qml/AppController.qml" as "AppController.qml",
     "qml/ProjectController.qml" as "ProjectController.qml",
     "qml/StarMapController.qml" as "StarMapController.qml",

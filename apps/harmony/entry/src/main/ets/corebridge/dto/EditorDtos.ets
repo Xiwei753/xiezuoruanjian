@@ -44,6 +44,9 @@ export interface EditorChangeStatsInput {
   cause: EditorTransactionCause
   insertedChars: number
   deletedChars: number
+  // Issue #981：编辑事务发生当场固定，重发/异步处理都不再改时刻。
+  eventId: string
+  occurredAtMs: number
 }
 
 // ─── Editor Core DTOs ─── 与 Core api/types/editor.rs 真实契约对齐

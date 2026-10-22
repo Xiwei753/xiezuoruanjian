@@ -1,15 +1,19 @@
 // NavigationHeaderActionDispatcher — ActionRole → 行为的唯一映射。
 // Sync 调共享 bridge 的 performSync()，Settings 交给 SettingsOverlayController：
 // 宽屏由后者用 WideSettingsOverlay 打开窗口级浮层，窄屏进入 Routes.Settings，
-// Search 走全局搜索入口（功能未接完也不删 slot）。
+// Search 走全局搜索：窄屏进 Routes.Search，宽屏由 SearchOverlayController 打开窗口内浮层。
 //
 // Issue #784 评论 5856805657：同步行为由全局 dispatcher 持有，不再各页面各写一份。
 
 import hilog from '@ohos.hilog'
 import { UIContext } from '@kit.ArkUI'
-import { ActionRole } from './ScreenSemantics'
-import { Routes } from './Routes'
+import { ActionRole, ScreenRole } from './ScreenSemantics'
+import { Routes, SearchRouteParams, StarMapRouteParams, WorkspaceRouteParams, WritingRouteParams } from './Routes'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
+import { NavigationChromeStore } from './NavigationChromeStore'
+import { SearchContext, SearchOriginScreen } from '../../corebridge/dto/SearchDtos'
+import { SearchOverlayController } from '../../feature/search/presentation/SearchOverlayController'
+import { SettingsSectionContext } from '../../feature/settings/presentation/SettingsSectionContext'
 import { SyncOperationController } from '../../feature/settings/presentation/SyncOperationController'
 import { SettingsOverlayController } from '../../feature/settings/presentation/SettingsOverlayController'
 import { SyncOutcomePresenter } from '../../feature/settings/presentation/SyncOutcomePresenter'
@@ -120,8 +124,65 @@ export class NavigationHeaderActionDispatcher {
     navPathStack.pushPath({ name: Routes.Settings })
   }
 
-  /** 搜索 — 全局搜索入口（功能未接完，保留 slot 不删） */
+  /** 搜索 — 全局搜索入口；窄屏进 Routes.Search，宽屏打开窗口内搜索浮层。 */
   private handleSearch(): void {
-    hilog.info(DOMAIN, TAG, 'Search action triggered (not yet implemented)')
+    const context: SearchContext = this.buildSearchContext()
+    if (SearchOverlayController.getInstance().isOverlayLayout()) {
+      SearchOverlayController.getInstance().open(context)
+      return
+    }
+
+    const navPathStack: NavPathStack | null = this.navCoordinator.getNavPathStack()
+    if (!navPathStack) {
+      hilog.warn(DOMAIN, TAG, 'navPathStack is null; cannot navigate to search')
+      return
+    }
+    const params: SearchRouteParams = { context: context }
+    navPathStack.pushPath({ name: Routes.Search, param: params })
+  }
+
+  // 发起搜索的页面上下文：只用于 Core 排序。优先取当前活动栈的真实路由参数，
+  // 不额外维护一份 project/chapter/starmap 全局状态。
+  private buildSearchContext(): SearchContext {
+    const role: ScreenRole = NavigationChromeStore.getInstance().getCurrentRole()
+    const context: SearchContext = { originScreen: this.resolveSearchOrigin(role) }
+    const stack: NavPathStack | null = this.navCoordinator.getNavPathStack()
+    if (stack !== null) {
+      const writingArr = stack.getParamByName(Routes.Writing) as WritingRouteParams[]
+      const writing = writingArr && writingArr.length > 0 ? writingArr[writingArr.length - 1] : null
+      const workspaceArr = stack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
+      const workspace = workspaceArr && workspaceArr.length > 0 ? workspaceArr[workspaceArr.length - 1] : null
+      const starmapArr = stack.getParamByName(Routes.StarMap) as StarMapRouteParams[]
+      const starmap = starmapArr && starmapArr.length > 0 ? starmapArr[starmapArr.length - 1] : null
+
+      if (writing !== null && writing.projectId.length > 0) {
+        context.currentProjectId = writing.projectId
+        if (writing.volumeId !== undefined && writing.volumeId.length > 0) {
+          context.currentVolumeId = writing.volumeId
+        }
+        if (writing.chapterId !== undefined && writing.chapterId.length > 0) {
+          context.currentChapterId = writing.chapterId
+        }
+      } else if (workspace !== null && workspace.projectId.length > 0) {
+        context.currentProjectId = workspace.projectId
+      }
+      if (starmap !== null && starmap.starmapId.length > 0) {
+        context.currentStarmapId = starmap.starmapId
+      }
+    }
+    if (context.originScreen === 'settings') {
+      context.currentSettingsSection = SettingsSectionContext.getCurrentSection()
+    }
+    return context
+  }
+
+  private resolveSearchOrigin(role: ScreenRole): SearchOriginScreen {
+    if (role === ScreenRole.Home) { return 'home' }
+    if (role === ScreenRole.ProjectList) { return 'home' }
+    if (role === ScreenRole.ProjectWorkspace) { return 'project' }
+    if (role === ScreenRole.Writing) { return 'writing' }
+    if (role === ScreenRole.StarMap || role === ScreenRole.StarMapDetail) { return 'starmap' }
+    if (role === ScreenRole.Settings) { return 'settings' }
+    return 'general'
   }
 }

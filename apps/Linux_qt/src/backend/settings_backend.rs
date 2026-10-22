@@ -1447,6 +1447,9 @@ impl AppBackend {
             false
         } else {
             self.debug_log("settings", "save_local_settings_success", "");
+            // 设置也是全局搜索的数据源；下一次查询前让常驻搜索 worker
+            // 重建一次索引，避免读到保存前的设置描述。
+            self.search_bridge().mark_dirty();
             true
         }
     }

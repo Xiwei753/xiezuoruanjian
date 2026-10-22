@@ -251,6 +251,7 @@ impl WriterCoreApi {
         core.remove_search_index_by_prefix(prefix);
     }
 
+    /// 兼容旧调用与既有测试：只返回当前页条目。
     pub(crate) fn search_service_search(
         &self,
         query: &str,
@@ -258,8 +259,26 @@ impl WriterCoreApi {
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<crate::search::SearchResult> {
+        self.search_service_page(
+            query,
+            scope,
+            limit,
+            cursor,
+            &crate::search::SearchContext::default(),
+        )
+        .items
+    }
+
+    pub(crate) fn search_service_page(
+        &self,
+        query: &str,
+        scope: crate::search::SearchScope,
+        limit: usize,
+        cursor: Option<&str>,
+        context: &crate::search::SearchContext,
+    ) -> crate::search::SearchResultPage {
         let core = self.core_read();
-        core.global_search(query, scope, limit, cursor)
+        core.global_search(query, scope, limit, cursor, context)
     }
 
     pub fn search_service_rebuild(

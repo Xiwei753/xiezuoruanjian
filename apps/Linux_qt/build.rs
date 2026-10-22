@@ -585,6 +585,7 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/WritingTreeGroupHeader.qml");
     // Issue #790 评论 5875963057: 全局顶栏公共入口组件
     println!("cargo:rerun-if-changed=qml/GlobalTopActions.qml");
+    println!("cargo:rerun-if-changed=qml/GlobalSearchOverlay.qml");
     println!("cargo:rerun-if-changed=qml/EditorContextMenu.qml");
     // Issue #904：编辑区视口层组件，WritingWorkspace 直接实例化，纳入重编译列表。
     println!("cargo:rerun-if-changed=qml/EditorViewport.qml");

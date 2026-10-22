@@ -397,6 +397,10 @@ export struct WritingScreen {
     const sessionObserver: LifecycleObserver = new WritingSessionLifecycleObserver(this.writingSessionTracker)
     this.writingSessionLifecycleObserver = sessionObserver
     this.lifecycle.addObserver(sessionObserver)
+    // 注册观察者不会重放“当前已在前台”，页面打开时主动同步一次，避免首笔输入被丢。
+    if (this.lifecycle.isForeground() && this.lifecycle.isFocused()) {
+      this.writingSessionTracker.resume()
+    }
 
     // Issue #825 复核8第 3 点：订阅 LocalSettings 落盘广播，让宽屏设置浮层的改动实时回流到本页。
     this.unsubscribeLocalSettings = LocalSettingsStore.getInstance().subscribe(
@@ -445,7 +449,8 @@ export struct WritingScreen {
           || edit.cause === EditorTransactionCause.Delete)
         && (edit.contentDelta.insertedChars > 0 || edit.contentDelta.deletedChars > 0)) {
         // 第一次真人编辑才开始计时；纯光标/选区/程序化写入不建立会话。
-        this.writingSessionTracker.onHumanEdit(this.projectId, this.volumeId, this.chapterId)
+        this.writingSessionTracker.onHumanEdit(
+          this.projectId, this.volumeId, this.chapterId, update.statsOccurredAtMs)
       }
       this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap, update.editResult)
       // Issue #879：把 snapshot + editResult + sessionId 保存在一个 @State presentationUpdate 中。
@@ -489,6 +494,12 @@ export struct WritingScreen {
     if (this.leaveGuardToken >= 0) {
       NavigationTransactionCoordinator.getInstance().unregisterLeaveGuard(this.leaveGuardToken)
       this.leaveGuardToken = -1
+    }
+    // Issue #981：离开正文页先结算最后一段前台计时，再清理生命周期观察者。
+    this.writingSessionTracker.close('leftEditor')
+    if (this.writingSessionLifecycleObserver) {
+      this.lifecycle.removeObserver(this.writingSessionLifecycleObserver)
+      this.writingSessionLifecycleObserver = null
     }
     // Issue #923：精确注销自身的活跃会话 token（不影响切章时新页面已完成的注册）。
     if (this.activeSessionToken !== null) {
@@ -603,6 +614,26 @@ export struct WritingScreen {
         const cursorByte: number = TextOffsetMapper.utf16ToUtf8(snap.text, params.cursor)
         await this.editorCoordinator.setSelection(cursorByte, cursorByte)
       }
+    }
+
+    // Issue #982：全局搜索正文命中直接使用 Core 的原文 UTF-8 byte 范围。
+    // 先按当前真实正文 clamp，再交给 Core 设置选区；滚动定位用同一段文字转 UTF-16。
+    if (params.searchField === 'body'
+      && params.searchByteStart !== undefined
+      && params.searchByteEnd !== undefined) {
+      const textByteLength: number = TextOffsetMapper.utf16ToUtf8(snap.text, snap.text.length)
+      const startByte: number = Math.max(0, Math.min(params.searchByteStart, textByteLength))
+      const endByte: number = Math.max(startByte, Math.min(params.searchByteEnd, textByteLength))
+      await this.editorCoordinator.setSelection(startByte, endByte)
+      const restored = this.editorCoordinator.getSnapshot()
+      if (restored !== null) {
+        const revealUtf16: number = TextOffsetMapper.utf8ToUtf16(restored.text, startByte)
+        this.viewportController.reveal(revealUtf16)
+      }
+      // 搜索定位只消费一次；后续章节切换不能把旧范围继续套到新正文。
+      params.searchByteStart = undefined
+      params.searchByteEnd = undefined
+      params.searchField = undefined
     }
 
     // viewport 只恢复到 UI 滚动位置，不写 Core。通过父子 controller 通道恢复。

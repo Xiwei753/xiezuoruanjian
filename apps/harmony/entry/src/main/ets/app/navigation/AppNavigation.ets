@@ -15,6 +15,7 @@ import hilog from '@ohos.hilog'
 import { ContinuationPayload } from '../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { PrimaryTabShell } from './PrimaryTabShell'
+import { SearchOverlayController } from '../../feature/search/presentation/SearchOverlayController'
 import { WideLayoutMode, getWideLayoutState } from './wide/WideLayoutMode'
 
 // 一级导航 Tab 索引常量
@@ -39,10 +40,14 @@ export struct AppNavigation {
     coordinator.registerRestoreListener((payload: ContinuationPayload) => {
       this.applyContinuation(payload)
     })
+    // Issue #982：宽屏全局搜索浮层由根导航宿主注册窗口级 UIContext；
+    // 浮层关闭只 dismiss 对话框，底层路由栈与页面状态保持不变。
+    SearchOverlayController.getInstance().attachUIContext(this.getUIContext())
   }
 
   aboutToDisappear(): void {
     NavigationTransactionCoordinator.getInstance().unregister()
+    SearchOverlayController.getInstance().detachUIContext(this.getUIContext())
   }
 
   // 根据接续 payload 重建 NavPathStack 并恢复 selection/cursor/viewport。

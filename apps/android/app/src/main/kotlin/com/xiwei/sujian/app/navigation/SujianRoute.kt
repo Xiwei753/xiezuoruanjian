@@ -27,6 +27,24 @@ sealed interface SujianRoute : Parcelable, NavKey {
     @Parcelize
     @Serializable
     data object Settings : SujianRoute
+
+    /**
+     * 全局搜索页 — 作为当前一级栈上的覆盖页，返回后回到原页面与原工作区状态。
+     *
+     * 语境字段只用于 Core 排序加权与结果跳转，不复制工作区业务状态。
+     */
+    @Parcelize
+    @Serializable
+    data class Search(
+        val originScreen: String = "general",
+        val scope: String = "all",
+        val topLevel: String = "Works",
+        val projectId: String? = null,
+        val volumeId: String? = null,
+        val chapterId: String? = null,
+        val starmapId: String? = null,
+        val settingsSection: String? = null,
+    ) : SujianRoute
 }
 
 /**

@@ -668,6 +668,37 @@ QtObject {
         return String(suggestion.original || "").trim();
     }
 
+    // Issue #982：把 Core 搜索结果中的原始 UTF-8 字节范围映射为编辑器选区。
+    // 使用与校对跳转相同的字节校验路径，不依赖 QML 自行换算正文位置。
+    function revealSearchRange(startByte, endByte) {
+        if (!targetEditorItem || !targetEditorItem.reveal_correction) return false;
+        var start = Number(startByte);
+        var end = Number(endByte);
+        if (!isFinite(start) || !isFinite(end) || start < 0 || end < start) return false;
+        var text = getEditorPlainText();
+        try {
+            var positions = correctionPositionsForBytes(text, [start, end]);
+            var startUtf16 = positions[0].utf16;
+            var endUtf16 = positions[1].utf16;
+            if (endUtf16 <= startUtf16) return false;
+            var original = text.slice(startUtf16, endUtf16);
+            var revision = Number(targetEditorItem.text_revision);
+            if (!isFinite(revision) || revision < 0) return false;
+            var revealed = targetEditorItem.reveal_correction(
+                start,
+                end,
+                original,
+                revision
+            );
+            if (revealed && editorViewportRef && editorViewportRef.revealCurrentCaret) {
+                editorViewportRef.revealCurrentCaret();
+            }
+            return revealed;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function jumpToCorrection(suggestion) {
         if (!suggestion || !suggestionIsCurrent(suggestion)) return false;
         if (!targetEditorItem || !targetEditorItem.reveal_correction) return false;

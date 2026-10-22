@@ -31,6 +31,9 @@ impl WriterCoreApi {
         if self.project_exists(input)? {
             if self.restored_project_matches_input(input)? {
                 self.ensure_restore_history(input)?;
+                if let Err(error) = self.search_service_rebuild(None) {
+                    log::warn!("restore_project_tree: rebuild search index failed: {error}");
+                }
                 let project_dto: ProjectDto = self
                     .core_read()
                     .list_projects()
@@ -89,6 +92,10 @@ impl WriterCoreApi {
         // canonical 目录已经存在，下一次恢复会命中"内容完全一致"分支，
         // 再次调用 ensure_restore_history()，直到 Git 也真正进入完成态。
         self.ensure_restore_history(input)?;
+
+        if let Err(error) = self.search_service_rebuild(None) {
+            log::warn!("restore_project_tree: rebuild search index failed: {error}");
+        }
 
         // 8. 返回创建的 ProjectDto
         let project_dto: ProjectDto = self

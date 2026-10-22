@@ -56,6 +56,8 @@ impl AppBackend {
     }
 
     pub(crate) fn reload_tree(&mut self) {
+        // Issue #982：结构增删改后让下一次搜索重建一次索引，不每次按键扫描磁盘。
+        self.search_bridge().mark_dirty();
         let before_count = self.cached_tree.len();
         let mut list = QJsonArray::default();
         // Issue #765：并行构建 serde_json::Value 镜像，供 appState/tree model 纯转换路径使用。

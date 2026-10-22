@@ -39,6 +39,7 @@ internal data class SujianTopBarEnv(
     val coroutineScope: CoroutineScope,
     val deps: SujianAppDependencies,
     val topLevelBackStack: SujianTopLevelBackStack,
+    val onOpenSearch: () -> Unit,
 )
 
 @Composable
@@ -59,6 +60,7 @@ private fun rememberSujianTopBarTitle(
         is SujianRoute.StarMap -> stringResource(id = R.string.title_starmap)
         is SujianRoute.Stats -> stringResource(id = R.string.title_stats)
         is SujianRoute.Settings -> stringResource(id = R.string.action_settings)
+        is SujianRoute.Search -> stringResource(id = R.string.search_title)
     }
 
 /** 顶栏返回逻辑 — 先生成唯一的返回动作，再决定是否显示图标（#597 评论问题三）。
@@ -90,6 +92,9 @@ private fun rememberSujianTopBarNavigation(
             }
             is SujianRoute.StarMap -> null
             is SujianRoute.Stats -> null
+            is SujianRoute.Search -> {
+                { env.topLevelBackStack.removeLastOrNull() }
+            }
         }
     val navigationIcon = if (onNavigationClick != null) SujianIcons.ArrowBack else null
     return navigationIcon to onNavigationClick
@@ -122,12 +127,11 @@ private fun rememberSujianTopBarActions(
                         semanticId = SujianSemanticIds.NavigationSettings,
                     )
                 SujianChromeAction.Search ->
-                    // #624 评论6：写作页/作品页搜索入口恢复可用状态 — #477 的全局搜索
-                    // 界面接入前 onClick 保持空动作，但图标不能从产品契约消失。
+                    // #982：顶栏搜索入口打开全局搜索页；上下文由导航套件按当前位置注入。
                     SujianIconButton(
-                        onClick = { },
+                        onClick = env.onOpenSearch,
                         icon = SujianIcons.Search,
-                        contentDescription = stringResource(id = R.string.cd_search_dev),
+                        contentDescription = stringResource(id = R.string.cd_search),
                         semanticId = SujianSemanticIds.NavigationSearch,
                     )
                 SujianChromeAction.Sync ->

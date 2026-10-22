@@ -307,9 +307,8 @@ class EditorViewModel(
     internal var currentSession: EditorSession? = null
 
     internal var initialWordCount = 0
-    internal var sessionStartTime = System.currentTimeMillis()
 
-    /** Issue #981：真实前台写作计时；只上报已测片段，速度仍由 Core 计算。 */
+    /** Issue #981：真实前台写作计时；已测片段上报 Core，实时会话速度也由同一时钟提供。 */
     internal val writingSessionTracker: WritingSessionTracker by lazy {
         WritingSessionTracker { segment -> statsRepository.recordWritingActivitySegment(segment) }
     }

@@ -25,6 +25,7 @@ export class WritingSessionTracker {
   private readonly bridge: IWriterCoreBridge
   private readonly platform: string
   private state: TrackerState = TrackerState.Idle
+  private foreground: boolean = false
   private sessionId: string = ''
   private projectId: string = ''
   private volumeId: string = ''
@@ -48,7 +49,11 @@ export class WritingSessionTracker {
   }
 
   /** 真人编辑事务入口。章节切换时先结算旧章节片段，再从当前时刻开新片段。 */
-  onHumanEdit(projectId: string, volumeId: string, chapterId: string): void {
+  onHumanEdit(projectId: string, volumeId: string, chapterId: string, occurredAtMs: number): void {
+    // 后台/失焦后迟到的 IME 提交只能进入字数事实，绝不能重新开启计时。
+    if (!this.foreground) {
+      return
+    }
     if (chapterId.length === 0) {
       return
     }
@@ -69,7 +74,7 @@ export class WritingSessionTracker {
     this.chapterId = chapterId
     if (this.state === TrackerState.Idle) {
       this.sessionId = util.generateRandomUUID(false)
-      this.wallAnchorMs = Date.now()
+      this.wallAnchorMs = occurredAtMs
       this.monotonicAnchorMs = nowMono
     }
     // 从暂停恢复：不把离开期间补进来，从这次编辑重新起算。
@@ -92,6 +97,7 @@ export class WritingSessionTracker {
 
   /** 真实离开前台 / 失焦 / 离开正文页：立即结算并暂停。重复调用不重复计。 */
   pause(reason: string): void {
+    this.foreground = false
     if (this.state !== TrackerState.Writing) {
       if (this.state === TrackerState.Idle) {
         return
@@ -106,10 +112,12 @@ export class WritingSessionTracker {
   /** 回到前台只解除“已离开”状态；不补算离开期间，等下一次真人编辑。 */
   resume(): void {
     // 状态保持 Paused：下一次真人编辑才重新开启片段。
+    this.foreground = true
   }
 
   /** 关闭正文 / 退出应用：结算最后不足 30 秒的片段并结束本次会话。 */
   close(reason: string): void {
+    this.foreground = false
     if (this.state === TrackerState.Writing) {
       this.flush(this.nowMonoMs(), reason)
     }

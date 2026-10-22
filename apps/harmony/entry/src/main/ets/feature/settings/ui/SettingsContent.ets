@@ -26,6 +26,7 @@ import { SyncOutcome } from '../presentation/SyncRunTypes'
 import { SyncRunPresentationState, SyncRunSnapshot } from '../presentation/SyncRunPresentationState'
 import { SyncOperationController } from '../presentation/SyncOperationController'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
+import { SettingsSectionContext } from '../presentation/SettingsSectionContext'
 import { SyncConflictViewModel } from '../presentation/SyncConflictViewModel'
 import { createSyncConflictsPanelContent, SyncConflictsPanelArgs } from './SyncConflictsPanel'
 // Issue #958：内置模型第三方资源（来源声明 + 许可全文）面板工厂。
@@ -71,6 +72,10 @@ export struct SettingsContent {
   @Param overlayLayout: boolean = false
   // Issue #972：宽屏浮层的搜索词由浮层持有并传入；窄屏 overlayLayout=false 时仍用本地 searchText。
   @Param overlaySearchText: string = ''
+  // Issue #982：设置页顶部搜索统一打开全局搜索，只传 originScreen=settings + 当前分类。
+  @Param onOpenGlobalSearch: (section: string) => void = (_section: string): void => {}
+  // 搜索结果跳到具体设置分类时由路由/浮层传入。
+  @Param initialSection: string = ''
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
   @Local viewModel: SettingsViewModel = new SettingsViewModel()
@@ -97,6 +102,7 @@ export struct SettingsContent {
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
+  private sectionContextListener: ((section: string) => void) | null = null
   private syncRunPresentation: SyncRunPresentationState = SyncRunPresentationState.getInstance()
   private unsubscribeSyncRun: (() => void) | null = null
   private syncStateBridge: NativeSyncBridge = new NativeSyncBridge(new NativeCoreModule())
@@ -109,6 +115,16 @@ export struct SettingsContent {
   private conflictProbe: SyncConflictViewModel = new SyncConflictViewModel()
 
   aboutToAppear() {
+    // Issue #982：搜索结果跳转到具体设置分类时展开该分类；普通进入不改变用户折叠状态。
+    if (this.initialSection.length > 0) {
+      SettingsSectionContext.setCurrentSection(this.initialSection)
+      this.viewModel.expandSection(this.initialSection as SettingsSectionId)
+    }
+    // 搜索从设置页发起后点击设置结果：不重建设置页，只展开目标分类。
+    this.sectionContextListener = (section: string): void => {
+      this.viewModel.expandSection(section as SettingsSectionId)
+    }
+    SettingsSectionContext.subscribe(this.sectionContextListener)
     // 注册主题观察者
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       this.themeConfig = theme
@@ -142,6 +158,10 @@ export struct SettingsContent {
   }
 
   aboutToDisappear() {
+    if (this.sectionContextListener !== null) {
+      SettingsSectionContext.unsubscribe(this.sectionContextListener)
+      this.sectionContextListener = null
+    }
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
     }
@@ -663,7 +683,7 @@ export struct SettingsContent {
       .width('100%')
       .padding({ top: 16, bottom: 8 })
 
-      // 搜索框（窄屏搜索过滤设置项）
+      // 搜索入口（Issue #982）：打开全局搜索，不再在本页单独过滤设置项。
       Row() {
         Image($r('app.media.ic_search'))
           .width(20)
@@ -671,16 +691,19 @@ export struct SettingsContent {
           .fillColor($r('sys.color.icon_primary'))
           .margin({ left: 12 })
 
-        TextInput({ placeholder: '', text: this.searchText })
+        Text('搜索设置、作品、章节与星图')
           .layoutWeight(1)
           .height(36)
           .fontSize(14)
-          .backgroundColor(Color.Transparent)
-          .onChange((value: string) => {
-            // 只更新搜索词；可见分组由 deriveFilteredGroups(searchText) 纯派生，
-            // 不再在事件里改写 filteredGroups / 展开状态，避免一次事件多次响应式写入。
-            this.searchText = value
-          })
+          .fontColor($r('sys.color.font_secondary'))
+          .textAlign(TextAlign.Start)
+          .margin({ left: 8 })
+
+        Image($r('sys.media.ohos_ic_public_arrow_right'))
+          .width(16)
+          .height(16)
+          .fillColor($r('sys.color.icon_secondary'))
+          .margin({ right: 12 })
       }
       .width('100%')
       .height(40)
@@ -688,6 +711,9 @@ export struct SettingsContent {
       .backgroundColor($r('sys.color.comp_background_gray'))
       // Issue #932：输入框圆角归口到共享 token。
       .borderRadius(DesignTokens.inputFieldRadius)
+      .onClick((): void => {
+        this.onOpenGlobalSearch(SettingsSectionContext.getCurrentSection())
+      })
     }
     .width('100%')
     .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding })
@@ -793,7 +819,10 @@ export struct SettingsContent {
       .width('100%')
       .height(48)
       .padding({ left: 16, right: 16 })
-      .onClick(() => this.viewModel.toggleSection(sectionId))
+      .onClick(() => {
+        SettingsSectionContext.setCurrentSection(sectionId)
+        this.viewModel.toggleSection(sectionId)
+      })
 
       // 分类内容（展开时显示）
       if (this.isSectionExpandedForDisplay(sectionId)) {
@@ -1844,7 +1873,10 @@ export struct SettingsContent {
             title: this.getSectionTitle(sectionId),
             summary: this.getSectionValueSummary(sectionId),
             expanded: this.isSectionExpandedForDisplay(sectionId),
-            onToggle: () => { this.viewModel.toggleSection(sectionId) }
+            onToggle: () => {
+              SettingsSectionContext.setCurrentSection(sectionId)
+              this.viewModel.toggleSection(sectionId)
+            }
           }) {
             WideSettingsCategoryContent({
               sectionId: sectionId,

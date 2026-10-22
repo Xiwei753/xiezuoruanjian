@@ -203,6 +203,16 @@ export class ProjectWorkspaceViewModel {
     this.expandedVolumes = newSet
   }
 
+  /** 搜索定位卷：只展开，不切换成收起（与用户点击 toggle 区分）。 */
+  expandVolume(volumeId: string): void {
+    if (this.expandedVolumes.has(volumeId)) {
+      return
+    }
+    const newSet = new Set<string>(this.expandedVolumes)
+    newSet.add(volumeId)
+    this.expandedVolumes = newSet
+  }
+
   // ─── 卷/章节共享业务入口 ───
   // Issue #920 A：作品工作区页与写作页（宽屏章节树）复用同一套卷/章节创建/删除规则，
   // 写作页不再各自维护第二套创建/删除逻辑。这里只做 Core 调用与错误处理，不碰页面状态。

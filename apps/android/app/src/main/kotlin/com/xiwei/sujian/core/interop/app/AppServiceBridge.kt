@@ -3,6 +3,7 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.project.ChapterBridge
 import com.xiwei.sujian.core.interop.project.ProjectBridge
 import com.xiwei.sujian.core.interop.project.RecentEditsBridge
+import com.xiwei.sujian.core.interop.search.SearchBridge
 import com.xiwei.sujian.core.interop.settings.SettingsBridge
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
@@ -33,6 +34,7 @@ open class AppServiceBridge(
     val projectBridge: ProjectBridge by lazy { ProjectBridge(holder, mirrorChangeSink) }
     val recentEditsBridge: RecentEditsBridge by lazy { RecentEditsBridge(holder) }
     val chapterBridge: ChapterBridge by lazy { ChapterBridge(holder, mirrorChangeSink) }
+    val searchBridge: SearchBridge by lazy { SearchBridge(holder) }
 
     /**
      * #649 评论 5561286861 第 4 点：恢复专用写入 Bridge（不带 MirrorChangeSink）。

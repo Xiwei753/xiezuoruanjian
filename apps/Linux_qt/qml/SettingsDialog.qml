@@ -68,6 +68,8 @@ MotionDialog {
 
     function flushSave() { settingsPage.flushSave() }
 
+    function revealSection(section) { settingsPage.revealSection(section) }
+
     KdeSettingsPage {
         id: settingsPage
         anchors.fill: parent

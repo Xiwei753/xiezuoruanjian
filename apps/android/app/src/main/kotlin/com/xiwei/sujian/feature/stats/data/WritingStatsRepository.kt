@@ -67,6 +67,8 @@ class WritingStatsRepository(
         val cause: EditorTransactionCauseDto,
         val insertedChars: Int,
         val deletedChars: Int,
+        val eventId: String,
+        val occurredAtMs: Long,
     )
 
     private val _revision = MutableStateFlow(0L)
@@ -105,6 +107,8 @@ class WritingStatsRepository(
                                 cmd.event.cause,
                                 cmd.event.insertedChars,
                                 cmd.event.deletedChars,
+                                cmd.event.eventId,
+                                cmd.event.occurredAtMs,
                             )
                         if (result is BridgeResult.Success) {
                             markChanged()
@@ -177,6 +181,8 @@ class WritingStatsRepository(
         cause: EditorTransactionCauseDto,
         insertedChars: Int,
         deletedChars: Int,
+        eventId: String,
+        occurredAtMs: Long,
     ) {
         synchronized(enqueueLock) {
             val seq = ++seqCounter
@@ -190,6 +196,8 @@ class WritingStatsRepository(
                         cause = cause,
                         insertedChars = insertedChars,
                         deletedChars = deletedChars,
+                        eventId = eventId,
+                        occurredAtMs = occurredAtMs,
                     ),
                 ),
             )

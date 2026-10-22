@@ -33,6 +33,9 @@ internal class WritingSessionTracker(
     private var monotonicAnchorMs = 0L
     private var wallAnchorMs = 0L
     private var sliceStartMonoMs = 0L
+    private var foreground = false
+    private var sessionTypedChars = 0L
+    private var completedActiveMs = 0L
     private val handler = Handler(Looper.getMainLooper())
 
     private val heartbeat = object : Runnable {
@@ -48,9 +51,17 @@ internal class WritingSessionTracker(
     }
 
     /** 真人编辑事务入口。章节切换先结算旧章节，再从当前时刻开新片段。 */
-    fun onHumanEdit(projectId: String, volumeId: String, chapterId: String) {
-        if (chapterId.isEmpty()) return
+    fun onHumanEdit(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        insertedChars: Int,
+        occurredAtMs: Long,
+    ) {
+        // 后台/离开正文页后的迟到 IME 提交不能再开启计时片段。
+        if (!foreground || chapterId.isEmpty()) return
         val now = SystemClock.elapsedRealtime()
+        sessionTypedChars += insertedChars.coerceAtLeast(0)
         if (state == State.Writing) {
             if (this.projectId != projectId || this.volumeId != volumeId || this.chapterId != chapterId) {
                 flush(now, "chapterSwitch")
@@ -67,8 +78,11 @@ internal class WritingSessionTracker(
         this.chapterId = chapterId
         if (state == State.Idle) {
             sessionId = UUID.randomUUID().toString()
-            wallAnchorMs = System.currentTimeMillis()
+            // 与本次编辑事件共用同一墙钟锚点，确保首笔字数落在计时区间内。
+            wallAnchorMs = occurredAtMs
             monotonicAnchorMs = now
+            sessionTypedChars = insertedChars.coerceAtLeast(0).toLong()
+            completedActiveMs = 0L
         }
         // 从暂停恢复：不把离开期间补进来，从这次编辑重新起算。
         sliceStartMonoMs = now
@@ -79,11 +93,37 @@ internal class WritingSessionTracker(
 
     /** 重新回到前台只解除暂停状态，不补算离开期间；等下一次真人编辑。 */
     fun resume() {
-        // 计时从下一次真人编辑开始，这里不启动片段。
+        foreground = true
+    }
+
+    /** 当前会话累计的真人输入字数。 */
+    fun sessionTypedChars(): Long = sessionTypedChars
+
+    /** 当前会话累计的真实计时秒数（已完成切片 + 正在进行的切片）。 */
+    fun sessionActiveSeconds(): Long {
+        val pending =
+            if (state == State.Writing) {
+                (SystemClock.elapsedRealtime() - sliceStartMonoMs).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+        return (completedActiveMs + pending) / 1000L
+    }
+
+    /**
+     * 当前会话真实累计字数 / 真实计时秒数的字/时。
+     * 样本不足 30 秒时返回 0，避免刚输入几个字就显示几千字/时。
+     */
+    fun currentCharsPerHour(): Long {
+        if (sessionTypedChars <= 0L) return 0L
+        val seconds = sessionActiveSeconds()
+        if (seconds < MIN_SPEED_SAMPLE_SECONDS) return 0L
+        return sessionTypedChars * 3600L / seconds
     }
 
     /** Activity/正文页离开前台：立即结算并暂停。重复调用不重复计时。 */
     fun pause(reason: String) {
+        foreground = false
         if (state != State.Writing) return
         flush(SystemClock.elapsedRealtime(), reason)
         state = State.Paused
@@ -92,6 +132,7 @@ internal class WritingSessionTracker(
 
     /** 关闭正文/退出页面：结算最后不足 30 秒的片段并结束会话。 */
     fun close(reason: String) {
+        foreground = false
         if (state == State.Writing) {
             flush(SystemClock.elapsedRealtime(), reason)
         }
@@ -106,6 +147,7 @@ internal class WritingSessionTracker(
     private fun flush(monoMs: Long, reason: String) {
         val durationMs = monoMs - sliceStartMonoMs
         if (durationMs <= 0L || sessionId.isEmpty() || chapterId.isEmpty()) return
+        completedActiveMs += durationMs
         val startAtMs = wallAnchorMs + (sliceStartMonoMs - monotonicAnchorMs)
         val endAtMs = wallAnchorMs + (monoMs - monotonicAnchorMs)
         recordSegment(
@@ -125,6 +167,7 @@ internal class WritingSessionTracker(
 
     companion object {
         private const val FLUSH_INTERVAL_MS = 30_000L
+        private const val MIN_SPEED_SAMPLE_SECONDS = 30L
     }
 }
 

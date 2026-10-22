@@ -240,33 +240,267 @@ pub fn extract_starmap_entries(
     Ok(entries)
 }
 
+struct SettingCatalogEntry {
+    group: &'static str,
+    key: &'static str,
+    title: &'static str,
+    aliases: &'static str,
+    description: &'static str,
+    section: &'static str,
+}
+
+/// 设置项的人类可读名称/别名/说明。索引展示这些文本，而不是原始 JSON。
+const SETTINGS_CATALOG: &[SettingCatalogEntry] = &[
+    SettingCatalogEntry {
+        group: "local",
+        key: "appearanceMode",
+        title: "主题模式",
+        aliases: "外观 深浅 深色 浅色 跟随系统 appearance theme dark light system",
+        description: "选择跟随系统、浅色或深色外观",
+        section: "appearance",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "colorSource",
+        title: "颜色来源",
+        aliases: "配色 动态取色 内置主题 color source",
+        description: "选择动态取色或内置主题配色",
+        section: "appearance",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "dynamicColorEnabled",
+        title: "动态取色",
+        aliases: "壁纸 配色 monet dynamic color",
+        description: "根据系统壁纸自动生成界面配色",
+        section: "appearance",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "selectedBuiltinThemeId",
+        title: "内置主题",
+        aliases: "配色 主题 builtin theme",
+        description: "选择内置主题",
+        section: "appearance",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "selectedPaletteId",
+        title: "已保存配色",
+        aliases: "调色板 主题 palette",
+        description: "选择已保存的配色方案",
+        section: "appearance",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "locale",
+        title: "界面语言",
+        aliases: "语言 地区 language locale",
+        description: "选择界面显示语言",
+        section: "appearance",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "editorFontSize",
+        title: "编辑器字号",
+        aliases: "字体大小 正文字号 font size",
+        description: "正文编辑器的字号大小",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "editorLineSpacingMultiplier",
+        title: "行距",
+        aliases: "行间距 间距 line spacing",
+        description: "正文行间距倍数",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "autoIndentEnabled",
+        title: "自动首行缩进",
+        aliases: "缩进 首行 indent",
+        description: "换行时自动缩进首行",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "autoIndentWidth",
+        title: "缩进宽度",
+        aliases: "缩进 字符 indent width",
+        description: "自动缩进的宽度",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "editorTypingAnimationEnabled",
+        title: "打字动画",
+        aliases: "输入动画 typing animation",
+        description: "输入文字时播放打字动画",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "editorSmoothCursorEnabled",
+        title: "平滑光标",
+        aliases: "光标动画 cursor smooth",
+        description: "光标移动时使用平滑动画",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "editorTypingAnimationDurationMs",
+        title: "打字动画时长",
+        aliases: "输入动画 时间 typing duration",
+        description: "打字动画的持续时间",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "editorSmoothCursorDurationMs",
+        title: "平滑光标时长",
+        aliases: "光标动画 时间 cursor duration",
+        description: "平滑光标动画的持续时间",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "editorCoordinatedTextCursorAnimationEnabled",
+        title: "协同动画",
+        aliases: "吞字 吐字 文本动画 coordinated animation",
+        description: "开启吞字与吐字的协同文本动画",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "autoSaveEnabled",
+        title: "自动保存",
+        aliases: "保存 auto save",
+        description: "编辑时自动保存正文",
+        section: "save_sync",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "autoSaveDelayMs",
+        title: "自动保存延迟",
+        aliases: "保存 等待 时间 auto save delay",
+        description: "停止输入后等待多久自动保存",
+        section: "save_sync",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "aiEnabled",
+        title: "启用 AI 功能",
+        aliases: "人工智能 AI artificial intelligence",
+        description: "开启 AI 辅助功能",
+        section: "ai",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "diagnosticsEnabled",
+        title: "启用诊断日志",
+        aliases: "日志 诊断 diagnostics log",
+        description: "记录应用诊断日志",
+        section: "diagnostics",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "diagnosticsVerbose",
+        title: "详细日志",
+        aliases: "日志 诊断 verbose diagnostics",
+        description: "记录更详细的诊断日志",
+        section: "diagnostics",
+    },
+    SettingCatalogEntry {
+        group: "local",
+        key: "statsDeviceId",
+        title: "统计设备标识",
+        aliases: "设备 统计 device stats",
+        description: "本机写作统计使用的设备标识",
+        section: "diagnostics",
+    },
+    SettingCatalogEntry {
+        group: "sync",
+        key: "fontSize",
+        title: "同步字号",
+        aliases: "字体大小 正文字号 float font size",
+        description: "跨设备同步的编辑器字号",
+        section: "editor",
+    },
+    SettingCatalogEntry {
+        group: "sync",
+        key: "themeMode",
+        title: "主题模式（旧版）",
+        aliases: "外观 深浅 深色 浅色 theme dark light",
+        description: "旧版可同步主题模式",
+        section: "appearance",
+    },
+    SettingCatalogEntry {
+        group: "sync",
+        key: "monetColor",
+        title: "动态取色（旧版）",
+        aliases: "配色 monet color",
+        description: "旧版可同步动态取色",
+        section: "appearance",
+    },
+];
+
+fn setting_value_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Bool(true) => "已开启".to_string(),
+        serde_json::Value::Bool(false) => "已关闭".to_string(),
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Null => "未设置".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 把一份设置 JSON 展开成逐项可搜索的索引条目。
+pub fn extract_settings_from_json(group: &str, content: &str) -> Vec<IndexEntry> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
+        return Vec::new();
+    };
+    SETTINGS_CATALOG
+        .iter()
+        .filter(|item| item.group == group)
+        .filter_map(|item| {
+            let raw = value.get(item.key)?;
+            Some(IndexEntry {
+                object_id: format!("setting:{}:{}", group, item.key),
+                scope: SearchScope::Setting,
+                title: item.title.to_string(),
+                body: format!(
+                    "{} {} {} {}",
+                    item.key,
+                    item.aliases,
+                    item.description,
+                    setting_value_text(raw)
+                ),
+                target: SearchTarget {
+                    setting_key: Some(item.key.to_string()),
+                    setting_section: Some(item.section.to_string()),
+                    ..Default::default()
+                },
+            })
+        })
+        .collect()
+}
+
 pub fn extract_setting_entries(app_data_root: &Path) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
-    let settings_dir = app_data_root.join("settings");
 
-    if !settings_dir.exists() {
-        return Ok(entries);
+    let local_content = std::fs::read_to_string(app_data_root.join("settings.local.json"))
+        .ok()
+        .or_else(|| serde_json::to_string(&crate::settings::LocalSettings::default()).ok());
+    if let Some(content) = local_content {
+        entries.extend(extract_settings_from_json("local", &content));
     }
 
-    if let Ok(files) = scan_json_files(&settings_dir) {
-        for (key, file_path) in files {
-            if let Ok(content) = std::fs::read_to_string(&file_path) {
-                entries.push(IndexEntry {
-                    object_id: format!("setting:{}", key),
-                    scope: SearchScope::Setting,
-                    title: key.clone(),
-                    body: content,
-                    target: SearchTarget {
-                        project_id: None,
-                        volume_id: None,
-                        chapter_id: None,
-                        starmap_id: None,
-                        node_id: None,
-                        setting_key: Some(key),
-                    },
-                });
-            }
-        }
+    let sync_content = std::fs::read_to_string(app_data_root.join("settings.sync.json"))
+        .ok()
+        .or_else(|| serde_json::to_string(&crate::settings::SyncableSettings::default()).ok());
+    if let Some(content) = sync_content {
+        entries.extend(extract_settings_from_json("sync", &content));
     }
 
     Ok(entries)
@@ -296,6 +530,7 @@ pub fn extract_starmap_node_entry(
             starmap_id: Some(starmap_id.to_string()),
             node_id: Some(node_id.to_string()),
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -317,7 +552,9 @@ pub fn extract_starmap_edge_entry(
             chapter_id: None,
             starmap_id: Some(starmap_id.to_string()),
             node_id: None,
+            edge_id: Some(edge_id.to_string()),
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -339,7 +576,9 @@ pub fn extract_starmap_link_entry(
             chapter_id: None,
             starmap_id: Some(starmap_id.to_string()),
             node_id: None,
+            link_id: Some(link_id.to_string()),
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -367,7 +606,9 @@ pub fn extract_starmap_hyperlink_entry(
             chapter_id: None,
             starmap_id: Some(starmap_id.to_string()),
             node_id: None,
+            hyperlink_id: Some(hyperlink_id.to_string()),
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -389,7 +630,9 @@ pub fn extract_starmap_embed_entry(
             chapter_id: None,
             starmap_id: Some(starmap_id.to_string()),
             node_id: None,
+            embed_id: Some(instance_id.to_string()),
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -411,6 +654,7 @@ pub fn extract_starmap_title_entry(
             starmap_id: Some(starmap_id.to_string()),
             node_id: None,
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -428,6 +672,7 @@ pub fn extract_project_title_entry(project_id: &str, title: &str) -> IndexEntry 
             starmap_id: None,
             node_id: None,
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -445,6 +690,7 @@ pub fn extract_volume_title_entry(project_id: &str, volume_id: &str, title: &str
             starmap_id: None,
             node_id: None,
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -467,6 +713,7 @@ pub fn extract_chapter_title_entry(
             starmap_id: None,
             node_id: None,
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -490,6 +737,7 @@ pub fn extract_chapter_body_entry(
             starmap_id: None,
             node_id: None,
             setting_key: None,
+            ..Default::default()
         },
     }
 }
@@ -513,23 +761,7 @@ pub fn extract_chapter_note_entry(
             starmap_id: None,
             node_id: None,
             setting_key: None,
-        },
-    }
-}
-
-pub fn extract_setting_entry(key: &str, content: &str) -> IndexEntry {
-    IndexEntry {
-        object_id: format!("setting:{}", key),
-        scope: SearchScope::Setting,
-        title: key.to_string(),
-        body: content.to_string(),
-        target: SearchTarget {
-            project_id: None,
-            volume_id: None,
-            chapter_id: None,
-            starmap_id: None,
-            node_id: None,
-            setting_key: Some(key.to_string()),
+            ..Default::default()
         },
     }
 }

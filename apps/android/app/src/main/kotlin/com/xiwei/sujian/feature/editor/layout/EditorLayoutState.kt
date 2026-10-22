@@ -126,6 +126,23 @@ class EditorViewportState(
     private var latestLayout: TextLayoutResult? = null
     private var pendingAnchor: ViewportAnchor? = initialAnchor
     private var restoredForCurrentAnchor: Boolean = false
+    private var pendingRevealOffsetUtf16: Int? = null
+    private var revealHandled: Boolean = false
+
+    /**
+     * 全局搜索命中跳转 — 请求把指定 UTF-16 offset 所在行滚入视口。
+     * 布局尚未就绪时保留请求，等下一次 [onLayout] 消费。
+     */
+    fun requestReveal(offsetUtf16: Int) {
+        pendingRevealOffsetUtf16 = offsetUtf16
+        revealHandled = false
+    }
+
+    /** 已拿到布局时立即计算 reveal 目标；未消费过则返回 null。 */
+    fun consumeRevealScrollY(): Int? {
+        val layout = latestLayout ?: return null
+        return consumeReveal(layout)
+    }
 
     /**
      * #644 评论 5462826712 第4节：系统给出权威布局时调用。
@@ -137,10 +154,21 @@ class EditorViewportState(
      */
     fun onLayout(result: TextLayoutResult): Int? {
         latestLayout = result
+        consumeReveal(result)?.let { return it }
         val anchor = pendingAnchor ?: return null
         if (restoredForCurrentAnchor) return null
         restoredForCurrentAnchor = true
         return restoreFromAnchor(result, anchor)
+    }
+
+    private fun consumeReveal(layout: TextLayoutResult): Int? {
+        if (revealHandled) return null
+        val offset = pendingRevealOffsetUtf16 ?: return null
+        revealHandled = true
+        val textLength = layout.layoutInput.text.text.length
+        val safeOffset = offset.coerceIn(0, textLength)
+        val line = layout.getLineForOffset(safeOffset)
+        return layout.getLineTop(line).toInt().coerceIn(0, scrollState.maxValue)
     }
 
     /**

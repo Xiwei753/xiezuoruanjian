@@ -46,8 +46,26 @@
     <string name="pref_category_about">About</string>
     <string name="pref_data_root_path">Data Root: %1$s</string>
 
-    <!-- Settings top compact global search entry (placeholder until #477 lands) -->
+    <!-- Settings top compact global search entry -->
     <string name="settings_search_hint">Search settings</string>
+
+    <!-- Global search -->
+    <string name="search_title">Search</string>
+    <string name="cd_search">Search</string>
+    <string name="search_input_hint">Search projects, chapters, starmaps and settings</string>
+    <string name="search_clear">Clear search</string>
+    <string name="search_prompt_title">Search everything</string>
+    <string name="search_prompt_supporting">Enter keywords to search projects, chapter text, starmaps and settings</string>
+    <string name="search_empty_title">No results found</string>
+    <string name="search_empty_supporting">Try different or shorter keywords</string>
+    <string name="search_failed_title">Search failed</string>
+    <string name="search_failed">Search failed: %1$s</string>
+    <string name="search_failed_inline">Search incomplete: %1$s</string>
+    <string name="search_native_not_loaded">Search service is unavailable. Restart the app.</string>
+    <string name="search_retry">Retry</string>
+    <string name="search_load_more">Load more</string>
+    <string name="search_loading_more">Loading…</string>
+    <string name="search_result_missing">Content no longer exists</string>
 
 
     <!-- Sync Settings -->

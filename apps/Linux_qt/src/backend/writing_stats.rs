@@ -12,6 +12,8 @@ use super::*;
 pub(crate) struct LinuxWritingSession {
     clock: writer_core::writing_stats::WritingSessionClock,
     started_at: std::time::Instant,
+    /// 正文页 + 应用/窗口当前是否在前台可写。后台迟到的 IME 提交不得重新开始计时。
+    foreground: bool,
 }
 
 impl Default for LinuxWritingSession {
@@ -19,6 +21,7 @@ impl Default for LinuxWritingSession {
         Self {
             clock: writer_core::writing_stats::WritingSessionClock::new(),
             started_at: std::time::Instant::now(),
+            foreground: false,
         }
     }
 }
@@ -82,6 +85,9 @@ impl AppBackend {
                 .writing_session
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
+            if !session.foreground {
+                return;
+            }
             let mono_ms = session.now_mono_ms();
             let wall_ms = LinuxWritingSession::now_wall_ms();
             session.clock.on_first_human_edit(
@@ -123,6 +129,7 @@ impl AppBackend {
                 .writing_session
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
+            session.foreground = false;
             let mono_ms = session.now_mono_ms();
             session.clock.on_pause(
                 mono_ms,
@@ -141,6 +148,7 @@ impl AppBackend {
             .writing_session
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        session.foreground = true;
         session.clock.on_resume();
     }
 
@@ -151,6 +159,7 @@ impl AppBackend {
                 .writing_session
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
+            session.foreground = false;
             let mono_ms = session.now_mono_ms();
             session
                 .clock
@@ -162,6 +171,13 @@ impl AppBackend {
                 )
         };
         self.enqueue_writing_activity_segments(segments);
+    }
+
+    /// Issue #981：正常退出时先关闭会话，再等统计 writer 把包括最后不足 30 秒的
+    /// 切片在内的所有前置记录落盘。仅 close（入队）不能保证 `process::exit` 前写完。
+    pub(crate) fn close_writing_session_and_wait(&self, reason: &str) -> bool {
+        self.close_writing_session(reason);
+        self.stats_barrier()
     }
 
     /// 按编辑事务上报写作统计。

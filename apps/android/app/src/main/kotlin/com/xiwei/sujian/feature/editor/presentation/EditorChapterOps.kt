@@ -665,7 +665,6 @@ private suspend fun EditorViewModel.switchCommit(
             wordCount = loaded.wordCount,
         )
     initialWordCount = loaded.wordCount
-    sessionStartTime = System.currentTimeMillis()
     startSaveActor()
     reloadSettings()
     // 提交后把 loaded fact 交给 applyExternalContentFact 建立 committedVersion，再 emit 到 replay bus。

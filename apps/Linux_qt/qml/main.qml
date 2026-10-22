@@ -559,12 +559,20 @@ Kirigami.ApplicationWindow {
         return manualSyncOperationId
     }
 
-    function openSettingsDialog() {
+    function openSettingsDialog(section) {
         if (!settingsDialogLoader.active) {
             settingsDialogLoader.active = true;
         }
         if (settingsDialogLoader.item) {
             settingsDialogLoader.item.open();
+            if (section) {
+                Qt.callLater(function() {
+                    var dialog = settingsDialogLoader.item
+                    if (dialog && dialog.revealSection) {
+                        dialog.revealSection(String(section))
+                    }
+                })
+            }
         }
     }
 
@@ -598,6 +606,247 @@ Kirigami.ApplicationWindow {
         workspace.openConflictPath(pendingConflictPath)
         pendingConflictPath = ""
         pendingConflictProjectId = ""
+    }
+
+    // ── Issue #982：全局搜索入口与跨页面定位 ──────────────────────────────
+    // 搜索本身由常驻 worker 上的 Core 索引完成；这里只负责收集当前页面上下文、
+    // 应用保存屏障，以及把点击结果交给现有路由和编辑器定位。
+
+    function openGlobalSearch(context) {
+        // 打开搜索前先收口当前编辑内容，让 Core 索引包含刚落盘的正文；
+        // 保存失败不阻断搜索，只保留后端给出的保存状态。
+        try {
+            window.preSyncBarrier()
+        } catch (e) {
+            window.debugLog("search", "pre_search_flush_failed", String(e))
+        }
+
+        var selected = window.appState && window.appState.selected
+            ? window.appState.selected : ({})
+        var origin = "general"
+        if (settingsDialogLoader.item && settingsDialogLoader.item.visible) {
+            origin = "settings"
+        } else if (appController.inWriting) {
+            origin = "writing"
+        } else if (appController.inStarmap) {
+            origin = "starmap"
+        } else if (window.rootHasWorkspace) {
+            origin = "home"
+        }
+
+        var ctx = context || ({})
+        if (!ctx.originScreen) ctx.originScreen = origin
+        if (!ctx.currentProjectId) {
+            ctx.currentProjectId = appController.writingProjectId
+                || selected.projectId || ""
+        }
+        if (!ctx.currentVolumeId) ctx.currentVolumeId = selected.volumeId || ""
+        if (!ctx.currentChapterId) ctx.currentChapterId = selected.chapterId || ""
+        if (!ctx.currentStarmapId) ctx.currentStarmapId = appController.starmapId || ""
+
+        window.globalSearchContext = ctx
+        window.globalSearchVisible = true
+        globalSearchOverlay.open(ctx)
+        window.debugLog("search", "open", "origin=" + ctx.originScreen)
+    }
+
+    function searchTargetExists(result) {
+        if (!result || !result.target) return false
+        var target = result.target
+        // 星图和设置是全局数据，不依赖当前打开的作品树；绑定星图带 projectId
+        // 也不能因此被误判为「已删除」。
+        if (target.starmapId || target.settingKey || target.settingSection) return true
+        if (!target.projectId) return true
+
+        var tree = window.appState && window.appState.tree
+            ? window.appState.tree : []
+        var projectFound = false
+        var volumeFound = !target.volumeId
+        var chapterFound = !target.chapterId
+        for (var i = 0; i < tree.length; i += 1) {
+            var node = tree[i]
+            if (!node) continue
+            if (node.type === "project" && node.id === target.projectId) {
+                projectFound = true
+            } else if (node.type === "volume"
+                       && node.id === target.volumeId
+                       && node.projectId === target.projectId) {
+                volumeFound = true
+            } else if (node.type === "chapter"
+                       && node.id === target.chapterId
+                       && node.volumeId === target.volumeId
+                       && node.projectId === target.projectId) {
+                chapterFound = true
+            }
+        }
+        if (target.chapterId) return projectFound && volumeFound && chapterFound
+        if (target.volumeId) return projectFound && volumeFound
+        return projectFound
+    }
+
+    function searchPathTail(path) {
+        var parts = String(path || "").split(" / ")
+        return parts.length > 0 ? parts[parts.length - 1] : ""
+    }
+
+    function schedulePendingSearchReveal(pId, vId, cId, startByte, endByte) {
+        window.pendingSearchReveal = {
+            projectId: pId,
+            volumeId: vId,
+            chapterId: cId,
+            startByte: Number(startByte),
+            endByte: Number(endByte)
+        }
+        window.pendingSearchRevealAttempts = 0
+        searchRevealRetryTimer.restart()
+        window.applyPendingSearchReveal()
+    }
+
+    function applyPendingSearchReveal() {
+        var pending = window.pendingSearchReveal
+        if (!pending) return false
+        var workspace = writingWorkspaceLoader.item
+        if (!workspace || !workspace.requestSearchReveal) return false
+        var revealed = workspace.requestSearchReveal(
+            pending.projectId,
+            pending.volumeId,
+            pending.chapterId,
+            pending.startByte,
+            pending.endByte
+        )
+        if (revealed) {
+            window.pendingSearchReveal = null
+            searchRevealRetryTimer.stop()
+        }
+        return revealed
+    }
+
+    function schedulePendingStarmapSearchTarget(target) {
+        window.pendingStarmapSearchTarget = target || null
+        window.pendingStarmapSearchAttempts = 0
+        starmapSearchRevealRetryTimer.restart()
+        window.applyPendingStarmapSearchTarget()
+    }
+
+    function applyPendingStarmapSearchTarget() {
+        var pending = window.pendingStarmapSearchTarget
+        if (!pending) return false
+        var workspace = starmapWorkspaceLoader.item
+        if (!workspace || !workspace.revealSearchTarget) return false
+        if (workspace.revealSearchTarget(pending)) {
+            window.pendingStarmapSearchTarget = null
+            starmapSearchRevealRetryTimer.stop()
+            return true
+        }
+        return false
+    }
+
+    function navigateToSearchResult(result) {
+        if (!result) return false
+        if (!window.searchTargetExists(result)) {
+            globalSearchOverlay.showMessage(qsTr("目标已不存在或已被删除"))
+            return false
+        }
+
+        var target = result.target || ({})
+        // 离开或定位当前章节前先保存。保存失败时不跳转，搜索浮层保持打开。
+        if (appController.inWriting) {
+            var saved = true
+            try {
+                saved = window.preSyncBarrier()
+            } catch (e) {
+                saved = false
+            }
+            if (!saved) {
+                var reason = window.manualSyncBarrierFailureReason
+                    || qsTr("当前章节尚未保存")
+                globalSearchOverlay.showMessage(qsTr("无法离开当前章节：%1").arg(reason))
+                return false
+            }
+        }
+
+        if (target.chapterId) {
+            var projectId = target.projectId || ""
+            var volumeId = target.volumeId || ""
+            var chapterId = target.chapterId
+            appController.openWriting(
+                projectId,
+                window.projectTitleById(projectId) || result.title || qsTr("作品")
+            )
+            // 只有正文命中能在编辑器里按字节范围选中；标题/备注命中只负责打开章节。
+            if (result.scope === "chapterBody") {
+                window.schedulePendingSearchReveal(
+                    projectId,
+                    volumeId,
+                    chapterId,
+                    result.byteStart,
+                    result.byteEnd
+                )
+            }
+            globalSearchOverlay.close()
+            return true
+        }
+
+        if (target.starmapId) {
+            appController.openRootStarmap(
+                target.starmapId,
+                window.searchPathTail(result.path) || qsTr("星图")
+            )
+            if ((target.nodeId || target.edgeId || target.embedId)
+                    && result.scope !== "starmapTitle") {
+                window.schedulePendingStarmapSearchTarget(target)
+            }
+            globalSearchOverlay.close()
+            return true
+        }
+
+        if (target.settingKey || target.settingSection) {
+            window.openSettingsDialog(target.settingSection || "")
+            globalSearchOverlay.close()
+            return true
+        }
+
+        if (target.projectId) {
+            appController.openWriting(
+                target.projectId,
+                window.projectTitleById(target.projectId) || result.title || qsTr("作品")
+            )
+            globalSearchOverlay.close()
+            return true
+        }
+
+        globalSearchOverlay.showMessage(qsTr("该结果没有可导航的目标"))
+        return false
+    }
+
+    Timer {
+        id: searchRevealRetryTimer
+        interval: 40
+        repeat: true
+        onTriggered: {
+            window.pendingSearchRevealAttempts += 1
+            if (window.applyPendingSearchReveal()) return
+            if (window.pendingSearchRevealAttempts < 25) return
+            window.pendingSearchReveal = null
+            window.pendingSearchRevealAttempts = 0
+            searchRevealRetryTimer.stop()
+            window.debugLog("search", "reveal_target_unavailable", "")
+        }
+    }
+
+    Timer {
+        id: starmapSearchRevealRetryTimer
+        interval: 40
+        repeat: true
+        onTriggered: {
+            window.pendingStarmapSearchAttempts += 1
+            if (window.applyPendingStarmapSearchTarget()) return
+            if (window.pendingStarmapSearchAttempts < 25) return
+            window.pendingStarmapSearchTarget = null
+            window.pendingStarmapSearchAttempts = 0
+            starmapSearchRevealRetryTimer.stop()
+            window.debugLog("search", "starmap_reveal_unavailable", "")
+        }
     }
 
     function openConflictInProject(targetKind, projectId, path) {
@@ -636,6 +885,14 @@ Kirigami.ApplicationWindow {
         : (appController.inStarmap ? "starmap" : "hub")
 
     property string previousEditorText: ""
+
+    // Issue #982：全局搜索浮层与待定位结果。
+    property bool globalSearchVisible: false
+    property var globalSearchContext: ({})
+    property var pendingSearchReveal: null
+    property int pendingSearchRevealAttempts: 0
+    property var pendingStarmapSearchTarget: null
+    property int pendingStarmapSearchAttempts: 0
 
     SystemPalette {
         id: systemPalette
@@ -852,6 +1109,8 @@ Kirigami.ApplicationWindow {
             appBackend.apply_window_dark_mode(designTokens.isDark);
         }
         appController.restoreWorkspace();
+        // 启动时同步一次真实前台状态，避免窗口已经 active 却不触发 onActiveChanged。
+        window.syncWritingSessionLifecycle();
         // Issue #696 评论 5696993601: 无工作区时 load_app_theme_mode() 已在
         // try_restore_last_workspace 内部执行完毕，这里发布一次
         // themeController.reload() 作为无工作区 fallback 路径的主题收口点。
@@ -867,7 +1126,8 @@ Kirigami.ApplicationWindow {
         window.autoSyncShutdown = true
         if (autoSyncWakeTimer) autoSyncWakeTimer.stop()
         if (editorBackend) {
-            editorBackend.close_writing_session("close")
+            // 关闭会话后等统计 writer 落盘，避免 process::exit 丢掉最后不足 30 秒的切片。
+            editorBackend.close_writing_session_and_wait("close")
         }
         if (appController.inWriting) {
             editorBackend.flush_recent_edits();
@@ -1038,7 +1298,7 @@ Kirigami.ApplicationWindow {
                 if (ws) ws.formatActiveEditor();
             }
             onRequestSync: window.requestManualSync(window.desktopTopBarMode)
-            onRequestSearch: window.debugLog("search", "request_search", "")
+            onRequestSearch: window.openGlobalSearch({})
             onOpenSettings: window.openSettingsDialog()
         }
 
@@ -1067,7 +1327,7 @@ Kirigami.ApplicationWindow {
                     window.requestManualSync("starmap")
                 }
                 onRequestSearch: {
-                    window.debugLog("search", "request_search", "");
+                    window.openGlobalSearch({});
                 }
                 onOpenSettings: {
                     window.openSettingsDialog();
@@ -1129,7 +1389,7 @@ Kirigami.ApplicationWindow {
                 }
 
                 onRequestSearch: {
-                    window.debugLog("search", "request_search", "");
+                    window.openGlobalSearch({});
                 }
             }
         }
@@ -1141,7 +1401,10 @@ Kirigami.ApplicationWindow {
             active: rootHasWorkspace && appController.inWriting
             // Issue #762 评论 5826175490 第 4 点：作品从全局冲突入口打开时，
             // Loader 到这里才有 item，补交待选中的冲突路径。
-            onLoaded: window.applyPendingConflictPath()
+            onLoaded: {
+                window.applyPendingConflictPath()
+                window.applyPendingSearchReveal()
+            }
             sourceComponent: WritingWorkspace {
                 dt: designTokens
                 projectBackendRef: projectBackend
@@ -1165,7 +1428,10 @@ Kirigami.ApplicationWindow {
                 syncBackendRef: syncBackend
                 // Issue #770 评论 5842877986: 作品切到位后发 projectReady，
                 // main.qml 据此消费 pendingConflictPath（项目 id 匹配才消费）。
-                onProjectReady: window.applyPendingConflictPath()
+                onProjectReady: {
+                    window.applyPendingConflictPath()
+                    window.applyPendingSearchReveal()
+                }
 
                 onBackToProjects: {
                     // Issue #796 评论 5886483653: 从写作区返回仍回 openHub(0)（作品页）。
@@ -1182,8 +1448,7 @@ Kirigami.ApplicationWindow {
                     window.requestManualSync("writing")
                 }
                 onRequestSearch: {
-                    // 全局搜索正式 UI 继续接 #477，搜索页还没接完时保留入口
-                    window.debugLog("search", "request_search", "");
+                    window.openGlobalSearch({});
                 }
 
 
@@ -1497,6 +1762,18 @@ Kirigami.ApplicationWindow {
 
         onOpened: {
             inputField.text = inputDialog.defaultText;
+        }
+    }
+
+    // Issue #982：全局搜索浮层放在最上层；只有点击结果才触发导航。
+    GlobalSearchOverlay {
+        id: globalSearchOverlay
+        searchBackendRef: searchBackend
+        onResultActivated: function(result) {
+            window.navigateToSearchResult(result)
+        }
+        onClosed: {
+            window.globalSearchVisible = false
         }
     }
 }

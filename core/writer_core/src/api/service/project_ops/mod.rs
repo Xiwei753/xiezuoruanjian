@@ -72,6 +72,15 @@ impl WriterCoreApi {
             .core_write()
             .create_project_with_id(id, title, order)
             .map_err(WriterError::from)?;
+        let entry = crate::search::extractor::extract_project_title_entry(id, title);
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
         // 恢复场景：不记录 workspace history（manifest 是已有事实来源）
         // 不自动创建默认卷（卷信息在 manifest 中）
         Ok(project.into())
@@ -285,6 +294,16 @@ impl WriterCoreApi {
             .core_write()
             .create_volume_with_id(project_id, id, title, order)
             .map_err(WriterError::from)?;
+        let entry =
+            crate::search::extractor::extract_volume_title_entry(project_id, id, title);
+        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+            action: crate::search::SearchIndexAction::Upsert,
+            object_id: entry.object_id.clone(),
+            scope: entry.scope,
+            title: entry.title.clone(),
+            body: entry.body.clone(),
+            target: Some(entry.target.clone()),
+        });
         Ok(volume.into())
     }
 

@@ -16,15 +16,16 @@ impl WriterCoreApi {
             .core_write()
             .save_local_settings_with_changes(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
-        let entry = crate::search::extractor::extract_setting_entry("local", &body);
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Upsert,
-            object_id: entry.object_id.clone(),
-            scope: entry.scope,
-            title: entry.title.clone(),
-            body: entry.body.clone(),
-            target: Some(entry.target.clone()),
-        });
+        for entry in crate::search::extractor::extract_settings_from_json("local", &body) {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
+            });
+        }
         let _ = self.record_workspace_change_set_history(&change_set, "save_local_settings");
         Ok(true)
     }
@@ -42,15 +43,16 @@ impl WriterCoreApi {
             .core_write()
             .save_syncable_settings_with_changes(&settings.clone().into())?;
         let body = serde_json::to_string(&settings).unwrap_or_default();
-        let entry = crate::search::extractor::extract_setting_entry("syncable", &body);
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Upsert,
-            object_id: entry.object_id.clone(),
-            scope: entry.scope,
-            title: entry.title.clone(),
-            body: entry.body.clone(),
-            target: Some(entry.target.clone()),
-        });
+        for entry in crate::search::extractor::extract_settings_from_json("sync", &body) {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
+            });
+        }
         let _ = self.record_workspace_change_set_history(&change_set, "save_syncable_settings");
         Ok(true)
     }

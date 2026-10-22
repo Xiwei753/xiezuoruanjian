@@ -221,6 +221,7 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 #include "napi/napi_starmap.cpp"
 #include "napi/napi_editor_session.cpp"
 #include "napi/napi_correction.cpp"
+#include "napi/napi_search.cpp"
 
 // ── Core lifecycle ──
 
@@ -678,6 +679,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     // Collect descriptors from all domains
     size_t app_state_count = 0, proj_count = 0, chap_count = 0, set_count = 0;
     size_t sync_count = 0, stats_count = 0, sm_count = 0, editor_count = 0, correction_count = 0;
+    size_t search_count = 0;
 
     napi_property_descriptor* app_state_desc = getAppStateDescriptors(&app_state_count);
     napi_property_descriptor* proj_desc = getProjectDescriptors(&proj_count);
@@ -688,6 +690,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor* sm_desc = getStarMapDescriptors(&sm_count);
     napi_property_descriptor* editor_desc = getEditorSessionDescriptors(&editor_count);
     napi_property_descriptor* correction_desc = getCorrectionDescriptors(&correction_count);
+    napi_property_descriptor* search_desc = getSearchDescriptors(&search_count);
 
     // Core lifecycle + misc descriptors
     napi_property_descriptor core_desc[] = {
@@ -710,7 +713,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     size_t core_count = sizeof(core_desc) / sizeof(core_desc[0]);
 
     // Merge all descriptors
-    size_t total = core_count + app_state_count + proj_count + chap_count + set_count + sync_count + stats_count + sm_count + editor_count + correction_count;
+    size_t total = core_count + app_state_count + proj_count + chap_count + set_count + sync_count + stats_count + sm_count + editor_count + correction_count + search_count;
     napi_property_descriptor* all_desc = new napi_property_descriptor[total];
     size_t offset = 0;
 
@@ -724,6 +727,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     memcpy(all_desc + offset, sm_desc, sm_count * sizeof(napi_property_descriptor)); offset += sm_count;
     memcpy(all_desc + offset, editor_desc, editor_count * sizeof(napi_property_descriptor)); offset += editor_count;
     memcpy(all_desc + offset, correction_desc, correction_count * sizeof(napi_property_descriptor)); offset += correction_count;
+    memcpy(all_desc + offset, search_desc, search_count * sizeof(napi_property_descriptor)); offset += search_count;
 
     napi_define_properties(env, exports, total, all_desc);
     delete[] all_desc;

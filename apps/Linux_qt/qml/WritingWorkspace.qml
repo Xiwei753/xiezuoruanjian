@@ -501,6 +501,24 @@ Rectangle {
         }
     }
 
+    // Issue #982：从全局搜索结果定位到当前作品的章节正文。需要时先打开章节，
+    // 再把 Core 给出的原始 UTF-8 字节范围交给编辑器选中、滚动并高亮。
+    function requestSearchReveal(pId, vId, cId, startByte, endByte) {
+        if (!pId || !vId || !cId) return false;
+        if (editorController.projectId !== pId
+                || editorController.volumeId !== vId
+                || editorController.chapterId !== cId) {
+            root.openChapter(pId, vId, cId, "");
+        }
+        if (editorController.projectId !== pId
+                || editorController.volumeId !== vId
+                || editorController.chapterId !== cId
+                || editorController.isLoadingChapter) {
+            return false;
+        }
+        return editorController.revealSearchRange(startByte, endByte);
+    }
+
     function reloadActiveChapter() {
         if (editorController.projectId && editorController.volumeId && editorController.chapterId) {
             editorViewport.snapNextCursorUpdate();

@@ -120,7 +120,10 @@ val settingsCategories =
  */
 @SuppressLint("LocalContextGetResourceValueCall")
 @Composable
-fun SettingsRoute(modifier: Modifier = Modifier) {
+fun SettingsRoute(
+    modifier: Modifier = Modifier,
+    onOpenSearch: (SettingsSection?) -> Unit = {},
+) {
     val view = LocalView.current
     // #631: screen 标记移至 SujianNavigationSuite，SettingsRoute 不再写 screen。
     val deps = LocalSujianAppDependencies.current
@@ -141,6 +144,12 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
         rememberSaveable(saver = SettingsExpansionState.Saver) {
             SettingsExpansionState()
         }
+    val requestedSection = SettingsSectionRequest.requestedSection
+    LaunchedEffect(requestedSection) {
+        val section = requestedSection ?: return@LaunchedEffect
+        expansionState.setExpanded(section, true)
+        SettingsSectionRequest.consume(section)
+    }
 
     // #630 评论5324547885项3：Settings 自身绘制层动画 — 120~140ms alpha + translationY。
     // 与 SujianTopLevelSwitchMotion 同路线：只动画 graphicsLayer，不改布局尺寸。
@@ -175,7 +184,7 @@ fun SettingsRoute(modifier: Modifier = Modifier) {
                     .padding(horizontal = dims.space16, vertical = dims.space8)
                     .testTag(SujianSemanticIds.SettingsScreen),
         ) {
-            SettingsSearchEntry(onClick = {})
+            SettingsSearchEntry(onClick = { onOpenSearch(expansionState.currentSection()) })
             Spacer(Modifier.height(dims.space16))
 
             SettingsGroupList(expansionState, vm)

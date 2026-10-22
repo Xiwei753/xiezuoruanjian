@@ -18,6 +18,7 @@ import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, Wri
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
+import { SearchResultPage, SearchResult, SearchTarget, SearchField, SearchScope } from '../dto/SearchDtos'
 
 // ─── Decode Result ───
 
@@ -2360,3 +2361,122 @@ export function decodeEditorEditResult(data: Object): DecodeResult<import('../dt
   }; return ok(value)
 }
 
+// ─── Global Search Decoders (Issue #982) ───
+// SearchTarget 的所有字段在 Core 侧都是 Option，未设置时序列化为 null。
+// summaryMatchRanges 是 Vec<(usize, usize)>，wire 上是数字二元数组。
+
+function decodeSearchTarget(data: Object): DecodeResult<SearchTarget> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<SearchTarget>('SearchTarget: expected object')
+  }
+  const projectIdR: DecodeResult<string | null> = nullStr(data, 'projectId')
+  if (!projectIdR.ok || projectIdR.value === undefined) { return err<SearchTarget>(`target.${projectIdR.error ?? 'projectId'}`) }
+  const volumeIdR: DecodeResult<string | null> = nullStr(data, 'volumeId')
+  if (!volumeIdR.ok || volumeIdR.value === undefined) { return err<SearchTarget>(`target.${volumeIdR.error ?? 'volumeId'}`) }
+  const chapterIdR: DecodeResult<string | null> = nullStr(data, 'chapterId')
+  if (!chapterIdR.ok || chapterIdR.value === undefined) { return err<SearchTarget>(`target.${chapterIdR.error ?? 'chapterId'}`) }
+  const starmapIdR: DecodeResult<string | null> = nullStr(data, 'starmapId')
+  if (!starmapIdR.ok || starmapIdR.value === undefined) { return err<SearchTarget>(`target.${starmapIdR.error ?? 'starmapId'}`) }
+  const nodeIdR: DecodeResult<string | null> = nullStr(data, 'nodeId')
+  if (!nodeIdR.ok || nodeIdR.value === undefined) { return err<SearchTarget>(`target.${nodeIdR.error ?? 'nodeId'}`) }
+  const edgeIdR: DecodeResult<string | null> = nullStr(data, 'edgeId')
+  if (!edgeIdR.ok || edgeIdR.value === undefined) { return err<SearchTarget>(`target.${edgeIdR.error ?? 'edgeId'}`) }
+  const linkIdR: DecodeResult<string | null> = nullStr(data, 'linkId')
+  if (!linkIdR.ok || linkIdR.value === undefined) { return err<SearchTarget>(`target.${linkIdR.error ?? 'linkId'}`) }
+  const hyperlinkIdR: DecodeResult<string | null> = nullStr(data, 'hyperlinkId')
+  if (!hyperlinkIdR.ok || hyperlinkIdR.value === undefined) { return err<SearchTarget>(`target.${hyperlinkIdR.error ?? 'hyperlinkId'}`) }
+  const embedIdR: DecodeResult<string | null> = nullStr(data, 'embedId')
+  if (!embedIdR.ok || embedIdR.value === undefined) { return err<SearchTarget>(`target.${embedIdR.error ?? 'embedId'}`) }
+  const settingKeyR: DecodeResult<string | null> = nullStr(data, 'settingKey')
+  if (!settingKeyR.ok || settingKeyR.value === undefined) { return err<SearchTarget>(`target.${settingKeyR.error ?? 'settingKey'}`) }
+  const settingSectionR: DecodeResult<string | null> = nullStr(data, 'settingSection')
+  if (!settingSectionR.ok || settingSectionR.value === undefined) { return err<SearchTarget>(`target.${settingSectionR.error ?? 'settingSection'}`) }
+  return ok<SearchTarget>({
+    projectId: projectIdR.value,
+    volumeId: volumeIdR.value,
+    chapterId: chapterIdR.value,
+    starmapId: starmapIdR.value,
+    nodeId: nodeIdR.value,
+    edgeId: edgeIdR.value,
+    linkId: linkIdR.value,
+    hyperlinkId: hyperlinkIdR.value,
+    embedId: embedIdR.value,
+    settingKey: settingKeyR.value,
+    settingSection: settingSectionR.value
+  })
+}
+
+function decodeSearchSummaryRange(data: Object): DecodeResult<number[]> {
+  if (!Array.isArray(data)) {
+    return err<number[]>('summaryMatchRange: expected array')
+  }
+  const raw: Array<Object> = data as Array<Object>
+  if (raw.length < 2) {
+    return err<number[]>('summaryMatchRange: expected [start, end]')
+  }
+  const start: Object | undefined = raw[0]
+  const end: Object | undefined = raw[1]
+  if (typeof start !== 'number' || typeof end !== 'number') {
+    return err<number[]>('summaryMatchRange: offsets must be numbers')
+  }
+  return ok<number[]>([start, end])
+}
+
+function decodeSearchResult(data: Object): DecodeResult<SearchResult> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<SearchResult>('SearchResult: expected object')
+  }
+  const objectId: string | null = reqStr(data, 'objectId')
+  if (objectId === null) { return err<SearchResult>('objectId missing') }
+  const title: string | null = reqStr(data, 'title')
+  if (title === null) { return err<SearchResult>('title missing') }
+  const path: string | null = reqStr(data, 'path')
+  if (path === null) { return err<SearchResult>('path missing') }
+  const summary: string | null = reqStr(data, 'summary')
+  if (summary === null) { return err<SearchResult>('summary missing') }
+  const byteStart: number | null = reqNum(data, 'byteStart')
+  if (byteStart === null) { return err<SearchResult>('byteStart missing') }
+  const byteEnd: number | null = reqNum(data, 'byteEnd')
+  if (byteEnd === null) { return err<SearchResult>('byteEnd missing') }
+  const rangesArr: Array<Object> | null = reqArray(data, 'summaryMatchRanges')
+  if (rangesArr === null) { return err<SearchResult>('summaryMatchRanges missing or not array') }
+  const rangesR: DecodeResult<number[][]> = decodeArray<number[]>(rangesArr as Object, decodeSearchSummaryRange, 'summaryMatchRanges')
+  if (!rangesR.ok || rangesR.value === undefined) { return err<SearchResult>(rangesR.error ?? 'summaryMatchRanges decode failed') }
+  const field: string | null = reqStr(data, 'field')
+  if (field === null) { return err<SearchResult>('field missing') }
+  if (field !== 'title' && field !== 'body') { return err<SearchResult>(`field invalid: ${field}`) }
+  const score: number | null = reqNum(data, 'score')
+  if (score === null) { return err<SearchResult>('score missing') }
+  const scope: string | null = reqStr(data, 'scope')
+  if (scope === null) { return err<SearchResult>('scope missing') }
+  const targetObj: Object | null = reqObj(data, 'target')
+  if (targetObj === null) { return err<SearchResult>('target missing or not object') }
+  const targetR: DecodeResult<SearchTarget> = decodeSearchTarget(targetObj)
+  if (!targetR.ok || targetR.value === undefined) { return err<SearchResult>(`target: ${targetR.error ?? 'decode failed'}`) }
+  return ok<SearchResult>({
+    objectId: objectId,
+    title: title,
+    path: path,
+    summary: summary,
+    byteStart: byteStart,
+    byteEnd: byteEnd,
+    summaryMatchRanges: rangesR.value,
+    field: field as SearchField,
+    score: score,
+    scope: scope as SearchScope,
+    target: targetR.value
+  })
+}
+
+export function decodeSearchResultPage(data: Object): DecodeResult<SearchResultPage> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<SearchResultPage>('SearchResultPage: expected object')
+  }
+  const itemsArr: Array<Object> | null = reqArray(data, 'items')
+  if (itemsArr === null) { return err<SearchResultPage>('items missing or not array') }
+  const itemsR: DecodeResult<SearchResult[]> = decodeArray<SearchResult>(itemsArr as Object, decodeSearchResult, 'items')
+  if (!itemsR.ok || itemsR.value === undefined) { return err<SearchResultPage>(itemsR.error ?? 'items decode failed') }
+  const nextCursorR: DecodeResult<string | null> = nullStr(data, 'nextCursor')
+  if (!nextCursorR.ok || nextCursorR.value === undefined) { return err<SearchResultPage>(`nextCursor: ${nextCursorR.error ?? 'decode failed'}`) }
+  return ok<SearchResultPage>({ items: itemsR.value, nextCursor: nextCursorR.value })
+}

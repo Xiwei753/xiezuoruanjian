@@ -35,11 +35,17 @@ export interface ViewportDimensions {
 }
 export type GetDimensionsImpl = () => ViewportDimensions
 
+// 把指定 UTF-16 offset 滚动到可读位置。由 SujianEditor 注册，按当前行布局计算目标 y。
+export type RevealOffsetImpl = (utf16Offset: number) => void
+
 export class EditorViewportController {
   private scrollToImpl: ScrollToImpl | null = null
   private getDimensionsImpl: GetDimensionsImpl | null = null
+  private revealImpl: RevealOffsetImpl | null = null
   // 待恢复的状态：SujianEditor 注册前或尺寸未就绪时 WritingScreen 可能已调 restore，缓存等就绪后执行。
   private pendingRestore: EditorViewportState | null = null
+  // 搜索命中定位：编辑器尚未注册时暂存，注册后立即消费。
+  private pendingRevealOffset: number | null = null
 
   // SujianEditor 注册 scrollTo 和 getDimensions 实现。
   // 注册后不立即消费 pending：尺寸可能为 0（layout 未就绪），clamp 会把 offset 压成 0 丢失位置。
@@ -50,10 +56,31 @@ export class EditorViewportController {
     this.tryConsumePending()
   }
 
+  // 注册“滚动到指定 UTF-16 offset”的实现。SujianEditor 在 aboutToAppear 与 scrollTo 一起注册。
+  registerReveal(reveal: RevealOffsetImpl): void {
+    this.revealImpl = reveal
+    if (this.pendingRevealOffset !== null) {
+      const target: number = this.pendingRevealOffset
+      this.pendingRevealOffset = null
+      this.revealImpl(target)
+    }
+  }
+
   // SujianEditor 注销（aboutToDisappear 时）。
   unregister(): void {
     this.scrollToImpl = null
     this.getDimensionsImpl = null
+    this.revealImpl = null
+  }
+
+  // 搜索命中定位：把指定 UTF-16 offset 所在行滚到视口内。
+  // 编辑器还没注册时缓存一次，注册后消费；连续点击以最后一次为准。
+  reveal(utf16Offset: number): void {
+    if (this.revealImpl !== null) {
+      this.revealImpl(utf16Offset)
+      return
+    }
+    this.pendingRevealOffset = utf16Offset
   }
 
   // WritingScreen 调用：恢复到指定 viewport 状态。

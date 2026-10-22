@@ -1153,6 +1153,54 @@ Item {
 
     // ── Issue #832：唯一命中入口 ──
     // 命中只发生在当前活动画布上；命中身份带该画布的 routeKey。
+    // Issue #982：把全局搜索命中的星图对象带到镜头中心并选中。
+    // 搜索索引只覆盖根星图对象，因此这里始终按根画布定位。
+    function revealSearchTarget(target) {
+        var scene = activeScene()
+        if (!target || !scene)
+            return false
+        if (!target.nodeId && !target.edgeId && !target.embedId)
+            return false
+        if (!focusIsRoot)
+            resetToRoot()
+        scene = activeScene()
+        if (!scene)
+            return false
+
+        var kind = ""
+        var itemId = ""
+        if (target.nodeId) {
+            kind = "node"
+            itemId = target.nodeId
+        } else if (target.edgeId) {
+            kind = "edge"
+            itemId = target.edgeId
+        } else {
+            kind = "embed"
+            itemId = target.embedId
+        }
+
+        var item = kind === "node" ? scene.hitNode(itemId)
+            : kind === "edge" ? scene.hitEdge(itemId)
+            : scene.hitEmbed(itemId)
+        if (!item)
+            return false
+
+        if (kind === "node")
+            scene.selectNode(itemId)
+        else if (kind === "edge")
+            scene.selectEdge(itemId)
+        else
+            scene.selectEmbed(itemId)
+
+        var center = scene.itemCenterScene(kind, itemId)
+        if (center) {
+            applyPan(width / 2 - center.x * zoomLevel,
+                     height / 2 - center.y * zoomLevel)
+        }
+        return true
+    }
+
     function hitTargetAtScreen(sx, sy) {
         var scene = activeScene()
         if (!scene)

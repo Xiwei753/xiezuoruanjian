@@ -160,6 +160,8 @@ class StatsViewModelTest {
             cause = EditorTransactionCauseDto.TYPING,
             insertedChars = 1,
             deletedChars = 0,
+            eventId = "test-event-1",
+            occurredAtMs = 1_700_000_000_000,
         )
         assertEquals(
             "Record 还在队列里时 revision 不能变（否则测不到缓存先判的窗口）",
@@ -218,6 +220,8 @@ class StatsViewModelTest {
             cause = EditorTransactionCauseDto.TYPING,
             insertedChars = 1,
             deletedChars = 0,
+            eventId = "test-event-1",
+            occurredAtMs = 1_700_000_000_000,
         )
         // 契约：只有写入成功才递增 revision；失败（单测环境原生库未加载 →
         // NotLoaded/Error）不得递增，否则 UI 会因失败不断重查。

@@ -49,6 +49,10 @@ object SujianSemanticIds {
     const val EditorContent = "editor.content"
     const val EditorSaveStatus = "editor.save_status"
 
+    // ---- 全局搜索 ----
+    const val SearchScreen = "search.screen"
+    const val SearchInput = "search.input"
+
     // ---- 星图占位页（功能未实现，仅保留页面级 ID）----
     const val StarMapScreen = "starmap.screen"
 

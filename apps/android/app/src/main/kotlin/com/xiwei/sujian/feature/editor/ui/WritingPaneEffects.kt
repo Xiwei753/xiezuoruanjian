@@ -22,6 +22,7 @@ import com.xiwei.sujian.feature.editor.presentation.shouldConsumePendingAfterFac
 import com.xiwei.sujian.feature.editor.session.CoreEditFactEvent
 import com.xiwei.sujian.feature.editor.session.ExternalContentDecision
 import com.xiwei.sujian.feature.editor.session.SessionResetSource
+import com.xiwei.sujian.feature.editor.session.TargetDecorations
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.session.applyExternalContentFact
 import com.xiwei.sujian.feature.editor.session.consumePendingExternalFact
@@ -369,6 +370,52 @@ internal fun WritingPaneSettingsReload(
     LaunchedEffect(targetId) {
         com.xiwei.sujian.feature.settings.data.CoreSettingsEvents.editorSettingsChanged.collect {
             viewModel.reloadSettings()
+        }
+    }
+}
+
+// ── 全局搜索定位 ──────────────────────────────────────────────
+
+/**
+ * 搜索结果正文命中 → 编辑器选区与滚动定位。
+ *
+ * 只消费与当前章节匹配的一次性请求；UTF-8 byte offset 经 [TextOffsetUtils]
+ * 转 UTF-16 后写入 [EditorTextFieldStateBridge]，并通过 viewport 的 reveal
+ * 请求滚动到命中行。搜索命中同时作为搜索高亮装饰显示。
+ */
+@Composable
+@Suppress("LongParameterList")
+internal fun WritingPaneSearchReveal(
+    coordinator: EditorWindowHost,
+    targetId: String,
+    projectId: String,
+    volumeId: String,
+    chapterId: String,
+    bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
+    viewportState: com.xiwei.sujian.feature.editor.layout.EditorViewportState,
+    loading: Boolean,
+) {
+    val pendingReveal = EditorSearchRevealGate.pending
+    LaunchedEffect(targetId, loading, bridge.mirroredText, pendingReveal) {
+        if (loading) return@LaunchedEffect
+        val reveal = EditorSearchRevealGate.consumeFor(projectId, volumeId, chapterId) ?: return@LaunchedEffect
+        val text = bridge.mirroredText
+        if (text.isEmpty()) return@LaunchedEffect
+        val range = TextOffsetUtils.utf16TextRangeForUtf8(text, reveal.byteStart, reveal.byteEnd)
+        bridge.state.edit {
+            selection = range
+        }
+        coordinator.setTargetDecorations(
+            targetId,
+            TargetDecorations(
+                searchHighlightsUtf8 = listOf(reveal.byteStart to reveal.byteEnd),
+                selectionStartUtf8 = reveal.byteStart,
+                selectionEndUtf8 = reveal.byteEnd,
+            ),
+        )
+        viewportState.requestReveal(range.start)
+        viewportState.consumeRevealScrollY()?.let { y ->
+            viewportState.scrollState.scrollTo(y)
         }
     }
 }

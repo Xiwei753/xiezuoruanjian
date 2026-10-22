@@ -10,6 +10,7 @@ package com.xiwei.sujian.feature.editor.presentation
 // ! 纯 selection/cursor-only（contentChanged=false）不进持久化状态机。
 
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
+import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -59,6 +60,21 @@ fun EditorViewModel.onEditorApplied(event: EditorAppliedEvent) {
  */
 fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
     val session = currentSession ?: return
+    val occurredAtMs = System.currentTimeMillis()
+    val eventId = UUID.randomUUID().toString()
+    // Issue #981：真人输入/删除建立并延续真实计时会话；粘贴/AI/撤销重做不建立。
+    // 计时锚点与编辑事件共用同一个发生时刻，首笔字数不会落在片段之外。
+    if (event.cause.isHumanWritingActivity() &&
+        (event.contentDelta.insertedChars > 0 || event.contentDelta.deletedChars > 0)
+    ) {
+        writingSessionTracker.onHumanEdit(
+            session.projectId,
+            session.volumeId,
+            session.chapterId,
+            event.contentDelta.insertedChars,
+            occurredAtMs,
+        )
+    }
     statsRepository.recordEditorChangeStats(
         session.projectId,
         session.volumeId,
@@ -66,13 +82,9 @@ fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
         event.cause,
         event.contentDelta.insertedChars,
         event.contentDelta.deletedChars,
+        eventId,
+        occurredAtMs,
     )
-    // Issue #981：真人输入/删除建立并延续真实计时会话；粘贴/AI/撤销重做不建立。
-    if (event.cause.isHumanWritingActivity() &&
-        (event.contentDelta.insertedChars > 0 || event.contentDelta.deletedChars > 0)
-    ) {
-        writingSessionTracker.onHumanEdit(session.projectId, session.volumeId, session.chapterId)
-    }
 }
 
 /**
@@ -92,13 +104,13 @@ fun EditorViewModel.scheduleStatsRefresh() {
 fun EditorViewModel.updateStats() {
     val currentWordCount = _uiState.value.wordCount
     val sessionAdded = currentWordCount - initialWordCount
-    val elapsedMinutes = (System.currentTimeMillis() - sessionStartTime) / 60000.0
+    // Issue #981：速度只取真实前台会话的累计人工字数 / 单调计时秒数，
+    // 不再用墙钟差把退后台、锁屏、离开正文的时间算进分母。
     val speed =
-        if (elapsedMinutes > 0 && sessionAdded > 0) {
-            (sessionAdded / elapsedMinutes).toInt()
-        } else {
-            0
-        }
+        writingSessionTracker
+            .currentCharsPerHour()
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
     _uiState.value =
         _uiState.value.copy(
             wordCount = currentWordCount,

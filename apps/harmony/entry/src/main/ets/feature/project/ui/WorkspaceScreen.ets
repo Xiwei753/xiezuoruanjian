@@ -80,7 +80,11 @@ export struct WorkspaceScreen {
     if (params) {
       this.viewModel.projectId = params.projectId
       this.viewModel.projectName = params.projectName
-      this.viewModel.loadData(params.projectId)
+      this.viewModel.loadData(params.projectId).then((): void => {
+        if (params.focusVolumeId !== undefined && params.focusVolumeId.length > 0) {
+          this.viewModel.expandVolume(params.focusVolumeId)
+        }
+      })
       // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
       AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
     }

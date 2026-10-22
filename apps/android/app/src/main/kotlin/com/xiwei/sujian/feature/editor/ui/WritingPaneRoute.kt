@@ -165,6 +165,7 @@ fun WritingPane(
             coordinator = coordinator,
             viewModel = currentViewModel,
             projectId = projectId,
+            volumeId = volumeId,
             chapterId = chapterId,
             targetId = targetId,
             isActivePane = isActivePane,
@@ -193,6 +194,10 @@ private fun WritingPaneSessionLifecycle(viewModel: EditorViewModel) {
                 }
             }
         lifecycleOwner.lifecycle.addObserver(observer)
+        // addObserver 不会补发当前状态；页面在 RESUMED 状态下进入时先显式放行计时。
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            viewModel.onWritingForeground()
+        }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.closeWritingSession()
@@ -213,6 +218,7 @@ private fun WritingPaneEditorContent(
     coordinator: com.xiwei.sujian.feature.editor.window.EditorWindowHost,
     viewModel: EditorViewModel,
     projectId: String,
+    volumeId: String,
     chapterId: String,
     targetId: String,
     isActivePane: Boolean,
@@ -250,6 +256,17 @@ private fun WritingPaneEditorContent(
                     targetId = targetId,
                     initialAnchor = projection?.viewportAnchor,
                 )
+
+            WritingPaneSearchReveal(
+                coordinator = coordinator,
+                targetId = targetId,
+                projectId = projectId,
+                volumeId = volumeId,
+                chapterId = chapterId,
+                bridge = bridge,
+                viewportState = viewportState,
+                loading = uiState.loading,
+            )
 
             val visualState =
                 remember(targetId) {

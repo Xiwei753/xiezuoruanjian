@@ -4,6 +4,7 @@ import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
+import { SearchContext, SearchResultPage } from './dto/SearchDtos'
 import { WritingActivitySegmentInput } from './dto/StatsDtos'
 
 export interface IWriterCoreBridge {
@@ -99,6 +100,15 @@ export interface IWriterCoreBridge {
   recordWritingActivitySegment(input: WritingActivitySegmentInput): Promise<ResultEnvelope<boolean>>
   calculateWordCount(text: string): Promise<number>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
+
+  // Global search（Issue #982）：分页、排序与命中范围全部由 Core 计算。
+  globalSearchPage(
+    query: string,
+    scope: string,
+    limit: number,
+    cursor: string | null,
+    context: SearchContext
+  ): Promise<ResultEnvelope<SearchResultPage>>
 
   // Native Status
   getNativeLoadStatus(): Promise<ResultEnvelope<string>>

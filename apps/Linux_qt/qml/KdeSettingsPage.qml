@@ -194,6 +194,39 @@ ScrollView {
         root.searchText = ""
     }
 
+    // 全局搜索结果定位到设置分组。Core 只给分组语义，具体设置项仍由本页现有控件承载。
+    function revealSection(section) {
+        var id = String(section || "")
+        if (id.length === 0)
+            return
+        root.resetSearch()
+        if (id === "appearance") {
+            root.appearanceExpanded = true
+        } else if (id === "editor") {
+            root.editorAnimationExpanded = true
+        } else if (id === "ai") {
+            root.aiExpanded = true
+        } else if (id === "save_sync") {
+            root.saveSyncExpanded = true
+        } else if (id === "diagnostics") {
+            root.diagnosticsExpanded = true
+        } else {
+            return
+        }
+        var target = id === "appearance" ? appearanceSection
+            : id === "editor" ? editorAnimationSection
+            : id === "ai" ? aiSection
+            : id === "save_sync" ? saveSyncSection
+            : diagnosticsSection
+        Qt.callLater(function() {
+            var flickable = root.contentItem
+            if (!flickable || !flickable.contentItem || !target)
+                return
+            var position = target.mapToItem(flickable.contentItem, 0, 0)
+            flickable.contentY = Math.max(0, position.y - 12)
+        })
+    }
+
     // 由 SettingsDialog.onOpened 调用；不重新加载全局设置（启动时已加载）。
     function onDialogOpened() {
         if (syncBackendRef)
@@ -246,6 +279,7 @@ ScrollView {
 
             // ── 1. 外观 ──
             ColumnLayout {
+                id: appearanceSection
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("外观"))
@@ -386,6 +420,7 @@ ScrollView {
 
             // ── 2. 编辑器和动画 ──
             ColumnLayout {
+                id: editorAnimationSection
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("编辑器和动画"))
@@ -510,6 +545,7 @@ ScrollView {
 
             // ── 3. AI ──
             ColumnLayout {
+                id: aiSection
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
                 visible: (root.settingsBackendRef ? root.settingsBackendRef.ai_available : false)
@@ -563,6 +599,7 @@ ScrollView {
 
             // ── 4. 保存和同步 ──
             ColumnLayout {
+                id: saveSyncSection
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("保存和同步"))
@@ -643,6 +680,7 @@ ScrollView {
 
             // ── 5. 诊断与日志 ──
             ColumnLayout {
+                id: diagnosticsSection
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("诊断与日志"))
@@ -795,6 +833,7 @@ ScrollView {
 
             // ── 6. 关于 ──
             ColumnLayout {
+                id: aboutSection
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("关于"))
