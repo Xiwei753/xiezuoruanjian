@@ -256,8 +256,8 @@ export struct WritingScreen {
   private shareService: HarmonyShareService = HarmonyShareService.getInstance()
   // Issue #829 评论 #5995146525：写作统计上报队列（串行、异步、与编辑事务同源）。
   private editorStatsQueue: EditorStatsQueue = new EditorStatsQueue(this.bridge, 'harmony')
-  // Issue #981：真实前台写作计时；只上报已测片段，字/时仍由 Core 计算。
-  private writingSessionTracker: WritingSessionTracker = new WritingSessionTracker(this.bridge, 'harmony')
+  // Issue #981：真实前台写作计时；与编辑字数事件共用同一条进程级串行统计队列。
+  private writingSessionTracker: WritingSessionTracker = new WritingSessionTracker(this.editorStatsQueue, 'harmony')
   private writingSessionLifecycleObserver: LifecycleObserver | null = null
   // Issue #920 A：写作流程协调器。页面只把事件交给它，并映射它产出的显示状态。
   private writingTextProvider: WritingTextProvider = (key: WritingTextKey): string => this.resolveWritingText(key)
@@ -501,6 +501,17 @@ export struct WritingScreen {
       this.lifecycle.removeObserver(this.writingSessionLifecycleObserver)
       this.writingSessionLifecycleObserver = null
     }
+    // Issue #981 复核：片段已进入与字数事件共用的队列。关闭时把队列刷到当前序号，
+    // 确认尾部片段落盘后再解除统计读取屏障，避免统计页读到半套数据。
+    const statsBarrier: number = this.editorStatsQueue.currentSeq()
+    void this.editorStatsQueue.flushThrough(statsBarrier).then((clean: boolean): void => {
+      if (!clean) {
+        console.warn('[WritingScreen] 关闭正文时仍有写作统计数据未落盘')
+      }
+      this.editorStatsQueue.releaseWriteBarrier()
+    }).catch((): void => {
+      this.editorStatsQueue.releaseWriteBarrier()
+    })
     // Issue #923：精确注销自身的活跃会话 token（不影响切章时新页面已完成的注册）。
     if (this.activeSessionToken !== null) {
       this.activeSessionToken()

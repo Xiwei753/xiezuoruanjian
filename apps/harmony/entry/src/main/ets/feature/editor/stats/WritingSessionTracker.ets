@@ -10,8 +10,8 @@
 
 import { systemDateTime } from '@kit.BasicServicesKit'
 import { util } from '@kit.ArkTS'
-import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { WritingActivitySegmentInput } from '../../../corebridge/dto/StatsDtos'
+import { EditorStatsQueue } from './EditorStatsQueue'
 
 const FLUSH_INTERVAL_MS: number = 30000
 
@@ -22,7 +22,7 @@ enum TrackerState {
 }
 
 export class WritingSessionTracker {
-  private readonly bridge: IWriterCoreBridge
+  private readonly queue: EditorStatsQueue
   private readonly platform: string
   private state: TrackerState = TrackerState.Idle
   private foreground: boolean = false
@@ -33,10 +33,9 @@ export class WritingSessionTracker {
   private monotonicAnchorMs: number = 0
   private wallAnchorMs: number = 0
   private sliceStartMonoMs: number = 0
-  private submitChain: Promise<void> = Promise.resolve()
 
-  constructor(bridge: IWriterCoreBridge, platform: string) {
-    this.bridge = bridge
+  constructor(queue: EditorStatsQueue, platform: string) {
+    this.queue = queue
     this.platform = platform
   }
 
@@ -146,12 +145,8 @@ export class WritingSessionTracker {
       endAtMs: endAtMs,
       pauseReason: reason
     }
-    // 串行送出：保持片段顺序，同时不阻塞编辑主链。失败只记日志，后续片段继续。
-    this.submitChain = this.submitChain.then(async (): Promise<void> => {
-      const result = await this.bridge.recordWritingActivitySegment(input)
-      if (!result.success) {
-        console.warn(`[WritingSessionTracker] segment submit failed: ${result.userMessage ?? ''}`)
-      }
-    }).catch((): void => {})
+    // Issue #981 复核：片段只交给编辑字数事件共用的串行队列，由它统一保持顺序、
+    // 固定 eventId 并在失败时重发；本类不再维护第二条 submitChain。
+    this.queue.enqueueActivitySegment(input)
   }
 }

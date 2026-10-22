@@ -1,7 +1,9 @@
 // EditorStatsQueue.ets — 写作统计上报队列（Issue #829 评论 #5995146525 第 5 项起）。
 //
 // 这一层只做一件事：
-// 把编辑事实组装成强类型 EditorChangeStatsInput，交给 SerialStatsDrain 串行送出。
+// 把编辑字数事件和实测写作片段组装成强类型写入命令，交给 SerialStatsDrain 串行送出。
+// Issue #981 复核：两类事实必须共用同一条进程级队列，不能各自维护提交链，
+// 否则统计页可能在字数事件之后、计时片段之前读到半套数据。
 //
 // 平台端只透传编辑事实（cause + contentDelta），source 分类（HumanTyped / Pasted /
 // Deleted / Unknown）由 Core 的 record_editor_change_stats 决定，这里不猜也不拼 source 字符串。
@@ -21,36 +23,58 @@
 // - drain 一次吃完整个队列：barrier 早就完成了也还在等后面的 seq（#5997254152 第 2 项）。
 
 import { EditorChangeStatsInput, EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
+import { WritingActivitySegmentInput } from '../../../corebridge/dto/StatsDtos'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
+import { StatsWriteBarrierRegistry } from '../../../corebridge/stats/StatsWriteBarrier'
 import { SerialStatsDrain } from './stats_drain_loop'
 
-/** 队列里一条待写事件：seq 交给调度层算好的，业务字段由本队列持有。 */
-interface QueuedEditorChange {
+enum QueuedStatsKind {
+  EditorChange = 0,
+  ActivitySegment = 1
+}
+
+/** 队列里一条待写命令：seq 交给调度层分配，业务字段由本队列持有。 */
+interface QueuedStatsWrite {
   seq: number
+  kind: QueuedStatsKind
   projectId: string
   volumeId: string
   chapterId: string
-  cause: EditorTransactionCause
+  cause: EditorTransactionCause | null
   insertedChars: number
   deletedChars: number
   eventId: string
   occurredAtMs: number
+  segment: WritingActivitySegmentInput | null
 }
 
 export class EditorStatsQueue {
   private readonly platform: string
-  private readonly drain: SerialStatsDrain<QueuedEditorChange>
+  private readonly drain: SerialStatsDrain<QueuedStatsWrite>
+  private readonly barrierFlusher: () => Promise<boolean>
 
   constructor(bridge: IWriterCoreBridge, platform: string) {
     this.platform = platform
-    this.drain = new SerialStatsDrain<QueuedEditorChange>(
-      (item: QueuedEditorChange): Promise<boolean> => {
+    this.barrierFlusher = (): Promise<boolean> => this.flushThrough(this.currentSeq())
+    this.drain = new SerialStatsDrain<QueuedStatsWrite>(
+      (item: QueuedStatsWrite): Promise<boolean> => {
+        if (item.kind === QueuedStatsKind.ActivitySegment) {
+          const segment = item.segment
+          if (segment === null) {
+            return Promise.resolve(false)
+          }
+          return bridge.recordWritingActivitySegment(segment).then((res) => res.success)
+        }
+        const cause = item.cause
+        if (cause === null) {
+          return Promise.resolve(false)
+        }
         const input: EditorChangeStatsInput = {
           platform: this.platform,
           projectId: item.projectId,
           volumeId: item.volumeId,
           chapterId: item.chapterId,
-          cause: item.cause,
+          cause: cause,
           insertedChars: item.insertedChars,
           deletedChars: item.deletedChars,
           eventId: item.eventId,
@@ -61,6 +85,7 @@ export class EditorStatsQueue {
         return bridge.recordEditorChangeStats(input).then((res) => res.success)
       }
     )
+    StatsWriteBarrierRegistry.getInstance().register(this.barrierFlusher)
   }
 
   /**
@@ -81,6 +106,7 @@ export class EditorStatsQueue {
 
     this.drain.enqueue({
       seq: 0, // 占位：入队时由调度层从账本分配并覆盖
+      kind: QueuedStatsKind.EditorChange,
       projectId: projectId,
       volumeId: volumeId,
       chapterId: chapterId,
@@ -88,7 +114,28 @@ export class EditorStatsQueue {
       insertedChars: insertedChars,
       deletedChars: deletedChars,
       eventId: eventId,
-      occurredAtMs: occurredAtMs
+      occurredAtMs: occurredAtMs,
+      segment: null
+    })
+  }
+
+  /** Issue #981：实测写作片段与编辑字数事件进入同一串行队列，稳定 eventId 由平台预先固定。 */
+  enqueueActivitySegment(segment: WritingActivitySegmentInput): void {
+    if (segment.sessionId.length === 0 || segment.chapterId.length === 0) {
+      return
+    }
+    this.drain.enqueue({
+      seq: 0,
+      kind: QueuedStatsKind.ActivitySegment,
+      projectId: segment.projectId,
+      volumeId: segment.volumeId,
+      chapterId: segment.chapterId,
+      cause: null,
+      insertedChars: 0,
+      deletedChars: 0,
+      eventId: segment.eventId,
+      occurredAtMs: segment.startAtMs,
+      segment: segment
     })
   }
 
@@ -109,6 +156,11 @@ export class EditorStatsQueue {
    */
   async flushThrough(barrier: number): Promise<boolean> {
     return this.drain.flushThrough(barrier)
+  }
+
+  /** 页面关闭并确认尾部写入后解除查询屏障，避免已销毁页面的队列常驻。 */
+  releaseWriteBarrier(): void {
+    StatsWriteBarrierRegistry.getInstance().release(this.barrierFlusher)
   }
 
   /** 因积压上限丢弃过多少条。正常应恒为 0，非 0 说明 Core 侧持续写失败。 */

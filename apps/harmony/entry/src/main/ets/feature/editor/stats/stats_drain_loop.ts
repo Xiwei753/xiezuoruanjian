@@ -33,13 +33,15 @@ export interface SequencedPayload {
 /** 积压上限。超过就丢最旧的一条，并按 seq 记一笔「脏」，调用方 flushThrough 时能看到。 */
 const MAX_QUEUE_SIZE: number = 512
 
+/** 单条写入失败后的重发次数（Issue #981：eventId 稳定，重发由 Core 幂等去重）。 */
+const MAX_SEND_ATTEMPTS: number = 3
+
 /**
  * 串行 drain + barrier 等待的调度层。
  *
  * @param ledger 序号账本（唯一事实源：seq 分配、完成推进、脏序号）
- * @param send 把一条事件发给 Core，返回是否成功。失败由本层统一兜住，
- *             不重试、不抛回调用方 —— 统计少记一条不该让后续上报全停，
- *             更不该把异常抛回编辑主链。
+ * @param send 把一条事件发给 Core，返回是否成功。失败时本层用同一 item（eventId
+ *             已由调用方固定）短暂退避后重发；仍失败才记脏，不让异常抛回编辑主链。
  */
 export class SerialStatsDrain<T extends SequencedPayload> {
   private readonly ledger: StatsBarrierLedger
@@ -143,11 +145,18 @@ export class SerialStatsDrain<T extends SequencedPayload> {
       return
     }
     let ok: boolean = false
-    try {
-      ok = await this.send(item)
-    } catch (e) {
-      // 单条失败不重试：下一条继续。
-      ok = false
+    for (let attempt: number = 1; attempt <= MAX_SEND_ATTEMPTS && !ok; attempt++) {
+      try {
+        ok = await this.send(item)
+      } catch (e) {
+        ok = false
+      }
+      if (!ok && attempt < MAX_SEND_ATTEMPTS) {
+        // 稳定 eventId 让重发是幂等的；短暂退避避免 Core 短暂不可用时立刻丢事实。
+        await new Promise<void>((resolve: () => void): void => {
+          setTimeout(resolve, attempt * 100)
+        })
+      }
     }
     // 无论成败都要推进完成序号：否则 flushThrough 会一直等这条。
     this.ledger.complete(item.seq, ok)

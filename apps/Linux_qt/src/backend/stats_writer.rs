@@ -63,12 +63,13 @@ pub(crate) type StatsQueryCallback = Box<dyn FnOnce(u32, Result<String, String>)
 /// worker 消息：写入命令、barrier 同步点或一次性查询。
 ///
 /// `Record` 携带一条写统计命令；`Barrier` 携带一个 ack sender，worker 处理到
-/// 这条消息时说明前面所有 Record 已全部落盘，回 `ack.send(())` 让 UI 线程继续。
+/// 这条消息时说明前面所有 Record 已处理完，回 `ack.send(Ok(()))` 让 UI 线程继续；
+/// 若补写后仍有失败命令，则回 `Err`，不能把失败当成写入完成。
 /// `QueryDashboard` / `QueryWritingStatus`（Issue #935）与 Record 走同一条队列，
 /// 消费到查询时此前全部编辑事实已处理完，回调带回最新快照或真实错误。
 enum StatsWriterMessage {
     Record(StatsWriteCommand),
-    Barrier(Sender<()>),
+    Barrier(Sender<Result<(), String>>),
     QueryDashboard {
         request_id: u32,
         completion: StatsQueryCallback,
@@ -219,10 +220,17 @@ impl StatsWriterHandle {
                             }
                         }
                         StatsWriterMessage::Barrier(ack) => {
-                            // 先尽量补写前面的失败事实，再放行查询；仍失败的
-                            // 留给 QueryDashboard/QueryWritingStatus 回报。
-                            let _ = flush_pending_records(&api, &mut pending_records);
-                            let _ = ack.send(());
+                            // 先尽量补写前面的失败事实；仍有失败时如实回传错误，
+                            // 关闭/查询路径不能把“还没写盘”报告成完成。
+                            let remaining = flush_pending_records(&api, &mut pending_records);
+                            let result = if remaining == 0 {
+                                Ok(())
+                            } else {
+                                Err(format!(
+                                    "stats-writer: {remaining} 条编辑事实尚未写盘成功"
+                                ))
+                            };
+                            let _ = ack.send(result);
                         }
                         StatsWriterMessage::QueryDashboard {
                             request_id,
@@ -418,15 +426,17 @@ impl StatsWriterHandle {
     /// 时前面所有 Record 已落盘，回 ack 后 UI 线程再读磁盘，保证查询看到最新数据。
     ///
     /// 返回 `Ok(())` 表示 barrier 成功（或没有 writer，直接通过）；
-    /// 返回 `Err(())` 表示 worker 已退出（sender send 失败或 ack recv 失败），
+    /// 返回 `Err(String)` 表示 worker 已退出，或补写后仍有失败命令。
     /// 调用方应走明确错误/空结果，不能拿旧磁盘数据冒充最新结果。
-    pub(crate) fn barrier(&self) -> Result<(), ()> {
+    pub(crate) fn barrier(&self) -> Result<(), String> {
         if let Some(ref sender) = self.sender {
-            let (ack_tx, ack_rx) = std::sync::mpsc::channel::<()>();
+            let (ack_tx, ack_rx) = std::sync::mpsc::channel::<Result<(), String>>();
             if sender.send(StatsWriterMessage::Barrier(ack_tx)).is_err() {
-                return Err(()); // worker 已退出
+                return Err("stats writer worker has exited".to_string());
             }
-            ack_rx.recv().map_err(|_| ())
+            ack_rx
+                .recv()
+                .map_err(|_| "stats writer worker dropped barrier ack".to_string())?
         } else {
             Ok(()) // sender 已被 take（shutdown 过），按无 writer 处理
         }
