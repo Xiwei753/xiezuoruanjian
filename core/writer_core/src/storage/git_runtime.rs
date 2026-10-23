@@ -83,6 +83,18 @@ fn configure() -> Result<(), String> {
     // 此调用同时触发 git2-rs 的 crate 初始化（`git_libgit2_init`）。
     unsafe { git2::opts::set_verify_owner_validation(verify_owner) }.map_err(|e| e.to_string())?;
 
+    // libgit2 的服务器超时也是无同步保护的 C 全局状态，官方要求只在启动阶段、
+    // 其他线程开始 Git 操作前设置。这里与 owner validation、fsync-gitdir 一起由
+    // `OnceLock` 只配置一次，绝不在每次 open/fetch 时重复写入。
+    //
+    // SAFETY: 同一 `OnceLock` 初始化路径，调用发生在任何同步线程使用 libgit2 之前。
+    unsafe {
+        git2::opts::set_server_connect_timeout_in_milliseconds(30_000)
+            .map_err(|e| format!("set git connect timeout failed: {e}"))?;
+        git2::opts::set_server_timeout_in_milliseconds(120_000)
+            .map_err(|e| format!("set git server timeout failed: {e}"))?;
+    }
+
     // 现在可以安全调用 raw git_libgit2_opts，因为 git2-rs 已完成初始化。
     //   所有 target 启用 fsync-gitdir。
     enable_fsync_gitdir()

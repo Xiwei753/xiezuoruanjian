@@ -6,20 +6,6 @@
 
 use git2::{Cred, CredentialType, ProxyOptions, RemoteCallbacks};
 
-/// 统一的服务器超时（毫秒）。连接与整体传输分开设置，避免卡死 UI 同步线程。
-const CONNECT_TIMEOUT_MS: i32 = 30_000;
-const SERVER_TIMEOUT_MS: i32 = 120_000;
-
-/// 配置 libgit2 的全局超时。幂等；失败只影响超时，不影响认证。
-pub(crate) fn configure_timeouts() {
-    // SAFETY: 两个 opts 只设置 libgit2 全局超时，重复调用是幂等的；调用发生在
-    // `storage::git_runtime::ensure_initialized()` 之后、任何传输操作之前。
-    unsafe {
-        let _ = git2::opts::set_server_connect_timeout_in_milliseconds(CONNECT_TIMEOUT_MS);
-        let _ = git2::opts::set_server_timeout_in_milliseconds(SERVER_TIMEOUT_MS);
-    }
-}
-
 /// 构造带凭据回调的 `RemoteCallbacks`。
 ///
 /// - `username` 非空：始终使用该用户名。

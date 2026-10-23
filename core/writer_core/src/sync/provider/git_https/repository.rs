@@ -4,8 +4,9 @@
 //! `commit_batch` 在本地构造完整 tree + commit 后执行普通（非强制）push。
 //! 缓存与用户正文目录分离；后续同步只下载新增对象。
 //!
-//! 所有网络错误按 libgit2 error class 分类：只有 `Net` 被视为“传输不可达”，
-//! 认证、权限、TLS 校验和 non-fast-forward 不会触发 GitHub API 后备。
+//! 错误优先按 libgit2 `ErrorCode` 分类、再用 `ErrorClass` 兜底：超时、EOF 和
+//! TLS 传输断开属于“传输不可达”，可触发 GitHub API 后备；证书验证失败、
+//! 认证、权限和 non-fast-forward 保留准确错误，不会误报为网络不可达。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -39,7 +40,6 @@ pub(crate) fn open_or_init(cache_dir: &Path) -> Result<Repository, ProviderError
     crate::storage::git_runtime::ensure_initialized().map_err(|err| ProviderError::Other {
         reason: format!("git runtime init failed: {err}"),
     })?;
-    credentials::configure_timeouts();
 
     if let Ok(repo) = Repository::open(cache_dir) {
         return Ok(repo);
@@ -460,21 +460,42 @@ pub(crate) fn read_blob(
 /// TLS、认证、权限、HTTP 状态错误保持独立语义。
 pub(crate) fn map_git_error(err: git2::Error, context: &str) -> ProviderError {
     let message = format!("{context}: {}", err.message());
+
+    // 先看具体错误码：libgit2 的传输超时/EOF 不一定落在 `ErrorClass::Net`，
+    // 而证书拒绝与其他 SSL 握手/传输断开也必须区分，否则会误触发或误阻断
+    // GitHub API 自动后备。
+    match err.code() {
+        ErrorCode::Certificate => {
+            return ProviderError::Other {
+                reason: format!("TLS certificate verification failed: {message}"),
+            };
+        }
+        ErrorCode::Timeout | ErrorCode::Eof => {
+            return ProviderError::Network { reason: message };
+        }
+        ErrorCode::Auth => {
+            return ProviderError::AuthFailed { reason: message };
+        }
+        ErrorCode::NotFastForward => {
+            return ProviderError::PreconditionFailed {
+                path: context.to_string(),
+                reason: err.message().to_string(),
+            };
+        }
+        _ => {}
+    }
+
     match err.class() {
         ErrorClass::Net => ProviderError::Network { reason: message },
-        ErrorClass::Ssl => ProviderError::Other {
-            reason: format!("TLS certificate verification failed: {message}"),
+        // 证书错误已在上面单独处理；其余 SSL 层错误是握手/传输中断，
+        // 应视为远端不可达，而不是“证书验证失败”。
+        ErrorClass::Ssl => ProviderError::Network {
+            reason: format!("TLS transport error: {message}"),
         },
         ErrorClass::Http => classify_http_error(&message, err.code()),
         ErrorClass::Reference if err.code() == ErrorCode::NotFound => ProviderError::NotFound {
             path: context.to_string(),
         },
-        ErrorClass::Reference if err.code() == ErrorCode::NotFastForward => {
-            ProviderError::PreconditionFailed {
-                path: context.to_string(),
-                reason: err.message().to_string(),
-            }
-        }
         _ => ProviderError::Other { reason: message },
     }
 }
