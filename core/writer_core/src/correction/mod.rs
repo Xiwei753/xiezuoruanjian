@@ -135,6 +135,7 @@ struct ModelBundleStamp {
 struct ModelIdentity {
     model_sha256: String,
     vocab_sha256: String,
+    tokenizer_sha256: String,
     calibrator_version: String,
 }
 
@@ -205,12 +206,12 @@ fn canonical_model_path(path: &Path) -> Result<PathBuf, WriterError> {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("klm"))
     {
         return Err(WriterError::Other(
-            "此前的 KenLM .klm 校对模型已停用。请下载 MacBERT4CSC ONNX 模型资源目录（含 model.onnx 与 vocab.txt），重新选择模型目录以完成迁移。"
+            "此前的 KenLM .klm 校对模型已停用。请下载 MacBERT4CSC ONNX 模型资源目录（含 model.onnx、vocab.txt 与 tokenizer.json），重新选择模型目录以完成迁移。"
                 .into(),
         ));
     }
     Err(WriterError::Other(
-        "校对模型路径应为包含 model.onnx、vocab.txt 的资源目录".into(),
+        "校对模型路径应为包含 model.onnx、vocab.txt、tokenizer.json 的资源目录".into(),
     ))
 }
 
@@ -233,6 +234,7 @@ fn model_bundle_stamp(directory: &Path) -> Result<ModelBundleStamp, WriterError>
     Ok(ModelBundleStamp {
         model: model_file_stamp(&directory.join("model.onnx"))?,
         vocab: model_file_stamp(&directory.join("vocab.txt"))?,
+        tokenizer: model_file_stamp(&directory.join("tokenizer.json"))?,
         calibrator: std::fs::metadata(&calibrator_path)
             .ok()
             .and_then(|metadata| {
@@ -264,6 +266,7 @@ fn model_identity(directory: &Path, stamp: &ModelBundleStamp) -> Result<ModelIde
     let identity = ModelIdentity {
         model_sha256: sha256_file(&directory.join("model.onnx"))?,
         vocab_sha256: sha256_file(&directory.join("vocab.txt"))?,
+        tokenizer_sha256: sha256_file(&directory.join("tokenizer.json"))?,
         calibrator_version: match std::fs::read_to_string(directory.join("calibrator.json")) {
             Ok(content) => sujian_proof::Calibrator::from_json(&content)
                 .map_err(|error| WriterError::Other(error.to_string()))?
@@ -434,6 +437,8 @@ impl CorrectionStore {
                 && std::fs::metadata(path.join("model.onnx"))
                     .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
                 && std::fs::metadata(path.join("vocab.txt"))
+                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+                && std::fs::metadata(path.join("tokenizer.json"))
                     .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
         });
         let data_root = self
@@ -802,11 +807,12 @@ impl CorrectionStore {
             match model_bundle_identity_for_fingerprint(path) {
                 Ok((stamp, identity)) => {
                     parts.push(format!(
-                        "model:{}:{}:{}:{}:{}",
+                        "model:{}:{}:{}:{}:{}:{}",
                         stamp.model.len,
                         modified_stamp(stamp.model.modified),
                         identity.model_sha256,
                         identity.vocab_sha256,
+                        identity.tokenizer_sha256,
                         identity.calibrator_version
                     ));
                 }

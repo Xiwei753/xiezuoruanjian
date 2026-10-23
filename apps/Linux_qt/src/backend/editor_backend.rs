@@ -196,7 +196,7 @@ pub struct EditorBackend {
     /// Issue #985：存储用户提供的本地 ONNX 模型资源目录；Core 负责懒加载与错误返回。
     #[allow(dead_code)]
     set_correction_model_path: qt_method!(fn(&self, path: QString) -> QJsonObject),
-    /// Issue #985：选择包含 model.onnx 与 vocab.txt 的模型资源目录。
+    /// Issue #985：选择包含 model.onnx、vocab.txt 与 tokenizer.json 的模型资源目录。
     #[allow(dead_code)]
     pick_correction_model_path: qt_method!(fn(&self) -> QJsonObject),
     /// Issue #943：选择并导入固定命名的共享校对词库文件。
@@ -754,8 +754,13 @@ impl EditorBackend {
             if !path.is_dir() {
                 return Err("请选择模型资源目录".to_string());
             }
-            if !path.join("model.onnx").is_file() || !path.join("vocab.txt").is_file() {
-                return Err("模型目录必须包含 model.onnx 与 vocab.txt".to_string());
+            if !path.join("model.onnx").is_file()
+                || !path.join("vocab.txt").is_file()
+                || !path.join("tokenizer.json").is_file()
+            {
+                return Err(
+                    "模型目录必须包含 model.onnx、vocab.txt 与 tokenizer.json".to_string()
+                );
             }
             Ok(path.to_string_lossy().into_owned())
         })();

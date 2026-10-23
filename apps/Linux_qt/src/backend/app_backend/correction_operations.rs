@@ -16,7 +16,7 @@ use writer_core::api::types::{
 /// Issue #985：RPM 包安装的 MacBERT4CSC ONNX 资源目录。
 ///
 /// AppImage 使用 `SUJIAN_CORRECTION_MODEL_DIR` 指向 `$APPDIR` 内的同一份
-/// 资源。目录中必须包含 `model.onnx` 与 `vocab.txt`，`calibrator.json`
+/// 资源。目录中必须包含 `model.onnx`、`vocab.txt` 与 `tokenizer.json`，`calibrator.json`
 /// 可选。运行时只读加载该目录，不向用户数据目录复制模型。源码运行/开发
 /// 环境通常没有这个目录，见 `provision_bundled_correction_model`。
 pub(crate) const SYSTEM_CORRECTION_MODEL_PATH: &str = "/usr/share/sujian/models/macbert4csc";
@@ -27,12 +27,18 @@ pub(crate) const SYSTEM_CORRECTION_MODEL_PATH: &str = "/usr/share/sujian/models/
 pub(crate) fn bundled_correction_model_path() -> Option<std::path::PathBuf> {
     if let Some(path) = std::env::var_os("SUJIAN_CORRECTION_MODEL_DIR") {
         let path = std::path::PathBuf::from(path);
-        if path.join("model.onnx").is_file() && path.join("vocab.txt").is_file() {
+        if path.join("model.onnx").is_file()
+            && path.join("vocab.txt").is_file()
+            && path.join("tokenizer.json").is_file()
+        {
             return Some(path);
         }
     }
     let system = std::path::PathBuf::from(SYSTEM_CORRECTION_MODEL_PATH);
-    (system.join("model.onnx").is_file() && system.join("vocab.txt").is_file()).then_some(system)
+    (system.join("model.onnx").is_file()
+        && system.join("vocab.txt").is_file()
+        && system.join("tokenizer.json").is_file())
+    .then_some(system)
 }
 
 const CORRECTION_DICTIONARY_FILES: [&str; 6] = [

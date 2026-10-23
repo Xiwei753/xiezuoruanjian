@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# fetch-model.sh — 构建期内置 MacBERT4CSC ONNX 模型与 Linux ONNX Runtime 获取
+# fetch-model.sh — 构建期内置 MacBERT4CSC ONNX 模型与平台原生 ONNX Runtime 获取
 # （Issue #985 架构换代）。
 #
 # 模型与运行时都不入库。脚本调用 crates/sujian-proof/tools/fetch_model.py，

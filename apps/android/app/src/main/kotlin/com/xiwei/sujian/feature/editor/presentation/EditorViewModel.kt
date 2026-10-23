@@ -684,7 +684,11 @@ class EditorViewModel(
      */
     private suspend fun prepareBundledCorrectionModelIfNeeded() {
         val active = correctionResourceRepository.activeModelFile()
-        if (active != null && File(active, "model.onnx").isFile && File(active, "vocab.txt").isFile) return
+        if (active != null && File(active, "model.onnx").isFile &&
+            File(active, "vocab.txt").isFile && File(active, "tokenizer.json").isFile
+        ) {
+            return
+        }
         val model =
             try {
                 withContext(Dispatchers.IO) { correctionResourceRepository.ensureBundledModel() }

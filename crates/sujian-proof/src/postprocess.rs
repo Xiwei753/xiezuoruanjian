@@ -19,9 +19,10 @@ use crate::neural::PositionPrediction;
 use crate::CorrectionError;
 
 /// Exported logistic calibration parameters. The values are fitted offline on
-/// the public shibing624/CSC dev split, grouped by sentence so the same article
-/// cannot appear in both fit and evaluation. Changing the data or parameters
-/// requires a new calibrator version and scanner fingerprint.
+/// public shibing624/CSC features plus constructed anonymous fiction/name
+/// negatives, grouped by sentence into disjoint fit/calibration/final sets.
+/// Changing the data or parameters requires a new calibrator version and
+/// scanner fingerprint.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Calibrator {
     pub version: String,

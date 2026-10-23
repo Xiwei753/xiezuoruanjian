@@ -227,7 +227,7 @@ Item {
             TextField {
                 id: correctionModelPathField
                 Layout.fillWidth: true
-                placeholderText: qsTr("本地模型资源目录（含 model.onnx 与 vocab.txt）")
+                placeholderText: qsTr("本地模型资源目录（含 model.onnx、vocab.txt 与 tokenizer.json）")
                 selectByMouse: true
                 onAccepted: {
                     if (root.editorControllerRef)

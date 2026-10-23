@@ -65,8 +65,13 @@ class CorrectionResourceRepository(context: Context) {
         val displayName = directory.name?.takeIf(String::isNotBlank) ?: "correction-model"
         val modelDocument = directory.findFile(MODEL_FILE_NAME)
         val vocabDocument = directory.findFile(VOCAB_FILE_NAME)
-        if (modelDocument?.isFile != true || vocabDocument?.isFile != true) {
-            throw IOException("The selected directory must contain model.onnx and vocab.txt")
+        val tokenizerDocument = directory.findFile(TOKENIZER_FILE_NAME)
+        if (modelDocument?.isFile != true || vocabDocument?.isFile != true ||
+            tokenizerDocument?.isFile != true
+        ) {
+            throw IOException(
+                "The selected directory must contain model.onnx, vocab.txt and tokenizer.json"
+            )
         }
         if (!modelStagingDirectory.isDirectory && !modelStagingDirectory.mkdirs()) {
             throw IOException("Unable to create the private correction model staging directory")
@@ -299,7 +304,8 @@ class CorrectionResourceRepository(context: Context) {
     private fun isModelBundle(directory: File): Boolean =
         directory.isDirectory &&
             File(directory, MODEL_FILE_NAME).isFile &&
-            File(directory, VOCAB_FILE_NAME).isFile
+            File(directory, VOCAB_FILE_NAME).isFile &&
+            File(directory, TOKENIZER_FILE_NAME).isFile
 
     private fun hashFile(file: File): String {
         val digest = MessageDigest.getInstance(SHA_256)
@@ -331,6 +337,7 @@ class CorrectionResourceRepository(context: Context) {
 
         internal const val MODEL_FILE_NAME = "model.onnx"
         internal const val VOCAB_FILE_NAME = "vocab.txt"
+        internal const val TOKENIZER_FILE_NAME = "tokenizer.json"
 
         // #985：随 APK 打包的 MacBERT4CSC ONNX 资源目录，与
         // crates/sujian-proof/assets/model_manifest.json 保持一致。

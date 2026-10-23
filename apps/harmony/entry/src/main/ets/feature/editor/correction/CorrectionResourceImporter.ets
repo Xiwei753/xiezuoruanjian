@@ -39,6 +39,9 @@ const BUNDLED_MODEL_SHA256 = 'a4d9d6807c0c8bc9d014462a728e7212315630c669a6bd670b
 const BUNDLED_VOCAB_RAW_FILE = 'macbert4csc/vocab.txt'
 const BUNDLED_VOCAB_SIZE = 109540
 const BUNDLED_VOCAB_SHA256 = '45bbac6b341c319adc98a532532882e91a9cefc0329aa57bac9ae761c27b291c'
+const BUNDLED_TOKENIZER_RAW_FILE = 'macbert4csc/tokenizer.json'
+const BUNDLED_TOKENIZER_SIZE = 439124
+const BUNDLED_TOKENIZER_SHA256 = '7dfbf1966ebf99d471c3796e9b457329d2b2182b817e144f1e904b957745c839'
 
 export interface CorrectionResourceSnapshot {
   directory: string
@@ -126,6 +129,7 @@ export class CorrectionResourceImporter {
       onProgress?.('正在将模型资源复制到应用私有暂存目录…')
       let copiedModel = false
       let copiedVocab = false
+      let copiedTokenizer = false
       for (let i = 0; i < uris.length; i++) {
         const sourceUri = uris[i]
         const selectedName = new fileUri.FileUri(sourceUri).name
@@ -142,10 +146,12 @@ export class CorrectionResourceImporter {
           copiedModel = true
         } else if (selectedName === VOCAB_FILE_NAME) {
           copiedVocab = true
+        } else if (selectedName === 'tokenizer.json') {
+          copiedTokenizer = true
         }
       }
-      if (!copiedModel || !copiedVocab) {
-        throw new Error('模型目录必须同时包含 model.onnx 与 vocab.txt')
+      if (!copiedModel || !copiedVocab || !copiedTokenizer) {
+        throw new Error('模型目录必须同时包含 model.onnx、vocab.txt 与 tokenizer.json')
       }
 
       await fileIo.moveDir(stagingDirectory, candidateDirectory)
@@ -237,7 +243,16 @@ export class CorrectionResourceImporter {
    */
   static async ensureBundledModel(manager: resourceManager.ResourceManager, appDataRoot: string): Promise<string> {
     if (CorrectionResourceImporter.bundledModelPath.length > 0) {
-      return CorrectionResourceImporter.bundledModelPath
+      try {
+        const existing = CorrectionResourceImporter.bundledModelPath
+        if (fileIo.statSync(`${existing}/${MODEL_FILE_NAME}`).size > 0 &&
+          fileIo.statSync(`${existing}/${VOCAB_FILE_NAME}`).size > 0 &&
+          fileIo.statSync(`${existing}/tokenizer.json`).size > 0) {
+          return existing
+        }
+      } catch (_) {
+        // 旧版本可能只复制了 model/vocab，继续补齐缺失资源。
+      }
     }
     const directory = `${appDataRoot}/${BUNDLED_MODEL_DIRECTORY}/${BUNDLED_BUNDLE_DIRECTORY}`
     CorrectionResourceImporter.ensureDirectory(directory)
@@ -247,6 +262,9 @@ export class CorrectionResourceImporter {
     await CorrectionResourceImporter.bundledModelBridge.prepareBundledCorrectionModel(
       manager, BUNDLED_VOCAB_RAW_FILE, `${directory}/${VOCAB_FILE_NAME}`,
       BUNDLED_VOCAB_SIZE, BUNDLED_VOCAB_SHA256)
+    await CorrectionResourceImporter.bundledModelBridge.prepareBundledCorrectionModel(
+      manager, BUNDLED_TOKENIZER_RAW_FILE, `${directory}/tokenizer.json`,
+      BUNDLED_TOKENIZER_SIZE, BUNDLED_TOKENIZER_SHA256)
     CorrectionResourceImporter.bundledModelPath = directory
     return directory
   }

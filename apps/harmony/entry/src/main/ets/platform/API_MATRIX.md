@@ -264,7 +264,7 @@
 - fallback：Picker 取消或资源复制失败时保留原有 Core 配置与词典文件；资源状态由 Core 汇报。模型文件存在性由 Core 检查，模型格式在首次校对时验证
 - 实现文件：`feature/editor/correction/CorrectionResourceImporter.ets`、`feature/editor/correction/CorrectionSuggestionsPanel.ets`、`feature/editor/ui/WritingScreen.ets`；severity 下划线由 `feature/editor/ui/SujianEditor.ets` 渲染
 - 词典映射：仅接受 `word_freq.txt`、`custom_confusion.txt`、`person_name.txt`、`place_name.txt`、`proper_name.txt`、`ignored_words.txt`，复制到 Core `app_data_root/correction-data/`；更新后由 Core 在下一次校对请求中重读。
-- 模型映射：用户可多选 `model.onnx`、`vocab.txt` 及 tokenizer 配置，复制到 `correction-data/` 下的唯一模型目录；目录必须同时包含前两项。随后通过 `nativeCorrectionSetModelPath` 配置 Core；Core 校验 ONNX 资源目录，旧 `.klm` 路径会返回迁移提示。
+- 模型映射：用户可多选 `model.onnx`、`vocab.txt`、`tokenizer.json` 及模型配置，复制到 `correction-data/` 下的唯一模型目录；目录必须同时包含前三项。随后通过 `nativeCorrectionSetModelPath` 配置 Core；Core 校验 ONNX 资源目录，旧 `.klm` 路径会返回迁移提示。
 - 官方参考：[@ohos.file.picker](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-file-picker)、[@ohos.file.fs](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-file-fs)
 
 ## 内置校对模型（native rawfile 流式复制）
