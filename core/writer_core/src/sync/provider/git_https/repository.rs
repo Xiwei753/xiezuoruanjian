@@ -278,14 +278,36 @@ fn build_index(
     Ok((index, written_blobs))
 }
 
-/// 在当前快照基础上提交一个 commit 并 push。返回新 commit OID。
+/// 从本地已创建的 commit 重建快照，不访问网络。
+///
+/// 只用于把本 provider 自己成功 push 的提交推进为下一轮基线；远端是否变化
+/// 仍由每次提交前的 fetch + HEAD 比较决定。
+pub(crate) fn snapshot_from_commit(
+    repo: &Repository,
+    commit_oid: Oid,
+) -> Result<Snapshot, ProviderError> {
+    let commit = repo
+        .find_commit(commit_oid)
+        .map_err(|err| map_git_error(err, "find committed commit"))?;
+    let tree = commit
+        .tree()
+        .map_err(|err| map_git_error(err, "read committed tree"))?;
+    let mut blobs = HashMap::new();
+    flatten_tree(repo, &tree, "", &mut blobs)?;
+    Ok(Snapshot {
+        head: Some(commit_oid),
+        blobs,
+    })
+}
+
+/// 在当前快照基础上提交一个 commit 并 push。返回新 commit OID 与本提交的本地快照。
 pub(crate) fn commit_and_push(
     repo: &Repository,
     config: &GitHttpsRuntimeConfig,
     snapshot: &Snapshot,
     mutations: &[BatchMutation],
     message: &str,
-) -> Result<Oid, ProviderError> {
+) -> Result<(Oid, Snapshot), ProviderError> {
     let (mut index, _) = build_index(repo, snapshot, mutations)?;
     let tree_oid = index
         .write_tree_to(repo)
@@ -323,7 +345,8 @@ pub(crate) fn commit_and_push(
         .map_err(|err| map_git_error(err, "update local branch"))?;
 
     push_branch(repo, config, &local_ref, &commit_oid)?;
-    Ok(commit_oid)
+    let committed_snapshot = snapshot_from_commit(repo, commit_oid)?;
+    Ok((commit_oid, committed_snapshot))
 }
 
 fn push_branch(
@@ -357,11 +380,15 @@ fn push_branch(
     }
     if let Err(err) = push_result {
         let mapped = map_git_error(err, "push git branch");
-        if matches!(mapped, ProviderError::Other { .. }) {
-            return Err(ProviderError::PreconditionFailed {
-                path: commit_oid.to_string(),
-                reason: "remote rejected push (non-fast-forward or protected branch)".to_string(),
-            });
+        // 只把能确定的 non-fast-forward 转为可重规划冲突；协议、钩子、本地
+        // 或其他服务器限制保留原始错误，不能统一伪装成并发冲突。
+        if let ProviderError::Other { reason } = &mapped {
+            if is_non_fast_forward_reason(reason) {
+                return Err(ProviderError::PreconditionFailed {
+                    path: commit_oid.to_string(),
+                    reason: reason.clone(),
+                });
+            }
         }
         return Err(mapped);
     }
@@ -370,16 +397,36 @@ fn push_branch(
 
 fn classify_push_rejection(reason: &str) -> ProviderError {
     let lower = reason.to_ascii_lowercase();
-    if lower.contains("protected") || lower.contains("not allowed") || lower.contains("permission")
+    if lower.contains("protected")
+        || lower.contains("not allowed")
+        || lower.contains("permission")
+        || lower.contains("denied")
     {
         return ProviderError::PermissionDenied {
             reason: reason.to_string(),
         };
     }
-    ProviderError::PreconditionFailed {
-        path: "refs/heads".to_string(),
+    if is_non_fast_forward_reason(reason) {
+        return ProviderError::PreconditionFailed {
+            path: "refs/heads".to_string(),
+            reason: reason.to_string(),
+        };
+    }
+    ProviderError::Other {
         reason: reason.to_string(),
     }
+}
+
+/// 远端/ref 回调中可确定是并发基线变化的描述。
+fn is_non_fast_forward_reason(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("non-fast-forward")
+        || lower.contains("non fast forward")
+        || lower.contains("not a fast forward")
+        || lower.contains("fetch first")
+        || lower.contains("stale info")
+        || lower.contains("failed to update ref")
+        || lower.contains("cannot lock ref")
 }
 
 /// 校验写前置条件；调用方已持有最新快照。

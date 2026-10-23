@@ -66,9 +66,16 @@ impl GitHttpsProvider {
         Ok(snapshot)
     }
 
-    fn invalidate(&self) {
+    /// 仅当缓存仍是本次提交的规划基线时，推进到自己的新提交。
+    ///
+    /// 绝不把远端 fetch 到的新 HEAD 当作下一轮规划基线；外部 HEAD 变化只能
+    /// 通过 `commit_from` 的前置检查返回 `PreconditionFailed`，由外层新建
+    /// provider 重新做完整 LWW。
+    fn advance_snapshot(&self, planned: &repository::Snapshot, committed: repository::Snapshot) {
         if let Ok(mut guard) = self.snapshot.lock() {
-            *guard = None;
+            if guard.as_ref().map(|snapshot| snapshot.head) == Some(planned.head) {
+                *guard = Some(committed);
+            }
         }
     }
 
@@ -89,7 +96,8 @@ impl GitHttpsProvider {
 
     /// 以 `planned` 为唯一基线提交。提交前重新读取远端 HEAD，但只有 HEAD
     /// 未变化时才应用旧计划；否则 Git 会把它当成合法快进，绕过上一轮 LWW
-    /// 对远端新提交的决策。
+    /// 对远端新提交的决策。push 成功后只把自己的提交推进为本地快照，绝不
+    /// 把这次 fetch 到的远端 HEAD 当成新的规划基线。
     fn commit_from(
         &self,
         planned: repository::Snapshot,
@@ -107,9 +115,9 @@ impl GitHttpsProvider {
                     .to_string(),
             });
         }
-        let commit_oid =
+        let (commit_oid, committed_snapshot) =
             repository::commit_and_push(&repo, &self.config, &planned, mutations, message)?;
-        self.invalidate();
+        self.advance_snapshot(&planned, committed_snapshot);
         Ok(BatchCommitResult {
             revision: RemoteVersion::new(commit_oid.to_string()),
             touched_paths: mutations.iter().map(|m| m.path().to_string()).collect(),
