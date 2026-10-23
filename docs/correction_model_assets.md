@@ -59,9 +59,13 @@ bundle on disk, and the Rust Core reads it locally.
 
 `calibrator.json` is fitted offline with `tools/train_calibrator.py`. Features
 come from `tools/export_features.py` over the pinned public CSC data and the
-pinned ONNX weights, plus constructed anonymous fiction/name negatives.
-Samples are grouped by source text into disjoint fit, calibration, and final
-evaluation sets. The threshold is selected once on the calibration set under
+pinned ONNX weights, plus constructed anonymous fiction/name negatives. Both
+positive and negative rows use the same runtime top-1 single-Han candidate; an
+annotated error is positive only when that candidate matches the correction,
+otherwise it is counted as an end-to-end miss. There is no banned-character
+list in the runtime: pronouns and particles are governed by the calibrated
+probability and the author's protected spans. Samples are grouped by source
+text into disjoint fit, calibration, and final evaluation sets. The threshold is selected once on the calibration set under
 the requested precision floor, and the final set is read-only. The exported
 parameters and version are the only runtime calibration inputs; no private
 manuscript text and no per-work word lists are part of the model. The UI does

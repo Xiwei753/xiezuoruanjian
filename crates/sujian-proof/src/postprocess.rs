@@ -197,10 +197,9 @@ mod tests {
     #[test]
     fn ambiguous_pronoun_is_rejected_by_the_calibrated_probability() {
         let lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("lexicon");
-        let shipped = Calibrator::from_json(include_str!(
-            "../assets/correction-data/calibrator.json"
-        ))
-        .expect("shipped calibrator");
+        let shipped =
+            Calibrator::from_json(include_str!("../assets/correction-data/calibrator.json"))
+                .expect("shipped calibrator");
         let accepted = postprocess(
             "他画了一幅画。",
             vec![prediction(0, '他', '她')],

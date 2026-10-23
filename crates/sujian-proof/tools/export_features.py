@@ -67,8 +67,13 @@ def main() -> None:
     parser.add_argument(
         "--correct-text",
         type=Path,
-        default=CRATE_ROOT / "tools" / "calibration" / "anonymous_ambiguous.txt",
-        help="one constructed correct sentence per line; all top-1 proposals are negatives",
+        nargs="+",
+        default=[
+            CRATE_ROOT / "tools" / "calibration" / "anonymous_ambiguous.txt",
+            CRATE_ROOT / "tools" / "calibration" / "anonymous_constructed_names.txt",
+            CRATE_ROOT / "tools" / "calibration" / "anonymous_constructed_fiction.txt",
+        ],
+        help="constructed correct sentences, one per line; all top-1 proposals are negatives",
     )
     args = parser.parse_args()
 
@@ -284,34 +289,40 @@ def main() -> None:
                             f"csc-{used}",
                         )
 
-        if not args.no_negatives and args.correct_text.is_file():
-            for index, line in enumerate(
-                args.correct_text.read_text(encoding="utf-8").splitlines()
-            ):
-                text = line.strip()
-                if not text or len(text) > 500:
+        extra_index = 0
+        if not args.no_negatives:
+            for source_path in args.correct_text:
+                if not source_path.is_file():
                     continue
-                prepared = tokenize(text)
-                if prepared is None:
-                    continue
-                ids, offsets = prepared
-                logits, log_probs = run(ids)
-                for char_index, original in enumerate(text):
-                    token_index = position_token(offsets, ids, char_index)
-                    if token_index is None:
+                for line in source_path.read_text(encoding="utf-8").splitlines():
+                    current_index = extra_index
+                    extra_index += 1
+                    text = line.strip()
+                    if not text or len(text) > 500:
                         continue
-                    original_id = ids[token_index]
-                    top = runtime_candidate(logits, log_probs, token_index, original_id)
-                    if top is None:
+                    prepared = tokenize(text)
+                    if prepared is None:
                         continue
-                    write_row(
-                        0,
-                        original,
-                        top[1],
-                        top[2],
-                        top[3],
-                        f"constructed-{index}",
-                    )
+                    ids, offsets = prepared
+                    logits, log_probs = run(ids)
+                    for char_index, original in enumerate(text):
+                        token_index = position_token(offsets, ids, char_index)
+                        if token_index is None:
+                            continue
+                        original_id = ids[token_index]
+                        top = runtime_candidate(
+                            logits, log_probs, token_index, original_id
+                        )
+                        if top is None:
+                            continue
+                        write_row(
+                            0,
+                            original,
+                            top[1],
+                            top[2],
+                            top[3],
+                            f"constructed-{current_index}",
+                        )
 
     print(
         json.dumps(

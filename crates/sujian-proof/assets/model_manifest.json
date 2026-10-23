@@ -48,9 +48,9 @@
   },
   "calibrator": {
     "path": "calibrator.json",
-    "version": "macbert4csc-csc-2026-10-23-v3",
-    "fit": "public shibing624/CSC plus constructed anonymous fiction/name negatives, grouped 60/20/20 fit/calibration/final; threshold from calibration split, final evaluation read-only",
-    "threshold": 0.7914836505125669
+    "version": "macbert4csc-csc-2026-10-23-v6",
+    "fit": "public shibing624/CSC plus constructed anonymous fiction/name negatives; both labels use the runtime top-1 single-Han candidate; grouped 60/20/20 fit/calibration/final, threshold from calibration, final evaluation read-only",
+    "threshold": 0.8447496608058054
   },
   "runtime": {
     "name": "onnxruntime",
