@@ -74,6 +74,7 @@
 - fallback：API < 20 或能力不支持时，握姿固定为 `unknown`，不伪造状态。
 - 实现文件：`awareness/impl/api20/GripPostureApi20.ets`
 - 对外 facade：`awareness/GripPostureService.ets`（通过 `PlatformApiResolver` 分流，不直接 import `@kit.MultimodalAwarenessKit`）
+- UI 消费（Issue #986）：`ui/adaptive/GripLayoutSide.ets` 把五态折成 left/right（both/notHeld/unknown 保持上一侧，首次默认右侧），供 `ui/components/CompactPrimaryActionLayer.ets` 的三个窄屏 FAB 与设置页 `feature/settings/ui/SettingsContent.ets`、`feature/settings/ui/wide/WideSettingsCategoryContent.ets` 的 Switch 行使用。
 
 ## 防窥屏
 

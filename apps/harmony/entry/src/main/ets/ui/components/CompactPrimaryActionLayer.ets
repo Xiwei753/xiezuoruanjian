@@ -9,7 +9,10 @@
 // 按钮外观不在这里重画：PrimaryFab 已实现统一的毛玻璃 / 按压视效 / 圆环边缘高光。
 
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../theme/LayoutTokens'
+import { GripLayoutSide, GripLayoutSideStore } from '../adaptive/GripLayoutSide'
 import { PrimaryFab } from './PrimaryFab'
+
+const GRIP_SWITCH_DURATION_MS: number = 280
 
 @ComponentV2
 export struct CompactPrimaryActionLayer {
@@ -20,20 +23,55 @@ export struct CompactPrimaryActionLayer {
   /** 主操作回调，由页面提供（新建作品 / 新建卷 / 新建星图） */
   @Param onTap: () => void = () => {}
 
+  // Issue #986：智感握姿决定 FAB 停靠侧；默认右侧，双手/放下设备保持上一次明确握持侧。
+  @Local private gripSide: GripLayoutSide = 'right'
+  private gripSideInitialized: boolean = false
+  private unsubscribeGrip: (() => void) | null = null
+
   @Builder
   emptyContent() {}
 
   /** 页面内容；FAB 只叠加在内容之上，不参与页面自身布局 */
   @BuilderParam contentBuilder: () => void = this.emptyContent
 
+  aboutToAppear(): void {
+    this.unsubscribeGrip = GripLayoutSideStore.getInstance().subscribe((side: GripLayoutSide): void => {
+      if (!this.gripSideInitialized) {
+        // 首帧直接落到当前握持侧，避免页面刚出现时从默认右侧滑过来。
+        this.gripSideInitialized = true
+        this.gripSide = side
+        return
+      }
+      if (side === this.gripSide) {
+        return
+      }
+      this.getUIContext().animateTo({
+        duration: GRIP_SWITCH_DURATION_MS,
+        curve: Curve.EaseInOut
+      }, () => {
+        this.gripSide = side
+      })
+    })
+  }
+
+  aboutToDisappear(): void {
+    if (this.unsubscribeGrip !== null) {
+      this.unsubscribeGrip()
+      this.unsubscribeGrip = null
+    }
+  }
+
   build() {
-    Stack({ alignContent: Alignment.BottomEnd }) {
+    Stack({
+      alignContent: this.gripSide === 'left' ? Alignment.BottomStart : Alignment.BottomEnd
+    }) {
       this.contentBuilder()
 
       if (this.visible) {
         PrimaryFab({ onTap: this.onTap })
           .margin({
-            right: this.pagePadding,
+            left: this.gripSide === 'left' ? this.pagePadding : 0,
+            right: this.gripSide === 'right' ? this.pagePadding : 0,
             bottom: PRIMARY_FAB_BOTTOM_INSET_VP
           })
       }

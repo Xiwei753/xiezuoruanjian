@@ -36,6 +36,8 @@ import { CompactPageState, CompactPageStateKind } from '../../../ui/components/C
 // Issue #972：宽屏浮层的两列分类卡片。
 import { WideSettingsSection } from './wide/WideSettingsSection'
 import { WideSettingsCategoryContent } from './wide/WideSettingsCategoryContent'
+// Issue #986：智感握姿 → 设置开关所在侧。
+import { GripLayoutSide, GripLayoutSideStore } from '../../../ui/adaptive/GripLayoutSide'
 
 const TAG = 'SettingsContent'
 const DOMAIN = 0x0000
@@ -179,6 +181,8 @@ export struct SettingsContent {
   @Local syncDetailsExpanded: boolean = false
   // Issue #982：精确定位后短暂高亮的设置项 key。
   @Local highlightedSettingKey: string = ''
+  // Issue #986：智感握姿决定 Switch 所在侧；默认右侧，双手/放下设备保持上一次明确握持侧。
+  @Local gripSide: GripLayoutSide = 'right'
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -197,6 +201,8 @@ export struct SettingsContent {
   private instanceToken: string = ''
   private syncRunPresentation: SyncRunPresentationState = SyncRunPresentationState.getInstance()
   private unsubscribeSyncRun: (() => void) | null = null
+  // Issue #986：握姿侧订阅句柄。
+  private unsubscribeGrip: (() => void) | null = null
   private syncStateBridge: NativeSyncBridge = new NativeSyncBridge(new NativeCoreModule())
   // Issue #926：冲突面板（窗口层级对话框）句柄。
   private conflictsPanelContent: ComponentContent<SyncConflictsPanelArgs> | null = null
@@ -252,6 +258,11 @@ export struct SettingsContent {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
 
+    // Issue #986：握姿换手只改 Switch 排列侧，不触发设置读写。
+    this.unsubscribeGrip = GripLayoutSideStore.getInstance().subscribe((side: GripLayoutSide): void => {
+      this.gripSide = side
+    })
+
     // Issue #952：设置页订阅共享运行态，保证“同步”分类展开时看到的是最新一轮结果；
     // 摘要只在分类内被动展示，不驱动任何主动弹窗。
     this.syncRunSnapshot = this.syncRunPresentation.snapshot()
@@ -297,6 +308,10 @@ export struct SettingsContent {
     if (this.unsubscribeSyncRun !== null) {
       this.unsubscribeSyncRun()
       this.unsubscribeSyncRun = null
+    }
+    if (this.unsubscribeGrip !== null) {
+      this.unsubscribeGrip()
+      this.unsubscribeGrip = null
     }
     // Issue #926：页面销毁时收起还开着的冲突面板（释放由 onDidDisappear 统一回收）。
     this.closeConflictsPanel()
@@ -1235,6 +1250,7 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('dynamicColorEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1405,6 +1421,7 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('autoIndentEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1451,6 +1468,7 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('editorTypingAnimationEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1498,6 +1516,7 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('editorSmoothCursorEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1545,6 +1564,7 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('editorCoordinatedTextCursorAnimationEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1573,6 +1593,7 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('autoSaveEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1640,6 +1661,7 @@ export struct SettingsContent {
             }
           })
       }
+      .reverse(this.gripSide === 'left')
       .width('100%')
       .margin({ bottom: 16 })
 
@@ -1667,6 +1689,7 @@ export struct SettingsContent {
               }
             })
         }
+        .reverse(this.gripSide === 'left')
         .width('100%')
         .margin({ bottom: 16 })
 
@@ -1879,6 +1902,7 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('aiEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1910,6 +1934,7 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('diagnosticsEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1932,6 +1957,7 @@ export struct SettingsContent {
             this.viewModel.saveSettings()
           })
       }
+      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('diagnosticsVerbose'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -2431,6 +2457,7 @@ export struct SettingsContent {
               idPrefix: this.instanceToken,
               highlightedSettingKey: this.highlightedSettingKey,
               conflictRemaining: this.conflictRemaining,
+              gripSide: this.gripSide,
               onSetThemeMode: (mode: ThemeMode): void => {
                 this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
                   s.appearanceMode = mode

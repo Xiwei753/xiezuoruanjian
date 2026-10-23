@@ -11,6 +11,7 @@ import { ThemeMode } from '../../../../ui/theme/HarmonyThemeTypes'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
 import { MessageKeyMapper } from '../../../../ui/i18n/MessageKeyMapper'
 import { SettingsSectionId, SettingsViewModel } from '../../presentation/SettingsViewModel'
+import { GripLayoutSide } from '../../../../ui/adaptive/GripLayoutSide'
 
 interface WideSelectOption {
   value: string
@@ -21,6 +22,8 @@ interface WideSelectOption {
 export struct WideSettingsCategoryContent {
   @Param sectionId: SettingsSectionId = 'appearance'
   @Param viewModel: SettingsViewModel = new SettingsViewModel()
+  // Issue #986：智感握姿决定 Switch 所在侧；只反转开关与文字，不镜像文字方向。
+  @Param gripSide: GripLayoutSide = 'right'
 
   // 主题变化涉及全局适配器和持久化，由 SettingsContent 统一执行。
   @Param onSetThemeMode: (mode: ThemeMode) => void = (_mode: ThemeMode) => {}
@@ -287,6 +290,7 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .reverse(this.gripSide === 'left')
     .id(this.rowId('dynamicColorEnabled'))
     .width('100%')
     .padding({ left: 4, right: 4, top: 7, bottom: 7 })
@@ -435,6 +439,7 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .reverse(this.gripSide === 'left')
     .id(this.rowId('autoIndentEnabled'))
     .width('100%')
     .padding({ left: 4, right: 4, top: 7, bottom: 7 })
@@ -482,6 +487,7 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .reverse(this.gripSide === 'left')
     .id(this.rowId('editorTypingAnimationEnabled'))
     .width('100%')
     .padding({ left: 4, right: 4, top: 7, bottom: 7 })
@@ -530,6 +536,7 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .reverse(this.gripSide === 'left')
     .id(this.rowId('editorSmoothCursorEnabled'))
     .width('100%')
     .padding({ left: 4, right: 4, top: 7, bottom: 7 })
@@ -578,6 +585,7 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .reverse(this.gripSide === 'left')
     .id(this.rowId('editorCoordinatedTextCursorAnimationEnabled'))
     .width('100%')
     .padding({ left: 4, right: 4, top: 7, bottom: 7 })
@@ -601,6 +609,7 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .reverse(this.gripSide === 'left')
     .id(this.rowId('autoSaveEnabled'))
     .width('100%')
     .padding({ left: 4, right: 4, top: 7, bottom: 7 })
@@ -661,6 +670,7 @@ export struct WideSettingsCategoryContent {
           }
         })
     }
+    .reverse(this.gripSide === 'left')
     .width('100%')
     .padding({ top: 7, bottom: 7 })
     .alignItems(VerticalAlign.Center)
@@ -687,6 +697,7 @@ export struct WideSettingsCategoryContent {
             }
           })
       }
+      .reverse(this.gripSide === 'left')
       .width('100%')
       .padding({ top: 7, bottom: 7 })
       .alignItems(VerticalAlign.Center)
@@ -885,6 +896,7 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .reverse(this.gripSide === 'left')
     .id(this.rowId('aiEnabled'))
     .width('100%')
     .padding({ left: 4, right: 4, top: 7, bottom: 7 })
@@ -911,6 +923,7 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .reverse(this.gripSide === 'left')
     .id(this.rowId('diagnosticsEnabled'))
     .width('100%')
     .padding({ left: 4, right: 4, top: 7, bottom: 7 })
@@ -932,6 +945,7 @@ export struct WideSettingsCategoryContent {
           this.viewModel.saveSettings()
         })
     }
+    .reverse(this.gripSide === 'left')
     .id(this.rowId('diagnosticsVerbose'))
     .width('100%')
     .padding({ left: 4, right: 4, top: 7, bottom: 7 })
