@@ -151,7 +151,7 @@ fn embed_chrome_selection_tap_handlers_not_readd_single_tap_double_tap() {
 fn router_pan_gating_and_local_state_reset() {
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
 
-    let press = function_window(&router, "function beginPress(", 2400);
+    let press = function_window(&router, "function beginPress(", 2800);
     assert!(
         press.contains("emptyPressActive = true") && press.contains("hasGestureTarget(hit)"),
         "空白/连线按下只登记 pan 候选，node/embed 按下登记 pressPending，实际窗口:\n{press}"
@@ -171,19 +171,24 @@ fn router_pan_gating_and_local_state_reset() {
         "触屏未长按滑动必须优先 pan，实际窗口:\n{activated}"
     );
 
-    // reset 会清 Router 本地手势现场。
+    // reset 会清 Router 本地手势现场；左右各自清理，避免误抹另一键的手势。
     let cancel = function_window(&router, "function cancelLocalState(", 400);
     assert!(
-        cancel.contains("emptyPressActive = false")
-            && cancel.contains("emptyLongPressArmed = false")
-            && cancel.contains("panActive = false"),
-        "cancelLocalState 必须清本地手势现场，实际窗口:\n{cancel}"
+        cancel.contains("resetLeftLocalState()") && cancel.contains("resetRightLocalState()"),
+        "cancelLocalState 必须分别清左右本地手势现场，实际窗口:\n{cancel}"
+    );
+    let left_cancel = function_window(&router, "function resetLeftLocalState(", 400);
+    assert!(
+        left_cancel.contains("emptyPressActive = false")
+            && left_cancel.contains("emptyLongPressArmed = false")
+            && left_cancel.contains("panActive = false"),
+        "resetLeftLocalState 必须清本地手势现场，实际窗口:\n{left_cancel}"
     );
     let canvas = read_src(CANVAS);
     let reset = function_window(&canvas, "function resetInteraction() {", 600);
     assert!(
-        reset.contains("inputRouter.cancelLocalState()"),
-        "resetInteraction 必须同时清 Router 本地手势现场，实际窗口:\n{reset}"
+        reset.contains("inputRouter.cancelAllGestures(\"reset\")"),
+        "resetInteraction 必须走 Router 的统一手势取消入口，实际窗口:\n{reset}"
     );
 }
 
@@ -192,7 +197,7 @@ fn router_pan_gating_and_local_state_reset() {
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Issue #832：整棵星图只有一个全局相机，唯一 Router 的 WheelHandler 无条件
-/// 接管滚轮并走 Canvas 的 `zoomAt` 统一缩放入口 + `blocking: true`，
+/// 接管滚轮并走 Canvas 的 `zoomAt` 统一缩放入口 + 显式 `event.accepted`，
 /// 不再按场景身份开关、不按 childContent 分发到"最深子 Scene"，
 /// 也不用 `event.accepted` 做二次分流。Canvas 自己不再挂 WheelHandler。
 #[test]
@@ -204,9 +209,7 @@ fn router_wheel_is_the_only_wheel_entry() {
     );
 
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
-    // Issue #834：窗口收到 900 字符，恰好覆盖 wheelHandler 自身（含 onWheel 体），
-    // 不溢出到本轮新增的 connectArmedHover（其 enabled 是 armed 门控，非 wheel 门控）。
-    let wheel = function_window(&router, "id: wheelHandler", 900);
+    let wheel = function_window(&router, "id: wheelHandler", 2400);
     assert!(
         !wheel.contains("enabled:"),
         "wheelHandler 不得再按场景身份开关（只有根 Canvas 有相机），实际窗口:\n{wheel}"
@@ -216,8 +219,10 @@ fn router_wheel_is_the_only_wheel_entry() {
         "wheelHandler 必须走根 Canvas 的 zoomAt 统一缩放入口，实际窗口:\n{wheel}"
     );
     assert!(
-        wheel.contains("blocking: true"),
-        "wheelHandler 处理后必须 blocking，实际窗口:\n{wheel}"
+        wheel.contains("blocking: false")
+            && wheel.contains("event.accepted = false")
+            && wheel.contains("event.accepted = true"),
+        "wheelHandler 不得阻塞编辑器滚动，并须显式声明 accepted，实际窗口:\n{wheel}"
     );
     assert!(
         !wheel.contains("childContent"),

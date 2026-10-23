@@ -43,6 +43,7 @@
 // =============================================================================
 
 import QtQuick
+import QtQuick.Window
 
 Item {
     id: router
@@ -54,20 +55,35 @@ Item {
     readonly property bool pinchActive:
         pinchHandler.active || (ic && ic.pointerMode === "pinch")
 
-    // Issue #987：本次具体指针手势的编辑仲裁结果。左右键完全隔离，按下时决定，
-    // 持续到下一次同键按下；松手/取消时只复位本手势的现场，不清仲裁结果，
-    // 因为 TapHandler.singleTapped 可能晚于 release tracker 到达。
+    // Issue #987 / #989：一次物理按下 = 一条独立手势记录。左右键完全隔离，
+    // 按下时重新分配序号与现场，绝不继承上一次的 blocked / pressPending。
+    // 松手/取消时只复位本键现场；仲裁结果保留到下一次同键按下，因为
+    // TapHandler.singleTapped / doubleTapped 可能晚于 release tracker 到达。
     //   blocked            — 本次手势归编辑器，或框外保存失败：不得执行任何业务。
-    //   pointerInEditor    — 按下点在编辑框内：拖动类 Handler 立即让位，避免取独占抓取。
+    //   pointerInEditor    — 按下点在编辑框内：拖动类 Handler 不抢独占抓取。
+    property int gestureSequence: 0
+    property int leftGestureId: 0
+    property int rightGestureId: 0
+    property bool leftGestureFinished: true
+    property bool rightGestureFinished: true
+    // 本次左键手势是否真的接管了共享状态机；并发的右键手势不能被左键收尾抹掉。
+    property bool leftGestureOwnsController: false
+    // 当前真正持有共享状态机的按键。空按左键尚未 beginPress、随后右键命中时，
+    // 单靠 leftGestureOwnsController 无法判断状态机已经转手，必须用归属标记。
+    property string controllerGesture: ""
     property bool leftGestureBlocked: false
     property bool rightGestureBlocked: false
     property bool leftPointerInEditor: false
     property bool rightPointerInEditor: false
+    // TapHandler 的点击候选：按下建立，取消/已处理时清除。pressed=false 只表示
+    // TapHandler 因拖动阈值取消，不是物理松手，不能拿它结束业务手势。
+    property bool leftTapCandidateValid: false
+    property bool rightTapCandidateValid: false
 
-    // ── 本文件持有的手势现场 ──
+    // ── 左键手势现场 ──
     // 按下时的完整递归命中（owner/scenePathKey/starmapId/kind/id/targetPath）。
     property var pressHit: null
-    // 当前手势归属层（按下目标的 owner；右键菜单"移动"也复用）。
+    // 当前左键手势归属层（按下目标的 owner）。
     property var gestureOwner: null
     // 空白/连线按下（还没决定 pan），松手按点击处理。
     property bool emptyPressActive: false
@@ -79,14 +95,14 @@ Item {
     property real pressScreenX: 0
     property real pressScreenY: 0
 
-    // 右键手势现场（Issue #930）：右键单击开菜单；按下后拖过阈值直接拉线。
-    // rightPressHit 是按下时的完整递归命中，拖动激活时据此进入 connect；
-    // rightWasDrag 标记本次右键已发生拖动，TapHandler.singleTapped 据此跳过菜单。
-    // rightPressScreenX/Y 是本次右键按下的屏幕坐标（不与左键 pressScreenX/Y 混用）：
-    // connect 起点种子的真实指针位置。
+    // ── 右键手势现场（Issue #930）──
+    // 右键单击开菜单；按下后拖过阈值直接拉线。rightPressHit 是按下时的完整
+    // 递归命中；rightWasDrag 标记本次右键已发生拖动，单击据此跳过菜单。
+    // rightPressScreenX/Y 是本次右键按下的屏幕坐标（不与左键混用）。
     property bool rightPressActive: false
     property bool rightWasDrag: false
     property var rightPressHit: null
+    property var rightGestureOwner: null
     property real rightPressScreenX: 0
     property real rightPressScreenY: 0
 
@@ -109,7 +125,11 @@ Item {
     }
 
     function hasActiveNodeEdit() {
-        return !!canvas && canvas.inlineEditingKey !== ""
+        if (!canvas)
+            return false
+        if (typeof canvas.hasActiveNodeEdit === "function")
+            return canvas.hasActiveNodeEdit() === true
+        return canvas.inlineEditingKey !== ""
     }
 
     // Issue #987：每次业务 press 开始前的唯一编辑仲裁。
@@ -117,12 +137,13 @@ Item {
     //   "blocked" — 指针在框外但保存失败：本次手势整体作废，编辑器保留草稿。
     //   "free"    — 无编辑会话，或框外保存成功：继续原有 press 流程。
     // 必须在 cancelViewportMotion / beginPress 等业务状态之前调用。
-    function arbitrateEditorPress(point, button) {
+    function arbitrateEditorPress(point, button, gestureId) {
         if (!canvas)
             return "blocked"
         if (pointInsideNodeEditor(point)) {
             canvas.logInteraction("node_edit_pointer_claimed", "node", "", {
                 "button": button,
+                "gesture": gestureId,
                 "screenX": point.position.x,
                 "screenY": point.position.y
             })
@@ -131,7 +152,8 @@ Item {
         if (!hasActiveNodeEdit())
             return "free"
         return canvas.commitNodeEditForOutsideGesture(point.position.x,
-                                                       point.position.y) === true
+                                                       point.position.y,
+                                                       button, gestureId) === true
                 ? "free" : "blocked"
     }
 
@@ -139,12 +161,66 @@ Item {
         return (ic && ic.pointerSource === "touch") ? "touch" : "mouse"
     }
 
-    function cancelLocalState() {
+    // 分配一条全新的手势序号；只清本键的现场，另一键完全不参与。
+    function beginGesture(button) {
+        // 兜底：上一次同键物理松手若还没走 Qt.callLater 兜底，先按正常松手
+        // 收尾，绝不让新按下继承旧 controller 状态。
+        if (button === "right") {
+            if (!rightGestureFinished)
+                finishRightGesture(false, "replaced")
+        } else if (!leftGestureFinished) {
+            finishLeftGesture(false, "replaced")
+        }
+        gestureSequence += 1
+        if (button === "right") {
+            rightGestureId = gestureSequence
+            rightGestureFinished = false
+            rightGestureBlocked = false
+            rightPointerInEditor = false
+            rightPressActive = false
+            rightWasDrag = false
+            rightPressHit = null
+            rightGestureOwner = null
+            rightTapCandidateValid = true
+        } else {
+            leftGestureId = gestureSequence
+            leftGestureFinished = false
+            leftGestureOwnsController = false
+            leftGestureBlocked = false
+            leftPointerInEditor = false
+            leftTapCandidateValid = true
+            pressHit = null
+            gestureOwner = null
+            emptyPressActive = false
+            emptyLongPressArmed = false
+            panActive = false
+        }
+        return gestureSequence
+    }
+
+    function resetLeftLocalState() {
+        leftGestureOwnsController = false
+        if (controllerGesture === "left")
+            controllerGesture = ""
         pressHit = null
         gestureOwner = null
         emptyPressActive = false
         emptyLongPressArmed = false
         panActive = false
+    }
+
+    function resetRightLocalState() {
+        if (controllerGesture === "right")
+            controllerGesture = ""
+        rightPressActive = false
+        rightPressHit = null
+        rightGestureOwner = null
+    }
+
+    // 兼容既有调用点：只清现场，不结束任何正在进行的手势。
+    function cancelLocalState() {
+        resetLeftLocalState()
+        resetRightLocalState()
     }
 
     // ── 按下：只登记命中与归属，不决定 move/connect/pan ──
@@ -153,14 +229,15 @@ Item {
             return
         if (ic.pointerMode === "pinch")
             return
-        leftGestureBlocked = false
-        leftPointerInEditor = false
+        beginGesture("left")
+        // 一次物理按下只在这里记录一次 pointer_press；后续 release/cancel 用同一序号。
+        canvas.logPointerPress("left", source, point, leftGestureId)
         // 编辑仲裁必须先于任何业务 press 状态；框外保存成功后继续本次手势。
-        var verdict = arbitrateEditorPress(point, "left")
+        var verdict = arbitrateEditorPress(point, "left", leftGestureId)
         if (verdict !== "free") {
             leftGestureBlocked = true
             leftPointerInEditor = verdict === "claimed"
-            cancelLocalState()
+            resetLeftLocalState()
             return
         }
         canvas.notePointerDevice(source === "touch")
@@ -180,14 +257,16 @@ Item {
         pressHit = hit
         emptyPressActive = false
         emptyLongPressArmed = false
-        canvas.logPointerPress("left", source, point)
 
         if (ic.pointerMode !== "idle") {
             // 右键菜单"移动"已经确定了目标：只有按在同一个目标上才是这次 move 的
-            // 继续，其它对象上的按下不改变任何状态。
+            // 继续，其它对象上的按下不改变任何状态。并发的右键 connect 等状态
+            // 不能被本次左键收尾误结束。
             if (ic.pointerMode === "move" && hasGestureTarget(hit)
                     && ic.isMovingTarget(hit.scenePathKey, hit.kind, hit.id)) {
                 gestureOwner = hit.owner
+                leftGestureOwnsController = true
+                controllerGesture = "left"
             }
             return
         }
@@ -195,9 +274,12 @@ Item {
         if (hasGestureTarget(hit)) {
             gestureOwner = hit.owner
             ic.pointerSource = source
-            ic.beginPress(hit.kind, hit.id, hit.targetPath, hit.scenePathKey,
-                          canvas.screenToWorldX(pressScreenX),
-                          canvas.screenToWorldY(pressScreenY))
+            leftGestureOwnsController =
+                    ic.beginPress(hit.kind, hit.id, hit.targetPath, hit.scenePathKey,
+                                  canvas.screenToWorldX(pressScreenX),
+                                  canvas.screenToWorldY(pressScreenY))
+            if (leftGestureOwnsController)
+                controllerGesture = "left"
             return
         }
 
@@ -205,27 +287,26 @@ Item {
         gestureOwner = null
         emptyPressActive = true
         emptyLongPressArmed = (source === "touch")
+        leftGestureOwnsController = true
+        controllerGesture = "left"
     }
 
     // ── 右键按下（Issue #930）：复用左键状态机，但不启用长按计时 ──
     // 右键点击继续走 handleRightClick 开菜单；真拖动越过阈值由
     // rightConnectDrag 调 beginRightConnectDrag() 提升成 connect。
     function beginRightPress(point) {
-        // 新一次按下先清掉上一次的拖动标记：TapHandler.singleTapped 只按本次
-        // 手势判断是否开菜单。armed / 菜单 move 等 guard 提前返回时也要清，
-        // 否则旧标记会压掉 #834 的"右键取消 armed 再开菜单"路径。
-        rightWasDrag = false
-        rightGestureBlocked = false
-        rightPointerInEditor = false
-        rightPressHit = null
         if (!canvas || !ic)
             return
+        // 新一次按下分配新序号并清掉上一次的拖动标记：单击只按本次手势
+        // 判断是否开菜单，绝不继承旧的 blocked / rightWasDrag。
+        beginGesture("right")
+        canvas.logPointerPress("right", "mouse", point, rightGestureId)
         // Issue #987：右键同样先做编辑区域仲裁，再决定是否进入 connect 候选。
-        var verdict = arbitrateEditorPress(point, "right")
+        var verdict = arbitrateEditorPress(point, "right", rightGestureId)
         if (verdict !== "free") {
             rightGestureBlocked = true
             rightPointerInEditor = verdict === "claimed"
-            cancelLocalState()
+            resetRightLocalState()
             return
         }
         // armed 态下右键由 TapHandler.singleTapped 取消 armed 并开菜单。
@@ -240,14 +321,16 @@ Item {
         var hit = hitAt(rightPressScreenX, rightPressScreenY)
         rightPressHit = hit
         rightPressActive = true
-        canvas.logPointerPress("right", "mouse", point)
 
         if (hasGestureTarget(hit)) {
-            gestureOwner = hit.owner
+            rightGestureOwner = hit.owner
             if (ic.beginPress(hit.kind, hit.id, hit.targetPath, hit.scenePathKey,
                               canvas.screenToWorldX(point.position.x),
                               canvas.screenToWorldY(point.position.y))) {
                 ic.pointerSource = "mouse"
+                controllerGesture = "right"
+                // 右键已接管状态机：左键随后松手不得再补一次点击选中。
+                leftTapCandidateValid = false
                 // 右拖不需要等"长按"时限：拖动阈值一到就走 connect，
                 // 不拖则松手仍是普通点击（菜单）。
                 ic.pressTimerActive = false
@@ -330,7 +413,8 @@ Item {
         if (!hit)
             return
         if (hit.kind === "node") {
-            hit.owner.beginInlineEdit(hit.id)
+            // 同一手势序号贯穿 node_edit_begin / ready / commit。
+            hit.owner.beginInlineEdit(hit.id, leftGestureId, "left")
         } else if (hit.kind === "embed") {
             focusEmbed(hit)
         }
@@ -365,7 +449,6 @@ Item {
         if (ic.linkArmed || ic.connectArmed)
             ic.cancelArmed()
         canvas.notePointerDevice(false)
-        canvas.logPointerPress("right", "mouse", point)
         var hit = hitAt(point.position.x, point.position.y)
         if (!hit)
             return
@@ -378,7 +461,7 @@ Item {
     function handleDragActivated() {
         if (!canvas || !ic)
             return
-        if (leftGestureBlocked)
+        if (leftGestureFinished || leftGestureBlocked)
             return
         if (pinchActive)
             return
@@ -457,7 +540,7 @@ Item {
     function handleDragDelta(dx, dy) {
         if (!canvas || !ic)
             return
-        if (leftGestureBlocked)
+        if (leftGestureFinished || leftGestureBlocked)
             return
         if (pinchActive)
             return
@@ -503,22 +586,24 @@ Item {
         if (!rightPressActive || rightGestureBlocked)
             return
         rightWasDrag = true
-        if (!hasGestureTarget(rightPressHit) || !gestureOwner)
+        if (!hasGestureTarget(rightPressHit) || !rightGestureOwner)
             return
         var h = rightPressHit
-        var center = gestureOwner.itemCenterScene(h.kind, h.id)
+        var owner = rightGestureOwner
+        var center = owner.itemCenterScene(h.kind, h.id)
         if (!center)
             return
         if (ic.pressPendingToConnect(h.kind, h.id, h.targetPath,
                                      center.x, center.y)) {
-            gestureOwner.logInteraction("connect_begin", h.kind, h.id, {
+            owner.logInteraction("connect_begin", h.kind, h.id, {
                 "kind": h.kind, "fromId": h.id,
                 "fromX": center.x, "fromY": center.y,
-                "button": "right"
+                "button": "right",
+                "gesture": rightGestureId
             })
             // 节点中心只作源锚点；终点立刻落回本次右键按下的真实指针位置，
             // 之后每帧由 updateConnectEndpointFromScreen() 跟随指针。
-            updateConnectEndpointFromScreen(rightPressScreenX, rightPressScreenY)
+            updateConnectEndpointFromScreen(rightPressScreenX, rightPressScreenY, owner)
         }
     }
 
@@ -527,42 +612,80 @@ Item {
     // 可见边界）；终点永远取当前指针的绝对位置：screen → 当前活动画布 world。
     // 不累计位移，所以任意 zoom 下终点都等于真实指针，松手 finishConnect 的命中
     // 不会带源节点中心/按下点的偏移；左键长按、触屏转 connect、右键拉线共用它。
-    function updateConnectEndpointFromScreen(sx, sy) {
-        if (!canvas || !ic || !gestureOwner || ic.pointerMode !== "connect")
+    function updateConnectEndpointFromScreen(sx, sy, owner) {
+        var target = owner !== undefined ? owner : gestureOwner
+        if (!canvas || !ic || !target || ic.pointerMode !== "connect")
             return
         ic.updateConnect(canvas.screenToWorldX(sx), canvas.screenToWorldY(sy))
-        gestureOwner.refreshConnectPreview()
+        target.refreshConnectPreview()
     }
 
-    // ── 松手统一出口：click / move / connect / pan 都在这里闭环 ──
-    function handleRelease() {
+    // ── 手势边界日志：press / grab / release / cancel 共用同一序号 ──
+    function logGestureBoundary(event, button, gestureId, mode, reason, blocked,
+                                editorOwned) {
+        if (!canvas)
+            return
+        canvas.logInteraction(event, "gesture", "", {
+            "button": button,
+            "gesture": gestureId,
+            "mode": mode,
+            "reason": reason,
+            "blocked": blocked,
+            "editorOwned": editorOwned
+        })
+    }
+
+    // ── 左键唯一收尾出口：正常松手与异常取消都必须走这里，且只执行一次 ──
+    // 正常 release：connect/move/context 走业务收尾，pressPending/pan 正常结束。
+    // 异常 cancel：只调对应的 end*/cancel*，绝不落边、不开菜单、不提交 move。
+    function finishLeftGesture(cancelled, reason) {
+        if (leftGestureFinished)
+            return
+        leftGestureFinished = true
+        if (cancelled)
+            leftTapCandidateValid = false
         if (!canvas || !ic) {
-            cancelLocalState()
-            return
-        }
-        // Issue #987：本次手势由编辑器认领或框外保存失败，只清 Router 现场。
-        if (leftGestureBlocked) {
-            cancelLocalState()
-            return
-        }
-        // Issue #834 复核：armed 态下 release 不走普通 mode 收尾。
-        // armed 的 target 选择由 handleSingleTap 负责（TapHandler 和
-        // PointHandler 是独立 passive 观察者，同一条 pointer 流都会收到，
-        // 不能赌 signal 顺序）。release 只清 Router 自己的临时 press 状态，
-        // armed 状态留给 handleSingleTap() / Escape / 右键取消。
-        if (ic.linkArmed || ic.connectArmed) {
-            cancelLocalState()
+            resetLeftLocalState()
             return
         }
         var mode = ic.pointerMode
-        if (mode === "connect") {
-            if (gestureOwner) gestureOwner.finishConnect()
+        var blocked = leftGestureBlocked
+        var armed = ic.linkArmed || ic.connectArmed
+        var owner = gestureOwner
+        logGestureBoundary(cancelled ? "pointer_cancel" : "pointer_release",
+                           "left", leftGestureId, mode, reason, blocked,
+                           leftPointerInEditor)
+        // 编辑器认领 / 框外保存失败 / armed 选择 / pinch / 并发的右键手势：
+        // 本次左键没有接管共享状态机，收尾时只清自己的现场。
+        if (blocked || armed || mode === "pinch"
+                || !leftGestureOwnsController || controllerGesture !== "left") {
+            resetLeftLocalState()
+            return
+        }
+        if (cancelled) {
+            if (mode === "connect") {
+                ic.endConnect()
+                canvas.hideTouchPreview()
+            } else if (mode === "move") {
+                ic.endMove()
+                if (owner)
+                    owner.refreshEdges()
+            } else if (mode === "contextPending") {
+                ic.endContextPending()
+                canvas.hideTouchPreview()
+            } else if (mode === "pressPending") {
+                ic.cancelPressPending()
+            } else if (mode === "pan") {
+                ic.endPan()
+            }
+        } else if (mode === "connect") {
+            if (owner) owner.finishConnect()
             else ic.endConnect()
         } else if (mode === "move") {
-            if (gestureOwner) gestureOwner.finishMove()
+            if (owner) owner.finishMove()
             else ic.endMove()
         } else if (mode === "contextPending") {
-            if (gestureOwner) gestureOwner.finishContextPending()
+            if (owner) owner.finishContextPending()
             else {
                 ic.endContextPending()
                 canvas.hideTouchPreview()
@@ -572,40 +695,122 @@ Item {
         } else if (mode === "pan") {
             endPanWithLog()
         }
-        // pinch 不属于单指业务：缩放结束由 PinchHandler 的 endPinch() 统一复位。
-        cancelLocalState()
+        resetLeftLocalState()
     }
 
-    // ── 右键松手统一出口（Issue #930）──
-    // 真拖动：finishConnect() 按既有出口递归命中解析目标并落边，空白目标
-    // 由 finishConnect 自己取消；未拖动：普通点击，pressPending 直接取消，
-    // 菜单交给同一手势的 TapHandler.singleTapped。
-    // rightWasDrag 不在这里清除：singleTapped 可能在本回调之后才到，靠它
-    // 跳过菜单；下一次右键按下在 beginRightPress 里重置。
-    function endRightPress() {
-        if (rightGestureBlocked) {
-            rightPressActive = false
-            rightPressHit = null
-            cancelLocalState()
+    function handleRelease() {
+        finishLeftGesture(false, "release")
+    }
+
+    function handleLeftCancel(reason) {
+        finishLeftGesture(true, reason)
+    }
+
+    // ── 右键唯一收尾出口（Issue #930 / #989）──
+    // 真拖动：finishConnect() 按既有出口递归命中解析目标并落边；未拖动：
+    // pressPending 直接取消，菜单交给同一手势的 TapHandler.singleTapped。
+    // rightWasDrag 保留到 next press；tap 候选在异常取消时作废。
+    function finishRightGesture(cancelled, reason) {
+        if (rightGestureFinished)
+            return
+        rightGestureFinished = true
+        if (cancelled)
+            rightTapCandidateValid = false
+        if (!canvas || !ic) {
+            resetRightLocalState()
             return
         }
-        if (!rightPressActive)
+        var mode = ic.pointerMode
+        var blocked = rightGestureBlocked
+        var armed = ic.linkArmed || ic.connectArmed
+        var owner = rightGestureOwner
+        logGestureBoundary(cancelled ? "pointer_cancel" : "pointer_release",
+                           "right", rightGestureId, mode, reason, blocked,
+                           rightPointerInEditor)
+        if (!rightPressActive || blocked || armed || mode === "pinch"
+                || controllerGesture !== "right") {
+            resetRightLocalState()
             return
-        if (rightWasDrag && ic.pointerMode === "connect" && gestureOwner)
-            gestureOwner.finishConnect()
-        else if (ic.pointerMode === "pressPending")
+        }
+        if (cancelled) {
+            if (mode === "connect" && rightWasDrag) {
+                ic.endConnect()
+                canvas.hideTouchPreview()
+            } else if (mode === "pressPending") {
+                ic.cancelPressPending()
+            }
+        } else if (rightWasDrag && mode === "connect") {
+            if (owner) owner.finishConnect()
+            else ic.endConnect()
+        } else if (mode === "pressPending") {
             ic.cancelPressPending()
-        rightPressActive = false
-        rightPressHit = null
-        if (rightWasDrag)
-            cancelLocalState()
+        }
+        resetRightLocalState()
+    }
+
+    function endRightPress() {
+        finishRightGesture(false, "release")
+    }
+
+    function endRightPressCanceled(reason) {
+        finishRightGesture(true, reason)
+    }
+
+    // 窗口失焦 / 切画布 / resetInteraction 的唯一取消入口。
+    function cancelAllGestures(reason) {
+        leftTapCandidateValid = false
+        rightTapCandidateValid = false
+        finishLeftGesture(true, reason)
+        finishRightGesture(true, reason)
+        resetLeftLocalState()
+        resetRightLocalState()
+    }
+
+    function grabTransitionName(transition) {
+        switch (transition) {
+        case PointerDevice.GrabPassive: return "grab_passive"
+        case PointerDevice.UngrabPassive: return "ungrab_passive"
+        case PointerDevice.CancelGrabPassive: return "cancel_grab_passive"
+        case PointerDevice.OverrideGrabPassive: return "override_grab_passive"
+        case PointerDevice.GrabExclusive: return "grab_exclusive"
+        case PointerDevice.UngrabExclusive: return "ungrab_exclusive"
+        case PointerDevice.CancelGrabExclusive: return "cancel_grab_exclusive"
+        default: return "unknown"
+        }
+    }
+
+    // PointHandler 同时给 onActiveChanged / onCanceled / grabChanged 三条路：
+    // Cancel* -> 异常取消；Ungrab* -> 正常结束。共同的 finished 标记保证只执行一次。
+    function handlePointerGrab(button, transition) {
+        if (!canvas)
+            return
+        var isLeft = button === "left"
+        canvas.logInteraction("pointer_grab_transition", "gesture", "", {
+            "button": button,
+            "gesture": isLeft ? leftGestureId : rightGestureId,
+            "transition": grabTransitionName(transition),
+            "mode": ic ? ic.pointerMode : ""
+        })
+        if (transition === PointerDevice.CancelGrabPassive
+                || transition === PointerDevice.CancelGrabExclusive) {
+            if (isLeft)
+                handleLeftCancel("grab_cancel")
+            else
+                endRightPressCanceled("grab_cancel")
+        } else if (transition === PointerDevice.UngrabPassive
+                   || transition === PointerDevice.UngrabExclusive) {
+            if (isLeft)
+                handleRelease()
+            else
+                endRightPress()
+        }
     }
 
     // ── 长按到点：唯一 Router 调状态提升 ──
     function handleLongPress() {
         if (!canvas || !ic)
             return
-        if (leftGestureBlocked)
+        if (leftGestureFinished || leftGestureBlocked)
             return
         if (pinchActive)
             return
@@ -665,19 +870,24 @@ Item {
         acceptedButtons: Qt.LeftButton
         enabled: !router.pinchActive
         onPressedChanged: {
+            // pressed=false 只是 TapHandler 自己退出（阈值/取消），不是物理松手；
+            // 真正的 release 只由 passive PointHandler 收尾。
             if (pressed)
                 router.beginPress(mouseLeftTap.point, "mouse")
             else
                 router.leftPointerInEditor = false
         }
+        onCanceled: router.leftTapCandidateValid = false
         onSingleTapped: function(eventPoint) {
-            if (router.leftGestureBlocked)
+            if (!router.leftTapCandidateValid || router.leftGestureBlocked)
                 return
+            router.leftTapCandidateValid = false
             router.handleSingleTap(eventPoint, "mouse")
         }
         onDoubleTapped: function(eventPoint) {
-            if (router.leftGestureBlocked)
+            if (!router.leftTapCandidateValid || router.leftGestureBlocked)
                 return
+            router.leftTapCandidateValid = false
             router.handleDoubleTap(eventPoint, "mouse")
         }
     }
@@ -696,14 +906,17 @@ Item {
             else
                 router.leftPointerInEditor = false
         }
+        onCanceled: router.leftTapCandidateValid = false
         onSingleTapped: function(eventPoint) {
-            if (router.leftGestureBlocked)
+            if (!router.leftTapCandidateValid || router.leftGestureBlocked)
                 return
+            router.leftTapCandidateValid = false
             router.handleSingleTap(eventPoint, "touch")
         }
         onDoubleTapped: function(eventPoint) {
-            if (router.leftGestureBlocked)
+            if (!router.leftTapCandidateValid || router.leftGestureBlocked)
                 return
+            router.leftTapCandidateValid = false
             router.handleDoubleTap(eventPoint, "touch")
         }
     }
@@ -721,9 +934,12 @@ Item {
             else
                 router.rightPointerInEditor = false
         }
+        onCanceled: router.rightTapCandidateValid = false
         onSingleTapped: function(eventPoint) {
-            if (router.rightGestureBlocked || router.rightWasDrag)
+            if (!router.rightTapCandidateValid
+                    || router.rightGestureBlocked || router.rightWasDrag)
                 return
+            router.rightTapCandidateValid = false
             router.handleRightClick(eventPoint)
         }
     }
@@ -735,9 +951,11 @@ Item {
         target: null
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
-        // Issue #987：按下点在编辑框内时本次手势归编辑器，立即让出抓取；
-        // 其它区域（包括编辑框外）仍由状态机处理。
-        enabled: !router.leftPointerInEditor
+        // Issue #989：Handler 始终保持稳定启用，不能在手势中途改 enabled 破坏
+        // grab 生命周期。按下点的归属已由编辑仲裁写入本次 blocked；并且不主动
+        // 从 Item（TextInput/TextEdit）手里抢独占抓取。
+        grabPermissions: PointerHandler.ApprovesTakeOverByItems
+                          | PointerHandler.ApprovesTakeOverByHandlersOfDifferentType
         property real lastTx: 0
         property real lastTy: 0
         onActiveChanged: {
@@ -773,7 +991,8 @@ Item {
         target: null
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
-        enabled: !router.rightPointerInEditor
+        grabPermissions: PointerHandler.ApprovesTakeOverByItems
+                          | PointerHandler.ApprovesTakeOverByHandlersOfDifferentType
         onActiveChanged: {
             if (active) {
                 if (router.rightGestureBlocked)
@@ -781,14 +1000,16 @@ Item {
                 router.beginRightConnectDrag()
                 // 激活当帧端点立即对齐指针（按下点种子只兜住随后的零位移场景）。
                 router.updateConnectEndpointFromScreen(rightConnectDrag.centroid.position.x,
-                                                       rightConnectDrag.centroid.position.y)
+                                                       rightConnectDrag.centroid.position.y,
+                                                       router.rightGestureOwner)
             }
         }
         onActiveTranslationChanged: {
             if (!active || router.rightGestureBlocked)
                 return
             router.updateConnectEndpointFromScreen(rightConnectDrag.centroid.position.x,
-                                                   rightConnectDrag.centroid.position.y)
+                                                   rightConnectDrag.centroid.position.y,
+                                                   router.rightGestureOwner)
         }
     }
 
@@ -796,9 +1017,19 @@ Item {
     PointHandler {
         id: leftReleaseTracker
         acceptedButtons: Qt.LeftButton
+        // active=false 只做兜底，延后一拍；同步的 canceled/grabChanged 先到时不重复。
         onActiveChanged: {
-            if (!active)
-                router.handleRelease()
+            if (!active) {
+                var gid = router.leftGestureId
+                Qt.callLater(function() {
+                    if (router.leftGestureId === gid)
+                        router.handleRelease()
+                })
+            }
+        }
+        onCanceled: router.handleLeftCancel("point_canceled")
+        onGrabChanged: function(transition, point) {
+            router.handlePointerGrab("left", transition)
         }
     }
 
@@ -810,8 +1041,17 @@ Item {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
         onActiveChanged: {
-            if (!active)
-                router.endRightPress()
+            if (!active) {
+                var gid = router.rightGestureId
+                Qt.callLater(function() {
+                    if (router.rightGestureId === gid)
+                        router.endRightPress()
+                })
+            }
+        }
+        onCanceled: router.endRightPressCanceled("point_canceled")
+        onGrabChanged: function(transition, point) {
+            router.handlePointerGrab("right", transition)
         }
     }
 
@@ -829,9 +1069,10 @@ Item {
                                                         pinchHandler.centroid.position.y)
                 router.leftPointerInEditor = false
                 router.rightPointerInEditor = false
+                // 双指接管也走统一取消入口；随后 reset 只是状态机复位。
+                router.cancelAllGestures("pinch")
                 canvas.resetInteraction()
                 canvas.hideTouchPreview()
-                router.cancelLocalState()
                 if (_editorOwnsPinch)
                     return
                 router.ic.beginPinch()
@@ -859,25 +1100,35 @@ Item {
         id: wheelHandler
         target: null
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        blocking: true
+        // 不抢在编辑器/正文 Flickable 之前吞掉滚轮；是否缩放由 accepted 明确决定。
+        blocking: false
         onWheel: function(event) {
-            if (!canvas)
+            if (!canvas) {
+                event.accepted = false
                 return
-            // Issue #987：编辑框内的滚轮归编辑器正文；框外仍缩放画布。
-            // 不在编辑期间全局禁用滚轮。
-            if (router.pointInEditor(point.position.x, point.position.y))
+            }
+            // Issue #987 / #989：编辑框内的滚轮归编辑器正文；这里不 accept，
+            // 让 bodyFlick 的 WheelHandler 继续滚动。框外仍缩放画布。
+            if (router.pointInEditor(point.position.x, point.position.y)) {
+                event.accepted = false
                 return
+            }
             canvas.notePointerDevice(false)
             var delta = event.angleDelta.y !== 0
                 ? event.angleDelta.y / 120
                 : event.pixelDelta.y / 120.0
-            if (delta === 0)
+            if (delta === 0) {
+                event.accepted = false
                 return
+            }
             var oldZoom = canvas.zoomTargetLevel
             var newZoom = oldZoom * Math.pow(canvas._zoomFactor, delta)
-            if (newZoom === oldZoom)
+            if (newZoom === oldZoom) {
+                event.accepted = false
                 return
+            }
             canvas.zoomAt(point.position.x, point.position.y, newZoom)
+            event.accepted = true
             canvas.logInteraction("zoom_wheel", "scene", canvas.starmapId, {
                 "oldZoom": oldZoom,
                 "newZoom": canvas.zoomLevel,
@@ -901,6 +1152,16 @@ Item {
             router.ic.connectMouseX = router.canvas.screenToWorldX(_hoverPos.x)
             router.ic.connectMouseY = router.canvas.screenToWorldY(_hoverPos.y)
             router.canvas.refreshConnectPreview()
+        }
+    }
+
+    // 窗口失活（切到别的应用）时，物理 release 可能永远不会送达：
+    // 用同一个取消入口清掉左右手势与控制器状态，下一次按下重新分配现场。
+    Connections {
+        target: Window.window
+        function onActiveChanged() {
+            if (!Window.window || !Window.window.active)
+                router.cancelAllGestures("window_inactive")
         }
     }
 

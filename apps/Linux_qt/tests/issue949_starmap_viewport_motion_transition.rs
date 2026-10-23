@@ -352,7 +352,7 @@ fn pinch_stays_realtime_and_keeps_the_929_pairing() {
 #[test]
 fn wheel_accumulates_on_the_target_not_on_the_displayed_frame() {
     let router = strip_line_comments(&read_src(ROUTER));
-    let wheel = function_window(&router, "id: wheelHandler", 900);
+    let wheel = function_window(&router, "id: wheelHandler", 2400);
     assert!(
         wheel.contains("var oldZoom = canvas.zoomTargetLevel")
             && wheel.contains("oldZoom * Math.pow(canvas._zoomFactor, delta)"),
@@ -360,8 +360,9 @@ fn wheel_accumulates_on_the_target_not_on_the_displayed_frame() {
     );
     assert!(
         wheel.contains("canvas.zoomAt(point.position.x, point.position.y, newZoom)")
-            && wheel.contains("blocking: true"),
-        "滚轮仍必须走唯一的 zoomAt 入口且保持 blocking，实际窗口:\n{wheel}"
+            && wheel.contains("blocking: false")
+            && wheel.contains("event.accepted = true"),
+        "滚轮仍必须走唯一的 zoomAt 入口，并显式接管框外 accepted，实际窗口:\n{wheel}"
     );
     assert!(
         !wheel.contains("enabled:"),

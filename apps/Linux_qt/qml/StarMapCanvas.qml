@@ -1144,7 +1144,7 @@ Item {
         setInlineEditingKey("")
         hideTouchPreview()
         if (inputRouter)
-            inputRouter.cancelLocalState()
+            inputRouter.cancelAllGestures("scene_switch")
         if (interaction.pointerMode === "pinch") {
             interaction.cancelArmed()
         } else {
@@ -1191,19 +1191,33 @@ Item {
         return scene.editorContainsScenePoint(p.x, p.y)
     }
 
+    // 直接读活动 Scene 的会话事实，不依赖可能晚一拍的汇总键。
+    function hasActiveNodeEdit() {
+        var scene = activeScene()
+        return !!scene && scene.hasActiveNodeEdit === true
+    }
+
     // Issue #987：编辑框外的新手势开始前，同步提交唯一编辑会话。
     // 失败返回 false：Router 必须把本次手势整体判为 blocked，保留编辑器与草稿。
-    function commitNodeEditForOutsideGesture(sx, sy) {
+    function commitNodeEditForOutsideGesture(sx, sy, button, gestureId) {
         var scene = activeScene()
-        if (!scene || typeof scene.commitActiveNodeEdit !== "function")
+        if (!scene || scene.editingNodeId === "")
             return true
-        var ok = scene.commitActiveNodeEdit() === true
+        if (typeof scene.commitActiveNodeEdit !== "function")
+            return false
+        var editingId = scene.editingNodeId
+        var didCommit = scene.commitActiveNodeEdit() === true
+        var ended = scene.editingNodeId === ""
+        var ok = didCommit && ended
         logInteraction(ok ? "node_edit_handoff" : "node_edit_handoff_failed",
-                       "node", "", {
+                       "node", editingId, {
                            "success": ok,
+                           "sessionEnded": ended,
                            "screenX": sx,
-                           "screenY": sy
-                       })
+                           "screenY": sy,
+                           "gesture": gestureId,
+                           "button": button
+                       }, scene.scenePathKey || routeKey)
         return ok
     }
 
@@ -1300,7 +1314,7 @@ Item {
     }
 
     // Issue #814 评论 5935346839: pointer_press 是完整手势的起点边界。
-    function logPointerPress(button, device, point) {
+    function logPointerPress(button, device, point, gestureId) {
         var hit = hitTargetAtScreen(point.position.x, point.position.y)
         var kind = hit ? hit.kind : "empty"
         var hitId = hit ? hit.id : ""
@@ -1308,6 +1322,7 @@ Item {
         logInteraction("pointer_press", kind, hitId, {
             "button": button,
             "device": device,
+            "gesture": gestureId !== undefined ? gestureId : 0,
             "screenX": point.position.x,
             "screenY": point.position.y,
             "sceneX": screenToWorldX(point.position.x),
@@ -1367,7 +1382,7 @@ Item {
     function resetInteraction() {
         interaction.reset()
         if (inputRouter)
-            inputRouter.cancelLocalState()
+            inputRouter.cancelAllGestures("reset")
         hideTouchPreview()
         var scene = activeScene()
         if (scene)

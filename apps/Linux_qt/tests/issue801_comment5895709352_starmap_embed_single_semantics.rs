@@ -156,12 +156,12 @@ fn canvas_node_delegate_has_no_portal_special_case() {
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     let double_click = function_window(&router, "function handleDoubleTap(", 600);
     assert!(
-        double_click.contains("hit.owner.beginInlineEdit(hit.id)"),
+        double_click.contains("hit.owner.beginInlineEdit(hit.id,"),
         "Node 双击必须进入命中层节点的内联编辑，实际窗口:\n{double_click}"
     );
     let active = strip_line_comments(&read_src(ACTIVE_SCENE));
     assert!(
-        active.contains("function beginInlineEdit(nodeId)"),
+        active.contains("function beginInlineEdit(nodeId, gestureId, button)"),
         "活动画布必须保留内联编辑入口"
     );
     assert!(

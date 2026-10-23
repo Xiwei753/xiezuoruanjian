@@ -139,7 +139,7 @@ fn mouse_left_tap_uses_recursive_hit() {
 #[test]
 fn touch_long_press_uses_recursive_hit_and_owner_layer() {
     let src = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
-    let press = function_window(&src, "function beginPress(", 2400);
+    let press = function_window(&src, "function beginPress(", 2800);
     assert!(
         press.contains("hitAt(pressScreenX, pressScreenY)")
             && press.contains("emptyLongPressArmed = (source === \"touch\")"),

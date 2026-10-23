@@ -410,13 +410,23 @@ fn inline_editing_owns_only_editor_rectangle() {
     ] {
         assert!(!router.contains(old), "不允许恢复全局禁用输入：{old}");
     }
+    for old in [
+        "enabled: !router.leftPointerInEditor",
+        "enabled: !router.rightPointerInEditor",
+    ] {
+        assert!(
+            !router.contains(old),
+            "手势中途不得切换 Handler enabled：{old}"
+        );
+    }
     for required in [
         "function pointInEditor(",
         "function arbitrateEditorPress(",
         "property bool leftGestureBlocked: false",
         "property bool rightGestureBlocked: false",
-        "enabled: !router.leftPointerInEditor",
-        "enabled: !router.rightPointerInEditor",
+        "property bool leftGestureFinished: true",
+        "property bool rightGestureFinished: true",
+        "onGrabChanged: function(transition, point)",
     ] {
         assert!(
             router.contains(required),
@@ -483,8 +493,8 @@ fn inline_editing_owns_only_editor_rectangle() {
     );
     assert!(
         active.contains("onItemRemoved: function(index, item)")
-            && active.contains("scene.finishActiveNodeEdit()"),
-        "编辑中的 delegate 被销毁时必须结束场景级编辑会话，否则编辑状态会残留"
+            && active.contains("scene.ensureEditingNodeExists()"),
+        "编辑中的 delegate 被移除时必须核对节点是否真的删除，模型行刷新不能清掉草稿"
     );
     let content = strip_line_comments(&read_src(CONTENT));
     assert!(

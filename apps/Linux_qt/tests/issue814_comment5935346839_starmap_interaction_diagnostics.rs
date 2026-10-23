@@ -234,12 +234,12 @@ fn router_pointer_press_covers_left_and_right() {
     );
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     assert!(
-        router.contains("canvas.logPointerPress(\"left\", source, point)"),
-        "左键（鼠标/触屏）按下必须记 pointer_press"
+        router.contains("canvas.logPointerPress(\"left\", source, point, leftGestureId)"),
+        "左键（鼠标/触屏）按下必须记 pointer_press 并带手势序号"
     );
     assert!(
-        router.contains("canvas.logPointerPress(\"right\", \"mouse\", point)"),
-        "右键按下必须记 pointer_press"
+        router.contains("canvas.logPointerPress(\"right\", \"mouse\", point, rightGestureId)"),
+        "右键按下必须记 pointer_press 并带手势序号"
     );
     assert!(
         !router.contains("logPointerPress(\"middle\"") && !canvas.contains("Qt.MiddleButton"),

@@ -311,12 +311,12 @@ fn wheel_and_pinch_have_no_scene_identity_gating() {
         );
     }
 
-    // Issue #834：窗口收到 900 字符，恰好覆盖 wheelHandler 自身（含 onWheel 体），
-    // 不溢出到本轮新增的 connectArmedHover（其 enabled 是 armed 门控，非 wheel 门控）。
-    let wheel = function_window(&router, "id: wheelHandler", 900);
+    let wheel = function_window(&router, "id: wheelHandler", 2400);
     assert!(
-        wheel.contains("blocking: true"),
-        "wheelHandler 仍需 blocking 决定阻塞语义，实际窗口:\n{wheel}"
+        wheel.contains("blocking: false")
+            && wheel.contains("event.accepted = false")
+            && wheel.contains("event.accepted = true"),
+        "wheelHandler 不得阻塞编辑器滚动，并须显式声明 accepted，实际窗口:\n{wheel}"
     );
     assert!(
         !wheel.contains("enabled:"),
@@ -931,7 +931,7 @@ fn drag_accumulation_is_a_raw_scene_pixel_vector_sum() {
 #[test]
 fn release_has_a_single_exit_for_click_move_and_connect() {
     let src = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
-    let release = function_window(&src, "function handleRelease(", 1100);
+    let release = function_window(&src, "function finishLeftGesture(", 1800);
     for branch in [
         "if (mode === \"connect\")",
         "else if (mode === \"move\")",
@@ -940,17 +940,17 @@ fn release_has_a_single_exit_for_click_move_and_connect() {
     ] {
         assert!(
             release.contains(branch),
-            "handleRelease 必须用一个统一出口覆盖所有状态，缺 {branch}，实际窗口:\n{release}"
+            "finishLeftGesture 必须用一个统一出口覆盖所有状态，缺 {branch}，实际窗口:\n{release}"
         );
     }
     assert!(
-        release.contains("gestureOwner.finishConnect()")
-            && release.contains("gestureOwner.finishMove()"),
+        release.contains("owner.finishConnect()")
+            && release.contains("owner.finishMove()"),
         "结束 connect/move 必须走归属层的 finish 出口，实际窗口:\n{release}"
     );
     assert!(
-        src.contains("if (!active)\n                router.handleRelease()"),
-        "左键 press→release 观察必须全部走这一个出口，实际源码缺少"
+        src.contains("router.handleRelease()") && src.contains("router.handleLeftCancel("),
+        "左键正常松手与异常取消都必须走统一收尾出口，实际源码缺少"
     );
 }
 
@@ -1171,11 +1171,11 @@ fn node_title_is_edited_inline_with_a_text_input() {
         "活动画布必须有正文多行 TextEdit"
     );
     assert!(
-        src.contains("visible: scene.editingNodeId !== \"\"") ,
+        src.contains("visible: scene.hasActiveNodeEdit"),
         "编辑层只在场景会话存在时显示并接管输入，实际源码缺少"
     );
 
-    let begin = function_window(&src, "function beginInlineEdit(", 700);
+    let begin = function_window(&src, "function beginInlineEdit(", 1400);
     assert!(
         begin.contains("if (editingNodeId !== \"\" && !commitActiveNodeEdit())")
             && begin.contains("return false")
@@ -1183,7 +1183,7 @@ fn node_title_is_edited_inline_with_a_text_input() {
             && begin.contains("Qt.callLater(editOverlay.activate)"),
         "打开新节点前必须先提交旧会话，失败保留原编辑；再建立唯一会话，实际窗口:\n{begin}"
     );
-    let commit = function_window(&src, "function commitEdit(", 2200);
+    let commit = function_window(&src, "function commitEdit(", 3600);
     assert!(
         commit.contains("scene.commitNodeEdit(node.id,")
             && commit.contains("titleChanged ? nextTitle : null")
@@ -1272,7 +1272,7 @@ fn node_editor_is_a_stable_viewport_anchored_overlay() {
             && active.contains("function finishActiveNodeEdit()"),
         "活动画布必须有唯一编辑会话，inlineEditingKey 由会话派生"
     );
-    let begin = function_window(&active, "function beginInlineEdit(", 800);
+    let begin = function_window(&active, "function beginInlineEdit(", 1400);
     assert!(
         begin.contains("if (editingNodeId !== \"\" && !commitActiveNodeEdit())")
             && begin.contains("Qt.callLater(editOverlay.activate)"),
@@ -1313,7 +1313,7 @@ fn node_gestures_are_disabled_while_editing() {
     assert!(
         active.contains("id: editOverlay")
             && active.contains("id: titleInput") && active.contains("id: bodyEdit")
-            && active.contains("visible: scene.editingNodeId !== \"\""),
+            && active.contains("visible: scene.hasActiveNodeEdit"),
         "场景级编辑容器必须同时提供名称单行输入与正文多行输入"
     );
 
@@ -1327,13 +1327,20 @@ fn node_gestures_are_disabled_while_editing() {
     ] {
         assert!(!router.contains(old), "不允许恢复全局禁用输入：{old}");
     }
+    for old in [
+        "enabled: !router.leftPointerInEditor",
+        "enabled: !router.rightPointerInEditor",
+    ] {
+        assert!(!router.contains(old), "手势中途不得切换 Handler enabled：{old}");
+    }
     for required in [
-        "function arbitrateEditorPress(point, button)",
+        "function arbitrateEditorPress(point, button, gestureId)",
         "canvas.commitNodeEditForOutsideGesture(",
         "property bool leftGestureBlocked: false",
         "property bool rightGestureBlocked: false",
-        "enabled: !router.leftPointerInEditor",
-        "enabled: !router.rightPointerInEditor",
+        "property bool leftGestureFinished: true",
+        "property bool rightGestureFinished: true",
+        "onGrabChanged: function(transition, point)",
     ] {
         assert!(router.contains(required), "必须按实际编辑区域仲裁单次手势：{required}");
     }
@@ -1761,7 +1768,7 @@ fn press_handlers_pass_true_scene_coordinates() {
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     let begin = function_window(&router, "function beginPress(", 2400);
     assert!(
-        begin.contains("canvas.logPointerPress(\"left\", source, point)")
+        begin.contains("canvas.logPointerPress(\"left\", source, point, leftGestureId)")
             && begin.contains("hitAt(pressScreenX, pressScreenY)")
             && begin.contains("canvas.screenToWorldX(pressScreenX)"),
         "Router 必须用 Canvas 局部坐标命中并换算 scene 坐标，实际窗口:\n{begin}"
@@ -2233,9 +2240,9 @@ fn connect_preview_reuses_platform_edge_renderer() {
     // world），不累计位移，所有进入/每帧路径都经它刷新。
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     assert_eq!(
-        count_occurrences(&router, "gestureOwner.refreshConnectPreview()"),
+        count_occurrences(&router, "target.refreshConnectPreview()"),
         1,
-        "connect 端点刷新必须收敛到唯一 helper（绝对指针端点，不累计位移）"
+        "connect 端点刷新必须收敛到唯一 helper（owner 由按键分别传入，绝对指针端点）"
     );
     assert!(
         count_occurrences(&router, "updateConnectEndpointFromScreen(") >= 8,
@@ -2464,7 +2471,7 @@ fn pinch_takes_over_the_shared_state_machine() {
             && begin_edit.contains("return"),
         "晚到的双击进入编辑必须拒绝 pinch 状态，实际窗口:\n{begin_edit}"
     );
-    let release = function_window(&router, "function handleRelease(", 1100);
+    let release = function_window(&router, "function finishLeftGesture(", 1800);
     for mode in [
         "\"connect\"",
         "\"move\"",
@@ -2473,12 +2480,12 @@ fn pinch_takes_over_the_shared_state_machine() {
     ] {
         assert!(
             release.contains(mode),
-            "handleRelease 必须继续处理 {mode}，实际窗口:\n{release}"
+            "finishLeftGesture 必须继续处理 {mode}，实际窗口:\n{release}"
         );
     }
     assert!(
-        !release.contains("\"pinch\" === mode") && !release.contains("mode === \"pinch\""),
-        "handleRelease 不得处理 pinch（缩放结束由 endPinch 复位），实际窗口:\n{release}"
+        !release.contains("\"pinch\" === mode") && !release.contains("if (mode === \"pinch\")"),
+        "手势收尾不得把 pinch 当业务状态（缩放结束由 endPinch 复位），实际窗口:\n{release}"
     );
 }
 

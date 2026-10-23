@@ -204,6 +204,13 @@ Item {
     property string editingBodyDraft: ""
     property string editingError: ""
     property bool editingSaving: false
+    // Issue #989：打开编辑时的节点快照。稳定编辑器不能因为一次模型查询
+    // 短暂返回 null 就静默隐藏；节点真正删除由 ensureEditingNodeExists() 收尾。
+    property var editingNodeSnapshot: null
+    // 打开该会话的左/右键手势序号，用于把 begin/ready/commit 串成同一条日志链。
+    property int editingGestureId: 0
+    property string editingGestureButton: ""
+    readonly property bool hasActiveNodeEdit: editingNodeId !== ""
     readonly property string inlineEditingKey:
         editingNodeId !== "" ? scenePathKey + "/node_" + editingNodeId : ""
 
@@ -218,6 +225,9 @@ Item {
         editingBodyDraft = ""
         editingError = ""
         editingSaving = false
+        editingNodeSnapshot = null
+        editingGestureId = 0
+        editingGestureButton = ""
     }
 
     // 兼容旧调用点：true = 进入编辑（先提交上一个），false = 结束该节点会话。
@@ -444,15 +454,22 @@ Item {
     // 切换画布前由 Canvas 调用：有未提交编辑时先尝试保存。
     // 返回 false 表示保存失败，调用方应中止切换，不能静默丢草稿。
     function flushPendingNodeEdit() {
-        if (editingNodeId === "")
-            return true
-        return editOverlay.commitEdit()
+        return commitActiveNodeEdit()
     }
 
+    // true 只表示"没有会话"或"会话真的保存/结束"；编辑器不可见时不能假成功。
     function commitActiveNodeEdit() {
         if (editingNodeId === "")
             return true
-        return editOverlay.commitEdit()
+        if (!editOverlay.visible || editOverlay.width <= 0 || editOverlay.height <= 0) {
+            logInteraction("node_edit_commit_blocked", "node", editingNodeId, {
+                "reason": "overlay_not_ready",
+                "gesture": editingGestureId,
+                "button": editingGestureButton
+            })
+            return false
+        }
+        return editOverlay.commitEdit() === true
     }
 
     // Issue #987：编辑器真实投影矩形的区域判断。参数是 Scene 局部坐标
@@ -488,7 +505,7 @@ Item {
 
     // 场景级唯一编辑入口（右键菜单"编辑" / Router 双击）。
     // 已有别的节点在编辑时，先提交它；失败则保持原节点，不切到新节点。
-    function beginInlineEdit(nodeId) {
+    function beginInlineEdit(nodeId, gestureId, button) {
         if (interactionController && interactionController.pointerMode === "pinch")
             return false
         if (editingNodeId === nodeId) {
@@ -500,12 +517,19 @@ Item {
         var node = graphController.getNode(nodeId)
         if (!node)
             return false
+        editingGestureId = gestureId !== undefined ? gestureId : 0
+        editingGestureButton = button !== undefined ? button : ""
         editingNodeId = nodeId
+        editingNodeSnapshot = node
         editingTitleDraft = node.title || ""
         editingBodyDraft = StarMapNodeMetrics.bodyOf(node)
         editingError = ""
         editingSaving = false
-        scene.logInteraction("node_edit_begin", "node", nodeId, {})
+        scene.logInteraction("node_edit_begin", "node", nodeId, {
+            "gesture": editingGestureId,
+            "button": editingGestureButton
+        })
+        // 可见性/尺寸/坐标由会话与节点快照驱动；布局完成后再验证焦点。
         Qt.callLater(editOverlay.activate)
         return true
     }
@@ -1118,11 +1142,10 @@ Item {
     Repeater {
         id: nodeRepeater
         model: graphController.nodesModel
-        // 正在编辑的节点被删除 / 模型移除时，场景级会话必须一起结束，
-        // 否则稳定编辑器会继续挂着一个已不存在的节点。
+        // 模型行重建也可能触发 itemRemoved；只有节点确实从图里消失时才结束
+        // 会话，不能让一次模型刷新清掉仍有效的草稿与编辑器。
         onItemRemoved: function(index, item) {
-            if (item && item.nodeId === scene.editingNodeId)
-                scene.finishActiveNodeEdit()
+            scene.ensureEditingNodeExists()
         }
 
         delegate: Item {
@@ -1320,8 +1343,14 @@ Item {
     Rectangle {
         id: editOverlay
 
-        readonly property var editingNode:
-            scene.editingNodeId !== "" ? scene.graphController.getNode(scene.editingNodeId) : null
+        // 优先读当前模型；模型刚刷新时的瞬时 null 由打开会话时的快照兜底，
+        // 保证有效会话不会因为一次查询失败就静默隐藏。
+        readonly property var editingNode: {
+            if (scene.editingNodeId === "")
+                return null
+            return scene.graphController.getNode(scene.editingNodeId)
+                    || scene.editingNodeSnapshot
+        }
         readonly property real _margin: 12
         readonly property var _nodeRect: {
             if (!editingNode)
@@ -1368,7 +1397,9 @@ Item {
         // Issue #987：编辑器视觉父级在 Router 之上；对象所有权仍属于本 Scene，
         // 切图/销毁时随 Scene 一并回收，不保留透明点击层或第二份编辑器。
         parent: scene.editOverlayHost ? scene.editOverlayHost : scene
-        visible: scene.editingNodeId !== "" && editingNode !== null
+        // 可见性只由会话驱动：节点快照保证几何始终可用；节点真正删除时由
+        // ensureEditingNodeExists() 结束会话，绝不让一次模型查询把有效草稿藏掉。
+        visible: scene.hasActiveNodeEdit
         x: _hostPos.x
         y: _hostPos.y
         width: _anchor.width
@@ -1380,14 +1411,40 @@ Item {
         clip: true
         z: 30
 
+        function activationFailed(reason) {
+            scene.logInteraction("node_edit_activation_failed", "node", scene.editingNodeId, {
+                "reason": reason,
+                "visible": visible,
+                "width": width,
+                "height": height,
+                "gesture": scene.editingGestureId,
+                "button": scene.editingGestureButton
+            })
+            return false
+        }
+
         function activate() {
-            if (!visible)
-                return
+            if (scene.editingNodeId === "")
+                return activationFailed("no_session")
+            if (!visible || width <= 0 || height <= 0)
+                return activationFailed("overlay_not_ready")
             titleInput.text = scene.editingTitleDraft
             bodyEdit.text = scene.editingBodyDraft
             titleInput.forceActiveFocus()
             titleInput.selectAll()
             bodyFlick.contentY = 0
+            if (!titleInput.activeFocus)
+                return activationFailed("focus_not_granted")
+            scene.logInteraction("node_edit_ready", "node", scene.editingNodeId, {
+                "visible": visible,
+                "activeFocus": titleInput.activeFocus,
+                "overlayRect": {
+                    "x": x, "y": y, "width": width, "height": height
+                },
+                "gesture": scene.editingGestureId,
+                "button": scene.editingGestureButton
+            })
+            return true
         }
 
         function focusCurrent() {
@@ -1400,8 +1457,18 @@ Item {
         }
 
         function commitEdit() {
-            if (!visible)
+            if (scene.editingNodeId === "")
                 return true
+            // 有会话但编辑器不可见/无尺寸：不能当作保存成功，草稿必须保留。
+            if (!visible || width <= 0 || height <= 0) {
+                scene.logInteraction("node_edit_commit_blocked", "node", scene.editingNodeId, {
+                    "reason": "overlay_not_ready",
+                    "visible": visible,
+                    "gesture": scene.editingGestureId,
+                    "button": scene.editingGestureButton
+                })
+                return false
+            }
             if (scene.editingSaving)
                 return false
             // IME 预编辑期间不提交，把 Enter 留给候选确认。
@@ -1411,7 +1478,9 @@ Item {
             if (nextTitle.length === 0) {
                 scene.editingError = qsTr("名称不能为空")
                 scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
-                    "success": false, "reason": "empty_title"
+                    "success": false, "reason": "empty_title",
+                    "gesture": scene.editingGestureId,
+                    "button": scene.editingGestureButton
                 })
                 titleInput.forceActiveFocus()
                 return false
@@ -1419,7 +1488,9 @@ Item {
             var node = scene.graphController.getNode(scene.editingNodeId)
             if (!node) {
                 scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
-                    "success": true, "reason": "node_removed"
+                    "success": true, "reason": "node_removed",
+                    "gesture": scene.editingGestureId,
+                    "button": scene.editingGestureButton
                 })
                 scene.finishActiveNodeEdit()
                 return true
@@ -1431,7 +1502,9 @@ Item {
             // 字段分别保存：什么都没改就直接关闭，不发无意义的 title/content。
             if (!titleChanged && !bodyChanged) {
                 scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
-                    "success": true, "reason": "unchanged"
+                    "success": true, "reason": "unchanged",
+                    "gesture": scene.editingGestureId,
+                    "button": scene.editingGestureButton
                 })
                 scene.finishActiveNodeEdit()
                 return true
@@ -1447,13 +1520,17 @@ Item {
                         ? result.message : qsTr("保存失败，请重试")
                 scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
                     "success": false, "reason": "save_failed",
-                    "titleChanged": titleChanged, "bodyChanged": bodyChanged
+                    "titleChanged": titleChanged, "bodyChanged": bodyChanged,
+                    "gesture": scene.editingGestureId,
+                    "button": scene.editingGestureButton
                 })
                 return false
             }
             scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
                 "success": true, "reason": "saved",
-                "titleChanged": titleChanged, "bodyChanged": bodyChanged
+                "titleChanged": titleChanged, "bodyChanged": bodyChanged,
+                "gesture": scene.editingGestureId,
+                "button": scene.editingGestureButton
             })
             scene.finishActiveNodeEdit()
             return true
