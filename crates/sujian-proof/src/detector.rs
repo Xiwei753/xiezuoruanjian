@@ -2,6 +2,7 @@
 // Modified behavioral port of pycorrector/pycorrector/detector.py by XuMing
 // (xuming624); this Rust implementation does not bundle upstream data files.
 
+use crate::candidates::{CandidateGenerator, CandidateOrigin};
 use crate::confusion::ConfusionMatcher;
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
@@ -17,6 +18,10 @@ use crate::CorrectionError;
 //
 // In this port every statistical signal is only a nomination with evidence.
 // Neither an OOV token nor a low character score is an error by itself.
+// Shape/pinyin lookups only generate candidates. The only model-external
+// source-error channel is a directional relation attested by an explicit
+// project typo entry; the final decision layer still keeps the original when
+// that channel does not match the candidate.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DetectionKind {
@@ -24,6 +29,34 @@ pub(crate) enum DetectionKind {
     ConfusionWord,
     OutOfVocabularyWord,
     Character,
+}
+
+/// What the dictionaries say about the source and whether it has an explicit
+/// spelling-error channel. This is deliberately separate from language-model
+/// anomaly and from shape/pinyin candidate generation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SourceSpellingEvidence {
+    /// Covered by a curated general dictionary (THUOCL/name/proper corpus), as
+    /// opposed to merely being a token in Jieba's runtime dictionary.
+    pub(crate) general_dictionary_word: bool,
+    /// Covered by Jieba's bundled dictionary. This is useful description, but
+    /// it is not author confirmation of a valid work-specific spelling.
+    pub(crate) jieba_dictionary_word: bool,
+    /// Zero-based scalar positions and replacement characters attested by an
+    /// explicit word-level typo relation, e.g. 黄梁美梦 -> 黄粱美梦 attests
+    /// 梁 -> 粱. These are model-external source-error evidence.
+    pub(crate) attested_error_pairs: Vec<(usize, char)>,
+}
+
+impl SourceSpellingEvidence {
+    fn merge(&mut self, other: SourceSpellingEvidence) {
+        self.general_dictionary_word |= other.general_dictionary_word;
+        self.jieba_dictionary_word |= other.jieba_dictionary_word;
+        self.attested_error_pairs.extend(other.attested_error_pairs);
+        self.attested_error_pairs
+            .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        self.attested_error_pairs.dedup();
+    }
 }
 
 /// Evidence gathered for one suspect span. Several detectors may nominate the
@@ -38,17 +71,17 @@ pub(crate) struct DetectionEvidence {
     /// The general Jieba dictionary does not cover the source span. This is a
     /// dictionary fact, not proof that the span is wrong.
     pub(crate) oov_general_dictionary_miss: bool,
-    /// The source span is itself a general-dictionary word. Valid words must
-    /// not be overturned by a higher local language-model score alone.
-    pub(crate) source_is_general_word: bool,
+    /// Source dictionary coverage and the explicit typo channel, kept apart
+    /// from KenLM frequency and candidate generation.
+    pub(crate) source_spelling_evidence: SourceSpellingEvidence,
     /// Character positions (zero-based scalars relative to the span) that the
     /// 2/3-gram MAD check considered anomalous, with the outlier strength.
     /// This is model-frequency evidence and is only a nomination.
     pub(crate) char_outliers: Vec<(usize, f64)>,
     /// Positions where replacing one source character with a shape-near
-    /// character forms a complete general-dictionary word. This relation comes
-    /// from the stroke table and dictionary coverage, not from KenLM.
-    pub(crate) orthographic_conflicts: Vec<usize>,
+    /// character forms a complete dictionary word. This is candidate
+    /// generation evidence only; it never proves the source is wrong.
+    pub(crate) shape_candidates: Vec<usize>,
     pub(crate) segmentation: SegmentationEvidence,
 }
 
@@ -57,7 +90,8 @@ impl DetectionEvidence {
         self.exact_relation |= other.exact_relation;
         self.confusion_entry |= other.confusion_entry;
         self.oov_general_dictionary_miss |= other.oov_general_dictionary_miss;
-        self.source_is_general_word |= other.source_is_general_word;
+        self.source_spelling_evidence
+            .merge(other.source_spelling_evidence);
         self.char_outliers.extend(other.char_outliers);
         self.char_outliers.sort_by(|left, right| {
             left.0
@@ -65,10 +99,9 @@ impl DetectionEvidence {
                 .then_with(|| right.1.total_cmp(&left.1))
         });
         self.char_outliers.dedup_by(|left, right| left.0 == right.0);
-        self.orthographic_conflicts
-            .extend(other.orthographic_conflicts);
-        self.orthographic_conflicts.sort_unstable();
-        self.orthographic_conflicts.dedup();
+        self.shape_candidates.extend(other.shape_candidates);
+        self.shape_candidates.sort_unstable();
+        self.shape_candidates.dedup();
         self.segmentation.merge(other.segmentation);
     }
 }
@@ -154,6 +187,8 @@ impl Detector {
                 }
                 let start_byte = segment.start_byte + matched.start_byte;
                 let end_byte = segment.start_byte + matched.end_byte;
+                let spelling_evidence =
+                    source_spelling_evidence(&matched.original_text, lexicon, segmenter);
                 sentence_candidates.push(Suspect {
                     start_byte,
                     end_byte,
@@ -163,6 +198,7 @@ impl Detector {
                     evidence: DetectionEvidence {
                         exact_relation: true,
                         confusion_entry: true,
+                        source_spelling_evidence: spelling_evidence,
                         segmentation: segmenter.candidate_span_evidence(
                             &analysis,
                             matched.start_byte,
@@ -185,6 +221,11 @@ impl Detector {
                         exact_replacement: Some(relation.replacement.clone()),
                         evidence: DetectionEvidence {
                             exact_relation: true,
+                            source_spelling_evidence: source_spelling_evidence(
+                                &relation.original,
+                                lexicon,
+                                segmenter,
+                            ),
                             segmentation: segmenter.candidate_span_evidence(&analysis, start, end),
                             ..DetectionEvidence::default()
                         },
@@ -213,9 +254,12 @@ impl Detector {
                         exact_replacement: None,
                         evidence: DetectionEvidence {
                             oov_general_dictionary_miss: true,
-                            source_is_general_word: lexicon.is_general_known_word(&token.text)
-                                || segmenter.has_word(&token.text),
-                            orthographic_conflicts: orthographic_conflicts(
+                            source_spelling_evidence: source_spelling_evidence(
+                                &token.text,
+                                lexicon,
+                                segmenter,
+                            ),
+                            shape_candidates: shape_candidates(
                                 &sentence[token.start_byte..token.end_byte],
                                 lexicon,
                                 segmenter,
@@ -397,8 +441,7 @@ fn detect_character_outliers(
             kind: DetectionKind::Character,
             exact_replacement: None,
             evidence: DetectionEvidence {
-                source_is_general_word: lexicon.is_general_known_word(&token.text)
-                    || segmenter.has_word(&token.text),
+                source_spelling_evidence: source_spelling_evidence(&token.text, lexicon, segmenter),
                 char_outliers: vec![(0, strength)],
                 segmentation: segmenter.candidate_span_evidence(
                     analysis,
@@ -431,10 +474,9 @@ fn detect_character_outliers(
             kind: DetectionKind::Character,
             exact_replacement: None,
             evidence: DetectionEvidence {
-                source_is_general_word: lexicon.is_general_known_word(&word.text)
-                    || segmenter.has_word(&word.text),
+                source_spelling_evidence: source_spelling_evidence(&word.text, lexicon, segmenter),
                 char_outliers: vec![(relative_position, strength)],
-                orthographic_conflicts: orthographic_conflicts(
+                shape_candidates: shape_candidates(
                     &sentence[word.start_byte..word.end_byte],
                     lexicon,
                     segmenter,
@@ -459,79 +501,91 @@ fn detect_split_oov_spans(
     segmenter: &Segmenter,
 ) -> Vec<Suspect> {
     let sentence = analysis.sentence();
-    let tokens = analysis.hmm_tokens();
+    let generator = CandidateGenerator::new();
     let mut matches = Vec::new();
-    let mut start = 0usize;
-    while start < tokens.len() {
-        if !is_single_han_token(&tokens[start]) {
-            start += 1;
+    for candidate_span in analysis.candidate_spans(4) {
+        let span = candidate_span.text.as_str();
+        let char_count = span.chars().count();
+        if !(2..=4).contains(&char_count)
+            || lexicon.is_ignored(span)
+            || lexicon.is_oov_exception(span)
+            || segmenter.has_word(span)
+            || lexicon.is_general_known_word(span)
+        {
             continue;
         }
-        let mut end = start + 1;
-        while end < tokens.len() && is_single_han_token(&tokens[end]) {
-            end += 1;
+        let candidates = generator.generate(span, lexicon, segmenter);
+        let has_complete_target = candidates.iter().any(|candidate| {
+            candidate.known_general_word || candidate.origin == CandidateOrigin::WordConfusion
+        });
+        if !has_complete_target {
+            continue;
         }
-        let run = &tokens[start..end];
-        if (2..=4).contains(&run.len()) {
-            let start_byte = run[0].start_byte;
-            let end_byte = run[run.len() - 1].end_byte;
-            let span = &sentence[start_byte..end_byte];
-            let absolute_start = base_byte + start_byte;
-            let absolute_end = base_byte + end_byte;
-            let has_character_nomination = character_suspects.iter().any(|suspect| {
-                absolute_start <= suspect.start_byte && suspect.end_byte <= absolute_end
-            });
-            let orthographic = orthographic_conflicts(span, lexicon, segmenter);
-            let segmentation = segmenter.candidate_span_evidence(analysis, start_byte, end_byte);
-            if (has_character_nomination || !orthographic.is_empty())
-                && !lexicon.is_ignored(span)
-                && !lexicon.is_oov_exception(span)
-                && !segmenter.has_word(span)
-                && !lexicon.is_general_known_word(span)
-                && !segmentation.overlaps_protected
-                && !segmentation.crosses_stable_word
-            {
-                let mut char_outliers = Vec::new();
-                for token in run {
-                    let token_start = base_byte + token.start_byte;
-                    let token_end = base_byte + token.end_byte;
-                    for suspect in character_suspects {
-                        if suspect.start_byte == token_start && suspect.end_byte == token_end {
-                            if let Some((_, strength)) = suspect.evidence.char_outliers.first() {
-                                let position =
-                                    sentence[start_byte..token.start_byte].chars().count();
-                                char_outliers.push((position, *strength));
-                            }
-                        }
+
+        let absolute_start = base_byte + candidate_span.start_byte;
+        let absolute_end = base_byte + candidate_span.end_byte;
+        let mut char_outliers = Vec::new();
+        for char_span in analysis.chars() {
+            let char_start = base_byte + char_span.start_byte;
+            let char_end = base_byte + char_span.end_byte;
+            if char_start < absolute_start || char_end > absolute_end {
+                continue;
+            }
+            for suspect in character_suspects {
+                if suspect.start_byte == char_start && suspect.end_byte == char_end {
+                    if let Some((_, strength)) = suspect.evidence.char_outliers.first() {
+                        let position = sentence[candidate_span.start_byte..char_span.start_byte]
+                            .chars()
+                            .count();
+                        char_outliers.push((position, *strength));
                     }
                 }
-                matches.push(Suspect {
-                    start_byte: absolute_start,
-                    end_byte: absolute_end,
-                    original: span.to_owned(),
-                    kind: DetectionKind::OutOfVocabularyWord,
-                    exact_replacement: None,
-                    evidence: DetectionEvidence {
-                        oov_general_dictionary_miss: true,
-                        char_outliers,
-                        orthographic_conflicts: orthographic,
-                        segmentation,
-                        ..DetectionEvidence::default()
-                    },
-                });
             }
         }
-        start = end;
+
+        matches.push(Suspect {
+            start_byte: absolute_start,
+            end_byte: absolute_end,
+            original: span.to_owned(),
+            kind: DetectionKind::OutOfVocabularyWord,
+            exact_replacement: None,
+            evidence: DetectionEvidence {
+                oov_general_dictionary_miss: true,
+                source_spelling_evidence: source_spelling_evidence(span, lexicon, segmenter),
+                char_outliers,
+                shape_candidates: shape_candidates(span, lexicon, segmenter),
+                segmentation: candidate_span.evidence,
+                ..DetectionEvidence::default()
+            },
+        });
     }
     matches
 }
 
-fn is_single_han_token(token: &crate::segment::TokenSpan) -> bool {
-    let mut chars = token.text.chars();
-    chars.next().is_some_and(is_han) && chars.next().is_none()
+/// Dictionary coverage plus explicitly attested directional typo relations.
+/// Shape similarity is intentionally absent here: it belongs to candidate
+/// generation, not to a source-error verdict.
+fn source_spelling_evidence(
+    span: &str,
+    lexicon: &Lexicon,
+    segmenter: &Segmenter,
+) -> SourceSpellingEvidence {
+    let mut attested_error_pairs = Vec::new();
+    for (position, ch) in span.chars().enumerate() {
+        for replacement in lexicon.attested_error_alternatives(ch) {
+            attested_error_pairs.push((position, replacement));
+        }
+    }
+    SourceSpellingEvidence {
+        general_dictionary_word: lexicon.is_general_known_word(span),
+        jieba_dictionary_word: segmenter.has_word(span),
+        attested_error_pairs,
+    }
 }
 
-fn orthographic_conflicts(span: &str, lexicon: &Lexicon, segmenter: &Segmenter) -> Vec<usize> {
+/// Candidate-generation positions where a shape-near substitution forms a
+/// complete dictionary word. This never establishes that the source is wrong.
+fn shape_candidates(span: &str, lexicon: &Lexicon, segmenter: &Segmenter) -> Vec<usize> {
     let chars = span.chars().collect::<Vec<_>>();
     if !(2..=6).contains(&chars.len()) {
         return Vec::new();

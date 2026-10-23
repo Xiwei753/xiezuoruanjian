@@ -201,7 +201,7 @@ impl TraditionalCorrector {
                     original: suspect.original,
                     replacement: chosen.text,
                     source: source.to_owned(),
-                    rule_id: statistical_rule_id(suspect.kind, &suspect.evidence).to_owned(),
+                    rule_id: statistical_rule_id(&suspect.evidence).to_owned(),
                     // Statistical candidates are never certain mistakes. The
                     // fixed author-confirmed paths above remain `error`.
                     severity: "warning".to_owned(),
@@ -237,8 +237,9 @@ impl TraditionalCorrector {
     }
 
     /// Filter and order generated candidates without touching the model, then
-    /// enforce the configured scoring budget. Evidence-supported positions and
-    /// stronger provenance come first; text is only a stable final tie-break.
+    /// enforce the configured scoring budget. Only candidates that implement
+    /// the detector's explicit source-error relation can be accepted, so other
+    /// guesses never consume model queries.
     fn candidates_for_scoring(
         &self,
         mut candidates: Vec<CorrectionCandidate>,
@@ -249,17 +250,18 @@ impl TraditionalCorrector {
             return Vec::new();
         }
         candidates.retain(|candidate| {
-            candidate.known_general_word || candidate.origin == CandidateOrigin::WordConfusion
+            candidate.origin == CandidateOrigin::WordConfusion
+                || (candidate.known_general_word
+                    && candidate_matches_source_error(candidate, evidence))
         });
         candidates.sort_by(|left, right| {
-            let left_support = candidate_targets_evidence(left, evidence);
-            let right_support = candidate_targets_evidence(right, evidence);
-            right_support
-                .cmp(&left_support)
+            let left_source_error = candidate_matches_source_error(left, evidence);
+            let right_source_error = candidate_matches_source_error(right, evidence);
+            right_source_error
+                .cmp(&left_source_error)
                 .then_with(|| right.origin.cmp(&left.origin))
                 .then_with(|| left.changed_chars.cmp(&right.changed_chars))
                 .then_with(|| right.known_general_word.cmp(&left.known_general_word))
-                .then_with(|| right.orthographic_relation.cmp(&left.orthographic_relation))
                 .then_with(|| left.rank.cmp(&right.rank))
                 .then_with(|| left.text.cmp(&right.text))
         });
@@ -360,36 +362,34 @@ impl TraditionalCorrector {
     }
 }
 
-fn candidate_targets_evidence(
+fn candidate_matches_source_error(
     candidate: &CorrectionCandidate,
     evidence: &DetectionEvidence,
 ) -> bool {
-    candidate.changed_positions.iter().any(|position| {
-        evidence
-            .char_outliers
-            .iter()
-            .any(|(outlier_position, strength)| outlier_position == position && *strength > 0.0)
-            || evidence
-                .orthographic_conflicts
-                .iter()
-                .any(|conflict_position| conflict_position == position)
-    })
+    let [position] = candidate.changed_positions.as_slice() else {
+        return false;
+    };
+    let Some(replacement) = candidate.text.chars().nth(*position) else {
+        return false;
+    };
+    evidence
+        .source_spelling_evidence
+        .attested_error_pairs
+        .iter()
+        .any(|(attested_position, attested_replacement)| {
+            attested_position == position && *attested_replacement == replacement
+        })
 }
 
-fn statistical_rule_id(kind: DetectionKind, evidence: &DetectionEvidence) -> &'static str {
-    if !evidence.orthographic_conflicts.is_empty() {
-        return "detector.orthographic";
+fn statistical_rule_id(evidence: &DetectionEvidence) -> &'static str {
+    if !evidence
+        .source_spelling_evidence
+        .attested_error_pairs
+        .is_empty()
+    {
+        return "detector.attested_error";
     }
-    match kind {
-        DetectionKind::OutOfVocabularyWord if !evidence.char_outliers.is_empty() => {
-            "detector.candidate"
-        }
-        DetectionKind::OutOfVocabularyWord => "detector.oov",
-        DetectionKind::Character => "detector.char_mad",
-        DetectionKind::ConfusionWord | DetectionKind::ConfirmedEntitySpelling => {
-            "detector.candidate"
-        }
-    }
+    "detector.candidate"
 }
 
 fn context_start(text: &str, end: usize, max_chars: usize) -> usize {

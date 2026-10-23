@@ -22,8 +22,14 @@ pub(crate) enum CandidateOrigin {
     /// where the candidate came from, not why the source is wrong.
     SamePinyinWord,
     /// A complete known word whose changed characters are all shape-near.
-    /// The shape relation is spelling evidence outside the language model.
+    /// This records the candidate's generation channel only; it is not
+    /// independent proof that the source is wrong.
     NearStrokeWord,
+    /// A word reached through a directional character relation attested by an
+    /// explicit project typo entry. This is a source-error channel; it is still
+    /// only the candidate's provenance, and the decision layer performs the
+    /// final check.
+    AttestedSpelling,
     /// An explicit whole-word confusion relation.
     WordConfusion,
 }
@@ -38,8 +44,10 @@ pub(crate) struct CorrectionCandidate {
     /// Whether every changed character has a same-pinyin relation to the
     /// source character. This is only a candidate-generation channel.
     pub(crate) phonetic_relation: bool,
-    /// Whether every changed character has a shape-near relation to the source
-    /// character. Unlike homophony, this is independent spelling evidence.
+    /// Whether every changed character has a shape-near relation to the
+    /// source character. This is a candidate-generation relation, not proof of
+    /// a source error; the decision layer requires a separately attested typo
+    /// channel.
     pub(crate) orthographic_relation: bool,
     /// Whether the candidate is a general-dictionary word. Being only a
     /// plausible pinyin match is not enough to replace prose.
@@ -83,6 +91,29 @@ impl CandidateGenerator {
                 segmenter,
                 &mut next_rank,
             );
+        }
+
+        // Directional character substitutions attested by an explicit typo
+        // relation generate a candidate directly. This keeps the source-error
+        // channel self-contained and does not depend on broad shape/pinyin
+        // tables happening to contain the same pair.
+        for (position, ch) in chars.iter().enumerate() {
+            for replacement in lexicon.attested_error_alternatives(*ch) {
+                if replacement == *ch {
+                    continue;
+                }
+                let mut candidate = chars.clone();
+                candidate[position] = replacement;
+                insert_if_candidate(
+                    &mut candidates,
+                    word,
+                    candidate.into_iter().collect(),
+                    CandidateOrigin::AttestedSpelling,
+                    lexicon,
+                    segmenter,
+                    &mut next_rank,
+                );
+            }
         }
 
         // Pycorrector first looks up known words whose pronunciation matches
@@ -240,15 +271,17 @@ fn insert_if_candidate(
         lexicon.is_general_known_word(&candidate) || segmenter.has_word(&candidate);
     let phonetic_relation = same_pinyin_word(original, &candidate, lexicon);
     let orthographic_relation = same_stroke_word(original, &candidate, lexicon);
-    // A complete known word reached through shape substitutions carries an
-    // external spelling relation. Homophony alone never gets this upgrade.
-    let origin = if origin != CandidateOrigin::WordConfusion
-        && orthographic_relation
-        && known_general_word
+    // A complete known word reached through shape substitutions records a
+    // shape-source candidate. Homophony never gets this upgrade. Both are
+    // candidate provenance, not an error verdict.
+    let origin = if origin == CandidateOrigin::WordConfusion
+        || origin == CandidateOrigin::AttestedSpelling
+        || !orthographic_relation
+        || !known_general_word
     {
-        CandidateOrigin::NearStrokeWord
-    } else {
         origin
+    } else {
+        CandidateOrigin::NearStrokeWord
     };
     match candidates.get_mut(&candidate) {
         Some(existing) => {

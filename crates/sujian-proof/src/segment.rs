@@ -82,6 +82,15 @@ impl SegmentationEvidence {
     }
 }
 
+/// A constrained candidate range inside a run of single-character tokens.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CandidateSpan {
+    pub(crate) text: String,
+    pub(crate) start_byte: usize,
+    pub(crate) end_byte: usize,
+    pub(crate) evidence: SegmentationEvidence,
+}
+
 /// Immutable per-sentence segmentation and protection analysis. Building it
 /// once keeps every candidate span query free of repeated `jieba.cut` calls.
 #[derive(Clone, Debug)]
@@ -107,16 +116,155 @@ impl SentenceAnalysis {
         &self.hmm_tokens
     }
 
-    pub(crate) fn dictionary_tokens(&self) -> &[TokenSpan] {
-        &self.dictionary_tokens
-    }
-
     pub(crate) fn protected_ranges(&self) -> &[(usize, usize)] {
         &self.protected_ranges
     }
 
     pub(crate) fn protected_entries(&self) -> &[(usize, usize)] {
         &self.protected_entries
+    }
+
+    /// Collect boundary, protection, and ambiguity evidence for one UTF-8
+    /// byte span. This only queries the immutable analysis; it never reruns
+    /// Jieba or sentence-level protection matching.
+    pub(crate) fn span_evidence(&self, start_byte: usize, end_byte: usize) -> SegmentationEvidence {
+        if start_byte >= end_byte || end_byte > self.sentence.len() {
+            return SegmentationEvidence::default();
+        }
+        let Some(span) = self.sentence.get(start_byte..end_byte) else {
+            return SegmentationEvidence::default();
+        };
+
+        let boundaries_agree = has_boundary(&self.hmm_tokens, start_byte)
+            && has_boundary(&self.hmm_tokens, end_byte)
+            && has_boundary(&self.dictionary_tokens, start_byte)
+            && has_boundary(&self.dictionary_tokens, end_byte);
+        let hmm_exact = self
+            .hmm_tokens
+            .iter()
+            .any(|token| token.start_byte == start_byte && token.end_byte == end_byte);
+        let dictionary_exact = self
+            .dictionary_tokens
+            .iter()
+            .any(|token| token.start_byte == start_byte && token.end_byte == end_byte);
+        let ambiguous_word = hmm_exact != dictionary_exact && !self.has_dictionary_word(span);
+        // Only cutting a confirmed general-dictionary word protects the span.
+        // An HMM-only unknown token is ambiguity, not a stable word.
+        let crosses_stable_word = self
+            .hmm_tokens
+            .iter()
+            .chain(self.dictionary_tokens.iter())
+            .any(|token| {
+                let straddles = (token.start_byte < start_byte && start_byte < token.end_byte)
+                    || (token.start_byte < end_byte && end_byte < token.end_byte);
+                straddles && self.has_dictionary_word(&token.text)
+            });
+
+        let overlaps_protected =
+            self.protected_ranges
+                .iter()
+                .any(|(protected_start, protected_end)| {
+                    start_byte < *protected_end && *protected_start < end_byte
+                });
+
+        let left_word = self
+            .hmm_tokens
+            .iter()
+            .find(|token| token.end_byte == start_byte)
+            .map(|token| token.text.clone())
+            .or_else(|| {
+                self.dictionary_tokens
+                    .iter()
+                    .find(|token| token.end_byte == start_byte)
+                    .map(|token| token.text.clone())
+            });
+        let right_word = self
+            .hmm_tokens
+            .iter()
+            .find(|token| token.start_byte == end_byte)
+            .map(|token| token.text.clone())
+            .or_else(|| {
+                self.dictionary_tokens
+                    .iter()
+                    .find(|token| token.start_byte == end_byte)
+                    .map(|token| token.text.clone())
+            });
+
+        let mut alternatives = Vec::new();
+        for token in self.hmm_tokens.iter().chain(self.dictionary_tokens.iter()) {
+            if token.start_byte < end_byte
+                && start_byte < token.end_byte
+                && token.text != span
+                && is_chinese_string(&token.text)
+                && !alternatives.contains(&token.text)
+            {
+                alternatives.push(token.text.clone());
+            }
+        }
+        alternatives.truncate(8);
+
+        SegmentationEvidence {
+            whole_word_known: (hmm_exact || dictionary_exact) && self.has_dictionary_word(span),
+            boundaries_agree,
+            overlaps_protected,
+            ambiguous_word,
+            crosses_stable_word,
+            hmm_covers_span: hmm_exact,
+            dictionary_covers_span: dictionary_exact,
+            left_word,
+            right_word,
+            alternatives,
+        }
+    }
+
+    /// Candidate ranges for split-OOV recovery. Only runs of single-character
+    /// HMM tokens are considered, and a range must start and end on boundaries
+    /// shared by both Jieba paths. This allows a 2-4 character error inside a
+    /// longer run without inventing all sliding windows across stable words or
+    /// joining an entity to a preceding verb (看|宿禾 -> 看宿).
+    pub(crate) fn candidate_spans(&self, max_chars: usize) -> Vec<CandidateSpan> {
+        let max_chars = max_chars.max(1);
+        let mut spans = Vec::new();
+        let mut index = 0usize;
+        while index < self.hmm_tokens.len() {
+            if !is_single_han_token(&self.hmm_tokens[index]) {
+                index += 1;
+                continue;
+            }
+            let run_start = index;
+            let mut run_end = index + 1;
+            while run_end < self.hmm_tokens.len() && is_single_han_token(&self.hmm_tokens[run_end])
+            {
+                run_end += 1;
+            }
+
+            for start in run_start..run_end {
+                let start_byte = self.hmm_tokens[start].start_byte;
+                let last = (start + max_chars).min(run_end);
+                for end in start + 1..=last {
+                    let end_byte = self.hmm_tokens[end - 1].end_byte;
+                    let evidence = self.span_evidence(start_byte, end_byte);
+                    if !evidence.boundaries_agree
+                        || evidence.overlaps_protected
+                        || evidence.crosses_stable_word
+                    {
+                        continue;
+                    }
+                    spans.push(CandidateSpan {
+                        text: self.sentence[start_byte..end_byte].to_owned(),
+                        start_byte,
+                        end_byte,
+                        evidence,
+                    });
+                }
+            }
+            index = run_end;
+        }
+        spans
+    }
+
+    fn has_dictionary_word(&self, word: &str) -> bool {
+        SHARED_JIEBA.get().is_some_and(|jieba| jieba.has_word(word))
     }
 }
 
@@ -231,92 +379,7 @@ impl Segmenter {
         start_byte: usize,
         end_byte: usize,
     ) -> SegmentationEvidence {
-        let sentence = analysis.sentence();
-        if start_byte >= end_byte || end_byte > sentence.len() {
-            return SegmentationEvidence::default();
-        }
-        let Some(span) = sentence.get(start_byte..end_byte) else {
-            return SegmentationEvidence::default();
-        };
-
-        let hmm_tokens = analysis.hmm_tokens();
-        let dictionary_tokens = analysis.dictionary_tokens();
-        let boundaries_agree = has_boundary(hmm_tokens, start_byte)
-            && has_boundary(hmm_tokens, end_byte)
-            && has_boundary(dictionary_tokens, start_byte)
-            && has_boundary(dictionary_tokens, end_byte);
-        let hmm_exact = hmm_tokens
-            .iter()
-            .any(|token| token.start_byte == start_byte && token.end_byte == end_byte);
-        let dictionary_exact = dictionary_tokens
-            .iter()
-            .any(|token| token.start_byte == start_byte && token.end_byte == end_byte);
-        let ambiguous_word = hmm_exact != dictionary_exact && !self.has_word(span);
-        // Only cutting a confirmed general-dictionary word protects the span.
-        // An HMM-only unknown token is ambiguity, not a stable word.
-        let crosses_stable_word = hmm_tokens
-            .iter()
-            .chain(dictionary_tokens.iter())
-            .any(|token| {
-                let straddles = (token.start_byte < start_byte && start_byte < token.end_byte)
-                    || (token.start_byte < end_byte && end_byte < token.end_byte);
-                straddles && self.has_word(&token.text)
-            });
-
-        let overlaps_protected =
-            analysis
-                .protected_ranges()
-                .iter()
-                .any(|(protected_start, protected_end)| {
-                    start_byte < *protected_end && *protected_start < end_byte
-                });
-
-        let left_word = hmm_tokens
-            .iter()
-            .find(|token| token.end_byte == start_byte)
-            .map(|token| token.text.clone())
-            .or_else(|| {
-                dictionary_tokens
-                    .iter()
-                    .find(|token| token.end_byte == start_byte)
-                    .map(|token| token.text.clone())
-            });
-        let right_word = hmm_tokens
-            .iter()
-            .find(|token| token.start_byte == end_byte)
-            .map(|token| token.text.clone())
-            .or_else(|| {
-                dictionary_tokens
-                    .iter()
-                    .find(|token| token.start_byte == end_byte)
-                    .map(|token| token.text.clone())
-            });
-
-        let mut alternatives = Vec::new();
-        for token in hmm_tokens.iter().chain(dictionary_tokens.iter()) {
-            if token.start_byte < end_byte
-                && start_byte < token.end_byte
-                && token.text != span
-                && is_chinese_string(&token.text)
-                && !alternatives.contains(&token.text)
-            {
-                alternatives.push(token.text.clone());
-            }
-        }
-        alternatives.truncate(8);
-
-        SegmentationEvidence {
-            whole_word_known: (hmm_exact || dictionary_exact) && self.has_word(span),
-            boundaries_agree,
-            overlaps_protected,
-            ambiguous_word,
-            crosses_stable_word,
-            hmm_covers_span: hmm_exact,
-            dictionary_covers_span: dictionary_exact,
-            left_word,
-            right_word,
-            alternatives,
-        }
+        analysis.span_evidence(start_byte, end_byte)
     }
 
     /// Whether a token belongs to Jieba's bundled general-purpose dictionary.
@@ -349,6 +412,11 @@ pub(crate) fn is_han(ch: char) -> bool {
         0xF900..=0xFAFF |
         0x20000..=0x2FA1F
     )
+}
+
+pub(crate) fn is_single_han_token(token: &TokenSpan) -> bool {
+    let mut chars = token.text.chars();
+    chars.next().is_some_and(is_han) && chars.next().is_none()
 }
 
 fn is_detector_word_char(ch: char) -> bool {

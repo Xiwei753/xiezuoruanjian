@@ -2,25 +2,26 @@
 //! Final, explainable arbitration between the original text and one candidate.
 //!
 //! Detection nominates suspicious spans. Candidate generation proposes text.
-//! Neither stage may declare an error: this module combines dictionary
-//! coverage, segmentation ambiguity, an explicit table relation, and a locally
-//! measured language-model gain into one decision.
+//! Neither stage may declare an error. KenLM anomaly (`char_outliers`) locates
+//! a span; shape and pinyin relations only enlarge the candidate set. A
+//! statistical suggestion is accepted only when the detector found a
+//! model-external source-error channel: a directional character relation
+//! attested by an explicit project typo entry, and the candidate implements
+//! that exact relation in a complete dictionary word. The local language-model
+//! comparison is then used once, as context confirmation. It is never combined
+//! with itself as a second independent reason.
 //!
-//! KenLM anomaly (`char_outliers`) locates a span; it is not acceptance
-//! evidence. A same-pinyin hit only expands the candidate set. Statistical
-//! acceptance needs a spelling relation outside the model, such as an explicit
-//! confusion entry or a complete word formed by a shape-near substitution, and
-//! then exactly one local score comparison. The gate is a conservative,
-//! explainable baseline, not a calibrated error probability; `confidence`
-//! therefore stays unset.
+//! The gate is a conservative, explainable baseline, not a calibrated error
+//! probability; `confidence` therefore stays unset.
 
 use crate::candidates::{CandidateOrigin, CorrectionCandidate};
 use crate::detector::DetectionEvidence;
 use crate::segment::SegmentationEvidence;
 
 /// The gate is deliberately not calibrated as an error probability. It only
-/// requires that the candidate has model-external spelling evidence and that
-/// its local normalized log10 score is strictly better than the original's.
+/// accepts a known complete-word candidate whose changed character is the one
+/// attested by an explicit typo relation, and whose local normalized log10
+/// score is strictly better than the original's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CorrectionDecision {
     Accept,
@@ -53,7 +54,7 @@ impl DecisionGate {
         if candidate.origin == CandidateOrigin::WordConfusion {
             return CorrectionDecision::Accept;
         }
-        if candidate.changed_chars == 0 || candidate.changed_chars != 1 {
+        if candidate.changed_chars != 1 || candidate.changed_positions.len() != 1 {
             // Multi-character statistical guesses are not a spelling relation.
             return CorrectionDecision::KeepOriginal;
         }
@@ -61,26 +62,40 @@ impl DecisionGate {
             return CorrectionDecision::KeepOriginal;
         }
 
-        let source_len = source_span.chars().count();
-        let source_is_known_word = segmentation.whole_word_known || evidence.source_is_general_word;
         // Single-character pronouns and other known characters need context
         // semantics that a character language model cannot supply.
-        if source_len == 1 && source_is_known_word {
+        if source_span.chars().count() == 1
+            && evidence.source_spelling_evidence.jieba_dictionary_word
+        {
             return CorrectionDecision::KeepOriginal;
         }
 
-        // A homophone is a candidate-generation channel, not proof that the
-        // original spelling is wrong. Acceptance requires a model-external
-        // relation: a complete known word formed by a shape-near substitution
-        // at one of the positions detector flagged, or an explicit relation
-        // handled above.
-        let targets_orthographic_conflict = candidate.origin == CandidateOrigin::NearStrokeWord
-            && candidate.orthographic_relation
-            && candidate
-                .changed_positions
-                .iter()
-                .any(|position| evidence.orthographic_conflicts.contains(position));
-        if !targets_orthographic_conflict {
+        // A span covered by the curated general dictionary is a valid complete
+        // word. Shape similarity and a better local score cannot overturn it.
+        // Jieba's runtime dictionary alone is not treated as author-confirmed
+        // validity: it also contains corpus artifacts (高梁 is one such entry).
+        if evidence.source_spelling_evidence.general_dictionary_word {
+            return CorrectionDecision::KeepOriginal;
+        }
+
+        // The only statistical source-error channel is an explicit typo
+        // relation such as the 梁 -> 粱 direction attested by
+        // 黄梁美梦 -> 黄粱美梦. Shape similarity and dictionary coverage of
+        // the target are candidate-generation facts, not source-error proof.
+        let Some(position) = candidate.changed_positions.first().copied() else {
+            return CorrectionDecision::KeepOriginal;
+        };
+        let Some(replacement) = candidate.text.chars().nth(position) else {
+            return CorrectionDecision::KeepOriginal;
+        };
+        let attested = evidence
+            .source_spelling_evidence
+            .attested_error_pairs
+            .iter()
+            .any(|(attested_position, attested_replacement)| {
+                *attested_position == position && *attested_replacement == replacement
+            });
+        if !attested {
             return CorrectionDecision::KeepOriginal;
         }
 
@@ -130,15 +145,37 @@ mod tests {
     }
 
     #[test]
-    fn known_word_typo_with_shape_conflict_can_be_accepted() {
+    fn attested_typo_relation_with_complete_word_can_be_accepted() {
         let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
         let segmenter = Segmenter::new();
         let sentence = "他种了高梁。";
         let start = sentence.find('高').expect("start");
         let end = start + "高梁".len();
         let mut evidence = evidence(&lexicon, &segmenter, sentence, (start, end));
-        evidence.source_is_general_word = true;
-        evidence.orthographic_conflicts = vec![1];
+        evidence.source_spelling_evidence.jieba_dictionary_word = true;
+        evidence.source_spelling_evidence.attested_error_pairs = vec![(1, '粱')];
+        assert_eq!(
+            DecisionGate::evaluate(
+                "高梁",
+                &candidate("高粱", CandidateOrigin::AttestedSpelling),
+                &evidence.segmentation,
+                &evidence,
+                0.0,
+                0.05,
+            ),
+            CorrectionDecision::Accept
+        );
+    }
+
+    #[test]
+    fn shape_alternative_alone_is_not_source_error_evidence() {
+        let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
+        let segmenter = Segmenter::new();
+        let sentence = "他种了高梁。";
+        let start = sentence.find('高').expect("start");
+        let end = start + "高梁".len();
+        let mut evidence = evidence(&lexicon, &segmenter, sentence, (start, end));
+        evidence.shape_candidates = vec![1];
         let mut candidate = candidate("高粱", CandidateOrigin::NearStrokeWord);
         candidate.orthographic_relation = true;
         assert_eq!(
@@ -150,7 +187,30 @@ mod tests {
                 0.0,
                 0.05,
             ),
-            CorrectionDecision::Accept
+            CorrectionDecision::KeepOriginal
+        );
+    }
+
+    #[test]
+    fn general_dictionary_word_is_kept_even_with_an_attested_pair() {
+        let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
+        let segmenter = Segmenter::new();
+        let sentence = "他看见桥梁。";
+        let start = sentence.find('桥').expect("start");
+        let end = start + "桥梁".len();
+        let mut evidence = evidence(&lexicon, &segmenter, sentence, (start, end));
+        evidence.source_spelling_evidence.general_dictionary_word = true;
+        evidence.source_spelling_evidence.attested_error_pairs = vec![(1, '粱')];
+        assert_eq!(
+            DecisionGate::evaluate(
+                "桥梁",
+                &candidate("桥粱", CandidateOrigin::NearStrokeWord),
+                &evidence.segmentation,
+                &evidence,
+                0.0,
+                0.05,
+            ),
+            CorrectionDecision::KeepOriginal
         );
     }
 
