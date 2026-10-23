@@ -49,13 +49,23 @@ Item {
     signal openSettings()
     signal sceneGeometryReady(string starmapId, string routeKey)
 
+    // Issue #984：对壳层暴露星图节点编辑的离开前保存入口。
+    // 搜索跳章节/根图等会让 Loader 失活的导航必须先确认这里返回 true。
+    function flushPendingNodeEdit() {
+        return canvas.flushPendingNodeEdit()
+    }
+
     // Issue #977：壳层统一返回入口。根画布退出星图工作区；子画布走 Core
     // 导航路由返回父画布，并恢复进入父画布时保存的镜头。
+    // Issue #984：根画布退出前先提交节点编辑；失败保留工作区和草稿。
     function navigateBack() {
-        if (canvas.focusIsRoot)
+        if (canvas.focusIsRoot) {
+            if (!canvas.flushPendingNodeEdit())
+                return false
             root.backClicked()
-        else
-            canvas.focusParentScene()
+            return true
+        }
+        return canvas.focusParentScene()
     }
 
     // Issue #982：全局搜索点击星图结果时定位到具体节点 / 边 / 嵌入。

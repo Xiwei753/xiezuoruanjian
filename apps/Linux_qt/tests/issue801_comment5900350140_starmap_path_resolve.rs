@@ -23,6 +23,7 @@ const CANVAS: &str = "qml/StarMapCanvas.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
 const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const WORKSPACE: &str = "qml/StarMapWorkspace.qml";
+const MAIN: &str = "qml/main.qml";
 const BRIDGE: &str = "src/starmap_bridge.rs";
 const QT_BACKEND: &str = "src/backend/starmap_backend.rs";
 const BACKEND_GRAPH: &str = "src/backend/starmap_backend/graph.rs";
@@ -357,5 +358,74 @@ fn core_resolver_is_the_layer_truth() {
     assert!(
         api.contains("pub fn resolve_starmap_path("),
         "WriterCoreApi 必须暴露 resolve_starmap_path"
+    );
+}
+
+/// Issue #984 第三轮复核：所有离开活动星图画布的路径都必须先提交节点编辑，
+/// 保存失败时停在本层，不能继续换路由或销毁工作区。
+#[test]
+fn leaving_starmap_commits_pending_node_edit_first() {
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let helper = function_window(
+        &canvas,
+        "function commitPendingNodeEditBeforeNavigation()",
+        700,
+    );
+    assert!(
+        helper.contains("scene.flushPendingNodeEdit()"),
+        "Canvas 离开前保存必须委托活动 Scene 的唯一编辑会话，实际窗口:\n{helper}"
+    );
+    assert!(
+        helper.contains("routeError = qsTr") && helper.contains("return false"),
+        "保存失败必须留在原画布并显示错误，实际窗口:\n{helper}"
+    );
+
+    let reset = function_window(&canvas, "function resetToRoot()", 900);
+    assert!(
+        reset.contains("if (!commitPendingNodeEditBeforeNavigation())")
+            && reset.contains("return false")
+            && reset.contains("applyRoute(route)"),
+        "resetToRoot 必须先确认保存成功再解析根路由，实际窗口:\n{reset}"
+    );
+
+    let reveal = function_window(&canvas, "function revealSearchTarget(target)", 2200);
+    assert!(
+        reveal.contains("if (!resetToRoot())"),
+        "全局搜索定位子图返回根图时必须先走 resetToRoot 的保存守卫，实际窗口:\n{reveal}"
+    );
+
+    let backend = function_window(&canvas, "onStarmapBackendRefChanged:", 500);
+    assert!(
+        backend.contains("commitPendingNodeEditBeforeNavigation()")
+            && backend.contains("applyRoute(currentRoute)"),
+        "后端晚注入重解析前也必须提交当前编辑，实际窗口:\n{backend}"
+    );
+
+    let workspace = strip_line_comments(&read_src(WORKSPACE));
+    let back = function_window(&workspace, "function navigateBack()", 700);
+    assert!(
+        back.contains("canvas.flushPendingNodeEdit()") && back.contains("root.backClicked()"),
+        "根图返回工作台必须先经 Canvas 统一保存入口，实际窗口:\n{back}"
+    );
+    assert!(
+        back.find("canvas.flushPendingNodeEdit()").unwrap()
+            < back.find("root.backClicked()").unwrap(),
+        "保存成功前不得发出 backClicked，实际窗口:\n{back}"
+    );
+
+    let main = strip_line_comments(&read_src(MAIN));
+    let search = function_window(&main, "function navigateToSearchResult(result)", 2600);
+    assert!(
+        search.contains("appController.inStarmap")
+            && search.contains("starmapWorkspace.flushPendingNodeEdit()")
+            && search.contains("globalSearchOverlay.showMessage("),
+        "从星图搜索跳章节/根图前必须走 Workspace 保存入口并提示失败，实际窗口:\n{search}"
+    );
+    assert!(
+        search
+            .find("starmapWorkspace.flushPendingNodeEdit()")
+            .unwrap()
+            < search.find("appController.openWriting(").unwrap(),
+        "保存未确认前不得切换工作区，实际窗口:\n{search}"
     );
 }

@@ -158,6 +158,24 @@ Item {
         return activeSceneLoader.item
     }
 
+    // Issue #984：离开活动画布前统一提交节点编辑。
+    // 所有会替换 currentStarmapId / 销毁活动 Scene 的导航入口都必须先过这里；
+    // 保存失败时留在原画布和编辑器，不允许继续 applyRoute。
+    function commitPendingNodeEditBeforeNavigation() {
+        var scene = activeScene()
+        if (!scene || typeof scene.flushPendingNodeEdit !== "function")
+            return true
+        if (scene.flushPendingNodeEdit())
+            return true
+        routeError = qsTr("节点保存失败，请重试")
+        return false
+    }
+
+    // 对 Workspace / 壳层暴露同一个离开前保存入口。
+    function flushPendingNodeEdit() {
+        return commitPendingNodeEditBeforeNavigation()
+    }
+
     // Core 定位当前活动画布：route 解析失败不回退到裸目标 ID。
     function applyRoute(route) {
         var normalized = normalizeRoute(route)
@@ -224,6 +242,8 @@ Item {
 
     // 切回根图：清所有层相机，镜头回默认。
     function resetToRoot() {
+        if (!commitPendingNodeEditBeforeNavigation())
+            return false
         settleViewportMotion()
         cameraStack = ({})
         entryContexts = ({})
@@ -236,6 +256,7 @@ Item {
         resetZoomRound()
         storeCamera(routeKeyOf(route), cameraSnapshot())
         visualFocusChanged()
+        return true
     }
 
     Component.onCompleted: {
@@ -248,7 +269,9 @@ Item {
     }
     onStarmapBackendRefChanged: {
         // 后端晚于 starmapId 注入时补一次路由解析。
-        if (_initialized && currentRoute.rootStarmapId !== "")
+        // 若此时已有活动画布正在编辑，也必须先保存成功再替换 Scene。
+        if (_initialized && currentRoute.rootStarmapId !== ""
+                && commitPendingNodeEditBeforeNavigation())
             applyRoute(currentRoute)
     }
 
@@ -1176,8 +1199,12 @@ Item {
         if (!target.nodeId && !target.edgeId && !target.embedId
                 && !target.linkId && !target.hyperlinkId)
             return false
-        if (!focusIsRoot)
-            resetToRoot()
+        if (!focusIsRoot) {
+            if (!resetToRoot())
+                return false
+        } else if (!commitPendingNodeEditBeforeNavigation()) {
+            return false
+        }
         scene = activeScene()
         if (!scene)
             return false

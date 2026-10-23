@@ -827,6 +827,23 @@ Kirigami.ApplicationWindow {
         }
 
         var target = result.target || ({})
+        // Issue #984：从星图跳到章节、根图或工作区前，先提交当前节点编辑。
+        // 失败时保留星图与编辑器，搜索浮层不关闭，也不能让 Loader 失活。
+        if (appController.inStarmap) {
+            var starmapWorkspace = starmapWorkspaceLoader.item
+            var starmapSaved = true
+            if (starmapWorkspace && typeof starmapWorkspace.flushPendingNodeEdit === "function") {
+                try {
+                    starmapSaved = starmapWorkspace.flushPendingNodeEdit()
+                } catch (e) {
+                    starmapSaved = false
+                }
+            }
+            if (!starmapSaved) {
+                globalSearchOverlay.showMessage(qsTr("节点正文尚未保存，无法离开星图"))
+                return false
+            }
+        }
         // 离开或定位当前章节前先保存。保存失败时不跳转，搜索浮层保持打开。
         if (appController.inWriting) {
             var saved = true
