@@ -7,9 +7,16 @@
 
 const MAX_SNAPSHOTS: number = 24
 
+interface SnapshotWaiter {
+  accept: (content: string) => boolean
+  resolve: (content: string | null) => void
+  timer: number
+}
+
 export class ContinuationSnapshotStore {
   private static instance: ContinuationSnapshotStore
   private snapshots: Map<string, string> = new Map<string, string>()
+  private waiters: Map<string, SnapshotWaiter[]> = new Map<string, SnapshotWaiter[]>()
 
   static getInstance(): ContinuationSnapshotStore {
     if (!ContinuationSnapshotStore.instance) {
@@ -24,6 +31,7 @@ export class ContinuationSnapshotStore {
     }
     this.snapshots.delete(snapshotId)
     this.snapshots.set(snapshotId, content)
+    this.resolveWaiters(snapshotId, content)
     while (this.snapshots.size > MAX_SNAPSHOTS) {
       const oldest: string | undefined = this.snapshots.keys().next().value
       if (oldest === undefined) {
@@ -38,7 +46,84 @@ export class ContinuationSnapshotStore {
     return content === undefined ? null : content
   }
 
+  /**
+   * 等待同一个 snapshotId 的正文真正到达，而不是固定轮询。
+   * accept 用于只接受哈希匹配的 revision；超时返回 null，并保留调用方的接续意图。
+   */
+  waitFor(snapshotId: string, accept: (content: string) => boolean,
+    timeoutMs: number = 5000): Promise<string | null> {
+    const existing: string | null = this.get(snapshotId)
+    if (existing !== null && accept(existing)) {
+      return Promise.resolve(existing)
+    }
+    return new Promise<string | null>((resolve: (content: string | null) => void): void => {
+      const waiter: SnapshotWaiter = {
+        accept: accept,
+        resolve: resolve,
+        timer: -1
+      }
+      waiter.timer = setTimeout((): void => {
+        this.removeWaiter(snapshotId, waiter)
+        resolve(null)
+      }, timeoutMs)
+      const list: SnapshotWaiter[] | undefined = this.waiters.get(snapshotId)
+      if (list === undefined) {
+        this.waiters.set(snapshotId, [waiter])
+      } else {
+        list.push(waiter)
+      }
+    })
+  }
+
   remove(snapshotId: string): void {
     this.snapshots.delete(snapshotId)
+    this.failWaiters(snapshotId)
+  }
+
+  private resolveWaiters(snapshotId: string, content: string): void {
+    const list: SnapshotWaiter[] | undefined = this.waiters.get(snapshotId)
+    if (list === undefined) {
+      return
+    }
+    const remaining: SnapshotWaiter[] = []
+    list.forEach((waiter: SnapshotWaiter): void => {
+      if (waiter.accept(content)) {
+        clearTimeout(waiter.timer)
+        waiter.resolve(content)
+      } else {
+        remaining.push(waiter)
+      }
+    })
+    if (remaining.length === 0) {
+      this.waiters.delete(snapshotId)
+    } else {
+      this.waiters.set(snapshotId, remaining)
+    }
+  }
+
+  private failWaiters(snapshotId: string): void {
+    const list: SnapshotWaiter[] | undefined = this.waiters.get(snapshotId)
+    if (list === undefined) {
+      return
+    }
+    list.forEach((waiter: SnapshotWaiter): void => {
+      clearTimeout(waiter.timer)
+      waiter.resolve(null)
+    })
+    this.waiters.delete(snapshotId)
+  }
+
+  private removeWaiter(snapshotId: string, waiter: SnapshotWaiter): void {
+    const list: SnapshotWaiter[] | undefined = this.waiters.get(snapshotId)
+    if (list === undefined) {
+      return
+    }
+    const index: number = list.indexOf(waiter)
+    if (index >= 0) {
+      list.splice(index, 1)
+    }
+    if (list.length === 0) {
+      this.waiters.delete(snapshotId)
+    }
   }
 }

@@ -95,7 +95,7 @@ export struct SearchScreen {
   private updateContinuationSnapshot(context: SearchContext, query: string): void {
     const payload: ContinuationPayload = {
       screen: 'search',
-      tabIndex: TAB_HOME,
+      tabIndex: this.screenTabIndex,
       searchQuery: query,
       searchOriginScreen: context.originScreen
     }

@@ -26,7 +26,7 @@
 | 窗口隐私 | @kit.ArkUI (window) | 9 | SystemCapability.WindowManager.WindowManager.Core | ohos.permission.PRIVACY_WINDOW | 否 | privacy/WindowPrivacyService.ets |
 | 应用接续 | 无独立 Kit（Ability 生命周期 + module.json5 continuable 配置） | 未限定独立 API（Staged 模型 ability 级配置） | 无独立 SystemCapability（Ability 级配置） | 无 | 否 | continuity/ContinuationEntrypoint.ets, continuity/AppContinuationService.ets |
 | 可信设备发现 | @kit.DistributedServiceKit (distributedDeviceManager) | 10 | SystemCapability.DistributedHardware.DeviceManager | ohos.permission.DISTRIBUTED_DATASYNC | 否 | device/impl/api18/TrustedDeviceApi18.ets, device/TrustedDeviceService.ets |
-| 附近设备连接 | @kit.DistributedServiceKit (abilityConnectionManager) | 18 | SystemCapability.DistributedSched.AppCollaboration | ohos.permission.DISTRIBUTED_DATASYNC（发现可信设备） | 否 | device/impl/api18/TrustedDeviceApi18.ets, device/TrustedDeviceService.ets, peer/PeerSyncTransport.ets, peer/PeerSyncSession.ets |
+| 附近设备连接 | @kit.DistributedServiceKit (abilityConnectionManager) | 18 | SystemCapability.DistributedSched.AppCollaboration | ohos.permission.DISTRIBUTED_DATASYNC（发现可信设备） | 否 | device/impl/api18/TrustedDeviceApi18.ets, device/TrustedDeviceService.ets, peer/PeerSyncTransport.ets, peer/PeerSyncSession.ets, peer/PeerObjectStore.ets |
 | 普通系统分享 | @kit.ShareKit (systemShare) | 11 | SystemCapability.Collaboration.SystemShare | 无 | 否 | share/impl/api11/SystemShareApi11.ets, share/SystemShareService.ets |
 | 碰一碰分享 | @kit.ShareKit (harmonyShare knockShare) | 12 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api12/KnockShareApi12.ets, share/TapShareService.ets |
 | 隔空传送 | @kit.ShareKit (harmonyShare gesturesShare) | 20 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api20/GesturesShareApi20.ets, share/AirTransferService.ets |
@@ -162,9 +162,9 @@
 - SystemCapability：`SystemCapability.DistributedHardware.DeviceManager`、`SystemCapability.DistributedSched.AppCollaboration`
 - 权限：`ohos.permission.DISTRIBUTED_DATASYNC`（user_grant，normal；用于可信设备发现，运行时在用户打开/刷新附近设备或主动连接时申请，拒绝时明确显示不可用，不申请 ACL）
 - ACL：否
-- fallback：API < 18 或能力缺失时 `TrustedDeviceService.isSupported()` 返回 false，附近设备列表为空、入口明确显示不可用；应用安装与云同步不受影响。系统只保证第三方文本消息，因此对象按 `PeerSyncTransport` 的有界文本分片（requestId/sequence/total/哈希）传输，不假设二进制 `sendData` 可用。
-- 实现文件：`device/impl/api18/TrustedDeviceApi18.ets`、`device/TrustedDeviceService.ets`、`peer/PeerSyncTransport.ets`、`peer/PeerSyncSession.ets`
-- 说明：可信关系来自系统分布式设备网络，不把华为账号“已登录”当同账号证明；会话只保存本次连接的 `networkId`，不写永久设备身份，也不传输 GitHub Token。附近设备同步与云备份是同一 Core 对象事务的两个 transport，不新增第二套 LWW/墓碑规则。
+- fallback：API < 18 或能力缺失时 `TrustedDeviceService.isSupported()` 返回 false，附近设备列表为空、入口明确显示不可用；应用安装与云同步不受影响。系统只保证第三方文本消息，因此对象按 `PeerSyncTransport` 的 UTF-8 JSON 帧字节上限分片（Base64 正文、requestId/sequence/total、SHA-256），不假设二进制 `sendData` 可用。
+- 实现文件：`device/impl/api18/TrustedDeviceApi18.ets`、`device/TrustedDeviceService.ets`、`peer/PeerSyncTransport.ets`、`peer/PeerSyncSession.ets`、`peer/PeerObjectStore.ets`、`peer/PeerCrypto.ets`、`peer/NearbyDeviceSyncCoordinator.ets`
+- 说明：可信关系来自系统分布式设备网络，不把华为账号“已登录”当同账号证明；会话只保存本次连接的 `networkId`，不写永久设备身份，也不传输 GitHub Token。附近设备同步全部在 ArkTS 完成，直接读取现有 `manifest.sync.json`/白名单对象，按 LWW 和删除墓碑原子提交；不经过 Rust Core peer provider，也不新增第二套云端同步状态。
 
 ## 分享
 

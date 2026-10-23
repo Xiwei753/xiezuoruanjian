@@ -64,7 +64,7 @@ impl ProofreadingModel {
             )));
         }
         ensure_runtime(bundle_dir)?;
-        let tokenizer = BertTokenizer::open(&bundle_dir.join("vocab.txt"))?;
+        let tokenizer = BertTokenizer::open_bundle(bundle_dir)?;
         let calibrator_path = bundle_dir.join("calibrator.json");
         let calibrator = if calibrator_path.is_file() {
             Calibrator::open(&calibrator_path)?

@@ -685,25 +685,6 @@ impl From<crate::sync::types::TargetSyncResult> for TargetSyncResultDto {
     }
 }
 
-/// 附近设备同步后要发回对端的对象变更（Issue #988）。
-///
-/// 内容用 base64，避免路径/正文里的换行破坏文本协议；ArkTS 再按有界文本分片传输。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerSyncMutationDto {
-    pub kind: String,
-    pub path: String,
-    pub content_base64: Option<String>,
-    pub version: Option<String>,
-}
-
-/// 附近设备同步结果：既有 Core 聚合结果，也有本次 Core 写回镜像、需发回对端的变更。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerSyncResultDto {
-    pub sync: FullSyncResultDto,
-    pub mutations: Vec<PeerSyncMutationDto>,
-}
 
 /// 全量同步 dry-run 聚合结果 DTO。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

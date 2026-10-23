@@ -73,7 +73,17 @@ LOG_FILE="$HISTORY_DIR/startup-${TIMESTAMP}-${PID}.log"
 LATEST_LOG="$STARTUP_DIR/latest.log"
 
 # --- 真实二进制路径（允许开发时通过环境变量覆盖）---
-REAL_BINARY="${SUJIAN_REAL_BINARY:-/usr/libexec/sujian/sujian-linux-qt}"
+# AppImage 的 AppDir 不在 /usr 下；优先使用随包布局，RPM 仍走系统路径。
+APPDIR="${APPDIR:-}"
+if [ -n "${SUJIAN_REAL_BINARY:-}" ]; then
+    REAL_BINARY="$SUJIAN_REAL_BINARY"
+elif [ -n "$APPDIR" ] && [ -x "$APPDIR/usr/libexec/sujian/sujian-linux-qt" ]; then
+    REAL_BINARY="$APPDIR/usr/libexec/sujian/sujian-linux-qt"
+elif [ -n "$APPDIR" ] && [ -x "$APPDIR/usr/bin/sujian-linux-qt" ]; then
+    REAL_BINARY="$APPDIR/usr/bin/sujian-linux-qt"
+else
+    REAL_BINARY="/usr/libexec/sujian/sujian-linux-qt"
+fi
 IS_APPIMAGE="no"
 [ -n "${APPIMAGE:-}" ] && IS_APPIMAGE="yes"
 
@@ -134,16 +144,27 @@ if [ ! -x "$REAL_BINARY" ]; then
     exit 127
 fi
 
-# Issue #985：ONNX Runtime 随 RPM 安装到私有目录，显式加载该库，避免依赖
-# 发行版是否另外安装了 onnxruntime。源码/AppImage 未提供时保持环境原样。
+# Issue #985：ONNX Runtime 随 RPM/AppImage 安装到私有目录，显式加载该库，
+# 避免依赖发行版是否另外安装了 onnxruntime。
 if [ -z "${SUJIAN_ONNXRUNTIME_LIB:-}" ]; then
-    for ort_lib in /usr/lib64/sujian/libonnxruntime.so /usr/lib/sujian/libonnxruntime.so; do
-        if [ -f "$ort_lib" ]; then
+    for ort_lib in \
+        "${APPDIR:+$APPDIR/usr/lib/sujian/libonnxruntime.so}" \
+        "${APPDIR:+$APPDIR/usr/lib64/sujian/libonnxruntime.so}" \
+        /usr/lib64/sujian/libonnxruntime.so \
+        /usr/lib/sujian/libonnxruntime.so; do
+        if [ -n "$ort_lib" ] && [ -f "$ort_lib" ]; then
             SUJIAN_ONNXRUNTIME_LIB="$ort_lib"
             export SUJIAN_ONNXRUNTIME_LIB
             break
         fi
     done
+fi
+
+# AppImage 内的模型不在系统路径；把实际目录交给 Rust 平台层解析。
+if [ -z "${SUJIAN_CORRECTION_MODEL_DIR:-}" ] && [ -n "$APPDIR" ] \
+    && [ -f "$APPDIR/usr/share/sujian/models/macbert4csc/model.onnx" ]; then
+    SUJIAN_CORRECTION_MODEL_DIR="$APPDIR/usr/share/sujian/models/macbert4csc"
+    export SUJIAN_CORRECTION_MODEL_DIR
 fi
 
 # --- 运行真实二进制，stdout/stderr 镜像到两个日志文件和终端 ---

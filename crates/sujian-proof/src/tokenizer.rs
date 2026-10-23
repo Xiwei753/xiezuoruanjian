@@ -109,16 +109,37 @@ impl EncodedSentence {
     }
 }
 
-/// BERT basic + WordPiece tokenizer backed by the model's `vocab.txt`.
+/// BERT basic + WordPiece tokenizer backed by the bundled `tokenizer.json`.
 pub(crate) struct BertTokenizer {
     vocab: HashMap<String, i64>,
     han_ids: Vec<(i64, char)>,
     cls_id: i64,
     sep_id: i64,
     unk_id: i64,
+    lowercase: bool,
+    continuing_subword_prefix: String,
+    max_input_chars_per_word: usize,
 }
 
 impl BertTokenizer {
+    /// Load the exact tokenizer configuration shipped with the model. The
+    /// bundled `tokenizer.json` is authoritative for vocabulary, normalizer,
+    /// and WordPiece settings; `vocab.txt` is only a compatibility fallback
+    /// for old resource directories.
+    pub(crate) fn open_bundle(bundle_dir: &Path) -> Result<Self, CorrectionError> {
+        let tokenizer_path = bundle_dir.join("tokenizer.json");
+        if tokenizer_path.is_file() {
+            let content = std::fs::read_to_string(&tokenizer_path).map_err(|error| {
+                CorrectionError::Model(format!(
+                    "failed to read tokenizer configuration {}: {error}",
+                    tokenizer_path.display()
+                ))
+            })?;
+            return Self::from_tokenizer_json(&content);
+        }
+        Self::open(&bundle_dir.join("vocab.txt"))
+    }
+
     pub(crate) fn open(path: &Path) -> Result<Self, CorrectionError> {
         let content = std::fs::read_to_string(path).map_err(|error| {
             CorrectionError::Model(format!(
@@ -129,22 +150,78 @@ impl BertTokenizer {
         Self::from_vocab(&content)
     }
 
+    pub(crate) fn from_tokenizer_json(content: &str) -> Result<Self, CorrectionError> {
+        let value: serde_json::Value = serde_json::from_str(content)
+            .map_err(|error| CorrectionError::Model(format!("invalid tokenizer.json: {error}")))?;
+        let model = value
+            .get("model")
+            .ok_or_else(|| CorrectionError::Model("tokenizer.json lacks model".into()))?;
+        if model.get("type").and_then(|value| value.as_str()) != Some("WordPiece") {
+            return Err(CorrectionError::Model(
+                "only the bundled BERT WordPiece tokenizer is supported".into(),
+            ));
+        }
+        let vocab_object = model
+            .get("vocab")
+            .and_then(|value| value.as_object())
+            .ok_or_else(|| CorrectionError::Model("tokenizer.json lacks model.vocab".into()))?;
+        let mut vocab = HashMap::with_capacity(vocab_object.len());
+        let mut han_ids = Vec::new();
+        for (token, id) in vocab_object {
+            let id = id
+                .as_i64()
+                .ok_or_else(|| CorrectionError::Model("tokenizer id is not an integer".into()))?;
+            if let Some(ch) = single_han(token) {
+                han_ids.push((id, ch));
+            }
+            vocab.insert(token.clone(), id);
+        }
+        let normalizer = value.get("normalizer");
+        let lowercase = normalizer
+            .and_then(|normalizer| normalizer.get("lowercase"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+        let continuing_subword_prefix = model
+            .get("continuing_subword_prefix")
+            .and_then(|value| value.as_str())
+            .unwrap_or("##")
+            .to_string();
+        let max_input_chars_per_word = model
+            .get("max_input_chars_per_word")
+            .and_then(|value| value.as_u64())
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(100);
+        Self::from_parts(
+            vocab,
+            han_ids,
+            lowercase,
+            continuing_subword_prefix,
+            max_input_chars_per_word,
+        )
+    }
+
     pub(crate) fn from_vocab(content: &str) -> Result<Self, CorrectionError> {
         let mut vocab = HashMap::new();
         let mut han_ids = Vec::new();
         for (index, token) in content.lines().enumerate() {
             let token = token.trim_end_matches('\r');
             let id = index as i64;
-            if !token.is_empty() {
-                let mut chars = token.chars();
-                if let (Some(ch), None) = (chars.next(), chars.next()) {
-                    if is_han(ch) {
-                        han_ids.push((id, ch));
-                    }
-                }
+            if let Some(ch) = single_han(token) {
+                han_ids.push((id, ch));
             }
             vocab.insert(token.to_string(), id);
         }
+        Self::from_parts(vocab, han_ids, true, "##".to_string(), 100)
+    }
+
+    fn from_parts(
+        vocab: HashMap<String, i64>,
+        han_ids: Vec<(i64, char)>,
+        lowercase: bool,
+        continuing_subword_prefix: String,
+        max_input_chars_per_word: usize,
+    ) -> Result<Self, CorrectionError> {
         let required = |token: &str| {
             vocab.get(token).copied().ok_or_else(|| {
                 CorrectionError::Model(format!("tokenizer vocabulary is missing {token}"))
@@ -156,6 +233,9 @@ impl BertTokenizer {
             unk_id: required("[UNK]")?,
             vocab,
             han_ids,
+            lowercase,
+            continuing_subword_prefix,
+            max_input_chars_per_word,
         })
     }
 
@@ -168,7 +248,7 @@ impl BertTokenizer {
 
     pub(crate) fn encode(&self, text: &str) -> EncodedSentence {
         let mut tokens = Vec::new();
-        for piece in basic_tokens(text) {
+        for piece in basic_tokens(text, self.lowercase) {
             match piece {
                 BasicPiece::Han {
                     ch,
@@ -199,7 +279,13 @@ impl BertTokenizer {
                     start_byte,
                     end_byte,
                 } => {
-                    for (piece_start, piece) in wordpiece(&text, self.unk_id, &self.vocab) {
+                    for (piece_start, piece) in wordpiece(
+                        &text,
+                        self.unk_id,
+                        &self.vocab,
+                        &self.continuing_subword_prefix,
+                        self.max_input_chars_per_word,
+                    ) {
                         tokens.push(EncodedToken {
                             id: piece,
                             origin: TokenOrigin::Context,
@@ -235,7 +321,7 @@ enum BasicPiece {
 /// BERT `BasicTokenizer` for the scripts the editor can contain. Chinese
 /// characters become individual tokens; Latin runs are lowercased and split
 /// on whitespace/punctuation before WordPiece.
-fn basic_tokens(text: &str) -> Vec<BasicPiece> {
+fn basic_tokens(text: &str, lowercase: bool) -> Vec<BasicPiece> {
     let mut pieces = Vec::new();
     let mut word_start: Option<usize> = None;
     let mut word = String::new();
@@ -284,19 +370,34 @@ fn basic_tokens(text: &str) -> Vec<BasicPiece> {
         if word_start.is_none() {
             word_start = Some(byte);
         }
-        for lower in ch.to_lowercase() {
-            word.push(lower);
+        if lowercase {
+            for lower in ch.to_lowercase() {
+                word.push(lower);
+            }
+        } else {
+            word.push(ch);
         }
     }
     flush(&mut pieces, &mut word_start, &mut word, text.len());
     pieces
 }
 
-fn wordpiece(word: &str, unk_id: i64, vocab: &HashMap<String, i64>) -> Vec<(usize, i64)> {
+fn wordpiece(
+    word: &str,
+    unk_id: i64,
+    vocab: &HashMap<String, i64>,
+    continuing_subword_prefix: &str,
+    max_input_chars_per_word: usize,
+) -> Vec<(usize, i64)> {
     if word.is_empty() {
         return Vec::new();
     }
     let chars = word.char_indices().collect::<Vec<_>>();
+    // BERT emits one `[UNK]` for the whole overlong/unsegmentable word, not
+    // one `[UNK]` per character. Repeating UNK changes the model's context.
+    if chars.len() > max_input_chars_per_word {
+        return vec![(0, unk_id)];
+    }
     let mut result = Vec::new();
     let mut start = 0;
     while start < chars.len() {
@@ -307,7 +408,7 @@ fn wordpiece(word: &str, unk_id: i64, vocab: &HashMap<String, i64>) -> Vec<(usiz
             let candidate = if start == 0 {
                 text.to_string()
             } else {
-                format!("##{text}")
+                format!("{continuing_subword_prefix}{text}")
             };
             if let Some(id) = vocab.get(&candidate) {
                 found = Some((id, end));
@@ -320,13 +421,18 @@ fn wordpiece(word: &str, unk_id: i64, vocab: &HashMap<String, i64>) -> Vec<(usiz
                 result.push((chars[start].0, *id));
                 start = end;
             }
-            None => {
-                result.push((chars[start].0, unk_id));
-                start += 1;
-            }
+            None => return vec![(0, unk_id)],
         }
     }
     result
+}
+
+fn single_han(token: &str) -> Option<char> {
+    let mut chars = token.chars();
+    match (chars.next(), chars.next()) {
+        (Some(ch), None) if is_han(ch) => Some(ch),
+        _ => None,
+    }
 }
 
 fn is_han(ch: char) -> bool {

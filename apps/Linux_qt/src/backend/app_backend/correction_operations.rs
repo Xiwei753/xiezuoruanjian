@@ -13,12 +13,27 @@ use writer_core::api::types::{
     CorrectionEntityNameKindDto, CorrectionIgnoreScopeDto,
 };
 
-/// Issue #985：RPM/HAP 包内自带的 MacBERT4CSC ONNX 资源目录。
+/// Issue #985：RPM 包安装的 MacBERT4CSC ONNX 资源目录。
 ///
-/// 目录中必须包含 `model.onnx` 与 `vocab.txt`，`calibrator.json` 可选。
-/// 运行时只读加载该目录，不向用户数据目录复制模型。源码运行/开发环境
-/// 通常没有这个目录，见 `provision_bundled_correction_model`。
-pub(crate) const BUNDLED_CORRECTION_MODEL_PATH: &str = "/usr/share/sujian/models/macbert4csc";
+/// AppImage 使用 `SUJIAN_CORRECTION_MODEL_DIR` 指向 `$APPDIR` 内的同一份
+/// 资源。目录中必须包含 `model.onnx` 与 `vocab.txt`，`calibrator.json`
+/// 可选。运行时只读加载该目录，不向用户数据目录复制模型。源码运行/开发
+/// 环境通常没有这个目录，见 `provision_bundled_correction_model`。
+pub(crate) const SYSTEM_CORRECTION_MODEL_PATH: &str = "/usr/share/sujian/models/macbert4csc";
+
+/// Resolve the model directory supplied by the package. RPM installs it under
+/// `/usr/share`; AppImage's launcher points `SUJIAN_CORRECTION_MODEL_DIR` at
+/// `$APPDIR/usr/share/sujian/models/macbert4csc` instead.
+pub(crate) fn bundled_correction_model_path() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("SUJIAN_CORRECTION_MODEL_DIR") {
+        let path = std::path::PathBuf::from(path);
+        if path.join("model.onnx").is_file() && path.join("vocab.txt").is_file() {
+            return Some(path);
+        }
+    }
+    let system = std::path::PathBuf::from(SYSTEM_CORRECTION_MODEL_PATH);
+    (system.join("model.onnx").is_file() && system.join("vocab.txt").is_file()).then_some(system)
+}
 
 const CORRECTION_DICTIONARY_FILES: [&str; 6] = [
     "word_freq.txt",
@@ -286,10 +301,10 @@ impl AppBackend {
     /// - Core 尚未配置模型，或仍保存旧 `.klm` 路径（`model_migration_required`）
     ///   → 写入内置 ONNX 目录。旧 KenLM 文件不会再被 Core 当作模型加载。
     pub(crate) fn provision_bundled_correction_model(&self) -> Result<(), String> {
-        let bundle = std::path::Path::new(BUNDLED_CORRECTION_MODEL_PATH);
-        if !bundle.join("model.onnx").is_file() || !bundle.join("vocab.txt").is_file() {
+        let Some(bundle) = bundled_correction_model_path() else {
             return Ok(());
-        }
+        };
+        let bundle = bundle.to_string_lossy().into_owned();
         let api = self
             .core_api()
             .ok_or_else(|| "Core 尚未打开工作区".to_string())?;
@@ -299,7 +314,7 @@ impl AppBackend {
         if status.model_configured && !status.model_migration_required {
             return Ok(());
         }
-        api.set_correction_model_path(BUNDLED_CORRECTION_MODEL_PATH.to_string())
+        api.set_correction_model_path(bundle)
             .map_err(|error| error.to_string())
     }
 

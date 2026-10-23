@@ -159,12 +159,14 @@ export struct SettingsContent {
   @Param onOpenGlobalSearch: (section: string) => void = (_section: string): void => {}
   // 搜索结果跳到具体设置分类时由路由/浮层传入。
   @Param initialSection: string = ''
+  // 设置页可能从星图/统计 tab 的搜索进入，快照必须记录真实 tab，不能硬编码 Home。
+  @Param screenTabIndex: number = 0
   // Issue #982：搜索结果跳到具体设置项；与 initialSection 一起构成一次性定位意图。
   @Param initialSettingKey: string = ''
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
   @Local viewModel: SettingsViewModel = new SettingsViewModel()
-  // Issue #988：附近设备同步与云备份是两个独立入口，共用同一 Core 对象事务。
+  // Issue #988：附近设备同步与云备份是两个独立入口，各自维护状态；附近设备对象由 ETS 对象库合并。
   @Local deviceSync: DeviceSyncViewModel = new DeviceSyncViewModel()
 
   // 页面 UI 状态（V2 @Local）
@@ -337,7 +339,7 @@ export struct SettingsContent {
   private recordContinuationSection(section: string, settingKey: string): void {
     const payload: ContinuationPayload = {
       screen: 'settings',
-      tabIndex: 0,
+      tabIndex: this.screenTabIndex,
       settingsSection: section
     }
     if (settingKey.length > 0) {

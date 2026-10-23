@@ -197,7 +197,10 @@ export class CorrectionCoordinator {
         userMessage: status.userMessage
       }
     }
-    if (status.data.modelConfigured) {
+    // 旧版 .klm 也会是 modelConfigured=true，但 Core 已拒绝该格式；
+    // 只有新 ONNX 目录完整可用时才跳过迁移。
+    if (status.data.modelConfigured && !status.data.modelMigrationRequired &&
+        status.data.modelFileAvailable) {
       this.bundledModelAttempted = true
       return { success: true, data: false }
     }

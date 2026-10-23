@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncSecrets, SyncState, FullSyncState, FullSyncReport, AllSyncConflictEntry, SyncConflictPreview, PeerSyncResult } from '../dto/SyncDtos'
+import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncSecrets, SyncState, FullSyncState, FullSyncReport, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets, decodeFullSyncState, decodeFullSyncReport, decodeAllSyncConflictEntry, decodeSyncConflictPreview, decodeArray, decodePeerSyncResult } from '../codec/CoreWireDecoders'
+import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets, decodeFullSyncState, decodeFullSyncReport, decodeAllSyncConflictEntry, decodeSyncConflictPreview, decodeArray } from '../codec/CoreWireDecoders'
 
 /**
  * 构造 NATIVE_ERROR 信封，仅用于真正的 JS 异常（如 native 模块不存在）。
@@ -85,18 +85,6 @@ export class NativeSyncBridge {
       // catch 只处理真正的 JS 异常（如 native 模块不存在）。
       return this.core.decodeEnvelope<FullSyncResult>(jsonStr, decodeFullSyncResult)
     } catch (e) { return nativeError<FullSyncResult>(e) }
-  }
-
-  /**
-   * 附近设备同步（Issue #988）：peerRoot 由平台层预先写入对端对象快照。
-   * 该入口不读取云端凭据，Core 走同一套对象合并与提交规则。
-   */
-  async performPeerSync(peerRoot: string): Promise<ResultEnvelope<PeerSyncResult>> {
-    try {
-      const jsonStr: string = await (this.core.getNativeModule()
-        .nativePerformPeerSync(peerRoot) as Promise<string>)
-      return this.core.decodeEnvelope<PeerSyncResult>(jsonStr, decodePeerSyncResult)
-    } catch (e) { return nativeError<PeerSyncResult>(e) }
   }
 
   async syncDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>> {

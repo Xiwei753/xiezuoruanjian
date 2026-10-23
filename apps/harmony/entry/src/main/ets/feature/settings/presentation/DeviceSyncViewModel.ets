@@ -1,5 +1,6 @@
 // DeviceSyncViewModel — 设置中的“附近设备同步”状态（Issue #988）。
-// 只负责系统可信设备发现、连接状态和给用户看的结果；不复制 Core 的同步规则，
+// 只负责系统可信设备发现、连接状态和给用户看的结果；对象清单/LWW/墓碑由 ETS
+// PeerObjectStore 按现有 manifest 规则处理，不复制一份云端 Core 状态，
 // 也不要求每台设备配置 GitHub 仓库或登录应用内华为账号。
 // 云端 GitHub 只是可选转发：任一台有仓库的可信设备可以把合并结果继续同步到云端。
 
@@ -109,7 +110,7 @@ export class DeviceSyncViewModel {
     }
     this.activeSessionId = sessionId
     this.connectionState = 'connected'
-    this.statusMessage = `已连接 ${device.deviceName}；同步由 Core 对象事务执行`
+    this.statusMessage = `已连接 ${device.deviceName}；正在交换对象清单`
     NearbyDeviceSyncCoordinator.getInstance().startInitiator(sessionId, device)
   }
 

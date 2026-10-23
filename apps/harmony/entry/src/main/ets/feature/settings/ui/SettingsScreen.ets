@@ -55,7 +55,7 @@ export struct SettingsScreen {
     // Issue #988：接续恢复到具体设置分类/设置项，而不是回到设置根页。
     const continuationPayload: ContinuationPayload = {
       screen: 'settings',
-      tabIndex: 0
+      tabIndex: this.screenTabIndex
     }
     if (this.initialSection.length > 0) {
       continuationPayload.settingsSection = this.initialSection
@@ -99,6 +99,7 @@ export struct SettingsScreen {
         SettingsContent({
           initialSection: this.initialSection,
           initialSettingKey: this.initialSettingKey,
+          screenTabIndex: this.screenTabIndex,
           onOpenGlobalSearch: (section: string): void => { this.openGlobalSearch(section) },
           onRequestClose: () => { this.goBack() }
         })
@@ -108,6 +109,7 @@ export struct SettingsScreen {
         SettingsContent({
           initialSection: this.initialSection,
           initialSettingKey: this.initialSettingKey,
+          screenTabIndex: this.screenTabIndex,
           onOpenGlobalSearch: (section: string): void => { this.openGlobalSearch(section) },
           onRequestClose: () => { this.goBack() }
         })

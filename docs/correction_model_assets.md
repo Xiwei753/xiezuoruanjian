@@ -76,8 +76,15 @@ task and are deliberately out of scope.
 - downloads only `onnx/model.onnx`, `vocab.txt`, `config.json`,
   `tokenizer.json`, `tokenizer_config.json`, and `special_tokens_map.json`;
 - verifies every byte count and SHA-256; any mismatch fails the build;
+- keeps verified downloads in a user cache so later builds and different output
+  directories reuse them without downloading the 474 MB weights again:
+  `SUJIAN_MODEL_CACHE`, else `$XDG_CACHE_HOME/sujian/models`, else
+  `~/.cache/sujian/models` (`--cache-dir` overrides it);
+- hard-links the cached files into the output directory when possible, or
+  copies them across filesystems; the build still verifies the output bytes;
 - copies `calibrator.json` and the Apache-2.0/MIT notices;
-- optionally verifies and extracts the pinned Linux ONNX Runtime archive.
+- optionally verifies and extracts the pinned Linux ONNX Runtime archive. The
+  runtime archive is cached under the same cache directory.
 
 The model binary is a build artifact under
 `packaging/correction/bundled/` and is not committed.

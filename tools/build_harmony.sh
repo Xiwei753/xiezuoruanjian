@@ -7,8 +7,10 @@
 # 应用的 prebuilt 目录：
 #   apps/harmony/entry/src/main/prebuilt/arm64-v8a/libwriter_core_ffi.so
 #
-# 内置中文 KenLM 模型（Issue #958）改由 entry 模块的 Hvigor 构建钩子在 HAP
-# 资源打包前获取并校验（见 apps/harmony/entry/hvigorfile.ts），本脚本只负责 FFI。
+# MacBERT4CSC 模型由 entry 模块的 Hvigor 构建钩子在 HAP 资源打包前获取并
+# 校验（见 apps/harmony/entry/hvigorfile.ts）；本脚本还负责获取鸿蒙 arm64
+# 的 ONNX Runtime 并写入 prebuilt 目录，避免把 Android/Linux 的 so 冒充
+# 鸿蒙库。两者都使用持久缓存，重复构建不会重新下载。
 #
 # 使用方法：
 #   ./tools/build_harmony.sh
@@ -132,9 +134,24 @@ export CXXFLAGS_aarch64_unknown_linux_ohos="--target=$CLANG_TARGET --sysroot=$SY
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS="-C link-arg=--target=$CLANG_TARGET -C link-arg=--sysroot=$SYSROOT -C link-arg=-Wl,-soname,libwriter_core_ffi.so"
 
 # -----------------------------------------------------------------------------
-# 4. 构建 cdylib 并复制到 prebuilt 目录
+# 4. 获取鸿蒙目标 ONNX Runtime（固定 revision、校验 SHA-256、持久缓存）
 # -----------------------------------------------------------------------------
 mkdir -p "$PREBUILT_DIR"
+echo "获取 OHOS arm64 ONNX Runtime ..."
+python3 "$WORKSPACE_ROOT/crates/sujian-proof/tools/fetch_model.py" \
+    --runtime harmony-arm64 \
+    --runtime-only \
+    --runtime-output "$PREBUILT_DIR"
+if [ ! -f "$PREBUILT_DIR/libonnxruntime.so" ]; then
+    echo "错误：未得到鸿蒙 libonnxruntime.so。" >&2
+    exit 1
+fi
+file "$PREBUILT_DIR/libonnxruntime.so" 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# 5. 构建 cdylib 并复制到 prebuilt 目录
+# -----------------------------------------------------------------------------
+
 rm -f "$PREBUILT_DIR/libwriter_core_ffi.so"
 
 cd "$WORKSPACE_ROOT"

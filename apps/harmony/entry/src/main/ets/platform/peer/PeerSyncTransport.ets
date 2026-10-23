@@ -1,11 +1,15 @@
 // PeerSyncTransport — 附近设备同步的文本消息传输层（Issue #988）。
-// AbilityConnectionManager 对第三方只保证文本消息，因此对象内容必须切片成有界消息：
-// 每片带 requestId/sequence/total/contentHash，接收端按 requestId 重组并校验哈希；
-// 超时由 PeerSyncSession 重发同一 requestId，接收端按 requestId 幂等去重。
-// 这里不把二进制 sendData 当既定能力，也不在平台层复制 Core 的 LWW/删除规则。
+//
+// AbilityConnectionManager 对第三方只保证约 1KB 的文本消息，因此这里按“序列化后的
+// UTF-8 JSON 帧字节数”切片，而不是按字符数。对象正文先转 UTF-8 字节，再对每片做
+// Base64；接收端按 requestId 重组字节并校验 SHA-256。二进制 sendData 不作为既定能力。
+
+import { PeerCrypto } from './PeerCrypto'
 
 const PROTOCOL_VERSION: number = 1
-const MAX_TEXT_CHUNK_CHARS: number = 12000
+// 单帧硬上限。系统侧限制约 1KB，这里给 JSON 字段和长路径留出余量。
+const MAX_FRAME_BYTES: number = 960
+const OBJECT_CHUNK_BYTES: number = 384
 
 export type PeerMessageType =
   'hello' | 'manifest' | 'read' | 'writeBegin' | 'writeChunk' | 'writeEnd' | 'delete' | 'ack' | 'error'
@@ -20,6 +24,8 @@ export interface PeerWireMessage {
   path?: string
   contentHash?: string
   versionToken?: string
+  modifiedAtMs?: number
+  deleted?: boolean
   sequence?: number
   total?: number
   chunk?: string
@@ -33,7 +39,7 @@ interface ChunkAssembly {
   contentHash: string
   total: number
   received: number
-  chunks: string[]
+  chunks: Uint8Array[]
 }
 
 export interface PeerTransportPort {
@@ -59,39 +65,48 @@ export class PeerSyncTransport {
   async send(message: PeerWireMessage): Promise<boolean> {
     const frame: PeerWireMessage = message
     frame.version = PROTOCOL_VERSION
-    if (message.type === 'writeBegin' || message.type === 'writeChunk' || message.type === 'writeEnd') {
-      return this.sendWriteFrame(message)
+    const encoded: string = JSON.stringify(frame)
+    if (PeerCrypto.utf8Encode(encoded).length > MAX_FRAME_BYTES) {
+      this.listener.onMalformed('text frame exceeds nearby message limit')
+      return false
     }
-    return this.port.sendText(JSON.stringify(message))
+    return this.port.sendText(encoded)
   }
 
-  // 写对象：先发声明，再按 MAX_TEXT_CHUNK_CHARS 切片，最后发 end；每片都可用同一
-  // requestId 重发。接收端只有收齐 total 且哈希一致才交给同步会话。
+  /**
+   * 发送完整对象字节。每个 writeChunk 的 JSON 帧都在 MAX_FRAME_BYTES 内；
+   * 返回 false 表示至少有一帧未送达，调用方必须保留待重试状态。
+   */
   async sendObject(
     path: string,
-    content: string,
+    content: Uint8Array,
     contentHash: string,
     requestId: string,
     sourceDevice: string,
-    targetDevice: string
+    targetDevice: string,
+    modifiedAtMs: number = Date.now(),
+    deleted: boolean = false
   ): Promise<boolean> {
-    const total: number = Math.max(1, Math.ceil(content.length / MAX_TEXT_CHUNK_CHARS))
+    const total: number = Math.max(1, Math.ceil(content.length / OBJECT_CHUNK_BYTES))
     const begin: PeerWireMessage = {
       version: PROTOCOL_VERSION,
       type: 'writeBegin',
       requestId: requestId,
       path: path,
       contentHash: contentHash,
+      modifiedAtMs: modifiedAtMs,
+      deleted: deleted,
       total: total,
       sourceDevice: sourceDevice,
       targetDevice: targetDevice
     }
-    if (!await this.port.sendText(JSON.stringify(begin))) {
+    if (!await this.send(begin)) {
       return false
     }
     for (let i = 0; i < total; i++) {
-      const start: number = i * MAX_TEXT_CHUNK_CHARS
-      const end: number = Math.min(content.length, start + MAX_TEXT_CHUNK_CHARS)
+      const start: number = i * OBJECT_CHUNK_BYTES
+      const end: number = Math.min(content.length, start + OBJECT_CHUNK_BYTES)
+      const part: Uint8Array = content.slice(start, end)
       const chunkMessage: PeerWireMessage = {
         version: PROTOCOL_VERSION,
         type: 'writeChunk',
@@ -99,9 +114,9 @@ export class PeerSyncTransport {
         path: path,
         sequence: i,
         total: total,
-        chunk: content.substring(start, end)
+        chunk: PeerCrypto.base64Encode(part)
       }
-      if (!await this.port.sendText(JSON.stringify(chunkMessage))) {
+      if (!await this.send(chunkMessage)) {
         return false
       }
     }
@@ -111,9 +126,11 @@ export class PeerSyncTransport {
       requestId: requestId,
       path: path,
       contentHash: contentHash,
+      modifiedAtMs: modifiedAtMs,
+      deleted: deleted,
       total: total
     }
-    return this.port.sendText(JSON.stringify(finish))
+    return this.send(finish)
   }
 
   receive(raw: string): void {
@@ -151,14 +168,8 @@ export class PeerSyncTransport {
     return this.seenRequests.has(requestId)
   }
 
-  // 已收过的 requestId 只允许重发 ack，不重复应用对象/删除。
   rememberRequest(requestId: string): void {
     this.seenRequests.add(requestId)
-  }
-
-  private async sendWriteFrame(message: PeerWireMessage): Promise<boolean> {
-    // write 帧已经由 PeerSyncSession 拆成有界文本；这里只负责传输。
-    return this.port.sendText(JSON.stringify(message))
   }
 
   private beginAssembly(message: PeerWireMessage): void {
@@ -167,13 +178,17 @@ export class PeerSyncTransport {
       this.listener.onMalformed('invalid writeBegin')
       return
     }
+    const chunks: Uint8Array[] = []
+    for (let i = 0; i < message.total; i++) {
+      chunks.push(new Uint8Array(0))
+    }
     this.assemblies.set(message.requestId, {
       requestId: message.requestId,
       path: message.path,
       contentHash: message.contentHash,
       total: message.total,
       received: 0,
-      chunks: new Array<string>(message.total).fill('')
+      chunks: chunks
     })
   }
 
@@ -187,7 +202,11 @@ export class PeerSyncTransport {
     if (assembly.chunks[message.sequence].length === 0) {
       assembly.received++
     }
-    assembly.chunks[message.sequence] = message.chunk
+    try {
+      assembly.chunks[message.sequence] = PeerCrypto.base64Decode(message.chunk)
+    } catch (_e) {
+      this.listener.onMalformed('invalid base64 chunk')
+    }
   }
 
   private finishAssembly(message: PeerWireMessage): void {
@@ -195,8 +214,15 @@ export class PeerSyncTransport {
     if (assembly === undefined || assembly.received < assembly.total) {
       return
     }
-    const content: string = assembly.chunks.join('')
-    if (PeerSyncTransport.hashText(content) !== assembly.contentHash) {
+    let size: number = 0
+    assembly.chunks.forEach((chunk: Uint8Array): void => { size += chunk.length })
+    const content: Uint8Array = new Uint8Array(size)
+    let offset: number = 0
+    assembly.chunks.forEach((chunk: Uint8Array): void => {
+      content.set(chunk, offset)
+      offset += chunk.length
+    })
+    if (PeerCrypto.sha256Hex(content) !== assembly.contentHash) {
       this.listener.onMalformed('content hash mismatch')
       this.assemblies.delete(message.requestId)
       return
@@ -208,18 +234,11 @@ export class PeerSyncTransport {
       requestId: message.requestId,
       path: assembly.path,
       contentHash: assembly.contentHash,
+      modifiedAtMs: message.modifiedAtMs,
+      deleted: message.deleted === true,
       total: assembly.total,
-      chunk: content
+      chunk: PeerCrypto.base64Encode(content)
     }
     this.listener.onMessage(complete)
-  }
-
-  static hashText(text: string): string {
-    let hash: number = 0x811c9dc5
-    for (let i = 0; i < text.length; i++) {
-      hash ^= text.charCodeAt(i)
-      hash = Math.imul(hash, 0x01000193) >>> 0
-    }
-    return hash.toString(16).padStart(8, '0')
   }
 }

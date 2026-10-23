@@ -17,36 +17,8 @@ impl crate::facade::WriterCore {
     /// 已在 `perform_full_sync` 中逐 target 收集）。
     pub fn finalize_full_sync(
         &self,
-        targets: Vec<crate::sync::types::TargetSyncResult>,
-        generation_gc_result: Option<Result<(), String>>,
-    ) -> (
-        crate::sync::types::FullSyncResult,
-        Vec<std::path::PathBuf>,
-        Vec<crate::sync::types::LocalLifecycleCommitReceipt>,
-    ) {
-        self.finalize_full_sync_internal(targets, generation_gc_result, true)
-    }
-
-    /// 附近设备同步收口：对象合并/冲突/lifecycle/搜索索引照常，但不写云备份的
-    /// `FullSyncState` 与最近报告。Issue #988：附近设备同步有自己的会话状态，
-    /// 不能伪造 GitHub 云备份成功或抑制下一次云备份自动同步。
-    pub(crate) fn finalize_full_sync_without_global_state(
-        &self,
-        targets: Vec<crate::sync::types::TargetSyncResult>,
-        generation_gc_result: Option<Result<(), String>>,
-    ) -> (
-        crate::sync::types::FullSyncResult,
-        Vec<std::path::PathBuf>,
-        Vec<crate::sync::types::LocalLifecycleCommitReceipt>,
-    ) {
-        self.finalize_full_sync_internal(targets, generation_gc_result, false)
-    }
-
-    fn finalize_full_sync_internal(
-        &self,
         mut targets: Vec<crate::sync::types::TargetSyncResult>,
         generation_gc_result: Option<Result<(), String>>,
-        persist_global_state: bool,
     ) -> (
         crate::sync::types::FullSyncResult,
         Vec<std::path::PathBuf>,
@@ -81,24 +53,22 @@ impl crate::facade::WriterCore {
         self.cleanup_completed_deleted_targets(&result);
 
         let report_time = now_epoch_seconds();
-        if persist_global_state {
-            let previous_state = self.load_full_sync_state().unwrap_or(None);
-            let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
-                &result,
-                previous_state.as_ref(),
-                report_time,
+        let previous_state = self.load_full_sync_state().unwrap_or(None);
+        let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
+            &result,
+            previous_state.as_ref(),
+            report_time,
+        );
+        if let Err(e) = self.save_full_sync_state(&new_state) {
+            log::warn!("Failed to persist full sync state: {e}");
+        }
+        if let Err(e) = self.record_latest_full_sync_report(&result, report_time) {
+            log::warn!(
+                "Failed to persist latest full sync report to {}: {e}",
+                self.app_data_root
+                    .join("app-meta/sync/last_report.local.json")
+                    .display()
             );
-            if let Err(e) = self.save_full_sync_state(&new_state) {
-                log::warn!("Failed to persist full sync state: {e}");
-            }
-            if let Err(e) = self.record_latest_full_sync_report(&result, report_time) {
-                log::warn!(
-                    "Failed to persist latest full sync report to {}: {e}",
-                    self.app_data_root
-                        .join("app-meta/sync/last_report.local.json")
-                        .display()
-                );
-            }
         }
 
         if matches!(

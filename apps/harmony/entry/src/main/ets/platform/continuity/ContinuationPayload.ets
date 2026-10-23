@@ -35,6 +35,9 @@ export interface ContinuationPayload {
   // 未保存正文快照：snapshotId 用于向源设备/附近设备取回，snapshotHash 用于校验。
   snapshotId?: string
   snapshotHash?: string
+  // 源设备身份：目标设备可据此向可信连接请求该 snapshotId，而不是只依赖已连接会话。
+  sourceDeviceId?: string
+  sourceNetworkId?: string
   // 星图：子图路径、相机、当前选中的节点/边。
   starmapId?: string
   starmapTitle?: string

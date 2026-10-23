@@ -703,107 +703,6 @@ impl WriterCoreApi {
         Ok(result)
     }
 
-    /// 附近设备同步 — 用本次会话的隔离镜像作为远端，复用同一套 staging/LWW/commit。
-    ///
-    /// Issue #988：该入口不读取 GitHub token、不修改持久化的 `SyncConfig.provider_config`，
-    /// 也不把对端文件直接覆盖 live 根。ArkTS 先收齐对端对象写进 `peer_root`；
-    /// 返回的 `mutations` 是 Core 写回镜像、需要发回对端的变更。
-    pub fn perform_peer_sync(
-        &self,
-        peer_root: String,
-        force_sync: bool,
-    ) -> ApiResult<PeerSyncResultDto> {
-        use base64::Engine as _;
-
-        let provider = crate::sync::provider::peer::PeerProvider::new(peer_root)
-            .map_err(|err| crate::api::error::WriterError::Other(format!("{err}")))?;
-
-        // 策略沿用当前同步配置，但连接方式是本次附近设备会话，不写回 provider_config。
-        let mut sync_config: crate::sync::SyncConfig = self.load_sync_config()?.into();
-        sync_config.enabled = true;
-
-        let remote_catalog_snapshot =
-            match crate::sync::target_lifecycle::discover_legacy_remote_catalog(&provider) {
-                Ok(snapshot) => snapshot,
-                Err(err) => return Err(crate::api::error::WriterError::from(err)),
-            };
-        let remote_catalog_snapshot =
-            if remote_catalog_snapshot.version.as_str() == "__nonexistent__" {
-                crate::sync::target_lifecycle::persist_bootstrap_catalog(
-                    &provider,
-                    &remote_catalog_snapshot.catalog,
-                    &remote_catalog_snapshot.version,
-                )
-                .map_err(crate::api::error::WriterError::from)?
-            } else {
-                remote_catalog_snapshot
-            };
-        let remote_app_data_groups =
-            crate::sync::app_data_group_catalog::discover_remote_app_data_groups(&provider)
-                .map_err(crate::api::error::WriterError::from)?;
-
-        let (app_data_root, projects_root) = {
-            let core = self.core_read();
-            (core.app_data_root.clone(), core.projects_root.clone())
-        };
-        let mut plan = crate::facade::WriterCore::build_full_sync_plan_unlocked(
-            &app_data_root,
-            &projects_root,
-            &sync_config,
-            force_sync,
-            &remote_catalog_snapshot.catalog,
-            &remote_app_data_groups,
-            remote_catalog_snapshot.clone(),
-        )
-        .map_err(crate::api::error::WriterError::from)?;
-
-        self.core_write()
-            .flush_all_starmap_stores()
-            .map_err(crate::api::error::WriterError::from)?;
-        let staging_runs = crate::sync::staging::prepare_staging_runs(&mut plan)
-            .map_err(crate::api::error::WriterError::from)?;
-
-        let result = self.perform_full_sync_with_provider_impl(
-            &provider,
-            &plan,
-            staging_runs,
-            None,
-            None,
-            None,
-            false,
-        )?;
-
-        let mutations = provider
-            .drain_mutations()
-            .into_iter()
-            .map(|mutation| match mutation {
-                crate::sync::provider::peer::PeerMutation::Put {
-                    path,
-                    content,
-                    version,
-                } => PeerSyncMutationDto {
-                    kind: "put".to_string(),
-                    path,
-                    content_base64: Some(base64::engine::general_purpose::STANDARD.encode(content)),
-                    version: Some(version),
-                },
-                crate::sync::provider::peer::PeerMutation::Delete { path } => PeerSyncMutationDto {
-                    kind: "delete".to_string(),
-                    path,
-                    content_base64: None,
-                    version: None,
-                },
-            })
-            .collect();
-
-        self.core_write().invalidate_path_dependency_index();
-
-        Ok(PeerSyncResultDto {
-            sync: result.into(),
-            mutations,
-        })
-    }
-
     /// 全量同步编排尾部 — 逐 target `Transfer → Commit → progress`，整轮结束聚合收口。
     ///
     /// Issue #762 评论 5828791004：不能同时存在"Transfer 提前写 live"和
@@ -829,28 +728,6 @@ impl WriterCoreApi {
         cancellation_token: Option<SyncCancellationToken>,
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
-    ) -> ApiResult<FullSyncResultDto> {
-        self.perform_full_sync_with_provider_impl(
-            provider,
-            plan,
-            staging_runs,
-            cancellation_token,
-            progress_sink,
-            target_progress,
-            true,
-        )
-    }
-
-    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
-    fn perform_full_sync_with_provider_impl(
-        &self,
-        provider: &dyn crate::sync::provider::SyncProvider,
-        plan: &crate::sync::full_sync::FullSyncPlan,
-        staging_runs: Vec<crate::sync::staging::StagingRun>,
-        cancellation_token: Option<SyncCancellationToken>,
-        progress_sink: Option<SyncProgressSink>,
-        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
-        persist_global_state: bool,
     ) -> ApiResult<FullSyncResultDto> {
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
@@ -998,11 +875,7 @@ impl WriterCoreApi {
         // Issue #779 评论 5853718466：传 None — GC 失败不影响同步终态。
         let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();
-            if persist_global_state {
-                core.finalize_full_sync(all_targets, None)
-            } else {
-                core.finalize_full_sync_without_global_state(all_targets, None)
-            }
+            core.finalize_full_sync(all_targets, None)
         };
 
         // 合并 per-target committed_paths 与 finalize 阶段返回的 committed_paths。

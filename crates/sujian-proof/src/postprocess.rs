@@ -92,6 +92,32 @@ pub(crate) struct AcceptedPrediction {
 /// complete work-dictionary entry, an alias, an ignored span, or a registered
 /// entity never become statistical suggestions. The original text is retained
 /// in every diagnostic.
+fn is_context_sensitive_character(ch: char) -> bool {
+    matches!(
+        ch,
+        '我' | '你'
+            | '您'
+            | '他'
+            | '她'
+            | '它'
+            | '吾'
+            | '汝'
+            | '的'
+            | '得'
+            | '地'
+            | '着'
+            | '了'
+            | '过'
+            | '吗'
+            | '呢'
+            | '吧'
+            | '啊'
+            | '呀'
+            | '嘛'
+            | '哦'
+    )
+}
+
 pub(crate) fn postprocess(
     text: &str,
     predictions: Vec<PositionPrediction>,
@@ -120,6 +146,13 @@ pub(crate) fn postprocess(
             continue;
         }
         if lexicon.is_ignored(&prediction.original.to_string()) {
+            continue;
+        }
+        // Pronouns and grammatical particles are ambiguous by context, not
+        // spelling errors. A character model cannot know the intended person
+        // or aspect, so it must not overturn these without an explicit author
+        // relation.
+        if is_context_sensitive_character(prediction.original) {
             continue;
         }
         if !calibrator.accepts(&prediction) {
@@ -195,6 +228,18 @@ mod tests {
         assert_eq!(accepted.len(), 1);
         assert_eq!(accepted[0].original, "拔");
         assert_eq!(accepted[0].replacement, "拨");
+    }
+
+    #[test]
+    fn ambiguous_pronoun_is_never_overturned_by_the_model() {
+        let lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("lexicon");
+        let accepted = postprocess(
+            "他画了一幅画。",
+            vec![prediction(0, '他', '她')],
+            &lexicon,
+            &calibrated(),
+        );
+        assert!(accepted.is_empty());
     }
 
     #[test]

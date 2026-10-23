@@ -277,30 +277,25 @@ fn model_identity(directory: &Path, stamp: &ModelBundleStamp) -> Result<ModelIde
     Ok(identity)
 }
 
-fn open_model_candidate(
-    path: &Path,
-) -> Result<(ModelCacheKey, Arc<ProofreadingModel>), WriterError> {
-    // Resource validation happens before any preference/cache lock so a
-    // rejected candidate cannot disturb active state.
+fn validate_model_candidate(path: &Path) -> Result<ModelCacheKey, WriterError> {
+    // Selecting a model only validates its immutable resource identity. The
+    // expensive ONNX Runtime session is created exactly once by the first
+    // engine that consumes `configured_model_snapshot`; opening it here and
+    // storing only a weak reference would load the 474 MB model twice.
     let path = canonical_model_path(path)?;
     let stamp_before = model_bundle_stamp(&path)?;
     let identity = model_identity(&path, &stamp_before)?;
-    let model = ProofreadingModel::open(&path)
-        .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")))?;
     let stamp_after = model_bundle_stamp(&path)?;
     if stamp_before != stamp_after {
         return Err(WriterError::Other(
-            "correction model changed while it was being opened; retry the request".into(),
+            "correction model changed while it was being validated; retry the request".into(),
         ));
     }
-    Ok((
-        ModelCacheKey {
-            path,
-            stamp: stamp_after,
-            identity,
-        },
-        Arc::new(model),
-    ))
+    Ok(ModelCacheKey {
+        path,
+        stamp: stamp_after,
+        identity,
+    })
 }
 
 fn model_bundle_identity_for_fingerprint(
@@ -383,7 +378,7 @@ impl CorrectionStore {
     }
 
     pub fn set_model_path(&self, path: &Path) -> Result<(), WriterError> {
-        let (key, candidate) = open_model_candidate(path)?;
+        let key = validate_model_candidate(path)?;
         let mut models = model_cache()
             .lock()
             .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
@@ -405,18 +400,11 @@ impl CorrectionStore {
         crate::storage::atomic_write_string(&self.inner.path, &json)
             .map_err(|error| WriterError::Io(error.to_string()))?;
 
-        // The candidate is already validated. Cache only a weak mapping: an
-        // active engine/scanner owns the strong reference, and idle models can
-        // be released as soon as their last engine is dropped.
+        // Resource identity is cached for status/fingerprint checks, but no
+        // ONNX session is created here. The first engine opens the single
+        // process-shared model; idle weak mappings disappear with that engine.
         models.retain(|_, model| model.model.strong_count() > 0);
-        models.insert(
-            key.path.clone(),
-            CachedModel {
-                stamp: key.stamp,
-                identity: key.identity,
-                model: Arc::downgrade(&candidate),
-            },
-        );
+        models.retain(|cached_path, _| cached_path != &key.path);
         *preferences = next;
         // Selecting a model always starts a fresh engine, even when the path is
         // unchanged but the file behind it was replaced.

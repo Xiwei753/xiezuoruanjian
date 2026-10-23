@@ -18,11 +18,8 @@ use crate::lexicon::Lexicon;
 use crate::neural::NeuralPredictor;
 use crate::postprocess;
 use crate::rules::RuleSet;
-use crate::segment::{context_end, context_start, Segmenter};
+use crate::segment::Segmenter;
 use crate::{CorrectionConfig, CorrectionDiagnostic, CorrectionError};
-
-/// Characters of neighbouring context supplied to each sentence window.
-const NEURAL_CONTEXT_CHARS: usize = 24;
 
 pub(crate) struct Corrector {
     predictor: Option<Arc<dyn NeuralPredictor>>,
@@ -113,33 +110,28 @@ impl Corrector {
         text: &str,
         predictor: &dyn NeuralPredictor,
     ) -> Result<Vec<CorrectionDiagnostic>, CorrectionError> {
-        let mut diagnostics = Vec::new();
-        let calibrator = predictor.calibrator();
-        for sentence in self.segmenter.sentence_segments(text) {
-            let window_start = context_start(text, sentence.start_byte, NEURAL_CONTEXT_CHARS);
-            let window_end = context_end(text, sentence.end_byte, NEURAL_CONTEXT_CHARS);
-            let window = &text[window_start..window_end];
-            let predictions = predictor.predict(window)?;
-            for accepted in postprocess::postprocess(window, predictions, &self.lexicon, calibrator)
-            {
-                let start_byte = window_start + accepted.start_byte;
-                let end_byte = window_start + accepted.end_byte;
-                if start_byte < sentence.start_byte || end_byte > sentence.end_byte {
-                    continue;
-                }
-                diagnostics.push(CorrectionDiagnostic {
-                    start_byte,
-                    end_byte,
-                    original: accepted.original,
-                    replacement: accepted.replacement,
-                    source: "neural_csc".to_string(),
-                    rule_id: "neural.macbert4csc".to_string(),
-                    severity: "warning".to_string(),
-                    confidence: Some(accepted.probability),
-                });
-            }
-        }
-        Ok(diagnostics)
+        // One call per scanned range. `ProofreadingModel` already splits long
+        // ranges into overlapping 512-token windows and merges predictions at
+        // the same original byte offset, so expanding each sentence by ±24
+        // characters and running BERT again for every sentence only creates
+        // duplicate overlapping inference. Core filters the returned absolute
+        // byte ranges back to the dirty segments it owns.
+        let predictions = predictor.predict(text)?;
+        let accepted =
+            postprocess::postprocess(text, predictions, &self.lexicon, predictor.calibrator());
+        Ok(accepted
+            .into_iter()
+            .map(|accepted| CorrectionDiagnostic {
+                start_byte: accepted.start_byte,
+                end_byte: accepted.end_byte,
+                original: accepted.original,
+                replacement: accepted.replacement,
+                source: "neural_csc".to_string(),
+                rule_id: "neural.macbert4csc".to_string(),
+                severity: "warning".to_string(),
+                confidence: Some(accepted.probability),
+            })
+            .collect())
     }
 
     fn confirmed_misspelling_diagnostics(&self, text: &str) -> Vec<CorrectionDiagnostic> {

@@ -76,42 +76,48 @@ export struct AppNavigation {
 
       this.currentTab = targetTab
       targetStack.clear()
+      const screen: string = payload.screen ?? this.legacyContinuationScreen(payload, targetTab)
+      const wideMode: boolean = getWideLayoutState().current() === WideLayoutMode.Wide
+      const hasProject: boolean = payload.projectId !== undefined && payload.projectId !== ''
+      const hasChapter: boolean = payload.chapterId !== undefined && payload.chapterId !== ''
 
+      // 先用目标 tab 的真实根页面建立层级，再按 screen 压入源页面。
+      // settings/search 即使发生在星图/统计 tab，也必须在对应 tab 上重建，而不是打开星图/统计根。
       if (targetTab === TAB_STARMAP) {
         targetStack.pushPath({ name: Routes.StarMapList })
-        const hasStarMap: boolean =
-          payload.starmapId !== undefined && payload.starmapId !== ''
-        if (hasStarMap) {
-          const starParam: StarMapRouteParams = {
-            starmapId: payload.starmapId as string,
-            starmapTitle: payload.starmapTitle ?? ''
-          }
-          if (payload.parentStarmapId !== undefined) {
-            starParam.parentStarmapId = payload.parentStarmapId
-          }
-          if (payload.parentStarmapTitle !== undefined) {
-            starParam.parentStarmapTitle = payload.parentStarmapTitle
-          }
-          if (payload.focusKind !== undefined) {
-            starParam.focusKind = payload.focusKind as StarMapFocusKind
-          }
-          if (payload.focusId !== undefined) {
-            starParam.focusId = payload.focusId
-          }
-          starParam.parentPath = payload.parentPath
-          starParam.focusScenePath = payload.focusScenePath
-          starParam.selectedNodeId = payload.selectedNodeId
-          starParam.selectedKind = payload.selectedKind
-          starParam.cameraScale = payload.cameraScale
-          starParam.cameraOffsetX = payload.cameraOffsetX
-          starParam.cameraOffsetY = payload.cameraOffsetY
-          targetStack.pushPath({ name: Routes.StarMap, param: starParam })
-        }
-        this.continuationPayload = payload
-        return
+      } else if (targetTab === TAB_STATS) {
+        targetStack.pushPath({ name: Routes.Stats })
+      } else {
+        targetStack.pushPath({ name: Routes.Home })
       }
 
-      if (targetTab === TAB_STATS) {
+      if (screen === 'starmap' && targetTab === TAB_STARMAP &&
+        payload.starmapId !== undefined && payload.starmapId !== '') {
+        const starParam: StarMapRouteParams = {
+          starmapId: payload.starmapId,
+          starmapTitle: payload.starmapTitle ?? ''
+        }
+        if (payload.parentStarmapId !== undefined) {
+          starParam.parentStarmapId = payload.parentStarmapId
+        }
+        if (payload.parentStarmapTitle !== undefined) {
+          starParam.parentStarmapTitle = payload.parentStarmapTitle
+        }
+        if (payload.focusKind !== undefined) {
+          starParam.focusKind = payload.focusKind as StarMapFocusKind
+        }
+        if (payload.focusId !== undefined) {
+          starParam.focusId = payload.focusId
+        }
+        starParam.parentPath = payload.parentPath
+        starParam.focusScenePath = payload.focusScenePath
+        starParam.selectedNodeId = payload.selectedNodeId
+        starParam.selectedKind = payload.selectedKind
+        starParam.cameraScale = payload.cameraScale
+        starParam.cameraOffsetX = payload.cameraOffsetX
+        starParam.cameraOffsetY = payload.cameraOffsetY
+        targetStack.pushPath({ name: Routes.StarMap, param: starParam })
+      } else if (screen === 'stats' && targetTab === TAB_STATS) {
         const statsParam: StatsRouteParams = {}
         if (payload.statsPeriod !== undefined) {
           statsParam.period = payload.statsPeriod
@@ -122,25 +128,9 @@ export struct AppNavigation {
         if (payload.statsHeatmapYear !== undefined) {
           statsParam.heatmapYear = payload.statsHeatmapYear
         }
+        targetStack.clear()
         targetStack.pushPath({ name: Routes.Stats, param: statsParam })
-        this.continuationPayload = payload
-        return
-      }
-
-      // 作品 tab：Home 是根，按源页面继续压入 Workspace/Writing/Settings/Search。
-      targetStack.pushPath({ name: Routes.Home })
-      const hasProject: boolean = payload.projectId !== undefined && payload.projectId !== ''
-      const hasChapter: boolean = payload.chapterId !== undefined && payload.chapterId !== ''
-      const hasVolume: boolean = payload.volumeId !== undefined && payload.volumeId !== ''
-      const wideMode: boolean = getWideLayoutState().current() === WideLayoutMode.Wide
-
-      if (payload.screen === 'workspace' && hasProject) {
-        const wsParam: WorkspaceRouteParams = {
-          projectId: payload.projectId as string,
-          projectName: ''
-        }
-        targetStack.pushPath({ name: Routes.Workspace, param: wsParam })
-      } else if (payload.screen === 'settings') {
+      } else if (screen === 'settings') {
         const settingsParam: SettingsRouteParams = {}
         if (payload.settingsSection !== undefined) {
           settingsParam.section = payload.settingsSection
@@ -149,28 +139,33 @@ export struct AppNavigation {
           settingsParam.settingKey = payload.settingKey
         }
         targetStack.pushPath({ name: Routes.Settings, param: settingsParam })
-      } else if (payload.screen === 'search') {
-        const searchContext: SearchContext = this.buildSearchContext(payload)
-        const searchParam: SearchRouteParams = { context: searchContext }
+      } else if (screen === 'search') {
+        const searchParam: SearchRouteParams = { context: this.buildSearchContext(payload) }
         if (payload.searchQuery !== undefined) {
           searchParam.initialQuery = payload.searchQuery
         }
         targetStack.pushPath({ name: Routes.Search, param: searchParam })
-      } else if (payload.screen === 'writing' || (payload.screen === undefined && hasChapter)) {
-        // 窄屏保留 Workspace → Writing 的真实层级；宽屏直达写作台的章节树。
-        if (hasProject && !wideMode) {
+      } else if (screen === 'workspace' && hasProject && targetTab === TAB_HOME) {
+        const wsParam: WorkspaceRouteParams = {
+          projectId: payload.projectId as string,
+          projectName: ''
+        }
+        targetStack.pushPath({ name: Routes.Workspace, param: wsParam })
+      } else if ((screen === 'writing' || (payload.screen === undefined && hasChapter)) &&
+        hasProject && targetTab === TAB_HOME) {
+        if (!wideMode) {
           const wsParam: WorkspaceRouteParams = {
             projectId: payload.projectId as string,
             projectName: ''
           }
           targetStack.pushPath({ name: Routes.Workspace, param: wsParam })
         }
-        if (hasProject && (wideMode || (hasChapter && hasVolume))) {
+        if (wideMode || (hasChapter && payload.volumeId !== undefined && payload.volumeId !== '')) {
           const wParam: WritingRouteParams = {
             chapterId: hasChapter ? payload.chapterId as string : '',
             chapterTitle: '',
             projectId: payload.projectId as string,
-            volumeId: hasVolume ? payload.volumeId as string : ''
+            volumeId: payload.volumeId ?? ''
           }
           if (payload.selection !== undefined) {
             wParam.selection = payload.selection
@@ -190,12 +185,28 @@ export struct AppNavigation {
           if (payload.snapshotHash !== undefined) {
             wParam.snapshotHash = payload.snapshotHash
           }
+          if (payload.sourceDeviceId !== undefined) {
+            wParam.sourceDeviceId = payload.sourceDeviceId
+          }
+          if (payload.sourceNetworkId !== undefined) {
+            wParam.sourceNetworkId = payload.sourceNetworkId
+          }
           targetStack.pushPath({ name: Routes.Writing, param: wParam })
         }
       }
 
       this.continuationPayload = payload
     })
+  }
+
+  private legacyContinuationScreen(payload: ContinuationPayload, targetTab: number): string {
+    if (targetTab === TAB_STARMAP) {
+      return 'starmapList'
+    }
+    if (targetTab === TAB_STATS) {
+      return 'stats'
+    }
+    return payload.chapterId !== undefined ? 'writing' : 'home'
   }
 
   private buildSearchContext(payload: ContinuationPayload): SearchContext {

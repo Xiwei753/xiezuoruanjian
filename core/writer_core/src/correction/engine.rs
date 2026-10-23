@@ -15,6 +15,52 @@ use super::result_cache::{
 };
 use super::CorrectionStore;
 
+/// Merge dirty segments whose expanded context windows touch or overlap. A
+/// segment's context is deterministic, so this does not change which text the
+/// model sees; it only avoids running the same model window once per segment.
+fn group_dirty_jobs(
+    text: &str,
+    jobs: &[(usize, usize, usize)],
+) -> Vec<Vec<(usize, usize, usize)>> {
+    let mut groups: Vec<Vec<(usize, usize, usize)>> = Vec::new();
+    let mut group_context_end = 0usize;
+    for &job in jobs {
+        let (context_start, context_end) = context_range(text, job.1, job.2);
+        if let Some(group) = groups.last_mut() {
+            if context_start <= group_context_end {
+                group.push(job);
+                group_context_end = group_context_end.max(context_end);
+                continue;
+            }
+        }
+        groups.push(vec![job]);
+        group_context_end = context_end;
+    }
+    groups
+}
+
+fn suggestions_in_segment(
+    diagnostics: &[CorrectionDiagnostic],
+    start: usize,
+    end: usize,
+) -> Result<Vec<CachedSuggestion>, WriterError> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.start_byte >= start && diagnostic.end_byte <= end)
+        .map(|diagnostic| {
+            Ok(CachedSuggestion {
+                start_byte: to_u32(diagnostic.start_byte - start)?,
+                end_byte: to_u32(diagnostic.end_byte - start)?,
+                original: diagnostic.original.clone(),
+                replacement: diagnostic.replacement.clone(),
+                source: diagnostic.source.clone(),
+                rule_id: diagnostic.rule_id.clone(),
+                severity: diagnostic.severity.clone(),
+            })
+        })
+        .collect()
+}
+
 pub(crate) struct CorrectionScanner {
     store: CorrectionStore,
     project_id: String,
@@ -245,17 +291,29 @@ impl CorrectionScanner {
         let jobs = dirty
             .iter()
             .filter_map(|index| {
-                guard
-                    .segments
-                    .get(*index)
-                    .map(|segment| (segment.start_byte as usize, segment.end_byte as usize))
+                guard.segments.get(*index).map(|segment| {
+                    (
+                        *index,
+                        segment.start_byte as usize,
+                        segment.end_byte as usize,
+                    )
+                })
             })
             .collect::<Vec<_>>();
         drop(guard);
 
-        let scanned = jobs
+        // Adjacent dirty segments share their ±context window. Scanning them
+        // independently runs the same BERT window repeatedly; group ranges
+        // whose expanded contexts overlap and attribute the single result
+        // back to each segment below.
+        let groups = group_dirty_jobs(text, &jobs);
+        let scanned = groups
             .iter()
-            .map(|(start, end)| self.scan_segment(text, *start, *end))
+            .map(|group| {
+                let start = group.first().map(|job| job.1).unwrap_or(0);
+                let end = group.last().map(|job| job.2).unwrap_or(start);
+                self.scan_range(text, start, end)
+            })
             .collect::<Result<Vec<_>, _>>();
 
         let mut guard = lock_slot(&slot)?;
@@ -276,13 +334,16 @@ impl CorrectionScanner {
         // discard these results and let the caller retry on a fresh scanner.
         self.ensure_scanner_current()?;
         let mut changed = false;
-        for (index, suggestions) in dirty.iter().zip(scanned) {
-            if let Some(segment) = guard.segments.get_mut(*index) {
-                if segment.checked.as_ref() != Some(&suggestions) {
-                    changed = true;
+        for (group, diagnostics) in groups.iter().zip(scanned) {
+            for (index, start, end) in group {
+                let suggestions = suggestions_in_segment(&diagnostics, *start, *end)?;
+                if let Some(segment) = guard.segments.get_mut(*index) {
+                    if segment.checked.as_ref() != Some(&suggestions) {
+                        changed = true;
+                    }
+                    segment.checked = Some(suggestions);
+                    segment.dirty = false;
                 }
-                segment.checked = Some(suggestions);
-                segment.dirty = false;
             }
         }
         // A rescan that produces the same suggestions and only shifted offsets
@@ -443,38 +504,28 @@ impl CorrectionScanner {
         }
     }
 
-    /// Cache-miss compute entry: scans one segment with its context and keeps
-    /// the suggestions inside the segment's responsibility range.
-    fn scan_segment(
+    /// Cache-miss compute entry: scans a merged dirty range with its context.
+    /// Returned offsets are absolute in `text`; callers split them per segment.
+    fn scan_range(
         &self,
         text: &str,
         start: usize,
         end: usize,
-    ) -> Result<Vec<CachedSuggestion>, WriterError> {
+    ) -> Result<Vec<CorrectionDiagnostic>, WriterError> {
         let (context_start, context_end) = context_range(text, start, end);
-        let local_start = start - context_start;
-        let local_end = end - context_start;
-        let diagnostics = self
-            .engine
+        self.engine
             .scan(&text[context_start..context_end])
-            .map_err(|error| WriterError::Other(error.to_string()))?;
-        diagnostics
-            .into_iter()
-            .filter(|diagnostic| {
-                diagnostic.start_byte >= local_start && diagnostic.end_byte <= local_end
+            .map(|diagnostics| {
+                diagnostics
+                    .into_iter()
+                    .map(|mut diagnostic| {
+                        diagnostic.start_byte += context_start;
+                        diagnostic.end_byte += context_start;
+                        diagnostic
+                    })
+                    .collect()
             })
-            .map(|diagnostic| {
-                Ok(CachedSuggestion {
-                    start_byte: to_u32(diagnostic.start_byte - local_start)?,
-                    end_byte: to_u32(diagnostic.end_byte - local_start)?,
-                    original: diagnostic.original,
-                    replacement: diagnostic.replacement,
-                    source: diagnostic.source,
-                    rule_id: diagnostic.rule_id,
-                    severity: diagnostic.severity,
-                })
-            })
-            .collect()
+            .map_err(|error| WriterError::Other(error.to_string()))
     }
 
     fn assemble_snapshot(

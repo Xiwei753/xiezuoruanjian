@@ -75,23 +75,6 @@ fn is_sentence_tail(ch: char) -> bool {
     )
 }
 
-/// Byte range of up to `chars` characters before `end`.
-pub(crate) fn context_start(text: &str, end: usize, chars: usize) -> usize {
-    text[..end]
-        .char_indices()
-        .rev()
-        .nth(chars.saturating_sub(1))
-        .map_or(0, |(byte, _)| byte)
-}
-
-/// Byte range of up to `chars` characters after `start`.
-pub(crate) fn context_end(text: &str, start: usize, chars: usize) -> usize {
-    text[start..]
-        .char_indices()
-        .nth(chars)
-        .map_or(text.len(), |(byte, _)| start + byte)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

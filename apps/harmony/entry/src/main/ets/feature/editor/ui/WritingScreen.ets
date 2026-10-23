@@ -51,6 +51,8 @@ import {
   resolveScreenPolicy
 } from '../../../app/navigation/ScreenSemantics'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
+import { HarmonyDeviceIdentity } from '../../../platform/identity/HarmonyDeviceIdentity'
+import { TrustedDeviceService } from '../../../platform/device/TrustedDeviceService'
 import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWritingDestinationApi23'
 import { sortedHeaderTrailingActions } from '../../../app/navigation/NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
@@ -649,6 +651,12 @@ export struct WritingScreen {
       !this.hasUnsavedChanges) {
       // 源设备冻结的未保存正文已通过附近设备快照到达。只有目标正文仍是同一份
       // 落盘基线（contentHash 相同）且本地没有新修改时才替换，避免覆盖目标新输入。
+      // 源设备冻结的未保存正文可能尚未到达：先按 payload 的源 networkId 主动
+      // 请求一次，再订阅同一 snapshotId 等待真正送达。连接/请求失败不阻塞页面。
+      if (params.sourceNetworkId !== undefined && params.sourceNetworkId.length > 0) {
+        await NearbyDeviceSyncCoordinator.getInstance().requestContinuationFromDevice(
+          params.sourceNetworkId, params.snapshotId, params.snapshotHash)
+      }
       const snapshotText: string | null =
         await this.waitForContinuationSnapshot(params.snapshotId, params.snapshotHash)
       if (snapshotText !== null) {
@@ -739,6 +747,14 @@ export struct WritingScreen {
       // 未保存内容不进 Core 的 contentHash；快照身份在接续/附近设备通道中校验。
       payload.snapshotId = `${this.chapterId}:${snapshotHash}`
     }
+    const abilityContext = getAppContext().getAbilityContext()
+    if (abilityContext !== null) {
+      payload.sourceDeviceId = HarmonyDeviceIdentity.getOrCreateDeviceId(abilityContext)
+      const sourceNetworkId: string = TrustedDeviceService.getInstance().getLocalNetworkId()
+      if (sourceNetworkId.length > 0) {
+        payload.sourceNetworkId = sourceNetworkId
+      }
+    }
     const cursorUtf16: number = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
     const anchorUtf16: number = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
     payload.selection = [anchorUtf16, cursorUtf16]
@@ -797,20 +813,11 @@ export struct WritingScreen {
     return hash.toString(16).padStart(8, '0')
   }
 
-  // 附近设备快照是异步文本消息；接续打开后短暂等待同一 snapshotId，
-  // 但绝不把等待放在 onContinue 的同步返回路径里。
+  // 附近设备快照是异步对象消息；接续打开后订阅同一 snapshotId，哈希匹配才恢复。
+  // 绝不把等待放在 onContinue 的同步返回路径里，也不依赖固定轮询。
   private async waitForContinuationSnapshot(snapshotId: string, snapshotHash: string): Promise<string | null> {
-    const deadline: number = Date.now() + 1500
-    while (Date.now() <= deadline) {
-      const content: string | null = ContinuationSnapshotStore.getInstance().get(snapshotId)
-      if (content !== null && this.computeSnapshotHash(content) === snapshotHash) {
-        return content
-      }
-      await new Promise<void>((resolve: () => void): void => {
-        setTimeout(resolve, 150)
-      })
-    }
-    return null
+    return ContinuationSnapshotStore.getInstance().waitFor(snapshotId,
+      (content: string): boolean => this.computeSnapshotHash(content) === snapshotHash, 5000)
   }
 
   private showContinuationUnavailableNotice(): void {

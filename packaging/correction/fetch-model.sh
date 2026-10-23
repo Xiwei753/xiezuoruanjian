@@ -5,14 +5,17 @@
 #
 # 模型与运行时都不入库。脚本调用 crates/sujian-proof/tools/fetch_model.py，
 # 按 crates/sujian-proof/assets/model_manifest.json 锁定的版本、字节数和
-# SHA-256 下载校验；任何不符都会让构建失败，而不是打出缺模型或错模型的包。
+# SHA-256 校验。首次下载后文件缓存在
+# ${XDG_CACHE_HOME:-$HOME/.cache}/sujian/models（SUJIAN_MODEL_CACHE 可覆盖），
+# 输出目录只做硬链接/复制；后续构建和不同输出目录不会重新下载 474MB 权重。
 #
 # 用法:
 #   packaging/correction/fetch-model.sh <输出目录>
 #
 # 输出:
 #   <输出目录>/macbert4csc/{model.onnx,vocab.txt,...}
-#   <输出目录>/runtime/libonnxruntime.so.1.22.0（仅 SUJIAN_FETCH_ORT=1）
+#   <输出目录>/runtime/libonnxruntime.so*（SUJIAN_RUNTIME_PLATFORM 指定平台，
+#   或 SUJIAN_FETCH_ORT=1 时取 linux-x64）
 #
 set -euo pipefail
 
@@ -32,7 +35,10 @@ fi
 
 mkdir -p "${OUTPUT_DIR}"
 PY_ARGS=(--output "${OUTPUT_DIR}/macbert4csc")
-if [ "${SUJIAN_FETCH_ORT:-0}" = "1" ]; then
+RUNTIME_PLATFORM="${SUJIAN_RUNTIME_PLATFORM:-}"
+if [ -n "${RUNTIME_PLATFORM}" ]; then
+    PY_ARGS+=(--runtime "${RUNTIME_PLATFORM}" --runtime-output "${OUTPUT_DIR}/runtime")
+elif [ "${SUJIAN_FETCH_ORT:-0}" = "1" ]; then
     PY_ARGS+=(--runtime linux-x64 --runtime-output "${OUTPUT_DIR}/runtime")
 fi
 python3 "${REPO_ROOT}/crates/sujian-proof/tools/fetch_model.py" "${PY_ARGS[@]}"

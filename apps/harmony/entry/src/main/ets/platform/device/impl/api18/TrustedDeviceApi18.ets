@@ -97,6 +97,21 @@ export class TrustedDeviceApi18 {
     }
   }
 
+  // 本机在本次系统网络中的 networkId，仅用于接续时定位源设备；不是永久身份。
+  getLocalNetworkId(): string {
+    if (!this.isSupported()) {
+      return ''
+    }
+    try {
+      if (this.deviceManager === null) {
+        this.deviceManager = distributedDeviceManager.createDeviceManager(BUNDLE_NAME)
+      }
+      return this.deviceManager.getLocalDeviceNetworkId()
+    } catch (_err) {
+      return ''
+    }
+  }
+
   async connect(device: TrustedDeviceInfo): Promise<number> {
     if (!this.isSupported() || this.context === null) {
       return -1
@@ -110,8 +125,11 @@ export class TrustedDeviceApi18 {
         serviceName: SERVICE_NAME
       }
       const options: abilityConnectionManager.ConnectOptions = {
-        needSendData: false,
-        parameters: { 'source': 'sujian-peer-sync' }
+        needSendData: true,
+        parameters: {
+          'source': 'sujian-peer-sync',
+          'ohos.collaboration.key.abilityCollaborateType': 'ohos.collaboration.value.abilityCollab'
+        }
       }
       const sessionId: number = abilityConnectionManager.createAbilityConnectionSession(
         SERVICE_NAME, this.context, peerInfo, options)
@@ -130,24 +148,34 @@ export class TrustedDeviceApi18 {
     }
   }
 
-  // 接收端由 EntryAbility.onCollaborate 调用。系统在 want 中附带 token 和呼叫方 PeerInfo。
+  // 接收端由 EntryAbility.onCollaborate 调用。系统把 token、PeerInfo、ConnectOption
+  // 一起放在 supportCollaborateIndex 的嵌套对象里，不能只从 want 顶层取值。
   acceptCollaboration(wantParam: Record<string, Object>): boolean {
     if (!this.isSupported() || this.context === null) {
       return false
     }
-    const tokenValue: Object | undefined = wantParam['ohos.extra.param.key.supportCollaborateIndex']
-    const peerValue: Object | undefined =
-      wantParam[abilityConnectionManager.CollaborationKeys.PEER_INFO]
-    if (tokenValue === undefined || peerValue === undefined) {
+    const collabValue: Object | undefined =
+      wantParam['ohos.extra.param.key.supportCollaborateIndex']
+    if (collabValue === undefined) {
       return false
     }
     try {
+      const collab: Record<string, Object> = collabValue as Record<string, Object>
+      const tokenValue: Object | undefined = collab['ohos.dms.collabToken']
+      const peerValue: Object | undefined = collab['PeerInfo']
+      const optionValue: Object | undefined = collab['ConnectOption']
+      if (tokenValue === undefined || peerValue === undefined || optionValue === undefined) {
+        hilog.warn(DOMAIN, 'TrustedDeviceApi18', 'collaboration token/PeerInfo/ConnectOption missing')
+        return false
+      }
       const peerInfo: abilityConnectionManager.PeerInfo =
         peerValue as abilityConnectionManager.PeerInfo
+      const connectOptions: abilityConnectionManager.ConnectOptions =
+        optionValue as abilityConnectionManager.ConnectOptions
       const serviceName: string =
         peerInfo.serviceName !== undefined ? peerInfo.serviceName : SERVICE_NAME
       const sessionId: number = abilityConnectionManager.createAbilityConnectionSession(
-        serviceName, this.context, peerInfo, { needSendData: false })
+        serviceName, this.context, peerInfo, connectOptions)
       this.registerSession(sessionId)
       abilityConnectionManager.acceptConnect(sessionId, tokenValue as string).catch((err: Object): void => {
         hilog.error(DOMAIN, 'TrustedDeviceApi18', 'acceptConnect failed: %{public}s', JSON.stringify(err))

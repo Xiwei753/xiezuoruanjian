@@ -129,6 +129,12 @@ export class AppContinuationService {
     if (payload.snapshotHash !== undefined) {
       result.snapshotHash = payload.snapshotHash
     }
+    if (payload.sourceDeviceId !== undefined) {
+      result.sourceDeviceId = payload.sourceDeviceId
+    }
+    if (payload.sourceNetworkId !== undefined) {
+      result.sourceNetworkId = payload.sourceNetworkId
+    }
     if (payload.starmapId !== undefined) {
       result.starmapId = payload.starmapId
     }
@@ -256,6 +262,12 @@ export class AppContinuationService {
     }
     if (obj['snapshotHash'] !== undefined) {
       result.snapshotHash = obj['snapshotHash'] as string
+    }
+    if (obj['sourceDeviceId'] !== undefined) {
+      result.sourceDeviceId = obj['sourceDeviceId'] as string
+    }
+    if (obj['sourceNetworkId'] !== undefined) {
+      result.sourceNetworkId = obj['sourceNetworkId'] as string
     }
     if (obj['starmapId'] !== undefined) {
       result.starmapId = obj['starmapId'] as string

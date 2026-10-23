@@ -212,18 +212,3 @@ export interface SyncConflictPreview {
   remoteContent: string | null
   remoteDeleted: boolean
 }
-
-// Core `PeerSyncMutationDto`：附近设备同步后需要回传给对端的对象变更。
-// contentBase64 仅 kind=put 时存在；delete 时 version 为删除前版本。
-export interface PeerSyncMutation {
-  kind: string
-  path: string
-  contentBase64: string | null
-  version: string | null
-}
-
-// Core `PeerSyncResultDto`：复用全量同步结果，并附带本次对端可见的对象变更。
-export interface PeerSyncResult {
-  sync: FullSyncResult
-  mutations: PeerSyncMutation[]
-}

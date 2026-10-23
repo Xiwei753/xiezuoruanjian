@@ -49,6 +49,8 @@ export interface WritingRouteParams {
   // Issue #988：源设备冻结的未保存正文快照。目标设备校验 snapshotHash 后才套用选区/视口。
   snapshotId?: string
   snapshotHash?: string
+  sourceDeviceId?: string
+  sourceNetworkId?: string
   // 全局搜索命中（Issue #982）。searchByteStart/searchByteEnd 是 Core 原文 UTF-8 byte 偏移；
   // searchField='body' 时 WritingScreen 在正文中转 UTF-16 后选中并滚动到该范围。
   searchByteStart?: number

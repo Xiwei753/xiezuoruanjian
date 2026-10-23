@@ -16,7 +16,7 @@ import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchem
 import { DateRange, Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
 import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint, WritingStatsHeatmap, WritingStatsHeatmapDay } from '../dto/StatsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
-import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview, PeerSyncMutation, PeerSyncResult } from '../dto/SyncDtos'
+import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 import { SearchResultPage, SearchResult, SearchTarget, SearchField, SearchScope } from '../dto/SearchDtos'
 
@@ -1944,55 +1944,6 @@ function decodeFullSyncTargetPlan(data: Object): DecodeResult<FullSyncTargetPlan
     plan: planR.value
   }
   return ok<FullSyncTargetPlan>(value)
-}
-
-export function decodePeerSyncMutation(data: Object): DecodeResult<PeerSyncMutation> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<PeerSyncMutation>('PeerSyncMutation: expected object')
-  }
-  const kind: string | null = reqStr(data, 'kind')
-  if (kind === null) { return err<PeerSyncMutation>('PeerSyncMutation.kind missing') }
-  const path: string | null = reqStr(data, 'path')
-  if (path === null) { return err<PeerSyncMutation>('PeerSyncMutation.path missing') }
-  const contentR: DecodeResult<string | null> = nullStr(data, 'contentBase64')
-  if (!contentR.ok || contentR.value === undefined) {
-    return err<PeerSyncMutation>(`PeerSyncMutation.${contentR.error ?? 'decode failed'}`)
-  }
-  const versionR: DecodeResult<string | null> = nullStr(data, 'version')
-  if (!versionR.ok || versionR.value === undefined) {
-    return err<PeerSyncMutation>(`PeerSyncMutation.${versionR.error ?? 'decode failed'}`)
-  }
-  return ok<PeerSyncMutation>({
-    kind: kind,
-    path: path,
-    contentBase64: contentR.value,
-    version: versionR.value
-  })
-}
-
-export function decodePeerSyncResult(data: Object): DecodeResult<PeerSyncResult> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<PeerSyncResult>('PeerSyncResult: expected object')
-  }
-  const rec = data as Record<string, Object>
-  const syncRaw: Object | undefined = rec['sync']
-  if (syncRaw === undefined || typeof syncRaw !== 'object' || syncRaw === null || Array.isArray(syncRaw)) {
-    return err<PeerSyncResult>('PeerSyncResult.sync missing')
-  }
-  const syncR: DecodeResult<FullSyncResult> = decodeFullSyncResult(syncRaw as Object)
-  if (!syncR.ok || syncR.value === undefined) {
-    return err<PeerSyncResult>(syncR.error ?? 'PeerSyncResult.sync decode failed')
-  }
-  const mutationsArr: Array<Object> | null = reqArray(data, 'mutations')
-  if (mutationsArr === null) {
-    return err<PeerSyncResult>('PeerSyncResult.mutations missing or not array')
-  }
-  const mutationsR: DecodeResult<PeerSyncMutation[]> =
-    decodeArray<PeerSyncMutation>(mutationsArr as Object, decodePeerSyncMutation, 'mutations')
-  if (!mutationsR.ok || mutationsR.value === undefined) {
-    return err<PeerSyncResult>(mutationsR.error ?? 'mutations decode failed')
-  }
-  return ok<PeerSyncResult>({ sync: syncR.value, mutations: mutationsR.value })
 }
 
 export function decodeFullSyncResult(data: Object): DecodeResult<FullSyncResult> {

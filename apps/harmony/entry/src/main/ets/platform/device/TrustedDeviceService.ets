@@ -39,6 +39,11 @@ export class TrustedDeviceService {
     return TrustedDeviceApi18.getInstance().isSupported()
   }
 
+  // 本机当前系统网络中的 networkId（仅本次连接有效），用于接续快照定位源设备。
+  getLocalNetworkId(): string {
+    return TrustedDeviceApi18.getInstance().getLocalNetworkId()
+  }
+
   // 分布式设备发现需要用户授权的 DISTRIBUTED_DATASYNC。只在用户打开/刷新附近设备
   // 或主动连接时申请，不在启动阶段打扰用户；拒绝后由上层显示真实不可用状态。
   async requestPermission(context: common.UIAbilityContext): Promise<boolean> {

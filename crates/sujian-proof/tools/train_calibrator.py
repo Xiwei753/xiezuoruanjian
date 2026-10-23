@@ -2,64 +2,104 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Fit the postprocess calibrator from exported model features.
 
-Feature export is intentionally separate from fitting so the same article can
-never appear in both sets. The offline feature exporter can write rows with this header:
+The exporter (`export_features.py`) and this fitter are separate so a text can
+never contribute to more than one split. Rows use this header:
 
     label,original_logprob,candidate_logprob,margin,original_char,candidate_char,sample_id
 
 `label=1` means the candidate is the known correction for a real error;
-`label=0` means the original character is already correct. Do not mix rows from
-the same article across train and evaluation. The split below is by sample_id.
+`label=0` means the original character is already correct and the candidate is
+a model proposal that must be rejected. Splits are grouped by `sample_id`:
 
-The output uses raw log probabilities, matching `Calibrator` in
-crates/sujian-proof/src/postprocess.rs. Threshold selection is precision-first:
-the script picks the highest recall whose measured precision is at least
-`--min-precision`, and refuses to export when the evaluation set has no
-negative rows.
+    fit (default 60%)          -> logistic weights
+    calibration (default 20%)  -> one threshold, precision-first
+    final evaluation (20%)     -> read-only metrics, never used for tuning
+
+The final evaluation is reported in the exported JSON and stdout; changing a
+parameter after looking at it requires a new data revision/version.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
-import math
 import random
 from pathlib import Path
 
 import numpy as np
 
+FEATURE_COLUMNS = [
+    "margin",
+    "candidate_logprob",
+    "original_logprob",
+]
 
-def load_rows(path: Path) -> tuple[np.ndarray, np.ndarray]:
+
+def load_rows(path: Path) -> tuple[np.ndarray, np.ndarray, list[str]]:
     features: list[list[float]] = []
     labels: list[float] = []
-    sample_ids: set[str] = set()
+    sample_ids: list[str] = []
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        required = {"label", "original_logprob", "candidate_logprob", "margin", "sample_id"}
-        if not required.issubset(reader.fieldnames or []):
-            raise SystemExit(f"missing columns: {sorted(required - set(reader.fieldnames or []))}")
+        required = {"label", *FEATURE_COLUMNS, "sample_id"}
+        missing = sorted(required - set(reader.fieldnames or []))
+        if missing:
+            raise SystemExit(f"missing columns: {missing}")
         for row in reader:
-            features.append(
-                [
-                    float(row["margin"]),
-                    float(row["candidate_logprob"]),
-                    float(row["original_logprob"]),
-                ]
-            )
+            features.append([float(row[column]) for column in FEATURE_COLUMNS])
             labels.append(float(row["label"]))
-            sample_ids.add(row["sample_id"])
+            sample_ids.append(row["sample_id"])
     if not features:
         raise SystemExit("no feature rows")
-    if len(sample_ids) < 2:
-        raise SystemExit("need at least two sample_ids for a grouped split")
-    return np.asarray(features, dtype=np.float64), np.asarray(labels, dtype=np.float64)
+    if len(set(sample_ids)) < 3:
+        raise SystemExit("need at least three sample_ids for three grouped splits")
+    return (
+        np.asarray(features, dtype=np.float64),
+        np.asarray(labels, dtype=np.float64),
+        sample_ids,
+    )
+
+
+def split_groups(
+    sample_ids: list[str],
+    labels: np.ndarray,
+    fit_fraction: float,
+    calibration_fraction: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    groups = sorted(set(sample_ids))
+    rng = random.Random(seed)
+    rng.shuffle(groups)
+    fit_end = max(1, int(len(groups) * fit_fraction))
+    calibration_end = max(
+        fit_end + 1,
+        fit_end + int(len(groups) * calibration_fraction),
+    )
+    calibration_end = min(calibration_end, len(groups) - 1)
+    split_groups = {
+        "fit": set(groups[:fit_end]),
+        "calibration": set(groups[fit_end:calibration_end]),
+        "final": set(groups[calibration_end:]),
+    }
+    masks = {}
+    for name, group_set in split_groups.items():
+        mask = np.asarray([sample_id in group_set for sample_id in sample_ids])
+        masks[name] = mask
+        if not np.any(mask):
+            raise SystemExit(f"{name} split is empty")
+        if not np.any(labels[mask] == 1):
+            raise SystemExit(f"{name} split has no positive rows")
+        if name != "fit" and not np.any(labels[mask] == 0):
+            raise SystemExit(f"{name} split has no negative rows")
+    return masks["fit"], masks["calibration"], masks["final"]
 
 
 def fit_logistic(x: np.ndarray, y: np.ndarray, l2: float) -> np.ndarray:
     design = np.column_stack([np.ones(len(x)), x])
     weights = np.zeros(design.shape[1], dtype=np.float64)
-    for _ in range(500):
+    for _ in range(800):
         logits = design @ weights
         probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -40.0, 40.0)))
         gradient = design.T @ (probabilities - y) / len(y)
@@ -68,33 +108,55 @@ def fit_logistic(x: np.ndarray, y: np.ndarray, l2: float) -> np.ndarray:
     return weights
 
 
-def evaluate(weights: np.ndarray, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def probabilities(weights: np.ndarray, x: np.ndarray) -> np.ndarray:
     design = np.column_stack([np.ones(len(x)), x])
     logits = design @ weights
-    probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -40.0, 40.0)))
-    return probabilities, y
+    return 1.0 / (1.0 + np.exp(-np.clip(logits, -40.0, 40.0)))
+
+
+def metrics_at(
+    probabilities: np.ndarray,
+    labels: np.ndarray,
+    threshold: float,
+) -> dict[str, float | int]:
+    selected = probabilities >= threshold
+    true_positive = int(np.sum(selected & (labels == 1)))
+    false_positive = int(np.sum(selected & (labels == 0)))
+    false_negative = int(np.sum(~selected & (labels == 1)))
+    true_negative = int(np.sum(~selected & (labels == 0)))
+    precision = true_positive / max(true_positive + false_positive, 1)
+    recall = true_positive / max(true_positive + false_negative, 1)
+    f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+    return {
+        "threshold": float(threshold),
+        "true_positive": true_positive,
+        "false_positive": false_positive,
+        "false_negative": false_negative,
+        "true_negative": true_negative,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+    }
 
 
 def pick_threshold(
-    probabilities: np.ndarray, labels: np.ndarray, min_precision: float
-) -> tuple[float, dict[str, float]]:
-    best: tuple[float, dict[str, float]] | None = None
+    probabilities: np.ndarray,
+    labels: np.ndarray,
+    min_precision: float,
+) -> tuple[float, dict[str, float | int]]:
+    best: tuple[float, float, dict[str, float | int]] | None = None
     for threshold in sorted(set(probabilities.tolist())):
-        selected = probabilities >= threshold
-        true_positive = float(np.sum(selected & (labels == 1)))
-        false_positive = float(np.sum(selected & (labels == 0)))
-        if true_positive == 0 or false_positive > 0:
+        metrics = metrics_at(probabilities, labels, threshold)
+        if metrics["precision"] < min_precision:
             continue
-        precision = true_positive / (true_positive + false_positive)
-        if precision < min_precision:
-            continue
-        recall = true_positive / max(float(np.sum(labels == 1)), 1.0)
-        candidate = (recall, {"precision": precision, "recall": recall, "threshold": float(threshold)})
-        if best is None or candidate[0] > best[0]:
+        # Highest recall wins; ties prefer the higher threshold (fewer weak
+        # suggestions) and finally higher precision.
+        candidate = (metrics["recall"], threshold, metrics)
+        if best is None or candidate[:2] > best[:2]:
             best = candidate
     if best is None:
-        raise SystemExit("no threshold reaches the requested precision")
-    return best[1]["threshold"], best[1]
+        raise SystemExit("no calibration threshold reaches the requested precision")
+    return best[1], best[2]
 
 
 def main() -> None:
@@ -103,27 +165,39 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--min-precision", type=float, default=0.98)
+    parser.add_argument("--fit-fraction", type=float, default=0.6)
+    parser.add_argument("--calibration-fraction", type=float, default=0.2)
     parser.add_argument("--l2", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=985)
+    parser.add_argument(
+        "--dataset",
+        default="shibing624/CSC public dev split",
+        help="provenance string stored in the exported calibrator",
+    )
+    parser.add_argument(
+        "--model-sha256",
+        default="",
+        help="optional ONNX model SHA-256 stored in the exported calibrator",
+    )
     args = parser.parse_args()
 
-    x, y = load_rows(args.features)
-    if not np.any(y == 1) or not np.any(y == 0):
-        raise SystemExit("features need both positive and negative rows")
-    rng = random.Random(args.seed)
-    groups = sorted({line.split(",", 6)[6].strip() for line in args.features.read_text().splitlines()[1:]})
-    rng.shuffle(groups)
-    eval_groups = set(groups[: max(1, len(groups) // 5)])
-    eval_mask = np.array(
-        [
-            line.split(",", 6)[6].strip() in eval_groups
-            for line in args.features.read_text().splitlines()[1:]
-        ]
+    x, y, sample_ids = load_rows(args.features)
+    fit_mask, calibration_mask, final_mask = split_groups(
+        sample_ids,
+        y,
+        args.fit_fraction,
+        args.calibration_fraction,
+        args.seed,
     )
-    train_mask = ~eval_mask
-    weights = fit_logistic(x[train_mask], y[train_mask], args.l2)
-    probabilities, labels = evaluate(weights, x[eval_mask], y[eval_mask])
-    threshold, metrics = pick_threshold(probabilities, labels, args.min_precision)
+    weights = fit_logistic(x[fit_mask], y[fit_mask], args.l2)
+    calibration_probabilities = probabilities(weights, x[calibration_mask])
+    threshold, calibration_metrics = pick_threshold(
+        calibration_probabilities,
+        y[calibration_mask],
+        args.min_precision,
+    )
+    final_probabilities = probabilities(weights, x[final_mask])
+    final_metrics = metrics_at(final_probabilities, y[final_mask], threshold)
 
     calibrator = {
         "version": args.version,
@@ -132,10 +206,26 @@ def main() -> None:
         "candidate_weight": float(weights[2]),
         "original_weight": float(weights[3]),
         "threshold": float(threshold),
+        "training": {
+            "dataset": args.dataset,
+            "features_sha256": hashlib.sha256(args.features.read_bytes()).hexdigest(),
+            "feature_columns": FEATURE_COLUMNS,
+            "seed": args.seed,
+            "split": {
+                "fit_rows": int(np.sum(fit_mask)),
+                "calibration_rows": int(np.sum(calibration_mask)),
+                "final_rows": int(np.sum(final_mask)),
+                "sample_ids": len(set(sample_ids)),
+            },
+            "threshold_policy": f"max recall on calibration with precision >= {args.min_precision}",
+            "calibration": calibration_metrics,
+            "final_evaluation": final_metrics,
+            "model_sha256": args.model_sha256,
+        },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(calibrator, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"calibrator": calibrator, "evaluation": metrics}, indent=2))
+    print(json.dumps(calibrator, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
