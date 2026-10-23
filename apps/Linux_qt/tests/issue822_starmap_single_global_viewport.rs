@@ -1177,10 +1177,22 @@ fn node_title_is_edited_inline_with_a_text_input() {
         begin.contains("editing = true") && begin.contains("titleInput.forceActiveFocus()"),
         "进入编辑必须把光标放进名称输入框（forceActiveFocus），实际窗口:\n{begin}"
     );
-    let commit = function_window(&src, "function commitEdit(", 900);
+    let commit = function_window(&src, "function commitEdit(", 1800);
     assert!(
-        commit.contains("scene.commitNodeEdit(nodeData.id, nextTitle, nextBody)"),
-        "提交必须把名称与正文交给归属层保存，实际窗口:\n{commit}"
+        commit.contains("scene.commitNodeEdit(nodeData.id,")
+            && commit.contains("titleChanged ? nextTitle : null")
+            && commit.contains("bodyChanged ? nextBody : null"),
+        "提交必须只把真正变化的名称/正文交给归属层保存，实际窗口:\n{commit}"
+    );
+    assert!(
+        commit.contains("if (!result || result.success !== true)")
+            && commit.contains("editError = result && result.message"),
+        "保存失败必须保留编辑态并显示错误，不能先销毁草稿，实际窗口:\n{commit}"
+    );
+    assert!(
+        commit.contains("if (!titleChanged && !bodyChanged)")
+            && commit.contains("finishEdit()"),
+        "无变化提交只退出编辑，不应产生 content 补丁，实际窗口:\n{commit}"
     );
     let cancel = function_window(&src, "function cancelEdit(", 500);
     assert!(

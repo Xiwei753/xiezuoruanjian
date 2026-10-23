@@ -656,13 +656,22 @@ private fun StarMapNodeEditorDialog(
         node.contentKind == null ||
             node.contentKind == StarMapNodeContentData.TYPE_EMPTY ||
             node.contentKind == StarMapNodeContentData.TYPE_INLINE
+    val originalBody = node.contentBody.orEmpty()
 
     fun save() {
         if (saving || trimmedTitle.isEmpty()) return
+        val titleChanged = trimmedTitle != node.title
+        // 名称与正文分别更新：只有正文确实变化才发送 content。
+        // 原样比较（含换行），不做 trim；empty 节点新增正文时才转 inline。
+        val bodyChanged = editableBody && body != originalBody
+        if (!titleChanged && !bodyChanged) {
+            onDismiss()
+            return
+        }
         saving = true
         errorDetail = null
         val content =
-            if (editableBody) {
+            if (bodyChanged) {
                 StarMapNodeContentData(
                     type = StarMapNodeContentData.TYPE_INLINE,
                     summary = node.contentSummary,
@@ -678,7 +687,7 @@ private fun StarMapNodeEditorDialog(
                     repository.updateStarmapNode(
                         starmapId = starmapId,
                         nodeId = node.id,
-                        title = trimmedTitle,
+                        title = if (titleChanged) trimmedTitle else null,
                         content = content,
                     )
                 }

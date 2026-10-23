@@ -402,8 +402,10 @@ QtObject {
     // Issue #984：patch 原样交给后端（content 也是 patch 的一部分）。
     // 成功后用 Core 返回的更新后 StarMapNodeDto 刷新模型，不能只浅拷贝 title；
     // 同时同步 graphData.nodes 并重算边端点，让正文、尺寸、连线立即刷新。
+    // 返回 { success, message }：编辑层只有拿到 success 才退出，失败保留草稿。
     function updateNode(nodeId, patch) {
-        if (!ensureBackend()) return;
+        if (!ensureBackend())
+            return { success: false, message: errorMessage }
         var res = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(patch)), qsTr("更新节点失败"));
         if (res.success) {
             clearError();
@@ -411,7 +413,9 @@ QtObject {
             if (!updated || updated.id !== nodeId) {
                 // 返回结构不可用时退回全量加载，仍然不能只改 title。
                 loadGraph();
-                return;
+                if (graphData === null)
+                    return { success: false, message: errorMessage || qsTr("更新节点失败") }
+                return { success: true }
             }
 
             var nextNodes = [];
@@ -425,8 +429,9 @@ QtObject {
                     n.content = updated.content !== undefined
                             ? (updated.content || { type: "empty" })
                             : n.content;
-                    // Issue #984：尺寸跟随同一份度量函数，不在更新路径另写固定值。
-                    // 用合并后的节点度量，部分字段缺失时也不会把卡片压回标题高度。
+                    // Issue #984：正文变了，旧的 Text 实测高度立即作废；
+                    // 新高度等 delegate 按真实排版回传，期间只用统一最小高度兜底。
+                    StarMapNodeMetrics.clearMeasuredHeight(nodeId);
                     n.width = StarMapNodeMetrics.nodeWidth(n);
                     n.height = StarMapNodeMetrics.nodeHeight(n, false);
                 }
@@ -458,9 +463,36 @@ QtObject {
 
             computeEdgeRenders(null);
             graphChanged();
+            return { success: true }
         } else {
             setError(backendErrorText(res, qsTr("更新节点失败")));
+            return { success: false, message: errorMessage }
         }
+    }
+
+    // Issue #984：delegate 用当前字体 / 宽度 / 换行规则实测出显示态高度后回传。
+    // 这里是节点几何的唯一更新入口：模型宽高、边端点、命中都读同一份值。
+    function reportNodeMeasuredSize(nodeId, height) {
+        var node = getNode(nodeId);
+        if (!node)
+            return
+        if (!StarMapNodeMetrics.recordMeasuredHeight(node, height))
+            return
+        var nextWidth = StarMapNodeMetrics.nodeWidth(node);
+        var nextHeight = StarMapNodeMetrics.nodeHeight(node, false);
+        var nextNodes = [];
+        for (var i = 0; i < nodesModel.length; i++) {
+            var n = nodesModel[i];
+            if (n.id === nodeId) {
+                n = copyObject(n);
+                n.width = nextWidth;
+                n.height = nextHeight;
+            }
+            nextNodes.push(n);
+        }
+        nodesModel = nextNodes;
+        computeEdgeRenders(null);
+        graphChanged();
     }
 
     function deleteNode(nodeId) {

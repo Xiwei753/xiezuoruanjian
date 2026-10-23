@@ -878,6 +878,12 @@ Item {
         var scene = activeScene()
         if (!scene || !starmapBackendRef || !instanceId)
             return -1
+        // Issue #984：切换画布前先保存未提交的节点编辑；保存失败就中止切换，
+        // 不能让 scene / model 重建把输入草稿静默丢掉。
+        if (!scene.flushPendingNodeEdit()) {
+            routeError = qsTr("节点保存失败，请重试")
+            return -1
+        }
         var info = scene.embedEntryInfo(instanceId)
         if (!info)
             return -1
@@ -1002,6 +1008,12 @@ Item {
     function exitCanvasViaCore(continuous) {
         if (focusIsRoot || !starmapBackendRef)
             return -1
+        // Issue #984：退出画布同样不能丢掉未提交的节点编辑。
+        var active = activeScene()
+        if (active && !active.flushPendingNodeEdit()) {
+            routeError = qsTr("节点保存失败，请重试")
+            return -1
+        }
         // 过渡还没收尾就立即反向缩小：先从当前已显示帧收尾，再冻结新快照。
         settleViewportMotion()
         var childKey = routeKey

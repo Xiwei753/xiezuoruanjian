@@ -25,6 +25,7 @@
 // authored position —— 本组件是只读渲染器，连 bridge 的写接口都不碰。
 
 import hilog from '@ohos.hilog'
+import { UIContext } from '@kit.ArkUI'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { StarMapGraph, StarMapEmbed, StarMapPathSegment } from '../../../corebridge/dto/StarMapDtos'
 import { ThemeConfig } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -32,7 +33,8 @@ import {
   PlatformLayoutNode,
   buildFreeformLayout,
   buildEmbedLayoutNodes,
-  DEFAULT_EMBED_DIAMETER
+  DEFAULT_EMBED_DIAMETER,
+  NodeTextHeightMeasure
 } from '../platform/StarMapLayout'
 import {
   PlatformNodeRect,
@@ -186,6 +188,29 @@ export struct StarMapEmbedPreview {
   }
 
   /**
+   * 缩略图与 interactive 层共用同一套节点卡片真实排版高度（#984）。
+   * 预览虽小，包围盒仍要和真实布局一致，不能用字符宽度估算另一套尺寸。
+   */
+  private nodeTextHeightMeasure(): NodeTextHeightMeasure {
+    return (text: string, fontSize: number, lineHeight: number, maxWidth: number,
+      maxLines: number, fontWeight: number): number => {
+      if (text.length === 0 || maxWidth <= 0) {
+        return 0
+      }
+      const uiContext: UIContext = this.getUIContext()
+      const size: SizeOptions = uiContext.getMeasureUtils().measureTextSize({
+        textContent: text,
+        constraintWidth: maxWidth,
+        fontSize: fontSize,
+        lineHeight: lineHeight,
+        maxLines: maxLines,
+        fontWeight: fontWeight
+      })
+      return uiContext.px2vp(size.height)
+    }
+  }
+
+  /**
    * 用和 interactive 层同一套只读几何重建缩略图。
    *
    * local fit 的可用区同样走 computeEmbedInnerContentSafeSide：子图内容不会压到
@@ -200,7 +225,8 @@ export struct StarMapEmbedPreview {
       this.edgeRenders = []
       return
     }
-    const nodeLayouts: PlatformLayoutNode[] = buildFreeformLayout(graph.nodes)
+    const nodeLayouts: PlatformLayoutNode[] =
+      buildFreeformLayout(graph.nodes, this.nodeTextHeightMeasure())
     const embedLayouts: PlatformLayoutNode[] = buildEmbedLayoutNodes(graph.embeds)
     const rects: PlatformNodeRect[] =
       nodeLayouts.map((ln: PlatformLayoutNode) => deriveNodeRectFromLayoutNode(ln))

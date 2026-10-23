@@ -109,120 +109,88 @@ export interface StarMapNodeCardMetrics {
 }
 
 /**
- * 估算单个字符占几个"字号宽度"。
+ * 真实文本高度测量回调（#984）。
  *
- * 只用确定性的字符类别估算，不依赖字体文件、不调用异步文本测量：
- * - CJK / 全角字符按 1 个字号宽；
- * - 空格按 0.4；
- * - 其余拉丁字母 / 数字 / 标点按 0.62（略偏保守，避免实际折行比估算多）。
+ * 平台层不自己按字符宽度猜行数：调用方必须提供与 Text 相同的字号、行高、
+ * 可用宽度、最大行数与字重，由 ArkUI 的文本排版能力返回实际高度（vp）。
+ * 返回 0 表示文本为空。
  */
-function estimatedCharWidthRatio(charCode: number): number {
-  if (charCode === 32) {
-    return 0.4
-  }
-  if (charCode === 9) {
-    // Tab 的视觉宽度随制表位变化，按 1 个字号宽保守估算，避免正文实际折行更多。
-    return 1.0
-  }
-  if (charCode >= 0x1100 && (
-    charCode <= 0x115F ||
-    (charCode >= 0x2E80 && charCode <= 0xA4CF) ||
-    (charCode >= 0xAC00 && charCode <= 0xD7A3) ||
-    (charCode >= 0xF900 && charCode <= 0xFAFF) ||
-    (charCode >= 0xFE30 && charCode <= 0xFE4F) ||
-    (charCode >= 0xFF00 && charCode <= 0xFF60) ||
-    (charCode >= 0xFFE0 && charCode <= 0xFFE6)
-  )) {
-    return 1.0
-  }
-  return 0.62
-}
-
-/**
- * 估算文本在给定宽度下会占几行（视觉折行，保留 `\n` 与连续空行）。
- *
- * 规则与 Text 的排版口径一致：每个 `\n` 强制换行；空段落也占一行；
- * 连续空行不会被折叠；超过 maxLines 后不再继续累加（返回 maxLines）。
- *
- * @param text 原始文本（不做 trim，正文里的首尾空行也是内容）
- * @param fontSize 字号（vp）
- * @param maxWidth 可用宽度（vp）
- * @param maxLines 最多统计到几行
- * @returns 视觉行数，范围 [0, maxLines]
- */
-export function estimateWrappedLineCount(
+export type NodeTextHeightMeasure = (
   text: string,
   fontSize: number,
+  lineHeight: number,
   maxWidth: number,
-  maxLines: number
-): number {
-  if (text.length === 0 || maxWidth <= 0 || maxLines <= 0) {
-    return 0
-  }
-  let lines: number = 1
-  let usedWidth: number = 0
-  for (let i = 0; i < text.length; i++) {
-    const code: number = text.charCodeAt(i)
-    if (code === 13) {
-      // CRLF / 单独 CR 都按一个换行处理，避免 Windows 换行被算成两行。
-      if (i + 1 < text.length && text.charCodeAt(i + 1) === 10) {
-        continue
-      }
-      lines += 1
-      usedWidth = 0
-      if (lines >= maxLines) {
-        return maxLines
-      }
-      continue
-    }
-    if (code === 10) {
-      lines += 1
-      usedWidth = 0
-      if (lines >= maxLines) {
-        return maxLines
-      }
-      continue
-    }
-    const charWidth: number = estimatedCharWidthRatio(code) * fontSize
-    if (usedWidth > 0 && usedWidth + charWidth > maxWidth) {
-      lines += 1
-      usedWidth = charWidth
-      if (lines >= maxLines) {
-        return maxLines
-      }
-    } else {
-      usedWidth += charWidth
-    }
-  }
-  return Math.min(lines, maxLines)
-}
+  maxLines: number,
+  fontWeight: number
+) => number
 
 /**
  * 按标题 + 正文内容计算普通节点卡片度量（#984）。
  *
+ * 高度只来自 `measureTextHeight` 的真实排版结果；没有传入测量回调时
+ * 不做字符宽度估算，仅退回最小高度（生产调用点必须传回调）。
+ *
  * @param title 节点名称（原始字段，不做 trim）
  * @param content 节点内容；只有 inline / empty 的 body 会进入预览
+ * @param measureTextHeight 平台真实文本高度测量回调
  * @returns 卡片宽高与标题 / 正文实际占用的预览行数
  */
 export function measureStarMapNodeCardByContent(
   title: string,
-  content: StarMapNodeContent | null
+  content: StarMapNodeContent | null,
+  measureTextHeight?: NodeTextHeightMeasure
 ): StarMapNodeCardMetrics {
   const titleMaxWidth: number =
     NODE_CARD_WIDTH - NODE_CARD_PADDING * 2 - NODE_CARD_ACCENT_SIZE - NODE_CARD_ACCENT_GAP
   const bodyMaxWidth: number = NODE_CARD_WIDTH - NODE_CARD_PADDING * 2
-  const titleLines: number = Math.max(1,
-    estimateWrappedLineCount(title, NODE_CARD_TITLE_FONT_SIZE, titleMaxWidth, NODE_CARD_TITLE_MAX_LINES))
+  let titleHeight: number = NODE_CARD_TITLE_LINE_HEIGHT
+  if (title.length > 0 && measureTextHeight !== undefined) {
+    titleHeight = Math.max(0, measureTextHeight(
+      title,
+      NODE_CARD_TITLE_FONT_SIZE,
+      NODE_CARD_TITLE_LINE_HEIGHT,
+      titleMaxWidth,
+      NODE_CARD_TITLE_MAX_LINES,
+      500
+    ))
+  }
+  const titleLines: number = titleHeight > 0
+    ? Math.max(1, Math.min(
+      NODE_CARD_TITLE_MAX_LINES,
+      Math.round(titleHeight / NODE_CARD_TITLE_LINE_HEIGHT)
+    ))
+    : 1
+
   let body: string = ''
   if (content !== null && (content.type === 'inline' || content.type === 'empty')) {
     body = content.body ?? ''
   }
-  const bodyLines: number = estimateWrappedLineCount(
-    body, NODE_CARD_BODY_FONT_SIZE, bodyMaxWidth, NODE_CARD_BODY_PREVIEW_MAX_LINES)
-  const hasBody: boolean = bodyLines > 0
-  let height: number = NODE_CARD_PADDING * 2 + titleLines * NODE_CARD_TITLE_LINE_HEIGHT
+  let bodyHeight: number = 0
+  if (body.length > 0) {
+    if (measureTextHeight !== undefined) {
+      bodyHeight = Math.max(0, measureTextHeight(
+        body,
+        NODE_CARD_BODY_FONT_SIZE,
+        NODE_CARD_BODY_LINE_HEIGHT,
+        bodyMaxWidth,
+        NODE_CARD_BODY_PREVIEW_MAX_LINES,
+        400
+      ))
+    } else {
+      // 无测量回调时只保留一行可点击区域，绝不按字符宽度推算更多行。
+      bodyHeight = NODE_CARD_BODY_LINE_HEIGHT
+    }
+  }
+  const bodyLines: number = bodyHeight > 0
+    ? Math.max(1, Math.min(
+      NODE_CARD_BODY_PREVIEW_MAX_LINES,
+      Math.round(bodyHeight / NODE_CARD_BODY_LINE_HEIGHT)
+    ))
+    : 0
+  const hasBody: boolean = body.length > 0
+  let height: number = NODE_CARD_PADDING * 2 + titleHeight
   if (hasBody) {
-    height += NODE_CARD_TITLE_BODY_GAP + bodyLines * NODE_CARD_BODY_LINE_HEIGHT
+    height += NODE_CARD_TITLE_BODY_GAP + bodyHeight
   }
   return {
     width: NODE_CARD_WIDTH,
@@ -237,8 +205,11 @@ export function measureStarMapNodeCardByContent(
  * 计算一个普通节点的卡片度量。布局、UI 渲染、创建时的安全区 clamp 都走这里，
  * 禁止再各自按固定 160×80 或另一套字符宽度公式计算。
  */
-export function measureStarMapNodeCard(node: StarMapNode): StarMapNodeCardMetrics {
-  return measureStarMapNodeCardByContent(node.title, node.content)
+export function measureStarMapNodeCard(
+  node: StarMapNode,
+  measureTextHeight?: NodeTextHeightMeasure
+): StarMapNodeCardMetrics {
+  return measureStarMapNodeCardByContent(node.title, node.content, measureTextHeight)
 }
 
 // ─── Freeform 布局 ───
@@ -254,10 +225,13 @@ export function measureStarMapNodeCard(node: StarMapNode): StarMapNodeCardMetric
  * @param nodes 星图节点列表（每个节点有 position.x/y）
  * @returns 平台层布局节点列表
  */
-export function buildFreeformLayout(nodes: StarMapNode[]): PlatformLayoutNode[] {
+export function buildFreeformLayout(
+  nodes: StarMapNode[],
+  measureTextHeight?: NodeTextHeightMeasure
+): PlatformLayoutNode[] {
   const result: PlatformLayoutNode[] = []
   for (const node of nodes) {
-    const metrics: StarMapNodeCardMetrics = measureStarMapNodeCard(node)
+    const metrics: StarMapNodeCardMetrics = measureStarMapNodeCard(node, measureTextHeight)
     result.push({
       nodeId: node.id,
       x: node.position.x,

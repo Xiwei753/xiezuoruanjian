@@ -140,7 +140,7 @@ import {
   buildFreeformLayout, buildEmbedLayoutNodes, applyFreeformLayout,
   DEFAULT_EMBED_DIAMETER,
   DEFAULT_NODE_RADIUS, measureStarMapNodeCard, measureStarMapNodeCardByContent,
-  StarMapNodeCardMetrics,
+  StarMapNodeCardMetrics, NodeTextHeightMeasure,
   NODE_CARD_PADDING, NODE_CARD_TITLE_FONT_SIZE, NODE_CARD_TITLE_LINE_HEIGHT,
   NODE_CARD_TITLE_MAX_LINES, NODE_CARD_BODY_FONT_SIZE, NODE_CARD_BODY_LINE_HEIGHT,
   NODE_CARD_BODY_PREVIEW_MAX_LINES, NODE_CARD_TITLE_BODY_GAP,
@@ -192,8 +192,15 @@ interface StarMapNodeEditDialogArgs {
   initialTitle: string
   initialBody: string
   showBody: boolean
-  onSave: (title: string, body: string) => void
+  /** 返回 null 表示保存成功；返回字符串表示失败原因，对话框保持打开并显示。 */
+  onSave: (title: string, body: string) => Promise<string | null>
   onCancel: () => void
+}
+
+/** 节点编辑保存结果：失败时 message 交给对话框展示，草稿不销毁。 */
+interface StarMapNodeSaveResult {
+  success: boolean
+  message: string
 }
 
 /**
@@ -208,14 +215,34 @@ struct StarMapNodeEditDialog {
   @Prop initialTitle: string = ''
   @Prop initialBody: string = ''
   @Prop showBody: boolean = true
-  onSave: (title: string, body: string) => void = (_title: string, _body: string) => {}
+  onSave: (title: string, body: string) => Promise<string | null> =
+    (_title: string, _body: string) => Promise.resolve<string | null>(null)
   onCancel: () => void = () => {}
   @State inputTitle: string = ''
   @State inputBody: string = ''
+  @State saving: boolean = false
+  @State errorMessage: string = ''
 
   aboutToAppear() {
     this.inputTitle = this.initialTitle
     this.inputBody = this.initialBody
+  }
+
+  private async save(): Promise<void> {
+    if (this.saving || this.inputTitle.trim().length === 0) {
+      return
+    }
+    this.saving = true
+    this.errorMessage = ''
+    // 名称允许 trim；正文字段不 trim，原样交给 Core。
+    const error: string | null = await this.onSave(this.inputTitle, this.inputBody)
+    if (error === null) {
+      // 保存成功才关闭窗口；关闭后组件会被销毁，不再写状态。
+      this.onCancel()
+      return
+    }
+    this.saving = false
+    this.errorMessage = error
   }
 
   build() {
@@ -236,8 +263,12 @@ struct StarMapNodeEditDialog {
           .height(COMPACT_TEXT_INPUT_HEIGHT_VP)
           .fontSize(16)
           .borderRadius(DesignTokens.inputFieldRadius)
+          .enabled(!this.saving)
           .onChange((value: string) => {
             this.inputTitle = value
+            if (this.errorMessage.length > 0) {
+              this.errorMessage = ''
+            }
           })
 
         if (this.showBody) {
@@ -255,28 +286,40 @@ struct StarMapNodeEditDialog {
             .fontSize(14)
             .maxLines(9999)
             .borderRadius(DesignTokens.inputFieldRadius)
+            .enabled(!this.saving)
             .onChange((value: string) => {
               this.inputBody = value
+              if (this.errorMessage.length > 0) {
+                this.errorMessage = ''
+              }
             })
+        }
+
+        if (this.errorMessage.length > 0) {
+          Text(this.errorMessage)
+            .width('100%')
+            .fontSize(12)
+            .fontColor($r('sys.color.ohos_id_color_warning'))
+            .margin({ top: 8 })
         }
 
         Row() {
           Button($r('app.string.cancel'))
             .fontSize(14)
             .height(36)
+            .enabled(!this.saving)
             .onClick(() => {
               this.onCancel()
             })
 
           Blank()
 
-          Button($r('app.string.save'))
+          Button(this.saving ? $r('app.string.saving') : $r('app.string.save'))
             .fontSize(14)
             .height(36)
-            .enabled(this.inputTitle.trim().length > 0)
+            .enabled(!this.saving && this.inputTitle.trim().length > 0)
             .onClick(() => {
-              // 名称允许 trim；正文字段不 trim，原样交给 Core。
-              this.onSave(this.inputTitle, this.inputBody)
+              void this.save()
             })
         }
         .width('100%')
@@ -1484,7 +1527,7 @@ private refitAfterContentAdded(): void {
       this.localEdgeRenders = []
       return
     }
-    this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes)
+    this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes, this.nodeTextHeightMeasure())
     this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
     this.recomputeGeometry()
   }
@@ -2017,6 +2060,44 @@ private refitAfterContentAdded(): void {
   }
 
   /**
+   * 节点卡片文字的真实排版高度（vp，#984）。
+   *
+   * 必须和 `StarMapNodeItem` 里的 Text 使用同一套字号 / 行高 / 最大行数 / 字重，
+   * 再交给 ArkUI 的 MeasureUtils 排版。布局、命中、边端点、概览都读这份结果，
+   * 不再按字符宽度估算行数。
+   */
+  private measureNodeTextHeight(
+    text: string,
+    fontSize: number,
+    lineHeight: number,
+    maxWidth: number,
+    maxLines: number,
+    fontWeight: number
+  ): number {
+    if (text.length === 0 || maxWidth <= 0) {
+      return 0
+    }
+    const uiContext: UIContext = this.getUIContext()
+    const size: SizeOptions = uiContext.getMeasureUtils().measureTextSize({
+      textContent: text,
+      constraintWidth: maxWidth,
+      fontSize: fontSize,
+      lineHeight: lineHeight,
+      maxLines: maxLines,
+      fontWeight: fontWeight
+    })
+    return uiContext.px2vp(size.height)
+  }
+
+  /** 传给布局模块的测量回调；箭头函数保留 this，避免方法引用丢失 UIContext。 */
+  private nodeTextHeightMeasure(): NodeTextHeightMeasure {
+    return (text: string, fontSize: number, lineHeight: number, maxWidth: number,
+      maxLines: number, fontWeight: number): number => {
+      return this.measureNodeTextHeight(text, fontSize, lineHeight, maxWidth, maxLines, fontWeight)
+    }
+  }
+
+  /**
    * 节点卡片宽度（#984）：优先读平台布局里该节点的 width，保证 UI 与命中 / 边端点
    * 用的是同一个矩形；布局尚未建立时退回同一份度量函数，绝不另写一套尺寸。
    */
@@ -2025,7 +2106,7 @@ private refitAfterContentAdded(): void {
     if (layoutNode !== undefined) {
       return layoutNode.width
     }
-    return measureStarMapNodeCard(node).width
+    return measureStarMapNodeCard(node, this.nodeTextHeightMeasure()).width
   }
 
   /** 节点卡片高度（#984）：取自平台布局矩形，布局未建立时退回同一份度量函数。 */
@@ -2034,7 +2115,7 @@ private refitAfterContentAdded(): void {
     if (layoutNode !== undefined) {
       return layoutNode.height
     }
-    return measureStarMapNodeCard(node).height
+    return measureStarMapNodeCard(node, this.nodeTextHeightMeasure()).height
   }
 
   /**
@@ -2088,9 +2169,11 @@ private refitAfterContentAdded(): void {
         initialTitle: node.title,
         initialBody: canEditBody ? (node.content.body ?? '') : '',
         showBody: canEditBody,
-        onSave: (title: string, body: string) => {
-          this.closeNodeEditDialog()
-          void this.saveNodeEdits(nodeId, title, body, canEditBody)
+        onSave: async (title: string, body: string): Promise<string | null> => {
+          // 保存成功由对话框关闭；失败把错误带回对话框，输入草稿保持不变。
+          const result: StarMapNodeSaveResult =
+            await this.saveNodeEdits(nodeId, title, body, canEditBody)
+          return result.success ? null : result.message
         },
         onCancel: () => {
           this.closeNodeEditDialog()
@@ -2107,7 +2190,8 @@ private refitAfterContentAdded(): void {
     this.getUIContext().getPromptAction().openCustomDialog(content, {
       alignment: DialogAlignment.Center,
       maskColor: '#80000000',
-      autoCancel: true,
+      // 保存期间不能让点击遮罩把对话框和草稿一起带走；退出必须走取消/保存。
+      autoCancel: false,
       onDidDisappear: () => {
         if (this.nodeEditDialogContent === content) {
           this.nodeEditDialogContent = null
@@ -2129,27 +2213,45 @@ private refitAfterContentAdded(): void {
   /**
    * 保存节点名称 / 正文（#984）。
    *
-   * - empty / inline：patch 带 `content: { type: 'inline', summary, body }`，body 不 trim；
+   * - 名称与正文分别更新：只有正文确实变化才发 `content: { type: 'inline', summary, body }`，
+   *   只改名称只发 title；body 不 trim；
    * - chapterRef / entityRef / externalRef：只发 title，content 字段保持 undefined，
    *   绝不会被覆盖成 inline。
+   * 返回 {success,message}：失败由对话框保留草稿并展示 message。
    * 成功后优先采用 Core 返回的更新后节点，更新本地 graph 并重算几何；
    * 卡片高度会随正文行数变化，所以必须重新布局，不能只改文字。
    */
-  async saveNodeEdits(nodeId: string, title: string, body: string, editContent: boolean) {
+  async saveNodeEdits(
+    nodeId: string,
+    title: string,
+    body: string,
+    editContent: boolean
+  ): Promise<StarMapNodeSaveResult> {
     if (!this.graph || !this.bridge) {
-      return
+      return { success: false, message: '星图尚未加载，暂时无法保存' }
     }
     const node: StarMapNode | undefined = this.graph.nodes.find((item: StarMapNode) => item.id === nodeId)
     if (node === undefined) {
-      return
+      return { success: false, message: '节点不存在，保存失败' }
     }
     const trimmedTitle: string = title.trim()
     if (trimmedTitle.length === 0) {
-      return
+      return { success: false, message: '名称不能为空' }
     }
-    const patch: StarMapNodeUpdatePatch = { title: trimmedTitle }
+    // 名称与正文分别更新：只有正文确实变化才发送 content。
+    // 原样比较（含换行），不 trim；empty 节点新增正文时才转 inline。
+    const titleChanged: boolean = trimmedTitle !== node.title
+    const originalBody: string = node.content !== null ? (node.content.body ?? '') : ''
+    const bodyChanged: boolean = editContent && body !== originalBody
+    if (!titleChanged && !bodyChanged) {
+      return { success: true, message: '' }
+    }
+    const patch: StarMapNodeUpdatePatch = {}
+    if (titleChanged) {
+      patch.title = trimmedTitle
+    }
     let nextContent: StarMapNodeContent = node.content
-    if (editContent) {
+    if (bodyChanged) {
       nextContent = this.buildInlineNodeContent(node, body)
       patch.content = nextContent
     }
@@ -2157,11 +2259,14 @@ private refitAfterContentAdded(): void {
     if (!result.success) {
       hilog.error(0x0000, 'StarMapScene',
         `saveNodeEdits failed: ${nodeId}, ${result.errorCode ?? ''}, ${result.userMessage}`)
-      return
+      return {
+        success: false,
+        message: result.userMessage ?? '保存失败，请重试'
+      }
     }
     // await 之后重新取图：期间 Scene 可能已经被父层移除 / 换图。
     if (!this.graph) {
-      return
+      return { success: false, message: '星图已切换，保存未完成' }
     }
     const currentGraph: StarMapGraph = this.graph
     const updated: StarMapNode = result.data !== undefined && result.data !== null
@@ -2204,12 +2309,13 @@ private refitAfterContentAdded(): void {
       links: currentGraph.links,
       hyperlinks: currentGraph.hyperlinks
     }
-    this.platformLayoutNodes = buildFreeformLayout(syncedNodes)
+    this.platformLayoutNodes = buildFreeformLayout(syncedNodes, this.nodeTextHeightMeasure())
     this.recomputeGeometry()
     // 卡片高度变了：子 Scene 里还要重新塞回父 Embed 的安全区（根 Scene 无局部 fit）。
     this.refitAfterContentAdded()
     hilog.info(0x0000, 'StarMapScene',
-      `saveNodeEdits ok: ${nodeId}, title=${trimmedTitle}, content=${editContent ? 'inline' : 'unchanged'}`)
+      `saveNodeEdits ok: ${nodeId}, title=${trimmedTitle}, content=${bodyChanged ? 'inline' : 'unchanged'}`)
+    return { success: true, message: '' }
   }
 
   /**
@@ -2249,7 +2355,7 @@ private refitAfterContentAdded(): void {
     // #984：新建节点是文字卡片，安全区 clamp 用与布局 / UI 同一份标题 + 正文度量，
     // 不能再拿固定的 DEFAULT_NODE_WIDTH / DEFAULT_NODE_HEIGHT 去夹。
     const cardMetrics: StarMapNodeCardMetrics =
-      measureStarMapNodeCardByContent(trimmed, null)
+      measureStarMapNodeCardByContent(trimmed, null, this.nodeTextHeightMeasure())
     const clampedNode = this.clampItemToLocalSafeArea(candidate.x, candidate.y,
       cardMetrics.width, cardMetrics.height)
     const position: StarMapPoint = {
@@ -2268,7 +2374,7 @@ private refitAfterContentAdded(): void {
           links: this.graph.links,
           hyperlinks: this.graph.hyperlinks
         }
-        this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes)
+        this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes, this.nodeTextHeightMeasure())
         this.recomputeGeometry()
         // 子层新增内容后重算 local fit：空子星图首次 fitView 时没有内容，fitScale = 1，
         // 新建的节点 / 子星图会大过当前安全区。全局相机不受影响（#818 复审）

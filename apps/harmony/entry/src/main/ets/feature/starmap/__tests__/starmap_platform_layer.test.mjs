@@ -48,70 +48,11 @@ const DEFAULT_EMBED_DIAMETER = 200
 const GRID_HORIZONTAL_GAP = 40
 const GRID_VERTICAL_GAP = 40
 
-function estimatedCharWidthRatio(charCode) {
-  if (charCode === 32) {
-    return 0.4
-  }
-  if (charCode === 9) {
-    return 1.0
-  }
-  if (charCode >= 0x1100 && (
-    charCode <= 0x115F ||
-    (charCode >= 0x2E80 && charCode <= 0xA4CF) ||
-    (charCode >= 0xAC00 && charCode <= 0xD7A3) ||
-    (charCode >= 0xF900 && charCode <= 0xFAFF) ||
-    (charCode >= 0xFE30 && charCode <= 0xFE4F) ||
-    (charCode >= 0xFF00 && charCode <= 0xFF60) ||
-    (charCode >= 0xFFE0 && charCode <= 0xFFE6)
-  )) {
-    return 1.0
-  }
-  return 0.62
-}
-
-function estimateWrappedLineCount(text, fontSize, maxWidth, maxLines) {
-  if (text.length === 0 || maxWidth <= 0 || maxLines <= 0) {
-    return 0
-  }
-  let lines = 1
-  let usedWidth = 0
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i)
-    if (code === 13) {
-      if (i + 1 < text.length && text.charCodeAt(i + 1) === 10) {
-        continue
-      }
-      lines += 1
-      usedWidth = 0
-      if (lines >= maxLines) {
-        return maxLines
-      }
-      continue
-    }
-    if (code === 10) {
-      lines += 1
-      usedWidth = 0
-      if (lines >= maxLines) {
-        return maxLines
-      }
-      continue
-    }
-    const charWidth = estimatedCharWidthRatio(code) * fontSize
-    if (usedWidth > 0 && usedWidth + charWidth > maxWidth) {
-      lines += 1
-      usedWidth = charWidth
-      if (lines >= maxLines) {
-        return maxLines
-      }
-    } else {
-      usedWidth += charWidth
-    }
-  }
-  return Math.min(lines, maxLines)
-}
-
 // ── 被测规格：measureStarMapNodeCard（#984）──
-function measureStarMapNodeCard(node) {
+//
+// 高度只来自平台文本测量回调，不在测试里另外按字符宽度猜行数。
+// 没有回调时和生产回退路径一致：只保留最小高度，绝不推算多行。
+function measureStarMapNodeCard(node, measureTextHeight) {
   const title = node.title ?? ''
   const body = node.content !== null && node.content !== undefined &&
     (node.content.type === 'inline' || node.content.type === 'empty')
@@ -119,13 +60,23 @@ function measureStarMapNodeCard(node) {
   const titleMaxWidth =
     NODE_CARD_WIDTH - NODE_CARD_PADDING * 2 - NODE_CARD_ACCENT_SIZE - NODE_CARD_ACCENT_GAP
   const bodyMaxWidth = NODE_CARD_WIDTH - NODE_CARD_PADDING * 2
-  const titleLines = Math.max(1, estimateWrappedLineCount(
-    title, NODE_CARD_TITLE_FONT_SIZE, titleMaxWidth, NODE_CARD_TITLE_MAX_LINES))
-  const bodyLines = estimateWrappedLineCount(
-    body, NODE_CARD_BODY_FONT_SIZE, bodyMaxWidth, NODE_CARD_BODY_PREVIEW_MAX_LINES)
-  let height = NODE_CARD_PADDING * 2 + titleLines * NODE_CARD_TITLE_LINE_HEIGHT
-  if (bodyLines > 0) {
-    height += NODE_CARD_TITLE_BODY_GAP + bodyLines * NODE_CARD_BODY_LINE_HEIGHT
+  let titleHeight = NODE_CARD_TITLE_LINE_HEIGHT
+  if (title.length > 0 && measureTextHeight !== undefined) {
+    titleHeight = Math.max(0, measureTextHeight(
+      title, NODE_CARD_TITLE_FONT_SIZE, NODE_CARD_TITLE_LINE_HEIGHT,
+      titleMaxWidth, NODE_CARD_TITLE_MAX_LINES, 500))
+  }
+  let bodyHeight = 0
+  if (body.length > 0) {
+    bodyHeight = measureTextHeight !== undefined
+      ? Math.max(0, measureTextHeight(
+        body, NODE_CARD_BODY_FONT_SIZE, NODE_CARD_BODY_LINE_HEIGHT,
+        bodyMaxWidth, NODE_CARD_BODY_PREVIEW_MAX_LINES, 400))
+      : NODE_CARD_BODY_LINE_HEIGHT
+  }
+  let height = NODE_CARD_PADDING * 2 + titleHeight
+  if (body.length > 0) {
+    height += NODE_CARD_TITLE_BODY_GAP + bodyHeight
   }
   return {
     width: NODE_CARD_WIDTH,
@@ -139,10 +90,10 @@ const CAMERA_SCALE_MAX = 1e5
 const ZOOM_FACTOR = 1.2
 
 // ── 被测规格：buildFreeformLayout ──
-function buildFreeformLayout(nodes) {
+function buildFreeformLayout(nodes, measureTextHeight) {
   const result = []
   for (const node of nodes) {
-    const metrics = measureStarMapNodeCard(node)
+    const metrics = measureStarMapNodeCard(node, measureTextHeight)
     result.push({
       nodeId: node.id,
       x: node.position.x,
@@ -653,9 +604,13 @@ console.log('3. 自动网格布局：保留 nodeId 与尺寸，居中排布')
   const withBody = buildFreeformLayout([{
     id: 'body', position: { x: 0, y: 0 }, title: '标题',
     content: { type: 'inline', body: '第一行\n第二行\n第三行' }
-  }])
+  }], (text, fontSize, lineHeight, maxWidth, maxLines) => {
+    // 测试用测量桩：按显式换行数返回排版高度，代表平台真实测量结果。
+    const lines = Math.min(maxLines, Math.max(1, text.split('\n').length))
+    return lines * lineHeight
+  })
   assert(withBody[0].width === 208 && withBody[0].height > 64,
-    '多行正文让卡片高度按内容增长，position 仍是左上角')
+    '多行正文让卡片高度按真实排版结果增长，position 仍是左上角')
 }
 
 console.log('4. position patch 写回：nodeId + 新坐标')
