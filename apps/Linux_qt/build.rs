@@ -565,6 +565,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StarMapGraphController.qml");
     // Issue #984: 普通节点卡片统一度量函数
     println!("cargo:rerun-if-changed=qml/StarMapNodeMetrics.js");
+    // Issue #984: 平台文本排版测量组件
+    println!("cargo:rerun-if-changed=qml/StarMapNodeMeasurer.qml");
     // Issue #798: 星图鼠标交互状态机
     println!("cargo:rerun-if-changed=qml/StarMapInteractionController.qml");
     // Issue #796 评论 5886483653: 子星图 Embed 组件

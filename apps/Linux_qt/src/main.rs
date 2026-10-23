@@ -150,6 +150,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapGraphController.qml" as "StarMapGraphController.qml",
     // Issue #984: 普通节点「名称 + 正文」卡片的统一度量函数（QML/JS 共用）
     "qml/StarMapNodeMetrics.js" as "StarMapNodeMetrics.js",
+    // Issue #984: 平台文本排版测量（隐藏 Text.forceLayout，图级快照共用）
+    "qml/StarMapNodeMeasurer.qml" as "StarMapNodeMeasurer.qml",
     // Issue #798: 星图鼠标交互状态机（瞬时手势状态，不读写 Core）
     "qml/StarMapInteractionController.qml" as "StarMapInteractionController.qml",
     // Issue #814 评论 5935285879: 递归树共享选中状态控制器

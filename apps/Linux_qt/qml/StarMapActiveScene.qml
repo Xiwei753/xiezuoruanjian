@@ -146,10 +146,18 @@ Item {
         starmapBackendRef: scene.starmapBackendRef
         pathKey: scene.scenePathKey
         selectionController: scene.selectionController
-        onGraphChanged: scene.refreshEdges()
+        onGraphChanged: {
+            scene.refreshEdges()
+            scene.ensureEditingNodeExists()
+        }
         onSelectionCleared: scene.selectionCleared()
         onNodeSelected: function(node) { scene.nodeSelected(node) }
         onEdgeSelected: function(edge) { scene.edgeSelected(edge) }
+    }
+
+    // 隐藏排版器：不依赖节点是否显示在屏幕上。
+    StarMapNodeMeasurer {
+        id: nodeMeasurer
     }
 
     // 切换活动画布时显式落 id/pathKey 再加载：不能只依赖绑定求值顺序，
@@ -161,13 +169,19 @@ Item {
     }
 
     onStarmapIdChanged: {
-        inlineEditingKey = ""
+        // 正常切图由 Canvas 先 flushPendingNodeEdit()；能走到这里说明旧画面
+        // 已被替换，不能再把旧草稿写进新图。显式结束会话，不留悬挂输入层。
+        finishActiveNodeEdit()
         reloadActiveGraph()
     }
     onScenePathKeyChanged: {
         graphController.pathKey = scene.scenePathKey
     }
-    Component.onCompleted: reloadActiveGraph()
+    Component.onCompleted: {
+        // 保证测量器先就位，首帧加载就按真实排版建图级快照。
+        graphController.textMeasurer = nodeMeasurer
+        reloadActiveGraph()
+    }
 
     readonly property bool ready: starmapId !== "" && graphController.graphData !== null
     readonly property string errorMessage: graphController.errorMessage
@@ -177,26 +191,47 @@ Item {
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
 
-    // 内联编辑汇总键（经 menuHost 汇总到根 Canvas，Router 在编辑期间让位给 TextInput）
-    property string inlineEditingKey: ""
+    // ── Issue #984：场景级唯一内联编辑会话 ──
+    // 草稿只在这里保存一份；delegate 只负责显示和发出“编辑此节点”的意图。
+    // 打开另一个节点前先提交当前节点，失败则继续留在原节点，避免多节点同时
+    // 编辑、切画布只 flush 最后一个而丢掉其它草稿。
+    property string editingNodeId: ""
+    property string editingTitleDraft: ""
+    property string editingBodyDraft: ""
+    property string editingError: ""
+    property bool editingSaving: false
+    readonly property string inlineEditingKey:
+        editingNodeId !== "" ? scenePathKey + "/node_" + editingNodeId : ""
 
+    onInlineEditingKeyChanged: {
+        if (menuHost)
+            menuHost.setInlineEditingKey(inlineEditingKey)
+    }
+
+    function finishActiveNodeEdit() {
+        editingNodeId = ""
+        editingTitleDraft = ""
+        editingBodyDraft = ""
+        editingError = ""
+        editingSaving = false
+    }
+
+    // 兼容旧调用点：true = 进入编辑（先提交上一个），false = 结束该节点会话。
     function noteInlineEditing(nodeId, editing) {
-        // 过渡期间的旧画面层只绘制：不认领内联编辑汇总键。
         if (!interactive)
             return
-        var key = scenePathKey + "/node_" + nodeId
         if (editing) {
-            inlineEditingKey = key
-            if (menuHost)
-                menuHost.setInlineEditingKey(key)
-        } else {
-            if (inlineEditingKey === key)
-                inlineEditingKey = ""
-            // delegate 被销毁（切画布 / 删节点 / 掉档）时本层键可能已被换画布清空，
-            // 但根 Canvas 的汇总键只要还是这个 key 就必须清掉，否则 Router 永久让位。
-            if (menuHost && menuHost.inlineEditingKey === key)
-                menuHost.setInlineEditingKey("")
+            beginInlineEdit(nodeId)
+        } else if (editingNodeId === nodeId) {
+            finishActiveNodeEdit()
         }
+    }
+
+    // 正在编辑的节点从图里消失（删除 / 外部刷新）时，先结束会话，
+    // 不能让稳定编辑器挂着已不存在的节点。
+    function ensureEditingNodeExists() {
+        if (editingNodeId !== "" && !graphController.getNode(editingNodeId))
+            finishActiveNodeEdit()
     }
 
     // Issue #814 评论 5935346839: 单层交互边界日志入口，不进连续移动热路径。
@@ -370,7 +405,12 @@ Item {
     function selectEmbed(instanceId) { graphController.selectEmbed(instanceId) }
     function clearLayerSelection() { graphController.clearSelection() }
     function updateNodeTitle(nodeId, title) { graphController.updateNode(nodeId, { title: title }) }
-    function deleteNode(nodeId) { graphController.deleteNode(nodeId) }
+    function deleteNode(nodeId) {
+        // 删除是明确丢弃该节点；先结束它的编辑会话，避免编辑器悬挂。
+        if (editingNodeId === nodeId)
+            finishActiveNodeEdit()
+        graphController.deleteNode(nodeId)
+    }
     function updateEdgeLabel(edgeId, label) { graphController.updateEdge(edgeId, { label: label }) }
     function deleteEdge(edgeId) { graphController.deleteEdge(edgeId) }
     function updateEmbedLabel(instanceId, label) { graphController.updateEmbed(instanceId, { label: label }) }
@@ -397,28 +437,18 @@ Item {
         return graphController.updateNode(nodeId, patch)
     }
 
-    // Issue #984：显示层 Text 实测高度回传控制器；命中 / 边端点 / 概览共用这份值。
-    // 编辑期间不让其它卡片的测量结果重建 nodesModel：Repeater 重建会销毁正在编辑的
-    // delegate，输入草稿跟着消失；退出编辑后 displayLayer 重新可见会再报一次。
-    function reportNodeMeasuredSize(nodeId, height) {
-        if (inlineEditingKey !== "")
-            return
-        graphController.reportNodeMeasuredSize(nodeId, height)
-    }
-
     // 切换画布前由 Canvas 调用：有未提交编辑时先尝试保存。
     // 返回 false 表示保存失败，调用方应中止切换，不能静默丢草稿。
     function flushPendingNodeEdit() {
-        if (inlineEditingKey === "")
+        if (editingNodeId === "")
             return true
-        var prefix = scenePathKey + "/node_"
-        if (inlineEditingKey.indexOf(prefix) !== 0)
+        return editOverlay.commitEdit()
+    }
+
+    function commitActiveNodeEdit() {
+        if (editingNodeId === "")
             return true
-        var nodeId = inlineEditingKey.substring(prefix.length)
-        var item = nodeItemOf(nodeId)
-        if (!item)
-            return true
-        return item.commitEdit()
+        return editOverlay.commitEdit()
     }
 
     // Repeater.itemAt() 的静态类型是 QQuickItem（qmllint 会把这些 delegate 属性
@@ -440,13 +470,27 @@ Item {
         return null
     }
 
-    // 内联编辑入口（右键菜单"编辑" / Router 双击）：放进节点框内的 TextInput。
+    // 场景级唯一编辑入口（右键菜单"编辑" / Router 双击）。
+    // 已有别的节点在编辑时，先提交它；失败则保持原节点，不切到新节点。
     function beginInlineEdit(nodeId) {
         if (interactionController && interactionController.pointerMode === "pinch")
-            return
-        var it = nodeItemOf(nodeId)
-        if (it)
-            it.beginEdit()
+            return false
+        if (editingNodeId === nodeId) {
+            editOverlay.focusCurrent()
+            return true
+        }
+        if (editingNodeId !== "" && !commitActiveNodeEdit())
+            return false
+        var node = graphController.getNode(nodeId)
+        if (!node)
+            return false
+        editingNodeId = nodeId
+        editingTitleDraft = node.title || ""
+        editingBodyDraft = StarMapNodeMetrics.bodyOf(node)
+        editingError = ""
+        editingSaving = false
+        Qt.callLater(editOverlay.activate)
+        return true
     }
 
     // ── 子图入口的进入连续性信息（Canvas 穿越子画布时用）──
@@ -902,8 +946,8 @@ Item {
 
     function overlapsExistingNode(x, y, w, h, padding) {
         var nodes = graphController.nodesModel
-        for (var i = 0; i < nodes.length; i++) {
-            var n = nodes[i]
+        for (var i = 0; i < nodes.count; i++) {
+            var n = nodes.get(i)
             var nx = n.x - padding
             var ny = n.y - padding
             var nw = n.width + padding * 2
@@ -1053,15 +1097,15 @@ Item {
         }
     }
 
-    // ── 节点：矢量圆角矩形 + 实时 TextInput（内联编辑）──
+    // ── 节点：矢量圆角矩形卡片（编辑输入在场景级稳定浮层，见 editOverlay）──
     Repeater {
         id: nodeRepeater
         model: graphController.nodesModel
-        // 正在编辑的节点被销毁（切画布 / 删节点）时不会再发 editingChanged(false)，
-        // 这里主动清掉内联编辑汇总键，否则 Router 会永久让位给文本输入。
+        // 正在编辑的节点被删除 / 模型移除时，场景级会话必须一起结束，
+        // 否则稳定编辑器会继续挂着一个已不存在的节点。
         onItemRemoved: function(index, item) {
-            if (item && item.editing)
-                scene.noteInlineEditing(item.nodeId, false)
+            if (item && item.nodeId === scene.editingNodeId)
+                scene.finishActiveNodeEdit()
         }
 
         delegate: Item {
@@ -1071,15 +1115,8 @@ Item {
 
             readonly property var nodeData: modelData
             readonly property string nodeId: nodeData.id
-            property bool editing: false
             property real _wobbleAnimX: 0
             property real _wobbleAnimY: 0
-            // Issue #984：编辑态草稿。正文保持原始文本，不做 trim。
-            property string editTitleDraft: ""
-            property string editBodyDraft: ""
-            // 保存失败时保留草稿并显示在卡片内；只有成功或用户取消才退出编辑。
-            property string editError: ""
-            property bool saving: false
 
             readonly property bool isSelected: scene.selectionController
                     ? scene.selectionController.matches(scene.scenePathKey, "node", nodeData.id)
@@ -1088,149 +1125,31 @@ Item {
                     ? scene.interactionController.isPressedTarget(scene.scenePathKey, "node", nodeData.id)
                     : false
             readonly property bool isMoving: scene.isMovingNode(nodeData.id)
+            readonly property bool isEditing: scene.editingNodeId === nodeData.id
             readonly property real worldX: isMoving && scene.interactionController
                     ? scene.interactionController.moveX : nodeData.x
             readonly property real worldY: isMoving && scene.interactionController
                     ? scene.interactionController.moveY : nodeData.y
 
-            // Issue #984：普通节点是「名称 + 正文」文字卡片，宽高只认
-            // StarMapNodeMetrics；nodesModel 里的 width/height 也来自同一函数。
+            // Issue #984：宽高来自图级布局快照（由平台文本排版一次性测量），
+            // delegate 不再实测 / 回写 / 维护编辑草稿。
             readonly property real cardWidth: nodeData.width !== undefined
-                    ? nodeData.width : StarMapNodeMetrics.nodeWidth(nodeData)
+                    ? nodeData.width : StarMapNodeMetrics.defaultNodeWidth()
             readonly property real cardHeight: nodeData.height !== undefined
-                    ? nodeData.height : StarMapNodeMetrics.nodeHeight(nodeData, false)
-            readonly property bool bodyEditable: StarMapNodeMetrics.canEditBody(nodeData)
+                    ? nodeData.height : StarMapNodeMetrics.defaultNodeHeight()
             readonly property string bodyText: StarMapNodeMetrics.bodyOf(nodeData)
             readonly property string titleText: nodeData.title && nodeData.title.length > 0
                     ? nodeData.title : qsTr("未命名")
-            // 编辑态是原位置展开的视口限高编辑层：正文在卡片内滚动，
-            // 不按全文行数把 world 几何无限撑大。
-            readonly property real editCardHeight: {
-                var viewportWorld = scene.height > 0 && scene._safeZoom > 0
-                        ? scene.height / scene._safeZoom : StarMapNodeMetrics.EDIT_MAX_HEIGHT
-                // 编辑层是视口内展开的工作区：允许比显示态卡片更矮（正文内部滚动），
-                // 但不能超过视口；只有视口本身极小时才退回最小卡片高度。
-                var limit = Math.min(StarMapNodeMetrics.EDIT_MAX_HEIGHT, viewportWorld - 24)
-                return Math.max(StarMapNodeMetrics.MIN_HEIGHT, limit)
-            }
-            readonly property real currentCardWidth: cardWidth
-            readonly property real currentCardHeight: editing ? editCardHeight : cardHeight
 
             x: scene.worldToScreenX(worldX)
-               + (editing ? 0 : (cardWidth * scene._safeZoom - width) / 2)
+               + (cardWidth * scene._safeZoom - width) / 2
             y: scene.worldToScreenY(worldY)
-               + (editing ? 0 : (cardHeight * scene._safeZoom - height) / 2)
-            width: currentCardWidth * scene._safeZoom * scene._reveal
+               + (cardHeight * scene._safeZoom - height) / 2
+            width: cardWidth * scene._safeZoom * scene._reveal
                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            height: currentCardHeight * scene._safeZoom * scene._reveal
+            height: cardHeight * scene._safeZoom * scene._reveal
                     + scene._revealDotRadius * 2 * (1 - scene._reveal)
             z: 1
-
-            function beginEdit() {
-                if (editing)
-                    return
-                // 先填草稿再进入 editing，避免输入框初始化时闪动。
-                editTitleDraft = nodeData.title || ""
-                editBodyDraft = bodyText
-                editError = ""
-                saving = false
-                titleInput.text = editTitleDraft
-                bodyEdit.text = bodyEditable ? editBodyDraft : ""
-                editing = true
-                titleInput.forceActiveFocus()
-                titleInput.selectAll()
-            }
-            function finishEdit() {
-                editing = false
-                titleInput.focus = false
-                bodyEdit.focus = false
-                editError = ""
-                saving = false
-                editTitleDraft = nodeData.title || ""
-                editBodyDraft = bodyText
-            }
-            function cancelEdit() {
-                if (!editing)
-                    return
-                // 取消是唯一明确丢弃草稿的路径。
-                finishEdit()
-            }
-            function moveFocusToBodyOrCommit() {
-                if (bodyEditable) {
-                    bodyEdit.forceActiveFocus()
-                    bodyEdit.cursorPosition = bodyEdit.text.length
-                } else {
-                    commitEdit()
-                }
-            }
-            // 返回值：true = 已保存或无需保存，false = 保存失败，编辑态与草稿保留。
-            function commitEdit() {
-                if (!editing)
-                    return true
-                if (saving)
-                    return false
-                // Issue #984：中文输入法预编辑（拼音/候选）期间不得提交，
-                // 否则会把未上屏的 composing 文本当成正文落盘。
-                if (titleInput.inputMethodComposing || bodyEdit.inputMethodComposing)
-                    return false
-
-                var nextTitle = titleInput.text.trim()
-                // 名称 trim 后为空：留在编辑态提示，不能把草稿丢掉。
-                if (nextTitle.length === 0) {
-                    editError = qsTr("名称不能为空")
-                    titleInput.forceActiveFocus()
-                    return false
-                }
-                // 正文不 trim：换行、空行、段落空白原样保存。
-                var nextBody = bodyEditable ? bodyEdit.text : null
-                var titleChanged = nextTitle !== (nodeData.title || "")
-                var bodyChanged = bodyEditable && nextBody !== bodyText
-                if (!titleChanged && !bodyChanged) {
-                    finishEdit()
-                    return true
-                }
-
-                saving = true
-                editError = ""
-                // 只改名称时 title 有值、body 传 null；只改正文时 title 传 null。
-                // 引用类型永远 body=null，content 不进 patch。
-                var result = scene.commitNodeEdit(nodeData.id,
-                                                  titleChanged ? nextTitle : null,
-                                                  bodyChanged ? nextBody : null)
-                saving = false
-                if (!result || result.success !== true) {
-                    editError = result && result.message
-                            ? result.message : qsTr("保存失败，请重试")
-                    return false
-                }
-                finishEdit()
-                return true
-            }
-            // Issue #984：显示层按当前 Text 的真实排版回传高度（world px）。
-            function reportMeasuredHeight() {
-                if (!editing && displayLayer.visible && scene._reveal >= 0.999
-                        && scene._safeZoom > 0 && titleLabel.contentHeight >= 0) {
-                    var scale = scene._textScale
-                    var titleHeight = Math.min(titleLabel.contentHeight,
-                            StarMapNodeMetrics.TITLE_MAX_LINES
-                            * StarMapNodeMetrics.TITLE_LINE_HEIGHT * scale)
-                    var bodyHeight = nodeItem.bodyText.length > 0
-                            ? Math.min(bodyPreview.contentHeight,
-                                  StarMapNodeMetrics.PREVIEW_MAX_LINES
-                                  * StarMapNodeMetrics.BODY_LINE_HEIGHT * scale)
-                            : 0
-                    var screenHeight = StarMapNodeMetrics.PADDING * 2 * scene._safeZoom
-                            + titleHeight
-                            + (bodyHeight > 0
-                               ? StarMapNodeMetrics.TITLE_BODY_GAP * scale + bodyHeight : 0)
-                    var worldHeight = Math.ceil(screenHeight / scene._safeZoom)
-                    scene.reportNodeMeasuredSize(nodeItem.nodeId, worldHeight)
-                }
-            }
-            onEditingChanged: scene.noteInlineEditing(nodeData.id, editing)
-            // 模型重建 / 标题或正文替换后，即便 contentHeight 恰好没变也要重报一次，
-            // 否则 updateNode 清掉的缓存会让卡片停在最小高度。
-            onNodeDataChanged: Qt.callLater(nodeItem.reportMeasuredHeight)
 
             Rectangle {
                 id: visualNode
@@ -1238,31 +1157,25 @@ Item {
                 radius: Math.min(scene.dt.radiusSm * scene._safeZoom,
                                  Math.min(width, height) / 2)
                 color: scene._surfaceContainer
-                border.color: nodeItem.isSelected || nodeItem.editing ? scene._accent : scene._border
-                border.width: (nodeItem.isSelected || nodeItem.editing) ? 2 : 1
+                border.color: nodeItem.isSelected || nodeItem.isEditing
+                        ? scene._accent : scene._border
+                border.width: (nodeItem.isSelected || nodeItem.isEditing) ? 2 : 1
                 clip: true
 
                 transform: Translate {
-                    x: (nodeItem.isSelected || nodeItem.isPressed || nodeItem.editing)
+                    x: (nodeItem.isSelected || nodeItem.isPressed || nodeItem.isEditing)
                        ? 0 : nodeItem._wobbleAnimX
-                    y: (nodeItem.isSelected || nodeItem.isPressed || nodeItem.editing)
+                    y: (nodeItem.isSelected || nodeItem.isPressed || nodeItem.isEditing)
                        ? 0 : nodeItem._wobbleAnimY
                 }
 
-                // ── 显示态：名称在上，正文预览在下 ──
+                // 显示态：名称在上，正文预览在下。编辑输入层是场景级稳定容器，
+                // 不挂在这里，模型行更新不会销毁正在输入的内容。
                 Item {
                     id: displayLayer
                     anchors.fill: parent
                     anchors.margins: StarMapNodeMetrics.PADDING * scene._safeZoom
-                    visible: !nodeItem.editing
-                             && nodeItem.height >= 18 && scene.detailReveal > 0.6
-                    // 可见 / 宽度 / 字号变化后都要重新取真实排版高度；
-                    // callLater 等 Text 完成本轮布局，避免拿到上一帧的 contentHeight。
-                    onVisibleChanged: {
-                        if (visible)
-                            Qt.callLater(nodeItem.reportMeasuredHeight)
-                    }
-                    onWidthChanged: Qt.callLater(nodeItem.reportMeasuredHeight)
+                    visible: nodeItem.height >= 18 && scene.detailReveal > 0.6
 
                     Column {
                         width: parent.width
@@ -1283,7 +1196,6 @@ Item {
                             elide: Text.ElideRight
                             lineHeightMode: Text.FixedHeight
                             lineHeight: StarMapNodeMetrics.TITLE_LINE_HEIGHT * scene._textScale
-                            onContentHeightChanged: nodeItem.reportMeasuredHeight()
                         }
 
                         Text {
@@ -1300,205 +1212,6 @@ Item {
                             elide: Text.ElideRight
                             lineHeightMode: Text.FixedHeight
                             lineHeight: StarMapNodeMetrics.BODY_LINE_HEIGHT * scene._textScale
-                            onContentHeightChanged: nodeItem.reportMeasuredHeight()
-                            onVisibleChanged: nodeItem.reportMeasuredHeight()
-                        }
-                    }
-                }
-
-                // ── 编辑态：名称单行 + 视口限高的正文滚动区 + 保存/取消 ──
-                Item {
-                    id: editLayer
-                    anchors.fill: parent
-                    anchors.margins: StarMapNodeMetrics.PADDING * scene._safeZoom
-                    visible: nodeItem.editing
-
-                    readonly property real _s: scene._textScale
-                    readonly property real _footerHeight: 26 * _s
-                    readonly property real _errorHeight:
-                        nodeItem.editError.length > 0 ? 17 * _s : 0
-                    readonly property real _titleHeight: Math.max(
-                        StarMapNodeMetrics.TITLE_LINE_HEIGHT * _s, titleInput.implicitHeight)
-                    readonly property real _bodyTop:
-                        _titleHeight + StarMapNodeMetrics.TITLE_BODY_GAP * _s
-                    readonly property real _bodyHeight: Math.max(0,
-                        height - _bodyTop - _footerHeight - _errorHeight)
-
-                    TextInput {
-                        id: titleInput
-                        width: parent.width
-                        height: editLayer._titleHeight
-                        color: scene._textPrimary
-                        font.pixelSize: Math.max(1,
-                            StarMapNodeMetrics.TITLE_FONT_SIZE * scene._textScale)
-                        font.weight: Font.DemiBold
-                        selectByMouse: true
-                        clip: true
-                        padding: 0
-
-                        onTextChanged: {
-                            if (nodeItem.editing) {
-                                nodeItem.editTitleDraft = text
-                                if (nodeItem.editError.length > 0)
-                                    nodeItem.editError = ""
-                            }
-                        }
-                        Keys.onReturnPressed: function(event) {
-                            // IME 预编辑期间不移动焦点 / 不提交，把 Enter 留给候选确认。
-                            if (titleInput.inputMethodComposing)
-                                return
-                            if (event.modifiers & Qt.ControlModifier)
-                                nodeItem.commitEdit()
-                            else
-                                nodeItem.moveFocusToBodyOrCommit()
-                            event.accepted = true
-                        }
-                        Keys.onEnterPressed: function(event) {
-                            if (titleInput.inputMethodComposing)
-                                return
-                            if (event.modifiers & Qt.ControlModifier)
-                                nodeItem.commitEdit()
-                            else
-                                nodeItem.moveFocusToBodyOrCommit()
-                            event.accepted = true
-                        }
-                        Keys.onEscapePressed: function(event) {
-                            nodeItem.cancelEdit()
-                            event.accepted = true
-                        }
-                    }
-
-                    // 引用类型没有可编辑正文，但名称仍可改。
-                    Text {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        y: editLayer._bodyTop
-                        visible: !nodeItem.bodyEditable
-                        text: qsTr("引用内容仅支持修改名称")
-                        color: scene._textMuted
-                        font.pixelSize: Math.max(1,
-                            StarMapNodeMetrics.BODY_FONT_SIZE * scene._textScale)
-                        wrapMode: Text.Wrap
-                    }
-
-                    // 正文区域固定高度 + 内部滚动：全文保留在 TextEdit / 草稿里，
-                    // 不把节点卡片本身撑到视口之外；光标移动时自动跟随滚动。
-                    Flickable {
-                        id: bodyFlick
-                        y: editLayer._bodyTop
-                        width: parent.width
-                        height: editLayer._bodyHeight
-                        visible: nodeItem.bodyEditable
-                        clip: true
-                        contentWidth: width
-                        contentHeight: bodyEdit.contentHeight + 2
-                        boundsBehavior: Flickable.StopAtBounds
-                        flickableDirection: Flickable.VerticalFlick
-                        interactive: contentHeight > height
-
-                        WheelHandler {
-                            onWheel: function(event) {
-                                var maxY = Math.max(0,
-                                    bodyFlick.contentHeight - bodyFlick.height)
-                                if (maxY <= 0)
-                                    return
-                                bodyFlick.contentY = Math.max(0, Math.min(maxY,
-                                    bodyFlick.contentY - event.angleDelta.y))
-                                event.accepted = true
-                            }
-                        }
-
-                        TextEdit {
-                            id: bodyEdit
-                            width: bodyFlick.width
-                            height: Math.max(bodyFlick.height, contentHeight)
-                            color: scene._textPrimary
-                            font.pixelSize: Math.max(1,
-                                StarMapNodeMetrics.BODY_FONT_SIZE * scene._textScale)
-                            wrapMode: TextEdit.Wrap
-                            textFormat: TextEdit.PlainText
-                            selectByMouse: true
-                            padding: 0
-
-                            onTextChanged: {
-                                if (nodeItem.editing) {
-                                    nodeItem.editBodyDraft = text
-                                    if (nodeItem.editError.length > 0)
-                                        nodeItem.editError = ""
-                                }
-                            }
-                            onCursorRectangleChanged: {
-                                var maxY = Math.max(0,
-                                    bodyFlick.contentHeight - bodyFlick.height)
-                                var top = bodyFlick.contentY
-                                var bottom = top + bodyFlick.height
-                                var cursorTop = cursorRectangle.y
-                                var cursorBottom = cursorTop + cursorRectangle.height
-                                if (cursorTop < top)
-                                    bodyFlick.contentY = Math.max(0, Math.min(maxY, cursorTop))
-                                else if (cursorBottom > bottom)
-                                    bodyFlick.contentY = Math.max(0, Math.min(maxY,
-                                        cursorBottom - bodyFlick.height))
-                            }
-                            // 正文里 Enter 插入换行；Ctrl+Enter 提交；Esc 取消。
-                            Keys.onPressed: function(event) {
-                                if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                                        && (event.modifiers & Qt.ControlModifier)) {
-                                    nodeItem.commitEdit()
-                                    event.accepted = true
-                                } else if (event.key === Qt.Key_Escape) {
-                                    nodeItem.cancelEdit()
-                                    event.accepted = true
-                                }
-                            }
-                        }
-                    }
-
-                    Text {
-                        id: editErrorText
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: editFooter.top
-                        height: editLayer._errorHeight
-                        visible: nodeItem.editError.length > 0
-                        text: nodeItem.editError
-                        color: scene._error
-                        font.pixelSize: Math.max(9, 10 * editLayer._s)
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                    }
-
-                    Item {
-                        id: editFooter
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        height: editLayer._footerHeight
-
-                        Controls.Button {
-                            id: cancelButton
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            height: parent.height
-                            width: Math.max(44 * editLayer._s, implicitWidth)
-                            text: qsTr("取消")
-                            font.pixelSize: Math.max(9, 11 * editLayer._s)
-                            padding: 0
-                            enabled: !nodeItem.saving
-                            onClicked: nodeItem.cancelEdit()
-                        }
-                        Controls.Button {
-                            id: saveButton
-                            anchors.right: cancelButton.left
-                            anchors.rightMargin: 4 * editLayer._s
-                            anchors.verticalCenter: parent.verticalCenter
-                            height: parent.height
-                            width: Math.max(44 * editLayer._s, implicitWidth)
-                            text: nodeItem.saving ? qsTr("保存中…") : qsTr("保存")
-                            font.pixelSize: Math.max(9, 11 * editLayer._s)
-                            padding: 0
-                            enabled: !nodeItem.saving
-                            onClicked: nodeItem.commitEdit()
                         }
                     }
                 }
@@ -1581,6 +1294,314 @@ Item {
         border.width: scene.ringStrokeWidth
         antialiasing: true
         z: -1
+    }
+
+    // ── Issue #984：场景级唯一节点编辑器（不挂在 Repeater delegate 内）──
+    // 模型行更新 / 文本重测 / 保存成功都不会重建输入层。编辑器按节点的
+    // 屏幕投影矩形与视口边界选择锚点：靠右向左展开、靠下向上展开，太窄
+    // 时在视口内居中；卡片 authored position 与连线几何不因浮层移动而改变。
+    Rectangle {
+        id: editOverlay
+
+        readonly property var editingNode:
+            scene.editingNodeId !== "" ? scene.graphController.getNode(scene.editingNodeId) : null
+        readonly property real _margin: 12
+        readonly property var _nodeRect: {
+            if (!editingNode)
+                return { x: 0, y: 0, width: 0, height: 0 }
+            return {
+                x: scene.worldToScreenX(editingNode.x),
+                y: scene.worldToScreenY(editingNode.y),
+                width: editingNode.width * scene._safeZoom,
+                height: editingNode.height * scene._safeZoom
+            }
+        }
+        readonly property var _anchor: {
+            var r = _nodeRect
+            var vw = Math.max(0, scene.width)
+            var vh = Math.max(0, scene.height)
+            var m = _margin
+            var availableW = Math.max(80, vw - m * 2)
+            var availableH = Math.max(80, vh - m * 2)
+            var w = Math.min(Math.max(r.width, 260), availableW)
+            var h = Math.min(Math.max(r.height, 220),
+                             Math.min(StarMapNodeMetrics.EDIT_MAX_HEIGHT, availableH))
+            var x = r.x
+            if (x + w > vw - m)
+                x = r.x + r.width - w
+            x = Math.max(m, Math.min(x, vw - w - m))
+            var y = r.y
+            if (y + h > vh - m)
+                y = r.y + r.height - h
+            y = Math.max(m, Math.min(y, vh - h - m))
+            // 投影太窄或视口太窄时，原卡片放不下可读编辑器，改为视口内居中浮层。
+            if (r.width < 180 || vw < 480)
+                x = Math.max(m, (vw - w) / 2)
+            return { x: x, y: y, width: w, height: h }
+        }
+
+        visible: scene.editingNodeId !== "" && editingNode !== null
+        x: _anchor.x
+        y: _anchor.y
+        width: _anchor.width
+        height: _anchor.height
+        radius: 10
+        color: scene._surfaceContainer
+        border.color: scene._accent
+        border.width: 2
+        clip: true
+        z: 30
+
+        function activate() {
+            if (!visible)
+                return
+            titleInput.text = scene.editingTitleDraft
+            bodyEdit.text = scene.editingBodyDraft
+            titleInput.forceActiveFocus()
+            titleInput.selectAll()
+            bodyFlick.contentY = 0
+        }
+
+        function focusCurrent() {
+            if (!visible)
+                return
+            if (StarMapNodeMetrics.canEditBody(editingNode))
+                bodyEdit.forceActiveFocus()
+            else
+                titleInput.forceActiveFocus()
+        }
+
+        function commitEdit() {
+            if (!visible)
+                return true
+            if (scene.editingSaving)
+                return false
+            // IME 预编辑期间不提交，把 Enter 留给候选确认。
+            if (titleInput.inputMethodComposing || bodyEdit.inputMethodComposing)
+                return false
+            var nextTitle = titleInput.text.trim()
+            if (nextTitle.length === 0) {
+                scene.editingError = qsTr("名称不能为空")
+                titleInput.forceActiveFocus()
+                return false
+            }
+            var node = scene.graphController.getNode(scene.editingNodeId)
+            if (!node) {
+                scene.finishActiveNodeEdit()
+                return true
+            }
+            var bodyEditable = StarMapNodeMetrics.canEditBody(node)
+            var nextBody = bodyEditable ? bodyEdit.text : null
+            var titleChanged = nextTitle !== (node.title || "")
+            var bodyChanged = bodyEditable && nextBody !== StarMapNodeMetrics.bodyOf(node)
+            // 字段分别保存：什么都没改就直接关闭，不发无意义的 title/content。
+            if (!titleChanged && !bodyChanged) {
+                scene.finishActiveNodeEdit()
+                return true
+            }
+            scene.editingSaving = true
+            scene.editingError = ""
+            var result = scene.commitNodeEdit(node.id,
+                                              titleChanged ? nextTitle : null,
+                                              bodyChanged ? nextBody : null)
+            scene.editingSaving = false
+            if (!result || result.success !== true) {
+                scene.editingError = result && result.message
+                        ? result.message : qsTr("保存失败，请重试")
+                return false
+            }
+            scene.finishActiveNodeEdit()
+            return true
+        }
+
+        readonly property real _footerHeight: 30
+        readonly property real _errorHeight: scene.editingError.length > 0 ? 18 : 0
+        readonly property real _titleHeight: Math.max(24, titleInput.implicitHeight)
+        readonly property real _bodyTop: _titleHeight + 6
+        readonly property real _bodyHeight: Math.max(0,
+            height - _bodyTop - _footerHeight - _errorHeight - 8)
+
+        TextInput {
+            id: titleInput
+            x: 10
+            y: 4
+            width: parent.width - 20
+            height: editOverlay._titleHeight
+            color: scene._textPrimary
+            font.pixelSize: 16
+            font.weight: Font.DemiBold
+            selectByMouse: true
+            clip: true
+            padding: 0
+
+            onTextChanged: {
+                if (editOverlay.visible) {
+                    scene.editingTitleDraft = text
+                    if (scene.editingError.length > 0)
+                        scene.editingError = ""
+                }
+            }
+            Keys.onReturnPressed: function(event) {
+                if (titleInput.inputMethodComposing)
+                    return
+                if (event.modifiers & Qt.ControlModifier)
+                    editOverlay.commitEdit()
+                else if (StarMapNodeMetrics.canEditBody(editOverlay.editingNode))
+                    bodyEdit.forceActiveFocus()
+                else
+                    editOverlay.commitEdit()
+                event.accepted = true
+            }
+            Keys.onEnterPressed: function(event) {
+                if (titleInput.inputMethodComposing)
+                    return
+                if (event.modifiers & Qt.ControlModifier)
+                    editOverlay.commitEdit()
+                else if (StarMapNodeMetrics.canEditBody(editOverlay.editingNode))
+                    bodyEdit.forceActiveFocus()
+                else
+                    editOverlay.commitEdit()
+                event.accepted = true
+            }
+            Keys.onEscapePressed: function(event) {
+                scene.finishActiveNodeEdit()
+                event.accepted = true
+            }
+        }
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 10
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            y: editOverlay._bodyTop
+            visible: editOverlay.editingNode !== null
+                     && !StarMapNodeMetrics.canEditBody(editOverlay.editingNode)
+            text: qsTr("引用内容仅支持修改名称")
+            color: scene._textMuted
+            font.pixelSize: 12
+            wrapMode: Text.Wrap
+        }
+
+        Flickable {
+            id: bodyFlick
+            x: 10
+            y: editOverlay._bodyTop
+            width: parent.width - 20
+            height: editOverlay._bodyHeight
+            visible: editOverlay.editingNode !== null
+                     && StarMapNodeMetrics.canEditBody(editOverlay.editingNode)
+            clip: true
+            contentWidth: width
+            contentHeight: bodyEdit.contentHeight + 2
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            interactive: contentHeight > height
+
+            WheelHandler {
+                onWheel: function(event) {
+                    var maxY = Math.max(0, bodyFlick.contentHeight - bodyFlick.height)
+                    if (maxY <= 0)
+                        return
+                    bodyFlick.contentY = Math.max(0, Math.min(maxY,
+                        bodyFlick.contentY - event.angleDelta.y))
+                    event.accepted = true
+                }
+            }
+
+            TextEdit {
+                id: bodyEdit
+                width: bodyFlick.width
+                height: Math.max(bodyFlick.height, contentHeight)
+                color: scene._textPrimary
+                font.pixelSize: 13
+                wrapMode: TextEdit.Wrap
+                textFormat: TextEdit.PlainText
+                selectByMouse: true
+                padding: 0
+
+                onTextChanged: {
+                    if (editOverlay.visible) {
+                        scene.editingBodyDraft = text
+                        if (scene.editingError.length > 0)
+                            scene.editingError = ""
+                    }
+                }
+                onCursorRectangleChanged: {
+                    var maxY = Math.max(0, bodyFlick.contentHeight - bodyFlick.height)
+                    var top = bodyFlick.contentY
+                    var bottom = top + bodyFlick.height
+                    var cursorTop = cursorRectangle.y
+                    var cursorBottom = cursorTop + cursorRectangle.height
+                    if (cursorTop < top)
+                        bodyFlick.contentY = Math.max(0, Math.min(maxY, cursorTop))
+                    else if (cursorBottom > bottom)
+                        bodyFlick.contentY = Math.max(0, Math.min(maxY,
+                            cursorBottom - bodyFlick.height))
+                }
+                Keys.onPressed: function(event) {
+                    if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                            && (event.modifiers & Qt.ControlModifier)) {
+                        editOverlay.commitEdit()
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Escape) {
+                        scene.finishActiveNodeEdit()
+                        event.accepted = true
+                    }
+                }
+            }
+        }
+
+        Text {
+            id: editErrorText
+            anchors.left: parent.left
+            anchors.leftMargin: 10
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            anchors.bottom: editFooter.top
+            height: editOverlay._errorHeight
+            visible: scene.editingError.length > 0
+            text: scene.editingError
+            color: scene._error
+            font.pixelSize: 11
+            elide: Text.ElideRight
+            verticalAlignment: Text.AlignVCenter
+        }
+
+        Item {
+            id: editFooter
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.margins: 8
+            height: editOverlay._footerHeight
+
+            Controls.Button {
+                id: cancelButton
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                height: parent.height
+                width: Math.max(52, implicitWidth)
+                text: qsTr("取消")
+                font.pixelSize: 12
+                padding: 0
+                enabled: !scene.editingSaving
+                onClicked: scene.finishActiveNodeEdit()
+            }
+            Controls.Button {
+                id: saveButton
+                anchors.right: cancelButton.left
+                anchors.rightMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                height: parent.height
+                width: Math.max(52, implicitWidth)
+                text: scene.editingSaving ? qsTr("保存中…") : qsTr("保存")
+                font.pixelSize: 12
+                padding: 0
+                enabled: !scene.editingSaving
+                onClicked: editOverlay.commitEdit()
+            }
+        }
     }
 
     // ── 加载 / 错误提示 ──

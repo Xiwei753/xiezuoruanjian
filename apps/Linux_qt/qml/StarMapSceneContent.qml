@@ -57,7 +57,14 @@ Item {
     // ── 目标图数据（只读快照，不写 Core）──
     property var graphData: null
     property var edgeRenders: []
+    // Issue #984：整张子图的节点布局快照（含未打开的子图，由真实文本排版
+    // 测量），概览 bounds / 端点 / 圆点共用这一份，不再回退到固定高度。
+    property var layoutSizes: ({})
     property string loadError: ""
+
+    StarMapNodeMeasurer {
+        id: nodeMeasurer
+    }
 
     readonly property var nodes: graphData && graphData.nodes ? graphData.nodes : []
     readonly property var embeds: graphData && graphData.embeds ? graphData.embeds : []
@@ -76,8 +83,9 @@ Item {
             var isPortal = n.portal && n.portal.destinationStarmapId
             // Issue #984：普通节点读原始 graphData 节点的 content 度量，
             // 旧 portal 仍按 Embed 直径处理。
-            var nw = isPortal ? _embedDiameter : StarMapNodeMetrics.nodeWidth(n)
-            var nh = isPortal ? _embedDiameter : StarMapNodeMetrics.nodeHeight(n, false)
+            var size = StarMapNodeMetrics.sizeFor(layoutSizes, n)
+            var nw = isPortal ? _embedDiameter : size.width
+            var nh = isPortal ? _embedDiameter : size.height
             if (!has) {
                 minX = np.x; minY = np.y
                 maxX = np.x + nw; maxY = np.y + nh
@@ -136,8 +144,10 @@ Item {
             out.push({
                 id: n.id,
                 x: pos.x, y: pos.y,
-                width: isPortal ? _embedDiameter : StarMapNodeMetrics.nodeWidth(n),
-                height: isPortal ? _embedDiameter : StarMapNodeMetrics.nodeHeight(n, false)
+                width: isPortal ? _embedDiameter
+                                : StarMapNodeMetrics.sizeFor(layoutSizes, n).width,
+                height: isPortal ? _embedDiameter
+                                 : StarMapNodeMetrics.sizeFor(layoutSizes, n).height
             })
         }
         return out
@@ -174,6 +184,7 @@ Item {
             return
         }
         graphData = res.data.graph
+        layoutSizes = StarMapNodeMetrics.snapshotFor(starmapId, nodes, nodeMeasurer.measureNode)
         loadError = ""
         var renderRes = starmapBackendRef.compute_edge_renders(
                     JSON.stringify(graphData),
@@ -217,8 +228,9 @@ Item {
             var pos = n.position || { x: 0, y: 0 }
             if (n.portal && n.portal.destinationStarmapId)
                 continue
-            s += _circlePath(projectX(pos.x + StarMapNodeMetrics.nodeWidth(n) / 2),
-                             projectY(pos.y + StarMapNodeMetrics.nodeHeight(n, false) / 2),
+            var dotSize = StarMapNodeMetrics.sizeFor(layoutSizes, n)
+            s += _circlePath(projectX(pos.x + dotSize.width / 2),
+                             projectY(pos.y + dotSize.height / 2),
                              _overviewDotRadius)
         }
         return s

@@ -93,8 +93,8 @@ fn build_models_routes_legacy_portal_nodes_into_embeds() {
         "portal 归一分支必须发生在 embedsModel = newEmbeds 之前"
     );
 
-    // nodesModel 的 push 块不得再携带 portal 字段（两套语义的来源）。
-    let nodes_push = slice_between(&build, "newNodes.push({", "});");
+    // 普通节点的模型行不得再携带 portal 字段（两套语义的来源）。
+    let nodes_push = slice_between(&build, "desiredNodes.push({", "});");
     assert!(
         !nodes_push.contains("portal"),
         "nodesModel 不得再下发 portal 字段，实际 push 块:\n{nodes_push}"

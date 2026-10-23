@@ -1154,52 +1154,51 @@ fn path_planner_no_longer_ports_lca_rules() {
 
 #[test]
 fn node_title_is_edited_inline_with_a_text_input() {
-    let src = strip_line_comments(&starmap_node_delegate_src());
+    let src = strip_line_comments(&read_src(ACTIVE_SCENE));
+    // Issue #984 第二轮复核：编辑会话收成场景级唯一状态，delegate 只显示。
     assert!(
-        src.contains("property bool editing: false"),
-        "节点卡片 delegate 必须有 editing 状态"
+        src.contains("property string editingNodeId: \"\"")
+            && src.contains("property string editingTitleDraft: \"\"")
+            && src.contains("property string editingBodyDraft: \"\""),
+        "活动画布必须有场景级唯一的名称/正文编辑会话"
     );
     assert!(
-        src.contains("TextInput {") && src.contains("id: titleInput"),
-        "节点卡片内必须有名称 TextInput"
+        src.contains("id: editOverlay") && src.contains("id: titleInput"),
+        "活动画布必须有稳定编辑容器与名称 TextInput"
     );
     assert!(
         src.contains("TextEdit {") && src.contains("id: bodyEdit"),
-        "节点卡片内必须有正文多行 TextEdit"
+        "活动画布必须有正文多行 TextEdit"
     );
     assert!(
-        src.contains("visible: nodeItem.editing"),
-        "编辑层只在 editing 时显示并接管输入，实际源码缺少"
+        src.contains("visible: scene.editingNodeId !== \"\"") ,
+        "编辑层只在场景会话存在时显示并接管输入，实际源码缺少"
     );
 
-    let begin = function_window(&src, "function beginEdit(", 500);
+    let begin = function_window(&src, "function beginInlineEdit(", 700);
     assert!(
-        begin.contains("editing = true") && begin.contains("titleInput.forceActiveFocus()"),
-        "进入编辑必须把光标放进名称输入框（forceActiveFocus），实际窗口:\n{begin}"
+        begin.contains("if (editingNodeId !== \"\" && !commitActiveNodeEdit())")
+            && begin.contains("return false")
+            && begin.contains("editingNodeId = nodeId")
+            && begin.contains("Qt.callLater(editOverlay.activate)"),
+        "打开新节点前必须先提交旧会话，失败保留原编辑；再建立唯一会话，实际窗口:\n{begin}"
     );
-    let commit = function_window(&src, "function commitEdit(", 1800);
+    let commit = function_window(&src, "function commitEdit(", 2200);
     assert!(
-        commit.contains("scene.commitNodeEdit(nodeData.id,")
+        commit.contains("scene.commitNodeEdit(node.id,")
             && commit.contains("titleChanged ? nextTitle : null")
             && commit.contains("bodyChanged ? nextBody : null"),
         "提交必须只把真正变化的名称/正文交给归属层保存，实际窗口:\n{commit}"
     );
     assert!(
         commit.contains("if (!result || result.success !== true)")
-            && commit.contains("editError = result && result.message"),
+            && commit.contains("scene.editingError = result && result.message"),
         "保存失败必须保留编辑态并显示错误，不能先销毁草稿，实际窗口:\n{commit}"
     );
     assert!(
         commit.contains("if (!titleChanged && !bodyChanged)")
-            && commit.contains("finishEdit()"),
+            && commit.contains("scene.finishActiveNodeEdit()"),
         "无变化提交只退出编辑，不应产生 content 补丁，实际窗口:\n{commit}"
-    );
-    let cancel = function_window(&src, "function cancelEdit(", 500);
-    assert!(
-        cancel.contains("editing = false")
-            && cancel.contains("editTitleDraft = nodeData.title")
-            && cancel.contains("editBodyDraft = bodyText"),
-        "Esc 必须退出编辑并还原名称/正文草稿，实际窗口:\n{cancel}"
     );
 
     // 名称 Enter 移到正文；Ctrl+Enter 提交；Esc 取消；正文 Enter 保留换行。
@@ -1208,8 +1207,8 @@ fn node_title_is_edited_inline_with_a_text_input() {
             && src.contains("Keys.onEnterPressed:")
             && src.contains("Keys.onEscapePressed:")
             && src.contains("event.modifiers & Qt.ControlModifier")
-            && src.contains("nodeItem.commitEdit()")
-            && src.contains("nodeItem.cancelEdit()"),
+            && src.contains("editOverlay.commitEdit()")
+            && src.contains("scene.finishActiveNodeEdit()"),
         "提交/取消必须绑定名称输入与 Ctrl+Enter / Esc"
     );
     assert!(
@@ -1221,9 +1220,81 @@ fn node_title_is_edited_inline_with_a_text_input() {
 }
 
 #[test]
+fn node_geometry_uses_graph_level_text_measurement_and_stable_rows() {
+    let controller = strip_line_comments(&read_src("qml/StarMapGraphController.qml"));
+    assert!(
+        controller.contains("property ListModel nodesModel")
+            && controller.contains("function syncNodeRows(")
+            && controller.contains("nodesModel.set(row, node)")
+            && controller.contains("nodesModel.setProperty(row, \"x\", nx)"),
+        "节点模型必须有稳定行身份：更新只 set/setProperty，不整体替换数组"
+    );
+    assert!(
+        !controller.contains("nodesModel = newNodes")
+            && !controller.contains("nodesModel = nextNodes")
+            && !controller.contains("reportNodeMeasuredSize"),
+        "节点模型不得再用数组整体赋值或 delegate 回传实测高度"
+    );
+    assert!(
+        controller.contains("StarMapNodeMetrics.snapshotFor(")
+            && controller.contains("textMeasurer.measureNode"),
+        "图数据加载必须用平台排版器生成整图布局快照"
+    );
+
+    let measurer = strip_line_comments(&read_src("qml/StarMapNodeMeasurer.qml"));
+    assert!(
+        measurer.contains("probe.forceLayout()") && measurer.contains("probe.contentHeight"),
+        "节点高度必须来自 Qt Text 的真实排版结果"
+    );
+    let content = strip_line_comments(&read_src(CONTENT));
+    assert!(
+        content.contains("StarMapNodeMetrics.snapshotFor(")
+            && !content.contains("nodeHeight(")
+            && !content.contains("_measuredHeights"),
+        "子图概览必须读同一份图级布局快照，不得回退固定高度"
+    );
+    let main = strip_line_comments(&read_src(MAIN_RS));
+    let build = strip_line_comments(&read_src(BUILD_RS));
+    for (name, src) in [("src/main.rs", &main), ("build.rs", &build)] {
+        assert!(
+            src.contains("qml/StarMapNodeMeasurer.qml"),
+            "{name} 必须注册 qml/StarMapNodeMeasurer.qml"
+        );
+    }
+}
+
+#[test]
+fn node_editor_is_a_stable_viewport_anchored_overlay() {
+    let active = strip_line_comments(&read_src(ACTIVE_SCENE));
+    assert!(
+        active.contains("property string editingNodeId: \"\"")
+            && active.contains("readonly property string inlineEditingKey:")
+            && active.contains("function finishActiveNodeEdit()"),
+        "活动画布必须有唯一编辑会话，inlineEditingKey 由会话派生"
+    );
+    let begin = function_window(&active, "function beginInlineEdit(", 800);
+    assert!(
+        begin.contains("if (editingNodeId !== \"\" && !commitActiveNodeEdit())")
+            && begin.contains("Qt.callLater(editOverlay.activate)"),
+        "打开新节点必须先提交旧会话，失败不切换，实际窗口:\n{begin}"
+    );
+    let anchor = function_window(&active, "readonly property var _anchor:", 1400);
+    assert!(
+        anchor.contains("x + w > vw - m") && anchor.contains("y + h > vh - m")
+            && anchor.contains("(vw - w) / 2"),
+        "编辑浮层必须按视口边界换向/居中，实际窗口:\n{anchor}"
+    );
+    assert!(
+        active.contains("readonly property string inlineEditingKey:")
+            && active.contains("StarMapNodeMetrics.canEditBody"),
+        "编辑会话必须驱动输入让位与正文可编辑判断"
+    );
+}
+
+#[test]
 fn node_gestures_are_disabled_while_editing() {
-    // Issue #832：Node 自身不再挂任何业务手势，输入统一由 Router 解释；
-    // 编辑期间由 Router 的拖动 Handler 整体让位给文本输入。
+    // Issue #984 第二轮复核：Node delegate 现在只显示，编辑输入层是场景级
+    // 稳定容器，不再挂在 Repeater delegate 内。
     let node = strip_line_comments(&starmap_node_delegate_src());
     for forbidden in ["TapHandler", "DragHandler", "PointHandler", "MouseArea"] {
         assert!(
@@ -1232,12 +1303,18 @@ fn node_gestures_are_disabled_while_editing() {
         );
     }
     assert!(
-        node.contains("id: editLayer") && node.contains("visible: nodeItem.editing"),
-        "名称/正文输入层必须只在编辑时显示并接管输入"
+        !node.contains("property bool editing")
+            && !node.contains("id: titleInput")
+            && !node.contains("id: bodyEdit"),
+        "节点 delegate 不得再持有编辑状态/输入层，否则模型更新会销毁草稿"
     );
+
+    let active = strip_line_comments(&read_src(ACTIVE_SCENE));
     assert!(
-        node.contains("id: titleInput") && node.contains("id: bodyEdit"),
-        "编辑层必须同时提供名称单行输入与正文多行输入"
+        active.contains("id: editOverlay")
+            && active.contains("id: titleInput") && active.contains("id: bodyEdit")
+            && active.contains("visible: scene.editingNodeId !== \"\""),
+        "场景级编辑容器必须同时提供名称单行输入与正文多行输入"
     );
 
     // 编辑期间所有单指业务 Handler（鼠标/触屏 tap、drag、release 观察、

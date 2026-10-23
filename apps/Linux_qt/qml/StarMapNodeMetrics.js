@@ -2,19 +2,18 @@
 // StarMapNodeMetrics.js — 星图普通节点的统一度量（Issue #984）
 // =============================================================================
 //
-// 层级：Linux_qt UI 层（纯度量函数 + 当前界面的实测高度缓存）
+// 层级：Linux_qt UI 层（纯几何口径 + 图级布局快照缓存）
 // 职责：给 StarMapGraphController / StarMapActiveScene / StarMapSceneContent
-//   提供同一份普通节点卡片宽高口径。普通节点是「名称 + 正文」的文字卡片，
-//   不是旧版固定尺寸的标题条；所有几何（绘制、命中、连线端点、子图概览）
-//   都必须调用这里，禁止各 QML 再写一套固定值。
+//   提供同一份普通节点卡片宽高。普通节点是「名称 + 正文」的文字卡片，
+//   不是旧版固定尺寸的标题条；绘制、命中、连线端点、子图概览必须共用
+//   同一份由图数据加载时算好的布局快照。
 //
 // 约束：
 //   - Core 只保存 position（节点左上角）与 title/content，宽高纯属平台显示层；
-//   - 节点宽度固定，高度来自当前平台 Text 的实际排版结果：
-//     StarMapActiveScene 的显示层把 Text.contentHeight 报回来，
-//     recordMeasuredHeight() 写入本模块缓存；控制器 / 命中 / 边端点 /
-//     概览都读同一份缓存。
-//   - 未测量前只回退 MIN_HEIGHT，不再按字符宽度猜行数；不使用第二套固定高度。
+//   - 高度不是字符宽度估算，也不是“活动画布实测、未打开子图按 64 猜”：
+//     由 StarMapNodeMeasurer 用 Qt 的真实文本排版（Text.forceLayout +
+//     contentHeight）在数据加载时测量整张图，写入 snapshotFor() 缓存；
+//   - 快照身份 = starmapId + 全部节点的标题/内容签名；内容变化后重新测量；
 //   - 正文原样参与显示：识别 "\n" 与连续空行，不 trim、不合并空白。
 // =============================================================================
 
@@ -31,11 +30,12 @@ var BODY_LINE_HEIGHT = 17
 var TITLE_MAX_LINES = 2
 var PREVIEW_MAX_LINES = 5
 var TITLE_BODY_GAP = 6
-// 编辑层在世界坐标里的最大高度；视口更小时由 ActiveScene 再收窄。
+// 编辑浮层的最大高度（屏幕 px）；实际尺寸还会被视口边界收窄。
 var EDIT_MAX_HEIGHT = 420
 
-// 当前界面里由 QML Text 实测出的卡片高度（world px），按节点 id 缓存。
-var _measuredHeights = {}
+// 图级布局快照：starmapId -> { signature, sizes: { nodeId: {width,height} } }。
+// 快照只在图数据/内容变化时重建，供活动画布、命中、边端点、Embed 概览共用。
+var _snapshots = {}
 
 function defaultNodeWidth() {
     return CARD_WIDTH
@@ -99,41 +99,75 @@ function _nodeId(nodeOrContent) {
             ? String(nodeOrContent.id) : ""
 }
 
-// QML 显示层实测出的高度（已含 padding / 标题 / 预览正文）。
-// 返回 true 表示高度确实变化，调用方需要重算边与命中。
-function recordMeasuredHeight(nodeOrContent, height) {
-    var id = _nodeId(nodeOrContent)
-    var value = Number(height)
-    if (id === "" || !isFinite(value) || value <= 0)
-        return false
-    value = Math.max(MIN_HEIGHT, Math.ceil(value))
-    var previous = _measuredHeights[id]
-    if (previous !== undefined && Math.abs(previous - value) < 0.75)
-        return false
-    _measuredHeights[id] = value
-    return true
+// 节点内容签名：标题、内容类型、摘要、正文都会影响排版高度。
+function nodeSignature(node) {
+    var content = _contentOf(node)
+    return String(node && node.title !== undefined && node.title !== null ? node.title : "未命名")
+            + "\u001f" + contentTypeOf(node)
+            + "\u001f" + String(summaryOf(node) !== null ? summaryOf(node) : "")
+            + "\u001f" + bodyOf(node)
 }
 
-function measuredHeight(nodeOrContent) {
-    var id = _nodeId(nodeOrContent)
-    var value = id !== "" ? _measuredHeights[id] : undefined
-    return value !== undefined ? value : MIN_HEIGHT
+function _graphSignature(nodes) {
+    var parts = []
+    for (var i = 0; i < nodes.length; i++)
+        parts.push(_nodeId(nodes[i]) + "\u001e" + nodeSignature(nodes[i]))
+    return parts.join("\u001d")
 }
 
-function clearMeasuredHeight(nodeId) {
-    if (nodeId === undefined || nodeId === null)
-        return
-    delete _measuredHeights[String(nodeId)]
+// 取得/构建一张图的节点尺寸快照。measureNode(node) 必须返回
+// { width, height }（由平台真实文本排版算出，world px）。
+// 同一 starmapId 下内容签名不变时复用；变化时整图重测，保证所有消费方
+// 拿到的都是同一份、包含未打开子图的完整几何。
+function snapshotFor(starmapId, nodes, measureNode) {
+    var list = nodes || []
+    var key = starmapId !== undefined && starmapId !== null ? String(starmapId) : ""
+    var signature = _graphSignature(list)
+    var cached = _snapshots[key]
+    if (cached && cached.signature === signature)
+        return cached.sizes
+
+    var sizes = {}
+    if (measureNode) {
+        for (var i = 0; i < list.length; i++) {
+            var node = list[i]
+            var id = _nodeId(node)
+            if (id === "")
+                continue
+            var size = measureNode(node)
+            if (size && isFinite(size.width) && isFinite(size.height)) {
+                sizes[id] = {
+                    width: Math.max(1, Number(size.width)),
+                    height: Math.max(MIN_HEIGHT, Number(size.height))
+                }
+            }
+        }
+        _snapshots[key] = { signature: signature, sizes: sizes }
+    }
+    return sizes
 }
 
-function clearAllMeasuredHeights() {
-    _measuredHeights = {}
+// 只读取已构建的快照；未构建返回 null。几何消费方不允许在缺快照时
+// 用另一套固定高度继续算，必须先通过 snapshotFor() 走平台文本测量。
+function snapshotSizes(starmapId) {
+    var key = starmapId !== undefined && starmapId !== null ? String(starmapId) : ""
+    var cached = _snapshots[key]
+    return cached ? cached.sizes : null
 }
 
-// 卡片高度（world px）。显示态读 QML Text 实测缓存；
-// 编辑态不再把完整正文撑进世界几何（编辑层由 ActiveScene 限高 + 滚动）。
-function nodeHeight(nodeOrContent, editing) {
-    if (editing === true)
-        return Math.max(MIN_HEIGHT, Math.min(EDIT_MAX_HEIGHT, measuredHeight(nodeOrContent)))
-    return measuredHeight(nodeOrContent)
+function sizeFor(sizes, node) {
+    var id = _nodeId(node)
+    var size = sizes ? sizes[id] : null
+    if (size)
+        return size
+    return { width: defaultNodeWidth(), height: defaultNodeHeight() }
+}
+
+function invalidateSnapshot(starmapId) {
+    var key = starmapId !== undefined && starmapId !== null ? String(starmapId) : ""
+    delete _snapshots[key]
+}
+
+function clearAllSnapshots() {
+    _snapshots = {}
 }

@@ -13,6 +13,7 @@
 // =============================================================================
 
 import QtQuick
+import QtQml.Models
 import "StarMapNodeMetrics.js" as StarMapNodeMetrics
 
 QtObject {
@@ -20,9 +21,14 @@ QtObject {
 
     property string starmapId: ""
     property var starmapBackendRef: null
+    // Issue #984：平台文本排版器（StarMapNodeMeasurer）。图数据加载时用它
+    // 一次量完整张图，不带“未打开子图按 64 猜”的第二种几何。
+    property var textMeasurer: null
     property string errorMessage: ""
     property var graphData: null
-    property var nodesModel: []
+    // 稳定行身份模型：更新节点只 set 对应 row，不整体替换数组。
+    // Repeater 因此不会销毁重建正在交互的 delegate。
+    property ListModel nodesModel: ListModel { id: nodesListModel }
     property var edgesModel: []
     property var edgeRenders: []
     // Issue #796 评论 5886483653: 子星图 Embed 显示模型，从 graphData.embeds 派生。
@@ -98,12 +104,16 @@ QtObject {
 
     function buildModels() {
         // graph.nodes[].position 是节点位置唯一真相，直接从 graph 派生平台显示模型。
-        // Issue #984：普通节点是「名称 + 正文」文字卡片，宽高统一由
-        // StarMapNodeMetrics 度量（与 ActiveScene / SceneContent 同一口径）。
-        var newNodes = [];
+        // Issue #984：普通节点是「名称 + 正文」文字卡片，宽高统一由图级
+        // 布局快照提供；快照由平台文本排版器测量整张图（包括尚未打开的
+        // 子图），绘制 / 命中 / 连线 / Embed 概览共用这一份。
+        var desiredNodes = [];
         // Issue #801 评论 5895625744: newEmbeds 提前声明，旧 portal Node 也往这里归一。
         var newEmbeds = [];
         var graphNodes = graphData && graphData.nodes ? graphData.nodes : [];
+        var layoutSizes = textMeasurer
+                ? StarMapNodeMetrics.snapshotFor(starmapId, graphNodes, textMeasurer.measureNode)
+                : StarMapNodeMetrics.snapshotSizes(starmapId);
         for (var i = 0; i < graphNodes.length; i++) {
             var gn = graphNodes[i];
             var pos = gn.position || { x: 0, y: 0 };
@@ -126,7 +136,8 @@ QtObject {
                     hostPath: null
                 });
             } else {
-                newNodes.push({
+                var size = StarMapNodeMetrics.sizeFor(layoutSizes, gn);
+                desiredNodes.push({
                     id: gn.id,
                     title: gn.title,
                     kind: gn.kind,
@@ -135,14 +146,14 @@ QtObject {
                     content: gn.content || { type: "empty" },
                     x: pos.x,
                     y: pos.y,
-                    width: StarMapNodeMetrics.nodeWidth(gn),
-                    height: StarMapNodeMetrics.nodeHeight(gn, false),
+                    width: size.width,
+                    height: size.height,
                     payload: gn.payload,
                     tags: gn.tags
                 });
             }
         }
-        nodesModel = newNodes;
+        syncNodeRows(desiredNodes);
 
         var newEdges = [];
         var graphEdges = graphData && graphData.edges ? graphData.edges : [];
@@ -178,17 +189,60 @@ QtObject {
     }
 
     function getNode(id) {
-        for (var i = 0; i < nodesModel.length; i++) {
-            if (nodesModel[i].id === id) return nodesModel[i];
+        for (var i = 0; i < nodesModel.count; i++) {
+            var node = nodesModel.get(i);
+            if (node.id === id) return node;
         }
         return null;
+    }
+
+    function _nodeRowIndex(id) {
+        for (var i = 0; i < nodesModel.count; i++) {
+            if (nodesModel.get(i).id === id) return i;
+        }
+        return -1;
+    }
+
+    function _sameNodeRow(rowNode, desired) {
+        return rowNode.id === desired.id
+                && rowNode.title === desired.title
+                && rowNode.kind === desired.kind
+                && rowNode.x === desired.x
+                && rowNode.y === desired.y
+                && rowNode.width === desired.width
+                && rowNode.height === desired.height
+                && JSON.stringify(rowNode.content) === JSON.stringify(desired.content)
+                && JSON.stringify(rowNode.payload) === JSON.stringify(desired.payload)
+                && JSON.stringify(rowNode.tags) === JSON.stringify(desired.tags);
+    }
+
+    // 稳定行身份同步：已有节点只更新 row 的字段，只有新增/删除才增删行。
+    // 这样 Repeater 的 delegate 在编辑保存、拖动落盘、文本重测时不会被重建。
+    function syncNodeRows(desiredNodes) {
+        var seen = {};
+        for (var i = 0; i < desiredNodes.length; i++) {
+            var node = desiredNodes[i];
+            seen[node.id] = true;
+            var row = _nodeRowIndex(node.id);
+            if (row >= 0) {
+                if (!_sameNodeRow(nodesModel.get(row), node))
+                    nodesModel.set(row, node);
+            } else {
+                nodesModel.append(node);
+            }
+        }
+        for (var j = nodesModel.count - 1; j >= 0; j--) {
+            var existingId = nodesModel.get(j).id;
+            if (!seen[existingId])
+                nodesModel.remove(j);
+        }
     }
 
     function findNodeAt(wx, wy) {
         if (!ensureBackend()) return null;
         var layoutNodes = [];
-        for (var i = 0; i < nodesModel.length; i++) {
-            var n = nodesModel[i];
+        for (var i = 0; i < nodesModel.count; i++) {
+            var n = nodesModel.get(i);
             layoutNodes.push({ nodeId: n.id, x: n.x, y: n.y, width: n.width, height: n.height, radius: 30, collapsed: false, zIndex: 0, scale: 1.0, depth: 0.0, focusWeight: 0.0, orbitGroup: null });
         }
         var res = normalizeBackendResult(starmapBackendRef.hit_test_nodes(JSON.stringify(layoutNodes), wx, wy), "");
@@ -400,8 +454,9 @@ QtObject {
     }
 
     // Issue #984：patch 原样交给后端（content 也是 patch 的一部分）。
-    // 成功后用 Core 返回的更新后 StarMapNodeDto 刷新模型，不能只浅拷贝 title；
-    // 同时同步 graphData.nodes 并重算边端点，让正文、尺寸、连线立即刷新。
+    // 成功后把 Core 返回的更新后 StarMapNodeDto 合并回 graphData，再按稳定
+    // 行身份刷新模型；delegate 不会因为一次保存被销毁，场景级编辑器可以
+    // 在拿到 success 后再退出。
     // 返回 { success, message }：编辑层只有拿到 success 才退出，失败保留草稿。
     function updateNode(nodeId, patch) {
         if (!ensureBackend())
@@ -418,28 +473,7 @@ QtObject {
                 return { success: true }
             }
 
-            var nextNodes = [];
-            for (var i = 0; i < nodesModel.length; i++) {
-                var n = copyObject(nodesModel[i]);
-                if (n.id === nodeId) {
-                    if (updated.title !== undefined) n.title = updated.title;
-                    if (updated.kind !== undefined) n.kind = updated.kind;
-                    if (updated.payload !== undefined) n.payload = updated.payload;
-                    if (updated.tags !== undefined) n.tags = updated.tags;
-                    n.content = updated.content !== undefined
-                            ? (updated.content || { type: "empty" })
-                            : n.content;
-                    // Issue #984：正文变了，旧的 Text 实测高度立即作废；
-                    // 新高度等 delegate 按真实排版回传，期间只用统一最小高度兜底。
-                    StarMapNodeMetrics.clearMeasuredHeight(nodeId);
-                    n.width = StarMapNodeMetrics.nodeWidth(n);
-                    n.height = StarMapNodeMetrics.nodeHeight(n, false);
-                }
-                nextNodes.push(n);
-            }
-            nodesModel = nextNodes;
-
-            // graphData 是边渲染与子图概览的事实输入，节点内容必须同步。
+            // graphData 是节点内容、边渲染与子图概览的事实输入，先合并更新后节点。
             if (graphData && graphData.nodes) {
                 var nextGraphNodes = [];
                 for (var j = 0; j < graphData.nodes.length; j++) {
@@ -461,38 +495,15 @@ QtObject {
                 graphData = nextGraph;
             }
 
+            // 内容签名变化的节点会在 buildModels 里被重新排版测量；
+            // 模型只 set 对应 row，Repeater delegate 保持稳定。
+            buildModels();
             computeEdgeRenders(null);
-            graphChanged();
             return { success: true }
         } else {
             setError(backendErrorText(res, qsTr("更新节点失败")));
             return { success: false, message: errorMessage }
         }
-    }
-
-    // Issue #984：delegate 用当前字体 / 宽度 / 换行规则实测出显示态高度后回传。
-    // 这里是节点几何的唯一更新入口：模型宽高、边端点、命中都读同一份值。
-    function reportNodeMeasuredSize(nodeId, height) {
-        var node = getNode(nodeId);
-        if (!node)
-            return
-        if (!StarMapNodeMetrics.recordMeasuredHeight(node, height))
-            return
-        var nextWidth = StarMapNodeMetrics.nodeWidth(node);
-        var nextHeight = StarMapNodeMetrics.nodeHeight(node, false);
-        var nextNodes = [];
-        for (var i = 0; i < nodesModel.length; i++) {
-            var n = nodesModel[i];
-            if (n.id === nodeId) {
-                n = copyObject(n);
-                n.width = nextWidth;
-                n.height = nextHeight;
-            }
-            nextNodes.push(n);
-        }
-        nodesModel = nextNodes;
-        computeEdgeRenders(null);
-        graphChanged();
     }
 
     function deleteNode(nodeId) {
@@ -661,13 +672,11 @@ QtObject {
         );
         if (res.success) {
             clearError();
-            var nextNodes = [];
-            for (var i = 0; i < nodesModel.length; i++) {
-                var n = copyObject(nodesModel[i]);
-                if (n.id === nodeId) { n.x = nx; n.y = ny; }
-                nextNodes.push(n);
+            var row = _nodeRowIndex(nodeId);
+            if (row >= 0) {
+                nodesModel.setProperty(row, "x", nx);
+                nodesModel.setProperty(row, "y", ny);
             }
-            nodesModel = nextNodes;
             computeEdgeRenders(null);
             graphChanged();
             return true;
@@ -744,8 +753,8 @@ QtObject {
     // computeEdgeRenders 与候选边预览共用同一份几何，避免两处拼装漂移。
     function nodeLayoutEntries(moveOverride) {
         var nodePos = [];
-        for (var j = 0; j < nodesModel.length; j++) {
-            var n = nodesModel[j];
+        for (var j = 0; j < nodesModel.count; j++) {
+            var n = nodesModel.get(j);
             var nx = n.x, ny = n.y;
             if (moveOverride && moveOverride.kind === "node" && moveOverride.id === n.id) {
                 nx = moveOverride.x; ny = moveOverride.y;

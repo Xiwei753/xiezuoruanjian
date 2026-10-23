@@ -429,26 +429,24 @@ fn inline_editing_gets_the_router_out_of_the_way() {
     let active = strip_line_comments(&read_src(ACTIVE_SCENE));
     assert!(
         active.contains("function noteInlineEditing(nodeId, editing)")
-            && active.contains("menuHost.setInlineEditingKey(key)"),
+            && active.contains("menuHost.setInlineEditingKey(inlineEditingKey)"),
         "活动画布必须把本层编辑状态汇总到菜单宿主，实际源码缺少"
     );
     assert!(
         active.contains("onItemRemoved: function(index, item)")
-            && active.contains("scene.noteInlineEditing(item.nodeId, false)"),
-        "编辑中的 delegate 被销毁时必须清掉内联编辑汇总键，否则 Router 会永久让位"
+            && active.contains("scene.finishActiveNodeEdit()"),
+        "编辑中的 delegate 被销毁时必须结束场景级编辑会话，否则 Router 会永久让位"
     );
     let content = strip_line_comments(&read_src(CONTENT));
     assert!(
         !content.contains("noteInlineEditing") && !content.contains("TextInput"),
         "StarMapSceneContent 不得再承载内联编辑"
     );
+    // Issue #984 第二轮复核：输入层不再挂在节点 delegate 内，而是场景级稳定容器。
     let node = strip_line_comments(&starmap_node_delegate_src());
     assert!(
-        node.contains("TextInput {")
-            && node.contains("id: titleInput")
-            && node.contains("TextEdit {")
-            && node.contains("id: bodyEdit"),
-        "节点卡片内联编辑必须同时保留名称 TextInput 与正文 TextEdit"
+        !node.contains("TextInput") && !node.contains("TextEdit"),
+        "节点 delegate 只显示，不得持有编辑输入层"
     );
     assert!(
         active.contains("TextInput {")
