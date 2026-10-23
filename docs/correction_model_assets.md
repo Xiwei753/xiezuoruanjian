@@ -57,12 +57,16 @@ bundle on disk, and the Rust Core reads it locally.
 3. Apply the exported calibrator to the original/candidate log-probabilities
    and accept only proposals above the calibrated threshold.
 
-`calibrator.json` is fitted offline with `tools/train_calibrator.py` on public
-CSC data, using grouped train/evaluation splits. It contains only exported
-parameters and a version string; no private manuscript text and no per-work
-word lists are part of the model. The UI does not invent a confidence
-percentage: probabilistic suggestions use a warning severity and the calibrated
-score remains internal.
+`calibrator.json` is fitted offline with `tools/train_calibrator.py`. Features
+come from `tools/export_features.py` over the pinned public CSC data and the
+pinned ONNX weights, plus constructed anonymous fiction/name negatives.
+Samples are grouped by source text into disjoint fit, calibration, and final
+evaluation sets. The threshold is selected once on the calibration set under
+the requested precision floor, and the final set is read-only. The exported
+parameters and version are the only runtime calibration inputs; no private
+manuscript text and no per-work word lists are part of the model. The UI does
+not invent a confidence percentage: probabilistic suggestions use a warning
+severity and the calibrated score remains internal.
 
 The model does not handle insertions or deletions. Those require a separate
 task and are deliberately out of scope.
@@ -94,6 +98,12 @@ The model binary is a build artifact under
 - **Linux Qt/RPM**: `/usr/share/sujian/models/macbert4csc/` contains the model
   bundle; `/usr/lib64/sujian/libonnxruntime.so` (or `/usr/lib/sujian/...`) is
   loaded through `SUJIAN_ONNXRUNTIME_LIB`.
+- **Linux AppImage**: `packaging/linux/build-appimage.sh` stages the same model
+  bundle and Linux ONNX Runtime under `AppDir/usr/share/sujian/models/macbert4csc`
+  and `AppDir/usr/lib/sujian`. The launcher exports APPDIR-relative
+  `SUJIAN_CORRECTION_MODEL_DIR` and `SUJIAN_ONNXRUNTIME_LIB`; the Qt backend
+  prefers that explicit model directory and only then falls back to the RPM
+  system path. AppImage does not depend on a system-wide RPM installation.
 - **Android**: the APK carries `assets/correction/macbert4csc/` and the official
   ONNX Runtime Android AAR. On first use the bundle is copied once to private
   storage and verified (474,336,933 bytes and SHA-256). There is no first-run
@@ -101,10 +111,14 @@ The model binary is a build artifact under
   use Play Asset Delivery (install-time or fast-follow) while keeping the same
   local bundle contract; the model must still be available immediately after
   install.
-- **HarmonyOS**: the HAP resource layout uses the same FP32 bundle and byte
-  offsets, but ONNX Runtime must be built for the target OpenHarmony SDK. The
-  Android `.so` is not reused, and this change does not claim a verified
-  HarmonyOS neural runtime or NPU execution.
+- **HarmonyOS**: the HAP uses the same FP32 bundle and byte offsets. Hvigor and
+  `tools/build_harmony.sh` fetch a pinned community OpenHarmony ARM64 build of
+  ONNX Runtime (`runtime.harmony-arm64` in the manifest), verify its SHA-256,
+  link it into the NAPI module, and copy `libonnxruntime.so` into the HAP native
+  libraries. Native init resolves that exact library path for the Rust
+  load-dynamic layer. Android/Linux `.so` files are never reused. The build is
+  wired, but on-device HarmonyOS execution still requires platform testing; no
+  NPU execution is claimed.
 
 Package size budget: the FP32 model alone is about 474 MB; total installer size
 must stay below 1 GB. Runtime memory and inference latency depend on the device

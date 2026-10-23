@@ -30,6 +30,7 @@ export interface PeerObjectDescriptor {
   contentHash: string
   modifiedAtMs: number
   deleted: boolean
+  deviceId: string
 }
 
 export type PeerSyncSessionState = 'idle' | 'connecting' | 'ready' | 'syncing' | 'error' | 'closed'
@@ -276,7 +277,8 @@ export class PeerSyncSession {
       return
     }
     const staged: PeerObjectCommitResult = this.corePort.stageRemoteObject(
-      message.path, bytes, message.contentHash, message.modifiedAtMs ?? Date.now(), false)
+      message.path, bytes, message.versionToken ?? message.contentHash,
+      message.modifiedAtMs ?? Date.now(), false, message.sourceDevice ?? 'unknown')
     if (!staged.success) {
       await this.sendAck(message.requestId, false, staged.message)
       return
@@ -291,12 +293,15 @@ export class PeerSyncSession {
     this.clearReadForPath(message.path)
     this.remoteObjects.set(message.path, {
       path: message.path,
-      contentHash: message.contentHash,
+      contentHash: message.versionToken ?? message.contentHash,
       modifiedAtMs: message.modifiedAtMs ?? Date.now(),
-      deleted: false
+      deleted: false,
+      deviceId: message.sourceDevice ?? 'unknown'
     })
     await this.sendAck(message.requestId, true, committed.message)
-    this.setState('ready', committed.message)
+    if (this.pendingReads.size === 0) {
+      this.setState('ready', committed.message)
+    }
   }
 
   private async acceptDelete(message: PeerWireMessage): Promise<void> {
@@ -309,8 +314,8 @@ export class PeerSyncSession {
       return
     }
     const staged: PeerObjectCommitResult = this.corePort.stageRemoteObject(
-      message.path, new Uint8Array(0), message.contentHash,
-      message.modifiedAtMs ?? Date.now(), true)
+      message.path, new Uint8Array(0), message.versionToken ?? message.contentHash,
+      message.modifiedAtMs ?? Date.now(), true, message.sourceDevice ?? 'unknown')
     if (!staged.success) {
       await this.sendAck(message.requestId, false, staged.message)
       return
@@ -324,6 +329,9 @@ export class PeerSyncSession {
     this.applied += committed.applied
     this.remoteObjects.delete(message.path)
     await this.sendAck(message.requestId, true, committed.message)
+    if (this.pendingReads.size === 0) {
+      this.setState('ready', '附近设备对象已同步并提交')
+    }
   }
 
   private mergeRemoteManifest(payload: string): void {
@@ -354,7 +362,8 @@ export class PeerSyncSession {
           path: object.path,
           contentHash: object.contentHash,
           modifiedAtMs: object.modifiedAtMs,
-          deleted: object.deleted
+          deleted: object.deleted,
+          deviceId: object.deviceId
         }
       })
     const handshake: PeerHandshakePayload = {
@@ -374,14 +383,16 @@ export class PeerSyncSession {
       local.set(object.path, object)
     })
     this.setState('syncing', '正在同步附近设备对象')
+    let requested: number = 0
     for (const entry of Array.from(this.remoteObjects.entries())) {
       const path: string = entry[0]
       const remote: PeerObjectDescriptor = entry[1]
       const current: PeerStoredObject | undefined = local.get(path)
       if (remote.deleted) {
-        if (current !== undefined && !current.deleted && current.modifiedAtMs <= remote.modifiedAtMs) {
+        if (current === undefined || current.deleted || current.modifiedAtMs < remote.modifiedAtMs) {
           const staged: PeerObjectCommitResult = this.corePort.stageRemoteObject(
-            path, new Uint8Array(0), remote.contentHash, remote.modifiedAtMs, true)
+            path, new Uint8Array(0), remote.contentHash, remote.modifiedAtMs, true,
+            remote.deviceId ?? 'unknown')
           if (staged.success) {
             await this.corePort.commitRemoteObjects()
           }
@@ -398,14 +409,20 @@ export class PeerSyncSession {
       if (current !== undefined && current.deleted && current.modifiedAtMs > remote.modifiedAtMs) {
         continue
       }
-      this.requestObject(path, remote.contentHash)
+      if (this.requestObject(path, remote.contentHash)) {
+        requested++
+      }
     }
-    this.setState('ready', '附近设备对象已同步')
+    if (requested === 0 && this.pendingReads.size === 0) {
+      this.setState('ready', '附近设备清单已收敛')
+    } else {
+      this.setState('syncing', `正在接收 ${this.pendingReads.size} 个附近设备对象`)
+    }
   }
 
-  private requestObject(path: string, contentHash: string): void {
+  private requestObject(path: string, contentHash: string): boolean {
     if (this.pendingReads.has(path)) {
-      return
+      return false
     }
     const requestId: string = `read:${path}:${contentHash}`
     const pending: PendingRead = {
@@ -417,6 +434,7 @@ export class PeerSyncSession {
     }
     this.pendingReads.set(path, pending)
     void this.sendRead(pending)
+    return true
   }
 
   private async sendRead(pending: PendingRead): Promise<void> {
@@ -432,14 +450,21 @@ export class PeerSyncSession {
       dataRootId: this.dataRootId
     }
     const sent: boolean = await this.send(request)
-    if (!sent || pending.attempts >= MAX_SEND_ATTEMPTS) {
+    if (!sent) {
       this.pendingReads.delete(pending.path)
+      this.fail('发送附近设备对象读取请求失败')
       return
     }
     pending.timer = setTimeout((): void => {
-      if (this.pendingReads.has(pending.path)) {
-        void this.sendRead(pending)
+      if (!this.pendingReads.has(pending.path)) {
+        return
       }
+      if (pending.attempts >= MAX_SEND_ATTEMPTS) {
+        this.pendingReads.delete(pending.path)
+        this.fail(`附近设备对象读取超时：${pending.path}`)
+        return
+      }
+      void this.sendRead(pending)
     }, ACK_TIMEOUT_MS)
   }
 

@@ -56,8 +56,20 @@ const bundledCorrectionModelPlugin: HvigorPlugin = {
           const repoRoot = resolve(taskContext.modulePath, '..', '..', '..');
           const correctionDir = resolve(repoRoot, 'packaging', 'correction');
           const rawfileDir = resolve(taskContext.modulePath, 'src', 'main', 'resources', 'rawfile');
+          const prebuiltDir = resolve(taskContext.modulePath, 'src', 'main', 'prebuilt', 'arm64-v8a');
           mkdirSync(rawfileDir, { recursive: true });
+          mkdirSync(prebuiltDir, { recursive: true });
           execFileSync('bash', [resolve(correctionDir, 'fetch-model.sh'), rawfileDir], { stdio: 'inherit' });
+          // 鸿蒙原生库不能复用 Android/Linux 的 .so。Hvigor 入口也单独取
+          // 固定版本、固定 SHA 的 OHOS arm64 ONNX Runtime，供 CMake 链接打包；
+          // 与 tools/build_harmony.sh 共用持久缓存，不会重复下载。
+          execFileSync('python3', [
+            resolve(repoRoot, 'crates', 'sujian-proof', 'tools', 'fetch_model.py'),
+            '--output', rawfileDir,
+            '--runtime', 'harmony-arm64',
+            '--runtime-only',
+            '--runtime-output', prebuiltDir,
+          ], { stdio: 'inherit' });
           copyFileSync(resolve(correctionDir, 'THIRD_PARTY_MODEL_NOTICES.md'),
             resolve(rawfileDir, 'THIRD_PARTY_MODEL_NOTICES.md'));
           copyFileSync(resolve(repoRoot, 'third_party', 'macbert4csc', 'LICENSE'),

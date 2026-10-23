@@ -28,7 +28,6 @@ pub struct Calibrator {
     pub intercept: f32,
     pub margin_weight: f32,
     pub candidate_weight: f32,
-    pub original_weight: f32,
     pub threshold: f32,
 }
 
@@ -39,7 +38,6 @@ impl Calibrator {
         if !calibrator.intercept.is_finite()
             || !calibrator.margin_weight.is_finite()
             || !calibrator.candidate_weight.is_finite()
-            || !calibrator.original_weight.is_finite()
             || !calibrator.threshold.is_finite()
         {
             return Err(CorrectionError::Model(
@@ -65,8 +63,7 @@ impl Calibrator {
         let margin = prediction.candidate_log_probability - prediction.original_log_probability;
         let logit = self.intercept
             + self.margin_weight * margin
-            + self.candidate_weight * prediction.candidate_log_probability
-            + self.original_weight * prediction.original_log_probability;
+            + self.candidate_weight * prediction.candidate_log_probability;
         if !logit.is_finite() {
             return 0.0;
         }
@@ -198,7 +195,6 @@ mod tests {
             intercept: 0.0,
             margin_weight: 1.0,
             candidate_weight: 0.0,
-            original_weight: 0.0,
             threshold: 0.5,
         }
     }

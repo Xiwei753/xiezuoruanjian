@@ -1,46 +1,47 @@
 {
-  "version": "macbert4csc-csc-2026-10-23-v2",
-  "intercept": -0.35306820205965905,
-  "margin_weight": 0.286328881616596,
-  "candidate_weight": -0.1022381449120837,
-  "original_weight": -0.38856755719306524,
-  "threshold": 0.7812554836273283,
+  "version": "macbert4csc-csc-2026-10-23-v3",
+  "intercept": -2.5586807396470377,
+  "margin_weight": 0.5261906533426669,
+  "candidate_weight": 0.4670310901347512,
+  "threshold": 0.7914836505125669,
   "training": {
-    "dataset": "shibing624/CSC public dev split",
-    "features_sha256": "33a53130f201aa0cf1c7f8168cebac2c75353c86c1ad2ed0fe3735b73a13799e",
+    "dataset": "shibing624/CSC public dev split plus constructed anonymous fiction/name negatives",
+    "features_sha256": "5ec03dabb4a057a7166949c46fc23295bfd865f612bd0dc8f542884de6f138fb",
     "feature_columns": [
       "margin",
-      "candidate_logprob",
-      "original_logprob"
+      "candidate_logprob"
     ],
     "seed": 985,
     "split": {
-      "fit_rows": 632,
-      "calibration_rows": 209,
-      "final_rows": 207,
-      "sample_ids": 767
+      "fit_rows": 860,
+      "calibration_rows": 293,
+      "final_rows": 299,
+      "sample_ids": 1149
     },
-    "threshold_policy": "max recall on calibration with precision >= 0.98",
+    "threshold_policy": "max recall on calibration with precision >= 0.995",
     "calibration": {
-      "threshold": 0.7812554836273283,
-      "true_positive": 197,
-      "false_positive": 4,
-      "false_negative": 4,
-      "true_negative": 4,
-      "precision": 0.9800995024875622,
-      "recall": 0.9800995024875622,
-      "f1": 0.9800995024875622
+      "threshold": 0.7914836505125669,
+      "true_positive": 175,
+      "false_positive": 0,
+      "false_negative": 36,
+      "true_negative": 82,
+      "precision": 1.0,
+      "recall": 0.8293838862559242,
+      "f1": 0.9067357512953368
     },
     "final_evaluation": {
-      "threshold": 0.7812554836273283,
-      "true_positive": 200,
-      "false_positive": 2,
-      "false_negative": 2,
-      "true_negative": 3,
-      "precision": 0.9900990099009901,
-      "recall": 0.9900990099009901,
-      "f1": 0.9900990099009901
+      "threshold": 0.7914836505125669,
+      "true_positive": 185,
+      "false_positive": 3,
+      "false_negative": 28,
+      "true_negative": 83,
+      "precision": 0.9840425531914894,
+      "recall": 0.8685446009389671,
+      "f1": 0.9226932668329177
     },
-    "model_sha256": "a4d9d6807c0c8bc9d014462a728e7212315630c669a6bd670b653154391a73f3"
+    "model_sha256": "a4d9d6807c0c8bc9d014462a728e7212315630c669a6bd670b653154391a73f3",
+    "positive_rows": 1021,
+    "negative_rows": 431,
+    "negative_sources": "public CSC correct text and constructed anonymous fiction/name sentences"
   }
 }

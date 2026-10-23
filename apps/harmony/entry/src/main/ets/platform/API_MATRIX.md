@@ -164,7 +164,7 @@
 - ACL：否
 - fallback：API < 18 或能力缺失时 `TrustedDeviceService.isSupported()` 返回 false，附近设备列表为空、入口明确显示不可用；应用安装与云同步不受影响。系统只保证第三方文本消息，因此对象按 `PeerSyncTransport` 的 UTF-8 JSON 帧字节上限分片（Base64 正文、requestId/sequence/total、SHA-256），不假设二进制 `sendData` 可用。
 - 实现文件：`device/impl/api18/TrustedDeviceApi18.ets`、`device/TrustedDeviceService.ets`、`peer/PeerSyncTransport.ets`、`peer/PeerSyncSession.ets`、`peer/PeerObjectStore.ets`、`peer/PeerCrypto.ets`、`peer/NearbyDeviceSyncCoordinator.ets`
-- 说明：可信关系来自系统分布式设备网络，不把华为账号“已登录”当同账号证明；会话只保存本次连接的 `networkId`，不写永久设备身份，也不传输 GitHub Token。附近设备同步全部在 ArkTS 完成，直接读取现有 `manifest.sync.json`/白名单对象，按 LWW 和删除墓碑原子提交；不经过 Rust Core peer provider，也不新增第二套云端同步状态。
+- 说明：可信关系来自系统分布式设备网络，不把华为账号“已登录”当同账号证明；会话只保存本次连接的 `networkId`，不写永久设备身份，也不传输 GitHub Token。附近设备同步全部在 ArkTS 完成，直接读取现有 `manifest.sync.json`/App group manifest 与白名单对象；清单 `content_hash` 保持 Core 的 MD5 语义，传输分片另用 SHA-256 校验；章节冲突保留本地并落冲突副本，删除保留墓碑。不经过 Rust Core peer provider，也不新增第二套云端同步状态。
 
 ## 分享
 

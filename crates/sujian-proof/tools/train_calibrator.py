@@ -33,7 +33,6 @@ import numpy as np
 FEATURE_COLUMNS = [
     "margin",
     "candidate_logprob",
-    "original_logprob",
 ]
 
 
@@ -164,14 +163,14 @@ def main() -> None:
     parser.add_argument("--features", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--version", required=True)
-    parser.add_argument("--min-precision", type=float, default=0.98)
+    parser.add_argument("--min-precision", type=float, default=0.995)
     parser.add_argument("--fit-fraction", type=float, default=0.6)
     parser.add_argument("--calibration-fraction", type=float, default=0.2)
     parser.add_argument("--l2", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=985)
     parser.add_argument(
         "--dataset",
-        default="shibing624/CSC public dev split",
+        default="shibing624/CSC public dev split plus constructed anonymous fiction/name negatives",
         help="provenance string stored in the exported calibrator",
     )
     parser.add_argument(
@@ -204,7 +203,6 @@ def main() -> None:
         "intercept": float(weights[0]),
         "margin_weight": float(weights[1]),
         "candidate_weight": float(weights[2]),
-        "original_weight": float(weights[3]),
         "threshold": float(threshold),
         "training": {
             "dataset": args.dataset,
@@ -221,6 +219,9 @@ def main() -> None:
             "calibration": calibration_metrics,
             "final_evaluation": final_metrics,
             "model_sha256": args.model_sha256,
+            "positive_rows": int(np.sum(y == 1)),
+            "negative_rows": int(np.sum(y == 0)),
+            "negative_sources": "public CSC correct text and constructed anonymous fiction/name sentences",
         },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

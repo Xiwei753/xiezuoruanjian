@@ -7,7 +7,7 @@ does not relicense its dependencies, model weights, or training data.
 
 | Source | License | Use in this crate |
 | --- | --- | --- |
-| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT | Loads `model.onnx` through the `ort` Rust binding. The Linux package ships an unmodified ONNX Runtime shared library; Android uses the official ONNX Runtime Android AAR. The model format and runtime are separate works. See `third_party/onnxruntime/LICENSE` and `NOTICE`. |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT | Loads `model.onnx` through the `ort` Rust binding. The Linux package ships an unmodified ONNX Runtime shared library; Android uses the official ONNX Runtime Android AAR; HarmonyOS ships a pinned community OpenHarmony ARM64 build of ONNX Runtime 1.26.0. The model format and runtime are separate works. See `third_party/onnxruntime/LICENSE` and `NOTICE`. |
 | [ort](https://crates.io/crates/ort) | MIT OR Apache-2.0 | Safe Rust binding used to create the ONNX session and run inference. |
 | [aho-corasick](https://github.com/BurntSushi/aho-corasick) | MIT OR Apache-2.0 | Exact whole-word confusion matching. |
 | [serde](https://serde.rs) / `serde_json` | MIT OR Apache-2.0 | Calibrator and manifest data. |

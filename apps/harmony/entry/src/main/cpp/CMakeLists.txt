@@ -50,3 +50,10 @@ target_link_libraries(writer_core_napi PUBLIC
 set_target_properties(writer_core_napi PROPERTIES
     OUTPUT_NAME "writer_core"
 )
+
+# 链接不会自动把依赖 so 放入 HAP 的 libs 目录；显式复制到最终模块目录。
+add_custom_command(TARGET writer_core_napi POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORT_SO}" "$<TARGET_FILE_DIR:writer_core_napi>/libonnxruntime.so"
+    COMMENT "Copying OHOS libonnxruntime.so into HAP native libraries"
+)

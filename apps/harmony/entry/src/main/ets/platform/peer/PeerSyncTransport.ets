@@ -80,13 +80,14 @@ export class PeerSyncTransport {
   async sendObject(
     path: string,
     content: Uint8Array,
-    contentHash: string,
+    versionToken: string,
     requestId: string,
     sourceDevice: string,
     targetDevice: string,
     modifiedAtMs: number = Date.now(),
     deleted: boolean = false
   ): Promise<boolean> {
+    const contentHash: string = PeerCrypto.sha256Hex(content)
     const total: number = Math.max(1, Math.ceil(content.length / OBJECT_CHUNK_BYTES))
     const begin: PeerWireMessage = {
       version: PROTOCOL_VERSION,
@@ -94,6 +95,7 @@ export class PeerSyncTransport {
       requestId: requestId,
       path: path,
       contentHash: contentHash,
+      versionToken: versionToken,
       modifiedAtMs: modifiedAtMs,
       deleted: deleted,
       total: total,
@@ -126,9 +128,12 @@ export class PeerSyncTransport {
       requestId: requestId,
       path: path,
       contentHash: contentHash,
+      versionToken: versionToken,
       modifiedAtMs: modifiedAtMs,
       deleted: deleted,
-      total: total
+      total: total,
+      sourceDevice: sourceDevice,
+      targetDevice: targetDevice
     }
     return this.send(finish)
   }
@@ -234,9 +239,12 @@ export class PeerSyncTransport {
       requestId: message.requestId,
       path: assembly.path,
       contentHash: assembly.contentHash,
+      versionToken: message.versionToken,
       modifiedAtMs: message.modifiedAtMs,
       deleted: message.deleted === true,
       total: assembly.total,
+      sourceDevice: message.sourceDevice,
+      targetDevice: message.targetDevice,
       chunk: PeerCrypto.base64Encode(content)
     }
     this.listener.onMessage(complete)

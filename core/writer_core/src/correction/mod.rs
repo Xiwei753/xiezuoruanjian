@@ -124,6 +124,7 @@ struct ModelFileStamp {
 struct ModelBundleStamp {
     model: ModelFileStamp,
     vocab: ModelFileStamp,
+    tokenizer: ModelFileStamp,
     calibrator: Option<ModelFileStamp>,
 }
 
@@ -790,7 +791,7 @@ impl CorrectionStore {
             (guard.model_path.clone(), disabled_rules)
         };
         let mut parts = vec![
-            "correction-scanner-v10".to_string(),
+            "correction-scanner-v11".to_string(),
             "correction-work-entities-v3".to_string(),
             model_path
                 .as_ref()

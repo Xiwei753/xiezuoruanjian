@@ -39,7 +39,13 @@
   `third_party/onnxruntime/NOTICE`。
 - Linux 包按 `assets/model_manifest.json` 锁定版本、压缩包字节数与 SHA-256，
   解包后只安装 `libonnxruntime.so`。Android 使用官方 ONNX Runtime Android
-  AAR；HarmonyOS 的原生运行时需按目标 SDK 单独构建，未验证前不声明可用。
+  AAR。
+- HarmonyOS 从
+  <https://github.com/csukuangfj/onnxruntime-libs/releases/tag/v1.26.0>
+  获取社区构建的 OpenHarmony ARM64 ONNX Runtime 1.26.0，按固定字节数与
+  SHA-256 校验后随 HAP 交付；它不是 Microsoft 官方 HarmonyOS 产物，也不复
+  用 Android/Linux 的 `.so`。运行时为 ONNX Runtime 的 MIT 许可作品，素笺未
+  修改该库；构建已接入，但仍需在目标设备上验证实际推理，且不声明 NPU 支持。
 - 模型格式与运行时是相互独立的作品，ONNX Runtime 的 MIT 许可不改变模型的
   Apache-2.0 许可。
 

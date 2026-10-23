@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <deque>
 #include <string>
+#include <cstdlib>
 #include <unistd.h>
+#include <dlfcn.h>
 #include <napi/native_api.h>
 #include <hilog/log.h>
 #include "writer_core_bridge.h"
@@ -665,6 +667,32 @@ static napi_value NativeIsAiAvailable(napi_env env, napi_callback_info info) {
     return result;
 }
 
+// 将随 HAP 交付的 libonnxruntime.so 绝对路径交给 Rust 的 load-dynamic 初始化。
+// libwriter_core.so 与 libonnxruntime.so 位于同一 native 库目录；用 dladdr
+// 取得本模块所在目录，避免依赖进程当前目录或设备上的系统安装路径。
+static void ConfigureOnnxRuntimePath() {
+    static bool configured = false;
+    if (configured) {
+        return;
+    }
+    configured = true;
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<void*>(&NativeIsAiAvailable), &info) == 0 ||
+        info.dli_fname == nullptr) {
+        return;
+    }
+    std::string library(info.dli_fname);
+    const size_t slash = library.rfind('/');
+    if (slash == std::string::npos) {
+        return;
+    }
+    library.resize(slash + 1);
+    library += "libonnxruntime.so";
+    if (access(library.c_str(), R_OK) == 0) {
+        setenv("SUJIAN_ONNXRUNTIME_LIB", library.c_str(), 0);
+    }
+}
+
 // ── Module registration ──
 // Init: Merges descriptors from all domains (app_state, project, chapter, settings,
 //   sync, stats, starmap) plus core lifecycle into a single NAPI module.
@@ -675,6 +703,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     // NAPI 模块在 ArkTS import native module 时初始化，比 EntryAbility.onCreate 更早，
     // 确保 EntryAbility.onCreate 的第一条启动日志也能被环形缓冲捕获。
     RegisterHilogCallback();
+    ConfigureOnnxRuntimePath();
 
     // Collect descriptors from all domains
     size_t app_state_count = 0, proj_count = 0, chap_count = 0, set_count = 0;

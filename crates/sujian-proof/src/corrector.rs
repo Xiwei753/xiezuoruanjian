@@ -336,7 +336,6 @@ mod tests {
             intercept: 0.0,
             margin_weight: 1.0,
             candidate_weight: 0.0,
-            original_weight: 0.0,
             threshold: 0.5,
         }
     }

@@ -6,6 +6,11 @@ Copyright (c) Microsoft Corporation
 License: MIT (see LICENSE)
 
 The Linux packages load a local ONNX Runtime shared library at runtime. Android
-packages use the official ONNX Runtime Android AAR. The model format and the
-runtime are separate works; the model license is recorded in
-third_party/macbert4csc/NOTICE.
+packages use the official ONNX Runtime Android AAR. HarmonyOS uses a pinned
+community OpenHarmony ARM64 build from
+https://github.com/csukuangfj/onnxruntime-libs/releases/tag/v1.26.0 (version
+1.26.0-ohos), verified by byte count and SHA-256 before packaging. That build is
+an unmodified redistribution of ONNX Runtime for the OpenHarmony target and
+remains under this MIT license. The Android/Linux libraries are not reused for
+HarmonyOS. The model format and the runtime are separate works; the model
+license is recorded in third_party/macbert4csc/NOTICE.
