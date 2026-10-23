@@ -55,6 +55,10 @@ Item {
     required property var interactionController
     // 菜单宿主（根 Canvas）：内联编辑汇总键、长按菜单都回调它。
     property var menuHost: null
+    // Issue #987：内联编辑器的视觉父级（Canvas 顶层宿主，位于输入路由之上）。
+    // Scene 只声明唯一编辑器并持有草稿；宿主只提供层级与坐标。过渡旧层不注入，
+    // 保持为场景内部子项且不参与编辑。
+    property var editOverlayHost: null
 
     // ── 活动镜头（由 StarMapCanvas 注入）──
     // 屏幕坐标 = pan + world × zoom；pan 是世界原点的屏幕位置。
@@ -451,6 +455,18 @@ Item {
         return editOverlay.commitEdit()
     }
 
+    // Issue #987：编辑器真实投影矩形的区域判断。参数是 Scene 局部坐标
+    // （Canvas 先把指针点映射进来）；只有可见且 editingNodeId 有效时才认领输入。
+    function editorContainsScenePoint(sceneX, sceneY) {
+        if (editingNodeId === "")
+            return false
+        if (!editOverlay.visible || editOverlay.width <= 0 || editOverlay.height <= 0)
+            return false
+        var p = editOverlay.mapFromItem(scene, sceneX, sceneY)
+        return p.x >= 0 && p.y >= 0
+                && p.x <= editOverlay.width && p.y <= editOverlay.height
+    }
+
     // Repeater.itemAt() 的静态类型是 QQuickItem（qmllint 会把这些 delegate 属性
     // 报成 missing-property，属静态分析的已知误报），运行时取的是真实 delegate。
     function nodeItemOf(nodeId) {
@@ -489,6 +505,7 @@ Item {
         editingBodyDraft = StarMapNodeMetrics.bodyOf(node)
         editingError = ""
         editingSaving = false
+        scene.logInteraction("node_edit_begin", "node", nodeId, {})
         Qt.callLater(editOverlay.activate)
         return true
     }
@@ -1339,10 +1356,21 @@ Item {
                 x = Math.max(m, (vw - w) / 2)
             return { x: x, y: y, width: w, height: h }
         }
+        // _anchor 是 Scene 局部坐标；视觉父级在 Canvas 顶层时必须显式换算。
+        readonly property var _hostPos: {
+            var a = _anchor
+            if (!parent || parent === scene)
+                return Qt.point(a.x, a.y)
+            var p = scene.mapToItem(parent, a.x, a.y)
+            return Qt.point(p.x, p.y)
+        }
 
+        // Issue #987：编辑器视觉父级在 Router 之上；对象所有权仍属于本 Scene，
+        // 切图/销毁时随 Scene 一并回收，不保留透明点击层或第二份编辑器。
+        parent: scene.editOverlayHost ? scene.editOverlayHost : scene
         visible: scene.editingNodeId !== "" && editingNode !== null
-        x: _anchor.x
-        y: _anchor.y
+        x: _hostPos.x
+        y: _hostPos.y
         width: _anchor.width
         height: _anchor.height
         radius: 10
@@ -1382,11 +1410,17 @@ Item {
             var nextTitle = titleInput.text.trim()
             if (nextTitle.length === 0) {
                 scene.editingError = qsTr("名称不能为空")
+                scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
+                    "success": false, "reason": "empty_title"
+                })
                 titleInput.forceActiveFocus()
                 return false
             }
             var node = scene.graphController.getNode(scene.editingNodeId)
             if (!node) {
+                scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
+                    "success": true, "reason": "node_removed"
+                })
                 scene.finishActiveNodeEdit()
                 return true
             }
@@ -1396,6 +1430,9 @@ Item {
             var bodyChanged = bodyEditable && nextBody !== StarMapNodeMetrics.bodyOf(node)
             // 字段分别保存：什么都没改就直接关闭，不发无意义的 title/content。
             if (!titleChanged && !bodyChanged) {
+                scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
+                    "success": true, "reason": "unchanged"
+                })
                 scene.finishActiveNodeEdit()
                 return true
             }
@@ -1408,8 +1445,16 @@ Item {
             if (!result || result.success !== true) {
                 scene.editingError = result && result.message
                         ? result.message : qsTr("保存失败，请重试")
+                scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
+                    "success": false, "reason": "save_failed",
+                    "titleChanged": titleChanged, "bodyChanged": bodyChanged
+                })
                 return false
             }
+            scene.logInteraction("node_edit_commit", "node", scene.editingNodeId, {
+                "success": true, "reason": "saved",
+                "titleChanged": titleChanged, "bodyChanged": bodyChanged
+            })
             scene.finishActiveNodeEdit()
             return true
         }

@@ -36,8 +36,10 @@
 //
 // 约束：
 //   - 不读写 Core，不做几何命中（命中统一走 canvas.hitTargetAtScreen）
-//   - 内联编辑进行中整体禁用 4 个单指业务 Handler（disabled 的 Handler 不再
-//     参与事件投递），TextInput 独占点击/拖动/文本选区
+//   - 内联编辑只占用实际编辑框内的输入：按下点在编辑框内时，本次手势整体交给
+//     编辑器；按下点在框外且存在编辑会话时，先同步提交草稿，成功后在同一个
+//     手势内继续原操作，失败则本次手势 blocked 并保留编辑器。左右键各自记录
+//     本次手势的仲裁结果，不在全局禁用 Handler。
 // =============================================================================
 
 import QtQuick
@@ -51,8 +53,16 @@ Item {
     readonly property var ic: canvas ? canvas.sharedInteraction : null
     readonly property bool pinchActive:
         pinchHandler.active || (ic && ic.pointerMode === "pinch")
-    // 有节点正在内联编辑：拖动 Handler 让位，TextInput 独占文本交互。
-    readonly property bool editingBlocks: canvas ? canvas.inlineEditingKey !== "" : false
+
+    // Issue #987：本次具体指针手势的编辑仲裁结果。左右键完全隔离，按下时决定，
+    // 持续到下一次同键按下；松手/取消时只复位本手势的现场，不清仲裁结果，
+    // 因为 TapHandler.singleTapped 可能晚于 release tracker 到达。
+    //   blocked            — 本次手势归编辑器，或框外保存失败：不得执行任何业务。
+    //   pointerInEditor    — 按下点在编辑框内：拖动类 Handler 立即让位，避免取独占抓取。
+    property bool leftGestureBlocked: false
+    property bool rightGestureBlocked: false
+    property bool leftPointerInEditor: false
+    property bool rightPointerInEditor: false
 
     // ── 本文件持有的手势现场 ──
     // 按下时的完整递归命中（owner/scenePathKey/starmapId/kind/id/targetPath）。
@@ -88,6 +98,43 @@ Item {
         return !!hit && (hit.kind === "node" || hit.kind === "embed")
     }
 
+    function pointInEditor(sx, sy) {
+        return !!canvas && canvas.isInsideNodeEditor(sx, sy)
+    }
+
+    function pointInsideNodeEditor(point) {
+        if (!point)
+            return false
+        return pointInEditor(point.position.x, point.position.y)
+    }
+
+    function hasActiveNodeEdit() {
+        return !!canvas && canvas.inlineEditingKey !== ""
+    }
+
+    // Issue #987：每次业务 press 开始前的唯一编辑仲裁。
+    //   "claimed" — 指针在实际编辑框内：本次手势交给编辑器。
+    //   "blocked" — 指针在框外但保存失败：本次手势整体作废，编辑器保留草稿。
+    //   "free"    — 无编辑会话，或框外保存成功：继续原有 press 流程。
+    // 必须在 cancelViewportMotion / beginPress 等业务状态之前调用。
+    function arbitrateEditorPress(point, button) {
+        if (!canvas)
+            return "blocked"
+        if (pointInsideNodeEditor(point)) {
+            canvas.logInteraction("node_edit_pointer_claimed", "node", "", {
+                "button": button,
+                "screenX": point.position.x,
+                "screenY": point.position.y
+            })
+            return "claimed"
+        }
+        if (!hasActiveNodeEdit())
+            return "free"
+        return canvas.commitNodeEditForOutsideGesture(point.position.x,
+                                                       point.position.y) === true
+                ? "free" : "blocked"
+    }
+
     function panDevice() {
         return (ic && ic.pointerSource === "touch") ? "touch" : "mouse"
     }
@@ -106,6 +153,16 @@ Item {
             return
         if (ic.pointerMode === "pinch")
             return
+        leftGestureBlocked = false
+        leftPointerInEditor = false
+        // 编辑仲裁必须先于任何业务 press 状态；框外保存成功后继续本次手势。
+        var verdict = arbitrateEditorPress(point, "left")
+        if (verdict !== "free") {
+            leftGestureBlocked = true
+            leftPointerInEditor = verdict === "claimed"
+            cancelLocalState()
+            return
+        }
         canvas.notePointerDevice(source === "touch")
         // Issue #834 复核：armed 态期间下一次左键只负责选 target，
         // 不参与普通 pressPending / move / 长按连线。
@@ -158,8 +215,23 @@ Item {
         // 手势判断是否开菜单。armed / 菜单 move 等 guard 提前返回时也要清，
         // 否则旧标记会压掉 #834 的"右键取消 armed 再开菜单"路径。
         rightWasDrag = false
-        if (!canvas || !ic || ic.pointerMode !== "idle" ||
-            ic.linkArmed || ic.connectArmed || editingBlocks)
+        rightGestureBlocked = false
+        rightPointerInEditor = false
+        rightPressHit = null
+        if (!canvas || !ic)
+            return
+        // Issue #987：右键同样先做编辑区域仲裁，再决定是否进入 connect 候选。
+        var verdict = arbitrateEditorPress(point, "right")
+        if (verdict !== "free") {
+            rightGestureBlocked = true
+            rightPointerInEditor = verdict === "claimed"
+            cancelLocalState()
+            return
+        }
+        // armed 态下右键由 TapHandler.singleTapped 取消 armed 并开菜单。
+        if (ic.linkArmed || ic.connectArmed)
+            return
+        if (ic.pointerMode !== "idle")
             return
         canvas.cancelViewportMotion()
 
@@ -207,6 +279,9 @@ Item {
             return
         if (ic.pointerMode === "pinch")
             return
+        // Issue #987：本次手势已归编辑器或保存失败，点击不得落到节点/画布上。
+        if (leftGestureBlocked)
+            return
         canvas.notePointerDevice(source === "touch")
         // Issue #834：菜单发起的 armed 态优先于普通选中。
         // linkArmed：下一次 tap 命中 node/embed 是 Link 的 target；命中自己拒绝
@@ -248,6 +323,9 @@ Item {
             return
         if (ic.pointerMode === "pinch")
             return
+        // Issue #987：编辑器认领的手势不做双击编辑 / 进入 Embed。
+        if (leftGestureBlocked)
+            return
         var hit = hitAt(point.position.x, point.position.y)
         if (!hit)
             return
@@ -280,6 +358,9 @@ Item {
             return
         if (ic.pointerMode === "pinch")
             return
+        // Issue #987：本次右键已归编辑器或保存失败，不再打开画布菜单。
+        if (rightGestureBlocked || pointInsideNodeEditor(point))
+            return
         // Issue #834：armed 态下右键先取消 armed 再开菜单（不连环/连链接）。
         if (ic.linkArmed || ic.connectArmed)
             ic.cancelArmed()
@@ -296,6 +377,8 @@ Item {
     // connect 的哪一条（长按先到的已经在 Timer 里提升为 connect/contextPending）。
     function handleDragActivated() {
         if (!canvas || !ic)
+            return
+        if (leftGestureBlocked)
             return
         if (pinchActive)
             return
@@ -374,6 +457,8 @@ Item {
     function handleDragDelta(dx, dy) {
         if (!canvas || !ic)
             return
+        if (leftGestureBlocked)
+            return
         if (pinchActive)
             return
         var mode = ic.pointerMode
@@ -415,7 +500,7 @@ Item {
     // 起点必须是有手势目标的 node/embed（edge/空白什么都不做）；
     // 端点身份与左键长按连线完全同源：pressPendingToConnect + 归属层预览刷新。
     function beginRightConnectDrag() {
-        if (!rightPressActive)
+        if (!rightPressActive || rightGestureBlocked)
             return
         rightWasDrag = true
         if (!hasGestureTarget(rightPressHit) || !gestureOwner)
@@ -452,6 +537,11 @@ Item {
     // ── 松手统一出口：click / move / connect / pan 都在这里闭环 ──
     function handleRelease() {
         if (!canvas || !ic) {
+            cancelLocalState()
+            return
+        }
+        // Issue #987：本次手势由编辑器认领或框外保存失败，只清 Router 现场。
+        if (leftGestureBlocked) {
             cancelLocalState()
             return
         }
@@ -493,6 +583,12 @@ Item {
     // rightWasDrag 不在这里清除：singleTapped 可能在本回调之后才到，靠它
     // 跳过菜单；下一次右键按下在 beginRightPress 里重置。
     function endRightPress() {
+        if (rightGestureBlocked) {
+            rightPressActive = false
+            rightPressHit = null
+            cancelLocalState()
+            return
+        }
         if (!rightPressActive)
             return
         if (rightWasDrag && ic.pointerMode === "connect" && gestureOwner)
@@ -508,6 +604,8 @@ Item {
     // ── 长按到点：唯一 Router 调状态提升 ──
     function handleLongPress() {
         if (!canvas || !ic)
+            return
+        if (leftGestureBlocked)
             return
         if (pinchActive)
             return
@@ -558,19 +656,30 @@ Item {
 
     // ── 左键按下/单击/双击（桌面指针）──
     // 默认 gesturePolicy=DragThreshold：press 只取 passive grab。
-    // 内联编辑期间整个让位（disabled 的 Handler 不参与投递），
-    // TextInput 才能收到点击/拖动去放置光标和选词。
+    // Issue #987：不在编辑会话期间整体禁用；由 beginPress 的编辑仲裁决定本次
+    // 手势归属。编辑框内按下时只让 DragHandler 让位，TapHandler 仍保持 passive，
+    // 文本控件因此能收到点击、选字与拖动。
     TapHandler {
         id: mouseLeftTap
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.LeftButton
-        enabled: !router.pinchActive && !router.editingBlocks
+        enabled: !router.pinchActive
         onPressedChanged: {
             if (pressed)
                 router.beginPress(mouseLeftTap.point, "mouse")
+            else
+                router.leftPointerInEditor = false
         }
-        onSingleTapped: router.handleSingleTap(mouseLeftTap.point, "mouse")
-        onDoubleTapped: router.handleDoubleTap(mouseLeftTap.point, "mouse")
+        onSingleTapped: function(eventPoint) {
+            if (router.leftGestureBlocked)
+                return
+            router.handleSingleTap(eventPoint, "mouse")
+        }
+        onDoubleTapped: function(eventPoint) {
+            if (router.leftGestureBlocked)
+                return
+            router.handleDoubleTap(eventPoint, "mouse")
+        }
     }
 
     // ── 左键按下/单击/双击（触屏）──
@@ -580,13 +689,23 @@ Item {
         id: touchTap
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
-        enabled: !router.pinchActive && !router.editingBlocks
+        enabled: !router.pinchActive
         onPressedChanged: {
             if (pressed)
                 router.beginPress(touchTap.point, "touch")
+            else
+                router.leftPointerInEditor = false
         }
-        onSingleTapped: router.handleSingleTap(touchTap.point, "touch")
-        onDoubleTapped: router.handleDoubleTap(touchTap.point, "touch")
+        onSingleTapped: function(eventPoint) {
+            if (router.leftGestureBlocked)
+                return
+            router.handleSingleTap(eventPoint, "touch")
+        }
+        onDoubleTapped: function(eventPoint) {
+            if (router.leftGestureBlocked)
+                return
+            router.handleDoubleTap(eventPoint, "touch")
+        }
     }
 
     // ── 右键（Issue #930）：单击开菜单；按下后拖过阈值 = 直接拉线 ──
@@ -596,14 +715,16 @@ Item {
         id: mouseRightTap
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
-        enabled: !router.editingBlocks
         onPressedChanged: {
             if (pressed)
                 router.beginRightPress(mouseRightTap.point)
+            else
+                router.rightPointerInEditor = false
         }
-        onSingleTapped: {
-            if (!router.rightWasDrag)
-                router.handleRightClick(mouseRightTap.point)
+        onSingleTapped: function(eventPoint) {
+            if (router.rightGestureBlocked || router.rightWasDrag)
+                return
+            router.handleRightClick(eventPoint)
         }
     }
 
@@ -614,12 +735,15 @@ Item {
         target: null
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
-        // 内联编辑时让位：把文本选区/光标拖拽留给 TextInput。
-        enabled: !router.editingBlocks
+        // Issue #987：按下点在编辑框内时本次手势归编辑器，立即让出抓取；
+        // 其它区域（包括编辑框外）仍由状态机处理。
+        enabled: !router.leftPointerInEditor
         property real lastTx: 0
         property real lastTy: 0
         onActiveChanged: {
             if (active) {
+                if (router.leftGestureBlocked)
+                    return
                 lastTx = 0
                 lastTy = 0
                 router.handleDragActivated()
@@ -630,6 +754,8 @@ Item {
             }
         }
         onActiveTranslationChanged: {
+            if (!active || router.leftGestureBlocked)
+                return
             var dx = activeTranslation.x - lastTx
             var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
@@ -647,9 +773,11 @@ Item {
         target: null
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
-        enabled: !router.editingBlocks
+        enabled: !router.rightPointerInEditor
         onActiveChanged: {
             if (active) {
+                if (router.rightGestureBlocked)
+                    return
                 router.beginRightConnectDrag()
                 // 激活当帧端点立即对齐指针（按下点种子只兜住随后的零位移场景）。
                 router.updateConnectEndpointFromScreen(rightConnectDrag.centroid.position.x,
@@ -657,7 +785,7 @@ Item {
             }
         }
         onActiveTranslationChanged: {
-            if (!active)
+            if (!active || router.rightGestureBlocked)
                 return
             router.updateConnectEndpointFromScreen(rightConnectDrag.centroid.position.x,
                                                    rightConnectDrag.centroid.position.y)
@@ -668,7 +796,6 @@ Item {
     PointHandler {
         id: leftReleaseTracker
         acceptedButtons: Qt.LeftButton
-        enabled: !router.editingBlocks
         onActiveChanged: {
             if (!active)
                 router.handleRelease()
@@ -682,7 +809,6 @@ Item {
         id: rightReleaseTracker
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
-        enabled: !router.editingBlocks
         onActiveChanged: {
             if (!active)
                 router.endRightPress()
@@ -695,19 +821,31 @@ Item {
         target: null
         acceptedDevices: PointerDevice.TouchScreen
         property real _pinchStartZoom: 1.0
+        // Issue #987：捏合中心在实际编辑框内时归编辑器，不用双指缩放画布。
+        property bool _editorOwnsPinch: false
         onActiveChanged: {
             if (active) {
+                _editorOwnsPinch = router.pointInEditor(pinchHandler.centroid.position.x,
+                                                        pinchHandler.centroid.position.y)
+                router.leftPointerInEditor = false
+                router.rightPointerInEditor = false
                 canvas.resetInteraction()
                 canvas.hideTouchPreview()
                 router.cancelLocalState()
+                if (_editorOwnsPinch)
+                    return
                 router.ic.beginPinch()
                 _pinchStartZoom = canvas.zoomLevel
                 canvas.notePointerDevice(true)
             } else {
-                router.ic.endPinch()
+                if (!_editorOwnsPinch)
+                    router.ic.endPinch()
+                _editorOwnsPinch = false
             }
         }
         onActiveScaleChanged: {
+            if (_editorOwnsPinch)
+                return
             canvas.zoomAt(centroid.position.x, centroid.position.y,
                           _pinchStartZoom * activeScale)
         }
@@ -724,6 +862,10 @@ Item {
         blocking: true
         onWheel: function(event) {
             if (!canvas)
+                return
+            // Issue #987：编辑框内的滚轮归编辑器正文；框外仍缩放画布。
+            // 不在编辑期间全局禁用滚轮。
+            if (router.pointInEditor(point.position.x, point.position.y))
                 return
             canvas.notePointerDevice(false)
             var delta = event.angleDelta.y !== 0

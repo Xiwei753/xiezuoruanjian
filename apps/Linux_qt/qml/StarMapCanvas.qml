@@ -28,6 +28,10 @@
 //   MouseArea，只保留：相机数据与纯方法（screen/world 换算、panBy()、zoomAt()）、
 //   hitTargetAtScreen() 唯一命中入口、菜单宿主和 connect 预览 overlay。
 //
+// Issue #987：节点内联编辑浮层由 Canvas 顶层 nodeEditOverlayHost 承载
+//   （位于 StarMapInputRouter 之上）；编辑会话与草稿仍只属于活动 Scene。
+//   Router 按编辑器实际矩形逐手势仲裁：框内输入归编辑器，框外先提交再继续。
+//
 // 约束：
 //   - 纯渲染和输入宿主层，星图业务逻辑在 Core 与各画布的 StarMapGraphController
 //   - 不读写 Core 的相机/视口字段；切换活动画布不改变任何 authored position
@@ -1176,6 +1180,33 @@ Item {
         inlineEditingKey = key
     }
 
+    // Issue #987：编辑器实际投影矩形命中。编辑器已送到 Canvas 顶层宿主，
+    // 但坐标语义仍以活动 Scene 为准：先把 Canvas 局部点映射进 Scene 局部，
+    // 再问编辑器自己的矩形。编辑会话无效时永远返回 false。
+    function isInsideNodeEditor(sx, sy) {
+        var scene = activeScene()
+        if (!scene || typeof scene.editorContainsScenePoint !== "function")
+            return false
+        var p = scene.mapFromItem(canvasArea, sx, sy)
+        return scene.editorContainsScenePoint(p.x, p.y)
+    }
+
+    // Issue #987：编辑框外的新手势开始前，同步提交唯一编辑会话。
+    // 失败返回 false：Router 必须把本次手势整体判为 blocked，保留编辑器与草稿。
+    function commitNodeEditForOutsideGesture(sx, sy) {
+        var scene = activeScene()
+        if (!scene || typeof scene.commitActiveNodeEdit !== "function")
+            return true
+        var ok = scene.commitActiveNodeEdit() === true
+        logInteraction(ok ? "node_edit_handoff" : "node_edit_handoff_failed",
+                       "node", "", {
+                           "success": ok,
+                           "screenX": sx,
+                           "screenY": sy
+                       })
+        return ok
+    }
+
     // Issue #814 评论 5935346839: 星图交互边界日志统一入口。
     function logInteraction(event, itemKind, itemId, fields, scenePathKey) {
         if (!starmapBackendRef)
@@ -1457,6 +1488,8 @@ Item {
             selectionController: canvasArea.selectionController
             interactionController: canvasArea.sharedInteraction
             menuHost: canvasArea
+            // Issue #987：编辑器的视觉父级送到 Router 之上；草稿与编辑会话仍只属于本 Scene。
+            editOverlayHost: nodeEditOverlayHost
             zoomLevel: canvasArea.zoomLevel
             panX: canvasArea.panX
             panY: canvasArea.panY
@@ -1528,6 +1561,18 @@ Item {
         anchors.fill: parent
         canvas: canvasArea
         z: 10
+    }
+
+    // ---------------------------------------------------------------------------
+    // Issue #987：节点编辑器视觉宿主。位于输入路由之上（z:20），只负责层级与
+    // 坐标，不保存草稿、不复制编辑器；编辑器对象仍由活动 Scene 声明和销毁。
+    // 子项的 z 再大也不能越过父项与兄弟项的堆叠关系，因此不能让编辑器继续
+    // 留在 activeSceneClip(z:1) 里对抗 Router(z:10)。
+    // ---------------------------------------------------------------------------
+    Item {
+        id: nodeEditOverlayHost
+        anchors.fill: parent
+        z: 20
     }
 
     // 连线预览线：唯一 overlay，坐标是活动画布 world 坐标，用当前镜头投影。
