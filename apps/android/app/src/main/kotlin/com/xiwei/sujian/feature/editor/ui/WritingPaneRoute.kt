@@ -238,7 +238,7 @@ private fun WritingPaneEditorContent(
             var showCorrectionResources by rememberSaveable(targetId) { mutableStateOf(false) }
             var authorizedToUseResources by rememberSaveable(targetId) { mutableStateOf(false) }
             val modelPicker =
-                rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
                     if (uri != null && authorizedToUseResources) viewModel.importCorrectionModel(uri)
                 }
             val dictionaryPicker =
@@ -355,7 +355,7 @@ private fun WritingPaneEditorContent(
                         state = correctionResources,
                         authorized = authorizedToUseResources,
                         onAuthorizedChange = { authorizedToUseResources = it },
-                        onImportModel = { modelPicker.launch(arrayOf("*/*")) },
+                        onImportModel = { modelPicker.launch(null) },
                         onImportDictionaries = { dictionaryPicker.launch(arrayOf("*/*")) },
                         onDismiss = { showCorrectionResources = false },
                     )
@@ -675,8 +675,7 @@ private fun localizedCorrectionSource(source: String): String =
     when (source) {
         "confusion_word" -> stringResource(R.string.editor_correction_source_confusion_word)
         "proper_name" -> stringResource(R.string.editor_correction_source_proper_name)
-        "oov" -> stringResource(R.string.editor_correction_source_oov)
-        "character_ngram" -> stringResource(R.string.editor_correction_source_character_ngram)
+        "neural_csc" -> stringResource(R.string.editor_correction_source_neural_csc)
         "rule" -> stringResource(R.string.editor_correction_source_rule)
         else -> if (source.isBlank()) stringResource(R.string.editor_correction_unknown) else source
     }
@@ -686,10 +685,7 @@ private fun localizedCorrectionRule(ruleId: String): String =
     when (ruleId) {
         "confusion.custom" -> stringResource(R.string.editor_correction_rule_confusion_custom)
         "proper.similarity" -> stringResource(R.string.editor_correction_rule_proper_similarity)
-        "detector.exact" -> stringResource(R.string.editor_correction_rule_detector_exact)
-        "detector.oov" -> stringResource(R.string.editor_correction_rule_detector_oov)
-        "detector.char_mad" -> stringResource(R.string.editor_correction_rule_detector_char_mad)
-        "detector.candidate" -> stringResource(R.string.editor_correction_rule_detector_candidate)
+        "neural.macbert4csc" -> stringResource(R.string.editor_correction_rule_neural_macbert4csc)
         "punctuation.repeated" -> stringResource(R.string.editor_correction_rule_punctuation_repeated)
         "character.repeated" -> stringResource(R.string.editor_correction_rule_character_repeated)
         "fixed.should" -> stringResource(R.string.editor_correction_rule_fixed_should)

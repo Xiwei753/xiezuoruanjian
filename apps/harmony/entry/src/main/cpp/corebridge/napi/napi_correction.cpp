@@ -79,12 +79,12 @@ static napi_value correction_invalid_args(napi_env env, const char* message) {
     return nullptr;
 }
 
-// ── 内置纠错模型：rawfile → 沙箱 分块流式复制（Issue #958）──
+// ── 内置纠错模型：rawfile → 沙箱 分块流式复制（Issue #985）──
 //
-// 模型二进制随 entry HAP 打包（resources/rawfile/people2014corpus_chars.klm），
+// 模型资源随 entry HAP 打包（resources/rawfile/macbert4csc/model.onnx 等），
 // 运行时在这里按固定 1MB 缓冲分块读取，边读边写沙箱、边算 SHA-256，校验
 // 字节数与摘要后原子改名落盘；沙箱内已有大小与摘要都匹配的文件直接复用。
-// 刻意不用 ArkTS getRawFileContent（会把 ~148MB 读进 ArkTS 内存），也不把
+// 刻意不用 ArkTS getRawFileContent（会把约 474MB 读进 ArkTS 内存），也不把
 // getRawFd 句柄当普通 fd 交给 fs.copyFile（华为 FAQ：内容错误）。
 
 static constexpr size_t CORRECTION_MODEL_BUFFER_SIZE = 1024 * 1024;

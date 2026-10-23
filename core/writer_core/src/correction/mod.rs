@@ -11,8 +11,9 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
-use sujian_proof::lm::KenlmModel;
-use sujian_proof::{CorrectionEngine, Lexicon, LexiconPaths};
+use sujian_proof::{CorrectionEngine, Lexicon, LexiconPaths, ProofreadingModel};
+
+use sha2::Digest;
 
 use crate::api::{
     CorrectionDictionaryEntryDto, CorrectionDictionaryEntryKindDto, CorrectionEntityNameDto,
@@ -113,24 +114,40 @@ struct CachedLexicon {
     lexicon: Arc<Lexicon>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ModelFileStamp {
     len: u64,
     modified: Option<SystemTime>,
 }
 
-struct CachedModel {
-    stamp: ModelFileStamp,
-    model: Weak<KenlmModel>,
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ModelBundleStamp {
+    model: ModelFileStamp,
+    vocab: ModelFileStamp,
+    calibrator: Option<ModelFileStamp>,
 }
 
-/// Identity of the exact model file an engine was built from. The path alone is
-/// not enough: replacing the model at the same path must invalidate both the
-/// scanner result cache and the process-wide engine cache.
+/// Versioned identity of the exact model bundle an engine was built from.
+/// The path alone is not enough: replacing any resource must invalidate both
+/// the scanner result cache and the process-wide engine cache.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModelIdentity {
+    model_sha256: String,
+    vocab_sha256: String,
+    calibrator_version: String,
+}
+
+struct CachedModel {
+    stamp: ModelBundleStamp,
+    identity: ModelIdentity,
+    model: Weak<ProofreadingModel>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ModelCacheKey {
     path: PathBuf,
-    stamp: ModelFileStamp,
+    stamp: ModelBundleStamp,
+    identity: ModelIdentity,
 }
 
 struct CachedCorrectionEngine {
@@ -148,32 +165,129 @@ pub struct CorrectionStore {
 static STORE_REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<CorrectionStoreInner>>>> =
     OnceLock::new();
 static MODEL_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedModel>>> = OnceLock::new();
+static MODEL_IDENTITY_CACHE: OnceLock<Mutex<HashMap<(PathBuf, ModelBundleStamp), ModelIdentity>>> =
+    OnceLock::new();
 
 fn model_cache() -> &'static Mutex<HashMap<PathBuf, CachedModel>> {
     MODEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn model_identity_cache() -> &'static Mutex<HashMap<(PathBuf, ModelBundleStamp), ModelIdentity>> {
+    MODEL_IDENTITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Resolve a user path to the model resource directory. A directory is used as
+/// is; `.../model.onnx` resolves to its parent. The old single-file KenLM
+/// format is rejected with an explicit migration error and can never be passed
+/// to ONNX Runtime.
 fn canonical_model_path(path: &Path) -> Result<PathBuf, WriterError> {
-    path.canonicalize()
-        .map_err(|error| WriterError::Io(error.to_string()))
+    let path = path
+        .canonicalize()
+        .map_err(|error| WriterError::Io(error.to_string()))?;
+    if path.is_dir() {
+        return Ok(path);
+    }
+    if path.is_file()
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("model.onnx"))
+    {
+        return path
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| WriterError::Other("correction model has no resource directory".into()));
+    }
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("klm"))
+    {
+        return Err(WriterError::Other(
+            "此前的 KenLM .klm 校对模型已停用。请下载 MacBERT4CSC ONNX 模型资源目录（含 model.onnx 与 vocab.txt），重新选择模型目录以完成迁移。"
+                .into(),
+        ));
+    }
+    Err(WriterError::Other(
+        "校对模型路径应为包含 model.onnx、vocab.txt 的资源目录".into(),
+    ))
 }
 
 fn model_file_stamp(path: &Path) -> Result<ModelFileStamp, WriterError> {
     let metadata = std::fs::metadata(path).map_err(|error| WriterError::Io(error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(WriterError::Other(format!(
+            "correction model resource is not a file: {}",
+            path.display()
+        )));
+    }
     Ok(ModelFileStamp {
         len: metadata.len(),
         modified: metadata.modified().ok(),
     })
 }
 
-fn open_model_candidate(path: &Path) -> Result<(ModelCacheKey, Arc<KenlmModel>), WriterError> {
-    // KenlmModel::open is the sole format validator. Validate before taking any
-    // preference/cache lock so rejected candidates cannot disturb active state.
+fn model_bundle_stamp(directory: &Path) -> Result<ModelBundleStamp, WriterError> {
+    let calibrator_path = directory.join("calibrator.json");
+    Ok(ModelBundleStamp {
+        model: model_file_stamp(&directory.join("model.onnx"))?,
+        vocab: model_file_stamp(&directory.join("vocab.txt"))?,
+        calibrator: std::fs::metadata(&calibrator_path)
+            .ok()
+            .and_then(|metadata| {
+                metadata.is_file().then(|| ModelFileStamp {
+                    len: metadata.len(),
+                    modified: metadata.modified().ok(),
+                })
+            }),
+    })
+}
+
+fn sha256_file(path: &Path) -> Result<String, WriterError> {
+    let mut file = std::fs::File::open(path).map_err(|error| WriterError::Io(error.to_string()))?;
+    let mut hasher = sha2::Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|error| WriterError::Io(error.to_string()))?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn model_identity(directory: &Path, stamp: &ModelBundleStamp) -> Result<ModelIdentity, WriterError> {
+    let key = (directory.to_path_buf(), stamp.clone());
+    {
+        let cache = model_identity_cache()
+            .lock()
+            .map_err(|_| WriterError::Other("correction model identity cache lock poisoned".into()))?;
+        if let Some(identity) = cache.get(&key) {
+            return Ok(identity.clone());
+        }
+    }
+    let identity = ModelIdentity {
+        model_sha256: sha256_file(&directory.join("model.onnx"))?,
+        vocab_sha256: sha256_file(&directory.join("vocab.txt"))?,
+        calibrator_version: match std::fs::read_to_string(directory.join("calibrator.json")) {
+            Ok(content) => sujian_proof::Calibrator::from_json(&content)
+                .map_err(|error| WriterError::Other(error.to_string()))?
+                .version,
+            Err(_) => "embedded-calibrator".to_string(),
+        },
+    };
+    let mut cache = model_identity_cache()
+        .lock()
+        .map_err(|_| WriterError::Other("correction model identity cache lock poisoned".into()))?;
+    cache.insert(key, identity.clone());
+    Ok(identity)
+}
+
+fn open_model_candidate(
+    path: &Path,
+) -> Result<(ModelCacheKey, Arc<ProofreadingModel>), WriterError> {
+    // Resource validation happens before any preference/cache lock so a
+    // rejected candidate cannot disturb active state.
     let path = canonical_model_path(path)?;
-    let stamp_before = model_file_stamp(&path)?;
-    let model = KenlmModel::open(&path)
+    let stamp_before = model_bundle_stamp(&path)?;
+    let identity = model_identity(&path, &stamp_before)?;
+    let model = ProofreadingModel::open(&path)
         .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")))?;
-    let stamp_after = model_file_stamp(&path)?;
+    let stamp_after = model_bundle_stamp(&path)?;
     if stamp_before != stamp_after {
         return Err(WriterError::Other(
             "correction model changed while it was being opened; retry the request".into(),
@@ -183,15 +297,27 @@ fn open_model_candidate(path: &Path) -> Result<(ModelCacheKey, Arc<KenlmModel>),
         ModelCacheKey {
             path,
             stamp: stamp_after,
+            identity,
         },
         Arc::new(model),
     ))
 }
 
-const CORRECTION_DICTIONARY_FILES: [&str; 8] = [
+fn model_bundle_identity_for_fingerprint(
+    path: &Path,
+) -> Result<(ModelBundleStamp, ModelIdentity), WriterError> {
+    let directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        canonical_model_path(path)?
+    };
+    let stamp = model_bundle_stamp(&directory)?;
+    let identity = model_identity(&directory, &stamp)?;
+    Ok((stamp, identity))
+}
+
+const CORRECTION_DICTIONARY_FILES: [&str; 6] = [
     "word_freq.txt",
-    "same_pinyin.txt",
-    "same_stroke.txt",
     "custom_confusion.txt",
     "person_name.txt",
     "place_name.txt",
@@ -287,6 +413,7 @@ impl CorrectionStore {
             key.path.clone(),
             CachedModel {
                 stamp: key.stamp,
+                identity: key.identity,
                 model: Arc::downgrade(&candidate),
             },
         );
@@ -308,8 +435,17 @@ impl CorrectionStore {
 
     pub fn resource_status(&self) -> Result<CorrectionResourceStatusDto, WriterError> {
         let model_path = self.configured_model_path()?;
+        let model_migration_required = model_path.as_ref().is_some_and(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("klm"))
+        });
         let model_file_available = model_path.as_ref().is_some_and(|path| {
-            std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+            path.is_dir()
+                && std::fs::metadata(path.join("model.onnx"))
+                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+                && std::fs::metadata(path.join("vocab.txt"))
+                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
         });
         let data_root = self
             .inner
@@ -331,6 +467,7 @@ impl CorrectionStore {
         Ok(CorrectionResourceStatusDto {
             model_configured: model_path.is_some(),
             model_file_available,
+            model_migration_required,
             model_path: model_path.map(|path| path.to_string_lossy().into_owned()),
             bundled_lexicon_available: true,
             installed_dictionary_files,
@@ -665,7 +802,7 @@ impl CorrectionStore {
             (guard.model_path.clone(), disabled_rules)
         };
         let mut parts = vec![
-            "correction-scanner-v9".to_string(),
+            "correction-scanner-v10".to_string(),
             "correction-work-entities-v3".to_string(),
             model_path
                 .as_ref()
@@ -673,12 +810,17 @@ impl CorrectionStore {
                 .unwrap_or_else(|| "no-model".to_string()),
         ];
         if let Some(path) = &model_path {
-            match std::fs::metadata(path) {
-                Ok(metadata) => parts.push(format!(
-                    "model:{}:{}",
-                    metadata.len(),
-                    modified_stamp(metadata.modified().ok())
-                )),
+            match model_bundle_identity_for_fingerprint(path) {
+                Ok((stamp, identity)) => {
+                    parts.push(format!(
+                        "model:{}:{}:{}:{}:{}",
+                        stamp.model.len,
+                        modified_stamp(stamp.model.modified),
+                        identity.model_sha256,
+                        identity.vocab_sha256,
+                        identity.calibrator_version
+                    ));
+                }
                 Err(_) => parts.push("model:missing".to_string()),
             }
         }
@@ -731,10 +873,6 @@ impl CorrectionStore {
             .join("correction-data");
 
         let (word_freq, word_freq_stamp) = optional_lexicon_file(&data_root, "word_freq.txt")?;
-        let (same_pinyin, same_pinyin_stamp) =
-            optional_lexicon_file(&data_root, "same_pinyin.txt")?;
-        let (same_stroke, same_stroke_stamp) =
-            optional_lexicon_file(&data_root, "same_stroke.txt")?;
         let (custom_confusion, custom_confusion_stamp) =
             optional_lexicon_file(&data_root, "custom_confusion.txt")?;
         let (person_name, person_name_stamp) =
@@ -746,8 +884,6 @@ impl CorrectionStore {
             optional_lexicon_file(&data_root, "ignored_words.txt")?;
         let files = vec![
             word_freq_stamp,
-            same_pinyin_stamp,
-            same_stroke_stamp,
             custom_confusion_stamp,
             person_name_stamp,
             place_name_stamp,
@@ -778,8 +914,6 @@ impl CorrectionStore {
 
         let mut lexicon = Lexicon::from_paths(&LexiconPaths {
             word_freq,
-            same_pinyin,
-            same_stroke,
             custom_confusion,
             person_name,
             place_name,
@@ -913,7 +1047,7 @@ impl CorrectionStore {
 
     pub(super) fn configured_model_snapshot(
         &self,
-    ) -> Result<(Option<ModelCacheKey>, Option<Arc<KenlmModel>>), WriterError> {
+    ) -> Result<(Option<ModelCacheKey>, Option<Arc<ProofreadingModel>>), WriterError> {
         let mut models = model_cache()
             .lock()
             .map_err(|_| WriterError::Other("correction model cache lock poisoned".into()))?;
@@ -926,17 +1060,25 @@ impl CorrectionStore {
             return Ok((None, None));
         };
         let path = canonical_model_path(&path)?;
-        let stamp = model_file_stamp(&path)?;
+        let stamp = model_bundle_stamp(&path)?;
         if let Some(cached) = models.get(&path) {
             if cached.stamp == stamp {
                 if let Some(model) = cached.model.upgrade() {
-                    return Ok((Some(ModelCacheKey { path, stamp }), Some(model)));
+                    return Ok((
+                        Some(ModelCacheKey {
+                            path,
+                            stamp,
+                            identity: cached.identity.clone(),
+                        }),
+                        Some(model),
+                    ));
                 }
             }
         }
-        let model = KenlmModel::open(&path)
+        let identity = model_identity(&path, &stamp)?;
+        let model = ProofreadingModel::open(&path)
             .map_err(|error| WriterError::Other(format!("invalid correction model: {error}")))?;
-        let stamp_after = model_file_stamp(&path)?;
+        let stamp_after = model_bundle_stamp(&path)?;
         if stamp_after != stamp {
             return Err(WriterError::Other(
                 "correction model changed while it was being opened; retry the request".into(),
@@ -946,11 +1088,19 @@ impl CorrectionStore {
         models.insert(
             path.clone(),
             CachedModel {
-                stamp,
+                stamp: stamp.clone(),
+                identity: identity.clone(),
                 model: Arc::downgrade(&model),
             },
         );
-        Ok((Some(ModelCacheKey { path, stamp }), Some(model)))
+        Ok((
+            Some(ModelCacheKey {
+                path,
+                stamp,
+                identity,
+            }),
+            Some(model),
+        ))
     }
 
     pub(super) fn cached_engine(

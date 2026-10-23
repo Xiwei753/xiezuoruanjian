@@ -1,0 +1,67 @@
+{
+  "format_version": 1,
+  "model": {
+    "name": "macbert4csc-base-chinese",
+    "source": "https://huggingface.co/shibing624/macbert4csc-base-chinese",
+    "publisher": "shibing624",
+    "revision": "615e6e09ef9a69ec487bc7c641ec3a311e2c11b9",
+    "license": "Apache-2.0",
+    "notice": "third_party/macbert4csc/NOTICE",
+    "files": [
+      {
+        "name": "model.onnx",
+        "source_path": "onnx/model.onnx",
+        "bytes": 474336933,
+        "sha256": "a4d9d6807c0c8bc9d014462a728e7212315630c669a6bd670b653154391a73f3"
+      },
+      {
+        "name": "vocab.txt",
+        "source_path": "onnx/vocab.txt",
+        "bytes": 109540,
+        "sha256": "45bbac6b341c319adc98a532532882e91a9cefc0329aa57bac9ae761c27b291c"
+      },
+      {
+        "name": "config.json",
+        "source_path": "onnx/config.json",
+        "bytes": 845,
+        "sha256": "13467683cd8734e2ee56512aeaa95e2b8a482d9882fb6acbe625374ae8157dee"
+      },
+      {
+        "name": "tokenizer.json",
+        "source_path": "onnx/tokenizer.json",
+        "bytes": 439124,
+        "sha256": "7dfbf1966ebf99d471c3796e9b457329d2b2182b817e144f1e904b957745c839"
+      },
+      {
+        "name": "tokenizer_config.json",
+        "source_path": "onnx/tokenizer_config.json",
+        "bytes": 394,
+        "sha256": "e1790949631401af1bfb6c9c7aeec7fcf612e274d73579d99f704faea40c8ba7"
+      },
+      {
+        "name": "special_tokens_map.json",
+        "source_path": "onnx/special_tokens_map.json",
+        "bytes": 125,
+        "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+      }
+    ]
+  },
+  "calibrator": {
+    "path": "calibrator.json",
+    "version": "macbert4csc-csc-dev-2026-10-23",
+    "fit": "public shibing624/CSC dev split, 800 sentences; grouped by sample, raw log probabilities",
+    "threshold": 0.7
+  },
+  "runtime": {
+    "name": "onnxruntime",
+    "version": "1.22.0",
+    "license": "MIT",
+    "notice": "third_party/onnxruntime/NOTICE",
+    "linux-x64": {
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz",
+      "bytes": 7798730,
+      "sha256": "8344d55f93d5bc5021ce342db50f62079daf39aaafb5d311a451846228be49b3",
+      "library": "lib/libonnxruntime.so.1.22.0"
+    }
+  }
+}

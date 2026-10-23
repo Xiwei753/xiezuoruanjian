@@ -234,7 +234,7 @@
 
 - Kit：`@kit.CoreFileKit`（`picker` 与 `fileIo` 模块）
 - 接口：
-  - `picker.DocumentViewPicker(context).select(options)` 由 UIAbility 页面选择 `.klm` 或 Core 约定的词典 `.txt`
+  - `picker.DocumentViewPicker(context).select(options)` 由 UIAbility 页面选择 ONNX 模型目录中的文件或 Core 约定的词典 `.txt`
   - `fileIo.openSync(uri, READ_ONLY)` 打开 Picker 返回的用户文件 URI，再由 `fileIo.copyFile(fd, stagingPath)` 复制到应用沙箱
   - `fileIo.moveFile(stagingPath, destination, 0)` 覆盖更新目标词典；`listFileSync` / `statSync` 检查现有资源
 - 最低 API：12（`DocumentViewPicker(context)` 构造函数自 API 12 可用；文件操作本身更早可用）
@@ -243,8 +243,8 @@
 - ACL：否
 - fallback：Picker 取消或资源复制失败时保留原有 Core 配置与词典文件；资源状态由 Core 汇报。模型文件存在性由 Core 检查，模型格式在首次校对时验证
 - 实现文件：`feature/editor/correction/CorrectionResourceImporter.ets`、`feature/editor/correction/CorrectionSuggestionsPanel.ets`、`feature/editor/ui/WritingScreen.ets`；severity 下划线由 `feature/editor/ui/SujianEditor.ets` 渲染
-- 词典映射：仅接受 `word_freq.txt`、`same_pinyin.txt`、`same_stroke.txt`、`custom_confusion.txt`、`person_name.txt`、`place_name.txt`、`proper_name.txt`、`ignored_words.txt`，复制到 Core `app_data_root/correction-data/`；更新后由 Core 在下一次校对请求中重读。
-- 模型映射：`.klm` 文件复制到同一应用私有资源目录下的唯一文件名，并通过现有 `nativeCorrectionSetModelPath` 配置 Core；模型格式由首次校对时验证。
+- 词典映射：仅接受 `word_freq.txt`、`custom_confusion.txt`、`person_name.txt`、`place_name.txt`、`proper_name.txt`、`ignored_words.txt`，复制到 Core `app_data_root/correction-data/`；更新后由 Core 在下一次校对请求中重读。
+- 模型映射：用户可多选 `model.onnx`、`vocab.txt` 及 tokenizer 配置，复制到 `correction-data/` 下的唯一模型目录；目录必须同时包含前两项。随后通过 `nativeCorrectionSetModelPath` 配置 Core；Core 校验 ONNX 资源目录，旧 `.klm` 路径会返回迁移提示。
 - 官方参考：[@ohos.file.picker](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-file-picker)、[@ohos.file.fs](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-file-fs)
 
 ## 内置校对模型（native rawfile 流式复制）
@@ -257,8 +257,8 @@
 - SystemCapability：`SystemCapability.Global.ResourceManager`
 - 权限：无
 - ACL：否
-- 模型来源：构建期由 `tools/build_harmony.sh` 调 `packaging/correction/fetch-model.sh`，按 `packaging/correction/kenlm-model.lock` 生成 `entry/src/main/resources/rawfile/people2014corpus_chars.klm`（147,608,010 字节，SHA-256 固定），随 entry HAP 打包；模型二进制不入库。
-- fallback：用户导入的 `.klm` 路径始终优先（Core 已 `modelConfigured` 时不做内置兜底）；沙箱内已有字节数与 SHA-256 匹配的成品直接复用，不重复复制；准备或切换失败只记 warning（hilog），不阻断编辑，固定规则仍可用。
+- 模型来源：构建期由 `tools/build_harmony.sh` 调 `packaging/correction/fetch-model.sh`，按 `crates/sujian-proof/assets/model_manifest.json` 生成 `entry/src/main/resources/rawfile/macbert4csc/`（FP32 `model.onnx` 474,336,933 字节及 tokenizer 资源，SHA-256 固定），随 entry HAP 打包；模型二进制不入库。HarmonyOS 侧 ONNX Runtime 原生运行时尚待联调验证，当前不宣称已可执行推理，也不使用 NNAPI/NPU 作为正确性依据。
+- fallback：用户导入的 ONNX 模型目录始终优先（Core 已 `modelConfigured` 时不做内置兜底）；沙箱内已有字节数与 SHA-256 匹配的成品直接复用，不重复复制；准备或切换失败只记 warning（hilog），不阻断编辑，固定规则仍可用。
 - 实现文件：`cpp/corebridge/napi/napi_correction.cpp`（`nativeCorrectionPrepareBundledModel`）、`cpp/CMakeLists.txt`（链接 `librawfile.z.so`）、`feature/editor/correction/CorrectionResourceImporter.ets`（`ensureBundledModel`）、`feature/editor/correction/NativeCorrectionBridge.ets`、`feature/editor/correction/CorrectionCoordinator.ets`（一次性兜底入口）、`feature/editor/ui/WritingScreen.ets`（会话初始化调用点，resourceManager 来自现有 UIAbilityContext）
 - 说明：不使用 ArkTS `getRawFileContent`（会把 148MB 读进 ArkTS 内存），也不把 `getRawFd` 句柄当普通 fd 交给 `fs.copyFile`（华为 FAQ 明确该用法内容错误：https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-local-file-manager-62）。native 侧自包含 SHA-256（FIPS 180-4，不依赖 OpenSSL）在复制同时增量计算摘要，校验通过后原子改名落盘。
 

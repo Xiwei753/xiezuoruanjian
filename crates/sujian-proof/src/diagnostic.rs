@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// `start_byte..end_byte` is a half-open UTF-8 byte range. A diagnostic never
 /// mutates the input. `confidence` is absent unless the engine has a calibrated
-/// probability; a KenLM log score is only a ranking signal.
+/// probability; raw model margins are not presented as confidence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CorrectionDiagnostic {

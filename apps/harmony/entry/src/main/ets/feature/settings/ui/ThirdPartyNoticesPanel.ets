@@ -1,10 +1,10 @@
 /**
  * 内置校对模型「第三方资源」面板（Issue #958）。
  *
- * 展示随 HAP 打包的内置中文 KenLM 模型来源声明（THIRD_PARTY_MODEL_NOTICES.md）
- * 与完整许可文本（BLOOM-RAIL-1.0.txt）。两份文本由 entry 模块的 Hvigor 构建
+ * 展示随 HAP 打包的内置中文 MacBERT4CSC 模型来源声明（THIRD_PARTY_MODEL_NOTICES.md）
+ * 与完整许可文本（MacBERT4CSC Apache-2.0、ONNX Runtime MIT）。这些文本由 entry 模块的 Hvigor 构建
  * 钩子在资源打包前写入 resources/rawfile/（见 entry/hvigorfile.ts），
- * 与 people2014corpus_chars.klm 一起分发；此处只读取小体积文本，不触碰模型本体。
+ * 与 MacBERT4CSC ONNX 模型资源一起分发；此处只读取小体积文本，不触碰模型本体。
  */
 import { UIContext, ComponentContent } from '@kit.ArkUI'
 import util from '@ohos.util'
@@ -16,7 +16,7 @@ const DOMAIN = 0x0000
 
 /** rawfile 中的声明 / 许可文件名（构建期生成，见 hvigorfile.ts）。 */
 const NOTICES_RAW_FILE = 'THIRD_PARTY_MODEL_NOTICES.md'
-const LICENSE_RAW_FILE = 'BLOOM-RAIL-1.0.txt'
+const LICENSE_RAW_FILES: string[] = ['MACBERT4CSC-Apache-2.0.txt', 'ONNXRUNTIME-MIT.txt']
 
 /** 面板参数：关闭回调由调用方处理。 */
 export interface ThirdPartyNoticesPanelArgs {
@@ -35,7 +35,11 @@ export struct ThirdPartyNoticesPanel {
       const decoder = new util.TextDecoder('utf-8')
       const manager = getContext(this).resourceManager
       this.noticesText = decoder.decodeWithStream(manager.getRawFileContentSync(NOTICES_RAW_FILE))
-      this.licenseText = decoder.decodeWithStream(manager.getRawFileContentSync(LICENSE_RAW_FILE))
+      const licenses: string[] = []
+      for (let i = 0; i < LICENSE_RAW_FILES.length; i++) {
+        licenses.push(decoder.decodeWithStream(manager.getRawFileContentSync(LICENSE_RAW_FILES[i])))
+      }
+      this.licenseText = licenses.join('\n\n')
     } catch (e) {
       this.loadFailed = true
       hilog.error(DOMAIN, TAG, 'read bundled notices failed: %{public}s', String(e))

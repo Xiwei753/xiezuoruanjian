@@ -227,7 +227,7 @@ Item {
             TextField {
                 id: correctionModelPathField
                 Layout.fillWidth: true
-                placeholderText: qsTr("本地 .klm 模型文件路径")
+                placeholderText: qsTr("本地模型资源目录（含 model.onnx 与 vocab.txt）")
                 selectByMouse: true
                 onAccepted: {
                     if (root.editorControllerRef)

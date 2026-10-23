@@ -193,10 +193,10 @@ pub struct EditorBackend {
     /// Issue #935：异步请求「实时速度 + 今日汇总」。
     #[allow(dead_code)]
     request_writing_status: qt_method!(fn(&mut self, request_id: u32, window_seconds: u32)),
-    /// Issue #943：存储用户提供的本地 KenLM 文件路径；Core 负责懒加载与错误返回。
+    /// Issue #985：存储用户提供的本地 ONNX 模型资源目录；Core 负责懒加载与错误返回。
     #[allow(dead_code)]
     set_correction_model_path: qt_method!(fn(&self, path: QString) -> QJsonObject),
-    /// Issue #943：选择现有 .klm 文件，并向 QML 返回解析后的本地绝对路径。
+    /// Issue #985：选择包含 model.onnx 与 vocab.txt 的模型资源目录。
     #[allow(dead_code)]
     pick_correction_model_path: qt_method!(fn(&self) -> QJsonObject),
     /// Issue #943：选择并导入固定命名的共享校对词库文件。
@@ -741,10 +741,7 @@ impl EditorBackend {
     }
 
     fn pick_correction_model_path(&self) -> QJsonObject {
-        let Some(selected_path) = FileDialog::new()
-            .add_filter("KenLM 模型 (*.klm)", &["klm"])
-            .pick_file()
-        else {
+        let Some(selected_path) = FileDialog::new().pick_folder() else {
             return crate::backend::json_utils::serde_to_qjson_object(
                 serde_json::json!({ "success": false, "cancelled": true }),
             );
@@ -753,16 +750,12 @@ impl EditorBackend {
         let result = (|| -> Result<String, String> {
             let path = selected_path
                 .canonicalize()
-                .map_err(|error| format!("无法解析所选模型文件: {error}"))?;
-            if !path.is_file() {
-                return Err("所选模型路径不是文件".to_string());
+                .map_err(|error| format!("无法解析所选模型目录: {error}"))?;
+            if !path.is_dir() {
+                return Err("请选择模型资源目录".to_string());
             }
-            let is_klm = path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("klm"));
-            if !is_klm {
-                return Err("请选择 .klm 模型文件".to_string());
+            if !path.join("model.onnx").is_file() || !path.join("vocab.txt").is_file() {
+                return Err("模型目录必须包含 model.onnx 与 vocab.txt".to_string());
             }
             Ok(path.to_string_lossy().into_owned())
         })();

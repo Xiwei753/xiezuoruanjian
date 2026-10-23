@@ -1,0 +1,20 @@
+MacBERT4CSC Chinese spelling correction model
+=============================================
+
+Upstream model: shibing624/macbert4csc-base-chinese
+Publisher: Ming Xu (shibing624), https://github.com/shibing624/pycorrector
+Model page: https://huggingface.co/shibing624/macbert4csc-base-chinese
+Pinned revision: 615e6e09ef9a69ec487bc7c641ec3a311e2c11b9
+Base model: hfl/chinese-macbert-base, Apache-2.0
+License: Apache-2.0 (as declared by the upstream model card)
+
+Sujian ships the upstream ONNX export under onnx/model.onnx without modifying
+its parameters. Tokenizer vocabulary and configuration files are copied from
+the same pinned revision. File sizes and SHA-256 digests are recorded in
+crates/sujian-proof/assets/model_manifest.json.
+
+The model is not relicensed as GPL-3.0-only. Sujian's GPL-3.0-only license
+applies to Sujian's own code and does not alter the model license.
+
+No training data is bundled. Do not use the model to impersonate people or to
+make fully automated decisions that affect a person's legal rights.

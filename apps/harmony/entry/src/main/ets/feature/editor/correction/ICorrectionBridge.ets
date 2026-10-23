@@ -15,7 +15,7 @@ export interface ICorrectionBridge {
   getResourceStatus(): Promise<ResultEnvelope<CorrectionResourceStatusDto>>
   getModelPathStatus(path: string): Promise<ResultEnvelope<CorrectionModelPathStatusDto>>
   /**
-   * Issue #958: stream the bundled KenLM model out of the HAP rawfile via the
+   * Issue #985: stream one bundled ONNX model resource out of the HAP rawfile via the
    * native OH_ResourceManager APIs and resolve the verified sandbox path.
    * Rejects with an Error when the rawfile or the copy/digest check fails.
    */

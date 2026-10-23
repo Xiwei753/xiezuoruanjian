@@ -32,6 +32,7 @@ export interface CorrectionChapterSnapshotDto {
 export interface CorrectionResourceStatusDto {
   modelConfigured: boolean
   modelFileAvailable: boolean
+  modelMigrationRequired: boolean
   bundledLexiconAvailable: boolean
   modelPath: string | null
   installedDictionaryFiles: string[]
@@ -148,11 +149,13 @@ export function decodeCorrectionResourceStatus(data: Object): DecodeResult<Corre
   const record = data as Record<string, Object>
   const modelConfigured = record['modelConfigured']
   const modelFileAvailable = record['modelFileAvailable']
+  const modelMigrationRequired = record['modelMigrationRequired']
   const bundledLexiconAvailable = record['bundledLexiconAvailable']
   const modelPath = record['modelPath']
   const installedDictionaryFiles = record['installedDictionaryFiles']
   const missingDictionaryFiles = record['missingDictionaryFiles']
   if (typeof modelConfigured !== 'boolean' || typeof modelFileAvailable !== 'boolean' ||
+      typeof modelMigrationRequired !== 'boolean' ||
       typeof bundledLexiconAvailable !== 'boolean' ||
       (typeof modelPath !== 'string' && modelPath !== null) || !Array.isArray(installedDictionaryFiles) ||
       !Array.isArray(missingDictionaryFiles) ||
@@ -165,6 +168,7 @@ export function decodeCorrectionResourceStatus(data: Object): DecodeResult<Corre
     value: {
       modelConfigured: modelConfigured,
       modelFileAvailable: modelFileAvailable,
+      modelMigrationRequired: modelMigrationRequired,
       bundledLexiconAvailable: bundledLexiconAvailable,
       modelPath: modelPath as string | null,
       installedDictionaryFiles: installedDictionaryFiles as string[],

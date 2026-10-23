@@ -6,11 +6,10 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.AtomicFile
 import androidx.core.content.edit
+import androidx.documentfile.provider.DocumentFile
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import java.io.File
 import java.io.IOException
-import java.io.OutputStream
-import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -42,62 +41,84 @@ class CorrectionResourceRepository(context: Context) {
     private val preferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
     fun currentFiles(): CorrectionResourceFiles {
-        val modelName = activeModelFile()?.takeIf { it.isFile }?.name
+        val modelName = activeModelFile()?.takeIf(::isModelBundle)?.name
         val displayName = modelName?.let { preferences.getString(KEY_ACTIVE_MODEL_DISPLAY_NAME, null) }
         val dictionaries = SUPPORTED_DICTIONARIES.filter { File(dictionaryDirectory, it).isFile }
         return CorrectionResourceFiles(modelName, displayName, dictionaries)
     }
 
-    /** Returns the persisted active path even if the file is currently missing. */
+    /** Returns the persisted active path even if the model directory is currently missing. */
     fun activeModelFile(): File? =
         preferences.getString(KEY_ACTIVE_MODEL, null)
             ?.takeIf { it.isNotBlank() && File(it).name == it }
             ?.let { File(modelDirectory, it) }
 
+    /**
+     * #985：复制用户通过目录选择器选中的 ONNX 资源包。资源包必须包含 model.onnx
+     * 与 vocab.txt；可选 calibrator.json 和 BERT tokenizer 元数据会一并复制。
+     */
     @Throws(IOException::class)
-    fun stageModel(uri: Uri): ImportedCorrectionModel {
-        val displayName = queryDisplayName(uri)
-        if (!displayName.endsWith(".klm", ignoreCase = true)) {
-            throw IOException("Choose a .klm language model")
+    fun stageModel(treeUri: Uri): ImportedCorrectionModel {
+        val directory =
+            DocumentFile.fromTreeUri(appContext, treeUri)
+                ?: throw IOException("Unable to open the selected model directory")
+        val displayName = directory.name?.takeIf(String::isNotBlank) ?: "correction-model"
+        val modelDocument = directory.findFile(MODEL_FILE_NAME)
+        val vocabDocument = directory.findFile(VOCAB_FILE_NAME)
+        if (modelDocument?.isFile != true || vocabDocument?.isFile != true) {
+            throw IOException("The selected directory must contain model.onnx and vocab.txt")
         }
         if (!modelStagingDirectory.isDirectory && !modelStagingDirectory.mkdirs()) {
             throw IOException("Unable to create the private correction model staging directory")
         }
-
-        val stagingFile = File(modelStagingDirectory, "${UUID.randomUUID()}.part")
-        val contentHash = copyAtomicallyWithHash(uri, stagingFile)
-        if (!stagingFile.isFile || stagingFile.length() == 0L) {
-            stagingFile.delete()
-            throw IOException("The selected language model is empty")
+        if (!modelDirectory.isDirectory && !modelDirectory.mkdirs()) {
+            throw IOException("Unable to create the private correction model directory")
         }
 
+        val stagingDirectory = File(modelStagingDirectory, "${UUID.randomUUID()}.part")
+        if (!stagingDirectory.mkdirs()) {
+            throw IOException("Unable to create the correction model staging directory")
+        }
         try {
+            for (name in MODEL_BUNDLE_FILES) {
+                val document = directory.findFile(name) ?: continue
+                if (!document.isFile) continue
+                copyDocument(document.uri, File(stagingDirectory, name))
+            }
+            val stagedModel = File(stagingDirectory, MODEL_FILE_NAME)
+            val stagedVocab = File(stagingDirectory, VOCAB_FILE_NAME)
+            if (!stagedModel.isFile || stagedModel.length() == 0L || !stagedVocab.isFile) {
+                throw IOException("The selected model bundle is incomplete")
+            }
+            val contentHash = hashFile(stagedModel)
+
             return synchronized(modelImportLock) {
-                val duplicate = findModelWithHash(contentHash, stagingFile.length())
+                val duplicate = findModelWithHash(contentHash)
                 if (duplicate != null) {
                     ImportedCorrectionModel(duplicate, displayName, contentHash, createdByImport = false)
                 } else {
-                    val hashedPath = File(modelDirectory, "model-$contentHash.klm")
                     val target =
-                        if (hashedPath.exists()) {
-                            File(modelDirectory, "model-$contentHash-${UUID.randomUUID()}.klm")
-                        } else {
-                            hashedPath
-                        }
-                    if (!stagingFile.renameTo(target)) {
+                        File(
+                            modelDirectory,
+                            "model-${contentHash.take(HASH_DIRECTORY_CHARS)}",
+                        )
+                    if (target.exists() && !target.deleteRecursively()) {
+                        throw IOException("Unable to replace the staged correction model")
+                    }
+                    if (!stagingDirectory.renameTo(target)) {
                         throw IOException("Unable to install the staged correction model")
                     }
                     ImportedCorrectionModel(target, displayName, contentHash, createdByImport = true)
                 }
             }
         } finally {
-            stagingFile.delete()
+            if (stagingDirectory.exists()) stagingDirectory.deleteRecursively()
         }
     }
 
     fun setActiveModel(model: ImportedCorrectionModel) {
-        require(model.file.parentFile == modelDirectory && model.file.isFile) {
-            "The configured model must be in the private correction model directory"
+        require(model.file.parentFile == modelDirectory && isModelBundle(model.file)) {
+            "The configured model must be a complete bundle in the private correction model directory"
         }
         preferences.edit()
             .putString(KEY_ACTIVE_MODEL, model.file.name)
@@ -106,22 +127,19 @@ class CorrectionResourceRepository(context: Context) {
     }
 
     /**
-     * #958：确保随 APK 打包的内置中文 KenLM 模型已就位并返回其文件。
-     *
-     * 用户导入的模型始终优先 — 调用方先看 [activeModelFile]；只有没有 active
-     * 用户模型、且私有模型目录里也没有摘要一致的副本时，才从 APK assets 流式
-     * 拷贝内置模型，成功后按摘要复用（只拷一次）。内置模型不是用户模型，
-     * 因此不写 [KEY_ACTIVE_MODEL] 偏好、不调用 [setActiveModel]。
+     * #985：确保随 APK 打包的 ONNX 纠错模型资源目录已就位并返回目录路径。
+     * 模型是约 474MB 的 FP32 权重，不能整块读入内存；按文件逐个流式复制并校验
+     * model.onnx 的长度和 SHA-256，成功后按目录复用。
      */
     @Throws(IOException::class)
     fun ensureBundledModel(): File {
         synchronized(modelImportLock) {
-            findModelWithHash(BUNDLED_MODEL_SHA256, BUNDLED_MODEL_SIZE)?.let { return it }
-            val namedCopy = File(modelDirectory, BUNDLED_MODEL_FILE_NAME)
-            if (namedCopy.isFile && namedCopy.length() == BUNDLED_MODEL_SIZE &&
-                hashFile(namedCopy) == BUNDLED_MODEL_SHA256
-            ) {
-                return namedCopy
+            val target = File(modelDirectory, BUNDLED_MODEL_DIRECTORY_NAME)
+            if (isModelBundle(target)) {
+                val model = File(target, MODEL_FILE_NAME)
+                if (model.length() == BUNDLED_MODEL_SIZE && hashFile(model) == BUNDLED_MODEL_SHA256) {
+                    return target
+                }
             }
             if (!modelDirectory.isDirectory && !modelDirectory.mkdirs()) {
                 throw IOException("Unable to create the private correction model directory")
@@ -129,26 +147,29 @@ class CorrectionResourceRepository(context: Context) {
             if (!modelStagingDirectory.isDirectory && !modelStagingDirectory.mkdirs()) {
                 throw IOException("Unable to create the private correction model staging directory")
             }
-            val stagingFile = File(modelStagingDirectory, "${UUID.randomUUID()}.part")
+            val stagingDirectory = File(modelStagingDirectory, "${UUID.randomUUID()}.part")
+            if (!stagingDirectory.mkdirs()) {
+                throw IOException("Unable to create the bundled model staging directory")
+            }
             try {
-                copyBundledModelToStaging(stagingFile)
-                if (namedCopy.exists() && !namedCopy.delete()) {
+                copyBundledBundle(stagingDirectory)
+                if (target.exists() && !target.deleteRecursively()) {
                     throw IOException("Unable to replace the existing bundled correction model")
                 }
-                if (!stagingFile.renameTo(namedCopy)) {
+                if (!stagingDirectory.renameTo(target)) {
                     throw IOException("Unable to install the bundled correction model")
                 }
-                return namedCopy
+                return target
             } finally {
-                stagingFile.delete()
+                if (stagingDirectory.exists()) stagingDirectory.deleteRecursively()
             }
         }
     }
 
-    /** Lists installed model copies, excluding temporary candidates under the staging directory. */
+    /** Lists installed model bundles, excluding temporary candidates under the staging directory. */
     fun installedModels(): List<File> =
         modelDirectory.listFiles()
-            ?.filter { it.isFile && it.extension.equals("klm", ignoreCase = true) }
+            ?.filter { it.isDirectory && it.name != MODEL_STAGING_DIRECTORY && isModelBundle(it) }
             .orEmpty()
 
     /**
@@ -164,23 +185,23 @@ class CorrectionResourceRepository(context: Context) {
         if (configured || inUse || !deletionEligible) return false
         val canonicalModelDirectory = modelDirectory.canonicalFile
         val canonicalFile = file.canonicalFile
-        // #958：内置模型是兜底资源，不是用户导入被取代的旧副本 — 用户改选其他模型后
-        // 删掉它只会让下次启动重新从 assets 拷贝 148MB。
-        if (canonicalFile.name == BUNDLED_MODEL_FILE_NAME) return false
+        // #985：内置模型是兜底资源，不是用户导入被取代的旧副本。
+        if (canonicalFile.name == BUNDLED_MODEL_DIRECTORY_NAME) return false
         if (canonicalFile.parentFile != canonicalModelDirectory ||
-            !canonicalFile.extension.equals("klm", ignoreCase = true) ||
+            !canonicalFile.isDirectory ||
             preferences.getString(KEY_ACTIVE_MODEL, null) == canonicalFile.name
         ) {
             return false
         }
-        return canonicalFile.delete()
+        return canonicalFile.deleteRecursively()
     }
 
     fun discardModel(model: ImportedCorrectionModel) {
         if (model.createdByImport && model.file.parentFile == modelDirectory &&
+            model.file.name != BUNDLED_MODEL_DIRECTORY_NAME &&
             preferences.getString(KEY_ACTIVE_MODEL, null) != model.file.name
         ) {
-            model.file.delete()
+            model.file.deleteRecursively()
         }
     }
 
@@ -239,76 +260,46 @@ class CorrectionResourceRepository(context: Context) {
         }
     }
 
-    private fun copyAtomicallyWithHash(uri: Uri, target: File): String {
+    private fun copyDocument(uri: Uri, target: File) {
         val input = appContext.contentResolver.openInputStream(uri)
-            ?: throw IOException("Unable to open the selected file")
-        val atomicFile = AtomicFile(target)
-        val digest = MessageDigest.getInstance(SHA_256)
-        var output: java.io.FileOutputStream? = null
-        try {
-            input.use { source ->
-                val stream = atomicFile.startWrite()
-                output = stream
-                DigestInputStream(source, digest).use { it.copyTo(stream) }
-                atomicFile.finishWrite(stream)
-                output = null
-            }
-        } catch (error: Exception) {
-            output?.let(atomicFile::failWrite)
-            target.delete()
-            if (error is IOException) throw error
-            throw IOException("Unable to stage the selected correction model", error)
-        }
-        return digest.digest().toLowerHex()
-    }
-
-    /**
-     * #958：把内置模型从 APK assets 流式拷到临时文件，边写边累计字节数与 SHA-256；
-     * 长度或摘要不符时抛 IOException，由 [ensureBundledModel] 删除临时文件。
-     * 148MB 模型不能整块读进内存，因此不使用 readBytes()/copyTo()。
-     */
-    private fun copyBundledModelToStaging(stagingFile: File) {
-        val digest = MessageDigest.getInstance(SHA_256)
-        val copiedBytes = stagingFile.outputStream().use { output -> streamBundledModel(output, digest) }
-        if (copiedBytes != BUNDLED_MODEL_SIZE) {
-            throw IOException("The bundled correction model has an unexpected byte count")
-        }
-        if (digest.digest().toLowerHex() != BUNDLED_MODEL_SHA256) {
-            throw IOException("The bundled correction model failed its checksum")
+            ?: throw IOException("Unable to open $target")
+        input.use { source ->
+            target.outputStream().use { output -> source.copyTo(output) }
         }
     }
 
-    /** #958：assets → 输出流的固定缓冲拷贝循环；超出期望字节数立即失败，避免无界写入。 */
-    private fun streamBundledModel(
-        output: OutputStream,
-        digest: MessageDigest,
-    ): Long {
-        var copiedBytes = 0L
-        appContext.assets.open(BUNDLED_MODEL_ASSET_PATH, AssetManager.ACCESS_STREAMING).use { input ->
-            val buffer = ByteArray(BUNDLED_MODEL_BUFFER_SIZE)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                if (count == 0) continue
-                copiedBytes += count
-                if (copiedBytes > BUNDLED_MODEL_SIZE) {
-                    throw IOException("The bundled correction model exceeds the expected size")
-                }
-                digest.update(buffer, 0, count)
-                output.write(buffer, 0, count)
+    private fun copyBundledBundle(stagingDirectory: File) {
+        val assetRoot = "$BUNDLED_MODEL_ASSET_PATH/"
+        for (name in MODEL_BUNDLE_FILES) {
+            val assetPath = assetRoot + name
+            val target = File(stagingDirectory, name)
+            appContext.assets.open(assetPath, AssetManager.ACCESS_STREAMING).use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
             }
         }
-        return copiedBytes
+        val model = File(stagingDirectory, MODEL_FILE_NAME)
+        val vocab = File(stagingDirectory, VOCAB_FILE_NAME)
+        if (!model.isFile || model.length() != BUNDLED_MODEL_SIZE || hashFile(model) != BUNDLED_MODEL_SHA256) {
+            throw IOException("The bundled correction model failed its size or checksum check")
+        }
+        if (!vocab.isFile || vocab.length() == 0L) {
+            throw IOException("The bundled correction vocabulary is missing")
+        }
     }
 
-    private fun findModelWithHash(
-        contentHash: String,
-        expectedLength: Long,
-    ): File? =
+    private fun findModelWithHash(contentHash: String): File? =
         modelDirectory.listFiles()
             ?.asSequence()
-            ?.filter { it.isFile && it.extension.equals("klm", ignoreCase = true) && it.length() == expectedLength }
-            ?.firstOrNull { hashFile(it) == contentHash }
+            ?.filter { it.isDirectory && it.name != MODEL_STAGING_DIRECTORY && isModelBundle(it) }
+            ?.firstOrNull {
+                it.name == "model-${contentHash.take(HASH_DIRECTORY_CHARS)}" ||
+                    File(it, MODEL_FILE_NAME).let { model -> model.length() > 0L && hashFile(model) == contentHash }
+            }
+
+    private fun isModelBundle(directory: File): Boolean =
+        directory.isDirectory &&
+            File(directory, MODEL_FILE_NAME).isFile &&
+            File(directory, VOCAB_FILE_NAME).isFile
 
     private fun hashFile(file: File): String {
         val digest = MessageDigest.getInstance(SHA_256)
@@ -335,22 +326,33 @@ class CorrectionResourceRepository(context: Context) {
         private const val DICTIONARY_DIRECTORY = "correction-data"
         private const val SHA_256 = "SHA-256"
         private const val HASH_BUFFER_SIZE = 64 * 1024
+        private const val HASH_DIRECTORY_CHARS = 24
         private val modelImportLock = Any()
 
-        // #958：随 APK 打包的内置中文 KenLM 模型，与
-        // packaging/correction/kenlm-model.lock 及 app/build.gradle.kts 中的
-        // fetchBundledCorrectionModel 保持一致（文件名、assets 路径、字节数、摘要）。
-        internal const val BUNDLED_MODEL_FILE_NAME = "people2014corpus_chars.klm"
-        internal const val BUNDLED_MODEL_ASSET_PATH = "correction/people2014corpus_chars.klm"
-        internal const val BUNDLED_MODEL_SIZE = 147_608_010L
+        internal const val MODEL_FILE_NAME = "model.onnx"
+        internal const val VOCAB_FILE_NAME = "vocab.txt"
+
+        // #985：随 APK 打包的 MacBERT4CSC ONNX 资源目录，与
+        // crates/sujian-proof/assets/model_manifest.json 保持一致。
+        internal const val BUNDLED_MODEL_DIRECTORY_NAME = "macbert4csc"
+        internal const val BUNDLED_MODEL_ASSET_PATH = "correction/macbert4csc"
+        internal const val BUNDLED_MODEL_SIZE = 474_336_933L
         internal const val BUNDLED_MODEL_SHA256 =
-            "1d4ad3975144619a5bddc4ac53fcf319ec27d37dccb4ba58674af3a068d835a9"
-        private const val BUNDLED_MODEL_BUFFER_SIZE = 1024 * 1024
+            "a4d9d6807c0c8bc9d014462a728e7212315630c669a6bd670b653154391a73f3"
+
+        internal val MODEL_BUNDLE_FILES =
+            listOf(
+                MODEL_FILE_NAME,
+                VOCAB_FILE_NAME,
+                "config.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "special_tokens_map.json",
+                "calibrator.json",
+            )
 
         val SUPPORTED_DICTIONARIES = listOf(
             "word_freq.txt",
-            "same_pinyin.txt",
-            "same_stroke.txt",
             "custom_confusion.txt",
             "person_name.txt",
             "place_name.txt",

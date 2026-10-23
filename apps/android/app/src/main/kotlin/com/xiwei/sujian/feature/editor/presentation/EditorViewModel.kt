@@ -92,6 +92,7 @@ import com.xiwei.sujian.feature.project.data.RecentEditsRepository
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -674,15 +675,16 @@ class EditorViewModel(
     }
 
     /**
-     * #958：启动时准备内置中文 KenLM 模型兜底 — 随 APK 打包的模型在首次使用时
-     * 拷到应用私有目录（只拷一次），再交给 Core 作为纠错语言模型。
+     * #985：启动时准备内置 MacBERT4CSC ONNX 资源包 — 随 APK 打包的模型在首次
+     * 使用时复制到应用私有目录（只复制一次），再交给 Core 作为离线纠错模型。
      *
-     * 用户自行导入的模型始终优先：已有 active 模型时直接返回，不覆盖。
-     * 任何一步失败（assets 缺失、拷贝/校验失败、桥接失败）都静默跳过 —
-     * 没有语言模型时 Core 继续使用规则纠错，不阻断编辑。
+     * 用户自行导入且完整的模型目录始终优先；旧版 `.klm` 配置视为待迁移，
+     * 自动切换到内置 ONNX 资源。任何一步失败都静默跳过，Core 继续使用固定
+     * 规则纠错，不阻断编辑。
      */
     private suspend fun prepareBundledCorrectionModelIfNeeded() {
-        if (correctionResourceRepository.activeModelFile() != null) return
+        val active = correctionResourceRepository.activeModelFile()
+        if (active != null && File(active, "model.onnx").isFile && File(active, "vocab.txt").isFile) return
         val model =
             try {
                 withContext(Dispatchers.IO) { correctionResourceRepository.ensureBundledModel() }
@@ -696,6 +698,16 @@ class EditorViewModel(
         if (result !is com.xiwei.sujian.core.interop.common.BridgeResult.Success) {
             // 内置模型交给 Core 失败时不写任何应用状态：Core 继续用规则纠错。
             return
+        }
+        withContext(Dispatchers.IO) {
+            correctionResourceRepository.setActiveModel(
+                ImportedCorrectionModel(
+                    file = model,
+                    displayName = "内置 MacBERT4CSC",
+                    contentHash = "",
+                    createdByImport = false,
+                ),
+            )
         }
     }
 

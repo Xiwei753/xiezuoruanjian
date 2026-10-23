@@ -176,7 +176,7 @@ export class CorrectionCoordinator {
   }
 
   /**
-   * Issue #958: 内置 KenLM 模型兜底，由会话打开回调触发：
+   * Issue #985: 内置 MacBERT4CSC ONNX 模型兜底，由会话打开回调触发：
    * - Core 已配置用户模型（`modelConfigured`）时直接跳过，用户模型优先、不覆盖；
    * - 未配置时先让调用方准备内置模型文件（prepare 返回沙箱路径），再走既有
    *   `setModelPath` 交给 Core 校验切换；

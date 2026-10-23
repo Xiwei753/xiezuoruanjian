@@ -21,6 +21,9 @@ pub struct CorrectionSuggestionDto {
 pub struct CorrectionResourceStatusDto {
     pub model_configured: bool,
     pub model_file_available: bool,
+    /// A saved path points at the retired single-file KenLM model. The caller
+    /// must select a MacBERT4CSC ONNX resource directory instead.
+    pub model_migration_required: bool,
     pub model_path: Option<String>,
     pub bundled_lexicon_available: bool,
     pub installed_dictionary_files: Vec<String>,

@@ -4,8 +4,8 @@ use std::io::{self, BufRead};
 
 // Rule entries are data, not a second language model. Literal particle rules
 // are deliberately narrow; no general classifier guesses 的/地/得 from one
-// character of context. Upstream pycorrector license applies only to behavior
-// modeled in detector/corrector; the small default table below is curated data.
+// character of context. The default table is project-authored data, not a
+// ported detector or frequency model.
 //
 // Rule detection deliberately has no "two identical adjacent Han characters
 // must be a typo" rule: AA, AABB, AABC and ABB are ordinary Chinese word
@@ -53,39 +53,15 @@ impl RuleSet {
         }
     }
 
-    /// A compact, conservative baseline: a few high-signal fixed forms,
-    /// repeated Chinese punctuation as weak hints, and explicit particle
-    /// examples. Applications can add licensed correction data with
-    /// `load_tsv` instead of embedding upstream datasets in this crate.
+    /// A compact, conservative baseline. The primary correction path is the
+    /// neural model; this table only contains layout-level evidence that does
+    /// not depend on a language model. Applications can add licensed literal
+    /// rules with `load_tsv`.
     pub fn with_common_rules() -> Self {
-        let mut rules = Self {
+        Self {
             literal_rules: Vec::new(),
             enable_punctuation_runs: true,
-        };
-        rules.add_literal("fixed.should", "因该", "应该", "error", [] as [&str; 0]);
-        rules.add_literal("fixed.already", "以经", "已经", "error", [] as [&str; 0]);
-        rules.add_literal(
-            "particle.dei.urgent",
-            "着急的哭",
-            "着急得哭",
-            "warning",
-            [] as [&str; 0],
-        );
-        rules.add_literal(
-            "particle.dei.run",
-            "跑的很快",
-            "跑得很快",
-            "warning",
-            [] as [&str; 0],
-        );
-        rules.add_literal(
-            "particle.dei.slow",
-            "慢慢的走",
-            "慢慢地走",
-            "warning",
-            [] as [&str; 0],
-        );
-        rules
+        }
     }
 
     pub fn add_literal<I, S>(
@@ -318,7 +294,22 @@ mod tests {
 
     #[test]
     fn explicit_literal_rules_still_fire() {
-        let matches = detect("这因该以经算好了。");
+        let mut rules = RuleSet::empty();
+        rules.add_literal(
+            "fixed.should",
+            "因该",
+            "应该",
+            "error",
+            Vec::<String>::new(),
+        );
+        rules.add_literal(
+            "fixed.already",
+            "以经",
+            "已经",
+            "error",
+            Vec::<String>::new(),
+        );
+        let matches = rules.detect("这因该以经算好了。");
         assert_eq!(matches.len(), 2, "unexpected matches: {matches:?}");
         assert_eq!(matches[0].rule_id, "fixed.should");
         assert_eq!(matches[0].original, "因该");

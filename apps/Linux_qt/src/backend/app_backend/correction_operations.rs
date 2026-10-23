@@ -13,19 +13,15 @@ use writer_core::api::types::{
     CorrectionEntityNameKindDto, CorrectionIgnoreScopeDto,
 };
 
-/// Issue #958：RPM 包内自带的中文 KenLM 模型安装路径。
+/// Issue #985：RPM/HAP 包内自带的 MacBERT4CSC ONNX 资源目录。
 ///
-/// RPM spec 把 `people2014corpus_chars.klm` 装到 `%{_datadir}/sujian/models/`，
-/// 即 `/usr/share/sujian/models/`。运行时直接从这个只读安装目录 mmap 读取，
-/// 不做每用户拷贝。源码运行/开发环境通常没有这个文件，见
-/// `provision_bundled_correction_model`。
-pub(crate) const BUNDLED_CORRECTION_MODEL_PATH: &str =
-    "/usr/share/sujian/models/people2014corpus_chars.klm";
+/// 目录中必须包含 `model.onnx` 与 `vocab.txt`，`calibrator.json` 可选。
+/// 运行时只读加载该目录，不向用户数据目录复制模型。源码运行/开发环境
+/// 通常没有这个目录，见 `provision_bundled_correction_model`。
+pub(crate) const BUNDLED_CORRECTION_MODEL_PATH: &str = "/usr/share/sujian/models/macbert4csc";
 
-const CORRECTION_DICTIONARY_FILES: [&str; 8] = [
+const CORRECTION_DICTIONARY_FILES: [&str; 6] = [
     "word_freq.txt",
-    "same_pinyin.txt",
-    "same_stroke.txt",
     "custom_confusion.txt",
     "person_name.txt",
     "place_name.txt",
@@ -282,18 +278,16 @@ impl AppBackend {
             .map_err(|error| error.to_string())
     }
 
-    /// Issue #958：把 RPM 安装的内置中文 KenLM 模型作为兜底交给 Core。
+    /// Issue #985：把发行包安装的 MacBERT4CSC ONNX 资源目录作为兜底交给 Core。
     ///
     /// 判定语义：
-    /// - 内置模型文件不存在（源码运行/开发环境）→ 什么都不做；
-    /// - Core 已配置过模型（`model_configured == true`，即使配置文件当前缺失）→
-    ///   直接返回，绝不覆盖用户自己的模型设置；
-    /// - 仅当 Core 从未配置过模型、且内置文件存在时，才把内置安装路径交给 Core。
-    ///
-    /// 由打开/切换工作区的启动路径调用一次。首次写入后 Core 会把该路径持久化，
-    /// 后续启动 `model_configured` 即为 true，不会反复覆盖。
+    /// - 内置模型目录或必需文件不存在（源码运行/开发环境）→ 什么都不做；
+    /// - Core 已配置可用的新模型 → 直接返回，绝不覆盖用户自己的模型设置；
+    /// - Core 尚未配置模型，或仍保存旧 `.klm` 路径（`model_migration_required`）
+    ///   → 写入内置 ONNX 目录。旧 KenLM 文件不会再被 Core 当作模型加载。
     pub(crate) fn provision_bundled_correction_model(&self) -> Result<(), String> {
-        if !std::path::Path::new(BUNDLED_CORRECTION_MODEL_PATH).is_file() {
+        let bundle = std::path::Path::new(BUNDLED_CORRECTION_MODEL_PATH);
+        if !bundle.join("model.onnx").is_file() || !bundle.join("vocab.txt").is_file() {
             return Ok(());
         }
         let api = self
@@ -302,7 +296,7 @@ impl AppBackend {
         let status = api
             .get_correction_resource_status()
             .map_err(|error| error.to_string())?;
-        if status.model_configured {
+        if status.model_configured && !status.model_migration_required {
             return Ok(());
         }
         api.set_correction_model_path(BUNDLED_CORRECTION_MODEL_PATH.to_string())

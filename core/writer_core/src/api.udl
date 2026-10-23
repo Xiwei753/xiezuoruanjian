@@ -1784,6 +1784,7 @@ dictionary CorrectionChapterSnapshotDto {
 dictionary CorrectionResourceStatusDto {
     boolean model_configured;
     boolean model_file_available;
+    boolean model_migration_required;
     string? model_path;
     boolean bundled_lexicon_available;
     sequence<string> installed_dictionary_files;

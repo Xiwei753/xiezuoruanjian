@@ -233,7 +233,10 @@ class SettingsRepository(
         val BUNDLED_CORRECTION_NOTICE_ASSETS =
             listOf(
                 "correction/THIRD_PARTY_MODEL_NOTICES.md",
-                "correction/BLOOM-RAIL-1.0.txt",
+                "correction/licenses/third_party-macbert4csc-LICENSE",
+                "correction/licenses/third_party-macbert4csc-NOTICE",
+                "correction/licenses/third_party-onnxruntime-LICENSE",
+                "correction/licenses/third_party-onnxruntime-NOTICE",
             )
     }
 }

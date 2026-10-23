@@ -75,17 +75,22 @@ val abiSuffix =
         )
     }
 
-// #958：内置中文 KenLM 模型（packaging/correction/kenlm-model.lock 锁定）只作为构建
-// 产物进入 APK：fetch-model.sh 复用或下载校验后写入
-// build/generated/correction-assets/correction/people2014corpus_chars.klm，
-// 该目录是 main 源集的 assets 根，APK 内路径为
-// assets/correction/people2014corpus_chars.klm。build/ 已被忽略，模型不入库。
+// #985：内置 MacBERT4CSC ONNX 资源包只作为构建产物进入 APK。fetch-model.sh
+// 按 model_manifest.json 下载并校验后写入
+// build/generated/correction-assets/correction/macbert4csc/，该目录是 main
+// 源集的 assets 根，APK 内路径为 assets/correction/macbert4csc/。
+// build/ 已被忽略，模型不入库。
 val bundledCorrectionAssetsDir = layout.buildDirectory.dir("generated/correction-assets")
-val bundledCorrectionModelDir = layout.buildDirectory.dir("generated/correction-assets/correction")
-val bundledCorrectionModelFileName = "people2014corpus_chars.klm"
-val bundledCorrectionModelSize = 147_608_010L
-// #958：与模型随包分发的第三方来源声明与许可全文（与 RPM/HAP 打包同一份文件）。
-val bundledCorrectionNoticeFileNames = listOf("THIRD_PARTY_MODEL_NOTICES.md", "BLOOM-RAIL-1.0.txt")
+val bundledCorrectionModelDir = layout.buildDirectory.dir("generated/correction-assets/correction/macbert4csc")
+val bundledCorrectionModelFileName = "model.onnx"
+val bundledCorrectionModelSize = 474_336_933L
+val bundledCorrectionNoticeFiles =
+    listOf(
+        "third_party/macbert4csc/LICENSE",
+        "third_party/macbert4csc/NOTICE",
+        "third_party/onnxruntime/LICENSE",
+        "third_party/onnxruntime/NOTICE",
+    )
 
 android {
     namespace = "com.xiwei.sujian"
@@ -144,8 +149,8 @@ android {
         // ABI 残留混入或陈旧原生库覆盖新产物。
         getByName("main") {
             jniLibs.setSrcDirs(emptyList<Any>())
-            // #958：内置纠错语言模型从构建产物目录进入 assets
-            // （APK 内 assets/correction/people2014corpus_chars.klm）。
+            // #985：内置纠错 ONNX 模型资源目录从构建产物进入 assets
+            // （APK 内 assets/correction/macbert4csc/）。
             assets.srcDir(bundledCorrectionAssetsDir)
         }
         getByName("noAi") {
@@ -198,10 +203,9 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-    // #958：内置语言模型是 Core mmap 读取的 148MB 独立资产，保持不压缩，
-    // 避免打包时压缩、运行时再解压的额外开销。
+    // #985：ONNX 权重由 Core 直接读取文件，保持不压缩，避免运行时解压开销。
     androidResources {
-        noCompress("klm")
+        noCompress("onnx")
     }
 }
 
@@ -231,20 +235,21 @@ tasks.register("buildWriterNative") {
     description = "Build Rust native libraries for writer core (lifecycle task)"
 }
 
-// #958：随 APK 打包的内置中文 KenLM 模型获取任务，只在顶层注册一次。
-// 声明锁文件与脚本为输入、模型输出目录为输出，让 Gradle 自行判断 UP-TO-DATE；
-// 各变体的 merge<Variant>Assets 都依赖本任务，保证 debug/release 打包前模型已就位。
+// #985：随 APK 打包的 ONNX 纠错模型获取任务，只在顶层注册一次。
+// 声明模型清单与脚本为输入、资源目录为输出；各变体的 merge<Variant>Assets
+// 都依赖本任务，保证 debug/release 打包前模型已就位。
 val fetchBundledCorrectionModel =
     tasks.register("fetchBundledCorrectionModel") {
         group = "build"
-        description = "Fetch and verify the bundled correction language model (Issue #958)"
+        description = "Fetch and verify the bundled ONNX correction model (Issue #985)"
 
         val repoRoot = rootProject.projectDir.resolve("../..").canonicalFile
         inputs.files(
-            File(repoRoot, "packaging/correction/kenlm-model.lock"),
+            File(repoRoot, "crates/sujian-proof/assets/model_manifest.json"),
             File(repoRoot, "packaging/correction/fetch-model.sh"),
+            File(repoRoot, "packaging/correction/THIRD_PARTY_MODEL_NOTICES.md"),
         )
-        inputs.files(bundledCorrectionNoticeFileNames.map { File(repoRoot, "packaging/correction/$it") })
+        inputs.files(bundledCorrectionNoticeFiles.map { File(repoRoot, it) })
         outputs.dir(bundledCorrectionModelDir)
 
         doLast {
@@ -252,22 +257,36 @@ val fetchBundledCorrectionModel =
             if (!scriptPath.exists()) {
                 throw GradleException("fetch-model.sh not found at ${scriptPath.absolutePath}")
             }
-            val outputDir = bundledCorrectionModelDir.get().asFile
+            val outputDir = bundledCorrectionModelDir.get().asFile.parentFile
             exec {
                 commandLine("bash", scriptPath.absolutePath, outputDir.absolutePath)
             }
-            val modelFile = File(outputDir, bundledCorrectionModelFileName)
+            val bundleDir = File(outputDir, "macbert4csc")
+            val modelFile = File(bundleDir, bundledCorrectionModelFileName)
             if (!modelFile.isFile || modelFile.length() != bundledCorrectionModelSize) {
                 throw GradleException(
                     "Bundled correction model missing or of unexpected size at ${modelFile.absolutePath}",
                 )
             }
-            bundledCorrectionNoticeFileNames.forEach { name ->
-                val sourceFile = File(repoRoot, "packaging/correction/$name")
+            if (!File(bundleDir, "vocab.txt").isFile) {
+                throw GradleException("Bundled correction vocabulary missing at ${bundleDir.absolutePath}")
+            }
+            val noticesSource = File(repoRoot, "packaging/correction/THIRD_PARTY_MODEL_NOTICES.md")
+            if (!noticesSource.isFile) {
+                throw GradleException("Bundled correction notices missing at ${noticesSource.absolutePath}")
+            }
+            noticesSource.copyTo(File(outputDir, "THIRD_PARTY_MODEL_NOTICES.md"), overwrite = true)
+            val licenseDir = File(outputDir, "licenses")
+            if (!licenseDir.isDirectory && !licenseDir.mkdirs()) {
+                throw GradleException("Unable to create bundled license directory")
+            }
+            bundledCorrectionNoticeFiles.forEach { relative ->
+                val sourceFile = File(repoRoot, relative)
                 if (!sourceFile.isFile) {
                     throw GradleException("Bundled correction notice missing at ${sourceFile.absolutePath}")
                 }
-                sourceFile.copyTo(File(outputDir, name), overwrite = true)
+                val targetName = relative.replace('/', '-')
+                sourceFile.copyTo(File(licenseDir, targetName), overwrite = true)
             }
         }
     }
@@ -449,6 +468,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
 
     implementation(libs.gson)
+    implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
 
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

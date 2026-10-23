@@ -33,8 +33,8 @@ impl WriterCoreApi {
         )
     }
 
-    /// Validate and save the user's local KenLM model path. Scans share the
-    /// process-cached model mapping; WriterCore never packages the model.
+    /// Validate and save the user's local ONNX model resource directory. Scans
+    /// share the process-cached model; WriterCore never packages the weights.
     pub fn set_correction_model_path(&self, path: String) -> ApiResult<()> {
         self.correction_store()?.set_model_path(Path::new(&path))
     }

@@ -1,27 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Offline Chinese proofreading engine used by Sujian's platform independent Core.
 //!
-//! Suggestions carry UTF-8 byte ranges and never mutate the supplied text. The
-//! KenLM model is opened from a caller supplied local path and is not embedded
-//! in this crate or its binaries.
+//! The primary correction path is a local MacBERT4CSC ONNX model. Model files
+//! are supplied by the application bundle or an explicit local path; this
+//! crate never downloads them. The engine returns byte-addressed suggestions
+//! and never mutates the supplied text.
 
 pub mod confusion;
 pub mod diagnostic;
-pub mod lm;
+pub mod neural;
+pub mod postprocess;
 
-mod candidates;
 mod corrector;
-mod decision;
-mod detector;
-mod error_detection;
 mod lexicon;
 mod proper_names;
 mod rules;
 mod segment;
+mod tokenizer;
 
 pub use diagnostic::CorrectionDiagnostic;
 pub use lexicon::{Lexicon, LexiconPaths};
-pub use lm::LanguageScorer;
+pub use neural::{NeuralPredictor, PositionPrediction, ProofreadingModel};
+pub use postprocess::Calibrator;
 pub use proper_names::{is_valid_work_entity, ProperNameKind};
 pub use rules::RuleSet;
 
@@ -32,8 +32,11 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CorrectionConfig {
     /// Maximum number of ranked replacements returned for each suspicious span.
+    /// The neural pipeline emits at most one equal-length replacement per
+    /// character position.
     pub max_candidates_per_error: usize,
-    /// Include warning-level suggestions explicitly emitted by configured rules.
+    /// Include warning-level suggestions. Confirmed author relations and
+    /// explicit rules remain visible when this is false.
     pub include_weak_hints: bool,
 }
 
@@ -63,38 +66,39 @@ pub enum CorrectionError {
     ModelUnavailable,
 }
 
-/// Stateless-in-request traditional correction engine with a shared model and
-/// immutable lexicon/rule data. `scan` returns suggestions and never edits the
-/// caller's text.
+/// Stateless-in-request correction engine with a shared model and immutable
+/// lexicon/rule data. `scan` returns suggestions and never edits the caller's
+/// text.
 pub struct CorrectionEngine {
-    corrector: corrector::TraditionalCorrector,
+    corrector: corrector::Corrector,
 }
 
 impl CorrectionEngine {
     pub fn new(
-        scorer: Arc<dyn LanguageScorer>,
+        predictor: Arc<dyn NeuralPredictor>,
         lexicon: Lexicon,
         rules: RuleSet,
         config: CorrectionConfig,
     ) -> Result<Self, CorrectionError> {
         Ok(Self {
-            corrector: corrector::TraditionalCorrector::new(scorer, lexicon, rules, config)?,
+            corrector: corrector::Corrector::new(predictor, lexicon, rules, config)?,
         })
     }
 
     /// Create an engine that shares immutable lexicon data across requests.
     pub fn new_shared(
-        scorer: Arc<dyn LanguageScorer>,
+        predictor: Arc<dyn NeuralPredictor>,
         lexicon: Arc<Lexicon>,
         rules: RuleSet,
         config: CorrectionConfig,
     ) -> Result<Self, CorrectionError> {
         Ok(Self {
-            corrector: corrector::TraditionalCorrector::new_shared(scorer, lexicon, rules, config)?,
+            corrector: corrector::Corrector::new_shared(predictor, lexicon, rules, config)?,
         })
     }
 
-    /// Create an engine that reports fixed rules without requiring a KenLM model.
+    /// Create an engine that reports deterministic relations and rules without
+    /// requiring a neural model.
     pub fn rules_only(
         lexicon: Lexicon,
         rules: RuleSet,
@@ -110,7 +114,7 @@ impl CorrectionEngine {
         config: CorrectionConfig,
     ) -> Result<Self, CorrectionError> {
         Ok(Self {
-            corrector: corrector::TraditionalCorrector::rules_only(lexicon, rules, config)?,
+            corrector: corrector::Corrector::rules_only(lexicon, rules, config)?,
         })
     }
 

@@ -104,25 +104,44 @@ install -Dpm 0644 packaging/linux/icons/hicolor/scalable/apps/sujian.svg \
 install -Dpm 0644 packaging/rpm/io.github.Xiwei753.Sujian.metainfo.xml \
     %{buildroot}%{_datadir}/metainfo/io.github.Xiwei753.Sujian.metainfo.xml
 
-# Issue #958：内置中文 KenLM 校对模型装到只读共享目录，运行时直接 mmap 读取，
-# 不复制到用户目录。模型由 build-rpm.sh 在生成 Source0 tarball 前下载校验。
-install -Dpm 0644 packaging/correction/bundled/people2014corpus_chars.klm \
-    %{buildroot}%{_datadir}/sujian/models/people2014corpus_chars.klm
+# Issue #985：内置 MacBERT4CSC ONNX 资源目录与 ONNX Runtime。模型由
+# build-rpm.sh 在生成 Source0 tarball 前按 manifest 下载校验；运行时只读加载，
+# 不复制到用户目录，也不在首次启动时联网下载。
+install -dpm 0755 %{buildroot}%{_datadir}/sujian/models/macbert4csc
+install -pm 0644 packaging/correction/bundled/macbert4csc/model.onnx \
+    %{buildroot}%{_datadir}/sujian/models/macbert4csc/model.onnx
+install -pm 0644 packaging/correction/bundled/macbert4csc/vocab.txt \
+    %{buildroot}%{_datadir}/sujian/models/macbert4csc/vocab.txt
+install -pm 0644 packaging/correction/bundled/macbert4csc/config.json \
+    %{buildroot}%{_datadir}/sujian/models/macbert4csc/config.json
+install -pm 0644 packaging/correction/bundled/macbert4csc/tokenizer.json \
+    %{buildroot}%{_datadir}/sujian/models/macbert4csc/tokenizer.json
+install -pm 0644 packaging/correction/bundled/macbert4csc/tokenizer_config.json \
+    %{buildroot}%{_datadir}/sujian/models/macbert4csc/tokenizer_config.json
+install -pm 0644 packaging/correction/bundled/macbert4csc/special_tokens_map.json \
+    %{buildroot}%{_datadir}/sujian/models/macbert4csc/special_tokens_map.json
+install -pm 0644 packaging/correction/bundled/macbert4csc/calibrator.json \
+    %{buildroot}%{_datadir}/sujian/models/macbert4csc/calibrator.json
+install -Dpm 0755 packaging/correction/bundled/runtime/libonnxruntime.so.1.22.0 \
+    %{buildroot}%{_libdir}/sujian/libonnxruntime.so.1.22.0
+ln -s libonnxruntime.so.1.22.0 %{buildroot}%{_libdir}/sujian/libonnxruntime.so
 
 %files
-%license LICENSE packaging/correction/BLOOM-RAIL-1.0.txt
-%doc README.md packaging/correction/THIRD_PARTY_MODEL_NOTICES.md
+%license LICENSE third_party/macbert4csc/LICENSE third_party/onnxruntime/LICENSE
+%doc README.md packaging/correction/THIRD_PARTY_MODEL_NOTICES.md third_party/macbert4csc/NOTICE third_party/onnxruntime/NOTICE
 %{_bindir}/sujian
 %{_libexecdir}/sujian/sujian-linux-qt
 %{_datadir}/applications/io.github.Xiwei753.Sujian.desktop
 %{_datadir}/icons/hicolor/scalable/apps/io.github.Xiwei753.Sujian.svg
 %{_datadir}/metainfo/io.github.Xiwei753.Sujian.metainfo.xml
-# Issue #958：内置中文 KenLM 模型与第三方来源/许可说明。
-%{_datadir}/sujian/models/people2014corpus_chars.klm
+# Issue #985：内置 MacBERT4CSC ONNX 资源目录、ONNX Runtime 与第三方声明。
+%{_datadir}/sujian/models/macbert4csc/
+%{_libdir}/sujian/libonnxruntime.so
+%{_libdir}/sujian/libonnxruntime.so.1.22.0
 
 %changelog
 * Sun Oct 18 2026 Xiwei753 <xiwei753@users.noreply.github.com> - 0.1.0-1
-- 内置中文 KenLM 校对模型 people2014corpus_chars.klm，随包分发 BigScience RAIL v1.0 许可与第三方来源说明（Issue #958）
+- 校对引擎换代：内置 MacBERT4CSC ONNX 模型与 ONNX Runtime，随包分发 Apache-2.0/MIT 许可与第三方来源说明（Issue #985）
 * Thu Oct 15 2026 Xiwei753 <xiwei753@users.noreply.github.com> - 0.1.0-1
 - 界面全面迁移到 KDE Kirigami 6 + Breeze + Kirigami Addons（Issue #900）
 - 新增运行依赖：kf6-kirigami、kf6-kirigami-addons、qqc2-breeze-style、breeze-icon-theme

@@ -1,7 +1,7 @@
 use std::sync::{Arc, MutexGuard};
 
 use sujian_proof::{
-    CorrectionConfig, CorrectionDiagnostic, CorrectionEngine, LanguageScorer, RuleSet,
+    CorrectionConfig, CorrectionDiagnostic, CorrectionEngine, NeuralPredictor, RuleSet,
 };
 
 use crate::api::{
@@ -98,8 +98,8 @@ impl CorrectionScanner {
             let rules = RuleSet::with_common_rules();
             let config = CorrectionConfig::default();
             let engine = if let Some(model) = model {
-                let scorer: Arc<dyn LanguageScorer> = model;
-                CorrectionEngine::new_shared(scorer, lexicon, rules, config)
+                let predictor: Arc<dyn NeuralPredictor> = model;
+                CorrectionEngine::new_shared(predictor, lexicon, rules, config)
             } else {
                 CorrectionEngine::rules_only_shared(lexicon, rules, config)
             }

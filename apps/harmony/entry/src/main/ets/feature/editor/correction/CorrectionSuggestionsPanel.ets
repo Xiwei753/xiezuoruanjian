@@ -42,9 +42,7 @@ export struct CorrectionSuggestionsPanel {
       case 'particle.dei.slow': return '助词用法提示，请结合句意确认。'
       case 'confusion.custom': return '命中了混淆词词典中的词条。'
       case 'proper.similarity': return '与作品专名存在形近候选。'
-      case 'detector.oov': return '该词未命中当前词典，属于统计疑点，请结合上下文判断。'
-      case 'detector.char_mad': return '字符级语言模型发现了较少见的搭配，仅作统计提示。'
-      case 'detector.candidate': return '替换候选的上下文评分高于原词。'
+      case 'neural.macbert4csc': return '离线神经网络模型根据上下文给出了等长替换建议，请结合语境核对。'
       default: return '检查到重复或标点规则提示，请结合上下文确认。'
     }
   }
@@ -110,7 +108,7 @@ export struct CorrectionSuggestionsPanel {
       .width('100%')
 
       Row({ space: 8 }) {
-        Button('导入 .klm 模型')
+        Button('导入 ONNX 模型目录')
           .height(32)
           .enabled(!this.isPreparingResources)
           .onClick(() => this.onImportModel?.())

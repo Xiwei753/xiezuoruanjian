@@ -7,8 +7,6 @@ import { NativeCorrectionBridge } from './NativeCorrectionBridge'
 
 const LEXICON_FILES: string[] = [
   'word_freq.txt',
-  'same_pinyin.txt',
-  'same_stroke.txt',
   'custom_confusion.txt',
   'person_name.txt',
   'place_name.txt',
@@ -17,15 +15,30 @@ const LEXICON_FILES: string[] = [
 ]
 
 const MODEL_FILE_PREFIX = 'sujian-correction-model-'
+const MODEL_FILE_NAME = 'model.onnx'
+const VOCAB_FILE_NAME = 'vocab.txt'
+const MODEL_BUNDLE_FILES: string[] = [
+  MODEL_FILE_NAME,
+  VOCAB_FILE_NAME,
+  'config.json',
+  'tokenizer.json',
+  'tokenizer_config.json',
+  'special_tokens_map.json',
+  'calibrator.json'
+]
 
-// Issue #958：内置中文 KenLM 模型随 entry HAP 打包，构建期由
+// Issue #985：内置 MacBERT4CSC FP32 ONNX 模型随 entry HAP 打包，构建期由
 // tools/build_harmony.sh 调 packaging/correction/fetch-model.sh 生成到
 // resources/rawfile/。运行时由 native OH_ResourceManager 接口分块流式复制到
 // 应用私有目录，这里只声明锁定文件的名称、字节数与 SHA-256。
-const BUNDLED_MODEL_RAW_FILE = 'people2014corpus_chars.klm'
-const BUNDLED_MODEL_SIZE = 147608010
-const BUNDLED_MODEL_SHA256 = '1d4ad3975144619a5bddc4ac53fcf319ec27d37dccb4ba58674af3a068d835a9'
 const BUNDLED_MODEL_DIRECTORY = 'correction-models'
+const BUNDLED_BUNDLE_DIRECTORY = 'macbert4csc'
+const BUNDLED_MODEL_RAW_FILE = 'macbert4csc/model.onnx'
+const BUNDLED_MODEL_SIZE = 474336933
+const BUNDLED_MODEL_SHA256 = 'a4d9d6807c0c8bc9d014462a728e7212315630c669a6bd670b653154391a73f3'
+const BUNDLED_VOCAB_RAW_FILE = 'macbert4csc/vocab.txt'
+const BUNDLED_VOCAB_SIZE = 109540
+const BUNDLED_VOCAB_SHA256 = '45bbac6b341c319adc98a532532882e91a9cefc0329aa57bac9ae761c27b291c'
 
 export interface CorrectionResourceSnapshot {
   directory: string
@@ -65,13 +78,15 @@ export class CorrectionResourceImporter {
         const path = `${directory}/${name}`
         try {
           const stat = fileIo.statSync(path)
+          if (stat.isDirectory() && CorrectionResourceImporter.isManagedModelFile(name)) {
+            modelFiles.push(name)
+            continue
+          }
           if (!stat.isFile() || stat.size <= 0) {
             continue
           }
           if (LEXICON_FILES.indexOf(name) >= 0) {
             dictionaryFiles.push(name)
-          } else if (name.toLowerCase().endsWith('.klm')) {
-            modelFiles.push(name)
           }
         } catch (_e) {
           // Ignore entries that disappear while the resource snapshot is read.
@@ -86,59 +101,62 @@ export class CorrectionResourceImporter {
   static async importModel(context: common.UIAbilityContext, appDataRoot: string,
     activateCandidate: (path: string) => Promise<ResultEnvelope<boolean>>,
     onProgress?: (message: string) => void): Promise<CorrectionResourceImportResult> {
-    let stagingPath = ''
-    let candidatePath = ''
+    let stagingDirectory = ''
+    let candidateDirectory = ''
     let candidateCreated = false
     let candidateActivated = false
     try {
       onProgress?.('正在打开系统文件选择器…')
       const options = new picker.DocumentSelectOptions()
-      options.fileSuffixFilters = ['KenLM 模型（.klm）|.klm']
-      options.maxSelectNumber = 1
+      options.fileSuffixFilters = ['ONNX 模型资源（.onnx/.txt/.json）|.onnx,.txt,.json']
+      options.maxSelectNumber = MODEL_BUNDLE_FILES.length
       const uris = await new picker.DocumentViewPicker(context).select(options)
       if (uris.length === 0) {
         return { status: 'cancelled', message: '已取消模型选择' }
       }
-      const sourceUri = uris[0]
-      const selectedName = new fileUri.FileUri(sourceUri).name
-      if (!selectedName.toLowerCase().endsWith('.klm')) {
-        return { status: 'failed', message: '请选择 .klm 格式的 KenLM 模型文件' }
-      }
 
       const directory = `${appDataRoot}/correction-data`
       CorrectionResourceImporter.ensureDirectory(directory)
-      let modelName = ''
-      do {
-        CorrectionResourceImporter.nextModelId++
-        const uniqueSuffix = `${Date.now()}-${CorrectionResourceImporter.nextModelId}`
-        modelName = `${MODEL_FILE_PREFIX}${uniqueSuffix}.klm`
-        candidatePath = `${directory}/${modelName}`
-        stagingPath = `${directory}/.${modelName}.importing`
-      } while (fileIo.accessSync(candidatePath) || fileIo.accessSync(stagingPath))
+      CorrectionResourceImporter.nextModelId++
+      const uniqueSuffix = `${Date.now()}-${CorrectionResourceImporter.nextModelId}`
+      stagingDirectory = `${directory}/.${MODEL_FILE_PREFIX}${uniqueSuffix}.importing`
+      candidateDirectory = `${directory}/${MODEL_FILE_PREFIX}${uniqueSuffix}`
+      CorrectionResourceImporter.ensureDirectory(stagingDirectory)
 
-      onProgress?.('正在将模型复制到应用私有暂存目录…')
-      await CorrectionResourceImporter.copyPickedUri(sourceUri, stagingPath)
-      const copied = fileIo.statSync(stagingPath)
-      if (!copied.isFile() || copied.size <= 0) {
-        throw new Error('所选模型文件为空或无法读取')
+      onProgress?.('正在将模型资源复制到应用私有暂存目录…')
+      let copiedModel = false
+      let copiedVocab = false
+      for (let i = 0; i < uris.length; i++) {
+        const sourceUri = uris[i]
+        const selectedName = new fileUri.FileUri(sourceUri).name
+        if (MODEL_BUNDLE_FILES.indexOf(selectedName) < 0) {
+          continue
+        }
+        const destination = `${stagingDirectory}/${selectedName}`
+        await CorrectionResourceImporter.copyPickedUri(sourceUri, destination)
+        const copied = fileIo.statSync(destination)
+        if (!copied.isFile() || copied.size <= 0) {
+          throw new Error(`模型资源 ${selectedName} 为空或无法读取`)
+        }
+        if (selectedName === MODEL_FILE_NAME) {
+          copiedModel = true
+        } else if (selectedName === VOCAB_FILE_NAME) {
+          copiedVocab = true
+        }
+      }
+      if (!copiedModel || !copiedVocab) {
+        throw new Error('模型目录必须同时包含 model.onnx 与 vocab.txt')
       }
 
-      const duplicatePath = await CorrectionResourceImporter.findDuplicateModel(directory, stagingPath, copied.size)
-      if (duplicatePath.length > 0) {
-        CorrectionResourceImporter.removeIfPresent(stagingPath)
-        stagingPath = ''
-        candidatePath = duplicatePath
-      } else {
-        await fileIo.moveFile(stagingPath, candidatePath)
-        stagingPath = ''
-        candidateCreated = true
-      }
+      await fileIo.moveDir(stagingDirectory, candidateDirectory)
+      stagingDirectory = ''
+      candidateCreated = true
 
       onProgress?.('正在让 Core 校验并切换到候选模型…')
-      const result = await activateCandidate(candidatePath)
+      const result = await activateCandidate(candidateDirectory)
       if (!result.success || result.data !== true) {
         if (candidateCreated) {
-          CorrectionResourceImporter.removeIfPresent(candidatePath)
+          CorrectionResourceImporter.removeModelDirectory(candidateDirectory)
           candidateCreated = false
         }
         return {
@@ -149,17 +167,15 @@ export class CorrectionResourceImporter {
       candidateActivated = true
       return {
         status: 'imported',
-        message: duplicatePath.length > 0
-          ? '发现内容相同的模型文件；Core 已校验并切换到现有文件'
-          : 'Core 已校验并切换到新模型；旧模型保留以供生命周期检查',
-        resourceName: candidatePath.substring(candidatePath.lastIndexOf('/') + 1)
+        message: 'Core 已校验并切换到新的 ONNX 模型目录；旧模型保留以供生命周期检查',
+        resourceName: candidateDirectory.substring(candidateDirectory.lastIndexOf('/') + 1)
       }
     } catch (e) {
-      if (stagingPath.length > 0) {
-        CorrectionResourceImporter.removeIfPresent(stagingPath)
+      if (stagingDirectory.length > 0) {
+        CorrectionResourceImporter.removeModelDirectory(stagingDirectory)
       }
       if (candidateCreated && !candidateActivated) {
-        CorrectionResourceImporter.removeIfPresent(candidatePath)
+        CorrectionResourceImporter.removeModelDirectory(candidateDirectory)
       }
       return { status: 'failed', message: `模型导入失败：${String(e)}` }
     }
@@ -184,7 +200,7 @@ export class CorrectionResourceImporter {
       if (canonicalName.length === 0) {
         return {
           status: 'failed',
-          message: `不支持“${selectedName}”；请使用 Core 约定的八种词典文件名`
+          message: `不支持“${selectedName}”；请使用 Core 约定的六种词典文件名`
         }
       }
 
@@ -214,22 +230,25 @@ export class CorrectionResourceImporter {
   }
 
   /**
-   * Issue #958: 把 HAP 内置 KenLM 模型复制到 `${appDataRoot}/correction-models/`。
-   * 目录先创建；native 侧按固定缓冲分块流式复制并校验字节数与 SHA-256，
-   * 返回校验后的沙箱绝对路径；任何失败都 reject，由调用方决定是否只记 warning。
-   * 用户导入的模型始终优先，本方法只在调用方确认 Core 未配置模型时使用。
+   * Issue #985: 把 HAP 内置 MacBERT4CSC ONNX 模型复制到
+   * `${appDataRoot}/correction-models/macbert4csc/`。目录先创建；native 侧按固定
+   * 缓冲分块流式复制并校验字节数与 SHA-256，返回校验后的沙箱目录；任何失败都
+   * reject，由调用方决定是否只记 warning。用户导入的模型始终优先。
    */
   static async ensureBundledModel(manager: resourceManager.ResourceManager, appDataRoot: string): Promise<string> {
     if (CorrectionResourceImporter.bundledModelPath.length > 0) {
       return CorrectionResourceImporter.bundledModelPath
     }
-    const directory = `${appDataRoot}/${BUNDLED_MODEL_DIRECTORY}`
+    const directory = `${appDataRoot}/${BUNDLED_MODEL_DIRECTORY}/${BUNDLED_BUNDLE_DIRECTORY}`
     CorrectionResourceImporter.ensureDirectory(directory)
-    const destination = `${directory}/${BUNDLED_MODEL_RAW_FILE}`
-    const path = await CorrectionResourceImporter.bundledModelBridge.prepareBundledCorrectionModel(
-      manager, BUNDLED_MODEL_RAW_FILE, destination, BUNDLED_MODEL_SIZE, BUNDLED_MODEL_SHA256)
-    CorrectionResourceImporter.bundledModelPath = path
-    return path
+    await CorrectionResourceImporter.bundledModelBridge.prepareBundledCorrectionModel(
+      manager, BUNDLED_MODEL_RAW_FILE, `${directory}/${MODEL_FILE_NAME}`,
+      BUNDLED_MODEL_SIZE, BUNDLED_MODEL_SHA256)
+    await CorrectionResourceImporter.bundledModelBridge.prepareBundledCorrectionModel(
+      manager, BUNDLED_VOCAB_RAW_FILE, `${directory}/${VOCAB_FILE_NAME}`,
+      BUNDLED_VOCAB_SIZE, BUNDLED_VOCAB_SHA256)
+    CorrectionResourceImporter.bundledModelPath = directory
+    return directory
   }
 
   static removeModelIfEligible(appDataRoot: string, path: string,
@@ -243,12 +262,15 @@ export class CorrectionResourceImporter {
       return false
     }
     const name = path.substring(directoryPrefix.length)
-    if (name.indexOf('/') >= 0 || !name.startsWith(MODEL_FILE_PREFIX) ||
-        !name.toLowerCase().endsWith('.klm')) {
+    if (name.indexOf('/') >= 0 || !CorrectionResourceImporter.isManagedModelFile(name)) {
       return false
     }
     try {
       const stat = fileIo.statSync(path)
+      if (stat.isDirectory()) {
+        CorrectionResourceImporter.removeModelDirectory(path)
+        return true
+      }
       if (!stat.isFile()) {
         return false
       }
@@ -260,7 +282,7 @@ export class CorrectionResourceImporter {
   }
 
   static isManagedModelFile(name: string): boolean {
-    return name.startsWith(MODEL_FILE_PREFIX) && name.toLowerCase().endsWith('.klm')
+    return name.startsWith(MODEL_FILE_PREFIX)
   }
 
   private static canonicalLexiconName(name: string): string {
@@ -288,77 +310,19 @@ export class CorrectionResourceImporter {
     }
   }
 
-  private static async findDuplicateModel(directory: string, candidatePath: string,
-    candidateSize: number): Promise<string> {
-    let names: string[] = []
+  private static removeModelDirectory(path: string): void {
     try {
-      names = fileIo.listFileSync(directory)
+      if (!fileIo.accessSync(path)) {
+        return
+      }
+      const names = fileIo.listFileSync(path)
+      for (let i = 0; i < names.length; i++) {
+        fileIo.unlinkSync(`${path}/${names[i]}`)
+      }
+      fileIo.rmdirSync(path)
     } catch (_e) {
-      return ''
+      // Cleanup failure must not hide the original import or Core error.
     }
-    for (let i = 0; i < names.length; i++) {
-      const name = names[i]
-      if (!name.toLowerCase().endsWith('.klm')) {
-        continue
-      }
-      const path = `${directory}/${name}`
-      try {
-        const stat = fileIo.statSync(path)
-        if (stat.isFile() && stat.size === candidateSize &&
-            await CorrectionResourceImporter.filesEqual(candidatePath, path, candidateSize)) {
-          return path
-        }
-      } catch (_e) {
-        // Ignore a model that disappears or becomes unreadable during comparison.
-      }
-    }
-    return ''
-  }
-
-  private static async filesEqual(leftPath: string, rightPath: string, size: number): Promise<boolean> {
-    const left = fileIo.openSync(leftPath, fileIo.OpenMode.READ_ONLY)
-    let right: fileIo.File | null = null
-    try {
-      right = fileIo.openSync(rightPath, fileIo.OpenMode.READ_ONLY)
-      let offset = 0
-      const chunkSize = 256 * 1024
-      while (offset < size) {
-        const length = Math.min(chunkSize, size - offset)
-        const leftBytes = await CorrectionResourceImporter.readChunk(left.fd, length)
-        const rightBytes = await CorrectionResourceImporter.readChunk(right.fd, length)
-        if (leftBytes === null || rightBytes === null) {
-          return false
-        }
-        for (let i = 0; i < length; i++) {
-          if (leftBytes[i] !== rightBytes[i]) {
-            return false
-          }
-        }
-        offset += length
-      }
-      return true
-    } finally {
-      if (right !== null) {
-        fileIo.closeSync(right)
-      }
-      fileIo.closeSync(left)
-    }
-  }
-
-  private static async readChunk(fd: number, length: number): Promise<Uint8Array | null> {
-    const bytes = new Uint8Array(length)
-    let offset = 0
-    while (offset < length) {
-      const remaining = length - offset
-      const buffer = new ArrayBuffer(remaining)
-      const read = await fileIo.read(fd, buffer)
-      if (read <= 0) {
-        return null
-      }
-      bytes.set(new Uint8Array(buffer, 0, read), offset)
-      offset += read
-    }
-    return bytes
   }
 
   private static removeIfPresent(path: string): void {

@@ -108,14 +108,15 @@ directory = "vendor"
 VENDOR_TOML
 
 # ---------------------------------------------------------------------------
-# 3.5. 获取并校验内置中文 KenLM 模型（Issue #958）
+# 3.5. 获取并校验内置 MacBERT4CSC ONNX 模型与 ONNX Runtime（Issue #985）
 # ---------------------------------------------------------------------------
-# 模型二进制不入库；在生成 Source0 tarball 之前放进 staging，使 rpmbuild 的
-# %install 能从源码树装入 /usr/share/sujian/models/。下载或校验不符时脚本
-# 以非零状态退出，构建失败，而不是打出缺少内置模型的 RPM。
+# 模型/运行时二进制不入库；在生成 Source0 tarball 之前放进 staging，使
+# rpmbuild 的 %install 能从源码树装入 /usr/share/sujian/models/ 与
+# /usr/lib64/sujian/。下载或校验不符时脚本以非零状态退出，构建失败，
+# 而不是打出缺少模型或运行时错误的 RPM。
 BUNDLED_MODEL_DIR="${STAGING_DIR}/packaging/correction/bundled"
-echo "==> 获取内置中文校对模型到: ${BUNDLED_MODEL_DIR}"
-"${SCRIPT_DIR}/../correction/fetch-model.sh" "${BUNDLED_MODEL_DIR}"
+echo "==> 获取内置校对模型与 ONNX Runtime 到: ${BUNDLED_MODEL_DIR}"
+SUJIAN_FETCH_ORT=1 "${SCRIPT_DIR}/../correction/fetch-model.sh" "${BUNDLED_MODEL_DIR}"
 
 # ---------------------------------------------------------------------------
 # 4. 从 staging 目录生成 Source0 tarball

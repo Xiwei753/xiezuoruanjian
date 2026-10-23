@@ -384,9 +384,9 @@ impl AppBackend {
         // 后续按键查询只查内存索引，不读盘也不阻塞 UI。
         self.search_bridge()
             .open(path.to_string(), projects_root_str.clone(), layout.clone());
-        // Issue #958：把 RPM 安装的内置中文 KenLM 模型作为兜底交给 Core。
+        // Issue #958/#985：把 RPM 安装的内置 ONNX 校对模型目录作为兜底交给 Core。
         // 此时 current_data_root/current_workspace_git_layout 已设置完毕，
-        // core_api() 可用。方法内部只在 Core 从未配置过模型且内置文件存在时写入，
+        // core_api() 可用。方法内部只在 Core 从未配置过模型且内置目录完整时写入，
         // 用户配置的模型始终优先。失败按 warning 记录，不阻断工作区打开，
         // 也不弹错误对话框、不改动用户可见状态。
         if let Err(e) = self.provision_bundled_correction_model() {

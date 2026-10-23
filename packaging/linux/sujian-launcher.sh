@@ -134,6 +134,18 @@ if [ ! -x "$REAL_BINARY" ]; then
     exit 127
 fi
 
+# Issue #985：ONNX Runtime 随 RPM 安装到私有目录，显式加载该库，避免依赖
+# 发行版是否另外安装了 onnxruntime。源码/AppImage 未提供时保持环境原样。
+if [ -z "${SUJIAN_ONNXRUNTIME_LIB:-}" ]; then
+    for ort_lib in /usr/lib64/sujian/libonnxruntime.so /usr/lib/sujian/libonnxruntime.so; do
+        if [ -f "$ort_lib" ]; then
+            SUJIAN_ONNXRUNTIME_LIB="$ort_lib"
+            export SUJIAN_ONNXRUNTIME_LIB
+            break
+        fi
+    done
+fi
+
 # --- 运行真实二进制，stdout/stderr 镜像到两个日志文件和终端 ---
 # 临时禁用 errexit 以便捕获 PIPESTATUS[0]（真实二进制的退出码）。
 # 2>&1 把 stderr 合并进管道，确保 stderr 也写入日志（不吞掉，只是镜像）。

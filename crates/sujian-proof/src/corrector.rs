@@ -1,65 +1,50 @@
-// SPDX-License-Identifier: Apache-2.0
-// Modified behavioral port of pycorrector/pycorrector/corrector.py by XuMing
-// (xuming624), especially Corrector.correct/get_lm_correct_item.
+// SPDX-License-Identifier: GPL-3.0-only
+//! Correction pipeline.
+//!
+//! Order is deliberate:
+//! 1. deterministic author relations (confirmed misspellings and literal
+//!    confusion entries) plus layout/punctuation rules;
+//! 2. equal-length neural character proposals, calibrated and filtered against
+//!    author-owned protection;
+//! 3. one final merge that keeps the original as the competing text.
+//!
+//! No branch rewrites the caller's text. Every diagnostic carries a UTF-8 byte
+//! range into the original string.
 
 use std::sync::Arc;
 
-use crate::candidates::{CandidateGenerator, CorrectionCandidate};
 use crate::confusion::ConfusionMatcher;
-use crate::decision::{CorrectionDecision, DecisionGate};
-use crate::detector::{exact_name_occurrences, DetectionKind, Detector};
-use crate::error_detection::{confusion_count, ErrorDetector, SourceErrorEvidence};
 use crate::lexicon::Lexicon;
-use crate::lm::LanguageScorer;
+use crate::neural::NeuralPredictor;
+use crate::postprocess;
 use crate::rules::RuleSet;
-use crate::segment::{Segmenter, TextSegment};
+use crate::segment::{context_end, context_start, Segmenter};
 use crate::{CorrectionConfig, CorrectionDiagnostic, CorrectionError};
 
-/// Characters of surrounding sentence scored on each side of a candidate.
-/// Comparison happens on the same local window for the original and every
-/// replacement, so a global sentence length cannot dominate the decision.
-const LOCAL_CONTEXT_CHARS: usize = 6;
+/// Characters of neighbouring context supplied to each sentence window.
+const NEURAL_CONTEXT_CHARS: usize = 24;
 
-// The original text is always a competing candidate. KenLM scores rank
-// alternatives; they are not calibrated error probabilities. Only the
-// explicit decision gate may turn a candidate into a suggestion.
-
-pub(crate) struct TraditionalCorrector {
-    scorer: Option<Arc<dyn LanguageScorer>>,
+pub(crate) struct Corrector {
+    predictor: Option<Arc<dyn NeuralPredictor>>,
     lexicon: Arc<Lexicon>,
     rules: RuleSet,
     config: CorrectionConfig,
     segmenter: Segmenter,
-    detector: Detector,
     confusion_matcher: ConfusionMatcher,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct LocalScore {
-    log10_score: f64,
-    events: usize,
-}
-
-impl LocalScore {
-    /// Per-scored-event log10 score. Length-changing replacements are compared
-    /// with the same normalization instead of favoring shorter text.
-    fn normalized(self) -> f64 {
-        self.log10_score / self.events.max(1) as f64
-    }
-}
-
-impl TraditionalCorrector {
+impl Corrector {
     pub(crate) fn new(
-        scorer: Arc<dyn LanguageScorer>,
+        predictor: Arc<dyn NeuralPredictor>,
         lexicon: Lexicon,
         rules: RuleSet,
         config: CorrectionConfig,
     ) -> Result<Self, CorrectionError> {
-        Self::new_shared(scorer, Arc::new(lexicon), rules, config)
+        Self::new_shared(predictor, Arc::new(lexicon), rules, config)
     }
 
     pub(crate) fn new_shared(
-        scorer: Arc<dyn LanguageScorer>,
+        predictor: Arc<dyn NeuralPredictor>,
         lexicon: Arc<Lexicon>,
         rules: RuleSet,
         config: CorrectionConfig,
@@ -67,12 +52,11 @@ impl TraditionalCorrector {
         let confusion_matcher = ConfusionMatcher::new(&lexicon.confusion_entries())
             .map_err(CorrectionError::InvalidConfiguration)?;
         Ok(Self {
-            scorer: Some(scorer),
+            predictor: Some(predictor),
             lexicon,
             rules,
             config,
             segmenter: Segmenter::new(),
-            detector: Detector::default(),
             confusion_matcher,
         })
     }
@@ -85,149 +69,23 @@ impl TraditionalCorrector {
         let confusion_matcher = ConfusionMatcher::new(&lexicon.confusion_entries())
             .map_err(CorrectionError::InvalidConfiguration)?;
         Ok(Self {
-            scorer: None,
+            predictor: None,
             lexicon,
             rules,
             config,
             segmenter: Segmenter::new(),
-            detector: Detector::default(),
             confusion_matcher,
         })
     }
 
     /// Generate byte-addressed suggestions without changing `text`.
     pub(crate) fn suggest(&self, text: &str) -> Result<Vec<CorrectionDiagnostic>, CorrectionError> {
-        let mut diagnostics = Vec::new();
-        if let Some(scorer) = self.scorer.as_ref() {
-            let suspects = self.detector.detect(
-                text,
-                &self.lexicon,
-                &self.segmenter,
-                &self.confusion_matcher,
-                scorer.as_ref(),
-            )?;
+        let mut diagnostics = self.confirmed_misspelling_diagnostics(text);
+        diagnostics.extend(self.confusion_diagnostics(text));
+        diagnostics.extend(self.rule_diagnostics(text));
 
-            for suspect in suspects {
-                let source = match suspect.kind {
-                    DetectionKind::ConfirmedEntitySpelling => "proper_name",
-                    DetectionKind::ConfusionWord => "confusion_word",
-                    DetectionKind::OutOfVocabularyWord => "oov",
-                    DetectionKind::Character => "character_ngram",
-                };
-                if let Some(replacement) = suspect.exact_replacement {
-                    if replacement == suspect.original {
-                        continue;
-                    }
-                    let rule_id = match suspect.kind {
-                        DetectionKind::ConfirmedEntitySpelling => "proper.confirmed_misspelling",
-                        DetectionKind::ConfusionWord => "confusion.custom",
-                        _ => continue,
-                    };
-                    diagnostics.push(CorrectionDiagnostic {
-                        start_byte: suspect.start_byte,
-                        end_byte: suspect.end_byte,
-                        original: suspect.original,
-                        replacement,
-                        source: source.to_owned(),
-                        rule_id: rule_id.to_owned(),
-                        severity: "error".to_owned(),
-                        confidence: None,
-                    });
-                    continue;
-                }
-
-                if self.config.max_candidates_per_error == 0 {
-                    continue;
-                }
-                let candidate_generator = CandidateGenerator::new();
-                let candidates =
-                    candidate_generator.generate(&suspect.original, &self.lexicon, &self.segmenter);
-                let candidates = self.candidates_for_scoring(&suspect.original, candidates);
-                if candidates.is_empty() {
-                    continue;
-                }
-
-                let segment =
-                    segment_for_span(text, suspect.start_byte, suspect.end_byte, &self.segmenter)
-                        .ok_or(CorrectionError::InvalidRange {
-                        start: suspect.start_byte,
-                        end: suspect.end_byte,
-                        text_len: text.len(),
-                    })?;
-                let segment_text = &text[segment.start_byte..segment.end_byte];
-                let relative_start = suspect.start_byte - segment.start_byte;
-                let relative_end = suspect.end_byte - segment.start_byte;
-
-                let original_score = self.local_context_score(
-                    segment_text,
-                    relative_start,
-                    relative_end,
-                    &suspect.original,
-                )?;
-                let mut accepted =
-                    Vec::<(f64, f64, CorrectionCandidate, SourceErrorEvidence)>::new();
-                for candidate in candidates {
-                    let candidate_score = self.local_context_score(
-                        segment_text,
-                        relative_start,
-                        relative_end,
-                        &candidate.text,
-                    )?;
-                    let source_error = ErrorDetector::assess(
-                        &suspect.original,
-                        &candidate,
-                        &suspect.evidence,
-                        original_score.normalized(),
-                        candidate_score.normalized(),
-                    );
-                    if DecisionGate::evaluate(
-                        &suspect.original,
-                        &candidate,
-                        &suspect.evidence.segmentation,
-                        &suspect.evidence,
-                        &source_error,
-                    ) == CorrectionDecision::Accept
-                    {
-                        accepted.push((
-                            source_error.probability,
-                            candidate_score.normalized() - original_score.normalized(),
-                            candidate,
-                            source_error,
-                        ));
-                    }
-                }
-                accepted.sort_by(
-                    |(left_probability, left_gain, left, _),
-                     (right_probability, right_gain, right, _)| {
-                        right_probability
-                            .total_cmp(left_probability)
-                            .then_with(|| right_gain.total_cmp(left_gain))
-                            .then_with(|| left.text.cmp(&right.text))
-                    },
-                );
-                let Some((_, _, chosen, _)) = accepted.into_iter().next() else {
-                    continue;
-                };
-
-                diagnostics.push(CorrectionDiagnostic {
-                    start_byte: suspect.start_byte,
-                    end_byte: suspect.end_byte,
-                    original: suspect.original,
-                    replacement: chosen.text,
-                    source: source.to_owned(),
-                    rule_id: "detector.error_model".to_owned(),
-                    // Statistical candidates are never certain mistakes. The
-                    // fixed author-confirmed paths above remain `error`.
-                    severity: "warning".to_owned(),
-                    confidence: None,
-                });
-            }
-
-            diagnostics.extend(self.rule_diagnostics(text));
-        } else {
-            diagnostics.extend(self.confirmed_misspelling_diagnostics(text));
-            diagnostics.extend(self.confusion_diagnostics(text));
-            diagnostics.extend(self.rule_diagnostics(text));
+        if let Some(predictor) = &self.predictor {
+            diagnostics.extend(self.neural_diagnostics(text, predictor.as_ref())?);
         }
 
         if !self.config.include_weak_hints {
@@ -250,69 +108,38 @@ impl TraditionalCorrector {
         filter_diagnostics(text, diagnostics)
     }
 
-    /// Filter and order generated candidates without touching the model, then
-    /// enforce the configured scoring budget. Only candidates that implement
-    /// the detector's explicit source-error relation can be accepted, so other
-    /// guesses never consume model queries.
-    fn candidates_for_scoring(
+    fn neural_diagnostics(
         &self,
-        source: &str,
-        mut candidates: Vec<CorrectionCandidate>,
-    ) -> Vec<CorrectionCandidate> {
-        let budget = self.config.max_candidates_per_error;
-        if budget == 0 {
-            return Vec::new();
+        text: &str,
+        predictor: &dyn NeuralPredictor,
+    ) -> Result<Vec<CorrectionDiagnostic>, CorrectionError> {
+        let mut diagnostics = Vec::new();
+        let calibrator = predictor.calibrator();
+        for sentence in self.segmenter.sentence_segments(text) {
+            let window_start = context_start(text, sentence.start_byte, NEURAL_CONTEXT_CHARS);
+            let window_end = context_end(text, sentence.end_byte, NEURAL_CONTEXT_CHARS);
+            let window = &text[window_start..window_end];
+            let predictions = predictor.predict(window)?;
+            for accepted in postprocess::postprocess(window, predictions, &self.lexicon, calibrator)
+            {
+                let start_byte = window_start + accepted.start_byte;
+                let end_byte = window_start + accepted.end_byte;
+                if start_byte < sentence.start_byte || end_byte > sentence.end_byte {
+                    continue;
+                }
+                diagnostics.push(CorrectionDiagnostic {
+                    start_byte,
+                    end_byte,
+                    original: accepted.original,
+                    replacement: accepted.replacement,
+                    source: "neural_csc".to_string(),
+                    rule_id: "neural.macbert4csc".to_string(),
+                    severity: "warning".to_string(),
+                    confidence: Some(accepted.probability),
+                });
+            }
         }
-        candidates.retain(|candidate| candidate.known_general_word);
-        candidates.sort_by(|left, right| {
-            let left_confusion = confusion_count(source, left);
-            let right_confusion = confusion_count(source, right);
-            right_confusion
-                .cmp(&left_confusion)
-                .then_with(|| right.origin.cmp(&left.origin))
-                .then_with(|| left.changed_chars.cmp(&right.changed_chars))
-                .then_with(|| right.phonetic_relation.cmp(&left.phonetic_relation))
-                .then_with(|| {
-                    right
-                        .near_phonetic_relation
-                        .cmp(&left.near_phonetic_relation)
-                })
-                .then_with(|| right.known_general_word.cmp(&left.known_general_word))
-                .then_with(|| left.rank.cmp(&right.rank))
-                .then_with(|| left.text.cmp(&right.text))
-        });
-        candidates.truncate(budget);
-        candidates
-    }
-
-    /// Score `replacement` in the same local sentence window as the original.
-    /// `score_tokens()` keeps the sentence boundary convention; both sides are
-    /// normalized per scored event so a length-changing candidate is compared
-    /// on equal terms.
-    fn local_context_score(
-        &self,
-        segment_text: &str,
-        start: usize,
-        end: usize,
-        replacement: &str,
-    ) -> Result<LocalScore, CorrectionError> {
-        let context_start = context_start(segment_text, start, LOCAL_CONTEXT_CHARS);
-        let context_end = context_end(segment_text, end, LOCAL_CONTEXT_CHARS);
-        let mut local = String::with_capacity(context_end - context_start + replacement.len());
-        local.push_str(&segment_text[context_start..start]);
-        local.push_str(replacement);
-        local.push_str(&segment_text[end..context_end]);
-
-        let tokens = self.segmenter.char_tokens(&local);
-        let log10_score = self
-            .scorer
-            .as_ref()
-            .ok_or(CorrectionError::ModelUnavailable)?
-            .score_tokens(&tokens)?;
-        Ok(LocalScore {
-            log10_score,
-            events: tokens.len() + 1,
-        })
+        Ok(diagnostics)
     }
 
     fn confirmed_misspelling_diagnostics(&self, text: &str) -> Vec<CorrectionDiagnostic> {
@@ -378,31 +205,15 @@ impl TraditionalCorrector {
     }
 }
 
-fn context_start(text: &str, end: usize, max_chars: usize) -> usize {
-    text[..end]
-        .char_indices()
-        .rev()
-        .nth(max_chars.saturating_sub(1))
-        .map_or(0, |(byte, _)| byte)
-}
-
-fn context_end(text: &str, start: usize, max_chars: usize) -> usize {
-    text[start..]
-        .char_indices()
-        .nth(max_chars)
-        .map_or(text.len(), |(byte, _)| start + byte)
-}
-
-fn segment_for_span(
-    text: &str,
-    start_byte: usize,
-    end_byte: usize,
-    segmenter: &Segmenter,
-) -> Option<TextSegment> {
-    segmenter
-        .sentence_segments(text)
-        .into_iter()
-        .find(|segment| segment.start_byte <= start_byte && end_byte <= segment.end_byte)
+/// Find every exact occurrence of `needle` in `haystack`, in bytes.
+pub(crate) fn exact_name_occurrences(haystack: &str, needle: &str) -> Vec<(usize, usize)> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    haystack
+        .match_indices(needle)
+        .map(|(start, _)| (start, start + needle.len()))
+        .collect()
 }
 
 fn filter_diagnostics(
@@ -457,13 +268,7 @@ fn filter_diagnostics(
                 && diagnostic.start_byte < existing.end_byte
                 && existing.start_byte < diagnostic.end_byte
         });
-        if overlaps_other {
-            continue;
-        }
-        // Only the best-ranked suggestion for a span is shown. Stacking
-        // alternative replacements on the same bytes is noise, especially for
-        // uncertain proper-name checks.
-        if same_span_alternative {
+        if overlaps_other || same_span_alternative {
             continue;
         }
         filtered.push(diagnostic);
@@ -479,14 +284,11 @@ fn filter_diagnostics(
 
 fn source_priority(source: &str) -> u8 {
     match source {
-        // Only explicit author-confirmed misspellings use `proper_name`; they
-        // must outrank ordinary confusion candidates, matching the detector.
         "proper_name" => 0,
         "confusion_word" => 1,
         "rule" => 2,
-        "oov" => 3,
-        "character_ngram" => 4,
-        _ => 5,
+        "neural_csc" => 3,
+        _ => 4,
     }
 }
 
@@ -501,137 +303,136 @@ fn severity_priority(severity: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexicon::LexiconPaths;
+    use crate::postprocess::Calibrator;
+    use crate::{CorrectionEngine, NeuralPredictor, PositionPrediction, ProperNameKind};
 
-    /// A flat model deliberately provides no language evidence. Work-dictionary
-    /// terms are protection only, so a similar span must not be rewritten just
-    /// because it resembles a confirmed entity.
-    struct FlatScorer;
+    struct FixedPredictor {
+        proposals: Vec<(char, char, f32, f32)>,
+        calibrator: Calibrator,
+    }
 
-    impl LanguageScorer for FlatScorer {
-        fn score_tokens(&self, _tokens: &[&str]) -> Result<f64, CorrectionError> {
-            Ok(0.0)
+    impl NeuralPredictor for FixedPredictor {
+        fn predict(&self, text: &str) -> Result<Vec<PositionPrediction>, CorrectionError> {
+            let mut predictions = Vec::new();
+            for (byte, ch) in text.char_indices() {
+                if let Some((_, candidate, original_log, candidate_log)) = self
+                    .proposals
+                    .iter()
+                    .find(|(original, _, _, _)| *original == ch)
+                {
+                    predictions.push(PositionPrediction {
+                        start_byte: byte,
+                        end_byte: byte + ch.len_utf8(),
+                        original: ch,
+                        candidate: *candidate,
+                        original_log_probability: *original_log,
+                        candidate_log_probability: *candidate_log,
+                    });
+                }
+            }
+            Ok(predictions)
         }
 
-        fn perplexity(&self, _tokens: &[&str]) -> Result<f64, CorrectionError> {
-            Ok(1.0)
+        fn calibrator(&self) -> &Calibrator {
+            &self.calibrator
         }
     }
 
-    fn corrector(lexicon: Lexicon) -> TraditionalCorrector {
-        TraditionalCorrector::new(
-            Arc::new(FlatScorer),
+    fn calibrator() -> Calibrator {
+        Calibrator {
+            version: "test".to_string(),
+            intercept: 0.0,
+            margin_weight: 1.0,
+            candidate_weight: 0.0,
+            original_weight: 0.0,
+            threshold: 0.5,
+        }
+    }
+
+    fn predictor(proposals: Vec<(char, char, f32, f32)>) -> Arc<dyn NeuralPredictor> {
+        Arc::new(FixedPredictor {
+            proposals,
+            calibrator: calibrator(),
+        })
+    }
+
+    fn engine(lexicon: Lexicon, proposals: Vec<(char, char, f32, f32)>) -> CorrectionEngine {
+        CorrectionEngine::new(
+            predictor(proposals),
             lexicon,
             RuleSet::empty(),
             CorrectionConfig::default(),
         )
-        .expect("corrector")
-    }
-
-    fn rules_only(lexicon: Lexicon) -> TraditionalCorrector {
-        TraditionalCorrector::rules_only(
-            Arc::new(lexicon),
-            RuleSet::empty(),
-            CorrectionConfig::default(),
-        )
-        .expect("corrector")
+        .expect("engine")
     }
 
     #[test]
-    fn work_dictionary_terms_are_protected_not_replacement_targets() {
-        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_protected_word("甲地乙坊".to_string());
-        let diagnostics = corrector(lexicon)
-            .suggest("他住进了甲地乙房。")
+    fn protected_complete_work_name_is_never_rewritten() {
+        let mut lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
+        lexicon.insert_protected_word("甲乙".to_string());
+        let diagnostics = engine(lexicon, vec![('甲', '假', -3.0, -0.1)])
+            .scan("甲乙走进了房间。")
             .expect("scan");
-        assert!(
-            diagnostics
-                .iter()
-                .all(|diagnostic| diagnostic.original != "甲地乙房"),
-            "an unconfirmed similar span must not be replaced by a work term"
-        );
-    }
-
-    fn entity_lexicon() -> Lexicon {
-        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_work_entity("甲乙丙".to_string(), crate::ProperNameKind::Person);
-        lexicon.insert_work_entity_alias("甲乙丙", "乙丙".to_string());
-        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丁".to_string());
-        lexicon
+        assert!(diagnostics.is_empty());
     }
 
     #[test]
-    fn explicit_wrong_spelling_is_replaced_but_alias_is_protected() {
-        let diagnostics = corrector(entity_lexicon())
-            .suggest("甲乙丁说道。")
+    fn a_confident_unprotected_character_is_reported_with_calibrated_confidence() {
+        let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
+        let diagnostics = engine(lexicon, vec![('幅', '副', -3.0, -0.1)])
+            .scan("他画了一幅画。")
             .expect("scan");
         assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.original == "甲乙丁"
+            diagnostic.original == "幅"
+                && diagnostic.replacement == "副"
+                && diagnostic.rule_id == "neural.macbert4csc"
+                && diagnostic.confidence.is_some()
+        }));
+    }
+
+    #[test]
+    fn weak_model_proposals_are_suppressed() {
+        let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
+        let diagnostics = engine(lexicon, vec![('她', '他', -0.1, -0.2)])
+            .scan("她笑了。")
+            .expect("scan");
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn confirmed_misspelling_is_an_error_even_when_weak_hints_are_disabled() {
+        let mut lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
+        lexicon.insert_work_entity("甲乙丙".to_string(), ProperNameKind::Person);
+        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丁".to_string());
+        let config = CorrectionConfig {
+            include_weak_hints: false,
+            ..CorrectionConfig::default()
+        };
+        let diagnostics =
+            CorrectionEngine::new(predictor(Vec::new()), lexicon, RuleSet::empty(), config)
+                .expect("engine")
+                .scan("甲乙丁说道。")
+                .expect("scan");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.rule_id == "proper.confirmed_misspelling"
                 && diagnostic.replacement == "甲乙丙"
-                && diagnostic.rule_id == "proper.confirmed_misspelling"
                 && diagnostic.severity == "error"
         }));
-
-        let alias_diagnostics = corrector(entity_lexicon())
-            .suggest("乙丙说道。")
-            .expect("scan");
-        assert!(
-            alias_diagnostics
-                .iter()
-                .all(|diagnostic| diagnostic.original != "乙丙"),
-            "a confirmed alias is protected and must not be flagged"
-        );
     }
 
     #[test]
-    fn valid_ordinary_words_are_not_replaced_by_work_entities() {
-        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_protected_word("甲乙".to_string());
-        lexicon.insert_protected_word("乙丙".to_string());
-        let corrector = corrector(lexicon);
-        assert!(corrector.suggest("甲丁").expect("scan").is_empty());
-        assert!(corrector.suggest("乙丁").expect("scan").is_empty());
-    }
-
-    #[test]
-    fn canonical_prefixed_misspelling_is_still_replaced_in_both_paths() {
-        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_work_entity("甲乙丙".to_string(), crate::ProperNameKind::Person);
-        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丙丁".to_string());
-
-        for diagnostics in [
-            corrector(lexicon.clone())
-                .suggest("甲乙丙丁说道。")
-                .expect("scan"),
-            rules_only(lexicon).suggest("甲乙丙丁说道。").expect("scan"),
-        ] {
-            assert!(diagnostics.iter().any(|diagnostic| {
-                diagnostic.original == "甲乙丙丁"
-                    && diagnostic.replacement == "甲乙丙"
-                    && diagnostic.rule_id == "proper.confirmed_misspelling"
-            }));
-        }
-    }
-
-    #[test]
-    fn confirmed_misspelling_outranks_confusion_in_both_paths() {
-        let mut lexicon = Lexicon::from_paths(&LexiconPaths::default()).expect("embedded lexicon");
-        lexicon.insert_work_entity("甲乙丙".to_string(), crate::ProperNameKind::Person);
-        lexicon.insert_work_entity_misspelling("甲乙丙", "甲乙丁".to_string());
-        lexicon.insert_confusion("甲乙丁".to_string(), "甲乙戊".to_string());
-
-        for diagnostics in [
-            corrector(lexicon.clone())
-                .suggest("甲乙丁说道。")
-                .expect("scan"),
-            rules_only(lexicon).suggest("甲乙丁说道。").expect("scan"),
-        ] {
-            let chosen = diagnostics
-                .iter()
-                .find(|diagnostic| diagnostic.original == "甲乙丁")
-                .expect("confirmed misspelling diagnostic");
-            assert_eq!(chosen.replacement, "甲乙丙");
-            assert_eq!(chosen.rule_id, "proper.confirmed_misspelling");
-        }
+    fn rules_only_scans_do_not_require_a_model() {
+        let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
+        let diagnostics = CorrectionEngine::rules_only(
+            lexicon,
+            RuleSet::with_common_rules(),
+            CorrectionConfig::default(),
+        )
+        .expect("engine")
+        .scan("他说。。。")
+        .expect("scan");
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.source == "rule"));
     }
 }
