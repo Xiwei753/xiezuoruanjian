@@ -881,7 +881,8 @@ Item {
         onSingleTapped: function(eventPoint) {
             if (!router.leftTapCandidateValid || router.leftGestureBlocked)
                 return
-            router.leftTapCandidateValid = false
+            // Qt 的双击会先发 singleTapped 再发 doubleTapped；这里不能清候选，
+            // 否则 doubleTapped 会被自己的 guard 拦掉。
             router.handleSingleTap(eventPoint, "mouse")
         }
         onDoubleTapped: function(eventPoint) {
@@ -910,7 +911,7 @@ Item {
         onSingleTapped: function(eventPoint) {
             if (!router.leftTapCandidateValid || router.leftGestureBlocked)
                 return
-            router.leftTapCandidateValid = false
+            // 同上：单击不能提前使双击候选失效。
             router.handleSingleTap(eventPoint, "touch")
         }
         onDoubleTapped: function(eventPoint) {
