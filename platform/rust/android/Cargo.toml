@@ -11,10 +11,11 @@ name = "uniffi_writer_core"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["github-api", "git-https"]
+default = ["github-api", "git-https-vendored-openssl"]
 ai = ["writer_uniffi/ai"]
 github-api = ["writer_uniffi/github-api", "dep:reqwest"]
 git-https = ["writer_uniffi/git-https"]
+git-https-vendored-openssl = ["writer_uniffi/git-https-vendored-openssl"]
 
 [dependencies]
 writer_core = { path = "../../../core/writer_core" }

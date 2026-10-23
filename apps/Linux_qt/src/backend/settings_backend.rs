@@ -416,6 +416,9 @@ fn build_export_attachments(
             Some(writer_core::api::types::ProviderConfigDto::GitHub { remote_url, .. }) => {
                 !remote_url.trim().is_empty()
             }
+            Some(writer_core::api::types::ProviderConfigDto::GitHttps { remote_url, .. }) => {
+                !remote_url.trim().is_empty()
+            }
             None => false,
         })
         .unwrap_or(false);

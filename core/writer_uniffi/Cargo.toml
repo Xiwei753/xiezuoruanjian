@@ -14,6 +14,7 @@ default = []
 ai = ["writer_core/ai"]
 github-api = ["writer_core/github-api"]
 git-https = ["writer_core/git-https"]
+git-https-vendored-openssl = ["writer_core/git-https-vendored-openssl"]
 
 [dependencies]
 writer_core = { path = "../writer_core" }

@@ -27,9 +27,7 @@ pub(crate) fn configure_timeouts() {
 /// - 无 secret：匿名访问，返回 `Cred::default()`。
 pub(crate) fn callbacks(username: &str, secret: Option<&str>) -> RemoteCallbacks<'static> {
     let explicit_username = username.trim().to_string();
-    let secret = secret
-        .map(str::to_string)
-        .filter(|value| !value.is_empty());
+    let secret = secret.map(str::to_string).filter(|value| !value.is_empty());
 
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(move |_url, username_from_url, allowed| {

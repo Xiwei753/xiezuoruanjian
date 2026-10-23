@@ -178,11 +178,7 @@ impl SyncProvider for GitHttpsProvider {
         Ok(version)
     }
 
-    fn delete(
-        &self,
-        path: &str,
-        precondition: DeletePrecondition,
-    ) -> Result<(), ProviderError> {
+    fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
         let snapshot = self.snapshot(true)?;
         repository::check_delete_precondition(&snapshot, path, &precondition)?;
         if !snapshot.blobs.contains_key(path) {

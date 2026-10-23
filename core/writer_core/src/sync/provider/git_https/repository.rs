@@ -59,10 +59,7 @@ fn remote<'repo>(
 }
 
 /// 只连接并读取 refs，不下载对象。用于路由可达性探测与诊断。
-pub(crate) fn probe(
-    cache_dir: &Path,
-    config: &GitHttpsRuntimeConfig,
-) -> Result<(), ProviderError> {
+pub(crate) fn probe(cache_dir: &Path, config: &GitHttpsRuntimeConfig) -> Result<(), ProviderError> {
     let repo = open_or_init(cache_dir)?;
     let mut remote = remote(&repo, config)?;
     let callbacks = credentials::callbacks(&config.username, config.secret.as_deref());
@@ -175,7 +172,9 @@ fn index_entry(path: &str, oid: Oid, size: usize) -> Result<git2::IndexEntry, Pr
     if path.is_empty()
         || path.starts_with('/')
         || path.ends_with('/')
-        || path.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
     {
         return Err(ProviderError::Other {
             reason: format!("invalid repository path: {path}"),
@@ -337,11 +336,7 @@ fn push_branch(
     let refspec = format!("{local_ref}:refs/heads/{}", config.branch);
     let push_result = remote.push(&[refspec], Some(&mut push_options));
 
-    if let Some(reason) = rejection
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
-    {
+    if let Some(reason) = rejection.lock().ok().and_then(|mut slot| slot.take()) {
         return Err(classify_push_rejection(&reason));
     }
     if let Err(err) = push_result {
@@ -359,9 +354,7 @@ fn push_branch(
 
 fn classify_push_rejection(reason: &str) -> ProviderError {
     let lower = reason.to_ascii_lowercase();
-    if lower.contains("protected")
-        || lower.contains("not allowed")
-        || lower.contains("permission")
+    if lower.contains("protected") || lower.contains("not allowed") || lower.contains("permission")
     {
         return ProviderError::PermissionDenied {
             reason: reason.to_string(),
@@ -380,18 +373,16 @@ pub(crate) fn check_write_precondition(
     precondition: &WritePrecondition,
 ) -> Result<(), ProviderError> {
     match precondition {
-        WritePrecondition::IfMatch(expected) => {
-            match snapshot.blobs.get(path) {
-                Some(current) if current.to_string() == expected.as_str() => Ok(()),
-                Some(current) => Err(ProviderError::PreconditionFailed {
-                    path: path.to_string(),
-                    reason: format!("version mismatch: expected={expected}, current={current}"),
-                }),
-                None => Err(ProviderError::NotFound {
-                    path: path.to_string(),
-                }),
-            }
-        }
+        WritePrecondition::IfMatch(expected) => match snapshot.blobs.get(path) {
+            Some(current) if current.to_string() == expected.as_str() => Ok(()),
+            Some(current) => Err(ProviderError::PreconditionFailed {
+                path: path.to_string(),
+                reason: format!("version mismatch: expected={expected}, current={current}"),
+            }),
+            None => Err(ProviderError::NotFound {
+                path: path.to_string(),
+            }),
+        },
         WritePrecondition::CreateNew => {
             if snapshot.blobs.contains_key(path) {
                 Err(ProviderError::PreconditionFailed {

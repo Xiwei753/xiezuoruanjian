@@ -21,13 +21,9 @@ fn should_retry_full_sync_via_github_api(config: &crate::sync::SyncConfig) -> bo
         return false;
     }
     match config.provider_config.as_ref() {
-        Some(ProviderConfig::GitHttps(git)) => {
-            router::is_github_https_remote(&git.remote_url)
-        }
+        Some(ProviderConfig::GitHttps(git)) => router::is_github_https_remote(&git.remote_url),
         #[cfg(feature = "github-api")]
-        Some(ProviderConfig::GitHub(github)) => {
-            router::is_github_https_remote(&github.remote_url)
-        }
+        Some(ProviderConfig::GitHub(github)) => router::is_github_https_remote(&github.remote_url),
         _ => false,
     }
 }

@@ -76,7 +76,7 @@ impl GitHttpsRuntimeConfig {
         }
         let lower = parsed.sanitized_url.to_ascii_lowercase();
         if !lower.starts_with("https://") {
-            return Err(ProviderError::AuthFailed {
+            return Err(ProviderError::Other {
                 reason: "Git HTTPS provider requires an https:// repository URL".to_string(),
             });
         }
@@ -152,7 +152,7 @@ mod tests {
         };
         assert!(matches!(
             GitHttpsRuntimeConfig::from_persisted(&cfg, None),
-            Err(ProviderError::AuthFailed { .. })
+            Err(ProviderError::Other { .. })
         ));
     }
 }

@@ -56,9 +56,12 @@ pub(crate) fn clear_git_unreachable() {
 /// 判断 URL 是否为官方 `github.com` 的 HTTPS 仓库（按主机精确匹配）。
 pub fn is_github_https_remote(remote_url: &str) -> bool {
     let sanitized = sanitize_remote_url(remote_url).sanitized_url;
-    let Some((_scheme, rest)) = sanitized.split_once("://") else {
+    let Some((scheme, rest)) = sanitized.split_once("://") else {
         return false;
     };
+    if !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
     let authority = rest.split('/').next().unwrap_or_default();
     let host = authority
         .rsplit('@')
@@ -97,9 +100,8 @@ fn git_provider(
     config: &GitHttpsProviderConfig,
     secrets: &SyncSecrets,
 ) -> crate::error::Result<GitHttpsProvider> {
-    let runtime =
-        GitHttpsRuntimeConfig::from_persisted(config, secrets.provider_secrets.as_ref())
-            .map_err(crate::Error::from)?;
+    let runtime = GitHttpsRuntimeConfig::from_persisted(config, secrets.provider_secrets.as_ref())
+        .map_err(crate::Error::from)?;
     let dir = cache_dir(app_data_root, &runtime.remote_url);
     Ok(GitHttpsProvider::new(runtime, dir))
 }
@@ -132,7 +134,9 @@ pub fn create_provider<F>(
     create_github_api: F,
 ) -> crate::error::Result<Box<dyn SyncProvider>>
 where
-    F: FnOnce(&crate::sync::provider::ProviderConfig) -> crate::error::Result<Box<dyn SyncProvider>>,
+    F: FnOnce(
+        &crate::sync::provider::ProviderConfig,
+    ) -> crate::error::Result<Box<dyn SyncProvider>>,
 {
     match config.provider_config.as_ref() {
         Some(ProviderConfig::GitHttps(git_config)) => create_git_or_fallback(
@@ -162,9 +166,9 @@ where
                 create_github_api(&ProviderConfig::GitHub(github_config.clone()))
             }
         }
-        None if config.active_provider == "git_https" => {
-            Err(crate::Error::Other("missing git https provider config".into()))
-        }
+        None if config.active_provider == "git_https" => Err(crate::Error::Other(
+            "missing git https provider config".into(),
+        )),
         None => Err(crate::Error::NotImplemented),
         #[cfg(not(feature = "github-api"))]
         Some(_) => Err(crate::Error::NotImplemented),
@@ -229,11 +233,19 @@ where
     match create_github_api(&ProviderConfig::GitHub(api_config)) {
         Ok(provider) => Ok(provider),
         Err(api_error) => match git_error {
-            Some(git_reason) => Err(crate::Error::SyncNetworkUnavailable {
-                reason: format!(
-                    "Git HTTPS unavailable ({git_reason}); GitHub API fallback failed: {api_error}"
-                ),
-            }),
+            // 保留 API 自身的错误分类（例如令牌缺失/无效仍是认证错误），
+            // 同时附带 Git HTTPS 不可达原因，避免把认证失败误报为网络被墙。
+            Some(git_reason) => match api_error {
+                crate::Error::SyncAuthFailed { reason } => Err(crate::Error::SyncAuthFailed {
+                    reason: format!("{reason} (Git HTTPS also unavailable: {git_reason})"),
+                }),
+                crate::Error::SyncNetworkUnavailable { reason } => {
+                    Err(crate::Error::SyncNetworkUnavailable {
+                        reason: format!("{reason} (Git HTTPS also unavailable: {git_reason})"),
+                    })
+                }
+                other => Err(other),
+            },
             None => Err(api_error),
         },
     }

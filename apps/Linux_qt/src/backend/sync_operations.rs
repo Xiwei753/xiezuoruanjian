@@ -269,6 +269,9 @@ impl AppBackend {
             Some(writer_core::api::types::ProviderConfigDto::GitHub { remote_url, .. }) => {
                 remote_url.as_str()
             }
+            Some(writer_core::api::types::ProviderConfigDto::GitHttps { remote_url, .. }) => {
+                remote_url.as_str()
+            }
             None => "",
         }
     }

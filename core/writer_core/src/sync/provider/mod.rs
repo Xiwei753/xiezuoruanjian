@@ -142,9 +142,7 @@ pub trait SyncProvider: Send + Sync {
     }
 
     /// 远端连通性/认证诊断。不支持诊断的 Provider 返回 `Other`。
-    fn diagnose(
-        &self,
-    ) -> Result<crate::sync::types::SyncDiagnosticsResult, error::ProviderError> {
+    fn diagnose(&self) -> Result<crate::sync::types::SyncDiagnosticsResult, error::ProviderError> {
         Err(error::ProviderError::Other {
             reason: "diagnostics not supported".to_string(),
         })

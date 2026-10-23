@@ -199,10 +199,9 @@ impl crate::facade::WriterCore {
         let create_github_api = |provider_config: &crate::sync::provider::ProviderConfig| {
             #[cfg(feature = "github-api")]
             {
-                let transport = self
-                    .init_sync_transport_with_optional_persist(persist_preflight_failure)?;
-                let crate::sync::provider::ProviderConfig::GitHub(github_config) =
-                    provider_config
+                let transport =
+                    self.init_sync_transport_with_optional_persist(persist_preflight_failure)?;
+                let crate::sync::provider::ProviderConfig::GitHub(github_config) = provider_config
                 else {
                     return Err(crate::Error::Other(
                         "GitHub API fallback requires github provider config".into(),
@@ -214,9 +213,10 @@ impl crate::facade::WriterCore {
                         secrets.provider_secrets.as_ref(),
                     )
                     .map_err(crate::Error::from)?;
-                Ok(Box::new(
-                    crate::sync::provider::github::GitHubProvider::new(runtime, transport),
-                ) as Box<dyn crate::sync::provider::SyncProvider>)
+                Ok(Box::new(crate::sync::provider::github::GitHubProvider::new(
+                    runtime, transport,
+                ))
+                    as Box<dyn crate::sync::provider::SyncProvider>)
             }
             #[cfg(not(feature = "github-api"))]
             {

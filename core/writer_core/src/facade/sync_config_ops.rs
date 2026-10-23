@@ -57,18 +57,37 @@ impl super::WriterCore {
 
         // 新格式：直接反序列化（provider_config 字段已存在或为 None）。
         if let Ok(mut config) = serde_json::from_str::<crate::sync::SyncConfig>(&content) {
-            // 如果已持久化的配置里 active_provider == "git"，
-            // 这是旧版本迁移遗留的死配置。修正为 github_api 并禁用同步。
+            // 旧版本可能持久化 active_provider == "git"。现在通用 Git HTTPS
+            // 已成为正式传输：已有 provider_config 时按仓库类型迁移到对应路由，
+            // 保留地址、分支、凭据与启用状态；只有完全无配置的死数据才禁用。
             if config.active_provider == "git" {
-                log::warn!(
-                    "load_sync_config: found legacy active_provider=\"git\", \
-                     resetting to github_api and disabling sync"
-                );
-                config.active_provider = "github_api".to_string();
-                config.enabled = false;
-                config.provider_config = None;
-                self.save_sync_config(&config)?;
-                return Ok(config);
+                if let Some(provider_config) = config.provider_config.as_ref() {
+                    config.active_provider = match provider_config {
+                        #[cfg(feature = "github-api")]
+                        crate::sync::provider::ProviderConfig::GitHub(_) => {
+                            "github_api".to_string()
+                        }
+                        crate::sync::provider::ProviderConfig::GitHttps(_) => {
+                            "git_https".to_string()
+                        }
+                    };
+                    log::warn!(
+                        "load_sync_config: migrated legacy active_provider=\"git\" to {}",
+                        config.active_provider
+                    );
+                    self.save_sync_config(&config)?;
+                    return Ok(config);
+                }
+                if !has_legacy_top_level_github_fields(&raw) {
+                    log::warn!(
+                        "load_sync_config: found legacy active_provider=\"git\" without \
+                         provider config, disabling sync"
+                    );
+                    config.active_provider = "git_https".to_string();
+                    config.enabled = false;
+                    self.save_sync_config(&config)?;
+                    return Ok(config);
+                }
             }
             if !has_legacy_top_level_github_fields(&raw) {
                 return Ok(config);
