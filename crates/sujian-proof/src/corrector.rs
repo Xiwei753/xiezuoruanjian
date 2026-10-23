@@ -252,12 +252,14 @@ impl TraditionalCorrector {
             candidate.known_general_word || candidate.origin == CandidateOrigin::WordConfusion
         });
         candidates.sort_by(|left, right| {
-            let left_support = candidate_targets_anomaly(left, evidence);
-            let right_support = candidate_targets_anomaly(right, evidence);
+            let left_support = candidate_targets_evidence(left, evidence);
+            let right_support = candidate_targets_evidence(right, evidence);
             right_support
                 .cmp(&left_support)
                 .then_with(|| right.origin.cmp(&left.origin))
                 .then_with(|| left.changed_chars.cmp(&right.changed_chars))
+                .then_with(|| right.known_general_word.cmp(&left.known_general_word))
+                .then_with(|| right.orthographic_relation.cmp(&left.orthographic_relation))
                 .then_with(|| left.rank.cmp(&right.rank))
                 .then_with(|| left.text.cmp(&right.text))
         });
@@ -358,7 +360,7 @@ impl TraditionalCorrector {
     }
 }
 
-fn candidate_targets_anomaly(
+fn candidate_targets_evidence(
     candidate: &CorrectionCandidate,
     evidence: &DetectionEvidence,
 ) -> bool {
@@ -367,10 +369,17 @@ fn candidate_targets_anomaly(
             .char_outliers
             .iter()
             .any(|(outlier_position, strength)| outlier_position == position && *strength > 0.0)
+            || evidence
+                .orthographic_conflicts
+                .iter()
+                .any(|conflict_position| conflict_position == position)
     })
 }
 
 fn statistical_rule_id(kind: DetectionKind, evidence: &DetectionEvidence) -> &'static str {
+    if !evidence.orthographic_conflicts.is_empty() {
+        return "detector.orthographic";
+    }
     match kind {
         DetectionKind::OutOfVocabularyWord if !evidence.char_outliers.is_empty() => {
             "detector.candidate"

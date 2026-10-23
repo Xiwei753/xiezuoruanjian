@@ -18,8 +18,12 @@ use crate::segment::{is_chinese_string, Segmenter};
 pub(crate) enum CandidateOrigin {
     /// Exactly one character came from a confusable-character table.
     SingleCharConfusable,
-    /// A complete known word with the same pinyin signature.
+    /// A complete known word with the same pinyin signature. This explains
+    /// where the candidate came from, not why the source is wrong.
     SamePinyinWord,
+    /// A complete known word whose changed characters are all shape-near.
+    /// The shape relation is spelling evidence outside the language model.
+    NearStrokeWord,
     /// An explicit whole-word confusion relation.
     WordConfusion,
 }
@@ -32,8 +36,11 @@ pub(crate) struct CorrectionCandidate {
     pub(crate) changed_positions: Vec<usize>,
     pub(crate) origin: CandidateOrigin,
     /// Whether every changed character has a same-pinyin relation to the
-    /// source character. This is table evidence outside the language model.
+    /// source character. This is only a candidate-generation channel.
     pub(crate) phonetic_relation: bool,
+    /// Whether every changed character has a shape-near relation to the source
+    /// character. Unlike homophony, this is independent spelling evidence.
+    pub(crate) orthographic_relation: bool,
     /// Whether the candidate is a general-dictionary word. Being only a
     /// plausible pinyin match is not enough to replace prose.
     pub(crate) known_general_word: bool,
@@ -185,14 +192,16 @@ impl CandidateGenerator {
         }
 
         let mut ordered = candidates.into_values().collect::<Vec<_>>();
-        // Stronger provenance and fewer changes first. Generation rank breaks
-        // ties without using the candidate's text, so a real correction is not
-        // lost to lexicographic truncation.
+        // Stronger provenance, dictionary coverage, and fewer changes first.
+        // Generation rank is deterministic because every source index is
+        // sorted; text is only the final tie-break.
         ordered.sort_by(|left, right| {
             right
                 .origin
                 .cmp(&left.origin)
                 .then_with(|| left.changed_chars.cmp(&right.changed_chars))
+                .then_with(|| right.known_general_word.cmp(&left.known_general_word))
+                .then_with(|| right.orthographic_relation.cmp(&left.orthographic_relation))
                 .then_with(|| left.rank.cmp(&right.rank))
                 .then_with(|| left.text.cmp(&right.text))
         });
@@ -230,11 +239,24 @@ fn insert_if_candidate(
     let known_general_word =
         lexicon.is_general_known_word(&candidate) || segmenter.has_word(&candidate);
     let phonetic_relation = same_pinyin_word(original, &candidate, lexicon);
+    let orthographic_relation = same_stroke_word(original, &candidate, lexicon);
+    // A complete known word reached through shape substitutions carries an
+    // external spelling relation. Homophony alone never gets this upgrade.
+    let origin = if origin != CandidateOrigin::WordConfusion
+        && orthographic_relation
+        && known_general_word
+    {
+        CandidateOrigin::NearStrokeWord
+    } else {
+        origin
+    };
     match candidates.get_mut(&candidate) {
         Some(existing) => {
             if origin > existing.origin {
                 existing.origin = origin;
             }
+            existing.phonetic_relation |= phonetic_relation;
+            existing.orthographic_relation |= orthographic_relation;
         }
         None => {
             candidates.insert(
@@ -245,6 +267,7 @@ fn insert_if_candidate(
                     changed_positions,
                     origin,
                     phonetic_relation,
+                    orthographic_relation,
                     known_general_word,
                     rank: *next_rank,
                 },
@@ -252,6 +275,17 @@ fn insert_if_candidate(
             *next_rank += 1;
         }
     }
+}
+
+fn same_stroke_word(original: &str, candidate: &str, lexicon: &Lexicon) -> bool {
+    let original = original.chars().collect::<Vec<_>>();
+    let candidate = candidate.chars().collect::<Vec<_>>();
+    original.len() == candidate.len()
+        && original
+            .iter()
+            .zip(candidate.iter())
+            .all(|(left, right)| left == right || lexicon.same_stroke(*left, *right))
+        && original != candidate
 }
 
 fn changed_characters(original: &str, candidate: &str) -> (usize, Vec<usize>) {

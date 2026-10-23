@@ -3,22 +3,24 @@
 //!
 //! Detection nominates suspicious spans. Candidate generation proposes text.
 //! Neither stage may declare an error: this module combines dictionary
-//! coverage, segmentation ambiguity, character evidence, candidate provenance,
-//! and a locally measured language-model gain into one decision.
+//! coverage, segmentation ambiguity, an explicit table relation, and a locally
+//! measured language-model gain into one decision.
 //!
-//! The gate is a conservative, explainable baseline, not a calibrated error
-//! probability; `confidence` therefore stays unset. Model anomaly locates a
-//! span, while acceptance requires table/dictionary evidence outside KenLM and
-//! one local score comparison.
+//! KenLM anomaly (`char_outliers`) locates a span; it is not acceptance
+//! evidence. A same-pinyin hit only expands the candidate set. Statistical
+//! acceptance needs a spelling relation outside the model, such as an explicit
+//! confusion entry or a complete word formed by a shape-near substitution, and
+//! then exactly one local score comparison. The gate is a conservative,
+//! explainable baseline, not a calibrated error probability; `confidence`
+//! therefore stays unset.
 
 use crate::candidates::{CandidateOrigin, CorrectionCandidate};
 use crate::detector::DetectionEvidence;
 use crate::segment::SegmentationEvidence;
 
 /// The gate is deliberately not calibrated as an error probability. It only
-/// requires that the candidate's local normalized log10 score is strictly
-/// better than the original's; the model anomaly is a nomination signal and is
-/// never counted as a second, independent reason.
+/// requires that the candidate has model-external spelling evidence and that
+/// its local normalized log10 score is strictly better than the original's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CorrectionDecision {
     Accept,
@@ -51,7 +53,11 @@ impl DecisionGate {
         if candidate.origin == CandidateOrigin::WordConfusion {
             return CorrectionDecision::Accept;
         }
-        if candidate.changed_chars == 0 || !candidate.known_general_word {
+        if candidate.changed_chars == 0 || candidate.changed_chars != 1 {
+            // Multi-character statistical guesses are not a spelling relation.
+            return CorrectionDecision::KeepOriginal;
+        }
+        if !candidate.known_general_word {
             return CorrectionDecision::KeepOriginal;
         }
 
@@ -63,45 +69,19 @@ impl DecisionGate {
             return CorrectionDecision::KeepOriginal;
         }
 
-        // Separate the model evidence from table/dictionary evidence. The
-        // candidate must carry a lexical or phonetic relation outside KenLM:
-        // a complete same-pinyin word, an explicit whole-word relation, or a
-        // single-character same-pinyin substitution. Shape-only guesses are not
-        // enough.
-        let external_spelling_evidence = match candidate.origin {
-            CandidateOrigin::WordConfusion | CandidateOrigin::SamePinyinWord => true,
-            CandidateOrigin::SingleCharConfusable => candidate.phonetic_relation,
-        };
-        if !external_spelling_evidence {
+        // A homophone is a candidate-generation channel, not proof that the
+        // original spelling is wrong. Acceptance requires a model-external
+        // relation: a complete known word formed by a shape-near substitution
+        // at one of the positions detector flagged, or an explicit relation
+        // handled above.
+        let targets_orthographic_conflict = candidate.origin == CandidateOrigin::NearStrokeWord
+            && candidate.orthographic_relation
+            && candidate
+                .changed_positions
+                .iter()
+                .any(|position| evidence.orthographic_conflicts.contains(position));
+        if !targets_orthographic_conflict {
             return CorrectionDecision::KeepOriginal;
-        }
-        if candidate.origin == CandidateOrigin::SingleCharConfusable && candidate.changed_chars != 1
-        {
-            return CorrectionDecision::KeepOriginal;
-        }
-
-        // An unregistered OOV span needs a complete same-pinyin word relation;
-        // an isolated confusable-character guess is not independent evidence
-        // that the span itself is a misspelling.
-        if !source_is_known_word && candidate.origin != CandidateOrigin::SamePinyinWord {
-            return CorrectionDecision::KeepOriginal;
-        }
-
-        // For a source that is already a known word, the correction must target
-        // the character position that was nominated as anomalous. This is a
-        // positional consistency check, not a second acceptance score.
-        if source_is_known_word {
-            let targets_anomaly = candidate.changed_positions.iter().any(|position| {
-                evidence
-                    .char_outliers
-                    .iter()
-                    .any(|(outlier_position, strength)| {
-                        outlier_position == position && *strength > 0.0
-                    })
-            });
-            if !targets_anomaly {
-                return CorrectionDecision::KeepOriginal;
-            }
         }
 
         // Use exactly one model comparison. The earlier anomaly score selected
@@ -129,6 +109,7 @@ mod tests {
             changed_positions: vec![1],
             origin,
             phonetic_relation: true,
+            orthographic_relation: false,
             known_general_word: true,
             rank: 0,
         }
@@ -149,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn known_word_typo_with_positional_evidence_can_be_accepted() {
+    fn known_word_typo_with_shape_conflict_can_be_accepted() {
         let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
         let segmenter = Segmenter::new();
         let sentence = "他种了高梁。";
@@ -157,11 +138,13 @@ mod tests {
         let end = start + "高梁".len();
         let mut evidence = evidence(&lexicon, &segmenter, sentence, (start, end));
         evidence.source_is_general_word = true;
-        evidence.char_outliers = vec![(1, 1.82)];
+        evidence.orthographic_conflicts = vec![1];
+        let mut candidate = candidate("高粱", CandidateOrigin::NearStrokeWord);
+        candidate.orthographic_relation = true;
         assert_eq!(
             DecisionGate::evaluate(
                 "高梁",
-                &candidate("高粱", CandidateOrigin::SingleCharConfusable),
+                &candidate,
                 &evidence.segmentation,
                 &evidence,
                 0.0,
@@ -172,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_oov_with_whole_word_relation_can_be_accepted() {
+    fn same_pinyin_word_alone_is_not_spelling_evidence() {
         let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
         let segmenter = Segmenter::new();
         let sentence = "他按装了灯。";
@@ -190,7 +173,7 @@ mod tests {
                 0.0,
                 0.05,
             ),
-            CorrectionDecision::Accept
+            CorrectionDecision::KeepOriginal
         );
     }
 

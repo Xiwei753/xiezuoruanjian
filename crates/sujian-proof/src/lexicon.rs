@@ -498,16 +498,21 @@ impl Lexicon {
         entries
     }
 
-    pub(crate) fn word_candidates_by_pinyin(
-        &self,
-        word: &str,
-    ) -> Box<dyn Iterator<Item = &str> + '_> {
-        let base_candidates: Box<dyn Iterator<Item = &str>> = if let Some(base) = &self.base {
-            Box::new(base.local_word_candidates_by_pinyin(word))
-        } else {
-            Box::new(std::iter::empty())
-        };
-        Box::new(base_candidates.chain(self.local_word_candidates_by_pinyin(word)))
+    /// Complete words with the same pinyin signature. The result is sorted so
+    /// candidate generation and the later model-scoring budget never depend on
+    /// HashMap/HashSet iteration order.
+    pub(crate) fn word_candidates_by_pinyin(&self, word: &str) -> Vec<&str> {
+        let mut candidates = self
+            .base
+            .as_ref()
+            .map(|base| base.local_word_candidates_by_pinyin(word))
+            .into_iter()
+            .flatten()
+            .chain(self.local_word_candidates_by_pinyin(word))
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates
     }
 
     fn local_word_candidates_by_pinyin<'a>(&'a self, word: &str) -> impl Iterator<Item = &'a str> {
@@ -542,7 +547,41 @@ impl Lexicon {
             chars.extend(same.iter().copied());
         }
         chars.remove(&ch);
-        chars.into_iter().collect()
+        let mut chars = chars.into_iter().collect::<Vec<_>>();
+        chars.sort_unstable();
+        chars
+    }
+
+    /// Shape-near alternatives only. Kept separate from homophones because a
+    /// shape substitution is independent spelling evidence, while sounding the
+    /// same is only a candidate-generation channel.
+    pub(crate) fn stroke_alternatives(&self, ch: char) -> Vec<char> {
+        let mut chars = HashSet::new();
+        if let Some(same) = self.same_stroke.get(&ch) {
+            chars.extend(same.iter().copied());
+        }
+        if let Some(same) = self
+            .base
+            .as_ref()
+            .and_then(|base| base.same_stroke.get(&ch))
+        {
+            chars.extend(same.iter().copied());
+        }
+        chars.remove(&ch);
+        let mut chars = chars.into_iter().collect::<Vec<_>>();
+        chars.sort_unstable();
+        chars
+    }
+
+    pub(crate) fn same_stroke(&self, left: char, right: char) -> bool {
+        self.same_stroke
+            .get(&left)
+            .is_some_and(|chars| chars.contains(&right))
+            || self.base.as_ref().is_some_and(|base| {
+                base.same_stroke
+                    .get(&left)
+                    .is_some_and(|chars| chars.contains(&right))
+            })
     }
 
     pub(crate) fn same_pinyin(&self, left: char, right: char) -> bool {
@@ -591,7 +630,10 @@ impl Lexicon {
     fn rebuild_candidate_indexes(&mut self) {
         self.pinyin_representatives = self.pinyin_components();
         self.words_by_pinyin.clear();
-        let words = self.word_freq.keys().cloned().collect::<Vec<_>>();
+        let mut words = self.word_freq.keys().cloned().collect::<Vec<_>>();
+        // HashMap iteration order is randomized. Candidate order must be a
+        // property of the lexicon, not of the current process.
+        words.sort_unstable();
         for word in words {
             let char_len = word.chars().count();
             let signature = self.pinyin_signature(&word);

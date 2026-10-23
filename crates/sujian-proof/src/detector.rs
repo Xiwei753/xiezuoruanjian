@@ -43,7 +43,12 @@ pub(crate) struct DetectionEvidence {
     pub(crate) source_is_general_word: bool,
     /// Character positions (zero-based scalars relative to the span) that the
     /// 2/3-gram MAD check considered anomalous, with the outlier strength.
+    /// This is model-frequency evidence and is only a nomination.
     pub(crate) char_outliers: Vec<(usize, f64)>,
+    /// Positions where replacing one source character with a shape-near
+    /// character forms a complete general-dictionary word. This relation comes
+    /// from the stroke table and dictionary coverage, not from KenLM.
+    pub(crate) orthographic_conflicts: Vec<usize>,
     pub(crate) segmentation: SegmentationEvidence,
 }
 
@@ -60,6 +65,10 @@ impl DetectionEvidence {
                 .then_with(|| right.1.total_cmp(&left.1))
         });
         self.char_outliers.dedup_by(|left, right| left.0 == right.0);
+        self.orthographic_conflicts
+            .extend(other.orthographic_conflicts);
+        self.orthographic_conflicts.sort_unstable();
+        self.orthographic_conflicts.dedup();
         self.segmentation.merge(other.segmentation);
     }
 }
@@ -206,6 +215,11 @@ impl Detector {
                             oov_general_dictionary_miss: true,
                             source_is_general_word: lexicon.is_general_known_word(&token.text)
                                 || segmenter.has_word(&token.text),
+                            orthographic_conflicts: orthographic_conflicts(
+                                &sentence[token.start_byte..token.end_byte],
+                                lexicon,
+                                segmenter,
+                            ),
                             segmentation: segmenter.candidate_span_evidence(
                                 &analysis,
                                 token.start_byte,
@@ -252,6 +266,18 @@ impl Detector {
                     }
                 }
             }
+            let split_oov = if self.detect_words {
+                detect_split_oov_spans(
+                    &analysis,
+                    segment.start_byte,
+                    &character_suspects,
+                    lexicon,
+                    segmenter,
+                )
+            } else {
+                Vec::new()
+            };
+            sentence_candidates.extend(split_oov);
             sentence_candidates.extend(character_suspects);
             candidates.extend(sentence_candidates);
         }
@@ -408,6 +434,11 @@ fn detect_character_outliers(
                 source_is_general_word: lexicon.is_general_known_word(&word.text)
                     || segmenter.has_word(&word.text),
                 char_outliers: vec![(relative_position, strength)],
+                orthographic_conflicts: orthographic_conflicts(
+                    &sentence[word.start_byte..word.end_byte],
+                    lexicon,
+                    segmenter,
+                ),
                 segmentation: segmenter.candidate_span_evidence(
                     analysis,
                     word.start_byte,
@@ -418,6 +449,108 @@ fn detect_character_outliers(
         });
     }
     Ok(matches)
+}
+
+fn detect_split_oov_spans(
+    analysis: &SentenceAnalysis,
+    base_byte: usize,
+    character_suspects: &[Suspect],
+    lexicon: &Lexicon,
+    segmenter: &Segmenter,
+) -> Vec<Suspect> {
+    let sentence = analysis.sentence();
+    let tokens = analysis.hmm_tokens();
+    let mut matches = Vec::new();
+    let mut start = 0usize;
+    while start < tokens.len() {
+        if !is_single_han_token(&tokens[start]) {
+            start += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < tokens.len() && is_single_han_token(&tokens[end]) {
+            end += 1;
+        }
+        let run = &tokens[start..end];
+        if (2..=4).contains(&run.len()) {
+            let start_byte = run[0].start_byte;
+            let end_byte = run[run.len() - 1].end_byte;
+            let span = &sentence[start_byte..end_byte];
+            let absolute_start = base_byte + start_byte;
+            let absolute_end = base_byte + end_byte;
+            let has_character_nomination = character_suspects.iter().any(|suspect| {
+                absolute_start <= suspect.start_byte && suspect.end_byte <= absolute_end
+            });
+            let orthographic = orthographic_conflicts(span, lexicon, segmenter);
+            let segmentation = segmenter.candidate_span_evidence(analysis, start_byte, end_byte);
+            if (has_character_nomination || !orthographic.is_empty())
+                && !lexicon.is_ignored(span)
+                && !lexicon.is_oov_exception(span)
+                && !segmenter.has_word(span)
+                && !lexicon.is_general_known_word(span)
+                && !segmentation.overlaps_protected
+                && !segmentation.crosses_stable_word
+            {
+                let mut char_outliers = Vec::new();
+                for token in run {
+                    let token_start = base_byte + token.start_byte;
+                    let token_end = base_byte + token.end_byte;
+                    for suspect in character_suspects {
+                        if suspect.start_byte == token_start && suspect.end_byte == token_end {
+                            if let Some((_, strength)) = suspect.evidence.char_outliers.first() {
+                                let position =
+                                    sentence[start_byte..token.start_byte].chars().count();
+                                char_outliers.push((position, *strength));
+                            }
+                        }
+                    }
+                }
+                matches.push(Suspect {
+                    start_byte: absolute_start,
+                    end_byte: absolute_end,
+                    original: span.to_owned(),
+                    kind: DetectionKind::OutOfVocabularyWord,
+                    exact_replacement: None,
+                    evidence: DetectionEvidence {
+                        oov_general_dictionary_miss: true,
+                        char_outliers,
+                        orthographic_conflicts: orthographic,
+                        segmentation,
+                        ..DetectionEvidence::default()
+                    },
+                });
+            }
+        }
+        start = end;
+    }
+    matches
+}
+
+fn is_single_han_token(token: &crate::segment::TokenSpan) -> bool {
+    let mut chars = token.text.chars();
+    chars.next().is_some_and(is_han) && chars.next().is_none()
+}
+
+fn orthographic_conflicts(span: &str, lexicon: &Lexicon, segmenter: &Segmenter) -> Vec<usize> {
+    let chars = span.chars().collect::<Vec<_>>();
+    if !(2..=6).contains(&chars.len()) {
+        return Vec::new();
+    }
+    let mut positions = Vec::new();
+    for (position, ch) in chars.iter().enumerate() {
+        for replacement in lexicon.stroke_alternatives(*ch) {
+            let mut candidate = chars.clone();
+            candidate[position] = replacement;
+            let candidate = candidate.into_iter().collect::<String>();
+            if candidate != span
+                && (lexicon.is_general_known_word(&candidate) || segmenter.has_word(&candidate))
+            {
+                positions.push(position);
+                break;
+            }
+        }
+    }
+    positions
 }
 
 fn align_window_scores(scores: &[f64], n: usize, char_len: usize) -> Vec<f64> {
