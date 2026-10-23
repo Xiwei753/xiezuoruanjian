@@ -5,7 +5,9 @@
 use crate::confusion::ConfusionMatcher;
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
-use crate::segment::{is_chinese_string, is_han, SegmentationEvidence, Segmenter};
+use crate::segment::{
+    is_chinese_string, is_han, SegmentationEvidence, Segmenter, SentenceAnalysis,
+};
 use crate::CorrectionError;
 
 // Behavioral port of pycorrector Detector._detect and _get_maybe_error_index
@@ -84,10 +86,9 @@ impl Suspect {
     }
 }
 
-/// Minimum character-outlier strength that may nominate a position. A lower
-/// value catches rare wrong characters such as 梁 in 高梁, while the decision
-/// layer applies a stricter strength to unknown spans so a plausible compound
-/// is not rewritten by a marginal anomaly.
+/// Nomination threshold for character-level 2/3-gram outliers. This only
+/// decides which positions are worth analyzing; it is not an error probability
+/// or a substitute for the decision gate's external spelling evidence.
 const CHAR_OUTLIER_THRESHOLD: f64 = 1.7;
 
 #[derive(Clone, Debug)]
@@ -123,16 +124,17 @@ impl Detector {
         let mut protected_entries = Vec::new();
         for segment in segmenter.sentence_segments(text) {
             let sentence = &text[segment.start_byte..segment.end_byte];
+            let analysis = segmenter.analyze_sentence(sentence, lexicon);
             protected_ranges.extend(
-                lexicon
-                    .protected_word_ranges(sentence)
-                    .into_iter()
+                analysis
+                    .protected_ranges()
+                    .iter()
                     .map(|(start, end)| (segment.start_byte + start, segment.start_byte + end)),
             );
             protected_entries.extend(
-                lexicon
-                    .protected_word_ranges_unmerged(sentence)
-                    .into_iter()
+                analysis
+                    .protected_entries()
+                    .iter()
                     .map(|(start, end)| (segment.start_byte + start, segment.start_byte + end)),
             );
 
@@ -153,10 +155,9 @@ impl Detector {
                         exact_relation: true,
                         confusion_entry: true,
                         segmentation: segmenter.candidate_span_evidence(
-                            sentence,
+                            &analysis,
                             matched.start_byte,
                             matched.end_byte,
-                            lexicon,
                         ),
                         ..DetectionEvidence::default()
                     },
@@ -175,8 +176,7 @@ impl Detector {
                         exact_replacement: Some(relation.replacement.clone()),
                         evidence: DetectionEvidence {
                             exact_relation: true,
-                            segmentation: segmenter
-                                .candidate_span_evidence(sentence, start, end, lexicon),
+                            segmentation: segmenter.candidate_span_evidence(&analysis, start, end),
                             ..DetectionEvidence::default()
                         },
                     });
@@ -188,7 +188,7 @@ impl Detector {
             }
 
             if self.detect_words {
-                for token in segmenter.words(sentence) {
+                for token in analysis.hmm_tokens() {
                     if !is_chinese_string(&token.text)
                         || lexicon.is_ignored(&token.text)
                         || lexicon.is_oov_exception(&token.text)
@@ -207,10 +207,9 @@ impl Detector {
                             source_is_general_word: lexicon.is_general_known_word(&token.text)
                                 || segmenter.has_word(&token.text),
                             segmentation: segmenter.candidate_span_evidence(
-                                sentence,
+                                &analysis,
                                 token.start_byte,
                                 token.end_byte,
-                                lexicon,
                             ),
                             ..DetectionEvidence::default()
                         },
@@ -219,7 +218,13 @@ impl Detector {
             }
 
             let character_suspects = if self.detect_characters {
-                detect_character_outliers(sentence, segment.start_byte, segmenter, lexicon, scorer)?
+                detect_character_outliers(
+                    &analysis,
+                    segment.start_byte,
+                    segmenter,
+                    lexicon,
+                    scorer,
+                )?
             } else {
                 Vec::new()
             };
@@ -310,13 +315,14 @@ fn is_ascii_name_char(value: char) -> bool {
 }
 
 fn detect_character_outliers(
-    sentence: &str,
+    analysis: &SentenceAnalysis,
     base_byte: usize,
     segmenter: &Segmenter,
     lexicon: &Lexicon,
     scorer: &dyn LanguageScorer,
 ) -> Result<Vec<Suspect>, CorrectionError> {
-    let chars = segmenter.characters(sentence);
+    let sentence = analysis.sentence();
+    let chars = analysis.chars();
     if chars.len() < 2 {
         return Ok(Vec::new());
     }
@@ -349,7 +355,7 @@ fn detect_character_outliers(
     }
 
     let outliers = mad_outlier_indices(&combined, 0.6745, CHAR_OUTLIER_THRESHOLD);
-    let word_tokens = segmenter.words(sentence);
+    let word_tokens = analysis.hmm_tokens();
     let mut matches = Vec::new();
     for (index, strength) in outliers {
         let Some(token) = chars.get(index) else {
@@ -369,10 +375,9 @@ fn detect_character_outliers(
                     || segmenter.has_word(&token.text),
                 char_outliers: vec![(0, strength)],
                 segmentation: segmenter.candidate_span_evidence(
-                    sentence,
+                    analysis,
                     token.start_byte,
                     token.end_byte,
-                    lexicon,
                 ),
                 ..DetectionEvidence::default()
             },
@@ -404,10 +409,9 @@ fn detect_character_outliers(
                     || segmenter.has_word(&word.text),
                 char_outliers: vec![(relative_position, strength)],
                 segmentation: segmenter.candidate_span_evidence(
-                    sentence,
+                    analysis,
                     word.start_byte,
                     word.end_byte,
-                    lexicon,
                 ),
                 ..DetectionEvidence::default()
             },

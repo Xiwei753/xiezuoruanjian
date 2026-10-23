@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::candidates::{CandidateGenerator, CorrectionCandidate};
+use crate::candidates::{CandidateGenerator, CandidateOrigin, CorrectionCandidate};
 use crate::confusion::ConfusionMatcher;
 use crate::decision::{CorrectionDecision, DecisionGate};
 use crate::detector::{exact_name_occurrences, DetectionEvidence, DetectionKind, Detector};
@@ -141,6 +141,7 @@ impl TraditionalCorrector {
                 let candidate_generator = CandidateGenerator::new();
                 let candidates =
                     candidate_generator.generate(&suspect.original, &self.lexicon, &self.segmenter);
+                let candidates = self.candidates_for_scoring(candidates, &suspect.evidence);
                 if candidates.is_empty() {
                     continue;
                 }
@@ -208,22 +209,15 @@ impl TraditionalCorrector {
                 });
             }
 
-            if !self.config.include_weak_hints {
-                diagnostics.extend(
-                    self.rule_diagnostics(text)
-                        .into_iter()
-                        .filter(|diagnostic| diagnostic.severity == "error"),
-                );
-            } else {
-                diagnostics.extend(self.rule_diagnostics(text));
-            }
+            diagnostics.extend(self.rule_diagnostics(text));
         } else {
             diagnostics.extend(self.confirmed_misspelling_diagnostics(text));
             diagnostics.extend(self.confusion_diagnostics(text));
             diagnostics.extend(self.rule_diagnostics(text));
-            if !self.config.include_weak_hints {
-                diagnostics.retain(|diagnostic| diagnostic.severity == "error");
-            }
+        }
+
+        if !self.config.include_weak_hints {
+            diagnostics.retain(|diagnostic| diagnostic.severity == "error");
         }
 
         let protected_ranges = self.lexicon.protected_word_ranges(text);
@@ -240,6 +234,35 @@ impl TraditionalCorrector {
                 .any(|(start, end)| diagnostic.start_byte < *end && *start < diagnostic.end_byte)
         });
         filter_diagnostics(text, diagnostics)
+    }
+
+    /// Filter and order generated candidates without touching the model, then
+    /// enforce the configured scoring budget. Evidence-supported positions and
+    /// stronger provenance come first; text is only a stable final tie-break.
+    fn candidates_for_scoring(
+        &self,
+        mut candidates: Vec<CorrectionCandidate>,
+        evidence: &DetectionEvidence,
+    ) -> Vec<CorrectionCandidate> {
+        let budget = self.config.max_candidates_per_error;
+        if budget == 0 {
+            return Vec::new();
+        }
+        candidates.retain(|candidate| {
+            candidate.known_general_word || candidate.origin == CandidateOrigin::WordConfusion
+        });
+        candidates.sort_by(|left, right| {
+            let left_support = candidate_targets_anomaly(left, evidence);
+            let right_support = candidate_targets_anomaly(right, evidence);
+            right_support
+                .cmp(&left_support)
+                .then_with(|| right.origin.cmp(&left.origin))
+                .then_with(|| left.changed_chars.cmp(&right.changed_chars))
+                .then_with(|| left.rank.cmp(&right.rank))
+                .then_with(|| left.text.cmp(&right.text))
+        });
+        candidates.truncate(budget);
+        candidates
     }
 
     /// Score `replacement` in the same local sentence window as the original.
@@ -333,6 +356,18 @@ impl TraditionalCorrector {
         }
         diagnostics
     }
+}
+
+fn candidate_targets_anomaly(
+    candidate: &CorrectionCandidate,
+    evidence: &DetectionEvidence,
+) -> bool {
+    candidate.changed_positions.iter().any(|position| {
+        evidence
+            .char_outliers
+            .iter()
+            .any(|(outlier_position, strength)| outlier_position == position && *strength > 0.0)
+    })
 }
 
 fn statistical_rule_id(kind: DetectionKind, evidence: &DetectionEvidence) -> &'static str {

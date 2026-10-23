@@ -2,7 +2,6 @@
 // Modified behavioral port of pycorrector/pycorrector/corrector.py by XuMing
 // (xuming624), especially Corrector.generate_items; no Python runtime/data is copied.
 
-use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use crate::lexicon::Lexicon;
@@ -13,12 +12,10 @@ use crate::segment::{is_chinese_string, Segmenter};
 // module does not reproduce pypinyin or ship its upstream data.
 
 /// How a candidate was produced. The decision layer must be able to tell an
-/// author-registered whole-word relation apart from a statistical two-character
-/// guess; they are not interchangeable evidence.
+/// author-registered whole-word relation apart from a statistical guess; they
+/// are not interchangeable evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum CandidateOrigin {
-    /// Both characters came from the confusable-character tables.
-    DoubleCharConfusable,
     /// Exactly one character came from a confusable-character table.
     SingleCharConfusable,
     /// A complete known word with the same pinyin signature.
@@ -34,9 +31,15 @@ pub(crate) struct CorrectionCandidate {
     /// Zero-based Unicode scalar offsets that differ from the source.
     pub(crate) changed_positions: Vec<usize>,
     pub(crate) origin: CandidateOrigin,
+    /// Whether every changed character has a same-pinyin relation to the
+    /// source character. This is table evidence outside the language model.
+    pub(crate) phonetic_relation: bool,
     /// Whether the candidate is a general-dictionary word. Being only a
     /// plausible pinyin match is not enough to replace prose.
     pub(crate) known_general_word: bool,
+    /// Stable generation order, used to bound model scoring without sorting
+    /// candidates by their text.
+    pub(crate) rank: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -62,6 +65,7 @@ impl CandidateGenerator {
         }
 
         let mut candidates = BTreeMap::<String, CorrectionCandidate>::new();
+        let mut next_rank = 0usize;
         if let Some(target) = lexicon.confusion_target(word) {
             insert_if_candidate(
                 &mut candidates,
@@ -70,6 +74,7 @@ impl CandidateGenerator {
                 CandidateOrigin::WordConfusion,
                 lexicon,
                 segmenter,
+                &mut next_rank,
             );
         }
 
@@ -84,6 +89,7 @@ impl CandidateGenerator {
                     CandidateOrigin::SamePinyinWord,
                     lexicon,
                     segmenter,
+                    &mut next_rank,
                 );
             }
         }
@@ -98,13 +104,15 @@ impl CandidateGenerator {
                         CandidateOrigin::SingleCharConfusable,
                         lexicon,
                         segmenter,
+                        &mut next_rank,
                     );
                 }
             }
             2 => {
-                let first = lexicon.confusable_chars(chars[0]);
-                let second = lexicon.confusable_chars(chars[1]);
-                for replacement in &first {
+                // Only one character may change. Two simultaneous confusable
+                // substitutions are not a relation and must not be generated:
+                // they are neither a registered word nor independent evidence.
+                for replacement in lexicon.confusable_chars(chars[0]) {
                     insert_if_candidate(
                         &mut candidates,
                         word,
@@ -112,9 +120,10 @@ impl CandidateGenerator {
                         CandidateOrigin::SingleCharConfusable,
                         lexicon,
                         segmenter,
+                        &mut next_rank,
                     );
                 }
-                for replacement in &second {
+                for replacement in lexicon.confusable_chars(chars[1]) {
                     insert_if_candidate(
                         &mut candidates,
                         word,
@@ -122,22 +131,8 @@ impl CandidateGenerator {
                         CandidateOrigin::SingleCharConfusable,
                         lexicon,
                         segmenter,
+                        &mut next_rank,
                     );
-                }
-                // Two simultaneous substitutions are exploratory guesses only.
-                // The decision layer rejects them unless an explicit whole-word
-                // relation exists.
-                for left in &first {
-                    for right in &second {
-                        insert_if_candidate(
-                            &mut candidates,
-                            word,
-                            format!("{left}{right}"),
-                            CandidateOrigin::DoubleCharConfusable,
-                            lexicon,
-                            segmenter,
-                        );
-                    }
                 }
             }
             _ => {
@@ -153,6 +148,7 @@ impl CandidateGenerator {
                         CandidateOrigin::SingleCharConfusable,
                         lexicon,
                         segmenter,
+                        &mut next_rank,
                     );
                 }
 
@@ -166,6 +162,7 @@ impl CandidateGenerator {
                             CandidateOrigin::SamePinyinWord,
                             lexicon,
                             segmenter,
+                            &mut next_rank,
                         );
                     }
                 }
@@ -180,6 +177,7 @@ impl CandidateGenerator {
                             CandidateOrigin::SamePinyinWord,
                             lexicon,
                             segmenter,
+                            &mut next_rank,
                         );
                     }
                 }
@@ -187,12 +185,15 @@ impl CandidateGenerator {
         }
 
         let mut ordered = candidates.into_values().collect::<Vec<_>>();
-        // Stronger provenance and fewer changes first; the local language model
-        // still compares every surviving candidate against the original.
+        // Stronger provenance and fewer changes first. Generation rank breaks
+        // ties without using the candidate's text, so a real correction is not
+        // lost to lexicographic truncation.
         ordered.sort_by(|left, right| {
-            Reverse(left.origin)
-                .cmp(&Reverse(right.origin))
+            right
+                .origin
+                .cmp(&left.origin)
                 .then_with(|| left.changed_chars.cmp(&right.changed_chars))
+                .then_with(|| left.rank.cmp(&right.rank))
                 .then_with(|| left.text.cmp(&right.text))
         });
         ordered
@@ -217,6 +218,7 @@ fn insert_if_candidate(
     origin: CandidateOrigin,
     lexicon: &Lexicon,
     segmenter: &Segmenter,
+    next_rank: &mut usize,
 ) {
     if candidate == original || !is_chinese_string(&candidate) {
         return;
@@ -227,6 +229,7 @@ fn insert_if_candidate(
     }
     let known_general_word =
         lexicon.is_general_known_word(&candidate) || segmenter.has_word(&candidate);
+    let phonetic_relation = same_pinyin_word(original, &candidate, lexicon);
     match candidates.get_mut(&candidate) {
         Some(existing) => {
             if origin > existing.origin {
@@ -241,9 +244,12 @@ fn insert_if_candidate(
                     changed_chars,
                     changed_positions,
                     origin,
+                    phonetic_relation,
                     known_general_word,
+                    rank: *next_rank,
                 },
             );
+            *next_rank += 1;
         }
     }
 }
