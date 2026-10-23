@@ -504,8 +504,10 @@ pub fn persist_bootstrap_catalog(
 ///   CAS 写远端 catalog，返回持久化后的完整 snapshot。
 ///
 /// 使用 `WritePrecondition::IfMatch(version)` 防止多设备并发覆盖。
-/// `PreconditionFailed` 时自动重读远端 catalog、LWW 合并本地变更、再 IfMatch 写入。
-/// 重试次数限制为 3（超过视为并发冲突过于激烈，返回 `Err`）。
+/// `PreconditionFailed` **原样返回**，不在内部重读/合并/重试。
+/// Issue #990：Git HTTPS 在一轮完整同步内固定远端快照，同一 provider
+/// 上的“重读”仍是旧 HEAD；需要新快照时必须由完整同步入口新建 provider
+/// 后重新规划。
 ///
 /// `snapshot.version` 为 `__nonexistent__` 时使用 `CreateNew`（首次写入）。
 /// 序列化失败或 provider.write 失败 → `Err`。
@@ -515,69 +517,37 @@ pub fn persist_bootstrap_catalog(
 /// "version 是新的、内容还是旧的"非法组合。
 ///
 /// 保留给非 lifecycle 决策的批量 catalog 写入（如初始化）。lifecycle 原子决策
-/// 用 [`write_catalog_once`] + [`apply_lifecycle_record`]，不在内部吞 CAS 冲突。
+/// 用 [`write_catalog_once`] + [`apply_lifecycle_record`]。
 pub fn write_remote_catalog(
     provider: &dyn SyncProvider,
     snapshot: &RemoteTargetCatalogSnapshot,
 ) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
-    let mut current_version = snapshot.version.clone();
-    let mut current_catalog = snapshot.catalog.clone();
-    let max_retries = 3;
+    let content = serde_json::to_vec(&snapshot.catalog).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "write_remote_catalog: serialize: {e}"
+        )))
+    })?;
 
-    for attempt in 0..max_retries {
-        let content = serde_json::to_vec(&current_catalog).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(format!(
-                "write_remote_catalog: serialize: {e}"
-            )))
-        })?;
+    let precondition = if snapshot.version.as_str() == "__nonexistent__" {
+        WritePrecondition::CreateNew
+    } else {
+        WritePrecondition::IfMatch(snapshot.version.clone())
+    };
 
-        let precondition = if current_version.as_str() == "__nonexistent__" {
-            WritePrecondition::CreateNew
-        } else {
-            WritePrecondition::IfMatch(current_version.clone())
-        };
-
-        match provider.write(TARGET_CATALOG_REMOTE_PATH, &content, precondition) {
-            Ok(new_version) => {
-                log::debug!(
-                    "[sync] write_remote_catalog: succeeded (attempt={})",
-                    attempt + 1
-                );
-                //   返回实际持久化后的完整 snapshot。
-                // provider.write 成功后远端内容就是 current_catalog，version 是 new_version。
-                return Ok(RemoteTargetCatalogSnapshot {
-                    catalog: current_catalog.clone(),
-                    version: new_version,
-                });
-            }
-            Err(crate::sync::provider::error::ProviderError::PreconditionFailed { .. }) => {
-                //   CAS 冲突 → 重读远端最新 catalog，
-                // LWW 合并本地变更后重试。
-                log::info!(
-                    "[sync] write_remote_catalog: PreconditionFailed (attempt={}), \
-                     re-reading and merging",
-                    attempt + 1
-                );
-                let reloaded = load_remote_catalog(provider)?;
-                current_catalog = merge_catalogs(&[reloaded.catalog, current_catalog]);
-                current_version = reloaded.version;
-            }
-            Err(e) => {
-                return Err(crate::Error::from(e));
-            }
-        }
+    match provider.write(TARGET_CATALOG_REMOTE_PATH, &content, precondition) {
+        Ok(new_version) => Ok(RemoteTargetCatalogSnapshot {
+            catalog: snapshot.catalog.clone(),
+            version: new_version,
+        }),
+        Err(e) => Err(crate::Error::from(e)),
     }
-
-    Err(crate::Error::Io(std::io::Error::other(format!(
-        "write_remote_catalog: CAS retry exhausted after {max_retries} attempts"
-    ))))
 }
 
 ///   单次 CAS 原语 — 只做一次 CreateNew/IfMatch 写入。
 ///
 /// 与 [`write_remote_catalog`] 的关键区别：`PreconditionFailed` **原样返回**，
-/// 不在内部重读/merge/重试。调用方（[`apply_lifecycle_record`]）负责在 CAS 冲突后
-/// 重新加载最新 snapshot、重新做 target-level LWW 决策、决定是否再次 CAS。
+/// 不在内部重读/merge/重试。调用方（[`apply_lifecycle_record`]）负责保留分类并
+/// 交给完整同步入口新建 provider、重新加载 snapshot 后重新做 LWW。
 ///
 /// 这样外层能看到真实的 CAS 冲突，不会把"远端已有更新记录"误判为"我方 Applied"。
 ///
@@ -652,20 +622,20 @@ pub fn compare_lifecycle_candidate(
 
 ///   provider-neutral 原子决策接口。
 ///
-/// 把一条 candidate lifecycle record 通过 CAS 写入远端 catalog。每次 CAS 冲突后：
-/// 重读最新 snapshot → candidate 与最新 remote record 重新做 target-level LWW：
-/// - candidate 严格赢 → merge → IfMatch 再写 → `Applied`；
+/// 把一条 candidate lifecycle record 通过 CAS 写入远端 catalog。
+/// - candidate 严格赢 → merge → IfMatch 写 → `Applied`；
 /// - candidate 与 remote 完全相等 → `AlreadyCurrent`（不写 catalog，调用方按 candidate.op 继续）；
 /// - remote 严格赢 → `RemoteWinner { record }`（携带真实赢的 record，调用方按 record.op 决策）；
-/// - Retry → 不删任何远端文件 → pending 保留。
+/// - CAS 冲突（`precondition_failed`）→ `Retry`，不删任何远端文件、不在此处重读旧快照；
+///   由完整同步入口新建 provider、读取新 catalog 后重新执行 target-level LWW。
 ///
 /// 不再用含糊的 `LostToRemote(snapshot)` 让调用方猜 op 反转。
 /// 完全相等的 record 返回 `AlreadyCurrent`，远端严格赢返回 `RemoteWinner { record }`，
 /// 调用方按真实 `record.op` 走对应路径，避免 LWW 相等时误判为"远端 delete 赢"或"远端 upsert 赢"。
 ///
-///   用 [`write_catalog_once`] 单次 CAS 原语，
-/// 不再用 [`write_remote_catalog`] 的内部 retry（会把 PreconditionFailed 吞成 Ok，
-/// 外层看不到冲突误判 Applied）。CAS 冲突由本函数重读 snapshot + 重新判定 winner 处理。
+///   用 [`write_catalog_once`] 单次 CAS 原语。CAS 冲突直接返回
+/// `Retry(precondition_failed)`：Git HTTPS 每轮固定快照，重读必须发生在
+/// 完整同步的新一轮（新 provider）中。
 #[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 pub fn apply_lifecycle_record(
     provider: &dyn SyncProvider,
@@ -675,7 +645,7 @@ pub fn apply_lifecycle_record(
     use crate::sync::types::TargetLifecycleApplyResult;
 
     let max_retries = 3;
-    let mut current_snapshot = snapshot.clone();
+    let current_snapshot = snapshot.clone();
     let current_candidate = candidate.clone();
 
     for attempt in 0..max_retries {
@@ -751,24 +721,16 @@ pub fn apply_lifecycle_record(
                     record: remote_rec,
                 };
             }
-            Err(crate::Error::SyncRemoteError { category, .. })
-                if category == "precondition_failed" =>
-            {
-                // CAS 冲突 → 重读最新 snapshot，重新判定 winner。
+            Err(error) if error.sync_category() == "precondition_failed" => {
+                // Issue #990：Git HTTPS 本轮固定远端快照，重读只能得到旧 HEAD。
+                // 保留 precondition_failed 分类向上返回，由完整同步入口新建
+                // provider、读取新 catalog 后重新做 target-level LWW。
                 log::info!(
-                    "[sync] apply_lifecycle_record: CAS conflict (attempt={}), \
-                     re-reading snapshot",
+                    "[sync] apply_lifecycle_record: CAS precondition failed (attempt={}) — \
+                     returning to full-sync replan",
                     attempt + 1
                 );
-                match load_remote_catalog(provider) {
-                    Ok(reloaded) => {
-                        current_snapshot = reloaded;
-                        // candidate 不变，下一轮重新与最新 remote record 比较。
-                    }
-                    Err(e) => {
-                        return TargetLifecycleApplyResult::Retry(e);
-                    }
-                }
+                return TargetLifecycleApplyResult::Retry(error);
             }
             Err(e) => {
                 return TargetLifecycleApplyResult::Retry(e);
@@ -821,9 +783,10 @@ pub enum GenerationPointerApplyResult {
 /// - 远端 Delete → 作品级 LWW 严格赢才允许复活（写 candidate），否则 RemoteWinner。
 ///
 /// `expected_visible_generation`：merge 时读取的远端 record 的
-/// `active_generation`（远端无 record / legacy prefix 时为 None）。CAS 冲突后
-/// 重读 snapshot，只有可见 generation 没变才继续写，保证不把别的设备刚发布的
-/// 内容版本指针覆盖掉。只有成功的 CAS 才推进 `active_generation`。
+/// `active_generation`（远端无 record / legacy prefix 时为 None）。只有可见
+/// generation 没变才继续写，保证不把别的设备刚发布的内容版本指针覆盖掉。
+/// CAS 冲突原样返回 `precondition_failed`，由完整同步的新一轮重新 merge；
+/// 只有成功的 CAS 才推进 `active_generation`。
 #[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 pub fn apply_generation_pointer(
     provider: &dyn SyncProvider,
@@ -832,7 +795,7 @@ pub fn apply_generation_pointer(
     expected_visible_generation: Option<&str>,
 ) -> GenerationPointerApplyResult {
     let max_retries = 3;
-    let mut current_snapshot = snapshot.clone();
+    let current_snapshot = snapshot.clone();
 
     for attempt in 0..max_retries {
         let remote_record = find_record(&current_snapshot.catalog, &candidate.target_id).cloned();
@@ -924,17 +887,15 @@ pub fn apply_generation_pointer(
                     record: remote_rec,
                 };
             }
-            Err(crate::Error::SyncRemoteError { category, .. })
-                if category == "precondition_failed" =>
-            {
+            Err(error) if error.sync_category() == "precondition_failed" => {
+                // Issue #990：固定快照下不能在同一 provider 上重读新 HEAD。
+                // 保留分类返回，交给完整同步入口新建 provider 后重新规划。
                 log::info!(
-                    "[sync] apply_generation_pointer: CAS conflict (attempt={}), re-reading snapshot",
+                    "[sync] apply_generation_pointer: CAS precondition failed (attempt={}) — \
+                     returning to full-sync replan",
                     attempt + 1
                 );
-                match load_remote_catalog(provider) {
-                    Ok(reloaded) => current_snapshot = reloaded,
-                    Err(e) => return GenerationPointerApplyResult::Retry(e),
-                }
+                return GenerationPointerApplyResult::Retry(error);
             }
             Err(e) => return GenerationPointerApplyResult::Retry(e),
         }

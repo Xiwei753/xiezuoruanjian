@@ -128,6 +128,11 @@ mod tests {
                 )
                 .map_err(crate::Error::from)?
             }
+            Some(crate::sync::provider::ProviderConfig::GitHttps(_)) => {
+                return Err(crate::Error::Other(
+                    "GitHttps provider cannot use the REST test transport".to_string(),
+                ))
+            }
             None => return Err(crate::Error::Other("no provider_config".to_string())),
         };
         let provider = crate::sync::provider::github::GitHubProvider::new(

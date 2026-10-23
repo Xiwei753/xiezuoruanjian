@@ -178,17 +178,18 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
             cancellation_token,
         );
 
-        // A Git branch CAS can fail because another target/device committed while this
-        // generation was uploading. Keep the unreferenced generation and re-merge from the
-        // latest selected source on retry.
+        // Issue #990：Git HTTPS 在一轮完整同步内固定远端快照，同一个 provider
+        // 无法读到别的设备刚推进的 HEAD。generation 发布遇到 precondition_failed
+        // 时保留分类直接返回，由完整同步入口新建 provider、重新读取 catalog/latest
+        // source 并重新做 LWW；不要在本轮循环里重放旧快照。
         if content_result.error_category.as_deref() == Some("precondition_failed") {
             retry_failure_phase = "generation_upload";
             log::info!(
-                "[sync] transfer_app_data_group: generation CAS conflict group={} attempt={}",
+                "[sync] transfer_app_data_group: generation precondition failed group={} attempt={} — returning to full-sync replan",
                 group.id(),
                 attempt + 1
             );
-            continue;
+            return mark_app_group_failure(content_result, retry_failure_phase);
         }
         let content_ok = matches!(
             &content_result.status,
@@ -209,11 +210,11 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
             Err(error) if error.sync_category() == "precondition_failed" => {
                 retry_failure_phase = "catalog_publish";
                 log::info!(
-                    "[sync] transfer_app_data_group: catalog CAS conflict group={} attempt={}",
+                    "[sync] transfer_app_data_group: catalog precondition failed group={} attempt={} — returning to full-sync replan",
                     group.id(),
                     attempt + 1
                 );
-                continue;
+                return mark_app_group_failure(sync_result_from_error(error), retry_failure_phase);
             }
             Err(error) => {
                 return mark_app_group_failure(sync_result_from_error(error), "catalog_publish")

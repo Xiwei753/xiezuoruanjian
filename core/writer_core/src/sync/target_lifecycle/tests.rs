@@ -54,18 +54,18 @@ fn cas_write_uses_ifmatch_after_initial() {
     let snap2 = load_remote_catalog(&p).unwrap();
     assert_ne!(snap2.version.as_str(), "__nonexistent__");
 
-    // 用正确版本 CAS 写入应成功（CAS retry 会重读最新版本）。
+    // 用正确版本 CAS 写入应成功。
     write_remote_catalog(&p, &snap2).unwrap();
 
-    // 用错误版本 CAS 写入：CAS retry 会重读最新版本并重写，
-    // 在 MemoryProvider 单线程环境下总会成功（无并发覆盖）。
+    // 用错误版本 CAS 写入：Issue #990 要求原样返回 precondition_failed，
+    // 由完整同步入口新建 provider 后重新规划，不能在同一 provider 上重读旧快照。
     let snap_bad = RemoteTargetCatalogSnapshot {
         catalog: catalog.clone(),
         version: RemoteVersion::new("stale-version"),
     };
     let result = write_remote_catalog(&p, &snap_bad);
-    // CAS retry 重读后写入成功（MemoryProvider 无并发冲突）。
-    assert!(result.is_ok());
+    let error = result.expect_err("stale CAS must fail");
+    assert_eq!(error.sync_category(), "precondition_failed");
 }
 
 #[test]

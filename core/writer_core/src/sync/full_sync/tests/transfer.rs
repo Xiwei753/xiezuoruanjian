@@ -251,9 +251,9 @@ fn run_transfer_delete_local_project_skips_upload() {
     assert!(transfer.targets[0].result.uploaded_files.is_empty());
 }
 
-/// 问题 3 复现：apply_lifecycle_record 的 CAS retry 被 write_remote_catalog 内部吃掉。
+/// Issue #990：固定快照下 CAS 冲突必须原样返回，交给完整同步入口重规划。
 #[test]
-fn repro_issue_645_q3_cas_retry_swallowed_by_write_remote_catalog() {
+fn stale_catalog_cas_returns_precondition_for_full_replan() {
     use crate::sync::types::{
         RemoteTargetCatalogSnapshot, TargetLifecycleApplyResult, TargetLifecycleRecord,
     };
@@ -286,21 +286,23 @@ fn repro_issue_645_q3_cas_retry_swallowed_by_write_remote_catalog() {
         candidate,
     );
 
-    assert!(
-        matches!(result, TargetLifecycleApplyResult::RemoteWinner { .. }),
-        "问题3: apply_lifecycle_record 应返回 RemoteWinner（远端 12:05 > candidate 12:00），\
-         但 write_remote_catalog 内部吃掉 CAS 冲突后返回了 {:?}",
-        match result {
-            TargetLifecycleApplyResult::Applied(s) => {
-                format!("Applied(catalog={:?})", s.catalog.records)
-            }
-            TargetLifecycleApplyResult::AlreadyCurrent(_) => "AlreadyCurrent".to_string(),
-            TargetLifecycleApplyResult::RemoteWinner { record, .. } => {
-                format!("RemoteWinner(op={:?})", record.op)
-            }
-            TargetLifecycleApplyResult::Retry(e) => format!("Retry({e})"),
+    match result {
+        TargetLifecycleApplyResult::Retry(error) => {
+            assert_eq!(error.sync_category(), "precondition_failed");
         }
-    );
+        TargetLifecycleApplyResult::Applied(snapshot) => {
+            panic!(
+                "stale CAS must not be applied: {:?}",
+                snapshot.catalog.records
+            )
+        }
+        TargetLifecycleApplyResult::AlreadyCurrent(_) => {
+            panic!("stale CAS must not be treated as already current")
+        }
+        TargetLifecycleApplyResult::RemoteWinner { .. } => {
+            panic!("stale snapshot cannot produce a real remote winner")
+        }
+    }
 }
 
 /// 问题 4 复现：DeleteLocalProject 只 NoChanges，返回 DeleteProject action。

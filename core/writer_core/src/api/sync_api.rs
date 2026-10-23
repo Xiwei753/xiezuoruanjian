@@ -399,6 +399,7 @@ impl WriterCoreApi {
                 && !cancelled
                 && match &result {
                     Ok(output) => full_sync_has_precondition_failure(output),
+                    Err(crate::api::error::WriterError::PreconditionFailed(_)) => true,
                     Err(_) => false,
                 };
             if retry_after_precondition {

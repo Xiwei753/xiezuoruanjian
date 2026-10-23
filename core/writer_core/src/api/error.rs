@@ -63,6 +63,9 @@ pub enum WriterError {
     /// 协议错误（non-fast-forward / unrelated histories / 不完整事务）
     #[error("Sync protocol error: {0}")]
     Protocol(String),
+    /// 远端前置条件已变化（HEAD / 版本 CAS 冲突）——需重新读取远端并整轮重规划
+    #[error("Sync precondition failed: {0}")]
+    PreconditionFailed(String),
     /// 未知/程序错误——默认不可重试
     #[error("Fatal sync failure: {0}")]
     Fatal(String),
@@ -92,6 +95,7 @@ impl WriterError {
             WriterError::Conflict(_) => "CONFLICT",
             WriterError::DirtyRepository(_) => "DIRTY_REPOSITORY",
             WriterError::Protocol(_) => "PROTOCOL",
+            WriterError::PreconditionFailed(_) => "PRECONDITION_FAILED",
             WriterError::Fatal(_) => "FATAL",
             WriterError::Other(_) => "OTHER",
         }
@@ -119,6 +123,7 @@ impl WriterError {
             WriterError::Conflict(_) => "error.sync_conflict",
             WriterError::DirtyRepository(_) => "error.sync_dirty_repository",
             WriterError::Protocol(_) => "error.sync_protocol_error",
+            WriterError::PreconditionFailed(_) => "error.sync_conflict",
             WriterError::Fatal(_) => "error.sync_fatal",
             WriterError::Other(_) => "error.other",
         }
@@ -284,6 +289,12 @@ impl From<crate::error::Error> for WriterError {
                     | crate::sync::types::SyncErrorCategory::TemporaryUnavailable
                     | crate::sync::types::SyncErrorCategory::RateLimited => {
                         WriterError::RetryableNetwork(format!(
+                            "remote_api_error: category={} context={} status={}",
+                            category, context, status
+                        ))
+                    }
+                    crate::sync::types::SyncErrorCategory::PreconditionFailed => {
+                        WriterError::PreconditionFailed(format!(
                             "remote_api_error: category={} context={} status={}",
                             category, context, status
                         ))
