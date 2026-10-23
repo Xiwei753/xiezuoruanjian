@@ -21,15 +21,13 @@ pub(crate) enum CandidateOrigin {
     /// A complete known word with the same pinyin signature. This explains
     /// where the candidate came from, not why the source is wrong.
     SamePinyinWord,
+    /// A complete known word with the same base syllable but a different tone.
+    /// This is a broader candidate-generation channel, never error proof.
+    NearPinyinWord,
     /// A complete known word whose changed characters are all shape-near.
     /// This records the candidate's generation channel only; it is not
     /// independent proof that the source is wrong.
     NearStrokeWord,
-    /// A word reached through a directional character relation attested by an
-    /// explicit project typo entry. This is a source-error channel; it is still
-    /// only the candidate's provenance, and the decision layer performs the
-    /// final check.
-    AttestedSpelling,
     /// An explicit whole-word confusion relation.
     WordConfusion,
 }
@@ -44,10 +42,12 @@ pub(crate) struct CorrectionCandidate {
     /// Whether every changed character has a same-pinyin relation to the
     /// source character. This is only a candidate-generation channel.
     pub(crate) phonetic_relation: bool,
+    /// Whether every changed character has a same-base-syllable relation that
+    /// is broader than the exact-pinyin table. Generation only.
+    pub(crate) near_phonetic_relation: bool,
     /// Whether every changed character has a shape-near relation to the
-    /// source character. This is a candidate-generation relation, not proof of
-    /// a source error; the decision layer requires a separately attested typo
-    /// channel.
+    /// source character. Shape is an independent spelling channel, but still
+    /// only one input to the final source-error gate.
     pub(crate) orthographic_relation: bool,
     /// Whether the candidate is a general-dictionary word. Being only a
     /// plausible pinyin match is not enough to replace prose.
@@ -91,29 +91,6 @@ impl CandidateGenerator {
                 segmenter,
                 &mut next_rank,
             );
-        }
-
-        // Directional character substitutions attested by an explicit typo
-        // relation generate a candidate directly. This keeps the source-error
-        // channel self-contained and does not depend on broad shape/pinyin
-        // tables happening to contain the same pair.
-        for (position, ch) in chars.iter().enumerate() {
-            for replacement in lexicon.attested_error_alternatives(*ch) {
-                if replacement == *ch {
-                    continue;
-                }
-                let mut candidate = chars.clone();
-                candidate[position] = replacement;
-                insert_if_candidate(
-                    &mut candidates,
-                    word,
-                    candidate.into_iter().collect(),
-                    CandidateOrigin::AttestedSpelling,
-                    lexicon,
-                    segmenter,
-                    &mut next_rank,
-                );
-            }
         }
 
         // Pycorrector first looks up known words whose pronunciation matches
@@ -251,6 +228,18 @@ fn same_pinyin_word(left: &str, right: &str, lexicon: &Lexicon) -> bool {
         && left != right
 }
 
+fn near_pinyin_word(left: &str, right: &str, lexicon: &Lexicon) -> bool {
+    let left = left.chars().collect::<Vec<_>>();
+    let right = right.chars().collect::<Vec<_>>();
+    left.len() == right.len()
+        && left.iter().zip(right.iter()).all(|(left, right)| {
+            left == right
+                || lexicon.same_pinyin(*left, *right)
+                || lexicon.across_tone_pinyin(*left, *right)
+        })
+        && left != right
+}
+
 fn insert_if_candidate(
     candidates: &mut BTreeMap<String, CorrectionCandidate>,
     original: &str,
@@ -270,18 +259,27 @@ fn insert_if_candidate(
     let known_general_word =
         lexicon.is_general_known_word(&candidate) || segmenter.has_word(&candidate);
     let phonetic_relation = same_pinyin_word(original, &candidate, lexicon);
+    let near_phonetic_relation = near_pinyin_word(original, &candidate, lexicon);
     let orthographic_relation = same_stroke_word(original, &candidate, lexicon);
-    // A complete known word reached through shape substitutions records a
-    // shape-source candidate. Homophony never gets this upgrade. Both are
-    // candidate provenance, not an error verdict.
-    let origin = if origin == CandidateOrigin::WordConfusion
-        || origin == CandidateOrigin::AttestedSpelling
-        || !orthographic_relation
-        || !known_general_word
-    {
+    // Candidates that are not complete words are not useful to the model or
+    // the decision layer. Exact whole-word confusion targets remain explicit
+    // even when they are not in a general dictionary.
+    if !known_general_word && origin != CandidateOrigin::WordConfusion {
+        return;
+    }
+    // Provenance only: an exact word confusion stays explicit; otherwise the
+    // strongest available spelling channel is recorded. None of these marks
+    // the source as erroneous by itself.
+    let origin = if origin == CandidateOrigin::WordConfusion {
         origin
-    } else {
+    } else if orthographic_relation {
         CandidateOrigin::NearStrokeWord
+    } else if phonetic_relation {
+        CandidateOrigin::SamePinyinWord
+    } else if near_phonetic_relation {
+        CandidateOrigin::NearPinyinWord
+    } else {
+        origin
     };
     match candidates.get_mut(&candidate) {
         Some(existing) => {
@@ -289,6 +287,7 @@ fn insert_if_candidate(
                 existing.origin = origin;
             }
             existing.phonetic_relation |= phonetic_relation;
+            existing.near_phonetic_relation |= near_phonetic_relation;
             existing.orthographic_relation |= orthographic_relation;
         }
         None => {
@@ -300,6 +299,7 @@ fn insert_if_candidate(
                     changed_positions,
                     origin,
                     phonetic_relation,
+                    near_phonetic_relation,
                     orthographic_relation,
                     known_general_word,
                     rank: *next_rank,

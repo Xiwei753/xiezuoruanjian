@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use jieba_rs::Jieba;
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use crate::lexicon::Lexicon;
@@ -217,50 +218,93 @@ impl SentenceAnalysis {
         }
     }
 
-    /// Candidate ranges for split-OOV recovery. Only runs of single-character
-    /// HMM tokens are considered, and a range must start and end on boundaries
-    /// shared by both Jieba paths. This allows a 2-4 character error inside a
-    /// longer run without inventing all sliding windows across stable words or
-    /// joining an entity to a preceding verb (看|宿禾 -> 看宿).
+    /// Candidate ranges for split-OOV recovery. A Jieba HMM token may either
+    /// be the complete unknown word (按装) or absorb one preceding character
+    /// (他|头资 -> 他头资). Only the whole token and suffixes after its first
+    /// character are proposed; prefixes and arbitrary internal windows would
+    /// turn ordinary single-character syntax into fake words (叫大|介).
+    ///
+    /// The dictionary-only path supplies the stable edges, so a range can
+    /// never begin or end in the middle of a known word; protected spans and
+    /// stable-word crossings are rejected as well.
     pub(crate) fn candidate_spans(&self, max_chars: usize) -> Vec<CandidateSpan> {
-        let max_chars = max_chars.max(1);
+        let max_chars = max_chars.max(2);
         let mut spans = Vec::new();
-        let mut index = 0usize;
-        while index < self.hmm_tokens.len() {
-            if !is_single_han_token(&self.hmm_tokens[index]) {
-                index += 1;
+        let mut seen = BTreeSet::new();
+        for token in &self.hmm_tokens {
+            let char_count = token.text.chars().count();
+            if char_count < 2
+                || !is_chinese_string(&token.text)
+                || self.has_dictionary_word(&token.text)
+            {
                 continue;
             }
-            let run_start = index;
-            let mut run_end = index + 1;
-            while run_end < self.hmm_tokens.len() && is_single_han_token(&self.hmm_tokens[run_end])
-            {
-                run_end += 1;
+            let chars = self
+                .chars
+                .iter()
+                .filter(|ch| token.start_byte <= ch.start_byte && ch.end_byte <= token.end_byte)
+                .collect::<Vec<_>>();
+            let push = |start: usize,
+                        end: usize,
+                        seen: &mut BTreeSet<(usize, usize)>,
+                        spans: &mut Vec<CandidateSpan>| {
+                self.push_candidate_span(
+                    chars[start].start_byte,
+                    chars[end - 1].end_byte,
+                    false,
+                    seen,
+                    spans,
+                );
+            };
+            if char_count <= max_chars {
+                push(0, chars.len(), &mut seen, &mut spans);
             }
-
-            for start in run_start..run_end {
-                let start_byte = self.hmm_tokens[start].start_byte;
-                let last = (start + max_chars).min(run_end);
-                for end in start + 1..=last {
-                    let end_byte = self.hmm_tokens[end - 1].end_byte;
-                    let evidence = self.span_evidence(start_byte, end_byte);
-                    if !evidence.boundaries_agree
-                        || evidence.overlaps_protected
-                        || evidence.crosses_stable_word
-                    {
-                        continue;
-                    }
-                    spans.push(CandidateSpan {
-                        text: self.sentence[start_byte..end_byte].to_owned(),
-                        start_byte,
-                        end_byte,
-                        evidence,
-                    });
-                }
+            for end in 3..=chars.len().min(1 + max_chars) {
+                push(1, end, &mut seen, &mut spans);
             }
-            index = run_end;
         }
+
+        // The two views overlap; emit in a stable byte order regardless of the
+        // token path that discovered a range.
+        spans.sort_by(|left, right| {
+            left.start_byte
+                .cmp(&right.start_byte)
+                .then_with(|| left.end_byte.cmp(&right.end_byte))
+                .then_with(|| left.text.cmp(&right.text))
+        });
         spans
+    }
+
+    fn push_candidate_span(
+        &self,
+        start_byte: usize,
+        end_byte: usize,
+        require_agreeing_boundaries: bool,
+        seen: &mut BTreeSet<(usize, usize)>,
+        spans: &mut Vec<CandidateSpan>,
+    ) {
+        if !seen.insert((start_byte, end_byte)) {
+            return;
+        }
+        let evidence = self.span_evidence(start_byte, end_byte);
+        if (require_agreeing_boundaries && !evidence.boundaries_agree)
+            || evidence.overlaps_protected
+            || evidence.crosses_stable_word
+        {
+            return;
+        }
+        if !require_agreeing_boundaries
+            && (!has_boundary(&self.dictionary_tokens, start_byte)
+                || !has_boundary(&self.dictionary_tokens, end_byte))
+        {
+            return;
+        }
+        spans.push(CandidateSpan {
+            text: self.sentence[start_byte..end_byte].to_owned(),
+            start_byte,
+            end_byte,
+            evidence,
+        });
     }
 
     fn has_dictionary_word(&self, word: &str) -> bool {
@@ -412,11 +456,6 @@ pub(crate) fn is_han(ch: char) -> bool {
         0xF900..=0xFAFF |
         0x20000..=0x2FA1F
     )
-}
-
-pub(crate) fn is_single_han_token(token: &TokenSpan) -> bool {
-    let mut chars = token.text.chars();
-    chars.next().is_some_and(is_han) && chars.next().is_none()
 }
 
 fn is_detector_word_char(ch: char) -> bool {

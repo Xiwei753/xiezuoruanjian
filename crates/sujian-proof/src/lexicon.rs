@@ -35,6 +35,7 @@ enum WordFrequencySource {
     PersonName,
     PlaceName,
     ProperName,
+    CommonCorpus,
     Thuocl(u8),
 }
 
@@ -50,13 +51,10 @@ pub struct Lexicon {
     word_freq: HashMap<String, Vec<WordFrequency>>,
     words_by_pinyin: HashMap<(usize, Vec<char>), Vec<String>>,
     same_pinyin: HashMap<char, HashSet<char>>,
+    near_pinyin: HashMap<char, HashSet<char>>,
     pinyin_representatives: HashMap<char, char>,
     same_stroke: HashMap<char, HashSet<char>>,
     custom_confusion: HashMap<String, String>,
-    /// Directional character relations attested by an explicit word-level
-    /// typo entry such as `黄梁美梦 -> 黄粱美梦` (梁 -> 粱). These are a
-    /// source-error channel, not a shape-similarity candidate index.
-    attested_error_pairs: HashMap<char, HashSet<char>>,
     person_names: HashMap<String, u64>,
     place_names: HashMap<String, u64>,
     proper_names: HashSet<String>,
@@ -208,10 +206,22 @@ impl Lexicon {
             "bundled thuocl_candidates.txt",
             &mut lexicon,
         )?;
+        for (word, frequency) in read_word_freq_from(
+            Cursor::new(include_str!("../assets/correction-data/common_words.txt")),
+            "bundled common_words.txt",
+        )? {
+            lexicon.insert_word_frequency_from(word, frequency, WordFrequencySource::CommonCorpus);
+        }
         merge_character_groups(
             &mut lexicon.same_pinyin,
             read_same_pinyin_from(Cursor::new(include_str!(
                 "../assets/correction-data/same_pinyin.txt"
+            )))?,
+        );
+        merge_character_groups(
+            &mut lexicon.near_pinyin,
+            read_same_pinyin_from(Cursor::new(include_str!(
+                "../assets/correction-data/near_pinyin.txt"
             )))?,
         );
         merge_character_groups(
@@ -302,36 +312,8 @@ impl Lexicon {
     }
 
     pub fn insert_confusion(&mut self, wrong: String, correct: String) {
-        self.record_attested_error_pair(&wrong, &correct);
         self.custom_confusion.insert(wrong, correct.clone());
         self.insert_word_frequency_from(correct, 1, WordFrequencySource::CustomConfusion);
-    }
-
-    /// An explicit word typo with exactly one changed character attests that
-    /// character relation directionally. This is project-authored error data,
-    /// unlike the broad same-pinyin/same-stroke candidate tables.
-    fn record_attested_error_pair(&mut self, wrong: &str, correct: &str) {
-        let wrong = wrong.chars().collect::<Vec<_>>();
-        let correct = correct.chars().collect::<Vec<_>>();
-        if wrong.len() != correct.len() {
-            return;
-        }
-        let mut changed = None;
-        for (index, (left, right)) in wrong.iter().zip(correct.iter()).enumerate() {
-            if left == right {
-                continue;
-            }
-            if changed.is_some() {
-                return;
-            }
-            changed = Some((index, *left, *right));
-        }
-        if let Some((_, wrong, correct)) = changed {
-            self.attested_error_pairs
-                .entry(wrong)
-                .or_default()
-                .insert(correct);
-        }
     }
 
     pub fn insert_proper_name(&mut self, name: String) {
@@ -558,25 +540,17 @@ impl Lexicon {
 
     pub(crate) fn confusable_chars(&self, ch: char) -> Vec<char> {
         let mut chars = HashSet::new();
-        if let Some(same) = self.same_pinyin.get(&ch) {
-            chars.extend(same.iter().copied());
+        for groups in [&self.same_pinyin, &self.near_pinyin, &self.same_stroke] {
+            if let Some(same) = groups.get(&ch) {
+                chars.extend(same.iter().copied());
+            }
         }
-        if let Some(same) = self
-            .base
-            .as_ref()
-            .and_then(|base| base.same_pinyin.get(&ch))
-        {
-            chars.extend(same.iter().copied());
-        }
-        if let Some(same) = self.same_stroke.get(&ch) {
-            chars.extend(same.iter().copied());
-        }
-        if let Some(same) = self
-            .base
-            .as_ref()
-            .and_then(|base| base.same_stroke.get(&ch))
-        {
-            chars.extend(same.iter().copied());
+        if let Some(base) = &self.base {
+            for groups in [&base.same_pinyin, &base.near_pinyin, &base.same_stroke] {
+                if let Some(same) = groups.get(&ch) {
+                    chars.extend(same.iter().copied());
+                }
+            }
         }
         chars.remove(&ch);
         let mut chars = chars.into_iter().collect::<Vec<_>>();
@@ -616,26 +590,18 @@ impl Lexicon {
             })
     }
 
-    /// Character substitutions attested by an explicit word-level typo
-    /// relation. This is a directional source-error channel; it is deliberately
-    /// separate from [`Self::stroke_alternatives`] and [`Self::same_pinyin`],
-    /// which only generate candidates.
-    pub(crate) fn attested_error_alternatives(&self, ch: char) -> Vec<char> {
-        let mut chars = HashSet::new();
-        if let Some(targets) = self.attested_error_pairs.get(&ch) {
-            chars.extend(targets.iter().copied());
-        }
-        if let Some(targets) = self
-            .base
-            .as_ref()
-            .and_then(|base| base.attested_error_pairs.get(&ch))
-        {
-            chars.extend(targets.iter().copied());
-        }
-        chars.remove(&ch);
-        let mut chars = chars.into_iter().collect::<Vec<_>>();
-        chars.sort_unstable();
-        chars
+    /// Whether two characters share a base syllable but differ in tone. This
+    /// broadens candidate generation beyond the exact-pinyin table; it is not
+    /// by itself proof of a spelling error.
+    pub(crate) fn across_tone_pinyin(&self, left: char, right: char) -> bool {
+        self.near_pinyin
+            .get(&left)
+            .is_some_and(|chars| chars.contains(&right))
+            || self.base.as_ref().is_some_and(|base| {
+                base.near_pinyin
+                    .get(&left)
+                    .is_some_and(|chars| chars.contains(&right))
+            })
     }
 
     pub(crate) fn same_pinyin(&self, left: char, right: char) -> bool {

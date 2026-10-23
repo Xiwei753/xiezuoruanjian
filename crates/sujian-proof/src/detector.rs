@@ -31,9 +31,9 @@ pub(crate) enum DetectionKind {
     Character,
 }
 
-/// What the dictionaries say about the source and whether it has an explicit
-/// spelling-error channel. This is deliberately separate from language-model
-/// anomaly and from shape/pinyin candidate generation.
+/// What the dictionaries say about the source. This is deliberately separate
+/// from language-model anomaly, candidate generation, and the corpus-derived
+/// source-error model.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SourceSpellingEvidence {
     /// Covered by a curated general dictionary (THUOCL/name/proper corpus), as
@@ -42,20 +42,12 @@ pub(crate) struct SourceSpellingEvidence {
     /// Covered by Jieba's bundled dictionary. This is useful description, but
     /// it is not author confirmation of a valid work-specific spelling.
     pub(crate) jieba_dictionary_word: bool,
-    /// Zero-based scalar positions and replacement characters attested by an
-    /// explicit word-level typo relation, e.g. 黄梁美梦 -> 黄粱美梦 attests
-    /// 梁 -> 粱. These are model-external source-error evidence.
-    pub(crate) attested_error_pairs: Vec<(usize, char)>,
 }
 
 impl SourceSpellingEvidence {
     fn merge(&mut self, other: SourceSpellingEvidence) {
         self.general_dictionary_word |= other.general_dictionary_word;
         self.jieba_dictionary_word |= other.jieba_dictionary_word;
-        self.attested_error_pairs.extend(other.attested_error_pairs);
-        self.attested_error_pairs
-            .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-        self.attested_error_pairs.dedup();
     }
 }
 
@@ -71,8 +63,8 @@ pub(crate) struct DetectionEvidence {
     /// The general Jieba dictionary does not cover the source span. This is a
     /// dictionary fact, not proof that the span is wrong.
     pub(crate) oov_general_dictionary_miss: bool,
-    /// Source dictionary coverage and the explicit typo channel, kept apart
-    /// from KenLM frequency and candidate generation.
+    /// Source dictionary coverage, kept apart from KenLM frequency and
+    /// candidate generation.
     pub(crate) source_spelling_evidence: SourceSpellingEvidence,
     /// Character positions (zero-based scalars relative to the span) that the
     /// 2/3-gram MAD check considered anomalous, with the outlier strength.
@@ -562,24 +554,17 @@ fn detect_split_oov_spans(
     matches
 }
 
-/// Dictionary coverage plus explicitly attested directional typo relations.
-/// Shape similarity is intentionally absent here: it belongs to candidate
-/// generation, not to a source-error verdict.
+/// Dictionary coverage for a source span. Shape similarity is intentionally
+/// absent here: it belongs to candidate generation, not to a source-error
+/// verdict.
 fn source_spelling_evidence(
     span: &str,
     lexicon: &Lexicon,
     segmenter: &Segmenter,
 ) -> SourceSpellingEvidence {
-    let mut attested_error_pairs = Vec::new();
-    for (position, ch) in span.chars().enumerate() {
-        for replacement in lexicon.attested_error_alternatives(ch) {
-            attested_error_pairs.push((position, replacement));
-        }
-    }
     SourceSpellingEvidence {
         general_dictionary_word: lexicon.is_general_known_word(span),
         jieba_dictionary_word: segmenter.has_word(span),
-        attested_error_pairs,
     }
 }
 

@@ -4,10 +4,11 @@
 
 use std::sync::Arc;
 
-use crate::candidates::{CandidateGenerator, CandidateOrigin, CorrectionCandidate};
+use crate::candidates::{CandidateGenerator, CorrectionCandidate};
 use crate::confusion::ConfusionMatcher;
 use crate::decision::{CorrectionDecision, DecisionGate};
-use crate::detector::{exact_name_occurrences, DetectionEvidence, DetectionKind, Detector};
+use crate::detector::{exact_name_occurrences, DetectionKind, Detector};
+use crate::error_detection::{confusion_count, ErrorDetector, SourceErrorEvidence};
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
 use crate::rules::RuleSet;
@@ -141,7 +142,7 @@ impl TraditionalCorrector {
                 let candidate_generator = CandidateGenerator::new();
                 let candidates =
                     candidate_generator.generate(&suspect.original, &self.lexicon, &self.segmenter);
-                let candidates = self.candidates_for_scoring(candidates, &suspect.evidence);
+                let candidates = self.candidates_for_scoring(&suspect.original, candidates);
                 if candidates.is_empty() {
                     continue;
                 }
@@ -163,7 +164,8 @@ impl TraditionalCorrector {
                     relative_end,
                     &suspect.original,
                 )?;
-                let mut accepted = Vec::<(f64, CorrectionCandidate)>::new();
+                let mut accepted =
+                    Vec::<(f64, f64, CorrectionCandidate, SourceErrorEvidence)>::new();
                 for candidate in candidates {
                     let candidate_score = self.local_context_score(
                         segment_text,
@@ -171,27 +173,39 @@ impl TraditionalCorrector {
                         relative_end,
                         &candidate.text,
                     )?;
+                    let source_error = ErrorDetector::assess(
+                        &suspect.original,
+                        &candidate,
+                        &suspect.evidence,
+                        original_score.normalized(),
+                        candidate_score.normalized(),
+                    );
                     if DecisionGate::evaluate(
                         &suspect.original,
                         &candidate,
                         &suspect.evidence.segmentation,
                         &suspect.evidence,
-                        original_score.normalized(),
-                        candidate_score.normalized(),
+                        &source_error,
                     ) == CorrectionDecision::Accept
                     {
                         accepted.push((
+                            source_error.probability,
                             candidate_score.normalized() - original_score.normalized(),
                             candidate,
+                            source_error,
                         ));
                     }
                 }
-                accepted.sort_by(|(left_gain, left), (right_gain, right)| {
-                    right_gain
-                        .total_cmp(left_gain)
-                        .then_with(|| left.text.cmp(&right.text))
-                });
-                let Some((_, chosen)) = accepted.into_iter().next() else {
+                accepted.sort_by(
+                    |(left_probability, left_gain, left, _),
+                     (right_probability, right_gain, right, _)| {
+                        right_probability
+                            .total_cmp(left_probability)
+                            .then_with(|| right_gain.total_cmp(left_gain))
+                            .then_with(|| left.text.cmp(&right.text))
+                    },
+                );
+                let Some((_, _, chosen, _)) = accepted.into_iter().next() else {
                     continue;
                 };
 
@@ -201,7 +215,7 @@ impl TraditionalCorrector {
                     original: suspect.original,
                     replacement: chosen.text,
                     source: source.to_owned(),
-                    rule_id: statistical_rule_id(&suspect.evidence).to_owned(),
+                    rule_id: "detector.error_model".to_owned(),
                     // Statistical candidates are never certain mistakes. The
                     // fixed author-confirmed paths above remain `error`.
                     severity: "warning".to_owned(),
@@ -242,25 +256,27 @@ impl TraditionalCorrector {
     /// guesses never consume model queries.
     fn candidates_for_scoring(
         &self,
+        source: &str,
         mut candidates: Vec<CorrectionCandidate>,
-        evidence: &DetectionEvidence,
     ) -> Vec<CorrectionCandidate> {
         let budget = self.config.max_candidates_per_error;
         if budget == 0 {
             return Vec::new();
         }
-        candidates.retain(|candidate| {
-            candidate.origin == CandidateOrigin::WordConfusion
-                || (candidate.known_general_word
-                    && candidate_matches_source_error(candidate, evidence))
-        });
+        candidates.retain(|candidate| candidate.known_general_word);
         candidates.sort_by(|left, right| {
-            let left_source_error = candidate_matches_source_error(left, evidence);
-            let right_source_error = candidate_matches_source_error(right, evidence);
-            right_source_error
-                .cmp(&left_source_error)
+            let left_confusion = confusion_count(source, left);
+            let right_confusion = confusion_count(source, right);
+            right_confusion
+                .cmp(&left_confusion)
                 .then_with(|| right.origin.cmp(&left.origin))
                 .then_with(|| left.changed_chars.cmp(&right.changed_chars))
+                .then_with(|| right.phonetic_relation.cmp(&left.phonetic_relation))
+                .then_with(|| {
+                    right
+                        .near_phonetic_relation
+                        .cmp(&left.near_phonetic_relation)
+                })
                 .then_with(|| right.known_general_word.cmp(&left.known_general_word))
                 .then_with(|| left.rank.cmp(&right.rank))
                 .then_with(|| left.text.cmp(&right.text))
@@ -360,36 +376,6 @@ impl TraditionalCorrector {
         }
         diagnostics
     }
-}
-
-fn candidate_matches_source_error(
-    candidate: &CorrectionCandidate,
-    evidence: &DetectionEvidence,
-) -> bool {
-    let [position] = candidate.changed_positions.as_slice() else {
-        return false;
-    };
-    let Some(replacement) = candidate.text.chars().nth(*position) else {
-        return false;
-    };
-    evidence
-        .source_spelling_evidence
-        .attested_error_pairs
-        .iter()
-        .any(|(attested_position, attested_replacement)| {
-            attested_position == position && *attested_replacement == replacement
-        })
-}
-
-fn statistical_rule_id(evidence: &DetectionEvidence) -> &'static str {
-    if !evidence
-        .source_spelling_evidence
-        .attested_error_pairs
-        .is_empty()
-    {
-        return "detector.attested_error";
-    }
-    "detector.candidate"
 }
 
 fn context_start(text: &str, end: usize, max_chars: usize) -> usize {

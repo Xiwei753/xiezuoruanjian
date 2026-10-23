@@ -2,26 +2,19 @@
 //! Final, explainable arbitration between the original text and one candidate.
 //!
 //! Detection nominates suspicious spans. Candidate generation proposes text.
-//! Neither stage may declare an error. KenLM anomaly (`char_outliers`) locates
-//! a span; shape and pinyin relations only enlarge the candidate set. A
-//! statistical suggestion is accepted only when the detector found a
-//! model-external source-error channel: a directional character relation
-//! attested by an explicit project typo entry, and the candidate implements
-//! that exact relation in a complete dictionary word. The local language-model
-//! comparison is then used once, as context confirmation. It is never combined
-//! with itself as a second independent reason.
+//! [`crate::error_detection::ErrorDetector`] supplies candidate-conditioned,
+//! model-external evidence that the source is misspelled. This gate only
+//! applies structural protections and the candidate's final context rank; it
+//! does not turn shape similarity or a dictionary alternative into an error.
 //!
 //! The gate is a conservative, explainable baseline, not a calibrated error
 //! probability; `confidence` therefore stays unset.
 
 use crate::candidates::{CandidateOrigin, CorrectionCandidate};
 use crate::detector::DetectionEvidence;
+use crate::error_detection::SourceErrorEvidence;
 use crate::segment::SegmentationEvidence;
 
-/// The gate is deliberately not calibrated as an error probability. It only
-/// accepts a known complete-word candidate whose changed character is the one
-/// attested by an explicit typo relation, and whose local normalized log10
-/// score is strictly better than the original's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CorrectionDecision {
     Accept,
@@ -38,8 +31,7 @@ impl DecisionGate {
         candidate: &CorrectionCandidate,
         segmentation: &SegmentationEvidence,
         evidence: &DetectionEvidence,
-        original_score: f64,
-        candidate_score: f64,
+        source_error: &SourceErrorEvidence,
     ) -> CorrectionDecision {
         if evidence.exact_relation {
             return CorrectionDecision::Accept;
@@ -58,7 +50,26 @@ impl DecisionGate {
             // Multi-character statistical guesses are not a spelling relation.
             return CorrectionDecision::KeepOriginal;
         }
+        if source_span.chars().count() > 2 {
+            // Longer unregistered forms are usually names, places, or invented
+            // terms. A character model plus a dictionary alternative is not
+            // enough to call them misspellings; explicit relations above still
+            // handle registered multi-character errors.
+            return CorrectionDecision::KeepOriginal;
+        }
         if !candidate.known_general_word {
+            return CorrectionDecision::KeepOriginal;
+        }
+
+        // 的/得/地/着/了/过 are structural markers. A character model often
+        // prefers a different marker, but "教得很好" and "睡着" are not
+        // misspellings; changing the marker needs an explicit relation.
+        const STRUCTURAL_MARKERS: [char; 6] = ['的', '得', '地', '着', '了', '过'];
+        let changed_source = candidate
+            .changed_positions
+            .first()
+            .and_then(|position| source_span.chars().nth(*position));
+        if changed_source.is_some_and(|ch| STRUCTURAL_MARKERS.contains(&ch)) {
             return CorrectionDecision::KeepOriginal;
         }
 
@@ -72,39 +83,19 @@ impl DecisionGate {
 
         // A span covered by the curated general dictionary is a valid complete
         // word. Shape similarity and a better local score cannot overturn it.
-        // Jieba's runtime dictionary alone is not treated as author-confirmed
-        // validity: it also contains corpus artifacts (高梁 is one such entry).
         if evidence.source_spelling_evidence.general_dictionary_word {
             return CorrectionDecision::KeepOriginal;
         }
-
-        // The only statistical source-error channel is an explicit typo
-        // relation such as the 梁 -> 粱 direction attested by
-        // 黄梁美梦 -> 黄粱美梦. Shape similarity and dictionary coverage of
-        // the target are candidate-generation facts, not source-error proof.
-        let Some(position) = candidate.changed_positions.first().copied() else {
-            return CorrectionDecision::KeepOriginal;
-        };
-        let Some(replacement) = candidate.text.chars().nth(position) else {
-            return CorrectionDecision::KeepOriginal;
-        };
-        let attested = evidence
-            .source_spelling_evidence
-            .attested_error_pairs
-            .iter()
-            .any(|(attested_position, attested_replacement)| {
-                *attested_position == position && *attested_replacement == replacement
-            });
-        if !attested {
+        // Jieba also contains common valid words. A pronunciation alternative
+        // alone cannot overturn them; a genuine shape relation can, because it
+        // explains why the author typed the wrong character.
+        if evidence.source_spelling_evidence.jieba_dictionary_word
+            && !candidate.orthographic_relation
+        {
             return CorrectionDecision::KeepOriginal;
         }
 
-        // Use exactly one model comparison. The earlier anomaly score selected
-        // the span; it is not added here as another reason.
-        if !candidate_score.is_finite() || !original_score.is_finite() {
-            return CorrectionDecision::KeepOriginal;
-        }
-        if candidate_score <= original_score {
+        if !source_error.accept || !source_error.probability.is_finite() {
             return CorrectionDecision::KeepOriginal;
         }
         CorrectionDecision::Accept
@@ -114,6 +105,7 @@ impl DecisionGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_detection::SourceErrorChannel;
     use crate::lexicon::Lexicon;
     use crate::segment::Segmenter;
 
@@ -124,9 +116,20 @@ mod tests {
             changed_positions: vec![1],
             origin,
             phonetic_relation: true,
+            near_phonetic_relation: false,
             orthographic_relation: false,
             known_general_word: true,
             rank: 0,
+        }
+    }
+
+    fn source_error(accept: bool) -> SourceErrorEvidence {
+        SourceErrorEvidence {
+            probability: if accept { 0.8 } else { 0.2 },
+            accept,
+            channel: SourceErrorChannel::ExactPinyin,
+            confusion_count: 0,
+            source_is_oov: true,
         }
     }
 
@@ -145,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn attested_typo_relation_with_complete_word_can_be_accepted() {
+    fn statistical_error_evidence_with_complete_word_can_be_accepted() {
         let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
         let segmenter = Segmenter::new();
         let sentence = "他种了高梁。";
@@ -153,22 +156,22 @@ mod tests {
         let end = start + "高梁".len();
         let mut evidence = evidence(&lexicon, &segmenter, sentence, (start, end));
         evidence.source_spelling_evidence.jieba_dictionary_word = true;
-        evidence.source_spelling_evidence.attested_error_pairs = vec![(1, '粱')];
+        let mut candidate = candidate("高粱", CandidateOrigin::NearStrokeWord);
+        candidate.orthographic_relation = true;
         assert_eq!(
             DecisionGate::evaluate(
                 "高梁",
-                &candidate("高粱", CandidateOrigin::AttestedSpelling),
+                &candidate,
                 &evidence.segmentation,
                 &evidence,
-                0.0,
-                0.05,
+                &source_error(true),
             ),
             CorrectionDecision::Accept
         );
     }
 
     #[test]
-    fn shape_alternative_alone_is_not_source_error_evidence() {
+    fn shape_alternative_without_source_error_is_kept() {
         let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
         let segmenter = Segmenter::new();
         let sentence = "他种了高梁。";
@@ -184,15 +187,14 @@ mod tests {
                 &candidate,
                 &evidence.segmentation,
                 &evidence,
-                0.0,
-                0.05,
+                &source_error(false),
             ),
             CorrectionDecision::KeepOriginal
         );
     }
 
     #[test]
-    fn general_dictionary_word_is_kept_even_with_an_attested_pair() {
+    fn general_dictionary_word_is_kept_even_with_error_evidence() {
         let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
         let segmenter = Segmenter::new();
         let sentence = "他看见桥梁。";
@@ -200,22 +202,41 @@ mod tests {
         let end = start + "桥梁".len();
         let mut evidence = evidence(&lexicon, &segmenter, sentence, (start, end));
         evidence.source_spelling_evidence.general_dictionary_word = true;
-        evidence.source_spelling_evidence.attested_error_pairs = vec![(1, '粱')];
         assert_eq!(
             DecisionGate::evaluate(
                 "桥梁",
                 &candidate("桥粱", CandidateOrigin::NearStrokeWord),
                 &evidence.segmentation,
                 &evidence,
-                0.0,
-                0.05,
+                &source_error(true),
             ),
             CorrectionDecision::KeepOriginal
         );
     }
 
     #[test]
-    fn same_pinyin_word_alone_is_not_spelling_evidence() {
+    fn jieba_word_needs_shape_evidence_to_be_overturned() {
+        let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
+        let segmenter = Segmenter::new();
+        let sentence = "他种了高梁。";
+        let start = sentence.find('高').expect("start");
+        let end = start + "高梁".len();
+        let mut evidence = evidence(&lexicon, &segmenter, sentence, (start, end));
+        evidence.source_spelling_evidence.jieba_dictionary_word = true;
+        assert_eq!(
+            DecisionGate::evaluate(
+                "高梁",
+                &candidate("高粱", CandidateOrigin::SamePinyinWord),
+                &evidence.segmentation,
+                &evidence,
+                &source_error(true),
+            ),
+            CorrectionDecision::KeepOriginal
+        );
+    }
+
+    #[test]
+    fn same_pinyin_word_without_source_error_is_kept() {
         let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
         let segmenter = Segmenter::new();
         let sentence = "他按装了灯。";
@@ -230,8 +251,7 @@ mod tests {
                 &candidate("安装", CandidateOrigin::SamePinyinWord),
                 &evidence.segmentation,
                 &evidence,
-                0.0,
-                0.05,
+                &source_error(false),
             ),
             CorrectionDecision::KeepOriginal
         );
@@ -254,15 +274,14 @@ mod tests {
                 &candidate,
                 &evidence.segmentation,
                 &evidence,
-                0.0,
-                0.05,
+                &source_error(true),
             ),
             CorrectionDecision::KeepOriginal
         );
     }
 
     #[test]
-    fn known_valid_word_is_kept_even_with_a_better_candidate_score() {
+    fn known_single_character_is_kept() {
         let lexicon = Lexicon::from_paths(&crate::LexiconPaths::default()).expect("lexicon");
         let segmenter = Segmenter::new();
         let sentence = "她捂住心脏";
@@ -275,8 +294,7 @@ mod tests {
                 &candidate("他", CandidateOrigin::SingleCharConfusable),
                 &evidence.segmentation,
                 &evidence,
-                0.0,
-                0.05,
+                &source_error(true),
             ),
             CorrectionDecision::KeepOriginal
         );
@@ -299,8 +317,7 @@ mod tests {
                 &candidate,
                 &evidence.segmentation,
                 &evidence,
-                0.0,
-                0.05,
+                &source_error(true),
             ),
             CorrectionDecision::KeepOriginal
         );

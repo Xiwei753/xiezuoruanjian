@@ -13,6 +13,7 @@ mod candidates;
 mod corrector;
 mod decision;
 mod detector;
+mod error_detection;
 mod lexicon;
 mod proper_names;
 mod rules;
