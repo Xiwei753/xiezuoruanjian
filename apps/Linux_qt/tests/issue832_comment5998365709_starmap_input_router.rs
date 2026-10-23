@@ -397,26 +397,50 @@ fn context_menus_use_the_hit_layer_owner() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 6. 内联编辑：Router 在编辑期间整体让位
+// 6. 内联编辑：Router 只让出编辑器实际矩形，不再全局禁用
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn inline_editing_gets_the_router_out_of_the_way() {
+fn inline_editing_owns_only_editor_rectangle() {
     let router = strip_line_comments(&read_src(ROUTER));
+    for old in [
+        "readonly property bool editingBlocks:",
+        "enabled: !router.editingBlocks",
+        "!router.pinchActive && !router.editingBlocks",
+    ] {
+        assert!(!router.contains(old), "不允许恢复全局禁用输入：{old}");
+    }
+    for required in [
+        "function pointInEditor(",
+        "function arbitrateEditorPress(",
+        "property bool leftGestureBlocked: false",
+        "property bool rightGestureBlocked: false",
+        "enabled: !router.leftPointerInEditor",
+        "enabled: !router.rightPointerInEditor",
+    ] {
+        assert!(
+            router.contains(required),
+            "必须按实际编辑区域仲裁单次手势：{required}"
+        );
+    }
+    let left_press = function_window(&router, "function beginPress(", 1200);
+    let right_press = function_window(&router, "function beginRightPress(", 1200);
     assert!(
-        router.contains("readonly property bool editingBlocks:")
-            && router.contains("canvas.inlineEditingKey !== \"\""),
-        "Router 必须根据内联编辑汇总键决定是否让位"
+        left_press.contains("arbitrateEditorPress(")
+            && right_press.contains("arbitrateEditorPress("),
+        "左右按下必须在进入业务状态前按实际编辑矩形仲裁"
     );
-    // disabled 的 Handler 不参与事件投递，因此编辑期间必须把单指/右键
-    // Handler（鼠标/触屏 tap、drag、release 观察、右键 tap 与拉线）整体禁用，
-    // TextInput 才能收到点击/拖动放置光标和选词。
-    assert_eq!(
-        count_occurrences(&router, "enabled: !router.editingBlocks")
-            + count_occurrences(&router, "!router.pinchActive && !router.editingBlocks"),
-        7,
-        "编辑期间 Router 的单指/右键 Handler 必须整体让位给 TextInput"
-    );
+    for required in [
+        "onSingleTapped: function(eventPoint)",
+        "router.handleSingleTap(eventPoint,",
+        "onDoubleTapped: function(eventPoint)",
+        "router.handleDoubleTap(eventPoint,",
+    ] {
+        assert!(
+            router.contains(required),
+            "单/双击必须使用信号传入的事件点：{required}"
+        );
+    }
 
     let canvas = strip_line_comments(&read_src(CANVAS));
     assert!(
@@ -424,9 +448,34 @@ fn inline_editing_gets_the_router_out_of_the_way() {
             && canvas.contains("function setInlineEditingKey(key)"),
         "Canvas 必须汇总内联编辑键"
     );
+    for required in [
+        "function isInsideNodeEditor(",
+        "function commitNodeEditForOutsideGesture(",
+    ] {
+        assert!(
+            canvas.contains(required),
+            "Canvas 必须向 Router 暴露真实编辑区域与交接入口：{required}"
+        );
+    }
+    let host = function_window(&canvas, "id: nodeEditOverlayHost", 300);
+    assert!(
+        host.contains("z: 20"),
+        "编辑浮层宿主必须位于输入路由之上，实际窗口:\n{host}"
+    );
+    let router_item = function_window(&canvas, "id: inputRouter", 300);
+    assert!(
+        router_item.contains("z: 10"),
+        "输入路由必须保持在编辑浮层宿主之下，实际窗口:\n{router_item}"
+    );
     // #929：活着的内联编辑在唯一活动画布 StarMapActiveScene 里；SceneContent
     // 退化为只读微缩概览，不再承载 TextInput / 编辑汇总。
     let active = strip_line_comments(&read_src(ACTIVE_SCENE));
+    assert!(
+        active.contains("property var editOverlayHost: null")
+            && active.contains("function editorContainsScenePoint(")
+            && active.contains("parent: scene.editOverlayHost ? scene.editOverlayHost : scene"),
+        "活动画布必须把唯一编辑器挂到 Canvas 顶层宿主，并按真实矩形判断点击"
+    );
     assert!(
         active.contains("function noteInlineEditing(nodeId, editing)")
             && active.contains("menuHost.setInlineEditingKey(inlineEditingKey)"),
@@ -435,7 +484,7 @@ fn inline_editing_gets_the_router_out_of_the_way() {
     assert!(
         active.contains("onItemRemoved: function(index, item)")
             && active.contains("scene.finishActiveNodeEdit()"),
-        "编辑中的 delegate 被销毁时必须结束场景级编辑会话，否则 Router 会永久让位"
+        "编辑中的 delegate 被销毁时必须结束场景级编辑会话，否则编辑状态会残留"
     );
     let content = strip_line_comments(&read_src(CONTENT));
     assert!(

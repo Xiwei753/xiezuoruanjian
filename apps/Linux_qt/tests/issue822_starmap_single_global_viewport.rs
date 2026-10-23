@@ -1317,16 +1317,26 @@ fn node_gestures_are_disabled_while_editing() {
         "场景级编辑容器必须同时提供名称单行输入与正文多行输入"
     );
 
-    // 编辑期间所有单指业务 Handler（鼠标/触屏 tap、drag、release 观察、
-    // 右键 tap 与右键拉线）必须整体禁用：disabled 的 Handler 不参与投递，
-    // TextInput 才能收到点击/拖动去放置光标和选词。
+    // Issue #987：编辑期间不再全局禁用 Router 业务手势，而是按实际编辑矩形
+    // 对每一次左/右键手势单独仲裁；左右键的归属状态互相隔离。
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
-    assert_eq!(
-        count_occurrences(&router, "enabled: !router.editingBlocks")
-            + count_occurrences(&router, "!router.pinchActive && !router.editingBlocks"),
-        7,
-        "编辑期间 Router 的单指/右键 Handler 必须整体让位给 TextInput，实际源码不符"
-    );
+    for old in [
+        "readonly property bool editingBlocks:",
+        "enabled: !router.editingBlocks",
+        "!router.pinchActive && !router.editingBlocks",
+    ] {
+        assert!(!router.contains(old), "不允许恢复全局禁用输入：{old}");
+    }
+    for required in [
+        "function arbitrateEditorPress(point, button)",
+        "canvas.commitNodeEditForOutsideGesture(",
+        "property bool leftGestureBlocked: false",
+        "property bool rightGestureBlocked: false",
+        "enabled: !router.leftPointerInEditor",
+        "enabled: !router.rightPointerInEditor",
+    ] {
+        assert!(router.contains(required), "必须按实际编辑区域仲裁单次手势：{required}");
+    }
     let canvas = strip_line_comments(&read_src(CANVAS));
     assert!(
         canvas.contains("property string inlineEditingKey: \"\"")
