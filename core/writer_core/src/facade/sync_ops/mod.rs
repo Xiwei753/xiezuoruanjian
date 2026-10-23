@@ -304,34 +304,8 @@ impl super::WriterCore {
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::SyncDiagnosticsResult> {
-        // secrets 仅在 github-api feature 下使用；非 github-api 时消费以避免 unused。
-        #[cfg(not(feature = "github-api"))]
-        let _ = secrets;
-        match config.active_provider.as_str() {
-            #[cfg(feature = "github-api")]
-            "github_api" => {
-                let transport = self.init_sync_transport()?;
-                let github_config = config
-                    .provider_config
-                    .as_ref()
-                    .map(|pc| match pc {
-                        crate::sync::provider::ProviderConfig::GitHub(c) => c,
-                    })
-                    .ok_or_else(|| crate::Error::Other("missing github provider config".into()))?;
-                let runtime =
-                    crate::sync::provider::github::config::GitHubRuntimeConfig::from_persisted(
-                        github_config,
-                        secrets.provider_secrets.as_ref(),
-                    )
-                    .map_err(crate::Error::from)?;
-                let provider =
-                    crate::sync::provider::github::GitHubProvider::new(runtime, transport);
-                provider.diagnose().map_err(crate::Error::from)
-            }
-            #[cfg(not(feature = "github-api"))]
-            "github_api" => Err(crate::Error::NotImplemented),
-            _ => Err(crate::Error::NotImplemented),
-        }
+        let provider = self.create_sync_provider_inner(config, secrets, false)?;
+        provider.diagnose().map_err(crate::Error::from)
     }
 
     /// 初始化同步传输 — 从平台注入的 factory 构造 `Arc<dyn SyncTransport>`。

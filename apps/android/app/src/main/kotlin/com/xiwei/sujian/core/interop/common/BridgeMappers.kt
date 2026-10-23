@@ -162,16 +162,17 @@ internal fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMod
 internal fun SyncableSettings.toDto() = SyncableSettingsDto(fontSize, themeMode, monetColor, themePaletteJson)
 
 internal fun SyncConfigDto.toModel(): SyncConfig {
+    val gitHttpsConfig = providerConfig as? ProviderConfigDto.GitHttps
     val gitHubConfig = providerConfig as? ProviderConfigDto.GitHub
     return SyncConfig(
         enabled = enabled,
         activeProvider = activeProvider,
-        remoteUrl = gitHubConfig?.remoteUrl ?: "",
+        remoteUrl = gitHttpsConfig?.remoteUrl ?: gitHubConfig?.remoteUrl ?: "",
         transport = gitHubConfig?.transport.toSyncTransport(),
-        branch = gitHubConfig?.branch ?: "main",
+        branch = gitHttpsConfig?.branch ?: gitHubConfig?.branch ?: "main",
         autoSync = autoSync,
         syncIntervalSeconds = syncIntervalSeconds.toInt(),
-        username = gitHubConfig?.username ?: "",
+        username = gitHttpsConfig?.username ?: gitHubConfig?.username ?: "",
         hasNetworkStatePermission = hasNetworkStatePermission,
         hasNetworkPermission = hasNetworkPermission,
     )
@@ -181,13 +182,12 @@ internal fun SyncConfig.toDto(): SyncConfigDto {
     val normalized = normalize()
     return SyncConfigDto(
         enabled = normalized.enabled ?: false,
-        activeProvider = normalized.activeProvider ?: "github",
+        activeProvider = "git_https",
         providerConfig =
-            ProviderConfigDto.GitHub(
+            ProviderConfigDto.GitHttps(
                 remoteUrl = normalized.remoteUrl ?: "",
                 branch = normalized.branch ?: "main",
                 username = normalized.username ?: "",
-                transport = normalized.transport.toWire(),
             ),
         autoSync = normalized.autoSync ?: false,
         syncIntervalSeconds = (normalized.syncIntervalSeconds ?: 300).toUInt(),
@@ -196,9 +196,17 @@ internal fun SyncConfig.toDto(): SyncConfigDto {
     )
 }
 
-internal fun SyncSecretsDto.toModel(): SyncSecrets = SyncSecrets((providerSecrets as? ProviderSecretsDto.GitHub)?.token)
+internal fun SyncSecretsDto.toModel(): SyncSecrets {
+    val providerSecrets = providerSecrets
+    val secret = when (providerSecrets) {
+        is ProviderSecretsDto.GitHttps -> providerSecrets.secret
+        is ProviderSecretsDto.GitHub -> providerSecrets.token
+        null -> null
+    }
+    return SyncSecrets(secret)
+}
 
-internal fun SyncSecrets.toDto(): SyncSecretsDto = SyncSecretsDto(token?.let { ProviderSecretsDto.GitHub(it) })
+internal fun SyncSecrets.toDto(): SyncSecretsDto = SyncSecretsDto(token?.let { ProviderSecretsDto.GitHttps(it) })
 
 internal fun SyncStatus.toWire(): String =
     when (this) {

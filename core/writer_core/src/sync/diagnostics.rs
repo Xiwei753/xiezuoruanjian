@@ -19,7 +19,6 @@ use crate::sync::types::SyncDiagnosticsResult;
 use crate::sync::types::SyncSecrets;
 #[cfg(feature = "github-api")]
 use crate::sync::url::detect_transport;
-#[cfg(feature = "github-api")]
 use crate::sync::url::sanitize_remote_url;
 
 impl crate::sync::SyncService {
@@ -53,6 +52,9 @@ impl crate::sync::SyncService {
             match &config.provider_config {
                 Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => {
                     (gh.remote_url.clone(), Some(gh.transport.clone()))
+                }
+                Some(crate::sync::provider::ProviderConfig::GitHttps(git)) => {
+                    (git.remote_url.clone(), None)
                 }
                 None => (String::new(), None),
             };
@@ -94,7 +96,7 @@ impl crate::sync::SyncService {
                 // 通过后返回 network_probe_failed（与旧 GitHubApiBackend::new() 无 transport 行为一致）。
                 let github_config = match &config.provider_config {
                     Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.clone(),
-                    None => GitHubProviderConfig::defaults(),
+                    _ => GitHubProviderConfig::defaults(),
                 };
 
                 match crate::sync::provider::github::config::GitHubRuntimeConfig::from_persisted(
@@ -124,6 +126,35 @@ impl crate::sync::SyncService {
                 result.error_category = "github_api_unavailable".to_string();
                 result.network_status = "unavailable".to_string();
                 result.success = false;
+                Ok(result)
+            }
+            "git_https" => {
+                let remote_url = match &config.provider_config {
+                    Some(crate::sync::provider::ProviderConfig::GitHttps(git)) => {
+                        git.remote_url.clone()
+                    }
+                    _ => String::new(),
+                };
+                let sanitized_url = sanitize_remote_url(&remote_url).sanitized_url;
+                result.provider_details = Some(format!("remote_url: {}", sanitized_url));
+                if sanitized_url.is_empty() {
+                    result.error_category = "empty_url".to_string();
+                    return Ok(result);
+                }
+                if !sanitized_url.to_ascii_lowercase().starts_with("https://") {
+                    result.error_category = "invalid_url".to_string();
+                    result.network_status = "invalid_https_url".to_string();
+                    result.success = false;
+                    return Ok(result);
+                }
+                // 真正的网络探测由 facade 的 run_sync_diagnostics 完成
+                // （构造 provider 并调用 SyncProvider::diagnose）。
+                result.error_category = "network_probe_failed".to_string();
+                result.raw_error = Some(
+                    "Use AppService run_sync_diagnostics for Git HTTPS network probe".to_string(),
+                );
+                result.network_ok = false;
+                result.network_status = "failed".to_string();
                 Ok(result)
             }
             "git" => {

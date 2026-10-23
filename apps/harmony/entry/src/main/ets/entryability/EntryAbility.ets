@@ -13,6 +13,8 @@ import { HarmonyCrashEventWatcher } from '../platform/diagnostics/HarmonyCrashEv
 import { HarmonyDiagnosticsCheckpoint } from '../platform/diagnostics/HarmonyDiagnosticsCheckpoint'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../platform/diagnostics/HarmonyDiagnosticEvents'
 import { HarmonyAutoSyncScheduler } from '../feature/settings/presentation/HarmonyAutoSyncScheduler'
+import { TrustedDeviceService } from '../platform/device/TrustedDeviceService'
+import { NearbyDeviceSyncCoordinator } from '../platform/peer/NearbyDeviceSyncCoordinator'
 import { TabletWindowPolicy } from '../platform/window/TabletWindowPolicy'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
@@ -63,6 +65,9 @@ export default class EntryAbility extends UIAbility {
     // 真实配置的首次读取与到期判断由 HarmonyAutoSyncScheduler.onCoreReady() 在
     // NativeWriterCoreBridge.initialize() 成功后触发（Issue #925 复核）。
     HarmonyAutoSyncScheduler.getInstance().attach(this.lifecycle)
+
+    // 附近设备同步接收端：即使设置页未打开，也要在系统协作回调后接住首条 hello。
+    NearbyDeviceSyncCoordinator.getInstance().attach()
 
     // 接续恢复：检查 launchReason === CONTINUATION，从 want.parameters 读取 payload。
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
@@ -262,6 +267,15 @@ export default class EntryAbility extends UIAbility {
   // EntryAbility 仅保留 Ability 生命周期调用。
   onContinue(wantParam: Record<string, Object>): AbilityConstant.OnContinueResult {
     return this.continuationEntrypoint.onContinue(wantParam)
+  }
+
+  // Issue #988：接收附近可信设备的跨设备协作连接。系统只在
+  // FLAG_ABILITY_ON_COLLABORATE 的 want 中回调；这里只委托稳定平台服务，
+  // 不把华为账号登录态当同账号证明，也不要求调用方有 GitHub 仓库。
+  onCollaborate(wantParam: Record<string, Object>): AbilityConstant.CollaborateResult {
+    const accepted: boolean =
+      TrustedDeviceService.getInstance().acceptCollaboration(wantParam, this.context)
+    return accepted ? AbilityConstant.CollaborateResult.ACCEPT : AbilityConstant.CollaborateResult.REJECT
   }
 
   // 新 want 到达（接续恢复在目标设备的二次入口）。

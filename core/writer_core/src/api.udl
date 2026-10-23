@@ -274,11 +274,13 @@ dictionary DeviceInfoDto {
 // GitHub 特定字段只在 ProviderConfigDto::GitHub / ProviderSecretsDto::GitHub 中。
 [Enum]
 interface ProviderConfigDto {
+    GitHttps(string remote_url, string branch, string username);
     GitHub(string remote_url, string branch, string username, string transport);
 };
 
 [Enum]
 interface ProviderSecretsDto {
+    GitHttps(string secret);
     GitHub(string token);
 };
 

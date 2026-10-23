@@ -37,6 +37,9 @@ import { STATS_PANEL_NONE, STATS_PANEL_RANGE, STATS_PANEL_LIFETIME, formatIsoDat
 import { CompactStatsContent } from './CompactStatsContent'
 import { WideStatisticsPage } from './wide/WideStatisticsPage'
 import { WideLayoutMode } from '../../../app/navigation/wide/WideLayoutMode'
+import { Routes, StatsRouteParams } from '../../../app/navigation/Routes'
+import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
+import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 
 @Component
 export struct StatsScreen {
@@ -76,8 +79,22 @@ export struct StatsScreen {
 
   async aboutToAppear() {
     hilog.info(0x0000, 'StatsScreen', 'route name=Stats')
-    this.loadExplorer(STATS_PRESET_LAST_7_DAYS, '', '')
+    const paramsArr = this.navPathStack.getParamByName(Routes.Stats) as StatsRouteParams[]
+    const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
+    if (params !== null) {
+      if (params.period !== undefined) {
+        this.selectedPeriod = params.period
+      }
+      if (params.expandedPanel !== undefined) {
+        this.expandedPanel = params.expandedPanel
+      }
+      if (params.heatmapYear !== undefined) {
+        this.heatmapYear = params.heatmapYear
+      }
+    }
+    this.loadExplorer(this.selectedPeriod, '', '')
     this.loadHeatmap(this.heatmapYear)
+    this.updateContinuationSnapshot()
 
     // #936：统计页保活期间，同步下载新内容或重新进入本页时，由同一条事件刷新 Explorer 与当前年份的日历快照。
     this.syncChangedHandler = (_data: emitter.EventData): void => {
@@ -97,6 +114,18 @@ export struct StatsScreen {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
+  }
+
+  // Issue #988：统计 tab 接续恢复当前时段、宽屏展开位置和日历年份。
+  private updateContinuationSnapshot(): void {
+    const payload: ContinuationPayload = {
+      screen: 'stats',
+      tabIndex: 2,
+      statsPeriod: this.selectedPeriod,
+      statsExpandedPanel: this.expandedPanel,
+      statsHeatmapYear: this.heatmapYear
+    }
+    AppContinuationService.getInstance().updateCurrentScreen(payload)
   }
 
   // Issue #968：诊断只记录实际挂载的统计正文根容器，而不是根据布尔值预计会挂哪一个。
@@ -189,6 +218,7 @@ export struct StatsScreen {
     // 先清空，避免短暂显示上一年数据；加载完成后写入新年份快照。
     this.heatmap = null
     this.loadHeatmap(year)
+    this.updateContinuationSnapshot()
   }
 
   /** 宽屏日历区查询失败后的原地重试：只重取当前年份日历，不打断 Explorer 时段。 */
@@ -206,6 +236,7 @@ export struct StatsScreen {
     this.selectedPeriod = preset
     this.expandedPanel = STATS_PANEL_NONE
     this.loadExplorer(preset, '', '')
+    this.updateContinuationSnapshot()
   }
 
   /** 宽屏点时段卡：切到该时段并在原卡区展开三栏，不导航新页面。 */
@@ -213,17 +244,20 @@ export struct StatsScreen {
     this.selectedPeriod = preset
     this.expandedPanel = STATS_PANEL_RANGE
     this.loadExplorer(preset, '', '')
+    this.updateContinuationSnapshot()
   }
 
   /** 宽屏点生涯横条：展开 / 收起生涯纪录 + 折线图。 */
   private toggleLifetimePanel(): void {
     if (this.expandedPanel === STATS_PANEL_LIFETIME) {
       this.expandedPanel = STATS_PANEL_NONE
+      this.updateContinuationSnapshot()
       return
     }
     this.selectedPeriod = STATS_PRESET_LIFETIME
     this.expandedPanel = STATS_PANEL_LIFETIME
     this.loadExplorer(STATS_PRESET_LIFETIME, '', '')
+    this.updateContinuationSnapshot()
   }
 
   private closeExpandedPanel(): void {

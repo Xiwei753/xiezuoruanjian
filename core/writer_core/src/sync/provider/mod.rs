@@ -12,8 +12,11 @@
 
 pub mod capabilities;
 pub mod error;
+pub mod git_https;
 pub mod memory;
 pub mod model;
+pub mod peer;
+pub mod router;
 
 #[cfg(feature = "github-api")]
 pub mod github;
@@ -31,6 +34,8 @@ pub enum ProviderConfig {
     #[cfg(feature = "github-api")]
     #[serde(rename = "github")]
     GitHub(github::config::GitHubProviderConfig),
+    #[serde(rename = "git_https")]
+    GitHttps(git_https::GitHttpsProviderConfig),
 }
 
 /// Provider 密钥选择 — provider-neutral 的强类型枚举。
@@ -40,18 +45,31 @@ pub enum ProviderConfig {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderSecrets {
+    /// 通用 Git HTTPS 密码 / PAT / API token。空串等同未提供（匿名读取）。
+    #[serde(rename = "git_https")]
+    GitHttps { secret: String },
     #[cfg(feature = "github-api")]
     #[serde(rename = "github")]
     GitHub { token: String },
 }
 
 impl ProviderSecrets {
-    /// 返回 GitHub token（若为 GitHub 变体）；其他 Provider 返回 None。
-    #[cfg(feature = "github-api")]
-    pub fn github_token(&self) -> Option<&str> {
+    /// 返回任意 Provider 的密钥；用于通用安全存储迁移。
+    pub fn any_secret(&self) -> Option<&str> {
         match self {
+            ProviderSecrets::GitHttps { secret } => Some(secret.as_str()),
+            #[cfg(feature = "github-api")]
             ProviderSecrets::GitHub { token } => Some(token.as_str()),
         }
+    }
+
+    /// 返回可作为 GitHub API token 使用的密钥。
+    ///
+    /// 旧 GitHub 配置保存为 `GitHub` 变体；切换到通用 Git HTTPS 后，
+    /// 同一串令牌仍可用于 `api.github.com` 自动后备。
+    #[cfg(feature = "github-api")]
+    pub fn github_token(&self) -> Option<&str> {
+        self.any_secret().filter(|secret| !secret.is_empty())
     }
 }
 
@@ -122,11 +140,21 @@ pub trait SyncProvider: Send + Sync {
             reason: "batch not supported".to_string(),
         })
     }
+
+    /// 远端连通性/认证诊断。不支持诊断的 Provider 返回 `Other`。
+    fn diagnose(
+        &self,
+    ) -> Result<crate::sync::types::SyncDiagnosticsResult, error::ProviderError> {
+        Err(error::ProviderError::Other {
+            reason: "diagnostics not supported".to_string(),
+        })
+    }
 }
 
 // ---- Provider-neutral 契约层 re-export ----
 pub use capabilities::*;
 pub use error::*;
+pub use git_https::{GitHttpsProvider, GitHttpsProviderConfig, GitHttpsRuntimeConfig};
 pub use memory::*;
 pub use model::*;
 

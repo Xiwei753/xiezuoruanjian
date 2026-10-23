@@ -11,6 +11,8 @@ import { ThemeMode } from '../../../../ui/theme/HarmonyThemeTypes'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
 import { MessageKeyMapper } from '../../../../ui/i18n/MessageKeyMapper'
 import { SettingsSectionId, SettingsViewModel } from '../../presentation/SettingsViewModel'
+import { DeviceSyncViewModel } from '../../presentation/DeviceSyncViewModel'
+import { TrustedDeviceInfo } from '../../../../platform/device/TrustedDeviceService'
 import { GripLayoutSide } from '../../../../ui/adaptive/GripLayoutSide'
 
 interface WideSelectOption {
@@ -22,6 +24,8 @@ interface WideSelectOption {
 export struct WideSettingsCategoryContent {
   @Param sectionId: SettingsSectionId = 'appearance'
   @Param viewModel: SettingsViewModel = new SettingsViewModel()
+  // Issue #988：宽窄屏共用同一个附近设备 ViewModel。
+  @Param deviceSync: DeviceSyncViewModel = new DeviceSyncViewModel()
   // Issue #986：智感握姿决定 Switch 所在侧；只反转开关与文字，不镜像文字方向。
   @Param gripSide: GripLayoutSide = 'right'
 
@@ -647,8 +651,85 @@ export struct WideSettingsCategoryContent {
     .alignItems(VerticalAlign.Center)
   }
 
+  // Issue #988：附近设备同步与云备份并列，不要求 GitHub 仓库或应用内账号。
+  @Builder
+  NearbyDeviceSyncRows() {
+    Column({ space: 8 }) {
+      Text('附近设备同步')
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .width('100%')
+      Text('通过系统可信设备同步作品与星图；双方都无需 GitHub 仓库，也不会传递 GitHub Token。')
+        .fontSize(12)
+        .opacity(0.72)
+        .width('100%')
+      if (!this.deviceSync.supported) {
+        Text('当前系统不支持附近设备同步（需要 API 18+ 的系统可信连接）')
+          .fontSize(12)
+          .opacity(0.72)
+          .width('100%')
+      } else {
+        if (this.deviceSync.devices.length === 0) {
+          Text('未发现系统可信设备。请先在同一分布式网络内完成系统设备连接。')
+            .fontSize(12)
+            .opacity(0.72)
+            .width('100%')
+        } else {
+          ForEach(this.deviceSync.devices, (device: TrustedDeviceInfo) => {
+            Row({ space: 8 }) {
+              Text(`${device.deviceName}${device.online ? '' : '（离线）'}`)
+                .fontSize(14)
+                .layoutWeight(1)
+              Button(this.deviceSync.selectedNetworkId === device.networkId ? '已选择' : '选择')
+                .fontSize(12)
+                .height(30)
+                .onClick(() => this.deviceSync.selectDevice(device))
+            }
+            .width('100%')
+            .padding({ top: 4, bottom: 4 })
+          }, (device: TrustedDeviceInfo): string => device.networkId)
+        }
+        if (this.deviceSync.selectedNetworkId.length > 0) {
+          Row({ space: 8 }) {
+            Button(this.deviceSync.connectionState === 'connected' ? '断开' : '连接')
+              .fontSize(12)
+              .height(32)
+              .onClick(() => {
+                if (this.deviceSync.connectionState === 'connected') {
+                  this.deviceSync.disconnect()
+                } else {
+                  this.deviceSync.connectSelected()
+                }
+              })
+            Button('刷新设备')
+              .fontSize(12)
+              .height(32)
+              .onClick(() => this.deviceSync.refresh())
+          }
+          .width('100%')
+        }
+        Text(this.deviceSync.statusMessage)
+          .fontSize(12)
+          .width('100%')
+        Text(this.deviceSync.remoteCloudLabel())
+          .fontSize(12)
+          .opacity(0.72)
+          .width('100%')
+        if (this.deviceSync.lastSyncMessage.length > 0) {
+          Text(this.deviceSync.lastSyncMessage)
+            .fontSize(12)
+            .opacity(0.72)
+            .width('100%')
+        }
+      }
+    }
+    .width('100%')
+    .padding({ top: 8, bottom: 8 })
+  }
+
   @Builder
   SyncRows() {
+    this.NearbyDeviceSyncRows()
     Row({ space: 12 }) {
       Text($r('app.string.enable_sync'))
         .fontSize(15)
@@ -659,7 +740,7 @@ export struct WideSettingsCategoryContent {
           if (config) {
             const next: SyncConfig = {
               enabled: isOn,
-              activeProvider: 'github_api',
+              activeProvider: config.activeProvider,
               providerConfig: config.providerConfig,
               autoSync: config.autoSync,
               syncIntervalSeconds: config.syncIntervalSeconds,
@@ -686,7 +767,7 @@ export struct WideSettingsCategoryContent {
             if (config) {
               const next: SyncConfig = {
                 enabled: config.enabled,
-                activeProvider: 'github_api',
+                activeProvider: config.activeProvider,
                 providerConfig: config.providerConfig,
                 autoSync: isOn,
                 syncIntervalSeconds: config.syncIntervalSeconds,
@@ -703,7 +784,7 @@ export struct WideSettingsCategoryContent {
       .alignItems(VerticalAlign.Center)
 
       Column({ space: 6 }) {
-        Text($r('app.string.github_repo'))
+        Text($r('app.string.repository_https_url'))
           .fontSize(13)
           .fontColor($r('sys.color.font_secondary'))
         TextInput({ text: this.viewModel.syncRemoteUrl })
@@ -719,7 +800,7 @@ export struct WideSettingsCategoryContent {
       .alignItems(HorizontalAlign.Start)
 
       Column({ space: 6 }) {
-        Text($r('app.string.https_token'))
+        Text($r('app.string.access_token_optional'))
           .fontSize(13)
           .fontColor($r('sys.color.font_secondary'))
         TextInput({ text: this.viewModel.syncToken })
@@ -743,6 +824,54 @@ export struct WideSettingsCategoryContent {
       .alignItems(HorizontalAlign.Start)
 
       Row({ space: 12 }) {
+        Text($r('app.string.advanced_settings'))
+          .fontSize(15)
+          .layoutWeight(1)
+        Text(this.viewModel.syncAdvancedExpanded ? '−' : '+')
+          .fontSize(16)
+      }
+      .width('100%')
+      .padding({ top: 7, bottom: 7 })
+      .onClick(() => {
+        this.viewModel.toggleSyncAdvanced()
+      })
+      .alignItems(VerticalAlign.Center)
+
+      if (this.viewModel.syncAdvancedExpanded) {
+        Column({ space: 6 }) {
+          Text($r('app.string.branch'))
+            .fontSize(13)
+            .fontColor($r('sys.color.font_secondary'))
+          TextInput({ text: this.viewModel.syncBranch })
+            .width('100%')
+            .fontSize(13)
+            .borderRadius(DesignTokens.inputFieldRadius)
+            .onChange((value: string) => {
+              this.viewModel.updateSyncBranch(value)
+            })
+        }
+        .width('100%')
+        .padding({ top: 7, bottom: 7 })
+        .alignItems(HorizontalAlign.Start)
+
+        Column({ space: 6 }) {
+          Text($r('app.string.username'))
+            .fontSize(13)
+            .fontColor($r('sys.color.font_secondary'))
+          TextInput({ text: this.viewModel.syncUsername })
+            .width('100%')
+            .fontSize(13)
+            .borderRadius(DesignTokens.inputFieldRadius)
+            .onChange((value: string) => {
+              this.viewModel.updateSyncUsername(value)
+            })
+        }
+        .width('100%')
+        .padding({ top: 7, bottom: 7 })
+        .alignItems(HorizontalAlign.Start)
+      }
+
+      Row({ space: 12 }) {
         Column({ space: 2 }) {
           Text($r('app.string.sync_interval'))
             .fontSize(15)
@@ -759,7 +888,7 @@ export struct WideSettingsCategoryContent {
             if (config) {
               const next: SyncConfig = {
                 enabled: config.enabled,
-                activeProvider: 'github_api',
+                activeProvider: config.activeProvider,
                 providerConfig: config.providerConfig,
                 autoSync: config.autoSync,
                 syncIntervalSeconds: value,

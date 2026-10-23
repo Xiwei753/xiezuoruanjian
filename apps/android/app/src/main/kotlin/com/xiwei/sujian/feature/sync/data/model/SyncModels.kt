@@ -7,7 +7,7 @@ enum class SyncTransport {
 
 data class SyncConfig(
     val enabled: Boolean? = false,
-    val activeProvider: String? = "github",
+    val activeProvider: String? = "git_https",
     val remoteUrl: String? = "",
     val transport: SyncTransport? = SyncTransport.HttpsToken,
     val branch: String? = "main",
@@ -20,7 +20,7 @@ data class SyncConfig(
     fun normalize(): SyncConfig {
         return copy(
             enabled = enabled ?: false,
-            activeProvider = activeProvider ?: "github",
+            activeProvider = activeProvider ?: "git_https",
             remoteUrl = remoteUrl ?: "",
             transport = transport ?: SyncTransport.HttpsToken,
             branch = if (branch.isNullOrEmpty()) "main" else branch,

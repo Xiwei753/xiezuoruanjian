@@ -11,7 +11,7 @@ name = "uniffi_writer_core"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["github-api"]
+default = ["github-api", "git-https"]
 ai = ["writer_uniffi/ai"]
 github-api = ["writer_uniffi/github-api", "dep:reqwest"]
 git-https = ["writer_uniffi/git-https"]

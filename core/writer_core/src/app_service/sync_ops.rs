@@ -1,8 +1,8 @@
 use crate::api::{
     AllSyncConflictEntryDto, FullSyncDiagnosticsResultDto, FullSyncDryRunResultDto,
     FullSyncReportDto, FullSyncResultDto, FullSyncStateDto, LegacyMigrationOutcomeDto,
-    LegacyProfileMetadataDto, SyncConfigDto, SyncConflictDto, SyncConflictPreviewDto,
-    SyncSecretsDto, SyncStateDto, WriterError,
+    LegacyProfileMetadataDto, PeerSyncResultDto, SyncConfigDto, SyncConflictDto,
+    SyncConflictPreviewDto, SyncSecretsDto, SyncStateDto, WriterError,
 };
 use crate::sync::{SyncConfig, SyncSecrets};
 
@@ -117,6 +117,16 @@ impl super::WriterAppService {
         self.refresh_secrets_override()?;
         self.api
             .perform_full_sync(config, force_sync, None, None, None)
+    }
+
+    /// 附近设备同步：以已准备的对端快照目录作为临时远端，走 Core 同一套
+    /// 对象暂存、合并和提交链路。此过程不读取也不传送 GitHub 凭据。
+    pub fn perform_peer_sync(
+        &self,
+        peer_root: String,
+        force_sync: bool,
+    ) -> Result<PeerSyncResultDto, WriterError> {
+        self.api.perform_peer_sync(peer_root, force_sync)
     }
 
     pub fn resolve_conflict_keep_local(

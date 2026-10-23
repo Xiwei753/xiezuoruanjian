@@ -24,7 +24,6 @@ import {
 } from '../../../ui/components/CompactDialogs'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
-import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState, RenameTarget, DeleteTarget } from '../presentation/ProjectWorkspaceViewModel'
 import { ActionSlot, ActionTarget, ActionRole, ScreenRole, resolveScreenPolicy } from '../../../app/navigation/ScreenSemantics'
@@ -85,8 +84,12 @@ export struct WorkspaceScreen {
           this.viewModel.expandVolume(params.focusVolumeId)
         }
       })
-      // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
-      AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
+      // Issue #988：记录真实页面与项目；不再用只有 projectId 的旧快照。
+      AppContinuationService.getInstance().updateCurrentScreen({
+        screen: 'workspace',
+        tabIndex: 0,
+        projectId: params.projectId
+      })
     }
 
     // 注册同步完成事件监听

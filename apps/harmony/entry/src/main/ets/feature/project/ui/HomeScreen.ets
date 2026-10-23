@@ -101,7 +101,10 @@ export struct HomeScreen {
     // 注册同步完成事件监听
     this.subscribeSyncEvent()
 
-    AppContinuationService.getInstance().clear()
+    AppContinuationService.getInstance().updateCurrentScreen({
+      screen: 'home',
+      tabIndex: 0
+    })
     this.viewModel.loadData()
 
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)

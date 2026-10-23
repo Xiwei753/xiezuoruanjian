@@ -10,7 +10,7 @@
 // - safePop / safeReplacePath 仍操作 activeTabStack（兼容）
 // - getNavPathStack() 返回当前活动栈（兼容）
 
-import { ContinuationPayload } from '../../platform/continuity/ContinuationPayload'
+import { ContinuationPayload, continuationTabIndex } from '../../platform/continuity/ContinuationPayload'
 
 // Issue #629 评论14 第2项：导航意图类型。
 // 区分 Pop / ClearAndRebuild / ReplacePath，相同 intent + 相同目标可复用同一 task；
@@ -173,9 +173,10 @@ export class NavigationTransactionCoordinator {
   // 如果有 pendingRestore 且 homeStack 可用（getTabStack(TAB_HOME) 返回非 null），才消费。
   tryConsumePendingRestore(): void {
     if (this.pendingRestore !== null && this.restoreListener !== null) {
-      // 确认 homeStack 已注册才消费，避免恢复内容写到错误的栈。
-      const homeStack: NavPathStack | null = this.getTabStack(0)
-      if (homeStack !== null) {
+      // Issue #988：按快照真实页面确认目标 tab 栈已注册，不能永远只等 homeStack。
+      const targetTab: number = continuationTabIndex(this.pendingRestore)
+      const targetStack: NavPathStack | null = this.getTabStack(targetTab)
+      if (targetStack !== null) {
         const pending: ContinuationPayload = this.pendingRestore
         this.pendingRestore = null
         this.restoreListener(pending)
@@ -210,8 +211,9 @@ export class NavigationTransactionCoordinator {
   // 现在改为：只要 restoreListener 或 homeStack 任一不可用，就暂存到 pendingRestore，
   // 等 PrimaryTabShell 注册 homeStack 后由 tryConsumePendingRestore() 消费。
   restoreFromContinuation(payload: ContinuationPayload): void {
-    const homeStack: NavPathStack | null = this.getTabStack(0)
-    if (this.restoreListener === null || homeStack === null) {
+    // Issue #988：目标页面可能属于星图/统计 tab，恢复前等对应栈注册。
+    const targetStack: NavPathStack | null = this.getTabStack(continuationTabIndex(payload))
+    if (this.restoreListener === null || targetStack === null) {
       this.pendingRestore = payload
       return
     }

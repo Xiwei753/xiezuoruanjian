@@ -61,10 +61,8 @@ impl super::WriterAppService {
             .provider_config
             .as_ref()
             .map(|pc| match pc {
-                #[cfg(feature = "github-api")]
+                crate::api::ProviderConfigDto::GitHttps { remote_url, .. } => remote_url.clone(),
                 crate::api::ProviderConfigDto::GitHub { remote_url, .. } => remote_url.clone(),
-                #[cfg(not(feature = "github-api"))]
-                _ => String::new(),
             })
             .unwrap_or_default();
         // 从 provider_secrets 读 token。
@@ -72,10 +70,8 @@ impl super::WriterAppService {
             .provider_secrets
             .as_ref()
             .map(|ps| match ps {
-                #[cfg(feature = "github-api")]
+                crate::api::ProviderSecretsDto::GitHttps { secret } => secret.clone(),
                 crate::api::ProviderSecretsDto::GitHub { token } => token.clone(),
-                #[cfg(not(feature = "github-api"))]
-                _ => String::new(),
             })
             .unwrap_or_default();
 

@@ -27,6 +27,9 @@ import {
   computeCameraZoomAround
 } from '../platform/StarMapViewport'
 import { StarMapSelectionState } from '../platform/StarMapSelectionState'
+import { StarMapSelectionKind } from '../platform/StarMapSelectionState'
+import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
+import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { StarMapScene } from './StarMapScene'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 
@@ -127,6 +130,10 @@ export struct StarMapScreen {
 
   async aboutToAppear() {
     hilog.info(0x0000, 'StarMapScreen', 'route name=StarMap')
+    // Issue #988：用户点选节点/Embed/边时立即冻结当前星图快照，而不是只等相机变化。
+    this.selectionState.setChangedListener((): void => {
+      this.updateContinuationSnapshot()
+    })
     const paramsArr = this.navPathStack.getParamByName(Routes.StarMap) as StarMapRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
@@ -138,6 +145,25 @@ export struct StarMapScreen {
         this.searchFocusKind = params.focusKind
         this.searchFocusId = params.focusId
       }
+      // Issue #988：接续恢复同一张星图的相机、视觉焦点和选中对象。
+      if (params.cameraScale !== undefined && params.cameraScale > 0) {
+        this.cameraScale = params.cameraScale
+      }
+      if (params.cameraOffsetX !== undefined) {
+        this.cameraOffsetX = params.cameraOffsetX
+      }
+      if (params.cameraOffsetY !== undefined) {
+        this.cameraOffsetY = params.cameraOffsetY
+      }
+      if (params.focusScenePath !== undefined && params.focusScenePath.length > 0) {
+        this.focusScenePath = params.focusScenePath
+      }
+      if (params.selectedNodeId !== undefined && params.selectedNodeId.length > 0) {
+        const selectedKind: StarMapSelectionKind =
+          (params.selectedKind as StarMapSelectionKind | undefined) ?? 'node'
+        this.selectionState.select([], selectedKind, params.selectedNodeId)
+      }
+      this.updateContinuationSnapshot()
       this.loadStarMap()
     } else {
       // 没有路由参数时不自动选择第一张星图，直接显示空状态
@@ -171,6 +197,7 @@ export struct StarMapScreen {
   aboutToDisappear() {
     this.canvasActive = false
     this.stopWobbleAnimation()
+    this.selectionState.setChangedListener(null)
     this.gestureTracker.reset()
     if (this.searchFocusTimerId !== -1) {
       clearTimeout(this.searchFocusTimerId)
@@ -237,6 +264,7 @@ export struct StarMapScreen {
 
       if (result.success && result.data) {
         this.graph = result.data
+        this.updateContinuationSnapshot()
         // Issue #982：子 Scene 完成布局后会回调 onSceneGeometryReady；这里先排一次，
         // 视口尺寸或图数据哪个先到位都能触发同一条幂等定位。
         this.scheduleSearchFocus()
@@ -419,6 +447,34 @@ export struct StarMapScreen {
     // 相机变了，每颗 Embed 的屏幕投影都变了，视觉焦点要重新判一次（#820）。
     // 结果不变时不写 @State，避免每帧捏合都触发一次无谓重建。
     this.recomputeVisualFocus()
+    this.updateContinuationSnapshot()
+  }
+
+  // Issue #988：星图接续状态只带稳定 ID、相机和焦点，不复制画布数据。
+  private updateContinuationSnapshot(): void {
+    if (this.starmapId.length === 0) {
+      return
+    }
+    const selection = this.selectionState.getSelection()
+    const payload: ContinuationPayload = {
+      screen: 'starmap',
+      tabIndex: 1,
+      starmapId: this.starmapId,
+      starmapTitle: this.starmapTitle,
+      focusScenePath: this.focusScenePath,
+      cameraScale: this.cameraScale,
+      cameraOffsetX: this.cameraOffsetX,
+      cameraOffsetY: this.cameraOffsetY
+    }
+    if (this.rootStarmapId !== this.starmapId) {
+      payload.parentStarmapId = this.rootStarmapId
+      payload.parentStarmapTitle = this.rootStarmapTitle
+    }
+    if (selection.kind !== 'none') {
+      payload.selectedKind = selection.kind
+      payload.selectedNodeId = selection.itemId
+    }
+    AppContinuationService.getInstance().updateCurrentScreen(payload)
   }
 
   /**

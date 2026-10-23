@@ -35,6 +35,8 @@ import { ActiveWritingSessionRegistry } from '../session/ActiveWritingSessionReg
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
+import { ContinuationSnapshotStore } from '../../../platform/continuity/ContinuationSnapshotStore'
+import { NearbyDeviceSyncCoordinator } from '../../../platform/peer/NearbyDeviceSyncCoordinator'
 import { HarmonyShareService } from '../../../platform/share/HarmonyShareService'
 import { SharePayload } from '../../../platform/share/SharePayload'
 import { EditorViewportState } from '../render/EditorViewportState'
@@ -276,6 +278,10 @@ export struct WritingScreen {
   private shareLifecycleObserver: LifecycleObserver | null = null
   // 接续进入时携带的编辑器状态（selection/cursor/viewport/contentHash），loadChapter 恢复时消费。
   private continuationParams: WritingRouteParams | null = null
+  // Issue #988：未保存正文快照按 1.5s 合并发送，避免每次按键都切分文本消息。
+  private continuationPublishTimer: number = -1
+  private lastContinuationPublishAt: number = 0
+  private pendingContinuationSnapshotId: string = ''
   // Issue #629 评论6 Part C：父子 viewport 恢复通道 controller。
   private viewportController: EditorViewportController = new EditorViewportController()
   // Issue #778 任务8：唯一 owner scroller，传给 SujianEditor 和 HDS 壳层做沉浸联动。
@@ -476,6 +482,9 @@ export struct WritingScreen {
       if (hashChanged) {
         // 保存成功后 contentHash 前进：更新接续状态（此时 hasUnsavedChanges=false 带完整 selection/cursor）。
         this.updateContinuationState()
+        // Issue #988：已连接的附近设备独立于 GitHub 自动同步；正文落盘后主动走一次
+        // Core 对象事务，让没有云端仓库的对端也能继续写作。
+        NearbyDeviceSyncCoordinator.getInstance().requestAllSessionsSync()
       }
     }
   }
@@ -490,6 +499,10 @@ export struct WritingScreen {
 
   // Issue #629 评论9 第3项：aboutToDisappear 只做页面已确定离开后的清理。
   async aboutToDisappear() {
+    if (this.continuationPublishTimer >= 0) {
+      clearTimeout(this.continuationPublishTimer)
+      this.continuationPublishTimer = -1
+    }
     // Issue #629 评论14 第2项：用唯一 token 注销自己的离开守卫，不影响其他 WritingScreen 实例。
     if (this.leaveGuardToken >= 0) {
       NavigationTransactionCoordinator.getInstance().unregisterLeaveGuard(this.leaveGuardToken)
@@ -614,18 +627,55 @@ export struct WritingScreen {
       return
     }
 
-    // contentHash 校验：不匹配时不强套旧 offset，只恢复章节导航，以当前 Core 正文为准。
+    // contentHash 校验：优先 Core 落盘身份；源设备有未保存修改时，用源设备冻结的
+    // snapshotHash 对真实编辑器文本再校验一次，不能仅凭旧 contentHash 把旧选区套到新正文。
+    const snapshotHashMatches: boolean =
+      params.snapshotHash !== undefined && params.snapshotHash === this.computeSnapshotHash(snap.text)
+    const hasFrozenRevision: boolean =
+      params.contentHash !== undefined || params.snapshotHash !== undefined
     const contentHashMatches: boolean =
-      params.contentHash === undefined || params.contentHash === this.lastSavedContentHash
+      params.contentHash !== undefined && params.contentHash === this.lastSavedContentHash
+    // snapshotId 表示源设备有未保存正文：即使基线 contentHash 相同，也不能把源选区
+    // 直接套到目标旧正文；必须先拿到并校验 snapshotHash 对应的快照。
+    const hasUnsavedSnapshot: boolean =
+      params.snapshotId !== undefined || (params.snapshotHash !== undefined && params.contentHash === undefined)
+    let canRestoreEditorState: boolean =
+      !hasFrozenRevision || snapshotHashMatches || (!hasUnsavedSnapshot && contentHashMatches)
+    let restoreText: string = snap.text
 
-    if (contentHashMatches) {
+    if (!canRestoreEditorState && params.snapshotId !== undefined &&
+      params.snapshotHash !== undefined &&
+      (params.contentHash === undefined || params.contentHash === this.lastSavedContentHash) &&
+      !this.hasUnsavedChanges) {
+      // 源设备冻结的未保存正文已通过附近设备快照到达。只有目标正文仍是同一份
+      // 落盘基线（contentHash 相同）且本地没有新修改时才替换，避免覆盖目标新输入。
+      const snapshotText: string | null =
+        await this.waitForContinuationSnapshot(params.snapshotId, params.snapshotHash)
+      if (snapshotText !== null) {
+        const textByteLength: number = TextOffsetMapper.utf16ToUtf8(snap.text, snap.text.length)
+        const applied = await this.editorCoordinator.replace(
+          0, textByteLength, snapshotText, snap.text, EditorTransactionCause.Programmatic)
+        if (applied.success) {
+          restoreText = snapshotText
+          canRestoreEditorState = true
+        }
+      }
+    }
+
+    if (!canRestoreEditorState) {
+      // 源设备冻结的正文版本还没有到达本机：保留接续意图，但不把旧正文的
+      // 选区/视口套到当前内容上，也不冒充“已恢复最新内容”。
+      this.showContinuationUnavailableNotice()
+    }
+
+    if (canRestoreEditorState) {
       // selection 优先；无 selection 时用 cursor。offset 是 UTF-16，转成 Core UTF-8 byte offset。
       if (params.selection !== undefined && params.selection.length >= 2) {
-        const anchorByte: number = TextOffsetMapper.utf16ToUtf8(snap.text, params.selection[0])
-        const headByte: number = TextOffsetMapper.utf16ToUtf8(snap.text, params.selection[1])
+        const anchorByte: number = TextOffsetMapper.utf16ToUtf8(restoreText, params.selection[0])
+        const headByte: number = TextOffsetMapper.utf16ToUtf8(restoreText, params.selection[1])
         await this.editorCoordinator.setSelection(anchorByte, headByte)
       } else if (params.cursor !== undefined) {
-        const cursorByte: number = TextOffsetMapper.utf16ToUtf8(snap.text, params.cursor)
+        const cursorByte: number = TextOffsetMapper.utf16ToUtf8(restoreText, params.cursor)
         await this.editorCoordinator.setSelection(cursorByte, cursorByte)
       }
     }
@@ -635,7 +685,7 @@ export struct WritingScreen {
     if (params.searchField === 'body'
       && params.searchByteStart !== undefined
       && params.searchByteEnd !== undefined) {
-      const textByteLength: number = TextOffsetMapper.utf16ToUtf8(snap.text, snap.text.length)
+      const textByteLength: number = TextOffsetMapper.utf16ToUtf8(restoreText, restoreText.length)
       const startByte: number = Math.max(0, Math.min(params.searchByteStart, textByteLength))
       const endByte: number = Math.max(startByte, Math.min(params.searchByteEnd, textByteLength))
       await this.editorCoordinator.setSelection(startByte, endByte)
@@ -651,7 +701,7 @@ export struct WritingScreen {
     }
 
     // viewport 只恢复到 UI 滚动位置，不写 Core。通过父子 controller 通道恢复。
-    if (params.viewport !== undefined) {
+    if (canRestoreEditorState && params.viewport !== undefined) {
       this.currentViewport = params.viewport
       this.viewportController.restore(params.viewport)
     }
@@ -661,6 +711,8 @@ export struct WritingScreen {
   }
 
   // 持续写入当前接续状态。每次章节打开、选区变化、正文编辑、viewport 变化后调用。
+  // Issue #988：在用户点击接续前就冻结同一 revision 的 contentHash/选区/视口；
+  // 有未保存正文时用 snapshotId + snapshotHash 标识，不能因为 dirty 就把选区/视口丢掉。
   private updateContinuationState(): void {
     if (!this.projectId || !this.chapterId) {
       return
@@ -669,23 +721,106 @@ export struct WritingScreen {
     if (!snap) {
       return
     }
+    const snapshotHash: string = this.computeSnapshotHash(snap.text)
     const payload: ContinuationPayload = {
+      screen: 'writing',
+      tabIndex: 0,
       projectId: this.projectId,
       volumeId: this.volumeId,
       chapterId: this.chapterId,
-      contentHash: this.lastSavedContentHash !== null ? this.lastSavedContentHash : undefined
+      snapshotHash: snapshotHash
     }
-    // 只有已保存（hasUnsavedChanges=false）时才带 selection/cursor（可精确恢复）。
-    if (!this.hasUnsavedChanges) {
-      const cursorUtf16: number = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
-      const anchorUtf16: number = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
-      payload.selection = [anchorUtf16, cursorUtf16]
-      payload.cursor = cursorUtf16
+    if (this.lastSavedContentHash !== null) {
+      // 有未保存内容时，contentHash 仍是源设备这份未保存正文的落盘基线；
+      // 目标设备先校验基线相同，再校验 snapshotHash，避免覆盖目标的新修改。
+      payload.contentHash = this.lastSavedContentHash
     }
+    if (this.hasUnsavedChanges) {
+      // 未保存内容不进 Core 的 contentHash；快照身份在接续/附近设备通道中校验。
+      payload.snapshotId = `${this.chapterId}:${snapshotHash}`
+    }
+    const cursorUtf16: number = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursor)
+    const anchorUtf16: number = TextOffsetMapper.utf8ToUtf16(snap.text, snap.selectionAnchor)
+    payload.selection = [anchorUtf16, cursorUtf16]
+    payload.cursor = cursorUtf16
     if (this.currentViewport !== null) {
       payload.viewport = this.currentViewport
     }
-    AppContinuationService.getInstance().updateCurrentState(payload)
+    AppContinuationService.getInstance().updateCurrentScreen(payload)
+    if (payload.snapshotId !== undefined) {
+      // Issue #988：源设备先固定这一版未保存正文；附近设备已连接时再按 snapshotId
+      // 异步交付。正文快照不写入 Core 数据根，只有目标校验 snapshotHash 后才应用。
+      ContinuationSnapshotStore.getInstance().save(payload.snapshotId, snap.text)
+      this.scheduleContinuationSnapshotPublish(payload.snapshotId)
+    }
+  }
+
+  private scheduleContinuationSnapshotPublish(snapshotId: string): void {
+    this.pendingContinuationSnapshotId = snapshotId
+    const now: number = Date.now()
+    if (now - this.lastContinuationPublishAt >= 1500) {
+      this.publishPendingContinuationSnapshot()
+      return
+    }
+    if (this.continuationPublishTimer >= 0) {
+      return
+    }
+    const delay: number = Math.max(0, 1500 - (now - this.lastContinuationPublishAt))
+    this.continuationPublishTimer = setTimeout((): void => {
+      this.continuationPublishTimer = -1
+      this.publishPendingContinuationSnapshot()
+    }, delay)
+  }
+
+  private publishPendingContinuationSnapshot(): void {
+    const snapshotId: string = this.pendingContinuationSnapshotId
+    this.pendingContinuationSnapshotId = ''
+    if (snapshotId.length === 0) {
+      return
+    }
+    const content: string | null = ContinuationSnapshotStore.getInstance().get(snapshotId)
+    if (content === null) {
+      return
+    }
+    this.lastContinuationPublishAt = Date.now()
+    NearbyDeviceSyncCoordinator.getInstance().publishContinuationSnapshot(snapshotId, content)
+  }
+
+  // UI 内部快照校验用；正文的跨设备稳定身份仍是 Core 的 contentHash。
+  // FNV-1a 只用于判断源设备冻结的文本与目标当前文本是否一致，不写数据格式。
+  private computeSnapshotHash(text: string): string {
+    let hash: number = 0x811c9dc5
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i)
+      hash = Math.imul(hash, 0x01000193) >>> 0
+    }
+    return hash.toString(16).padStart(8, '0')
+  }
+
+  // 附近设备快照是异步文本消息；接续打开后短暂等待同一 snapshotId，
+  // 但绝不把等待放在 onContinue 的同步返回路径里。
+  private async waitForContinuationSnapshot(snapshotId: string, snapshotHash: string): Promise<string | null> {
+    const deadline: number = Date.now() + 1500
+    while (Date.now() <= deadline) {
+      const content: string | null = ContinuationSnapshotStore.getInstance().get(snapshotId)
+      if (content !== null && this.computeSnapshotHash(content) === snapshotHash) {
+        return content
+      }
+      await new Promise<void>((resolve: () => void): void => {
+        setTimeout(resolve, 150)
+      })
+    }
+    return null
+  }
+
+  private showContinuationUnavailableNotice(): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({
+        message: '接续正文版本尚未同步到本机，已保留目标章节；未套用源设备的选区与视口'
+      })
+    } catch (_e) {
+      // 提示失败不影响已打开的目标页面。
+    }
   }
 
   // ── Issue #629 评论 5 第 7 节：碰一碰/隔空传送 Share 生命周期 ──
@@ -1472,7 +1607,7 @@ export struct WritingScreen {
   }
 
   /**
-   * Issue #958：内置 KenLM 模型兜底。用户导入的模型始终优先；只有 Core 尚未
+   * Issue #985：内置 MacBERT4CSC ONNX 模型兜底。用户导入的模型始终优先；只有 Core 尚未
    * 配置模型时才把 HAP 内置模型流式复制到沙箱并交给 Core（协调器每会话只做一次）。
    * 资源管理器沿用现有 UIAbilityContext 获取方式；失败只记 warning，不阻断编辑。
    */
@@ -1505,7 +1640,7 @@ export struct WritingScreen {
     const missingDictionaries = status.missingDictionaryFiles
     const dictionaryReadiness = missingDictionaries.length > 0
       ? `可选词典 ${status.installedDictionaryFiles.length}/8 已安装；未安装：${missingDictionaries.join('、')}`
-      : '八种可选词典均已安装'
+      : '六种可选词典均已安装'
     this.correctionDictionaryResourceStatus = status.bundledLexiconAvailable
       ? `Core 内置词库已就绪；${dictionaryReadiness}`
       : 'Core 内置词库不可用'

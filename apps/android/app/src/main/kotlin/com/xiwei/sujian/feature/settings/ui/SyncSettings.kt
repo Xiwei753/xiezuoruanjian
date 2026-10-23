@@ -77,6 +77,12 @@ fun SyncSettingsContent(vm: SettingsViewModel) {
     var token by rememberSaveable { mutableStateOf(tokenRow.token) }
     LaunchedEffect(tokenRow.token) { token = tokenRow.token }
 
+    var showAdvanced by rememberSaveable { mutableStateOf(false) }
+    var branch by rememberSaveable { mutableStateOf(remoteUrlRow.branch) }
+    LaunchedEffect(remoteUrlRow.branch) { branch = remoteUrlRow.branch }
+    var username by rememberSaveable { mutableStateOf(remoteUrlRow.username) }
+    LaunchedEffect(remoteUrlRow.username) { username = remoteUrlRow.username }
+
     SettingsInnerCard {
         SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_sync_credentials))
         SujianTextField(
@@ -99,6 +105,34 @@ fun SyncSettingsContent(vm: SettingsViewModel) {
             modifier = rememberFieldFocusModifier("sync_token") { token },
             enabled = tokenRow.enabled,
         )
+        SujianSwitchRow(
+            title = stringResource(id = R.string.pref_advanced_settings),
+            checked = showAdvanced,
+            onCheckedChange = { showAdvanced = it },
+            enabled = remoteUrlRow.enabled,
+        )
+        if (showAdvanced) {
+            SujianTextField(
+                value = branch,
+                onValueChange = {
+                    branch = it
+                    vm.handleIntent(SettingsIntent.UpdateSyncConfig { copy(branch = it.ifBlank { "main" }) })
+                },
+                label = { Text(stringResource(id = R.string.pref_branch)) },
+                modifier = rememberFieldFocusModifier("sync_branch") { branch },
+                enabled = remoteUrlRow.enabled,
+            )
+            SujianTextField(
+                value = username,
+                onValueChange = {
+                    username = it
+                    vm.handleIntent(SettingsIntent.UpdateSyncConfig { copy(username = it) })
+                },
+                label = { Text(stringResource(id = R.string.pref_username)) },
+                modifier = rememberFieldFocusModifier("sync_username") { username },
+                enabled = remoteUrlRow.enabled,
+            )
+        }
     }
 
     // ── 同步间隔组（间隔标题 + 间隔 Slider）──

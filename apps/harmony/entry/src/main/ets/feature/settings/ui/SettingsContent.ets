@@ -26,8 +26,12 @@ import { SyncOutcome } from '../presentation/SyncRunTypes'
 import { SyncRunPresentationState, SyncRunSnapshot } from '../presentation/SyncRunPresentationState'
 import { SyncOperationController } from '../presentation/SyncOperationController'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
+import { DeviceSyncViewModel } from '../presentation/DeviceSyncViewModel'
+import { TrustedDeviceInfo } from '../../../platform/device/TrustedDeviceService'
 import { SettingsSectionContext } from '../presentation/SettingsSectionContext'
 import { SyncConflictViewModel } from '../presentation/SyncConflictViewModel'
+import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
+import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { createSyncConflictsPanelContent, SyncConflictsPanelArgs } from './SyncConflictsPanel'
 // Issue #958：内置模型第三方资源（来源声明 + 许可全文）面板工厂。
 import { createThirdPartyNoticesPanelContent, ThirdPartyNoticesPanelArgs } from './ThirdPartyNoticesPanel'
@@ -160,6 +164,8 @@ export struct SettingsContent {
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
   @Local viewModel: SettingsViewModel = new SettingsViewModel()
+  // Issue #988：附近设备同步与云备份是两个独立入口，共用同一 Core 对象事务。
+  @Local deviceSync: DeviceSyncViewModel = new DeviceSyncViewModel()
 
   // 页面 UI 状态（V2 @Local）
   @Local themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
@@ -276,6 +282,7 @@ export struct SettingsContent {
     })
 
     // 先让设置页沿用既有 Core 读取路径完成加载，再读取 Core 的持久化同步状态。
+    this.deviceSync.refresh()
     void this.loadSettingsAndSyncState()
 
     // Issue #926：打开设置页时从 Core 全局冲突列表取一次真实剩余数，冲突入口据此显示。
@@ -326,6 +333,19 @@ export struct SettingsContent {
 
   // ── Issue #982：搜索结果精确设置项定位 ──
 
+  // Issue #988：设置页离开/接续时保留用户最后点击的分类和设置项。
+  private recordContinuationSection(section: string, settingKey: string): void {
+    const payload: ContinuationPayload = {
+      screen: 'settings',
+      tabIndex: 0,
+      settingsSection: section
+    }
+    if (settingKey.length > 0) {
+      payload.settingKey = settingKey
+    }
+    AppContinuationService.getInstance().updateCurrentScreen(payload)
+  }
+
   private acceptLocateRequest(section: string, settingKey: string): void {
     if (settingKey.length === 0) {
       // 新的“只跳分类”请求取消尚未完成的精确项定位。
@@ -341,6 +361,7 @@ export struct SettingsContent {
       if (normalized !== null) {
         SettingsSectionContext.setCurrentSection(normalized)
         this.viewModel.expandSection(normalized)
+        this.recordContinuationSection(normalized, '')
       }
       return
     }
@@ -357,6 +378,7 @@ export struct SettingsContent {
     this.locateAttempt = 0
     SettingsSectionContext.setCurrentSection(targetSection)
     this.viewModel.expandSection(targetSection)
+    this.recordContinuationSection(targetSection, settingKey)
     if (!this.viewModel.isLoading) {
       this.scheduleLocateApply(30)
     }
@@ -1133,6 +1155,7 @@ export struct SettingsContent {
       .padding({ left: 16, right: 16 })
       .onClick(() => {
         SettingsSectionContext.setCurrentSection(sectionId)
+        this.recordContinuationSection(sectionId, '')
         this.viewModel.toggleSection(sectionId)
       })
 
@@ -1632,12 +1655,103 @@ export struct SettingsContent {
   // ════════════════════════════════════════════
   // 窄屏折叠分类内容 — 同步设置
   // ════════════════════════════════════════════
+  // Issue #988：附近设备同步。这里明确真实条件，不把“已登录华为账号”
+  // 当成“同账号”或“可同步”的证明。
+  @Builder
+  NearbyDeviceSyncRows() {
+    Column({ space: 8 }) {
+      Text('附近设备同步')
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .width('100%')
+      Text('通过系统可信设备直接同步作品、章节、星图和统计；双方都无需 GitHub 仓库，也不会传递 GitHub Token。')
+        .fontSize(12)
+        .opacity(0.72)
+        .width('100%')
+        .margin({ bottom: 2 })
+
+      if (!this.deviceSync.supported) {
+        Text('当前系统不支持附近设备同步（需要 API 18+，且两台设备已建立系统可信连接）')
+          .fontSize(12)
+          .opacity(0.72)
+          .width('100%')
+      } else {
+        if (this.deviceSync.devices.length === 0) {
+          Text('未发现系统可信设备。请先在同一分布式网络中完成系统设备连接；应用不要求登录华为账号。')
+            .fontSize(12)
+            .opacity(0.72)
+            .width('100%')
+        } else {
+          ForEach(this.deviceSync.devices, (device: TrustedDeviceInfo) => {
+            Row({ space: 8 }) {
+              Column({ space: 2 }) {
+                Text(device.deviceName)
+                  .fontSize(14)
+                  .width('100%')
+                Text(device.online ? '在线' : '离线')
+                  .fontSize(11)
+                  .opacity(0.62)
+                  .width('100%')
+              }
+              .layoutWeight(1)
+              Button(this.deviceSync.selectedNetworkId === device.networkId ? '已选择' : '选择')
+                .fontSize(12)
+                .height(30)
+                .onClick(() => this.deviceSync.selectDevice(device))
+            }
+            .width('100%')
+            .padding({ top: 4, bottom: 4 })
+          }, (device: TrustedDeviceInfo): string => device.networkId)
+        }
+
+        if (this.deviceSync.selectedNetworkId.length > 0) {
+          Row({ space: 8 }) {
+            Button(this.deviceSync.connectionState === 'connected' ? '断开' : '连接')
+              .fontSize(12)
+              .height(32)
+              .onClick(() => {
+                if (this.deviceSync.connectionState === 'connected') {
+                  this.deviceSync.disconnect()
+                } else {
+                  this.deviceSync.connectSelected()
+                }
+              })
+            Button('刷新设备')
+              .fontSize(12)
+              .height(32)
+              .onClick(() => this.deviceSync.refresh())
+          }
+          .width('100%')
+        }
+
+        Text(this.deviceSync.statusMessage)
+          .fontSize(12)
+          .width('100%')
+        Text(this.deviceSync.remoteCloudLabel())
+          .fontSize(12)
+          .opacity(0.72)
+          .width('100%')
+        if (this.deviceSync.lastSyncMessage.length > 0) {
+          Text(this.deviceSync.lastSyncMessage)
+            .fontSize(12)
+            .opacity(0.72)
+            .width('100%')
+        }
+      }
+    }
+    .width('100%')
+    .padding({ top: 8, bottom: 8 })
+  }
+
   @Builder
   SyncContent() {
     Column() {
       // Issue #952：同步摘要跟随“数据与同步 → 同步”分类展开才显示，不再常驻设置页顶部；
       // 本轮结果 / 历史结果只做被动展示，失败明细按需展开。
       this.SyncBriefSummary()
+      // Issue #988：附近设备同步不要求 GitHub 仓库或应用内账号；它和云备份
+      // 共用 Core 对象事务，任一侧有仓库时可继续把合并结果同步到云端。
+      this.NearbyDeviceSyncRows()
 
       // 启用同步
       Row() {
@@ -1650,7 +1764,7 @@ export struct SettingsContent {
             if (this.viewModel.syncConfig) {
               const newConfig: SyncConfig = {
                 enabled: isOn,
-                activeProvider: 'github_api',
+                activeProvider: this.viewModel.syncConfig.activeProvider,
                 providerConfig: this.viewModel.syncConfig.providerConfig,
                 autoSync: this.viewModel.syncConfig.autoSync,
                 syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
@@ -1678,7 +1792,7 @@ export struct SettingsContent {
               if (this.viewModel.syncConfig) {
                 const newConfig: SyncConfig = {
                   enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: 'github_api',
+                  activeProvider: this.viewModel.syncConfig.activeProvider,
                   providerConfig: this.viewModel.syncConfig.providerConfig,
                   autoSync: isOn,
                   syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
@@ -1693,9 +1807,9 @@ export struct SettingsContent {
         .width('100%')
         .margin({ bottom: 16 })
 
-        // GitHub 远程仓库地址
+        // 通用 Git 仓库 HTTPS 地址（GitHub 运行时自动选路，不要求用户选择传输方式）
         Column() {
-          Text($r('app.string.github_repo'))
+          Text($r('app.string.repository_https_url'))
             .fontSize(16)
             .margin({ bottom: 8 })
 
@@ -1712,9 +1826,9 @@ export struct SettingsContent {
         .width('100%')
         .margin({ bottom: 16 })
 
-        // HTTPS Token
+        // 访问令牌或密码（公开仓库可匿名读取，可留空）
         Column() {
-          Text($r('app.string.https_token'))
+          Text($r('app.string.access_token_optional'))
             .fontSize(16)
             .margin({ bottom: 8 })
 
@@ -1740,6 +1854,56 @@ export struct SettingsContent {
         .width('100%')
         .margin({ bottom: 16 })
 
+        // 高级设置：分支与用户名默认收起，普通用户只需仓库地址 + 可选令牌。
+        Row() {
+          Text($r('app.string.advanced_settings'))
+            .fontSize(16)
+            .layoutWeight(1)
+          Text(this.viewModel.syncAdvancedExpanded ? '−' : '+')
+            .fontSize(18)
+        }
+        .width('100%')
+        .onClick(() => {
+          this.viewModel.toggleSyncAdvanced()
+        })
+        .margin({ bottom: 8 })
+
+        if (this.viewModel.syncAdvancedExpanded) {
+          Column() {
+            Text($r('app.string.branch'))
+              .fontSize(14)
+              .margin({ bottom: 6 })
+            TextInput({ text: this.viewModel.syncBranch })
+              .width('100%')
+              .height(40)
+              .fontSize(14)
+              .borderRadius(DesignTokens.inputFieldRadius)
+              .onChange((value: string) => {
+                this.viewModel.updateSyncBranch(value)
+              })
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .margin({ bottom: 12 })
+
+          Column() {
+            Text($r('app.string.username'))
+              .fontSize(14)
+              .margin({ bottom: 6 })
+            TextInput({ text: this.viewModel.syncUsername })
+              .width('100%')
+              .height(40)
+              .fontSize(14)
+              .borderRadius(DesignTokens.inputFieldRadius)
+              .onChange((value: string) => {
+                this.viewModel.updateSyncUsername(value)
+              })
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .margin({ bottom: 16 })
+        }
+
         // 同步间隔
         Row() {
           Text($r('app.string.sync_interval'))
@@ -1762,7 +1926,7 @@ export struct SettingsContent {
               if (this.viewModel.syncConfig) {
                 const newConfig: SyncConfig = {
                   enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: 'github_api',
+                  activeProvider: this.viewModel.syncConfig.activeProvider,
                   providerConfig: this.viewModel.syncConfig.providerConfig,
                   autoSync: this.viewModel.syncConfig.autoSync,
                   syncIntervalSeconds: value,
@@ -2197,8 +2361,9 @@ export struct SettingsContent {
         return [
           ctx.resourceManager.getStringSync($r('app.string.enable_sync').id),
           ctx.resourceManager.getStringSync($r('app.string.auto_sync').id),
-          ctx.resourceManager.getStringSync($r('app.string.github_repo').id),
-          ctx.resourceManager.getStringSync($r('app.string.https_token').id),
+          ctx.resourceManager.getStringSync($r('app.string.repository_https_url').id),
+          ctx.resourceManager.getStringSync($r('app.string.access_token_optional').id),
+          ctx.resourceManager.getStringSync($r('app.string.advanced_settings').id),
           ctx.resourceManager.getStringSync($r('app.string.sync_interval').id),
           ctx.resourceManager.getStringSync($r('app.string.diagnose').id)
         ]
@@ -2448,12 +2613,14 @@ export struct SettingsContent {
             expanded: this.isSectionExpandedForDisplay(sectionId),
             onToggle: () => {
               SettingsSectionContext.setCurrentSection(sectionId)
+              this.recordContinuationSection(sectionId, '')
               this.viewModel.toggleSection(sectionId)
             }
           }) {
             WideSettingsCategoryContent({
               sectionId: sectionId,
               viewModel: this.viewModel,
+              deviceSync: this.deviceSync,
               idPrefix: this.instanceToken,
               highlightedSettingKey: this.highlightedSettingKey,
               conflictRemaining: this.conflictRemaining,

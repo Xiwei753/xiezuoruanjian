@@ -20,6 +20,8 @@ import { CompactPageState, CompactPageStateKind } from '../../../ui/components/C
 import { SettingsSectionContext } from '../../settings/presentation/SettingsSectionContext'
 import { SettingsOverlayController } from '../../settings/presentation/SettingsOverlayController'
 import { SearchController } from '../presentation/SearchController'
+import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
+import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 
 interface SummarySegment {
   text: string
@@ -58,6 +60,7 @@ export struct SearchScreen {
 
   private navCoordinator: NavigationTransactionCoordinator = NavigationTransactionCoordinator.getInstance()
   private openedWithSettingsOrigin: boolean = false
+  private continuationContext: SearchContext | null = null
 
   aboutToAppear(): void {
     let context: SearchContext | null = this.originContext
@@ -79,11 +82,39 @@ export struct SearchScreen {
       resolved.currentSettingsSection = SettingsSectionContext.getCurrentSection()
     }
     this.openedWithSettingsOrigin = resolved.originScreen === 'settings'
+    this.continuationContext = resolved
     this.controller.setContext(resolved)
     if (initial.length > 0) {
       this.queryText = initial
       this.controller.setQuery(initial, true)
     }
+    this.updateContinuationSnapshot(resolved, initial)
+  }
+
+  // Issue #988：搜索页接续保留来源上下文和查询词；返回时仍只 pop 搜索页。
+  private updateContinuationSnapshot(context: SearchContext, query: string): void {
+    const payload: ContinuationPayload = {
+      screen: 'search',
+      tabIndex: TAB_HOME,
+      searchQuery: query,
+      searchOriginScreen: context.originScreen
+    }
+    if (context.currentProjectId !== undefined) {
+      payload.searchProjectId = context.currentProjectId
+    }
+    if (context.currentVolumeId !== undefined) {
+      payload.searchVolumeId = context.currentVolumeId
+    }
+    if (context.currentChapterId !== undefined) {
+      payload.searchChapterId = context.currentChapterId
+    }
+    if (context.currentStarmapId !== undefined) {
+      payload.searchStarmapId = context.currentStarmapId
+    }
+    if (context.currentSettingsSection !== undefined) {
+      payload.searchSettingsSection = context.currentSettingsSection
+    }
+    AppContinuationService.getInstance().updateCurrentScreen(payload)
   }
 
   aboutToDisappear(): void {
@@ -330,6 +361,9 @@ export struct SearchScreen {
       .onChange((value: string): void => {
         this.queryText = value
         this.controller.setQuery(value)
+        if (this.continuationContext !== null) {
+          this.updateContinuationSnapshot(this.continuationContext, value)
+        }
       })
       .onSubmit((): void => {
         this.controller.setQuery(this.queryText, true)

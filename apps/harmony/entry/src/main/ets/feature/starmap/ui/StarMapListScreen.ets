@@ -40,6 +40,7 @@ import { handleRootBack } from '../../../app/navigation/RootBackHandler'
 // Issue #972：宽屏星图首页独立内容区（网格 + 创建卡），不再复用窄屏 FAB 内容层。
 import { WideStarMapHome } from './wide/WideStarMapHome'
 import { WideLayoutMode } from '../../../app/navigation/wide/WideLayoutMode'
+import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 @ComponentV2
 export struct StarMapListScreen {
   // 由 PageMapForStack 显式传入 ownerStack，不使用全局 NavigationTransactionCoordinator
@@ -94,6 +95,11 @@ export struct StarMapListScreen {
     }
 
     this.loadStarMaps()
+    // Issue #988：星图列表属于星图 tab，切回该 tab 时恢复列表页。
+    AppContinuationService.getInstance().updateCurrentScreen({
+      screen: 'starmapList',
+      tabIndex: 1
+    })
   }
 
   aboutToDisappear() {

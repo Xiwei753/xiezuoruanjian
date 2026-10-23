@@ -259,7 +259,12 @@ class SettingsViewModel(
 
     data class SyncAutoSyncRowState(val enabled: Boolean, val autoSync: Boolean)
 
-    data class SyncRemoteUrlRowState(val enabled: Boolean, val remoteUrl: String)
+    data class SyncRemoteUrlRowState(
+        val enabled: Boolean,
+        val remoteUrl: String,
+        val branch: String,
+        val username: String,
+    )
 
     data class SyncTokenRowState(val enabled: Boolean, val token: String)
 
@@ -294,11 +299,15 @@ class SettingsViewModel(
             SyncRemoteUrlRowState(
                 _uiState.value.syncConfig.enabled == true,
                 _uiState.value.syncConfig.remoteUrl.orEmpty(),
+                _uiState.value.syncConfig.branch.orEmpty().ifEmpty { "main" },
+                _uiState.value.syncConfig.username.orEmpty(),
             ),
         ) {
             SyncRemoteUrlRowState(
                 enabled = it.syncConfig.enabled == true,
                 remoteUrl = it.syncConfig.remoteUrl.orEmpty(),
+                branch = it.syncConfig.branch.orEmpty().ifEmpty { "main" },
+                username = it.syncConfig.username.orEmpty(),
             )
         }
     val syncTokenRow =

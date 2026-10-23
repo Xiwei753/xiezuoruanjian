@@ -43,6 +43,8 @@ ColumnLayout {
     // 结果区与原始诊断文本（原 TextArea/TextEdit 的文本源）。
     property string resultText: ""
     property string lastSyncReport: ""
+    // Issue #990：分支/用户名收进高级设置，主表单只展示仓库地址与可选令牌。
+    property bool showAdvanced: false
     // Issue #948：Core 持久化的最近一次全量同步历史状态（FullSyncStateDto JSON）。
     // 与 lastSyncReport 相互独立（旧格式失败可能没有分组报告）；
     // 没有触发新同步时结果区按它显示「上次同步（本地时间）」。
@@ -683,16 +685,39 @@ ColumnLayout {
 
         FormCard.FormTextFieldDelegate {
             id: urlField
-            label: qsTr("远程仓库地址")
+            label: qsTr("仓库 HTTPS 地址")
             text: (root.syncBackendRef ? root.syncBackendRef.sync_remote_url : "")
-            placeholderText: "https://github.com/user/repo"
+            placeholderText: "https://gitlab.com/user/repo.git"
         }
 
         FormCard.FormTextFieldDelegate {
             id: tokenField
-            label: qsTr("访问 Token")
-            placeholderText: (root.syncBackendRef ? root.syncBackendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
+            label: qsTr("密码或访问令牌（可选）")
+            placeholderText: (root.syncBackendRef ? root.syncBackendRef.has_sync_token : false) ? qsTr("已设置（输入新值以覆盖）") : qsTr("公开仓库可留空")
             echoMode: TextInput.Password
+        }
+
+        FormCard.FormSwitchDelegate {
+            id: advancedSwitch
+            text: qsTr("高级设置")
+            description: qsTr("仅当服务器要求特定用户名或分支时填写")
+            onToggled: root.showAdvanced = checked
+        }
+
+        FormCard.FormTextFieldDelegate {
+            id: branchField
+            visible: root.showAdvanced
+            label: qsTr("分支")
+            text: (root.syncBackendRef ? root.syncBackendRef.sync_branch : "main")
+            placeholderText: "main"
+        }
+
+        FormCard.FormTextFieldDelegate {
+            id: usernameField
+            visible: root.showAdvanced
+            label: qsTr("用户名")
+            text: (root.syncBackendRef ? root.syncBackendRef.sync_username : "")
+            placeholderText: qsTr("留空自动使用 git")
         }
 
         FormCard.FormSwitchDelegate {
@@ -739,12 +764,14 @@ ColumnLayout {
                 }
                 if (!root.syncBackendRef) return
                 root.syncBackendRef.sync_remote_url = urlField.text
+                root.syncBackendRef.sync_branch = branchField.text.trim().length > 0 ? branchField.text.trim() : "main"
+                root.syncBackendRef.sync_username = usernameField.text.trim()
                 if (tokenField.text.trim().length > 0) {
                     root.syncBackendRef.set_sync_token(tokenField.text.trim())
                     tokenField.text = ""
                 }
                 root.syncBackendRef.sync_enabled = true
-                root.syncBackendRef.sync_backend_type = "github_api"
+                root.syncBackendRef.sync_backend_type = "git_https"
 
                 var success = root.syncBackendRef.save_sync_config()
                 if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -782,6 +809,8 @@ ColumnLayout {
                 // 先保存当前 UI 配置
                 if (root.syncBackendRef) {
                     root.syncBackendRef.sync_remote_url = urlField.text
+                    root.syncBackendRef.sync_branch = branchField.text.trim().length > 0 ? branchField.text.trim() : "main"
+                    root.syncBackendRef.sync_username = usernameField.text.trim()
                     if (tokenField.text.trim().length > 0) {
                         root.syncBackendRef.set_sync_token(tokenField.text.trim())
                     }

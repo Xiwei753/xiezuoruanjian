@@ -289,6 +289,10 @@ impl SyncProvider for GitHubProvider {
             message,
         )
     }
+
+    fn diagnose(&self) -> Result<SyncDiagnosticsResult, ProviderError> {
+        GitHubProvider::diagnose(self)
+    }
 }
 
 impl GitHubProvider {

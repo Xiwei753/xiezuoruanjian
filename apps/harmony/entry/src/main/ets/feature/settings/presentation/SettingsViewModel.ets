@@ -124,6 +124,9 @@ export class SettingsViewModel {
   @Trace syncConfig: SyncConfig | null = null
   @Trace syncToken: string = ''
   @Trace syncRemoteUrl: string = ''
+  @Trace syncBranch: string = 'main'
+  @Trace syncUsername: string = ''
+  @Trace syncAdvancedExpanded: boolean = false
   @Trace isLoading: boolean = true
   @Trace isSaving: boolean = false
   @Trace isDiagnosing: boolean = false
@@ -222,6 +225,8 @@ export class SettingsViewModel {
         // 回填 UI 可观察字段
         if (syncConfigResult.data.providerConfig) {
           this.syncRemoteUrl = syncConfigResult.data.providerConfig.remote_url
+          this.syncBranch = syncConfigResult.data.providerConfig.branch || 'main'
+          this.syncUsername = syncConfigResult.data.providerConfig.username || ''
         }
         // Issue #925：把 Core 已提交的配置交给进程唯一自动同步调度器。
         // reconfigure 只记录配置、启停前台唤醒 timer；是否真正同步由 runIfDue 决定，
@@ -376,7 +381,7 @@ export class SettingsViewModel {
 
   /**
    * 更新 syncConfig 并排队保存到 Core（Issue #925：有序串行保存，保存期间合并重复变更）。
-   * 保证 activeProvider='github_api'，providerConfig.type='github'，transport='https_token'。
+   * 新配置统一使用通用 `git_https`；旧 `github` 配置原样保留，由 Core 统一选路。
    * 只有真正落盘成功的配置才会 reconfigure 自动同步调度器；不 await（UI 回调不阻塞），
    * 保存结果由队列内部感知。
    */
@@ -385,37 +390,70 @@ export class SettingsViewModel {
     this.saveSyncConfig()
   }
 
+  /** 新表单只展示仓库地址与可选令牌；分支/用户名属于高级设置。 */
+  private makeGitHttpsProviderConfig(remoteUrl: string): ProviderConfig {
+    return {
+      type: 'git_https',
+      remote_url: remoteUrl,
+      branch: this.syncBranch.trim().length > 0 ? this.syncBranch.trim() : 'main',
+      username: this.syncUsername.trim(),
+      transport: null
+    }
+  }
+
+  private saveProviderConfig(providerConfig: ProviderConfig): void {
+    if (!this.syncConfig) {
+      return
+    }
+    const next: SyncConfig = {
+      enabled: this.syncConfig.enabled,
+      activeProvider: 'git_https',
+      providerConfig: providerConfig,
+      autoSync: this.syncConfig.autoSync,
+      syncIntervalSeconds: this.syncConfig.syncIntervalSeconds,
+      hasNetworkPermission: this.syncConfig.hasNetworkPermission,
+      hasNetworkStatePermission: this.syncConfig.hasNetworkStatePermission
+    }
+    this.syncConfig = next
+    this.saveSyncConfig()
+  }
+
   /**
-   * 更新远程仓库地址，修改 providerConfig.remote_url，然后保存。
+   * 更新远程仓库 HTTPS 地址。旧 GitHub 配置在首次编辑后迁移为通用 Git HTTPS 配置，
+   * Core 仍会对 github.com 仓库自动探测并在不可达时转 API。
    */
   updateSyncRemoteUrl(value: string): void {
     this.syncRemoteUrl = value
     if (this.syncConfig) {
-      // providerConfig 缺失时新建，branch 沿用已有值（拿不到时回落 'main'），
-      // 不再由用户在设置页手输；已有 providerConfig 只更新 remote_url。
-      // 注意：必须在创建新对象前先读取旧 branch，避免在 ?? 表达式右侧访问已被收窄的类型。
       const existingProviderConfig: ProviderConfig | null = this.syncConfig.providerConfig
-      const previousBranch: string = existingProviderConfig ? existingProviderConfig.branch : 'main'
-      const providerConfig: ProviderConfig = existingProviderConfig ?? {
-        type: 'github',
-        remote_url: value,
-        branch: previousBranch,
-        username: '',
-        transport: 'https_token'
+      if (existingProviderConfig && this.syncBranch.trim().length === 0) {
+        this.syncBranch = existingProviderConfig.branch || 'main'
       }
-      providerConfig.remote_url = value
-      const newConfig: SyncConfig = {
-        enabled: this.syncConfig.enabled,
-        activeProvider: 'github_api',
-        providerConfig: providerConfig,
-        autoSync: this.syncConfig.autoSync,
-        syncIntervalSeconds: this.syncConfig.syncIntervalSeconds,
-        hasNetworkPermission: this.syncConfig.hasNetworkPermission,
-        hasNetworkStatePermission: this.syncConfig.hasNetworkStatePermission
+      if (existingProviderConfig && this.syncUsername.length === 0) {
+        this.syncUsername = existingProviderConfig.username || ''
       }
-      this.syncConfig = newConfig
-      this.saveSyncConfig()
+      this.saveProviderConfig(this.makeGitHttpsProviderConfig(value))
     }
+  }
+
+  /** 高级设置：远端分支，默认 main。 */
+  updateSyncBranch(value: string): void {
+    this.syncBranch = value
+    if (this.syncConfig) {
+      this.saveProviderConfig(this.makeGitHttpsProviderConfig(this.syncRemoteUrl))
+    }
+  }
+
+  /** 高级设置：HTTPS Basic 用户名；留空时由 Core 按服务器要求自动选择。 */
+  updateSyncUsername(value: string): void {
+    this.syncUsername = value
+    if (this.syncConfig) {
+      this.saveProviderConfig(this.makeGitHttpsProviderConfig(this.syncRemoteUrl))
+    }
+  }
+
+  toggleSyncAdvanced(): void {
+    this.syncAdvancedExpanded = !this.syncAdvancedExpanded
   }
 
   /**
@@ -498,7 +536,12 @@ export class SettingsViewModel {
       const result = await this.bridge.loadSyncSecrets()
       if (result.success && result.data) {
         if (result.data.providerSecrets) {
-          this.syncToken = result.data.providerSecrets.token
+          const secrets = result.data.providerSecrets
+          if (secrets.type === 'git_https') {
+            this.syncToken = secrets.secret ?? ''
+          } else {
+            this.syncToken = secrets.token ?? ''
+          }
         } else {
           this.syncToken = ''
         }
@@ -561,8 +604,9 @@ export class SettingsViewModel {
     try {
       const secrets: SyncSecrets = {
         providerSecrets: token.length === 0 ? null : {
-          type: 'github',
-          token: token
+          type: 'git_https',
+          token: null,
+          secret: token
         }
       }
       const result = await this.bridge.saveSyncSecrets(secrets)

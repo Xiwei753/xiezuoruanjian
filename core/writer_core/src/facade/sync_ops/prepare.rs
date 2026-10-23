@@ -190,28 +190,24 @@ impl crate::facade::WriterCore {
     ///   `persist_full_sync_early_failure(status, "preflight")` 持久化失败状态；
     /// - `false`：维护路径（GC maintenance 等），transport 初始化失败只返回 Err，
     ///   不触碰 `FullSyncState`。
-    fn create_sync_provider_inner(
+    pub(crate) fn create_sync_provider_inner(
         &self,
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
         persist_preflight_failure: bool,
     ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
-        // secrets / persist_preflight_failure 仅在 github-api feature 下使用；
-        // 非 github-api 时消费以避免 unused。
-        #[cfg(not(feature = "github-api"))]
-        let _ = (secrets, persist_preflight_failure);
-        match config.active_provider.as_str() {
+        let create_github_api = |provider_config: &crate::sync::provider::ProviderConfig| {
             #[cfg(feature = "github-api")]
-            "github_api" => {
-                let transport =
-                    self.init_sync_transport_with_optional_persist(persist_preflight_failure)?;
-                let github_config = config
-                    .provider_config
-                    .as_ref()
-                    .map(|pc| match pc {
-                        crate::sync::provider::ProviderConfig::GitHub(c) => c,
-                    })
-                    .ok_or_else(|| crate::Error::Other("missing github provider config".into()))?;
+            {
+                let transport = self
+                    .init_sync_transport_with_optional_persist(persist_preflight_failure)?;
+                let crate::sync::provider::ProviderConfig::GitHub(github_config) =
+                    provider_config
+                else {
+                    return Err(crate::Error::Other(
+                        "GitHub API fallback requires github provider config".into(),
+                    ));
+                };
                 let runtime =
                     crate::sync::provider::github::config::GitHubRuntimeConfig::from_persisted(
                         github_config,
@@ -220,12 +216,21 @@ impl crate::facade::WriterCore {
                     .map_err(crate::Error::from)?;
                 Ok(Box::new(
                     crate::sync::provider::github::GitHubProvider::new(runtime, transport),
-                ))
+                ) as Box<dyn crate::sync::provider::SyncProvider>)
             }
             #[cfg(not(feature = "github-api"))]
-            "github_api" => Err(crate::Error::NotImplemented),
-            _ => Err(crate::Error::NotImplemented),
-        }
+            {
+                let _ = provider_config;
+                Err(crate::Error::NotImplemented)
+            }
+        };
+
+        crate::sync::provider::router::create_provider(
+            config,
+            secrets,
+            &self.app_data_root,
+            create_github_api,
+        )
     }
 
     /// 初始化 sync transport，可选持久化 preflight 失败状态。

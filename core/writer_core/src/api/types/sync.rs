@@ -21,6 +21,12 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderConfigDto {
+    #[serde(rename = "git_https")]
+    GitHttps {
+        remote_url: String,
+        branch: String,
+        username: String,
+    },
     #[serde(rename = "github")]
     GitHub {
         remote_url: String,
@@ -30,10 +36,15 @@ pub enum ProviderConfigDto {
     },
 }
 
-#[cfg(feature = "github-api")]
 impl From<crate::sync::provider::ProviderConfig> for ProviderConfigDto {
     fn from(c: crate::sync::provider::ProviderConfig) -> Self {
         match c {
+            crate::sync::provider::ProviderConfig::GitHttps(git) => ProviderConfigDto::GitHttps {
+                remote_url: git.remote_url,
+                branch: git.branch,
+                username: git.username,
+            },
+            #[cfg(feature = "github-api")]
             crate::sync::provider::ProviderConfig::GitHub(gh) => ProviderConfigDto::GitHub {
                 remote_url: gh.remote_url,
                 branch: gh.branch,
@@ -44,10 +55,21 @@ impl From<crate::sync::provider::ProviderConfig> for ProviderConfigDto {
     }
 }
 
-#[cfg(feature = "github-api")]
 impl From<ProviderConfigDto> for Option<crate::sync::provider::ProviderConfig> {
     fn from(c: ProviderConfigDto) -> Self {
         match c {
+            ProviderConfigDto::GitHttps {
+                remote_url,
+                branch,
+                username,
+            } => Some(crate::sync::provider::ProviderConfig::GitHttps(
+                crate::sync::provider::GitHttpsProviderConfig {
+                    remote_url,
+                    branch,
+                    username,
+                },
+            )),
+            #[cfg(feature = "github-api")]
             ProviderConfigDto::GitHub {
                 remote_url,
                 branch,
@@ -59,6 +81,19 @@ impl From<ProviderConfigDto> for Option<crate::sync::provider::ProviderConfig> {
                     branch,
                     username,
                     transport: sync_protocol_from_wire(&transport),
+                },
+            )),
+            #[cfg(not(feature = "github-api"))]
+            ProviderConfigDto::GitHub {
+                remote_url,
+                branch,
+                username,
+                ..
+            } => Some(crate::sync::provider::ProviderConfig::GitHttps(
+                crate::sync::provider::GitHttpsProviderConfig {
+                    remote_url,
+                    branch,
+                    username,
                 },
             )),
         }
@@ -82,17 +117,7 @@ impl From<crate::sync::SyncConfig> for SyncConfigDto {
         Self {
             enabled: c.enabled,
             active_provider: c.active_provider,
-            provider_config: {
-                #[cfg(feature = "github-api")]
-                {
-                    c.provider_config.map(Into::into)
-                }
-                #[cfg(not(feature = "github-api"))]
-                {
-                    let _ = c.provider_config;
-                    None
-                }
-            },
+            provider_config: c.provider_config.map(Into::into),
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
             has_network_permission: c.has_network_permission,
@@ -106,17 +131,7 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
         crate::sync::SyncConfig {
             enabled: c.enabled,
             active_provider: c.active_provider,
-            provider_config: {
-                #[cfg(feature = "github-api")]
-                {
-                    c.provider_config.and_then(Into::into)
-                }
-                #[cfg(not(feature = "github-api"))]
-                {
-                    let _ = c.provider_config;
-                    None
-                }
-            },
+            provider_config: c.provider_config.and_then(Into::into),
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
             has_network_permission: c.has_network_permission,
@@ -129,14 +144,19 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderSecretsDto {
+    #[serde(rename = "git_https")]
+    GitHttps { secret: String },
     #[serde(rename = "github")]
     GitHub { token: String },
 }
 
-#[cfg(feature = "github-api")]
 impl From<crate::sync::provider::ProviderSecrets> for ProviderSecretsDto {
     fn from(s: crate::sync::provider::ProviderSecrets) -> Self {
         match s {
+            crate::sync::provider::ProviderSecrets::GitHttps { secret } => {
+                ProviderSecretsDto::GitHttps { secret }
+            }
+            #[cfg(feature = "github-api")]
             crate::sync::provider::ProviderSecrets::GitHub { token } => {
                 ProviderSecretsDto::GitHub { token }
             }
@@ -144,12 +164,19 @@ impl From<crate::sync::provider::ProviderSecrets> for ProviderSecretsDto {
     }
 }
 
-#[cfg(feature = "github-api")]
 impl From<ProviderSecretsDto> for crate::sync::provider::ProviderSecrets {
     fn from(s: ProviderSecretsDto) -> Self {
         match s {
+            ProviderSecretsDto::GitHttps { secret } => {
+                crate::sync::provider::ProviderSecrets::GitHttps { secret }
+            }
+            #[cfg(feature = "github-api")]
             ProviderSecretsDto::GitHub { token } => {
                 crate::sync::provider::ProviderSecrets::GitHub { token }
+            }
+            #[cfg(not(feature = "github-api"))]
+            ProviderSecretsDto::GitHub { token } => {
+                crate::sync::provider::ProviderSecrets::GitHttps { secret: token }
             }
         }
     }
@@ -164,17 +191,7 @@ pub struct SyncSecretsDto {
 impl From<crate::sync::SyncSecrets> for SyncSecretsDto {
     fn from(s: crate::sync::SyncSecrets) -> Self {
         Self {
-            provider_secrets: {
-                #[cfg(feature = "github-api")]
-                {
-                    s.provider_secrets.map(Into::into)
-                }
-                #[cfg(not(feature = "github-api"))]
-                {
-                    let _ = s.provider_secrets;
-                    None
-                }
-            },
+            provider_secrets: s.provider_secrets.map(Into::into),
         }
     }
 }
@@ -182,17 +199,7 @@ impl From<crate::sync::SyncSecrets> for SyncSecretsDto {
 impl From<SyncSecretsDto> for crate::sync::SyncSecrets {
     fn from(s: SyncSecretsDto) -> Self {
         crate::sync::SyncSecrets {
-            provider_secrets: {
-                #[cfg(feature = "github-api")]
-                {
-                    s.provider_secrets.map(Into::into)
-                }
-                #[cfg(not(feature = "github-api"))]
-                {
-                    let _ = s.provider_secrets;
-                    None
-                }
-            },
+            provider_secrets: s.provider_secrets.map(Into::into),
         }
     }
 }
@@ -676,6 +683,26 @@ impl From<crate::sync::types::TargetSyncResult> for TargetSyncResultDto {
             result: t.result.into(),
         }
     }
+}
+
+/// 附近设备同步后要发回对端的对象变更（Issue #988）。
+///
+/// 内容用 base64，避免路径/正文里的换行破坏文本协议；ArkTS 再按有界文本分片传输。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerSyncMutationDto {
+    pub kind: String,
+    pub path: String,
+    pub content_base64: Option<String>,
+    pub version: Option<String>,
+}
+
+/// 附近设备同步结果：既有 Core 聚合结果，也有本次 Core 写回镜像、需发回对端的变更。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerSyncResultDto {
+    pub sync: FullSyncResultDto,
+    pub mutations: Vec<PeerSyncMutationDto>,
 }
 
 /// 全量同步 dry-run 聚合结果 DTO。

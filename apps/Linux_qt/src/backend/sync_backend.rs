@@ -1420,29 +1420,35 @@ impl AppBackend {
                 .and_then(|s| s.provider_secrets)
                 .map(|ps| match ps {
                     writer_core::api::types::ProviderSecretsDto::GitHub { token } => token,
+                    writer_core::api::types::ProviderSecretsDto::GitHttps { secret } => secret,
                 });
             if let Some(config) = config_opt {
                 self.current_sync_enabled = config.enabled;
                 self.current_sync_backend_type = config.active_provider.clone();
-                // Issue #645：GitHub 字段从 provider_config → ProviderConfigDto::GitHub 提取。
-                let (gh_remote_url, gh_branch, gh_username) = match &config.provider_config {
+                // Issue #990：兼容旧 GitHub 配置与新的通用 Git HTTPS 配置。
+                let (sync_remote_url, sync_branch, sync_username) = match &config.provider_config {
                     Some(writer_core::api::types::ProviderConfigDto::GitHub {
                         remote_url,
                         branch,
                         username,
                         ..
                     }) => (remote_url.clone(), branch.clone(), username.clone()),
+                    Some(writer_core::api::types::ProviderConfigDto::GitHttps {
+                        remote_url,
+                        branch,
+                        username,
+                    }) => (remote_url.clone(), branch.clone(), username.clone()),
                     None => (String::new(), String::new(), String::new()),
                 };
-                self.current_sync_remote_url = gh_remote_url;
-                self.current_sync_branch = if gh_branch.is_empty() {
+                self.current_sync_remote_url = sync_remote_url;
+                self.current_sync_branch = if sync_branch.is_empty() {
                     "main".to_string()
                 } else {
-                    gh_branch
+                    sync_branch
                 };
                 self.current_sync_auto_sync = config.auto_sync;
                 self.current_sync_interval = config.sync_interval_seconds;
-                self.current_sync_username = gh_username;
+                self.current_sync_username = sync_username;
             } else {
                 self.current_sync_enabled = false;
                 self.current_sync_remote_url = "".to_string();
@@ -1478,18 +1484,16 @@ impl AppBackend {
         let mut error_state: Option<writer_core::api::SyncOperationStateDto> = None;
         if let Some(api) = self.core_api() {
             let net = crate::backend::app_backend::current_network_state();
-            // Issue #645：SyncConfigDto 改为 provider-neutral 结构，
-            // GitHub 字段通过 provider_config: Option<ProviderConfigDto::GitHub> 携带。
+            // Issue #990：通用 Git HTTPS 配置；GitHub 由 Core 自动选择 Git/API。
             let mut c = api
                 .load_sync_config()
                 .unwrap_or(writer_core::api::types::SyncConfigDto {
                     enabled: false,
-                    active_provider: "github_api".to_string(),
-                    provider_config: Some(writer_core::api::types::ProviderConfigDto::GitHub {
+                    active_provider: "git_https".to_string(),
+                    provider_config: Some(writer_core::api::types::ProviderConfigDto::GitHttps {
                         remote_url: "".to_string(),
                         branch: "main".to_string(),
                         username: "".to_string(),
-                        transport: "https_token".to_string(),
                     }),
                     auto_sync: false,
                     sync_interval_seconds: 300,
@@ -1502,10 +1506,10 @@ impl AppBackend {
 
             c.enabled = self.current_sync_enabled;
             c.active_provider = match self.current_sync_backend_type.as_str() {
-                "webdav" | "s3" | "local_folder" | "git" | "github_api" => {
+                "webdav" | "s3" | "local_folder" | "git" | "git_https" => {
                     self.current_sync_backend_type.clone()
                 }
-                _ => "github_api".to_string(),
+                _ => "git_https".to_string(),
             };
             let new_branch = if self.current_sync_branch.is_empty() {
                 "main".to_string()
@@ -1518,17 +1522,16 @@ impl AppBackend {
                     new_username = extracted_user.clone();
                 }
             }
-            // GitHub 字段统一写入 provider_config（线格式 transport 为 "https_token"）。
-            c.provider_config = Some(writer_core::api::types::ProviderConfigDto::GitHub {
+            // Issue #990：远端地址、分支、用户名统一写入通用 Git HTTPS 配置。
+            c.provider_config = Some(writer_core::api::types::ProviderConfigDto::GitHttps {
                 remote_url: parsed.sanitized_url.clone(),
                 branch: new_branch,
                 username: new_username,
-                transport: "https_token".to_string(),
             });
             c.auto_sync = self.current_sync_auto_sync;
             c.sync_interval_seconds = self.current_sync_interval;
 
-            // Issue #645：SyncSecretsDto 改为 provider_secrets → ProviderSecretsDto::GitHub { token }。
+            // Issue #990：密码/访问令牌统一写入通用 Git HTTPS 密钥。
             let mut s =
                 api.load_sync_secrets()
                     .unwrap_or(writer_core::api::types::SyncSecretsDto {
@@ -1542,7 +1545,7 @@ impl AppBackend {
                 Some(self.current_sync_token.clone())
             };
             s.provider_secrets = new_token
-                .map(|token| writer_core::api::types::ProviderSecretsDto::GitHub { token });
+                .map(|secret| writer_core::api::types::ProviderSecretsDto::GitHttps { secret });
 
             let config_result = api.save_sync_config(c);
             let config_envelope = match config_result {

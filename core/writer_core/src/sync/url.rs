@@ -8,8 +8,6 @@
 //! 安全约束：脱敏函数必须保证 token 不出现在日志、错误消息和 UI 展示中。
 //! `redact_secrets_from_message` 是当前主链，`mask_token` 是遗留别名。
 
-use crate::sync::types::SyncConfig;
-
 /// URL 解析结果 — 剥离 userinfo 后的 URL 和提取的凭证。
 pub struct ParsedRemoteUrl {
     pub sanitized_url: String,
@@ -112,28 +110,31 @@ pub fn detect_transport(
     }
 }
 
+/// 判断是否为官方 `github.com` 的 HTTPS 仓库。
+///
+/// 只按 URL 主机精确匹配，避免把 `notgithub.com`、`github.com.example.org`
+/// 或自托管 GitHub Enterprise 误判为官方 GitHub。
 pub fn is_github_https_remote(remote_url: &str) -> bool {
     let sanitized = sanitize_remote_url(remote_url).sanitized_url;
-    let lower = sanitized.to_lowercase();
-    lower.starts_with("https://github.com/") || lower.starts_with("http://github.com/")
-}
-
-/// 解析最终使用的 active_provider 字符串 — 若配置为 "git" 但 GitHub Provider 的
-/// remote_url 为 GitHub HTTPS，自动切换为 "github_api"。
-///
-/// GitHub HTTPS 远程仓库使用 REST API 更高效（无需 clone 整个仓库），
-/// 因此当 `active_provider == "git"` 且 GitHub `remote_url` 为 `https://github.com/`
-/// 时自动升级。无 GitHub provider_config 时返回原 `active_provider`。
-pub fn resolved_active_provider(config: &SyncConfig) -> String {
-    if config.active_provider == "git" {
-        #[cfg(feature = "github-api")]
-        if let Some(crate::sync::provider::ProviderConfig::GitHub(gh)) = &config.provider_config {
-            if is_github_https_remote(&gh.remote_url) {
-                return "github_api".to_string();
-            }
-        }
+    let Some((scheme, rest)) = sanitized.split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("http") {
+        return false;
     }
-    config.active_provider.clone()
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default();
+    host.eq_ignore_ascii_case("github.com")
+        && rest
+            .split_once('/')
+            .map(|(_, path)| !path.trim_matches('/').is_empty())
+            .unwrap_or(false)
 }
 
 /// 将 URL 中的 userinfo 部分替换为 `***`，用于日志和 UI 展示。

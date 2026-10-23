@@ -466,7 +466,7 @@
     },
     {
       "name": "enable_sync",
-      "value": "启用同步"
+      "value": "启用云备份（可选）"
     },
     {
       "name": "sync_method",
@@ -773,6 +773,10 @@
       "value": "用于感知握姿以优化单手阅读体验"
     },
     {
+      "name": "perm_reason_distributed_datasync",
+      "value": "用于发现附近可信设备并在设备之间同步作品与接续写作页面"
+    },
+    {
       "name": "search_settings",
       "value": "搜索设置"
     },
@@ -787,6 +791,22 @@
     {
       "name": "https_token",
       "value": "HTTPS Token"
+    },
+    {
+      "name": "repository_https_url",
+      "value": "仓库 HTTPS 地址"
+    },
+    {
+      "name": "access_token_optional",
+      "value": "访问令牌或密码（可选）"
+    },
+    {
+      "name": "advanced_settings",
+      "value": "高级设置"
+    },
+    {
+      "name": "username",
+      "value": "用户名"
     },
     {
       "name": "move_node",

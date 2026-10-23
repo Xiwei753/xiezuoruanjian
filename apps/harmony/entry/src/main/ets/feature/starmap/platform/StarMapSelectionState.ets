@@ -34,6 +34,12 @@ export class StarMapSelectionState {
   selectedKind: StarMapSelectionKind = 'none'
   /** 当前选中对象 ID */
   selectedItemId: string = ''
+  private changedListener: (() => void) | null = null
+
+  // Issue #988：选中变化时让页面冻结接续快照；不改变选中态本身的唯一真相。
+  setChangedListener(listener: (() => void) | null): void {
+    this.changedListener = listener
+  }
 
   /**
    * 选中一个对象。
@@ -47,6 +53,7 @@ export class StarMapSelectionState {
     }))
     this.selectedKind = kind
     this.selectedItemId = itemId
+    this.notifyChanged()
   }
 
   /** 清空选中（点空白处）。 */
@@ -54,6 +61,7 @@ export class StarMapSelectionState {
     this.selectedScenePath = []
     this.selectedKind = 'none'
     this.selectedItemId = ''
+    this.notifyChanged()
   }
 
   /** 读取选中快照。 */
@@ -64,6 +72,12 @@ export class StarMapSelectionState {
       })),
       kind: this.selectedKind,
       itemId: this.selectedItemId
+    }
+  }
+
+  private notifyChanged(): void {
+    if (this.changedListener !== null) {
+      this.changedListener()
     }
   }
 

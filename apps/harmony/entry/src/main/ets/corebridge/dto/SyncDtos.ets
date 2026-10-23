@@ -10,11 +10,14 @@
 //   ArkTS 必须写成 `T | null`，不能写成可选属性。
 
 export interface ProviderConfig {
-  type: string  // "github"
+  // "git_https"：所有标准 Git Smart HTTP 远端（GitLab/Gitee/Gitea/Forgejo/Bitbucket/自建）。
+  // "github"：旧配置兼容；运行时仍由 Core 统一选路。
+  type: string
   remote_url: string
   branch: string
   username: string
-  transport: string
+  // 仅旧 GitHub 配置使用；序列化到 Core 时多余字段会被忽略。
+  transport: string | null
 }
 
 export interface SyncConfig {
@@ -140,8 +143,11 @@ export interface FullSyncDiagnosticsResult {
 // SyncSecrets.providerSecrets 对应 Core 侧 `Option<ProviderSecretsDto>`，nullable。
 
 export interface ProviderSecrets {
-  type: string // "github"
-  token: string
+  // "git_https" 使用 secret；"github" 为旧配置，使用 token。
+  // 两个字段都可为 null，Core 的 internally-tagged enum 会忽略不属于当前变体的字段。
+  type: string
+  token: string | null
+  secret: string | null
 }
 
 export interface SyncSecrets {
@@ -205,4 +211,19 @@ export interface SyncConflictPreview {
   localContent: string
   remoteContent: string | null
   remoteDeleted: boolean
+}
+
+// Core `PeerSyncMutationDto`：附近设备同步后需要回传给对端的对象变更。
+// contentBase64 仅 kind=put 时存在；delete 时 version 为删除前版本。
+export interface PeerSyncMutation {
+  kind: string
+  path: string
+  contentBase64: string | null
+  version: string | null
+}
+
+// Core `PeerSyncResultDto`：复用全量同步结果，并附带本次对端可见的对象变更。
+export interface PeerSyncResult {
+  sync: FullSyncResult
+  mutations: PeerSyncMutation[]
 }

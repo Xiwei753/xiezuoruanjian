@@ -25,6 +25,8 @@
 | 防窥屏 | @kit.DeviceSecurityKit (dlpAntiPeep) | 20（基础）/ 23（requestAntiPeepOptions） | SystemCapability.Security.DlpAntiPeep | ohos.permission.DLP_GET_HIDE_STATUS | 是（仅 ACL product 装配 privacy_acl HSP） | privacy_acl/src/main/ets/impl/api20/DlpAntiPeepApi20.ets, privacy_acl/src/main/ets/impl/api23/DlpAntiPeepApi23.ets |
 | 窗口隐私 | @kit.ArkUI (window) | 9 | SystemCapability.WindowManager.WindowManager.Core | ohos.permission.PRIVACY_WINDOW | 否 | privacy/WindowPrivacyService.ets |
 | 应用接续 | 无独立 Kit（Ability 生命周期 + module.json5 continuable 配置） | 未限定独立 API（Staged 模型 ability 级配置） | 无独立 SystemCapability（Ability 级配置） | 无 | 否 | continuity/ContinuationEntrypoint.ets, continuity/AppContinuationService.ets |
+| 可信设备发现 | @kit.DistributedServiceKit (distributedDeviceManager) | 10 | SystemCapability.DistributedHardware.DeviceManager | ohos.permission.DISTRIBUTED_DATASYNC | 否 | device/impl/api18/TrustedDeviceApi18.ets, device/TrustedDeviceService.ets |
+| 附近设备连接 | @kit.DistributedServiceKit (abilityConnectionManager) | 18 | SystemCapability.DistributedSched.AppCollaboration | ohos.permission.DISTRIBUTED_DATASYNC（发现可信设备） | 否 | device/impl/api18/TrustedDeviceApi18.ets, device/TrustedDeviceService.ets, peer/PeerSyncTransport.ets, peer/PeerSyncSession.ets |
 | 普通系统分享 | @kit.ShareKit (systemShare) | 11 | SystemCapability.Collaboration.SystemShare | 无 | 否 | share/impl/api11/SystemShareApi11.ets, share/SystemShareService.ets |
 | 碰一碰分享 | @kit.ShareKit (harmonyShare knockShare) | 12 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api12/KnockShareApi12.ets, share/TapShareService.ets |
 | 隔空传送 | @kit.ShareKit (harmonyShare gesturesShare) | 20 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api20/GesturesShareApi20.ets, share/AirTransferService.ets |
@@ -145,6 +147,24 @@
 - ACL：否（接续是 Ability 级配置，无 DLP ACL 依赖）
 - 实现文件：`continuity/ContinuationEntrypoint.ets`（接续序列化/恢复入口，从 EntryAbility 提取）、`continuity/AppContinuationService.ets`
 - 说明：`EntryAbility` 仅保留 Ability 生命周期调用，接续的序列化/恢复细节收在 `ContinuationEntrypoint`。接续与 DLP ACL 完全独立，普通包（default product）同样支持接续。
+- Issue #988：payload 带版本号、真实 `screen`/`tabIndex` 和稳定对象 ID（作品/卷/章、星图子路径/相机/选中节点、统计周期、设置分类、搜索上下文）；源页面持续更新快照，`onContinue` 只同步写出已有快照，不在其中等待 GitHub/设备传输。目标端按内容哈希校验后再恢复光标/选区/视口。无需应用内华为账号，也不要求每台设备都有 GitHub 仓库。
+
+## 附近设备同步（可信设备发现 / AbilityConnection）
+
+- Kit：`@kit.DistributedServiceKit`（`distributedDeviceManager`、`abilityConnectionManager`）
+- 接口：
+  - `distributedDeviceManager.createDeviceManager(bundleName)`
+  - `deviceManager.getAvailableDeviceListSync()` / `getAvailableDeviceList()`
+  - `abilityConnectionManager.createAbilityConnectionSession(serviceName, context, peerInfo, connectOptions)`
+  - `connect` / `acceptConnect` / `reject` / `sendMessage` / `on('receiveMessage')` / `on('disconnect')` / `disconnect` / `destroyAbilityConnectionSession`
+  - 接收端 `UIAbility.onCollaborate(wantParam)`（`wantConstant.Flags.FLAG_ABILITY_ON_COLLABORATE`，token 键 `ohos.extra.param.key.supportCollaborateIndex`）
+- 最低 API：设备发现 10；跨设备 AbilityConnection 18
+- SystemCapability：`SystemCapability.DistributedHardware.DeviceManager`、`SystemCapability.DistributedSched.AppCollaboration`
+- 权限：`ohos.permission.DISTRIBUTED_DATASYNC`（user_grant，normal；用于可信设备发现，运行时在用户打开/刷新附近设备或主动连接时申请，拒绝时明确显示不可用，不申请 ACL）
+- ACL：否
+- fallback：API < 18 或能力缺失时 `TrustedDeviceService.isSupported()` 返回 false，附近设备列表为空、入口明确显示不可用；应用安装与云同步不受影响。系统只保证第三方文本消息，因此对象按 `PeerSyncTransport` 的有界文本分片（requestId/sequence/total/哈希）传输，不假设二进制 `sendData` 可用。
+- 实现文件：`device/impl/api18/TrustedDeviceApi18.ets`、`device/TrustedDeviceService.ets`、`peer/PeerSyncTransport.ets`、`peer/PeerSyncSession.ets`
+- 说明：可信关系来自系统分布式设备网络，不把华为账号“已登录”当同账号证明；会话只保存本次连接的 `networkId`，不写永久设备身份，也不传输 GitHub Token。附近设备同步与云备份是同一 Core 对象事务的两个 transport，不新增第二套 LWW/墓碑规则。
 
 ## 分享
 

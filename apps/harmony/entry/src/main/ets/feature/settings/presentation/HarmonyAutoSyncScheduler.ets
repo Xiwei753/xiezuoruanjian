@@ -27,6 +27,7 @@ import { HarmonyLifecycle, SyncLifecycleObserver } from '../../../platform/lifec
 import { NetworkStatusService } from '../../../platform/network/NetworkStatusService'
 import { SyncOperationController } from './SyncOperationController'
 import { SyncOutcome } from './SyncRunTypes'
+import { NearbyDeviceSyncCoordinator } from '../../../platform/peer/NearbyDeviceSyncCoordinator'
 
 const TAG = 'SyncScheduler'
 const DOMAIN = 0x0000
@@ -169,6 +170,9 @@ export class HarmonyAutoSyncScheduler {
   /** 进入前台：必要时重试读取配置，然后挂前台唤醒 timer 并立即做一次到期判断。 */
   onForeground(): void {
     this.isForeground = true
+    // Issue #988：附近设备会话的唤醒与云备份到期判断互不依赖；即使本机没有
+    // GitHub 配置，已连接的可信设备仍可主动同步。Core 内部继续使用同一事务锁。
+    NearbyDeviceSyncCoordinator.getInstance().requestAllSessionsSync()
     if (!this.configLoaded) {
       // 配置尚未成功读过（Core 未就绪或上次读取失败）：本次前台重试一次真实读取，
       // 不把读取失败记忆成"自动同步关闭"；Core 未就绪时等 onCoreReady()。
@@ -207,6 +211,8 @@ export class HarmonyAutoSyncScheduler {
 
   /** 网络恢复：必要时重试读取配置，然后立即做一次到期判断（不等待 timer）。 */
   onNetworkRestored(): void {
+    // Issue #988：网络恢复先唤醒附近设备会话，再走 GitHub 的到期判断。
+    NearbyDeviceSyncCoordinator.getInstance().requestAllSessionsSync()
     if (!this.configLoaded) {
       if (!this.coreReady) {
         hilog.info(DOMAIN, TAG, 'onNetworkRestored: core not ready, defer to onCoreReady')

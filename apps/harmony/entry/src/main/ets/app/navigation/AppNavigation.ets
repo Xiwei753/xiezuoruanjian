@@ -10,9 +10,19 @@
 // 导航事务逻辑（意图队列、离开守卫、安全 pop/replace/rebuild）在 NavigationTransactionCoordinator。
 // 接续恢复逻辑保留在 AppNavigation（通过 coordinator 获取活动栈操作）。
 
-import { Routes, WorkspaceRouteParams, WritingRouteParams } from './Routes'
+import {
+  Routes,
+  SettingsRouteParams,
+  StarMapFocusKind,
+  StarMapRouteParams,
+  StatsRouteParams,
+  SearchRouteParams,
+  WorkspaceRouteParams,
+  WritingRouteParams
+} from './Routes'
 import hilog from '@ohos.hilog'
-import { ContinuationPayload } from '../../platform/continuity/ContinuationPayload'
+import { SearchContext, SearchOriginScreen } from '../../corebridge/dto/SearchDtos'
+import { ContinuationPayload, continuationTabIndex } from '../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { PrimaryTabShell } from './PrimaryTabShell'
 import { SearchOverlayController } from '../../feature/search/presentation/SearchOverlayController'
@@ -50,79 +60,164 @@ export struct AppNavigation {
     SearchOverlayController.getInstance().detachUIContext(this.getUIContext())
   }
 
-  // 根据接续 payload 重建 NavPathStack 并恢复 selection/cursor/viewport。
-  // NavPathStack 不能自动迁移（SUPPORT_CONTINUE_PAGE_STACK_KEY=false），这里手动重建。
-  // Issue #629 评论14 第2项：改用 safeClearAndRebuild，先调 leaveGuard（保存+关闭事务），
-  // guard 成功才 clear + rebuild；失败保持当前页面，不清栈（不卸载活跃 WritingScreen 绕过保存）。
-  // Issue #767：接续恢复有 project/chapter 时先切到作品 tab，再重建作品栈。
+  // Issue #988：按 payload.screen/tabIndex 重建源页面所属的真实 tab 和页面层级。
+  // 不再固定回 Home，也不假定接续一定发生在写作页。
   private async applyContinuation(payload: ContinuationPayload): Promise<void> {
-    const dedupeKey = `continuation:${payload.chapterId ?? ''}:${payload.projectId ?? ''}`
+    const targetTab: number = continuationTabIndex(payload)
+    const dedupeKey =
+      `continuation:${payload.snapshotSequence ?? 0}:${payload.screen ?? 'writing'}:${payload.projectId ?? ''}:${payload.chapterId ?? ''}`
     await NavigationTransactionCoordinator.getInstance().safeClearAndRebuild(dedupeKey, (): void => {
-      // 接续恢复始终回到 Home tab。
-      // Issue #767 评论5832129578 第1项：currentTab 变化会通过 @Watch 触发
-      // PrimaryTabShell.syncActiveTab，不再依赖 Tabs.onChange 回调。
-      this.currentTab = TAB_HOME
-
-      // Issue #767：用 getTabStack(TAB_HOME) 获取作品 tab 的 NavPathStack，
-      // 而不是 getNavPathStack()（可能返回其他 tab 的 stack）。
       const coordinator = NavigationTransactionCoordinator.getInstance()
-      const homeStack = coordinator.getTabStack(TAB_HOME)
-      if (homeStack === null) {
-        // PrimaryTabShell 还没注册 homeStack，不消费 payload（保留 pending）。
-        hilog.error(0x0000, 'AppNavigation', 'applyContinuation: homeStack not registered yet, cannot rebuild')
+      const targetStack: NavPathStack | null = coordinator.getTabStack(targetTab)
+      if (targetStack === null) {
+        hilog.error(0x0000, 'AppNavigation', 'applyContinuation: target stack not registered')
         return
       }
 
-      // 清栈到根后按 payload 重建。clear() 清空全部路由，再 push Home 作为根。
-      homeStack.clear()
-      homeStack.pushPath({ name: Routes.Home })
+      this.currentTab = targetTab
+      targetStack.clear()
 
-      // 底栏显隐由平台动作表按页面角色决定，不再手工设置。
-      // continuation 导航到 Workspace 时底栏显示，
-      // 导航到 Writing 时底栏隐藏，与普通进入一致。
+      if (targetTab === TAB_STARMAP) {
+        targetStack.pushPath({ name: Routes.StarMapList })
+        const hasStarMap: boolean =
+          payload.starmapId !== undefined && payload.starmapId !== ''
+        if (hasStarMap) {
+          const starParam: StarMapRouteParams = {
+            starmapId: payload.starmapId as string,
+            starmapTitle: payload.starmapTitle ?? ''
+          }
+          if (payload.parentStarmapId !== undefined) {
+            starParam.parentStarmapId = payload.parentStarmapId
+          }
+          if (payload.parentStarmapTitle !== undefined) {
+            starParam.parentStarmapTitle = payload.parentStarmapTitle
+          }
+          if (payload.focusKind !== undefined) {
+            starParam.focusKind = payload.focusKind as StarMapFocusKind
+          }
+          if (payload.focusId !== undefined) {
+            starParam.focusId = payload.focusId
+          }
+          starParam.parentPath = payload.parentPath
+          starParam.focusScenePath = payload.focusScenePath
+          starParam.selectedNodeId = payload.selectedNodeId
+          starParam.selectedKind = payload.selectedKind
+          starParam.cameraScale = payload.cameraScale
+          starParam.cameraOffsetX = payload.cameraOffsetX
+          starParam.cameraOffsetY = payload.cameraOffsetY
+          targetStack.pushPath({ name: Routes.StarMap, param: starParam })
+        }
+        this.continuationPayload = payload
+        return
+      }
+
+      if (targetTab === TAB_STATS) {
+        const statsParam: StatsRouteParams = {}
+        if (payload.statsPeriod !== undefined) {
+          statsParam.period = payload.statsPeriod
+        }
+        if (payload.statsExpandedPanel !== undefined) {
+          statsParam.expandedPanel = payload.statsExpandedPanel
+        }
+        if (payload.statsHeatmapYear !== undefined) {
+          statsParam.heatmapYear = payload.statsHeatmapYear
+        }
+        targetStack.pushPath({ name: Routes.Stats, param: statsParam })
+        this.continuationPayload = payload
+        return
+      }
+
+      // 作品 tab：Home 是根，按源页面继续压入 Workspace/Writing/Settings/Search。
+      targetStack.pushPath({ name: Routes.Home })
       const hasProject: boolean = payload.projectId !== undefined && payload.projectId !== ''
       const hasChapter: boolean = payload.chapterId !== undefined && payload.chapterId !== ''
       const hasVolume: boolean = payload.volumeId !== undefined && payload.volumeId !== ''
+      const wideMode: boolean = getWideLayoutState().current() === WideLayoutMode.Wide
 
-      // Issue #972：宽屏恢复不再先塞一个手机卷/章工作区。只要有项目就直达宽屏写作台，
-      // 有章节时带上原会话参数；只有项目时由写作台自己的章节树选择章节。
-      // 窄屏继续保留 Workspace → Writing 的既有恢复路径。
-      const wideMode: boolean =
-        getWideLayoutState().current() === WideLayoutMode.Wide
-      if (hasProject && !wideMode) {
+      if (payload.screen === 'workspace' && hasProject) {
         const wsParam: WorkspaceRouteParams = {
           projectId: payload.projectId as string,
-          projectName: '' // payload 不带 projectName；WorkspaceScreen 会从 core 加载。
+          projectName: ''
         }
-        homeStack.pushPath({ name: Routes.Workspace, param: wsParam })
+        targetStack.pushPath({ name: Routes.Workspace, param: wsParam })
+      } else if (payload.screen === 'settings') {
+        const settingsParam: SettingsRouteParams = {}
+        if (payload.settingsSection !== undefined) {
+          settingsParam.section = payload.settingsSection
+        }
+        if (payload.settingKey !== undefined) {
+          settingsParam.settingKey = payload.settingKey
+        }
+        targetStack.pushPath({ name: Routes.Settings, param: settingsParam })
+      } else if (payload.screen === 'search') {
+        const searchContext: SearchContext = this.buildSearchContext(payload)
+        const searchParam: SearchRouteParams = { context: searchContext }
+        if (payload.searchQuery !== undefined) {
+          searchParam.initialQuery = payload.searchQuery
+        }
+        targetStack.pushPath({ name: Routes.Search, param: searchParam })
+      } else if (payload.screen === 'writing' || (payload.screen === undefined && hasChapter)) {
+        // 窄屏保留 Workspace → Writing 的真实层级；宽屏直达写作台的章节树。
+        if (hasProject && !wideMode) {
+          const wsParam: WorkspaceRouteParams = {
+            projectId: payload.projectId as string,
+            projectName: ''
+          }
+          targetStack.pushPath({ name: Routes.Workspace, param: wsParam })
+        }
+        if (hasProject && (wideMode || (hasChapter && hasVolume))) {
+          const wParam: WritingRouteParams = {
+            chapterId: hasChapter ? payload.chapterId as string : '',
+            chapterTitle: '',
+            projectId: payload.projectId as string,
+            volumeId: hasVolume ? payload.volumeId as string : ''
+          }
+          if (payload.selection !== undefined) {
+            wParam.selection = payload.selection
+          }
+          if (payload.cursor !== undefined) {
+            wParam.cursor = payload.cursor
+          }
+          if (payload.viewport !== undefined) {
+            wParam.viewport = payload.viewport
+          }
+          if (payload.contentHash !== undefined) {
+            wParam.contentHash = payload.contentHash
+          }
+          if (payload.snapshotId !== undefined) {
+            wParam.snapshotId = payload.snapshotId
+          }
+          if (payload.snapshotHash !== undefined) {
+            wParam.snapshotHash = payload.snapshotHash
+          }
+          targetStack.pushPath({ name: Routes.Writing, param: wParam })
+        }
       }
 
-      if (hasProject && (wideMode || (hasChapter && hasVolume))) {
-        // 携带 selection/cursor/viewport/contentHash 到 WritingScreen 入口。
-        const wParam: WritingRouteParams = {
-          chapterId: hasChapter ? payload.chapterId as string : '',
-          chapterTitle: '',
-          projectId: payload.projectId as string,
-          volumeId: hasVolume ? payload.volumeId as string : ''
-        }
-        if (payload.selection !== undefined) {
-          wParam.selection = payload.selection
-        }
-        if (payload.cursor !== undefined) {
-          wParam.cursor = payload.cursor
-        }
-        if (payload.viewport !== undefined) {
-          wParam.viewport = payload.viewport
-        }
-        if (payload.contentHash !== undefined) {
-          wParam.contentHash = payload.contentHash
-        }
-        homeStack.pushPath({ name: Routes.Writing, param: wParam })
-      }
-
-      // 暂存 payload，供页面层主动读取编辑器状态（selection/cursor/viewport）。
       this.continuationPayload = payload
     })
+  }
+
+  private buildSearchContext(payload: ContinuationPayload): SearchContext {
+    const origin: SearchOriginScreen =
+      (payload.searchOriginScreen as SearchOriginScreen | undefined) ?? 'home'
+    const context: SearchContext = { originScreen: origin }
+    if (payload.searchProjectId !== undefined) {
+      context.currentProjectId = payload.searchProjectId
+    }
+    if (payload.searchVolumeId !== undefined) {
+      context.currentVolumeId = payload.searchVolumeId
+    }
+    if (payload.searchChapterId !== undefined) {
+      context.currentChapterId = payload.searchChapterId
+    }
+    if (payload.searchStarmapId !== undefined) {
+      context.currentStarmapId = payload.searchStarmapId
+    }
+    if (payload.searchSettingsSection !== undefined) {
+      context.currentSettingsSection = payload.searchSettingsSection
+    }
+    return context
   }
 
   build() {

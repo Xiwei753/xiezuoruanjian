@@ -10,7 +10,7 @@ workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["github-api", "secret-service"]
+default = ["github-api", "git-https", "secret-service"]
 github-api = ["writer_uniffi/github-api", "dep:reqwest"]
 git-https = ["writer_uniffi/git-https"]
 secret-service = ["dep:keyring"]

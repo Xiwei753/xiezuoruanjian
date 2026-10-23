@@ -230,6 +230,43 @@ pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
     }
 }
 
+/// 附近设备同步 C ABI。`peer_root` 是平台层预先写入对端对象快照的隔离目录。
+///
+/// 该入口不读取、不刷新任何云端凭据，也不会把对端原始文件直接覆盖到作品目录；
+/// Core 仍按现有 staging → LWW 合并 → commit 管线处理对象。
+///
+/// # Safety
+/// `peer_root` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_perform_peer_sync(peer_root: *const c_char) -> *mut c_char {
+    let root = match c_str_to_rust(peer_root) {
+        Ok(value) => value,
+        Err(e) => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!("Invalid peer_root: error {}", e),
+            )
+        }
+    };
+    let inner_result: Result<Result<_, WriterError>, String> = with_app_service(|svc| {
+        Ok(svc.perform_peer_sync(root, false))
+    });
+    match inner_result {
+        Ok(Ok(data)) => ok_json(data),
+        Ok(Err(e)) => {
+            let envelope = ResultEnvelope::<()>::from_api_result(Err(e));
+            let s = envelope.to_json_string();
+            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+        }
+        Err(e) => {
+            let envelope = ResultEnvelope::<()>::from_api_result(Err(WriterError::Other(e)));
+            let s = envelope.to_json_string();
+            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+        }
+    }
+}
+
 /// 加载 App target 同步状态。返回 JSON 形式的 `SyncState`。
 ///
 /// # Safety

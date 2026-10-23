@@ -63,6 +63,24 @@ impl SyncCapabilities {
         }
     }
 
+    /// 通用 Git HTTPS (Smart HTTP) 能力。
+    ///
+    /// 一次 fetch/push 原子提交完整 tree；条件写入在本地基于最新远端快照校验，
+    /// 因此 `conditional_write`/`atomic_write`/`batch` 均为真。
+    /// 没有原子 rename 和空目录语义；commit 提供远端历史与服务端时间。
+    pub fn git_https() -> Self {
+        Self {
+            conditional_write: true,
+            atomic_write: true,
+            atomic_move: false,
+            batch: true,
+            server_timestamp: true,
+            directory_semantics: false,
+            remote_history: true,
+            max_parallel_downloads: 4,
+        }
+    }
+
     /// 内存 Provider 能力。
     ///
     /// MemoryProvider 在单进程内操作，天然支持原子批量、原子移动、目录语义，

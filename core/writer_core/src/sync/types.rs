@@ -415,30 +415,21 @@ impl SyncConfig {
     #[cfg(feature = "github-api")]
     pub fn github_remote_url(&self) -> String {
         match &self.provider_config {
+            Some(crate::sync::provider::ProviderConfig::GitHttps(git)) => git.remote_url.clone(),
+            #[cfg(feature = "github-api")]
             Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.remote_url.clone(),
             None => String::new(),
         }
     }
 
-    /// 非 github-api feature 下无 GitHub provider，统一返回空字符串。
-    #[cfg(not(feature = "github-api"))]
-    pub fn github_remote_url(&self) -> String {
-        String::new()
-    }
-
-    /// 返回 GitHub branch（若 `provider_config` 为 GitHub 变体）；否则空字符串。
-    #[cfg(feature = "github-api")]
+    /// 返回当前 Provider 的远端分支；无配置时返回 `main`。
     pub fn github_branch(&self) -> String {
         match &self.provider_config {
+            Some(crate::sync::provider::ProviderConfig::GitHttps(git)) => git.branch.clone(),
+            #[cfg(feature = "github-api")]
             Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.branch.clone(),
-            None => String::new(),
+            None => "main".to_string(),
         }
-    }
-
-    /// 非 github-api feature 下无 GitHub provider，统一返回 "main"。
-    #[cfg(not(feature = "github-api"))]
-    pub fn github_branch(&self) -> String {
-        "main".to_string()
     }
 
     /// 设置 GitHub provider_config 字段（测试辅助）。
@@ -495,18 +486,32 @@ pub struct SyncSecrets {
 }
 
 impl SyncSecrets {
+    /// 返回任意 Provider 的密钥（Git HTTPS 或旧 GitHub）。
+    pub fn any_secret(&self) -> Option<String> {
+        self.provider_secrets
+            .as_ref()
+            .and_then(|s| s.any_secret())
+            .filter(|secret| !secret.is_empty())
+            .map(str::to_string)
+    }
+
     /// 返回 GitHub token（若 `provider_secrets` 为 GitHub 变体）；否则 None。
     #[cfg(feature = "github-api")]
     pub fn github_token(&self) -> Option<String> {
-        self.provider_secrets
-            .as_ref()
-            .and_then(|s| s.github_token().map(|t| t.to_string()))
+        self.any_secret()
     }
 
     /// 非 github-api feature 下无 GitHub provider，统一返回 None。
     #[cfg(not(feature = "github-api"))]
     pub fn github_token(&self) -> Option<String> {
         None
+    }
+
+    /// 从任意 Provider 密钥构造 `SyncSecrets`（通用 Git HTTPS 存储）。
+    pub fn from_secret(secret: String) -> Self {
+        SyncSecrets {
+            provider_secrets: Some(crate::sync::provider::ProviderSecrets::GitHttps { secret }),
+        }
     }
 
     /// 从 GitHub token 构造 `SyncSecrets`（github-api feature 下）。

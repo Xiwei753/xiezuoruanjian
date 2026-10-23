@@ -118,7 +118,10 @@ impl super::WriterCore {
             let remote_url_empty = match &config.provider_config {
                 #[cfg(feature = "github-api")]
                 Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.remote_url.is_empty(),
-                _ => true,
+                Some(crate::sync::provider::ProviderConfig::GitHttps(git)) => {
+                    git.remote_url.is_empty()
+                }
+                None => true,
             };
             if remote_url_empty {
                 return Ok(false);
@@ -152,7 +155,7 @@ impl super::WriterCore {
                         )))
                     })?;
                     if !token.is_empty() {
-                        return Ok(crate::sync::SyncSecrets::from_github_token(token));
+                        return Ok(crate::sync::SyncSecrets::from_secret(token));
                     }
                 }
                 Ok(None) => {}
@@ -167,7 +170,7 @@ impl super::WriterCore {
             // 才认为迁移完成；任一步失败保留旧文件并返回错误（Issue #924），
             // 不再出现「set 失败仍删明文」或「悄悄写回明文」的旁路。
             let file_secrets = self.load_sync_secrets_from_file()?;
-            if let Some(token) = file_secrets.github_token() {
+            if let Some(token) = file_secrets.any_secret() {
                 if !token.is_empty() {
                     let legacy_path = self.legacy_secrets_file_path(None);
                     self.migrate_legacy_token_into_secure_storage(
@@ -191,7 +194,7 @@ impl super::WriterCore {
     ) -> crate::error::Result<()> {
         let key = format!("sync_token_global_g{}", generation);
         if let Some(ref storage) = self.secure_storage {
-            if let Some(token) = secrets.github_token() {
+            if let Some(token) = secrets.any_secret() {
                 storage
                     .set_secret(&key, token.as_bytes())
                     .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
@@ -248,7 +251,7 @@ impl super::WriterCore {
                 }
             };
             if let Some(token) = token {
-                return Ok(Some(crate::sync::SyncSecrets::from_github_token(token)));
+                return Ok(Some(crate::sync::SyncSecrets::from_secret(token)));
             }
             // generation 旧明文凭据一次性迁移（成功时序，Issue #924）：
             // 写入成功 → 读回一致 → 删除旧文件；任一步失败保留文件并返回错误。
@@ -259,7 +262,7 @@ impl super::WriterCore {
             let content = std::fs::read_to_string(&secrets_path)?;
             let secrets: crate::sync::SyncSecrets = serde_json::from_str(&content)
                 .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-            match secrets.github_token() {
+            match secrets.any_secret() {
                 Some(token) if !token.is_empty() => {
                     self.migrate_legacy_token_into_secure_storage(
                         storage.as_ref(),
@@ -326,7 +329,7 @@ impl super::WriterCore {
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(legacy
             .token
-            .map(crate::sync::SyncSecrets::from_github_token)
+            .map(crate::sync::SyncSecrets::from_secret)
             .unwrap_or_default())
     }
 
@@ -336,7 +339,7 @@ impl super::WriterCore {
     ) -> crate::error::Result<()> {
         const GLOBAL_KEY: &str = "sync_token_global";
         if let Some(ref storage) = self.secure_storage {
-            if let Some(token) = secrets.github_token() {
+            if let Some(token) = secrets.any_secret() {
                 storage
                     .set_secret(GLOBAL_KEY, token.as_bytes())
                     .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
@@ -508,18 +511,32 @@ fn migrate_legacy_sync_config(
         .and_then(|v| v.as_str())
         .unwrap_or("github_api");
 
-    // 旧 Git 配置不写回 `active_provider = "git"`。
-    // - GitHub HTTPS → 升级为 github_api
-    // - 其他 backend_type（非 github_api）→ 禁用同步，要求用户重新配置
+    // 旧 Git 配置迁移：
+    // - GitHub HTTPS → 保留 GitHub 配置，运行时由 router 先试 Git、失败转 API；
+    // - 其他 HTTPS Git 平台 → 迁移为通用 GitHttps 配置；
+    // - SSH/非 HTTPS 的旧 Git 配置 → 无法走标准 Git HTTPS，禁用同步要求重配。
     let is_git = backend_type == "git";
     let is_github_https = remote_url
         .as_deref()
         .is_some_and(crate::sync::url::is_github_https_remote);
+    let is_https = remote_url.as_deref().is_some_and(|url| {
+        crate::sync::url::sanitize_remote_url(url)
+            .sanitized_url
+            .to_ascii_lowercase()
+            .starts_with("https://")
+    });
     if is_git && is_github_https {
         config.active_provider = "github_api".to_string();
+    } else if is_git && is_https {
+        config.active_provider = "git_https".to_string();
+        config.enabled = true;
+        config.provider_config = Some(crate::sync::provider::ProviderConfig::GitHttps(
+            crate::sync::provider::GitHttpsProviderConfig::from_legacy_fields(
+                remote_url, branch, username,
+            ),
+        ));
+        return config;
     } else if is_git {
-        // 旧 Git 配置不是 GitHub HTTPS → 禁用同步，要求重新配置。
-        // 不写 `"git"` 到 active_provider，避免死配置。
         config.active_provider = "github_api".to_string();
         config.enabled = false;
         config.provider_config = None;
@@ -587,11 +604,10 @@ mod tests {
         assert_eq!(config.active_provider, "github_api");
     }
 
-    /// 旧 Git backend 不是 GitHub HTTPS 时，
-    /// 禁用同步并要求重新配置，不写 `"git"` 到 active_provider。
+    /// 旧非 GitHub Git HTTPS 配置迁移为通用 GitHttps。
     #[test]
     #[cfg(feature = "github-api")]
-    fn migrate_legacy_non_github_git_disables_sync() {
+    fn migrate_legacy_non_github_git_to_git_https() {
         let raw: serde_json::Value = serde_json::json!({
             "enabled": true,
             "backend_type": "git",
@@ -600,12 +616,15 @@ mod tests {
             "branch": "main"
         });
         let config = migrate_legacy_sync_config(&raw, default_sync_config());
-        assert_eq!(config.active_provider, "github_api");
-        assert!(!config.enabled, "non-GitHub Git should disable sync");
-        assert!(
-            config.provider_config.is_none(),
-            "non-GitHub Git should have no provider config"
-        );
+        assert_eq!(config.active_provider, "git_https");
+        assert!(config.enabled);
+        match config.provider_config {
+            Some(crate::sync::provider::ProviderConfig::GitHttps(ref git)) => {
+                assert_eq!(git.remote_url, "https://gitlab.com/test/repo.git");
+                assert_eq!(git.branch, "main");
+            }
+            _ => panic!("expected GitHttps provider config"),
+        }
     }
 
     #[test]

@@ -16,6 +16,8 @@ import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeS
 import { ScreenRole } from '../../../app/navigation/ScreenSemantics'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsSettingsDestinationApi23 } from '../../../app/navigation/impl/api23/HdsSettingsDestinationApi23'
+import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
+import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 
 @ComponentV2
 export struct SettingsScreen {
@@ -50,6 +52,18 @@ export struct SettingsScreen {
     }
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
+    // Issue #988：接续恢复到具体设置分类/设置项，而不是回到设置根页。
+    const continuationPayload: ContinuationPayload = {
+      screen: 'settings',
+      tabIndex: 0
+    }
+    if (this.initialSection.length > 0) {
+      continuationPayload.settingsSection = this.initialSection
+    }
+    if (this.initialSettingKey.length > 0) {
+      continuationPayload.settingKey = this.initialSettingKey
+    }
+    AppContinuationService.getInstance().updateCurrentScreen(continuationPayload)
   }
 
   // Issue #982：设置页顶部搜索调用同一全局搜索，只改变来源上下文。

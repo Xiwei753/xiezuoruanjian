@@ -2,6 +2,36 @@ use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 use crate::sync::cancellation_token::{SyncCancellationToken, SyncProgressSink};
 
+/// GitHub 仓库是否还值得在完整同步失败后改用 API 重试。
+///
+/// 仅当配置指向官方 `github.com` HTTPS 仓库、且本轮尚未判定 Git 不可达时成立。
+/// 认证/权限/证书/non-fast-forward 不会走到 `RetryableNetwork`，因此不会被重试。
+fn full_sync_has_network_failure(result: &FullSyncResultDto) -> bool {
+    result.error_category.as_deref() == Some("network")
+        || result
+            .targets
+            .iter()
+            .any(|target| target.result.error_category.as_deref() == Some("network"))
+}
+
+fn should_retry_full_sync_via_github_api(config: &crate::sync::SyncConfig) -> bool {
+    use crate::sync::provider::{router, ProviderConfig};
+
+    if router::is_git_known_unreachable() {
+        return false;
+    }
+    match config.provider_config.as_ref() {
+        Some(ProviderConfig::GitHttps(git)) => {
+            router::is_github_https_remote(&git.remote_url)
+        }
+        #[cfg(feature = "github-api")]
+        Some(ProviderConfig::GitHub(github)) => {
+            router::is_github_https_remote(&github.remote_url)
+        }
+        _ => false,
+    }
+}
+
 /// 同步 API — 全量同步统一入口。
 ///
 /// 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
@@ -307,8 +337,48 @@ impl WriterCoreApi {
     /// 通用 full-sync 入口不再 `#[cfg(feature = "github-api")]`
     /// 门控。具体 Provider 能否创建由 [`crate::facade::WriterCore::create_sync_provider_for_plan`]
     /// 决定（未启用 github-api feature 时 `github_api` 分支返回 `NotImplemented`）。
-    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
     pub fn perform_full_sync(
+        &self,
+        config: SyncConfigDto,
+        force_sync: bool,
+        cancellation_token: Option<SyncCancellationToken>,
+        progress_sink: Option<SyncProgressSink>,
+        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
+    ) -> ApiResult<FullSyncResultDto> {
+        let result = self.perform_full_sync_once(
+            config.clone(),
+            force_sync,
+            cancellation_token.clone(),
+            progress_sink.clone(),
+            target_progress,
+        );
+
+        // Issue #990：GitHub 仓库在传输中途才暴露网络不可达时，不能沿用旧的
+        // 前置条件和半途结果。标记 Git 不可达后从 Prepare 阶段重新开始一次
+        // 完整同步，由 router 改走 api.github.com。每轮最多重试一次。
+        let retry_via_api = match &result {
+            Err(crate::api::error::WriterError::RetryableNetwork(_)) => true,
+            Ok(output) => full_sync_has_network_failure(output),
+            Err(_) => false,
+        } && {
+            let sync_config: crate::sync::SyncConfig = config.clone().into();
+            should_retry_full_sync_via_github_api(&sync_config)
+        };
+        if retry_via_api {
+            crate::sync::provider::router::mark_git_unreachable();
+            return self.perform_full_sync_once(
+                config,
+                force_sync,
+                cancellation_token,
+                progress_sink,
+                target_progress,
+            );
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
+    fn perform_full_sync_once(
         &self,
         config: SyncConfigDto,
         force_sync: bool,
@@ -589,6 +659,107 @@ impl WriterCoreApi {
         Ok(result)
     }
 
+    /// 附近设备同步 — 用本次会话的隔离镜像作为远端，复用同一套 staging/LWW/commit。
+    ///
+    /// Issue #988：该入口不读取 GitHub token、不修改持久化的 `SyncConfig.provider_config`，
+    /// 也不把对端文件直接覆盖 live 根。ArkTS 先收齐对端对象写进 `peer_root`；
+    /// 返回的 `mutations` 是 Core 写回镜像、需要发回对端的变更。
+    pub fn perform_peer_sync(
+        &self,
+        peer_root: String,
+        force_sync: bool,
+    ) -> ApiResult<PeerSyncResultDto> {
+        use base64::Engine as _;
+
+        let provider = crate::sync::provider::peer::PeerProvider::new(peer_root)
+            .map_err(|err| crate::api::error::WriterError::Other(format!("{err}")))?;
+
+        // 策略沿用当前同步配置，但连接方式是本次附近设备会话，不写回 provider_config。
+        let mut sync_config: crate::sync::SyncConfig = self.load_sync_config()?.into();
+        sync_config.enabled = true;
+
+        let remote_catalog_snapshot =
+            match crate::sync::target_lifecycle::discover_legacy_remote_catalog(&provider) {
+                Ok(snapshot) => snapshot,
+                Err(err) => return Err(crate::api::error::WriterError::from(err)),
+            };
+        let remote_catalog_snapshot =
+            if remote_catalog_snapshot.version.as_str() == "__nonexistent__" {
+                crate::sync::target_lifecycle::persist_bootstrap_catalog(
+                    &provider,
+                    &remote_catalog_snapshot.catalog,
+                    &remote_catalog_snapshot.version,
+                )
+                .map_err(crate::api::error::WriterError::from)?
+            } else {
+                remote_catalog_snapshot
+            };
+        let remote_app_data_groups =
+            crate::sync::app_data_group_catalog::discover_remote_app_data_groups(&provider)
+                .map_err(crate::api::error::WriterError::from)?;
+
+        let (app_data_root, projects_root) = {
+            let core = self.core_read();
+            (core.app_data_root.clone(), core.projects_root.clone())
+        };
+        let mut plan = crate::facade::WriterCore::build_full_sync_plan_unlocked(
+            &app_data_root,
+            &projects_root,
+            &sync_config,
+            force_sync,
+            &remote_catalog_snapshot.catalog,
+            &remote_app_data_groups,
+            remote_catalog_snapshot.clone(),
+        )
+        .map_err(crate::api::error::WriterError::from)?;
+
+        self.core_write()
+            .flush_all_starmap_stores()
+            .map_err(crate::api::error::WriterError::from)?;
+        let staging_runs = crate::sync::staging::prepare_staging_runs(&mut plan)
+            .map_err(crate::api::error::WriterError::from)?;
+
+        let result = self.perform_full_sync_with_provider_impl(
+            &provider,
+            &plan,
+            staging_runs,
+            None,
+            None,
+            None,
+            false,
+        )?;
+
+        let mutations = provider
+            .drain_mutations()
+            .into_iter()
+            .map(|mutation| match mutation {
+                crate::sync::provider::peer::PeerMutation::Put {
+                    path,
+                    content,
+                    version,
+                } => PeerSyncMutationDto {
+                    kind: "put".to_string(),
+                    path,
+                    content_base64: Some(base64::engine::general_purpose::STANDARD.encode(content)),
+                    version: Some(version),
+                },
+                crate::sync::provider::peer::PeerMutation::Delete { path } => PeerSyncMutationDto {
+                    kind: "delete".to_string(),
+                    path,
+                    content_base64: None,
+                    version: None,
+                },
+            })
+            .collect();
+
+        self.core_write().invalidate_path_dependency_index();
+
+        Ok(PeerSyncResultDto {
+            sync: result.into(),
+            mutations,
+        })
+    }
+
     /// 全量同步编排尾部 — 逐 target `Transfer → Commit → progress`，整轮结束聚合收口。
     ///
     /// Issue #762 评论 5828791004：不能同时存在"Transfer 提前写 live"和
@@ -614,6 +785,28 @@ impl WriterCoreApi {
         cancellation_token: Option<SyncCancellationToken>,
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
+    ) -> ApiResult<FullSyncResultDto> {
+        self.perform_full_sync_with_provider_impl(
+            provider,
+            plan,
+            staging_runs,
+            cancellation_token,
+            progress_sink,
+            target_progress,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
+    fn perform_full_sync_with_provider_impl(
+        &self,
+        provider: &dyn crate::sync::provider::SyncProvider,
+        plan: &crate::sync::full_sync::FullSyncPlan,
+        staging_runs: Vec<crate::sync::staging::StagingRun>,
+        cancellation_token: Option<SyncCancellationToken>,
+        progress_sink: Option<SyncProgressSink>,
+        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
+        persist_global_state: bool,
     ) -> ApiResult<FullSyncResultDto> {
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
@@ -761,7 +954,11 @@ impl WriterCoreApi {
         // Issue #779 评论 5853718466：传 None — GC 失败不影响同步终态。
         let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();
-            core.finalize_full_sync(all_targets, None)
+            if persist_global_state {
+                core.finalize_full_sync(all_targets, None)
+            } else {
+                core.finalize_full_sync_without_global_state(all_targets, None)
+            }
         };
 
         // 合并 per-target committed_paths 与 finalize 阶段返回的 committed_paths。
@@ -1232,10 +1429,8 @@ impl WriterCoreApi {
             .provider_config
             .as_ref()
             .map(|pc| match pc {
-                #[cfg(feature = "github-api")]
+                crate::api::ProviderConfigDto::GitHttps { remote_url, .. } => remote_url.clone(),
                 crate::api::ProviderConfigDto::GitHub { remote_url, .. } => remote_url.clone(),
-                #[cfg(not(feature = "github-api"))]
-                _ => String::new(),
             })
             .unwrap_or_default();
         // 从 provider_secrets 读 token。
@@ -1243,10 +1438,8 @@ impl WriterCoreApi {
             .provider_secrets
             .as_ref()
             .map(|ps| match ps {
-                #[cfg(feature = "github-api")]
+                crate::api::ProviderSecretsDto::GitHttps { secret } => secret.clone(),
                 crate::api::ProviderSecretsDto::GitHub { token } => token.clone(),
-                #[cfg(not(feature = "github-api"))]
-                _ => String::new(),
             })
             .unwrap_or_default();
 

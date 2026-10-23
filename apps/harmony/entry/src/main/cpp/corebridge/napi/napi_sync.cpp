@@ -15,14 +15,15 @@
 struct SyncAsyncData {
     napi_async_work work;
     napi_deferred deferred;
-    char* result_json;  // writer_core_* 返回的 JSON C string，在工作线程中赋值
-    // 带参操作（loadSyncConflictPreview / resolveSyncConflict）在 JS 线程复制出来的
-    // 字符串参数；无参操作恒为 nullptr。所有权：SyncCompleteCb 或提交失败路径
-    // 统一 delete[]（delete[] nullptr 是 no-op）。
-    char* arg_target_kind;
-    char* arg_project_id;
-    char* arg_path;
-    char* arg_decision;
+    char* result_json = nullptr;  // writer_core_* 返回的 JSON C string，在工作线程中赋值
+    // 带参操作（loadSyncConflictPreview / resolveSyncConflict / performPeerSync）在
+    // JS 线程复制出来的字符串参数；无参操作为 nullptr。所有权：SyncCompleteCb 或
+    // 提交失败路径统一 delete[]（delete[] nullptr 是 no-op）。
+    char* arg_target_kind = nullptr;
+    char* arg_project_id = nullptr;
+    char* arg_path = nullptr;
+    char* arg_decision = nullptr;
+    char* arg_peer_root = nullptr;
 };
 
 // SyncAsyncArgsFree: 释放带参异步操作持有的字符串参数，避免创建/排队失败路径泄漏。
@@ -31,10 +32,12 @@ static void SyncAsyncArgsFree(SyncAsyncData* asyncData) {
     delete[] asyncData->arg_project_id;
     delete[] asyncData->arg_path;
     delete[] asyncData->arg_decision;
+    delete[] asyncData->arg_peer_root;
     asyncData->arg_target_kind = nullptr;
     asyncData->arg_project_id = nullptr;
     asyncData->arg_path = nullptr;
     asyncData->arg_decision = nullptr;
+    asyncData->arg_peer_root = nullptr;
 }
 
 // SyncCompleteCb: 通用 complete callback — 把 result_json 包装为 NAPI string，
@@ -81,6 +84,12 @@ static void SyncCompleteCb(napi_env env, napi_status status, void* data) {
 static void PerformSyncExecuteCb(napi_env env, void* data) {
     SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
     asyncData->result_json = writer_core_perform_full_sync();
+}
+
+// PeerSyncExecuteCb: 工作线程上在隔离的对端快照目录上执行 Core 对象同步。
+static void PeerSyncExecuteCb(napi_env env, void* data) {
+    SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
+    asyncData->result_json = writer_core_perform_peer_sync(asyncData->arg_peer_root);
 }
 
 // SyncDiagnosticsExecuteCb: 工作线程上执行 writer_core_full_sync_diagnostics()
@@ -448,6 +457,19 @@ static napi_value NativeResolveSyncConflict(napi_env env, napi_callback_info inf
     return SyncAsyncSubmit(env, "NativeResolveSyncConflict", ResolveSyncConflictExecuteCb, asyncData);
 }
 
+// NativePerformPeerSync(peerRoot)
+//   peerRoot 是平台层预先写入对端对象快照的隔离目录。Core 工作线程执行对象合并，
+//   不触摸云端凭据，也不直接覆盖作品目录。
+static napi_value NativePerformPeerSync(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    SyncAsyncData* asyncData = new SyncAsyncData();
+    asyncData->arg_peer_root = SyncAsyncCopyStringArg(env, args, argc, 0);
+    return SyncAsyncSubmit(env, "NativePerformPeerSync", PeerSyncExecuteCb, asyncData);
+}
+
 // ── Sync property descriptors ──
 
 napi_property_descriptor* getSyncDescriptors(size_t* count) {
@@ -459,6 +481,7 @@ napi_property_descriptor* getSyncDescriptors(size_t* count) {
         {"nativeSyncDryRun", nullptr, NativeSyncDryRun, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSyncDiagnostics", nullptr, NativeSyncDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativePerformSync", nullptr, NativePerformSync, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativePerformPeerSync", nullptr, NativePerformPeerSync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeLoadAppSyncState", nullptr, NativeLoadAppSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSaveAppSyncState", nullptr, NativeSaveAppSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeLoadFullSyncState", nullptr, NativeLoadFullSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},

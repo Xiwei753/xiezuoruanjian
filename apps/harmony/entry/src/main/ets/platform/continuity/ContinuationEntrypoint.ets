@@ -2,7 +2,9 @@ import { AbilityConstant, Want, wantConstant } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
 import { AppContinuationService } from './AppContinuationService'
 import { ContinuationPayload } from './ContinuationPayload'
+import { ContinuationSnapshotStore } from './ContinuationSnapshotStore'
 import { NavigationTransactionCoordinator } from '../../app/navigation/NavigationTransactionCoordinator'
+import { NearbyDeviceSyncCoordinator } from '../peer/NearbyDeviceSyncCoordinator'
 
 // ContinuationEntrypoint — 应用接续（流转）的序列化/恢复入口。
 // 从 EntryAbility 提取，使 EntryAbility 仅保留 Ability 生命周期调用。
@@ -28,10 +30,25 @@ export class ContinuationEntrypoint {
     wantParam[wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY] = false as Object
     const payload: ContinuationPayload | null = this.continuationService.getCurrentPayload()
     if (payload !== null) {
+      // Issue #988：未保存正文必须在 onContinue 同步返回前发起交付，但绝不能在这里
+      // await 设备/GitHub 传输。目标设备按 snapshotHash 校验后才恢复选区/视口。
+      this.publishSnapshotBestEffort(payload)
       wantParam['continuationData'] = this.continuationService.serializeForWant(payload)
       return AbilityConstant.OnContinueResult.AGREE
     }
     return AbilityConstant.OnContinueResult.REJECT
+  }
+
+  private publishSnapshotBestEffort(payload: ContinuationPayload): void {
+    if (payload.screen !== 'writing' || payload.snapshotId === undefined) {
+      return
+    }
+    const content: string | null = ContinuationSnapshotStore.getInstance().get(payload.snapshotId)
+    if (content === null) {
+      return
+    }
+    NearbyDeviceSyncCoordinator.getInstance().publishContinuationSnapshot(
+      payload.snapshotId, content)
   }
 
   // 目标设备从 want 恢复接续 payload。

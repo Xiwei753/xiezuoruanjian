@@ -10,8 +10,9 @@ workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["github-api"]
+default = ["github-api", "git-https"]
 github-api = ["writer_core/github-api", "dep:reqwest"]
+git-https = ["writer_core/git-https"]
 
 [dependencies]
 writer_core = { path = "../../../core/writer_core", features = ["harmony-ffi"] }

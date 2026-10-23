@@ -46,6 +46,9 @@ export interface WritingRouteParams {
   cursor?: number                   // UTF-16 code unit offset
   viewport?: EditorViewportState    // UI 滚动位置（强类型，不写 Core）
   contentHash?: string              // 跨设备稳定内容身份（不用 revision）
+  // Issue #988：源设备冻结的未保存正文快照。目标设备校验 snapshotHash 后才套用选区/视口。
+  snapshotId?: string
+  snapshotHash?: string
   // 全局搜索命中（Issue #982）。searchByteStart/searchByteEnd 是 Core 原文 UTF-8 byte 偏移；
   // searchField='body' 时 WritingScreen 在正文中转 UTF-16 后选中并滚动到该范围。
   searchByteStart?: number
@@ -61,12 +64,27 @@ export interface StarMapRouteParams {
   // 搜索结果精确落到节点/边/嵌入/链接；页面加载图后解析几何并选中、居中。
   focusKind?: StarMapFocusKind
   focusId?: string
+  // Issue #988：接续还原子图路径、相机与选中节点。
+  parentPath?: string
+  focusScenePath?: string
+  selectedNodeId?: string
+  selectedKind?: string
+  cameraScale?: number
+  cameraOffsetX?: number
+  cameraOffsetY?: number
 }
 
 // 全局搜索路由参数：打开搜索页时携带来源上下文，不改变底层页面状态。
 export interface SearchRouteParams {
   context: SearchContext
   initialQuery?: string
+}
+
+// 统计页接续：时段、展开位置和码字日历年份都是稳定页面状态。
+export interface StatsRouteParams {
+  period?: string
+  expandedPanel?: string
+  heatmapYear?: number
 }
 
 // Settings 页是应用级页面（Issue #784 评论 5856805657）。

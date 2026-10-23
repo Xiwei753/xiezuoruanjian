@@ -53,7 +53,7 @@
     <string name="pref_category_sync_credentials">凭据与仓库</string>
     <string name="pref_category_sync_interval">同步间隔</string>
     <string name="pref_category_sync_actions">同步操作</string>
-    <string name="sync_github_api_hint">同步设置、星图、主题与全部作品。目前仅支持 GitHub API 上传同步。</string>
+    <string name="sync_github_api_hint">同步设置、星图、主题与全部作品。支持标准 Git HTTPS（GitLab、Gitee、Gitea、Forgejo、Bitbucket 与自建服务器）；GitHub 无法通过 Git 连接时自动改用 GitHub API。</string>
     <string name="pref_category_app_sync">应用数据同步</string>
     <string name="pref_category_ai">AI</string>
 
@@ -120,9 +120,11 @@
     <string name="cd_sync_manual">同步</string>
     <string name="cd_search">搜索</string>
     <string name="cd_search_dev">搜索功能开发中</string>
-    <string name="pref_github_repo">GitHub 仓库地址 (HTTPS)</string>
+    <string name="pref_github_repo">仓库 HTTPS 地址</string>
     <string name="pref_branch">分支 (默认 main)</string>
-    <string name="pref_https_token">HTTPS Token (PAT)</string>
+    <string name="pref_username">用户名</string>
+    <string name="pref_advanced_settings">高级设置</string>
+    <string name="pref_https_token">密码或访问令牌（可选）</string>
     <string name="pref_auto_sync">自动同步</string>
     <string name="pref_sync_interval">同步间隔 (秒)</string>
     <string name="btn_dry_run">检查同步计划</string>

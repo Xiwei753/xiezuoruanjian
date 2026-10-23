@@ -147,6 +147,9 @@ char*  writer_core_save_sync_secrets(const char* secrets_json);
 char*  writer_core_full_sync_dry_run(void);
 char*  writer_core_full_sync_diagnostics(void);
 char*  writer_core_perform_full_sync(void);
+// 附近设备同步：peer_root 为平台层准备的隔离会话目录。不读取云端凭据，
+// 复用 Core 的对象暂存/LWW 合并/提交，返回同步结果及需回传给对端的变更。
+char*  writer_core_perform_peer_sync(const char* peer_root);
 char*  writer_core_load_app_sync_state(void);
 char*  writer_core_save_app_sync_state(const char* state_json);
 // writer_core_load_full_sync_state: 读取 full_state.local.json（最近一次全量同步的总体结果）。
