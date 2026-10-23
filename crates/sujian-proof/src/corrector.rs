@@ -4,21 +4,24 @@
 
 use std::sync::Arc;
 
-use crate::candidates::CandidateGenerator;
+use crate::candidates::{CandidateGenerator, CorrectionCandidate};
 use crate::confusion::ConfusionMatcher;
-use crate::detector::{exact_name_occurrences, DetectionKind, Detector};
+use crate::decision::{CorrectionDecision, DecisionGate};
+use crate::detector::{exact_name_occurrences, DetectionEvidence, DetectionKind, Detector};
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageScorer;
 use crate::rules::RuleSet;
 use crate::segment::{Segmenter, TextSegment};
 use crate::{CorrectionConfig, CorrectionDiagnostic, CorrectionError};
 
-const PYCORRECTOR_PPL_THRESHOLD: f64 = 57.0;
+/// Characters of surrounding sentence scored on each side of a candidate.
+/// Comparison happens on the same local window for the original and every
+/// replacement, so a global sentence length cannot dominate the decision.
+const LOCAL_CONTEXT_CHARS: usize = 6;
 
-// Behavioral port of pycorrector Corrector.correct/get_lm_correct_item
-// (Apache-2.0). The original stays in every candidate set; KenLM perplexity
-// ranks candidates within pycorrector's tolerance, and confidence remains unset
-// because model scores are not calibrated probabilities.
+// The original text is always a competing candidate. KenLM scores rank
+// alternatives; they are not calibrated error probabilities. Only the
+// explicit decision gate may turn a candidate into a suggestion.
 
 pub(crate) struct TraditionalCorrector {
     scorer: Option<Arc<dyn LanguageScorer>>,
@@ -28,6 +31,20 @@ pub(crate) struct TraditionalCorrector {
     segmenter: Segmenter,
     detector: Detector,
     confusion_matcher: ConfusionMatcher,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LocalScore {
+    log10_score: f64,
+    events: usize,
+}
+
+impl LocalScore {
+    /// Per-scored-event log10 score. Length-changing replacements are compared
+    /// with the same normalization instead of favoring shorter text.
+    fn normalized(self) -> f64 {
+        self.log10_score / self.events.max(1) as f64
+    }
 }
 
 impl TraditionalCorrector {
@@ -122,7 +139,8 @@ impl TraditionalCorrector {
                     continue;
                 }
                 let candidate_generator = CandidateGenerator::new();
-                let candidates = candidate_generator.generate(&suspect.original, &self.lexicon);
+                let candidates =
+                    candidate_generator.generate(&suspect.original, &self.lexicon, &self.segmenter);
                 if candidates.is_empty() {
                     continue;
                 }
@@ -137,67 +155,57 @@ impl TraditionalCorrector {
                 let segment_text = &text[segment.start_byte..segment.end_byte];
                 let relative_start = suspect.start_byte - segment.start_byte;
                 let relative_end = suspect.end_byte - segment.start_byte;
-                let before = &segment_text[..relative_start];
-                let after = &segment_text[relative_end..];
 
-                // pycorrector keeps the original in the PPL candidate set. A model
-                // score is a ranking signal, not confidence: only flag an error
-                // when the source falls outside the upstream-compatible tolerance.
-                let original_ppl = self.perplexity_text(segment_text)?;
-                let mut ranked = Vec::with_capacity(candidates.len() + 1);
-                ranked.push((None, original_ppl));
+                let original_score = self.local_context_score(
+                    segment_text,
+                    relative_start,
+                    relative_end,
+                    &suspect.original,
+                )?;
+                let mut accepted = Vec::<(f64, CorrectionCandidate)>::new();
                 for candidate in candidates {
-                    let mut alternative =
-                        String::with_capacity(before.len() + candidate.len() + after.len());
-                    alternative.push_str(before);
-                    alternative.push_str(&candidate);
-                    alternative.push_str(after);
-                    let perplexity = self.perplexity_text(&alternative)?;
-                    ranked.push((Some(candidate), perplexity));
+                    let candidate_score = self.local_context_score(
+                        segment_text,
+                        relative_start,
+                        relative_end,
+                        &candidate.text,
+                    )?;
+                    if DecisionGate::evaluate(
+                        &suspect.original,
+                        &candidate,
+                        &suspect.evidence.segmentation,
+                        &suspect.evidence,
+                        original_score.normalized(),
+                        candidate_score.normalized(),
+                    ) == CorrectionDecision::Accept
+                    {
+                        accepted.push((
+                            candidate_score.normalized() - original_score.normalized(),
+                            candidate,
+                        ));
+                    }
                 }
-                ranked.sort_by(|left, right| {
-                    left.1
-                        .total_cmp(&right.1)
-                        .then_with(|| left.0.cmp(&right.0))
+                accepted.sort_by(|(left_gain, left), (right_gain, right)| {
+                    right_gain
+                        .total_cmp(left_gain)
+                        .then_with(|| left.text.cmp(&right.text))
                 });
-                ranked.truncate(self.config.max_candidates_per_error.saturating_add(1));
-
-                let Some((_, best_ppl)) = ranked.first() else {
+                let Some((_, chosen)) = accepted.into_iter().next() else {
                     continue;
                 };
-                let acceptable_limit = best_ppl + PYCORRECTOR_PPL_THRESHOLD;
-                let original_acceptable = original_ppl <= acceptable_limit;
 
-                // If the source remains in pycorrector's acceptable set, preserve
-                // it without emitting statistically generated alternatives. LM
-                // rankings are not a calibrated reason to warn on valid prose.
-                if original_acceptable {
-                    continue;
-                }
-
-                let source_kind = source.to_owned();
-                let rule_id = match suspect.kind {
-                    DetectionKind::OutOfVocabularyWord => "detector.oov",
-                    DetectionKind::Character => "detector.char_mad",
-                    _ => "detector.candidate",
-                };
-                let chosen = ranked.into_iter().find_map(|(replacement, perplexity)| {
-                    (perplexity <= acceptable_limit)
-                        .then_some(replacement)
-                        .flatten()
+                diagnostics.push(CorrectionDiagnostic {
+                    start_byte: suspect.start_byte,
+                    end_byte: suspect.end_byte,
+                    original: suspect.original,
+                    replacement: chosen.text,
+                    source: source.to_owned(),
+                    rule_id: statistical_rule_id(suspect.kind, &suspect.evidence).to_owned(),
+                    // Statistical candidates are never certain mistakes. The
+                    // fixed author-confirmed paths above remain `error`.
+                    severity: "warning".to_owned(),
+                    confidence: None,
                 });
-                if let Some(replacement) = chosen {
-                    diagnostics.push(CorrectionDiagnostic {
-                        start_byte: suspect.start_byte,
-                        end_byte: suspect.end_byte,
-                        original: suspect.original,
-                        replacement,
-                        source: source_kind,
-                        rule_id: rule_id.to_owned(),
-                        severity: "error".to_owned(),
-                        confidence: None,
-                    });
-                }
             }
 
             if !self.config.include_weak_hints {
@@ -221,7 +229,7 @@ impl TraditionalCorrector {
         let protected_ranges = self.lexicon.protected_word_ranges(text);
         diagnostics.retain(|diagnostic| {
             if diagnostic.rule_id == "proper.confirmed_misspelling" {
-                return !self.lexicon.protected_entry_wraps_range(
+                return !self.lexicon.is_work_protected_span(
                     text,
                     diagnostic.start_byte,
                     diagnostic.end_byte,
@@ -231,15 +239,37 @@ impl TraditionalCorrector {
                 .iter()
                 .any(|(start, end)| diagnostic.start_byte < *end && *start < diagnostic.end_byte)
         });
-        Ok(filter_diagnostics(text, diagnostics)?)
+        filter_diagnostics(text, diagnostics)
     }
 
-    fn perplexity_text(&self, text: &str) -> Result<f64, CorrectionError> {
-        let tokens = self.segmenter.char_tokens(text);
-        self.scorer
+    /// Score `replacement` in the same local sentence window as the original.
+    /// `score_tokens()` keeps the sentence boundary convention; both sides are
+    /// normalized per scored event so a length-changing candidate is compared
+    /// on equal terms.
+    fn local_context_score(
+        &self,
+        segment_text: &str,
+        start: usize,
+        end: usize,
+        replacement: &str,
+    ) -> Result<LocalScore, CorrectionError> {
+        let context_start = context_start(segment_text, start, LOCAL_CONTEXT_CHARS);
+        let context_end = context_end(segment_text, end, LOCAL_CONTEXT_CHARS);
+        let mut local = String::with_capacity(context_end - context_start + replacement.len());
+        local.push_str(&segment_text[context_start..start]);
+        local.push_str(replacement);
+        local.push_str(&segment_text[end..context_end]);
+
+        let tokens = self.segmenter.char_tokens(&local);
+        let log10_score = self
+            .scorer
             .as_ref()
             .ok_or(CorrectionError::ModelUnavailable)?
-            .perplexity(&tokens)
+            .score_tokens(&tokens)?;
+        Ok(LocalScore {
+            log10_score,
+            events: tokens.len() + 1,
+        })
     }
 
     fn confirmed_misspelling_diagnostics(&self, text: &str) -> Vec<CorrectionDiagnostic> {
@@ -303,6 +333,34 @@ impl TraditionalCorrector {
         }
         diagnostics
     }
+}
+
+fn statistical_rule_id(kind: DetectionKind, evidence: &DetectionEvidence) -> &'static str {
+    match kind {
+        DetectionKind::OutOfVocabularyWord if !evidence.char_outliers.is_empty() => {
+            "detector.candidate"
+        }
+        DetectionKind::OutOfVocabularyWord => "detector.oov",
+        DetectionKind::Character => "detector.char_mad",
+        DetectionKind::ConfusionWord | DetectionKind::ConfirmedEntitySpelling => {
+            "detector.candidate"
+        }
+    }
+}
+
+fn context_start(text: &str, end: usize, max_chars: usize) -> usize {
+    text[..end]
+        .char_indices()
+        .rev()
+        .nth(max_chars.saturating_sub(1))
+        .map_or(0, |(byte, _)| byte)
+}
+
+fn context_end(text: &str, start: usize, max_chars: usize) -> usize {
+    text[start..]
+        .char_indices()
+        .nth(max_chars)
+        .map_or(text.len(), |(byte, _)| start + byte)
 }
 
 fn segment_for_span(
@@ -515,9 +573,7 @@ mod tests {
             corrector(lexicon.clone())
                 .suggest("甲乙丙丁说道。")
                 .expect("scan"),
-            rules_only(lexicon)
-                .suggest("甲乙丙丁说道。")
-                .expect("scan"),
+            rules_only(lexicon).suggest("甲乙丙丁说道。").expect("scan"),
         ] {
             assert!(diagnostics.iter().any(|diagnostic| {
                 diagnostic.original == "甲乙丙丁"
@@ -538,9 +594,7 @@ mod tests {
             corrector(lexicon.clone())
                 .suggest("甲乙丁说道。")
                 .expect("scan"),
-            rules_only(lexicon)
-                .suggest("甲乙丁说道。")
-                .expect("scan"),
+            rules_only(lexicon).suggest("甲乙丁说道。").expect("scan"),
         ] {
             let chosen = diagnostics
                 .iter()

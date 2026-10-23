@@ -409,15 +409,28 @@ impl Lexicon {
     }
 
     /// Whether one complete protected entry fully wraps `start..end`.
-    pub(crate) fn protected_entry_wraps_range(
-        &self,
-        text: &str,
-        start: usize,
-        end: usize,
-    ) -> bool {
+    pub(crate) fn protected_entry_wraps_range(&self, text: &str, start: usize, end: usize) -> bool {
         self.protected_word_ranges_unmerged(text)
             .into_iter()
             .any(|(entry_start, entry_end)| entry_start <= start && end <= entry_end)
+    }
+
+    /// Whether the project dictionary protects this complete UTF-8 byte span.
+    /// This is author-owned evidence; it is deliberately separate from general
+    /// dictionary membership.
+    pub(crate) fn is_work_protected_span(&self, text: &str, start: usize, end: usize) -> bool {
+        self.protected_entry_wraps_range(text, start, end)
+    }
+
+    /// Whether the span is covered by a general dictionary entry (THUOCL,
+    /// person/place/proper corpora, or a user-supplied word-frequency file).
+    /// This says the form is a known word, not that the source is correct.
+    pub(crate) fn is_general_known_word(&self, word: &str) -> bool {
+        self.word_freq.contains_key(word)
+            || self
+                .base
+                .as_ref()
+                .is_some_and(|base| base.word_freq.contains_key(word))
     }
 
     fn protected_word_ranges_in(

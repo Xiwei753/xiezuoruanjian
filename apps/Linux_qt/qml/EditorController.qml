@@ -724,9 +724,9 @@ QtObject {
             "proper.person_check": qsTr("与作品词典中的人名相近，请核对。"),
             "proper.place_check": qsTr("与作品词典中的地名相近，请核对。"),
             "detector.exact": qsTr("词典检测给出了明确替换。"),
-            "detector.oov": qsTr("该词未收录在作品词典中，替换后的句子语言模型评分更高。"),
-            "detector.char_mad": qsTr("字符组合偏离语言模型习惯，替换后的句子评分更高。"),
-            "detector.candidate": qsTr("替换后的句子语言模型评分更高。"),
+            "detector.oov": qsTr("该片段未被通用分词词典收录；只有同时存在可解释的字符或词形依据时才提示。"),
+            "detector.char_mad": qsTr("该字在当前上下文中的语言模型得分异常，且存在可解释的替换候选。"),
+            "detector.candidate": qsTr("词典词形与上下文字符证据共同支持该替换，请结合语境核对。"),
             "punctuation.repeated": qsTr("发现连续重复标点；这也可能是有意的表达。"),
             "character.repeated": qsTr("发现连续重复汉字；请结合语境确认。")
         };

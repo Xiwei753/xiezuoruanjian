@@ -11,6 +11,7 @@ pub mod lm;
 
 mod candidates;
 mod corrector;
+mod decision;
 mod detector;
 mod lexicon;
 mod proper_names;
