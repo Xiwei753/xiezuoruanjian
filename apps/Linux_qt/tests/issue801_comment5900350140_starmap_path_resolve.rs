@@ -414,18 +414,61 @@ fn leaving_starmap_commits_pending_node_edit_first() {
     );
 
     let main = strip_line_comments(&read_src(MAIN));
+    let flush = function_window(&main, "function flushStarmapBeforeRouteChange()", 900);
+    assert!(
+        flush.contains("appController.inStarmap")
+            && flush.contains("starmapWorkspaceLoader.item")
+            && flush.contains("workspace.flushPendingNodeEdit()")
+            && flush.contains("return false"),
+        "窗口级离开星图入口必须统一委托 Workspace 保存，失败返回 false，实际窗口:\n{flush}"
+    );
+
     let search = function_window(&main, "function navigateToSearchResult(result)", 2600);
     assert!(
-        search.contains("appController.inStarmap")
-            && search.contains("starmapWorkspace.flushPendingNodeEdit()")
+        search.contains("window.flushStarmapBeforeRouteChange()")
             && search.contains("globalSearchOverlay.showMessage("),
-        "从星图搜索跳章节/根图前必须走 Workspace 保存入口并提示失败，实际窗口:\n{search}"
+        "搜索跳章节/根图前必须走窗口级保存入口并提示失败，实际窗口:\n{search}"
     );
     assert!(
         search
-            .find("starmapWorkspace.flushPendingNodeEdit()")
+            .find("window.flushStarmapBeforeRouteChange()")
             .unwrap()
             < search.find("appController.openWriting(").unwrap(),
-        "保存未确认前不得切换工作区，实际窗口:\n{search}"
+        "保存未确认前不得通过搜索切换工作区，实际窗口:\n{search}"
+    );
+
+    let switchWorkspace = function_window(&main, "onSwitchWorkspaceRequested:", 900);
+    assert!(
+        switchWorkspace.contains("window.flushStarmapBeforeRouteChange()")
+            && switchWorkspace.contains("appController.switchWorkspace()"),
+        "设置页切换工作区必须先提交星图节点编辑，实际窗口:\n{switchWorkspace}"
+    );
+    assert!(
+        switchWorkspace
+            .find("window.flushStarmapBeforeRouteChange()")
+            .unwrap()
+            < switchWorkspace
+                .find("appController.switchWorkspace()")
+                .unwrap(),
+        "保存失败时不得切换工作区，实际窗口:\n{switchWorkspace}"
+    );
+
+    let conflict = function_window(
+        &main,
+        "function openConflictInProject(targetKind, projectId, path)",
+        1200,
+    );
+    assert!(
+        conflict.contains("window.flushStarmapBeforeRouteChange()")
+            && conflict.contains("appController.openWriting(")
+            && conflict.contains("pendingConflictProjectId"),
+        "从星图打开同步冲突前必须先提交节点编辑，实际窗口:\n{conflict}"
+    );
+    assert!(
+        conflict
+            .find("window.flushStarmapBeforeRouteChange()")
+            .unwrap()
+            < conflict.find("pendingConflictProjectId").unwrap(),
+        "保存失败时不得写 pendingConflict 或打开作品，实际窗口:\n{conflict}"
     );
 }

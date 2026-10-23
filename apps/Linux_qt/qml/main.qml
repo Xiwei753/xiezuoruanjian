@@ -819,6 +819,21 @@ Kirigami.ApplicationWindow {
         window.debugLog("search", "starmap_reveal_unavailable", String(routeKey || ""))
     }
 
+    // Issue #984：窗口级统一离开星图入口。设置切工作区、同步冲突打开作品、
+    // 全局搜索跳转等壳层动作都会让 starmapWorkspaceLoader 失活，必须先提交
+    // 活动 Scene 的唯一节点编辑会话。失败时保留原图与草稿，由 Canvas 显示错误。
+    function flushStarmapBeforeRouteChange() {
+        if (!appController.inStarmap) return true
+        var workspace = starmapWorkspaceLoader.item
+        if (!workspace || typeof workspace.flushPendingNodeEdit !== "function")
+            return true
+        try {
+            return workspace.flushPendingNodeEdit() === true
+        } catch (e) {
+            return false
+        }
+    }
+
     function navigateToSearchResult(result) {
         if (!result) return false
         if (!window.searchTargetExists(result)) {
@@ -829,20 +844,9 @@ Kirigami.ApplicationWindow {
         var target = result.target || ({})
         // Issue #984：从星图跳到章节、根图或工作区前，先提交当前节点编辑。
         // 失败时保留星图与编辑器，搜索浮层不关闭，也不能让 Loader 失活。
-        if (appController.inStarmap) {
-            var starmapWorkspace = starmapWorkspaceLoader.item
-            var starmapSaved = true
-            if (starmapWorkspace && typeof starmapWorkspace.flushPendingNodeEdit === "function") {
-                try {
-                    starmapSaved = starmapWorkspace.flushPendingNodeEdit()
-                } catch (e) {
-                    starmapSaved = false
-                }
-            }
-            if (!starmapSaved) {
-                globalSearchOverlay.showMessage(qsTr("节点正文尚未保存，无法离开星图"))
-                return false
-            }
+        if (!window.flushStarmapBeforeRouteChange()) {
+            globalSearchOverlay.showMessage(qsTr("节点正文尚未保存，无法离开星图"))
+            return false
         }
         // 离开或定位当前章节前先保存。保存失败时不跳转，搜索浮层保持打开。
         if (appController.inWriting) {
@@ -924,6 +928,9 @@ Kirigami.ApplicationWindow {
         // Issue #902 第二十轮：App 冲突在 SyncPage 内部处理，不走 openWriting。
         if (targetKind === "app") return
         if (!projectId) return  // project target 必须有 projectId
+        // Issue #984：从星图打开冲突前必须先提交节点编辑；失败时不要关设置，
+        // 也不要写 pendingConflict，避免污染下一次打开状态。
+        if (!window.flushStarmapBeforeRouteChange()) return
         // 关闭设置页，让写作工作区可见。
         if (settingsDialogLoader.item) settingsDialogLoader.item.close()
         // Issue #770 评论 5842877986: 先写 pending（projectId + path）再切作品，
@@ -1764,6 +1771,8 @@ Kirigami.ApplicationWindow {
             }
             // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
             onSwitchWorkspaceRequested: {
+                // Issue #984：切换工作区会让星图 Loader 失活，先统一提交节点编辑。
+                if (!window.flushStarmapBeforeRouteChange()) return
                 var dialog = settingsDialogLoader.item
                 if (dialog) {
                     dialog.flushSave()
