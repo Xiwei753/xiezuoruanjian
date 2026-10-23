@@ -14,6 +14,19 @@ fn full_sync_has_network_failure(result: &FullSyncResultDto) -> bool {
             .any(|target| target.result.error_category.as_deref() == Some("network"))
 }
 
+/// 远端版本在规划后变化，旧 batch 已不能安全提交。
+///
+/// `PreconditionFailed` 在完整同步结果中稳定映射为 `precondition_failed`。
+/// 必须重新执行整轮同步（新 provider、新远端快照、重新 LWW），不能在
+/// generation 层重放旧 mutations。
+fn full_sync_has_precondition_failure(result: &FullSyncResultDto) -> bool {
+    result.error_category.as_deref() == Some("precondition_failed")
+        || result
+            .targets
+            .iter()
+            .any(|target| target.result.error_category.as_deref() == Some("precondition_failed"))
+}
+
 fn should_retry_full_sync_via_github_api(config: &crate::sync::SyncConfig) -> bool {
     use crate::sync::provider::{router, ProviderConfig};
 
@@ -341,34 +354,69 @@ impl WriterCoreApi {
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
     ) -> ApiResult<FullSyncResultDto> {
-        let result = self.perform_full_sync_once(
+        let mut result = self.perform_full_sync_once(
             config.clone(),
             force_sync,
             cancellation_token.clone(),
             progress_sink.clone(),
             target_progress,
         );
+        let sync_config: crate::sync::SyncConfig = config.clone().into();
+        let mut retried_via_github_api = false;
+        let mut replanned_after_precondition = false;
 
-        // Issue #990：GitHub 仓库在传输中途才暴露网络不可达时，不能沿用旧的
-        // 前置条件和半途结果。标记 Git 不可达后从 Prepare 阶段重新开始一次
-        // 完整同步，由 router 改走 api.github.com。每轮最多重试一次。
-        let retry_via_api = match &result {
-            Err(crate::api::error::WriterError::RetryableNetwork(_)) => true,
-            Ok(output) => full_sync_has_network_failure(output),
-            Err(_) => false,
-        } && {
-            let sync_config: crate::sync::SyncConfig = config.clone().into();
-            should_retry_full_sync_via_github_api(&sync_config)
-        };
-        if retry_via_api {
-            crate::sync::provider::router::mark_git_unreachable();
-            return self.perform_full_sync_once(
-                config,
-                force_sync,
-                cancellation_token,
-                progress_sink,
-                target_progress,
-            );
+        loop {
+            // Issue #990：GitHub 仓库在传输中途才暴露网络不可达时，不能沿用
+            // 旧的前置条件和半途结果。标记 Git 不可达后从 Prepare 阶段重新
+            // 开始完整同步，由 router 改走 api.github.com。每轮最多一次。
+            let retry_via_api = !retried_via_github_api
+                && match &result {
+                    Err(crate::api::error::WriterError::RetryableNetwork(_)) => true,
+                    Ok(output) => full_sync_has_network_failure(output),
+                    Err(_) => false,
+                }
+                && should_retry_full_sync_via_github_api(&sync_config);
+            if retry_via_api {
+                crate::sync::provider::router::mark_git_unreachable();
+                retried_via_github_api = true;
+                result = self.perform_full_sync_once(
+                    config.clone(),
+                    force_sync,
+                    cancellation_token.clone(),
+                    progress_sink.clone(),
+                    target_progress,
+                );
+                continue;
+            }
+
+            // 远端 HEAD 在规划后变化：旧 batch 即使重试也不能提交。重新执行
+            // 整轮 Prepare → 读取 catalog → LWW → 新 batch，每轮使用新 provider
+            // 和新远端快照；不能靠 generation 层重放旧 mutations。
+            let cancelled = cancellation_token
+                .as_ref()
+                .is_some_and(SyncCancellationToken::is_cancelled);
+            let retry_after_precondition = !replanned_after_precondition
+                && !cancelled
+                && match &result {
+                    Ok(output) => full_sync_has_precondition_failure(output),
+                    Err(_) => false,
+                };
+            if retry_after_precondition {
+                log::info!(
+                    "[sync] perform_full_sync: remote precondition changed — replanning the full sync"
+                );
+                replanned_after_precondition = true;
+                result = self.perform_full_sync_once(
+                    config.clone(),
+                    force_sync,
+                    cancellation_token.clone(),
+                    progress_sink.clone(),
+                    target_progress,
+                );
+                continue;
+            }
+
+            break;
         }
         result
     }

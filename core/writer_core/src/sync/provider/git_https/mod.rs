@@ -52,15 +52,13 @@ impl GitHttpsProvider {
         repository::probe(&self.cache_dir, &self.config)
     }
 
-    /// 返回当前快照；`force` 为 true 时重新 fetch。
-    fn snapshot(&self, force: bool) -> Result<repository::Snapshot, ProviderError> {
+    /// 返回本轮同步固定使用的远端快照；首次调用时 fetch，之后一直复用。
+    fn snapshot(&self) -> Result<repository::Snapshot, ProviderError> {
         let mut guard = self.snapshot.lock().map_err(|_| ProviderError::Other {
             reason: "git provider snapshot lock poisoned".to_string(),
         })?;
-        if !force {
-            if let Some(snapshot) = guard.as_ref() {
-                return Ok(snapshot.clone());
-            }
+        if let Some(snapshot) = guard.as_ref() {
+            return Ok(snapshot.clone());
         }
         let repo = repository::open_or_init(&self.cache_dir)?;
         let snapshot = repository::fetch_snapshot(&repo, &self.config)?;
@@ -85,7 +83,7 @@ impl GitHttpsProvider {
                 touched_paths: Vec::new(),
             });
         }
-        let planned = self.snapshot(false)?;
+        let planned = self.snapshot()?;
         self.commit_from(planned, mutations, message)
     }
 
@@ -101,9 +99,8 @@ impl GitHttpsProvider {
         let repo = repository::open_or_init(&self.cache_dir)?;
         let latest = repository::fetch_snapshot(&repo, &self.config)?;
         if latest.head != planned.head {
-            if let Ok(mut guard) = self.snapshot.lock() {
-                *guard = Some(latest);
-            }
+            // 保持本轮的旧快照：调用方必须重新建立 provider、重新读取 catalog
+            // 并经过 LWW 规划，不能用同一批 mutations 直接重试。
             return Err(ProviderError::PreconditionFailed {
                 path: format!("refs/heads/{}", self.config.branch),
                 reason: "remote head changed since the sync plan was built; re-read and replan"
@@ -126,7 +123,7 @@ impl SyncProvider for GitHttpsProvider {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
-        let snapshot = self.snapshot(false)?;
+        let snapshot = self.snapshot()?;
         let needle = if prefix.is_empty() {
             None
         } else {
@@ -150,21 +147,11 @@ impl SyncProvider for GitHttpsProvider {
     }
 
     fn read(&self, path: &str) -> Result<Option<RemoteObject>, ProviderError> {
-        let snapshot = self.snapshot(false)?;
+        // 本轮同步固定使用首次读取的 HEAD 快照；快照中没有的路径直接视为
+        // 远端不存在。不能在这里隐式 fetch 并替换规划基线。
+        let snapshot = self.snapshot()?;
         if !snapshot.blobs.contains_key(path) {
-            // 可能被其他设备刚写入；刷新一次再判断。
-            let snapshot = self.snapshot(true)?;
-            if !snapshot.blobs.contains_key(path) {
-                return Ok(None);
-            }
-            let repo = repository::open_or_init(&self.cache_dir)?;
-            let content = repository::read_blob(&repo, &snapshot, path)?;
-            return Ok(content.map(|content| RemoteObject {
-                path: path.to_string(),
-                content,
-                version: repository::blob_version(&snapshot, path)
-                    .unwrap_or_else(|| RemoteVersion::new("")),
-            }));
+            return Ok(None);
         }
         let repo = repository::open_or_init(&self.cache_dir)?;
         let content = repository::read_blob(&repo, &snapshot, path)?;
@@ -183,7 +170,7 @@ impl SyncProvider for GitHttpsProvider {
         precondition: WritePrecondition,
     ) -> Result<RemoteVersion, ProviderError> {
         // 前置条件必须针对本轮计划使用的快照校验；commit 会再确认远端 HEAD 未变化。
-        let snapshot = self.snapshot(false)?;
+        let snapshot = self.snapshot()?;
         repository::check_write_precondition(&snapshot, path, &precondition)?;
         let version = RemoteVersion::new(
             git2::Oid::hash_object(git2::ObjectType::Blob, content)
@@ -202,7 +189,7 @@ impl SyncProvider for GitHttpsProvider {
     }
 
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
-        let snapshot = self.snapshot(false)?;
+        let snapshot = self.snapshot()?;
         repository::check_delete_precondition(&snapshot, path, &precondition)?;
         if !snapshot.blobs.contains_key(path) {
             return Ok(());

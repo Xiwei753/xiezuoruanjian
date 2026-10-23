@@ -450,79 +450,32 @@ fn publish_generation_batch(
         }
     }
 
-    // Issue #779 评论 5854082763：commit_batch 对 PreconditionFailed 做有限次重试。
-    // branch head 可能被本机 GC maintenance 推进，导致 PATCH ref 收到 409/422。
-    // 重试时 commit_batch_via_git_database 内部会重新 GET head → build tree → commit → PATCH ref。
-    // 只重试 PreconditionFailed（ref moved），其他 provider 错误照常返回。
+    // PreconditionFailed 表示远端在本轮规划后又发生了变化。不能在这里重放
+    // 同一批 mutations：provider 可能已重新 fetch 到新 HEAD，重放会绕过 LWW。
+    // 将错误交给完整同步入口，由它重新 Prepare → 读取 catalog → LWW → 生成新 batch。
     let commit_message = format!("WriterApp publish generation {generation_id}");
-    let mut last_error: Option<crate::sync::provider::error::ProviderError> = None;
-    let mut commit_result: Option<crate::sync::provider::model::BatchCommitResult> = None;
-    for attempt in 0..3u32 {
-        // 取消令牌检查（每次重试前）。
-        if let Some(token) = cancellation_token {
-            if token.is_cancelled() {
-                return super::transfer_helpers::sync_result_from_error(crate::Error::Other(
-                    "sync cancelled during generation publish".into(),
-                ));
-            }
-        }
-        match provider.commit_batch(&mutations, &commit_message) {
-            Ok(result) => {
-                commit_result = Some(result);
-                break;
-            }
-            Err(crate::sync::provider::error::ProviderError::PreconditionFailed {
-                path,
-                reason,
-            }) => {
-                log::warn!(
-                    "[sync] publish_generation_batch: commit_batch PreconditionFailed (attempt={}): path={}, reason={}",
-                    attempt + 1, path, reason
-                );
-                last_error = Some(
-                    crate::sync::provider::error::ProviderError::PreconditionFailed {
-                        path,
-                        reason,
-                    },
-                );
-                continue;
-            }
-            Err(e) => {
-                return super::transfer_helpers::sync_result_from_provider_error(e);
-            }
-        }
+    if let Err(error) = provider.commit_batch(&mutations, &commit_message) {
+        return super::transfer_helpers::sync_result_from_provider_error(error);
     }
-    match commit_result {
-        Some(_result) => {
-            let mut r = crate::sync::types::SyncResult::success();
-            r.uploaded_files = uploaded_files;
-            if let Some(outcome) = merge_outcome {
-                r.downloaded_files = outcome.downloaded_files.clone();
-                r.local_deletes = outcome.remote_delete_paths.clone();
-                r.remote_deletes = outcome.local_deletes.clone();
-                r.overwritten_files = outcome.overwritten_files.clone();
-                r.ignored_files = outcome.ignored_files.clone();
-            }
-            if r.uploaded_files.is_empty()
-                && r.downloaded_files.is_empty()
-                && r.local_deletes.is_empty()
-                && r.remote_deletes.is_empty()
-            {
-                r.status = SyncStatus::NoChanges;
-            } else {
-                r.status = SyncStatus::LatestWinsApplied;
-            }
-            r
-        }
-        None => {
-            // 3 次重试全部 PreconditionFailed — 返回错误，让上层处理。
-            super::transfer_helpers::sync_result_from_provider_error(last_error.unwrap_or(
-                crate::sync::provider::error::ProviderError::Other {
-                    reason: "commit_batch failed after retries".to_string(),
-                },
-            ))
-        }
+    let mut r = crate::sync::types::SyncResult::success();
+    r.uploaded_files = uploaded_files;
+    if let Some(outcome) = merge_outcome {
+        r.downloaded_files = outcome.downloaded_files.clone();
+        r.local_deletes = outcome.remote_delete_paths.clone();
+        r.remote_deletes = outcome.local_deletes.clone();
+        r.overwritten_files = outcome.overwritten_files.clone();
+        r.ignored_files = outcome.ignored_files.clone();
     }
+    if r.uploaded_files.is_empty()
+        && r.downloaded_files.is_empty()
+        && r.local_deletes.is_empty()
+        && r.remote_deletes.is_empty()
+    {
+        r.status = SyncStatus::NoChanges;
+    } else {
+        r.status = SyncStatus::LatestWinsApplied;
+    }
+    r
 }
 
 /// 读取 staging 的本地 `manifest.sync.json`（无 merge_outcome 的首次同步用）。
