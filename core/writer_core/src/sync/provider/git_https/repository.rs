@@ -54,8 +54,24 @@ fn remote<'repo>(
     repo: &'repo Repository,
     config: &GitHttpsRuntimeConfig,
 ) -> Result<git2::Remote<'repo>, ProviderError> {
-    repo.remote(REMOTE_NAME, &config.remote_url)
-        .map_err(|err| map_git_error(err, "configure remote"))
+    match repo.find_remote(REMOTE_NAME) {
+        Ok(remote) => {
+            // 缓存目录按远端 URL 哈希隔离，正常不会出现不同 URL；若配置被改动，
+            // 不能静默复用旧地址的对象，也不能覆盖这个缓存里的 remote。
+            if remote.url() != Some(config.remote_url.as_str()) {
+                return Err(ProviderError::Other {
+                    reason:
+                        "cached git repository remote URL does not match the current configuration"
+                            .to_string(),
+                });
+            }
+            Ok(remote)
+        }
+        Err(err) if err.code() == ErrorCode::NotFound => repo
+            .remote(REMOTE_NAME, &config.remote_url)
+            .map_err(|err| map_git_error(err, "configure remote")),
+        Err(err) => Err(map_git_error(err, "open git remote")),
+    }
 }
 
 /// 只连接并读取 refs，不下载对象。用于路由可达性探测与诊断。

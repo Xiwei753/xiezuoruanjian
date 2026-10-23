@@ -85,11 +85,33 @@ impl GitHttpsProvider {
                 touched_paths: Vec::new(),
             });
         }
+        let planned = self.snapshot(false)?;
+        self.commit_from(planned, mutations, message)
+    }
+
+    /// 以 `planned` 为唯一基线提交。提交前重新读取远端 HEAD，但只有 HEAD
+    /// 未变化时才应用旧计划；否则 Git 会把它当成合法快进，绕过上一轮 LWW
+    /// 对远端新提交的决策。
+    fn commit_from(
+        &self,
+        planned: repository::Snapshot,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
         let repo = repository::open_or_init(&self.cache_dir)?;
-        // 提交前强制重新读取远端 HEAD，避免沿用旧前置条件。
-        let snapshot = repository::fetch_snapshot(&repo, &self.config)?;
+        let latest = repository::fetch_snapshot(&repo, &self.config)?;
+        if latest.head != planned.head {
+            if let Ok(mut guard) = self.snapshot.lock() {
+                *guard = Some(latest);
+            }
+            return Err(ProviderError::PreconditionFailed {
+                path: format!("refs/heads/{}", self.config.branch),
+                reason: "remote head changed since the sync plan was built; re-read and replan"
+                    .to_string(),
+            });
+        }
         let commit_oid =
-            repository::commit_and_push(&repo, &self.config, &snapshot, mutations, message)?;
+            repository::commit_and_push(&repo, &self.config, &planned, mutations, message)?;
         self.invalidate();
         Ok(BatchCommitResult {
             revision: RemoteVersion::new(commit_oid.to_string()),
@@ -160,15 +182,16 @@ impl SyncProvider for GitHttpsProvider {
         content: &[u8],
         precondition: WritePrecondition,
     ) -> Result<RemoteVersion, ProviderError> {
-        // 单对象写入必须先读取最新远端状态，再在最新快照上校验前置条件。
-        let snapshot = self.snapshot(true)?;
+        // 前置条件必须针对本轮计划使用的快照校验；commit 会再确认远端 HEAD 未变化。
+        let snapshot = self.snapshot(false)?;
         repository::check_write_precondition(&snapshot, path, &precondition)?;
         let version = RemoteVersion::new(
             git2::Oid::hash_object(git2::ObjectType::Blob, content)
                 .map_err(|err| repository::map_git_error(err, "hash blob"))?
                 .to_string(),
         );
-        self.commit(
+        self.commit_from(
+            snapshot,
             &[BatchMutation::Put {
                 path: path.to_string(),
                 content: content.to_vec(),
@@ -179,12 +202,13 @@ impl SyncProvider for GitHttpsProvider {
     }
 
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
-        let snapshot = self.snapshot(true)?;
+        let snapshot = self.snapshot(false)?;
         repository::check_delete_precondition(&snapshot, path, &precondition)?;
         if !snapshot.blobs.contains_key(path) {
             return Ok(());
         }
-        self.commit(
+        self.commit_from(
+            snapshot,
             &[BatchMutation::Delete {
                 path: path.to_string(),
             }],
@@ -218,7 +242,8 @@ impl SyncProvider for GitHttpsProvider {
                 result.success = true;
                 result.network_ok = true;
                 result.remote_ok = true;
-                result.auth_ok = self.config.secret.is_some();
+                // 探测成功即说明匿名或认证访问均可建立；匿名仓库不能算认证失败。
+                result.auth_ok = true;
                 result.network_status = "ok".to_string();
                 result.auth_status = if self.config.secret.is_some() {
                     "ok".to_string()
@@ -229,16 +254,16 @@ impl SyncProvider for GitHttpsProvider {
             Err(error) => {
                 result.success = false;
                 result.error_category = error.to_sync_error_category().to_ui_status().to_string();
-                result.network_ok = matches!(error, ProviderError::Network { .. });
+                result.network_ok = !matches!(error, ProviderError::Network { .. });
                 result.auth_ok = !matches!(
                     error,
                     ProviderError::AuthFailed { .. } | ProviderError::PermissionDenied { .. }
                 );
                 result.remote_ok = false;
                 result.network_status = if result.network_ok {
-                    "unreachable".to_string()
-                } else {
                     "checked".to_string()
+                } else {
+                    "unreachable".to_string()
                 };
                 result.auth_status = if result.auth_ok {
                     "checked".to_string()
