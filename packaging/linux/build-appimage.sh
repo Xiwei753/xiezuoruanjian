@@ -74,6 +74,9 @@ cat > "$APPDIR/AppRun" <<'EOF'
 set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 export APPDIR="${APPDIR:-$HERE}"
+# AppDir 的 ELF 在 usr/bin；launcher 的 RPM 默认路径是 usr/libexec。
+# 显式传给同一个入口脚本，避免 AppImage 回落到系统 RPM 路径。
+export SUJIAN_REAL_BINARY="$APPDIR/usr/bin/sujian-linux-qt"
 exec "$APPDIR/usr/libexec/sujian/sujian-launcher.sh" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"

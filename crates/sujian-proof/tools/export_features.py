@@ -19,10 +19,13 @@ shibing624/CSC distribution. The output header is the one consumed by
 
     label,original_logprob,candidate_logprob,margin,original_char,candidate_char,sample_id
 
-Positive rows use each annotated wrong character and its corrected character.
-Negative rows use the model's top-1 single-Han alternative at otherwise valid
-positions, so the calibration set reflects proposals the runtime would actually
-produce. No private manuscript text is used.
+Both positive and negative rows use the model's global top-1 single-Han
+alternative, exactly like `neural.rs::best_han_prediction()`. An annotated error
+is a positive row only when that runtime candidate equals the known correction;
+otherwise it is counted as an end-to-end miss and contributes no row. Negative
+rows come from unannotated positions and from a small set of constructed,
+anonymous high-ambiguity correct sentences (pronouns, particles, ordinary
+prose). No private manuscript text is used.
 """
 
 from __future__ import annotations
@@ -61,6 +64,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-sentences", type=int, default=0)
     parser.add_argument("--no-negatives", action="store_true")
+    parser.add_argument(
+        "--correct-text",
+        type=Path,
+        default=CRATE_ROOT / "tools" / "calibration" / "anonymous_ambiguous.txt",
+        help="one constructed correct sentence per line; all top-1 proposals are negatives",
+    )
     args = parser.parse_args()
 
     try:
@@ -130,6 +139,8 @@ def main() -> None:
     positive = 0
     negative = 0
     used = 0
+    annotated_positions = 0
+    end_to_end_misses = 0
     with args.output.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(
@@ -143,6 +154,49 @@ def main() -> None:
                 "sample_id",
             ]
         )
+        def write_row(
+            label: int,
+            original: str,
+            candidate: str,
+            original_logprob: float,
+            candidate_logprob: float,
+            sample_id: str,
+        ) -> None:
+            nonlocal positive, negative
+            writer.writerow(
+                [
+                    label,
+                    original_logprob,
+                    candidate_logprob,
+                    candidate_logprob - original_logprob,
+                    original,
+                    candidate,
+                    sample_id,
+                ]
+            )
+            if label == 1:
+                positive += 1
+            else:
+                negative += 1
+
+        def runtime_candidate(
+            logits: np.ndarray,
+            log_probs: np.ndarray,
+            token_index: int,
+            original_id: int,
+        ) -> tuple[int, str, float, float] | None:
+            """Mirror neural.rs::best_han_prediction exactly."""
+            top_id = int(np.argmax(logits[token_index]))
+            if top_id == original_id or top_id not in han_ids:
+                return None
+            candidate = han_ids[top_id]
+            return (
+                top_id,
+                candidate,
+                float(log_probs[token_index, original_id]),
+                float(log_probs[token_index, top_id]),
+            )
+
         for row in rows:
             if args.max_sentences and used >= args.max_sentences:
                 break
@@ -156,58 +210,115 @@ def main() -> None:
             logits, log_probs = run(ids)
             used += 1
             annotated = set(wrong_ids)
+            same_length = len(corrected) == len(text)
             for char_index, original in enumerate(text):
                 token_index = position_token(offsets, ids, char_index)
                 if token_index is None:
                     continue
                 original_id = ids[token_index]
-                if char_index in annotated and char_index < len(corrected):
-                    candidate = corrected[char_index]
-                    candidate_id = token_to_id.get(candidate)
-                    if candidate_id is None or candidate == original:
+                annotated_position = char_index in annotated
+                if annotated_position:
+                    annotated_positions += 1
+                top = runtime_candidate(logits, log_probs, token_index, original_id)
+                if annotated_position:
+                    # Positive only when the runtime candidate is the label.
+                    # A wrong top-1 is an end-to-end miss, not a calibration
+                    # positive; already-correct positions below use top-1 too.
+                    if (
+                        top is None
+                        or not same_length
+                        or top[1] != corrected[char_index]
+                    ):
+                        end_to_end_misses += 1
                         continue
-                    original_logprob = float(log_probs[token_index, original_id])
-                    candidate_logprob = float(log_probs[token_index, candidate_id])
-                    writer.writerow(
-                        [
-                            1,
-                            original_logprob,
-                            candidate_logprob,
-                            candidate_logprob - original_logprob,
-                            original,
-                            candidate,
-                            row.get("id", str(used)),
-                        ]
-                    )
-                    positive += 1
-                    continue
-                if args.no_negatives:
-                    continue
-                # Only record disagreements the runtime would actually see:
-                # the global top-1 token must be exactly one Han character.
-                top_id = int(np.argmax(logits[token_index]))
-                if top_id == original_id or top_id not in han_ids:
-                    continue
-                candidate = han_ids[top_id]
-                original_logprob = float(log_probs[token_index, original_id])
-                candidate_logprob = float(log_probs[token_index, top_id])
-                writer.writerow(
-                    [
-                        0,
-                        original_logprob,
-                        candidate_logprob,
-                        candidate_logprob - original_logprob,
+                    write_row(
+                        1,
                         original,
-                        candidate,
-                        row.get("id", str(used)),
-                    ]
+                        top[1],
+                        top[2],
+                        top[3],
+                        f"csc-{used}",
+                    )
+                    continue
+                if args.no_negatives or top is None:
+                    continue
+                write_row(
+                    0,
+                    original,
+                    top[1],
+                    top[2],
+                    top[3],
+                    f"csc-{used}",
                 )
-                negative += 1
+
+            # The corrected sentence is public normal prose. Its top-1
+            # disagreements are exactly the false positives the runtime would
+            # show, so they belong in the negative set under the same article
+            # group as this row.
+            if not args.no_negatives and same_length and corrected != text:
+                prepared_correct = tokenize(corrected)
+                if prepared_correct is not None:
+                    correct_ids, correct_offsets = prepared_correct
+                    correct_logits, correct_log_probs = run(correct_ids)
+                    for char_index, original in enumerate(corrected):
+                        token_index = position_token(
+                            correct_offsets, correct_ids, char_index
+                        )
+                        if token_index is None:
+                            continue
+                        original_id = correct_ids[token_index]
+                        top = runtime_candidate(
+                            correct_logits,
+                            correct_log_probs,
+                            token_index,
+                            original_id,
+                        )
+                        if top is None:
+                            continue
+                        write_row(
+                            0,
+                            original,
+                            top[1],
+                            top[2],
+                            top[3],
+                            f"csc-{used}",
+                        )
+
+        if not args.no_negatives and args.correct_text.is_file():
+            for index, line in enumerate(
+                args.correct_text.read_text(encoding="utf-8").splitlines()
+            ):
+                text = line.strip()
+                if not text or len(text) > 500:
+                    continue
+                prepared = tokenize(text)
+                if prepared is None:
+                    continue
+                ids, offsets = prepared
+                logits, log_probs = run(ids)
+                for char_index, original in enumerate(text):
+                    token_index = position_token(offsets, ids, char_index)
+                    if token_index is None:
+                        continue
+                    original_id = ids[token_index]
+                    top = runtime_candidate(logits, log_probs, token_index, original_id)
+                    if top is None:
+                        continue
+                    write_row(
+                        0,
+                        original,
+                        top[1],
+                        top[2],
+                        top[3],
+                        f"constructed-{index}",
+                    )
 
     print(
         json.dumps(
             {
                 "samples": used,
+                "annotated_positions": annotated_positions,
+                "end_to_end_misses": end_to_end_misses,
                 "positive_rows": positive,
                 "negative_rows": negative,
                 "output": str(args.output),

@@ -77,9 +77,9 @@ LATEST_LOG="$STARTUP_DIR/latest.log"
 APPDIR="${APPDIR:-}"
 if [ -n "${SUJIAN_REAL_BINARY:-}" ]; then
     REAL_BINARY="$SUJIAN_REAL_BINARY"
-elif [ -n "$APPDIR" ] && [ -x "$APPDIR/usr/libexec/sujian/sujian-linux-qt" ]; then
+elif [ -n "${APPDIR:-}" ] && [ -x "$APPDIR/usr/libexec/sujian/sujian-linux-qt" ]; then
     REAL_BINARY="$APPDIR/usr/libexec/sujian/sujian-linux-qt"
-elif [ -n "$APPDIR" ] && [ -x "$APPDIR/usr/bin/sujian-linux-qt" ]; then
+elif [ -n "${APPDIR:-}" ] && [ -x "$APPDIR/usr/bin/sujian-linux-qt" ]; then
     REAL_BINARY="$APPDIR/usr/bin/sujian-linux-qt"
 else
     REAL_BINARY="/usr/libexec/sujian/sujian-linux-qt"
@@ -161,7 +161,7 @@ if [ -z "${SUJIAN_ONNXRUNTIME_LIB:-}" ]; then
 fi
 
 # AppImage 内的模型不在系统路径；把实际目录交给 Rust 平台层解析。
-if [ -z "${SUJIAN_CORRECTION_MODEL_DIR:-}" ] && [ -n "$APPDIR" ] \
+if [ -z "${SUJIAN_CORRECTION_MODEL_DIR:-}" ] && [ -n "${APPDIR:-}" ] \
     && [ -f "$APPDIR/usr/share/sujian/models/macbert4csc/model.onnx" ]; then
     SUJIAN_CORRECTION_MODEL_DIR="$APPDIR/usr/share/sujian/models/macbert4csc"
     export SUJIAN_CORRECTION_MODEL_DIR

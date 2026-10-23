@@ -83,6 +83,10 @@ export class PeerSyncSession {
   private localHasCloudRepo: boolean
   private remoteHasCloudRepo: boolean | null = null
   private applied: number = 0
+  private unresolvedConflicts: number = 0
+  // 双向同步以双方清单都到达为准；只收到单方清单不能宣告收敛。
+  private localManifestSent: boolean = false
+  private remoteManifestReceived: boolean = false
 
   constructor(
     deviceNetworkId: string,
@@ -124,7 +128,10 @@ export class PeerSyncSession {
     this.send(hello).then((sent: boolean): void => {
       if (!sent) {
         this.fail('发送协商消息失败')
+        return
       }
+      // 发起方不能只等对端清单；先把自己的清单也送过去，首次连接才是双向交换。
+      void this.sendManifest()
     })
   }
 
@@ -147,7 +154,7 @@ export class PeerSyncSession {
     const hash: string = PeerCrypto.sha256Hex(bytes)
     const requestId: string = `continuation:${snapshotId}:${hash}`
     void this.sendObjectWithAck(`${CONTINUATION_OBJECT_PREFIX}${snapshotId}`, bytes, hash,
-      requestId, Date.now(), false)
+      requestId, Date.now(), false, this.localDeviceId)
   }
 
   // 目标设备按 payload 中的 sourceNetworkId 建立连接后，主动请求源设备的接续快照。
@@ -196,13 +203,14 @@ export class PeerSyncSession {
         this.fail('协商消息格式错误')
         return
       }
-      this.setState('ready', '附近设备已连接')
+      this.setState('syncing', '附近设备已连接，正在交换双方清单')
       await this.sendManifest()
       return
     }
     if (message.type === 'manifest') {
       if (message.payload !== undefined) {
         this.mergeRemoteManifest(message.payload)
+        this.remoteManifestReceived = true
         await this.requestMissingObjects()
       }
       return
@@ -215,14 +223,16 @@ export class PeerSyncSession {
           if (snapshot !== null) {
             const snapshotBytes: Uint8Array = PeerCrypto.utf8Encode(snapshot)
             await this.sendObjectWithAck(message.path, snapshotBytes,
-              PeerCrypto.sha256Hex(snapshotBytes), message.requestId, Date.now(), false)
+              PeerCrypto.sha256Hex(snapshotBytes), message.requestId, Date.now(), false,
+              this.localDeviceId)
           }
           return
         }
         const content: PeerStoredContent | null = this.corePort.readLocalObject(message.path)
         if (content !== null) {
           await this.sendObjectWithAck(content.object.path, content.bytes,
-            content.object.contentHash, message.requestId, content.object.modifiedAtMs, false)
+            content.object.contentHash, message.requestId, content.object.modifiedAtMs, false,
+            content.object.deviceId)
         }
       }
       return
@@ -264,8 +274,12 @@ export class PeerSyncSession {
     if (message.path.startsWith(MANIFEST_OBJECT_PREFIX)) {
       const text: string = PeerCrypto.utf8Decode(bytes)
       this.mergeRemoteManifest(text)
+      this.remoteManifestReceived = true
       this.transport.rememberRequest(message.requestId)
-      await this.sendAck(message.requestId, true, 'manifest')
+      if (!await this.sendAck(message.requestId, true, 'manifest')) {
+        this.fail('发送附近设备清单确认失败')
+        return
+      }
       await this.requestMissingObjects()
       return
     }
@@ -273,12 +287,15 @@ export class PeerSyncSession {
       const snapshotId: string = message.path.substring(CONTINUATION_OBJECT_PREFIX.length)
       ContinuationSnapshotStore.getInstance().save(snapshotId, PeerCrypto.utf8Decode(bytes))
       this.transport.rememberRequest(message.requestId)
-      await this.sendAck(message.requestId, true, 'continuation snapshot')
+      if (!await this.sendAck(message.requestId, true, 'continuation snapshot')) {
+        this.fail('发送续接快照确认失败')
+      }
       return
     }
+    const ownerDeviceId: string = message.ownerDeviceId ?? message.sourceDevice ?? 'unknown'
     const staged: PeerObjectCommitResult = this.corePort.stageRemoteObject(
       message.path, bytes, message.versionToken ?? message.contentHash,
-      message.modifiedAtMs ?? Date.now(), false, message.sourceDevice ?? 'unknown')
+      message.modifiedAtMs ?? Date.now(), false, ownerDeviceId)
     if (!staged.success) {
       await this.sendAck(message.requestId, false, staged.message)
       return
@@ -290,18 +307,23 @@ export class PeerSyncSession {
     }
     this.transport.rememberRequest(message.requestId)
     this.applied += committed.applied
+    if (committed.conflicts > 0) {
+      this.unresolvedConflicts += committed.conflicts
+    }
     this.clearReadForPath(message.path)
     this.remoteObjects.set(message.path, {
       path: message.path,
       contentHash: message.versionToken ?? message.contentHash,
       modifiedAtMs: message.modifiedAtMs ?? Date.now(),
       deleted: false,
-      deviceId: message.sourceDevice ?? 'unknown'
+      deviceId: ownerDeviceId
     })
-    await this.sendAck(message.requestId, true, committed.message)
-    if (this.pendingReads.size === 0) {
-      this.setState('ready', committed.message)
+    // 只有 ACK 真正发送成功后才能推进会话状态；发送失败必须保持可重试的失败状态。
+    if (!await this.sendAck(message.requestId, true, committed.message)) {
+      this.fail('发送附近设备确认失败')
+      return
     }
+    this.maybeReady(committed.message)
   }
 
   private async acceptDelete(message: PeerWireMessage): Promise<void> {
@@ -313,9 +335,10 @@ export class PeerSyncSession {
       await this.sendAck(message.requestId, true, 'duplicate')
       return
     }
+    const ownerDeviceId: string = message.ownerDeviceId ?? message.sourceDevice ?? 'unknown'
     const staged: PeerObjectCommitResult = this.corePort.stageRemoteObject(
       message.path, new Uint8Array(0), message.versionToken ?? message.contentHash,
-      message.modifiedAtMs ?? Date.now(), true, message.sourceDevice ?? 'unknown')
+      message.modifiedAtMs ?? Date.now(), true, ownerDeviceId)
     if (!staged.success) {
       await this.sendAck(message.requestId, false, staged.message)
       return
@@ -327,11 +350,15 @@ export class PeerSyncSession {
     }
     this.transport.rememberRequest(message.requestId)
     this.applied += committed.applied
-    this.remoteObjects.delete(message.path)
-    await this.sendAck(message.requestId, true, committed.message)
-    if (this.pendingReads.size === 0) {
-      this.setState('ready', '附近设备对象已同步并提交')
+    if (committed.conflicts > 0) {
+      this.unresolvedConflicts += committed.conflicts
     }
+    this.remoteObjects.delete(message.path)
+    if (!await this.sendAck(message.requestId, true, committed.message)) {
+      this.fail('发送附近设备确认失败')
+      return
+    }
+    this.maybeReady(committed.message)
   }
 
   private mergeRemoteManifest(payload: string): void {
@@ -355,7 +382,7 @@ export class PeerSyncSession {
     }
   }
 
-  private async sendManifest(): Promise<void> {
+  private async sendManifest(): Promise<boolean> {
     const objects: PeerObjectDescriptor[] = this.corePort.listLocalObjects().map(
       (object: PeerStoredObject): PeerObjectDescriptor => {
         return {
@@ -373,8 +400,16 @@ export class PeerSyncSession {
     }
     const bytes: Uint8Array = PeerCrypto.utf8Encode(JSON.stringify(handshake))
     const requestId: string = `manifest:${this.localDeviceId}:${Date.now()}`
-    await this.sendObjectWithAck(`${MANIFEST_OBJECT_PREFIX}${requestId}`, bytes,
-      PeerCrypto.sha256Hex(bytes), requestId, Date.now(), false)
+    const sent: boolean = await this.sendObjectWithAck(
+      `${MANIFEST_OBJECT_PREFIX}${requestId}`, bytes,
+      PeerCrypto.sha256Hex(bytes), requestId, Date.now(), false, this.localDeviceId)
+    if (sent) {
+      this.localManifestSent = true
+      this.maybeReady('附近设备双方清单已交换')
+    } else {
+      this.fail('发送附近设备清单失败')
+    }
+    return sent
   }
 
   private async requestMissingObjects(): Promise<void> {
@@ -389,12 +424,25 @@ export class PeerSyncSession {
       const remote: PeerObjectDescriptor = entry[1]
       const current: PeerStoredObject | undefined = local.get(path)
       if (remote.deleted) {
-        if (current === undefined || current.deleted || current.modifiedAtMs < remote.modifiedAtMs) {
+        const remoteDeleteWins: boolean = current === undefined || current.deleted ||
+          current.modifiedAtMs < remote.modifiedAtMs ||
+          (current.modifiedAtMs === remote.modifiedAtMs &&
+            remote.deviceId >= current.deviceId)
+        if (remoteDeleteWins) {
           const staged: PeerObjectCommitResult = this.corePort.stageRemoteObject(
             path, new Uint8Array(0), remote.contentHash, remote.modifiedAtMs, true,
             remote.deviceId ?? 'unknown')
-          if (staged.success) {
-            await this.corePort.commitRemoteObjects()
+          if (!staged.success) {
+            this.fail(staged.message)
+            return
+          }
+          const committed: PeerObjectCommitResult = await this.corePort.commitRemoteObjects()
+          if (!committed.success) {
+            this.fail(committed.message)
+            return
+          }
+          if (committed.conflicts > 0) {
+            this.unresolvedConflicts += committed.conflicts
           }
         }
         continue
@@ -414,7 +462,7 @@ export class PeerSyncSession {
       }
     }
     if (requested === 0 && this.pendingReads.size === 0) {
-      this.setState('ready', '附近设备清单已收敛')
+      this.maybeReady('附近设备清单已收敛')
     } else {
       this.setState('syncing', `正在接收 ${this.pendingReads.size} 个附近设备对象`)
     }
@@ -477,10 +525,11 @@ export class PeerSyncSession {
   }
 
   private async sendObjectWithAck(path: string, bytes: Uint8Array, contentHash: string,
-    requestId: string, modifiedAtMs: number, deleted: boolean): Promise<boolean> {
+    requestId: string, modifiedAtMs: number, deleted: boolean,
+    ownerDeviceId: string): Promise<boolean> {
     const resend = async (): Promise<boolean> => {
       return this.transport.sendObject(path, bytes, contentHash, requestId,
-        this.localDeviceId, this.deviceNetworkId, modifiedAtMs, deleted)
+        this.localDeviceId, this.deviceNetworkId, modifiedAtMs, deleted, ownerDeviceId)
     }
     return new Promise<boolean>((resolve: (success: boolean) => void): void => {
       const pending: PendingAck = {
@@ -502,14 +551,16 @@ export class PeerSyncSession {
       this.completeAck(pending.requestId, false, '对象分片发送失败')
       return
     }
-    if (pending.attempts >= MAX_SEND_ATTEMPTS) {
-      this.completeAck(pending.requestId, false, '附近设备确认超时')
-      return
-    }
+    // 最后一次发送也必须给它完整的确认窗口，不能刚发出就宣告超时。
     pending.timer = setTimeout((): void => {
-      if (this.pendingAcks.has(pending.requestId)) {
-        void this.sendPending(pending)
+      if (!this.pendingAcks.has(pending.requestId)) {
+        return
       }
+      if (pending.attempts >= MAX_SEND_ATTEMPTS) {
+        this.completeAck(pending.requestId, false, '附近设备确认超时')
+        return
+      }
+      void this.sendPending(pending)
     }, ACK_TIMEOUT_MS)
   }
 
@@ -528,6 +579,25 @@ export class PeerSyncSession {
     this.transport.markAck(requestId)
     this.clearReadForPath(this.pendingReadPath(requestId))
     pending.resolve(true)
+    this.maybeReady('附近设备对象已确认接收')
+  }
+
+  private maybeReady(message: string): void {
+    if (this.state === 'closed' || this.state === 'error') {
+      return
+    }
+    if (this.localManifestSent && this.remoteManifestReceived && this.pendingReads.size === 0) {
+      if (this.unresolvedConflicts > 0) {
+        this.setState('ready',
+          `附近设备同步完成，有 ${this.unresolvedConflicts} 个冲突待处理`)
+      } else {
+        this.setState('ready', message)
+      }
+      return
+    }
+    const detail: string = this.remoteManifestReceived
+      ? '正在向附近设备发送本机清单' : '正在等待附近设备清单'
+    this.setState('syncing', detail)
   }
 
   private pendingReadPath(requestId: string): string {

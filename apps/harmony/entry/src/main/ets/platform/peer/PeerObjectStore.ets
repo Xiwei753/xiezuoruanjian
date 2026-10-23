@@ -34,6 +34,7 @@ export interface PeerStoredContent {
 export interface PeerObjectCommitResult {
   success: boolean
   applied: number
+  conflicts: number
   message: string
 }
 
@@ -51,6 +52,41 @@ interface SyncManifest {
   files: ManifestFileRecord[]
 }
 
+// 与 Core `SyncConflict` 的线格式保持一致；冲突页通过 listAllSyncConflicts 读取。
+interface SyncConflictRecord {
+  local_path: string
+  remote_path: string
+  local_hash: string
+  remote_hash: string
+  base_hash: string
+  created_at: number
+  description: string
+  kind: string
+  remote_snapshot_path: string | null
+  remote_graph_snapshot_dir: string | null
+}
+
+// 只声明附近设备需要维护的字段；JSON.parse 后未声明字段仍会原样保留。
+interface SyncStateFile {
+  last_sync_time?: number | null
+  last_error?: string | null
+  known_files?: Record<string, string>
+  conflicts?: SyncConflictRecord[]
+  tombstones?: Object[]
+  deleted_files?: string[]
+  device_id?: string
+  known_files_updated_at?: Record<string, number>
+  conflicted_files?: string[]
+  pending_take_remote?: string[]
+}
+
+interface SyncStatePaths {
+  statePath: string
+  conflictsPath: string
+  conflictDir: string
+  syncRoot: string
+}
+
 interface StagedPeerObject extends PeerStoredObject {
   bytes: Uint8Array
 }
@@ -63,7 +99,7 @@ interface LocalObjectTarget {
 }
 
 function failed(message: string): PeerObjectCommitResult {
-  return { success: false, applied: 0, message: message }
+  return { success: false, applied: 0, conflicts: 0, message: message }
 }
 
 function encodePathSegment(value: string): string {
@@ -105,19 +141,23 @@ export class PeerObjectStore {
         return null
       }
       const bytes: Uint8Array = this.readBytes(target.absolutePath)
+      const actualHash: string = PeerCrypto.md5Hex(bytes)
       const record: ManifestFileRecord | null = this.findManifestRecord(target, path)
       const stat = fs.statSync(target.absolutePath)
+      // 旧 manifest 记录只有在“当前字节仍是记录里的版本”时才能沿用其时间/胜者身份。
+      // 否则用户刚保存的新正文还带着旧记录的版本，发送端会把旧 MD5 和新字节混在一起。
+      const recordMatches: boolean = record !== null && record.op === 'upsert' &&
+        record.content_hash === actualHash
       return {
         object: {
           path: path,
-          contentHash: record !== null && record.op !== 'delete' && record.content_hash !== undefined
-            ? record.content_hash : PeerCrypto.md5Hex(bytes),
-          modifiedAtMs: record !== null && record.op !== 'delete'
-            ? (record.updated_at_ms ?? stat.mtime * 1000)
+          contentHash: actualHash,
+          modifiedAtMs: recordMatches
+            ? (record as ManifestFileRecord).updated_at_ms ?? stat.mtime * 1000
             : stat.mtime * 1000,
           deleted: false,
-          deviceId: record !== null && record.device_id !== undefined
-            ? record.device_id : this.localDeviceId
+          deviceId: recordMatches && (record as ManifestFileRecord).device_id !== undefined
+            ? (record as ManifestFileRecord).device_id as string : this.localDeviceId
         },
         bytes: bytes
       }
@@ -137,7 +177,7 @@ export class PeerObjectStore {
         path: path, contentHash: versionToken, modifiedAtMs: modifiedAtMs, deleted: true,
         deviceId: deviceId, bytes: new Uint8Array(0)
       })
-      return { success: true, applied: 1, message: 'staged tombstone' }
+      return { success: true, applied: 1, conflicts: 0, message: 'staged tombstone' }
     }
     const actualVersion: string = PeerCrypto.md5Hex(bytes)
     if (versionToken.length > 0 && versionToken !== actualVersion) {
@@ -147,11 +187,12 @@ export class PeerObjectStore {
       path: path, contentHash: actualVersion, modifiedAtMs: modifiedAtMs, deleted: false,
       deviceId: deviceId, bytes: bytes
     })
-    return { success: true, applied: 1, message: 'staged' }
+    return { success: true, applied: 1, conflicts: 0, message: 'staged' }
   }
 
   async commitRemoteObjects(): Promise<PeerObjectCommitResult> {
     let applied: number = 0
+    let conflicts: number = 0
     try {
       const pending: StagedPeerObject[] = Array.from(this.staged.values())
       // 先全部完成规则判断，再逐个原子落盘；单文件 rename 不是整轮两阶段事务，
@@ -178,7 +219,8 @@ export class PeerObjectStore {
         if (object.deleted) {
           // 删除墓碑遇到本地修改（或未登记的本地文件）时不能直接删，保留本地事实。
           if (localChanged || (localExists && localRecord === null)) {
-            this.writeConflict(object, target, 'delete')
+            this.writeConflict(object, target, 'delete', localHash, baseHash)
+            conflicts++
             continue
           }
           if (fs.accessSync(target.absolutePath)) {
@@ -191,7 +233,8 @@ export class PeerObjectStore {
 
         // 章节正文：本地和远端相对共同基线都变化时，绝不静默覆盖本地。
         if (this.isChapterText(object.path) && localChanged && localHash !== object.contentHash) {
-          this.writeConflict(object, target, 'update')
+          this.writeConflict(object, target, 'update', localHash, baseHash)
+          conflicts++
           continue
         }
 
@@ -206,11 +249,21 @@ export class PeerObjectStore {
       if (applied > 0) {
         emitter.emit({ eventId: SYNC_CONTENT_CHANGED_EVENT_ID })
       }
-      return { success: true, applied: applied,
-        message: applied > 0 ? `已合并 ${applied} 个附近设备对象` : '没有需要提交的对象' }
+      return { success: true, applied: applied, conflicts: conflicts,
+        message: this.commitMessage(applied, conflicts) }
     } catch (e) {
       return failed(`提交附近设备对象失败：${String(e)}`)
     }
+  }
+
+  private commitMessage(applied: number, conflicts: number): string {
+    if (conflicts > 0 && applied > 0) {
+      return `已合并 ${applied} 个附近设备对象，另有 ${conflicts} 个冲突待处理`
+    }
+    if (conflicts > 0) {
+      return `已记录 ${conflicts} 个附近设备冲突，本地内容未被覆盖`
+    }
+    return applied > 0 ? `已合并 ${applied} 个附近设备对象` : '没有需要提交的对象'
   }
 
   clearStaged(): void {
@@ -264,7 +317,7 @@ export class PeerObjectStore {
       const manifest: SyncManifest =
         this.readManifest(`${groupsRoot}/${groupDir}/manifest.sync.json`)
       manifest.files.forEach((record: ManifestFileRecord): void => {
-        if (!this.isAppWhitelisted(record.path)) {
+        if (record.path.endsWith('manifest.sync.json') || !this.isAppWhitelisted(record.path)) {
           return
         }
         this.addManifestRecord(objects, `app/${record.path}`, record,
@@ -277,7 +330,7 @@ export class PeerObjectStore {
   private collectLegacyManifest(objects: Map<string, PeerStoredObject>): void {
     const legacy: SyncManifest = this.readManifest(`${this.root}/app-meta/sync/manifest.sync.json`)
     legacy.files.forEach((record: ManifestFileRecord): void => {
-      if (!this.isAppWhitelisted(record.path)) {
+      if (record.path.endsWith('manifest.sync.json') || !this.isAppWhitelisted(record.path)) {
         return
       }
       const storageKey: string = this.appGroupStorageKey(record.path)
@@ -332,16 +385,17 @@ export class PeerObjectStore {
       const record: ManifestFileRecord | null = target === null
         ? null : this.findManifestRecord(target, remotePath)
       const actualHash: string = PeerCrypto.md5Hex(bytes)
-      const hash: string = actualHash
+      const recordMatches: boolean = record !== null && record.op === 'upsert' &&
+        record.content_hash === actualHash
       objects.set(remotePath, {
         path: remotePath,
-        contentHash: hash,
-        modifiedAtMs: record !== null && record.content_hash === actualHash
-          ? (record.deleted_at_ms ?? record.updated_at_ms ?? stat.mtime * 1000)
+        contentHash: actualHash,
+        modifiedAtMs: recordMatches
+          ? ((record as ManifestFileRecord).updated_at_ms ?? stat.mtime * 1000)
           : stat.mtime * 1000,
         deleted: false,
-        deviceId: record !== null && record.device_id !== undefined
-          ? record.device_id : this.localDeviceId
+        deviceId: recordMatches && (record as ManifestFileRecord).device_id !== undefined
+          ? (record as ManifestFileRecord).device_id as string : this.localDeviceId
       })
     }
   }
@@ -370,14 +424,14 @@ export class PeerObjectStore {
       const stat = fs.statSync(absolutePath)
       const bytes: Uint8Array = this.readBytes(absolutePath)
       const actualHash: string = PeerCrypto.md5Hex(bytes)
-      const hash: string = actualHash
-      const unchanged: boolean = record.content_hash === actualHash
+      const unchanged: boolean = record.op === 'upsert' && record.content_hash === actualHash
       objects.set(remotePath, {
         path: remotePath,
-        contentHash: hash,
+        contentHash: actualHash,
         modifiedAtMs: unchanged ? (record.updated_at_ms ?? stat.mtime * 1000) : stat.mtime * 1000,
         deleted: false,
-        deviceId: record.device_id ?? this.localDeviceId
+        deviceId: unchanged && record.device_id !== undefined
+          ? record.device_id : this.localDeviceId
       })
     } catch (_e) {
       // 清单仍是 upsert、文件已不存在：保留删除/冲突判断给业务层，不伪造墓碑。
@@ -463,20 +517,109 @@ export class PeerObjectStore {
     return object.deviceId >= localDevice
   }
 
-  private writeConflict(object: StagedPeerObject, target: LocalObjectTarget, action: string): void {
-    try {
-      const conflictRoot: string = target.projectScoped
-        ? `${this.root}/projects/${this.projectIdForTarget(target)}/app-meta/sync/conflicts`
-        : `${this.root}/app-meta/sync/conflicts`
-      fs.mkdirSync(conflictRoot, true)
+  private writeConflict(object: StagedPeerObject, target: LocalObjectTarget, action: string,
+    localHash: string, baseHash: string): void {
+    const paths: SyncStatePaths = this.syncStatePaths(target)
+    const kind: string = action === 'delete' ? 'remote_deleted' : 'both_changed'
+    let remoteSnapshotPath: string | null = null
+    if (kind === 'both_changed') {
+      fs.mkdirSync(paths.conflictDir, true)
       const baseName: string = target.relativePath.replace(/[\\/]/g, '_')
-      const suffix: string = action === 'delete' ? 'delete' : 'remote'
-      const conflictPath: string =
-        `${conflictRoot}/peer-${Date.now()}-${suffix}-${baseName}.conflict`
-      this.atomicWrite(conflictPath, object.bytes)
-    } catch (_e) {
-      // 冲突副本写失败时仍保留本地文件，绝不因副本失败覆盖本地正文。
+      const snapshotPath: string =
+        `${paths.conflictDir}/peer-${Date.now()}-${baseName}.remote-conflict`
+      this.atomicWrite(snapshotPath, object.bytes)
+      remoteSnapshotPath = this.relativeToSyncRoot(snapshotPath, paths.syncRoot)
     }
+    const description: string = kind === 'remote_deleted'
+      ? `附近设备同步：远端已删除 ${target.relativePath}，本地仍有修改`
+      : `附近设备同步：本地和远端都修改了 ${target.relativePath}`
+    const record: SyncConflictRecord = {
+      local_path: target.relativePath,
+      remote_path: object.path,
+      local_hash: localHash,
+      remote_hash: object.contentHash,
+      base_hash: baseHash,
+      created_at: Math.floor(Date.now() / 1000),
+      description: description,
+      kind: kind,
+      remote_snapshot_path: remoteSnapshotPath,
+      remote_graph_snapshot_dir: null
+    }
+    // 与 Core 一样，conflicts.json 是冲突页读取的 canonical record；
+    // state.conflicts / conflicted_files 是同步引擎镜像，二者同路径去重。
+    const conflicts: SyncConflictRecord[] = this.readConflictRecords(paths.conflictsPath)
+    this.upsertConflictRecord(conflicts, record)
+    const state: SyncStateFile = this.readSyncState(paths.statePath)
+    if (state.device_id === undefined || state.device_id.length === 0) {
+      state.device_id = this.localDeviceId
+    }
+    const conflictedFiles: string[] = state.conflicted_files ?? []
+    if (!conflictedFiles.includes(record.local_path)) {
+      conflictedFiles.push(record.local_path)
+    }
+    state.conflicted_files = conflictedFiles
+    const stateConflicts: SyncConflictRecord[] = state.conflicts ?? []
+    this.upsertConflictRecord(stateConflicts, record)
+    state.conflicts = stateConflicts
+    // 先写 canonical conflicts.json，再写 state mirror；任一步失败都让提交返回失败，
+    // 发送端不会收到“已同步”的 ACK。
+    this.atomicWrite(paths.conflictsPath, PeerCrypto.utf8Encode(JSON.stringify(conflicts)))
+    this.atomicWrite(paths.statePath, PeerCrypto.utf8Encode(JSON.stringify(state)))
+  }
+
+  private syncStatePaths(target: LocalObjectTarget): SyncStatePaths {
+    const syncRoot: string = target.projectScoped
+      ? `${this.root}/projects/${this.projectIdForTarget(target)}`
+      : this.root
+    const syncDir: string =
+      target.manifestPath.substring(0, target.manifestPath.lastIndexOf('/'))
+    return {
+      statePath: `${syncDir}/state.local.json`,
+      conflictsPath: `${syncDir}/conflicts.json`,
+      conflictDir: `${syncDir}/conflicts`,
+      syncRoot: syncRoot
+    }
+  }
+
+  private relativeToSyncRoot(absolutePath: string, syncRoot: string): string {
+    const prefix: string = `${syncRoot}/`
+    return absolutePath.startsWith(prefix)
+      ? absolutePath.substring(prefix.length).replace(/\\/g, '/')
+      : absolutePath.replace(/\\/g, '/')
+  }
+
+  private readConflictRecords(path: string): SyncConflictRecord[] {
+    if (!fs.accessSync(path)) {
+      return []
+    }
+    const text: string = PeerCrypto.utf8Decode(this.readBytes(path))
+    const parsed: SyncConflictRecord[] = JSON.parse(text) as SyncConflictRecord[]
+    if (!Array.isArray(parsed)) {
+      throw new Error(`冲突记录格式错误：${path}`)
+    }
+    return parsed
+  }
+
+  private readSyncState(path: string): SyncStateFile {
+    if (!fs.accessSync(path)) {
+      return { device_id: this.localDeviceId, conflicted_files: [], conflicts: [] }
+    }
+    const text: string = PeerCrypto.utf8Decode(this.readBytes(path))
+    const parsed: SyncStateFile = JSON.parse(text) as SyncStateFile
+    if (parsed === null || Array.isArray(parsed)) {
+      throw new Error(`同步状态格式错误：${path}`)
+    }
+    return parsed
+  }
+
+  private upsertConflictRecord(records: SyncConflictRecord[], record: SyncConflictRecord): void {
+    for (let i = 0; i < records.length; i++) {
+      if (records[i].local_path === record.local_path) {
+        records[i] = record
+        return
+      }
+    }
+    records.push(record)
   }
 
   private projectIdForTarget(target: LocalObjectTarget): string {

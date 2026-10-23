@@ -18,8 +18,10 @@ export interface PeerWireMessage {
   version: number
   type: PeerMessageType
   requestId: string
+  // 本次连接的发送端；ownerDeviceId 才是对象清单里的真实写入者。
   sourceDevice?: string
   targetDevice?: string
+  ownerDeviceId?: string
   dataRootId?: string
   path?: string
   contentHash?: string
@@ -85,7 +87,8 @@ export class PeerSyncTransport {
     sourceDevice: string,
     targetDevice: string,
     modifiedAtMs: number = Date.now(),
-    deleted: boolean = false
+    deleted: boolean = false,
+    ownerDeviceId: string = sourceDevice
   ): Promise<boolean> {
     const contentHash: string = PeerCrypto.sha256Hex(content)
     const total: number = Math.max(1, Math.ceil(content.length / OBJECT_CHUNK_BYTES))
@@ -100,7 +103,8 @@ export class PeerSyncTransport {
       deleted: deleted,
       total: total,
       sourceDevice: sourceDevice,
-      targetDevice: targetDevice
+      targetDevice: targetDevice,
+      ownerDeviceId: ownerDeviceId
     }
     if (!await this.send(begin)) {
       return false
@@ -133,7 +137,8 @@ export class PeerSyncTransport {
       deleted: deleted,
       total: total,
       sourceDevice: sourceDevice,
-      targetDevice: targetDevice
+      targetDevice: targetDevice,
+      ownerDeviceId: ownerDeviceId
     }
     return this.send(finish)
   }
@@ -245,6 +250,7 @@ export class PeerSyncTransport {
       total: assembly.total,
       sourceDevice: message.sourceDevice,
       targetDevice: message.targetDevice,
+      ownerDeviceId: message.ownerDeviceId ?? message.sourceDevice,
       chunk: PeerCrypto.base64Encode(content)
     }
     this.listener.onMessage(complete)
