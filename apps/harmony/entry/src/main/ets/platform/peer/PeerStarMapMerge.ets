@@ -155,10 +155,10 @@ function mergeProjectMap(local: Record<string, string> | undefined,
   onConflict: () => void): Record<string, string> {
   const keys: Set<string> = new Set<string>()
   if (local !== undefined) {
-    Object.keys(local).forEach((key: string): void => { void keys.add(key) })
+    Object.keys(local).forEach((key: string): void => { keys.add(key) })
   }
   if (remote !== undefined) {
-    Object.keys(remote).forEach((key: string): void => { void keys.add(key) })
+    Object.keys(remote).forEach((key: string): void => { keys.add(key) })
   }
   const merged: Record<string, string> = {}
   keys.forEach((projectId: string): void => {
