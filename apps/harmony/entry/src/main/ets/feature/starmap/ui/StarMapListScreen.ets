@@ -68,9 +68,6 @@ export struct StarMapListScreen {
   // 更多菜单上下文
   @Local currentMenuStarMapId: string = ''
 
-  private get usesWideLayout(): boolean {
-    return this.layoutMode === WideLayoutMode.Wide
-  }
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -355,7 +352,7 @@ export struct StarMapListScreen {
     // Issue #932 复核：与作品页 HomeContent 的 layoutMode 分流对齐。
     // 判定与 PrimaryTabShell 的 WideAppShell 同源（下一轮精确等于 widthVp >= 840）。
     // Issue #972：宽屏进入独立 WideStarMapHome，不复用窄屏内容层与右下角 FAB。
-    if (this.usesWideLayout) {
+    if (this.layoutMode === WideLayoutMode.Wide) {
       WideStarMapHome({
         starMaps: this.starMaps,
         isLoading: this.isLoading,
@@ -432,7 +429,7 @@ export struct StarMapListScreen {
         title: '星图',
         screenRole: ScreenRole.StarMap,
         screenTabIndex: 1,
-        showTitleBar: !this.usesWideLayout
+        showTitleBar: !(this.layoutMode === WideLayoutMode.Wide)
       }) {
         this.StarMapListContent()
       }
@@ -440,7 +437,7 @@ export struct StarMapListScreen {
       NavDestination() {
         this.StarMapListContent()
       }
-      .hideTitleBar(this.usesWideLayout)
+      .hideTitleBar(this.layoutMode === WideLayoutMode.Wide)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title('星图')

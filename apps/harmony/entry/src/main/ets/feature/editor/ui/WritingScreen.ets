@@ -870,11 +870,6 @@ export struct WritingScreen {
     this.shareService.stopAirTransferSharing().then(() => {})
   }
 
-  // Issue #972 复核：宽屏形态只认外壳传入的 layoutMode，页面不再读取
-  // 外层导航壳传入的 layoutMode；窄屏 / 中屏仍走 HDS 标题栏 + 正文 + 底部状态栏。
-  private get isWideWorkbench(): boolean {
-    return this.layoutMode === WideLayoutMode.Wide
-  }
 
   // Issue #825 复核第2项 / #920 D：HeaderTrailing 动作只在这里解析一次（平台动作表）。
   private async resolveHeaderActions(): Promise<void> {
@@ -887,7 +882,7 @@ export struct WritingScreen {
 
   // 宽屏正文由中央工作台列决定宽度，不再套 840vp 阅读栏；窄屏保持原阅读宽度。
   private editorMaxWidthVp(): number {
-    return this.isWideWorkbench ? this.getWorkbenchWidthVp() : this.adaptiveState.contentMaxWidth
+    return this.layoutMode === WideLayoutMode.Wide ? this.getWorkbenchWidthVp() : this.adaptiveState.contentMaxWidth
   }
 
   private toolRailWidthVp(): number {
@@ -896,7 +891,7 @@ export struct WritingScreen {
 
   private initializeWidePaneWidths(): void {
     const width: number = this.getWorkbenchWidthVp()
-    if (!this.isWideWorkbench || width <= 0) {
+    if (!(this.layoutMode === WideLayoutMode.Wide) || width <= 0) {
       return
     }
     if (this.chapterNavWidthVp <= 0) {
@@ -937,7 +932,7 @@ export struct WritingScreen {
 
   private reconcilePaneSpace(): void {
     const available: number = this.workbenchRowWidthVp
-    if (available <= 0 || !this.isWideWorkbench) {
+    if (available <= 0 || !(this.layoutMode === WideLayoutMode.Wide)) {
       return
     }
 
@@ -964,7 +959,7 @@ export struct WritingScreen {
 
   // 展开/收起和栏宽均为 ArkUI 状态，不进入 Core；展开另一侧仅在当前栏宽会挤占正文时让位。
   private requestToolPaneOpen(toolKey: string): void {
-    if (!this.isWideWorkbench) {
+    if (!(this.layoutMode === WideLayoutMode.Wide)) {
       return
     }
     this.selectedToolKey = toolKey
@@ -975,7 +970,7 @@ export struct WritingScreen {
   }
 
   private requestChapterNavigationOpen(): void {
-    if (!this.isWideWorkbench) {
+    if (!(this.layoutMode === WideLayoutMode.Wide)) {
       return
     }
     if (this.leftPaneCollapsed && !this.rightPaneCollapsed && !this.canKeepBothPanesOpen()) {
@@ -1017,7 +1012,7 @@ export struct WritingScreen {
 
   // Issue #880 复核第 2 项：宽屏工作台目录树只有这一个加载入口，在途请求复用同一个 Promise。
   private ensureWorkbenchProjectTree(): Promise<boolean> {
-    if (!this.isWideWorkbench || this.wideWorkbenchTreeLoaded) {
+    if (!(this.layoutMode === WideLayoutMode.Wide) || this.wideWorkbenchTreeLoaded) {
       return Promise.resolve(this.wideWorkbenchTreeLoaded)
     }
     if (this.projectTreeLoadTask !== null) {
@@ -1036,7 +1031,7 @@ export struct WritingScreen {
   // Issue #629 评论14 第1项：宽屏双栏模式加载项目树。
   // Issue #880 修复4b：返回 boolean，成功时才标记 wideWorkbenchTreeLoaded，失败时可重试。
   private async loadProjectTree(): Promise<boolean> {
-    if (!this.projectId || !this.isWideWorkbench) {
+    if (!this.projectId || !(this.layoutMode === WideLayoutMode.Wide)) {
       return false
     }
     this.isTreeLoading = true
@@ -1273,7 +1268,7 @@ export struct WritingScreen {
   // Issue #768 评论5835171266 第3项：NavDestination 内容部分抽取为 @Builder，供两个分支共用。
   @Builder
   NavContent() {
-    if (this.isWideWorkbench) {
+    if (this.layoutMode === WideLayoutMode.Wide) {
       // Issue #972：宽屏只挂一个整页工作台。上下左右都是同一个布局流，
       // 折叠/拖动只改变列宽；编辑会话仍是本页唯一的 coordinator/dispatcher/IME。
       WideWritingWorkbench({
@@ -1463,7 +1458,7 @@ export struct WritingScreen {
         scroller: this.editorScroller,
         headerActions: this.headerActions,
         // Issue #920 A / #972：宽屏由 WideWritingWorkbench 整页排版，HDS 标题栏必须让位。
-        showTitleBar: !this.isWideWorkbench
+        showTitleBar: !(this.layoutMode === WideLayoutMode.Wide)
       }) {
         this.NavContent()
       }
@@ -1471,7 +1466,7 @@ export struct WritingScreen {
       NavDestination() {
         Column() {
           // 宽屏这条自绘标题行让位给 WideWritingWorkbench 的顶部工具条。
-          if (!this.isWideWorkbench) {
+          if (!(this.layoutMode === WideLayoutMode.Wide)) {
             // Issue #783 评论5856245403：自定义标题行 — 圆形返回按钮 + 标题。
             Row() {
               Button({ type: ButtonType.Circle, stateEffect: true }) {

@@ -442,18 +442,18 @@ export struct PrimaryTabShell {
     if (name === Routes.Home) {
       // Issue #768 评论5838624438：星图快捷入口改为切换一级 tab，不再 push 进 homeStack。
       HomeScreen({
-        layoutMode: this.wideLayoutMode,
+        layoutMode: resolveWideLayoutMode(this.shellWidthVp),
         onOpenStarMap: (): void => {
           // Issue #906：作品页「打开星图」是明确的用户入口，走统一的用户 Tab 请求记录。
           this.recordUserTabRequest(TAB_STARMAP)
         }
       })
     } else if (name === Routes.Workspace) {
-      WorkspaceScreen({ navPathStack: ownerStack, layoutMode: this.wideLayoutMode })
+      WorkspaceScreen({ navPathStack: ownerStack, layoutMode: resolveWideLayoutMode(this.shellWidthVp) })
     } else if (name === Routes.Writing) {
-      WritingScreen({ navPathStack: ownerStack, layoutMode: this.wideLayoutMode })
+      WritingScreen({ navPathStack: ownerStack, layoutMode: resolveWideLayoutMode(this.shellWidthVp) })
     } else if (name === Routes.StarMapList) {
-      StarMapListScreen({ navPathStack: ownerStack, layoutMode: this.wideLayoutMode })
+      StarMapListScreen({ navPathStack: ownerStack, layoutMode: resolveWideLayoutMode(this.shellWidthVp) })
     } else if (name === Routes.StarMap) {
       // Issue #972：星图详情沿用打开它的真实一级 Tab；写作工作台打开时 ownerTabIndex=0。
       StarMapScreen({ screenTabIndex: ownerTabIndex })
@@ -462,7 +462,7 @@ export struct PrimaryTabShell {
     } else if (name === Routes.Search) {
       SearchScreen({ navPathStack: ownerStack, screenTabIndex: ownerTabIndex })
     } else if (name === Routes.Stats) {
-      StatsScreen({ layoutMode: this.wideLayoutMode })
+      StatsScreen({ layoutMode: resolveWideLayoutMode(this.shellWidthVp) })
     }
   }
 
@@ -498,24 +498,12 @@ export struct PrimaryTabShell {
     }
   }
 
-  // Issue #972：宽屏外壳只由根容器实测宽度按 840vp 断点解析一次。
-  // 宽屏只实例化 WideAppShell，窄屏只实例化 CompactPrimaryShell，两者不会同时挂载。
-  //
-  // 这里必须读取 @State shellWidthVp 派生模式，而不是读 WideLayoutState 单例：
-  // ArkUI 只在渲染期间读取状态变量时建立依赖，单例普通字段变化不会标脏 build()。
-  // WideLayoutState 仍由 onAreaChange 同步写入，作为设置浮层/接续恢复的只读投影。
-  private get wideLayoutMode(): WideLayoutMode {
-    return resolveWideLayoutMode(this.shellWidthVp)
-  }
-
-  private get usesWideNavigation(): boolean {
-    return this.wideLayoutMode === WideLayoutMode.Wide
-  }
 
   // Issue #968：诊断只记录实际挂载的外壳根容器，而不是根据布尔值预计会挂哪一个。
   // 宽屏 Row 和窄屏 HdsTabs / Tabs 的 onAppear 各自调用这里，日志与同一份 widthVp 对照。
   private recordMountedShell(shell: string): void {
-    const signature: string = `${this.shellWidthVp}x${this.adaptiveState.heightVp}:${this.wideLayoutMode}:${shell}`
+    const mountedMode: WideLayoutMode = resolveWideLayoutMode(this.shellWidthVp)
+    const signature: string = `${this.shellWidthVp}x${this.adaptiveState.heightVp}:${mountedMode}:${shell}`
     if (signature === this.lastReportedLayoutMode) {
       return
     }
@@ -523,7 +511,7 @@ export struct PrimaryTabShell {
     const fields: DiagnosticField[] = [
       { key: 'widthVp', value: String(this.adaptiveState.widthVp) },
       { key: 'heightVp', value: String(this.adaptiveState.heightVp) },
-      { key: 'wideLayoutMode', value: this.wideLayoutMode },
+      { key: 'wideLayoutMode', value: String(mountedMode) },
       { key: 'mountedShell', value: shell },
       { key: 'currentTab', value: String(this.currentTab) }
     ]
@@ -570,7 +558,7 @@ export struct PrimaryTabShell {
   WideShell() {
     WideAppShell({
       currentTab: this.currentTab,
-      layoutMode: this.wideLayoutMode,
+      layoutMode: resolveWideLayoutMode(this.shellWidthVp),
       showPrimaryNavigation: this.currentShowPrimaryNav,
       headerActions: this.wideHeaderActions,
       safeTopVp: this.adaptiveState.safeTopVp,
@@ -685,7 +673,7 @@ export struct PrimaryTabShell {
     // 窄屏只挂 CompactPrimaryShell，两者不会同时挂载。
     // 设置浮层由窗口级 custom dialog 承载（见 aboutToAppear 的 attachUIContext），与本 Stack 无关。
     Stack() {
-      if (this.usesWideNavigation) {
+      if (resolveWideLayoutMode(this.shellWidthVp) === WideLayoutMode.Wide) {
         this.WideShell()
       } else {
         Column() {

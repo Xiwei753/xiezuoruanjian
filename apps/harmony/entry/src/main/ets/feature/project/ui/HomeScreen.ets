@@ -132,16 +132,13 @@ export struct HomeScreen {
     this.viewModel.retry()
   }
 
-  private get usesWideLayout(): boolean {
-    return this.layoutMode === WideLayoutMode.Wide
-  }
 
   private navigateToWorkspace(projectId: string, projectName: string): void {
     const navPathStack = this.navCoordinator.getNavPathStack()
     if (!navPathStack) {
       return
     }
-    if (this.usesWideLayout) {
+    if (this.layoutMode === WideLayoutMode.Wide) {
       // 宽屏：直接进入写作工作台
       this.navigateToWritingFromProject(projectId, projectName)
     } else {
@@ -457,7 +454,7 @@ export struct HomeScreen {
   HomeContent() {
     Stack() {
       Column() {
-        if (this.usesWideLayout) {
+        if (this.layoutMode === WideLayoutMode.Wide) {
           // ── 宽屏：书封卡片网格，从内容区左上开始排（Issue #972） ──
           WideProjectHome({
             projects: this.viewModel.projects,
@@ -520,7 +517,7 @@ export struct HomeScreen {
         title: $r('app.string.app_title'),
         screenRole: ScreenRole.ProjectList,
         screenTabIndex: 0,
-        showTitleBar: !this.usesWideLayout
+        showTitleBar: !(this.layoutMode === WideLayoutMode.Wide)
       }) {
         this.HomeContent()
       }
@@ -528,7 +525,7 @@ export struct HomeScreen {
       NavDestination() {
         this.HomeContent()
       }
-      .hideTitleBar(this.usesWideLayout)
+      .hideTitleBar(this.layoutMode === WideLayoutMode.Wide)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title($r('app.string.app_title'))
