@@ -367,6 +367,29 @@ export class PeerSyncSession {
     }
   }
 
+  // 两端清单中同一 path 的版本一致（含同版本 tombstone）时，把该版本记为
+  // 附近设备共同基线。先核对本机仍是该版本，避免把用户刚修改的内容记成基线。
+  // 只写 app-meta/peer/agreements.local.json，绝不写 Git 的 known_files。
+  private establishEqualPeerAgreement(path: string, expectedHash: string,
+    deleted: boolean): void {
+    if (expectedHash.length === 0) {
+      return
+    }
+    if (!deleted) {
+      const current: PeerStoredContent | null = this.corePort.readLocalObject(path)
+      if (current === null || current.object.deleted ||
+        current.object.contentHash !== expectedHash) {
+        return
+      }
+    }
+    try {
+      this.corePort.confirmPeerObjects(this.remoteDeviceId,
+        [{ path: path, contentHash: expectedHash, deleted: deleted }])
+    } catch (_e) {
+      // 基线写入失败不阻断同步，下一轮会再次尝试建立。
+    }
+  }
+
   // 从提交结果中找到该路径实际落盘的版本 hash。星图语义合并可能生成
   // 第三个 hash，ACK 需携带它让发送端写入正确的共同基线。
   private committedHashFor(path: string, committed: PeerObjectCommitResult): string {
@@ -443,7 +466,6 @@ export class PeerSyncSession {
       this.fail(committed.message)
       return
     }
-    this.transport.rememberRequest(message.requestId)
     this.applied += committed.applied
     if (committed.conflicts > 0) {
       this.unresolvedConflicts += committed.conflicts
@@ -455,15 +477,20 @@ export class PeerSyncSession {
       deleted: false,
       deviceId: ownerDeviceId
     })
-    // 先持久化本轮本地基线，再发成功 ACK：不能先 sendAck(true) 后 confirmPeerObjects()，
-    // 确认后存储失败会造成两端成功状态不一致。
+    // 先持久化本轮本地基线，再 remember + 发 ACK：不能先 remember/ACK 后
+    // confirmPeerObjects()，确认后存储失败会造成两端成功状态不一致，
+    // 且重试会被 isDuplicate 误判为已成功。
     if (!this.confirmCommitted(committed)) {
       this.clearReadForPath(message.path, false)
       this.fail('保存附近设备共同基线失败')
       return
     }
+    this.transport.rememberRequest(message.requestId)
     const committedHash: string = this.committedHashFor(message.path, committed)
-    if (!await this.sendAck(message.requestId, true, committed.message, committedHash)) {
+    // 冲突时接收端保留本地版本，ACK 报告"已保留冲突副本"让发送端结束本次传输，
+    // 但不推进共同版本；非冲突时 ACK 携带接收端实际落盘 hash。
+    const hasConflict: boolean = committed.conflicts > 0 && committedHash.length === 0
+    if (!await this.sendAck(message.requestId, true, committed.message, committedHash, hasConflict)) {
       this.clearReadForPath(message.path, false)
       this.fail('发送附近设备确认失败')
       return
@@ -497,7 +524,6 @@ export class PeerSyncSession {
       this.fail(committed.message)
       return
     }
-    this.transport.rememberRequest(message.requestId)
     this.applied += committed.applied
     if (committed.conflicts > 0) {
       this.unresolvedConflicts += committed.conflicts
@@ -507,8 +533,10 @@ export class PeerSyncSession {
       this.fail('保存附近设备共同基线失败')
       return
     }
+    this.transport.rememberRequest(message.requestId)
     const committedHash: string = this.committedHashFor(message.path, committed)
-    if (!await this.sendAck(message.requestId, true, committed.message, committedHash)) {
+    const hasConflict: boolean = committed.conflicts > 0 && committedHash.length === 0
+    if (!await this.sendAck(message.requestId, true, committed.message, committedHash, hasConflict)) {
       this.fail('发送附近设备确认失败')
       return
     }
@@ -612,6 +640,13 @@ export class PeerSyncSession {
       const remote: PeerObjectDescriptor = entry[1]
       const current: PeerStoredObject | undefined = local.get(path)
       if (remote.deleted) {
+        // 两端都是同版本墓碑：建立附近设备共同基线，不传输。
+        // 这样之后一端恢复创建时不会把另一端的 tombstone 误判成 both_changed。
+        if (current !== undefined && current.deleted &&
+          current.contentHash === remote.contentHash) {
+          this.establishEqualPeerAgreement(path, current.contentHash, true)
+          continue
+        }
         // 墓碑不能因为“本地 mtime 更新”就被跳过：正文/星图对象的删除-修改
         // 必须交给 PeerObjectStore 记录冲突；普通元数据由 store 按 LWW 决定。
         const staged: PeerObjectCommitResult = this.corePort.stageRemoteObject(
@@ -632,8 +667,13 @@ export class PeerSyncSession {
         }
         continue
       }
-      if (current !== undefined && !current.deleted &&
+      if (current !== undefined && !current.deleted && !remote.deleted &&
         current.contentHash === remote.contentHash) {
+        // 两端文件版本一致但可能从未互传过、也没有 Git known_files：
+        // 把当前版本记为对这台设备已认可的 Peer 基线，避免之后一端编辑到 V2
+        // 时 knownBase() 读不到基线，把 V1 误判成"本机也修改"制造假 both_changed。
+        // 只修改 app-meta/peer/agreements.local.json，绝不写 Git 的 known_files。
+        this.establishEqualPeerAgreement(path, current.contentHash, false)
         continue
       }
       // 用户正文、星图索引/GraphMeta、星图对象文件必须拉取远端内容：
@@ -791,24 +831,25 @@ export class PeerSyncSession {
       return
     }
     this.transport.markAck(requestId)
-    // 发送端收到对端针对具体对象版本的持久化成功 ACK 后，也将该路径和版本
-    // 写入发件方的 Peer agreement。星图语义合并可能生成第三个 hash，
-    // ACK payload 携带接收方实际合并结果的版本；如未收敛到同版本，
-    // 不能假称双方已有共同版本，下一轮继续传差异。
+    // 发送端收到 ACK 后，只有当 ACK 携带的接收端实际落盘 hash 与发送端
+    // 本地该对象版本一致时，才写入发件方 Peer agreement：
+    // - 'conflict'：接收端保留本地版本，不推进共同基线。
+    // - 'true'：manifest/continuation 等非业务对象，不涉及共同基线。
+    // - 具体 hash 但与发送端版本不同：星图语义合并产出第三个 hash M，
+    //   此时 M !== 发送端版本，不推进共同基线，下一轮清单差异交换继续收敛。
+    // 双方只在同一个 path 两端真实落盘哈希一致（删除时两端同版本 tombstone）
+    // 的情况下更新 Peer agreement。
     if (pending.path !== undefined && pending.path.length > 0 &&
       !pending.path.startsWith(MANIFEST_OBJECT_PREFIX) &&
-      !pending.path.startsWith(CONTINUATION_OBJECT_PREFIX)) {
-      const committedHash: string = payload === 'true'
-        ? (pending.contentHash ?? '')
-        : payload
-      if (committedHash.length > 0) {
-        try {
-          this.corePort.confirmPeerObjects(this.remoteDeviceId,
-            [{ path: pending.path, contentHash: committedHash,
-              deleted: pending.deleted ?? false }])
-        } catch (_e) {
-          // 基线写入失败不阻断已成功的对象传输，但会让下一轮重复检测失效。
-        }
+      !pending.path.startsWith(CONTINUATION_OBJECT_PREFIX) &&
+      payload !== 'conflict' && payload !== 'true' &&
+      pending.contentHash !== undefined && payload === pending.contentHash) {
+      try {
+        this.corePort.confirmPeerObjects(this.remoteDeviceId,
+          [{ path: pending.path, contentHash: payload,
+            deleted: pending.deleted ?? false }])
+      } catch (_e) {
+        // 基线写入失败不阻断已成功的对象传输，但会让下一轮重复检测失效。
       }
     }
     pending.resolve(true)
@@ -839,14 +880,27 @@ export class PeerSyncSession {
     this.setState('syncing', detail)
   }
 
+  // ACK payload 语义：
+  // - 'false'：接收端提交失败，发送端应重试。
+  // - 'conflict'：接收端保留本地版本（冲突未采用），本次传输结束但不推进共同基线。
+  // - 'true'：manifest/continuation 等非业务对象成功，不涉及共同基线。
+  // - 具体 hash：接收端实际落盘的 contentHash，发送端据此判断双方是否已收敛。
   private sendAck(requestId: string, success: boolean, message: string,
-    committedHash: string = ''): Promise<boolean> {
+    committedHash: string = '', conflict: boolean = false): Promise<boolean> {
+    let payload: string
+    if (!success) {
+      payload = 'false'
+    } else if (conflict) {
+      payload = 'conflict'
+    } else {
+      payload = committedHash.length > 0 ? committedHash : 'true'
+    }
     const ack: PeerWireMessage = {
       version: PEER_PROTOCOL_VERSION,
       type: 'ack',
       requestId: requestId,
       message: success ? 'ok' : message,
-      payload: success ? (committedHash.length > 0 ? committedHash : 'true') : 'false'
+      payload: payload
     }
     return this.send(ack)
   }
