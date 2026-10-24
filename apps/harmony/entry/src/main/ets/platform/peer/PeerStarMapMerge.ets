@@ -94,51 +94,71 @@ function maxVersion(left: string | undefined, right: string | undefined): string
   return String(Math.max(leftNumber, rightNumber))
 }
 
+// 索引成员合并：对没有明确删除事实的独立 ID 做并集，不能以整个索引文件的
+// updatedAt 判定某个成员已被删。三路判定需要共同基线的成员清单：
+// - baseIds 提供：base 有而一端没有 → 另一端明确删除，接受删除；
+//   base 没有 → 该端新增，保留。
+// - baseIds 无法获取但有基线（hasBase）：无法判定新增 vs 删除，保留并报告冲突。
+// - 无基线（首次同步）：两端各自新增，并集保留，不报冲突。
 function mergeIndexIds(local: string[] | undefined, remote: string[] | undefined,
-  localUpdatedAt: number, remoteUpdatedAt: number): string[] {
+  baseIds: Set<string> | undefined, hasBase: boolean,
+  onConflict: () => void): string[] {
   const localSet: Set<string> = new Set<string>(local ?? [])
   const remoteSet: Set<string> = new Set<string>(remote ?? [])
+  const allIds: Set<string> = new Set<string>()
+  ;(local ?? []).forEach((id: string): void => {
+    if (id.length > 0) {
+      allIds.add(id)
+    }
+  })
+  ;(remote ?? []).forEach((id: string): void => {
+    if (id.length > 0) {
+      allIds.add(id)
+    }
+  })
   const merged: string[] = []
   const seen: Set<string> = new Set<string>()
   const append = (id: string): void => {
-    if (id.length > 0 && !seen.has(id)) {
+    if (!seen.has(id)) {
       seen.add(id)
       merged.push(id)
     }
   }
-  ;(local ?? []).forEach((id: string): void => {
-    if (remoteSet.has(id) || localUpdatedAt >= remoteUpdatedAt) {
+  allIds.forEach((id: string): void => {
+    const localHas: boolean = localSet.has(id)
+    const remoteHas: boolean = remoteSet.has(id)
+    if (localHas && remoteHas) {
       append(id)
+      return
     }
-  })
-  ;(remote ?? []).forEach((id: string): void => {
-    if (localSet.has(id) || remoteUpdatedAt >= localUpdatedAt) {
+    if (baseIds !== undefined) {
+      if (baseIds.has(id)) {
+        return
+      }
       append(id)
+      return
     }
+    if (hasBase) {
+      onConflict()
+    }
+    append(id)
   })
   return merged
 }
 
+// 项目主图映射合并：同样不能用整索引 updatedAt 判定单端映射被删。
+// 三路判定与 mergeIndexIds 一致：base 有而一端没有 → 另一端删除；
+// 无 base 内容但有基线 → 保留并报告冲突；无基线 → 新增保留。
 function mergeProjectMap(local: Record<string, string> | undefined,
-  remote: Record<string, string> | undefined, localUpdatedAt: number,
-  remoteUpdatedAt: number, onConflict: () => void): Record<string, string> {
-  const keys: string[] = []
-  const seen: Set<string> = new Set<string>()
+  remote: Record<string, string> | undefined,
+  baseMap: Record<string, string> | undefined, hasBase: boolean,
+  onConflict: () => void): Record<string, string> {
+  const keys: Set<string> = new Set<string>()
   if (local !== undefined) {
-    Object.keys(local).forEach((key: string): void => {
-      if (!seen.has(key)) {
-        seen.add(key)
-        keys.push(key)
-      }
-    })
+    Object.keys(local).forEach((key: string): void => { keys.add(key) })
   }
   if (remote !== undefined) {
-    Object.keys(remote).forEach((key: string): void => {
-      if (!seen.has(key)) {
-        seen.add(key)
-        keys.push(key)
-      }
-    })
+    Object.keys(remote).forEach((key: string): void => { keys.add(key) })
   }
   const merged: Record<string, string> = {}
   keys.forEach((projectId: string): void => {
@@ -146,7 +166,6 @@ function mergeProjectMap(local: Record<string, string> | undefined,
     const remoteId: string | undefined = remote === undefined ? undefined : remote[projectId]
     if (localId !== undefined && remoteId !== undefined) {
       if (localId !== remoteId) {
-        // 同 project 指向不同星图：保留本机当前主图，由调用方记录冲突。
         onConflict()
         merged[projectId] = localId
       } else {
@@ -155,15 +174,30 @@ function mergeProjectMap(local: Record<string, string> | undefined,
       return
     }
     if (localId !== undefined) {
-      // 远端没有该映射：只有远端索引更新时才认为它删除了映射。
-      if (localUpdatedAt >= remoteUpdatedAt) {
+      if (baseMap !== undefined) {
+        if (baseMap[projectId] !== undefined) {
+          return
+        }
         merged[projectId] = localId
+        return
       }
+      if (hasBase) {
+        onConflict()
+      }
+      merged[projectId] = localId
       return
     }
-    if (remoteId !== undefined && remoteUpdatedAt >= localUpdatedAt) {
-      merged[projectId] = remoteId
+    if (baseMap !== undefined) {
+      if (baseMap[projectId] !== undefined) {
+        return
+      }
+      merged[projectId] = remoteId as string
+      return
     }
+    if (hasBase) {
+      onConflict()
+    }
+    merged[projectId] = remoteId as string
   })
   return merged
 }
@@ -224,20 +258,25 @@ function mergeNumberMap(local: Record<string, number> | undefined,
 }
 
 function mergeIndex(local: PeerStarMapIndexRecord,
-  remote: PeerStarMapIndexRecord): PeerStarMapMergeResult {
+  remote: PeerStarMapIndexRecord, base: PeerStarMapIndexRecord | undefined,
+  hasBase: boolean): PeerStarMapMergeResult {
   let conflict: boolean = false
-  const localUpdatedAt: number = local.updatedAt ?? 0
-  const remoteUpdatedAt: number = remote.updatedAt ?? 0
+  const baseIds: Set<string> | undefined = base === undefined ? undefined
+    : new Set<string>(base.starmapIds ?? [])
   const starmapIds: string[] = mergeIndexIds(local.starmapIds, remote.starmapIds,
-    localUpdatedAt, remoteUpdatedAt)
+    baseIds, hasBase, (): void => { conflict = true })
   const existing: Set<string> = new Set<string>(starmapIds)
+  const baseRootIds: Set<string> | undefined = base === undefined ? undefined
+    : new Set<string>(base.rootStarmapIds ?? [])
   const rootStarmapIds: string[] = mergeIndexIds(local.rootStarmapIds,
-    remote.rootStarmapIds, localUpdatedAt, remoteUpdatedAt)
+    remote.rootStarmapIds, baseRootIds, hasBase, (): void => { conflict = true })
     .filter((id: string): boolean => existing.has(id))
   // 普通星图新增映射允许直接吸收；同 project 指向不同 starmap 时保留本机，
   // 由 PeerObjectStore 记录冲突，不擅自修改项目当前主图。
+  const baseMap: Record<string, string> | undefined = base === undefined
+    ? undefined : base.mainStarmapByProject
   const main: Record<string, string> = mergeProjectMap(local.mainStarmapByProject,
-    remote.mainStarmapByProject, localUpdatedAt, remoteUpdatedAt, (): void => {
+    remote.mainStarmapByProject, baseMap, hasBase, (): void => {
       conflict = true
     })
   const mainFiltered: Record<string, string> = {}
@@ -260,7 +299,7 @@ function mergeIndex(local: PeerStarMapIndexRecord,
   merged.mainStarmapByProject = mainFiltered
   merged.updatedAt = maxNumber(local.updatedAt, remote.updatedAt)
   return finalize(local, merged, conflict, conflict
-    ? '附近设备星图索引中同一项目的默认星图不同，已保留本机映射'
+    ? '附近设备星图索引合并存在无法判定的删除或主图冲突，已保留本机'
     : '')
 }
 
@@ -552,12 +591,16 @@ export class PeerStarMapMerge {
   }
 
   static merge(path: string, localBytes: Uint8Array,
-    remoteBytes: Uint8Array): PeerStarMapMergeResult {
+    remoteBytes: Uint8Array, baseBytes?: Uint8Array,
+    hasBase: boolean = false): PeerStarMapMergeResult {
     const localText: string = PeerCrypto.utf8Decode(localBytes)
     const remoteText: string = PeerCrypto.utf8Decode(remoteBytes)
     if (path === 'app/starmaps/index.json') {
+      const baseRecord: PeerStarMapIndexRecord | undefined = baseBytes === undefined
+        ? undefined
+        : JSON.parse(PeerCrypto.utf8Decode(baseBytes)) as PeerStarMapIndexRecord
       return mergeIndex(JSON.parse(localText) as PeerStarMapIndexRecord,
-        JSON.parse(remoteText) as PeerStarMapIndexRecord)
+        JSON.parse(remoteText) as PeerStarMapIndexRecord, baseRecord, hasBase)
     }
     return mergeGraph(JSON.parse(localText) as PeerStarMapGraphMeta,
       JSON.parse(remoteText) as PeerStarMapGraphMeta)

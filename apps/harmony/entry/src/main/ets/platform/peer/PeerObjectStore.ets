@@ -358,9 +358,19 @@ export class PeerObjectStore {
         // 星图索引 / GraphMeta：按稳定对象 ID 合并，绝不整文件 mtime LWW。
         if (isPeerStarMapSemanticPath(object.path)) {
           if (localBytes !== null) {
+            // 推断共同基线内容：若基线 hash 等于某一端，该端内容即基线内容。
+            // 双方都改了且无法获取基线内容时，merge 做并集并报告无法判定的冲突。
+            const hasBase: boolean = baseHash.length > 0
+            let baseBytes: Uint8Array | undefined = undefined
+            if (hasBase && baseHash === localHash) {
+              baseBytes = localBytes
+            } else if (hasBase && baseHash === object.contentHash) {
+              baseBytes = object.bytes
+            }
             let merged: PeerStarMapMergeResult
             try {
-              merged = PeerStarMapMerge.merge(object.path, localBytes, object.bytes)
+              merged = PeerStarMapMerge.merge(object.path, localBytes, object.bytes,
+                baseBytes, hasBase)
             } catch (e) {
               throw new Error(`星图语义合并失败：${String(e)}`)
             }

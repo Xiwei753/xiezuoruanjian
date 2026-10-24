@@ -62,6 +62,10 @@ interface PendingAck {
   timer: number
   resend: () => Promise<boolean>
   resolve: (success: boolean) => void
+  // 发送端收到对端持久化成功 ACK 后，用这些字段把该路径和版本写入发件方 Peer agreement。
+  path?: string
+  contentHash?: string
+  deleted?: boolean
 }
 
 interface PendingRead {
@@ -270,7 +274,7 @@ export class PeerSyncSession {
       return
     }
     if (message.type === 'ack') {
-      this.completeAck(message.requestId, message.payload === 'true', message.message ?? '')
+      this.completeAck(message.requestId, message.payload ?? '', message.message ?? '')
     }
   }
 
@@ -363,6 +367,20 @@ export class PeerSyncSession {
     }
   }
 
+  // 从提交结果中找到该路径实际落盘的版本 hash。星图语义合并可能生成
+  // 第三个 hash，ACK 需携带它让发送端写入正确的共同基线。
+  private committedHashFor(path: string, committed: PeerObjectCommitResult): string {
+    if (committed.appliedObjects === undefined) {
+      return ''
+    }
+    for (const entry of committed.appliedObjects) {
+      if (entry.path === path) {
+        return entry.contentHash
+      }
+    }
+    return ''
+  }
+
   private async acceptWriteEnd(message: PeerWireMessage): Promise<void> {
     if (message.chunk === undefined || message.path === undefined ||
       message.contentHash === undefined) {
@@ -437,15 +455,17 @@ export class PeerSyncSession {
       deleted: false,
       deviceId: ownerDeviceId
     })
-    // 只有 ACK 真正发送成功后才能推进会话状态；发送失败必须保持可重试的失败状态。
-    if (!await this.sendAck(message.requestId, true, committed.message)) {
-      this.clearReadForPath(message.path, false)
-      this.fail('发送附近设备确认失败')
-      return
-    }
+    // 先持久化本轮本地基线，再发成功 ACK：不能先 sendAck(true) 后 confirmPeerObjects()，
+    // 确认后存储失败会造成两端成功状态不一致。
     if (!this.confirmCommitted(committed)) {
       this.clearReadForPath(message.path, false)
       this.fail('保存附近设备共同基线失败')
+      return
+    }
+    const committedHash: string = this.committedHashFor(message.path, committed)
+    if (!await this.sendAck(message.requestId, true, committed.message, committedHash)) {
+      this.clearReadForPath(message.path, false)
+      this.fail('发送附近设备确认失败')
       return
     }
     this.clearReadForPath(message.path, true)
@@ -483,12 +503,13 @@ export class PeerSyncSession {
       this.unresolvedConflicts += committed.conflicts
     }
     this.remoteObjects.delete(message.path)
-    if (!await this.sendAck(message.requestId, true, committed.message)) {
-      this.fail('发送附近设备确认失败')
-      return
-    }
     if (!this.confirmCommitted(committed)) {
       this.fail('保存附近设备共同基线失败')
+      return
+    }
+    const committedHash: string = this.committedHashFor(message.path, committed)
+    if (!await this.sendAck(message.requestId, true, committed.message, committedHash)) {
+      this.fail('发送附近设备确认失败')
       return
     }
     this.maybeReady(committed.message)
@@ -726,7 +747,10 @@ export class PeerSyncSession {
         attempts: 0,
         timer: -1,
         resend: resend,
-        resolve: resolve
+        resolve: resolve,
+        path: path,
+        contentHash: contentHash,
+        deleted: deleted
       }
       this.pendingAcks.set(requestId, pending)
       void this.sendPending(pending)
@@ -737,7 +761,7 @@ export class PeerSyncSession {
     pending.attempts++
     const sent: boolean = await pending.resend()
     if (!sent) {
-      this.completeAck(pending.requestId, false, '对象分片发送失败')
+      this.completeAck(pending.requestId, 'false', '对象分片发送失败')
       return
     }
     // 最后一次发送也必须给它完整的确认窗口，不能刚发出就宣告超时。
@@ -746,26 +770,47 @@ export class PeerSyncSession {
         return
       }
       if (pending.attempts >= MAX_SEND_ATTEMPTS) {
-        this.completeAck(pending.requestId, false, '附近设备确认超时')
+        this.completeAck(pending.requestId, 'false', '附近设备确认超时')
         return
       }
       void this.sendPending(pending)
     }, ACK_TIMEOUT_MS)
   }
 
-  private completeAck(requestId: string, success: boolean, message: string): void {
+  private completeAck(requestId: string, payload: string, message: string): void {
     const pending: PendingAck | undefined = this.pendingAcks.get(requestId)
     if (pending === undefined) {
       return
     }
     clearTimeout(pending.timer)
     this.pendingAcks.delete(requestId)
+    const success: boolean = payload !== 'false' && payload.length > 0
     if (!success) {
       this.fail(message.length > 0 ? message : '附近设备拒绝了对象')
       pending.resolve(false)
       return
     }
     this.transport.markAck(requestId)
+    // 发送端收到对端针对具体对象版本的持久化成功 ACK 后，也将该路径和版本
+    // 写入发件方的 Peer agreement。星图语义合并可能生成第三个 hash，
+    // ACK payload 携带接收方实际合并结果的版本；如未收敛到同版本，
+    // 不能假称双方已有共同版本，下一轮继续传差异。
+    if (pending.path !== undefined && pending.path.length > 0 &&
+      !pending.path.startsWith(MANIFEST_OBJECT_PREFIX) &&
+      !pending.path.startsWith(CONTINUATION_OBJECT_PREFIX)) {
+      const committedHash: string = payload === 'true'
+        ? (pending.contentHash ?? '')
+        : payload
+      if (committedHash.length > 0) {
+        try {
+          this.corePort.confirmPeerObjects(this.remoteDeviceId,
+            [{ path: pending.path, contentHash: committedHash,
+              deleted: pending.deleted ?? false }])
+        } catch (_e) {
+          // 基线写入失败不阻断已成功的对象传输，但会让下一轮重复检测失效。
+        }
+      }
+    }
     pending.resolve(true)
     this.maybeReady('附近设备对象已确认接收')
   }
@@ -794,13 +839,14 @@ export class PeerSyncSession {
     this.setState('syncing', detail)
   }
 
-  private sendAck(requestId: string, success: boolean, message: string): Promise<boolean> {
+  private sendAck(requestId: string, success: boolean, message: string,
+    committedHash: string = ''): Promise<boolean> {
     const ack: PeerWireMessage = {
       version: PEER_PROTOCOL_VERSION,
       type: 'ack',
       requestId: requestId,
       message: success ? 'ok' : message,
-      payload: success ? 'true' : 'false'
+      payload: success ? (committedHash.length > 0 ? committedHash : 'true') : 'false'
     }
     return this.send(ack)
   }
