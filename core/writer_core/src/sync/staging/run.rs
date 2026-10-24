@@ -313,8 +313,23 @@ impl StagingRun {
             .map(|s| s.tombstones.clone())
             .unwrap_or_default();
 
-        // 读取 live 的持久 manifest。它才是本地对象的版本事实；
+        // 读取 base/live 的持久 manifest，保留三方对象版本时间事实；
         // 不能用当前文件系统 mtime 覆盖已有记录。
+        let base_manifest_result = match &self.app_group {
+            Some(group) => read_live_manifest_for_group(&base_root, group),
+            None => read_live_manifest(&base_root),
+        };
+        let base_manifest = match base_manifest_result {
+            Ok(Some(map)) => map,
+            Ok(None) => std::collections::HashMap::new(),
+            Err(e) => {
+                return Err(crate::Error::Other(format!(
+                    "compute_commit_plan: base manifest unavailable: {e}"
+                )));
+            }
+        };
+
+        // live manifest 是本地对象的版本事实；
         let live_manifest_result = match &self.app_group {
             Some(group) => read_live_manifest_for_group(live_root, group),
             None => read_live_manifest(live_root),
@@ -647,6 +662,7 @@ impl StagingRun {
             String,
             crate::sync::staging::starmap_merge::GraphLifecycleDecision,
         > = std::collections::HashMap::new();
+        let mut starmap_pruned_object_paths = std::collections::HashSet::new();
 
         for (starmap_id, group) in starmap_groups {
             // issue #902 第十七轮复核问题1：先读取 meta 三方 bytes，
@@ -664,74 +680,18 @@ impl StagingRun {
                 (None, None, None)
             };
 
-            let graph_rel = match &group.graph_meta_path {
-                Some(p) => p.clone(),
-                None => {
-                    // issue #902 第十七轮复核问题1：graph 不存在但 meta 可能存在。
-                    // 独立做 meta-only 生命周期处理，不走 merge_starmap_graph_with_objects，
-                    // 不产生 graph/object 的 CommitAction，不制造凭空存在的 graph。
-                    // graph 未创建时通过 meta/index 判断其创建、删除与冲突。
-                    let lifecycle_decision =
-                        crate::sync::staging::starmap_merge::resolve_graph_lifecycle(
-                            None,
-                            None,
-                            None,
-                            meta_base.as_deref(),
-                            meta_local.as_deref(),
-                            meta_incoming.as_deref(),
-                        );
-                    graph_lifecycle_decisions
-                        .insert(starmap_id.clone(), lifecycle_decision.clone());
-
-                    // 处理 meta（复用统一逻辑）
-                    if let Some(mr) = &meta_rel {
-                        apply_meta_lifecycle_decision(
-                            &mut plan,
-                            &lifecycle_decision,
-                            mr,
-                            &meta_base,
-                            &meta_local,
-                            &meta_incoming,
-                            false, // graph_local_exists
-                            false, // graph_incoming_exists
-                            live_root,
-                            &staging_root,
-                            &live_device_id,
-                            &live_tombstones,
-                            &live_manifest,
-                            &staging_manifest,
-                        )?;
-
-                        // issue #902 第十九轮复核问题1a：
-                        // meta-only 空星图的 DeleteModifyConflict 产生 StagingConflict，
-                        // 否则用户看不到冲突。
-                        if let crate::sync::staging::starmap_merge::GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted } = &lifecycle_decision {
-                            // is_local_deleted=true：本地删除远端修改 → BothChanged
-                            //   （用户选远端 = 恢复远端 meta）
-                            // is_local_deleted=false：远端删除本地修改 → RemoteDeleted
-                            //   （用户选远端 = 接受删除）
-                            let kind = if *is_local_deleted {
-                                crate::sync::types::SyncConflictKind::BothChanged
-                            } else {
-                                crate::sync::types::SyncConflictKind::RemoteDeleted
-                            };
-                            plan.conflict.push(StagingConflict {
-                                rel_path: mr.clone(),
-                                base_hash: md5_hex(&meta_base),
-                                local_hash: md5_hex(&meta_local),
-                                incoming_hash: md5_hex(&meta_incoming),
-                                kind,
-                                remote_snapshot_path: None,
-                                remote_graph_snapshot_dir: None,
-                            });
-                        }
-                    }
-                    continue;
-                }
+            let graph_rel = group.graph_meta_path.clone();
+            let (graph_base, graph_local, graph_incoming) = if let Some(graph_rel) = &graph_rel {
+                (
+                    read_opt_bytes(&base_root.join(graph_rel))?,
+                    read_opt_bytes(&live_root.join(graph_rel))?,
+                    read_opt_bytes(&staging_root.join(graph_rel))?,
+                )
+            } else {
+                // 图文件不存在时仍合并 object_paths：starmap_merge 将没有成员引用的
+                // 对象判为孤儿并生成 Delete，不让恢复到 staging 的文件被跳过。
+                (None, None, None)
             };
-            let graph_base = read_opt_bytes(&base_root.join(&graph_rel))?;
-            let graph_local = read_opt_bytes(&live_root.join(&graph_rel))?;
-            let graph_incoming = read_opt_bytes(&staging_root.join(&graph_rel))?;
 
             // 读取每个对象文件的三方 bytes
             // (rel_path, object_type, object_id, base, local, incoming)
@@ -802,7 +762,9 @@ impl StagingRun {
             // graph 级冲突事实：DeleteModifyConflict 时产生 graph.json 的 StagingConflict
             // （issue #902 第十二轮复核）。此前只靠对象级 Conflict 隐式传递整图冲突，
             // 用户无法在 graph.json 层面看到冲突。
-            if let Some(graph_conflict_kind) = output.graph_conflict {
+            if let (Some(graph_rel), Some(graph_conflict_kind)) =
+                (&graph_rel, output.graph_conflict)
+            {
                 let graph_base_hash = md5_hex(&graph_base);
                 let graph_local_hash = md5_hex(&graph_local);
                 let graph_incoming_hash = md5_hex(&graph_incoming);
@@ -819,27 +781,30 @@ impl StagingRun {
                 });
             }
 
-            // graph.json 结果装入 CommitPlan
-            match output.graph_meta_result {
-                StarmapMergeResult::NoOp => {
-                    plan.noop.push(graph_rel);
-                }
-                StarmapMergeResult::KeepLocal => {
-                    plan.keep_local.push(graph_rel);
-                }
-                StarmapMergeResult::ApplyIncoming(content)
-                | StarmapMergeResult::ApplyMerged(content) => {
-                    plan.content_actions.push(CommitAction::Apply {
-                        rel_path: graph_rel,
-                        content,
-                    });
-                }
-                StarmapMergeResult::Delete => {
-                    // 远端删除了整个 graph 且 local 未改 → 删除 live 的 graph.json
-                    // 修复 issue #902 第十一轮复核
-                    plan.content_actions.push(CommitAction::Delete {
-                        rel_path: graph_rel,
-                    });
+            // graph.json 结果装入 CommitPlan；没有 graph 路径时不生成虚构动作，
+            // 但对象决策仍然进入共同处理路径。
+            if let Some(graph_rel) = graph_rel.as_ref() {
+                match output.graph_meta_result {
+                    StarmapMergeResult::NoOp => {
+                        plan.noop.push(graph_rel.clone());
+                    }
+                    StarmapMergeResult::KeepLocal => {
+                        plan.keep_local.push(graph_rel.clone());
+                    }
+                    StarmapMergeResult::ApplyIncoming(content)
+                    | StarmapMergeResult::ApplyMerged(content) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: graph_rel.clone(),
+                            content,
+                        });
+                    }
+                    StarmapMergeResult::Delete => {
+                        // 远端删除了整个 graph 且 local 未改 → 删除 live 的 graph.json
+                        // 修复 issue #902 第十一轮复核
+                        plan.content_actions.push(CommitAction::Delete {
+                            rel_path: graph_rel.clone(),
+                        });
+                    }
                 }
             }
 
@@ -863,6 +828,8 @@ impl StagingRun {
                         });
                     }
                     ObjectMergeDecision::Delete => {
+                        starmap_pruned_object_paths
+                            .insert(obj_rel.to_string_lossy().replace('\\', "/"));
                         // 按 live 文件是否存在决定动作：
                         // - live 仍有该对象文件 → 必须发出 Delete 动作真正删除磁盘文件
                         // - live 已不存在 → 无需操作（noop）
@@ -912,6 +879,27 @@ impl StagingRun {
                     &live_manifest,
                     &staging_manifest,
                 )?;
+
+                // meta-only 空星图的 DeleteModifyConflict 由 meta 路径承载，
+                // 否则用户无法看到并选择整图生命周期冲突。
+                if graph_rel.is_none() {
+                    if let crate::sync::staging::starmap_merge::GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted } = &output.lifecycle_decision {
+                        let kind = if *is_local_deleted {
+                            crate::sync::types::SyncConflictKind::BothChanged
+                        } else {
+                            crate::sync::types::SyncConflictKind::RemoteDeleted
+                        };
+                        plan.conflict.push(StagingConflict {
+                            rel_path: mr.clone(),
+                            base_hash: md5_hex(&meta_base),
+                            local_hash: md5_hex(&meta_local),
+                            incoming_hash: md5_hex(&meta_incoming),
+                            kind,
+                            remote_snapshot_path: None,
+                            remote_graph_snapshot_dir: None,
+                        });
+                    }
+                }
             }
         }
 
@@ -956,6 +944,20 @@ impl StagingRun {
             }
         }
 
+        if !starmap_pruned_object_paths.is_empty() {
+            plan.needs_sync_state_merge = true;
+            plan.starmap_pruned_object_paths = starmap_pruned_object_paths.clone();
+            write_starmap_delete_records_to_manifest(
+                &mut plan.engine_state_actions,
+                &self.app_group,
+                &starmap_pruned_object_paths,
+                &base_manifest,
+                &live_manifest,
+                &staging_manifest,
+                &live_device_id,
+            )?;
+        }
+
         Ok(plan)
     }
 
@@ -963,6 +965,180 @@ impl StagingRun {
     pub fn cleanup(&self) {
         let _ = fs::remove_dir_all(&self.run_root);
     }
+}
+
+fn write_starmap_delete_records_to_manifest(
+    actions: &mut Vec<CommitAction>,
+    app_group: &Option<crate::sync::types::AppDataGroup>,
+    deleted_paths: &std::collections::HashSet<String>,
+    base_records: &std::collections::HashMap<String, super::resolve::ManifestRecord>,
+    live_records: &std::collections::HashMap<String, super::resolve::ManifestRecord>,
+    staging_records: &std::collections::HashMap<String, super::resolve::ManifestRecord>,
+    device_id: &str,
+) -> Result<()> {
+    use crate::sync::types::{ManifestFileRecord, SyncManifest};
+
+    let manifest_rel = app_group
+        .as_ref()
+        .map(crate::sync::types::AppDataGroup::local_manifest_path)
+        .unwrap_or_else(|| "app-meta/sync/manifest.sync.json".to_string());
+    let action_index = actions.iter().position(|action| {
+        let path = match action {
+            CommitAction::Apply { rel_path, .. } | CommitAction::Delete { rel_path } => rel_path,
+        };
+        path.to_string_lossy().replace('\\', "/") == manifest_rel
+    });
+
+    let mut manifest = if let Some(index) = action_index {
+        match &actions[index] {
+            CommitAction::Apply { content, .. } => serde_json::from_slice::<SyncManifest>(content)
+                .map_err(|error| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "write_starmap_delete_records_to_manifest: invalid merged manifest: {error}"
+                    )))
+                })?,
+            CommitAction::Delete { .. } => SyncManifest::default(),
+        }
+    } else {
+        // A manifest may not exist on the first sync. Preserve any records already
+        // available in either snapshot, then add the semantic graph deletions.
+        let to_file_record = |record: &super::resolve::ManifestRecord| ManifestFileRecord {
+            path: record.path.clone(),
+            content_hash: record.content_hash.clone(),
+            updated_at_ms: record.updated_at_ms,
+            deleted_at_ms: record.deleted_at_ms,
+            device_id: record.device_id.clone(),
+            op: record.op.clone(),
+            schema_version: 1,
+        };
+        let mut records: std::collections::BTreeMap<
+            String,
+            crate::sync::types::ManifestFileRecord,
+        > = base_records
+            .iter()
+            .map(|(path, record)| (path.clone(), to_file_record(record)))
+            .collect();
+        for (path, incoming_record) in live_records.iter().chain(staging_records.iter()) {
+            match records.get(path) {
+                Some(live_record) => {
+                    let winner = crate::sync::content_class::resolve_lww(
+                        &crate::sync::content_class::LwwRecord {
+                            content_hash: live_record.content_hash.clone(),
+                            updated_at_ms: live_record.updated_at_ms,
+                            deleted_at_ms: live_record.deleted_at_ms,
+                            device_id: live_record.device_id.clone(),
+                            op: live_record.op.clone(),
+                        },
+                        &crate::sync::content_class::LwwRecord {
+                            content_hash: incoming_record.content_hash.clone(),
+                            updated_at_ms: incoming_record.updated_at_ms,
+                            deleted_at_ms: incoming_record.deleted_at_ms,
+                            device_id: incoming_record.device_id.clone(),
+                            op: incoming_record.op.clone(),
+                        },
+                    );
+                    if winner == crate::sync::content_class::LwwWinner::Remote {
+                        records.insert(path.clone(), to_file_record(incoming_record));
+                    }
+                }
+                None => {
+                    records.insert(path.clone(), to_file_record(incoming_record));
+                }
+            }
+        }
+        SyncManifest {
+            files: records.into_values().collect(),
+        }
+    };
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    for path in deleted_paths {
+        let merged_record = manifest.files.iter().find(|record| record.path == *path);
+        let base_record = base_records.get(path);
+        let stage_record = staging_records.get(path);
+        let live_record = live_records.get(path);
+
+        let record_time = |updated_at_ms: i64, deleted_at_ms: Option<i64>| {
+            updated_at_ms.max(deleted_at_ms.unwrap_or(i64::MIN))
+        };
+        let latest_record_time = merged_record
+            .map(|record| record_time(record.updated_at_ms, record.deleted_at_ms))
+            .into_iter()
+            .chain(
+                base_record.map(|record| record_time(record.updated_at_ms, record.deleted_at_ms)),
+            )
+            .chain(
+                stage_record.map(|record| record_time(record.updated_at_ms, record.deleted_at_ms)),
+            )
+            .chain(
+                live_record.map(|record| record_time(record.updated_at_ms, record.deleted_at_ms)),
+            )
+            .max()
+            .unwrap_or(i64::MIN);
+        let merged_delete_wins = merged_record.is_some_and(|record| {
+            record.op == "delete"
+                && [base_record, stage_record, live_record]
+                    .into_iter()
+                    .flatten()
+                    .all(|other| {
+                        crate::sync::content_class::resolve_lww(
+                            &crate::sync::content_class::LwwRecord {
+                                content_hash: record.content_hash.clone(),
+                                updated_at_ms: record.updated_at_ms,
+                                deleted_at_ms: record.deleted_at_ms,
+                                device_id: record.device_id.clone(),
+                                op: record.op.clone(),
+                            },
+                            &crate::sync::content_class::LwwRecord {
+                                content_hash: other.content_hash.clone(),
+                                updated_at_ms: other.updated_at_ms,
+                                deleted_at_ms: other.deleted_at_ms,
+                                device_id: other.device_id.clone(),
+                                op: other.op.clone(),
+                            },
+                        ) != crate::sync::content_class::LwwWinner::Remote
+                    })
+        });
+        if merged_delete_wins {
+            continue;
+        }
+        let deleted_at_ms = now_ms.max(latest_record_time).saturating_add(1);
+        let schema_version = merged_record
+            .map(|record| record.schema_version)
+            .unwrap_or(1);
+        let tombstone = ManifestFileRecord {
+            path: path.clone(),
+            content_hash: String::new(),
+            updated_at_ms: deleted_at_ms,
+            deleted_at_ms: Some(deleted_at_ms),
+            device_id: device_id.to_string(),
+            op: "delete".to_string(),
+            schema_version,
+        };
+        if let Some(record) = manifest
+            .files
+            .iter_mut()
+            .find(|record| record.path == *path)
+        {
+            *record = tombstone;
+        } else {
+            manifest.files.push(tombstone);
+        }
+    }
+    manifest
+        .files
+        .sort_by(|left, right| left.path.cmp(&right.path));
+
+    let content = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?;
+    let rel_path = PathBuf::from(&manifest_rel);
+    let action = CommitAction::Apply { rel_path, content };
+    if let Some(index) = action_index {
+        actions[index] = action;
+    } else {
+        actions.push(action);
+    }
+    Ok(())
 }
 
 ///   第1/2节：在**无 Core 锁**状态下创建并 seed 所有 staging runs。

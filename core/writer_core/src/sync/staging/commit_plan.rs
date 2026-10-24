@@ -23,6 +23,9 @@ pub struct CommitPlan {
     /// [`crate::sync::staging::sync_state_merge::merge_sync_state_three_way`]
     /// 并在同一 tx 里提交合并结果，而不是从 `engine_state_actions` 直接 apply。
     pub needs_sync_state_merge: bool,
+    /// StarMap object paths removed by the final three-way graph membership merge.
+    /// Commit removes their cached sync-state facts together with the content decision.
+    pub starmap_pruned_object_paths: std::collections::HashSet<String>,
     /// incoming==base，保留 local（无需动作，记录供诊断）。
     pub keep_local: Vec<PathBuf>,
     /// local==incoming，内容相同，无需操作。

@@ -41,7 +41,7 @@ pub(super) fn lww_record_time(record: &ManifestFileRecord) -> i64 {
 /// 本地文件快照：正常可判定的记录 + 缺失且无删除证据的文件。
 #[derive(Debug, Clone)]
 pub(crate) struct LocalSnapshot {
-    /// 正常投影出的 `path → record`（含真实 tombstone 产生的 delete record）。
+    /// 正常投影出的 `path → record`（含 state/manifest 删除事实产生的 delete record）。
     pub records: HashMap<String, ManifestFileRecord>,
     /// known_files / 旧 manifest 中记录但磁盘缺失且无 tombstone 的文件。
     /// 这些文件既不能当成删除事实，也不能凭空生成 upsert；merge 需先尝试
@@ -247,12 +247,15 @@ fn build_local_snapshot(
                 if old_rec.content_hash != local_hash {
                     log::debug!(
                         "[sync] snapshot_local_records: {} manifest hash {} != file hash {} — rebuilding record (content diverged since manifest write-back)",
-                        path, old_rec.content_hash, local_hash
+                        path,
+                        old_rec.content_hash,
+                        local_hash
                     );
                 } else {
                     log::debug!(
                         "[sync] snapshot_local_records: {} manifest op={} != upsert — rebuilding record",
-                        path, old_rec.op
+                        path,
+                        old_rec.op
                     );
                 }
             }
@@ -301,6 +304,14 @@ fn build_local_snapshot(
             continue;
         }
         if !sync_root.join(path).exists() {
+            // A committed manifest delete is already durable deletion evidence;
+            // it must not also be reported as an unexplained missing local file.
+            if old_manifest_records
+                .get(path)
+                .is_some_and(|record| record.op == "delete")
+            {
+                continue;
+            }
             // 有真实 tombstone → 用 tombstone 的 deleted_at + deleted_by/device_id。
             if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path) {
                 let deleted_at_ms = tombstone.deleted_at * 1000;
@@ -337,7 +348,7 @@ fn build_local_snapshot(
         }
     }
 
-    // 5.   ：manifest 中有 upsert record 但文件不在磁盘上
+    // 5. manifest 中有 upsert record 但文件不在磁盘上
     //    且不在 known_files → 不再把旧 upsert 冒充当前本地事实。
     //    - 文件实际存在 → 说明被 whitelisted/blacklisted 跳过，不管（上面 step 3 已处理）；
     //    - 文件不存在 + 有 tombstone（state.tombstones 中 original_path 匹配）
@@ -346,6 +357,28 @@ fn build_local_snapshot(
     //    - 文件不存在 + 无 tombstone → 返回 Err（不能伪造当前本地事实）。
     for (path, old_rec) in &old_manifest_records {
         if records.contains_key(path) {
+            continue;
+        }
+        // A committed manifest delete is a durable local delete fact even when
+        // state.local.json no longer lists the path. Preserve it so the next LWW
+        // merge cannot interpret a stale remote upsert as missing local content.
+        if old_rec.op == "delete" {
+            if !sync_root.join(path).exists() {
+                let validated = ValidatedSyncPath::new(path)?;
+                let normalized = validated.as_str();
+                let whitelisted = app_group.map_or_else(
+                    || SyncService::is_whitelisted_path(normalized, scope),
+                    |group| SyncService::is_whitelisted_app_group_path(normalized, group),
+                );
+                if normalized != SYNC_MANIFEST_PATH
+                    && whitelisted
+                    && !SyncService::is_blacklisted_path(normalized, scope)
+                {
+                    let mut record = old_rec.clone();
+                    record.path = normalized.to_string();
+                    records.insert(normalized.to_string(), record);
+                }
+            }
             continue;
         }
         if old_rec.op != "upsert" {

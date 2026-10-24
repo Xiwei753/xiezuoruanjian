@@ -25,9 +25,13 @@
 //! - <https://docs.github.com/en/rest/git/commits>
 //! - <https://docs.github.com/en/rest/git/refs>
 
+use std::collections::HashMap;
+
 use writer_platform_api::SyncTransport;
 
-use super::client::{get_commit, get_ref, patch_ref, post_blob, post_commit, post_trees};
+use super::client::{
+    get_commit, get_ref, get_tree_recursive, patch_ref, post_blob, post_commit, post_trees,
+};
 use super::error::map_http_error;
 use crate::sync::provider::error::ProviderError;
 use crate::sync::provider::model::{BatchCommitResult, BatchMutation, RemoteVersion};
@@ -143,9 +147,143 @@ fn mutations_to_tree_entries(
                     "sha": serde_json::Value::Null,
                 }));
             }
+            BatchMutation::DeleteIfMatch { path, .. } => {
+                entries.push(serde_json::json!({
+                    "path": path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": serde_json::Value::Null,
+                }));
+            }
+            BatchMutation::CheckObject { .. } | BatchMutation::CheckPrefix { .. } => {}
         }
     }
     Ok(entries)
+}
+
+/// 在 commit_batch 所基于的同一远端 tree 上校验条件 mutation。
+/// 后续 ref 使用 force=false 更新；若校验后远端推进，ref 更新会失败。
+fn validate_batch_preconditions(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    base_tree_sha: &str,
+    mutations: &[BatchMutation],
+) -> Result<(), ProviderError> {
+    if !mutations.iter().any(|mutation| {
+        matches!(
+            mutation,
+            BatchMutation::DeleteIfMatch { .. }
+                | BatchMutation::CheckObject { .. }
+                | BatchMutation::CheckPrefix { .. }
+        )
+    }) {
+        return Ok(());
+    }
+
+    let response = get_tree_recursive(transport, api_base, token, base_tree_sha)?;
+    let body = String::from_utf8(response.body).unwrap_or_default();
+    if !(200..300).contains(&response.status) {
+        return Err(map_http_error(
+            "git_database get tree for batch preconditions",
+            response.status,
+            body,
+        ));
+    }
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|error| ProviderError::Other {
+            reason: format!("invalid tree JSON while validating batch preconditions: {error}"),
+        })?;
+    if json["truncated"].as_bool() == Some(true) {
+        let path = mutations
+            .iter()
+            .find(|mutation| {
+                matches!(
+                    mutation,
+                    BatchMutation::DeleteIfMatch { .. }
+                        | BatchMutation::CheckObject { .. }
+                        | BatchMutation::CheckPrefix { .. }
+                )
+            })
+            .map(|mutation| mutation.path().to_string())
+            .unwrap_or_else(|| "batch preconditions".to_string());
+        return Err(ProviderError::PreconditionFailed {
+            path,
+            reason: "recursive tree was truncated; cannot verify batch preconditions".to_string(),
+        });
+    }
+    let items = json["tree"]
+        .as_array()
+        .ok_or_else(|| ProviderError::Other {
+            reason: "tree response missing 'tree' array while validating batch preconditions"
+                .to_string(),
+        })?;
+    let mut versions = HashMap::with_capacity(items.len());
+    for item in items {
+        if item["type"].as_str() != Some("blob") {
+            continue;
+        }
+        if let (Some(path), Some(version)) = (item["path"].as_str(), item["sha"].as_str()) {
+            versions.insert(path.to_string(), version.to_string());
+        }
+    }
+
+    for mutation in mutations {
+        match mutation {
+            BatchMutation::DeleteIfMatch { path, version } => {
+                if versions.get(path).map(String::as_str) != Some(version.as_str()) {
+                    return Err(ProviderError::PreconditionFailed {
+                        path: path.clone(),
+                        reason: format!(
+                            "version mismatch: expected={version}, current={:?}",
+                            versions.get(path)
+                        ),
+                    });
+                }
+            }
+            BatchMutation::CheckObject {
+                path,
+                expected_version,
+            } => {
+                let current = versions.get(path).map(String::as_str);
+                if current != expected_version.as_ref().map(|version| version.as_str()) {
+                    return Err(ProviderError::PreconditionFailed {
+                        path: path.clone(),
+                        reason: format!(
+                            "object version mismatch: expected={expected_version:?}, current={current:?}"
+                        ),
+                    });
+                }
+            }
+            BatchMutation::CheckPrefix {
+                prefix,
+                expected_entries,
+            } => {
+                let prefix_with_slash = format!("{prefix}/");
+                let mut current_entries: Vec<(String, String)> = versions
+                    .iter()
+                    .filter_map(|(path, version)| {
+                        path.strip_prefix(&prefix_with_slash)
+                            .map(|relative_path| (relative_path.to_string(), version.clone()))
+                    })
+                    .collect();
+                current_entries.sort_by(|a, b| a.0.cmp(&b.0));
+                let mut expected: Vec<(String, String)> = expected_entries
+                    .iter()
+                    .map(|entry| (entry.path.clone(), entry.version.0.clone()))
+                    .collect();
+                expected.sort_by(|a, b| a.0.cmp(&b.0));
+                if current_entries != expected {
+                    return Err(ProviderError::PreconditionFailed {
+                        path: prefix.clone(),
+                        reason: "directory object set or version changed".to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// 执行 Git Database API 原子批量提交。
@@ -187,6 +325,8 @@ pub(crate) fn commit_batch_via_git_database(
         ));
     }
     let base_tree_sha = parse_commit_tree_sha(&commit_body)?;
+
+    validate_batch_preconditions(transport, api_base, token, &base_tree_sha, mutations)?;
 
     // 3. 每个 Put 先 POST /git/blobs 拿 blob SHA，再构造 tree entries。
     let tree_entries = mutations_to_tree_entries(transport, api_base, token, mutations)?;
@@ -247,7 +387,16 @@ pub(crate) fn commit_batch_via_git_database(
         ));
     }
 
-    let touched_paths = mutations.iter().map(|m| m.path().to_string()).collect();
+    let touched_paths = mutations
+        .iter()
+        .filter(|mutation| {
+            !matches!(
+                mutation,
+                BatchMutation::CheckObject { .. } | BatchMutation::CheckPrefix { .. }
+            )
+        })
+        .map(|mutation| mutation.path().to_string())
+        .collect();
     Ok(BatchCommitResult {
         revision: RemoteVersion(new_commit_sha),
         touched_paths,

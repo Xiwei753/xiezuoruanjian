@@ -236,13 +236,23 @@ fn apply_commit_plan_with_optional_merge(
         let base_root = run.base_root();
         let staging_root = run.staging_root();
         let app_group = run.app_group();
-        let (merged_state, merged_conflicts) =
+        let (mut merged_state, mut merged_conflicts) =
             crate::sync::staging::sync_state_merge::merge_sync_state_three_way_for_target(
                 &base_root,
                 live_root,
                 &staging_root,
                 app_group,
             )?;
+        for path in &plan.starmap_pruned_object_paths {
+            merged_state.known_files.remove(path);
+            merged_state.known_files_updated_at.remove(path);
+            merged_state.pending_take_remote.remove(path);
+            merged_state.conflicted_files.remove(path);
+            merged_state
+                .conflicts
+                .retain(|conflict| conflict.local_path != *path);
+            merged_conflicts.retain(|conflict| conflict.local_path != *path);
+        }
         apply_commit_plan_with_sync_state_merge_for_group(
             live_root,
             content_actions,

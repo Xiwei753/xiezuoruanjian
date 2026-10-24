@@ -224,6 +224,65 @@ impl SyncProvider for MemoryProvider {
                     next.remove(path);
                     touched.push(path.clone());
                 }
+                BatchMutation::DeleteIfMatch { path, version } => match store.get(path) {
+                    Some((_, current)) if current == version => {
+                        next.remove(path);
+                        touched.push(path.clone());
+                    }
+                    Some((_, current)) => {
+                        return Err(ProviderError::PreconditionFailed {
+                            path: path.clone(),
+                            reason: format!(
+                                "version mismatch: expected={version}, current={current}"
+                            ),
+                        });
+                    }
+                    None => {
+                        return Err(ProviderError::PreconditionFailed {
+                            path: path.clone(),
+                            reason: "object does not exist".to_string(),
+                        });
+                    }
+                },
+                BatchMutation::CheckObject {
+                    path,
+                    expected_version,
+                } => {
+                    let current = store.get(path).map(|(_, version)| version);
+                    if current != expected_version.as_ref() {
+                        return Err(ProviderError::PreconditionFailed {
+                            path: path.clone(),
+                            reason: format!(
+                                "object version mismatch: expected={expected_version:?}, current={current:?}"
+                            ),
+                        });
+                    }
+                }
+                BatchMutation::CheckPrefix {
+                    prefix,
+                    expected_entries,
+                } => {
+                    let prefix_with_slash = format!("{prefix}/");
+                    let mut current_entries: Vec<RemoteEntry> = store
+                        .iter()
+                        .filter_map(|(path, (_, version))| {
+                            path.strip_prefix(&prefix_with_slash)
+                                .map(|relative_path| RemoteEntry {
+                                    path: relative_path.to_string(),
+                                    version: version.clone(),
+                                })
+                        })
+                        .collect();
+                    current_entries.sort_by(|a, b| a.path.cmp(&b.path));
+                    let mut expected_entries = expected_entries.clone();
+                    expected_entries.sort_by(|a, b| a.path.cmp(&b.path));
+                    if current_entries != expected_entries {
+                        return Err(ProviderError::PreconditionFailed {
+                            path: prefix.clone(),
+                            reason: "directory object set or version changed".to_string(),
+                        });
+                    }
+                }
             }
         }
         // 全部 mutation 成功后才提交，保证 batch 原子性。

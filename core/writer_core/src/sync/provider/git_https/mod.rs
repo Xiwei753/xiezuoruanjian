@@ -120,7 +120,16 @@ impl GitHttpsProvider {
         self.advance_snapshot(&planned, committed_snapshot);
         Ok(BatchCommitResult {
             revision: RemoteVersion::new(commit_oid.to_string()),
-            touched_paths: mutations.iter().map(|m| m.path().to_string()).collect(),
+            touched_paths: mutations
+                .iter()
+                .filter(|mutation| {
+                    !matches!(
+                        mutation,
+                        BatchMutation::CheckObject { .. } | BatchMutation::CheckPrefix { .. }
+                    )
+                })
+                .map(|mutation| mutation.path().to_string())
+                .collect(),
         })
     }
 }

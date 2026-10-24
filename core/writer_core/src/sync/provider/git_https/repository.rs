@@ -21,7 +21,7 @@ use super::config::GitHttpsRuntimeConfig;
 use super::credentials;
 use crate::sync::provider::error::ProviderError;
 use crate::sync::provider::model::{
-    BatchMutation, DeletePrecondition, RemoteVersion, WritePrecondition,
+    BatchMutation, DeletePrecondition, RemoteEntry, RemoteVersion, WritePrecondition,
 };
 
 const REMOTE_NAME: &str = "origin";
@@ -273,6 +273,22 @@ fn build_index(
                 // 删除不存在的路径保持幂等，与 HTTP DELETE 语义一致。
                 let _ = index.remove_path(Path::new(path));
             }
+            BatchMutation::DeleteIfMatch { path, version } => {
+                check_delete_precondition(
+                    snapshot,
+                    path,
+                    &DeletePrecondition::IfMatch(version.clone()),
+                )?;
+                let _ = index.remove_path(Path::new(path));
+            }
+            BatchMutation::CheckObject {
+                path,
+                expected_version,
+            } => check_object_precondition(snapshot, path, expected_version.as_ref())?,
+            BatchMutation::CheckPrefix {
+                prefix,
+                expected_entries,
+            } => check_prefix_precondition(snapshot, prefix, expected_entries)?,
         }
     }
     Ok((index, written_blobs))
@@ -477,6 +493,55 @@ pub(crate) fn check_delete_precondition(
             }),
         },
         DeletePrecondition::Unconditional => Ok(()),
+    }
+}
+
+pub(crate) fn check_object_precondition(
+    snapshot: &Snapshot,
+    path: &str,
+    expected_version: Option<&RemoteVersion>,
+) -> Result<(), ProviderError> {
+    let current = blob_version(snapshot, path);
+    if current.as_ref() == expected_version {
+        Ok(())
+    } else {
+        Err(ProviderError::PreconditionFailed {
+            path: path.to_string(),
+            reason: format!(
+                "object version mismatch: expected={expected_version:?}, current={current:?}"
+            ),
+        })
+    }
+}
+
+pub(crate) fn check_prefix_precondition(
+    snapshot: &Snapshot,
+    prefix: &str,
+    expected_entries: &[RemoteEntry],
+) -> Result<(), ProviderError> {
+    let prefix_with_slash = format!("{prefix}/");
+    let mut current_entries: Vec<RemoteEntry> = snapshot
+        .blobs
+        .iter()
+        .filter_map(|(path, oid)| {
+            path.strip_prefix(&prefix_with_slash)
+                .map(|relative_path| RemoteEntry {
+                    path: relative_path.to_string(),
+                    version: RemoteVersion::new(oid.to_string()),
+                })
+        })
+        .collect();
+    current_entries.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let mut expected_entries = expected_entries.to_vec();
+    expected_entries.sort_by(|a, b| a.path.cmp(&b.path));
+    if current_entries == expected_entries {
+        Ok(())
+    } else {
+        Err(ProviderError::PreconditionFailed {
+            path: prefix.to_string(),
+            reason: "directory object set or version changed".to_string(),
+        })
     }
 }
 

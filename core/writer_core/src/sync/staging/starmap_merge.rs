@@ -1481,7 +1481,64 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     )],
     object_versions: &HashMap<String, (Option<LwwRecord>, Option<LwwRecord>)>,
 ) -> Result<StarmapGraphMergeOutput> {
-    // --- 1. 对每个对象做三方决策，收集最终胜出 bytes ---
+    // --- 1. 解析 graph 成员并确定对象保留边界 ---
+    let base_meta = parse_graph_meta(graph_base)?;
+    let local_meta = parse_graph_meta(graph_local)?;
+    let incoming_meta = parse_graph_meta(graph_incoming)?;
+
+    let lifecycle_decision = resolve_graph_lifecycle(
+        graph_base,
+        graph_local,
+        graph_incoming,
+        meta_base,
+        meta_local,
+        meta_incoming,
+    );
+
+    // --- 整图生命周期决策（issue #902 第十二轮复核）---
+    // 删除或删除-修改冲突必须优先于对象级决策，不能用孤儿对象复活整图。
+    match &lifecycle_decision {
+        GraphLifecycleDecision::Delete => {
+            let decisions = objects
+                .iter()
+                .map(|(rel, _, _, _, _, _)| (rel.clone(), ObjectMergeDecision::Delete))
+                .collect();
+            return Ok(StarmapGraphMergeOutput {
+                graph_meta_result: StarmapMergeResult::Delete,
+                object_decisions: decisions,
+                lifecycle_decision,
+                graph_conflict: None,
+            });
+        }
+        GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted } => {
+            let decisions = objects
+                .iter()
+                .map(|(rel, _, _, _, _, _)| (rel.clone(), ObjectMergeDecision::NoOp))
+                .collect();
+            let conflict_kind = if *is_local_deleted {
+                crate::sync::types::SyncConflictKind::BothChanged
+            } else {
+                crate::sync::types::SyncConflictKind::RemoteDeleted
+            };
+            return Ok(StarmapGraphMergeOutput {
+                graph_meta_result: StarmapMergeResult::NoOp,
+                object_decisions: decisions,
+                lifecycle_decision,
+                graph_conflict: Some(conflict_kind),
+            });
+        }
+        GraphLifecycleDecision::Normal => {}
+    }
+
+    // The graph membership lists are authoritative. Files left behind after a
+    // member is removed are orphans and must not be appended back into graph.json.
+    let initial_members = merge_member_ids(
+        base_meta.as_ref(),
+        local_meta.as_ref(),
+        incoming_meta.as_ref(),
+    );
+
+    // --- 2. 对每个对象做三方决策，收集最终胜出 bytes ---
     let mut object_decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)> = Vec::new();
     let mut final_objects: HashMap<(String, String), Vec<u8>> = HashMap::new();
     let mut node_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
@@ -1498,13 +1555,17 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
                 (local_record.as_ref(), incoming_record.as_ref())
             })
             .unwrap_or((None, None));
-        let decision = merge_starmap_object_with_versions(
-            base.as_deref(),
-            local.as_deref(),
-            incoming.as_deref(),
-            local_record,
-            incoming_record,
-        );
+        let decision = if is_object_still_exists(object_type, object_id, &initial_members.sets) {
+            merge_starmap_object_with_versions(
+                base.as_deref(),
+                local.as_deref(),
+                incoming.as_deref(),
+                local_record,
+                incoming_record,
+            )
+        } else {
+            ObjectMergeDecision::Delete
+        };
 
         // 收集胜出 bytes：ApplyIncoming/ApplyMerged 用新内容，KeepLocal/Conflict 用 local，
         // NoOp 用 local（== incoming），Delete 无 bytes。
@@ -1542,79 +1603,15 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
         object_decisions.push((rel_path.clone(), decision));
     }
 
-    // --- 2. 解析三方 graph meta ---
-    let base_meta = parse_graph_meta(graph_base)?;
-    let local_meta = parse_graph_meta(graph_local)?;
-    let incoming_meta = parse_graph_meta(graph_incoming)?;
-
-    // 文件双方都不存在 → 无操作
-    // --- 整图生命周期决策（issue #902 第十二轮复核）---
-    // 对称处理 base/local/incoming 三方整图存在性，覆盖远端删除和本地删除
-    // 所有场景。原 check_entire_graph_delete 只处理远端删除单边场景。
-    // issue #902 第十七轮复核：整图实体 = graph + meta，纳入 meta bytes 判断。
-    let lifecycle_decision = resolve_graph_lifecycle(
-        graph_base,
-        graph_local,
-        graph_incoming,
-        meta_base,
-        meta_local,
-        meta_incoming,
-    );
-    match &lifecycle_decision {
-        GraphLifecycleDecision::Normal => {
-            // 正常合并，继续走常规 graph+对象合并流程。
-            // 安全网：三方 graph 都不存在时直接 NoOp（此时 base 也无，
-            // 否则 lifecycle 会是 Delete/DeleteModifyConflict）。
-            if graph_local.is_none() && graph_incoming.is_none() {
-                return Ok(StarmapGraphMergeOutput {
-                    graph_meta_result: StarmapMergeResult::NoOp,
-                    object_decisions,
-                    lifecycle_decision,
-                    graph_conflict: None,
-                });
-            }
-        }
-        GraphLifecycleDecision::Delete => {
-            // 整图删除：双端删除，或一端删除另一端未改。
-            // graph 输出 Delete，所有对象也输出 Delete。
-            let decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)> = objects
-                .iter()
-                .map(|(rel, _, _, _, _, _)| (rel.clone(), ObjectMergeDecision::Delete))
-                .collect();
-            return Ok(StarmapGraphMergeOutput {
-                graph_meta_result: StarmapMergeResult::Delete,
-                object_decisions: decisions,
-                lifecycle_decision,
-                graph_conflict: None,
-            });
-        }
-        GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted } => {
-            // 删除-修改冲突：一端删除整图，另一端修改了 graph。
-            // graph 输出 NoOp（保留 live graph），产生 graph 级冲突事实
-            // （graph_conflict 承载"整图删除还是整图恢复"的选择）。
-            // 整图生命周期冲突未裁决：不执行任何子对象 Apply/Delete。
-            // 子对象全部标为 NoOp，等用户选择整图版本后再基于胜出整图
-            // 的成员表、对象、index 生成完整 CommitPlan。
-            // 此前直接写入真实三方合并结果会导致正常 Commit 提前对图内对象
-            // 执行 Delete/Apply，例如未修改的 n1 被立即删除 n1.json，
-            // 而 graph.json 仍包含 n1，下次 StarMapStore 加载 n1 将找不到文件
-            // （issue #902 第十四轮复核）。
-            let noop_decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)> = objects
-                .iter()
-                .map(|(rel, _, _, _, _, _)| (rel.clone(), ObjectMergeDecision::NoOp))
-                .collect();
-            let conflict_kind = if *is_local_deleted {
-                crate::sync::types::SyncConflictKind::BothChanged
-            } else {
-                crate::sync::types::SyncConflictKind::RemoteDeleted
-            };
-            return Ok(StarmapGraphMergeOutput {
-                graph_meta_result: StarmapMergeResult::NoOp,
-                object_decisions: noop_decisions,
-                lifecycle_decision,
-                graph_conflict: Some(conflict_kind),
-            });
-        }
+    // 安全网：三方 graph 都不存在时没有任何成员引用对象。保留对象级 Delete
+    // 决策，让调用方清理遗留文件；不创建凭空存在的 graph.json。
+    if graph_base.is_none() && graph_local.is_none() && graph_incoming.is_none() {
+        return Ok(StarmapGraphMergeOutput {
+            graph_meta_result: StarmapMergeResult::NoOp,
+            object_decisions,
+            lifecycle_decision,
+            graph_conflict: None,
+        });
     }
 
     let (merged_starmap_id, merged_schema_version) = resolve_graph_meta_header(
@@ -1623,14 +1620,7 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
         incoming_meta.as_ref(),
     )?;
 
-    // --- 3. 用 graph 成员表三方合并得到初始成员表（保持顺序） ---
-    let initial_members = merge_member_ids(
-        base_meta.as_ref(),
-        local_meta.as_ref(),
-        incoming_meta.as_ref(),
-    );
-
-    // --- 4. 从 final_objects 构建按类型分组的最终对象 ID 集合 ---
+    // --- 3. 从 final_objects 构建按类型分组的最终对象 ID 集合 ---
     let mut final_node: HashSet<String> = HashSet::new();
     let mut final_edge: HashSet<String> = HashSet::new();
     let mut final_embed: HashSet<String> = HashSet::new();

@@ -98,6 +98,10 @@ pub enum DeletePrecondition {
 ///   不重新上传正文。GitHub 下 `version` 是 blob SHA，作为 tree entry 的 `sha`
 ///   传给 POST /git/trees，复用已有 blob 不重新上传。
 /// - [`BatchMutation::Delete`]：从远端移除该路径。
+/// - [`BatchMutation::DeleteIfMatch`]：仅当路径版本匹配时移除对象。
+/// - [`BatchMutation::CheckObject`]：要求路径存在状态/版本匹配，不修改对象；用于把
+///   依赖条件与 batch mutation 放在同一原子提交中验证。
+/// - [`BatchMutation::CheckPrefix`]：要求目录前缀下的对象集合与版本完全匹配，不修改对象。
 ///
 /// `path` 始终是相对远端根的完整路径（含 remote_prefix），与 `SyncProvider::write`
 /// 的 path 语义一致。同一 batch 内同一 `path` 不应出现多次（实现可自行决定去重/报错）。
@@ -115,6 +119,22 @@ pub enum BatchMutation {
     Delete {
         path: String,
     },
+    /// 删除前检查对象版本。校验与本 batch 的其他 mutation 原子执行。
+    DeleteIfMatch {
+        path: String,
+        version: RemoteVersion,
+    },
+    /// 只检查对象的存在状态/版本，不修改对象。
+    CheckObject {
+        path: String,
+        expected_version: Option<RemoteVersion>,
+    },
+    /// 只检查目录前缀下的对象路径与版本集合，不修改对象。
+    /// `expected_entries.path` 相对于 `prefix`，与 `SyncProvider::list(prefix)` 一致。
+    CheckPrefix {
+        prefix: String,
+        expected_entries: Vec<RemoteEntry>,
+    },
 }
 
 impl BatchMutation {
@@ -123,7 +143,10 @@ impl BatchMutation {
         match self {
             BatchMutation::Put { path, .. }
             | BatchMutation::ReuseVersion { path, .. }
-            | BatchMutation::Delete { path } => path,
+            | BatchMutation::Delete { path }
+            | BatchMutation::DeleteIfMatch { path, .. }
+            | BatchMutation::CheckObject { path, .. } => path,
+            BatchMutation::CheckPrefix { prefix, .. } => prefix,
         }
     }
 }
