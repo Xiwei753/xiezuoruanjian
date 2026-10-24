@@ -48,6 +48,12 @@ echo ""
 # -----------------------------------------------------------------------------
 detect_native_dir() {
     local -a cands=()
+    # 与 hvigor 使用同一份 SDK：tools/setup_harmony_cli.sh 将此变量设为
+    # command-line-tools/sdk，DevEco 的 CLI 构建也以它作为 SDK 根目录。
+    if [ -n "${DEVECO_SDK_HOME:-}" ]; then
+        cands+=("$DEVECO_SDK_HOME/default/openharmony/native")
+        cands+=("$DEVECO_SDK_HOME/openharmony/native")
+    fi
     [ -n "${OHOS_NDK_HOME:-}" ] && cands+=("$OHOS_NDK_HOME")
     # 仓库标准入口 tools/setup_harmony_cli.sh 的安装位置（默认 ~/.harmony-cli）
     local cli_home="${HARMONY_CLI_HOME:-$HOME/.harmony-cli}"
@@ -110,6 +116,10 @@ echo "clang           : $CLANG"
 echo "llvm-ar         : $LLVM_AR"
 echo "sysroot         : $SYSROOT"
 echo ""
+
+# ONNX Runtime 的 DT_NEEDED 包含 libc++_shared.so。将同一 Native SDK 中
+# aarch64-linux-ohos 的 runtime 复制到唯一 prebuilt 来源，供 CMake/hvigor 共用。
+bash "$WORKSPACE_ROOT/tools/prepare_harmony_native_runtime.sh" "$NATIVE_DIR" "$PREBUILT_DIR"
 
 # -----------------------------------------------------------------------------
 # 2. 确保 Rust 目标已安装

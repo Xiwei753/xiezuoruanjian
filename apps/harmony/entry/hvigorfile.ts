@@ -1,7 +1,7 @@
-import { hapTasks, OhosPluginId, OhosHapContext } from '@ohos/hvigor-ohos-plugin';
+import { hapTasks, OhosPluginId, OhosAppContext, OhosHapContext } from '@ohos/hvigor-ohos-plugin';
 import { HvigorPlugin, HvigorNode } from '@ohos/hvigor';
 import { execFileSync } from 'child_process';
-import { copyFileSync, mkdirSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve } from 'path';
 
 // 根据 product 动态设置 entry 的 dependencies：
@@ -82,7 +82,59 @@ const bundledCorrectionModelPlugin: HvigorPlugin = {
   }
 };
 
+// CMake must see the same libc++_shared.so whether the build starts through
+// tools/build_harmony.sh or directly through DevEco/hvigor. Run the shared
+// SDK-to-prebuilt copy step before each active native target configures CMake.
+const harmonyNativeRuntimePlugin: HvigorPlugin = {
+  pluginId: 'harmony-native-runtime-plugin',
+  apply: (node: HvigorNode) => {
+    node.afterNodeEvaluate(() => {
+      const hapContext = node.getContext(OhosPluginId.OHOS_HAP_PLUGIN) as OhosHapContext;
+      if (!hapContext) {
+        return;
+      }
+
+      const nativeBuildTasks: string[] = [];
+      hapContext.targets((target) => {
+        nativeBuildTasks.push(`${target.getTargetName()}@BuildNativeWithCmake`);
+      });
+
+      node.registerTask({
+        name: 'PrepareHarmonyNativeRuntime',
+        // postDependencies makes BuildNativeWithCmake depend on this preparation task.
+        postDependencies: nativeBuildTasks,
+        run: (taskContext) => {
+          const projectNode = node.getParentNode();
+          const projectContext = projectNode?.getContext(OhosPluginId.OHOS_APP_PLUGIN) as OhosAppContext | undefined;
+          if (!projectContext) {
+            throw new Error('Unable to resolve the HarmonyOS SDK selected by hvigor.');
+          }
+          const sdkDir = projectContext.getSdkDetails().getSdkDir();
+          const nativeCandidates = [
+            resolve(sdkDir, 'default', 'openharmony', 'native'),
+            resolve(sdkDir, 'openharmony', 'native'),
+          ];
+          const nativeDir = nativeCandidates.find((candidate) => existsSync(resolve(
+            candidate,
+            'llvm', 'lib', 'aarch64-linux-ohos', 'c++', 'libc++_shared.so'
+          )));
+          if (!nativeDir) {
+            throw new Error(`HarmonyOS Native SDK was not found below hvigor SDK directory: ${sdkDir}`);
+          }
+          const repoRoot = resolve(taskContext.modulePath, '..', '..', '..');
+          const prebuiltDir = resolve(taskContext.modulePath, 'src', 'main', 'prebuilt', 'arm64-v8a');
+          execFileSync('bash', [
+            resolve(repoRoot, 'tools', 'prepare_harmony_native_runtime.sh'),
+            nativeDir,
+            prebuiltDir,
+          ], { stdio: 'inherit' });
+        }
+      });
+    });
+  }
+};
+
 export default {
   system: hapTasks,
-  plugins: [privacyAclDependencyPlugin, bundledCorrectionModelPlugin]
+  plugins: [privacyAclDependencyPlugin, bundledCorrectionModelPlugin, harmonyNativeRuntimePlugin]
 }
