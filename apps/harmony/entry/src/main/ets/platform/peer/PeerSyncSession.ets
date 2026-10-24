@@ -16,6 +16,7 @@ import {
   isPeerDocumentPath,
   isPeerStarMapObjectPath,
   isPeerStarMapSemanticPath,
+  PeerAgreementEntry,
   PeerObjectCommitResult,
   PeerObjectStore,
   PeerStoredContent,
@@ -68,6 +69,15 @@ interface PendingAck {
   deleted?: boolean
 }
 
+// 已确认 requestId 的完整 ACK 结果，用于超时重传时原样重发，
+// 而不是无条件回 'true' 丢失第一次的 conflict/落盘 hash。
+interface AckOutcome {
+  success: boolean
+  message: string
+  committedHash: string
+  conflict: boolean
+}
+
 interface PendingRead {
   requestId: string
   path: string
@@ -94,6 +104,9 @@ export class PeerSyncSession {
   private remoteObjects: Map<string, PeerObjectDescriptor> = new Map<string, PeerObjectDescriptor>()
   private pendingReads: Map<string, PendingRead> = new Map<string, PendingRead>()
   private pendingAcks: Map<string, PendingAck> = new Map<string, PendingAck>()
+  // 已确认 requestId 的完整 ACK 结果：超时重传相同 requestId 时原样重发，
+  // 不丢失第一次的 conflict 标记或接收端实际落盘 hash。
+  private rememberedAcks: Map<string, AckOutcome> = new Map<string, AckOutcome>()
   private localHasCloudRepo: boolean
   private remoteHasCloudRepo: boolean | null = null
   private applied: number = 0
@@ -201,6 +214,7 @@ export class PeerSyncSession {
 
   close(): void {
     this.clearPending()
+    this.rememberedAcks.clear()
     this.state = 'closed'
     this.listener.onStatus({ state: 'closed', message: '附近设备会话已关闭', applied: this.applied })
   }
@@ -354,13 +368,24 @@ export class PeerSyncSession {
     this.peerBatchConflicts = 0
   }
 
-  private confirmCommitted(committed: PeerObjectCommitResult): boolean {
+  // 接收端落盘成功后推进附近设备共同基线。只有实际落盘版本与发送端版本
+  // 一致时才写入 agreement；星图语义合并产出第三个 hash M 时 M !== 发送端版本，
+  // 两边都暂不推进，留待下一轮清单交换使文件真的一致。
+  private confirmCommitted(committed: PeerObjectCommitResult,
+    senderVersion: string = ''): boolean {
     const entries = committed.appliedObjects
     if (entries === undefined || entries.length === 0) {
       return true
     }
+    const agreed: PeerAgreementEntry[] = senderVersion.length === 0
+      ? entries
+      : entries.filter((entry: PeerAgreementEntry): boolean =>
+        entry.contentHash === senderVersion)
+    if (agreed.length === 0) {
+      return true
+    }
     try {
-      this.corePort.confirmPeerObjects(this.remoteDeviceId, entries)
+      this.corePort.confirmPeerObjects(this.remoteDeviceId, agreed)
       return true
     } catch (_e) {
       return false
@@ -411,7 +436,7 @@ export class PeerSyncSession {
       return
     }
     if (this.transport.isDuplicate(message.requestId)) {
-      await this.sendAck(message.requestId, true, 'duplicate')
+      await this.replayAck(message.requestId)
       return
     }
     let bytes: Uint8Array
@@ -479,8 +504,10 @@ export class PeerSyncSession {
     })
     // 先持久化本轮本地基线，再 remember + 发 ACK：不能先 remember/ACK 后
     // confirmPeerObjects()，确认后存储失败会造成两端成功状态不一致，
-    // 且重试会被 isDuplicate 误判为已成功。
-    if (!this.confirmCommitted(committed)) {
+    // 且重试会被 isDuplicate 误判为已成功。只有接收端落盘版本与发送端版本
+    // 一致时才推进 agreement；合并出第三个 hash M 时两边都暂不推进。
+    const senderVersion: string = message.versionToken ?? message.contentHash
+    if (!this.confirmCommitted(committed, senderVersion)) {
       this.clearReadForPath(message.path, false)
       this.fail('保存附近设备共同基线失败')
       return
@@ -495,6 +522,9 @@ export class PeerSyncSession {
       this.fail('发送附近设备确认失败')
       return
     }
+    this.rememberedAcks.set(message.requestId,
+      { success: true, message: committed.message, committedHash: committedHash,
+        conflict: hasConflict })
     this.clearReadForPath(message.path, true)
     this.maybeReady(committed.message)
   }
@@ -505,7 +535,7 @@ export class PeerSyncSession {
       return
     }
     if (this.transport.isDuplicate(message.requestId)) {
-      await this.sendAck(message.requestId, true, 'duplicate')
+      await this.replayAck(message.requestId)
       return
     }
     const ownerDeviceId: string = message.ownerDeviceId ?? message.sourceDevice ?? 'unknown'
@@ -529,7 +559,8 @@ export class PeerSyncSession {
       this.unresolvedConflicts += committed.conflicts
     }
     this.remoteObjects.delete(message.path)
-    if (!this.confirmCommitted(committed)) {
+    const senderVersion: string = message.versionToken ?? message.contentHash
+    if (!this.confirmCommitted(committed, senderVersion)) {
       this.fail('保存附近设备共同基线失败')
       return
     }
@@ -540,6 +571,9 @@ export class PeerSyncSession {
       this.fail('发送附近设备确认失败')
       return
     }
+    this.rememberedAcks.set(message.requestId,
+      { success: true, message: committed.message, committedHash: committedHash,
+        conflict: hasConflict })
     this.maybeReady(committed.message)
   }
 
@@ -662,7 +696,7 @@ export class PeerSyncSession {
         if (committed.conflicts > 0) {
           this.unresolvedConflicts += committed.conflicts
         }
-        if (!this.confirmCommitted(committed)) {
+        if (!this.confirmCommitted(committed, remote.contentHash)) {
           return this.peerBatchResult(false, '保存附近设备共同基线失败')
         }
         continue
@@ -878,6 +912,18 @@ export class PeerSyncSession {
     const detail: string = this.remoteManifestReceived
       ? '正在向附近设备发送本机清单' : '正在等待附近设备清单'
     this.setState('syncing', detail)
+  }
+
+  // 超时重传相同 requestId 时原样重发第一次的完整 ACK 结果，
+  // 不丢失 conflict 标记或接收端实际落盘 hash。不重新提交对象。
+  private async replayAck(requestId: string): Promise<void> {
+    const outcome: AckOutcome | undefined = this.rememberedAcks.get(requestId)
+    if (outcome !== undefined) {
+      await this.sendAck(requestId, outcome.success, outcome.message,
+        outcome.committedHash, outcome.conflict)
+    } else {
+      await this.sendAck(requestId, true, 'duplicate')
+    }
   }
 
   // ACK payload 语义：
