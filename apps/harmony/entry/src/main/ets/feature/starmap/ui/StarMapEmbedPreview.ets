@@ -206,7 +206,7 @@ export struct StarMapEmbedPreview {
         maxLines: maxLines,
         fontWeight: fontWeight
       })
-      return uiContext.px2vp(size.height)
+      return uiContext.px2vp(Number(size.height))
     }
   }
 
