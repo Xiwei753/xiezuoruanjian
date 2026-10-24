@@ -2106,7 +2106,7 @@ private refitAfterContentAdded(): void {
       maxLines: maxLines,
       fontWeight: fontWeight
     })
-    return uiContext.px2vp(size.height)
+    return uiContext.px2vp(Number(size.height))
   }
 
   /** 传给布局模块的测量回调；箭头函数保留 this，避免方法引用丢失 UIContext。 */

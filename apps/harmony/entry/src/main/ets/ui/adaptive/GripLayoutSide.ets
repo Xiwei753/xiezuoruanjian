@@ -10,15 +10,23 @@ import { GripPosture, GripPostureObserver } from '../../platform/awareness/GripP
 export type GripLayoutSide = 'left' | 'right'
 export type GripLayoutSideListener = (side: GripLayoutSide) => void
 
+class GripLayoutSideObserver implements GripPostureObserver {
+  private store: GripLayoutSideStore
+
+  constructor(store: GripLayoutSideStore) {
+    this.store = store
+  }
+
+  onGripPostureChanged(posture: GripPosture): void {
+    this.store.applyPosture(posture)
+  }
+}
+
 export class GripLayoutSideStore {
   private static instance: GripLayoutSideStore
   private side: GripLayoutSide = 'right'
   private listeners: Set<GripLayoutSideListener> = new Set<GripLayoutSideListener>()
-  private observer: GripPostureObserver = {
-    onGripPostureChanged: (posture: GripPosture): void => {
-      this.applyPosture(posture)
-    }
-  }
+  private observer: GripLayoutSideObserver = new GripLayoutSideObserver(this)
 
   static getInstance(): GripLayoutSideStore {
     if (!GripLayoutSideStore.instance) {
@@ -48,7 +56,7 @@ export class GripLayoutSideStore {
     }
   }
 
-  private applyPosture(posture: GripPosture): void {
+  applyPosture(posture: GripPosture): void {
     // 'both' / 'notHeld' / 'unknown' 不覆盖上一侧。
     if (posture !== 'left' && posture !== 'right') {
       return
