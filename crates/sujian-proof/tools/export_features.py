@@ -183,6 +183,10 @@ def main() -> None:
     correct_candidate = 0
     end_to_end_misses = 0
     no_candidate_by_sample: dict[str, int] = {}
+    # Every original sample group belongs to a split, even when it produces no
+    # candidate row. Otherwise a sentence with only no-candidate errors would
+    # disappear before train/calibration/final assignment.
+    sample_groups: dict[str, bool] = {}
     with args.output.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(
@@ -242,12 +246,14 @@ def main() -> None:
                 float(log_probs[token_index, top_id]),
             )
 
-        for row in rows:
+        for row_index, row in enumerate(rows, start=1):
             if args.max_sentences and used >= args.max_sentences:
                 break
             text = row.get("original_text", "")
             corrected = row.get("correct_text", "")
             wrong_ids = row.get("wrong_ids", [])
+            sample_id = f"csc-{row_index}"
+            sample_groups[sample_id] = bool(wrong_ids)
             prepared = tokenize(text)
             if prepared is None or not text:
                 continue
@@ -265,7 +271,6 @@ def main() -> None:
                 if annotated_position:
                     annotated_positions += 1
                 top = runtime_candidate(logits, log_probs, token_index, original_id)
-                sample_id = f"csc-{used}"
                 if annotated_position:
                     if top is None or not same_length:
                         no_candidate += 1
@@ -341,11 +346,13 @@ def main() -> None:
                             top[1],
                             top[2],
                             top[3],
-                            f"csc-{used}",
+                            sample_id,
                         )
 
         def export_negative_text(source_path: Path, sample_prefix: str) -> None:
             for group, text in read_grouped_text(source_path):
+                sample_id = f"{sample_prefix}-{source_path.stem}-{group}"
+                sample_groups[sample_id] = False
                 if len(text) > 500:
                     continue
                 prepared = tokenize(text)
@@ -353,7 +360,6 @@ def main() -> None:
                     continue
                 ids, offsets = prepared
                 logits, log_probs = run(ids)
-                sample_id = f"{sample_prefix}-{source_path.stem}-{group}"
                 for char_index, original in enumerate(text):
                     token_index = position_token(offsets, ids, char_index)
                     if token_index is None:
@@ -390,6 +396,7 @@ def main() -> None:
             "correct_candidate": correct_candidate,
             "end_to_end_misses": end_to_end_misses,
             "no_candidate_by_sample": no_candidate_by_sample,
+            "sample_groups": sample_groups,
         }
         args.output.with_suffix(args.output.suffix + ".stats.json").write_text(
             json.dumps(stats, indent=2, ensure_ascii=False) + "\n",

@@ -67,6 +67,9 @@ replacement); only a matching candidate is positive. There is no banned-characte
 list in the runtime: pronouns and particles are governed by the calibrated
 probability and the author's protected spans. Samples are grouped by template
 or synthetic entity, so variants of one name/template cannot straddle splits.
+The group inventory comes from every original sample, including samples that
+produced no candidate row at all; end-to-end false negatives therefore include
+no-candidate errors instead of silently dropping them from the denominator.
 Fit, calibration, and final evaluation are disjoint; held-out public CSC test
 prose is reserved for final evaluation and never used to fit weights or choose
 the threshold. The threshold is selected once on the calibration set under

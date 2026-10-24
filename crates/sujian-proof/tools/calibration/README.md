@@ -16,6 +16,9 @@
   to fit weights or choose the threshold.
 
 Regenerate features with `tools/export_features.py`; it writes the CSV and a
-`.stats.json` sidecar with no-candidate counts. Train with
+`.stats.json` sidecar with no-candidate counts and `sample_groups` for every
+original sample, including samples that produced no candidate row. Train with
 `tools/train_calibrator.py`. Group ids keep one template or entity in exactly
-one of the fit, calibration, or final splits.
+one of the fit, calibration, or final splits; because the split inventory also
+comes from the sidecar, no-candidate errors still count as end-to-end false
+negatives in their assigned split.

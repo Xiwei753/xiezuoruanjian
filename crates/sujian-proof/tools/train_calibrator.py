@@ -74,14 +74,20 @@ def load_rows(
 def split_groups(
     sample_ids: list[str],
     labels: np.ndarray,
+    sample_groups: dict[str, bool],
     fit_fraction: float,
     calibration_fraction: float,
     seed: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    all_groups = sorted(set(sample_ids))
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, set[str]]]:
+    # The split universe is the union of groups that produced rows and groups
+    # that produced only no-candidate errors. Taking it from row masks would
+    # silently drop the latter from calibration/final denominators.
+    all_groups = sorted(set(sample_ids) | set(sample_groups))
     # Public held-out prose is never used to fit weights or pick a threshold.
     heldout_groups = {group for group in all_groups if group.startswith("heldout-")}
     groups = [group for group in all_groups if group not in heldout_groups]
+    if len(groups) < 3:
+        raise SystemExit("need at least three non-heldout groups for three splits")
     rng = random.Random(seed)
     rng.shuffle(groups)
     fit_end = max(1, int(len(groups) * fit_fraction))
@@ -99,13 +105,20 @@ def split_groups(
     for name, group_set in split_groups.items():
         mask = np.asarray([sample_id in group_set for sample_id in sample_ids])
         masks[name] = mask
-        if not np.any(mask):
+        if not group_set:
             raise SystemExit(f"{name} split is empty")
+        if not np.any(mask):
+            raise SystemExit(f"{name} split has no feature rows")
         if not np.any(labels[mask] == 1):
             raise SystemExit(f"{name} split has no positive rows")
         if name != "fit" and not np.any(labels[mask] == 0):
             raise SystemExit(f"{name} split has no negative rows")
-    return masks["fit"], masks["calibration"], masks["final"]
+    return (
+        masks["fit"],
+        masks["calibration"],
+        masks["final"],
+        split_groups,
+    )
 
 
 def fit_logistic(x: np.ndarray, y: np.ndarray, l2: float) -> np.ndarray:
@@ -232,9 +245,13 @@ def main() -> None:
     args = parser.parse_args()
 
     x, y, sample_ids, error_positions, feature_stats = load_rows(args.features)
-    fit_mask, calibration_mask, final_mask = split_groups(
+    sample_groups = feature_stats.get("sample_groups", {})
+    if not isinstance(sample_groups, dict):
+        raise SystemExit("sample_groups in the stats sidecar must be an object")
+    fit_mask, calibration_mask, final_mask, group_splits = split_groups(
         sample_ids,
         y,
+        sample_groups,
         args.fit_fraction,
         args.calibration_fraction,
         args.seed,
@@ -251,24 +268,33 @@ def main() -> None:
 
     no_candidate_by_sample = feature_stats.get("no_candidate_by_sample", {})
 
-    def no_candidate_for(mask: np.ndarray) -> int:
-        groups = {sample_ids[index] for index in np.flatnonzero(mask)}
-        return sum(int(no_candidate_by_sample.get(group, 0)) for group in groups)
+    def no_candidate_for(split_name: str) -> int:
+        return sum(
+            int(no_candidate_by_sample.get(group, 0))
+            for group in group_splits[split_name]
+        )
 
     calibration_end_to_end = end_to_end_metrics(
         calibration_probabilities,
         y[calibration_mask],
         error_positions[calibration_mask],
-        no_candidate_for(calibration_mask),
+        no_candidate_for("calibration"),
         threshold,
     )
     final_end_to_end = end_to_end_metrics(
         final_probabilities,
         y[final_mask],
         error_positions[final_mask],
-        no_candidate_for(final_mask),
+        no_candidate_for("final"),
         threshold,
     )
+    all_group_count = len(set(sample_ids) | set(sample_groups))
+    group_assignment_sha256 = hashlib.sha256(
+        json.dumps(
+            {name: sorted(groups) for name, groups in group_splits.items()},
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
     calibrator = {
         "version": args.version,
@@ -285,7 +311,13 @@ def main() -> None:
                 "fit_rows": int(np.sum(fit_mask)),
                 "calibration_rows": int(np.sum(calibration_mask)),
                 "final_rows": int(np.sum(final_mask)),
-                "sample_ids": len(set(sample_ids)),
+                "sample_ids": all_group_count,
+                "fit_groups": len(group_splits["fit"]),
+                "calibration_groups": len(group_splits["calibration"]),
+                "final_groups": len(group_splits["final"]),
+                "group_assignment_sha256": group_assignment_sha256,
+                "groups_without_feature_rows": all_group_count
+                - len(set(sample_ids)),
             },
             "threshold_policy": f"max recall on calibration with precision >= {args.min_precision}",
             "candidate_definition": (
@@ -302,6 +334,9 @@ def main() -> None:
                 "no_candidate": feature_stats.get("no_candidate"),
                 "wrong_candidate": feature_stats.get("wrong_candidate"),
                 "correct_candidate": feature_stats.get("correct_candidate"),
+                "no_candidate_by_split": {
+                    name: no_candidate_for(name) for name in group_splits
+                },
             }
             if feature_stats
             else {},

@@ -20,6 +20,10 @@ BUNDLE_DIR="$OUT_DIR/correction-bundle"
 BINARY="$ROOT/target/release/sujian-linux-qt"
 LINUXDEPLOY="${LINUXDEPLOY:-linuxdeploy}"
 APPIMAGETOOL="${APPIMAGETOOL:-appimagetool}"
+# QML is embedded in the Rust binary via qrc, so linuxdeploy cannot discover
+# QtQuick/Kirigami imports from ELF dependencies alone.
+QML_SOURCES_PATHS="$ROOT/apps/Linux_qt/qml"
+export QML_SOURCES_PATHS
 
 for tool in "$LINUXDEPLOY" "$APPIMAGETOOL"; do
     if ! command -v "$tool" >/dev/null 2>&1; then

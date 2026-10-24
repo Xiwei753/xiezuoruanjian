@@ -48,9 +48,9 @@
   },
   "calibrator": {
     "path": "calibrator.json",
-    "version": "macbert4csc-csc-2026-10-23-v7",
-    "fit": "public shibing624/CSC dev features plus constructed anonymous fiction/name negatives; wrong top-1 at an annotated error is a negative row; fit/calibration/final groups are disjoint and heldout public CSC test prose is final-only",
-    "threshold": 0.8570238198547705
+    "version": "macbert4csc-csc-2026-10-24-v8",
+    "fit": "public shibing624/CSC dev features plus constructed anonymous fiction/name negatives; wrong top-1 at an annotated error is a negative row; fit/calibration/final groups are disjoint and include samples that produced no feature rows; no-candidate errors count as end-to-end misses; heldout public CSC test prose is final-only",
+    "threshold": 0.7785767928972075
   },
   "runtime": {
     "name": "onnxruntime",
