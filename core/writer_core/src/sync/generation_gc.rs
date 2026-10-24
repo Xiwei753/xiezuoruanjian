@@ -15,7 +15,9 @@
 //! （upload_lease_until_ms）。GC 用 meta 判断 generation 是否可删。
 
 use crate::sync::cancellation_token::SyncCancellationToken;
-use crate::sync::provider::model::{BatchMutation, DeletePrecondition};
+use crate::sync::provider::model::{
+    BatchMutation, DeletePrecondition, RemoteEntry, RemoteVersion, WritePrecondition,
+};
 use crate::sync::provider::SyncProvider;
 
 /// generation meta — 记录单个 generation 的上传状态和保留信息。
@@ -39,6 +41,100 @@ pub const GENERATION_UPLOAD_LEASE_MS: i64 = 5 * 60 * 1000;
 
 /// 未引用 generation 安全保留期（7 天）。超过保留期且未引用的 generation 才可删。
 pub const GENERATION_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+// ── Issue #993：缺 meta 代际的 orphan observation 生命周期 ──
+//
+// 缺 meta 的 generation 无法用 GenerationMeta 判定创建时间/上传状态。UUIDv4 和
+// blob SHA 都不含可核实的创建时间，不能据以猜年龄。改为在远端独立 GC 元数据中
+// 记录首次发现时间 + 目录内容指纹，观察满保留期且内容未变化后才回收。
+
+/// 远端 orphan observation 存储目录（项目级，独立于 `__generations__`）。
+const ORPHAN_OBSERVATIONS_DIR: &str = "__gc__";
+/// 远端 orphan observation 文件名。
+const ORPHAN_OBSERVATIONS_FILENAME: &str = "orphan-observations.json";
+
+/// 缺 meta 代际的首次发现观察记录。
+///
+/// 持久化到 `{project_remote_prefix}/__gc__/orphan-observations.json`，用 Provider
+/// CAS（IfMatch）写入，多设备并发安全。`content_fingerprint` 是观察时 generation
+/// prefix 下所有对象 (path, version) 的指纹，用于检测观察期内目录内容是否变化：
+/// 变化则重新计时（可能仍有设备在写入）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OrphanObservation {
+    pub generation_id: String,
+    pub first_observed_at_ms: i64,
+    pub content_fingerprint: String,
+}
+
+/// 计算 generation prefix 下所有对象的指纹。
+///
+/// 对 (path, version) 排序后拼接，取 content_md5。内容未变化 ⇒ 指纹不变；
+/// 任何对象增删改版本 ⇒ 指纹变化。
+fn compute_generation_fingerprint(entries: &[RemoteEntry]) -> String {
+    let mut lines: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}:{}", e.path, e.version.0))
+        .collect();
+    lines.sort_unstable();
+    let joined = lines.join("\n");
+    crate::sync::hash::content_md5(joined.as_bytes())
+}
+
+/// 加载远端 orphan observations（只读）。
+///
+/// 返回 (observations, prev_version)。文件不存在 → 空列表 + None（首次写用 CreateNew）。
+fn load_orphan_observations(
+    provider: &dyn SyncProvider,
+    gc_meta_path: &str,
+) -> crate::error::Result<(Vec<OrphanObservation>, Option<RemoteVersion>)> {
+    let obj = provider.read(gc_meta_path).map_err(crate::Error::from)?;
+    match obj {
+        Some(obj) => {
+            let observations: Vec<OrphanObservation> =
+                serde_json::from_slice(&obj.content).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "load_orphan_observations: parse {}: {e}",
+                        gc_meta_path
+                    )))
+                })?;
+            Ok((observations, Some(obj.version)))
+        }
+        None => Ok((Vec::new(), None)),
+    }
+}
+
+/// CAS 写回 orphan observations。
+///
+/// `prev_version` 为 None → CreateNew；Some → IfMatch。PreconditionFailed（其他设备
+/// 并发修改）时 log warn 返回 Ok(())：observations 写回失败最坏是下轮重新观察（重新
+/// 计时七天），不会误删 generation。其他错误向上返回。
+fn save_orphan_observations(
+    provider: &dyn SyncProvider,
+    gc_meta_path: &str,
+    observations: &[OrphanObservation],
+    prev_version: Option<RemoteVersion>,
+) -> crate::error::Result<()> {
+    let content = serde_json::to_vec(observations).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "save_orphan_observations: serialize: {e}"
+        )))
+    })?;
+    let precondition = match prev_version {
+        Some(v) => WritePrecondition::IfMatch(v),
+        None => WritePrecondition::CreateNew,
+    };
+    match provider.write(gc_meta_path, &content, precondition) {
+        Ok(_) => Ok(()),
+        Err(crate::sync::provider::error::ProviderError::PreconditionFailed { path, reason }) => {
+            log::warn!(
+                "[sync] save_orphan_observations: CAS precondition failed for {}: path={}, reason={} — observations not persisted, will re-observe next round",
+                gc_meta_path, path, reason
+            );
+            Ok(())
+        }
+        Err(e) => Err(crate::Error::from(e)),
+    }
+}
 
 /// 运行 generation GC。
 ///
@@ -106,6 +202,21 @@ pub fn run_generation_gc(
         generation_ids.push(first_segment.to_string());
     }
 
+    // Issue #993：加载远端 orphan observations（缺 meta 代际的首次发现记录）。
+    let gc_meta_path = format!(
+        "{}/{ORPHAN_OBSERVATIONS_DIR}/{ORPHAN_OBSERVATIONS_FILENAME}",
+        project_remote_prefix
+    );
+    let (mut orphan_observations, orphan_obs_prev_version) =
+        load_orphan_observations(provider, &gc_meta_path)?;
+    let mut orphan_obs_changed = false;
+    // 清理 stale 观察：generation 已不存在（被其他设备回收或变 active 后不再 list 出）。
+    let initial_obs_count = orphan_observations.len();
+    orphan_observations.retain(|o| generation_ids.contains(&o.generation_id));
+    if orphan_observations.len() != initial_obs_count {
+        orphan_obs_changed = true;
+    }
+
     for gen_id in &generation_ids {
         // Issue #729 评论 5765306162 问题5：每次 generation 迭代前检查取消令牌。
         if let Some(token) = cancellation_token {
@@ -136,6 +247,9 @@ pub fn run_generation_gc(
                 return Ok(());
             }
         }
+        // Issue #993：缺 meta 回收成功后待移除的 observation index。
+        let mut orphan_reclaim_idx: Option<usize> = None;
+
         let meta: Option<GenerationMeta> = match meta_obj {
             Some(obj) => match serde_json::from_slice::<GenerationMeta>(&obj.content) {
                 Ok(m) => Some(m),
@@ -151,25 +265,78 @@ pub fn run_generation_gc(
                 }
             },
             None => {
-                // Issue #993：meta 缺失。当前 publish_generation 的 batch 分支在同一
-                // commit_batch 写入 manifest + meta(complete=true)（generation.rs），逐文件
-                // 分支先写 meta(complete=false) 再写 meta(complete=true)，两路径都会写 meta。
-                // 所以缺 meta 的 generation 是旧版/迁移遗留（meta 机制引入前发布）。这类
-                // generation 没有活跃 upload lease（lease 由 publish_generation 写入 meta），
-                // 不是上传中；且 meta 机制引入远早于保留期，必然已超过保留期。不臆造
-                // created_at_ms，不永久保留：跳过 meta 相关检查，用远端 catalog 确认非
-                // active 后复用现有批量删除逻辑回收（见下方）。
-                log::warn!(
-                    "[sync] run_generation_gc: missing meta for {} generation {} — legacy/migration leftover, reclaiming after catalog check",
-                    project_remote_prefix,
-                    gen_id
-                );
-                None
+                // Issue #993：meta 缺失。不能据 UUIDv4/blob SHA 猜年龄（generation_id 是
+                // UUIDv4 无生成时间，RemoteEntry 只有 path+version），也不立即删除（可能
+                // 是其他版本客户端/迁移程序产生的临时对象）。走 orphan observation 生命
+                // 周期：首次发现记录观察起点 + 目录内容指纹，观察满保留期且内容未变化、
+                // 仍缺 meta、仍未被引用后才回收。观察记录持久化到远端 __gc__/，多设备
+                // 共享。
+                let orphan_gen_prefix = format!("{generations_prefix}/{gen_id}");
+                let orphan_entries =
+                    provider.list(&orphan_gen_prefix).map_err(crate::Error::from)?;
+                if let Some(token) = cancellation_token {
+                    if token.is_cancelled() {
+                        log::info!(
+                            "[sync] run_generation_gc: cancellation requested after list orphan {} — returning Ok",
+                            orphan_gen_prefix
+                        );
+                        return Ok(());
+                    }
+                }
+                let fingerprint = compute_generation_fingerprint(&orphan_entries);
+                let obs_idx = orphan_observations
+                    .iter()
+                    .position(|o| o.generation_id == *gen_id);
+                match obs_idx {
+                    None => {
+                        // 首次发现：建立观察记录，保留。
+                        orphan_observations.push(OrphanObservation {
+                            generation_id: gen_id.clone(),
+                            first_observed_at_ms: now_ms,
+                            content_fingerprint: fingerprint,
+                        });
+                        orphan_obs_changed = true;
+                        log::info!(
+                            "[sync] run_generation_gc: {} generation {} missing meta — first observed, starting {}ms observation period",
+                            project_remote_prefix, gen_id, retention_ms
+                        );
+                        continue;
+                    }
+                    Some(idx) => {
+                        let prev_fp = orphan_observations[idx].content_fingerprint.clone();
+                        let prev_observed = orphan_observations[idx].first_observed_at_ms;
+                        if prev_fp != fingerprint {
+                            // 观察期内内容变化：重新计时，保留。
+                            orphan_observations[idx].first_observed_at_ms = now_ms;
+                            orphan_observations[idx].content_fingerprint = fingerprint;
+                            orphan_obs_changed = true;
+                            log::info!(
+                                "[sync] run_generation_gc: {} generation {} missing meta — content changed during observation, resetting period",
+                                project_remote_prefix, gen_id
+                            );
+                            continue;
+                        }
+                        if now_ms - prev_observed < retention_ms {
+                            // 未满保留期：保留。
+                            log::debug!(
+                                "[sync] run_generation_gc: {} generation {} missing meta — within observation period ({}ms / {}ms), keeping",
+                                project_remote_prefix, gen_id, now_ms - prev_observed, retention_ms
+                            );
+                            continue;
+                        }
+                        // 满保留期 + 指纹未变化：落到下方 catalog 确认 + 删除。
+                        log::info!(
+                            "[sync] run_generation_gc: {} generation {} missing meta — observation period elapsed + content stable, reclaiming",
+                            project_remote_prefix, gen_id
+                        );
+                        orphan_reclaim_idx = Some(idx);
+                        None
+                    }
+                }
             }
         };
 
-        // 有 meta 时检查上传中和保留期；缺 meta（旧版遗留）跳过这两项直接走回收：
-        // 无 lease ⇒ 不在上传中；旧版遗留 ⇒ 已超过保留期。
+        // 有 meta 时检查上传中和保留期。
         if let Some(meta) = &meta {
             // incomplete 且 lease 未过期 → 不删（上传中）。
             if !meta.complete && meta.upload_lease_until_ms > now_ms {
@@ -262,7 +429,17 @@ pub fn run_generation_gc(
             // Issue #779 评论 5854511049：只吞 PreconditionFailed，其他错误（网络/认证/403/
             // Git Database API 失败）照常向上返回，交给 maintenance 层记录，不伪装成成功。
             match provider.commit_batch(&mutations, &batch_message) {
-                Ok(_) => {}
+                Ok(_) => {
+                    // Issue #993：批量删除成功，移除 orphan observation。
+                    if let Some(idx) = orphan_reclaim_idx {
+                        orphan_observations.remove(idx);
+                        orphan_obs_changed = true;
+                        log::info!(
+                            "[sync] run_generation_gc: {} generation {} orphan reclaimed — removing observation",
+                            project_remote_prefix, gen_id
+                        );
+                    }
+                }
                 Err(crate::sync::provider::error::ProviderError::PreconditionFailed {
                     path,
                     reason,
@@ -303,7 +480,26 @@ pub fn run_generation_gc(
                     }
                 }
             }
+            // Issue #993：非批量逐文件删除全部成功，移除 orphan observation。
+            if let Some(idx) = orphan_reclaim_idx {
+                orphan_observations.remove(idx);
+                orphan_obs_changed = true;
+                log::info!(
+                    "[sync] run_generation_gc: {} generation {} orphan reclaimed — removing observation",
+                    project_remote_prefix, gen_id
+                );
+            }
         }
+    }
+
+    // Issue #993：持久化 orphan observations（首次发现/重新计时/回收移除/stale 清理）。
+    if orphan_obs_changed {
+        save_orphan_observations(
+            provider,
+            &gc_meta_path,
+            &orphan_observations,
+            orphan_obs_prev_version,
+        )?;
     }
 
     Ok(())

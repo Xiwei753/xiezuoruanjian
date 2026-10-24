@@ -576,8 +576,11 @@ fn merge_remote_into_local_snapshot_with_group(
                 if remote_rec.op == "upsert" {
                     to_download.push(path);
                 } else if remote_rec.op == "delete" {
-                    to_delete_local.push(path.clone());
-                    remote_deletes_count.push(path);
+                    // Issue #993：本地已无此文件（None 分支），远端 delete 记录无需
+                    // move_to_trash（no-op），不计入 to_delete_local / remote_deletes_count。
+                    // 否则每轮都重复报告已删文件（remoteDeleted 虚高）。merged_manifest
+                    // 仍保留 remote_rec（tombstone 一致性）。只有本地仍存在文件时
+                    //（DeleteLocal / LwwRemoteWinsDelete 分支）才计入实际回收动作。
                 }
             }
             (Some(local_rec), Some(remote_rec)) => {
