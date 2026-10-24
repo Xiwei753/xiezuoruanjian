@@ -121,6 +121,9 @@ char*  writer_core_list_root_starmaps(void);
 char*  writer_core_list_starmaps_for_project(const char* project_id);
 char*  writer_core_get_starmap(const char* starmap_id);
 char*  writer_core_get_starmap_graph(const char* starmap_id);
+// 关闭并移出 Core 的活跃 StarMapStore（会先 flush dirty），用于附近设备同步前后
+// 让磁盘成为唯一事实来源；不新增 Rust 接口。
+char*  writer_core_close_starmap_store(const char* starmap_id);
 char*  writer_core_create_starmap(const char* title, const char* description);
 char*  writer_core_delete_starmap(const char* starmap_id);
 char*  writer_core_rename_starmap(const char* starmap_id, const char* new_title);

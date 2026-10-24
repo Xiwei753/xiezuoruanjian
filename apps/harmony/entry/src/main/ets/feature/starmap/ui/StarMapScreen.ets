@@ -100,8 +100,6 @@ export struct StarMapScreen {
   private graphLoadGeneration: number = 0
   // Issue #988：附近设备提交期间先等在途星图写入，提交后重载当前图。
   private unregisterPeerSync: (() => void) | null = null
-  private peerReloadTimerId: number = -1
-  private peerReloadConflicts: number = 0
 
   // 画布尺寸（用于 zoomAround 计算可视中心）
   // 同时也是**根 StarMap 实际视口**（#820）：不是物理屏幕，是这张星图真正能画东西的那块区域。
@@ -138,6 +136,9 @@ export struct StarMapScreen {
     // Issue #988：附近设备同步不能只靠 Home 刷新；活跃星图要先等在途 CRUD 落盘，
     // 提交完成后按磁盘最新 graph.json 重载，避免旧内存图在后续保存时覆盖同步结果。
     this.unregisterPeerSync = StarMapSyncBarrier.getInstance().register({
+      beforePeerCommit: async (paths: string[]): Promise<void> => {
+        await this.closeStarMapStores(paths)
+      },
       afterPeerCommit: async (paths: string[], applied: number,
         conflicts: number): Promise<void> => {
         await this.reloadAfterPeerCommit(paths, applied, conflicts)
@@ -214,10 +215,6 @@ export struct StarMapScreen {
       this.unregisterPeerSync()
       this.unregisterPeerSync = null
     }
-    if (this.peerReloadTimerId !== -1) {
-      clearTimeout(this.peerReloadTimerId)
-      this.peerReloadTimerId = -1
-    }
     this.selectionState.setChangedListener(null)
     this.gestureTracker.reset()
     if (this.searchFocusTimerId !== -1) {
@@ -280,23 +277,35 @@ export struct StarMapScreen {
     if (!affectsCurrent) {
       return
     }
-    this.peerReloadConflicts += conflicts
-    // 一条清单可能连续提交多个星图对象；合并成一次重载，避免每落一个文件就重建整张图。
-    if (this.peerReloadTimerId !== -1) {
-      clearTimeout(this.peerReloadTimerId)
-    }
-    this.peerReloadTimerId = setTimeout((): void => {
-      this.peerReloadTimerId = -1
-      void this.applyPeerReload()
-    }, 120)
-  }
-
-  private async applyPeerReload(): Promise<void> {
-    const conflicts: number = this.peerReloadConflicts
-    this.peerReloadConflicts = 0
+    // 先让 Core 丢弃旧 Store（close 会 flush dirty），再从磁盘重载；
+    // 只调用 getStarMapGraph 会命中原缓存，看不到 ETS 刚写入的对象。
+    await this.closeStarMapStores(paths)
     await this.loadStarMap()
     if (conflicts > 0) {
       this.showSearchFocusToast(`附近设备同步完成，有 ${conflicts} 个星图冲突待处理`)
+    }
+  }
+
+  private async closeStarMapStores(paths: string[]): Promise<void> {
+    const ids: string[] = []
+    const add = (id: string): void => {
+      if (id.length > 0 && !ids.includes(id)) {
+        ids.push(id)
+      }
+    }
+    add(this.starmapId)
+    paths.forEach((path: string): void => {
+      const match = /^app\/starmaps\/([^/]+)\//.exec(path)
+      if (match !== null) {
+        add(match[1])
+      }
+    })
+    for (const id of ids) {
+      const result = await this.bridge.closeStarMapStore(id)
+      if (!result.success) {
+        const detail: string = result.userMessage ?? result.rawError ?? '星图缓存关闭失败'
+        throw new Error(detail)
+      }
     }
   }
 

@@ -42,6 +42,17 @@ static napi_value NativeGetStarMapGraph(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_get_starmap_graph(starmap_id));
 }
 
+static napi_value NativeCloseStarMapStore(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char starmap_id[256] = {0};
+    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
+
+    return ReturnJsonString(env, writer_core_close_starmap_store(starmap_id));
+}
+
 static napi_value NativeCreateStarMap(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value args[2];
@@ -288,6 +299,7 @@ napi_property_descriptor* getStarMapDescriptors(size_t* count) {
         {"nativeListStarMapsForProject", nullptr, NativeListStarMapsForProject, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetStarMap", nullptr, NativeGetStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetStarMapGraph", nullptr, NativeGetStarMapGraph, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeCloseStarMapStore", nullptr, NativeCloseStarMapStore, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeUpdateStarMapNode", nullptr, NativeUpdateStarMapNode, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeAddStarMapEdge", nullptr, NativeAddStarMapEdge, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeAddStarMapNode", nullptr, NativeAddStarMapNode, nullptr, nullptr, nullptr, napi_default, nullptr},

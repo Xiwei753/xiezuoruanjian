@@ -70,6 +70,7 @@ interface PendingRead {
   contentHash: string
   attempts: number
   timer: number
+  resolve: (success: boolean) => void
 }
 
 export interface PeerSyncSessionListener {
@@ -80,6 +81,7 @@ export class PeerSyncSession {
   readonly deviceNetworkId: string
   readonly sessionId: number
   private localDeviceId: string
+  private remoteDeviceId: string
   private corePort: PeerObjectStore
   private transport: PeerSyncTransport
   private listener: PeerSyncSessionListener
@@ -97,6 +99,12 @@ export class PeerSyncSession {
   private remoteManifestReceived: boolean = false
   // 上一次提交成功后活跃写作会话未对齐：重试时即使对象已无 diff 也要继续回填。
   private pendingWritingReconcile: boolean = false
+  // 附近设备对象按“接收 → 提交 → ACK → 基线推进”的顺序逐条处理；
+  // 星图成员/GraphMeta/index 在一批结束后只通知活跃页面一次。
+  private peerBatchActive: boolean = false
+  private peerBatchPaths: string[] = []
+  private peerBatchApplied: number = 0
+  private peerBatchConflicts: number = 0
 
   constructor(
     deviceNetworkId: string,
@@ -110,6 +118,7 @@ export class PeerSyncSession {
     this.deviceNetworkId = deviceNetworkId
     this.sessionId = sessionId
     this.localDeviceId = localDeviceId
+    this.remoteDeviceId = deviceNetworkId
     this.corePort = corePort
     this.listener = listener
     this.localHasCloudRepo = localHasCloudRepo
@@ -193,6 +202,11 @@ export class PeerSyncSession {
   }
 
   private async onMessage(message: PeerWireMessage): Promise<void> {
+    if (message.sourceDevice !== undefined && message.sourceDevice.length > 0 &&
+      message.sourceDevice !== this.localDeviceId) {
+      // sourceDevice 是发送端的稳定设备 ID（不是 networkId），用作附近设备基线键。
+      this.remoteDeviceId = message.sourceDevice
+    }
     if (message.type === 'error') {
       this.fail(message.message ?? '附近设备同步失败')
       return
@@ -265,33 +279,46 @@ export class PeerSyncSession {
     if (paths.length === 0) {
       return { success: true, applied: 0, conflicts: 0, message: '没有待提交对象' }
     }
-    try {
-      return await StarMapSyncBarrier.getInstance().withSyncBarrier(paths,
+    const committed: PeerObjectCommitResult = this.peerBatchActive
+      // 清单批处理已经由 StarMapSyncBarrier 持有整批闸门；这里只提交、
+      // 不再按单个对象重复关闭星图缓存或释放屏障。
+      ? await this.commitStagedWithWritingBarrier()
+      : await StarMapSyncBarrier.getInstance().withSyncBarrier(paths,
         async (): Promise<PeerObjectCommitResult> => {
-          return await ActiveWritingSessionRegistry.getInstance().withSyncBarrier(
-            async (scope: SyncBarrierScope): Promise<PeerObjectCommitResult> => {
-              const committed: PeerObjectCommitResult =
-                await this.corePort.commitRemoteObjects()
-              if (!committed.success) {
-                return committed
+          return await this.commitStagedWithWritingBarrier()
+        }, true)
+    if (committed.applied > 0 || committed.conflicts > 0) {
+      this.notePeerBatch(paths, committed)
+    }
+    return committed
+  }
+
+  private async commitStagedWithWritingBarrier(): Promise<PeerObjectCommitResult> {
+    try {
+      return await ActiveWritingSessionRegistry.getInstance().withSyncBarrier(
+        async (scope: SyncBarrierScope): Promise<PeerObjectCommitResult> => {
+          const result: PeerObjectCommitResult =
+            await this.corePort.commitRemoteObjects(this.remoteDeviceId)
+          if (!result.success) {
+            return result
+          }
+          if (result.applied > 0) {
+            this.pendingWritingReconcile = true
+          }
+          if (this.pendingWritingReconcile) {
+            const reconciled: boolean = await scope.reconcileAfterSync()
+            if (!reconciled) {
+              return {
+                success: false,
+                applied: result.applied,
+                conflicts: result.conflicts,
+                message: '活跃写作会话未能与附近设备新内容对齐，本次提交未确认',
+                appliedObjects: result.appliedObjects
               }
-              if (committed.applied > 0) {
-                this.pendingWritingReconcile = true
-              }
-              if (this.pendingWritingReconcile) {
-                const reconciled: boolean = await scope.reconcileAfterSync()
-                if (!reconciled) {
-                  return {
-                    success: false,
-                    applied: committed.applied,
-                    conflicts: committed.conflicts,
-                    message: '活跃写作会话未能与附近设备新内容对齐，本次提交未确认'
-                  }
-                }
-                this.pendingWritingReconcile = false
-              }
-              return committed
-            })
+            }
+            this.pendingWritingReconcile = false
+          }
+          return result
         })
     } catch (_e) {
       return {
@@ -300,6 +327,39 @@ export class PeerSyncSession {
         conflicts: 0,
         message: '活跃写作会话仍在对齐中，附近设备对象暂未提交'
       }
+    }
+  }
+
+  private notePeerBatch(paths: string[], committed: PeerObjectCommitResult): void {
+    if (!this.peerBatchActive) {
+      return
+    }
+    paths.forEach((path: string): void => {
+      if (!this.peerBatchPaths.includes(path)) {
+        this.peerBatchPaths.push(path)
+      }
+    })
+    this.peerBatchApplied += committed.applied
+    this.peerBatchConflicts += committed.conflicts
+  }
+
+  private resetPeerBatch(): void {
+    this.peerBatchActive = false
+    this.peerBatchPaths = []
+    this.peerBatchApplied = 0
+    this.peerBatchConflicts = 0
+  }
+
+  private confirmCommitted(committed: PeerObjectCommitResult): boolean {
+    const entries = committed.appliedObjects
+    if (entries === undefined || entries.length === 0) {
+      return true
+    }
+    try {
+      this.corePort.confirmPeerObjects(this.remoteDeviceId, entries)
+      return true
+    } catch (_e) {
+      return false
     }
   }
 
@@ -317,10 +377,12 @@ export class PeerSyncSession {
     try {
       bytes = PeerCrypto.base64Decode(message.chunk)
     } catch (_e) {
+      this.clearReadForPath(message.path, false)
       await this.sendAck(message.requestId, false, 'invalid base64')
       return
     }
     if (PeerCrypto.sha256Hex(bytes) !== message.contentHash) {
+      this.clearReadForPath(message.path, false)
       await this.sendAck(message.requestId, false, 'content hash mismatch')
       return
     }
@@ -350,6 +412,7 @@ export class PeerSyncSession {
       message.path, bytes, message.versionToken ?? message.contentHash,
       message.modifiedAtMs ?? Date.now(), false, ownerDeviceId)
     if (!staged.success) {
+      this.clearReadForPath(message.path, false)
       await this.sendAck(message.requestId, false, staged.message)
       return
     }
@@ -357,7 +420,9 @@ export class PeerSyncSession {
     if (!committed.success) {
       // 不 remember 这笔 requestId：发送端会用同一 requestId 重试，
       // 接收端重新暂存/提交，不能在持久化失败后回成功 ACK。
+      this.clearReadForPath(message.path, false)
       await this.sendAck(message.requestId, false, committed.message)
+      this.fail(committed.message)
       return
     }
     this.transport.rememberRequest(message.requestId)
@@ -365,7 +430,6 @@ export class PeerSyncSession {
     if (committed.conflicts > 0) {
       this.unresolvedConflicts += committed.conflicts
     }
-    this.clearReadForPath(message.path)
     this.remoteObjects.set(message.path, {
       path: message.path,
       contentHash: message.versionToken ?? message.contentHash,
@@ -375,9 +439,16 @@ export class PeerSyncSession {
     })
     // 只有 ACK 真正发送成功后才能推进会话状态；发送失败必须保持可重试的失败状态。
     if (!await this.sendAck(message.requestId, true, committed.message)) {
+      this.clearReadForPath(message.path, false)
       this.fail('发送附近设备确认失败')
       return
     }
+    if (!this.confirmCommitted(committed)) {
+      this.clearReadForPath(message.path, false)
+      this.fail('保存附近设备共同基线失败')
+      return
+    }
+    this.clearReadForPath(message.path, true)
     this.maybeReady(committed.message)
   }
 
@@ -403,6 +474,7 @@ export class PeerSyncSession {
       // 不 remember 这笔 requestId：发送端会用同一 requestId 重试，
       // 接收端重新暂存/提交，不能在持久化失败后回成功 ACK。
       await this.sendAck(message.requestId, false, committed.message)
+      this.fail(committed.message)
       return
     }
     this.transport.rememberRequest(message.requestId)
@@ -413,6 +485,10 @@ export class PeerSyncSession {
     this.remoteObjects.delete(message.path)
     if (!await this.sendAck(message.requestId, true, committed.message)) {
       this.fail('发送附近设备确认失败')
+      return
+    }
+    if (!this.confirmCommitted(committed)) {
+      this.fail('保存附近设备共同基线失败')
       return
     }
     this.maybeReady(committed.message)
@@ -470,19 +546,46 @@ export class PeerSyncSession {
   }
 
   private async requestMissingObjects(): Promise<void> {
+    if (this.peerBatchActive) {
+      return
+    }
     const local: Map<string, PeerStoredObject> = new Map<string, PeerStoredObject>()
     this.corePort.listLocalObjects().forEach((object: PeerStoredObject): void => {
       local.set(object.path, object)
     })
     this.setState('syncing', '正在同步附近设备对象')
-    let requested: number = 0
+    this.peerBatchActive = true
+    this.peerBatchPaths = []
+    this.peerBatchApplied = 0
+    this.peerBatchConflicts = 0
     const entries: Array<[string, PeerObjectDescriptor]> =
       Array.from(this.remoteObjects.entries())
-    // 先拿节点/边/嵌入对象，再合 GraphMeta，最后合 index：单条消息仍按对象 ACK，
-    // 但请求顺序保证活跃星图重载时依赖对象已经落盘。
+    // 按依赖顺序逐个等待“接收 → 提交 → ACK”；不能只排序后并发发送。
     entries.sort((left: [string, PeerObjectDescriptor],
       right: [string, PeerObjectDescriptor]): number =>
       this.requestOrder(left[0]) - this.requestOrder(right[0]))
+    const paths: string[] = entries.map((entry: [string, PeerObjectDescriptor]): string => entry[0])
+    let result: PeerObjectCommitResult
+    try {
+      // 整批持有一个 StarMap barrier：成员对象、graph、index 全部落盘并完成
+      // 活跃页面重载后才释放；中途不允许新的星图写入插进来。
+      result = await StarMapSyncBarrier.getInstance().withSyncBarrier(paths,
+        async (): Promise<PeerObjectCommitResult> => {
+          return await this.processMissingObjects(local, entries)
+        }, true)
+    } catch (_e) {
+      result = this.peerBatchResult(false, '附近设备对象同步中断')
+    }
+    this.resetPeerBatch()
+    if (!result.success) {
+      this.fail(result.message)
+      return
+    }
+    this.maybeReady('附近设备清单已收敛')
+  }
+
+  private async processMissingObjects(local: Map<string, PeerStoredObject>,
+    entries: Array<[string, PeerObjectDescriptor]>): Promise<PeerObjectCommitResult> {
     for (const entry of entries) {
       const path: string = entry[0]
       const remote: PeerObjectDescriptor = entry[1]
@@ -494,16 +597,17 @@ export class PeerSyncSession {
           path, new Uint8Array(0), remote.contentHash, remote.modifiedAtMs, true,
           remote.deviceId ?? 'unknown')
         if (!staged.success) {
-          this.fail(staged.message)
-          return
+          return this.peerBatchResult(false, staged.message)
         }
         const committed: PeerObjectCommitResult = await this.commitStagedObjects()
         if (!committed.success) {
-          this.fail(committed.message)
-          return
+          return this.peerBatchResult(false, committed.message)
         }
         if (committed.conflicts > 0) {
           this.unresolvedConflicts += committed.conflicts
+        }
+        if (!this.confirmCommitted(committed)) {
+          return this.peerBatchResult(false, '保存附近设备共同基线失败')
         }
         continue
       }
@@ -511,28 +615,30 @@ export class PeerSyncSession {
         current.contentHash === remote.contentHash) {
         continue
       }
-      // 用户正文、星图索引/GraphMeta、已有共同基线的星图对象必须拉取远端内容：
+      // 用户正文、星图索引/GraphMeta、星图对象文件必须拉取远端内容：
       // 只在 store 里做三路判断，发送端不能自己按 mtime 提前跳过冲突。
+      // 普通 LWW 元数据才保留时间预过滤。
       const mustFetch: boolean = current === undefined ||
         isPeerDocumentPath(path) || isPeerStarMapSemanticPath(path) ||
-        (isPeerStarMapObjectPath(path) && this.corePort.hasKnownBase(path))
-      if (!mustFetch) {
-        if (current !== undefined && current.modifiedAtMs > remote.modifiedAtMs) {
-          continue
-        }
-        if (current !== undefined && current.deleted &&
-          current.modifiedAtMs > remote.modifiedAtMs) {
-          continue
-        }
+        isPeerStarMapObjectPath(path)
+      if (!mustFetch && current !== undefined &&
+        current.modifiedAtMs > remote.modifiedAtMs) {
+        continue
       }
-      if (this.requestObject(path, remote.contentHash)) {
-        requested++
+      const fetched: boolean = await this.requestObjectAndWait(path, remote.contentHash)
+      if (!fetched) {
+        return this.peerBatchResult(false, '附近设备对象读取失败')
       }
     }
-    if (requested === 0 && this.pendingReads.size === 0) {
-      this.maybeReady('附近设备清单已收敛')
-    } else {
-      this.setState('syncing', `正在接收 ${this.pendingReads.size} 个附近设备对象`)
+    return this.peerBatchResult(true, '附近设备清单已收敛')
+  }
+
+  private peerBatchResult(success: boolean, message: string): PeerObjectCommitResult {
+    return {
+      success: success,
+      applied: this.peerBatchApplied,
+      conflicts: this.peerBatchConflicts,
+      message: message
     }
   }
 
@@ -546,21 +652,23 @@ export class PeerSyncSession {
     return path.startsWith('app/starmaps/') ? 1 : 0
   }
 
-  private requestObject(path: string, contentHash: string): boolean {
+  private requestObjectAndWait(path: string, contentHash: string): Promise<boolean> {
     if (this.pendingReads.has(path)) {
-      return false
+      return Promise.resolve(false)
     }
     const requestId: string = `read:${path}:${contentHash}`
-    const pending: PendingRead = {
-      requestId: requestId,
-      path: path,
-      contentHash: contentHash,
-      attempts: 0,
-      timer: -1
-    }
-    this.pendingReads.set(path, pending)
-    void this.sendRead(pending)
-    return true
+    return new Promise<boolean>((resolve: (success: boolean) => void): void => {
+      const pending: PendingRead = {
+        requestId: requestId,
+        path: path,
+        contentHash: contentHash,
+        attempts: 0,
+        timer: -1,
+        resolve: resolve
+      }
+      this.pendingReads.set(path, pending)
+      void this.sendRead(pending)
+    })
   }
 
   private async sendRead(pending: PendingRead): Promise<void> {
@@ -578,6 +686,7 @@ export class PeerSyncSession {
     const sent: boolean = await this.send(request)
     if (!sent) {
       this.pendingReads.delete(pending.path)
+      pending.resolve(false)
       this.fail('发送附近设备对象读取请求失败')
       return
     }
@@ -587,6 +696,7 @@ export class PeerSyncSession {
       }
       if (pending.attempts >= MAX_SEND_ATTEMPTS) {
         this.pendingReads.delete(pending.path)
+        pending.resolve(false)
         this.fail(`附近设备对象读取超时：${pending.path}`)
         return
       }
@@ -594,11 +704,12 @@ export class PeerSyncSession {
     }, ACK_TIMEOUT_MS)
   }
 
-  private clearReadForPath(path: string): void {
+  private clearReadForPath(path: string, success: boolean): void {
     const pending: PendingRead | undefined = this.pendingReads.get(path)
     if (pending !== undefined) {
       clearTimeout(pending.timer)
       this.pendingReads.delete(path)
+      pending.resolve(success)
     }
   }
 
@@ -655,13 +766,18 @@ export class PeerSyncSession {
       return
     }
     this.transport.markAck(requestId)
-    this.clearReadForPath(this.pendingReadPath(requestId))
     pending.resolve(true)
     this.maybeReady('附近设备对象已确认接收')
   }
 
   private maybeReady(message: string): void {
     if (this.state === 'closed' || this.state === 'error') {
+      return
+    }
+    if (this.peerBatchActive) {
+      // 批量同步期间单个对象/墓碑 ACK 成功后不能提前标记“已同步”，
+      // 必须等成员对象、graph、index 全部按序提交并由活跃星图完成重载。
+      this.setState('syncing', '正在按顺序提交附近设备对象')
       return
     }
     if (this.localManifestSent && this.remoteManifestReceived && this.pendingReads.size === 0) {
@@ -676,15 +792,6 @@ export class PeerSyncSession {
     const detail: string = this.remoteManifestReceived
       ? '正在向附近设备发送本机清单' : '正在等待附近设备清单'
     this.setState('syncing', detail)
-  }
-
-  private pendingReadPath(requestId: string): string {
-    for (const pending of this.pendingReads.values()) {
-      if (pending.requestId === requestId) {
-        return pending.path
-      }
-    }
-    return ''
   }
 
   private sendAck(requestId: string, success: boolean, message: string): Promise<boolean> {
@@ -713,6 +820,7 @@ export class PeerSyncSession {
     this.pendingAcks.clear()
     this.pendingReads.forEach((pending: PendingRead): void => {
       clearTimeout(pending.timer)
+      pending.resolve(false)
     })
     this.pendingReads.clear()
   }

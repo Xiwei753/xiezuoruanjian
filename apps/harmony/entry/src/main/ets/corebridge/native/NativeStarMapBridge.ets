@@ -111,6 +111,13 @@ export class NativeStarMapBridge {
     } catch (e) { return nativeError<StarMapGraph>(e) }
   }
 
+  async closeStarMapStore(starmapId: string): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeCloseStarMapStore(starmapId)
+      return this.core.parseEnvelope<boolean>(jsonStr)
+    } catch (e) { return nativeError<boolean>(e) }
+  }
+
   async createStarMap(title: string, description: string): Promise<ResultEnvelope<StarMapMeta>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeCreateStarMap(title, description)

@@ -13,8 +13,11 @@ import { PeerObjectCommitResult } from '../../../platform/peer/PeerObjectStore'
 
 const WRITE_IDLE_TIMEOUT_MS: number = 4000
 
-// 活跃星图页面对一次附近设备提交暴露的能力：按受影响路径重载当前图。
+// 活跃星图页面对一次附近设备提交暴露的能力：
+// - beforePeerCommit 在写 live 文件前关闭/刷新 Core 的星图 Store 缓存；
+// - afterPeerCommit 在 barrier 内完成页面重载后才返回，不能只丢一个定时器。
 export interface ActiveStarMapSession {
+  readonly beforePeerCommit?: (paths: string[]) => Promise<void>
   readonly afterPeerCommit: (paths: string[], applied: number, conflicts: number) => Promise<void>
 }
 
@@ -77,7 +80,8 @@ export class StarMapSyncBarrier {
    * 只有 commit 真正应用了变更才通知活跃星图重载。失败 / 冲突不刷新，也不伪造成功。
    */
   async withSyncBarrier(paths: string[],
-    action: () => Promise<PeerObjectCommitResult>): Promise<PeerObjectCommitResult> {
+    action: () => Promise<PeerObjectCommitResult>,
+    notify: boolean = true): Promise<PeerObjectCommitResult> {
     if (!paths.some((path: string): boolean => isPeerStarMapPath(path))) {
       return action()
     }
@@ -92,16 +96,77 @@ export class StarMapSyncBarrier {
           message: '星图仍有写入未完成，附近设备对象暂未提交'
         }
       }
+      if (!await this.beforeCommit(paths)) {
+        return {
+          success: false,
+          applied: 0,
+          conflicts: 0,
+          message: '活跃星图缓存未能关闭，附近设备对象暂未提交'
+        }
+      }
       const result: PeerObjectCommitResult = await action()
-      if (result.applied > 0 && this.sessions.length > 0) {
-        const sessions: ActiveStarMapSession[] = this.sessions.slice()
-        for (const session of sessions) {
-          await session.afterPeerCommit(paths, result.applied, result.conflicts)
+      if (notify && result.applied > 0) {
+        if (!await this.notifySessions(paths, result.applied, result.conflicts)) {
+          return {
+            success: false,
+            applied: result.applied,
+            conflicts: result.conflicts,
+            message: '附近设备对象已写入，但活跃星图未能完成重载',
+            appliedObjects: result.appliedObjects
+          }
         }
       }
       return result
     } finally {
       this.releaseBarrier()
+    }
+  }
+
+  // 批量同步在最后一个对象落盘后调用：同一批只让活跃星图重载一次。
+  async notifyCommitted(paths: string[], applied: number, conflicts: number): Promise<boolean> {
+    if (applied <= 0) {
+      return true
+    }
+    await this.acquireBarrier()
+    try {
+      const idle: boolean = await this.waitForIdle()
+      if (!idle) {
+        return false
+      }
+      return await this.notifySessions(paths, applied, conflicts)
+    } finally {
+      this.releaseBarrier()
+    }
+  }
+
+  private async beforeCommit(paths: string[]): Promise<boolean> {
+    const sessions: ActiveStarMapSession[] = this.sessions.slice()
+    try {
+      for (const session of sessions) {
+        const callback = session.beforePeerCommit
+        if (callback !== undefined) {
+          await callback(paths)
+        }
+      }
+      return true
+    } catch (_e) {
+      return false
+    }
+  }
+
+  private async notifySessions(paths: string[], applied: number,
+    conflicts: number): Promise<boolean> {
+    if (this.sessions.length === 0) {
+      return true
+    }
+    const sessions: ActiveStarMapSession[] = this.sessions.slice()
+    try {
+      for (const session of sessions) {
+        await session.afterPeerCommit(paths, applied, conflicts)
+      }
+      return true
+    } catch (_e) {
+      return false
     }
   }
 

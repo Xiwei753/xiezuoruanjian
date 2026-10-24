@@ -18,6 +18,12 @@ export interface PeerStarMapMergeResult {
   description: string
 }
 
+interface PeerMemberMergeResult {
+  ids: string[]
+  conflict: boolean
+  description: string
+}
+
 interface PeerStarMapIndexRecord {
   schemaVersion?: number
   starmapIds?: string[]
@@ -75,25 +81,6 @@ interface PeerStarMapGraphMeta {
   deletedSinceLastSync?: PeerDeletedSinceLastSync
 }
 
-function unionIds(local: string[] | undefined, remote: string[] | undefined): string[] {
-  const merged: string[] = []
-  const seen: Set<string> = new Set<string>()
-  const add = (values: string[] | undefined): void => {
-    if (values === undefined) {
-      return
-    }
-    values.forEach((value: string): void => {
-      if (value.length > 0 && !seen.has(value)) {
-        seen.add(value)
-        merged.push(value)
-      }
-    })
-  }
-  add(local)
-  add(remote)
-  return merged
-}
-
 function maxNumber(left: number | undefined, right: number | undefined): number {
   return Math.max(left ?? 0, right ?? 0)
 }
@@ -107,29 +94,116 @@ function maxVersion(left: string | undefined, right: string | undefined): string
   return String(Math.max(leftNumber, rightNumber))
 }
 
-function mergeMapKeys(local: Record<string, string> | undefined,
-  remote: Record<string, string> | undefined, allowRemote: boolean,
-  onConflict: () => void): Record<string, string> {
-  const merged: Record<string, string> = {}
+function mergeIndexIds(local: string[] | undefined, remote: string[] | undefined,
+  localUpdatedAt: number, remoteUpdatedAt: number): string[] {
+  const localSet: Set<string> = new Set<string>(local ?? [])
+  const remoteSet: Set<string> = new Set<string>(remote ?? [])
+  const merged: string[] = []
+  const seen: Set<string> = new Set<string>()
+  const append = (id: string): void => {
+    if (id.length > 0 && !seen.has(id)) {
+      seen.add(id)
+      merged.push(id)
+    }
+  }
+  ;(local ?? []).forEach((id: string): void => {
+    if (remoteSet.has(id) || localUpdatedAt >= remoteUpdatedAt) {
+      append(id)
+    }
+  })
+  ;(remote ?? []).forEach((id: string): void => {
+    if (localSet.has(id) || remoteUpdatedAt >= localUpdatedAt) {
+      append(id)
+    }
+  })
+  return merged
+}
+
+function mergeProjectMap(local: Record<string, string> | undefined,
+  remote: Record<string, string> | undefined, localUpdatedAt: number,
+  remoteUpdatedAt: number, onConflict: () => void): Record<string, string> {
+  const keys: string[] = []
+  const seen: Set<string> = new Set<string>()
   if (local !== undefined) {
     Object.keys(local).forEach((key: string): void => {
-      merged[key] = local[key]
+      if (!seen.has(key)) {
+        seen.add(key)
+        keys.push(key)
+      }
     })
   }
   if (remote !== undefined) {
     Object.keys(remote).forEach((key: string): void => {
-      const current: string | undefined = merged[key]
-      if (current === undefined) {
-        if (allowRemote) {
-          merged[key] = remote[key]
-        }
-      } else if (current !== remote[key]) {
-        // 同 key 不同值：保留本机映射，并让调用方记录结构化冲突。
+      if (!seen.has(key)) {
+        seen.add(key)
+        keys.push(key)
+      }
+    })
+  }
+  const merged: Record<string, string> = {}
+  keys.forEach((projectId: string): void => {
+    const localId: string | undefined = local === undefined ? undefined : local[projectId]
+    const remoteId: string | undefined = remote === undefined ? undefined : remote[projectId]
+    if (localId !== undefined && remoteId !== undefined) {
+      if (localId !== remoteId) {
+        // 同 project 指向不同星图：保留本机当前主图，由调用方记录冲突。
         onConflict()
+        merged[projectId] = localId
+      } else {
+        merged[projectId] = localId
+      }
+      return
+    }
+    if (localId !== undefined) {
+      // 远端没有该映射：只有远端索引更新时才认为它删除了映射。
+      if (localUpdatedAt >= remoteUpdatedAt) {
+        merged[projectId] = localId
+      }
+      return
+    }
+    if (remoteId !== undefined && remoteUpdatedAt >= localUpdatedAt) {
+      merged[projectId] = remoteId
+    }
+  })
+  return merged
+}
+
+function mergeRelationArray<T>(local: T[] | undefined,
+  remote: T[] | undefined, keyOf: (entry: T) => string): T[] {
+  const merged: T[] = local === undefined ? [] : local.slice()
+  const indexes: Map<string, number> = new Map<string, number>()
+  merged.forEach((entry: T, index: number): void => {
+    indexes.set(keyOf(entry), index)
+  })
+  if (remote !== undefined) {
+    remote.forEach((entry: T): void => {
+      const key: string = keyOf(entry)
+      const index: number | undefined = indexes.get(key)
+      if (index === undefined) {
+        indexes.set(key, merged.length)
+        merged.push(entry)
       }
     })
   }
   return merged
+}
+
+function filterRelationArray<T>(entries: T[] | undefined, ids: Set<string>,
+  keyOf: (entry: T) => string): T[] {
+  return (entries ?? []).filter((entry: T): boolean => ids.has(keyOf(entry)))
+}
+
+function filterNumberMap(entries: Record<string, number> | undefined,
+  ids: Set<string>): Record<string, number> {
+  const filtered: Record<string, number> = {}
+  if (entries !== undefined) {
+    Object.keys(entries).forEach((key: string): void => {
+      if (ids.has(key)) {
+        filtered[key] = entries[key]
+      }
+    })
+  }
+  return filtered
 }
 
 function mergeNumberMap(local: Record<string, number> | undefined,
@@ -152,14 +226,18 @@ function mergeNumberMap(local: Record<string, number> | undefined,
 function mergeIndex(local: PeerStarMapIndexRecord,
   remote: PeerStarMapIndexRecord): PeerStarMapMergeResult {
   let conflict: boolean = false
-  const starmapIds: string[] = unionIds(local.starmapIds, remote.starmapIds)
+  const localUpdatedAt: number = local.updatedAt ?? 0
+  const remoteUpdatedAt: number = remote.updatedAt ?? 0
+  const starmapIds: string[] = mergeIndexIds(local.starmapIds, remote.starmapIds,
+    localUpdatedAt, remoteUpdatedAt)
   const existing: Set<string> = new Set<string>(starmapIds)
-  const rootStarmapIds: string[] = unionIds(local.rootStarmapIds, remote.rootStarmapIds)
+  const rootStarmapIds: string[] = mergeIndexIds(local.rootStarmapIds,
+    remote.rootStarmapIds, localUpdatedAt, remoteUpdatedAt)
     .filter((id: string): boolean => existing.has(id))
   // 普通星图新增映射允许直接吸收；同 project 指向不同 starmap 时保留本机，
   // 由 PeerObjectStore 记录冲突，不擅自修改项目当前主图。
-  const main: Record<string, string> = mergeMapKeys(local.mainStarmapByProject,
-    remote.mainStarmapByProject, true, (): void => {
+  const main: Record<string, string> = mergeProjectMap(local.mainStarmapByProject,
+    remote.mainStarmapByProject, localUpdatedAt, remoteUpdatedAt, (): void => {
       conflict = true
     })
   const mainFiltered: Record<string, string> = {}
@@ -184,26 +262,6 @@ function mergeIndex(local: PeerStarMapIndexRecord,
   return finalize(local, merged, conflict, conflict
     ? '附近设备星图索引中同一项目的默认星图不同，已保留本机映射'
     : '')
-}
-
-function mergeRelationArray<T>(local: T[] | undefined,
-  remote: T[] | undefined, keyOf: (entry: T) => string): T[] {
-  const merged: T[] = local === undefined ? [] : local.slice()
-  const indexes: Map<string, number> = new Map<string, number>()
-  merged.forEach((entry: T, index: number): void => {
-    indexes.set(keyOf(entry), index)
-  })
-  if (remote !== undefined) {
-    remote.forEach((entry: T): void => {
-      const key: string = keyOf(entry)
-      const index: number | undefined = indexes.get(key)
-      if (index === undefined) {
-        indexes.set(key, merged.length)
-        merged.push(entry)
-      }
-    })
-  }
-  return merged
 }
 
 function relationKey(entry: PeerEdgeRelationEntry): string {
@@ -249,6 +307,123 @@ function mergeDeletions(local: PeerDeletedSinceLastSync | undefined,
   return { entries: merged }
 }
 
+function readDeletionRevision(tombstones: Map<string, number>, id: string): number {
+  const revision: number | undefined = tombstones.get(id)
+  return revision === undefined ? -1 : revision
+}
+
+function collectTombstones(local: PeerDeletedSinceLastSync | undefined,
+  remote: PeerDeletedSinceLastSync | undefined, objectType: string): Map<string, number> {
+  const tombstones: Map<string, number> = new Map<string, number>()
+  const collect = (entries: PeerDeletionEntry[] | undefined): void => {
+    (entries ?? []).forEach((entry: PeerDeletionEntry): void => {
+      if (entry.objectType !== objectType || entry.objectId === undefined ||
+        entry.objectId.length === 0) {
+        return
+      }
+      const current: number = tombstones.get(entry.objectId) ?? -1
+      tombstones.set(entry.objectId, Math.max(current, entry.deletedAtRevision ?? 0))
+    })
+  }
+  collect(local?.entries)
+  collect(remote?.entries)
+  return tombstones
+}
+
+function readRevision(revisions: Record<string, number> | undefined, id: string): number {
+  const revision: number | undefined = revisions === undefined ? undefined : revisions[id]
+  return revision === undefined ? 0 : revision
+}
+
+function mergeMembersWithDeletions(localIds: string[] | undefined,
+  remoteIds: string[] | undefined, localRevisions: Record<string, number> | undefined,
+  remoteRevisions: Record<string, number> | undefined, objectType: string,
+  localDeletions: PeerDeletedSinceLastSync | undefined,
+  remoteDeletions: PeerDeletedSinceLastSync | undefined): PeerMemberMergeResult {
+  const localSet: Set<string> = new Set<string>(localIds ?? [])
+  const remoteSet: Set<string> = new Set<string>(remoteIds ?? [])
+  const tombstones: Map<string, number> = collectTombstones(localDeletions, remoteDeletions,
+    objectType)
+  const ids: string[] = []
+  const seen: Set<string> = new Set<string>()
+  let conflict: boolean = false
+  const append = (id: string): void => {
+    if (!seen.has(id)) {
+      seen.add(id)
+      ids.push(id)
+    }
+  }
+  const visit = (id: string): void => {
+    if (id.length === 0) {
+      return
+    }
+    const localHas: boolean = localSet.has(id)
+    const remoteHas: boolean = remoteSet.has(id)
+    const deletedAt: number = readDeletionRevision(tombstones, id)
+    if (deletedAt < 0) {
+      if (localHas || remoteHas) {
+        append(id)
+      }
+      return
+    }
+    if (localHas && remoteHas) {
+      // 两边仍保留成员：说明删除事实已过期，成员继续存在，稍后过滤墓碑。
+      append(id)
+      return
+    }
+    if (localHas) {
+      const localRevision: number = readRevision(localRevisions, id)
+      if (localRevision <= deletedAt) {
+        // 本机没有在删除之后修改过：接受远端删除，不复活成员。
+        return
+      }
+      // 删除与后续修改冲突：保留当前图成员并记录冲突。
+      append(id)
+      conflict = true
+      return
+    }
+    const remoteRevision: number = readRevision(remoteRevisions, id)
+    if (remoteRevision <= deletedAt) {
+      // 远端成员没有在删除之后修改过：接受本机删除。
+      return
+    }
+    // 远端在删除后修改过：保留当前图（本机无该成员），记录冲突，不擅自复活。
+    conflict = true
+  }
+  ;(localIds ?? []).forEach(visit)
+  ;(remoteIds ?? []).forEach(visit)
+  return {
+    ids: ids,
+    conflict: conflict,
+    description: conflict ? '附近设备星图对象删除与修改冲突，已保留本机图' : ''
+  }
+}
+
+function filterDeletions(deletions: PeerDeletedSinceLastSync,
+  nodeIds: Set<string>, edgeIds: Set<string>, embedIds: Set<string>,
+  linkIds: Set<string>, hyperlinkIds: Set<string>): PeerDeletedSinceLastSync {
+  const filtered: PeerDeletionEntry[] = []
+  ;(deletions.entries ?? []).forEach((entry: PeerDeletionEntry): void => {
+    const id: string = entry.objectId ?? ''
+    let exists: boolean = false
+    if (entry.objectType === 'node') {
+      exists = nodeIds.has(id)
+    } else if (entry.objectType === 'edge') {
+      exists = edgeIds.has(id)
+    } else if (entry.objectType === 'embed') {
+      exists = embedIds.has(id)
+    } else if (entry.objectType === 'link') {
+      exists = linkIds.has(id)
+    } else if (entry.objectType === 'hyperlink') {
+      exists = hyperlinkIds.has(id)
+    }
+    if (!exists) {
+      filtered.push(entry)
+    }
+  })
+  return { entries: filtered }
+}
+
 function mergeGraph(local: PeerStarMapGraphMeta,
   remote: PeerStarMapGraphMeta): PeerStarMapMergeResult {
   let conflict: boolean = false
@@ -264,6 +439,41 @@ function mergeGraph(local: PeerStarMapGraphMeta,
       description: '附近设备星图图元标识不一致，已保留本机图'
     }
   }
+  const nodeMerge: PeerMemberMergeResult = mergeMembersWithDeletions(local.nodeIds,
+    remote.nodeIds, local.nodeRevisions, remote.nodeRevisions, 'node',
+    local.deletedSinceLastSync, remote.deletedSinceLastSync)
+  const edgeMerge: PeerMemberMergeResult = mergeMembersWithDeletions(local.edgeIds,
+    remote.edgeIds, local.edgeRevisions, remote.edgeRevisions, 'edge',
+    local.deletedSinceLastSync, remote.deletedSinceLastSync)
+  const embedMerge: PeerMemberMergeResult = mergeMembersWithDeletions(local.embedInstanceIds,
+    remote.embedInstanceIds, local.embedRevisions, remote.embedRevisions, 'embed',
+    local.deletedSinceLastSync, remote.deletedSinceLastSync)
+  const linkMerge: PeerMemberMergeResult = mergeMembersWithDeletions(local.linkIds,
+    remote.linkIds, local.linkRevisions, remote.linkRevisions, 'link',
+    local.deletedSinceLastSync, remote.deletedSinceLastSync)
+  const hyperlinkMerge: PeerMemberMergeResult = mergeMembersWithDeletions(local.hyperlinkIds,
+    remote.hyperlinkIds, local.hyperlinkRevisions, remote.hyperlinkRevisions,
+    'hyperlink', local.deletedSinceLastSync, remote.deletedSinceLastSync)
+  const nodeSet: Set<string> = new Set<string>(nodeMerge.ids)
+  const edgeSet: Set<string> = new Set<string>(edgeMerge.ids)
+  const embedSet: Set<string> = new Set<string>(embedMerge.ids)
+  const linkSet: Set<string> = new Set<string>(linkMerge.ids)
+  const hyperlinkSet: Set<string> = new Set<string>(hyperlinkMerge.ids)
+  conflict = nodeMerge.conflict || edgeMerge.conflict || embedMerge.conflict ||
+    linkMerge.conflict || hyperlinkMerge.conflict
+  let description: string = ''
+  const descriptions: string[] = [
+    nodeMerge.description,
+    edgeMerge.description,
+    embedMerge.description,
+    linkMerge.description,
+    hyperlinkMerge.description
+  ]
+  descriptions.forEach((text: string): void => {
+    if (description.length === 0 && text.length > 0) {
+      description = text
+    }
+  })
   const merged: PeerStarMapGraphMeta = {
     schemaVersion: local.schemaVersion,
     starmapId: local.starmapId,
@@ -286,41 +496,40 @@ function mergeGraph(local: PeerStarMapGraphMeta,
     updatedAt: local.updatedAt,
     deletedSinceLastSync: local.deletedSinceLastSync
   }
-  if (local.starmapId !== undefined && remote.starmapId !== undefined &&
-    local.starmapId !== remote.starmapId) {
-    conflict = true
-  }
   if (merged.starmapId === undefined) {
     merged.starmapId = remote.starmapId
   }
   merged.schemaVersion = maxVersion(local.schemaVersion, remote.schemaVersion)
-  merged.nodeIds = unionIds(local.nodeIds, remote.nodeIds)
-  merged.edgeIds = unionIds(local.edgeIds, remote.edgeIds)
-  merged.embedInstanceIds = unionIds(local.embedInstanceIds, remote.embedInstanceIds)
-  merged.linkIds = unionIds(local.linkIds, remote.linkIds)
-  merged.hyperlinkIds = unionIds(local.hyperlinkIds, remote.hyperlinkIds)
-  merged.edgeRelationIndex = mergeRelationArray(local.edgeRelationIndex,
-    remote.edgeRelationIndex, relationKey)
-  merged.embedHostIndex = mergeRelationArray(local.embedHostIndex,
-    remote.embedHostIndex, embedHostKey)
-  merged.linkRelationIndex = mergeRelationArray(local.linkRelationIndex,
-    remote.linkRelationIndex, linkKey)
-  merged.hyperlinkRelationIndex = mergeRelationArray(local.hyperlinkRelationIndex,
-    remote.hyperlinkRelationIndex, hyperlinkKey)
+  merged.nodeIds = nodeMerge.ids
+  merged.edgeIds = edgeMerge.ids
+  merged.embedInstanceIds = embedMerge.ids
+  merged.linkIds = linkMerge.ids
+  merged.hyperlinkIds = hyperlinkMerge.ids
+  merged.edgeRelationIndex = filterRelationArray(mergeRelationArray(
+    local.edgeRelationIndex, remote.edgeRelationIndex, relationKey), edgeSet, relationKey)
+  merged.embedHostIndex = filterRelationArray(mergeRelationArray(
+    local.embedHostIndex, remote.embedHostIndex, embedHostKey), embedSet, embedHostKey)
+  merged.linkRelationIndex = filterRelationArray(mergeRelationArray(
+    local.linkRelationIndex, remote.linkRelationIndex, linkKey), linkSet, linkKey)
+  merged.hyperlinkRelationIndex = filterRelationArray(mergeRelationArray(
+    local.hyperlinkRelationIndex, remote.hyperlinkRelationIndex, hyperlinkKey),
+    hyperlinkSet, hyperlinkKey)
   merged.nodeKindCounts = mergeNumberMap(local.nodeKindCounts, remote.nodeKindCounts)
-  merged.nodeRevisions = mergeNumberMap(local.nodeRevisions, remote.nodeRevisions)
-  merged.edgeRevisions = mergeNumberMap(local.edgeRevisions, remote.edgeRevisions)
-  merged.embedRevisions = mergeNumberMap(local.embedRevisions, remote.embedRevisions)
-  merged.linkRevisions = mergeNumberMap(local.linkRevisions, remote.linkRevisions)
-  merged.hyperlinkRevisions = mergeNumberMap(local.hyperlinkRevisions,
-    remote.hyperlinkRevisions)
+  merged.nodeRevisions = filterNumberMap(mergeNumberMap(local.nodeRevisions,
+    remote.nodeRevisions), nodeSet)
+  merged.edgeRevisions = filterNumberMap(mergeNumberMap(local.edgeRevisions,
+    remote.edgeRevisions), edgeSet)
+  merged.embedRevisions = filterNumberMap(mergeNumberMap(local.embedRevisions,
+    remote.embedRevisions), embedSet)
+  merged.linkRevisions = filterNumberMap(mergeNumberMap(local.linkRevisions,
+    remote.linkRevisions), linkSet)
+  merged.hyperlinkRevisions = filterNumberMap(mergeNumberMap(local.hyperlinkRevisions,
+    remote.hyperlinkRevisions), hyperlinkSet)
   merged.packageRevision = maxNumber(local.packageRevision, remote.packageRevision)
   merged.updatedAt = maxNumber(local.updatedAt, remote.updatedAt)
-  merged.deletedSinceLastSync = mergeDeletions(local.deletedSinceLastSync,
-    remote.deletedSinceLastSync)
-  return finalize(local, merged, conflict, conflict
-    ? '附近设备星图图元标识不一致，已保留本机图'
-    : '')
+  merged.deletedSinceLastSync = filterDeletions(mergeDeletions(local.deletedSinceLastSync,
+    remote.deletedSinceLastSync), nodeSet, edgeSet, embedSet, linkSet, hyperlinkSet)
+  return finalize(local, merged, conflict, description)
 }
 
 function finalize(local: Object, merged: Object, conflict: boolean,

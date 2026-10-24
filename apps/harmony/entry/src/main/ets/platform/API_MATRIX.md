@@ -163,8 +163,8 @@
 - 权限：`ohos.permission.DISTRIBUTED_DATASYNC`（user_grant，normal；用于可信设备发现，运行时在用户打开/刷新附近设备或主动连接时申请，拒绝时明确显示不可用，不申请 ACL）
 - ACL：否
 - fallback：API < 18 或能力缺失时 `TrustedDeviceService.isSupported()` 返回 false，附近设备列表为空、入口明确显示不可用；应用安装与云同步不受影响。系统只保证第三方文本消息，因此对象按 `PeerSyncTransport` 的 UTF-8 JSON 帧字节上限分片（Base64 正文、requestId/sequence/total、SHA-256），不假设二进制 `sendData` 可用。
-- 实现文件：`device/impl/api18/TrustedDeviceApi18.ets`、`device/TrustedDeviceService.ets`、`peer/PeerSyncTransport.ets`、`peer/PeerSyncSession.ets`、`peer/PeerObjectStore.ets`、`peer/PeerCrypto.ets`、`peer/NearbyDeviceSyncCoordinator.ets`
-- 说明：可信关系来自系统分布式设备网络，不把华为账号“已登录”当同账号证明；会话只保存本次连接的 `networkId`，不写永久设备身份，也不传输 GitHub Token。附近设备同步全部在 ArkTS 完成，直接读取现有 `manifest.sync.json`/App group manifest 与白名单对象；清单 `content_hash` 保持 Core 的 MD5 语义，传输分片另用 SHA-256 校验；章节冲突保留本地并落冲突副本，删除保留墓碑。不经过 Rust Core peer provider，也不新增第二套云端同步状态。
+- 实现文件：`device/impl/api18/TrustedDeviceApi18.ets`、`device/TrustedDeviceService.ets`、`peer/PeerSyncTransport.ets`、`peer/PeerSyncSession.ets`、`peer/PeerObjectStore.ets`、`peer/PeerStarMapMerge.ets`、`peer/PeerCrypto.ets`、`peer/NearbyDeviceSyncCoordinator.ets`、`feature/starmap/platform/StarMapSyncBarrier.ets`
+- 说明：可信关系来自系统分布式设备网络，不把华为账号“已登录”当同账号证明；会话只保存本次连接的 `networkId`，不写永久设备身份，也不传输 GitHub Token。附近设备同步全部在 ArkTS 完成，直接读取现有 `manifest.sync.json`/App group manifest 与白名单对象；清单 `content_hash` 保持 Core 的 MD5 语义，传输分片另用 SHA-256 校验；章节冲突保留本地并落冲突副本，删除保留墓碑。接收端的附近设备共同基线单独存放在 `app-meta/peer/agreements.local.json`，按稳定设备 ID + 完整对象路径记录，只在对象落盘并 ACK 成功后推进，不写 Git 的 `state.local.json:known_files`。星图 `index.json`/`graph.json` 按对象 ID 与删除墓碑合并，成员对象按“对象 → graph → index”顺序逐项接收、提交、ACK；提交期间持有写作/星图屏障并关闭 Core 星图 Store 缓存，提交后重载当前星图，不依赖 120ms 定时器或 Home 刷新。不经过 Rust Core peer provider，也不新增第二套云端同步状态。
 
 ## 分享
 

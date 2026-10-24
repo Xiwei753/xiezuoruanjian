@@ -53,6 +53,27 @@ export interface PeerObjectCommitResult {
   applied: number
   conflicts: number
   message: string
+  // 本次真正落盘的对象版本；接收端 ACK 成功后再写入“附近设备共同基线”。
+  appliedObjects?: PeerAgreementEntry[]
+}
+
+// 附近设备自己的共同基线，按对端稳定 deviceId + 对象路径保存。
+// 不写 Core 的 state.local.json:known_files；后者只能在 Git 同步成功提交后推进。
+export interface PeerAgreementEntry {
+  path: string
+  contentHash: string
+  deleted: boolean
+}
+
+interface PeerAgreementRecord {
+  deviceId: string
+  objects: Record<string, string>
+  updatedAt: number
+}
+
+interface PeerAgreementFile {
+  version: number
+  devices: PeerAgreementRecord[]
 }
 
 interface ManifestFileRecord {
@@ -152,16 +173,52 @@ export class PeerObjectStore {
     return Array.from(this.staged.keys())
   }
 
-  // 是否存在同步共同基线。章节三路保护依赖它；没有基线时不拿当前文件冒充。
-  hasKnownBase(path: string): boolean {
+  // 只读取附近设备自己的共同基线；不会写 Git 的 known_files。
+  // 必须以完整对象路径（app/... 或 projects/<id>/...）为键，不能只用项目内相对路径，
+  // 否则不同项目中同名的 chapters/<id>/chapter.md 会互相覆盖基线。
+  peerAgreementBase(peerDeviceId: string, path: string): string | null {
+    if (peerDeviceId.length === 0) {
+      return null
+    }
     const target: LocalObjectTarget | null = this.resolveTarget(path)
     if (target === null) {
-      return false
+      return null
     }
-    const state: SyncStateFile = this.readSyncState(this.syncStatePaths(target).statePath)
-    return state.known_files !== undefined &&
-      state.known_files[target.relativePath] !== undefined &&
-      (state.known_files[target.relativePath] as string).length > 0
+    const file: PeerAgreementFile = this.readAgreements()
+    const record: PeerAgreementRecord | undefined = file.devices.find(
+      (item: PeerAgreementRecord): boolean => item.deviceId === peerDeviceId)
+    if (record === undefined) {
+      return null
+    }
+    const hash: string | undefined = record.objects[path]
+    return hash === undefined || hash.length === 0 ? null : hash
+  }
+
+  // 接收并 ACK 成功后调用：先落 live 文件/对象版本，再推进附近设备基线。
+  confirmPeerObjects(peerDeviceId: string, entries: PeerAgreementEntry[]): void {
+    if (peerDeviceId.length === 0 || entries.length === 0) {
+      return
+    }
+    const file: PeerAgreementFile = this.readAgreements()
+    let record: PeerAgreementRecord | undefined = file.devices.find(
+      (item: PeerAgreementRecord): boolean => item.deviceId === peerDeviceId)
+    if (record === undefined) {
+      record = { deviceId: peerDeviceId, objects: {}, updatedAt: 0 }
+      file.devices.push(record)
+    }
+    const targetRecord: PeerAgreementRecord = record
+    entries.forEach((entry: PeerAgreementEntry): void => {
+      if (entry.path.length === 0) {
+        return
+      }
+      const target: LocalObjectTarget | null = this.resolveTarget(entry.path)
+      if (target === null) {
+        return
+      }
+      targetRecord.objects[entry.path] = entry.contentHash
+    })
+    targetRecord.updatedAt = Date.now()
+    this.atomicWrite(this.agreementsPath(), PeerCrypto.utf8Encode(JSON.stringify(file)))
   }
 
   readLocalObject(path: string): PeerStoredContent | null {
@@ -223,9 +280,10 @@ export class PeerObjectStore {
     return { success: true, applied: 1, conflicts: 0, message: 'staged' }
   }
 
-  async commitRemoteObjects(): Promise<PeerObjectCommitResult> {
+  async commitRemoteObjects(peerDeviceId: string = ''): Promise<PeerObjectCommitResult> {
     let applied: number = 0
     let conflicts: number = 0
+    const appliedObjects: PeerAgreementEntry[] = []
     try {
       const pending: StagedPeerObject[] = Array.from(this.staged.values())
       // 星图 graph/index 必须最后落盘：先把节点/边/嵌入对象文件提交完，
@@ -250,7 +308,8 @@ export class PeerObjectStore {
         const localHash: string = localBytes === null ? '' : PeerCrypto.md5Hex(localBytes)
         const protectedPath: boolean = isPeerDocumentPath(object.path) ||
           isPeerStarMapSemanticPath(object.path) || isPeerStarMapObjectPath(object.path)
-        const baseHash: string = this.knownBase(target, localRecord, localHash, protectedPath)
+        const baseHash: string = this.knownBase(object.path, target, localRecord, localHash,
+          protectedPath, peerDeviceId)
         const localModifiedAt: number = this.localModifiedAt(target, localRecord, localHash)
         const localChanged: boolean = localHash.length > 0 &&
           (baseHash.length === 0 || localHash !== baseHash)
@@ -277,11 +336,17 @@ export class PeerObjectStore {
               continue
             }
           }
+          // 已经落过同版本墓碑且本地确实没有文件：重复清单不再算一次“已应用”。
+          if (!localExists && localRecord !== null && localRecord.op === 'delete' &&
+            localRecord.content_hash === object.contentHash) {
+            continue
+          }
           if (fs.accessSync(target.absolutePath)) {
             fs.unlinkSync(target.absolutePath)
           }
           this.updateManifest(target, object, true)
-          this.removeKnown(target)
+          appliedObjects.push({ path: object.path, contentHash: object.contentHash,
+            deleted: true })
           applied++
           continue
         }
@@ -304,7 +369,8 @@ export class PeerObjectStore {
               const mergedHash: string = PeerCrypto.md5Hex(merged.bytes)
               this.updateManifest(target, object, false, mergedHash)
               if (!merged.conflict) {
-                this.markKnown(target, mergedHash)
+                appliedObjects.push({ path: object.path, contentHash: mergedHash,
+                  deleted: false })
               }
               applied++
             }
@@ -316,6 +382,8 @@ export class PeerObjectStore {
             continue
           }
           this.applyRemoteObject(target, object)
+          appliedObjects.push({ path: object.path, contentHash: object.contentHash,
+            deleted: false })
           applied++
           continue
         }
@@ -338,6 +406,8 @@ export class PeerObjectStore {
         // 不能再拿文件 mtime 把远端新内容挡掉（本地 mtime 可能只是复制/打开时间）。
         if (!localChanged) {
           this.applyRemoteObject(target, object)
+          appliedObjects.push({ path: object.path, contentHash: object.contentHash,
+            deleted: false })
           applied++
           continue
         }
@@ -346,6 +416,8 @@ export class PeerObjectStore {
           continue
         }
         this.applyRemoteObject(target, object)
+        appliedObjects.push({ path: object.path, contentHash: object.contentHash,
+          deleted: false })
         applied++
       }
       this.staged.clear()
@@ -353,9 +425,17 @@ export class PeerObjectStore {
         emitter.emit({ eventId: SYNC_CONTENT_CHANGED_EVENT_ID })
       }
       return { success: true, applied: applied, conflicts: conflicts,
-        message: this.commitMessage(applied, conflicts) }
+        message: this.commitMessage(applied, conflicts), appliedObjects: appliedObjects }
     } catch (e) {
-      return failed(`提交附近设备对象失败：${String(e)}`)
+      // 已经落盘的对象仍要返回给会话推进附近设备基线/刷新星图；
+      // success=false 只表示本轮没有完整提交完，不能把已应用事实一起丢掉。
+      return {
+        success: false,
+        applied: applied,
+        conflicts: conflicts,
+        message: `提交附近设备对象失败：${String(e)}`,
+        appliedObjects: appliedObjects
+      }
     }
   }
 
@@ -372,19 +452,24 @@ export class PeerObjectStore {
   private applyRemoteObject(target: LocalObjectTarget, object: StagedPeerObject): void {
     this.atomicWrite(target.absolutePath, object.bytes)
     this.updateManifest(target, object, false)
-    this.markKnown(target, object.contentHash)
   }
 
-  private knownBase(target: LocalObjectTarget, localRecord: ManifestFileRecord | null,
-    localHash: string, requireStateBaseline: boolean): string {
+  private knownBase(path: string, target: LocalObjectTarget, localRecord: ManifestFileRecord | null,
+    localHash: string, requireStateBaseline: boolean, peerDeviceId: string): string {
+    // 先读附近设备自己的基线；它只在接收并 ACK 成功后推进，绝不写 Git known_files。
+    const agreed: string | null = this.peerAgreementBase(peerDeviceId, path)
+    if (agreed !== null) {
+      return agreed
+    }
+    // 首次连接还没有附近设备基线时，允许只读沿用 Git 的成功同步基线，
+    // 避免把本机已有正文误判成“双方都改”；但 Peer 接收绝不回写该字段。
     const state: SyncStateFile = this.readSyncState(this.syncStatePaths(target).statePath)
     const known: string | undefined = state.known_files === undefined
       ? undefined : state.known_files[target.relativePath]
     if (known !== undefined && known.length > 0) {
       return known
     }
-    // 正文、星图对象与星图语义文件必须使用 Core 维护的共同基线 known_files；
-    // manifest 里的 hash 可能只是本机当前版本，不能冒充三方合并的 base，
+    // 正文、星图对象与星图语义文件没有共同基线时不能拿 manifest 当前值冒充，
     // 否则会把“本机有新内容”误判成未修改，被远端 LWW 覆盖。
     if (requireStateBaseline) {
       return ''
@@ -411,43 +496,26 @@ export class PeerObjectStore {
     }
   }
 
-  private markKnown(target: LocalObjectTarget, contentHash: string): void {
-    const paths: SyncStatePaths = this.syncStatePaths(target)
-    const state: SyncStateFile = this.readSyncState(paths.statePath)
-    const known: Record<string, string> = state.known_files ?? {}
-    known[target.relativePath] = contentHash
-    state.known_files = known
-    const updated: Record<string, number> = state.known_files_updated_at ?? {}
-    updated[target.relativePath] = Date.now()
-    state.known_files_updated_at = updated
-    if (state.device_id === undefined || state.device_id.length === 0) {
-      state.device_id = this.localDeviceId
-    }
-    this.atomicWrite(paths.statePath, PeerCrypto.utf8Encode(JSON.stringify(state)))
+  private agreementsPath(): string {
+    return `${this.root}/app-meta/peer/agreements.local.json`
   }
 
-  private removeKnown(target: LocalObjectTarget): void {
-    const paths: SyncStatePaths = this.syncStatePaths(target)
-    const state: SyncStateFile = this.readSyncState(paths.statePath)
-    const known: Record<string, string> = {}
-    if (state.known_files !== undefined) {
-      Object.keys(state.known_files).forEach((key: string): void => {
-        if (key !== target.relativePath) {
-          known[key] = (state.known_files as Record<string, string>)[key]
-        }
-      })
+  private readAgreements(): PeerAgreementFile {
+    const path: string = this.agreementsPath()
+    try {
+      if (!fs.accessSync(path)) {
+        return { version: 1, devices: [] }
+      }
+      const text: string = PeerCrypto.utf8Decode(this.readBytes(path))
+      const parsed: PeerAgreementFile = JSON.parse(text) as PeerAgreementFile
+      return {
+        version: parsed.version ?? 1,
+        devices: parsed.devices ?? []
+      }
+    } catch (_e) {
+      // 损坏的附近设备基线不能当成“已同意”，更不能用它覆盖 Git 基线。
+      return { version: 1, devices: [] }
     }
-    state.known_files = known
-    const updated: Record<string, number> = {}
-    if (state.known_files_updated_at !== undefined) {
-      Object.keys(state.known_files_updated_at).forEach((key: string): void => {
-        if (key !== target.relativePath) {
-          updated[key] = (state.known_files_updated_at as Record<string, number>)[key]
-        }
-      })
-    }
-    state.known_files_updated_at = updated
-    this.atomicWrite(paths.statePath, PeerCrypto.utf8Encode(JSON.stringify(state)))
   }
 
   private commitMessage(applied: number, conflicts: number): string {
