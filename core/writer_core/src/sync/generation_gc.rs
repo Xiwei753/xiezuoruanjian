@@ -136,9 +136,9 @@ pub fn run_generation_gc(
                 return Ok(());
             }
         }
-        let meta = match meta_obj {
+        let meta: Option<GenerationMeta> = match meta_obj {
             Some(obj) => match serde_json::from_slice::<GenerationMeta>(&obj.content) {
-                Ok(m) => m,
+                Ok(m) => Some(m),
                 Err(e) => {
                     // meta 损坏：保守保留（不删），log warn。
                     log::warn!(
@@ -151,34 +151,45 @@ pub fn run_generation_gc(
                 }
             },
             None => {
-                // meta 缺失：保守保留（不删），log warn。
+                // Issue #993：meta 缺失。当前 publish_generation 的 batch 分支在同一
+                // commit_batch 写入 manifest + meta(complete=true)（generation.rs），逐文件
+                // 分支先写 meta(complete=false) 再写 meta(complete=true)，两路径都会写 meta。
+                // 所以缺 meta 的 generation 是旧版/迁移遗留（meta 机制引入前发布）。这类
+                // generation 没有活跃 upload lease（lease 由 publish_generation 写入 meta），
+                // 不是上传中；且 meta 机制引入远早于保留期，必然已超过保留期。不臆造
+                // created_at_ms，不永久保留：跳过 meta 相关检查，用远端 catalog 确认非
+                // active 后复用现有批量删除逻辑回收（见下方）。
                 log::warn!(
-                    "[sync] run_generation_gc: missing meta for {} generation {} — keeping",
+                    "[sync] run_generation_gc: missing meta for {} generation {} — legacy/migration leftover, reclaiming after catalog check",
+                    project_remote_prefix,
+                    gen_id
+                );
+                None
+            }
+        };
+
+        // 有 meta 时检查上传中和保留期；缺 meta（旧版遗留）跳过这两项直接走回收：
+        // 无 lease ⇒ 不在上传中；旧版遗留 ⇒ 已超过保留期。
+        if let Some(meta) = &meta {
+            // incomplete 且 lease 未过期 → 不删（上传中）。
+            if !meta.complete && meta.upload_lease_until_ms > now_ms {
+                log::debug!(
+                    "[sync] run_generation_gc: {} generation {} incomplete + lease active — keeping",
                     project_remote_prefix,
                     gen_id
                 );
                 continue;
             }
-        };
 
-        // incomplete 且 lease 未过期 → 不删（上传中）。
-        if !meta.complete && meta.upload_lease_until_ms > now_ms {
-            log::debug!(
-                "[sync] run_generation_gc: {} generation {} incomplete + lease active — keeping",
-                project_remote_prefix,
-                gen_id
-            );
-            continue;
-        }
-
-        // unreferenced generation 超过安全保留期后才可删。
-        if meta.created_at_ms + retention_ms >= now_ms {
-            log::debug!(
-                "[sync] run_generation_gc: {} generation {} within retention — keeping",
-                project_remote_prefix,
-                gen_id
-            );
-            continue;
+            // unreferenced generation 超过安全保留期后才可删。
+            if meta.created_at_ms + retention_ms >= now_ms {
+                log::debug!(
+                    "[sync] run_generation_gc: {} generation {} within retention — keeping",
+                    project_remote_prefix,
+                    gen_id
+                );
+                continue;
+            }
         }
 
         // 真正删除前再次 load_remote_catalog，

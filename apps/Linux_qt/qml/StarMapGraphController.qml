@@ -148,7 +148,7 @@ QtObject {
                     y: pos.y,
                     width: size.width,
                     height: size.height,
-                    payload: gn.payload,
+
                     tags: gn.tags
                 });
             }
@@ -212,7 +212,7 @@ QtObject {
                 && rowNode.width === desired.width
                 && rowNode.height === desired.height
                 && JSON.stringify(rowNode.content) === JSON.stringify(desired.content)
-                && JSON.stringify(rowNode.payload) === JSON.stringify(desired.payload)
+
                 && JSON.stringify(rowNode.tags) === JSON.stringify(desired.tags);
     }
 

@@ -241,6 +241,20 @@ fn build_local_snapshot(
                     records.insert(path.clone(), old_rec.clone());
                     continue;
                 }
+                // Issue #993：复用失败 → 重建 record 用当前 mtime/device_id，LWW 元数据
+                // 可能与 remote 不一致 → 下轮 LWW 判 remote 赢 → 重复下载。记录原因便于
+                // 运行时定位收敛失败的根因（不改变 LWW 取胜规则，仅诊断）。
+                if old_rec.content_hash != local_hash {
+                    log::debug!(
+                        "[sync] snapshot_local_records: {} manifest hash {} != file hash {} — rebuilding record (content diverged since manifest write-back)",
+                        path, old_rec.content_hash, local_hash
+                    );
+                } else {
+                    log::debug!(
+                        "[sync] snapshot_local_records: {} manifest op={} != upsert — rebuilding record",
+                        path, old_rec.op
+                    );
+                }
             }
 
             // 当前 hash 改了或是新文件 → 用当前文件 mtime + 当前真实 device_id。

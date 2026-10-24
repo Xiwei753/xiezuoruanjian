@@ -1158,10 +1158,14 @@ Item {
 
     // 窗口失活（切到别的应用）时，物理 release 可能永远不会送达：
     // 用同一个取消入口清掉左右手势与控制器状态，下一次按下重新分配现场。
+    // Issue #993：取 router 这个 Item 所属的 Window 作为 Connections target，
+    // 不在 Connections 上直接取 Window.window（该附加属性只在 Item 派生类型上有效，
+    // 直接绑定到 Connections 会触发 "Window.window only supports types derived from Item" 警告）。
     Connections {
-        target: Window.window
+        target: router.Window.window
         function onActiveChanged() {
-            if (!Window.window || !Window.window.active)
+            var win = router.Window.window
+            if (!win || !win.active)
                 router.cancelAllGestures("window_inactive")
         }
     }
