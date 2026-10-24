@@ -87,16 +87,24 @@ export class ProjectListViewModel {
         if (!initOk) {
           ctx.markNativeInitFailed()
           const errCode = nativeBridge.getLastInitErrorCode()
-          const rustError = await nativeBridge.getLastError()
+          const firstFailureDetail = nativeBridge.getFirstInitFailureDetail()
           let errDesc = `Unknown error(${errCode})`
           if (errCode === -1) { errDesc = 'Path is empty' }
           else if (errCode === -2) { errDesc = 'Invalid path encoding' }
           else if (errCode === -3) { errDesc = 'Internal state error' }
           else if (errCode === -4) { errDesc = 'Workspace dir creation failed' }
           else if (errCode === -5) { errDesc = 'App data root path is empty' }
-          else if (errCode === -999) { errDesc = 'NAPI exception (SO load failed?)' }
-        this.errorMessage = `Native core init failed: ${errDesc}\nPath: ${appDataRoot}\nDetail: ${rustError}`
-        return
+          else if (errCode === -999) {
+            errDesc = firstFailureDetail.length > 0
+              ? `NAPI exception (${firstFailureDetail})`
+              : 'NAPI exception (unknown cause)'
+          }
+          const rustError = errCode === -999
+            ? firstFailureDetail
+            : await nativeBridge.getLastError()
+          this.errorMessage = `Native core init failed: ${errDesc}\nPath: ${appDataRoot}\nDetail: ${rustError}`
+          this.isLoading = false
+          return
         }
         const statusResult = await nativeBridge.getNativeLoadStatus()
         this.nativeStatus = statusResult.success ? (statusResult.data || 'unknown') : 'error'

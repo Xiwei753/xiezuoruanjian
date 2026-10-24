@@ -24,6 +24,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private isInitialized: boolean = false
   private appDataRoot: string = ''
   private lastInitErrorCode: number = 0
+  private firstInitFailureDetail: string = ''
 
   // ── 公共模块 & 分域 Bridge ──
   private core = new NativeCoreModule()
@@ -49,14 +50,13 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return true
     }
     try {
-      // 网络状态为三态：查询失败（unknown）传 -1，不得伪造成在线。
       const isConnected: number = params.networkKnown ? (params.isConnected ? 1 : 0) : -1
       const isMetered: number = params.networkKnown ? (params.isMetered ? 1 : 0) : -1
 
       const result: number = this.core.getNativeModule().nativeInit(
         params.appDataRoot,
-        params.filesDir,   // PlatformInit.app_data_dir，与 appDataRoot 同一数据根
-        params.cacheDir,   // 真实 UIAbilityContext.cacheDir
+        params.filesDir,
+        params.cacheDir,
         params.deviceId,
         params.appVersion,
         params.locale,
@@ -68,6 +68,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
         this.isInitialized = true
         this.appDataRoot = params.appDataRoot
         this.statsBridge.setInitialized(true)
+        this.firstInitFailureDetail = ''
         return true
       }
       this.lastInitErrorCode = result
@@ -75,7 +76,13 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return false
     } catch (e) {
       this.lastInitErrorCode = -999
-      this.core.markNativeUnavailable()
+      const cause = String(e)
+      if (this.firstInitFailureDetail.length === 0) {
+        this.firstInitFailureDetail = `nativeInit: ${cause}`
+      }
+      if (!this.core.isNativeModuleAvailable()) {
+        this.core.markNativeUnavailable('nativeInit', cause)
+      }
       console.error(`nativeInit exception: ${e}`)
       return false
     }
@@ -121,7 +128,13 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       }
       return result
     } catch (e) {
-      this.core.markNativeUnavailable()
+      const cause = String(e)
+      if (this.firstInitFailureDetail.length === 0) {
+        this.firstInitFailureDetail = `nativeInitDiagnostics: ${cause}`
+      }
+      if (!this.core.isNativeModuleAvailable()) {
+        this.core.markNativeUnavailable('nativeInitDiagnostics', cause)
+      }
       console.error(`nativeInitDiagnostics exception: ${e}`)
       return -999
     }
@@ -131,7 +144,19 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.lastInitErrorCode
   }
 
+  getFirstInitFailureDetail(): string {
+    if (this.firstInitFailureDetail.length > 0) {
+      return this.firstInitFailureDetail
+    }
+    return this.core.getFirstLoadFailureDetail()
+  }
+
   async getLastError(): Promise<string> {
+    if (!this.core.isNativeModuleAvailable()) {
+      return this.firstInitFailureDetail.length > 0
+        ? this.firstInitFailureDetail
+        : this.core.getFirstLoadFailureDetail()
+    }
     try {
       const err: string = this.core.getNativeModule().nativeGetLastError() as string
       return err

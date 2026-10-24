@@ -679,17 +679,22 @@ static void ConfigureOnnxRuntimePath() {
     Dl_info info{};
     if (dladdr(reinterpret_cast<void*>(&NativeIsAiAvailable), &info) == 0 ||
         info.dli_fname == nullptr) {
+        OH_LOG_WARN(LOG_APP, "ConfigureOnnxRuntimePath: dladdr failed, cannot locate module path");
         return;
     }
     std::string library(info.dli_fname);
     const size_t slash = library.rfind('/');
     if (slash == std::string::npos) {
+        OH_LOG_WARN(LOG_APP, "ConfigureOnnxRuntimePath: no slash in module path '%{public}s'", library.c_str());
         return;
     }
     library.resize(slash + 1);
     library += "libonnxruntime.so";
     if (access(library.c_str(), R_OK) == 0) {
         setenv("SUJIAN_ONNXRUNTIME_LIB", library.c_str(), 0);
+        OH_LOG_INFO(LOG_APP, "ConfigureOnnxRuntimePath: set SUJIAN_ONNXRUNTIME_LIB=%{public}s", library.c_str());
+    } else {
+        OH_LOG_ERROR(LOG_APP, "ConfigureOnnxRuntimePath: libonnxruntime.so not found at %{public}s", library.c_str());
     }
 }
 
@@ -699,9 +704,7 @@ static void ConfigureOnnxRuntimePath() {
 //   Domain descriptor arrays are allocated by each get*Descriptors() function
 //   and must remain valid for the lifetime of the module.
 static napi_value Init(napi_env env, napi_value exports) {
-    // Issue #760 评论 5824787641：在 NAPI 模块 Init 开头注册 HiLog callback。
-    // NAPI 模块在 ArkTS import native module 时初始化，比 EntryAbility.onCreate 更早，
-    // 确保 EntryAbility.onCreate 的第一条启动日志也能被环形缓冲捕获。
+    OH_LOG_INFO(LOG_APP, "NAPI writer_core Init: starting module registration");
     RegisterHilogCallback();
     ConfigureOnnxRuntimePath();
 

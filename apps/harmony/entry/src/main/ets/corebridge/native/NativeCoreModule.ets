@@ -40,14 +40,19 @@ interface VolumeLocationResult {
  */
 export class NativeCoreModule {
   private nativeModuleAvailable: boolean = true
+  private firstLoadFailureStage: string = ''
+  private firstLoadFailureCause: string = ''
 
   getNativeModule(): Record<string, Function> {
     if (!this.nativeModuleAvailable) {
-      throw new Error('Native module is not available (previously failed to load)')
+      const detail = this.firstLoadFailureStage.length > 0
+        ? `${this.firstLoadFailureStage}: ${this.firstLoadFailureCause}`
+        : 'previously failed to load'
+      throw new Error(`Native module is not available (${detail})`)
     }
     if (nativeModule === null || nativeModule === undefined) {
-      this.nativeModuleAvailable = false
-      throw new Error('Native module is null or undefined')
+      this.markNativeUnavailable('import', 'nativeModule is null or undefined')
+      throw new Error(`Native module is not available (import: nativeModule is null or undefined)`)
     }
     return nativeModule as Record<string, Function>
   }
@@ -222,7 +227,22 @@ export class NativeCoreModule {
     }
   }
 
-  markNativeUnavailable(): void {
-    this.nativeModuleAvailable = false
+  markNativeUnavailable(stage: string = '', cause: string = ''): void {
+    if (this.nativeModuleAvailable) {
+      this.nativeModuleAvailable = false
+      this.firstLoadFailureStage = stage
+      this.firstLoadFailureCause = cause
+    }
+  }
+
+  getFirstLoadFailureDetail(): string {
+    if (this.firstLoadFailureStage.length > 0) {
+      return `${this.firstLoadFailureStage}: ${this.firstLoadFailureCause}`
+    }
+    return ''
+  }
+
+  isNativeModuleAvailable(): boolean {
+    return this.nativeModuleAvailable
   }
 }

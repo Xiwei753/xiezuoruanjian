@@ -29,6 +29,21 @@ set_target_properties(onnxruntime_ohos PROPERTIES
 )
 message(STATUS "Found OHOS ONNX Runtime: ${ORT_SO}")
 
+# libonnxruntime.so 依赖 libc++_shared.so；鸿蒙系统不保证提供，必须随 HAP 打包。
+set(CXX_SHARED_SO "${OHOS_NDK_HOME}/llvm/lib/aarch64-linux-ohos/c++/libc++_shared.so")
+if(NOT EXISTS "${CXX_SHARED_SO}")
+    set(CXX_SHARED_SO "${PREBUILT_DIR}/libc++_shared.so")
+endif()
+if(EXISTS "${CXX_SHARED_SO}")
+    add_library(cxx_shared SHARED IMPORTED)
+    set_target_properties(cxx_shared PROPERTIES
+        IMPORTED_LOCATION "${CXX_SHARED_SO}"
+    )
+    message(STATUS "Found libc++_shared.so: ${CXX_SHARED_SO}")
+else()
+    message(WARNING "libc++_shared.so not found; libonnxruntime.so may fail to load on device")
+endif()
+
 # napi_init.cpp 通过 #include "napi/napi_xxx.cpp" 内联各域实现，
 # 故只需编译 napi_init.cpp 一个翻译单元（与历史结构一致）。
 add_library(writer_core_napi SHARED
@@ -46,6 +61,9 @@ target_link_libraries(writer_core_napi PUBLIC
     writer_core_ffi
     onnxruntime_ohos
 )
+if(TARGET cxx_shared)
+    target_link_libraries(writer_core_napi PUBLIC cxx_shared)
+endif()
 
 set_target_properties(writer_core_napi PROPERTIES
     OUTPUT_NAME "writer_core"
@@ -57,3 +75,10 @@ add_custom_command(TARGET writer_core_napi POST_BUILD
         "${ORT_SO}" "$<TARGET_FILE_DIR:writer_core_napi>/libonnxruntime.so"
     COMMENT "Copying OHOS libonnxruntime.so into HAP native libraries"
 )
+if(EXISTS "${CXX_SHARED_SO}")
+    add_custom_command(TARGET writer_core_napi POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CXX_SHARED_SO}" "$<TARGET_FILE_DIR:writer_core_napi>/libc++_shared.so"
+        COMMENT "Copying libc++_shared.so into HAP native libraries"
+    )
+endif()
