@@ -456,6 +456,8 @@ export class PeerSyncSession {
       const text: string = PeerCrypto.utf8Decode(bytes)
       this.mergeRemoteManifest(text)
       this.remoteManifestReceived = true
+      this.rememberedAcks.set(message.requestId,
+        { success: true, message: 'manifest', committedHash: '', conflict: false })
       this.transport.rememberRequest(message.requestId)
       if (!await this.sendAck(message.requestId, true, 'manifest')) {
         this.fail('发送附近设备清单确认失败')
@@ -467,6 +469,8 @@ export class PeerSyncSession {
     if (message.path.startsWith(CONTINUATION_OBJECT_PREFIX)) {
       const snapshotId: string = message.path.substring(CONTINUATION_OBJECT_PREFIX.length)
       ContinuationSnapshotStore.getInstance().save(snapshotId, PeerCrypto.utf8Decode(bytes))
+      this.rememberedAcks.set(message.requestId,
+        { success: true, message: 'continuation snapshot', committedHash: '', conflict: false })
       this.transport.rememberRequest(message.requestId)
       if (!await this.sendAck(message.requestId, true, 'continuation snapshot')) {
         this.fail('发送续接快照确认失败')
@@ -502,29 +506,31 @@ export class PeerSyncSession {
       deleted: false,
       deviceId: ownerDeviceId
     })
-    // 先持久化本轮本地基线，再 remember + 发 ACK：不能先 remember/ACK 后
-    // confirmPeerObjects()，确认后存储失败会造成两端成功状态不一致，
-    // 且重试会被 isDuplicate 误判为已成功。只有接收端落盘版本与发送端版本
-    // 一致时才推进 agreement；合并出第三个 hash M 时两边都暂不推进。
+    // 先持久化本轮本地基线，再算出完整 ACK 结果并保存，然后 remember + 发 ACK：
+    // 不能先 remember/ACK 后 confirmPeerObjects()，确认后存储失败会造成两端成功
+    // 状态不一致。也不能先 remember 后 rememberedAcks.set：若第一次 ACK 发送失败，
+    // 重传时 isDuplicate=true 但 rememberedAcks 尚无记录，replayAck 会丢失
+    // conflict/committedHash。只有接收端落盘版本与发送端版本一致时才推进
+    // agreement；合并出第三个 hash M 时两边都暂不推进。
     const senderVersion: string = message.versionToken ?? message.contentHash
     if (!this.confirmCommitted(committed, senderVersion)) {
       this.clearReadForPath(message.path, false)
       this.fail('保存附近设备共同基线失败')
       return
     }
-    this.transport.rememberRequest(message.requestId)
     const committedHash: string = this.committedHashFor(message.path, committed)
     // 冲突时接收端保留本地版本，ACK 报告"已保留冲突副本"让发送端结束本次传输，
     // 但不推进共同版本；非冲突时 ACK 携带接收端实际落盘 hash。
     const hasConflict: boolean = committed.conflicts > 0 && committedHash.length === 0
+    this.rememberedAcks.set(message.requestId,
+      { success: true, message: committed.message, committedHash: committedHash,
+        conflict: hasConflict })
+    this.transport.rememberRequest(message.requestId)
     if (!await this.sendAck(message.requestId, true, committed.message, committedHash, hasConflict)) {
       this.clearReadForPath(message.path, false)
       this.fail('发送附近设备确认失败')
       return
     }
-    this.rememberedAcks.set(message.requestId,
-      { success: true, message: committed.message, committedHash: committedHash,
-        conflict: hasConflict })
     this.clearReadForPath(message.path, true)
     this.maybeReady(committed.message)
   }
@@ -564,16 +570,16 @@ export class PeerSyncSession {
       this.fail('保存附近设备共同基线失败')
       return
     }
-    this.transport.rememberRequest(message.requestId)
     const committedHash: string = this.committedHashFor(message.path, committed)
     const hasConflict: boolean = committed.conflicts > 0 && committedHash.length === 0
+    this.rememberedAcks.set(message.requestId,
+      { success: true, message: committed.message, committedHash: committedHash,
+        conflict: hasConflict })
+    this.transport.rememberRequest(message.requestId)
     if (!await this.sendAck(message.requestId, true, committed.message, committedHash, hasConflict)) {
       this.fail('发送附近设备确认失败')
       return
     }
-    this.rememberedAcks.set(message.requestId,
-      { success: true, message: committed.message, committedHash: committedHash,
-        conflict: hasConflict })
     this.maybeReady(committed.message)
   }
 
@@ -916,13 +922,15 @@ export class PeerSyncSession {
 
   // 超时重传相同 requestId 时原样重发第一次的完整 ACK 结果，
   // 不丢失 conflict 标记或接收端实际落盘 hash。不重新提交对象。
+  // 正常情况下 rememberedAcks 一定有记录（rememberRequest 之前已 set）；
+  // 若查不到说明状态丢失，回失败让发送端重试，绝不对业务对象假报成功。
   private async replayAck(requestId: string): Promise<void> {
     const outcome: AckOutcome | undefined = this.rememberedAcks.get(requestId)
     if (outcome !== undefined) {
       await this.sendAck(requestId, outcome.success, outcome.message,
         outcome.committedHash, outcome.conflict)
     } else {
-      await this.sendAck(requestId, true, 'duplicate')
+      await this.sendAck(requestId, false, 'ack outcome missing')
     }
   }
 
