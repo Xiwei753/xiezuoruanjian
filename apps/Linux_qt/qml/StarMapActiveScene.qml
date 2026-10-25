@@ -518,16 +518,16 @@ Item {
     function beginInlineEdit(nodeId, gestureId, button) {
         if (interactionController && interactionController.pointerMode === "pinch")
             return false
-        if (editOverlay._closing)
-            return false
+        if (editOverlay._closing && editingNodeId === "")
+            editOverlay.abortTransition()
         if (editingNodeId === nodeId) {
             editOverlay.focusCurrent()
             return true
         }
         if (editingNodeId !== "" && !commitActiveNodeEdit())
             return false
-        if (editOverlay._closing)
-            return false
+        if (editOverlay._closing && editingNodeId === "")
+            editOverlay.abortTransition()
         var node = graphController.getNode(nodeId)
         if (!node)
             return false
@@ -544,8 +544,8 @@ Item {
             "gesture": editingGestureId,
             "button": editingGestureButton
         })
-        // 可见性/尺寸/坐标由会话与节点快照驱动。先让布局落地，再只平移一次
-        // 镜头露出原位展开卡片，最后验证真实输入控件的焦点。
+        // 先建立正文真实焦点以接住紧随双击的输入，再只平移一次镜头露出展开卡片。
+        editOverlay.activate()
         Qt.callLater(function() {
             if (scene.editingNodeId !== nodeId || !editOverlay.visible)
                 return
@@ -1396,21 +1396,33 @@ Item {
         }
         readonly property real _margin: 12
         readonly property var _nodeRect: {
-            if (!editingNode)
+            var closingNode = !editingNode ? _closingSnapshot : null
+            if (!editingNode && !closingNode)
                 return { x: 0, y: 0, width: 0, height: 0 }
-            var item = scene.nodeItemOf(editingNode.id)
+            var nodeId = closingNode ? closingNode.nodeId : editingNode.id
+            var item = scene.nodeItemOf(nodeId)
             if (item) {
                 return { x: item.x, y: item.y, width: item.width, height: item.height }
             }
-            var nodeWidth = editingNode.width !== undefined
-                    ? editingNode.width : StarMapNodeMetrics.defaultNodeWidth()
-            var nodeHeight = editingNode.height !== undefined
-                    ? editingNode.height : StarMapNodeMetrics.defaultNodeHeight()
+            var worldX = closingNode ? closingNode.worldX : editingNode.x
+            var worldY = closingNode ? closingNode.worldY : editingNode.y
+            var nodeWidth = closingNode ? closingNode.worldWidth
+                    : editingNode.width !== undefined
+                        ? editingNode.width : StarMapNodeMetrics.defaultNodeWidth()
+            var nodeHeight = closingNode ? closingNode.worldHeight
+                    : editingNode.height !== undefined
+                        ? editingNode.height : StarMapNodeMetrics.defaultNodeHeight()
+            var projectedWidth = nodeWidth * scene._safeZoom * scene._reveal
+                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            var projectedHeight = nodeHeight * scene._safeZoom * scene._reveal
+                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
             return {
-                x: scene.worldToScreenX(editingNode.x),
-                y: scene.worldToScreenY(editingNode.y),
-                width: nodeWidth * scene._safeZoom,
-                height: nodeHeight * scene._safeZoom
+                x: scene.worldToScreenX(worldX)
+                   + (nodeWidth * scene._safeZoom - projectedWidth) / 2,
+                y: scene.worldToScreenY(worldY)
+                   + (nodeHeight * scene._safeZoom - projectedHeight) / 2,
+                width: projectedWidth,
+                height: projectedHeight
             }
         }
         readonly property var _expandedRect: {
@@ -1430,27 +1442,17 @@ Item {
         property real transitionProgress: 0
         property bool _transitionRunning: false
         property bool _closing: false
-        property real _closingStartProgress: 1
-        property var _openingFromRect: null
-        property var _openingToRect: null
-        property var _closingFromRect: null
-        property var _closingToRect: null
+        property int _transitionGeneration: 0
+        property int _expandGeneration: 0
+        property int _collapseGeneration: 0
         property var _closingSnapshot: null
+        readonly property bool _inputReady: scene.hasActiveNodeEdit && !_closing
         readonly property bool _inputVisible: visible
                 && scene.hasActiveNodeEdit && !_closing && !_transitionRunning
                 && transitionProgress >= 1
         readonly property var _presentedRect: {
             var p = Math.max(0, Math.min(1, transitionProgress))
-            if (_closing && _closingFromRect && _closingToRect) {
-                var closeP = _closingStartProgress > 0
-                        ? Math.min(1, p / _closingStartProgress) : 0
-                return interpolateRect(_closingToRect, _closingFromRect, closeP)
-            }
-            if (_openingFromRect && _openingToRect)
-                return interpolateRect(_openingFromRect, _openingToRect, p)
-            if (scene.hasActiveNodeEdit && p < 1)
-                return _nodeRect
-            return _expandedRect
+            return interpolateRect(_nodeRect, _expandedRect, p)
         }
         // 视觉父级在 Canvas 顶层时显式转换当前动画帧的 Scene 坐标。
         readonly property var _presentedHostPos: {
@@ -1459,10 +1461,6 @@ Item {
                 return Qt.point(a.x, a.y)
             var p = scene.mapToItem(parent, a.x, a.y)
             return Qt.point(p.x, p.y)
-        }
-
-        function copyRect(rect) {
-            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
         }
 
         function interpolateRect(from, to, progress) {
@@ -1475,29 +1473,7 @@ Item {
             }
         }
 
-        function nodeRectFor(node) {
-            var item = scene.nodeItemOf(node.id)
-            if (item)
-                return { x: item.x, y: item.y, width: item.width, height: item.height }
-            var nodeWidth = node.width !== undefined
-                    ? node.width : StarMapNodeMetrics.defaultNodeWidth()
-            var nodeHeight = node.height !== undefined
-                    ? node.height : StarMapNodeMetrics.defaultNodeHeight()
-            var width = nodeWidth * scene._safeZoom * scene._reveal
-                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            var height = nodeHeight * scene._safeZoom * scene._reveal
-                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
-            return {
-                x: scene.worldToScreenX(node.x)
-                   + (nodeWidth * scene._safeZoom - width) / 2,
-                y: scene.worldToScreenY(node.y)
-                   + (nodeHeight * scene._safeZoom - height) / 2,
-                width: width,
-                height: height
-            }
-        }
-
-        function presentationSnapshot(node, rect) {
+        function presentationSnapshot(node) {
             return {
                 nodeId: node.id,
                 worldX: node.x,
@@ -1507,22 +1483,17 @@ Item {
                 worldHeight: node.height !== undefined
                         ? node.height : StarMapNodeMetrics.defaultNodeHeight(),
                 title: node.title || "",
-                body: StarMapNodeMetrics.bodyOf(node),
-                rect: copyRect(rect)
+                body: StarMapNodeMetrics.bodyOf(node)
             }
         }
 
         function prepareExpand() {
+            _transitionGeneration += 1
             expandAnimation.stop()
             collapseAnimation.stop()
             transitionProgress = 0
             _transitionRunning = true
             _closing = false
-            _closingStartProgress = 1
-            _openingFromRect = null
-            _openingToRect = null
-            _closingFromRect = null
-            _closingToRect = null
             _closingSnapshot = null
         }
 
@@ -1531,9 +1502,8 @@ Item {
                 return false
             if (!_transitionRunning)
                 prepareExpand()
-            _openingFromRect = copyRect(_nodeRect)
-            _openingToRect = copyRect(_expandedRect)
             transitionProgress = 0
+            _expandGeneration = _transitionGeneration
             expandAnimation.start()
             return true
         }
@@ -1542,15 +1512,11 @@ Item {
             transitionProgress = 0
             _transitionRunning = false
             _closing = false
-            _closingStartProgress = 1
-            _openingFromRect = null
-            _openingToRect = null
-            _closingFromRect = null
-            _closingToRect = null
             _closingSnapshot = null
         }
 
         function abortTransition() {
+            _transitionGeneration += 1
             expandAnimation.stop()
             collapseAnimation.stop()
             finishCollapse()
@@ -1567,24 +1533,20 @@ Item {
             }
             var displayNode = committed ? currentNode
                                         : (scene.editingNodeSnapshot || currentNode)
-            var targetRect = nodeRectFor(displayNode)
-            var currentRect = copyRect(_presentedRect)
-            _closingSnapshot = presentationSnapshot(displayNode, targetRect)
-            _closingFromRect = currentRect
-            _closingToRect = copyRect(targetRect)
-            _closingStartProgress = Math.max(0, transitionProgress)
-            _openingFromRect = null
-            _openingToRect = null
+            expandAnimation.stop()
+            _transitionGeneration += 1
+            _collapseGeneration = _transitionGeneration
+            _closingSnapshot = presentationSnapshot(displayNode)
             _closing = true
             _transitionRunning = true
             titleInput.focus = false
             bodyEdit.focus = false
             scene.finishActiveNodeEdit(true)
-            if (_closingStartProgress <= 0) {
+            if (transitionProgress <= 0) {
                 finishCollapse()
                 return
             }
-            collapseAnimation.duration = Math.max(70, Math.round(180 * _closingStartProgress))
+            collapseAnimation.duration = Math.max(70, Math.round(180 * transitionProgress))
             collapseAnimation.start()
         }
 
@@ -1596,14 +1558,12 @@ Item {
             duration: 190
             easing.type: Easing.OutCubic
             onFinished: {
-                if (scene.editingNodeId === "" || editOverlay._closing)
+                if (scene.editingNodeId === "" || editOverlay._closing
+                        || editOverlay._expandGeneration
+                            !== editOverlay._transitionGeneration)
                     return
                 editOverlay.transitionProgress = 1
                 editOverlay._transitionRunning = false
-                Qt.callLater(function() {
-                    if (scene.editingNodeId !== "" && !editOverlay._closing)
-                        editOverlay.activate()
-                })
             }
         }
         NumberAnimation {
@@ -1613,11 +1573,16 @@ Item {
             to: 0
             duration: 180
             easing.type: Easing.InCubic
-            onFinished: editOverlay.finishCollapse()
+            onFinished: {
+                if (editOverlay._closing
+                        && editOverlay._collapseGeneration
+                            === editOverlay._transitionGeneration)
+                    editOverlay.finishCollapse()
+            }
         }
 
         // _presentedRect 是 Scene 局部坐标；视觉父级在 Canvas 顶层时显式换算。
-        // 会话或关闭快照保持可见，输入控件只在展开完成后启用。
+        // 会话或关闭快照保持可见；文本控件从会话开始接收输入，辅助控件在展开后显示。
 
         // Issue #987：编辑器视觉父级在 Router 之上；对象所有权仍属于本 Scene，
         // 切图/销毁时随 Scene 一并回收，不保留透明点击层或第二份编辑器。
@@ -1629,7 +1594,7 @@ Item {
         width: _presentedRect.width
         height: _presentedRect.height
         opacity: transitionProgress
-        enabled: _inputVisible
+        enabled: _inputReady
         radius: 10
         color: scene._surfaceContainer
         border.color: scene._accent
@@ -1654,8 +1619,8 @@ Item {
         function activate() {
             if (scene.editingNodeId === "")
                 return activationFailed("no_session")
-            if (!_inputVisible || width <= 0 || height <= 0)
-                return activationFailed("transition_incomplete")
+            if (!_inputReady || width <= 0 || height <= 0)
+                return activationFailed("overlay_not_ready")
             titleInput.text = scene.editingTitleDraft
             bodyEdit.text = scene.editingBodyDraft
             _titleInputReported = false
@@ -1688,7 +1653,7 @@ Item {
         }
 
         function focusCurrent() {
-            if (!_inputVisible)
+            if (!_inputReady)
                 return
             if (StarMapNodeMetrics.canEditBody(editingNode))
                 bodyEdit.forceActiveFocus()
@@ -1699,7 +1664,7 @@ Item {
         function commitEdit() {
             if (scene.editingNodeId === "")
                 return true
-            if (_transitionRunning || _closing)
+            if (_closing)
                 return false
             // 有会话但编辑器不可见/无尺寸：不能当作保存成功，草稿必须保留。
             if (!visible || width <= 0 || height <= 0) {
@@ -1789,7 +1754,7 @@ Item {
             id: titleInput
             x: 10
             y: 4
-            visible: editOverlay._inputVisible
+            visible: editOverlay._inputReady
             width: parent.width - 20
             height: editOverlay._titleHeight
             color: scene._textPrimary
@@ -1801,7 +1766,7 @@ Item {
             padding: 0
 
             onActiveFocusChanged: {
-                if (editOverlay._inputVisible) {
+                if (editOverlay._inputReady) {
                     scene.logInteraction("node_edit_focus_changed", "node",
                                          scene.editingNodeId, {
                         "focusTarget": "title",
@@ -1812,14 +1777,14 @@ Item {
                 }
             }
             onTextChanged: {
-                if (editOverlay._inputVisible && !editOverlay._closing) {
+                if (editOverlay._inputReady) {
                     scene.editingTitleDraft = text
                     if (scene.editingError.length > 0)
                         scene.editingError = ""
                 }
             }
             onTextEdited: {
-                if (editOverlay._inputVisible && !editOverlay._titleInputReported) {
+                if (editOverlay._inputReady && !editOverlay._titleInputReported) {
                     editOverlay._titleInputReported = true
                     scene.logInteraction("node_edit_title_changed", "node",
                                          scene.editingNodeId, {
@@ -1878,7 +1843,7 @@ Item {
             y: editOverlay._bodyTop
             width: parent.width - 20
             height: editOverlay._bodyHeight
-            visible: editOverlay._inputVisible && editOverlay.editingNode !== null
+            visible: editOverlay._inputReady && editOverlay.editingNode !== null
                      && StarMapNodeMetrics.canEditBody(editOverlay.editingNode)
             clip: true
             contentWidth: width
@@ -1922,7 +1887,7 @@ Item {
                 padding: 0
 
                 onActiveFocusChanged: {
-                    if (editOverlay._inputVisible) {
+                    if (editOverlay._inputReady) {
                         scene.logInteraction("node_edit_focus_changed", "node",
                                              scene.editingNodeId, {
                             "focusTarget": "body",
@@ -1933,14 +1898,14 @@ Item {
                     }
                 }
                 onTextChanged: {
-                    if (editOverlay._inputVisible && !editOverlay._closing) {
+                    if (editOverlay._inputReady) {
                         scene.editingBodyDraft = text
                         if (scene.editingError.length > 0)
                             scene.editingError = ""
                     }
                 }
                 onTextEdited: {
-                    if (editOverlay._inputVisible && !editOverlay._bodyInputReported) {
+                    if (editOverlay._inputReady && !editOverlay._bodyInputReported) {
                         editOverlay._bodyInputReported = true
                         scene.logInteraction("node_edit_body_changed", "node",
                                              scene.editingNodeId, {
