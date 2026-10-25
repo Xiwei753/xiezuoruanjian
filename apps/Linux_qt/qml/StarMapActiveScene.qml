@@ -474,10 +474,10 @@ Item {
         return editOverlay.commitEdit() === true
     }
 
-    // Issue #987：编辑器当前动画帧矩形的区域判断。参数是 Scene 局部坐标
-    // （Canvas 先把指针点映射进来）；关闭快照仍可见时也继续认领覆盖区域。
+    // Issue #996：只让有效编辑会话认领当前动画帧矩形；关闭快照纯作视觉过渡。
+    // 参数是 Scene 局部坐标（Canvas 先把指针点映射进来）。
     function editorContainsScenePoint(sceneX, sceneY) {
-        if (editingNodeId === "" && !editOverlay._closing)
+        if (editingNodeId === "")
             return false
         if (!editOverlay.visible || editOverlay.width <= 0 || editOverlay.height <= 0)
             return false

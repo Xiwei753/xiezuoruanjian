@@ -138,8 +138,8 @@ Item {
     //   "free"    — 无编辑会话，或框外保存成功：继续原有 press 流程。
     // 必须在 cancelViewportMotion / beginPress 等业务状态之前调用。
     function arbitrateEditorPress(point, button, gestureId) {
-        if (!canvas)
-            return "blocked"
+        if (!hasActiveNodeEdit())
+            return "free"
         if (pointInsideNodeEditor(point)) {
             canvas.logInteraction("node_edit_pointer_claimed", "node", "", {
                 "button": button,
@@ -149,8 +149,6 @@ Item {
             })
             return "claimed"
         }
-        if (!hasActiveNodeEdit())
-            return "free"
         return canvas.commitNodeEditForOutsideGesture(point.position.x,
                                                        point.position.y,
                                                        button, gestureId) === true
