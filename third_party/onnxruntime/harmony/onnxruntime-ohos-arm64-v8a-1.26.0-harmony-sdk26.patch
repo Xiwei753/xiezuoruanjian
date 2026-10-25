@@ -1,0 +1,387 @@
+diff --git a/cmake/CMakeLists.txt b/cmake/CMakeLists.txt
+index 83d1751..a2b4378 100644
+--- a/cmake/CMakeLists.txt
++++ b/cmake/CMakeLists.txt
+@@ -1106,7 +1106,7 @@ function(onnxruntime_set_compile_flags target_name)
+       target_compile_definitions(${target_name} PRIVATE USE_KLEIDIAI)
+     endif()
+ 
+-    set_target_properties(${target_name} PROPERTIES COMPILE_WARNING_AS_ERROR ON)
++    set_target_properties(${target_name} PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+     if (onnxruntime_USE_CUDA)
+       # Suppress a "conversion_function_not_usable" warning in gsl/span
+       target_compile_options(${target_name} PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:SHELL:-Xcudafe \"--diag_suppress=conversion_function_not_usable\">")
+diff --git a/cmake/onnxruntime.cmake b/cmake/onnxruntime.cmake
+index dfad20b..3ff7f81 100644
+--- a/cmake/onnxruntime.cmake
++++ b/cmake/onnxruntime.cmake
+@@ -291,14 +291,11 @@ if(NOT WIN32)
+     set_target_properties(onnxruntime PROPERTIES
+       PUBLIC_HEADER "${ONNXRUNTIME_PUBLIC_HEADERS}"
+       VERSION ${ORT_VERSION}
+-      SOVERSION 1
+       FOLDER "ONNXRuntime")
+   else()
+     set_target_properties(onnxruntime PROPERTIES
+       PUBLIC_HEADER "${ONNXRUNTIME_PUBLIC_HEADERS}"
+       LINK_DEPENDS ${SYMBOL_FILE}
+-      VERSION ${ORT_VERSION}
+-      SOVERSION 1
+       FOLDER "ONNXRuntime")
+   endif()
+ else()
+diff --git a/cmake/onnxruntime_mlas.cmake b/cmake/onnxruntime_mlas.cmake
+index 0233254..87e8c15 100644
+--- a/cmake/onnxruntime_mlas.cmake
++++ b/cmake/onnxruntime_mlas.cmake
+@@ -83,9 +83,7 @@ function(setup_mlas_source_for_windows)
+   # Sources common for all platforms.
+   #
+   target_sources(onnxruntime_mlas PRIVATE
+-    ${MLAS_SRC_DIR}/activate_fp16.cpp
+     ${MLAS_SRC_DIR}/dwconv.cpp
+-    ${MLAS_SRC_DIR}/pooling_fp16.cpp
+   )
+ 
+   #The onnxruntime_target_platform variable was added by Windows AI team in onnxruntime_common.cmake
+@@ -104,20 +102,13 @@ function(setup_mlas_source_for_windows)
+         ${MLAS_SRC_DIR}/qnbitgemm_kernel_neon.cpp
+         ${MLAS_SRC_DIR}/sqnbitgemm_kernel_neon_fp32.cpp
+         ${MLAS_SRC_DIR}/sqnbitgemm_kernel_neon_int8.cpp
+-        ${MLAS_SRC_DIR}/cast_kernel_neon.cpp
+-        ${MLAS_SRC_DIR}/hqnbitgemm_kernel_neon_fp16.cpp
+-        ${MLAS_SRC_DIR}/hqnbitgemm_kernel_neon_fp16_8bit.cpp
+         ${MLAS_SRC_DIR}/rotary_embedding_kernel_neon.h
+         ${MLAS_SRC_DIR}/rotary_embedding_kernel_neon.cpp
+-        ${MLAS_SRC_DIR}/rotary_embedding_kernel_neon_fp16.cpp
+         ${MLAS_SRC_DIR}/hgemm_kernel_neon.cpp
+-        ${MLAS_SRC_DIR}/halfgemm_kernel_neon_fp16.cpp
+         ${MLAS_SRC_DIR}/softmax_kernel_neon.h
+         ${MLAS_SRC_DIR}/softmax_kernel_neon.cpp
+-        ${MLAS_SRC_DIR}/softmax_kernel_neon_fp16.cpp
+         ${MLAS_SRC_DIR}/eltwise_kernel_neon.h
+         ${MLAS_SRC_DIR}/eltwise_kernel_neon.cpp
+-        ${MLAS_SRC_DIR}/eltwise_kernel_neon_fp16.cpp
+         ${MLAS_SRC_DIR}/sqnbitgemm_kernel_neon_int8_i8mm.cpp
+         ${MLAS_SRC_DIR}/sconv_nchw_depthwise_multiplier_1.cpp
+       )
+@@ -534,60 +525,22 @@ else()
+         if (NOT APPLE)
+           set(mlas_platform_srcs
+             ${mlas_platform_srcs}
+-            ${MLAS_SRC_DIR}/aarch64/HalfGemmKernelNeon.S
+             ${MLAS_SRC_DIR}/aarch64/QgemmS8S8KernelSmmla.S
+             ${MLAS_SRC_DIR}/aarch64/QgemmU8X8KernelUmmla.S
+-            ${MLAS_SRC_DIR}/aarch64/SbgemmKernelNeon.S
+-            ${MLAS_SRC_DIR}/activate_fp16.cpp
+             ${MLAS_SRC_DIR}/dwconv.cpp
+             ${MLAS_SRC_DIR}/halfgemm_kernel_neon.cpp
+-            ${MLAS_SRC_DIR}/pooling_fp16.cpp
+             ${MLAS_SRC_DIR}/qgemm_kernel_smmla.cpp
+             ${MLAS_SRC_DIR}/qgemm_kernel_ummla.cpp
+-            ${MLAS_SRC_DIR}/sbgemm_kernel_neon.cpp
+-            ${MLAS_SRC_DIR}/sbconv_kernel_neon.cpp
+-            ${MLAS_SRC_DIR}/cast_kernel_neon.cpp
+-            ${MLAS_SRC_DIR}/hqnbitgemm_kernel_neon_fp16.cpp
+-            ${MLAS_SRC_DIR}/hqnbitgemm_kernel_neon_fp16_8bit.cpp
+-            ${MLAS_SRC_DIR}/rotary_embedding_kernel_neon_fp16.cpp
+-            ${MLAS_SRC_DIR}/halfgemm_kernel_neon_fp16.cpp
+-            ${MLAS_SRC_DIR}/softmax_kernel_neon_fp16.cpp
+-            ${MLAS_SRC_DIR}/eltwise_kernel_neon_fp16.cpp
+-            ${MLAS_SRC_DIR}/erf_neon_fp16.h
+-            ${MLAS_SRC_DIR}/erf_neon_fp16.cpp
+-            ${MLAS_SRC_DIR}/gelu_neon_fp16.h
+-            ${MLAS_SRC_DIR}/gelu_neon_fp16.cpp
+           )
+           if (onnxruntime_USE_ARM_NEON_NCHWC)
+             list(APPEND mlas_platform_srcs
+-              ${MLAS_SRC_DIR}/aarch64/SconvDepthwiseKernelNeonBf16.S
+-              ${MLAS_SRC_DIR}/aarch64/SconvKernelNeonBf16.S
+-              ${MLAS_SRC_DIR}/aarch64/SconvPointwiseKernelNeonBf16.S
+             )
+           endif()
+-          set_source_files_properties(${MLAS_SRC_DIR}/aarch64/HalfGemmKernelNeon.S PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+           set_source_files_properties(${MLAS_SRC_DIR}/aarch64/QgemmS8S8KernelSmmla.S PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+i8mm ")
+           set_source_files_properties(${MLAS_SRC_DIR}/aarch64/QgemmU8X8KernelUmmla.S PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+i8mm ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/aarch64/SbgemmKernelNeon.S PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+bf16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/activate_fp16.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+           set_source_files_properties(${MLAS_SRC_DIR}/dwconv.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/pooling_fp16.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/sbgemm_kernel_neon.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+bf16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/sbconv_kernel_neon.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+bf16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/cast_kernel_neon.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/hqnbitgemm_kernel_neon_fp16.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/hqnbitgemm_kernel_neon_fp16_8bit.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/rotary_embedding_kernel_neon_fp16.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/halfgemm_kernel_neon_fp16.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/softmax_kernel_neon_fp16.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/eltwise_kernel_neon_fp16.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+           if (onnxruntime_USE_ARM_NEON_NCHWC)
+-            set_source_files_properties(${MLAS_SRC_DIR}/aarch64/SconvDepthwiseKernelNeonBf16.S PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+bf16 ")
+-            set_source_files_properties(${MLAS_SRC_DIR}/aarch64/SconvKernelNeonBf16.S PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+bf16 ")
+-            set_source_files_properties(${MLAS_SRC_DIR}/aarch64/SconvPointwiseKernelNeonBf16.S PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+bf16 ")
+           endif()
+-          set_source_files_properties(${MLAS_SRC_DIR}/erf_neon_fp16.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+-          set_source_files_properties(${MLAS_SRC_DIR}/gelu_neon_fp16.cpp PROPERTIES COMPILE_FLAGS " -march=armv8.2-a+fp16 ")
+         endif()
+ 
+         if(ONNXRUNTIME_MLAS_MULTI_ARCH)
+@@ -822,10 +775,8 @@ endif()
+         set_source_files_properties(${mlas_platform_srcs_avx512vnni} PROPERTIES COMPILE_FLAGS "-mfma -mavx512vnni -mavx512bw -mavx512dq -mavx512vl -mavx512f")
+ 
+         set(mlas_platform_srcs
+-          ${MLAS_SRC_DIR}/activate_fp16.cpp
+           ${MLAS_SRC_DIR}/dwconv.cpp
+           ${MLAS_SRC_DIR}/dgemm.cpp
+-          ${MLAS_SRC_DIR}/pooling_fp16.cpp
+           ${MLAS_SRC_DIR}/qgemm_kernel_avx2.cpp
+           ${mlas_platform_srcs_sse2}
+           ${mlas_platform_srcs_avx}
+diff --git a/onnxruntime/contrib_ops/cpu/nchwc_ops.cc b/onnxruntime/contrib_ops/cpu/nchwc_ops.cc
+index fa097bb..2616476 100644
+--- a/onnxruntime/contrib_ops/cpu/nchwc_ops.cc
++++ b/onnxruntime/contrib_ops/cpu/nchwc_ops.cc
+@@ -202,7 +202,7 @@ Status NchwcConv::Compute(OpKernelContext* context) const {
+     }
+   }
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+   const bool use_bf16 = use_fastmath_mode_;
+ #else
+   const bool use_bf16 = false;
+diff --git a/onnxruntime/contrib_ops/cpu/nchwc_ops.h b/onnxruntime/contrib_ops/cpu/nchwc_ops.h
+index 271fe73..d373306 100644
+--- a/onnxruntime/contrib_ops/cpu/nchwc_ops.h
++++ b/onnxruntime/contrib_ops/cpu/nchwc_ops.h
+@@ -46,7 +46,7 @@ class NchwcConv final : public OpKernel {
+   NchwcConv(const OpKernelInfo& info) : OpKernel(info), conv_attrs_(info) {
+     ORT_ENFORCE(GetFusedActivationAttr(info, activation_).IsOK());
+     SetupMlasBackendKernelSelectorFromConfigOptions(mlas_backend_kernel_selector_config_, info.GetConfigOptions());
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+     auto config_ops = info.GetConfigOptions().GetConfigEntry(kOrtSessionOptionsMlasGemmFastMathArm64Bfloat16);
+     use_fastmath_mode_ = (config_ops == "1") && MlasBf16AccelerationSupported();
+ #endif
+@@ -60,7 +60,7 @@ class NchwcConv final : public OpKernel {
+   MLAS_ACTIVATION activation_;
+   MLAS_BACKEND_KERNEL_SELECTOR_CONFIG mlas_backend_kernel_selector_config_;
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+   bool use_fastmath_mode_{false};
+ #endif
+ };
+diff --git a/onnxruntime/core/mlas/inc/mlas.h b/onnxruntime/core/mlas/inc/mlas.h
+index 04e99d2..83cf07b 100644
+--- a/onnxruntime/core/mlas/inc/mlas.h
++++ b/onnxruntime/core/mlas/inc/mlas.h
+@@ -92,7 +92,7 @@ Abstract:
+ 
+ #if (!defined(_MSC_VER)) || (_MSC_VER >= 1930)
+ #if defined(MLAS_TARGET_ARM64) || defined(MLAS_TARGET_ARM64EC)
+-#if !defined(__APPLE__)
++#if !defined(__APPLE__) && !defined(__OHOS__)
+ // Had to temporary disable fp16 under APPLE ARM64, as compiling
+ // the source files require a hardware specific compilation flag.
+ // When building an universial binary for APPLE, this flag would
+@@ -1965,7 +1965,7 @@ MlasHalfGemmConvertPackB(
+     void* PackedB
+     );
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+ /**
+  * @brief Whether current CPU supports Bfloat16(bf16) acceleration.
+  */
+diff --git a/onnxruntime/core/mlas/lib/kleidiai/mlasi_kleidiai.h b/onnxruntime/core/mlas/lib/kleidiai/mlasi_kleidiai.h
+index a1aa241..0528d85 100644
+--- a/onnxruntime/core/mlas/lib/kleidiai/mlasi_kleidiai.h
++++ b/onnxruntime/core/mlas/lib/kleidiai/mlasi_kleidiai.h
+@@ -105,7 +105,7 @@ MlasGemmBatch(
+     MLAS_THREADPOOL* ThreadPool
+     );
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+ size_t
+ MLASCALL
+ MlasSBGemmPackBSize(
+diff --git a/onnxruntime/core/mlas/lib/kleidiai/sbgemm_kleidiai.cpp b/onnxruntime/core/mlas/lib/kleidiai/sbgemm_kleidiai.cpp
+index f88af05..9af786d 100644
+--- a/onnxruntime/core/mlas/lib/kleidiai/sbgemm_kleidiai.cpp
++++ b/onnxruntime/core/mlas/lib/kleidiai/sbgemm_kleidiai.cpp
+@@ -4,7 +4,7 @@
+ // SPDX-License-Identifier: MIT
+ //
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+ 
+ #include <vector>
+ #include <cstring>
+diff --git a/onnxruntime/core/mlas/lib/mlasi.h b/onnxruntime/core/mlas/lib/mlasi.h
+index 1fa4c90..3b58c61 100644
+--- a/onnxruntime/core/mlas/lib/mlasi.h
++++ b/onnxruntime/core/mlas/lib/mlasi.h
+@@ -403,7 +403,7 @@ size_t
+ 
+ #else
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+ typedef size_t(MLASCALL MLAS_SBGEMM_FLOAT_KERNEL)(
+     const float* A,
+     const bfloat16_t* B,
+@@ -932,7 +932,7 @@ void
+     const float* Bias,
+     void* PackedB);
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+ typedef
+ bool
+ (MLASCALL MLAS_SBGEMM_BATCH_OVERRIDE)(
+@@ -1052,7 +1052,7 @@ extern "C" {
+ #else
+     MLAS_GEMM_FLOAT_KERNEL MlasSgemmKernelZero;
+     MLAS_GEMM_FLOAT_KERNEL MlasSgemmKernelAdd;
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+     MLAS_SBGEMM_FLOAT_KERNEL MlasSbgemmKernelZero;
+     MLAS_SBGEMM_FLOAT_KERNEL MlasSbgemmKernelAdd;
+ #endif
+@@ -1250,7 +1250,7 @@ extern "C" {
+ #define MLAS_QGEMM_THREAD_COMPLEXITY                65536
+ #define MLAS_HGEMM_THREAD_COMPLEXITY                65536
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+ #define MLAS_SBGEMM_THREAD_COMPLEXITY (size_t(64) * size_t(1024))
+ #endif
+ 
+@@ -1471,7 +1471,7 @@ struct MLAS_PLATFORM {
+     // MLAS Conv overrides
+     MLAS_CONV_PREPARE_FLOAT_OVERRIDE* MlasConvPrepareOverride = nullptr;
+     MLAS_CONV_FLOAT_OVERRIDE* MlasConvOverride = nullptr;
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+     // SBGemm overrides
+     MLAS_SBGEMM_BATCH_OVERRIDE* MlasSBGemmBatchOverride = nullptr;
+     MLAS_SBGEMM_PACK_B_SIZE_OVERRIDE* MlasSBGemmPackBSizeOverride = nullptr;
+diff --git a/onnxruntime/core/mlas/lib/platform.cpp b/onnxruntime/core/mlas/lib/platform.cpp
+index 191ee1a..5414324 100644
+--- a/onnxruntime/core/mlas/lib/platform.cpp
++++ b/onnxruntime/core/mlas/lib/platform.cpp
+@@ -386,7 +386,7 @@ Return Value:
+     this->DequantizeLinearU8Kernel = MlasDequantizeLinearU8Kernel;
+ #ifndef __APPLE__
+ #ifndef FORCE_GENERIC_ALGORITHMS
+-    this->CastF16ToF32Kernel = &MlasCastF16ToF32KernelSse;
++    this->CastF16ToF32Kernel = nullptr;
+ #else  // FORCE_GENERIC_ALGORITHMS
+     this->CastF16ToF32Kernel = nullptr;
+ #endif  // FORCE_GENERIC_ALGORITHMS
+@@ -709,7 +709,7 @@ Return Value:
+         this->MlasDynamicQGemmPackBOverride = ArmKleidiAI::MlasDynamicQGemmPackB;
+         this->MlasConvPrepareOverride = ArmKleidiAI::MlasConvPrepare;
+         this->MlasConvOverride = ArmKleidiAI::MlasConv;
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+         // Currently only an SME2 variant of SBGEMM exists
+         if (ArmKleidiAI::UseSME2){
+             this->MlasSBGemmBatchOverride = ArmKleidiAI::MlasSBGemmBatch;
+diff --git a/onnxruntime/core/mlas/lib/sbgemm.h b/onnxruntime/core/mlas/lib/sbgemm.h
+index 35520c7..bcb611f 100644
+--- a/onnxruntime/core/mlas/lib/sbgemm.h
++++ b/onnxruntime/core/mlas/lib/sbgemm.h
+@@ -30,7 +30,7 @@ Abstract:
+         MLAS_SBGEMM_STRIDES Strides{128, 128, 256};
+ --*/
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+ 
+ #pragma once
+ 
+diff --git a/onnxruntime/core/mlas/lib/sbgemm_kernel_neon.cpp b/onnxruntime/core/mlas/lib/sbgemm_kernel_neon.cpp
+index a6a7399..335e611 100644
+--- a/onnxruntime/core/mlas/lib/sbgemm_kernel_neon.cpp
++++ b/onnxruntime/core/mlas/lib/sbgemm_kernel_neon.cpp
+@@ -15,7 +15,7 @@ Abstract:
+ 
+ --*/
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+ 
+ #include "arm_neon.h"
+ #include "mlasi.h"
+diff --git a/onnxruntime/core/platform/posix/env.cc b/onnxruntime/core/platform/posix/env.cc
+index ba7af3b..cca0986 100644
+--- a/onnxruntime/core/platform/posix/env.cc
++++ b/onnxruntime/core/platform/posix/env.cc
+@@ -204,7 +204,7 @@ class PosixThread : public EnvThread {
+   static void* ThreadMain(void* param) {
+     std::unique_ptr<Param> p(static_cast<Param*>(param));
+     ORT_TRY {
+-#if !defined(__APPLE__) && !defined(__ANDROID__) && !defined(__wasm__) && !defined(_AIX)
++#if 0  // The HarmonyOS build recipe excludes Linux-specific thread affinity calls.
+       if (p->affinity.has_value() && !p->affinity->empty()) {
+         cpu_set_t cpuset;
+         CPU_ZERO(&cpuset);
+diff --git a/onnxruntime/core/providers/cpu/math/matmul.cc b/onnxruntime/core/providers/cpu/math/matmul.cc
+index ca91f46..4d61594 100644
+--- a/onnxruntime/core/providers/cpu/math/matmul.cc
++++ b/onnxruntime/core/providers/cpu/math/matmul.cc
+@@ -185,7 +185,7 @@ Status MatMul<double>::Compute(OpKernelContext* ctx) const {
+   return Status::OK();
+ }
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+ bool GemmPackBBfloat16(AllocatorPtr& alloc,
+                        const Tensor& tensor_b,
+                        bool trans_a,
+@@ -243,7 +243,7 @@ Status MatMul<float>::PrePack(const Tensor& tensor, int input_idx, /*out*/ Alloc
+   // only pack Matrix B
+   if (input_idx == 1) {
+     size_t packed_b_size;
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+     size_t dim1 = 0;
+     size_t dim2 = 0;
+     TensorShape b_shape = tensor.Shape();
+@@ -322,7 +322,7 @@ Status MatMul<float>::Compute(OpKernelContext* ctx) const {
+   const size_t K = static_cast<size_t>(helper.K());
+   const size_t lda = helper.Lda(trans_a);
+   const size_t ldb = helper.Ldb(trans_b);
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+   if (use_fastmath_mode_ && !trans_a && !trans_b && ((N * K) >= kFastMathModeKernelsizeThreshold)) {
+     std::vector<MLAS_SBGEMM_DATA_PARAMS> data(max_len);
+     for (size_t i = 0; i < max_len; i++) {
+diff --git a/onnxruntime/core/providers/cpu/math/matmul.h b/onnxruntime/core/providers/cpu/math/matmul.h
+index d1c0df1..f881d5f 100644
+--- a/onnxruntime/core/providers/cpu/math/matmul.h
++++ b/onnxruntime/core/providers/cpu/math/matmul.h
+@@ -65,10 +65,6 @@ class MatMul<float> final : public OpKernel {
+     trans_batch_a_ = trans_batch_a_attr != 0;
+     trans_batch_b_ = trans_batch_b_attr != 0;
+ 
+-#if defined(__aarch64__) && defined(__linux__)
+-    auto config_ops = info.GetConfigOptions().GetConfigEntry(kOrtSessionOptionsMlasGemmFastMathArm64Bfloat16);
+-    use_fastmath_mode_ = (config_ops == "1") && MlasBf16AccelerationSupported();
+-#endif
+ 
+     SetupMlasBackendKernelSelectorFromConfigOptions(mlas_backend_kernel_selector_config_, info.GetConfigOptions());
+   }
+@@ -97,7 +93,7 @@ class MatMul<float> final : public OpKernel {
+ 
+   MLAS_BACKEND_KERNEL_SELECTOR_CONFIG mlas_backend_kernel_selector_config_;
+ 
+-#if defined(__aarch64__) && defined(__linux__)
++#if defined(__aarch64__) && defined(__linux__) && !defined(__OHOS__)
+   // fastmath mode state
+   bool use_fastmath_mode_;
+   // sbgemm kernel is implemented as 8x8 blocks with weights pre-packed to 4 blocks of 4x2

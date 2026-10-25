@@ -140,10 +140,10 @@ export CXXFLAGS_aarch64_unknown_linux_ohos="--target=$CLANG_TARGET --sysroot=$SY
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_RUSTFLAGS="-C link-arg=--target=$CLANG_TARGET -C link-arg=--sysroot=$SYSROOT -C link-arg=-Wl,-soname,libwriter_core_ffi.so"
 
 # -----------------------------------------------------------------------------
-# 4. 获取鸿蒙目标 ONNX Runtime（固定 revision、校验 SHA-256、持久缓存）
+# 4. 从仓库准备鸿蒙目标 ONNX Runtime（按 manifest 校验 SHA-256）
 # -----------------------------------------------------------------------------
 mkdir -p "$PREBUILT_DIR"
-echo "获取 OHOS arm64 ONNX Runtime ..."
+echo "准备 OHOS arm64 ONNX Runtime ..."
 python3 "$WORKSPACE_ROOT/crates/sujian-proof/tools/fetch_model.py" \
     --runtime harmony-arm64 \
     --runtime-only \

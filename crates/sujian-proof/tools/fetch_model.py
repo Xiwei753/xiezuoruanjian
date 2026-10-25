@@ -160,6 +160,21 @@ def fetch_runtime(manifest: dict, platform: str, output: Path, cache_dir: Path) 
     runtime = manifest["runtime"][platform]
     version = runtime.get("version", manifest["runtime"]["version"])
     output.mkdir(parents=True, exist_ok=True)
+    local_library = runtime.get("local_library")
+    if local_library is not None:
+        source = (REPO_ROOT / local_library).resolve()
+        try:
+            source.relative_to(REPO_ROOT.resolve())
+        except ValueError:
+            raise SystemExit(f"{platform}: local runtime path escapes the repository")
+        if not source.is_file():
+            raise SystemExit(f"{platform}: local runtime library is missing: {source}")
+        verify(source, runtime["bytes"], runtime["sha256"])
+        target = output / source.name
+        materialize(source, target, runtime["bytes"], runtime["sha256"])
+        print(f"ONNX Runtime ready: {target} (repository asset)")
+        return
+
     archive_name = Path(runtime["url"]).name
     cached = cache_dir / "onnxruntime" / version / archive_name
     source = ensure_cached(runtime["url"], runtime["bytes"], runtime["sha256"], cached)

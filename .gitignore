@@ -24,6 +24,7 @@ build/
 *.apk
 *.aab
 *.so
+!third_party/onnxruntime/harmony/arm64-v8a/libonnxruntime.so
 *.hap
 *.app
 dist/

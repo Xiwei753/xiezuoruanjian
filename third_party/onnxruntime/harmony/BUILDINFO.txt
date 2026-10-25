@@ -1,0 +1,13 @@
+ONNX Runtime HarmonyOS arm64 build
+
+Upstream: https://github.com/microsoft/onnxruntime/tree/v1.26.0
+Upstream commit: 8c546c37b43caaca1fa25db430dab94b901cf277
+Target SDK: HarmonyOS Native SDK 26.0.0.105
+Target triple: aarch64-linux-ohos26.0.0
+Compiler: HarmonyOS Clang 15.0.4
+Provider profile: CPU
+Compatibility profile: BF16 and NEON FP16 acceleration paths disabled for this compiler; general CPU kernels retained.
+SONAME: libonnxruntime.so
+DT_NEEDED: libdeviceinfo_ndk.z.so, libc++_shared.so, libc.so
+
+The runtime was compiled against the target SDK sysroot. Device-side loading remains unverified because no HarmonyOS device was connected during this build.
