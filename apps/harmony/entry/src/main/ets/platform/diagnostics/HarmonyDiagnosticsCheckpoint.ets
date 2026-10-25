@@ -41,6 +41,18 @@ const LATEST_ZIP = 'sujian-diagnostics-latest.zip'
 const PREVIOUS_ZIP = 'sujian-diagnostics-previous.zip'
 const LATEST_TMP = 'sujian-diagnostics-latest.tmp'
 const STAGING_SUBDIR = '.staging/checkpoint'
+const WATCH_MODIFY = 0x2
+const WATCH_CLOSE_WRITE = 0x8
+const WATCH_MOVED_FROM = 0x40
+const WATCH_MOVED_TO = 0x80
+const WATCH_CREATE = 0x100
+const WATCH_DELETE = 0x200
+const WATCH_DELETE_SELF = 0x400
+const WATCH_MOVE_SELF = 0x800
+const LOG_DIRECTORY_EVENTS = WATCH_MOVED_FROM | WATCH_MOVED_TO | WATCH_CREATE | WATCH_DELETE |
+  WATCH_DELETE_SELF | WATCH_MOVE_SELF
+const LOG_FILE_EVENTS = WATCH_MODIFY | WATCH_CLOSE_WRITE
+const LOG_FILENAME_PATTERN = /^sujian-current-[A-Za-z0-9._-]+\.log$/
 
 // Issue #773 评论 5845033983：ThemeObserver 实现 — theme 变化时 persist + markDirty。
 class CheckpointThemeObserver implements ThemeObserver {
@@ -91,6 +103,11 @@ export class HarmonyDiagnosticsCheckpoint {
   private initialized: boolean = false
   private adaptiveObserver: CheckpointAdaptiveObserver | null = null
 
+  // Rust 日志目录及其逐级父目录 watcher。逐级监听可在 diagnostics/live/log
+  // 尚未创建时接住目录创建事件；日志文件 watcher 单独捕获文件内容追加。
+  private logDirectoryWatchers: Array<fs.Watcher | null> = [null, null, null, null]
+  private logFileWatchers: Array<fs.Watcher> = []
+
   private constructor() {
     this.exporter = new HarmonyDiagnosticsExporter()
   }
@@ -112,6 +129,7 @@ export class HarmonyDiagnosticsCheckpoint {
     this.initialized = true
     this.context = context
     this.exporter.setAbilityContext(context)
+    this.attachLogWatchersFrom(0)
 
     // Issue #773 评论 5845033983：订阅三个 Store 的 observer。
     // 三个 Store 不反向 import Checkpoint，避免循环依赖。Checkpoint 主动订阅。
@@ -324,6 +342,149 @@ export class HarmonyDiagnosticsCheckpoint {
     }
   }
 
+  private getLogWatchPaths(): Array<string> {
+    if (this.context === null) {
+      return []
+    }
+    const filesDir = this.context.filesDir
+    const diagnosticsDir = `${filesDir}/${DIAGNOSTICS_DIR}`
+    const liveDir = `${diagnosticsDir}/live`
+    return [filesDir, diagnosticsDir, liveDir, `${liveDir}/log`]
+  }
+
+  // 按 filesDir → diagnostics → live → log 逐层挂载。上层 watcher 只负责发现
+  // 下一层目录的创建、移入或移除，避免目标目录首次出现前 createWatcher 抛错。
+  private attachLogWatchersFrom(firstLevel: number): void {
+    const paths = this.getLogWatchPaths()
+    for (let level = firstLevel; level < paths.length; level += 1) {
+      if (this.logDirectoryWatchers[level] !== null || !this.fileExists(paths[level])) {
+        continue
+      }
+      try {
+        const watcher = fs.createWatcher(paths[level], LOG_DIRECTORY_EVENTS, (event) => {
+          this.onLogDirectoryEvent(level, event.fileName, event.event)
+        })
+        watcher.start()
+        this.logDirectoryWatchers[level] = watcher
+      } catch (e) {
+        hilog.warn(0x0000, LOG_TAG, 'cannot watch diagnostics directory %{public}s: %{public}s', paths[level], String(e))
+      }
+    }
+    this.refreshLogFileWatchers()
+  }
+
+  private onLogDirectoryEvent(level: number, fileName: string, eventMask: number): void {
+    if (!this.initialized || this.context === null) {
+      return
+    }
+
+    const entryEvents = WATCH_MOVED_FROM | WATCH_MOVED_TO | WATCH_CREATE | WATCH_DELETE
+    if (level === 3) {
+      if ((eventMask & entryEvents) !== 0) {
+        // 日志目录收到新建、移入或移除时，重新按当前路径挂载文件 watcher；
+        // 轮转会触发 moved-to/create，新的 current 文件因此能继续被监听。
+        this.refreshLogFileWatchers()
+        if ((eventMask & (WATCH_MOVED_TO | WATCH_CREATE)) !== 0) {
+          this.markDirty()
+        }
+      }
+      if ((eventMask & (WATCH_DELETE_SELF | WATCH_MOVE_SELF)) !== 0) {
+        this.refreshLogWatcherSubtreeFrom(3)
+      }
+      return
+    }
+
+    const paths = this.getLogWatchPaths()
+    const childPath = paths[level + 1]
+    const childChanged = (eventMask & entryEvents) !== 0 && this.matchesPathEvent(fileName, childPath)
+    const selfMovedOrDeleted = (eventMask & (WATCH_DELETE_SELF | WATCH_MOVE_SELF)) !== 0
+    if (childChanged) {
+      this.refreshLogWatcherSubtreeFrom(level + 1)
+    } else if (selfMovedOrDeleted) {
+      this.refreshLogWatcherSubtreeFrom(level)
+    }
+  }
+
+  private matchesPathEvent(fileName: string, path: string): boolean {
+    const pathParts = path.split('/')
+    const basename = pathParts[pathParts.length - 1]
+    return fileName === path || fileName === basename || fileName.endsWith(`/${basename}`)
+  }
+
+  // 目录层级变化时只重建受影响的下层 watcher；filesDir 及未变化的上层 watcher
+  // 保持活动，以便在 log 目录被删除、重建或替换后继续接收事件。
+  private refreshLogWatcherSubtreeFrom(firstLevel: number): void {
+    this.stopLogFileWatchers()
+    for (let level = this.logDirectoryWatchers.length - 1; level >= firstLevel; level -= 1) {
+      const watcher = this.logDirectoryWatchers[level]
+      if (watcher !== null) {
+        try {
+          watcher.stop()
+        } catch (_) {
+        }
+        this.logDirectoryWatchers[level] = null
+      }
+    }
+    this.attachLogWatchersFrom(firstLevel)
+  }
+
+  private refreshLogFileWatchers(): void {
+    this.stopLogFileWatchers()
+    const paths = this.getLogWatchPaths()
+    if (paths.length !== 4 || this.logDirectoryWatchers[3] === null) {
+      return
+    }
+    const logDir = paths[3]
+    try {
+      for (const fileName of fs.listFileSync(logDir)) {
+        if (!LOG_FILENAME_PATTERN.test(fileName)) {
+          continue
+        }
+        const filePath = `${logDir}/${fileName}`
+        try {
+          if (!fs.statSync(filePath).isFile()) {
+            continue
+          }
+          const watcher = fs.createWatcher(filePath, LOG_FILE_EVENTS, (event) => {
+            if (this.initialized && this.context !== null && (event.event & LOG_FILE_EVENTS) !== 0) {
+              this.markDirty()
+            }
+          })
+          watcher.start()
+          this.logFileWatchers.push(watcher)
+        } catch (e) {
+          hilog.warn(0x0000, LOG_TAG, 'cannot watch diagnostics log %{public}s: %{public}s', filePath, String(e))
+        }
+      }
+    } catch (e) {
+      hilog.warn(0x0000, LOG_TAG, 'cannot list diagnostics logs: %{public}s', String(e))
+    }
+  }
+
+  private stopLogFileWatchers(): void {
+    for (const watcher of this.logFileWatchers) {
+      try {
+        watcher.stop()
+      } catch (_) {
+      }
+    }
+    this.logFileWatchers = []
+  }
+
+  private stopLogWatchers(): void {
+    this.stopLogFileWatchers()
+    for (let level = this.logDirectoryWatchers.length - 1; level >= 0; level -= 1) {
+      const watcher = this.logDirectoryWatchers[level]
+      if (watcher !== null) {
+        try {
+          watcher.stop()
+        } catch (_) {
+        }
+        this.logDirectoryWatchers[level] = null
+      }
+    }
+  }
+
   // 确保目录存在 — 如果不存在则创建（含父目录）。
   private ensureDir(dirPath: string): void {
     try {
@@ -341,6 +502,7 @@ export class HarmonyDiagnosticsCheckpoint {
       clearTimeout(this.scheduledTimerId)
       this.scheduledTimerId = -1
     }
+    this.stopLogWatchers()
     // Issue #773 评论 5845033983：取消三个 Store 的 observer 订阅。
     if (this.themeObserver !== null) {
       HarmonyThemeAdapter.getInstance().removeObserver(this.themeObserver)

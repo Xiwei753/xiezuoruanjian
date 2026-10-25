@@ -64,6 +64,9 @@ if [ -z "$READ_ELF" ] && command -v readelf >/dev/null 2>&1; then
 fi
 if [ -z "$READ_ELF" ] || [ ! -x "$READ_ELF" ]; then
     echo "警告：未找到 llvm-readelf/readelf；跳过 HarmonyOS 动态依赖诊断。" >&2
+    if [ "$MODE" = "diagnose" ]; then
+        exit 1
+    fi
     exit 0
 fi
 
@@ -74,13 +77,30 @@ else
     echo "检查现有 ONNX Runtime 与 Rust FFI；NAPI 将在 CMake 链接完成后再次诊断。"
 fi
 
-python3 - "$READ_ELF" "$PREBUILT_DIR" "$NAPI_SO" "$SYSROOT" "$NATIVE_DIR" <<'PY'
+python3 - "$READ_ELF" "$PREBUILT_DIR" "$NAPI_SO" "$SYSROOT" "$NATIVE_DIR" "$MODE" <<'PY'
 import os
 import re
 import subprocess
 import sys
 
-readelf, prebuilt_dir, napi_so, sysroot, native_dir = sys.argv[1:]
+readelf, prebuilt_dir, napi_so, sysroot, native_dir, mode = sys.argv[1:]
+
+# These HarmonyOS runtime APIs can be device-provided when a local SDK omits
+# their stubs. Their absence from local roots is therefore reported separately
+# from an unknown DT_NEEDED entry.
+SYSTEM_RUNTIME_SONAMES = {
+    "libace_napi.z.so",
+    "libace_ndk.z.so",
+    "libc.so",
+    "libdl.so",
+    "libhilog_ndk.z.so",
+    "libhuks_ndk.z.so",
+    "libm.so",
+    "librawfile.z.so",
+    "libtime_service_ndk.so",
+    "libunwind.so",
+    "libz.so",
+}
 
 
 def run_readelf(args, path):
@@ -167,12 +187,48 @@ def resolve_needed(soname):
     return None
 
 
+def candidate_provider_libraries(targets):
+    """Return package/SDK ELF files that can help classify non-closure symbols.
+
+    A symbol exported by a library outside DT_NEEDED is not proven to resolve at
+    runtime: the loader must also have that library in its global scope. Keep
+    these candidates separate from the dependency closure instead of silently
+    treating them as providers.
+    """
+    target_paths = {os.path.realpath(path) for path in targets}
+    candidates = {}
+    package_root = os.path.realpath(prebuilt_dir)
+    for root in search_roots:
+        category = "package" if os.path.realpath(root) == package_root else "sdk"
+        try:
+            entries = os.scandir(root)
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                if ".so" not in entry.name or not os.path.isfile(entry.path):
+                    continue
+                path = os.path.realpath(entry.path)
+                if path not in target_paths:
+                    try:
+                        with open(path, "rb") as library:
+                            if library.read(4) != b"\x7fELF":
+                                continue
+                    except OSError:
+                        continue
+                    candidates[path] = category
+    return candidates
+
+
 targets = []
+diagnostics_failed = False
+system_provider_unverified = False
 if napi_so:
     if os.path.isfile(napi_so):
         targets.append(napi_so)
     else:
         print(f"警告：CMake 目标库不存在，无法诊断：{napi_so}")
+        diagnostics_failed = mode == "diagnose"
 for name in ("libwriter_core_ffi.so", "libonnxruntime.so"):
     path = os.path.join(prebuilt_dir, name)
     if os.path.isfile(path):
@@ -180,7 +236,18 @@ for name in ("libwriter_core_ffi.so", "libonnxruntime.so"):
 
 if not targets:
     print(f"HarmonyOS ELF diagnostics: no target libraries found in {prebuilt_dir}")
-    raise SystemExit(0)
+    raise SystemExit(1 if mode == "diagnose" else 0)
+
+candidate_libraries = candidate_provider_libraries(targets)
+candidate_symbols = {"package": {}, "sdk": {}}
+for provider, category in candidate_libraries.items():
+    try:
+        _, exports = dynamic_symbols(provider)
+    except (OSError, RuntimeError) as error:
+        print(f"  警告：跳过候选符号提供方 {provider}: {error}")
+        continue
+    for symbol in exports:
+        candidate_symbols[category].setdefault(symbol, set()).add(os.path.basename(provider))
 
 print("HarmonyOS dynamic dependency and symbol-provider diagnostics")
 print(f"Provider search roots: {', '.join(search_roots) or '(none)'}")
@@ -239,22 +306,72 @@ for target in targets:
             if not provider_symbols.get(name):
                 missing_weak.append(name)
 
+        expected_system_needed = sorted(set(unresolved_needed) & SYSTEM_RUNTIME_SONAMES)
+        unknown_needed = sorted(set(unresolved_needed) - SYSTEM_RUNTIME_SONAMES)
+
+        sdk_candidates = {}
+        package_candidates = {}
+        no_local_provider = []
+        for name in missing_strong:
+            sdk_matches = candidate_symbols["sdk"].get(name)
+            package_matches = candidate_symbols["package"].get(name)
+            if sdk_matches:
+                sdk_candidates[name] = sdk_matches
+            elif package_matches:
+                package_candidates[name] = package_matches
+            else:
+                no_local_provider.append(name)
+
         print(f"  Dynamic undefined symbols: {len(strong_symbols)} strong, {len(weak_symbols)} weak")
         if provider_counts:
             print("  Matching providers in DT_NEEDED closure:")
             for provider, count in sorted(provider_counts.items()):
                 print(f"    {provider}: {count} strong symbol(s)")
-        print(f"  Strong symbols without a matching package/SDK provider: {len(missing_strong)}")
-        for name in missing_strong:
-            print(f"    {name}")
+        print(f"  Strong undefined symbols absent from the DT_NEEDED closure: {len(missing_strong)}")
+        if sdk_candidates:
+            print("  Missing from DT_NEEDED closure, but exported by other SDK libraries (runtime availability unproven):")
+            for name, providers in sorted(sdk_candidates.items()):
+                print(f"    {name} -> {', '.join(sorted(providers))}")
+        if package_candidates:
+            print("  Missing from DT_NEEDED closure, but exported by other packaged libraries (not proven loaded):")
+            for name, providers in sorted(package_candidates.items()):
+                print(f"    {name} -> {', '.join(sorted(providers))}")
+        if no_local_provider:
+            print("  No provider in local package/SDK roots (target runtime provider is unknown):")
+            for name in no_local_provider:
+                print(f"    {name}")
+            if expected_system_needed:
+                print("  These symbols may belong to a HarmonyOS runtime library missing from the local SDK; the exact owner needs device-side ELF evidence.")
+        if not missing_strong:
+            print("  All strong undefined symbols match exports in the package/SDK DT_NEEDED closure by name; device ABI is not verified.")
         if missing_weak:
-            print(f"  Weak symbols without a matching package/SDK provider: {len(missing_weak)}")
+            print(f"  Weak symbols absent from the package/SDK dependency closure (optional ELF references): {len(missing_weak)}")
             for name in missing_weak:
                 print(f"    {name}")
         if unresolved_needed:
-            print("  DT_NEEDED entries without a package/SDK provider:")
-            for soname in sorted(set(unresolved_needed)):
-                print(f"    {soname}")
+            if expected_system_needed:
+                print("  HarmonyOS system libraries absent from local package/SDK roots (device provider unverified):")
+                for soname in expected_system_needed:
+                    print(f"    {soname}")
+                system_provider_unverified = True
+            if unknown_needed:
+                print("  DT_NEEDED entries absent from package/SDK roots and not classified as HarmonyOS system libraries:")
+                for soname in unknown_needed:
+                    print(f"    {soname}")
+                diagnostics_failed = True
+
+        # A library elsewhere in the package or SDK is only a candidate
+        # provider; it is not loaded merely because it exports the symbol.
+        if missing_strong:
+            diagnostics_failed = True
     except (OSError, RuntimeError) as error:
         print(f"  诊断失败：{error}")
+        diagnostics_failed = True
+
+if diagnostics_failed:
+    print("HarmonyOS ELF diagnostics failed: unresolved strong symbols or unclassified dependencies remain.")
+    raise SystemExit(1)
+if system_provider_unverified:
+    print("HarmonyOS ELF diagnostics incomplete: a system dependency must be confirmed on a device.")
+    raise SystemExit(2)
 PY
