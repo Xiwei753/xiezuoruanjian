@@ -299,7 +299,11 @@ impl AppBackend {
         // 各 target 开始/结束时更新 finished/total。存到 self 供诊断导出主线程读，
         // clone 一份 move 进后台线程传给 perform_full_sync。SyncProgressSink 是
         // Clone（廉价 Arc）且 Send + Sync，可安全跨线程共享。
-        let progress_sink = writer_core::sync::SyncProgressSink::new(0);
+        let progress_sink = writer_core::sync::SyncProgressSink::new_for_operation_with_trigger(
+            0,
+            op_id.clone(),
+            trigger,
+        );
         self.current_sync_progress = Some(progress_sink.clone());
         // Issue #729 评论 5763441474：捕获 data_root 用于回调身份校验。
         let data_root_capture = data_root.clone();

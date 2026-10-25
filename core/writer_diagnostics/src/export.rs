@@ -8,6 +8,7 @@
 //! 4. 生成 `diagnostics_manifest.json`
 //! 5. 打 zip 包
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,7 @@ struct LogCollectionStatus {
     builds: Vec<String>,
     first_log_time: Option<String>,
     last_log_time: Option<String>,
+    levels: Vec<String>,
     missing_files: Vec<String>,
 }
 
@@ -137,6 +139,7 @@ fn write_logs(dest_dir: &Path) -> LogCollectionStatus {
             builds: Vec::new(),
             first_log_time: None,
             last_log_time: None,
+            levels: Vec::new(),
             missing_files: vec!["<logs directory>".to_string()],
         };
     }
@@ -148,6 +151,7 @@ fn write_logs(dest_dir: &Path) -> LogCollectionStatus {
             builds: Vec::new(),
             first_log_time: None,
             last_log_time: None,
+            levels: Vec::new(),
             missing_files: Vec::new(),
         };
     }
@@ -155,8 +159,9 @@ fn write_logs(dest_dir: &Path) -> LogCollectionStatus {
     let mut copied = 0usize;
     let mut missing_files = Vec::new();
     let mut builds = Vec::new();
-    let mut first_time = None;
-    let mut last_time = None;
+    let mut levels = BTreeSet::new();
+    let mut first_event_ms: Option<i64> = None;
+    let mut last_event_ms: Option<i64> = None;
     for log_file in &log_files {
         let file_name = log_file
             .file_name()
@@ -175,12 +180,19 @@ fn write_logs(dest_dir: &Path) -> LogCollectionStatus {
                 builds.push(build);
             }
         }
-        if let Ok(modified) = fs::metadata(log_file).and_then(|m| m.modified()) {
-            let time = chrono::DateTime::<chrono::Local>::from(modified).to_rfc3339();
-            if first_time.is_none() {
-                first_time = Some(time.clone());
+        for line in content.lines() {
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if let Some(level) = event.get("level").and_then(serde_json::Value::as_str) {
+                levels.insert(level.to_string());
             }
-            last_time = Some(time);
+            if let Some(timestamp_ms) = event.get("ts").and_then(serde_json::Value::as_i64) {
+                first_event_ms =
+                    Some(first_event_ms.map_or(timestamp_ms, |first| first.min(timestamp_ms)));
+                last_event_ms =
+                    Some(last_event_ms.map_or(timestamp_ms, |last| last.max(timestamp_ms)));
+            }
         }
         let redacted = super::redact::redact(&content);
         let dest = logs_dir.join(&file_name);
@@ -198,12 +210,19 @@ fn write_logs(dest_dir: &Path) -> LogCollectionStatus {
     } else {
         "error"
     };
+    let first_time = first_event_ms
+        .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+        .map(|time| time.to_rfc3339());
+    let last_time = last_event_ms
+        .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+        .map(|time| time.to_rfc3339());
     LogCollectionStatus {
         status: status.to_string(),
         file_count: copied,
         builds,
         first_log_time: first_time,
         last_log_time: last_time,
+        levels: levels.into_iter().collect(),
         missing_files,
     }
 }

@@ -216,8 +216,8 @@ impl ChapterCorrectionCacheState {
             Err(error) => {
                 if error.kind() != std::io::ErrorKind::NotFound {
                     log::warn!(
-                        "[correction] failed to read result cache {}: {error}",
-                        state.path.display()
+                        "[correction] result cache read failed error_kind={:?}",
+                        error.kind()
                     );
                 }
                 return state;
@@ -225,11 +225,8 @@ impl ChapterCorrectionCacheState {
         };
         let cache = match serde_json::from_str::<ChapterCorrectionCache>(&content) {
             Ok(cache) => cache,
-            Err(error) => {
-                log::warn!(
-                    "[correction] failed to parse result cache {}: {error}",
-                    state.path.display()
-                );
+            Err(_error) => {
+                log::warn!("[correction] result cache parse failed");
                 return state;
             }
         };

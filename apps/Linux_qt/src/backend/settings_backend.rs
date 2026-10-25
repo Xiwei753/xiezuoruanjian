@@ -240,6 +240,35 @@ fn build_export_attachments(
         .core_api()
         .and_then(|api| api.list_all_sync_conflicts().ok());
 
+    // Parse the serialized SyncOperationStateDto once so both exported attachments
+    // share the same identity and status values. The DTO uses camelCase JSON keys.
+    let operation_state =
+        serde_json::from_str::<serde_json::Value>(&app.current_sync_operation_state).ok();
+    let operation_id = operation_state
+        .as_ref()
+        .and_then(|state| state.get("operationId"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            (!app.current_sync_operation_id.is_empty())
+                .then_some(app.current_sync_operation_id.as_str())
+        });
+    let operation_kind = operation_state
+        .as_ref()
+        .and_then(|state| state.get("operationKind"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            (!app.current_sync_operation_kind.is_empty())
+                .then_some(app.current_sync_operation_kind.as_str())
+        });
+    let operation_status = operation_state
+        .as_ref()
+        .and_then(|state| state.get("statusCode"))
+        .and_then(serde_json::Value::as_str);
+    let core_attempt_started =
+        operation_id.map(|id| app.sync_core_attempt_started_for_operation_id(id));
+
     // sync_operation_state.json — 当前同步操作状态（含 target 进度）。
     // current_sync_operation_state 是 Core SyncOperationStateDto 的 JSON 序列化。
     // 若有进度 sink（同步进行中），合并 currentTarget/finishedTargets/totalTargets。
@@ -247,59 +276,51 @@ fn build_export_attachments(
     if !app.current_sync_operation_state.is_empty() {
         // Issue #763：无论是否有 progress sink，都解析 JSON 以写入真实 conflictCount。
         // 有 sink 时额外合并 currentTarget/finishedTargets/totalTargets。
-        let content =
-            match serde_json::from_str::<serde_json::Value>(&app.current_sync_operation_state) {
-                Ok(mut v) => {
-                    if let Some(obj) = v.as_object_mut() {
-                        let operation_id = obj
-                            .get("operation_id")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or_default();
+        let content = match operation_state.clone() {
+            Some(mut v) => {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "core_attempt_started".to_string(),
+                        serde_json::json!(core_attempt_started),
+                    );
+                    // 合并 progress sink 的 target 进度（同步运行中才有）。
+                    if let Some(ref sink) = app.current_sync_progress {
+                        let progress = sink.snapshot();
                         obj.insert(
-                            "core_attempt_started".to_string(),
-                            serde_json::Value::Bool(
-                                app.sync_core_attempt_started_for_operation_id(operation_id),
-                            ),
+                            "currentTarget".to_string(),
+                            serde_json::json!({
+                                "targetRemotePrefix": progress.current_target_remote_prefix,
+                                "projectId": progress.current_project_id,
+                                "phase": progress.current_phase,
+                            }),
                         );
-                        // 合并 progress sink 的 target 进度（同步运行中才有）。
-                        if let Some(ref sink) = app.current_sync_progress {
-                            let progress = sink.snapshot();
-                            obj.insert(
-                                "currentTarget".to_string(),
-                                serde_json::json!({
-                                    "targetRemotePrefix": progress.current_target_remote_prefix,
-                                    "projectId": progress.current_project_id,
-                                    "phase": progress.current_phase,
-                                }),
+                        obj.insert(
+                            "finishedTargets".to_string(),
+                            serde_json::json!(progress.finished_targets),
+                        );
+                        obj.insert(
+                            "totalTargets".to_string(),
+                            serde_json::json!(progress.total_targets),
+                        );
+                    }
+                    // Issue #763：写入真实未解决冲突总数，复用已读取的
+                    // list_all_sync_conflicts 结果，不为计数再扫第二遍项目。
+                    if let Some(conflicts) = sync_conflicts_opt.as_ref() {
+                        let conflict_count = u32::try_from(conflicts.len()).unwrap_or(u32::MAX);
+                        if let Some(counts) = obj.get_mut("counts").and_then(|c| c.as_object_mut())
+                        {
+                            counts.insert(
+                                "conflictCount".to_string(),
+                                serde_json::json!(conflict_count),
                             );
-                            obj.insert(
-                                "finishedTargets".to_string(),
-                                serde_json::json!(progress.finished_targets),
-                            );
-                            obj.insert(
-                                "totalTargets".to_string(),
-                                serde_json::json!(progress.total_targets),
-                            );
-                        }
-                        // Issue #763：写入真实未解决冲突总数，复用已读取的
-                        // list_all_sync_conflicts 结果，不为计数再扫第二遍项目。
-                        if let Some(conflicts) = sync_conflicts_opt.as_ref() {
-                            let conflict_count = u32::try_from(conflicts.len()).unwrap_or(u32::MAX);
-                            if let Some(counts) =
-                                obj.get_mut("counts").and_then(|c| c.as_object_mut())
-                            {
-                                counts.insert(
-                                    "conflictCount".to_string(),
-                                    serde_json::json!(conflict_count),
-                                );
-                            }
                         }
                     }
-                    serde_json::to_string_pretty(&v)
-                        .unwrap_or_else(|_| app.current_sync_operation_state.clone())
                 }
-                Err(_) => app.current_sync_operation_state.clone(),
-            };
+                serde_json::to_string_pretty(&v)
+                    .unwrap_or_else(|_| app.current_sync_operation_state.clone())
+            }
+            None => app.current_sync_operation_state.clone(),
+        };
         attachments.push(writer_diagnostics::PlatformAttachment {
             relative_path: "sync_operation_state.json".to_string(),
             content: content.into_bytes(),
@@ -364,33 +385,6 @@ fn build_export_attachments(
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
         .to_string();
-    let operation_state =
-        serde_json::from_str::<serde_json::Value>(&app.current_sync_operation_state).ok();
-    let operation_id = operation_state
-        .as_ref()
-        .and_then(|state| state.get("operation_id"))
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            (!app.current_sync_operation_id.is_empty())
-                .then_some(app.current_sync_operation_id.as_str())
-        });
-    let operation_kind = operation_state
-        .as_ref()
-        .and_then(|state| state.get("operation_kind"))
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            (!app.current_sync_operation_kind.is_empty())
-                .then_some(app.current_sync_operation_kind.as_str())
-        });
-    let operation_status = operation_state
-        .as_ref()
-        .and_then(|state| state.get("status_code"))
-        .and_then(|value| value.as_str());
-    let core_attempt_started = operation_id
-        .map(|id| app.sync_core_attempt_started_for_operation_id(id))
-        .unwrap_or(false);
     let exported_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
@@ -431,7 +425,7 @@ fn build_export_attachments(
             .unwrap_or(false);
     let runtime = serde_json::json!({
         "syncInProgress": app.current_sync_in_progress,
-        "operationId": app.current_sync_operation_id,
+        "operationId": operation_id,
         "syncStatus": app.current_sync_status,
         "workspaceGeneration": app.current_workspace_generation,
         "dataRootBasename": data_root_basename,

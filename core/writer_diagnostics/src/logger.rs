@@ -90,6 +90,14 @@ pub fn record_event(mut event: DiagnosticEvent) {
     writer::enqueue(json);
 }
 
+/// 当前是否启用了详细诊断事件（Debug/Trace）。
+///
+/// 采集端可在构造高频或大字段事件之前查询此状态，避免普通诊断模式下产生
+/// 不必要的逐帧采样与对象级字段开销。日志关闭时也视为未启用。
+pub fn is_detailed_enabled() -> bool {
+    VERBOSE.load(Ordering::SeqCst) && writer::is_enabled()
+}
+
 /// 对事件的 message 和 fields 字符串值做脱敏。
 fn redact_event(mut event: DiagnosticEvent) -> DiagnosticEvent {
     if let Some(msg) = event.message.take() {

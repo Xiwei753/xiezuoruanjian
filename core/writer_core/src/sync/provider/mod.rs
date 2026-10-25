@@ -80,6 +80,7 @@ impl ProviderSecrets {
 /// ## 方法语义
 ///
 /// - `capabilities()`：返回远端能力集合，engine 据此调整策略。
+/// - `remote_revision()`：读取分支当前提交标识，不支持此能力的 Provider 返回 `None`。
 /// - `list(prefix)`：枚举远端以 `prefix + "/"` 开头的对象，剥掉前缀返回。
 ///   `prefix` 为空时返回全部。返回 `RemoteEntry`（path + version，无内容）。
 /// - `read(path)`：读取远端对象完整内容，返回 `Option<RemoteObject>`（None 表示不存在）。
@@ -99,6 +100,14 @@ impl ProviderSecrets {
 pub trait SyncProvider: Send + Sync {
     /// 返回远端能力集合。
     fn capabilities(&self) -> capabilities::SyncCapabilities;
+
+    /// 只读查询远端当前分支的版本标识。
+    ///
+    /// 默认返回 `None` 表示 Provider 不支持分支级版本查询；支持该能力的 Provider
+    /// 在分支尚未创建时也可返回 `None`。查询失败必须返回错误，不能当作版本未变化。
+    fn remote_revision(&self) -> Result<Option<String>, error::ProviderError> {
+        Ok(None)
+    }
 
     /// 枚举远端以 `prefix + "/"` 开头的对象，剥掉前缀返回。
     fn list(&self, prefix: &str) -> Result<Vec<model::RemoteEntry>, error::ProviderError>;

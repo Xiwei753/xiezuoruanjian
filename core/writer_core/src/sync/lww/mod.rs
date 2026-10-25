@@ -62,7 +62,7 @@ pub(crate) use manifest::{snapshot_app_group_records_read_only, snapshot_local_r
 // 供 `execute_lww_sync_attempt`（普通 LWW）和 `full_sync.rs` LiveProject 复用。
 pub(crate) use merge::{
     materialize_local_snapshot_for_empty_remote, merge_remote_into_local_app_group,
-    merge_remote_into_local_snapshot, LwwMergeOutcome,
+    merge_remote_into_local_snapshot_with_diagnostics, LwwMergeOutcome,
 };
 
 // re-export SYNC_MANIFEST_PATH，

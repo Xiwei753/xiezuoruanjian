@@ -257,6 +257,40 @@ pub(crate) fn get_ref(
     execute_get(transport, &url, token)
 }
 
+/// 查询分支当前指向的 commit SHA，不读取 tree 或文件正文。
+///
+/// 404 表示该分支当前不存在；其他非成功状态是查询错误，不能被当作未变化。
+pub(crate) fn get_ref_revision(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    branch: &str,
+) -> Result<Option<String>, ProviderError> {
+    let response = get_ref(transport, api_base, token, branch)?;
+    if response.status == 404 {
+        return Ok(None);
+    }
+    if !(200..300).contains(&response.status) {
+        return Err(map_http_error(
+            "get ref",
+            response.status,
+            String::from_utf8(response.body).unwrap_or_default(),
+        ));
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&response.body).map_err(|error| ProviderError::Other {
+            reason: format!("invalid ref json: {error}"),
+        })?;
+    json["object"]["sha"]
+        .as_str()
+        .map(str::to_string)
+        .map(Some)
+        .ok_or_else(|| ProviderError::Other {
+            reason: "ref response missing object SHA".to_string(),
+        })
+}
+
 /// 查询仓库根（用于 list 的 404 诊断：区分仓库不存在 vs 权限不足）。
 pub(crate) fn get_repo(
     transport: &dyn SyncTransport,

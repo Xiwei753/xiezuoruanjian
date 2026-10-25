@@ -19,6 +19,52 @@
 use super::types::{FullSyncResult, SyncStatus};
 use serde::{Deserialize, Serialize};
 
+/// Version checkpoint for the last successful, fully converged sync.
+///
+/// Repository identity is stored as a digest so private remote URLs are not copied
+/// into the checkpoint file. The revision and local fingerprint are content
+/// versions, not timestamps.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FullSyncCheckpoint {
+    pub repository_identity: String,
+    pub remote_revision: String,
+    pub local_object_fingerprint: String,
+    /// Independent versions let a stable remote branch process only locally changed
+    /// App groups or projects on the next run.
+    #[serde(default)]
+    pub target_fingerprints: std::collections::BTreeMap<String, String>,
+}
+
+impl FullSyncCheckpoint {
+    const FILE_NAME: &'static str = "checkpoint.local.json";
+
+    pub fn load(app_data_root: &std::path::Path) -> crate::error::Result<Option<Self>> {
+        let path = app_data_root.join("app-meta/sync").join(Self::FILE_NAME);
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(crate::Error::Io(error)),
+        };
+        match serde_json::from_str(&content) {
+            Ok(checkpoint) => Ok(Some(checkpoint)),
+            Err(error) => {
+                log::warn!("sync checkpoint is unreadable; forcing a full sync: {error}");
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn save(&self, app_data_root: &std::path::Path) -> crate::error::Result<()> {
+        let path = app_data_root.join("app-meta/sync").join(Self::FILE_NAME);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(self)
+            .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?;
+        crate::storage::atomic_write_string(&path, &content)
+    }
+}
+
 /// 最近一次全量同步报告，单独保存在 `last_report.local.json`。
 ///
 /// `FullSyncState` 保持顶部状态的轻量契约；这份报告保存每个独立数据组的

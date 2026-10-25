@@ -1,6 +1,351 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 use crate::sync::cancellation_token::{SyncCancellationToken, SyncProgressSink};
+use sha2::{Digest, Sha256};
+use std::time::Instant;
+
+fn record_sync_diagnostic(
+    event: &str,
+    target: &str,
+    fields: std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: if event.starts_with("sync.object.")
+            || event.starts_with("sync.target.")
+            || (target == "sync.target" && event.starts_with("sync.phase."))
+        {
+            writer_diagnostics::DiagnosticLevel::Debug
+        } else {
+            writer_diagnostics::DiagnosticLevel::Info
+        },
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: event.to_string(),
+        target: target.to_string(),
+        message: None,
+        fields,
+    });
+}
+
+fn sync_diagnostic_fields(
+    operation_id: &str,
+    phase: &str,
+    target_digest: Option<&str>,
+) -> std::collections::BTreeMap<String, serde_json::Value> {
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(
+        "operation_id".to_string(),
+        serde_json::Value::String(operation_id.to_string()),
+    );
+    fields.insert(
+        "phase".to_string(),
+        serde_json::Value::String(phase.to_string()),
+    );
+    if let Some(target_digest) = target_digest {
+        fields.insert(
+            "target_digest".to_string(),
+            serde_json::Value::String(target_digest.to_string()),
+        );
+    }
+    fields
+}
+
+fn sync_target_digest(target: &str) -> String {
+    format!("{:x}", Sha256::digest(target.as_bytes()))
+}
+
+fn record_sync_object_result(
+    operation_id: &str,
+    target_digest: &str,
+    object_path: &str,
+    action: &str,
+) {
+    let mut fields = sync_diagnostic_fields(operation_id, "object_result", Some(target_digest));
+    fields.insert(
+        "object_path_digest".to_string(),
+        serde_json::Value::String(sync_target_digest(object_path)),
+    );
+    fields.insert(
+        "action".to_string(),
+        serde_json::Value::String(action.to_string()),
+    );
+    record_sync_diagnostic("sync.object.result", "sync.object", fields);
+}
+
+struct SyncDiagnosticPhase {
+    operation_id: String,
+    phase: String,
+    target_digest: Option<String>,
+    started_at: Instant,
+    finished: bool,
+}
+
+impl SyncDiagnosticPhase {
+    fn start(operation_id: &str, phase: &str, target_digest: Option<String>) -> Self {
+        let guard = Self {
+            operation_id: operation_id.to_string(),
+            phase: phase.to_string(),
+            target_digest,
+            started_at: Instant::now(),
+            finished: false,
+        };
+        guard.record("sync.phase.start", None);
+        guard
+    }
+
+    fn finish(mut self, outcome: &str) {
+        self.record("sync.phase.end", Some(outcome));
+        self.finished = true;
+    }
+
+    fn record(&self, event: &str, outcome: Option<&str>) {
+        let mut fields = sync_diagnostic_fields(
+            &self.operation_id,
+            &self.phase,
+            self.target_digest.as_deref(),
+        );
+        if let Some(outcome) = outcome {
+            fields.insert(
+                "outcome".to_string(),
+                serde_json::Value::String(outcome.to_string()),
+            );
+        }
+        if event.ends_with(".end") {
+            fields.insert(
+                "duration_ms".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(
+                    u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                )),
+            );
+        }
+        let target = if self.target_digest.is_some() {
+            "sync.target"
+        } else {
+            "sync.run"
+        };
+        record_sync_diagnostic(event, target, fields);
+    }
+}
+
+impl Drop for SyncDiagnosticPhase {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.record("sync.phase.end", Some("interrupted"));
+            self.finished = true;
+        }
+    }
+}
+
+struct LocalSyncVersionSnapshot {
+    fingerprint: String,
+    target_fingerprints: std::collections::BTreeMap<String, String>,
+    no_change_targets: Vec<crate::sync::types::TargetSyncResult>,
+}
+
+fn add_fingerprint_field(hasher: &mut Sha256, key: &str, value: &[u8]) {
+    hasher.update((key.len() as u64).to_le_bytes());
+    hasher.update(key.as_bytes());
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
+fn add_local_objects_to_fingerprint(
+    hasher: &mut Sha256,
+    root_key: &str,
+    entries: Vec<crate::sync::types::SyncFileEntry>,
+) {
+    let mut objects: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| matches!(&entry.sync_kind, crate::sync::types::SyncKind::Upload))
+        .collect();
+    objects.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    for entry in objects {
+        add_fingerprint_field(
+            hasher,
+            &format!("{root_key}:{}", entry.relative_path),
+            entry.file_hash.as_bytes(),
+        );
+    }
+}
+
+fn add_optional_file_to_fingerprint(
+    hasher: &mut Sha256,
+    key: &str,
+    path: &std::path::Path,
+) -> crate::Result<()> {
+    match std::fs::read(path) {
+        Ok(bytes) => add_fingerprint_field(hasher, key, &bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            add_fingerprint_field(hasher, key, b"<absent>");
+        }
+        Err(error) => return Err(crate::Error::Io(error)),
+    }
+    Ok(())
+}
+
+/// Snapshot the current syncable objects and group state. `None` means a known
+/// pending operation or migration makes the fast no-change path ineligible.
+fn local_sync_version_snapshot(
+    app_data_root: &std::path::Path,
+    projects_root: &std::path::Path,
+) -> crate::Result<Option<LocalSyncVersionSnapshot>> {
+    if crate::writing_stats::migration::legacy_events_present(app_data_root)
+        || app_data_root
+            .join("app-meta/sync/manifest.sync.json")
+            .exists()
+        || app_data_root.join("app-meta/sync/sync_state.json").exists()
+    {
+        return Ok(None);
+    }
+
+    match crate::sync::pending_deleted::load_pending_deleted_targets(app_data_root) {
+        Ok(pending) if pending.is_empty() => {}
+        Ok(_) | Err(_) => return Ok(None),
+    }
+    match crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root) {
+        Ok(pending) if pending.is_empty() => {}
+        Ok(_) | Err(_) => return Ok(None),
+    }
+
+    let mut target_fingerprints = std::collections::BTreeMap::new();
+    let app_groups =
+        crate::sync::app_data_group_catalog::discover_local_app_data_groups(app_data_root)?;
+    let mut no_change_targets = Vec::new();
+    for group in app_groups {
+        let state = crate::sync::SyncService::load_sync_state_read_only_for_group(
+            app_data_root,
+            &group,
+            None,
+        )?;
+        if state.last_error.is_some()
+            || !state.tombstones.is_empty()
+            || !state.conflicted_files.is_empty()
+            || !state.pending_take_remote.is_empty()
+        {
+            return Ok(None);
+        }
+        let mut target_hasher = Sha256::new();
+        let app_entries = crate::sync::scanner::scan_for_sync_group(
+            app_data_root,
+            crate::sync::types::SyncScope::App,
+            Some(&group),
+        )?;
+        add_local_objects_to_fingerprint(&mut target_hasher, "objects", app_entries);
+        add_optional_file_to_fingerprint(
+            &mut target_hasher,
+            "state",
+            &app_data_root.join(group.local_state_path()),
+        )?;
+        add_optional_file_to_fingerprint(
+            &mut target_hasher,
+            "manifest",
+            &app_data_root.join(group.local_manifest_path()),
+        )?;
+        add_optional_file_to_fingerprint(
+            &mut target_hasher,
+            "conflicts",
+            &app_data_root.join(group.local_conflicts_path()),
+        )?;
+        let group_id = group.id();
+        target_fingerprints.insert(
+            format!("app:{group_id}"),
+            format!("{:x}", target_hasher.finalize()),
+        );
+        let target = crate::sync::types::SyncTarget::app_data_group(group);
+        no_change_targets.push(crate::sync::types::TargetSyncResult {
+            target_kind: "app".to_string(),
+            project_id: None,
+            remote_prefix: target.remote_prefix,
+            group_id: target.app_group.as_ref().map(|group| group.id()),
+            failure_path: None,
+            failure_phase: None,
+            result: crate::sync::types::SyncResult::no_changes(),
+            deleted_resolution: None,
+            local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
+        });
+    }
+
+    let projects = crate::project::list_projects(projects_root)?;
+    for project in projects {
+        let project_root = projects_root.join(&project.id);
+        if project_root.join("app-meta/sync/sync_state.json").exists() {
+            return Ok(None);
+        }
+        let entries = crate::sync::scanner::scan_for_sync_group(
+            &project_root,
+            crate::sync::types::SyncScope::Project,
+            None,
+        )?;
+        let mut target_hasher = Sha256::new();
+        add_local_objects_to_fingerprint(&mut target_hasher, "objects", entries);
+        let state = crate::sync::SyncService::load_sync_state_read_only(&project_root, None)?;
+        if state.last_error.is_some()
+            || !state.tombstones.is_empty()
+            || !state.conflicted_files.is_empty()
+            || !state.pending_take_remote.is_empty()
+        {
+            return Ok(None);
+        }
+        for (name, relative_path) in [
+            ("state", "app-meta/sync/state.local.json"),
+            ("manifest", "app-meta/sync/manifest.sync.json"),
+            ("conflicts", "app-meta/sync/conflicts.json"),
+        ] {
+            add_optional_file_to_fingerprint(
+                &mut target_hasher,
+                name,
+                &project_root.join(relative_path),
+            )?;
+        }
+        target_fingerprints.insert(
+            format!("project:{}", project.id),
+            format!("{:x}", target_hasher.finalize()),
+        );
+        no_change_targets.push(crate::sync::types::TargetSyncResult {
+            target_kind: "project".to_string(),
+            project_id: Some(project.id.clone()),
+            remote_prefix: format!("projects/{}", project.id),
+            group_id: None,
+            failure_path: None,
+            failure_phase: None,
+            result: crate::sync::types::SyncResult::no_changes(),
+            deleted_resolution: None,
+            local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
+        });
+    }
+
+    let mut hasher = Sha256::new();
+    for (target, fingerprint) in &target_fingerprints {
+        add_fingerprint_field(&mut hasher, target, fingerprint.as_bytes());
+    }
+    Ok(Some(LocalSyncVersionSnapshot {
+        fingerprint: format!("{:x}", hasher.finalize()),
+        target_fingerprints,
+        no_change_targets,
+    }))
+}
+
+fn sync_target_checkpoint_key(target: &crate::sync::full_sync::PlannedTarget) -> Option<String> {
+    if let Some(group) = target.target.app_group.as_ref() {
+        return Some(format!("app:{}", group.id()));
+    }
+    target
+        .project_id
+        .as_ref()
+        .map(|project_id| format!("project:{project_id}"))
+}
+
+fn repository_identity(config: &crate::sync::SyncConfig) -> Option<String> {
+    match serde_json::to_vec(&(&config.active_provider, &config.provider_config)) {
+        Ok(identity) => Some(format!("{:x}", Sha256::digest(identity))),
+        Err(error) => {
+            log::warn!("[sync] failed to serialize repository identity for checkpoint: {error}");
+            None
+        }
+    }
+}
 
 /// GitHub 仓库是否还值得在完整同步失败后改用 API 重试。
 ///
@@ -354,12 +699,33 @@ impl WriterCoreApi {
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
     ) -> ApiResult<FullSyncResultDto> {
+        let operation_id = progress_sink
+            .as_ref()
+            .and_then(SyncProgressSink::operation_id)
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let started_at = Instant::now();
+        record_sync_diagnostic("sync.run.start", "sync.run", {
+            let mut fields = sync_diagnostic_fields(&operation_id, "prepare", None);
+            fields.insert(
+                "trigger".to_string(),
+                serde_json::Value::String(
+                    progress_sink
+                        .as_ref()
+                        .and_then(SyncProgressSink::trigger)
+                        .unwrap_or(if force_sync { "manual" } else { "auto" })
+                        .to_string(),
+                ),
+            );
+            fields
+        });
         let mut result = self.perform_full_sync_once(
             config.clone(),
             force_sync,
             cancellation_token.clone(),
             progress_sink.clone(),
             target_progress,
+            &operation_id,
         );
         let sync_config: crate::sync::SyncConfig = config.clone().into();
         let mut retried_via_github_api = false;
@@ -385,6 +751,7 @@ impl WriterCoreApi {
                     cancellation_token.clone(),
                     progress_sink.clone(),
                     target_progress,
+                    &operation_id,
                 );
                 continue;
             }
@@ -413,12 +780,67 @@ impl WriterCoreApi {
                     cancellation_token.clone(),
                     progress_sink.clone(),
                     target_progress,
+                    &operation_id,
                 );
                 continue;
             }
 
             break;
         }
+        let mut fields = sync_diagnostic_fields(&operation_id, "complete", None);
+        let cancelled = cancellation_token
+            .as_ref()
+            .is_some_and(SyncCancellationToken::is_cancelled);
+        fields.insert(
+            "trigger".to_string(),
+            serde_json::Value::String(
+                progress_sink
+                    .as_ref()
+                    .and_then(SyncProgressSink::trigger)
+                    .unwrap_or(if force_sync { "manual" } else { "auto" })
+                    .to_string(),
+            ),
+        );
+        fields.insert(
+            "duration_ms".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(
+                u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+            )),
+        );
+        fields.insert(
+            "outcome".to_string(),
+            serde_json::Value::String(
+                if cancelled {
+                    "cancelled"
+                } else if result.is_ok() {
+                    "returned"
+                } else {
+                    "error"
+                }
+                .to_string(),
+            ),
+        );
+        fields.insert(
+            "termination_reason".to_string(),
+            serde_json::Value::String(if cancelled {
+                "cancelled_by_platform".to_string()
+            } else if let Ok(output) = &result {
+                output.overall_status.clone()
+            } else {
+                "error".to_string()
+            }),
+        );
+        fields.insert(
+            "cancel_requested".to_string(),
+            serde_json::Value::Bool(cancelled),
+        );
+        if let Ok(output) = &result {
+            fields.insert(
+                "status_code".to_string(),
+                serde_json::Value::String(output.overall_status.clone()),
+            );
+        }
+        record_sync_diagnostic("sync.run.end", "sync.run", fields);
         result
     }
 
@@ -430,6 +852,7 @@ impl WriterCoreApi {
         cancellation_token: Option<SyncCancellationToken>,
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
+        diagnostic_operation_id: &str,
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
@@ -466,10 +889,118 @@ impl WriterCoreApi {
         // core_write 作用域外执行，不阻塞正文/作品读取（ 拆锁路线）。
         //
         // 1a. 短锁 A：创建 provider（transport 初始化可能涉及本地 IO）。
-        let provider = {
+        let provider_phase =
+            SyncDiagnosticPhase::start(diagnostic_operation_id, "provider_init", None);
+        let provider_result = {
             let core = self.core_write();
-            core.create_sync_provider_for_plan(&sync_config, &secrets)?
+            core.create_sync_provider_for_plan(&sync_config, &secrets)
         };
+        let provider = match provider_result {
+            Ok(provider) => provider,
+            Err(error) => {
+                provider_phase.finish("error");
+                return Err(error.into());
+            }
+        };
+        provider_phase.finish("success");
+
+        let (app_data_root, projects_root, previous_full_sync_state) = {
+            let core = self.core_write();
+            (
+                core.app_data_root.clone(),
+                core.projects_root.clone(),
+                core.load_full_sync_state().ok().flatten(),
+            )
+        };
+        let repo_identity = repository_identity(&sync_config);
+        let revision_phase =
+            SyncDiagnosticPhase::start(diagnostic_operation_id, "remote_revision", None);
+        let remote_revision_before = match provider.remote_revision() {
+            Ok(revision) => revision,
+            Err(error) => {
+                revision_phase.finish("error");
+                log::warn!("[sync] remote revision query failed: {error}");
+                let _ = self.record_full_sync_preflight_failure(
+                    "recoverable_error".to_string(),
+                    "remote_revision".to_string(),
+                );
+                return Err(crate::api::error::WriterError::from(
+                    crate::error::Error::from(error),
+                ));
+            }
+        };
+        revision_phase.finish("success");
+        let checkpoint = crate::sync::full_sync_state::FullSyncCheckpoint::load(&app_data_root)
+            .ok()
+            .flatten();
+        let previous_was_converged = previous_full_sync_state.as_ref().is_some_and(|state| {
+            crate::sync::full_sync_state::FullSyncState::is_overall_success(&state.overall_status)
+                && state.failed_targets.is_empty()
+        });
+        let mut checkpoint_remote_unchanged = !force_sync
+            && previous_was_converged
+            && checkpoint.as_ref().is_some_and(|checkpoint| {
+                repo_identity
+                    .as_ref()
+                    .is_some_and(|identity| checkpoint.repository_identity == *identity)
+                    && remote_revision_before.as_deref()
+                        == Some(checkpoint.remote_revision.as_str())
+            });
+        let preflight_snapshot = if checkpoint_remote_unchanged {
+            let local_snapshot_phase =
+                SyncDiagnosticPhase::start(diagnostic_operation_id, "local_snapshot", None);
+            let snapshot = local_sync_version_snapshot(&app_data_root, &projects_root);
+            match snapshot {
+                Ok(snapshot) => {
+                    local_snapshot_phase.finish(if snapshot.is_some() {
+                        "success"
+                    } else {
+                        "ineligible"
+                    });
+                    snapshot
+                }
+                Err(error) => {
+                    local_snapshot_phase.finish("error");
+                    log::warn!(
+                        "[sync] local checkpoint snapshot failed; continuing with LWW: {error}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Fast path is allowed only after a successful, fully converged run and
+        // only when both the local object versions and remote branch revision
+        // match that run's checkpoint. Any uncertainty falls through to LWW.
+        if let (Some(checkpoint), Some(snapshot)) =
+            (checkpoint.as_ref(), preflight_snapshot.as_ref())
+        {
+            if checkpoint.local_object_fingerprint == snapshot.fingerprint {
+                log::info!(
+                    "[sync] full-sync checkpoint matched; returning no_changes without target transfers"
+                );
+                let mut fields =
+                    sync_diagnostic_fields(diagnostic_operation_id, "checkpoint_match", None);
+                fields.insert(
+                    "skipped_targets".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        u64::try_from(snapshot.target_fingerprints.len()).unwrap_or(u64::MAX),
+                    )),
+                );
+                record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
+                let (mut result, _, _) = self
+                    .core_write()
+                    .finalize_full_sync(snapshot.no_change_targets.clone(), None);
+                // The target results were persisted by finalize_full_sync. Returning
+                // an empty list lets the platform distinguish this checkpoint no-op
+                // and avoid launching generation GC on every polling interval.
+                result.targets.clear();
+                return Ok(result.into());
+            }
+        }
+
         // 写锁已释放。
         // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
         //   catalog 读取失败直接结束本次 full sync，
@@ -477,10 +1008,13 @@ impl WriterCoreApi {
         // planner 误判"远端无记录"做破坏性删除/复活决策）。
         //   用 discover_legacy_remote_catalog（真做 legacy 枚举），
         // 不再用 load_remote_catalog（只读 catalog 文件，不做 legacy 发现）。
+        let remote_catalog_phase =
+            SyncDiagnosticPhase::start(diagnostic_operation_id, "remote_catalog", None);
         let remote_catalog_snapshot =
             match crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref()) {
                 Ok(snapshot) => snapshot,
                 Err(e) => {
+                    remote_catalog_phase.finish("error");
                     let msg = format!("discover_legacy_remote_catalog failed: {e}");
                     log::warn!("[sync] prepare: {msg}");
                     let _ = self.record_full_sync_preflight_failure(
@@ -490,6 +1024,7 @@ impl WriterCoreApi {
                     return Err(crate::api::error::WriterError::from(e));
                 }
             };
+        remote_catalog_phase.finish("success");
 
         // Issue #729：discover_legacy_remote_catalog 返回后检查取消令牌。
         // 取消则返回 no-op，不进入 persist_bootstrap_catalog / plan / transfer。
@@ -545,12 +1080,15 @@ impl WriterCoreApi {
         // App data-group catalog is independent from the project lifecycle catalog.
         // A malformed/unreadable group catalog fails Prepare instead of guessing a
         // flat App layout and risking a mixed or destructive merge.
+        let app_group_catalog_phase =
+            SyncDiagnosticPhase::start(diagnostic_operation_id, "remote_app_group_catalog", None);
         let remote_app_data_groups =
             match crate::sync::app_data_group_catalog::discover_remote_app_data_groups(
                 provider.as_ref(),
             ) {
                 Ok(groups) => groups,
                 Err(e) => {
+                    app_group_catalog_phase.finish("error");
                     let msg = format!("discover_remote_app_data_groups failed: {e}");
                     log::warn!("[sync] prepare: {msg}");
                     let _ = self.record_full_sync_preflight_failure(
@@ -560,6 +1098,7 @@ impl WriterCoreApi {
                     return Err(crate::api::error::WriterError::from(e));
                 }
             };
+        app_group_catalog_phase.finish("success");
         // Issue #729：persist_bootstrap_catalog 返回后检查取消令牌。
         if let Some(ref token) = cancellation_token {
             if token.is_cancelled() {
@@ -574,12 +1113,9 @@ impl WriterCoreApi {
         // 短锁只拿 app_data_root/projects_root/sync_policy/remote snapshot + persist Syncing，
         // 释放锁后 list_projects/pending/device/planner/scan 全部锁外执行，
         // 避免阻塞正文/作品读取。
-        let (app_data_root, projects_root) = {
-            let core = self.core_write();
-            core.persist_full_sync_started();
-            (core.app_data_root.clone(), core.projects_root.clone())
-        };
+        self.core_write().persist_full_sync_started();
         // 写锁已释放。锁外构建 plan（list_projects / pending / device / planner / scan）。
+        let plan_phase = SyncDiagnosticPhase::start(diagnostic_operation_id, "plan", None);
         let mut plan = match crate::facade::WriterCore::build_full_sync_plan_unlocked(
             &app_data_root,
             &projects_root,
@@ -591,6 +1127,7 @@ impl WriterCoreApi {
         ) {
             Ok(plan) => plan,
             Err(err) => {
+                plan_phase.finish("error");
                 let msg = err.to_string();
                 log::warn!("[sync] prepare: build_full_sync_plan_unlocked failed: {msg}");
                 let _ = self.record_full_sync_preflight_failure(
@@ -600,6 +1137,33 @@ impl WriterCoreApi {
                 return Err(crate::api::error::WriterError::from(err));
             }
         };
+        plan_phase.finish("success");
+
+        if checkpoint_remote_unchanged {
+            let revision_phase = SyncDiagnosticPhase::start(
+                diagnostic_operation_id,
+                "remote_revision_before_group_filter",
+                None,
+            );
+            match provider.remote_revision() {
+                Ok(revision) if revision == remote_revision_before => {
+                    revision_phase.finish("success");
+                }
+                Ok(_) => {
+                    revision_phase.finish("changed");
+                    checkpoint_remote_unchanged = false;
+                    log::info!(
+                        "[sync] remote branch changed during prepare; keeping every target in the LWW plan"
+                    );
+                }
+                Err(error) => {
+                    revision_phase.finish("error");
+                    return Err(crate::api::error::WriterError::from(
+                        crate::error::Error::from(error),
+                    ));
+                }
+            }
+        }
 
         // Issue #729：build_full_sync_plan_unlocked 返回后检查取消令牌。
         if let Some(ref token) = cancellation_token {
@@ -611,6 +1175,51 @@ impl WriterCoreApi {
                 // Syncing，取消前持久化取消终态，避免 full_state.local.json 停在 Syncing。
                 self.core_write().persist_full_sync_cancelled();
                 return make_noop_result();
+            }
+        }
+
+        // If the remote branch is unchanged, only locally changed groups need a
+        // plan, staging seed, and transfer. New or lifecycle targets have no prior
+        // fingerprint and remain in the plan so the normal LWW path handles them.
+        if checkpoint_remote_unchanged {
+            if let (Some(checkpoint), Some(snapshot)) =
+                (checkpoint.as_ref(), preflight_snapshot.as_ref())
+            {
+                let previous_target_count = plan.targets.len();
+                plan.targets.retain(|planned| {
+                    let Some(key) = sync_target_checkpoint_key(planned) else {
+                        return true;
+                    };
+                    match (
+                        checkpoint.target_fingerprints.get(&key),
+                        snapshot.target_fingerprints.get(&key),
+                    ) {
+                        (Some(previous), Some(current)) => previous != current,
+                        _ => true,
+                    }
+                });
+                let skipped_target_count = previous_target_count.saturating_sub(plan.targets.len());
+                if skipped_target_count > 0 {
+                    log::info!(
+                        "[sync] unchanged local targets skipped from transfer plan: count={skipped_target_count}"
+                    );
+                }
+                if plan.targets.is_empty() {
+                    let mut fields =
+                        sync_diagnostic_fields(diagnostic_operation_id, "unchanged_targets", None);
+                    fields.insert(
+                        "skipped_targets".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(
+                            u64::try_from(skipped_target_count).unwrap_or(u64::MAX),
+                        )),
+                    );
+                    record_sync_diagnostic("sync.checkpoint.skip", "sync.run", fields);
+                    let (mut result, _, _) = self
+                        .core_write()
+                        .finalize_full_sync(snapshot.no_change_targets.clone(), None);
+                    result.targets.clear();
+                    return Ok(result.into());
+                }
             }
         }
 
@@ -649,9 +1258,11 @@ impl WriterCoreApi {
             );
             return Err(crate::api::error::WriterError::from(e));
         }
+        let staging_phase = SyncDiagnosticPhase::start(diagnostic_operation_id, "staging", None);
         let staging_runs = match crate::sync::staging::prepare_staging_runs(&mut plan) {
             Ok(runs) => runs,
             Err(err) => {
+                staging_phase.finish("error");
                 let status = crate::sync::full_sync::error_to_persist_status(&err);
                 let status_str = match &status {
                     crate::sync::SyncStatus::FatalError(_) => "fatal_error".to_string(),
@@ -665,6 +1276,32 @@ impl WriterCoreApi {
                 return Err(err.into());
             }
         };
+        staging_phase.finish("success");
+
+        if checkpoint_remote_unchanged {
+            let revision_phase = SyncDiagnosticPhase::start(
+                diagnostic_operation_id,
+                "remote_revision_before_transfer",
+                None,
+            );
+            match provider.remote_revision() {
+                Ok(revision) if revision == remote_revision_before => {
+                    revision_phase.finish("success");
+                }
+                Ok(_) => {
+                    revision_phase.finish("changed");
+                    return Err(crate::api::error::WriterError::PreconditionFailed(
+                        "remote branch changed before a filtered target sync".to_string(),
+                    ));
+                }
+                Err(error) => {
+                    revision_phase.finish("error");
+                    return Err(crate::api::error::WriterError::from(
+                        crate::error::Error::from(error),
+                    ));
+                }
+            }
+        }
 
         // Issue #729：prepare_staging_runs 返回后检查取消令牌。
         if let Some(ref token) = cancellation_token {
@@ -685,14 +1322,55 @@ impl WriterCoreApi {
         // perform_generation_gc_maintenance 异步调用（独立 maintenance token，
         // 不复用用户同步 token），避免 GC detached thread 和下一轮用户同步同时写
         // 同一 branch 导致 PreconditionFailed。
-        let result = self.perform_full_sync_with_provider(
+        let result = self.perform_full_sync_with_provider_for_run(
             provider.as_ref(),
             &plan,
             staging_runs,
             cancellation_token,
             progress_sink,
             target_progress,
+            diagnostic_operation_id,
+            remote_revision_before.as_deref(),
         )?;
+
+        let fully_converged = matches!(
+            result.overall_status.as_str(),
+            "success" | "no_changes" | "latest_wins_applied"
+        ) && result.targets.iter().all(|target| {
+            matches!(
+                target.result.status.as_str(),
+                "success" | "no_changes" | "latest_wins_applied"
+            )
+        });
+        if fully_converged {
+            if let (
+                Some(repository_identity),
+                Some(revision_before),
+                Ok(Some(revision_after)),
+                Ok(Some(snapshot)),
+            ) = (
+                repo_identity.as_ref(),
+                remote_revision_before.as_deref(),
+                provider.remote_revision(),
+                local_sync_version_snapshot(&app_data_root, &projects_root),
+            ) {
+                // A changed branch revision means another commit (or our own
+                // upload) occurred during this pass. Let a later stable pass
+                // establish the checkpoint instead of claiming that unseen
+                // remote state was already consumed.
+                if revision_before == revision_after {
+                    let checkpoint = crate::sync::full_sync_state::FullSyncCheckpoint {
+                        repository_identity: repository_identity.clone(),
+                        remote_revision: revision_after,
+                        local_object_fingerprint: snapshot.fingerprint,
+                        target_fingerprints: snapshot.target_fingerprints,
+                    };
+                    if let Err(error) = checkpoint.save(&app_data_root) {
+                        log::warn!("[sync] failed to persist full-sync checkpoint: {error}");
+                    }
+                }
+            }
+        }
 
         // 同步可能修改磁盘上的星图数据（staging → commit），失效路径依赖索引
         // 确保下次查询从真实数据重建，不持有过期 entry（问题1）。
@@ -730,6 +1408,35 @@ impl WriterCoreApi {
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
     ) -> ApiResult<FullSyncResultDto> {
+        let operation_id = progress_sink
+            .as_ref()
+            .and_then(SyncProgressSink::operation_id)
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        self.perform_full_sync_with_provider_for_run(
+            provider,
+            plan,
+            staging_runs,
+            cancellation_token,
+            progress_sink,
+            target_progress,
+            &operation_id,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
+    fn perform_full_sync_with_provider_for_run(
+        &self,
+        provider: &dyn crate::sync::provider::SyncProvider,
+        plan: &crate::sync::full_sync::FullSyncPlan,
+        staging_runs: Vec<crate::sync::staging::StagingRun>,
+        cancellation_token: Option<SyncCancellationToken>,
+        progress_sink: Option<SyncProgressSink>,
+        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
+        diagnostic_operation_id: &str,
+        remote_revision: Option<&str>,
+    ) -> ApiResult<FullSyncResultDto> {
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
         let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
@@ -747,6 +1454,60 @@ impl WriterCoreApi {
             }
 
             let planned = &plan.targets[target_index];
+            let target_digest = sync_target_digest(&planned.target.remote_prefix);
+            let target_kind = planned.target_kind.as_target_kind_str().to_string();
+            let target_id = planned
+                .project_id
+                .clone()
+                .or_else(|| planned.target.app_group.as_ref().map(|group| group.id()));
+            let target_id_digest = target_id.as_deref().map(sync_target_digest);
+            let active_generation = planned.project_id.as_ref().and_then(|project_id| {
+                catalog_snapshot
+                    .catalog
+                    .records
+                    .iter()
+                    .find(|record| {
+                        record.remote_prefix == planned.target.remote_prefix
+                            || record.target_id == format!("projects/{project_id}")
+                    })
+                    .and_then(|record| record.active_generation.clone())
+            });
+            let target_started_at = Instant::now();
+            let mut target_fields =
+                sync_diagnostic_fields(diagnostic_operation_id, "transfer", Some(&target_digest));
+            target_fields.insert(
+                "target_kind".to_string(),
+                serde_json::Value::String(target_kind.clone()),
+            );
+            target_fields.insert(
+                "target_index".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(
+                    u64::try_from(target_index).unwrap_or(u64::MAX),
+                )),
+            );
+            target_fields.insert(
+                "total_targets".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(total_targets)),
+            );
+            if let Some(target_id_digest) = target_id_digest.as_ref() {
+                target_fields.insert(
+                    "target_id_digest".to_string(),
+                    serde_json::Value::String(target_id_digest.clone()),
+                );
+            }
+            if let Some(remote_revision) = remote_revision {
+                target_fields.insert(
+                    "remote_revision".to_string(),
+                    serde_json::Value::String(remote_revision.to_string()),
+                );
+            }
+            if let Some(active_generation) = active_generation.as_deref() {
+                target_fields.insert(
+                    "remote_generation_digest".to_string(),
+                    serde_json::Value::String(sync_target_digest(active_generation)),
+                );
+            }
+            record_sync_diagnostic("sync.target.start", "sync.target", target_fields);
 
             // 1. sink.update_target_start — 标记开始处理该 target（Transfer 阶段）。
             if let Some(ref sink) = progress_sink {
@@ -766,6 +1527,11 @@ impl WriterCoreApi {
             let prepared_failure = staging_runs
                 .get(target_index)
                 .and_then(|run| run.prepare_error());
+            let transfer_phase = SyncDiagnosticPhase::start(
+                diagnostic_operation_id,
+                "transfer",
+                Some(target_digest.clone()),
+            );
             let transfer_result = if prepared_failure.is_some() {
                 Some(crate::sync::full_sync::prepare_failed_target_result(
                     plan,
@@ -780,13 +1546,52 @@ impl WriterCoreApi {
                     &mut catalog_snapshot,
                     cancellation_token.as_ref(),
                     &all_targets,
+                    Some(diagnostic_operation_id),
                 )
                 .map(|(result, _resolution, _action)| result)
             };
             let Some(target_sync_result) = transfer_result else {
+                transfer_phase.finish("cancelled");
+                let mut fields = sync_diagnostic_fields(
+                    diagnostic_operation_id,
+                    "cancelled",
+                    Some(&target_digest),
+                );
+                fields.insert(
+                    "duration_ms".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        u64::try_from(target_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    )),
+                );
+                record_sync_diagnostic("sync.target.end", "sync.target", fields);
                 // target 未执行（取消或索引越界），跳过。
                 continue;
             };
+            transfer_phase.finish("success");
+            for path in &target_sync_result.result.downloaded_files {
+                record_sync_object_result(
+                    diagnostic_operation_id,
+                    &target_digest,
+                    path,
+                    "downloaded",
+                );
+            }
+            for path in &target_sync_result.result.local_deletes {
+                record_sync_object_result(
+                    diagnostic_operation_id,
+                    &target_digest,
+                    path,
+                    "deleted_locally",
+                );
+            }
+            for path in &target_sync_result.result.remote_deletes {
+                record_sync_object_result(
+                    diagnostic_operation_id,
+                    &target_digest,
+                    path,
+                    "deleted_remotely",
+                );
+            }
 
             // 3. sink.set_target_phase("commit") — 标记该 target 进入 Commit 阶段。
             if let Some(ref sink) = progress_sink {
@@ -798,12 +1603,18 @@ impl WriterCoreApi {
             }
 
             // 4. Commit（短写锁）— 该 target 的 state/conflicts 成为 live 终态。
+            let commit_phase = SyncDiagnosticPhase::start(
+                diagnostic_operation_id,
+                "commit",
+                Some(target_digest.clone()),
+            );
             let (target_with_conflicts, target_committed_paths) = self.commit_transferred_target(
                 target_index,
                 prepared_failure.is_some(),
                 &staging_runs,
                 &target_sync_result,
             );
+            commit_phase.finish("success");
 
             // Store 协调与索引失效已在 commit_target_after_transfer 内的
             // 同一写锁持有期完成（问题1+2），不再在循环体中单独执行。
@@ -842,6 +1653,102 @@ impl WriterCoreApi {
                 });
             }
 
+            let target_status =
+                crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
+            let mut target_end_fields =
+                sync_diagnostic_fields(diagnostic_operation_id, "complete", Some(&target_digest));
+            target_end_fields.insert(
+                "target_kind".to_string(),
+                serde_json::Value::String(target_kind),
+            );
+            target_end_fields.insert(
+                "target_index".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(
+                    u64::try_from(target_index).unwrap_or(u64::MAX),
+                )),
+            );
+            target_end_fields.insert(
+                "total_targets".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(total_targets)),
+            );
+            target_end_fields.insert(
+                "status_code".to_string(),
+                serde_json::Value::String(target_status),
+            );
+            target_end_fields.insert(
+                "duration_ms".to_string(),
+                serde_json::Value::Number(serde_json::Number::from(
+                    u64::try_from(target_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                )),
+            );
+            if let Some(target_id_digest) = target_id_digest {
+                target_end_fields.insert(
+                    "target_id_digest".to_string(),
+                    serde_json::Value::String(target_id_digest),
+                );
+            }
+            if let Some(remote_revision) = remote_revision {
+                target_end_fields.insert(
+                    "remote_revision".to_string(),
+                    serde_json::Value::String(remote_revision.to_string()),
+                );
+            }
+            if let Some(active_generation) = active_generation.as_deref() {
+                target_end_fields.insert(
+                    "remote_generation_digest".to_string(),
+                    serde_json::Value::String(sync_target_digest(active_generation)),
+                );
+            }
+            let sync_result = &target_with_conflicts.result;
+            let uploaded = sync_result.uploaded_files.len();
+            let downloaded = sync_result.downloaded_files.len();
+            let local_deleted = sync_result.local_deletes.len();
+            let remote_deleted = sync_result.remote_deletes.len();
+            let overwritten = sync_result.overwritten_files.len();
+            let ignored = sync_result.ignored_files.len();
+            let conflicts = sync_result.conflicts.len();
+            for (name, value) in [
+                ("uploaded", uploaded),
+                ("downloaded", downloaded),
+                ("local_deleted", local_deleted),
+                ("remote_deleted", remote_deleted),
+                ("overwritten", overwritten),
+                ("ignored", ignored),
+                ("conflicts", conflicts),
+            ] {
+                target_end_fields.insert(
+                    name.to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        u64::try_from(value).unwrap_or(u64::MAX),
+                    )),
+                );
+            }
+            let decision_summary = if conflicts > 0 {
+                "conflict"
+            } else if downloaded > 0 || remote_deleted > 0 {
+                "remote_change_applied"
+            } else if uploaded > 0 || local_deleted > 0 {
+                "local_change_published"
+            } else if overwritten > 0 {
+                "overwritten"
+            } else if ignored > 0 {
+                "ignored_or_reused"
+            } else {
+                "unchanged"
+            };
+            target_end_fields.insert(
+                "lww_decision".to_string(),
+                serde_json::Value::String(decision_summary.to_string()),
+            );
+            target_end_fields.insert(
+                "state_source".to_string(),
+                serde_json::Value::String("live_after_commit".to_string()),
+            );
+            target_end_fields.insert(
+                "commit_modified_live".to_string(),
+                serde_json::Value::Bool(!target_committed_paths.is_empty()),
+            );
+            record_sync_diagnostic("sync.target.end", "sync.target", target_end_fields);
             all_targets.push(target_with_conflicts);
             all_committed_paths.extend(target_committed_paths);
         }

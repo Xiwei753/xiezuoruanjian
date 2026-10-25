@@ -126,6 +126,10 @@ impl PointerDiagnostics {
         buttons: i32,
         selecting: bool,
     ) {
+        if kind == "move" && !writer_diagnostics::logger::is_detailed_enabled() {
+            self.qml_moves.flush("qml", self.active_sequence);
+            return;
+        }
         let event = match kind {
             "enter" => "editor.pointer.enter",
             "leave" => "editor.pointer.leave",
@@ -200,6 +204,10 @@ impl PointerDiagnostics {
         wheel_angle_x: i32,
         wheel_angle_y: i32,
     ) {
+        if kind == 1 && !writer_diagnostics::logger::is_detailed_enabled() {
+            self.window_moves.flush("window", self.active_sequence);
+            return;
+        }
         if kind == 2 || kind == 5 {
             self.window_moves.flush("window", self.active_sequence);
             self.qml_moves.flush("qml", self.active_sequence);
@@ -310,6 +318,9 @@ impl PointerDiagnostics {
     }
 
     pub(crate) fn record_caret_submitted(&self, frame: SubmittedPointerFrame) {
+        if !writer_diagnostics::logger::is_detailed_enabled() {
+            return;
+        }
         let fields = pointer_frame_fields(frame);
         record_event(
             "editor.pointer.caret_submitted",
@@ -338,13 +349,15 @@ impl PointerDiagnostics {
             return;
         }
 
-        let mut fields = pointer_frame_fields(frame);
-        fields.insert("frame_end_confirmed".to_string(), json!(true));
-        record_event(
-            "editor.pointer.frame_end",
-            Some(frame.submission.pointer_sequence),
-            fields,
-        );
+        if writer_diagnostics::logger::is_detailed_enabled() {
+            let mut fields = pointer_frame_fields(frame);
+            fields.insert("frame_end_confirmed".to_string(), json!(true));
+            record_event(
+                "editor.pointer.frame_end",
+                Some(frame.submission.pointer_sequence),
+                fields,
+            );
+        }
 
         match phase {
             PointerFramePhase::FirstFrame => {
@@ -436,14 +449,16 @@ pub(crate) fn record_event(
     });
 }
 
-/// 连续移动/滚轮轨迹属于高频采样，只在 verbose（Debug）日志中保留。
-/// 单击、双击、按下/释放、帧结束等关键操作仍保持 Info。
+/// 连续移动/滚轮轨迹和帧提交细节只在 verbose（Debug）日志中保留；
+/// 单击、双击、按下/释放等关键操作保持 Info。
 fn pointer_event_level(event: &str) -> writer_diagnostics::DiagnosticLevel {
     match event {
         "editor.pointer.move"
         | "editor.pointer.move_summary"
         | "editor.pointer.window_move"
-        | "editor.pointer.window_wheel" => writer_diagnostics::DiagnosticLevel::Debug,
+        | "editor.pointer.window_wheel"
+        | "editor.pointer.caret_submitted"
+        | "editor.pointer.frame_end" => writer_diagnostics::DiagnosticLevel::Debug,
         _ => writer_diagnostics::DiagnosticLevel::Info,
     }
 }

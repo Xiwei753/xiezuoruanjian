@@ -104,43 +104,39 @@ Item {
                     anchors.margins: Kirigami.Units.smallSpacing
                     spacing: Kirigami.Units.smallSpacing / 2
 
-                    // Clicking the highlighted source jumps the sole editor to
-                    // this exact byte span. No offsets are exposed to the user.
-                    Label {
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: modelData.contextHtml !== undefined
-                              ? modelData.contextHtml
-                              : (root.editorControllerRef
-                                 ? root.editorControllerRef.correctionContextHtml(modelData)
-                                 : String(modelData.original || ""))
-                        textFormat: Text.RichText
-                        wrapMode: Text.Wrap
+                        spacing: Kirigami.Units.smallSpacing / 2
 
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (root.editorControllerRef)
-                                    root.editorControllerRef.jumpToCorrection(modelData)
+                        // Clicking only the source word jumps to and selects
+                        // the exact reported range in the editor.
+                        Label {
+                            id: correctionOriginal
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            text: String(modelData.original || "")
+                            wrapMode: Text.Wrap
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (root.editorControllerRef)
+                                        root.editorControllerRef.jumpToCorrection(modelData)
+                                }
                             }
                         }
-                    }
 
-                    Label {
-                        Layout.fillWidth: true
-                        text: qsTr("建议：%1").arg(String(modelData.replacement || ""))
-                        wrapMode: Text.Wrap
-                    }
+                        Label {
+                            text: "→"
+                        }
 
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.editorControllerRef
-                              ? root.editorControllerRef.correctionReason(modelData) : ""
-                        wrapMode: Text.Wrap
-                        maximumLineCount: 2
-                        elide: Text.ElideRight
-                        font.pixelSize: Kirigami.Units.gridUnit * 0.75
-                        color: Kirigami.Theme.disabledTextColor
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            text: String(modelData.replacement || "")
+                            wrapMode: Text.Wrap
+                        }
                     }
 
                     RowLayout {

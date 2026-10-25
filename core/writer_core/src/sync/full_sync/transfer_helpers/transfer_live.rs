@@ -16,6 +16,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
     catalog_snapshot: &mut crate::sync::types::RemoteTargetCatalogSnapshot,
     plan: &FullSyncPlan,
     cancellation_token: Option<&SyncCancellationToken>,
+    diagnostic_operation_id: Option<&str>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
@@ -123,13 +124,21 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 sync_root,
                                 preferred_device_id,
                             )?;
-                        let outcome = crate::sync::lww::merge_remote_into_local_snapshot(
-                            sync_root,
-                            provider,
-                            &source_prefix,
-                            planned.target.scope,
-                            &mut merge_state,
-                        )?;
+                        let write_location = if planned.staging_root.is_some() {
+                            "staging"
+                        } else {
+                            "live"
+                        };
+                        let outcome =
+                            crate::sync::lww::merge_remote_into_local_snapshot_with_diagnostics(
+                                sync_root,
+                                provider,
+                                &source_prefix,
+                                planned.target.scope,
+                                &mut merge_state,
+                                diagnostic_operation_id,
+                                write_location,
+                            )?;
                         // 落盘 staging state（含稳定 device_id + merge 结果），
                         // 供 Commit 阶段 merge_sync_state_three_way 三方合并读取。
                         // 修复前不落盘 → staging state.local.json 不存在 →

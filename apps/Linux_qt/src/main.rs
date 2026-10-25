@@ -108,6 +108,7 @@
 use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
 use qmetaobject::prelude::*;
 use qmetaobject::QString;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -236,6 +237,7 @@ static QML_LAST_LOAD_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
 // unsafe impl Send/Sync。main 最早期 `begin_startup_diagnostics()` 后立刻 set，
 // 之后所有 mark（包括 Qt message handler）都通过 helper 访问。
 static STARTUP_DIAG: OnceLock<writer_platform_linux::StartupDiagnostics> = OnceLock::new();
+static APP_LIFECYCLE_MARKER: OnceLock<PathBuf> = OnceLock::new();
 
 /// 记录一个启动阶段到启动诊断日志。若全局句柄尚未设置（极早期或未初始化），静默跳过。
 fn startup_mark(stage: &str, message: &str) {
@@ -246,8 +248,87 @@ fn startup_mark(stage: &str, message: &str) {
 
 /// 标记进程退出码。
 fn startup_mark_exit(code: i32) {
+    finish_app_lifecycle(code);
     if let Some(d) = STARTUP_DIAG.get() {
         d.mark_exit(code);
+    }
+}
+
+/// 为每个进程保留独立的运行标记，既能识别上次未完成的运行，也不把并行运行
+/// 的另一个窗口误判成异常退出。
+fn begin_app_lifecycle(log_dir: &std::path::Path, session_id: &str) {
+    let mut previous_run_unclean = false;
+    if std::fs::create_dir_all(log_dir).is_ok() {
+        if let Ok(entries) = std::fs::read_dir(log_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let Some(pid) = name
+                    .strip_prefix("app-running-")
+                    .and_then(|name| name.strip_suffix(".marker"))
+                    .and_then(|pid| pid.parse::<u32>().ok())
+                else {
+                    continue;
+                };
+                if !PathBuf::from(format!("/proc/{pid}")).exists() {
+                    previous_run_unclean = true;
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+    }
+
+    let marker = log_dir.join(format!("app-running-{}.marker", std::process::id()));
+    let _ = APP_LIFECYCLE_MARKER.set(marker.clone());
+    let _ = std::fs::write(&marker, session_id.as_bytes());
+
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(
+        "previous_run_unclean".to_string(),
+        serde_json::Value::Bool(previous_run_unclean),
+    );
+    fields.insert(
+        "pid".to_string(),
+        serde_json::Value::Number(serde_json::Number::from(std::process::id())),
+    );
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Info,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: "app.lifecycle.start".to_string(),
+        target: "app.lifecycle".to_string(),
+        message: None,
+        fields,
+    });
+}
+
+/// 记录正常退出并等待前序生命周期事件落盘。已知的非零退出也会清理运行标记；
+/// 它由启动诊断记录具体退出码，不能算作“未记录退出”。
+fn finish_app_lifecycle(code: i32) {
+    if code == 0 {
+        writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            sequence: 0,
+            session_id: String::new(),
+            level: writer_diagnostics::DiagnosticLevel::Info,
+            origin: writer_diagnostics::DiagnosticOrigin::App,
+            event: "app.lifecycle.exit".to_string(),
+            target: "app.lifecycle".to_string(),
+            message: None,
+            fields: std::collections::BTreeMap::from([(
+                "outcome".to_string(),
+                serde_json::Value::String("normal".to_string()),
+            )]),
+        });
+    }
+    if writer_diagnostics::flush() {
+        if let Some(marker) = APP_LIFECYCLE_MARKER.get() {
+            let _ = std::fs::remove_file(marker);
+        }
     }
 }
 
@@ -576,12 +657,13 @@ fn main() {
     writer_platform_linux::init_diagnostics(
         &platform_init,
         diagnostics::effective_build_key().to_string(),
-        session_id,
+        session_id.clone(),
         // alpha 阶段默认开启；后续由 SettingsBackend.load_local_settings 调用
         // writer_diagnostics::set_config 覆盖为用户设置值。
         true,
         true,
     );
+    begin_app_lifecycle(&platform_init.log_dir, &session_id);
     startup_mark("shared_diagnostics_ready", "writer_diagnostics initialized");
 
     debug_log_static("app", "app_startup", "Sujian application starting...");

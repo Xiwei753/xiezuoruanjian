@@ -572,10 +572,6 @@ QtObject {
             }
             suggestions.sort(function(a, b) { return a.startByte - b.startByte; });
             annotateCorrectionPositions(currentText, suggestions);
-            for (var contextIndex = 0; contextIndex < suggestions.length; contextIndex += 1) {
-                suggestions[contextIndex].contextHtml =
-                        correctionContextHtmlForText(currentText, suggestions[contextIndex]);
-            }
             updateCorrectionSuggestions(suggestions);
             syncCorrectionTracking(currentText, textRevision);
             if (isPending) {
@@ -613,42 +609,6 @@ QtObject {
                 && chapterId === correctionTrackedChapterId)) return false;
         var currentText = getEditorPlainText();
         return currentText.slice(suggestion.startUtf16, suggestion.endUtf16) === suggestion.original;
-    }
-
-    function escapeCorrectionHtml(value) {
-        return String(value)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;");
-    }
-
-    // A short clickable context snippet with the reported range highlighted.
-    // The snapshot response precomputes this once per suggestion so delegates
-    // never read the full chapter text during list layout.
-    function correctionContextHtmlForText(text, suggestion) {
-        if (!suggestion) return "";
-        var highlighted = escapeCorrectionHtml(suggestion.original || "");
-        var start = Number(suggestion.startUtf16);
-        var end = Number(suggestion.endUtf16);
-        if (!isFinite(start) || !isFinite(end) || start < 0 || end < start || end > text.length) {
-            return "<b>" + highlighted + "</b>";
-        }
-        var radius = 12;
-        var beforeStart = Math.max(0, start - radius);
-        var afterEnd = Math.min(text.length, end + radius);
-        var before = escapeCorrectionHtml(text.slice(beforeStart, start).replace(/[\r\n\u2028\u2029]/g, " "));
-        var after = escapeCorrectionHtml(text.slice(end, afterEnd).replace(/[\r\n\u2028\u2029]/g, " "));
-        var color = correctionSeverityColor(suggestion);
-        return (beforeStart > 0 ? "…" : "")
-                + before
-                + "<font color=\"" + color + "\"><b>" + highlighted + "</b></font>"
-                + after
-                + (afterEnd < text.length ? "…" : "");
-    }
-
-    function correctionContextHtml(suggestion) {
-        if (!suggestion) return "";
-        return correctionContextHtmlForText(getEditorPlainText(), suggestion);
     }
 
     // The dictionary stores complete, author-confirmed words, never the
@@ -714,43 +674,6 @@ QtObject {
             editorViewportRef.revealCurrentCaret();
         }
         return true;
-    }
-
-    function correctionReason(suggestion) {
-        var reasons = {
-            "confusion.custom": qsTr("命中作品中的自定义易混词替换。"),
-            "proper.confirmed_misspelling": qsTr("这是你为该专名登记的错误写法，建议改为完整原名。"),
-            "proper.entity_check": qsTr("与作品词典中的专名相近，请核对。"),
-            "proper.person_check": qsTr("与作品词典中的人名相近，请核对。"),
-            "proper.place_check": qsTr("与作品词典中的地名相近，请核对。"),
-            "neural.macbert4csc": qsTr("离线神经网络模型根据上下文给出了等长替换建议，请结合语境核对。"),
-            "punctuation.repeated": qsTr("发现连续重复标点；这也可能是有意的表达。"),
-            "character.repeated": qsTr("发现连续重复汉字；请结合语境确认。")
-        };
-        var sourceNames = {
-            "confusion_word": qsTr("易混词"),
-            "proper_name": qsTr("作品专名核对"),
-            "neural_csc": qsTr("离线神经网络模型"),
-            "rule": qsTr("文本规则")
-        };
-        var reason = reasons[suggestion.ruleId]
-                || qsTr("命中规则 %1。需结合上下文判断。 ").arg(suggestion.ruleId);
-        var sourceName = sourceNames[suggestion.source] || suggestion.source;
-        return qsTr("%1（来源：%2）").arg(reason).arg(sourceName);
-    }
-
-    function correctionSeverityLabel(suggestion) {
-        var severity = String(suggestion && suggestion.severity || "").toLowerCase();
-        if (severity === "error") return qsTr("错误");
-        if (severity === "warning") return qsTr("警告");
-        return qsTr("提示");
-    }
-
-    function correctionSeverityColor(suggestion) {
-        var severity = String(suggestion && suggestion.severity || "").toLowerCase();
-        if (severity === "error") return "#C52222";
-        if (severity === "warning") return "#A65D00";
-        return "#777777";
     }
 
     function acceptCorrection(suggestion) {

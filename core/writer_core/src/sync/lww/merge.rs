@@ -50,6 +50,79 @@ use super::transfer::{
     move_to_trash, save_conflict_copy,
 };
 
+fn record_sync_object_event(
+    event: &str,
+    remote_prefix: &str,
+    path: &str,
+    action: &str,
+    outcome: &str,
+    operation_id: Option<&str>,
+    reason: Option<&str>,
+    remote_blob_verified: Option<bool>,
+    write_location: Option<&str>,
+    write_performed: Option<bool>,
+) {
+    use sha2::{Digest, Sha256};
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(
+        "target_digest".to_string(),
+        serde_json::Value::String(format!("{:x}", Sha256::digest(remote_prefix.as_bytes()))),
+    );
+    fields.insert(
+        "object_path_digest".to_string(),
+        serde_json::Value::String(format!("{:x}", Sha256::digest(path.as_bytes()))),
+    );
+    fields.insert(
+        "action".to_string(),
+        serde_json::Value::String(action.to_string()),
+    );
+    fields.insert(
+        "outcome".to_string(),
+        serde_json::Value::String(outcome.to_string()),
+    );
+    if let Some(operation_id) = operation_id {
+        fields.insert(
+            "operation_id".to_string(),
+            serde_json::Value::String(operation_id.to_string()),
+        );
+    }
+    if let Some(reason) = reason {
+        fields.insert(
+            "reason".to_string(),
+            serde_json::Value::String(reason.to_string()),
+        );
+    }
+    if let Some(remote_blob_verified) = remote_blob_verified {
+        fields.insert(
+            "remote_blob_verified".to_string(),
+            serde_json::Value::Bool(remote_blob_verified),
+        );
+    }
+    if let Some(write_location) = write_location {
+        fields.insert(
+            "target_location".to_string(),
+            serde_json::Value::String(write_location.to_string()),
+        );
+    }
+    if let Some(write_performed) = write_performed {
+        fields.insert(
+            "write_performed".to_string(),
+            serde_json::Value::Bool(write_performed),
+        );
+    }
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Debug,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: event.to_string(),
+        target: "sync.object".to_string(),
+        message: None,
+        fields,
+    });
+}
+
 /// LWW merge 核心产出。
 ///
 /// [`merge_remote_into_local_snapshot`] 返回此结构，调用方根据字段做远端写。
@@ -121,13 +194,36 @@ pub(crate) fn merge_remote_into_local_snapshot(
     scope: SyncScope,
     state: &mut SyncState,
 ) -> crate::error::Result<LwwMergeOutcome> {
-    merge_remote_into_local_snapshot_with_group(
+    merge_remote_into_local_snapshot_with_diagnostics(
+        sync_root,
+        provider,
+        source_remote_prefix,
+        scope,
+        state,
+        None,
+        "unknown",
+    )
+}
+
+/// Project merge entry point carrying privacy-safe task correlation and staging location.
+pub(crate) fn merge_remote_into_local_snapshot_with_diagnostics(
+    sync_root: &Path,
+    provider: &dyn SyncProvider,
+    source_remote_prefix: &str,
+    scope: SyncScope,
+    state: &mut SyncState,
+    operation_id: Option<&str>,
+    write_location: &str,
+) -> crate::error::Result<LwwMergeOutcome> {
+    merge_remote_into_local_snapshot_with_group_and_diagnostics(
         sync_root,
         provider,
         source_remote_prefix,
         scope,
         None,
         state,
+        operation_id,
+        write_location,
     )
 }
 
@@ -139,13 +235,15 @@ pub(crate) fn merge_remote_into_local_app_group(
     group: &crate::sync::types::AppDataGroup,
     state: &mut SyncState,
 ) -> crate::error::Result<LwwMergeOutcome> {
-    merge_remote_into_local_snapshot_with_group(
+    merge_remote_into_local_snapshot_with_group_and_diagnostics(
         sync_root,
         provider,
         source_remote_prefix,
         SyncScope::App,
         Some(group),
         state,
+        None,
+        "unknown",
     )
 }
 
@@ -157,13 +255,15 @@ pub(crate) fn merge_remote_into_local_app_group(
     clippy::too_many_arguments,
     clippy::type_complexity
 )]
-fn merge_remote_into_local_snapshot_with_group(
+fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     sync_root: &Path,
     provider: &dyn SyncProvider,
     source_remote_prefix: &str,
     scope: SyncScope,
     app_group: Option<&crate::sync::types::AppDataGroup>,
     state: &mut SyncState,
+    operation_id: Option<&str>,
+    write_location: &str,
 ) -> crate::error::Result<LwwMergeOutcome> {
     log::debug!(
         "[sync] merge_remote_into_local_snapshot: source_remote_prefix={}",
@@ -198,10 +298,29 @@ fn merge_remote_into_local_snapshot_with_group(
     //   也不允许发布引用缺失 blob 的新 generation；其余路径正常合并。
     let mut recovered_missing_files: Vec<String> = Vec::new();
     let mut unresolved_missing_paths: Vec<String> = Vec::new();
+    let missing_reason = if write_location == "staging" {
+        "staging_missing"
+    } else if write_location == "live" {
+        "live_missing_without_delete_fact"
+    } else {
+        "missing_without_delete_fact"
+    };
     for missing in &local_snapshot.missing_without_delete_fact {
         // 之前轮次可能已恢复 → 磁盘存在即视为已恢复。
         if sync_root.join(&missing.path).exists() {
             recovered_missing_files.push(missing.path.clone());
+            record_sync_object_event(
+                "sync.object.recovered",
+                source_remote_prefix,
+                &missing.path,
+                "remote_blob",
+                "already_present",
+                operation_id,
+                Some(missing_reason),
+                None,
+                Some(write_location),
+                Some(false),
+            );
             continue;
         }
         match remote_records.get(&missing.path) {
@@ -222,8 +341,7 @@ fn merge_remote_into_local_snapshot_with_group(
                             )
                             .map_err(|e| {
                                 crate::Error::Io(std::io::Error::other(format!(
-                                    "recover missing file {}: {}",
-                                    missing.path, e
+                                    "recover missing sync object: {e}"
                                 )))
                             })?;
                             true
@@ -235,23 +353,55 @@ fn merge_remote_into_local_snapshot_with_group(
                 };
                 if recoverable {
                     recovered_missing_files.push(missing.path.clone());
-                    log::info!(
-                        "[sync] recovered missing local file from remote blob: path={}",
-                        missing.path
+                    record_sync_object_event(
+                        "sync.object.recovered",
+                        source_remote_prefix,
+                        &missing.path,
+                        "remote_blob",
+                        "verified_and_written",
+                        operation_id,
+                        Some(missing_reason),
+                        Some(true),
+                        Some(write_location),
+                        Some(true),
                     );
                 } else {
                     unresolved_missing_paths.push(missing.path.clone());
+                    record_sync_object_event(
+                        "sync.object.recovery_failed",
+                        source_remote_prefix,
+                        &missing.path,
+                        "remote_blob",
+                        "missing_or_hash_mismatch",
+                        operation_id,
+                        Some(missing_reason),
+                        Some(false),
+                        Some(write_location),
+                        Some(false),
+                    );
                 }
             }
-            None => unresolved_missing_paths.push(missing.path.clone()),
+            None => {
+                unresolved_missing_paths.push(missing.path.clone());
+                record_sync_object_event(
+                    "sync.object.recovery_failed",
+                    source_remote_prefix,
+                    &missing.path,
+                    "remote_blob",
+                    "remote_object_missing",
+                    operation_id,
+                    Some(missing_reason),
+                    Some(false),
+                    Some(write_location),
+                    Some(false),
+                );
+            }
         }
     }
     if !unresolved_missing_paths.is_empty() {
         log::warn!(
-            "[sync] local_missing_without_tombstone: {} path(s) missing without delete fact and no \
-             verifiable remote blob: {:?}",
-            unresolved_missing_paths.len(),
-            unresolved_missing_paths
+            "[sync] local_missing_without_tombstone: {} object(s) missing without delete fact and no verifiable remote blob",
+            unresolved_missing_paths.len()
         );
     }
 
@@ -845,6 +995,63 @@ fn merge_remote_into_local_snapshot_with_group(
             state,
             &conflicts_json,
         )?;
+    }
+
+    for path in &to_download {
+        record_sync_object_event(
+            "sync.object.plan",
+            source_remote_prefix,
+            path,
+            "download_remote",
+            "remote_wins",
+            operation_id,
+            None,
+            None,
+            Some(write_location),
+            None,
+        );
+    }
+    for path in &to_delete_local {
+        record_sync_object_event(
+            "sync.object.plan",
+            source_remote_prefix,
+            path,
+            "delete_local",
+            "remote_delete_applied",
+            operation_id,
+            None,
+            None,
+            Some(write_location),
+            None,
+        );
+    }
+    for path in &to_upload {
+        record_sync_object_event(
+            "sync.object.plan",
+            source_remote_prefix,
+            path,
+            "upload_remote",
+            "local_wins",
+            operation_id,
+            None,
+            None,
+            Some(write_location),
+            None,
+        );
+    }
+    for path in &local_deletes_count {
+        record_sync_object_event(
+            "sync.object.plan",
+            source_remote_prefix,
+            path,
+            "delete_remote",
+            "local_delete_wins",
+            operation_id,
+            None,
+            None,
+            Some(write_location),
+            None,
+        );
     }
 
     let mut all_downloaded = pending_take_remote_downloaded;

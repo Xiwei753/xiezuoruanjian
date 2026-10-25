@@ -93,11 +93,28 @@ pub struct SyncTargetProgressDto {
 #[derive(Debug, Clone)]
 pub struct SyncProgressSink {
     inner: Arc<std::sync::Mutex<SyncTargetProgressDto>>,
+    operation_id: String,
+    trigger: String,
 }
 
 impl SyncProgressSink {
     /// 创建一个进度 sink，初始 `finished_targets = 0`、`total_targets` 为传入值。
     pub fn new(total_targets: u32) -> Self {
+        Self::new_for_operation(total_targets, String::new())
+    }
+
+    /// Create a progress sink associated with the platform operation that owns it.
+    /// The id is copied into structured Core sync diagnostics for cross-log joins.
+    pub fn new_for_operation(total_targets: u32, operation_id: impl Into<String>) -> Self {
+        Self::new_for_operation_with_trigger(total_targets, operation_id, "")
+    }
+
+    /// Create a progress sink with its owning operation id and trigger source.
+    pub fn new_for_operation_with_trigger(
+        total_targets: u32,
+        operation_id: impl Into<String>,
+        trigger: impl Into<String>,
+    ) -> Self {
         Self {
             inner: Arc::new(std::sync::Mutex::new(SyncTargetProgressDto {
                 current_target_remote_prefix: None,
@@ -106,7 +123,19 @@ impl SyncProgressSink {
                 finished_targets: 0,
                 total_targets,
             })),
+            operation_id: operation_id.into(),
+            trigger: trigger.into(),
         }
+    }
+
+    /// Stable identifier of the owning platform operation, if one was supplied.
+    pub fn operation_id(&self) -> Option<&str> {
+        (!self.operation_id.is_empty()).then_some(self.operation_id.as_str())
+    }
+
+    /// Trigger source of the owning operation, when supplied by the platform.
+    pub fn trigger(&self) -> Option<&str> {
+        (!self.trigger.is_empty()).then_some(self.trigger.as_str())
     }
 
     /// 读当前进度快照（clone 一份）。

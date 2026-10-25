@@ -14,6 +14,8 @@ mod repository;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use git2::Direction;
+
 use crate::sync::provider::capabilities::SyncCapabilities;
 use crate::sync::provider::error::ProviderError;
 use crate::sync::provider::model::{
@@ -137,6 +139,30 @@ impl GitHttpsProvider {
 impl SyncProvider for GitHttpsProvider {
     fn capabilities(&self) -> SyncCapabilities {
         SyncCapabilities::git_https()
+    }
+
+    fn remote_revision(&self) -> Result<Option<String>, ProviderError> {
+        let repo = repository::open_or_init(&self.cache_dir)?;
+        let mut remote = repo
+            .remote_anonymous(&self.config.remote_url)
+            .map_err(|error| repository::map_git_error(error, "open git remote"))?;
+        let callbacks =
+            credentials::callbacks(&self.config.username, self.config.secret.as_deref());
+        let connection = remote
+            .connect_auth(
+                Direction::Fetch,
+                Some(callbacks),
+                Some(credentials::proxy_options()),
+            )
+            .map_err(|error| repository::map_git_error(error, "connect to git remote"))?;
+        let heads = connection
+            .list()
+            .map_err(|error| repository::map_git_error(error, "list remote refs"))?;
+        let branch_ref = format!("refs/heads/{}", self.config.branch);
+        Ok(heads
+            .iter()
+            .find(|head| head.name() == branch_ref)
+            .map(|head| head.oid().to_string()))
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {

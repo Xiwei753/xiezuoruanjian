@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Instant;
 
 use super::*;
 use writer_core::api::types::{
@@ -60,10 +61,13 @@ pub(crate) type CorrectionQueryCallback =
 struct CorrectionJob {
     project_id: String,
     chapter_id: String,
+    request_id: u32,
     session_id: u64,
     text_revision: u64,
+    kind: &'static str,
+    queued_at: Instant,
     coalescable: bool,
-    run: Box<dyn FnOnce() + Send>,
+    run: Box<dyn FnOnce() -> bool + Send>,
 }
 
 struct CorrectionQueue {
@@ -84,14 +88,60 @@ fn correction_queue() -> &'static Arc<CorrectionQueue> {
             latest: Mutex::new(HashMap::new()),
         });
         let worker = Arc::clone(&queue);
-        if let Err(error) = std::thread::Builder::new()
+        if std::thread::Builder::new()
             .name("correction-executor".to_string())
             .spawn(move || correction_executor(worker))
+            .is_err()
         {
-            log::error!("failed to start correction executor: {error}");
+            log::error!(target: "correction.job", "correction.job.worker_start_failed");
         }
         queue
     })
+}
+
+fn record_correction_job_event(
+    event: &str,
+    request_id: u32,
+    session_id: u64,
+    text_revision: u64,
+    kind: &'static str,
+    result: Option<&str>,
+    reason: Option<&str>,
+    queue_wait_ms: Option<u128>,
+    execution_ms: Option<u128>,
+    queue_depth: Option<usize>,
+) {
+    let mut fields = vec![
+        ("request_id", request_id.to_string()),
+        ("session_id", session_id.to_string()),
+        ("text_revision", text_revision.to_string()),
+        ("job_kind", kind.to_string()),
+    ];
+    if let Some(result) = result {
+        fields.push(("result", result.to_string()));
+    }
+    if let Some(reason) = reason {
+        fields.push(("reason", reason.to_string()));
+    }
+    if let Some(queue_wait_ms) = queue_wait_ms {
+        fields.push(("queue_wait_ms", queue_wait_ms.to_string()));
+    }
+    if let Some(execution_ms) = execution_ms {
+        fields.push(("execution_ms", execution_ms.to_string()));
+    }
+    if let Some(queue_depth) = queue_depth {
+        fields.push(("queue_depth", queue_depth.to_string()));
+    }
+    let field_refs = fields
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect::<Vec<_>>();
+    super::record_struct_event(
+        writer_diagnostics::DiagnosticOrigin::App,
+        event,
+        "correction.job",
+        &field_refs,
+    );
 }
 
 fn correction_executor(queue: Arc<CorrectionQueue>) {
@@ -110,6 +160,7 @@ fn correction_executor(queue: Arc<CorrectionQueue>) {
             Some(job) => job,
             None => continue,
         };
+        let queue_depth = jobs.len();
         drop(jobs);
 
         if job.coalescable {
@@ -126,10 +177,48 @@ fn correction_executor(queue: Arc<CorrectionQueue>) {
                 job.session_id < session_id
                     || (job.session_id == session_id && job.text_revision < text_revision)
             }) {
+                record_correction_job_event(
+                    "correction.job.skipped",
+                    job.request_id,
+                    job.session_id,
+                    job.text_revision,
+                    job.kind,
+                    Some("skipped"),
+                    Some("superseded_revision"),
+                    Some(job.queued_at.elapsed().as_millis()),
+                    None,
+                    Some(queue_depth),
+                );
                 continue;
             }
         }
-        (job.run)();
+        let queue_wait_ms = job.queued_at.elapsed().as_millis();
+        record_correction_job_event(
+            "correction.job.start",
+            job.request_id,
+            job.session_id,
+            job.text_revision,
+            job.kind,
+            None,
+            None,
+            Some(queue_wait_ms),
+            None,
+            Some(queue_depth),
+        );
+        let execution_started_at = Instant::now();
+        let succeeded = (job.run)();
+        record_correction_job_event(
+            "correction.job.end",
+            job.request_id,
+            job.session_id,
+            job.text_revision,
+            job.kind,
+            Some(if succeeded { "success" } else { "error" }),
+            (!succeeded).then_some("core_or_encoding_error"),
+            Some(queue_wait_ms),
+            Some(execution_started_at.elapsed().as_millis()),
+            Some(queue_depth),
+        );
     }
 }
 
@@ -156,25 +245,58 @@ fn record_correction_latest(
 fn submit_correction_job(
     project_id: String,
     chapter_id: String,
+    request_id: u32,
     session_id: u64,
     text_revision: u64,
+    kind: &'static str,
     coalescable: bool,
-    run: impl FnOnce() + Send + 'static,
+    run: impl FnOnce() -> bool + Send + 'static,
 ) -> Result<(), String> {
     record_correction_latest(&project_id, &chapter_id, session_id, text_revision);
     let queue = correction_queue();
-    let mut jobs = queue
-        .jobs
-        .lock()
-        .map_err(|_| "校对任务队列锁已损坏".to_string())?;
+    let mut jobs = match queue.jobs.lock() {
+        Ok(jobs) => jobs,
+        Err(_) => {
+            record_correction_job_event(
+                "correction.job.skipped",
+                request_id,
+                session_id,
+                text_revision,
+                kind,
+                Some("error"),
+                Some("queue_lock_poisoned"),
+                None,
+                None,
+                None,
+            );
+            return Err("校对任务队列锁已损坏".to_string());
+        }
+    };
     jobs.push_back(CorrectionJob {
         project_id,
         chapter_id,
+        request_id,
         session_id,
         text_revision,
+        kind,
+        queued_at: Instant::now(),
         coalescable,
         run: Box::new(run),
     });
+    let queue_depth = jobs.len();
+    drop(jobs);
+    record_correction_job_event(
+        "correction.job.queued",
+        request_id,
+        session_id,
+        text_revision,
+        kind,
+        Some("queued"),
+        None,
+        None,
+        None,
+        Some(queue_depth),
+    );
     queue.wake.notify_one();
     Ok(())
 }
@@ -193,7 +315,27 @@ pub(crate) fn release_correction_queue(project_id: &str, chapter_id: &str) {
         Ok(jobs) => jobs,
         Err(poisoned) => poisoned.into_inner(),
     };
-    jobs.retain(|job| job.project_id != project_id || job.chapter_id != chapter_id);
+    let queue_depth = jobs.len();
+    let mut retained = VecDeque::with_capacity(jobs.len());
+    while let Some(job) = jobs.pop_front() {
+        if job.project_id == project_id && job.chapter_id == chapter_id {
+            record_correction_job_event(
+                "correction.job.skipped",
+                job.request_id,
+                job.session_id,
+                job.text_revision,
+                job.kind,
+                Some("skipped"),
+                Some("chapter_closed"),
+                Some(job.queued_at.elapsed().as_millis()),
+                None,
+                Some(queue_depth),
+            );
+        } else {
+            retained.push_back(job);
+        }
+    }
+    *jobs = retained;
 }
 
 fn parse_correction_edits_json(edits_json: &str) -> Result<Vec<CorrectionEditRangeDto>, String> {
@@ -455,8 +597,10 @@ impl AppBackend {
         submit_correction_job(
             project_id.clone(),
             chapter_id.clone(),
+            request_id,
             session_id,
             text_revision,
+            "chapter_all",
             false,
             move || {
                 let api = with_layout_core_api(&data_root, &projects_root, &layout);
@@ -475,7 +619,9 @@ impl AppBackend {
                         serde_json::to_string(&suggestions)
                             .map_err(|error| format!("无法编码校对结果: {error}"))
                     });
+                let succeeded = result.is_ok();
                 completion(request_id, text_revision, result);
+                succeeded
             },
         )
     }
@@ -515,8 +661,10 @@ impl AppBackend {
         submit_correction_job(
             project_id.clone(),
             chapter_id.clone(),
+            request_id,
             session_id,
             text_revision,
+            "snapshot",
             true,
             move || {
                 let api = with_layout_core_api(&data_root, &projects_root, &layout);
@@ -533,7 +681,9 @@ impl AppBackend {
                         serde_json::to_string(&snapshot)
                             .map_err(|error| format!("无法编码校对结果: {error}"))
                     });
+                let succeeded = result.is_ok();
                 completion(request_id, text_revision, result);
+                succeeded
             },
         )
     }
@@ -575,8 +725,10 @@ impl AppBackend {
         submit_correction_job(
             project_id.clone(),
             chapter_id.clone(),
+            request_id,
             session_id,
             text_revision,
+            "segment",
             true,
             move || {
                 let api = with_layout_core_api(&data_root, &projects_root, &layout);
@@ -595,7 +747,9 @@ impl AppBackend {
                         serde_json::to_string(&suggestions)
                             .map_err(|error| format!("无法编码校对结果: {error}"))
                     });
+                let succeeded = result.is_ok();
                 completion(request_id, text_revision, result);
+                succeeded
             },
         )
     }
@@ -669,8 +823,10 @@ impl AppBackend {
         submit_correction_job(
             project_id.clone(),
             chapter_id.clone(),
+            request_id,
             session_id,
             text_revision,
+            "pending",
             true,
             move || {
                 let api = with_layout_core_api(&data_root, &projects_root, &layout);
@@ -687,7 +843,9 @@ impl AppBackend {
                         serde_json::to_string(&snapshot)
                             .map_err(|error| format!("无法编码校对结果: {error}"))
                     });
+                let succeeded = result.is_ok();
                 completion(request_id, text_revision, result);
+                succeeded
             },
         )
     }
@@ -728,8 +886,10 @@ impl AppBackend {
         submit_correction_job(
             project_id.clone(),
             chapter_id.clone(),
+            request_id,
             session_id,
             text_revision,
+            "edits",
             false,
             move || {
                 let api = with_layout_core_api(&data_root, &projects_root, &layout);
@@ -762,7 +922,9 @@ impl AppBackend {
                         serde_json::to_string(&snapshot)
                             .map_err(|error| format!("无法编码校对结果: {error}"))
                     });
+                let succeeded = result.is_ok();
                 completion(request_id, text_revision, result);
+                succeeded
             },
         )
     }

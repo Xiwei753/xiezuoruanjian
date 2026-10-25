@@ -91,6 +91,7 @@ pub fn run_transfer(
             &mut catalog_snapshot,
             cancellation_token,
             &targets,
+            progress_sink.and_then(SyncProgressSink::operation_id),
         ) else {
             // 取消（或索引越界）→ 停止本轮，已完成的 targets 保留。
             break;
@@ -247,6 +248,7 @@ pub fn run_single_target_transfer(
     catalog_snapshot: &mut crate::sync::types::RemoteTargetCatalogSnapshot,
     cancellation_token: Option<&SyncCancellationToken>,
     completed_targets: &[TargetSyncResult],
+    diagnostic_operation_id: Option<&str>,
 ) -> Option<(
     TargetSyncResult,
     Option<DeletedTargetResolution>,
@@ -327,6 +329,7 @@ pub fn run_single_target_transfer(
             catalog_snapshot,
             plan,
             cancellation_token,
+            diagnostic_operation_id,
         ),
         PlannedTargetKind::DeleteLocalProject => {
             transfer_delete_local_project(provider, planned, plan, cancellation_token)

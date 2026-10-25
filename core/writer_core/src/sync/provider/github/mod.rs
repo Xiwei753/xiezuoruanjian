@@ -62,6 +62,15 @@ impl SyncProvider for GitHubProvider {
         SyncCapabilities::github()
     }
 
+    fn remote_revision(&self) -> Result<Option<String>, ProviderError> {
+        client::get_ref_revision(
+            self.transport(),
+            &self.config.api_base_url,
+            &self.config.token,
+            &self.config.branch,
+        )
+    }
+
     fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
         let transport = self.transport();
         let api_base = &self.config.api_base_url;

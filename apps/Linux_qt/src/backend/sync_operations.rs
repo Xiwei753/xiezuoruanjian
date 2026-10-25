@@ -168,24 +168,26 @@ impl AppBackend {
         // Issue #754 评论 5814866116 改动2: handle_sync_outcome 返回 SyncOutcomeEffect，
         // 由 SyncBackend::handle_outcome 据此决定是否发 sync_content_applied。
         // 改动3: github init 旧路径已删除，不再有 pending_github_init_path 特判。
-        // Issue #983 复核：latest_wins_applied 也是成功类终态，可能已经下载并应用远端
-        // 较新内容（remote upsert winner + downloaded_files），必须和 success 一样
-        // 刷新正文/作品树；no_changes 不在此列。
-        let sync_success = matches!(
-            status_str,
-            "success" | "latest_wins_applied" | "branch_missing_recovered"
-        );
-        // Issue #754 评论 5816573119: 所有"内容已变化"的同步结果统一走同一个刷新入口，
-        // 确保 reload_tree + reconcile_selection_after_tree_reload 成对执行。
-        // conflict/partial_conflict/unrelated_histories 也会真实修改本地工作区内容
-        // （Core issue_644: PartialConflict 时安全完成的非冲突文件继续提交到 live），
-        // 若包含远端删除/结构变化，selection 必须同步 reconcile，否则
-        // selected_project_id/selected_volume_id/selected_chapter_id 可能指向已删除对象。
-        let content_changed = self.has_workspace()
-            && (sync_success
-                || status_str == "conflict"
-                || status_str == "partial_conflict"
-                || status_str == "unrelated_histories");
+        // Refresh only when Core reports an actual remote change applied locally.
+        // `downloaded` and `remoteDeleted` are the counts for remote upserts and
+        // remote deletions that changed the local workspace; uploads alone do not.
+        let content_changed = serde_json::from_str::<serde_json::Value>(&outcome.action_result)
+            .ok()
+            .and_then(|state| state.get("counts").cloned())
+            .map(|counts| {
+                counts
+                    .get("downloaded")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+                    > 0
+                    || counts
+                        .get("remoteDeleted")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0)
+                        > 0
+            })
+            .unwrap_or(false)
+            && self.has_workspace();
 
         let effect = if content_changed {
             self.handle_sync_content_refresh();
@@ -204,7 +206,16 @@ impl AppBackend {
             status_str,
             "success" | "no_changes" | "latest_wins_applied" | "branch_missing_recovered"
         );
-        if gc_success && !self.manual_sync_pending {
+        let checkpoint_noop = status_str == "no_changes"
+            && serde_json::from_str::<serde_json::Value>(&outcome.action_result)
+                .ok()
+                .and_then(|state| {
+                    state
+                        .get("totalTargets")
+                        .and_then(serde_json::Value::as_u64)
+                })
+                == Some(0);
+        if gc_success && !checkpoint_noop && !self.manual_sync_pending {
             if self.current_gc_maintenance_cancel_token.is_some() {
                 // 旧 GC 还没退干净（done callback 还没清 token），标记 pending，
                 // 等 done callback 清 token 后补启动。不直接丢，避免本轮 GC 永久跳过。
