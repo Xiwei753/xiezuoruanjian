@@ -39,16 +39,22 @@ export struct SettingsScreen {
 
   aboutToAppear() {
     hilog.info(0x0000, 'SettingsScreen', 'route name=Settings')
-    const paramsArr = this.navPathStack.getParamByName(Routes.Settings) as SettingsRouteParams[]
-    const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
-    if (params !== null && params.section !== undefined) {
-      this.initialSection = params.section
-      SettingsSectionContext.setCurrentSection(params.section)
-    }
-    if (params !== null && params.settingKey !== undefined) {
-      this.initialSettingKey = params.settingKey
-      // 精确设置项定位：等 SettingsContent 创建后消费；普通进入不触发。
-      SettingsSectionContext.requestLocate(this.initialSection, params.settingKey)
+    this.initialSection = ''
+    this.initialSettingKey = ''
+    const paramsArr =
+      this.navPathStack.getParamByName(Routes.Settings) as SettingsRouteParams[] | undefined
+    const params: SettingsRouteParams | undefined =
+      paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : undefined
+    if (params !== undefined && params !== null) {
+      if (params.section !== undefined) {
+        this.initialSection = params.section
+        SettingsSectionContext.setCurrentSection(params.section)
+      }
+      if (params.settingKey !== undefined) {
+        this.initialSettingKey = params.settingKey
+        // 精确设置项定位：等 SettingsContent 创建后消费；普通进入不触发。
+        SettingsSectionContext.requestLocate(this.initialSection, params.settingKey)
+      }
     }
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)

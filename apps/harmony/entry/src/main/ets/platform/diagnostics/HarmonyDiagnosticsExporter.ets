@@ -2,11 +2,11 @@
 //
 // 负责：
 // 1. 收集 HarmonyOS 平台附件（hilog / app_settings / sync_state / device_info / build_identity）
-// 2. 调用共享 Rust exporter（通过 NativeDiagnosticsBridge.exportDiagnostics）生成 zip
+// 2. 将白名单附件和脱敏后的持久日志写入 staging 树，再由 ArkTS zlib 生成 zip
 // 3. 拉起 HarmonyOS 系统分享面板
 //
-// 附件内容在传给 NAPI 前必须 base64 编码；Rust 层解码后交给 writer_diagnostics::export。
-// 脱敏由 Rust 层 redact 模块统一处理，ArkTS 层不做脱敏。
+// 导出不能依赖 writer_core NAPI；Native 可用时仅尽力 flush / 读取 HiLog 快照。
+// 导入 staging 的文本与 JSON 均由 HarmonyDiagnosticsArchive 做脱敏。
 //
 // 参考 Android 端 DiagnosticsExporterInterop.kt。
 
@@ -28,12 +28,31 @@ import { HarmonyShareService } from '../share/HarmonyShareService'
 import { SharePayload } from '../share/SharePayload'
 import { DeviceInfoSnapshot, getDeviceInfoSnapshot } from '../device/DeviceInfoSnapshot'
 import { HarmonyDiagnosticsRuntimeSnapshot } from './HarmonyDiagnosticsRuntimeSnapshot'
+import { HarmonyDiagnosticsArchive } from './HarmonyDiagnosticsArchive'
 
-// 附件 JSON 项格式 — 与 Rust AttachmentDto { relative_path: String, content: String } 对齐。
-// content 是 base64 编码的二进制数据。
+// 已整理的 UTF-8 诊断附件。relative_path 必须命中本文件的显式白名单。
 interface AttachmentItem {
   relative_path: string
   content: string
+}
+
+interface LogCollectionSummary {
+  status: string
+  file_count: number
+  files: string[]
+}
+
+interface DiagnosticsCollectionSummary {
+  logs: LogCollectionSummary
+  attachments: string[]
+}
+
+interface DiagnosticsManifest {
+  schema_version: number
+  platform: string
+  build_identity: string
+  exported_at: string
+  collection: DiagnosticsCollectionSummary
 }
 
 // Issue #804：诊断导出保存结果 — 区分成功 / 用户取消 / 真失败，让 UI 能给出明确反馈。
@@ -162,6 +181,7 @@ export class HarmonyDiagnosticsExporter {
   // 与 export() 类似，但接受 outputDir 参数，不使用默认的 snapshots 目录。
   // Checkpoint 调用此方法导出到 staging 目录，确认完整成功后再移动到 snapshots。
   async exportTo(outputDir: string): Promise<string | null> {
+    let stagingDir: string = ''
     try {
       // 1. 准备输出目录
       if (this.abilityContext === null) {
@@ -170,29 +190,61 @@ export class HarmonyDiagnosticsExporter {
       }
       this.ensureOutputDir(outputDir)
 
+      // Flush is only a best-effort log barrier. Its failure cannot block the
+      // ArkTS archive path when the writer native module is unavailable.
+      try {
+        const flushResult = this.diagnosticsBridge.flushDiagnostics()
+        if (flushResult !== 0) {
+          hilog.warn(0x0000, LOG_TAG, 'flushDiagnostics returned %{public}d; archiving persisted files', flushResult)
+        }
+      } catch (_) {
+        hilog.info(0x0000, LOG_TAG, 'native diagnostics flush unavailable; archiving persisted files')
+      }
+
       // 2. 收集平台附件
       const attachments = await this.collectAttachments()
 
-      // 3. 调用 Rust exporter 生成 zip
-      const attachmentsJson = JSON.stringify(attachments)
-      const zipPath = this.diagnosticsBridge.exportDiagnostics(outputDir, attachmentsJson)
-
-      // 检查返回值：成功是 zip 文件路径，失败是 JSON 错误 envelope
-      if (zipPath === null || zipPath === undefined || zipPath.length === 0) {
-        hilog.error(0x0000, LOG_TAG, 'exportDiagnostics returned empty path')
-        return null
+      // 3. 只把固定附件白名单和 writer 持久日志放进沙箱 staging 树。
+      stagingDir = `${outputDir}/.archive-${Date.now()}-${Math.floor(Math.random() * 1000000)}`
+      this.ensureOutputDir(stagingDir)
+      const logSummary = this.copyPersistedLogs(stagingDir)
+      const attachmentNames: string[] = []
+      for (const attachment of attachments) {
+        if (!this.isWhitelistedAttachmentPath(attachment.relative_path)) {
+          hilog.warn(0x0000, LOG_TAG, 'Skipped non-whitelisted attachment')
+          continue
+        }
+        HarmonyDiagnosticsArchive.writeTextFile(stagingDir, attachment.relative_path, attachment.content)
+        attachmentNames.push(attachment.relative_path)
       }
-      // 失败时 NAPI 返回 JSON 错误 envelope（以 { 开头）
-      if (zipPath.startsWith('{')) {
-        hilog.error(0x0000, LOG_TAG, 'exportDiagnostics returned error: %{public}s', zipPath)
-        return null
-      }
 
-      hilog.info(0x0000, LOG_TAG, 'exportDiagnostics succeeded: %{public}s', zipPath)
+      const manifest: DiagnosticsManifest = {
+        schema_version: 1,
+        platform: 'harmony',
+        build_identity: this.getBuildIdentity().buildKey,
+        exported_at: new Date().toISOString(),
+        collection: {
+          logs: logSummary,
+          attachments: attachmentNames
+        }
+      }
+      HarmonyDiagnosticsArchive.writeTextFile(
+        stagingDir, 'diagnostics_manifest.json', JSON.stringify(manifest, null, 2)
+      )
+
+      // 4. NativeDiagnosticsBridge.exportDiagnostics is deliberately not involved.
+      const zipPath = await HarmonyDiagnosticsArchive.compressDirectory(
+        stagingDir, outputDir, 'sujian-diagnostics'
+      )
+      hilog.info(0x0000, LOG_TAG, 'ArkTS diagnostics archive generated')
       return zipPath
     } catch (e) {
-      hilog.error(0x0000, LOG_TAG, 'exportTo failed: %{public}s', String(e))
+      hilog.error(0x0000, LOG_TAG, 'exportTo failed: %{public}s', e instanceof Error ? e.name : 'UNKNOWN_ERROR')
       return null
+    } finally {
+      if (stagingDir.length > 0) {
+        HarmonyDiagnosticsArchive.removeTree(stagingDir)
+      }
     }
   }
 
@@ -306,7 +358,7 @@ export class HarmonyDiagnosticsExporter {
 
   // ── 附件收集 ──────────────────────────────────────────────────
 
-  // 收集所有平台附件，返回 base64 编码的 AttachmentItem 列表。
+  // 收集所有已整理的 UTF-8 平台附件。
   // 每个附件收集失败时写入错误 JSON 附件，不让整个导出失败。
   private async collectAttachments(): Promise<AttachmentItem[]> {
     const attachments: AttachmentItem[] = []
@@ -385,7 +437,7 @@ export class HarmonyDiagnosticsExporter {
     }
   }
 
-  // app_settings_sanitized.json — 应用设置（脱敏由 Rust 层处理）。
+  // app_settings_sanitized.json — 应用设置仅采集非敏感字段，写入 staging 时再统一脱敏。
   private async addAppSettingsAttachment(attachments: AttachmentItem[]): Promise<void> {
     try {
       const result = await this.bridge.getLocalSettings()
@@ -418,7 +470,7 @@ export class HarmonyDiagnosticsExporter {
     }
   }
 
-  // sync_state_sanitized.json — App target 局部状态（脱敏由 Rust 层处理）。
+  // sync_state_sanitized.json — App target 局部状态，写入 staging 时再统一脱敏。
   private async addSyncStateAttachment(attachments: AttachmentItem[]): Promise<void> {
     try {
       const result = await this.bridge.loadAppSyncState()
@@ -626,11 +678,19 @@ export class HarmonyDiagnosticsExporter {
         return
       }
 
-      // 读取最新 crash 事件目录中的所有文件（params.json + crash log）
+      if (!/^[A-Za-z0-9_-]+$/.test(latestEventKey)) {
+        return
+      }
+
+      // 只复制 crash 参数摘要和本应用持久化的 fault-N.log；不把原始
+      // external_log 路径或目录中的任意文件纳入 ZIP。
       const eventDirPath = `${crashesDir}/${latestEventKey}`
       const eventFiles = fs.listFileSync(eventDirPath)
 
       for (const fileName of eventFiles) {
+        if (fileName !== 'params.json' && !/^fault-[0-9]+\.log$/.test(fileName)) {
+          continue
+        }
         const filePath = `${eventDirPath}/${fileName}`
         try {
           const content = this.readFileContent(filePath)
@@ -664,20 +724,72 @@ export class HarmonyDiagnosticsExporter {
         fs.closeSync(fd)
       }
     } catch (e) {
-      hilog.warn(0x0000, LOG_TAG, 'readFileContent failed for %{public}s: %{public}s', filePath, String(e))
+      hilog.warn(0x0000, LOG_TAG, 'readFileContent failed: %{public}s', e instanceof Error ? e.name : 'UNKNOWN_ERROR')
       return ''
     }
   }
 
-  // 构造附件项 — content 为 base64 编码的 UTF-8 字符串。
+  // 构造尚未写入 staging 的 UTF-8 附件项。
   private makeAttachment(relativePath: string, textContent: string): AttachmentItem {
-    const textEncoder = new util.TextEncoder('utf-8')
-    const encoded: Uint8Array = textEncoder.encodeInto(textContent)
-    const base64Helper = new util.Base64Helper()
-    const base64 = base64Helper.encodeToStringSync(encoded)
     return {
       relative_path: relativePath,
-      content: base64
+      content: textContent
+    }
+  }
+
+  private isWhitelistedAttachmentPath(relativePath: string): boolean {
+    const allowedPaths: string[] = [
+      ATTACHMENT_HILOG,
+      ATTACHMENT_HILOG_CAPTURE_STATS,
+      ATTACHMENT_APP_SETTINGS,
+      ATTACHMENT_SYNC_STATE,
+      ATTACHMENT_FULL_SYNC_STATE,
+      ATTACHMENT_LATEST_FULL_SYNC_REPORT,
+      ATTACHMENT_SYNC_OPERATION_RUNTIME,
+      ATTACHMENT_CURRENT_DEVICE,
+      ATTACHMENT_BUILD_IDENTITY,
+      ATTACHMENT_THEME_RUNTIME,
+      ATTACHMENT_UI_RUNTIME,
+      ATTACHMENT_EDITOR_RUNTIME
+    ]
+    if (allowedPaths.indexOf(relativePath) >= 0) {
+      return true
+    }
+    return /^crashes\/[A-Za-z0-9_-]+\/(?:params\.json|fault-[0-9]+\.log)$/.test(relativePath)
+  }
+
+  // Rust's writer stores up to five build logs in this sandbox directory. Include
+  // only its deterministic file names; the staging writer redacts their contents.
+  private copyPersistedLogs(stagingDir: string): LogCollectionSummary {
+    const files: string[] = []
+    const logDir = `${this.abilityContext!.filesDir}/${DIAGNOSTICS_DIR}/live/log`
+    try {
+      if (!fs.accessSync(logDir)) {
+        return { status: 'missing', file_count: 0, files: files }
+      }
+      for (const fileName of fs.listFileSync(logDir)) {
+        if (!/^sujian-current-[A-Za-z0-9._-]+\.log$/.test(fileName)) {
+          continue
+        }
+        const filePath = `${logDir}/${fileName}`
+        try {
+          if (!fs.statSync(filePath).isFile()) {
+            continue
+          }
+          const content = this.readFileContent(filePath)
+          HarmonyDiagnosticsArchive.writeTextFile(stagingDir, `logs/${fileName}`, content)
+          files.push(fileName)
+        } catch (_) {
+          // A single unreadable log should not prevent the remaining archive.
+        }
+      }
+    } catch (_) {
+      return { status: 'error', file_count: 0, files: files }
+    }
+    return {
+      status: files.length > 0 ? 'ok' : 'missing',
+      file_count: files.length,
+      files: files
     }
   }
 

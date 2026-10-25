@@ -117,10 +117,6 @@ echo "llvm-ar         : $LLVM_AR"
 echo "sysroot         : $SYSROOT"
 echo ""
 
-# ONNX Runtime 的 DT_NEEDED 包含 libc++_shared.so。将同一 Native SDK 中
-# aarch64-linux-ohos 的 runtime 复制到唯一 prebuilt 来源，供 CMake/hvigor 共用。
-bash "$WORKSPACE_ROOT/tools/prepare_harmony_native_runtime.sh" "$NATIVE_DIR" "$PREBUILT_DIR"
-
 # -----------------------------------------------------------------------------
 # 2. 确保 Rust 目标已安装
 # -----------------------------------------------------------------------------
@@ -180,6 +176,11 @@ if [ ! -f "$PREBUILT_DIR/libwriter_core_ffi.so" ]; then
     echo "错误：复制 libwriter_core_ffi.so 到 prebuilt 目录失败。" >&2
     exit 1
 fi
+
+# ONNX Runtime 的 DT_NEEDED 包含 libc++_shared.so。准备 SDK 匹配的 runtime
+# 并审计刚生成的 FFI 与 ONNX 的 DT_NEEDED / 动态未定义符号提供方；CMake
+# 完成 writer_core_napi 链接后还会对最终 NAPI 文件运行同一套诊断。
+bash "$WORKSPACE_ROOT/tools/prepare_harmony_native_runtime.sh" "$NATIVE_DIR" "$PREBUILT_DIR"
 
 echo ""
 echo "=== 构建成功 ==="

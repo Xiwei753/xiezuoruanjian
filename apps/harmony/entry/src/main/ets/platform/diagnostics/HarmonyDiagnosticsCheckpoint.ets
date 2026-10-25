@@ -1,8 +1,7 @@
 // HarmonyDiagnosticsCheckpoint — 后台诊断 checkpoint 管理器。
 //
 // 设计目标：平时持续维护 latest.zip，不等用户点导出。
-// 运行态发生变化时只标记 dirty；最多每 5 秒生成一次 checkpoint，
-// 避免每条日志都重新压 zip。
+// 初始化、运行态变化和结构化诊断事件触发一个合并的单次快照；后台不轮询。
 //
 // Issue #773 评论 5845033983：激活 checkpoint — 订阅三个 Store 的 observer，
 // theme/navigation/editor 变化时自动 persistRuntimeSnapshot + markDirty。
@@ -23,7 +22,7 @@
 // 双槽 + 原子替换：如果进程恰好死在打包中途，
 // latest.zip 或 previous.zip 至少还有一份完整包。
 
-import { common, ConfigurationConstant } from '@kit.AbilityKit'
+import { common } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
 import fs from '@ohos.file.fs'
 
@@ -36,7 +35,7 @@ import { ScreenRole } from '../../app/navigation/ScreenSemantics'
 import { AdaptiveContext, AdaptiveObserver, AdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 
 const LOG_TAG = 'HarmonyDiagnosticsCheckpoint'
-const CHECKPOINT_INTERVAL_MS = 5000  // 最多每5秒生成一次
+const CHECKPOINT_COALESCE_MS = 250
 const DIAGNOSTICS_DIR = 'diagnostics'
 const LATEST_ZIP = 'sujian-diagnostics-latest.zip'
 const PREVIOUS_ZIP = 'sujian-diagnostics-previous.zip'
@@ -81,17 +80,16 @@ export class HarmonyDiagnosticsCheckpoint {
   // 最后 dirty = false 不会把新变化吃掉。tick 开始记版本号，成功后比较是否变化。
   private dirtyVersion: number = 0
   private isGenerating: boolean = false
-  private timerId: number = -1
+  private scheduledTimerId: number = -1
 
   // Issue #773 评论 5845033983：三个 observer，在 destroy 中取消订阅。
   private themeObserver: CheckpointThemeObserver | null = null
   private navObserver: CheckpointNavObserver | null = null
   private editorObserver: EditorSnapshotObserver | null = null
 
-  // Issue #773 评论 5845398115：生命周期幂等 + AdaptiveContext 订阅 + 日志变化检测。
+  // Issue #773 评论 5845398115：生命周期幂等 + AdaptiveContext 订阅。
   private initialized: boolean = false
   private adaptiveObserver: CheckpointAdaptiveObserver | null = null
-  private lastLogSignature: string = ''
 
   private constructor() {
     this.exporter = new HarmonyDiagnosticsExporter()
@@ -104,7 +102,7 @@ export class HarmonyDiagnosticsCheckpoint {
     return HarmonyDiagnosticsCheckpoint.instance
   }
 
-  // 初始化 — 注入 UIAbilityContext，订阅 observer，启动定时器。
+  // 初始化 — 注入 UIAbilityContext 并订阅运行态 observer。
   // Issue #773 评论 5845398115：生命周期幂等 — UIAbility 在同一进程销毁后重建时，
   // 不重复订阅 observer、不重复开 timer。destroy() 后 initialized 复位，允许下次 init。
   init(context: common.UIAbilityContext): void {
@@ -138,25 +136,24 @@ export class HarmonyDiagnosticsCheckpoint {
     this.adaptiveObserver = new CheckpointAdaptiveObserver(this)
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
 
-    this.startTimer()
+    // Produce an initial snapshot so latest.zip exists before the next state event.
+    this.markDirty()
   }
 
-  // 标记 dirty — 运行态变化时调用，只设置 dirty=true。
-  // 实际的 checkpoint 生成由定时器触发，最多每 5 秒一次。
+  // 标记 dirty 并合并触发一次 checkpoint。
   markDirty(): void {
     this.dirty = true
     this.dirtyVersion += 1
+    this.scheduleCheckpoint()
   }
 
-  // Issue #773 评论 5845398115：立即排一轮 checkpoint，不等 5 秒 timer。
-  // 首次启动立即调用，消除"首启 5 秒空窗期内闪退没有 latest.zip"的问题。
+  // 首次启动或显式请求时也走同一合并调度入口。
   requestCheckpoint(): void {
     this.markDirty()
-    this.onTimerTick()
   }
 
   // Issue #773 评论 5845033983：persistRuntimeSnapshot — 把运行态 JSON 写到 live/runtime/ 目录，
-  // 然后标记 dirty，让定时器在下一个 tick 生成 checkpoint。
+  // 然后标记 dirty，合并触发一次 checkpoint。
   persistRuntimeSnapshot(): void {
     if (this.context === null) {
       return
@@ -165,74 +162,29 @@ export class HarmonyDiagnosticsCheckpoint {
     this.markDirty()
   }
 
-  // 启动内部定时器，每 CHECKPOINT_INTERVAL_MS 检查一次 dirty 状态。
-  private startTimer(): void {
-    this.timerId = setInterval(() => {
-      this.onTimerTick()
-    }, CHECKPOINT_INTERVAL_MS)
+  // 事件触发的一次性 debounce。已有 timer 或正在归档时不再排重复唤醒。
+  private scheduleCheckpoint(): void {
+    if (!this.initialized || this.context === null || !this.dirty || this.isGenerating || this.scheduledTimerId !== -1) {
+      return
+    }
+    this.scheduledTimerId = setTimeout(() => {
+      this.scheduledTimerId = -1
+      void this.runScheduledCheckpoint()
+    }, CHECKPOINT_COALESCE_MS)
   }
 
-  // 定时器回调 — 检查 dirty 状态，必要时触发 checkpoint 生成。
-  // Issue #773 评论 5845033983：tick 不仅看 Store dirty，还比较 live/log 当前日志文件的 size/mtime。
-  // Rust live log 持续 append 不触发 Store dirty；窗口尺寸/折叠/safe area 变化由 AdaptiveObserver 触发。
-  // 日志变了就生成新 checkpoint，保证 latest.zip 最多落后几秒。
-  // Issue #773 评论 5845876043：候选签名只在成功发布后提交，失败时保留重试条件。
-  // Issue #773 评论 5846511131：tick 一开始就记 versionAtStart，再取签名。
-  // 导出期间 observer 若又 markDirty()，dirtyVersion 已递增，
-  // 发布成功后 dirty 按版本号差保留 true，新变化不会被 dirty = false 吃掉。
-  private async onTimerTick(): Promise<void> {
-    if (this.isGenerating) {
+  // 单次归档失败后保留 dirty，但不自行重试；后续真实事件会再次调度。
+  // 导出期间新增事件依 dirtyVersion 保留，并且只再排一轮归档。
+  private async runScheduledCheckpoint(): Promise<void> {
+    if (this.isGenerating || !this.dirty) {
       return
     }
     const versionAtStart = this.dirtyVersion
-    const signature = this.getLogSignature()
-    const logChanged = signature !== this.lastLogSignature
-    if (!this.dirty && !logChanged) {
-      return
-    }
     const published = await this.generateCheckpoint()
-    if (published) {
-      this.lastLogSignature = signature
-      this.dirty = this.dirtyVersion !== versionAtStart
-    } else {
-      // 保留重试条件，下一 tick 继续尝试
-      this.dirty = true
-    }
-  }
-
-  // Issue #773 评论 5845876043：getLogSignature 只计算签名，不修改 lastLogSignature。
-  // 签名的提交（lastLogSignature 赋值）推迟到 onTimerTick 确认发布成功之后。
-  private getLogSignature(): string {
-    if (this.context === null) {
-      return ''
-    }
-    const logDir = `${this.context.filesDir}/${DIAGNOSTICS_DIR}/live/log`
-    return this.computeLogSignature(logDir)
-  }
-
-  // Issue #773 评论 5845398115：计算 live/log 目录下所有文件的总 size + 最大 mtime 作为签名。
-  // 签名变化说明 Rust 又写了日志，需要生成新 checkpoint。
-  // Issue #773 评论 5845876043：本方法只计算签名，不修改 lastLogSignature；
-  // 签名提交由 onTimerTick 在确认发布成功后执行。
-  private computeLogSignature(logDir: string): string {
-    try {
-      if (!fs.accessSync(logDir)) {
-        return ''
-      }
-      const entries = fs.listFileSync(logDir)
-      let totalSize: number = 0
-      let maxMtime: number = 0
-      for (let i = 0; i < entries.length; i++) {
-        const fullPath = `${logDir}/${entries[i]}`
-        const stat = fs.statSync(fullPath)
-        totalSize += stat.size
-        if (stat.mtime > maxMtime) {
-          maxMtime = stat.mtime
-        }
-      }
-      return `${totalSize}:${maxMtime}`
-    } catch (_) {
-      return ''
+    const changedDuringArchive = this.dirtyVersion !== versionAtStart
+    this.dirty = published ? changedDuringArchive : true
+    if (changedDuringArchive) {
+      this.scheduleCheckpoint()
     }
   }
 
@@ -383,11 +335,11 @@ export class HarmonyDiagnosticsCheckpoint {
     }
   }
 
-  // 销毁 — 停止定时器，取消所有 observer 订阅，释放资源。
+  // 销毁 — 取消尚未触发的一次性调度，取消所有 observer 订阅。
   destroy(): void {
-    if (this.timerId !== -1) {
-      clearInterval(this.timerId)
-      this.timerId = -1
+    if (this.scheduledTimerId !== -1) {
+      clearTimeout(this.scheduledTimerId)
+      this.scheduledTimerId = -1
     }
     // Issue #773 评论 5845033983：取消三个 Store 的 observer 订阅。
     if (this.themeObserver !== null) {
@@ -409,6 +361,5 @@ export class HarmonyDiagnosticsCheckpoint {
     }
     // Issue #773 评论 5845398115：生命周期幂等 — 复位 initialized，允许下次 init。
     this.initialized = false
-    this.lastLogSignature = ''
   }
 }

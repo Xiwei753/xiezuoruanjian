@@ -4,7 +4,7 @@
 // 1. 在应用启动时订阅 HiAppEvent 的 APP_CRASH 和 APP_KILLED 事件
 // 2. 系统在下一次启动回放上一轮故障事件时，把 params 和 external_log 复制进
 //    diagnostics/crashes/<timestamp>/ 目录
-// 3. 额外生成 sujian-diagnostics-crash-<timestamp>.zip 崩溃补全包到 snapshots 目录
+// 3. 额外由 ArkTS zlib 生成 sujian-diagnostics-crash-<timestamp>.zip 崩溃补全包
 //    （不覆盖平时维护的 latest.zip / previous.zip）
 //
 // HiAppEvent 的 APP_CRASH 事件 params 中包含 time、external_log 等系统定义字段。
@@ -21,16 +21,11 @@ import { NativeDiagnosticsBridge } from '../../corebridge/native/NativeDiagnosti
 import { NativeCoreModule } from '../../corebridge/native/NativeCoreModule'
 import { PlatformApiResolver } from '../version/PlatformApiResolver'
 import { HarmonyDiagnosticEvents, DiagnosticField } from './HarmonyDiagnosticEvents'
+import { HarmonyDiagnosticsArchive } from './HarmonyDiagnosticsArchive'
+import { HarmonyDiagnosticsCheckpoint } from './HarmonyDiagnosticsCheckpoint'
 
 const LOG_TAG = 'HarmonyCrashEventWatcher'
 const DIAGNOSTICS_DIR = 'diagnostics'
-
-// 附件 JSON 项格式 — 与 Rust AttachmentDto { relative_path: String, content: String } 对齐。
-// content 是 base64 编码的二进制数据。
-interface AttachmentItem {
-  relative_path: string
-  content: string
-}
 
 // 崩溃事件记录 — 用于序列化 params.json。
 // ArkTS 严格模式要求对象字面量有显式 interface 类型（arkts-no-untyped-obj-literals）。
@@ -174,13 +169,13 @@ export class HarmonyCrashEventWatcher {
       const crashesDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/crashes/${eventKey}`
       fs.mkdirSync(crashesDir, true)
 
-      // 写 params.json — 把整个 event 信息序列化保存
-      // ArkTS 严格模式要求对象字面量有显式 interface 类型（arkts-no-untyped-obj-literals）。
+      // 只持久化崩溃摘要白名单；external_log 的原始 fault 内容单独保存在
+      // diagnostics/crashes/<eventKey>/fault-N.log，原始系统日志保持完整。
       const crashRecord: CrashRecord = {
-        domain: event.domain,
+        domain: event.domain === hiAppEvent.domain.OS ? event.domain : hiAppEvent.domain.OS,
         name: event.name,
         eventType: event.eventType,
-        params: event.params as Record<string, Object>
+        params: this.safeCrashParams(params)
       }
       const paramsJson = JSON.stringify(crashRecord, null, 2)
       this.writeAtomic(`${crashesDir}/params.json`, paramsJson)
@@ -190,93 +185,73 @@ export class HarmonyCrashEventWatcher {
       // 没有 external_log 是正常情况，用 info 级别记录，不当失败处理。
       if (externalLog.length > 0) {
         for (let i = 0; i < externalLog.length; i++) {
-          this.copyFile(externalLog[i], crashesDir)
+          this.copyFile(externalLog[i], crashesDir, `fault-${i + 1}.log`)
         }
       } else {
         hilog.info(0x0000, LOG_TAG, 'No external_log in event %{public}s (normal for APP_KILLED)', event.name)
       }
 
+      // 崩溃事件和持久化日志均触发一轮合并 checkpoint。
+      HarmonyDiagnosticsCheckpoint.getInstance().markDirty()
+
       // 生成崩溃补全包 zip
-      this.generateCrashZip(eventKey, crashRecord, externalLog)
+      void this.generateCrashZip(eventKey, crashRecord)
     } catch (e) {
       hilog.error(0x0000, LOG_TAG, 'handleCrashEvent failed: %{public}s', String(e))
     }
   }
 
-  // 生成崩溃补全包 zip — flush → export → 重命名为 crash 前缀。
-  // 崩溃补全包不覆盖 latest.zip / previous.zip，使用独立的 crash 前缀文件名。
-  private generateCrashZip(
-    eventKey: string,
-    crashRecord: CrashRecord,
-    externalLog: string[]
-  ): void {
+  // 通过同一 ArkTS archive 服务生成崩溃补全包；native flush 失败不影响归档。
+  // 崩溃包不覆盖 latest.zip / previous.zip，使用独立的 crash 前缀文件名。
+  private async generateCrashZip(eventKey: string, crashRecord: CrashRecord): Promise<void> {
+    let stagingDir: string = ''
     try {
-      // 1. flush 日志落盘
-      const flushResult = this.diagnosticsBridge.flushDiagnostics()
-      if (flushResult !== 0) {
-        hilog.warn(0x0000, LOG_TAG, 'flushDiagnostics failed with code %{public}d; continuing crash zip', flushResult)
+      // 1. Best-effort flush of native diagnostics; no native export dependency.
+      try {
+        const flushResult = this.diagnosticsBridge.flushDiagnostics()
+        if (flushResult !== 0) {
+          hilog.warn(0x0000, LOG_TAG, 'flushDiagnostics returned %{public}d; continuing crash archive', flushResult)
+        }
+      } catch (_) {
+        hilog.info(0x0000, LOG_TAG, 'native diagnostics flush unavailable; continuing crash archive')
       }
 
       // 2. 准备输出目录
       const outputDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/snapshots`
       this.ensureOutputDir(outputDir)
+      stagingDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/.staging/crash-${eventKey}-${Date.now()}`
+      this.ensureOutputDir(stagingDir)
 
-      // 3. 把 crash 事件信息作为附件传给 Rust exporter
-      const attachments: AttachmentItem[] = []
-      // params.json 附件
-      const paramsJson = JSON.stringify(crashRecord, null, 2)
-      attachments.push(this.makeAttachment('crashes/' + eventKey + '/params.json', paramsJson))
-
-      // external_log 内容附件 — 从已复制到 diagnostics 的持久副本读取
-      // （原始系统路径的 external_log 在 copyFile 中已被删除，不能再依赖）
+      // 3. 仅写入安全参数摘要和已持久化的 fault 日志副本。
+      const relativeCrashDir = `crashes/${eventKey}`
+      HarmonyDiagnosticsArchive.writeTextFile(
+        stagingDir, `${relativeCrashDir}/params.json`, JSON.stringify(crashRecord, null, 2)
+      )
       const crashesDir = `${this.context!.filesDir}/${DIAGNOSTICS_DIR}/crashes/${eventKey}`
-      for (let i = 0; i < externalLog.length; i++) {
-        const fileName = this.extractFileName(externalLog[i])
+      for (const fileName of fs.listFileSync(crashesDir)) {
+        if (!/^fault-[0-9]+\.log$/.test(fileName)) {
+          continue
+        }
         const persistedPath = `${crashesDir}/${fileName}`
         const logContent = this.readFileContent(persistedPath)
         if (logContent.length > 0) {
-          attachments.push(this.makeAttachment('crashes/' + eventKey + '/' + fileName, logContent))
+          HarmonyDiagnosticsArchive.writeTextFile(
+            stagingDir, `${relativeCrashDir}/${fileName}`, logContent
+          )
         }
       }
 
-      // 4. 调用 Rust exporter 生成 zip
-      const attachmentsJson = JSON.stringify(attachments)
-      const zipPath = this.diagnosticsBridge.exportDiagnostics(outputDir, attachmentsJson)
-
-      if (zipPath === null || zipPath === undefined || zipPath.length === 0) {
-        hilog.error(0x0000, LOG_TAG, 'exportDiagnostics returned empty path for crash zip')
-        return
-      }
-      // 失败时 NAPI 返回 JSON 错误 envelope（以 { 开头）
-      if (zipPath.startsWith('{')) {
-        hilog.error(0x0000, LOG_TAG, 'exportDiagnostics returned error for crash zip: %{public}s', zipPath)
-        return
-      }
-
-      // 5. 重命名为 crash 前缀文件名
-      // Rust 层生成的文件名格式是 sujian-diagnostics-{rust_timestamp}.zip
-      // 我们需要重命名为 sujian-diagnostics-crash-{eventKey}.zip
-      const crashZipName = `sujian-diagnostics-crash-${eventKey}.zip`
-      const crashZipPath = `${outputDir}/${crashZipName}`
-      try {
-        // 如果目标文件已存在（同一时间戳的崩溃事件），先删除
-        if (fs.accessSync(crashZipPath)) {
-          fs.unlinkSync(crashZipPath)
-        }
-        fs.renameSync(zipPath, crashZipPath)
-        hilog.info(0x0000, LOG_TAG, 'Crash zip generated: %{public}s', crashZipPath)
-      } catch (renameErr) {
-        // rename 失败时尝试 copy + delete
-        try {
-          fs.copyFileSync(zipPath, crashZipPath)
-          fs.unlinkSync(zipPath)
-          hilog.info(0x0000, LOG_TAG, 'Crash zip generated (via copy): %{public}s', crashZipPath)
-        } catch (copyErr) {
-          hilog.error(0x0000, LOG_TAG, 'Failed to rename/copy crash zip: %{public}s', String(copyErr))
-        }
-      }
+      // 4. NativeDiagnosticsBridge.exportDiagnostics is not part of crash ZIP creation.
+      await HarmonyDiagnosticsArchive.compressDirectory(
+        stagingDir, outputDir, `sujian-diagnostics-crash-${eventKey}`, true
+      )
+      hilog.info(0x0000, LOG_TAG, 'Crash archive generated for event %{public}s', eventKey)
     } catch (e) {
-      hilog.error(0x0000, LOG_TAG, 'generateCrashZip failed: %{public}s', String(e))
+      hilog.error(0x0000, LOG_TAG, 'generateCrashZip failed: %{public}s', e instanceof Error ? e.name : 'UNKNOWN_ERROR')
+    } finally {
+      if (stagingDir.length > 0) {
+        HarmonyDiagnosticsArchive.removeTree(stagingDir)
+      }
     }
   }
 
@@ -315,6 +290,29 @@ export class HarmonyCrashEventWatcher {
       return reason
     }
     return ''
+  }
+
+  // params.json keeps only stable, non-sensitive crash metadata. In particular,
+  // external_log paths, exception messages and stacks stay out of the archive.
+  private safeCrashParams(params: Record<string, Object>): Record<string, Object> {
+    const safe: Record<string, Object> = {}
+    const time = params['time']
+    if (typeof time === 'number') {
+      safe['time'] = time
+    }
+    const crashType = params['crash_type']
+    if (typeof crashType === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(crashType)) {
+      safe['crash_type'] = crashType
+    }
+    const reason = params['reason']
+    if (typeof reason === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(reason)) {
+      safe['reason'] = reason
+    }
+    const foreground = params['foreground']
+    if (typeof foreground === 'boolean') {
+      safe['foreground'] = foreground
+    }
+    return safe
   }
 
   // 原子写入 — 双槽模式（崩溃安全）：
@@ -398,22 +396,19 @@ export class HarmonyCrashEventWatcher {
   // 复制 external_log 文件到 crashes 目录，复制成功后删除系统源文件。
   // 华为官方要求处理完 external_log 后及时删除，否则故障日志目录达到上限后
   // 后续新日志可能写不出来。删除失败只记 warn，不影响后续流程。
-  private copyFile(srcPath: string, destDir: string): void {
+  private copyFile(srcPath: string, destDir: string, fileName: string): void {
     try {
-      const fileName = this.extractFileName(srcPath)
       const destPath = `${destDir}/${fileName}`
       fs.copyFileSync(srcPath, destPath)
-      hilog.info(0x0000, LOG_TAG, 'Copied external log: %{public}s → %{public}s', srcPath, destPath)
+      hilog.info(0x0000, LOG_TAG, 'Copied external crash fault log into diagnostics storage')
       // 复制成功后删除系统源文件
       try {
         fs.unlinkSync(srcPath)
-        hilog.info(0x0000, LOG_TAG, 'Deleted system external log source: %{public}s', srcPath)
-      } catch (unlinkErr) {
-        hilog.warn(0x0000, LOG_TAG, 'Failed to delete system external log source %{public}s: %{public}s',
-          srcPath, String(unlinkErr))
+      } catch (_) {
+        hilog.warn(0x0000, LOG_TAG, 'Unable to delete copied system crash fault log source')
       }
     } catch (e) {
-      hilog.warn(0x0000, LOG_TAG, 'copyFile failed for %{public}s: %{public}s', srcPath, String(e))
+      hilog.warn(0x0000, LOG_TAG, 'copyFile failed: %{public}s', e instanceof Error ? e.name : 'UNKNOWN_ERROR')
     }
   }
 
@@ -431,18 +426,9 @@ export class HarmonyCrashEventWatcher {
         fs.closeSync(fd)
       }
     } catch (e) {
-      hilog.warn(0x0000, LOG_TAG, 'readFileContent failed for %{public}s: %{public}s', filePath, String(e))
+      hilog.warn(0x0000, LOG_TAG, 'readFileContent failed: %{public}s', e instanceof Error ? e.name : 'UNKNOWN_ERROR')
       return ''
     }
-  }
-
-  // 从文件路径中提取文件名。
-  private extractFileName(filePath: string): string {
-    const lastSlash = filePath.lastIndexOf('/')
-    if (lastSlash >= 0 && lastSlash < filePath.length - 1) {
-      return filePath.substring(lastSlash + 1)
-    }
-    return filePath
   }
 
   // 清理 eventKey 中的非法字符，确保可作为目录名/文件名使用。
@@ -460,18 +446,6 @@ export class HarmonyCrashEventWatcher {
     const minutes = date.getMinutes().toString().padStart(2, '0')
     const seconds = date.getSeconds().toString().padStart(2, '0')
     return `${year}${month}${day}-${hours}${minutes}${seconds}`
-  }
-
-  // 构造附件项 — content 为 base64 编码的 UTF-8 字符串。
-  private makeAttachment(relativePath: string, textContent: string): AttachmentItem {
-    const textEncoder = new util.TextEncoder('utf-8')
-    const encoded: Uint8Array = textEncoder.encodeInto(textContent)
-    const base64Helper = new util.Base64Helper()
-    const base64 = base64Helper.encodeToStringSync(encoded)
-    return {
-      relative_path: relativePath,
-      content: base64
-    }
   }
 
   // 确保输出目录存在。

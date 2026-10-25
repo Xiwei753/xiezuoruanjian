@@ -32,6 +32,7 @@
 | 隔空传送 | @kit.ShareKit (harmonyShare gesturesShare) | 20 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api20/GesturesShareApi20.ets, share/AirTransferService.ets |
 | 手写笔 | @kit.ArkUI (组件 TouchEvent) | 未限定独立 API（基础输入事件，随 ArkUI） | 无独立 SystemCapability（基础输入事件） | 无独立权限（基础输入事件） | 否 | input/StylusInputService.ets |
 | Native HiLog | @kit.BasicServicesKit (hilog) — C 接口 | 12 | SystemCapability.HiviewDFX.HiLog | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets（ArkTS 侧调用 getHilogSnapshot），cpp/corebridge/napi/napi_init.cpp（C++ 侧 OH_LOG_SetCallback） |
+| ArkTS 诊断 ZIP 归档 | @kit.BasicServicesKit (`@ohos.zlib`) | 9（应用最低系统版本为 12） | SystemCapability.BundleManager.Zlib | 无 | 否 | diagnostics/HarmonyDiagnosticsArchive.ets, diagnostics/HarmonyDiagnosticsExporter.ets, diagnostics/HarmonyCrashEventWatcher.ets |
 | Core File Kit (fileUri) | @kit.CoreFileKit (fileUri) | 12 | SystemCapability.FileManagement.File.FileUri | 无 | 否 | diagnostics/HarmonyDiagnosticsExporter.ets |
 | 校对资源文件选择与导入 | @kit.CoreFileKit (picker.DocumentViewPicker, fileIo) | 12 | SystemCapability.FileManagement.UserFileService; SystemCapability.FileManagement.File.FileIO | 无（系统 Picker 授权用户所选 URI） | 否 | feature/editor/correction/CorrectionResourceImporter.ets, feature/editor/ui/WritingScreen.ets, feature/editor/correction/CorrectionSuggestionsPanel.ets |
 | 校对资源状态查询 | WriterCore `get_correction_resource_status` | 1 | NAPI async worker | 无 | 否 | feature/editor/correction/CorrectionDtos.ets, feature/editor/correction/NativeCorrectionBridge.ets, corebridge/napi/napi_correction.cpp |
@@ -237,6 +238,18 @@
   - C++ 层：`cpp/corebridge/napi/napi_init.cpp`（`RegisterHilogCallback()` 注册回调，环形缓冲区收集日志，`NativeGetHilogSnapshot` 返回内容）
   - ArkTS 层：`diagnostics/HarmonyDiagnosticsExporter.ets`（通过 `NativeDiagnosticsBridge.getHilogSnapshot()` 读取 C++ 层环形缓冲内容）
 - 说明：华为官方 FAQ 确认 `OH_LOG_SetCallback` 会接收当前进程 HiLog：https://developer.huawei.com/consumer/cn/doc/doccenter-tools-faq/faqs-app-debugging-77
+
+## ArkTS 诊断 ZIP 归档（@ohos.zlib）
+
+- Kit：`@kit.BasicServicesKit`（`@ohos.zlib`）
+- 接口：`zlib.compressFile(inFile: string, outFile: string, options: zlib.Options): Promise<void>`；`inFile` 可为应用沙箱内已整理的目录，`outFile` 为应用沙箱内的 ZIP 文件路径
+- 最低 API：9（SDK d.ts 的 `compressFile` 标记 `@since 9`；应用安装基线仍为 API 12）
+- SystemCapability：`SystemCapability.BundleManager.Zlib`
+- 权限：无
+- ACL：否
+- fallback：压缩失败时本次导出失败并清理临时 ZIP；不回退到 writer_core NAPI exporter
+- 实现文件：`diagnostics/HarmonyDiagnosticsArchive.ets`, `diagnostics/HarmonyDiagnosticsExporter.ets`, `diagnostics/HarmonyCrashEventWatcher.ets`
+- 说明：只压缩调用方组装的 staging 目录；JSON 按字段、文本按凭据/正文/URL/绝对路径规则脱敏后写入。华为官方接口说明见 [@ohos.zlib API](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-zlib)；官方概述将 `@ohos.zlib` 描述为 ArkTS 压缩解压模块，API 26 新增的 `@ohos.archive` 是另一套 native 能力：https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/archive-overview
 
 ## Core File Kit（fileUri）
 

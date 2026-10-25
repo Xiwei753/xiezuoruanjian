@@ -17,6 +17,7 @@
 import hilog from '@ohos.hilog'
 import { NativeDiagnosticsBridge } from '../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../corebridge/native/NativeCoreModule'
+import { HarmonyDiagnosticsCheckpoint } from './HarmonyDiagnosticsCheckpoint'
 
 /**
  * 诊断日志级别 — 与 Rust `DiagnosticLevelDto` 的变体名一一对应。
@@ -115,6 +116,10 @@ export class HarmonyDiagnosticEvents {
         fields: fields
       }
     }
+
+    // Schedule the ArkTS checkpoint before touching NAPI. Even if the native
+    // diagnostics bridge is unavailable, the event-triggered snapshot still runs.
+    HarmonyDiagnosticsCheckpoint.getInstance().markDirty()
 
     try {
       const bridge: NativeDiagnosticsBridge = HarmonyDiagnosticEvents.getBridge()

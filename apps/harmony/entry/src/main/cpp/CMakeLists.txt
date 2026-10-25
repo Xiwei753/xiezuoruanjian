@@ -16,18 +16,14 @@ set_target_properties(writer_core_ffi PROPERTIES
 )
 message(STATUS "Found prebuilt libwriter_core_ffi.so: ${PREBUILT_SO}")
 
-# Issue #985：鸿蒙目标必须随 HAP 交付可加载的 ONNX Runtime，而不是借用
+# 鸿蒙目标必须随 HAP 交付 ONNX Runtime 供纠错功能按需加载，而不是借用
 # Android/Linux 的 .so。tools/build_harmony.sh 从固定 OHOS 产物获取并写入
-# prebuilt/arm64-v8a；链接后由打包器复制到 libs/arm64-v8a。
+# prebuilt/arm64-v8a；它不能成为写作 NAPI 模块的启动时链接依赖。
 set(ORT_SO "${PREBUILT_DIR}/libonnxruntime.so")
 if(NOT EXISTS "${ORT_SO}")
     message(FATAL_ERROR "Missing OHOS libonnxruntime.so at ${ORT_SO}. Run tools/build_harmony.sh first.")
 endif()
-add_library(onnxruntime_ohos SHARED IMPORTED)
-set_target_properties(onnxruntime_ohos PROPERTIES
-    IMPORTED_LOCATION "${ORT_SO}"
-)
-message(STATUS "Found OHOS ONNX Runtime: ${ORT_SO}")
+message(STATUS "Found OHOS ONNX Runtime for correction: ${ORT_SO}")
 
 # libonnxruntime.so 的 DT_NEEDED 明确包含 libc++_shared.so。CLI 构建脚本和
 # hvigor 构建入口都从当前 HarmonyOS Native SDK 准备到同一 PREBUILT_DIR；
@@ -57,24 +53,49 @@ target_link_libraries(writer_core_napi PUBLIC
     libhilog_ndk.z.so
     librawfile.z.so
     writer_core_ffi
-    onnxruntime_ohos
+    cxx_shared
 )
-target_link_libraries(writer_core_napi PUBLIC cxx_shared)
 
 set_target_properties(writer_core_napi PROPERTIES
     OUTPUT_NAME "writer_core"
 )
 
-# 链接不会自动把依赖 so 放入 HAP 的 libs 目录；显式复制到最终模块目录。
+# ONNX Runtime 由纠错 Rust 代码通过 ort 的 load-dynamic 在实际打开模型时
+# 加载。它仍作为 HAP 资源交付，但不进入 libwriter_core.so 的 DT_NEEDED。
 add_custom_command(TARGET writer_core_napi POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${ORT_SO}" "$<TARGET_FILE_DIR:writer_core_napi>/libonnxruntime.so"
-    COMMENT "Copying OHOS libonnxruntime.so into HAP native libraries"
+    COMMENT "Packaging OHOS libonnxruntime.so for on-demand correction"
 )
-# Copy the same prebuilt file that is linked above. If hvigor also collects the
-# imported dependency, both paths resolve to identical bytes and one HAP entry.
+# Keep the SDK-matched C++ runtime in the HAP for the native module and ORT.
 add_custom_command(TARGET writer_core_napi POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CXX_SHARED_SO}" "$<TARGET_FILE_DIR:writer_core_napi>/libc++_shared.so"
     COMMENT "Copying the canonical libc++_shared.so into HAP native libraries"
 )
+
+# Audit the just-linked NAPI binary as well as its packaged native dependencies.
+# CMake's Harmony toolchain supplies the target sysroot; the script resolves
+# llvm-readelf beside that sysroot and reports providers from the SDK/package.
+if(UNIX)
+    get_filename_component(REPO_ROOT
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../"
+        ABSOLUTE
+    )
+    set(HARMONY_RUNTIME_SCRIPT "${REPO_ROOT}/tools/prepare_harmony_native_runtime.sh")
+    if(CMAKE_SYSROOT)
+        add_custom_command(TARGET writer_core_napi POST_BUILD
+            COMMAND bash "${HARMONY_RUNTIME_SCRIPT}" --diagnose-only
+                "${PREBUILT_DIR}" "$<TARGET_FILE:writer_core_napi>" "${CMAKE_SYSROOT}"
+            COMMENT "Diagnosing HarmonyOS native dynamic dependencies"
+            VERBATIM
+        )
+    else()
+        add_custom_command(TARGET writer_core_napi POST_BUILD
+            COMMAND bash "${HARMONY_RUNTIME_SCRIPT}" --diagnose-only
+                "${PREBUILT_DIR}" "$<TARGET_FILE:writer_core_napi>"
+            COMMENT "Diagnosing HarmonyOS native dynamic dependencies"
+            VERBATIM
+        )
+    endif()
+endif()
