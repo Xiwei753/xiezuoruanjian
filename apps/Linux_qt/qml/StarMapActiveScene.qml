@@ -219,7 +219,9 @@ Item {
             menuHost.setInlineEditingKey(inlineEditingKey)
     }
 
-    function finishActiveNodeEdit() {
+    function finishActiveNodeEdit(preservePresentation) {
+        if (!preservePresentation && editOverlay)
+            editOverlay.abortTransition()
         editingNodeId = ""
         editingTitleDraft = ""
         editingBodyDraft = ""
@@ -237,7 +239,7 @@ Item {
         if (editing) {
             beginInlineEdit(nodeId)
         } else if (editingNodeId === nodeId) {
-            finishActiveNodeEdit()
+            editOverlay.closeEdit(false)
         }
     }
 
@@ -472,10 +474,10 @@ Item {
         return editOverlay.commitEdit() === true
     }
 
-    // Issue #987：编辑器真实投影矩形的区域判断。参数是 Scene 局部坐标
-    // （Canvas 先把指针点映射进来）；只有可见且 editingNodeId 有效时才认领输入。
+    // Issue #987：编辑器当前动画帧矩形的区域判断。参数是 Scene 局部坐标
+    // （Canvas 先把指针点映射进来）；关闭快照仍可见时也继续认领覆盖区域。
     function editorContainsScenePoint(sceneX, sceneY) {
-        if (editingNodeId === "")
+        if (editingNodeId === "" && !editOverlay._closing)
             return false
         if (!editOverlay.visible || editOverlay.width <= 0 || editOverlay.height <= 0)
             return false
@@ -516,11 +518,15 @@ Item {
     function beginInlineEdit(nodeId, gestureId, button) {
         if (interactionController && interactionController.pointerMode === "pinch")
             return false
+        if (editOverlay._closing)
+            return false
         if (editingNodeId === nodeId) {
             editOverlay.focusCurrent()
             return true
         }
         if (editingNodeId !== "" && !commitActiveNodeEdit())
+            return false
+        if (editOverlay._closing)
             return false
         var node = graphController.getNode(nodeId)
         if (!node)
@@ -533,6 +539,7 @@ Item {
         editingBodyDraft = StarMapNodeMetrics.bodyOf(node)
         editingError = ""
         editingSaving = false
+        editOverlay.prepareExpand()
         scene.logInteraction("node_edit_begin", "node", nodeId, {
             "gesture": editingGestureId,
             "button": editingGestureButton
@@ -546,7 +553,7 @@ Item {
                 scene.menuHost.ensureNodeEditVisible()
             Qt.callLater(function() {
                 if (scene.editingNodeId === nodeId)
-                    editOverlay.activate()
+                    editOverlay.startExpand()
             })
         })
         return true
@@ -1176,6 +1183,11 @@ Item {
             property real _wobbleAnimX: 0
             property real _wobbleAnimY: 0
 
+            readonly property var closingSnapshot:
+                editOverlay._closingSnapshot
+                && editOverlay._closingSnapshot.nodeId === nodeData.id
+                    ? editOverlay._closingSnapshot : null
+
             readonly property bool isSelected: scene.selectionController
                     ? scene.selectionController.matches(scene.scenePathKey, "node", nodeData.id)
                     : false
@@ -1184,20 +1196,33 @@ Item {
                     : false
             readonly property bool isMoving: scene.isMovingNode(nodeData.id)
             readonly property bool isEditing: scene.editingNodeId === nodeData.id
-            readonly property real worldX: isMoving && scene.interactionController
+                    || closingSnapshot !== null
+            readonly property real worldX: closingSnapshot
+                    ? closingSnapshot.worldX
+                    : isMoving && scene.interactionController
                     ? scene.interactionController.moveX : nodeData.x
-            readonly property real worldY: isMoving && scene.interactionController
+            readonly property real worldY: closingSnapshot
+                    ? closingSnapshot.worldY
+                    : isMoving && scene.interactionController
                     ? scene.interactionController.moveY : nodeData.y
 
             // Issue #984：宽高来自图级布局快照（由平台文本排版一次性测量），
             // delegate 不再实测 / 回写 / 维护编辑草稿。
-            readonly property real cardWidth: nodeData.width !== undefined
-                    ? nodeData.width : StarMapNodeMetrics.defaultNodeWidth()
-            readonly property real cardHeight: nodeData.height !== undefined
-                    ? nodeData.height : StarMapNodeMetrics.defaultNodeHeight()
-            readonly property string bodyText: StarMapNodeMetrics.bodyOf(nodeData)
-            readonly property string titleText: nodeData.title && nodeData.title.length > 0
-                    ? nodeData.title : qsTr("未命名")
+            readonly property real cardWidth: closingSnapshot
+                    ? closingSnapshot.worldWidth
+                    : nodeData.width !== undefined
+                        ? nodeData.width : StarMapNodeMetrics.defaultNodeWidth()
+            readonly property real cardHeight: closingSnapshot
+                    ? closingSnapshot.worldHeight
+                    : nodeData.height !== undefined
+                        ? nodeData.height : StarMapNodeMetrics.defaultNodeHeight()
+            readonly property string bodyText: closingSnapshot
+                    ? closingSnapshot.body : StarMapNodeMetrics.bodyOf(nodeData)
+            readonly property string titleText: closingSnapshot
+                    ? (closingSnapshot.title.length > 0
+                       ? closingSnapshot.title : qsTr("未命名"))
+                    : nodeData.title && nodeData.title.length > 0
+                        ? nodeData.title : qsTr("未命名")
 
             x: scene.worldToScreenX(worldX)
                + (cardWidth * scene._safeZoom - width) / 2
@@ -1212,7 +1237,7 @@ Item {
             Rectangle {
                 id: visualNode
                 anchors.fill: parent
-                opacity: nodeItem.isEditing ? 0 : 1
+                opacity: nodeItem.isEditing ? 1 - editOverlay.transitionProgress : 1
                 radius: Math.min(scene.dt.radiusSm * scene._safeZoom,
                                  Math.min(width, height) / 2)
                 color: scene._surfaceContainer
@@ -1402,25 +1427,209 @@ Item {
             var y = r.y + (r.height - h) / 2
             return { x: x, y: y, width: w, height: h }
         }
-        // _expandedRect 是 Scene 局部坐标；视觉父级在 Canvas 顶层时显式换算。
-        readonly property var _hostPos: {
-            var a = _expandedRect
+        property real transitionProgress: 0
+        property bool _transitionRunning: false
+        property bool _closing: false
+        property real _closingStartProgress: 1
+        property var _openingFromRect: null
+        property var _openingToRect: null
+        property var _closingFromRect: null
+        property var _closingToRect: null
+        property var _closingSnapshot: null
+        readonly property bool _inputVisible: visible
+                && scene.hasActiveNodeEdit && !_closing && !_transitionRunning
+                && transitionProgress >= 1
+        readonly property var _presentedRect: {
+            var p = Math.max(0, Math.min(1, transitionProgress))
+            if (_closing && _closingFromRect && _closingToRect) {
+                var closeP = _closingStartProgress > 0
+                        ? Math.min(1, p / _closingStartProgress) : 0
+                return interpolateRect(_closingToRect, _closingFromRect, closeP)
+            }
+            if (_openingFromRect && _openingToRect)
+                return interpolateRect(_openingFromRect, _openingToRect, p)
+            if (scene.hasActiveNodeEdit && p < 1)
+                return _nodeRect
+            return _expandedRect
+        }
+        // 视觉父级在 Canvas 顶层时显式转换当前动画帧的 Scene 坐标。
+        readonly property var _presentedHostPos: {
+            var a = _presentedRect
             if (!parent || parent === scene)
                 return Qt.point(a.x, a.y)
             var p = scene.mapToItem(parent, a.x, a.y)
             return Qt.point(p.x, p.y)
         }
 
+        function copyRect(rect) {
+            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+        }
+
+        function interpolateRect(from, to, progress) {
+            var p = Math.max(0, Math.min(1, progress))
+            return {
+                x: from.x + (to.x - from.x) * p,
+                y: from.y + (to.y - from.y) * p,
+                width: from.width + (to.width - from.width) * p,
+                height: from.height + (to.height - from.height) * p
+            }
+        }
+
+        function nodeRectFor(node) {
+            var item = scene.nodeItemOf(node.id)
+            if (item)
+                return { x: item.x, y: item.y, width: item.width, height: item.height }
+            var nodeWidth = node.width !== undefined
+                    ? node.width : StarMapNodeMetrics.defaultNodeWidth()
+            var nodeHeight = node.height !== undefined
+                    ? node.height : StarMapNodeMetrics.defaultNodeHeight()
+            var width = nodeWidth * scene._safeZoom * scene._reveal
+                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            var height = nodeHeight * scene._safeZoom * scene._reveal
+                    + scene._revealDotRadius * 2 * (1 - scene._reveal)
+            return {
+                x: scene.worldToScreenX(node.x)
+                   + (nodeWidth * scene._safeZoom - width) / 2,
+                y: scene.worldToScreenY(node.y)
+                   + (nodeHeight * scene._safeZoom - height) / 2,
+                width: width,
+                height: height
+            }
+        }
+
+        function presentationSnapshot(node, rect) {
+            return {
+                nodeId: node.id,
+                worldX: node.x,
+                worldY: node.y,
+                worldWidth: node.width !== undefined
+                        ? node.width : StarMapNodeMetrics.defaultNodeWidth(),
+                worldHeight: node.height !== undefined
+                        ? node.height : StarMapNodeMetrics.defaultNodeHeight(),
+                title: node.title || "",
+                body: StarMapNodeMetrics.bodyOf(node),
+                rect: copyRect(rect)
+            }
+        }
+
+        function prepareExpand() {
+            expandAnimation.stop()
+            collapseAnimation.stop()
+            transitionProgress = 0
+            _transitionRunning = true
+            _closing = false
+            _closingStartProgress = 1
+            _openingFromRect = null
+            _openingToRect = null
+            _closingFromRect = null
+            _closingToRect = null
+            _closingSnapshot = null
+        }
+
+        function startExpand() {
+            if (scene.editingNodeId === "" || _closing)
+                return false
+            if (!_transitionRunning)
+                prepareExpand()
+            _openingFromRect = copyRect(_nodeRect)
+            _openingToRect = copyRect(_expandedRect)
+            transitionProgress = 0
+            expandAnimation.start()
+            return true
+        }
+
+        function finishCollapse() {
+            transitionProgress = 0
+            _transitionRunning = false
+            _closing = false
+            _closingStartProgress = 1
+            _openingFromRect = null
+            _openingToRect = null
+            _closingFromRect = null
+            _closingToRect = null
+            _closingSnapshot = null
+        }
+
+        function abortTransition() {
+            expandAnimation.stop()
+            collapseAnimation.stop()
+            finishCollapse()
+        }
+
+        function closeEdit(committed) {
+            if (scene.editingNodeId === "")
+                return
+            var nodeId = scene.editingNodeId
+            var currentNode = scene.graphController.getNode(nodeId)
+            if (!currentNode) {
+                scene.finishActiveNodeEdit()
+                return
+            }
+            var displayNode = committed ? currentNode
+                                        : (scene.editingNodeSnapshot || currentNode)
+            var targetRect = nodeRectFor(displayNode)
+            var currentRect = copyRect(_presentedRect)
+            _closingSnapshot = presentationSnapshot(displayNode, targetRect)
+            _closingFromRect = currentRect
+            _closingToRect = copyRect(targetRect)
+            _closingStartProgress = Math.max(0, transitionProgress)
+            _openingFromRect = null
+            _openingToRect = null
+            _closing = true
+            _transitionRunning = true
+            titleInput.focus = false
+            bodyEdit.focus = false
+            scene.finishActiveNodeEdit(true)
+            if (_closingStartProgress <= 0) {
+                finishCollapse()
+                return
+            }
+            collapseAnimation.duration = Math.max(70, Math.round(180 * _closingStartProgress))
+            collapseAnimation.start()
+        }
+
+        NumberAnimation {
+            id: expandAnimation
+            target: editOverlay
+            property: "transitionProgress"
+            to: 1
+            duration: 190
+            easing.type: Easing.OutCubic
+            onFinished: {
+                if (scene.editingNodeId === "" || editOverlay._closing)
+                    return
+                editOverlay.transitionProgress = 1
+                editOverlay._transitionRunning = false
+                Qt.callLater(function() {
+                    if (scene.editingNodeId !== "" && !editOverlay._closing)
+                        editOverlay.activate()
+                })
+            }
+        }
+        NumberAnimation {
+            id: collapseAnimation
+            target: editOverlay
+            property: "transitionProgress"
+            to: 0
+            duration: 180
+            easing.type: Easing.InCubic
+            onFinished: editOverlay.finishCollapse()
+        }
+
+        // _presentedRect 是 Scene 局部坐标；视觉父级在 Canvas 顶层时显式换算。
+        // 会话或关闭快照保持可见，输入控件只在展开完成后启用。
+
         // Issue #987：编辑器视觉父级在 Router 之上；对象所有权仍属于本 Scene，
         // 切图/销毁时随 Scene 一并回收，不保留透明点击层或第二份编辑器。
         parent: scene.editOverlayHost ? scene.editOverlayHost : scene
-        // 可见性只由会话驱动：节点快照保证几何始终可用；节点真正删除时由
-        // ensureEditingNodeExists() 结束会话，绝不让一次模型查询把有效草稿藏掉。
-        visible: scene.hasActiveNodeEdit
-        x: _hostPos.x
-        y: _hostPos.y
-        width: _expandedRect.width
-        height: _expandedRect.height
+        // 节点快照保证有效会话与收起展示都有稳定几何；节点真正删除时结束会话。
+        visible: scene.hasActiveNodeEdit || _closing
+        x: _presentedHostPos.x
+        y: _presentedHostPos.y
+        width: _presentedRect.width
+        height: _presentedRect.height
+        opacity: transitionProgress
+        enabled: _inputVisible
         radius: 10
         color: scene._surfaceContainer
         border.color: scene._accent
@@ -1445,8 +1654,8 @@ Item {
         function activate() {
             if (scene.editingNodeId === "")
                 return activationFailed("no_session")
-            if (!visible || width <= 0 || height <= 0)
-                return activationFailed("overlay_not_ready")
+            if (!_inputVisible || width <= 0 || height <= 0)
+                return activationFailed("transition_incomplete")
             titleInput.text = scene.editingTitleDraft
             bodyEdit.text = scene.editingBodyDraft
             _titleInputReported = false
@@ -1479,7 +1688,7 @@ Item {
         }
 
         function focusCurrent() {
-            if (!visible)
+            if (!_inputVisible)
                 return
             if (StarMapNodeMetrics.canEditBody(editingNode))
                 bodyEdit.forceActiveFocus()
@@ -1490,6 +1699,8 @@ Item {
         function commitEdit() {
             if (scene.editingNodeId === "")
                 return true
+            if (_transitionRunning || _closing)
+                return false
             // 有会话但编辑器不可见/无尺寸：不能当作保存成功，草稿必须保留。
             if (!visible || width <= 0 || height <= 0) {
                 scene.logInteraction("node_edit_commit_blocked", "node", scene.editingNodeId, {
@@ -1537,7 +1748,7 @@ Item {
                     "gesture": scene.editingGestureId,
                     "button": scene.editingGestureButton
                 })
-                scene.finishActiveNodeEdit()
+                closeEdit(true)
                 return true
             }
             scene.editingSaving = true
@@ -1563,7 +1774,7 @@ Item {
                 "gesture": scene.editingGestureId,
                 "button": scene.editingGestureButton
             })
-            scene.finishActiveNodeEdit()
+            closeEdit(true)
             return true
         }
 
@@ -1578,6 +1789,7 @@ Item {
             id: titleInput
             x: 10
             y: 4
+            visible: editOverlay._inputVisible
             width: parent.width - 20
             height: editOverlay._titleHeight
             color: scene._textPrimary
@@ -1589,7 +1801,7 @@ Item {
             padding: 0
 
             onActiveFocusChanged: {
-                if (editOverlay.visible) {
+                if (editOverlay._inputVisible) {
                     scene.logInteraction("node_edit_focus_changed", "node",
                                          scene.editingNodeId, {
                         "focusTarget": "title",
@@ -1600,14 +1812,14 @@ Item {
                 }
             }
             onTextChanged: {
-                if (editOverlay.visible) {
+                if (editOverlay._inputVisible && !editOverlay._closing) {
                     scene.editingTitleDraft = text
                     if (scene.editingError.length > 0)
                         scene.editingError = ""
                 }
             }
             onTextEdited: {
-                if (editOverlay.visible && !editOverlay._titleInputReported) {
+                if (editOverlay._inputVisible && !editOverlay._titleInputReported) {
                     editOverlay._titleInputReported = true
                     scene.logInteraction("node_edit_title_changed", "node",
                                          scene.editingNodeId, {
@@ -1640,7 +1852,7 @@ Item {
                 event.accepted = true
             }
             Keys.onEscapePressed: function(event) {
-                scene.finishActiveNodeEdit()
+                editOverlay.closeEdit(false)
                 event.accepted = true
             }
         }
@@ -1651,7 +1863,7 @@ Item {
             anchors.right: parent.right
             anchors.rightMargin: 10
             y: editOverlay._bodyTop
-            visible: editOverlay.editingNode !== null
+            visible: editOverlay._inputVisible && editOverlay.editingNode !== null
                      && !StarMapNodeMetrics.canEditBody(editOverlay.editingNode)
             text: qsTr("引用内容仅支持修改名称")
             color: scene._textMuted
@@ -1666,7 +1878,7 @@ Item {
             y: editOverlay._bodyTop
             width: parent.width - 20
             height: editOverlay._bodyHeight
-            visible: editOverlay.editingNode !== null
+            visible: editOverlay._inputVisible && editOverlay.editingNode !== null
                      && StarMapNodeMetrics.canEditBody(editOverlay.editingNode)
             clip: true
             contentWidth: width
@@ -1710,7 +1922,7 @@ Item {
                 padding: 0
 
                 onActiveFocusChanged: {
-                    if (editOverlay.visible) {
+                    if (editOverlay._inputVisible) {
                         scene.logInteraction("node_edit_focus_changed", "node",
                                              scene.editingNodeId, {
                             "focusTarget": "body",
@@ -1721,14 +1933,14 @@ Item {
                     }
                 }
                 onTextChanged: {
-                    if (editOverlay.visible) {
+                    if (editOverlay._inputVisible && !editOverlay._closing) {
                         scene.editingBodyDraft = text
                         if (scene.editingError.length > 0)
                             scene.editingError = ""
                     }
                 }
                 onTextEdited: {
-                    if (editOverlay.visible && !editOverlay._bodyInputReported) {
+                    if (editOverlay._inputVisible && !editOverlay._bodyInputReported) {
                         editOverlay._bodyInputReported = true
                         scene.logInteraction("node_edit_body_changed", "node",
                                              scene.editingNodeId, {
@@ -1756,7 +1968,7 @@ Item {
                         editOverlay.commitEdit()
                         event.accepted = true
                     } else if (event.key === Qt.Key_Escape) {
-                        scene.finishActiveNodeEdit()
+                        editOverlay.closeEdit(false)
                         event.accepted = true
                     }
                 }
@@ -1771,7 +1983,7 @@ Item {
             anchors.rightMargin: 10
             anchors.bottom: editFooter.top
             height: editOverlay._errorHeight
-            visible: scene.editingError.length > 0
+            visible: editOverlay._inputVisible && scene.editingError.length > 0
             text: scene.editingError
             color: scene._error
             font.pixelSize: 11
@@ -1786,6 +1998,7 @@ Item {
             anchors.bottom: parent.bottom
             anchors.margins: 8
             height: editOverlay._footerHeight
+            visible: editOverlay._inputVisible
 
             Controls.Button {
                 id: cancelButton
@@ -1797,7 +2010,7 @@ Item {
                 font.pixelSize: 12
                 padding: 0
                 enabled: !scene.editingSaving
-                onClicked: scene.finishActiveNodeEdit()
+                onClicked: editOverlay.closeEdit(false)
             }
             Controls.Button {
                 id: saveButton
