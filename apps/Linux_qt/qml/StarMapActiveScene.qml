@@ -484,6 +484,14 @@ Item {
                 && p.x <= editOverlay.width && p.y <= editOverlay.height
     }
 
+    // Canvas 用这份 Scene 局部视觉矩形做一次性最小镜头平移；节点世界坐标不变。
+    function nodeEditExpandedRect() {
+        if (editingNodeId === "" || !editOverlay.visible)
+            return null
+        var r = editOverlay._expandedRect
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+    }
+
     // Repeater.itemAt() 的静态类型是 QQuickItem（qmllint 会把这些 delegate 属性
     // 报成 missing-property，属静态分析的已知误报），运行时取的是真实 delegate。
     function nodeItemOf(nodeId) {
@@ -529,8 +537,18 @@ Item {
             "gesture": editingGestureId,
             "button": editingGestureButton
         })
-        // 可见性/尺寸/坐标由会话与节点快照驱动；布局完成后再验证焦点。
-        Qt.callLater(editOverlay.activate)
+        // 可见性/尺寸/坐标由会话与节点快照驱动。先让布局落地，再只平移一次
+        // 镜头露出原位展开卡片，最后验证真实输入控件的焦点。
+        Qt.callLater(function() {
+            if (scene.editingNodeId !== nodeId || !editOverlay.visible)
+                return
+            if (scene.menuHost && typeof scene.menuHost.ensureNodeEditVisible === "function")
+                scene.menuHost.ensureNodeEditVisible()
+            Qt.callLater(function() {
+                if (scene.editingNodeId === nodeId)
+                    editOverlay.activate()
+            })
+        })
         return true
     }
 
@@ -1194,6 +1212,7 @@ Item {
             Rectangle {
                 id: visualNode
                 anchors.fill: parent
+                opacity: nodeItem.isEditing ? 0 : 1
                 radius: Math.min(scene.dt.radiusSm * scene._safeZoom,
                                  Math.min(width, height) / 2)
                 color: scene._surfaceContainer
@@ -1336,10 +1355,9 @@ Item {
         z: -1
     }
 
-    // ── Issue #984：场景级唯一节点编辑器（不挂在 Repeater delegate 内）──
-    // 模型行更新 / 文本重测 / 保存成功都不会重建输入层。编辑器按节点的
-    // 屏幕投影矩形与视口边界选择锚点：靠右向左展开、靠下向上展开，太窄
-    // 时在视口内居中；卡片 authored position 与连线几何不因浮层移动而改变。
+    // ── 场景级唯一节点编辑器（不挂在 Repeater delegate 内）──
+    // 模型行更新 / 文本重测 / 保存成功都不会重建输入层。编辑卡以原节点投影
+    // 矩形为锚点、保持中心展开；镜头负责露出卡片，不改 authored position。
     Rectangle {
         id: editOverlay
 
@@ -1355,39 +1373,38 @@ Item {
         readonly property var _nodeRect: {
             if (!editingNode)
                 return { x: 0, y: 0, width: 0, height: 0 }
+            var item = scene.nodeItemOf(editingNode.id)
+            if (item) {
+                return { x: item.x, y: item.y, width: item.width, height: item.height }
+            }
+            var nodeWidth = editingNode.width !== undefined
+                    ? editingNode.width : StarMapNodeMetrics.defaultNodeWidth()
+            var nodeHeight = editingNode.height !== undefined
+                    ? editingNode.height : StarMapNodeMetrics.defaultNodeHeight()
             return {
                 x: scene.worldToScreenX(editingNode.x),
                 y: scene.worldToScreenY(editingNode.y),
-                width: editingNode.width * scene._safeZoom,
-                height: editingNode.height * scene._safeZoom
+                width: nodeWidth * scene._safeZoom,
+                height: nodeHeight * scene._safeZoom
             }
         }
-        readonly property var _anchor: {
+        readonly property var _expandedRect: {
             var r = _nodeRect
             var vw = Math.max(0, scene.width)
             var vh = Math.max(0, scene.height)
             var m = _margin
-            var availableW = Math.max(80, vw - m * 2)
-            var availableH = Math.max(80, vh - m * 2)
-            var w = Math.min(Math.max(r.width, 260), availableW)
+            var availableW = Math.max(0, vw - m * 2)
+            var availableH = Math.max(0, vh - m * 2)
+            var w = Math.min(Math.max(0, r.width, 260), availableW)
             var h = Math.min(Math.max(r.height, 220),
                              Math.min(StarMapNodeMetrics.EDIT_MAX_HEIGHT, availableH))
-            var x = r.x
-            if (x + w > vw - m)
-                x = r.x + r.width - w
-            x = Math.max(m, Math.min(x, vw - w - m))
-            var y = r.y
-            if (y + h > vh - m)
-                y = r.y + r.height - h
-            y = Math.max(m, Math.min(y, vh - h - m))
-            // 投影太窄或视口太窄时，原卡片放不下可读编辑器，改为视口内居中浮层。
-            if (r.width < 180 || vw < 480)
-                x = Math.max(m, (vw - w) / 2)
+            var x = r.x + (r.width - w) / 2
+            var y = r.y + (r.height - h) / 2
             return { x: x, y: y, width: w, height: h }
         }
-        // _anchor 是 Scene 局部坐标；视觉父级在 Canvas 顶层时必须显式换算。
+        // _expandedRect 是 Scene 局部坐标；视觉父级在 Canvas 顶层时显式换算。
         readonly property var _hostPos: {
-            var a = _anchor
+            var a = _expandedRect
             if (!parent || parent === scene)
                 return Qt.point(a.x, a.y)
             var p = scene.mapToItem(parent, a.x, a.y)
@@ -1402,14 +1419,16 @@ Item {
         visible: scene.hasActiveNodeEdit
         x: _hostPos.x
         y: _hostPos.y
-        width: _anchor.width
-        height: _anchor.height
+        width: _expandedRect.width
+        height: _expandedRect.height
         radius: 10
         color: scene._surfaceContainer
         border.color: scene._accent
         border.width: 2
         clip: true
         z: 30
+        property bool _bodyInputReported: false
+        property bool _titleInputReported: false
 
         function activationFailed(reason) {
             scene.logInteraction("node_edit_activation_failed", "node", scene.editingNodeId, {
@@ -1430,14 +1449,26 @@ Item {
                 return activationFailed("overlay_not_ready")
             titleInput.text = scene.editingTitleDraft
             bodyEdit.text = scene.editingBodyDraft
-            titleInput.forceActiveFocus()
-            titleInput.selectAll()
+            _titleInputReported = false
+            _bodyInputReported = false
             bodyFlick.contentY = 0
-            if (!titleInput.activeFocus)
+            var bodyEditable = StarMapNodeMetrics.canEditBody(editingNode)
+            if (bodyEditable) {
+                bodyEdit.cursorPosition = bodyEdit.length
+                bodyEdit.forceActiveFocus()
+            } else {
+                titleInput.forceActiveFocus()
+                titleInput.selectAll()
+            }
+            var titleFocus = titleInput.activeFocus
+            var bodyFocus = bodyEdit.activeFocus
+            if (bodyEditable ? !bodyFocus : !titleFocus)
                 return activationFailed("focus_not_granted")
             scene.logInteraction("node_edit_ready", "node", scene.editingNodeId, {
                 "visible": visible,
-                "activeFocus": titleInput.activeFocus,
+                "titleFocus": titleFocus,
+                "bodyFocus": bodyFocus,
+                "focusTarget": bodyFocus ? "body" : "title",
                 "overlayRect": {
                     "x": x, "y": y, "width": width, "height": height
                 },
@@ -1552,15 +1583,38 @@ Item {
             color: scene._textPrimary
             font.pixelSize: 16
             font.weight: Font.DemiBold
+            activeFocusOnPress: true
             selectByMouse: true
             clip: true
             padding: 0
 
+            onActiveFocusChanged: {
+                if (editOverlay.visible) {
+                    scene.logInteraction("node_edit_focus_changed", "node",
+                                         scene.editingNodeId, {
+                        "focusTarget": "title",
+                        "activeFocus": activeFocus,
+                        "length": text.length,
+                        "imeComposing": inputMethodComposing
+                    })
+                }
+            }
             onTextChanged: {
                 if (editOverlay.visible) {
                     scene.editingTitleDraft = text
                     if (scene.editingError.length > 0)
                         scene.editingError = ""
+                }
+            }
+            onTextEdited: {
+                if (editOverlay.visible && !editOverlay._titleInputReported) {
+                    editOverlay._titleInputReported = true
+                    scene.logInteraction("node_edit_title_changed", "node",
+                                         scene.editingNodeId, {
+                        "length": text.length,
+                        "focusTarget": activeFocus ? "title" : "other",
+                        "imeComposing": inputMethodComposing
+                    })
                 }
             }
             Keys.onReturnPressed: function(event) {
@@ -1603,6 +1657,7 @@ Item {
             color: scene._textMuted
             font.pixelSize: 12
             wrapMode: Text.Wrap
+            enabled: false
         }
 
         Flickable {
@@ -1618,7 +1673,18 @@ Item {
             contentHeight: bodyEdit.contentHeight + 2
             boundsBehavior: Flickable.StopAtBounds
             flickableDirection: Flickable.VerticalFlick
-            interactive: contentHeight > height
+            // 让 TextEdit 独占文本点击、选区与拖动；正文滚动由滚轮和光标可见性驱动。
+            interactive: false
+
+            Text {
+                x: 3
+                y: 2
+                visible: bodyEdit.text.length === 0
+                text: qsTr("输入节点内容")
+                color: scene._textMuted
+                font.pixelSize: 13
+                enabled: false
+            }
 
             WheelHandler {
                 onWheel: function(event) {
@@ -1639,14 +1705,37 @@ Item {
                 font.pixelSize: 13
                 wrapMode: TextEdit.Wrap
                 textFormat: TextEdit.PlainText
+                activeFocusOnPress: true
                 selectByMouse: true
                 padding: 0
 
+                onActiveFocusChanged: {
+                    if (editOverlay.visible) {
+                        scene.logInteraction("node_edit_focus_changed", "node",
+                                             scene.editingNodeId, {
+                            "focusTarget": "body",
+                            "activeFocus": activeFocus,
+                            "length": text.length,
+                            "imeComposing": inputMethodComposing
+                        })
+                    }
+                }
                 onTextChanged: {
                     if (editOverlay.visible) {
                         scene.editingBodyDraft = text
                         if (scene.editingError.length > 0)
                             scene.editingError = ""
+                    }
+                }
+                onTextEdited: {
+                    if (editOverlay.visible && !editOverlay._bodyInputReported) {
+                        editOverlay._bodyInputReported = true
+                        scene.logInteraction("node_edit_body_changed", "node",
+                                             scene.editingNodeId, {
+                            "length": text.length,
+                            "focusTarget": activeFocus ? "body" : "other",
+                            "imeComposing": inputMethodComposing
+                        })
                     }
                 }
                 onCursorRectangleChanged: {

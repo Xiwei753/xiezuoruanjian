@@ -646,6 +646,7 @@ Item {
             leftTapCandidateValid = false
         if (!canvas || !ic) {
             resetLeftLocalState()
+            leftPointerInEditor = false
             return
         }
         var mode = ic.pointerMode
@@ -660,6 +661,7 @@ Item {
         if (blocked || armed || mode === "pinch"
                 || !leftGestureOwnsController || controllerGesture !== "left") {
             resetLeftLocalState()
+            leftPointerInEditor = false
             return
         }
         if (cancelled) {
@@ -696,6 +698,7 @@ Item {
             endPanWithLog()
         }
         resetLeftLocalState()
+        leftPointerInEditor = false
     }
 
     function handleRelease() {
@@ -718,6 +721,7 @@ Item {
             rightTapCandidateValid = false
         if (!canvas || !ic) {
             resetRightLocalState()
+            rightPointerInEditor = false
             return
         }
         var mode = ic.pointerMode
@@ -730,6 +734,7 @@ Item {
         if (!rightPressActive || blocked || armed || mode === "pinch"
                 || controllerGesture !== "right") {
             resetRightLocalState()
+            rightPointerInEditor = false
             return
         }
         if (cancelled) {
@@ -746,6 +751,7 @@ Item {
             ic.cancelPressPending()
         }
         resetRightLocalState()
+        rightPointerInEditor = false
     }
 
     function endRightPress() {
@@ -874,8 +880,6 @@ Item {
             // 真正的 release 只由 passive PointHandler 收尾。
             if (pressed)
                 router.beginPress(mouseLeftTap.point, "mouse")
-            else
-                router.leftPointerInEditor = false
         }
         onCanceled: router.leftTapCandidateValid = false
         onSingleTapped: function(eventPoint) {
@@ -904,8 +908,6 @@ Item {
         onPressedChanged: {
             if (pressed)
                 router.beginPress(touchTap.point, "touch")
-            else
-                router.leftPointerInEditor = false
         }
         onCanceled: router.leftTapCandidateValid = false
         onSingleTapped: function(eventPoint) {
@@ -932,8 +934,6 @@ Item {
         onPressedChanged: {
             if (pressed)
                 router.beginRightPress(mouseRightTap.point)
-            else
-                router.rightPointerInEditor = false
         }
         onCanceled: router.rightTapCandidateValid = false
         onSingleTapped: function(eventPoint) {
@@ -1068,8 +1068,6 @@ Item {
             if (active) {
                 _editorOwnsPinch = router.pointInEditor(pinchHandler.centroid.position.x,
                                                         pinchHandler.centroid.position.y)
-                router.leftPointerInEditor = false
-                router.rightPointerInEditor = false
                 // 双指接管也走统一取消入口；随后 reset 只是状态机复位。
                 router.cancelAllGestures("pinch")
                 canvas.resetInteraction()

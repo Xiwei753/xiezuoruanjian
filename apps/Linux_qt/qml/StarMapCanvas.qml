@@ -1191,6 +1191,32 @@ Item {
         return scene.editorContainsScenePoint(p.x, p.y)
     }
 
+    // 编辑卡保持在节点原位；只在激活时最小平移相机，让展开矩形进入视口安全区。
+    function ensureNodeEditVisible() {
+        var scene = activeScene()
+        if (!scene || typeof scene.nodeEditExpandedRect !== "function")
+            return false
+        var rect = scene.nodeEditExpandedRect()
+        if (!rect || rect.width <= 0 || rect.height <= 0)
+            return false
+        var topLeft = scene.mapToItem(canvasArea, rect.x, rect.y)
+        var bottomRight = scene.mapToItem(canvasArea,
+                                          rect.x + rect.width,
+                                          rect.y + rect.height)
+        var left = Math.min(topLeft.x, bottomRight.x)
+        var right = Math.max(topLeft.x, bottomRight.x)
+        var top = Math.min(topLeft.y, bottomRight.y)
+        var bottom = Math.max(topLeft.y, bottomRight.y)
+        var margin = Math.max(0, Math.min(12, Math.min(width, height) / 2))
+        var dx = left < margin ? margin - left
+                               : (right > width - margin ? width - margin - right : 0)
+        var dy = top < margin ? margin - top
+                              : (bottom > height - margin ? height - margin - bottom : 0)
+        if (dx !== 0 || dy !== 0)
+            applyPan(panX + dx, panY + dy)
+        return true
+    }
+
     // 直接读活动 Scene 的会话事实，不依赖可能晚一拍的汇总键。
     function hasActiveNodeEdit() {
         var scene = activeScene()
