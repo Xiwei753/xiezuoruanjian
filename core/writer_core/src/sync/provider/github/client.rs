@@ -13,10 +13,38 @@
 //! 给定版本，409 直接上报 `PreconditionFailed`，由 LWW engine 按乐观并发语义处理。
 
 use base64::Engine;
+use std::sync::Arc;
 use writer_platform_api::{HttpRequest, HttpResponse, SyncTransport, TransportError};
 
 use super::error::map_http_error;
 use crate::sync::provider::error::ProviderError;
+use crate::sync::provider::ProviderNetworkAccounting;
+
+/// GitHub HTTP transport wrapper. It accounts only body payload bytes handed to/from the
+/// platform transport; headers and bytes from failed calls are not observable here.
+pub(crate) struct CountingTransport {
+    inner: Arc<dyn SyncTransport>,
+    accounting: Arc<ProviderNetworkAccounting>,
+}
+
+impl CountingTransport {
+    pub(crate) fn new(
+        inner: Arc<dyn SyncTransport>,
+        accounting: Arc<ProviderNetworkAccounting>,
+    ) -> Self {
+        Self { inner, accounting }
+    }
+}
+
+impl SyncTransport for CountingTransport {
+    fn execute(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        let request_body_bytes = request.body.as_ref().map_or(0, Vec::len);
+        self.accounting.record_request(request_body_bytes);
+        let response = self.inner.execute(request)?;
+        self.accounting.record_bytes_received(response.body.len());
+        Ok(response)
+    }
+}
 
 fn transport_err_to_provider(e: TransportError) -> ProviderError {
     ProviderError::Network {

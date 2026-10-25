@@ -52,6 +52,100 @@ pub enum ProviderSecrets {
     GitHub { token: String },
 }
 
+/// Provider 边界的累计网络指标快照。
+///
+/// `set_operation_id()` 会切换上下文并清零当前累计值。字节数按 `metric_scope`
+/// 说明的可观测范围统计，不代表网络线缆上的全部字节。
+///
+/// 当前 scope：
+/// - `github_execute_body_bytes`：SyncTransport execute 次数及提交/返回的 HTTP body 字节；
+///   不含 headers，也不含失败调用中未返回的响应字节。
+/// - `git_https_provider_operations_pack_bytes_lower_bound`：Git provider 网络操作次数及
+///   libgit2 回调报告的 pack 字节下界，不是逐 HTTP 请求数或完整 wire 字节数。
+/// - `not_instrumented`：Provider 未实现网络计数。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ProviderNetworkMetrics {
+    pub request_count: u64,
+    pub bytes_received: u64,
+    pub bytes_sent: u64,
+    pub operation_id: Option<String>,
+    pub metric_scope: String,
+}
+
+impl Default for ProviderNetworkMetrics {
+    fn default() -> Self {
+        Self {
+            request_count: 0,
+            bytes_received: 0,
+            bytes_sent: 0,
+            operation_id: None,
+            metric_scope: "not_instrumented".to_string(),
+        }
+    }
+}
+
+/// Provider 内部共享的指标累计器。只保存计数与 operation_id，不保存请求内容。
+#[derive(Debug)]
+pub(crate) struct ProviderNetworkAccounting {
+    metric_scope: &'static str,
+    state: std::sync::Mutex<ProviderNetworkMetrics>,
+}
+
+impl ProviderNetworkAccounting {
+    pub(crate) fn new(metric_scope: &'static str) -> Self {
+        Self {
+            metric_scope,
+            state: std::sync::Mutex::new(ProviderNetworkMetrics {
+                metric_scope: metric_scope.to_string(),
+                ..ProviderNetworkMetrics::default()
+            }),
+        }
+    }
+
+    /// 设置当前操作上下文并开始一轮新的累计窗口。
+    pub(crate) fn set_operation_id(&self, operation_id: Option<&str>) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.request_count = 0;
+        state.bytes_received = 0;
+        state.bytes_sent = 0;
+        state.operation_id = operation_id.map(str::to_string);
+    }
+
+    /// 记录一次 provider 请求尝试以及交给传输层的请求 body 字节数。
+    pub(crate) fn record_request(&self, bytes_sent: usize) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.request_count = state.request_count.saturating_add(1);
+        state.bytes_sent = state
+            .bytes_sent
+            .saturating_add(u64::try_from(bytes_sent).unwrap_or(u64::MAX));
+    }
+
+    pub(crate) fn record_bytes_received(&self, bytes: usize) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.bytes_received = state
+            .bytes_received
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+    }
+
+    pub(crate) fn record_bytes_sent(&self, bytes: usize) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.bytes_sent = state
+            .bytes_sent
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+    }
+
+    pub(crate) fn snapshot(&self) -> ProviderNetworkMetrics {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        ProviderNetworkMetrics {
+            request_count: state.request_count,
+            bytes_received: state.bytes_received,
+            bytes_sent: state.bytes_sent,
+            operation_id: state.operation_id.clone(),
+            metric_scope: self.metric_scope.to_string(),
+        }
+    }
+}
+
 impl ProviderSecrets {
     /// 返回任意 Provider 的密钥；用于通用安全存储迁移。
     pub fn any_secret(&self) -> Option<&str> {
@@ -98,6 +192,17 @@ impl ProviderSecrets {
 /// trait 要求 `Send + Sync`，方法接受 `&self`，实现内部处理并发。
 /// 调用方可在多线程共享 `&dyn SyncProvider`。
 pub trait SyncProvider: Send + Sync {
+    /// 设置当前 operation_id 并重置本 Provider 的累计网络指标。
+    ///
+    /// 调用方可在一个同步 phase/run 开始前设置 ID，随后调用
+    /// [`network_metrics`](Self::network_metrics) 读取该窗口内的累计值。
+    fn set_operation_id(&self, _operation_id: Option<&str>) {}
+
+    /// 读取自最近一次 [`set_operation_id`](Self::set_operation_id) 后累计的指标。
+    fn network_metrics(&self) -> ProviderNetworkMetrics {
+        ProviderNetworkMetrics::default()
+    }
+
     /// 返回远端能力集合。
     fn capabilities(&self) -> capabilities::SyncCapabilities;
 

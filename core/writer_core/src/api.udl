@@ -379,6 +379,7 @@ dictionary SyncOperationStateDto {
     u32 finished_targets;
     u32 total_targets;
     SyncOperationCountsDto counts;
+    boolean local_content_changed;
     string? raw_error;
 };
 
@@ -442,6 +443,7 @@ dictionary FullSyncResultDto {
     u32 total_overwritten;
     u32 total_ignored;
     u32 total_conflicts;
+    boolean local_content_changed;
     string? error;
     string? error_category;
     string? message_key;

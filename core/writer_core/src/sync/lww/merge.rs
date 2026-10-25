@@ -52,7 +52,8 @@ use super::transfer::{
 
 fn record_sync_object_event(
     event: &str,
-    remote_prefix: &str,
+    target_remote_prefix: &str,
+    source_remote_prefix: &str,
     path: &str,
     action: &str,
     outcome: &str,
@@ -66,7 +67,17 @@ fn record_sync_object_event(
     let mut fields = std::collections::BTreeMap::new();
     fields.insert(
         "target_digest".to_string(),
-        serde_json::Value::String(format!("{:x}", Sha256::digest(remote_prefix.as_bytes()))),
+        serde_json::Value::String(format!(
+            "{:x}",
+            Sha256::digest(target_remote_prefix.as_bytes())
+        )),
+    );
+    fields.insert(
+        "source_digest".to_string(),
+        serde_json::Value::String(format!(
+            "{:x}",
+            Sha256::digest(source_remote_prefix.as_bytes())
+        )),
     );
     fields.insert(
         "object_path_digest".to_string(),
@@ -198,6 +209,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
         sync_root,
         provider,
         source_remote_prefix,
+        source_remote_prefix,
         scope,
         state,
         None,
@@ -205,10 +217,15 @@ pub(crate) fn merge_remote_into_local_snapshot(
     )
 }
 
-/// Project merge entry point carrying privacy-safe task correlation and staging location.
+/// Project merge entry point carrying stable target identity, source generation, privacy-safe
+/// task correlation, and staging location.
+///
+/// `target_remote_prefix` is hashed as the stable target identity. The independently hashed
+/// `source_remote_prefix` identifies the visible source (including a LiveProject generation).
 pub(crate) fn merge_remote_into_local_snapshot_with_diagnostics(
     sync_root: &Path,
     provider: &dyn SyncProvider,
+    target_remote_prefix: &str,
     source_remote_prefix: &str,
     scope: SyncScope,
     state: &mut SyncState,
@@ -218,6 +235,7 @@ pub(crate) fn merge_remote_into_local_snapshot_with_diagnostics(
     merge_remote_into_local_snapshot_with_group_and_diagnostics(
         sync_root,
         provider,
+        target_remote_prefix,
         source_remote_prefix,
         scope,
         None,
@@ -239,6 +257,7 @@ pub(crate) fn merge_remote_into_local_app_group(
         sync_root,
         provider,
         source_remote_prefix,
+        source_remote_prefix,
         SyncScope::App,
         Some(group),
         state,
@@ -258,6 +277,7 @@ pub(crate) fn merge_remote_into_local_app_group(
 fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     sync_root: &Path,
     provider: &dyn SyncProvider,
+    target_remote_prefix: &str,
     source_remote_prefix: &str,
     scope: SyncScope,
     app_group: Option<&crate::sync::types::AppDataGroup>,
@@ -311,6 +331,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
             recovered_missing_files.push(missing.path.clone());
             record_sync_object_event(
                 "sync.object.recovered",
+                target_remote_prefix,
                 source_remote_prefix,
                 &missing.path,
                 "remote_blob",
@@ -355,6 +376,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                     recovered_missing_files.push(missing.path.clone());
                     record_sync_object_event(
                         "sync.object.recovered",
+                        target_remote_prefix,
                         source_remote_prefix,
                         &missing.path,
                         "remote_blob",
@@ -369,6 +391,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                     unresolved_missing_paths.push(missing.path.clone());
                     record_sync_object_event(
                         "sync.object.recovery_failed",
+                        target_remote_prefix,
                         source_remote_prefix,
                         &missing.path,
                         "remote_blob",
@@ -385,6 +408,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                 unresolved_missing_paths.push(missing.path.clone());
                 record_sync_object_event(
                     "sync.object.recovery_failed",
+                    target_remote_prefix,
                     source_remote_prefix,
                     &missing.path,
                     "remote_blob",
@@ -1000,6 +1024,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     for path in &to_download {
         record_sync_object_event(
             "sync.object.plan",
+            target_remote_prefix,
             source_remote_prefix,
             path,
             "download_remote",
@@ -1014,6 +1039,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     for path in &to_delete_local {
         record_sync_object_event(
             "sync.object.plan",
+            target_remote_prefix,
             source_remote_prefix,
             path,
             "delete_local",
@@ -1028,6 +1054,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     for path in &to_upload {
         record_sync_object_event(
             "sync.object.plan",
+            target_remote_prefix,
             source_remote_prefix,
             path,
             "upload_remote",
@@ -1042,6 +1069,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     for path in &local_deletes_count {
         record_sync_object_event(
             "sync.object.plan",
+            target_remote_prefix,
             source_remote_prefix,
             path,
             "delete_remote",

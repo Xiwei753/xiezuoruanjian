@@ -168,26 +168,15 @@ impl AppBackend {
         // Issue #754 评论 5814866116 改动2: handle_sync_outcome 返回 SyncOutcomeEffect，
         // 由 SyncBackend::handle_outcome 据此决定是否发 sync_content_applied。
         // 改动3: github init 旧路径已删除，不再有 pending_github_init_path 特判。
-        // Refresh only when Core reports an actual remote change applied locally.
-        // `downloaded` and `remoteDeleted` are the counts for remote upserts and
-        // remote deletions that changed the local workspace; uploads alone do not.
-        let content_changed = serde_json::from_str::<serde_json::Value>(&outcome.action_result)
-            .ok()
-            .and_then(|state| state.get("counts").cloned())
-            .map(|counts| {
-                counts
-                    .get("downloaded")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0)
-                    > 0
-                    || counts
-                        .get("remoteDeleted")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0)
-                        > 0
-            })
-            .unwrap_or(false)
-            && self.has_workspace();
+        // Refresh only when Core reports a path actually changed in live during Commit.
+        // Transfer counts can include staging recovery and deletion counts have opposing
+        // local/remote directions, so neither is a reliable content-change signal.
+        let content_changed =
+            serde_json::from_str::<writer_core::api::SyncOperationStateDto>(&outcome.action_result)
+                .ok()
+                .map(|state| state.local_content_changed)
+                .unwrap_or(false)
+                && self.has_workspace();
 
         let effect = if content_changed {
             self.handle_sync_content_refresh();
@@ -198,24 +187,15 @@ impl AppBackend {
 
         // Issue #779 评论 5854734343：GC 触发要看完整成功类终态，不仅字面上的 success，
         // 还包括 no_changes / latest_wins_applied / branch_missing_recovered —
-        // 这些都是 Core aggregate_full_sync_result() 的成功类终态。LWW 正常覆盖时
-        // overall_status 就是 latest_wins_applied，无变化时是 no_changes，都应启动 GC。
+        // 这些都是 Core aggregate_full_sync_result() 的成功类终态。GC 在成功同步后
+        // 仅当独立维护周期到期时启动，no_changes 不会每轮触发远端代际扫描。
         // 注意：sync_success（用于 content_changed）不包含 no_changes，
         // 避免无变化时也触发 content refresh。
         let gc_success = matches!(
             status_str,
             "success" | "no_changes" | "latest_wins_applied" | "branch_missing_recovered"
         );
-        let checkpoint_noop = status_str == "no_changes"
-            && serde_json::from_str::<serde_json::Value>(&outcome.action_result)
-                .ok()
-                .and_then(|state| {
-                    state
-                        .get("totalTargets")
-                        .and_then(serde_json::Value::as_u64)
-                })
-                == Some(0);
-        if gc_success && !checkpoint_noop && !self.manual_sync_pending {
+        if gc_success && !self.manual_sync_pending && self.gc_maintenance_due() {
             if self.current_gc_maintenance_cancel_token.is_some() {
                 // 旧 GC 还没退干净（done callback 还没清 token），标记 pending，
                 // 等 done callback 清 token 后补启动。不直接丢，避免本轮 GC 永久跳过。

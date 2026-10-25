@@ -133,6 +133,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                             crate::sync::lww::merge_remote_into_local_snapshot_with_diagnostics(
                                 sync_root,
                                 provider,
+                                &planned.target.remote_prefix,
                                 &source_prefix,
                                 planned.target.scope,
                                 &mut merge_state,

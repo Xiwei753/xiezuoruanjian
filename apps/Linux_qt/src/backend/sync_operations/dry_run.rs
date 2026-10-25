@@ -27,6 +27,7 @@ impl AppBackend {
                 finished_targets: 0,
                 total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
+                local_content_changed: false,
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
@@ -47,6 +48,7 @@ impl AppBackend {
                 finished_targets: 0,
                 total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
+                local_content_changed: false,
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
@@ -66,6 +68,7 @@ impl AppBackend {
                 finished_targets: 0,
                 total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
+                local_content_changed: false,
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
@@ -85,6 +88,7 @@ impl AppBackend {
                 finished_targets: 0,
                 total_targets: 0,
                 counts: writer_core::api::SyncOperationCountsDto::default(),
+                local_content_changed: false,
                 raw_error: None,
             };
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
@@ -108,6 +112,7 @@ impl AppBackend {
             finished_targets: 0,
             total_targets: 0,
             counts: writer_core::api::SyncOperationCountsDto::default(),
+            local_content_changed: false,
             raw_error: None,
         };
         self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
@@ -131,6 +136,7 @@ impl AppBackend {
                     finished_targets: 0,
                     total_targets: 0,
                     counts: writer_core::api::SyncOperationCountsDto::default(),
+                    local_content_changed: false,
                     raw_error: None,
                 };
                 self.current_sync_operation_state =
@@ -186,6 +192,7 @@ impl AppBackend {
                             finished_targets: 0,
                             total_targets: 0,
                             counts: writer_core::api::SyncOperationCountsDto::default(),
+                            local_content_changed: false,
                             raw_error: Some(mask_sync_error(&err_str)),
                         };
                         return SyncTaskOutcome {
@@ -225,6 +232,7 @@ impl AppBackend {
                             finished_targets: 0,
                             total_targets: 0,
                             counts,
+                            local_content_changed: false,
                             raw_error: None,
                         };
 
@@ -251,6 +259,7 @@ impl AppBackend {
                             finished_targets: 0,
                             total_targets: 0,
                             counts: writer_core::api::SyncOperationCountsDto::default(),
+                            local_content_changed: false,
                             raw_error: Some(mask_sync_error(&err_str)),
                         };
 
@@ -286,6 +295,7 @@ impl AppBackend {
                         finished_targets: 0,
                         total_targets: 0,
                         counts: writer_core::api::SyncOperationCountsDto::default(),
+                        local_content_changed: false,
                         raw_error: None,
                     };
                     callback(SyncTaskOutcome {

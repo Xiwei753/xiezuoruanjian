@@ -12,7 +12,7 @@ mod credentials;
 mod repository;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use git2::Direction;
 
@@ -22,18 +22,21 @@ use crate::sync::provider::model::{
     BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion,
     WritePrecondition,
 };
-use crate::sync::provider::SyncProvider;
+use crate::sync::provider::{ProviderNetworkAccounting, ProviderNetworkMetrics, SyncProvider};
 use crate::sync::types::SyncDiagnosticsResult;
 use crate::sync::url::sanitize_remote_url;
 
 pub use config::GitHttpsProviderConfig;
 pub use config::GitHttpsRuntimeConfig;
 
+const GIT_HTTPS_METRIC_SCOPE: &str = "git_https_provider_operations_pack_bytes_lower_bound";
+
 /// 通用 Git HTTPS Provider。
 pub struct GitHttpsProvider {
     config: GitHttpsRuntimeConfig,
     cache_dir: PathBuf,
     snapshot: Mutex<Option<repository::Snapshot>>,
+    network_accounting: Arc<ProviderNetworkAccounting>,
 }
 
 impl GitHttpsProvider {
@@ -42,6 +45,7 @@ impl GitHttpsProvider {
             config,
             cache_dir,
             snapshot: Mutex::new(None),
+            network_accounting: Arc::new(ProviderNetworkAccounting::new(GIT_HTTPS_METRIC_SCOPE)),
         }
     }
 
@@ -51,7 +55,7 @@ impl GitHttpsProvider {
 
     /// 只连接并读取 refs，用于路由探测与诊断。
     pub(crate) fn probe(&self) -> Result<(), ProviderError> {
-        repository::probe(&self.cache_dir, &self.config)
+        repository::probe(&self.cache_dir, &self.config, &self.network_accounting)
     }
 
     /// 返回本轮同步固定使用的远端快照；首次调用时 fetch，之后一直复用。
@@ -63,7 +67,7 @@ impl GitHttpsProvider {
             return Ok(snapshot.clone());
         }
         let repo = repository::open_or_init(&self.cache_dir)?;
-        let snapshot = repository::fetch_snapshot(&repo, &self.config)?;
+        let snapshot = repository::fetch_snapshot(&repo, &self.config, &self.network_accounting)?;
         *guard = Some(snapshot.clone());
         Ok(snapshot)
     }
@@ -107,7 +111,7 @@ impl GitHttpsProvider {
         message: &str,
     ) -> Result<BatchCommitResult, ProviderError> {
         let repo = repository::open_or_init(&self.cache_dir)?;
-        let latest = repository::fetch_snapshot(&repo, &self.config)?;
+        let latest = repository::fetch_snapshot(&repo, &self.config, &self.network_accounting)?;
         if latest.head != planned.head {
             // 保持本轮的旧快照：调用方必须重新建立 provider、重新读取 catalog
             // 并经过 LWW 规划，不能用同一批 mutations 直接重试。
@@ -117,8 +121,14 @@ impl GitHttpsProvider {
                     .to_string(),
             });
         }
-        let (commit_oid, committed_snapshot) =
-            repository::commit_and_push(&repo, &self.config, &planned, mutations, message)?;
+        let (commit_oid, committed_snapshot) = repository::commit_and_push(
+            &repo,
+            &self.config,
+            &planned,
+            mutations,
+            message,
+            &self.network_accounting,
+        )?;
         self.advance_snapshot(&planned, committed_snapshot);
         Ok(BatchCommitResult {
             revision: RemoteVersion::new(commit_oid.to_string()),
@@ -137,6 +147,14 @@ impl GitHttpsProvider {
 }
 
 impl SyncProvider for GitHttpsProvider {
+    fn set_operation_id(&self, operation_id: Option<&str>) {
+        self.network_accounting.set_operation_id(operation_id);
+    }
+
+    fn network_metrics(&self) -> ProviderNetworkMetrics {
+        self.network_accounting.snapshot()
+    }
+
     fn capabilities(&self) -> SyncCapabilities {
         SyncCapabilities::git_https()
     }
@@ -148,6 +166,7 @@ impl SyncProvider for GitHttpsProvider {
             .map_err(|error| repository::map_git_error(error, "open git remote"))?;
         let callbacks =
             credentials::callbacks(&self.config.username, self.config.secret.as_deref());
+        self.network_accounting.record_request(0);
         let connection = remote
             .connect_auth(
                 Direction::Fetch,
@@ -267,7 +286,7 @@ impl SyncProvider for GitHttpsProvider {
             self.config.branch
         ));
 
-        match repository::probe(&self.cache_dir, &self.config) {
+        match repository::probe(&self.cache_dir, &self.config, &self.network_accounting) {
             Ok(()) => {
                 result.success = true;
                 result.network_ok = true;

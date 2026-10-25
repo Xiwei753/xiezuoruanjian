@@ -5,7 +5,17 @@
 
 use super::*;
 
+// Check for eligible generations once per seventh of their seven-day retention window.
+const GC_MAINTENANCE_INTERVAL_SECONDS: i64 =
+    writer_core::sync::generation_gc::GENERATION_RETENTION_MS / (7 * 1_000);
+
 impl AppBackend {
+    pub(super) fn gc_maintenance_due(&self) -> bool {
+        let last = self.last_gc_maintenance_at;
+        let now = Self::now_epoch_seconds();
+        last <= 0 || now < last || now.saturating_sub(last) >= GC_MAINTENANCE_INTERVAL_SECONDS
+    }
+
     /// Issue #779 评论 5854082763：启动 generation GC maintenance 后台线程。
     ///
     /// - single-flight：如果 `current_gc_maintenance_cancel_token` 已存在，跳过
@@ -15,6 +25,15 @@ impl AppBackend {
     /// - 线程结束后通过 queued_callback 清 `current_gc_maintenance_cancel_token = None`。
     /// - GC 失败只 log warn，不影响任何用户状态。
     pub(super) fn start_gc_maintenance(&mut self) {
+        if !self.gc_maintenance_due() {
+            self.debug_log(
+                "sync",
+                "gc_maintenance_not_due",
+                "generation GC maintenance interval has not elapsed",
+            );
+            return;
+        }
+
         // single-flight：已有 maintenance 在跑，跳过。
         if self.current_gc_maintenance_cancel_token.is_some() {
             self.debug_log(
@@ -56,7 +75,7 @@ impl AppBackend {
         let captured_data_root = data_root.clone();
         let captured_token = token.clone();
         // GC 线程结束后回到主线程清 token。
-        let gc_done_callback = qmetaobject::queued_callback(move |_result: ()| {
+        let gc_done_callback = qmetaobject::queued_callback(move |succeeded: bool| {
             app_qptr.as_pinned().map(|this| {
                 let mut this = this.borrow_mut();
                 // 身份校验：workspace_generation、data_root、token Arc 身份三者都一致才清。
@@ -70,15 +89,26 @@ impl AppBackend {
                     .unwrap_or(false);
                 if still_same_workspace && still_same_data_root && still_same_token {
                     this.current_gc_maintenance_cancel_token = None;
+                    if succeeded {
+                        this.last_gc_maintenance_at = Self::now_epoch_seconds();
+                        this.gc_maintenance_pending = false;
+                    }
                     this.debug_log(
                         "sync",
                         "gc_maintenance_done",
-                        "generation GC maintenance completed",
+                        if succeeded {
+                            "generation GC maintenance completed"
+                        } else {
+                            "generation GC maintenance failed"
+                        },
                     );
                     // Issue #779 评论 5854734343：done callback 清 token 后，如果 pending
                     // 且当前没有用户同步在跑，补启动一次新的 maintenance。
                     // still_same_workspace 已确保仍是同一 workspace，无需再校验。
-                    if this.gc_maintenance_pending && !this.current_sync_in_progress {
+                    if this.gc_maintenance_pending
+                        && !this.current_sync_in_progress
+                        && this.gc_maintenance_due()
+                    {
                         this.gc_maintenance_pending = false;
                         this.debug_log(
                             "sync",
@@ -107,6 +137,7 @@ impl AppBackend {
             // UnwindSafe: String/GitRepoLayout are plain data, and SyncCancellationToken is
             // Arc<AtomicBool> where std impls RefUnwindSafe for both Arc<T> and AtomicBool.
             // No hand-rolled `unsafe impl` or AssertUnwindSafe is needed.
+            let was_cancelled = cancel_token_for_thread.clone();
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::with_layout_core_api(
                     &data_root,
@@ -120,32 +151,41 @@ impl AppBackend {
                             "[sync] gc_maintenance: prepare_sync_profile failed: {}",
                             e.raw_error()
                         );
-                        return;
+                        return false;
                     }
                 };
+                if !config.enabled {
+                    return false;
+                }
                 // GC maintenance 不需要 network permission 检查 —
                 // GC 是低优先级 maintenance，网络不可用时 Core 内部自然失败。
-                if let Err(e) =
-                    api.perform_generation_gc_maintenance(config, Some(cancel_token_for_thread))
-                {
-                    log::warn!(
-                        "[sync] gc_maintenance: perform_generation_gc_maintenance failed: {e}"
-                    );
+                match api.perform_generation_gc_maintenance(config, Some(cancel_token_for_thread)) {
+                    Ok(()) => !was_cancelled.is_cancelled(),
+                    Err(e) => {
+                        log::warn!(
+                            "[sync] gc_maintenance: perform_generation_gc_maintenance failed: {e}"
+                        );
+                        false
+                    }
                 }
             });
 
-            if let Err(err) = result {
-                let panic_msg = if let Some(s) = err.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = err.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "panic.unknown".to_string()
-                };
-                log::error!("[sync] gc_maintenance: panic: {panic_msg}");
-            }
+            let succeeded = match result {
+                Ok(succeeded) => succeeded,
+                Err(err) => {
+                    let panic_msg = if let Some(s) = err.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = err.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "panic.unknown".to_string()
+                    };
+                    log::error!("[sync] gc_maintenance: panic: {panic_msg}");
+                    false
+                }
+            };
 
-            gc_done_callback(());
+            gc_done_callback(succeeded);
         });
     }
 }

@@ -23,9 +23,11 @@ use crate::sync::provider::model::{
     BatchCommitResult, BatchMutation, DeletePrecondition, RemoteEntry, RemoteObject, RemoteVersion,
     WritePrecondition,
 };
-use crate::sync::provider::SyncProvider;
+use crate::sync::provider::{ProviderNetworkAccounting, ProviderNetworkMetrics, SyncProvider};
 use crate::sync::types::SyncDiagnosticsResult;
 use crate::sync::url::sanitize_remote_url;
+
+const GITHUB_METRIC_SCOPE: &str = "github_execute_body_bytes";
 
 pub mod client;
 pub mod config;
@@ -41,6 +43,7 @@ pub mod git_database;
 pub struct GitHubProvider {
     config: GitHubRuntimeConfig,
     transport: Arc<dyn SyncTransport>,
+    network_accounting: Arc<ProviderNetworkAccounting>,
 }
 
 impl GitHubProvider {
@@ -49,7 +52,16 @@ impl GitHubProvider {
     /// `config` 携带 API base URL/token/branch 等运行时信息（含 token，不持久化），
     /// `transport` 为平台注入的 HTTP 客户端实现（用 `Arc` 共享所有权）。
     pub fn new(config: GitHubRuntimeConfig, transport: Arc<dyn SyncTransport>) -> Self {
-        Self { config, transport }
+        let network_accounting = Arc::new(ProviderNetworkAccounting::new(GITHUB_METRIC_SCOPE));
+        let transport: Arc<dyn SyncTransport> = Arc::new(client::CountingTransport::new(
+            transport,
+            Arc::clone(&network_accounting),
+        ));
+        Self {
+            config,
+            transport,
+            network_accounting,
+        }
     }
 
     fn transport(&self) -> &dyn SyncTransport {
@@ -58,6 +70,14 @@ impl GitHubProvider {
 }
 
 impl SyncProvider for GitHubProvider {
+    fn set_operation_id(&self, operation_id: Option<&str>) {
+        self.network_accounting.set_operation_id(operation_id);
+    }
+
+    fn network_metrics(&self) -> ProviderNetworkMetrics {
+        self.network_accounting.snapshot()
+    }
+
     fn capabilities(&self) -> SyncCapabilities {
         SyncCapabilities::github()
     }

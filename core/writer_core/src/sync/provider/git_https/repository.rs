@@ -23,6 +23,7 @@ use crate::sync::provider::error::ProviderError;
 use crate::sync::provider::model::{
     BatchMutation, DeletePrecondition, RemoteEntry, RemoteVersion, WritePrecondition,
 };
+use crate::sync::provider::ProviderNetworkAccounting;
 
 const REMOTE_NAME: &str = "origin";
 const AUTHOR_NAME: &str = "Sujian";
@@ -75,10 +76,15 @@ fn remote<'repo>(
 }
 
 /// 只连接并读取 refs，不下载对象。用于路由可达性探测与诊断。
-pub(crate) fn probe(cache_dir: &Path, config: &GitHttpsRuntimeConfig) -> Result<(), ProviderError> {
+pub(crate) fn probe(
+    cache_dir: &Path,
+    config: &GitHttpsRuntimeConfig,
+    accounting: &Arc<ProviderNetworkAccounting>,
+) -> Result<(), ProviderError> {
     let repo = open_or_init(cache_dir)?;
     let mut remote = remote(&repo, config)?;
     let callbacks = credentials::callbacks(&config.username, config.secret.as_deref());
+    accounting.record_request(0);
     let connection = remote
         .connect_auth(
             Direction::Fetch,
@@ -96,12 +102,14 @@ pub(crate) fn probe(cache_dir: &Path, config: &GitHttpsRuntimeConfig) -> Result<
 pub(crate) fn fetch_snapshot(
     repo: &Repository,
     config: &GitHttpsRuntimeConfig,
+    accounting: &Arc<ProviderNetworkAccounting>,
 ) -> Result<Snapshot, ProviderError> {
     let mut remote = remote(repo, config)?;
     let branch_ref = format!("refs/heads/{}", config.branch);
 
     // 先 connect/list：既验证认证与可达性，也准确判断分支是否已存在。
     let callbacks = credentials::callbacks(&config.username, config.secret.as_deref());
+    accounting.record_request(0);
     let connection = remote
         .connect_auth(
             Direction::Fetch,
@@ -121,12 +129,22 @@ pub(crate) fn fetch_snapshot(
 
     let refspec = format!("+{branch_ref}:refs/remotes/{REMOTE_NAME}/{}", config.branch);
     let mut fetch_options = FetchOptions::new();
-    fetch_options.remote_callbacks(credentials::callbacks(
-        &config.username,
-        config.secret.as_deref(),
-    ));
+    let progress_accounting = Arc::clone(accounting);
+    let mut last_received_bytes = 0usize;
+    let mut callbacks = credentials::callbacks(&config.username, config.secret.as_deref());
+    callbacks.transfer_progress(move |progress| {
+        let received_bytes = progress.received_bytes();
+        let delta = received_bytes.saturating_sub(last_received_bytes);
+        if delta > 0 {
+            progress_accounting.record_bytes_received(delta);
+            last_received_bytes = received_bytes;
+        }
+        true
+    });
+    fetch_options.remote_callbacks(callbacks);
     fetch_options.proxy_options(credentials::proxy_options());
     fetch_options.download_tags(AutotagOption::None);
+    accounting.record_request(0);
     remote
         .fetch(
             &[refspec],
@@ -323,6 +341,7 @@ pub(crate) fn commit_and_push(
     snapshot: &Snapshot,
     mutations: &[BatchMutation],
     message: &str,
+    accounting: &Arc<ProviderNetworkAccounting>,
 ) -> Result<(Oid, Snapshot), ProviderError> {
     let (mut index, _) = build_index(repo, snapshot, mutations)?;
     let tree_oid = index
@@ -360,7 +379,7 @@ pub(crate) fn commit_and_push(
     repo.reference(&local_ref, commit_oid, true, "sujian sync commit")
         .map_err(|err| map_git_error(err, "update local branch"))?;
 
-    push_branch(repo, config, &local_ref, &commit_oid)?;
+    push_branch(repo, config, &local_ref, &commit_oid, accounting)?;
     let committed_snapshot = snapshot_from_commit(repo, commit_oid)?;
     Ok((commit_oid, committed_snapshot))
 }
@@ -370,6 +389,7 @@ fn push_branch(
     config: &GitHttpsRuntimeConfig,
     local_ref: &str,
     commit_oid: &Oid,
+    accounting: &Arc<ProviderNetworkAccounting>,
 ) -> Result<(), ProviderError> {
     let mut remote = remote(repo, config)?;
     let rejection: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -384,11 +404,21 @@ fn push_branch(
         }
         Ok(())
     });
+    let progress_accounting = Arc::clone(accounting);
+    let mut last_sent_bytes = 0usize;
+    callbacks.push_transfer_progress(move |_current, _total, sent_bytes| {
+        let delta = sent_bytes.saturating_sub(last_sent_bytes);
+        if delta > 0 {
+            progress_accounting.record_bytes_sent(delta);
+            last_sent_bytes = sent_bytes;
+        }
+    });
 
     let mut push_options = PushOptions::new();
     push_options.remote_callbacks(callbacks);
     push_options.proxy_options(credentials::proxy_options());
     let refspec = format!("{local_ref}:refs/heads/{}", config.branch);
+    accounting.record_request(0);
     let push_result = remote.push(&[refspec], Some(&mut push_options));
 
     if let Some(reason) = rejection.lock().ok().and_then(|mut slot| slot.take()) {

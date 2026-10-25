@@ -433,6 +433,9 @@ pub struct SyncOperationStateDto {
     pub finished_targets: u32,
     pub total_targets: u32,
     pub counts: SyncOperationCountsDto,
+    /// Whether Commit changed the local live workspace. Counts may include staging recovery.
+    #[serde(default)]
+    pub local_content_changed: bool,
     pub raw_error: Option<String>,
 }
 
@@ -650,6 +653,9 @@ pub struct FullSyncResultDto {
     pub total_overwritten: u32,
     pub total_ignored: u32,
     pub total_conflicts: u32,
+    /// Whether the completed Commit phase changed live local content.
+    #[serde(default)]
+    pub local_content_changed: bool,
     pub error: Option<String>,
     pub error_category: Option<String>,
     pub message_key: Option<String>,
@@ -667,6 +673,7 @@ impl From<crate::sync::types::FullSyncResult> for FullSyncResultDto {
             total_overwritten: r.total_overwritten,
             total_ignored: r.total_ignored,
             total_conflicts: r.total_conflicts,
+            local_content_changed: false,
             error: r.error,
             error_category: r.error_category,
             message_key: r.message_key,
@@ -684,7 +691,6 @@ impl From<crate::sync::types::TargetSyncResult> for TargetSyncResultDto {
         }
     }
 }
-
 
 /// 全量同步 dry-run 聚合结果 DTO。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

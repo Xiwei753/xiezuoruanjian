@@ -79,6 +79,8 @@ struct SyncDiagnosticPhase {
     phase: String,
     target_digest: Option<String>,
     started_at: Instant,
+    network_metrics_start: Option<crate::sync::provider::ProviderNetworkMetrics>,
+    network_metrics_delta: Option<crate::sync::provider::ProviderNetworkMetrics>,
     finished: bool,
 }
 
@@ -89,13 +91,44 @@ impl SyncDiagnosticPhase {
             phase: phase.to_string(),
             target_digest,
             started_at: Instant::now(),
+            network_metrics_start: None,
+            network_metrics_delta: None,
             finished: false,
         };
         guard.record("sync.phase.start", None);
         guard
     }
 
+    fn start_with_provider(
+        operation_id: &str,
+        phase: &str,
+        target_digest: Option<String>,
+        provider: &dyn crate::sync::provider::SyncProvider,
+    ) -> Self {
+        let mut guard = Self::start(operation_id, phase, target_digest);
+        guard.network_metrics_start = Some(provider.network_metrics());
+        guard
+    }
+
     fn finish(mut self, outcome: &str) {
+        self.record("sync.phase.end", Some(outcome));
+        self.finished = true;
+    }
+
+    fn finish_with_provider(
+        mut self,
+        outcome: &str,
+        provider: &dyn crate::sync::provider::SyncProvider,
+    ) {
+        let end = provider.network_metrics();
+        let start = self.network_metrics_start.take().unwrap_or_default();
+        self.network_metrics_delta = Some(crate::sync::provider::ProviderNetworkMetrics {
+            request_count: end.request_count.saturating_sub(start.request_count),
+            bytes_received: end.bytes_received.saturating_sub(start.bytes_received),
+            bytes_sent: end.bytes_sent.saturating_sub(start.bytes_sent),
+            operation_id: end.operation_id,
+            metric_scope: end.metric_scope,
+        });
         self.record("sync.phase.end", Some(outcome));
         self.finished = true;
     }
@@ -119,6 +152,24 @@ impl SyncDiagnosticPhase {
                     u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
                 )),
             );
+            if let Some(metrics) = &self.network_metrics_delta {
+                fields.insert(
+                    "request_count".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(metrics.request_count)),
+                );
+                fields.insert(
+                    "bytes_received".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(metrics.bytes_received)),
+                );
+                fields.insert(
+                    "bytes_sent".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(metrics.bytes_sent)),
+                );
+                fields.insert(
+                    "metric_scope".to_string(),
+                    serde_json::Value::String(metrics.metric_scope.clone()),
+                );
+            }
         }
         let target = if self.target_digest.is_some() {
             "sync.target"
@@ -902,6 +953,7 @@ impl WriterCoreApi {
                 return Err(error.into());
             }
         };
+        provider.set_operation_id(Some(diagnostic_operation_id));
         provider_phase.finish("success");
 
         let (app_data_root, projects_root, previous_full_sync_state) = {
@@ -913,12 +965,16 @@ impl WriterCoreApi {
             )
         };
         let repo_identity = repository_identity(&sync_config);
-        let revision_phase =
-            SyncDiagnosticPhase::start(diagnostic_operation_id, "remote_revision", None);
+        let revision_phase = SyncDiagnosticPhase::start_with_provider(
+            diagnostic_operation_id,
+            "remote_revision",
+            None,
+            provider.as_ref(),
+        );
         let remote_revision_before = match provider.remote_revision() {
             Ok(revision) => revision,
             Err(error) => {
-                revision_phase.finish("error");
+                revision_phase.finish_with_provider("error", provider.as_ref());
                 log::warn!("[sync] remote revision query failed: {error}");
                 let _ = self.record_full_sync_preflight_failure(
                     "recoverable_error".to_string(),
@@ -929,7 +985,7 @@ impl WriterCoreApi {
                 ));
             }
         };
-        revision_phase.finish("success");
+        revision_phase.finish_with_provider("success", provider.as_ref());
         let checkpoint = crate::sync::full_sync_state::FullSyncCheckpoint::load(&app_data_root)
             .ok()
             .flatten();
@@ -947,20 +1003,27 @@ impl WriterCoreApi {
                         == Some(checkpoint.remote_revision.as_str())
             });
         let preflight_snapshot = if checkpoint_remote_unchanged {
-            let local_snapshot_phase =
-                SyncDiagnosticPhase::start(diagnostic_operation_id, "local_snapshot", None);
+            let local_snapshot_phase = SyncDiagnosticPhase::start_with_provider(
+                diagnostic_operation_id,
+                "local_snapshot",
+                None,
+                provider.as_ref(),
+            );
             let snapshot = local_sync_version_snapshot(&app_data_root, &projects_root);
             match snapshot {
                 Ok(snapshot) => {
-                    local_snapshot_phase.finish(if snapshot.is_some() {
-                        "success"
-                    } else {
-                        "ineligible"
-                    });
+                    local_snapshot_phase.finish_with_provider(
+                        if snapshot.is_some() {
+                            "success"
+                        } else {
+                            "ineligible"
+                        },
+                        provider.as_ref(),
+                    );
                     snapshot
                 }
                 Err(error) => {
-                    local_snapshot_phase.finish("error");
+                    local_snapshot_phase.finish_with_provider("error", provider.as_ref());
                     log::warn!(
                         "[sync] local checkpoint snapshot failed; continuing with LWW: {error}"
                     );
@@ -1008,13 +1071,17 @@ impl WriterCoreApi {
         // planner 误判"远端无记录"做破坏性删除/复活决策）。
         //   用 discover_legacy_remote_catalog（真做 legacy 枚举），
         // 不再用 load_remote_catalog（只读 catalog 文件，不做 legacy 发现）。
-        let remote_catalog_phase =
-            SyncDiagnosticPhase::start(diagnostic_operation_id, "remote_catalog", None);
+        let remote_catalog_phase = SyncDiagnosticPhase::start_with_provider(
+            diagnostic_operation_id,
+            "remote_catalog",
+            None,
+            provider.as_ref(),
+        );
         let remote_catalog_snapshot =
             match crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref()) {
                 Ok(snapshot) => snapshot,
                 Err(e) => {
-                    remote_catalog_phase.finish("error");
+                    remote_catalog_phase.finish_with_provider("error", provider.as_ref());
                     let msg = format!("discover_legacy_remote_catalog failed: {e}");
                     log::warn!("[sync] prepare: {msg}");
                     let _ = self.record_full_sync_preflight_failure(
@@ -1024,7 +1091,7 @@ impl WriterCoreApi {
                     return Err(crate::api::error::WriterError::from(e));
                 }
             };
-        remote_catalog_phase.finish("success");
+        remote_catalog_phase.finish_with_provider("success", provider.as_ref());
 
         // Issue #729：discover_legacy_remote_catalog 返回后检查取消令牌。
         // 取消则返回 no-op，不进入 persist_bootstrap_catalog / plan / transfer。
@@ -1080,15 +1147,19 @@ impl WriterCoreApi {
         // App data-group catalog is independent from the project lifecycle catalog.
         // A malformed/unreadable group catalog fails Prepare instead of guessing a
         // flat App layout and risking a mixed or destructive merge.
-        let app_group_catalog_phase =
-            SyncDiagnosticPhase::start(diagnostic_operation_id, "remote_app_group_catalog", None);
+        let app_group_catalog_phase = SyncDiagnosticPhase::start_with_provider(
+            diagnostic_operation_id,
+            "remote_app_group_catalog",
+            None,
+            provider.as_ref(),
+        );
         let remote_app_data_groups =
             match crate::sync::app_data_group_catalog::discover_remote_app_data_groups(
                 provider.as_ref(),
             ) {
                 Ok(groups) => groups,
                 Err(e) => {
-                    app_group_catalog_phase.finish("error");
+                    app_group_catalog_phase.finish_with_provider("error", provider.as_ref());
                     let msg = format!("discover_remote_app_data_groups failed: {e}");
                     log::warn!("[sync] prepare: {msg}");
                     let _ = self.record_full_sync_preflight_failure(
@@ -1098,7 +1169,7 @@ impl WriterCoreApi {
                     return Err(crate::api::error::WriterError::from(e));
                 }
             };
-        app_group_catalog_phase.finish("success");
+        app_group_catalog_phase.finish_with_provider("success", provider.as_ref());
         // Issue #729：persist_bootstrap_catalog 返回后检查取消令牌。
         if let Some(ref token) = cancellation_token {
             if token.is_cancelled() {
@@ -1115,7 +1186,12 @@ impl WriterCoreApi {
         // 避免阻塞正文/作品读取。
         self.core_write().persist_full_sync_started();
         // 写锁已释放。锁外构建 plan（list_projects / pending / device / planner / scan）。
-        let plan_phase = SyncDiagnosticPhase::start(diagnostic_operation_id, "plan", None);
+        let plan_phase = SyncDiagnosticPhase::start_with_provider(
+            diagnostic_operation_id,
+            "plan",
+            None,
+            provider.as_ref(),
+        );
         let mut plan = match crate::facade::WriterCore::build_full_sync_plan_unlocked(
             &app_data_root,
             &projects_root,
@@ -1127,7 +1203,7 @@ impl WriterCoreApi {
         ) {
             Ok(plan) => plan,
             Err(err) => {
-                plan_phase.finish("error");
+                plan_phase.finish_with_provider("error", provider.as_ref());
                 let msg = err.to_string();
                 log::warn!("[sync] prepare: build_full_sync_plan_unlocked failed: {msg}");
                 let _ = self.record_full_sync_preflight_failure(
@@ -1137,27 +1213,28 @@ impl WriterCoreApi {
                 return Err(crate::api::error::WriterError::from(err));
             }
         };
-        plan_phase.finish("success");
+        plan_phase.finish_with_provider("success", provider.as_ref());
 
         if checkpoint_remote_unchanged {
-            let revision_phase = SyncDiagnosticPhase::start(
+            let revision_phase = SyncDiagnosticPhase::start_with_provider(
                 diagnostic_operation_id,
                 "remote_revision_before_group_filter",
                 None,
+                provider.as_ref(),
             );
             match provider.remote_revision() {
                 Ok(revision) if revision == remote_revision_before => {
-                    revision_phase.finish("success");
+                    revision_phase.finish_with_provider("success", provider.as_ref());
                 }
                 Ok(_) => {
-                    revision_phase.finish("changed");
+                    revision_phase.finish_with_provider("changed", provider.as_ref());
                     checkpoint_remote_unchanged = false;
                     log::info!(
                         "[sync] remote branch changed during prepare; keeping every target in the LWW plan"
                     );
                 }
                 Err(error) => {
-                    revision_phase.finish("error");
+                    revision_phase.finish_with_provider("error", provider.as_ref());
                     return Err(crate::api::error::WriterError::from(
                         crate::error::Error::from(error),
                     ));
@@ -1258,11 +1335,16 @@ impl WriterCoreApi {
             );
             return Err(crate::api::error::WriterError::from(e));
         }
-        let staging_phase = SyncDiagnosticPhase::start(diagnostic_operation_id, "staging", None);
+        let staging_phase = SyncDiagnosticPhase::start_with_provider(
+            diagnostic_operation_id,
+            "staging",
+            None,
+            provider.as_ref(),
+        );
         let staging_runs = match crate::sync::staging::prepare_staging_runs(&mut plan) {
             Ok(runs) => runs,
             Err(err) => {
-                staging_phase.finish("error");
+                staging_phase.finish_with_provider("error", provider.as_ref());
                 let status = crate::sync::full_sync::error_to_persist_status(&err);
                 let status_str = match &status {
                     crate::sync::SyncStatus::FatalError(_) => "fatal_error".to_string(),
@@ -1276,26 +1358,27 @@ impl WriterCoreApi {
                 return Err(err.into());
             }
         };
-        staging_phase.finish("success");
+        staging_phase.finish_with_provider("success", provider.as_ref());
 
         if checkpoint_remote_unchanged {
-            let revision_phase = SyncDiagnosticPhase::start(
+            let revision_phase = SyncDiagnosticPhase::start_with_provider(
                 diagnostic_operation_id,
                 "remote_revision_before_transfer",
                 None,
+                provider.as_ref(),
             );
             match provider.remote_revision() {
                 Ok(revision) if revision == remote_revision_before => {
-                    revision_phase.finish("success");
+                    revision_phase.finish_with_provider("success", provider.as_ref());
                 }
                 Ok(_) => {
-                    revision_phase.finish("changed");
+                    revision_phase.finish_with_provider("changed", provider.as_ref());
                     return Err(crate::api::error::WriterError::PreconditionFailed(
                         "remote branch changed before a filtered target sync".to_string(),
                     ));
                 }
                 Err(error) => {
-                    revision_phase.finish("error");
+                    revision_phase.finish_with_provider("error", provider.as_ref());
                     return Err(crate::api::error::WriterError::from(
                         crate::error::Error::from(error),
                     ));
@@ -1527,10 +1610,11 @@ impl WriterCoreApi {
             let prepared_failure = staging_runs
                 .get(target_index)
                 .and_then(|run| run.prepare_error());
-            let transfer_phase = SyncDiagnosticPhase::start(
+            let transfer_phase = SyncDiagnosticPhase::start_with_provider(
                 diagnostic_operation_id,
                 "transfer",
                 Some(target_digest.clone()),
+                provider,
             );
             let transfer_result = if prepared_failure.is_some() {
                 Some(crate::sync::full_sync::prepare_failed_target_result(
@@ -1551,7 +1635,7 @@ impl WriterCoreApi {
                 .map(|(result, _resolution, _action)| result)
             };
             let Some(target_sync_result) = transfer_result else {
-                transfer_phase.finish("cancelled");
+                transfer_phase.finish_with_provider("cancelled", provider);
                 let mut fields = sync_diagnostic_fields(
                     diagnostic_operation_id,
                     "cancelled",
@@ -1567,7 +1651,7 @@ impl WriterCoreApi {
                 // target 未执行（取消或索引越界），跳过。
                 continue;
             };
-            transfer_phase.finish("success");
+            transfer_phase.finish_with_provider("success", provider);
             for path in &target_sync_result.result.downloaded_files {
                 record_sync_object_result(
                     diagnostic_operation_id,
@@ -1603,10 +1687,11 @@ impl WriterCoreApi {
             }
 
             // 4. Commit（短写锁）— 该 target 的 state/conflicts 成为 live 终态。
-            let commit_phase = SyncDiagnosticPhase::start(
+            let commit_phase = SyncDiagnosticPhase::start_with_provider(
                 diagnostic_operation_id,
                 "commit",
                 Some(target_digest.clone()),
+                provider,
             );
             let (target_with_conflicts, target_committed_paths) = self.commit_transferred_target(
                 target_index,
@@ -1614,7 +1699,7 @@ impl WriterCoreApi {
                 &staging_runs,
                 &target_sync_result,
             );
-            commit_phase.finish("success");
+            commit_phase.finish_with_provider("success", provider);
 
             // Store 协调与索引失效已在 commit_target_after_transfer 内的
             // 同一写锁持有期完成（问题1+2），不再在循环体中单独执行。
@@ -1794,6 +1879,7 @@ impl WriterCoreApi {
         // 精确 stage，替代全量 &[] 扫描。committed_paths 是 workspace-relative paths。
         // 空 committed_paths 不触发全量扫描（record_workspace_paths_history
         // 空 paths 直接返回空结果）。
+        let local_content_changed = !all_paths.is_empty();
         self.record_workspace_paths_history(&all_paths, "full_sync_commit");
 
         // 处理 RemoteLifecycle 删除事务的 receipts。
@@ -1805,7 +1891,9 @@ impl WriterCoreApi {
             self.process_lifecycle_receipt(receipt);
         }
 
-        Ok(result.into())
+        let mut result: FullSyncResultDto = result.into();
+        result.local_content_changed = local_content_changed;
+        Ok(result)
     }
 
     /// 取消令牌是否已请求取消。`None`（未提供令牌）永远不取消。
