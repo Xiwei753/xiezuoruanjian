@@ -1222,6 +1222,9 @@ interface WriterAppService {
     [Throws=WriterError]
     FullSyncStateDto? load_full_sync_state();
 
+    [Throws=WriterError]
+    i64? load_generation_gc_maintenance_last_success_at();
+
     // 最近一次持久化的完整同步报告（按独立数据组记录失败详情）。
     [Throws=WriterError]
     FullSyncReportDto? load_latest_full_sync_report();

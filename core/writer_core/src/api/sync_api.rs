@@ -600,6 +600,13 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// Last successful generation GC time stored in this workspace's app-meta sync state.
+    pub fn load_generation_gc_maintenance_last_success_at(&self) -> ApiResult<Option<i64>> {
+        let core = self.core_read();
+        crate::sync::generation_gc::load_maintenance_last_success_at(&core.app_data_root)
+            .map_err(Into::into)
+    }
+
     /// 最近一次持久化的完整同步报告，供各平台页面和诊断包读取。
     pub fn load_latest_full_sync_report(&self) -> ApiResult<Option<FullSyncReportDto>> {
         self.core_read()
@@ -955,6 +962,26 @@ impl WriterCoreApi {
         };
         provider.set_operation_id(Some(diagnostic_operation_id));
         provider_phase.finish("success");
+
+        // A checkpoint snapshot must observe StarMap Store dirty state on disk.
+        // The later staging-seed flush remains necessary for edits made while the
+        // local snapshot and plan are being prepared.
+        let starmap_flush_phase = SyncDiagnosticPhase::start_with_provider(
+            diagnostic_operation_id,
+            "starmap_store_flush",
+            None,
+            provider.as_ref(),
+        );
+        if let Err(error) = self.flush_all_starmap_stores() {
+            starmap_flush_phase.finish_with_provider("error", provider.as_ref());
+            log::warn!("[sync] prepare: StarMap Store flush before checkpoint failed: {error}");
+            let _ = self.record_full_sync_preflight_failure(
+                "recoverable_error".to_string(),
+                "preflight".to_string(),
+            );
+            return Err(error);
+        }
+        starmap_flush_phase.finish_with_provider("success", provider.as_ref());
 
         let (app_data_root, projects_root, previous_full_sync_state) = {
             let core = self.core_write();
@@ -1651,7 +1678,12 @@ impl WriterCoreApi {
                 // target 未执行（取消或索引越界），跳过。
                 continue;
             };
-            transfer_phase.finish_with_provider("success", provider);
+            let transfer_outcome = if prepared_failure.is_some() {
+                "prepare_failed".to_string()
+            } else {
+                crate::api::types::sync_status_to_wire(&target_sync_result.result.status)
+            };
+            transfer_phase.finish_with_provider(&transfer_outcome, provider);
             for path in &target_sync_result.result.downloaded_files {
                 record_sync_object_result(
                     diagnostic_operation_id,
@@ -1699,7 +1731,9 @@ impl WriterCoreApi {
                 &staging_runs,
                 &target_sync_result,
             );
-            commit_phase.finish_with_provider("success", provider);
+            let commit_outcome =
+                crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
+            commit_phase.finish_with_provider(&commit_outcome, provider);
 
             // Store 协调与索引失效已在 commit_target_after_transfer 内的
             // 同一写锁持有期完成（问题1+2），不再在循环体中单独执行。
@@ -2081,19 +2115,23 @@ impl WriterCoreApi {
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
         //   用无副作用 provider factory：transport 初始化失败只返回 Err，
         // 不调 persist_full_sync_early_failure，不污染用户同步终态（Issue #779 评论 5854912227）。
-        let provider = {
+        let (provider, app_data_root) = {
             let core = self.core_write();
-            core.create_sync_provider_for_maintenance(&sync_config, &secrets)?
+            (
+                core.create_sync_provider_for_maintenance(&sync_config, &secrets)?,
+                core.app_data_root.clone(),
+            )
         };
         let remote_catalog_snapshot =
             match crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref()) {
                 Ok(snapshot) => snapshot,
                 Err(e) => {
                     log::warn!("[sync] gc_maintenance: discover catalog failed: {e}");
-                    return Ok(()); // GC 失败不传播
+                    return Err(e.into());
                 }
             };
         let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut first_gc_error = None;
         for record in &remote_catalog_snapshot.catalog.records {
             if !record.remote_prefix.starts_with("projects/") {
                 continue;
@@ -2128,8 +2166,24 @@ impl WriterCoreApi {
                     "[sync] gc_maintenance: GC failed for {}: {e}",
                     record.remote_prefix
                 );
+                if first_gc_error.is_none() {
+                    first_gc_error = Some(e);
+                }
             }
         }
+        if let Some(token) = cancellation_token.as_ref() {
+            if token.is_cancelled() {
+                log::info!("[sync] gc_maintenance: cancellation requested — skipping maintenance timestamp");
+                return Ok(());
+            }
+        }
+        if let Some(error) = first_gc_error {
+            return Err(error.into());
+        }
+        crate::sync::generation_gc::save_maintenance_last_success_at(
+            &app_data_root,
+            chrono::Utc::now().timestamp(),
+        )?;
         Ok(())
     }
 

@@ -253,6 +253,13 @@ impl super::WriterAppService {
         self.api.load_full_sync_state()
     }
 
+    /// 读取当前工作区最近一次成功完成 generation GC 的时间。
+    pub fn load_generation_gc_maintenance_last_success_at(
+        &self,
+    ) -> Result<Option<i64>, WriterError> {
+        self.api.load_generation_gc_maintenance_last_success_at()
+    }
+
     /// 读取最近一次持久化的完整同步报告。
     pub fn load_latest_full_sync_report(&self) -> Result<Option<FullSyncReportDto>, WriterError> {
         self.api.load_latest_full_sync_report()

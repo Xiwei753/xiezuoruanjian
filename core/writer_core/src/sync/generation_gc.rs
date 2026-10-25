@@ -42,6 +42,49 @@ pub const GENERATION_UPLOAD_LEASE_MS: i64 = 5 * 60 * 1000;
 /// 未引用 generation 安全保留期（7 天）。超过保留期且未引用的 generation 才可删。
 pub const GENERATION_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
+const MAINTENANCE_STATE_FILE: &str = "app-meta/sync/gc_maintenance.local.json";
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct GenerationGcMaintenanceState {
+    last_success_at: i64,
+}
+
+/// Read the last successful GC time for this workspace, if maintenance has run before.
+pub fn load_maintenance_last_success_at(
+    app_data_root: &std::path::Path,
+) -> crate::error::Result<Option<i64>> {
+    let path = app_data_root.join(MAINTENANCE_STATE_FILE);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(crate::Error::Io(error)),
+    };
+    match serde_json::from_str::<GenerationGcMaintenanceState>(&content) {
+        Ok(state) if state.last_success_at > 0 => Ok(Some(state.last_success_at)),
+        Ok(_) => Ok(None),
+        Err(error) => {
+            log::warn!(
+                "generation GC maintenance state is unreadable; maintenance is due: {error}"
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// Atomically persist the last successful GC time for this workspace.
+pub fn save_maintenance_last_success_at(
+    app_data_root: &std::path::Path,
+    last_success_at: i64,
+) -> crate::error::Result<()> {
+    let path = app_data_root.join(MAINTENANCE_STATE_FILE);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(&GenerationGcMaintenanceState { last_success_at })
+        .map_err(|error| crate::Error::Io(std::io::Error::other(error.to_string())))?;
+    crate::storage::atomic_write_string(&path, &content)
+}
+
 // ── Issue #993：缺 meta 代际的 orphan observation 生命周期 ──
 //
 // 缺 meta 的 generation 无法用 GenerationMeta 判定创建时间/上传状态。UUIDv4 和

@@ -103,6 +103,7 @@ impl crate::sync::SyncService {
             "app-meta/sync/sync_state.json",
             "app-meta/sync/config.local.json",
             "app-meta/sync/conflicts.json",
+            "app-meta/sync/gc_maintenance.local.json",
             "sqlite_cache",
             "tmp",
             "cache",
@@ -193,6 +194,7 @@ impl crate::sync::SyncService {
             || rel_path == "app-meta/sync/sync_state.json"
             || rel_path == "app-meta/sync/config.local.json"
             || rel_path == "app-meta/sync/conflicts.json"
+            || rel_path == "app-meta/sync/gc_maintenance.local.json"
             || rel_path == "app-meta/sync/last_report.local.json"
             || rel_path.starts_with("app-meta/sync/groups/")
             || rel_path.starts_with("app-meta/sync/secrets")

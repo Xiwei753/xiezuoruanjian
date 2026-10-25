@@ -363,8 +363,6 @@ pub struct AppBackend {
     /// - workspace reset 时 cancel 并清 None
     /// - GC 线程结束后通过 queued_callback 清 None
     current_gc_maintenance_cancel_token: Option<Arc<SyncCancellationToken>>,
-    /// Issue #997：最近一次成功的 generation GC 时间；无变化同步只按保留策略周期维护。
-    last_gc_maintenance_at: i64,
     /// Issue #779 评论 5854734343：GC maintenance pending 标志。
     /// 当用户同步 cancel 了正在跑的 GC，或同步成功完成但旧 GC token 仍存在时，
     /// 标记为 true。GC done callback 清 token 后若 pending 且无用户同步在跑，

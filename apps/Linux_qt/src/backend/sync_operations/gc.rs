@@ -11,7 +11,20 @@ const GC_MAINTENANCE_INTERVAL_SECONDS: i64 =
 
 impl AppBackend {
     pub(super) fn gc_maintenance_due(&self) -> bool {
-        let last = self.last_gc_maintenance_at;
+        let last = match self.core_api() {
+            Some(api) => match api.load_generation_gc_maintenance_last_success_at() {
+                Ok(last_success_at) => last_success_at.unwrap_or(0),
+                Err(error) => {
+                    self.debug_warn(
+                        "sync",
+                        "gc_maintenance_state_read_failed",
+                        &error.to_string(),
+                    );
+                    0
+                }
+            },
+            None => return false,
+        };
         let now = Self::now_epoch_seconds();
         last <= 0 || now < last || now.saturating_sub(last) >= GC_MAINTENANCE_INTERVAL_SECONDS
     }
@@ -90,7 +103,6 @@ impl AppBackend {
                 if still_same_workspace && still_same_data_root && still_same_token {
                     this.current_gc_maintenance_cancel_token = None;
                     if succeeded {
-                        this.last_gc_maintenance_at = Self::now_epoch_seconds();
                         this.gc_maintenance_pending = false;
                     }
                     this.debug_log(

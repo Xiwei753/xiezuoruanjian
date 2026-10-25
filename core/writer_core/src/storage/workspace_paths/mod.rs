@@ -131,6 +131,7 @@ fn is_sync_engine_state_path(path: &str) -> bool {
         || path == "app-meta/sync/state.local.json"
         || path == "app-meta/sync/full_state.local.json"
         || path == "app-meta/sync/last_report.local.json"
+        || path == "app-meta/sync/gc_maintenance.local.json"
         || path == "app-meta/sync/conflicts.json"
         || path.starts_with("app-meta/sync/groups/")
         || path == "app-meta/sync/config.local.json"
