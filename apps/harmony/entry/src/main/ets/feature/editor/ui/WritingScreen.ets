@@ -385,8 +385,8 @@ export struct WritingScreen {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
     // Issue #629 评论6 Part G：退后台用 performBackgroundSave（flush+idle+save）。
-    // Issue #927：回调改为返回真实成功/失败；保存事务由 AutoSaveLifecycleObserver →
-    // HarmonyBackgroundSaveTask 申请平台短时任务托管，页面只接收结果、不在生命周期里 await。
+    // Issue #927：回调改为返回真实成功/失败；Lifecycle 把全部后台保存和诊断归档
+    // 包在同一个 HarmonyBackgroundSaveTask 短时任务中，页面只接收保存结果。
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
       (): Promise<boolean> => this.writingWorkflow.performBackgroundSave(),
       this.settings.autoSaveDelayMs,

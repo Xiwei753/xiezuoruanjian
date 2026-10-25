@@ -128,14 +128,19 @@ The model binary is a build artifact under
   use Play Asset Delivery (install-time or fast-follow) while keeping the same
   local bundle contract; the model must still be available immediately after
   install.
-- **HarmonyOS**: the HAP uses the same FP32 bundle and byte offsets. Hvigor and
-  `tools/build_harmony.sh` fetch a pinned community OpenHarmony ARM64 build of
-  ONNX Runtime (`runtime.harmony-arm64` in the manifest), verify its SHA-256,
-  link it into the NAPI module, and copy `libonnxruntime.so` into the HAP native
-  libraries. Native init resolves that exact library path for the Rust
-  load-dynamic layer. Android/Linux `.so` files are never reused. The build is
-  wired, but on-device HarmonyOS execution still requires platform testing; no
-  NPU execution is claimed.
+- **HarmonyOS**: the HAP uses the same FP32 bundle and pinned file hashes. The
+  manifest points to the repository-local ARM64 library built from Microsoft
+  ONNX Runtime 1.26.0 commit `8c546c37b43caaca1fa25db430dab94b901cf277` with
+  HarmonyOS Native SDK 26.0.0.105 and Clang 15.0.4. Its local compatibility
+  patch adjusts CMake warning/SONAME handling, excludes OHOS-inapplicable Linux
+  thread-affinity calls, and disables BF16/NEON FP16 acceleration; build details
+  are in `third_party/onnxruntime/harmony/BUILDINFO.txt`. Hvigor's
+  native preparation task verifies and copies this `.so` from the local
+  manifest before CMake configures, then packages it in the HAP native
+  libraries. The writing NAPI module does not link ONNX Runtime. Native init
+  resolves the packaged library path, and Rust loads it only when correction
+  opens the model. Android/Linux `.so` files are never reused. Actual dynamic
+  loading on a HarmonyOS device remains unverified; no NPU execution is claimed.
 
 Package size budget: the FP32 model alone is about 474 MB; total installer size
 must stay below 1 GB. Runtime memory and inference latency depend on the device

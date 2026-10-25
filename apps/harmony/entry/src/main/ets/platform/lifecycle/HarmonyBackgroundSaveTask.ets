@@ -5,15 +5,17 @@
 //
 // 本类包装官方 @kit.BackgroundTasksKit 的 backgroundTaskManager：
 // - requestSuspendDelay(reason, onTimeout)：申请短时任务（API 9+，无需权限）；
-// - cancelSuspendDelay(requestId)：一次保存事务结束后释放。
+// - cancelSuspendDelay(requestId)：正文保存和诊断归档都结束后释放。
 //
 // 边界（Issue #927 复核）：
 // - 短时任务只是延长后台执行机会，不是正文保存的许可证：申请不到短时任务时
 //   只记录真实原因，保存 action 照常执行，结果以 action 的真实返回值为准。
-// - 申请到 requestId 就在 try/finally 中释放；申请失败时不做任何伪装成功/失败，
-//   也不抛出未捕获异常。
-// - UI 页面不直接使用平台后台任务接口，统一从 runSave() 进入。
-// - 短时任务只用于完成正在进行的落盘，不用于常驻同步或持续运行。
+// - Lifecycle 在短时任务保护下依次等待全部后台 observer 保存和最终化回调；
+//   申请到 requestId 就在整个事务结束后释放。
+// - 申请失败时不做任何伪装成功/失败，后台事务照常执行。
+// - UI 页面不直接使用平台后台任务接口，Lifecycle 统一通过
+//   runBackgroundTransaction() 托管一次后台过渡。
+// - 短时任务只用于完成正在进行的落盘和归档，不用于常驻同步或持续运行。
 
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
 import { BusinessError } from '@kit.BasicServicesKit'
@@ -28,7 +30,7 @@ const TAG: string = 'HarmonyBgSaveTask'
 const TRANSIENT_TASK_SYSCAP: string = 'SystemCapability.ResourceSchedule.BackgroundTaskManager.TransientTask'
 
 // 申请理由（系统侧可见；只描述用途，不含正文/书名等敏感信息）。
-const TRANSIENT_TASK_REASON: string = 'save pending writing content'
+const TRANSIENT_TASK_REASON: string = 'save writing content and finalize diagnostics'
 
 export class HarmonyBackgroundSaveTask {
   private static instance: HarmonyBackgroundSaveTask
@@ -47,12 +49,9 @@ export class HarmonyBackgroundSaveTask {
     return PlatformApiResolver.getInstance().hasSystemCapability(TRANSIENT_TASK_SYSCAP)
   }
 
-  // 在短时任务保护下执行一次保存事务。
-  // 申请到 requestId 就用 try/finally 在结束时释放；申请失败/平台不支持只记录
-  // 真实原因，保存 action 照常执行——短时任务申请失败与实际正文保存失败是两件事，
-  // 不能因为申请不到就放弃还有执行机会的落盘（Issue #927 复核）。
-  // action 的真实结果原样返回。
-  async runSave(action: () => Promise<boolean>): Promise<boolean> {
+  // 在一个短时任务保护下执行完整后台事务：Lifecycle 等待全部正文保存，
+  // 随后等待诊断 flush、压缩和 ZIP 发布，最后才释放 requestId。
+  async runBackgroundTransaction(action: () => Promise<void>): Promise<void> {
     let requestId: number = -1
     if (!this.isSupported()) {
       this.recordUnavailable('syscap_missing', -1)
@@ -72,7 +71,7 @@ export class HarmonyBackgroundSaveTask {
     }
 
     try {
-      return await action()
+      await action()
     } finally {
       if (requestId !== -1) {
         this.cancelRequest(requestId)

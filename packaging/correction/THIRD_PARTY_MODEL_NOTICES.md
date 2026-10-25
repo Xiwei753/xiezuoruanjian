@@ -40,12 +40,19 @@
 - Linux 包按 `assets/model_manifest.json` 锁定版本、压缩包字节数与 SHA-256，
   解包后只安装 `libonnxruntime.so`。Android 使用官方 ONNX Runtime Android
   AAR。
-- HarmonyOS 从
-  <https://github.com/csukuangfj/onnxruntime-libs/releases/tag/v1.26.0>
-  获取社区构建的 OpenHarmony ARM64 ONNX Runtime 1.26.0，按固定字节数与
-  SHA-256 校验后随 HAP 交付；它不是 Microsoft 官方 HarmonyOS 产物，也不复
-  用 Android/Linux 的 `.so`。运行时为 ONNX Runtime 的 MIT 许可作品，素笺未
-  修改该库；构建已接入，但仍需在目标设备上验证实际推理，且不声明 NPU 支持。
+- HarmonyOS 随 HAP 交付的 ARM64 `libonnxruntime.so` 基于 Microsoft ONNX Runtime
+  1.26.0 官方源码提交
+  [`8c546c37b43caaca1fa25db430dab94b901cf277`](https://github.com/microsoft/onnxruntime/tree/8c546c37b43caaca1fa25db430dab94b901cf277)，
+  使用 HarmonyOS Native SDK 26.0.0.105 与 HarmonyOS Clang 15.0.4 构建。
+  构建应用了本项目的[HarmonyOS SDK 26 兼容补丁](https://github.com/Xiwei753/xiezuoruanjian/blob/main/third_party/onnxruntime/harmony/onnxruntime-ohos-arm64-v8a-1.26.0-harmony-sdk26.patch)：
+  调整 CMake 警告与 SONAME 设置、排除 OHOS 不适用的 Linux 线程亲和调用，
+  并关闭 BF16 和 NEON FP16 加速路径，保留 CPU provider。库文件的字节数和
+  SHA-256 记录在
+  `crates/sujian-proof/assets/model_manifest.json`，并随 HAP 交付；写作 NAPI
+  不强链接 ONNX Runtime，Rust 纠错功能在实际打开模型时按需加载该本地库。
+  源码与补丁作品按 MIT 许可分发，许可和归属见
+  `third_party/onnxruntime/LICENSE` 与 `third_party/onnxruntime/NOTICE`。
+  目标 HarmonyOS 设备上的动态装载仍待实机验证；本说明不声明 NPU 支持。
 - 模型格式与运行时是相互独立的作品，ONNX Runtime 的 MIT 许可不改变模型的
   Apache-2.0 许可。
 

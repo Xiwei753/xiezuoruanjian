@@ -12,6 +12,7 @@ export interface LifecycleObserver {
   onDestroy?(): void
   onForeground?(): void
   onBackground?(): void | Promise<void>
+  onBackgroundFinalize?(): void | Promise<void>
   onFocus?(): void
   onBlur?(): void
 }
@@ -105,20 +106,39 @@ export class HarmonyLifecycle {
     }
     this.state.isForeground = false
     this.state.lastBackgroundAt = Date.now()
-    const pending: Array<Promise<void>> = []
-    this.observers.forEach(obs => {
-      try {
-        const result = obs.onBackground?.()
-        if (result !== undefined) {
-          pending.push(result.catch(() => {}))
+    const observers = Array.from(this.observers)
+    const transaction = HarmonyBackgroundSaveTask.getInstance().runBackgroundTransaction(async (): Promise<void> => {
+      const pendingSaves: Array<Promise<void>> = []
+      observers.forEach(obs => {
+        try {
+          const result = obs.onBackground?.()
+          if (result !== undefined) {
+            pendingSaves.push(Promise.resolve(result).catch(() => {}))
+          }
+        } catch (_) {
+          // One observer must not prevent the remaining background saves.
         }
-      } catch (_) {
-        // One observer must not prevent the remaining background work or the
-        // completion signal that lets diagnostics take its final snapshot.
-      }
+      })
+      await Promise.all(pendingSaves)
+
+      const pendingFinalizers: Array<Promise<void>> = []
+      observers.forEach(obs => {
+        try {
+          const result = obs.onBackgroundFinalize?.()
+          if (result !== undefined) {
+            pendingFinalizers.push(Promise.resolve(result).catch(() => {}))
+          }
+        } catch (_) {
+          // One finalizer must not prevent other registered background cleanup.
+        }
+      })
+      await Promise.all(pendingFinalizers)
     })
     this.emit('background')
-    Promise.all(pending).then(() => this.emit('backgroundComplete'))
+    transaction.then(
+      () => this.emit('backgroundComplete'),
+      () => this.emit('backgroundComplete')
+    )
   }
 
   notifyFocus(): void {
@@ -150,11 +170,9 @@ export class HarmonyLifecycle {
 // 新参数决定要不要立刻重启。退后台那次安全保存与这个开关是两件事，仍然无条件执行，
 // 避免把「定时自动保存开关」和「退后台保护正文」混在一起。
 //
-// Issue #927：退后台保存不再直接调用 saveCallback 丢弃 Promise，而是交给平台
-// HarmonyBackgroundSaveTask.runSave 托管：申请到短时任务就用 try/finally 释放，
-// 申请不到也照常执行保存（短时任务只是延长执行机会，不是保存的许可证）。
-// 保存结果以 saveCallback 的真实返回值为准。单一 in-flight 标志保证
-// onWindowStageDestroy + onBackground 连续触发只产生一笔后台保存事务。
+// Issue #927：后台保存和诊断收尾由 HarmonyLifecycle 合并进同一个
+// HarmonyBackgroundSaveTask.runBackgroundTransaction。保存结果仍以 saveCallback
+// 的真实返回值为准。单一 in-flight 标志保证连续生命周期通知只产生一笔后台保存。
 // 前台 setInterval 定时保存语义不变。
 export class AutoSaveLifecycleObserver implements LifecycleObserver {
   private saveCallback: () => Promise<boolean>
@@ -233,8 +251,7 @@ export class AutoSaveLifecycleObserver implements LifecycleObserver {
     if (this.backgroundSavePromise !== null) {
       return this.backgroundSavePromise
     }
-    const task: HarmonyBackgroundSaveTask = HarmonyBackgroundSaveTask.getInstance()
-    const savePromise = task.runSave(this.saveCallback).then((success: boolean) => {
+    const savePromise = this.saveCallback().then((success: boolean) => {
       if (!success) {
         const stageField: DiagnosticField = { key: 'stage', value: 'save' }
         HarmonyDiagnosticEvents.record('Error', 'App', 'background_save_failed', 'AutoSaveLifecycleObserver', [stageField])

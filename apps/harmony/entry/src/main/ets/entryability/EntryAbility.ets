@@ -245,9 +245,8 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0000, 'EntryAbility', 'onBackground')
     HarmonyDiagnosticEvents.record('Info', 'App', 'ability.background', 'EntryAbility', [])
     HarmonyDiagnosticsCheckpoint.getInstance().onBackground()
-    // Issue #927：退后台保存由 AutoSaveLifecycleObserver → HarmonyBackgroundSaveTask.runSave()
-    // 申请短时任务托管（申请到 requestId 后才开始异步落盘）。这里只派发一次全局事件，
-    // 不 await 不受系统等待保证的保存 Promise。
+    // Issue #927：保存和诊断收尾由 Lifecycle 的同一个短时任务托管；这里只派发一次
+    // 全局事件，不在 UIAbility 回调中直接等待后台事务。
     this.lifecycle.notifyBackground()
   }
 

@@ -26,6 +26,7 @@ import { common } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
 import fs from '@ohos.file.fs'
 
+import { HarmonyDiagnosticEvents } from './HarmonyDiagnosticEvents'
 import { HarmonyDiagnosticsExporter } from './HarmonyDiagnosticsExporter'
 import { HarmonyDiagnosticsRuntimeSnapshot } from './HarmonyDiagnosticsRuntimeSnapshot'
 import { HarmonyThemeAdapter, ThemeObserver, ThemeConfig } from '../../ui/theme/HarmonyThemeAdapter'
@@ -33,7 +34,7 @@ import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStor
 import { EditorRuntimeSnapshotStore, EditorRuntimeSnapshot, EditorSnapshotObserver } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
 import { ScreenRole } from '../../app/navigation/ScreenSemantics'
 import { AdaptiveContext, AdaptiveObserver, AdaptiveState } from '../../ui/adaptive/AdaptiveContext'
-import { HarmonyLifecycle } from '../lifecycle/HarmonyLifecycle'
+import { HarmonyLifecycle, LifecycleObserver } from '../lifecycle/HarmonyLifecycle'
 
 const LOG_TAG = 'HarmonyDiagnosticsCheckpoint'
 const CHECKPOINT_COALESCE_MS = 250
@@ -102,10 +103,11 @@ export class HarmonyDiagnosticsCheckpoint {
   private scheduledTimerId: number = -1
   private isForeground: boolean = true
   private backgroundFinalizationPending: boolean = false
+  private backgroundTransitionVersion: number = 0
+  private activeCheckpointPromise: Promise<void> | null = null
   private lastLogClosedAt: number = 0
   private lastArchiveCompletedAt: number = 0
-  private manualCheckpointPending: boolean = false
-  private backgroundCompleteListener: (() => void) | null = null
+  private backgroundFinalizerObserver: LifecycleObserver | null = null
 
   // Issue #773 评论 5845033983：三个 observer，在 destroy 中取消订阅。
   private themeObserver: CheckpointThemeObserver | null = null
@@ -144,8 +146,11 @@ export class HarmonyDiagnosticsCheckpoint {
     this.context = context
     this.exporter.setAbilityContext(context)
     this.attachLogWatchers()
-    this.backgroundCompleteListener = () => this.onBackgroundSaveCompleted()
-    HarmonyLifecycle.getInstance().on('backgroundComplete', this.backgroundCompleteListener)
+    HarmonyDiagnosticEvents.setCheckpointDirtyHandler(() => this.markDirty())
+    this.backgroundFinalizerObserver = {
+      onBackgroundFinalize: (): Promise<void> => this.finalizeBackground()
+    }
+    HarmonyLifecycle.getInstance().addObserver(this.backgroundFinalizerObserver)
 
     // Issue #773 评论 5845033983：订阅三个 Store 的 observer。
     // 三个 Store 不反向 import Checkpoint，避免循环依赖。Checkpoint 主动订阅。
@@ -193,16 +198,13 @@ export class HarmonyDiagnosticsCheckpoint {
     if (!this.initialized || this.context === null) {
       return
     }
-    if (this.isGenerating) {
-      this.manualCheckpointPending = true
-      return
-    }
     void this.runCheckpoint(true)
   }
 
   onForeground(): void {
     const wasForeground = this.isForeground
     this.isForeground = true
+    this.backgroundTransitionVersion += 1
     this.backgroundFinalizationPending = false
     if (!wasForeground) {
       this.attachLogWatchers()
@@ -217,25 +219,36 @@ export class HarmonyDiagnosticsCheckpoint {
       return
     }
     this.isForeground = false
+    this.backgroundTransitionVersion += 1
     this.backgroundFinalizationPending = true
     this.cancelScheduledCheckpoint()
     // Keep the directory watcher through the background save. The lifecycle
-    // completion callback below stops it before the one final archive.
+    // finalization callback stops it after all background saves have completed.
   }
 
-  private onBackgroundSaveCompleted(): void {
-    if (!this.initialized || !this.backgroundFinalizationPending) {
+  // Lifecycle awaits this after all background save Promises settle and before
+  // its single suspend-delay request is released.
+  async finalizeBackground(): Promise<void> {
+    if (!this.initialized || !this.backgroundFinalizationPending || this.isForeground) {
       return
     }
-    this.backgroundFinalizationPending = false
-    if (this.isForeground) {
-      return
-    }
+    const transitionVersion = this.backgroundTransitionVersion
     this.stopLogWatchers()
-    // exportTo() flushes the Rust diagnostics writer before collecting files.
-    // This is the single final background checkpoint; later background log
-    // batches remain durable and are reconciled when the app returns.
-    this.requestCheckpoint()
+    this.stateDirty = true
+    this.dirty = true
+    this.dirtyVersion += 1
+    this.stateDirtyVersion += 1
+    this.cancelScheduledCheckpoint()
+    try {
+      // exportTo() flushes Rust diagnostics before collecting and compressing
+      // files. The lifecycle keeps the same suspend-delay request until this
+      // final archive has either been published or cancelled as stale.
+      await this.runCheckpoint(true, transitionVersion)
+    } finally {
+      if (this.backgroundTransitionVersion === transitionVersion) {
+        this.backgroundFinalizationPending = false
+      }
+    }
   }
 
   // Issue #773 评论 5845033983：persistRuntimeSnapshot — 把运行态 JSON 写到 live/runtime/ 目录，
@@ -320,17 +333,38 @@ export class HarmonyDiagnosticsCheckpoint {
     await this.runCheckpoint(false)
   }
 
-  private async runCheckpoint(manual: boolean): Promise<void> {
-    if (this.isGenerating) {
-      if (manual) {
-        this.manualCheckpointPending = true
-      }
+  private async runCheckpoint(manual: boolean, backgroundTransitionVersion: number = -1): Promise<void> {
+    if (backgroundTransitionVersion >= 0 && !this.isCurrentBackgroundFinalization(backgroundTransitionVersion)) {
       return
     }
+    const active = this.activeCheckpointPromise
+    if (active !== null) {
+      if (!manual) {
+        return
+      }
+      await active
+      if (backgroundTransitionVersion >= 0 && !this.isCurrentBackgroundFinalization(backgroundTransitionVersion)) {
+        return
+      }
+      await this.runCheckpoint(true, backgroundTransitionVersion)
+      return
+    }
+    const checkpointPromise = this.runCheckpointBody(backgroundTransitionVersion)
+    this.activeCheckpointPromise = checkpointPromise
+    try {
+      await checkpointPromise
+    } finally {
+      if (this.activeCheckpointPromise === checkpointPromise) {
+        this.activeCheckpointPromise = null
+      }
+    }
+  }
+
+  private async runCheckpointBody(backgroundTransitionVersion: number): Promise<void> {
     const versionAtStart = this.dirtyVersion
     const stateVersionAtStart = this.stateDirtyVersion
     const logVersionAtStart = this.logDirtyVersion
-    const published = await this.generateCheckpoint()
+    const published = await this.generateCheckpoint(backgroundTransitionVersion)
     this.lastArchiveCompletedAt = Date.now()
     const changedDuringArchive = this.dirtyVersion !== versionAtStart
 
@@ -344,12 +378,6 @@ export class HarmonyDiagnosticsCheckpoint {
     }
     this.dirty = this.stateDirty || this.logDirty
 
-    if (this.manualCheckpointPending) {
-      this.manualCheckpointPending = false
-      void this.runCheckpoint(true)
-      return
-    }
-
     // 新写入在归档期间到达时只保留待处理状态；从归档完成起至少再等一个静默窗。
     if (changedDuringArchive && this.dirty) {
       if (this.stateDirty || (this.logDirty && this.isForeground)) {
@@ -358,12 +386,17 @@ export class HarmonyDiagnosticsCheckpoint {
     }
   }
 
+  private isCurrentBackgroundFinalization(transitionVersion: number): boolean {
+    return this.backgroundFinalizationPending && !this.isForeground &&
+      this.backgroundTransitionVersion === transitionVersion
+  }
+
   // 生成 checkpoint — 复用 HarmonyDiagnosticsExporter.exportTo() 生成 zip，
   // 然后通过双槽 + 原子替换流程维护 latest.zip / previous.zip。
   // Issue #773 评论 5845033983：先导出到 staging 目录，确认完整成功后再移动到 snapshots。
   // Issue #773 评论 5845876043：改为 Promise<boolean>，所有失败分支返回 false；
   // 只有 atomicReplace 成功后才清 staging、打印成功并返回 true。
-  private async generateCheckpoint(): Promise<boolean> {
+  private async generateCheckpoint(backgroundTransitionVersion: number = -1): Promise<boolean> {
     if (this.context === null) {
       hilog.warn(0x0000, LOG_TAG, 'context is null; cannot generate checkpoint')
       return false
@@ -378,6 +411,11 @@ export class HarmonyDiagnosticsCheckpoint {
       const timestampedZipPath = await this.exporter.exportTo(stagingDir)
       if (timestampedZipPath === null) {
         hilog.warn(0x0000, LOG_TAG, 'exportTo returned null; skipping checkpoint')
+        return false
+      }
+      if (backgroundTransitionVersion >= 0 &&
+        !this.isCurrentBackgroundFinalization(backgroundTransitionVersion)) {
+        this.safeDelete(timestampedZipPath)
         return false
       }
 
@@ -611,11 +649,11 @@ export class HarmonyDiagnosticsCheckpoint {
   // 销毁 — 取消尚未触发的一次性调度，取消所有 observer 订阅。
   destroy(): void {
     this.cancelScheduledCheckpoint()
-    this.manualCheckpointPending = false
     this.stopLogWatchers()
-    if (this.backgroundCompleteListener !== null) {
-      HarmonyLifecycle.getInstance().off('backgroundComplete', this.backgroundCompleteListener)
-      this.backgroundCompleteListener = null
+    HarmonyDiagnosticEvents.setCheckpointDirtyHandler(null)
+    if (this.backgroundFinalizerObserver !== null) {
+      HarmonyLifecycle.getInstance().removeObserver(this.backgroundFinalizerObserver)
+      this.backgroundFinalizerObserver = null
     }
     // Issue #773 评论 5845033983：取消三个 Store 的 observer 订阅。
     if (this.themeObserver !== null) {
