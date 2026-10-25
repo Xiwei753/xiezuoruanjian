@@ -64,13 +64,17 @@
       "library": "lib/libonnxruntime.so.1.22.0"
     },
     "harmony-arm64": {
-      "version": "1.26.0-ohos",
-      "url": "https://github.com/csukuangfj/onnxruntime-libs/releases/download/v1.26.0/onnxruntime-ohos-arm64-v8a-1.26.0.zip",
-      "bytes": 7959712,
-      "sha256": "dc2e89c0e4ea806398f2e957d7149545fd52fa0f6fab8d78fc934bfcdeddb398",
+      "version": "1.26.0-harmony-sdk26.0.0.105",
+      "url": "https://github.com/Xiwei753/xiezuoruanjian/releases/download/onnxruntime-harmony-sdk26-v1.26.0/onnxruntime-ohos-arm64-v8a-1.26.0-harmony-sdk26.zip",
+      "bytes": 5974920,
+      "sha256": "2c2acc6ac083404b679d43ac539bbc1e0e85fa76ed0d420c76b0fbdff9793d10",
       "format": "zip",
-      "library": "lib/libonnxruntime.so",
-      "provenance": "community OpenHarmony arm64 build of ONNX Runtime 1.26.0"
+      "library": "onnxruntime-ohos-arm64-v8a-1.26.0-harmony-sdk26/lib/libonnxruntime.so",
+      "provenance": "Microsoft ONNX Runtime 1.26.0 official source, commit 8c546c37b43caaca1fa25db430dab94b901cf277, built for HarmonyOS Native SDK 26.0.0.105 with Clang 15.0.4; CPU profile with BF16 and NEON FP16 acceleration disabled",
+      "source": "https://github.com/microsoft/onnxruntime/tree/v1.26.0",
+      "source_commit": "8c546c37b43caaca1fa25db430dab94b901cf277",
+      "target_sdk": "HarmonyOS Native SDK 26.0.0.105",
+      "target_triple": "aarch64-linux-ohos26.0.0"
     }
   }
 }
