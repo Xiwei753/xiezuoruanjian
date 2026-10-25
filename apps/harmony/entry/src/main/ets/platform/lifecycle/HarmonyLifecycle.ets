@@ -5,13 +5,13 @@
 import { HarmonyBackgroundSaveTask } from './HarmonyBackgroundSaveTask'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../diagnostics/HarmonyDiagnosticEvents'
 
-export type LifecycleEvent = 'create' | 'destroy' | 'foreground' | 'background' | 'focus' | 'blur'
+export type LifecycleEvent = 'create' | 'destroy' | 'foreground' | 'background' | 'backgroundComplete' | 'focus' | 'blur'
 
 export interface LifecycleObserver {
   onCreate?(): void
   onDestroy?(): void
   onForeground?(): void
-  onBackground?(): void
+  onBackground?(): void | Promise<void>
   onFocus?(): void
   onBlur?(): void
 }
@@ -100,10 +100,25 @@ export class HarmonyLifecycle {
   }
 
   notifyBackground(): void {
+    if (!this.state.isForeground) {
+      return
+    }
     this.state.isForeground = false
     this.state.lastBackgroundAt = Date.now()
-    this.observers.forEach(obs => obs.onBackground?.())
+    const pending: Array<Promise<void>> = []
+    this.observers.forEach(obs => {
+      try {
+        const result = obs.onBackground?.()
+        if (result !== undefined) {
+          pending.push(result.catch(() => {}))
+        }
+      } catch (_) {
+        // One observer must not prevent the remaining background work or the
+        // completion signal that lets diagnostics take its final snapshot.
+      }
+    })
     this.emit('background')
+    Promise.all(pending).then(() => this.emit('backgroundComplete'))
   }
 
   notifyFocus(): void {
@@ -149,7 +164,7 @@ export class AutoSaveLifecycleObserver implements LifecycleObserver {
   // Issue #927：后台保存成功/失败结果回调（页面用于日志/提示；dirty 状态由协调器回流保证）。
   private onSaveResult: ((success: boolean) => void) | null = null
   // Issue #927：单一 in-flight 标志，避免双生命周期事件生成两笔后台保存。
-  private backgroundSaveInFlight: boolean = false
+  private backgroundSavePromise: Promise<void> | null = null
 
   constructor(
     saveCallback: () => Promise<boolean>,
@@ -186,9 +201,9 @@ export class AutoSaveLifecycleObserver implements LifecycleObserver {
   }
 
   // Issue #927：退后台保存统一走平台短时任务（runSave），不再直接丢弃 saveCallback 的 Promise。
-  onBackground(): void {
+  onBackground(): Promise<void> {
     this.stopAutoSave()
-    this.runBackgroundSave()
+    return this.runBackgroundSave()
   }
 
   onDestroy(): void {
@@ -210,18 +225,16 @@ export class AutoSaveLifecycleObserver implements LifecycleObserver {
     }
   }
 
-  // Issue #927：一次后台保存事务。in-flight 期间忽略重复事件。
+  // 一次后台保存事务。重复的生命周期通知共享同一个 Promise。
   // 短时任务只是延长执行机会：是否申请到都不改变保存语义——始终执行唯一的
   // saveCallback（performBackgroundSave），申请失败只由 HarmonyBackgroundSaveTask
   // 记录真实原因，保存结果以 saveCallback 的真实返回值为准（Issue #927 复核）。
-  private runBackgroundSave(): void {
-    if (this.backgroundSaveInFlight) {
-      return
+  private runBackgroundSave(): Promise<void> {
+    if (this.backgroundSavePromise !== null) {
+      return this.backgroundSavePromise
     }
-    this.backgroundSaveInFlight = true
     const task: HarmonyBackgroundSaveTask = HarmonyBackgroundSaveTask.getInstance()
-    task.runSave(this.saveCallback).then((success: boolean) => {
-      this.backgroundSaveInFlight = false
+    const savePromise = task.runSave(this.saveCallback).then((success: boolean) => {
       if (!success) {
         const stageField: DiagnosticField = { key: 'stage', value: 'save' }
         HarmonyDiagnosticEvents.record('Error', 'App', 'background_save_failed', 'AutoSaveLifecycleObserver', [stageField])
@@ -229,11 +242,17 @@ export class AutoSaveLifecycleObserver implements LifecycleObserver {
       this.notifySaveResult(success)
     }, () => {
       // runSave 按契约不抛异常；兜底路径同样按失败上报，不静默吞掉。
-      this.backgroundSaveInFlight = false
       const stageField: DiagnosticField = { key: 'stage', value: 'exception' }
       HarmonyDiagnosticEvents.record('Error', 'App', 'background_save_failed', 'AutoSaveLifecycleObserver', [stageField])
       this.notifySaveResult(false)
     })
+    const completionPromise = savePromise.then(() => {
+      this.backgroundSavePromise = null
+    }, () => {
+      this.backgroundSavePromise = null
+    })
+    this.backgroundSavePromise = completionPromise
+    return completionPromise
   }
 
   private notifySaveResult(success: boolean): void {

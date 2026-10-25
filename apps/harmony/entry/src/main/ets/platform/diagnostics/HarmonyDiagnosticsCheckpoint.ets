@@ -33,6 +33,7 @@ import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStor
 import { EditorRuntimeSnapshotStore, EditorRuntimeSnapshot, EditorSnapshotObserver } from '../../feature/editor/diagnostics/EditorRuntimeSnapshotStore'
 import { ScreenRole } from '../../app/navigation/ScreenSemantics'
 import { AdaptiveContext, AdaptiveObserver, AdaptiveState } from '../../ui/adaptive/AdaptiveContext'
+import { HarmonyLifecycle } from '../lifecycle/HarmonyLifecycle'
 
 const LOG_TAG = 'HarmonyDiagnosticsCheckpoint'
 const CHECKPOINT_COALESCE_MS = 250
@@ -45,7 +46,6 @@ const LATEST_ZIP = 'sujian-diagnostics-latest.zip'
 const PREVIOUS_ZIP = 'sujian-diagnostics-previous.zip'
 const LATEST_TMP = 'sujian-diagnostics-latest.tmp'
 const STAGING_SUBDIR = '.staging/checkpoint'
-const WATCH_MODIFY = 0x2
 const WATCH_CLOSE_WRITE = 0x8
 const WATCH_MOVED_FROM = 0x40
 const WATCH_MOVED_TO = 0x80
@@ -55,9 +55,6 @@ const WATCH_DELETE_SELF = 0x400
 const WATCH_MOVE_SELF = 0x800
 const LOG_DIRECTORY_EVENTS = WATCH_MOVED_FROM | WATCH_MOVED_TO | WATCH_CREATE | WATCH_DELETE |
   WATCH_DELETE_SELF | WATCH_MOVE_SELF
-// 修改事件由文件 watcher 记录；关闭写入由 log 目录 watcher 统一处理，
-// 这样新建/轮转文件即使在文件 watcher 挂上前已开始写，也不会漏掉 CLOSE_WRITE。
-const LOG_FILE_EVENTS = WATCH_MODIFY
 const LOG_FILENAME_PATTERN = /^sujian-current-[A-Za-z0-9._-]+\.log$/
 
 // Issue #773 评论 5845033983：ThemeObserver 实现 — theme 变化时 persist + markDirty。
@@ -104,11 +101,11 @@ export class HarmonyDiagnosticsCheckpoint {
   private isGenerating: boolean = false
   private scheduledTimerId: number = -1
   private isForeground: boolean = true
-  private allowBackgroundCheckpoint: boolean = false
+  private backgroundFinalizationPending: boolean = false
   private lastLogClosedAt: number = 0
   private lastArchiveCompletedAt: number = 0
-  private logWriteInProgress: boolean = false
   private manualCheckpointPending: boolean = false
+  private backgroundCompleteListener: (() => void) | null = null
 
   // Issue #773 评论 5845033983：三个 observer，在 destroy 中取消订阅。
   private themeObserver: CheckpointThemeObserver | null = null
@@ -122,7 +119,6 @@ export class HarmonyDiagnosticsCheckpoint {
   // 目标目录出现前，只短暂监听当前最深的已存在父目录；目标 log 出现后只监听它。
   private logDirectoryWatcher: fs.Watcher | null = null
   private logDirectoryWatchLevel: number = -1
-  private logFileWatchers: Array<fs.Watcher> = []
 
   private constructor() {
     this.exporter = new HarmonyDiagnosticsExporter()
@@ -144,10 +140,12 @@ export class HarmonyDiagnosticsCheckpoint {
     }
     this.initialized = true
     this.isForeground = true
-    this.allowBackgroundCheckpoint = false
+    this.backgroundFinalizationPending = false
     this.context = context
     this.exporter.setAbilityContext(context)
     this.attachLogWatchers()
+    this.backgroundCompleteListener = () => this.onBackgroundSaveCompleted()
+    HarmonyLifecycle.getInstance().on('backgroundComplete', this.backgroundCompleteListener)
 
     // Issue #773 评论 5845033983：订阅三个 Store 的 observer。
     // 三个 Store 不反向 import Checkpoint，避免循环依赖。Checkpoint 主动订阅。
@@ -205,19 +203,39 @@ export class HarmonyDiagnosticsCheckpoint {
   onForeground(): void {
     const wasForeground = this.isForeground
     this.isForeground = true
-    this.allowBackgroundCheckpoint = false
-    if (!wasForeground && this.dirty) {
-      this.schedulePendingCheckpoint()
+    this.backgroundFinalizationPending = false
+    if (!wasForeground) {
+      this.attachLogWatchers()
+      // The watcher was paused after background save completion. Reconcile the
+      // persisted log directory on return, including writes made while paused.
+      this.markLogClosed()
     }
   }
 
   onBackground(): void {
+    if (!this.isForeground) {
+      return
+    }
     this.isForeground = false
-    this.allowBackgroundCheckpoint = true
+    this.backgroundFinalizationPending = true
     this.cancelScheduledCheckpoint()
-    // 后台切换是明确提交点。若写入仍打开，CLOSE_WRITE 到达后才开始安静窗口；
-    // 没有脏数据时不会留下计时器。
-    this.schedulePendingCheckpoint()
+    // Keep the directory watcher through the background save. The lifecycle
+    // completion callback below stops it before the one final archive.
+  }
+
+  private onBackgroundSaveCompleted(): void {
+    if (!this.initialized || !this.backgroundFinalizationPending) {
+      return
+    }
+    this.backgroundFinalizationPending = false
+    if (this.isForeground) {
+      return
+    }
+    this.stopLogWatchers()
+    // exportTo() flushes the Rust diagnostics writer before collecting files.
+    // This is the single final background checkpoint; later background log
+    // batches remain durable and are reconciled when the app returns.
+    this.requestCheckpoint()
   }
 
   // Issue #773 评论 5845033983：persistRuntimeSnapshot — 把运行态 JSON 写到 live/runtime/ 目录，
@@ -233,8 +251,7 @@ export class HarmonyDiagnosticsCheckpoint {
   // 普通运行态事件用一次性 debounce；日志事件会重置计时器，形成真正的静默窗口。
   private scheduleCheckpoint(resetExisting: boolean = false, delayMs: number = CHECKPOINT_COALESCE_MS): void {
     if (!this.initialized || this.context === null || !this.dirty || this.isGenerating ||
-      (!this.isForeground && !this.allowBackgroundCheckpoint) ||
-      (!this.stateDirty && (!this.logDirty || this.logWriteInProgress))) {
+      !this.isForeground || (!this.stateDirty && !this.logDirty)) {
       return
     }
     if (this.scheduledTimerId !== -1) {
@@ -249,32 +266,20 @@ export class HarmonyDiagnosticsCheckpoint {
     }, Math.max(0, delayMs))
   }
 
-  // 写入中只记录版本/脏状态；它不能启动计时器，也不能让纯日志计时器提前归档。
-  private markLogModified(): void {
-    this.logDirty = true
-    this.dirty = true
-    this.dirtyVersion += 1
-    this.logDirtyVersion += 1
-    this.logWriteInProgress = true
-    // 任意待提交包都等待这批日志关闭，避免 state 事件让归档撞上半写入文件。
-    this.cancelScheduledCheckpoint()
-  }
-
   // CLOSE_WRITE 是一个 batch 已落盘的边界，才从这里启动真正的静默窗口。
   private markLogClosed(): void {
     this.logDirty = true
     this.dirty = true
     this.dirtyVersion += 1
     this.logDirtyVersion += 1
-    this.logWriteInProgress = false
     this.lastLogClosedAt = Date.now()
-    if (this.isForeground || this.allowBackgroundCheckpoint) {
+    if (this.isForeground) {
       this.schedulePendingCheckpoint(true)
     }
   }
 
   private schedulePendingCheckpoint(resetExisting: boolean = false): void {
-    if (this.logWriteInProgress) {
+    if (!this.isForeground) {
       return
     }
     const delay = this.logDirty ? this.getLogQuietDelay() : CHECKPOINT_COALESCE_MS
@@ -299,10 +304,10 @@ export class HarmonyDiagnosticsCheckpoint {
   // 单次归档失败后保留 dirty，但不自行重试；归档期间新增变化保留版本，
   // 归档结束后再等待静默窗口，避免紧接着反复压 ZIP。
   private async runScheduledCheckpoint(): Promise<void> {
-    if ((!this.isForeground && !this.allowBackgroundCheckpoint) || this.isGenerating || !this.dirty) {
+    if (!this.isForeground || this.isGenerating || !this.dirty) {
       return
     }
-    if (this.logWriteInProgress || (!this.stateDirty && !this.logDirty)) {
+    if (!this.stateDirty && !this.logDirty) {
       return
     }
     if (this.logDirty && this.isForeground) {
@@ -499,8 +504,7 @@ export class HarmonyDiagnosticsCheckpoint {
     return [filesDir, diagnosticsDir, liveDir, `${liveDir}/log`]
   }
 
-  // log 尚未创建时只看当前最深的已存在父目录；新子目录出现后切换到它，
-  // 最终只保留 diagnostics/live/log 本身和其中的日志文件 watcher。
+  // log 尚未创建时只看当前最深的已存在父目录；新子目录出现后切换到它。
   private attachLogWatchers(): void {
     const paths = this.getLogWatchPaths()
     let level: number = -1
@@ -536,32 +540,19 @@ export class HarmonyDiagnosticsCheckpoint {
         this.logDirectoryWatchLevel = -1
       }
     }
-    if (level === 3 && this.logDirectoryWatchLevel === 3) {
-      this.refreshLogFileWatchers()
-    } else {
-      this.stopLogFileWatchers()
-    }
   }
 
   private onLogDirectoryEvent(level: number, fileName: string, eventMask: number): void {
-    if (!this.initialized || this.context === null) {
+    if (!this.initialized || this.context === null ||
+      (!this.isForeground && !this.backgroundFinalizationPending)) {
       return
     }
 
     const entryEvents = WATCH_MOVED_FROM | WATCH_MOVED_TO | WATCH_CREATE | WATCH_DELETE
     if (level === 3) {
       if ((eventMask & WATCH_CLOSE_WRITE) !== 0 && LOG_FILENAME_PATTERN.test(fileName)) {
-        // 目录 watcher 能接住文件 watcher 挂载前就已写完的新建/轮转文件。
+        // Rust closes each append batch before emitting IN_CLOSE_WRITE.
         this.markLogClosed()
-      }
-      if ((eventMask & entryEvents) !== 0) {
-        // 日志目录收到新建、移入或移除时，重新按当前路径挂载文件 watcher；
-        // 轮转会触发 moved-to/create，新的 current 文件因此能继续被监听。
-        this.refreshLogFileWatchers()
-        if ((eventMask & (WATCH_MOVED_TO | WATCH_CREATE)) !== 0 && LOG_FILENAME_PATTERN.test(fileName)) {
-          // 新建/移入只代表写入可能开始；等目录或文件的 CLOSE_WRITE 再提交。
-          this.markLogModified()
-        }
       }
       if ((eventMask & (WATCH_DELETE_SELF | WATCH_MOVE_SELF)) !== 0) {
         this.reattachLogWatchers()
@@ -587,59 +578,11 @@ export class HarmonyDiagnosticsCheckpoint {
   }
 
   private reattachLogWatchers(): void {
-    this.stopLogFileWatchers()
     this.stopLogDirectoryWatcher()
     this.attachLogWatchers()
   }
 
-  private refreshLogFileWatchers(): void {
-    this.stopLogFileWatchers()
-    const paths = this.getLogWatchPaths()
-    if (paths.length !== 4 || this.logDirectoryWatchLevel !== 3 || this.logDirectoryWatcher === null) {
-      return
-    }
-    const logDir = paths[3]
-    try {
-      for (const fileName of fs.listFileSync(logDir)) {
-        if (!LOG_FILENAME_PATTERN.test(fileName)) {
-          continue
-        }
-        const filePath = `${logDir}/${fileName}`
-        try {
-          if (!fs.statSync(filePath).isFile()) {
-            continue
-          }
-          const watcher = fs.createWatcher(filePath, LOG_FILE_EVENTS, (event) => {
-            if (!this.initialized || this.context === null) {
-              return
-            }
-            if ((event.event & WATCH_MODIFY) !== 0) {
-              this.markLogModified()
-            }
-          })
-          watcher.start()
-          this.logFileWatchers.push(watcher)
-        } catch (e) {
-          hilog.warn(0x0000, LOG_TAG, 'cannot watch diagnostics log %{public}s: %{public}s', filePath, String(e))
-        }
-      }
-    } catch (e) {
-      hilog.warn(0x0000, LOG_TAG, 'cannot list diagnostics logs: %{public}s', String(e))
-    }
-  }
-
-  private stopLogFileWatchers(): void {
-    for (const watcher of this.logFileWatchers) {
-      try {
-        watcher.stop()
-      } catch (_) {
-      }
-    }
-    this.logFileWatchers = []
-  }
-
   private stopLogWatchers(): void {
-    this.stopLogFileWatchers()
     this.stopLogDirectoryWatcher()
   }
 
@@ -670,6 +613,10 @@ export class HarmonyDiagnosticsCheckpoint {
     this.cancelScheduledCheckpoint()
     this.manualCheckpointPending = false
     this.stopLogWatchers()
+    if (this.backgroundCompleteListener !== null) {
+      HarmonyLifecycle.getInstance().off('backgroundComplete', this.backgroundCompleteListener)
+      this.backgroundCompleteListener = null
+    }
     // Issue #773 评论 5845033983：取消三个 Store 的 observer 订阅。
     if (this.themeObserver !== null) {
       HarmonyThemeAdapter.getInstance().removeObserver(this.themeObserver)
