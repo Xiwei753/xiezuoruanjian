@@ -51,7 +51,9 @@ const WATCH_DELETE_SELF = 0x400
 const WATCH_MOVE_SELF = 0x800
 const LOG_DIRECTORY_EVENTS = WATCH_MOVED_FROM | WATCH_MOVED_TO | WATCH_CREATE | WATCH_DELETE |
   WATCH_DELETE_SELF | WATCH_MOVE_SELF
-const LOG_FILE_EVENTS = WATCH_MODIFY | WATCH_CLOSE_WRITE
+// 修改事件由文件 watcher 记录；关闭写入由 log 目录 watcher 统一处理，
+// 这样新建/轮转文件即使在文件 watcher 挂上前已开始写，也不会漏掉 CLOSE_WRITE。
+const LOG_FILE_EVENTS = WATCH_MODIFY
 const LOG_FILENAME_PATTERN = /^sujian-current-[A-Za-z0-9._-]+\.log$/
 
 // Issue #773 评论 5845033983：ThemeObserver 实现 — theme 变化时 persist + markDirty。
@@ -88,11 +90,20 @@ export class HarmonyDiagnosticsCheckpoint {
   private context: common.UIAbilityContext | null = null
   private exporter: HarmonyDiagnosticsExporter
   private dirty: boolean = false
+  private stateDirty: boolean = false
+  private logDirty: boolean = false
   // Issue #773 评论 5846511131：版本号机制 — 导出过程中若 observer 又 markDirty()，
   // 最后 dirty = false 不会把新变化吃掉。tick 开始记版本号，成功后比较是否变化。
   private dirtyVersion: number = 0
+  private stateDirtyVersion: number = 0
+  private logDirtyVersion: number = 0
   private isGenerating: boolean = false
   private scheduledTimerId: number = -1
+  private isForeground: boolean = true
+  private lastLogDirtyAt: number = 0
+  private lastArchiveCompletedAt: number = 0
+  private logWriteInProgress: boolean = false
+  private manualCheckpointPending: boolean = false
 
   // Issue #773 评论 5845033983：三个 observer，在 destroy 中取消订阅。
   private themeObserver: CheckpointThemeObserver | null = null
@@ -103,9 +114,9 @@ export class HarmonyDiagnosticsCheckpoint {
   private initialized: boolean = false
   private adaptiveObserver: CheckpointAdaptiveObserver | null = null
 
-  // Rust 日志目录及其逐级父目录 watcher。逐级监听可在 diagnostics/live/log
-  // 尚未创建时接住目录创建事件；日志文件 watcher 单独捕获文件内容追加。
-  private logDirectoryWatchers: Array<fs.Watcher | null> = [null, null, null, null]
+  // 目标目录出现前，只短暂监听当前最深的已存在父目录；目标 log 出现后只监听它。
+  private logDirectoryWatcher: fs.Watcher | null = null
+  private logDirectoryWatchLevel: number = -1
   private logFileWatchers: Array<fs.Watcher> = []
 
   private constructor() {
@@ -129,7 +140,7 @@ export class HarmonyDiagnosticsCheckpoint {
     this.initialized = true
     this.context = context
     this.exporter.setAbilityContext(context)
-    this.attachLogWatchersFrom(0)
+    this.attachLogWatchers()
 
     // Issue #773 评论 5845033983：订阅三个 Store 的 observer。
     // 三个 Store 不反向 import Checkpoint，避免循环依赖。Checkpoint 主动订阅。
@@ -158,16 +169,46 @@ export class HarmonyDiagnosticsCheckpoint {
     this.markDirty()
   }
 
-  // 标记 dirty 并合并触发一次 checkpoint。
+  // 运行态变化合并触发一次 checkpoint。
   markDirty(): void {
+    this.stateDirty = true
     this.dirty = true
     this.dirtyVersion += 1
+    this.stateDirtyVersion += 1
     this.scheduleCheckpoint()
   }
 
-  // 首次启动或显式请求时也走同一合并调度入口。
+  // 显式请求绕过静默窗口，立即归档调用时可见的最新日志。
   requestCheckpoint(): void {
-    this.markDirty()
+    this.stateDirty = true
+    this.dirty = true
+    this.dirtyVersion += 1
+    this.stateDirtyVersion += 1
+    this.cancelScheduledCheckpoint()
+    if (!this.initialized || this.context === null) {
+      return
+    }
+    if (this.isGenerating) {
+      this.manualCheckpointPending = true
+      return
+    }
+    void this.runCheckpoint(true)
+  }
+
+  onForeground(): void {
+    const wasForeground = this.isForeground
+    this.isForeground = true
+    if (!wasForeground && this.dirty) {
+      this.schedulePendingCheckpoint()
+    }
+  }
+
+  onBackground(): void {
+    this.isForeground = false
+    // 日志单独积累时后台不启动 ZIP 归档。若仍有运行态变更，保留它自己的调度。
+    if (!this.stateDirty) {
+      this.cancelScheduledCheckpoint()
+    }
   }
 
   // Issue #773 评论 5845033983：persistRuntimeSnapshot — 把运行态 JSON 写到 live/runtime/ 目录，
@@ -180,29 +221,127 @@ export class HarmonyDiagnosticsCheckpoint {
     this.markDirty()
   }
 
-  // 事件触发的一次性 debounce。已有 timer 或正在归档时不再排重复唤醒。
-  private scheduleCheckpoint(): void {
-    if (!this.initialized || this.context === null || !this.dirty || this.isGenerating || this.scheduledTimerId !== -1) {
+  // 普通运行态事件用一次性 debounce；日志事件会重置计时器，形成真正的静默窗口。
+  private scheduleCheckpoint(resetExisting: boolean = false, delayMs: number = CHECKPOINT_COALESCE_MS): void {
+    if (!this.initialized || this.context === null || !this.dirty || this.isGenerating ||
+      (!this.stateDirty && (!this.logDirty || !this.isForeground || this.logWriteInProgress))) {
       return
+    }
+    if (this.scheduledTimerId !== -1) {
+      if (!resetExisting) {
+        return
+      }
+      this.cancelScheduledCheckpoint()
     }
     this.scheduledTimerId = setTimeout(() => {
       this.scheduledTimerId = -1
       void this.runScheduledCheckpoint()
-    }, CHECKPOINT_COALESCE_MS)
+    }, Math.max(0, delayMs))
   }
 
-  // 单次归档失败后保留 dirty，但不自行重试；后续真实事件会再次调度。
-  // 导出期间新增事件依 dirtyVersion 保留，并且只再排一轮归档。
+  // 写入中只记录版本/脏状态；它不能启动计时器，也不能让纯日志计时器提前归档。
+  private markLogModified(): void {
+    this.logDirty = true
+    this.dirty = true
+    this.dirtyVersion += 1
+    this.logDirtyVersion += 1
+    this.logWriteInProgress = true
+    if (!this.stateDirty) {
+      this.cancelScheduledCheckpoint()
+    }
+  }
+
+  // CLOSE_WRITE 是一个 batch 已落盘的边界，才从这里启动真正的静默窗口。
+  private markLogClosed(): void {
+    this.logDirty = true
+    this.dirty = true
+    this.dirtyVersion += 1
+    this.logDirtyVersion += 1
+    this.logWriteInProgress = false
+    this.lastLogDirtyAt = Date.now()
+    if (this.isForeground) {
+      this.schedulePendingCheckpoint(true)
+    }
+  }
+
+  private schedulePendingCheckpoint(resetExisting: boolean = false): void {
+    if (this.logWriteInProgress && !this.stateDirty) {
+      return
+    }
+    const delay = this.logDirty && this.isForeground ?
+      this.getLogQuietDelay() : CHECKPOINT_COALESCE_MS
+    this.scheduleCheckpoint(resetExisting, delay)
+  }
+
+  private getLogQuietDelay(): number {
+    const quietDeadline = Math.max(
+      this.lastLogDirtyAt + CHECKPOINT_COALESCE_MS,
+      this.lastArchiveCompletedAt + CHECKPOINT_COALESCE_MS
+    )
+    return Math.max(0, quietDeadline - Date.now())
+  }
+
+  private cancelScheduledCheckpoint(): void {
+    if (this.scheduledTimerId !== -1) {
+      clearTimeout(this.scheduledTimerId)
+      this.scheduledTimerId = -1
+    }
+  }
+
+  // 单次归档失败后保留 dirty，但不自行重试；归档期间新增变化保留版本，
+  // 归档结束后再等待静默窗口，避免紧接着反复压 ZIP。
   private async runScheduledCheckpoint(): Promise<void> {
     if (this.isGenerating || !this.dirty) {
       return
     }
+    if (!this.stateDirty && (!this.logDirty || !this.isForeground || this.logWriteInProgress)) {
+      return
+    }
+    if (this.logDirty && this.isForeground) {
+      const quietDelay = this.getLogQuietDelay()
+      if (quietDelay > 0) {
+        this.scheduleCheckpoint(true, quietDelay)
+        return
+      }
+    }
+    await this.runCheckpoint(false)
+  }
+
+  private async runCheckpoint(manual: boolean): Promise<void> {
+    if (this.isGenerating) {
+      if (manual) {
+        this.manualCheckpointPending = true
+      }
+      return
+    }
     const versionAtStart = this.dirtyVersion
+    const stateVersionAtStart = this.stateDirtyVersion
+    const logVersionAtStart = this.logDirtyVersion
     const published = await this.generateCheckpoint()
+    this.lastArchiveCompletedAt = Date.now()
     const changedDuringArchive = this.dirtyVersion !== versionAtStart
-    this.dirty = published ? changedDuringArchive : true
-    if (changedDuringArchive) {
-      this.scheduleCheckpoint()
+
+    if (published) {
+      if (this.stateDirtyVersion === stateVersionAtStart) {
+        this.stateDirty = false
+      }
+      if (this.logDirtyVersion === logVersionAtStart) {
+        this.logDirty = false
+      }
+    }
+    this.dirty = this.stateDirty || this.logDirty
+
+    if (this.manualCheckpointPending) {
+      this.manualCheckpointPending = false
+      void this.runCheckpoint(true)
+      return
+    }
+
+    // 新写入在归档期间到达时只保留待处理状态；从归档完成起至少再等一个静默窗。
+    if (changedDuringArchive && this.dirty) {
+      if (this.stateDirty || (this.logDirty && this.isForeground)) {
+        this.schedulePendingCheckpoint(true)
+      }
     }
   }
 
@@ -352,25 +491,48 @@ export class HarmonyDiagnosticsCheckpoint {
     return [filesDir, diagnosticsDir, liveDir, `${liveDir}/log`]
   }
 
-  // 按 filesDir → diagnostics → live → log 逐层挂载。上层 watcher 只负责发现
-  // 下一层目录的创建、移入或移除，避免目标目录首次出现前 createWatcher 抛错。
-  private attachLogWatchersFrom(firstLevel: number): void {
+  // log 尚未创建时只看当前最深的已存在父目录；新子目录出现后切换到它，
+  // 最终只保留 diagnostics/live/log 本身和其中的日志文件 watcher。
+  private attachLogWatchers(): void {
     const paths = this.getLogWatchPaths()
-    for (let level = firstLevel; level < paths.length; level += 1) {
-      if (this.logDirectoryWatchers[level] !== null || !this.fileExists(paths[level])) {
-        continue
-      }
+    let level: number = -1
+    for (let index = paths.length - 1; index >= 0; index -= 1) {
       try {
-        const watcher = fs.createWatcher(paths[level], LOG_DIRECTORY_EVENTS, (event) => {
+        if (fs.statSync(paths[index]).isDirectory()) {
+          level = index
+          break
+        }
+      } catch (_) {
+      }
+    }
+
+    if (level === -1) {
+      this.stopLogWatchers()
+      return
+    }
+    if (this.logDirectoryWatchLevel !== level) {
+      this.stopLogDirectoryWatcher()
+    }
+    if (this.logDirectoryWatcher === null) {
+      try {
+        const watcherEvents = level === 3 ? LOG_DIRECTORY_EVENTS | WATCH_CLOSE_WRITE : LOG_DIRECTORY_EVENTS
+        const watcher = fs.createWatcher(paths[level], watcherEvents, (event) => {
           this.onLogDirectoryEvent(level, event.fileName, event.event)
         })
         watcher.start()
-        this.logDirectoryWatchers[level] = watcher
+        this.logDirectoryWatcher = watcher
+        this.logDirectoryWatchLevel = level
       } catch (e) {
         hilog.warn(0x0000, LOG_TAG, 'cannot watch diagnostics directory %{public}s: %{public}s', paths[level], String(e))
+        this.logDirectoryWatcher = null
+        this.logDirectoryWatchLevel = -1
       }
     }
-    this.refreshLogFileWatchers()
+    if (level === 3 && this.logDirectoryWatchLevel === 3) {
+      this.refreshLogFileWatchers()
+    } else {
+      this.stopLogFileWatchers()
+    }
   }
 
   private onLogDirectoryEvent(level: number, fileName: string, eventMask: number): void {
@@ -380,16 +542,21 @@ export class HarmonyDiagnosticsCheckpoint {
 
     const entryEvents = WATCH_MOVED_FROM | WATCH_MOVED_TO | WATCH_CREATE | WATCH_DELETE
     if (level === 3) {
+      if ((eventMask & WATCH_CLOSE_WRITE) !== 0 && LOG_FILENAME_PATTERN.test(fileName)) {
+        // 目录 watcher 能接住文件 watcher 挂载前就已写完的新建/轮转文件。
+        this.markLogClosed()
+      }
       if ((eventMask & entryEvents) !== 0) {
         // 日志目录收到新建、移入或移除时，重新按当前路径挂载文件 watcher；
         // 轮转会触发 moved-to/create，新的 current 文件因此能继续被监听。
         this.refreshLogFileWatchers()
-        if ((eventMask & (WATCH_MOVED_TO | WATCH_CREATE)) !== 0) {
-          this.markDirty()
+        if ((eventMask & (WATCH_MOVED_TO | WATCH_CREATE)) !== 0 && LOG_FILENAME_PATTERN.test(fileName)) {
+          // 新建/移入只代表写入可能开始；等目录或文件的 CLOSE_WRITE 再提交。
+          this.markLogModified()
         }
       }
       if ((eventMask & (WATCH_DELETE_SELF | WATCH_MOVE_SELF)) !== 0) {
-        this.refreshLogWatcherSubtreeFrom(3)
+        this.reattachLogWatchers()
       }
       return
     }
@@ -399,9 +566,9 @@ export class HarmonyDiagnosticsCheckpoint {
     const childChanged = (eventMask & entryEvents) !== 0 && this.matchesPathEvent(fileName, childPath)
     const selfMovedOrDeleted = (eventMask & (WATCH_DELETE_SELF | WATCH_MOVE_SELF)) !== 0
     if (childChanged) {
-      this.refreshLogWatcherSubtreeFrom(level + 1)
+      this.attachLogWatchers()
     } else if (selfMovedOrDeleted) {
-      this.refreshLogWatcherSubtreeFrom(level)
+      this.reattachLogWatchers()
     }
   }
 
@@ -411,27 +578,16 @@ export class HarmonyDiagnosticsCheckpoint {
     return fileName === path || fileName === basename || fileName.endsWith(`/${basename}`)
   }
 
-  // 目录层级变化时只重建受影响的下层 watcher；filesDir 及未变化的上层 watcher
-  // 保持活动，以便在 log 目录被删除、重建或替换后继续接收事件。
-  private refreshLogWatcherSubtreeFrom(firstLevel: number): void {
+  private reattachLogWatchers(): void {
     this.stopLogFileWatchers()
-    for (let level = this.logDirectoryWatchers.length - 1; level >= firstLevel; level -= 1) {
-      const watcher = this.logDirectoryWatchers[level]
-      if (watcher !== null) {
-        try {
-          watcher.stop()
-        } catch (_) {
-        }
-        this.logDirectoryWatchers[level] = null
-      }
-    }
-    this.attachLogWatchersFrom(firstLevel)
+    this.stopLogDirectoryWatcher()
+    this.attachLogWatchers()
   }
 
   private refreshLogFileWatchers(): void {
     this.stopLogFileWatchers()
     const paths = this.getLogWatchPaths()
-    if (paths.length !== 4 || this.logDirectoryWatchers[3] === null) {
+    if (paths.length !== 4 || this.logDirectoryWatchLevel !== 3 || this.logDirectoryWatcher === null) {
       return
     }
     const logDir = paths[3]
@@ -446,8 +602,11 @@ export class HarmonyDiagnosticsCheckpoint {
             continue
           }
           const watcher = fs.createWatcher(filePath, LOG_FILE_EVENTS, (event) => {
-            if (this.initialized && this.context !== null && (event.event & LOG_FILE_EVENTS) !== 0) {
-              this.markDirty()
+            if (!this.initialized || this.context === null) {
+              return
+            }
+            if ((event.event & WATCH_MODIFY) !== 0) {
+              this.markLogModified()
             }
           })
           watcher.start()
@@ -473,16 +632,18 @@ export class HarmonyDiagnosticsCheckpoint {
 
   private stopLogWatchers(): void {
     this.stopLogFileWatchers()
-    for (let level = this.logDirectoryWatchers.length - 1; level >= 0; level -= 1) {
-      const watcher = this.logDirectoryWatchers[level]
-      if (watcher !== null) {
-        try {
-          watcher.stop()
-        } catch (_) {
-        }
-        this.logDirectoryWatchers[level] = null
+    this.stopLogDirectoryWatcher()
+  }
+
+  private stopLogDirectoryWatcher(): void {
+    if (this.logDirectoryWatcher !== null) {
+      try {
+        this.logDirectoryWatcher.stop()
+      } catch (_) {
       }
     }
+    this.logDirectoryWatcher = null
+    this.logDirectoryWatchLevel = -1
   }
 
   // 确保目录存在 — 如果不存在则创建（含父目录）。
@@ -498,10 +659,8 @@ export class HarmonyDiagnosticsCheckpoint {
 
   // 销毁 — 取消尚未触发的一次性调度，取消所有 observer 订阅。
   destroy(): void {
-    if (this.scheduledTimerId !== -1) {
-      clearTimeout(this.scheduledTimerId)
-      this.scheduledTimerId = -1
-    }
+    this.cancelScheduledCheckpoint()
+    this.manualCheckpointPending = false
     this.stopLogWatchers()
     // Issue #773 评论 5845033983：取消三个 Store 的 observer 订阅。
     if (this.themeObserver !== null) {

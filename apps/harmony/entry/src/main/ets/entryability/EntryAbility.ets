@@ -188,6 +188,7 @@ export default class EntryAbility extends UIAbility {
       })
     })
 
+    HarmonyDiagnosticsCheckpoint.getInstance().onForeground()
     this.lifecycle.notifyForeground()
   }
 
@@ -217,6 +218,7 @@ export default class EntryAbility extends UIAbility {
       })
     })
 
+    HarmonyDiagnosticsCheckpoint.getInstance().onForeground()
     this.lifecycle.notifyForeground()
   }
 
@@ -228,18 +230,21 @@ export default class EntryAbility extends UIAbility {
     // Issue #927：与 onBackground 可能连续触发，这里仍只派发一次全局事件；
     // 后台保存事务的重复由 AutoSaveLifecycleObserver 的 in-flight 标志在 observer 层去重，
     // 不删除任何生命周期事件。保存由平台短时任务托管，这里不 await 保存 Promise。
+    HarmonyDiagnosticsCheckpoint.getInstance().onBackground()
     this.lifecycle.notifyBackground()
   }
 
   onForeground() {
     hilog.info(0x0000, 'EntryAbility', 'onForeground')
     HarmonyDiagnosticEvents.record('Info', 'App', 'ability.foreground', 'EntryAbility', [])
+    HarmonyDiagnosticsCheckpoint.getInstance().onForeground()
     this.lifecycle.notifyForeground()
   }
 
   onBackground() {
     hilog.info(0x0000, 'EntryAbility', 'onBackground')
     HarmonyDiagnosticEvents.record('Info', 'App', 'ability.background', 'EntryAbility', [])
+    HarmonyDiagnosticsCheckpoint.getInstance().onBackground()
     // Issue #927：退后台保存由 AutoSaveLifecycleObserver → HarmonyBackgroundSaveTask.runSave()
     // 申请短时任务托管（申请到 requestId 后才开始异步落盘）。这里只派发一次全局事件，
     // 不 await 不受系统等待保证的保存 Promise。
