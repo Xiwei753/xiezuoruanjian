@@ -31,5 +31,13 @@ export const COMPACT_CARD_PADDING_VP: number = 16
 export const COMPACT_CARD_TITLE_FONT_VP: number = 17
 // 卡片辅助字号（vp）。
 export const COMPACT_CARD_SUPPORTING_FONT_VP: number = 13
-// 列表末端留白（vp），避免最后一张卡贴住悬浮底栏。
-export const COMPACT_LIST_BOTTOM_INSET_VP: number = 16
+// HDS 一级页签栏可见高度、悬浮位置与内容之间的间距，共同确定滚动列表的底部避让量。
+// 不叠加 safeBottomVp：系统安全区与应用绘制的悬浮栏分属不同空间。
+export const FLOATING_BAR_HEIGHT_VP: number = 56
+export const FLOATING_BAR_BOTTOM_MARGIN_VP: number = 28
+export const FLOATING_BAR_CONTENT_GAP_VP: number = 16
+export const FLOATING_BAR_CONTENT_BOTTOM_INSET_VP: number =
+  FLOATING_BAR_HEIGHT_VP + FLOATING_BAR_BOTTOM_MARGIN_VP + FLOATING_BAR_CONTENT_GAP_VP
+
+// 现有窄屏列表共用同一份一级悬浮导航避让量。
+export const COMPACT_LIST_BOTTOM_INSET_VP: number = FLOATING_BAR_CONTENT_BOTTOM_INSET_VP

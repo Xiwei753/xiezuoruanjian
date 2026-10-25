@@ -12,6 +12,9 @@ interface NativeJsonEnvelope {
   messageKey?: string
   messageArgs?: Record<string, string>
   rawError?: string
+  diagnosticOperationId?: string
+  failureStage?: string
+  failureCategory?: string
   warnings?: string[]
   changedPaths?: string[]
   changedEntities?: Object[]
@@ -77,6 +80,9 @@ export class NativeCoreModule {
         messageKey: obj.messageKey,
         messageArgs: obj.messageArgs ? new Map(Object.entries(obj.messageArgs)) : undefined,
         rawError: obj.rawError,
+        diagnosticOperationId: obj.diagnosticOperationId,
+        failureStage: obj.failureStage,
+        failureCategory: obj.failureCategory,
         warnings: obj.warnings,
         changedPaths: obj.changedPaths,
         changedEntities: obj.changedEntities?.map((e: Object): ChangedEntity => {
@@ -119,6 +125,9 @@ export class NativeCoreModule {
       messageKey: raw.messageKey,
       messageArgs: raw.messageArgs,
       rawError: raw.rawError,
+      diagnosticOperationId: raw.diagnosticOperationId,
+      failureStage: raw.failureStage,
+      failureCategory: raw.failureCategory,
       warnings: raw.warnings,
       changedPaths: raw.changedPaths,
       changedEntities: raw.changedEntities
@@ -160,6 +169,9 @@ export class NativeCoreModule {
         messageKey: raw.messageKey,
         messageArgs: raw.messageArgs,
         rawError: raw.rawError,
+        diagnosticOperationId: raw.diagnosticOperationId,
+        failureStage: raw.failureStage,
+        failureCategory: raw.failureCategory,
         warnings: raw.warnings,
         changedPaths: raw.changedPaths,
         changedEntities: raw.changedEntities
@@ -175,7 +187,11 @@ export class NativeCoreModule {
     }
     const result: ResultEnvelope<T> = {
       success: true,
-      data: decoded.value }
+      data: decoded.value,
+      diagnosticOperationId: raw.diagnosticOperationId,
+      failureStage: raw.failureStage,
+      failureCategory: raw.failureCategory
+    }
     return result
   }
 

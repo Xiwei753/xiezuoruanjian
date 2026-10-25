@@ -1,7 +1,7 @@
 // CompactStatsContent — 窄屏统计正文（Issue #945，按「手机统计七天 / 手机统计」手稿）。
 //
 // 从上到下：顶部时间范围切换（7 天 / 30 天 / 半年 / 生涯 / 自选）→ 大号总人工码字 +
-// 日期区间 → 纪录 2×2（最多 / 单小时最多 / 最长 / 连续）→ 真实字数折线图 → 码字日历热力图
+// 日期区间 → 纪录 2×2（最多 / 单小时最多 / 最长 / 连续）→ 码字日历热力图
 // （#956，同一年每日真值 + 年份切换）。
 // 内容可垂直滚动并给 HDS 悬浮底栏留空间。生涯与近七天只是同一页面换快照，
 // 不另建导航栈。
@@ -15,14 +15,10 @@ import {
   COMPACT_CARD_PADDING_VP,
   COMPACT_CARD_SUPPORTING_FONT_VP,
   COMPACT_CARD_TITLE_FONT_VP,
-  COMPACT_LIST_BOTTOM_INSET_VP
+  FLOATING_BAR_CONTENT_BOTTOM_INSET_VP
 } from '../../../ui/theme/LayoutTokens'
 import { EMPTY_STATS_EXPLORER, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatHistoryScope, formatInt, formatMeasuredDuration, formatRecordValue } from './StatsFormat'
 import { WritingStatsCalendarHeatmap } from './WritingStatsCalendarHeatmap'
-import { WritingStatsTrendChart } from './WritingStatsTrendChart'
-
-// 折线图在窄屏的固定高度（vp）。
-const COMPACT_CHART_HEIGHT_VP: number = 160
 
 interface RangeOption {
   label: string
@@ -59,17 +55,6 @@ export struct CompactStatsContent {
     return this.explorer.selected
   }
 
-  private trendGranularityLabel(): string {
-    const granularity: string = this.explorer.selected.trend.granularity
-    if (granularity === 'week') {
-      return '按周'
-    }
-    if (granularity === 'month') {
-      return '按月'
-    }
-    return '按天'
-  }
-
   private recordValueText(record: WritingStatsRecord, unit: string): string {
     if (record.value === null) {
       return '暂无纪录'
@@ -103,8 +88,13 @@ export struct CompactStatsContent {
         }
         this.RangeSwitch()
         this.SummarySection()
+        if (!this.isLoading && this.errorMessage.length === 0 && this.selected().totalHumanTypedChars === 0) {
+          Text('暂无码字记录')
+            .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
+            .fontColor($r('sys.color.font_tertiary'))
+            .margin({ bottom: COMPACT_CARD_PADDING_VP })
+        }
         this.RecordsSection()
-        this.TrendSection()
         this.HeatmapSection()
       }
       .width('100%')
@@ -112,8 +102,8 @@ export struct CompactStatsContent {
         left: 16,
         right: 16,
         top: 12,
-        // 列表末端留白：沿用窄屏统一 token，避免内容贴住 HDS 悬浮底栏。
-        bottom: COMPACT_LIST_BOTTOM_INSET_VP
+        // 为 HDS 悬浮底栏预留共享内容避让区；系统安全区不在这里重复计算。
+        bottom: FLOATING_BAR_CONTENT_BOTTOM_INSET_VP
       })
       .alignItems(HorizontalAlign.Start)
     }
@@ -202,11 +192,10 @@ export struct CompactStatsContent {
       .width('100%')
       .alignItems(VerticalAlign.Bottom)
 
-      Row() {
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
         Text(formatDateRangeHuman(this.selected().range.startDate, this.selected().range.endDate))
           .fontSize(14)
           .fontColor($r('sys.color.font_secondary'))
-          .layoutWeight(1)
         Text(this.selected().hasMeasuredTiming
           ? `陪伴 ${formatInt(this.explorer.lifetime.elapsedCalendarDays)} 天 · 实际计时 ${formatMeasuredDuration(this.selected().measuredWritingSeconds)}`
           : `陪伴 ${formatInt(this.explorer.lifetime.elapsedCalendarDays)} 天 · 仅统计新记录`)
@@ -291,33 +280,6 @@ export struct CompactStatsContent {
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Start)
     .padding({ left: 8, right: 8 })
-  }
-
-  /** 底部：真实写作字数折线图（数据点全部来自 Core trend）。 */
-  @Builder
-  TrendSection() {
-    Column() {
-      Row() {
-        Text('写作趋势')
-          .fontSize(COMPACT_CARD_TITLE_FONT_VP)
-          .fontWeight(FontWeight.Medium)
-          .layoutWeight(1)
-        Text(this.trendGranularityLabel())
-          .fontSize(12)
-          .fontColor($r('sys.color.font_secondary'))
-      }
-      .width('100%')
-      .margin({ bottom: 8 })
-
-      WritingStatsTrendChart({ trend: this.selected().trend })
-        .width('100%')
-        .height(COMPACT_CHART_HEIGHT_VP)
-    }
-    .width('100%')
-    .padding(COMPACT_CARD_PADDING_VP)
-    .borderRadius(DesignTokens.cardRadius)
-    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-    .margin({ top: COMPACT_CARD_PADDING_VP })
   }
 
   /** #956 码字日历：每年的每日真值热力图；年份切换与日格选择复用回调。 */

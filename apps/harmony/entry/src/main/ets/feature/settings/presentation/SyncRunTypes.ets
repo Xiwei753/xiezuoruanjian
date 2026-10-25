@@ -7,6 +7,8 @@ export interface SyncOutcome {
   message: string
   messageKey?: string
   messageArgs?: Record<string, string>
+  operationId?: string
+  failureStage?: string
   errorCategory?: string
   errorCode?: string
   rawError?: string

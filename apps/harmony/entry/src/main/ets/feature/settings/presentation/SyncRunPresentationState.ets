@@ -107,6 +107,8 @@ export class SyncRunPresentationState {
       message: outcome.message,
       messageKey: outcome.messageKey,
       messageArgs: messageArgs,
+      operationId: outcome.operationId,
+      failureStage: outcome.failureStage,
       errorCategory: outcome.errorCategory,
       errorCode: outcome.errorCode,
       rawError: outcome.rawError,

@@ -4,7 +4,7 @@
 // - 顶部居中的生涯概览条；点按原地展开成「左纪录 / 右大图」，展开时四卡隐藏；
 // - 默认四张高时段卡横排；点卡后原位置换成「左摘要 / 中纪录 / 右大图」三栏；
 // - 周期区之后是常驻陪伴横条；
-// - 码字日历是陪伴条之后的独立模块，不参与上面的高度分配，不挤压四张卡。
+// - 生涯展开态在纪录旁显示年度码字热力图；时段展开态保留手稿中的折线图。
 //
 // 尺寸不再按某块平板写死：内容列取可用宽度的 88.3% 居中，纵向留白和段间距
 // 用 aspectRatio 由内容宽度派生，卡片/展开框各自用宽高比自适应。
@@ -29,7 +29,6 @@ import { WideLifetimeSummary } from './WideLifetimeSummary'
 import { WidePeriodCards } from './WidePeriodCards'
 import { WidePeriodExpanded } from './WidePeriodExpanded'
 import { WideCompanionship } from './WideCompanionship'
-import { WideCalendarHeatmap } from './WideCalendarHeatmap'
 
 // 统计内容占宽屏正文可用宽度的比例（参考图约 973 / 1102vp）。
 const WIDE_CONTENT_WIDTH: string = '88.3%'
@@ -80,11 +79,23 @@ export struct WideStatisticsPage {
                 explorer: this.explorer,
                 expanded: this.expandedPanel === STATS_PANEL_LIFETIME,
                 isLoading: this.isLoading,
+                heatmap: this.heatmap,
+                heatmapYear: this.heatmapYear,
+                heatmapError: this.heatmapError,
                 onToggle: (): void => {
                   this.onToggleLifetime()
                 },
                 onRetry: (): void => {
                   this.onRetry()
+                },
+                onChangeHeatmapYear: (year: number): void => {
+                  this.onChangeHeatmapYear(year)
+                },
+                onSelectHeatmapDay: (date: string, chars: number): void => {
+                  this.onSelectHeatmapDay(date, chars)
+                },
+                onRetryHeatmap: (): void => {
+                  this.onRetryHeatmap()
                 }
               })
             }
@@ -131,23 +142,6 @@ export struct WideStatisticsPage {
 
             WideCompanionship({
               elapsedCalendarDays: this.explorer.lifetime.elapsedCalendarDays
-            })
-
-            this.SectionGap()
-
-            WideCalendarHeatmap({
-              heatmap: this.heatmap,
-              heatmapYear: this.heatmapYear,
-              heatmapError: this.heatmapError,
-              onChangeYear: (year: number): void => {
-                this.onChangeHeatmapYear(year)
-              },
-              onSelectDay: (date: string, chars: number): void => {
-                this.onSelectHeatmapDay(date, chars)
-              },
-              onRetry: (): void => {
-                this.onRetryHeatmap()
-              }
             })
 
             this.BottomInset()

@@ -3,12 +3,13 @@
 // 收起：居中横条，左侧「生涯」+ 总人写字数，中间首末写作日期与平均速度 / 日均字数，
 // 右侧写作天数 / 历时天数与展开提示。
 // 展开：横条原位置向下变成一张大卡，上半部仍是同一份生涯摘要，下半部左侧四项生涯纪录、
-// 右侧大趋势折线图；不弹窗、不导航，四张时段卡由父页面隐藏。
+// 右侧年度码字热力图；不弹窗、不导航，四张时段卡由父页面隐藏。
 //
 // 数据全部来自 Core Explorer 的 lifetime / selected 快照，组件只做格式化。
 
 import {
   WritingStatsExplorer,
+  WritingStatsHeatmap,
   WritingStatsRecord,
   WritingStatsSelectedPeriod,
   STATS_PRESET_LIFETIME
@@ -30,7 +31,7 @@ import {
   formatMeasuredDuration,
   formatRecordValue
 } from '../StatsFormat'
-import { WritingStatsTrendChart } from '../WritingStatsTrendChart'
+import { WideCalendarHeatmap } from './WideCalendarHeatmap'
 
 // 收起态横条占统计内容宽度的比例（参考约 657 / 973vp）；展开后占满整行。
 const LIFETIME_COLLAPSED_WIDTH: string = '67.5%'
@@ -42,8 +43,14 @@ export struct WideLifetimeSummary {
   @Prop explorer: WritingStatsExplorer = EMPTY_STATS_EXPLORER
   @Prop expanded: boolean = false
   @Prop isLoading: boolean = false
+  @Prop heatmap: WritingStatsHeatmap | null = null
+  @Prop heatmapYear: number = new Date().getFullYear()
+  @Prop heatmapError: string = ''
   onToggle: () => void = () => {}
   onRetry: () => void = () => {}
+  onChangeHeatmapYear: (year: number) => void = (_year: number): void => {}
+  onSelectHeatmapDay: (date: string, chars: number) => void = (_date: string, _chars: number): void => {}
+  onRetryHeatmap: () => void = (): void => {}
 
   private selected(): WritingStatsSelectedPeriod {
     return this.explorer.selected
@@ -52,17 +59,6 @@ export struct WideLifetimeSummary {
   /** 展开区只能消费真正的生涯快照；切时段过程中不把旧时段数据标成生涯。 */
   private lifetimeSelected(): boolean {
     return this.explorer.selected.preset === STATS_PRESET_LIFETIME
-  }
-
-  private trendGranularityLabel(): string {
-    const granularity: string = this.selected().trend.granularity
-    if (granularity === 'week') {
-      return '按周'
-    }
-    if (granularity === 'month') {
-      return '按月'
-    }
-    return '按天'
   }
 
   private recordValueText(record: WritingStatsRecord, unit: string): string {
@@ -241,22 +237,21 @@ export struct WideLifetimeSummary {
       .padding({ left: 24, right: 4, top: 16, bottom: 18 })
 
       Column() {
-        Row() {
-          Text('写作趋势')
-            .fontSize(COMPACT_CARD_TITLE_FONT_VP)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('sys.color.font_primary'))
-            .layoutWeight(1)
-          Text(this.trendGranularityLabel())
-            .fontSize(12)
-            .fontColor($r('sys.color.font_secondary'))
-        }
-        .width('100%')
-        .margin({ bottom: 8 })
-
-        WritingStatsTrendChart({ trend: this.selected().trend })
+        WideCalendarHeatmap({
+          heatmap: this.heatmap,
+          heatmapYear: this.heatmapYear,
+          heatmapError: this.heatmapError,
+          onChangeYear: (year: number): void => {
+            this.onChangeHeatmapYear(year)
+          },
+          onSelectDay: (date: string, chars: number): void => {
+            this.onSelectHeatmapDay(date, chars)
+          },
+          onRetry: (): void => {
+            this.onRetryHeatmap()
+          }
+        })
           .width('100%')
-          .layoutWeight(1)
       }
       .layoutWeight(1)
       .height('100%')

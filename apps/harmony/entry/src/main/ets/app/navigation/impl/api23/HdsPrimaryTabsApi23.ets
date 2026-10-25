@@ -13,6 +13,7 @@
 
 import { Routes } from '../../Routes'
 import hilog from '@ohos.hilog'
+import { FLOATING_BAR_BOTTOM_MARGIN_VP } from '../../../../ui/theme/LayoutTokens'
 import { HomeScreen } from '../../../../feature/project/ui/HomeScreen'
 import { WorkspaceScreen } from '../../../../feature/project/ui/WorkspaceScreen'
 import { WritingScreen } from '../../../../feature/editor/ui/WritingScreen'
@@ -33,10 +34,6 @@ import {
 const TAB_HOME: number = 0    // 作品
 const TAB_STARMAP: number = 1 // 星图
 const TAB_STATS: number = 2   // 统计
-
-// Issue #774 评论5847359998：悬浮栏底部固定设计间距（vp）。
-// 不再用 safeBottomVp（系统导航指示条避让高度），那是另一个语义。
-const FLOATING_BAR_BOTTOM_MARGIN: number = 28
 
 @Component
 export struct HdsPrimaryTabsApi23 {
@@ -185,7 +182,7 @@ export struct HdsPrimaryTabsApi23 {
         mediumWidth: 400,
         largeWidth: 500,
       },
-      barBottomMargin: FLOATING_BAR_BOTTOM_MARGIN,
+      barBottomMargin: FLOATING_BAR_BOTTOM_MARGIN_VP,
       // 官方《设置页签栏的模糊样式》：gradientMask 就是手册里的"渐变模糊"，
       // maskColor 是"底部纯色、向上逐渐透明"的遮罩色，maskHeight 控制渐隐高度。
       // 官方 d.ts 确认 maskColor 只能取单色 ResourceColor，做不了渐变。

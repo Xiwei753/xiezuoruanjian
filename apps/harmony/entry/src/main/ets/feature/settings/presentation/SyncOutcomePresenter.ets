@@ -60,6 +60,41 @@ export class SyncOutcomePresenter {
 
   /** 仅使用类型化字段；rawError/message 可能包含 URL、凭据或远端原文，不展示给用户。 */
   private static typedReason(context: Context, outcome: SyncOutcome): string {
+    if (outcome.failureStage === 'config_load') {
+      return '同步配置读取失败，请检查本地同步配置。'
+    }
+    if (outcome.failureStage === 'secrets_load') {
+      return '同步凭据读取失败，请检查本地凭据设置。'
+    }
+    switch (outcome.errorCategory) {
+      case 'repository_unconfigured':
+        return '云端仓库未配置，请先完成同步设置。'
+      case 'network':
+      case 'network_error':
+      case 'network_failed':
+      case 'retryable_network':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
+      case 'authentication':
+      case 'authentication_error':
+      case 'auth_failed':
+      case 'auth_error':
+      case 'token_missing':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_auth_failed').id)
+      case 'local_io':
+      case 'local_io_error':
+      case 'local_decode':
+      case 'local_decode_error':
+      case 'config_local_io':
+      case 'config_file_read':
+      case 'config_file_decode':
+      case 'credentials_local_io':
+      case 'credentials_file_read':
+      case 'credentials_file_decode':
+      case 'secure_storage_read':
+      case 'secure_storage_decode':
+      case 'credential_migration_io':
+        return '读取本地同步数据失败，请检查配置和凭据文件。'
+    }
     if (outcome.messageKey !== undefined && outcome.messageKey.trim().length > 0) {
       return MessageKeyMapper.resolveMessage(context, outcome.messageKey, outcome.messageArgs, outcome.errorCode)
     }

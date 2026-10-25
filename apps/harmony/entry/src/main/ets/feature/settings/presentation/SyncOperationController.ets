@@ -121,6 +121,9 @@ export class SyncOperationController {
       { key: 'phase', value: outcome.phase },
       { key: 'overallStatus', value: outcome.overallStatus ?? '' },
       { key: 'errorCode', value: outcome.errorCode ?? '' },
+      { key: 'operationId', value: outcome.operationId ?? '' },
+      { key: 'failureStage', value: outcome.failureStage ?? '' },
+      { key: 'errorCategory', value: outcome.errorCategory ?? '' },
       { key: 'durationMs', value: String(Math.max(0, Date.now() - startedAtMs)) }
     ]
     const level = outcome.phase === 'success' ? 'Info' : 'Warn'
@@ -147,9 +150,13 @@ export class SyncOperationController {
               result.errorCode ?? 'UNKNOWN')
             return {
               phase: 'failed',
-              message: result.rawError ?? result.userMessage ?? result.errorCode ?? '同步失败',
+              message: this.safeSyncFailureMessage(result.failureStage, result.failureCategory,
+                result.errorCode),
               messageKey: result.messageKey,
               messageArgs: this.mapToRecord(result.messageArgs),
+              operationId: result.diagnosticOperationId,
+              failureStage: result.failureStage,
+              errorCategory: result.failureCategory,
               errorCode: result.errorCode,
               rawError: result.rawError
             }
@@ -158,7 +165,10 @@ export class SyncOperationController {
           const syncResult = result.data
           if (syncResult === undefined || syncResult === null) {
             hilog.error(DOMAIN, TAG, 'performSync: success but data is null')
-            return { phase: 'failed', message: '同步结果数据缺失', errorCode: 'SCHEMA_MISMATCH' }
+            return {
+              phase: 'failed', message: '同步结果数据缺失', errorCode: 'SCHEMA_MISMATCH',
+              operationId: result.diagnosticOperationId
+            }
           }
 
           // 本地可见内容（下载/覆盖/本地删除）是否实际变化。远端删除（totalRemoteDeletes）
@@ -182,6 +192,7 @@ export class SyncOperationController {
               message: '同步已改动本地内容，但当前写作会话存在未提交内容，需要先处理',
               messageKey: 'sync.result.session_unaligned',
               errorCode: 'SYNC_SESSION_UNALIGNED',
+              operationId: result.diagnosticOperationId,
               totalDownloaded: syncResult.totalDownloaded,
               totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts,
@@ -196,6 +207,7 @@ export class SyncOperationController {
             return {
               phase: 'success',
               message: `sync success: ${status}`,
+              operationId: result.diagnosticOperationId,
               totalDownloaded: syncResult.totalDownloaded,
               totalUploaded: syncResult.totalUploaded,
               overallStatus: status
@@ -208,6 +220,7 @@ export class SyncOperationController {
               message: '同步冲突，需要手动解决',
               messageKey: 'sync.result.conflict_summary',
               errorCode: 'SYNC_CONFLICT',
+              operationId: result.diagnosticOperationId,
               totalDownloaded: syncResult.totalDownloaded,
               totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts,
@@ -230,11 +243,13 @@ export class SyncOperationController {
 
             return {
               phase: 'failed',
-              message: errorMsg.length > 0 ? errorMsg : (messageKey.length > 0 ? messageKey : errorCategory),
+              message: this.safeSyncFailureMessage(undefined, errorCategory, errorCategory),
               messageKey: messageKey.length > 0 ? messageKey : undefined,
               errorCategory: errorCategory.length > 0 ? errorCategory : undefined,
               errorCode: errorCategory.length > 0 ? errorCategory : 'SYNC_ERROR',
               rawError: errorMsg.length > 0 ? errorMsg : undefined,
+              operationId: result.diagnosticOperationId,
+              failureStage: 'core_sync',
               totalDownloaded: syncResult.totalDownloaded,
               totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts,
@@ -244,6 +259,7 @@ export class SyncOperationController {
           if (status === 'syncing') {
             return {
               phase: 'failed', message: '同步仍在进行中（状态异常）', errorCode: 'SYNC_STATE_ERROR',
+              operationId: result.diagnosticOperationId,
               totalDownloaded: syncResult.totalDownloaded, totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts, overallStatus: status
             }
@@ -251,6 +267,7 @@ export class SyncOperationController {
           if (status === 'idle' || status === 'configured_not_tested') {
             return {
               phase: 'failed', message: '同步未执行（状态异常）', errorCode: 'SYNC_STATE_ERROR',
+              operationId: result.diagnosticOperationId,
               totalDownloaded: syncResult.totalDownloaded, totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts, overallStatus: status
             }
@@ -260,6 +277,7 @@ export class SyncOperationController {
           hilog.error(DOMAIN, TAG, 'performSync: unknown overallStatus=%{public}s', status)
           return {
             phase: 'failed', message: `未知的同步状态: ${status}`, errorCode: 'SCHEMA_MISMATCH',
+            operationId: result.diagnosticOperationId,
             totalDownloaded: syncResult.totalDownloaded, totalUploaded: syncResult.totalUploaded,
             totalConflicts: syncResult.totalConflicts, overallStatus: status
           }
@@ -278,13 +296,53 @@ export class SyncOperationController {
       // Issue #906：异常只记类型，不记 String(e)（可能含 URL/Token）。
       hilog.error(DOMAIN, TAG, 'performSync: exception: %{public}s',
         e instanceof Error ? e.name : 'Unknown')
-      return { phase: 'failed', message: `同步异常: ${e}`, errorCode: 'NATIVE_ERROR', rawError: String(e) }
+      return { phase: 'failed', message: '同步异常，请查看诊断信息。', errorCode: 'NATIVE_ERROR', rawError: String(e) }
     }
     // 同步屏障（含活跃会话回填）已释放，再通知页面刷新，避免刷新读到未回填的旧会话状态。
     if (contentChanged) {
       this.notifyContentChanged()
     }
     return outcome
+  }
+
+  private safeSyncFailureMessage(stage: string | undefined, category: string | undefined,
+    errorCode: string | undefined): string {
+    if (stage === 'config_load') {
+      return '同步配置读取失败，请检查本地同步配置。'
+    }
+    if (stage === 'secrets_load') {
+      return '同步凭据读取失败，请检查本地凭据设置。'
+    }
+    switch (category) {
+      case 'repository_unconfigured':
+        return '云端仓库未配置，请先完成同步设置。'
+      case 'network':
+      case 'network_error':
+      case 'network_failed':
+      case 'retryable_network':
+        return '网络连接失败，请检查网络后重试。'
+      case 'authentication':
+      case 'authentication_error':
+      case 'auth_failed':
+      case 'auth_error':
+      case 'token_missing':
+        return '云端认证失败，请检查账号或访问令牌。'
+      case 'local_io':
+      case 'local_io_error':
+      case 'config_local_io':
+      case 'config_file_read':
+      case 'config_file_decode':
+      case 'credentials_local_io':
+      case 'credentials_file_read':
+      case 'credentials_file_decode':
+      case 'secure_storage_read':
+      case 'secure_storage_decode':
+      case 'credential_migration_io':
+      case 'local_decode_error':
+        return '读取本地同步数据失败，请检查配置和凭据文件。'
+      default:
+        return errorCode === undefined ? '同步失败，请查看诊断信息。' : `同步失败（${errorCode}），请查看诊断信息。`
+    }
   }
 
   /** 同步操作前刷新 Core 的网络状态（三态；未知时不伪造在线）。 */

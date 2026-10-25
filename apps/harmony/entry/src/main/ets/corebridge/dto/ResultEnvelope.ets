@@ -17,6 +17,10 @@ export interface ResultEnvelope<T> {
   messageKey?: string
   messageArgs?: Map<string, string>
   rawError?: string
+  // Safe cross-log correlation metadata for one full-sync request.
+  diagnosticOperationId?: string
+  failureStage?: string
+  failureCategory?: string
   warnings?: string[]
   changedPaths?: string[]
   changedEntities?: ChangedEntity[]

@@ -10,6 +10,8 @@ import { NearbyDeviceSyncCoordinator, PeerStatusHandler } from '../../../platfor
 import { PeerSyncStatus } from '../../../platform/peer/PeerSyncSession'
 
 export type DeviceSyncConnectionState = 'idle' | 'connecting' | 'connected' | 'unsupported' | 'error'
+export type DeviceSyncDisplayState =
+  'loading' | 'empty' | 'ready' | 'selected' | 'connecting' | 'connected' | 'error'
 
 @ObservedV2
 export class DeviceSyncViewModel {
@@ -24,6 +26,30 @@ export class DeviceSyncViewModel {
   @Trace remoteCloudRepoAvailable: boolean | null = null
 
   private activeSessionId: number = -1
+
+  /** Layout-facing category derived from the existing connection state and status message. */
+  @Computed
+  get displayState(): DeviceSyncDisplayState {
+    if (this.connectionState === 'connecting') {
+      return 'connecting'
+    }
+    if (this.connectionState === 'connected') {
+      return 'connected'
+    }
+    if (this.connectionState === 'error' || this.connectionState === 'unsupported') {
+      return 'error'
+    }
+    if (this.statusMessage.startsWith('正在刷新')) {
+      return 'loading'
+    }
+    if (this.statusMessage.startsWith('未发现') || this.statusMessage === '尚未选择附近设备') {
+      return 'empty'
+    }
+    if (this.statusMessage.startsWith('已选择') || this.statusMessage.startsWith('附近设备连接已断开')) {
+      return 'selected'
+    }
+    return 'ready'
+  }
 
   constructor() {
     const coordinator: NearbyDeviceSyncCoordinator = NearbyDeviceSyncCoordinator.getInstance()
@@ -41,6 +67,9 @@ export class DeviceSyncViewModel {
 
   private async refreshDevices(): Promise<void> {
     this.isRefreshing = true
+    if (this.connectionState === 'idle') {
+      this.statusMessage = '正在刷新附近设备'
+    }
     this.supported = TrustedDeviceService.getInstance().isSupported()
     if (!this.supported) {
       this.devices = []
@@ -66,10 +95,16 @@ export class DeviceSyncViewModel {
       return
     }
     this.devices = TrustedDeviceService.getInstance().listTrustedDevices()
-    if (this.devices.length === 0) {
-      this.statusMessage = '未发现系统可信设备；请先在同一分布式网络内完成系统设备连接'
-    } else if (this.selectedNetworkId.length === 0) {
-      this.statusMessage = '选择一台可信设备开始同步'
+    if (this.connectionState === 'idle') {
+      if (this.devices.length === 0) {
+        this.statusMessage = '未发现系统可信设备；请先在同一分布式网络内完成系统设备连接'
+      } else if (this.selectedNetworkId.length === 0) {
+        this.statusMessage = '选择一台可信设备开始同步'
+      } else {
+        const selected: TrustedDeviceInfo | undefined =
+          this.devices.find((item: TrustedDeviceInfo): boolean => item.networkId === this.selectedNetworkId)
+        this.statusMessage = selected === undefined ? '选择一台可信设备开始同步' : `已选择 ${selected.deviceName}`
+      }
     }
     this.isRefreshing = false
   }

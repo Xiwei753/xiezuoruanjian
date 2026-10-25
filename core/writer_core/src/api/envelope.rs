@@ -27,6 +27,13 @@ where
     pub message_args: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_error: Option<String>,
+    /// Safe sync diagnostics context, populated by the Harmony full-sync FFI entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_operation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_stage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_category: Option<String>,
     pub warnings: Vec<String>,
     pub changed_paths: Vec<String>,
     pub changed_entities: Vec<ChangedEntityDto>,
@@ -56,6 +63,9 @@ where
             message_key: None,
             message_args: None,
             raw_error: None,
+            diagnostic_operation_id: None,
+            failure_stage: None,
+            failure_category: None,
             warnings: Vec::new(),
             changed_paths: Vec::new(),
             changed_entities: Vec::new(),
@@ -84,6 +94,9 @@ where
             message_key: Some(error.message_key().to_string()),
             message_args: Some(error.params()),
             raw_error: Some(error.to_string()),
+            diagnostic_operation_id: None,
+            failure_stage: None,
+            failure_category: None,
             warnings: Vec::new(),
             changed_paths: Vec::new(),
             changed_entities: Vec::new(),
@@ -107,6 +120,9 @@ where
             message_key: self.message_key,
             message_args: self.message_args,
             raw_error: self.raw_error,
+            diagnostic_operation_id: self.diagnostic_operation_id,
+            failure_stage: self.failure_stage,
+            failure_category: self.failure_category,
             warnings: self.warnings,
             changed_paths: self.changed_paths,
             changed_entities: self.changed_entities,

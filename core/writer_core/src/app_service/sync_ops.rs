@@ -32,7 +32,7 @@ impl super::WriterAppService {
      * [crate::api::service::WriterCoreApi::secrets_override_snapshot] 取当前应使用的凭据，
      * 若 override 未显式设置则把 snapshot 写入 API override，后续 sync 全程复用。
      */
-    fn refresh_secrets_override(&self) -> Result<(), WriterError> {
+    pub(crate) fn refresh_secrets_override(&self) -> Result<(), WriterError> {
         if !self.api.has_secrets_override() {
             let secrets = self.api.load_sync_secrets()?;
             self.api.set_secrets_override(Some(secrets.into()));
@@ -117,6 +117,18 @@ impl super::WriterAppService {
         self.refresh_secrets_override()?;
         self.api
             .perform_full_sync(config, force_sync, None, None, None)
+    }
+
+    /// Full-sync entry for the Harmony FFI after it has recorded config/secrets preflight.
+    /// Core phases reuse the same operation id for cross-log correlation.
+    pub(crate) fn perform_full_sync_after_preflight(
+        &self,
+        config: SyncConfigDto,
+        force_sync: bool,
+        operation_id: String,
+    ) -> Result<FullSyncResultDto, WriterError> {
+        self.api
+            .perform_full_sync_for_operation_id(config, force_sync, operation_id, "manual")
     }
 
     pub fn resolve_conflict_keep_local(

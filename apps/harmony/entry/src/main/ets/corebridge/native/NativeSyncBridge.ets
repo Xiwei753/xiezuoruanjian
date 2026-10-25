@@ -139,6 +139,9 @@ export class NativeSyncBridge {
           messageKey: decoded.messageKey,
           messageArgs: decoded.messageArgs,
           rawError: decoded.rawError,
+          diagnosticOperationId: decoded.diagnosticOperationId,
+          failureStage: decoded.failureStage,
+          failureCategory: decoded.failureCategory,
           warnings: decoded.warnings,
           changedPaths: decoded.changedPaths,
           changedEntities: decoded.changedEntities
@@ -167,6 +170,9 @@ export class NativeSyncBridge {
           messageKey: decoded.messageKey,
           messageArgs: decoded.messageArgs,
           rawError: decoded.rawError,
+          diagnosticOperationId: decoded.diagnosticOperationId,
+          failureStage: decoded.failureStage,
+          failureCategory: decoded.failureCategory,
           warnings: decoded.warnings,
           changedPaths: decoded.changedPaths,
           changedEntities: decoded.changedEntities

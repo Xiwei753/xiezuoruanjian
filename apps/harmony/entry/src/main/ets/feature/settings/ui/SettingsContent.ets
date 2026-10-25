@@ -37,6 +37,7 @@ import { createSyncConflictsPanelContent, SyncConflictsPanelArgs } from './SyncC
 import { createThirdPartyNoticesPanelContent, ThirdPartyNoticesPanelArgs } from './ThirdPartyNoticesPanel'
 // Issue #932：窄屏页面状态（加载中 / 出错重试 / 空）复用公共组件。
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
+import { GripAdaptiveToggleRow } from '../../../ui/components/GripAdaptiveToggleRow'
 // Issue #972：宽屏浮层的两列分类卡片。
 import { WideSettingsSection } from './wide/WideSettingsSection'
 import { WideSettingsCategoryContent } from './wide/WideSettingsCategoryContent'
@@ -634,35 +635,39 @@ export struct SettingsContent {
   @Builder
   SyncBriefSummary() {
     Column({ space: 4 }) {
-      // 本轮结果：来自进程内运行快照，标注触发来源，避免把自动同步的旧结果误当本次手动操作。
-      if (this.syncRunSnapshot.phase === 'in_progress') {
-        Text(`本轮结果（${this.syncSourceLabel(this.syncRunSnapshot.source)}）：同步进行中…`)
-          .fontSize(13)
-      } else if (this.syncRunSnapshot.phase !== 'idle' && this.syncRunSnapshot.outcome !== null) {
-        Text(`本轮结果（${this.syncSourceLabel(this.syncRunSnapshot.source)}）：${SyncOutcomePresenter.present(getContext(this), this.syncRunSnapshot.outcome)}`)
-          .fontSize(13)
-      }
-      // 历史结果：Core 持久化的最近一轮状态、失败目标数量与整轮报告摘要。
-      Text(`历史结果：${this.fullSyncOverallStatusText()}`)
-        .fontSize(12)
-      Text(this.fullSyncAttemptTimeText())
-        .fontSize(12)
-      Text(this.fullSyncSuccessTimeText())
-        .fontSize(12)
-      Text(this.fullSyncFailedTargetsText())
-        .fontSize(12)
-      Text(this.latestFullSyncReportSummaryText())
-        .fontSize(12)
+      // 常态只显示一条最近状态；整轮持久状态与报告字段由用户展开查看。
+      Text(this.syncBriefStatusText())
+        .fontSize(13)
+        .fontColor($r('sys.color.font_secondary'))
       this.SettingsNeutralAction(this.syncDetailsExpanded ? '收起同步详情' : '查看同步详情', () => {
         this.syncDetailsExpanded = !this.syncDetailsExpanded
       })
       if (this.syncDetailsExpanded) {
+        Column({ space: 4 }) {
+          Text(`历史结果：${this.fullSyncOverallStatusText()}`).fontSize(12)
+          Text(this.fullSyncAttemptTimeText()).fontSize(12)
+          Text(this.fullSyncSuccessTimeText()).fontSize(12)
+          Text(this.fullSyncFailedTargetsText()).fontSize(12)
+          Text(this.latestFullSyncReportSummaryText()).fontSize(12)
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
         this.SyncReportDetails()
       }
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .margin({ bottom: 16 })
+  }
+
+  private syncBriefStatusText(): string {
+    if (this.syncRunSnapshot.phase === 'in_progress') {
+      return `最近状态：${this.syncSourceLabel(this.syncRunSnapshot.source)}同步进行中…`
+    }
+    if (this.syncRunSnapshot.phase !== 'idle' && this.syncRunSnapshot.outcome !== null) {
+      return `最近状态：${this.syncSourceLabel(this.syncRunSnapshot.source)}${SyncOutcomePresenter.present(getContext(this), this.syncRunSnapshot.outcome)}`
+    }
+    return `最近状态：${this.fullSyncOverallStatusText()}`
   }
 
   // 完整失败明细只在用户展开时渲染，失败条目再多也留在设置列表自己的滚动区域内。
@@ -1262,20 +1267,19 @@ export struct SettingsContent {
       .margin({ bottom: 16 })
 
       // 动态取色（旧版 monetColor 别名也定位到这里）
-      Row() {
-        Text('动态取色（实验性）')
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.dynamicColorEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.dynamicColorEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.dynamicColorEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+            s.dynamicColorEnabled = isOn
+            return s
           })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('动态取色（实验性）').fontSize(16)
       }
-      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('dynamicColorEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1433,20 +1437,19 @@ export struct SettingsContent {
   EditorContent() {
     Column() {
       // 自动缩进
-      Row() {
-        Text($r('app.string.auto_indent'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.autoIndentEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.autoIndentEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.autoIndentEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+            s.autoIndentEnabled = isOn
+            return s
           })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text($r('app.string.auto_indent')).fontSize(16)
       }
-      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('autoIndentEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1480,20 +1483,19 @@ export struct SettingsContent {
       .margin({ bottom: 16 })
 
       // 打字动画
-      Row() {
-        Text('打字动画')
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.editorTypingAnimationEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.editorTypingAnimationEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.editorTypingAnimationEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+            s.editorTypingAnimationEnabled = isOn
+            return s
           })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('打字动画').fontSize(16)
       }
-      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('editorTypingAnimationEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1528,20 +1530,19 @@ export struct SettingsContent {
       .margin({ bottom: 16 })
 
       // 平滑光标
-      Row() {
-        Text('平滑光标')
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.editorSmoothCursorEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.editorSmoothCursorEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.editorSmoothCursorEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+            s.editorSmoothCursorEnabled = isOn
+            return s
           })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('平滑光标').fontSize(16)
       }
-      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('editorSmoothCursorEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1576,20 +1577,19 @@ export struct SettingsContent {
       .margin({ bottom: 16 })
 
       // 协同文本动画
-      Row() {
-        Text('协同动画')
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.editorCoordinatedTextCursorAnimationEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.editorCoordinatedTextCursorAnimationEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.editorCoordinatedTextCursorAnimationEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+            s.editorCoordinatedTextCursorAnimationEnabled = isOn
+            return s
           })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('协同动画').fontSize(16)
       }
-      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('editorCoordinatedTextCursorAnimationEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1605,20 +1605,19 @@ export struct SettingsContent {
   SaveContent() {
     Column() {
       // 自动保存
-      Row() {
-        Text($r('app.string.auto_save'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.autoSaveEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.autoSaveEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.autoSaveEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+            s.autoSaveEnabled = isOn
+            return s
           })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text($r('app.string.auto_save')).fontSize(16)
       }
-      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('autoSaveEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -1672,97 +1671,84 @@ export struct SettingsContent {
         .width('100%')
         .margin({ bottom: 2 })
 
-      if (!this.deviceSync.supported) {
-        Text('当前系统不支持附近设备同步（需要 API 18+，且两台设备已建立系统可信连接）')
-          .fontSize(12)
-          .opacity(0.72)
-          .width('100%')
-      } else {
-        if (this.deviceSync.devices.length === 0) {
-          Text('未发现系统可信设备。请先在同一分布式网络中完成系统设备连接；应用不要求登录华为账号。')
-            .fontSize(12)
-            .opacity(0.72)
-            .width('100%')
-        } else {
-          ForEach(this.deviceSync.devices, (device: TrustedDeviceInfo) => {
-            Row({ space: 8 }) {
-              Column({ space: 2 }) {
-                Text(device.deviceName)
-                  .fontSize(14)
-                  .width('100%')
-                Text(device.online ? '在线' : '离线')
-                  .fontSize(11)
-                  .opacity(0.62)
-                  .width('100%')
-              }
-              .layoutWeight(1)
-              Button(this.deviceSync.selectedNetworkId === device.networkId ? '已选择' : '选择')
-                .fontSize(12)
-                .height(30)
-                .onClick(() => this.deviceSync.selectDevice(device))
-            }
-            .width('100%')
-            .padding({ top: 4, bottom: 4 })
-          }, (device: TrustedDeviceInfo): string => device.networkId)
-        }
-
-        if (this.deviceSync.selectedNetworkId.length > 0) {
+      if (this.deviceSync.devices.length > 0) {
+        ForEach(this.deviceSync.devices, (device: TrustedDeviceInfo) => {
           Row({ space: 8 }) {
-            Button(this.deviceSync.connectionState === 'connected' ? '断开' : '连接')
+            Column({ space: 2 }) {
+              Text(device.deviceName)
+                .fontSize(14)
+                .width('100%')
+              Text(device.online ? '在线' : '离线')
+                .fontSize(11)
+                .opacity(0.62)
+                .width('100%')
+            }
+            .layoutWeight(1)
+            Button(this.deviceSync.selectedNetworkId === device.networkId ? '已选择' : '选择')
               .fontSize(12)
-              .height(32)
-              .onClick(() => {
-                if (this.deviceSync.connectionState === 'connected') {
-                  this.deviceSync.disconnect()
-                } else {
-                  this.deviceSync.connectSelected()
-                }
-              })
-            Button('刷新设备')
-              .fontSize(12)
-              .height(32)
-              .onClick(() => this.deviceSync.refresh())
+              .height(30)
+              .onClick(() => this.deviceSync.selectDevice(device))
           }
           .width('100%')
-        }
+          .padding({ top: 4, bottom: 4 })
+        }, (device: TrustedDeviceInfo): string => device.networkId)
+      }
 
-        Text(this.deviceSync.statusMessage)
+      // A single state line covers loading, empty, selection, connection and errors.
+      Text(this.deviceSync.statusMessage)
+        .fontSize(12)
+        .fontColor($r('sys.color.font_secondary'))
+        .width('100%')
+
+      if (this.deviceSync.displayState === 'empty') {
+        Button('刷新设备')
           .fontSize(12)
-          .width('100%')
+          .height(32)
+          .onClick(() => this.deviceSync.refresh())
+      }
+
+      if (this.deviceSync.displayState === 'selected' ||
+        this.deviceSync.displayState === 'connected') {
+        Button(this.deviceSync.displayState === 'connected' ? '断开' : '连接')
+          .fontSize(12)
+          .height(32)
+          .onClick(() => {
+            if (this.deviceSync.displayState === 'connected') {
+              this.deviceSync.disconnect()
+            } else {
+              this.deviceSync.connectSelected()
+            }
+          })
+      }
+
+      if (this.deviceSync.displayState === 'connected') {
         Text(this.deviceSync.remoteCloudLabel())
           .fontSize(12)
-          .opacity(0.72)
+          .fontColor($r('sys.color.font_tertiary'))
           .width('100%')
-        if (this.deviceSync.lastSyncMessage.length > 0) {
-          Text(this.deviceSync.lastSyncMessage)
-            .fontSize(12)
-            .opacity(0.72)
-            .width('100%')
-        }
       }
     }
     .width('100%')
+    .alignItems(HorizontalAlign.Start)
     .padding({ top: 8, bottom: 8 })
   }
 
   @Builder
   SyncContent() {
     Column() {
-      // Issue #952：同步摘要跟随“数据与同步 → 同步”分类展开才显示，不再常驻设置页顶部；
-      // 本轮结果 / 历史结果只做被动展示，失败明细按需展开。
-      this.SyncBriefSummary()
-      // Issue #988：附近设备同步不要求 GitHub 仓库或应用内账号；它和云备份
-      // 共用 Core 对象事务，任一侧有仓库时可继续把合并结果同步到云端。
-      this.NearbyDeviceSyncRows()
-
-      // 启用同步
-      Row() {
-        Text($r('app.string.enable_sync'))
+      Column({ space: 8 }) {
+        Text('云端同步')
           .fontSize(16)
-          .layoutWeight(1)
+          .fontWeight(FontWeight.Medium)
+          .width('100%')
+        // Issue #952：同步摘要跟随“同步”分类展开才显示；完整字段由用户按需展开。
+        this.SyncBriefSummary()
 
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.syncConfig?.enabled || false })
-          .onChange((isOn: boolean) => {
+        // 启用同步
+        GripAdaptiveToggleRow({
+          side: this.gripSide,
+          isOn: this.viewModel.syncConfig?.enabled || false,
+          onChange: (isOn: boolean): void => {
             if (this.viewModel.syncConfig) {
               const newConfig: SyncConfig = {
                 enabled: isOn,
@@ -1775,37 +1761,36 @@ export struct SettingsContent {
               }
               this.viewModel.updateSyncConfig(newConfig)
             }
-          })
-      }
-      .reverse(this.gripSide === 'left')
-      .width('100%')
-      .margin({ bottom: 16 })
+          }
+        }) {
+          Text($r('app.string.enable_sync')).fontSize(16)
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
 
       // Sync 详细配置（仅在同步开启时显示）
       if (this.viewModel.syncConfig?.enabled) {
         // 自动同步
-        Row() {
-          Text($r('app.string.auto_sync'))
-            .fontSize(16)
-            .layoutWeight(1)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.viewModel.syncConfig?.autoSync || false })
-            .onChange((isOn: boolean) => {
-              if (this.viewModel.syncConfig) {
-                const newConfig: SyncConfig = {
-                  enabled: this.viewModel.syncConfig.enabled,
-                  activeProvider: this.viewModel.syncConfig.activeProvider,
-                  providerConfig: this.viewModel.syncConfig.providerConfig,
-                  autoSync: isOn,
-                  syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
-                  hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
-                  hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
-                }
-                this.viewModel.updateSyncConfig(newConfig)
+        GripAdaptiveToggleRow({
+          side: this.gripSide,
+          isOn: this.viewModel.syncConfig?.autoSync || false,
+          onChange: (isOn: boolean): void => {
+            if (this.viewModel.syncConfig) {
+              const newConfig: SyncConfig = {
+                enabled: this.viewModel.syncConfig.enabled,
+                activeProvider: this.viewModel.syncConfig.activeProvider,
+                providerConfig: this.viewModel.syncConfig.providerConfig,
+                autoSync: isOn,
+                syncIntervalSeconds: this.viewModel.syncConfig.syncIntervalSeconds,
+                hasNetworkPermission: this.viewModel.syncConfig.hasNetworkPermission,
+                hasNetworkStatePermission: this.viewModel.syncConfig.hasNetworkStatePermission
               }
-            })
+              this.viewModel.updateSyncConfig(newConfig)
+            }
+          }
+        }) {
+          Text($r('app.string.auto_sync')).fontSize(16)
         }
-        .reverse(this.gripSide === 'left')
         .width('100%')
         .margin({ bottom: 16 })
 
@@ -1826,6 +1811,7 @@ export struct SettingsContent {
             })
         }
         .width('100%')
+        .alignItems(HorizontalAlign.Start)
         .margin({ bottom: 16 })
 
         // 访问令牌或密码（公开仓库可匿名读取，可留空）
@@ -1854,6 +1840,7 @@ export struct SettingsContent {
             })
         }
         .width('100%')
+        .alignItems(HorizontalAlign.Start)
         .margin({ bottom: 16 })
 
         // 高级设置：分支与用户名默认收起，普通用户只需仓库地址 + 可选令牌。
@@ -1966,7 +1953,15 @@ export struct SettingsContent {
           this.DiagnosticsResultCard()
         }
       }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .margin({ bottom: 16 })
+
+      // Nearby-device sync stays independent from repository configuration and follows cloud sync.
+      this.NearbyDeviceSyncRows()
     }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
   }
 
   // ── 诊断结果卡片 ──
@@ -2055,20 +2050,19 @@ export struct SettingsContent {
   @Builder
   AiContent() {
     Column() {
-      Row() {
-        Text($r('app.string.enable_ai'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.aiEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.aiEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.aiEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+            s.aiEnabled = isOn
+            return s
           })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text($r('app.string.enable_ai')).fontSize(16)
       }
-      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('aiEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -2084,23 +2078,22 @@ export struct SettingsContent {
   DiagnosticsContent() {
     Column() {
       // 开启诊断日志
-      Row() {
-        Text('开启诊断日志')
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.diagnosticsEnabled })
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.diagnosticsEnabled = isOn
-              if (!isOn) {
-                s.diagnosticsVerbose = false
-              }
-              return s
-            })
-            this.viewModel.saveSettings()
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.diagnosticsEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+            s.diagnosticsEnabled = isOn
+            if (!isOn) {
+              s.diagnosticsVerbose = false
+            }
+            return s
           })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('开启诊断日志').fontSize(16)
       }
-      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('diagnosticsEnabled'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
@@ -2109,21 +2102,20 @@ export struct SettingsContent {
       .margin({ bottom: 16 })
 
       // 详细日志
-      Row() {
-        Text('详细日志')
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.viewModel.settings.diagnosticsVerbose })
-          .enabled(this.viewModel.settings.diagnosticsEnabled)
-          .onChange((isOn: boolean) => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.diagnosticsVerbose = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.diagnosticsVerbose,
+        enabled: this.viewModel.settings.diagnosticsEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
+            s.diagnosticsVerbose = isOn
+            return s
           })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('详细日志').fontSize(16)
       }
-      .reverse(this.gripSide === 'left')
       .id(this.settingItemId('diagnosticsVerbose'))
       .width('100%')
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })

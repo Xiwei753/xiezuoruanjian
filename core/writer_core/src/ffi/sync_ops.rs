@@ -19,6 +19,225 @@ use super::{c_str_to_rust, err_json, ok_json, patch_dto, with_app_service};
 use crate::api::envelope::ResultEnvelope;
 use crate::api::error::WriterError;
 use crate::app_service::WriterAppService;
+use crate::api::SyncConfigDto;
+
+struct SyncFailureContext {
+    operation_id: String,
+    stage: &'static str,
+    category: String,
+}
+
+struct SyncOperationFailure {
+    error: WriterError,
+    context: SyncFailureContext,
+}
+
+fn sync_failure_category(error: &WriterError, stage: &str) -> String {
+    match error {
+        WriterError::Io(detail) => {
+            let subtype = [
+                ("sync_config_file_read", "config_file_read"),
+                ("sync_config_file_decode", "config_file_decode"),
+                ("sync_config_migration_write", "config_migration_write"),
+                ("sync_secure_storage_read", "secure_storage_read"),
+                ("sync_secure_storage_decode", "secure_storage_decode"),
+                ("sync_credentials_file_read", "credentials_file_read"),
+                ("sync_credentials_file_decode", "credentials_file_decode"),
+                ("sync_credential_migration_", "credential_migration_io"),
+            ]
+            .iter()
+            .find(|(marker, _)| detail.contains(marker))
+            .map(|(_, category)| *category);
+            subtype
+                .unwrap_or(if stage == "config_load" {
+                    "config_local_io"
+                } else {
+                    "credentials_local_io"
+                })
+                .to_string()
+        }
+        WriterError::Json(_) => "local_decode_error".to_string(),
+        WriterError::RetryableIo(_) => "local_io_error".to_string(),
+        WriterError::RetryableNetwork(_) => "network_error".to_string(),
+        WriterError::Authentication(_) => "authentication_error".to_string(),
+        WriterError::Other(_) if stage == "core_enter" => "sync_core_error".to_string(),
+        _ => "sync_error".to_string(),
+    }
+}
+
+fn sync_config_has_remote_url(config: &SyncConfigDto) -> bool {
+    config
+        .provider_config
+        .as_ref()
+        .is_some_and(|provider| match provider {
+            crate::api::ProviderConfigDto::GitHttps { remote_url, .. }
+            | crate::api::ProviderConfigDto::GitHub { remote_url, .. } => {
+                !remote_url.trim().is_empty()
+            }
+        })
+}
+
+fn record_sync_preflight_event(
+    operation_id: &str,
+    stage: &str,
+    outcome: &str,
+    error: Option<&WriterError>,
+    error_category: Option<&str>,
+) {
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(
+        "operation_id".to_string(),
+        serde_json::Value::String(operation_id.to_string()),
+    );
+    fields.insert(
+        "phase".to_string(),
+        serde_json::Value::String(stage.to_string()),
+    );
+    fields.insert(
+        "outcome".to_string(),
+        serde_json::Value::String(outcome.to_string()),
+    );
+    if let Some(error) = error {
+        fields.insert(
+            "error_code".to_string(),
+            serde_json::Value::String(error.code().to_string()),
+        );
+    }
+    if let Some(category) = error_category {
+        fields.insert(
+            "error_category".to_string(),
+            serde_json::Value::String(category.to_string()),
+        );
+    }
+    let level = if outcome == "error" {
+        writer_diagnostics::DiagnosticLevel::Error
+    } else {
+        writer_diagnostics::DiagnosticLevel::Info
+    };
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: if outcome == "started" {
+            "sync.preflight.start".to_string()
+        } else {
+            "sync.preflight.end".to_string()
+        },
+        target: "sync.preflight".to_string(),
+        message: None,
+        fields,
+    });
+}
+
+fn persist_sync_preflight_failure(svc: &WriterAppService, stage: &str) {
+    if let Err(error) =
+        svc.record_full_sync_preflight_failure("recoverable_error".to_string(), "preflight".to_string())
+    {
+        log::warn!(
+            "[sync] preflight state write failed: stage={} error_code={}",
+            stage,
+            error.code()
+        );
+    }
+}
+
+fn perform_full_sync_with_preflight_diagnostics(
+    svc: &WriterAppService,
+    operation_id: &str,
+) -> Result<crate::api::FullSyncResultDto, SyncOperationFailure> {
+    record_sync_preflight_event(operation_id, "config_load", "started", None, None);
+    let config = match svc.load_sync_config() {
+        Ok(config) => {
+            record_sync_preflight_event(operation_id, "config_load", "success", None, None);
+            config
+        }
+        Err(error) => {
+            let category = sync_failure_category(&error, "config_load");
+            record_sync_preflight_event(
+                operation_id,
+                "config_load",
+                "error",
+                Some(&error),
+                Some(&category),
+            );
+            persist_sync_preflight_failure(svc, "config_load");
+            return Err(SyncOperationFailure {
+                error,
+                context: SyncFailureContext {
+                    operation_id: operation_id.to_string(),
+                    stage: "config_load",
+                    category,
+                },
+            });
+        }
+    };
+
+    record_sync_preflight_event(operation_id, "secrets_load", "started", None, None);
+    if let Err(error) = svc.refresh_secrets_override() {
+        let category = sync_failure_category(&error, "secrets_load");
+        record_sync_preflight_event(
+            operation_id,
+            "secrets_load",
+            "error",
+            Some(&error),
+            Some(&category),
+        );
+        persist_sync_preflight_failure(svc, "secrets_load");
+        return Err(SyncOperationFailure {
+            error,
+            context: SyncFailureContext {
+                operation_id: operation_id.to_string(),
+                stage: "secrets_load",
+                category,
+            },
+        });
+    }
+    record_sync_preflight_event(operation_id, "secrets_load", "success", None, None);
+
+    record_sync_preflight_event(operation_id, "core_enter", "started", None, None);
+    let result = svc.perform_full_sync_after_preflight(config.clone(), false, operation_id.to_string());
+    match result {
+        Ok(result) => {
+            record_sync_preflight_event(operation_id, "core_enter", "success", None, None);
+            Ok(result)
+        }
+        Err(error) => {
+            let category = if config.enabled && !sync_config_has_remote_url(&config) {
+                "repository_unconfigured".to_string()
+            } else {
+                sync_failure_category(&error, "core_enter")
+            };
+            record_sync_preflight_event(
+                operation_id,
+                "core_enter",
+                "error",
+                Some(&error),
+                Some(&category),
+            );
+            Err(SyncOperationFailure {
+                error,
+                context: SyncFailureContext {
+                    operation_id: operation_id.to_string(),
+                    stage: "core_enter",
+                    category,
+                },
+            })
+        }
+    }
+}
+
+fn sync_error_envelope_json(
+    error: WriterError,
+    context: SyncFailureContext,
+) -> String {
+    let mut envelope = ResultEnvelope::<()>::error(error);
+    envelope.diagnostic_operation_id = Some(context.operation_id);
+    envelope.failure_stage = Some(context.stage.to_string());
+    envelope.failure_category = Some(context.category);
+    envelope.to_json_string()
+}
 
 /// 执行一次同步操作，操作结束后无论成功失败都清除 secrets override。
 ///
@@ -208,24 +427,81 @@ pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    record_sync_preflight_event(&operation_id, "operation", "started", None, None);
+    let mut failure_context: Option<SyncFailureContext> = None;
     let inner_result: Result<Result<_, WriterError>, String> = with_app_service(|svc| {
         Ok(run_sync_op(svc, |svc| {
-            let config = svc.load_sync_config()?;
-            let result = svc.perform_full_sync(config, false)?;
-            Ok(result)
+            match perform_full_sync_with_preflight_diagnostics(svc, &operation_id) {
+                Ok(result) => Ok(result),
+                Err(failure) => {
+                    failure_context = Some(failure.context);
+                    Err(failure.error)
+                }
+            }
         }))
     });
     match inner_result {
-        Ok(Ok(data)) => ok_json(data),
+        Ok(Ok(data)) => {
+            record_sync_preflight_event(&operation_id, "operation", "success", None, None);
+            let mut envelope = ResultEnvelope::success(data);
+            envelope.diagnostic_operation_id = Some(operation_id);
+            std::ffi::CString::new(envelope.to_json_string())
+                .unwrap_or_default()
+                .into_raw()
+        }
         Ok(Err(e)) => {
-            let envelope = ResultEnvelope::<()>::from_api_result(Err(e));
-            let s = envelope.to_json_string();
-            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+            let stage_already_recorded = failure_context.is_some();
+            let context = failure_context.unwrap_or_else(|| SyncFailureContext {
+                operation_id: operation_id.clone(),
+                stage: "cleanup",
+                category: sync_failure_category(&e, "cleanup"),
+            });
+            if !stage_already_recorded {
+                record_sync_preflight_event(
+                    &context.operation_id,
+                    context.stage,
+                    "error",
+                    Some(&e),
+                    Some(&context.category),
+                );
+            }
+            record_sync_preflight_event(
+                &operation_id,
+                "operation",
+                "error",
+                Some(&e),
+                Some(&context.category),
+            );
+            std::ffi::CString::new(sync_error_envelope_json(e, context))
+                .unwrap_or_default()
+                .into_raw()
         }
         Err(e) => {
-            let envelope = ResultEnvelope::<()>::from_api_result(Err(WriterError::Other(e)));
-            let s = envelope.to_json_string();
-            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+            let error = WriterError::Other(e);
+            let category = sync_failure_category(&error, "app_service_entry");
+            let context = SyncFailureContext {
+                operation_id: operation_id.clone(),
+                stage: "app_service_entry",
+                category: category.clone(),
+            };
+            record_sync_preflight_event(
+                &operation_id,
+                "app_service_entry",
+                "error",
+                Some(&error),
+                Some(&category),
+            );
+            record_sync_preflight_event(
+                &operation_id,
+                "operation",
+                "error",
+                Some(&error),
+                Some(&category),
+            );
+            std::ffi::CString::new(sync_error_envelope_json(error, context))
+                .unwrap_or_default()
+                .into_raw()
         }
     }
 }

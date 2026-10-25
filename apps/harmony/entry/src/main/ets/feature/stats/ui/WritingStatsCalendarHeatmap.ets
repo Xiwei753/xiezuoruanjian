@@ -118,15 +118,15 @@ export struct WritingStatsCalendarHeatmap {
         .onClick(() => this.shiftYear(1))
     }
     .width('100%')
-    .margin({ bottom: 6 })
+    .margin({ bottom: 4 })
   }
 
   @Builder
   private SelectedDayRow() {
     Text(this.selectedDayText())
-      .fontSize(12)
+      .fontSize(11)
       .fontColor(this.selectedDate !== '' ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
-      .margin({ bottom: 8 })
+      .margin({ bottom: 4 })
   }
 
   /** 选中日期的实时字数：每次渲染从当前快照查找，外部同步刷新后立即反映。 */
@@ -286,7 +286,7 @@ export struct WritingStatsCalendarHeatmap {
     }
     .width('100%')
     .justifyContent(FlexAlign.End)
-    .margin({ top: 8 })
+    .margin({ top: 4 })
   }
 
   private canPreviousYear(): boolean {

@@ -52,6 +52,38 @@ fn sync_diagnostic_fields(
     fields
 }
 
+fn sync_error_category(error: &crate::api::error::WriterError) -> &'static str {
+    match error {
+        crate::api::error::WriterError::Io(_) | crate::api::error::WriterError::RetryableIo(_) => {
+            "local_io"
+        }
+        crate::api::error::WriterError::Json(_) => "local_decode",
+        crate::api::error::WriterError::RetryableNetwork(_) => "network",
+        crate::api::error::WriterError::Authentication(_) => "authentication",
+        crate::api::error::WriterError::SyncConflict(_)
+        | crate::api::error::WriterError::Conflict(_) => "conflict",
+        crate::api::error::WriterError::NotImplemented => "unsupported",
+        _ => "sync_error",
+    }
+}
+
+fn record_sync_phase_failure(
+    operation_id: &str,
+    phase: &str,
+    error: &crate::api::error::WriterError,
+) {
+    let mut fields = sync_diagnostic_fields(operation_id, phase, None);
+    fields.insert(
+        "error_code".to_string(),
+        serde_json::Value::String(error.code().to_string()),
+    );
+    fields.insert(
+        "error_category".to_string(),
+        serde_json::Value::String(sync_error_category(error).to_string()),
+    );
+    record_sync_diagnostic("sync.phase.failure", "sync.run", fields);
+}
+
 fn sync_target_digest(target: &str) -> String {
     format!("{:x}", Sha256::digest(target.as_bytes()))
 }
@@ -757,11 +789,52 @@ impl WriterCoreApi {
         progress_sink: Option<SyncProgressSink>,
         target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
     ) -> ApiResult<FullSyncResultDto> {
-        let operation_id = progress_sink
+        self.perform_full_sync_internal(
+            config,
+            force_sync,
+            cancellation_token,
+            progress_sink,
+            target_progress,
+            None,
+            None,
+        )
+    }
+
+    /// Harmony C ABI entry that has already recorded local preflight stages.
+    /// Reuse its operation id so Core's detailed phases join the FFI diagnostics.
+    pub(crate) fn perform_full_sync_for_operation_id(
+        &self,
+        config: SyncConfigDto,
+        force_sync: bool,
+        operation_id: String,
+        trigger: &str,
+    ) -> ApiResult<FullSyncResultDto> {
+        self.perform_full_sync_internal(
+            config,
+            force_sync,
+            None,
+            None,
+            None,
+            Some(operation_id),
+            Some(trigger.to_string()),
+        )
+    }
+
+    fn perform_full_sync_internal(
+        &self,
+        config: SyncConfigDto,
+        force_sync: bool,
+        cancellation_token: Option<SyncCancellationToken>,
+        progress_sink: Option<SyncProgressSink>,
+        target_progress: Option<&crate::sync::full_sync::SyncProgressCallback>,
+        operation_id_override: Option<String>,
+        trigger_override: Option<String>,
+    ) -> ApiResult<FullSyncResultDto> {
+        let operation_id = operation_id_override.or_else(|| progress_sink
             .as_ref()
             .and_then(SyncProgressSink::operation_id)
             .map(str::to_string)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        ).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let started_at = Instant::now();
         record_sync_diagnostic("sync.run.start", "sync.run", {
             let mut fields = sync_diagnostic_fields(&operation_id, "prepare", None);
@@ -771,6 +844,7 @@ impl WriterCoreApi {
                     progress_sink
                         .as_ref()
                         .and_then(SyncProgressSink::trigger)
+                        .or(trigger_override.as_deref())
                         .unwrap_or(if force_sync { "manual" } else { "auto" })
                         .to_string(),
                 ),
@@ -855,6 +929,7 @@ impl WriterCoreApi {
                 progress_sink
                     .as_ref()
                     .and_then(SyncProgressSink::trigger)
+                    .or(trigger_override.as_deref())
                     .unwrap_or(if force_sync { "manual" } else { "auto" })
                     .to_string(),
             ),
@@ -896,6 +971,15 @@ impl WriterCoreApi {
             fields.insert(
                 "status_code".to_string(),
                 serde_json::Value::String(output.overall_status.clone()),
+            );
+        } else if let Err(error) = &result {
+            fields.insert(
+                "error_code".to_string(),
+                serde_json::Value::String(error.code().to_string()),
+            );
+            fields.insert(
+                "error_category".to_string(),
+                serde_json::Value::String(sync_error_category(error).to_string()),
             );
         }
         record_sync_diagnostic("sync.run.end", "sync.run", fields);
@@ -957,7 +1041,20 @@ impl WriterCoreApi {
             Ok(provider) => provider,
             Err(error) => {
                 provider_phase.finish("error");
-                return Err(error.into());
+                let status = crate::sync::full_sync::error_to_persist_status(&error);
+                let status_code = sync_status_to_wire(&status);
+                if let Err(state_error) = self.record_full_sync_preflight_failure(
+                    status_code,
+                    "provider_init".to_string(),
+                ) {
+                    log::warn!(
+                        "[sync] provider_init failed-state write failed: error_code={}",
+                        state_error.code()
+                    );
+                }
+                let writer_error = crate::api::error::WriterError::from(error);
+                record_sync_phase_failure(diagnostic_operation_id, "provider_init", &writer_error);
+                return Err(writer_error);
             }
         };
         provider.set_operation_id(Some(diagnostic_operation_id));
@@ -974,12 +1071,21 @@ impl WriterCoreApi {
         );
         if let Err(error) = self.flush_all_starmap_stores() {
             starmap_flush_phase.finish_with_provider("error", provider.as_ref());
-            log::warn!("[sync] prepare: StarMap Store flush before checkpoint failed: {error}");
+            let writer_error = crate::api::error::WriterError::from(error);
+            record_sync_phase_failure(
+                diagnostic_operation_id,
+                "starmap_store_flush",
+                &writer_error,
+            );
+            log::warn!(
+                "[sync] starmap_store_flush failed: error_code={}",
+                writer_error.code()
+            );
             let _ = self.record_full_sync_preflight_failure(
                 "recoverable_error".to_string(),
-                "preflight".to_string(),
+                "starmap_store_flush".to_string(),
             );
-            return Err(error);
+            return Err(writer_error);
         }
         starmap_flush_phase.finish_with_provider("success", provider.as_ref());
 
@@ -1002,14 +1108,23 @@ impl WriterCoreApi {
             Ok(revision) => revision,
             Err(error) => {
                 revision_phase.finish_with_provider("error", provider.as_ref());
-                log::warn!("[sync] remote revision query failed: {error}");
+                let writer_error = crate::api::error::WriterError::from(
+                    crate::error::Error::from(error),
+                );
+                record_sync_phase_failure(
+                    diagnostic_operation_id,
+                    "remote_revision",
+                    &writer_error,
+                );
+                log::warn!(
+                    "[sync] remote_revision failed: error_code={}",
+                    writer_error.code()
+                );
                 let _ = self.record_full_sync_preflight_failure(
                     "recoverable_error".to_string(),
                     "remote_revision".to_string(),
                 );
-                return Err(crate::api::error::WriterError::from(
-                    crate::error::Error::from(error),
-                ));
+                return Err(writer_error);
             }
         };
         revision_phase.finish_with_provider("success", provider.as_ref());

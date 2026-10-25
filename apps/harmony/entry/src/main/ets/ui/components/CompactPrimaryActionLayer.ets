@@ -8,7 +8,7 @@
 // 本组件不决定业务动作、不做新建作品/卷/星图的逻辑，onTap 由页面传入。
 // 按钮外观不在这里重画：PrimaryFab 已实现统一的毛玻璃 / 按压视效 / 圆环边缘高光。
 
-import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../theme/LayoutTokens'
+import { PRIMARY_FAB_BOTTOM_INSET_VP, PRIMARY_FAB_SIZE_VP } from '../theme/LayoutTokens'
 import { GripLayoutSide, GripLayoutSideStore } from '../adaptive/GripLayoutSide'
 import { PrimaryFab } from './PrimaryFab'
 
@@ -25,8 +25,36 @@ export struct CompactPrimaryActionLayer {
 
   // Issue #986：智感握姿决定 FAB 停靠侧；默认右侧，双手/放下设备保持上一次明确握持侧。
   @Local private gripSide: GripLayoutSide = 'right'
+  @Local private fabX: number = 0
+  @Local private fabY: number = 0
+  private containerWidthVp: number = 0
+  private containerHeightVp: number = 0
   private gripSideInitialized: boolean = false
   private unsubscribeGrip: (() => void) | null = null
+
+  private fabPositionX(side: GripLayoutSide): number {
+    if (side === 'left') {
+      return this.pagePadding
+    }
+    return Math.max(0, this.containerWidthVp - this.pagePadding - PRIMARY_FAB_SIZE_VP)
+  }
+
+  private updateContainerSize(area: Area): void {
+    const width: number = Number(area.width)
+    const height: number = Number(area.height)
+    if (width === this.containerWidthVp && height === this.containerHeightVp) {
+      return
+    }
+    this.containerWidthVp = width
+    this.containerHeightVp = height
+    this.fabX = this.fabPositionX(this.gripSide)
+    this.fabY = Math.max(0, height - PRIMARY_FAB_BOTTOM_INSET_VP - PRIMARY_FAB_SIZE_VP)
+  }
+
+  @Monitor('pagePadding')
+  onPagePaddingChanged(): void {
+    this.fabX = this.fabPositionX(this.gripSide)
+  }
 
   @Builder
   emptyContent() {}
@@ -40,6 +68,7 @@ export struct CompactPrimaryActionLayer {
         // 首帧直接落到当前握持侧，避免页面刚出现时从默认右侧滑过来。
         this.gripSideInitialized = true
         this.gripSide = side
+        this.fabX = this.fabPositionX(side)
         return
       }
       if (side === this.gripSide) {
@@ -50,6 +79,7 @@ export struct CompactPrimaryActionLayer {
         curve: Curve.EaseInOut
       }, () => {
         this.gripSide = side
+        this.fabX = this.fabPositionX(side)
       })
     })
   }
@@ -62,21 +92,16 @@ export struct CompactPrimaryActionLayer {
   }
 
   build() {
-    Stack({
-      alignContent: this.gripSide === 'left' ? Alignment.BottomStart : Alignment.BottomEnd
-    }) {
+    Stack({ alignContent: Alignment.TopStart }) {
       this.contentBuilder()
 
       if (this.visible) {
         PrimaryFab({ onTap: this.onTap })
-          .margin({
-            left: this.gripSide === 'left' ? this.pagePadding : 0,
-            right: this.gripSide === 'right' ? this.pagePadding : 0,
-            bottom: PRIMARY_FAB_BOTTOM_INSET_VP
-          })
+          .position({ x: this.fabX, y: this.fabY })
       }
     }
     .width('100%')
     .height('100%')
+    .onAreaChange((oldArea: Area, newArea: Area) => { this.updateContainerSize(newArea) })
   }
 }

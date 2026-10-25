@@ -89,6 +89,13 @@ interface SyncStateAttachment {
   conflictCount: number
 }
 
+// sync_config_sanitized.json — only stable provider metadata, never remote URL or secrets.
+interface SyncConfigOverviewAttachment {
+  enabled: boolean
+  providerType: string | null
+  hasRemoteUrl: boolean
+}
+
 // full_sync_state_sanitized.json 附件 DTO。Core 从未持久化时，各值为空。
 interface FullSyncStateAttachment {
   overall_status: string | null
@@ -114,6 +121,9 @@ interface SyncOperationRuntimeAttachment {
   finishedAtMs: number | null
   errorCode: string | null
   overallStatus: string | null
+  operationId: string | null
+  failureStage: string | null
+  errorCategory: string | null
 }
 
 // build_identity.json 附件 DTO。
@@ -134,6 +144,7 @@ const DIAGNOSTICS_DIR = 'diagnostics'
 const ATTACHMENT_HILOG = 'hilog.txt'
 const ATTACHMENT_HILOG_CAPTURE_STATS = 'hilog_capture_stats.json'
 const ATTACHMENT_APP_SETTINGS = 'app_settings_sanitized.json'
+const ATTACHMENT_SYNC_CONFIG = 'sync_config_sanitized.json'
 const ATTACHMENT_SYNC_STATE = 'sync_state_sanitized.json'
 const ATTACHMENT_FULL_SYNC_STATE = 'full_sync_state_sanitized.json'
 const ATTACHMENT_LATEST_FULL_SYNC_REPORT = 'last_sync_report_sanitized.json'
@@ -371,13 +382,16 @@ export class HarmonyDiagnosticsExporter {
     this.addHilogCaptureStatsAttachment(attachments)
 
     // Capture the process-local run state before any asynchronous attachment reads.
-    this.addSyncOperationRuntimeAttachment(attachments)
+    await this.addSyncOperationRuntimeAttachment(attachments)
 
     // app_settings_sanitized.json
     await this.addAppSettingsAttachment(attachments)
 
     // sync_state_sanitized.json
     await this.addSyncStateAttachment(attachments)
+
+    // sync_config_sanitized.json — provider identity and remote URL presence only.
+    await this.addSyncConfigOverviewAttachment(attachments)
 
     // full_sync_state_sanitized.json — the last persisted whole-sync result.
     await this.addFullSyncStateAttachment(attachments)
@@ -494,6 +508,31 @@ export class HarmonyDiagnosticsExporter {
     }
   }
 
+  private async addSyncConfigOverviewAttachment(attachments: AttachmentItem[]): Promise<void> {
+    try {
+      const result = await this.syncBridge.loadSyncConfig()
+      if (result.success && result.data !== undefined && result.data !== null) {
+        const config = result.data
+        const configuredProvider = config.providerConfig?.type ?? null
+        const providerType = configuredProvider === 'git_https' || configuredProvider === 'github'
+          ? configuredProvider : null
+        const sanitized: SyncConfigOverviewAttachment = {
+          enabled: config.enabled,
+          providerType: providerType,
+          hasRemoteUrl: (config.providerConfig?.remote_url ?? '').trim().length > 0
+        }
+        attachments.push(this.makeAttachment(ATTACHMENT_SYNC_CONFIG,
+          JSON.stringify(sanitized, null, 2)))
+      } else {
+        attachments.push(this.errorAttachment(ATTACHMENT_SYNC_CONFIG,
+          result.errorCode ?? 'loadSyncConfig failed'))
+      }
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_SYNC_CONFIG,
+        e instanceof Error ? e.name : 'UNKNOWN_ERROR'))
+    }
+  }
+
   // full_sync_state_sanitized.json — 仅导出 Core 持久化的整轮同步终态字段。
   private async addFullSyncStateAttachment(attachments: AttachmentItem[]): Promise<void> {
     try {
@@ -563,16 +602,23 @@ export class HarmonyDiagnosticsExporter {
   }
 
   // sync_operation_runtime.json — export only safe display state, never rawError or credentials.
-  private addSyncOperationRuntimeAttachment(attachments: AttachmentItem[]): void {
+  private async addSyncOperationRuntimeAttachment(attachments: AttachmentItem[]): Promise<void> {
     try {
       const snapshot = SyncRunPresentationState.getInstance().snapshot()
+      let failureStage = snapshot.outcome?.failureStage ?? null
+      if (snapshot.phase === 'failed' && (failureStage === null || failureStage === 'core_sync')) {
+        failureStage = await this.loadMostRecentFailureStage() ?? failureStage
+      }
       const runtime: SyncOperationRuntimeAttachment = {
         phase: snapshot.phase,
         source: snapshot.source,
         startedAtMs: snapshot.startedAtMs,
         finishedAtMs: snapshot.finishedAtMs,
         errorCode: snapshot.outcome?.errorCode ?? null,
-        overallStatus: snapshot.outcome?.overallStatus ?? null
+        overallStatus: snapshot.outcome?.overallStatus ?? null,
+        operationId: snapshot.outcome?.operationId ?? null,
+        failureStage: failureStage,
+        errorCategory: snapshot.outcome?.errorCategory ?? null
       }
       attachments.push(this.makeAttachment(
         ATTACHMENT_SYNC_OPERATION_RUNTIME,
@@ -581,6 +627,41 @@ export class HarmonyDiagnosticsExporter {
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_SYNC_OPERATION_RUNTIME,
         e instanceof Error ? e.name : 'UNKNOWN_ERROR'))
+    }
+  }
+
+  private async loadMostRecentFailureStage(): Promise<string | null> {
+    try {
+      const stateResult = await this.syncBridge.loadFullSyncState()
+      if (stateResult.success && stateResult.data !== undefined && stateResult.data !== null) {
+        const allowedStages: string[] = [
+          'config_load', 'secrets_load', 'core_enter', 'provider_init', 'starmap_store_flush',
+          'remote_revision', 'prepare', 'seed', 'transfer', 'commit', 'preflight'
+        ]
+        const failedTargets: string[] = stateResult.data.failed_targets
+        for (let i = failedTargets.length - 1; i >= 0; i--) {
+          if (allowedStages.indexOf(failedTargets[i]) >= 0) {
+            return failedTargets[i]
+          }
+        }
+      }
+      const result = await this.syncBridge.loadLatestFullSyncReport()
+      if (!result.success || result.data === undefined || result.data === null || result.data.failures.length === 0) {
+        return null
+      }
+      let latest = result.data.failures[0]
+      for (const failure of result.data.failures) {
+        if (failure.occurred_at >= latest.occurred_at) {
+          latest = failure
+        }
+      }
+      const allowedStages: string[] = [
+        'config_load', 'secrets_load', 'core_enter', 'provider_init', 'starmap_store_flush',
+        'remote_revision', 'prepare', 'seed', 'transfer', 'commit', 'preflight'
+      ]
+      return allowedStages.indexOf(latest.phase) >= 0 ? latest.phase : null
+    } catch (_) {
+      return null
     }
   }
 
@@ -742,6 +823,7 @@ export class HarmonyDiagnosticsExporter {
       ATTACHMENT_HILOG,
       ATTACHMENT_HILOG_CAPTURE_STATS,
       ATTACHMENT_APP_SETTINGS,
+      ATTACHMENT_SYNC_CONFIG,
       ATTACHMENT_SYNC_STATE,
       ATTACHMENT_FULL_SYNC_STATE,
       ATTACHMENT_LATEST_FULL_SYNC_REPORT,

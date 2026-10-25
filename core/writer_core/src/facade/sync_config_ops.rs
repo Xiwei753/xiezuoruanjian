@@ -48,12 +48,22 @@ impl super::WriterCore {
     /// `transport` 任一字段，且 `provider_config` 不存在或为 null。
     pub fn load_sync_config(&self) -> crate::error::Result<crate::sync::SyncConfig> {
         let config_path = self.app_data_root.join("app-meta/sync/config.local.json");
-        if !config_path.exists() {
-            return Ok(default_sync_config());
-        }
-        let content = std::fs::read_to_string(&config_path)?;
+        let content = match std::fs::read_to_string(&config_path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(default_sync_config());
+            }
+            Err(error) => {
+                return Err(crate::Error::Io(std::io::Error::new(
+                    error.kind(),
+                    format!("sync_config_file_read: {error}"),
+                )));
+            }
+        };
         let raw: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            .map_err(|e| crate::Error::Io(std::io::Error::other(format!(
+                "sync_config_file_decode: {e}"
+            ))))?;
 
         // 新格式：直接反序列化（provider_config 字段已存在或为 None）。
         if let Ok(mut config) = serde_json::from_str::<crate::sync::SyncConfig>(&content) {
@@ -75,7 +85,9 @@ impl super::WriterCore {
                         "load_sync_config: migrated legacy active_provider=\"git\" to {}",
                         config.active_provider
                     );
-                    self.save_sync_config(&config)?;
+                    self.save_sync_config(&config).map_err(|error| {
+                        sync_config_context(error, "sync_config_migration_write")
+                    })?;
                     return Ok(config);
                 }
                 if !has_legacy_top_level_github_fields(&raw) {
@@ -85,7 +97,9 @@ impl super::WriterCore {
                     );
                     config.active_provider = "git_https".to_string();
                     config.enabled = false;
-                    self.save_sync_config(&config)?;
+                    self.save_sync_config(&config).map_err(|error| {
+                        sync_config_context(error, "sync_config_migration_write")
+                    })?;
                     return Ok(config);
                 }
             }
@@ -100,7 +114,9 @@ impl super::WriterCore {
             #[cfg(feature = "github-api")]
             {
                 let migrated = migrate_legacy_sync_config(&raw, config);
-                self.save_sync_config(&migrated)?;
+                self.save_sync_config(&migrated).map_err(|error| {
+                    sync_config_context(error, "sync_config_migration_write")
+                })?;
                 return Ok(migrated);
             }
             #[cfg(not(feature = "github-api"))]
@@ -169,7 +185,7 @@ impl super::WriterCore {
                 Ok(Some(bytes)) => {
                     let token = String::from_utf8(bytes).map_err(|e| {
                         crate::Error::Io(std::io::Error::other(format!(
-                            "secure storage value for {} is not valid UTF-8: {}",
+                            "sync_secure_storage_decode: value for {} is not valid UTF-8: {}",
                             GLOBAL_KEY, e
                         )))
                     })?;
@@ -180,7 +196,7 @@ impl super::WriterCore {
                 Ok(None) => {}
                 Err(error) => {
                     return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "secure storage read failed for {}: {}",
+                        "sync_secure_storage_read: read failed for {}: {}",
                         GLOBAL_KEY, error
                     ))));
                 }
@@ -330,10 +346,18 @@ impl super::WriterCore {
 
     fn load_sync_secrets_from_file(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
         let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
-        if !secrets_path.exists() {
-            return Ok(crate::sync::SyncSecrets::default());
-        }
-        let content = std::fs::read_to_string(&secrets_path)?;
+        let content = match std::fs::read_to_string(&secrets_path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(crate::sync::SyncSecrets::default());
+            }
+            Err(error) => {
+                return Err(crate::Error::Io(std::io::Error::new(
+                    error.kind(),
+                    format!("sync_credentials_file_read: {error}"),
+                )));
+            }
+        };
         // 先尝试新格式（provider_secrets），失败则尝试旧格式（token/ssh_private_key）。
         if let Ok(secrets) = serde_json::from_str::<crate::sync::SyncSecrets>(&content) {
             return Ok(secrets);
@@ -345,7 +369,9 @@ impl super::WriterCore {
             token: Option<String>,
         }
         let legacy: LegacySecrets = serde_json::from_str(&content)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            .map_err(|e| crate::Error::Io(std::io::Error::other(format!(
+                "sync_credentials_file_decode: {e}"
+            ))))?;
         Ok(legacy
             .token
             .map(crate::sync::SyncSecrets::from_secret)
@@ -401,21 +427,43 @@ impl super::WriterCore {
     ) -> crate::error::Result<()> {
         storage
             .set_secret(secure_key, token.as_bytes())
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "sync_credential_migration_secure_write: {e}"
+                )))
+            })?;
         let readback_matches = storage
             .get_secret(secure_key)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "sync_credential_migration_secure_readback: {e}"
+                )))
+            })?
             .as_deref()
             .and_then(|bytes| std::str::from_utf8(bytes).ok())
             .is_some_and(|value| value == token);
         if !readback_matches {
             return Err(crate::Error::Io(std::io::Error::other(format!(
-                "secure storage readback mismatch after migrating {}",
-                legacy_path.display()
+                "sync_credential_migration_secure_readback: mismatch"
             ))));
         }
-        std::fs::remove_file(legacy_path)?;
+        std::fs::remove_file(legacy_path).map_err(|error| {
+            crate::Error::Io(std::io::Error::new(
+                error.kind(),
+                format!("sync_credential_migration_legacy_remove: {error}"),
+            ))
+        })?;
         Ok(())
+    }
+}
+
+fn sync_config_context(error: crate::Error, context: &str) -> crate::Error {
+    match error {
+        crate::Error::Io(error) => crate::Error::Io(std::io::Error::new(
+            error.kind(),
+            format!("{context}: {error}"),
+        )),
+        other => other,
     }
 }
 
