@@ -320,10 +320,10 @@ for target in targets:
             if provider is not None:
                 print(f"    {soname} -> {provider['path']} ({'随包 ELF' if category == 'package' else 'SDK ELF; 设备运行时未核实'})")
             elif category == "invalid-package":
-                print(f"    {soname} -> 包内文件不是可读 ELF：{detail}")
+                print(f"    确认缺失：{soname} -> 同名随包文件不是可读 ELF：{detail}")
                 confirmed_missing_packaged.append((target, soname, detail))
             else:
-                print(f"    {soname} -> 本地 package/SDK 未找到；设备系统提供者未知")
+                print(f"    本机无法核实：{soname} -> package/SDK 未找到，目标设备系统提供者未知")
                 unresolved_needed.append((soname, target_info))
                 inconclusive = True
 
@@ -334,7 +334,7 @@ for target in targets:
             seen_sonames.add(soname)
             provider, category, detail = resolve_needed(soname)
             if category == "invalid-package":
-                print(f"  确认缺失随包依赖：{importer['name']} 需要 {soname}，包内文件不是有效 ELF：{detail}")
+                print(f"  确认缺失随包依赖：{importer['name']} 需要 {soname}，同名包内文件不是有效 ELF：{detail}")
                 confirmed_missing_packaged.append((importer["path"], soname, detail))
                 continue
             if provider is None:
@@ -400,14 +400,14 @@ for target in targets:
         sdk_weak_exports = sum(exported["bind"] == "WEAK" for _, (_, exported) in resolved_sdk)
         versioned_package = sum(symbol_identity(symbol["name"])[1] is not None for symbol, _ in resolved_package)
         versioned_sdk = sum(symbol_identity(symbol["name"])[1] is not None for symbol, _ in resolved_sdk)
-        print(f"  随包/目标 ELF 已解析（在实际 DT_NEEDED 闭包内按名称/绑定/可见性/版本匹配）：{len(resolved_package)} strong symbol(s)")
+        print(f"  已解析（随包/目标 ELF 在实际 DT_NEEDED 闭包内按名称/绑定/可见性/版本匹配）：{len(resolved_package)} strong symbol(s)")
         print(f"    带版本 {versioned_package}；GLOBAL/GNU_UNIQUE 导出满足 {len(resolved_package) - package_weak_exports}，WEAK 导出满足 {package_weak_exports}")
-        print(f"  SDK ELF 匹配候选（静态 SDK 文件在闭包内提供；设备运行时未核实）：{len(resolved_sdk)} strong symbol(s)")
+        print(f"  系统库候选（目标 SDK ELF 在闭包内存在匹配导出；设备运行时无法由本机核实）：{len(resolved_sdk)} strong symbol(s)")
         print(f"    带版本 {versioned_sdk}；GLOBAL/GNU_UNIQUE 导出满足 {len(resolved_sdk) - sdk_weak_exports}，WEAK 导出满足 {sdk_weak_exports}")
         if resolved_sdk:
             inconclusive = True
         if version_mismatches:
-            print("  同名导出存在但 ELF 符号版本不匹配（未计为已解析）：")
+            print("  本机无法核实：同名导出存在，但 ELF 符号版本不匹配（未计为已解析）：")
             for symbol, (provider, exported) in version_mismatches:
                 print(f"    {symbol['importer']['name']}: {display_symbol(symbol)} -> {provider['name']} ({exported['bind']} {exported['visibility']} {exported['name']})")
             inconclusive = True
@@ -422,7 +422,7 @@ for target in targets:
                 print(f"    {symbol['importer']['name']}: {display_symbol(symbol)} -> {provider['name']} ({exported['bind']} {exported['visibility']} {exported['name']})")
             inconclusive = True
         if unknown_symbols:
-            print("  本地 package/SDK 均未找到 strong symbol；设备系统提供者未知，不能据此判定设备不兼容：")
+            print("  本机无法核实的 strong imports：package/SDK 闭包均无匹配导出；设备系统提供者未知，不能据此判定设备不兼容：")
             for symbol in unknown_symbols:
                 print(f"    {symbol['importer']['name']}: {display_symbol(symbol)}")
             inconclusive = True
@@ -434,7 +434,7 @@ for target in targets:
             for symbol in weak_unprovided:
                 print(f"    {symbol['importer']['name']}: {display_symbol(symbol)}")
         if unresolved_needed:
-            print("  未解析的 DT_NEEDED 本地依赖（可能由设备系统提供，需设备 ELF/日志核实）：")
+            print("  本机无法核实的 DT_NEEDED（可能由目标设备系统提供，需设备 ELF/日志核实）：")
             for soname, importer in unresolved_needed:
                 print(f"    {importer['name']} -> {soname}")
     except (OSError, RuntimeError) as error:
@@ -442,10 +442,13 @@ for target in targets:
         inconclusive = True
 
 if confirmed_missing_packaged:
+    print("结论：确认缺失。真实 DT_NEEDED 指向同名随包文件，但该文件不是可读 ELF；这是已证实的打包依赖问题。")
     print("HarmonyOS ELF diagnostics failed: a DT_NEEDED entry points to an invalid packaged ELF dependency.")
     raise SystemExit(1)
 if inconclusive:
+    print("结论：本机无法核实。上面分别列出随包已解析项、SDK 候选项和可能由设备系统提供但本机无 ELF 证据的项；未把未知项判成缺失。")
     print("HarmonyOS ELF diagnostics inconclusive: device-side system providers and the unnamed relocation failure were not verified.")
 else:
+    print("结论：当前可见的随包/SDK ELF 闭包中的 strong imports 均有匹配提供方；设备运行时仍需设备证据确认。")
     print("HarmonyOS ELF diagnostics complete for the available package/SDK ELF set; this is not a device compatibility claim.")
 PY

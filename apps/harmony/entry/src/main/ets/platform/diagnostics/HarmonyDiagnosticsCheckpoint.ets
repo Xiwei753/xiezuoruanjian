@@ -36,6 +36,10 @@ import { AdaptiveContext, AdaptiveObserver, AdaptiveState } from '../../ui/adapt
 
 const LOG_TAG = 'HarmonyDiagnosticsCheckpoint'
 const CHECKPOINT_COALESCE_MS = 250
+// Rust writer opens, appends, flushes, and closes once per batch. Wait for a
+// full quiet window after the last CLOSE_WRITE so adjacent batches publish as
+// one archive instead of repeatedly compressing the same log stream.
+const LOG_QUIET_WINDOW_MS = 1000
 const DIAGNOSTICS_DIR = 'diagnostics'
 const LATEST_ZIP = 'sujian-diagnostics-latest.zip'
 const PREVIOUS_ZIP = 'sujian-diagnostics-previous.zip'
@@ -100,7 +104,8 @@ export class HarmonyDiagnosticsCheckpoint {
   private isGenerating: boolean = false
   private scheduledTimerId: number = -1
   private isForeground: boolean = true
-  private lastLogDirtyAt: number = 0
+  private allowBackgroundCheckpoint: boolean = false
+  private lastLogClosedAt: number = 0
   private lastArchiveCompletedAt: number = 0
   private logWriteInProgress: boolean = false
   private manualCheckpointPending: boolean = false
@@ -138,6 +143,8 @@ export class HarmonyDiagnosticsCheckpoint {
       return
     }
     this.initialized = true
+    this.isForeground = true
+    this.allowBackgroundCheckpoint = false
     this.context = context
     this.exporter.setAbilityContext(context)
     this.attachLogWatchers()
@@ -175,7 +182,7 @@ export class HarmonyDiagnosticsCheckpoint {
     this.dirty = true
     this.dirtyVersion += 1
     this.stateDirtyVersion += 1
-    this.scheduleCheckpoint()
+    this.schedulePendingCheckpoint()
   }
 
   // 显式请求绕过静默窗口，立即归档调用时可见的最新日志。
@@ -198,6 +205,7 @@ export class HarmonyDiagnosticsCheckpoint {
   onForeground(): void {
     const wasForeground = this.isForeground
     this.isForeground = true
+    this.allowBackgroundCheckpoint = false
     if (!wasForeground && this.dirty) {
       this.schedulePendingCheckpoint()
     }
@@ -205,10 +213,11 @@ export class HarmonyDiagnosticsCheckpoint {
 
   onBackground(): void {
     this.isForeground = false
-    // 日志单独积累时后台不启动 ZIP 归档。若仍有运行态变更，保留它自己的调度。
-    if (!this.stateDirty) {
-      this.cancelScheduledCheckpoint()
-    }
+    this.allowBackgroundCheckpoint = true
+    this.cancelScheduledCheckpoint()
+    // 后台切换是明确提交点。若写入仍打开，CLOSE_WRITE 到达后才开始安静窗口；
+    // 没有脏数据时不会留下计时器。
+    this.schedulePendingCheckpoint()
   }
 
   // Issue #773 评论 5845033983：persistRuntimeSnapshot — 把运行态 JSON 写到 live/runtime/ 目录，
@@ -224,7 +233,8 @@ export class HarmonyDiagnosticsCheckpoint {
   // 普通运行态事件用一次性 debounce；日志事件会重置计时器，形成真正的静默窗口。
   private scheduleCheckpoint(resetExisting: boolean = false, delayMs: number = CHECKPOINT_COALESCE_MS): void {
     if (!this.initialized || this.context === null || !this.dirty || this.isGenerating ||
-      (!this.stateDirty && (!this.logDirty || !this.isForeground || this.logWriteInProgress))) {
+      (!this.isForeground && !this.allowBackgroundCheckpoint) ||
+      (!this.stateDirty && (!this.logDirty || this.logWriteInProgress))) {
       return
     }
     if (this.scheduledTimerId !== -1) {
@@ -246,9 +256,8 @@ export class HarmonyDiagnosticsCheckpoint {
     this.dirtyVersion += 1
     this.logDirtyVersion += 1
     this.logWriteInProgress = true
-    if (!this.stateDirty) {
-      this.cancelScheduledCheckpoint()
-    }
+    // 任意待提交包都等待这批日志关闭，避免 state 事件让归档撞上半写入文件。
+    this.cancelScheduledCheckpoint()
   }
 
   // CLOSE_WRITE 是一个 batch 已落盘的边界，才从这里启动真正的静默窗口。
@@ -258,25 +267,24 @@ export class HarmonyDiagnosticsCheckpoint {
     this.dirtyVersion += 1
     this.logDirtyVersion += 1
     this.logWriteInProgress = false
-    this.lastLogDirtyAt = Date.now()
-    if (this.isForeground) {
+    this.lastLogClosedAt = Date.now()
+    if (this.isForeground || this.allowBackgroundCheckpoint) {
       this.schedulePendingCheckpoint(true)
     }
   }
 
   private schedulePendingCheckpoint(resetExisting: boolean = false): void {
-    if (this.logWriteInProgress && !this.stateDirty) {
+    if (this.logWriteInProgress) {
       return
     }
-    const delay = this.logDirty && this.isForeground ?
-      this.getLogQuietDelay() : CHECKPOINT_COALESCE_MS
+    const delay = this.logDirty ? this.getLogQuietDelay() : CHECKPOINT_COALESCE_MS
     this.scheduleCheckpoint(resetExisting, delay)
   }
 
   private getLogQuietDelay(): number {
     const quietDeadline = Math.max(
-      this.lastLogDirtyAt + CHECKPOINT_COALESCE_MS,
-      this.lastArchiveCompletedAt + CHECKPOINT_COALESCE_MS
+      this.lastLogClosedAt + LOG_QUIET_WINDOW_MS,
+      this.lastArchiveCompletedAt + LOG_QUIET_WINDOW_MS
     )
     return Math.max(0, quietDeadline - Date.now())
   }
@@ -291,10 +299,10 @@ export class HarmonyDiagnosticsCheckpoint {
   // 单次归档失败后保留 dirty，但不自行重试；归档期间新增变化保留版本，
   // 归档结束后再等待静默窗口，避免紧接着反复压 ZIP。
   private async runScheduledCheckpoint(): Promise<void> {
-    if (this.isGenerating || !this.dirty) {
+    if ((!this.isForeground && !this.allowBackgroundCheckpoint) || this.isGenerating || !this.dirty) {
       return
     }
-    if (!this.stateDirty && (!this.logDirty || !this.isForeground || this.logWriteInProgress)) {
+    if (this.logWriteInProgress || (!this.stateDirty && !this.logDirty)) {
       return
     }
     if (this.logDirty && this.isForeground) {
