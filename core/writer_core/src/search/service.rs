@@ -26,14 +26,8 @@ impl SearchIndexService {
         limit: usize,
         cursor: Option<&str>,
     ) -> Vec<SearchResult> {
-        self.search_page(
-            query,
-            scope,
-            limit,
-            cursor,
-            &SearchContext::default(),
-        )
-        .items
+        self.search_page(query, scope, limit, cursor, &SearchContext::default())
+            .items
     }
 
     pub fn search_page(
@@ -115,6 +109,10 @@ impl SearchIndexService {
 
     pub fn backend(&self) -> &SearchBackend {
         &self.backend
+    }
+
+    pub fn annotation_object_ids_for_project(&self, project_id: &str) -> Vec<String> {
+        self.backend.annotation_object_ids_for_project(project_id)
     }
 
     pub fn backend_mut(&mut self) -> &mut SearchBackend {

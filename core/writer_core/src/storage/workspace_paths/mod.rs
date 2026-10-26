@@ -309,6 +309,11 @@ pub fn classify_workspace_path_str(path: &str) -> WorkspacePathClass {
         return WorkspacePathClass::SyncEngineState;
     }
 
+    // 作品标签、锚点、命名条目与链接是可同步的用户内容，也进入本地版本历史。
+    if normalized.starts_with("annotations/") {
+        return WorkspacePathClass::UserContent;
+    }
+
     // UserSetting：已知用户设置文件
     if normalized == "settings.local.json"
         || normalized == "settings.sync.json"

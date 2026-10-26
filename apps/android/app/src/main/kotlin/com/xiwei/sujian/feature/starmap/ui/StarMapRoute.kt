@@ -60,10 +60,15 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.core.designsystem.component.SujianListItem
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.feature.editor.presentation.AnnotationCoordinator
+import com.xiwei.sujian.feature.editor.presentation.AnnotationObjectKind
+import com.xiwei.sujian.feature.editor.presentation.AnnotationObjectRef
+import com.xiwei.sujian.feature.editor.ui.AnnotationSheet
 import com.xiwei.sujian.feature.starmap.data.StarMapRepository
 import com.xiwei.sujian.feature.starmap.data.model.StarMapData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphEdge
@@ -98,6 +103,7 @@ import kotlin.math.sqrt
 @Composable
 fun StarMapScreen(
     starmapId: String?,
+    projectId: String?,
     target: StarMapSelectionTarget?,
     onOpenStarmap: (starmapId: String, projectId: String?) -> Unit,
     modifier: Modifier = Modifier,
@@ -105,7 +111,7 @@ fun StarMapScreen(
     if (starmapId == null) {
         StarMapRootScreen(onOpenStarmap = onOpenStarmap, modifier = modifier)
     } else {
-        StarMapDetailScreen(starmapId = starmapId, target = target, modifier = modifier)
+        StarMapDetailScreen(starmapId = starmapId, projectId = projectId, target = target, modifier = modifier)
     }
 }
 
@@ -164,6 +170,7 @@ private fun StarMapRootScreen(
 @Composable
 private fun StarMapDetailScreen(
     starmapId: String,
+    projectId: String?,
     target: StarMapSelectionTarget?,
     modifier: Modifier = Modifier,
 ) {
@@ -191,6 +198,7 @@ private fun StarMapDetailScreen(
         is StarMapDetailState.Ready ->
             StarMapCanvas(
                 starmapId = starmapId,
+                projectId = projectId,
                 repository = repository,
                 data = current.data,
                 target = target,
@@ -353,17 +361,30 @@ private fun buildNodeCards(
 @Composable
 private fun StarMapCanvas(
     starmapId: String,
+    projectId: String?,
     repository: StarMapRepository,
     data: StarMapData,
     target: StarMapSelectionTarget?,
     onNodeUpdated: (StarMapGraphNode) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val appDependencies = LocalSujianAppDependencies.current
+    val annotationScope = rememberCoroutineScope()
+    val annotationCoordinator =
+        remember(appDependencies.appServiceBridge, appDependencies.searchRepository, annotationScope) {
+            AnnotationCoordinator(
+                bridge = appDependencies.appServiceBridge.annotationBridge,
+                searchRepository = appDependencies.searchRepository,
+                scope = annotationScope,
+            )
+        }
+    val annotationState by annotationCoordinator.state.collectAsStateWithLifecycle()
     val resolvedTarget = remember(data, target) { target?.let { data.resolveSelectionTarget(it) } }
     var selectedOwner by remember(data, target) { mutableStateOf(resolvedTarget?.owner) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     var camera by remember { mutableStateOf(StarMapCamera(1f, Offset.Zero)) }
     var editingNode by remember(data) { mutableStateOf<StarMapGraphNode?>(null) }
+    var annotationNode by remember(data) { mutableStateOf<StarMapGraphNode?>(null) }
     val currentCamera by rememberUpdatedState(camera)
 
     val textMeasurer = rememberTextMeasurer()
@@ -463,6 +484,20 @@ private fun StarMapCanvas(
                                 if (hit is StarMapSelectionOwner.Node) {
                                     editingNode = hit.node
                                 }
+                            },
+                            onLongPress = { tap ->
+                                val activeCamera = currentCamera
+                                val hit =
+                                    hitTest(
+                                        data = data,
+                                        world = tap.toWorld(activeCamera),
+                                        cardsById = cardsById,
+                                        proximityTolerance = nodeRadius / activeCamera.scale,
+                                    )
+                                val node = (hit as? StarMapSelectionOwner.Node)?.node
+                                selectedOwner = hit
+                                annotationNode = node
+                                if (node == null) annotationCoordinator.dismissSheet()
                             },
                         )
                     }
@@ -631,6 +666,44 @@ private fun StarMapCanvas(
                     editingNode = null
                     onNodeUpdated(updated)
                 },
+            )
+        }
+        val selectedAnnotationNode = annotationNode
+        val annotationProjectId = projectId
+        if (selectedAnnotationNode != null && annotationProjectId != null) {
+            LaunchedEffect(selectedAnnotationNode.id, annotationProjectId) {
+                annotationCoordinator.openObject(
+                    ref =
+                        AnnotationObjectRef(
+                            AnnotationObjectKind.StarMapNode,
+                            annotationProjectId,
+                            selectedAnnotationNode.id,
+                        ),
+                    label = selectedAnnotationNode.title,
+                )
+            }
+        }
+        annotationNode?.takeIf { projectId == null }?.let { node ->
+            Surface(
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = MaterialTheme.shapes.small,
+            ) {
+                Text(node.title, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+            }
+        }
+        if (annotationState.isSheetOpen) {
+            AnnotationSheet(
+                state = annotationState,
+                onDismiss = { annotationCoordinator.dismissSheet(); annotationNode = null },
+                onTagToggled = annotationCoordinator::toggleTag,
+                onCreateTag = annotationCoordinator::createTag,
+                onRegisterName = annotationCoordinator::registerName,
+                onNameChanged = annotationCoordinator::onNameDraftChanged,
+                onExternalLink = annotationCoordinator::addExternalLink,
+                onSearchChanged = annotationCoordinator::onLinkSearchChanged,
+                onObjectLink = annotationCoordinator::addObjectLink,
+                onDeleteLink = annotationCoordinator::deleteLink,
             )
         }
     }

@@ -194,6 +194,7 @@ private fun rememberSujianEntryProvider(
                             NavEntry(key, metadata = noPageTransitionMetadata) {
                                 StarMapScreen(
                                     starmapId = key.starmapId,
+                                    projectId = key.projectId,
                                     target = key.selectionTarget(),
                                     onOpenStarmap = { starmapId, projectId ->
                                         topLevelBackStack.add(

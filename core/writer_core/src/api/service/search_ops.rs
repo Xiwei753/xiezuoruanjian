@@ -14,6 +14,9 @@ fn parse_scope(scope: &str) -> crate::search::SearchScope {
         "starmapLink" => crate::search::SearchScope::StarmapLink,
         "starmapEmbed" => crate::search::SearchScope::StarmapEmbed,
         "setting" => crate::search::SearchScope::Setting,
+        "annotationTag" => crate::search::SearchScope::AnnotationTag,
+        "annotationEntry" => crate::search::SearchScope::AnnotationEntry,
+        "annotationLink" => crate::search::SearchScope::AnnotationLink,
         _ => crate::search::SearchScope::All,
     }
 }
@@ -41,13 +44,8 @@ impl WriterCoreApi {
         context: Option<&crate::search::SearchContext>,
     ) -> ApiResult<String> {
         let context = context.cloned().unwrap_or_default();
-        let page = self.search_service_page(
-            query,
-            parse_scope(scope),
-            limit as usize,
-            cursor,
-            &context,
-        );
+        let page =
+            self.search_service_page(query, parse_scope(scope), limit as usize, cursor, &context);
         Self::json_string(&page)
     }
 

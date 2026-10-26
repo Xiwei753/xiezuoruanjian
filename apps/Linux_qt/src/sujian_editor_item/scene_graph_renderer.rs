@@ -575,7 +575,7 @@ pub(crate) fn render_frame(
         static_text.scroll_y,
         static_text.viewport_height,
     );
-    // Layer 3: 正文装饰（纠错波浪线）
+    // Layer 3: 正文装饰（校对波浪线、标签底色、手动链接与名称链接下划线）
     // 只消费 GUI 线程已从 canonical LayoutSnapshot 生成的可见段落几何；段落动画偏移与
     // 静态层孔洞沿用本帧局部文字计划，不触碰静态 QTextNode 或动画纹理。
     let decoration_holes = if animation_resources_ready {

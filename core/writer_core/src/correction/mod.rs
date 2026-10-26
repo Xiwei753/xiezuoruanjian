@@ -16,9 +16,9 @@ use sujian_proof::{CorrectionEngine, Lexicon, LexiconPaths, ProofreadingModel};
 use sha2::Digest;
 
 use crate::api::{
-    CorrectionDictionaryEntryDto, CorrectionDictionaryEntryKindDto, CorrectionEntityNameDto,
-    CorrectionEntityNameKindDto, CorrectionIgnoreScopeDto, CorrectionModelPathStatusDto,
-    CorrectionResourceStatusDto, WriterError,
+    AnnotationNamedEntryDto, CorrectionDictionaryEntryDto, CorrectionDictionaryEntryKindDto,
+    CorrectionEntityNameDto, CorrectionEntityNameKindDto, CorrectionIgnoreScopeDto,
+    CorrectionModelPathStatusDto, CorrectionResourceStatusDto, WriterError,
 };
 
 mod engine;
@@ -86,6 +86,9 @@ type ChapterResultCacheRegistry = HashMap<(String, String), Arc<ChapterCorrectio
 struct CorrectionStoreInner {
     path: PathBuf,
     preferences: Mutex<PersistedCorrectionPreferences>,
+    /// Read-only projection of annotation NamedEntry records for proofreading.
+    /// Writes go through AnnotationStore; this is only a process cache.
+    named_entries: Mutex<HashMap<String, Vec<AnnotationNamedEntryDto>>>,
     once_ignored: Mutex<HashSet<OnceIgnoredDiagnostic>>,
     active_project: Mutex<ActiveCorrectionProject>,
     next_lexicon_version: AtomicU64,
@@ -110,6 +113,7 @@ struct CachedLexicon {
     files: Vec<LexiconFileStamp>,
     dictionary_entries: Vec<CorrectionDictionaryEntryDto>,
     entity_names: Vec<CorrectionEntityNameDto>,
+    named_entries: Vec<AnnotationNamedEntryDto>,
     version: u64,
     lexicon: Arc<Lexicon>,
 }
@@ -195,10 +199,9 @@ fn canonical_model_path(path: &Path) -> Result<PathBuf, WriterError> {
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.eq_ignore_ascii_case("model.onnx"))
     {
-        return path
-            .parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| WriterError::Other("correction model has no resource directory".into()));
+        return path.parent().map(Path::to_path_buf).ok_or_else(|| {
+            WriterError::Other("correction model has no resource directory".into())
+        });
     }
     if path
         .extension()
@@ -253,12 +256,15 @@ fn sha256_file(path: &Path) -> Result<String, WriterError> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn model_identity(directory: &Path, stamp: &ModelBundleStamp) -> Result<ModelIdentity, WriterError> {
+fn model_identity(
+    directory: &Path,
+    stamp: &ModelBundleStamp,
+) -> Result<ModelIdentity, WriterError> {
     let key = (directory.to_path_buf(), stamp.clone());
     {
-        let cache = model_identity_cache()
-            .lock()
-            .map_err(|_| WriterError::Other("correction model identity cache lock poisoned".into()))?;
+        let cache = model_identity_cache().lock().map_err(|_| {
+            WriterError::Other("correction model identity cache lock poisoned".into())
+        })?;
         if let Some(identity) = cache.get(&key) {
             return Ok(identity.clone());
         }
@@ -268,9 +274,11 @@ fn model_identity(directory: &Path, stamp: &ModelBundleStamp) -> Result<ModelIde
         vocab_sha256: sha256_file(&directory.join("vocab.txt"))?,
         tokenizer_sha256: sha256_file(&directory.join("tokenizer.json"))?,
         calibrator_version: match std::fs::read_to_string(directory.join("calibrator.json")) {
-            Ok(content) => sujian_proof::Calibrator::from_json(&content)
-                .map_err(|error| WriterError::Other(error.to_string()))?
-                .version,
+            Ok(content) => {
+                sujian_proof::Calibrator::from_json(&content)
+                    .map_err(|error| WriterError::Other(error.to_string()))?
+                    .version
+            }
             Err(_) => "embedded-calibrator".to_string(),
         },
     };
@@ -346,6 +354,7 @@ impl CorrectionStore {
             let inner = Arc::new(CorrectionStoreInner {
                 path,
                 preferences: Mutex::new(preferences),
+                named_entries: Mutex::new(HashMap::new()),
                 once_ignored: Mutex::new(HashSet::new()),
                 active_project: Mutex::new(ActiveCorrectionProject {
                     project_id: None,
@@ -588,6 +597,37 @@ impl CorrectionStore {
         &self,
         project_id: &str,
     ) -> Result<Vec<CorrectionEntityNameDto>, WriterError> {
+        if let Some(entries) = self
+            .inner
+            .named_entries
+            .lock()
+            .map_err(|_| WriterError::Other("correction named entry cache lock poisoned".into()))?
+            .get(project_id)
+            .cloned()
+        {
+            let mut records = entries
+                .iter()
+                .flat_map(|entry| {
+                    entry
+                        .aliases
+                        .iter()
+                        .map(|name| CorrectionEntityNameDto {
+                            canonical: entry.canonical_name.clone(),
+                            name: name.clone(),
+                            kind: CorrectionEntityNameKindDto::Alias,
+                        })
+                        .chain(entry.confirmed_misspellings.iter().map(|name| {
+                            CorrectionEntityNameDto {
+                                canonical: entry.canonical_name.clone(),
+                                name: name.clone(),
+                                kind: CorrectionEntityNameKindDto::Misspelling,
+                            }
+                        }))
+                })
+                .collect::<Vec<_>>();
+            records.sort();
+            return Ok(records);
+        }
         let guard = self
             .inner
             .preferences
@@ -598,6 +638,81 @@ impl CorrectionStore {
             .get(project_id)
             .map(|project| project.entity_names.iter().cloned().collect())
             .unwrap_or_default())
+    }
+
+    /// Supply the canonical annotation entries used by the correction engine.
+    /// This cache never persists names; AnnotationStore remains the single
+    /// writable source of truth.
+    pub(crate) fn set_named_entries_for_project(
+        &self,
+        project_id: &str,
+        entries: Vec<AnnotationNamedEntryDto>,
+    ) -> Result<(), WriterError> {
+        let mut guard =
+            self.inner.named_entries.lock().map_err(|_| {
+                WriterError::Other("correction named entry cache lock poisoned".into())
+            })?;
+        guard.insert(project_id.to_string(), entries);
+        if let Ok(mut lexicons) = self.inner.lexicons.lock() {
+            lexicons.remove(project_id);
+        }
+        if let Ok(mut engines) = self.inner.engines.lock() {
+            engines.remove(project_id);
+        }
+        Ok(())
+    }
+
+    /// Return the legacy name relations solely for the one-time import into
+    /// annotations/entries. The old table is cleared after that import.
+    pub(crate) fn legacy_entity_name_records(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<CorrectionEntityNameDto>, WriterError> {
+        let guard = self
+            .inner
+            .preferences
+            .lock()
+            .map_err(|_| WriterError::Other("correction preferences lock poisoned".into()))?;
+        Ok(guard
+            .projects
+            .get(project_id)
+            .map(|project| project.entity_names.iter().cloned().collect())
+            .unwrap_or_default())
+    }
+
+    pub(crate) fn clear_legacy_entity_name_records(
+        &self,
+        project_id: &str,
+    ) -> Result<(), WriterError> {
+        self.update_preferences(|preferences| {
+            if let Some(project) = preferences.projects.get_mut(project_id) {
+                project.entity_names.clear();
+            }
+        })
+    }
+
+    /// Remove proper-entity dictionary rows after their canonical names have
+    /// been migrated to project annotation entries. Ordinary protected terms
+    /// stay in the correction preferences store.
+    pub(crate) fn clear_legacy_typed_entity_dictionary_entries(
+        &self,
+        project_id: &str,
+    ) -> Result<(), WriterError> {
+        self.update_preferences(|preferences| {
+            if let Some(project) = preferences.projects.get_mut(project_id) {
+                let typed_entities = project
+                    .dictionary_person_entries
+                    .iter()
+                    .chain(project.dictionary_place_entries.iter())
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>();
+                project
+                    .dictionary_entries
+                    .retain(|entry| !typed_entities.contains(entry));
+                project.dictionary_person_entries.clear();
+                project.dictionary_place_entries.clear();
+            }
+        })
     }
 
     pub fn add_entity_name(
@@ -842,6 +957,17 @@ impl CorrectionStore {
                 relation.kind, relation.canonical, relation.name
             ));
         }
+        if let Some(entries) = self
+            .inner
+            .named_entries
+            .lock()
+            .map_err(|_| WriterError::Other("correction named entry cache lock poisoned".into()))?
+            .get(project_id)
+        {
+            for entry in entries {
+                parts.push(format!("named-entry:{}", entry.canonical_name));
+            }
+        }
         for rule in disabled_rules {
             parts.push(format!("disabled-rule:{rule}"));
         }
@@ -860,6 +986,14 @@ impl CorrectionStore {
         let project_generation = self.activate_project_cache(project_id)?;
         let dictionary_entries = self.dictionary_entry_records(project_id)?;
         let entity_names = self.entity_name_records(project_id)?;
+        let named_entries = self
+            .inner
+            .named_entries
+            .lock()
+            .map_err(|_| WriterError::Other("correction named entry cache lock poisoned".into()))?
+            .get(project_id)
+            .cloned()
+            .unwrap_or_default();
         let data_root = self
             .inner
             .path
@@ -900,6 +1034,7 @@ impl CorrectionStore {
                     if cached.files == files
                         && cached.dictionary_entries == dictionary_entries
                         && cached.entity_names == entity_names
+                        && cached.named_entries == named_entries
                     {
                         return Ok((cached.version, Arc::clone(&cached.lexicon)));
                     }
@@ -933,6 +1068,24 @@ impl CorrectionStore {
                 CorrectionDictionaryEntryKindDto::Term => {
                     lexicon.insert_protected_word(entry.text.clone());
                 }
+            }
+        }
+        for entry in &named_entries {
+            if !dictionary_entries.iter().any(|dictionary_entry| {
+                dictionary_entry.text == entry.canonical_name
+                    && matches!(
+                        dictionary_entry.kind,
+                        CorrectionDictionaryEntryKindDto::Person
+                            | CorrectionDictionaryEntryKindDto::Place
+                    )
+            }) {
+                // The proof engine currently classifies proper entities as
+                // person/place names. The annotation model intentionally has
+                // no such tag; Person is only its internal protected-name lane.
+                lexicon.insert_work_entity(
+                    entry.canonical_name.clone(),
+                    sujian_proof::ProperNameKind::Person,
+                );
             }
         }
         for relation in &entity_names {
@@ -970,6 +1123,7 @@ impl CorrectionStore {
             if cached.files == files
                 && cached.dictionary_entries == dictionary_entries
                 && cached.entity_names == entity_names
+                && cached.named_entries == named_entries
             {
                 return Ok((cached.version, Arc::clone(&cached.lexicon)));
             }
@@ -988,6 +1142,7 @@ impl CorrectionStore {
                 files,
                 dictionary_entries,
                 entity_names,
+                named_entries,
                 version,
                 lexicon: Arc::clone(&lexicon),
             },

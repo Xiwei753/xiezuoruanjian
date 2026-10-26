@@ -33,6 +33,8 @@ import { AppContinuationService } from '../../../platform/continuity/AppContinua
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { StarMapScene } from './StarMapScene'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
+import { AnnotationObjectRefDto } from '../../../corebridge/dto/AnnotationDtos'
+import { AnnotationPanel } from '../../editor/annotation/AnnotationPanel'
 
 /**
  * 工具栏每次点击的**倍数**（#821）。
@@ -68,6 +70,9 @@ export struct StarMapScreen {
   @State graph: StarMapGraph | null = null
   @State isLoading: boolean = true
   @State errorMessage: string = ''
+  @State private annotationProjectId: string = ''
+  @State private annotationPanelOpen: boolean = false
+  @State private annotationTarget: AnnotationObjectRefDto | null = null
 
   // 全局视角相机（#818）：整棵递归星图只有这一台相机。
   // 工具栏 +/- 和画布双指捏合改的都是它；节点、子星图、嵌套子星图都只是相机里的内容，
@@ -326,6 +331,10 @@ export struct StarMapScreen {
 
       if (result.success && result.data) {
         this.graph = result.data
+        const metaResult = await this.bridge.getStarMap(requestedStarmapId)
+        if (generation === this.graphLoadGeneration && metaResult.success && metaResult.data !== undefined) {
+          this.annotationProjectId = metaResult.data.projectId ?? ''
+        }
         this.updateContinuationSnapshot()
         // Issue #982：子 Scene 完成布局后会回调 onSceneGeometryReady；这里先排一次，
         // 视口尺寸或图数据哪个先到位都能触发同一条幂等定位。
@@ -345,6 +354,20 @@ export struct StarMapScreen {
         this.isLoading = false
       }
     }
+  }
+
+  private openSelectedStarMapAnnotation(): void {
+    const selection = this.selectionState.getSelection()
+    if (this.annotationProjectId.length === 0 || selection.itemId.length === 0 ||
+        (selection.kind !== 'node' && selection.kind !== 'embed')) {
+      return
+    }
+    this.annotationTarget = {
+      kind: selection.kind === 'node' ? 'starMapNode' : 'starMapEmbed',
+      projectId: this.annotationProjectId,
+      objectId: selection.itemId
+    }
+    this.annotationPanelOpen = true
   }
 
   /**
@@ -673,6 +696,26 @@ export struct StarMapScreen {
         onMoveNode: (_path: StarMapPathSegment[], _starmapId: string, _nodeId: string, _pos: StarMapPoint) => {},
         onMoveEmbed: (_path: StarMapPathSegment[], _starmapId: string, _embedId: string, _pos: StarMapPoint) => {},
       })
+
+      if (this.annotationProjectId.length > 0 && this.selectionState.hasSelection() &&
+          (this.selectionState.selectedKind === 'node' || this.selectionState.selectedKind === 'embed')) {
+        Column({ space: 8 }) {
+          Button(this.annotationPanelOpen ? '收起标注' : '标注选中项')
+            .onClick(() => {
+              if (this.annotationPanelOpen) this.annotationPanelOpen = false
+              else this.openSelectedStarMapAnnotation()
+            })
+          if (this.annotationPanelOpen && this.annotationTarget !== null) {
+            AnnotationPanel({
+              projectId: this.annotationProjectId,
+              target: this.annotationTarget
+            })
+              .width(340)
+          }
+        }
+        .align(Alignment.TopStart)
+        .padding(12)
+      }
 
       // 缩放控件：独立锚定右下角
       this.ZoomControls()

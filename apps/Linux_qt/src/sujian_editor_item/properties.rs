@@ -163,6 +163,14 @@ impl SujianEditorItem {
         self.pipeline.has_selection()
     }
 
+    pub(crate) fn selection_start_byte(&self) -> u32 {
+        self.pipeline.selection_range().0 as u32
+    }
+
+    pub(crate) fn selection_end_byte(&self) -> u32 {
+        self.pipeline.selection_range().1 as u32
+    }
+
     pub(crate) fn editor_enabled(&self) -> bool {
         self.current_editor_enabled
     }

@@ -2,6 +2,37 @@ use crate::error::Result;
 use crate::search::types::*;
 
 impl super::WriterCore {
+    pub fn annotation_search_object_ids_for_project(&self, project_id: &str) -> Vec<String> {
+        let service = self
+            .search_service
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        service.annotation_object_ids_for_project(project_id)
+    }
+
+    pub fn auto_link_matches(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        text_revision: u64,
+        text: &str,
+        entries: &[crate::annotations::NamedEntry],
+        manual_ranges: &[(usize, usize)],
+    ) -> crate::annotations::AutoMatchSnapshot {
+        let mut matcher = self
+            .annotation_matcher
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        matcher.update_chapter(
+            project_id,
+            chapter_id,
+            text_revision,
+            text,
+            entries,
+            manual_ranges,
+        )
+    }
+
     pub fn global_search(
         &self,
         query: &str,

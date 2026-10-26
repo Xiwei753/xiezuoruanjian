@@ -809,7 +809,121 @@ Kirigami.ApplicationWindow {
         return false
     }
 
+    function navigateAnnotationTarget(target) {
+        if (!target) return false
+        if (target.externalUrl) {
+            Qt.openUrlExternally(String(target.externalUrl))
+            return true
+        }
+        var ref = target.objectRef || target
+        if (!ref || !ref.kind) return false
+        var projectId = String(ref.projectId || "")
+        if (ref.kind === "starMap") {
+            appController.openRootStarmap(String(ref.objectId), String(ref.objectId))
+            return true
+        }
+        if (ref.kind === "starMapNode" || ref.kind === "starMapEmbed") {
+            if (!projectId || !ref.objectId) return false
+            var owner = window.findAnnotationStarmapOwner(
+                projectId, String(ref.kind), String(ref.objectId))
+            if (!owner) return false
+            var mapTarget = { starmapId: owner.starmapId }
+            if (ref.kind === "starMapNode") mapTarget.nodeId = String(ref.objectId)
+            else mapTarget.embedId = String(ref.objectId)
+            window.pendingAnnotationMapTarget = {
+                starmapId: owner.starmapId,
+                target: mapTarget
+            }
+            appController.openRootStarmap(owner.starmapId, owner.title)
+            if (window.applyPendingAnnotationMapTarget()) return true
+            return true
+        }
+        if (ref.kind === "project" || ref.kind === "volume" || ref.kind === "chapter") {
+            if (!projectId) return false
+            appController.openWriting(projectId, window.projectTitleById(projectId) || qsTr("作品"))
+            if (ref.kind === "chapter") {
+                var chapter = null
+                var tree = window.appState && window.appState.tree ? window.appState.tree : []
+                for (var i = 0; i < tree.length; ++i) {
+                    var node = tree[i]
+                    if (node && node.type === "chapter" && String(node.id) === String(ref.objectId)
+                            && String(node.projectId) === projectId) {
+                        chapter = node
+                        break
+                    }
+                }
+                if (!chapter || !chapter.volumeId) return false
+                window.pendingAnnotationChapter = {
+                    projectId: projectId,
+                    volumeId: String(chapter.volumeId),
+                    chapterId: String(chapter.id),
+                    title: String(chapter.title || "")
+                }
+                window.applyPendingAnnotationChapter()
+            }
+            return true
+        }
+        return false
+    }
+
+    // Annotation refs keep stable node/embed ids. Resolve the containing map
+    // from the current project graph before opening the existing StarMap route.
+    function findAnnotationStarmapOwner(projectId, kind, objectId) {
+        if (!starmapBackend || !projectId || !objectId) return null
+        var mapsEnvelope = appController.parseJson(
+            starmapBackend.list_starmaps_for_project_json(String(projectId)),
+            qsTr("无法查找星图目标"))
+        var maps = mapsEnvelope && mapsEnvelope.success === true
+            ? (mapsEnvelope.data || []) : []
+        for (var i = 0; i < maps.length; ++i) {
+            var meta = maps[i]
+            if (!meta || !meta.starmapId) continue
+            var graphEnvelope = appController.parseJson(
+                starmapBackend.get_starmap_graph_json(String(meta.starmapId)),
+                qsTr("无法读取星图目标"))
+            var graphData = graphEnvelope && graphEnvelope.success === true
+                ? graphEnvelope.data : null
+            var graph = graphData && graphData.graph ? graphData.graph : null
+            if (!graph) continue
+            var objects = kind === "starMapNode" ? (graph.nodes || []) : (graph.embeds || [])
+            for (var j = 0; j < objects.length; ++j) {
+                var candidateId = kind === "starMapNode"
+                    ? objects[j].id : objects[j].instanceId
+                if (String(candidateId || "") === String(objectId)) {
+                    return {
+                        starmapId: String(meta.starmapId),
+                        title: String(meta.title || qsTr("星图"))
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    function applyPendingAnnotationMapTarget() {
+        var pending = window.pendingAnnotationMapTarget
+        var workspace = starmapWorkspaceLoader.item
+        if (!pending || !workspace || !workspace.revealSearchTarget
+                || String(workspace.starmapId || "") !== pending.starmapId)
+            return false
+        if (!workspace.revealSearchTarget(pending.target)) return false
+        window.pendingAnnotationMapTarget = null
+        return true
+    }
+
+    function applyPendingAnnotationChapter() {
+        var pending = window.pendingAnnotationChapter
+        var workspace = writingWorkspaceLoader.item
+        if (!pending || !workspace || workspace.workspaceProjectId !== pending.projectId) return false
+        workspace.openChapter(pending.projectId, pending.volumeId, pending.chapterId, pending.title)
+        window.pendingAnnotationChapter = null
+        return true
+    }
+
     function handleStarmapSceneReady(starmapId, routeKey) {
+        var annotationPending = window.pendingAnnotationMapTarget
+        if (annotationPending && annotationPending.starmapId === String(starmapId || "")
+                && window.applyPendingAnnotationMapTarget()) return
         var pending = window.pendingStarmapSearchTarget
         if (!pending || !pending.target) return
         if (pending.serial !== window.searchNavigationSerial) return
@@ -969,6 +1083,8 @@ Kirigami.ApplicationWindow {
     property var globalSearchContext: ({})
     property var pendingSearchReveal: null
     property var pendingStarmapSearchTarget: null
+    property var pendingAnnotationMapTarget: null
+    property var pendingAnnotationChapter: null
     property int searchNavigationSerial: 0
 
     SystemPalette {
@@ -1400,6 +1516,10 @@ Kirigami.ApplicationWindow {
             sourceComponent: StarMapWorkspace {
                 dt: designTokens
                 starmapBackendRef: starmapBackend
+                annotationBackendRef: annotationBackend
+                searchBackendRef: searchBackend
+                aiAvailable: settingsBackend.ai_available
+                aiEnabled: settingsBackend.ai_enabled
                 starmapId: appController.starmapId
                 starmapTitle: appController.starmapTitle
                 appState: window.appState
@@ -1419,6 +1539,9 @@ Kirigami.ApplicationWindow {
                 }
                 onSceneGeometryReady: function(starmapId, routeKey) {
                     window.handleStarmapSceneReady(starmapId, routeKey)
+                }
+                onAnnotationTargetRequested: function(target) {
+                    window.navigateAnnotationTarget(target)
                 }
             }
         }
@@ -1508,6 +1631,10 @@ Kirigami.ApplicationWindow {
                 // EditorController.logRenderColorProbe 能读取 runtime state。
                 themeController: themeController
                 appState: window.appState
+                annotationBackendRef: annotationBackend
+                searchBackendRef: searchBackend
+                aiAvailable: settingsBackend.ai_available
+                aiEnabled: settingsBackend.ai_enabled
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId
                 // Issue #757 评论 5818193510 第 5 点：传入 syncBackend 给 WritingWorkspace，
@@ -1518,12 +1645,22 @@ Kirigami.ApplicationWindow {
                 onProjectReady: {
                     window.applyPendingConflictPath()
                     window.handleWritingWorkspaceReady()
+                    window.applyPendingAnnotationChapter()
                 }
                 onChapterLoaded: function(projectId, volumeId, chapterId) {
                     window.handleSearchChapterLoaded(projectId, volumeId, chapterId)
+                    if (window.pendingAnnotationChapter
+                            && window.pendingAnnotationChapter.chapterId === chapterId)
+                        window.pendingAnnotationChapter = null
                 }
                 onChapterLoadFailed: function(projectId, volumeId, chapterId, reason) {
                     window.handleSearchChapterLoadFailed(projectId, volumeId, chapterId, reason)
+                    if (window.pendingAnnotationChapter
+                            && window.pendingAnnotationChapter.chapterId === chapterId)
+                        window.pendingAnnotationChapter = null
+                }
+                onAnnotationTargetRequested: function(target) {
+                    window.navigateAnnotationTarget(target)
                 }
 
                 onBackToProjects: {

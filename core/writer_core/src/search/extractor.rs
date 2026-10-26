@@ -1,6 +1,9 @@
 use std::path::Path;
 
 use super::types::*;
+use crate::annotations::{
+    AnnotationStore, LinkTarget, NamedEntry, ObjectLink, ObjectRef, Tag, TagBinding,
+};
 use crate::error::Result;
 
 // TODO(#597): 既有代码可读性技术债，待后续重构拆分
@@ -36,6 +39,7 @@ pub fn extract_chapter_entries(
                 .and_then(|s| serde_json::from_str(&s).ok());
         let proj_title = proj.as_ref().map(|p| p.title.as_str()).unwrap_or("");
         entries.push(extract_project_title_entry(&pid, proj_title));
+        entries.extend(extract_annotation_entries(&project_path, &pid)?);
 
         let volumes_dir = project_path.join("volumes");
         if !volumes_dir.exists() {
@@ -83,6 +87,303 @@ pub fn extract_chapter_entries(
     }
 
     Ok(entries)
+}
+
+/// Build the searchable projection of one project's active annotation records.
+/// Tags, bindings, entries, and links each receive stable IDs derived from their
+/// persisted record IDs so incremental updates can replace them independently.
+pub fn extract_annotation_entries(
+    project_root: &Path,
+    project_id: &str,
+) -> Result<Vec<IndexEntry>> {
+    let store = AnnotationStore::new(project_root, project_id);
+    let tags = store.list_tags()?;
+    let tags_by_id: std::collections::HashMap<_, _> =
+        tags.iter().map(|tag| (tag.tag_id.as_str(), tag)).collect();
+    let mut entries = Vec::new();
+
+    for tag in &tags {
+        entries.push(extract_annotation_tag_entry(tag));
+    }
+    for binding in store.list_bindings()? {
+        if let Some(tag) = tags_by_id.get(binding.tag_id.as_str()) {
+            entries.push(extract_annotation_binding_entry(&store, tag, &binding)?);
+        }
+    }
+    for named_entry in store.list_named_entries()? {
+        entries.push(extract_annotation_named_entry(&named_entry));
+    }
+    for link in store.list_links()? {
+        entries.push(extract_annotation_link_entry(&store, &link)?);
+    }
+
+    Ok(entries)
+}
+
+/// Produce incremental search updates for the active projection and remove
+/// tombstoned or no-longer-derived objects from the existing project index.
+pub fn annotation_search_updates_for_project(
+    project_root: &Path,
+    project_id: &str,
+    existing_ids: &[String],
+) -> Result<Vec<SearchIndexUpdate>> {
+    let store = AnnotationStore::new(project_root, project_id);
+    let mut updates = Vec::new();
+    let mut active_ids = std::collections::HashSet::new();
+
+    for entry in extract_annotation_entries(project_root, project_id)? {
+        active_ids.insert(entry.object_id.clone());
+        updates.push(SearchIndexUpdate {
+            action: SearchIndexAction::Upsert,
+            object_id: entry.object_id,
+            scope: entry.scope,
+            title: entry.title,
+            body: entry.body,
+            target: Some(entry.target),
+        });
+    }
+
+    let mut tombstones = Vec::new();
+    tombstones.extend(
+        store
+            .list_tag_records()?
+            .into_iter()
+            .filter(|record| record.project_id == project_id && record.deleted_at_ms.is_some())
+            .map(|record| {
+                (
+                    format!("annotation:{project_id}:tag:{}", record.tag_id),
+                    SearchScope::AnnotationTag,
+                )
+            }),
+    );
+    tombstones.extend(
+        store
+            .list_binding_records()?
+            .into_iter()
+            .filter(|record| record.project_id == project_id && record.deleted_at_ms.is_some())
+            .map(|record| {
+                (
+                    format!("annotation:{project_id}:binding:{}", record.binding_id),
+                    SearchScope::AnnotationTag,
+                )
+            }),
+    );
+    tombstones.extend(
+        store
+            .list_named_entry_records()?
+            .into_iter()
+            .filter(|record| record.project_id == project_id && record.deleted_at_ms.is_some())
+            .map(|record| {
+                (
+                    format!("annotation:{project_id}:entry:{}", record.entry_id),
+                    SearchScope::AnnotationEntry,
+                )
+            }),
+    );
+    tombstones.extend(
+        store
+            .list_link_records()?
+            .into_iter()
+            .filter(|record| {
+                record.source.project_id() == project_id && record.deleted_at_ms.is_some()
+            })
+            .map(|record| {
+                (
+                    format!("annotation:{project_id}:link:{}", record.link_id),
+                    SearchScope::AnnotationLink,
+                )
+            }),
+    );
+
+    let mut delete_ids = std::collections::HashSet::new();
+    for (object_id, scope) in tombstones {
+        if delete_ids.insert(object_id.clone()) {
+            updates.push(annotation_delete_update(&object_id, scope, project_id));
+        }
+    }
+    for object_id in existing_ids {
+        if !object_id.starts_with(&format!("annotation:{project_id}:"))
+            || active_ids.contains(object_id)
+            || !delete_ids.insert(object_id.clone())
+        {
+            continue;
+        }
+        updates.push(annotation_delete_update(
+            object_id,
+            annotation_scope_for_id(object_id),
+            project_id,
+        ));
+    }
+
+    Ok(updates)
+}
+
+fn annotation_delete_update(
+    object_id: &str,
+    scope: SearchScope,
+    project_id: &str,
+) -> SearchIndexUpdate {
+    SearchIndexUpdate {
+        action: SearchIndexAction::Delete,
+        object_id: object_id.to_string(),
+        scope,
+        title: String::new(),
+        body: String::new(),
+        target: Some(SearchTarget {
+            project_id: Some(project_id.to_string()),
+            ..Default::default()
+        }),
+    }
+}
+
+fn annotation_scope_for_id(object_id: &str) -> SearchScope {
+    if object_id.contains(":entry:") {
+        SearchScope::AnnotationEntry
+    } else if object_id.contains(":link:") {
+        SearchScope::AnnotationLink
+    } else {
+        SearchScope::AnnotationTag
+    }
+}
+
+fn extract_annotation_tag_entry(tag: &Tag) -> IndexEntry {
+    IndexEntry {
+        object_id: format!("annotation:{}:tag:{}", tag.project_id, tag.tag_id),
+        scope: SearchScope::AnnotationTag,
+        title: tag.name.clone(),
+        body: tag.name.clone(),
+        target: annotation_project_target(&tag.project_id),
+    }
+}
+
+fn extract_annotation_binding_entry(
+    store: &AnnotationStore,
+    tag: &Tag,
+    binding: &TagBinding,
+) -> Result<IndexEntry> {
+    let target = search_target_for_object_ref(store, &binding.target)?;
+    let body = format!(
+        "{} {}",
+        object_ref_kind_label(&binding.target),
+        binding.target.object_id()
+    );
+    Ok(IndexEntry {
+        object_id: format!(
+            "annotation:{}:binding:{}",
+            binding.project_id, binding.binding_id
+        ),
+        scope: SearchScope::AnnotationTag,
+        title: tag.name.clone(),
+        body,
+        target,
+    })
+}
+
+fn extract_annotation_named_entry(entry: &NamedEntry) -> IndexEntry {
+    let mut body = Vec::new();
+    body.extend(entry.aliases.iter().map(String::as_str));
+    body.extend(entry.confirmed_misspellings.iter().map(String::as_str));
+    IndexEntry {
+        object_id: format!("annotation:{}:entry:{}", entry.project_id, entry.entry_id),
+        scope: SearchScope::AnnotationEntry,
+        title: entry.canonical_name.clone(),
+        body: body.join(" "),
+        target: annotation_project_target(&entry.project_id),
+    }
+}
+
+fn extract_annotation_link_entry(store: &AnnotationStore, link: &ObjectLink) -> Result<IndexEntry> {
+    let source = object_ref_search_text(store, &link.source)?;
+    let (title, target_text) = match &link.target {
+        LinkTarget::ExternalUrl(url) => (url.clone(), url.clone()),
+        LinkTarget::Object(target) => {
+            let text = object_ref_search_text(store, target)?;
+            (text.clone(), text)
+        }
+    };
+    let title = if title.is_empty() {
+        format!("链接 {}", link.link_id)
+    } else {
+        title
+    };
+    Ok(IndexEntry {
+        object_id: format!(
+            "annotation:{}:link:{}",
+            link.source.project_id(),
+            link.link_id
+        ),
+        scope: SearchScope::AnnotationLink,
+        title,
+        body: format!("{} {}", source, target_text).trim().to_string(),
+        target: search_target_for_object_ref(store, &link.source)?,
+    })
+}
+
+fn annotation_project_target(project_id: &str) -> SearchTarget {
+    SearchTarget {
+        project_id: Some(project_id.to_string()),
+        ..Default::default()
+    }
+}
+
+fn search_target_for_object_ref(
+    store: &AnnotationStore,
+    object_ref: &ObjectRef,
+) -> Result<SearchTarget> {
+    let mut target = annotation_project_target(object_ref.project_id());
+    match object_ref {
+        ObjectRef::Project { .. } => {}
+        ObjectRef::Volume { object_id, .. } => target.volume_id = Some(object_id.clone()),
+        ObjectRef::Chapter { object_id, .. } => target.chapter_id = Some(object_id.clone()),
+        ObjectRef::TextAnchor { object_id, .. } => {
+            if let Some(anchor) = store.get_text_anchor(object_id)? {
+                target.chapter_id = Some(anchor.chapter_id);
+            }
+        }
+        ObjectRef::StarMap { object_id, .. } => target.starmap_id = Some(object_id.clone()),
+        ObjectRef::StarMapNode { object_id, .. } => target.node_id = Some(object_id.clone()),
+        ObjectRef::StarMapEmbed { object_id, .. } => target.embed_id = Some(object_id.clone()),
+        ObjectRef::NamedEntry { .. } => {}
+    }
+    Ok(target)
+}
+
+fn object_ref_search_text(store: &AnnotationStore, object_ref: &ObjectRef) -> Result<String> {
+    let kind = object_ref_kind_label(object_ref);
+    match object_ref {
+        ObjectRef::NamedEntry { object_id, .. } => Ok(store
+            .get_named_entry(object_id)?
+            .filter(|entry| entry.deleted_at_ms.is_none())
+            .map(|entry| {
+                let mut names = vec![entry.canonical_name];
+                names.extend(entry.aliases);
+                format!("{} {}", kind, names.join(" "))
+            })
+            .unwrap_or_else(|| format!("{} {}", kind, object_ref.object_id()))),
+        ObjectRef::TextAnchor { object_id, .. } => Ok(store
+            .get_text_anchor(object_id)?
+            .map(|anchor| {
+                format!(
+                    "{} {} {}-{}",
+                    kind, anchor.chapter_id, anchor.start_byte, anchor.end_byte
+                )
+            })
+            .unwrap_or_else(|| format!("{} {}", kind, object_ref.object_id()))),
+        _ => Ok(format!("{} {}", kind, object_ref.object_id())),
+    }
+}
+
+fn object_ref_kind_label(object_ref: &ObjectRef) -> &'static str {
+    match object_ref {
+        ObjectRef::Project { .. } => "作品",
+        ObjectRef::Volume { .. } => "卷",
+        ObjectRef::Chapter { .. } => "章节",
+        ObjectRef::TextAnchor { .. } => "正文选区",
+        ObjectRef::StarMap { .. } => "星图",
+        ObjectRef::StarMapNode { .. } => "星图节点",
+        ObjectRef::StarMapEmbed { .. } => "星图嵌入",
+        ObjectRef::NamedEntry { .. } => "专有名词",
+    }
 }
 
 #[allow(

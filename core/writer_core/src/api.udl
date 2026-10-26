@@ -1539,6 +1539,51 @@ interface WriterAppService {
     boolean remove_correction_entity_name(string project_id, string canonical, string name);
     EditorEditResultDto apply_correction(u64 session_id, string project_id, string chapter_id, u64 text_revision, u32 start_byte, u32 end_byte, string original, string replacement);
 
+    // Unified annotations: flat tags, stable object references, named entries,
+    // text anchors, and manual links are owned by Core and synced per record.
+    [Throws=WriterError]
+    sequence<AnnotationTagDto> list_tags(string project_id);
+    [Throws=WriterError]
+    AnnotationTagDto create_tag(string project_id, string name, string? color);
+    [Throws=WriterError]
+    AnnotationTagDto rename_tag(string project_id, string tag_id, string name);
+    [Throws=WriterError]
+    boolean delete_tag(string project_id, string tag_id);
+    [Throws=WriterError]
+    boolean merge_tags(string project_id, string source_tag_id, string target_tag_id);
+    [Throws=WriterError]
+    sequence<AnnotationTagBindingDto> set_tag_bindings(string project_id, AnnotationObjectRefDto target, sequence<string> tag_ids);
+    [Throws=WriterError]
+    sequence<AnnotationTagBindingDto> list_bindings_for_target(string project_id, AnnotationObjectRefDto target);
+    [Throws=WriterError]
+    AnnotationTextAnchorDto create_text_anchor(string project_id, string chapter_id, u32 start_byte, u32 end_byte, u64 text_revision, string text);
+    [Throws=WriterError]
+    AnnotationNamedEntryDto create_named_entry(string project_id, string canonical_name, sequence<string> aliases, sequence<string> confirmed_misspellings, boolean auto_link_enabled);
+    [Throws=WriterError]
+    sequence<AnnotationNamedEntryDto> list_named_entries(string project_id);
+    [Throws=WriterError]
+    AnnotationNamedEntryDto update_named_entry(string project_id, string entry_id, string canonical_name, sequence<string> aliases, sequence<string> confirmed_misspellings, boolean auto_link_enabled);
+    [Throws=WriterError]
+    boolean delete_named_entry(string project_id, string entry_id);
+    [Throws=WriterError]
+    AnnotationObjectLinkDto create_link(AnnotationObjectRefDto source, AnnotationTargetDto target);
+    [Throws=WriterError]
+    AnnotationObjectLinkDto update_link(string project_id, string link_id, AnnotationObjectRefDto source, AnnotationTargetDto target);
+    [Throws=WriterError]
+    boolean delete_link(string project_id, string link_id);
+    [Throws=WriterError]
+    AnnotationLinkResolutionDto resolve_link(AnnotationTargetDto target);
+    [Throws=WriterError]
+    sequence<AnnotationObjectLinkDto> find_backlinks(AnnotationTargetDto target);
+    [Throws=WriterError]
+    sequence<AnnotationObjectLinkDto> list_links_for_source(AnnotationObjectRefDto source);
+    [Throws=WriterError]
+    ChapterAnnotationsDto get_chapter_annotations(string project_id, string chapter_id, u64 text_revision, string text);
+    [Throws=WriterError]
+    boolean apply_annotation_edits(string project_id, string chapter_id, u64 base_revision, u64 text_revision, EditorTransactionCauseDto cause, sequence<AnnotationEditDto> edits);
+    [Throws=WriterError]
+    sequence<AnnotationAutoMatchDto> find_auto_name_links(string project_id, string chapter_id, u64 text_revision, string text);
+
     // ── Search Index ──
 
     [Throws=WriterError]
@@ -1589,6 +1634,28 @@ enum CorrectionDictionaryEntryKindDto {
 enum CorrectionEntityNameKindDto {
     "Alias",
     "Misspelling",
+};
+
+enum AnnotationObjectKindDto {
+    "Project",
+    "Volume",
+    "Chapter",
+    "TextAnchor",
+    "StarMap",
+    "StarMapNode",
+    "StarMapEmbed",
+    "NamedEntry",
+};
+
+enum AnnotationLinkOriginDto {
+    "Manual",
+};
+
+enum AnnotationLinkResolutionStateDto {
+    "Exists",
+    "Missing",
+    "ProjectNotDownloaded",
+    "ExternalUrl",
 };
 
 // 平台端按编辑事务上报写作统计的入参。
@@ -1781,6 +1848,96 @@ dictionary CorrectionEntityNameDto {
     string canonical;
     string name;
     CorrectionEntityNameKindDto kind;
+};
+
+dictionary AnnotationObjectRefDto {
+    AnnotationObjectKindDto kind;
+    string project_id;
+    string object_id;
+};
+
+dictionary AnnotationTargetDto {
+    AnnotationObjectRefDto? object_ref;
+    string? external_url;
+};
+
+dictionary AnnotationTagDto {
+    string tag_id;
+    string project_id;
+    string name;
+    string? color;
+    i64 updated_at_ms;
+    i64? deleted_at_ms;
+};
+
+dictionary AnnotationTagBindingDto {
+    string binding_id;
+    string project_id;
+    string tag_id;
+    AnnotationObjectRefDto target;
+    i64 updated_at_ms;
+    i64? deleted_at_ms;
+};
+
+dictionary AnnotationTextAnchorDto {
+    string anchor_id;
+    string project_id;
+    string chapter_id;
+    u32 start_byte;
+    u32 end_byte;
+    u64 text_revision;
+    i64 updated_at_ms;
+    i64? deleted_at_ms;
+};
+
+dictionary AnnotationNamedEntryDto {
+    string entry_id;
+    string project_id;
+    string canonical_name;
+    sequence<string> aliases;
+    sequence<string> confirmed_misspellings;
+    boolean auto_link_enabled;
+    i64 updated_at_ms;
+    i64? deleted_at_ms;
+};
+
+dictionary AnnotationObjectLinkDto {
+    string link_id;
+    AnnotationObjectRefDto source;
+    AnnotationTargetDto target;
+    AnnotationLinkOriginDto origin;
+    i64 updated_at_ms;
+    i64? deleted_at_ms;
+};
+
+dictionary AnnotationLinkResolutionDto {
+    AnnotationLinkResolutionStateDto state;
+    AnnotationTargetDto target;
+};
+
+dictionary AnnotationAutoMatchDto {
+    u32 start_byte;
+    u32 end_byte;
+    string matched_text;
+    sequence<string> entry_ids;
+    sequence<AnnotationObjectRefDto> candidates;
+};
+
+dictionary ChapterAnnotationsDto {
+    string project_id;
+    string chapter_id;
+    u64 text_revision;
+    sequence<AnnotationTextAnchorDto> anchors;
+    sequence<AnnotationTagBindingDto> bindings;
+    sequence<AnnotationObjectLinkDto> links;
+    sequence<AnnotationAutoMatchDto> auto_matches;
+};
+
+dictionary AnnotationEditDto {
+    u32 old_start_byte;
+    u32 old_end_byte;
+    u32 new_start_byte;
+    u32 new_end_byte;
 };
 
 dictionary CorrectionChapterSnapshotDto {

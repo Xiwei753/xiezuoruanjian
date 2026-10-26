@@ -73,6 +73,7 @@ pub struct WriterCore {
     /// 进程级 override 唯一存在于 `api::service::WriterCoreApi.secrets_override`，
     /// 避免两份状态漂移。
     pub(crate) search_service: std::sync::Mutex<SearchIndexService>,
+    pub(crate) annotation_matcher: std::sync::Mutex<crate::annotations::AutoLinkMatcher>,
     pub(crate) starmap_stores: std::sync::Mutex<HashMap<String, StarMapStore>>,
     /// 持久化路径依赖索引：删除保护与关联查询的统一查询入口。
     ///
@@ -125,6 +126,7 @@ impl WriterCore {
             sync_transport: None,
             secure_storage: None,
             search_service: std::sync::Mutex::new(SearchIndexService::new()),
+            annotation_matcher: std::sync::Mutex::new(crate::annotations::AutoLinkMatcher::new()),
             starmap_stores: std::sync::Mutex::new(HashMap::new()),
             path_dependency_index: std::sync::Mutex::new(None),
             preferred_device_id: std::sync::Mutex::new(None),

@@ -3,6 +3,8 @@ package com.xiwei.sujian.feature.editor.ui
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.contextmenu.builder.item
+import androidx.compose.foundation.text.contextmenu.modifier.appendTextContextMenuComponents
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.runtime.Composable
@@ -14,10 +16,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange as ComposeTextRange
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextDecoration
+import com.xiwei.sujian.R
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.layout.EditorViewportState
 import com.xiwei.sujian.feature.editor.projection.TextRange
@@ -41,8 +46,16 @@ data class WritingEditorContentParams(
     val searchHighlightColor: Color,
     val correctionHighlights: List<TextRange>,
     val correctionHighlightColor: Color,
+    val tagHighlights: List<ComposeTextRange>,
+    val linkHighlights: List<ComposeTextRange>,
+    val onAnnotationSelectionAction: ((AnnotationSelectionAction, ComposeTextRange, String) -> Unit)?,
     val modifier: Modifier,
 )
+
+enum class AnnotationSelectionAction {
+    TagsAndLinks,
+    RegisterName,
+}
 
 /**
  * #641 评论1 第3节：活动/非活动 target 渲染模式。
@@ -137,6 +150,9 @@ fun WritingEditorSurface(
         androidx.compose.material3.MaterialTheme.colorScheme.secondaryContainer,
     correctionHighlights: List<TextRange> = emptyList(),
     correctionHighlightColor: Color = androidx.compose.material3.MaterialTheme.colorScheme.error,
+    tagHighlights: List<ComposeTextRange> = emptyList(),
+    linkHighlights: List<ComposeTextRange> = emptyList(),
+    onAnnotationSelectionAction: ((AnnotationSelectionAction, ComposeTextRange, String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     WritingEditorContent(
@@ -154,6 +170,9 @@ fun WritingEditorSurface(
                 searchHighlightColor = searchHighlightColor,
                 correctionHighlights = correctionHighlights,
                 correctionHighlightColor = correctionHighlightColor,
+                tagHighlights = tagHighlights,
+                linkHighlights = linkHighlights,
+                onAnnotationSelectionAction = onAnnotationSelectionAction,
                 modifier = modifier,
             ),
     )
@@ -177,6 +196,9 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val searchHighlightColor = params.searchHighlightColor
     val correctionHighlights = params.correctionHighlights
     val correctionHighlightColor = params.correctionHighlightColor
+    val tagHighlights = params.tagHighlights
+    val linkHighlights = params.linkHighlights
+    val onAnnotationSelectionAction = params.onAnnotationSelectionAction
     val modifier = params.modifier
     val scope = rememberCoroutineScope()
 
@@ -203,6 +225,9 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             }
         }
 
+    val annotationMenuLabel = stringResource(R.string.annotation_context_tags_links)
+    val registerNameMenuLabel = stringResource(R.string.annotation_context_register_name)
+
     // #698 评论 5698296237 / 5697612595 / 5699401353：统一 draw 层 —
     // EditorTextFieldDrawLayer 真正包住 BasicTextField（content lambda），
     // 用 drawWithContent 对 hiddenRanges 做 ClipOp.Difference 裁切后画动画字和 caret。
@@ -213,6 +238,10 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
         scrollY = viewportState.scrollState.value,
         textColor = textColor,
         cursorColor = cursorColor,
+        tagRanges = tagHighlights,
+        linkRanges = linkHighlights,
+        tagFillColor = androidx.compose.material3.MaterialTheme.colorScheme.tertiaryContainer,
+        linkColor = androidx.compose.material3.MaterialTheme.colorScheme.primary,
         modifier = modifier.fillMaxSize(),
     ) {
         BasicTextField(
@@ -220,7 +249,34 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .testTag(com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds.EditorContent),
+                    .testTag(com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds.EditorContent)
+                    .appendTextContextMenuComponents {
+                        if (!bridge.state.selection.collapsed && onAnnotationSelectionAction != null) {
+                            separator()
+                            item(key = AnnotationTagsLinksMenuKey, label = annotationMenuLabel) {
+                                val selection = bridge.state.selection
+                                val range =
+                                    ComposeTextRange(
+                                        minOf(selection.start, selection.end),
+                                        maxOf(selection.start, selection.end),
+                                    )
+                                val selectedText = bridge.state.text.substring(range.start, range.end)
+                                onAnnotationSelectionAction(AnnotationSelectionAction.TagsAndLinks, range, selectedText)
+                                close()
+                            }
+                            item(key = AnnotationRegisterNameMenuKey, label = registerNameMenuLabel) {
+                                val selection = bridge.state.selection
+                                val range =
+                                    ComposeTextRange(
+                                        minOf(selection.start, selection.end),
+                                        maxOf(selection.start, selection.end),
+                                    )
+                                val selectedText = bridge.state.text.substring(range.start, range.end)
+                                onAnnotationSelectionAction(AnnotationSelectionAction.RegisterName, range, selectedText)
+                                close()
+                            }
+                        }
+                    },
             readOnly = !inputEnabled,
             lineLimits = TextFieldLineLimits.MultiLine(),
             scrollState = viewportState.scrollState,
@@ -245,6 +301,10 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
         )
     }
 }
+
+private data object AnnotationTagsLinksMenuKey
+
+private data object AnnotationRegisterNameMenuKey
 
 /**
  * 处理 TextLayoutResult — 提取以降低认知复杂度。

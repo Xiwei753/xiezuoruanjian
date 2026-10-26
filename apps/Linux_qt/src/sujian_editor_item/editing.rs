@@ -977,6 +977,14 @@ impl SujianEditorItem {
         self.request_static_repaint();
     }
 
+    /// A context-menu click keeps an existing text selection byte-for-byte intact.
+    /// With no active selection, retain the prior desktop behavior and move the caret.
+    pub(crate) fn prepare_context_menu_at(&mut self, x: f32, y: f32) {
+        if !self.pipeline.has_selection() {
+            self.click_at(x, y, false);
+        }
+    }
+
     pub(crate) fn drag_select_at(&mut self, x: f32, y: f32) {
         // Issue #705 评论 5718299909: 先 hit_test，确认 head/affinity 真的改变
         // 再 bump epoch。拖到当前 cursor 同一位置不应 bump。

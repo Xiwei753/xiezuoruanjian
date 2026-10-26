@@ -22,6 +22,7 @@ Item {
     required property var dt
     required property var settingsBackendRef
     required property var editorControllerRef
+    property var searchBackendRef: null
 
     property alias editorItem: sujianEditor
     readonly property bool editorEnabled: sujianEditor.editor_enabled
@@ -279,6 +280,7 @@ Item {
         onExplicit_clear_requested: root.explicitClearRequested()
 
         onContext_menu_requested: function(cx, cy) {
+            sujianEditor.prepare_context_menu_at(cx, cy)
             // 将局部坐标映射为全局坐标后弹出菜单
             var globalPos = sujianEditor.mapToGlobal(cx, cy)
             editorContextMenu.popup(globalPos.x, globalPos.y)
@@ -287,7 +289,7 @@ Item {
         TapHandler {
             acceptedButtons: Qt.RightButton
             onTapped: function(eventPoint) {
-                sujianEditor.click_at(eventPoint.position.x, eventPoint.position.y, false)
+                sujianEditor.prepare_context_menu_at(eventPoint.position.x, eventPoint.position.y)
                 sujianEditor.record_pointer_activity(
                     "context_menu",
                     eventPoint.position.x,
@@ -352,6 +354,9 @@ Item {
     EditorContextMenu {
         id: editorContextMenu
         editorItem: sujianEditor
+        editorControllerRef: root.editorControllerRef
+        annotationBackendRef: root.editorControllerRef.annotationBackendRef
+        searchBackendRef: root.searchBackendRef
         dt: root.dt
     }
 

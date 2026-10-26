@@ -1,4 +1,5 @@
 package com.xiwei.sujian.core.interop.app
+import com.xiwei.sujian.core.interop.annotations.AnnotationBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.project.ChapterBridge
 import com.xiwei.sujian.core.interop.project.ProjectBridge
@@ -50,6 +51,7 @@ open class AppServiceBridge(
     open val syncBridge: SyncBridge by lazy { SyncBridge(holder) }
     val statsBridge: StatsBridge by lazy { StatsBridge(holder) }
     val starMapBridge: StarMapBridge by lazy { StarMapBridge(holder) }
+    val annotationBridge: AnnotationBridge by lazy { AnnotationBridge(holder) }
     val secureStorageWarning: String? get() = holder.secureStorageWarning
 
     companion object {

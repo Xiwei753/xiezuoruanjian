@@ -1,3 +1,4 @@
+mod annotation_ops;
 mod correction_ops;
 mod project_ops;
 mod search_ops;

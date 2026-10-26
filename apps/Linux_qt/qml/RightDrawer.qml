@@ -30,6 +30,13 @@ Rectangle {
     property var editorBackendRef: null
     // 校对面板只消费 WritingWorkspace 中同一个 EditorController。
     property var editorControllerRef: null
+    property var annotationBackendRef: null
+    property var searchBackendRef: null
+    property bool aiAvailable: false
+    property bool aiEnabled: false
+    property var pendingLinkSource: null
+    property string pendingLinkId: ""
+    property var pendingLinkTarget: null
     // Issue #835：星图预览所需后端与全局状态，由 WritingWorkspace 透传，
     // 再下发给 StarMapPreviewPage，不在 RightDrawer 内部自造星图数据。
     property var starmapBackendRef: null
@@ -64,13 +71,16 @@ Rectangle {
     property string embeddedStarmapTitle: ""
 
     signal closeRequested()
+    signal toolRequested(string toolKey)
     // 冲突入口被请求时发出（hasConflicts 从 false 变 true），外部据此选中冲突工具。
     signal conflictToolRequested()
+    signal annotationTargetActivated(var target)
 
     // Issue #825：工具 key → 标题 + 是否可用。
     // 可用性与入口都由 rail 表达，这里只用于标题文字，不再自行决定显隐。
     function toolTitle(toolKey) {
         if (toolKey === "starmap") return qsTr("星图")
+        if (toolKey === "tags") return qsTr("标签")
         if (toolKey === "ai") return qsTr("AI")
         if (toolKey === "correction") return qsTr("校对")
         if (toolKey === "conflict") return qsTr("冲突")
@@ -167,6 +177,7 @@ Rectangle {
                 // starmapBackendRef 给 Workspace/Canvas，子星图沿现有焦点链工作。
                 // 返回时清空 embeddedStarmapId 退回根星图列表，route 始终是 writing。
                 StarMapWorkspace {
+                    id: embeddedStarmapWorkspace
                     visible: root.selectedTool === "starmap" && root.embeddedStarmapId !== ""
                     anchors.fill: parent
                     dt: root.dt
@@ -174,6 +185,12 @@ Rectangle {
                     starmapId: root.embeddedStarmapId
                     starmapTitle: root.embeddedStarmapTitle
                     appState: root.appState
+                    annotationBackendRef: root.annotationBackendRef
+                    searchBackendRef: root.searchBackendRef
+                    aiAvailable: root.aiAvailable
+                    aiEnabled: root.aiEnabled
+                    embedded: true
+                    onAnnotationToolRequested: function(toolKey) { root.toolRequested(toolKey) }
 
                     onBackClicked: {
                         root.embeddedStarmapId = ""
@@ -185,6 +202,49 @@ Rectangle {
                     visible: root.selectedTool === "correction"
                     anchors.fill: parent
                     editorControllerRef: root.editorControllerRef
+                }
+
+                TagsPanel {
+                    id: writingTagsPanel
+                    visible: root.selectedTool === "tags"
+                    anchors.fill: parent
+                    dt: root.dt
+                    annotationBackendRef: root.annotationBackendRef
+                    searchBackendRef: root.searchBackendRef
+                    chapterId: root.editorControllerRef ? root.editorControllerRef.chapterId : ""
+                    projectId: root.embeddedStarmapId !== ""
+                        ? embeddedStarmapWorkspace.annotationProjectId
+                        : (root.editorControllerRef ? root.editorControllerRef.projectId : root.workspaceProjectId)
+                    targetRef: root.embeddedStarmapId !== ""
+                        ? embeddedStarmapWorkspace.annotationTargetRef
+                        : (projectId && chapterId
+                            ? { kind: "chapter", projectId: projectId, objectId: chapterId } : null)
+                    targetLabel: root.embeddedStarmapId !== ""
+                        ? (writingTagsPanel.targetRef && writingTagsPanel.targetRef.kind === "starMapNode"
+                            ? qsTr("星图节点")
+                            : writingTagsPanel.targetRef && writingTagsPanel.targetRef.kind === "starMapEmbed"
+                                ? qsTr("子星图") : root.embeddedStarmapTitle)
+                        : (root.editorControllerRef ? root.editorControllerRef.chapterTitle : "")
+                    allowSelectionAnchor: root.embeddedStarmapId === ""
+                    textRevision: root.editorControllerRef && root.editorControllerRef.targetEditorItem
+                        ? Number(root.editorControllerRef.targetEditorItem.text_revision) : 0
+                    chapterText: root.editorControllerRef && root.editorControllerRef.getEditorPlainText
+                        ? root.editorControllerRef.getEditorPlainText() : ""
+                    selectionStartByte: root.editorControllerRef && root.editorControllerRef.targetEditorItem
+                        ? Number(root.editorControllerRef.targetEditorItem.selection_start_byte) : -1
+                    selectionEndByte: root.editorControllerRef && root.editorControllerRef.targetEditorItem
+                        ? Number(root.editorControllerRef.targetEditorItem.selection_end_byte) : -1
+                    onTargetActivated: function(target) { root.annotationTargetActivated(target) }
+                    onLinkPickerRequested: function(sourceRef, link) {
+                        root.pendingLinkSource = sourceRef
+                        root.pendingLinkId = link ? String(link.linkId || "") : ""
+                        root.pendingLinkTarget = link ? link.target : null
+                        annotationLinkPickerPopup.open()
+                    }
+                    onChanged: {
+                        if (root.editorControllerRef && root.editorControllerRef.refreshChapterAnnotations)
+                            root.editorControllerRef.refreshChapterAnnotations()
+                    }
                 }
 
                 // 统计 — 复用现有 StatsPreviewPage
@@ -215,6 +275,43 @@ Rectangle {
                         root.conflictToolRequested()
                     }
                 }
+            }
+        }
+    }
+
+    Popup {
+        id: annotationLinkPickerPopup
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(620, Overlay.overlay ? Overlay.overlay.width - 48 : 620)
+        height: Math.min(560, Overlay.overlay ? Overlay.overlay.height - 48 : 560)
+        padding: 0
+        contentItem: AnnotationLinkPicker {
+            dt: root.dt
+            searchBackendRef: root.searchBackendRef
+            projectId: root.pendingLinkSource ? String(root.pendingLinkSource.projectId || "")
+                : (root.editorControllerRef ? root.editorControllerRef.projectId : root.workspaceProjectId)
+            sourceRef: root.pendingLinkSource
+            initialTargets: root.pendingLinkTarget ? [root.pendingLinkTarget] : []
+            onCancelled: annotationLinkPickerPopup.close()
+            onTargetsSelected: function(targets) {
+                if (!root.annotationBackendRef || !root.pendingLinkSource) return
+                for (var i = 0; i < targets.length; ++i) {
+                    if (i === 0 && root.pendingLinkId) {
+                        root.annotationBackendRef.update_link_json(
+                            String(root.pendingLinkSource.projectId), root.pendingLinkId,
+                            JSON.stringify(root.pendingLinkSource), JSON.stringify(targets[i]))
+                    } else {
+                        root.annotationBackendRef.create_link_json(
+                            JSON.stringify(root.pendingLinkSource), JSON.stringify(targets[i]))
+                    }
+                }
+                root.pendingLinkId = ""
+                root.pendingLinkTarget = null
+                annotationLinkPickerPopup.close()
+                Qt.callLater(writingTagsPanel.refresh)
+                if (root.editorControllerRef && root.editorControllerRef.refreshChapterAnnotations)
+                    root.editorControllerRef.refreshChapterAnnotations()
             }
         }
     }

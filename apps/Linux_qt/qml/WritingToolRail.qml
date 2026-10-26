@@ -34,8 +34,7 @@ Rectangle {
     // 由 WritingWorkspace 绑定到 rightPaneCollapsed 的反值，与工具选择解耦。
     property bool toolPaneOpen: false
 
-    // Issue #829 / #950：右侧工具 rail 的空间骨架按手稿固定。
-    // 星图、校对的真实内容在 RightDrawer 里接，不再改 rail 结构。
+    // Issue #1003：统一标签作为常驻写作入口，星图 / AI / 校对入口保持不变。
     // 冲突属于运行时异常入口，只在确实存在冲突时追加到下面。
     // Issue #835 评论 6020221770: AI 暂无 Linux_Qt 真实会话面板，rail 位置保留
     // 但 enabled:false 禁用，降 opacity，不发 toolRequested，不伪造 AI 页面。
@@ -43,6 +42,7 @@ Rectangle {
     readonly property var tools: {
         var list = [
             { key: "starmap", label: qsTr("星图"), icon: "view-grid", enabled: true },
+            { key: "tags", label: qsTr("标签"), icon: "tag", enabled: true },
             { key: "ai", label: qsTr("AI"), enabled: false },
             { key: "correction", label: qsTr("校对"), icon: "tools-check-spelling", enabled: true }
         ]

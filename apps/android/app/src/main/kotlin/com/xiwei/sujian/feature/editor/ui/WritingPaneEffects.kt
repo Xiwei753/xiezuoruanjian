@@ -12,6 +12,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
+import com.xiwei.sujian.feature.editor.presentation.AnnotationCoordinator
 import com.xiwei.sujian.feature.editor.presentation.EditorSettingsState
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
 import com.xiwei.sujian.feature.editor.presentation.applyExternalContentToUi
@@ -511,8 +512,11 @@ internal fun CollectEditFactEvents(
     targetId: String,
     visualState: ComposeEditorVisualState,
     coordinator: EditorWindowHost,
+    annotationCoordinator: AnnotationCoordinator,
+    projectId: String,
+    chapterId: String,
 ) {
-    LaunchedEffect(viewModel, targetId) {
+    LaunchedEffect(viewModel, targetId, annotationCoordinator, projectId, chapterId) {
         viewModel.editFactEvents
             .collect { event ->
                 if (event.targetId != targetId) return@collect
@@ -520,6 +524,16 @@ internal fun CollectEditFactEvents(
                 // 不再用 isLocalInputCause() 跳过本地输入 cause，统一送进 ComposeVisualFrameCoordinator。
                 val editFact = mapCoreEditFactToEditorEditFact(event)
                 visualState.onEditFact(editFact)
+                annotationCoordinator.onEditFact(
+                    projectId = projectId,
+                    chapterId = chapterId,
+                    baseRevision = event.baseRevision,
+                    newRevision = event.newRevision,
+                    cause = event.cause,
+                    oldText = event.oldText,
+                    newText = event.newText,
+                    offsetMap = event.offsetMap,
+                )
             }
     }
 }

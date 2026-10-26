@@ -590,6 +590,10 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/GlobalTopActions.qml");
     println!("cargo:rerun-if-changed=qml/GlobalSearchOverlay.qml");
     println!("cargo:rerun-if-changed=qml/EditorContextMenu.qml");
+    println!("cargo:rerun-if-changed=qml/TagsPanel.qml");
+    println!("cargo:rerun-if-changed=qml/AnnotationLinkPicker.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapToolRail.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapToolDrawer.qml");
     // Issue #904：编辑区视口层组件，WritingWorkspace 直接实例化，纳入重编译列表。
     println!("cargo:rerun-if-changed=qml/EditorViewport.qml");
     println!("cargo:rerun-if-changed=qml/RightDrawer.qml");

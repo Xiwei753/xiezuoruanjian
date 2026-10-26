@@ -14,6 +14,9 @@ pub enum SearchScope {
     StarmapHyperlink,
     StarmapLink,
     StarmapEmbed,
+    AnnotationTag,
+    AnnotationEntry,
+    AnnotationLink,
     Setting,
     All,
 }
@@ -32,6 +35,9 @@ impl SearchScope {
             SearchScope::StarmapHyperlink,
             SearchScope::StarmapLink,
             SearchScope::StarmapEmbed,
+            SearchScope::AnnotationTag,
+            SearchScope::AnnotationEntry,
+            SearchScope::AnnotationLink,
             SearchScope::Setting,
         ]
     }

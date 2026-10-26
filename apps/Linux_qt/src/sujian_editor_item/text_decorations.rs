@@ -13,7 +13,8 @@ pub(crate) enum TextDecorationKind {
     SpellErrorWave,
     SpellWarningWave,
     Highlight,
-    Underline,
+    ManualLinkUnderline,
+    AutoNameUnderline,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -31,6 +32,9 @@ pub(crate) struct DecorationParagraphGeometry {
     pub error_vertices: Vec<f64>,
     /// 文档坐标中的橙色波浪线三角形顶点，按 x,y 顺序排列。
     pub warning_vertices: Vec<f64>,
+    pub highlight_vertices: Vec<f64>,
+    pub manual_link_vertices: Vec<f64>,
+    pub auto_name_vertices: Vec<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -54,6 +58,9 @@ struct DecorationLineGeometry {
     paragraph_id: u64,
     error_vertices: Arc<[f64]>,
     warning_vertices: Arc<[f64]>,
+    highlight_vertices: Arc<[f64]>,
+    manual_link_vertices: Arc<[f64]>,
+    auto_name_vertices: Arc<[f64]>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -111,6 +118,9 @@ pub(crate) fn parse_spans(
         let kind = match span.severity.as_str() {
             "error" => TextDecorationKind::SpellErrorWave,
             "warning" => TextDecorationKind::SpellWarningWave,
+            "highlight" => TextDecorationKind::Highlight,
+            "manualLink" => TextDecorationKind::ManualLinkUnderline,
+            "autoName" => TextDecorationKind::AutoNameUnderline,
             _ => continue,
         };
         spans.push(TextDecorationSpan {
@@ -242,11 +252,24 @@ pub(crate) fn build_geometry(
         paragraph
             .warning_vertices
             .extend_from_slice(&line.warning_vertices);
+        paragraph
+            .highlight_vertices
+            .extend_from_slice(&line.highlight_vertices);
+        paragraph
+            .manual_link_vertices
+            .extend_from_slice(&line.manual_link_vertices);
+        paragraph
+            .auto_name_vertices
+            .extend_from_slice(&line.auto_name_vertices);
     }
     geometry.paragraphs = by_paragraph
         .into_values()
         .filter(|paragraph| {
-            !paragraph.error_vertices.is_empty() || !paragraph.warning_vertices.is_empty()
+            !paragraph.error_vertices.is_empty()
+                || !paragraph.warning_vertices.is_empty()
+                || !paragraph.highlight_vertices.is_empty()
+                || !paragraph.manual_link_vertices.is_empty()
+                || !paragraph.auto_name_vertices.is_empty()
         })
         .collect();
     geometry.signature = geometry_signature(&geometry);
@@ -264,6 +287,9 @@ fn build_line_geometry(
 ) -> DecorationLineGeometry {
     let mut error_vertices = Vec::new();
     let mut warning_vertices = Vec::new();
+    let mut highlight_vertices = Vec::new();
+    let mut manual_link_vertices = Vec::new();
+    let mut auto_name_vertices = Vec::new();
     if line.has_qt_layout && line.byte_start < line.byte_end {
         if let Some(canonical_line) = canonical_line_for(canonical, line) {
             let first_span = prefix_max_end.partition_point(|&max_end| max_end <= line.byte_start);
@@ -297,20 +323,44 @@ fn build_line_geometry(
                 }
                 let baseline =
                     text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
-                let available_descent = (line.y + line.height - baseline).max(0.0);
-                if available_descent <= 0.35 / dpr {
-                    continue;
-                }
-                let stroke = (0.9 / dpr).min(available_descent * 0.5);
-                let amplitude = (0.8 / dpr).min((available_descent - stroke).max(0.0) * 0.5);
-                let center_y = baseline + (available_descent - stroke) * 0.5;
-                let vertices = match span.kind {
-                    TextDecorationKind::SpellErrorWave => &mut error_vertices,
-                    TextDecorationKind::SpellWarningWave => &mut warning_vertices,
-                    TextDecorationKind::Highlight | TextDecorationKind::Underline => continue,
-                };
                 for (left, right) in intervals {
-                    append_wave_strip(vertices, left, right, center_y, amplitude, stroke, dpr);
+                    match span.kind {
+                        TextDecorationKind::SpellErrorWave
+                        | TextDecorationKind::SpellWarningWave => {
+                            let available_descent = (line.y + line.height - baseline).max(0.0);
+                            if available_descent <= 0.35 / dpr {
+                                continue;
+                            }
+                            let stroke = (0.9 / dpr).min(available_descent * 0.5);
+                            let amplitude = (0.8 / dpr)
+                                .min((available_descent - stroke).max(0.0) * 0.5);
+                            let center_y = baseline + (available_descent - stroke) * 0.5;
+                            let vertices = if span.kind == TextDecorationKind::SpellErrorWave {
+                                &mut error_vertices
+                            } else {
+                                &mut warning_vertices
+                            };
+                            append_wave_strip(vertices, left, right, center_y, amplitude, stroke, dpr);
+                        }
+                        TextDecorationKind::Highlight => append_rect(
+                            &mut highlight_vertices,
+                            left,
+                            line.y + 1.0 / dpr,
+                            right,
+                            (line.y + line.height - 1.0 / dpr).max(line.y + 1.0 / dpr),
+                        ),
+                        TextDecorationKind::ManualLinkUnderline
+                        | TextDecorationKind::AutoNameUnderline => {
+                            let vertices = if span.kind == TextDecorationKind::ManualLinkUnderline {
+                                &mut manual_link_vertices
+                            } else {
+                                &mut auto_name_vertices
+                            };
+                            let thickness = 1.0 / dpr;
+                            let y = (baseline + 1.0 / dpr).min(line.y + line.height - thickness);
+                            append_rect(vertices, left, y, right, y + thickness);
+                        }
+                    }
                 }
             }
         }
@@ -321,6 +371,9 @@ fn build_line_geometry(
         paragraph_id: line.paragraph_id.as_u64(),
         error_vertices: Arc::from(error_vertices.into_boxed_slice()),
         warning_vertices: Arc::from(warning_vertices.into_boxed_slice()),
+        highlight_vertices: Arc::from(highlight_vertices.into_boxed_slice()),
+        manual_link_vertices: Arc::from(manual_link_vertices.into_boxed_slice()),
+        auto_name_vertices: Arc::from(auto_name_vertices.into_boxed_slice()),
     }
 }
 
@@ -450,6 +503,16 @@ fn geometry_signature(geometry: &TextDecorationGeometry) -> u64 {
         for vertex in &paragraph.warning_vertices {
             vertex.to_bits().hash(&mut hasher);
         }
+        for vertices in [
+            &paragraph.highlight_vertices,
+            &paragraph.manual_link_vertices,
+            &paragraph.auto_name_vertices,
+        ] {
+            vertices.len().hash(&mut hasher);
+            for vertex in vertices {
+                vertex.to_bits().hash(&mut hasher);
+            }
+        }
     }
     hasher.finish()
 }
@@ -484,6 +547,18 @@ fn append_wave_strip(
         x = next_x;
         y = next_y;
     }
+}
+
+fn append_rect(vertices: &mut Vec<f64>, left: f64, top: f64, right: f64, bottom: f64) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    push_vertex(vertices, left, top);
+    push_vertex(vertices, right, top);
+    push_vertex(vertices, left, bottom);
+    push_vertex(vertices, left, bottom);
+    push_vertex(vertices, right, top);
+    push_vertex(vertices, right, bottom);
 }
 
 fn push_vertex(vertices: &mut Vec<f64>, x: f64, y: f64) {

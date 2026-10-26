@@ -20,7 +20,7 @@ import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
 import { WritingSessionTracker } from '../stats/WritingSessionTracker'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
-import { EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
+import { EditorEditResult, EditorSessionSnapshot } from '../../../corebridge/dto/EditorDtos'
 import { EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
@@ -65,6 +65,11 @@ import { CorrectionIgnoreScope } from '../correction/ICorrectionBridge'
 import { NativeCorrectionBridge } from '../correction/NativeCorrectionBridge'
 import { CorrectionSuggestionsPanel } from '../correction/CorrectionSuggestionsPanel'
 import { CorrectionResourceImporter } from '../correction/CorrectionResourceImporter'
+import { NativeAnnotationBridge } from '../../../corebridge/native/NativeAnnotationBridge'
+import {
+  AnnotationObjectRefDto, AnnotationRangeDto, AnnotationTextAnchorDto, ChapterAnnotationsDto
+} from '../../../corebridge/dto/AnnotationDtos'
+import { AnnotationPanel } from '../annotation/AnnotationPanel'
 
 // Issue #920 A：写作页不再向 Core 要七角色 bounds，布局由 ArkUI 自适应自行决定。
 // Issue #932 / #972 复核：宽窄形态统一由 PrimaryTabShell 传入的 WideLayoutMode 判定，
@@ -134,6 +139,11 @@ export struct WritingScreen {
   @State correctionDictionaryResourceStatus: string = ''
   @State correctionModelResourceStatus: string = ''
   @State correctionResourcesBusy: boolean = false
+  @State annotationPanelOpen: boolean = false
+  @State annotationTarget: AnnotationObjectRefDto | null = null
+  @State annotationRanges: AnnotationRangeDto[] = []
+  @State annotationErrorMessage: string = ''
+  @State chapterAnnotations: ChapterAnnotationsDto | null = null
   @State wordCount: number = 0
   @State isLoading: boolean = true
   @State isSaving: boolean = false
@@ -249,6 +259,7 @@ export struct WritingScreen {
   private editorCoordinator: EditorSessionCoordinator = new EditorSessionCoordinator(new NativeEditorSessionBridge())
   private correctionCoordinator: CorrectionCoordinator = new CorrectionCoordinator(
     new NativeCorrectionBridge(), this.editorCoordinator)
+  private annotationBridge: NativeAnnotationBridge = new NativeAnnotationBridge()
   private correctionModelCleanupQueue: Promise<void> = Promise.resolve()
   private correctionModelCleanupDeferred: boolean = false
   private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.editorCoordinator)
@@ -474,6 +485,12 @@ export struct WritingScreen {
         update.editResult,
         this.editorCoordinator.getSessionId() ?? 0
       )
+      if (update.editResult !== null && update.editResult.cause !== EditorTransactionCause.Load &&
+          update.editResult.displayPatches.length > 0) {
+        void this.persistAnnotationEditAndRefresh(snap, update.editResult)
+      } else if (update.editResult === null || update.editResult.cause === EditorTransactionCause.Load) {
+        void this.refreshChapterAnnotations(snap)
+      }
       this.updateContinuationState()
       // 内容变化时更新碰一碰/隔空传送 payload（Issue #629 评论 5 第 7 节）。
       this.updateSharePayload()
@@ -1573,10 +1590,43 @@ export struct WritingScreen {
             .width('100%')
             .constraintSize({ maxWidth: this.editorMaxWidthVp() })
 
+          Row() {
+            Button(this.annotationPanelOpen ? '收起标注' : '标注')
+              .height(34)
+              .onClick(() => {
+                if (this.annotationPanelOpen) {
+                  this.annotationPanelOpen = false
+                } else {
+                  void this.openAnnotationPanel()
+                }
+              })
+            if (this.annotationErrorMessage.length > 0) {
+              Text(this.annotationErrorMessage)
+                .fontSize(12)
+                .fontColor($r('sys.color.ohos_id_color_alert'))
+                .margin({ left: 8 })
+            }
+          }
+          .width('100%')
+
+          if (this.annotationPanelOpen && this.annotationTarget !== null) {
+            AnnotationPanel({
+              projectId: this.projectId,
+              target: this.annotationTarget,
+              onChanged: (): void => {
+                const snapshot = this.editorCoordinator.getSnapshot()
+                if (snapshot !== null) void this.refreshChapterAnnotations(snapshot)
+              }
+            })
+              .width('100%')
+              .constraintSize({ maxWidth: this.editorMaxWidthVp() })
+          }
+
           SujianEditor({
             scroller: this.editorScroller,
             presentationUpdate: this.presentationUpdate,
             correctionSuggestions: this.correctionSuggestions,
+            annotationRanges: this.annotationRanges,
             motionPolicy: this.motionPolicy,
             harmonyImeConnection: this.harmonyImeConnection,
             inputAdapter: this.inputAdapter,
@@ -1599,6 +1649,87 @@ export struct WritingScreen {
     .width('100%')
     .height('100%')
     .alignItems(HorizontalAlign.Center)
+  }
+
+  private async openAnnotationPanel(): Promise<void> {
+    const snapshot = this.editorCoordinator.getSnapshot()
+    if (snapshot === null || this.projectId.length === 0 || this.chapterId.length === 0) return
+    let target: AnnotationObjectRefDto = {
+      kind: 'chapter', projectId: this.projectId, objectId: this.chapterId
+    }
+    const startByte = Math.min(snapshot.selectionAnchor, snapshot.cursor)
+    const endByte = Math.max(snapshot.selectionAnchor, snapshot.cursor)
+    if (endByte > startByte) {
+      let annotations = this.chapterAnnotations
+      if (annotations === null || annotations.textRevision !== snapshot.revision) {
+        await this.refreshChapterAnnotations(snapshot)
+        annotations = this.chapterAnnotations
+      }
+      let anchor: AnnotationTextAnchorDto | undefined = annotations?.anchors.find((item: AnnotationTextAnchorDto) =>
+        item.deletedAtMs === null && item.startByte === startByte && item.endByte === endByte)
+      if (anchor === undefined) {
+        const created = await this.annotationBridge.createTextAnchor(
+          this.projectId, this.chapterId, startByte, endByte, snapshot.revision, snapshot.text)
+        if (!created.success || created.data === undefined) {
+          this.annotationErrorMessage = created.userMessage ?? '选区标注创建失败'
+          return
+        }
+        anchor = created.data
+        await this.refreshChapterAnnotations(snapshot)
+      }
+      target = { kind: 'textAnchor', projectId: this.projectId, objectId: anchor.anchorId }
+    }
+    this.annotationErrorMessage = ''
+    this.annotationTarget = target
+    this.annotationPanelOpen = true
+  }
+
+  private async persistAnnotationEditAndRefresh(
+    snapshot: EditorSessionSnapshot,
+    edit: EditorEditResult
+  ): Promise<void> {
+    const result = await this.annotationBridge.applyAnnotationEdits(
+      this.projectId, this.chapterId, edit.baseRevision, edit.newRevision, edit.cause,
+      edit.displayPatches.map((patch) => ({
+        oldStartByte: patch.replaceByteStart,
+        oldEndByte: patch.replaceByteEndExclusive,
+        newStartByte: patch.insertedByteStart,
+        newEndByte: patch.insertedByteEndExclusive
+      }))
+    )
+    if (!result.success) {
+      this.annotationErrorMessage = result.userMessage ?? '选区标注位置同步失败'
+    }
+    await this.refreshChapterAnnotations(this.editorCoordinator.getSnapshot() ?? snapshot)
+  }
+
+  private async refreshChapterAnnotations(snapshot: EditorSessionSnapshot): Promise<void> {
+    if (this.projectId.length === 0 || this.chapterId.length === 0 || snapshot.chapterId !== this.chapterId) return
+    const result = await this.annotationBridge.getChapterAnnotations(
+      this.projectId, this.chapterId, snapshot.revision, snapshot.text)
+    if (!result.success || result.data === undefined) {
+      this.annotationErrorMessage = result.userMessage ?? '标注加载失败'
+      return
+    }
+    const current = this.editorCoordinator.getSnapshot()
+    if (current === null || current.revision !== snapshot.revision || current.chapterId !== snapshot.chapterId) return
+    const annotations = result.data
+    this.chapterAnnotations = annotations
+    const ranges: AnnotationRangeDto[] = []
+    annotations.anchors.forEach((anchor: AnnotationTextAnchorDto): void => {
+      if (anchor.deletedAtMs === null && anchor.endByte > anchor.startByte) {
+        ranges.push({ startByte: anchor.startByte, endByte: anchor.endByte,
+          textRevision: annotations.textRevision, kind: 'anchor' })
+      }
+    })
+    annotations.autoMatches.forEach((match): void => {
+      if (match.endByte > match.startByte) {
+        ranges.push({ startByte: match.startByte, endByte: match.endByte,
+          textRevision: annotations.textRevision, kind: 'autoMatch' })
+      }
+    })
+    this.annotationRanges = ranges
+    this.annotationErrorMessage = ''
   }
 
   private async applyCorrection(suggestion: MappedCorrectionSuggestion): Promise<void> {

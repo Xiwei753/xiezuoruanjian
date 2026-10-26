@@ -26,10 +26,12 @@ QtObject {
     signal emptySaveBlocked(string message)
     signal chapterLoaded(string projectId, string volumeId, string chapterId)
     signal chapterLoadFailed(string projectId, string volumeId, string chapterId, string reason)
+    signal annotationTargetActivated(var target)
 
     // Target UI bindings
     property var targetEditorItem: null
     property var editorBackendRef: null
+    property var annotationBackendRef: null
     required property var dt
     // Issue #709 评论 issue-body-709: 主题诊断需要读取 ThemeController runtime state
     //（appearance_mode/is_dark/color_source），由 WritingWorkspace 注入。
@@ -63,6 +65,12 @@ QtObject {
     // Issue #943：proofreading results are revision-scoped annotations only.
     // The editor item remains the sole owner of editable text and transactions.
     property var correctionSuggestions: []
+    property var proofreadingDecorations: []
+    property var annotationDecorations: []
+    property string annotationError: ""
+    property string annotationTrackedProjectId: ""
+    property string annotationTrackedChapterId: ""
+    property double annotationTrackedRevision: -1
     property string correctionError: ""
     property string correctionStatus: ""
     property string correctionDictionaryError: ""
@@ -87,6 +95,13 @@ QtObject {
     // previous document cannot overwrite the current chapter's annotations.
     property var correctionRequestEpochs: ({})
     property var editorViewportRef: null
+
+    Timer {
+        id: annotationRefreshTimer
+        interval: 120
+        repeat: false
+        onTriggered: controller.refreshChapterAnnotations()
+    }
 
     // Issue #954：编辑事务先走轻量位置更新，模型扫描防抖到输入停顿后一次。
     property var correctionScanDebounceTimer: Timer {
@@ -200,6 +215,7 @@ QtObject {
         function onEditor_change_applied(cause, insertedChars, deletedChars,
                                          baseRevision, newRevision, editRangesJson) {
             controller.reconcileCorrectionEdit(baseRevision, newRevision, editRangesJson);
+            controller.applyAnnotationEditRanges(cause, baseRevision, newRevision, editRangesJson);
             if (controller.chapterId && controller.editorBackendRef) {
                 controller.editorBackendRef.record_editor_change_stats(
                     controller.projectId, controller.volumeId, controller.chapterId,
@@ -249,18 +265,123 @@ QtObject {
 
     function updateCorrectionSuggestions(suggestions) {
         correctionSuggestions = suggestions;
-        if (!targetEditorItem || !targetEditorItem.set_text_decorations_json) return;
-        var spans = [];
+        proofreadingDecorations = [];
         for (var i = 0; i < suggestions.length; i += 1) {
             var suggestion = suggestions[i];
-            spans.push({
+            proofreadingDecorations.push({
                 startByte: suggestion.startByte,
                 endByte: suggestion.endByte,
                 severity: suggestion.severity,
                 textRevision: suggestion.textRevision
             });
         }
+        applyTextDecorations();
+    }
+
+    function applyTextDecorations() {
+        if (!targetEditorItem || !targetEditorItem.set_text_decorations_json) return;
+        var spans = proofreadingDecorations.concat(annotationDecorations);
         targetEditorItem.set_text_decorations_json(JSON.stringify(spans));
+    }
+
+    function applyAnnotationEditRanges(cause, baseRevision, newRevision, rangesJson) {
+        if (!annotationBackendRef || !projectId || !chapterId || isLoadingChapter || isApplyingFormat)
+            return;
+        var edits = [];
+        try {
+            var ranges = JSON.parse(String(rangesJson || "[]"));
+            for (var i = 0; i < ranges.length; ++i) {
+                var range = ranges[i];
+                if (!range || range.length < 4) continue;
+                edits.push({
+                    oldStartByte: Number(range[0]), oldEndByte: Number(range[1]),
+                    newStartByte: Number(range[2]), newEndByte: Number(range[3])
+                });
+            }
+        } catch (e) {
+            annotationError = qsTr("正文标记更新范围无效")
+            annotationDecorations = []
+            applyTextDecorations()
+            return
+        }
+        var raw = annotationBackendRef.apply_annotation_edits_json(
+            projectId, chapterId, Number(baseRevision), Number(newRevision), String(cause), JSON.stringify(edits))
+        var envelope = null
+        try { envelope = JSON.parse(String(raw || "{}")) } catch (e) {}
+        if (!envelope || envelope.success !== true) {
+            annotationError = envelope && envelope.rawError ? String(envelope.rawError) : qsTr("正文标记未能更新")
+            annotationDecorations = []
+            applyTextDecorations()
+            return
+        }
+        annotationError = ""
+        annotationRefreshTimer.restart()
+    }
+
+    function refreshChapterAnnotations() {
+        if (!annotationBackendRef || !targetEditorItem || !projectId || !chapterId) {
+            annotationDecorations = []
+            annotationTrackedProjectId = ""
+            annotationTrackedChapterId = ""
+            annotationTrackedRevision = -1
+            applyTextDecorations()
+            return
+        }
+        var revision = Number(targetEditorItem.text_revision)
+        var text = getEditorPlainText()
+        var raw = annotationBackendRef.get_chapter_annotations_json(projectId, chapterId, revision, text)
+        var envelope = null
+        try { envelope = JSON.parse(String(raw || "{}")) } catch (e) {}
+        if (!envelope || envelope.success !== true || !envelope.data) {
+            annotationError = envelope && envelope.rawError ? String(envelope.rawError) : qsTr("正文标记暂不可用")
+            annotationDecorations = []
+            applyTextDecorations()
+            return
+        }
+        var snapshot = envelope.data
+        if (Number(snapshot.textRevision) !== revision
+                || revision !== Number(targetEditorItem.text_revision)) {
+            annotationRefreshTimer.restart()
+            return
+        }
+        var spans = []
+        var anchors = snapshot.anchors || []
+        var bindings = snapshot.bindings || []
+        for (var a = 0; a < anchors.length; ++a) {
+            var anchor = anchors[a]
+            for (var b = 0; b < bindings.length; ++b) {
+                var binding = bindings[b]
+                if (binding && binding.target && binding.target.kind === "textAnchor"
+                        && String(binding.target.objectId) === String(anchor.anchorId)
+                        && !binding.deletedAtMs) {
+                    spans.push({ startByte: anchor.startByte, endByte: anchor.endByte,
+                        severity: "highlight", textRevision: revision })
+                    break
+                }
+            }
+        }
+        var links = snapshot.links || []
+        for (var l = 0; l < links.length; ++l) {
+            var source = links[l] ? links[l].source : null
+            if (!source || source.kind !== "textAnchor") continue
+            for (var ai = 0; ai < anchors.length; ++ai) {
+                if (String(anchors[ai].anchorId) !== String(source.objectId)) continue
+                spans.push({ startByte: anchors[ai].startByte, endByte: anchors[ai].endByte,
+                    severity: "manualLink", textRevision: revision })
+                break
+            }
+        }
+        var autoMatches = snapshot.autoMatches || []
+        for (var m = 0; m < autoMatches.length; ++m) {
+            spans.push({ startByte: autoMatches[m].startByte, endByte: autoMatches[m].endByte,
+                severity: "autoName", textRevision: revision })
+        }
+        annotationDecorations = spans
+        annotationTrackedProjectId = projectId
+        annotationTrackedChapterId = chapterId
+        annotationTrackedRevision = revision
+        annotationError = ""
+        applyTextDecorations()
     }
 
     // Clears the visible marks without changing the document identity. In-flight

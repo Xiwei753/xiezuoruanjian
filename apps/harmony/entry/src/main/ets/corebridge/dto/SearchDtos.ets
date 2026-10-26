@@ -14,6 +14,9 @@ export type SearchScope =
   | 'starmapHyperlink'
   | 'starmapLink'
   | 'starmapEmbed'
+  | 'annotationTag'
+  | 'annotationEntry'
+  | 'annotationLink'
   | 'setting'
   | 'all'
 

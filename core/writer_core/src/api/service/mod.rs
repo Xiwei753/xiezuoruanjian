@@ -9,6 +9,7 @@ use crate::facade::WriterCore;
 
 pub type ApiResult<T> = Result<T, WriterError>;
 
+mod annotation_ops;
 mod correction_ops;
 
 pub struct WriterCoreApi {
@@ -25,6 +26,10 @@ pub struct WriterCoreApi {
     /// `sync_transport` / `secure_storage` 只存在于内部 `WriterCore` 中，
     /// 不再在 API 层保留副本——避免双份状态漂移。
     core_instance: std::sync::RwLock<WriterCore>,
+    /// Annotation range undo/redo snapshots follow the editor session's committed transactions.
+    annotation_edit_history: std::sync::Mutex<
+        std::collections::HashMap<(String, String), super::annotation_ops::AnnotationEditHistory>,
+    >,
     ///   本地 workspace Git 布局。
     ///
     /// 持有本地 `GitRepoLayout`，让写事务完成后能调
@@ -61,6 +66,7 @@ impl WriterCoreApi {
             projects_root: projects_root_buf,
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
+            annotation_edit_history: std::sync::Mutex::new(std::collections::HashMap::new()),
             workspace_git_layout: std::sync::RwLock::new(
                 crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root_buf),
             ),
@@ -244,6 +250,11 @@ impl WriterCoreApi {
     pub(crate) fn enqueue_search_index_update(&self, update: crate::search::SearchIndexUpdate) {
         let core = self.core_write();
         core.enqueue_search_index_update(update);
+    }
+
+    pub(crate) fn annotation_search_object_ids_for_project(&self, project_id: &str) -> Vec<String> {
+        self.core_read()
+            .annotation_search_object_ids_for_project(project_id)
     }
 
     pub(crate) fn remove_search_index_by_prefix(&self, prefix: &str) {

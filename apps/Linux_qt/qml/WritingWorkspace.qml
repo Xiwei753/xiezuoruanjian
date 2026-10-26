@@ -53,6 +53,10 @@ Rectangle {
     // Issue #835：星图后端透传给 RightDrawer（任务 4 已为 RightDrawer 加 starmapBackendRef 属性）。
     // 由 main.qml 注入，WritingWorkspace 只做透传，不在本地伪造星图业务状态。
     property var starmapBackendRef: null
+    property var annotationBackendRef: null
+    property var searchBackendRef: null
+    property bool aiAvailable: false
+    property bool aiEnabled: false
     // Issue #835 评论 6019713847: StarMapPage 需要真实 StarMapController 读根星图，
     // 由 main.qml 注入 globalStarMapController，透传给 RightDrawer.starMapControllerRef。
     property var starMapControllerRef: null
@@ -276,6 +280,7 @@ Rectangle {
     // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索入口
     signal requestSync()
     signal requestSearch()
+    signal annotationTargetRequested(var target)
     // Issue #770 评论 5842877986: 作品切到位后发出，main.qml 据此消费
     // pendingConflictPath（projectId 匹配才消费），不靠猜 Loader 是否已存在。
     signal projectReady()
@@ -392,6 +397,7 @@ Rectangle {
         targetEditorItem: editorViewport.editorItem
         editorViewportRef: editorViewport
         editorBackendRef: root.editorBackendRef
+        annotationBackendRef: root.annotationBackendRef
         dt: root.dt
         onChapterLoaded: function(projectId, volumeId, chapterId) {
             root.chapterLoaded(projectId, volumeId, chapterId)
@@ -399,6 +405,7 @@ Rectangle {
         onChapterLoadFailed: function(projectId, volumeId, chapterId, reason) {
             root.chapterLoadFailed(projectId, volumeId, chapterId, reason)
         }
+        onAnnotationTargetActivated: function(target) { root.annotationTargetRequested(target) }
         // Issue #709 评论 issue-body-709: 传入 themeController 使
         // logRenderColorProbe 能读取 runtime state。
         themeControllerRef: root.themeController
@@ -510,6 +517,7 @@ Rectangle {
             // 才宣布章节加载成功。搜索定位回调此时重入 requestSearchReveal(),
             // 章节 ID 已一致，只会选中/滚动，不会再次打开同一章。
             root.chapterLoaded(pId, vId, cId);
+            Qt.callLater(editorController.refreshChapterAnnotations)
         }
     }
 
@@ -547,6 +555,7 @@ Rectangle {
                     editorController.volumeId,
                     editorController.chapterId
                 );
+                Qt.callLater(editorController.refreshChapterAnnotations)
             }
         }
     }
@@ -728,6 +737,7 @@ Rectangle {
                             anchors.fill: paperBg
                             dt: root.dt
                             settingsBackendRef: root.settingsBackendRef
+                            searchBackendRef: root.searchBackendRef
                             editorControllerRef: editorController
                             onExplicitClearRequested: editorController.markPotentialExplicitClear()
                         }
@@ -789,10 +799,20 @@ Rectangle {
                 selectedTool: root.drawerTool
                 // Issue #835：透传星图后端与 appState 给 RightDrawer（任务 4 已加属性）。
                 starmapBackendRef: root.starmapBackendRef
+                annotationBackendRef: root.annotationBackendRef
+                searchBackendRef: root.searchBackendRef
+                aiAvailable: root.aiAvailable
+                aiEnabled: root.aiEnabled
                 // Issue #835 评论 6019713847: 透传真实 StarMapController 给 RightDrawer，
                 // StarMapPage 据此调 listStarmaps() 读真实根星图。
                 starMapControllerRef: root.starMapControllerRef
                 appState: root.appState
+                onAnnotationTargetActivated: function(target) {
+                    root.annotationTargetRequested(target)
+                }
+                onToolRequested: function(toolKey) {
+                    root.requestToolPaneOpen(toolKey, true)
+                }
                 // Issue #757 评论 5818193510 第 5 点：冲突侧栏绑定。
                 syncBackendRef: root.syncBackendRef
                 workspaceProjectId: root.workspaceProjectId

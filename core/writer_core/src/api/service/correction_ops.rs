@@ -24,6 +24,7 @@ impl WriterCoreApi {
                 "project id and chapter id must be non-empty".into(),
             ));
         }
+        self.ensure_named_entries_migrated(&project_id)?;
         CorrectionScanner::new(
             self.correction_store()?,
             project_id,
@@ -73,8 +74,31 @@ impl WriterCoreApi {
                 "project id must be non-empty".into(),
             ));
         }
-        self.correction_store()?
-            .add_dictionary_entry_with_kind(&project_id, &entry, kind)
+        if kind == crate::api::CorrectionDictionaryEntryKindDto::Term {
+            return self.correction_store()?.add_dictionary_entry_with_kind(
+                &project_id,
+                &entry,
+                kind,
+            );
+        }
+        let entry = entry.trim();
+        if !sujian_proof::is_valid_work_entity(entry) {
+            return Err(crate::api::WriterError::Other(
+                "人物/地点词条必须是完整的作品名称（不超过 64 个字符）".into(),
+            ));
+        }
+        self.ensure_named_entries_migrated(&project_id)?;
+        if self
+            .annotation_store(&project_id)?
+            .list_named_entries()
+            .map_err(crate::api::WriterError::from)?
+            .iter()
+            .any(|named| named.canonical_name == entry)
+        {
+            return Ok(false);
+        }
+        self.create_named_entry(project_id, entry.to_string(), Vec::new(), Vec::new(), false)
+            .map(|_| true)
     }
 
     pub fn get_correction_dictionary_entries(
@@ -86,8 +110,25 @@ impl WriterCoreApi {
                 "project id must be non-empty".into(),
             ));
         }
-        self.correction_store()?
-            .dictionary_entry_records(&project_id)
+        self.ensure_named_entries_migrated(&project_id)?;
+        let mut records = self
+            .correction_store()?
+            .dictionary_entry_records(&project_id)?
+            .into_iter()
+            .filter(|entry| entry.kind == crate::api::CorrectionDictionaryEntryKindDto::Term)
+            .collect::<Vec<_>>();
+        records.extend(
+            self.annotation_store(&project_id)?
+                .list_named_entries()
+                .map_err(crate::api::WriterError::from)?
+                .into_iter()
+                .map(|entry| crate::api::CorrectionDictionaryEntryDto {
+                    text: entry.canonical_name,
+                    kind: crate::api::CorrectionDictionaryEntryKindDto::Person,
+                }),
+        );
+        records.sort_by(|left, right| left.text.cmp(&right.text));
+        Ok(records)
     }
 
     pub fn add_correction_entity_name(
@@ -102,8 +143,78 @@ impl WriterCoreApi {
                 "project id must be non-empty".into(),
             ));
         }
-        self.correction_store()?
-            .add_entity_name(&project_id, &canonical, &name, kind)
+        self.ensure_named_entries_migrated(&project_id)?;
+        let canonical = canonical.trim();
+        let name = name.trim();
+        if !sujian_proof::is_valid_work_entity(canonical)
+            || !sujian_proof::is_valid_work_entity(name)
+            || canonical == name
+        {
+            return Err(crate::api::WriterError::Other(
+                "entity written form must be a complete name (at most 64 characters)".into(),
+            ));
+        }
+        let entries = self
+            .annotation_store(&project_id)?
+            .list_named_entries()
+            .map_err(crate::api::WriterError::from)?;
+        let Some(entry) = entries
+            .into_iter()
+            .find(|entry| entry.canonical_name == canonical)
+        else {
+            let mut aliases = Vec::new();
+            let mut misspellings = Vec::new();
+            match kind {
+                crate::api::CorrectionEntityNameKindDto::Alias => aliases.push(name.to_string()),
+                crate::api::CorrectionEntityNameKindDto::Misspelling => {
+                    misspellings.push(name.to_string())
+                }
+            }
+            self.create_named_entry(
+                project_id,
+                canonical.to_string(),
+                aliases,
+                misspellings,
+                false,
+            )?;
+            return Ok(true);
+        };
+        let duplicate = match kind {
+            crate::api::CorrectionEntityNameKindDto::Alias => {
+                entry.aliases.iter().any(|value| value == name)
+                    || entry
+                        .confirmed_misspellings
+                        .iter()
+                        .any(|value| value == name)
+            }
+            crate::api::CorrectionEntityNameKindDto::Misspelling => {
+                entry
+                    .confirmed_misspellings
+                    .iter()
+                    .any(|value| value == name)
+                    || entry.aliases.iter().any(|value| value == name)
+            }
+        };
+        if duplicate {
+            return Ok(false);
+        }
+        let mut aliases = entry.aliases;
+        let mut misspellings = entry.confirmed_misspellings;
+        match kind {
+            crate::api::CorrectionEntityNameKindDto::Alias => aliases.push(name.to_string()),
+            crate::api::CorrectionEntityNameKindDto::Misspelling => {
+                misspellings.push(name.to_string())
+            }
+        }
+        self.update_named_entry(
+            project_id,
+            entry.entry_id,
+            entry.canonical_name,
+            aliases,
+            misspellings,
+            entry.auto_link_enabled,
+        )?;
+        Ok(true)
     }
 
     pub fn get_correction_entity_names(
@@ -115,6 +226,7 @@ impl WriterCoreApi {
                 "project id must be non-empty".into(),
             ));
         }
+        self.ensure_named_entries_migrated(&project_id)?;
         self.correction_store()?.entity_name_records(&project_id)
     }
 
@@ -129,8 +241,44 @@ impl WriterCoreApi {
                 "project id must be non-empty".into(),
             ));
         }
-        self.correction_store()?
-            .remove_entity_name(&project_id, &canonical, &name)
+        self.ensure_named_entries_migrated(&project_id)?;
+        let canonical = canonical.trim();
+        let name = name.trim();
+        let entries = self
+            .annotation_store(&project_id)?
+            .list_named_entries()
+            .map_err(crate::api::WriterError::from)?;
+        let Some(entry) = entries
+            .into_iter()
+            .find(|entry| entry.canonical_name == canonical)
+        else {
+            return Ok(false);
+        };
+        let original_alias_count = entry.aliases.len();
+        let original_misspelling_count = entry.confirmed_misspellings.len();
+        let aliases = entry
+            .aliases
+            .into_iter()
+            .filter(|value| value != name)
+            .collect::<Vec<_>>();
+        let misspellings = entry
+            .confirmed_misspellings
+            .into_iter()
+            .filter(|value| value != name)
+            .collect::<Vec<_>>();
+        if aliases.len() == original_alias_count && misspellings.len() == original_misspelling_count
+        {
+            return Ok(false);
+        }
+        self.update_named_entry(
+            project_id,
+            entry.entry_id,
+            entry.canonical_name,
+            aliases,
+            misspellings,
+            entry.auto_link_enabled,
+        )?;
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]

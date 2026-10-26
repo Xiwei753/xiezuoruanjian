@@ -60,6 +60,10 @@ fun EditorTextFieldDrawLayer(
     scrollY: Int,
     textColor: Color,
     cursorColor: Color,
+    tagRanges: List<TextRange> = emptyList(),
+    linkRanges: List<TextRange> = emptyList(),
+    tagFillColor: Color = Color.Transparent,
+    linkColor: Color = textColor,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -100,6 +104,12 @@ fun EditorTextFieldDrawLayer(
                     // #708 评论 5723410606 第一节：真正的画面状态只在 drawWithContent 内取 —
                     // 动画每帧只重跑 Draw，不重新执行 BasicTextField 的 Composition/Layout。
                     val snapshot = visualState.drawSnapshot()
+                    drawAnnotationBackgrounds(
+                        layout = snapshot.layout,
+                        ranges = tagRanges,
+                        scrollY = scrollY,
+                        fillColor = tagFillColor,
+                    )
                     drawCurrentEditorFrame(
                         motionSample = snapshot.motionSample,
                         layout = snapshot.layout,
@@ -108,6 +118,15 @@ fun EditorTextFieldDrawLayer(
                         textColor = textColor,
                         cursorColor = cursorColor,
                         density = density,
+                        drawAnnotations = {
+                            drawAnnotationUnderlines(
+                                layout = snapshot.layout,
+                                ranges = linkRanges,
+                                scrollY = scrollY,
+                                color = linkColor,
+                                density = density,
+                            )
+                        },
                         drawContent = { this@drawWithContent.drawContent() },
                     )
                 },
@@ -358,6 +377,7 @@ internal fun DrawScope.drawCurrentEditorFrame(
     textColor: Color,
     cursorColor: Color,
     density: androidx.compose.ui.unit.Density,
+    drawAnnotations: () -> Unit = {},
     drawContent: () -> Unit,
 ) {
     if (motionSample != null && motionSample.isValid) {
@@ -379,6 +399,7 @@ internal fun DrawScope.drawCurrentEditorFrame(
         } else {
             drawContent()
         }
+        drawAnnotations()
         // 2. 画 retained move overlays（Issue #739 评论 5787769674：自动换行保留文字的位置平移）
         for (overlay in motionSample.retainedOverlays) {
             drawRetainedOverlay(
@@ -407,6 +428,7 @@ internal fun DrawScope.drawCurrentEditorFrame(
     } else {
         // sample 不存在或无效：画平台最终正文 + resting caret
         drawContent()
+        drawAnnotations()
         if (restingCaretRect != null && cursorColor != Color.Transparent) {
             drawVisualCaretRect(
                 caretRect = restingCaretRect,
@@ -414,6 +436,59 @@ internal fun DrawScope.drawCurrentEditorFrame(
                 cursorColor = cursorColor,
                 density = density,
             )
+        }
+    }
+}
+
+private fun DrawScope.drawAnnotationBackgrounds(
+    layout: ComposeLayoutSnapshot?,
+    ranges: List<TextRange>,
+    scrollY: Int,
+    fillColor: Color,
+) {
+    if (layout == null || ranges.isEmpty() || fillColor == Color.Transparent) return
+    val textLength = layout.result.layoutInput.text.text.length
+    ranges.forEach { range ->
+        if (range.start >= range.end || range.start < 0 || range.end > textLength) return@forEach
+        runCatching { layout.pathForRawRange(range) }.getOrNull()?.let { path ->
+            withTransform({ translate(top = -scrollY.toFloat()) }) {
+                drawPath(fillColor.copy(alpha = 0.18f), path)
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawAnnotationUnderlines(
+    layout: ComposeLayoutSnapshot?,
+    ranges: List<TextRange>,
+    scrollY: Int,
+    color: Color,
+    density: androidx.compose.ui.unit.Density,
+) {
+    if (layout == null || ranges.isEmpty()) return
+    val result = layout.result
+    val textLength = result.layoutInput.text.text.length
+    val strokeWidth = with(density) { 1.25.dp.toPx() }
+    ranges.forEach { range ->
+        if (range.start >= range.end || range.start < 0 || range.end > textLength) return@forEach
+        runCatching {
+            val firstLine = result.getLineForOffset(range.start)
+            val lastLine = result.getLineForOffset(range.end - 1)
+            for (line in firstLine..lastLine) {
+                val start = maxOf(range.start, result.getLineStart(line))
+                val end = minOf(range.end, result.getLineEnd(line))
+                if (start >= end) continue
+                val x1 = result.getHorizontalPosition(start, usePrimaryDirection = true)
+                val x2 = result.getHorizontalPosition(end, usePrimaryDirection = false)
+                val y = result.getLineBottom(line) - with(density) { 1.dp.toPx() } - scrollY
+                drawLine(
+                    color = color,
+                    start = Offset(minOf(x1, x2), y),
+                    end = Offset(maxOf(x1, x2), y),
+                    strokeWidth = strokeWidth,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                )
+            }
         }
     }
 }

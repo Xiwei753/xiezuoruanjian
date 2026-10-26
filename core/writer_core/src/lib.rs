@@ -60,6 +60,7 @@ pub use crate::ai_service::{AiAction, AiActionResponse, AiActionType};
 pub mod app_config;
 pub mod settings_registry;
 
+pub mod annotations;
 pub mod chapter;
 pub mod correction;
 pub mod editor;

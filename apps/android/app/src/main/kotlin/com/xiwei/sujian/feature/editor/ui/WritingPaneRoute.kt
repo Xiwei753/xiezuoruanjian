@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -33,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange as ComposeTextRange
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -42,6 +44,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
+import com.xiwei.sujian.feature.editor.presentation.AnnotationCoordinator
 import com.xiwei.sujian.feature.editor.presentation.CorrectionResourceFeedbackLevel
 import com.xiwei.sujian.feature.editor.presentation.EditorCorrectionResourceState
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
@@ -234,6 +237,25 @@ private fun WritingPaneEditorContent(
     when (surfaceMode) {
         EditorSurfaceMode.EditorHost -> {
             val bridge = viewModel.bridgeForTarget(targetId, uiState.content)
+            val appDependencies = LocalSujianAppDependencies.current
+            val annotationScope = rememberCoroutineScope()
+            val annotationCoordinator =
+                remember(appDependencies.appServiceBridge, appDependencies.searchRepository, annotationScope) {
+                    AnnotationCoordinator(
+                        bridge = appDependencies.appServiceBridge.annotationBridge,
+                        searchRepository = appDependencies.searchRepository,
+                        scope = annotationScope,
+                    )
+                }
+            val annotationState by annotationCoordinator.state.collectAsStateWithLifecycle()
+            LaunchedEffect(projectId, chapterId, sessionState.sessionId, uiState.chapterHash) {
+                annotationCoordinator.loadChapter(
+                    projectId = projectId,
+                    chapterId = chapterId,
+                    revision = sessionState.revision,
+                    text = bridge.state.text.toString(),
+                )
+            }
             val correctionResources by viewModel.correctionResourceState.collectAsStateWithLifecycle()
             var showCorrectionResources by rememberSaveable(targetId) { mutableStateOf(false) }
             var authorizedToUseResources by rememberSaveable(targetId) { mutableStateOf(false) }
@@ -305,6 +327,9 @@ private fun WritingPaneEditorContent(
                 targetId = targetId,
                 visualState = visualState,
                 coordinator = coordinator,
+                annotationCoordinator = annotationCoordinator,
+                projectId = projectId,
+                chapterId = chapterId,
             )
 
             val searchHighlightsUtf16 = collectSearchHighlightsUtf16(coordinator, targetId, bridge)
@@ -344,6 +369,24 @@ private fun WritingPaneEditorContent(
                     ?: activeCorrectionSuggestions.firstOrNull()
 
             Column(modifier = modifier) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(
+                        onClick = {
+                            annotationCoordinator.openChapter(
+                                projectId = projectId,
+                                chapterId = chapterId,
+                                revision = sessionState.revision,
+                                text = bridge.state.text.toString(),
+                                title = uiState.chapterTitle.ifBlank { chapterId },
+                            )
+                        },
+                    ) {
+                        Text(stringResource(R.string.annotation_sheet_title))
+                    }
+                }
                 CorrectionResourceStatusRow(
                     state = correctionResources,
                     onManage = { showCorrectionResources = true },
@@ -410,7 +453,35 @@ private fun WritingPaneEditorContent(
                     },
                     searchHighlights = searchHighlightsUtf16,
                     correctionHighlights = correctionHighlightsUtf16,
+                    tagHighlights = annotationState.tagRanges.map { ComposeTextRange(it.start, it.end) },
+                    linkHighlights = annotationState.linkRanges.map { ComposeTextRange(it.start, it.end) },
+                    onAnnotationSelectionAction = { _, range, _ ->
+                        val text = bridge.state.text.toString()
+                        annotationCoordinator.openSelection(
+                            projectId = projectId,
+                            chapterId = chapterId,
+                            revision = sessionState.revision,
+                            text = text,
+                            startByte = TextOffsetUtils.utf8OffsetForCharIndex(text, range.start),
+                            endByte = TextOffsetUtils.utf8OffsetForCharIndex(text, range.end),
+                            chapterTitle = uiState.chapterTitle.ifBlank { chapterId },
+                        )
+                    },
                     modifier = Modifier.weight(1f),
+                )
+            }
+            if (annotationState.isSheetOpen) {
+                AnnotationSheet(
+                    state = annotationState,
+                    onDismiss = annotationCoordinator::dismissSheet,
+                    onTagToggled = annotationCoordinator::toggleTag,
+                    onCreateTag = annotationCoordinator::createTag,
+                    onRegisterName = annotationCoordinator::registerName,
+                    onNameChanged = annotationCoordinator::onNameDraftChanged,
+                    onExternalLink = annotationCoordinator::addExternalLink,
+                    onSearchChanged = annotationCoordinator::onLinkSearchChanged,
+                    onObjectLink = annotationCoordinator::addObjectLink,
+                    onDeleteLink = annotationCoordinator::deleteLink,
                 )
             }
         }

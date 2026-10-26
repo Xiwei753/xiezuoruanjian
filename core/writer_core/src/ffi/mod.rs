@@ -11,6 +11,7 @@
 //! - 所有函数要求先调用 `writer_core_init` 初始化全局单例
 
 // pub：供 writer-platform-harmony cdylib re-export 并导出 `writer_core_*` 符号。
+pub mod annotation_ops;
 pub mod app_state_ops;
 pub mod correction_ops;
 pub mod editor_session_ops;

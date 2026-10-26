@@ -276,6 +276,11 @@ pub struct SujianEditorItem {
     cursor_position: qt_property!(u32; READ cursor_position NOTIFY cursor_position_changed),
     #[allow(dead_code)]
     has_selection: qt_property!(bool; READ has_selection NOTIFY selection_changed),
+    /// UTF-8 byte offsets for annotation anchors; unlike cursor_position these are not character counts.
+    #[allow(dead_code)]
+    selection_start_byte: qt_property!(u32; READ selection_start_byte NOTIFY selection_changed),
+    #[allow(dead_code)]
+    selection_end_byte: qt_property!(u32; READ selection_end_byte NOTIFY selection_changed),
     #[allow(dead_code)]
     editor_enabled: qt_property!(bool; READ editor_enabled WRITE set_editor_enabled NOTIFY editor_enabled_changed),
     #[allow(dead_code)]
@@ -467,6 +472,8 @@ pub struct SujianEditorItem {
     #[allow(dead_code)]
     click_at: qt_method!(fn(&mut self, x: f32, y: f32, extend: bool)),
     #[allow(dead_code)]
+    prepare_context_menu_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    #[allow(dead_code)]
     drag_select_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     #[allow(dead_code)]
     clipboard_copy: qt_method!(fn(&mut self) -> bool),
@@ -646,6 +653,8 @@ impl Default for SujianEditorItem {
             content_height: Default::default(),
             cursor_position: Default::default(),
             has_selection: Default::default(),
+            selection_start_byte: Default::default(),
+            selection_end_byte: Default::default(),
             editor_enabled: Default::default(),
             font_pixel_size: Default::default(),
             font_family: Default::default(),

@@ -15,6 +15,9 @@ fn parse_scope(s: &str) -> crate::search::SearchScope {
         "starmapHyperlink" => crate::search::SearchScope::StarmapHyperlink,
         "starmapLink" => crate::search::SearchScope::StarmapLink,
         "starmapEmbed" => crate::search::SearchScope::StarmapEmbed,
+        "annotationTag" => crate::search::SearchScope::AnnotationTag,
+        "annotationEntry" => crate::search::SearchScope::AnnotationEntry,
+        "annotationLink" => crate::search::SearchScope::AnnotationLink,
         "setting" => crate::search::SearchScope::Setting,
         _ => crate::search::SearchScope::All,
     }

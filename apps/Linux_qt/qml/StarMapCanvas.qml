@@ -74,6 +74,7 @@ Item {
     readonly property int _dialogRadius: dt.dialogRadius
 
     property var starmapBackendRef: null
+    property string annotationProjectId: ""
     // Issue #814 评论 5935285879: 整棵星图共享的唯一选中状态控制器。
     property var selectionController: null
 
@@ -93,6 +94,7 @@ Item {
     signal visualFocusChanged()
     // Issue #982：活动画布图数据/几何可用，供全局搜索按真实就绪时机定位。
     signal sceneGeometryReady(string starmapId, string routeKey)
+    signal annotationActionRequested(string action, var targetRef, string title)
 
     readonly property string errorMessage:
         routeError.length > 0
@@ -160,6 +162,16 @@ Item {
 
     function activeScene() {
         return activeSceneLoader.item
+    }
+
+    function annotationRef(kind, objectId) {
+        if (!annotationProjectId || !objectId) return null
+        return { kind: kind, projectId: annotationProjectId, objectId: String(objectId) }
+    }
+
+    function requestAnnotationAction(action, kind, objectId, title) {
+        var target = annotationRef(kind, objectId)
+        if (target) annotationActionRequested(action, target, String(title || ""))
     }
 
     // Issue #984：离开活动画布前统一提交节点编辑。
@@ -1902,6 +1914,20 @@ Item {
             }
             onTriggered: createDialog.open("starmap", contextMenuSceneX, contextMenuSceneY)
         }
+
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("标签与引用")
+            onTriggered: requestAnnotationAction("tags", "starMap", currentStarmapId, "")
+        }
+        MenuItem {
+            text: qsTr("添加超链接")
+            onTriggered: requestAnnotationAction("link", "starMap", currentStarmapId, "")
+        }
+        MenuItem {
+            text: qsTr("查看引用")
+            onTriggered: requestAnnotationAction("viewReferences", "starMap", currentStarmapId, "")
+        }
     }
 
     Menu {
@@ -1935,6 +1961,29 @@ Item {
                 if (selectedNodeForMenu && menuOwnerContent)
                     menuOwnerContent.beginInlineEdit(selectedNodeForMenu.id)
             }
+        }
+
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("标签与引用")
+            onTriggered: requestAnnotationAction("tags", "starMapNode",
+                                                   selectedNodeForMenu ? selectedNodeForMenu.id : "", "")
+        }
+        MenuItem {
+            text: qsTr("添加超链接")
+            onTriggered: requestAnnotationAction("link", "starMapNode",
+                                                   selectedNodeForMenu ? selectedNodeForMenu.id : "", "")
+        }
+        MenuItem {
+            text: qsTr("登记名称")
+            onTriggered: requestAnnotationAction("registerName", "starMapNode",
+                selectedNodeForMenu ? selectedNodeForMenu.id : "",
+                selectedNodeForMenu ? selectedNodeForMenu.title : "")
+        }
+        MenuItem {
+            text: qsTr("查看引用")
+            onTriggered: requestAnnotationAction("viewReferences", "starMapNode",
+                                                   selectedNodeForMenu ? selectedNodeForMenu.id : "", "")
         }
 
         MenuItem {
@@ -2119,6 +2168,29 @@ Item {
                     renameDialog.open("embed", selectedEmbedForMenu.instanceId, selectedEmbedForMenu.label || "")
                 }
             }
+        }
+
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("标签与引用")
+            onTriggered: requestAnnotationAction("tags", "starMapEmbed",
+                selectedEmbedForMenu ? selectedEmbedForMenu.instanceId : "", "")
+        }
+        MenuItem {
+            text: qsTr("添加超链接")
+            onTriggered: requestAnnotationAction("link", "starMapEmbed",
+                selectedEmbedForMenu ? selectedEmbedForMenu.instanceId : "", "")
+        }
+        MenuItem {
+            text: qsTr("登记名称")
+            onTriggered: requestAnnotationAction("registerName", "starMapEmbed",
+                selectedEmbedForMenu ? selectedEmbedForMenu.instanceId : "",
+                selectedEmbedForMenu ? selectedEmbedForMenu.label : "")
+        }
+        MenuItem {
+            text: qsTr("查看引用")
+            onTriggered: requestAnnotationAction("viewReferences", "starMapEmbed",
+                selectedEmbedForMenu ? selectedEmbedForMenu.instanceId : "", "")
         }
 
         MenuItem {

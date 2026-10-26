@@ -294,6 +294,9 @@ fn create_project_with_id_and_order(
 
     // 恢复/导入场景不自动创建"第一卷"——卷信息在 manifest 中已包含，由调用方逐卷恢复
     if id_opt.is_none() {
+        // 新建作品时一次性安装普通可编辑预设标签。读取/打开作品不补回被用户删除的标签。
+        crate::annotations::store::AnnotationStore::new(&project_dir, &id)
+            .initialize_default_tags()?;
         // 普通新建场景：自动创建默认卷保持产品一致性
         let _ = crate::volume::create_volume(&project_dir, "第一卷");
     }

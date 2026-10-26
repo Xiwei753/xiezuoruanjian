@@ -26,6 +26,8 @@
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
 Item {
@@ -39,6 +41,17 @@ Item {
     property var starmapBackendRef: null
     // Issue #790 评论 5875963057: 公共入口收口后的应用状态。
     property var appState: ({})
+    property var annotationBackendRef: null
+    property var searchBackendRef: null
+    property bool aiAvailable: false
+    property bool aiEnabled: false
+    property bool embedded: false
+    property string selectedTool: "tags"
+    property bool toolDrawerOpen: false
+    property var pendingLinkSource: null
+    property string pendingLinkId: ""
+    property var pendingLinkTarget: null
+    property string pendingName: ""
 
     // Issue #977：顶栏需要知道当前是根画布还是子画布，以决定返回文案与动作。
     readonly property bool focusIsRoot: canvas.focusIsRoot
@@ -48,6 +61,35 @@ Item {
     signal requestSearch()
     signal openSettings()
     signal sceneGeometryReady(string starmapId, string routeKey)
+    signal annotationTargetRequested(var target)
+    signal annotationToolRequested(string toolKey)
+
+    function projectIdForStarmap(id) {
+        if (starmapBackendRef && id && starmapBackendRef.get_starmap_json) {
+            try {
+                var envelope = JSON.parse(String(starmapBackendRef.get_starmap_json(id) || "{}"))
+                var meta = envelope && envelope.success === true ? envelope.data : null
+                if (meta && meta.projectId) return String(meta.projectId)
+            } catch (e) {}
+        }
+        var selected = root.appState && root.appState.selected ? root.appState.selected : ({})
+        return String(selected.projectId || "")
+    }
+
+    readonly property string annotationProjectId: projectIdForStarmap(canvas.currentStarmapId || root.starmapId)
+    readonly property var annotationTargetRef: {
+        var projectId = root.annotationProjectId
+        var sceneId = String(canvas.currentStarmapId || root.starmapId || "")
+        if (!projectId || !sceneId) return null
+        if (sharedSelectionController.scenePathKey === canvas.routeKey) {
+            var selectedKind = sharedSelectionController.kind
+            if (selectedKind === "node" && sharedSelectionController.itemId)
+                return { kind: "starMapNode", projectId: projectId, objectId: sharedSelectionController.itemId }
+            if (selectedKind === "embed" && sharedSelectionController.itemId)
+                return { kind: "starMapEmbed", projectId: projectId, objectId: sharedSelectionController.itemId }
+        }
+        return { kind: "starMap", projectId: projectId, objectId: sceneId }
+    }
 
     // Issue #984：对壳层暴露星图节点编辑的离开前保存入口。
     // 搜索跳章节/根图等会让 Loader 失活的导航必须先确认这里返回 true。
@@ -83,22 +125,153 @@ Item {
         anchors.fill: parent
         color: Kirigami.Theme.backgroundColor
 
-        // 主体：唯一一块星图画布占满顶栏以下的全部空间。
-        StarMapCanvas {
-            id: canvas
+        RowLayout {
             anchors.fill: parent
-            dt: root.dt
-            onSceneGeometryReady: function(starmapId, routeKey) {
-                root.sceneGeometryReady(starmapId, routeKey)
-            }
-            canvasBackgroundColor: Kirigami.Theme.backgroundColor
-            starmapId: root.starmapId
-            starmapBackendRef: root.starmapBackendRef
-            selectionController: sharedSelectionController
+            spacing: 0
 
-            onVisibleChanged: {
-                if (!visible)
-                    canvas.resetInteraction()
+            // 主体：唯一一块星图画布，工具抽屉只在独立星图工作区加入。
+            StarMapCanvas {
+                id: canvas
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                dt: root.dt
+                onSceneGeometryReady: function(starmapId, routeKey) {
+                    root.sceneGeometryReady(starmapId, routeKey)
+                }
+                canvasBackgroundColor: Kirigami.Theme.backgroundColor
+                starmapId: root.starmapId
+                starmapBackendRef: root.starmapBackendRef
+                annotationProjectId: root.annotationProjectId
+                selectionController: sharedSelectionController
+                onAnnotationActionRequested: function(action, targetRef, title) {
+                    root.pendingLinkSource = targetRef
+                    root.selectedTool = "tags"
+                    if (action === "link") {
+                        root.pendingLinkId = ""
+                        root.pendingLinkTarget = null
+                        annotationLinkPicker.open()
+                    } else if (action === "registerName") {
+                        var itemName = String(title || targetRef.objectId)
+                        root.pendingName = itemName
+                        registerNameDialog.open()
+                    } else if (root.embedded) {
+                        root.annotationToolRequested("tags")
+                    } else {
+                        root.toolDrawerOpen = true
+                    }
+                }
+
+                onVisibleChanged: {
+                    if (!visible)
+                        canvas.resetInteraction()
+                }
+            }
+
+            StarMapToolDrawer {
+                id: starMapTools
+                visible: !root.embedded && root.toolDrawerOpen
+                Layout.preferredWidth: Math.min(340, Math.max(260, root.width * 0.32))
+                Layout.minimumWidth: 240
+                Layout.fillHeight: true
+                dt: root.dt
+                selectedTool: root.selectedTool
+                isOpen: visible
+                aiAvailable: root.aiAvailable
+                aiEnabled: root.aiEnabled
+                annotationBackendRef: root.annotationBackendRef
+                searchBackendRef: root.searchBackendRef
+                projectId: root.annotationProjectId
+                targetRef: root.annotationTargetRef
+                targetLabel: root.annotationTargetRef
+                    ? (root.annotationTargetRef.kind === "starMapNode" ? qsTr("星图节点")
+                       : root.annotationTargetRef.kind === "starMapEmbed" ? qsTr("子星图") : root.starmapTitle)
+                    : qsTr("星图对象")
+                onCloseRequested: root.toolDrawerOpen = false
+                onTargetActivated: function(target) { root.annotationTargetRequested(target) }
+                onLinkPickerRequested: function(sourceRef, link) {
+                    root.pendingLinkSource = sourceRef
+                    root.pendingLinkId = link ? String(link.linkId || "") : ""
+                    root.pendingLinkTarget = link ? link.target : null
+                    annotationLinkPicker.open()
+                }
+            }
+
+            StarMapToolRail {
+                visible: !root.embedded
+                Layout.preferredWidth: 56
+                Layout.minimumWidth: 56
+                Layout.maximumWidth: 56
+                Layout.fillHeight: true
+                dt: root.dt
+                selectedTool: root.selectedTool
+                drawerOpen: root.toolDrawerOpen
+                aiAvailable: root.aiAvailable
+                aiEnabled: root.aiEnabled
+                onToolRequested: function(key) {
+                    root.selectedTool = key
+                    root.toolDrawerOpen = true
+                }
+                onDrawerToggled: root.toolDrawerOpen = !root.toolDrawerOpen
+            }
+        }
+    }
+
+    Popup {
+        id: annotationLinkPicker
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(620, Overlay.overlay ? Overlay.overlay.width - 48 : 620)
+        height: Math.min(560, Overlay.overlay ? Overlay.overlay.height - 48 : 560)
+        padding: 0
+        contentItem: AnnotationLinkPicker {
+            dt: root.dt
+            searchBackendRef: root.searchBackendRef
+            projectId: root.annotationProjectId
+            sourceRef: root.pendingLinkSource
+            initialTargets: root.pendingLinkTarget ? [root.pendingLinkTarget] : []
+            onCancelled: annotationLinkPicker.close()
+            onTargetsSelected: function(targets) {
+                if (!root.annotationBackendRef || !root.pendingLinkSource) return
+                for (var i = 0; i < targets.length; ++i) {
+                    if (i === 0 && root.pendingLinkId) {
+                        root.annotationBackendRef.update_link_json(
+                            String(root.pendingLinkSource.projectId), root.pendingLinkId,
+                            JSON.stringify(root.pendingLinkSource), JSON.stringify(targets[i]))
+                    } else {
+                        root.annotationBackendRef.create_link_json(
+                            JSON.stringify(root.pendingLinkSource), JSON.stringify(targets[i]))
+                    }
+                }
+                root.pendingLinkId = ""
+                root.pendingLinkTarget = null
+                annotationLinkPicker.close()
+                Qt.callLater(starMapTools.refresh)
+            }
+        }
+    }
+
+    Dialog {
+        id: registerNameDialog
+        title: qsTr("登记名称")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        contentItem: TextField { id: nameField; text: root.pendingName }
+        onAccepted: {
+            if (!root.annotationBackendRef || !root.annotationProjectId || !nameField.text.trim()) return
+            var raw = root.annotationBackendRef.create_named_entry_json(
+                root.annotationProjectId, nameField.text.trim(), "[]", "[]", true)
+            var envelope = null
+            try { envelope = JSON.parse(String(raw || "{}")) } catch (e) {}
+            var entry = envelope && envelope.success === true ? envelope.data : null
+            if (entry && entry.entryId && root.pendingLinkSource) {
+                var namedTarget = { objectRef: {
+                    kind: "namedEntry", projectId: root.annotationProjectId,
+                    objectId: String(entry.entryId)
+                }, externalUrl: null }
+                root.annotationBackendRef.create_link_json(
+                    JSON.stringify(root.pendingLinkSource), JSON.stringify(namedTarget))
+                Qt.callLater(starMapTools.refresh)
             }
         }
     }

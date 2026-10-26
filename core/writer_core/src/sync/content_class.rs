@@ -66,6 +66,20 @@ pub(crate) fn classify_content_path(raw_path: &str) -> ContentClass {
         return ContentClass::StarMap;
     }
 
+    // Each annotation record is an independent JSON file and uses ordinary
+    // metadata LWW; there is no project-wide annotations snapshot to overwrite.
+    if path.starts_with("annotations/")
+        && path.ends_with(".json")
+        && path.split('/').nth(1).is_some_and(|collection| {
+            matches!(
+                collection,
+                "tags" | "bindings" | "entries" | "anchors" | "links"
+            )
+        })
+    {
+        return ContentClass::Metadata;
+    }
+
     // User text documents: any .md file under /chapters/, plus
     // note.md, outline.md, scene.md, character_notes.md, timeline_notes.md
     // anywhere in the sync root

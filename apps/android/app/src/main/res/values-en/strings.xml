@@ -303,4 +303,21 @@
     <string name="editor_correction_disable_rule">Disable this rule</string>
     <string name="editor_correction_ignored">Proofreading suggestion ignored</string>
     <string name="editor_correction_added_to_dictionary">Added to work dictionary</string>
+
+    <string name="annotation_sheet_title">Tags and links</string>
+    <string name="annotation_tags">Tags</string>
+    <string name="annotation_no_tags">No tags are available</string>
+    <string name="annotation_new_tag">New tag</string>
+    <string name="annotation_register_name">Register proper name</string>
+    <string name="annotation_name_hint">Name</string>
+    <string name="annotation_links">Add link</string>
+    <string name="annotation_search_links_hint">Search works, chapters, or star map objects</string>
+    <string name="annotation_link_url_hint">External URL</string>
+    <string name="annotation_outgoing">Links from this object</string>
+    <string name="annotation_backlinks">Backlinks</string>
+    <string name="annotation_no_links">No links yet</string>
+    <string name="annotation_no_backlinks">No other objects refer here yet</string>
+    <string name="annotation_remove_link">Remove</string>
+    <string name="annotation_context_tags_links">Tags and links</string>
+    <string name="annotation_context_register_name">Register name</string>
 </resources>

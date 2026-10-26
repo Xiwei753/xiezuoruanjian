@@ -230,6 +230,7 @@ impl crate::sync::SyncService {
     /// - `chapter.md`：章节正文，LWW 或三路比较
     /// - `project.json` / `volume.json` / `chapter.meta.json`：结构化元数据
     /// - `characters/`：角色数据
+    /// - `annotations/{tags,bindings,entries,anchors,links}/<id>.json`：独立注释对象
     /// - `app-meta/sync/manifest.sync.json`：同步清单
     ///
     /// 应用级数据（设置、同步配置与凭证、统计、最近编辑、设备信息、星图、
@@ -278,6 +279,9 @@ impl crate::sync::SyncService {
         if rel_path.starts_with("characters/") {
             return true;
         }
+        if Self::is_annotation_record_path(&rel_path) {
+            return true;
+        }
 
         // 作品自己的同步元数据
         if rel_path == "app-meta/sync/manifest.sync.json" {
@@ -285,6 +289,33 @@ impl crate::sync::SyncService {
         }
 
         false
+    }
+
+    /// Annotation records are independent sync objects. Only the five record
+    /// collections are admitted; a project-wide `annotations.json` is never
+    /// used as a merge unit.
+    fn is_annotation_record_path(rel_path: &str) -> bool {
+        let Some(rest) = rel_path.strip_prefix("annotations/") else {
+            return false;
+        };
+        let mut parts = rest.split('/');
+        let (Some(collection), Some(filename), None) = (parts.next(), parts.next(), parts.next())
+        else {
+            return false;
+        };
+        if !matches!(
+            collection,
+            "tags" | "bindings" | "entries" | "anchors" | "links"
+        ) {
+            return false;
+        }
+        let Some(id) = filename.strip_suffix(".json") else {
+            return false;
+        };
+        !id.is_empty()
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     }
 
     /// 应用级白名单：设置/全局星图/主题调色板/统计事件分区/应用级同步清单。

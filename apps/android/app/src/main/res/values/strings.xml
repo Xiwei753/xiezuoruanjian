@@ -417,4 +417,21 @@
     <string name="editor_correction_disable_rule">关闭这条规则</string>
     <string name="editor_correction_ignored">已忽略这条校对建议</string>
     <string name="editor_correction_added_to_dictionary">已加入作品词典</string>
+
+    <string name="annotation_sheet_title">标签与链接</string>
+    <string name="annotation_tags">标签</string>
+    <string name="annotation_no_tags">当前没有可用标签</string>
+    <string name="annotation_new_tag">新建标签</string>
+    <string name="annotation_register_name">登记专有名词</string>
+    <string name="annotation_name_hint">名称</string>
+    <string name="annotation_links">添加链接</string>
+    <string name="annotation_search_links_hint">搜索作品、章节或星图对象</string>
+    <string name="annotation_link_url_hint">外部网址</string>
+    <string name="annotation_outgoing">此对象的链接</string>
+    <string name="annotation_backlinks">反向引用</string>
+    <string name="annotation_no_links">还没有链接</string>
+    <string name="annotation_no_backlinks">还没有其他对象引用此处</string>
+    <string name="annotation_remove_link">解除</string>
+    <string name="annotation_context_tags_links">标签与链接</string>
+    <string name="annotation_context_register_name">登记名称</string>
 </resources>

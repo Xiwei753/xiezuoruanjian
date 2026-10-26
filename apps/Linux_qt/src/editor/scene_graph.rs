@@ -346,10 +346,8 @@ cpp! {{
             : m_paragraph_id(paragraph_id) {}
 
         quint64 m_paragraph_id;
-        quint64 m_error_signature = 0;
-        quint64 m_warning_signature = 0;
-        quint64 m_error_hole_signature = 0;
-        quint64 m_warning_hole_signature = 0;
+        quint64 m_signatures[5] = {};
+        quint64 m_hole_signatures[5] = {};
         bool m_has_geometry_signatures = false;
     };
 
@@ -1013,9 +1011,27 @@ pub(crate) fn update_text_decoration_layer(
             }
         })
         .collect();
+    let highlight_vertex_ptrs: Vec<*const f64> = paragraphs
+        .iter()
+        .map(|group| if group.highlight_vertices.is_empty() { std::ptr::null() } else { group.highlight_vertices.as_ptr() })
+        .collect();
+    let manual_link_vertex_ptrs: Vec<*const f64> = paragraphs
+        .iter()
+        .map(|group| if group.manual_link_vertices.is_empty() { std::ptr::null() } else { group.manual_link_vertices.as_ptr() })
+        .collect();
+    let auto_name_vertex_ptrs: Vec<*const f64> = paragraphs
+        .iter()
+        .map(|group| if group.auto_name_vertices.is_empty() { std::ptr::null() } else { group.auto_name_vertices.as_ptr() })
+        .collect();
+    let mut highlight_lengths = Vec::with_capacity(paragraphs.len());
+    let mut manual_link_lengths = Vec::with_capacity(paragraphs.len());
+    let mut auto_name_lengths = Vec::with_capacity(paragraphs.len());
     for group in paragraphs {
         error_lengths.push(group.error_vertices.len());
         warning_lengths.push(group.warning_vertices.len());
+        highlight_lengths.push(group.highlight_vertices.len());
+        manual_link_lengths.push(group.manual_link_vertices.len());
+        auto_name_lengths.push(group.auto_name_vertices.len());
     }
 
     let offset_ids: Vec<u64> = paragraph_y_offsets.iter().map(|(id, _)| *id).collect();
@@ -1033,6 +1049,12 @@ pub(crate) fn update_text_decoration_layer(
     let error_vertices_ptrs_ptr = error_vertex_ptrs.as_ptr();
     let warning_lengths_ptr = warning_lengths.as_ptr();
     let warning_vertices_ptrs_ptr = warning_vertex_ptrs.as_ptr();
+    let highlight_lengths_ptr = highlight_lengths.as_ptr();
+    let highlight_vertices_ptrs_ptr = highlight_vertex_ptrs.as_ptr();
+    let manual_link_lengths_ptr = manual_link_lengths.as_ptr();
+    let manual_link_vertices_ptrs_ptr = manual_link_vertex_ptrs.as_ptr();
+    let auto_name_lengths_ptr = auto_name_lengths.as_ptr();
+    let auto_name_vertices_ptrs_ptr = auto_name_vertex_ptrs.as_ptr();
     let offset_ids_ptr = offset_ids.as_ptr();
     let offset_values_ptr = offset_values.as_ptr();
     let hole_values_ptr = hole_values.as_ptr();
@@ -1052,6 +1074,12 @@ pub(crate) fn update_text_decoration_layer(
         error_vertices_ptrs_ptr as "const double *const*",
         warning_lengths_ptr as "const size_t*",
         warning_vertices_ptrs_ptr as "const double *const*",
+        highlight_lengths_ptr as "const size_t*",
+        highlight_vertices_ptrs_ptr as "const double *const*",
+        manual_link_lengths_ptr as "const size_t*",
+        manual_link_vertices_ptrs_ptr as "const double *const*",
+        auto_name_lengths_ptr as "const size_t*",
+        auto_name_vertices_ptrs_ptr as "const double *const*",
         offset_ids_ptr as "const quint64*",
         offset_values_ptr as "const double*",
         hole_values_ptr as "const double*",
@@ -1072,6 +1100,12 @@ pub(crate) fn update_text_decoration_layer(
 
         const QColor errorColor(220, 38, 38);
         const QColor warningColor(245, 124, 0);
+        const QColor highlightColor(245, 204, 92, 72);
+        const QColor manualLinkColor(34, 125, 175);
+        const QColor autoNameColor(126, 87, 194);
+        const QColor *decorationColors[5] = {
+            &errorColor, &warningColor, &highlightColor, &manualLinkColor, &autoNameColor
+        };
         QSet<quint64> activeParagraphs;
         for (size_t i = 0; i < paragraph_count; i++) {
             const quint64 paragraphId = paragraph_ids_ptr[i];
@@ -1079,9 +1113,24 @@ pub(crate) fn update_text_decoration_layer(
 
             const double *errorData = error_vertices_ptrs_ptr[i];
             const double *warningData = warning_vertices_ptrs_ptr[i];
+            const double *highlightData = highlight_vertices_ptrs_ptr[i];
+            const double *manualLinkData = manual_link_vertices_ptrs_ptr[i];
+            const double *autoNameData = auto_name_vertices_ptrs_ptr[i];
             const size_t errorLength = error_lengths_ptr[i];
             const size_t warningLength = warning_lengths_ptr[i];
-            if (errorLength == 0 && warningLength == 0) continue;
+            const size_t highlightLength = highlight_lengths_ptr[i];
+            const size_t manualLinkLength = manual_link_lengths_ptr[i];
+            const size_t autoNameLength = auto_name_lengths_ptr[i];
+            const double *decorationData[5] = {
+                errorData, warningData, highlightData, manualLinkData, autoNameData
+            };
+            const size_t decorationLengths[5] = {
+                errorLength, warningLength, highlightLength, manualLinkLength, autoNameLength
+            };
+            bool hasDecoration = false;
+            for (int kind = 0; kind < 5; ++kind)
+                hasDecoration = hasDecoration || decorationLengths[kind] != 0;
+            if (!hasDecoration) continue;
 
             TextDecorationParagraphNode *paragraphNode = nullptr;
             for (int child = 0; child < decorationLayer->childCount(); child++) {
@@ -1102,15 +1151,42 @@ pub(crate) fn update_text_decoration_layer(
             const quint64 warningHoleSignature = decoration_holes_signature(
                 warningData, warningLength, hole_values_ptr, hole_count
             );
+            const quint64 highlightSignature = decoration_values_signature(highlightData, highlightLength);
+            const quint64 manualLinkSignature = decoration_values_signature(manualLinkData, manualLinkLength);
+            const quint64 autoNameSignature = decoration_values_signature(autoNameData, autoNameLength);
+            const quint64 highlightHoleSignature = decoration_holes_signature(
+                highlightData, highlightLength, hole_values_ptr, hole_count
+            );
+            const quint64 manualLinkHoleSignature = decoration_holes_signature(
+                manualLinkData, manualLinkLength, hole_values_ptr, hole_count
+            );
+            const quint64 autoNameHoleSignature = decoration_holes_signature(
+                autoNameData, autoNameLength, hole_values_ptr, hole_count
+            );
+            const quint64 decorationSignatures[5] = {
+                errorSignature, warningSignature, highlightSignature,
+                manualLinkSignature, autoNameSignature
+            };
+            const quint64 decorationHoleSignatures[5] = {
+                errorHoleSignature, warningHoleSignature, highlightHoleSignature,
+                manualLinkHoleSignature, autoNameHoleSignature
+            };
             const bool hasGeometryNodes = paragraphNode
                 && dynamic_cast<QSGGeometryNode*>(child_at(paragraphNode, 0))
-                && dynamic_cast<QSGGeometryNode*>(child_at(paragraphNode, 1));
-            const bool geometryUnchanged = hasGeometryNodes
-                && paragraphNode->m_has_geometry_signatures
-                && paragraphNode->m_error_signature == errorSignature
-                && paragraphNode->m_warning_signature == warningSignature
-                && paragraphNode->m_error_hole_signature == errorHoleSignature
-                && paragraphNode->m_warning_hole_signature == warningHoleSignature;
+                && dynamic_cast<QSGGeometryNode*>(child_at(paragraphNode, 1))
+                && dynamic_cast<QSGGeometryNode*>(child_at(paragraphNode, 2))
+                && dynamic_cast<QSGGeometryNode*>(child_at(paragraphNode, 3))
+                && dynamic_cast<QSGGeometryNode*>(child_at(paragraphNode, 4));
+            bool geometryUnchanged = hasGeometryNodes && paragraphNode->m_has_geometry_signatures;
+            if (geometryUnchanged) {
+                for (int kind = 0; kind < 5; ++kind) {
+                    if (paragraphNode->m_signatures[kind] != decorationSignatures[kind]
+                            || paragraphNode->m_hole_signatures[kind] != decorationHoleSignatures[kind]) {
+                        geometryUnchanged = false;
+                        break;
+                    }
+                }
+            }
 
             if (!paragraphNode) {
                 paragraphNode = new TextDecorationParagraphNode(paragraphId);
@@ -1139,54 +1215,41 @@ pub(crate) fn update_text_decoration_layer(
             // Static geometry is passed directly to QSG when no hole overlaps it.
             // Only the paragraphs and individual triangles touched by animation
             // holes pay for polygon clipping and temporary geometry storage.
-            std::vector<double> clippedErrors;
-            const double *errorGeometry = errorData;
-            size_t errorGeometryLength = errorLength;
-            if (errorHoleSignature != 0) {
-                clippedErrors = clip_decoration_triangles(
-                    errorData, errorLength, hole_values_ptr, hole_count
+            std::vector<double> clippedGeometry[5];
+            const double *geometryData[5] = {
+                errorData, warningData, highlightData, manualLinkData, autoNameData
+            };
+            size_t geometryLengths[5] = {
+                errorLength, warningLength, highlightLength, manualLinkLength, autoNameLength
+            };
+            for (int kind = 0; kind < 5; ++kind) {
+                if (decorationHoleSignatures[kind] == 0) continue;
+                clippedGeometry[kind] = clip_decoration_triangles(
+                    geometryData[kind], geometryLengths[kind], hole_values_ptr, hole_count
                 );
-                errorGeometry = clippedErrors.empty() ? nullptr : clippedErrors.data();
-                errorGeometryLength = clippedErrors.size();
+                geometryData[kind] = clippedGeometry[kind].empty()
+                    ? nullptr : clippedGeometry[kind].data();
+                geometryLengths[kind] = clippedGeometry[kind].size();
             }
-            std::vector<double> clippedWarnings;
-            const double *warningGeometry = warningData;
-            size_t warningGeometryLength = warningLength;
-            if (warningHoleSignature != 0) {
-                clippedWarnings = clip_decoration_triangles(
-                    warningData, warningLength, hole_values_ptr, hole_count
-                );
-                warningGeometry = clippedWarnings.empty() ? nullptr : clippedWarnings.data();
-                warningGeometryLength = clippedWarnings.size();
-            }
-            if (errorGeometryLength == 0 && warningGeometryLength == 0) continue;
 
-            QSGGeometryNode *errorNode = text_decoration_node_at_or_create(
-                paragraphNode, 0, errorColor
-            );
-            QSGGeometryNode *warningNode = text_decoration_node_at_or_create(
-                paragraphNode, 1, warningColor
-            );
-            while (paragraphNode->childCount() > 2) {
+            QSGGeometryNode *decorationNodes[5];
+            for (int kind = 0; kind < 5; ++kind) {
+                decorationNodes[kind] = text_decoration_node_at_or_create(
+                    paragraphNode, kind, *decorationColors[kind]
+                );
+            }
+            while (paragraphNode->childCount() > 5) {
                 QSGNode *extra = paragraphNode->lastChild();
                 paragraphNode->removeChildNode(extra);
                 delete extra;
             }
-
-            update_text_decoration_geometry(
-                errorNode,
-                errorGeometry,
-                errorGeometryLength
-            );
-            update_text_decoration_geometry(
-                warningNode,
-                warningGeometry,
-                warningGeometryLength
-            );
-            paragraphNode->m_error_signature = errorSignature;
-            paragraphNode->m_warning_signature = warningSignature;
-            paragraphNode->m_error_hole_signature = errorHoleSignature;
-            paragraphNode->m_warning_hole_signature = warningHoleSignature;
+            for (int kind = 0; kind < 5; ++kind) {
+                update_text_decoration_geometry(
+                    decorationNodes[kind], geometryData[kind], geometryLengths[kind]
+                );
+                paragraphNode->m_signatures[kind] = decorationSignatures[kind];
+                paragraphNode->m_hole_signatures[kind] = decorationHoleSignatures[kind];
+            }
             paragraphNode->m_has_geometry_signatures = true;
             activeParagraphs.insert(paragraphId);
         }

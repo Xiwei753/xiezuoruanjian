@@ -89,6 +89,8 @@ char*  writer_core_get_recent_edits(void);
 //   是原文 UTF-8 字节偏移。返回值由 Core 分配，必须用 writer_core_free_string 释放。
 char*  writer_core_global_search_page(const char* query, const char* scope, uint32_t limit,
                                       const char* cursor, const char* context_json);
+// Annotation operations use a typed camelCase JSON argument object and return a ResultEnvelope.
+char*  writer_core_annotation_call(const char* operation, const char* args_json);
 
 // ── Settings ──
 char*  writer_core_load_local_settings(void);

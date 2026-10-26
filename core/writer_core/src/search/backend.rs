@@ -58,9 +58,7 @@ fn find_all_occurrences(
                 let orig_end = if end == start {
                     orig_start
                 } else {
-                    map.get(end - 1)
-                        .map(|(_, end)| *end)
-                        .unwrap_or(orig_start)
+                    map.get(end - 1).map(|(_, end)| *end).unwrap_or(orig_start)
                 };
                 (orig_start, orig_end)
             }
@@ -117,6 +115,9 @@ fn searchable_fields(scope: SearchScope) -> (bool, bool) {
         | SearchScope::StarmapHyperlink
         | SearchScope::StarmapLink
         | SearchScope::StarmapEmbed
+        | SearchScope::AnnotationTag
+        | SearchScope::AnnotationEntry
+        | SearchScope::AnnotationLink
         | SearchScope::Setting => (true, true),
         SearchScope::All => (true, true),
     }
@@ -135,6 +136,9 @@ fn base_text_score(scope: SearchScope, field: SearchField) -> f64 {
         SearchScope::StarmapHyperlink => 2.1,
         SearchScope::StarmapLink => 2.0,
         SearchScope::StarmapEmbed => 2.0,
+        SearchScope::AnnotationTag => 2.7,
+        SearchScope::AnnotationEntry => 2.5,
+        SearchScope::AnnotationLink => 2.1,
         SearchScope::ChapterNote => 1.8,
         SearchScope::All => 1.0,
     };
@@ -145,11 +149,7 @@ fn base_text_score(scope: SearchScope, field: SearchField) -> f64 {
         }
 }
 
-fn context_boost(
-    scope: SearchScope,
-    target: &SearchTarget,
-    context: &SearchContext,
-) -> f64 {
+fn context_boost(scope: SearchScope, target: &SearchTarget, context: &SearchContext) -> f64 {
     let same = |value: Option<&str>, current: Option<&str>| match (value, current) {
         (Some(value), Some(current)) => value == current,
         _ => false,
@@ -174,7 +174,11 @@ fn context_boost(
                 boost += 1.5;
             }
         }
-        SearchScope::ProjectTitle | SearchScope::VolumeTitle => {
+        SearchScope::ProjectTitle
+        | SearchScope::VolumeTitle
+        | SearchScope::AnnotationTag
+        | SearchScope::AnnotationEntry
+        | SearchScope::AnnotationLink => {
             if same(
                 target.project_id.as_deref(),
                 context.current_project_id.as_deref(),
@@ -221,7 +225,12 @@ fn context_boost(
         boost += 0.4;
     }
     match context.origin_screen {
-        SearchOriginScreen::Writing if matches!(scope, SearchScope::ChapterBody | SearchScope::ChapterTitle | SearchScope::ChapterNote) => {
+        SearchOriginScreen::Writing
+            if matches!(
+                scope,
+                SearchScope::ChapterBody | SearchScope::ChapterTitle | SearchScope::ChapterNote
+            ) =>
+        {
             boost += 0.4;
         }
         SearchOriginScreen::Starmap
@@ -233,6 +242,16 @@ fn context_boost(
                     | SearchScope::StarmapHyperlink
                     | SearchScope::StarmapLink
                     | SearchScope::StarmapEmbed
+            ) =>
+        {
+            boost += 0.4;
+        }
+        SearchOriginScreen::Writing
+            if matches!(
+                scope,
+                SearchScope::AnnotationTag
+                    | SearchScope::AnnotationEntry
+                    | SearchScope::AnnotationLink
             ) =>
         {
             boost += 0.4;
@@ -334,6 +353,17 @@ impl PathLookup {
                     .as_deref()
                     .map(settings_section_label);
                 join_path(&[Some("设置".to_string()), section, Some(entry.title.clone())])
+            }
+            SearchScope::AnnotationTag => {
+                join_path(&[project, Some("标签".to_string()), Some(entry.title.clone())])
+            }
+            SearchScope::AnnotationEntry => join_path(&[
+                project,
+                Some("专有名词".to_string()),
+                Some(entry.title.clone()),
+            ]),
+            SearchScope::AnnotationLink => {
+                join_path(&[project, Some("链接".to_string()), Some(entry.title.clone())])
             }
             SearchScope::All => entry.title.clone(),
         }
@@ -581,7 +611,10 @@ impl SearchBackend {
             }
         }
 
-        let remaining = all_results.into_iter().skip(start_index).collect::<Vec<_>>();
+        let remaining = all_results
+            .into_iter()
+            .skip(start_index)
+            .collect::<Vec<_>>();
         let has_more = remaining.len() > limit;
         let items = remaining.into_iter().take(limit).collect::<Vec<_>>();
         let next_cursor = if has_more {
@@ -611,6 +644,20 @@ impl SearchBackend {
             .get(&scope)
             .map(|ids| ids.len())
             .unwrap_or(0)
+    }
+
+    /// Return current annotation IDs for one project so a refreshed projection
+    /// can delete derived entries whose backing record disappeared.
+    pub fn annotation_object_ids_for_project(&self, project_id: &str) -> Vec<String> {
+        let prefix = format!("annotation:{project_id}:");
+        let mut ids: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(id, _)| id.starts_with(&prefix))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        ids
     }
 
     pub fn remove_by_target_project_id(&mut self, project_id: &str) {
