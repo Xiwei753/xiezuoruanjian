@@ -15,6 +15,7 @@
 import {
   WritingStatsExplorer,
   WritingStatsHeatmap,
+  WritingStatsHeatmapDay,
   STATS_PRESET_LAST_7_DAYS
 } from '../../../../corebridge/dto/StatsDtos'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
@@ -52,6 +53,9 @@ export struct WideStatisticsPage {
   @Prop heatmap: WritingStatsHeatmap | null = null
   @Prop heatmapYear: number = new Date().getFullYear()
   @Prop heatmapError: string = ''
+  @Prop periodHeatmapDays: WritingStatsHeatmapDay[] = []
+  @Prop periodHeatmapLoading: boolean = false
+  @Prop periodHeatmapError: string = ''
 
   onMounted: () => void = () => {}
   onChangeHeatmapYear: (year: number) => void = (_year: number) => {}
@@ -62,6 +66,7 @@ export struct WideStatisticsPage {
   onCloseExpanded: () => void = () => {}
   onRetry: () => void = () => {}
   onRetryHeatmap: () => void = () => {}
+  onRetryPeriodHeatmap: () => void = () => {}
 
   build() {
     Column() {
@@ -103,11 +108,17 @@ export struct WideStatisticsPage {
                   selected: this.explorer.selected,
                   historyScope: this.explorer.historyScope,
                   isLoading: this.isLoading,
+                  periodHeatmapDays: this.periodHeatmapDays,
+                  periodHeatmapLoading: this.periodHeatmapLoading,
+                  periodHeatmapError: this.periodHeatmapError,
                   onClose: (): void => {
                     this.onCloseExpanded()
                   },
                   onRetry: (): void => {
                     this.onRetry()
+                  },
+                  onRetryPeriodHeatmap: (): void => {
+                    this.onRetryPeriodHeatmap()
                   }
                 })
               } else {

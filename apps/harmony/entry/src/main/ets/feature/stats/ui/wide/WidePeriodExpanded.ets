@@ -9,6 +9,7 @@
 import {
   WritingStatsSelectedPeriod,
   WritingStatsRecord,
+  WritingStatsHeatmapDay,
   STATS_PRESET_LAST_7_DAYS
 } from '../../../../corebridge/dto/StatsDtos'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
@@ -27,15 +28,15 @@ import {
   formatMeasuredDuration,
   formatRecordValue
 } from '../StatsFormat'
-import { WritingStatsTrendChart } from '../WritingStatsTrendChart'
 import { widePresetLabel } from './WidePeriodCards'
+import { WidePeriodHeatmap } from './WidePeriodHeatmap'
 
 // 展开大框宽高比（参考约 973 x 351vp）；高度由内容宽度派生，短窗口整体交给页面滚动。
 const WIDE_EXPANDED_ASPECT: number = 2.78
 // 参考图三列宽度约 218:373:382vp，换算为 2.2 : 3.8 : 4.0。
 const WIDE_SUMMARY_WEIGHT: number = 2.2
 const WIDE_RECORDS_WEIGHT: number = 3.8
-const WIDE_CHART_WEIGHT: number = 4.0
+const WIDE_HEATMAP_WEIGHT: number = 4.0
 
 @Component
 export struct WidePeriodExpanded {
@@ -43,23 +44,16 @@ export struct WidePeriodExpanded {
   @Prop selected: WritingStatsSelectedPeriod = EMPTY_STATS_EXPLORER.selected
   @Prop historyScope: string = 'localEvents'
   @Prop isLoading: boolean = false
+  @Prop periodHeatmapDays: WritingStatsHeatmapDay[] = []
+  @Prop periodHeatmapLoading: boolean = false
+  @Prop periodHeatmapError: string = ''
   onClose: () => void = () => {}
   onRetry: () => void = () => {}
+  onRetryPeriodHeatmap: () => void = () => {}
 
   /** 快照是否已经对应刚点开的时段；否则不能把旧时段数字贴上新标题。 */
   private hasSnapshot(): boolean {
     return this.selected.preset === this.selectedPeriod
-  }
-
-  private trendGranularityLabel(): string {
-    const granularity: string = this.selected.trend.granularity
-    if (granularity === 'week') {
-      return '按周'
-    }
-    if (granularity === 'month') {
-      return '按月'
-    }
-    return '按天'
   }
 
   private recordValueText(record: WritingStatsRecord, unit: string): string {
@@ -96,7 +90,7 @@ export struct WidePeriodExpanded {
     Row() {
       this.SummaryColumn()
       this.RecordsColumn()
-      this.ChartColumn()
+      this.PeriodHeatmapColumn()
     }
     .width('100%')
     .layoutWeight(1)
@@ -221,36 +215,22 @@ export struct WidePeriodExpanded {
     .alignItems(VerticalAlign.Center)
   }
 
-  /** 右列：大趋势折线图，放进内嵌浅色面板，与左侧摘要同一外框。 */
+  /** 右列：时段实际日数据热力图，与下方全年热力图使用相同 Core 日真值。 */
   @Builder
-  ChartColumn() {
+  PeriodHeatmapColumn() {
     Column() {
-      Column() {
-        Row() {
-          Text('写作趋势')
-            .fontSize(COMPACT_CARD_TITLE_FONT_VP)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('sys.color.font_primary'))
-            .layoutWeight(1)
-          Text(this.trendGranularityLabel())
-            .fontSize(12)
-            .fontColor($r('sys.color.font_secondary'))
+      WidePeriodHeatmap({
+        startDate: this.selected.range.startDate,
+        endDate: this.selected.range.endDate,
+        days: this.periodHeatmapDays,
+        isLoading: this.periodHeatmapLoading,
+        errorMessage: this.periodHeatmapError,
+        onRetry: (): void => {
+          this.onRetryPeriodHeatmap()
         }
-        .width('100%')
-        .margin({ bottom: 8 })
-
-        WritingStatsTrendChart({ trend: this.selected.trend })
-          .width('100%')
-          .layoutWeight(1)
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .padding('3.9%')
-      .borderRadius(DesignTokens.radiusLg)
-      .border({ width: 1, color: $r('sys.color.comp_divider') })
-      .backgroundColor($r('sys.color.background_secondary'))
+      })
     }
-    .layoutWeight(WIDE_CHART_WEIGHT)
+    .layoutWeight(WIDE_HEATMAP_WEIGHT)
     .height('100%')
     .padding({ left: '0.4%', right: '2.4%', top: '2%', bottom: '2%' })
   }
@@ -298,7 +278,7 @@ export struct WidePeriodExpanded {
             })
         }
       }
-      .layoutWeight(WIDE_RECORDS_WEIGHT + WIDE_CHART_WEIGHT)
+      .layoutWeight(WIDE_RECORDS_WEIGHT + WIDE_HEATMAP_WEIGHT)
       .height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)

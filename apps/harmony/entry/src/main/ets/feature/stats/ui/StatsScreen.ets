@@ -13,13 +13,14 @@
 import hilog from '@ohos.hilog'
 import emitter from '@ohos.events.emitter'
 import { UIContext } from '@kit.ArkUI'
-import { NativeStatsBridge, StatsExplorerRequestResult, StatsHeatmapRequestResult } from '../../../corebridge/native/NativeStatsBridge'
+import { NativeStatsBridge, StatsExplorerRequestResult, StatsHeatmapRequestResult, StatsPeriodHeatmapRequestResult } from '../../../corebridge/native/NativeStatsBridge'
 import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../settings/presentation/SyncOperationController'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import {
   WritingStatsExplorer,
   WritingStatsHeatmap,
+  WritingStatsHeatmapDay,
   STATS_PRESET_LAST_7_DAYS,
   STATS_PRESET_LIFETIME,
   STATS_PRESET_CUSTOM
@@ -61,6 +62,11 @@ export struct StatsScreen {
   @State heatmapYear: number = new Date().getFullYear()
   @State heatmap: WritingStatsHeatmap | null = null
   @State heatmapError: string = ''
+  // 时段展开详情的每日真值，独立于全年日历快照和 Explorer 趋势桶。
+  @State periodHeatmapDays: WritingStatsHeatmapDay[] = []
+  @State periodHeatmapRangeKey: string = ''
+  @State periodHeatmapLoading: boolean = false
+  @State periodHeatmapError: string = ''
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State useHdsNav: boolean = false
   @State headerActions: ActionSlot[] = []
@@ -168,6 +174,9 @@ export struct StatsScreen {
     const result: ResultEnvelope<WritingStatsExplorer> = response.envelope
     if (result.success && result.data !== undefined) {
       this.explorer = result.data
+      if (this.expandedPanel === STATS_PANEL_RANGE) {
+        this.loadPeriodHeatmap(result.data.selected.range.startDate, result.data.selected.range.endDate)
+      }
     } else {
       // envelope 只有 errorCode / userMessage（Core 不发明 messageKey）。
       this.errorMessage = result.userMessage !== undefined && result.userMessage.length > 0
@@ -195,6 +204,63 @@ export struct StatsScreen {
         ? result.userMessage
         : (result.errorCode !== undefined ? result.errorCode : '加载码字日历失败')
     }
+  }
+
+  /** 加载时段实际日期范围覆盖的年度 Core 日快照，并合并范围内的真实日数据。 */
+  private async loadPeriodHeatmap(startDate: string, endDate: string): Promise<void> {
+    const rangeKey: string = `${startDate}/${endDate}`
+    this.periodHeatmapRangeKey = rangeKey
+    this.periodHeatmapDays = []
+    this.periodHeatmapLoading = true
+    this.periodHeatmapError = ''
+
+    const start: Date | null = parseIsoDate(startDate)
+    const end: Date | null = parseIsoDate(endDate)
+    if (start === null || end === null || formatIsoDate(start) !== startDate ||
+      formatIsoDate(end) !== endDate || start.getTime() > end.getTime()) {
+      this.periodHeatmapLoading = false
+      this.periodHeatmapError = '时段日期无效'
+      return
+    }
+
+    const years: number[] = []
+    for (let year: number = start.getFullYear(); year <= end.getFullYear(); year++) {
+      years.push(year)
+    }
+    const response: StatsPeriodHeatmapRequestResult = await this.statsBridge.getWritingStatsHeatmaps(years)
+    if (!this.statsBridge.isLatestPeriodHeatmapRequest(response.requestSeq) ||
+      this.periodHeatmapRangeKey !== rangeKey) {
+      return
+    }
+    this.periodHeatmapLoading = false
+    const result: ResultEnvelope<WritingStatsHeatmap[]> = response.envelope
+    if (result.success && result.data !== undefined) {
+      const merged: WritingStatsHeatmapDay[] = []
+      for (const snapshot of result.data) {
+        for (const day of snapshot.days) {
+          if (day.date >= startDate && day.date <= endDate) {
+            merged.push(day)
+          }
+        }
+      }
+      this.periodHeatmapDays = merged
+    } else {
+      this.periodHeatmapError = result.userMessage !== undefined && result.userMessage.length > 0
+        ? result.userMessage
+        : (result.errorCode !== undefined ? result.errorCode : '加载时段日历失败')
+    }
+  }
+
+  /** 时段日历失败后的原地重试，不重新请求 Explorer 或全年日历。 */
+  private retryPeriodHeatmap(): void {
+    if (this.explorer !== null) {
+      this.loadPeriodHeatmap(this.explorer.selected.range.startDate, this.explorer.selected.range.endDate)
+    }
+  }
+
+  private periodHeatmapMatchesSelection(): boolean {
+    return this.explorer !== null &&
+      this.periodHeatmapRangeKey === `${this.explorer.selected.range.startDate}/${this.explorer.selected.range.endDate}`
   }
 
   /**
@@ -355,6 +421,9 @@ export struct StatsScreen {
           heatmap: this.heatmap,
           heatmapYear: this.heatmapYear,
           heatmapError: this.heatmapError,
+          periodHeatmapDays: this.periodHeatmapMatchesSelection() ? this.periodHeatmapDays : [],
+          periodHeatmapLoading: this.periodHeatmapMatchesSelection() ? this.periodHeatmapLoading : true,
+          periodHeatmapError: this.periodHeatmapMatchesSelection() ? this.periodHeatmapError : '',
           onMounted: (): void => {
             this.recordMountedContent('WideStatisticsPage')
           },
@@ -381,6 +450,9 @@ export struct StatsScreen {
           },
           onRetryHeatmap: (): void => {
             this.retryHeatmap()
+          },
+          onRetryPeriodHeatmap: (): void => {
+            this.retryPeriodHeatmap()
           }
         })
       } else {
