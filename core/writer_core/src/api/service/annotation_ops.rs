@@ -218,6 +218,30 @@ impl WriterCoreApi {
         ))
     }
 
+    fn saved_chapter_text_matches(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        text: &str,
+    ) -> ApiResult<bool> {
+        let core = self.core_read();
+        for volume in core.list_volumes(project_id).map_err(WriterError::from)? {
+            let chapter_exists = core
+                .list_chapters(project_id, &volume.id)
+                .map_err(WriterError::from)?
+                .iter()
+                .any(|chapter| chapter.id == chapter_id);
+            if !chapter_exists {
+                continue;
+            }
+            let saved = core
+                .read_chapter(project_id, &volume.id, chapter_id)
+                .map_err(WriterError::from)?;
+            return Ok(saved.content == text);
+        }
+        Ok(false)
+    }
+
     pub(crate) fn ensure_named_entries_migrated(&self, project_id: &str) -> ApiResult<()> {
         safe_project_id(project_id)?;
         let correction = crate::correction::CorrectionStore::open(&self.app_data_root)?;
@@ -505,6 +529,49 @@ impl WriterCoreApi {
             }
             desired.insert(tag_id);
         }
+        if let Some(anchor_id) = text_anchor_id(&target) {
+            let mut baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            if let Some(baseline) =
+                find_session_created_anchor_baseline_mut(&mut baselines, &project_id, anchor_id)
+            {
+                let existing = baseline
+                    .pending_bindings
+                    .values()
+                    .filter(|binding| binding.target == target)
+                    .cloned()
+                    .map(|binding| (binding.tag_id.clone(), binding))
+                    .collect::<HashMap<_, _>>();
+                baseline
+                    .pending_bindings
+                    .retain(|_, binding| binding.target != target);
+                let now = chrono::Utc::now().timestamp_millis();
+                let mut desired_ids = desired.into_iter().collect::<Vec<_>>();
+                desired_ids.sort();
+                let mut result = Vec::with_capacity(desired_ids.len());
+                for tag_id in desired_ids {
+                    let binding = existing
+                        .get(&tag_id)
+                        .cloned()
+                        .unwrap_or_else(|| TagBinding {
+                            binding_id: uuid::Uuid::new_v4().to_string(),
+                            project_id: project_id.clone(),
+                            tag_id,
+                            target: target.clone(),
+                            updated_at_ms: now,
+                            deleted_at_ms: None,
+                        });
+                    baseline
+                        .pending_bindings
+                        .insert(binding.binding_id.clone(), binding.clone());
+                    result.push(binding_to_dto(binding));
+                }
+                baseline.updated_at_ms = now;
+                return Ok(result);
+            }
+        }
         let existing = store
             .list_bindings_for_target(&target)
             .map_err(WriterError::from)?;
@@ -559,10 +626,30 @@ impl WriterCoreApi {
         target: AnnotationObjectRefDto,
     ) -> ApiResult<Vec<AnnotationTagBindingDto>> {
         let target = object_ref_from_dto(target)?;
-        self.annotation_store(&project_id)?
+        let mut bindings = self
+            .annotation_store(&project_id)?
             .list_bindings_for_target(&target)
-            .map(|values| values.into_iter().map(binding_to_dto).collect())
-            .map_err(Into::into)
+            .map_err(WriterError::from)?;
+        if text_anchor_id(&target).is_some() {
+            let baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            for baseline in baselines
+                .values()
+                .filter(|baseline| baseline.project_id == project_id)
+            {
+                bindings.extend(
+                    baseline
+                        .pending_bindings
+                        .values()
+                        .filter(|binding| binding.target == target)
+                        .cloned(),
+                );
+            }
+        }
+        bindings.sort_by(|left, right| left.binding_id.cmp(&right.binding_id));
+        Ok(bindings.into_iter().map(binding_to_dto).collect())
     }
 
     pub fn create_text_anchor(
@@ -571,7 +658,7 @@ impl WriterCoreApi {
         chapter_id: String,
         start_byte: u32,
         end_byte: u32,
-        _text_revision: u64,
+        text_revision: u64,
         text: String,
     ) -> ApiResult<AnnotationTextAnchorDto> {
         safe_project_id(&project_id)?;
@@ -601,7 +688,7 @@ impl WriterCoreApi {
         let mut anchor = TextAnchor {
             anchor_id: uuid::Uuid::new_v4().to_string(),
             project_id: project_id.clone(),
-            chapter_id,
+            chapter_id: chapter_id.clone(),
             start_byte: start,
             end_byte: end,
             text_hash: String::new(),
@@ -613,10 +700,43 @@ impl WriterCoreApi {
         };
         capture_text_anchor(&mut anchor, &text).map_err(WriterError::from)?;
         let result = anchor_to_dto(anchor.clone())?;
-        let paths = store
-            .apply_mutation(AnnotationMutation::UpsertTextAnchor(anchor))
-            .map_err(WriterError::from)?;
-        self.finish_annotation_write(&project_id, paths, "create_annotation_text_anchor");
+        if self.saved_chapter_text_matches(&project_id, &chapter_id, &text)? {
+            let paths = store
+                .apply_mutation(AnnotationMutation::UpsertTextAnchor(anchor))
+                .map_err(WriterError::from)?;
+            self.finish_annotation_write(&project_id, paths, "create_annotation_text_anchor");
+            return Ok(result);
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut baselines = self
+            .annotation_edit_baselines
+            .lock()
+            .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+        let baseline = baselines
+            .values_mut()
+            .filter(|baseline| {
+                baseline.project_id == project_id
+                    && baseline.chapter_id == chapter_id
+                    && baseline.text_revision == text_revision
+                    && baseline.text_len == text.len()
+            })
+            .max_by_key(|baseline| baseline.updated_at_ms)
+            .ok_or_else(|| {
+                invalid_annotation(
+                    "unsaved text anchor requires an active chapter annotation session",
+                )
+            })?;
+        if baseline
+            .anchors
+            .iter()
+            .any(|existing| existing.anchor_id == anchor.anchor_id)
+        {
+            return Err(invalid_annotation(
+                "text anchor ID already exists in session",
+            ));
+        }
+        baseline.anchors.push(anchor);
+        baseline.updated_at_ms = now;
         Ok(result)
     }
 
@@ -732,6 +852,19 @@ impl WriterCoreApi {
             deleted_at_ms: None,
         };
         let result = link_to_dto(link.clone());
+        if let Some(anchor_id) = text_anchor_id(&link.source) {
+            let mut baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            if let Some(baseline) =
+                find_session_created_anchor_baseline_mut(&mut baselines, &project_id, anchor_id)
+            {
+                baseline.pending_links.insert(link.link_id.clone(), link);
+                baseline.updated_at_ms = chrono::Utc::now().timestamp_millis();
+                return Ok(result);
+            }
+        }
         let paths = store
             .apply_mutation(AnnotationMutation::UpsertLink(link))
             .map_err(WriterError::from)?;
@@ -756,6 +889,23 @@ impl WriterCoreApi {
         if !self.object_ref_exists(&source)? {
             return Err(invalid_annotation("link source does not exist"));
         }
+        let target = link_target_from_dto(target)?;
+        {
+            let mut baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            if let Some(link) = baselines
+                .values_mut()
+                .filter(|baseline| baseline.project_id == project_id)
+                .find_map(|baseline| baseline.pending_links.get_mut(&link_id))
+            {
+                link.source = source;
+                link.target = target;
+                link.updated_at_ms = chrono::Utc::now().timestamp_millis();
+                return Ok(link_to_dto(link.clone()));
+            }
+        }
         let store = self.annotation_store(&project_id)?;
         let mut link = store
             .get_link(&link_id)
@@ -763,7 +913,7 @@ impl WriterCoreApi {
             .filter(|link| link.deleted_at_ms.is_none())
             .ok_or_else(|| invalid_annotation("link does not exist"))?;
         link.source = source;
-        link.target = link_target_from_dto(target)?;
+        link.target = target;
         link.updated_at_ms = chrono::Utc::now().timestamp_millis();
         let result = link_to_dto(link.clone());
         let paths = store
@@ -774,6 +924,21 @@ impl WriterCoreApi {
     }
 
     pub fn delete_link(&self, project_id: String, link_id: String) -> ApiResult<bool> {
+        {
+            let mut baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            for baseline in baselines
+                .values_mut()
+                .filter(|baseline| baseline.project_id == project_id)
+            {
+                if baseline.pending_links.remove(&link_id).is_some() {
+                    baseline.updated_at_ms = chrono::Utc::now().timestamp_millis();
+                    return Ok(true);
+                }
+            }
+        }
         let store = self.annotation_store(&project_id)?;
         let paths = store
             .apply_mutation(AnnotationMutation::Delete {
@@ -793,10 +958,30 @@ impl WriterCoreApi {
         source: AnnotationObjectRefDto,
     ) -> ApiResult<Vec<AnnotationObjectLinkDto>> {
         let source = object_ref_from_dto(source)?;
-        self.annotation_store(source.project_id())?
+        let mut links = self
+            .annotation_store(source.project_id())?
             .list_links_for_source(&source)
-            .map(|values| values.into_iter().map(link_to_dto).collect())
-            .map_err(Into::into)
+            .map_err(WriterError::from)?;
+        if matches!(source, ObjectRef::TextAnchor { .. }) {
+            let baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            for baseline in baselines
+                .values()
+                .filter(|baseline| baseline.project_id == source.project_id())
+            {
+                links.extend(
+                    baseline
+                        .pending_links
+                        .values()
+                        .filter(|link| link.source == source)
+                        .cloned(),
+                );
+            }
+        }
+        links.sort_by(|left, right| left.link_id.cmp(&right.link_id));
+        Ok(links.into_iter().map(link_to_dto).collect())
     }
 
     pub fn find_backlinks(
@@ -819,6 +1004,30 @@ impl WriterCoreApi {
         safe_project_id(&project_id)?;
         if anchor_id.is_empty() {
             return Ok(None);
+        }
+        {
+            let baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            if let Some(baseline) = baselines.values().find(|baseline| {
+                baseline.project_id == project_id
+                    && baseline.anchors.iter().any(|anchor| {
+                        anchor.anchor_id == anchor_id && anchor.deleted_at_ms.is_none()
+                    })
+                    && !baseline
+                        .original_anchors
+                        .iter()
+                        .any(|anchor| anchor.anchor_id == anchor_id)
+            }) {
+                if let Some(anchor) = baseline
+                    .anchors
+                    .iter()
+                    .find(|anchor| anchor.anchor_id == anchor_id)
+                {
+                    return anchor_to_dto(anchor.clone()).map(Some);
+                }
+            }
         }
         self.annotation_store(&project_id)?
             .get_text_anchor(&anchor_id)
@@ -854,6 +1063,18 @@ impl WriterCoreApi {
 
     fn object_ref_exists(&self, target: &ObjectRef) -> ApiResult<bool> {
         let project_id = target.project_id();
+        if let ObjectRef::TextAnchor { object_id, .. } = target {
+            let baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            if baselines
+                .values()
+                .any(|baseline| is_session_created_anchor(baseline, project_id, object_id))
+            {
+                return Ok(true);
+            }
+        }
         let project_root = self.projects_root.join(project_id);
         if !project_root.join("project.json").is_file() {
             return Ok(false);
@@ -964,6 +1185,8 @@ impl WriterCoreApi {
             uuid::Uuid::new_v4().to_string()
         };
         let mut projected_anchors = Vec::new();
+        let mut session_bindings = Vec::new();
+        let mut session_links = Vec::new();
         if use_session_baseline {
             let mut baselines = self
                 .annotation_edit_baselines
@@ -1016,6 +1239,8 @@ impl WriterCoreApi {
                 capture_text_anchor_with_hash(anchor, &text, &text_hash)
                     .map_err(WriterError::from)?;
             }
+            session_bindings = baseline.pending_bindings.values().cloned().collect();
+            session_links = baseline.pending_links.values().cloned().collect();
         } else {
             for anchor in &stored_anchors {
                 let Some(current) = rebase_text_anchor_with_hash(anchor, &text, &text_hash)
@@ -1047,6 +1272,8 @@ impl WriterCoreApi {
                     text_len: text.len(),
                     original_anchors: stored_anchors,
                     anchors: projected_anchors.clone(),
+                    pending_bindings: HashMap::new(),
+                    pending_links: HashMap::new(),
                     history: AnnotationEditHistory::default(),
                     updated_at_ms: now,
                 },
@@ -1081,6 +1308,42 @@ impl WriterCoreApi {
             } = &link.source
             {
                 if source_project_id == &project_id {
+                    links_by_anchor
+                        .entry(anchor_id.clone())
+                        .or_default()
+                        .push(link);
+                }
+            }
+        }
+        for binding in session_bindings {
+            if let ObjectRef::TextAnchor {
+                project_id: binding_project_id,
+                object_id: anchor_id,
+            } = &binding.target
+            {
+                if binding_project_id == &project_id {
+                    bindings_by_anchor
+                        .entry(anchor_id.clone())
+                        .or_default()
+                        .retain(|stored| stored.binding_id != binding.binding_id);
+                    bindings_by_anchor
+                        .entry(anchor_id.clone())
+                        .or_default()
+                        .push(binding);
+                }
+            }
+        }
+        for link in session_links {
+            if let ObjectRef::TextAnchor {
+                project_id: source_project_id,
+                object_id: anchor_id,
+            } = &link.source
+            {
+                if source_project_id == &project_id {
+                    links_by_anchor
+                        .entry(anchor_id.clone())
+                        .or_default()
+                        .retain(|stored| stored.link_id != link.link_id);
                     links_by_anchor
                         .entry(anchor_id.clone())
                         .or_default()
@@ -1399,6 +1662,12 @@ impl WriterCoreApi {
             .prepare_text_anchor_changes(
                 &original_anchors,
                 &current_anchors,
+                &baseline
+                    .pending_bindings
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                &baseline.pending_links.values().cloned().collect::<Vec<_>>(),
                 content,
                 chrono::Utc::now().timestamp_millis(),
             )
@@ -1409,6 +1678,10 @@ impl WriterCoreApi {
         Ok(Some(PreparedAnnotationEditSave {
             baseline_id: Some(baseline_id),
             prepared,
+            text_revision: baseline.text_revision,
+            chapter_text_hash: text_hash,
+            pending_bindings: baseline.pending_bindings.values().cloned().collect(),
+            pending_links: baseline.pending_links.values().cloned().collect(),
         }))
     }
 
@@ -1438,6 +1711,8 @@ impl WriterCoreApi {
             .prepare_text_anchor_changes(
                 &original_anchors,
                 &current_anchors,
+                &[],
+                &[],
                 content,
                 chrono::Utc::now().timestamp_millis(),
             )
@@ -1448,14 +1723,17 @@ impl WriterCoreApi {
         Ok(Some(PreparedAnnotationEditSave {
             baseline_id: None,
             prepared,
+            text_revision: 0,
+            chapter_text_hash: text_hash,
+            pending_bindings: Vec::new(),
+            pending_links: Vec::new(),
         }))
     }
 
-    pub(crate) fn finish_annotation_edit_save(
-        &self,
-        baseline_id: &str,
-        committed_anchors: &[TextAnchor],
-    ) {
+    pub(crate) fn finish_annotation_edit_save(&self, pending: &PreparedAnnotationEditSave) {
+        let Some(baseline_id) = pending.baseline_id.as_deref() else {
+            return;
+        };
         let Ok(mut baselines) = self.annotation_edit_baselines.lock() else {
             log::warn!("annotation edit baseline lock poisoned after chapter save");
             return;
@@ -1470,11 +1748,12 @@ impl WriterCoreApi {
             id == baseline_id
                 || baseline.project_id.as_str() != session_key.0.as_str()
                 || baseline.chapter_id.as_str() != session_key.1.as_str()
+                || annotation_baseline_is_dirty(baseline, &pending.chapter_text_hash)
         });
         let Some(baseline) = baselines.get_mut(baseline_id) else {
             return;
         };
-        for committed in committed_anchors {
+        for committed in &pending.prepared.committed_anchors {
             if let Some(original) = baseline
                 .original_anchors
                 .iter_mut()
@@ -1484,17 +1763,62 @@ impl WriterCoreApi {
             } else {
                 baseline.original_anchors.push(committed.clone());
             }
-            if let Some(current) = baseline
-                .anchors
-                .iter_mut()
-                .find(|anchor| anchor.anchor_id == committed.anchor_id)
-            {
-                *current = committed.clone();
-            } else {
-                baseline.anchors.push(committed.clone());
+            if baseline.text_revision == pending.text_revision {
+                if let Some(current) = baseline
+                    .anchors
+                    .iter_mut()
+                    .find(|anchor| anchor.anchor_id == committed.anchor_id)
+                {
+                    *current = committed.clone();
+                } else {
+                    baseline.anchors.push(committed.clone());
+                }
+            }
+        }
+        for binding in &pending.pending_bindings {
+            if baseline.pending_bindings.get(&binding.binding_id) == Some(binding) {
+                baseline.pending_bindings.remove(&binding.binding_id);
+            }
+        }
+        for link in &pending.pending_links {
+            if baseline.pending_links.get(&link.link_id) == Some(link) {
+                baseline.pending_links.remove(&link.link_id);
             }
         }
     }
+}
+
+fn text_anchor_id(target: &ObjectRef) -> Option<&str> {
+    match target {
+        ObjectRef::TextAnchor { object_id, .. } => Some(object_id),
+        _ => None,
+    }
+}
+
+fn is_session_created_anchor(
+    baseline: &AnnotationEditBaseline,
+    project_id: &str,
+    anchor_id: &str,
+) -> bool {
+    baseline.project_id == project_id
+        && baseline
+            .anchors
+            .iter()
+            .any(|anchor| anchor.anchor_id == anchor_id && anchor.deleted_at_ms.is_none())
+        && !baseline
+            .original_anchors
+            .iter()
+            .any(|anchor| anchor.anchor_id == anchor_id)
+}
+
+fn find_session_created_anchor_baseline_mut<'a>(
+    baselines: &'a mut HashMap<String, AnnotationEditBaseline>,
+    project_id: &str,
+    anchor_id: &str,
+) -> Option<&'a mut AnnotationEditBaseline> {
+    baselines
+        .values_mut()
+        .find(|baseline| is_session_created_anchor(baseline, project_id, anchor_id))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1517,6 +1841,8 @@ pub(super) struct AnnotationEditBaseline {
     text_len: usize,
     original_anchors: Vec<TextAnchor>,
     anchors: Vec<TextAnchor>,
+    pending_bindings: HashMap<String, TagBinding>,
+    pending_links: HashMap<String, ObjectLink>,
     history: AnnotationEditHistory,
     updated_at_ms: i64,
 }
@@ -1524,6 +1850,10 @@ pub(super) struct AnnotationEditBaseline {
 pub(crate) struct PreparedAnnotationEditSave {
     pub(crate) baseline_id: Option<String>,
     pub(crate) prepared: crate::annotations::PreparedTextAnchorChanges,
+    text_revision: u64,
+    chapter_text_hash: String,
+    pending_bindings: Vec<TagBinding>,
+    pending_links: Vec<ObjectLink>,
 }
 
 fn annotation_baseline_is_dirty(
@@ -1531,14 +1861,16 @@ fn annotation_baseline_is_dirty(
     chapter_text_hash: &str,
 ) -> bool {
     baseline.anchors.iter().any(|anchor| {
-        baseline
+        if let Some(original) = baseline
             .original_anchors
             .iter()
             .find(|original| original.anchor_id == anchor.anchor_id)
-            .is_some_and(|original| {
-                original != anchor
-                    || (anchor.deleted_at_ms.is_none() && anchor.text_hash != chapter_text_hash)
-            })
+        {
+            original != anchor
+                || (anchor.deleted_at_ms.is_none() && anchor.text_hash != chapter_text_hash)
+        } else {
+            anchor.deleted_at_ms.is_none()
+        }
     })
 }
 

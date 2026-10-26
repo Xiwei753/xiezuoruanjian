@@ -396,8 +396,8 @@ impl WriterCoreApi {
             });
         }
         if let Some(pending) = pending_annotations {
-            if let Some(baseline_id) = pending.baseline_id.as_deref() {
-                self.finish_annotation_edit_save(baseline_id, &pending.prepared.committed_anchors);
+            if pending.baseline_id.is_some() {
+                self.finish_annotation_edit_save(&pending);
             }
             self.refresh_annotation_search_index(project_id, "save_chapter_content");
         }

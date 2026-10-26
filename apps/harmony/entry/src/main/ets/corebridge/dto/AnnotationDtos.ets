@@ -36,7 +36,6 @@ export interface AnnotationTextAnchorDto {
   chapterId: string
   startByte: number
   endByte: number
-  textRevision: number
   updatedAtMs: number
   deletedAtMs: number | null
 }

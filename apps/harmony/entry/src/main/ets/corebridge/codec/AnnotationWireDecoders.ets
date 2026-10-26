@@ -138,13 +138,13 @@ export function decodeAnnotationTextAnchor(value: Object): DecodeResult<Annotati
   const rec = record(value, 'AnnotationTextAnchorDto')
   if (rec === null) return failure('expected object')
   const anchorId = text(rec, 'anchorId'); const projectId = text(rec, 'projectId'); const chapterId = text(rec, 'chapterId')
-  const startByte = number(rec, 'startByte'); const endByte = number(rec, 'endByte'); const textRevision = number(rec, 'textRevision')
+  const startByte = number(rec, 'startByte'); const endByte = number(rec, 'endByte')
   const updatedAtMs = number(rec, 'updatedAtMs'); const deletedAtMs = nullableNumber(rec, 'deletedAtMs')
   if (anchorId === null || projectId === null || chapterId === null || startByte === null || endByte === null ||
-      textRevision === null || updatedAtMs === null || deletedAtMs === undefined) return failure('missing anchor fields')
+      updatedAtMs === null || deletedAtMs === undefined) return failure('missing anchor fields')
   const decoded: AnnotationTextAnchorDto = {
     anchorId: anchorId, projectId: projectId, chapterId: chapterId, startByte: startByte,
-    endByte: endByte, textRevision: textRevision, updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs
+    endByte: endByte, updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs
   }
   return success(decoded)
 }

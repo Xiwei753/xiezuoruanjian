@@ -53,6 +53,8 @@ fn stage_rebased_chapter_anchors(
 
     let mut handled_chapters = HashSet::new();
     let mut staged_anchor_paths = HashSet::new();
+    let mut rebased_anchors = Vec::new();
+    let mut newest_existing_version = i64::MIN;
     for action in content_actions {
         let CommitAction::Apply { rel_path, content } = action else {
             continue;
@@ -109,8 +111,17 @@ fn stage_rebased_chapter_anchors(
             if rebased == anchor {
                 continue;
             }
-            let serialized = serde_json::to_vec_pretty(&rebased)?;
-            let target_relative = project_namespace.join(&anchor_relative);
+            newest_existing_version = newest_existing_version.max(anchor.updated_at_ms);
+            rebased_anchors.push((project_namespace.join(&anchor_relative), rebased));
+        }
+    }
+    if !rebased_anchors.is_empty() {
+        let updated_at_ms = chrono::Utc::now()
+            .timestamp_millis()
+            .max(newest_existing_version.saturating_add(1));
+        for (target_relative, mut anchor) in rebased_anchors {
+            anchor.updated_at_ms = updated_at_ms;
+            let serialized = serde_json::to_vec_pretty(&anchor)?;
             let target_relative = target_relative.to_string_lossy();
             tx.add_bytes(&target_relative, &serialized)?;
         }

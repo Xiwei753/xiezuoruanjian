@@ -131,6 +131,8 @@ impl AnnotationStore {
         &self,
         original_anchors: &[TextAnchor],
         current_anchors: &[TextAnchor],
+        pending_bindings: &[TagBinding],
+        pending_links: &[ObjectLink],
         chapter_text: &str,
         updated_at_ms: i64,
     ) -> crate::Result<PreparedTextAnchorChanges> {
@@ -145,7 +147,28 @@ impl AnnotationStore {
         let mut restored_anchor_ids = HashMap::<String, i64>::new();
 
         for anchor in current_anchors {
-            let Some(original) = originals.get(anchor.anchor_id.as_str()) else {
+            let original = originals.get(anchor.anchor_id.as_str());
+            if original.is_none() {
+                // A text anchor created during this editor session has no
+                // durable record yet. Persist it with the chapter save, unless
+                // the selected text was removed before that save.
+                if anchor.deleted_at_ms.is_some() {
+                    continue;
+                }
+                let mut committed = anchor.clone();
+                committed.updated_at_ms = updated_at_ms;
+                crate::annotations::ranges::capture_text_anchor_with_hash(
+                    &mut committed,
+                    chapter_text,
+                    &text_hash,
+                )?;
+                committed.deleted_at_ms = None;
+                let path = self.relative_record_path("anchors", &committed.anchor_id)?;
+                records.insert(path, serde_json::to_string_pretty(&committed)?);
+                committed_anchors.push(committed);
+                continue;
+            }
+            let Some(original) = original else {
                 continue;
             };
             if *original == anchor
@@ -238,6 +261,43 @@ impl AnnotationStore {
                 let path = self.relative_record_path("links", &link.link_id)?;
                 records.insert(path, serde_json::to_string_pretty(&link)?);
             }
+        }
+
+        let active_anchor_ids = committed_anchors
+            .iter()
+            .filter(|anchor| anchor.deleted_at_ms.is_none())
+            .map(|anchor| anchor.anchor_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        for binding in pending_bindings {
+            let ObjectRef::TextAnchor {
+                project_id,
+                object_id,
+            } = &binding.target
+            else {
+                continue;
+            };
+            if binding.project_id != self.project_id
+                || project_id != &self.project_id
+                || !active_anchor_ids.contains(object_id.as_str())
+            {
+                continue;
+            }
+            let path = self.relative_record_path("bindings", &binding.binding_id)?;
+            records.insert(path, serde_json::to_string_pretty(binding)?);
+        }
+        for link in pending_links {
+            let ObjectRef::TextAnchor {
+                project_id,
+                object_id,
+            } = &link.source
+            else {
+                continue;
+            };
+            if project_id != &self.project_id || !active_anchor_ids.contains(object_id.as_str()) {
+                continue;
+            }
+            let path = self.relative_record_path("links", &link.link_id)?;
+            records.insert(path, serde_json::to_string_pretty(link)?);
         }
 
         let mut files = records.into_iter().collect::<Vec<_>>();
