@@ -281,7 +281,7 @@ export struct WideLifetimeSummary {
       }
     }
     .width('100%')
-    .layoutWeight(1)
+    .padding({ top: 24, bottom: 24 })
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
   }
