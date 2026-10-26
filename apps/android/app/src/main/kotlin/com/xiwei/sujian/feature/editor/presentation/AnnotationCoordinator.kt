@@ -414,13 +414,12 @@ class AnnotationCoordinator(
         val baselineId =
             context.baselineId ?: try {
                 withContext(Dispatchers.IO) {
-                    requireData(
-                        bridge.getChapterAnnotations(
-                            projectId,
-                            chapterId,
-                            baseRevision,
-                            oldText,
-                        ),
+                    loadChapterAnnotations(
+                        projectId,
+                        chapterId,
+                        baseRevision,
+                        oldText,
+                        context.baselineId,
                     ).baselineId
                 }
             } catch (error: Exception) {
@@ -443,7 +442,6 @@ class AnnotationCoordinator(
                         newRevision,
                         cause,
                         edits,
-                        newText,
                     ),
                 )
             }
@@ -498,17 +496,36 @@ class AnnotationCoordinator(
         _state.value = data.copy(isSheetOpen = _state.value.isSheetOpen)
     }
 
+    private suspend fun loadChapterAnnotations(
+        projectId: String,
+        chapterId: String,
+        revision: Long,
+        text: String,
+        baselineId: String?,
+    ): ChapterAnnotationsDto {
+        suspend fun fetch(id: String): ChapterAnnotationsDto =
+            withContext(Dispatchers.IO) {
+                requireData(bridge.getChapterAnnotations(projectId, chapterId, revision, text, id))
+            }
+
+        return try {
+            fetch(baselineId.orEmpty())
+        } catch (error: Exception) {
+            if (baselineId.isNullOrEmpty()) throw error
+            fetch("")
+        }
+    }
+
     private suspend fun loadSnapshot(context: TargetContext): AnnotationCoordinatorState {
         val tags = requireData(bridge.listTags(context.projectId)).filter { it.deletedAtMs == null }
         val chapterSnapshot =
             if (context.chapterId != null && context.text != null) {
-                requireData(
-                    bridge.getChapterAnnotations(
-                        context.projectId,
-                        context.chapterId,
-                        context.revision,
-                        context.text,
-                    ),
+                loadChapterAnnotations(
+                    context.projectId,
+                    context.chapterId,
+                    context.revision,
+                    context.text,
+                    context.baselineId,
                 )
             } else {
                 null
@@ -620,13 +637,12 @@ class AnnotationCoordinator(
         val chapter = context.chapterId ?: return null
         val text = context.text ?: return null
         val matchingAnchor =
-            requireData(
-                bridge.getChapterAnnotations(
-                    context.projectId,
-                    chapter,
-                    context.revision,
-                    text,
-                ),
+            loadChapterAnnotations(
+                context.projectId,
+                chapter,
+                context.revision,
+                text,
+                context.baselineId,
             ).anchors.firstOrNull { anchor ->
                 anchor.startByte.toInt() == range.first &&
                     anchor.endByte.toInt() == range.second &&

@@ -62,6 +62,7 @@ pub fn save_chapter_verified_with_changes(
         chapter_id,
         content,
         false,
+        &[],
         workspace_root,
     )
 }
@@ -87,6 +88,32 @@ pub fn save_chapter_verified_with_changes_with_options(
         chapter_id,
         content,
         allow_empty_overwrite,
+        &[],
+        workspace_root,
+    )
+}
+
+/// Save chapter content and additional project-local records in one file
+/// transaction, returning every path in the workspace change set.
+pub fn save_chapter_verified_with_changes_and_files_with_options(
+    project_root: &Path,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+    allow_empty_overwrite: bool,
+    additional_files: &[(String, String)],
+    workspace_root: &Path,
+) -> Result<(
+    ChapterSaveReceipt,
+    crate::storage::workspace_git::WorkspaceChangeSet,
+)> {
+    save_chapter_verified_with_changes_inner(
+        project_root,
+        volume_id,
+        chapter_id,
+        content,
+        allow_empty_overwrite,
+        additional_files,
         workspace_root,
     )
 }
@@ -98,17 +125,19 @@ fn save_chapter_verified_with_changes_inner(
     chapter_id: &str,
     content: &str,
     allow_empty_overwrite: bool,
+    additional_files: &[(String, String)],
     workspace_root: &Path,
 ) -> Result<(
     ChapterSaveReceipt,
     crate::storage::workspace_git::WorkspaceChangeSet,
 )> {
-    let receipt = save_chapter_verified_with_options(
+    let receipt = save_chapter_verified_with_options_and_files(
         project_root,
         volume_id,
         chapter_id,
         content,
         allow_empty_overwrite,
+        additional_files,
     )?;
 
     let chapter_dir = project_root
@@ -131,9 +160,15 @@ fn save_chapter_verified_with_changes_inner(
         .to_string_lossy()
         .replace('\\', "/");
 
-    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+    let project_relative = project_root
+        .strip_prefix(workspace_root)
+        .unwrap_or(project_root);
+    let mut change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
         .add_upsert(std::path::PathBuf::from(meta_rel_path))
         .add_upsert(std::path::PathBuf::from(md_rel_path));
+    for (relative_path, _) in additional_files {
+        change_set = change_set.add_upsert(project_relative.join(relative_path));
+    }
 
     Ok((receipt, change_set))
 }

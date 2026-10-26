@@ -2086,7 +2086,7 @@ export struct WritingScreen {
           oldEndByte: patch.replaceByteEndExclusive,
           newStartByte: patch.insertedByteStart,
           newEndByte: patch.insertedByteEndExclusive
-        })), snapshot.text
+        }))
       )
       if (!result.success) {
         this.annotationErrorMessage = result.userMessage ?? '选区标注位置同步失败'
@@ -2128,14 +2128,25 @@ export struct WritingScreen {
 
   private async loadChapterAnnotations(snapshot: EditorSessionSnapshot, allowBaselineAdvanceWhileEditing: boolean): Promise<void> {
     if (this.projectId.length === 0 || this.chapterId.length === 0 || snapshot.chapterId !== this.chapterId) return
+    const requestedBaselineId: string = this.annotationBaselineId
     const result = await this.annotationBridge.getChapterAnnotations(
-      this.projectId, this.chapterId, snapshot.revision, snapshot.text)
+      this.projectId, this.chapterId, snapshot.revision, snapshot.text, requestedBaselineId)
     if (!result.success || result.data === undefined) {
+      const current = this.editorCoordinator.getSnapshot()
+      if (requestedBaselineId.length > 0 && this.annotationBaselineId === requestedBaselineId &&
+        current !== null && current.revision === snapshot.revision && current.chapterId === snapshot.chapterId) {
+        this.annotationBaselineId = ''
+        this.annotationBaselineRevision = -1
+        await this.loadChapterAnnotations(snapshot, allowBaselineAdvanceWhileEditing)
+        return
+      }
+      if (current !== null && (current.revision !== snapshot.revision || current.chapterId !== snapshot.chapterId)) return
       this.annotationErrorMessage = result.userMessage ?? '标注加载失败'
       return
     }
     const annotations = result.data
-    if (snapshot.chapterId !== this.chapterId || annotations.chapterId !== snapshot.chapterId ||
+    if (snapshot.chapterId !== this.chapterId || annotations.projectId !== this.projectId ||
+      annotations.chapterId !== snapshot.chapterId ||
       annotations.textRevision !== snapshot.revision) return
     const mayAdvanceBaseline: boolean = allowBaselineAdvanceWhileEditing || this.pendingAnnotationEdits === 0 ||
       (this.annotationBaselineId.length === 0 && snapshot.revision === this.nextAnnotationEditBaseRevision)
@@ -2146,17 +2157,50 @@ export struct WritingScreen {
     const current = this.editorCoordinator.getSnapshot()
     if (current === null || current.revision !== snapshot.revision || current.chapterId !== snapshot.chapterId) return
     this.chapterAnnotations = annotations
-    const ranges: AnnotationRangeDto[] = []
+    const liveAnchors = new Map<string, AnnotationTextAnchorDto>()
     annotations.anchors.forEach((anchor: AnnotationTextAnchorDto): void => {
-      if (anchor.deletedAtMs === null && anchor.endByte > anchor.startByte) {
+      if (anchor.projectId === annotations.projectId && anchor.chapterId === annotations.chapterId &&
+        anchor.deletedAtMs === null && anchor.startByte >= 0 && anchor.endByte > anchor.startByte) {
+        liveAnchors.set(anchor.anchorId, anchor)
+      }
+    })
+
+    const tagAnchorIds: Set<string> = new Set<string>()
+    annotations.bindings.forEach((binding): void => {
+      const target = binding.target
+      if (binding.deletedAtMs !== null || binding.projectId !== annotations.projectId ||
+        target.kind !== 'textAnchor' || target.projectId !== annotations.projectId ||
+        !liveAnchors.has(target.objectId)) return
+      tagAnchorIds.add(target.objectId)
+    })
+
+    const linkedAnchorIds: Set<string> = new Set<string>()
+    annotations.links.forEach((link): void => {
+      const source = link.source
+      if (link.deletedAtMs !== null || link.origin !== 'manual' || source.kind !== 'textAnchor' ||
+        source.projectId !== annotations.projectId || !liveAnchors.has(source.objectId)) return
+      linkedAnchorIds.add(source.objectId)
+    })
+
+    const ranges: AnnotationRangeDto[] = []
+    tagAnchorIds.forEach((anchorId: string): void => {
+      const anchor = liveAnchors.get(anchorId)
+      if (anchor !== undefined) {
         ranges.push({ startByte: anchor.startByte, endByte: anchor.endByte,
-          textRevision: annotations.textRevision, kind: 'anchor' })
+          textRevision: annotations.textRevision, kind: 'tagBackground' })
+      }
+    })
+    linkedAnchorIds.forEach((anchorId: string): void => {
+      const anchor = liveAnchors.get(anchorId)
+      if (anchor !== undefined) {
+        ranges.push({ startByte: anchor.startByte, endByte: anchor.endByte,
+          textRevision: annotations.textRevision, kind: 'linkUnderline' })
       }
     })
     annotations.autoMatches.forEach((match): void => {
-      if (match.endByte > match.startByte) {
+      if (match.endByte > match.startByte && (match.candidates.length > 0 || match.entryIds.length > 0)) {
         ranges.push({ startByte: match.startByte, endByte: match.endByte,
-          textRevision: annotations.textRevision, kind: 'autoMatch' })
+          textRevision: annotations.textRevision, kind: 'linkUnderline' })
       }
     })
     this.annotationRanges = ranges

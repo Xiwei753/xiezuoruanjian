@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,6 +10,14 @@ use super::model::{
 };
 
 const COLLECTIONS: [&str; 5] = ["tags", "bindings", "entries", "anchors", "links"];
+
+#[derive(Debug, Clone, Default)]
+pub struct PreparedTextAnchorChanges {
+    /// Project-relative JSON files staged with the chapter body save.
+    pub files: Vec<(String, String)>,
+    /// Anchor records as they will be stored after the transaction commits.
+    pub committed_anchors: Vec<TextAnchor>,
+}
 
 /// Project-local annotation persistence.
 ///
@@ -114,6 +123,130 @@ impl AnnotationStore {
 
     pub fn get_text_anchor(&self, anchor_id: &str) -> crate::Result<Option<TextAnchor>> {
         self.read_record("anchors", anchor_id)
+    }
+
+    /// Prepare changed chapter anchors and cascaded tombstones without writing
+    /// them. Callers add `files` to the chapter's existing save transaction.
+    pub fn prepare_text_anchor_changes(
+        &self,
+        original_anchors: &[TextAnchor],
+        current_anchors: &[TextAnchor],
+        chapter_text: &str,
+        updated_at_ms: i64,
+    ) -> crate::Result<PreparedTextAnchorChanges> {
+        let originals = original_anchors
+            .iter()
+            .map(|anchor| (anchor.anchor_id.as_str(), anchor))
+            .collect::<HashMap<_, _>>();
+        let text_hash = format!("{:x}", md5::compute(chapter_text.as_bytes()));
+        let mut records = HashMap::<String, String>::new();
+        let mut committed_anchors = Vec::new();
+        let mut deleted_anchor_ids = HashMap::<String, TextAnchor>::new();
+        let mut restored_anchor_ids = HashMap::<String, i64>::new();
+
+        for anchor in current_anchors {
+            let Some(original) = originals.get(anchor.anchor_id.as_str()) else {
+                continue;
+            };
+            if *original == anchor
+                && (anchor.deleted_at_ms.is_some() || anchor.text_hash == text_hash)
+            {
+                continue;
+            }
+            let mut committed = anchor.clone();
+            committed.updated_at_ms = updated_at_ms;
+            let collection = "anchors";
+            if committed.deleted_at_ms.is_some() {
+                committed.deleted_at_ms = Some(updated_at_ms);
+                deleted_anchor_ids.insert(committed.anchor_id.clone(), committed.clone());
+            } else {
+                if let Some(Some(deleted_at_ms)) = originals
+                    .get(committed.anchor_id.as_str())
+                    .map(|original| original.deleted_at_ms)
+                {
+                    restored_anchor_ids.insert(committed.anchor_id.clone(), deleted_at_ms);
+                }
+                crate::annotations::ranges::capture_text_anchor_with_hash(
+                    &mut committed,
+                    chapter_text,
+                    &text_hash,
+                )?;
+                committed.deleted_at_ms = None;
+            }
+            let path = self.relative_record_path(collection, &committed.anchor_id)?;
+            records.insert(path, serde_json::to_string_pretty(&committed)?);
+            committed_anchors.push(committed);
+        }
+
+        if !deleted_anchor_ids.is_empty() {
+            for binding in self.list_bindings()? {
+                let ObjectRef::TextAnchor { object_id, .. } = &binding.target else {
+                    continue;
+                };
+                if !deleted_anchor_ids.contains_key(object_id) {
+                    continue;
+                }
+                let mut tombstone = binding;
+                tombstone.updated_at_ms = updated_at_ms;
+                tombstone.deleted_at_ms = Some(updated_at_ms);
+                let path = self.relative_record_path("bindings", &tombstone.binding_id)?;
+                records.insert(path, serde_json::to_string_pretty(&tombstone)?);
+            }
+            for link in self.list_links()? {
+                let ObjectRef::TextAnchor { object_id, .. } = &link.source else {
+                    continue;
+                };
+                if !deleted_anchor_ids.contains_key(object_id) {
+                    continue;
+                }
+                let mut tombstone = link;
+                tombstone.updated_at_ms = updated_at_ms;
+                tombstone.deleted_at_ms = Some(updated_at_ms);
+                let path = self.relative_record_path("links", &tombstone.link_id)?;
+                records.insert(path, serde_json::to_string_pretty(&tombstone)?);
+            }
+        }
+
+        if !restored_anchor_ids.is_empty() {
+            for mut binding in self.list_binding_records()? {
+                let ObjectRef::TextAnchor { object_id, .. } = &binding.target else {
+                    continue;
+                };
+                let Some(deleted_at_ms) = restored_anchor_ids.get(object_id) else {
+                    continue;
+                };
+                if binding.deleted_at_ms != Some(*deleted_at_ms) {
+                    continue;
+                }
+                binding.deleted_at_ms = None;
+                binding.updated_at_ms = updated_at_ms;
+                let path = self.relative_record_path("bindings", &binding.binding_id)?;
+                records.insert(path, serde_json::to_string_pretty(&binding)?);
+            }
+            for mut link in self.list_link_records()? {
+                let ObjectRef::TextAnchor { object_id, .. } = &link.source else {
+                    continue;
+                };
+                let Some(deleted_at_ms) = restored_anchor_ids.get(object_id) else {
+                    continue;
+                };
+                if link.deleted_at_ms != Some(*deleted_at_ms) {
+                    continue;
+                }
+                link.deleted_at_ms = None;
+                link.updated_at_ms = updated_at_ms;
+                let path = self.relative_record_path("links", &link.link_id)?;
+                records.insert(path, serde_json::to_string_pretty(&link)?);
+            }
+        }
+
+        let mut files = records.into_iter().collect::<Vec<_>>();
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+        committed_anchors.sort_by(|left, right| left.anchor_id.cmp(&right.anchor_id));
+        Ok(PreparedTextAnchorChanges {
+            files,
+            committed_anchors,
+        })
     }
 
     pub fn list_links(&self) -> crate::Result<Vec<ObjectLink>> {
@@ -472,6 +605,15 @@ impl AnnotationStore {
             ));
         }
         Ok(self.collection_path(collection)?.join(format!("{id}.json")))
+    }
+
+    fn relative_record_path(&self, collection: &str, id: &str) -> crate::Result<String> {
+        let path = self.record_path(collection, id)?;
+        Ok(path
+            .strip_prefix(&self.project_root)
+            .map_err(|_| invalid_annotation("annotation path escaped its project"))?
+            .to_string_lossy()
+            .replace('\\', "/"))
     }
 }
 

@@ -359,6 +359,26 @@ pub(super) fn save_chapter_verified_with_options(
     content: &str,
     allow_empty_overwrite: bool,
 ) -> Result<ChapterSaveReceipt> {
+    save_chapter_verified_with_options_and_files(
+        project_root,
+        volume_id,
+        chapter_id,
+        content,
+        allow_empty_overwrite,
+        &[],
+    )
+}
+
+/// Save the chapter and additional project-local records in the same
+/// recoverable file transaction.
+pub(super) fn save_chapter_verified_with_options_and_files(
+    project_root: &Path,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+    allow_empty_overwrite: bool,
+    additional_files: &[(String, String)],
+) -> Result<ChapterSaveReceipt> {
     let chapter_dir = project_root
         .join("volumes")
         .join(volume_id)
@@ -423,6 +443,9 @@ pub(super) fn save_chapter_verified_with_options(
 
     tx.add_file(&md_relative, content)?;
     tx.add_file(&meta_relative, &updated_meta_str)?;
+    for (relative_path, file_content) in additional_files {
+        tx.add_file(relative_path, file_content)?;
+    }
 
     tx.commit()?;
 

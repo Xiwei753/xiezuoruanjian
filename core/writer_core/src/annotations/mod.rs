@@ -14,4 +14,4 @@ pub use model::{
     AnnotationKind, AnnotationMutation, LinkOrigin, LinkTarget, NamedEntry, ObjectLink, ObjectRef,
     Tag, TagBinding, TextAnchor, DEFAULT_TAG_NAMES,
 };
-pub use store::{find_backlinks, AnnotationStore};
+pub use store::{find_backlinks, AnnotationStore, PreparedTextAnchorChanges};

@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::annotations::ranges::{
-    capture_text_anchor, map_text_anchor_after_edits, rebase_text_anchor, TextAnchorEdit,
-    TextEditRange,
+    capture_text_anchor, capture_text_anchor_with_hash, map_text_anchor_after_edits,
+    rebase_text_anchor_with_hash, resulting_text_len, TextAnchorEdit, TextEditRange,
 };
 use crate::annotations::{
     find_backlinks as find_annotation_backlinks, AnnotationKind, AnnotationMutation,
@@ -349,6 +349,10 @@ impl WriterCoreApi {
             .map(|path| PathBuf::from("projects").join(project_id).join(path))
             .collect::<Vec<_>>();
         self.record_workspace_paths_history(&workspace_paths, operation);
+        self.refresh_annotation_search_index(project_id, operation);
+    }
+
+    pub(crate) fn refresh_annotation_search_index(&self, project_id: &str, operation: &str) {
         let project_root = self.projects_root.join(project_id);
         let existing_ids = self.annotation_search_object_ids_for_project(project_id);
         match crate::search::extractor::annotation_search_updates_for_project(
@@ -937,31 +941,118 @@ impl WriterCoreApi {
         chapter_id: String,
         text_revision: u64,
         text: String,
+        baseline_id: String,
     ) -> ApiResult<ChapterAnnotationsDto> {
-        self.ensure_named_entries_migrated(&project_id)?;
         let store = self.annotation_store(&project_id)?;
         let now = chrono::Utc::now().timestamp_millis();
-        let mut changed_paths = Vec::new();
-        let mut anchors = Vec::new();
-        for anchor in store
-            .list_text_anchors_for_chapter(&chapter_id)
+        let stored_anchor_records = store
+            .list_text_anchor_records()
             .map_err(WriterError::from)?
-        {
-            let Some(mut current) =
-                rebase_text_anchor(&anchor, &text).map_err(WriterError::from)?
-            else {
-                continue;
-            };
-            if current != anchor {
-                current.updated_at_ms = now;
-                changed_paths.extend(
-                    store
-                        .apply_mutation(AnnotationMutation::UpsertTextAnchor(current.clone()))
-                        .map_err(WriterError::from)?,
-                );
+            .into_iter()
+            .filter(|anchor| anchor.chapter_id == chapter_id)
+            .collect::<Vec<_>>();
+        let stored_anchors = stored_anchor_records
+            .iter()
+            .filter(|anchor| anchor.deleted_at_ms.is_none())
+            .cloned()
+            .collect::<Vec<_>>();
+        let text_hash = format!("{:x}", md5::compute(text.as_bytes()));
+        let use_session_baseline = !baseline_id.is_empty();
+        let baseline_id = if use_session_baseline {
+            baseline_id
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
+        let mut projected_anchors = Vec::new();
+        if use_session_baseline {
+            let mut baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            let baseline = baselines.get_mut(&baseline_id).ok_or_else(|| {
+                invalid_annotation("annotation edit baseline expired; reload chapter annotations")
+            })?;
+            if baseline.project_id != project_id
+                || baseline.chapter_id != chapter_id
+                || baseline.text_revision != text_revision
+                || baseline.text_len != text.len()
+            {
+                return Err(invalid_annotation(
+                    "annotation edit baseline does not match the current chapter snapshot",
+                ));
             }
-            anchors.push(current);
+            for original in &baseline.original_anchors {
+                if !stored_anchor_records
+                    .iter()
+                    .any(|stored| stored == original)
+                {
+                    return Err(invalid_annotation(
+                        "annotation anchors changed outside this edit session; reload chapter annotations",
+                    ));
+                }
+            }
+            for stored in &stored_anchors {
+                if baseline
+                    .original_anchors
+                    .iter()
+                    .any(|original| original.anchor_id == stored.anchor_id)
+                {
+                    continue;
+                }
+                if let Some(projected) = rebase_text_anchor_with_hash(stored, &text, &text_hash)
+                    .map_err(WriterError::from)?
+                {
+                    baseline.original_anchors.push(stored.clone());
+                    baseline.anchors.push(projected);
+                }
+            }
+            projected_anchors = baseline
+                .anchors
+                .iter()
+                .filter(|anchor| anchor.deleted_at_ms.is_none())
+                .cloned()
+                .collect();
+            for anchor in &mut projected_anchors {
+                capture_text_anchor_with_hash(anchor, &text, &text_hash)
+                    .map_err(WriterError::from)?;
+            }
+        } else {
+            for anchor in &stored_anchors {
+                let Some(current) = rebase_text_anchor_with_hash(anchor, &text, &text_hash)
+                    .map_err(WriterError::from)?
+                else {
+                    continue;
+                };
+                projected_anchors.push(current);
+            }
+            let mut baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            if baselines.len() >= 2_048 {
+                if let Some(oldest) = baselines
+                    .iter()
+                    .min_by_key(|(_, baseline)| baseline.updated_at_ms)
+                    .map(|(id, _)| id.clone())
+                {
+                    baselines.remove(&oldest);
+                }
+            }
+            baselines.insert(
+                baseline_id.clone(),
+                AnnotationEditBaseline {
+                    project_id: project_id.clone(),
+                    chapter_id: chapter_id.clone(),
+                    text_revision,
+                    text_len: text.len(),
+                    original_anchors: stored_anchors,
+                    anchors: projected_anchors.clone(),
+                    history: AnnotationEditHistory::default(),
+                    updated_at_ms: now,
+                },
+            );
         }
+        let anchors = projected_anchors;
 
         // Read each project collection once. Per-anchor list calls would rescan
         // the same directories for every mark in a chapter.
@@ -1016,34 +1107,7 @@ impl WriterCoreApi {
             &anchors,
             &links,
         )?;
-        self.finish_annotation_write(&project_id, changed_paths, "rebase_annotation_text_anchors");
 
-        let baseline_id = uuid::Uuid::new_v4().to_string();
-        {
-            let mut baselines = self
-                .annotation_edit_baselines
-                .lock()
-                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
-            if baselines.len() >= 2_048 {
-                if let Some(oldest) = baselines
-                    .iter()
-                    .min_by_key(|(_, baseline)| baseline.created_at_ms)
-                    .map(|(id, _)| id.clone())
-                {
-                    baselines.remove(&oldest);
-                }
-            }
-            baselines.insert(
-                baseline_id.clone(),
-                AnnotationEditBaseline {
-                    project_id: project_id.clone(),
-                    chapter_id: chapter_id.clone(),
-                    text_revision,
-                    text,
-                    created_at_ms: now,
-                },
-            );
-        }
         Ok(ChapterAnnotationsDto {
             project_id,
             chapter_id,
@@ -1071,9 +1135,12 @@ impl WriterCoreApi {
         let anchors = store
             .list_text_anchors_for_chapter(&chapter_id)
             .map_err(WriterError::from)?;
+        let text_hash = format!("{:x}", md5::compute(text.as_bytes()));
         let mut rebased_anchors = Vec::new();
         for anchor in &anchors {
-            if let Some(rebased) = rebase_text_anchor(anchor, &text).map_err(WriterError::from)? {
+            if let Some(rebased) = rebase_text_anchor_with_hash(anchor, &text, &text_hash)
+                .map_err(WriterError::from)?
+            {
                 rebased_anchors.push(rebased);
             }
         }
@@ -1147,7 +1214,6 @@ impl WriterCoreApi {
         text_revision: u64,
         cause: EditorTransactionCauseDto,
         edits: Vec<AnnotationEditDto>,
-        text: String,
     ) -> ApiResult<bool> {
         safe_project_id(&project_id)?;
         if cause == EditorTransactionCauseDto::Load {
@@ -1179,15 +1245,14 @@ impl WriterCoreApi {
             })
             .collect::<Vec<_>>();
         edits.sort_by_key(|edit| (edit.old_start_byte, edit.old_end_byte, edit.new_start_byte));
-        let baseline = self
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut baselines = self
             .annotation_edit_baselines
             .lock()
-            .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?
-            .get(&baseline_id)
-            .cloned()
-            .ok_or_else(|| {
-                invalid_annotation("annotation edit baseline expired; reload chapter annotations")
-            })?;
+            .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+        let baseline = baselines.get_mut(&baseline_id).ok_or_else(|| {
+            invalid_annotation("annotation edit baseline expired; reload chapter annotations")
+        })?;
         if baseline.project_id != project_id
             || baseline.chapter_id != chapter_id
             || baseline.text_revision != base_revision
@@ -1196,159 +1261,252 @@ impl WriterCoreApi {
                 "annotation edit does not match its loaded text baseline",
             ));
         }
-        validate_text_edit_transition(&baseline.text, &text, &edits)?;
-        let now = chrono::Utc::now().timestamp_millis();
+        let next_text_len =
+            resulting_text_len(baseline.text_len, &edits).map_err(WriterError::from)?;
         if edits.is_empty() {
-            self.advance_annotation_edit_baseline(&baseline_id, text_revision, &text, now)?;
+            baseline.text_revision = text_revision;
+            baseline.updated_at_ms = now;
             return Ok(false);
         }
-        let store = self.annotation_store(&project_id)?;
-        let key = (project_id.clone(), chapter_id.clone());
-
-        if matches!(
-            cause,
-            EditorTransactionCauseDto::Undo | EditorTransactionCauseDto::Redo
-        ) {
-            let target = {
-                let mut histories = self
-                    .annotation_edit_history
-                    .lock()
-                    .map_err(|_| invalid_annotation("annotation edit history lock poisoned"))?;
-                let history = histories.entry(key.clone()).or_default();
-                match cause {
-                    EditorTransactionCauseDto::Undo => history.undo.pop(),
-                    EditorTransactionCauseDto::Redo => history.redo.pop(),
-                    _ => None,
-                }
-            };
-            if let Some(target) = target {
-                let current = snapshot_chapter_annotations(&store, &chapter_id)?;
-                let changed_paths = match restore_chapter_annotations(
-                    &store,
-                    &project_id,
-                    &chapter_id,
-                    &target,
-                    &text,
-                    now,
-                ) {
-                    Ok(paths) => paths,
-                    Err(error) => {
-                        let mut histories = self.annotation_edit_history.lock().map_err(|_| {
-                            invalid_annotation("annotation edit history lock poisoned")
-                        })?;
-                        let history = histories.entry(key).or_default();
-                        match cause {
-                            EditorTransactionCauseDto::Undo => history.undo.push(target),
-                            EditorTransactionCauseDto::Redo => history.redo.push(target),
-                            _ => {}
-                        }
-                        return Err(error);
+        let previous_len = baseline.text_len;
+        let (next_anchors, changed) = match cause {
+            EditorTransactionCauseDto::Undo => {
+                let history = baseline.history.undo.pop();
+                if let Some(entry) = history {
+                    if entry.text_len != next_text_len {
+                        baseline.history.undo.push(entry);
+                        return Err(invalid_annotation(
+                            "annotation undo history does not match the editor transaction",
+                        ));
                     }
-                };
-                let mut histories = self
-                    .annotation_edit_history
-                    .lock()
-                    .map_err(|_| invalid_annotation("annotation edit history lock poisoned"))?;
-                let history = histories.entry(key).or_default();
-                match cause {
-                    EditorTransactionCauseDto::Undo => history.redo.push(current),
-                    EditorTransactionCauseDto::Redo => history.undo.push(current),
-                    _ => {}
+                    let current_anchors = entry.anchors.as_ref().map(|_| baseline.anchors.clone());
+                    baseline.history.redo.push(AnnotationEditHistoryEntry {
+                        anchors: current_anchors,
+                        text_len: previous_len,
+                    });
+                    let next = entry.anchors.unwrap_or_else(|| baseline.anchors.clone());
+                    let changed = next != baseline.anchors;
+                    (next, changed)
+                } else {
+                    map_session_anchors(&baseline.anchors, &edits, now)?
                 }
-                self.finish_annotation_write(
-                    &project_id,
-                    changed_paths,
-                    "restore_annotation_edit_history",
-                );
-                self.advance_annotation_edit_baseline(&baseline_id, text_revision, &text, now)?;
-                return Ok(true);
             }
-        }
-
-        let before = snapshot_chapter_annotations(&store, &chapter_id)?;
-        let anchors = store
-            .list_text_anchors_for_chapter(&chapter_id)
-            .map_err(WriterError::from)?;
-        let mut changed_paths = Vec::new();
-        for anchor in anchors {
-            // Rebase records changed by sync or another session onto the exact
-            // text this editor loaded before applying its local edit map.
-            let Some(anchor) =
-                rebase_text_anchor(&anchor, &baseline.text).map_err(WriterError::from)?
-            else {
-                continue;
-            };
-            match map_text_anchor_after_edits(&anchor, &edits, now).map_err(WriterError::from)? {
-                TextAnchorEdit::Updated(mut anchor) => {
-                    capture_text_anchor(&mut anchor, &text).map_err(WriterError::from)?;
-                    changed_paths.extend(
-                        store
-                            .apply_mutation(AnnotationMutation::UpsertTextAnchor(anchor))
-                            .map_err(WriterError::from)?,
-                    );
+            EditorTransactionCauseDto::Redo => {
+                let history = baseline.history.redo.pop();
+                if let Some(entry) = history {
+                    if entry.text_len != next_text_len {
+                        baseline.history.redo.push(entry);
+                        return Err(invalid_annotation(
+                            "annotation redo history does not match the editor transaction",
+                        ));
+                    }
+                    let current_anchors = entry.anchors.as_ref().map(|_| baseline.anchors.clone());
+                    baseline.history.undo.push(AnnotationEditHistoryEntry {
+                        anchors: current_anchors,
+                        text_len: previous_len,
+                    });
+                    let next = entry.anchors.unwrap_or_else(|| baseline.anchors.clone());
+                    let changed = next != baseline.anchors;
+                    (next, changed)
+                } else {
+                    map_session_anchors(&baseline.anchors, &edits, now)?
                 }
-                TextAnchorEdit::Deleted(anchor) => changed_paths.extend(
-                    store
-                        .apply_mutation(AnnotationMutation::Delete {
-                            kind: AnnotationKind::TextAnchor,
-                            project_id: project_id.clone(),
-                            object_id: anchor.anchor_id,
-                            deleted_at_ms: now,
-                        })
-                        .map_err(WriterError::from)?,
-                ),
             }
-        }
-
-        let changed = !changed_paths.is_empty();
-        if changed {
-            if !matches!(
-                cause,
-                EditorTransactionCauseDto::Undo
-                    | EditorTransactionCauseDto::Redo
-                    | EditorTransactionCauseDto::Load
-            ) {
-                let mut histories = self
-                    .annotation_edit_history
-                    .lock()
-                    .map_err(|_| invalid_annotation("annotation edit history lock poisoned"))?;
-                let history = histories.entry(key).or_default();
-                history.undo.push(before);
-                if history.undo.len() > 512 {
-                    history.undo.remove(0);
+            _ => {
+                let (next, changed) = map_session_anchors(&baseline.anchors, &edits, now)?;
+                baseline.history.undo.push(AnnotationEditHistoryEntry {
+                    anchors: changed.then(|| baseline.anchors.clone()),
+                    text_len: previous_len,
+                });
+                if baseline.history.undo.len() > 512 {
+                    baseline.history.undo.remove(0);
                 }
-                history.redo.clear();
+                baseline.history.redo.clear();
+                (next, changed)
             }
-            self.finish_annotation_write(&project_id, changed_paths, "map_annotation_text_anchors");
-        }
-        self.advance_annotation_edit_baseline(&baseline_id, text_revision, &text, now)?;
+        };
+        baseline.anchors = next_anchors;
+        baseline.text_len = next_text_len;
+        baseline.text_revision = text_revision;
+        baseline.updated_at_ms = now;
         Ok(changed)
     }
 
-    fn advance_annotation_edit_baseline(
+    pub(crate) fn prepare_annotation_edit_save(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        content: &str,
+    ) -> ApiResult<Option<PreparedAnnotationEditSave>> {
+        let text_hash = format!("{:x}", md5::compute(content.as_bytes()));
+        let baseline = {
+            let baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            baselines
+                .iter()
+                .filter(|(_, baseline)| {
+                    baseline.project_id == project_id
+                        && baseline.chapter_id == chapter_id
+                        && annotation_baseline_is_dirty(baseline, &text_hash)
+                })
+                .max_by_key(|(_, baseline)| baseline.updated_at_ms)
+                .map(|(id, baseline)| (id.clone(), baseline.clone()))
+        };
+        let Some((baseline_id, baseline)) = baseline else {
+            return self.prepare_saved_text_anchor_rebase(project_id, chapter_id, content);
+        };
+        if baseline.text_len != content.len() {
+            return Err(invalid_annotation(
+                "chapter save does not match the active annotation edit session",
+            ));
+        }
+        let store = self.annotation_store(project_id)?;
+        let stored_records = store
+            .list_text_anchor_records()
+            .map_err(WriterError::from)?
+            .into_iter()
+            .filter(|anchor| anchor.chapter_id == chapter_id)
+            .collect::<Vec<_>>();
+        for original in &baseline.original_anchors {
+            if !stored_records.iter().any(|stored| stored == original) {
+                return Err(invalid_annotation(
+                    "annotation anchors changed outside this edit session; reload chapter annotations",
+                ));
+            }
+        }
+        let mut original_anchors = baseline.original_anchors.clone();
+        let mut current_anchors = baseline.anchors.clone();
+        for stored in stored_records
+            .iter()
+            .filter(|anchor| anchor.deleted_at_ms.is_none())
+        {
+            if original_anchors
+                .iter()
+                .any(|original| original.anchor_id == stored.anchor_id)
+            {
+                continue;
+            }
+            original_anchors.push(stored.clone());
+            if let Some(projected) = rebase_text_anchor_with_hash(stored, content, &text_hash)
+                .map_err(WriterError::from)?
+            {
+                current_anchors.push(projected);
+            }
+        }
+        let prepared = store
+            .prepare_text_anchor_changes(
+                &original_anchors,
+                &current_anchors,
+                content,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(WriterError::from)?;
+        if prepared.files.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(PreparedAnnotationEditSave {
+            baseline_id: Some(baseline_id),
+            prepared,
+        }))
+    }
+
+    fn prepare_saved_text_anchor_rebase(
+        &self,
+        project_id: &str,
+        chapter_id: &str,
+        content: &str,
+    ) -> ApiResult<Option<PreparedAnnotationEditSave>> {
+        let store = self.annotation_store(project_id)?;
+        let original_anchors = store
+            .list_text_anchors_for_chapter(chapter_id)
+            .map_err(WriterError::from)?;
+        if original_anchors.is_empty() {
+            return Ok(None);
+        }
+        let text_hash = format!("{:x}", md5::compute(content.as_bytes()));
+        let mut current_anchors = Vec::new();
+        for anchor in &original_anchors {
+            if let Some(anchor) = rebase_text_anchor_with_hash(anchor, content, &text_hash)
+                .map_err(WriterError::from)?
+            {
+                current_anchors.push(anchor);
+            }
+        }
+        let prepared = store
+            .prepare_text_anchor_changes(
+                &original_anchors,
+                &current_anchors,
+                content,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(WriterError::from)?;
+        if prepared.files.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(PreparedAnnotationEditSave {
+            baseline_id: None,
+            prepared,
+        }))
+    }
+
+    pub(crate) fn finish_annotation_edit_save(
         &self,
         baseline_id: &str,
-        text_revision: u64,
-        text: &str,
-        updated_at_ms: i64,
-    ) -> ApiResult<()> {
-        let mut baselines = self
-            .annotation_edit_baselines
-            .lock()
-            .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
-        if let Some(baseline) = baselines.get_mut(baseline_id) {
-            baseline.text_revision = text_revision;
-            baseline.text = text.to_string();
-            baseline.created_at_ms = updated_at_ms;
+        committed_anchors: &[TextAnchor],
+    ) {
+        let Ok(mut baselines) = self.annotation_edit_baselines.lock() else {
+            log::warn!("annotation edit baseline lock poisoned after chapter save");
+            return;
+        };
+        let Some(session_key) = baselines
+            .get(baseline_id)
+            .map(|baseline| (baseline.project_id.clone(), baseline.chapter_id.clone()))
+        else {
+            return;
+        };
+        baselines.retain(|id, baseline| {
+            id == baseline_id
+                || baseline.project_id.as_str() != session_key.0.as_str()
+                || baseline.chapter_id.as_str() != session_key.1.as_str()
+        });
+        let Some(baseline) = baselines.get_mut(baseline_id) else {
+            return;
+        };
+        for committed in committed_anchors {
+            if let Some(original) = baseline
+                .original_anchors
+                .iter_mut()
+                .find(|anchor| anchor.anchor_id == committed.anchor_id)
+            {
+                *original = committed.clone();
+            } else {
+                baseline.original_anchors.push(committed.clone());
+            }
+            if let Some(current) = baseline
+                .anchors
+                .iter_mut()
+                .find(|anchor| anchor.anchor_id == committed.anchor_id)
+            {
+                *current = committed.clone();
+            } else {
+                baseline.anchors.push(committed.clone());
+            }
         }
-        Ok(())
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct AnnotationEditHistory {
-    undo: Vec<ChapterAnnotationState>,
-    redo: Vec<ChapterAnnotationState>,
+    undo: Vec<AnnotationEditHistoryEntry>,
+    redo: Vec<AnnotationEditHistoryEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct AnnotationEditHistoryEntry {
+    anchors: Option<Vec<TextAnchor>>,
+    text_len: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1356,213 +1514,55 @@ pub(super) struct AnnotationEditBaseline {
     project_id: String,
     chapter_id: String,
     text_revision: u64,
-    text: String,
-    created_at_ms: i64,
-}
-
-#[derive(Debug, Clone, Default)]
-struct ChapterAnnotationState {
+    text_len: usize,
+    original_anchors: Vec<TextAnchor>,
     anchors: Vec<TextAnchor>,
-    bindings: Vec<TagBinding>,
-    links: Vec<ObjectLink>,
+    history: AnnotationEditHistory,
+    updated_at_ms: i64,
 }
 
-fn snapshot_chapter_annotations(
-    store: &AnnotationStore,
-    chapter_id: &str,
-) -> ApiResult<ChapterAnnotationState> {
-    let anchors = store
-        .list_text_anchors_for_chapter(chapter_id)
-        .map_err(WriterError::from)?;
-    let anchor_ids = anchors
-        .iter()
-        .map(|anchor| anchor.anchor_id.as_str())
-        .collect::<HashSet<_>>();
-    let bindings = store
-        .list_bindings()
-        .map_err(WriterError::from)?
-        .into_iter()
-        .filter(|binding| match &binding.target {
-            ObjectRef::TextAnchor { object_id, .. } => anchor_ids.contains(object_id.as_str()),
-            _ => false,
-        })
-        .collect();
-    let links = store
-        .list_links()
-        .map_err(WriterError::from)?
-        .into_iter()
-        .filter(|link| match &link.source {
-            ObjectRef::TextAnchor { object_id, .. } => anchor_ids.contains(object_id.as_str()),
-            _ => false,
-        })
-        .collect();
-    Ok(ChapterAnnotationState {
-        anchors,
-        bindings,
-        links,
+pub(crate) struct PreparedAnnotationEditSave {
+    pub(crate) baseline_id: Option<String>,
+    pub(crate) prepared: crate::annotations::PreparedTextAnchorChanges,
+}
+
+fn annotation_baseline_is_dirty(
+    baseline: &AnnotationEditBaseline,
+    chapter_text_hash: &str,
+) -> bool {
+    baseline.anchors.iter().any(|anchor| {
+        baseline
+            .original_anchors
+            .iter()
+            .find(|original| original.anchor_id == anchor.anchor_id)
+            .is_some_and(|original| {
+                original != anchor
+                    || (anchor.deleted_at_ms.is_none() && anchor.text_hash != chapter_text_hash)
+            })
     })
 }
 
-fn restore_chapter_annotations(
-    store: &AnnotationStore,
-    project_id: &str,
-    chapter_id: &str,
-    target: &ChapterAnnotationState,
-    text: &str,
-    now: i64,
-) -> ApiResult<Vec<String>> {
-    let current = snapshot_chapter_annotations(store, chapter_id)?;
-    let mut restored_anchors = Vec::new();
-    for anchor in &target.anchors {
-        if let Some(mut current_text_anchor) =
-            rebase_text_anchor(anchor, text).map_err(WriterError::from)?
-        {
-            current_text_anchor.updated_at_ms = now;
-            current_text_anchor.deleted_at_ms = None;
-            restored_anchors.push(current_text_anchor);
-        }
-    }
-    let target_anchor_ids = restored_anchors
-        .iter()
-        .map(|anchor| anchor.anchor_id.as_str())
-        .collect::<HashSet<_>>();
-    let restored_bindings = target
-        .bindings
-        .iter()
-        .filter(|binding| match &binding.target {
-            ObjectRef::TextAnchor { object_id, .. } => {
-                target_anchor_ids.contains(object_id.as_str())
-            }
-            _ => false,
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let restored_links = target
-        .links
-        .iter()
-        .filter(|link| match &link.source {
-            ObjectRef::TextAnchor { object_id, .. } => {
-                target_anchor_ids.contains(object_id.as_str())
-            }
-            _ => false,
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut changed_paths = Vec::new();
-    for anchor in &current.anchors {
-        if !target_anchor_ids.contains(anchor.anchor_id.as_str()) {
-            changed_paths.extend(
-                store
-                    .apply_mutation(AnnotationMutation::Delete {
-                        kind: AnnotationKind::TextAnchor,
-                        project_id: project_id.to_string(),
-                        object_id: anchor.anchor_id.clone(),
-                        deleted_at_ms: now,
-                    })
-                    .map_err(WriterError::from)?,
-            );
-        }
-    }
-    let target_binding_ids = restored_bindings
-        .iter()
-        .map(|binding| binding.binding_id.as_str())
-        .collect::<HashSet<_>>();
-    for binding in &current.bindings {
-        if !target_binding_ids.contains(binding.binding_id.as_str()) {
-            changed_paths.extend(
-                store
-                    .apply_mutation(AnnotationMutation::Delete {
-                        kind: AnnotationKind::Binding,
-                        project_id: project_id.to_string(),
-                        object_id: binding.binding_id.clone(),
-                        deleted_at_ms: now,
-                    })
-                    .map_err(WriterError::from)?,
-            );
-        }
-    }
-    let target_link_ids = restored_links
-        .iter()
-        .map(|link| link.link_id.as_str())
-        .collect::<HashSet<_>>();
-    for link in &current.links {
-        if !target_link_ids.contains(link.link_id.as_str()) {
-            changed_paths.extend(
-                store
-                    .apply_mutation(AnnotationMutation::Delete {
-                        kind: AnnotationKind::Link,
-                        project_id: project_id.to_string(),
-                        object_id: link.link_id.clone(),
-                        deleted_at_ms: now,
-                    })
-                    .map_err(WriterError::from)?,
-            );
-        }
-    }
-    for anchor in restored_anchors {
-        changed_paths.extend(
-            store
-                .apply_mutation(AnnotationMutation::UpsertTextAnchor(anchor))
-                .map_err(WriterError::from)?,
-        );
-    }
-    for mut binding in restored_bindings {
-        binding.updated_at_ms = now;
-        binding.deleted_at_ms = None;
-        changed_paths.extend(
-            store
-                .apply_mutation(AnnotationMutation::UpsertBinding(binding))
-                .map_err(WriterError::from)?,
-        );
-    }
-    for mut link in restored_links {
-        link.updated_at_ms = now;
-        link.deleted_at_ms = None;
-        changed_paths.extend(
-            store
-                .apply_mutation(AnnotationMutation::UpsertLink(link))
-                .map_err(WriterError::from)?,
-        );
-    }
-    Ok(changed_paths)
-}
-
-fn validate_text_edit_transition(
-    base_text: &str,
-    new_text: &str,
+fn map_session_anchors(
+    anchors: &[TextAnchor],
     edits: &[TextEditRange],
-) -> ApiResult<()> {
-    let mut reconstructed = String::with_capacity(new_text.len());
-    let mut old_cursor = 0usize;
-    let mut new_cursor = 0usize;
-    for edit in edits {
-        if edit.old_start_byte < old_cursor
-            || edit.new_start_byte < new_cursor
-            || edit.old_start_byte > edit.old_end_byte
-            || edit.new_start_byte > edit.new_end_byte
-            || edit.old_end_byte > base_text.len()
-            || edit.new_end_byte > new_text.len()
-            || !base_text.is_char_boundary(edit.old_start_byte)
-            || !base_text.is_char_boundary(edit.old_end_byte)
-            || !new_text.is_char_boundary(edit.new_start_byte)
-            || !new_text.is_char_boundary(edit.new_end_byte)
-        {
-            return Err(invalid_annotation(
-                "annotation edit ranges do not match the loaded text",
-            ));
+    updated_at_ms: i64,
+) -> ApiResult<(Vec<TextAnchor>, bool)> {
+    let mut mapped = Vec::with_capacity(anchors.len());
+    let mut changed = false;
+    for anchor in anchors {
+        if anchor.deleted_at_ms.is_some() {
+            mapped.push(anchor.clone());
+            continue;
         }
-        reconstructed.push_str(&base_text[old_cursor..edit.old_start_byte]);
-        reconstructed.push_str(&new_text[edit.new_start_byte..edit.new_end_byte]);
-        old_cursor = edit.old_end_byte;
-        new_cursor = edit.new_end_byte;
+        let next = match map_text_anchor_after_edits(anchor, edits, updated_at_ms)
+            .map_err(WriterError::from)?
+        {
+            TextAnchorEdit::Updated(anchor) | TextAnchorEdit::Deleted(anchor) => anchor,
+        };
+        changed |= next != *anchor;
+        mapped.push(next);
     }
-    reconstructed.push_str(&base_text[old_cursor..]);
-    if reconstructed != new_text {
-        return Err(invalid_annotation(
-            "annotation edit result differs from the supplied chapter text",
-        ));
-    }
-    Ok(())
+    Ok((mapped, changed))
 }
 
 fn validate_named_entry(

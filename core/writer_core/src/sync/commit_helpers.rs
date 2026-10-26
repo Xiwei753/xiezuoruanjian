@@ -39,6 +39,170 @@ fn collect_action_paths(
     }
 }
 
+/// Rebase locally stored text anchors when an incoming chapter body is applied
+/// without an incoming record for that anchor. The rebased anchor files join
+/// the same SaveTransaction as the body so a crash cannot leave new text with
+/// stale offsets. Ambiguous, missing, or invalid UTF-8 inputs are left alone.
+fn stage_rebased_chapter_anchors(
+    live_root: &Path,
+    content_actions: &[crate::sync::staging::CommitAction],
+    tx: &mut crate::storage::transaction::SaveTransaction,
+) -> crate::error::Result<()> {
+    use crate::sync::staging::CommitAction;
+    use std::collections::HashSet;
+
+    let mut handled_chapters = HashSet::new();
+    let mut staged_anchor_paths = HashSet::new();
+    for action in content_actions {
+        let CommitAction::Apply { rel_path, content } = action else {
+            continue;
+        };
+        let Some((project_namespace, project_relative, project_id)) =
+            project_relative_sync_path(live_root, rel_path)
+        else {
+            continue;
+        };
+        let Some(chapter_id) = chapter_id_for_body_path(&project_relative) else {
+            continue;
+        };
+        let chapter_key = (project_namespace.clone(), chapter_id.to_string());
+        if !handled_chapters.insert(chapter_key) {
+            continue;
+        }
+        let Ok(incoming_text) = std::str::from_utf8(content) else {
+            continue;
+        };
+
+        let project_root = live_root.join(&project_namespace);
+        let store = crate::annotations::AnnotationStore::new(&project_root, &project_id);
+        for anchor in store.list_text_anchors_for_chapter(chapter_id)? {
+            if anchor.project_id != project_id || !is_safe_annotation_id(&anchor.anchor_id) {
+                continue;
+            }
+            let anchor_relative = PathBuf::from("annotations")
+                .join("anchors")
+                .join(format!("{}.json", anchor.anchor_id));
+            let explicitly_changed = content_actions.iter().any(|candidate| {
+                let candidate_path = match candidate {
+                    CommitAction::Apply { rel_path, .. } | CommitAction::Delete { rel_path } => {
+                        rel_path
+                    }
+                };
+                project_relative_sync_path(live_root, candidate_path).is_some_and(
+                    |(namespace, relative, _)| {
+                        namespace == project_namespace && relative == anchor_relative
+                    },
+                )
+            });
+            if explicitly_changed
+                || !staged_anchor_paths
+                    .insert((project_namespace.clone(), anchor.anchor_id.clone()))
+            {
+                continue;
+            }
+
+            let Some(rebased) =
+                crate::annotations::ranges::rebase_text_anchor(&anchor, incoming_text)?
+            else {
+                continue;
+            };
+            if rebased == anchor {
+                continue;
+            }
+            let serialized = serde_json::to_vec_pretty(&rebased)?;
+            let target_relative = project_namespace.join(&anchor_relative);
+            let target_relative = target_relative.to_string_lossy();
+            tx.add_bytes(&target_relative, &serialized)?;
+        }
+    }
+    Ok(())
+}
+
+/// Return the project namespace within `live_root`, the project-relative path,
+/// and project ID for project-target (`volumes/...`) or app-target
+/// (`projects/<id>/volumes/...`) sync paths.
+fn project_relative_sync_path(
+    live_root: &Path,
+    rel_path: &Path,
+) -> Option<(PathBuf, PathBuf, String)> {
+    use std::path::Component;
+
+    let components = rel_path
+        .components()
+        .map(|component| match component {
+            Component::Normal(value) => value.to_str().map(str::to_string),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if components.is_empty() {
+        return None;
+    }
+
+    if components.len() >= 3 && components[0] == "projects" {
+        let project_id = components[1].clone();
+        let namespace = PathBuf::from("projects").join(&project_id);
+        let project_relative = components[2..].iter().collect::<PathBuf>();
+        return Some((namespace, project_relative, project_id));
+    }
+
+    let project_id = live_root.file_name()?.to_str()?.to_string();
+    Some((PathBuf::new(), components.iter().collect(), project_id))
+}
+
+fn chapter_id_for_body_path(project_relative: &Path) -> Option<&str> {
+    let components = project_relative
+        .components()
+        .map(|component| component.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()?;
+    match components.as_slice() {
+        ["volumes", _volume_id, "chapters", chapter_id, "chapter.md"] => Some(chapter_id),
+        _ => None,
+    }
+}
+
+fn is_safe_annotation_id(id: &str) -> bool {
+    !id.is_empty()
+        && id != "."
+        && id != ".."
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+/// Add automatically rebased anchor files to the workspace-history path list.
+/// Their transaction paths are not present in `content_actions` by definition.
+fn collect_rebased_anchor_paths(
+    tx: &crate::storage::transaction::SaveTransaction,
+    target_kind: &str,
+    project_id: Option<&str>,
+    content_actions: &[crate::sync::staging::CommitAction],
+    out: &mut Vec<PathBuf>,
+) {
+    let action_paths = content_actions
+        .iter()
+        .map(|action| match action {
+            crate::sync::staging::CommitAction::Apply { rel_path, .. }
+            | crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
+        })
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<std::collections::HashSet<_>>();
+    for entry in &tx.entries {
+        let path = Path::new(&entry.target_relative);
+        let components = path
+            .components()
+            .map(|component| component.as_os_str().to_str())
+            .collect::<Option<Vec<_>>>();
+        let is_anchor_json = components.as_deref().is_some_and(|components| {
+            matches!(components, ["annotations", "anchors", file] if file.ends_with(".json"))
+                || matches!(components, ["projects", _, "annotations", "anchors", file] if file.ends_with(".json"))
+        });
+        if entry.is_delete || !is_anchor_json || action_paths.contains(&entry.target_relative) {
+            continue;
+        }
+        out.push(to_workspace_rel_path(target_kind, project_id, path));
+    }
+}
+
 /// 将 commit plan 中的 Apply/Delete 变更通过 SaveTransaction 写回 live root。
 ///
 /// 删除 `git_finalize_recovery` 参数。
@@ -70,6 +234,7 @@ pub(crate) fn apply_commit_plan_to_live(
             }
         }
     }
+    stage_rebased_chapter_anchors(live_root, content_actions, &mut tx)?;
     for action in content_actions {
         match action {
             crate::sync::staging::CommitAction::Apply { rel_path, content } => {
@@ -166,6 +331,7 @@ fn apply_commit_plan_with_sync_state_merge_for_group(
     tx.add_bytes(&state_path, state_json.as_bytes())?;
     tx.add_bytes(&conflicts_path, conflicts_json.as_bytes())?;
     // content_actions（安全正文）。
+    stage_rebased_chapter_anchors(live_root, content_actions, &mut tx)?;
     for action in content_actions {
         match action {
             crate::sync::staging::CommitAction::Apply { rel_path, content } => {
@@ -733,6 +899,13 @@ pub(crate) fn apply_staging_commits_for_targets(
                             &plan.content_actions,
                             &mut committed_paths,
                         );
+                        collect_rebased_anchor_paths(
+                            &tx,
+                            kind,
+                            pid,
+                            &plan.content_actions,
+                            &mut committed_paths,
+                        );
                         // #757：在 cleanup 前保存远端快照到 plan.conflict，
                         // 让 record_staging_conflicts 映射成 SyncConflict 时带上
                         // remote_snapshot_path。cleanup 后 staging_root 已删，无法再读。
@@ -798,22 +971,23 @@ pub(crate) fn apply_staging_commits_for_targets(
                     })
                     .cloned()
                     .collect();
-                if let Err(e) = apply_commit_plan_with_optional_merge(
+                let tx = match apply_commit_plan_with_optional_merge(
                     run,
                     live_root,
                     &plan,
                     &safe_content_actions,
                     false,
-                )
-                .map(|_tx| ())
-                {
-                    let msg = format!("apply_commit_plan failed: {}", e);
-                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                    target_results.push(TargetCommitResult::Failed(msg));
-                    target_conflicts.push(Vec::new());
-                    run.cleanup();
-                    continue;
-                }
+                ) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        let msg = format!("apply_commit_plan failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
                 // ConflictMetadataOnly 也落盘了
                 // safe_content_actions + engine_state_actions，收集它们的 rel_path。
                 //   committed_paths 只收集
@@ -823,6 +997,13 @@ pub(crate) fn apply_staging_commits_for_targets(
                     .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
                     .unwrap_or(("", None));
                 collect_action_paths(kind, pid, &safe_content_actions, &mut committed_paths);
+                collect_rebased_anchor_paths(
+                    &tx,
+                    kind,
+                    pid,
+                    &safe_content_actions,
+                    &mut committed_paths,
+                );
                 // #757：在 cleanup 前保存远端快照到 plan.conflict（同 Full 模式）。
                 let staging_root = run.staging_root();
                 if let Err(e) =
@@ -954,6 +1135,13 @@ pub(crate) fn apply_staging_commits_for_targets(
                             &plan.content_actions,
                             &mut committed_paths,
                         );
+                        collect_rebased_anchor_paths(
+                            &tx,
+                            kind,
+                            pid,
+                            &plan.content_actions,
+                            &mut committed_paths,
+                        );
                         // #757：在 cleanup 前保存远端快照（防御性——ReplaceProject
                         // 通常无冲突，但保持与其他分支一致）。
                         if let Err(e) =
@@ -1068,6 +1256,13 @@ pub(crate) fn commit_single_target_staging(
                         &plan.content_actions,
                         &mut committed_paths,
                     );
+                    collect_rebased_anchor_paths(
+                        &tx,
+                        target.target_kind.as_str(),
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                        &mut committed_paths,
+                    );
                     let staging_root = run.staging_root();
                     if let Err(e) =
                         save_conflict_snapshots(live_root, &staging_root, &mut plan.conflict)
@@ -1117,21 +1312,29 @@ pub(crate) fn commit_single_target_staging(
                 })
                 .cloned()
                 .collect();
-            if let Err(e) = apply_commit_plan_with_optional_merge(
+            let tx = match apply_commit_plan_with_optional_merge(
                 run,
                 live_root,
                 &plan,
                 &safe_content_actions,
                 false,
-            )
-            .map(|_tx| ())
-            {
-                let msg = format!("apply_commit_plan failed: {}", e);
-                log::warn!("Staging commit: {} for run {}", msg, run.run_id());
-                return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
-            }
+            ) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    let msg = format!("apply_commit_plan failed: {}", e);
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            };
             let mut committed_paths = Vec::new();
             collect_action_paths(
+                target.target_kind.as_str(),
+                target.project_id.as_deref(),
+                &safe_content_actions,
+                &mut committed_paths,
+            );
+            collect_rebased_anchor_paths(
+                &tx,
                 target.target_kind.as_str(),
                 target.project_id.as_deref(),
                 &safe_content_actions,
@@ -1226,6 +1429,13 @@ pub(crate) fn commit_single_target_staging(
                 Ok(()) => {
                     let mut committed_paths = Vec::new();
                     collect_action_paths(
+                        target.target_kind.as_str(),
+                        target.project_id.as_deref(),
+                        &plan.content_actions,
+                        &mut committed_paths,
+                    );
+                    collect_rebased_anchor_paths(
+                        &tx,
                         target.target_kind.as_str(),
                         target.project_id.as_deref(),
                         &plan.content_actions,

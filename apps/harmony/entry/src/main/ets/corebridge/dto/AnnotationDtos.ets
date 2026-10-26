@@ -96,5 +96,5 @@ export interface AnnotationRangeDto {
   startByte: number
   endByte: number
   textRevision: number
-  kind: 'anchor' | 'autoMatch'
+  kind: 'tagBackground' | 'linkUnderline'
 }

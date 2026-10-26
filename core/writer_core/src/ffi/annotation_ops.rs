@@ -144,6 +144,10 @@ fn annotation_call(operation: &str, args: Value) -> Result<Value, String> {
                 string_arg(&args, "chapterId")?,
                 unsigned_arg(&args, "textRevision")?,
                 string_arg(&args, "text")?,
+                args.get("baselineId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             )),
             "applyAnnotationEdits" => {
                 let cause: EditorTransactionCauseDto = decode_arg(&args, "cause")?;
@@ -155,7 +159,6 @@ fn annotation_call(operation: &str, args: Value) -> Result<Value, String> {
                     unsigned_arg(&args, "textRevision")?,
                     cause,
                     decode_arg::<Vec<AnnotationEditDto>>(&args, "edits")?,
-                    string_arg(&args, "text")?,
                 ))
             }
             "findAutoNameLinks" => call!(service.find_auto_name_links(

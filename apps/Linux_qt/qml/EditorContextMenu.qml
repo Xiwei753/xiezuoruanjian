@@ -30,8 +30,13 @@ Menu {
             var currentText = controller.getEditorPlainText()
             var revision = Number(editorItem.text_revision)
             if (annotationBackendRef.get_chapter_annotations_json) {
+                var currentSnapshot = controller.annotationNavigationSnapshot
+                var baselineId = currentSnapshot
+                        && String(currentSnapshot.projectId) === String(controller.projectId)
+                        && String(currentSnapshot.chapterId) === String(controller.chapterId)
+                        ? String(currentSnapshot.baselineId || "") : ""
                 var snapshot = parseData(annotationBackendRef.get_chapter_annotations_json(
-                    controller.projectId, controller.chapterId, revision, currentText))
+                    controller.projectId, controller.chapterId, revision, currentText, baselineId))
                 var anchors = snapshot && snapshot.anchors ? snapshot.anchors : []
                 for (var i = 0; i < anchors.length; ++i) {
                     if (Number(anchors[i].startByte) === Number(editorItem.selection_start_byte)
@@ -134,6 +139,9 @@ Menu {
             searchBackendRef: editorContextMenu.searchBackendRef
             projectId: editorContextMenu.editorControllerRef ? editorContextMenu.editorControllerRef.projectId : ""
             chapterId: editorContextMenu.editorControllerRef ? editorContextMenu.editorControllerRef.chapterId : ""
+            baselineId: editorContextMenu.editorControllerRef
+                && editorContextMenu.editorControllerRef.annotationNavigationSnapshot
+                ? String(editorContextMenu.editorControllerRef.annotationNavigationSnapshot.baselineId || "") : ""
             targetRef: editorContextMenu.pendingSourceRef
             targetLabel: targetRef && targetRef.kind === "textAnchor" ? qsTr("所选正文") : qsTr("本章")
             onTargetActivated: function(target) {

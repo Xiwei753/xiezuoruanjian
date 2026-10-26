@@ -15,6 +15,7 @@ Rectangle {
     property string chapterId: ""
     property double textRevision: 0
     property string chapterText: ""
+    property string baselineId: ""
     property int selectionStartByte: -1
     property int selectionEndByte: -1
     property bool allowSelectionAnchor: false
@@ -64,7 +65,7 @@ Rectangle {
             return selectionAnchorRef
         if (annotationBackendRef.get_chapter_annotations_json) {
             var snapshot = parseData(annotationBackendRef.get_chapter_annotations_json(
-                projectId, chapterId, Number(textRevision), chapterText))
+                projectId, chapterId, Number(textRevision), chapterText, baselineId))
             var anchors = snapshot && snapshot.anchors ? snapshot.anchors : []
             for (var i = 0; i < anchors.length; ++i) {
                 if (Number(anchors[i].startByte) === selectionStartByte

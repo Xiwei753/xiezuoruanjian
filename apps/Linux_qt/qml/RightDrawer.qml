@@ -230,6 +230,8 @@ Rectangle {
                         ? Number(root.editorControllerRef.targetEditorItem.text_revision) : 0
                     chapterText: root.editorControllerRef && root.editorControllerRef.getEditorPlainText
                         ? root.editorControllerRef.getEditorPlainText() : ""
+                    baselineId: root.editorControllerRef && root.editorControllerRef.annotationNavigationSnapshot
+                        ? String(root.editorControllerRef.annotationNavigationSnapshot.baselineId || "") : ""
                     selectionStartByte: root.editorControllerRef && root.editorControllerRef.targetEditorItem
                         ? Number(root.editorControllerRef.targetEditorItem.selection_start_byte) : -1
                     selectionEndByte: root.editorControllerRef && root.editorControllerRef.targetEditorItem

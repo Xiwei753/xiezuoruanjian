@@ -77,8 +77,8 @@ pub fn map_text_anchor_after_edits(
         .sum::<usize>();
 
     let mut updated = anchor.clone();
-    updated.updated_at_ms = updated_at_ms;
     if original_len == 0 || removed_len >= original_len {
+        updated.updated_at_ms = updated_at_ms;
         updated.deleted_at_ms = Some(updated_at_ms);
         return Ok(TextAnchorEdit::Deleted(updated));
     }
@@ -88,8 +88,59 @@ pub fn map_text_anchor_after_edits(
     if updated.start_byte > updated.end_byte {
         return Err(invalid_range("mapped text anchor start exceeds end"));
     }
+    if updated.start_byte != anchor.start_byte
+        || updated.end_byte != anchor.end_byte
+        || edits.iter().any(|edit| {
+            if edit.old_start_byte == edit.old_end_byte {
+                edit.old_start_byte > anchor.start_byte && edit.old_start_byte < anchor.end_byte
+            } else {
+                edit.old_start_byte < anchor.end_byte && edit.old_end_byte > anchor.start_byte
+            }
+        })
+    {
+        updated.updated_at_ms = updated_at_ms;
+    }
     updated.deleted_at_ms = None;
     Ok(TextAnchorEdit::Updated(updated))
+}
+
+/// Validate a batch emitted by the editor transaction and compute the resulting
+/// UTF-8 byte length without materializing either chapter string.
+pub fn resulting_text_len(current_len: usize, edits: &[TextEditRange]) -> crate::Result<usize> {
+    validate_edits(edits)?;
+    let mut shift = 0i128;
+    let mut previous_new_end = 0usize;
+    for (index, edit) in edits.iter().enumerate() {
+        if edit.old_end_byte > current_len {
+            return Err(invalid_range(
+                "edit range is outside the current chapter text",
+            ));
+        }
+        if index > 0 && edit.new_start_byte < previous_new_end {
+            return Err(invalid_range("resulting edit ranges overlap"));
+        }
+        let expected_new_start = (edit.old_start_byte as i128) + shift;
+        let expected_new_start = usize::try_from(expected_new_start)
+            .map_err(|_| invalid_range("resulting edit offset overflowed"))?;
+        if expected_new_start != edit.new_start_byte {
+            return Err(invalid_range(
+                "resulting edit range does not match the preceding text edits",
+            ));
+        }
+        let old_len = edit.old_end_byte - edit.old_start_byte;
+        let new_len = edit.new_end_byte - edit.new_start_byte;
+        shift += new_len as i128 - old_len as i128;
+        previous_new_end = edit.new_end_byte;
+    }
+    let resulting_len = (current_len as i128) + shift;
+    let resulting_len = usize::try_from(resulting_len)
+        .map_err(|_| invalid_range("resulting chapter length overflowed"))?;
+    if previous_new_end > resulting_len {
+        return Err(invalid_range(
+            "resulting edit range exceeds the resulting chapter text",
+        ));
+    }
+    Ok(resulting_len)
 }
 
 /// Build store mutations from the editor's committed transaction. Callers can
@@ -130,6 +181,16 @@ pub fn map_anchors_after_editor_result(
 /// The digest covers the whole chapter; the quote and small context window are
 /// retained only so a changed chapter can relocate the range safely.
 pub fn capture_text_anchor(anchor: &mut TextAnchor, text: &str) -> crate::Result<()> {
+    let text_hash = format!("{:x}", md5::compute(text.as_bytes()));
+    capture_text_anchor_with_hash(anchor, text, &text_hash)
+}
+
+/// Capture an anchor using a chapter digest computed once by the caller.
+pub fn capture_text_anchor_with_hash(
+    anchor: &mut TextAnchor,
+    text: &str,
+    text_hash: &str,
+) -> crate::Result<()> {
     if anchor.start_byte >= anchor.end_byte
         || anchor.end_byte > text.len()
         || !text.is_char_boundary(anchor.start_byte)
@@ -137,7 +198,7 @@ pub fn capture_text_anchor(anchor: &mut TextAnchor, text: &str) -> crate::Result
     {
         return Err(invalid_range("text anchor is outside the chapter text"));
     }
-    anchor.text_hash = format!("{:x}", md5::compute(text.as_bytes()));
+    anchor.text_hash = text_hash.to_string();
     anchor.anchored_text = text[anchor.start_byte..anchor.end_byte].to_string();
 
     let before_start = text[..anchor.start_byte]
@@ -161,6 +222,17 @@ pub fn capture_text_anchor(anchor: &mut TextAnchor, text: &str) -> crate::Result
 /// saved quote and context. Ambiguous and legacy anchors are left unresolved;
 /// callers must not display or mutate their historical offsets.
 pub fn rebase_text_anchor(anchor: &TextAnchor, text: &str) -> crate::Result<Option<TextAnchor>> {
+    let text_hash = format!("{:x}", md5::compute(text.as_bytes()));
+    rebase_text_anchor_with_hash(anchor, text, &text_hash)
+}
+
+/// Rebase an anchor while reusing a chapter digest shared by all anchors in
+/// the same snapshot.
+pub fn rebase_text_anchor_with_hash(
+    anchor: &TextAnchor,
+    text: &str,
+    text_hash: &str,
+) -> crate::Result<Option<TextAnchor>> {
     if anchor.deleted_at_ms.is_some() || anchor.anchored_text.is_empty() {
         return Ok(None);
     }
@@ -169,7 +241,7 @@ pub fn rebase_text_anchor(anchor: &TextAnchor, text: &str) -> crate::Result<Opti
         && text.is_char_boundary(anchor.start_byte)
         && text.is_char_boundary(anchor.end_byte);
     if range_is_valid
-        && anchor.text_hash == format!("{:x}", md5::compute(text.as_bytes()))
+        && anchor.text_hash == text_hash
         && text[anchor.start_byte..anchor.end_byte] == anchor.anchored_text
     {
         return Ok(Some(anchor.clone()));
@@ -217,7 +289,7 @@ pub fn rebase_text_anchor(anchor: &TextAnchor, text: &str) -> crate::Result<Opti
     let mut rebased = anchor.clone();
     rebased.start_byte = start_byte;
     rebased.end_byte = end_byte;
-    capture_text_anchor(&mut rebased, text)?;
+    capture_text_anchor_with_hash(&mut rebased, text, text_hash)?;
     Ok(Some(rebased))
 }
 

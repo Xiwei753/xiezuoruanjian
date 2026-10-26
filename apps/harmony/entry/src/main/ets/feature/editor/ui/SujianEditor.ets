@@ -105,10 +105,6 @@ interface CorrectionUnderlineRect extends SelectionRect {
   severity: string
 }
 
-interface AnnotationUnderlineRect extends SelectionRect {
-  kind: 'anchor' | 'autoMatch'
-}
-
 /**
  * Issue #879 复核评论修复（问题1）：候选 token——标识一次候选的完整身份。
  *
@@ -295,7 +291,8 @@ export struct SujianEditor {
   @State caretRect: CaretRect | null = null
   @State compositionUnderlineRects: CompositionUnderlineRect[] = []
   @State correctionUnderlineRects: CorrectionUnderlineRect[] = []
-  @State annotationUnderlineRects: AnnotationUnderlineRect[] = []
+  @State annotationTagBackgroundRects: SelectionRect[] = []
+  @State annotationLinkUnderlineRects: SelectionRect[] = []
   // Issue #629 评论6 Part C：分开 viewport 与 content 尺寸。
   // viewportWidth/viewportHeight：外层 Scroll 可视区域尺寸（px），来自 Scroll onAreaChange。
   // contentWidth/contentHeight：内层正文实际渲染尺寸（px），来自 Text onAreaChange。
@@ -771,7 +768,8 @@ export struct SujianEditor {
       this.caretRect = null
       this.compositionUnderlineRects = []
       this.correctionUnderlineRects = []
-      this.annotationUnderlineRects = []
+      this.annotationTagBackgroundRects = []
+      this.annotationLinkUnderlineRects = []
       this.displayedVisualFrame = null
       this.candidateVisualFrame = null
       // Issue #879 最新复核评论问题4：会话失效时丢弃候选句柄。
@@ -982,7 +980,7 @@ export struct SujianEditor {
   }
 
   private onAnnotationRangesChanged(): void {
-    this.refreshAnnotationUnderlineRects()
+    this.refreshAnnotationDisplayRects()
   }
 
   // Issue #879 复核评论修复（问题1）：EditorPendingLayoutHost 排版完成回调。
@@ -2092,7 +2090,7 @@ export struct SujianEditor {
 
   /** Draw revision-matched Core suggestions as severity-colored underlines. */
   private refreshCorrectionUnderlineRects(): void {
-    this.refreshAnnotationUnderlineRects()
+    this.refreshAnnotationDisplayRects()
     const snapshot = this.displayedSnapshot
     const result = this.renderResult
     if (snapshot === null || result === null || this.contentWidth <= 0 ||
@@ -2124,21 +2122,23 @@ export struct SujianEditor {
     this.correctionUnderlineRects = rects
   }
 
-  /** Draw current Core text anchors and auto-name matches on the committed text layout. */
-  private refreshAnnotationUnderlineRects(): void {
+  /** Project tag backgrounds and link underlines onto the committed text layout. */
+  private refreshAnnotationDisplayRects(): void {
     const snapshot = this.displayedSnapshot
     const result = this.renderResult
     if (snapshot === null || result === null || this.contentWidth <= 0 ||
         result.revision !== snapshot.revision || result.lines.length === 0 ||
         snapshot.compositionStart !== null || this.annotationRanges.length === 0) {
-      this.annotationUnderlineRects = []
+      this.annotationTagBackgroundRects = []
+      this.annotationLinkUnderlineRects = []
       return
     }
     const measureUtils = this.getUIContext().getMeasureUtils()
     const measureTextFn = (text: string): number => {
       return this.getUIContext().px2vp(measureUtils.measureText({ textContent: text, fontSize: snapshot.fontSize }))
     }
-    const rects: AnnotationUnderlineRect[] = []
+    const tagBackgroundRects: SelectionRect[] = []
+    const linkUnderlineRects: SelectionRect[] = []
     for (let i = 0; i < this.annotationRanges.length; i++) {
       const range = this.annotationRanges[i]
       if (range.textRevision !== snapshot.revision || range.startByte < 0 ||
@@ -2154,18 +2154,16 @@ export struct SujianEditor {
       }
       const rangeRects = computeSelectionRectsFromLineLayouts(
         snapshot.text, result.lines, this.contentWidth, startUtf16, endUtf16, measureTextFn)
-      for (let j = 0; j < rangeRects.length; j++) {
-        const rect = rangeRects[j]
-        rects.push({ x: rect.x, y: rect.y, width: rect.width, height: rect.height, kind: range.kind })
-      }
+      const destination: SelectionRect[] = range.kind === 'tagBackground'
+        ? tagBackgroundRects : linkUnderlineRects
+      for (let j = 0; j < rangeRects.length; j++) destination.push(rangeRects[j])
     }
-    this.annotationUnderlineRects = rects
+    this.annotationTagBackgroundRects = tagBackgroundRects
+    this.annotationLinkUnderlineRects = linkUnderlineRects
   }
 
-  private annotationRangeColor(kind: 'anchor' | 'autoMatch'): ResourceColor {
-    return kind === 'autoMatch'
-      ? $r('sys.color.ohos_id_color_emphasize')
-      : $r('sys.color.font_secondary')
+  private annotationLinkUnderlineColor(): ResourceColor {
+    return $r('sys.color.ohos_id_color_emphasize')
   }
 
   private correctionSeverityColor(severity: string): ResourceColor {
@@ -2971,6 +2969,16 @@ export struct SujianEditor {
         // 这样空白处点击也能命中宿主节点，触发 focus + IME attach。
         Stack() {
         if (this.renderResult && (this.displayedSnapshot ?? this.currentSnapshot)) {
+          // Tag backgrounds sit beneath the selection and text, sharing the committed line geometry.
+          ForEach(this.annotationTagBackgroundRects, (rect: SelectionRect, index: number) => {
+            Rect()
+              .position({ x: rect.x, y: rect.y })
+              .width(rect.width)
+              .height(rect.height)
+              .fill($r('sys.color.ohos_id_color_emphasize'))
+              .opacity(0.12)
+          }, (rect: SelectionRect, index: number) => `annotation_tag_${index}`)
+
           // 1. selection background（最底层）
           ForEach(this.selectionRects, (rect: SelectionRect, index: number) => {
             Rect()
@@ -3062,14 +3070,14 @@ export struct SujianEditor {
               .fill(this.compositionUnderlineColor)
           }, (rect: CompositionUnderlineRect, index: number) => index.toString())
 
-          // Core text anchors and auto-name matches share the committed line geometry.
-          ForEach(this.annotationUnderlineRects, (rect: AnnotationUnderlineRect, index: number) => {
+          // Manual and automatic links use a thin underline over the text.
+          ForEach(this.annotationLinkUnderlineRects, (rect: SelectionRect, index: number) => {
             Rect()
               .position({ x: rect.x, y: rect.y + Math.max(0, rect.height - 1) })
               .width(rect.width)
               .height(Math.min(1, rect.height))
-              .fill(this.annotationRangeColor(rect.kind))
-          }, (rect: AnnotationUnderlineRect, index: number) => `annotation_${index}`)
+              .fill(this.annotationLinkUnderlineColor())
+          }, (rect: SelectionRect, index: number) => `annotation_link_${index}`)
 
           // Current-revision correction diagnostics use the same committed line geometry as text.
           ForEach(this.correctionUnderlineRects, (rect: CorrectionUnderlineRect, index: number) => {

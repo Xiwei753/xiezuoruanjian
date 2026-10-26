@@ -186,9 +186,10 @@ impl super::WriterAppService {
         chapter_id: String,
         text_revision: u64,
         text: String,
+        baseline_id: String,
     ) -> Result<ChapterAnnotationsDto, WriterError> {
         self.api
-            .get_chapter_annotations(project_id, chapter_id, text_revision, text)
+            .get_chapter_annotations(project_id, chapter_id, text_revision, text, baseline_id)
     }
 
     pub fn apply_annotation_edits(
@@ -200,7 +201,6 @@ impl super::WriterAppService {
         text_revision: u64,
         cause: crate::api::EditorTransactionCauseDto,
         edits: Vec<AnnotationEditDto>,
-        text: String,
     ) -> Result<bool, WriterError> {
         self.api.apply_annotation_edits(
             project_id,
@@ -210,7 +210,6 @@ impl super::WriterAppService {
             text_revision,
             cause,
             edits,
-            text,
         )
     }
 

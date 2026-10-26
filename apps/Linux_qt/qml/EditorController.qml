@@ -321,11 +321,10 @@ QtObject {
             annotationRefreshTimer.restart()
             return
         }
-        var currentText = getEditorPlainText()
         var raw = annotationBackendRef.apply_annotation_edits_json(
             projectId, chapterId, String(snapshot.baselineId),
             Number(baseRevision), Number(newRevision), String(cause),
-            JSON.stringify(edits), currentText)
+            JSON.stringify(edits))
         var envelope = null
         try { envelope = JSON.parse(String(raw || "{}")) } catch (e) {}
         if (!envelope || envelope.success !== true) {
@@ -355,7 +354,13 @@ QtObject {
         }
         var revision = Number(targetEditorItem.text_revision)
         var text = getEditorPlainText()
-        var raw = annotationBackendRef.get_chapter_annotations_json(projectId, chapterId, revision, text)
+        var existingSnapshot = annotationNavigationSnapshot
+        var baselineId = existingSnapshot
+                && String(existingSnapshot.projectId) === String(projectId)
+                && String(existingSnapshot.chapterId) === String(chapterId)
+                ? String(existingSnapshot.baselineId || "") : ""
+        var raw = annotationBackendRef.get_chapter_annotations_json(
+            projectId, chapterId, revision, text, baselineId)
         var envelope = null
         try { envelope = JSON.parse(String(raw || "{}")) } catch (e) {}
         if (!envelope || envelope.success !== true || !envelope.data) {

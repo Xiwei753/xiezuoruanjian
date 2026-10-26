@@ -1580,9 +1580,9 @@ interface WriterAppService {
     [Throws=WriterError]
     AnnotationTextAnchorDto? get_text_anchor(string project_id, string anchor_id);
     [Throws=WriterError]
-    ChapterAnnotationsDto get_chapter_annotations(string project_id, string chapter_id, u64 text_revision, string text);
+    ChapterAnnotationsDto get_chapter_annotations(string project_id, string chapter_id, u64 text_revision, string text, string baseline_id);
     [Throws=WriterError]
-    boolean apply_annotation_edits(string project_id, string chapter_id, string baseline_id, u64 base_revision, u64 text_revision, EditorTransactionCauseDto cause, sequence<AnnotationEditDto> edits, string text);
+    boolean apply_annotation_edits(string project_id, string chapter_id, string baseline_id, u64 base_revision, u64 text_revision, EditorTransactionCauseDto cause, sequence<AnnotationEditDto> edits);
     [Throws=WriterError]
     sequence<AnnotationAutoMatchDto> find_auto_name_links(string project_id, string chapter_id, u64 text_revision, string text);
 

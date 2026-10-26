@@ -49,9 +49,8 @@ impl WriterCoreApi {
             .core_write()
             .create_chapter_with_id(project_id, volume_id, id, title, order)
             .map_err(WriterError::from)?;
-        let title_entry = crate::search::extractor::extract_chapter_title_entry(
-            project_id, volume_id, id, title,
-        );
+        let title_entry =
+            crate::search::extractor::extract_chapter_title_entry(project_id, volume_id, id, title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: title_entry.object_id.clone(),
@@ -304,25 +303,7 @@ impl WriterCoreApi {
         chapter_id: &str,
         content: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        //   用 _with_changes 版本拿变更集。
-        let (receipt, change_set) = self
-            .core_write()
-            .write_chapter_verified_with_changes(project_id, volume_id, chapter_id, content)
-            .map_err(WriterError::from)?;
-        let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
-        let entry = crate::search::extractor::extract_chapter_body_entry(
-            project_id, volume_id, chapter_id, &ch_title, content,
-        );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Upsert,
-            object_id: entry.object_id.clone(),
-            scope: entry.scope,
-            title: entry.title.clone(),
-            body: entry.body.clone(),
-            target: Some(entry.target.clone()),
-        });
-        let _ = self.record_workspace_change_set_history(&change_set, "save_chapter_content");
-        Ok(receipt.into())
+        self.save_chapter_content_internal(project_id, volume_id, chapter_id, content, false, false)
     }
 
     /// 保存章节正文（带空覆盖控制）。`allow_empty_overwrite=true` 绕过安全拦截。
@@ -334,31 +315,14 @@ impl WriterCoreApi {
         content: &str,
         allow_empty_overwrite: bool,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        //   用 _with_changes 版本拿变更集。
-        let (receipt, change_set) = self
-            .core_write()
-            .save_chapter_verified_with_changes_with_options(
-                project_id,
-                volume_id,
-                chapter_id,
-                content,
-                allow_empty_overwrite,
-            )
-            .map_err(WriterError::from)?;
-        let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
-        let entry = crate::search::extractor::extract_chapter_body_entry(
-            project_id, volume_id, chapter_id, &ch_title, content,
-        );
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Upsert,
-            object_id: entry.object_id.clone(),
-            scope: entry.scope,
-            title: entry.title.clone(),
-            body: entry.body.clone(),
-            target: Some(entry.target.clone()),
-        });
-        let _ = self.record_workspace_change_set_history(&change_set, "save_chapter_content");
-        Ok(receipt.into())
+        self.save_chapter_content_internal(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            allow_empty_overwrite,
+            false,
+        )
     }
 
     /// 清空章节正文（等价于 `save_chapter_content_with_options(..., true)`）。
@@ -368,23 +332,83 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        //   用 _with_changes 版本拿变更集。
-        // 清空正文需要 allow_empty_overwrite=true。
-        let (receipt, change_set) = self
-            .core_write()
-            .save_chapter_verified_with_changes_with_options(
-                project_id, volume_id, chapter_id, "", true,
-            )
-            .map_err(WriterError::from)?;
-        self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
-            action: crate::search::SearchIndexAction::Delete,
-            object_id: format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
-            scope: crate::search::SearchScope::All,
-            title: String::new(),
-            body: String::new(),
-            target: None,
-        });
-        let _ = self.record_workspace_change_set_history(&change_set, "clear_chapter_content");
+        self.save_chapter_content_internal(project_id, volume_id, chapter_id, "", true, true)
+    }
+
+    fn save_chapter_content_internal(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        allow_empty_overwrite: bool,
+        clear_content: bool,
+    ) -> ApiResult<ChapterSaveReceiptDto> {
+        let pending_annotations =
+            self.prepare_annotation_edit_save(project_id, chapter_id, content)?;
+        let additional_files = pending_annotations
+            .as_ref()
+            .map(|pending| pending.prepared.files.clone())
+            .unwrap_or_default();
+        let (receipt, change_set) = if additional_files.is_empty() {
+            self.core_write()
+                .save_chapter_verified_with_changes_with_options(
+                    project_id,
+                    volume_id,
+                    chapter_id,
+                    content,
+                    allow_empty_overwrite,
+                )
+        } else {
+            self.core_write()
+                .save_chapter_verified_with_changes_and_files_with_options(
+                    project_id,
+                    volume_id,
+                    chapter_id,
+                    content,
+                    allow_empty_overwrite,
+                    &additional_files,
+                )
+        }
+        .map_err(WriterError::from)?;
+
+        if clear_content {
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Delete,
+                object_id: format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
+                scope: crate::search::SearchScope::All,
+                title: String::new(),
+                body: String::new(),
+                target: None,
+            });
+        } else {
+            let ch_title = get_chapter_title(self, project_id, volume_id, chapter_id);
+            let entry = crate::search::extractor::extract_chapter_body_entry(
+                project_id, volume_id, chapter_id, &ch_title, content,
+            );
+            self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+                action: crate::search::SearchIndexAction::Upsert,
+                object_id: entry.object_id.clone(),
+                scope: entry.scope,
+                title: entry.title.clone(),
+                body: entry.body.clone(),
+                target: Some(entry.target.clone()),
+            });
+        }
+        if let Some(pending) = pending_annotations {
+            if let Some(baseline_id) = pending.baseline_id.as_deref() {
+                self.finish_annotation_edit_save(baseline_id, &pending.prepared.committed_anchors);
+            }
+            self.refresh_annotation_search_index(project_id, "save_chapter_content");
+        }
+        let _ = self.record_workspace_change_set_history(
+            &change_set,
+            if clear_content {
+                "clear_chapter_content"
+            } else {
+                "save_chapter_content"
+            },
+        );
         Ok(receipt.into())
     }
 

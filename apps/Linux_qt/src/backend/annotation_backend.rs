@@ -36,8 +36,8 @@ pub struct AnnotationBackend {
     find_backlinks_json: qt_method!(fn(&self, target_json: QString) -> QString),
     list_links_for_source_json: qt_method!(fn(&self, source_json: QString) -> QString),
     get_text_anchor_json: qt_method!(fn(&self, project_id: QString, anchor_id: QString) -> QString),
-    get_chapter_annotations_json: qt_method!(fn(&self, project_id: QString, chapter_id: QString, text_revision: u64, text: QString) -> QString),
-    apply_annotation_edits_json: qt_method!(fn(&self, project_id: QString, chapter_id: QString, baseline_id: QString, base_revision: u64, text_revision: u64, cause: QString, edits_json: QString, text: QString) -> QString),
+    get_chapter_annotations_json: qt_method!(fn(&self, project_id: QString, chapter_id: QString, text_revision: u64, text: QString, baseline_id: QString) -> QString),
+    apply_annotation_edits_json: qt_method!(fn(&self, project_id: QString, chapter_id: QString, baseline_id: QString, base_revision: u64, text_revision: u64, cause: QString, edits_json: QString) -> QString),
     find_auto_name_links_json: qt_method!(fn(&self, project_id: QString, chapter_id: QString, text_revision: u64, text: QString) -> QString),
     app: AppRef,
 }
@@ -201,12 +201,12 @@ impl AnnotationBackend {
         self.execute(|api| api.get_text_anchor(project_id.clone(), anchor_id.clone()))
     }
 
-    fn get_chapter_annotations_json(&self, project_id: QString, chapter_id: QString, text_revision: u64, text: QString) -> QString {
-        let (project_id, chapter_id, text) = (project_id.to_string(), chapter_id.to_string(), text.to_string());
-        self.execute(|api| api.get_chapter_annotations(project_id.clone(), chapter_id.clone(), text_revision, text.clone()))
+    fn get_chapter_annotations_json(&self, project_id: QString, chapter_id: QString, text_revision: u64, text: QString, baseline_id: QString) -> QString {
+        let (project_id, chapter_id, text, baseline_id) = (project_id.to_string(), chapter_id.to_string(), text.to_string(), baseline_id.to_string());
+        self.execute(|api| api.get_chapter_annotations(project_id.clone(), chapter_id.clone(), text_revision, text.clone(), baseline_id.clone()))
     }
 
-    fn apply_annotation_edits_json(&self, project_id: QString, chapter_id: QString, baseline_id: QString, base_revision: u64, text_revision: u64, cause: QString, edits_json: QString, text: QString) -> QString {
+    fn apply_annotation_edits_json(&self, project_id: QString, chapter_id: QString, baseline_id: QString, base_revision: u64, text_revision: u64, cause: QString, edits_json: QString) -> QString {
         let edits = match Self::decode::<Vec<AnnotationEditDto>>(&edits_json, "edits") {
             Ok(edits) => edits,
             Err(error) => return ResultEnvelope::<serde_json::Value>::error(error).to_json_string().into(),
@@ -226,12 +226,12 @@ impl AnnotationBackend {
                 WriterError::Other(format!("未知编辑事务来源: {value}"))
             ).to_json_string().into(),
         };
-        let (project_id, chapter_id, baseline_id, text) = (
-            project_id.to_string(), chapter_id.to_string(), baseline_id.to_string(), text.to_string()
+        let (project_id, chapter_id, baseline_id) = (
+            project_id.to_string(), chapter_id.to_string(), baseline_id.to_string()
         );
         self.execute(|api| api.apply_annotation_edits(
             project_id.clone(), chapter_id.clone(), baseline_id.clone(),
-            base_revision, text_revision, cause, edits, text.clone()
+            base_revision, text_revision, cause, edits
         ))
     }
 

@@ -318,6 +318,29 @@ impl super::WriterCore {
         )
     }
 
+    /// Save chapter content and additional project-local records in the same
+    /// transaction used for chapter.md and chapter metadata.
+    pub fn save_chapter_verified_with_changes_and_files_with_options(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        allow_empty_overwrite: bool,
+        additional_files: &[(String, String)],
+    ) -> Result<(ChapterSaveReceipt, WorkspaceChangeSet)> {
+        let project_root = self.project_root(project_id);
+        chapter::save_chapter_verified_with_changes_and_files_with_options(
+            &project_root,
+            volume_id,
+            chapter_id,
+            content,
+            allow_empty_overwrite,
+            additional_files,
+            &self.app_data_root,
+        )
+    }
+
     /// 重命名章节并返回变更集。
     pub fn rename_chapter_with_changes(
         &self,

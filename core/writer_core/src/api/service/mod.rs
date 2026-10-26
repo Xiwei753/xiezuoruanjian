@@ -26,12 +26,8 @@ pub struct WriterCoreApi {
     /// `sync_transport` / `secure_storage` 只存在于内部 `WriterCore` 中，
     /// 不再在 API 层保留副本——避免双份状态漂移。
     core_instance: std::sync::RwLock<WriterCore>,
-    /// Annotation range undo/redo snapshots follow the editor session's committed transactions.
-    annotation_edit_history: std::sync::Mutex<
-        std::collections::HashMap<(String, String), annotation_ops::AnnotationEditHistory>,
-    >,
-    /// Loaded chapter text snapshots used to rebase persisted anchor positions
-    /// before applying session-local editor byte ranges.
+    /// Session-local text-anchor ranges; edit transactions update this map in
+    /// memory and the chapter save transaction persists it with the body.
     annotation_edit_baselines:
         std::sync::Mutex<std::collections::HashMap<String, annotation_ops::AnnotationEditBaseline>>,
     ///   本地 workspace Git 布局。
@@ -70,7 +66,6 @@ impl WriterCoreApi {
             projects_root: projects_root_buf,
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
-            annotation_edit_history: std::sync::Mutex::new(std::collections::HashMap::new()),
             annotation_edit_baselines: std::sync::Mutex::new(std::collections::HashMap::new()),
             workspace_git_layout: std::sync::RwLock::new(
                 crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root_buf),

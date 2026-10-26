@@ -164,9 +164,10 @@ class AnnotationBridge internal constructor(
         chapterId: String,
         textRevision: Long,
         text: String,
+        baselineId: String = "",
     ): BridgeResult<ChapterAnnotationsDto> =
         holder.wrapResult {
-            holder.service.getChapterAnnotations(projectId, chapterId, textRevision.toULong(), text)
+            holder.service.getChapterAnnotations(projectId, chapterId, textRevision.toULong(), text, baselineId)
         }
 
     fun applyAnnotationEdits(
@@ -177,7 +178,6 @@ class AnnotationBridge internal constructor(
         textRevision: Long,
         cause: EditorTransactionCauseDto,
         edits: List<AnnotationEditDto>,
-        text: String,
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.applyAnnotationEdits(
@@ -188,7 +188,6 @@ class AnnotationBridge internal constructor(
                 textRevision.toULong(),
                 cause,
                 edits,
-                text,
             )
         }
 

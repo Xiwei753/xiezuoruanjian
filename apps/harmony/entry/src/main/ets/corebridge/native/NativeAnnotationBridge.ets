@@ -122,17 +122,16 @@ export class NativeAnnotationBridge {
   }
 
   getChapterAnnotations(projectId: string, chapterId: string, textRevision: number,
-    text: string): Promise<ResultEnvelope<ChapterAnnotationsDto>> {
+    text: string, baselineId: string): Promise<ResultEnvelope<ChapterAnnotationsDto>> {
     return this.call('getChapterAnnotations', { projectId: projectId, chapterId: chapterId,
-      textRevision: textRevision, text: text }, decodeChapterAnnotations)
+      textRevision: textRevision, text: text, baselineId: baselineId }, decodeChapterAnnotations)
   }
 
   applyAnnotationEdits(projectId: string, chapterId: string, baselineId: string, baseRevision: number,
-    textRevision: number, cause: EditorTransactionCause, edits: AnnotationEditDto[],
-    newText: string): Promise<ResultEnvelope<boolean>> {
+    textRevision: number, cause: EditorTransactionCause, edits: AnnotationEditDto[]): Promise<ResultEnvelope<boolean>> {
     return this.call('applyAnnotationEdits', { projectId: projectId, chapterId: chapterId,
       baselineId: baselineId, baseRevision: baseRevision, textRevision: textRevision,
-      cause: cause, edits: edits, newText: newText }, decodeBoolean)
+      cause: cause, edits: edits }, decodeBoolean)
   }
 
   findAutoNameLinks(projectId: string, chapterId: string, textRevision: number,
