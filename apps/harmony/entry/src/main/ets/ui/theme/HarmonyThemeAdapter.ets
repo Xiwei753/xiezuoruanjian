@@ -1,10 +1,8 @@
 import window from '@ohos.window'
 import { ConfigurationConstant } from '@kit.AbilityKit'
-import { ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
+import { ThemeColorSchemeDto, BuiltinThemeDto } from '../../corebridge/dto/SettingsDtos'
 import { HarmonyColorModeController } from './HarmonyColorModeController'
 import { ThemeMode } from './HarmonyThemeTypes'
-
-export type ColorSource = 'built_in' | 'saved_palette'
 
 export interface ThemeColors {
   // Primary
@@ -62,8 +60,6 @@ export interface ThemeColors {
 
 export interface ThemeConfig {
   mode: ThemeMode
-  colorSource: ColorSource
-  selectedPaletteId: string
   selectedBuiltinThemeId: string
   colors: ThemeColors
   fontSize: number
@@ -167,8 +163,6 @@ export interface ThemeObserver {
 
 export interface ThemeUpdateParams {
   theme: ThemeMode
-  colorSource?: ColorSource
-  selectedPaletteId?: string
   selectedBuiltinThemeId?: string
   fontSize: number
   fontFamily: string
@@ -185,8 +179,6 @@ export class HarmonyThemeAdapter {
   private effectiveColorMode: string = 'light' // 'light' | 'dark'，根据 mode 和 systemColorMode 计算
   private currentTheme: ThemeConfig = {
     mode: 'system',
-    colorSource: 'built_in',
-    selectedPaletteId: '',
     selectedBuiltinThemeId: '',
     colors: LightTheme,
     fontSize: 16,
@@ -195,7 +187,6 @@ export class HarmonyThemeAdapter {
   }
   private observers: Set<ThemeObserver> = new Set()
   private systemThemeListener: ((isDark: boolean) => void) | null = null
-  private paletteRecords: ThemePaletteRecordDto[] = []
   private builtinThemes: BuiltinThemeDto[] = []
 
   static getInstance(): HarmonyThemeAdapter {
@@ -212,8 +203,6 @@ export class HarmonyThemeAdapter {
   getCurrentTheme(): ThemeConfig {
     const c: ThemeConfig = {
       mode: this.currentTheme.mode,
-      colorSource: this.currentTheme.colorSource,
-      selectedPaletteId: this.currentTheme.selectedPaletteId,
       selectedBuiltinThemeId: this.currentTheme.selectedBuiltinThemeId,
       colors: this.currentTheme.colors,
       fontSize: this.currentTheme.fontSize,
@@ -229,14 +218,6 @@ export class HarmonyThemeAdapter {
 
   getMode(): ThemeMode {
     return this.currentTheme.mode
-  }
-
-  getColorSource(): ColorSource {
-    return this.currentTheme.colorSource
-  }
-
-  getSelectedPaletteId(): string {
-    return this.currentTheme.selectedPaletteId
   }
 
   getSelectedBuiltinThemeId(): string {
@@ -273,10 +254,6 @@ export class HarmonyThemeAdapter {
     }
   }
 
-  getPaletteRecords(): ThemePaletteRecordDto[] {
-    return this.paletteRecords
-  }
-
   getBuiltinThemes(): BuiltinThemeDto[] {
     return this.builtinThemes
   }
@@ -287,39 +264,10 @@ export class HarmonyThemeAdapter {
     this.notifyObservers()
   }
 
-  // Issue #767 评论 5831321551：统一走 recomputeUseSystemTokens，
-  // 不在 setter 里手动设置 useSystemTokens。
-  setColorSource(colorSource: ColorSource): void {
-    this.currentTheme.colorSource = colorSource
-    this.recomputeUseSystemTokens()
-    this.updateColors()
-    this.notifyObservers()
-  }
-
-  // Issue #767 评论 5831321551：统一走 recomputeUseSystemTokens。
-  setSelectedPaletteId(paletteId: string): void {
-    this.currentTheme.selectedPaletteId = paletteId
-    if (paletteId.length > 0) {
-      this.currentTheme.colorSource = 'saved_palette'
-    }
-    this.recomputeUseSystemTokens()
-    this.updateColors()
-    this.notifyObservers()
-  }
-
   // Issue #767 评论 5831321551：统一走 recomputeUseSystemTokens。
   setSelectedBuiltinThemeId(themeId: string): void {
     this.currentTheme.selectedBuiltinThemeId = themeId
-    if (themeId.length > 0) {
-      this.currentTheme.colorSource = 'built_in'
-    }
     this.recomputeUseSystemTokens()
-    this.updateColors()
-    this.notifyObservers()
-  }
-
-  setPaletteRecords(records: ThemePaletteRecordDto[]): void {
-    this.paletteRecords = records
     this.updateColors()
     this.notifyObservers()
   }
@@ -356,12 +304,10 @@ export class HarmonyThemeAdapter {
     this.notifyObservers()
   }
 
-  updateFromLocalSettings(appearanceMode: string, colorSource: string, selectedPaletteId: string, selectedBuiltinThemeId: string): void {
+  updateFromLocalSettings(appearanceMode: string, selectedBuiltinThemeId: string): void {
     // Issue #767 评论 5831658277：统一走 applyMode 私有入口，确保应用重启后
     // 也能把用户选择的深浅色模式真正下发到系统。
     this.applyMode(appearanceMode as ThemeMode)
-    this.currentTheme.colorSource = colorSource as ColorSource
-    this.currentTheme.selectedPaletteId = selectedPaletteId
     this.currentTheme.selectedBuiltinThemeId = selectedBuiltinThemeId
     // Issue #767 评论 5831067980：根据显式主题选择重算 useSystemTokens，
     // 避免应用重启后 adapter 仍保持默认 useSystemTokens=true。
@@ -451,19 +397,12 @@ export class HarmonyThemeAdapter {
     return this.effectiveColorMode === 'dark'
   }
 
-  // Issue #767 评论 5831067980：根据 colorSource 和 selectedPaletteId/selectedBuiltinThemeId
+  // Issue #767 评论 5831067980：根据 selectedBuiltinThemeId
   // 重算 useSystemTokens，确保应用重启后不会保持默认 useSystemTokens=true。
-  // - selectedPaletteId 非空且 colorSource=saved_palette → useSystemTokens=false
-  // - selectedBuiltinThemeId 非空且 colorSource=built_in → useSystemTokens=false
-  // - 两者都没有有效显式覆盖 → useSystemTokens=true
+  // - selectedBuiltinThemeId 非空 → useSystemTokens=false
+  // - 没有有效显式覆盖 → useSystemTokens=true
   private recomputeUseSystemTokens(): void {
-    if (this.currentTheme.colorSource === 'saved_palette' && this.currentTheme.selectedPaletteId.length > 0) {
-      this.useSystemTokens = false
-    } else if (this.currentTheme.colorSource === 'built_in' && this.currentTheme.selectedBuiltinThemeId.length > 0) {
-      this.useSystemTokens = false
-    } else {
-      this.useSystemTokens = true
-    }
+    this.useSystemTokens = this.currentTheme.selectedBuiltinThemeId.length === 0
   }
 
   private updateColors(): void {
@@ -484,18 +423,7 @@ export class HarmonyThemeAdapter {
 
     const isDark = this.isCurrentlyDark()
 
-    if (this.currentTheme.colorSource === 'saved_palette' && this.currentTheme.selectedPaletteId.length > 0) {
-      const record = this.findPaletteRecord(this.currentTheme.selectedPaletteId)
-      if (record !== null) {
-        this.currentTheme.colors = schemeToThemeColors(
-          isDark ? record.dark_scheme : record.light_scheme,
-          isDark
-        )
-        return
-      }
-    }
-
-    if (this.currentTheme.colorSource === 'built_in' && this.currentTheme.selectedBuiltinThemeId.length > 0) {
+    if (this.currentTheme.selectedBuiltinThemeId.length > 0) {
       const theme = this.findBuiltinTheme(this.currentTheme.selectedBuiltinThemeId)
       if (theme !== null) {
         this.currentTheme.colors = schemeToThemeColors(
@@ -517,13 +445,6 @@ export class HarmonyThemeAdapter {
         this.applySystemColorMode(this.systemColorMode)
         break
     }
-  }
-
-  private findPaletteRecord(paletteId: string): ThemePaletteRecordDto | null {
-    for (const r of this.paletteRecords) {
-      if (r.palette_id === paletteId) return r
-    }
-    return null
   }
 
   private findBuiltinTheme(themeId: string): BuiltinThemeDto | null {

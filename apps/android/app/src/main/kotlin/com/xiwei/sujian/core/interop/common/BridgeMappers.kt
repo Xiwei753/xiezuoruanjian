@@ -156,10 +156,9 @@ internal fun LocalSettings.toDto() =
         diagnosticsVerbose = diagnosticsVerbose,
     )
 
-internal fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMode, monetColor, themePaletteJson)
+internal fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMode)
 
-@Suppress("DEPRECATION")
-internal fun SyncableSettings.toDto() = SyncableSettingsDto(fontSize, themeMode, monetColor, themePaletteJson)
+internal fun SyncableSettings.toDto() = SyncableSettingsDto(fontSize, themeMode)
 
 internal fun SyncConfigDto.toModel(): SyncConfig {
     val gitHttpsConfig = providerConfig as? ProviderConfigDto.GitHttps

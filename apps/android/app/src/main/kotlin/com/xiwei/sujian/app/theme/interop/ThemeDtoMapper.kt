@@ -2,7 +2,6 @@ package com.xiwei.sujian.app.theme.interop
 
 import com.xiwei.sujian.app.theme.model.BuiltinTheme
 import com.xiwei.sujian.app.theme.model.ThemeColorScheme
-import com.xiwei.sujian.app.theme.model.ThemePaletteRecord
 
 /**
  * UniFFI 主题 DTO → app 层主题 DTO 映射器。
@@ -69,72 +68,5 @@ object ThemeDtoMapper {
             name = dto.name,
             lightScheme = fromDto(dto.lightScheme),
             darkScheme = fromDto(dto.darkScheme),
-        )
-
-    fun fromDto(dto: uniffi.writer_core.ThemePaletteRecordDto): ThemePaletteRecord =
-        ThemePaletteRecord(
-            schemaVersion = dto.schemaVersion,
-            paletteId = dto.paletteId,
-            paletteFingerprint = dto.paletteFingerprint,
-            source = dto.source,
-            sourcePlatform = dto.sourcePlatform,
-            sourceDeviceId = dto.sourceDeviceId,
-            sourceDeviceClass = dto.sourceDeviceClass,
-            capturedAtMs = dto.capturedAtMs,
-            variant = dto.variant,
-            lightScheme = fromDto(dto.lightScheme),
-            darkScheme = fromDto(dto.darkScheme),
-        )
-
-    fun toDto(scheme: ThemeColorScheme): uniffi.writer_core.ThemeColorSchemeDto =
-        uniffi.writer_core.ThemeColorSchemeDto(
-            primary = scheme.primary,
-            onPrimary = scheme.onPrimary,
-            primaryContainer = scheme.primaryContainer,
-            onPrimaryContainer = scheme.onPrimaryContainer,
-            inversePrimary = scheme.inversePrimary,
-            secondary = scheme.secondary,
-            onSecondary = scheme.onSecondary,
-            secondaryContainer = scheme.secondaryContainer,
-            onSecondaryContainer = scheme.onSecondaryContainer,
-            tertiary = scheme.tertiary,
-            onTertiary = scheme.onTertiary,
-            tertiaryContainer = scheme.tertiaryContainer,
-            onTertiaryContainer = scheme.onTertiaryContainer,
-            background = scheme.background,
-            onBackground = scheme.onBackground,
-            surface = scheme.surface,
-            onSurface = scheme.onSurface,
-            surfaceVariant = scheme.surfaceVariant,
-            onSurfaceVariant = scheme.onSurfaceVariant,
-            surfaceTint = scheme.surfaceTint,
-            surfaceDim = scheme.surfaceDim,
-            surfaceBright = scheme.surfaceBright,
-            surfaceContainerLowest = scheme.surfaceContainerLowest,
-            surfaceContainerLow = scheme.surfaceContainerLow,
-            surfaceContainer = scheme.surfaceContainer,
-            surfaceContainerHigh = scheme.surfaceContainerHigh,
-            surfaceContainerHighest = scheme.surfaceContainerHighest,
-            inverseSurface = scheme.inverseSurface,
-            inverseOnSurface = scheme.inverseOnSurface,
-            error = scheme.error,
-            onError = scheme.onError,
-            errorContainer = scheme.errorContainer,
-            onErrorContainer = scheme.onErrorContainer,
-            outline = scheme.outline,
-            outlineVariant = scheme.outlineVariant,
-            scrim = scheme.scrim,
-            primaryFixed = scheme.primaryFixed,
-            primaryFixedDim = scheme.primaryFixedDim,
-            onPrimaryFixed = scheme.onPrimaryFixed,
-            onPrimaryFixedVariant = scheme.onPrimaryFixedVariant,
-            secondaryFixed = scheme.secondaryFixed,
-            secondaryFixedDim = scheme.secondaryFixedDim,
-            onSecondaryFixed = scheme.onSecondaryFixed,
-            onSecondaryFixedVariant = scheme.onSecondaryFixedVariant,
-            tertiaryFixed = scheme.tertiaryFixed,
-            tertiaryFixedDim = scheme.tertiaryFixedDim,
-            onTertiaryFixed = scheme.onTertiaryFixed,
-            onTertiaryFixedVariant = scheme.onTertiaryFixedVariant,
         )
 }

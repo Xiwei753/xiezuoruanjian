@@ -404,7 +404,6 @@ class SyncCoordinatorTest {
                     ),
                 ),
             reloadSettings = { },
-            reloadThemes = { },
             invalidateStarmapCache = { },
         ) {
         override fun flushBeforeSync(): Boolean = false

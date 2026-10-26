@@ -41,6 +41,7 @@ object AndroidPrivateDataRoot {
     private const val LOGS_DIR_NAME = "logs"
     private const val EXPORTS_DIR_NAME = "exports"
     private const val MIRROR_DIR_NAME = "mirror"
+    private const val LOCAL_THEME_PALETTES_DIR_NAME = "local-theme-palettes"
 
     /**
      * 应用私有根目录 `context.filesDir/sujian`。
@@ -66,6 +67,13 @@ object AndroidPrivateDataRoot {
      * 调用方通过 [com.xiwei.sujian.storage.mirror.MirrorTransactionWorkspace] 使用此目录。
      */
     fun mirror(context: Context): File = File(root(context), MIRROR_DIR_NAME)
+
+    /**
+     * `sujian/local-theme-palettes/` — Android 设备配色快照（Issue #1005）。
+     *
+     * 仅当前设备使用，不进入 Git 同步、近场同步或 `settings.sync.json`。
+     */
+    fun localThemePalettes(context: Context): File = File(root(context), LOCAL_THEME_PALETTES_DIR_NAME)
 
     /**
      * 创建所有业务子目录（幂等）。应用私有存储不需要额外权限。

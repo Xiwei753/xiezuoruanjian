@@ -970,7 +970,7 @@ export class PeerObjectStore {
   }
 
   private appGroupStorageKey(relativePath: string): string {
-    if (relativePath === 'settings.sync.json' || relativePath.startsWith('themes/palettes/')) {
+    if (relativePath === 'settings.sync.json') {
       return 'global'
     }
     if (relativePath === 'starmaps/index.json') {
@@ -1031,7 +1031,7 @@ export class PeerObjectStore {
     if (path === 'settings.sync.json' || path === 'app-meta/sync/manifest.sync.json') {
       return true
     }
-    if (path.startsWith('starmaps/') || path.startsWith('themes/palettes/')) {
+    if (path.startsWith('starmaps/')) {
       return true
     }
     return /^stats\/events\/[^/]+\/\d{4}-\d{2}-\d{2}\.(events|sessions)\.jsonl$/.test(path)

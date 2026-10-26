@@ -66,7 +66,6 @@ pub struct ResolvedThemeUiSnapshot {
     pub is_dark: bool,
     pub color_source: String,
     pub selected_builtin_theme_id: String,
-    pub selected_palette_id: String,
     pub resolved_source: String,
     pub resolved_scheme_kind: String,
     /// 最终颜色值。始终存在（scheme 为 None 时用 is_dark fallback）。

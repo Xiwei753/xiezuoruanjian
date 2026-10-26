@@ -412,8 +412,6 @@ export struct StarMapScene {
   /** 主题配置 */
   @Prop themeConfig: ThemeConfig = {
     mode: 'light',
-    colorSource: 'built_in',
-    selectedPaletteId: '',
     selectedBuiltinThemeId: '',
     colors: {
       primary: '#000000', onPrimary: '#FFFFFF',

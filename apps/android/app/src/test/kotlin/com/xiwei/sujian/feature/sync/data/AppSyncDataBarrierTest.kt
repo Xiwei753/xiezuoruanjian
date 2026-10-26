@@ -11,8 +11,9 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * #600 评论 #7: AppSyncDataBarrier.reloadAfterSync 正反测试.
  *
- * - 正面: downloadedFiles 包含 starmaps/settings/themes 前缀 -> 对应回调被调用
+ * - 正面: downloadedFiles 包含 starmaps/settings 前缀 -> 对应回调被调用
  * - 删除路径: localDeletes/remoteDeletes 包含对应前缀 -> 回调被调用
+ * - Issue #1005: 旧 themes/palettes 路径不触发任何回调
  * - 反面: 不包含上述前缀 / 空结果 -> 回调不被调用
  */
 class AppSyncDataBarrierTest {
@@ -28,13 +29,11 @@ class AppSyncDataBarrierTest {
 
     private fun makeBarrier(
         settingsCalls: AtomicInteger,
-        themesCalls: AtomicInteger,
         starmapCalls: AtomicInteger,
     ): AppSyncDataBarrier =
         AppSyncDataBarrier(
             starmapBridge = starmapBridge,
             reloadSettings = { settingsCalls.incrementAndGet() },
-            reloadThemes = { themesCalls.incrementAndGet() },
             invalidateStarmapCache = { starmapCalls.incrementAndGet() },
         )
 
@@ -56,43 +55,37 @@ class AppSyncDataBarrierTest {
     fun downloadedStarmapPath_invokesInvalidateStarmapCache() =
         runTest {
             val settingsCalls = AtomicInteger(0)
-            val themesCalls = AtomicInteger(0)
             val starmapCalls = AtomicInteger(0)
-            val barrier = makeBarrier(settingsCalls, themesCalls, starmapCalls)
+            val barrier = makeBarrier(settingsCalls, starmapCalls)
 
             barrier.reloadAfterSync(syncResult(downloaded = listOf("starmaps/foo.json")))
 
             assertEquals(1, starmapCalls.get())
             assertEquals(0, settingsCalls.get())
-            assertEquals(0, themesCalls.get())
         }
 
     @Test
     fun downloadedSettingsPath_invokesReloadSettings() =
         runTest {
             val settingsCalls = AtomicInteger(0)
-            val themesCalls = AtomicInteger(0)
             val starmapCalls = AtomicInteger(0)
-            val barrier = makeBarrier(settingsCalls, themesCalls, starmapCalls)
+            val barrier = makeBarrier(settingsCalls, starmapCalls)
 
             barrier.reloadAfterSync(syncResult(downloaded = listOf("settings.sync.json")))
 
             assertEquals(1, settingsCalls.get())
             assertEquals(0, starmapCalls.get())
-            assertEquals(0, themesCalls.get())
         }
 
     @Test
-    fun downloadedThemesPath_invokesReloadThemes() =
+    fun downloadedLegacyPalettePath_isIgnored() =
         runTest {
             val settingsCalls = AtomicInteger(0)
-            val themesCalls = AtomicInteger(0)
             val starmapCalls = AtomicInteger(0)
-            val barrier = makeBarrier(settingsCalls, themesCalls, starmapCalls)
+            val barrier = makeBarrier(settingsCalls, starmapCalls)
 
             barrier.reloadAfterSync(syncResult(downloaded = listOf("themes/palettes/x.json")))
 
-            assertEquals(1, themesCalls.get())
             assertEquals(0, starmapCalls.get())
             assertEquals(0, settingsCalls.get())
         }
@@ -103,43 +96,37 @@ class AppSyncDataBarrierTest {
     fun remoteDeletedStarmapPath_invokesInvalidateStarmapCache() =
         runTest {
             val settingsCalls = AtomicInteger(0)
-            val themesCalls = AtomicInteger(0)
             val starmapCalls = AtomicInteger(0)
-            val barrier = makeBarrier(settingsCalls, themesCalls, starmapCalls)
+            val barrier = makeBarrier(settingsCalls, starmapCalls)
 
             barrier.reloadAfterSync(syncResult(remoteDeletes = listOf("starmaps/foo.json")))
 
             assertEquals(1, starmapCalls.get())
             assertEquals(0, settingsCalls.get())
-            assertEquals(0, themesCalls.get())
         }
 
     @Test
     fun localDeletedSettingsPath_invokesReloadSettings() =
         runTest {
             val settingsCalls = AtomicInteger(0)
-            val themesCalls = AtomicInteger(0)
             val starmapCalls = AtomicInteger(0)
-            val barrier = makeBarrier(settingsCalls, themesCalls, starmapCalls)
+            val barrier = makeBarrier(settingsCalls, starmapCalls)
 
             barrier.reloadAfterSync(syncResult(localDeletes = listOf("settings.sync.json")))
 
             assertEquals(1, settingsCalls.get())
             assertEquals(0, starmapCalls.get())
-            assertEquals(0, themesCalls.get())
         }
 
     @Test
-    fun remoteDeletedThemesPath_invokesReloadThemes() =
+    fun remoteDeletedLegacyPalettePath_isIgnored() =
         runTest {
             val settingsCalls = AtomicInteger(0)
-            val themesCalls = AtomicInteger(0)
             val starmapCalls = AtomicInteger(0)
-            val barrier = makeBarrier(settingsCalls, themesCalls, starmapCalls)
+            val barrier = makeBarrier(settingsCalls, starmapCalls)
 
             barrier.reloadAfterSync(syncResult(remoteDeletes = listOf("themes/palettes/x.json")))
 
-            assertEquals(1, themesCalls.get())
             assertEquals(0, starmapCalls.get())
             assertEquals(0, settingsCalls.get())
         }
@@ -150,9 +137,8 @@ class AppSyncDataBarrierTest {
     fun unrelatedDownloadedPath_invokesNoCallbacks() =
         runTest {
             val settingsCalls = AtomicInteger(0)
-            val themesCalls = AtomicInteger(0)
             val starmapCalls = AtomicInteger(0)
-            val barrier = makeBarrier(settingsCalls, themesCalls, starmapCalls)
+            val barrier = makeBarrier(settingsCalls, starmapCalls)
 
             barrier.reloadAfterSync(
                 syncResult(downloaded = listOf("projects/foo/chapters/1.md", "README.md")),
@@ -160,31 +146,27 @@ class AppSyncDataBarrierTest {
 
             assertEquals(0, starmapCalls.get())
             assertEquals(0, settingsCalls.get())
-            assertEquals(0, themesCalls.get())
         }
 
     @Test
     fun emptyResult_invokesNoCallbacks() =
         runTest {
             val settingsCalls = AtomicInteger(0)
-            val themesCalls = AtomicInteger(0)
             val starmapCalls = AtomicInteger(0)
-            val barrier = makeBarrier(settingsCalls, themesCalls, starmapCalls)
+            val barrier = makeBarrier(settingsCalls, starmapCalls)
 
             barrier.reloadAfterSync(syncResult())
 
             assertEquals(0, starmapCalls.get())
             assertEquals(0, settingsCalls.get())
-            assertEquals(0, themesCalls.get())
         }
 
     @Test
     fun unrelatedDeletedPath_invokesNoCallbacks() =
         runTest {
             val settingsCalls = AtomicInteger(0)
-            val themesCalls = AtomicInteger(0)
             val starmapCalls = AtomicInteger(0)
-            val barrier = makeBarrier(settingsCalls, themesCalls, starmapCalls)
+            val barrier = makeBarrier(settingsCalls, starmapCalls)
 
             barrier.reloadAfterSync(
                 syncResult(
@@ -195,6 +177,5 @@ class AppSyncDataBarrierTest {
 
             assertEquals(0, starmapCalls.get())
             assertEquals(0, settingsCalls.get())
-            assertEquals(0, themesCalls.get())
         }
 }

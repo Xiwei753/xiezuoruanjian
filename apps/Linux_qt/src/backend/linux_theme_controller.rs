@@ -6,16 +6,15 @@ use crate::backend::DomainSnapshot;
 /// Issue #701 评论 5699565102: 运行时主题状态的唯一事实来源。
 /// Issue #701 评论 5702214893: resolved scheme 现在缓存在 controller 内。
 ///
-/// `appearance_mode`、`system_is_dark`、`is_dark`、`color_source`、当前
-/// builtin/palette id 以及最终 `ThemeColorSchemeDto`（`scheme`）
-/// 全部从同一份 `DomainSnapshot` 一次性解析并缓存到 `cached_state`。
+/// `appearance_mode`、`system_is_dark`、`is_dark`、当前 builtin id 以及最终
+/// `ThemeColorSchemeDto`（`scheme`）全部从同一份 `DomainSnapshot` 一次性解析并缓存到
+/// `cached_state`。Issue #1005：Android 设备配色不参与 Qt 主题解析。
 /// getter（`resolved_scheme_json`/`is_dark`/`color_source` 等）只读缓存，
 /// 不再每次都 borrow `AppBackend` 或 `DomainSnapshot`，彻底消除双状态机。
 ///
-/// 切换主题模式、颜色来源、内置主题、已保存 palette 后，setter 先写
-/// AppBackend 设置，再调用 `rebuild_resolved_state()` 重建缓存，最后发
-/// `scheme_changed`；QML 侧通过该信号重新求值只读属性。`with_app` 仅用于
-/// 调用 `core_api()` 加载 palette record / builtin theme 数据，不再用于
+/// 切换主题模式、内置主题后，setter 先写 AppBackend 设置，再调用
+/// `rebuild_resolved_state()` 重建缓存，最后发 `scheme_changed`；QML 侧通过该信号重新
+/// 求值只读属性。`with_app` 仅用于调用 `core_api()` 加载 builtin theme 数据，不再用于
 /// 读取主题设置本身。
 ///
 /// Issue #709 评论 issue-body-709: `ResolvedThemeState` 直接保存最终选中的
@@ -34,7 +33,7 @@ pub struct LinuxThemeController {
     /// Issue #702: 主题完整状态一次性发布。JSON 结构：
     /// `{"appearance_mode": str, "system_is_dark": bool, "is_dark": bool,
     ///   "color_source": str, "selected_builtin_theme_id": str,
-    ///   "selected_palette_id": str, "scheme": <ThemeColorScheme object or null>}`。
+    ///   "scheme": <ThemeColorScheme object or null>}`。
     /// QML 侧（DesignTokens）只绑定这一个属性，从同一份 JSON 解析
     /// `is_dark` 和 `scheme`，彻底消除 isDark 与 scheme 不同步的中间状态。
     /// Issue #709 评论 issue-body-709: scheme 为 null 时 QML 侧 fallback 到
@@ -50,8 +49,6 @@ pub struct LinuxThemeController {
     #[allow(dead_code)]
     selected_builtin_theme_id: qt_property!(QString; READ selected_builtin_theme_id NOTIFY scheme_changed),
     #[allow(dead_code)]
-    selected_palette_id: qt_property!(QString; READ selected_palette_id NOTIFY scheme_changed),
-    #[allow(dead_code)]
     appearance_mode: qt_property!(QString; READ appearance_mode NOTIFY scheme_changed),
     #[allow(dead_code)]
     system_is_dark: qt_property!(bool; READ system_is_dark NOTIFY scheme_changed),
@@ -64,18 +61,14 @@ pub struct LinuxThemeController {
     #[allow(dead_code)]
     reload: qt_method!(fn(&mut self)),
     /// Issue #724 评论 5750911834 问题 3: 只在主题输入真的变化时才重新 resolve。
-    /// 比较 ThemeInputKey（appearance_mode + system_is_dark + color_source +
-    /// selected_builtin_theme_id + selected_palette_id），避免重复 resolve。
+    /// 比较 ThemeInputKey（appearance_mode + system_is_dark +
+    /// selected_builtin_theme_id），避免重复 resolve。
     #[allow(dead_code)]
     reload_from_backend_if_changed: qt_method!(fn(&mut self)),
-    #[allow(dead_code)]
-    set_color_source: qt_method!(fn(&mut self, val: QString)),
     #[allow(dead_code)]
     set_appearance_mode: qt_method!(fn(&mut self, val: QString)),
     #[allow(dead_code)]
     set_selected_builtin_theme_id: qt_method!(fn(&mut self, val: QString)),
-    #[allow(dead_code)]
-    set_selected_palette_id: qt_method!(fn(&mut self, val: QString)),
     #[allow(dead_code)]
     set_system_is_dark: qt_method!(fn(&mut self, val: bool)),
     app: AppRef,
@@ -87,8 +80,7 @@ pub struct LinuxThemeController {
     cached_state: std::cell::RefCell<Option<ResolvedThemeState>>,
     /// Issue #724 评论 5750911834 问题 3: 主题输入指纹缓存。
     ///
-    /// 由 appearance_mode + system_is_dark + color_source +
-    /// selected_builtin_theme_id + selected_palette_id 计算的指纹。
+    /// 由 appearance_mode + system_is_dark + selected_builtin_theme_id 计算的指纹。
     /// `reload_from_backend_if_changed()` 比较此指纹，只在输入真的变化时
     /// 才重新 resolve 并发 scheme_changed，避免重复 resolve（日志 574 次
     /// theme.resolve 的根因）。
@@ -145,67 +137,19 @@ impl LinuxThemeController {
         // Issue #705: 复现阶段注入的 [BUGFIX_REPRO_TRACE] 诊断 eprintln 已移除。
         // 主题状态决策点:appearance_mode + system_is_dark -> is_dark,
         // on_surface/editorText 从同一份 is_dark 派生的 scheme 取值。
-        let color_source = s.color_source.clone();
-        let selected_palette_id = s.selected_palette_id.clone();
+        // Issue #1005: Qt 固定使用内置主题，不再读取 Android 设备配色。
+        let color_source = "built_in".to_string();
         let selected_builtin_theme_id = s.selected_builtin_theme_id.clone();
         // drop Ref<'_, DomainSnapshot> 后再 with_app 加载 scheme，避免与
         // with_app 的 AppBackend borrow 冲突（snap() 持有的是 snapshot 的 Ref，
         // 与 with_app 的 AppBackend borrow 是不同的 RefCell，但显式 drop 更清晰）。
         drop(s);
 
-        // Issue #709 评论 5728916561: 把 saved_palette 和 builtin 两条路径的
-        // scheme 加载与 resolved_source 追踪合并为一个 (Option<scheme>, String) 元组，
-        // 避免在 fallback 分支中重复代码。
-        let (scheme, resolved_source) = if color_source == "saved_palette" {
-            if !selected_palette_id.is_empty() {
-                let parts: Vec<&str> = selected_palette_id.splitn(2, ':').collect();
-                if parts.len() == 2 {
-                    match self
-                        .with_app(|app| {
-                            app.core_api().and_then(|core| {
-                                core.load_palette_record(parts[0], parts[1])
-                                    .ok()
-                                    .map(|dto| {
-                                        let dto: writer_core::api::types::ThemePaletteRecordDto =
-                                            dto;
-                                        if is_dark {
-                                            dto.dark_scheme
-                                        } else {
-                                            dto.light_scheme
-                                        }
-                                    })
-                            })
-                        })
-                        .unwrap_or(None)
-                    {
-                        Some(s) => (Some(s), "saved_palette".to_string()),
-                        None => match self.load_builtin_scheme(is_dark, &selected_builtin_theme_id)
-                        {
-                            Some(s) => (Some(s), "builtin".to_string()),
-                            None => (None, "none".to_string()),
-                        },
-                    }
-                } else {
-                    // palette_id 格式无效，fallback 到 builtin
-                    match self.load_builtin_scheme(is_dark, &selected_builtin_theme_id) {
-                        Some(s) => (Some(s), "builtin".to_string()),
-                        None => (None, "none".to_string()),
-                    }
-                }
-            } else {
-                // palette_id 为空，fallback 到 builtin
-                match self.load_builtin_scheme(is_dark, &selected_builtin_theme_id) {
-                    Some(s) => (Some(s), "builtin".to_string()),
-                    None => (None, "none".to_string()),
-                }
-            }
-        } else {
-            // color_source == "built_in"
+        let (scheme, resolved_source) =
             match self.load_builtin_scheme(is_dark, &selected_builtin_theme_id) {
-                Some(s) => (Some(s), "builtin".to_string()),
+                Some(scheme) => (Some(scheme), "builtin".to_string()),
                 None => (None, "none".to_string()),
-            }
-        };
+            };
 
         // Issue #709 评论 5729368242: 只有 scheme.is_some() 时 resolved_scheme_kind
         // 才是 dark_scheme/light_scheme；scheme == None 时写 none，
@@ -229,7 +173,6 @@ impl LinuxThemeController {
             system_is_dark,
             is_dark,
             color_source,
-            selected_palette_id,
             selected_builtin_theme_id,
             scheme,
             resolved_source,
@@ -298,7 +241,7 @@ impl LinuxThemeController {
     /// 完整状态，不再走 `scheme -> JSON string -> serde_json::Value -> 再包
     /// 第二层 JSON` 的低效路径。输出 JSON 结构包含 appearance_mode,
     /// system_is_dark, is_dark, color_source, selected_builtin_theme_id,
-    /// selected_palette_id, scheme（ThemeColorSchemeDto 对象或 null）。
+    /// scheme（ThemeColorSchemeDto 对象或 null）。
     /// Issue #727 评论 5757225958 问题4: theme_state_json() 只做
     /// `serde_json::to_string(&snapshot)`，不再手工拼 serde_json::Map。
     /// 由 `ResolvedThemeState` 一次构造最终 `ResolvedThemeUiSnapshot`，
@@ -352,7 +295,6 @@ impl LinuxThemeController {
             is_dark: state.is_dark,
             color_source: state.color_source,
             selected_builtin_theme_id: state.selected_builtin_theme_id,
-            selected_palette_id: state.selected_palette_id,
             resolved_source: state.resolved_source,
             resolved_scheme_kind: state.resolved_scheme_kind,
             colors,
@@ -360,7 +302,7 @@ impl LinuxThemeController {
         let json = serde_json::to_string(&snapshot).unwrap_or_else(|_| {
             "{\"appearance_mode\":\"system\",\"system_is_dark\":false,\"is_dark\":false,\
              \"color_source\":\"built_in\",\"selected_builtin_theme_id\":\"\",\
-             \"selected_palette_id\":\"\",\"resolved_source\":\"none\",\
+             \"resolved_source\":\"none\",\
              \"resolved_scheme_kind\":\"none\",\"colors\":{}}"
                 .to_string()
         });
@@ -475,7 +417,7 @@ impl LinuxThemeController {
     ///
     /// Issue #701 评论 5702214893: scheme 在 `rebuild_resolved_state()` 里一次性
     /// 解析并缓存到 `cached_state.scheme`，此 getter 只读缓存，不再每次
-    /// 都 borrow `AppBackend` 加载 palette/builtin。
+    /// 都 borrow `AppBackend` 加载 builtin theme。
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
     /// Issue #709 评论 issue-body-709: 从 `state().scheme` 序列化，None 时返回 `"{}"`。
     pub fn resolved_scheme_json(&self) -> QString {
@@ -505,11 +447,6 @@ impl LinuxThemeController {
     }
 
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
-    pub fn selected_palette_id(&self) -> QString {
-        QString::from(self.state().selected_palette_id)
-    }
-
-    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
     pub fn appearance_mode(&self) -> QString {
         QString::from(self.state().appearance_mode)
     }
@@ -530,11 +467,11 @@ impl LinuxThemeController {
 
     /// Issue #710 评论 5731145076: 记录完整 resolved theme 诊断事件。
     ///
-    /// 每次 appearance/source/builtin/palette/system dark 真正改变 resolved state 后，
-    /// 都记录完整 resolved theme，不要只有 reload() 才记。日志直接写出
-    /// appearance_mode、system_is_dark、is_dark、resolved_source、resolved_scheme_kind、
-    /// theme/palette id、surface、on_surface、on_surface_variant，便于定位深色模式
-    /// 文字仍为黑色等问题。scheme 为 None 时颜色字段写 `<none>`。
+    /// 每次 appearance/builtin/system dark 真正改变 resolved state 后，都记录完整
+    /// resolved theme，不要只有 reload() 才记。日志直接写出 appearance_mode、
+    /// system_is_dark、is_dark、resolved_source、resolved_scheme_kind、theme id、
+    /// surface、on_surface、on_surface_variant，便于定位深色模式文字仍为黑色等问题。
+    /// scheme 为 None 时颜色字段写 `<none>`。
     fn log_resolved_theme(
         &self,
         event_name: &str,
@@ -568,7 +505,6 @@ impl LinuxThemeController {
                 ("resolvedSource", &state.resolved_source),
                 ("resolvedSchemeKind", &state.resolved_scheme_kind),
                 ("builtinThemeId", &state.selected_builtin_theme_id),
-                ("paletteId", &state.selected_palette_id),
                 ("surface", surface),
                 ("onSurface", on_surface),
                 ("onSurfaceVariant", on_surface_variant),
@@ -622,18 +558,13 @@ impl LinuxThemeController {
 
     /// Issue #724 评论 5750911834 问题 3: 从 ResolvedThemeState 计算主题输入指纹。
     ///
-    /// 指纹由 appearance_mode + system_is_dark + color_source +
-    /// selected_builtin_theme_id + selected_palette_id 拼接而成。
-    /// 两个 state 产生相同指纹当且仅当它们的主题输入完全相同，
+    /// 指纹由 appearance_mode + system_is_dark + selected_builtin_theme_id
+    /// 拼接而成。两个 state 产生相同指纹当且仅当它们的主题输入完全相同，
     /// 此时无需重新 resolve。
     fn compute_input_key_from_state(&self, state: &ResolvedThemeState) -> String {
         format!(
-            "{}|{}|{}|{}|{}",
-            state.appearance_mode,
-            state.system_is_dark,
-            state.color_source,
-            state.selected_builtin_theme_id,
-            state.selected_palette_id,
+            "{}|{}|{}",
+            state.appearance_mode, state.system_is_dark, state.selected_builtin_theme_id,
         )
     }
 
@@ -641,21 +572,17 @@ impl LinuxThemeController {
     fn compute_input_key_from_snapshot(&self) -> String {
         let s = self.snap();
         format!(
-            "{}|{}|{}|{}|{}",
-            s.appearance_mode,
-            s.system_is_dark,
-            s.color_source,
-            s.selected_builtin_theme_id,
-            s.selected_palette_id,
+            "{}|{}|{}",
+            s.appearance_mode, s.system_is_dark, s.selected_builtin_theme_id,
         )
     }
 
     /// Issue #724 评论 5750911834 问题 3: 只在主题输入真的变化时才重新 resolve。
     ///
-    /// 比较 ThemeInputKey（appearance_mode + system_is_dark + color_source +
-    /// selected_builtin_theme_id + selected_palette_id），只在输入真的变化时
-    /// 才重新 resolve 并发 scheme_changed。避免 main.qml 多处 reload() 调用
-    /// 导致重复 resolve（日志 574 次 theme.resolve 的根因）和中间状态分叉。
+    /// 比较 ThemeInputKey（appearance_mode + system_is_dark +
+    /// selected_builtin_theme_id），只在输入真的变化时才重新 resolve 并发
+    /// scheme_changed。避免 main.qml 多处 reload() 调用导致重复 resolve
+    /// （日志 574 次 theme.resolve 的根因）和中间状态分叉。
     pub fn reload_from_backend_if_changed(&mut self) {
         let current_key = self.compute_input_key_from_snapshot();
         let last_key = self.last_input_key.borrow().clone();
@@ -675,33 +602,6 @@ impl LinuxThemeController {
         // Issue #912: 输入变化后同步 KDE 应用配色方案。
         self.sync_kde_color_scheme(&state.appearance_mode);
         self.scheme_changed();
-    }
-
-    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
-    pub fn set_color_source(&mut self, val: QString) {
-        let source = val.to_string();
-        if source == "saved_palette" {
-            let pid = self.snap().selected_palette_id.clone();
-            if pid.is_empty() {
-                return;
-            }
-        }
-        if self
-            .with_app_mut(|app| app.set_setting_color_source(val))
-            .is_ok()
-        {
-            let state = self.rebuild_resolved_state();
-            *self.cached_state.borrow_mut() = Some(state.clone());
-            // Issue #724 评论 5750911834 问题 3: 更新 input key 避免后续重复 resolve。
-            *self.last_input_key.borrow_mut() = Some(self.compute_input_key_from_state(&state));
-            // Issue #710 评论 5731145076: color source 改变后记录完整 resolved theme。
-            self.log_resolved_theme(
-                "theme.color_source_resolved",
-                writer_diagnostics::DiagnosticOrigin::User,
-                &state,
-            );
-            self.scheme_changed();
-        }
     }
 
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
@@ -740,16 +640,6 @@ impl LinuxThemeController {
             .with_app_mut(|app| app.set_setting_selected_builtin_theme_id(val))
             .is_ok()
         {
-            if self
-                .with_app_mut(|app| app.set_setting_color_source("built_in".into()))
-                .is_err()
-            {
-                crate::backend::app_backend::debug_error_static(
-                    "theme_controller",
-                    "BORROW_CONFLICT",
-                    "set_setting_color_source skipped due to borrow conflict",
-                );
-            }
             let state = self.rebuild_resolved_state();
             *self.cached_state.borrow_mut() = Some(state.clone());
             // Issue #724 评论 5750911834 问题 3: 更新 input key 避免后续重复 resolve。
@@ -762,44 +652,6 @@ impl LinuxThemeController {
             );
             self.scheme_changed();
         }
-    }
-
-    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
-    pub fn set_selected_palette_id(&mut self, val: QString) {
-        let palette_id = val.to_string();
-        if !palette_id.is_empty() {
-            if self
-                .with_app_mut(|app| app.set_setting_selected_palette_id(val))
-                .is_err()
-            {
-                crate::backend::app_backend::debug_error_static(
-                    "theme_controller",
-                    "BORROW_CONFLICT",
-                    "set_setting_selected_palette_id skipped due to borrow conflict",
-                );
-            }
-            if self
-                .with_app_mut(|app| app.set_setting_color_source("saved_palette".into()))
-                .is_err()
-            {
-                crate::backend::app_backend::debug_error_static(
-                    "theme_controller",
-                    "BORROW_CONFLICT",
-                    "set_setting_color_source skipped due to borrow conflict",
-                );
-            }
-        }
-        let state = self.rebuild_resolved_state();
-        *self.cached_state.borrow_mut() = Some(state.clone());
-        // Issue #724 评论 5750911834 问题 3: 更新 input key 避免后续重复 resolve。
-        *self.last_input_key.borrow_mut() = Some(self.compute_input_key_from_state(&state));
-        // Issue #710 评论 5731145076: palette 改变后记录完整 resolved theme。
-        self.log_resolved_theme(
-            "theme.palette_resolved",
-            writer_diagnostics::DiagnosticOrigin::User,
-            &state,
-        );
-        self.scheme_changed();
     }
 
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
@@ -863,16 +715,14 @@ pub struct ResolvedThemeState {
     pub system_is_dark: bool,
     pub is_dark: bool,
     pub color_source: String,
-    pub selected_palette_id: String,
     pub selected_builtin_theme_id: String,
     /// Issue #709 评论 issue-body-709: 最终选中的 ThemeColorSchemeDto（按
     /// is_dark 一次性选择 dark_scheme/light_scheme）。None 表示没有可用
     /// scheme（builtin theme 列表为空等），QML 侧 fallback 到 isDark 派生
     /// 的固定色。
     pub scheme: Option<writer_core::api::types::ThemeColorSchemeDto>,
-    /// Issue #709 评论 5728916561: 实际命中的来源 — "saved_palette"、"builtin" 或 "none"。
-    /// 区分 color_source（用户设置）和 resolved_source（实际命中）：
-    /// color_source 可能是 "saved_palette" 但 palette_id 无效，最终 fallback 到 builtin。
+    /// Issue #709 评论 5728916561: 实际命中的来源 — "builtin" 或 "none"。
+    /// Issue #1005: Qt 不再加载 Android 设备配色，color_source 固定 built_in。
     pub resolved_source: String,
     /// Issue #709 评论 5728916561: 实际选择的 scheme 类型 — "dark_scheme"、"light_scheme" 或 "none"。
     /// 确认 is_dark=true 时确实选了 dark_scheme，is_dark=false 时确实选了 light_scheme。

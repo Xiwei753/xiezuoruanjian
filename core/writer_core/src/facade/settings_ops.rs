@@ -38,23 +38,6 @@ impl super::WriterCore {
         settings::save_syncable_settings_with_changes(&self.app_data_root, settings)
     }
 
-    /// 保存 palette 记录并返回变更集。
-    pub fn save_palette_record_with_changes(
-        &self,
-        record: &crate::settings::ThemePaletteRecord,
-    ) -> Result<WorkspaceChangeSet> {
-        settings::save_palette_record_with_changes(&self.app_data_root, record)
-    }
-
-    /// 删除 palette 记录并返回变更集。
-    pub fn delete_palette_record_with_changes(
-        &self,
-        device_id: &str,
-        fingerprint: &str,
-    ) -> Result<WorkspaceChangeSet> {
-        settings::delete_palette_record_with_changes(&self.app_data_root, device_id, fingerprint)
-    }
-
     pub fn load_device_info(&self) -> Result<DeviceInfo> {
         settings::load_device_info(&self.app_data_root)
     }
@@ -79,22 +62,6 @@ impl super::WriterCore {
 
     pub fn list_registered_settings(&self) -> crate::settings_registry::SettingsRegistry {
         crate::settings_registry::SettingsRegistry::default_registry()
-    }
-
-    pub fn list_palette_records(&self) -> Result<Vec<crate::settings::ThemePaletteRecord>> {
-        crate::settings::list_palette_records(&self.app_data_root)
-    }
-
-    pub fn load_palette_record(
-        &self,
-        device_id: &str,
-        fingerprint: &str,
-    ) -> Result<crate::settings::ThemePaletteRecord> {
-        crate::settings::load_palette_record(&self.app_data_root, device_id, fingerprint)
-    }
-
-    pub fn delete_palette_record(&self, device_id: &str, fingerprint: &str) -> Result<()> {
-        crate::settings::delete_palette_record(&self.app_data_root, device_id, fingerprint)
     }
 
     pub fn list_builtin_themes(&self) -> Vec<crate::settings::BuiltinTheme> {

@@ -32,8 +32,6 @@ export interface LocalSettings {
 export interface SyncableSettings {
   fontSize: number
   themeMode: string
-  monetColor: string
-  themePaletteJson: string
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system'
@@ -89,20 +87,6 @@ export interface ThemeColorSchemeDto {
   tertiary_fixed_dim: string
   on_tertiary_fixed: string
   on_tertiary_fixed_variant: string
-}
-
-export interface ThemePaletteRecordDto {
-  schema_version: number
-  palette_id: string
-  palette_fingerprint: string
-  source: string
-  source_platform: string
-  source_device_id: string
-  source_device_class: string
-  captured_at_ms: number
-  variant: string
-  light_scheme: ThemeColorSchemeDto
-  dark_scheme: ThemeColorSchemeDto
 }
 
 export interface BuiltinThemeDto {

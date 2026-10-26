@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../dto/SettingsDtos'
+import { LocalSettings, SyncableSettings, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeLocalSettings, decodeSyncableSettings, decodeThemePaletteRecord, decodeBuiltinTheme, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeLocalSettings, decodeSyncableSettings, decodeBuiltinTheme, decodeArray } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
@@ -38,28 +38,6 @@ export class NativeSettingsBridge {
   async saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeSaveSyncableSettings(JSON.stringify(settings))
-      return this.core.parseEnvelope<boolean>(jsonStr)
-    } catch (e) { return nativeError<boolean>(e) }
-  }
-
-  async listPaletteRecords(): Promise<ResultEnvelope<ThemePaletteRecordDto[]>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeListPaletteRecords()
-      return this.core.decodeEnvelope<ThemePaletteRecordDto[]>(jsonStr,
-        (d: Object) => decodeArray<ThemePaletteRecordDto>(d, decodeThemePaletteRecord, 'ThemePaletteRecord'))
-    } catch (e) { return nativeError<ThemePaletteRecordDto[]>(e) }
-  }
-
-  async loadPaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<ThemePaletteRecordDto>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeLoadPaletteRecord(deviceId, fingerprint)
-      return this.core.decodeEnvelope<ThemePaletteRecordDto>(jsonStr, decodeThemePaletteRecord)
-    } catch (e) { return nativeError<ThemePaletteRecordDto>(e) }
-  }
-
-  async deletePaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.core.getNativeModule().nativeDeletePaletteRecord(deviceId, fingerprint)
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) { return nativeError<boolean>(e) }
   }

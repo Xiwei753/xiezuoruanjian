@@ -214,10 +214,7 @@ fn app_group_target_for_delete_facts(
                 ));
             }
             group = Some(candidate);
-        } else if path.starts_with("starmaps/")
-            || path == "settings.sync.json"
-            || path.starts_with("themes/palettes/")
-        {
+        } else if path.starts_with("starmaps/") || path == "settings.sync.json" {
             return Err(crate::error::Error::Other(format!(
                 "ensure_sync_tombstones_from_facts: cannot resolve App data group for {path}"
             )));

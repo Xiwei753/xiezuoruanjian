@@ -208,14 +208,6 @@ class SettingsRepository(
         CoreSettingsEvents.notifyExternalSettingsChanged()
     }
 
-    /**
-     * #600 评论 #7 / #618 三：外部同步拉取后通知主题调色板已变化 — 走 themeCatalogChanged，
-     * 让 ThemeController 重新加载 palette catalog（不再重读整份设置）。
-     */
-    fun notifyPaletteCatalogChangedExternally() {
-        CoreSettingsEvents.notifyExternalThemeCatalogChanged()
-    }
-
     fun aiAvailable(): Boolean {
         return appBridge.aiAvailable()
     }

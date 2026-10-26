@@ -318,7 +318,7 @@ impl crate::sync::SyncService {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     }
 
-    /// 应用级白名单：设置/全局星图/主题调色板/统计事件分区/应用级同步清单。
+    /// 应用级白名单：设置/全局星图/统计事件分区/应用级同步清单。
     fn is_app_whitelisted_path(rel_path: &str) -> bool {
         // 可同步设置
         if rel_path == "settings.sync.json" {
@@ -327,11 +327,6 @@ impl crate::sync::SyncService {
 
         // 全局星图
         if rel_path.starts_with("starmaps/") {
-            return true;
-        }
-
-        // 主题调色板
-        if rel_path.starts_with("themes/palettes/") {
             return true;
         }
 

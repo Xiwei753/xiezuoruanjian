@@ -1196,7 +1196,7 @@ Kirigami.ApplicationWindow {
         // Issue #709 评论 issue-body-709: 主题诊断只读 ThemeController runtime state
         // 和 designTokens，不再读旧 appState.settings.themeMode、Qt.styleHints.colorScheme、
         // systemPaletteIsDark()。这些不再是主题诊断的权威来源。同一条诊断写出
-        // appearance_mode/is_dark/color_source/选中 theme/palette id/最终
+        // appearance_mode/is_dark/color_source/选中 theme id/最终
         // primary/surface/on_surface/on_surface_variant/editorText。
         // Issue #736 评论 5778543593 修改2: 当传入 snapshot 时（onThemeApplied 调用），
         // 直接用 snapshot 的字段记录诊断，不经过第二轮 QML binding（Qt 不保证 binding
@@ -1223,7 +1223,6 @@ Kirigami.ApplicationWindow {
                         + " is_dark=" + (tc ? tc.is_dark : "<null>")
                         + " color_source=" + (tc ? tc.color_source : "<null>")
                         + " builtin_theme_id=" + (tc ? tc.selected_builtin_theme_id : "<null>")
-                        + " palette_id=" + (tc ? tc.selected_palette_id : "<null>")
                         // Issue #912：把实际显示来源也写进同一条诊断——snapshot 的
                         // is_dark/editor_background（theme_applied 时）与当前 Breeze
                         // 壳层底色，便于核对壳层与纸张是否闭合。仍是每次主题变化一行。

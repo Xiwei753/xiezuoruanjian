@@ -1,6 +1,5 @@
 {
   "clearChapter": {
-    "kind": "object",
     "fields": {
       "chapterRelativePath": {
         "kind": "scalar",
@@ -26,10 +25,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "createChapter": {
-    "kind": "object",
     "fields": {
       "createdAt": {
         "kind": "scalar",
@@ -63,10 +62,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "createProject": {
-    "kind": "object",
     "fields": {
       "createdAt": {
         "kind": "scalar",
@@ -84,10 +83,10 @@
         "kind": "scalar",
         "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "createStarMap": {
-    "kind": "object",
     "fields": {
       "accentColor": {
         "kind": "scalar",
@@ -117,10 +116,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "createVolume": {
-    "kind": "object",
     "fields": {
       "createdAt": {
         "kind": "scalar",
@@ -142,10 +141,10 @@
         "kind": "scalar",
         "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionBeginComposition": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -156,7 +155,6 @@
         "ty": "string"
       },
       "composition": {
-        "kind": "object",
         "fields": {
           "baseRevision": {
             "kind": "scalar",
@@ -186,10 +184,10 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "compositionSession": {
-        "kind": "object",
         "fields": {
           "baseRevision": {
             "kind": "scalar",
@@ -203,10 +201,10 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -224,11 +222,12 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -262,14 +261,14 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionClose": {
     "kind": "scalar",
     "ty": "boolean"
   },
   "editorSessionCommitText": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -280,7 +279,6 @@
         "ty": "string"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -298,11 +296,12 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -336,10 +335,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionCompositionMoveGraphemeLeft": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -350,7 +349,6 @@
         "ty": "string"
       },
       "composition": {
-        "kind": "object",
         "fields": {
           "baseRevision": {
             "kind": "scalar",
@@ -380,10 +378,10 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "compositionSession": {
-        "kind": "object",
         "fields": {
           "baseRevision": {
             "kind": "scalar",
@@ -397,10 +395,10 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -418,11 +416,12 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -456,10 +455,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionCompositionMoveGraphemeRight": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -470,7 +469,6 @@
         "ty": "string"
       },
       "composition": {
-        "kind": "object",
         "fields": {
           "baseRevision": {
             "kind": "scalar",
@@ -500,10 +498,10 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "compositionSession": {
-        "kind": "object",
         "fields": {
           "baseRevision": {
             "kind": "scalar",
@@ -517,10 +515,10 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -538,11 +536,12 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -576,14 +575,14 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionCreate": {
     "kind": "scalar",
     "ty": "number"
   },
   "editorSessionDelete": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -594,7 +593,6 @@
         "ty": "string"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -612,12 +610,11 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
         "element": {
-          "kind": "object",
           "fields": {
             "baseRevision": {
               "kind": "scalar",
@@ -655,8 +652,10 @@
               "kind": "scalar",
               "ty": "number"
             }
-          }
-        }
+          },
+          "kind": "object"
+        },
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -671,12 +670,9 @@
         "ty": "number"
       },
       "offsetMap": {
-        "kind": "object",
         "fields": {
           "entries": {
-            "kind": "array",
             "element": {
-              "kind": "object",
               "fields": {
                 "kind": {
                   "kind": "scalar",
@@ -694,10 +690,13 @@
                   "kind": "scalar",
                   "ty": "number"
                 }
-              }
-            }
+              },
+              "kind": "object"
+            },
+            "kind": "array"
           }
-        }
+        },
+        "kind": "object"
       },
       "oldSelectionAnchor": {
         "kind": "scalar",
@@ -719,10 +718,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionDeleteSurrounding": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -733,7 +732,6 @@
         "ty": "string"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -751,12 +749,11 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
         "element": {
-          "kind": "object",
           "fields": {
             "baseRevision": {
               "kind": "scalar",
@@ -794,8 +791,10 @@
               "kind": "scalar",
               "ty": "number"
             }
-          }
-        }
+          },
+          "kind": "object"
+        },
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -810,12 +809,9 @@
         "ty": "number"
       },
       "offsetMap": {
-        "kind": "object",
         "fields": {
           "entries": {
-            "kind": "array",
             "element": {
-              "kind": "object",
               "fields": {
                 "kind": {
                   "kind": "scalar",
@@ -833,10 +829,13 @@
                   "kind": "scalar",
                   "ty": "number"
                 }
-              }
-            }
+              },
+              "kind": "object"
+            },
+            "kind": "array"
           }
-        }
+        },
+        "kind": "object"
       },
       "oldSelectionAnchor": {
         "kind": "scalar",
@@ -858,7 +857,8 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionGetRevision": {
     "kind": "scalar",
@@ -869,7 +869,6 @@
     "ty": "string"
   },
   "editorSessionInsert": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -880,7 +879,6 @@
         "ty": "string"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -898,12 +896,11 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
         "element": {
-          "kind": "object",
           "fields": {
             "baseRevision": {
               "kind": "scalar",
@@ -941,8 +938,10 @@
               "kind": "scalar",
               "ty": "number"
             }
-          }
-        }
+          },
+          "kind": "object"
+        },
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -957,12 +956,9 @@
         "ty": "number"
       },
       "offsetMap": {
-        "kind": "object",
         "fields": {
           "entries": {
-            "kind": "array",
             "element": {
-              "kind": "object",
               "fields": {
                 "kind": {
                   "kind": "scalar",
@@ -980,10 +976,13 @@
                   "kind": "scalar",
                   "ty": "number"
                 }
-              }
-            }
+              },
+              "kind": "object"
+            },
+            "kind": "array"
           }
-        }
+        },
+        "kind": "object"
       },
       "oldSelectionAnchor": {
         "kind": "scalar",
@@ -1005,7 +1004,8 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionNextGraphemeBoundary": {
     "kind": "scalar",
@@ -1016,7 +1016,6 @@
     "ty": "number"
   },
   "editorSessionRedo": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -1027,7 +1026,6 @@
         "ty": "string"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -1045,12 +1043,11 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
         "element": {
-          "kind": "object",
           "fields": {
             "baseRevision": {
               "kind": "scalar",
@@ -1088,8 +1085,10 @@
               "kind": "scalar",
               "ty": "number"
             }
-          }
-        }
+          },
+          "kind": "object"
+        },
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -1104,12 +1103,9 @@
         "ty": "number"
       },
       "offsetMap": {
-        "kind": "object",
         "fields": {
           "entries": {
-            "kind": "array",
             "element": {
-              "kind": "object",
               "fields": {
                 "kind": {
                   "kind": "scalar",
@@ -1127,10 +1123,13 @@
                   "kind": "scalar",
                   "ty": "number"
                 }
-              }
-            }
+              },
+              "kind": "object"
+            },
+            "kind": "array"
           }
-        }
+        },
+        "kind": "object"
       },
       "oldSelectionAnchor": {
         "kind": "scalar",
@@ -1152,10 +1151,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionReplace": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -1166,7 +1165,6 @@
         "ty": "string"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -1184,12 +1182,11 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
         "element": {
-          "kind": "object",
           "fields": {
             "baseRevision": {
               "kind": "scalar",
@@ -1227,8 +1224,10 @@
               "kind": "scalar",
               "ty": "number"
             }
-          }
-        }
+          },
+          "kind": "object"
+        },
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -1243,13 +1242,13 @@
         "ty": "number"
       },
       "offsetMap": {
-        "kind": "object",
         "fields": {
           "entries": {
-            "kind": "array",
-            "element": null
+            "element": null,
+            "kind": "array"
           }
-        }
+        },
+        "kind": "object"
       },
       "oldSelectionAnchor": {
         "kind": "scalar",
@@ -1271,10 +1270,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionSetSelection": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -1285,7 +1284,6 @@
         "ty": "string"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -1303,11 +1301,12 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -1341,10 +1340,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionSnapshot": {
-    "kind": "object",
     "fields": {
       "chapterId": {
         "kind": "scalar",
@@ -1370,10 +1369,10 @@
         "kind": "scalar",
         "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionUndo": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -1384,7 +1383,6 @@
         "ty": "string"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -1402,12 +1400,11 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
         "element": {
-          "kind": "object",
           "fields": {
             "baseRevision": {
               "kind": "scalar",
@@ -1445,8 +1442,10 @@
               "kind": "scalar",
               "ty": "number"
             }
-          }
-        }
+          },
+          "kind": "object"
+        },
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -1461,12 +1460,9 @@
         "ty": "number"
       },
       "offsetMap": {
-        "kind": "object",
         "fields": {
           "entries": {
-            "kind": "array",
             "element": {
-              "kind": "object",
               "fields": {
                 "kind": {
                   "kind": "scalar",
@@ -1484,10 +1480,13 @@
                   "kind": "scalar",
                   "ty": "number"
                 }
-              }
-            }
+              },
+              "kind": "object"
+            },
+            "kind": "array"
           }
-        }
+        },
+        "kind": "object"
       },
       "oldSelectionAnchor": {
         "kind": "scalar",
@@ -1509,10 +1508,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "editorSessionUpdateComposition": {
-    "kind": "object",
     "fields": {
       "baseRevision": {
         "kind": "scalar",
@@ -1523,7 +1522,6 @@
         "ty": "string"
       },
       "composition": {
-        "kind": "object",
         "fields": {
           "baseRevision": {
             "kind": "scalar",
@@ -1553,10 +1551,10 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "compositionSession": {
-        "kind": "object",
         "fields": {
           "baseRevision": {
             "kind": "scalar",
@@ -1570,10 +1568,10 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "contentDelta": {
-        "kind": "object",
         "fields": {
           "deletedChars": {
             "kind": "scalar",
@@ -1591,11 +1589,12 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "displayPatches": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "newRevision": {
         "kind": "scalar",
@@ -1629,10 +1628,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "ensureDeviceInfo": {
-    "kind": "object",
     "fields": {
       "deviceClass": {
         "kind": "scalar",
@@ -1646,15 +1645,13 @@
         "kind": "scalar",
         "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "getAppState": {
-    "kind": "object",
     "fields": {
       "projects": {
-        "kind": "array",
         "element": {
-          "kind": "object",
           "fields": {
             "chapterCount": {
               "kind": "scalar",
@@ -1684,17 +1681,19 @@
               "kind": "scalar",
               "ty": "number"
             }
-          }
-        }
+          },
+          "kind": "object"
+        },
+        "kind": "array"
       },
       "recentEdit": {
         "kind": "scalar",
         "ty": "null"
       }
-    }
+    },
+    "kind": "object"
   },
   "getProjectStats": {
-    "kind": "object",
     "fields": {
       "chapterCount": {
         "kind": "scalar",
@@ -1708,13 +1707,12 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "getProjectTree": {
-    "kind": "object",
     "fields": {
       "project": {
-        "kind": "object",
         "fields": {
           "createdAt": {
             "kind": "scalar",
@@ -1732,10 +1730,10 @@
             "kind": "scalar",
             "ty": "string"
           }
-        }
+        },
+        "kind": "object"
       },
       "stats": {
-        "kind": "object",
         "fields": {
           "chapterCount": {
             "kind": "scalar",
@@ -1749,17 +1747,14 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       },
       "volumes": {
-        "kind": "array",
         "element": {
-          "kind": "object",
           "fields": {
             "chapters": {
-              "kind": "array",
               "element": {
-                "kind": "object",
                 "fields": {
                   "createdAt": {
                     "kind": "scalar",
@@ -1793,11 +1788,12 @@
                     "kind": "scalar",
                     "ty": "number"
                   }
-                }
-              }
+                },
+                "kind": "object"
+              },
+              "kind": "array"
             },
             "volume": {
-              "kind": "object",
               "fields": {
                 "createdAt": {
                   "kind": "scalar",
@@ -1819,19 +1815,22 @@
                   "kind": "scalar",
                   "ty": "string"
                 }
-              }
+              },
+              "kind": "object"
             }
-          }
-        }
+          },
+          "kind": "object"
+        },
+        "kind": "array"
       }
-    }
+    },
+    "kind": "object"
   },
   "getRecentEdits": {
-    "kind": "array",
-    "element": null
+    "element": null,
+    "kind": "array"
   },
   "getStarMap": {
-    "kind": "object",
     "fields": {
       "accentColor": {
         "kind": "scalar",
@@ -1861,30 +1860,30 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "getStarMapGraph": {
-    "kind": "object",
     "fields": {
       "edges": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "embeds": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "hyperlinks": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "links": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "nodes": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "schemaVersion": {
         "kind": "scalar",
@@ -1894,17 +1893,16 @@
         "kind": "scalar",
         "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "getWritingStats": {
-    "kind": "object",
     "fields": {
       "daysCount": {
         "kind": "scalar",
         "ty": "number"
       },
       "range": {
-        "kind": "object",
         "fields": {
           "endDate": {
             "kind": "scalar",
@@ -1914,7 +1912,8 @@
             "kind": "scalar",
             "ty": "string"
           }
-        }
+        },
+        "kind": "object"
       },
       "totalActiveSeconds": {
         "kind": "scalar",
@@ -1944,15 +1943,13 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "listBuiltinThemes": {
-    "kind": "array",
     "element": {
-      "kind": "object",
       "fields": {
         "dark_scheme": {
-          "kind": "object",
           "fields": {
             "background": {
               "kind": "scalar",
@@ -2146,10 +2143,10 @@
               "kind": "scalar",
               "ty": "string"
             }
-          }
+          },
+          "kind": "object"
         },
         "light_scheme": {
-          "kind": "object",
           "fields": {
             "background": {
               "kind": "scalar",
@@ -2343,7 +2340,8 @@
               "kind": "scalar",
               "ty": "string"
             }
-          }
+          },
+          "kind": "object"
         },
         "name": {
           "kind": "scalar",
@@ -2353,13 +2351,13 @@
           "kind": "scalar",
           "ty": "string"
         }
-      }
-    }
+      },
+      "kind": "object"
+    },
+    "kind": "array"
   },
   "listChapters": {
-    "kind": "array",
     "element": {
-      "kind": "object",
       "fields": {
         "createdAt": {
           "kind": "scalar",
@@ -2393,17 +2391,13 @@
           "kind": "scalar",
           "ty": "number"
         }
-      }
-    }
-  },
-  "listPaletteRecords": {
-    "kind": "array",
-    "element": null
+      },
+      "kind": "object"
+    },
+    "kind": "array"
   },
   "listProjects": {
-    "kind": "array",
     "element": {
-      "kind": "object",
       "fields": {
         "createdAt": {
           "kind": "scalar",
@@ -2421,13 +2415,13 @@
           "kind": "scalar",
           "ty": "string"
         }
-      }
-    }
+      },
+      "kind": "object"
+    },
+    "kind": "array"
   },
   "listStarMaps": {
-    "kind": "array",
     "element": {
-      "kind": "object",
       "fields": {
         "accentColor": {
           "kind": "scalar",
@@ -2457,17 +2451,17 @@
           "kind": "scalar",
           "ty": "number"
         }
-      }
-    }
+      },
+      "kind": "object"
+    },
+    "kind": "array"
   },
   "listStarMapsForProject": {
-    "kind": "array",
-    "element": null
+    "element": null,
+    "kind": "array"
   },
   "listVolumes": {
-    "kind": "array",
     "element": {
-      "kind": "object",
       "fields": {
         "createdAt": {
           "kind": "scalar",
@@ -2489,15 +2483,16 @@
           "kind": "scalar",
           "ty": "string"
         }
-      }
-    }
+      },
+      "kind": "object"
+    },
+    "kind": "array"
   },
   "loadAppSyncState": {
-    "kind": "object",
     "fields": {
       "conflicts": {
-        "kind": "array",
-        "element": null
+        "element": null,
+        "kind": "array"
       },
       "lastError": {
         "kind": "scalar",
@@ -2511,10 +2506,10 @@
         "kind": "scalar",
         "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "loadDeviceInfo": {
-    "kind": "object",
     "fields": {
       "deviceClass": {
         "kind": "scalar",
@@ -2528,10 +2523,10 @@
         "kind": "scalar",
         "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "loadLocalSettings": {
-    "kind": "object",
     "fields": {
       "aiEnabled": {
         "kind": "scalar",
@@ -2621,10 +2616,10 @@
         "kind": "scalar",
         "ty": "null"
       }
-    }
+    },
+    "kind": "object"
   },
   "loadLocalSettingsAfterPatch": {
-    "kind": "object",
     "fields": {
       "aiEnabled": {
         "kind": "scalar",
@@ -2714,10 +2709,10 @@
         "kind": "scalar",
         "ty": "null"
       }
-    }
+    },
+    "kind": "object"
   },
   "loadSyncConfig": {
-    "kind": "object",
     "fields": {
       "activeProvider": {
         "kind": "scalar",
@@ -2747,10 +2742,10 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "loadSyncConfigAfterPatch": {
-    "kind": "object",
     "fields": {
       "activeProvider": {
         "kind": "scalar",
@@ -2780,38 +2775,29 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "loadSyncableSettings": {
-    "kind": "object",
     "fields": {
       "fontSize": {
         "kind": "scalar",
         "ty": "number"
       },
-      "monetColor": {
-        "kind": "scalar",
-        "ty": "string"
-      },
       "themeMode": {
         "kind": "scalar",
         "ty": "string"
-      },
-      "themePaletteJson": {
-        "kind": "scalar",
-        "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "openChapter": {
-    "kind": "object",
     "fields": {
       "content": {
         "kind": "scalar",
         "ty": "string"
       },
       "meta": {
-        "kind": "object",
         "fields": {
           "createdAt": {
             "kind": "scalar",
@@ -2845,9 +2831,11 @@
             "kind": "scalar",
             "ty": "number"
           }
-        }
+        },
+        "kind": "object"
       }
-    }
+    },
+    "kind": "object"
   },
   "recordEditorChangeStats": {
     "kind": "scalar",
@@ -2862,7 +2850,6 @@
     "ty": "boolean"
   },
   "renameStarMap": {
-    "kind": "object",
     "fields": {
       "accentColor": {
         "kind": "scalar",
@@ -2892,7 +2879,8 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "renameVolume": {
     "kind": "scalar",
@@ -2907,7 +2895,6 @@
     "ty": "boolean"
   },
   "resolveChapterLocation": {
-    "kind": "object",
     "fields": {
       "chapterId": {
         "kind": "scalar",
@@ -2921,10 +2908,10 @@
         "kind": "scalar",
         "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "resolveVolumeLocation": {
-    "kind": "object",
     "fields": {
       "projectId": {
         "kind": "scalar",
@@ -2934,14 +2921,14 @@
         "kind": "scalar",
         "ty": "string"
       }
-    }
+    },
+    "kind": "object"
   },
   "saveAppSyncState": {
     "kind": "scalar",
     "ty": "boolean"
   },
   "saveChapter": {
-    "kind": "object",
     "fields": {
       "chapterRelativePath": {
         "kind": "scalar",
@@ -2967,7 +2954,8 @@
         "kind": "scalar",
         "ty": "number"
       }
-    }
+    },
+    "kind": "object"
   },
   "saveLocalSettings": {
     "kind": "scalar",

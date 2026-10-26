@@ -188,8 +188,6 @@ dictionary LocalSettingsDto {
 dictionary SyncableSettingsDto {
     f64 font_size;
     string theme_mode;
-    string monet_color;
-    string theme_palette_json;
 };
 
 dictionary ThemeColorSchemeDto {
@@ -241,20 +239,6 @@ dictionary ThemeColorSchemeDto {
     string tertiary_fixed_dim;
     string on_tertiary_fixed;
     string on_tertiary_fixed_variant;
-};
-
-dictionary ThemePaletteRecordDto {
-    u32 schema_version;
-    string palette_id;
-    string palette_fingerprint;
-    string source;
-    string source_platform;
-    string source_device_id;
-    string source_device_class;
-    i64 captured_at_ms;
-    string variant;
-    ThemeColorSchemeDto light_scheme;
-    ThemeColorSchemeDto dark_scheme;
 };
 
 dictionary BuiltinThemeDto {
@@ -1451,25 +1435,6 @@ interface WriterAppService {
     void secure_storage_delete(string key);
 
     boolean secure_storage_available();
-
-    // ── Palette Catalog ──
-
-    [Throws=WriterError]
-    boolean save_palette_record(ThemePaletteRecordDto record);
-
-    [Throws=WriterError]
-    ThemePaletteRecordDto load_palette_record(string device_id, string fingerprint);
-
-    [Throws=WriterError]
-    sequence<ThemePaletteRecordDto> list_palette_records();
-
-    [Throws=WriterError]
-    boolean delete_palette_record(string device_id, string fingerprint);
-
-    [Throws=WriterError]
-    boolean migrate_legacy_theme_palette();
-
-    string compute_palette_fingerprint(ThemeColorSchemeDto light_scheme, ThemeColorSchemeDto dark_scheme);
 
     // ── Built-in Themes ──
 

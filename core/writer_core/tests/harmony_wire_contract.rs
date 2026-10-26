@@ -380,11 +380,6 @@ fn harmony_wire_contract_matches_fixture() {
     );
     let _ = note(
         &mut out,
-        "listPaletteRecords",
-        &call0(settings::writer_core_list_palette_records),
-    );
-    let _ = note(
-        &mut out,
         "listBuiltinThemes",
         &call0(settings::writer_core_list_builtin_themes),
     );

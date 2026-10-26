@@ -448,12 +448,7 @@ pub struct AppBackend {
     current_setting_auto_indent_width: f32,
     // Issue #705: current_setting_theme_mode 已删除。运行时只认
     // current_setting_appearance_mode,不再有第二套主题状态字段。
-    current_setting_monet_color: String,
-    current_setting_theme_palette_json: String,
-    current_setting_color_source: String,
     current_setting_appearance_mode: String,
-    current_setting_dynamic_color_enabled: bool,
-    current_setting_selected_palette_id: String,
     current_setting_selected_builtin_theme_id: String,
     current_setting_typing_animation_enabled: bool,
     current_setting_smooth_cursor_enabled: bool,
@@ -527,11 +522,8 @@ impl AppBackend {
         s.setting_desktop_editor_width = self.current_setting_desktop_editor_width;
         s.setting_diagnostics_enabled = self.current_setting_diagnostics_enabled;
         s.setting_diagnostics_verbose = self.current_setting_diagnostics_verbose;
-        s.setting_dynamic_color_enabled = self.current_setting_dynamic_color_enabled;
         s.system_is_dark = self.current_system_is_dark;
         s.appearance_mode = self.current_setting_appearance_mode.clone();
-        s.color_source = self.current_setting_color_source.clone();
-        s.selected_palette_id = self.current_setting_selected_palette_id.clone();
         s.selected_builtin_theme_id = self.current_setting_selected_builtin_theme_id.clone();
         s.has_selected_chapter = self.selected_chapter_id.is_some();
         s.selected_chapter_exists = {

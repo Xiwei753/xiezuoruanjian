@@ -30,6 +30,4 @@ data class LocalSettings(
 data class SyncableSettings(
     val fontSize: Double = 0.0,
     val themeMode: String = "",
-    @Deprecated("Use themePaletteJson instead") val monetColor: String = "",
-    val themePaletteJson: String = "",
 )

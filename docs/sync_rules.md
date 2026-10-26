@@ -17,7 +17,7 @@ Supersedes: None
 ## 同步规则
 - 系统只有一个全局 `SyncProfile`、一个远端仓库、一次全量同步（Issue #630）。
 - Core 内部仍区分 `SyncScope::App / Project` 两个 target，但只用于路径过滤和远端前缀路由，不再暴露成两套用户配置。
-- App target 同步根 = `app_data_root`，远端前缀 `app/`，同步设置、全局星图、主题调色板。
+- App target 同步根 = `app_data_root`，远端前缀 `app/`，同步设置、全局星图与写作统计。Android 设备配色只保存在 Android 本地，不参与任何同步。
 - Project target 同步根 = `project_root`（`projects_root/<project_id>`），远端前缀 `projects/<project_id>/`，同步单部作品正文、元数据、作品自己的同步状态。
 - 全局同步配置只存在一份：`<app_data_root>/app-meta/sync/config.local.json`。
 - 冲突存储为单独的冲突文件，绝不自动覆盖本地数据。
@@ -27,12 +27,14 @@ Supersedes: None
 
 同步根 = `app_data_root`，路径相对应用数据根：
 
-- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`themes/palettes/**`、写作统计事件 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl` 与计时切片 `stats/events/<device_id>/YYYY-MM-DD.sessions.jsonl`（仅通过对应设备的统计数据组同步，见下文「统计设备组」）。
-- **黑名单（绝不参与）**：`作品/`（projects_root）、`日志/`（log_dir）、`导出/`、`备份/`、`settings.local.json`、`recent_edits.json`、`app-meta/sync/config.local.json`、`app-meta/sync/conflicts.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`（旧版单机事件库、迁移标记与冲突诊断文件，只作为一次性迁移输入）、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
+- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、写作统计事件 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl` 与计时切片 `stats/events/<device_id>/YYYY-MM-DD.sessions.jsonl`（仅通过对应设备的统计数据组同步，见下文「统计设备组」）。
+- **黑名单（绝不参与）**：`作品/`（projects_root）、`日志/`（log_dir）、`导出/`、`备份/`、`settings.local.json`、`recent_edits.json`、`app-meta/sync/config.local.json`、`app-meta/sync/conflicts.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`（旧版单机事件库、迁移标记与冲突诊断文件，只作为一次性迁移输入）、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径，以及 Android 本地设备配色目录 `local-theme-palettes/`。
+
+旧版本远端可能仍存在 `app/themes/palettes/**`。新客户端会把它当作普通未知历史文件忽略：不下载、不应用、不重新上传，也不生成删除 tombstone；清理远端历史不属于同步行为。Qt、HarmonyOS 与 Windows 不再展示或应用 Android 设备配色。
 
 ### App 数据组与独立发布
 
-App target 内部按数据组独立扫描、合并、记录状态并发布不可变 generation：`global` 包含跨设备设置和调色板；每张星图是一个组，包含该图的 meta、graph 和对象文件。`starmaps/index.json` 当前仍是跨图聚合记录，因此作为依赖组，在本轮所有星图组成功后才发布。
+App target 内部按数据组独立扫描、合并、记录状态并发布不可变 generation：`global` 只包含跨设备设置；每张星图是一个组，包含该图的 meta、graph 和对象文件。`starmaps/index.json` 当前仍是跨图聚合记录，因此作为依赖组，在本轮所有星图组成功后才发布。
 
 远端 `app/app-meta/sync/app_groups.sync.json` 选择每个数据组的当前 generation，与 project 生命周期清单 `targets.sync.json` 分离。没有该目录清单时，从旧 `app/app-meta/sync/manifest.sync.json` 推导数据组；各组在迁移完成前继续从旧 `app/` 读取。成功发布一组 generation 后才通过版本条件更新目录清单切换该组，尚未迁移的组和旧文件继续保留。
 

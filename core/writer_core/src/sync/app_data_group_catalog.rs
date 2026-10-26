@@ -518,7 +518,7 @@ pub fn groups_from_manifest_records(records: &[ManifestFileRecord]) -> Vec<AppDa
     let mut groups = std::collections::BTreeMap::<String, AppDataGroup>::new();
     for record in records {
         let path = record.path.replace('\\', "/");
-        if path == "settings.sync.json" || path.starts_with("themes/palettes/") {
+        if path == "settings.sync.json" {
             let group = AppDataGroup::Global;
             groups.insert(group.id(), group);
         } else if path == "starmaps/index.json" {

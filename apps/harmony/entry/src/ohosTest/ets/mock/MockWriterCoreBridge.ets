@@ -2,7 +2,7 @@ import { IWriterCoreBridge } from '../../../main/ets/corebridge/IWriterCoreBridg
 import { EditorTransactionCause } from '../../../main/ets/corebridge/dto/EditorDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../../../main/ets/corebridge/dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit, ErrorCode } from '../../../main/ets/corebridge/dto/ResultEnvelope'
-import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
+import { LocalSettings, SyncableSettings, ThemeColorSchemeDto, BuiltinThemeDto } from '../../../main/ets/corebridge/dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapTargetPath, EdgeKind, NodeType, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from '../../../main/ets/corebridge/dto/StarMapDtos'
 import { SyncConfig, SyncResult, SyncDiagnosticsResult, SyncState, SyncConflict, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult } from '../../../main/ets/corebridge/dto/SyncDtos'
 
@@ -672,9 +672,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(100)
     const result: SyncableSettings = {
       fontSize: this.mockSettings.editorFontSize,
-      themeMode: this.mockSettings.themeMode || 'system',
-      monetColor: 'default',
-      themePaletteJson: ''
+      themeMode: this.mockSettings.themeMode || 'system'
     }
     return this.success(result)
   }
@@ -683,21 +681,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(200)
     if (settings.fontSize !== undefined) this.mockSettings.editorFontSize = settings.fontSize
     if (settings.themeMode !== undefined) this.mockSettings.themeMode = settings.themeMode
-    return this.success(true)
-  }
-
-  async listPaletteRecords(): Promise<ResultEnvelope<ThemePaletteRecordDto[]>> {
-    await this.delay(100)
-    return this.success([] as ThemePaletteRecordDto[])
-  }
-
-  async loadPaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<ThemePaletteRecordDto>> {
-    await this.delay(100)
-    return this.error('NOT_FOUND', 'Palette record not found')
-  }
-
-  async deletePaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<boolean>> {
-    await this.delay(100)
     return this.success(true)
   }
 

@@ -2,7 +2,7 @@ import { IWriterCoreBridge } from './IWriterCoreBridge'
 import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
-import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
+import { LocalSettings, SyncableSettings, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult, StarMapCrossLayerConnectionPlan, StarMapNodeUpdatePatch } from './dto/StarMapDtos'
 import { SyncConfig, SyncSecrets, FullSyncResult, FullSyncDryRunResult, FullSyncDiagnosticsResult, SyncState } from './dto/SyncDtos'
 import { SearchContext, SearchResultPage } from './dto/SearchDtos'
@@ -344,18 +344,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>> {
     return this.settingsBridge.saveSyncableSettings(settings)
-  }
-
-  async listPaletteRecords(): Promise<ResultEnvelope<ThemePaletteRecordDto[]>> {
-    return this.settingsBridge.listPaletteRecords()
-  }
-
-  async loadPaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<ThemePaletteRecordDto>> {
-    return this.settingsBridge.loadPaletteRecord(deviceId, fingerprint)
-  }
-
-  async deletePaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<boolean>> {
-    return this.settingsBridge.deletePaletteRecord(deviceId, fingerprint)
   }
 
   async listBuiltinThemes(): Promise<ResultEnvelope<BuiltinThemeDto[]>> {

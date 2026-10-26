@@ -13,7 +13,9 @@ import com.xiwei.sujian.feature.sync.data.model.SyncResult
  * - [reloadAfterSync]: 同步成功后根据下载文件列表失效对应缓存:
  *   - starmaps/ prefix -> 失效星图缓存
  *   - settings.sync.json -> 重载设置
- *   - themes/palettes/ prefix -> 重载主题调色板
+ *
+ * Issue #1005：`themes/palettes/` 已不在 Git/近场同步白名单，旧远端设备配色文件
+ * 即使出现在变更列表也直接忽略，不重新读取任何跨端调色板。
  *
  * 屏障通过 lambda 注入重载回调, 不直接依赖具体 Repository/Store,
  * 便于测试和避免循环依赖.
@@ -21,7 +23,6 @@ import com.xiwei.sujian.feature.sync.data.model.SyncResult
 open class AppSyncDataBarrier(
     private val starmapBridge: StarMapBridge,
     private val reloadSettings: suspend () -> Unit,
-    private val reloadThemes: suspend () -> Unit,
     private val invalidateStarmapCache: suspend () -> Unit,
 ) {
     /**
@@ -48,8 +49,7 @@ open class AppSyncDataBarrier(
      * 单个缓存重载失败不影响其他缓存.
      *
      * #600 评论 #7: 除 downloadedFiles 外也检查 localDeletes/remoteDeletes —
-     * Git pull 可能删除文件（远端删除），删除一个 starmap 或 palette 文件
-     * 同样必须清缓存。
+     * Git pull 可能删除文件（远端删除），删除一个 starmap 文件同样必须清缓存。
      */
     suspend fun reloadAfterSync(result: SyncResult) {
         val downloaded = result.downloadedFiles
@@ -67,13 +67,6 @@ open class AppSyncDataBarrier(
                 reloadSettings()
             } catch (e: Exception) {
                 DiagnosticsInterop.w(TAG, "reload settings failed", e)
-            }
-        }
-        if (allChanged.any { it.startsWith("themes/palettes/") }) {
-            try {
-                reloadThemes()
-            } catch (e: Exception) {
-                DiagnosticsInterop.w(TAG, "reload themes failed", e)
             }
         }
     }
@@ -103,13 +96,6 @@ open class AppSyncDataBarrier(
                 reloadSettings()
             } catch (e: Exception) {
                 DiagnosticsInterop.w(TAG, "reload settings failed", e)
-            }
-        }
-        if (allChanged.any { it.startsWith("themes/palettes/") }) {
-            try {
-                reloadThemes()
-            } catch (e: Exception) {
-                DiagnosticsInterop.w(TAG, "reload themes failed", e)
             }
         }
     }

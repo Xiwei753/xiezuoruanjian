@@ -164,8 +164,6 @@ ScrollView {
 
         var mode = themeControllerRef ? themeControllerRef.appearance_mode : "system"
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
-        var src = themeControllerRef ? themeControllerRef.color_source : "built_in"
-        colorSourceCombo.currentIndex = src === "saved_palette" ? 1 : 0
         var builtinSelId = themeControllerRef ? themeControllerRef.selected_builtin_theme_id : ""
         var builtinThemes = builtinThemeCombo._themes
         var builtinFound = -1
@@ -173,13 +171,6 @@ ScrollView {
             if (builtinThemes[bi].theme_id === builtinSelId) { builtinFound = bi; break }
         }
         builtinThemeCombo.currentIndex = builtinFound >= 0 ? builtinFound : 0
-        var paletteSelId = themeControllerRef ? themeControllerRef.selected_palette_id : ""
-        var paletteRecords = paletteRecordCombo._records
-        var paletteFound = -1
-        for (var pi = 0; pi < paletteRecords.length; pi++) {
-            if (paletteRecords[pi].palette_id === paletteSelId) { paletteFound = pi; break }
-        }
-        paletteRecordCombo.currentIndex = paletteFound >= 0 ? paletteFound : 0
 
         diagnosticsEnabled.checked = settingsBackendRef.setting_diagnostics_enabled
         diagnosticsVerbose.checked = settingsBackendRef.setting_diagnostics_verbose
@@ -213,11 +204,9 @@ ScrollView {
 
     function sectionForSettingKey(key) {
         if (key === "appearanceMode" || key === "themeMode"
-                || key === "colorSource" || key === "monetColor"
-                || key === "dynamicColorEnabled" || key === "selectedBuiltinThemeId"
-                || key === "selectedPaletteId" || key === "locale"
-                || key === "themePalette" || key === "editorFontSize"
-                || key === "fontSize" || key === "editorLineSpacingMultiplier")
+                || key === "selectedBuiltinThemeId" || key === "locale"
+                || key === "editorFontSize" || key === "fontSize"
+                || key === "editorLineSpacingMultiplier")
             return "appearance"
         if (key === "autoSaveEnabled" || key === "autoSaveDelayMs")
             return "save_sync"
@@ -234,14 +223,8 @@ ScrollView {
         case "appearanceMode":
         case "themeMode":
             return themeCombo
-        case "colorSource":
-        case "monetColor":
-            return colorSourceCombo
         case "selectedBuiltinThemeId":
             return builtinThemeCombo
-        case "selectedPaletteId":
-        case "themePalette":
-            return paletteRecordCombo
         case "editorFontSize":
         case "fontSize":
             return fontSizeSpin
@@ -472,21 +455,7 @@ ScrollView {
                             }
                         }
                         FormCard.FormComboBoxDelegate {
-                            id: colorSourceCombo
-                            text: qsTr("颜色来源")
-                            description: qsTr("选择素笺默认主题或已保存的设备配色")
-                            model: [qsTr("素笺默认"), qsTr("已保存的设备配色")]
-                            onActivated: function(index) {
-                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
-                                    return
-                                themeControllerRef.set_color_source(["built_in", "saved_palette"][index])
-                                root.settingsDirty = true
-                                root.saveAndNotify()
-                            }
-                        }
-                        FormCard.FormComboBoxDelegate {
                             id: builtinThemeCombo
-                            visible: themeControllerRef ? themeControllerRef.color_source === "built_in" : false
                             text: qsTr("内置主题")
                             description: qsTr("选择内置主题配色方案")
                             property var _themes: {
@@ -500,30 +469,6 @@ ScrollView {
                                 var themeId = _themes[index] ? _themes[index].theme_id : ""
                                 if (themeId.length > 0) {
                                     themeControllerRef.set_selected_builtin_theme_id(themeId)
-                                    root.settingsDirty = true
-                                    root.saveAndNotify()
-                                }
-                            }
-                        }
-                        FormCard.FormComboBoxDelegate {
-                            id: paletteRecordCombo
-                            visible: themeControllerRef ? themeControllerRef.color_source === "saved_palette" : false
-                            text: qsTr("已保存配色")
-                            description: qsTr("选择已保存的设备调色板")
-                            property var _records: {
-                                if (!settingsBackendRef) return []
-                                try { return JSON.parse(settingsBackendRef.list_palette_records_json()) } catch (e) { return [] }
-                            }
-                            model: _records.map(function(r) {
-                                var d = new Date(r.captured_at_ms)
-                                return (r.source_platform || "") + " · " + (r.source_device_class || "") + " · " + (r.source_device_id || "") + " · " + d.toLocaleDateString()
-                            })
-                            onActivated: function(index) {
-                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues)
-                                    return
-                                var paletteId = _records[index] ? _records[index].palette_id : ""
-                                if (paletteId.length > 0) {
-                                    themeControllerRef.set_selected_palette_id(paletteId)
                                     root.settingsDirty = true
                                     root.saveAndNotify()
                                 }

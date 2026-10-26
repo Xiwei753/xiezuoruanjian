@@ -762,7 +762,8 @@ mod tests {
             "starmaps/constellations/orion.json",
             SyncScope::App
         ));
-        assert!(SyncService::is_whitelisted_path(
+        // Issue #1005: 设备配色快照不进入 App 同步。
+        assert!(!SyncService::is_whitelisted_path(
             "themes/palettes/dark.json",
             SyncScope::App
         ));

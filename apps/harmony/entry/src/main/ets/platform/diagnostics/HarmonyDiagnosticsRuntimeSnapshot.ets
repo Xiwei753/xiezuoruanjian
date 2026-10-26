@@ -43,8 +43,6 @@ interface ThemeRuntimeDto {
   useSystemTokens: boolean
   hasExplicitThemeOverride: boolean
   selectedBuiltinThemeId: string
-  selectedPaletteId: string
-  colorSource: string
   // Issue #773 评论 5846511131：材质配置状态（不是支持状态）。
   // state 是 module.json5 的材质配置值，不代表 HDS 组件已实际生效。
   // 删除 immersiveMaterialSupported（state !== DISABLE 推导不成立），
@@ -157,8 +155,6 @@ export class HarmonyDiagnosticsRuntimeSnapshot {
       useSystemTokens: useSystemTokens,
       hasExplicitThemeOverride: !useSystemTokens,
       selectedBuiltinThemeId: adapter.getSelectedBuiltinThemeId(),
-      selectedPaletteId: adapter.getSelectedPaletteId(),
-      colorSource: adapter.getColorSource(),
       appMaterialState: appMaterialState,
       appMaterialType: appMaterialType,
       hdsRequestedMaterialType: hdsRequestedMaterialType,

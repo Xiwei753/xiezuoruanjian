@@ -8,7 +8,7 @@
 //
 // 干什么的：
 // - 实现 SettingsBackend 结构体，作为 QML 中 "settingsBackend" 对象的桥梁。
-// - 维护并对外公开与设置 schema 强类型匹配的 Qt 属性，如字号、行距、自动保存延迟、首行缩进宽度、主题及 Monet 动态调色。
+// - 维护并对外公开与设置 schema 强类型匹配的 Qt 属性，如字号、行距、自动保存延迟、首行缩进宽度和内置主题。
 // - 支持对本地不随云端同步的本地设置（LocalSettingsDto，如侧边栏 sidebar 宽度、打字动画开关）以及自动随网络同步的全局设置（SyncableSettingsDto，如作品的字体偏好）进行强类型校验的加载（load_local_settings）与安全性持久化落盘（save_local_settings）。
 //
 // 被什么引用：
@@ -54,25 +54,16 @@ pub struct SettingsBackend {
     // Issue #705: setting_theme_mode QML 属性已删除。运行时主题状态只通过
     // LinuxThemeController.theme_state_json 发布,不再有第二套 QML 出口。
     #[allow(dead_code)]
-    setting_monet_color: qt_property!(QString; READ setting_monet_color NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_theme_palette_json: qt_property!(QString; READ setting_theme_palette_json NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_color_source: qt_property!(QString; READ setting_color_source WRITE set_setting_color_source NOTIFY settings_changed),
-    #[allow(dead_code)]
     setting_appearance_mode: qt_property!(QString; READ setting_appearance_mode WRITE set_setting_appearance_mode NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_dynamic_color_enabled: qt_property!(bool; READ setting_dynamic_color_enabled WRITE set_setting_dynamic_color_enabled NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_selected_palette_id: qt_property!(QString; READ setting_selected_palette_id WRITE set_setting_selected_palette_id NOTIFY settings_changed),
     #[allow(dead_code)]
     setting_selected_builtin_theme_id: qt_property!(QString; READ setting_selected_builtin_theme_id WRITE set_setting_selected_builtin_theme_id NOTIFY settings_changed),
     // Issue #701 评论 5699565102: 删除 resolved_theme_palette_json /
     // resolved_builtin_themes_json / resolved_palette_records_json /
     // resolved_appearance_mode / resolved_color_source 这类给运行时 UI
     // 再解析主题用的重复出口。运行时主题状态统一由 LinuxThemeController
-    // 发布，SettingsBackend 只负责持久化。设置页列出 palette/builtin 选项
-    // 用 list_palette_records_json / list_builtin_themes_json method。
+    // 发布，SettingsBackend 只负责持久化。设置页列出内置主题选项
+    // 用 list_builtin_themes_json method。
+    // Issue #1005: Android 设备配色只在 Android 本地使用，Qt 不再读取或展示。
     #[allow(dead_code)]
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
     #[allow(dead_code)]
@@ -135,11 +126,7 @@ pub struct SettingsBackend {
     #[allow(dead_code)]
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
     #[allow(dead_code)]
-    list_palette_records_json: qt_method!(fn(&self) -> QString),
-    #[allow(dead_code)]
     list_builtin_themes_json: qt_method!(fn(&self) -> QString),
-    #[allow(dead_code)]
-    load_selected_palette_json: qt_method!(fn(&self) -> QString),
     #[allow(dead_code)]
     refresh_theme_data: qt_method!(fn(&mut self)),
     /// 标记是否有待保存的设置
@@ -619,26 +606,6 @@ impl SettingsBackend {
     }
     // Issue #705: SettingsBackend::setting_theme_mode 已删除。
     // 运行时主题状态只通过 LinuxThemeController.theme_state_json 发布。
-    fn setting_monet_color(&self) -> QString {
-        self.with_app(|app| app.setting_monet_color())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
-    }
-    fn setting_theme_palette_json(&self) -> QString {
-        self.with_app(|app| app.setting_theme_palette_json())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
-    }
-    fn setting_color_source(&self) -> QString {
-        self.with_app(|app| app.setting_color_source())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
-    }
-    fn set_setting_color_source(&mut self, val: QString) {
-        if self
-            .with_app_mut(|app| app.set_setting_color_source(val))
-            .is_ok()
-        {
-            self.settings_changed();
-        }
-    }
     fn setting_appearance_mode(&self) -> QString {
         self.with_app(|app| app.setting_appearance_mode())
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
@@ -646,29 +613,6 @@ impl SettingsBackend {
     fn set_setting_appearance_mode(&mut self, val: QString) {
         if self
             .with_app_mut(|app| app.set_setting_appearance_mode(val))
-            .is_ok()
-        {
-            self.settings_changed();
-        }
-    }
-    fn setting_dynamic_color_enabled(&self) -> bool {
-        self.snap().setting_dynamic_color_enabled
-    }
-    fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
-        if self
-            .with_app_mut(|app| app.set_setting_dynamic_color_enabled(val))
-            .is_ok()
-        {
-            self.settings_changed();
-        }
-    }
-    fn setting_selected_palette_id(&self) -> QString {
-        self.with_app(|app| app.setting_selected_palette_id())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
-    }
-    fn set_setting_selected_palette_id(&mut self, val: QString) {
-        if self
-            .with_app_mut(|app| app.set_setting_selected_palette_id(val))
             .is_ok()
         {
             self.settings_changed();
@@ -996,28 +940,6 @@ impl SettingsBackend {
             })
     }
 
-    fn list_palette_records_json(&self) -> QString {
-        self.with_app(|app| {
-            if let Some(core) = app.core_api() {
-                match core.list_palette_records() {
-                    Ok(records) => {
-                        let dtos: Vec<writer_core::api::types::ThemePaletteRecordDto> =
-                            records.into_iter().collect();
-                        QString::from(
-                            serde_json::to_string(&dtos).unwrap_or_else(|_| "[]".to_string()),
-                        )
-                    }
-                    Err(_) => {
-                        QString::from(crate::backend::json_utils::borrow_conflict_error_json())
-                    }
-                }
-            } else {
-                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
-            }
-        })
-        .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
-    }
-
     fn list_builtin_themes_json(&self) -> QString {
         self.with_app(|app| {
             if let Some(core) = app.core_api() {
@@ -1025,31 +947,6 @@ impl SettingsBackend {
                 QString::from(serde_json::to_string(&themes).unwrap_or_else(|_| "[]".to_string()))
             } else {
                 QString::from(crate::backend::json_utils::borrow_conflict_error_json())
-            }
-        })
-        .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
-    }
-
-    fn load_selected_palette_json(&self) -> QString {
-        self.with_app(|app| {
-            let palette_id = app.setting_selected_palette_id().to_string();
-            if palette_id.is_empty() {
-                return QString::from("");
-            }
-            let parts: Vec<&str> = palette_id.splitn(2, ':').collect();
-            if parts.len() != 2 {
-                return QString::from("");
-            }
-            if let Some(core) = app.core_api() {
-                match core.load_palette_record(parts[0], parts[1]) {
-                    Ok(record) => {
-                        let json = serde_json::to_string(&record).unwrap_or_default();
-                        QString::from(json)
-                    }
-                    Err(_) => QString::from(""),
-                }
-            } else {
-                QString::from("")
             }
         })
         .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
@@ -1100,22 +997,6 @@ impl AppBackend {
     // current_setting_appearance_mode。app_state_json 的 themeMode 字段
     // 改读 current_setting_appearance_mode(诊断日志用)。
 
-    pub(crate) fn setting_monet_color(&self) -> QString {
-        self.current_setting_monet_color.clone().into()
-    }
-
-    pub(crate) fn setting_theme_palette_json(&self) -> QString {
-        self.current_setting_theme_palette_json.clone().into()
-    }
-
-    pub(crate) fn setting_color_source(&self) -> QString {
-        self.current_setting_color_source.clone().into()
-    }
-
-    pub(crate) fn set_setting_color_source(&mut self, val: QString) {
-        self.current_setting_color_source = val.to_string();
-    }
-
     pub(crate) fn setting_appearance_mode(&self) -> QString {
         self.current_setting_appearance_mode.clone().into()
     }
@@ -1128,18 +1009,6 @@ impl AppBackend {
             "system" | "light" | "dark" => s,
             _ => "system".to_string(),
         };
-    }
-
-    pub(crate) fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
-        self.current_setting_dynamic_color_enabled = val;
-    }
-
-    pub(crate) fn setting_selected_palette_id(&self) -> QString {
-        self.current_setting_selected_palette_id.clone().into()
-    }
-
-    pub(crate) fn set_setting_selected_palette_id(&mut self, val: QString) {
-        self.current_setting_selected_palette_id = val.to_string();
     }
 
     pub(crate) fn setting_selected_builtin_theme_id(&self) -> QString {
@@ -1207,11 +1076,8 @@ impl AppBackend {
         // Load theme mode from app_config (when no workspace is open)
         // Default to "system"
         // Issue #705: current_setting_theme_mode 已删除,只认 appearance_mode。
-        self.current_setting_monet_color = "".to_string();
-        self.current_setting_theme_palette_json = "".to_string();
-        self.current_setting_color_source = "built_in".to_string();
+        // Issue #1005: Android 设备配色不进入 Qt 运行时状态。
         self.current_setting_appearance_mode = "system".to_string();
-        self.current_setting_dynamic_color_enabled = false;
     }
 
     /// 平台桌面设置迁移用的数据根目录：已打开工作区时取 `current_data_root`；
@@ -1282,36 +1148,17 @@ impl AppBackend {
                 if let Ok(local) = core.load_local_settings() {
                     // Issue #705: current_setting_theme_mode 已删除。
                     // 运行时只认 current_setting_appearance_mode。
-                    self.current_setting_color_source = local.color_source.clone();
+                    // Issue #1005: 不再读取 color_source/saved_palette；Android
+                    // 设备配色不会进入 Qt 主题解析。
                     self.current_setting_appearance_mode = local.appearance_mode.clone();
                     if self.current_setting_appearance_mode.is_empty() {
                         self.current_setting_appearance_mode = "system".to_string();
                     }
-                    self.current_setting_dynamic_color_enabled = local.dynamic_color_enabled;
-                    self.current_setting_selected_palette_id = local.selected_palette_id.clone();
                     self.current_setting_selected_builtin_theme_id =
                         local.selected_builtin_theme_id.clone();
-
-                    if local.color_source == "saved_palette"
-                        && !local.selected_palette_id.is_empty()
-                    {
-                        let parts: Vec<&str> = local.selected_palette_id.splitn(2, ':').collect();
-                        if parts.len() == 2 {
-                            if let Ok(record) = core.load_palette_record(parts[0], parts[1]) {
-                                if let Ok(json) = serde_json::to_string(&record) {
-                                    self.current_setting_theme_palette_json = json;
-                                }
-                            }
-                        }
-                    }
                 }
             } else {
-                self.current_setting_monet_color = "".to_string();
-                self.current_setting_theme_palette_json = "".to_string();
-                self.current_setting_color_source = "built_in".to_string();
                 self.current_setting_appearance_mode = "system".to_string();
-                self.current_setting_dynamic_color_enabled = false;
-                self.current_setting_selected_palette_id = String::new();
                 self.current_setting_selected_builtin_theme_id = String::new();
                 if let Ok(local) = core.load_local_settings() {
                     self.current_setting_font_size = local.editor_font_size;
@@ -1380,10 +1227,9 @@ impl AppBackend {
             local.ai_enabled = self.current_ai_enabled;
             local.diagnostics_enabled = self.current_setting_diagnostics_enabled;
             local.diagnostics_verbose = self.current_setting_diagnostics_verbose;
-            local.color_source = self.current_setting_color_source.clone();
+            // Issue #1005: 保留 color_source/dynamic_color_enabled/selected_palette_id
+            // 的既有值，Qt 不再读写设备配色字段。
             local.appearance_mode = self.current_setting_appearance_mode.clone();
-            local.dynamic_color_enabled = self.current_setting_dynamic_color_enabled;
-            local.selected_palette_id = self.current_setting_selected_palette_id.clone();
             local.selected_builtin_theme_id =
                 self.current_setting_selected_builtin_theme_id.clone();
 

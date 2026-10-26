@@ -319,8 +319,6 @@ private val appearanceSettingKeys: Set<String> =
         "selectedPaletteId",
         "locale",
         "themeMode",
-        "monetColor",
-        "themePalette",
     )
 
 private val editorSettingKeys: Set<String> =

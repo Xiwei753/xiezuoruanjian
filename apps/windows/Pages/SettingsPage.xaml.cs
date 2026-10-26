@@ -9,7 +9,6 @@ namespace Sujian.Windows.Pages;
 public sealed partial class SettingsPage : Page
 {
     private readonly WriterCoreBridge _core = new();
-    private List<ThemePaletteRecordDto> _paletteRecords = new();
     private List<BuiltinThemeDto> _builtinThemes = new();
 
     public SettingsPage()
@@ -41,28 +40,6 @@ public sealed partial class SettingsPage : Page
                 "dark" => 2,
                 _ => 0
             };
-            ColorSourceRadio.SelectedIndex = settings.ColorSource switch
-            {
-                "saved_palette" => 1,
-                _ => 0
-            };
-
-            try
-            {
-                _paletteRecords = new List<ThemePaletteRecordDto>(await _core.ListPaletteRecordsAsync());
-                PaletteRecordCombo.ItemsSource = _paletteRecords.ConvertAll(r =>
-                {
-                    var date = DateTimeOffset.FromUnixTimeMilliseconds(r.CapturedAtMs).DateTime.ToString("yyyy-MM-dd");
-                    return $"{r.SourceDeviceClass} · {date}";
-                });
-                if (!string.IsNullOrEmpty(settings.SelectedPaletteId))
-                {
-                    var idx = _paletteRecords.FindIndex(r => r.PaletteId == settings.SelectedPaletteId);
-                    if (idx >= 0) PaletteRecordCombo.SelectedIndex = idx;
-                }
-            }
-            catch { }
-
             try
             {
                 _builtinThemes = new List<BuiltinThemeDto>(await _core.ListBuiltinThemesAsync());
@@ -110,15 +87,8 @@ public sealed partial class SettingsPage : Page
                 2 => "dark",
                 _ => "system"
             };
-            var colorSource = ColorSourceRadio.SelectedIndex switch
-            {
-                1 => "saved_palette",
-                _ => "built_in"
-            };
             var selectedBuiltinThemeId = BuiltinThemeCombo.SelectedIndex >= 0 && BuiltinThemeCombo.SelectedIndex < _builtinThemes.Count
                 ? _builtinThemes[BuiltinThemeCombo.SelectedIndex].ThemeId : "";
-            var selectedPaletteId = PaletteRecordCombo.SelectedIndex >= 0 && PaletteRecordCombo.SelectedIndex < _paletteRecords.Count
-                ? _paletteRecords[PaletteRecordCombo.SelectedIndex].PaletteId : "";
 
             var typingAnimDuration = CoordinatedCursorAnimToggle.IsOn
                 ? (int)CoordinatedDurationBox.Value
@@ -129,9 +99,7 @@ public sealed partial class SettingsPage : Page
                 LineHeight = (float)LineHeightBox.Value,
                 Theme = theme,
                 AppearanceMode = theme,
-                ColorSource = colorSource,
                 SelectedBuiltinThemeId = selectedBuiltinThemeId,
-                SelectedPaletteId = selectedPaletteId,
                 AutoSave = AutoSaveToggle.IsOn,
                 AutoIndent = AutoIndentToggle.IsOn,
                 TypingAnimationEnabled = TypingAnimToggle.IsOn,

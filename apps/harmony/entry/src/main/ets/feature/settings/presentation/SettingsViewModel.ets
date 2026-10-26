@@ -10,7 +10,7 @@ import hilog from '@ohos.hilog'
 import pasteboard from '@ohos.pasteboard'
 import { AppStorageV2 } from '@kit.ArkUI'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
+import { LocalSettings, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { SyncConfig, SyncDiagnosticsResult, SyncSecrets, ProviderConfig } from '../../../corebridge/dto/SyncDtos'
 import { HarmonyThemeAdapter, ThemeUpdateParams } from '../../../ui/theme/HarmonyThemeAdapter'
 import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
@@ -119,7 +119,6 @@ export class SettingsViewModel {
     diagnosticsEnabled: false,
     diagnosticsVerbose: false
   }
-  @Trace paletteRecords: ThemePaletteRecordDto[] = []
   @Trace builtinThemes: BuiltinThemeDto[] = []
   @Trace syncConfig: SyncConfig | null = null
   @Trace syncToken: string = ''
@@ -179,16 +178,6 @@ export class SettingsViewModel {
       const syncConfigResult = await this.bridge.loadSyncConfig()
 
       try {
-        const paletteResult = await this.bridge.listPaletteRecords()
-        if (paletteResult.success && paletteResult.data) {
-          this.paletteRecords = paletteResult.data
-          this.themeAdapter.setPaletteRecords(paletteResult.data)
-        }
-      } catch (_e) {
-        hilog.warn(DOMAIN, TAG, 'listPaletteRecords failed')
-      }
-
-      try {
         const builtinResult = await this.bridge.listBuiltinThemes()
         if (builtinResult.success && builtinResult.data) {
           this.builtinThemes = builtinResult.data
@@ -208,8 +197,6 @@ export class SettingsViewModel {
         const appearanceMode = settingsResult.data.appearanceMode || settingsResult.data.themeMode || 'system'
         this.themeAdapter.updateFromLocalSettings(
           appearanceMode,
-          settingsResult.data.colorSource || 'built_in',
-          settingsResult.data.selectedPaletteId || '',
           settingsResult.data.selectedBuiltinThemeId || ''
         )
         this.themeAdapter.updateFromSettings({
@@ -286,8 +273,6 @@ export class SettingsViewModel {
         const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
         this.themeAdapter.updateFromLocalSettings(
           appearanceMode,
-          this.settings.colorSource || 'built_in',
-          this.settings.selectedPaletteId || '',
           this.settings.selectedBuiltinThemeId || ''
         )
         this.themeAdapter.updateFromSettings({

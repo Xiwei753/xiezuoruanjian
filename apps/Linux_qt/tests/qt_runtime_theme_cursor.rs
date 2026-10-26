@@ -362,21 +362,20 @@ fn qt_theme_appearance_mode_invalid_falls_back_to_system() {
 }
 
 // =========================================================================
-// 行为守卫 7: rebuild_resolved_state 返回七字段完整的 ResolvedThemeState
+// 行为守卫 7: rebuild_resolved_state 返回字段完整的 ResolvedThemeState
 // =========================================================================
 
 #[test]
-fn qt_theme_rebuild_resolved_state_has_all_seven_fields() {
+fn qt_theme_rebuild_resolved_state_has_all_fields() {
     run_on_qt_thread(|| {
         let (app, _temp) = make_app_with_real_data_root();
         let ctrl = LinuxThemeController::new(app);
         let state: ResolvedThemeState = ctrl.rebuild_resolved_state();
-        // 七字段完整 — 通过访问每个字段验证存在性
+        // 所有字段完整 — 通过访问每个字段验证存在性
         let _appearance_mode: &String = &state.appearance_mode;
         let _system_is_dark: &bool = &state.system_is_dark;
         let _is_dark: &bool = &state.is_dark;
         let _color_source: &String = &state.color_source;
-        let _selected_palette_id: &String = &state.selected_palette_id;
         let _selected_builtin_theme_id: &String = &state.selected_builtin_theme_id;
         // Issue #709 评论 issue-body-709: scheme 现在是 Option<ThemeColorSchemeDto>，
         // 不再是 scheme_json: String。直接断言 Some 且非空对象。

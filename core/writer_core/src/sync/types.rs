@@ -151,7 +151,7 @@ pub fn legacy_category_compat(code: &str) -> Option<SyncErrorCategory> {
 /// 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
 /// 把不同本地根映射到同一个远端仓库的不同前缀：
 /// - `Project`：同步根为单个作品目录，白名单为作品正文/元数据。
-/// - `App`：同步根为 `app_data_root`，白名单为设置/全局星图/主题调色板。
+/// - `App`：同步根为 `app_data_root`，白名单为设置/全局星图/统计事件。
 ///
 /// 该字段不暴露到 `SyncConfigDto`，由 `SyncTarget` 内部携带。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -160,7 +160,7 @@ pub enum SyncScope {
     /// 作品级同步：单部作品正文、元数据、作品自己的同步状态。
     #[default]
     Project,
-    /// 应用级同步：设置、全局星图、主题调色板。
+    /// 应用级同步：设置、全局星图、统计事件。
     App,
 }
 
@@ -169,7 +169,7 @@ pub enum SyncScope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "starmap_id", rename_all = "snake_case")]
 pub enum AppDataGroup {
-    /// 设置、主题调色板和其他全局应用数据。
+    /// 设置和其他全局应用数据。
     Global,
     /// 全局星图成员索引；因物理文件是单体聚合记录，作为 dependent group
     /// 与每张图分开版本化，并由 transfer guard 等待所有图组成功。
@@ -225,7 +225,7 @@ impl AppDataGroup {
     pub fn owns_path(&self, path: &str) -> bool {
         let path = path.replace('\\', "/");
         match self {
-            Self::Global => path == "settings.sync.json" || path.starts_with("themes/palettes/"),
+            Self::Global => path == "settings.sync.json",
             Self::StarmapIndex => path == "starmaps/index.json",
             Self::Starmap(id) => {
                 path == format!("starmaps/{id}.meta.json")
@@ -362,7 +362,7 @@ impl SyncTarget {
 
 /// 同步配置 — 全局唯一，持久化为 `<app_data_root>/app-meta/sync/config.local.json`。
 ///
-/// 一次全量同步 = 设置 + 全局星图 + 主题调色板 + 全部作品。
+/// 一次全量同步 = 设置 + 全局星图 + 统计事件 + 全部作品。
 /// App/Project 的区分由 `SyncTarget` 内部携带，`SyncConfig` 不再携带"我是应用同步还是作品同步"的产品配置含义。
 ///
 /// 非线程安全：只在主线程读写，同步引擎在同步期间持有快照。

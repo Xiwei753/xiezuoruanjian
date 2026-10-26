@@ -12,13 +12,10 @@ public sealed class ThemeManager
     public static ThemeManager Instance => _instance ??= new ThemeManager();
 
     private readonly WriterCoreBridge _core = new();
-    private List<ThemePaletteRecordDto> _paletteRecords = new();
     private List<BuiltinThemeDto> _builtinThemes = new();
     private ThemeColorSchemeDto? _currentLightScheme;
     private ThemeColorSchemeDto? _currentDarkScheme;
     private string _appearanceMode = "system";
-    private string _colorSource = "built_in";
-    private string _selectedPaletteId = "";
     private string _selectedBuiltinThemeId = "";
 
     public event EventHandler? ThemeChanged;
@@ -31,15 +28,7 @@ public sealed class ThemeManager
         {
             var settings = await _core.LoadSettingsAsync();
             _appearanceMode = settings.AppearanceMode;
-            _colorSource = settings.ColorSource;
-            _selectedPaletteId = settings.SelectedPaletteId;
             _selectedBuiltinThemeId = settings.SelectedBuiltinThemeId;
-
-            try
-            {
-                _paletteRecords = new List<ThemePaletteRecordDto>(await _core.ListPaletteRecordsAsync());
-            }
-            catch { }
 
             try
             {
@@ -55,15 +44,7 @@ public sealed class ThemeManager
     public async void UpdateFromSettings(LocalSettings settings)
     {
         _appearanceMode = settings.AppearanceMode;
-        _colorSource = settings.ColorSource;
-        _selectedPaletteId = settings.SelectedPaletteId;
         _selectedBuiltinThemeId = settings.SelectedBuiltinThemeId;
-
-        try
-        {
-            _paletteRecords = new List<ThemePaletteRecordDto>(await _core.ListPaletteRecordsAsync());
-        }
-        catch { }
 
         try
         {
@@ -87,18 +68,7 @@ public sealed class ThemeManager
         _currentLightScheme = null;
         _currentDarkScheme = null;
 
-        if (_colorSource == "saved_palette" && !string.IsNullOrEmpty(_selectedPaletteId))
-        {
-            var record = _paletteRecords.Find(r => r.PaletteId == _selectedPaletteId);
-            if (record != null)
-            {
-                _currentLightScheme = record.LightScheme;
-                _currentDarkScheme = record.DarkScheme;
-                return;
-            }
-        }
-
-        if (_colorSource == "built_in" && !string.IsNullOrEmpty(_selectedBuiltinThemeId))
+        if (!string.IsNullOrEmpty(_selectedBuiltinThemeId))
         {
             var theme = _builtinThemes.Find(t => t.ThemeId == _selectedBuiltinThemeId);
             if (theme != null)

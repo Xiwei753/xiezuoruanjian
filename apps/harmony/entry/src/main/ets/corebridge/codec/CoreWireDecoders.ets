@@ -12,7 +12,7 @@
 // 3. 必填字段缺失或类型错误 → 返回 error；可选字段缺失 → 赋 undefined。
 // 4. 嵌套对象递归 decode；数组逐元素 decode。
 
-import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
+import { LocalSettings, SyncableSettings, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { DateRange, Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
 import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint, WritingStatsHeatmap, WritingStatsHeatmapDay } from '../dto/StatsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
@@ -264,15 +264,9 @@ export function decodeSyncableSettings(data: Object): DecodeResult<SyncableSetti
   if (fontSize === null) { return err<SyncableSettings>('SyncableSettings.fontSize missing or not number') }
   const themeMode: string | null = reqStr(data, 'themeMode')
   if (themeMode === null) { return err<SyncableSettings>('SyncableSettings.themeMode missing or not string') }
-  const monetColor: string | null = reqStr(data, 'monetColor')
-  if (monetColor === null) { return err<SyncableSettings>('SyncableSettings.monetColor missing or not string') }
-  const themePaletteJson: string | null = reqStr(data, 'themePaletteJson')
-  if (themePaletteJson === null) { return err<SyncableSettings>('SyncableSettings.themePaletteJson missing or not string') }
   const value: SyncableSettings = {
     fontSize: fontSize,
-    themeMode: themeMode,
-    monetColor: monetColor,
-    themePaletteJson: themePaletteJson
+    themeMode: themeMode
   }
   return ok<SyncableSettings>(value)
 }
@@ -307,52 +301,6 @@ function decodeThemeColorScheme(data: Object): DecodeResult<ThemeColorSchemeDto>
   }
   const value: ThemeColorSchemeDto = rec as Object as ThemeColorSchemeDto
   return ok<ThemeColorSchemeDto>(value)
-}
-
-export function decodeThemePaletteRecord(data: Object): DecodeResult<ThemePaletteRecordDto> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<ThemePaletteRecordDto>('ThemePaletteRecord: expected object')
-  }
-  const schemaVersion: number | null = reqNum(data, 'schema_version')
-  if (schemaVersion === null) { return err<ThemePaletteRecordDto>('schema_version missing or not number') }
-  const paletteId: string | null = reqStr(data, 'palette_id')
-  if (paletteId === null) { return err<ThemePaletteRecordDto>('palette_id missing or not string') }
-  const paletteFingerprint: string | null = reqStr(data, 'palette_fingerprint')
-  if (paletteFingerprint === null) { return err<ThemePaletteRecordDto>('palette_fingerprint missing or not string') }
-  const source: string | null = reqStr(data, 'source')
-  if (source === null) { return err<ThemePaletteRecordDto>('source missing or not string') }
-  const sourcePlatform: string | null = reqStr(data, 'source_platform')
-  if (sourcePlatform === null) { return err<ThemePaletteRecordDto>('source_platform missing or not string') }
-  const sourceDeviceId: string | null = reqStr(data, 'source_device_id')
-  if (sourceDeviceId === null) { return err<ThemePaletteRecordDto>('source_device_id missing or not string') }
-  const sourceDeviceClass: string | null = reqStr(data, 'source_device_class')
-  if (sourceDeviceClass === null) { return err<ThemePaletteRecordDto>('source_device_class missing or not string') }
-  const capturedAtMs: number | null = reqNum(data, 'captured_at_ms')
-  if (capturedAtMs === null) { return err<ThemePaletteRecordDto>('captured_at_ms missing or not number') }
-  const variant: string | null = reqStr(data, 'variant')
-  if (variant === null) { return err<ThemePaletteRecordDto>('variant missing or not string') }
-  const lightSchemeObj: Object | null = reqObj(data, 'light_scheme')
-  if (lightSchemeObj === null) { return err<ThemePaletteRecordDto>('light_scheme missing or not object') }
-  const lightR: DecodeResult<ThemeColorSchemeDto> = decodeThemeColorScheme(lightSchemeObj)
-  if (!lightR.ok || lightR.value === undefined) { return err<ThemePaletteRecordDto>(`light_scheme: ${lightR.error}`) }
-  const darkSchemeObj: Object | null = reqObj(data, 'dark_scheme')
-  if (darkSchemeObj === null) { return err<ThemePaletteRecordDto>('dark_scheme missing or not object') }
-  const darkR: DecodeResult<ThemeColorSchemeDto> = decodeThemeColorScheme(darkSchemeObj)
-  if (!darkR.ok || darkR.value === undefined) { return err<ThemePaletteRecordDto>(`dark_scheme: ${darkR.error}`) }
-  const value: ThemePaletteRecordDto = {
-    schema_version: schemaVersion,
-    palette_id: paletteId,
-    palette_fingerprint: paletteFingerprint,
-    source: source,
-    source_platform: sourcePlatform,
-    source_device_id: sourceDeviceId,
-    source_device_class: sourceDeviceClass,
-    captured_at_ms: capturedAtMs,
-    variant: variant,
-    light_scheme: lightR.value,
-    dark_scheme: darkR.value
-  }
-  return ok<ThemePaletteRecordDto>(value)
 }
 
 export function decodeBuiltinTheme(data: Object): DecodeResult<BuiltinThemeDto> {

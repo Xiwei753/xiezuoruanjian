@@ -61,15 +61,6 @@ public sealed class WriterCoreBridge
     private static extern IntPtr writer_core_save_local_settings(IntPtr settingsJson);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr writer_core_list_palette_records();
-
-    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr writer_core_load_palette_record(IntPtr deviceId, IntPtr fingerprint);
-
-    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr writer_core_delete_palette_record(IntPtr deviceId, IntPtr fingerprint);
-
-    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr writer_core_list_builtin_themes();
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -448,10 +439,7 @@ public sealed class WriterCoreBridge
             if (env.Data.Value.TryGetProperty("editorFontSize", out var fs)) s.FontSize = (float)fs.GetDouble();
             if (env.Data.Value.TryGetProperty("editorLineSpacingMultiplier", out var lh)) s.LineHeight = (float)lh.GetDouble();
             if (env.Data.Value.TryGetProperty("appearanceMode", out var am)) s.AppearanceMode = am.GetString() ?? "system";
-            if (env.Data.Value.TryGetProperty("colorSource", out var cs)) s.ColorSource = cs.GetString() ?? "built_in";
-            if (env.Data.Value.TryGetProperty("dynamicColorEnabled", out var dce)) s.DynamicColorEnabled = dce.GetBoolean();
             if (env.Data.Value.TryGetProperty("selectedBuiltinThemeId", out var sbti)) s.SelectedBuiltinThemeId = sbti.GetString() ?? "";
-            if (env.Data.Value.TryGetProperty("selectedPaletteId", out var spi)) s.SelectedPaletteId = spi.GetString() ?? "";
             if (env.Data.Value.TryGetProperty("autoSaveEnabled", out var asv)) s.AutoSave = asv.GetBoolean();
             if (env.Data.Value.TryGetProperty("autoIndentEnabled", out var ai)) s.AutoIndent = ai.GetBoolean();
             if (env.Data.Value.TryGetProperty("editorTypingAnimationEnabled", out var tae)) s.TypingAnimationEnabled = tae.GetBoolean();
@@ -470,10 +458,7 @@ public sealed class WriterCoreBridge
             editorFontSize = settings.FontSize,
             editorLineSpacingMultiplier = settings.LineHeight,
             appearanceMode = settings.AppearanceMode,
-            colorSource = settings.ColorSource,
-            dynamicColorEnabled = settings.DynamicColorEnabled,
             selectedBuiltinThemeId = settings.SelectedBuiltinThemeId,
-            selectedPaletteId = settings.SelectedPaletteId,
             autoSaveEnabled = settings.AutoSave,
             autoIndentEnabled = settings.AutoIndent,
             editorTypingAnimationEnabled = settings.TypingAnimationEnabled,
@@ -508,24 +493,6 @@ public sealed class WriterCoreBridge
         {
             Marshal.FreeHGlobal(textPtr);
         }
-    }
-
-    public Task<IReadOnlyList<ThemePaletteRecordDto>> ListPaletteRecordsAsync()
-    {
-        var resultPtr = writer_core_list_palette_records();
-        var json = PtrToStringAndFree(resultPtr);
-        var env = ParseEnvelope(json);
-        ThrowIfFailed(env);
-
-        var list = new List<ThemePaletteRecordDto>();
-        if (env.Data?.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in env.Data.Value.EnumerateArray())
-            {
-                list.Add(ParsePaletteRecord(item));
-            }
-        }
-        return Task.FromResult<IReadOnlyList<ThemePaletteRecordDto>>(list);
     }
 
     public Task<IReadOnlyList<BuiltinThemeDto>> ListBuiltinThemesAsync()
@@ -587,24 +554,6 @@ public sealed class WriterCoreBridge
         if (el.TryGetProperty("outline_variant", out var olv)) s.OutlineVariant = olv.GetString() ?? "";
         if (el.TryGetProperty("scrim", out var scr)) s.Scrim = scr.GetString() ?? "";
         return s;
-    }
-
-    private static ThemePaletteRecordDto ParsePaletteRecord(JsonElement el)
-    {
-        var r = new ThemePaletteRecordDto();
-        if (el.ValueKind != JsonValueKind.Object) return r;
-        if (el.TryGetProperty("schema_version", out var sv)) r.SchemaVersion = sv.GetUInt32();
-        if (el.TryGetProperty("palette_id", out var pid)) r.PaletteId = pid.GetString() ?? "";
-        if (el.TryGetProperty("palette_fingerprint", out var pf)) r.PaletteFingerprint = pf.GetString() ?? "";
-        if (el.TryGetProperty("source", out var src)) r.Source = src.GetString() ?? "";
-        if (el.TryGetProperty("source_platform", out var sp)) r.SourcePlatform = sp.GetString() ?? "";
-        if (el.TryGetProperty("source_device_id", out var sdi)) r.SourceDeviceId = sdi.GetString() ?? "";
-        if (el.TryGetProperty("source_device_class", out var sdc)) r.SourceDeviceClass = sdc.GetString() ?? "";
-        if (el.TryGetProperty("captured_at_ms", out var cam)) r.CapturedAtMs = cam.GetInt64();
-        if (el.TryGetProperty("variant", out var v)) r.Variant = v.GetString() ?? "";
-        if (el.TryGetProperty("light_scheme", out var ls)) r.LightScheme = ParseColorScheme(ls);
-        if (el.TryGetProperty("dark_scheme", out var ds)) r.DarkScheme = ParseColorScheme(ds);
-        return r;
     }
 
     private static BuiltinThemeDto ParseBuiltinTheme(JsonElement el)
@@ -799,10 +748,7 @@ public sealed class LocalSettings
     public float FontSize { get; set; } = 16f;
     public float LineHeight { get; set; } = 1.5f;
     public string AppearanceMode { get; set; } = "system";
-    public string ColorSource { get; set; } = "built_in";
-    public bool DynamicColorEnabled { get; set; } = false;
     public string SelectedBuiltinThemeId { get; set; } = "";
-    public string SelectedPaletteId { get; set; } = "";
     public bool AutoSave { get; set; } = true;
     public bool AutoIndent { get; set; } = true;
     public bool TypingAnimationEnabled { get; set; } = true;
@@ -850,21 +796,6 @@ public sealed class ThemeColorSchemeDto
     public string Outline { get; set; } = "";
     public string OutlineVariant { get; set; } = "";
     public string Scrim { get; set; } = "";
-}
-
-public sealed class ThemePaletteRecordDto
-{
-    public uint SchemaVersion { get; set; }
-    public string PaletteId { get; set; } = "";
-    public string PaletteFingerprint { get; set; } = "";
-    public string Source { get; set; } = "";
-    public string SourcePlatform { get; set; } = "";
-    public string SourceDeviceId { get; set; } = "";
-    public string SourceDeviceClass { get; set; } = "";
-    public long CapturedAtMs { get; set; }
-    public string Variant { get; set; } = "";
-    public ThemeColorSchemeDto? LightScheme { get; set; }
-    public ThemeColorSchemeDto? DarkScheme { get; set; }
 }
 
 public sealed class BuiltinThemeDto

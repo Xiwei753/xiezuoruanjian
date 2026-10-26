@@ -205,10 +205,7 @@ bool  writer_core_record_writing_activity_segment(const char* segment_json);
 // 正文保存失败则不记任何事件；重复提交同一批事件不会重复计字。
 char*  writer_core_save_chapter_with_stats(const char* project_id, const char* volume_id, const char* chapter_id, const char* content, const char* events_json);
 
-// ── Palette / Theme ──
-char*  writer_core_list_palette_records(void);
-char*  writer_core_load_palette_record(const char* device_id, const char* fingerprint);
-char*  writer_core_delete_palette_record(const char* device_id, const char* fingerprint);
+// ── Theme ──
 char*  writer_core_list_builtin_themes(void);
 
 // ── Misc ──

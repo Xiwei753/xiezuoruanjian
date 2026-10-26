@@ -1,5 +1,6 @@
 package com.xiwei.sujian.app.theme
 
+import com.xiwei.sujian.app.theme.interop.ThemePaletteRecordJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
@@ -110,7 +111,7 @@ class ThemePaletteHelperTest {
     }
 
     @Test
-    fun themePaletteRecordDto_allFieldsAreCamelCase() {
+    fun themePaletteRecordJson_roundTripsLocalSnapshot() {
         val scheme =
             com.xiwei.sujian.app.theme.model.ThemeColorScheme(
                 primary = "#006497",
@@ -166,27 +167,25 @@ class ThemePaletteHelperTest {
             com.xiwei.sujian.app.theme.model.ThemePaletteRecord(
                 schemaVersion = 1u,
                 paletteId = "test-palette",
-                paletteFingerprint = "fp123",
+                paletteFingerprint = ThemePaletteRecordJson.fingerprint(scheme, scheme),
                 source = "android_dynamic_color",
                 sourcePlatform = "android",
                 sourceDeviceId = "device001",
                 sourceDeviceClass = "phone",
                 capturedAtMs = 1719792000000L,
-                variant = "tonal_spot",
+                variant = "system_selected",
                 lightScheme = scheme,
                 darkScheme = scheme,
             )
-        assertEquals(1u, record.schemaVersion)
-        assertEquals("test-palette", record.paletteId)
-        assertEquals("fp123", record.paletteFingerprint)
-        assertEquals("android_dynamic_color", record.source)
-        assertEquals("android", record.sourcePlatform)
-        assertEquals("device001", record.sourceDeviceId)
-        assertEquals("phone", record.sourceDeviceClass)
-        assertEquals(1719792000000L, record.capturedAtMs)
-        assertEquals("tonal_spot", record.variant)
-        assertNotNull(record.lightScheme)
-        assertNotNull(record.darkScheme)
+
+        val decoded = ThemePaletteRecordJson.decode(ThemePaletteRecordJson.encode(record))
+
+        assertEquals(record, decoded)
+        assertEquals(
+            "升级后旧 selectedPaletteId 必须仍能命中同一指纹",
+            "f3aa7a264466efa6",
+            record.paletteFingerprint,
+        )
     }
 
     @Test

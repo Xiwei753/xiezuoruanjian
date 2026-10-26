@@ -40,3 +40,40 @@ fn test_settings() {
         assert_eq!(loaded_syncable.theme_mode, "system");
     }
 }
+
+#[test]
+fn test_legacy_device_color_fields_are_ignored_and_not_written_back() {
+    let dir = tempdir().unwrap();
+    let data_root = dir.path();
+    let legacy = serde_json::json!({
+        "fontSize": 18.0,
+        "themeMode": "dark",
+        "monetColor": "#FF5722",
+        "themePalette": {
+            "source": "android_dynamic_color",
+            "deviceId": "android-device",
+            "lightPrimary": "#006493"
+        }
+    });
+    std::fs::write(
+        data_root.join("settings.sync.json"),
+        serde_json::to_string_pretty(&legacy).unwrap(),
+    )
+    .unwrap();
+
+    let loaded = load_syncable_settings(data_root).unwrap();
+    assert_eq!(loaded.font_size, 18.0);
+    #[allow(deprecated)]
+    {
+        assert_eq!(loaded.theme_mode, "dark");
+    }
+
+    save_syncable_settings(data_root, &loaded).unwrap();
+    let rewritten: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(data_root.join("settings.sync.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(rewritten.get("monetColor").is_none());
+    assert!(rewritten.get("themePalette").is_none());
+    assert_eq!(rewritten["fontSize"], 18.0);
+}

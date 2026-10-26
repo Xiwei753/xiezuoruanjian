@@ -12,11 +12,11 @@
 
 import { promptAction, ComponentContent } from '@kit.ArkUI'
 import hilog from '@ohos.hilog'
-import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
+import { LocalSettings, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { FullSyncState, FullSyncReport, FullSyncReportFailure, SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
 import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ColorSource } from '../../../ui/theme/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
@@ -78,18 +78,14 @@ function normalizeSettingsSectionId(section: string): SettingsSectionId | null {
   return null
 }
 
-// Issue #982：settingKey → 实际存在的设置分类。旧同步别名（fontSize/themeMode/monetColor/themePalette）
+// Issue #982：settingKey → 实际存在的设置分类。旧同步别名（fontSize/themeMode）
 // 指到当前平台真实控件，不额外造第二套设置项。
+// Issue #1005：设备配色 / Monet 不再是 HarmonyOS 设置项。
 function resolveSettingSectionForKey(settingKey: string): SettingsSectionId | null {
   switch (settingKey) {
     case 'appearanceMode':
     case 'themeMode':
-    case 'colorSource':
-    case 'dynamicColorEnabled':
-    case 'monetColor':
     case 'selectedBuiltinThemeId':
-    case 'selectedPaletteId':
-    case 'themePalette':
     case 'locale':
     case 'editorFontSize':
     case 'fontSize':
@@ -128,12 +124,6 @@ let settingsContentInstanceSeq: number = 0
 function resolveSettingItemAnchorKey(settingKey: string): string {
   if (settingKey === 'themeMode') {
     return 'appearanceMode'
-  }
-  if (settingKey === 'monetColor') {
-    return 'dynamicColorEnabled'
-  }
-  if (settingKey === 'themePalette') {
-    return 'selectedPaletteId'
   }
   if (settingKey === 'fontSize') {
     return 'editorFontSize'
@@ -1239,57 +1229,8 @@ export struct SettingsContent {
       .backgroundColor(this.settingHighlightColor('appearanceMode'))
       .margin({ bottom: 16 })
 
-      // 颜色主题来源（实验性：当前页面默认使用系统 token，自定义颜色暂不生效）
-      Row() {
-        Text('颜色主题（实验性）')
-          .fontSize(16)
-          .layoutWeight(1)
-
-        Select(this.getColorSourceOptions())
-          .selected(this.getColorSourceIndex())
-          .value(this.getColorSourceName())
-          .onSelect((index: number) => {
-            const sources: ColorSource[] = ['built_in', 'saved_palette']
-            const selected = sources[index]
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.colorSource = selected
-              return s
-            })
-            this.themeAdapter.setColorSource(selected)
-            this.viewModel.saveSettings()
-          })
-      }
-      .id(this.settingItemId('colorSource'))
-      .width('100%')
-      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
-      .borderRadius(DesignTokens.radiusSm)
-      .backgroundColor(this.settingHighlightColor('colorSource'))
-      .margin({ bottom: 16 })
-
-      // 动态取色（旧版 monetColor 别名也定位到这里）
-      Row() {
-        GripAdaptiveToggleRow({
-          side: this.gripSide,
-          isOn: this.viewModel.settings.dynamicColorEnabled,
-          onChange: (isOn: boolean): void => {
-            this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-              s.dynamicColorEnabled = isOn
-              return s
-            })
-            this.viewModel.saveSettings()
-          }
-        }) {
-          Text('动态取色（实验性）').fontSize(16)
-        }
-      }
-      .id(this.settingItemId('dynamicColorEnabled'))
-      .width('100%')
-      .padding({ left: 4, right: 4, top: 2, bottom: 2 })
-      .borderRadius(DesignTokens.radiusSm)
-      .backgroundColor(this.settingHighlightColor('dynamicColorEnabled'))
-      .margin({ bottom: 16 })
-
-      // 内置主题选择（实验性）。始终保留可定位项；只有 built_in 来源时可用。
+      // 内置主题选择（实验性）。HarmonyOS 只使用 ArkUI 系统色与内置主题，
+      // 不读取 Android 设备配色（Issue #1005）。
       if (this.viewModel.builtinThemes.length > 0) {
         Row() {
           Text('内置主题（实验性）')
@@ -1299,7 +1240,6 @@ export struct SettingsContent {
           Select(this.getBuiltinThemeOptions())
             .selected(this.getSelectedBuiltinThemeIndex())
             .value(this.getSelectedBuiltinThemeName())
-            .enabled(this.viewModel.settings.colorSource === 'built_in')
             .onSelect((index: number) => {
               if (index < this.viewModel.builtinThemes.length) {
                 const themeId = this.viewModel.builtinThemes[index].theme_id
@@ -1317,41 +1257,6 @@ export struct SettingsContent {
         .padding({ left: 4, right: 4, top: 2, bottom: 2 })
         .borderRadius(DesignTokens.radiusSm)
         .backgroundColor(this.settingHighlightColor('selectedBuiltinThemeId'))
-        .margin({ bottom: 16 })
-      }
-
-      // 已保存调色板选择（实验性）。始终保留可定位项；只有 saved_palette 来源时可用。
-      if (this.viewModel.paletteRecords.length > 0) {
-        Row() {
-          Text('设备配色（实验性）')
-            .fontSize(16)
-            .layoutWeight(1)
-
-          Select(this.viewModel.paletteRecords.map((r: ThemePaletteRecordDto): SettingsSelectOption => {
-            const date = new Date(r.captured_at_ms)
-            const dateStr = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
-            return { value: `${r.source_device_class} · ${dateStr}`, icon: '' }
-          }))
-            .selected(this.getSelectedPaletteIndex())
-            .value(this.getSelectedPaletteName())
-            .enabled(this.viewModel.settings.colorSource === 'saved_palette')
-            .onSelect((index: number) => {
-              if (index < this.viewModel.paletteRecords.length) {
-                const paletteId = this.viewModel.paletteRecords[index].palette_id
-                this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-                  s.selectedPaletteId = paletteId
-                  return s
-                })
-                this.themeAdapter.setSelectedPaletteId(paletteId)
-                this.viewModel.saveSettings()
-              }
-            })
-        }
-        .id(this.settingItemId('selectedPaletteId'))
-        .width('100%')
-        .padding({ left: 4, right: 4, top: 2, bottom: 2 })
-        .borderRadius(DesignTokens.radiusSm)
-        .backgroundColor(this.settingHighlightColor('selectedPaletteId'))
         .margin({ bottom: 16 })
       }
 
@@ -2359,9 +2264,7 @@ export struct SettingsContent {
       case 'appearance':
         return [
           ctx.resourceManager.getStringSync($r('app.string.theme_mode').id),
-          '颜色主题（实验性）',
           '内置主题（实验性）',
-          '设备配色（实验性）',
           ctx.resourceManager.getStringSync($r('app.string.font_size').id),
           ctx.resourceManager.getStringSync($r('app.string.line_spacing_multiplier').id)
         ]
@@ -2446,13 +2349,6 @@ export struct SettingsContent {
     ]
   }
 
-  getColorSourceOptions(): SettingsSelectOption[] {
-    return [
-      { value: '素笺默认', icon: '' },
-      { value: '已保存的设备配色', icon: '' }
-    ]
-  }
-
   getBuiltinThemeOptions(): SettingsSelectOption[] {
     return this.viewModel.builtinThemes.map((theme: BuiltinThemeDto): SettingsSelectOption => {
       return { value: theme.name, icon: '' }
@@ -2493,17 +2389,6 @@ export struct SettingsContent {
     return names[this.getLocaleIndex()]
   }
 
-  getColorSourceIndex(): number {
-    const sources: string[] = ['built_in', 'saved_palette']
-    return sources.indexOf(this.viewModel.settings.colorSource || 'built_in')
-  }
-
-  getColorSourceName(): string {
-    const s = this.viewModel.settings.colorSource || 'built_in'
-    if (s === 'saved_palette') return '已保存的设备配色'
-    return '素笺默认'
-  }
-
   getSelectedBuiltinThemeIndex(): number {
     const id = this.viewModel.settings.selectedBuiltinThemeId || ''
     if (id.length === 0) return 0
@@ -2515,27 +2400,6 @@ export struct SettingsContent {
     if (id.length === 0) return '素笺默认'
     const theme = this.viewModel.builtinThemes.find(t => t.theme_id === id)
     return theme ? theme.name : '素笺默认'
-  }
-
-  getSelectedPaletteIndex(): number {
-    const id = this.viewModel.settings.selectedPaletteId || ''
-    if (id.length === 0) return 0
-    return this.viewModel.paletteRecords.findIndex(r => r.palette_id === id)
-  }
-
-  getSelectedPaletteName(): string {
-    const id = this.viewModel.settings.selectedPaletteId || ''
-    if (id.length === 0 && this.viewModel.paletteRecords.length > 0) {
-      const r = this.viewModel.paletteRecords[0]
-      const date = new Date(r.captured_at_ms)
-      return `${r.source_device_class} · ${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
-    }
-    const record = this.viewModel.paletteRecords.find(r => r.palette_id === id)
-    if (record) {
-      const date = new Date(record.captured_at_ms)
-      return `${record.source_device_class} · ${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
-    }
-    return ''
   }
 
   // ════════════════════════════════════════════
@@ -2652,28 +2516,12 @@ export struct SettingsContent {
                 this.themeAdapter.setMode(mode)
                 this.viewModel.saveSettings()
               },
-              onSetColorSource: (source: string): void => {
-                this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-                  s.colorSource = source
-                  return s
-                })
-                this.themeAdapter.setColorSource(source as ColorSource)
-                this.viewModel.saveSettings()
-              },
               onSetBuiltinTheme: (themeId: string): void => {
                 this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
                   s.selectedBuiltinThemeId = themeId
                   return s
                 })
                 this.themeAdapter.setSelectedBuiltinThemeId(themeId)
-                this.viewModel.saveSettings()
-              },
-              onSetPalette: (paletteId: string): void => {
-                this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
-                  s.selectedPaletteId = paletteId
-                  return s
-                })
-                this.themeAdapter.setSelectedPaletteId(paletteId)
                 this.viewModel.saveSettings()
               },
               onRequestSync: (): void => {

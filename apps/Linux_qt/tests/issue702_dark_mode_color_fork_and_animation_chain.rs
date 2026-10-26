@@ -371,10 +371,15 @@ fn issue709_theme_state_json_includes_resolved_source_and_scheme_kind() {
 #[test]
 fn issue709_resolved_state_tracks_scheme_origin() {
     let src = read_src("src/backend/linux_theme_controller.rs");
-    // 确认 saved_palette 路径设置 resolved_source = "saved_palette"
+    // Issue #1005: Qt 不再读取 Android 设备配色；旧 saved_palette 值必须被忽略，
+    // 不加载 palette record，也不产生 saved_palette 解析来源。
     assert!(
-        src.contains("\"saved_palette\""),
-        "saved_palette 路径应设置 resolved_source"
+        !src.contains("\"saved_palette\""),
+        "Qt 不应再产生 saved_palette 解析来源"
+    );
+    assert!(
+        !src.contains("load_palette_record"),
+        "Qt 不应读取 Android 设备配色"
     );
     // 确认 builtin 路径设置 resolved_source = "builtin"
     assert!(

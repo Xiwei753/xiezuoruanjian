@@ -70,58 +70,6 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn save_palette_record(&self, record: ThemePaletteRecordDto) -> ApiResult<bool> {
-        //   用 _with_changes 版本拿变更集，
-        // 调 record_workspace_change_set_history 记录本地历史。
-        let r: crate::settings::ThemePaletteRecord = record.into();
-        let change_set = self
-            .core_write()
-            .save_palette_record_with_changes(&r)
-            .map_err(crate::api::error::WriterError::from)?;
-        let _ = self.record_workspace_change_set_history(&change_set, "save_palette_record");
-        Ok(true)
-    }
-
-    pub fn load_palette_record(
-        &self,
-        device_id: &str,
-        fingerprint: &str,
-    ) -> ApiResult<ThemePaletteRecordDto> {
-        crate::settings::load_palette_record(&self.app_data_root, device_id, fingerprint)
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn list_palette_records(&self) -> ApiResult<Vec<ThemePaletteRecordDto>> {
-        crate::settings::list_palette_records(&self.app_data_root)
-            .map(|v| v.into_iter().map(Into::into).collect())
-            .map_err(Into::into)
-    }
-
-    pub fn delete_palette_record(&self, device_id: &str, fingerprint: &str) -> ApiResult<bool> {
-        //   用 _with_changes 版本拿变更集。
-        let change_set = self
-            .core_write()
-            .delete_palette_record_with_changes(device_id, fingerprint)
-            .map_err(crate::api::error::WriterError::from)?;
-        let _ = self.record_workspace_change_set_history(&change_set, "delete_palette_record");
-        Ok(true)
-    }
-
-    pub fn migrate_legacy_theme_palette(&self) -> ApiResult<bool> {
-        crate::settings::migrate_legacy_theme_palette(&self.app_data_root).map_err(Into::into)
-    }
-
-    pub fn compute_palette_fingerprint(
-        &self,
-        light_scheme: ThemeColorSchemeDto,
-        dark_scheme: ThemeColorSchemeDto,
-    ) -> String {
-        let light: crate::settings::ThemeColorScheme = light_scheme.into();
-        let dark: crate::settings::ThemeColorScheme = dark_scheme.into();
-        crate::settings::compute_palette_fingerprint(&light, &dark)
-    }
-
     pub fn list_builtin_themes(&self) -> Vec<BuiltinThemeDto> {
         crate::settings::list_builtin_themes()
             .into_iter()

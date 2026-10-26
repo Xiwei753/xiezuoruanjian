@@ -5,7 +5,7 @@
 // 数据与副作用仍全部走现有 SettingsViewModel / 主题适配器 / 同步控制器，
 // 不复制窄屏 SectionContent 的视觉 builder。
 
-import { BuiltinThemeDto, LocalSettings, ThemePaletteRecordDto } from '../../../../corebridge/dto/SettingsDtos'
+import { BuiltinThemeDto, LocalSettings } from '../../../../corebridge/dto/SettingsDtos'
 import { SyncConfig } from '../../../../corebridge/dto/SyncDtos'
 import { ThemeMode } from '../../../../ui/theme/HarmonyThemeTypes'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
@@ -32,9 +32,7 @@ export struct WideSettingsCategoryContent {
 
   // 主题变化涉及全局适配器和持久化，由 SettingsContent 统一执行。
   @Param onSetThemeMode: (mode: ThemeMode) => void = (_mode: ThemeMode) => {}
-  @Param onSetColorSource: (source: string) => void = (_source: string) => {}
   @Param onSetBuiltinTheme: (themeId: string) => void = (_themeId: string) => {}
-  @Param onSetPalette: (paletteId: string) => void = (_paletteId: string) => {}
   @Param onRequestSync: () => void = () => {}
   @Param onOpenConflicts: () => void = () => {}
   @Param onOpenThirdPartyNotices: () => void = () => {}
@@ -104,26 +102,10 @@ export struct WideSettingsCategoryContent {
     this.viewModel.saveSettings()
   }
 
-  private colorSourceOptions(): WideSelectOption[] {
-    return [
-      { value: '素笺默认', icon: '' },
-      { value: '已保存的设备配色', icon: '' }
-    ]
-  }
-
   private builtinThemeSelectOptions(): WideSelectOption[] {
     const options: WideSelectOption[] = []
     for (let index: number = 0; index < this.viewModel.builtinThemes.length; index++) {
       options.push({ value: this.viewModel.builtinThemes[index].name, icon: '' })
-    }
-    return options
-  }
-
-  private paletteSelectOptions(): WideSelectOption[] {
-    const labels: string[] = this.paletteOptions()
-    const options: WideSelectOption[] = []
-    for (let index: number = 0; index < labels.length; index++) {
-      options.push({ value: labels[index], icon: '' })
     }
     return options
   }
@@ -152,31 +134,6 @@ export struct WideSettingsCategoryContent {
     const theme: BuiltinThemeDto | undefined =
       this.viewModel.builtinThemes.find((item: BuiltinThemeDto) => item.theme_id === id)
     return theme ? theme.name : '素笺默认'
-  }
-
-  private paletteOptions(): string[] {
-    return this.viewModel.paletteRecords.map((record: ThemePaletteRecordDto): string => {
-      const date: Date = new Date(record.captured_at_ms)
-      const dateText: string = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
-      return `${record.source_device_class} · ${dateText}`
-    })
-  }
-
-  private paletteIndex(): number {
-    const id: string = this.viewModel.settings.selectedPaletteId || ''
-    if (id.length === 0) {
-      return 0
-    }
-    const index: number = this.viewModel.paletteRecords.findIndex((record: ThemePaletteRecordDto) => record.palette_id === id)
-    return index >= 0 ? index : 0
-  }
-
-  private paletteName(): string {
-    const options: string[] = this.paletteOptions()
-    if (options.length === 0) {
-      return ''
-    }
-    return options[this.paletteIndex()]
   }
 
   private conflictLabel(): string {
@@ -261,49 +218,7 @@ export struct WideSettingsCategoryContent {
     .backgroundColor(this.rowBackground('appearanceMode'))
     .alignItems(VerticalAlign.Center)
 
-    // 颜色来源（实验性）
-    Row({ space: 12 }) {
-      Text('颜色主题（实验性）')
-        .fontSize(15)
-        .layoutWeight(1)
-      Select(this.colorSourceOptions())
-        .selected(this.viewModel.settings.colorSource === 'saved_palette' ? 1 : 0)
-        .value(this.viewModel.settings.colorSource === 'saved_palette' ? '已保存的设备配色' : '素笺默认')
-        .width('32%')
-        .onSelect((index: number) => {
-          this.onSetColorSource(index === 1 ? 'saved_palette' : 'built_in')
-        })
-    }
-    .id(this.rowId('colorSource'))
-    .width('100%')
-    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
-    .borderRadius(DesignTokens.radiusSm)
-    .backgroundColor(this.rowBackground('colorSource'))
-    .alignItems(VerticalAlign.Center)
-
-    // 动态取色（旧版 monetColor 别名也定位到这里）
-    Row() {
-      GripAdaptiveToggleRow({
-        side: this.gripSide,
-        isOn: this.viewModel.settings.dynamicColorEnabled,
-        onChange: (isOn: boolean): void => {
-          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-            settings.dynamicColorEnabled = isOn
-            return settings
-          })
-          this.viewModel.saveSettings()
-        }
-      }) {
-        Text('动态取色（实验性）').fontSize(15)
-      }
-    }
-    .id(this.rowId('dynamicColorEnabled'))
-    .width('100%')
-    .padding({ left: 4, right: 4, top: 7, bottom: 7 })
-    .borderRadius(DesignTokens.radiusSm)
-    .backgroundColor(this.rowBackground('dynamicColorEnabled'))
-    .alignItems(VerticalAlign.Center)
-
+    // 内置主题：HarmonyOS 只使用 ArkUI 系统色与内置主题，不读取 Android 设备配色（Issue #1005）。
     if (this.viewModel.builtinThemes.length > 0) {
       Row({ space: 12 }) {
         Text('内置主题（实验性）')
@@ -313,7 +228,6 @@ export struct WideSettingsCategoryContent {
           .selected(this.builtinThemeIndex())
           .value(this.builtinThemeName())
           .width('32%')
-          .enabled(this.viewModel.settings.colorSource === 'built_in')
           .onSelect((index: number) => {
             if (index < this.viewModel.builtinThemes.length) {
               this.onSetBuiltinTheme(this.viewModel.builtinThemes[index].theme_id)
@@ -325,30 +239,6 @@ export struct WideSettingsCategoryContent {
       .padding({ left: 4, right: 4, top: 7, bottom: 7 })
       .borderRadius(DesignTokens.radiusSm)
       .backgroundColor(this.rowBackground('selectedBuiltinThemeId'))
-      .alignItems(VerticalAlign.Center)
-    }
-
-    if (this.viewModel.paletteRecords.length > 0) {
-      Row({ space: 12 }) {
-        Text('设备配色（实验性）')
-          .fontSize(15)
-          .layoutWeight(1)
-        Select(this.paletteSelectOptions())
-          .selected(this.paletteIndex())
-          .value(this.paletteName())
-          .width('32%')
-          .enabled(this.viewModel.settings.colorSource === 'saved_palette')
-          .onSelect((index: number) => {
-            if (index < this.viewModel.paletteRecords.length) {
-              this.onSetPalette(this.viewModel.paletteRecords[index].palette_id)
-            }
-          })
-      }
-      .id(this.rowId('selectedPaletteId'))
-      .width('100%')
-      .padding({ left: 4, right: 4, top: 7, bottom: 7 })
-      .borderRadius(DesignTokens.radiusSm)
-      .backgroundColor(this.rowBackground('selectedPaletteId'))
       .alignItems(VerticalAlign.Center)
     }
 

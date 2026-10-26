@@ -75,9 +75,7 @@ data class BuiltinTheme(
 )
 
 /**
- * 调色板记录 — 用户保存的调色板快照。
- *
- * 对应 UniFFI: `uniffi.writer_core.ThemePaletteRecordDto`
+ * 调色板记录 — 当前 Android 设备保存的配色快照（Issue #1005，仅本机使用）。
  */
 data class ThemePaletteRecord(
     val schemaVersion: UInt,

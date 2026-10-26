@@ -736,14 +736,6 @@ const SETTINGS_CATALOG: &[SettingCatalogEntry] = &[
         description: "旧版可同步主题模式",
         section: "appearance",
     },
-    SettingCatalogEntry {
-        group: "sync",
-        key: "monetColor",
-        title: "动态取色（旧版）",
-        aliases: "配色 monet color",
-        description: "旧版可同步动态取色",
-        section: "appearance",
-    },
 ];
 
 fn setting_value_text(value: &serde_json::Value) -> String {

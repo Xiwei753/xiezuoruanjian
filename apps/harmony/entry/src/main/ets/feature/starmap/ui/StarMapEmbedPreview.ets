@@ -92,8 +92,8 @@ export struct StarMapEmbedPreview {
   }
   /** 主题配置（只读颜色） */
   @Prop themeConfig: ThemeConfig = {
-    mode: 'light', colorSource: 'built_in',
-    selectedPaletteId: '', selectedBuiltinThemeId: '',
+    mode: 'light',
+    selectedBuiltinThemeId: '',
     colors: {
       primary: '#000000', onPrimary: '#FFFFFF',
       primaryContainer: '#E0E0E0', onPrimaryContainer: '#1A1C2E',

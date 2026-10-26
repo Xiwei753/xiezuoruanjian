@@ -168,20 +168,8 @@ export class ProjectListViewModel {
   // ── 初始化主题 ──
 
   private initializeTheme(): void {
-    this.loadPaletteRecords()
     this.loadBuiltinThemes()
     this.loadLocalSettings()
-  }
-
-  private async loadPaletteRecords(): Promise<void> {
-    try {
-      const paletteResult = await this.bridge.listPaletteRecords()
-      if (paletteResult.success && paletteResult.data) {
-        this.themeAdapter.setPaletteRecords(paletteResult.data)
-      }
-    } catch (_e) {
-      hilog.warn(DOMAIN, TAG, 'loadPaletteRecords failed')
-    }
   }
 
   private async loadBuiltinThemes(): Promise<void> {
@@ -202,8 +190,6 @@ export class ProjectListViewModel {
         const appearanceMode = settingsResult.data.appearanceMode || settingsResult.data.themeMode || 'system'
         this.themeAdapter.updateFromLocalSettings(
           appearanceMode,
-          settingsResult.data.colorSource || 'built_in',
-          settingsResult.data.selectedPaletteId || '',
           settingsResult.data.selectedBuiltinThemeId || ''
         )
       }

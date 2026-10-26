@@ -587,7 +587,8 @@ mod tests {
             "starmaps/x.json",
             crate::sync::types::SyncScope::App
         ));
-        assert!(SyncService::is_whitelisted_path(
+        // Issue #1005: Android 设备配色快照不进入 App 同步。
+        assert!(!SyncService::is_whitelisted_path(
             "themes/palettes/dark.json",
             crate::sync::types::SyncScope::App
         ));

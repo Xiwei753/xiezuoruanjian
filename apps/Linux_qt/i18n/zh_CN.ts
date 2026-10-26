@@ -2308,14 +2308,6 @@
         <translation>工作区目录无效</translation>
     </message>
     <message>
-        <source>已保存的设备配色</source>
-        <translation>已保存的设备配色</translation>
-    </message>
-    <message>
-        <source>已保存配色</source>
-        <translation>已保存配色</translation>
-    </message>
-    <message>
         <source>已配置，尚未测试</source>
         <translation>已配置，尚未测试</translation>
     </message>
@@ -2442,18 +2434,6 @@
     <message>
         <source>选择内置主题配色方案</source>
         <translation>选择内置主题配色方案</translation>
-    </message>
-    <message>
-        <source>选择已保存的设备调色板</source>
-        <translation>选择已保存的设备调色板</translation>
-    </message>
-    <message>
-        <source>选择素笺默认主题或已保存的设备配色</source>
-        <translation>选择素笺默认主题或已保存的设备配色</translation>
-    </message>
-    <message>
-        <source>颜色来源</source>
-        <translation>颜色来源</translation>
     </message>
 </context>
 <context>

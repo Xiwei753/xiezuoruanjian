@@ -14,10 +14,9 @@ import kotlinx.coroutines.flow.asSharedFlow
  * - [externalSettingsChanged]：同步把设置拉回来时由外部触发，SettingsViewModel 才
  *   reloadFromExternalSync；
  * - [editorSettingsChanged]：编辑器相关设置变化（本地保存成功或外部同步），
- *   WritingPane 用它 reloadSettings；
- * - [themeCatalogChanged]：同步把主题调色板目录拉回来时由外部触发，
- *   ThemeController 才刷新主题目录。本机主题字段变化不走这里，继续走
- *   SettingsSaveCommand.Local.affectsTheme → ThemeStore.reload()。
+ *   WritingPane 用它 reloadSettings。
+ *
+ * Issue #1005：设备配色不再跨端同步，删除 themeCatalogChanged 主题目录同步事件。
  */
 object CoreSettingsEvents {
     private val _externalSettingsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -25,9 +24,6 @@ object CoreSettingsEvents {
 
     private val _editorSettingsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val editorSettingsChanged: SharedFlow<Unit> = _editorSettingsChanged.asSharedFlow()
-
-    private val _themeCatalogChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    val themeCatalogChanged: SharedFlow<Unit> = _themeCatalogChanged.asSharedFlow()
 
     /** 本机设置保存成功：只通知编辑器需要更新的部分，不冒充外部设置变化。 */
     fun notifyLocalEditorSettingsChanged() {
@@ -38,10 +34,5 @@ object CoreSettingsEvents {
     fun notifyExternalSettingsChanged() {
         _externalSettingsChanged.tryEmit(Unit)
         _editorSettingsChanged.tryEmit(Unit)
-    }
-
-    /** 外部同步把主题调色板目录拉回来：主题控制器刷新目录。 */
-    fun notifyExternalThemeCatalogChanged() {
-        _themeCatalogChanged.tryEmit(Unit)
     }
 }

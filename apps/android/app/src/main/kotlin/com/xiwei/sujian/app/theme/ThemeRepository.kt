@@ -1,7 +1,9 @@
 package com.xiwei.sujian.app.theme
 
 import android.content.Context
+import com.xiwei.sujian.app.theme.interop.LocalThemePaletteStore
 import com.xiwei.sujian.app.theme.interop.ThemeDtoMapper
+import com.xiwei.sujian.app.theme.interop.ThemePaletteRecordJson
 import com.xiwei.sujian.app.theme.model.BuiltinTheme
 import com.xiwei.sujian.app.theme.model.DeviceInfo
 import com.xiwei.sujian.app.theme.model.ThemeColorScheme
@@ -13,15 +15,16 @@ import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 /**
  * ThemeRepository — 主题仓库层（#602 Phase 7 从 SettingsRepository 拆分）。
  *
- * 集中所有主题相关读写：设备信息、内置主题、调色板记录、动态色保存与设备类型识别。
- * 设置同步通知（notifyPaletteCatalogChangedExternally）仍保留在 SettingsRepository，
- * 因为它属于设置同步事件总线，不属于主题读写。
+ * 集中所有主题相关读写：设备信息、内置主题、设备配色快照、动态色保存与设备类型识别。
+ * 设备配色快照只保存在当前 Android 设备（Issue #1005），不经过 Core 跨端 catalog。
  *
  * ## 架构定位
- * - ThemeStore / ThemeController / SettingsViewModel → ThemeRepository → SettingsBridge → JNI → Rust Core
+ * - ThemeStore / ThemeController / SettingsViewModel → ThemeRepository
+ * - 设备信息/内置主题 → SettingsBridge → JNI → Rust Core
+ * - 设备配色快照 → [LocalThemePaletteStore] → Android 私有目录
  *
  * ## 职责边界
- * - **做**：读写设备信息、内置主题、调色板记录，识别设备类型，保存动态色到 catalog
+ * - **做**：读写设备信息、内置主题、本地调色板记录，识别设备类型，保存动态色
  * - **不做**：设置同步通知（在 SettingsRepository）、UI 状态（在 ThemeStore）
  */
 class ThemeRepository(
@@ -30,6 +33,7 @@ class ThemeRepository(
 ) {
     private val appContext = context.applicationContext
     private val settingsBridge = appBridge.settingsBridge
+    private val paletteStore = LocalThemePaletteStore(appContext)
     private val defaultDeviceClass = "phone"
 
     /**
@@ -68,44 +72,17 @@ class ThemeRepository(
         }
     }
 
-    fun listPaletteRecords(): List<ThemePaletteRecord> {
-        return when (val result = settingsBridge.listPaletteRecords()) {
-            is BridgeResult.Success -> (result.data ?: emptyList()).map { ThemeDtoMapper.fromDto(it) }
-            is BridgeResult.Error -> {
-                warn("Failed to list palette records: ${result.fullEnvelope}")
-                emptyList()
-            }
-            BridgeResult.NotLoaded -> emptyList()
-        }
-    }
+    fun listPaletteRecords(): List<ThemePaletteRecord> = paletteStore.list()
 
     fun loadPaletteRecord(
         deviceId: String,
         fingerprint: String,
-    ): ThemePaletteRecord? {
-        return when (val result = settingsBridge.loadPaletteRecord(deviceId, fingerprint)) {
-            is BridgeResult.Success -> result.data?.let { ThemeDtoMapper.fromDto(it) }
-            is BridgeResult.Error -> {
-                warn("Failed to load palette record: ${result.fullEnvelope}")
-                null
-            }
-            BridgeResult.NotLoaded -> null
-        }
-    }
+    ): ThemePaletteRecord? = paletteStore.load(deviceId, fingerprint)
 
     fun deletePaletteRecord(
         deviceId: String,
         fingerprint: String,
-    ): Boolean {
-        return when (val result = settingsBridge.deletePaletteRecord(deviceId, fingerprint)) {
-            is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> {
-                warn("Failed to delete palette record: ${result.fullEnvelope}")
-                false
-            }
-            BridgeResult.NotLoaded -> false
-        }
-    }
+    ): Boolean = paletteStore.delete(deviceId, fingerprint)
 
     fun saveDynamicColorPaletteToCatalog(
         lightScheme: ThemeColorScheme,
@@ -113,29 +90,16 @@ class ThemeRepository(
         deviceClass: String? = null,
     ) {
         try {
-            val lightDto = ThemeDtoMapper.toDto(lightScheme)
-            val darkDto = ThemeDtoMapper.toDto(darkScheme)
             val deviceInfo = loadDeviceInfo()
             val deviceId = deviceInfo.deviceId.ifEmpty { "legacy" }
             val effectiveDeviceClass =
                 deviceClass
                     ?: deviceInfo.deviceClass.ifEmpty { detectDeviceClass() }
-
-            val fingerprint =
-                when (val r = settingsBridge.computePaletteFingerprint(lightDto, darkDto)) {
-                    is BridgeResult.Success -> r.data
-                    is BridgeResult.Error -> {
-                        warn("Failed to compute palette fingerprint: ${r.fullEnvelope}")
-                        return
-                    }
-                    BridgeResult.NotLoaded -> return
-                }
-            val paletteId = "$deviceId:$fingerprint"
-
+            val fingerprint = ThemePaletteRecordJson.fingerprint(lightScheme, darkScheme)
             val record =
-                uniffi.writer_core.ThemePaletteRecordDto(
+                ThemePaletteRecord(
                     schemaVersion = 1u,
-                    paletteId = paletteId,
+                    paletteId = "$deviceId:$fingerprint",
                     paletteFingerprint = fingerprint,
                     source = "android_dynamic_color",
                     sourcePlatform = "android",
@@ -143,22 +107,14 @@ class ThemeRepository(
                     sourceDeviceClass = effectiveDeviceClass,
                     capturedAtMs = System.currentTimeMillis(),
                     variant = "system_selected",
-                    lightScheme = lightDto,
-                    darkScheme = darkDto,
+                    lightScheme = lightScheme,
+                    darkScheme = darkScheme,
                 )
-
-            when (val saveResult = settingsBridge.savePaletteRecord(record)) {
-                is BridgeResult.Error ->
-                    warn(
-                        "Failed to save palette record (rejected by Core validation, " +
-                            "likely semantic invalid e.g. unreadable foreground/background contrast): " +
-                            "${saveResult.fullEnvelope}",
-                    )
-                BridgeResult.NotLoaded -> warn("Native library not loaded, cannot save palette record")
-                is BridgeResult.Success -> {}
+            if (!paletteStore.save(record)) {
+                warn("Failed to save local palette record ${record.paletteId}")
             }
         } catch (e: Exception) {
-            DiagnosticsInterop.w("ThemeRepository", "Failed to save palette to catalog", e)
+            DiagnosticsInterop.w("ThemeRepository", "Failed to save palette locally", e)
         }
     }
 
