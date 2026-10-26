@@ -82,18 +82,31 @@ class LocalThemePaletteStore(
      */
     private fun migrateLegacyLocked() {
         if (legacyMigrationDone) return
-        legacyMigrationDone = true
-        if (!legacyRoot.isDirectory) return
-        runCatching {
+        if (!legacyRoot.isDirectory) {
+            legacyMigrationDone = true
+            return
+        }
+        var completed = true
+        try {
             legacyRoot.listFiles()?.filter { it.isDirectory }?.forEach { deviceDir ->
                 deviceDir.listFiles()?.filter { it.isFile && it.extension == "json" }?.forEach { file ->
                     if (!fileFor(root, deviceDir.name, file.nameWithoutExtension).exists()) {
-                        readRecord(file)?.let { writeRecord(root, it) }
+                        val record = readRecord(file)
+                        if (record == null) {
+                            completed = false
+                        } else if (!writeRecord(root, record)) {
+                            completed = false
+                        }
                     }
                 }
             }
-        }.onFailure {
-            warn("Failed to migrate legacy palette records", it)
+        } catch (e: Exception) {
+            warn("Failed to migrate legacy palette records", e)
+            return
+        }
+        legacyMigrationDone = completed
+        if (!completed) {
+            warn("Legacy palette migration incomplete; will retry on next access")
         }
     }
 

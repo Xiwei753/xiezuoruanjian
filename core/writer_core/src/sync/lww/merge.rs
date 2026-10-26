@@ -890,6 +890,35 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
 
     download_remote_files(sync_root, provider, source_remote_prefix, &to_download)?;
 
+    // Issue #1005：旧版 settings.sync.json 可能仍带有设备配色字段。下载完成后、
+    // 生成 manifest 前统一规范化，确保实际文件、manifest 哈希和后续上传内容一致。
+    // 仅处理 App 级同步；其他 scope 没有该文件，helper 会返回 None。
+    if scope == SyncScope::App {
+        let settings_rel = "settings.sync.json";
+        let settings_path = sync_root.join(settings_rel);
+        if let Some(normalized) =
+            crate::settings::normalize_syncable_settings_file(&settings_path)?
+        {
+            let canonical_hash = crate::sync::hash::content_md5(&normalized);
+            if let Some(record) = merged_manifest_files.get_mut(settings_rel) {
+                record.content_hash = canonical_hash.clone();
+                state.known_files.insert(settings_rel.to_string(), canonical_hash);
+                state
+                    .known_files_updated_at
+                    .insert(settings_rel.to_string(), chrono::Utc::now().timestamp_millis());
+                if !to_upload.iter().any(|p| p == settings_rel) {
+                    to_upload.push(settings_rel.to_string());
+                }
+            } else {
+                log::warn!(
+                    "[sync] normalized settings.sync.json without manifest record; \
+                     skip canonical re-upload"
+                );
+            }
+            log::info!("[sync] normalized legacy settings.sync.json device-color fields");
+        }
+    }
+
     // 清除超过 30 天的 delete 墓碑记录。
     let purge_time = now_ms - 30 * 24 * 3600 * 1000;
     let mut manifest_files_vec: Vec<ManifestFileRecord> =

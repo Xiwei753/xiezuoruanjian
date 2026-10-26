@@ -5,6 +5,7 @@ import com.xiwei.sujian.app.theme.model.ThemePaletteRecord
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.Locale
+import kotlin.math.pow
 
 /**
  * Android 本地调色板快照 JSON 编解码（Issue #1005）。
@@ -185,12 +186,57 @@ internal object ThemePaletteRecordJson {
             isHex(scheme.surface) &&
             isHex(scheme.onSurface) &&
             isHex(scheme.surfaceVariant) &&
-            isHex(scheme.onSurfaceVariant)
+            isHex(scheme.onSurfaceVariant) &&
+            isReadablePair(scheme.onSurface, scheme.surface) &&
+            isReadablePair(scheme.onBackground, scheme.background) &&
+            isReadablePair(scheme.onSurfaceVariant, scheme.surface)
 
     private fun isHex(color: String): Boolean {
         val hex = color.removePrefix("#")
         return (hex.length == 6 || hex.length == 8) && hex.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
     }
+
+    /**
+     * 与旧 Core 调色板校验保持一致的 WCAG 对比度检查。
+     * `#AARRGGBB` 与旧实现一样只取后 6 位 RGB。
+     */
+    private fun isReadablePair(
+        foreground: String,
+        background: String,
+    ): Boolean {
+        val foregroundLuminance = relativeLuminance(foreground) ?: return false
+        val backgroundLuminance = relativeLuminance(background) ?: return false
+        val lighter = maxOf(foregroundLuminance, backgroundLuminance)
+        val darker = minOf(foregroundLuminance, backgroundLuminance)
+        return (lighter + 0.05) / (darker + 0.05) >= MIN_READABLE_CONTRAST_RATIO
+    }
+
+    private fun relativeLuminance(color: String): Double? {
+        val hex = color.removePrefix("#")
+        val rgb =
+            when (hex.length) {
+                6 -> hex
+                8 -> hex.substring(2)
+                else -> return null
+            }
+        val red = rgb.substring(0, 2).toIntOrNull(16) ?: return null
+        val green = rgb.substring(2, 4).toIntOrNull(16) ?: return null
+        val blue = rgb.substring(4, 6).toIntOrNull(16) ?: return null
+        return 0.2126 * linearizeChannel(red) +
+            0.7152 * linearizeChannel(green) +
+            0.0722 * linearizeChannel(blue)
+    }
+
+    private fun linearizeChannel(channel: Int): Double {
+        val normalized = channel / 255.0
+        return if (normalized <= 0.04045) {
+            normalized / 12.92
+        } else {
+            ((normalized + 0.055) / 1.055).pow(2.4)
+        }
+    }
+
+    private const val MIN_READABLE_CONTRAST_RATIO = 3.0
 
     /**
      * 手写字段顺序，保证与 Rust serde 生成的紧凑 camelCase JSON 一致；

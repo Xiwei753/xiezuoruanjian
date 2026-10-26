@@ -319,7 +319,7 @@ impl StagingRun {
             Some(group) => read_live_manifest_for_group(&base_root, group),
             None => read_live_manifest(&base_root),
         };
-        let base_manifest = match base_manifest_result {
+        let mut base_manifest = match base_manifest_result {
             Ok(Some(map)) => map,
             Ok(None) => std::collections::HashMap::new(),
             Err(e) => {
@@ -334,7 +334,7 @@ impl StagingRun {
             Some(group) => read_live_manifest_for_group(live_root, group),
             None => read_live_manifest(live_root),
         };
-        let live_manifest = match live_manifest_result {
+        let mut live_manifest = match live_manifest_result {
             Ok(Some(map)) => map,
             Ok(None) => {
                 // 首次导入/旧数据迁移：尚无版本记录，允许按当前文件建立初始版本。
@@ -356,7 +356,7 @@ impl StagingRun {
             Some(group) => read_staging_manifest_for_group(&staging_root, group),
             None => read_staging_manifest(&staging_root),
         };
-        let staging_manifest = match staging_manifest_result {
+        let mut staging_manifest = match staging_manifest_result {
             Ok(Some(map)) => map,
             Ok(None) => std::collections::HashMap::new(),
             Err(e) => {
@@ -365,6 +365,17 @@ impl StagingRun {
                 )));
             }
         };
+
+        // Issue #1005: 旧版本 settings.sync.json 里的设备配色字段必须在进入
+        // 三方/LWW 比较前从实际文件与 manifest 哈希中一起规范化。
+        if matches!(
+            self.app_group.as_ref(),
+            Some(crate::sync::types::AppDataGroup::Global)
+        ) {
+            normalize_syncable_settings_for_plan(&base_root, &mut base_manifest)?;
+            normalize_syncable_settings_for_plan(live_root, &mut live_manifest)?;
+            normalize_syncable_settings_for_plan(&staging_root, &mut staging_manifest)?;
+        }
 
         // 收集 base ∪ staging 的路径全集。
         // base 和 staging 都走 list_commit_candidate_paths，
@@ -965,6 +976,21 @@ impl StagingRun {
     pub fn cleanup(&self) {
         let _ = fs::remove_dir_all(&self.run_root);
     }
+}
+
+/// Issue #1005: 规范化 staging/base/live 中的 settings.sync.json，
+/// 并让对应 manifest 的内容哈希与实际写盘字节保持一致。
+fn normalize_syncable_settings_for_plan(
+    root: &Path,
+    manifest: &mut std::collections::HashMap<String, super::resolve::ManifestRecord>,
+) -> Result<()> {
+    const REL: &str = "settings.sync.json";
+    if let Some(bytes) = crate::settings::normalize_syncable_settings_file(&root.join(REL))? {
+        if let Some(record) = manifest.get_mut(REL) {
+            record.content_hash = crate::sync::hash::content_md5(&bytes);
+        }
+    }
+    Ok(())
 }
 
 fn write_starmap_delete_records_to_manifest(

@@ -51,7 +51,9 @@ Supersedes: None
 - `themeMode`（字符串）[DEPRECATED — 使用 LocalSettings.appearanceMode]
 
 Android Monet / 设备配色只属于当前 Android 设备，不写入 `settings.sync.json`。旧版本写下的
-`monetColor`、`themePalette` / `themePaletteJson` 字段仍可正常读取，但会被忽略，保存时不会写回。
+`monetColor`、`themePalette` / `themePaletteJson` 等字段会在首次读取或进入同步流程时被一次性
+规范化并从磁盘移除，`fontSize` / `themeMode` 等仍有效的字段保留；规范化后的文件才是实际
+同步、计算哈希和写入 manifest 的内容。
 
 ### Android 本地设备配色：`<app_data_root>/local-theme-palettes/<device_id>/<fingerprint>.json`
 仅 Android 使用，不进入 Git 同步、近场同步或任何跨端设置。每个文件是一份完整的

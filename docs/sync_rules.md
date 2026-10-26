@@ -30,6 +30,8 @@ Supersedes: None
 - **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、写作统计事件 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl` 与计时切片 `stats/events/<device_id>/YYYY-MM-DD.sessions.jsonl`（仅通过对应设备的统计数据组同步，见下文「统计设备组」）。
 - **黑名单（绝不参与）**：`作品/`（projects_root）、`日志/`（log_dir）、`导出/`、`备份/`、`settings.local.json`、`recent_edits.json`、`app-meta/sync/config.local.json`、`app-meta/sync/conflicts.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`（旧版单机事件库、迁移标记与冲突诊断文件，只作为一次性迁移输入）、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径，以及 Android 本地设备配色目录 `local-theme-palettes/`。
 
+旧版本 `settings.sync.json` 中的设备配色字段会在本地读取、LWW 合并且下载远端文件后，以及完整同步 staging 规划前统一规范化为 canonical JSON。同步上传、manifest 哈希和实际落盘内容始终对应规范化后的文件；规范化不是设置文件黑名单，字号等有效字段仍照常同步。
+
 旧版本远端可能仍存在 `app/themes/palettes/**`。新客户端会把它当作普通未知历史文件忽略：不下载、不应用、不重新上传，也不生成删除 tombstone；清理远端历史不属于同步行为。Qt、HarmonyOS 与 Windows 不再展示或应用 Android 设备配色。
 
 ### App 数据组与独立发布

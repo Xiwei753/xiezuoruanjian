@@ -419,10 +419,98 @@ pub fn save_local_settings(config_dir: &Path, settings: &LocalSettings) -> Resul
     crate::storage::atomic_write_string(&path, &content)
 }
 
+/// 旧版 `settings.sync.json` 中携带 Android 设备配色的字段。
+///
+/// Issue #1005：这些字段不再属于可同步设置。读取或同步旧文件时必须从实际
+/// 落盘内容中移除，否则原始字节仍会被 Git/近场同步原样传播。
+const LEGACY_DEVICE_COLOR_KEYS: &[&str] = &[
+    "monetColor",
+    "monet_color",
+    "themePalette",
+    "theme_palette",
+    "themePaletteJson",
+    "theme_palette_json",
+];
+
+/// 规范化可同步设置 JSON 内容。
+///
+/// 只有检测到旧设备配色字段（或旧 snake_case 字段别名）时才返回重写后的
+/// canonical 字节；普通新格式文件返回 `None`，避免同步时产生无意义哈希变化。
+pub fn normalize_syncable_settings_content(content: &[u8]) -> Result<Option<Vec<u8>>> {
+    let mut value: serde_json::Value = serde_json::from_slice(content)?;
+    let Some(object) = value.as_object_mut() else {
+        return Ok(None);
+    };
+
+    let mut changed = false;
+    for key in LEGACY_DEVICE_COLOR_KEYS {
+        if object.remove(*key).is_some() {
+            changed = true;
+        }
+    }
+    if let Some(font_size) = object.remove("font_size") {
+        object.entry("fontSize".to_string()).or_insert(font_size);
+        changed = true;
+    }
+    if let Some(theme_mode) = object.remove("theme_mode") {
+        object.entry("themeMode".to_string()).or_insert(theme_mode);
+        changed = true;
+    }
+
+    if !changed {
+        return Ok(None);
+    }
+
+    let settings: SyncableSettings = serde_json::from_value(value)?;
+    Ok(Some(serde_json::to_vec_pretty(&settings)?))
+}
+
+/// 规范化 `settings.sync.json` 文件，必要时原子重写并保留原修改时间。
+///
+/// 保留 mtime 是为了避免“升级清理旧字段”被 LWW 误判成一次用户编辑，
+/// 让旧文件在同步冲突中错误地压过其他设备的真实更新。
+pub fn normalize_syncable_settings_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    let content = match fs::read(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let Some(normalized) = normalize_syncable_settings_content(&content)? else {
+        return Ok(None);
+    };
+
+    let original_modified = fs::metadata(path).and_then(|m| m.modified()).ok();
+    crate::storage::atomic_write_bytes(path, &normalized)?;
+    if let Some(modified) = original_modified {
+        match fs::File::options().write(true).open(path) {
+            Ok(file) => {
+                if let Err(err) = file.set_times(fs::FileTimes::new().set_modified(modified)) {
+                    log::warn!(
+                        "failed to restore mtime for normalized settings {}: {}",
+                        path.display(),
+                        err
+                    );
+                }
+            }
+            Err(err) => {
+                log::warn!(
+                    "failed to open normalized settings {} to restore mtime: {}",
+                    path.display(),
+                    err
+                );
+            }
+        }
+    }
+    Ok(Some(normalized))
+}
+
 pub fn load_syncable_settings(config_dir: &Path) -> Result<SyncableSettings> {
     let path = config_dir.join("settings.sync.json");
     if !path.exists() {
         return Ok(SyncableSettings::default());
+    }
+    if let Some(normalized) = normalize_syncable_settings_file(&path)? {
+        return Ok(serde_json::from_slice(&normalized)?);
     }
     let content = fs::read_to_string(&path)?;
     Ok(serde_json::from_str(&content)?)
