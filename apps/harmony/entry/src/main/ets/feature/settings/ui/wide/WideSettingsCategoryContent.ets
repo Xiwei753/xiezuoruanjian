@@ -903,6 +903,8 @@ export struct WideSettingsCategoryContent {
       .padding({ top: 7, bottom: 7 })
       .alignItems(VerticalAlign.Center)
 
+      }
+
       Row({ space: 10 }) {
         Button($r('app.string.sync_section'))
           .fontSize(13)
@@ -1069,7 +1071,7 @@ export struct WideSettingsCategoryContent {
       GripAdaptiveToggleRow({
         side: this.gripSide,
         isOn: this.viewModel.settings.diagnosticsVerbose,
-        enabled: this.viewModel.settings.diagnosticsEnabled,
+        toggleEnabled: this.viewModel.settings.diagnosticsEnabled,
         onChange: (isOn: boolean): void => {
           this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
             settings.diagnosticsVerbose = isOn

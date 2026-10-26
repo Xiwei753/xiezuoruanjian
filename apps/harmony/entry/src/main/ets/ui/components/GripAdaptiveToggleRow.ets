@@ -10,7 +10,7 @@ const GRIP_TOGGLE_LABEL_GAP_VP: number = 12
 export struct GripAdaptiveToggleRow {
   @Param side: GripLayoutSide = 'right'
   @Param isOn: boolean = false
-  @Param enabled: boolean = true
+  @Param toggleEnabled: boolean = true
   @Param onChange: (isOn: boolean) => void = (_isOn: boolean) => {}
 
   @Builder
@@ -102,7 +102,7 @@ export struct GripAdaptiveToggleRow {
       })
 
       Toggle({ type: ToggleType.Switch, isOn: this.isOn })
-        .enabled(this.enabled)
+        .enabled(this.toggleEnabled)
         .onChange((isOn: boolean) => this.onChange(isOn))
         .offset({ x: this.toggleOffsetX() })
         .onAreaChange((_oldArea: Area, newArea: Area) => this.updateToggleWidth(newArea))

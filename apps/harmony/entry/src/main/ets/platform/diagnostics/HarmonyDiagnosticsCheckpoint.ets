@@ -87,6 +87,18 @@ class CheckpointAdaptiveObserver implements AdaptiveObserver {
   }
 }
 
+class CheckpointBackgroundFinalizerObserver implements LifecycleObserver {
+  private checkpoint: HarmonyDiagnosticsCheckpoint
+
+  constructor(checkpoint: HarmonyDiagnosticsCheckpoint) {
+    this.checkpoint = checkpoint
+  }
+
+  onBackgroundFinalize(): Promise<void> {
+    return this.checkpoint.finalizeBackground()
+  }
+}
+
 export class HarmonyDiagnosticsCheckpoint {
   private static instance: HarmonyDiagnosticsCheckpoint
   private context: common.UIAbilityContext | null = null
@@ -147,9 +159,7 @@ export class HarmonyDiagnosticsCheckpoint {
     this.exporter.setAbilityContext(context)
     this.attachLogWatchers()
     HarmonyDiagnosticEvents.setCheckpointDirtyHandler(() => this.markDirty())
-    this.backgroundFinalizerObserver = {
-      onBackgroundFinalize: (): Promise<void> => this.finalizeBackground()
-    }
+    this.backgroundFinalizerObserver = new CheckpointBackgroundFinalizerObserver(this)
     HarmonyLifecycle.getInstance().addObserver(this.backgroundFinalizerObserver)
 
     // Issue #773 评论 5845033983：订阅三个 Store 的 observer。

@@ -1945,29 +1945,31 @@ export struct SettingsContent {
         .width('100%')
         .margin({ bottom: 16 })
 
-        // Sync actions
-        Row({ space: 12 }) {
-          // Issue #952：只禁手动同步进行中的按钮防连点；后台自动同步不得锁住设置页操作。
-          this.SettingsInlineAction($r('app.string.sync_section'),
-            () => this.requestSync(),
-            !this.isManualSyncInProgress())
+      }
 
-          this.SettingsInlineAction($r('app.string.diagnose'),
-            () => this.viewModel.runSyncDiagnostics(),
-            !this.viewModel.isDiagnosing)
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
+      // Sync actions
+      Row({ space: 12 }) {
+        // Issue #952：只禁手动同步进行中的按钮防连点；后台自动同步不得锁住设置页操作。
+        this.SettingsInlineAction($r('app.string.sync_section'),
+          () => this.requestSync(),
+          !this.isManualSyncInProgress())
 
-        // Issue #926：同步结果带冲突时给出查看/解决入口。
-        if (this.hasConflictEntry()) {
-          this.SyncConflictEntry()
-        }
+        this.SettingsInlineAction($r('app.string.diagnose'),
+          () => this.viewModel.runSyncDiagnostics(),
+          !this.viewModel.isDiagnosing)
+      }
+      .width('100%')
+      .margin({ bottom: 16 })
 
-        // Diagnostics result card
-        if (this.viewModel.syncDiagnostics) {
-          this.DiagnosticsResultCard()
-        }
+      // Issue #926：同步结果带冲突时给出查看/解决入口。
+      if (this.hasConflictEntry()) {
+        this.SyncConflictEntry()
+      }
+
+      // Diagnostics result card
+      if (this.viewModel.syncDiagnostics) {
+        this.DiagnosticsResultCard()
+      }
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
@@ -2126,7 +2128,7 @@ export struct SettingsContent {
         GripAdaptiveToggleRow({
           side: this.gripSide,
           isOn: this.viewModel.settings.diagnosticsVerbose,
-          enabled: this.viewModel.settings.diagnosticsEnabled,
+          toggleEnabled: this.viewModel.settings.diagnosticsEnabled,
           onChange: (isOn: boolean): void => {
             this.viewModel.updateSettings((s: LocalSettings): LocalSettings => {
               s.diagnosticsVerbose = isOn

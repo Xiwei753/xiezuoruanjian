@@ -133,8 +133,9 @@ export class HarmonyDiagnosticsArchive {
     }
     if (Array.isArray(value)) {
       const safeItems: Object[] = []
-      for (const item of value) {
-        safeItems.push(HarmonyDiagnosticsArchive.sanitizeJsonValue(item as Object))
+      const items: Object[] = value as Object[]
+      for (const item of items) {
+        safeItems.push(HarmonyDiagnosticsArchive.sanitizeJsonValue(item))
       }
       return safeItems as Object
     }
