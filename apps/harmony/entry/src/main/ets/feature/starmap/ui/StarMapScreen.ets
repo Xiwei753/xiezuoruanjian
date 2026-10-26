@@ -671,10 +671,11 @@ export struct StarMapScreen {
     if (this.isWideLayout()) {
       Row() {
         this.StarMapCanvas()
-          .layoutWeight(1)
 
         if (this.starMapToolPanelOpen) {
-          this.StarMapToolPanel()
+          Column() {
+            this.StarMapToolPanel()
+          }
             .width(320)
             .height('100%')
         }
