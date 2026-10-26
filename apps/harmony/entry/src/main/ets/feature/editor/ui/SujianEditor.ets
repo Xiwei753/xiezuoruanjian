@@ -137,9 +137,9 @@ export struct SujianEditor {
   @Prop @Watch('onPresentationUpdateChanged') presentationUpdate: EditorPresentationUpdate | null = null
   @Prop @Watch('onCorrectionSuggestionsChanged') correctionSuggestions: MappedCorrectionSuggestion[] = []
   @Prop @Watch('onAnnotationRangesChanged') annotationRanges: AnnotationRangeDto[] = []
-  @Prop hasHyperlinkAt: (utf16Offset: number, revision: number, text: string) => boolean =
+  hasHyperlinkAt: (utf16Offset: number, revision: number, text: string) => boolean =
     (_utf16Offset: number, _revision: number, _text: string): boolean => false
-  @Prop onHyperlinkTap: (utf16Offset: number, revision: number, text: string) => boolean =
+  onHyperlinkTap: (utf16Offset: number, revision: number, text: string) => boolean =
     (_utf16Offset: number, _revision: number, _text: string): boolean => false
   // Issue #879：运动策略，由父组件（WritingScreen）从 LocalSettings 构造后传入。
   motionPolicy: EditorMotionPolicy = new EditorMotionPolicy(

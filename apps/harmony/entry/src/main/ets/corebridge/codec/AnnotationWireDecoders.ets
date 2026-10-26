@@ -1,9 +1,11 @@
 import { DecodeResult } from './CoreWireDecoders'
 import {
-  AnnotationAutoMatchDto, AnnotationLinkResolutionDto, AnnotationNamedEntryDto,
+  AnnotationAutoMatchDto, AnnotationLinkResolutionDto, AnnotationNamedEntryDto, AnnotationObjectKind,
   AnnotationObjectLinkDto, AnnotationObjectRefDto, AnnotationTagBindingDto,
   AnnotationTagDto, AnnotationTargetDto, AnnotationTextAnchorDto, ChapterAnnotationsDto
 } from '../dto/AnnotationDtos'
+
+type AnnotationLinkResolutionState = 'exists' | 'missing' | 'projectNotDownloaded' | 'externalUrl'
 
 function success<T>(value: T): DecodeResult<T> { return { ok: true, value: value } }
 function failure<T>(message: string): DecodeResult<T> { return { ok: false, error: message } }
@@ -76,7 +78,10 @@ export function decodeAnnotationObjectRef(value: Object): DecodeResult<Annotatio
   if (!['project', 'volume', 'chapter', 'textAnchor', 'starMap', 'starMapNode', 'starMapEmbed', 'namedEntry'].includes(kind)) {
     return failure('unknown object kind')
   }
-  return success({ kind: kind as AnnotationObjectRefDto['kind'], projectId: projectId, objectId: objectId })
+  const decoded: AnnotationObjectRefDto = {
+    kind: kind as AnnotationObjectKind, projectId: projectId, objectId: objectId
+  }
+  return success(decoded)
 }
 
 export function decodeAnnotationTarget(value: Object): DecodeResult<AnnotationTargetDto> {
@@ -91,7 +96,8 @@ export function decodeAnnotationTarget(value: Object): DecodeResult<AnnotationTa
   }
   const externalUrl = nullableString(rec, 'externalUrl')
   if (externalUrl === undefined) return failure('externalUrl must be a string or null')
-  return success({ objectRef: objectRef, externalUrl: externalUrl })
+  const decoded: AnnotationTargetDto = { objectRef: objectRef, externalUrl: externalUrl }
+  return success(decoded)
 }
 
 export function decodeAnnotationTag(value: Object): DecodeResult<AnnotationTagDto> {
@@ -103,8 +109,11 @@ export function decodeAnnotationTag(value: Object): DecodeResult<AnnotationTagDt
   if (tagId === null || projectId === null || name === null || updatedAtMs === null || color === undefined || deletedAtMs === undefined) {
     return failure('missing tag fields')
   }
-  return success({ tagId: tagId, projectId: projectId, name: name, color: color,
-    updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs })
+  const decoded: AnnotationTagDto = {
+    tagId: tagId, projectId: projectId, name: name, color: color,
+    updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs
+  }
+  return success(decoded)
 }
 
 export function decodeAnnotationTagBinding(value: Object): DecodeResult<AnnotationTagBindingDto> {
@@ -118,8 +127,11 @@ export function decodeAnnotationTagBinding(value: Object): DecodeResult<Annotati
   }
   const target = decodeAnnotationObjectRef(targetValue)
   if (!target.ok || target.value === undefined) return failure(`target: ${target.error}`)
-  return success({ bindingId: bindingId, projectId: projectId, tagId: tagId,
-    updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs, target: target.value })
+  const decoded: AnnotationTagBindingDto = {
+    bindingId: bindingId, projectId: projectId, tagId: tagId,
+    updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs, target: target.value
+  }
+  return success(decoded)
 }
 
 export function decodeAnnotationTextAnchor(value: Object): DecodeResult<AnnotationTextAnchorDto> {
@@ -130,8 +142,11 @@ export function decodeAnnotationTextAnchor(value: Object): DecodeResult<Annotati
   const updatedAtMs = number(rec, 'updatedAtMs'); const deletedAtMs = nullableNumber(rec, 'deletedAtMs')
   if (anchorId === null || projectId === null || chapterId === null || startByte === null || endByte === null ||
       textRevision === null || updatedAtMs === null || deletedAtMs === undefined) return failure('missing anchor fields')
-  return success({ anchorId: anchorId, projectId: projectId, chapterId: chapterId, startByte: startByte,
-    endByte: endByte, textRevision: textRevision, updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs })
+  const decoded: AnnotationTextAnchorDto = {
+    anchorId: anchorId, projectId: projectId, chapterId: chapterId, startByte: startByte,
+    endByte: endByte, textRevision: textRevision, updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs
+  }
+  return success(decoded)
 }
 
 export function decodeAnnotationNamedEntry(value: Object): DecodeResult<AnnotationNamedEntryDto> {
@@ -143,9 +158,12 @@ export function decodeAnnotationNamedEntry(value: Object): DecodeResult<Annotati
   const deletedAtMs = nullableNumber(rec, 'deletedAtMs')
   if (entryId === null || projectId === null || canonicalName === null || aliases === null || confirmedMisspellings === null ||
       autoLinkEnabled === null || updatedAtMs === null || deletedAtMs === undefined) return failure('missing named entry fields')
-  return success({ entryId: entryId, projectId: projectId, canonicalName: canonicalName, aliases: aliases,
+  const decoded: AnnotationNamedEntryDto = {
+    entryId: entryId, projectId: projectId, canonicalName: canonicalName, aliases: aliases,
     confirmedMisspellings: confirmedMisspellings, autoLinkEnabled: autoLinkEnabled,
-    updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs })
+    updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs
+  }
+  return success(decoded)
 }
 
 export function decodeAnnotationLink(value: Object): DecodeResult<AnnotationObjectLinkDto> {
@@ -159,8 +177,11 @@ export function decodeAnnotationLink(value: Object): DecodeResult<AnnotationObje
   }
   const source = decodeAnnotationObjectRef(sourceValue); const target = decodeAnnotationTarget(targetValue)
   if (!source.ok || source.value === undefined || !target.ok || target.value === undefined) return failure('invalid link endpoints')
-  return success({ linkId: linkId, origin: 'manual', updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs,
-    source: source.value, target: target.value })
+  const decoded: AnnotationObjectLinkDto = {
+    linkId: linkId, origin: 'manual', updatedAtMs: updatedAtMs, deletedAtMs: deletedAtMs,
+    source: source.value, target: target.value
+  }
+  return success(decoded)
 }
 
 export function decodeAnnotationAutoMatch(value: Object): DecodeResult<AnnotationAutoMatchDto> {
@@ -169,7 +190,10 @@ export function decodeAnnotationAutoMatch(value: Object): DecodeResult<Annotatio
   const startByte = number(rec, 'startByte'); const endByte = number(rec, 'endByte'); const matchedText = text(rec, 'matchedText')
   const entryIds = strings(rec, 'entryIds'); const candidates = array(rec, 'candidates', decodeAnnotationObjectRef)
   if (startByte === null || endByte === null || matchedText === null || entryIds === null || candidates === null) return failure('missing auto match fields')
-  return success({ startByte: startByte, endByte: endByte, matchedText: matchedText, entryIds: entryIds, candidates: candidates })
+  const decoded: AnnotationAutoMatchDto = {
+    startByte: startByte, endByte: endByte, matchedText: matchedText, entryIds: entryIds, candidates: candidates
+  }
+  return success(decoded)
 }
 
 export function decodeChapterAnnotations(value: Object): DecodeResult<ChapterAnnotationsDto> {
@@ -185,8 +209,11 @@ export function decodeChapterAnnotations(value: Object): DecodeResult<ChapterAnn
       anchors === null || bindings === null || links === null || autoMatches === null) {
     return failure('missing chapter annotation fields')
   }
-  return success({ projectId: projectId, chapterId: chapterId, textRevision: textRevision, baselineId: baselineId,
-    anchors: anchors, bindings: bindings, links: links, autoMatches: autoMatches })
+  const decoded: ChapterAnnotationsDto = {
+    projectId: projectId, chapterId: chapterId, textRevision: textRevision, baselineId: baselineId,
+    anchors: anchors, bindings: bindings, links: links, autoMatches: autoMatches
+  }
+  return success(decoded)
 }
 
 export function decodeAnnotationLinkResolution(value: Object): DecodeResult<AnnotationLinkResolutionDto> {
@@ -198,5 +225,8 @@ export function decodeAnnotationLinkResolution(value: Object): DecodeResult<Anno
   }
   const target = decodeAnnotationTarget(targetValue)
   if (!target.ok || target.value === undefined) return failure(`target: ${target.error}`)
-  return success({ state: state as AnnotationLinkResolutionDto['state'], target: target.value })
+  const decoded: AnnotationLinkResolutionDto = {
+    state: state as AnnotationLinkResolutionState, target: target.value
+  }
+  return success(decoded)
 }

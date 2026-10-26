@@ -15,7 +15,7 @@ interface AnnotationLinkResolutionItem {
 export struct AnnotationPanel {
   @Prop projectId: string = ''
   @Prop @Watch('onTargetChanged') target: AnnotationObjectRefDto = { kind: 'chapter', projectId: '', objectId: '' }
-  @Prop onChanged: () => void = () => {}
+  onChanged: () => void = () => {}
 
   @State private tags: AnnotationTagDto[] = []
   @State private bindings: AnnotationTagBindingDto[] = []
@@ -50,13 +50,18 @@ export struct AnnotationPanel {
 
   private async refresh(): Promise<void> {
     if (this.projectId.length === 0 || this.target.projectId.length === 0) return
-    const [tagsResult, entriesResult, bindingsResult, linksResult, backlinksResult] = await Promise.all([
+    const results = await Promise.all([
       this.bridge.listTags(this.projectId),
       this.bridge.listNamedEntries(this.projectId),
       this.bridge.listBindingsForTarget(this.projectId, this.target),
       this.bridge.listLinksForSource(this.target),
       this.bridge.findBacklinks(this.objectTarget(this.target))
     ])
+    const tagsResult = results[0]
+    const entriesResult = results[1]
+    const bindingsResult = results[2]
+    const linksResult = results[3]
+    const backlinksResult = results[4]
     if (tagsResult.success && tagsResult.data !== undefined) this.tags = tagsResult.data
     if (entriesResult.success && entriesResult.data !== undefined) this.namedEntries = entriesResult.data
     if (bindingsResult.success && bindingsResult.data !== undefined) this.bindings = bindingsResult.data

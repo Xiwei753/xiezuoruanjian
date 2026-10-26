@@ -1,4 +1,4 @@
-import { Routes, StarMapRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
+import { Routes, StarMapRouteParams, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import { WideLayoutMode } from '../../../app/navigation/wide/WideLayoutMode'
 import hilog from '@ohos.hilog'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
@@ -67,7 +67,8 @@ import { CorrectionSuggestionsPanel } from '../correction/CorrectionSuggestionsP
 import { CorrectionResourceImporter } from '../correction/CorrectionResourceImporter'
 import { NativeAnnotationBridge } from '../../../corebridge/native/NativeAnnotationBridge'
 import {
-  AnnotationObjectRefDto, AnnotationRangeDto, AnnotationTargetDto, AnnotationTextAnchorDto, ChapterAnnotationsDto
+  AnnotationEditDto, AnnotationObjectRefDto, AnnotationRangeDto, AnnotationTargetDto, AnnotationTextAnchorDto,
+  ChapterAnnotationsDto
 } from '../../../corebridge/dto/AnnotationDtos'
 import { AnnotationPanel } from '../annotation/AnnotationPanel'
 
@@ -92,6 +93,11 @@ const WRITING_SPEED_WINDOW_SECONDS: number = 60
 interface HyperlinkChoice {
   target: AnnotationTargetDto
   label: string
+}
+
+interface HyperlinkChoiceButton {
+  value: string
+  action: () => void
 }
 
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
@@ -1864,7 +1870,7 @@ export struct WritingScreen {
       duplicateLabels.set(choice.label, (duplicateLabels.get(choice.label) ?? 0) + 1)
     }
     const labelIndex = new Map<string, number>()
-    const buttons = choices.map((choice: HyperlinkChoice) => {
+    const buttons: HyperlinkChoiceButton[] = choices.map((choice: HyperlinkChoice): HyperlinkChoiceButton => {
       const duplicateCount: number = duplicateLabels.get(choice.label) ?? 0
       let label: string = choice.label
       if (duplicateCount > 1) {
@@ -1872,7 +1878,11 @@ export struct WritingScreen {
         labelIndex.set(choice.label, nextIndex)
         label = `${label}（候选 ${nextIndex}）`
       }
-      return { value: label, action: (): void => { void this.openHyperlinkTarget(choice.target) } }
+      const button: HyperlinkChoiceButton = {
+        value: label,
+        action: (): void => { void this.openHyperlinkTarget(choice.target) }
+      }
+      return button
     })
     if (targets.length > 1) {
       let message: string = '找到多个链接目标，请选择要打开的对象。'
@@ -2016,9 +2026,21 @@ export struct WritingScreen {
       const projectName: string = tree.success && tree.data !== undefined
         ? tree.data.project.title
         : (ref.projectId === this.projectId ? this.projectTitle : ref.projectId)
-      const param = ref.kind === 'volume'
-        ? { projectId: ref.projectId, projectName: projectName, focusVolumeId: ref.objectId }
-        : { projectId: ref.projectId, projectName: projectName }
+      let param: WorkspaceRouteParams
+      if (ref.kind === 'volume') {
+        const volumeParam: WorkspaceRouteParams = {
+          projectId: ref.projectId,
+          projectName: projectName,
+          focusVolumeId: ref.objectId
+        }
+        param = volumeParam
+      } else {
+        const projectParam: WorkspaceRouteParams = {
+          projectId: ref.projectId,
+          projectName: projectName
+        }
+        param = projectParam
+      }
       this.navPathStack.pushPath({ name: Routes.Workspace, param: param })
       return
     }
@@ -2079,14 +2101,18 @@ export struct WritingScreen {
         return
       }
       const baselineId: string = this.annotationBaselineId
-      const result = await this.annotationBridge.applyAnnotationEdits(
-        projectId, chapterId, baselineId, edit.baseRevision, edit.newRevision, edit.cause,
-        edit.displayPatches.map((patch) => ({
+      const annotationEdits: AnnotationEditDto[] = edit.displayPatches.map((patch) => {
+        const annotationEdit: AnnotationEditDto = {
           oldStartByte: patch.replaceByteStart,
           oldEndByte: patch.replaceByteEndExclusive,
           newStartByte: patch.insertedByteStart,
           newEndByte: patch.insertedByteEndExclusive
-        }))
+        }
+        return annotationEdit
+      })
+      const result = await this.annotationBridge.applyAnnotationEdits(
+        projectId, chapterId, baselineId, edit.baseRevision, edit.newRevision, edit.cause,
+        annotationEdits
       )
       if (!result.success) {
         this.annotationErrorMessage = result.userMessage ?? '选区标注位置同步失败'
