@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -263,11 +263,31 @@ impl AnnotationStore {
             }
         }
 
-        let active_anchor_ids = committed_anchors
+        let changed_to_deleted = committed_anchors
             .iter()
-            .filter(|anchor| anchor.deleted_at_ms.is_none())
+            .filter(|anchor| anchor.deleted_at_ms.is_some())
             .map(|anchor| anchor.anchor_id.as_str())
-            .collect::<std::collections::HashSet<_>>();
+            .collect::<HashSet<_>>();
+        let chapter_ids = original_anchors
+            .iter()
+            .chain(current_anchors)
+            .filter(|anchor| anchor.project_id == self.project_id)
+            .map(|anchor| anchor.chapter_id.as_str())
+            .collect::<HashSet<_>>();
+        let mut active_anchor_ids = current_anchors
+            .iter()
+            .filter(|anchor| anchor.project_id == self.project_id && anchor.deleted_at_ms.is_none())
+            .map(|anchor| anchor.anchor_id.clone())
+            .collect::<HashSet<_>>();
+        for chapter_id in chapter_ids {
+            for anchor in self.list_text_anchors_for_chapter(chapter_id)? {
+                if anchor.deleted_at_ms.is_none()
+                    && !changed_to_deleted.contains(anchor.anchor_id.as_str())
+                {
+                    active_anchor_ids.insert(anchor.anchor_id);
+                }
+            }
+        }
         for binding in pending_bindings {
             let ObjectRef::TextAnchor {
                 project_id,
@@ -278,7 +298,7 @@ impl AnnotationStore {
             };
             if binding.project_id != self.project_id
                 || project_id != &self.project_id
-                || !active_anchor_ids.contains(object_id.as_str())
+                || !active_anchor_ids.contains(object_id)
             {
                 continue;
             }
@@ -293,7 +313,7 @@ impl AnnotationStore {
             else {
                 continue;
             };
-            if project_id != &self.project_id || !active_anchor_ids.contains(object_id.as_str()) {
+            if project_id != &self.project_id || !active_anchor_ids.contains(object_id) {
                 continue;
             }
             let path = self.relative_record_path("links", &link.link_id)?;

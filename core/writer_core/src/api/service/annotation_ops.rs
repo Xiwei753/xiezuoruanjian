@@ -890,21 +890,109 @@ impl WriterCoreApi {
             return Err(invalid_annotation("link source does not exist"));
         }
         let target = link_target_from_dto(target)?;
-        {
+        let now = chrono::Utc::now().timestamp_millis();
+        let pending_update = {
             let mut baselines = self
                 .annotation_edit_baselines
                 .lock()
                 .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
-            if let Some(link) = baselines
+            let origin_baseline_id = baselines
+                .iter()
+                .find(|(_, baseline)| {
+                    baseline.project_id == project_id
+                        && baseline.pending_links.contains_key(&link_id)
+                })
+                .map(|(id, _)| id.clone());
+            if let Some(origin_baseline_id) = origin_baseline_id {
+                let Some(mut link) = baselines
+                    .get_mut(&origin_baseline_id)
+                    .and_then(|baseline| baseline.pending_links.remove(&link_id))
+                else {
+                    return Err(invalid_annotation("pending link changed during update"));
+                };
+                link.source = source.clone();
+                link.target = target.clone();
+
+                let destination_baseline_id = match &link.source {
+                    ObjectRef::TextAnchor {
+                        project_id: source_project_id,
+                        object_id,
+                    } if source_project_id == &project_id => baselines
+                        .iter()
+                        .filter(|(_, baseline)| baseline.project_id == project_id)
+                        .filter(|(_, baseline)| {
+                            baseline.anchors.iter().any(|anchor| {
+                                anchor.anchor_id == *object_id && anchor.deleted_at_ms.is_none()
+                            })
+                        })
+                        .max_by_key(|(_, baseline)| baseline.updated_at_ms)
+                        .map(|(id, _)| id.clone()),
+                    _ => None,
+                };
+
+                if let Some(destination_baseline_id) = destination_baseline_id {
+                    let Some(destination) = baselines.get(&destination_baseline_id) else {
+                        return Err(invalid_annotation("destination annotation session expired"));
+                    };
+                    let latest_session_update = baselines
+                        .values()
+                        .filter(|baseline| {
+                            baseline.project_id == destination.project_id
+                                && baseline.chapter_id == destination.chapter_id
+                        })
+                        .map(|baseline| baseline.updated_at_ms)
+                        .max()
+                        .unwrap_or(now);
+                    link.updated_at_ms = now.max(latest_session_update.saturating_add(1));
+                    let Some(destination) = baselines.get_mut(&destination_baseline_id) else {
+                        return Err(invalid_annotation("destination annotation session expired"));
+                    };
+                    destination
+                        .pending_links
+                        .insert(link_id.clone(), link.clone());
+                    destination.updated_at_ms = link.updated_at_ms;
+                    Some((Some(destination_baseline_id), link))
+                } else {
+                    // The replacement source is already durable and has no
+                    // active chapter edit session. Persist it directly; keep
+                    // the pending copy until the write succeeds.
+                    link.updated_at_ms = now.max(link.updated_at_ms.saturating_add(1));
+                    let Some(origin_baseline) = baselines.get_mut(&origin_baseline_id) else {
+                        return Err(invalid_annotation("origin annotation session expired"));
+                    };
+                    origin_baseline
+                        .pending_links
+                        .insert(link_id.clone(), link.clone());
+                    Some((None, link))
+                }
+            } else {
+                None
+            }
+        };
+        if let Some((Some(_destination_baseline_id), link)) = pending_update.as_ref() {
+            return Ok(link_to_dto(link.clone()));
+        }
+        if let Some((None, link)) = pending_update {
+            let store = self.annotation_store(&project_id)?;
+            let paths = store
+                .apply_mutation(AnnotationMutation::UpsertLink(link.clone()))
+                .map_err(WriterError::from)?;
+            self.finish_annotation_write(&project_id, paths, "update_object_link");
+            let mut baselines = self
+                .annotation_edit_baselines
+                .lock()
+                .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+            for baseline in baselines
                 .values_mut()
                 .filter(|baseline| baseline.project_id == project_id)
-                .find_map(|baseline| baseline.pending_links.get_mut(&link_id))
             {
-                link.source = source;
-                link.target = target;
-                link.updated_at_ms = chrono::Utc::now().timestamp_millis();
-                return Ok(link_to_dto(link.clone()));
+                if baseline.pending_links.get(&link_id) == Some(&link) {
+                    baseline.pending_links.remove(&link_id);
+                    baseline.updated_at_ms = now;
+                    break;
+                }
             }
+            return Ok(link_to_dto(link));
         }
         let store = self.annotation_store(&project_id)?;
         let mut link = store
@@ -991,9 +1079,30 @@ impl WriterCoreApi {
         let LinkTarget::Object(target) = link_target_from_dto(target)? else {
             return Ok(Vec::new());
         };
-        find_annotation_backlinks(&self.projects_root, &target)
-            .map(|values| values.into_iter().map(link_to_dto).collect())
-            .map_err(Into::into)
+        let mut links_by_id = find_annotation_backlinks(&self.projects_root, &target)
+            .map_err(WriterError::from)?
+            .into_iter()
+            .map(|link| (link.link_id.clone(), link))
+            .collect::<HashMap<_, _>>();
+        let baselines = self
+            .annotation_edit_baselines
+            .lock()
+            .map_err(|_| invalid_annotation("annotation edit baseline lock poisoned"))?;
+        for link in baselines
+            .values()
+            .flat_map(|baseline| baseline.pending_links.values())
+        {
+            // A pending update replaces the disk version by ID, including
+            // when it has moved away from this target. Active draft links
+            // appear immediately in backlinks before their chapter is saved.
+            links_by_id.remove(&link.link_id);
+            if link.deleted_at_ms.is_none() && link.target == LinkTarget::Object(target.clone()) {
+                links_by_id.insert(link.link_id.clone(), link.clone());
+            }
+        }
+        let mut links = links_by_id.into_values().collect::<Vec<_>>();
+        links.sort_by(|left, right| left.link_id.cmp(&right.link_id));
+        Ok(links.into_iter().map(link_to_dto).collect())
     }
 
     pub fn get_text_anchor(
@@ -1860,18 +1969,20 @@ fn annotation_baseline_is_dirty(
     baseline: &AnnotationEditBaseline,
     chapter_text_hash: &str,
 ) -> bool {
-    baseline.anchors.iter().any(|anchor| {
-        if let Some(original) = baseline
-            .original_anchors
-            .iter()
-            .find(|original| original.anchor_id == anchor.anchor_id)
-        {
-            original != anchor
-                || (anchor.deleted_at_ms.is_none() && anchor.text_hash != chapter_text_hash)
-        } else {
-            anchor.deleted_at_ms.is_none()
-        }
-    })
+    !baseline.pending_bindings.is_empty()
+        || !baseline.pending_links.is_empty()
+        || baseline.anchors.iter().any(|anchor| {
+            if let Some(original) = baseline
+                .original_anchors
+                .iter()
+                .find(|original| original.anchor_id == anchor.anchor_id)
+            {
+                original != anchor
+                    || (anchor.deleted_at_ms.is_none() && anchor.text_hash != chapter_text_hash)
+            } else {
+                anchor.deleted_at_ms.is_none()
+            }
+        })
 }
 
 fn map_session_anchors(
