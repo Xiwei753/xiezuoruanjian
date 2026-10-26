@@ -273,13 +273,17 @@ export struct StatsScreen {
 
     const changedViewport: boolean = requestedYears.length !== this.periodHeatmapVisibleYears.length ||
       requestedYears.some((year: number, index: number) => year !== this.periodHeatmapVisibleYears[index])
-    if (!changedViewport && !forceReload && requestedYears.every((year: number) => this.periodHeatmapLoadedYears.includes(year))) {
+    if (!changedViewport && !forceReload) {
       return
     }
 
     this.periodHeatmapVisibleYears = requestedYears
-    if (changedViewport || forceReload) {
+    if (forceReload) {
       this.periodHeatmapLoadedYears = this.periodHeatmapLoadedYears.filter((year: number) => !requestedYears.includes(year))
+      this.periodHeatmapDays = this.periodHeatmapDays.filter((day: WritingStatsHeatmapDay) =>
+        !requestedYears.includes(Number(day.date.substring(0, 4))))
+    } else if (changedViewport) {
+      this.periodHeatmapLoadedYears = this.periodHeatmapLoadedYears.filter((year: number) => requestedYears.includes(year))
       this.periodHeatmapDays = this.periodHeatmapDays.filter((day: WritingStatsHeatmapDay) =>
         requestedYears.includes(Number(day.date.substring(0, 4))))
     }
@@ -307,8 +311,10 @@ export struct StatsScreen {
       if (result.success && result.data !== undefined) {
         const visibleDays: WritingStatsHeatmapDay[] = result.data.days.filter((day: WritingStatsHeatmapDay) =>
           day.date >= startDate && day.date <= endDate)
-        this.periodHeatmapDays = this.periodHeatmapDays.concat(visibleDays)
-        this.periodHeatmapLoadedYears = this.periodHeatmapLoadedYears.concat([year])
+        this.mergePeriodHeatmapDays(visibleDays)
+        if (!this.periodHeatmapLoadedYears.includes(year)) {
+          this.periodHeatmapLoadedYears = this.periodHeatmapLoadedYears.concat([year])
+        }
       } else if (this.periodHeatmapError.length === 0) {
         this.periodHeatmapError = result.userMessage !== undefined && result.userMessage.length > 0
           ? result.userMessage
@@ -318,6 +324,20 @@ export struct StatsScreen {
     if (requestSeq === this.periodHeatmapRequestSeq && this.periodHeatmapRangeKey === rangeKey) {
       this.periodHeatmapLoading = false
     }
+  }
+
+  private mergePeriodHeatmapDays(days: WritingStatsHeatmapDay[]): void {
+    const merged: WritingStatsHeatmapDay[] = this.periodHeatmapDays.slice()
+    for (const day of days) {
+      const existingIndex: number = merged.findIndex((existing: WritingStatsHeatmapDay) => existing.date === day.date)
+      if (existingIndex >= 0) {
+        merged[existingIndex] = day
+      } else {
+        merged.push(day)
+      }
+    }
+    merged.sort((left: WritingStatsHeatmapDay, right: WritingStatsHeatmapDay) => left.date.localeCompare(right.date))
+    this.periodHeatmapDays = merged
   }
 
   /** 时段日历失败后的原地重试，不重新请求 Explorer 或全年日历。 */

@@ -325,18 +325,23 @@ export struct WidePeriodHeatmap {
     }, 0)
   }
 
+  private currentScrollOffsetVp(): number {
+    const offset = this.scroller.currentOffset()
+    return offset !== undefined ? Math.max(0, offset.xOffset) : 0
+  }
+
   private applyInitialLayout(): void {
     if (!this.validRange()) {
       return
     }
     const range: string = this.rangeKey()
     if (this.lastScrolledRange === range && Math.abs(this.lastScrolledWidthVp - this.scrollViewportWidthVp) < 0.5) {
-      this.reportVisibleYears(0)
+      this.reportVisibleYears(this.isLongRange() ? this.currentScrollOffsetVp() : 0)
       return
     }
     if (this.isLongRange() && this.scrollViewportWidthVp > 0) {
       this.scroller.scrollEdge(Edge.End)
-      this.reportVisibleYears(Math.max(0, this.longGridWidthVp() - this.scrollViewportWidthVp))
+      this.reportVisibleYears(this.currentScrollOffsetVp())
     } else {
       this.reportVisibleYears(0)
     }
@@ -568,8 +573,8 @@ export struct WidePeriodHeatmap {
       .onAppear(() => {
         this.scheduleInitialLayout()
       })
-      .onScroll((xOffset: number, _yOffset: number): void => {
-        this.reportVisibleYears(xOffset)
+      .onScroll((_xOffset: number, _yOffset: number): void => {
+        this.reportVisibleYears(this.currentScrollOffsetVp())
       })
       .onAreaChange((_oldArea: Area, newArea: Area): void => {
         const nextWidth: number = Number(newArea.width)
