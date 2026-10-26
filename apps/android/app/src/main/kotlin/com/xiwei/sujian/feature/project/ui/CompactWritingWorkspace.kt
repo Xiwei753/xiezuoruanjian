@@ -13,6 +13,7 @@ import com.xiwei.sujian.core.designsystem.component.SujianIconButton
 import com.xiwei.sujian.core.designsystem.component.SujianTopAppBar
 import com.xiwei.sujian.core.designsystem.icon.SujianIcons
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
+import com.xiwei.sujian.feature.editor.presentation.AnnotationObjectRef
 
 /**
  * #641 评论 问题6：窄屏（SinglePane）写作工作区 — 完整写作顶栏 + 唯一 SujianEditorHost。
@@ -39,6 +40,7 @@ internal fun CompactWritingWorkspace(
     onSync: () -> Unit,
     onSettings: () -> Unit,
     onChapterSwitchFailed: ((String, String?, String?, String) -> Unit)?,
+    onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean = { _, _ -> false },
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -63,6 +65,7 @@ internal fun CompactWritingWorkspace(
                         .weight(1f)
                         .fillMaxWidth(),
                 onChapterSwitchFailed = onChapterSwitchFailed,
+                onAnnotationTargetOpen = onAnnotationTargetOpen,
             )
         }
     }

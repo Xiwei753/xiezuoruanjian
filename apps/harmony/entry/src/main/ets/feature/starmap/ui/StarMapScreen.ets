@@ -1,4 +1,5 @@
 import { Routes, StarMapRouteParams } from '../../../app/navigation/Routes'
+import { WideLayoutMode, WideLayoutState } from '../../../app/navigation/wide/WideLayoutMode'
 import hilog from '@ohos.hilog'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { StarMapGraph, StarMapPathSegment, StarMapPoint, StarMapTargetPath } from '../../../corebridge/dto/StarMapDtos'
@@ -35,6 +36,8 @@ import { StarMapScene } from './StarMapScene'
 import { CompactPageState, CompactPageStateKind } from '../../../ui/components/CompactPageState'
 import { AnnotationObjectRefDto } from '../../../corebridge/dto/AnnotationDtos'
 import { AnnotationPanel } from '../../editor/annotation/AnnotationPanel'
+import { WideStarMapToolRail } from './wide/WideStarMapHome'
+import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
 /**
  * 工具栏每次点击的**倍数**（#821）。
@@ -71,8 +74,9 @@ export struct StarMapScreen {
   @State isLoading: boolean = true
   @State errorMessage: string = ''
   @State private annotationProjectId: string = ''
-  @State private annotationPanelOpen: boolean = false
-  @State private annotationTarget: AnnotationObjectRefDto | null = null
+  @State private compactAnnotationPanelOpen: boolean = false
+  @State private starMapToolPanelOpen: boolean = false
+  @State private selectedStarMapTool: string = 'ai'
 
   // 全局视角相机（#818）：整棵递归星图只有这一台相机。
   // 工具栏 +/- 和画布双指捏合改的都是它；节点、子星图、嵌套子星图都只是相机里的内容，
@@ -356,18 +360,33 @@ export struct StarMapScreen {
     }
   }
 
-  private openSelectedStarMapAnnotation(): void {
+  private isWideLayout(): boolean {
+    return WideLayoutState.getInstance().current() === WideLayoutMode.Wide
+  }
+
+  private selectStarMapTool(key: string): void {
+    this.selectedStarMapTool = key
+    this.starMapToolPanelOpen = true
+  }
+
+  private toggleStarMapToolPanel(): void {
+    this.starMapToolPanelOpen = !this.starMapToolPanelOpen
+  }
+
+  private selectedStarMapAnnotationTarget(): AnnotationObjectRefDto {
     const selection = this.selectionState.getSelection()
-    if (this.annotationProjectId.length === 0 || selection.itemId.length === 0 ||
-        (selection.kind !== 'node' && selection.kind !== 'embed')) {
-      return
+    if (selection.itemId.length > 0 && (selection.kind === 'node' || selection.kind === 'embed')) {
+      return {
+        kind: selection.kind === 'node' ? 'starMapNode' : 'starMapEmbed',
+        projectId: this.annotationProjectId,
+        objectId: selection.itemId
+      }
     }
-    this.annotationTarget = {
-      kind: selection.kind === 'node' ? 'starMapNode' : 'starMapEmbed',
+    return {
+      kind: 'project',
       projectId: this.annotationProjectId,
-      objectId: selection.itemId
+      objectId: this.annotationProjectId
     }
-    this.annotationPanelOpen = true
   }
 
   /**
@@ -649,6 +668,39 @@ export struct StarMapScreen {
 
   @Builder
   StarMapContent() {
+    if (this.isWideLayout()) {
+      Row() {
+        this.StarMapCanvas()
+          .layoutWeight(1)
+
+        if (this.starMapToolPanelOpen) {
+          this.StarMapToolPanel()
+            .width(320)
+            .height('100%')
+        }
+
+        WideStarMapToolRail({
+          selectedToolKey: this.selectedStarMapTool,
+          panelVisible: this.starMapToolPanelOpen,
+          onSelectTool: (key: string): void => {
+            this.selectStarMapTool(key)
+          },
+          onTogglePanel: (): void => {
+            this.toggleStarMapToolPanel()
+          }
+        })
+          .width(56)
+          .height('100%')
+      }
+      .width('100%')
+      .height('100%')
+    } else {
+      this.StarMapCanvas()
+    }
+  }
+
+  @Builder
+  StarMapCanvas() {
     Stack() {
       // 使用 StarMapScene 组件替换所有节点/Embed/Canvas/手势逻辑
       StarMapScene({
@@ -697,18 +749,18 @@ export struct StarMapScreen {
         onMoveEmbed: (_path: StarMapPathSegment[], _starmapId: string, _embedId: string, _pos: StarMapPoint) => {},
       })
 
-      if (this.annotationProjectId.length > 0 && this.selectionState.hasSelection() &&
+      if (!this.isWideLayout() && this.annotationProjectId.length > 0 &&
+          this.selectionState.hasSelection() &&
           (this.selectionState.selectedKind === 'node' || this.selectionState.selectedKind === 'embed')) {
         Column({ space: 8 }) {
-          Button(this.annotationPanelOpen ? '收起标注' : '标注选中项')
+          Button(this.compactAnnotationPanelOpen ? '收起标注' : '标注选中项')
             .onClick(() => {
-              if (this.annotationPanelOpen) this.annotationPanelOpen = false
-              else this.openSelectedStarMapAnnotation()
+              this.compactAnnotationPanelOpen = !this.compactAnnotationPanelOpen
             })
-          if (this.annotationPanelOpen && this.annotationTarget !== null) {
+          if (this.compactAnnotationPanelOpen) {
             AnnotationPanel({
               projectId: this.annotationProjectId,
-              target: this.annotationTarget
+              target: this.selectedStarMapAnnotationTarget()
             })
               .width(340)
           }
@@ -767,6 +819,68 @@ export struct StarMapScreen {
       // 折叠屏展开一下、分屏拖宽一点就换焦点是没有理由的。
       // 焦点只在相机平移 / 缩放 / 捏合结束时才重算。
     })
+  }
+
+  @Builder
+  StarMapToolPanel() {
+    Column() {
+      Row() {
+        Text(this.selectedStarMapTool === 'tags' ? '标签' : 'AI')
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+        Blank()
+        Button({ type: ButtonType.Normal, stateEffect: true }) {
+          Text('›')
+            .fontSize(16)
+            .fontColor($r('sys.color.icon_secondary'))
+        }
+        .width(28)
+        .height(28)
+        .borderRadius(DesignTokens.radiusPill)
+        .backgroundColor($r('sys.color.comp_background_gray'))
+        .onClick(() => this.toggleStarMapToolPanel())
+      }
+      .width('100%')
+      .height(52)
+      .padding({ left: 14, right: 12 })
+      .alignItems(VerticalAlign.Center)
+
+      if (this.selectedStarMapTool === 'tags') {
+        if (this.annotationProjectId.length > 0) {
+          AnnotationPanel({
+            projectId: this.annotationProjectId,
+            target: this.selectedStarMapAnnotationTarget()
+          })
+            .width('100%')
+            .layoutWeight(1)
+        } else {
+          Text('作品标签暂不可用')
+            .fontSize(12)
+            .fontColor($r('sys.color.font_secondary'))
+            .padding(16)
+        }
+      } else {
+        Column({ space: 8 }) {
+          Text('AI 尚未启用')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('sys.color.font_primary'))
+          Text('当前版本没有可用的 AI 会话能力。')
+            .fontSize(11)
+            .fontColor($r('sys.color.font_tertiary'))
+            .lineHeight(18)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .padding(16)
+        .alignItems(HorizontalAlign.Start)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor($r('sys.color.background_secondary'))
+    .border({ width: { left: 1 }, color: $r('sys.color.comp_divider') })
   }
 
   @Builder

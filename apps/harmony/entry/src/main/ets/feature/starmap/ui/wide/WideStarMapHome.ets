@@ -24,6 +24,71 @@ const WIDE_HEADER_TOP_PADDING_PERCENT: string = '2%'
 const WIDE_HEADER_BOTTOM_PADDING_PERCENT: string = '1.3%'
 const WIDE_MORE_BUTTON_SIZE_VP: number = 32
 
+interface WideStarMapToolEntry {
+  key: string
+  label: string
+}
+
+/** Wide StarMap detail pages reuse this rail while the list page keeps its grid-only layout. */
+@ComponentV2
+export struct WideStarMapToolRail {
+  @Param selectedToolKey: string = 'ai'
+  @Param panelVisible: boolean = false
+  @Param onSelectTool: (key: string) => void = (_key: string): void => {}
+  @Param onTogglePanel: () => void = (): void => {}
+
+  private tools: WideStarMapToolEntry[] = [
+    { key: 'ai', label: 'AI' },
+    { key: 'tags', label: '标签' }
+  ]
+
+  @Builder
+  ToolButton(entry: WideStarMapToolEntry) {
+    Column() {
+      Text(entry.label)
+        .fontSize(11)
+        .fontWeight(this.selectedToolKey === entry.key ? FontWeight.Bold : FontWeight.Normal)
+        .fontColor($r('sys.color.font_primary'))
+        .maxLines(1)
+    }
+    .width('100%')
+    .height(52)
+    .justifyContent(FlexAlign.Center)
+    .borderRadius(DesignTokens.radiusSm)
+    .backgroundColor(this.selectedToolKey === entry.key
+      ? $r('sys.color.comp_background_gray')
+      : Color.Transparent)
+    .onClick(() => this.onSelectTool(entry.key))
+  }
+
+  build() {
+    Column() {
+      ForEach(this.tools, (entry: WideStarMapToolEntry) => {
+        this.ToolButton(entry)
+      }, (entry: WideStarMapToolEntry) => entry.key)
+
+      Blank()
+
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Text(this.panelVisible ? '›' : '‹')
+          .fontSize(16)
+          .fontColor($r('sys.color.icon_secondary'))
+      }
+      .width(32)
+      .height(32)
+      .borderRadius(DesignTokens.radiusPill)
+      .backgroundColor($r('sys.color.comp_background_gray'))
+      .onClick(() => this.onTogglePanel())
+    }
+    .width(56)
+    .height('100%')
+    .padding({ top: 8, bottom: 8, left: 4, right: 4 })
+    .alignItems(HorizontalAlign.Center)
+    .border({ width: { left: 1 }, color: $r('sys.color.comp_divider') })
+    .backgroundColor($r('sys.color.background_secondary'))
+  }
+}
+
 @ComponentV2
 export struct WideStarMapHome {
   @Param starMaps: StarMapMeta[] = []

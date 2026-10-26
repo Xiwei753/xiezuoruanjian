@@ -1578,9 +1578,11 @@ interface WriterAppService {
     [Throws=WriterError]
     sequence<AnnotationObjectLinkDto> list_links_for_source(AnnotationObjectRefDto source);
     [Throws=WriterError]
+    AnnotationTextAnchorDto? get_text_anchor(string project_id, string anchor_id);
+    [Throws=WriterError]
     ChapterAnnotationsDto get_chapter_annotations(string project_id, string chapter_id, u64 text_revision, string text);
     [Throws=WriterError]
-    boolean apply_annotation_edits(string project_id, string chapter_id, u64 base_revision, u64 text_revision, EditorTransactionCauseDto cause, sequence<AnnotationEditDto> edits);
+    boolean apply_annotation_edits(string project_id, string chapter_id, string baseline_id, u64 base_revision, u64 text_revision, EditorTransactionCauseDto cause, sequence<AnnotationEditDto> edits, string text);
     [Throws=WriterError]
     sequence<AnnotationAutoMatchDto> find_auto_name_links(string project_id, string chapter_id, u64 text_revision, string text);
 
@@ -1885,7 +1887,6 @@ dictionary AnnotationTextAnchorDto {
     string chapter_id;
     u32 start_byte;
     u32 end_byte;
-    u64 text_revision;
     i64 updated_at_ms;
     i64? deleted_at_ms;
 };
@@ -1926,6 +1927,7 @@ dictionary AnnotationAutoMatchDto {
 dictionary ChapterAnnotationsDto {
     string project_id;
     string chapter_id;
+    string baseline_id;
     u64 text_revision;
     sequence<AnnotationTextAnchorDto> anchors;
     sequence<AnnotationTagBindingDto> bindings;

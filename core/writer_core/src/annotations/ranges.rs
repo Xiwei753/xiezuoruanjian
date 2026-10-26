@@ -2,6 +2,8 @@ use crate::editor::{EditorEditResult, EditorOperationKind};
 
 use super::model::{AnnotationKind, AnnotationMutation, TextAnchor};
 
+const ANCHOR_CONTEXT_CHARS: usize = 32;
+
 /// One committed edit expressed in the old and resulting UTF-8 byte spaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextEditRange {
@@ -56,7 +58,6 @@ pub fn edit_ranges_from_result(result: &EditorEditResult) -> Vec<TextEditRange> 
 pub fn map_text_anchor_after_edits(
     anchor: &TextAnchor,
     edits: &[TextEditRange],
-    new_revision: u64,
     updated_at_ms: i64,
 ) -> crate::Result<TextAnchorEdit> {
     validate_edits(edits)?;
@@ -77,7 +78,6 @@ pub fn map_text_anchor_after_edits(
 
     let mut updated = anchor.clone();
     updated.updated_at_ms = updated_at_ms;
-    updated.text_revision = new_revision;
     if original_len == 0 || removed_len >= original_len {
         updated.deleted_at_ms = Some(updated_at_ms);
         return Ok(TextAnchorEdit::Deleted(updated));
@@ -97,23 +97,22 @@ pub fn map_text_anchor_after_edits(
 pub fn map_anchors_after_editor_result(
     anchors: &[TextAnchor],
     result: &EditorEditResult,
+    base_text: &str,
+    new_text: &str,
     updated_at_ms: i64,
 ) -> crate::Result<Vec<AnnotationMutation>> {
     let edits = edit_ranges_from_result(result);
-    if edits.is_empty() || result.base_revision == result.new_revision {
+    if edits.is_empty() || base_text == new_text {
         return Ok(Vec::new());
     }
-    let base_revision = result.base_revision.value();
-    let new_revision = result.new_revision.value();
     let mut mutations = Vec::with_capacity(anchors.len());
     for anchor in anchors {
-        if anchor.text_revision != base_revision {
-            return Err(invalid_range(
-                "text anchor revision does not match edit base",
-            ));
-        }
-        match map_text_anchor_after_edits(anchor, &edits, new_revision, updated_at_ms)? {
-            TextAnchorEdit::Updated(anchor) => {
+        let Some(anchor) = rebase_text_anchor(anchor, base_text)? else {
+            continue;
+        };
+        match map_text_anchor_after_edits(&anchor, &edits, updated_at_ms)? {
+            TextAnchorEdit::Updated(mut anchor) => {
+                capture_text_anchor(&mut anchor, new_text)?;
                 mutations.push(AnnotationMutation::UpsertTextAnchor(anchor));
             }
             TextAnchorEdit::Deleted(anchor) => mutations.push(AnnotationMutation::Delete {
@@ -125,6 +124,101 @@ pub fn map_anchors_after_editor_result(
         }
     }
     Ok(mutations)
+}
+
+/// Refresh the persisted identity for a verified range in the supplied text.
+/// The digest covers the whole chapter; the quote and small context window are
+/// retained only so a changed chapter can relocate the range safely.
+pub fn capture_text_anchor(anchor: &mut TextAnchor, text: &str) -> crate::Result<()> {
+    if anchor.start_byte >= anchor.end_byte
+        || anchor.end_byte > text.len()
+        || !text.is_char_boundary(anchor.start_byte)
+        || !text.is_char_boundary(anchor.end_byte)
+    {
+        return Err(invalid_range("text anchor is outside the chapter text"));
+    }
+    anchor.text_hash = format!("{:x}", md5::compute(text.as_bytes()));
+    anchor.anchored_text = text[anchor.start_byte..anchor.end_byte].to_string();
+
+    let before_start = text[..anchor.start_byte]
+        .char_indices()
+        .rev()
+        .take(ANCHOR_CONTEXT_CHARS)
+        .last()
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    let after_end = text[anchor.end_byte..]
+        .char_indices()
+        .nth(ANCHOR_CONTEXT_CHARS)
+        .map(|(index, _)| anchor.end_byte + index)
+        .unwrap_or(text.len());
+    anchor.context_before = text[before_start..anchor.start_byte].to_string();
+    anchor.context_after = text[anchor.end_byte..after_end].to_string();
+    Ok(())
+}
+
+/// Verify an anchor against the supplied chapter text or relocate it by its
+/// saved quote and context. Ambiguous and legacy anchors are left unresolved;
+/// callers must not display or mutate their historical offsets.
+pub fn rebase_text_anchor(anchor: &TextAnchor, text: &str) -> crate::Result<Option<TextAnchor>> {
+    if anchor.deleted_at_ms.is_some() || anchor.anchored_text.is_empty() {
+        return Ok(None);
+    }
+    let range_is_valid = anchor.start_byte < anchor.end_byte
+        && anchor.end_byte <= text.len()
+        && text.is_char_boundary(anchor.start_byte)
+        && text.is_char_boundary(anchor.end_byte);
+    if range_is_valid
+        && anchor.text_hash == format!("{:x}", md5::compute(text.as_bytes()))
+        && text[anchor.start_byte..anchor.end_byte] == anchor.anchored_text
+    {
+        return Ok(Some(anchor.clone()));
+    }
+
+    let mut candidates = Vec::new();
+    let mut from = 0usize;
+    while from < text.len() {
+        let Some(relative_start) = text[from..].find(&anchor.anchored_text) else {
+            break;
+        };
+        let start = from + relative_start;
+        let end = start + anchor.anchored_text.len();
+        if text.is_char_boundary(start) && text.is_char_boundary(end) {
+            let before_score = anchor
+                .context_before
+                .chars()
+                .rev()
+                .zip(text[..start].chars().rev())
+                .take_while(|(left, right)| left == right)
+                .count();
+            let after_score = anchor
+                .context_after
+                .chars()
+                .zip(text[end..].chars())
+                .take_while(|(left, right)| left == right)
+                .count();
+            candidates.push((start, end, before_score + after_score));
+        }
+        let next = text[start..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
+        from = start.saturating_add(next);
+    }
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.2));
+    let Some(&(start_byte, end_byte, best_score)) = candidates.first() else {
+        return Ok(None);
+    };
+    if candidates.len() > 1 && best_score == candidates[1].2 {
+        return Ok(None);
+    }
+
+    let mut rebased = anchor.clone();
+    rebased.start_byte = start_byte;
+    rebased.end_byte = end_byte;
+    capture_text_anchor(&mut rebased, text)?;
+    Ok(Some(rebased))
 }
 
 #[derive(Debug, Clone, Copy)]

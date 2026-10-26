@@ -78,6 +78,7 @@ export interface ChapterAnnotationsDto {
   projectId: string
   chapterId: string
   textRevision: number
+  baselineId: string
   anchors: AnnotationTextAnchorDto[]
   bindings: AnnotationTagBindingDto[]
   links: AnnotationObjectLinkDto[]

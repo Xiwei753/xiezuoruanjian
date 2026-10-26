@@ -434,4 +434,7 @@
     <string name="annotation_remove_link">解除</string>
     <string name="annotation_context_tags_links">标签与链接</string>
     <string name="annotation_context_register_name">登记名称</string>
+    <string name="annotation_link_choose_target">选择链接目标</string>
+    <string name="annotation_link_choose_name_target">选择同名目标</string>
+    <string name="annotation_link_unavailable_title">链接不可用</string>
 </resources>

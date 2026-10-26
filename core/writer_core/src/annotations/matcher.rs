@@ -51,7 +51,7 @@ impl AutoLinkMatcher {
         manual_ranges: &[(usize, usize)],
     ) -> AutoMatchSnapshot {
         let key = (project_id.to_string(), chapter_id.to_string());
-        let input_fingerprint = matcher_fingerprint(entries, manual_ranges);
+        let input_fingerprint = matcher_fingerprint(text, entries, manual_ranges);
         if let Some(cached) = self.snapshots.get(&key) {
             if cached.text_revision == text_revision
                 && cached.input_fingerprint == input_fingerprint
@@ -172,8 +172,9 @@ fn occurrences(text: &str, needle: &str) -> Vec<(usize, usize)> {
     matches
 }
 
-fn matcher_fingerprint(entries: &[NamedEntry], manual_ranges: &[(usize, usize)]) -> u64 {
+fn matcher_fingerprint(text: &str, entries: &[NamedEntry], manual_ranges: &[(usize, usize)]) -> u64 {
     let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
     let mut entries: Vec<_> = entries
         .iter()
         .filter(|entry| entry.deleted_at_ms.is_none() && entry.auto_link_enabled)

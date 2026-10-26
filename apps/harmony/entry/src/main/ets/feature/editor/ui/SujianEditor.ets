@@ -80,6 +80,7 @@ import { PathShape } from '@ohos.arkui.shape'
 
 const EDITOR_LOG_DOMAIN = 0x0000
 const EDITOR_LOG_TAG = 'SujianEditor'
+const HYPERLINK_TAP_MAX_DURATION_MS: number = 500
 const INPUT_HOST_ID = 'sujian-editor-input-host'
 // Issue #768 评论5837824666：正文 Text 的固定 id，用于 ComponentObserver 监听布局完成回调。
 const EDITOR_TEXT_ID = 'sujian-editor-text'
@@ -140,6 +141,10 @@ export struct SujianEditor {
   @Prop @Watch('onPresentationUpdateChanged') presentationUpdate: EditorPresentationUpdate | null = null
   @Prop @Watch('onCorrectionSuggestionsChanged') correctionSuggestions: MappedCorrectionSuggestion[] = []
   @Prop @Watch('onAnnotationRangesChanged') annotationRanges: AnnotationRangeDto[] = []
+  @Prop hasHyperlinkAt: (utf16Offset: number, revision: number, text: string) => boolean =
+    (_utf16Offset: number, _revision: number, _text: string): boolean => false
+  @Prop onHyperlinkTap: (utf16Offset: number, revision: number, text: string) => boolean =
+    (_utf16Offset: number, _revision: number, _text: string): boolean => false
   // Issue #879：运动策略，由父组件（WritingScreen）从 LocalSettings 构造后传入。
   motionPolicy: EditorMotionPolicy = new EditorMotionPolicy(
     100, 80, MotionMode.Independent, false, false, false, false
@@ -327,6 +332,8 @@ export struct SujianEditor {
   private dragAnchor: VisualCaretPosition | null = null
   private dragAnchorCore: VisualCaretPosition | null = null
   private isDragging: boolean = false
+  private pendingHyperlinkTap: boolean = false
+  private pendingHyperlinkStartedAtMs: number = 0
   // Issue #768：编辑器焦点状态，供诊断快照读取。
   private isFocused: boolean = false
   // Issue #768：布局来源标记，供诊断快照读取。
@@ -2717,14 +2724,23 @@ export struct SujianEditor {
           this.dragAnchor = hitPos
           this.dragAnchorCore = this.toCoreCaretPosition(hitPos)
           this.isDragging = true
+          this.pendingHyperlinkTap = snap.selectionAnchor === snap.selectionHead &&
+            this.hasHyperlinkAt(hitPos.utf16Offset, snap.revision, snap.text)
+          this.pendingHyperlinkStartedAtMs = this.pendingHyperlinkTap ? Date.now() : 0
           // Issue #879 复核评论修复（问题2）：映射不可得时不发送 dispatcher 命令——
           // 不应把未经转换的旧 UTF-16 offset 冒充新版直接提交。
-          if (this.dragAnchorCore !== null) {
+          if (!this.pendingHyperlinkTap && this.dragAnchorCore !== null) {
             this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.dragAnchorCore })
           }
         }
         break
       case 'move':
+        if (this.pendingHyperlinkTap && this.dragAnchor !== null && this.dragAnchorCore !== null &&
+          hitPos.utf16Offset !== this.dragAnchor.utf16Offset) {
+          this.pendingHyperlinkTap = false
+          this.pendingHyperlinkStartedAtMs = 0
+          this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.dragAnchorCore })
+        }
         if (this.isDragging && this.dragAnchorCore !== null && inContentArea) {
           // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
           // Issue #879 复核评论修复（问题2）：anchor 已是 Core 坐标，head 现场映射；
@@ -2741,6 +2757,22 @@ export struct SujianEditor {
         break
       case 'up':
         if (this.isDragging) {
+          const wasHyperlinkTap: boolean = this.pendingHyperlinkTap &&
+            Date.now() - this.pendingHyperlinkStartedAtMs < HYPERLINK_TAP_MAX_DURATION_MS && this.dragAnchor !== null &&
+            inContentArea && this.dragAnchor.utf16Offset === hitPos.utf16Offset
+          if (wasHyperlinkTap && this.onHyperlinkTap(hitPos.utf16Offset, snap.revision, snap.text)) {
+            this.pendingHyperlinkTap = false
+            this.pendingHyperlinkStartedAtMs = 0
+            this.isDragging = false
+            this.dragAnchor = null
+            this.dragAnchorCore = null
+            break
+          }
+          if (this.pendingHyperlinkTap && this.dragAnchorCore !== null) {
+            this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.dragAnchorCore })
+          }
+          this.pendingHyperlinkTap = false
+          this.pendingHyperlinkStartedAtMs = 0
           this.isDragging = false
           this.dragAnchor = null
           this.dragAnchorCore = null
@@ -2777,6 +2809,8 @@ export struct SujianEditor {
       if (event.type === TouchType.Cancel) {
         this.isDragging = false
         this.dragAnchor = null
+        this.pendingHyperlinkTap = false
+        this.pendingHyperlinkStartedAtMs = 0
       }
       return
     }
@@ -2819,8 +2853,17 @@ export struct SujianEditor {
         this.dragAnchor = hitPos
         this.dragAnchorCore = this.toCoreCaretPosition(hitPos)
         this.isDragging = true
+        this.pendingHyperlinkTap = snap.selectionAnchor === snap.selectionHead &&
+          this.hasHyperlinkAt(hitPos.utf16Offset, snap.revision, snap.text)
+        this.pendingHyperlinkStartedAtMs = this.pendingHyperlinkTap ? Date.now() : 0
         break
       case TouchType.Move:
+        if (this.pendingHyperlinkTap && this.dragAnchor !== null && this.dragAnchorCore !== null &&
+          this.dragAnchor.utf16Offset !== hitPos.utf16Offset) {
+          this.pendingHyperlinkTap = false
+          this.pendingHyperlinkStartedAtMs = 0
+          this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.dragAnchorCore })
+        }
         // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
         // Issue #879 复核评论修复（问题2）：比较用可见坐标，发命令用 Core 坐标；
         // 映射不可得时不发送 dispatcher 命令。
@@ -2838,6 +2881,22 @@ export struct SujianEditor {
         break
       case TouchType.Up:
         if (this.isDragging) {
+          const wasHyperlinkTap: boolean = this.pendingHyperlinkTap &&
+            Date.now() - this.pendingHyperlinkStartedAtMs < HYPERLINK_TAP_MAX_DURATION_MS && this.dragAnchor !== null &&
+            inContentArea && this.dragAnchor.utf16Offset === hitPos.utf16Offset
+          if (wasHyperlinkTap && this.onHyperlinkTap(hitPos.utf16Offset, snap.revision, snap.text)) {
+            this.pendingHyperlinkTap = false
+            this.pendingHyperlinkStartedAtMs = 0
+            this.isDragging = false
+            this.dragAnchor = null
+            this.dragAnchorCore = null
+            break
+          }
+          if (this.pendingHyperlinkTap && this.dragAnchorCore !== null) {
+            this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.dragAnchorCore })
+          }
+          this.pendingHyperlinkTap = false
+          this.pendingHyperlinkStartedAtMs = 0
           if (inContentArea && this.dragAnchor !== null
             && this.dragAnchor.utf16Offset === hitPos.utf16Offset) {
             // 单击：经 dispatcher 发 selection，成功后查询最终 selection 再通知 IME。
@@ -2850,6 +2909,8 @@ export struct SujianEditor {
           this.isDragging = false
           this.dragAnchor = null
           this.dragAnchorCore = null
+          this.pendingHyperlinkTap = false
+          this.pendingHyperlinkStartedAtMs = 0
         }
         break
       default:

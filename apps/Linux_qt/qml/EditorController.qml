@@ -27,6 +27,8 @@ QtObject {
     signal chapterLoaded(string projectId, string volumeId, string chapterId)
     signal chapterLoadFailed(string projectId, string volumeId, string chapterId, string reason)
     signal annotationTargetActivated(var target)
+    signal annotationLinkChoicesRequested(var choices)
+    signal annotationLinkActivationFailed(string message)
 
     // Target UI bindings
     property var targetEditorItem: null
@@ -67,6 +69,8 @@ QtObject {
     property var correctionSuggestions: []
     property var proofreadingDecorations: []
     property var annotationDecorations: []
+    property var annotationNavigationSnapshot: null
+    property double annotationBaselineRevision: -1
     property string annotationError: ""
     property string annotationTrackedProjectId: ""
     property string annotationTrackedChapterId: ""
@@ -301,26 +305,48 @@ QtObject {
         } catch (e) {
             annotationError = qsTr("正文标记更新范围无效")
             annotationDecorations = []
+            annotationNavigationSnapshot = null
+            annotationBaselineRevision = -1
             applyTextDecorations()
             return
         }
+        var snapshot = annotationNavigationSnapshot
+        if (!snapshot || String(snapshot.projectId) !== String(projectId)
+                || String(snapshot.chapterId) !== String(chapterId)
+                || Number(annotationBaselineRevision) !== Number(baseRevision)
+                || String(snapshot.baselineId || "").length === 0) {
+            annotationError = qsTr("正文标记基准已失效，正在重新载入")
+            annotationNavigationSnapshot = null
+            annotationBaselineRevision = -1
+            annotationRefreshTimer.restart()
+            return
+        }
+        var currentText = getEditorPlainText()
         var raw = annotationBackendRef.apply_annotation_edits_json(
-            projectId, chapterId, Number(baseRevision), Number(newRevision), String(cause), JSON.stringify(edits))
+            projectId, chapterId, String(snapshot.baselineId),
+            Number(baseRevision), Number(newRevision), String(cause),
+            JSON.stringify(edits), currentText)
         var envelope = null
         try { envelope = JSON.parse(String(raw || "{}")) } catch (e) {}
         if (!envelope || envelope.success !== true) {
             annotationError = envelope && envelope.rawError ? String(envelope.rawError) : qsTr("正文标记未能更新")
             annotationDecorations = []
+            annotationNavigationSnapshot = null
+            annotationBaselineRevision = -1
             applyTextDecorations()
+            annotationRefreshTimer.restart()
             return
         }
         annotationError = ""
+        annotationBaselineRevision = Number(newRevision)
         annotationRefreshTimer.restart()
     }
 
     function refreshChapterAnnotations() {
         if (!annotationBackendRef || !targetEditorItem || !projectId || !chapterId) {
             annotationDecorations = []
+            annotationNavigationSnapshot = null
+            annotationBaselineRevision = -1
             annotationTrackedProjectId = ""
             annotationTrackedChapterId = ""
             annotationTrackedRevision = -1
@@ -335,12 +361,16 @@ QtObject {
         if (!envelope || envelope.success !== true || !envelope.data) {
             annotationError = envelope && envelope.rawError ? String(envelope.rawError) : qsTr("正文标记暂不可用")
             annotationDecorations = []
+            annotationNavigationSnapshot = null
+            annotationBaselineRevision = -1
             applyTextDecorations()
             return
         }
         var snapshot = envelope.data
         if (Number(snapshot.textRevision) !== revision
                 || revision !== Number(targetEditorItem.text_revision)) {
+            annotationNavigationSnapshot = null
+            annotationBaselineRevision = -1
             annotationRefreshTimer.restart()
             return
         }
@@ -377,11 +407,168 @@ QtObject {
                 severity: "autoName", textRevision: revision })
         }
         annotationDecorations = spans
+        annotationNavigationSnapshot = snapshot
+        annotationBaselineRevision = revision
         annotationTrackedProjectId = projectId
         annotationTrackedChapterId = chapterId
         annotationTrackedRevision = revision
         annotationError = ""
         applyTextDecorations()
+    }
+
+    function annotationTargetLabel(target, namedEntries, matchedText) {
+        if (!target) return qsTr("链接目标")
+        if (target.externalUrl) return String(target.externalUrl)
+        var ref = target.objectRef || target
+        if (!ref || !ref.kind) return qsTr("链接目标")
+        if (ref.kind === "namedEntry") {
+            for (var i = 0; i < namedEntries.length; ++i) {
+                var entry = namedEntries[i]
+                if (entry && !entry.deletedAtMs
+                        && String(entry.entryId) === String(ref.objectId))
+                    return String(entry.canonicalName || matchedText || ref.objectId)
+                        + " · " + String(ref.objectId).slice(0, 8)
+            }
+            return String(matchedText || qsTr("登记名称"))
+                + " · " + String(ref.objectId || "").slice(0, 8)
+        }
+        var labels = ({ project: qsTr("作品"), volume: qsTr("分卷"), chapter: qsTr("章节"),
+            textAnchor: qsTr("正文位置"), starMap: qsTr("星图"),
+            starMapNode: qsTr("星图节点"), starMapEmbed: qsTr("星图嵌入") })
+        return (labels[ref.kind] || String(ref.kind)) + " · " + String(ref.objectId || "")
+    }
+
+    function resolvedAnnotationLinkChoice(target, namedEntries, matchedText, origin) {
+        var choice = {
+            target: target,
+            label: annotationTargetLabel(target, namedEntries, matchedText),
+            matchedText: String(matchedText || ""),
+            origin: String(origin || "manual"),
+            state: "unavailable"
+        }
+        if (!annotationBackendRef || !annotationBackendRef.resolve_link_json) return choice
+        var raw = annotationBackendRef.resolve_link_json(JSON.stringify(target))
+        var envelope = null
+        try { envelope = JSON.parse(String(raw || "{}")) } catch (e) {}
+        if (envelope && envelope.success === true && envelope.data) {
+            choice.state = String(envelope.data.state || "unavailable")
+            choice.target = envelope.data.target || target
+        }
+        return choice
+    }
+
+    function annotationLinkChoicesAtByte(byteOffset) {
+        var snapshot = annotationNavigationSnapshot
+        if (!snapshot || !targetEditorItem || String(snapshot.projectId) !== String(projectId)
+                || String(snapshot.chapterId) !== String(chapterId)
+                || Number(snapshot.textRevision) !== Number(targetEditorItem.text_revision))
+            return []
+        var offset = Number(byteOffset)
+        if (!isFinite(offset) || offset < 0) return []
+
+        var anchorsById = ({})
+        var anchors = snapshot.anchors || []
+        for (var a = 0; a < anchors.length; ++a) {
+            var anchor = anchors[a]
+            if (anchor && !anchor.deletedAtMs)
+                anchorsById[String(anchor.anchorId)] = anchor
+        }
+
+        // A manually created link always wins over an automatic name match at
+        // the same text position. Multiple manual links on one anchor remain
+        // separate choices.
+        var manualTargets = []
+        var links = snapshot.links || []
+        for (var l = 0; l < links.length; ++l) {
+            var link = links[l]
+            if (!link || link.deletedAtMs || !link.source || link.source.kind !== "textAnchor") continue
+            var linkedAnchor = anchorsById[String(link.source.objectId)]
+            if (!linkedAnchor) continue
+            var start = Number(linkedAnchor.startByte)
+            var end = Number(linkedAnchor.endByte)
+            if (offset < start || offset >= end) continue
+            manualTargets.push(link.target)
+        }
+
+        var targets = []
+        var matchedText = ""
+        var origin = "manual"
+        if (manualTargets.length > 0) {
+            targets = manualTargets
+        } else {
+            origin = "auto"
+            var matches = snapshot.autoMatches || []
+            for (var m = 0; m < matches.length; ++m) {
+                var match = matches[m]
+                if (!match || offset < Number(match.startByte) || offset >= Number(match.endByte)) continue
+                matchedText = String(match.matchedText || "")
+                targets = match.candidates || []
+                break
+            }
+        }
+
+        if (targets.length === 0) return []
+        var namedEntries = []
+        if (annotationBackendRef && annotationBackendRef.list_named_entries_json) {
+            var entriesEnvelope = null
+            try { entriesEnvelope = JSON.parse(String(annotationBackendRef.list_named_entries_json(projectId) || "{}")) } catch (e) {}
+            if (entriesEnvelope && entriesEnvelope.success === true && entriesEnvelope.data)
+                namedEntries = entriesEnvelope.data
+        }
+
+        var choices = []
+        var seen = ({})
+        for (var t = 0; t < targets.length; ++t) {
+            var rawTarget = targets[t]
+            var target = rawTarget && rawTarget.objectRef !== undefined
+                ? rawTarget : { objectRef: rawTarget, externalUrl: null }
+            var key = JSON.stringify(target)
+            if (seen[key]) continue
+            seen[key] = true
+            choices.push(resolvedAnnotationLinkChoice(target, namedEntries, matchedText, origin))
+        }
+        return choices
+    }
+
+    function activateAnnotationLinkAtByte(byteOffset) {
+        var choices = annotationLinkChoicesAtByte(byteOffset)
+        if (choices.length === 0) return false
+        if (choices.length > 1) {
+            annotationLinkChoicesRequested(choices)
+            return true
+        }
+        activateAnnotationLinkChoice(choices[0])
+        return true
+    }
+
+    function activateAnnotationLinkChoice(choice) {
+        if (!choice) return false
+        var state = String(choice.state || "unavailable")
+        if (state === "projectNotDownloaded") {
+            annotationLinkActivationFailed(qsTr("目标作品尚未下载"))
+            return false
+        }
+        if (state === "missing") {
+            annotationLinkActivationFailed(qsTr("链接目标已删除或不存在"))
+            return false
+        }
+        if (state !== "exists" && state !== "externalUrl") {
+            annotationLinkActivationFailed(qsTr("无法解析链接目标"))
+            return false
+        }
+        var target = choice.target
+        if (state === "externalUrl" && target && target.externalUrl) {
+            Qt.openUrlExternally(String(target.externalUrl))
+            return true
+        }
+        var ref = target ? (target.objectRef || target) : null
+        if (!ref || !ref.kind) return false
+        if (ref.kind === "textAnchor") {
+            annotationTargetActivated(target)
+            return true
+        }
+        annotationTargetActivated(target)
+        return true
     }
 
     // Clears the visible marks without changing the document identity. In-flight

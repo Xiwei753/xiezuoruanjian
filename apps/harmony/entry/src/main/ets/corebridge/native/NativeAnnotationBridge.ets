@@ -70,6 +70,13 @@ export class NativeAnnotationBridge {
       startByte: startByte, endByte: endByte, textRevision: textRevision, text: text }, decodeAnnotationTextAnchor)
   }
 
+  getTextAnchor(projectId: string, anchorId: string): Promise<ResultEnvelope<AnnotationTextAnchorDto | null>> {
+    return this.call('getTextAnchor', { projectId: projectId, anchorId: anchorId },
+      (data: Object) => data === null
+        ? { ok: true, value: null }
+        : decodeAnnotationTextAnchor(data))
+  }
+
   listNamedEntries(projectId: string): Promise<ResultEnvelope<AnnotationNamedEntryDto[]>> {
     return this.call('listNamedEntries', { projectId: projectId },
       (data: Object) => decodeArray(data, decodeAnnotationNamedEntry, 'AnnotationNamedEntryDto[]'))
@@ -120,11 +127,12 @@ export class NativeAnnotationBridge {
       textRevision: textRevision, text: text }, decodeChapterAnnotations)
   }
 
-  applyAnnotationEdits(projectId: string, chapterId: string, baseRevision: number,
-    textRevision: number, cause: EditorTransactionCause,
-    edits: AnnotationEditDto[]): Promise<ResultEnvelope<boolean>> {
+  applyAnnotationEdits(projectId: string, chapterId: string, baselineId: string, baseRevision: number,
+    textRevision: number, cause: EditorTransactionCause, edits: AnnotationEditDto[],
+    newText: string): Promise<ResultEnvelope<boolean>> {
     return this.call('applyAnnotationEdits', { projectId: projectId, chapterId: chapterId,
-      baseRevision: baseRevision, textRevision: textRevision, cause: cause, edits: edits }, decodeBoolean)
+      baselineId: baselineId, baseRevision: baseRevision, textRevision: textRevision,
+      cause: cause, edits: edits, newText: newText }, decodeBoolean)
   }
 
   findAutoNameLinks(projectId: string, chapterId: string, textRevision: number,

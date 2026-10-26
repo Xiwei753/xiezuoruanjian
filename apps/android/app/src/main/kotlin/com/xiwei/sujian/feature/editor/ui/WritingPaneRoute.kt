@@ -1,5 +1,7 @@
 package com.xiwei.sujian.feature.editor.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -13,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +46,11 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.presentation.AnnotationCoordinator
+import com.xiwei.sujian.feature.editor.presentation.AnnotationLinkOpenResult
+import com.xiwei.sujian.feature.editor.presentation.AnnotationLinkOrigin
+import com.xiwei.sujian.feature.editor.presentation.AnnotationObjectKind
+import com.xiwei.sujian.feature.editor.presentation.AnnotationObjectRef
+import com.xiwei.sujian.feature.editor.presentation.AnnotationResolvedLinkTarget
 import com.xiwei.sujian.feature.editor.presentation.CorrectionResourceFeedbackLevel
 import com.xiwei.sujian.feature.editor.presentation.EditorCorrectionResourceState
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
@@ -56,6 +62,7 @@ import com.xiwei.sujian.feature.editor.session.EditorCorrectionSuggestion
 import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.window.EditableTextTarget
+import uniffi.writer_core.AnnotationLinkResolutionStateDto
 
 /**
  * 正文编辑窗格 — 「正文」一级内容（#624 评论17 第2部分 Route 层）。
@@ -95,6 +102,7 @@ fun WritingPane(
     onChapterSwitchFailed: (
         (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     )? = null,
+    onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean = { _, _ -> false },
 ) {
     val context = LocalContext.current
     val deps = LocalSujianAppDependencies.current
@@ -175,6 +183,7 @@ fun WritingPane(
             sessionState = sessionState,
             correctionState = correctionState,
             uiState = uiState,
+            onAnnotationTargetOpen = onAnnotationTargetOpen,
             modifier = editorModifier,
         )
     }
@@ -228,8 +237,10 @@ private fun WritingPaneEditorContent(
     sessionState: com.xiwei.sujian.feature.editor.session.EditorSessionState,
     correctionState: com.xiwei.sujian.feature.editor.session.EditorCorrectionState,
     uiState: com.xiwei.sujian.feature.editor.presentation.EditorUiState,
+    onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean,
     modifier: Modifier,
 ) {
+    val context = LocalContext.current
     @Suppress("UNUSED_EXPRESSION")
     (coordinator.targetDecorationsVersionFlow.collectAsStateWithLifecycle().value)
     val surfaceMode = editorSurfaceMode(sessionState.bindingState, coordinator.windowId, targetId, isActivePane)
@@ -248,6 +259,8 @@ private fun WritingPaneEditorContent(
                     )
                 }
             val annotationState by annotationCoordinator.state.collectAsStateWithLifecycle()
+            var linkChoices by remember(targetId) { mutableStateOf<AnnotationLinkOpenResult?>(null) }
+            var linkMessage by remember(targetId) { mutableStateOf<String?>(null) }
             LaunchedEffect(projectId, chapterId, sessionState.sessionId, uiState.chapterHash) {
                 annotationCoordinator.loadChapter(
                     projectId = projectId,
@@ -455,6 +468,21 @@ private fun WritingPaneEditorContent(
                     correctionHighlights = correctionHighlightsUtf16,
                     tagHighlights = annotationState.tagRanges.map { ComposeTextRange(it.start, it.end) },
                     linkHighlights = annotationState.linkRanges.map { ComposeTextRange(it.start, it.end) },
+                    onLinkedTextClick = { offset ->
+                        annotationCoordinator.resolveLinkedText(offset) { result ->
+                            if (result.targets.size == 1) {
+                                openResolvedAnnotationTarget(
+                                    target = result.targets.single(),
+                                    coordinator = annotationCoordinator,
+                                    context = context,
+                                    onAnnotationTargetOpen = onAnnotationTargetOpen,
+                                    onError = { linkMessage = it },
+                                )
+                            } else {
+                                linkChoices = result
+                            }
+                        }
+                    },
                     onAnnotationSelectionAction = { _, range, _ ->
                         val text = bridge.state.text.toString()
                         annotationCoordinator.openSelection(
@@ -468,6 +496,34 @@ private fun WritingPaneEditorContent(
                         )
                     },
                     modifier = Modifier.weight(1f),
+                )
+            }
+            linkChoices?.let { result ->
+                AnnotationLinkTargetDialog(
+                    result = result,
+                    onDismiss = { linkChoices = null },
+                    onChoose = { target ->
+                        linkChoices = null
+                        openResolvedAnnotationTarget(
+                            target = target,
+                            coordinator = annotationCoordinator,
+                            context = context,
+                            onAnnotationTargetOpen = onAnnotationTargetOpen,
+                            onError = { linkMessage = it },
+                        )
+                    },
+                )
+            }
+            linkMessage?.let { message ->
+                AlertDialog(
+                    onDismissRequest = { linkMessage = null },
+                    title = { Text(stringResource(R.string.annotation_link_unavailable_title)) },
+                    text = { Text(message) },
+                    confirmButton = {
+                        TextButton(onClick = { linkMessage = null }) {
+                            Text(stringResource(android.R.string.ok))
+                        }
+                    },
                 )
             }
             if (annotationState.isSheetOpen) {
@@ -493,6 +549,94 @@ private fun WritingPaneEditorContent(
         }
     }
 }
+
+@Composable
+private fun AnnotationLinkTargetDialog(
+    result: AnnotationLinkOpenResult,
+    onDismiss: () -> Unit,
+    onChoose: (AnnotationResolvedLinkTarget) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                if (result.origin == AnnotationLinkOrigin.Automatic) {
+                    stringResource(R.string.annotation_link_choose_name_target)
+                } else {
+                    stringResource(R.string.annotation_link_choose_target)
+                },
+            )
+        },
+        text = {
+            Column {
+                result.targets.forEach { target ->
+                    TextButton(
+                        onClick = { onChoose(target) },
+                        enabled = target.state.isOpenable(),
+                    ) {
+                        Text(
+                            if (target.state.isOpenable()) {
+                                target.target.label
+                            } else {
+                                "${target.target.label} · ${target.state.displayMessage()}"
+                            },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(android.R.string.cancel))
+            }
+        },
+    )
+}
+
+private fun openResolvedAnnotationTarget(
+    target: AnnotationResolvedLinkTarget,
+    coordinator: AnnotationCoordinator,
+    context: android.content.Context,
+    onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean,
+    onError: (String) -> Unit,
+) {
+    when (target.state) {
+        AnnotationLinkResolutionStateDto.EXISTS -> {
+            val ref = target.target.ref
+            if (ref == null) {
+                onError("Link target is unavailable")
+            } else if (ref.kind == AnnotationObjectKind.NamedEntry) {
+                coordinator.openObject(ref, target.target.label)
+            } else if (!onAnnotationTargetOpen(ref, target.target.label)) {
+                coordinator.openObject(ref, target.target.label)
+            }
+        }
+        AnnotationLinkResolutionStateDto.EXTERNAL_URL -> {
+            val url = target.target.externalUrl
+            if (url.isNullOrBlank()) {
+                onError("Link URL is unavailable")
+            } else {
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                }.onFailure { onError(it.message ?: "Could not open link") }
+            }
+        }
+        AnnotationLinkResolutionStateDto.MISSING,
+        AnnotationLinkResolutionStateDto.PROJECT_NOT_DOWNLOADED,
+        -> onError(target.state.displayMessage())
+    }
+}
+
+private fun AnnotationLinkResolutionStateDto.isOpenable(): Boolean =
+    this == AnnotationLinkResolutionStateDto.EXISTS || this == AnnotationLinkResolutionStateDto.EXTERNAL_URL
+
+private fun AnnotationLinkResolutionStateDto.displayMessage(): String =
+    when (this) {
+        AnnotationLinkResolutionStateDto.EXISTS -> "目标可访问"
+        AnnotationLinkResolutionStateDto.EXTERNAL_URL -> "外部网址"
+        AnnotationLinkResolutionStateDto.MISSING -> "目标不存在或已删除"
+        AnnotationLinkResolutionStateDto.PROJECT_NOT_DOWNLOADED -> "目标作品尚未下载"
+    }
 
 @Composable
 private fun CorrectionResourceStatusRow(

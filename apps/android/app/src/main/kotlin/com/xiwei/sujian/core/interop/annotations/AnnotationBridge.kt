@@ -79,6 +79,12 @@ class AnnotationBridge internal constructor(
             )
         }
 
+    fun getTextAnchor(
+        projectId: String,
+        anchorId: String,
+    ): BridgeResult<AnnotationTextAnchorDto?> =
+        holder.wrapResult { holder.service.getTextAnchor(projectId, anchorId) }
+
     fun createNamedEntry(
         projectId: String,
         canonicalName: String,
@@ -166,19 +172,23 @@ class AnnotationBridge internal constructor(
     fun applyAnnotationEdits(
         projectId: String,
         chapterId: String,
+        baselineId: String,
         baseRevision: Long,
         textRevision: Long,
         cause: EditorTransactionCauseDto,
         edits: List<AnnotationEditDto>,
+        text: String,
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.applyAnnotationEdits(
                 projectId,
                 chapterId,
+                baselineId,
                 baseRevision.toULong(),
                 textRevision.toULong(),
                 cause,
                 edits,
+                text,
             )
         }
 

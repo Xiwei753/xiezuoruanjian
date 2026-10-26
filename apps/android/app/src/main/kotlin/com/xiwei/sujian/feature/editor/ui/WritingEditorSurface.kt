@@ -1,6 +1,8 @@
 package com.xiwei.sujian.feature.editor.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.contextmenu.builder.item
@@ -9,12 +11,17 @@ import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.awaitPointerEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
@@ -49,6 +56,7 @@ data class WritingEditorContentParams(
     val tagHighlights: List<ComposeTextRange>,
     val linkHighlights: List<ComposeTextRange>,
     val onAnnotationSelectionAction: ((AnnotationSelectionAction, ComposeTextRange, String) -> Unit)?,
+    val onLinkedTextClick: ((Int) -> Unit)?,
     val modifier: Modifier,
 )
 
@@ -153,6 +161,7 @@ fun WritingEditorSurface(
     tagHighlights: List<ComposeTextRange> = emptyList(),
     linkHighlights: List<ComposeTextRange> = emptyList(),
     onAnnotationSelectionAction: ((AnnotationSelectionAction, ComposeTextRange, String) -> Unit)? = null,
+    onLinkedTextClick: ((Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     WritingEditorContent(
@@ -173,6 +182,7 @@ fun WritingEditorSurface(
                 tagHighlights = tagHighlights,
                 linkHighlights = linkHighlights,
                 onAnnotationSelectionAction = onAnnotationSelectionAction,
+                onLinkedTextClick = onLinkedTextClick,
                 modifier = modifier,
             ),
     )
@@ -199,8 +209,11 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val tagHighlights = params.tagHighlights
     val linkHighlights = params.linkHighlights
     val onAnnotationSelectionAction = params.onAnnotationSelectionAction
+    val onLinkedTextClick = params.onLinkedTextClick
+    val latestOnLinkedTextClick = rememberUpdatedState(onLinkedTextClick)
     val modifier = params.modifier
     val scope = rememberCoroutineScope()
+    val authoritativeTextLayout = remember(bridge) { mutableStateOf<TextLayoutResult?>(null) }
 
     // #644 评论 #684：OutputTransformation 整个编辑器生命周期只创建一次，
     // 动态值通过 rememberUpdatedState 读取，不再因 ranges 切换而重启输入会话。
@@ -250,6 +263,36 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                 Modifier
                     .fillMaxSize()
                     .testTag(com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds.EditorContent)
+                    .pointerInput(bridge, linkHighlights) {
+                        if (latestOnLinkedTextClick.value == null || linkHighlights.isEmpty()) return@pointerInput
+                        awaitEachGesture {
+                            val down =
+                                awaitFirstDown(
+                                    requireUnconsumed = false,
+                                    pass = PointerEventPass.Initial,
+                                )
+                            var up: androidx.compose.ui.input.pointer.PointerInputChange? = null
+                            while (up == null) {
+                                val event = awaitPointerEvent(PointerEventPass.Final)
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) up = change
+                            }
+                            val released = up ?: return@awaitEachGesture
+                            val travel = (released.position - down.position).getDistance()
+                            if (travel > viewConfiguration.touchSlop ||
+                                released.uptimeMillis - down.uptimeMillis >= viewConfiguration.longPressTimeoutMillis
+                            ) {
+                                return@awaitEachGesture
+                            }
+                            val layout = authoritativeTextLayout.value ?: return@awaitEachGesture
+                            val contentPosition =
+                                Offset(
+                                    x = released.position.x,
+                                    y = released.position.y + viewportState.scrollState.value,
+                                )
+                            latestOnLinkedTextClick.value?.invoke(layout.getOffsetForPosition(contentPosition))
+                        }
+                    }
                     .appendTextContextMenuComponents {
                         if (!bridge.state.selection.collapsed && onAnnotationSelectionAction != null) {
                             separator()
@@ -288,6 +331,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             cursorBrush = SolidColor(Color.Transparent),
             onTextLayout = { getResult ->
                 getResult()?.let { result ->
+                    authoritativeTextLayout.value = result
                     onTextLayoutResult(
                         result = result,
                         viewportState = viewportState,

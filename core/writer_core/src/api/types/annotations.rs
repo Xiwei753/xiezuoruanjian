@@ -63,7 +63,6 @@ pub struct AnnotationTextAnchorDto {
     pub chapter_id: String,
     pub start_byte: u32,
     pub end_byte: u32,
-    pub text_revision: u64,
     pub updated_at_ms: i64,
     pub deleted_at_ms: Option<i64>,
 }
@@ -129,6 +128,9 @@ pub struct AnnotationAutoMatchDto {
 pub struct ChapterAnnotationsDto {
     pub project_id: String,
     pub chapter_id: String,
+    /// Opaque in-memory token binding these ranges to this loaded text
+    /// snapshot. The token is echoed when applying the session's edit maps.
+    pub baseline_id: String,
     pub text_revision: u64,
     pub anchors: Vec<AnnotationTextAnchorDto>,
     pub bindings: Vec<AnnotationTagBindingDto>,

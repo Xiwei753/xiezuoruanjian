@@ -818,6 +818,59 @@ Kirigami.ApplicationWindow {
         var ref = target.objectRef || target
         if (!ref || !ref.kind) return false
         var projectId = String(ref.projectId || "")
+        if (ref.kind === "namedEntry") {
+            if (!projectId || !ref.objectId || !annotationBackend
+                    || !annotationBackend.list_named_entries_json)
+                return false
+            var entryEnvelope = null
+            try {
+                entryEnvelope = JSON.parse(String(annotationBackend.list_named_entries_json(projectId) || "{}"))
+            } catch (e) {}
+            var entries = entryEnvelope && entryEnvelope.success === true
+                ? (entryEnvelope.data || []) : []
+            for (var e = 0; e < entries.length; ++e) {
+                var entry = entries[e]
+                if (entry && !entry.deletedAtMs
+                        && String(entry.entryId) === String(ref.objectId)) {
+                    annotationEntryDetailsDialog.entry = entry
+                    annotationEntryDetailsDialog.open()
+                    return true
+                }
+            }
+            errorDialog.message = qsTr("登记名称目标已删除或不存在")
+            errorDialog.open()
+            return false
+        }
+        if (ref.kind === "textAnchor") {
+            if (!projectId || !ref.objectId || !annotationBackend
+                    || !annotationBackend.get_text_anchor_json) {
+                errorDialog.message = qsTr("无法读取正文锚点位置")
+                errorDialog.open()
+                return false
+            }
+            var anchorEnvelope = null
+            try {
+                anchorEnvelope = JSON.parse(String(
+                    annotationBackend.get_text_anchor_json(projectId, String(ref.objectId)) || "{}"))
+            } catch (e) {}
+            var anchor = anchorEnvelope && anchorEnvelope.success === true
+                ? anchorEnvelope.data : null
+            if (!anchor || anchor.deletedAtMs || !anchor.chapterId) {
+                errorDialog.message = qsTr("正文锚点已删除或不存在")
+                errorDialog.open()
+                return false
+            }
+            window.pendingAnnotationChapter = {
+                projectId: projectId,
+                chapterId: String(anchor.chapterId),
+                title: "",
+                startByte: Number(anchor.startByte),
+                endByte: Number(anchor.endByte)
+            }
+            appController.openWriting(projectId, window.projectTitleById(projectId) || qsTr("作品"))
+            window.applyPendingAnnotationChapter()
+            return true
+        }
         if (ref.kind === "starMap") {
             appController.openRootStarmap(String(ref.objectId), String(ref.objectId))
             return true
@@ -915,8 +968,31 @@ Kirigami.ApplicationWindow {
         var pending = window.pendingAnnotationChapter
         var workspace = writingWorkspaceLoader.item
         if (!pending || !workspace || workspace.workspaceProjectId !== pending.projectId) return false
+        if (!pending.volumeId) {
+            var tree = window.appState && window.appState.tree ? window.appState.tree : []
+            for (var i = 0; i < tree.length; ++i) {
+                var node = tree[i]
+                if (node && node.type === "chapter"
+                        && String(node.id) === pending.chapterId
+                        && String(node.projectId) === pending.projectId
+                        && node.volumeId) {
+                    pending.volumeId = String(node.volumeId)
+                    if (!pending.title) pending.title = String(node.title || "")
+                    break
+                }
+            }
+            if (!pending.volumeId) return false
+        }
         workspace.openChapter(pending.projectId, pending.volumeId, pending.chapterId, pending.title)
-        window.pendingAnnotationChapter = null
+        if (window.pendingAnnotationChapter === pending
+                && pending.startByte !== undefined && pending.endByte !== undefined
+                && workspace.requestSearchReveal
+                && workspace.requestSearchReveal(pending.projectId, pending.volumeId,
+                    pending.chapterId, pending.startByte, pending.endByte)) {
+            window.pendingAnnotationChapter = null
+        } else if (pending.startByte === undefined || pending.endByte === undefined) {
+            window.pendingAnnotationChapter = null
+        }
         return true
     }
 
@@ -1649,15 +1725,31 @@ Kirigami.ApplicationWindow {
                 }
                 onChapterLoaded: function(projectId, volumeId, chapterId) {
                     window.handleSearchChapterLoaded(projectId, volumeId, chapterId)
-                    if (window.pendingAnnotationChapter
-                            && window.pendingAnnotationChapter.chapterId === chapterId)
+                    var pendingAnnotation = window.pendingAnnotationChapter
+                    if (pendingAnnotation
+                            && pendingAnnotation.projectId === projectId
+                            && pendingAnnotation.chapterId === chapterId) {
+                        if (pendingAnnotation.startByte !== undefined
+                                && pendingAnnotation.endByte !== undefined
+                                && !writingWorkspaceLoader.item.requestSearchReveal(
+                                    pendingAnnotation.projectId, pendingAnnotation.volumeId,
+                                    pendingAnnotation.chapterId, pendingAnnotation.startByte,
+                                    pendingAnnotation.endByte)) {
+                            errorDialog.message = qsTr("无法定位正文锚点范围")
+                            errorDialog.open()
+                        }
                         window.pendingAnnotationChapter = null
+                    }
                 }
                 onChapterLoadFailed: function(projectId, volumeId, chapterId, reason) {
                     window.handleSearchChapterLoadFailed(projectId, volumeId, chapterId, reason)
                     if (window.pendingAnnotationChapter
-                            && window.pendingAnnotationChapter.chapterId === chapterId)
+                            && window.pendingAnnotationChapter.projectId === projectId
+                            && window.pendingAnnotationChapter.chapterId === chapterId) {
                         window.pendingAnnotationChapter = null
+                        errorDialog.message = qsTr("无法打开链接目标章节：%1").arg(String(reason || ""))
+                        errorDialog.open()
+                    }
                 }
                 onAnnotationTargetRequested: function(target) {
                     window.navigateAnnotationTarget(target)
@@ -1874,6 +1966,39 @@ Kirigami.ApplicationWindow {
             width: parent.width
             wrapMode: Text.Wrap
             text: errorDialog.message
+        }
+    }
+
+    Dialog {
+        id: annotationEntryDetailsDialog
+        property var entry: null
+        title: entry ? String(entry.canonicalName || qsTr("登记名称")) : qsTr("登记名称")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(460, window.width - 40)
+        standardButtons: Dialog.Ok
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.smallSpacing
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("别名：%1").arg((annotationEntryDetailsDialog.entry
+                    && annotationEntryDetailsDialog.entry.aliases
+                    ? annotationEntryDetailsDialog.entry.aliases : []).join("、") || qsTr("无"))
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("已确认误写：%1").arg((annotationEntryDetailsDialog.entry
+                    && annotationEntryDetailsDialog.entry.confirmedMisspellings
+                    ? annotationEntryDetailsDialog.entry.confirmedMisspellings : []).join("、") || qsTr("无"))
+            }
+            Label {
+                Layout.fillWidth: true
+                text: annotationEntryDetailsDialog.entry
+                    && annotationEntryDetailsDialog.entry.autoLinkEnabled
+                    ? qsTr("正文中自动链接已开启") : qsTr("正文中自动链接已关闭")
+            }
         }
     }
 

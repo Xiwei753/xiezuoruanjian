@@ -28,8 +28,12 @@ pub struct WriterCoreApi {
     core_instance: std::sync::RwLock<WriterCore>,
     /// Annotation range undo/redo snapshots follow the editor session's committed transactions.
     annotation_edit_history: std::sync::Mutex<
-        std::collections::HashMap<(String, String), super::annotation_ops::AnnotationEditHistory>,
+        std::collections::HashMap<(String, String), annotation_ops::AnnotationEditHistory>,
     >,
+    /// Loaded chapter text snapshots used to rebase persisted anchor positions
+    /// before applying session-local editor byte ranges.
+    annotation_edit_baselines:
+        std::sync::Mutex<std::collections::HashMap<String, annotation_ops::AnnotationEditBaseline>>,
     ///   本地 workspace Git 布局。
     ///
     /// 持有本地 `GitRepoLayout`，让写事务完成后能调
@@ -67,6 +71,7 @@ impl WriterCoreApi {
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
             annotation_edit_history: std::sync::Mutex::new(std::collections::HashMap::new()),
+            annotation_edit_baselines: std::sync::Mutex::new(std::collections::HashMap::new()),
             workspace_git_layout: std::sync::RwLock::new(
                 crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root_buf),
             ),

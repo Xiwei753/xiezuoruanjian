@@ -8,7 +8,9 @@
 import { getBridge } from '../../../../app/AppContext'
 import { IWriterCoreBridge } from '../../../../corebridge/IWriterCoreBridge'
 import { StarMapMeta } from '../../../../corebridge/dto/StarMapDtos'
+import { AnnotationObjectRefDto } from '../../../../corebridge/dto/AnnotationDtos'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
+import { AnnotationPanel } from '../../annotation/AnnotationPanel'
 
 const TOOL_PANEL_HEADER_HEIGHT_VP: number = 52
 
@@ -16,6 +18,8 @@ const TOOL_PANEL_HEADER_HEIGHT_VP: number = 52
 export struct WideToolPanel {
   @Param toolKey: string = 'starmap'
   @Param projectId: string = ''
+  @Param annotationTarget: AnnotationObjectRefDto | null = null
+  @Param onAnnotationChanged: () => void = () => {}
   @Param onClose: () => void = () => {}
   @Param onOpenStarMap: (starmapId: string, starmapTitle: string) => void =
     (_starmapId: string, _starmapTitle: string): void => {}
@@ -29,7 +33,9 @@ export struct WideToolPanel {
   }
 
   private toolTitle(): string {
-    return this.toolKey === 'ai' ? 'AI' : '星图'
+    if (this.toolKey === 'ai') return 'AI'
+    if (this.toolKey === 'tags') return '标签'
+    return '星图'
   }
 
   private async loadStarMaps(): Promise<void> {
@@ -73,7 +79,7 @@ export struct WideToolPanel {
 
       Blank()
 
-      if (this.toolKey !== 'ai') {
+      if (this.toolKey === 'starmap') {
         Button({ type: ButtonType.Normal, stateEffect: true }) {
           Image($r('app.media.ic_refresh'))
             .width(18)
@@ -231,6 +237,23 @@ export struct WideToolPanel {
         Column() {
           if (this.toolKey === 'ai') {
             this.AiBody()
+          } else if (this.toolKey === 'tags') {
+            if (this.annotationTarget !== null) {
+              AnnotationPanel({
+                projectId: this.annotationTarget !== null ? this.annotationTarget.projectId : this.projectId,
+                target: this.annotationTarget,
+                onChanged: (): void => {
+                  this.onAnnotationChanged()
+                }
+              })
+                .width('100%')
+                .layoutWeight(1)
+            } else {
+              Text('选择章节后可管理当前章节或文字选区的标签。')
+                .fontSize(12)
+                .fontColor($r('sys.color.font_secondary'))
+                .padding(16)
+            }
           } else {
             this.StarMapListBody()
           }

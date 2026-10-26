@@ -21,6 +21,7 @@ import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.app.navigation.SujianWorkbenchDimensions
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.editor.ui.SujianEditorHost
+import com.xiwei.sujian.feature.editor.presentation.AnnotationObjectRef
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 
 /**
@@ -55,6 +56,7 @@ internal data class WideWorkspaceCallbacks(
     val onChapterSwitchFailed: (
         (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     )? = null,
+    val onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean = { _, _ -> false },
 )
 
 /**
@@ -199,6 +201,7 @@ private fun WideWorkspaceContentRow(
                     .weight(1f)
                     .fillMaxHeight(),
             onChapterSwitchFailed = callbacks.onChapterSwitchFailed,
+            onAnnotationTargetOpen = callbacks.onAnnotationTargetOpen,
         )
         // 工具面板（用户主动收起时不画）。
         if (!toolPaneCollapsed) {

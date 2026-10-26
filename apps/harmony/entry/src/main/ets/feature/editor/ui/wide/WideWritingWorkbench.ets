@@ -20,6 +20,7 @@
 
 import { ActionRole, ActionSlot } from '../../../../app/navigation/ScreenSemantics'
 import { VolumeTree } from '../../../../corebridge/dto/ProjectDtos'
+import { AnnotationObjectRefDto } from '../../../../corebridge/dto/AnnotationDtos'
 import { DesignTokens } from '../../../../ui/theme/DesignTokens'
 import { WideChapterTree } from './WideChapterTree'
 import { WidePaneDivider } from './WidePaneDivider'
@@ -74,6 +75,8 @@ export struct WideWritingWorkbench {
   @Param toolPaneMaxWidthVp: number = 0
   @Param selectedToolKey: string = 'starmap'
   @Param projectId: string = ''
+  @Param annotationTarget: AnnotationObjectRefDto | null = null
+  @Param onAnnotationChanged: () => void = () => {}
   @Param onOpenStarMap: (starmapId: string, starmapTitle: string) => void =
     (_starmapId: string, _starmapTitle: string): void => {}
   @Param onChapterNavResize: (widthVp: number) => void = () => {}
@@ -314,6 +317,10 @@ export struct WideWritingWorkbench {
           WideToolPanel({
             toolKey: this.selectedToolKey,
             projectId: this.projectId,
+            annotationTarget: this.annotationTarget,
+            onAnnotationChanged: (): void => {
+              this.onAnnotationChanged()
+            },
             onClose: (): void => {
               this.onCollapseToolPane()
             },

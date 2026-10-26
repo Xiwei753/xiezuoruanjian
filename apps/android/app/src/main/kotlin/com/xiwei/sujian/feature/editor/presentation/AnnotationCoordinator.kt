@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.update
 import uniffi.writer_core.AnnotationEditDto
 import uniffi.writer_core.AnnotationObjectKindDto
 import uniffi.writer_core.AnnotationObjectRefDto
+import uniffi.writer_core.AnnotationLinkResolutionStateDto
 import uniffi.writer_core.AnnotationTargetDto
 import uniffi.writer_core.EditorTransactionCauseDto
 
@@ -58,6 +59,33 @@ data class AnnotationUiRange(
     val end: Int,
 )
 
+enum class AnnotationLinkOrigin {
+    Manual,
+    Automatic,
+}
+
+data class AnnotationUiLinkTarget(
+    val ref: AnnotationObjectRef? = null,
+    val externalUrl: String? = null,
+    val label: String,
+)
+
+data class AnnotationUiLinkedRange(
+    val range: AnnotationUiRange,
+    val targets: List<AnnotationUiLinkTarget>,
+    val origin: AnnotationLinkOrigin,
+)
+
+data class AnnotationResolvedLinkTarget(
+    val target: AnnotationUiLinkTarget,
+    val state: AnnotationLinkResolutionStateDto,
+)
+
+data class AnnotationLinkOpenResult(
+    val origin: AnnotationLinkOrigin,
+    val targets: List<AnnotationResolvedLinkTarget>,
+)
+
 data class AnnotationSearchTarget(
     val title: String,
     val subtitle: String,
@@ -79,6 +107,7 @@ data class AnnotationCoordinatorState(
     val namedEntries: List<String> = emptyList(),
     val tagRanges: List<AnnotationUiRange> = emptyList(),
     val linkRanges: List<AnnotationUiRange> = emptyList(),
+    val linkedRanges: List<AnnotationUiLinkedRange> = emptyList(),
     val linkSearchQuery: String = "",
     val linkSearchResults: List<AnnotationSearchTarget> = emptyList(),
     val error: String? = null,
@@ -186,6 +215,54 @@ class AnnotationCoordinator(
 
     fun dismissSheet() {
         _state.update { it.copy(isSheetOpen = false, error = null) }
+    }
+
+    /** Resolve the manual or automatic targets at a text offset; manual links take precedence. */
+    fun resolveLinkedText(
+        utf16Offset: Int,
+        onResolved: (AnnotationLinkOpenResult) -> Unit,
+    ) {
+        val context = targetContext ?: return
+        val linkedRanges = _state.value.linkedRanges
+        val hitRanges = linkedRanges.filter { linkedRange ->
+            utf16Offset in linkedRange.range.start until linkedRange.range.end ||
+                (utf16Offset > 0 && utf16Offset - 1 in linkedRange.range.start until linkedRange.range.end)
+        }
+        val manual = hitRanges.filter { it.origin == AnnotationLinkOrigin.Manual }
+        val selectedRanges = manual.ifEmpty { hitRanges.filter { it.origin == AnnotationLinkOrigin.Automatic } }
+        val origin = if (manual.isNotEmpty()) AnnotationLinkOrigin.Manual else AnnotationLinkOrigin.Automatic
+        val targets = selectedRanges.flatMap { it.targets }.distinctBy { target ->
+            target.ref?.let { "${it.kind}:${it.projectId}:${it.objectId}" } ?: "url:${target.externalUrl}"
+        }
+        if (targets.isEmpty()) return
+
+        scope.launch {
+            val resolved =
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        targets.map { target ->
+                            val dto =
+                                AnnotationTargetDto(
+                                    objectRef = target.ref?.toDto(),
+                                    externalUrl = target.externalUrl,
+                                )
+                            val resolution = requireData(bridge.resolveLink(dto))
+                            AnnotationResolvedLinkTarget(target, resolution.state)
+                        }
+                    }
+                }.getOrElse { error ->
+                    _state.update { it.copy(error = error.message ?: "Could not resolve link target") }
+                    return@launch
+                }
+            val latest = targetContext
+            if (latest?.projectId == context.projectId &&
+                latest.chapterId == context.chapterId &&
+                latest.revision == context.revision &&
+                latest.text == context.text
+            ) {
+                onResolved(AnnotationLinkOpenResult(origin, resolved))
+            }
+        }
     }
 
     fun onNameDraftChanged(value: String) {
@@ -333,16 +410,40 @@ class AnnotationCoordinator(
         if (offsetMap == null || oldText == newText) return
         val edits = annotationEditRanges(oldText, newText, offsetMap)
         if (edits.isEmpty()) return
+        var context = targetContext?.takeIf { it.projectId == projectId && it.chapterId == chapterId } ?: return
+        val baselineId =
+            context.baselineId ?: try {
+                withContext(Dispatchers.IO) {
+                    requireData(
+                        bridge.getChapterAnnotations(
+                            projectId,
+                            chapterId,
+                            baseRevision,
+                            oldText,
+                        ),
+                    ).baselineId
+                }
+            } catch (error: Exception) {
+                _state.update { it.copy(error = error.message ?: "Could not establish annotation baseline") }
+                return
+            }
+        val latestContext = targetContext?.takeIf { it.projectId == projectId && it.chapterId == chapterId } ?: return
+        if (latestContext.revision != context.revision || latestContext.text != context.text) return
+        context = latestContext.copy(baselineId = latestContext.baselineId ?: baselineId)
+        targetContext = context
+        val activeBaselineId = context.baselineId ?: return
         try {
             withContext(Dispatchers.IO) {
                 requireData(
                     bridge.applyAnnotationEdits(
                         projectId,
                         chapterId,
+                        activeBaselineId,
                         baseRevision,
                         newRevision,
                         cause,
                         edits,
+                        newText,
                     ),
                 )
             }
@@ -350,9 +451,9 @@ class AnnotationCoordinator(
             _state.update { it.copy(error = error.message ?: "Could not update annotation ranges") }
             return
         }
-        val context = targetContext
-        if (context?.projectId == projectId && context.chapterId == chapterId) {
-            targetContext = context.copy(revision = newRevision, text = newText)
+        val updatedContext = targetContext
+        if (updatedContext?.projectId == projectId && updatedContext.chapterId == chapterId) {
+            targetContext = updatedContext.copy(revision = newRevision, text = newText)
             reload()
         }
     }
@@ -412,6 +513,9 @@ class AnnotationCoordinator(
             } else {
                 null
             }
+        if (chapterSnapshot != null && targetContext === context) {
+            targetContext = context.copy(baselineId = chapterSnapshot.baselineId)
+        }
         val ref = context.objectRef ?: chapterSnapshot?.anchors?.firstOrNull { anchor ->
             context.selectedByteRange?.let { (start, end) ->
                 anchor.startByte.toInt() == start && anchor.endByte.toInt() == end && anchor.deletedAtMs == null
@@ -444,15 +548,49 @@ class AnnotationCoordinator(
                     }
                 if (!hasTag || anchor.deletedAtMs != null) null else anchor.toUiRange(text)
             }
-        val linkRanges = buildList {
-            chapterSnapshot?.links.orEmpty().forEach { link ->
-                if (link.deletedAtMs != null || link.source.kind != AnnotationObjectKindDto.TEXT_ANCHOR) return@forEach
-                anchorById[link.source.objectId]?.takeIf { it.deletedAtMs == null }?.toUiRange(text)?.let(::add)
-            }
+        val namedEntriesById = entries.associateBy { it.entryId }
+        val linkedRanges = buildList {
+            chapterSnapshot?.links.orEmpty()
+                .filter { it.deletedAtMs == null && it.source.kind == AnnotationObjectKindDto.TEXT_ANCHOR }
+                .groupBy { it.source.objectId }
+                .forEach { (anchorId, links) ->
+                    val anchor = anchorById[anchorId]?.takeIf { it.deletedAtMs == null } ?: return@forEach
+                    val range = anchor.toUiRange(text) ?: return@forEach
+                    val targets =
+                        links.mapNotNull { link ->
+                            val objectRef = link.target.objectRef?.toUi()
+                            val externalUrl = link.target.externalUrl
+                            if (objectRef == null && externalUrl.isNullOrBlank()) {
+                                null
+                            } else {
+                                AnnotationUiLinkTarget(
+                                    ref = objectRef,
+                                    externalUrl = externalUrl,
+                                    label =
+                                        externalUrl
+                                            ?: objectRef?.let { ref ->
+                                                namedEntriesById[ref.objectId]?.canonicalName ?: ref.objectId
+                                            }
+                                            ?: "Link",
+                                )
+                            }
+                        }
+                    if (targets.isNotEmpty()) add(AnnotationUiLinkedRange(range, targets, AnnotationLinkOrigin.Manual))
+                }
             chapterSnapshot?.autoMatches.orEmpty().forEach { match ->
-                match.toUiRange(text)?.let(::add)
+                val range = match.toUiRange(text) ?: return@forEach
+                val targets =
+                    match.candidates.map { candidate ->
+                        val ref = candidate.toUi()
+                        AnnotationUiLinkTarget(
+                            ref = ref,
+                            label = namedEntriesById[ref.objectId]?.canonicalName ?: ref.objectId,
+                        )
+                    }
+                if (targets.isNotEmpty()) add(AnnotationUiLinkedRange(range, targets, AnnotationLinkOrigin.Automatic))
             }
         }
+        val linkRanges = linkedRanges.map { it.range }
         val selectedIds = bindings.filter { it.deletedAtMs == null }.map { it.tagId }.toSet()
         return AnnotationCoordinatorState(
             isSheetOpen = _state.value.isSheetOpen,
@@ -467,6 +605,7 @@ class AnnotationCoordinator(
             namedEntries = entries.map { it.canonicalName },
             tagRanges = tagRanges,
             linkRanges = linkRanges,
+            linkedRanges = linkedRanges,
             linkSearchQuery = _state.value.linkSearchQuery,
             linkSearchResults = _state.value.linkSearchResults,
             isLoading = false,
@@ -541,6 +680,7 @@ class AnnotationCoordinator(
         val selectedByteRange: Pair<Int, Int>? = null,
         val objectRef: AnnotationObjectRef? = null,
         val targetLabel: String,
+        val baselineId: String? = null,
     )
 }
 

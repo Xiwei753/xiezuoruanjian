@@ -14,11 +14,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.app.SujianAppState
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
+import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.editor.presentation.ChapterSwitchResult
 import com.xiwei.sujian.feature.editor.presentation.EditorViewModel
+import com.xiwei.sujian.feature.editor.presentation.AnnotationObjectKind
+import com.xiwei.sujian.feature.editor.presentation.AnnotationObjectRef
 import com.xiwei.sujian.feature.editor.presentation.requestOpenChapter
+import com.xiwei.sujian.feature.editor.ui.EditorSearchReveal
+import com.xiwei.sujian.feature.editor.ui.EditorSearchRevealGate
 import com.xiwei.sujian.feature.editor.ui.LocalEditorWindowHost
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -187,6 +193,110 @@ internal fun ProjectWorkspaceScreen(
             }
         }
 
+    val onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean =
+        remember(coroutineScope, editorViewModel, editorHost, appState, workspaceNavState, projectRepository, openChapter, deps) {
+            { ref, label ->
+                when (ref.kind) {
+                    AnnotationObjectKind.Project -> {
+                        coroutineScope.launch {
+                            runCatching {
+                                projectRepository.getProjectSummaries().firstOrNull { it.id == ref.projectId }
+                                    ?: error("Project is unavailable")
+                            }.onSuccess { project ->
+                                appState.selectProject(project.id, project.title)
+                                appState.clearChapterSelection()
+                                workspaceNavState.navigateToChapterTree(project.id)
+                            }.onFailure { error ->
+                                appState.reportWorkspaceError(error.message ?: "Could not open $label")
+                            }
+                        }
+                        true
+                    }
+                    AnnotationObjectKind.Volume -> {
+                        coroutineScope.launch {
+                            runCatching {
+                                val volume = projectRepository.getVolumes(ref.projectId).firstOrNull { it.id == ref.objectId }
+                                    ?: error("Volume is unavailable")
+                                val project = projectRepository.getProjectSummaries().firstOrNull { it.id == ref.projectId }
+                                    ?: error("Project is unavailable")
+                                volume to project
+                            }.onSuccess { (volume, project) ->
+                                appState.selectProject(project.id, project.title)
+                                appState.clearChapterSelection()
+                                workspaceNavState.navigateToChapterTree(project.id, focusVolumeId = volume.id)
+                            }.onFailure { error ->
+                                appState.reportWorkspaceError(error.message ?: "Could not open $label")
+                            }
+                        }
+                        true
+                    }
+                    AnnotationObjectKind.Chapter -> {
+                        coroutineScope.launch {
+                            runCatching {
+                                val project = projectRepository.getProjectSummaries().firstOrNull { it.id == ref.projectId }
+                                    ?: error("Project is unavailable")
+                                val chapter =
+                                    projectRepository.getVolumes(ref.projectId).firstNotNullOfOrNull { volume ->
+                                        projectRepository.getChapters(ref.projectId, volume.id)
+                                            .firstOrNull { it.id == ref.objectId }
+                                            ?.let { volume to it }
+                                    } ?: error("Chapter is unavailable")
+                                Triple(project, chapter.first, chapter.second)
+                            }.onSuccess { (project, volume, chapter) ->
+                                openChapter(project.id, project.title, volume.id, chapter.id, chapter.title, null)
+                            }.onFailure { error ->
+                                appState.reportWorkspaceError(error.message ?: "Could not open $label")
+                            }
+                        }
+                        true
+                    }
+                    AnnotationObjectKind.TextAnchor -> {
+                        coroutineScope.launch {
+                            runCatching {
+                                withContext(Dispatchers.IO) {
+                                    val anchor =
+                                        when (val result = deps.appServiceBridge.annotationBridge.getTextAnchor(ref.projectId, ref.objectId)) {
+                                            is BridgeResult.Success -> result.data ?: error("正文链接已不存在或被删除")
+                                            is BridgeResult.Error -> error(result.envelope.rawError ?: "无法读取正文链接")
+                                            BridgeResult.NotLoaded -> error("原生服务尚未加载")
+                                        }
+                                    val snapshot = projectRepository.getProjectWorkspaceSnapshot(ref.projectId)
+                                    val volumeWithChapter =
+                                        snapshot.volumes.firstNotNullOfOrNull { item ->
+                                            item.takeIf { volume -> volume.chapters.any { it.id == anchor.chapterId } }
+                                        } ?: error("正文链接所在章节已不存在")
+                                    Triple(snapshot.project, volumeWithChapter, anchor)
+                                }
+                            }.onSuccess { (project, volumeWithChapter, anchor) ->
+                                val reveal =
+                                    EditorSearchReveal(
+                                        projectId = project.id,
+                                        volumeId = volumeWithChapter.volume.id,
+                                        chapterId = anchor.chapterId,
+                                        byteStart = anchor.startByte.toInt(),
+                                        byteEnd = anchor.endByte.toInt(),
+                                    )
+                                EditorSearchRevealGate.request(reveal)
+                                val chapter = volumeWithChapter.chapters.first { it.id == anchor.chapterId }
+                                openChapter(
+                                    project.id,
+                                    project.title,
+                                    volumeWithChapter.volume.id,
+                                    chapter.id,
+                                    chapter.title,
+                                    null,
+                                )
+                            }.onFailure { error ->
+                                appState.reportWorkspaceError(error.message ?: "无法打开正文链接")
+                            }
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+
     // 章节切换失败回滚回调 — remember 稳定，供窄屏/宽屏共用。
     val onChapterSwitchFailed: (
         oldProjectId: String,
@@ -274,6 +384,7 @@ internal fun ProjectWorkspaceScreen(
             onBack = { coroutineScope.launch { workspaceNavState.guardedBack() } },
             onChapterSwitchFailed = onChapterSwitchFailed,
             editorCallbacks = editorCallbacks,
+            onAnnotationTargetOpen = onAnnotationTargetOpen,
             chapterTreeFocusVolumeId = chapterTreeFocusVolumeId,
             onChapterTreeFocusConsumed = onChapterTreeFocusConsumed,
             modifier = modifier,
@@ -302,6 +413,7 @@ internal fun ProjectWorkspaceScreen(
             onBack = { coroutineScope.launch { workspaceNavState.guardedBack() } },
             onChapterSwitchFailed = onChapterSwitchFailed,
             editorCallbacks = editorCallbacks,
+            onAnnotationTargetOpen = onAnnotationTargetOpen,
             chapterTreeFocusVolumeId = chapterTreeFocusVolumeId,
             onChapterTreeFocusConsumed = onChapterTreeFocusConsumed,
             modifier = modifier.fillMaxSize(),
@@ -330,6 +442,7 @@ private fun SinglePaneContent(
     chapterTreeFocusVolumeId: String? = null,
     onChapterTreeFocusConsumed: () -> Unit = {},
     editorCallbacks: EditorWorkspaceCallbacks? = null,
+    onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean = { _, _ -> false },
     modifier: Modifier = Modifier,
 ) {
     when (location) {
@@ -376,6 +489,7 @@ private fun SinglePaneContent(
                 onSync = editorCallbacks?.onSync ?: {},
                 onSettings = editorCallbacks?.onSettings ?: {},
                 onChapterSwitchFailed = onChapterSwitchFailed,
+                onAnnotationTargetOpen = onAnnotationTargetOpen,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -406,6 +520,7 @@ private fun WideLayoutContent(
     chapterTreeFocusVolumeId: String? = null,
     onChapterTreeFocusConsumed: () -> Unit = {},
     editorCallbacks: EditorWorkspaceCallbacks? = null,
+    onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean = { _, _ -> false },
     modifier: Modifier = Modifier,
 ) {
     when (location) {
@@ -459,7 +574,7 @@ private fun WideLayoutContent(
                     )
                 }
             val callbacks =
-                remember(onBack, onSelectChapter, onChapterSwitchFailed, editorCallbacks) {
+                remember(onBack, onSelectChapter, onChapterSwitchFailed, editorCallbacks, onAnnotationTargetOpen) {
                     WideWorkspaceCallbacks(
                         onBack = onBack,
                         onSync = editorCallbacks?.onSync ?: {},
@@ -467,6 +582,7 @@ private fun WideLayoutContent(
                         onSettings = editorCallbacks?.onSettings ?: {},
                         onChapterSwitch = onSelectChapter,
                         onChapterSwitchFailed = onChapterSwitchFailed,
+                        onAnnotationTargetOpen = onAnnotationTargetOpen,
                     )
                 }
             WideWritingWorkspace(

@@ -117,7 +117,19 @@ pub struct TextAnchor {
     pub chapter_id: String,
     pub start_byte: usize,
     pub end_byte: usize,
-    pub text_revision: u64,
+    /// Content identity for the exact chapter text against which this range
+    /// was last verified. Editor-session revisions are never persisted here.
+    #[serde(default)]
+    pub text_hash: String,
+    /// Selected text and nearby context let Core safely relocate an anchor
+    /// after another device changes the chapter. Empty legacy snapshots are
+    /// treated as unresolved rather than trusting an old byte offset.
+    #[serde(default)]
+    pub anchored_text: String,
+    #[serde(default)]
+    pub context_before: String,
+    #[serde(default)]
+    pub context_after: String,
     pub updated_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted_at_ms: Option<i64>,

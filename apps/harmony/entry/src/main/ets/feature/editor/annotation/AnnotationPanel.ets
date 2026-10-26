@@ -333,6 +333,17 @@ export struct AnnotationPanel {
     return '外部网址'
   }
 
+  private focusedEntrySummary(): string {
+    const entry = this.namedEntries.find((item: AnnotationNamedEntryDto) =>
+      item.entryId === this.target.objectId && item.deletedAtMs === null)
+    if (entry === undefined) return '专名条目已删除或不可用'
+    const aliases: string = entry.aliases.length > 0 ? `别名：${entry.aliases.join('、')}` : '没有登记别名'
+    const misspellings: string = entry.confirmedMisspellings.length > 0
+      ? `确认错写：${entry.confirmedMisspellings.join('、')}`
+      : '没有确认错写'
+    return `${aliases}\n${misspellings}`
+  }
+
   build() {
     Column({ space: 8 }) {
       Row() {
@@ -345,6 +356,16 @@ export struct AnnotationPanel {
           .fontColor($r('sys.color.font_secondary'))
       }
       .width('100%')
+
+      if (this.target.kind === 'namedEntry') {
+        Text(this.focusedEntrySummary())
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+          .lineHeight(18)
+          .width('100%')
+          .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+          .backgroundColor($r('sys.color.comp_background_gray'))
+      }
 
       Scroll() {
         Column({ space: 10 }) {
@@ -409,6 +430,8 @@ export struct AnnotationPanel {
             Row() {
               Text(entry.canonicalName)
                 .fontSize(14)
+                .fontWeight(this.target.kind === 'namedEntry' && this.target.objectId === entry.entryId
+                  ? FontWeight.Bold : FontWeight.Normal)
               Blank()
               Button(entry.autoLinkEnabled ? '自动链接：开' : '自动链接：关')
                 .onClick(() => { void this.toggleAutoLink(entry) })

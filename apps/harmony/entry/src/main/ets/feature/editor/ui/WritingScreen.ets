@@ -67,7 +67,7 @@ import { CorrectionSuggestionsPanel } from '../correction/CorrectionSuggestionsP
 import { CorrectionResourceImporter } from '../correction/CorrectionResourceImporter'
 import { NativeAnnotationBridge } from '../../../corebridge/native/NativeAnnotationBridge'
 import {
-  AnnotationObjectRefDto, AnnotationRangeDto, AnnotationTextAnchorDto, ChapterAnnotationsDto
+  AnnotationObjectRefDto, AnnotationRangeDto, AnnotationTargetDto, AnnotationTextAnchorDto, ChapterAnnotationsDto
 } from '../../../corebridge/dto/AnnotationDtos'
 import { AnnotationPanel } from '../annotation/AnnotationPanel'
 
@@ -88,6 +88,11 @@ const EDITOR_MIN_WIDTH_VP: number = 360
 const STATUS_CLOCK_INTERVAL_MS: number = 30000
 // Issue #829 评论3第2项：状态栏左段「字/时」的速度窗口（最近一分钟）。
 const WRITING_SPEED_WINDOW_SECONDS: number = 60
+
+interface HyperlinkChoice {
+  target: AnnotationTargetDto
+  label: string
+}
 
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // 返回入口和标题改由 NavDestination 原生标题栏承载。
@@ -144,6 +149,11 @@ export struct WritingScreen {
   @State annotationRanges: AnnotationRangeDto[] = []
   @State annotationErrorMessage: string = ''
   @State chapterAnnotations: ChapterAnnotationsDto | null = null
+  @State annotationBaselineId: string = ''
+  private annotationBaselineRevision: number = -1
+  private annotationBaselineRefresh: Promise<void> = Promise.resolve()
+  private pendingAnnotationEdits: number = 0
+  private nextAnnotationEditBaseRevision: number = -1
   @State wordCount: number = 0
   @State isLoading: boolean = true
   @State isSaving: boolean = false
@@ -260,6 +270,7 @@ export struct WritingScreen {
   private correctionCoordinator: CorrectionCoordinator = new CorrectionCoordinator(
     new NativeCorrectionBridge(), this.editorCoordinator)
   private annotationBridge: NativeAnnotationBridge = new NativeAnnotationBridge()
+  private annotationEditQueue: Promise<void> = Promise.resolve()
   private correctionModelCleanupQueue: Promise<void> = Promise.resolve()
   private correctionModelCleanupDeferred: boolean = false
   private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.editorCoordinator)
@@ -445,6 +456,18 @@ export struct WritingScreen {
   // 接续 / 分享 payload（平台侧呈现）。
   private applyWorkflowUpdate(update: WritingWorkflowUpdate): void {
     const state = update.state
+    if (state.chapterId !== this.chapterId) {
+      this.chapterId = state.chapterId
+      this.annotationBaselineId = ''
+      this.annotationBaselineRevision = -1
+      this.annotationBaselineRefresh = Promise.resolve()
+      this.pendingAnnotationEdits = 0
+      this.nextAnnotationEditBaseRevision = -1
+      this.chapterAnnotations = null
+      this.annotationRanges = []
+      this.annotationTarget = null
+      this.annotationPanelOpen = false
+    }
     const hashChanged: boolean = state.lastSavedContentHash !== this.lastSavedContentHash
     this.content = state.content
     this.wordCount = state.wordCount
@@ -1089,7 +1112,8 @@ export struct WritingScreen {
 
   // Issue #629 评论14 第1项：宽屏左侧切章节，流程在协调器里（先关闭当前会话再安全 replace）。
   private switchChapter(chapterId: string, chapterTitle: string, volumeId: string): void {
-    this.writingWorkflow.switchChapter(chapterId, chapterTitle, volumeId).catch(() => {})
+    this.annotationEditQueue.then(() => this.writingWorkflow.switchChapter(chapterId, chapterTitle, volumeId))
+      .catch(() => {})
   }
 
   // Issue #629 评论14 第1项：展开/折叠卷。
@@ -1331,6 +1355,11 @@ export struct WritingScreen {
         toolPaneMaxWidthVp: this.maximumToolPaneWidthVp(),
         selectedToolKey: this.selectedToolKey,
         projectId: this.projectId,
+        annotationTarget: this.annotationTarget,
+        onAnnotationChanged: (): void => {
+          const snapshot = this.editorCoordinator.getSnapshot()
+          if (snapshot !== null) void this.refreshAnnotationsAfterPendingEdits(snapshot)
+        },
         onOpenStarMap: (starmapId: string, starmapTitle: string): void => {
           this.openStarMapFromWorkbench(starmapId, starmapTitle)
         },
@@ -1447,7 +1476,10 @@ export struct WritingScreen {
   }
 
   // Issue #825 复核第 2 项：选中工具时同时请求展开 ToolPane。
-  private onSelectTool(key: string): void {
+  private async onSelectTool(key: string): Promise<void> {
+    if (key === 'tags') {
+      await this.openAnnotationPanel()
+    }
     this.requestToolPaneOpen(key)
   }
 
@@ -1590,36 +1622,38 @@ export struct WritingScreen {
             .width('100%')
             .constraintSize({ maxWidth: this.editorMaxWidthVp() })
 
-          Row() {
-            Button(this.annotationPanelOpen ? '收起标注' : '标注')
-              .height(34)
-              .onClick(() => {
-                if (this.annotationPanelOpen) {
-                  this.annotationPanelOpen = false
-                } else {
-                  void this.openAnnotationPanel()
+          if (this.layoutMode === WideLayoutMode.Compact) {
+            Row() {
+              Button(this.annotationPanelOpen ? '收起标注' : '标注')
+                .height(34)
+                .onClick(() => {
+                  if (this.annotationPanelOpen) {
+                    this.annotationPanelOpen = false
+                  } else {
+                    void this.openAnnotationPanel()
+                  }
+                })
+              if (this.annotationErrorMessage.length > 0) {
+                Text(this.annotationErrorMessage)
+                  .fontSize(12)
+                  .fontColor($r('sys.color.ohos_id_color_alert'))
+                  .margin({ left: 8 })
+              }
+            }
+            .width('100%')
+
+            if (this.annotationPanelOpen && this.annotationTarget !== null) {
+              AnnotationPanel({
+                projectId: this.annotationTarget !== null ? this.annotationTarget.projectId : this.projectId,
+                target: this.annotationTarget,
+                onChanged: (): void => {
+                  const snapshot = this.editorCoordinator.getSnapshot()
+                  if (snapshot !== null) void this.refreshAnnotationsAfterPendingEdits(snapshot)
                 }
               })
-            if (this.annotationErrorMessage.length > 0) {
-              Text(this.annotationErrorMessage)
-                .fontSize(12)
-                .fontColor($r('sys.color.ohos_id_color_alert'))
-                .margin({ left: 8 })
+                .width('100%')
+                .constraintSize({ maxWidth: this.editorMaxWidthVp() })
             }
-          }
-          .width('100%')
-
-          if (this.annotationPanelOpen && this.annotationTarget !== null) {
-            AnnotationPanel({
-              projectId: this.projectId,
-              target: this.annotationTarget,
-              onChanged: (): void => {
-                const snapshot = this.editorCoordinator.getSnapshot()
-                if (snapshot !== null) void this.refreshChapterAnnotations(snapshot)
-              }
-            })
-              .width('100%')
-              .constraintSize({ maxWidth: this.editorMaxWidthVp() })
           }
 
           SujianEditor({
@@ -1627,6 +1661,13 @@ export struct WritingScreen {
             presentationUpdate: this.presentationUpdate,
             correctionSuggestions: this.correctionSuggestions,
             annotationRanges: this.annotationRanges,
+            hasHyperlinkAt: (utf16Offset: number, revision: number, text: string): boolean =>
+              this.hasHyperlinkAt(utf16Offset, revision, text),
+            onHyperlinkTap: (utf16Offset: number, revision: number, text: string): boolean => {
+              if (!this.hasHyperlinkAt(utf16Offset, revision, text)) return false
+              void this.activateHyperlinkAt(utf16Offset, revision, text)
+              return true
+            },
             motionPolicy: this.motionPolicy,
             harmonyImeConnection: this.harmonyImeConnection,
             inputAdapter: this.inputAdapter,
@@ -1652,6 +1693,7 @@ export struct WritingScreen {
   }
 
   private async openAnnotationPanel(): Promise<void> {
+    await this.annotationEditQueue
     const snapshot = this.editorCoordinator.getSnapshot()
     if (snapshot === null || this.projectId.length === 0 || this.chapterId.length === 0) return
     let target: AnnotationObjectRefDto = {
@@ -1662,7 +1704,7 @@ export struct WritingScreen {
     if (endByte > startByte) {
       let annotations = this.chapterAnnotations
       if (annotations === null || annotations.textRevision !== snapshot.revision) {
-        await this.refreshChapterAnnotations(snapshot)
+        await this.refreshAnnotationsAfterPendingEdits(snapshot)
         annotations = this.chapterAnnotations
       }
       let anchor: AnnotationTextAnchorDto | undefined = annotations?.anchors.find((item: AnnotationTextAnchorDto) =>
@@ -1675,7 +1717,7 @@ export struct WritingScreen {
           return
         }
         anchor = created.data
-        await this.refreshChapterAnnotations(snapshot)
+        await this.refreshAnnotationsAfterPendingEdits(snapshot)
       }
       target = { kind: 'textAnchor', projectId: this.projectId, objectId: anchor.anchorId }
     }
@@ -1684,26 +1726,407 @@ export struct WritingScreen {
     this.annotationPanelOpen = true
   }
 
+  private async refreshAnnotationsAfterPendingEdits(snapshot: EditorSessionSnapshot): Promise<void> {
+    await this.annotationEditQueue
+    const current = this.editorCoordinator.getSnapshot()
+    await this.refreshChapterAnnotations(
+      current !== null && current.chapterId === snapshot.chapterId ? current : snapshot)
+  }
+
+  private hyperlinkOffsets(text: string, utf16Offset: number): number[] {
+    const bounded: number = Math.max(0, Math.min(utf16Offset, text.length))
+    const offsets: number[] = [TextOffsetMapper.utf16ToUtf8(text, bounded)]
+    if (bounded > 0) {
+      let previous: number = bounded - 1
+      const lastCodeUnit: number = text.charCodeAt(previous)
+      if (lastCodeUnit >= 0xDC00 && lastCodeUnit <= 0xDFFF && previous > 0) {
+        const highCodeUnit: number = text.charCodeAt(previous - 1)
+        if (highCodeUnit >= 0xD800 && highCodeUnit <= 0xDBFF) previous -= 1
+      }
+      offsets.push(TextOffsetMapper.utf16ToUtf8(text, previous))
+    }
+    return offsets
+  }
+
+  private hyperlinkTargetsAt(utf16Offset: number, revision: number, text: string): AnnotationTargetDto[] {
+    const annotations = this.chapterAnnotations
+    if (annotations === null || annotations.chapterId !== this.chapterId ||
+      annotations.textRevision !== revision) return []
+    const offsets: number[] = this.hyperlinkOffsets(text, utf16Offset)
+    const covers = (startByte: number, endByte: number): boolean => {
+      for (const offset of offsets) {
+        if (offset >= startByte && offset < endByte) return true
+      }
+      return false
+    }
+    const sourceIds: string[] = []
+    for (const anchor of annotations.anchors) {
+      if (anchor.deletedAtMs === null && covers(anchor.startByte, anchor.endByte)) {
+        sourceIds.push(anchor.anchorId)
+      }
+    }
+    const manualTargets: AnnotationTargetDto[] = []
+    for (const link of annotations.links) {
+      if (link.deletedAtMs !== null || link.source.kind !== 'textAnchor' ||
+        link.source.projectId !== this.projectId || !sourceIds.includes(link.source.objectId)) continue
+      if (link.target.externalUrl !== null || link.target.objectRef !== null) {
+        manualTargets.push(link.target)
+      }
+    }
+    if (manualTargets.length > 0) return this.uniqueHyperlinkTargets(manualTargets)
+
+    const automaticTargets: AnnotationTargetDto[] = []
+    for (const match of annotations.autoMatches) {
+      if (!covers(match.startByte, match.endByte)) continue
+      for (const candidate of match.candidates) {
+        automaticTargets.push({ objectRef: candidate, externalUrl: null })
+      }
+      if (match.candidates.length === 0) {
+        for (const entryId of match.entryIds) {
+          automaticTargets.push({
+            objectRef: { kind: 'namedEntry', projectId: this.projectId, objectId: entryId },
+            externalUrl: null
+          })
+        }
+      }
+    }
+    return this.uniqueHyperlinkTargets(automaticTargets)
+  }
+
+  private uniqueHyperlinkTargets(targets: AnnotationTargetDto[]): AnnotationTargetDto[] {
+    const output: AnnotationTargetDto[] = []
+    const keys: Set<string> = new Set<string>()
+    for (const target of targets) {
+      const ref = target.objectRef
+      const key: string = ref !== null
+        ? `${ref.kind}:${ref.projectId}:${ref.objectId}`
+        : `url:${target.externalUrl ?? ''}`
+      if (keys.has(key)) continue
+      keys.add(key)
+      output.push(target)
+    }
+    return output
+  }
+
+  private hasHyperlinkAt(utf16Offset: number, revision: number, text: string): boolean {
+    return this.hyperlinkTargetsAt(utf16Offset, revision, text).length > 0
+  }
+
+  private showHyperlinkToast(message: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message })
+    } catch (_error) {
+      // A toast failure must not affect editor selection or routing.
+    }
+  }
+
+  private async activateHyperlinkAt(utf16Offset: number, revision: number, text: string): Promise<void> {
+    const targets = this.hyperlinkTargetsAt(utf16Offset, revision, text)
+    if (targets.length === 0) return
+    const choices: HyperlinkChoice[] = []
+    let missingCount: number = 0
+    let notDownloadedCount: number = 0
+    let resolutionFailedCount: number = 0
+    for (const target of targets) {
+      const result = await this.annotationBridge.resolveLink(target)
+      if (!result.success || result.data === undefined) {
+        resolutionFailedCount += 1
+        continue
+      }
+      if (result.data.state === 'missing') {
+        missingCount += 1
+        continue
+      }
+      if (result.data.state === 'projectNotDownloaded') {
+        notDownloadedCount += 1
+        continue
+      }
+      const resolved: AnnotationTargetDto = result.data.target
+      choices.push({ target: resolved, label: await this.hyperlinkTargetLabel(resolved) })
+    }
+    if (choices.length === 0) {
+      const unavailable: string[] = []
+      if (missingCount > 0) unavailable.push(`${missingCount} 个目标已删除或不存在`)
+      if (notDownloadedCount > 0) unavailable.push(`${notDownloadedCount} 个目标所属作品尚未下载`)
+      if (resolutionFailedCount > 0) unavailable.push(`${resolutionFailedCount} 个目标解析失败`)
+      this.showHyperlinkToast(unavailable.length > 0
+        ? `链接目标不可用：${unavailable.join('；')}`
+        : '链接目标不可用')
+      return
+    }
+    if (choices.length === 1) {
+      await this.openHyperlinkTarget(choices[0].target)
+      return
+    }
+
+    const duplicateLabels = new Map<string, number>()
+    for (const choice of choices) {
+      duplicateLabels.set(choice.label, (duplicateLabels.get(choice.label) ?? 0) + 1)
+    }
+    const labelIndex = new Map<string, number>()
+    const buttons = choices.map((choice: HyperlinkChoice) => {
+      const duplicateCount: number = duplicateLabels.get(choice.label) ?? 0
+      let label: string = choice.label
+      if (duplicateCount > 1) {
+        const nextIndex: number = (labelIndex.get(choice.label) ?? 0) + 1
+        labelIndex.set(choice.label, nextIndex)
+        label = `${label}（候选 ${nextIndex}）`
+      }
+      return { value: label, action: (): void => { void this.openHyperlinkTarget(choice.target) } }
+    })
+    if (targets.length > 1) {
+      let message: string = '找到多个链接目标，请选择要打开的对象。'
+      if (missingCount + notDownloadedCount > 0) {
+        const skipped: string[] = []
+        if (missingCount > 0) skipped.push(`${missingCount} 个已删除目标`)
+        if (notDownloadedCount > 0) skipped.push(`${notDownloadedCount} 个未下载目标`)
+        message += ` 已跳过${skipped.join('、')}。`
+      }
+      if (resolutionFailedCount > 0) {
+        message += ` ${resolutionFailedCount} 个目标解析失败。`
+      }
+      AlertDialog.show({ title: '选择链接目标', message: message, buttons: buttons })
+      return
+    }
+    await this.openHyperlinkTarget(choices[0].target)
+  }
+
+  private async hyperlinkTargetLabel(target: AnnotationTargetDto): Promise<string> {
+    const ref = target.objectRef
+    if (ref === null) return target.externalUrl ?? '外部链接'
+    if (ref.kind === 'namedEntry') {
+      const result = await this.annotationBridge.listNamedEntries(ref.projectId)
+      const entry = result.data?.find((item) => item.entryId === ref.objectId && item.deletedAtMs === null)
+      if (entry !== undefined) {
+        const aliases: string = entry.aliases.length > 0 ? `（${entry.aliases.join('、')}）` : ''
+        return `专名：${entry.canonicalName}${aliases}`
+      }
+      return '专名条目'
+    }
+    if (ref.kind === 'project' || ref.kind === 'volume' || ref.kind === 'chapter') {
+      const tree = await this.bridge.getProjectTree(ref.projectId)
+      if (tree.success && tree.data !== undefined) {
+        if (ref.kind === 'project') return tree.data.project.title
+        for (const volume of tree.data.volumes) {
+          if (ref.kind === 'volume' && volume.volume.id === ref.objectId) return volume.volume.title
+          for (const chapter of volume.chapters) {
+            if (ref.kind === 'chapter' && chapter.id === ref.objectId) return chapter.title
+          }
+        }
+      }
+    }
+    if (ref.kind === 'starMap' || ref.kind === 'starMapNode' || ref.kind === 'starMapEmbed') {
+      const maps = await this.bridge.listStarMapsForProject(ref.projectId)
+      if (maps.success && maps.data !== undefined) {
+        for (const map of maps.data) {
+          if (ref.kind === 'starMap' && map.starmapId === ref.objectId) return map.title
+          if (ref.kind === 'starMapNode' || ref.kind === 'starMapEmbed') {
+            const graph = await this.bridge.getStarMapGraph(map.starmapId)
+            if (!graph.success || graph.data === undefined) continue
+            if (ref.kind === 'starMapNode') {
+              const node = graph.data.nodes.find((item) => item.id === ref.objectId)
+              if (node !== undefined) return node.title
+            } else {
+              const embed = graph.data.embeds.find((item) => item.instanceId === ref.objectId)
+              if (embed !== undefined) return embed.label ?? map.title
+            }
+          }
+        }
+      }
+    }
+    if (ref.kind === 'textAnchor') return '正文选区'
+    return `${ref.kind} · ${ref.objectId}`
+  }
+
+  private async openHyperlinkTarget(target: AnnotationTargetDto): Promise<void> {
+    if (target.externalUrl !== null) {
+      const context = getAppContext().getAbilityContext()
+      if (context === null) {
+        this.showHyperlinkToast('无法打开外部链接')
+        return
+      }
+      try {
+        await context.openLink(target.externalUrl)
+      } catch (_error) {
+        this.showHyperlinkToast('外部链接打开失败')
+      }
+      return
+    }
+    const ref = target.objectRef
+    if (ref === null) {
+      this.showHyperlinkToast('链接目标不可用')
+      return
+    }
+    if (ref.kind === 'namedEntry') {
+      this.annotationTarget = ref
+      this.annotationPanelOpen = true
+      if (this.layoutMode === WideLayoutMode.Wide) this.requestToolPaneOpen('tags')
+      return
+    }
+    if (ref.kind === 'textAnchor') {
+      const anchor = await this.annotationBridge.getTextAnchor(ref.projectId, ref.objectId)
+      if (!anchor.success) {
+        this.showHyperlinkToast(anchor.userMessage ?? '正文选区链接无法解析')
+        return
+      }
+      if (anchor.data === undefined || anchor.data === null || anchor.data.deletedAtMs !== null) {
+        this.showHyperlinkToast('正文选区已删除或不存在')
+        return
+      }
+      if (anchor.data.chapterId === this.chapterId && anchor.data.projectId === this.projectId) {
+        const selected = await this.editorCoordinator.setSelection(anchor.data.startByte, anchor.data.endByte)
+        if (selected.success) {
+          this.viewportController.reveal(TextOffsetMapper.utf8ToUtf16(
+            this.editorCoordinator.getSnapshot()?.text ?? '', anchor.data.startByte))
+        }
+        return
+      }
+      const route: WritingRouteParams = {
+        projectId: anchor.data.projectId,
+        chapterId: anchor.data.chapterId,
+        searchByteStart: anchor.data.startByte,
+        searchByteEnd: anchor.data.endByte,
+        searchField: 'body'
+      }
+      this.navPathStack.pushPath({ name: Routes.Writing, param: route })
+      return
+    }
+    if (ref.kind === 'chapter') {
+      let title: string = ref.objectId
+      let volumeId: string = ''
+      const tree = await this.bridge.getProjectTree(ref.projectId)
+      if (tree.success && tree.data !== undefined) {
+        for (const volume of tree.data.volumes) {
+          for (const chapter of volume.chapters) {
+            if (chapter.id === ref.objectId) {
+              title = chapter.title
+              volumeId = volume.volume.id
+            }
+          }
+        }
+      }
+      const route: WritingRouteParams = {
+        chapterId: ref.objectId, chapterTitle: title, projectId: ref.projectId, volumeId: volumeId
+      }
+      this.navPathStack.pushPath({ name: Routes.Writing, param: route })
+      return
+    }
+    if (ref.kind === 'project' || ref.kind === 'volume') {
+      const tree = await this.bridge.getProjectTree(ref.projectId)
+      const projectName: string = tree.success && tree.data !== undefined
+        ? tree.data.project.title
+        : (ref.projectId === this.projectId ? this.projectTitle : ref.projectId)
+      const param = ref.kind === 'volume'
+        ? { projectId: ref.projectId, projectName: projectName, focusVolumeId: ref.objectId }
+        : { projectId: ref.projectId, projectName: projectName }
+      this.navPathStack.pushPath({ name: Routes.Workspace, param: param })
+      return
+    }
+    if (ref.kind === 'starMap' || ref.kind === 'starMapNode' || ref.kind === 'starMapEmbed') {
+      const maps = await this.bridge.listStarMapsForProject(ref.projectId)
+      if (!maps.success || maps.data === undefined) {
+        this.showHyperlinkToast(maps.userMessage ?? '星图目标无法打开')
+        return
+      }
+      for (const map of maps.data) {
+        if (ref.kind === 'starMap' && map.starmapId === ref.objectId) {
+          this.navPathStack.pushPath({ name: Routes.StarMap, param: {
+            starmapId: map.starmapId, starmapTitle: map.title
+          } as StarMapRouteParams })
+          return
+        }
+        if (ref.kind === 'starMapNode' || ref.kind === 'starMapEmbed') {
+          const graph = await this.bridge.getStarMapGraph(map.starmapId)
+          if (!graph.success || graph.data === undefined) continue
+          const found: boolean = ref.kind === 'starMapNode'
+            ? graph.data.nodes.some((item) => item.id === ref.objectId)
+            : graph.data.embeds.some((item) => item.instanceId === ref.objectId)
+          if (found) {
+            const param: StarMapRouteParams = {
+              starmapId: map.starmapId,
+              starmapTitle: map.title,
+              focusKind: ref.kind === 'starMapNode' ? 'node' : 'embed',
+              focusId: ref.objectId
+            }
+            this.navPathStack.pushPath({ name: Routes.StarMap, param: param })
+            return
+          }
+        }
+      }
+      this.showHyperlinkToast('星图目标已删除或不存在')
+      return
+    }
+    this.showHyperlinkToast('暂不支持打开此链接目标')
+  }
+
   private async persistAnnotationEditAndRefresh(
     snapshot: EditorSessionSnapshot,
     edit: EditorEditResult
   ): Promise<void> {
-    const result = await this.annotationBridge.applyAnnotationEdits(
-      this.projectId, this.chapterId, edit.baseRevision, edit.newRevision, edit.cause,
-      edit.displayPatches.map((patch) => ({
-        oldStartByte: patch.replaceByteStart,
-        oldEndByte: patch.replaceByteEndExclusive,
-        newStartByte: patch.insertedByteStart,
-        newEndByte: patch.insertedByteEndExclusive
-      }))
-    )
-    if (!result.success) {
-      this.annotationErrorMessage = result.userMessage ?? '选区标注位置同步失败'
+    const projectId: string = this.projectId
+    const chapterId: string = this.chapterId
+    if (this.pendingAnnotationEdits === 0) {
+      this.nextAnnotationEditBaseRevision = edit.baseRevision
     }
-    await this.refreshChapterAnnotations(this.editorCoordinator.getSnapshot() ?? snapshot)
+    this.pendingAnnotationEdits += 1
+    const task = this.annotationEditQueue.then(async (): Promise<void> => {
+      if (projectId.length === 0 || chapterId.length === 0 || snapshot.chapterId !== chapterId) return
+      if (this.annotationBaselineId.length === 0 || this.annotationBaselineRevision !== edit.baseRevision) {
+        await this.annotationBaselineRefresh
+      }
+      if (this.annotationBaselineId.length === 0 || this.annotationBaselineRevision !== edit.baseRevision) {
+        this.annotationErrorMessage = '标注基线与正文版本不一致，已保留正文编辑'
+        return
+      }
+      const baselineId: string = this.annotationBaselineId
+      const result = await this.annotationBridge.applyAnnotationEdits(
+        projectId, chapterId, baselineId, edit.baseRevision, edit.newRevision, edit.cause,
+        edit.displayPatches.map((patch) => ({
+          oldStartByte: patch.replaceByteStart,
+          oldEndByte: patch.replaceByteEndExclusive,
+          newStartByte: patch.insertedByteStart,
+          newEndByte: patch.insertedByteEndExclusive
+        })), snapshot.text
+      )
+      if (!result.success) {
+        this.annotationErrorMessage = result.userMessage ?? '选区标注位置同步失败'
+        this.annotationBaselineId = ''
+        this.annotationBaselineRevision = -1
+        return
+      }
+      this.annotationBaselineRevision = edit.newRevision
+      this.nextAnnotationEditBaseRevision = edit.newRevision
+      await this.loadChapterAnnotations(snapshot, true)
+    })
+    this.annotationEditQueue = task.catch((error: Object): void => {
+      hilog.error(0x0000, 'WritingScreen', `annotation edit synchronization failed: ${String(error)}`)
+      this.annotationErrorMessage = '选区标注位置同步失败'
+    })
+    try {
+      await this.annotationEditQueue
+    } finally {
+      this.pendingAnnotationEdits = Math.max(0, this.pendingAnnotationEdits - 1)
+      if (this.pendingAnnotationEdits === 0) {
+        this.nextAnnotationEditBaseRevision = -1
+        const current = this.editorCoordinator.getSnapshot()
+        if (current !== null && current.chapterId === this.chapterId &&
+          current.revision !== this.annotationBaselineRevision) {
+          await this.refreshChapterAnnotations(current)
+        }
+      }
+    }
   }
 
-  private async refreshChapterAnnotations(snapshot: EditorSessionSnapshot): Promise<void> {
+  private refreshChapterAnnotations(snapshot: EditorSessionSnapshot): Promise<void> {
+    const task = this.loadChapterAnnotations(snapshot, false)
+    if (this.pendingAnnotationEdits === 0 ||
+      (this.annotationBaselineId.length === 0 && snapshot.revision === this.nextAnnotationEditBaseRevision)) {
+      this.annotationBaselineRefresh = task
+    }
+    return task
+  }
+
+  private async loadChapterAnnotations(snapshot: EditorSessionSnapshot, allowBaselineAdvanceWhileEditing: boolean): Promise<void> {
     if (this.projectId.length === 0 || this.chapterId.length === 0 || snapshot.chapterId !== this.chapterId) return
     const result = await this.annotationBridge.getChapterAnnotations(
       this.projectId, this.chapterId, snapshot.revision, snapshot.text)
@@ -1711,9 +2134,17 @@ export struct WritingScreen {
       this.annotationErrorMessage = result.userMessage ?? '标注加载失败'
       return
     }
+    const annotations = result.data
+    if (snapshot.chapterId !== this.chapterId || annotations.chapterId !== snapshot.chapterId ||
+      annotations.textRevision !== snapshot.revision) return
+    const mayAdvanceBaseline: boolean = allowBaselineAdvanceWhileEditing || this.pendingAnnotationEdits === 0 ||
+      (this.annotationBaselineId.length === 0 && snapshot.revision === this.nextAnnotationEditBaseRevision)
+    if (mayAdvanceBaseline && snapshot.revision >= this.annotationBaselineRevision) {
+      this.annotationBaselineId = annotations.baselineId
+      this.annotationBaselineRevision = snapshot.revision
+    }
     const current = this.editorCoordinator.getSnapshot()
     if (current === null || current.revision !== snapshot.revision || current.chapterId !== snapshot.chapterId) return
-    const annotations = result.data
     this.chapterAnnotations = annotations
     const ranges: AnnotationRangeDto[] = []
     annotations.anchors.forEach((anchor: AnnotationTextAnchorDto): void => {

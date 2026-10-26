@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.ui
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.xiwei.sujian.feature.editor.presentation.AnnotationObjectRef
 
 @Composable
 @Suppress("LongParameterList")
@@ -16,6 +17,7 @@ fun SujianEditorHost(
     onChapterSwitchFailed: (
         (oldProjectId: String, oldVolumeId: String?, oldChapterId: String?, oldChapterTitle: String) -> Unit
     )? = null,
+    onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean = { _, _ -> false },
 ) {
     WritingPane(
         projectId = projectId,
@@ -24,5 +26,6 @@ fun SujianEditorHost(
         chapterTitle = chapterTitle,
         modifier = modifier.fillMaxSize(),
         onChapterSwitchFailed = onChapterSwitchFailed,
+        onAnnotationTargetOpen = onAnnotationTargetOpen,
     )
 }

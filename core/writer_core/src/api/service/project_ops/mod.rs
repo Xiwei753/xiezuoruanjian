@@ -294,8 +294,7 @@ impl WriterCoreApi {
             .core_write()
             .create_volume_with_id(project_id, id, title, order)
             .map_err(WriterError::from)?;
-        let entry =
-            crate::search::extractor::extract_volume_title_entry(project_id, id, title);
+        let entry = crate::search::extractor::extract_volume_title_entry(project_id, id, title);
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Upsert,
             object_id: entry.object_id.clone(),

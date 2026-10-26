@@ -22,7 +22,8 @@ export struct WideToolRail {
 
   private tools: ToolRailEntry[] = [
     { key: 'starmap', label: '星图' },
-    { key: 'ai', label: 'AI' }
+    { key: 'ai', label: 'AI' },
+    { key: 'tags', label: '标签' }
   ]
 
   @Builder

@@ -13,6 +13,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import Sujian 1.0
 
@@ -26,6 +27,11 @@ Item {
 
     property alias editorItem: sujianEditor
     readonly property bool editorEnabled: sujianEditor.editor_enabled
+    property bool linkClickEligible: false
+    property real linkPressX: 0
+    property real linkPressY: 0
+    property var pendingLinkChoices: []
+    property string linkActivationMessage: ""
 
     signal explicitClearRequested()
 
@@ -321,26 +327,41 @@ Item {
                 sujianEditor.record_pointer_activity(
                     "move", mouse.x, mouse.y, mouse.buttons)
                 if (pressed) {
+                    var dx = mouse.x - root.linkPressX
+                    var dy = mouse.y - root.linkPressY
+                    if (dx * dx + dy * dy >= 9)
+                        root.linkClickEligible = false
                     sujianEditor.pointer_move(mouse.x, mouse.y)
                 }
             }
             onPressed: function(mouse) {
+                root.linkPressX = mouse.x
+                root.linkPressY = mouse.y
+                root.linkClickEligible = true
                 sujianEditor.record_pointer_activity(
                     "press", mouse.x, mouse.y, mouse.buttons)
                 sujianEditor.pointer_press(mouse.x, mouse.y)
                 sujianEditor.request_text_input_focus()
             }
             onReleased: function(mouse) {
+                var activateLink = root.linkClickEligible
+                var hitByte = Number(sujianEditor.selection_start_byte)
+                root.linkClickEligible = false
                 sujianEditor.record_pointer_activity(
                     "release", mouse.x, mouse.y, mouse.buttons)
                 sujianEditor.pointer_release()
+                if (activateLink && root.editorControllerRef
+                        && root.editorControllerRef.activateAnnotationLinkAtByte)
+                    root.editorControllerRef.activateAnnotationLinkAtByte(hitByte)
             }
             onCanceled: {
+                root.linkClickEligible = false
                 sujianEditor.record_pointer_activity(
                     "cancel", mouseX, mouseY, 0)
                 sujianEditor.pointer_cancel()
             }
             onPressAndHold: function(mouse) {
+                root.linkClickEligible = false
                 sujianEditor.record_pointer_activity(
                     "long_press", mouse.x, mouse.y, mouse.buttons)
                 sujianEditor.activate_pointer_long_press(mouse.x, mouse.y)
@@ -358,6 +379,66 @@ Item {
         annotationBackendRef: root.editorControllerRef.annotationBackendRef
         searchBackendRef: root.searchBackendRef
         dt: root.dt
+    }
+
+    Connections {
+        target: root.editorControllerRef
+        function onAnnotationLinkChoicesRequested(choices) {
+            root.pendingLinkChoices = choices || []
+            linkChoiceDialog.open()
+        }
+        function onAnnotationLinkActivationFailed(message) {
+            root.linkActivationMessage = String(message || qsTr("无法打开链接目标"))
+            linkActivationErrorDialog.open()
+        }
+    }
+
+    Dialog {
+        id: linkChoiceDialog
+        title: qsTr("选择链接目标")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(440, root.width - 32)
+        standardButtons: Dialog.Cancel
+        contentItem: ColumnLayout {
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("此处有多个链接目标，请选择一个可用目标。")
+            }
+            Repeater {
+                model: root.pendingLinkChoices
+                delegate: Button {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    enabled: modelData.state === "exists" || modelData.state === "externalUrl"
+                    text: {
+                        var suffix = modelData.state === "projectNotDownloaded" ? qsTr("（目标作品未下载）")
+                            : modelData.state === "missing" ? qsTr("（目标已删除）")
+                            : modelData.state === "unavailable" ? qsTr("（无法解析）") : ""
+                        return String(modelData.label || qsTr("链接目标")) + suffix
+                    }
+                    onClicked: {
+                        root.editorControllerRef.activateAnnotationLinkChoice(modelData)
+                        linkChoiceDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: linkActivationErrorDialog
+        title: qsTr("无法打开链接")
+        modal: true
+        anchors.centerIn: parent
+        width: Math.min(380, root.width - 32)
+        standardButtons: Dialog.Ok
+        contentItem: Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: root.linkActivationMessage
+        }
     }
 
     // Issue #690 评论 5675007226 步骤 4: 光标闪烁改用低频 Timer，

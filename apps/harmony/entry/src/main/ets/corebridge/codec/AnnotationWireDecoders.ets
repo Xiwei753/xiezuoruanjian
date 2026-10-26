@@ -176,14 +176,16 @@ export function decodeChapterAnnotations(value: Object): DecodeResult<ChapterAnn
   const rec = record(value, 'ChapterAnnotationsDto')
   if (rec === null) return failure('expected object')
   const projectId = text(rec, 'projectId'); const chapterId = text(rec, 'chapterId'); const textRevision = number(rec, 'textRevision')
+  const baselineId = text(rec, 'baselineId')
   const anchors = array(rec, 'anchors', decodeAnnotationTextAnchor)
   const bindings = array(rec, 'bindings', decodeAnnotationTagBinding)
   const links = array(rec, 'links', decodeAnnotationLink)
   const autoMatches = array(rec, 'autoMatches', decodeAnnotationAutoMatch)
-  if (projectId === null || chapterId === null || textRevision === null || anchors === null || bindings === null || links === null || autoMatches === null) {
+  if (projectId === null || chapterId === null || textRevision === null || baselineId === null ||
+      anchors === null || bindings === null || links === null || autoMatches === null) {
     return failure('missing chapter annotation fields')
   }
-  return success({ projectId: projectId, chapterId: chapterId, textRevision: textRevision,
+  return success({ projectId: projectId, chapterId: chapterId, textRevision: textRevision, baselineId: baselineId,
     anchors: anchors, bindings: bindings, links: links, autoMatches: autoMatches })
 }
 

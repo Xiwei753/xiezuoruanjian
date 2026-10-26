@@ -135,6 +135,10 @@ fn annotation_call(operation: &str, args: Value) -> Result<Value, String> {
                 call!(service
                     .list_links_for_source(decode_arg::<AnnotationObjectRefDto>(&args, "source")?,))
             }
+            "getTextAnchor" => call!(service.get_text_anchor(
+                string_arg(&args, "projectId")?,
+                string_arg(&args, "anchorId")?,
+            )),
             "getChapterAnnotations" => call!(service.get_chapter_annotations(
                 string_arg(&args, "projectId")?,
                 string_arg(&args, "chapterId")?,
@@ -146,10 +150,12 @@ fn annotation_call(operation: &str, args: Value) -> Result<Value, String> {
                 call!(service.apply_annotation_edits(
                     string_arg(&args, "projectId")?,
                     string_arg(&args, "chapterId")?,
+                    string_arg(&args, "baselineId")?,
                     unsigned_arg(&args, "baseRevision")?,
                     unsigned_arg(&args, "textRevision")?,
                     cause,
                     decode_arg::<Vec<AnnotationEditDto>>(&args, "edits")?,
+                    string_arg(&args, "text")?,
                 ))
             }
             "findAutoNameLinks" => call!(service.find_auto_name_links(
@@ -160,8 +166,8 @@ fn annotation_call(operation: &str, args: Value) -> Result<Value, String> {
             )),
             _ => return Err(format!("unknown annotation operation `{operation}`")),
         };
-        Ok(result)
-    })
+        result
+    })?
 }
 
 /// Dispatch one typed annotation call from the Harmony NAPI bridge.

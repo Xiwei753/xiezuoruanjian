@@ -257,7 +257,7 @@ impl AnnotationStore {
         changed.extend(self.apply_mutation(AnnotationMutation::Delete {
             kind: AnnotationKind::Tag,
             project_id: self.project_id.clone(),
-            object_id: source_tag.tag_id,
+            object_id: source.tag_id,
             deleted_at_ms: updated_at_ms,
         })?);
         Ok(changed)

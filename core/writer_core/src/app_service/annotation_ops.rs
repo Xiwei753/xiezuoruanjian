@@ -172,6 +172,14 @@ impl super::WriterAppService {
         self.api.list_links_for_source(source)
     }
 
+    pub fn get_text_anchor(
+        &self,
+        project_id: String,
+        anchor_id: String,
+    ) -> Result<Option<AnnotationTextAnchorDto>, WriterError> {
+        self.api.get_text_anchor(project_id, anchor_id)
+    }
+
     pub fn get_chapter_annotations(
         &self,
         project_id: String,
@@ -187,18 +195,22 @@ impl super::WriterAppService {
         &self,
         project_id: String,
         chapter_id: String,
+        baseline_id: String,
         base_revision: u64,
         text_revision: u64,
         cause: crate::api::EditorTransactionCauseDto,
         edits: Vec<AnnotationEditDto>,
+        text: String,
     ) -> Result<bool, WriterError> {
         self.api.apply_annotation_edits(
             project_id,
             chapter_id,
+            baseline_id,
             base_revision,
             text_revision,
             cause,
             edits,
+            text,
         )
     }
 
