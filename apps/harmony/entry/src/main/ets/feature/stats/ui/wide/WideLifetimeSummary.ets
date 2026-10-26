@@ -2,14 +2,13 @@
 //
 // 收起：居中横条，左侧「生涯」+ 总人写字数，中间首末写作日期与平均速度 / 日均字数，
 // 右侧写作天数 / 历时天数与展开提示。
-// 展开：横条原位置向下变成一张大卡，上半部仍是同一份生涯摘要，下半部左侧四项生涯纪录、
-// 右侧年度码字热力图；不弹窗、不导航，四张时段卡由父页面隐藏。
+// 展开：横条原位置向下变成生涯纪录卡；年度码字热力图由父页面在陪伴横条后全宽展示。
+// 不弹窗、不导航，四张时段卡由父页面隐藏。
 //
 // 数据全部来自 Core Explorer 的 lifetime / selected 快照，组件只做格式化。
 
 import {
   WritingStatsExplorer,
-  WritingStatsHeatmap,
   WritingStatsRecord,
   WritingStatsSelectedPeriod,
   STATS_PRESET_LIFETIME
@@ -31,26 +30,17 @@ import {
   formatMeasuredDuration,
   formatRecordValue
 } from '../StatsFormat'
-import { WideCalendarHeatmap } from './WideCalendarHeatmap'
 
 // 收起态横条占统计内容宽度的比例（参考约 657 / 973vp）；展开后占满整行。
 const LIFETIME_COLLAPSED_WIDTH: string = '67.5%'
-// 展开态整框宽高比（参考约 973 x 458vp）；内部高度由宽度派生，不写死平板高度。
-const LIFETIME_EXPANDED_ASPECT: number = 2.12
 
 @Component
 export struct WideLifetimeSummary {
   @Prop explorer: WritingStatsExplorer = EMPTY_STATS_EXPLORER
   @Prop expanded: boolean = false
   @Prop isLoading: boolean = false
-  @Prop heatmap: WritingStatsHeatmap | null = null
-  @Prop heatmapYear: number = new Date().getFullYear()
-  @Prop heatmapError: string = ''
   onToggle: () => void = () => {}
   onRetry: () => void = () => {}
-  onChangeHeatmapYear: (year: number) => void = (_year: number): void => {}
-  onSelectHeatmapDay: (date: string, chars: number) => void = (_date: string, _chars: number): void => {}
-  onRetryHeatmap: () => void = (): void => {}
 
   private selected(): WritingStatsSelectedPeriod {
     return this.explorer.selected
@@ -106,7 +96,7 @@ export struct WideLifetimeSummary {
     .clip(true)
   }
 
-  /** 展开态：整内容宽，宽高比约 2.12；上下分栏占满剩余高度。 */
+  /** 展开态：整内容宽，只保留生涯纪录，按内容自然定高。 */
   @Builder
   ExpandedFrame() {
     Column() {
@@ -124,7 +114,6 @@ export struct WideLifetimeSummary {
       }
     }
     .width('100%')
-    .aspectRatio(LIFETIME_EXPANDED_ASPECT)
     .borderRadius(DesignTokens.cardRadius)
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
     .clip(true)
@@ -196,74 +185,43 @@ export struct WideLifetimeSummary {
     })
   }
 
-  /** 展开态：左纪录 / 右大图，同一张外框内两列。 */
+  /** 展开态：生涯纪录占满卡片宽度；年度码字热力图位于页面下方独立全宽区域。 */
   @Builder
   LifetimeDetail() {
-    Row({ space: 24 }) {
-      Column() {
-        Row() {
-          Text('生涯纪录')
-            .fontSize(COMPACT_CARD_TITLE_FONT_VP)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('sys.color.font_primary'))
-            .layoutWeight(1)
-          Text(formatHistoryScope(this.explorer.historyScope))
-            .fontSize(12)
-            .fontColor($r('sys.color.font_tertiary'))
-        }
-        .width('100%')
-        .margin({ bottom: 8 })
-
-        this.RecordRow(
-          '最多码字',
-          this.recordDateText(this.selected().records.bestDay),
-          this.recordValueText(this.selected().records.bestDay, '字'))
-        this.RecordRow(
-          '单小时最多码字',
-          this.recordDateText(this.selected().records.fastestHour),
-          this.recordValueText(this.selected().records.fastestHour, '字'))
-        this.RecordRow(
-          '最长码字',
-          this.recordDateText(this.selected().records.longestSession),
-          this.recordDurationText(this.selected().records.longestSession))
-        this.RecordRow(
-          '连续码字',
-          this.streakDateText(this.selected().records.longestStreak),
-          this.recordValueText(this.selected().records.longestStreak, '天'))
+    Column() {
+      Row() {
+        Text('生涯纪录')
+          .fontSize(COMPACT_CARD_TITLE_FONT_VP)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+          .layoutWeight(1)
+        Text(formatHistoryScope(this.explorer.historyScope))
+          .fontSize(12)
+          .fontColor($r('sys.color.font_tertiary'))
       }
-      .layoutWeight(1)
-      .height('100%')
-      .alignItems(HorizontalAlign.Start)
-      .padding({ left: 24, right: 4, top: 16, bottom: 18 })
+      .width('100%')
+      .margin({ bottom: 8 })
 
-      Column() {
-        WideCalendarHeatmap({
-          heatmap: this.heatmap,
-          heatmapYear: this.heatmapYear,
-          heatmapError: this.heatmapError,
-          onChangeYear: (year: number): void => {
-            this.onChangeHeatmapYear(year)
-          },
-          onSelectDay: (date: string, chars: number): void => {
-            this.onSelectHeatmapDay(date, chars)
-          },
-          onRetry: (): void => {
-            this.onRetryHeatmap()
-          }
-        })
-          .width('100%')
-      }
-      .layoutWeight(1)
-      .height('100%')
-      .padding(16)
-      .borderRadius(DesignTokens.radiusLg)
-      .border({ width: 1, color: $r('sys.color.comp_divider') })
-      .backgroundColor($r('sys.color.background_secondary'))
+      this.RecordRow(
+        '最多码字',
+        this.recordDateText(this.selected().records.bestDay),
+        this.recordValueText(this.selected().records.bestDay, '字'))
+      this.RecordRow(
+        '单小时最多码字',
+        this.recordDateText(this.selected().records.fastestHour),
+        this.recordValueText(this.selected().records.fastestHour, '字'))
+      this.RecordRow(
+        '最长码字',
+        this.recordDateText(this.selected().records.longestSession),
+        this.recordDurationText(this.selected().records.longestSession))
+      this.RecordRow(
+        '连续码字',
+        this.streakDateText(this.selected().records.longestStreak),
+        this.recordValueText(this.selected().records.longestStreak, '天'))
     }
     .width('100%')
-    .layoutWeight(1)
-    .padding({ right: '2.4%', top: '1.6%', bottom: '2%' })
-    .alignItems(VerticalAlign.Top)
+    .padding({ left: 24, right: 24, top: 16, bottom: 18 })
+    .alignItems(HorizontalAlign.Start)
   }
 
   @Builder

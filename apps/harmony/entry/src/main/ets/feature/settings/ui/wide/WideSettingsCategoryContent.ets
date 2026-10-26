@@ -282,18 +282,20 @@ export struct WideSettingsCategoryContent {
     .alignItems(VerticalAlign.Center)
 
     // 动态取色（旧版 monetColor 别名也定位到这里）
-    GripAdaptiveToggleRow({
-      side: this.gripSide,
-      isOn: this.viewModel.settings.dynamicColorEnabled,
-      onChange: (isOn: boolean): void => {
-        this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-          settings.dynamicColorEnabled = isOn
-          return settings
-        })
-        this.viewModel.saveSettings()
+    Row() {
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.dynamicColorEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.dynamicColorEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('动态取色（实验性）').fontSize(15)
       }
-    }) {
-      Text('动态取色（实验性）').fontSize(15)
     }
     .id(this.rowId('dynamicColorEnabled'))
     .width('100%')
@@ -430,18 +432,20 @@ export struct WideSettingsCategoryContent {
 
   @Builder
   EditorRows() {
-    GripAdaptiveToggleRow({
-      side: this.gripSide,
-      isOn: this.viewModel.settings.autoIndentEnabled,
-      onChange: (isOn: boolean): void => {
-        this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-          settings.autoIndentEnabled = isOn
-          return settings
-        })
-        this.viewModel.saveSettings()
+    Row() {
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.autoIndentEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.autoIndentEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text($r('app.string.auto_indent')).fontSize(15)
       }
-    }) {
-      Text($r('app.string.auto_indent')).fontSize(15)
     }
     .id(this.rowId('autoIndentEnabled'))
     .width('100%')
@@ -477,18 +481,20 @@ export struct WideSettingsCategoryContent {
     .backgroundColor(this.rowBackground('autoIndentWidth'))
     .alignItems(VerticalAlign.Center)
 
-    GripAdaptiveToggleRow({
-      side: this.gripSide,
-      isOn: this.viewModel.settings.editorTypingAnimationEnabled,
-      onChange: (isOn: boolean): void => {
-        this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-          settings.editorTypingAnimationEnabled = isOn
-          return settings
-        })
-        this.viewModel.saveSettings()
+    Row() {
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.editorTypingAnimationEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.editorTypingAnimationEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('打字动画').fontSize(15)
       }
-    }) {
-      Text('打字动画').fontSize(15)
     }
     .id(this.rowId('editorTypingAnimationEnabled'))
     .width('100%')
@@ -525,18 +531,20 @@ export struct WideSettingsCategoryContent {
     .backgroundColor(this.rowBackground('editorTypingAnimationDurationMs'))
     .alignItems(VerticalAlign.Center)
 
-    GripAdaptiveToggleRow({
-      side: this.gripSide,
-      isOn: this.viewModel.settings.editorSmoothCursorEnabled,
-      onChange: (isOn: boolean): void => {
-        this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-          settings.editorSmoothCursorEnabled = isOn
-          return settings
-        })
-        this.viewModel.saveSettings()
+    Row() {
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.editorSmoothCursorEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.editorSmoothCursorEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('平滑光标').fontSize(15)
       }
-    }) {
-      Text('平滑光标').fontSize(15)
     }
     .id(this.rowId('editorSmoothCursorEnabled'))
     .width('100%')
@@ -573,18 +581,20 @@ export struct WideSettingsCategoryContent {
     .backgroundColor(this.rowBackground('editorSmoothCursorDurationMs'))
     .alignItems(VerticalAlign.Center)
 
-    GripAdaptiveToggleRow({
-      side: this.gripSide,
-      isOn: this.viewModel.settings.editorCoordinatedTextCursorAnimationEnabled,
-      onChange: (isOn: boolean): void => {
-        this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-          settings.editorCoordinatedTextCursorAnimationEnabled = isOn
-          return settings
-        })
-        this.viewModel.saveSettings()
+    Row() {
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.editorCoordinatedTextCursorAnimationEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.editorCoordinatedTextCursorAnimationEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('协同动画').fontSize(15)
       }
-    }) {
-      Text('协同动画').fontSize(15)
     }
     .id(this.rowId('editorCoordinatedTextCursorAnimationEnabled'))
     .width('100%')
@@ -596,18 +606,20 @@ export struct WideSettingsCategoryContent {
 
   @Builder
   SaveRows() {
-    GripAdaptiveToggleRow({
-      side: this.gripSide,
-      isOn: this.viewModel.settings.autoSaveEnabled,
-      onChange: (isOn: boolean): void => {
-        this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-          settings.autoSaveEnabled = isOn
-          return settings
-        })
-        this.viewModel.saveSettings()
+    Row() {
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.autoSaveEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.autoSaveEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text($r('app.string.auto_save')).fontSize(15)
       }
-    }) {
-      Text($r('app.string.auto_save')).fontSize(15)
     }
     .id(this.rowId('autoSaveEnabled'))
     .width('100%')
@@ -718,42 +730,18 @@ export struct WideSettingsCategoryContent {
         .fontSize(15)
         .fontWeight(FontWeight.Medium)
         .width('100%')
-      GripAdaptiveToggleRow({
-        side: this.gripSide,
-        isOn: this.viewModel.syncConfig?.enabled || false,
-        onChange: (isOn: boolean): void => {
-          const config: SyncConfig | null = this.viewModel.syncConfig
-          if (config) {
-            const next: SyncConfig = {
-              enabled: isOn,
-              activeProvider: config.activeProvider,
-              providerConfig: config.providerConfig,
-              autoSync: config.autoSync,
-              syncIntervalSeconds: config.syncIntervalSeconds,
-              hasNetworkPermission: config.hasNetworkPermission,
-              hasNetworkStatePermission: config.hasNetworkStatePermission
-            }
-            this.viewModel.updateSyncConfig(next)
-          }
-        }
-      }) {
-        Text($r('app.string.enable_sync')).fontSize(15)
-      }
-      .width('100%')
-      .padding({ top: 7, bottom: 7 })
-
-      if (this.viewModel.syncConfig?.enabled) {
+      Row() {
         GripAdaptiveToggleRow({
           side: this.gripSide,
-          isOn: this.viewModel.syncConfig?.autoSync || false,
+          isOn: this.viewModel.syncConfig?.enabled || false,
           onChange: (isOn: boolean): void => {
             const config: SyncConfig | null = this.viewModel.syncConfig
             if (config) {
               const next: SyncConfig = {
-                enabled: config.enabled,
+                enabled: isOn,
                 activeProvider: config.activeProvider,
                 providerConfig: config.providerConfig,
-                autoSync: isOn,
+                autoSync: config.autoSync,
                 syncIntervalSeconds: config.syncIntervalSeconds,
                 hasNetworkPermission: config.hasNetworkPermission,
                 hasNetworkStatePermission: config.hasNetworkStatePermission
@@ -762,7 +750,35 @@ export struct WideSettingsCategoryContent {
             }
           }
         }) {
-          Text($r('app.string.auto_sync')).fontSize(15)
+          Text($r('app.string.enable_sync')).fontSize(15)
+        }
+      }
+      .width('100%')
+      .padding({ top: 7, bottom: 7 })
+
+      if (this.viewModel.syncConfig?.enabled) {
+        Row() {
+          GripAdaptiveToggleRow({
+            side: this.gripSide,
+            isOn: this.viewModel.syncConfig?.autoSync || false,
+            onChange: (isOn: boolean): void => {
+              const config: SyncConfig | null = this.viewModel.syncConfig
+              if (config) {
+                const next: SyncConfig = {
+                  enabled: config.enabled,
+                  activeProvider: config.activeProvider,
+                  providerConfig: config.providerConfig,
+                  autoSync: isOn,
+                  syncIntervalSeconds: config.syncIntervalSeconds,
+                  hasNetworkPermission: config.hasNetworkPermission,
+                  hasNetworkStatePermission: config.hasNetworkStatePermission
+                }
+                this.viewModel.updateSyncConfig(next)
+              }
+            }
+          }) {
+            Text($r('app.string.auto_sync')).fontSize(15)
+          }
         }
         .width('100%')
         .padding({ top: 7, bottom: 7 })
@@ -994,22 +1010,25 @@ export struct WideSettingsCategoryContent {
 
   @Builder
   AiRows() {
-    GripAdaptiveToggleRow({
-      side: this.gripSide,
-      isOn: this.viewModel.settings.aiEnabled,
-      onChange: (isOn: boolean): void => {
-        this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-          settings.aiEnabled = isOn
-          return settings
-        })
-        this.viewModel.saveSettings()
+    Row() {
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.aiEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.aiEnabled = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Column({ space: 2 }) {
+          Text($r('app.string.enable_ai')).fontSize(15)
+          Text('AI 能力尚未接入写作工具面板')
+            .fontSize(11)
+            .fontColor($r('sys.color.font_tertiary'))
+        }
       }
-    }) {
-      Text($r('app.string.enable_ai')).fontSize(15)
-    } descriptionBuilder: {
-      Text('AI 能力尚未接入写作工具面板')
-        .fontSize(11)
-        .fontColor($r('sys.color.font_tertiary'))
     }
     .id(this.rowId('aiEnabled'))
     .width('100%')
@@ -1021,21 +1040,23 @@ export struct WideSettingsCategoryContent {
 
   @Builder
   DiagnosticsRows() {
-    GripAdaptiveToggleRow({
-      side: this.gripSide,
-      isOn: this.viewModel.settings.diagnosticsEnabled,
-      onChange: (isOn: boolean): void => {
-        this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-          settings.diagnosticsEnabled = isOn
-          if (!isOn) {
-            settings.diagnosticsVerbose = false
-          }
-          return settings
-        })
-        this.viewModel.saveSettings()
+    Row() {
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.diagnosticsEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.diagnosticsEnabled = isOn
+            if (!isOn) {
+              settings.diagnosticsVerbose = false
+            }
+            return settings
+          })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('开启诊断日志').fontSize(15)
       }
-    }) {
-      Text('开启诊断日志').fontSize(15)
     }
     .id(this.rowId('diagnosticsEnabled'))
     .width('100%')
@@ -1044,19 +1065,21 @@ export struct WideSettingsCategoryContent {
     .backgroundColor(this.rowBackground('diagnosticsEnabled'))
     .alignItems(VerticalAlign.Center)
 
-    GripAdaptiveToggleRow({
-      side: this.gripSide,
-      isOn: this.viewModel.settings.diagnosticsVerbose,
-      enabled: this.viewModel.settings.diagnosticsEnabled,
-      onChange: (isOn: boolean): void => {
-        this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
-          settings.diagnosticsVerbose = isOn
-          return settings
-        })
-        this.viewModel.saveSettings()
+    Row() {
+      GripAdaptiveToggleRow({
+        side: this.gripSide,
+        isOn: this.viewModel.settings.diagnosticsVerbose,
+        enabled: this.viewModel.settings.diagnosticsEnabled,
+        onChange: (isOn: boolean): void => {
+          this.viewModel.updateSettings((settings: LocalSettings): LocalSettings => {
+            settings.diagnosticsVerbose = isOn
+            return settings
+          })
+          this.viewModel.saveSettings()
+        }
+      }) {
+        Text('详细日志').fontSize(15)
       }
-    }) {
-      Text('详细日志').fontSize(15)
     }
     .id(this.rowId('diagnosticsVerbose'))
     .width('100%')

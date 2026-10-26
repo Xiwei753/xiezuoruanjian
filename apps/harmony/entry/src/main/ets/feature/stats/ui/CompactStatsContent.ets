@@ -55,6 +55,14 @@ export struct CompactStatsContent {
     return this.explorer.selected
   }
 
+  private hasAnyRecord(): boolean {
+    const records = this.selected().records
+    return records.bestDay.value !== null ||
+      records.fastestHour.value !== null ||
+      records.longestSession.value !== null ||
+      records.longestStreak.value !== null
+  }
+
   private recordValueText(record: WritingStatsRecord, unit: string): string {
     if (record.value === null) {
       return '暂无纪录'
@@ -88,13 +96,15 @@ export struct CompactStatsContent {
         }
         this.RangeSwitch()
         this.SummarySection()
-        if (!this.isLoading && this.errorMessage.length === 0 && this.selected().totalHumanTypedChars === 0) {
+        if (!this.isLoading && this.errorMessage.length === 0 && !this.hasAnyRecord()) {
           Text('暂无码字记录')
             .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
             .fontColor($r('sys.color.font_tertiary'))
             .margin({ bottom: COMPACT_CARD_PADDING_VP })
         }
-        this.RecordsSection()
+        if (this.hasAnyRecord()) {
+          this.RecordsSection()
+        }
         this.HeatmapSection()
       }
       .width('100%')
