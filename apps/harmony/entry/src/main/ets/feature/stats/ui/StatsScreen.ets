@@ -13,7 +13,7 @@
 import hilog from '@ohos.hilog'
 import emitter from '@ohos.events.emitter'
 import { UIContext } from '@kit.ArkUI'
-import { NativeStatsBridge, StatsExplorerRequestResult, StatsHeatmapRequestResult, StatsPeriodHeatmapRequestResult } from '../../../corebridge/native/NativeStatsBridge'
+import { NativeStatsBridge, StatsExplorerRequestResult, StatsHeatmapRequestResult } from '../../../corebridge/native/NativeStatsBridge'
 import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../settings/presentation/SyncOperationController'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
@@ -64,6 +64,7 @@ export struct StatsScreen {
   @State heatmapError: string = ''
   // 时段展开详情的每日真值，独立于全年日历快照和 Explorer 趋势桶。
   @State periodHeatmapDays: WritingStatsHeatmapDay[] = []
+  @State periodHeatmapLoadedYears: number[] = []
   @State periodHeatmapRangeKey: string = ''
   @State periodHeatmapLoading: boolean = false
   @State periodHeatmapError: string = ''
@@ -77,6 +78,9 @@ export struct StatsScreen {
   private lastReportedLayoutMode: string = ''
   // 请求序号在 Bridge 内维护：旧范围的晚到结果由 isLatestExplorerRequest 过滤。
   private statsBridge: NativeStatsBridge = new NativeStatsBridge(new NativeCoreModule())
+  // 时段热力图只为横向可见的年份读取数据；滚动、切换范围会使旧年度请求立即失效。
+  private periodHeatmapRequestSeq: number = 0
+  private periodHeatmapVisibleYears: number[] = []
   // #936 SYNC_CONTENT_CHANGED 监听器：保存回调本体，退订时只移除本页（emitter.on 返回 void）。
   private syncChangedHandler: ((data: emitter.EventData) => void) | null = null
 
@@ -206,11 +210,17 @@ export struct StatsScreen {
     }
   }
 
-  /** 加载时段实际日期范围覆盖的年度 Core 日快照，并合并范围内的真实日数据。 */
-  private async loadPeriodHeatmap(startDate: string, endDate: string): Promise<void> {
+  /** 为当前区间建立独立的可见年份快照；年份数据由热力图视口按需请求。 */
+  private loadPeriodHeatmap(startDate: string, endDate: string): void {
     const rangeKey: string = `${startDate}/${endDate}`
+    const sameRange: boolean = rangeKey === this.periodHeatmapRangeKey
+    this.periodHeatmapRequestSeq += 1
     this.periodHeatmapRangeKey = rangeKey
+    if (!sameRange) {
+      this.periodHeatmapVisibleYears = []
+    }
     this.periodHeatmapDays = []
+    this.periodHeatmapLoadedYears = []
     this.periodHeatmapLoading = true
     this.periodHeatmapError = ''
 
@@ -222,39 +232,99 @@ export struct StatsScreen {
       this.periodHeatmapError = '时段日期无效'
       return
     }
-
-    const years: number[] = []
-    for (let year: number = start.getFullYear(); year <= end.getFullYear(); year++) {
-      years.push(year)
+    if (sameRange && this.periodHeatmapVisibleYears.length > 0) {
+      this.requestPeriodHeatmapYears(this.periodHeatmapVisibleYears, rangeKey, true)
     }
-    const response: StatsPeriodHeatmapRequestResult = await this.statsBridge.getWritingStatsHeatmaps(years)
-    if (!this.statsBridge.isLatestPeriodHeatmapRequest(response.requestSeq) ||
-      this.periodHeatmapRangeKey !== rangeKey) {
+  }
+
+  /** UI 视口变化时只保留并请求当前可见的年度快照。 */
+  private onPeriodHeatmapVisibleYears(years: number[]): void {
+    if (this.explorer === null || this.expandedPanel !== STATS_PANEL_RANGE) {
       return
     }
-    this.periodHeatmapLoading = false
-    const result: ResultEnvelope<WritingStatsHeatmap[]> = response.envelope
-    if (result.success && result.data !== undefined) {
-      const merged: WritingStatsHeatmapDay[] = []
-      for (const snapshot of result.data) {
-        for (const day of snapshot.days) {
-          if (day.date >= startDate && day.date <= endDate) {
-            merged.push(day)
-          }
-        }
+    const startDate: string = this.explorer.selected.range.startDate
+    const endDate: string = this.explorer.selected.range.endDate
+    const rangeKey: string = `${startDate}/${endDate}`
+    if (this.periodHeatmapRangeKey !== rangeKey) {
+      return
+    }
+    this.requestPeriodHeatmapYears(years, rangeKey, false)
+  }
+
+  private requestPeriodHeatmapYears(years: number[], rangeKey: string, forceReload: boolean): void {
+    const startDate: string = rangeKey.split('/')[0]
+    const endDate: string = rangeKey.split('/')[1]
+    const start: Date | null = parseIsoDate(startDate)
+    const end: Date | null = parseIsoDate(endDate)
+    if (start === null || end === null) {
+      return
+    }
+
+    const requestedYears: number[] = []
+    for (const year of years) {
+      if (year >= start.getFullYear() && year <= end.getFullYear() && !requestedYears.includes(year)) {
+        requestedYears.push(year)
       }
-      this.periodHeatmapDays = merged
-    } else {
-      this.periodHeatmapError = result.userMessage !== undefined && result.userMessage.length > 0
-        ? result.userMessage
-        : (result.errorCode !== undefined ? result.errorCode : '加载时段日历失败')
+    }
+    requestedYears.sort((left: number, right: number) => left - right)
+    if (requestedYears.length === 0) {
+      return
+    }
+
+    const changedViewport: boolean = requestedYears.length !== this.periodHeatmapVisibleYears.length ||
+      requestedYears.some((year: number, index: number) => year !== this.periodHeatmapVisibleYears[index])
+    if (!changedViewport && !forceReload && requestedYears.every((year: number) => this.periodHeatmapLoadedYears.includes(year))) {
+      return
+    }
+
+    this.periodHeatmapVisibleYears = requestedYears
+    if (changedViewport || forceReload) {
+      this.periodHeatmapLoadedYears = this.periodHeatmapLoadedYears.filter((year: number) => !requestedYears.includes(year))
+      this.periodHeatmapDays = this.periodHeatmapDays.filter((day: WritingStatsHeatmapDay) =>
+        requestedYears.includes(Number(day.date.substring(0, 4))))
+    }
+    this.periodHeatmapRequestSeq += 1
+    const requestSeq: number = this.periodHeatmapRequestSeq
+    const missingYears: number[] = requestedYears.filter((year: number) => !this.periodHeatmapLoadedYears.includes(year))
+    this.periodHeatmapLoading = missingYears.length > 0
+    this.periodHeatmapError = ''
+    this.loadPeriodHeatmapYears(missingYears, startDate, endDate, rangeKey, requestSeq)
+  }
+
+  private async loadPeriodHeatmapYears(years: number[], startDate: string, endDate: string,
+    rangeKey: string, requestSeq: number): Promise<void> {
+    for (const year of years) {
+      const isCurrent: () => boolean = (): boolean =>
+        requestSeq === this.periodHeatmapRequestSeq && this.periodHeatmapRangeKey === rangeKey
+      if (!isCurrent()) {
+        return
+      }
+      const result: ResultEnvelope<WritingStatsHeatmap> | null =
+        await this.statsBridge.getPeriodWritingStatsHeatmap(year, isCurrent)
+      if (!isCurrent() || result === null) {
+        return
+      }
+      if (result.success && result.data !== undefined) {
+        const visibleDays: WritingStatsHeatmapDay[] = result.data.days.filter((day: WritingStatsHeatmapDay) =>
+          day.date >= startDate && day.date <= endDate)
+        this.periodHeatmapDays = this.periodHeatmapDays.concat(visibleDays)
+        this.periodHeatmapLoadedYears = this.periodHeatmapLoadedYears.concat([year])
+      } else if (this.periodHeatmapError.length === 0) {
+        this.periodHeatmapError = result.userMessage !== undefined && result.userMessage.length > 0
+          ? result.userMessage
+          : (result.errorCode !== undefined ? result.errorCode : '加载时段日历失败')
+      }
+    }
+    if (requestSeq === this.periodHeatmapRequestSeq && this.periodHeatmapRangeKey === rangeKey) {
+      this.periodHeatmapLoading = false
     }
   }
 
   /** 时段日历失败后的原地重试，不重新请求 Explorer 或全年日历。 */
   private retryPeriodHeatmap(): void {
     if (this.explorer !== null) {
-      this.loadPeriodHeatmap(this.explorer.selected.range.startDate, this.explorer.selected.range.endDate)
+      this.requestPeriodHeatmapYears(this.periodHeatmapVisibleYears,
+        `${this.explorer.selected.range.startDate}/${this.explorer.selected.range.endDate}`, true)
     }
   }
 
@@ -422,6 +492,7 @@ export struct StatsScreen {
           heatmapYear: this.heatmapYear,
           heatmapError: this.heatmapError,
           periodHeatmapDays: this.periodHeatmapMatchesSelection() ? this.periodHeatmapDays : [],
+          periodHeatmapLoadedYears: this.periodHeatmapMatchesSelection() ? this.periodHeatmapLoadedYears : [],
           periodHeatmapLoading: this.periodHeatmapMatchesSelection() ? this.periodHeatmapLoading : true,
           periodHeatmapError: this.periodHeatmapMatchesSelection() ? this.periodHeatmapError : '',
           onMounted: (): void => {
@@ -453,6 +524,9 @@ export struct StatsScreen {
           },
           onRetryPeriodHeatmap: (): void => {
             this.retryPeriodHeatmap()
+          },
+          onVisiblePeriodHeatmapYears: (years: number[]): void => {
+            this.onPeriodHeatmapVisibleYears(years)
           }
         })
       } else {

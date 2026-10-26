@@ -54,6 +54,7 @@ export struct WideStatisticsPage {
   @Prop heatmapYear: number = new Date().getFullYear()
   @Prop heatmapError: string = ''
   @Prop periodHeatmapDays: WritingStatsHeatmapDay[] = []
+  @Prop periodHeatmapLoadedYears: number[] = []
   @Prop periodHeatmapLoading: boolean = false
   @Prop periodHeatmapError: string = ''
 
@@ -67,6 +68,7 @@ export struct WideStatisticsPage {
   onRetry: () => void = () => {}
   onRetryHeatmap: () => void = () => {}
   onRetryPeriodHeatmap: () => void = () => {}
+  onVisiblePeriodHeatmapYears: (years: number[]) => void = (_years: number[]) => {}
 
   build() {
     Column() {
@@ -109,6 +111,7 @@ export struct WideStatisticsPage {
                   historyScope: this.explorer.historyScope,
                   isLoading: this.isLoading,
                   periodHeatmapDays: this.periodHeatmapDays,
+                  periodHeatmapLoadedYears: this.periodHeatmapLoadedYears,
                   periodHeatmapLoading: this.periodHeatmapLoading,
                   periodHeatmapError: this.periodHeatmapError,
                   onClose: (): void => {
@@ -119,6 +122,9 @@ export struct WideStatisticsPage {
                   },
                   onRetryPeriodHeatmap: (): void => {
                     this.onRetryPeriodHeatmap()
+                  },
+                  onVisiblePeriodHeatmapYears: (years: number[]): void => {
+                    this.onVisiblePeriodHeatmapYears(years)
                   }
                 })
               } else {

@@ -45,11 +45,13 @@ export struct WidePeriodExpanded {
   @Prop historyScope: string = 'localEvents'
   @Prop isLoading: boolean = false
   @Prop periodHeatmapDays: WritingStatsHeatmapDay[] = []
+  @Prop periodHeatmapLoadedYears: number[] = []
   @Prop periodHeatmapLoading: boolean = false
   @Prop periodHeatmapError: string = ''
   onClose: () => void = () => {}
   onRetry: () => void = () => {}
   onRetryPeriodHeatmap: () => void = () => {}
+  onVisiblePeriodHeatmapYears: (years: number[]) => void = (_years: number[]) => {}
 
   /** 快照是否已经对应刚点开的时段；否则不能把旧时段数字贴上新标题。 */
   private hasSnapshot(): boolean {
@@ -223,10 +225,14 @@ export struct WidePeriodExpanded {
         startDate: this.selected.range.startDate,
         endDate: this.selected.range.endDate,
         days: this.periodHeatmapDays,
+        loadedYears: this.periodHeatmapLoadedYears,
         isLoading: this.periodHeatmapLoading,
         errorMessage: this.periodHeatmapError,
         onRetry: (): void => {
           this.onRetryPeriodHeatmap()
+        },
+        onVisibleYears: (years: number[]): void => {
+          this.onVisiblePeriodHeatmapYears(years)
         }
       })
     }

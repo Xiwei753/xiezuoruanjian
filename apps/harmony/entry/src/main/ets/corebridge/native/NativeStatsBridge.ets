@@ -26,19 +26,11 @@ export interface StatsHeatmapRequestResult {
   envelope: ResultEnvelope<WritingStatsHeatmap>
 }
 
-// 多年份日快照请求结果（Issue #1002）：时段详情跨年时仍使用 Core 年度热力图真值，
-// 与独立全年日历拥有各自的请求序号，互不使对方的响应失效。
-export interface StatsPeriodHeatmapRequestResult {
-  requestSeq: number
-  envelope: ResultEnvelope<WritingStatsHeatmap[]>
-}
-
 export class NativeStatsBridge {
   private isInitialized: boolean = false
   private core: NativeCoreModule
   private explorerRequestSeq: number = 0
   private heatmapRequestSeq: number = 0
-  private periodHeatmapRequestSeq: number = 0
 
   constructor(core: NativeCoreModule) {
     this.core = core
@@ -132,48 +124,25 @@ export class NativeStatsBridge {
     return requestSeq === this.heatmapRequestSeq
   }
 
-  /**
-   * Issue #1002：按年份顺序读取一段日期所跨年度的 Core 日快照。
-   * 使用独立序号，避免时段详情查询打断全年日历的年份切换。
-   */
-  async getWritingStatsHeatmaps(years: number[]): Promise<StatsPeriodHeatmapRequestResult> {
-    this.periodHeatmapRequestSeq += 1
-    const requestSeq: number = this.periodHeatmapRequestSeq
-    const snapshots: WritingStatsHeatmap[] = []
-    let envelope: ResultEnvelope<WritingStatsHeatmap[]>
+  /** 时段详情按当前横向可见范围读取单个年度快照，过期时不再启动后续 Core 调用。 */
+  async getPeriodWritingStatsHeatmap(year: number,
+    isCurrentRequest: () => boolean): Promise<ResultEnvelope<WritingStatsHeatmap> | null> {
     try {
-      for (const year of years) {
-        const blocked = await this.statsWritesBlocked<WritingStatsHeatmap[]>()
-        if (blocked !== null) {
-          envelope = blocked
-          return { requestSeq: requestSeq, envelope: envelope }
-        }
-        const jsonStr: string = await this.core.getNativeModule().nativeGetWritingStatsHeatmap(year)
-        const decoded: ResultEnvelope<WritingStatsHeatmap> =
-          this.core.decodeEnvelope<WritingStatsHeatmap>(jsonStr, decodeWritingStatsHeatmap)
-        if (!decoded.success || decoded.data === undefined) {
-          envelope = {
-            success: false,
-            errorCode: decoded.errorCode,
-            userMessage: decoded.userMessage,
-            messageKey: decoded.messageKey,
-            messageArgs: decoded.messageArgs,
-            rawError: decoded.rawError
-          }
-          return { requestSeq: requestSeq, envelope: envelope }
-        }
-        snapshots.push(decoded.data)
+      const blocked = await this.statsWritesBlocked<WritingStatsHeatmap>()
+      if (!isCurrentRequest()) {
+        return null
       }
-      envelope = { success: true, data: snapshots }
+      if (blocked !== null) {
+        return blocked
+      }
+      const jsonStr: string = await this.core.getNativeModule().nativeGetWritingStatsHeatmap(year)
+      if (!isCurrentRequest()) {
+        return null
+      }
+      return this.core.decodeEnvelope<WritingStatsHeatmap>(jsonStr, decodeWritingStatsHeatmap)
     } catch (e) {
-      envelope = nativeError<WritingStatsHeatmap[]>(e)
+      return isCurrentRequest() ? nativeError<WritingStatsHeatmap>(e) : null
     }
-    return { requestSeq: requestSeq, envelope: envelope }
-  }
-
-  /** 该请求序号是否仍是最新一次时段日快照查询。 */
-  isLatestPeriodHeatmapRequest(requestSeq: number): boolean {
-    return requestSeq === this.periodHeatmapRequestSeq
   }
 
   // Issue #829：写作页状态栏的「今日进度」要当日口径，writer_core_get_writing_stats
