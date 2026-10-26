@@ -167,7 +167,7 @@ fn annotation_call(operation: &str, args: Value) -> Result<Value, String> {
             _ => return Err(format!("unknown annotation operation `{operation}`")),
         };
         result
-    })?
+    })
 }
 
 /// Dispatch one typed annotation call from the Harmony NAPI bridge.
