@@ -29,6 +29,7 @@ pub fn resolve_platform_init() -> PlatformInit {
         timezone: local_timezone(),
         tls_ca_bundle: None,
         tls_ca_dir: None,
+        tls_ca_required: false,
     }
 }
 

@@ -55,6 +55,7 @@ impl From<PlatformInitDto> for writer_platform_api::PlatformInit {
             // 等需要 CA 的平台通过内部 PlatformInit/PlatformServices 注入。
             tls_ca_bundle: None,
             tls_ca_dir: None,
+            tls_ca_required: false,
         }
     }
 }

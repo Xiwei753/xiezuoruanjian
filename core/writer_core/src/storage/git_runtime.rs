@@ -21,13 +21,14 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 static INIT: OnceLock<Result<(), String>> = OnceLock::new();
-static TLS_TRUST: OnceLock<(Option<PathBuf>, Option<PathBuf>)> = OnceLock::new();
+static TLS_TRUST: OnceLock<(Option<PathBuf>, Option<PathBuf>, bool)> = OnceLock::new();
 static TLS_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
 /// 注入平台解析出的 CA bundle/目录。路径由平台适配层保证真实存在且可读；
-/// 重复调用不覆盖首次注入。必须在首次 Git HTTPS 连接前调用。
-pub fn set_platform_tls_trust(bundle: Option<PathBuf>, dir: Option<PathBuf>) {
-    let _ = TLS_TRUST.set((bundle, dir));
+/// `required` 表示该平台必须使用系统 CA（如 HarmonyOS），缺失时应明确失败。
+/// 重复调用不覆盖首次注入，必须在首次 Git HTTPS 连接前调用。
+pub fn set_platform_tls_trust(bundle: Option<PathBuf>, dir: Option<PathBuf>, required: bool) {
+    let _ = TLS_TRUST.set((bundle, dir, required));
 }
 
 /// 确保 libgit2 运行时已完成平台级配置。幂等、线程安全。
@@ -55,8 +56,14 @@ pub fn ensure_tls_initialized() -> crate::Result<()> {
 /// 为 vendored OpenSSL 配置平台 CA。未注入时不假设任何路径；配置失败返回
 /// 稳定前缀 `ca_store_unavailable`，供 Provider 层区分于普通运行时初始化失败。
 fn configure_tls_trust() -> Result<(), String> {
-    let (bundle, dir) = TLS_TRUST.get().cloned().unwrap_or((None, None));
+    let (bundle, dir, required) = TLS_TRUST.get().cloned().unwrap_or((None, None, false));
     if bundle.is_none() && dir.is_none() {
+        if required {
+            return Err(
+                "ca_store_unavailable: no usable system CA found for required platform TLS trust"
+                    .to_string(),
+            );
+        }
         return Ok(());
     }
     if let Some(path) = bundle.as_deref() {
@@ -66,9 +73,6 @@ fn configure_tls_trust() -> Result<(), String> {
                 path.display()
             ));
         }
-        // SAFETY: libgit2 全局 SSL 选项只在 OnceLock 初始化期、任何连接开始前设置。
-        unsafe { git2::opts::set_ssl_cert_file(path) }
-            .map_err(|err| format!("ca_store_unavailable: set CA bundle failed: {err}"))?;
     }
     if let Some(path) = dir.as_deref() {
         if !path.is_dir() || std::fs::read_dir(path).is_err() {
@@ -77,9 +81,43 @@ fn configure_tls_trust() -> Result<(), String> {
                 path.display()
             ));
         }
-        // SAFETY: 同上，一次性设置 libgit2 全局 SSL 目录。
-        unsafe { git2::opts::set_ssl_cert_dir(path) }
-            .map_err(|err| format!("ca_store_unavailable: set CA directory failed: {err}"))?;
+    }
+    // file 与 path 必须在同一次 GIT_OPT_SET_SSL_CERT_LOCATIONS 调用中设置；
+    // 分开调用 git2::opts::set_ssl_cert_file/dir 会把另一参数置为 NULL。
+    set_ssl_cert_locations(bundle.as_deref(), dir.as_deref())
+}
+
+fn set_ssl_cert_locations(
+    bundle: Option<&std::path::Path>,
+    dir: Option<&std::path::Path>,
+) -> Result<(), String> {
+    use std::ffi::CString;
+    use std::os::raw::c_int;
+
+    fn c_path(path: &std::path::Path) -> Result<CString, String> {
+        CString::new(path.to_string_lossy().into_owned())
+            .map_err(|_| "ca_store_unavailable: CA path contains NUL".to_string())
+    }
+
+    let file = bundle.map(c_path).transpose()?;
+    let directory = dir.map(c_path).transpose()?;
+    // SAFETY: 仅在 OnceLock 初始化期调用；两个 CString 在调用期间保持存活，
+    // libgit2 只读取指针内容，不保留指针。
+    let result = unsafe {
+        libgit2_sys::git_libgit2_opts(
+            libgit2_sys::GIT_OPT_SET_SSL_CERT_LOCATIONS as c_int,
+            file.as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            directory
+                .as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+        )
+    };
+    if result < 0 {
+        let error = git2::Error::last_error(result);
+        return Err(format!(
+            "ca_store_unavailable: set CA certificate locations failed: {error}"
+        ));
     }
     Ok(())
 }

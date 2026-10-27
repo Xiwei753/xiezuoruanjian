@@ -3,45 +3,70 @@
 //! Harmony 平台通过 NAPI 桥接层把目录信息传进来，构造 `PlatformInit`
 //! 并启动统一日志后端。
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use writer_platform_api::{PlatformInit, PlatformKind};
 
-/// HarmonyOS 系统 CA 的候选位置，只返回真实存在且可读的路径。
+/// 检查文件是否真的包含 PEM 证书，而不是把任意可读文件当作 CA。
+fn has_ca_certificate(path: &Path) -> bool {
+    const MARKER: &[u8] = b"-----BEGIN CERTIFICATE-----";
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buffer = [0u8; 64];
+    match file.read(&mut buffer) {
+        Ok(size) => buffer[..size]
+            .windows(MARKER.len())
+            .any(|window| window == MARKER),
+        Err(_) => false,
+    }
+}
+
+/// 目录必须实际包含可供 OpenSSL 使用的 CA 文件，仅有读权限不足。
+fn directory_has_ca_files(path: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+    entries
+        .take(256)
+        .flatten()
+        .any(|entry| entry.path().is_file() && has_ca_certificate(&entry.path()))
+}
+
+/// HarmonyOS 系统 CA 的候选位置。
 ///
-/// 不同 OpenHarmony/HarmonyOS 版本的证书布局不一致；这些路径必须由平台适配层
-/// 探测后传给 Core，不能把 Linux/桌面路径直接复用到沙箱。禁止在没有可信根时
-/// 关闭 TLS 校验，发现不到 CA 时保持 `None` 并让具体 TLS 错误向上分类。
+/// 华为《网络连接安全配置》要求第三方库使用系统预置 CA 目录
+/// `/etc/security/certificates`。该目录优先于其他系统的兼容路径；兼容路径
+/// 只有在确实包含 PEM 证书时才会被采用。禁止在没有可信根时关闭 TLS 校验，
+/// 未发现可用 CA 时由 Core 返回 `tls_ca_unavailable`。
 fn resolve_tls_ca() -> (Option<PathBuf>, Option<PathBuf>) {
     let bundle_candidates = [
         std::env::var_os("SSL_CERT_FILE").map(PathBuf::from),
         Some(PathBuf::from("/etc/ssl/certs/cacert.pem")),
+        Some(PathBuf::from("/system/etc/ssl/certs/cacert.pem")),
         Some(PathBuf::from("/system/etc/security/cacert.pem")),
         Some(PathBuf::from(
             "/system/etc/security/certificates/cacert.pem",
         )),
-        Some(PathBuf::from("/etc/security/certificates/cacert.pem")),
         Some(PathBuf::from("/etc/ssl/certs/ca-certificates.crt")),
     ];
     let dir_candidates = [
+        Some(PathBuf::from("/etc/security/certificates")),
+        Some(PathBuf::from("/system/etc/security/certificates")),
         std::env::var_os("SSL_CERT_DIR").map(PathBuf::from),
         Some(PathBuf::from("/etc/ssl/certs")),
-        Some(PathBuf::from("/system/etc/security/cacerts")),
     ];
     (
         bundle_candidates
             .into_iter()
             .flatten()
-            .find(|path| path.is_file() && std::fs::File::open(path).is_ok()),
+            .find(|path| path.is_file() && has_ca_certificate(path)),
         dir_candidates
             .into_iter()
             .flatten()
-            .find(|path| path.is_dir() && std::fs::read_dir(path).is_ok()),
+            .find(|path| path.is_dir() && directory_has_ca_files(path)),
     )
-}
-
-fn resolved_ca_or_none(path: Option<PathBuf>) -> Option<PathBuf> {
-    path.filter(|value| !value.as_os_str().is_empty() && Path::new(value).exists())
 }
 
 /// 从 Harmony 目录信息构造平台初始化结构。
@@ -65,8 +90,9 @@ pub fn create_platform_init(
         app_version,
         locale,
         timezone,
-        tls_ca_bundle: resolved_ca_or_none(tls_ca_bundle),
-        tls_ca_dir: resolved_ca_or_none(tls_ca_dir),
+        tls_ca_bundle,
+        tls_ca_dir,
+        tls_ca_required: true,
     }
 }
 

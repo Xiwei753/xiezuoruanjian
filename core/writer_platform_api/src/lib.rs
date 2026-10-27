@@ -103,6 +103,7 @@ mod tests {
             timezone: "UTC".to_string(),
             tls_ca_bundle: None,
             tls_ca_dir: None,
+            tls_ca_required: false,
         };
         let paths = init.paths();
         assert_eq!(paths.app_data_dir, std::path::PathBuf::from("/data"));
@@ -124,6 +125,7 @@ mod tests {
             timezone: "Asia/Shanghai".to_string(),
             tls_ca_bundle: None,
             tls_ca_dir: None,
+            tls_ca_required: false,
         };
         let json = serde_json::to_string(&init).unwrap();
         assert!(json.contains("\"appDataDir\""));
@@ -223,6 +225,7 @@ mod tests {
             timezone: "UTC".to_string(),
             tls_ca_bundle: None,
             tls_ca_dir: None,
+            tls_ca_required: false,
         };
         let services = PlatformServices {
             init,
@@ -252,6 +255,7 @@ mod tests {
             timezone: "Asia/Shanghai".to_string(),
             tls_ca_bundle: None,
             tls_ca_dir: None,
+            tls_ca_required: false,
         };
         let dir = tempfile::tempdir().unwrap();
         let config_store: Box<dyn ConfigStore> =

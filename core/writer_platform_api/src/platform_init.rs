@@ -75,6 +75,10 @@ pub struct PlatformInit {
     /// 平台确认存在且可读的 CA 证书目录。
     #[serde(default)]
     pub tls_ca_dir: Option<PathBuf>,
+    /// 平台是否要求必须配置系统 CA。为 true 且未发现可用 CA 时，
+    /// Git HTTPS 返回 `tls_ca_unavailable`，而不是静默使用空信任库。
+    #[serde(default)]
+    pub tls_ca_required: bool,
 }
 
 impl PlatformInit {

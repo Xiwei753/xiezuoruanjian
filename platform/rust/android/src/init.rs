@@ -30,6 +30,7 @@ pub fn create_platform_init(
         timezone,
         tls_ca_bundle: None,
         tls_ca_dir: None,
+        tls_ca_required: false,
     }
 }
 

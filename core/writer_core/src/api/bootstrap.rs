@@ -1319,6 +1319,7 @@ pub fn open_app_service_with_init(
     crate::storage::git_runtime::set_platform_tls_trust(
         platform_init.tls_ca_bundle.clone(),
         platform_init.tls_ca_dir.clone(),
+        platform_init.tls_ca_required,
     );
     // 统一 workspace bootstrap：确保 .git 存在、恢复未完成删除事务。
     let layout = bootstrap_workspace(Path::new(&app_data_root))?;
@@ -1367,6 +1368,7 @@ pub fn open_app_service_with_services(
     crate::storage::git_runtime::set_platform_tls_trust(
         services.init.tls_ca_bundle.clone(),
         services.init.tls_ca_dir.clone(),
+        services.init.tls_ca_required,
     );
     let layout = bootstrap_workspace(Path::new(&app_data_root))?;
     let service = Arc::new(WriterAppService::with_platform_services(
@@ -1394,6 +1396,7 @@ pub fn open_app_service_with_secure_storage(
     crate::storage::git_runtime::set_platform_tls_trust(
         platform_init.tls_ca_bundle.clone(),
         platform_init.tls_ca_dir.clone(),
+        platform_init.tls_ca_required,
     );
     // 统一 workspace bootstrap：确保 .git 存在、恢复未完成删除事务。
     let layout = bootstrap_workspace(Path::new(&app_data_root))?;
