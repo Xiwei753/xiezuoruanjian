@@ -3,42 +3,24 @@
 //! Harmony 平台通过 NAPI 桥接层把目录信息传进来，构造 `PlatformInit`
 //! 并启动统一日志后端。
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use writer_platform_api::{PlatformInit, PlatformKind};
 
-/// 检查文件是否真的包含 PEM 证书，而不是把任意可读文件当作 CA。
-fn has_ca_certificate(path: &Path) -> bool {
-    const MARKER: &[u8] = b"-----BEGIN CERTIFICATE-----";
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut buffer = [0u8; 64];
-    match file.read(&mut buffer) {
-        Ok(size) => buffer[..size]
-            .windows(MARKER.len())
-            .any(|window| window == MARKER),
-        Err(_) => false,
-    }
+fn readable_file(path: &Path) -> bool {
+    path.is_file() && std::fs::File::open(path).is_ok()
 }
 
-/// 目录必须实际包含可供 OpenSSL 使用的 CA 文件，仅有读权限不足。
-fn directory_has_ca_files(path: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return false;
-    };
-    entries
-        .take(256)
-        .flatten()
-        .any(|entry| entry.path().is_file() && has_ca_certificate(&entry.path()))
+fn readable_dir(path: &Path) -> bool {
+    path.is_dir() && std::fs::read_dir(path).is_ok()
 }
 
 /// HarmonyOS 系统 CA 的候选位置。
 ///
 /// 华为《网络连接安全配置》要求第三方库使用系统预置 CA 目录
-/// `/etc/security/certificates`。该目录优先于其他系统的兼容路径；兼容路径
-/// 只有在确实包含 PEM 证书时才会被采用。禁止在没有可信根时关闭 TLS 校验，
+/// `/etc/security/certificates`。该目录优先于其他系统的兼容路径。此处只确认
+/// 路径存在且可读；目录内容是否真能用于校验由 OpenSSL 设置 CApath 后的实际
+/// TLS 握手给出结论，不能靠扫描文件头代替。禁止在没有可信根时关闭 TLS 校验，
 /// 未发现可用 CA 时由 Core 返回 `tls_ca_unavailable`。
 fn resolve_tls_ca() -> (Option<PathBuf>, Option<PathBuf>) {
     let bundle_candidates = [
@@ -57,16 +39,21 @@ fn resolve_tls_ca() -> (Option<PathBuf>, Option<PathBuf>) {
         std::env::var_os("SSL_CERT_DIR").map(PathBuf::from),
         Some(PathBuf::from("/etc/ssl/certs")),
     ];
-    (
+    let tls_ca_dir = dir_candidates
+        .into_iter()
+        .flatten()
+        .find(|path| readable_dir(path));
+    // 官方 CA 目录优先且互斥：目录可用时不再混入另一个 bundle，避免无效文件
+    // 让整次 GIT_OPT_SET_SSL_CERT_LOCATIONS 失败。只有找不到目录时才回退到 bundle。
+    let tls_ca_bundle = if tls_ca_dir.is_some() {
+        None
+    } else {
         bundle_candidates
             .into_iter()
             .flatten()
-            .find(|path| path.is_file() && has_ca_certificate(path)),
-        dir_candidates
-            .into_iter()
-            .flatten()
-            .find(|path| path.is_dir() && directory_has_ca_files(path)),
-    )
+            .find(|path| readable_file(path))
+    };
+    (tls_ca_bundle, tls_ca_dir)
 }
 
 /// 从 Harmony 目录信息构造平台初始化结构。
