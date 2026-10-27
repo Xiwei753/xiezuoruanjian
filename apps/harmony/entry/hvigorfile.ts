@@ -1,7 +1,7 @@
 import { hapTasks, OhosPluginId, OhosAppContext, OhosHapContext } from '@ohos/hvigor-ohos-plugin';
 import { HvigorPlugin, HvigorNode } from '@ohos/hvigor';
 import { execFileSync } from 'child_process';
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 
 // 根据 product 动态设置 entry 的 dependencies：
@@ -152,25 +152,35 @@ const buildRevisionPlugin: HvigorPlugin = {
         postDependencies: compileArkTsTasks,
         run: (taskContext) => {
           const repoRoot = resolve(taskContext.modulePath, '..', '..', '..');
+          const prebuiltDir = resolve(taskContext.modulePath, 'src', 'main', 'prebuilt', 'arm64-v8a');
+          const revisionStamp = resolve(prebuiltDir, 'writer_core_revision.txt');
           let revision = 'unknown';
-          try {
-            revision = String(execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
-              cwd: repoRoot,
-              encoding: 'utf8'
-            })).trim();
+          if (existsSync(revisionStamp)) {
+            // tools/build_harmony.sh 在编译 .so 后写入；优先反映实际内核版本。
+            revision = String(readFileSync(revisionStamp, 'utf8')).trim();
             if (revision.length === 0) {
               revision = 'unknown';
-            } else {
-              const dirty = String(execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], {
+            }
+          } else {
+            try {
+              revision = String(execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
                 cwd: repoRoot,
                 encoding: 'utf8'
               })).trim();
-              if (dirty.length > 0) {
-                revision += '-dirty';
+              if (revision.length === 0) {
+                revision = 'unknown';
+              } else {
+                const dirty = String(execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], {
+                  cwd: repoRoot,
+                  encoding: 'utf8'
+                })).trim();
+                if (dirty.length > 0) {
+                  revision += '-dirty';
+                }
               }
+            } catch (_) {
+              revision = 'unknown';
             }
-          } catch (_) {
-            revision = 'unknown';
           }
           const generatedDir = resolve(taskContext.modulePath, 'src', 'main', 'ets', 'generated');
           mkdirSync(generatedDir, { recursive: true });

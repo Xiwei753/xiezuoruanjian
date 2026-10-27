@@ -172,6 +172,21 @@ fi
 
 cp "$SO_SRC" "$PREBUILT_DIR/libwriter_core_ffi.so"
 
+# Issue #1007：记录实际编译进 .so 的 Git revision。Hvigor 的诊断 build_identity
+# 优先读这个文件，避免只重建 HAP 时把新 HEAD 误当成新的 Rust 内核版本。
+CORE_REVISION="unknown"
+if command -v git >/dev/null 2>&1; then
+    CORE_REVISION="$(git -C "$WORKSPACE_ROOT" rev-parse --short HEAD 2>/dev/null || true)"
+    if [ -n "$CORE_REVISION" ]; then
+        if [ -n "$(git -C "$WORKSPACE_ROOT" status --porcelain --untracked-files=no 2>/dev/null || true)" ]; then
+            CORE_REVISION="${CORE_REVISION}-dirty"
+        fi
+    else
+        CORE_REVISION="unknown"
+    fi
+fi
+printf '%s\n' "$CORE_REVISION" > "$PREBUILT_DIR/writer_core_revision.txt"
+
 if [ ! -f "$PREBUILT_DIR/libwriter_core_ffi.so" ]; then
     echo "错误：复制 libwriter_core_ffi.so 到 prebuilt 目录失败。" >&2
     exit 1
@@ -185,6 +200,7 @@ bash "$WORKSPACE_ROOT/tools/prepare_harmony_native_runtime.sh" "$NATIVE_DIR" "$P
 echo ""
 echo "=== 构建成功 ==="
 echo "  FFI 库: $PREBUILT_DIR/libwriter_core_ffi.so"
+echo "  FFI revision: $CORE_REVISION"
 ls -lh "$PREBUILT_DIR/libwriter_core_ffi.so"
 file "$PREBUILT_DIR/libwriter_core_ffi.so" 2>/dev/null || true
 echo ""

@@ -133,3 +133,4 @@ apps/harmony/privacy_acl/oh-package-lock.json5
 
 # HarmonyOS 构建期生成的 Git revision（entry/hvigorfile.ts GenerateBuildRevision）
 /apps/harmony/entry/src/main/ets/generated/BuildRevision.ets
+/apps/harmony/entry/src/main/prebuilt/arm64-v8a/writer_core_revision.txt
