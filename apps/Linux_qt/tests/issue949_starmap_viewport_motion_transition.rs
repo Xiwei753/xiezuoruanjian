@@ -562,17 +562,24 @@ fn active_scene_reveals_dots_into_full_nodes_without_touching_authored_coords() 
 }
 
 #[test]
-fn overview_content_scales_dots_with_the_same_reveal() {
+fn overview_content_projects_real_geometry_without_dot_tiers() {
     let src = strip_line_comments(&read_src(CONTENT));
     assert!(
         src.contains("property real detailReveal: 1.0"),
-        "只读概览必须接收同一个展开进度（两层圆点同步长大 / 收回）"
+        "只读概览仍接收视口过渡进度属性（不再据此换形状）"
     );
-    let dots = function_window(&src, "readonly property real _overviewDotRadius:", 300);
     assert!(
-        dots.contains("Math.min(width, height) * 0.018")
-            && dots.contains("Math.max(0, Math.min(1, detailReveal))"),
-        "概览圆点半径必须按展开进度缩放（不改 authored 坐标），实际窗口:\n{dots}"
+        src.contains("readonly property var projectedNodes:")
+            && src.contains("readonly property var projectedEmbeds:")
+            && src.contains("width: size.width * fitScale")
+            && src.contains("radius: modelData.diameter / 2"),
+        "概览必须直接投影真实卡片 / 入口几何（不改 authored 坐标）"
+    );
+    assert!(
+        !src.contains("_overviewDotRadius")
+            && !src.contains("readonly property string nodesPath")
+            && !src.contains("readonly property string embedsPath"),
+        "概览不得按倍率换成小圆点 / 摘要卡"
     );
     assert!(
         src.contains("readonly property real fitScale:") && src.contains("readonly property var childBounds:"),

@@ -13,11 +13,10 @@
 //     也没有 localFitScale × ancestor effectiveScale 的递归尺寸链；
 //   - 概览整体留在圆的内接安全区（约直径 66%），天然不会溢出圆外，
 //     不需要 layer.enabled / MultiEffect 圆形 FBO 遮罩 / ShaderEffectSource；
-//   - 未进入的子图中，普通节点、旧 portal、Embed 都统一显示为小圆点且不画名字；
-//     进入后由活动画布恢复完整几何和标题；
+//   - 未进入的子图按 fit-to-bounds 直接投影真实节点卡片、文字、边和入口圆壳；
+//     缩小后文字看不清是自然结果，不换圆点、不换摘要、不换另一套 LOD。
 //   - 不保存任何固定分辨率快照：父图相机变化时按当前投影重画几何。
-//     超过进入阈值后由 StarMapActiveScene 用真实矢量对象接管，本组件不会
-//     被拉伸成活动画布。
+//     超过进入阈值后由 StarMapActiveScene 用同一套 authored 几何接管。
 //
 // 约束：
 //   - 纯 UI 渲染，不调 Core 写入接口，不创建子画布
@@ -46,19 +45,17 @@ Item {
     // 概览线宽的屏幕口径：概览是父图投影的一部分，线宽恒定在屏幕像素上。
     readonly property real _previewStrokeWidth: 1.5
 
-    // Issue #949：展开进度（只影响显示层，不改 authored 坐标 / 图关系）。
-    // 1 = 概览本来样子；过渡期间与活动画布同一个 progress，圆点在两层里同步
-    // 长大 / 收回，圆点半径公式与活动画布 _revealDotRadius 同一份。
+    // Issue #949 保留该属性给视口过渡传值；#1009 起它不再切换任何形状。
     property real detailReveal: 1.0
-    readonly property real _overviewDotRadius:
-        Math.max(2, Math.min(6, Math.min(width, height) * 0.018))
-        * Math.max(0, Math.min(1, detailReveal))
+    readonly property real _titleFontPx: Math.max(0.01, 14 * fitScale)
+    readonly property real _bodyFontPx: Math.max(0.01, 12 * fitScale)
+    readonly property real _cardRadiusPx: Math.max(0.1, 6 * fitScale)
 
     // ── 目标图数据（只读快照，不写 Core）──
     property var graphData: null
     property var edgeRenders: []
     // Issue #984：整张子图的节点布局快照（含未打开的子图，由真实文本排版
-    // 测量），概览 bounds / 端点 / 圆点共用这一份，不再回退到固定高度。
+    // 测量），概览 bounds / 端点 / 卡片几何共用这一份，不再回退到固定高度。
     property var layoutSizes: ({})
     property string loadError: ""
 
@@ -219,42 +216,61 @@ Item {
         return s
     }
 
-    readonly property string nodesPath: {
-        var s = ""
+    // 真实节点卡片的投影：尺寸、文字、正文全部来自原始图，只乘同一个 fitScale。
+    readonly property var projectedNodes: {
+        var out = []
         if (!(fitScale > 0))
-            return s
+            return out
         for (var i = 0; i < nodes.length; i++) {
             var n = nodes[i]
-            var pos = n.position || { x: 0, y: 0 }
             if (n.portal && n.portal.destinationStarmapId)
                 continue
-            var dotSize = StarMapNodeMetrics.sizeFor(layoutSizes, n)
-            s += _circlePath(projectX(pos.x + dotSize.width / 2),
-                             projectY(pos.y + dotSize.height / 2),
-                             _overviewDotRadius)
+            var pos = n.position || { x: 0, y: 0 }
+            var size = StarMapNodeMetrics.sizeFor(layoutSizes, n)
+            var bodyText = ""
+            if (n.content) {
+                bodyText = n.content.body !== undefined ? n.content.body
+                    : (n.content.summary !== undefined ? n.content.summary : "")
+            }
+            out.push({
+                id: n.id,
+                x: projectX(pos.x), y: projectY(pos.y),
+                width: size.width * fitScale, height: size.height * fitScale,
+                title: n.title !== undefined ? n.title : "",
+                body: bodyText !== null && bodyText !== undefined ? String(bodyText) : ""
+            })
         }
-        return s
+        return out
     }
 
-    readonly property string embedsPath: {
-        var s = ""
+    // 子图入口同样是真实圆形几何，只是按同一投影缩小；没有缩略图 / 小圆点分支。
+    readonly property var projectedEmbeds: {
+        var out = []
         if (!(fitScale > 0))
-            return s
+            return out
         for (var i = 0; i < nodes.length; i++) {
             var n = nodes[i]
-            var npos = n.position || { x: 0, y: 0 }
             if (!(n.portal && n.portal.destinationStarmapId))
                 continue
-            s += _circlePath(projectX(npos.x + _embedDiameter / 2),
-                             projectY(npos.y + _embedDiameter / 2), _overviewDotRadius)
+            var npos = n.position || { x: 0, y: 0 }
+            out.push({
+                id: n.id,
+                x: projectX(npos.x), y: projectY(npos.y),
+                diameter: _embedDiameter * fitScale,
+                label: n.title !== undefined ? n.title : ""
+            })
         }
         for (var j = 0; j < embeds.length; j++) {
             var e = embeds[j]
             var pos = e.position || { x: 0, y: 0 }
-            s += _circlePath(projectX(pos.x + _embedDiameter / 2),
-                             projectY(pos.y + _embedDiameter / 2), _overviewDotRadius)
+            out.push({
+                id: e.instanceId,
+                x: projectX(pos.x), y: projectY(pos.y),
+                diameter: _embedDiameter * fitScale,
+                label: e.label !== undefined && e.label !== null ? e.label : ""
+            })
         }
-        return s
+        return out
     }
 
     z: 0
@@ -273,21 +289,80 @@ Item {
             PathSvg { path: overview.edgesPath }
         }
 
-        // 未进入的子入口：和普通节点一样只显示小圆点。
-        ShapePath {
-            strokeColor: overview.dt.border
-            strokeWidth: overview._previewStrokeWidth
-            fillColor: overview.dt.accentSoft
-            PathSvg { path: overview.embedsPath }
-        }
+    }
 
-        // 普通节点：未进入的子图中只显示小圆点。
-        ShapePath {
-            strokeColor: overview.dt.border
-            strokeWidth: overview._previewStrokeWidth
-            fillColor: overview.dt.surfaceContainer
-            PathSvg { path: overview.nodesPath }
+    // 节点卡片：原始标题 / 正文 / 卡片边框按真实几何缩小，不换摘要或圆点。
+    Repeater {
+        model: overview.projectedNodes
+        delegate: Rectangle {
+            x: modelData.x
+            y: modelData.y
+            width: modelData.width
+            height: modelData.height
+            radius: overview._cardRadiusPx
+            color: overview.dt.surfaceContainer
+            border.color: overview.dt.border
+            border.width: Math.max(0.05, 1 * overview.fitScale)
+            clip: true
+            visible: width > 0.3 && height > 0.3
+
+            Column {
+                anchors.fill: parent
+                anchors.margins: Math.max(0.1, 6 * overview.fitScale)
+                spacing: Math.max(0.05, 2 * overview.fitScale)
+                clip: true
+
+                Text {
+                    width: parent.width
+                    text: modelData.title
+                    color: overview.dt.textPrimary
+                    font.pixelSize: overview._titleFontPx
+                    font.bold: true
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                }
+
+                Text {
+                    width: parent.width
+                    text: modelData.body
+                    color: overview.dt.textSecondary
+                    font.pixelSize: overview._bodyFontPx
+                    elide: Text.ElideRight
+                    maximumLineCount: 2
+                    wrapMode: Text.Wrap
+                    visible: text.length > 0
+                }
+            }
         }
     }
 
+    // 子图入口：真实圆形边界 + 标题，随同一投影缩放。
+    Repeater {
+        model: overview.projectedEmbeds
+        delegate: Rectangle {
+            x: modelData.x
+            y: modelData.y
+            width: modelData.diameter
+            height: modelData.diameter
+            radius: modelData.diameter / 2
+            color: overview.dt.accentSoft
+            border.color: overview.dt.border
+            border.width: Math.max(0.05, 1 * overview.fitScale)
+            clip: true
+            visible: width > 0.3 && height > 0.3
+
+            Text {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.topMargin: Math.max(0.1, 8 * overview.fitScale)
+                text: modelData.label
+                color: overview.dt.textPrimary
+                font.pixelSize: overview._titleFontPx
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+                maximumLineCount: 1
+            }
+        }
+    }
 }

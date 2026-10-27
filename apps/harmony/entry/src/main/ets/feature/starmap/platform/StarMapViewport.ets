@@ -148,6 +148,38 @@ export function clampCameraScale(scale: number): number {
   return scale
 }
 
+/**
+ * 有限乘法：真正超出 Number 表示范围时饱和到有限端点。
+ *
+ * 相机比例可以很大/很小，但屏幕坐标、pan 和路径坐标不能再产生 Infinity/NaN。
+ * 超界点本来就在屏幕外，饱和只影响不可见位置，不引入缩放停点。
+ */
+export function finiteMultiply(a: number, b: number): number {
+  const result: number = a * b
+  if (isFinite(result)) {
+    return result
+  }
+  return (a < 0) !== (b < 0) ? -Number.MAX_VALUE : Number.MAX_VALUE
+}
+
+/** 有限加法，溢出时饱和到有限端点。 */
+export function finiteAdd(a: number, b: number): number {
+  const result: number = a + b
+  if (isFinite(result)) {
+    return result
+  }
+  return result === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+}
+
+/** 有限减法，溢出时饱和到有限端点。 */
+export function finiteSubtract(a: number, b: number): number {
+  const result: number = a - b
+  if (isFinite(result)) {
+    return result
+  }
+  return result === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+}
+
 /** 相机比例连续变化；下溢时保留最小正数，不跳回默认比例。 */
 function scaleAfterFactor(scale: number, factor: number): number {
   const nextScale: number = scale * factor
@@ -191,12 +223,12 @@ export function computeCameraPinch(
   const ratio: number = baseDistance > 0 ? currentDistance / baseDistance : 1
   const currentScale: number = safeCameraScale(camera)
   const nextScale: number = scaleAfterFactor(currentScale, ratio)
-  const anchorWorldX: number = (centerX - camera.offsetX) / currentScale
-  const anchorWorldY: number = (centerY - camera.offsetY) / currentScale
+  const anchorWorldX: number = finiteSubtract(centerX, camera.offsetX) / currentScale
+  const anchorWorldY: number = finiteSubtract(centerY, camera.offsetY) / currentScale
   return {
     scale: nextScale,
-    offsetX: centerX - anchorWorldX * nextScale,
-    offsetY: centerY - anchorWorldY * nextScale
+    offsetX: finiteSubtract(centerX, finiteMultiply(anchorWorldX, nextScale)),
+    offsetY: finiteSubtract(centerY, finiteMultiply(anchorWorldY, nextScale))
   }
 }
 
@@ -210,13 +242,13 @@ export function computeCameraZoomAround(
   nextScale: number
 ): GlobalCameraTransform {
   const currentScale: number = safeCameraScale(camera)
-  const scale: number = clampCameraScale(nextScale)
-  const anchorWorldX: number = (centerX - camera.offsetX) / currentScale
-  const anchorWorldY: number = (centerY - camera.offsetY) / currentScale
+  const scale: number = nextScale === 0 ? Number.MIN_VALUE : clampCameraScale(nextScale)
+  const anchorWorldX: number = finiteSubtract(centerX, camera.offsetX) / currentScale
+  const anchorWorldY: number = finiteSubtract(centerY, camera.offsetY) / currentScale
   return {
     scale,
-    offsetX: centerX - anchorWorldX * scale,
-    offsetY: centerY - anchorWorldY * scale
+    offsetX: finiteSubtract(centerX, finiteMultiply(anchorWorldX, scale)),
+    offsetY: finiteSubtract(centerY, finiteMultiply(anchorWorldY, scale))
   }
 }
 

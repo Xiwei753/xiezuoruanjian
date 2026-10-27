@@ -17,11 +17,13 @@ import { StarMapGestureStateTracker } from '../platform/StarMapGestureState'
 import {
   RecursiveSceneSource, EmbedFocusProbe,
   PlatformEdgeRender, PlatformNodeRect, resolveEdgeEndpointAnchor,
-  buildRecursiveSceneContext, collectEmbedFocusProbes
+  buildRecursiveSceneContext, collectEmbedFocusProbes,
+  canvasToScreen, convertPointToRoot
 } from '../platform/StarMapGeometry'
 import {
   VisualLodContext, FocusCandidate, ProjectedEmbedMetrics,
-  projectEmbedMetrics, resolveFocusScenePath
+  projectEmbedMetrics, resolveFocusScenePath,
+  FOCUS_ENTER_COVERAGE, FOCUS_EXIT_COVERAGE
 } from '../platform/StarMapVisualLod'
 import {
   StarMapSceneRegistry,
@@ -63,6 +65,19 @@ interface RouteCameraState {
   offsetY: number
 }
 
+/**
+ * 进入某条 route 时的父层入口快照，用于反向缩小穿越。
+ *
+ * entryCoverage 是进入瞬间入口在**父画布短边**上的真实投影覆盖率；
+ * entryChildScale 是同一瞬间子画布内容在屏幕上的有效比例。
+ * 两者一起把当前画布相机折算回“入口又变回多大”。
+ */
+interface RouteEntryContext {
+  parentPath: StarMapPathSegment[]
+  entryCoverage: number
+  entryChildScale: number
+}
+
 @Component
 export struct StarMapScreen {
   // 导航
@@ -80,6 +95,8 @@ export struct StarMapScreen {
    * 每次进入 Embed 只追加一段；退出只移除最后一段。A→B→A / A→A 都是合法 route。
    */
   @State activePath: StarMapPathSegment[] = []
+  /** 当前 route 依次经过的 starmapId（含根，允许重复）。只用于投影深度保护，不拒绝路径。 */
+  @State activeStarmapIds: string[] = []
   @State starmapTitle: string = ''
   @State rootStarmapTitle: string = ''
   @State graph: StarMapGraph | null = null
@@ -123,6 +140,13 @@ export struct StarMapScreen {
   private routeRequestGeneration: number = 0
   /** 每个完整 route 自己的相机。退出时恢复进入前的视角，而不是复用子画布相机。 */
   private routeCameras: Map<string, RouteCameraState> = new Map<string, RouteCameraState>()
+  /** 进入 route 时的父入口快照，用于缩小回父画布。 */
+  private routeEntryContexts: Map<string, RouteEntryContext> = new Map<string, RouteEntryContext>()
+  /** route 加载/镜头恢复期间不触发缩放穿越，避免反馈环。 */
+  private routeTransitioning: boolean = false
+  private zoomTraversalTimerId: number = -1
+  private pendingZoomPrevious: number = -1
+  private pendingZoomNext: number = -1
   // Issue #988：附近设备提交期间先等在途星图写入，提交后重载当前图。
   private unregisterPeerSync: (() => void) | null = null
 
@@ -178,6 +202,7 @@ export struct StarMapScreen {
     if (params) {
       this.starmapId = params.starmapId
       this.rootStarmapId = params.starmapId
+      this.activeStarmapIds = [params.starmapId]
       this.starmapTitle = params.starmapTitle
       this.rootStarmapTitle = params.starmapTitle
       if (params.focusKind !== undefined && params.focusId !== undefined) {
@@ -408,6 +433,101 @@ export struct StarMapScreen {
     this.cameraOffsetY = Number.isFinite(camera.offsetY) ? camera.offsetY : 0
   }
 
+  /** 逐段解析 route，得到含根的完整 starmap 链（允许重复）。 */
+  private async resolveStarmapIdChain(path: StarMapPathSegment[]): Promise<string[] | null> {
+    let ids: string[] = [this.rootStarmapId]
+    let start: number = 0
+    // 点击入口时 route 通常就是“当前活动路径 + 一段”，直接续用已解析链，
+    // 避免在 100 层路径里为了进下一层反复重解所有前缀。
+    if (path.length === this.activePath.length + 1 &&
+        this.routeKey(path.slice(0, this.activePath.length)) === this.routeKey(this.activePath)) {
+      ids = this.activeStarmapIds.slice()
+      start = this.activePath.length
+    }
+    for (let i = start; i < path.length; i++) {
+      const resolved = await this.bridge.resolveStarMapPath(
+        this.rootStarmapId, path.slice(0, i + 1))
+      if (!resolved.success || !resolved.data || !resolved.data.finalStarmapId) {
+        return null
+      }
+      ids.push(resolved.data.finalStarmapId)
+    }
+    return ids
+  }
+
+  /**
+   * 进入入口瞬间的镜头：把父画布里“入口内部的真实投影”换算成子画布自己的相机。
+   *
+   * 子 Scene 的屏幕比例 = fitScale * 父相机比例，子 Scene 内容在父入口盒里的
+   * 局部偏移也已经乘过父比例。这里按完整 route 求根屏幕坐标，不按 starmapId
+   * 猜测，因此 A→A / A→B→A 的每一次入口都得到各自正确的实例镜头。
+   */
+  private entryCameraForRoute(path: StarMapPathSegment[]): RouteCameraState | null {
+    if (path.length === 0) {
+      return null
+    }
+    const parentPath: StarMapPathSegment[] = path.slice(0, -1)
+    const last: StarMapPathSegment = path[path.length - 1]
+    const rootHandle = this.sceneRegistry.getRoot()
+    const parentHandle = this.sceneRegistry.find(parentPath)
+    const childHandle = this.sceneRegistry.find(path)
+    if (rootHandle === null || parentHandle === null || childHandle === null) {
+      return null
+    }
+    const rect: PlatformNodeRect | undefined =
+      parentHandle.rects.find((item: PlatformNodeRect) => item.nodeId === last.instanceId)
+    if (rect === undefined) {
+      return null
+    }
+    const rootContext = buildRecursiveSceneContext(rootHandle)
+    const parentLocal = canvasToScreen(
+      rect.x, rect.y, parentHandle.scale, parentHandle.offsetX, parentHandle.offsetY)
+    const parentRoot = convertPointToRoot(rootContext, parentPath, parentLocal.x, parentLocal.y)
+    const childRoot = convertPointToRoot(
+      rootContext, parentPath,
+      parentLocal.x + childHandle.offsetX, parentLocal.y + childHandle.offsetY)
+    const scale: number = childHandle.scale
+    return {
+      scale: Number.isFinite(scale) && scale > 0 ? scale : 1,
+      offsetX: Number.isFinite(childRoot.x) ? childRoot.x : 0,
+      offsetY: Number.isFinite(childRoot.y) ? childRoot.y : 0
+    }
+  }
+
+  /** 进入时记录父入口覆盖率和子画布有效比例，供缩小返回时反算。 */
+  private rememberEntryContext(path: StarMapPathSegment[], camera: RouteCameraState | null): void {
+    if (path.length === 0) {
+      return
+    }
+    const parentPath: StarMapPathSegment[] = path.slice(0, -1)
+    const last: StarMapPathSegment = path[path.length - 1]
+    const parentHandle = this.sceneRegistry.find(parentPath)
+    if (parentHandle === null) {
+      return
+    }
+    const rect: PlatformNodeRect | undefined =
+      parentHandle.rects.find((item: PlatformNodeRect) => item.nodeId === last.instanceId)
+    if (rect === undefined) {
+      return
+    }
+    const shortSide: number = Math.min(this.canvasWidth, this.canvasHeight)
+    if (!Number.isFinite(shortSide) || shortSide <= 0) {
+      return
+    }
+    const entryCoverage: number =
+      Math.min(rect.width, rect.height) * parentHandle.scale / shortSide
+    const childScale: number = camera !== null ? camera.scale : parentHandle.scale
+    if (!Number.isFinite(entryCoverage) || entryCoverage <= 0 ||
+        !Number.isFinite(childScale) || childScale <= 0) {
+      return
+    }
+    this.routeEntryContexts.set(this.routeKey(path), {
+      parentPath: parentPath,
+      entryCoverage: entryCoverage,
+      entryChildScale: childScale
+    })
+  }
+
   /**
    * 按完整 route 切换当前活动画布。
    *
@@ -416,25 +536,34 @@ export struct StarMapScreen {
    * 返回时恢复原画布视角。
    */
   private async openActiveRoute(path: StarMapPathSegment[]): Promise<void> {
+    this.routeTransitioning = true
     const request: number = ++this.routeRequestGeneration
-    const resolved = await this.bridge.resolveStarMapPath(this.rootStarmapId, path)
-    if (request !== this.routeRequestGeneration) {
+    const ids: string[] | null = await this.resolveStarmapIdChain(path)
+    if (request !== this.routeRequestGeneration || ids === null) {
+      if (request === this.routeRequestGeneration) {
+        this.routeTransitioning = false
+        this.showSearchFocusToast('无法进入该子星图')
+      }
       return
     }
-    if (!resolved.success || !resolved.data || !resolved.data.finalStarmapId) {
-      this.showSearchFocusToast('无法进入该子星图')
-      return
-    }
-    const targetStarmapId: string = resolved.data.finalStarmapId
+    const targetStarmapId: string = ids[ids.length - 1]
     this.saveRouteCamera(this.activePath)
+    const entryCamera: RouteCameraState | null = this.entryCameraForRoute(path)
+    this.rememberEntryContext(path, entryCamera)
+    if (entryCamera !== null) {
+      this.routeCameras.set(this.routeKey(path), entryCamera)
+    }
+    this.routeTransitioning = true
     // 先丢掉上一张图的几何，避免新 route 的 scenePath 与旧 graph 混一帧。
     this.graph = null
     this.activePath = path
+    this.activeStarmapIds = ids
     this.starmapId = targetStarmapId
     this.focusScenePath = 'root'
     this.selectionState.clear()
     this.restoreRouteCamera(path)
     await this.loadStarMap()
+    this.routeTransitioning = false
   }
 
   private enterEmbedRoute(path: StarMapPathSegment[]): void {
@@ -447,6 +576,7 @@ export struct StarMapScreen {
       this.navPathStack.pop()
       return
     }
+    this.routeTransitioning = true
     const request: number = ++this.routeRequestGeneration
     this.saveRouteCamera(this.activePath)
     const parentPath: StarMapPathSegment[] = this.activePath.slice(0, -1)
@@ -457,6 +587,7 @@ export struct StarMapScreen {
         return
       }
       if (!resolved.success || !resolved.data || !resolved.data.finalStarmapId) {
+        this.routeTransitioning = false
         this.showSearchFocusToast('无法返回上层星图')
         return
       }
@@ -464,11 +595,13 @@ export struct StarMapScreen {
     }
     this.graph = null
     this.activePath = parentPath
+    this.activeStarmapIds = this.activeStarmapIds.slice(0, -1)
     this.starmapId = parentStarmapId
     this.focusScenePath = 'root'
     this.selectionState.clear()
     this.restoreRouteCamera(parentPath)
     await this.loadStarMap()
+    this.routeTransitioning = false
   }
 
   private isWideLayout(): boolean {
@@ -656,13 +789,116 @@ export struct StarMapScreen {
    * 改全局相机。Scene 层（根或子）都通过根 Scene 的回调调到这里。
    */
   applyCamera(scale: number, offsetX: number, offsetY: number) {
+    const previousScale: number = this.cameraScale
     this.cameraScale = scale
     this.cameraOffsetX = offsetX
     this.cameraOffsetY = offsetY
     // 相机变了，每颗 Embed 的屏幕投影都变了，视觉焦点要重新判一次（#820）。
     // 结果不变时不写 @State，避免每帧捏合都触发一次无谓重建。
     this.recomputeVisualFocus()
+    this.scheduleZoomTraversal(previousScale, scale)
     this.updateContinuationSnapshot()
+  }
+
+  /**
+   * 缩放穿越检查要等本帧投影同步后再做。
+   *
+   * Scene 的 @Watch 会把新相机同步进注册表；用 0ms 任务避开“刚写 @State、
+   * 子组件还没重算”的那一帧。只有比例真的变了才排队，纯平移不触发。
+   */
+  private scheduleZoomTraversal(previousScale: number, nextScale: number): void {
+    if (this.routeTransitioning || this.isLoading) {
+      return
+    }
+    if (!Number.isFinite(previousScale) || !Number.isFinite(nextScale) ||
+        previousScale <= 0 || nextScale <= 0 || previousScale === nextScale) {
+      return
+    }
+    this.pendingZoomPrevious = previousScale
+    this.pendingZoomNext = nextScale
+    if (this.zoomTraversalTimerId >= 0) {
+      clearTimeout(this.zoomTraversalTimerId)
+    }
+    this.zoomTraversalTimerId = setTimeout((): void => {
+      this.zoomTraversalTimerId = -1
+      this.consumePendingZoomTraversal()
+    }, 0)
+  }
+
+  /** 帧后消费最近一次缩放；Scene 几何就绪回调也会再推一次，避免单步按钮错过。 */
+  private consumePendingZoomTraversal(): void {
+    if (this.pendingZoomPrevious <= 0 || this.pendingZoomNext <= 0) {
+      return
+    }
+    const previous: number = this.pendingZoomPrevious
+    const next: number = this.pendingZoomNext
+    this.pendingZoomPrevious = -1
+    this.pendingZoomNext = -1
+    this.maybeTraverseByZoom(previous, next)
+  }
+
+  /**
+   * 用真实投影覆盖率驱动进入/退出，而不是独立于画布的固定层级按钮。
+   *
+   * 放大：只看“当前活动画布的直接入口”——当前图里的 Embed 圆壳投影直径
+   * 达到短边 70% 时，按它的完整入口 route 进入下一层。先进入最近一层，
+   * 不跳过中间投影。
+   *
+   * 缩小：入口覆盖率按当前相机/进入时子画布比例等比折算；低于进入时覆盖率
+   * （且不超过 0.55 退出阈值）就弹出 route 最后一段，父镜头由 routeCameras 恢复。
+   */
+  private maybeTraverseByZoom(previousScale: number, nextScale: number): void {
+    if (this.routeTransitioning || this.isLoading ||
+        this.canvasWidth <= 0 || this.canvasHeight <= 0) {
+      return
+    }
+    if (nextScale < previousScale && this.activePath.length > 0) {
+      const entry: RouteEntryContext | undefined =
+        this.routeEntryContexts.get(this.routeKey(this.activePath))
+      if (entry === undefined) {
+        return
+      }
+      const coverageNow: number = entry.entryCoverage * (nextScale / entry.entryChildScale)
+      const exitThreshold: number = Math.min(FOCUS_EXIT_COVERAGE, entry.entryCoverage)
+      if (Number.isFinite(coverageNow) && coverageNow < entry.entryCoverage &&
+          coverageNow <= exitThreshold) {
+        this.exitActiveCanvas()
+      }
+      return
+    }
+    if (nextScale <= previousScale) {
+      return
+    }
+    const rootScene: RecursiveSceneSource | null = this.sceneRegistry.getRoot()
+    if (rootScene === null) {
+      return
+    }
+    const probes: EmbedFocusProbe[] = collectEmbedFocusProbes(
+      buildRecursiveSceneContext(rootScene), this.canvasWidth, this.canvasHeight)
+    const context: VisualLodContext = {
+      viewportWidthVp: this.canvasWidth,
+      viewportHeightVp: this.canvasHeight,
+      focusScenePath: this.focusScenePath
+    }
+    const activeKey: string = this.routeKey(this.activePath)
+    let best: EmbedFocusProbe | null = null
+    let bestCoverage: number = FOCUS_ENTER_COVERAGE
+    for (const probe of probes) {
+      if (probe.segments.length !== this.activePath.length + 1) {
+        continue
+      }
+      if (this.routeKey(probe.segments.slice(0, this.activePath.length)) !== activeKey) {
+        continue
+      }
+      const metrics: ProjectedEmbedMetrics = projectEmbedMetrics(probe.ownerScale, context)
+      if (metrics.coverage > bestCoverage) {
+        best = probe
+        bestCoverage = metrics.coverage
+      }
+    }
+    if (best !== null) {
+      this.enterEmbedRoute(best.segments.slice())
+    }
   }
 
   // Issue #988：星图接续状态只带稳定 ID、相机和焦点，不复制画布数据。
@@ -832,8 +1068,11 @@ export struct StarMapScreen {
         onCameraPanTo: (offsetX: number, offsetY: number) => {
           this.panCameraTo(offsetX, offsetY)
         },
-        // 活动画布始终按正常矢量几何显示，不把子星图缩进上一层的入口圆壳。
+        // 活动画布既画本层真实内容，也把直接子图投影进入口圆壳。
+        // ancestorStarmapIds 只控制循环投影最多展开一层，不参与 route 合法性判断。
         sceneDepth: 0,
+        ancestorStarmapIds: this.activeStarmapIds,
+        allowCycleProjection: true,
         onEnterEmbed: (path: StarMapPathSegment[]): void => {
           this.enterEmbedRoute(path)
         },
@@ -841,10 +1080,12 @@ export struct StarMapScreen {
         // 但那一帧的投影可能还没稳定，手势收尾才是干净的时机。
         onFocusRecomputeRequested: () => {
           this.recomputeVisualFocus()
+          this.consumePendingZoomTraversal()
         },
         // Issue #982：根 Scene 完成几何重算后通知页面把搜索目标解析成相机/选中。
         onSceneGeometryReady: () => {
           this.scheduleSearchFocus()
+          this.consumePendingZoomTraversal()
         },
         bridge: this.bridge,
         themeConfig: this.themeConfig,

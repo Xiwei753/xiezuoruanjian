@@ -63,11 +63,11 @@ function readStarmapSource(relativePath) {
 //         (StarMapViewport.ets / ui/StarMapScene.ets)
 //
 //   5e. 相机状态链上不能有断点（#818 复审）：ArkUI V1 只有 @Prop 是父 → 子单向同步，
-//      普通字段只是拿父值做一次初始化。活动画布模型下链条是
-//      Screen @State → 唯一 StarMapScene @Prop；中间不再有 EmbedScene 层级。
+//      普通字段只是拿父值做一次初始化。父画布投影真实子图时链条是
+//      Screen @State → StarMapScene @Prop → StarMapEmbedScene @Prop → child Scene @Prop。
 //      页面切换 route 时先保存当前画布相机，返回时恢复同一 route 的视角。
 //      —— @State cameraScale/Offset (ui/StarMapScreen.ets)
-//         @Prop cameraScale/Offset (ui/StarMapScene.ets)
+//         @Prop cameraScale/Offset (ui/StarMapScene.ets / StarMapEmbedScene.ets)
 //
 //   6. 全树唯一选中态：选中身份 = scenePath + kind + itemId。
 //      选中子节点时父 Embed 立刻失选；同名 item 在不同层不互相命中
@@ -151,26 +151,44 @@ function scaleAfterFactor(scale, factor) {
   return clampCameraScale(nextScale)
 }
 
+function finiteMultiply(a, b) {
+  const result = a * b
+  if (isFinite(result)) { return result }
+  return (a < 0) !== (b < 0) ? -Number.MAX_VALUE : Number.MAX_VALUE
+}
+
+function finiteAdd(a, b) {
+  const result = a + b
+  if (isFinite(result)) { return result }
+  return result === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+}
+
+function finiteSubtract(a, b) {
+  const result = a - b
+  if (isFinite(result)) { return result }
+  return result === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+}
+
 function computeCameraPinch(camera, baseScale, baseDistance, currentDistance, centerX, centerY) {
   const ratio = baseDistance > 0 ? currentDistance / baseDistance : 1
   const nextScale = clampCameraScale(baseScale * ratio)
-  const anchorWorldX = (centerX - camera.offsetX) / camera.scale
-  const anchorWorldY = (centerY - camera.offsetY) / camera.scale
+  const anchorWorldX = finiteSubtract(centerX, camera.offsetX) / camera.scale
+  const anchorWorldY = finiteSubtract(centerY, camera.offsetY) / camera.scale
   return {
     scale: nextScale,
-    offsetX: centerX - anchorWorldX * nextScale,
-    offsetY: centerY - anchorWorldY * nextScale
+    offsetX: finiteSubtract(centerX, finiteMultiply(anchorWorldX, nextScale)),
+    offsetY: finiteSubtract(centerY, finiteMultiply(anchorWorldY, nextScale))
   }
 }
 
 function computeCameraZoomAround(camera, centerX, centerY, nextScale) {
-  const clamped = clampCameraScale(nextScale)
-  const anchorWorldX = (centerX - camera.offsetX) / camera.scale
-  const anchorWorldY = (centerY - camera.offsetY) / camera.scale
+  const clamped = nextScale === 0 ? Number.MIN_VALUE : clampCameraScale(nextScale)
+  const anchorWorldX = finiteSubtract(centerX, camera.offsetX) / camera.scale
+  const anchorWorldY = finiteSubtract(centerY, camera.offsetY) / camera.scale
   return {
     scale: clamped,
-    offsetX: centerX - anchorWorldX * clamped,
-    offsetY: centerY - anchorWorldY * clamped
+    offsetX: finiteSubtract(centerX, finiteMultiply(anchorWorldX, clamped)),
+    offsetY: finiteSubtract(centerY, finiteMultiply(anchorWorldY, clamped))
   }
 }
 
@@ -1281,6 +1299,14 @@ console.log('4. 全局相机（#818）：只有一台，锚点钉在两指中心
   assert(scaleAfterFactor(1, Number.MIN_VALUE / 2) === Number.MIN_VALUE,
     '连续缩小到下溢时保留最小正数，不归零')
 
+  // 极端比例不能把 pan / 世界投影写成 Infinity（#1009 复审）
+  const extreme = computeCameraZoomAround(
+    { scale: 1, offsetX: 0, offsetY: 0 }, 500, 500, Number.MAX_VALUE)
+  assert(isFinite(extreme.offsetX) && isFinite(extreme.offsetY),
+    'worldX=500、zoom=MAX_VALUE 时 pan 仍有限，不出现 -Infinity')
+  assert(isFinite(finiteAdd(extreme.offsetX, finiteMultiply(500, extreme.scale))),
+    '极端缩放下世界点投影仍是有限数')
+
   // 工具栏围绕画布中心缩放
   const bar = zoomCameraAroundCenter({ scale: 1, offsetX: 0, offsetY: 0 }, 500, 500, 2)
   assert(near(bar.scale, 2), '工具栏 + 把相机比例改到 2')
@@ -2309,19 +2335,24 @@ console.log('24i. 契约 5e：相机状态链不能断在中间层，子 Scene �
   assert(broken.screen.cameraOffsetX === 5,
     '对照：旧基准 0 + 5 = 5，全局相机从 100 跳回 5（复现真机症状）')
 
-  // 结构守卫：#1009 起不再有 EmbedScene 中间层，相机只从 Screen 传给当前活动画布。
+  // 结构守卫：#1009 复审起，父画布仍把真实子图投影进 Embed 圆内；
+  // 相机经 Screen @State → 根 Scene @Prop → EmbedScene @Prop → child Scene @Prop 同步。
   const screenSource = readStarmapSource('ui/StarMapScreen.ets')
   const sceneSource = readStarmapSource('ui/StarMapScene.ets')
+  const embedSource = readStarmapSource('ui/StarMapEmbedScene.ets')
   for (const field of ['cameraScale', 'cameraOffsetX', 'cameraOffsetY']) {
     assert(new RegExp(`@State\\s+${field}\\s*:`).test(screenSource),
       `StarMapScreen.ets 里 ${field} 仍是页面级 @State`)
+    assert(new RegExp(`@Prop\\s+${field}\\s*:`).test(embedSource),
+      `StarMapEmbedScene.ets 里 ${field} 仍是 @Prop`)
     assert(new RegExp(`@Prop\\s+@Watch\\('onTransformChange'\\)\\s+${field}\\s*:`).test(sceneSource),
       `StarMapScene.ets 里 ${field} 仍是 @Prop（ArkUI V1 父→子单向同步）`)
   }
   assert(screenSource.includes('scenePath: this.activePath'),
     'Screen 把活动画布的完整 route 传给唯一的 StarMapScene')
-  assert(!sceneSource.includes('StarMapEmbedScene'),
-    'Scene 不再递归挂载 StarMapEmbedScene；切换画布由页面完成')
+  assert(sceneSource.includes('StarMapEmbedScene({') &&
+    sceneSource.includes('inheritedScale: this.viewportScaleValue()'),
+  '父画布把真实子图投影进圆内，并把累计显示比例传给子 Scene')
 }
 
 console.log('')
@@ -3160,13 +3191,11 @@ console.log('35. 输入节点 id 与 onChildTouchTest：命中的子图继续参
     'onTouchIntercept 不再把标题热区乘 viewportScaleValue（那一层坐标已经是屏幕 vp）')
   assert(!/EMBED_BORDER_HIT_WIDTH\s*\*\s*this\.viewportScaleValue\(\)/.test(interceptBody),
     'onTouchIntercept 不再把边框热区乘 viewportScaleValue')
-  // #1009：入口整块由本层手势处理，圆内一律 Block；圆内点击再由
-  // isEmbedInnerTap 用同一份 24/12vp 口径区分“进入画布 / 选中入口”。
-  assert(interceptBody.includes('dist <= radius ? HitTestMode.Block : HitTestMode.None'),
-    '整颗入口圆内 Block、圆外 None，不再把内部让给已删除的递归子 Scene')
-  assert(sceneSource.includes('private isEmbedInnerTap(event: GestureEvent | undefined): boolean {') &&
-    sceneSource.includes('this.embedLocalHitMetrics(radius)'),
-    '圆内单击用 embedLocalHitMetrics 区分标题/圆环与进入画布，累计比例口径一致')
+  // #1009 复审：title / 圆环由外壳 Block，圆内内容区 None 交给真实子 Scene。
+  assert(interceptBody.includes('return (inTitle || inBorder) ? HitTestMode.Block : HitTestMode.None'),
+    'title / 圆环 Block、入口内部 None，真实子 Scene 能直接命中和选中节点')
+  assert(sceneSource.includes('this.embedLocalHitMetrics(radius)'),
+    '标题 / 圆环命中与递归命中复用同一份 24/12vp 口径')
   assert(!/embedHitMetricsForScene\(\s*1\s*,/.test(sceneSource),
     'UI 侧不再出现 embedHitMetricsForScene(1, ...)：那会把 24/12vp 当成本地尺寸')
   assert(sceneSource.includes('private embedLocalHitMetrics(radius: number): EmbedHitMetrics {') &&
@@ -3287,6 +3316,10 @@ console.log('')
 console.log('38. #1009：无固定缩放阈值，无 LOD/预览/外壳档位，入口始终是真实内容')
 {
   const viewportSource = readStarmapSource('platform/StarMapViewport.ets')
+  assert(viewportSource.includes('export function finiteMultiply') &&
+    viewportSource.includes('finiteMultiply(anchorWorldX, nextScale)') &&
+    viewportSource.includes('finiteMultiply(anchorWorldX, scale)'),
+  '相机 pan 的锚点乘法必须走有限收口，极端 zoom 不生成 Infinity')
   assert(!/export const (CAMERA_SCALE_MIN|CAMERA_SCALE_MAX|MIN_FIT_SCALE|MAX_FIT_SCALE)\b/.test(viewportSource),
     '视口模块不再导出 0.02×/4×/1e-4×/1e5× 这类产品缩放阈值')
   assert(viewportSource.includes('export const DEFAULT_FIT_SCALE: number = 1') &&
@@ -3304,6 +3337,9 @@ console.log('38. #1009：无固定缩放阈值，无 LOD/预览/外壳档位，�
     '命中模块删除了 32 层递归常量')
   assert(geometrySource.includes('while (true)'),
     'resolveRecursiveHit 沿真实子 Scene 循环，直到命中或没有子图')
+  assert(geometrySource.includes('function safeProduct') &&
+    geometrySource.includes('safeSum(safeProduct(canvasX, zoomScale), offsetX)'),
+  'canvasToScreen 的世界投影乘法/加法必须有限收口，不产出 Infinity 路径坐标')
   assert(!geometrySource.includes('return findSceneContext('),
     'findSceneContext 改成迭代，不再按路径递归切片')
   const findStart = geometrySource.indexOf('export function findSceneContext')
@@ -3318,13 +3354,18 @@ console.log('38. #1009：无固定缩放阈值，无 LOD/预览/外壳档位，�
     !sceneSource.includes('DeepZoomDetail') &&
     !sceneSource.includes('embedDetail('),
   'Scene 不再引用预览画布/LOD 档位/细节判定')
-  assert(!sceneSource.includes('StarMapEmbedScene') &&
-    !sceneSource.includes('ancestorStarmapIds') &&
-    !sceneSource.includes('isCycleBoundary'),
-  'Scene 不再递归挂载子 Scene，也不按 ancestorStarmapIds 截断路径')
+  assert(sceneSource.includes('StarMapEmbedScene({') &&
+    sceneSource.includes('ancestorStarmapIds: this.ancestorStarmapIds') &&
+    sceneSource.includes('allowCycleProjection: this.allowCycleProjection'),
+  '父画布在圆内投影真实子 Scene；循环只由祖先链 + 一层允许标志收口')
+  const embedSource = readStarmapSource('ui/StarMapEmbedScene.ets')
+  assert(embedSource.includes('this.ancestorStarmapIds.includes(finalId)') &&
+    embedSource.includes('this.childAllowCycleProjection = repeated ? false : this.allowCycleProjection') &&
+    embedSource.includes('isCycleBoundary'),
+  '循环引用投影一层后停止实例化，不拒绝路径本身')
   assert(sceneSource.includes("route.push({ type: 'enterEmbed', instanceId: embed.instanceId, nodeId: null })") &&
-    sceneSource.includes('this.onEnterEmbed(route)'),
-  '点击入口只追加一条 enterEmbed 路径段，把完整 route 交给页面')
+    sceneSource.includes('this.enterEmbedByInstance(embed)'),
+  '点击/双击入口只追加一条 enterEmbed 路径段，把完整 route 交给页面')
   assert(sceneSource.includes("@Prop @Watch('onRouteIdentityChange') scenePath") &&
     sceneSource.includes('unregisterSceneHandle()') &&
     sceneSource.includes('registerSceneHandle()'),
@@ -3335,12 +3376,18 @@ console.log('38. #1009：无固定缩放阈值，无 LOD/预览/外壳档位，�
 
   const screenSource = readStarmapSource('ui/StarMapScreen.ets')
   assert(screenSource.includes('@State activePath: StarMapPathSegment[] = []') &&
-    screenSource.includes('resolveStarMapPath(this.rootStarmapId, path)') &&
+    screenSource.includes('resolveStarmapIdChain') &&
+    screenSource.includes('resolveStarMapPath(') &&
     screenSource.includes('this.activePath.slice(0, -1)') &&
     screenSource.includes('scenePath: this.activePath'),
   '页面持有完整 route；进入追加、退出只移除最后一段，并把 route 传给唯一活动画布')
-  assert(!screenSource.includes('ancestorStarmapIds'),
-    '页面不再靠祖先 starmapId 集合阻止循环引用')
+  assert(screenSource.includes('ancestorStarmapIds: this.activeStarmapIds'),
+    '页面把完整 starmap 链交给投影层；重复 starmapId 是合法路径')
+  assert(screenSource.includes('maybeTraverseByZoom') &&
+    screenSource.includes('probe.segments') &&
+    screenSource.includes('FOCUS_ENTER_COVERAGE') &&
+    screenSource.includes('routeEntryContexts'),
+  '缩放穿越按真实入口 projection + 完整实例 route 进入/退出')
 
   const lodSource = readStarmapSource('platform/StarMapVisualLod.ets')
   assert(!lodSource.includes('DeepZoomDetail') &&

@@ -503,15 +503,15 @@ fn camera_transform_lives_in_the_single_projection_entry_only() {
             "活动画布只能有一个投影入口定义：{entry}"
         );
     }
-    let w2s = function_window(&scene, "function worldToScreenX(", 200);
+    let w2s = function_window(&scene, "function worldToScreenX(", 300);
     assert!(
-        w2s.contains("width / 2 + (wx - _originWorldX) * _safeZoom"),
+        w2s.contains("width / 2") && w2s.contains("_originWorldX") && w2s.contains("_safeZoom"),
         "worldToScreenX 必须以视口中心为相对原点，实际窗口:\n{w2s}"
     );
     let origin = function_window(&scene, "readonly property real _originWorldX:", 200);
     assert!(
-        origin.contains("(width / 2 - panX) / _safeZoom"),
-        "相对原点必须由当前镜头现算，实际窗口:\n{origin}"
+        origin.contains("_finiteQuotient(_finiteDifference(width / 2, panX), _safeZoom)"),
+        "相对原点必须由当前镜头现算并做有限收口，实际窗口:\n{origin}"
     );
 
     // 活动画布不得自己写相机状态：只有投影读取，没有赋值。
@@ -550,7 +550,7 @@ fn canvas_enter_exit_transition_is_coverage_only_and_never_writes_back() {
 
     let enter = function_window(&canvas, "function maybeEnterEmbedAt(", 800);
     assert!(
-        enter.contains("var projectedPx = Math.min(emb.width, emb.height) * zoomLevel")
+        enter.contains("var projectedPx = finiteProduct(Math.min(emb.width, emb.height), zoomLevel)")
             && enter.contains("if (coverageOfScreenPx(projectedPx) < _enterRatio)")
             && enter.contains("return enterEmbedViaCore(emb.instanceId, \"zoom\")"),
         "连续放大的进入判定只能比较入口投影覆盖率，实际窗口:\n{enter}"
@@ -562,9 +562,9 @@ fn canvas_enter_exit_transition_is_coverage_only_and_never_writes_back() {
 
     let exit = function_window(&canvas, "function maybeExitCanvas(", 900);
     assert!(
-        exit.contains("var virtualParentZoom = zoomLevel / ctx.ratio")
+        exit.contains("var virtualParentZoom = finiteQuotient(zoomLevel, ctx.ratio)")
             && exit.contains(
-                "var coverageNow = coverageOfScreenPx(ctx.embedDiameter * virtualParentZoom)"
+                "var coverageNow = coverageOfScreenPx(finiteProduct(ctx.embedDiameter, virtualParentZoom))"
             )
             && exit.contains("if (coverageNow > Math.min(_exitRatio, entryCoverage))")
             && exit.contains("return exitCanvasViaCore(true)"),
@@ -1715,21 +1715,21 @@ fn overview_geometry_rebinds_without_manual_transform_signal() {
             "只读概览不得再手工维护显示变换通知：{forbidden}"
         );
     }
-    for path_prop in [
+    for content_prop in [
         "readonly property string edgesPath: {",
-        "readonly property string nodesPath: {",
-        "readonly property string embedsPath: {",
+        "readonly property var projectedNodes: {",
+        "readonly property var projectedEmbeds: {",
     ] {
         assert!(
-            content.contains(path_prop),
-            "三条几何路径必须是随投影重算的 readonly 绑定：缺 {path_prop}"
+            content.contains(content_prop),
+            "概览几何必须是随投影重算的 readonly 绑定：缺 {content_prop}"
         );
     }
     assert!(
         content.contains("PathSvg { path: overview.edgesPath }")
-            && content.contains("PathSvg { path: overview.embedsPath }")
-            && content.contains("PathSvg { path: overview.nodesPath }"),
-        "ShapePath 必须消费这些绑定，父图相机/尺寸变化自动重画（不保存快照）"
+            && content.contains("model: overview.projectedNodes")
+            && content.contains("model: overview.projectedEmbeds"),
+        "边用 ShapePath、节点/入口用真实投影 delegate，父图相机/尺寸变化自动重画"
     );
 
     // 活动画布同理：node/edge 投影绑定依赖 {zoomLevel, panX, panY, width, height}。
@@ -1741,9 +1741,9 @@ fn overview_geometry_rebinds_without_manual_transform_signal() {
     );
     let origin = function_window(&scene, "readonly property real _originWorldX:", 200);
     assert!(
-        origin.contains("(width / 2 - panX) / _safeZoom")
+        origin.contains("_finiteQuotient(_finiteDifference(width / 2, panX), _safeZoom)")
             && origin.contains("readonly property real _originWorldY:"),
-        "投影原点必须同时依赖视口尺寸与 pan，实际窗口:\n{origin}"
+        "投影原点必须同时依赖视口尺寸与 pan，并对极端值做有限收口，实际窗口:\n{origin}"
     );
 }
 
@@ -1892,17 +1892,21 @@ fn embed_hit_testing_is_circular() {
         "previewLoader 必须铺满圆盒，实际窗口:\n{preview_loader}"
     );
 
-    // 概览里的子入口也要画正圆，不能把子星图画回长方形卡片。
-    // Issue #949 复核：概览圆点半径现在是 _overviewDotRadius（再乘展开进度），
-    // 旧的 "var r = _embedDiameter / 2 * fitScale" 断言在 HEAD 上就已失效
-    // （源码里从来没有这一行），这里按现状收窄成仍在用的圆点半径口径。
+    // #1009 复审：概览已是真实节点卡片 / 文字 / 入口圆形几何的同一投影，
+    // 不再构造节点小圆点或入口小圆点。
     let content_src = strip_line_comments(&read_src(CONTENT));
     assert!(
-        content_src.contains("function _circlePath(cx, cy, r)")
-            && content_src.contains("_overviewDotRadius")
-            && content_src.contains("s += _circlePath(projectX(pos.x + _embedDiameter / 2),")
-            && content_src.contains("s += _circlePath(projectX(npos.x + _embedDiameter / 2),"),
-        "概览里的子入口必须用正圆路径画，实际源码缺少"
+        content_src.contains("width: size.width * fitScale")
+            && content_src.contains("text: modelData.title")
+            && content_src.contains("text: modelData.body")
+            && content_src.contains("radius: modelData.diameter / 2"),
+        "概览必须投影真实节点卡片、正文和入口圆壳，实际源码缺少"
+    );
+    assert!(
+        !content_src.contains("_overviewDotRadius")
+            && !content_src.contains("readonly property string nodesPath")
+            && !content_src.contains("readonly property string embedsPath"),
+        "概览不得再按倍率把节点 / 入口换成小圆点"
     );
 }
 

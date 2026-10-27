@@ -118,6 +118,39 @@ Item {
         return value
     }
 
+    // 相机比例可以连续增大/缩小，但世界坐标乘比例、pan 加减都必须在 Number
+    // 可表示范围内收口。超过范围的点本来就在屏幕外，饱和到有限端点不会改变
+    // 可见画面，也不会产生 NaN/Infinity 的 pan 或路径坐标。
+    function finiteProduct(a, b) {
+        var value = a * b
+        if (isFinite(value))
+            return value
+        return (a < 0) !== (b < 0) ? -Number.MAX_VALUE : Number.MAX_VALUE
+    }
+
+    function finiteSum(a, b) {
+        var value = a + b
+        if (isFinite(value))
+            return value
+        return value === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+    }
+
+    function finiteDifference(a, b) {
+        var value = a - b
+        if (isFinite(value))
+            return value
+        return value === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+    }
+
+    function finiteQuotient(a, b) {
+        if (!isFinite(b) || b === 0)
+            return 0
+        var value = a / b
+        if (isFinite(value))
+            return value
+        return value === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+    }
+
     // routeKey -> { zoom, panX, panY }：每一层进入前保存的父相机。
     property var cameraStack: ({})
     // childRouteKey -> 进入上下文（父/子比例、入口世界几何），退场反推父镜头用。
@@ -304,12 +337,12 @@ Item {
 
     // ── 纯方法：平移 / 缩放 / 坐标换算 ──
     function applyPan(nextX, nextY) {
-        panX = nextX
-        panY = nextY
+        panX = isFinite(nextX) ? nextX : (nextX === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE)
+        panY = isFinite(nextY) ? nextY : (nextY === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE)
     }
 
     function panBy(dx, dy) {
-        applyPan(panX + dx, panY + dy)
+        applyPan(finiteSum(panX, dx), finiteSum(panY, dy))
     }
 
     // world ↔ 屏幕换算：优先用活动场景的投影（视口中心相对原点），
@@ -318,13 +351,13 @@ Item {
         var scene = activeScene()
         if (scene)
             return scene.worldToScreenX(wx)
-        return panX + wx * zoomLevel
+        return finiteSum(panX, finiteProduct(wx, zoomLevel))
     }
     function worldToScreenY(wy) {
         var scene = activeScene()
         if (scene)
             return scene.worldToScreenY(wy)
-        return panY + wy * zoomLevel
+        return finiteSum(panY, finiteProduct(wy, zoomLevel))
     }
     function screenToWorldX(sx) {
         var scene = activeScene()
@@ -409,8 +442,8 @@ Item {
             stopZoomTween()
             anchorRoundAt(screenX, screenY)
             zoomLevel = target
-            applyPan(screenX - _zoomRoundWorldX * target,
-                     screenY - _zoomRoundWorldY * target)
+            applyPan(finiteDifference(screenX, finiteProduct(_zoomRoundWorldX, target)),
+                     finiteDifference(screenY, finiteProduct(_zoomRoundWorldY, target)))
             var switched = -1
             if (zoomingIn) {
                 switched = maybeEnterEmbedAt(screenX, screenY)
@@ -437,8 +470,8 @@ Item {
         if (target === previous)
             return -1
         zoomLevel = target
-        applyPan(screenX - _zoomRoundWorldX * target,
-                 screenY - _zoomRoundWorldY * target)
+        applyPan(finiteDifference(screenX, finiteProduct(_zoomRoundWorldX, target)),
+                 finiteDifference(screenY, finiteProduct(_zoomRoundWorldY, target)))
         var zoomingIn = target > previous
         var zoomingOut = target < previous
         var switched = -1
@@ -456,8 +489,8 @@ Item {
         var z = zoomLevel > 0 ? zoomLevel : 1
         _zoomAnchorX = screenX
         _zoomAnchorY = screenY
-        _zoomRoundWorldX = (screenX - panX) / z
-        _zoomRoundWorldY = (screenY - panY) / z
+        _zoomRoundWorldX = finiteQuotient(finiteDifference(screenX, panX), z)
+        _zoomRoundWorldY = finiteQuotient(finiteDifference(screenY, panY), z)
     }
 
     // 同一屏幕锚点在给定 zoom 下推出来的相机（锚点 world 位置用"当前显示帧"现算）：
@@ -466,10 +499,11 @@ Item {
     function anchoredCameraAt(zoom, screenX, screenY) {
         var normalized = normalizedZoom(zoom, zoomLevel)
         var z = zoomLevel > 0 ? zoomLevel : 1
-        var worldX = (screenX - panX) / z
-        var worldY = (screenY - panY) / z
-        return { zoom: normalized, panX: screenX - worldX * normalized,
-                 panY: screenY - worldY * normalized }
+        var worldX = finiteQuotient(finiteDifference(screenX, panX), z)
+        var worldY = finiteQuotient(finiteDifference(screenY, panY), z)
+        return { zoom: normalized,
+                 panX: finiteDifference(screenX, finiteProduct(worldX, normalized)),
+                 panY: finiteDifference(screenY, finiteProduct(worldY, normalized)) }
     }
 
     // 过渡期滚轮：从**当前可见帧**连续推进到新目标（Issue #949 复核评论
@@ -602,20 +636,22 @@ Item {
         if (!parentCam || !ctx || !(ctx.ratio > 0))
             return parentCam
         var zoom = normalizedZoom(parentCam.zoom * ctx.ratio, parentCam.zoom)
-        var screenX = parentCam.panX + ctx.embedCenterX * parentCam.zoom
-        var screenY = parentCam.panY + ctx.embedCenterY * parentCam.zoom
-        return { zoom: zoom, panX: screenX - ctx.boundsCenterX * zoom,
-                 panY: screenY - ctx.boundsCenterY * zoom }
+        var screenX = finiteSum(parentCam.panX, finiteProduct(ctx.embedCenterX, parentCam.zoom))
+        var screenY = finiteSum(parentCam.panY, finiteProduct(ctx.embedCenterY, parentCam.zoom))
+        return { zoom: zoom,
+                 panX: finiteDifference(screenX, finiteProduct(ctx.boundsCenterX, zoom)),
+                 panY: finiteDifference(screenY, finiteProduct(ctx.boundsCenterY, zoom)) }
     }
 
     function parentCameraForChild(childCam, ctx) {
         if (!childCam || !ctx || !(ctx.ratio > 0))
             return childCam
         var zoom = normalizedZoom(childCam.zoom / ctx.ratio, childCam.zoom)
-        var screenX = childCam.panX + ctx.boundsCenterX * childCam.zoom
-        var screenY = childCam.panY + ctx.boundsCenterY * childCam.zoom
-        return { zoom: zoom, panX: screenX - ctx.embedCenterX * zoom,
-                 panY: screenY - ctx.embedCenterY * zoom }
+        var screenX = finiteSum(childCam.panX, finiteProduct(ctx.boundsCenterX, childCam.zoom))
+        var screenY = finiteSum(childCam.panY, finiteProduct(ctx.boundsCenterY, childCam.zoom))
+        return { zoom: zoom,
+                 panX: finiteDifference(screenX, finiteProduct(ctx.embedCenterX, zoom)),
+                 panY: finiteDifference(screenY, finiteProduct(ctx.embedCenterY, zoom)) }
     }
 
     function cameraLerp(from, to, p) {
@@ -623,9 +659,9 @@ Item {
             return to
         if (!to)
             return from
-        return { zoom: from.zoom + (to.zoom - from.zoom) * p,
-                 panX: from.panX + (to.panX - from.panX) * p,
-                 panY: from.panY + (to.panY - from.panY) * p }
+        return { zoom: finiteSum(from.zoom, finiteProduct(finiteDifference(to.zoom, from.zoom), p)),
+                 panX: finiteSum(from.panX, finiteProduct(finiteDifference(to.panX, from.panX), p)),
+                 panY: finiteSum(from.panY, finiteProduct(finiteDifference(to.panY, from.panY), p)) }
     }
 
     // 子图正常可读 / 可交互的镜头（进场落点，Issue #949 复核评论 6250468319，
@@ -650,8 +686,8 @@ Item {
     // 进场时圆环从这里起步，出场时缩回这里后由真实圆壳接管）。
     function embedScreenGeometry(cam, centerX, centerY, diameter) {
         var z = cam && cam.zoom > 0 ? cam.zoom : 1
-        return { screenX: cam.panX + centerX * z,
-                 screenY: cam.panY + centerY * z,
+        return { screenX: finiteSum(cam.panX, finiteProduct(centerX, z)),
+                 screenY: finiteSum(cam.panY, finiteProduct(centerY, z)),
                  screenRadius: Math.max(diameter, 1) * z / 2 }
     }
 
@@ -884,7 +920,7 @@ Item {
             return -1
         }
         _zoomEntryKey = routeKey + "/" + emb.instanceId
-        var projectedPx = Math.min(emb.width, emb.height) * zoomLevel
+        var projectedPx = finiteProduct(Math.min(emb.width, emb.height), zoomLevel)
         if (entryScaleForDiameter(projectedPx) < _enterRatio) {
             return -1
         }
@@ -900,8 +936,8 @@ Item {
         var ctx = entryContexts[routeKey]
         if (!ctx || !(ctx.ratio > 0))
             return -1
-        var virtualParentZoom = zoomLevel / ctx.ratio
-        var coverageNow = entryScaleForDiameter(ctx.embedDiameter * virtualParentZoom)
+        var virtualParentZoom = finiteQuotient(zoomLevel, ctx.ratio)
+        var coverageNow = entryScaleForDiameter(finiteProduct(ctx.embedDiameter, virtualParentZoom))
         var entryCoverage = ctx.entryCoverage > 0 ? ctx.entryCoverage : _exitRatio
         if (coverageNow >= entryCoverage)
             return -1
@@ -1231,7 +1267,7 @@ Item {
         var dy = top < margin ? margin - top
                               : (bottom > height - margin ? height - margin - bottom : 0)
         if (dx !== 0 || dy !== 0)
-            applyPan(panX + dx, panY + dy)
+            applyPan(finiteSum(panX, dx), finiteSum(panY, dy))
         return true
     }
 
@@ -1344,8 +1380,8 @@ Item {
 
         var center = scene.itemCenterScene(kind, itemId)
         if (center) {
-            applyPan(width / 2 - center.x * zoomLevel,
-                     height / 2 - center.y * zoomLevel)
+            applyPan(finiteDifference(width / 2, finiteProduct(center.x, zoomLevel)),
+                     finiteDifference(height / 2, finiteProduct(center.y, zoomLevel)))
         }
         return center !== null
     }
@@ -1589,7 +1625,7 @@ Item {
                 if (!(zoomLevel > 0))
                     return
                 var worldSpacing = 50
-                var gridSpacing = worldSpacing * zoomLevel
+                var gridSpacing = finiteProduct(worldSpacing, zoomLevel)
                 while (gridSpacing < 16) {
                     worldSpacing *= 5
                     gridSpacing = worldSpacing * zoomLevel

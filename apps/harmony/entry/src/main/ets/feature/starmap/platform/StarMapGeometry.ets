@@ -1087,6 +1087,8 @@ function findEmbedRect(context: RecursiveSceneContext, instanceId: string): Plat
 export interface EmbedFocusProbe {
   /** 进入这颗 Embed 之后的 scenePath 描述（也就是"钻进它"会落到哪一层） */
   childScenePath: string
+  /** 进入这颗 Embed 的完整入口 route（含每个父级实例），用于按实例穿越。 */
+  segments: StarMapPathSegment[]
   /** 圆心在视口内的归一化 X（0 = 左边缘，1 = 右边缘） */
   centerRatioX: number
   /** 圆心在视口内的归一化 Y */
@@ -1167,6 +1169,7 @@ function collectEmbedFocusProbesInScene(
     ]
     probes.push({
       childScenePath: describeScenePath(childSegments),
+      segments: childSegments,
       centerRatioX: rootScreen.x / viewportWidthVp,
       centerRatioY: rootScreen.y / viewportHeightVp,
       ownerScale: context.scale
@@ -1529,6 +1532,22 @@ export function resolveSceneLocalPoint(
  * @param offsetY Y 方向偏移
  * @returns 屏幕坐标
  */
+function safeProduct(a: number, b: number): number {
+  const value: number = a * b
+  if (isFinite(value)) {
+    return value
+  }
+  return (a < 0) !== (b < 0) ? -Number.MAX_VALUE : Number.MAX_VALUE
+}
+
+function safeSum(a: number, b: number): number {
+  const value: number = a + b
+  if (isFinite(value)) {
+    return value
+  }
+  return value === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+}
+
 export function canvasToScreen(
   canvasX: number,
   canvasY: number,
@@ -1537,8 +1556,8 @@ export function canvasToScreen(
   offsetY: number
 ): PlatformPoint {
   return {
-    x: canvasX * zoomScale + offsetX,
-    y: canvasY * zoomScale + offsetY
+    x: safeSum(safeProduct(canvasX, zoomScale), offsetX),
+    y: safeSum(safeProduct(canvasY, zoomScale), offsetY)
   }
 }
 
@@ -1562,11 +1581,13 @@ export function screenToCanvas(
   offsetX: number,
   offsetY: number
 ): PlatformPoint {
-  if (zoomScale === 0) {
+  if (!isFinite(zoomScale) || zoomScale === 0) {
     return { x: 0, y: 0 }
   }
+  const canvasX: number = (screenX - offsetX) / zoomScale
+  const canvasY: number = (screenY - offsetY) / zoomScale
   return {
-    x: (screenX - offsetX) / zoomScale,
-    y: (screenY - offsetY) / zoomScale
+    x: isFinite(canvasX) ? canvasX : (canvasX === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE),
+    y: isFinite(canvasY) ? canvasY : (canvasY === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE)
   }
 }

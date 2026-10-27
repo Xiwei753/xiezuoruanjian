@@ -99,14 +99,43 @@ Item {
     // 数学上 worldToScreenX(w) === panX + w * zoom，渲染时改写成
     // "视口中心 + (w - 视口中心世界坐标) × zoom"：中心偏移在 double 里现算，
     // 场景图只见到视口量级的相对坐标。
-    readonly property real _safeZoom: zoomLevel > 0 ? zoomLevel : 1.0
-    readonly property real _originWorldX: (width / 2 - panX) / _safeZoom
-    readonly property real _originWorldY: (height / 2 - panY) / _safeZoom
+    readonly property real _safeZoom: zoomLevel > 0 && isFinite(zoomLevel) ? zoomLevel : 1.0
+    function _finiteProduct(a, b) {
+        var value = a * b
+        if (isFinite(value)) return value
+        return (a < 0) !== (b < 0) ? -Number.MAX_VALUE : Number.MAX_VALUE
+    }
+    function _finiteSum(a, b) {
+        var value = a + b
+        if (isFinite(value)) return value
+        return value === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+    }
+    function _finiteDifference(a, b) {
+        var value = a - b
+        if (isFinite(value)) return value
+        return value === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+    }
+    function _finiteQuotient(a, b) {
+        if (!isFinite(b) || b === 0) return 0
+        var value = a / b
+        if (isFinite(value)) return value
+        return value === Infinity ? Number.MAX_VALUE : -Number.MAX_VALUE
+    }
+    readonly property real _originWorldX: _finiteQuotient(_finiteDifference(width / 2, panX), _safeZoom)
+    readonly property real _originWorldY: _finiteQuotient(_finiteDifference(height / 2, panY), _safeZoom)
 
-    function worldToScreenX(wx) { return width / 2 + (wx - _originWorldX) * _safeZoom }
-    function worldToScreenY(wy) { return height / 2 + (wy - _originWorldY) * _safeZoom }
-    function screenToWorldX(sx) { return _originWorldX + (sx - width / 2) / _safeZoom }
-    function screenToWorldY(sy) { return _originWorldY + (sy - height / 2) / _safeZoom }
+    function worldToScreenX(wx) {
+        return _finiteSum(width / 2, _finiteProduct(_finiteDifference(wx, _originWorldX), _safeZoom))
+    }
+    function worldToScreenY(wy) {
+        return _finiteSum(height / 2, _finiteProduct(_finiteDifference(wy, _originWorldY), _safeZoom))
+    }
+    function screenToWorldX(sx) {
+        return _finiteSum(_originWorldX, _finiteQuotient(_finiteDifference(sx, width / 2), _safeZoom))
+    }
+    function screenToWorldY(sy) {
+        return _finiteSum(_originWorldY, _finiteQuotient(_finiteDifference(sy, height / 2), _safeZoom))
+    }
 
     // Qt scene（窗口）坐标增量 → 屏幕增量 → world 增量。
     function qtSceneDeltaToWorld(dx, dy) {

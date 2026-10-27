@@ -17,8 +17,8 @@
 // 8. Embed 的 title / 圆环由外层 Stack 的 onTouchIntercept 动态分流，不再用三根矩形窄条：
 //    矩形条被 clip(true) 裁出来的只是圆内几段直线，斜着点边框会漏到内部入口点击层（Issue #813 复审）。
 // 9. 圆形子视图必须同时声明圆形热区（responseRegion）并用 HitTestMode.Block 独占 title / 圆环：
-//    组件默认热区是整个矩形，borderRadius + clip 只裁视觉不裁热区；内部点击层只负责进入画布，
-//    不能和 title / 圆环抢同一个手势（Issue #813 复审）。
+//    组件默认热区是整个矩形，borderRadius + clip 只裁视觉不裁热区；内部真实子 Scene 自己接手势，
+//    title / 圆环由外壳手势选中，双击作为进入入口的备用操作（Issue #813 复审）。
 // 10. 预览连线的起点和正式边共用 geometry 的 edgeEndpointBoundaryPoint：
 //     预览从对象边界出发，不要从中心出发，否则松手前后会跳变。
 // 11. 双指缩放用真正的**高优先级 PinchGesture**（`priorityGesture`），只挂在根 Scene 的
@@ -30,9 +30,9 @@
 //     所以必须换成真正声明优先级的 PinchGesture，用 `event.scale` / `event.pinchCenterX/Y`。
 // 12. 双指只有一台**全局相机**（#818）：当前活动画布整体缩放，缩放目标不由
 //     "两指中心落在哪个对象/入口"决定。旧方向"两指中心递归命中 → 找 ownerScenePath"已作废。
-// 13. 变换只有一种（#1009）：当前活动画布的全局相机（用户可改）。活动画布始终按
-//     正常矢量几何直接渲染，不缩进上一层入口圆壳，也不再为子画布维护 local fit。
-//     相机比例只做显示变换，不乘进布局尺寸；数值极端时只做有限性/正数规范化。
+// 13. 活动画布有自己的全局相机；入口内的真实子图投影使用 local fit × 父相机累计比例，
+//     不是第二台用户相机。投影与活动画布共用 authored 几何和同一套坐标变换。
+//     相机比例只做显示变换，不乘进布局尺寸；极端值统一做有限收口。
 // 14. 选中态全树只有一份（StarMapSelectionState），身份是 scenePath + kind + itemId。
 //     每层各存一份 selectedNodeId 的话，父子两层会同时亮，且分不清选中的是哪一层的哪个东西。
 // 15. 选中、connect 松手、菜单归属全部走 geometry 的递归命中一个入口，
@@ -53,18 +53,18 @@
 //     缩放只改变视角，不换形状、不换渲染器、不把文字卡片降级成圆点或缩略图。
 //     子星图在任何缩放下都还是那颗正圆（DEFAULT_EMBED_DIAMETER，圆角 = 半径），
 //     看不清是自然的光学结果，不是切换到另一套显示模型的信号。
-// 21. 活动画布按完整 route 切换；同一 starmap 可以在不同路径位置重复出现，
-//     入口圆壳只负责追加路径段，绝不递归实例化下一条 route 的 Scene。
-//     因此 A→B→A / A→A 既不会被拒绝，也不会把组件树撑成无限递归。
-//     身份始终是完整路径 + 入口实例。
+// 21. 活动画布按完整 route 切换；同一 starmap 可以在不同路径位置重复出现。
+//     入口圆内投影真实子图（含更深入口），但循环再次遇到祖先时只保留一层，
+//     绝不把组件树撑成无限递归。身份始终是完整路径 + 入口实例。
 // 22. 放大必须走**显示变换**，不许撑大布局：节点 / Embed 的 `.width()/.height()`
 //     和 `.fontSize()` 一律保持局部基准尺寸（普通节点用每节点卡片度量（#984），
 //     Embed 用固定直径），缩放只通过 `.scale()`（配合 boxPositionX/Y
 //     的中心补偿）实现。旧写法 `.width(160 * viewportScaleValue())` 在相机放大到几十倍时
 //     会让 RenderService 按巨大的组件缓冲去分配。
-// 23. 活动画布的盒子尺寸就是屏幕画布视口；不再存在“父 Embed 局部尺寸”的嵌套布局。
+// 23. 活动画布的盒子尺寸是屏幕画布视口；入口内子 Scene 的盒子是 Embed 局部尺寸，
+//     两者都只通过同一 authored 几何 + 显示变换投影。
 // 24. 视觉焦点只由 StarMapScreen 参考投影位置更新，用来记录接续状态；
-//     它不参与渲染档位、不强制展开/折叠任何入口。当前画布只画本层内容与入口。
+//     它不参与渲染档位、不强制展开/折叠任何入口。当前画布画本层内容、入口及其有限层真实投影。
 // 25. 相机比例没有产品上下限：工具栏 +/− 走乘性 ZOOM_FACTOR，双指捏合保持连续比例，
 //     只有 Number 真正上溢/下溢时才做数值规范化，用户不应感觉到缩放硬停点。
 // 26. 缩放不是布局变化：正常相机缩放不触发任何避让、不推开邻居。
@@ -126,6 +126,7 @@ import {
   StarMapSceneNode, StarMapSceneRegistry, Viewport,
   ContentBounds, computeContentBounds, computeFittedViewport,
   computeCameraPinch, GlobalCameraTransform,
+  finiteMultiply, finiteAdd, finiteSubtract,
   clampItemToEmbedSafeArea, computeEmbedInnerContentSafeSide, CIRCLE_INNER_SAFE_RATIO
 } from '../platform/StarMapViewport'
 import {
@@ -135,6 +136,7 @@ import {
 import {
   STARMAP_EMBED_FIT_PADDING_VP, starmapNodeColor
 } from './StarMapVisualTokens'
+import { StarMapEmbedScene } from './StarMapEmbedScene'
 
 /** wobble 视觉偏移（dx, dy）：只影响显示，不写回 Core。 */
 interface WobbleOffset {
@@ -357,6 +359,10 @@ export struct StarMapScene {
    * 保留该字段给独立复用的测试 / 预览调用点，不再参与循环递归展开。
    */
   @Prop sceneDepth: number = 0
+  /** 当前 route 已出现的 starmapId（含根，允许重复），只用于循环投影边界。 */
+  @Prop ancestorStarmapIds: string[] = []
+  /** 是否允许把已出现在祖先链上的目标再投影一层。 */
+  @Prop allowCycleProjection: boolean = true
   /** 主题配置 */
   @Prop themeConfig: ThemeConfig = {
     mode: 'light',
@@ -681,13 +687,19 @@ export struct StarMapScene {
    */
   private boxPositionX(canvasX: number, baseWidth: number): number {
     const scale: number = this.boxScale()
-    return canvasX * scale + this.boxOffsetX() - baseWidth * (scale - 1) / 2
+    return finiteSubtract(
+      finiteAdd(finiteMultiply(canvasX, scale), this.boxOffsetX()),
+      finiteMultiply(baseWidth, (scale - 1) / 2)
+    )
   }
 
   /** `boxPositionX` 的 Y 版本。@param baseHeight 组件的局部布局高度（常量） */
   private boxPositionY(canvasY: number, baseHeight: number): number {
     const scale: number = this.boxScale()
-    return canvasY * scale + this.boxOffsetY() - baseHeight * (scale - 1) / 2
+    return finiteSubtract(
+      finiteAdd(finiteMultiply(canvasY, scale), this.boxOffsetY()),
+      finiteMultiply(baseHeight, (scale - 1) / 2)
+    )
   }
 
   /**
@@ -706,17 +718,17 @@ export struct StarMapScene {
    * 只有 @ComponentV2 才支持 getter（HomeScreen.ets 那种写法），这里是 V1，别改回去。
    */
   private viewportScaleValue(): number {
-    return this.isCameraScene() ? this.cameraScale : this.fitScale * this.parentScale()
+    return this.isCameraScene() ? this.cameraScale : finiteMultiply(this.fitScale, this.parentScale())
   }
 
   /** 本 Scene 的累计视口偏移 X：根用全局相机，子用 `局部 fit 偏移 × 祖先累计`。 */
   private viewportOffsetX(): number {
-    return this.isCameraScene() ? this.cameraOffsetX : this.fitOffsetX * this.parentScale()
+    return this.isCameraScene() ? this.cameraOffsetX : finiteMultiply(this.fitOffsetX, this.parentScale())
   }
 
   /** 本 Scene 的累计视口偏移 Y：根用全局相机，子用 `局部 fit 偏移 × 祖先累计`。 */
   private viewportOffsetY(): number {
-    return this.isCameraScene() ? this.cameraOffsetY : this.fitOffsetY * this.parentScale()
+    return this.isCameraScene() ? this.cameraOffsetY : finiteMultiply(this.fitOffsetY, this.parentScale())
   }
 
   /** 本 Scene 是不是相机本体（全树只有根 Scene 是）。 */
@@ -1373,6 +1385,8 @@ private refitAfterContentAdded(): void {
     this.syncSceneHandle()
     this.drawEdges()
     // 相机只改视角：布局矩形、authored position 和显示形态一律不动。
+    // 通知页面“本帧投影已同步”，缩放穿越必须用这一帧的真实覆盖率判断。
+    this.notifySceneGeometryReady()
   }
 
   onMotionProgressChange() {
@@ -1474,7 +1488,7 @@ private refitAfterContentAdded(): void {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseX = ln ? ln.x : 0
     const wobbleDx = wobbleXFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeItemId)
-    return (baseX + wobbleDx) * this.boxScale() + this.boxOffsetX()
+    return finiteAdd(finiteMultiply(baseX + wobbleDx, this.boxScale()), this.boxOffsetX())
   }
 
   /** `getNodeBoxX` 的 Y 版本。 */
@@ -1482,7 +1496,7 @@ private refitAfterContentAdded(): void {
     const ln = this.getPlatformLayoutNode(nodeId)
     const baseY = ln ? ln.y : 0
     const wobbleDy = wobbleYFromProgress(nodeId, this.motionProgress, this.motionConfig, this.gestureTracker.getState().activeItemId)
-    return (baseY + wobbleDy) * this.boxScale() + this.boxOffsetY()
+    return finiteAdd(finiteMultiply(baseY + wobbleDy, this.boxScale()), this.boxOffsetY())
   }
 
   /**
@@ -1502,7 +1516,7 @@ private refitAfterContentAdded(): void {
     const rect: PlatformNodeRect = deriveNodeRectFromLayoutNode(ln)
     // 手指坐标在盒子坐标系里，几何层的画布坐标在累计屏幕空间：先乘一次 parentScale。
     const pointerCanvas: PlatformPoint = screenToCanvas(
-      pointerScreen.x * this.parentScale(), pointerScreen.y * this.parentScale(),
+      finiteMultiply(pointerScreen.x, this.parentScale()), finiteMultiply(pointerScreen.y, this.parentScale()),
       this.viewportScaleValue(), this.viewportOffsetX(), this.viewportOffsetY()
     )
     const start: PlatformPoint = edgeEndpointBoundaryPoint(
@@ -1510,8 +1524,8 @@ private refitAfterContentAdded(): void {
     )
     // previewLineFrom 是预览 Canvas 用的锚点，留在盒子坐标系（#821）
     this.previewLineFrom = {
-      x: start.x * this.boxScale() + this.boxOffsetX(),
-      y: start.y * this.boxScale() + this.boxOffsetY()
+      x: finiteAdd(finiteMultiply(start.x, this.boxScale()), this.boxOffsetX()),
+      y: finiteAdd(finiteMultiply(start.y, this.boxScale()), this.boxOffsetY())
     }
   }
 
@@ -1519,14 +1533,14 @@ private refitAfterContentAdded(): void {
   private getEmbedBoxX(embedId: string): number {
     const ln = this.getPlatformLayoutNode(embedId)
     const baseX = ln ? ln.x : 0
-    return baseX * this.boxScale() + this.boxOffsetX()
+    return finiteAdd(finiteMultiply(baseX, this.boxScale()), this.boxOffsetX())
   }
 
   /** Embed 在**本 Scene 盒子坐标系**里的 y（无 wobble）。 */
   private getEmbedBoxY(embedId: string): number {
     const ln = this.getPlatformLayoutNode(embedId)
     const baseY = ln ? ln.y : 0
-    return baseY * this.boxScale() + this.boxOffsetY()
+    return finiteAdd(finiteMultiply(baseY, this.boxScale()), this.boxOffsetY())
   }
 
   /**
@@ -2768,54 +2782,28 @@ private refitAfterContentAdded(): void {
    * innerContent 不挂父手势，由 child Scene 自己处理。
    * 所有 onActionStart 检查 isOwnedByScene，防止别层正在用手势时覆盖 owner。
    *
-   * 单击和双击都必须落在同一个 Embed 选中上（#816）：双击声明在单击之前，
-   * 双击的第二次按下不触发单击识别，所以单击不会被双击抢走。
-   * 两者都只是选中这个 Embed，都不开新页面。
+   * 单击标题/圆环只选中入口；双击标题/圆环作为缩放穿越之外的备用进入方式。
+   * 双击声明在单击之前，第二次按下不会触发单击识别。
    */
-  /**
-   * 单击是否落在入口内部内容区（不是标题带，也不是圆环）。
-   *
-   * 入口内部 = “进入这颗子星图”。标题带 / 圆环仍然是选中入口本身。
-   * 坐标来自绑定在 Embed Stack 上的手势，`finger.localX/Y` 已经是本地盒子坐标；
-   * `.scale()` 不参与换算。
-   */
-  private isEmbedInnerTap(event: GestureEvent | undefined): boolean {
-    if (!event || !event.fingerList || event.fingerList.length === 0) {
-      return false
-    }
-    const finger = event.fingerList[0]
-    if (!finger || !Number.isFinite(finger.localX) || !Number.isFinite(finger.localY)) {
-      return false
-    }
-    const radius: number = DEFAULT_EMBED_DIAMETER / 2
-    const dx: number = finger.localX - radius
-    const dy: number = finger.localY - radius
-    const dist: number = Math.sqrt(dx * dx + dy * dy)
-    if (dist > radius) {
-      return false
-    }
-    const metrics: EmbedHitMetrics = this.embedLocalHitMetrics(radius)
-    return finger.localY > metrics.titleHitHeight && dist < radius - metrics.borderHitWidth
+  /** 按当前入口实例追加一段 route；A→A 也只会多一段，不走 starmapId 去重。 */
+  private enterEmbedByInstance(embed: StarMapEmbed): void {
+    const route: StarMapPathSegment[] = this.scenePath.slice()
+    route.push({ type: 'enterEmbed', instanceId: embed.instanceId, nodeId: null })
+    this.onEnterEmbed(route)
   }
 
   private embedGestureGroup(embed: StarMapEmbed): GestureGroupInterface {
     return GestureGroup(GestureMode.Exclusive,
-      // 双击 → 选中 Embed（和单击同一个结果）
+      // 双击标题/圆环 → 进入入口（缩放穿越之外的备用入口）
       TapGesture({ count: 2 })
         .onAction(() => {
           if (this.gestureTracker.isPinching()) return
-          this.selectItem('embed', embed.instanceId)
+          this.enterEmbedByInstance(embed)
         }),
-      // 单击内部 → 追加路径并切换活动画布；单击标题/圆环 → 选中入口
+      // 单击标题/圆环 → 选中入口；内部真实子 Scene 的事件由 onTouchIntercept 放行
       TapGesture({ count: 1 })
-        .onAction((event: GestureEvent) => {
+        .onAction(() => {
           if (this.gestureTracker.isPinching()) return
-          if (this.isEmbedInnerTap(event)) {
-            const route: StarMapPathSegment[] = this.scenePath.slice()
-            route.push({ type: 'enterEmbed', instanceId: embed.instanceId, nodeId: null })
-            this.onEnterEmbed(route)
-            return
-          }
           this.selectItem('embed', embed.instanceId)
         }),
       // 长按 → 菜单（连线预备态）→ 继续拖动 → connect
@@ -2928,12 +2916,36 @@ private refitAfterContentAdded(): void {
   @Builder
   StarMapEmbedItem(embed: StarMapEmbed) {
     Stack() {
-      // 1. 内部内容区：当前画布只画入口，不再把子星图缩成缩略图或递归子 Scene。
-      // 单击圆内（除标题带、圆环外）由外层手势追加 enterEmbed 路径并切换画布。
+      // 1. 内部内容区：直接子图的真实投影。节点卡片、文字、边和更深入口
+      // 全部按同一套布局/相机几何缩小，不换形状、不做 LOD、不画缩略图。
+      // 循环最多再投影一层，由 ancestorStarmapIds + allowCycleProjection 收口。
       Column() {
+        StarMapEmbedScene({
+          rootStarmapId: this.rootStarmapId,
+          scenePath: this.scenePath,
+          embed: embed,
+          sceneDepth: this.sceneDepth + 1,
+          ancestorStarmapIds: this.ancestorStarmapIds,
+          allowCycleProjection: this.allowCycleProjection,
+          themeConfig: this.themeConfig,
+          motionConfig: this.motionConfig,
+          motionProgress: this.motionProgress,
+          bridge: this.bridge,
+          gestureTracker: this.gestureTracker,
+          selectionState: this.selectionState,
+          sceneRegistry: this.sceneRegistry,
+          cameraScale: this.cameraScale,
+          cameraOffsetX: this.cameraOffsetX,
+          cameraOffsetY: this.cameraOffsetY,
+          onCameraChanged: this.onCameraChanged,
+          onCameraPanTo: this.onCameraPanTo,
+          onEnterEmbed: this.onEnterEmbed,
+          inheritedScale: this.viewportScaleValue(),
+        })
       }
       .width('100%')
       .height('100%')
+      .id(this.embedInputNodeId(embed.instanceId))
 
       // 2. title 视觉层（纯显示，不挂手势也不挂菜单）
       // 手势统一由外层 Stack 的 embedGestureGroup + onTouchIntercept 分流，
@@ -2990,8 +3002,8 @@ private refitAfterContentAdded(): void {
     .gesture(this.embedGestureGroup(embed))
     // 动态事件分流（坐标是相对本组件的局部坐标，圆心即 直径/2）：
     // - 圆外：不属于 Embed，热区已排除，这里再兜一层，事件落回父星图
-    // - 圆内：Block，整颗入口由本层手势处理。单击内部进入画布；单击标题/圆环选中入口。
-    //   圆外：None，事件落回画布。
+    // - title / 圆环：Block，由本层外壳手势选中入口；双击标题/圆环作为单击进入的备用入口
+    // - 内部内容：None，把事件交给圆内真实子 Scene，子节点/连线照常直接命中。
     .onTouchIntercept((event: TouchEvent): HitTestMode => {
       const touch = event.changedTouches[0]
       if (!touch) {
@@ -3012,7 +3024,13 @@ private refitAfterContentAdded(): void {
       const dx: number = localX - radius
       const dy: number = localY - radius
       const dist: number = Math.sqrt(dx * dx + dy * dy)
-      return dist <= radius ? HitTestMode.Block : HitTestMode.None
+      if (dist > radius) {
+        return HitTestMode.None
+      }
+      const metrics: EmbedHitMetrics = this.embedLocalHitMetrics(radius)
+      const inTitle: boolean = localY <= metrics.titleHitHeight
+      const inBorder: boolean = dist >= radius - metrics.borderHitWidth
+      return (inTitle || inBorder) ? HitTestMode.Block : HitTestMode.None
     })
     // 父子触摸竞争（#818 复审）：
     // 上面 onTouchIntercept 只决定"要不要让 child 参与"，它管不了"深层 child 被 touch-test
