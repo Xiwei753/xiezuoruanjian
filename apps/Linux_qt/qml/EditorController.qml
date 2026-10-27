@@ -100,8 +100,7 @@ QtObject {
     property var correctionRequestEpochs: ({})
     property var editorViewportRef: null
 
-    Timer {
-        id: annotationRefreshTimer
+    property var annotationRefreshTimer: Timer {
         interval: 120
         repeat: false
         onTriggered: controller.refreshChapterAnnotations()
