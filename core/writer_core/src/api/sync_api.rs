@@ -875,11 +875,14 @@ impl WriterCoreApi {
         operation_id_override: Option<String>,
         trigger_override: Option<String>,
     ) -> ApiResult<FullSyncResultDto> {
-        let operation_id = operation_id_override.or_else(|| progress_sink
-            .as_ref()
-            .and_then(SyncProgressSink::operation_id)
-            .map(str::to_string)
-        ).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let operation_id = operation_id_override
+            .or_else(|| {
+                progress_sink
+                    .as_ref()
+                    .and_then(SyncProgressSink::operation_id)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let started_at = Instant::now();
         record_sync_diagnostic("sync.run.start", "sync.run", {
             let mut fields = sync_diagnostic_fields(&operation_id, "prepare", None);
@@ -1579,9 +1582,7 @@ impl WriterCoreApi {
             {
                 continue;
             }
-            let settings_path = planned_target
-                .target_live_root
-                .join("settings.sync.json");
+            let settings_path = planned_target.target_live_root.join("settings.sync.json");
             if let Err(e) = crate::settings::normalize_syncable_settings_file(&settings_path) {
                 let msg = format!(
                     "normalize settings.sync.json before staging seed failed at {}: {e}",
@@ -2264,7 +2265,8 @@ impl WriterCoreApi {
                 return (target_with_conflicts, Vec::new());
             }
 
-            let sync_sources = staging_manifest_device_ids(run, target_sync_result.project_id.as_deref());
+            let sync_sources =
+                staging_manifest_device_ids(run, target_sync_result.project_id.as_deref());
             let (commit_result, conflicts, committed_paths) =
                 crate::sync::commit_helpers::commit_single_target_staging(run, target_sync_result);
             let mut target_with_conflicts = target_sync_result.clone();
@@ -2288,22 +2290,50 @@ impl WriterCoreApi {
             // 下次保存时被统归为 Unknown 外部变更。事件以 Core 当前证明链头为
             // before，Apply 读取刚写入 projects_root 的实际正文；Delete 记录真实
             // 删除事实。证明落盘失败必须反映到该 target，不能只打 warn 后假装成功。
-            if matches!(commit_result, crate::sync::commit_helpers::TargetCommitResult::Ok) {
+            if matches!(
+                commit_result,
+                crate::sync::commit_helpers::TargetCommitResult::Ok
+            ) {
                 let mut proof_errors: Vec<String> = Vec::new();
                 for (action_index, committed) in committed_paths.iter().enumerate() {
                     let path = &committed.path;
                     let Some((project_id, volume_id, chapter_id)) = chapter_path_parts(path) else {
                         continue;
                     };
+                    let before_text = match &committed.before {
+                        crate::sync::commit_helpers::CommittedBefore::Missing => None,
+                        crate::sync::commit_helpers::CommittedBefore::Text(bytes) => {
+                            match std::str::from_utf8(bytes) {
+                                Ok(text) => Some(text.to_string()),
+                                Err(e) => {
+                                    proof_errors.push(format!(
+                                        "同步章节前置正文不是 UTF-8 {}: {}",
+                                        path.display(),
+                                        e
+                                    ));
+                                    continue;
+                                }
+                            }
+                        }
+                        crate::sync::commit_helpers::CommittedBefore::Error(e) => {
+                            proof_errors.push(e.clone());
+                            continue;
+                        }
+                        crate::sync::commit_helpers::CommittedBefore::NotTracked => {
+                            proof_errors
+                                .push(format!("同步章节缺少 commit 前置快照: {}", path.display()));
+                            continue;
+                        }
+                    };
                     let after_text = if committed.deleted {
-                        String::new()
+                        None
                     } else {
                         let Some(live_path) = chapter_live_path(&core, path) else {
                             proof_errors.push(format!("无法映射同步章节路径: {}", path.display()));
                             continue;
                         };
                         match std::fs::read_to_string(&live_path) {
-                            Ok(text) => text,
+                            Ok(text) => Some(text),
                             Err(e) => {
                                 proof_errors.push(format!(
                                     "读取同步章节 {} 失败: {}",
@@ -2321,17 +2351,14 @@ impl WriterCoreApi {
                         .unwrap_or("");
                     // run_id + 落盘路径 + 动作序号唯一标识一次真实同步提交；同一
                     // 章节 A→B→A→B 不会被内容 hash 误去重。事件 ID 固定后重发复用。
-                    let sync_event_id = format!(
-                        "sync:{}:{}:{}",
-                        run.run_id(),
-                        path.display(),
-                        action_index
-                    );
+                    let sync_event_id =
+                        format!("sync:{}:{}:{}", run.run_id(), path.display(), action_index);
                     if let Err(e) = core.record_sync_content_change(
                         &project_id,
                         &volume_id,
                         &chapter_id,
-                        &after_text,
+                        before_text.as_deref(),
+                        after_text.as_deref(),
                         &sync_event_id,
                         source_device,
                         "",
@@ -2340,10 +2367,9 @@ impl WriterCoreApi {
                     }
                 }
                 if !proof_errors.is_empty() {
-                    target_with_conflicts.result.status =
-                        crate::sync::SyncStatus::RecoverableError(
-                            "sync_proof_record_failed".to_string(),
-                        );
+                    target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
+                        "sync_proof_record_failed".to_string(),
+                    );
                     target_with_conflicts.result.error = Some(format!(
                         "同步正文已落盘，但证明事件记录失败: {}",
                         proof_errors.join("; ")
@@ -2923,7 +2949,6 @@ mod tests {
     }
 }
 
-
 /// 从 workspace-relative 章节正文路径解析 `(project, volume, chapter)`。
 fn chapter_path_parts(path: &std::path::Path) -> Option<(String, String, String)> {
     let parts: Vec<String> = path
@@ -2960,7 +2985,11 @@ fn chapter_live_path(
         return None;
     }
     let project_id = components.next()?.as_os_str().to_str()?;
-    Some(core.projects_root().join(project_id).join(components.as_path()))
+    Some(
+        core.projects_root()
+            .join(project_id)
+            .join(components.as_path()),
+    )
 }
 
 /// 从 staging manifest 收集 `project/volume/chapter -> 远端设备`，供 SyncRemote

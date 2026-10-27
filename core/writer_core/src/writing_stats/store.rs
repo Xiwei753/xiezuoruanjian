@@ -24,15 +24,15 @@
 //!   分区只读。读取时扫描全部分区，按 `event_id` 去重后组成同一份聚合输入。
 //! - 旧版单分区事件库由 [`crate::writing_stats::migration`] 一次性迁入本结构。
 
-use crate::error::Result;
 use crate::editor::kernel::ContentDigest;
 use crate::editor::{EditorChange, EditorSelection, Utf8ByteOffset};
+use crate::error::Result;
+use crate::writing_stats::calendar;
 use crate::writing_stats::checkpoint::{self, ProofCheckpoint};
 use crate::writing_stats::proof::{
     self, apply_changes, chain_content_hash, compute_event_hash, content_hash_of_text,
     text_digest_matches, text_sha256,
 };
-use crate::writing_stats::calendar;
 use crate::writing_stats::{WritingActivitySegment, WritingInputEvent};
 use chrono::NaiveDate;
 use serde::Serialize;
@@ -40,8 +40,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 /// 统计事件根目录（相对 app_data_root）。
 const EVENTS_ROOT: &str = "stats/events";
@@ -348,9 +348,7 @@ impl StatsStore {
         }
         let origin = event.device_id.clone();
         if origin.is_empty() {
-            return Err(crate::Error::Other(
-                "proof 事件缺少来源设备 ID".to_string(),
-            ));
+            return Err(crate::Error::Other("proof 事件缺少来源设备 ID".to_string()));
         }
         let date = self.timestamp_to_date(event.timestamp_ms)?;
         if self.event_is_persisted(&origin, &date, &event.event_id)? {
@@ -510,9 +508,13 @@ impl StatsStore {
             }
 
             let legacy_before = !draft.before_text_sha256.is_empty()
-                && !draft.before_text_sha256.starts_with(proof::CONTENT_DIGEST_VERSION);
+                && !draft
+                    .before_text_sha256
+                    .starts_with(proof::CONTENT_DIGEST_VERSION);
             let legacy_after = !draft.after_text_sha256.is_empty()
-                && !draft.after_text_sha256.starts_with(proof::CONTENT_DIGEST_VERSION);
+                && !draft
+                    .after_text_sha256
+                    .starts_with(proof::CONTENT_DIGEST_VERSION);
             if (legacy_before || legacy_after) && before_text.is_none() {
                 let frame = crate::writing_stats::replay::replay_chapter(
                     self,
@@ -550,7 +552,10 @@ impl StatsStore {
             let mut after_digest = before_digest.clone();
             after_digest.apply_changes(&draft.changes)?;
             if !draft.after_text_sha256.is_empty() {
-                let matches = if draft.after_text_sha256.starts_with(proof::CONTENT_DIGEST_VERSION) {
+                let matches = if draft
+                    .after_text_sha256
+                    .starts_with(proof::CONTENT_DIGEST_VERSION)
+                {
                     draft.after_text_sha256 == after_digest.digest()
                 } else {
                     let mut legacy_after_text = before_text.clone().unwrap_or_default();
@@ -579,7 +584,8 @@ impl StatsStore {
                 chain_content_hash(&draft.before_content_hash, &draft.changes);
             (draft.changes.clone(), after_digest)
         };
-        let after_content_hash = chain_content_hash(&expected_before_content_hash, &changes_for_chain);
+        let after_content_hash =
+            chain_content_hash(&expected_before_content_hash, &changes_for_chain);
         let after_text_sha256 = after_digest.digest();
         let event_hash = compute_event_hash(&event);
         if let Some(draft) = event.proof.as_mut() {
@@ -697,9 +703,10 @@ impl StatsStore {
         let mut last = find_last(&all_events);
         let mut repaired_external = false;
         if let Some(event) = last.as_ref() {
-            let proof = event.proof.as_ref().ok_or_else(|| {
-                crate::Error::Other("proof 事件缺少 proof 细节".to_string())
-            })?;
+            let proof = event
+                .proof
+                .as_ref()
+                .ok_or_else(|| crate::Error::Other("proof 事件缺少 proof 细节".to_string()))?;
             let frame = crate::writing_stats::replay::replay_chapter(
                 self,
                 &crate::writing_stats::replay::ProofReplayRequest {
@@ -744,9 +751,10 @@ impl StatsStore {
 
         let now = chrono::Utc::now().timestamp_millis();
         if let Some(event) = last.as_ref() {
-            let proof = event.proof.as_ref().ok_or_else(|| {
-                crate::Error::Other("proof 事件缺少 proof 细节".to_string())
-            })?;
+            let proof = event
+                .proof
+                .as_ref()
+                .ok_or_else(|| crate::Error::Other("proof 事件缺少 proof 细节".to_string()))?;
             let frame = crate::writing_stats::replay::replay_chapter(
                 self,
                 &crate::writing_stats::replay::ProofReplayRequest {
@@ -772,7 +780,11 @@ impl StatsStore {
                 text,
                 &proof.after_content_hash,
                 &proof.event_hash,
-                if repaired_external { "external" } else { "save" },
+                if repaired_external {
+                    "external"
+                } else {
+                    "save"
+                },
             );
             return checkpoint::append_checkpoint(&self.app_data_root, &checkpoint);
         }
@@ -805,13 +817,12 @@ impl StatsStore {
                 }
                 let refreshed = self.load_all_events()?;
                 let last = find_last(&refreshed).ok_or_else(|| {
-                    crate::Error::Other(format!(
-                        "章节 {chapter_id} 的外部变更事件写入后缺少证明链"
-                    ))
+                    crate::Error::Other(format!("章节 {chapter_id} 的外部变更事件写入后缺少证明链"))
                 })?;
-                let proof = last.proof.as_ref().ok_or_else(|| {
-                    crate::Error::Other("proof 事件缺少 proof 细节".to_string())
-                })?;
+                let proof = last
+                    .proof
+                    .as_ref()
+                    .ok_or_else(|| crate::Error::Other("proof 事件缺少 proof 细节".to_string()))?;
                 let frame = crate::writing_stats::replay::replay_chapter(
                     self,
                     &crate::writing_stats::replay::ProofReplayRequest {
@@ -932,6 +943,70 @@ impl StatsStore {
         event
     }
 
+    /// 本机某章节是否已有逐字证明事件。
+    pub(crate) fn has_chapter_proof(
+        &self,
+        origin_device_id: &str,
+        chapter_id: &str,
+    ) -> Result<bool> {
+        Ok(self.load_all_events()?.iter().any(|event| {
+            event.device_id == origin_device_id
+                && event.chapter_id == chapter_id
+                && event.proof.is_some()
+        }))
+    }
+
+    /// 首次从 Git/同步导入章节、且本机没有逐字历史时，写一个有来源标记的
+    /// `sync_import` 基线。基线声明「此前没有本机逐字记录」，不是人工输入事件。
+    pub(crate) fn record_sync_import_baseline(
+        &self,
+        chapter_id: &str,
+        text: &str,
+        sync_event_id: &str,
+        source_device_id: &str,
+    ) -> Result<()> {
+        if chapter_id.is_empty() {
+            return Err(crate::Error::Other("同步证明基线缺少章节 ID".to_string()));
+        }
+        let origin = self.resolve_origin_device_id()?;
+        if self.has_chapter_proof(&origin, chapter_id)? {
+            return Err(crate::Error::Other(format!(
+                "章节 {chapter_id} 已有本机证明事件，不能再写同步导入基线"
+            )));
+        }
+        if let Some(last) =
+            checkpoint::load_last_checkpoint(&self.app_data_root, &origin, chapter_id)?
+        {
+            if last.seq != 0 {
+                return Err(crate::Error::Other(format!(
+                    "章节 {chapter_id} 的证明链已从 seq {} 开始，不能写同步导入基线",
+                    last.seq
+                )));
+            }
+            if last.text != text {
+                return Err(crate::Error::Other(format!(
+                    "章节 {chapter_id} 的同步前置正文与已有基线不一致"
+                )));
+            }
+            return Ok(());
+        }
+        let mut checkpoint = ProofCheckpoint::new(
+            chapter_id,
+            &origin,
+            0,
+            sync_event_id,
+            chrono::Utc::now().timestamp_millis(),
+            text,
+            &content_hash_of_text(text),
+            "",
+            "sync_import",
+        );
+        checkpoint.source_device_id = source_device_id.to_string();
+        checkpoint::append_checkpoint(&self.app_data_root, &checkpoint)?;
+        self.proof_generation.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// 本机当前证明链的最近序号（没有事件时为 0）。
     pub(crate) fn latest_proof_seq(&self) -> Result<u64> {
         let mut state = self.lock_proof_state();
@@ -1042,10 +1117,7 @@ impl StatsStore {
     /// 切片先按写作设备本地日期切开，再按切片起点的 UTC 日期落到
     /// `.sessions.jsonl`。派生 ID 由切片原始 `event_id` 与本地日期确定，
     /// 同一批数据重发时不会重复累计时长。
-    pub fn record_activity_segments(
-        &self,
-        segments: Vec<WritingActivitySegment>,
-    ) -> Result<usize> {
+    pub fn record_activity_segments(&self, segments: Vec<WritingActivitySegment>) -> Result<usize> {
         if segments.is_empty() {
             return Ok(0);
         }
@@ -1424,16 +1496,15 @@ impl StatsStore {
             if trimmed.is_empty() {
                 continue;
             }
-            let segment: WritingActivitySegment =
-                serde_json::from_str(trimmed).map_err(|e| {
-                    crate::Error::Other(format!(
-                        "Corrupt writing activity segment at stats/events/{}/{}.sessions.jsonl:{}: {}",
-                        file.origin,
-                        file.date,
-                        idx + 1,
-                        e
-                    ))
-                })?;
+            let segment: WritingActivitySegment = serde_json::from_str(trimmed).map_err(|e| {
+                crate::Error::Other(format!(
+                    "Corrupt writing activity segment at stats/events/{}/{}.sessions.jsonl:{}: {}",
+                    file.origin,
+                    file.date,
+                    idx + 1,
+                    e
+                ))
+            })?;
             segments.push(segment);
         }
         Ok(segments)

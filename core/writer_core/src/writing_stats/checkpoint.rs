@@ -36,8 +36,11 @@ pub struct ProofCheckpoint {
     #[serde(default)]
     pub event_hash: String,
     pub created_at_ms: i64,
-    /// baseline / save / periodic / archive
+    /// baseline / save / periodic / archive / sync_import
     pub reason: String,
+    /// 外部来源设备：同步导入基线记录远端设备；本机生成留空。
+    #[serde(default)]
+    pub source_device_id: String,
 }
 
 impl ProofCheckpoint {
@@ -65,6 +68,7 @@ impl ProofCheckpoint {
             event_hash: event_hash.to_string(),
             created_at_ms: chrono::Utc::now().timestamp_millis(),
             reason: reason.to_string(),
+            source_device_id: String::new(),
         }
     }
 }
@@ -112,8 +116,10 @@ pub fn archive_event_day(
         // 崩溃可能发生在 rename 之后、删除源文件之前。归档与源完全一致时
         // 完成收尾；源若有迟到事件则保留两段，读取侧按 event_id 去重。
         let source_bytes = fs::read(&source)?;
-        let archive_bytes = zstd::stream::decode_all(fs::File::open(&destination)?)
-            .map_err(|error| crate::Error::Other(format!("decode proof archive failed: {error}")))?;
+        let archive_bytes =
+            zstd::stream::decode_all(fs::File::open(&destination)?).map_err(|error| {
+                crate::Error::Other(format!("decode proof archive failed: {error}"))
+            })?;
         if archive_bytes == source_bytes {
             fs::remove_file(&source)?;
         }
@@ -172,10 +178,7 @@ pub fn append_checkpoint(app_data_root: &Path, checkpoint: &ProofCheckpoint) -> 
         )));
     }
     let serialized = serde_json::to_string(checkpoint)?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     file.write_all(serialized.as_bytes())?;
     file.write_all(b"\n")?;
     Ok(())

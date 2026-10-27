@@ -819,6 +819,23 @@ impl StatsApi {
         self.store.record_proof_event(event, baseline_text)
     }
 
+    /// 本机某章节是否已有逐字证明事件。
+    pub fn has_chapter_proof(&self, device_id: &str, chapter_id: &str) -> Result<bool> {
+        self.store.has_chapter_proof(device_id, chapter_id)
+    }
+
+    /// 首次同步导入时写有来源标记的基线；不是人工输入事件。
+    pub fn record_sync_import_baseline(
+        &self,
+        chapter_id: &str,
+        text: &str,
+        sync_event_id: &str,
+        source_device_id: &str,
+    ) -> Result<()> {
+        self.store
+            .record_sync_import_baseline(chapter_id, text, sync_event_id, source_device_id)
+    }
+
     /// 正文保存后写入完整正文检查点。
     pub fn record_chapter_checkpoint(
         &self,

@@ -23,6 +23,10 @@ pub const CONTENT_DIGEST_VERSION: &str = "content-v1";
 const BASE1: u128 = 0x9E37_79B1_85EB_CA87_9E37_79B1_85EB_CA87;
 const BASE2: u128 = 0xC2B2_AE3D_27D4_EB4F_C2B2_AE3D_27D4_EB4F;
 
+/// 每个叶子的最大 UTF-8 byte 长度。分块上限保证中间编辑只拆一个（或两个）
+/// 有界叶子，不会对整章正文做 `Arc::from` 复制或重新哈希。
+const CHUNK_MAX_BYTES: usize = 4096;
+
 type NodeRef = Option<Arc<Node>>;
 
 #[derive(Debug, Clone)]
@@ -66,10 +70,13 @@ impl ContentDigest {
 
     pub fn from_text(text: &str) -> Self {
         let mut digest = Self::new();
-        if !text.is_empty() {
-            digest.root = Some(make_leaf(Arc::from(text), digest.next_priority));
+        let mut root = None;
+        for chunk in chunk_text(text) {
+            let node = make_leaf(Arc::from(chunk), digest.next_priority);
             digest.next_priority = digest.next_priority.wrapping_add(1);
+            root = merge(root, Some(node));
         }
+        digest.root = root;
         digest
     }
 
@@ -113,10 +120,13 @@ impl ContentDigest {
                     )));
                 }
                 let (left, right) = split(self.root.take(), index)?;
-                let priority = self.next_priority;
-                self.next_priority = self.next_priority.wrapping_add(1);
-                let node = make_leaf(Arc::from(text.as_str()), priority);
-                self.root = merge(merge(left, Some(node)), right);
+                let mut inserted = None;
+                for chunk in chunk_text(text) {
+                    let priority = self.next_priority;
+                    self.next_priority = self.next_priority.wrapping_add(1);
+                    inserted = merge(inserted, Some(make_leaf(Arc::from(chunk), priority)));
+                }
+                self.root = merge(merge(left, inserted), right);
                 Ok(())
             }
             EditorChange::Delete { index, text } => {
@@ -137,6 +147,25 @@ impl ContentDigest {
             }
         }
     }
+}
+
+/// 按 UTF-8 字符边界切分正文，每块不超过 [`CHUNK_MAX_BYTES`]。
+///
+/// 空正文返回空迭代；调用方按顺序建树，保证叶子长度恒定有界。
+fn chunk_text(text: &str) -> impl Iterator<Item = &str> {
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        if start >= text.len() {
+            return None;
+        }
+        let mut end = (start + CHUNK_MAX_BYTES).min(text.len());
+        while end > start && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let chunk = &text[start..end];
+        start = end;
+        Some(chunk)
+    })
 }
 
 fn make_leaf(text: Arc<str>, priority: u64) -> Arc<Node> {
@@ -172,13 +201,21 @@ fn rebuild(original: &Node, left: NodeRef, right: NodeRef) -> Arc<Node> {
         left.as_ref().map_or(1, |node| node.subtree_pow1),
         left.as_ref().map_or(1, |node| node.subtree_pow2),
     );
-    hash1 = hash1.wrapping_mul(original.pow1).wrapping_add(original.hash1);
-    hash2 = hash2.wrapping_mul(original.pow2).wrapping_add(original.hash2);
+    hash1 = hash1
+        .wrapping_mul(original.pow1)
+        .wrapping_add(original.hash1);
+    hash2 = hash2
+        .wrapping_mul(original.pow2)
+        .wrapping_add(original.hash2);
     pow1 = pow1.wrapping_mul(original.pow1);
     pow2 = pow2.wrapping_mul(original.pow2);
     if let Some(node) = right.as_ref() {
-        hash1 = hash1.wrapping_mul(node.subtree_pow1).wrapping_add(node.subtree_hash1);
-        hash2 = hash2.wrapping_mul(node.subtree_pow2).wrapping_add(node.subtree_hash2);
+        hash1 = hash1
+            .wrapping_mul(node.subtree_pow1)
+            .wrapping_add(node.subtree_hash1);
+        hash2 = hash2
+            .wrapping_mul(node.subtree_pow2)
+            .wrapping_add(node.subtree_hash2);
         pow1 = pow1.wrapping_mul(node.subtree_pow1);
         pow2 = pow2.wrapping_mul(node.subtree_pow2);
     }
@@ -238,10 +275,16 @@ fn split(root: NodeRef, offset: usize) -> crate::Result<(NodeRef, NodeRef)> {
         return Ok((Some(rebuild(&node, node.left.clone(), middle)), right));
     }
     if offset == left_len {
-        return Ok((node.left.clone(), Some(rebuild(&node, None, node.right.clone()))));
+        return Ok((
+            node.left.clone(),
+            Some(rebuild(&node, None, node.right.clone())),
+        ));
     }
     if offset == left_len + node.len {
-        return Ok((Some(rebuild(&node, node.left.clone(), None)), node.right.clone()));
+        return Ok((
+            Some(rebuild(&node, node.left.clone(), None)),
+            node.right.clone(),
+        ));
     }
 
     let local = offset - left_len;

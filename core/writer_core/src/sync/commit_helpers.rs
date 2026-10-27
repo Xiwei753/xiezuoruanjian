@@ -1,31 +1,14 @@
 use std::path::{Path, PathBuf};
 
-/// 本次 commit 真正落盘的一个 workspace-relative 路径，以及它是写入还是删除。
-///
-/// 证明事件不能只看路径是否存在来判断 Apply/Delete：删除要记录真实同步删除
-/// 事实，写入则要读取落盘后的正文。动作类型由 commit plan 的 `CommitAction`
-/// 原样带出。
-#[derive(Debug, Clone)]
-pub(crate) struct CommittedPath {
-    pub path: PathBuf,
-    pub deleted: bool,
-}
-
-///    把 target-relative `rel_path` 转成
-/// workspace-relative path，供 `record_workspace_history` 精确 stage。
+/// 把 target-relative `rel_path` 转成 workspace-relative path，供
+/// `record_workspace_history` 精确 stage。
 ///
 /// - App target：`live_root = app_data_root`，`rel_path` 已是 workspace-relative。
 /// - Project target：`live_root = projects_root/<project_id>`，
 ///   workspace-relative = `projects/<project_id>/<rel_path>`。
 /// - DeletedProject target with `RemoteTargetWins`：`target_kind` 保持为
-///   `"deleted_project"`，但 `target_live_root` 已设为 `projects_root/<project_id>`，
-///   所以 workspace-relative 也是 `projects/<project_id>/<rel_path>`。
-///
-/// `target_kind` / `project_id` 来自 `TargetSyncResult`，与 staging_runs
-/// 按索引对应。未知 target_kind 时退化为直接返回 `rel_path`（保守不丢路径）。
+///   `"deleted_project"`，但 `target_live_root` 已设为 `projects_root/<project_id>`。
 fn to_workspace_rel_path(target_kind: &str, project_id: Option<&str>, rel_path: &Path) -> PathBuf {
-    //   deleted_project 的 RemoteTargetWins 恢复路径
-    // 与普通 project 共用同一分支，不再走 rel-only 路径。
     if target_kind == "project" || target_kind == "deleted_project" {
         if let Some(pid) = project_id {
             return PathBuf::from("projects").join(pid).join(rel_path);
@@ -34,14 +17,84 @@ fn to_workspace_rel_path(target_kind: &str, project_id: Option<&str>, rel_path: 
     PathBuf::from(rel_path)
 }
 
+/// 章节正文在 commit 前的真实快照。同步证明必须用这个快照作为 before，
+/// 不能等应用后再从 live 倒推，也不能把“文件不存在”当成空正文。
+#[derive(Debug, Clone)]
+pub(crate) enum CommittedBefore {
+    /// 非章节正文路径，不为证明读取。
+    NotTracked,
+    /// 章节正文在 commit 前不存在（首次导入/删除已不存在）。
+    Missing,
+    /// commit 前的原始字节（空文件也是空 Vec）。
+    Text(Vec<u8>),
+    /// 读取失败，证明事件必须明确报错而不是伪造 before。
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CommittedPath {
+    pub path: PathBuf,
+    pub deleted: bool,
+    pub before: CommittedBefore,
+}
+
+/// 本次 commit 真正落盘的一个 workspace-relative 路径，以及它是写入还是删除。
+///
+/// 证明事件不能只看路径是否存在来判断 Apply/Delete：删除要记录真实同步删除
+/// 事实，写入则要读取落盘后的正文。动作类型由 commit plan 的 `CommitAction`
+/// 原样带出。
+
+/// commit 前为每个章节正文动作保存真实快照。快照发生在事务写入之前，
+/// 且只读取章节正文，避免为图片等无关文件增加 I/O。
+fn capture_action_before(
+    live_root: &Path,
+    actions: &[crate::sync::staging::CommitAction],
+) -> Vec<CommittedBefore> {
+    actions
+        .iter()
+        .map(|action| {
+            let rel = match action {
+                crate::sync::staging::CommitAction::Apply { rel_path, .. } => rel_path,
+                crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
+            };
+            if !is_chapter_content_path(rel) {
+                return CommittedBefore::NotTracked;
+            }
+            match std::fs::read(live_root.join(rel)) {
+                Ok(bytes) => CommittedBefore::Text(bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => CommittedBefore::Missing,
+                Err(e) => CommittedBefore::Error(format!(
+                    "读取同步章节前置正文 {} 失败: {}",
+                    rel.display(),
+                    e
+                )),
+            }
+        })
+        .collect()
+}
+
+fn is_chapter_content_path(path: &Path) -> bool {
+    let mut has_chapters = false;
+    let mut last = None;
+    for component in path.components() {
+        let part = component.as_os_str();
+        if part == "chapters" {
+            has_chapters = true;
+        }
+        last = Some(part);
+    }
+    has_chapters && last.is_some_and(|name| name == "chapter.md")
+}
+
 /// 收集一批 `CommitAction` 的 rel_path，转成 workspace-relative 后追加到 `out`。
 fn collect_action_paths(
     target_kind: &str,
     project_id: Option<&str>,
     actions: &[crate::sync::staging::CommitAction],
+    before: &[CommittedBefore],
     out: &mut Vec<CommittedPath>,
 ) {
-    for action in actions {
+    for (index, action) in actions.iter().enumerate() {
         let rel = match action {
             crate::sync::staging::CommitAction::Apply { rel_path, .. } => rel_path,
             crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
@@ -49,6 +102,10 @@ fn collect_action_paths(
         out.push(CommittedPath {
             path: to_workspace_rel_path(target_kind, project_id, rel),
             deleted: matches!(action, crate::sync::staging::CommitAction::Delete { .. }),
+            before: before
+                .get(index)
+                .cloned()
+                .unwrap_or(CommittedBefore::NotTracked),
         });
     }
 }
@@ -227,6 +284,7 @@ fn collect_rebased_anchor_paths(
         out.push(CommittedPath {
             path: to_workspace_rel_path(target_kind, project_id, path),
             deleted: false,
+            before: CommittedBefore::NotTracked,
         });
     }
 }
@@ -925,6 +983,7 @@ pub(crate) fn apply_staging_commits_for_targets(
                             kind,
                             pid,
                             &plan.content_actions,
+                            &[],
                             &mut committed_paths,
                         );
                         collect_rebased_anchor_paths(
@@ -1024,7 +1083,7 @@ pub(crate) fn apply_staging_commits_for_targets(
                     .get(idx)
                     .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
                     .unwrap_or(("", None));
-                collect_action_paths(kind, pid, &safe_content_actions, &mut committed_paths);
+                collect_action_paths(kind, pid, &safe_content_actions, &[], &mut committed_paths);
                 collect_rebased_anchor_paths(
                     &tx,
                     kind,
@@ -1161,6 +1220,7 @@ pub(crate) fn apply_staging_commits_for_targets(
                             kind,
                             pid,
                             &plan.content_actions,
+                            &[],
                             &mut committed_paths,
                         );
                         collect_rebased_anchor_paths(
@@ -1259,6 +1319,7 @@ pub(crate) fn commit_single_target_staging(
                     return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
                 }
             };
+            let before = capture_action_before(live_root, &plan.content_actions);
 
             let mut tx = match apply_commit_plan_with_optional_merge(
                 run,
@@ -1282,6 +1343,7 @@ pub(crate) fn commit_single_target_staging(
                         target.target_kind.as_str(),
                         target.project_id.as_deref(),
                         &plan.content_actions,
+                        &before,
                         &mut committed_paths,
                     );
                     collect_rebased_anchor_paths(
@@ -1340,6 +1402,7 @@ pub(crate) fn commit_single_target_staging(
                 })
                 .cloned()
                 .collect();
+            let before = capture_action_before(live_root, &safe_content_actions);
             let tx = match apply_commit_plan_with_optional_merge(
                 run,
                 live_root,
@@ -1359,6 +1422,7 @@ pub(crate) fn commit_single_target_staging(
                 target.target_kind.as_str(),
                 target.project_id.as_deref(),
                 &safe_content_actions,
+                &before,
                 &mut committed_paths,
             );
             collect_rebased_anchor_paths(
@@ -1439,6 +1503,7 @@ pub(crate) fn commit_single_target_staging(
                 }
             };
 
+            let before = capture_action_before(live_root, &plan.content_actions);
             let mut tx = match apply_commit_plan_to_live(
                 live_root,
                 &plan.content_actions,
@@ -1460,6 +1525,7 @@ pub(crate) fn commit_single_target_staging(
                         target.target_kind.as_str(),
                         target.project_id.as_deref(),
                         &plan.content_actions,
+                        &before,
                         &mut committed_paths,
                     );
                     collect_rebased_anchor_paths(

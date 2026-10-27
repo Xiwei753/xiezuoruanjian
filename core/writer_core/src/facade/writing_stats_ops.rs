@@ -20,7 +20,9 @@ impl super::WriterCore {
         chapter_id: &str,
         device_id: &str,
     ) -> Result<serde_json::Value> {
-        let package = self.get_stats_api().export_chapter_proof(chapter_id, device_id)?;
+        let package = self
+            .get_stats_api()
+            .export_chapter_proof(chapter_id, device_id)?;
         serde_json::to_value(package).map_err(Into::into)
     }
 
@@ -46,8 +48,8 @@ impl super::WriterCore {
         &self,
         input: &crate::api::EditorChangeStatsInputDto,
     ) -> Result<()> {
-        use crate::editor::EditorTransactionCause;
         use crate::editor::transaction::{EditorChange, EditorCursor, EditorSelection};
+        use crate::editor::EditorTransactionCause;
         use crate::writing_stats::proof::{ProofEditPayload, PROOF_FORMAT_VERSION};
 
         if input.changes.is_empty() {
@@ -179,47 +181,81 @@ impl super::WriterCore {
         project_id: &str,
         volume_id: &str,
         chapter_id: &str,
-        after_text: &str,
+        before_text: Option<&str>,
+        after_text: Option<&str>,
         sync_event_id: &str,
         sync_source_device_id: &str,
         parent_event_id: &str,
     ) -> Result<bool> {
-        use crate::editor::EditorTransactionCause;
         use crate::editor::transaction::{EditorChange, EditorCursor, EditorSelection};
+        use crate::editor::EditorTransactionCause;
         use crate::editor::Utf8ByteOffset;
         use crate::writing_stats::proof::{
             content_digest_of_text, ProofEditPayload, PROOF_FORMAT_VERSION,
         };
 
-        let request = crate::writing_stats::replay::ProofReplayRequest {
-            chapter_id: chapter_id.to_string(),
-            device_id: String::new(),
-            target_seq: None,
-            target_time_ms: None,
-            target_index: None,
-            baseline_text: None,
-        };
-        let frame = self.get_stats_api().replay_chapter_proof(&request)?;
-        if !frame.valid {
-            return Err(crate::Error::Other(format!(
-                "章节 {chapter_id} 的证明链校验失败，拒绝写入 SyncRemote 事件: {}",
-                frame.errors.join("; ")
-            )));
+        if sync_event_id.is_empty() {
+            return Err(crate::Error::Other("同步证明事件缺少事务 ID".to_string()));
         }
-        // 没有任何证明记录（空正文且无基线）时，不能伪造「从空正文同步出全文」
-        // 的起点；首次保存会按真实正文建立基线。
-        if frame.total_events == 0 && frame.text.is_empty() {
+        if before_text.unwrap_or("") == after_text.unwrap_or("") {
             return Ok(false);
         }
-        if frame.text == after_text {
+        let stats = self.get_stats_api();
+        let origin = stats.store().resolve_origin_device_id()?;
+        let has_local_chain = stats.has_chapter_proof(&origin, chapter_id)?;
+        let (before_text, chain_parent_event_id) = if has_local_chain {
+            let request = crate::writing_stats::replay::ProofReplayRequest {
+                chapter_id: chapter_id.to_string(),
+                device_id: origin.clone(),
+                target_seq: None,
+                target_time_ms: None,
+                target_index: None,
+                baseline_text: None,
+            };
+            let frame = stats.replay_chapter_proof(&request)?;
+            if !frame.valid {
+                return Err(crate::Error::Other(format!(
+                    "章节 {chapter_id} 的证明链校验失败，拒绝写入 SyncRemote 事件: {}",
+                    frame.errors.join("; ")
+                )));
+            }
+            match before_text {
+                Some(expected) if expected != frame.text => {
+                    return Err(crate::Error::Other(format!(
+                        "章节 {chapter_id} 的同步前置正文与证明链头不一致：提交快照 {} bytes，链头 {} bytes",
+                        expected.len(),
+                        frame.text.len()
+                    )));
+                }
+                None if !frame.text.is_empty() => {
+                    return Err(crate::Error::Other(format!(
+                        "章节 {chapter_id} 已有证明链，但同步提交缺少前置正文快照"
+                    )));
+                }
+                None => {}
+                Some(_) => {}
+            }
+            (frame.text, frame.event_id)
+        } else {
+            let baseline = before_text.unwrap_or("");
+            stats.record_sync_import_baseline(
+                chapter_id,
+                baseline,
+                sync_event_id,
+                sync_source_device_id,
+            )?;
+            (baseline.to_string(), String::new())
+        };
+
+        let after_text = after_text.unwrap_or("");
+        if before_text == after_text {
             return Ok(false);
         }
         let parent_event_id = if parent_event_id.is_empty() {
-            frame.event_id.clone()
+            chain_parent_event_id
         } else {
             parent_event_id.to_string()
         };
-        let before_text = frame.text;
         let before_sha = content_digest_of_text(&before_text);
         let after_sha = content_digest_of_text(after_text);
         let mut changes = Vec::new();
@@ -235,9 +271,6 @@ impl super::WriterCore {
                 text: after_text.to_string(),
             });
         }
-        if changes.is_empty() {
-            return Ok(false);
-        }
 
         let platform = writer_platform_api::PlatformKind::Desktop;
         let preferred_device_id = self.preferred_device_id();
@@ -250,15 +283,9 @@ impl super::WriterCore {
             anchor: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
             head: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
         };
-        if sync_event_id.is_empty() {
-            return Err(crate::Error::Other(
-                "同步证明事件缺少事务 ID".to_string(),
-            ));
-        }
-        let event_id = sync_event_id.to_string();
         let occurred_at_ms = chrono::Utc::now().timestamp_millis();
         let mut event = WritingInputEvent::with_identity(
-            event_id,
+            sync_event_id.to_string(),
             occurred_at_ms,
             &device_info.device_id,
             platform,
@@ -272,12 +299,12 @@ impl super::WriterCore {
             0,
             0,
             0,
-            "",
+            sync_event_id,
         );
         event.proof = Some(ProofEditPayload {
             format_version: PROOF_FORMAT_VERSION,
             seq: 0,
-            session_id: String::new(),
+            session_id: sync_event_id.to_string(),
             baseline_id: String::new(),
             starts_new_chain: false,
             base_revision: 0,
@@ -295,8 +322,7 @@ impl super::WriterCore {
             sync_source_device_id: sync_source_device_id.to_string(),
             parent_event_id,
         });
-        self.get_stats_api()
-            .record_proof_event(event, Some(&before_text))
+        stats.record_proof_event(event, Some(&before_text))
     }
 
     /// 正文保存成功后记录一份完整正文检查点，作为长章节回放的加速索引。
@@ -309,13 +335,8 @@ impl super::WriterCore {
         text: &str,
         session_id: &str,
     ) -> Result<()> {
-        self.get_stats_api().record_chapter_checkpoint(
-            project_id,
-            volume_id,
-            chapter_id,
-            text,
-            session_id,
-        )
+        self.get_stats_api()
+            .record_chapter_checkpoint(project_id, volume_id, chapter_id, text, session_id)
     }
 
     /// 按编辑事务上报写作统计（平台端编辑事务与统计同源的正式入口）。
