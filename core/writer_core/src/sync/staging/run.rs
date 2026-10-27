@@ -319,7 +319,7 @@ impl StagingRun {
             Some(group) => read_live_manifest_for_group(&base_root, group),
             None => read_live_manifest(&base_root),
         };
-        let mut base_manifest = match base_manifest_result {
+        let base_manifest = match base_manifest_result {
             Ok(Some(map)) => map,
             Ok(None) => std::collections::HashMap::new(),
             Err(e) => {
@@ -334,7 +334,7 @@ impl StagingRun {
             Some(group) => read_live_manifest_for_group(live_root, group),
             None => read_live_manifest(live_root),
         };
-        let mut live_manifest = match live_manifest_result {
+        let live_manifest = match live_manifest_result {
             Ok(Some(map)) => map,
             Ok(None) => {
                 // 首次导入/旧数据迁移：尚无版本记录，允许按当前文件建立初始版本。
@@ -366,14 +366,13 @@ impl StagingRun {
             }
         };
 
-        // Issue #1005: 旧版本 settings.sync.json 里的设备配色字段必须在进入
-        // 三方/LWW 比较前从实际文件与 manifest 哈希中一起规范化。
+        // Issue #1005: 远端旧 settings.sync.json 可能仍带设备配色字段，在进入
+        // 三方/LWW 比较前规范化隔离 staging 副本及其 manifest 哈希。
+        // 本地 live/base 已由 perform_full_sync 在 seed 前统一迁移，这里不得写 live。
         if matches!(
             self.app_group.as_ref(),
             Some(crate::sync::types::AppDataGroup::Global)
         ) {
-            normalize_syncable_settings_for_plan(&base_root, &mut base_manifest)?;
-            normalize_syncable_settings_for_plan(live_root, &mut live_manifest)?;
             normalize_syncable_settings_for_plan(&staging_root, &mut staging_manifest)?;
         }
 
@@ -978,7 +977,7 @@ impl StagingRun {
     }
 }
 
-/// Issue #1005: 规范化 staging/base/live 中的 settings.sync.json，
+/// Issue #1005: 规范化隔离 staging 中的 settings.sync.json，
 /// 并让对应 manifest 的内容哈希与实际写盘字节保持一致。
 fn normalize_syncable_settings_for_plan(
     root: &Path,

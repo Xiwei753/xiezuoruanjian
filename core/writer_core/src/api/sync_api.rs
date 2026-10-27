@@ -1477,6 +1477,31 @@ impl WriterCoreApi {
             );
             return Err(crate::api::error::WriterError::from(e));
         }
+        // Issue #1005: 在 staging seed 前一次性迁移本地旧 settings.sync.json。
+        // 这样 base/live/staging 快照从同一份规范内容开始，compute_commit_plan
+        // 只读 live，不会在失败/取消时提前改写用户文件。
+        for planned_target in &plan.targets {
+            if planned_target.target.app_group.as_ref()
+                != Some(&crate::sync::types::AppDataGroup::Global)
+            {
+                continue;
+            }
+            let settings_path = planned_target
+                .target_live_root
+                .join("settings.sync.json");
+            if let Err(e) = crate::settings::normalize_syncable_settings_file(&settings_path) {
+                let msg = format!(
+                    "normalize settings.sync.json before staging seed failed at {}: {e}",
+                    settings_path.display()
+                );
+                log::warn!("[sync] prepare: {msg}");
+                let _ = self.record_full_sync_preflight_failure(
+                    "recoverable_error".to_string(),
+                    "staging_seed".to_string(),
+                );
+                return Err(crate::api::error::WriterError::from(e));
+            }
+        }
         let staging_phase = SyncDiagnosticPhase::start_with_provider(
             diagnostic_operation_id,
             "staging",

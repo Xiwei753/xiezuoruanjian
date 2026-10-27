@@ -48,6 +48,8 @@ fn test_legacy_device_color_fields_are_normalized_on_load() {
     let legacy = serde_json::json!({
         "fontSize": 18.0,
         "themeMode": "dark",
+        "futureSyncSetting": { "enabled": true, "level": 7 },
+        "customNote": "keep-me",
         "monetColor": "#FF5722",
         "monet_color": "#FF5722",
         "themePalette": {
@@ -92,6 +94,9 @@ fn test_legacy_device_color_fields_are_normalized_on_load() {
     }
     assert_eq!(rewritten["fontSize"], 18.0);
     assert_eq!(rewritten["themeMode"], "dark");
+    assert_eq!(rewritten["futureSyncSetting"]["enabled"], true);
+    assert_eq!(rewritten["futureSyncSetting"]["level"], 7);
+    assert_eq!(rewritten["customNote"], "keep-me");
 }
 
 #[test]

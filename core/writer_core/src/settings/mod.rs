@@ -461,8 +461,10 @@ pub fn normalize_syncable_settings_content(content: &[u8]) -> Result<Option<Vec<
         return Ok(None);
     }
 
-    let settings: SyncableSettings = serde_json::from_value(value)?;
-    Ok(Some(serde_json::to_vec_pretty(&settings)?))
+    // 只校验当前已知字段；未知字段必须原样保留，避免旧客户端文件中的
+    // 其他同步设置在新版本读取后被静默丢弃。
+    let _: SyncableSettings = serde_json::from_value(value.clone())?;
+    Ok(Some(serde_json::to_vec_pretty(&value)?))
 }
 
 /// 规范化 `settings.sync.json` 文件，必要时原子重写并保留原修改时间。
