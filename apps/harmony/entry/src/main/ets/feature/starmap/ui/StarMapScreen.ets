@@ -45,7 +45,7 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
  * #820 用 0.1 的加法步长：在 scale=2 时点一下是 2.1，在 scale=0.5 时
  * 是 0.6 —— 手感在两端完全不同，而且很快撞上原来的相机上限。
  * 改成乘法之后，每一档的相对变化一致，跨十几倍缩放都有同样的"点一下"体感；
- * 边界交给 computeCameraZoomAround 内部的 clampCameraScale 处理，这里不重复夹一次。
+ * 比例连续变化，只有 Number 真正上溢/下溢时 computeCameraZoomAround 才做数值规范化。
  */
 const ZOOM_FACTOR: number = 1.2
 
@@ -54,6 +54,13 @@ interface StarMapSearchFocusGeometry {
   itemId: string
   centerX: number
   centerY: number
+}
+
+/** 每个完整 route 各自保存的相机状态。 */
+interface RouteCameraState {
+  scale: number
+  offsetX: number
+  offsetY: number
 }
 
 @Component
@@ -68,6 +75,11 @@ export struct StarMapScreen {
   // 根星图状态
   @State rootStarmapId: string = ''
   @State starmapId: string = ''
+  /**
+   * 当前活动画布的完整入口 route。空数组 = 根画布。
+   * 每次进入 Embed 只追加一段；退出只移除最后一段。A→B→A / A→A 都是合法 route。
+   */
+  @State activePath: StarMapPathSegment[] = []
   @State starmapTitle: string = ''
   @State rootStarmapTitle: string = ''
   @State graph: StarMapGraph | null = null
@@ -78,9 +90,9 @@ export struct StarMapScreen {
   @State private starMapToolPanelOpen: boolean = false
   @State private selectedStarMapTool: string = 'ai'
 
-  // 全局视角相机（#818）：整棵递归星图只有这一台相机。
-  // 工具栏 +/- 和画布双指捏合改的都是它；节点、子星图、嵌套子星图都只是相机里的内容，
-  // 不存在"单独缩放某个子星图"这条路径。
+  // 全局视角相机（#818/#1009）：当前活动画布只有这一台相机。
+  // 工具栏 +/- 和画布双指捏合改的都是它；节点和入口都只是这张画布里的内容。
+  // 切换 route 时按完整路径分别保存/恢复视角，不存在“单独缩放某个入口”这条路径。
   @State cameraScale: number = 1
   @State cameraOffsetX: number = 0
   @State cameraOffsetY: number = 0
@@ -107,6 +119,10 @@ export struct StarMapScreen {
 
   // 加载序号：防止切层后旧异步结果覆盖新层
   private graphLoadGeneration: number = 0
+  // route 解析序号：连续点入口/返回时，只允许最后一次导航落地
+  private routeRequestGeneration: number = 0
+  /** 每个完整 route 自己的相机。退出时恢复进入前的视角，而不是复用子画布相机。 */
+  private routeCameras: Map<string, RouteCameraState> = new Map<string, RouteCameraState>()
   // Issue #988：附近设备提交期间先等在途星图写入，提交后重载当前图。
   private unregisterPeerSync: (() => void) | null = null
 
@@ -116,12 +132,12 @@ export struct StarMapScreen {
   @State canvasHeight: number = 0
 
   /**
-   * 当前视觉焦点的 scenePath 描述（根为 'root'）（#820）。
+   * 当前视觉焦点的 scenePath 描述（根为 'root'）。
    *
-   * 焦点只决定"哪几颗 Embed 保持展开"，它**不是**页面、不是另一台相机、也不落盘：
+   * 焦点只是"显示参考根"和接续状态的一部分，**不决定**任何渲染器、细节档位或
+   * Embed 的展开/折叠；它**不是**页面、不是另一台相机、也不落盘。
    * 整棵树仍然只有一台全局相机，坐标系仍然是 root world → 全局相机 → 屏幕。
-   * 窗口尺寸变化（分屏 / 折叠屏展开 / 横竖屏）时它保持不动，只更新视口宽高重算 LOD，
-   * 不重新 fit 根图，也不把用户拽回根层。
+   * 窗口尺寸变化时它保持不动，不重新 fit 根图，也不把用户拽回根层。
    *
    * 只在这几个时机重算：全局相机变化、视口尺寸变化、捏合结束。
    * 绝不在 build() 或任何组件重建过程中写它（重建里改状态会触发重建死循环）。
@@ -360,6 +376,101 @@ export struct StarMapScreen {
     }
   }
 
+  private routeKey(path: StarMapPathSegment[]): string {
+    if (path.length === 0) {
+      return 'root'
+    }
+    const parts: string[] = []
+    for (const segment of path) {
+      parts.push(`${segment.type}:${segment.instanceId ?? ''}`)
+    }
+    return parts.join('/')
+  }
+
+  private saveRouteCamera(path: StarMapPathSegment[]): void {
+    this.routeCameras.set(this.routeKey(path), {
+      scale: this.cameraScale,
+      offsetX: this.cameraOffsetX,
+      offsetY: this.cameraOffsetY
+    })
+  }
+
+  private restoreRouteCamera(path: StarMapPathSegment[]): void {
+    const camera: RouteCameraState | undefined = this.routeCameras.get(this.routeKey(path))
+    if (camera === undefined) {
+      this.cameraScale = 1
+      this.cameraOffsetX = 0
+      this.cameraOffsetY = 0
+      return
+    }
+    this.cameraScale = Number.isFinite(camera.scale) && camera.scale > 0 ? camera.scale : 1
+    this.cameraOffsetX = Number.isFinite(camera.offsetX) ? camera.offsetX : 0
+    this.cameraOffsetY = Number.isFinite(camera.offsetY) ? camera.offsetY : 0
+  }
+
+  /**
+   * 按完整 route 切换当前活动画布。
+   *
+   * route 只追加一段 enterEmbed，解析和加载都交给 Core；同一 starmap 可以出现在
+   * 任意多个路径位置，这里不做“已访问”拒绝。离开当前画布前先保存相机，
+   * 返回时恢复原画布视角。
+   */
+  private async openActiveRoute(path: StarMapPathSegment[]): Promise<void> {
+    const request: number = ++this.routeRequestGeneration
+    const resolved = await this.bridge.resolveStarMapPath(this.rootStarmapId, path)
+    if (request !== this.routeRequestGeneration) {
+      return
+    }
+    if (!resolved.success || !resolved.data || !resolved.data.finalStarmapId) {
+      this.showSearchFocusToast('无法进入该子星图')
+      return
+    }
+    const targetStarmapId: string = resolved.data.finalStarmapId
+    this.saveRouteCamera(this.activePath)
+    // 先丢掉上一张图的几何，避免新 route 的 scenePath 与旧 graph 混一帧。
+    this.graph = null
+    this.activePath = path
+    this.starmapId = targetStarmapId
+    this.focusScenePath = 'root'
+    this.selectionState.clear()
+    this.restoreRouteCamera(path)
+    await this.loadStarMap()
+  }
+
+  private enterEmbedRoute(path: StarMapPathSegment[]): void {
+    void this.openActiveRoute(path)
+  }
+
+  /** 退出当前活动画布：只移除 route 最后一段，回到进入前的入口实例。 */
+  private async exitActiveCanvas(): Promise<void> {
+    if (this.activePath.length === 0) {
+      this.navPathStack.pop()
+      return
+    }
+    const request: number = ++this.routeRequestGeneration
+    this.saveRouteCamera(this.activePath)
+    const parentPath: StarMapPathSegment[] = this.activePath.slice(0, -1)
+    let parentStarmapId: string = this.rootStarmapId
+    if (parentPath.length > 0) {
+      const resolved = await this.bridge.resolveStarMapPath(this.rootStarmapId, parentPath)
+      if (request !== this.routeRequestGeneration) {
+        return
+      }
+      if (!resolved.success || !resolved.data || !resolved.data.finalStarmapId) {
+        this.showSearchFocusToast('无法返回上层星图')
+        return
+      }
+      parentStarmapId = resolved.data.finalStarmapId
+    }
+    this.graph = null
+    this.activePath = parentPath
+    this.starmapId = parentStarmapId
+    this.focusScenePath = 'root'
+    this.selectionState.clear()
+    this.restoreRouteCamera(parentPath)
+    await this.loadStarMap()
+  }
+
   private isWideLayout(): boolean {
     return WideLayoutState.getInstance().current() === WideLayoutMode.Wide
   }
@@ -430,7 +541,7 @@ export struct StarMapScreen {
       return
     }
 
-    this.selectionState.select([], focus.kind, focus.itemId)
+    this.selectionState.select(this.activePath, focus.kind, focus.itemId)
     if (this.sceneRegistry !== null) {
       this.sceneRegistry.redrawAllEdges()
     }
@@ -587,8 +698,8 @@ export struct StarMapScreen {
    * 纯显示行为：读注册表里的 Scene 快照 → 收集候选 Embed 的圆心位置和所属层比例 →
    * 交给 StarMapVisualLod 的纯函数判（覆盖率过 0.70 进、过 0.55 出，中间那段滞回不动）。
    *
-   * 覆盖率只依赖 Embed 的投影直径和根视口，与形状无关（#821）：Embed 的 world 尺寸
-   * 恒为 DEFAULT_EMBED_DIAMETER，所以这一层不需要任何 LOD 显示边界入参。
+   * 覆盖率只依赖 Embed 的投影直径和根视口，与形状无关：Embed 的 world 尺寸
+   * 恒为 DEFAULT_EMBED_DIAMETER，焦点判定不切换任何显示形态。
    *
    * 全程不写 Core、不新建页面、不动相机、不落盘；只在焦点真的变了时写一次 @State。
    * 注册表还没建起来（图没加载）时直接返回，保持 'root'。
@@ -656,7 +767,7 @@ export struct StarMapScreen {
       this.cameraScale * ZOOM_FACTOR)
   }
 
-  /** 缩小一级（工具栏 −）：乘法步进，边界由 clampCameraScale 兜（#821） */
+  /** 缩小一级（工具栏 −）：乘法步进，连续缩放，只有数值上下溢时才规范化 */
   zoomOut() {
     this.zoomAround(this.canvasWidth / 2, this.canvasHeight / 2,
       this.cameraScale / ZOOM_FACTOR)
@@ -706,7 +817,8 @@ export struct StarMapScreen {
       // 使用 StarMapScene 组件替换所有节点/Embed/Canvas/手势逻辑
       StarMapScene({
         rootStarmapId: this.rootStarmapId,
-        scenePath: [],  // 根 scene 的 path 为空
+        // 当前活动画布的完整 route；根画布为空数组。
+        scenePath: this.activePath,
         starmapId: this.starmapId,
         graph: $graph,
         // 全局相机：根 Scene 是相机本体（#818）
@@ -720,14 +832,13 @@ export struct StarMapScreen {
         onCameraPanTo: (offsetX: number, offsetY: number) => {
           this.panCameraTo(offsetX, offsetY)
         },
+        // 活动画布始终按正常矢量几何显示，不把子星图缩进上一层的入口圆壳。
         sceneDepth: 0,
-        // 根视口 + 视觉焦点：从这里原样透传给每一个递归 Scene（#820）。
-        // 子 Scene 不许拿自己那个圆的尺寸当视口，也不许自己判断焦点。
-        rootViewportWidth: this.canvasWidth,
-        rootViewportHeight: this.canvasHeight,
-        focusScenePath: this.focusScenePath,
+        onEnterEmbed: (path: StarMapPathSegment[]): void => {
+          this.enterEmbedRoute(path)
+        },
         // 捏合结束时再判一次焦点：捏合过程中每帧都会改相机，
-        // 但那一帧的树结构可能还没定形（子 Scene 可能正在重建），手势收尾才是干净的时机。
+        // 但那一帧的投影可能还没稳定，手势收尾才是干净的时机。
         onFocusRecomputeRequested: () => {
           this.recomputeVisualFocus()
         },
@@ -749,6 +860,19 @@ export struct StarMapScreen {
         onMoveNode: (_path: StarMapPathSegment[], _starmapId: string, _nodeId: string, _pos: StarMapPoint) => {},
         onMoveEmbed: (_path: StarMapPathSegment[], _starmapId: string, _embedId: string, _pos: StarMapPoint) => {},
       })
+
+      if (this.activePath.length > 0) {
+        Button('返回上层')
+          .fontSize(13)
+          .height(36)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor(this.themeConfig.colors.surfaceContainerHigh)
+          .fontColor(this.themeConfig.colors.onSurface)
+          .onClick(() => {
+            void this.exitActiveCanvas()
+          })
+          .position({ x: 12, y: 12 })
+      }
 
       if (!this.isWideLayout() && this.annotationProjectId.length > 0 &&
           this.selectionState.hasSelection() &&
@@ -815,9 +939,9 @@ export struct StarMapScreen {
       // 相机不动、focusScenePath 不动、不重新 fit 根图 —— 用户不会因为
       // 转个屏就被拽回根层看全局，那等于把正在写的内容从眼前搬走。
       //
-      // 这里也**不能**顺手重算视觉焦点（#820 复核）：视口只改"显示预算"，
-      // LOD 由新视口尺寸往下传、各 Scene 自己重算。焦点是"用户在盯哪个子星图"，
-      // 折叠屏展开一下、分屏拖宽一点就换焦点是没有理由的。
+      // 这里也**不能**顺手重算视觉焦点（#820 复核）：视口尺寸变化不改变任何
+      // 画布内容或渲染档位。焦点是"用户在盯哪个子星图"，折叠屏展开一下、
+      // 分屏拖宽一点就换焦点是没有理由的。
       // 焦点只在相机平移 / 缩放 / 捏合结束时才重算。
     })
   }
@@ -914,7 +1038,11 @@ export struct StarMapScreen {
         screenTabIndex: this.screenTabIndex,
         isRoot: false,
         onBack: () => {
-          this.navPathStack.pop()
+          if (this.activePath.length > 0) {
+            void this.exitActiveCanvas()
+          } else {
+            this.navPathStack.pop()
+          }
           return true
         }
       }) {
@@ -927,7 +1055,11 @@ export struct StarMapScreen {
       .hideTitleBar(false)
       .hideBackButton(false)
       .onBackPressed(() => {
-        this.navPathStack.pop()
+        if (this.activePath.length > 0) {
+          void this.exitActiveCanvas()
+        } else {
+          this.navPathStack.pop()
+        }
         return true
       })
       .title(this.rootStarmapTitle)

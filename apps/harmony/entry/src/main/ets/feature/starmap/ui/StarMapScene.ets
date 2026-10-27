@@ -1,12 +1,12 @@
 // ─── StarMapScene.ets ───
-// 可递归星图场景组件：负责某一张星图的完整显示和交互。
-// 可嵌套在 StarMapScreen（根场景）或 StarMapEmbedScene（子星图 Embed 内部）中。
+// 星图活动画布组件：负责当前 route 对应星图的完整显示和交互。
+// 由 StarMapScreen 直接挂载一份；完整 route 变化时复用本实例并切换到新星图。
 //
 // 关键约束：
 // 1. 所有 gestureTracker.begin* 调用传入 this.scenePath 作为 ownerScenePath
-// 2. 所有 bridge mutation 调用使用 this.starmapId（当前 scene 的 starmapId）
-// 3. Embed 的 title/border 区域负责选中 Embed；innerContent 区域让事件穿透到 child StarMapScene
-// 4. 递归结构：StarMapScene → StarMapEmbedScene → child StarMapScene
+// 2. 所有 bridge mutation 调用使用 this.starmapId（当前画布对应的 starmapId）
+// 3. Embed 的 title/border 区域负责选中入口；innerContent 区域追加路径段并切换活动画布
+// 4. 不递归实例化子 Scene：每次只显示完整 route 终点的那一张画布
 // 5. 菜单和对话框都不属于 Scene 的 Stack：菜单用 ArkUI 程序化 bindMenu（由系统定位、自动避让屏幕边缘），
 //    对话框用 openCustomDialog 挂到窗口层级。否则菜单会被圆形 Embed 的 clip(true) 裁掉（Issue #813）。
 // 6. bindMenu 按"被绑定组件"定位，所以菜单不能直接挂在全屏背景层或节点本体上：
@@ -15,10 +15,10 @@
 // 7. 菜单必须接 onDisappear 把显示标记写回状态：程序化 bindMenu 的 isShow 不会自动双向同步，
 //    不写回的话第二次长按同一对象会因为状态没变化而弹不出来（Issue #813 复审）。
 // 8. Embed 的 title / 圆环由外层 Stack 的 onTouchIntercept 动态分流，不再用三根矩形窄条：
-//    矩形条被 clip(true) 裁出来的只是圆内几段直线，斜着点边框会掉进 child Scene（Issue #813 复审）。
+//    矩形条被 clip(true) 裁出来的只是圆内几段直线，斜着点边框会漏到内部入口点击层（Issue #813 复审）。
 // 9. 圆形子视图必须同时声明圆形热区（responseRegion）并用 HitTestMode.Block 独占 title / 圆环：
-//    组件默认热区是整个矩形，borderRadius + clip 只裁视觉不裁热区；HitTestMode.Default 是
-//    "自己和子节点都参加"，父 Embed 和 child Scene 会一起进手势竞争（Issue #813 复审）。
+//    组件默认热区是整个矩形，borderRadius + clip 只裁视觉不裁热区；内部点击层只负责进入画布，
+//    不能和 title / 圆环抢同一个手势（Issue #813 复审）。
 // 10. 预览连线的起点和正式边共用 geometry 的 edgeEndpointBoundaryPoint：
 //     预览从对象边界出发，不要从中心出发，否则松手前后会跳变。
 // 11. 双指缩放用真正的**高优先级 PinchGesture**（`priorityGesture`），只挂在根 Scene 的
@@ -28,18 +28,11 @@
 //     第二根手指落下时单指那边早就赢了（甚至已经把对象选中了）。
 //     `gestureTracker.beginPinch()` 只改我们自己的状态，改不了 ArkUI 识别器的优先级，
 //     所以必须换成真正声明优先级的 PinchGesture，用 `event.scale` / `event.pinchCenterX/Y`。
-// 12. 双指只有一台**全局相机**（#818）：整棵递归星图一起缩放，缩放目标不再由
-//     "两指中心落在哪一层"决定。手指落在节点上、落在子星图上、落在二层子星图上，
-//     结果完全一样。旧方向"两指中心递归命中 → 找最深 ownerScenePath → 缩放那个 Scene"已作废。
-// 13. 变换只有两种（#818）：根 Scene 的全局相机（用户可改），和每个子 Scene 的
-//     局部适配 fitScale + 居中偏移（布局用，用户改不了）。禁止再用"每深一层乘 0.6"
-//     这种写死系数，也禁止在子层再存一份用户缩放倍数。
-//     子 Scene 在画面上的有效比例 = `fitScale * inheritedScale`（inheritedScale 是父层
-//     的 viewportScaleValue()），偏移同理要乘 —— 否则相机放大时只有外层圆壳变大，
-//     圆里的节点不跟着放大（#818 复审）。
-//     #821：这两个值不再互相乘进布局尺寸。Scene 在自己的**盒子坐标系**里渲染，
-//     子树只靠 `.scale(fitScale)` + `.position(fitOffset)` 显示变换，组件宽高恒为局部基准尺寸；
-//     inheritedScale 只是给几何 / 命中 / 注册表换算用的累计比例（viewportScaleValue()）。
+// 12. 双指只有一台**全局相机**（#818）：当前活动画布整体缩放，缩放目标不由
+//     "两指中心落在哪个对象/入口"决定。旧方向"两指中心递归命中 → 找 ownerScenePath"已作废。
+// 13. 变换只有一种（#1009）：当前活动画布的全局相机（用户可改）。活动画布始终按
+//     正常矢量几何直接渲染，不缩进上一层入口圆壳，也不再为子画布维护 local fit。
+//     相机比例只做显示变换，不乘进布局尺寸；数值极端时只做有限性/正数规范化。
 // 14. 选中态全树只有一份（StarMapSelectionState），身份是 scenePath + kind + itemId。
 //     每层各存一份 selectedNodeId 的话，父子两层会同时亮，且分不清选中的是哪一层的哪个东西。
 // 15. 选中、connect 松手、菜单归属全部走 geometry 的递归命中一个入口，
@@ -48,62 +41,37 @@
 //     并收掉单指留下的业务现场（panActive / 菜单 / 创建菜单 / 连线预览线）；
 //     所有单指回调入口统一先 `if (this.gestureTracker.isPinching()) return`，
 //     否则晚到的单指回调会重新选中对象、弹菜单或起连线。
-// 17. 子星图**不是独立窗口**（#818 复审），没有自己的平移相机。任意一层空白处的
-//     普通单指拖动都只改根全局相机：child Scene 把目标 offset 通过 onCameraPanTo 回传给根。
-//     fitOffsetX/Y 只允许由 fitView 写，不进任何用户交互写路径。
-//     之前 child 能自己写 fitOffset，拖出去的内容又被 clip(true) 裁掉，真机上表现为
-//     "子星图里的东西突然看不见"。
+// 17. 活动画布就是正常全屏画布，空白处单指拖动直接改全局相机。
 //     回传的是**目标值**不是增量：PanGesture 的 event.offsetX/Y 是相对手势起点的累计位移，
-//     起手时记一份 panBaseCameraOffsetX/Y，更新时算 基准 + 累计值，根整份覆盖相机 offset；
+//     起手时记一份 panBaseCameraOffsetX/Y，更新时算 基准 + 累计值，整份覆盖相机 offset；
 //     写成 `camera += event.offsetX` 会把同一手势的每一帧叠加一遍，越拖越远。
-// 18. 子星图里的对象不能被拖到圆外（#818 复审）：sceneDepth > 0 时 moveNode / moveEmbed
-//     的候选坐标先过 `clampItemToEmbedSafeArea()`（复用 CIRCLE_INNER_SAFE_RATIO），
-//     再进 applyFreeformLayout、再存进 Core —— 存进数据的也必须是夹好的那份坐标，
-//     不能只在显示层夹住然后靠 clip 藏错误。根层对象仍然自由移动。
-// 19. 新建也要守边界（#818 复审）：performCreateNode / performCreateEmbed 写 Core 之前
-//     先过 `clampItemToLocalSafeArea()`（节点尺寸取 StarMapLayout 的节点卡片度量（#984），
-//     Embed 取 DEFAULT_EMBED_DIAMETER，UI 侧不手写）。
-//     clamp 之外还必须 `refitAfterContentAdded()`：空子星图首次 fitView() 时没有内容，
-//     fitScale 会停在 1 且 hasFittedView 已为 true，之后第一次新建时 maybeFitView 不再跑，
-//     新对象会比当前安全区还大。重算的是 local fit，不是 global camera，
-//     所以不会把用户双指缩放好的视角打回初始大小。
-//     移动已有对象不重算，继续每帧 clamp 即可。
-// 20. Deep Zoom 只减细节、不改几何（#821）：子星图在任何档位、任何缩放下都还是那颗正圆
-//     （DEFAULT_EMBED_DIAMETER × DEFAULT_EMBED_DIAMETER，圆角 = 半径）。
-//     禁止在任何档位画成 160×80 的矩形节点卡片，禁止让档位进入 buildEmbedLayoutNodes、
-//     禁止让档位改 layout rect 或 authored position。用户在圆与圆之间看到的比例差
-//     全部来自相机 + 逐层 local fit，不是来自"这一层换了张皮"。
-// 21. 三档渲染（#821）：interactive 挂 StarMapEmbedScene（真实可交互的子 Scene）；
-//     preview 挂 StarMapEmbedPreview（一张固定尺寸 Canvas 缩略图，HitTestMode.None，
-//     绝不抢父层的全局 Pinch）；shell 只画圆壳。档位变化**只换圆里那个渲染器**，
-//     不重建任何布局矩形、不重算 fit。禁止 opacity(0) 假装折叠，也禁止"先建好再缩"。
-//     档位按 scenePath 判，不按 sceneDepth——递归链里一层 Embed 要加两次 sceneDepth。
-// 22. 放大必须走**显示变换**，不许撑大布局（#821）：节点 / Embed 的 `.width()/.height()`
+// 18. 活动画布里的对象可以自由移动：不再有“父 Embed 圆形安全区”这一层显示限制。
+//     移动结果直接进 applyFreeformLayout 并写回 Core，不伪造坐标。
+// 19. 新建也走同一套真实画布坐标（#1009）：performCreateNode / performCreateEmbed 直接写
+//     Core 的 authored position，不再按父 Embed 圆形安全区裁剪。
+// 20. 不再有显示细节档位：当前画布里的每个 Embed 都渲染同一套真实节点卡片、边和入口，
+//     缩放只改变视角，不换形状、不换渲染器、不把文字卡片降级成圆点或缩略图。
+//     子星图在任何缩放下都还是那颗正圆（DEFAULT_EMBED_DIAMETER，圆角 = 半径），
+//     看不清是自然的光学结果，不是切换到另一套显示模型的信号。
+// 21. 活动画布按完整 route 切换；同一 starmap 可以在不同路径位置重复出现，
+//     入口圆壳只负责追加路径段，绝不递归实例化下一条 route 的 Scene。
+//     因此 A→B→A / A→A 既不会被拒绝，也不会把组件树撑成无限递归。
+//     身份始终是完整路径 + 入口实例。
+// 22. 放大必须走**显示变换**，不许撑大布局：节点 / Embed 的 `.width()/.height()`
 //     和 `.fontSize()` 一律保持局部基准尺寸（普通节点用每节点卡片度量（#984），
 //     Embed 用固定直径），缩放只通过 `.scale()`（配合 boxPositionX/Y
 //     的中心补偿）实现。旧写法 `.width(160 * viewportScaleValue())` 在相机放大到几十倍时
-//     会让 RenderService 按巨大的组件缓冲去分配，那正是 #820 里 3× 天花板的真正原因。
-// 23. Scene 的盒子尺寸恒等于局部尺寸（#821）：子 Scene 的布局盒子永远是父 Embed 的局部
-//     DEFAULT_EMBED_DIAMETER（放大由父层 `.scale()` 承担），所以 onAreaChange 报出来的
-//     就是本层局部尺寸，`localSceneSize()` 不再除以 parentScale()，也不需要任何
-//     "尺寸变了再重算 fit"的补偿机制。
-// 24. 焦点链比对的路径必须是**这颗 Embed 进入之后**的 childScenePath
-//     （embedScenePathLabel(instanceId)），不能传本 Scene 的 scenePath：
-//     传父 Scene 的话焦点 = root/embed:a 时 a/b/c 全被判成"在焦点链上"保底，
-//     而初始 focusScenePath = root 更会把根层所有 Embed 全部保底，档位判定失效（#820 复核）。
-//     焦点链的保底只是"至少 preview"（里面还有东西可看），不是形状、也不是强制 interactive。
-// 25. 相机范围放到数值安全边界（#821）：CAMERA_SCALE_MIN/MAX 已经在 StarMapViewport 里
-//     放宽到 1e-4 / 1e5，因为显示变换不再撑大组件缓冲。工具栏 +/− 走乘性 ZOOM_FACTOR，
-//     双指捏合保持连续比例——用户不应该感觉到一个"3× 天花板"。
-// 26. 缩放不是布局变化（#821）：正常相机缩放不触发任何避让、不推开邻居。
+//     会让 RenderService 按巨大的组件缓冲去分配。
+// 23. 活动画布的盒子尺寸就是屏幕画布视口；不再存在“父 Embed 局部尺寸”的嵌套布局。
+// 24. 视觉焦点只由 StarMapScreen 参考投影位置更新，用来记录接续状态；
+//     它不参与渲染档位、不强制展开/折叠任何入口。当前画布只画本层内容与入口。
+// 25. 相机比例没有产品上下限：工具栏 +/− 走乘性 ZOOM_FACTOR，双指捏合保持连续比例，
+//     只有 Number 真正上溢/下溢时才做数值规范化，用户不应感觉到缩放硬停点。
+// 26. 缩放不是布局变化：正常相机缩放不触发任何避让、不推开邻居。
 //     同层对象按同一个相机比例等比放大，包括互相重叠也照画。避让 / 找空位只在用户
 //     真的创建、移动、缩放了某个对象的 world bounds 时才发生。
-// 27. preview 和 interactive 是**同一张图**（#821 复审第二轮）：kind → 颜色表、
-//     preview 圆形降级的直径 / 字号、Embed fit 留白，全部读 ./StarMapVisualTokens，
-//     本文件不再各写一份。
-//     #984 之后普通节点在 interactive 档是文字卡片（标题 + 正文预览），宽高由
-//     StarMapLayout 按内容度量；preview 档仍是低倍率下的圆形缩略图，按同一份平台
-//     布局矩形居中。这是有意的视觉降级，不改对象身份、坐标和命中区域。
+// 27. 节点卡片和入口始终读 ./StarMapVisualTokens 与 StarMapLayout 的同一份度量，
+//     本文件不另造低倍率视觉规则；#984 的文字卡片就是唯一显示形态。
 
 import hilog from '@ohos.hilog'
 import { ComponentContent, UIContext } from '@kit.ArkUI'
@@ -161,15 +129,9 @@ import {
   clampItemToEmbedSafeArea, computeEmbedInnerContentSafeSide, CIRCLE_INNER_SAFE_RATIO
 } from '../platform/StarMapViewport'
 import {
-  DeepZoomDetail, VisualLodContext,
-  projectEmbedMetrics, resolveEmbedDetailForScene
-} from '../platform/StarMapVisualLod'
-import {
   logPinchBegin, logPinchEnd, logRecursiveHit, logViewportState, logCreateResult,
   logSelectionChanged, logConnectBegin, logConnectEnd
 } from '../platform/StarMapDiagnostics'
-import { StarMapEmbedScene } from './StarMapEmbedScene'
-import { StarMapEmbedPreview } from './StarMapEmbedPreview'
 import {
   STARMAP_EMBED_FIT_PADDING_VP, starmapNodeColor
 } from './StarMapVisualTokens'
@@ -375,9 +337,8 @@ const STARMAP_SELECTED_STROKE_COLOR: string = '#FF6B6B'
 
 // ─── 视口常量 ───
 
-// 子图内容适配到 Embed 圆形可用区时的四边留白不再本地定义：
-// 它必须和 preview 档的缩略图是同一个数，否则跨 70% 门槛时内容大小会跳一下。
-// 统一读 StarMapVisualTokens（#821 复审第二轮）。
+// 子图内容适配到 Embed 圆形可用区时的四边留白不在本地重复定义：
+// 统一读 StarMapVisualTokens，当前画布与入口圆壳共用同一份几何真相。
 
 // 缩放锚点不再自己算：改用高优先级 PinchGesture 事件里的 pinchCenterX / pinchCenterY，
 // 它是双指中点在根组件坐标系里的位置（#818 复审）。
@@ -387,28 +348,15 @@ export struct StarMapScene {
   // ─── @Prop：从父组件只读传入 ───
   /** 根星图 ID（整个 StarMapScreen 生命周期内不变） */
   @Prop rootStarmapId: string = ''
-  /** 当前 scene 的路径段（根 scene 为空数组） */
-  @Prop scenePath: StarMapPathSegment[] = []
-  /** 当前 scene 对应的星图 ID */
-  @Prop starmapId: string = ''
-  /** 当前 scene 的深度（根为 0） */
+  /** 当前活动画布的完整入口路径（根画布为空数组） */
+  @Prop @Watch('onRouteIdentityChange') scenePath: StarMapPathSegment[] = []
+  /** 当前活动画布对应的星图 ID */
+  @Prop @Watch('onRouteIdentityChange') starmapId: string = ''
+  /**
+   * 当前 Scene 的深度。活动画布模型下始终由页面传 0；
+   * 保留该字段给独立复用的测试 / 预览调用点，不再参与循环递归展开。
+   */
   @Prop sceneDepth: number = 0
-  /**
-   * 根 StarMap 实际可绘制内容区宽度（vp），整棵递归树共用同一份（#820）。
-   *
-   * LOD 判定必须用**根视口**：子 Scene 拿自己那个圆当视口，
-   * "这层还有多少展开空间"就变成了自我实现的死循环（自己算自己，永远不够）。
-   */
-  @Prop @Watch('onRootViewportChange') rootViewportWidth: number = 0
-  /** 根 StarMap 实际可绘制内容区高度（vp），语义同 rootViewportWidth（#820）。 */
-  @Prop @Watch('onRootViewportChange') rootViewportHeight: number = 0
-  /**
-   * 当前视觉焦点的 scenePath 描述（根为 'root'）（#820）。
-   *
-   * 焦点只决定"哪些 Embed 保持展开"，不新建页面、不换相机、不落盘。
-   * 焦点链上的 Embed 强制展开，否则用户捏进去的子星图会因为"里面不够大"自己折起来。
-   */
-  @Prop @Watch('onFocusScenePathChange') focusScenePath: string = 'root'
   /** 主题配置 */
   @Prop themeConfig: ThemeConfig = {
     mode: 'light',
@@ -525,6 +473,11 @@ export struct StarMapScene {
    * 没有注册表（比如单测或脱离 StarMapScreen 复用）时退化成"只有本层"。
    */
   sceneRegistry: StarMapSceneRegistry | null = null
+  /**
+   * 进入某个 Embed 入口：把完整 route 交给页面，由页面解析并切换当前活动画布。
+   * 路径段在这里追加，重复 starmap_id / 自嵌入都不会被本地拒绝。
+   */
+  onEnterEmbed: (scenePath: StarMapPathSegment[]) => void = (_path) => {}
   /** 新建节点回调 */
   onCreateNode: (scenePath: StarMapPathSegment[], starmapId: string, title: string, position: StarMapPoint) => void = (_path, _id, _title, _pos) => {}
   /** 新建子星图回调 */
@@ -615,6 +568,9 @@ export struct StarMapScene {
   // 撑大，也就不需要用尺寸变化反推什么时候该重算 fit。
   /** 注册到 sceneRegistry 的本层句柄 */
   private sceneHandle: StarMapSceneNode | null = null
+  /** 上一次注册使用的路径。活动画布切换时要按旧路径注销，不能按新路径找。 */
+  private registeredScenePath: StarMapPathSegment[] = []
+  private hasRegisteredScene: boolean = false
 
   // ─── 全局相机双指缩放状态（只在根 Scene 上被改） ───
   /** 两指抬起到只剩 0 指 */
@@ -677,70 +633,6 @@ export struct StarMapScene {
     this.inlineEditingKey = ''
     this.closeCreateDialogs()
     this.closeNodeEditDialog()
-  }
-
-  // ─── Deep Zoom 细节档位与显示变换（#821）───
-
-  /**
-   * 某个 Embed 进入之后的 childScenePath 描述（'root' / 'root/embed:xxx'）。
-   *
-   * 细节档位的逻辑层级按**它**判，不按 sceneDepth：
-   * 递归链是 StarMapScene → StarMapEmbedScene → StarMapScene，
-   * 一层嵌套要把 sceneDepth 加两次，用它算"第几层"会把深度翻倍。
-   *
-   * 焦点链比对的是**这颗 Embed 自己进入后的位置**，不是它所属的父 Scene：
-   * 焦点在 `root/embed:a` 时只有 a 属于焦点链，同层的 b / c 仍按真实屏幕空间
-   * 正常掉档；传父 Scene 的话初始焦点 `root` 会把整层 Embed 全部保底，
-   * 档位判定直接失效（#820 复核）。
-   */
-  private embedScenePathLabel(embedInstanceId: string): string {
-    const childSegments: StarMapPathSegment[] = [
-      ...this.scenePath,
-      { type: 'enterEmbed', instanceId: embedInstanceId, nodeId: null }
-    ]
-    return describeScenePath(childSegments)
-  }
-
-  /** 根视口 + 焦点的档位上下文。整棵递归树共用同一份，子 Scene 不许用自己的圆当视口。 */
-  private visualLodContext(): VisualLodContext {
-    return {
-      viewportWidthVp: this.rootViewportWidth,
-      viewportHeightVp: this.rootViewportHeight,
-      focusScenePath: this.focusScenePath
-    }
-  }
-
-  /**
-   * 上一帧每个 Embed 的细节档位，作为覆盖率滞回的输入。
-   *
-   * 刻意用**普通字段**而不是 @State：档位是在 build 里就地算出来决定挂哪个渲染器的，
-   * 如果它是响应式的，每次改档都会触发一轮无意义的重渲染；真正驱动重渲染的是
-   * cameraScale / focusScenePath / rootViewport 这几个 @State/@Prop。
-   */
-  private embedDetailCache: Map<string, DeepZoomDetail> = new Map<string, DeepZoomDetail>()
-
-  /**
-   * 某个 Embed 当前的 Deep Zoom 细节档位。
-   *
-   * 判据只有屏幕上的两项连续量（`projectEmbedMetrics` 用本 Scene 的累计比例投影）：
-   * 覆盖率过 0.70 挂真实子 Scene，投影直径过 48vp 挂 Canvas 缩略图，
-   * 再小就只剩圆壳。视口大小从 rootViewportWidth/Height 进来，所以同一个设备
-   * 改窗口大小会真的换档。
-   *
-   * **档位只决定圆里渲染哪个组件**：形状、world bounds、authored position
-   * 一律不变（#821）。所以这里没有任何"重建布局矩形"的副作用，
-   * 缓存只是为了给滞回留上一帧的值。
-   */
-  private embedDetail(embedInstanceId: string): DeepZoomDetail {
-    const metrics = projectEmbedMetrics(this.viewportScaleValue(), this.visualLodContext())
-    const detail: DeepZoomDetail = resolveEmbedDetailForScene(
-      metrics,
-      this.embedScenePathLabel(embedInstanceId),
-      this.focusScenePath,
-      this.embedDetailCache.get(embedInstanceId) ?? null
-    )
-    this.embedDetailCache.set(embedInstanceId, detail)
-    return detail
   }
 
   // ─── 显示变换（盒子坐标系）───
@@ -900,13 +792,19 @@ export struct StarMapScene {
     if (this.sceneRegistry === null) {
       return
     }
-    this.sceneRegistry.register(this.buildSceneHandle())
+    this.sceneHandle = null
+    const handle: StarMapSceneNode = this.buildSceneHandle()
+    this.registeredScenePath = this.scenePath.slice()
+    this.hasRegisteredScene = true
+    this.sceneRegistry.register(handle)
   }
 
   private unregisterSceneHandle(): void {
-    if (this.sceneRegistry !== null) {
-      this.sceneRegistry.unregister(this.scenePath)
+    if (this.sceneRegistry !== null && this.hasRegisteredScene) {
+      this.sceneRegistry.unregister(this.registeredScenePath)
     }
+    this.registeredScenePath = []
+    this.hasRegisteredScene = false
     this.sceneHandle = null
   }
 
@@ -981,8 +879,8 @@ export struct StarMapScene {
     this.applyFittedLocalViewport(this.sceneWidth, this.sceneHeight)
     // fitScale 变了，递归命中/坐标换算读的就是这份快照，必须立刻同步
     this.syncSceneHandle()
-    // #821：局部 fit 变了只需要同步句柄。各 Embed 的细节档位是在 build 里
-    // 就地按 @State/@Prop 现算的，不需要"重建布局矩形"这一步 —— 布局矩形恒定。
+    // 局部 fit 变了只需要同步句柄：布局矩形恒定，不需要重建；
+    // 当前挂载的子 Scene 也只读这份真实几何。
   }
 
   /**
@@ -1100,7 +998,7 @@ export struct StarMapScene {
    *
    * id 的生成规则在 StarMapGeometry.describeEmbedInputNodeId（带 scenePath，
    * 因为同一个 instanceId 会在每一层父图里各出现一次），这里只做转发，
-   * 保证 StarMapEmbedScene 那边报出来的 id 和这里设上去的完全一致。
+   * 几何层的递归命中与 UI 共享同一份 scenePath + instanceId 身份。
    */
   private embedInputNodeId(embedInstanceId: string): string {
     return describeEmbedInputNodeId(this.scenePath, embedInstanceId)
@@ -1474,29 +1372,7 @@ private refitAfterContentAdded(): void {
     // 不同步的话缩放之后命中判定就一直用的是旧视口（#816 复审第 2 条）。
     this.syncSceneHandle()
     this.drawEdges()
-    // #821：这里**不**再有任何"重建布局矩形"的步骤。
-    // 相机一变，每个 Embed 的屏幕投影跟着变，Deep Zoom 档位在 build 里就地现算
-    // （build 读的就是这几个 @Prop/@State），布局矩形和 authored position 一律不动。
-  }
-
-  /**
-   * 视觉焦点变了（#821）：焦点链上的 Embed 至少保底 preview，离链的按屏幕空间判。
-   * 焦点只改显示，不动 Core 的 StarMap / Embed 关系，也不改相机、不改布局矩形。
-   */
-  onFocusScenePathChange() {
-    this.drawEdges()
-    this.syncSceneHandle()
-  }
-
-  /**
-   * 根视口尺寸变了（分屏、折叠屏展开、横竖屏切换）（#821）。
-   *
-   * 这里只重算派生显示状态：相机保持不动、focusScenePath 保持不动，
-   * 不重新 fit 根图，也不把用户拉回根层——同一个星图换个窗口大小就该接着看。
-   */
-  onRootViewportChange() {
-    this.drawEdges()
-    this.syncSceneHandle()
+    // 相机只改视角：布局矩形、authored position 和显示形态一律不动。
   }
 
   onMotionProgressChange() {
@@ -1510,6 +1386,21 @@ private refitAfterContentAdded(): void {
     this.recomputeLayoutAndGeometry()
     // 图第一次到位时布局区可能已经有尺寸了，onAreaChange 不一定还会再来一次
     this.maybeFitView()
+  }
+
+  /**
+   * 活动画布切换：同一个 StarMapScene 实例改挂到新的完整 route。
+   *
+   * 先用旧路径注销注册表，再用新路径注册；不能沿用旧句柄，否则选择/连线
+   * 仍会带着上一层的 scenePath。重复 starmap_id 在这里只是不同的入口身份，
+   * 不触发任何拒绝或递归展开。
+   */
+  onRouteIdentityChange() {
+    this.unregisterSceneHandle()
+    this.hasFittedView = false
+    this.recomputeLayoutAndGeometry()
+    this.registerSceneHandle()
+    this.notifySceneGeometryReady()
   }
 
   // ─── 布局与几何计算 ───
@@ -2663,8 +2554,8 @@ private refitAfterContentAdded(): void {
 
   // ─── @Builder：节点组件 ───
 
-  // kind → 颜色的映射不在本地维护：preview 档的缩略图要画同一批圆，
-  // 两边各写一张表就一定会漂，统一读 StarMapVisualTokens.starmapNodeColor（#821 复审第二轮）。
+  // kind → 颜色的映射不在本地维护：节点卡片、边和入口共用同一份视觉表，
+  // 统一读 StarMapVisualTokens.starmapNodeColor（#821 复审第二轮）。
 
   /**
    * 节点卡片（#984）：上方名称、下方正文预览。
@@ -2881,6 +2772,32 @@ private refitAfterContentAdded(): void {
    * 双击的第二次按下不触发单击识别，所以单击不会被双击抢走。
    * 两者都只是选中这个 Embed，都不开新页面。
    */
+  /**
+   * 单击是否落在入口内部内容区（不是标题带，也不是圆环）。
+   *
+   * 入口内部 = “进入这颗子星图”。标题带 / 圆环仍然是选中入口本身。
+   * 坐标来自绑定在 Embed Stack 上的手势，`finger.localX/Y` 已经是本地盒子坐标；
+   * `.scale()` 不参与换算。
+   */
+  private isEmbedInnerTap(event: GestureEvent | undefined): boolean {
+    if (!event || !event.fingerList || event.fingerList.length === 0) {
+      return false
+    }
+    const finger = event.fingerList[0]
+    if (!finger || !Number.isFinite(finger.localX) || !Number.isFinite(finger.localY)) {
+      return false
+    }
+    const radius: number = DEFAULT_EMBED_DIAMETER / 2
+    const dx: number = finger.localX - radius
+    const dy: number = finger.localY - radius
+    const dist: number = Math.sqrt(dx * dx + dy * dy)
+    if (dist > radius) {
+      return false
+    }
+    const metrics: EmbedHitMetrics = this.embedLocalHitMetrics(radius)
+    return finger.localY > metrics.titleHitHeight && dist < radius - metrics.borderHitWidth
+  }
+
   private embedGestureGroup(embed: StarMapEmbed): GestureGroupInterface {
     return GestureGroup(GestureMode.Exclusive,
       // 双击 → 选中 Embed（和单击同一个结果）
@@ -2889,10 +2806,16 @@ private refitAfterContentAdded(): void {
           if (this.gestureTracker.isPinching()) return
           this.selectItem('embed', embed.instanceId)
         }),
-      // 单击 → 选中 Embed
+      // 单击内部 → 追加路径并切换活动画布；单击标题/圆环 → 选中入口
       TapGesture({ count: 1 })
-        .onAction(() => {
+        .onAction((event: GestureEvent) => {
           if (this.gestureTracker.isPinching()) return
+          if (this.isEmbedInnerTap(event)) {
+            const route: StarMapPathSegment[] = this.scenePath.slice()
+            route.push({ type: 'enterEmbed', instanceId: embed.instanceId, nodeId: null })
+            this.onEnterEmbed(route)
+            return
+          }
           this.selectItem('embed', embed.instanceId)
         }),
       // 长按 → 菜单（连线预备态）→ 继续拖动 → connect
@@ -2996,79 +2919,21 @@ private refitAfterContentAdded(): void {
   // ─── @Builder：Embed 组件 ───
 
   /**
-   * Embed 的渲染入口：外壳只有一个形状，按 Deep Zoom detail 换内部渲染器（#821）。
+   * Embed 的渲染入口：外壳固定为一颗正圆，当前活动画布只画入口本身。
    *
-   * 档位是**渲染前**算好的（embedDetail），这里只负责按档位挂不同的内部组件：
-   * - interactive：完整正圆 + StarMapEmbedScene 递归实例化 child Scene，可交互
-   * - preview：同一颗正圆 + StarMapEmbedPreview 的轻量 Canvas 缩略图，只回答"里面有什么"
-   * - shell：同一颗正圆的外壳（标题 + 底色 + 描边），不挂任何子渲染器
-   *
-   * 关键结构（#821）：
-   * - 三档的外壳几何完全相同，都是 DEFAULT_EMBED_DIAMETER 的正圆；
-   *   档位只决定"渲染多少细节"，绝不换形状、换 world bounds、换 authored position。
-   * - 缩放一律走 .scale() 的显示变换，不允许用"改 width/height"去缩小。
-   * - preview 必须 HitTestMode.None：它不参与触摸竞争，根 Scene 的两指 Pinch 不受影响。
+   * 不再按缩放或覆盖率切换渲染器，也不在圆里预渲染子图缩略图。点击内部会
+   * 追加一条 enterEmbed 路径段，由页面按完整 route 解析并切换当前画布；
+   * 自嵌入、A→B→A 只是不同路径，不会在这里被拒绝，也不会生成无限 Scene 树。
    */
   @Builder
   StarMapEmbedItem(embed: StarMapEmbed) {
     Stack() {
-      // 1. 内部内容区：只按 detail 换渲染器，外壳形状不动
-      if (this.embedDetail(embed.instanceId) === 'interactive') {
-        // 不挂任何手势，能不能收到事件由下面的 onTouchIntercept 决定
-        Column() {
-          StarMapEmbedScene({
-            rootStarmapId: this.rootStarmapId,
-            scenePath: this.scenePath,
-            embed: embed,
-            // 子 Scene 的深度是父层 +1：只有根 Scene 是全局相机本体（#818）
-            sceneDepth: this.sceneDepth + 1,
-            themeConfig: this.themeConfig,
-            motionConfig: this.motionConfig,
-            motionProgress: this.motionProgress,
-            bridge: this.bridge,
-            gestureTracker: this.gestureTracker,
-            // 全树共用的选中状态和 Scene 注册表
-            selectionState: this.selectionState,
-            sceneRegistry: this.sceneRegistry,
-            // 全局相机原样透传：子 Scene 是相机里的内容，不持有自己的缩放（#818）
-            cameraScale: this.cameraScale,
-            cameraOffsetX: this.cameraOffsetX,
-            cameraOffsetY: this.cameraOffsetY,
-            onCameraChanged: this.onCameraChanged,
-            // 空白拖动继续往下传：子星图里拖动的也是整张星图的视角（#818 复审）
-            onCameraPanTo: this.onCameraPanTo,
-            // 根视口与视觉焦点原样透传：整棵递归树共用同一份（#820）。
-            // 子 Scene 不许拿自己那个圆当视口去判档位，否则"够不够交互"变成自我实现。
-            rootViewportWidth: this.rootViewportWidth,
-            rootViewportHeight: this.rootViewportHeight,
-            focusScenePath: this.focusScenePath,
-            // 祖先累计比例：子 Scene 的有效比例 = 它的 fitScale × 这一份（#818 复审）
-            inheritedScale: this.viewportScaleValue(),
-          })
-        }
-        .width('100%')
-        .height('100%')
-        // 稳定输入节点 id（#818 复审）：onChildTouchTest 只能看到显式设了 .id() 的命名节点，
-        // 没有它父级就分不清该转发给哪一层，只能退回 Stack 默认命中顺序。
-        .id(this.embedInputNodeId(embed.instanceId))
-      } else if (this.embedDetail(embed.instanceId) === 'preview') {
-        // preview 是"看得见里面有什么"的缩略图，不是可交互层：
-        // 整块 HitTestMode.None，不进触摸竞争，父层 Embed 和根 Scene 的手势都拿回完整事件。
-        Column() {
-          StarMapEmbedPreview({
-            rootStarmapId: this.rootStarmapId,
-            scenePath: this.scenePath,
-            embed: embed,
-            themeConfig: this.themeConfig,
-            // preview 只读子星图也要 bridge 才画得出"里面有什么"（#821 复审）
-            bridge: this.bridge
-          })
-        }
-        .width('100%')
-        .height('100%')
-        .id(this.embedInputNodeId(embed.instanceId))
-        .hitTestBehavior(HitTestMode.None)
+      // 1. 内部内容区：当前画布只画入口，不再把子星图缩成缩略图或递归子 Scene。
+      // 单击圆内（除标题带、圆环外）由外层手势追加 enterEmbed 路径并切换画布。
+      Column() {
       }
+      .width('100%')
+      .height('100%')
 
       // 2. title 视觉层（纯显示，不挂手势也不挂菜单）
       // 手势统一由外层 Stack 的 embedGestureGroup + onTouchIntercept 分流，
@@ -3125,9 +2990,8 @@ private refitAfterContentAdded(): void {
     .gesture(this.embedGestureGroup(embed))
     // 动态事件分流（坐标是相对本组件的局部坐标，圆心即 直径/2）：
     // - 圆外：不属于 Embed，热区已排除，这里再兜一层，事件落回父星图
-    // - 圆内 title / 真实圆环：Block，只给外层 Embed，不再让 child Scene 参与手势竞争
-    //   （Default 是"自己和子节点都参加"，父 Embed 和 child Scene 会一起进竞争）
-    // - 圆内其余：None，交给 child StarMapScene
+    // - 圆内：Block，整颗入口由本层手势处理。单击内部进入画布；单击标题/圆环选中入口。
+    //   圆外：None，事件落回画布。
     .onTouchIntercept((event: TouchEvent): HitTestMode => {
       const touch = event.changedTouches[0]
       if (!touch) {
@@ -3148,13 +3012,7 @@ private refitAfterContentAdded(): void {
       const dx: number = localX - radius
       const dy: number = localY - radius
       const dist: number = Math.sqrt(dx * dx + dy * dy)
-      if (dist > radius) {
-        return HitTestMode.None
-      }
-      const metrics = this.embedLocalHitMetrics(radius)
-      const inTitle: boolean = localY <= metrics.titleHitHeight
-      const inBorder: boolean = dist >= radius - metrics.borderHitWidth
-      return (inTitle || inBorder) ? HitTestMode.Block : HitTestMode.None
+      return dist <= radius ? HitTestMode.Block : HitTestMode.None
     })
     // 父子触摸竞争（#818 复审）：
     // 上面 onTouchIntercept 只决定"要不要让 child 参与"，它管不了"深层 child 被 touch-test
@@ -3305,7 +3163,7 @@ private refitAfterContentAdded(): void {
    * #821：Scene 的盒子尺寸恒为**本地** DEFAULT_EMBED_DIAMETER（子 Scene）或根视口
    * （根 Scene）——父层缩放走 .scale()，不会改变布局尺寸，所以这里没有"尺寸变了
    * 再同比带一次 fit"的补偿路径，onAreaChange 报出来的就是 fitView 该用的本地尺寸。
-   * Deep Zoom 档位同样不需要在这里重算：档位由累计比例内联求值，渲染时直接读。
+   * 当前引擎也不按缩放重算布局或切换画面层级：实时相机比例只作用在显示变换上。
    */
   private handleSceneAreaChange(newArea: Area): void {
     this.sceneWidth = Number(newArea.width)

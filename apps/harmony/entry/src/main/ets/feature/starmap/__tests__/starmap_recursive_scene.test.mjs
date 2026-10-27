@@ -63,13 +63,11 @@ function readStarmapSource(relativePath) {
 //         (StarMapViewport.ets / ui/StarMapScene.ets)
 //
 //   5e. 相机状态链上不能有断点（#818 复审）：ArkUI V1 只有 @Prop 是父 → 子单向同步，
-//      普通字段只是拿父值做一次初始化。StarMapEmbedScene 正处在
-//      Screen @State → 根 Scene @Prop → EmbedScene → child Scene @Prop 这条链的中间，
-//      那一层一旦写成普通字段，子 Scene 读到的 cameraOffset 就停在初始化时的旧值，
-//      而拖画布正是拿它当起手基准 → 全局相机从 100 跳回 5。
-//      行为语义：根层拖到 100，再从任意深度子星图起手 Pan，基准必须是 100，
-//      第一帧 +5 之后全局必须是 105，绝不能跳回 5
-//      —— @Prop cameraScale / cameraOffsetX / cameraOffsetY (ui/StarMapEmbedScene.ets)
+//      普通字段只是拿父值做一次初始化。活动画布模型下链条是
+//      Screen @State → 唯一 StarMapScene @Prop；中间不再有 EmbedScene 层级。
+//      页面切换 route 时先保存当前画布相机，返回时恢复同一 route 的视角。
+//      —— @State cameraScale/Offset (ui/StarMapScreen.ets)
+//         @Prop cameraScale/Offset (ui/StarMapScene.ets)
 //
 //   6. 全树唯一选中态：选中身份 = scenePath + kind + itemId。
 //      选中子节点时父 Embed 立刻失选；同名 item 在不同层不互相命中
@@ -88,10 +86,10 @@ function readStarmapSource(relativePath) {
 // ══════════════════════════════════════════════════════════════
 
 const CIRCLE_INNER_SAFE_RATIO = 1 / Math.SQRT2
-const MIN_FIT_SCALE = 0.02
-const MAX_FIT_SCALE = 4
-const CAMERA_SCALE_MIN = 0.3
-const CAMERA_SCALE_MAX = 3
+// 与 platform/StarMapViewport.ets 一致：没有可用内容时才用的稳定默认值，
+// 不是用户缩放/布局适配的上下限（#1009）。
+const DEFAULT_FIT_SCALE = 1
+const DEFAULT_CAMERA_SCALE = 1
 const EMBED_FIT_PADDING_VP = 8
 const EMBED_TITLE_HIT_HEIGHT = 24
 const EMBED_BORDER_HIT_WIDTH = 12
@@ -120,8 +118,8 @@ function computeFitScale(bounds, availableWidth, availableHeight, paddingVp) {
   const usableWidth = Math.max(1, availableWidth - paddingVp * 2)
   const usableHeight = Math.max(1, availableHeight - paddingVp * 2)
   const raw = Math.min(usableWidth / bounds.width, usableHeight / bounds.height)
-  if (!isFinite(raw) || raw <= 0) { return MIN_FIT_SCALE }
-  return Math.max(MIN_FIT_SCALE, Math.min(MAX_FIT_SCALE, raw))
+  if (!isFinite(raw) || raw <= 0) { return DEFAULT_FIT_SCALE }
+  return raw
 }
 
 // 缩放比例按可用区（子星图里是圆的内接正方形）算；
@@ -142,8 +140,15 @@ function computeFittedViewport(bounds, availableWidth, availableHeight, paddingV
 // ─── 全局视角相机（#818）───
 
 function clampCameraScale(scale) {
-  if (!isFinite(scale) || scale <= 0) { return 1 }
-  return Math.max(CAMERA_SCALE_MIN, Math.min(CAMERA_SCALE_MAX, scale))
+  if (scale === Infinity) { return Number.MAX_VALUE }
+  if (!isFinite(scale) || scale <= 0) { return DEFAULT_CAMERA_SCALE }
+  return scale
+}
+
+function scaleAfterFactor(scale, factor) {
+  const nextScale = scale * factor
+  if (nextScale === 0) { return Number.MIN_VALUE }
+  return clampCameraScale(nextScale)
 }
 
 function computeCameraPinch(camera, baseScale, baseDistance, currentDistance, centerX, centerY) {
@@ -394,12 +399,15 @@ function describeLastEmbedInstanceId(path) {
 }
 
 function findSceneContext(root, scenePath) {
-  if (scenePath.length === 0) { return root }
-  const seg = scenePath[0]
-  if (seg.type !== 'enterEmbed' || seg.instanceId === null) { return null }
-  const child = root.children.get(seg.instanceId)
-  if (child === undefined) { return null }
-  return findSceneContext(child, scenePath.slice(1))
+  let current = root
+  // 路径只按每一段的 Embed 实例下钻；同一个 starmapId 可以重复出现（#1009）。
+  for (const seg of scenePath) {
+    if (seg.type !== 'enterEmbed' || seg.instanceId === null) { return null }
+    const child = current.children.get(seg.instanceId)
+    if (child === undefined) { return null }
+    current = child
+  }
+  return current
 }
 
 function findEmbedRect(context, instanceId) {
@@ -427,8 +435,6 @@ function childLocalToParentCanvas(parent, embedInstanceId, childLocalX, childLoc
   const scale = parent.scale > 0 ? parent.scale : 1
   return { x: childLocalX / scale + originX, y: childLocalY / scale + originY }
 }
-
-const MAX_RECURSE_SCENE_DEPTH = 32
 
 /** pointToSegmentDistance 的镜像（原在 StarMapGeometry.ets:330）。 */
 function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
@@ -475,7 +481,8 @@ function resolveRecursiveHit(root, x, y) {
   let localX = x
   let localY = y
   const embedPath = []
-  for (let depth = 0; depth <= MAX_RECURSE_SCENE_DEPTH; depth++) {
+  // 沿实际挂载的有限子 Scene 结构下探，不以固定层数作为停止条件（#1009）。
+  while (true) {
     const canvasPoint = screenToCanvas(localX, localY, current.scale, current.offsetX, current.offsetY)
     const hit = hitTestWithScene(current.rects, canvasPoint.x, canvasPoint.y, current.scenePath, current.embedInstanceIds, current.scale)
     if (hit === null) {
@@ -538,12 +545,6 @@ function resolveRecursiveHit(root, x, y) {
     current = child
     localX = childLocal.x
     localY = childLocal.y
-  }
-  return {
-    ownerScenePath: cloneScenePath(current.scenePath),
-    ownerStarmapId: current.starmapId,
-    target: null,
-    embedPath: cloneScenePath(embedPath)
   }
 }
 
@@ -1180,13 +1181,17 @@ console.log('2. fitScale 来自内容与可用区，不是"每层乘 0.6"')
     computeFitScale(small, available, available, EMBED_FIT_PADDING_VP)),
   'fit 与嵌套深度无关（深度是路径，不是系数）')
 
-  // 夹取
+  // 不再套产品上下限：内容极小/极大都返回真实比例（#1009）
   const huge = computeContentBounds([{ nodeId: 'a', x: 0, y: 0, width: 1, height: 1, radius: 0 }])
-  assert(near(computeFitScale(huge, available, available, EMBED_FIT_PADDING_VP), MAX_FIT_SCALE),
-    '内容极小时 fit 夹在 MAX_FIT_SCALE，不被放大到糊掉')
+  const hugeFit = computeFitScale(huge, available, available, EMBED_FIT_PADDING_VP)
+  assert(isFinite(hugeFit) && hugeFit > 4, `内容极小时返回真实大比例（${hugeFit}），不停在 4×`)
   const vast = computeContentBounds([{ nodeId: 'a', x: 0, y: 0, width: 1e7, height: 1e7, radius: 0 }])
-  assert(near(computeFitScale(vast, available, available, EMBED_FIT_PADDING_VP), MIN_FIT_SCALE),
-    '内容极大时 fit 有下限，不会变成 0')
+  const vastFit = computeFitScale(vast, available, available, EMBED_FIT_PADDING_VP)
+  assert(isFinite(vastFit) && vastFit > 0 && vastFit < 0.02,
+    `内容极大时返回真实小比例（${vastFit}），不停在 0.02×`)
+  assert(computeFitScale(computeContentBounds([{ nodeId: 'z', x: 0, y: 0, width: 0, height: 0, radius: 0 }]),
+    available, available, EMBED_FIT_PADDING_VP) === DEFAULT_FIT_SCALE,
+  '没有有效内容时才退回稳定默认适配比例 1')
 
   // #818：fit 只是布局适配，不再和用户缩放相乘。子 Scene 的累计有效比例是
   // `fitScale × 祖先累计`，其中"用户缩放"只来自根那一台相机。
@@ -1266,11 +1271,15 @@ console.log('4. 全局相机（#818）：只有一台，锚点钉在两指中心
   pinch.update([{ x: 0, y: 0 }, { x: 120, y: 0 }], 60, 0)
   assert(near(pinch.camera.scale, 1.2), '两指 100 → 110 → 120 得到 1.20，不是 1.00×1.1×1.2 = 1.32')
 
-  // 夹取
-  assert(near(clampCameraScale(99), CAMERA_SCALE_MAX), '相机比例夹在上限 3')
-  assert(near(clampCameraScale(0.01), CAMERA_SCALE_MIN), '相机比例有下限 0.3')
-  assert(near(clampCameraScale(NaN), 1), '非法相机比例退回 1')
-  assert(near(clampCameraScale(0), 1), '0 不是合法相机比例，退回 1（不能除零）')
+  // 连续比例：正常值原样保留，只有数值边界才做保护（#1009）
+  assert(near(clampCameraScale(99), 99), '相机比例 99 原样保留，没有 3× 产品上限')
+  assert(near(clampCameraScale(0.01), 0.01), '相机比例 0.01 原样保留，没有 0.3× 产品下限')
+  assert(near(clampCameraScale(1e-7), 1e-7), '更小的有限正比例也不被夹回')
+  assert(clampCameraScale(Infinity) === Number.MAX_VALUE, '只有真正上溢才停在 Number.MAX_VALUE')
+  assert(near(clampCameraScale(NaN), DEFAULT_CAMERA_SCALE), '非法相机比例退回稳定默认值 1')
+  assert(near(clampCameraScale(0), DEFAULT_CAMERA_SCALE), '0 不是合法相机比例，退回 1（不能除零）')
+  assert(scaleAfterFactor(1, Number.MIN_VALUE / 2) === Number.MIN_VALUE,
+    '连续缩小到下溢时保留最小正数，不归零')
 
   // 工具栏围绕画布中心缩放
   const bar = zoomCameraAroundCenter({ scale: 1, offsetX: 0, offsetY: 0 }, 500, 500, 2)
@@ -2300,18 +2309,19 @@ console.log('24i. 契约 5e：相机状态链不能断在中间层，子 Scene �
   assert(broken.screen.cameraOffsetX === 5,
     '对照：旧基准 0 + 5 = 5，全局相机从 100 跳回 5（复现真机症状）')
 
-  // 结构守卫：真实 .ets 里这三个字段必须还是 @Prop，不能退回普通字段
-  const embedSource = readStarmapSource('ui/StarMapEmbedScene.ets')
+  // 结构守卫：#1009 起不再有 EmbedScene 中间层，相机只从 Screen 传给当前活动画布。
+  const screenSource = readStarmapSource('ui/StarMapScreen.ets')
+  const sceneSource = readStarmapSource('ui/StarMapScene.ets')
   for (const field of ['cameraScale', 'cameraOffsetX', 'cameraOffsetY']) {
-    assert(new RegExp(`@Prop\\s+${field}\\s*:`).test(embedSource),
-      `StarMapEmbedScene.ets 里 ${field} 仍是 @Prop（ArkUI V1 只有 @Prop 才是父→子单向同步）`)
-    assert(!new RegExp(`^\\s{2}${field}\\s*:`, 'm').test(embedSource),
-      `${field} 没有退回成不带装饰器的普通字段`)
+    assert(new RegExp(`@State\\s+${field}\\s*:`).test(screenSource),
+      `StarMapScreen.ets 里 ${field} 仍是页面级 @State`)
+    assert(new RegExp(`@Prop\\s+@Watch\\('onTransformChange'\\)\\s+${field}\\s*:`).test(sceneSource),
+      `StarMapScene.ets 里 ${field} 仍是 @Prop（ArkUI V1 父→子单向同步）`)
   }
-  assert(embedSource.includes('cameraScale: this.cameraScale'),
-    'EmbedScene 仍然把 cameraScale 透传给 child StarMapScene')
-  assert(/onCameraPanTo[\s\S]*offsetX: number, offsetY: number/.test(embedSource),
-    'onCameraPanTo 保持普通字段即可：它是稳定引用，不是每帧变化的状态')
+  assert(screenSource.includes('scenePath: this.activePath'),
+    'Screen 把活动画布的完整 route 传给唯一的 StarMapScene')
+  assert(!sceneSource.includes('StarMapEmbedScene'),
+    'Scene 不再递归挂载 StarMapEmbedScene；切换画布由页面完成')
 }
 
 console.log('')
@@ -3150,10 +3160,13 @@ console.log('35. 输入节点 id 与 onChildTouchTest：命中的子图继续参
     'onTouchIntercept 不再把标题热区乘 viewportScaleValue（那一层坐标已经是屏幕 vp）')
   assert(!/EMBED_BORDER_HIT_WIDTH\s*\*\s*this\.viewportScaleValue\(\)/.test(interceptBody),
     'onTouchIntercept 不再把边框热区乘 viewportScaleValue')
-  // #821 复审：24 / 12vp 是屏幕侧手指尺寸，组件局部坐标必须除一次累计比例。
-  // UI 侧与递归命中共用同一个 embedHitMetricsForScene，不允许再传 1 当地尺寸。
-  assert(interceptBody.includes('this.embedLocalHitMetrics(radius)'),
-    '真实触摸分流走 embedLocalHitMetrics（累计比例口径），不再硬传 scale = 1')
+  // #1009：入口整块由本层手势处理，圆内一律 Block；圆内点击再由
+  // isEmbedInnerTap 用同一份 24/12vp 口径区分“进入画布 / 选中入口”。
+  assert(interceptBody.includes('dist <= radius ? HitTestMode.Block : HitTestMode.None'),
+    '整颗入口圆内 Block、圆外 None，不再把内部让给已删除的递归子 Scene')
+  assert(sceneSource.includes('private isEmbedInnerTap(event: GestureEvent | undefined): boolean {') &&
+    sceneSource.includes('this.embedLocalHitMetrics(radius)'),
+    '圆内单击用 embedLocalHitMetrics 区分标题/圆环与进入画布，累计比例口径一致')
   assert(!/embedHitMetricsForScene\(\s*1\s*,/.test(sceneSource),
     'UI 侧不再出现 embedHitMetricsForScene(1, ...)：那会把 24/12vp 当成本地尺寸')
   assert(sceneSource.includes('private embedLocalHitMetrics(radius: number): EmbedHitMetrics {') &&
@@ -3224,1073 +3237,116 @@ const sceneSource = readStarmapSource('ui/StarMapScene.ets')
 
 console.log('')
 console.log('')
-console.log('37. 视觉 LOD（#820）：投影 → 折叠档位 → 视觉焦点，纯函数不散进 build()')
 
-// ── 被测规格：platform/StarMapVisualLod.ets ──
-const INTERACTIVE_ENTER_COVERAGE = 0.70
-const INTERACTIVE_EXIT_COVERAGE = 0.60
-const PREVIEW_MIN_DIAMETER_VP = 48
-const PREVIEW_EXIT_DIAMETER_VP = 40
-const FOCUS_ENTER_COVERAGE = 0.70
-const FOCUS_EXIT_COVERAGE = 0.55
-const FOCUS_CENTER_ENTER_RATIO = 0.30
-const FOCUS_CENTER_EXIT_RATIO = 0.20
-
-function viewportShortSideVp(context) {
-  const w = context.viewportWidthVp
-  const h = context.viewportHeightVp
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
-    return 0
-  }
-  return Math.min(w, h)
-}
-
-function effectiveOwnerScale(ownerEffectiveScale) {
-  if (!Number.isFinite(ownerEffectiveScale) || ownerEffectiveScale <= 0) {
-    return 1
-  }
-  return ownerEffectiveScale
-}
-
-function projectEmbedMetrics(ownerEffectiveScale, context) {
-  const scale = effectiveOwnerScale(ownerEffectiveScale)
-  const projectedDiameterVp = DEFAULT_EMBED_DIAMETER * scale
-  const shortSide = viewportShortSideVp(context)
-  const coverage = shortSide > 0 ? projectedDiameterVp / shortSide : 0
-  return { projectedDiameterVp, coverage }
-}
-
-function scenePathDepthOf(scenePath) {
-  if (scenePath === 'root') { return 0 }
-  let depth = 0
-  for (let i = 0; i < scenePath.length; i++) {
-    if (scenePath.charAt(i) === '/') { depth += 1 }
-  }
-  return depth
-}
-
-function parentScenePathOf(scenePath) {
-  if (scenePath === 'root') { return 'root' }
-  const idx = scenePath.lastIndexOf('/embed:')
-  if (idx < 0) { return 'root' }
-  return scenePath.substring(0, idx)
-}
-
-function isOnFocusChain(embedScenePath, focusScenePath) {
-  return embedScenePath === focusScenePath || focusScenePath.startsWith(embedScenePath + '/')
-}
-
-function resolveDeepZoomDetail(metrics, previousDetail) {
-  if (!Number.isFinite(metrics.projectedDiameterVp) || !Number.isFinite(metrics.coverage)) {
-    return 'shell'
-  }
-  if (metrics.coverage >= INTERACTIVE_ENTER_COVERAGE) {
-    return 'interactive'
-  }
-  if (previousDetail === 'interactive' && metrics.coverage >= INTERACTIVE_EXIT_COVERAGE) {
-    return 'interactive'
-  }
-  if (metrics.projectedDiameterVp >= PREVIEW_MIN_DIAMETER_VP) {
-    return 'preview'
-  }
-  if (previousDetail === 'preview' && metrics.projectedDiameterVp >= PREVIEW_EXIT_DIAMETER_VP) {
-    return 'preview'
-  }
-  return 'shell'
-}
-
-function resolveEmbedDetailForScene(metrics, embedScenePath, focusScenePath, previousDetail) {
-  const detail = resolveDeepZoomDetail(metrics, previousDetail)
-  if (detail === 'shell' && isOnFocusChain(embedScenePath, focusScenePath)) {
-    return 'preview'
-  }
-  return detail
-}
-
-function inCenterWindow(candidate, ratio) {
-  return candidate.centerRatioX >= ratio &&
-    candidate.centerRatioX <= 1 - ratio &&
-    candidate.centerRatioY >= ratio &&
-    candidate.centerRatioY <= 1 - ratio
-}
-
-function inCenterEnterRegion(candidate) { return inCenterWindow(candidate, FOCUS_CENTER_ENTER_RATIO) }
-function inCenterExitRegion(candidate) { return inCenterWindow(candidate, FOCUS_CENTER_EXIT_RATIO) }
-function inCenterRegion(candidate) { return inCenterEnterRegion(candidate) }
-
-function resolveFocusCandidate(candidates) {
-  let best = null
-  let bestDepth = -1
-  let bestCoverage = -1
-  for (const candidate of candidates) {
-    if (!inCenterEnterRegion(candidate)) { continue }
-    const depth = scenePathDepthOf(candidate.scenePath)
-    if (best === null || depth > bestDepth ||
-      (depth === bestDepth && candidate.coverage > bestCoverage)) {
-      best = candidate
-      bestDepth = depth
-      bestCoverage = candidate.coverage
-    }
-  }
-  return best
-}
-
-function shouldPromoteFocus(coverage) {
-  return Number.isFinite(coverage) && coverage >= FOCUS_ENTER_COVERAGE
-}
-
-function shouldDemoteFocus(candidate) {
-  return !Number.isFinite(candidate.coverage) ||
-    candidate.coverage < FOCUS_EXIT_COVERAGE ||
-    !inCenterExitRegion(candidate)
-}
-
-function findFocusCandidate(scenePath, candidates) {
-  for (const candidate of candidates) {
-    if (candidate.scenePath === scenePath) { return candidate }
-  }
-  return null
-}
-
-function promotableCandidates(candidates) {
-  const promotable = []
-  for (const candidate of candidates) {
-    if (shouldPromoteFocus(candidate.coverage)) { promotable.push(candidate) }
-  }
-  return promotable
-}
-
-function resolveFocusScenePath(currentFocusScenePath, candidates) {
-  const promotable = promotableCandidates(candidates)
-  if (currentFocusScenePath === 'root') {
-    const winner = resolveFocusCandidate(promotable)
-    return winner !== null ? winner.scenePath : 'root'
-  }
-  const current = findFocusCandidate(currentFocusScenePath, candidates)
-  const descendants = []
-  for (const candidate of promotable) {
-    if (candidate.scenePath.startsWith(currentFocusScenePath + '/')) { descendants.push(candidate) }
-  }
-  const deeper = resolveFocusCandidate(descendants)
-  if (deeper !== null) { return deeper.scenePath }
-  if (current !== null && !shouldDemoteFocus(current)) { return currentFocusScenePath }
-  return parentScenePathOf(currentFocusScenePath)
-}
-
-// ── 被测规格：platform/StarMapGeometry.ets 的 collectEmbedFocusProbes ──
-function collectEmbedFocusProbesInScene(root, context, viewportWidthVp, viewportHeightVp, probes) {
-  for (const rect of context.rects) {
-    if (!context.embedInstanceIds.has(rect.nodeId)) { continue }
-    const localCenterX = rect.x + rect.width / 2
-    const localCenterY = rect.y + rect.height / 2
-    const localScreen = canvasToScreen(localCenterX, localCenterY,
-      context.scale, context.offsetX, context.offsetY)
-    const rootScreen = convertPointToRoot(root, context.scenePath, localScreen.x, localScreen.y)
-    const childSegments = [
-      ...cloneScenePath(context.scenePath),
-      { type: 'enterEmbed', instanceId: rect.nodeId, nodeId: null }
-    ]
-    probes.push({
-      childScenePath: describeScenePath(childSegments),
-      centerRatioX: rootScreen.x / viewportWidthVp,
-      centerRatioY: rootScreen.y / viewportHeightVp,
-      ownerScale: context.scale
-    })
-  }
-  for (const child of context.children.values()) {
-    collectEmbedFocusProbesInScene(root, child, viewportWidthVp, viewportHeightVp, probes)
-  }
-}
-
-function collectEmbedFocusProbes(root, viewportWidthVp, viewportHeightVp) {
-  const probes = []
-  if (viewportWidthVp <= 0 || viewportHeightVp <= 0) { return probes }
-  collectEmbedFocusProbesInScene(root, root, viewportWidthVp, viewportHeightVp, probes)
-  return probes
-}
-
-const viewport = (w, h, focus = 'root') => ({
-  viewportWidthVp: w, viewportHeightVp: h, focusScenePath: focus
-})
-
-console.log('37a. interactive 门槛看"圆占视口短边的比例"，不看这是第几层')
+console.log('37. #1009：同一 starmapId 可重复出现在路径里，递归命中不设固定层数')
 {
-  // 视口短边 400 时 coverage 0.70 → 投影直径 280 → 累计比例 1.4
-  const context = viewport(400, 800)
-  const enterScale = INTERACTIVE_ENTER_COVERAGE * 400 / DEFAULT_EMBED_DIAMETER
-  assert(near(enterScale, 1.4),
-    `短边 400 时进入 interactive 需要累计比例 ${enterScale.toFixed(2)}（现算，不是写死的深度系数）`)
+  const DEPTH = 80
+  const deepestPath = []
+  for (let i = 0; i < DEPTH; i++) { deepestPath.push(embedSegment(`emb-${i}`)) }
 
-  const atEnter = projectEmbedMetrics(enterScale, context)
-  assert(resolveDeepZoomDetail(atEnter, null) === 'interactive',
-    'coverage 正好等于 0.70 → interactive（>= 而不是 >）')
-  assert(resolveDeepZoomDetail(projectEmbedMetrics(enterScale - 0.01, context), null) === 'preview',
-    '差一点点就掉出 interactive → preview（连续判据，不是层数）')
-
-  // 交互档滞回：0.70 ~ 0.60 之间保持上一档，不抖
-  const inHysteresis = projectEmbedMetrics(0.65 * 400 / DEFAULT_EMBED_DIAMETER, context)
-  assert(resolveDeepZoomDetail(inHysteresis, 'interactive') === 'interactive',
-    'coverage 0.65 落在滞回窗口内 → 保持 interactive')
-  assert(resolveDeepZoomDetail(inHysteresis, null) === 'preview',
-    '同样的 0.65 首次进来只给 preview（滞回只对已有档位生效）')
-  assert(resolveDeepZoomDetail(projectEmbedMetrics(0.59 * 400 / DEFAULT_EMBED_DIAMETER, context), 'interactive') === 'preview',
-    '掉出 0.60 下沿 → 降级')
-
-  // preview 门槛：投影直径 ≥ 48vp；滞回下沿 40vp
-  const at48 = projectEmbedMetrics(PREVIEW_MIN_DIAMETER_VP / DEFAULT_EMBED_DIAMETER, context)
-  assert(resolveDeepZoomDetail(at48, null) === 'preview',
-    '投影直径正好 48vp → preview（>= 而不是 >）')
-  const at40 = projectEmbedMetrics(PREVIEW_EXIT_DIAMETER_VP / DEFAULT_EMBED_DIAMETER, context)
-  assert(resolveDeepZoomDetail(at40, null) === 'shell',
-    '48vp 以下首次进来只剩 shell')
-  assert(resolveDeepZoomDetail(at40, 'preview') === 'preview',
-    '已经在 preview 时 40vp ~ 48vp 之间保持 preview（防抖）')
-  assert(resolveDeepZoomDetail(projectEmbedMetrics(0.1, context), 'preview') === 'shell',
-    '掉到 10vp → shell')
-
-  // 投影还没算出来时退回最省的一档，不建任何交互组件
-  assert(resolveDeepZoomDetail({ projectedDiameterVp: NaN, coverage: NaN }, null) === 'shell',
-    '投影还没算出来（NaN）→ shell')
-  assert(resolveDeepZoomDetail({ projectedDiameterVp: NaN, coverage: NaN }, 'interactive') === 'shell',
-    'NaN 时连滞回也不认，不去建 child Scene')
-}
-
-console.log('')
-console.log('37b. 外壳投影只乘 owner 的累计比例，不乘 Embed 自己的 child fit')
-{
-  const context = viewport(400, 800)
-  const atRoot = projectEmbedMetrics(1, context)
-  assert(near(atRoot.projectedDiameterVp, DEFAULT_EMBED_DIAMETER), '根层 Embed 外壳 = 直径 × 根比例')
-  assert(near(atRoot.coverage, DEFAULT_EMBED_DIAMETER / 400),
-    'coverage = 外壳投影 / 视口短边')
-
-  // 模拟"深一层"：父层 local fit 0.4 已折进 ownerEffectiveScale。
-  // 档位判定必须只吃这一个数，绝不能把 child Scene 自己的 fit 再乘一遍，
-  // 否则每深一层外壳就小一截（自我实现的缩小）。
-  const childOfChildFit = 0.35
-  const deepWithoutChildFit = projectEmbedMetrics(0.4, context)
-  const deepWrong = projectEmbedMetrics(0.4 * childOfChildFit, context)
-  assert(near(deepWithoutChildFit.projectedDiameterVp, 80) &&
-    near(deepWrong.projectedDiameterVp, 28),
-    '错误口径会把外壳再乘一次 child fit（80 → 28）')
-  assert(near(deepWithoutChildFit.projectedDiameterVp / deepWrong.projectedDiameterVp, 1 / childOfChildFit),
-    '越深的 Embed 外壳越小完全来自祖先 local fit，不来自 child fit')
-
-  // 三档门槛是可以算出来的，不是"第几层"的常量：
-  // interactive = 短边 × 0.70 / 直径；preview = 48 / 直径。
-  assert(near(INTERACTIVE_ENTER_COVERAGE * 400 / DEFAULT_EMBED_DIAMETER, 1.4) &&
-    near(PREVIEW_MIN_DIAMETER_VP / DEFAULT_EMBED_DIAMETER, 0.24),
-    'interactive / preview 门槛都是"短边比例 → 累计比例"的现算结果')
-  assert(resolveDeepZoomDetail(projectEmbedMetrics(1.39, context), null) === 'preview' &&
-    resolveDeepZoomDetail(projectEmbedMetrics(1.41, context), null) === 'interactive',
-    'interactive 门槛两侧分别是 preview / interactive，同一份公式')
-
-  // 深层要继续交互，只有两条路：祖先 local fit 更松，或者用户把相机放得够大。
-  const depthsInteractive = (cameraScale, localFitPerLevel) => {
-    const depths = []
-    let scale = cameraScale
-    for (let depth = 0; depth < 12; depth++) {
-      if (resolveDeepZoomDetail(projectEmbedMetrics(scale, context), null) !== 'interactive') { break }
-      depths.push(depth)
-      scale *= localFitPerLevel
-    }
-    return depths
-  }
-  assert(depthsInteractive(1, 0.45).every(d => d < 5),
-    '相机 1 时再深的层很快掉出 interactive —— "两层 / 三层"只是某个视口下的观测结果')
-  assert(depthsInteractive(4, 0.45).length > depthsInteractive(1.4, 0.45).length,
-    '相机放大 → 能交互的层数变多，同一个公式没有任何深度常量')
-  assert(depthsInteractive(4, 0.9).length > depthsInteractive(4, 0.45).length,
-    '祖先 local fit 越松 → 越深的层也够大，能交互的层数也变多')
-
-  // 视口尺寸不直接决定外壳尺寸，但直接决定 coverage 与档位：
-  const narrow = projectEmbedMetrics(1, viewport(400, 800))
-  const wide = projectEmbedMetrics(1, viewport(1200, 1800))
-  assert(narrow.projectedDiameterVp === wide.projectedDiameterVp && narrow.coverage > wide.coverage,
-    '视口越大同样的圆 coverage 越小（分母是视口短边）')
-  const narrowFocused = projectEmbedMetrics(3, viewport(400, 800))
-  const wideFocused = projectEmbedMetrics(3, viewport(1200, 1800))
-  assert(shouldPromoteFocus(narrowFocused.coverage) && !shouldPromoteFocus(wideFocused.coverage),
-    `同一颗圆在窄视口 coverage ${narrowFocused.coverage.toFixed(2)} 能拿到焦点、宽视口 ${wideFocused.coverage.toFixed(2)} 拿不到 —— 焦点跟着视口走`)
-  assert(resolveDeepZoomDetail(narrowFocused, null) === 'interactive' &&
-    resolveDeepZoomDetail(wideFocused, null) === 'preview',
-    '宽视口同一颗圆降档，档位纯由屏幕空间决定')
-
-  const badViewport = projectEmbedMetrics(1, viewport(0, 0))
-  assert(badViewport.coverage === 0, '视口还没量出来时 coverage = 0，不返回 NaN')
-  const badScale = projectEmbedMetrics(0, context)
-  assert(near(badScale.projectedDiameterVp, DEFAULT_EMBED_DIAMETER),
-    '比例还没算出来时按 1 处理，不返回 0 尺寸')
-}
-
-console.log('')
-console.log('37c. 焦点链上的 Embed 保底 preview，但形状永远不变')
-{
-  const smallMetrics = { projectedDiameterVp: 30, coverage: 0.075 }
-  assert(resolveDeepZoomDetail(smallMetrics, null) === 'shell',
-    '直径 30vp：普通情况下只剩圆壳')
-  assert(resolveEmbedDetailForScene(smallMetrics, 'root/embed:a', 'root/embed:a', null) === 'preview',
-    '焦点本身保底 preview：用户钻进去的子星图不会退化成一颗空圆')
-  assert(resolveEmbedDetailForScene(smallMetrics, 'root', 'root/embed:a', null) === 'preview',
-    '焦点的祖先同样保底（否则整条链会从根部断掉）')
-  assert(resolveEmbedDetailForScene(smallMetrics, 'root/embed:other', 'root/embed:a', null) === 'shell',
-    '焦点链之外的 Embed 仍按屏幕空间判定')
-  assert(resolveEmbedDetailForScene(smallMetrics, 'root/embed:a/embed:c', 'root/embed:a', null) === 'shell',
-    '焦点之后更深的一层继续按屏幕空间判定（语义缩放不会退化成"从焦点往下全保底"）')
-  // 保底的只是"里面还有东西可看"，不是形状：三档都还是同一颗正圆。
-  assert(near(smallMetrics.projectedDiameterVp, DEFAULT_EMBED_DIAMETER * 0.15),
-    '保底前后外壳投影尺寸一模一样，档位不改几何')
-
-  assert(scenePathDepthOf('root') === 0 &&
-    scenePathDepthOf('root/embed:a') === 1 &&
-    scenePathDepthOf('root/embed:a/embed:b') === 2,
-    '层级按 scenePath 数，不按 sceneDepth（组件链每层会 +2）')
-  assert(parentScenePathOf('root/embed:a/embed:b') === 'root/embed:a' &&
-    parentScenePathOf('root') === 'root',
-    '焦点掉出下沿时退回父层，不跳回根')
-  assert(!isOnFocusChain('root/embed:a', 'root/embed:b'), '不同分支不同链')
-
-  // 焦点链比对的是 candidate Embed 自己的 childScenePath，不是它所属的父 Scene。
-  // 传父 Scene 的话初始 focus='root' 会把根层每一颗 Embed 都判成"在焦点链上"，
-  // 根层档位直接失效；focus='root/embed:a' 时同层兄弟也会被一起撑开。
-  const detailOf = (embedScenePath, focus, metrics = smallMetrics) =>
-    resolveEmbedDetailForScene(metrics, embedScenePath, focus, null)
-  assert(detailOf('root/embed:a', 'root/embed:a') === 'preview' &&
-    detailOf('root/embed:b', 'root/embed:a') === 'shell' &&
-    detailOf('root/embed:c', 'root/embed:a') === 'shell',
-    'focus=root/embed:a：只有 a 被保底，同层兄弟 b / c 继续按投影尺寸正常判定')
-  assert(detailOf('root/embed:a', 'root') === 'shell' &&
-    detailOf('root/embed:b', 'root') === 'shell',
-    'focus=root：root 下的 Embed 不能因为"所属 Scene 就是 root"被全部保底')
-  assert(detailOf('root/embed:a', 'root/embed:a/embed:c') === 'preview' &&
-    detailOf('root/embed:a/embed:c', 'root/embed:a/embed:c') === 'preview' &&
-    detailOf('root/embed:a/embed:d', 'root/embed:a/embed:c') === 'shell',
-    'focus=root/embed:a/embed:c：只保住真正的 root→a→c 路径，同层兄弟 d 不跟着保底')
-
-  const sceneSrc821 = readStarmapSource('ui/StarMapScene.ets')
-  const detailBody821 = sceneSrc821.slice(sceneSrc821.indexOf('private embedDetail('),
-    sceneSrc821.indexOf('private embedDetail(') + 800)
-  assert(detailBody821.includes('this.embedScenePathLabel(embedInstanceId)') &&
-    !detailBody821.includes('this.scenePathLabel('),
-    'embedDetail 传的是这颗 Embed 的 childScenePath，不是 owner Scene 的 scenePath')
-  assert(/private embedScenePathLabel\(embedInstanceId: string\): string \{[\s\S]{0,400}type: 'enterEmbed', instanceId: embedInstanceId/.test(sceneSrc821),
-    'embedScenePathLabel 按 scenePath + enterEmbed 段拼出 childScenePath')
-}
-
-console.log('')
-console.log('37d. 视觉焦点：中心区域优先、再比深度、滞回不抖；只改显示参考根')
-{
-  const big = { scenePath: 'root/embed:big', coverage: 0.95, centerRatioX: 0.05, centerRatioY: 0.5 }
-  const centeredSmall = { scenePath: 'root/embed:mid', coverage: 0.60, centerRatioX: 0.5, centerRatioY: 0.5 }
-  const centeredDeeper = { scenePath: 'root/embed:mid/embed:deep', coverage: 0.58, centerRatioX: 0.52, centerRatioY: 0.48 }
-  const winner = resolveFocusCandidate([big, centeredSmall, centeredDeeper])
-  assert(winner !== null && winner.scenePath === 'root/embed:mid/embed:deep',
-    '屏幕边缘那颗大圆不抢焦点；中心区域里取层级最深的一颗')
-  assert(resolveFocusCandidate([{ scenePath: 'root/embed:a', coverage: 0.9, centerRatioX: 0.02, centerRatioY: 0.02 }]) === null,
-    '全在角落时没有候选 → 焦点保持不变')
-  assert(resolveFocusCandidate([{ scenePath: 'root/embed:a', coverage: 0.9, centerRatioX: 0.5, centerRatioY: 0.5 },
-    { scenePath: 'root/embed:b', coverage: 0.92, centerRatioX: 0.5, centerRatioY: 0.5 }]).scenePath === 'root/embed:b',
-    '同层时按覆盖率从大到小')
-
-  assert(shouldPromoteFocus(FOCUS_ENTER_COVERAGE) && !shouldPromoteFocus(0.69),
-    '进入焦点要过 0.70')
-  const cand = (scenePath, coverage, centerRatioX = 0.5, centerRatioY = 0.5) =>
-    ({ scenePath, coverage, centerRatioX, centerRatioY })
-  assert(shouldDemoteFocus(cand('x', 0.54)) && !shouldDemoteFocus(cand('x', FOCUS_EXIT_COVERAGE)),
-    '退出焦点要掉到 0.55 之下')
-  assert(!shouldDemoteFocus(cand('x', 0.80, 0.5, 0.5)), '够大且还在中央 → 不退出')
-  assert(shouldDemoteFocus(cand('x', 0.80, 1.2, 0.5)),
-    '够大但整颗都被拖出视口（centerRatioX=1.2）→ 也要退出')
-  assert(!shouldDemoteFocus(cand('x', 0.80, 0.25, 0.5)),
-    '圆心 0.25 还在 20%~80% 保持窗口里 → 不退出（位置滞回）')
-
-  // 筛选顺序：先过 70% 进入门槛，再在里面比深度。
-  // 反过来（先选最深再查覆盖率）会让一颗很小的深层候选把合法父候选整批否决。
-  const parentBig = cand('root/embed:a', 0.85, 0.5, 0.5)
-  const childTiny = cand('root/embed:a/embed:b', 0.40, 0.5, 0.5)
-  assert(resolveFocusScenePath('root', [parentBig, childTiny]) === 'root/embed:a',
-    '父候选 0.85 + 深层候选 0.40 → focus 进入父候选（不能被不够大的深层候选挡死）')
-  assert(resolveFocusScenePath('root', [parentBig, cand('root/embed:a/embed:b', 0.75, 0.5, 0.5)]) ===
-    'root/embed:a/embed:b',
-    '父 0.85 + 深层 0.75（都过 70%）→ 焦点才进入更深的那个')
-  assert(resolveFocusScenePath('root', [cand('root/embed:a', 0.85, 0.5, 0.5),
-    cand('root/embed:a/embed:b', 0.40, 0.25, 0.5)]) === 'root/embed:a',
-    '深层候选圆心在 0.25（进入窗口外）本来就不参选，父候选照常进焦点')
-  assert(resolveFocusScenePath('root', [cand('root/embed:a', 0.72, 0.25, 0.5)]) === 'root',
-    '非焦点候选圆心 0.25 没进 30%~70% 进入窗口 → 不能新进入焦点')
-
-  // 拖出视野的焦点必须退出（只看 coverage 会让它永久赖着）
-  assert(resolveFocusScenePath('root/embed:a', [cand('root/embed:a', 0.80, 1.2, 0.5)]) === 'root',
-    '当前 focus coverage=0.80 但 centerRatioX=1.2 → 退回父层')
-  assert(resolveFocusScenePath('root/embed:a', [cand('root/embed:a', 0.80, 0.25, 0.5)]) === 'root/embed:a',
-    '当前 focus coverage=0.80、centerRatioX=0.25 → 保持（还在 exit 区间里）')
-  assert(resolveFocusScenePath('root/embed:a', [cand('root/embed:a', 0.80, 0.5, 0.5)]) === 'root/embed:a',
-    '当前 focus 又大又在中央 → 保持')
-
-  // 滞回窗口：0.55 ~ 0.70 之间不动，捏合停在里面不会一帧一层地抖
-  assert(resolveFocusScenePath('root/embed:a', [
-    { scenePath: 'root/embed:a', coverage: 0.62, centerRatioX: 0.5, centerRatioY: 0.5 }
-  ]) === 'root/embed:a', '0.62 落在滞回窗口内 → 焦点不动')
-  assert(resolveFocusScenePath('root/embed:a', [
-    { scenePath: 'root/embed:a', coverage: 0.40, centerRatioX: 0.5, centerRatioY: 0.5 }
-  ]) === 'root', '0.40 掉出下沿 → 退回父层（不是新建页面）')
-  assert(resolveFocusScenePath('root', [{ scenePath: 'root/embed:a', coverage: 0.40, centerRatioX: 0.5, centerRatioY: 0.5 }]) === 'root',
-    '根层没有父层可退')
-  assert(resolveFocusScenePath('root/embed:a/embed:b', []) === 'root/embed:a',
-    '这轮整棵树都没加载到 → 退回一层，不会一路弹回根')
-
-  // ── 保持区间不能被祖先 / 兄弟顶掉（#820 复核第二轮）──
-  assert(resolveFocusScenePath('root/embed:a/embed:b', [
-    cand('root/embed:a', 0.85, 0.5, 0.5),
-    cand('root/embed:a/embed:b', 0.62, 0.5, 0.5)
-  ]) === 'root/embed:a/embed:b',
-    '覆盖率滞回：b=0.62 在 0.55~0.70 之间 → 祖先 a=0.85 不能把它顶回父层')
-  assert(resolveFocusScenePath('root/embed:a/embed:b', [
-    cand('root/embed:a', 0.90, 0.5, 0.5),
-    cand('root/embed:a/embed:b', 0.80, 0.25, 0.5)
-  ]) === 'root/embed:a/embed:b',
-    '位置滞回：b 圆心 0.25 仍在 20%~80% 保持窗口 → 祖先 a 不能顶掉它')
-  assert(resolveFocusScenePath('root/embed:a/embed:b', [
-    cand('root/embed:a/embed:b', 0.62, 0.5, 0.5),
-    cand('root/embed:a/embed:c', 0.90, 0.5, 0.5)
-  ]) === 'root/embed:a/embed:b',
-    '兄弟 c=0.90 更符合进入条件，也不能在 b 合法保持时抢走焦点')
-  assert(resolveFocusScenePath('root/embed:a', [
-    cand('root/embed:a', 0.80, 0.5, 0.5),
-    cand('root/embed:a/embed:b', 0.75, 0.5, 0.5)
-  ]) === 'root/embed:a/embed:b',
-    '真正更深的后代 b=0.75 满足进入条件 → 允许晋升（继续往里钻）')
-  assert(resolveFocusScenePath('root/embed:a/embed:b', [
-    cand('root/embed:a/embed:b', 0.40, 0.5, 0.5),
-    cand('root/embed:a/embed:c', 0.90, 0.5, 0.5)
-  ]) === 'root/embed:a',
-    '当前焦点真失效（0.40）→ 本轮只退一层到父层，不跨分支瞬移到兄弟 c')
-}
-
-console.log('')
-console.log('37e. 焦点候选只来自已实例化的 Scene，屏幕坐标从显示矩形算')
-{
-  const rootNode = {
-    scenePath: [],
-    starmapId: 'sm1',
-    rects: [
-      { nodeId: 'e1', x: 0, y: 0, width: 200, height: 200, radius: 100 },
-      { nodeId: 'n1', x: 400, y: 400, width: 160, height: 80, radius: 16 }
-    ],
-    embedInstanceIds: new Set(['e1']),
-    edges: [],
-    scale: 1,
-    offsetX: 100,
-    offsetY: 200,
-    getChildEmbeds: () => [{
-      scenePath: [{ type: 'enterEmbed', instanceId: 'e1', nodeId: null }],
-      starmapId: 'sm2',
-      rects: [{ nodeId: 'e2', x: 0, y: 0, width: 100, height: 100, radius: 50 }],
-      embedInstanceIds: new Set(['e2']),
-      edges: [],
-      scale: 0.5,
-      offsetX: 10,
-      offsetY: 20,
-      getChildEmbeds: () => []
-    }]
-  }
-  const probes = collectEmbedFocusProbes(buildRecursiveSceneContext(rootNode), 400, 400)
-  assert(probes.length === 2, '普通节点不当焦点候选，只有 Embed 进候选')
-  const rootProbe = probes.find(p => p.childScenePath === 'root/embed:e1')
-  assert(near(rootProbe.centerRatioX, (100 + 100) / 400) && near(rootProbe.centerRatioY, (200 + 100) / 400),
-    '圆心按画布 × 本 Scene 比例 + 累计偏移 换算到屏幕，再归一化')
-  assert(near(rootProbe.ownerScale, 1), '候选带的是所属 Scene 的累计比例')
-  const childProbe = probes.find(p => p.childScenePath === 'root/embed:e1/embed:e2')
-  assert(childProbe !== undefined && near(childProbe.ownerScale, 0.5),
-    '子 Scene 里的候选带的是子 Scene 的累计比例（相机 × 祖先 local fit）')
-  // 深层圆心必须换算回根 Scene 屏幕坐标：
-  // 子图内 (50,50) → 子局部屏幕 (35,45) → 扣掉父 Embed 矩形原点再乘父 scale → 父画布 (35,45)
-  // → 根局部屏幕 (35×1+100, 45×1+200) = (135,245)。少了父层这段偏移就会漂到 (35,45)。
-  assert(near(childProbe.centerRatioX, 135 / 400) && near(childProbe.centerRatioY, 245 / 400),
-    '深层候选的圆心先 canvasToScreen 再 convertPointToRoot，父 Embed 的平移算进去了')
-  assert(collectEmbedFocusProbes(buildRecursiveSceneContext(rootNode), 0, 400).length === 0,
-    '视口还没量出来时没有候选（焦点保持 root）')
-
-  // 真实递归几何：父 Embed 在根画布明显偏右，子图里的 Embed 靠左。
-  // 只算子层局部偏移的话子 Embed 圆心会落在视口左侧、被误判成"屏幕边缘"，
-  // 70% 的焦点规则就永远选不到它（#820 复核）。
-  const deepRootNode = {
-    scenePath: [],
-    starmapId: 'sm1',
-    rects: [{ nodeId: 'a', x: 500, y: 0, width: 200, height: 200, radius: 100 }],
-    embedInstanceIds: new Set(['a']),
+  // 最深一层放一个真实节点；每一层都包一颗同名 starmapId 的 Embed。
+  // 路径身份只看 Embed 实例，不因为 starmapId 重复而提前判定为循环失败。
+  let current = {
+    scenePath: cloneScenePath(deepestPath),
+    starmapId: 'sm-repeat',
+    rects: [{ nodeId: 'n-deep', x: 0, y: 0, width: 200, height: 200, radius: 0 }],
+    embedInstanceIds: new Set(),
     edges: [],
     scale: 1,
     offsetX: 0,
     offsetY: 0,
-    getChildEmbeds: () => [{
-      scenePath: [{ type: 'enterEmbed', instanceId: 'a', nodeId: null }],
-      starmapId: 'sm2',
-      rects: [{ nodeId: 'b', x: 40, y: 40, width: 100, height: 100, radius: 50 }],
-      embedInstanceIds: new Set(['b']),
-      edges: [],
-      scale: 1,
-      offsetX: 0,
-      offsetY: 0,
-      getChildEmbeds: () => []
-    }]
+    children: new Map()
   }
-  const deepProbes = collectEmbedFocusProbes(buildRecursiveSceneContext(deepRootNode), 1000, 1000)
-  const deepChild = deepProbes.find(p => p.childScenePath === 'root/embed:a/embed:b')
-  // 子图内圆心 (90,90) → 子局部屏幕 (90,90) → childLocalToParentCanvas 换到父画布
-  // = 90/父scale + 父 Embed 矩形原点 (500,0) = (590,90) → 根局部屏幕 (590,90)。
-  // 旧口径只做 × context.scale + context.offset（子层 scale=1、offset=0），
-  // 算出来还是 (90,90)，父层那 500 整段丢掉。
-  assert(deepChild !== undefined && near(deepChild.centerRatioX, 590 / 1000) &&
-    near(deepChild.centerRatioY, 90 / 1000),
-    '父 Embed 在根画布 x=500、子图内圆心 (90,90) 时，子 Embed 的根圆心是 (590,90)')
-  const withoutParentOffset = (40 + 100 / 2) / 1000
-  assert(!near(deepChild.centerRatioX, withoutParentOffset),
-    `回归：不换算父层平移会算成 ${withoutParentOffset}，父层那 500 整个丢掉`)
-
-  // 旧口径会误选：父 Embed 在根画布 (400,800)、子 Embed 在子图内圆心 (400,400) 时，
-  // 旧口径给 (0.4,0.4) 落在中心区域内 → 有资格抢焦点；
-  // 换算父层后是 (800,1200)/1000 = (0.8,1.2)，正确地被中心区域规则排除。
-  const misleadingProbes = collectEmbedFocusProbes(buildRecursiveSceneContext({
-    ...deepRootNode,
-    rects: [{ nodeId: 'a', x: 400, y: 800, width: 200, height: 200, radius: 100 }],
-    getChildEmbeds: () => [{
-      scenePath: [{ type: 'enterEmbed', instanceId: 'a', nodeId: null }],
-      starmapId: 'sm2',
-      rects: [{ nodeId: 'b', x: 350, y: 350, width: 100, height: 100, radius: 50 }],
-      embedInstanceIds: new Set(['b']),
+  for (let i = DEPTH - 1; i >= 0; i--) {
+    const instanceId = `emb-${i}`
+    current = {
+      scenePath: cloneScenePath(deepestPath.slice(0, i)),
+      starmapId: 'sm-repeat',
+      rects: [{ nodeId: instanceId, x: 0, y: 0, width: 200, height: 200, radius: 100 }],
+      embedInstanceIds: new Set([instanceId]),
       edges: [],
       scale: 1,
       offsetX: 0,
       offsetY: 0,
-      getChildEmbeds: () => []
-    }]
-  }), 1000, 1000)
-  const misleading = misleadingProbes.find(p => p.childScenePath === 'root/embed:a/embed:b')
-  assert(near(misleading.centerRatioX, 0.8) && near(misleading.centerRatioY, 1.2),
-    '父 Embed 在 (400,800) 时子 Embed 的根圆心是 (800,1200) → 比例 (0.8,1.2)')
-  assert(!inCenterRegion({ centerRatioX: misleading.centerRatioX, centerRatioY: misleading.centerRatioY }),
-    '旧口径的 (0.4,0.4) 会被当成"在视口中央"，换算父层后正确排除（焦点不会选到视口外的圆）')
+      children: new Map([[instanceId, current]])
+    }
+  }
 
-  // 正例：父 Embed 挪到子 Embed 真正落在视口中心的位置，它就该进中心区域
-  const centeredProbes = collectEmbedFocusProbes(buildRecursiveSceneContext({
-    ...deepRootNode,
-    rects: [{ nodeId: 'a', x: 100, y: 100, width: 200, height: 200, radius: 100 }],
-    getChildEmbeds: () => [{
-      scenePath: [{ type: 'enterEmbed', instanceId: 'a', nodeId: null }],
-      starmapId: 'sm2',
-      rects: [{ nodeId: 'b', x: 350, y: 350, width: 100, height: 100, radius: 50 }],
-      embedInstanceIds: new Set(['b']),
-      edges: [],
-      scale: 1,
-      offsetX: 0,
-      offsetY: 0,
-      getChildEmbeds: () => []
-    }]
-  }), 1000, 1000)
-  const centered = centeredProbes.find(p => p.childScenePath === 'root/embed:a/embed:b')
-  assert(near(centered.centerRatioX, 0.5) && near(centered.centerRatioY, 0.5),
-    '父 Embed 在 (100,100) 时子 Embed 的根圆心是 (500,500) → 比例 (0.5,0.5)')
-  assert(inCenterRegion({ centerRatioX: centered.centerRatioX, centerRatioY: centered.centerRatioY }),
-    '圆心落在 1000×1000 视口中心区域里 → 有资格被选为焦点')
-
-  const geometrySrc820 = readStarmapSource('platform/StarMapGeometry.ets')
-  const probesSrc820 = geometrySrc820.slice(geometrySrc820.indexOf('function collectEmbedFocusProbesInScene'))
-  assert(probesSrc820.includes('canvasToScreen(') && probesSrc820.includes('convertPointToRoot('),
-    '焦点候选的圆心先 canvasToScreen 再 convertPointToRoot（复用递归坐标工具，不另写一套）')
-  assert(/function collectEmbedFocusProbesInScene\(\s*root: RecursiveSceneContext,\s*context: RecursiveSceneContext,/.test(
-    geometrySrc820.slice(geometrySrc820.indexOf('function collectEmbedFocusProbesInScene'))),
-    '递归下钻时透传同一份 root，深层 Embed 才知道自己在根画布的哪')
-  assert(probesSrc820.includes('centerRatioX: rootScreen.x / viewportWidthVp'),
-    '比例是根 Scene 屏幕坐标除视口宽高，不是子层局部坐标')
+  const found = findSceneContext(current, deepestPath)
+  assert(found !== null && found.starmapId === 'sm-repeat' && found.rects[0].nodeId === 'n-deep',
+    'findSceneContext 按 80 段完整路径下钻，不因 starmapId 重复而截断')
+  const hit = resolveRecursiveHit(current, 100, 100)
+  assert(hit.target !== null && hit.target.objectKind === 'node' && hit.target.objectId === 'n-deep',
+    '递归命中穿过 80 层重复 starmapId 后命中真实节点')
+  assert(hit.embedPath.length === DEPTH && hit.ownerScenePath.length === DEPTH,
+    '命中归属保留完整路径，不把重复 starmapId 折叠成一层')
 }
 
 console.log('')
-console.log('37f. Embed 永远是那颗正圆：命中 / 边端点 / 显示几何用同一份边界')
+console.log('')
+console.log('38. #1009：无固定缩放阈值，无 LOD/预览/外壳档位，入口始终是真实内容')
 {
-  // 不再有任何"显示矩形读形状"的入口：Embed 的边界只有一个来源。
-  const circleRect = { nodeId: 'e1', x: 0, y: 0, width: DEFAULT_EMBED_DIAMETER, height: DEFAULT_EMBED_DIAMETER, radius: DEFAULT_EMBED_DIAMETER / 2 }
-  assert(circleRect.width === circleRect.height && circleRect.radius * 2 === circleRect.width,
-    'Embed 的 rect 自证是圆（宽 = 高、半径 = 宽 / 2），不需要额外的 isCircle 标记')
-
-  const ids = new Set(['e1'])
-  const path = [{ type: 'enterEmbed', instanceId: 'e1', nodeId: null }]
-  const inside = hitTestWithScene([circleRect], 100, 100, path, ids, 1)
-  assert(inside !== null && inside.objectKind === 'embedInnerContent' && inside.hitRegion === 'innerContent',
-    '圆内仍然是 innerContent（递归下探照旧）')
-  const onRing = hitTestWithScene([circleRect], 2, 100, path, ids, 1)
-  assert(onRing !== null && onRing.objectKind === 'embedBorder' && onRing.hitRegion === 'border',
-    '圆环上是 border（选中这个子星图，不下探 child Scene）')
-  // 圆外四个方角不算命中：矩形布局也拦不住
-  assert(hitTestWithScene([circleRect], 2, 2, path, ids, 1) === null,
-    '圆外方角不算命中（Embed 从来不按矩形命中）')
-  assert(hitTestWithScene([circleRect], 5, 195, path, ids, 1) === null,
-    '矩形框内、圆外的一点不算命中（边界只有圆，没有矩形热区）')
-
-  // 缩放不参与命中：命中始终在画布坐标里按固定尺寸判定
-  assert(hitTestWithScene([circleRect], 2, 2, path, ids, 4) === null,
-    'sceneScale 放大只让标题/边框壳变薄，不把圆变成方形热区')
+  const viewportSource = readStarmapSource('platform/StarMapViewport.ets')
+  assert(!/export const (CAMERA_SCALE_MIN|CAMERA_SCALE_MAX|MIN_FIT_SCALE|MAX_FIT_SCALE)\b/.test(viewportSource),
+    '视口模块不再导出 0.02×/4×/1e-4×/1e5× 这类产品缩放阈值')
+  assert(viewportSource.includes('export const DEFAULT_FIT_SCALE: number = 1') &&
+    viewportSource.includes('if (!isFinite(raw) || raw <= 0)') &&
+    viewportSource.includes('return DEFAULT_FIT_SCALE'),
+  '没有有效内容时才用稳定默认适配比例，有效内容返回真实比例')
+  assert(viewportSource.includes('if (scale === Infinity)') &&
+    viewportSource.includes('return Number.MAX_VALUE'),
+  '相机比例只在 Number 上溢时停在数值边界，不是可见的产品上限')
+  assert(viewportSource.includes('if (nextScale === 0)') && viewportSource.includes('Number.MIN_VALUE'),
+    '连续缩小到下溢时保留最小正数，不把用户缩放归零')
 
   const geometrySource = readStarmapSource('platform/StarMapGeometry.ets')
-  assert(!geometrySource.includes('isCircularDisplayRect'),
-    'Geometry 里没有"读显示矩形形状"的辅助函数了（Embed 只有圆）')
-  const edgeEndpointBody = geometrySource.slice(geometrySource.indexOf('export function edgeEndpointBoundaryPoint'))
-  assert(edgeEndpointBody.slice(0, 900).includes('if (isEmbed)') &&
-    edgeEndpointBody.slice(0, 900).includes('lineCircleIntersection('),
-    '连线端点直接判 isEmbed → 圆周；端点永远贴在用户看得见的那圈圆上')
-  const hitBody = geometrySource.slice(geometrySource.indexOf('export function hitTestWithScene') === -1
-    ? geometrySource.indexOf('function hitTestWithScene') : geometrySource.indexOf('export function hitTestWithScene'))
-  assert(!hitBody.slice(0, 1400).includes('isCircularDisplayRect'),
-    '命中路径里没有任何按显示矩形切形状的分支')
+  assert(!geometrySource.includes('MAX_RECURSE_SCENE_DEPTH'),
+    '命中模块删除了 32 层递归常量')
+  assert(geometrySource.includes('while (true)'),
+    'resolveRecursiveHit 沿真实子 Scene 循环，直到命中或没有子图')
+  assert(!geometrySource.includes('return findSceneContext('),
+    'findSceneContext 改成迭代，不再按路径递归切片')
+  const findStart = geometrySource.indexOf('export function findSceneContext')
+  const findEnd = geometrySource.indexOf('export function resolveRecursiveHit', findStart)
+  const findBody = geometrySource.slice(findStart, findEnd)
+  assert(findBody.includes('for (const seg of scenePath)') && findBody.includes('current = child'),
+    'findSceneContext 按每一段 Embed 实例逐层下钻')
 
-  const layoutSource = readStarmapSource('platform/StarMapLayout.ets')
-  const embedLayoutBody = layoutSource.slice(layoutSource.indexOf('export function buildEmbedLayoutNodes'),
-    layoutSource.indexOf('export function buildEmbedLayoutNodes') + 1200)
-  assert(embedLayoutBody.includes('width: DEFAULT_EMBED_DIAMETER') &&
-    embedLayoutBody.includes('height: DEFAULT_EMBED_DIAMETER') &&
-    embedLayoutBody.includes('radius: DEFAULT_EMBED_DIAMETER / 2') &&
-    embedLayoutBody.includes('x: embed.position.x') && embedLayoutBody.includes('y: embed.position.y'),
-    'buildEmbedLayoutNodes 的位置就是 authored position，尺寸恒为默认圆（没有 displayBounds 入参）')
-  assert(!embedLayoutBody.includes('displayBounds') &&
-    !layoutSource.includes('EmbedDisplayBounds') && !layoutSource.includes('expandedEmbedDisplayBounds'),
-    'Layout 里不再有显示边界这套东西（也不再有 isCircle 分支）')
-  assert(embedLayoutBody.includes('collapsed: false'),
-    'collapsed 标记恒为 false —— Embed 不再存在"折叠成节点卡"这档')
-}
+  const sceneSource = readStarmapSource('ui/StarMapScene.ets')
+  assert(!sceneSource.includes('StarMapEmbedPreview') &&
+    !sceneSource.includes('resolveEmbedDetailForScene') &&
+    !sceneSource.includes('DeepZoomDetail') &&
+    !sceneSource.includes('embedDetail('),
+  'Scene 不再引用预览画布/LOD 档位/细节判定')
+  assert(!sceneSource.includes('StarMapEmbedScene') &&
+    !sceneSource.includes('ancestorStarmapIds') &&
+    !sceneSource.includes('isCycleBoundary'),
+  'Scene 不再递归挂载子 Scene，也不按 ancestorStarmapIds 截断路径')
+  assert(sceneSource.includes("route.push({ type: 'enterEmbed', instanceId: embed.instanceId, nodeId: null })") &&
+    sceneSource.includes('this.onEnterEmbed(route)'),
+  '点击入口只追加一条 enterEmbed 路径段，把完整 route 交给页面')
+  assert(sceneSource.includes("@Prop @Watch('onRouteIdentityChange') scenePath") &&
+    sceneSource.includes('unregisterSceneHandle()') &&
+    sceneSource.includes('registerSceneHandle()'),
+  '活动画布切换时按旧路径注销、按新路径注册，不保留上一层的 scenePath')
+  assert(sceneSource.includes('export struct StarMapScene') &&
+    !/if \(detail === '(shell|preview|interactive)'\)/.test(sceneSource),
+  '渲染分支里没有 shell/preview/interactive 档位')
 
-console.log('')
-console.log('37g. 档位只换内部渲染器：外壳同一颗圆，不重建布局、不写回 Core 位置（#821）')
-{
-  const sceneSrc = readStarmapSource('ui/StarMapScene.ets')
-  const embedItemIdx = sceneSrc.indexOf('@Builder\n  StarMapEmbedItem')
-  const embedItemEnd = sceneSrc.indexOf('private buildEmbedCircleResponseRegions')
-  const embedItemBody = sceneSrc.slice(embedItemIdx, embedItemEnd)
-  assert(embedItemIdx > -1 && embedItemEnd > embedItemIdx,
-    'StarMapEmbedItem 是唯一的 Embed 渲染入口')
-  assert(!sceneSrc.includes('StarMapCollapsedEmbed') && !sceneSrc.includes('StarMapExpandedEmbed'),
-    '折叠摘要卡 / 展开态两个 Builder 都没了：Embed 只有一个形状')
-  assert(!sceneSrc.includes('starmap_sub_starmap'),
-    '不再有"子星图摘要卡"那张矩形节点卡')
-
-  assert(embedItemBody.includes("=== 'interactive'") && embedItemBody.includes("=== 'preview'"),
-    '按 detail 档位切换内部渲染器：interactive / preview 两档各挂各的')
-  assert(embedItemBody.includes('StarMapEmbedScene('), 'interactive 档才挂 child Scene')
-  assert(embedItemBody.includes('StarMapEmbedPreview('), 'preview 档挂轻量 Canvas 缩略图')
-  const interactiveIdx = embedItemBody.indexOf('StarMapEmbedScene(')
-  const previewIdx = embedItemBody.indexOf('StarMapEmbedPreview(')
-  assert(interactiveIdx > -1 && previewIdx > interactiveIdx,
-    'interactive 排在 preview 前面：默认路径先判交互档')
-
-  // preview 必须完全不参与触摸竞争：根 Scene 的两指 Pinch 拿回完整事件
-  const previewBranch = embedItemBody.slice(interactiveIdx, embedItemBody.indexOf('// 2. title 视觉层'))
-  const previewTail = previewBranch.slice(previewIdx)
-  assert(previewTail.includes('.hitTestBehavior(HitTestMode.None)'),
-    'preview 整块 HitTestMode.None，不抢也不挡根 Scene 的 Pinch')
-  assert(/StarMapEmbedPreview\(\{[\s\S]{0,400}bridge: this\.bridge/.test(embedItemBody),
-    'preview 拿得到 bridge：否则 aboutToAppear 直接 return，preview 永远是空圆')
-
-  // 外壳几何只有一个来源，任何档位都一样
-  assert(embedItemBody.includes('.width(DEFAULT_EMBED_DIAMETER)') &&
-    embedItemBody.includes('.height(DEFAULT_EMBED_DIAMETER)') &&
-    embedItemBody.includes('.borderRadius(DEFAULT_EMBED_DIAMETER / 2)'),
-    '外壳尺寸恒为 DEFAULT_EMBED_DIAMETER 的正圆（不按档位换形状）')
-  assert(embedItemBody.includes('.scale({ x: this.boxScale(), y: this.boxScale() })'),
-    '缩放走 .scale() 显示变换，不把 boxScale 乘进 width/height')
-  assert(!/\.width\(\s*\d+\s*\*\s*this\.viewportScaleValue\(\)\s*\)/.test(sceneSrc) &&
-    !/\.height\(\s*\d+\s*\*\s*this\.viewportScaleValue\(\)\s*\)/.test(sceneSrc),
-    'Scene 里不再有 "160 * viewportScaleValue()" 这种让布局跟着相机长大的写法')
-  assert(!/fontSize\(\d+\s*\*\s*this\.viewportScaleValue\(\)\)/.test(sceneSrc),
-    '字号也不再乘 viewportScaleValue（等比缩放交给 .scale）')
-
-  assert(sceneSrc.includes('focusScenePath: string'), '档位逻辑层级按 scenePath 判定')
-  assert(/@Prop @Watch\('onFocusScenePathChange'\) focusScenePath: string = 'root'/.test(sceneSrc),
-    'focusScenePath 是 @Prop：焦点变化要能传到每一层 Scene（不是冻结在创建时）')
-  assert(!sceneSrc.includes('embedDetailByDepth'),
-    '档位判定不按 sceneDepth（组件链每层 +2，会算错层级）')
-  assert(!sceneSrc.includes('refreshEmbedLodLayout'),
-    '没有"切档位重建 Embed 边界"这条路径')
-  const detailBody = sceneSrc.slice(sceneSrc.indexOf('private embedDetail('),
-    sceneSrc.indexOf('private embedDetail(') + 800)
-  assert(detailBody.includes('projectEmbedMetrics(') && detailBody.includes('resolveEmbedDetailForScene('),
-    '档位来自 StarMapVisualLod 的纯函数（UI 层不自己写阈值）')
-  assert(!/buildEmbedLayoutNodes\(|recomputeGeometry\(|onMoveEmbed|moveEmbed\(/m.test(detailBody),
-    '算档位不重建布局、不写回 Core authored position（用户缩放不改数据）')
-  assert(sceneSrc.includes('rootViewportWidth: number') && sceneSrc.includes('rootViewportHeight: number'),
-    '根视口宽高由 StarMapScreen 透传进来，子 Scene 不许拿自己那个圆当视口')
-
-  const screenSrc = readStarmapSource('ui/StarMapScreen.ets')
-  assert(screenSrc.includes('@State focusScenePath: string = \'root\''),
-    '视觉焦点住在 StarMapScreen（只改显示参考根，不落盘）')
-  assert(screenSrc.includes('rootViewportWidth: this.canvasWidth') &&
-    screenSrc.includes('rootViewportHeight: this.canvasHeight'),
-    'onAreaChange 拿到的真实内容区就是根视口')
-  assert(screenSrc.includes('focusScenePath: this.focusScenePath'),
-    '同一份 focusScenePath 透传到每一层 Scene')
-  assert(screenSrc.includes('recomputeVisualFocus()') &&
-    screenSrc.includes('resolveFocusScenePath('),
-    '焦点由 StarMapVisualLod 的纯函数判定，UI 层不自己写阈值')
-  assert(!/build\(\)[\s\S]{0,400}focusScenePath\s*=[^=]/.test(screenSrc.slice(screenSrc.indexOf('build()'))),
-    '焦点状态不在 build() 里写（不能靠重建副作用驱动显示态）')
-
-  const embedSrc = readStarmapSource('ui/StarMapEmbedScene.ets')
-  assert(embedSrc.includes('@Prop focusScenePath') &&
-    embedSrc.includes('focusScenePath: this.focusScenePath'),
-    'StarMapEmbedScene 原样透传 focusScenePath')
-  assert(embedSrc.includes('rootViewportWidth') && embedSrc.includes('rootViewportHeight'),
-    'StarMapEmbedScene 原样透传根视口宽高')
-  assert(/@Prop cameraScale/.test(embedSrc) && embedSrc.includes('cameraScale: this.cameraScale'),
-    '相机仍然是 @Prop 透传链，#818 的状态链没被 Deep Zoom 改坏')
-  assert(/@Prop cameraOffsetX/.test(embedSrc) && /@Prop cameraOffsetY/.test(embedSrc),
-    '相机偏移同样保持 @Prop')
-
-  // preview 是独立的轻量渲染器：固定尺寸 Canvas，不注册 Scene、不挂手势
-  const previewSrc = readStarmapSource('ui/StarMapEmbedPreview.ets')
-  assert(previewSrc.includes('bridge: IWriterCoreBridge | null = null'),
-    'preview 声明了 bridge 字段')
-  assert(/async aboutToAppear\(\)[\s\S]{0,200}if \(!this\.bridge \|\| !this\.embed\.targetStarmapId\)/.test(previewSrc),
-    'preview 靠 bridge 读子星图：没有 bridge 就直接不画')
-  // Canvas onReady 是"画布可绘制"，不是数据变化后的重绘回调；
-  // 异步 graph 后到时必须有人再画一次，否则圆里永远是空的。
-  assert(previewSrc.includes('private refreshPreview(): void {') &&
-    /private refreshPreview\(\): void \{\s*this\.recomputePreviewGeometry\(\)\s*if \(this\.canvasReady\) \{\s*this\.drawPreview\(\)/.test(previewSrc),
-    '几何刷新与重绘收口到 refreshPreview 一个出口（graph 先到 / Canvas 先到两种时序都补得上）')
-  assert(previewSrc.includes('this.childGraph = result.data') &&
-    /this\.childGraph = result\.data\s*this\.refreshPreview\(\)/.test(previewSrc),
-    '异步加载子 graph 成功后走 refreshPreview，而不是只算几何不重绘')
-  assert(/onReady\(\(\) => \{\s*this\.canvasReady = true\s*this\.refreshPreview\(\)/.test(previewSrc),
-    'onReady 也走 refreshPreview：Canvas 先 ready 时先画一张空图，graph 到了会补画')
-  assert(previewSrc.includes('PREVIEW_CANVAS_SIZE') &&
-    previewSrc.includes('.width(PREVIEW_CANVAS_SIZE)') && previewSrc.includes('.height(PREVIEW_CANVAS_SIZE)'),
-    'preview 用固定尺寸 Canvas（不按父层比例分配缓冲区）')
-  assert(previewSrc.includes('.hitTestBehavior(HitTestMode.None)'),
-    'preview 不参与触摸竞争')
-  assert(!/sceneRegistry|selectionState|StarMapScene\(/.test(previewSrc),
-    'preview 不注册 Scene、不带选中态、不递归实例化子 Scene')
-  assert(previewSrc.includes('computeContentBounds(') && previewSrc.includes('computeFittedViewport('),
-    'preview 复用同一份 local fit 口径（不是另写一套缩放）')
-  assert(!/\.gesture\(|Gesture\(|onTouch|onClick/.test(previewSrc),
-    'preview 不挂任何手势组件（里面没有节点级交互）')
+  const screenSource = readStarmapSource('ui/StarMapScreen.ets')
+  assert(screenSource.includes('@State activePath: StarMapPathSegment[] = []') &&
+    screenSource.includes('resolveStarMapPath(this.rootStarmapId, path)') &&
+    screenSource.includes('this.activePath.slice(0, -1)') &&
+    screenSource.includes('scenePath: this.activePath'),
+  '页面持有完整 route；进入追加、退出只移除最后一段，并把 route 传给唯一活动画布')
+  assert(!screenSource.includes('ancestorStarmapIds'),
+    '页面不再靠祖先 starmapId 集合阻止循环引用')
 
   const lodSource = readStarmapSource('platform/StarMapVisualLod.ets')
-  assert(!/from '\.\/StarMapGeometry'/.test(lodSource),
-    'StarMapVisualLod 不反向依赖 StarMapGeometry（会和 Viewport→Geometry 绕成初始化环）')
-  assert(lodSource.includes('export type DeepZoomDetail = \'interactive\' | \'preview\' | \'shell\''),
-    '三档 detail 是显式类型，不是隐含的 if/else 层级')
-  for (const fn of ['projectEmbedMetrics', 'resolveDeepZoomDetail', 'resolveEmbedDetailForScene',
-    'resolveFocusCandidate', 'shouldPromoteFocus', 'shouldDemoteFocus']) {
-    assert(lodSource.includes(`export function ${fn}`), `${fn} 是 StarMapVisualLod 里的纯函数`)
-  }
-  for (const gone of ['EmbedLodMode', 'embedDisplayBoundsForLod', 'viewportDetailScale',
-    'expandedEmbedSizeVp', 'resolveEmbedLod', 'outerSizeVp', 'innerUsableSizeVp']) {
-    assert(!lodSource.includes(gone), `StarMapVisualLod 里不再有 ${gone}（Deep Zoom 不改几何）`)
-  }
-  assert(!/from '\.\/StarMapViewport'/.test(lodSource),
-    '稳定圆壳之后 StarMapVisualLod 不再依赖 StarMapViewport')
-  assert(!/deviceType|isTablet|isPhone|orientation|landscape/.test(lodSource),
-    '档位里没有设备型号 / 横竖屏分支，层数只能是视口算出来的结果')
-  assert(lodSource.includes('export const INTERACTIVE_ENTER_COVERAGE: number = 0.70') &&
-    lodSource.includes('export const INTERACTIVE_EXIT_COVERAGE: number = 0.60') &&
-    lodSource.includes('export const PREVIEW_MIN_DIAMETER_VP: number = 48') &&
-    lodSource.includes('export const PREVIEW_EXIT_DIAMETER_VP: number = 40'),
-    '两档门槛都带滞回：interactive 0.70/0.60，preview 48/40vp')
-
-  // 焦点状态机：先过滤 70% 再比深度；退出同时看覆盖率和位置
-  assert(lodSource.includes('FOCUS_CENTER_ENTER_RATIO: number = 0.30') &&
-    lodSource.includes('FOCUS_CENTER_EXIT_RATIO: number = 0.20'),
-    '位置滞回分进入窗口(30%)和保持窗口(20%)两个常量')
-  const focusPathBody = lodSource.slice(lodSource.indexOf('export function resolveFocusScenePath'))
-  assert(focusPathBody.indexOf('shouldPromoteFocus(candidate.coverage)') <
-    focusPathBody.indexOf('resolveFocusCandidate(promotable)'),
-    '先按覆盖率过滤出 promotable，再交给 resolveFocusCandidate 比深度')
-  assert(focusPathBody.includes('promotableCandidates(candidates)'),
-    'resolveFocusScenePath 走共享的 promotable 过滤，不自己内联一遍覆盖率门槛')
-  assert(!/resolveFocusCandidate\(candidates\)[\s\S]{0,200}shouldPromoteFocus\(winner\.coverage\)/.test(focusPathBody),
-    '不再保留"先选最深的、再查它够不够 70% 然后否决整批候选"这条路径')
-  assert(focusPathBody.includes('shouldDemoteFocus(current)') &&
-    focusPathBody.includes('findFocusCandidate(currentFocusScenePath, candidates)'),
-    '退出判定拿的是当前焦点的完整候选（含圆心位置），不是一个孤立的 coverage 数字')
-  assert(lodSource.includes('export function shouldDemoteFocus(candidate: FocusCandidate): boolean') &&
-    lodSource.includes('!inCenterExitRegion(candidate)'),
-    'shouldDemoteFocus 同时看 coverage 下沿和位置保持窗口')
-  assert(/export function shouldDemoteFocus\(coverage: number\)/.test(lodSource) === false,
-    'shouldDemoteFocus 不再只接一个 coverage 数字（那样看不到位置）')
-  assert(lodSource.includes('!Number.isFinite(candidate.coverage)'),
-    '非有限 coverage 仍按退出处理（不返回 NaN 焦点）')
-
-  // 焦点转移顺序：先看后代能不能晋升，再判当前是否仍在保持区间
-  const spIdx = focusPathBody.indexOf("startsWith(currentFocusScenePath + '/')")
-  const holdIdx = focusPathBody.indexOf('!shouldDemoteFocus(current)')
-  const parentIdx = focusPathBody.lastIndexOf('parentScenePathOf(currentFocusScenePath)')
-  assert(spIdx > -1 && holdIdx > spIdx && parentIdx > holdIdx,
-    'resolveFocusScenePath 的顺序是：后代晋升 → 当前保持 → 退回父层')
-  assert(focusPathBody.includes("if (currentFocusScenePath === 'root')") &&
-    focusPathBody.indexOf("if (currentFocusScenePath === 'root')") < spIdx,
-    '根层没有需要保持的旧焦点，先正常从全体 promotable 里选')
-  assert(focusPathBody.includes('resolveFocusCandidate(descendants)') &&
-    !/resolveFocusCandidate\(promotable\)[\s\S]{0,400}shouldDemoteFocus\(current\)/.test(focusPathBody),
-    '非根层只在"当前焦点的严格后代"里晋升，不从全树重选 winner')
-  assert(lodSource.includes('function promotableCandidates(candidates: FocusCandidate[]): FocusCandidate[]'),
-    'promotable 过滤抽成共用纯函数，根层与后代晋升走同一套进入门槛')
-
-  const viewportSource = readStarmapSource('platform/StarMapViewport.ets')
-  assert(!viewportSource.includes('projectLocalLengthToScreen'),
-    '屏幕长度投影函数已删除：显示变换走 .scale()，不需要"把本地长度投影成屏幕长度"')
-  assert(viewportSource.includes('export const CAMERA_SCALE_MIN: number = 1e-4') &&
-    viewportSource.includes('export const CAMERA_SCALE_MAX: number = 1e5'),
-    '相机范围放宽到数值安全边界（用户不再撞到 3× 天花板）')
-  assert(!/deviceType|isTablet|isPhone|orientation|landscape/.test(viewportSource),
-    'Viewport 里同样没有设备 / 横竖屏分支')
-}
-
-console.log('')
-console.log('38. Deep Zoom 档位随视口重算，但外壳几何恒定（#821）')
-
-function detailOf(embedScenePath, ownerEffectiveScale, context, previousDetail = null) {
-  return resolveEmbedDetailForScene(
-    projectEmbedMetrics(ownerEffectiveScale, context),
-    embedScenePath, context.focusScenePath, previousDetail
-  )
-}
-
-console.log('38a. 档位判据只有 coverage 和投影直径两条连续量，没有设备断点表')
-{
-  assert(INTERACTIVE_ENTER_COVERAGE > 0 && INTERACTIVE_EXIT_COVERAGE < INTERACTIVE_ENTER_COVERAGE &&
-    INTERACTIVE_EXIT_COVERAGE > 0 && PREVIEW_MIN_DIAMETER_VP > PREVIEW_EXIT_DIAMETER_VP &&
-    PREVIEW_EXIT_DIAMETER_VP > 0,
-    '两档门槛都是"进入值 > 保持值 > 0"的滞回对，不是机型表')
-  const ctx = (w, h) => ({ viewportWidthVp: w, viewportHeightVp: h, focusScenePath: 'root' })
-  const detailAtShortSide = (shortSide, scale) =>
-    detailOf('root/embed:a', scale, ctx(shortSide, shortSide))
-  // coverage = 200 × scale / 短边，是纯连续量
-  assert(near(projectEmbedMetrics(1, ctx(360, 800)).coverage, 200 / 360) &&
-    near(projectEmbedMetrics(1, ctx(1200, 2400)).coverage, 200 / 1200),
-    'coverage 恒等于 圆投影 / 视口短边（同一个公式）')
-  assert(detailAtShortSide(360, 1) === 'preview' && detailAtShortSide(360, 2) === 'interactive',
-    '360×640 小窗：相机 1 → preview，相机 2（coverage 1.11）→ interactive')
-  assert(detailAtShortSide(200, 1) === 'interactive',
-    '短边 200 时 200vp 的圆正好占满短边 → interactive（不是"按层数限深"）')
-  assert(detailAtShortSide(2000, 1) === 'preview',
-    '短边 2000 时 200vp 的圆只给 preview：投影直径还是 200vp，缩略图看得清，组件装不下')
-  assert(detailAtShortSide(2000, 0.1) === 'shell',
-    '同一条 2000vp 圆缩到 0.1 → 直径 20vp，只剩圆壳（连续判据，不是按层数保底）')
-  const order = { shell: 0, preview: 1, interactive: 2 }
-  let prev = Infinity
-  let monotone = true
-  for (let shortSide = 200; shortSide <= 1600; shortSide += 20) {
-    const current = order[detailAtShortSide(shortSide, 2.5)]
-    if (current > prev) { monotone = false }
-    prev = current
-  }
-  assert(monotone, '视口越大档位只降不升（连续，没有台阶）')
-  const unmeasured = projectEmbedMetrics(1, ctx(0, 0))
-  assert(unmeasured.coverage === 0 && !Number.isNaN(unmeasured.coverage) &&
-    detailOf('root/embed:a', 1, ctx(0, 0)) === 'preview',
-    '视口还没量出来时 coverage 记 0（不是 NaN），档位只由投影直径兜底')
-}
-
-console.log('38b. 真实递归链路：child local fit → 下一层累计比例 → 下一层档位')
-{
-  // 不再手填 ownerEffectiveScale：按真实链路一级一级算下去。
-  // 每层 child Scene 的局部盒子恒为 DEFAULT_EMBED_DIAMETER，
-  // 内容随层数变宽（越深的子星图内容越多），所以累计 fit 会自然把更深层压下去。
-  const contentBoundsAtDepth = (depth) => ({ minX: 0, minY: 0, maxX: 240 * depth, maxY: 120 * depth, width: 240 * depth, height: 120 * depth })
-  const walkChain = (context, depthCount) => {
-    const details = []
-    const fits = []
-    let ownerEffectiveScale = 1 // 根 Scene：camera = 1，没有祖先 local fit
-    for (let depth = 1; depth <= depthCount; depth++) {
-      const embedScenePath = depth === 1
-        ? 'root/embed:a'
-        : 'root/embed:a' + '/embed:b'.repeat(depth - 1)
-      const detail = detailOf(embedScenePath, ownerEffectiveScale, context)
-      details.push(detail)
-      if (detail === 'shell') { break }
-      // child Scene：局部盒子恒为默认直径，可用区按圆内接正方形算
-      const childBox = DEFAULT_EMBED_DIAMETER
-      const childAvailable = computeEmbedInnerContentSafeSide(childBox, EMBED_FIT_PADDING_VP)
-      const fitted = computeFittedViewport(contentBoundsAtDepth(depth), childAvailable, childAvailable, 0, childBox, childBox)
-      fits.push(fitted.zoomScale)
-      ownerEffectiveScale = ownerEffectiveScale * fitted.zoomScale
-    }
-    return { details, fits }
-  }
-
-  const small = { viewportWidthVp: 360, viewportHeightVp: 640, focusScenePath: 'root' }
-  const large = { viewportWidthVp: 1000, viewportHeightVp: 900, focusScenePath: 'root' }
-  const smallChain = walkChain(small, 6)
-  const largeChain = walkChain(large, 6)
-  console.log(`     小窗链: ${smallChain.details.join(' → ')} | 大窗链: ${largeChain.details.join(' → ')}`)
-
-  // 相机 1 时第一层都是 preview：要占满视口短边 70% 才挂完整交互组件。
-  assert(smallChain.details[0] === 'preview' && largeChain.details[0] === 'preview',
-    '相机 1 时第一层只是 preview（不是 expanded / collapsed 二分）')
-  assert(smallChain.details.includes('shell') && largeChain.details.includes('shell'),
-    '相机 1 时再深的层自动掉到 shell —— "两层 / 三层"只是某个视口下的观测结果')
-
-  // 相机放到能占满短边时，第一层真的进 interactive，且交互层数随祖先 local fit 变多
-  const interactiveDepth = (cameraScale, localFitPerLevel) => {
-    let scale = cameraScale
-    let count = 0
-    let previous = null
-    for (let depth = 0; depth < 12; depth++) {
-      const detail = detailOf('root/embed:a', scale, large, previous)
-      if (detail !== 'interactive') { break }
-      previous = detail
-      count += 1
-      scale *= localFitPerLevel
-    }
-    return count
-  }
-  assert(interactiveDepth(3.2, 0.45) > 0 && interactiveDepth(3.2, 0.9) > interactiveDepth(3.2, 0.45),
-    '祖先 local fit 越松 → 能交互的层数越多（同一份公式，没有深度常量）')
-  assert(interactiveDepth(1, 0.45) === 0 && interactiveDepth(4, 0.45) > interactiveDepth(1.4, 0.45),
-    '相机放大 → 能交互的层数变多')
-
-  // 深层的档位完全由祖先 local fit 的连乘决定
-  assert(largeChain.fits.length > 0 && largeChain.fits.every(f => f < 1),
-    '每层 local fit 都 < 1：越深的 Embed 投影越小（没有任何"越深越大"的机制）')
-  assert(near(largeChain.fits[0], 0.371, 0.01),
-    `第一层 local fit = ${largeChain.fits[0].toFixed(3)}（按默认直径的圆内接正方形可用区现算，与视口无关）`)
-  assert(near(smallChain.fits[0], largeChain.fits[0]),
-    '两层链的 local fit 完全一样：视口大小不改变子图的局部 fit（只改档位）')
-}
-
-console.log('38b-2. 局部 box 恒为默认直径：resize / zoom 都不重算 fit（#821）')
-{
-  const childBounds = { minX: 0, minY: 0, maxX: 240, maxY: 120, width: 240, height: 120 }
-  const available = computeEmbedInnerContentSafeSide(DEFAULT_EMBED_DIAMETER, EMBED_FIT_PADDING_VP)
-  const fitted = computeFittedViewport(childBounds, available, available, 0,
-    DEFAULT_EMBED_DIAMETER, DEFAULT_EMBED_DIAMETER)
-  assert(near(fitted.zoomScale, available / childBounds.width) &&
-    fitted.zoomScale < available / DEFAULT_EMBED_DIAMETER,
-    `child fit = ${fitted.zoomScale.toFixed(3)}：可用区只由默认直径算出（与视口、相机都无关），再被内容宽高收一次`)
-
-  // 同理，"按某个更大的盒子 fit"这件事本身已经不存在了
-  const biggerBox = 320
-  const availableInBigger = computeEmbedInnerContentSafeSide(biggerBox, EMBED_FIT_PADDING_VP)
-  const fittedInBigger = computeFittedViewport(childBounds, availableInBigger, availableInBigger, 0, biggerBox, biggerBox)
-  assert(fittedInBigger.zoomScale > fitted.zoomScale,
-    '（反事实）如果盒子真变成 320，fit 会更大 —— 但 #821 之后盒子永远不变，这条路走不到')
-
-  const sceneSource821 = readStarmapSource('ui/StarMapScene.ets')
-  assert(!sceneSource821.includes('syncFitToSceneSize'),
-    '没有"尺寸变了要重算 fit"的路径：局部 box 恒为 DEFAULT_EMBED_DIAMETER')
-  assert(!sceneSource821.includes('lastFittedSceneSize'),
-    '没有"上次 fit 时用的尺寸"这个状态')
-  assert(sceneSource821.includes('private localSceneSize(): number {') &&
-    /private localSceneSize\(\): number \{\s*return this\.sceneWidth/.test(sceneSource821),
-    'localSceneSize 不再除以 parentScale（box 就是本地尺寸）')
-  const fitBody821 = sceneSource821.slice(sceneSource821.indexOf('private applyFittedLocalViewport('),
-    sceneSource821.indexOf('private syncSceneHandle()'))
-  assert(fitBody821.includes('computeEmbedInnerContentSafeSide(') && fitBody821.includes('computeFittedViewport('),
-    'fit 走圆内接正方形可用区（与 clamp / preview 缩略图同一口径）')
-  assert(!fitBody821.includes('computeCenteredOffset'),
-    'fit 不再"只 recenter"：比例和偏移一起算')
-  const firstFitIdx821 = sceneSource821.indexOf('fitView(): void {')
-  assert(sceneSource821.slice(firstFitIdx821, firstFitIdx821 + 260).includes('applyFittedLocalViewport('),
-    '首次 fit 也走同一个出口，两条路径不会长歪')
-  const transformBody821 = sceneSource821.slice(sceneSource821.indexOf('private onTransformChange()'),
-    sceneSource821.indexOf('private syncSceneHandle()'))
-  assert(!transformBody821.includes('applyFittedLocalViewport') &&
-    !transformBody821.includes('buildEmbedLayoutNodes'),
-    '相机变化只刷新显示变换，不重算 fit、不重建布局')
-}
-
-console.log('38c. 视口 resize 不改焦点；焦点只跟着相机走')
-{
-  const screenSource821 = readStarmapSource('ui/StarMapScreen.ets')
-  const areaBody = screenSource821.slice(screenSource821.indexOf('.onAreaChange('),
-    screenSource821.indexOf('.onAreaChange(') + 900)
-  assert(!areaBody.includes('recomputeVisualFocus'),
-    '纯 onAreaChange 只更新视口尺寸，不重算视觉焦点（折叠屏展开一下不该换焦点）')
-  assert(screenSource821.includes('this.canvasWidth = Number(newArea.width)') &&
-    screenSource821.includes('this.canvasHeight = Number(newArea.height)'),
-    'onAreaChange 更新的是根视口宽高')
-  assert(screenSource821.includes('projectEmbedMetrics(probe.ownerScale, context)'),
-    '焦点覆盖率直接用稳定圆投影（没有"视口感知的展开尺寸"这一层）')
-  assert(!screenSource821.includes('expandedEmbedSizeVp') && !screenSource821.includes('ZOOM_STEP'),
-    'Screen 里不再有展开尺寸，也没有加性 ZOOM_STEP')
-  assert(screenSource821.includes('const ZOOM_FACTOR: number = 1.2') &&
-    screenSource821.includes('this.cameraScale * ZOOM_FACTOR') &&
-    screenSource821.includes('this.cameraScale / ZOOM_FACTOR'),
-    '工具栏缩放改成乘性 ZOOM_FACTOR（无级缩放回到手感上）')
-
-  const sceneSource821 = readStarmapSource('ui/StarMapScene.ets')
-  const detailBody821 = sceneSource821.slice(sceneSource821.indexOf('private embedDetail('),
-    sceneSource821.indexOf('private embedDetail(') + 800)
-  assert(detailBody821.includes('this.viewportScaleValue()') && detailBody821.includes('this.visualLodContext()'),
-    'embedDetail 用所属 Scene 的累计比例 + 根视口上下文算档位')
-  assert(sceneSource821.includes('updateStarMapEmbed(this.starmapId, embedId,') &&
-    !sceneSource821.includes('embedAuthoredPositionFromDisplay'),
-    '移动保存直接写 authored 坐标（显示矩形不再需要反解）')
-  const layoutSource821 = readStarmapSource('platform/StarMapLayout.ets')
-  assert(layoutSource821.includes('x: embed.position.x') && layoutSource821.includes('y: embed.position.y') &&
-    !layoutSource821.includes('authoredCenterX'),
-    '布局矩形的位置就是 authored position（不再以中心为锚派生）')
-}
-
-console.log('')
-console.log('39. preview 和 interactive 共用同一份视觉真相（#821 复审第二轮）')
-{
-  const tokensSrc = readStarmapSource('ui/StarMapVisualTokens.ets')
-  const sceneSrc39 = readStarmapSource('ui/StarMapScene.ets')
-  const previewSrc39 = readStarmapSource('ui/StarMapEmbedPreview.ets')
-
-  // 1. 视觉常量集中在一个文件里，两层都从它读
-  for (const token of ['STARMAP_NODE_GLYPH_DIAMETER', 'STARMAP_NODE_GLYPH_RADIUS',
-    'STARMAP_NODE_LABEL_FONT_SIZE', 'STARMAP_NODE_LABEL_MIN_PROJECTED_DIAMETER_VP',
-    'STARMAP_EMBED_FIT_PADDING_VP']) {
-    assert(tokensSrc.includes(`export const ${token}`), `${token} 集中在 StarMapVisualTokens`)
-  }
-  assert(tokensSrc.includes('export function starmapNodeColor(') &&
-    tokensSrc.includes("'Character': '#4A90D9'"),
-    'kind → 颜色的映射只有一份（starmapNodeColor）')
-  assert(sceneSrc39.includes("from './StarMapVisualTokens'") &&
-    previewSrc39.includes("from './StarMapVisualTokens'"),
-    'interactive 层和 preview 层都读同一份视觉真相')
-
-  // 2. #984：interactive 是文字卡片，preview 是低倍率圆点；
-  //    两层共用同一份平台布局矩形，preview 不再猜固定圆心。
-  assert(sceneSrc39.includes('measureStarMapNodeCard(') &&
-    sceneSrc39.includes('this.nodeCardWidth(node)') &&
-    sceneSrc39.includes('this.nodeCardHeight(node)'),
-    'interactive 卡片宽高统一读布局度量，position 仍是卡片左上角')
-  assert(previewSrc39.includes('const rect = this.rectOf(node.id)') &&
-    previewSrc39.includes('rect.x + rect.width / 2') &&
-    previewSrc39.includes('rect.y + rect.height / 2') &&
-    !previewSrc39.includes('STARMAP_NODE_GLYPH_CENTER_X') &&
-    !previewSrc39.includes('STARMAP_NODE_GLYPH_CENTER_Y'),
-    'preview 按实际布局矩形居中，不再依赖 160×80 固定圆心')
-
-  // 3. preview 不再把普通节点画成灰圆角矩形，也不再另造一套颜色
-  // 断言只看真正的代码行：注释里会解释"以前是什么样"，默认 themeConfig 字面量
-  // 里也会出现所有颜色键，两者都不能当成"还在用"。
-  const previewCode39 = previewSrc39.split('\n')
-    .filter((line) => !line.trimStart().startsWith('//')).join('\n')
-  const previewDrawCode = previewCode39.slice(previewCode39.indexOf('@State'))
-  assert(!previewDrawCode.includes('surfaceContainerHigh') && !previewCode39.includes('quadraticCurveTo'),
-    'preview 不再把节点画成"节点卡"圆角矩形（#821 要的是视觉缩小，不是换对象外观）')
-  assert(previewCode39.includes('ctx.fillStyle = starmapNodeColor(node.kind)'),
-    'preview 的节点颜色和 interactive 同一张表')
-  assert(!sceneSrc39.includes('getNodeColor(') && !sceneSrc39.includes("'Location': '#F39C12'"),
-    'interactive 侧不再留一份本地颜色表')
-  assert(previewCode39.includes('this.themeConfig.colors.surfaceContainer') &&
-    previewCode39.includes('this.themeConfig.colors.outlineVariant'),
-    '子 Embed 外壳的底色 / 描边和 interactive 层一致')
-  assert(!previewDrawCode.includes('primaryContainer'),
-    'preview 不再给子 Embed 造第二套预览皮肤')
-
-  // 4. fit 留白同一个数
-  assert(!previewSrc39.includes('PREVIEW_PADDING_VP') && !sceneSrc39.includes('EMBED_FIT_PADDING_VP: number'),
-    '两层都不再本地定义 fit 留白（曾经是 preview 6 / interactive 8）')
-  assert(previewSrc39.includes('computeEmbedInnerContentSafeSide(PREVIEW_CANVAS_SIZE, STARMAP_EMBED_FIT_PADDING_VP)') &&
-    sceneSrc39.includes('STARMAP_EMBED_FIT_PADDING_VP'),
-    'preview 和 interactive 的 local fit 留白是同一个常量')
-
-  // 5. 掉文字可以，掉形状不行：文字阈值独立于形状
-  assert(previewSrc39.includes('STARMAP_NODE_LABEL_MIN_PROJECTED_DIAMETER_VP') &&
-    previewSrc39.includes('const labelReadable: boolean ='),
-    'preview 的"写不写标题"是一个独立阈值（只省文字，不改形状和颜色）')
+  assert(!lodSource.includes('DeepZoomDetail') &&
+    !lodSource.includes('resolveDeepZoomDetail') &&
+    !lodSource.includes('resolveEmbedDetailForScene'),
+  '视觉模块只保留投影/焦点参考，不再输出内容档位')
 }
 
 console.log('')

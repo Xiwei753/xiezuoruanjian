@@ -284,7 +284,7 @@ fn validate_target_path(
         let status = resolve_target_path(context, path);
         use crate::starmap::semantic::StarMapTargetResolveStatus::*;
         match status {
-            CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
+            MissingStarmap | MissingNode | MissingAnchor
             | MissingEmbed | MissingPortal | InvalidRange | UnsupportedVersion | CorruptStarmap
             | ReadFailed => {
                 return Err(Error::Io(std::io::Error::new(
@@ -301,7 +301,7 @@ fn validate_target_path(
     Ok(())
 }
 
-/// 验证嵌入：instance_id 唯一、禁止自嵌入、目标星图存在、
+/// 验证嵌入：instance_id 唯一、目标星图存在、
 /// position 数值合法性、host_path 引用完整性。
 #[allow(
     clippy::excessive_nesting,
@@ -321,12 +321,7 @@ fn validate_embeds(
                 "Duplicate embed instance_id",
             )));
         }
-        if embed.target_starmap_id == graph.starmap_id {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Self-embed is prohibited",
-            )));
-        }
+        // Self-embed 是合法内容：当前图可以嵌入自身，路径身份由入口实例区分。
 
         // 统一走 resolve_target_path 校验目标星图存在且可读。
         let embed_target_path = StarMapTargetPath {

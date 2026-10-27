@@ -3,9 +3,9 @@
 // 不依赖 Core bridge，不依赖 ArkUI 组件。所有函数都是纯函数，无副作用。
 //
 // #821：Embed **永远只有一副面孔** —— 那颗正圆（DEFAULT_EMBED_DIAMETER，
-// 半径 = 直径 / 2）。Deep Zoom 档位只决定圆里渲染多少细节，不改形状、
-// 不改 world bounds、不改 authored position，所以这里没有"按形状分支"的余地：
-// 命中、边端点、响应区和画出来的那一块永远是同一块几何，也永远只需要圆那一条路径。
+// 半径 = 直径 / 2）。当前入口路径挂载到哪一层都不改形状、world bounds 或
+// authored position，所以这里没有"按形状分支"的余地：命中、边端点、响应区和
+// 画出来的那一块永远是同一块几何，也永远只需要圆那一条路径。
 
 import {
   StarMapEdge,
@@ -62,12 +62,6 @@ export interface HitTestResult {
 const ARROW_SIZE: number = 10
 const ARROW_ANGLE: number = Math.PI / 6 // 30°
 const LABEL_OFFSET: number = 8
-
-/**
- * 递归 Scene 层级深度上限（Issue #816）。
- * 与 Core 侧 resolve_target 的深度限制对齐；病态自引用数据也不会把递归打爆。
- */
-export const MAX_RECURSE_SCENE_DEPTH: number = 32
 
 /**
  * Embed 命中规格（vp）——**唯一真相源**。
@@ -259,9 +253,9 @@ export function pointInEmbedCircle(rect: PlatformNodeRect, x: number, y: number)
  *   由 embedHitMetricsForScene 按本 Scene 累计比例换算成画布坐标（#818 复审）
  * - innerContent（其余圆内区域）→ objectKind='embedInnerContent'，让调用方递归处理 child Scene
  *
- * 注意命中路径和 Deep Zoom 档位**无关**（#821）：preview / shell 档位下圆里并没有
- * 真实 child Scene 组件，但几何层的形状与热区完全一致，命中结果不因为"现在没渲染
- * 交互组件"而变松或变紧。是否真的把触摸交给内部预览，是 ui 层的事。
+ * 注意命中路径和当前挂载到哪一层**无关**：几何只按真实坐标判断圆、标题带和圆环。
+ * 圆内内容是否继续向 child Scene 穿透，由 UI 按实际挂载路径决定；遇到重复 starmap
+ * 时 UI 停在入口圆壳，但这里的热区不会因此变形，也不会把合法路径判成错误。
  *
  * @param rects 节点矩形列表
  * @param screenX 屏幕 X 坐标
@@ -602,7 +596,7 @@ export function lineCircleIntersection(
  * 普通节点是矩形，**Embed 永远是正圆**（#821），两者不能共用一套边界算法。
  *
  * #821 之前 Embed 要先读形状再决定走圆还是走矩形；现在 Embed 只有圆这一种形状，
- * 分支直接判 `isEmbed` 就行。Deep Zoom 掉档不会改变这里的边界算法 ——
+ * 分支直接判 `isEmbed` 就行。相机缩放或入口层级变化不会改变这里的边界算法 ——
  * 连线端点永远贴在用户看得见的那圈圆周上。
  *
  * 这是端点几何的唯一入口：正式边的渲染端点和拉线时的预览端点都必须走它，
@@ -1158,7 +1152,7 @@ function collectEmbedFocusProbesInScene(
     }
     // 本 Scene 画布几何的中心 → 本 Scene 局部屏幕 → 根 Scene 屏幕。
     // #821：Embed 的 rect 尺寸恒定（DEFAULT_EMBED_DIAMETER 的正圆），
-    // 圆心就是 rect 的中心，这里没有任何档位分支。
+    // 圆心就是 rect 的中心，这里没有按缩放或挂载层级分支。
     const localCenterX: number = rect.x + rect.width / 2
     const localCenterY: number = rect.y + rect.height / 2
     const localScreen: PlatformPoint = canvasToScreen(
@@ -1253,18 +1247,18 @@ export function findSceneContext(
   root: RecursiveSceneContext,
   scenePath: StarMapPathSegment[]
 ): RecursiveSceneContext | null {
-  if (scenePath.length === 0) {
-    return root
+  let current: RecursiveSceneContext = root
+  for (const seg of scenePath) {
+    if (seg.type !== 'enterEmbed' || seg.instanceId === null) {
+      return null
+    }
+    const child: RecursiveSceneContext | undefined = current.children.get(seg.instanceId)
+    if (child === undefined) {
+      return null
+    }
+    current = child
   }
-  const seg: StarMapPathSegment = scenePath[0]
-  if (seg.type !== 'enterEmbed' || seg.instanceId === null) {
-    return null
-  }
-  const child: RecursiveSceneContext | undefined = root.children.get(seg.instanceId)
-  if (child === undefined) {
-    return null
-  }
-  return findSceneContext(child, scenePath.slice(1))
+  return current
 }
 
 /**
@@ -1336,9 +1330,8 @@ export function resolveRecursiveHit(
   let localY: number = y
   const embedPath: StarMapPathSegment[] = []
 
-  // 递归深度上限：Core 侧 resolve_target 也是 32，这里多给一层余量后硬性兜底，
-  // 避免病态数据（自引用 Embed）把栈打爆。
-  for (let depth = 0; depth <= MAX_RECURSE_SCENE_DEPTH; depth++) {
+  // 沿实际存在的子 Scene 结构下探；结构本身有限，循环在命中或子图缺失时返回。
+  while (true) {
     const canvasPoint: PlatformPoint = screenToCanvas(
       localX, localY, current.scale, current.offsetX, current.offsetY
     )
@@ -1424,14 +1417,6 @@ export function resolveRecursiveHit(
     current = child
     localX = childLocal.x
     localY = childLocal.y
-  }
-
-  // 深度兜底：返回最深一层的归属，不做命中
-  return {
-    ownerScenePath: cloneScenePath(current.scenePath),
-    ownerStarmapId: current.starmapId,
-    target: null,
-    embedPath: cloneScenePath(embedPath)
   }
 }
 

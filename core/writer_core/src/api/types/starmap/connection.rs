@@ -91,7 +91,7 @@ impl TryFrom<StarMapConnectionInfoDto> for crate::starmap::connections::StarMapC
 /// - `error_type`：`"NoCommonHost"` / `"FromResolveFailed"` / `"ToResolveFailed"`
 /// - `resolve_status`：解析失败时的 `StarMapTargetResolveStatus` 字符串表示（仅
 ///   `FromResolveFailed` / `ToResolveFailed` 有值），使用 serde 序列化值
-///   （如 `"missingStarmap"`、`"cycleDetected"` 等）
+///   （如 `"missingStarmap"`、`"missingEmbed"` 等）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CrossCanvasEdgeErrorDto {

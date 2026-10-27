@@ -19,9 +19,10 @@
 //      结果通过 position patch 写回 —— autoGridLayoutNodes / generatePositionPatches
 //   4. 节点/Embed 拖动：屏幕位移 ÷ zoomScale 落到布局坐标，返回新数组
 //      —— moveLayoutNode（StarMapScreen.moveNodeBy / moveEmbedBy）
-//   5. 缩放：工具栏按倍数步进、双指连续，边界只防数值事故；
-//      不再有"缩到 MIN 之下自动回父星图"的跳转 —— 子星图由 Deep Zoom 档位
-//      自然显隐（#821）—— zoomIn / zoomOut / applyPinchScale / clampCameraScale
+//   5. 缩放：工具栏按倍数步进、双指连续；没有 0.02×/4×/1e-4×/1e5× 这类
+//      产品上下限，也不存在 Deep Zoom 档位（#1009）。只有 Number 边界保护：
+//      Infinity 停到 MAX_VALUE、下溢保留 MIN_VALUE、非法值退回 1
+//      —— zoomIn / zoomOut / applyPinchScale / clampCameraScale
 //   6. 关系写入 JSON 形状：edge id/时间戳平台端生成，target detail 全字段显式
 //      null（Core 侧 serde 要求键存在）—— NativeStarMapBridge.addStarMapEdge
 //
@@ -84,9 +85,8 @@ function measureStarMapNodeCard(node, measureTextHeight) {
   }
 }
 
-// ── 常量（与 StarMapViewport.ets 一致，#821）──
-const CAMERA_SCALE_MIN = 1e-4
-const CAMERA_SCALE_MAX = 1e5
+// ── 常量（与 StarMapViewport.ets 一致，#1009）──
+const DEFAULT_CAMERA_SCALE = 1
 const ZOOM_FACTOR = 1.2
 
 // ── 被测规格：buildFreeformLayout ──
@@ -211,21 +211,32 @@ function generatePositionPatches(layoutNodes) {
   return patches
 }
 
-// ── 被测规格：缩放策略（StarMapScreen + StarMapViewport，#821）──
-// 相机范围是数值安全边界，不是产品上限；工具栏用乘法步进，手感与当前档位无关。
+// ── 被测规格：缩放策略（StarMapScreen + StarMapViewport，#1009）──
+// 正常正有限比例原样保留；只有 Number 边界才做保护，工具栏用乘法步进。
 function clampCameraScale(scale) {
-  if (!Number.isFinite(scale) || scale <= 0) {
-    return 1
+  if (scale === Infinity) {
+    return Number.MAX_VALUE
   }
-  return Math.min(CAMERA_SCALE_MAX, Math.max(CAMERA_SCALE_MIN, scale))
+  if (!Number.isFinite(scale) || scale <= 0) {
+    return DEFAULT_CAMERA_SCALE
+  }
+  return scale
+}
+
+function scaleAfterFactor(scale, factor) {
+  const nextScale = scale * factor
+  if (nextScale === 0) {
+    return Number.MIN_VALUE
+  }
+  return clampCameraScale(nextScale)
 }
 
 function zoomOut(zoomScale) {
-  return clampCameraScale(zoomScale / ZOOM_FACTOR)
+  return scaleAfterFactor(zoomScale, 1 / ZOOM_FACTOR)
 }
 
 function zoomIn(zoomScale) {
-  return clampCameraScale(zoomScale * ZOOM_FACTOR)
+  return scaleAfterFactor(zoomScale, ZOOM_FACTOR)
 }
 
 function applyPinchScale(pinchBaseScale, gestureScale) {
@@ -661,18 +672,17 @@ console.log('5b. Embed 布局没有任何档位入口：几何恒定（#821）')
     '圆心与 authored 圆心重合（派生式退化成恒等）')
 }
 
-console.log('5c. 掉档 / 换档不重建任何布局矩形（#821）')
+console.log('5c. 缩放不重建布局矩形，也没有 LOD 档位（#1009）')
 {
   const embed = { instanceId: 'emb1', targetStarmapId: 'sm2', position: { x: 640, y: 48 } }
   const before = buildEmbedLayoutNodes([embed])[0]
-  // Deep Zoom 档位变化（interactive → preview → shell）在布局层完全不可见：
-  // 布局函数不接收档位，也不该因为档位被重新调用出别的矩形。
-  for (const _detail of ['interactive', 'preview', 'shell']) {
+  // 布局函数不接收缩放/档位；反复求值必须得到同一颗 authored 圆。
+  for (let i = 0; i < 3; i++) {
     const after = buildEmbedLayoutNodes([embed])[0]
     assert(after.x === before.x && after.y === before.y &&
       after.width === before.width && after.height === before.height &&
       after.radius === before.radius && after.collapsed === before.collapsed,
-      `档位 ${_detail} 下 Embed 布局矩形一字不改`)
+      '缩放 / 多次刷新下 Embed 布局矩形一字不改')
   }
   // 缩放不碰布局：唯一改变屏幕尺寸的是显示变换（.scale）
   const scaled = DEFAULT_EMBED_DIAMETER * 40
@@ -699,28 +709,30 @@ console.log('6. 拖动：屏幕位移 ÷ zoomScale，返回新数组不改原数
   assert(moveLayoutNode(layout, 'nope', 10, 10, 1) === layout, '未知 id 原样返回')
 }
 
-console.log('7. 缩放：乘法步进 + 数值安全边界，没有"返回父层"分支（#821）')
+console.log('7. 缩放：乘法步进 + Number 边界保护，没有产品上下限（#1009）')
 {
   assert(near(zoomOut(0.5), 0.5 / ZOOM_FACTOR), '0.5 按倍数缩小')
   assert(near(zoomIn(0.5), 0.5 * ZOOM_FACTOR), '0.5 按倍数放大')
   // 相对步进一致：加法步长在两端手感完全不同，这是它被换掉的原因
   assert(near(zoomIn(2) / 2, ZOOM_FACTOR) && near(zoomIn(1) / 1, ZOOM_FACTOR),
     '放大是相对步进：1× 和 2× 下的增幅比例一致（加法步长做不到这点）')
-  // 边界是数值安全界，不是产品天花板：3× 这种硬顶不再存在
-  assert(zoomIn(3) > 3, '超过旧的 3× 天花板仍可继续放大（#821 核心目标）')
-  assert(zoomIn(1e4) > 1e4, '可以放到 10000× 级别，不会被 3 卡住')
-  assert(zoomOut(1e4) > 1000 && zoomOut(zoomOut(1e4)) > 600,
-    '缩小同样没有地板式硬顶：0.3 那种下限退得回去')
-  // 真正的边界只防数值事故
-  assert(zoomIn(CAMERA_SCALE_MAX) === CAMERA_SCALE_MAX, '放大夹在数值上界')
-  assert(zoomOut(CAMERA_SCALE_MIN) === CAMERA_SCALE_MIN, '缩小夹在数值下界')
-  assert(clampCameraScale(NaN) === 1 && clampCameraScale(0) === 1 && clampCameraScale(-2) === 1,
-    '退化输入退回 1，不把 NaN / 0 / 负数写进相机')
-  // 双指捏合保持连续比例，边界同样交给 clamp
+  // 旧产品边界（0.02× / 4× / 1e-4× / 1e5×）不再存在
+  assert(zoomIn(3) > 3 && zoomIn(4) > 4, '旧的 4× 天花板不再截断')
+  assert(zoomOut(0.02) < 0.02 && zoomOut(1e-4) < 1e-4, '旧的 0.02× / 1e-4× 地板不再截断')
+  assert(zoomIn(1e4) > 1e4 && zoomIn(1e5) > 1e5, '可以继续进入 1e5× 以上')
+  // 真正的边界只防 Number 上溢/下溢
+  assert(zoomIn(Number.MAX_VALUE) === Number.MAX_VALUE, '上溢停在 Number.MAX_VALUE')
+  assert(zoomOut(Number.MIN_VALUE) === Number.MIN_VALUE, '下溢保留 Number.MIN_VALUE，不归零')
+  assert(clampCameraScale(1e308) === 1e308 && clampCameraScale(1e-308) === 1e-308,
+    '可表示的正有限比例原样保留')
+  assert(clampCameraScale(NaN) === DEFAULT_CAMERA_SCALE && clampCameraScale(0) === DEFAULT_CAMERA_SCALE &&
+    clampCameraScale(-2) === DEFAULT_CAMERA_SCALE,
+  '退化输入退回 1，不把 NaN / 0 / 负数写进相机')
+  // 双指捏合保持连续比例，边界同样交给 Number 保护
   assert(near(applyPinchScale(2, 1.5), 3), '双指放大按基准比例 × 手势比例')
   assert(near(applyPinchScale(2, 0.25), 0.5), '双指缩小同理')
-  assert(applyPinchScale(1, 1e6) === CAMERA_SCALE_MAX, '双指疯捏夹在上界')
-  assert(applyPinchScale(1, 1e-6) === CAMERA_SCALE_MIN, '双指疯开夹在下界')
+  assert(applyPinchScale(1, 1e6) === 1e6, '双指放到 1e6 仍原样保留')
+  assert(applyPinchScale(1, 1e-6) === 1e-6, '双指缩到 1e-6 仍原样保留')
 }
 
 console.log('8. 关系写入 JSON：id/时间戳平台端生成，target detail 全字段存在')

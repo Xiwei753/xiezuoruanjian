@@ -3,8 +3,8 @@
 // 圆角层级、保存时生成 position patch。
 // Embed 的 world 几何**恒定**（#821）：位置直接读 embed.position，尺寸恒为
 // DEFAULT_EMBED_DIAMETER × DEFAULT_EMBED_DIAMETER，圆角 = 半径，永远是正圆。
-// Deep Zoom 档位只决定"圆里渲染多少细节"，绝不参与这里的任何尺寸或位置计算，
-// 所以缩放、掉档、视口 resize 都不会让星图里的 Embed 跳一下或换形状。
+// 当前画布有没有继续挂载子 Scene 绝不参与这里的尺寸或位置计算，
+// 所以缩放、切换入口、视口 resize 都不会让星图里的 Embed 跳一下或换形状。
 // 不依赖 Core bridge，不依赖 ArkUI 组件。所有函数都是纯函数，无副作用。
 
 import { StarMapNode, StarMapEmbed, StarMapNodeContent } from '../../../corebridge/dto/StarMapDtos'
@@ -81,7 +81,7 @@ export const DEFAULT_NODE_HEIGHT: number = NODE_CARD_MIN_HEIGHT
 /**
  * 节点圆角（vp）。UI 侧禁止再手写 16。
  *
- * #821 起 Embed 任何档位都是正圆，不再有这个圆角；普通节点卡片仍用它。
+ * #821 起 Embed 始终是正圆，不再有这个圆角；普通节点卡片仍用它。
  */
 export const DEFAULT_NODE_RADIUS: number = 16
 const DEFAULT_NODE_ZINDEX: number = 0
@@ -89,7 +89,7 @@ const DEFAULT_NODE_ZINDEX: number = 0
  * 子星图 Embed 的**稳定** world 直径（vp）。Embed 的 width / height / borderRadius
  * 全部从这一个值推导，保证 UI 与几何计算看到的永远是同一个圆。
  *
- * #821：这是恒定值，不再随视觉档位或视口 resize 变化。放大靠显示变换
+ * #821：这是恒定值，不随视口 resize 或当前入口层级变化。放大靠显示变换
  * （`.scale()`）而不是把布局矩形撑大，所以组件宽高永远是 DEFAULT_EMBED_DIAMETER。
  */
 export const DEFAULT_EMBED_DIAMETER: number = 200
@@ -255,8 +255,8 @@ export function buildFreeformLayout(
  *   派生和反算在数学上是同一件事，多写一层只会多一个能算错的地方。
  * - 尺寸恒为 `DEFAULT_EMBED_DIAMETER × DEFAULT_EMBED_DIAMETER`，圆角 = 半径，永远是正圆。
  *
- * 代价是这一层不再接收任何"LOD 显示边界"入参：Deep Zoom 掉档不会重排布局矩形，
- * 用户缩放也不会改这里任何一个数字。缩放是显示变换的事，归 ui/StarMapScene 的 `.scale()` 管。
+ * 这一层不接收任何缩放或视口档位入参：用户缩放不会改这里任何一个数字。
+ * 缩放是显示变换的事，归 ui/StarMapScene 的 `.scale()` 管。
  *
  * @param embeds 星图内嵌列表
  * @returns 平台层布局节点列表（用于 Embed 渲染）

@@ -58,7 +58,11 @@ StarMapNavigationRoute {
 * **`exit_canvas(route)`**：弹出最后一个段，返回上一层。对同一目标星图的多个 Embed，返回的是**原进入实例**。
 * **`jump_to_ancestor(route, level)`**：跳到任意祖先层级（纯路径截断）。
 
-路径环、缺失实例、超过 32 层限制，沿用现有明确错误类型。
+路径环和重复目标星图是合法内容：A→B→A、A→A 都可以保存、解析和导航。每次进入
+都追加一个路径段，身份由完整路径加当次 Embed/Portal 实例决定；同一个 starmap_id
+可以在不同路径位置重复出现。路径解析只处理传入的有限段数组，不设层数上限，
+也不因目标曾经出现过而拒绝。只有缺失实例、缺失 Portal、非法端点或非有限坐标
+才是错误。
 
 上述导航操作通过统一 Core API 导出：`resolve_starmap_navigation` 解析当前画布，
 `enter_starmap_embed` / `enter_starmap_portal` 进入子画布，`exit_starmap_canvas`
@@ -125,10 +129,11 @@ StarMapEndpointSelection {
 
 ## 严格图校验 (validate_graph)
 * **重复性**：同图不能有重复的 `instance_id` 或 `link_id`。
-* **目标存活**：Embed 指向的星图必须存在。不允许 Self-Embed。
+* **目标存活**：Embed 指向的星图必须存在。允许 Self-Embed，也允许 A→B→A 等循环引用；它们是合法入口，不是数据损坏。
 * **端点安全**：Edge、Link、Embed 都使用 `StarMapTargetPath`。如果端点是 Node/Anchor 且路径无 segments，则它们必须存在于当前 Host StarMap 中。
 * **位置合法**：节点的 `position`、嵌入的 `position` 数值必须 finite（无 NaN/Inf）。坐标精度为 f64。
-* **深层可达性**：Link/Edge 的目标深层路径不能指向虚无，不能发生环路（CycleDetected）或层级太深（TooDeep）。
+* **深层可达性**：Link/Edge 的目标深层路径不能指向虚无；路径可以重复经过同一星图，
+  也可以任意有限长。全图扫描只为终止而去重，不能把合法的环或重复引用判成错误。
 * **级联清理**：调用 `delete_starmap_node` 删除节点时，会自动级联清理连接到该节点的本地 Edge、Embed 和 Link。
 * **跨图引用检查**：删除目标节点、Embed 入口或 Portal 之前，使用反查识别**其他 graph 持有的跨层引用**：有跨图关联时**拒绝破坏性删除**并明确返回引用列表。不能只扫描本图导致祖先 Edge 变悬空。更新 Portal 目标等能改变路径解析结果的操作也须做跨图引用检查。
 * **删除保护**：调用 `delete_starmap` 时，仅当存在**外部引用**（被其他星图引用）时才阻止删除。

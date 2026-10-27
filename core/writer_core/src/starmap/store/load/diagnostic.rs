@@ -481,9 +481,7 @@ impl StarMapStore {
                         StarMapTargetResolveStatus::MissingPortal => {
                             "references non-existent portal"
                         }
-                        StarMapTargetResolveStatus::CycleDetected => "contains a cycle",
                         StarMapTargetResolveStatus::InvalidRange => "has invalid range",
-                        StarMapTargetResolveStatus::TooDeep => "path too deep",
                         StarMapTargetResolveStatus::UnsupportedVersion => {
                             "target starmap has unsupported schema version"
                         }

@@ -277,8 +277,6 @@ pub enum StarMapTargetDetail {
 /// - `Resolved`：路径完整可达
 /// - `MissingStarmap/Node/Anchor`：引用的目标不存在
 /// - `MissingEmbed/MissingPortal`：路径段引用的嵌入/传送门不存在
-/// - `TooDeep`：路径超过 32 层深度限制
-/// - `CycleDetected`：路径中存在循环引用
 /// - `InvalidRange`：章节范围 range_start > range_end
 /// - `UnsupportedVersion`：目标星图 graph.json schema 版本不被支持
 /// - `CorruptStarmap`：目标星图对象文件损坏（JSON 解析失败等）
@@ -297,8 +295,6 @@ pub enum StarMapTargetResolveStatus {
     MissingAnchor,
     MissingEmbed,
     MissingPortal,
-    TooDeep,
-    CycleDetected,
     InvalidRange,
     UnsupportedVersion,
     CorruptStarmap,

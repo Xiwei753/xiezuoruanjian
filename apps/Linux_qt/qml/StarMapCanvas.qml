@@ -106,11 +106,17 @@ Item {
     property real zoomLevel: 1.0
     property real panX: 0
     property real panY: 0
-    // Issue #822 评论 5972215936: 只保留数值安全边界，不设产品硬天花板。
-    // 边界只是防止浮点/图形管线爆掉，绝不用来触发层级切换。
-    readonly property real _cameraScaleMin: 1e-4
-    readonly property real _cameraScaleMax: 1e5
+    // 相机比例不设产品上下限：滚轮、按钮、捏合都连续作用在同一台活动镜头上。
+    // 只有 Number 真正上溢/下溢时才做数值规范化，规范化不触发任何层级切换。
     readonly property real _zoomFactor: 1.2
+
+    function normalizedZoom(value, fallback) {
+        if (value === Infinity)
+            return Number.MAX_VALUE
+        if (!isFinite(value) || value <= 0)
+            return fallback > 0 && isFinite(fallback) ? fallback : 1.0
+        return value
+    }
 
     // routeKey -> { zoom, panX, panY }：每一层进入前保存的父相机。
     property var cameraStack: ({})
@@ -374,7 +380,7 @@ Item {
         var requested = nextZoom
         if (pinchInput && _pinchSwitchBaseZoom > 0)
             requested = _pinchSwitchCanvasZoom * (nextZoom / _pinchSwitchBaseZoom)
-        var target = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, requested))
+        var target = normalizedZoom(requested, zoomLevel)
         var oldZoom = zoomLevel
         if (target === oldZoom && !zoomTween.running)
             return
@@ -426,7 +432,7 @@ Item {
     // 然后只用**正在显示**的投影直径评估画布穿越（放大只进场、缩小只退场）。
     // 命中与穿越因此永远与看得见的画面一致，绝不从尚未显示的未来缩放值跳过。
     function applyDisplayedZoom(target, screenX, screenY) {
-        target = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, target))
+        target = normalizedZoom(target, zoomLevel)
         var previous = zoomLevel
         if (target === previous)
             return -1
@@ -458,12 +464,12 @@ Item {
     // 未完成滚轮目标的跨画布换算、过渡期滚轮重定都走它（Issue #949 复核评论
     // 6250932011 问题 2/3）。
     function anchoredCameraAt(zoom, screenX, screenY) {
-        var clamped = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, zoom))
+        var normalized = normalizedZoom(zoom, zoomLevel)
         var z = zoomLevel > 0 ? zoomLevel : 1
         var worldX = (screenX - panX) / z
         var worldY = (screenY - panY) / z
-        return { zoom: clamped, panX: screenX - worldX * clamped,
-                 panY: screenY - worldY * clamped }
+        return { zoom: normalized, panX: screenX - worldX * normalized,
+                 panY: screenY - worldY * normalized }
     }
 
     // 过渡期滚轮：从**当前可见帧**连续推进到新目标（Issue #949 复核评论
@@ -595,7 +601,7 @@ Item {
     function childCameraForParent(parentCam, ctx) {
         if (!parentCam || !ctx || !(ctx.ratio > 0))
             return parentCam
-        var zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, parentCam.zoom * ctx.ratio))
+        var zoom = normalizedZoom(parentCam.zoom * ctx.ratio, parentCam.zoom)
         var screenX = parentCam.panX + ctx.embedCenterX * parentCam.zoom
         var screenY = parentCam.panY + ctx.embedCenterY * parentCam.zoom
         return { zoom: zoom, panX: screenX - ctx.boundsCenterX * zoom,
@@ -605,7 +611,7 @@ Item {
     function parentCameraForChild(childCam, ctx) {
         if (!childCam || !ctx || !(ctx.ratio > 0))
             return childCam
-        var zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, childCam.zoom / ctx.ratio))
+        var zoom = normalizedZoom(childCam.zoom / ctx.ratio, childCam.zoom)
         var screenX = childCam.panX + ctx.boundsCenterX * childCam.zoom
         var screenY = childCam.panY + ctx.boundsCenterY * childCam.zoom
         return { zoom: zoom, panX: screenX - ctx.embedCenterX * zoom,
@@ -634,7 +640,7 @@ Item {
         var saved = childKey ? cameraStack[childKey] : null
         if (saved && saved.zoom > 0)
             return { zoom: saved.zoom, panX: saved.panX, panY: saved.panY }
-        var zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, 1.0))
+        var zoom = 1.0
         var cx = context ? context.boundsCenterX : 0
         var cy = context ? context.boundsCenterY : 0
         return { zoom: zoom, panX: width / 2 - cx * zoom, panY: height / 2 - cy * zoom }

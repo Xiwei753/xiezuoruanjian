@@ -293,28 +293,24 @@ fn check_starmap_readable(
 ///
 /// ## 算法
 ///
-/// 1. **深度限制**：`segments.len() > 32` 返回 `TooDeep`。
-/// 2. **起点检查**：`path.starmap_id` 对应的星图必须存在。
-/// 3. **逐段穿越**：沿 `segments` 遍历，用 `HashSet` 记录已访问的 `starmap_id`，
-///    重复进入同一星图即返回 `CycleDetected`。
-/// 4. **终节点校验**：路径末端的 `StarMapTargetDetail` 在最终星图中验证。
+/// 1. **起点检查**：`path.starmap_id` 对应的星图必须存在。
+/// 2. **逐段穿越**：沿给定的 `segments` 顺序逐段解析，每一步都由当次的
+///    Embed/Portal 实例定位。同一个 `starmap_id` 可以在路径的不同位置重复出现
+///    （A→B→A、A→A 都合法），不按 `starmap_id` 去重，也不存在深度上限。
+/// 3. **终节点校验**：路径末端的 `StarMapTargetDetail` 在最终星图中验证。
+///
+/// 路径数组本身是有限的；循环关系是合法内容，终止由数组长度保证。
 pub fn resolve_target(
     context: &GraphResolverContext,
     path: &StarMapTargetPath,
 ) -> Result<ResolvedTarget, crate::starmap::semantic::StarMapTargetResolveStatus> {
     use crate::starmap::semantic::StarMapTargetResolveStatus::*;
 
-    if path.segments.len() > 32 {
-        return Err(TooDeep);
-    }
-
     // 起点检查：直接使用 starmap_exists_and_readable 以正确传递 UnsupportedVersion 等错误
     check_starmap_readable(context, &path.starmap_id)?;
 
     let mut current_starmap_id = path.starmap_id.clone();
     let mut traversed_starmap_ids = vec![current_starmap_id.clone()];
-    let mut visited = std::collections::HashSet::new();
-    visited.insert(current_starmap_id.clone());
 
     for segment in &path.segments {
         match segment {
@@ -325,9 +321,6 @@ pub fn resolve_target(
                     Err(status) => return Err(status),
                 };
                 current_starmap_id = embed.target_starmap_id.clone();
-                if !visited.insert(current_starmap_id.clone()) {
-                    return Err(CycleDetected);
-                }
                 check_starmap_readable(context, &current_starmap_id)?;
                 traversed_starmap_ids.push(current_starmap_id.clone());
             }
@@ -342,9 +335,6 @@ pub fn resolve_target(
                     None => return Err(MissingPortal),
                 };
                 current_starmap_id = portal.destination_starmap_id.clone();
-                if !visited.insert(current_starmap_id.clone()) {
-                    return Err(CycleDetected);
-                }
                 check_starmap_readable(context, &current_starmap_id)?;
                 traversed_starmap_ids.push(current_starmap_id.clone());
             }
@@ -513,16 +503,10 @@ pub fn extract_path_dependency_facts(
 
     let mut facts = Vec::new();
 
-    if path.segments.len() > 32 {
-        return Err(resolve_status_to_error(Status::TooDeep));
-    }
-
     // 起点检查
     check_starmap_readable(context, &path.starmap_id).map_err(resolve_status_to_error)?;
 
     let mut current_starmap_id = path.starmap_id.clone();
-    let mut visited = std::collections::HashSet::new();
-    visited.insert(current_starmap_id.clone());
 
     for segment in &path.segments {
         match segment {
@@ -539,9 +523,6 @@ pub fn extract_path_dependency_facts(
                     anchor_id: None,
                 });
                 current_starmap_id = embed.target_starmap_id.clone();
-                if !visited.insert(current_starmap_id.clone()) {
-                    return Err(resolve_status_to_error(Status::CycleDetected));
-                }
                 check_starmap_readable(context, &current_starmap_id)
                     .map_err(resolve_status_to_error)?;
             }
@@ -562,9 +543,6 @@ pub fn extract_path_dependency_facts(
                     anchor_id: None,
                 });
                 current_starmap_id = portal.destination_starmap_id.clone();
-                if !visited.insert(current_starmap_id.clone()) {
-                    return Err(resolve_status_to_error(Status::CycleDetected));
-                }
                 check_starmap_readable(context, &current_starmap_id)
                     .map_err(resolve_status_to_error)?;
             }

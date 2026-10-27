@@ -15,8 +15,9 @@
 //!   对同一目标星图的多个 Embed，返回的是原进入实例（因为路径段记录了
 //!   具体的 `instance_id`，不是靠目标标题推测）。
 //! - **跳到祖先**：`jump_to_ancestor` 纯路径截断，不需要 context。
-//! - **错误沿用现有类型**：路径环 → `CycleDetected`，缺失实例 → `MissingEmbed`，
-//!   缺失 portal → `MissingPortal`，超过 32 层 → `TooDeep`。
+//! - **错误沿用现有类型**：缺失实例 → `MissingEmbed`，缺失 portal → `MissingPortal`。
+//!   路径允许重复进入同一星图（A→B→A、A→A），循环是合法内容；每次进入只追加
+//!   一个路径段，身份由完整路径和当次入口实例决定。
 //!
 //! 每一层自己的节点/Embed `position` 仍只属于这一张图的文档坐标。
 //! 不存在"父画布无限放大后把子画布全部铺进去"的坐标链。
@@ -75,7 +76,7 @@ pub struct StarMapNavigationLocation {
 /// 复用 `graph/resolve.rs::resolve_target` 进行解析。
 ///
 /// 成功时返回 `StarMapNavigationLocation`，失败时返回对应的
-/// `StarMapTargetResolveStatus` 错误（如 `MissingEmbed`、`CycleDetected`、`TooDeep` 等）。
+/// `StarMapTargetResolveStatus` 错误（如 `MissingEmbed`、`MissingPortal` 等）。
 pub fn resolve_navigation_route(
     context: &GraphResolverContext,
     route: &StarMapNavigationRoute,
@@ -102,7 +103,7 @@ pub fn enter_embed(
     instance_id: &str,
 ) -> Result<(StarMapNavigationRoute, StarMapNavigationLocation), StarMapTargetResolveStatus> {
     // 先解析当前 route 确认当前位置有效
-    let current_location = resolve_navigation_route(context, route)?;
+    resolve_navigation_route(context, route)?;
 
     // 追加 EnterEmbed 段
     let mut new_segments = route.segments.clone();
@@ -114,17 +115,9 @@ pub fn enter_embed(
         segments: new_segments,
     };
 
-    // 重新解析新 route 验证有效性（会检查 embed 是否存在、是否成环、是否超深度）
+    // 重新解析新 route 验证有效性。允许进入同一张星图（自引用 Embed），
+    // 每进入一次就追加一个路径段，身份由完整路径与当次实例共同确定。
     let new_location = resolve_navigation_route(context, &new_route)?;
-
-    // 确认进入的 embed 实例确实在当前画布中（resolve_target 已通过 lookup_embed 验证）
-    // current_starmap_id 应该与之前的 current_location.current_starmap_id 不同，
-    // 因为穿越到了子画布。但即使相同（自引用 embed），也由 CycleDetected 处理。
-    debug_assert_ne!(
-        current_location.current_starmap_id, new_location.current_starmap_id,
-        "enter_embed should traverse to a different starmap; \
-         same-id traversal is caught by CycleDetected in resolve_target"
-    );
 
     Ok((new_route, new_location))
 }
@@ -142,7 +135,7 @@ pub fn enter_portal(
     node_id: &str,
 ) -> Result<(StarMapNavigationRoute, StarMapNavigationLocation), StarMapTargetResolveStatus> {
     // 先解析当前 route 确认当前位置有效
-    let current_location = resolve_navigation_route(context, route)?;
+    resolve_navigation_route(context, route)?;
 
     // 追加 EnterPortal 段
     let mut new_segments = route.segments.clone();
@@ -154,15 +147,9 @@ pub fn enter_portal(
         segments: new_segments,
     };
 
-    // 重新解析新 route 验证有效性（会检查 portal 节点是否存在、是否成环、是否超深度）
+    // 重新解析新 route 验证有效性。允许 portal 回到当前或祖先星图，
+    // 每进入一次就追加一个路径段。
     let new_location = resolve_navigation_route(context, &new_route)?;
-
-    // 确认穿越到了不同的画布（自引用 portal 由 CycleDetected 处理）
-    debug_assert_ne!(
-        current_location.current_starmap_id, new_location.current_starmap_id,
-        "enter_portal should traverse to a different starmap; \
-         same-id traversal is caught by CycleDetected in resolve_target"
-    );
 
     Ok((new_route, new_location))
 }
@@ -502,8 +489,8 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_navigation_route_cycle_detected() {
-        // 两个图互相 embed 对方 → CycleDetected
+    fn test_resolve_navigation_route_allows_mutual_embed_cycle() {
+        // 两个图互相 embed 对方：A→B→A 是合法路径，重复的 starmap_id 保留在穿越记录里。
         let mut graph_a = make_empty_graph("sm_a");
         graph_a.embeds.push(make_embed("emb_a", "sm_b"));
         let mut graph_b = make_empty_graph("sm_b");
@@ -526,27 +513,65 @@ mod tests {
             ],
         };
 
-        let result = resolve_navigation_route(&context, &route);
-        assert_eq!(result, Err(StarMapTargetResolveStatus::CycleDetected));
+        let location = resolve_navigation_route(&context, &route).unwrap();
+        assert_eq!(location.current_starmap_id, "sm_a");
+        assert_eq!(
+            location.traversed_starmap_ids,
+            vec!["sm_a", "sm_b", "sm_a"]
+        );
     }
 
     #[test]
-    fn test_resolve_navigation_route_too_deep() {
+    fn test_resolve_navigation_route_allows_self_embed() {
+        let mut graph_a = make_empty_graph("sm_a");
+        graph_a.embeds.push(make_embed("self", "sm_a"));
+
+        let mut overlays = HashMap::new();
+        overlays.insert("sm_a".to_string(), graph_a);
+        let context = make_overlay_context(overlays);
+
+        let route = StarMapNavigationRoute {
+            root_starmap_id: "sm_a".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "self".to_string(),
+            }],
+        };
+
+        let location = resolve_navigation_route(&context, &route).unwrap();
+        assert_eq!(location.current_starmap_id, "sm_a");
+        assert_eq!(location.traversed_starmap_ids, vec!["sm_a", "sm_a"]);
+    }
+
+    #[test]
+    fn test_resolve_navigation_route_allows_more_than_32_layers() {
+        // 100 层真实链式 Embed：不再存在固定深度上限。
+        let depth = 100;
+        let mut overlays = HashMap::new();
+        for i in 0..depth {
+            let mut graph = make_empty_graph(&format!("sm_{}", i));
+            graph
+                .embeds
+                .push(make_embed(&format!("emb_{}", i), &format!("sm_{}", i + 1)));
+            overlays.insert(format!("sm_{}", i), graph);
+        }
+        overlays.insert(format!("sm_{}", depth), make_empty_graph(&format!("sm_{}", depth)));
+
         let mut segments = Vec::new();
-        for i in 0..33 {
+        for i in 0..depth {
             segments.push(StarMapPathSegment::EnterEmbed {
                 instance_id: format!("emb_{}", i),
             });
         }
 
         let route = StarMapNavigationRoute {
-            root_starmap_id: "sm_root".to_string(),
+            root_starmap_id: "sm_0".to_string(),
             segments,
         };
 
-        let context = make_overlay_context(HashMap::new());
-        let result = resolve_navigation_route(&context, &route);
-        assert_eq!(result, Err(StarMapTargetResolveStatus::TooDeep));
+        let context = make_overlay_context(overlays);
+        let location = resolve_navigation_route(&context, &route).unwrap();
+        assert_eq!(location.current_starmap_id, format!("sm_{}", depth));
+        assert_eq!(location.traversed_starmap_ids.len(), depth as usize + 1);
     }
 
     // -----------------------------------------------------------------------

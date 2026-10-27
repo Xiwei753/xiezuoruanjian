@@ -13,9 +13,10 @@
 //!    属于 A 的 `e1` 必须报 `MissingEmbed`，不能因为根图里存在 `e1` 就放行。
 //! 3. `enter_starmap_portal` 只接受当前画布中带 Portal 的节点：普通节点与不存在
 //!    节点都报 `MissingPortal`。
-//! 4. A、B 互相 Embed 形成环：`enter_starmap_embed` 与 `resolve_starmap_navigation`
-//!    都必须报 `CycleDetected`，不得把重复进入当成有效路径。
-//! 5. 路径段超过 32 层：`resolve_starmap_navigation` 报 `TooDeep`。
+//! 4. A、B 互相 Embed 形成环：A→B→A 是合法导航路径，route 保留完整实例序列，
+//!    退出一次回到 B、再退出回到根图 A；重复的 starmap_id 不构成错误。
+//! 5. 33 层与 100 层链式 Embed：`resolve_starmap_navigation` 均成功，不再有固定深度上限。
+//! 6. A 自嵌入 A：进入后仍停留在 A，但 route 必须追加一个入口实例段，退出回到根图。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -210,9 +211,9 @@ fn enter_portal_rejects_non_portal_and_missing_nodes() {
     );
 }
 
-/// A、B 互相 Embed 形成环，进出与解析都必须拒绝，不得把重复进入当成有效路径。
+/// A、B 互相 Embed 形成环：循环是合法内容，进入、解析和逐层退出都保留实例身份。
 #[test]
-fn mutual_embed_cycle_is_rejected_by_public_api() {
+fn mutual_embed_cycle_is_navigable_by_public_api() {
     let (tmp, api) = make_api();
     let a = api.create_starmap("A", "", None).unwrap().starmap_id;
     let b = api.create_starmap("B", "", None).unwrap().starmap_id;
@@ -225,43 +226,137 @@ fn mutual_embed_cycle_is_rejected_by_public_api() {
         .enter_starmap_embed(a.clone(), vec![], "eAB".to_string())
         .unwrap();
     assert_eq!(into_b.location.current_starmap_id, b);
+    assert_eq!(into_b.route.segments, vec![enter_embed("eAB")]);
 
-    // B -eBA-> A 会重复进入 A，必须报 CycleDetected。
-    let error = api
+    // B -eBA-> A：重复进入 A 合法，完整 route 和穿越顺序都要保留。
+    let back_to_a = api
         .enter_starmap_embed(a.clone(), vec![enter_embed("eAB")], "eBA".to_string())
-        .expect_err("重复进入 A 必须被识别为环");
-    assert!(
-        format!("{error:?}").contains("CycleDetected"),
-        "必须是 CycleDetected；实际: {error:?}"
+        .unwrap();
+    assert_eq!(back_to_a.location.current_starmap_id, a);
+    assert_eq!(
+        back_to_a.route.segments,
+        vec![enter_embed("eAB"), enter_embed("eBA")]
+    );
+    assert_eq!(
+        back_to_a.location.traversed_starmap_ids,
+        vec![a.clone(), b.clone(), a.clone()]
     );
 
-    // 直接解析整条环路径也必须拒绝，而不是返回某个画布位置。
-    let error = api
+    // 直接解析整条环路径同样成功，并能继续沿着循环再走一圈。
+    let resolved = api
         .resolve_starmap_navigation(a.clone(), vec![enter_embed("eAB"), enter_embed("eBA")])
-        .expect_err("环路径不能被解析成有效位置");
-    assert!(
-        format!("{error:?}").contains("CycleDetected"),
-        "必须是 CycleDetected；实际: {error:?}"
-    );
+        .unwrap();
+    assert_eq!(resolved.current_starmap_id, a);
+    let round_trip = api
+        .enter_starmap_embed(
+            a.clone(),
+            vec![enter_embed("eAB"), enter_embed("eBA")],
+            "eAB".to_string(),
+        )
+        .unwrap();
+    assert_eq!(round_trip.location.current_starmap_id, b);
+    assert_eq!(round_trip.route.segments.len(), 3);
+
+    // 退出只移除最后一段：先回到 B 的 eAB 入口身份，再回到根图。
+    let exited_b = api.exit_starmap_canvas(back_to_a.route.clone()).unwrap();
+    assert_eq!(exited_b.segments, vec![enter_embed("eAB")]);
+    let exited_root = api.exit_starmap_canvas(exited_b).unwrap();
+    assert!(exited_root.segments.is_empty());
+    assert_eq!(exited_root.root_starmap_id, a);
 
     drop(tmp);
 }
 
-/// 路径段超过 32 层，`resolve_starmap_navigation` 必须报 TooDeep。
+/// A 自嵌入 A：进入后当前画布仍是 A，但入口段必须追加，退出回到根图。
 #[test]
-fn navigation_depth_limit_is_enforced() {
+fn self_embed_is_navigable_by_public_api() {
     let (tmp, api) = make_api();
     let a = api.create_starmap("A", "", None).unwrap().starmap_id;
+    api.add_starmap_embed(&a, embed_at(&a, "eAA", &a)).unwrap();
+    api.flush_all_starmap_stores().unwrap();
 
-    let segments: Vec<StarMapPathSegmentDto> =
-        (0..33).map(|i| enter_embed(&format!("e{i}"))).collect();
-    let error = api
-        .resolve_starmap_navigation(a.clone(), segments)
-        .expect_err("超过 32 层的路径必须报 TooDeep");
-    assert!(
-        format!("{error:?}").contains("TooDeep"),
-        "必须是 TooDeep；实际: {error:?}"
+    let entered = api
+        .enter_starmap_embed(a.clone(), vec![], "eAA".to_string())
+        .unwrap();
+    assert_eq!(entered.location.current_starmap_id, a);
+    assert_eq!(entered.route.segments, vec![enter_embed("eAA")]);
+    assert_eq!(
+        entered.location.traversed_starmap_ids,
+        vec![a.clone(), a.clone()]
     );
+
+    let resolved = api
+        .resolve_starmap_navigation(a.clone(), vec![enter_embed("eAA"), enter_embed("eAA")])
+        .unwrap();
+    assert_eq!(resolved.current_starmap_id, a);
+    assert_eq!(resolved.traversed_starmap_ids.len(), 3);
+
+    let exited = api.exit_starmap_canvas(entered.route).unwrap();
+    assert!(exited.segments.is_empty());
+
+    drop(tmp);
+}
+
+/// 构造 `depth` 层链式 Embed 的 100 层测试夹具。
+fn make_chain_fixture(depth: usize) -> (TempDir, WriterCoreApi, String, String) {
+    let (tmp, api) = make_api();
+    let root = api.create_starmap("S0", "", None).unwrap().starmap_id;
+    let mut previous = root.clone();
+    for i in 0..depth {
+        let next = api
+            .create_starmap(&format!("S{}", i + 1), "", None)
+            .unwrap()
+            .starmap_id;
+        api.add_starmap_embed(&previous, embed_at(&previous, &format!("e{i}"), &next))
+            .unwrap();
+        previous = next;
+    }
+    api.flush_all_starmap_stores().unwrap();
+    let final_starmap_id = previous;
+    (tmp, api, root, final_starmap_id)
+}
+
+/// 33 层链式导航成功。
+#[test]
+fn navigation_supports_33_layers() {
+    let depth = 33;
+    let (tmp, api, root, final_starmap_id) = make_chain_fixture(depth);
+    let segments: Vec<StarMapPathSegmentDto> =
+        (0..depth).map(|i| enter_embed(&format!("e{i}"))).collect();
+
+    let location = api
+        .resolve_starmap_navigation(root, segments)
+        .expect("33 层是合法有限路径");
+    assert_eq!(location.current_starmap_id, final_starmap_id);
+    assert_eq!(location.traversed_starmap_ids.len(), depth + 1);
+
+    drop(tmp);
+}
+
+/// 100 层链式导航成功，不再存在任意深度天花板。
+#[test]
+fn navigation_supports_100_layers() {
+    let depth = 100;
+    let (tmp, api, root, final_starmap_id) = make_chain_fixture(depth);
+    let mut segments: Vec<StarMapPathSegmentDto> =
+        (0..depth).map(|i| enter_embed(&format!("e{i}"))).collect();
+
+    let location = api
+        .resolve_starmap_navigation(root.clone(), segments.clone())
+        .expect("100 层是合法有限路径");
+    assert_eq!(location.current_starmap_id, final_starmap_id);
+    assert_eq!(location.traversed_starmap_ids.len(), depth + 1);
+
+    // 通过导航 API 逐层进入最后一段，确认返回的 route 也保留完整长度。
+    let entered = api
+        .enter_starmap_embed(
+            root,
+            segments.drain(..depth - 1).collect(),
+            format!("e{}", depth - 1),
+        )
+        .unwrap();
+    assert_eq!(entered.route.segments.len(), depth);
+    assert_eq!(entered.location.current_starmap_id, final_starmap_id);
 
     drop(tmp);
 }

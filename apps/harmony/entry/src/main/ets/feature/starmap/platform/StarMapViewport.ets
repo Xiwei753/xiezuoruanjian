@@ -128,42 +128,44 @@ export interface GlobalCameraTransform {
   offsetY: number
 }
 
-/**
- * 相机比例下限（#821）。
- *
- * #820 取 0.3 是为了让"双指捏到最小"刚好还能认清一整棵树，属于拍出来的经验值；
- * #821 放开到接近数值安全下界：局部适配比例已经能把深层内容保持成可辨认的尺寸，
- * 相机只需要管视角，退得远一点是用户的正常需求（看全局结构），不该被硬顶住。
- */
-export const CAMERA_SCALE_MIN: number = 1e-4
+/** 没有可用内容时使用的稳定默认比例。 */
+export const DEFAULT_CAMERA_SCALE: number = 1
 
 /**
- * 相机比例上限（#821）。
+ * 把相机比例规范为可参与运算的正有限数。
  *
- * #820 取 3，真机上很快就会顶到、用户觉得"不能再放大"。
- *
- * #821 之所以敢放开到 1e5，是因为**放大不再靠撑大布局矩形**：
- * 组件宽高恒为局部基准尺寸（Embed 恒为 DEFAULT_EMBED_DIAMETER），
- * 放大只发生在 `.scale()` 显示变换上。旧模型下把上限调大就会让 RenderService
- * 按 `baseSize * cameraScale` 去分配超大缓冲区，那才是真正会被顶死的原因。
- *
- * 1e5 是纯数值安全边界，不是产品上限：真正能放多大由用户手势和内容决定。
+ * 这不是产品缩放上限：正常手势产生的任何正有限比例都会原样保留。
+ * 只有数值表示真的到达 Number 边界（上溢/下溢）时才停在边界上，
+ * 避免 Infinity / 0 污染后续坐标运算。
  */
-export const CAMERA_SCALE_MAX: number = 1e5
-
-/** 把相机比例夹在合法区间内；非有限值或非正数一律退回 1。 */
 export function clampCameraScale(scale: number): number {
-  if (!isFinite(scale) || scale <= 0) {
-    return 1
+  if (scale === Infinity) {
+    return Number.MAX_VALUE
   }
-  return Math.max(CAMERA_SCALE_MIN, Math.min(CAMERA_SCALE_MAX, scale))
+  if (!isFinite(scale) || scale <= 0) {
+    return DEFAULT_CAMERA_SCALE
+  }
+  return scale
+}
+
+/** 相机比例连续变化；下溢时保留最小正数，不跳回默认比例。 */
+function scaleAfterFactor(scale: number, factor: number): number {
+  const nextScale: number = scale * factor
+  if (nextScale === 0) {
+    return Number.MIN_VALUE
+  }
+  return clampCameraScale(nextScale)
+}
+
+function safeCameraScale(camera: GlobalCameraTransform): number {
+  return isFinite(camera.scale) && camera.scale > 0 ? camera.scale : DEFAULT_CAMERA_SCALE
 }
 
 /**
  * 双指捏合时相机的新状态（#818 公式）：
  *   anchorWorldX = (centerX - offsetX) / cameraScale
  *   anchorWorldY = (centerY - offsetY) / cameraScale
- *   nextScale    = clamp(baseScale * pinchRatio)
+ *   nextScale    = baseScale * pinchRatio
  *   offsetX      = centerX - anchorWorldX * nextScale
  *   offsetY      = centerY - anchorWorldY * nextScale
  *
@@ -187,9 +189,10 @@ export function computeCameraPinch(
   centerY: number
 ): GlobalCameraTransform {
   const ratio: number = baseDistance > 0 ? currentDistance / baseDistance : 1
-  const nextScale: number = clampCameraScale(baseScale * ratio)
-  const anchorWorldX: number = (centerX - camera.offsetX) / camera.scale
-  const anchorWorldY: number = (centerY - camera.offsetY) / camera.scale
+  const currentScale: number = safeCameraScale(camera)
+  const nextScale: number = scaleAfterFactor(currentScale, ratio)
+  const anchorWorldX: number = (centerX - camera.offsetX) / currentScale
+  const anchorWorldY: number = (centerY - camera.offsetY) / currentScale
   return {
     scale: nextScale,
     offsetX: centerX - anchorWorldX * nextScale,
@@ -206,13 +209,14 @@ export function computeCameraZoomAround(
   centerY: number,
   nextScale: number
 ): GlobalCameraTransform {
-  const clamped: number = clampCameraScale(nextScale)
-  const anchorWorldX: number = (centerX - camera.offsetX) / camera.scale
-  const anchorWorldY: number = (centerY - camera.offsetY) / camera.scale
+  const currentScale: number = safeCameraScale(camera)
+  const scale: number = clampCameraScale(nextScale)
+  const anchorWorldX: number = (centerX - camera.offsetX) / currentScale
+  const anchorWorldY: number = (centerY - camera.offsetY) / currentScale
   return {
-    scale: clamped,
-    offsetX: centerX - anchorWorldX * clamped,
-    offsetY: centerY - anchorWorldY * clamped
+    scale,
+    offsetX: centerX - anchorWorldX * scale,
+    offsetY: centerY - anchorWorldY * scale
   }
 }
 
@@ -265,20 +269,20 @@ export function computeEmbedInnerContentSafeSide(
   return Math.max(0, innerSquare - EMBED_INTERACTION_SHELL_VP - Math.max(0, paddingVp) * 2)
 }
 
-/** fitScale 的下限。再小就完全看不见了，保留一点下限免得内容糊成一点。 */
-export const MIN_FIT_SCALE: number = 0.02
-
-/** fitScale 的上限。子星图内容少的时候不该被放大到糊掉。 */
-export const MAX_FIT_SCALE: number = 4
+/** 没有有效内容包围盒时使用的稳定默认适配比例。 */
+export const DEFAULT_FIT_SCALE: number = 1
 
 /**
  * 按可用区域计算适配比例。
+ *
+ * 返回真实内容比例，不再套产品上下限：内容大就小、内容小就大，
+ * 看不清是自然的缩放结果，不是切换到另一套显示形态的信号。
  *
  * @param bounds 内容包围盒（画布坐标）
  * @param availableWidth 可用宽度（vp）
  * @param availableHeight 可用高度（vp）
  * @param paddingVp 四边留白（vp）
- * @returns 适配比例，已夹在 [MIN_FIT_SCALE, MAX_FIT_SCALE]
+ * @returns 适配比例；没有有效内容时返回稳定默认值
  */
 export function computeFitScale(
   bounds: ContentBounds,
@@ -290,9 +294,9 @@ export function computeFitScale(
   const usableHeight: number = Math.max(1, availableHeight - paddingVp * 2)
   const raw: number = Math.min(usableWidth / bounds.width, usableHeight / bounds.height)
   if (!isFinite(raw) || raw <= 0) {
-    return MIN_FIT_SCALE
+    return DEFAULT_FIT_SCALE
   }
-  return Math.max(MIN_FIT_SCALE, Math.min(MAX_FIT_SCALE, raw))
+  return raw
 }
 
 /**
@@ -562,15 +566,21 @@ export class StarMapSceneNode implements RecursiveSceneSource {
  */
 export class StarMapSceneRegistry {
   private handles: Map<string, StarMapSceneNode> = new Map<string, StarMapSceneNode>()
+  private activeHandle: StarMapSceneNode | null = null
 
   /** 注册一层 Scene。同一路径重复注册以最后一次为准。 */
   register(handle: StarMapSceneNode): void {
     this.handles.set(describeScenePath(handle.scenePath), handle)
+    this.activeHandle = handle
   }
 
   /** 注销一层 Scene。 */
   unregister(scenePath: StarMapPathSegment[]): void {
-    this.handles.delete(describeScenePath(scenePath))
+    const key: string = describeScenePath(scenePath)
+    this.handles.delete(key)
+    if (this.activeHandle !== null && describeScenePath(this.activeHandle.scenePath) === key) {
+      this.activeHandle = null
+    }
   }
 
   /** 按绝对路径查 Scene 句柄；没挂载或没加载完返回 null。 */
@@ -579,9 +589,15 @@ export class StarMapSceneRegistry {
     return handle !== undefined ? handle : null
   }
 
-  /** 取根 Scene 句柄。 */
+  /**
+   * 取当前活动画布的 Scene 句柄。
+   *
+   * #1009 起 Harmony 只挂载一份活动画布，它的 scenePath 是完整 route，
+   * 不一定为空；根画布仍优先返回空路径，其他情况返回唯一已注册画布。
+   */
   getRoot(): StarMapSceneNode | null {
-    return this.find([])
+    const root: StarMapSceneNode | null = this.find([])
+    return root !== null ? root : this.activeHandle
   }
 
   /**

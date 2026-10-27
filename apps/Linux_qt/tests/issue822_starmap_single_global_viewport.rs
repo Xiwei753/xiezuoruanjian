@@ -189,8 +189,8 @@ fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
         "zoomAt 必须是唯一缩放入口，内部改活动画布 zoomLevel 并 applyPan，实际窗口:\n{zoom}"
     );
     assert!(
-        zoom.contains("Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, requested))"),
-        "zoomAt 只夹数值安全范围（CAMERA_SCALE_MIN/MAX），实际窗口:\n{zoom}"
+        zoom.contains("var target = normalizedZoom(requested, zoomLevel)"),
+        "zoomAt 只做 Number 边界规范化，不夹 1e-4×/1e5× 产品范围，实际窗口:\n{zoom}"
     );
     // #929 复核：连续缩放穿越也从同一入口评估，判定只按入口投影覆盖率
     //（maybeEnterEmbedAt / maybeExitCanvas），zoom 数值本身不是层级依据；
@@ -238,21 +238,19 @@ fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
     );
 }
 
-/// 相机范围跟 docs/starmap_viewport.md：只保留数值安全边界 + 乘法步进。
-/// 旧的 0.35~2.5 硬上限会让 1080 高窗口里的子星图永远停在 preview（进不了 interactive）。
+/// 相机范围跟 docs/starmap_viewport.md：连续缩放 + 乘法步进。
+/// 不再有 0.35~2.5 / 1e-4~1e5 这类产品硬边界；只在 Number 边界做规范化。
 #[test]
 fn camera_range_and_steps_follow_the_shared_viewport_spec() {
     let src = read_src(CANVAS);
-    for constant in [
-        "readonly property real _cameraScaleMin: 1e-4",
-        "readonly property real _cameraScaleMax: 1e5",
-        "readonly property real _zoomFactor: 1.2",
-    ] {
-        assert!(
-            src.contains(constant),
-            "相机常量必须与 docs/starmap_viewport.md 一致：缺 {constant}"
-        );
-    }
+    assert!(
+        src.contains("readonly property real _zoomFactor: 1.2"),
+        "工具栏必须使用共享乘法步进常量"
+    );
+    assert!(
+        !src.contains("_cameraScaleMin") && !src.contains("_cameraScaleMax"),
+        "画布不得再声明 1e-4×/1e5× 产品缩放范围"
+    );
 
     let stripped = strip_line_comments(&src);
     for forbidden in [

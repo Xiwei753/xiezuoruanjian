@@ -260,8 +260,8 @@ fn zoom_target_and_anchor_are_recorded_without_queueing_tweens() {
     let zoom = function_window(&src, "function zoomAt(", 2600);
     assert!(
         zoom.contains("var requested = nextZoom")
-            && zoom.contains("Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, requested))"),
-        "zoomAt 仍必须是唯一缩放入口并只夹数值安全范围，实际窗口:\n{zoom}"
+            && zoom.contains("var target = normalizedZoom(requested, zoomLevel)"),
+        "zoomAt 仍必须是唯一缩放入口并只做 Number 边界规范化，实际窗口:\n{zoom}"
     );
     assert!(
         zoom.contains("_zoomTargetLevel = target"),
@@ -784,7 +784,7 @@ fn enter_transition_moves_from_entry_preview_to_the_readable_camera() {
         "可读镜头必须优先沿用该子图已有的合法镜头，实际窗口:\n{readable}"
     );
     assert!(
-        readable.contains("Math.min(_cameraScaleMax, 1.0)")
+        readable.contains("var zoom = 1.0")
             && readable.contains("panX: width / 2 - cx * zoom")
             && readable.contains("panY: height / 2 - cy * zoom"),
         "没有既有镜头时用作者尺度 100% + 内容包围盒居中的合理默认，实际窗口:\n{readable}"
@@ -1028,11 +1028,11 @@ fn layer_switch_carries_the_unfinished_wheel_target_across_the_ratio() {
     // 换算公式本体：子镜头 = 父镜头 × ratio、父镜头 = 子镜头 ÷ ratio，都带 clamp。
     assert!(
         canvas.contains(
-            "var zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, parentCam.zoom * ctx.ratio))"
+            "var zoom = normalizedZoom(parentCam.zoom * ctx.ratio, parentCam.zoom)"
         ) && canvas.contains(
-            "var zoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, childCam.zoom / ctx.ratio))"
+            "var zoom = normalizedZoom(childCam.zoom / ctx.ratio, childCam.zoom)"
         ),
-        "跨画布换算必须走 childCameraForParent / parentCameraForChild 的 ×ratio / ÷ratio（带数值 clamp）"
+        "跨画布换算必须走 childCameraForParent / parentCameraForChild 的 ×ratio / ÷ratio（带 Number 规范化）"
     );
 
     // 进场：换层前保存父层 pending + 锚点，换算到子图尺度当过渡目标。

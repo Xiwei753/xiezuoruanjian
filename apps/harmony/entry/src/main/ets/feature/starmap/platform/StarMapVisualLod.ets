@@ -1,53 +1,29 @@
 // ─── StarMapVisualLod.ets ───
-// 星图 Deep Zoom 显示细节档位 + 视觉焦点纯计算模块 —— Issue #821。
+// 星图视觉焦点纯计算模块。
 //
 // 这一层是 HarmonyOS **显示层**的东西，不进 writer_core：
 // Core 只知道"这张星图里有这些节点、这些 Embed、这些 authored position"，
-// 完全不知道屏幕、相机和视觉焦点。这里负责把这些量算出来：
+// 完全不知道屏幕、相机和视觉焦点。
 //
-//   屏幕投影链（#821 规范）：
-//     稳定 world geometry → 全局相机 → 每层 local fit → Deep Zoom detail
-//   effectiveScale = globalCameraScale × 所有祖先 EmbedLocalFitScale
-//   projectedDiameterVp = DEFAULT_EMBED_DIAMETER × ownerEffectiveScale
-//   coverage = projectedDiameterVp / min(viewportWidth, viewportHeight)
+// 这里只算屏幕投影和焦点参考根，**不再有 interactive / preview / shell 细节档位**：
+// 每层画布始终绘制本层真实的节点卡片、边和入口，缩放只改变视角，
+// 不换形状、不换渲染器、不按覆盖率降级内容。缩得足够小、文字看不清，
+// 就是自然的光学结果，不是切换到另一套显示模型。
 //
-// #821 的核心边界：**Deep Zoom 只决定"渲染多少细节 / 是否挂完整交互组件"，
-// 绝不改 Embed 的形状、world bounds 或它在父 Scene 里的 authored position。**
-// 子星图在任何档位、任何缩放下都还是那颗正圆（DEFAULT_EMBED_DIAMETER，
-// 圆角 = 边长 / 2），不会再变成 160×80 的矩形节点摘要卡。用户缩放只改变视角，
-// 同层所有对象按同一个相机比例等比缩放；只有真正创建 / 移动 / 缩放某个对象的
-// world bounds 时才谈得上避让。缩放不是布局变化。
-//
-// 三档细节只看屏幕上有多少真实空间：
-// - interactive：实例化 child Scene（内部可命中、可编辑、可继续递归）
-// - preview：轻量 Canvas 缩略图，只回答"里面大概有什么"，不挂交互组件
-// - shell：只画圆壳，连缩略图都不画（数据仍在 Core 里，随时可以再展开）
-//
-// 档位之间用滞回防抖：
-// - interactive 进入 coverage ≥ 0.70 / 退出 ≥ 0.60
-// - preview 进入 projectedDiameterVp ≥ 48vp / 退出 ≥ 40vp
-// 视觉焦点链上的 Embed 至少保底 preview（不会掉到纯圆壳），但**保底的不是形状**，
-// 只是"里面还有东西可看"。
-//
-// "手机两层、平板三层"这种层数是**小视口自然算出来的结果**，不是常量：
-// 视口小或相机缩得小 → 圆投影小 → 内部可用尺寸不够 → 掉档；
-// 视口大或相机放大 → 交互层。同一个设备改窗口大小会就地重算。
-//
-// 视口 resize 与相机缩放都**不碰 authored position、不碰 world 几何**，
-// 只重算显示细节档位，focusScenePath 由 ui/StarMapScreen 的焦点状态机另行维护。
+//   屏幕投影链：
+//     effectiveScale = globalCameraScale × 所有祖先 EmbedLocalFitScale
+//     projectedDiameterVp = DEFAULT_EMBED_DIAMETER × ownerEffectiveScale
+//     coverage = projectedDiameterVp / min(viewportWidth, viewportHeight)
 //
 // 视觉焦点只是"显示参考根"，两组滞回常量都在这一层：
 // - 覆盖率：进入 ≥ 0.70 / 退出 < 0.55
 // - 位置：圆心进入要落在 30%~70%，保持在 20%~80%
-// 两组都只为防抖，不是设备分类。退出必须同时看位置，否则用户把相机拖走之后，
-// 一条已经不在视野里的焦点链会被继续强制保底。
+// 两组都只为防抖，不是设备分类。焦点不参与任何形状或细节档位判定。
 //
 // 所有函数都是纯函数：不读 Core、不碰 ArkUI、不做 per-frame UniFFI 调用。
-// Deep Zoom 档位是高频显示计算，全部在本地一次算完。
 //
 // 关于依赖方向：本模块只依赖 StarMapLayout（纯尺寸常量），
-// **不依赖 StarMapViewport**（#820 旧模型要算圆内可用尺寸才需要它，
-// #821 稳定圆壳之后不再需要）。也不依赖 StarMapGeometry：
+// **不依赖 StarMapViewport**。也不依赖 StarMapGeometry：
 // 原因是 Geometry 若反向 import 本模块会绕成 platform 模块之间的环，
 // 而 Viewport 顶层的常量在模块初始化时就要读 Geometry 的常量，环初始化会算成 NaN。
 
@@ -55,17 +31,7 @@ import { DEFAULT_EMBED_DIAMETER } from './StarMapLayout'
 
 // ─── 类型 ───
 
-/**
- * Deep Zoom 细节档位。
- *
- * 三档都画同一颗圆、同一份 world geometry，区别只在"圆里渲染多少东西"：
- * - interactive：挂完整 child Scene，内部节点是真实 ArkUI 组件，可点可拖
- * - preview：一张固定尺寸 Canvas 缩略图，节点/边/子星图都是画出来的，没有交互组件
- * - shell：只画圆壳
- */
-export type DeepZoomDetail = 'interactive' | 'preview' | 'shell'
-
-/** 档位计算需要的**根**视口上下文。整棵递归树共用同一份，子 Scene 不许拿自己的圆当视口。 */
+/** 焦点判定需要的**根**视口上下文。整棵递归树共用同一份，子 Scene 不许拿自己的圆当视口。 */
 export interface VisualLodContext {
   /** 根 StarMap 实际可绘制内容区宽度（vp） */
   viewportWidthVp: number
@@ -87,23 +53,6 @@ export interface ProjectedEmbedMetrics {
   /** projectedDiameterVp 占视口短边的比例 */
   coverage: number
 }
-
-/** 进入 interactive 档所需的覆盖率阈值（滞回上沿）。 */
-export const INTERACTIVE_ENTER_COVERAGE: number = 0.70
-
-/** 保持 interactive 档所需的覆盖率阈值（滞回下沿）。 */
-export const INTERACTIVE_EXIT_COVERAGE: number = 0.60
-
-/**
- * 进入 preview 档所需的投影直径下限（vp）。
- *
- * 再小就只剩圆壳：画出来的节点圆和字都糊成一团，比不画更难认。
- * 48vp 大约能让里面几个节点圆分辨出形状和相对位置 —— 这正是 preview 要回答的问题。
- */
-export const PREVIEW_MIN_DIAMETER_VP: number = 48
-
-/** 保持 preview 档所需的投影直径下限（vp），防抖用。 */
-export const PREVIEW_EXIT_DIAMETER_VP: number = 40
 
 /** 进入视觉焦点所需的覆盖率阈值（滞回上沿）。 */
 export const FOCUS_ENTER_COVERAGE: number = 0.70
@@ -239,88 +188,6 @@ export function parentScenePathOf(scenePath: string): string {
   return scenePath.substring(0, idx)
 }
 
-/**
- * 某个 candidate Embed 的 childScenePath 是否在"通往视觉焦点的那条链"上
- * （焦点自身或它的祖先）。
- *
- * 注意入参是**这颗 Embed 进入之后的路径**，不是它所属的父 Scene：
- * 焦点在 `root/embed:a` 时只有 a 属于焦点链，同层兄弟 b / c 仍按屏幕空间正常掉档。
- *
- * Detail 判定要用它保住这条链：从根到 `focusScenePath` 的每一层至少留住 preview，
- * 否则用户捏进去的子星图会退化成一颗空圆壳，"里面有什么"就再也看不到了。
- *
- * 焦点**之后**的更深层不在这条链上：那几层继续按屏幕空间正常判定，
- * 否则"语义缩放"就退化成"从焦点往下全部保底"，再深也不掉档了。
- *
- * @param embedScenePath 待判定的 **candidate Embed 进入之后**的 childScenePath 描述
- * @param focusScenePath 当前视觉焦点的 scenePath 描述
- * @returns true 表示它是焦点自身或焦点的祖先
- */
-export function isOnFocusChain(embedScenePath: string, focusScenePath: string): boolean {
-  return embedScenePath === focusScenePath || focusScenePath.startsWith(embedScenePath + '/')
-}
-
-// ─── Deep Zoom 档位判定 ───
-
-/**
- * 单个 Embed 的 Deep Zoom 细节档位（只看屏幕上有多少真实空间）。
- *
- * 判据只有两条，都是**连续**的屏幕量，没有"第几层"也没有设备断点：
- * - `coverage ≥ 0.70` → 圆几乎占满视口短边，里面塞得下真实组件 → interactive
- * - `projectedDiameterVp ≥ 48` → 还能看出里面大概有什么 → preview
- * - 再小 → 只剩圆壳
- *
- * @param metrics 该 Embed 的屏幕投影度量
- * @param previousDetail 上一帧的档位（滞回用），首次渲染传 null
- * @returns interactive / preview / shell
- */
-export function resolveDeepZoomDetail(
-  metrics: ProjectedEmbedMetrics,
-  previousDetail: DeepZoomDetail | null
-): DeepZoomDetail {
-  if (!Number.isFinite(metrics.projectedDiameterVp) || !Number.isFinite(metrics.coverage)) {
-    return 'shell'
-  }
-  if (metrics.coverage >= INTERACTIVE_ENTER_COVERAGE) {
-    return 'interactive'
-  }
-  if (previousDetail === 'interactive' && metrics.coverage >= INTERACTIVE_EXIT_COVERAGE) {
-    return 'interactive'
-  }
-  if (metrics.projectedDiameterVp >= PREVIEW_MIN_DIAMETER_VP) {
-    return 'preview'
-  }
-  if (previousDetail === 'preview' && metrics.projectedDiameterVp >= PREVIEW_EXIT_DIAMETER_VP) {
-    return 'preview'
-  }
-  return 'shell'
-}
-
-/**
- * 带焦点链保底的完整档位求解。
- *
- * 焦点链上的 Embed 至少保底 preview：用户捏进去的那条链不能退化成空圆壳。
- * 保底的只是"里面还有东西可看"，**不是形状**——它照样是同一颗正圆。
- *
- * @param metrics 该 Embed 的屏幕投影度量
- * @param embedScenePath 该 Embed 进入之后的 childScenePath 描述（**不是**所属父 Scene 的路径）
- * @param focusScenePath 当前视觉焦点的 scenePath 描述
- * @param previousDetail 上一帧的档位（滞回用），首次渲染传 null
- * @returns Deep Zoom 细节档位
- */
-export function resolveEmbedDetailForScene(
-  metrics: ProjectedEmbedMetrics,
-  embedScenePath: string,
-  focusScenePath: string,
-  previousDetail: DeepZoomDetail | null
-): DeepZoomDetail {
-  const detail: DeepZoomDetail = resolveDeepZoomDetail(metrics, previousDetail)
-  if (detail === 'shell' && isOnFocusChain(embedScenePath, focusScenePath)) {
-    return 'preview'
-  }
-  return detail
-}
-
 // ─── 焦点候选与滞回 ───
 
 /**
@@ -371,7 +238,7 @@ export function shouldPromoteFocus(coverage: number): boolean {
  * - 圆心已经离开**保持窗口**（20% ~ 80%）：用户把相机拖走了，它根本不在看的东西里。
  *
  * 只看 coverage 会让"被拖出视口但仍然很大"的焦点永久赖着：
- * 那条已经看不见的链会被继续保底，焦点参考根和用户实际在看的区域脱节。
+ * 那张已经看不见的画面会被继续当作参考根，和用户实际在看的区域脱节。
  *
  * @param candidate 当前焦点对应的完整候选（含覆盖率与圆心位置）
  * @returns true 表示应当退出焦点（退回父层）
