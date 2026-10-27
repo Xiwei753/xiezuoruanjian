@@ -552,8 +552,13 @@ def check_arkts_relative_imports_resolvable(harmony_root: str) -> List[Tuple[boo
                 relpath = m.group(1)
                 if not relpath.startswith("."):
                     continue
-                total_imports += 1
                 resolved = os.path.normpath(os.path.join(file_dir, relpath))
+                # Issue #1007：entry/hvigorfile.ts 在 CompileArkTS 前生成
+                # generated/BuildRevision.ets；该文件不入库，干净检出时静态检查
+                # 不能要求它已存在。
+                if resolved.startswith(os.path.join(ets_root, "generated") + os.sep):
+                    continue
+                total_imports += 1
                 if (os.path.exists(resolved)
                         or os.path.exists(resolved + ".ets")
                         or os.path.exists(resolved + ".ts")):
