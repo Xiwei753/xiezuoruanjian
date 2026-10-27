@@ -173,6 +173,17 @@ export class EditorStatsQueue {
       deletedChars: 0,
       eventId: segment.eventId,
       occurredAtMs: segment.startAtMs,
+      changes: [],
+      sessionId: segment.sessionId,
+      baselineText: '',
+      baseRevision: 0,
+      newRevision: 0,
+      oldSelectionAnchor: 0,
+      oldSelectionHead: 0,
+      newSelectionAnchor: 0,
+      newSelectionHead: 0,
+      beforeTextSha256: '',
+      afterTextSha256: '',
       segment: segment
     })
   }

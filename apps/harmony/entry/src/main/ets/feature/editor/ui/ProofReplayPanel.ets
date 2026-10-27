@@ -30,7 +30,7 @@ export struct ProofReplayPanel {
   @State private text: string = ''
   @State private deviceId: string = ''
   @State private branches: string[] = []
-  @State private position: number = 0
+  @State private eventPosition: number = 0
   @State private totalEvents: number = 0
   @State private timestampMs: number = 0
   @State private nextTimestampMs: number = 0
@@ -98,7 +98,7 @@ export struct ProofReplayPanel {
         }
       }
     }
-    this.position = frame.position !== undefined ? frame.position : 0
+    this.eventPosition = frame.position !== undefined ? frame.position : 0
     this.totalEvents = frame.totalEvents !== undefined ? frame.totalEvents : 0
     this.timestampMs = frame.timestampMs !== undefined ? frame.timestampMs : 0
     this.nextTimestampMs = frame.nextTimestampMs !== undefined ? frame.nextTimestampMs : 0
@@ -112,7 +112,7 @@ export struct ProofReplayPanel {
     if (!this.playing) {
       return
     }
-    if (this.position >= this.totalEvents) {
+    if (this.eventPosition >= this.totalEvents) {
       this.stopPlayback()
       return
     }
@@ -124,14 +124,14 @@ export struct ProofReplayPanel {
       if (!this.playing) {
         return
       }
-      void this.loadFrame(this.position + 1).then((): void => {
+      void this.loadFrame(this.eventPosition + 1).then((): void => {
         this.scheduleNext()
       })
     }, delay)
   }
 
   private startPlayback(): void {
-    if (this.totalEvents <= 0 || this.position >= this.totalEvents) {
+    if (this.totalEvents <= 0 || this.eventPosition >= this.totalEvents) {
       return
     }
     this.playing = true
@@ -167,19 +167,19 @@ export struct ProofReplayPanel {
             }
           })
         Button('上一步')
-          .enabled(this.position > 0)
+          .enabled(this.eventPosition > 0)
           .onClick(() => {
             this.stopPlayback()
-            void this.loadFrame(this.position - 1)
+            void this.loadFrame(this.eventPosition - 1)
           })
         Button('下一步')
-          .enabled(this.position < this.totalEvents)
+          .enabled(this.eventPosition < this.totalEvents)
           .onClick(() => {
             this.stopPlayback()
-            void this.loadFrame(this.position + 1)
+            void this.loadFrame(this.eventPosition + 1)
           })
         Blank()
-        Text(`事件 ${this.position} / ${this.totalEvents} · ${this.source}`)
+        Text(`事件 ${this.eventPosition} / ${this.totalEvents} · ${this.source}`)
           .fontSize(12)
       }
       .width('100%')
@@ -216,7 +216,7 @@ export struct ProofReplayPanel {
       .width('100%')
 
       Slider({
-        value: this.position,
+        value: this.eventPosition,
         min: 0,
         max: this.totalEvents > 0 ? this.totalEvents : 1,
         step: 1,

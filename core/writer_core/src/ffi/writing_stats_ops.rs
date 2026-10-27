@@ -165,9 +165,12 @@ pub unsafe extern "C" fn writer_core_replay_chapter_proof_json(
 ) -> *mut c_char {
     let request_json = match c_str_to_rust(request_json) {
         Ok(value) => value,
-        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
     };
-    match with_app_service(|svc| svc.replay_chapter_proof_json(request_json)) {
+    match with_app_service(|svc| {
+        svc.replay_chapter_proof_json(request_json)
+            .map_err(|error| error.to_string())
+    }) {
         Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
             Ok(value) => ok_json(value),
             Err(error) => err_json("SERDE_ERROR", &error.to_string()),
@@ -189,13 +192,16 @@ pub unsafe extern "C" fn writer_core_export_chapter_proof_json(
 ) -> *mut c_char {
     let chapter_id = match c_str_to_rust(chapter_id) {
         Ok(value) => value,
-        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
     };
     let device_id = match c_str_to_rust(device_id) {
         Ok(value) => value,
-        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
     };
-    match with_app_service(|svc| svc.export_chapter_proof_json(chapter_id, device_id)) {
+    match with_app_service(|svc| {
+        svc.export_chapter_proof_json(chapter_id, device_id)
+            .map_err(|error| error.to_string())
+    }) {
         Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
             Ok(value) => ok_json(value),
             Err(error) => err_json("SERDE_ERROR", &error.to_string()),
@@ -216,13 +222,16 @@ pub unsafe extern "C" fn writer_core_list_proof_checkpoints_json(
 ) -> *mut c_char {
     let device_id = match c_str_to_rust(device_id) {
         Ok(value) => value,
-        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
     };
     let chapter_id = match c_str_to_rust(chapter_id) {
         Ok(value) => value,
-        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+        Err(error) => return err_json("INVALID_ARGUMENT", &error.to_string()),
     };
-    match with_app_service(|svc| svc.list_proof_checkpoints_json(device_id, chapter_id)) {
+    match with_app_service(|svc| {
+        svc.list_proof_checkpoints_json(device_id, chapter_id)
+            .map_err(|error| error.to_string())
+    }) {
         Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
             Ok(value) => ok_json(value),
             Err(error) => err_json("SERDE_ERROR", &error.to_string()),
