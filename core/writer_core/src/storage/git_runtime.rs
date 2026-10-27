@@ -17,9 +17,18 @@
 //! 由这里统一打开。NotGitRepo 路径的 `copy_dir_recursive` 也已是 durable recursive copy
 //!（copy 后 fsync 文件 + 父目录，每层目录 bottom-up fsync）。
 
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 static INIT: OnceLock<Result<(), String>> = OnceLock::new();
+static TLS_TRUST: OnceLock<(Option<PathBuf>, Option<PathBuf>)> = OnceLock::new();
+static TLS_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+
+/// 注入平台解析出的 CA bundle/目录。路径由平台适配层保证真实存在且可读；
+/// 重复调用不覆盖首次注入。必须在首次 Git HTTPS 连接前调用。
+pub fn set_platform_tls_trust(bundle: Option<PathBuf>, dir: Option<PathBuf>) {
+    let _ = TLS_TRUST.set((bundle, dir));
+}
 
 /// 确保 libgit2 运行时已完成平台级配置。幂等、线程安全。
 ///
@@ -31,6 +40,48 @@ pub fn ensure_initialized() -> crate::Result<()> {
         Ok(()) => Ok(()),
         Err(message) => Err(crate::Error::Io(std::io::Error::other(message.clone()))),
     }
+}
+
+/// 在首次 Git HTTPS 连接前配置平台 CA。与 libgit2 全局初始化分开，避免
+/// 本地 Git 操作或应用启动因 CA 暂不可读而失败。
+pub fn ensure_tls_initialized() -> crate::Result<()> {
+    ensure_initialized()?;
+    match TLS_INIT.get_or_init(configure_tls_trust) {
+        Ok(()) => Ok(()),
+        Err(message) => Err(crate::Error::Io(std::io::Error::other(message.clone()))),
+    }
+}
+
+/// 为 vendored OpenSSL 配置平台 CA。未注入时不假设任何路径；配置失败返回
+/// 稳定前缀 `ca_store_unavailable`，供 Provider 层区分于普通运行时初始化失败。
+fn configure_tls_trust() -> Result<(), String> {
+    let (bundle, dir) = TLS_TRUST.get().cloned().unwrap_or((None, None));
+    if bundle.is_none() && dir.is_none() {
+        return Ok(());
+    }
+    if let Some(path) = bundle.as_deref() {
+        if !path.is_file() || std::fs::File::open(path).is_err() {
+            return Err(format!(
+                "ca_store_unavailable: configured CA bundle is not readable: {}",
+                path.display()
+            ));
+        }
+        // SAFETY: libgit2 全局 SSL 选项只在 OnceLock 初始化期、任何连接开始前设置。
+        unsafe { git2::opts::set_ssl_cert_file(path) }
+            .map_err(|err| format!("ca_store_unavailable: set CA bundle failed: {err}"))?;
+    }
+    if let Some(path) = dir.as_deref() {
+        if !path.is_dir() || std::fs::read_dir(path).is_err() {
+            return Err(format!(
+                "ca_store_unavailable: configured CA directory is not readable: {}",
+                path.display()
+            ));
+        }
+        // SAFETY: 同上，一次性设置 libgit2 全局 SSL 目录。
+        unsafe { git2::opts::set_ssl_cert_dir(path) }
+            .map_err(|err| format!("ca_store_unavailable: set CA directory failed: {err}"))?;
+    }
+    Ok(())
 }
 
 ///   对所有 target 启用 libgit2 fsync-gitdir。

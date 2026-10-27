@@ -3,9 +3,46 @@
 //! Harmony 平台通过 NAPI 桥接层把目录信息传进来，构造 `PlatformInit`
 //! 并启动统一日志后端。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use writer_platform_api::{PlatformInit, PlatformKind};
+
+/// HarmonyOS 系统 CA 的候选位置，只返回真实存在且可读的路径。
+///
+/// 不同 OpenHarmony/HarmonyOS 版本的证书布局不一致；这些路径必须由平台适配层
+/// 探测后传给 Core，不能把 Linux/桌面路径直接复用到沙箱。禁止在没有可信根时
+/// 关闭 TLS 校验，发现不到 CA 时保持 `None` 并让具体 TLS 错误向上分类。
+fn resolve_tls_ca() -> (Option<PathBuf>, Option<PathBuf>) {
+    let bundle_candidates = [
+        std::env::var_os("SSL_CERT_FILE").map(PathBuf::from),
+        Some(PathBuf::from("/etc/ssl/certs/cacert.pem")),
+        Some(PathBuf::from("/system/etc/security/cacert.pem")),
+        Some(PathBuf::from(
+            "/system/etc/security/certificates/cacert.pem",
+        )),
+        Some(PathBuf::from("/etc/security/certificates/cacert.pem")),
+        Some(PathBuf::from("/etc/ssl/certs/ca-certificates.crt")),
+    ];
+    let dir_candidates = [
+        std::env::var_os("SSL_CERT_DIR").map(PathBuf::from),
+        Some(PathBuf::from("/etc/ssl/certs")),
+        Some(PathBuf::from("/system/etc/security/cacerts")),
+    ];
+    (
+        bundle_candidates
+            .into_iter()
+            .flatten()
+            .find(|path| path.is_file() && std::fs::File::open(path).is_ok()),
+        dir_candidates
+            .into_iter()
+            .flatten()
+            .find(|path| path.is_dir() && std::fs::read_dir(path).is_ok()),
+    )
+}
+
+fn resolved_ca_or_none(path: Option<PathBuf>) -> Option<PathBuf> {
+    path.filter(|value| !value.as_os_str().is_empty() && Path::new(value).exists())
+}
 
 /// 从 Harmony 目录信息构造平台初始化结构。
 pub fn create_platform_init(
@@ -17,6 +54,7 @@ pub fn create_platform_init(
     timezone: String,
 ) -> PlatformInit {
     let log_dir = cache_dir.join("log");
+    let (tls_ca_bundle, tls_ca_dir) = resolve_tls_ca();
     PlatformInit {
         platform: PlatformKind::Harmony,
         app_data_dir: files_dir,
@@ -27,6 +65,8 @@ pub fn create_platform_init(
         app_version,
         locale,
         timezone,
+        tls_ca_bundle: resolved_ca_or_none(tls_ca_bundle),
+        tls_ca_dir: resolved_ca_or_none(tls_ca_dir),
     }
 }
 

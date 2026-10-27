@@ -32,11 +32,14 @@ impl crate::facade::WriterCore {
         let projects = match self.list_projects() {
             Ok(projects) => projects,
             Err(err) => {
-                let msg = err.to_string();
-                self.persist_full_sync_early_failure(
-                    crate::sync::SyncStatus::RecoverableError(msg),
-                    "global",
-                );
+                let status = crate::sync::full_sync::error_to_persist_status(&err);
+                let category = err.sync_category();
+                let category = if category.is_empty() {
+                    "other"
+                } else {
+                    category
+                };
+                self.persist_full_sync_early_failure_typed(status, "global", category, "prepare");
                 return Err(err);
             }
         };
@@ -48,10 +51,15 @@ impl crate::facade::WriterCore {
             match crate::sync::pending_deleted::load_pending_deleted_targets(&self.app_data_root) {
                 Ok(targets) => targets,
                 Err(err) => {
-                    let msg = err.to_string();
-                    self.persist_full_sync_early_failure(
-                        crate::sync::SyncStatus::RecoverableError(msg),
-                        "global",
+                    let status = crate::sync::full_sync::error_to_persist_status(&err);
+                    let category = err.sync_category();
+                    let category = if category.is_empty() {
+                        "other"
+                    } else {
+                        category
+                    };
+                    self.persist_full_sync_early_failure_typed(
+                        status, "global", category, "prepare",
                     );
                     return Err(err);
                 }
@@ -247,7 +255,20 @@ impl crate::facade::WriterCore {
         if persist_preflight_failure {
             transport_result.inspect_err(|err| {
                 let status = crate::sync::full_sync::error_to_persist_status(err);
-                self.persist_full_sync_early_failure(status, "preflight");
+                let category = {
+                    let category = err.sync_category();
+                    if category.is_empty() {
+                        "other"
+                    } else {
+                        category
+                    }
+                };
+                self.persist_full_sync_early_failure_typed(
+                    status,
+                    "github_api_fallback_init",
+                    category,
+                    "github_api_fallback_init",
+                );
             })
         } else {
             transport_result

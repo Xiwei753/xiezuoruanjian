@@ -179,6 +179,29 @@ impl FullSyncReport {
                 SyncStatus::RecoverableError(_) => "network".to_string(),
                 _ => "other".to_string(),
             });
+        Self::early_failure_typed(
+            status,
+            failed_target,
+            &error_category,
+            "preflight",
+            now_epoch_seconds,
+            app_data_root,
+            projects_root,
+        )
+    }
+
+    /// 使用调用方已有的真实错误分类与失败阶段生成早期报告，避免仅凭
+    /// Recoverable/Fatal 二值误判为 network/auth_failed。
+    pub fn early_failure_typed(
+        status: &SyncStatus,
+        failed_target: &str,
+        error_category: &str,
+        phase: &str,
+        now_epoch_seconds: i64,
+        app_data_root: &std::path::Path,
+        projects_root: &std::path::Path,
+    ) -> Self {
+        let raw_detail = status_detail(status).unwrap_or("sync failed before data groups ran");
         Self {
             attempted_at: now_epoch_seconds,
             completed_groups: 0,
@@ -188,9 +211,9 @@ impl FullSyncReport {
                 target_kind: "global".to_string(),
                 group_id: failed_target.to_string(),
                 path: failed_target.to_string(),
-                phase: "preflight".to_string(),
-                message_key: message_key_for_category(&error_category),
-                error_category,
+                phase: phase.to_string(),
+                message_key: message_key_for_category(error_category),
+                error_category: error_category.to_string(),
                 detail: sanitize_report_detail(raw_detail, app_data_root, projects_root),
                 occurred_at: now_epoch_seconds,
             }],

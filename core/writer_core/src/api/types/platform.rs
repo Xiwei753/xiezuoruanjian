@@ -51,6 +51,10 @@ impl From<PlatformInitDto> for writer_platform_api::PlatformInit {
             app_version: dto.app_version,
             locale: dto.locale,
             timezone: dto.timezone,
+            // PlatformInitDto 是跨语言 ABI，不为桌面平台新增字段；Harmony
+            // 等需要 CA 的平台通过内部 PlatformInit/PlatformServices 注入。
+            tls_ca_bundle: None,
+            tls_ca_dir: None,
         }
     }
 }

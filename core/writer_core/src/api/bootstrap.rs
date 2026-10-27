@@ -1314,10 +1314,14 @@ pub fn open_app_service_with_init(
     projects_root: String,
     init: PlatformInitDto,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
+    let platform_init: PlatformInit = init.clone().into();
     crate::storage::git_runtime::ensure_initialized()?;
+    crate::storage::git_runtime::set_platform_tls_trust(
+        platform_init.tls_ca_bundle.clone(),
+        platform_init.tls_ca_dir.clone(),
+    );
     // 统一 workspace bootstrap：确保 .git 存在、恢复未完成删除事务。
     let layout = bootstrap_workspace(Path::new(&app_data_root))?;
-    let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 
     let services = if let Some(resolver) = get_platform_services_resolver() {
@@ -1360,6 +1364,10 @@ pub fn open_app_service_with_services(
     services: PlatformServices,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
+    crate::storage::git_runtime::set_platform_tls_trust(
+        services.init.tls_ca_bundle.clone(),
+        services.init.tls_ca_dir.clone(),
+    );
     let layout = bootstrap_workspace(Path::new(&app_data_root))?;
     let service = Arc::new(WriterAppService::with_platform_services(
         app_data_root,
@@ -1381,10 +1389,14 @@ pub fn open_app_service_with_secure_storage(
     init: PlatformInitDto,
     secure_storage: Option<Box<dyn SecureStorageProvider>>,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
+    let platform_init: PlatformInit = init.clone().into();
     crate::storage::git_runtime::ensure_initialized()?;
+    crate::storage::git_runtime::set_platform_tls_trust(
+        platform_init.tls_ca_bundle.clone(),
+        platform_init.tls_ca_dir.clone(),
+    );
     // 统一 workspace bootstrap：确保 .git 存在、恢复未完成删除事务。
     let layout = bootstrap_workspace(Path::new(&app_data_root))?;
-    let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
 
     let secure_storage_impl: Option<Box<dyn SecureStorage>> =

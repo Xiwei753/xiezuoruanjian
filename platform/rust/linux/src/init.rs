@@ -27,6 +27,8 @@ pub fn resolve_platform_init() -> PlatformInit {
             .unwrap_or("en_US")
             .to_string(),
         timezone: local_timezone(),
+        tls_ca_bundle: None,
+        tls_ca_dir: None,
     }
 }
 

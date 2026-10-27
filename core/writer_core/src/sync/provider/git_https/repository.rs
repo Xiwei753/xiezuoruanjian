@@ -38,17 +38,31 @@ pub(crate) struct Snapshot {
 
 /// 打开或初始化 bare 仓库缓存。
 pub(crate) fn open_or_init(cache_dir: &Path) -> Result<Repository, ProviderError> {
-    crate::storage::git_runtime::ensure_initialized().map_err(|err| ProviderError::Other {
-        reason: format!("git runtime init failed: {err}"),
+    crate::storage::git_runtime::ensure_tls_initialized().map_err(|err| {
+        let reason = err.to_string();
+        if reason.contains("ca_store_unavailable") {
+            ProviderError::TlsCaUnavailable { reason }
+        } else {
+            ProviderError::GitRuntimeInit { reason }
+        }
     })?;
 
-    if let Ok(repo) = Repository::open(cache_dir) {
-        return Ok(repo);
+    match Repository::open(cache_dir) {
+        Ok(repo) => Ok(repo),
+        Err(open_error) if open_error.code() != ErrorCode::NotFound => {
+            Err(ProviderError::LocalGitCache {
+                reason: format!("open git cache failed: {}", open_error.message()),
+            })
+        }
+        Err(_) => {
+            std::fs::create_dir_all(cache_dir).map_err(|err| ProviderError::LocalGitCache {
+                reason: format!("create git cache dir failed: {err}"),
+            })?;
+            Repository::init_bare(cache_dir).map_err(|err| ProviderError::LocalGitCache {
+                reason: format!("init git cache failed: {}", err.message()),
+            })
+        }
     }
-    std::fs::create_dir_all(cache_dir).map_err(|err| ProviderError::Other {
-        reason: format!("create git cache dir failed: {err}"),
-    })?;
-    Repository::init_bare(cache_dir).map_err(|err| map_git_error(err, "init git cache"))
 }
 
 fn remote<'repo>(
@@ -60,7 +74,7 @@ fn remote<'repo>(
             // 缓存目录按远端 URL 哈希隔离，正常不会出现不同 URL；若配置被改动，
             // 不能静默复用旧地址的对象，也不能覆盖这个缓存里的 remote。
             if remote.url() != Some(config.remote_url.as_str()) {
-                return Err(ProviderError::Other {
+                return Err(ProviderError::RemoteConfig {
                     reason:
                         "cached git repository remote URL does not match the current configuration"
                             .to_string(),
@@ -70,8 +84,12 @@ fn remote<'repo>(
         }
         Err(err) if err.code() == ErrorCode::NotFound => repo
             .remote(REMOTE_NAME, &config.remote_url)
-            .map_err(|err| map_git_error(err, "configure remote")),
-        Err(err) => Err(map_git_error(err, "open git remote")),
+            .map_err(|err| ProviderError::RemoteConfig {
+                reason: format!("configure git remote failed: {}", err.message()),
+            }),
+        Err(err) => Err(ProviderError::RemoteConfig {
+            reason: format!("open git remote failed: {}", err.message()),
+        }),
     }
 }
 
@@ -608,7 +626,12 @@ pub(crate) fn map_git_error(err: git2::Error, context: &str) -> ProviderError {
     // GitHub API 自动后备。
     match err.code() {
         ErrorCode::Certificate => {
-            return ProviderError::Other {
+            if is_ca_trust_error(err.message()) {
+                return ProviderError::TlsCaUnavailable {
+                    reason: format!("TLS CA trust unavailable: {message}"),
+                };
+            }
+            return ProviderError::TlsCertificateInvalid {
                 reason: format!("TLS certificate verification failed: {message}"),
             };
         }
@@ -629,17 +652,45 @@ pub(crate) fn map_git_error(err: git2::Error, context: &str) -> ProviderError {
 
     match err.class() {
         ErrorClass::Net => ProviderError::Network { reason: message },
-        // 证书错误已在上面单独处理；其余 SSL 层错误是握手/传输中断，
-        // 应视为远端不可达，而不是“证书验证失败”。
-        ErrorClass::Ssl => ProviderError::Network {
-            reason: format!("TLS transport error: {message}"),
-        },
+        // 证书错误已在上面单独处理。ErrorClass::Ssl 仍可能携带 OpenSSL
+        // 的验证错误文本（部分 libgit2 版本不返回 Certificate code），不能
+        // 一律归为“连接中断”，否则会误触发 GitHub API 后备。
+        ErrorClass::Ssl => {
+            let lower = err.message().to_ascii_lowercase();
+            if is_ca_trust_error(&lower) {
+                ProviderError::TlsCaUnavailable {
+                    reason: format!("TLS CA trust unavailable: {message}"),
+                }
+            } else if lower.contains("certificate")
+                || lower.contains("self signed")
+                || lower.contains("hostname")
+                || lower.contains("cert verify")
+                || lower.contains("ssl verify")
+            {
+                ProviderError::TlsCertificateInvalid { reason: message }
+            } else {
+                ProviderError::Network {
+                    reason: format!("TLS transport error: {message}"),
+                }
+            }
+        }
         ErrorClass::Http => classify_http_error(&message, err.code()),
         ErrorClass::Reference if err.code() == ErrorCode::NotFound => ProviderError::NotFound {
             path: context.to_string(),
         },
         _ => ProviderError::Other { reason: message },
     }
+}
+
+/// OpenSSL 的“找不到签发者/系统根”文本表示 CA 信任源不可用，而不是
+/// 服务端证书本身过期或主机名不匹配。两者都要保留真实原因，但不能混报。
+fn is_ca_trust_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("unable to get local issuer")
+        || lower.contains("unable to verify the first certificate")
+        || lower.contains("unknown ca")
+        || lower.contains("no ca certificate")
+        || lower.contains("ca certificate")
 }
 
 fn classify_http_error(message: &str, code: ErrorCode) -> ProviderError {

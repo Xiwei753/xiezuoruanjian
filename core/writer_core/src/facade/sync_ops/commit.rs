@@ -421,6 +421,18 @@ impl crate::facade::WriterCore {
         Ok(())
     }
 
+    /// 保留 Core 原始错误分类与失败阶段的预检失败落盘入口。
+    pub fn record_full_sync_preflight_failure_typed(
+        &self,
+        status: crate::sync::SyncStatus,
+        failed_target: &str,
+        error_category: &str,
+        phase: &str,
+    ) -> crate::error::Result<()> {
+        self.persist_full_sync_early_failure_typed(status, failed_target, error_category, phase);
+        Ok(())
+    }
+
     /// 正式事务开始：原子写 `Syncing` + 本次 attempt 时间，保留旧 last_success_time。
     /// 写失败只记录警告（同步本身继续，状态持久化是副作用）。
     ///   回退问题：改为 `pub(crate)` 供 API 层在短锁内调用。
@@ -459,6 +471,38 @@ impl crate::facade::WriterCore {
             self.record_full_sync_early_failure_report(&report_status, failed_target, report_time)
         {
             log::warn!("Failed to persist early full sync report: {e}");
+        }
+    }
+
+    /// 带真实分类/阶段的预检失败持久化。状态机仍使用 Recoverable/Fatal 线格式，
+    /// 但报告保留 `provider_init`、TLS/CA、本地 Git 缓存等可诊断原因。
+    pub(in crate::facade) fn persist_full_sync_early_failure_typed(
+        &self,
+        status: crate::sync::SyncStatus,
+        failed_target: &str,
+        error_category: &str,
+        phase: &str,
+    ) {
+        let report_time = now_epoch_seconds();
+        let report_status = status.clone();
+        let previous = self.load_full_sync_state().unwrap_or(None);
+        let state = crate::sync::full_sync_state::FullSyncState::failed_before_targets(
+            previous.as_ref(),
+            status,
+            report_time,
+            failed_target,
+        );
+        if let Err(e) = self.save_full_sync_state(&state) {
+            log::warn!("Failed to persist full sync early failure state: {e}");
+        }
+        if let Err(e) = self.record_full_sync_early_failure_report_typed(
+            &report_status,
+            failed_target,
+            error_category,
+            phase,
+            report_time,
+        ) {
+            log::warn!("Failed to persist typed early full sync report: {e}");
         }
     }
 

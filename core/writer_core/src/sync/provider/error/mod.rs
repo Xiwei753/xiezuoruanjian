@@ -44,6 +44,26 @@ pub enum ProviderError {
     #[error("temporary unavailable: {reason}")]
     TemporaryUnavailable { reason: String },
 
+    /// libgit2/Git 运行时初始化失败（非网络、非证书问题）。
+    #[error("git runtime init failed: {reason}")]
+    GitRuntimeInit { reason: String },
+
+    /// 平台注入的 CA 信任存储不可用/不可读，TLS 无法建立可信连接。
+    #[error("tls ca unavailable: {reason}")]
+    TlsCaUnavailable { reason: String },
+
+    /// 服务端证书验证失败（未知 CA、主机名不匹配、证书过期等）。
+    #[error("tls certificate invalid: {reason}")]
+    TlsCertificateInvalid { reason: String },
+
+    /// 本地 Git 缓存目录/仓库损坏或不可写。
+    #[error("local git cache error: {reason}")]
+    LocalGitCache { reason: String },
+
+    /// 本地缓存中的 remote 配置缺失、冲突或无法写入。
+    #[error("git remote config error: {reason}")]
+    RemoteConfig { reason: String },
+
     /// 其他未分类错误。与 Core `Error::Other` 对齐：兜底视为可恢复，
     /// 允许 engine 退避重试（最多 max_retries 次），避免未知错误直接卡死用户。
     #[error("provider error: {reason}")]
@@ -68,7 +88,12 @@ impl ProviderError {
             ProviderError::AuthFailed { .. }
             | ProviderError::PermissionDenied { .. }
             | ProviderError::NotFound { .. }
-            | ProviderError::PreconditionFailed { .. } => false,
+            | ProviderError::PreconditionFailed { .. }
+            | ProviderError::GitRuntimeInit { .. }
+            | ProviderError::TlsCaUnavailable { .. }
+            | ProviderError::TlsCertificateInvalid { .. }
+            | ProviderError::LocalGitCache { .. }
+            | ProviderError::RemoteConfig { .. } => false,
         }
     }
 
@@ -77,6 +102,25 @@ impl ProviderError {
     /// 该映射让现有 UI/状态机继续工作，同时把 GitHub 特定错误名隔离在 Provider 实现内。
     /// `SyncErrorCategory` 已收成 provider-neutral
     /// 分类，本映射直接对应到新通用变体。
+    /// 稳定的低层错误码，供日志/诊断使用。不得包含 URL、token 或本地路径。
+    pub fn stable_code(&self) -> &'static str {
+        match self {
+            ProviderError::AuthFailed { .. } => "auth_failed",
+            ProviderError::PermissionDenied { .. } => "permission_denied",
+            ProviderError::NotFound { .. } => "not_found",
+            ProviderError::PreconditionFailed { .. } => "precondition_failed",
+            ProviderError::RateLimited { .. } => "rate_limited",
+            ProviderError::Network { .. } => "network",
+            ProviderError::TemporaryUnavailable { .. } => "temporary_unavailable",
+            ProviderError::GitRuntimeInit { .. } => "git_runtime_init",
+            ProviderError::TlsCaUnavailable { .. } => "tls_ca_unavailable",
+            ProviderError::TlsCertificateInvalid { .. } => "tls_certificate_invalid",
+            ProviderError::LocalGitCache { .. } => "local_git_cache",
+            ProviderError::RemoteConfig { .. } => "git_remote_config",
+            ProviderError::Other { .. } => "other",
+        }
+    }
+
     pub fn to_sync_error_category(&self) -> SyncErrorCategory {
         match self {
             ProviderError::AuthFailed { .. } => SyncErrorCategory::AuthFailed,
@@ -87,7 +131,12 @@ impl ProviderError {
             ProviderError::Network { .. } | ProviderError::TemporaryUnavailable { .. } => {
                 SyncErrorCategory::Network
             }
-            ProviderError::Other { .. } => SyncErrorCategory::Other,
+            ProviderError::GitRuntimeInit { .. }
+            | ProviderError::TlsCaUnavailable { .. }
+            | ProviderError::TlsCertificateInvalid { .. }
+            | ProviderError::LocalGitCache { .. }
+            | ProviderError::RemoteConfig { .. }
+            | ProviderError::Other { .. } => SyncErrorCategory::Other,
         }
     }
 }
@@ -128,6 +177,36 @@ impl From<ProviderError> for crate::Error {
             ProviderError::TemporaryUnavailable { reason } => {
                 crate::Error::SyncNetworkUnavailable { reason }
             }
+            ProviderError::GitRuntimeInit { reason } => crate::Error::SyncRemoteError {
+                category: "git_runtime_init".to_string(),
+                context: "git_runtime".to_string(),
+                status: 0,
+                body_preview: reason,
+            },
+            ProviderError::TlsCaUnavailable { reason } => crate::Error::SyncRemoteError {
+                category: "tls_ca_unavailable".to_string(),
+                context: "git_transport".to_string(),
+                status: 0,
+                body_preview: reason,
+            },
+            ProviderError::TlsCertificateInvalid { reason } => crate::Error::SyncRemoteError {
+                category: "tls_certificate_invalid".to_string(),
+                context: "git_transport".to_string(),
+                status: 0,
+                body_preview: reason,
+            },
+            ProviderError::LocalGitCache { reason } => crate::Error::SyncRemoteError {
+                category: "local_git_cache".to_string(),
+                context: "git_cache".to_string(),
+                status: 0,
+                body_preview: reason,
+            },
+            ProviderError::RemoteConfig { reason } => crate::Error::SyncRemoteError {
+                category: "git_remote_config".to_string(),
+                context: "git_config".to_string(),
+                status: 0,
+                body_preview: reason,
+            },
             ProviderError::Other { reason } => crate::Error::Other(reason),
         }
     }

@@ -23,7 +23,7 @@ use crate::api::SyncConfigDto;
 
 struct SyncFailureContext {
     operation_id: String,
-    stage: &'static str,
+    stage: String,
     category: String,
 }
 
@@ -60,6 +60,7 @@ fn sync_failure_category(error: &WriterError, stage: &str) -> String {
         WriterError::RetryableIo(_) => "local_io_error".to_string(),
         WriterError::RetryableNetwork(_) => "network_error".to_string(),
         WriterError::Authentication(_) => "authentication_error".to_string(),
+        WriterError::SyncFailure { category, .. } => category.clone(),
         WriterError::Other(_) if stage == "core_enter" => "sync_core_error".to_string(),
         _ => "sync_error".to_string(),
     }
@@ -131,10 +132,13 @@ fn record_sync_preflight_event(
     });
 }
 
-fn persist_sync_preflight_failure(svc: &WriterAppService, stage: &str) {
-    if let Err(error) =
-        svc.record_full_sync_preflight_failure("recoverable_error".to_string(), "preflight".to_string())
-    {
+fn persist_sync_preflight_failure(svc: &WriterAppService, stage: &str, category: &str) {
+    if let Err(error) = svc.record_full_sync_preflight_failure_typed(
+        "recoverable_error".to_string(),
+        "preflight".to_string(),
+        category.to_string(),
+        stage.to_string(),
+    ) {
         log::warn!(
             "[sync] preflight state write failed: stage={} error_code={}",
             stage,
@@ -162,12 +166,12 @@ fn perform_full_sync_with_preflight_diagnostics(
                 Some(&error),
                 Some(&category),
             );
-            persist_sync_preflight_failure(svc, "config_load");
+            persist_sync_preflight_failure(svc, "config_load", &category);
             return Err(SyncOperationFailure {
                 error,
                 context: SyncFailureContext {
                     operation_id: operation_id.to_string(),
-                    stage: "config_load",
+                    stage: "config_load".to_string(),
                     category,
                 },
             });
@@ -184,12 +188,12 @@ fn perform_full_sync_with_preflight_diagnostics(
             Some(&error),
             Some(&category),
         );
-        persist_sync_preflight_failure(svc, "secrets_load");
+        persist_sync_preflight_failure(svc, "secrets_load", &category);
         return Err(SyncOperationFailure {
             error,
             context: SyncFailureContext {
                 operation_id: operation_id.to_string(),
-                stage: "secrets_load",
+                stage: "secrets_load".to_string(),
                 category,
             },
         });
@@ -209,9 +213,13 @@ fn perform_full_sync_with_preflight_diagnostics(
             } else {
                 sync_failure_category(&error, "core_enter")
             };
+            let stage = match &error {
+                WriterError::SyncFailure { stage, .. } => stage.clone(),
+                _ => "core_enter".to_string(),
+            };
             record_sync_preflight_event(
                 operation_id,
-                "core_enter",
+                &stage,
                 "error",
                 Some(&error),
                 Some(&category),
@@ -220,7 +228,7 @@ fn perform_full_sync_with_preflight_diagnostics(
                 error,
                 context: SyncFailureContext {
                     operation_id: operation_id.to_string(),
-                    stage: "core_enter",
+                    stage,
                     category,
                 },
             })
@@ -454,13 +462,13 @@ pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
             let stage_already_recorded = failure_context.is_some();
             let context = failure_context.unwrap_or_else(|| SyncFailureContext {
                 operation_id: operation_id.clone(),
-                stage: "cleanup",
+                stage: "cleanup".to_string(),
                 category: sync_failure_category(&e, "cleanup"),
             });
             if !stage_already_recorded {
                 record_sync_preflight_event(
                     &context.operation_id,
-                    context.stage,
+                    &context.stage,
                     "error",
                     Some(&e),
                     Some(&context.category),
@@ -482,7 +490,7 @@ pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
             let category = sync_failure_category(&error, "app_service_entry");
             let context = SyncFailureContext {
                 operation_id: operation_id.clone(),
-                stage: "app_service_entry",
+                stage: "app_service_entry".to_string(),
                 category: category.clone(),
             };
             record_sync_preflight_event(

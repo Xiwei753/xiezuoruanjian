@@ -69,6 +69,12 @@ pub struct PlatformInit {
     pub app_version: String,
     pub locale: String,
     pub timezone: String,
+    /// 平台确认存在且可读的 CA bundle 文件。由平台适配层发现，Core 不猜测路径。
+    #[serde(default)]
+    pub tls_ca_bundle: Option<PathBuf>,
+    /// 平台确认存在且可读的 CA 证书目录。
+    #[serde(default)]
+    pub tls_ca_dir: Option<PathBuf>,
 }
 
 impl PlatformInit {

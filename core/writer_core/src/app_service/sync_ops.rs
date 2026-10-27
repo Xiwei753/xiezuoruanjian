@@ -296,4 +296,20 @@ impl super::WriterAppService {
         self.api
             .record_full_sync_preflight_failure(status, failed_target)
     }
+
+    /// 保留真实错误分类与失败阶段的窄接口。
+    pub fn record_full_sync_preflight_failure_typed(
+        &self,
+        status: String,
+        failed_target: String,
+        error_category: String,
+        phase: String,
+    ) -> Result<(), WriterError> {
+        self.api.record_full_sync_preflight_failure_typed(
+            status,
+            failed_target,
+            error_category,
+            phase,
+        )
+    }
 }

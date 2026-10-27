@@ -204,9 +204,16 @@ impl Error {
             //   不可重试，需上层拉取远端最新版本后重新决策或上报冲突让用户处理。
             // - not_found：远端对象不存在，重试也不会出现，不可重试。
             // - 其他 category（如 api_error、network 类临时错误）：保守视为可恢复，允许重试。
-            Error::SyncRemoteError { category, .. } => {
-                !matches!(category.as_str(), "precondition_failed" | "not_found")
-            }
+            Error::SyncRemoteError { category, .. } => !matches!(
+                category.as_str(),
+                "precondition_failed"
+                    | "not_found"
+                    | "git_runtime_init"
+                    | "tls_ca_unavailable"
+                    | "tls_certificate_invalid"
+                    | "local_git_cache"
+                    | "git_remote_config"
+            ),
             Error::DiskFull { .. } => false,
             Error::StorageTransactionIncomplete { .. } => true,
             Error::SaveQueueFlushIncomplete { .. } => true,

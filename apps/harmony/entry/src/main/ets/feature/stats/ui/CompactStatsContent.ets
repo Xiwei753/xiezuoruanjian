@@ -1,7 +1,7 @@
 // CompactStatsContent — 窄屏统计正文（Issue #945，按「手机统计七天 / 手机统计」手稿）。
 //
 // 从上到下：顶部时间范围切换（7 天 / 30 天 / 半年 / 生涯 / 自选）→ 大号总人工码字 +
-// 日期区间 → 纪录 2×2（最多 / 单小时最多 / 最长 / 连续）→ 码字日历热力图
+// 日期区间 → 纪录 2×2（最多 / 最快 / 最长 / 连续）→ 码字日历热力图
 // （#956，同一年每日真值 + 年份切换）。
 // 内容可垂直滚动并给 HDS 悬浮底栏留空间。生涯与近七天只是同一页面换快照，
 // 不另建导航栈。
@@ -55,24 +55,16 @@ export struct CompactStatsContent {
     return this.explorer.selected
   }
 
-  private hasAnyRecord(): boolean {
-    const records = this.selected().records
-    return records.bestDay.value !== null ||
-      records.fastestHour.value !== null ||
-      records.longestSession.value !== null ||
-      records.longestStreak.value !== null
-  }
-
   private recordValueText(record: WritingStatsRecord, unit: string): string {
     if (record.value === null) {
-      return '暂无纪录'
+      return '—'
     }
     return formatRecordValue(record.value, unit)
   }
 
   private recordDurationText(record: WritingStatsRecord): string {
     if (record.value === null) {
-      return '暂无纪录'
+      return '—'
     }
     return formatDurationHuman(record.value)
   }
@@ -85,6 +77,9 @@ export struct CompactStatsContent {
   }
 
   private recordDateText(record: WritingStatsRecord): string {
+    if (record.date === null) {
+      return ''
+    }
     return formatDateHuman(record.date)
   }
 
@@ -96,15 +91,7 @@ export struct CompactStatsContent {
         }
         this.RangeSwitch()
         this.SummarySection()
-        if (!this.isLoading && this.errorMessage.length === 0 && !this.hasAnyRecord()) {
-          Text('暂无码字记录')
-            .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
-            .fontColor($r('sys.color.font_tertiary'))
-            .margin({ bottom: COMPACT_CARD_PADDING_VP })
-        }
-        if (this.hasAnyRecord()) {
-          this.RecordsSection()
-        }
+        this.RecordsSection()
         this.HeatmapSection()
       }
       .width('100%')
@@ -225,7 +212,7 @@ export struct CompactStatsContent {
     .margin({ bottom: COMPACT_CARD_PADDING_VP })
   }
 
-  /** 纪录 2×2：最多码字 / 单小时最多码字 / 最长码字 / 连续码字。 */
+  /** 纪录 2×2：最多码字 / 最快码字 / 最长码字 / 连续码字。 */
   @Builder
   RecordsSection() {
     Column() {
@@ -235,17 +222,20 @@ export struct CompactStatsContent {
           this.recordValueText(this.selected().records.bestDay, '字'),
           this.recordDateText(this.selected().records.bestDay)
         )
-        Divider().vertical(true).height(56).color($r('sys.color.comp_divider'))
+        Column()
+          .width(1)
+          .backgroundColor($r('sys.color.comp_divider'))
+          .alignSelf(ItemAlign.Stretch)
         this.RecordCell(
-          '单小时最多码字',
+          '最快码字',
           this.recordValueText(this.selected().records.fastestHour, '字'),
           this.recordDateText(this.selected().records.fastestHour)
         )
       }
       .width('100%')
-      .alignItems(VerticalAlign.Center)
+      .alignItems(VerticalAlign.Top)
 
-      Divider().color($r('sys.color.comp_divider')).margin({ top: 8, bottom: 8 })
+      Divider().color($r('sys.color.comp_divider')).margin({ top: 10, bottom: 10 })
 
       Row() {
         this.RecordCell(
@@ -253,7 +243,10 @@ export struct CompactStatsContent {
           this.recordDurationText(this.selected().records.longestSession),
           this.recordDateText(this.selected().records.longestSession)
         )
-        Divider().vertical(true).height(56).color($r('sys.color.comp_divider'))
+        Column()
+          .width(1)
+          .backgroundColor($r('sys.color.comp_divider'))
+          .alignSelf(ItemAlign.Stretch)
         this.RecordCell(
           '连续码字',
           this.recordValueText(this.selected().records.longestStreak, '天'),
@@ -261,7 +254,7 @@ export struct CompactStatsContent {
         )
       }
       .width('100%')
-      .alignItems(VerticalAlign.Center)
+      .alignItems(VerticalAlign.Top)
     }
     .width('100%')
     .padding(COMPACT_CARD_PADDING_VP)
@@ -269,23 +262,32 @@ export struct CompactStatsContent {
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
   }
 
+  /** 每格：标题在上；日期在左、数值在右；连续码字的日期区间允许自然换行。 */
   @Builder
   RecordCell(label: string, valueText: string, dateText: string) {
-    Column({ space: 2 }) {
+    Column({ space: 6 }) {
       Text(label)
         .fontSize(COMPACT_CARD_SUPPORTING_FONT_VP)
         .fontColor($r('sys.color.font_secondary'))
-      Text(valueText)
-        .fontSize(COMPACT_CARD_TITLE_FONT_VP)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('sys.color.font_primary'))
-      if (dateText.length > 0) {
-        Text(dateText)
-          .fontSize(12)
-          .fontColor($r('sys.color.font_tertiary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Row() {
+        if (dateText.length > 0) {
+          Text(dateText)
+            .fontSize(12)
+            .fontColor($r('sys.color.font_tertiary'))
+            .layoutWeight(1)
+        } else {
+          Blank()
+            .layoutWeight(1)
+        }
+        Text(valueText)
+          .fontSize(COMPACT_CARD_TITLE_FONT_VP)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+          .margin({ left: 8 })
+          .flexShrink(0)
       }
+      .width('100%')
+      .alignItems(VerticalAlign.Top)
     }
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Start)

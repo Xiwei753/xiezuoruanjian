@@ -66,6 +66,14 @@ pub enum WriterError {
     /// 远端前置条件已变化（HEAD / 版本 CAS 冲突）——需重新读取远端并整轮重规划
     #[error("Sync precondition failed: {0}")]
     PreconditionFailed(String),
+    /// 带原始 Core 分类与失败阶段的同步错误，供 FFI/UI 保留 provider_init、
+    /// TLS/CA、本地 Git 缓存等真实原因，而不是折叠成 OTHER/core_enter。
+    #[error("Sync failure: category={category}, stage={stage}, detail={detail}")]
+    SyncFailure {
+        category: String,
+        stage: String,
+        detail: String,
+    },
     /// 未知/程序错误——默认不可重试
     #[error("Fatal sync failure: {0}")]
     Fatal(String),
@@ -96,6 +104,7 @@ impl WriterError {
             WriterError::DirtyRepository(_) => "DIRTY_REPOSITORY",
             WriterError::Protocol(_) => "PROTOCOL",
             WriterError::PreconditionFailed(_) => "PRECONDITION_FAILED",
+            WriterError::SyncFailure { .. } => "SYNC_FAILURE",
             WriterError::Fatal(_) => "FATAL",
             WriterError::Other(_) => "OTHER",
         }
@@ -124,6 +133,7 @@ impl WriterError {
             WriterError::DirtyRepository(_) => "error.sync_dirty_repository",
             WriterError::Protocol(_) => "error.sync_protocol_error",
             WriterError::PreconditionFailed(_) => "error.sync_conflict",
+            WriterError::SyncFailure { .. } => "error.sync_failed",
             WriterError::Fatal(_) => "error.sync_fatal",
             WriterError::Other(_) => "error.other",
         }
@@ -171,6 +181,15 @@ impl WriterError {
                 m.insert("detail".into(), detail.clone());
             }
             WriterError::Protocol(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::SyncFailure {
+                category,
+                stage,
+                detail,
+            } => {
+                m.insert("category".into(), category.clone());
+                m.insert("stage".into(), stage.clone());
                 m.insert("detail".into(), detail.clone());
             }
             WriterError::Fatal(detail) => {
@@ -270,6 +289,25 @@ impl From<crate::error::Error> for WriterError {
                 //  七：远端 Provider 错误按类别映射为类型化失败；
                 // 只有明确网络/认证类别进入对应类型，其余默认 Fatal。
                 //
+                // 基础 Git/TLS/缓存错误保留稳定分类与失败阶段，避免被折叠为
+                // FATAL 后只能显示 OTHER。
+                if matches!(
+                    category.as_str(),
+                    "git_runtime_init"
+                        | "tls_ca_unavailable"
+                        | "tls_certificate_invalid"
+                        | "local_git_cache"
+                        | "git_remote_config"
+                ) {
+                    return WriterError::SyncFailure {
+                        category,
+                        stage: context,
+                        detail: format!(
+                            "remote_api_error: status={} body={}",
+                            status, body_preview
+                        ),
+                    };
+                }
                 // `SyncErrorCategory` 已收成
                 // provider-neutral 分类，这里使用新变体。先查旧 GitHub/Git code
                 // 兼容映射（legacy_category_compat），再回退 provider-neutral from_code。

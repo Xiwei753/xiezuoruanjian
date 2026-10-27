@@ -414,6 +414,27 @@ impl super::WriterCore {
         self.save_latest_full_sync_report(&report)
     }
 
+    /// 保留 Core 已确定的错误分类与失败阶段，不按 Recoverable/Fatal 猜测。
+    pub fn record_full_sync_early_failure_report_typed(
+        &self,
+        status: &crate::sync::SyncStatus,
+        failed_target: &str,
+        error_category: &str,
+        phase: &str,
+        now_epoch_seconds: i64,
+    ) -> crate::error::Result<()> {
+        let report = crate::sync::full_sync_state::FullSyncReport::early_failure_typed(
+            status,
+            failed_target,
+            error_category,
+            phase,
+            now_epoch_seconds,
+            &self.app_data_root,
+            &self.projects_root,
+        );
+        self.save_latest_full_sync_report(&report)
+    }
+
     /// 冷启动恢复中断的 `Syncing` 状态。
     ///
     /// 读取 `full_state.local.json`，只有旧状态是 `Syncing` 才原子改成

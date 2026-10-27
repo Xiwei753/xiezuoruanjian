@@ -302,8 +302,24 @@ impl SyncProvider for GitHttpsProvider {
             }
             Err(error) => {
                 result.success = false;
-                result.error_category = error.to_sync_error_category().to_ui_status().to_string();
-                result.network_ok = !matches!(error, ProviderError::Network { .. });
+                result.error_category = match &error {
+                    ProviderError::GitRuntimeInit { .. }
+                    | ProviderError::TlsCaUnavailable { .. }
+                    | ProviderError::TlsCertificateInvalid { .. }
+                    | ProviderError::LocalGitCache { .. }
+                    | ProviderError::RemoteConfig { .. } => error.stable_code().to_string(),
+                    _ => error.to_sync_error_category().to_ui_status().to_string(),
+                };
+                result.network_ok = !matches!(
+                    error,
+                    ProviderError::Network { .. }
+                        | ProviderError::TemporaryUnavailable { .. }
+                        | ProviderError::GitRuntimeInit { .. }
+                        | ProviderError::TlsCaUnavailable { .. }
+                        | ProviderError::TlsCertificateInvalid { .. }
+                        | ProviderError::LocalGitCache { .. }
+                        | ProviderError::RemoteConfig { .. }
+                );
                 result.auth_ok = !matches!(
                     error,
                     ProviderError::AuthFailed { .. } | ProviderError::PermissionDenied { .. }

@@ -28,6 +28,8 @@ pub fn create_platform_init(
         app_version,
         locale,
         timezone,
+        tls_ca_bundle: None,
+        tls_ca_dir: None,
     }
 }
 

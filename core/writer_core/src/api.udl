@@ -514,6 +514,7 @@ enum WriterError {
     "DirtyRepository",
     "Protocol",
     "PreconditionFailed",
+    "SyncFailure",
     "Fatal",
     "Other"
 };

@@ -232,7 +232,8 @@ export class SyncOperationController {
           if (status === 'recoverable_error' || status === 'fatal_error' || status === 'error') {
             // 直接透传 Core 的类型化字段，由 MessageKeyMapper 统一映射，不再手写中文字典。
             const messageKey = syncResult.messageKey ?? ''
-            const errorCategory = syncResult.errorCategory ?? ''
+            const errorCategory = result.failureCategory ?? syncResult.errorCategory ?? ''
+            const failureStage = result.failureStage ?? 'core_sync'
             const errorMsg = syncResult.error ?? ''
 
             if (messageKey.length === 0 && errorCategory.length === 0) {
@@ -243,13 +244,13 @@ export class SyncOperationController {
 
             return {
               phase: 'failed',
-              message: this.safeSyncFailureMessage(undefined, errorCategory, errorCategory),
+              message: this.safeSyncFailureMessage(failureStage, errorCategory, errorCategory),
               messageKey: messageKey.length > 0 ? messageKey : undefined,
               errorCategory: errorCategory.length > 0 ? errorCategory : undefined,
               errorCode: errorCategory.length > 0 ? errorCategory : 'SYNC_ERROR',
               rawError: errorMsg.length > 0 ? errorMsg : undefined,
               operationId: result.diagnosticOperationId,
-              failureStage: 'core_sync',
+              failureStage,
               totalDownloaded: syncResult.totalDownloaded,
               totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts,
@@ -327,6 +328,14 @@ export class SyncOperationController {
       case 'auth_error':
       case 'token_missing':
         return '云端认证失败，请检查账号或访问令牌。'
+      case 'tls_ca_unavailable':
+        return '系统证书库不可用，无法建立安全的 HTTPS 连接。'
+      case 'tls_certificate_invalid':
+        return '云端 HTTPS 证书校验失败，请检查系统时间或网络代理。'
+      case 'git_runtime_init':
+      case 'local_git_cache':
+      case 'git_remote_config':
+        return '本地 Git 同步缓存初始化失败，请重试或查看诊断信息。'
       case 'local_io':
       case 'local_io_error':
       case 'config_local_io':

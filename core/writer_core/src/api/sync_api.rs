@@ -52,7 +52,7 @@ fn sync_diagnostic_fields(
     fields
 }
 
-fn sync_error_category(error: &crate::api::error::WriterError) -> &'static str {
+fn sync_error_category(error: &crate::api::error::WriterError) -> &str {
     match error {
         crate::api::error::WriterError::Io(_) | crate::api::error::WriterError::RetryableIo(_) => {
             "local_io"
@@ -63,7 +63,31 @@ fn sync_error_category(error: &crate::api::error::WriterError) -> &'static str {
         crate::api::error::WriterError::SyncConflict(_)
         | crate::api::error::WriterError::Conflict(_) => "conflict",
         crate::api::error::WriterError::NotImplemented => "unsupported",
+        crate::api::error::WriterError::SyncFailure { category, .. } => category,
         _ => "sync_error",
+    }
+}
+
+fn core_sync_category(error: &crate::Error) -> String {
+    let category = error.sync_category();
+    if category.is_empty() {
+        "other".to_string()
+    } else {
+        category.to_string()
+    }
+}
+
+/// Provider 初始化错误在保留真实阶段/分类后，仍需保持网络类错误原有的
+/// REST 后备重试语义；证书、CA、本地缓存等错误不进入此分支。
+fn writer_error_is_retryable_network(error: &crate::api::error::WriterError) -> bool {
+    use crate::api::error::WriterError;
+    match error {
+        WriterError::RetryableNetwork(_) => true,
+        WriterError::SyncFailure { category, .. } => matches!(
+            category.as_str(),
+            "network" | "rate_limited" | "temporary_unavailable"
+        ),
+        _ => false,
     }
 }
 
@@ -680,6 +704,25 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// 平台预处理/Provider 初始化失败时保留 Core 原始分类与阶段。
+    pub fn record_full_sync_preflight_failure_typed(
+        &self,
+        status: String,
+        failed_target: String,
+        error_category: String,
+        phase: String,
+    ) -> ApiResult<()> {
+        let parsed = super::types::sync_status_from_wire(&status);
+        self.core_write()
+            .record_full_sync_preflight_failure_typed(
+                parsed,
+                &failed_target,
+                &error_category,
+                &phase,
+            )
+            .map_err(Into::into)
+    }
+
     /// 全量同步诊断 — 只测一次仓库、分支、token。
     pub fn perform_full_sync_diagnostics(
         &self,
@@ -869,9 +912,8 @@ impl WriterCoreApi {
             // 开始完整同步，由 router 改走 api.github.com。每轮最多一次。
             let retry_via_api = !retried_via_github_api
                 && match &result {
-                    Err(crate::api::error::WriterError::RetryableNetwork(_)) => true,
+                    Err(error) => writer_error_is_retryable_network(error),
                     Ok(output) => full_sync_has_network_failure(output),
-                    Err(_) => false,
                 }
                 && should_retry_full_sync_via_github_api(&sync_config);
             if retry_via_api {
@@ -1041,10 +1083,21 @@ impl WriterCoreApi {
             Ok(provider) => provider,
             Err(error) => {
                 provider_phase.finish("error");
+                let category = {
+                    let category = error.sync_category();
+                    if category.is_empty() {
+                        "other".to_string()
+                    } else {
+                        category.to_string()
+                    }
+                };
+                let detail = error.to_string();
                 let status = crate::sync::full_sync::error_to_persist_status(&error);
                 let status_code = sync_status_to_wire(&status);
-                if let Err(state_error) = self.record_full_sync_preflight_failure(
+                if let Err(state_error) = self.record_full_sync_preflight_failure_typed(
                     status_code,
+                    "provider_init".to_string(),
+                    category.clone(),
                     "provider_init".to_string(),
                 ) {
                     log::warn!(
@@ -1052,7 +1105,11 @@ impl WriterCoreApi {
                         state_error.code()
                     );
                 }
-                let writer_error = crate::api::error::WriterError::from(error);
+                let writer_error = crate::api::error::WriterError::SyncFailure {
+                    category,
+                    stage: "provider_init".to_string(),
+                    detail,
+                };
                 record_sync_phase_failure(diagnostic_operation_id, "provider_init", &writer_error);
                 return Err(writer_error);
             }
@@ -1071,7 +1128,8 @@ impl WriterCoreApi {
         );
         if let Err(error) = self.flush_all_starmap_stores() {
             starmap_flush_phase.finish_with_provider("error", provider.as_ref());
-            let writer_error = crate::api::error::WriterError::from(error);
+            let error_category = sync_error_category(&error).to_string();
+            let writer_error = error;
             record_sync_phase_failure(
                 diagnostic_operation_id,
                 "starmap_store_flush",
@@ -1081,8 +1139,10 @@ impl WriterCoreApi {
                 "[sync] starmap_store_flush failed: error_code={}",
                 writer_error.code()
             );
-            let _ = self.record_full_sync_preflight_failure(
+            let _ = self.record_full_sync_preflight_failure_typed(
                 "recoverable_error".to_string(),
+                "starmap_store_flush".to_string(),
+                error_category,
                 "starmap_store_flush".to_string(),
             );
             return Err(writer_error);
@@ -1108,9 +1168,10 @@ impl WriterCoreApi {
             Ok(revision) => revision,
             Err(error) => {
                 revision_phase.finish_with_provider("error", provider.as_ref());
-                let writer_error = crate::api::error::WriterError::from(
-                    crate::error::Error::from(error),
-                );
+                let core_error = crate::error::Error::from(error);
+                let status = crate::sync::full_sync::error_to_persist_status(&core_error);
+                let error_category = core_sync_category(&core_error);
+                let writer_error = crate::api::error::WriterError::from(core_error);
                 record_sync_phase_failure(
                     diagnostic_operation_id,
                     "remote_revision",
@@ -1120,8 +1181,10 @@ impl WriterCoreApi {
                     "[sync] remote_revision failed: error_code={}",
                     writer_error.code()
                 );
-                let _ = self.record_full_sync_preflight_failure(
-                    "recoverable_error".to_string(),
+                let _ = self.record_full_sync_preflight_failure_typed(
+                    sync_status_to_wire(&status),
+                    "remote_revision".to_string(),
+                    error_category,
                     "remote_revision".to_string(),
                 );
                 return Err(writer_error);
@@ -1226,8 +1289,12 @@ impl WriterCoreApi {
                     remote_catalog_phase.finish_with_provider("error", provider.as_ref());
                     let msg = format!("discover_legacy_remote_catalog failed: {e}");
                     log::warn!("[sync] prepare: {msg}");
-                    let _ = self.record_full_sync_preflight_failure(
-                        "recoverable_error".to_string(),
+                    let status = crate::sync::full_sync::error_to_persist_status(&e);
+                    let error_category = core_sync_category(&e);
+                    let _ = self.record_full_sync_preflight_failure_typed(
+                        sync_status_to_wire(&status),
+                        "target_catalog".to_string(),
+                        error_category,
                         "target_catalog".to_string(),
                     );
                     return Err(crate::api::error::WriterError::from(e));
@@ -1275,8 +1342,12 @@ impl WriterCoreApi {
                     Err(e) => {
                         let msg = format!("persist_bootstrap_catalog failed: {e}");
                         log::warn!("[sync] prepare: {msg}");
-                        let _ = self.record_full_sync_preflight_failure(
-                            "recoverable_error".to_string(),
+                        let status = crate::sync::full_sync::error_to_persist_status(&e);
+                        let error_category = core_sync_category(&e);
+                        let _ = self.record_full_sync_preflight_failure_typed(
+                            sync_status_to_wire(&status),
+                            "target_catalog".to_string(),
+                            error_category,
                             "target_catalog".to_string(),
                         );
                         return Err(crate::api::error::WriterError::from(e));
@@ -1304,8 +1375,12 @@ impl WriterCoreApi {
                     app_group_catalog_phase.finish_with_provider("error", provider.as_ref());
                     let msg = format!("discover_remote_app_data_groups failed: {e}");
                     log::warn!("[sync] prepare: {msg}");
-                    let _ = self.record_full_sync_preflight_failure(
-                        "recoverable_error".to_string(),
+                    let status = crate::sync::full_sync::error_to_persist_status(&e);
+                    let error_category = core_sync_category(&e);
+                    let _ = self.record_full_sync_preflight_failure_typed(
+                        sync_status_to_wire(&status),
+                        "app_group_catalog".to_string(),
+                        error_category,
                         "app_group_catalog".to_string(),
                     );
                     return Err(crate::api::error::WriterError::from(e));
@@ -1348,9 +1423,13 @@ impl WriterCoreApi {
                 plan_phase.finish_with_provider("error", provider.as_ref());
                 let msg = err.to_string();
                 log::warn!("[sync] prepare: build_full_sync_plan_unlocked failed: {msg}");
-                let _ = self.record_full_sync_preflight_failure(
-                    "recoverable_error".to_string(),
+                let status = crate::sync::full_sync::error_to_persist_status(&err);
+                let error_category = core_sync_category(&err);
+                let _ = self.record_full_sync_preflight_failure_typed(
+                    sync_status_to_wire(&status),
                     "global".to_string(),
+                    error_category,
+                    "plan".to_string(),
                 );
                 return Err(crate::api::error::WriterError::from(err));
             }
@@ -1471,8 +1550,12 @@ impl WriterCoreApi {
         if let Err(e) = self.core_write().flush_all_starmap_stores() {
             let msg = format!("flush_all_starmap_stores before staging seed failed: {e}");
             log::warn!("[sync] prepare: {msg}");
-            let _ = self.record_full_sync_preflight_failure(
-                "recoverable_error".to_string(),
+            let status = crate::sync::full_sync::error_to_persist_status(&e);
+            let error_category = core_sync_category(&e);
+            let _ = self.record_full_sync_preflight_failure_typed(
+                sync_status_to_wire(&status),
+                "staging_seed".to_string(),
+                error_category,
                 "staging_seed".to_string(),
             );
             return Err(crate::api::error::WriterError::from(e));
@@ -1495,8 +1578,12 @@ impl WriterCoreApi {
                     settings_path.display()
                 );
                 log::warn!("[sync] prepare: {msg}");
-                let _ = self.record_full_sync_preflight_failure(
-                    "recoverable_error".to_string(),
+                let status = crate::sync::full_sync::error_to_persist_status(&e);
+                let error_category = core_sync_category(&e);
+                let _ = self.record_full_sync_preflight_failure_typed(
+                    sync_status_to_wire(&status),
+                    "staging_seed".to_string(),
+                    error_category,
                     "staging_seed".to_string(),
                 );
                 return Err(crate::api::error::WriterError::from(e));
@@ -1513,15 +1600,13 @@ impl WriterCoreApi {
             Err(err) => {
                 staging_phase.finish_with_provider("error", provider.as_ref());
                 let status = crate::sync::full_sync::error_to_persist_status(&err);
-                let status_str = match &status {
-                    crate::sync::SyncStatus::FatalError(_) => "fatal_error".to_string(),
-                    crate::sync::SyncStatus::RecoverableError(_) => "recoverable_error".to_string(),
-                    _ => "fatal_error".to_string(),
-                };
-                // record_full_sync_preflight_failure 是 pub API，
-                // persist_full_sync_early_failure 是 pub(super) 不可从 api 层调用。
-                let _ =
-                    self.record_full_sync_preflight_failure(status_str, "staging_seed".to_string());
+                let error_category = core_sync_category(&err);
+                let _ = self.record_full_sync_preflight_failure_typed(
+                    sync_status_to_wire(&status),
+                    "staging_seed".to_string(),
+                    error_category,
+                    "staging_seed".to_string(),
+                );
                 return Err(err.into());
             }
         };

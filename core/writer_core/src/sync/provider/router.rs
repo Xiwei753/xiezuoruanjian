@@ -189,24 +189,44 @@ where
 
     if !is_github_https_remote(&provider.config().remote_url) {
         // 通用 Git 平台（GitLab/Gitee/Gitea/Forgejo/Bitbucket/自建）直接使用。
+        log::info!(
+            "sync.route: provider=git_https host_class=other fallback=false phase=git_probe"
+        );
         return Ok(Box::new(provider));
     }
 
     #[cfg(feature = "github-api")]
     {
         if is_git_known_unreachable() {
+            log::warn!(
+                "sync.route: provider=github_api host_class=github fallback=true phase=git_probe reason_code=network_cached"
+            );
             return fallback_to_github_api(git_config, create_github_api, None);
         }
         match provider.probe() {
             Ok(()) => {
                 clear_git_unreachable();
+                log::info!(
+                    "sync.route: provider=git_https host_class=github fallback=false phase=git_probe"
+                );
                 Ok(Box::new(provider))
             }
+            // 仅底层传输不可达（DNS/连接/超时/握手中断）允许 REST 后备。
+            // TLS 证书、CA、认证、本地缓存与 remote 配置错误必须原样上报。
             Err(ProviderError::Network { reason }) => {
                 mark_git_unreachable();
+                log::warn!(
+                    "sync.route: provider=github_api host_class=github fallback=true phase=git_probe reason_code=network"
+                );
                 fallback_to_github_api(git_config, create_github_api, Some(reason))
             }
-            Err(error) => Err(crate::Error::from(error)),
+            Err(error) => {
+                log::warn!(
+                    "sync.route: provider=git_https host_class=github fallback=false phase=git_probe reason_code={}",
+                    error.stable_code()
+                );
+                Err(crate::Error::from(error))
+            }
         }
     }
 
@@ -214,8 +234,19 @@ where
     {
         let _ = create_github_api;
         match provider.probe() {
-            Ok(()) => Ok(Box::new(provider)),
-            Err(error) => Err(crate::Error::from(error)),
+            Ok(()) => {
+                log::info!(
+                    "sync.route: provider=git_https host_class=github fallback=false phase=git_probe"
+                );
+                Ok(Box::new(provider))
+            }
+            Err(error) => {
+                log::warn!(
+                    "sync.route: provider=git_https host_class=github fallback=false phase=git_probe reason_code={}",
+                    error.stable_code()
+                );
+                Err(crate::Error::from(error))
+            }
         }
     }
 }
@@ -230,23 +261,38 @@ where
     F: FnOnce(&ProviderConfig) -> crate::error::Result<Box<dyn SyncProvider>>,
 {
     let api_config = github_api_config(git_config);
+    log::info!(
+        "sync.route: provider=github_api host_class=github fallback=true phase=github_api_fallback_init"
+    );
     match create_github_api(&ProviderConfig::GitHub(api_config)) {
-        Ok(provider) => Ok(provider),
-        Err(api_error) => match git_error {
-            // 保留 API 自身的错误分类（例如令牌缺失/无效仍是认证错误），
-            // 同时附带 Git HTTPS 不可达原因，避免把认证失败误报为网络被墙。
-            Some(git_reason) => match api_error {
-                crate::Error::SyncAuthFailed { reason } => Err(crate::Error::SyncAuthFailed {
-                    reason: format!("{reason} (Git HTTPS also unavailable: {git_reason})"),
-                }),
-                crate::Error::SyncNetworkUnavailable { reason } => {
-                    Err(crate::Error::SyncNetworkUnavailable {
+        Ok(provider) => {
+            log::info!(
+                "sync.route: provider=github_api host_class=github fallback=true phase=github_api_fallback_init result=ok"
+            );
+            Ok(provider)
+        }
+        Err(api_error) => {
+            let category = api_error.sync_category();
+            log::warn!(
+                "sync.route: provider=github_api host_class=github fallback=true phase=github_api_fallback_init result=error reason_code={}",
+                if category.is_empty() { "other" } else { category }
+            );
+            match git_error {
+                // 保留 API 自身的错误分类（例如令牌缺失/无效仍是认证错误），
+                // 同时附带 Git HTTPS 不可达原因，避免把认证失败误报为网络被墙。
+                Some(git_reason) => match api_error {
+                    crate::Error::SyncAuthFailed { reason } => Err(crate::Error::SyncAuthFailed {
                         reason: format!("{reason} (Git HTTPS also unavailable: {git_reason})"),
-                    })
-                }
-                other => Err(other),
-            },
-            None => Err(api_error),
-        },
+                    }),
+                    crate::Error::SyncNetworkUnavailable { reason } => {
+                        Err(crate::Error::SyncNetworkUnavailable {
+                            reason: format!("{reason} (Git HTTPS also unavailable: {git_reason})"),
+                        })
+                    }
+                    other => Err(other),
+                },
+                None => Err(api_error),
+            }
+        }
     }
 }
