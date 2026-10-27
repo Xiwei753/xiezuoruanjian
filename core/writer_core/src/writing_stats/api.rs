@@ -798,6 +798,58 @@ impl StatsApi {
         Ok(())
     }
 
+    /// 记录一次带证明细节的编辑事务；seq/哈希链由 store 串行补齐。
+    pub fn record_proof_event(
+        &self,
+        event: WritingInputEvent,
+        baseline_text: Option<&str>,
+    ) -> Result<bool> {
+        self.store.record_proof_event(event, baseline_text)
+    }
+
+    /// 正文保存后写入完整正文检查点。
+    pub fn record_chapter_checkpoint(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        text: &str,
+        session_id: &str,
+    ) -> Result<()> {
+        self.store
+            .record_chapter_checkpoints(project_id, volume_id, chapter_id, text, session_id)
+    }
+
+    /// 按章节回放证明事件，返回目标时刻的正文/选区与校验结果。
+    pub fn replay_chapter_proof(
+        &self,
+        request: &crate::writing_stats::replay::ProofReplayRequest,
+    ) -> Result<crate::writing_stats::replay::ProofReplayFrame> {
+        crate::writing_stats::replay::replay_chapter(&self.store, request)
+    }
+
+    /// 导出离线可校验的章节证明包。
+    pub fn export_chapter_proof(
+        &self,
+        chapter_id: &str,
+        device_id: &str,
+    ) -> Result<crate::writing_stats::replay::ProofExportPackage> {
+        crate::writing_stats::replay::export_chapter_proof(&self.store, chapter_id, device_id)
+    }
+
+    /// 列出某设备/章节的完整正文检查点。
+    pub fn load_proof_checkpoints(
+        &self,
+        device_id: &str,
+        chapter_id: &str,
+    ) -> Result<Vec<crate::writing_stats::checkpoint::ProofCheckpoint>> {
+        crate::writing_stats::checkpoint::load_checkpoints(
+            self.store.app_data_root(),
+            device_id,
+            chapter_id,
+        )
+    }
+
     /// 记录一段平台已测量的前台写作计时切片。
     ///
     /// Core 负责补齐设备身份、按本地日期切分并幂等持久化；平台端只上报

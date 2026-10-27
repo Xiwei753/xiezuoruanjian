@@ -8,6 +8,7 @@ use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
 impl EditorKernel {
     #[allow(clippy::cast_possible_truncation)]
     pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditOutcome {
+        self.pending_changes.clear();
         let base_revision = self.revision;
         let old_selection_anchor = self.selection_anchor.value();
         let old_selection_head = self.cursor.value();
@@ -56,6 +57,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::Load,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::Load,
             offset_map: Some(OffsetMap::from_single_edit(old_len, (0, old_len), new_len)),
             content_delta: EditorContentDelta {
@@ -85,6 +87,7 @@ impl EditorKernel {
             old_selection: current_selection,
             new_selection: current_selection,
             cause: EditorTransactionCause::Programmatic,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CursorOnly,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -107,6 +110,7 @@ impl EditorKernel {
             old_selection,
             new_selection: old_selection,
             cause: EditorTransactionCause::Programmatic,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CursorOnly,
             offset_map: None,
             content_delta: EditorContentDelta::default(),

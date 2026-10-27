@@ -128,5 +128,6 @@ pub(crate) fn synthetic_edit_result(
         operation_kind,
         offset_map,
         content_delta: writer_core::editor::EditorContentDelta::default(),
+        changes: Vec::new(),
     }
 }

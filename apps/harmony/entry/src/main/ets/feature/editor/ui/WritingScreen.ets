@@ -27,6 +27,7 @@ import { SelectionController } from '../selection/SelectionController'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { SujianEditor } from './SujianEditor'
+import { ProofReplayPanel } from './ProofReplayPanel'
 import { WideWritingWorkbench } from './wide/WideWritingWorkbench'
 // Issue #825 复核8第 3 点：订阅"刚落盘的 LocalSettings"广播，
 // 让宽屏设置浮层的改动实时回流到本页（对齐 Linux 的 settingsBackend.onSettings_changed）。
@@ -151,6 +152,7 @@ export struct WritingScreen {
   @State correctionModelResourceStatus: string = ''
   @State correctionResourcesBusy: boolean = false
   @State annotationPanelOpen: boolean = false
+  @State proofReplayOpen: boolean = false
   @State annotationTarget: AnnotationObjectRefDto | null = null
   @State annotationRanges: AnnotationRangeDto[] = []
   @State annotationErrorMessage: string = ''
@@ -298,6 +300,7 @@ export struct WritingScreen {
     this.editorCoordinator,
     this.dispatcher,
     this.editorStatsQueue,
+    this.writingSessionTracker,
     NavigationTransactionCoordinator.getInstance(),
     this.harmonyImeConnection,
     this.writingTextProvider
@@ -489,17 +492,6 @@ export struct WritingScreen {
 
     const snap = update.snapshot
     if (snap !== null) {
-      const edit = update.editResult
-      if (edit !== null
-        && (edit.cause === EditorTransactionCause.Typing
-          || edit.cause === EditorTransactionCause.TypingCommit
-          || edit.cause === EditorTransactionCause.ImeComposition
-          || edit.cause === EditorTransactionCause.Delete)
-        && (edit.contentDelta.insertedChars > 0 || edit.contentDelta.deletedChars > 0)) {
-        // 第一次真人编辑才开始计时；纯光标/选区/程序化写入不建立会话。
-        this.writingSessionTracker.onHumanEdit(
-          this.projectId, this.volumeId, this.chapterId, update.statsOccurredAtMs)
-      }
       this.correctionCoordinator.acceptSnapshot(this.projectId, this.chapterId, snap, update.editResult)
       // Issue #879：把 snapshot + editResult + sessionId 保存在一个 @State presentationUpdate 中。
       const layoutSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
@@ -1578,6 +1570,14 @@ export struct WritingScreen {
   // Issue #629 评论14 第1项：编辑区域 Builder（窄屏和宽屏复用同一套编辑会话）。
   // Issue #829 评论2第1项：正文主体抽成不含任何状态栏的 EditorBody()。
   @Builder
+  ProofReplaySheet() {
+    ProofReplayPanel({
+      chapterId: this.chapterId,
+      coordinator: this.writingWorkflow
+    })
+  }
+
+  @Builder
   EditorBody() {
     Column() {
       if (this.isLoading) {
@@ -1639,6 +1639,10 @@ export struct WritingScreen {
                     void this.openAnnotationPanel()
                   }
                 })
+              Button('写作回放')
+                .height(34)
+                .margin({ left: 8 })
+                .onClick(() => { this.proofReplayOpen = true })
               if (this.annotationErrorMessage.length > 0) {
                 Text(this.annotationErrorMessage)
                   .fontSize(12)
@@ -1647,6 +1651,7 @@ export struct WritingScreen {
               }
             }
             .width('100%')
+            .bindSheet($$this.proofReplayOpen, this.ProofReplaySheet(), { height: 560 })
 
             if (this.annotationPanelOpen && this.annotationTarget !== null) {
               AnnotationPanel({

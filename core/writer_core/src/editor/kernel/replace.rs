@@ -3,7 +3,7 @@ use super::types::{DisplayPatch, EditorOperationKind};
 use super::{EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
+use crate::editor::transaction::{EditorChange, EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     /// replace-all 是冷路径（明确需要全文的边界），允许 materialize
@@ -75,6 +75,18 @@ impl EditorKernel {
         // 从后往前对 Rope 局部 replace（前面的坐标不受后面替换影响）。
         for &start in match_starts.iter().rev() {
             self.text.replace(start..start + search_len, replacement);
+            if !search.is_empty() {
+                self.push_change(EditorChange::Delete {
+                    index: Utf8ByteOffset::unchecked(start),
+                    text: search.to_string(),
+                });
+            }
+            if !replacement.is_empty() {
+                self.push_change(EditorChange::Insert {
+                    index: Utf8ByteOffset::unchecked(start),
+                    text: replacement.to_string(),
+                });
+            }
         }
 
         self.revision = self.revision.next();
@@ -137,6 +149,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::Format,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::Format,
             // 从 delta 直接构造 offset map，不再全文 diff。
             offset_map: Some(OffsetMap::from_edits(old_text.len(), &offset_pairs)),

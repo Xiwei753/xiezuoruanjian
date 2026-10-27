@@ -16,7 +16,7 @@ use crate::editor::strong_types::{
     EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset, Utf8ByteOffset,
     Utf8ByteRange,
 };
-use crate::editor::transaction::EditorSelection;
+use crate::editor::transaction::{EditorChange, EditorSelection};
 use crop::Rope;
 
 /// 编辑 delta：只保存实际删除/插入的局部文本及 old/new ranges。
@@ -59,6 +59,13 @@ pub struct EditorKernel {
     redo_stack: Vec<UndoEntry>,
     composition_session: Option<CompositionSessionState>,
     next_composition_session_id: EditorSessionId,
+    /// 本次 `apply()` 中实际执行的插入/删除操作（按执行顺序）。
+    ///
+    /// 只有真正修改了正文的局部操作才记录；composition preedit 不记录，
+    /// IME commit 才记录。`apply()` 结束时把这些操作原样交给
+    /// [`self::result::EditorEditResult::changes`]，供写作统计/手写证明使用，
+    /// 平台端不再按最终字符串猜 diff。
+    pending_changes: Vec<EditorChange>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +97,7 @@ impl EditorKernel {
             redo_stack: Vec::new(),
             composition_session: None,
             next_composition_session_id: EditorSessionId::new(1),
+            pending_changes: Vec::new(),
         }
     }
 
@@ -110,7 +118,18 @@ impl EditorKernel {
             redo_stack: Vec::new(),
             composition_session: None,
             next_composition_session_id: EditorSessionId::new(1),
+            pending_changes: Vec::new(),
         })
+    }
+
+    /// 记录一次实际写入正文的操作（仅供 kernel 内部与证明/统计使用）。
+    pub(crate) fn push_change(&mut self, change: EditorChange) {
+        self.pending_changes.push(change);
+    }
+
+    /// 取走本次事务累积的实际变更列表。
+    pub(crate) fn take_pending_changes(&mut self) -> Vec<EditorChange> {
+        std::mem::take(&mut self.pending_changes)
     }
 
     ///   — 热路径访问器：UTF-8 byte 长度，O(1)。

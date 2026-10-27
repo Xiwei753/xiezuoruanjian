@@ -386,6 +386,17 @@ mod tests {
             deleted_chars: 0,
             event_id: "evt-save-1".to_string(),
             occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+            changes: Vec::new(),
+            session_id: String::new(),
+            baseline_text: None,
+            base_revision: 0,
+            new_revision: 0,
+            old_selection_anchor: 0,
+            old_selection_head: 0,
+            new_selection_anchor: 0,
+            new_selection_head: 0,
+            sync_source_device_id: String::new(),
+            parent_event_id: String::new(),
         };
 
         let receipt = api

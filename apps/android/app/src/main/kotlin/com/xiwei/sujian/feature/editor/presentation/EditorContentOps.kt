@@ -84,7 +84,19 @@ fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
         event.contentDelta.deletedChars,
         eventId,
         occurredAtMs,
+        changes = event.changes,
+        baselineText = if (proofBaselineSent) null else proofBaselineText,
+        sessionId = writingSessionTracker.currentSessionId(),
+        baseRevision = (event.revision - 1).coerceAtLeast(0),
+        newRevision = event.revision,
+        oldSelectionAnchor = event.oldSelectionAnchorUtf8,
+        oldSelectionHead = event.oldSelectionHeadUtf8,
+        newSelectionAnchor = event.selectionAnchorUtf8,
+        newSelectionHead = event.selectionHeadUtf8,
     )
+    if (event.contentDelta.insertedChars > 0 || event.contentDelta.deletedChars > 0) {
+        proofBaselineSent = true
+    }
 }
 
 /**

@@ -400,7 +400,12 @@ pub struct SujianEditorItem {
         deleted_chars: u32,
         base_revision: u64,
         new_revision: u64,
-        patch_ranges_json: QString
+        patch_ranges_json: QString,
+        changes_json: QString,
+        old_selection_anchor: u64,
+        old_selection_head: u64,
+        new_selection_anchor: u64,
+        new_selection_head: u64
     ),
 
     #[allow(dead_code)]

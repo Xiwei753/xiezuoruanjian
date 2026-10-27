@@ -18,10 +18,12 @@
 import hilog from '@ohos.hilog'
 import { util } from '@kit.ArkTS'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
-import { EditorSessionSnapshot, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
+import { EditorSessionSnapshot, EditorEditResult, EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
+import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorSessionCoordinator, EditorStateUpdate } from './EditorSessionCoordinator'
 import { EditorSemanticDispatcher } from '../input/EditorSemanticDispatcher'
 import { EditorStatsQueue } from '../stats/EditorStatsQueue'
+import { WritingSessionTracker } from '../stats/WritingSessionTracker'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { Routes, WritingRouteParams } from '../../../app/navigation/Routes'
@@ -91,6 +93,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   private editorCoordinator: EditorSessionCoordinator
   private dispatcher: EditorSemanticDispatcher
   private statsQueue: EditorStatsQueue
+  private writingSessionTracker: WritingSessionTracker
   private navigation: NavigationTransactionCoordinator
   private imeConnection: HarmonyImeConnection
   private textProvider: WritingTextProvider
@@ -112,6 +115,8 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   private wordCount: number = 0
   private hasUnsavedChanges: boolean = false
   private lastSavedContent: string = ''
+  // 证明链起点只上报一次：本次打开章节时的完整正文；之后由 Core 链式 hash 承接。
+  private proofBaselineSent: boolean = false
   private lastSavedContentHash: string | null = null
   private isLoading: boolean = false
   private errorMessage: string = ''
@@ -137,6 +142,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     editorCoordinator: EditorSessionCoordinator,
     dispatcher: EditorSemanticDispatcher,
     statsQueue: EditorStatsQueue,
+    writingSessionTracker: WritingSessionTracker,
     navigation: NavigationTransactionCoordinator,
     imeConnection: HarmonyImeConnection,
     textProvider: WritingTextProvider
@@ -145,6 +151,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
     this.editorCoordinator = editorCoordinator
     this.dispatcher = dispatcher
     this.statsQueue = statsQueue
+    this.writingSessionTracker = writingSessionTracker
     this.navigation = navigation
     this.imeConnection = imeConnection
     this.textProvider = textProvider
@@ -222,13 +229,36 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       // 页面用同一时刻锚定真实写作计时，首笔输入不会落在片段起点之前。
       const statsOccurredAtMs: number = Date.now()
       const statsEventId: string = util.generateRandomUUID(false)
+      const proofBaseline: string = this.proofBaselineSent ? '' : this.lastSavedContent
+      // Issue #981 / #1008：真实会话在编辑发生时先建立，再让同一事务事件携带 sessionId，
+      // 保证证明事件与前台计时切片指向同一会话。
+      if ((update.editResult.cause === EditorTransactionCause.Typing
+        || update.editResult.cause === EditorTransactionCause.TypingCommit
+        || update.editResult.cause === EditorTransactionCause.ImeComposition
+        || update.editResult.cause === EditorTransactionCause.Delete)
+        && (delta.insertedChars > 0 || delta.deletedChars > 0)) {
+        this.writingSessionTracker.onHumanEdit(
+          this.projectId, this.volumeId, this.chapterId, statsOccurredAtMs)
+      }
       // Issue #829 评论 #5995146525：正文每次真实变化就在这里产出统计事件，
       // 不再等保存后比较整章。enqueueChange 只入内存队列，不跨 NAPI、不 await。
       this.statsQueue.enqueueChange(
         this.projectId, this.volumeId, this.chapterId,
         update.editResult.cause, delta.insertedChars, delta.deletedChars,
-        statsEventId, statsOccurredAtMs
+        statsEventId, statsOccurredAtMs,
+        update.editResult.changes ?? [],
+        this.writingSessionTracker.currentSessionId(),
+        update.editResult.baseRevision,
+        update.editResult.newRevision,
+        update.editResult.oldSelectionAnchor,
+        update.editResult.oldSelectionHead,
+        update.editResult.newSelectionAnchor,
+        update.editResult.newSelectionHead,
+        proofBaseline
       )
+      if (delta.insertedChars > 0 || delta.deletedChars > 0) {
+        this.proofBaselineSent = true
+      }
       this.emit(snap, update.editResult, statsEventId, statsOccurredAtMs)
       return
     }
@@ -236,6 +266,16 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
   }
 
   // ── 加载 ──
+
+  /** 手写证明回放：原样取 Core 计算结果，页面只渲染。 */
+  async replayChapterProof(requestJson: string): Promise<ResultEnvelope<Object>> {
+    return this.bridge.replayChapterProof(requestJson)
+  }
+
+  /** 导出证明包（包含历史正文，展示前需明确提示）。 */
+  async exportChapterProof(chapterId: string, deviceId: string): Promise<ResultEnvelope<Object>> {
+    return this.bridge.exportChapterProof(chapterId, deviceId)
+  }
 
   // Issue #768 评论5838296806：先加载排版设置，再打开章节会话（由页面在外面先 loadSettings 再调本方法）。
   async loadChapter(): Promise<void> {
@@ -248,6 +288,7 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
       if (result.success && result.data) {
         this.content = result.data.content
         this.lastSavedContent = result.data.content
+        this.proofBaselineSent = false
         // Issue #629 评论 5 第 8 节：跨设备内容身份来自 ChapterContent.meta.hash。
         this.lastSavedContentHash = result.data.meta.hash
         this.wordCount = result.data.meta.wordCount

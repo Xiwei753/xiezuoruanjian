@@ -78,9 +78,20 @@ pub fn record_editor_change_stats(
     cause: writer_core::editor::EditorTransactionCause,
     inserted_chars: u32,
     deleted_chars: u32,
+    changes_json: &str,
+    session_id: &str,
+    base_revision: u64,
+    new_revision: u64,
+    old_selection_anchor: u64,
+    old_selection_head: u64,
+    new_selection_anchor: u64,
+    new_selection_head: u64,
+    baseline_text: Option<&str>,
     event_id: &str,
     occurred_at_ms: i64,
 ) -> Result<(), WriterError> {
+    let changes: Vec<writer_core::api::EditorChangeDto> =
+        serde_json::from_str(changes_json).unwrap_or_default();
     let input = writer_core::api::EditorChangeStatsInputDto {
         platform: "linux".to_string(),
         project_id: project_id.to_string(),
@@ -92,6 +103,18 @@ pub fn record_editor_change_stats(
         // Issue #935 复核：身份与发生时间由入队时固定，重发原样带回。
         event_id: event_id.to_string(),
         occurred_at_ms,
+        // 旧调用点暂不携带逐字变更；带 changes 后会走 Core 的证明链入口。
+        changes,
+        session_id: session_id.to_string(),
+        baseline_text: baseline_text.map(ToString::to_string),
+        base_revision,
+        new_revision,
+        old_selection_anchor: old_selection_anchor as u32,
+        old_selection_head: old_selection_head as u32,
+        new_selection_anchor: new_selection_anchor as u32,
+        new_selection_head: new_selection_head as u32,
+        sync_source_device_id: String::new(),
+        parent_event_id: String::new(),
     };
     api.record_editor_change_stats(input)
         .map_err(WriterError::from)

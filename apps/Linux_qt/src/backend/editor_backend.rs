@@ -128,6 +128,14 @@ pub struct EditorBackend {
             cause: QString,
             inserted_chars: u32,
             deleted_chars: u32,
+            changes_json: QString,
+            base_revision: u64,
+            new_revision: u64,
+            old_selection_anchor: u64,
+            old_selection_head: u64,
+            new_selection_anchor: u64,
+            new_selection_head: u64,
+            baseline_text: QString,
         )
     ),
     #[allow(dead_code)]
@@ -136,6 +144,13 @@ pub struct EditorBackend {
     #[allow(dead_code)]
     get_writing_stats_summary_object:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
+    /// 手写证明：按章节回放。请求为 Core `ProofReplayRequest` JSON，返回同帧 JSON。
+    #[allow(dead_code)]
+    replay_chapter_proof_object: qt_method!(fn(&self, request_json: QString) -> QJsonObject),
+    /// 手写证明：导出离线证明包 JSON（含历史正文摘要与逐次事件）。
+    #[allow(dead_code)]
+    export_chapter_proof_object:
+        qt_method!(fn(&self, chapter_id: QString, device_id: QString) -> QJsonObject),
     /// 「今天」的写作汇总。今天是哪一天由 Core 的本地日历口径决定。
     #[allow(dead_code)]
     get_today_writing_stats_summary_object: qt_method!(fn(&self) -> QJsonObject),
@@ -485,6 +500,14 @@ impl EditorBackend {
         cause: QString,
         inserted_chars: u32,
         deleted_chars: u32,
+        changes_json: QString,
+        base_revision: u64,
+        new_revision: u64,
+        old_selection_anchor: u64,
+        old_selection_head: u64,
+        new_selection_anchor: u64,
+        new_selection_head: u64,
+        baseline_text: QString,
     ) {
         let parsed_cause = match cause.to_string().as_str() {
             "Typing" => writer_core::editor::EditorTransactionCause::Typing,
@@ -529,6 +552,7 @@ impl EditorBackend {
         }
         if self
             .with_app(|app| {
+                let session_id = app.current_writing_session_id();
                 app.record_editor_change_stats(
                     project_id,
                     volume_id,
@@ -536,6 +560,15 @@ impl EditorBackend {
                     parsed_cause,
                     inserted_chars,
                     deleted_chars,
+                    changes_json,
+                    session_id.into(),
+                    base_revision,
+                    new_revision,
+                    old_selection_anchor,
+                    old_selection_head,
+                    new_selection_anchor,
+                    new_selection_head,
+                    baseline_text,
                 )
             })
             .is_err()
@@ -1304,6 +1337,24 @@ impl EditorBackend {
         end_date: QString,
     ) -> QJsonObject {
         self.with_app(|app| app.get_writing_stats_summary_object(start_date, end_date))
+            .unwrap_or_else(|_| {
+                qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
+            })
+    }
+
+    fn replay_chapter_proof_object(&self, request_json: QString) -> QJsonObject {
+        self.with_app(|app| app.replay_chapter_proof_object(request_json))
+            .unwrap_or_else(|_| {
+                qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
+            })
+    }
+
+    fn export_chapter_proof_object(
+        &self,
+        chapter_id: QString,
+        device_id: QString,
+    ) -> QJsonObject {
+        self.with_app(|app| app.export_chapter_proof_object(chapter_id, device_id))
             .unwrap_or_else(|_| {
                 qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
             })

@@ -156,6 +156,11 @@ impl SujianEditorItem {
                 QString::from(
                     serde_json::to_string(&patch_ranges).unwrap_or_else(|_| "[]".to_string()),
                 ),
+                QString::from(serde_json::to_string(&result.changes).unwrap_or_else(|_| "[]".to_string())),
+                result.old_selection.anchor.index.value() as u64,
+                result.old_selection.head.index.value() as u64,
+                result.new_selection.anchor.index.value() as u64,
+                result.new_selection.head.index.value() as u64,
             );
         }
     }

@@ -53,6 +53,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::Programmatic,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CursorOnly,
             // 选区操作不变更正文，无 offset_map
             offset_map: None,

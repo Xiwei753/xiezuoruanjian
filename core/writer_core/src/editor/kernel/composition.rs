@@ -6,7 +6,7 @@ use crate::editor::strong_types::{
     EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset, Utf8ByteOffset,
     Utf8ByteRange,
 };
-use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
+use crate::editor::transaction::{EditorChange, EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     pub(crate) fn apply_begin_composition(
@@ -75,6 +75,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -117,6 +118,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -161,6 +163,7 @@ impl EditorKernel {
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
                 cause: EditorTransactionCause::TypingCommit,
+                changes: Vec::new(),
                 operation_kind: EditorOperationKind::CompositionCommit,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -186,6 +189,18 @@ impl EditorKernel {
         let deleted_text = self.text.byte_slice(replace_start..replace_end).to_string();
         self.text
             .replace(replace_start..replace_end, &committed_text);
+        if !deleted_text.is_empty() {
+            self.push_change(EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(replace_start),
+                text: deleted_text.clone(),
+            });
+        }
+        if !committed_text.is_empty() {
+            self.push_change(EditorChange::Insert {
+                index: Utf8ByteOffset::unchecked(replace_start),
+                text: committed_text.clone(),
+            });
+        }
         self.revision = self.revision.next();
 
         let committed_utf16_len: usize = committed_text.chars().map(|c| c.len_utf16()).sum();
@@ -250,6 +265,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::TypingCommit,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CompositionCommit,
             // 单次 composition commit 从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -313,6 +329,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CompositionCancel,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -371,6 +388,7 @@ impl EditorKernel {
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
                 cause: EditorTransactionCause::ImeComposition,
+                changes: Vec::new(),
                 operation_kind: EditorOperationKind::CompositionUpdate,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -393,6 +411,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -434,6 +453,7 @@ impl EditorKernel {
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
                 cause: EditorTransactionCause::ImeComposition,
+                changes: Vec::new(),
                 operation_kind: EditorOperationKind::CompositionUpdate,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -456,6 +476,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -497,6 +518,7 @@ impl EditorKernel {
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
                 cause: EditorTransactionCause::ImeComposition,
+                changes: Vec::new(),
                 operation_kind: EditorOperationKind::CompositionUpdate,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -524,6 +546,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),
@@ -565,6 +588,7 @@ impl EditorKernel {
                 old_selection: make_selection(old_selection_anchor, old_selection_head),
                 new_selection,
                 cause: EditorTransactionCause::ImeComposition,
+                changes: Vec::new(),
                 operation_kind: EditorOperationKind::CompositionUpdate,
                 offset_map: None,
                 content_delta: EditorContentDelta::default(),
@@ -593,6 +617,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::ImeComposition,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CompositionUpdate,
             offset_map: None,
             content_delta: EditorContentDelta::default(),

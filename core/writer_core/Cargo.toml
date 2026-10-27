@@ -29,6 +29,7 @@ uuid = { version = "1.8", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 md5 = "0.7"
 sha2 = "0.10"
+zstd = "0.13"
 tempfile = "3.8"
 sujian-proof = { path = "../../crates/sujian-proof" }
 once_cell = { version = "1.19", optional = true }

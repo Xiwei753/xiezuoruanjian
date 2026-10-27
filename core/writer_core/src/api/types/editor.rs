@@ -86,6 +86,35 @@ pub struct EditorChangeStatsInputDto {
     /// 不会把昨天的输入改记到今天。`0` 表示老客户端未提供，Core 用当前时间。
     #[serde(default)]
     pub occurred_at_ms: i64,
+    /// 本次事务实际执行的插入/删除，按执行顺序。为空表示老客户端只上报计数，
+    /// 仍可统计但不能逐字回放。
+    #[serde(default)]
+    pub changes: Vec<EditorChangeDto>,
+    /// 真实前台写作会话 ID（与 activity segment 同源）。
+    #[serde(default)]
+    pub session_id: String,
+    /// 旧会话首次记录时的当前正文基线；仅证明链第一条事件需要。
+    /// 包含历史正文，平台只在本机通过 Core 持久化，不写入普通日志。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_text: Option<String>,
+    #[serde(default)]
+    pub base_revision: u64,
+    #[serde(default)]
+    pub new_revision: u64,
+    #[serde(default)]
+    pub old_selection_anchor: u32,
+    #[serde(default)]
+    pub old_selection_head: u32,
+    #[serde(default)]
+    pub new_selection_anchor: u32,
+    #[serde(default)]
+    pub new_selection_head: u32,
+    /// 同步导入正文时指向远端设备；人工输入为空。
+    #[serde(default)]
+    pub sync_source_device_id: String,
+    /// 同步/外部变更依赖的父事件。
+    #[serde(default)]
+    pub parent_event_id: String,
 }
 
 impl From<crate::editor::EditorTransactionCause> for EditorTransactionCauseDto {
@@ -101,6 +130,55 @@ impl From<crate::editor::EditorTransactionCause> for EditorTransactionCauseDto {
             crate::editor::EditorTransactionCause::Load => Self::Load,
             crate::editor::EditorTransactionCause::Format => Self::Format,
             crate::editor::EditorTransactionCause::Programmatic => Self::Programmatic,
+        }
+    }
+}
+
+/// 变更类型：插入或删除。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EditorChangeKindDto {
+    Insert,
+    Delete,
+}
+
+/// 一次实际执行的插入/删除，UTF-8 byte 偏移。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorChangeDto {
+    pub kind: EditorChangeKindDto,
+    pub index: u32,
+    pub text: String,
+}
+
+impl From<crate::editor::EditorChange> for EditorChangeDto {
+    fn from(change: crate::editor::EditorChange) -> Self {
+        match change {
+            crate::editor::EditorChange::Insert { index, text } => Self {
+                kind: EditorChangeKindDto::Insert,
+                index: index.value() as u32,
+                text,
+            },
+            crate::editor::EditorChange::Delete { index, text } => Self {
+                kind: EditorChangeKindDto::Delete,
+                index: index.value() as u32,
+                text,
+            },
+        }
+    }
+}
+
+impl From<EditorChangeDto> for crate::editor::EditorChange {
+    fn from(change: EditorChangeDto) -> Self {
+        let index = crate::editor::Utf8ByteOffset::unchecked(change.index as usize);
+        match change.kind {
+            EditorChangeKindDto::Insert => Self::Insert {
+                index,
+                text: change.text,
+            },
+            EditorChangeKindDto::Delete => Self::Delete {
+                index,
+                text: change.text,
+            },
         }
     }
 }
@@ -424,6 +502,10 @@ pub struct EditorEditResultDto {
     /// 本次编辑的字符增量（正文无变化时为全 0）。
     #[serde(default)]
     pub content_delta: EditorContentDeltaDto,
+    /// 本次事务实际执行的插入/删除，按执行顺序，UTF-8 byte 坐标。
+    /// 平台原样转交统计/证明入口，不按最终字符串猜 diff。
+    #[serde(default)]
+    pub changes: Vec<EditorChangeDto>,
     /// 当前 composition 完整状态（preedit 文本 replace range cursor）。
     /// 仅在 composition 活跃（begin/update 成功）时非 None；finish/cancel/普通编辑后为 None。
     /// 平台端据此构造临时显示文本和下划线范围，不复制 Core 的 composition 状态机。
@@ -448,6 +530,7 @@ impl EditorEditResultDto {
             offset_map: None,
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
+            changes: vec![],
             composition: None,
         }
     }
@@ -468,6 +551,7 @@ impl EditorEditResultDto {
             offset_map: None,
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
+            changes: vec![],
             composition: None,
         }
     }
@@ -488,6 +572,7 @@ impl EditorEditResultDto {
             offset_map: None,
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
+            changes: vec![],
             composition: None,
         }
     }
@@ -547,6 +632,7 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
             offset_map: r.offset_map.map(Into::into),
             composition_session: None,
             content_delta: r.content_delta.into(),
+            changes: r.changes.into_iter().map(Into::into).collect(),
             composition: None,
         }
     }
@@ -571,6 +657,7 @@ impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
             offset_map: r.offset_map.map(Into::into),
             composition_session: None,
             content_delta: r.content_delta.into(),
+            changes: r.changes.into_iter().map(Into::into).collect(),
             composition: None,
         }
     }

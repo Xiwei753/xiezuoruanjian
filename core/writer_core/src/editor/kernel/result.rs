@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::types::{DisplayPatch, EditorOperationKind};
 use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
 use crate::editor::transaction::{
-    EditorCursor, EditorSelection, EditorTransactionCause, OffsetMap,
+    EditorChange, EditorCursor, EditorSelection, EditorTransactionCause, OffsetMap,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,6 +45,18 @@ impl EditorEditOutcome {
             self,
             EditorEditOutcome::InvalidOffset(_) | EditorEditOutcome::InvalidRange(_)
         )
+    }
+
+    /// 内核返回结果的可变引用（用于把本次实际执行的变更列表挂到结果上）。
+    pub(crate) fn result_mut(&mut self) -> &mut EditorEditResult {
+        match self {
+            EditorEditOutcome::Applied(r)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(r)
+            | EditorEditOutcome::NoChange(r)
+            | EditorEditOutcome::StaleRevision(r)
+            | EditorEditOutcome::InvalidOffset(r)
+            | EditorEditOutcome::InvalidRange(r) => r,
+        }
     }
 }
 
@@ -156,6 +168,13 @@ pub struct EditorEditResult {
     pub offset_map: Option<OffsetMap>,
     /// 本次编辑的字符增量（正文无变化时为全 0）。
     pub content_delta: EditorContentDelta,
+    /// 本次事务实际执行的插入/删除操作（按执行顺序，UTF-8 byte 坐标）。
+    ///
+    /// 由 kernel 在真正修改正文时记录，不是平台端对最终字符串猜 diff。
+    /// composition preedit 不写入正文、也不产生变更；IME commit 才记录。
+    /// 纯光标/选区事务为空。
+    #[serde(default)]
+    pub changes: Vec<EditorChange>,
 }
 
 impl EditorEditResult {

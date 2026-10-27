@@ -300,7 +300,8 @@ fn test_speed_buckets_generation() {
             duration_seconds: 0,
             session_id: "s1".to_string(),
             local_date: String::new(),
-        };
+                proof: None,
+};
         api.record_event(event).unwrap();
     }
 
@@ -348,7 +349,8 @@ fn speed_test_event_with_source(
         duration_seconds: 0,
         session_id: "s1".to_string(),
         local_date: String::new(),
-    }
+        proof: None,
+}
 }
 
 // 当前速度只能计 HumanTyped：Undo/Redo/Programmatic/Load/Format 会带着真实
@@ -577,7 +579,8 @@ fn test_session_gap_detection() {
         duration_seconds: 0,
         session_id: "s1".to_string(),
         local_date: String::new(),
-    };
+        proof: None,
+};
     store.record_event(event1).unwrap();
 
     let event2 = WritingInputEvent {
@@ -598,7 +601,8 @@ fn test_session_gap_detection() {
         duration_seconds: 0,
         session_id: "s1".to_string(),
         local_date: String::new(),
-    };
+        proof: None,
+};
     store.record_event(event2).unwrap();
 
     let date = crate::writing_stats::calendar::local_date_at(base_ms).unwrap();
@@ -1200,7 +1204,8 @@ fn test_typing_replace_counts_deleted() {
         duration_seconds: 0,
         session_id: "s1".to_string(),
         local_date: String::new(),
-    };
+        proof: None,
+};
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
@@ -1240,7 +1245,8 @@ fn test_paste_replace_counts_deleted() {
         duration_seconds: 0,
         session_id: "s1".to_string(),
         local_date: String::new(),
-    };
+        proof: None,
+};
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
@@ -1284,7 +1290,8 @@ fn test_speed_curve_zero_bucket_minutes_clamped() {
         duration_seconds: 0,
         session_id: "s1".to_string(),
         local_date: String::new(),
-    };
+        proof: None,
+};
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
@@ -1332,7 +1339,8 @@ fn test_days_count_from_business_date() {
         duration_seconds: 0,
         session_id: "s1".to_string(),
         local_date: String::new(),
-    };
+        proof: None,
+};
     api.record_event(event1).unwrap();
 
     let event2 = WritingInputEvent {
@@ -1353,7 +1361,8 @@ fn test_days_count_from_business_date() {
         duration_seconds: 0,
         session_id: "s1".to_string(),
         local_date: String::new(),
-    };
+        proof: None,
+};
     api.record_event(event2).unwrap();
 
     let today = StatsApi::today_date();

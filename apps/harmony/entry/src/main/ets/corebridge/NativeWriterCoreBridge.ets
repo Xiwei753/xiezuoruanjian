@@ -421,6 +421,15 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.statsBridge.recordWritingActivitySegment(input)
   }
 
+  // Issue #1008：手写证明回放与导出。
+  async replayChapterProof(requestJson: string): Promise<ResultEnvelope<Object>> {
+    return this.statsBridge.replayChapterProof(requestJson)
+  }
+
+  async exportChapterProof(chapterId: string, deviceId: string): Promise<ResultEnvelope<Object>> {
+    return this.statsBridge.exportChapterProof(chapterId, deviceId)
+  }
+
   async calculateWordCount(text: string): Promise<number> {
     return this.statsBridge.calculateWordCount(text)
   }

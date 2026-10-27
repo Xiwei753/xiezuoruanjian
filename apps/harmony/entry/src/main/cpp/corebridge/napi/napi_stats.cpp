@@ -469,6 +469,30 @@ static napi_value NativeRecordWritingActivitySegment(napi_env env, napi_callback
 
 // ── Stats property descriptors ──
 
+// Issue #1008：按章节回放手写证明。请求/响应均为 Core JSON，C 层只搬运。
+static napi_value NativeReplayChapterProof(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    char* request = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
+    napi_value result = ReturnJsonString(env, writer_core_replay_chapter_proof_json(request));
+    delete[] request;
+    return result;
+}
+
+// Issue #1008：导出证明包。包内含历史正文，UI 必须先提示用户。
+static napi_value NativeExportChapterProof(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {nullptr, nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    char* chapter = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
+    char* device = TakeStringArg(env, argc >= 2 ? args[1] : nullptr);
+    napi_value result = ReturnJsonString(env, writer_core_export_chapter_proof_json(chapter, device));
+    delete[] chapter;
+    delete[] device;
+    return result;
+}
+
 napi_property_descriptor* getStatsDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {
         {"nativeGetWritingStats", nullptr, NativeGetWritingStats, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -480,6 +504,8 @@ napi_property_descriptor* getStatsDescriptors(size_t* count) {
         {"nativeGetCurrentWritingSpeed", nullptr, NativeGetCurrentWritingSpeed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRecordEditorChangeStats", nullptr, NativeRecordEditorChangeStats, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRecordWritingActivitySegment", nullptr, NativeRecordWritingActivitySegment, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeReplayChapterProof", nullptr, NativeReplayChapterProof, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeExportChapterProof", nullptr, NativeExportChapterProof, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(desc) / sizeof(desc[0]);
     return desc;

@@ -9,6 +9,7 @@ import com.xiwei.sujian.feature.stats.data.model.DeviceWritingStatsSummary
 import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsSummary
 import com.xiwei.sujian.feature.stats.data.model.WritingSpeedCurve
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
+import uniffi.writer_core.EditorChangeDto
 import uniffi.writer_core.EditorChangeStatsInputDto
 import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.WritingActivitySegmentInputDto
@@ -74,6 +75,15 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
         deletedChars: Int,
         eventId: String,
         occurredAtMs: Long,
+        changes: List<EditorChangeDto> = emptyList(),
+        sessionId: String = "",
+        baselineText: String? = null,
+        baseRevision: Long = 0,
+        newRevision: Long = 0,
+        oldSelectionAnchor: Int = 0,
+        oldSelectionHead: Int = 0,
+        newSelectionAnchor: Int = 0,
+        newSelectionHead: Int = 0,
     ): BridgeResult<Unit> =
         holder.wrapResult {
             holder.service.recordEditorChangeStats(
@@ -87,6 +97,17 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
                     deletedChars = deletedChars.toUInt(),
                     eventId = eventId,
                     occurredAtMs = occurredAtMs,
+                    changes = changes,
+                    sessionId = sessionId,
+                    baselineText = baselineText,
+                    baseRevision = baseRevision.toULong(),
+                    newRevision = newRevision.toULong(),
+                    oldSelectionAnchor = oldSelectionAnchor.toUInt(),
+                    oldSelectionHead = oldSelectionHead.toUInt(),
+                    newSelectionAnchor = newSelectionAnchor.toUInt(),
+                    newSelectionHead = newSelectionHead.toUInt(),
+                    syncSourceDeviceId = "",
+                    parentEventId = "",
                 ),
             )
         }
@@ -94,6 +115,21 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
     fun getProjectStats(projectId: String): BridgeResult<ProjectStats> =
         holder.wrapResult {
             holder.service.getProjectStats(projectId).toModel()
+        }
+
+    /** Issue #1008：按章节回放手写证明，返回 Core 已校验的帧 JSON。 */
+    fun replayChapterProof(requestJson: String): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.replayChapterProofJson(requestJson)
+        }
+
+    /** Issue #1008：导出手写证明包；包含历史正文，调用方需先提示用户。 */
+    fun exportChapterProof(
+        chapterId: String,
+        deviceId: String,
+    ): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.exportChapterProofJson(chapterId, deviceId)
         }
 
     /** Issue #981：上报一段已测量的前台写作计时，Core 负责幂等落盘与字/时聚合。 */

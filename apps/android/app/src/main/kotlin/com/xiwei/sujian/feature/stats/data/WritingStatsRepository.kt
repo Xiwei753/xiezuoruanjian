@@ -5,12 +5,15 @@ import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsSummary
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import uniffi.writer_core.EditorChangeDto
 import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.WritingActivitySegmentInputDto
 
@@ -69,6 +72,15 @@ class WritingStatsRepository(
         val deletedChars: Int,
         val eventId: String,
         val occurredAtMs: Long,
+        val changes: List<EditorChangeDto> = emptyList(),
+        val sessionId: String = "",
+        val baselineText: String? = null,
+        val baseRevision: Long = 0,
+        val newRevision: Long = 0,
+        val oldSelectionAnchor: Int = 0,
+        val oldSelectionHead: Int = 0,
+        val newSelectionAnchor: Int = 0,
+        val newSelectionHead: Int = 0,
     )
 
     private val _revision = MutableStateFlow(0L)
@@ -109,6 +121,15 @@ class WritingStatsRepository(
                                 cmd.event.deletedChars,
                                 cmd.event.eventId,
                                 cmd.event.occurredAtMs,
+                                cmd.event.changes,
+                                cmd.event.sessionId,
+                                cmd.event.baselineText,
+                                cmd.event.baseRevision,
+                                cmd.event.newRevision,
+                                cmd.event.oldSelectionAnchor,
+                                cmd.event.oldSelectionHead,
+                                cmd.event.newSelectionAnchor,
+                                cmd.event.newSelectionHead,
                             )
                         if (result is BridgeResult.Success) {
                             markChanged()
@@ -183,6 +204,15 @@ class WritingStatsRepository(
         deletedChars: Int,
         eventId: String,
         occurredAtMs: Long,
+        changes: List<EditorChangeDto> = emptyList(),
+        sessionId: String = "",
+        baselineText: String? = null,
+        baseRevision: Long = 0,
+        newRevision: Long = 0,
+        oldSelectionAnchor: Int = 0,
+        oldSelectionHead: Int = 0,
+        newSelectionAnchor: Int = 0,
+        newSelectionHead: Int = 0,
     ) {
         synchronized(enqueueLock) {
             val seq = ++seqCounter
@@ -198,6 +228,15 @@ class WritingStatsRepository(
                         deletedChars = deletedChars,
                         eventId = eventId,
                         occurredAtMs = occurredAtMs,
+                        changes = changes,
+                        sessionId = sessionId,
+                        baselineText = baselineText,
+                        baseRevision = baseRevision,
+                        newRevision = newRevision,
+                        oldSelectionAnchor = oldSelectionAnchor,
+                        oldSelectionHead = oldSelectionHead,
+                        newSelectionAnchor = newSelectionAnchor,
+                        newSelectionHead = newSelectionHead,
                     ),
                 ),
             )
@@ -208,6 +247,31 @@ class WritingStatsRepository(
     fun recordWritingActivitySegment(segment: WritingActivitySegmentInputDto) {
         synchronized(enqueueLock) {
             commands.trySend(StatsWriteCommand.ActivitySegment(++seqCounter, segment))
+        }
+    }
+
+    /** Issue #1008：回放前先等编辑事件落盘，再从 Core 取已校验的正文帧。 */
+    suspend fun replayChapterProof(requestJson: String): String? {
+        awaitPendingWrites()
+        return withContext(Dispatchers.IO) {
+            when (val result = statsBridge.replayChapterProof(requestJson)) {
+                is BridgeResult.Success -> result.data
+                else -> null
+            }
+        }
+    }
+
+    /** Issue #1008：导出证明包 JSON（包含历史正文）。 */
+    suspend fun exportChapterProof(
+        chapterId: String,
+        deviceId: String,
+    ): String? {
+        awaitPendingWrites()
+        return withContext(Dispatchers.IO) {
+            when (val result = statsBridge.exportChapterProof(chapterId, deviceId)) {
+                is BridgeResult.Success -> result.data
+                else -> null
+            }
         }
     }
 

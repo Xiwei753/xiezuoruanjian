@@ -10,18 +10,46 @@ impl WriterCoreApi {
         input: crate::api::EditorChangeStatsInputDto,
     ) -> ApiResult<()> {
         self.core_write()
-            .record_editor_change_stats(
-                &input.platform,
-                &input.project_id,
-                &input.volume_id,
-                &input.chapter_id,
-                input.cause.into(),
-                input.inserted_chars,
-                input.deleted_chars,
-                &input.event_id,
-                input.occurred_at_ms,
-            )
+            .record_editor_transaction_stats(&input)
             .map_err(WriterError::from)
+    }
+
+    /// 按章节回放证明事件。`request_json` 为 `ProofReplayRequest` 的 camelCase
+    /// JSON；返回目标时刻正文、选区、进度与链校验结果。播放器只渲染本结果，
+    /// 不在平台端推演编辑规则。
+    pub fn replay_chapter_proof_json(&self, request_json: &str) -> ApiResult<String> {
+        let request =
+            serde_json::from_str::<crate::writing_stats::replay::ProofReplayRequest>(
+                request_json,
+            )
+            .map_err(WriterError::from)?;
+        let value = self
+            .core_write()
+            .replay_chapter_proof(&request)
+            .map_err(WriterError::from)?;
+        Self::json_string(&value)
+    }
+
+    /// 导出章节证明包。包内包含历史正文，平台 UI 必须先明确提示用户。
+    pub fn export_chapter_proof_json(&self, chapter_id: &str, device_id: &str) -> ApiResult<String> {
+        let value = self
+            .core_write()
+            .export_chapter_proof(chapter_id, device_id)
+            .map_err(WriterError::from)?;
+        Self::json_string(&value)
+    }
+
+    /// 列出某设备/章节的完整正文检查点。
+    pub fn list_proof_checkpoints_json(
+        &self,
+        device_id: &str,
+        chapter_id: &str,
+    ) -> ApiResult<String> {
+        let value = self
+            .core_write()
+            .list_proof_checkpoints(device_id, chapter_id)
+            .map_err(WriterError::from)?;
+        Self::json_string(&value)
     }
 
     /// 上报一段平台已测量的前台写作计时切片。
@@ -56,6 +84,15 @@ impl WriterCoreApi {
         for event in events {
             self.record_editor_change_stats(event)?;
         }
+        // 正文保存事务完成后再写检查点：checkpoint 是事件流的加速索引，
+        // 失败不影响正文与已确认事件，但会明确返回错误供上层重试。
+        self.core_write().record_chapter_checkpoint(
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            "",
+        )?;
         Ok(receipt)
     }
 

@@ -200,6 +200,11 @@ bool  writer_core_record_editor_change_stats(const char* event_json);
 // 项目卷章 / 暂停原因与固定 event_id；device_id、业务日由 Core 补齐。Core 按
 // event_id 幂等去重，同一设备重叠切片按并集计。
 bool  writer_core_record_writing_activity_segment(const char* segment_json);
+// 手写证明回放（#1008）：request_json 为 ProofReplayRequest 的 camelCase JSON，
+// 返回目标时刻正文、选区、进度与链校验结果的 ResultEnvelope JSON。
+char* writer_core_replay_chapter_proof_json(const char* request_json);
+// 导出证明包（#1008）。包内含历史正文；device_id 为空时由 Core 选择本机分区。
+char* writer_core_export_chapter_proof_json(const char* chapter_id, const char* device_id);
 // 正文保存 + 未确认统计事件一次提交：先走正文保存事务，成功后再幂等记录
 // events_json（[EditorChangeStatsInputDto] 数组，可为 NULL/空串）里的事件。
 // 正文保存失败则不记任何事件；重复提交同一批事件不会重复计字。

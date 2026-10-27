@@ -36,6 +36,18 @@ export enum EditorTransactionCause {
 // 由 Core 侧 ensure_device_info 读/建。页面构造这个入参时 settings 往往还没加载完
 // （loadSettings 在 aboutToAppear 之后才跑），传过去的多半是 null 或占位值；
 // 一旦被记进统计事件就再也改不回来，所有事件会堆进同一个 unknown 设备桶。
+export enum EditorChangeKind {
+  Insert = 'Insert',
+  Delete = 'Delete'
+}
+
+/** 一次实际执行的插入/删除，index 是 UTF-8 byte 偏移。 */
+export interface EditorChange {
+  kind: EditorChangeKind
+  index: number
+  text: string
+}
+
 export interface EditorChangeStatsInput {
   platform: string
   projectId: string
@@ -47,6 +59,16 @@ export interface EditorChangeStatsInput {
   // Issue #981：编辑事务发生当场固定，重发/异步处理都不再改时刻。
   eventId: string
   occurredAtMs: number
+  /** 本次事务实际执行的插入/删除（按执行顺序）；缺省表示只上报计数。 */
+  changes?: EditorChange[]
+  sessionId?: string
+  baselineText?: string
+  baseRevision?: number
+  newRevision?: number
+  oldSelectionAnchor?: number
+  oldSelectionHead?: number
+  newSelectionAnchor?: number
+  newSelectionHead?: number
 }
 
 // ─── Editor Core DTOs ─── 与 Core api/types/editor.rs 真实契约对齐
@@ -166,6 +188,8 @@ export interface EditorEditResult {
   offsetMap?: OffsetMap
   compositionSession?: CompositionSession
   contentDelta: EditorContentDelta
+  /** 本次事务实际执行的插入/删除，按执行顺序（Core pending_changes）。 */
+  changes?: EditorChange[]
   // #629 评论6 Part B：当前 composition 完整状态。composition 活跃时 Core 才发出该键，
   // 平台端据此构造临时显示文本和下划线范围。无 composition 时键省略。
   composition?: EditorCompositionState

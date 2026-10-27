@@ -3,7 +3,7 @@ use super::types::{DisplayPatch, EditorOperationKind};
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
-use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
+use crate::editor::transaction::{EditorChange, EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     /// Undo 通过 inverse delta 局部应用。
@@ -59,6 +59,18 @@ impl EditorKernel {
                 delta.new_range.start().value()..delta.new_range.end().value(),
                 &delta.deleted_text,
             );
+            if !delta.inserted_text.is_empty() {
+                self.push_change(EditorChange::Delete {
+                    index: Utf8ByteOffset::unchecked(delta.new_range.start().value()),
+                    text: delta.inserted_text.clone(),
+                });
+            }
+            if !delta.deleted_text.is_empty() {
+                self.push_change(EditorChange::Insert {
+                    index: Utf8ByteOffset::unchecked(delta.new_range.start().value()),
+                    text: delta.deleted_text.clone(),
+                });
+            }
         }
         // Issue #683：直接恢复保存的 anchor/head，不再从排序后的 range 反推。
         let restored_anchor = entry.old_selection.anchor.index.value();
@@ -122,6 +134,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::Undo,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::Replace,
             offset_map: Some(offset_map),
             content_delta,
@@ -166,6 +179,18 @@ impl EditorKernel {
                 delta.old_range.start().value()..delta.old_range.end().value(),
                 &delta.inserted_text,
             );
+            if !delta.deleted_text.is_empty() {
+                self.push_change(EditorChange::Delete {
+                    index: Utf8ByteOffset::unchecked(delta.old_range.start().value()),
+                    text: delta.deleted_text.clone(),
+                });
+            }
+            if !delta.inserted_text.is_empty() {
+                self.push_change(EditorChange::Insert {
+                    index: Utf8ByteOffset::unchecked(delta.old_range.start().value()),
+                    text: delta.inserted_text.clone(),
+                });
+            }
         }
         // Issue #683：直接恢复保存的 anchor/head，不再从排序后的 range 反推。
         let restored_anchor = entry.new_selection.anchor.index.value();
@@ -228,6 +253,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause: EditorTransactionCause::Redo,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::Replace,
             offset_map: Some(offset_map),
             content_delta,

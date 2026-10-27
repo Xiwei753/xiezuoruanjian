@@ -4,7 +4,7 @@ use super::types::{DisplayPatch, EditorOperationKind};
 use super::{EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{EditorTransactionCause, OffsetMap};
+use crate::editor::transaction::{EditorChange, EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
     #[allow(
@@ -15,6 +15,7 @@ impl EditorKernel {
         clippy::type_complexity
     )]
     pub fn apply(&mut self, command: EditorCommand) -> EditorEditOutcome {
+        self.pending_changes.clear();
         let base_revision = self.revision;
 
         match &command {
@@ -81,7 +82,7 @@ impl EditorKernel {
         let old_selection_anchor = self.selection_anchor.value();
         let old_selection_head = self.cursor.value();
 
-        match command {
+        let mut outcome = match command {
             EditorCommand::Insert {
                 byte_offset,
                 text,
@@ -328,7 +329,10 @@ impl EditorKernel {
                 old_selection_anchor,
                 old_selection_head,
             ),
-        }
+        };
+
+        outcome.result_mut().changes = self.take_pending_changes();
+        outcome
     }
 
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -363,6 +367,10 @@ impl EditorKernel {
 
         // 局部 Rope edit，不 clone 全文。
         self.text.insert(byte_offset, text);
+        self.push_change(EditorChange::Insert {
+            index: Utf8ByteOffset::unchecked(byte_offset),
+            text: text.to_string(),
+        });
         self.revision = self.revision.next();
         let new_cursor_val = byte_offset + text.len();
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
@@ -401,6 +409,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::Insert,
             // 单次编辑从 delta 直接构造 offset map，不再扫全文。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -462,6 +471,10 @@ impl EditorKernel {
         self.composition_session = None;
 
         self.text.delete(byte_start..byte_end_exclusive);
+        self.push_change(EditorChange::Delete {
+            index: Utf8ByteOffset::unchecked(byte_start),
+            text: deleted_text.clone(),
+        });
         self.revision = self.revision.next();
         self.cursor = Utf8ByteOffset::unchecked(byte_start);
         self.selection_anchor = Utf8ByteOffset::unchecked(byte_start);
@@ -500,6 +513,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::Delete,
             // 单次删除从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -560,6 +574,18 @@ impl EditorKernel {
 
         self.text
             .replace(byte_start..byte_end_exclusive, replacement_text);
+        if !deleted_text.is_empty() {
+            self.push_change(EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(byte_start),
+                text: deleted_text.clone(),
+            });
+        }
+        if !replacement_text.is_empty() {
+            self.push_change(EditorChange::Insert {
+                index: Utf8ByteOffset::unchecked(byte_start),
+                text: replacement_text.to_string(),
+            });
+        }
         self.revision = self.revision.next();
         let new_cursor_val = byte_start + replacement_text.len();
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
@@ -610,6 +636,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause,
+            changes: Vec::new(),
             operation_kind,
             // 单次替换从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -663,6 +690,10 @@ impl EditorKernel {
 
         // 局部 Rope insert，不 clone 全文。
         self.text.insert(byte_offset, &text);
+        self.push_change(EditorChange::Insert {
+            index: Utf8ByteOffset::unchecked(byte_offset),
+            text: text.clone(),
+        });
         self.revision = self.revision.next();
         let new_cursor_val = byte_offset + text.len();
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
@@ -702,6 +733,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::Insert,
             // 单次换行插入从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -838,6 +870,18 @@ impl EditorKernel {
 
         self.text
             .replace(byte_start..byte_end_exclusive, replacement_text);
+        if !deleted_text.is_empty() {
+            self.push_change(EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(byte_start),
+                text: deleted_text.clone(),
+            });
+        }
+        if !replacement_text.is_empty() {
+            self.push_change(EditorChange::Insert {
+                index: Utf8ByteOffset::unchecked(byte_start),
+                text: replacement_text.to_string(),
+            });
+        }
         self.revision = self.revision.next();
 
         let sel_anchor = Self::clamp_to_char_boundary(&self.text, resulting_selection_anchor);
@@ -895,6 +939,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause,
+            changes: Vec::new(),
             operation_kind,
             // 单次 commit 从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -1010,6 +1055,10 @@ impl EditorKernel {
             // 局部 Rope delete 记录 delta。
             let deleted = self.text.byte_slice(as_..ae).to_string();
             self.text.delete(as_..ae);
+            self.push_change(EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(as_),
+                text: deleted.clone(),
+            });
             edits.push(TextEditDelta {
                 old_range: Utf8ByteRange::from_ordered(as_, ae),
                 // new_range 必须使用两次删除都完成后的最终文本坐标。
@@ -1029,6 +1078,10 @@ impl EditorKernel {
             // 局部 Rope delete 记录 delta。
             let deleted = self.text.byte_slice(bs..be).to_string();
             self.text.delete(bs..be);
+            self.push_change(EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(bs),
+                text: deleted.clone(),
+            });
             edits.push(TextEditDelta {
                 old_range: Utf8ByteRange::from_ordered(bs, be),
                 new_range: Utf8ByteRange::point(bs),
@@ -1118,6 +1171,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::Delete,
             offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
             content_delta,
@@ -1291,15 +1345,27 @@ impl EditorKernel {
         // Step 1: 删除 selection [sel_min, sel_max)，得到 base_text。
         if has_sel {
             self.text.delete(sel_min..sel_max);
+            self.push_change(EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(sel_min),
+                text: deleted_selection_text.clone(),
+            });
         }
         // 此时 self.text 是 base_text。
         // Step 2: 在 base_text 上删除 [rep_min, rep_max)。
         if has_rep {
             self.text.delete(rep_min..rep_max);
+            self.push_change(EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(rep_min),
+                text: _deleted_replacement_text.clone(),
+            });
         }
         // Step 3: 在 rep_min 插入 inserted_text。
         if has_ins {
             self.text.insert(rep_min, inserted_text);
+            self.push_change(EditorChange::Insert {
+                index: Utf8ByteOffset::unchecked(rep_min),
+                text: inserted_text.to_string(),
+            });
         }
         // 此时 self.text 是 final_text。
 
@@ -1472,6 +1538,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             cause,
+            changes: Vec::new(),
             operation_kind: EditorOperationKind::CompositionCommit,
             // 原子 IME commit 从 delta 构造 offset map。
             offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),

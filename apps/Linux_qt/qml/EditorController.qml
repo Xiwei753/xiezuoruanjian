@@ -204,6 +204,11 @@ QtObject {
         }
     }
 
+    // 手写证明链起点：章节加载时的完整正文。只在本次加载后的第一条编辑事务上报一次；
+    // 后续事件由 Core 用链式 hash 承接，不重复传整章。
+    property bool proofBaselineSent: false
+    property string proofBaselineText: ""
+
     // NOTE: sync is NOT triggered by save. Auto-sync has been removed
     // (Issue #729). This is intentional: save ≠ sync.
 
@@ -216,13 +221,21 @@ QtObject {
         // Issue #843: 编辑事务事实从 Rust EditorEditResult 直接传来，
         // cause + inserted/deleted 不再在 QML 中用文本长度 diff 猜。
         function onEditor_change_applied(cause, insertedChars, deletedChars,
-                                         baseRevision, newRevision, editRangesJson) {
+                                         baseRevision, newRevision, editRangesJson,
+                                         changesJson, oldSelectionAnchor, oldSelectionHead,
+                                         newSelectionAnchor, newSelectionHead) {
             controller.reconcileCorrectionEdit(baseRevision, newRevision, editRangesJson);
             controller.applyAnnotationEditRanges(cause, baseRevision, newRevision, editRangesJson);
             if (controller.chapterId && controller.editorBackendRef) {
                 controller.editorBackendRef.record_editor_change_stats(
                     controller.projectId, controller.volumeId, controller.chapterId,
-                    cause, insertedChars, deletedChars);
+                    cause, insertedChars, deletedChars, changesJson,
+                    baseRevision, newRevision, oldSelectionAnchor, oldSelectionHead,
+                    newSelectionAnchor, newSelectionHead,
+                    controller.proofBaselineSent ? "" : controller.proofBaselineText);
+            if (changesJson && changesJson !== "[]") {
+                controller.proofBaselineSent = true;
+            }
             }
         }
     }
@@ -1414,6 +1427,8 @@ QtObject {
 
         previousEditorText = content;
         lastSavedEditorText = content;
+        proofBaselineText = content;
+        proofBaselineSent = false;
         explicitEmptySavePending = false;
         lastPotentialExplicitClearAtMs = 0;
         releaseCorrectionSession(controller.projectId, controller.chapterId);

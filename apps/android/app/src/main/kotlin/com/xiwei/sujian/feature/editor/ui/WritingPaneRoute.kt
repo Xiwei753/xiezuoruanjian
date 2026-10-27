@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -162,29 +164,48 @@ fun WritingPane(
     )
 
     val isActivePane = currentViewModel.isCurrentChapter(projectId, volumeId, chapterId)
-    WritingPaneLayout(
-        modifier = modifier,
-        uiState = uiState,
-        showEditor =
-            shouldShowEditorForWritingPane(
-                loading = uiState.loading,
-                settingsReady = uiState.settingsReady,
-                isCurrentChapter = isActivePane,
-            ),
-    ) { editorModifier ->
-        WritingPaneEditorContent(
-            coordinator = coordinator,
-            viewModel = currentViewModel,
-            projectId = projectId,
-            volumeId = volumeId,
-            chapterId = chapterId,
-            targetId = targetId,
-            isActivePane = isActivePane,
-            sessionState = sessionState,
-            correctionState = correctionState,
+    var proofReplayOpen by remember(chapterId) { mutableStateOf(false) }
+    androidx.compose.foundation.layout.Box(modifier = modifier) {
+        WritingPaneLayout(
+            modifier = androidx.compose.ui.Modifier.fillMaxSize(),
             uiState = uiState,
-            onAnnotationTargetOpen = onAnnotationTargetOpen,
-            modifier = editorModifier,
+            showEditor =
+                shouldShowEditorForWritingPane(
+                    loading = uiState.loading,
+                    settingsReady = uiState.settingsReady,
+                    isCurrentChapter = isActivePane,
+                ),
+        ) { editorModifier ->
+            WritingPaneEditorContent(
+                coordinator = coordinator,
+                viewModel = currentViewModel,
+                projectId = projectId,
+                volumeId = volumeId,
+                chapterId = chapterId,
+                targetId = targetId,
+                isActivePane = isActivePane,
+                sessionState = sessionState,
+                correctionState = correctionState,
+                uiState = uiState,
+                onAnnotationTargetOpen = onAnnotationTargetOpen,
+                modifier = editorModifier,
+            )
+        }
+        androidx.compose.material3.TextButton(
+            onClick = { proofReplayOpen = true },
+            modifier =
+                androidx.compose.ui.Modifier
+                    .align(androidx.compose.ui.Alignment.TopEnd)
+                    .padding(top = 4.dp, end = 8.dp),
+        ) {
+            androidx.compose.material3.Text("写作回放")
+        }
+    }
+    if (proofReplayOpen) {
+        ProofReplayDialog(
+            chapterId = chapterId,
+            repository = currentViewModel.statsRepository,
+            onDismiss = { proofReplayOpen = false },
         )
     }
 }

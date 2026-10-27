@@ -153,6 +153,84 @@ pub unsafe extern "C" fn writer_core_record_editor_change_stats(event_json: *con
     .is_ok()
 }
 
+/// 按章节回放证明事件。请求/响应都是 JSON，播放器只渲染 Core 返回的状态。
+///
+/// # Safety
+/// `request_json` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串，内容为
+/// `ProofReplayRequest` 的 camelCase JSON。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_replay_chapter_proof_json(
+    request_json: *const c_char,
+) -> *mut c_char {
+    let request_json = match c_str_to_rust(request_json) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+    };
+    match with_app_service(|svc| svc.replay_chapter_proof_json(request_json)) {
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
+        Err(error) => err_json("UNKNOWN_ERROR", &error),
+    }
+}
+
+/// 导出章节证明包。包内包含历史正文，调用方 UI 必须先明确提示用户。
+///
+/// # Safety
+/// `chapter_id` / `device_id` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
+/// `device_id` 为空时由 Core 选择本机分区。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_export_chapter_proof_json(
+    chapter_id: *const c_char,
+    device_id: *const c_char,
+) -> *mut c_char {
+    let chapter_id = match c_str_to_rust(chapter_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+    };
+    let device_id = match c_str_to_rust(device_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+    };
+    match with_app_service(|svc| svc.export_chapter_proof_json(chapter_id, device_id)) {
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
+        Err(error) => err_json("UNKNOWN_ERROR", &error),
+    }
+}
+
+/// 列出某设备/章节的完整正文检查点。
+///
+/// # Safety
+/// `device_id` / `chapter_id` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_list_proof_checkpoints_json(
+    device_id: *const c_char,
+    chapter_id: *const c_char,
+) -> *mut c_char {
+    let device_id = match c_str_to_rust(device_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+    };
+    let chapter_id = match c_str_to_rust(chapter_id) {
+        Ok(value) => value,
+        Err(error) => return err_json("INVALID_ARGUMENT", &error),
+    };
+    match with_app_service(|svc| svc.list_proof_checkpoints_json(device_id, chapter_id)) {
+        Ok(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(value) => ok_json(value),
+            Err(error) => err_json("SERDE_ERROR", &error.to_string()),
+        },
+        Err(error) => err_json("UNKNOWN_ERROR", &error),
+    }
+}
+
 /// 上报一段平台已测量的前台写作计时切片。
 ///
 /// # Safety

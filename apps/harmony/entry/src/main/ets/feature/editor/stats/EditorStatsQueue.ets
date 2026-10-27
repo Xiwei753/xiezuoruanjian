@@ -22,7 +22,7 @@
 //   现在保存只 flushThrough(自己的 barrier)。
 // - drain 一次吃完整个队列：barrier 早就完成了也还在等后面的 seq（#5997254152 第 2 项）。
 
-import { EditorChangeStatsInput, EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
+import { EditorChange, EditorChangeStatsInput, EditorTransactionCause } from '../../../corebridge/dto/EditorDtos'
 import { WritingActivitySegmentInput } from '../../../corebridge/dto/StatsDtos'
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { StatsWriteBarrierRegistry } from '../../../corebridge/stats/StatsWriteBarrier'
@@ -45,6 +45,15 @@ interface QueuedStatsWrite {
   deletedChars: number
   eventId: string
   occurredAtMs: number
+  changes: EditorChange[]
+  sessionId: string
+  baselineText: string
+  baseRevision: number
+  newRevision: number
+  oldSelectionAnchor: number
+  oldSelectionHead: number
+  newSelectionAnchor: number
+  newSelectionHead: number
   segment: WritingActivitySegmentInput | null
 }
 
@@ -78,7 +87,16 @@ export class EditorStatsQueue {
           insertedChars: item.insertedChars,
           deletedChars: item.deletedChars,
           eventId: item.eventId,
-          occurredAtMs: item.occurredAtMs
+          occurredAtMs: item.occurredAtMs,
+          changes: item.changes,
+          sessionId: item.sessionId,
+          baselineText: item.baselineText,
+          baseRevision: item.baseRevision,
+          newRevision: item.newRevision,
+          oldSelectionAnchor: item.oldSelectionAnchor,
+          oldSelectionHead: item.oldSelectionHead,
+          newSelectionAnchor: item.newSelectionAnchor,
+          newSelectionHead: item.newSelectionHead
         }
         // 这里 await 的 Promise 背后是 Node-API async work：Rust 调用跑在线程池，
         // 磁盘 I/O 不在 ArkUI 主线程上。串行保证同时只有一条在飞。
@@ -94,7 +112,12 @@ export class EditorStatsQueue {
    */
   enqueueChange(projectId: string, volumeId: string, chapterId: string,
     cause: EditorTransactionCause, insertedChars: number, deletedChars: number,
-    eventId: string, occurredAtMs: number): void {
+    eventId: string, occurredAtMs: number,
+    changes: EditorChange[] = [], sessionId: string = '',
+    baseRevision: number = 0, newRevision: number = 0,
+    oldSelectionAnchor: number = 0, oldSelectionHead: number = 0,
+    newSelectionAnchor: number = 0, newSelectionHead: number = 0,
+    baselineText: string = ''): void {
     // 纯光标移动 / 选区变化：Core 那侧也不落盘，这里直接不进队列。
     if (insertedChars <= 0 && deletedChars <= 0) {
       return
@@ -115,6 +138,15 @@ export class EditorStatsQueue {
       deletedChars: deletedChars,
       eventId: eventId,
       occurredAtMs: occurredAtMs,
+      changes: changes,
+      sessionId: sessionId,
+      baselineText: baselineText,
+      baseRevision: baseRevision,
+      newRevision: newRevision,
+      oldSelectionAnchor: oldSelectionAnchor,
+      oldSelectionHead: oldSelectionHead,
+      newSelectionAnchor: newSelectionAnchor,
+      newSelectionHead: newSelectionHead,
       segment: null
     })
   }

@@ -97,6 +97,8 @@ export interface IWriterCoreBridge {
   recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>>
   // Issue #981：上报已由平台单调时钟测量完成的前台写作切片。
   recordWritingActivitySegment(input: WritingActivitySegmentInput): Promise<ResultEnvelope<boolean>>
+  replayChapterProof(requestJson: string): Promise<ResultEnvelope<Object>>
+  exportChapterProof(chapterId: string, deviceId: string): Promise<ResultEnvelope<Object>>
   calculateWordCount(text: string): Promise<number>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
 

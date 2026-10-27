@@ -47,8 +47,11 @@
 
 pub mod api;
 pub mod calendar;
+pub mod checkpoint;
 pub mod migration;
 pub mod projection;
+pub mod proof;
+pub mod replay;
 pub mod session;
 pub mod store;
 
@@ -126,6 +129,10 @@ pub struct WritingInputEvent {
     /// 现算本机本地日——见 [`WritingInputEvent::business_date`]。
     #[serde(default)]
     pub local_date: String,
+    /// 逐次编辑证明。旧事件/老客户端没有该字段，反序列化为 `None`：
+    /// 仍参与写作统计，但不能逐字回放，也不能被当成有证明的记录导出。
+    #[serde(default)]
+    pub proof: Option<proof::ProofEditPayload>,
 }
 
 impl WritingInputEvent {
@@ -225,6 +232,7 @@ impl WritingInputEvent {
             local_date: calendar::local_date_at(timestamp_ms)
                 .or_else(|_| calendar::utc_date_at(timestamp_ms))
                 .unwrap_or_default(),
+            proof: None,
         }
     }
 

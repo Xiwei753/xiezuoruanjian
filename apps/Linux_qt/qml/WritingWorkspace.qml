@@ -449,6 +449,19 @@ Rectangle {
         }
     }
 
+    ProofReplayDialog {
+        id: proofReplayDialog
+        editorBackendRef: root.editorBackendRef
+        dt: root.dt
+    }
+
+    Connections {
+        target: editorViewport
+        function onProofReplayRequested() {
+            proofReplayDialog.openForChapter(editorController.chapterId, "")
+        }
+    }
+
     // Issue #833 复核：onTreeChanged -> populateTreeModel() 已删，
     // treeModel 现在由 WritingChapterNavigation 内部维护。
     Component.onCompleted: {

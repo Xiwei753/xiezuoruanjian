@@ -5,6 +5,185 @@ use crate::writing_stats::{DateRange, EventSource, WritingInputEvent};
 use serde_json::Value;
 
 impl super::WriterCore {
+    /// 按章节回放证明事件，返回目标时刻的正文/选区与校验结果。
+    pub fn replay_chapter_proof(
+        &self,
+        request: &crate::writing_stats::replay::ProofReplayRequest,
+    ) -> Result<serde_json::Value> {
+        let frame = self.get_stats_api().replay_chapter_proof(request)?;
+        serde_json::to_value(frame).map_err(Into::into)
+    }
+
+    /// 导出离线可校验的章节证明包（包含历史正文，调用方需提示用户）。
+    pub fn export_chapter_proof(
+        &self,
+        chapter_id: &str,
+        device_id: &str,
+    ) -> Result<serde_json::Value> {
+        let package = self.get_stats_api().export_chapter_proof(chapter_id, device_id)?;
+        serde_json::to_value(package).map_err(Into::into)
+    }
+
+    /// 列出某设备/章节的完整正文检查点。
+    pub fn list_proof_checkpoints(
+        &self,
+        device_id: &str,
+        chapter_id: &str,
+    ) -> Result<serde_json::Value> {
+        let checkpoints = self
+            .get_stats_api()
+            .load_proof_checkpoints(device_id, chapter_id)?;
+        serde_json::to_value(checkpoints).map_err(Into::into)
+    }
+
+    /// 上报一次已成功提交的编辑事务，同时写入统计事件与手写证明。
+    ///
+    /// `changes` 是 Editor V2 内核实际执行的插入/删除列表（含删除原文），
+    /// Core 据此精确计算字数、来源和内容链；平台端不再只传两个计数。
+    /// 无 `changes` 的旧客户端继续走 [`Self::record_editor_change_stats`]，
+    /// 只产生统计事件、不产生可回放证明。
+    pub fn record_editor_transaction_stats(
+        &self,
+        input: &crate::api::EditorChangeStatsInputDto,
+    ) -> Result<()> {
+        use crate::editor::EditorTransactionCause;
+        use crate::editor::transaction::{EditorChange, EditorCursor, EditorSelection};
+        use crate::writing_stats::proof::{ProofEditPayload, PROOF_FORMAT_VERSION};
+
+        if input.changes.is_empty() {
+            return self.record_editor_change_stats(
+                &input.platform,
+                &input.project_id,
+                &input.volume_id,
+                &input.chapter_id,
+                input.cause.into(),
+                input.inserted_chars,
+                input.deleted_chars,
+                &input.event_id,
+                input.occurred_at_ms,
+            );
+        }
+
+        // 设备身份由 Core 读/建，不让平台端传；平台初始化注入的稳定 ID 优先。
+        let platform = writer_platform_api::PlatformKind::from_str_name(&input.platform)
+            .unwrap_or(writer_platform_api::PlatformKind::Desktop);
+        let preferred_device_id = self.preferred_device_id();
+        let device_info = self.ensure_device_info(
+            platform.to_str_name(),
+            platform.default_device_class(),
+            preferred_device_id.as_deref(),
+        )?;
+
+        let cause: EditorTransactionCause = input.cause.into();
+        let changes: Vec<EditorChange> = input.changes.iter().cloned().map(Into::into).collect();
+        let inserted_chars: u32 = changes
+            .iter()
+            .filter_map(|change| match change {
+                EditorChange::Insert { text, .. } => Some(text.chars().count() as u32),
+                EditorChange::Delete { .. } => None,
+            })
+            .sum();
+        let deleted_chars: u32 = changes
+            .iter()
+            .filter_map(|change| match change {
+                EditorChange::Delete { text, .. } => Some(text.chars().count() as u32),
+                EditorChange::Insert { .. } => None,
+            })
+            .sum();
+
+        let (source, inserted, deleted, pasted) = match cause {
+            EditorTransactionCause::Typing
+            | EditorTransactionCause::TypingCommit
+            | EditorTransactionCause::ImeComposition => {
+                (EventSource::HumanTyped, inserted_chars, deleted_chars, 0)
+            }
+            EditorTransactionCause::Paste => {
+                (EventSource::Pasted, 0, deleted_chars, inserted_chars)
+            }
+            EditorTransactionCause::Delete => (EventSource::Deleted, 0, deleted_chars, 0),
+            EditorTransactionCause::Undo
+            | EditorTransactionCause::Redo
+            | EditorTransactionCause::Load
+            | EditorTransactionCause::Format
+            | EditorTransactionCause::Programmatic => {
+                (EventSource::Unknown, inserted_chars, deleted_chars, 0)
+            }
+        };
+
+        if inserted == 0 && deleted == 0 && pasted == 0 {
+            return Ok(());
+        }
+
+        let mut event = WritingInputEvent::with_identity(
+            input.event_id.clone(),
+            input.occurred_at_ms,
+            &device_info.device_id,
+            platform,
+            &device_info.device_class,
+            &input.project_id,
+            &input.volume_id,
+            &input.chapter_id,
+            source,
+            inserted,
+            deleted,
+            pasted,
+            0,
+            0,
+            &input.session_id,
+        );
+        let selection = |anchor: u32, head: u32| EditorSelection {
+            anchor: EditorCursor::from_offset(crate::editor::Utf8ByteOffset::unchecked(
+                anchor as usize,
+            )),
+            head: EditorCursor::from_offset(crate::editor::Utf8ByteOffset::unchecked(
+                head as usize,
+            )),
+        };
+        event.proof = Some(ProofEditPayload {
+            format_version: PROOF_FORMAT_VERSION,
+            // 序号、基线、前后 hash 和事件 hash 由 store 在串行写入时补齐。
+            seq: 0,
+            session_id: input.session_id.clone(),
+            baseline_id: String::new(),
+            starts_new_chain: false,
+            base_revision: input.base_revision,
+            new_revision: input.new_revision,
+            cause,
+            changes,
+            old_selection: selection(input.old_selection_anchor, input.old_selection_head),
+            new_selection: selection(input.new_selection_anchor, input.new_selection_head),
+            before_content_hash: String::new(),
+            after_content_hash: String::new(),
+            prev_event_hash: String::new(),
+            event_hash: String::new(),
+            sync_source_device_id: input.sync_source_device_id.clone(),
+            parent_event_id: input.parent_event_id.clone(),
+        });
+
+        self.get_stats_api()
+            .record_proof_event(event, input.baseline_text.as_deref())?;
+        Ok(())
+    }
+
+    /// 正文保存成功后记录一份完整正文检查点，作为长章节回放的加速索引。
+    /// checkpoint 只是索引，逐字事实仍是事件流；重复保存同一内容会去重。
+    pub fn record_chapter_checkpoint(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        text: &str,
+        session_id: &str,
+    ) -> Result<()> {
+        self.get_stats_api().record_chapter_checkpoint(
+            project_id,
+            volume_id,
+            chapter_id,
+            text,
+            session_id,
+        )
+    }
+
     /// 按编辑事务上报写作统计（平台端编辑事务与统计同源的正式入口）。
     ///
     /// 平台端只透传「编辑事实」：编辑 cause + contentDelta 的 inserted/deleted，

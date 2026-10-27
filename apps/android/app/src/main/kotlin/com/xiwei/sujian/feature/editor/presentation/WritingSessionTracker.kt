@@ -110,6 +110,8 @@ internal class WritingSessionTracker(
         return (completedActiveMs + pending) / 1000L
     }
 
+    fun currentSessionId(): String = sessionId
+
     /**
      * 当前会话真实累计字数 / 真实计时秒数的字/时。
      * 样本不足 30 秒时返回 0，避免刚输入几个字就显示几千字/时。

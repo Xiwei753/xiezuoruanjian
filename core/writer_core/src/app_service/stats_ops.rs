@@ -75,6 +75,26 @@ impl super::WriterAppService {
         self.api.record_editor_change_stats(input)
     }
 
+    pub fn replay_chapter_proof_json(&self, request_json: String) -> Result<String, WriterError> {
+        self.api.replay_chapter_proof_json(&request_json)
+    }
+
+    pub fn export_chapter_proof_json(
+        &self,
+        chapter_id: String,
+        device_id: String,
+    ) -> Result<String, WriterError> {
+        self.api.export_chapter_proof_json(&chapter_id, &device_id)
+    }
+
+    pub fn list_proof_checkpoints_json(
+        &self,
+        device_id: String,
+        chapter_id: String,
+    ) -> Result<String, WriterError> {
+        self.api.list_proof_checkpoints_json(&device_id, &chapter_id)
+    }
+
     /// 上报一段平台已测量的前台写作计时切片。
     pub fn record_writing_activity_segment(
         &self,

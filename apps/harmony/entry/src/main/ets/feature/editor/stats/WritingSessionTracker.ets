@@ -47,6 +47,11 @@ export class WritingSessionTracker {
     this.sliceStartMonoMs = monoMs
   }
 
+  /** 当前真实写作会话 ID；未开始计时时为空。 */
+  currentSessionId(): string {
+    return this.sessionId
+  }
+
   /** 真人编辑事务入口。章节切换时先结算旧章节片段，再从当前时刻开新片段。 */
   onHumanEdit(projectId: string, volumeId: string, chapterId: string, occurredAtMs: number): void {
     // 后台/失焦后迟到的 IME 提交只能进入字数事实，绝不能重新开启计时。

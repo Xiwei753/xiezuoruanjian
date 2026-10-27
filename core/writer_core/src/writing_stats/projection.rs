@@ -1317,7 +1317,8 @@ mod tests {
             duration_seconds: 0,
             session_id: "s1".to_string(),
             local_date: String::new(),
-        }
+                proof: None,
+}
     }
 
     #[test]

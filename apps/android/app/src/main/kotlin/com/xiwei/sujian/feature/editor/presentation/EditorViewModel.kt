@@ -308,6 +308,9 @@ class EditorViewModel(
     internal var currentSession: EditorSession? = null
 
     internal var initialWordCount = 0
+    /** 本次打开章节的正文基线，仅首条证明事件上报一次。 */
+    internal var proofBaselineText: String = ""
+    internal var proofBaselineSent: Boolean = false
 
     /** Issue #981：真实前台写作计时；已测片段上报 Core，实时会话速度也由同一时钟提供。 */
     internal val writingSessionTracker: WritingSessionTracker by lazy {
@@ -794,6 +797,9 @@ class EditorViewModel(
                             contentDelta = edit.contentDelta.toSessionDelta(),
                             selectionAnchorUtf8 = edit.newSelectionAnchor,
                             selectionHeadUtf8 = edit.newSelectionHead,
+                            oldSelectionAnchorUtf8 = edit.oldSelectionAnchor,
+                            oldSelectionHeadUtf8 = edit.oldSelectionHead,
+                            changes = edit.changes,
                         ),
                     )
                     _editFactEvents.send(
@@ -900,6 +906,24 @@ class EditorViewModel(
             // ComposeEditorVisualState.onEditFact。
             // 必须用完整 old/new 文本：删除范围用完整 oldText，插入/移动范围用完整 newText。
             val editResult = com.xiwei.sujian.feature.editor.projection.EditResult.fromDto(result)
+            // Issue #1008：普通 IME/键盘提交同样进入统计与手写证明入口，
+            // 携带 Core 返回的实际 changes 与前后选区，不再只走校对事件通道。
+            onEditorApplied(
+                EditorAppliedEvent(
+                    revision = result.newRevision.toLong(),
+                    transactionId = result.transactionId.toLong(),
+                    operationKind = editResult.operationKind.toEditorOperationKind(),
+                    source = EditorEditSource.NORMAL,
+                    cause = editResult.cause,
+                    contentChanged = result.displayPatches.isNotEmpty(),
+                    contentDelta = editResult.contentDelta.toSessionDelta(),
+                    selectionAnchorUtf8 = result.newSelectionAnchor.toInt(),
+                    selectionHeadUtf8 = result.newSelectionHead.toInt(),
+                    oldSelectionAnchorUtf8 = result.oldSelectionAnchor.toInt(),
+                    oldSelectionHeadUtf8 = result.oldSelectionHead.toInt(),
+                    changes = editResult.changes,
+                ),
+            )
             // 完整提交后的正文；校对增量请求必须带事务时捕获的文本，避免排队期间
             // Core 内核已推进后重新读取到更新版本而丢失本地增量。
             val fullNewText =

@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.session
 
 import androidx.compose.runtime.Immutable
+import uniffi.writer_core.EditorChangeDto
 import uniffi.writer_core.EditorContentDeltaDto
 import uniffi.writer_core.EditorOperationKindDto
 import uniffi.writer_core.EditorTransactionCauseDto
@@ -33,6 +34,10 @@ data class EditorAppliedEvent(
     val contentDelta: EditorContentDelta,
     val selectionAnchorUtf8: Int = -1,
     val selectionHeadUtf8: Int = -1,
+    val oldSelectionAnchorUtf8: Int = -1,
+    val oldSelectionHeadUtf8: Int = -1,
+    /** 事务实际执行的插入/删除（UTF-8 byte 坐标），按执行顺序。 */
+    val changes: List<EditorChangeDto> = emptyList(),
 )
 
 /**

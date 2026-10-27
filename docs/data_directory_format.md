@@ -86,7 +86,10 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 │  │  ├── events/                  # 按来源设备分区的写作事件（经统计设备组同步）
 │  │  │  └── <device_id>/
 │  │  │     ├── YYYY-MM-DD.events.jsonl
-│  │  │     └── YYYY-MM-DD.sessions.jsonl
+│  │  │     ├── YYYY-MM-DD.sessions.jsonl
+│  │  │     └── proof/
+│  │  │        ├── <chapter_id>.checkpoints.jsonl
+│  │  │        └── archive/YYYY-MM-DD.events.jsonl.zst
 │  │  ├── events.local/            # 旧版本地写作事件（迁移后只读保留，不同步）
 │  │  ├── daily/                   # 统计日报（不同步）
 │  │  ├── events.device_partitions.v1  # 事件库迁移完成标记（不同步）
@@ -102,7 +105,7 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 
 同步根 = `app_data_root`，路径相对应用数据根：
 
-- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`stats/events/<device_id>/YYYY-MM-DD.events.jsonl` 与 `stats/events/<device_id>/YYYY-MM-DD.sessions.jsonl`（仅通过对应设备数据组同步，本机只写自己的分区）。
+- **白名单（参与同步）**：`settings.sync.json`、`starmaps/**`、`stats/events/<device_id>/YYYY-MM-DD.events.jsonl`、`stats/events/<device_id>/YYYY-MM-DD.sessions.jsonl`、`stats/events/<device_id>/proof/**`（仅通过对应设备数据组同步，本机只写自己的分区）。`proof/` 包含章节检查点与封口后的压缩事件段，同样按来源设备独占写入。
 - **Android 设备配色**：`local-theme-palettes/**` 只在当前 Android 设备本地使用；旧版 `themes/palettes/**` 仅作升级迁移输入，二者均不参与 Git 或近场同步。旧远端 `app/themes/palettes/**` 由新客户端忽略，不产生删除 tombstone；Qt、HarmonyOS 与 Windows 不读取、不展示、不应用这些配色。
 - **黑名单（绝不参与）**：`projects/`（projects_root）、`logs/`（log_dir）、`exports/`、`backups/`、`settings.local.json`、`recent_edits.json`、含 `secret` 的路径（`app-meta/sync/*secret*`）、`device/`、`app-meta/stats/`（旧版单机事件库、迁移标记与冲突诊断文件）、`app-meta/transactions/`、`.git/`、`.tmp`/`.lock` 后缀、含 `cache`/`tmp`/`backups`/`sqlite_cache` 的路径。
 
@@ -111,10 +114,13 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 写作统计事件按来源设备独立成组同步（详见 `docs/sync_rules.md`「统计设备组」）：
 
 - 事件目录：`stats/events/<device_id>/YYYY-MM-DD.events.jsonl`，文件按 UTC 日命名，事件内 `local_date` 仍是事件发生地的业务日，两个日期概念不混用。
+- 编辑证明：同一事件行可选携带 `proof`（`formatVersion`、设备内持久递增 `seq`、`sessionId`、`baselineId`、`cause`、实际 `changes`、前后选区、before/after 内容链摘要、prev/event hash）。旧 JSONL 没有 `proof` 仍按旧字段读取，只可统计、不能逐字回放；不得为旧历史伪造变更列表。一次成功编辑事务只写一条事件，事务内的插入/删除顺序保留；失败、过期 revision、未提交 composition 不产生事件。
+- 检查点：`stats/events/<device_id>/proof/<chapter_id>.checkpoints.jsonl`，按章节与设备保存基线/阶段性完整正文、全文 SHA-256、对应事件序号 `seq` 与覆盖的日志位置。检查点只是回放加速索引，事件才是长期事实；写入检查点不重复计入写作统计。
+- 封口归档：`stats/events/<device_id>/proof/archive/YYYY-MM-DD.events.jsonl.zst`。活跃当天只追加 JSONL，封口后才把不可变历史压缩为 zstd 事件段；归档段与其来源设备检查点留在同一设备分区，归档后不再改写。
 - 计时目录：同分区 `YYYY-MM-DD.sessions.jsonl`，每行是一条已测量的前台编辑器写作切片（`event_id`、`session_id`、起止毫秒、项目/卷/章、来源本地日、暂停原因）。切片不是两次按键时间差；本机只追加自己的分区并按 `event_id` 幂等去重。
-- 组 id `stats_device:<device_id>`，远端 storage key `stats-device-<hex>`；每台设备独占写入自己的分区，下载分区只读，其它设备不重写。
+- 组 id `stats_device:<device_id>`，远端 storage key `stats-device-<hex>`；每台设备独占写入自己的分区，下载分区只读，其它设备不重写。跨设备回放按各设备内部的 `seq` 与 before/after hash、基线因果衔接，不按毫秒交错不同设备的事务；同步导入的正文变化显式记为 `SyncRemote`/依赖事件，不计入人工输入，分叉按设备分支展示。
 - 聚合时 Core 扫描全部分区并按 `event_id` 去重（本机优先），不维护可被 LWW 覆写的每日汇总账本；字数仍从事件投影派生，真实写作秒数只从计时切片派生。旧事件没有计时切片，不得反推或补写时长，也不与新计时样本混算字/时。
-- 旧 `app-meta/stats/events.local/` 只作为一次性迁移输入，迁移标记写入后不再读写。
+- 删除作品后，已写入的事件与检查点作为历史证明保留在设备分区（不随作品目录删除而抹除）；导出证明包包含历史正文，平台必须在导出前明确提示用户。旧 `app-meta/stats/events.local/` 只作为一次性迁移输入，迁移标记写入后不再读写。
 
 `log_dir` 由平台提供，与 `app_data_root` 相互独立（Android 为 `Sujian/logs/`），不位于数据根目录下。
 

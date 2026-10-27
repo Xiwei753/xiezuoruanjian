@@ -14,6 +14,8 @@ Menu {
     property var pendingLinkTarget: null
     required property var dt
 
+    signal proofReplayRequested()
+
     function parseData(raw) {
         try {
             var envelope = JSON.parse(String(raw || "{}"))
@@ -93,6 +95,13 @@ Menu {
     }
 
     MenuSeparator {}
+    MenuItem {
+        text: qsTr("手写证明回放")
+        icon.name: "document-open-recent"
+        enabled: !!editorContextMenu.editorControllerRef
+                 && String(editorContextMenu.editorControllerRef.chapterId || "").length > 0
+        onTriggered: editorContextMenu.proofReplayRequested()
+    }
     MenuItem {
         text: qsTr("标签")
         icon.name: "tag"

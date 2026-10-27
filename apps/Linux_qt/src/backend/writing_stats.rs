@@ -114,6 +114,12 @@ impl AppBackend {
         self.enqueue_writing_activity_segments(segments);
     }
 
+    /// 当前真实写作会话 ID；未开始计时时为空。
+    pub(crate) fn current_writing_session_id(&self) -> String {
+        let session = self.writing_session.lock().unwrap_or_else(|e| e.into_inner());
+        session.clock.session_id().to_string()
+    }
+
     /// Issue #981：30 秒心跳把已完成切片异步落盘，保持会话继续。
     pub(crate) fn writing_session_heartbeat(&self) {
         let segments = {
@@ -247,6 +253,15 @@ impl AppBackend {
         cause: writer_core::editor::EditorTransactionCause,
         inserted_chars: u32,
         deleted_chars: u32,
+        changes_json: QString,
+        session_id: QString,
+        base_revision: u64,
+        new_revision: u64,
+        old_selection_anchor: u64,
+        old_selection_head: u64,
+        new_selection_anchor: u64,
+        new_selection_head: u64,
+        baseline_text: QString,
     ) {
         if let Some(ref writer) = self.stats_writer {
             // Issue #935 复核：编辑事实首次入队就固定稳定身份与发生时间，
@@ -263,6 +278,15 @@ impl AppBackend {
                 cause,
                 inserted_chars,
                 deleted_chars,
+                changes_json: changes_json.to_string(),
+                session_id: session_id.to_string(),
+                base_revision,
+                new_revision,
+                old_selection_anchor,
+                old_selection_head,
+                new_selection_anchor,
+                new_selection_head,
+                baseline_text: if baseline_text.is_empty() { None } else { Some(baseline_text.to_string()) },
                 event_id,
                 occurred_at_ms,
             }) {
@@ -348,12 +372,55 @@ impl AppBackend {
         }
     }
 
+    /// 手写证明回放：请求与结果均为 Core JSON，QML 只渲染返回的正文与选区。
+    pub(crate) fn replay_chapter_proof_object(&self, request_json: QString) -> QJsonObject {
+        if !self.stats_barrier() {
+            return QJsonObject::default();
+        }
+        let Some(core) = self.core_api() else {
+            return QJsonObject::default();
+        };
+        match core.replay_chapter_proof_json(&request_json.to_string()) {
+            Ok(value) => qjson_object_from_json(&value),
+            Err(error) => {
+                self.debug_error("stats", "replay_chapter_proof_failed", &error.to_string());
+                qjson_object_from_json(&format!(
+                    "{{\"valid\":false,\"errors\":[\"{}\"]}}",
+                    error.to_string().replace('\\', "\\\\").replace('"', "\\\"")
+                ))
+            }
+        }
+    }
+
+    /// 导出手写证明包。导出包含历史正文，调用方必须先向用户确认。
+    pub(crate) fn export_chapter_proof_object(
+        &self,
+        chapter_id: QString,
+        device_id: QString,
+    ) -> QJsonObject {
+        if !self.stats_barrier() {
+            return QJsonObject::default();
+        }
+        let Some(core) = self.core_api() else {
+            return QJsonObject::default();
+        };
+        match core.export_chapter_proof_json(&chapter_id.to_string(), &device_id.to_string()) {
+            Ok(value) => qjson_object_from_json(&value),
+            Err(error) => {
+                self.debug_error("stats", "export_chapter_proof_failed", &error.to_string());
+                qjson_object_from_json(&format!(
+                    "{{\"error\":\"{}\"}}",
+                    error.to_string().replace('\\', "\\\\").replace('"', "\\\"")
+                ))
+            }
+        }
+    }
+
     pub(crate) fn get_writing_stats_summary_object(
         &self,
         start_date: QString,
         end_date: QString,
     ) -> QJsonObject {
-        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
         if !self.stats_barrier() {
             return QJsonObject::default();
         }

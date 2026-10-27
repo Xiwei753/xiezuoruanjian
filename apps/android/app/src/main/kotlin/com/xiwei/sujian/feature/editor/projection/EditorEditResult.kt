@@ -4,6 +4,7 @@ import uniffi.writer_core.DisplayPatchDto
 import uniffi.writer_core.EditorContentDeltaDto
 import uniffi.writer_core.EditorEditOutcomeDto
 import uniffi.writer_core.EditorEditResultDto
+import uniffi.writer_core.EditorChangeDto
 import uniffi.writer_core.EditorOperationKindDto
 import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.OffsetMapDto
@@ -106,6 +107,8 @@ data class EditResult(
     val operationKind: EditorOperationKindDto,
     val offsetMap: OffsetMap?,
     val contentDelta: EditorContentDeltaDto = EditorContentDeltaDto(0u, 0u, 0u, 0u),
+    /** 本次事务实际执行的插入/删除，按执行顺序；证明链的事实来源。 */
+    val changes: List<EditorChangeDto> = emptyList(),
 ) {
     companion object {
         fun fromDto(dto: EditorEditResultDto): EditResult =
@@ -123,6 +126,7 @@ data class EditResult(
                 operationKind = dto.operationKind,
                 offsetMap = dto.offsetMap?.let { OffsetMap.fromDto(it) },
                 contentDelta = dto.contentDelta,
+                changes = dto.changes,
             )
     }
 

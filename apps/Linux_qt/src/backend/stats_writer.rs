@@ -45,6 +45,18 @@ pub(crate) enum StatsWriteCommand {
         cause: EditorTransactionCause,
         inserted_chars: u32,
         deleted_chars: u32,
+        /// 实际插入/删除（JSON），由 Core EditorEditResult.changes 序列化。
+        changes_json: String,
+        /// 与前台计时切片同源的真实写作会话 ID；无会话时为空。
+        session_id: String,
+        base_revision: u64,
+        new_revision: u64,
+        old_selection_anchor: u64,
+        old_selection_head: u64,
+        new_selection_anchor: u64,
+        new_selection_head: u64,
+        /// 首次证明事件的正文基线；之后为 None。
+        baseline_text: Option<String>,
         /// Issue #935 复核：编辑事实首次入队就固定稳定身份与发生时间，
         /// 写盘失败重发时原样带回，避免每次重发都被 Core 当成新事件。
         event_id: String,
@@ -115,6 +127,15 @@ fn try_record_stats(
             cause,
             inserted_chars,
             deleted_chars,
+            changes_json,
+            session_id,
+            base_revision,
+            new_revision,
+            old_selection_anchor,
+            old_selection_head,
+            new_selection_anchor,
+            new_selection_head,
+            baseline_text,
             event_id,
             occurred_at_ms,
         } => crate::writing_bridge::record_editor_change_stats(
@@ -125,6 +146,15 @@ fn try_record_stats(
             *cause,
             *inserted_chars,
             *deleted_chars,
+            changes_json,
+            session_id,
+            *base_revision,
+            *new_revision,
+            *old_selection_anchor,
+            *old_selection_head,
+            *new_selection_anchor,
+            *new_selection_head,
+            baseline_text.as_deref(),
             event_id,
             *occurred_at_ms,
         )

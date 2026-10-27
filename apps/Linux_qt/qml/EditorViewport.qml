@@ -34,6 +34,7 @@ Item {
     property string linkActivationMessage: ""
 
     signal explicitClearRequested()
+    signal proofReplayRequested()
 
     function requestEditorFocus() {
         if (sujianEditor && sujianEditor.visible && sujianEditor.editor_enabled) {
@@ -379,6 +380,7 @@ Item {
         annotationBackendRef: root.editorControllerRef.annotationBackendRef
         searchBackendRef: root.searchBackendRef
         dt: root.dt
+        onProofReplayRequested: root.proofReplayRequested()
     }
 
     Connections {

@@ -210,6 +210,27 @@ export class NativeStatsBridge {
     } catch (e) { return nativeError<boolean>(e) }
   }
 
+  // Issue #1008：按章节回放手写证明。请求/响应都是 Core 定义的 JSON；
+  // 先等编辑事件落盘，避免回放读到缺事件的中间状态。
+  async replayChapterProof(requestJson: string): Promise<ResultEnvelope<Object>> {
+    try {
+      const blocked = await this.statsWritesBlocked<Object>()
+      if (blocked !== null) return blocked
+      const jsonStr: string = this.core.getNativeModule().nativeReplayChapterProof(requestJson)
+      return this.core.parseRawEnvelope(jsonStr)
+    } catch (e) { return nativeError<Object>(e) }
+  }
+
+  // Issue #1008：导出证明包。包内包含历史正文，调用方必须先向用户说明。
+  async exportChapterProof(chapterId: string, deviceId: string): Promise<ResultEnvelope<Object>> {
+    try {
+      const blocked = await this.statsWritesBlocked<Object>()
+      if (blocked !== null) return blocked
+      const jsonStr: string = this.core.getNativeModule().nativeExportChapterProof(chapterId, deviceId)
+      return this.core.parseRawEnvelope(jsonStr)
+    } catch (e) { return nativeError<Object>(e) }
+  }
+
   // Issue #981：真实前台编辑计时片段。eventId 由端侧一次生成并固定，Core 幂等去重；
   // 这里同样 await C++ 侧 async work，失败不能被当成已写入。
   async recordWritingActivitySegment(input: WritingActivitySegmentInput): Promise<ResultEnvelope<boolean>> {

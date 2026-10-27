@@ -25,6 +25,9 @@
 //! - 旧版单分区事件库由 [`crate::writing_stats::migration`] 一次性迁入本结构。
 
 use crate::error::Result;
+use crate::writing_stats::checkpoint::{self, ProofCheckpoint};use crate::writing_stats::proof::{
+    self, chain_content_hash, compute_event_hash, content_hash_of_text, empty_content_hash,
+};
 use crate::writing_stats::calendar;
 use crate::writing_stats::{WritingActivitySegment, WritingInputEvent};
 use chrono::NaiveDate;
@@ -37,6 +40,8 @@ use std::sync::Mutex;
 
 /// 统计事件根目录（相对 app_data_root）。
 const EVENTS_ROOT: &str = "stats/events";
+/// 每 800 个内容事件写一个完整正文 checkpoint；事件仍是长期事实。
+const PERIODIC_CHECKPOINT_INTERVAL: u64 = 800;
 
 /// 跨分区重复 `event_id` 的结构化诊断记录。
 ///
@@ -56,6 +61,8 @@ struct EventFile {
     origin: String,
     date: String,
     path: PathBuf,
+    /// 已封口的 zstd 归档段（`proof/archive/<date>.events.jsonl.zst`）。
+    compressed: bool,
 }
 
 /// 写作统计事件存储。
@@ -65,6 +72,22 @@ pub struct StatsStore {
     origin_device_id: Mutex<Option<String>>,
     /// 按「分区/UTC 日期」缓存已持久化的 event_id，避免每次全量重扫。
     written_ids: Mutex<HashMap<String, HashSet<String>>>,
+    /// 证明序号与每章节链头。首次写入时扫描已有事件重建。
+    proof_state: Mutex<ProofStoreState>,
+}
+
+#[derive(Debug, Clone)]
+struct ProofChainHead {
+    seq: u64,
+    event_hash: String,
+    content_hash: String,
+}
+
+#[derive(Debug, Default)]
+struct ProofStoreState {
+    initialized: bool,
+    next_seq: u64,
+    chains: HashMap<String, ProofChainHead>,
 }
 
 impl StatsStore {
@@ -73,6 +96,7 @@ impl StatsStore {
             app_data_root: app_data_root.to_path_buf(),
             origin_device_id: Mutex::new(None),
             written_ids: Mutex::new(HashMap::new()),
+            proof_state: Mutex::new(ProofStoreState::default()),
         }
     }
 
@@ -280,6 +304,292 @@ impl StatsStore {
     /// 追加单个事件。
     pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {
         self.record_events(vec![event]).map(|_| ())
+    }
+
+    /// 写入一条带证明的编辑事务。序号、前后链摘要和事件哈希由 Core 在这里补齐。
+    ///
+    /// - 同一 `event_id` 重发只落一条，返回 `false`；
+    /// - 没有实际正文变更、没有 proof 细节的事件不写证明；
+    /// - 写盘失败时不推进内存链状态，重试不会造成序号/哈希跳跃；
+    /// - 首次记录时若提供 `baseline_text`，先写 seq=0 的基线 checkpoint。
+    pub(crate) fn record_proof_event(
+        &self,
+        mut event: WritingInputEvent,
+        baseline_text: Option<&str>,
+    ) -> Result<bool> {
+        if event
+            .proof
+            .as_ref()
+            .is_none_or(|proof| !proof.has_content_change())
+        {
+            return Ok(false);
+        }
+        let origin = event.device_id.clone();
+        if origin.is_empty() {
+            return Err(crate::Error::Other(
+                "proof 事件缺少来源设备 ID".to_string(),
+            ));
+        }
+        let date = self.timestamp_to_date(event.timestamp_ms)?;
+        if self.event_is_persisted(&origin, &date, &event.event_id)? {
+            return Ok(false);
+        }
+
+        let mut state = self.lock_proof_state();
+        if !state.initialized {
+            self.initialize_proof_state(&mut state)?;
+        }
+
+        let chain_key = format!("{origin}/{}", event.chapter_id);
+        let head = state.chains.get(&chain_key).cloned();
+        let seq = state.next_seq;
+        let starts_new_chain = head.is_none();
+        let baseline_checkpoint = if starts_new_chain {
+            baseline_text.map(|text| {
+                ProofCheckpoint::new(
+                    &event.chapter_id,
+                    &origin,
+                    0,
+                    "",
+                    event.timestamp_ms,
+                    text,
+                    &content_hash_of_text(text),
+                    "",
+                    "baseline",
+                )
+            })
+        } else {
+            None
+        };
+
+        if let Some(checkpoint) = baseline_checkpoint.as_ref() {
+            checkpoint::append_checkpoint(&self.app_data_root, checkpoint)?;
+        }
+
+        let before_content_hash = head.as_ref().map_or_else(
+            || {
+                baseline_text.map_or_else(empty_content_hash, content_hash_of_text)
+            },
+            |head| head.content_hash.clone(),
+        );
+        let previous_event_hash = head.map_or_else(String::new, |head| head.event_hash);
+        let baseline_id = if starts_new_chain {
+            format!("{origin}:{}:0", event.chapter_id)
+        } else {
+            String::new()
+        };
+        let changes_for_chain = {
+            let draft = event
+                .proof
+                .as_mut()
+                .ok_or_else(|| crate::Error::Other("proof 事件缺少 proof 细节".to_string()))?;
+            draft.format_version = proof::PROOF_FORMAT_VERSION;
+            draft.seq = seq;
+            draft.starts_new_chain = starts_new_chain;
+            if draft.baseline_id.is_empty() {
+                draft.baseline_id = baseline_id;
+            }
+            draft.before_content_hash = before_content_hash.clone();
+            draft.prev_event_hash = previous_event_hash;
+            draft.after_content_hash = chain_content_hash(&before_content_hash, &draft.changes);
+            draft.changes.clone()
+        };
+        let after_content_hash = chain_content_hash(&before_content_hash, &changes_for_chain);
+        let event_hash = compute_event_hash(&event);
+        if let Some(draft) = event.proof.as_mut() {
+            draft.event_hash = event_hash.clone();
+        }
+        let chapter_for_checkpoint = event.chapter_id.clone();
+        let timestamp_for_checkpoint = event.timestamp_ms;
+
+        let written = self.record_events(vec![event])?;
+        if written == 0 {
+            return Ok(false);
+        }
+        state.next_seq = seq.saturating_add(1);
+        state.chains.insert(
+            chain_key,
+            ProofChainHead {
+                seq,
+                event_hash: event_hash.clone(),
+                content_hash: chain_content_hash(&before_content_hash, &changes_for_chain),
+            },
+        );
+        drop(state);
+
+        // Issue #1008：事件是长期事实，checkpoint 只是加速索引。长会话按固定事件
+        // 间隔写一次完整正文，回放不必从会话起点重放；写失败不能反过来否定已落盘的
+        // 编辑事件，因此只记录错误并继续。
+        if seq > 0 && seq % PERIODIC_CHECKPOINT_INTERVAL == 0 {
+            if let Err(error) = self.write_periodic_checkpoint(
+                &chapter_for_checkpoint,
+                &origin,
+                seq,
+                timestamp_for_checkpoint,
+                &after_content_hash,
+                &event_hash,
+            ) {
+                log::warn!("proof periodic checkpoint failed: {error}");
+            }
+        }
+        Ok(true)
+    }
+
+    /// 从最近 checkpoint 回放到当前序号，写一个周期正文检查点。
+    fn write_periodic_checkpoint(
+        &self,
+        chapter_id: &str,
+        device_id: &str,
+        seq: u64,
+        timestamp_ms: i64,
+        content_hash: &str,
+        event_hash: &str,
+    ) -> Result<()> {
+        let request = crate::writing_stats::replay::ProofReplayRequest {
+            chapter_id: chapter_id.to_string(),
+            device_id: device_id.to_string(),
+            target_seq: Some(seq),
+            target_time_ms: None,
+            baseline_text: None,
+        };
+        let frame = crate::writing_stats::replay::replay_chapter(self, &request)?;
+        if !frame.valid {
+            log::warn!(
+                "proof periodic checkpoint skipped for {chapter_id}: {}",
+                frame.errors.join("; ")
+            );
+            return Ok(());
+        }
+        let checkpoint = ProofCheckpoint::new(
+            chapter_id,
+            device_id,
+            seq,
+            "",
+            timestamp_ms,
+            &frame.text,
+            content_hash,
+            event_hash,
+            "periodic",
+        );
+        checkpoint::append_checkpoint(&self.app_data_root, &checkpoint)
+    }
+
+    /// 保存正文后写一个完整正文 checkpoint，作为后续回放加速索引。
+    ///
+    /// `chapters` 由保存事务提供完整正文，因此检查点不需要重新回放事件；
+    /// 无证明事件时写 seq=0 基线，之后第一条证明事件会复用它。
+    pub(crate) fn record_chapter_checkpoints(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        text: &str,
+        session_id: &str,
+    ) -> Result<()> {
+        let origin = self.resolve_origin_device_id()?;
+        let all_events = self.load_all_events()?;
+        let mut last: Option<&WritingInputEvent> = None;
+        for event in &all_events {
+            if event.device_id != origin
+                || event.project_id != project_id
+                || event.volume_id != volume_id
+                || event.chapter_id != chapter_id
+            {
+                continue;
+            }
+            if let Some(proof) = event.proof.as_ref() {
+                if last
+                    .and_then(|event| event.proof.as_ref())
+                    .is_none_or(|previous| proof.seq > previous.seq)
+                {
+                    last = Some(event);
+                }
+            }
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let (seq, timestamp_ms, content_hash, event_hash, reason) = match last {
+            Some(event) => {
+                let proof = event.proof.as_ref().ok_or_else(|| {
+                    crate::Error::Other("proof 事件缺少 proof 细节".to_string())
+                })?;
+                (
+                    proof.seq,
+                    event.timestamp_ms,
+                    proof.after_content_hash.clone(),
+                    proof.event_hash.clone(),
+                    "save",
+                )
+            }
+            None => (0, now, content_hash_of_text(text), String::new(), "baseline"),
+        };
+        let checkpoint = ProofCheckpoint::new(
+            chapter_id,
+            &origin,
+            seq,
+            session_id,
+            timestamp_ms,
+            text,
+            &content_hash,
+            &event_hash,
+            reason,
+        );
+        checkpoint::append_checkpoint(&self.app_data_root, &checkpoint)
+    }
+
+    /// 本机当前证明链的最近序号（没有事件时为 0）。
+    pub(crate) fn latest_proof_seq(&self) -> Result<u64> {
+        let mut state = self.lock_proof_state();
+        if !state.initialized {
+            self.initialize_proof_state(&mut state)?;
+        }
+        Ok(state.next_seq.saturating_sub(1))
+    }
+
+    fn initialize_proof_state(&self, state: &mut ProofStoreState) -> Result<()> {
+        for event in self.load_all_events()? {
+            let Some(proof) = event.proof.as_ref() else {
+                continue;
+            };
+            state.next_seq = state.next_seq.max(proof.seq.saturating_add(1));
+            let key = format!("{}/{}", event.device_id, event.chapter_id);
+            let replace = state
+                .chains
+                .get(&key)
+                .is_none_or(|head| proof.seq > head.seq);
+            if replace {
+                state.chains.insert(
+                    key,
+                    ProofChainHead {
+                        seq: proof.seq,
+                        event_hash: proof.event_hash.clone(),
+                        content_hash: proof.after_content_hash.clone(),
+                    },
+                );
+            }
+        }
+        state.initialized = true;
+        Ok(())
+    }
+
+    fn lock_proof_state(&self) -> std::sync::MutexGuard<'_, ProofStoreState> {
+        self.proof_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn event_is_persisted(&self, origin: &str, date: &str, event_id: &str) -> Result<bool> {
+        if event_id.is_empty() {
+            return Ok(false);
+        }
+        let mut cache = self.lock_written_ids();
+        let cache_key = format!("{origin}/{date}");
+        if !cache.contains_key(&cache_key) {
+            let ids = self.scan_ids(&self.event_file_path(origin, date))?;
+            cache.insert(cache_key.clone(), ids);
+        }
+        Ok(cache
+            .get(&cache_key)
+            .is_some_and(|ids| ids.contains(event_id)))
     }
 
     /// 追加一批已测量的前台写作计时切片，只写入本机来源分区。
@@ -520,6 +830,7 @@ impl StatsStore {
         let mut files = Vec::new();
         for origin in list_origin_dirs(&root)? {
             files.extend(list_origin_files(&root, &origin, ".events.jsonl")?);
+            files.extend(list_archive_files(&root, &origin)?);
         }
         Ok(files)
     }
@@ -540,7 +851,18 @@ impl StatsStore {
     /// 严格读取单个事件文件（任何一行解析失败都报错）。
     fn parse_events_file(&self, file: &EventFile) -> Result<Vec<WritingInputEvent>> {
         let handle = File::open(&file.path)?;
-        let reader = BufReader::new(handle);
+        let reader: Box<dyn BufRead> = if file.compressed {
+            Box::new(BufReader::new(
+                zstd::stream::read::Decoder::new(handle).map_err(|error| {
+                    crate::Error::Other(format!(
+                        "Open proof archive stats/events/{}/proof/archive/{}.events.jsonl.zst: {}",
+                        file.origin, file.date, error
+                    ))
+                })?,
+            ))
+        } else {
+            Box::new(BufReader::new(handle))
+        };
         let mut events = Vec::new();
         for (idx, line) in reader.lines().enumerate() {
             let line = line?;
@@ -768,6 +1090,40 @@ fn list_origin_files(root: &Path, origin: &str, suffix: &str) -> Result<Vec<Even
             origin: origin.to_string(),
             date,
             path,
+            compressed: false,
+        })
+        .collect())
+}
+
+/// 列出 `proof/archive/<date>.events.jsonl.zst` 封口段（按日期升序）。
+fn list_archive_files(root: &Path, origin: &str) -> Result<Vec<EventFile>> {
+    let dir = root.join(origin).join("proof/archive");
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut dates: Vec<(String, PathBuf)> = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(date) = name.strip_suffix(".events.jsonl.zst") else {
+            continue;
+        };
+        if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+            continue;
+        }
+        dates.push((date.to_string(), entry.path()));
+    }
+    dates.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(dates
+        .into_iter()
+        .map(|(date, path)| EventFile {
+            origin: origin.to_string(),
+            date,
+            path,
+            compressed: true,
         })
         .collect())
 }
