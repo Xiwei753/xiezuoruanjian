@@ -238,7 +238,7 @@ impl crate::facade::WriterCore {
         //   合并 lifecycle 删除产生的 committed_paths
         // 与 staging commit 产生的 committed_paths。
         let mut all_committed_paths = lifecycle_committed_paths;
-        all_committed_paths.extend(commit_outcome.committed_paths);
+        all_committed_paths.extend(commit_outcome.committed_paths.into_iter().map(|path| path.path));
         (result, all_committed_paths, lifecycle_receipts)
     }
 

@@ -8,8 +8,10 @@
 //! - `before_content_hash` / `after_content_hash` 是“上一链摘要 + 本次变更”
 //!   的命令链摘要，只用于校验事件顺序与变更连续性；它不是全文 SHA。
 //! - `before_text_sha256` / `after_text_sha256` 是 Core 在应用事务前后对
-//!   **真实正文**计算的 SHA-256，用来把事件锚定到具体文本。
-//! - checkpoint 里的 `text_sha256` 是某个完整正文快照的 SHA-256。
+//!   **真实正文**计算的全文内容摘要：新事件使用编辑器增量 treap 的根摘要
+//!   （`content-v1:`），旧事件可能仍是完整正文的 `sha256:v1:`。它用来把
+//!   事件锚定到具体文本，又不把输入热路径变成 O(N) 全文扫描。
+//! - checkpoint 里的 `text_sha256` 仍是某个完整正文快照的 SHA-256。
 //!
 //! 哈希编码带明确版本前缀，字段用长度前缀拼接，避免分隔符歧义。校验只能
 //! 说明「这份记录从记录起点起前后一致」，不宣称证明输入者一定是人类。
@@ -20,6 +22,8 @@ use sha2::{Digest, Sha256};
 use crate::editor::transaction::{
     EditorChange, EditorSelection, EditorTransactionCause,
 };
+use crate::editor::kernel::ContentDigest;
+pub(crate) use crate::editor::kernel::CONTENT_DIGEST_VERSION;
 use crate::writing_stats::WritingInputEvent;
 
 pub const PROOF_FORMAT_VERSION: u32 = 1;
@@ -51,10 +55,11 @@ pub struct ProofEditPayload {
     pub new_selection: EditorSelection,
     pub before_content_hash: String,
     pub after_content_hash: String,
-    /// 事务应用前真实正文的全文 SHA-256；旧事件为空，回放时跳过强校验。
+    /// 事务应用前真实正文的全文内容摘要。新事件为增量根摘要
+    /// `content-v1:`；旧事件可能是完整正文的 `sha256:v1:`。为空时回放跳过强校验。
     #[serde(default)]
     pub before_text_sha256: String,
-    /// 事务应用后真实正文的全文 SHA-256。
+    /// 事务应用后真实正文的全文内容摘要，编码同上。
     #[serde(default)]
     pub after_text_sha256: String,
     /// 同设备、同章节上一条事件的 `event_hash`；新链为空。
@@ -89,6 +94,20 @@ pub struct ProofVerification {
     pub final_selection_anchor: u32,
     pub final_selection_head: u32,
     pub errors: Vec<String>,
+}
+
+/// 完整正文的增量内容根摘要。回放/存储从完整文本构建后得到同一根值。
+pub fn content_digest_of_text(text: &str) -> String {
+    ContentDigest::from_text(text).digest()
+}
+
+/// 校验事件里的正文摘要。新事件用增量根摘要，旧事件保留完整 SHA-256 校验。
+pub fn text_digest_matches(value: &str, text: &str, digest: &ContentDigest) -> bool {
+    if value.starts_with(CONTENT_DIGEST_VERSION) {
+        value == digest.digest()
+    } else {
+        value == text_sha256(text)
+    }
 }
 
 /// 规范化 SHA-256 文本摘要。
@@ -258,6 +277,7 @@ pub fn verify_event_chain(
     let mut previous_content_hash: Option<String> = None;
     let mut previous_seq: Option<u64> = None;
     let mut saw_event = false;
+    let mut digest = ContentDigest::from_text(baseline_text);
 
     for event in events {
         let Some(proof) = event.proof.as_ref() else {
@@ -274,6 +294,7 @@ pub fn verify_event_chain(
             saw_event = true;
             if !proof.starts_new_chain {
                 result.final_text = baseline_text.to_string();
+                digest = ContentDigest::from_text(baseline_text);
                 previous_content_hash = Some(content_hash_of_text(baseline_text));
             }
         }
@@ -292,6 +313,7 @@ pub fn verify_event_chain(
         if proof.starts_new_chain {
             previous_event_hash.clear();
             previous_content_hash = Some(content_hash_of_text(&result.final_text));
+            digest = ContentDigest::from_text(&result.final_text);
         }
 
         if let Some(expected) = previous_content_hash.as_ref() {
@@ -321,7 +343,7 @@ pub fn verify_event_chain(
         }
 
         if !proof.before_text_sha256.is_empty()
-            && proof.before_text_sha256 != text_sha256(&result.final_text)
+            && !text_digest_matches(&proof.before_text_sha256, &result.final_text, &digest)
         {
             result.valid = false;
             result.errors.push(format!(
@@ -333,6 +355,9 @@ pub fn verify_event_chain(
         if let Err(error) = apply_changes(&mut result.final_text, &proof.changes) {
             result.valid = false;
             result.errors.push(format!("事件 {}: {error}", event.event_id));
+        } else if let Err(error) = digest.apply_changes(&proof.changes) {
+            result.valid = false;
+            result.errors.push(format!("事件 {} 摘要: {error}", event.event_id));
         }
         let expected_after = chain_content_hash(&proof.before_content_hash, &proof.changes);
         if expected_after != proof.after_content_hash {
@@ -343,7 +368,7 @@ pub fn verify_event_chain(
             ));
         }
         if !proof.after_text_sha256.is_empty()
-            && proof.after_text_sha256 != text_sha256(&result.final_text)
+            && !text_digest_matches(&proof.after_text_sha256, &result.final_text, &digest)
         {
             result.valid = false;
             result.errors.push(format!(

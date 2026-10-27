@@ -25,6 +25,7 @@ impl EditorKernel {
         let old_len = self.text.byte_len();
         let old_chars: u32 = self.text.chars().count() as u32;
         let old_non_ws: u32 = self.text.chars().filter(|c| !c.is_whitespace()).count() as u32;
+        self.content_digest = super::ContentDigest::from_text(&text);
         self.text = crop::Rope::from(text);
         self.cursor = Utf8ByteOffset::unchecked(resolved_cursor);
         self.selection_anchor = Utf8ByteOffset::unchecked(resolved_cursor);

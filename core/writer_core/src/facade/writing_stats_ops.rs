@@ -180,13 +180,16 @@ impl super::WriterCore {
         volume_id: &str,
         chapter_id: &str,
         after_text: &str,
+        sync_event_id: &str,
         sync_source_device_id: &str,
         parent_event_id: &str,
     ) -> Result<bool> {
         use crate::editor::EditorTransactionCause;
         use crate::editor::transaction::{EditorChange, EditorCursor, EditorSelection};
         use crate::editor::Utf8ByteOffset;
-        use crate::writing_stats::proof::{text_sha256, ProofEditPayload, PROOF_FORMAT_VERSION};
+        use crate::writing_stats::proof::{
+            content_digest_of_text, ProofEditPayload, PROOF_FORMAT_VERSION,
+        };
 
         let request = crate::writing_stats::replay::ProofReplayRequest {
             chapter_id: chapter_id.to_string(),
@@ -196,10 +199,18 @@ impl super::WriterCore {
             target_index: None,
             baseline_text: None,
         };
-        let frame = match self.get_stats_api().replay_chapter_proof(&request) {
-            Ok(frame) if frame.valid => frame,
-            _ => return Ok(false),
-        };
+        let frame = self.get_stats_api().replay_chapter_proof(&request)?;
+        if !frame.valid {
+            return Err(crate::Error::Other(format!(
+                "章节 {chapter_id} 的证明链校验失败，拒绝写入 SyncRemote 事件: {}",
+                frame.errors.join("; ")
+            )));
+        }
+        // 没有任何证明记录（空正文且无基线）时，不能伪造「从空正文同步出全文」
+        // 的起点；首次保存会按真实正文建立基线。
+        if frame.total_events == 0 && frame.text.is_empty() {
+            return Ok(false);
+        }
         if frame.text == after_text {
             return Ok(false);
         }
@@ -209,8 +220,8 @@ impl super::WriterCore {
             parent_event_id.to_string()
         };
         let before_text = frame.text;
-        let before_sha = text_sha256(&before_text);
-        let after_sha = text_sha256(after_text);
+        let before_sha = content_digest_of_text(&before_text);
+        let after_sha = content_digest_of_text(after_text);
         let mut changes = Vec::new();
         if !before_text.is_empty() {
             changes.push(EditorChange::Delete {
@@ -239,7 +250,12 @@ impl super::WriterCore {
             anchor: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
             head: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
         };
-        let event_id = format!("sync:{chapter_id}:{before_sha}:{after_sha}");
+        if sync_event_id.is_empty() {
+            return Err(crate::Error::Other(
+                "同步证明事件缺少事务 ID".to_string(),
+            ));
+        }
+        let event_id = sync_event_id.to_string();
         let occurred_at_ms = chrono::Utc::now().timestamp_millis();
         let mut event = WritingInputEvent::with_identity(
             event_id,

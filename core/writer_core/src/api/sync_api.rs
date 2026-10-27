@@ -2106,7 +2106,7 @@ impl WriterCoreApi {
             );
             record_sync_diagnostic("sync.target.end", "sync.target", target_end_fields);
             all_targets.push(target_with_conflicts);
-            all_committed_paths.extend(target_committed_paths);
+            all_committed_paths.extend(target_committed_paths.into_iter().map(|path| path.path));
         }
 
         // 每个 target 的 commit 已在同一写锁内完成 Store 协调与索引失效（问题2）。
@@ -2222,7 +2222,7 @@ impl WriterCoreApi {
         target_sync_result: &crate::sync::types::TargetSyncResult,
     ) -> (
         crate::sync::types::TargetSyncResult,
-        Vec<std::path::PathBuf>,
+        Vec<crate::sync::commit_helpers::CommittedPath>,
     ) {
         if prepared_failure {
             // 迁移失败时 staging 未 seed，本组本次不上传也不 Commit。
@@ -2240,7 +2240,7 @@ impl WriterCoreApi {
         target_sync_result: &crate::sync::types::TargetSyncResult,
     ) -> (
         crate::sync::types::TargetSyncResult,
-        Vec<std::path::PathBuf>,
+        Vec<crate::sync::commit_helpers::CommittedPath>,
     ) {
         // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 sync root 的
         // state/conflict mutation。整段 Commit（三方 merge + SaveTransaction 写回 +
@@ -2264,7 +2264,7 @@ impl WriterCoreApi {
                 return (target_with_conflicts, Vec::new());
             }
 
-            let sync_sources = staging_manifest_device_ids(run);
+            let sync_sources = staging_manifest_device_ids(run, target_sync_result.project_id.as_deref());
             let (commit_result, conflicts, committed_paths) =
                 crate::sync::commit_helpers::commit_single_target_staging(run, target_sync_result);
             let mut target_with_conflicts = target_sync_result.clone();
@@ -2286,33 +2286,68 @@ impl WriterCoreApi {
 
             // Issue #1008：同步落盘的正文变化是明确的 SyncRemote 事实，不能等
             // 下次保存时被统归为 Unknown 外部变更。事件以 Core 当前证明链头为
-            // before，应用后的正文取刚写入 live 的实际文本。
+            // before，Apply 读取刚写入 projects_root 的实际正文；Delete 记录真实
+            // 删除事实。证明落盘失败必须反映到该 target，不能只打 warn 后假装成功。
             if matches!(commit_result, crate::sync::commit_helpers::TargetCommitResult::Ok) {
-                for path in &committed_paths {
+                let mut proof_errors: Vec<String> = Vec::new();
+                for (action_index, committed) in committed_paths.iter().enumerate() {
+                    let path = &committed.path;
                     let Some((project_id, volume_id, chapter_id)) = chapter_path_parts(path) else {
                         continue;
                     };
-                    let live_path = core.app_data_root.join(path);
-                    let Ok(after_text) = std::fs::read_to_string(&live_path) else {
-                        continue;
+                    let after_text = if committed.deleted {
+                        String::new()
+                    } else {
+                        let Some(live_path) = chapter_live_path(&core, path) else {
+                            proof_errors.push(format!("无法映射同步章节路径: {}", path.display()));
+                            continue;
+                        };
+                        match std::fs::read_to_string(&live_path) {
+                            Ok(text) => text,
+                            Err(e) => {
+                                proof_errors.push(format!(
+                                    "读取同步章节 {} 失败: {}",
+                                    live_path.display(),
+                                    e
+                                ));
+                                continue;
+                            }
+                        }
                     };
+                    let chapter_key = format!("{project_id}/{volume_id}/{chapter_id}");
                     let source_device = sync_sources
-                        .get(&chapter_id)
+                        .get(&chapter_key)
                         .map(String::as_str)
                         .unwrap_or("");
+                    // run_id + 落盘路径 + 动作序号唯一标识一次真实同步提交；同一
+                    // 章节 A→B→A→B 不会被内容 hash 误去重。事件 ID 固定后重发复用。
+                    let sync_event_id = format!(
+                        "sync:{}:{}:{}",
+                        run.run_id(),
+                        path.display(),
+                        action_index
+                    );
                     if let Err(e) = core.record_sync_content_change(
                         &project_id,
                         &volume_id,
                         &chapter_id,
                         &after_text,
+                        &sync_event_id,
                         source_device,
                         "",
                     ) {
-                        log::warn!(
-                            "[sync] record SyncRemote proof change failed for {}: {e}",
-                            path.display()
-                        );
+                        proof_errors.push(format!("{}: {e}", path.display()));
                     }
+                }
+                if !proof_errors.is_empty() {
+                    target_with_conflicts.result.status =
+                        crate::sync::SyncStatus::RecoverableError(
+                            "sync_proof_record_failed".to_string(),
+                        );
+                    target_with_conflicts.result.error = Some(format!(
+                        "同步正文已落盘，但证明事件记录失败: {}",
+                        proof_errors.join("; ")
+                    ));
                 }
             }
 
@@ -2338,11 +2373,11 @@ impl WriterCoreApi {
     /// 返回 Result，失败时传播错误到 target 终态（问题2），不吞成 warn 后假装成功。
     fn coordinate_stores_after_commit(
         core: &crate::facade::WriterCore,
-        committed_paths: &[std::path::PathBuf],
+        committed_paths: &[crate::sync::commit_helpers::CommittedPath],
     ) -> crate::error::Result<()> {
         let changed_starmap_ids: std::collections::HashSet<String> = committed_paths
             .iter()
-            .filter_map(|p| extract_starmap_id_from_committed_path(p))
+            .filter_map(|p| extract_starmap_id_from_committed_path(&p.path))
             .collect();
         for starmap_id in &changed_starmap_ids {
             // 问题1：不再 flush dirty（已在 commit 前 flush），只 evict Store。
@@ -2912,11 +2947,27 @@ fn chapter_path_parts(path: &std::path::Path) -> Option<(String, String, String)
     ))
 }
 
+/// 把 workspace-relative `projects/<pid>/...` 映射到独立注入的 projects_root。
+///
+/// 作品根与 app_data_root 可以分离，不能用 app_data_root.join(workspace_path)
+/// 猜正文位置。
+fn chapter_live_path(
+    core: &crate::facade::WriterCore,
+    workspace_path: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let mut components = workspace_path.components();
+    if components.next()?.as_os_str() != "projects" {
+        return None;
+    }
+    let project_id = components.next()?.as_os_str().to_str()?;
+    Some(core.projects_root().join(project_id).join(components.as_path()))
+}
 
-/// 从 staging manifest 收集 `chapter_id -> 远端设备`，供 SyncRemote 证明事件
-/// 记录真实来源。manifest 不存在或字段缺失时返回空映射，不阻塞同步。
+/// 从 staging manifest 收集 `project/volume/chapter -> 远端设备`，供 SyncRemote
+/// 证明事件记录真实来源。只按 chapter_id 会在不同作品同名章节时串来源。
 fn staging_manifest_device_ids(
     run: &crate::sync::staging::StagingRun,
+    default_project_id: Option<&str>,
 ) -> std::collections::HashMap<String, String> {
     let path = run
         .staging_root()
@@ -2932,21 +2983,29 @@ fn staging_manifest_device_ids(
         if record.device_id.is_empty() {
             continue;
         }
-        if let Some(chapter_id) = chapter_id_from_path_str(&record.path) {
-            out.insert(chapter_id, record.device_id);
+        if let Some(key) = chapter_key_from_path_str(&record.path, default_project_id) {
+            out.insert(key, record.device_id);
         }
     }
     out
 }
 
-fn chapter_id_from_path_str(path: &str) -> Option<String> {
+fn chapter_key_from_path_str(path: &str, default_project_id: Option<&str>) -> Option<String> {
     let parts: Vec<&str> = path.split('/').collect();
+    let volumes = parts.iter().position(|part| *part == "volumes")?;
     let chapters = parts.iter().position(|part| *part == "chapters")?;
-    let id = parts.get(chapters + 1)?;
-    let file = parts.get(chapters + 2)?;
-    if *file == "chapter.md" {
-        Some((*id).to_string())
-    } else {
-        None
+    if parts.get(chapters + 2) != Some(&"chapter.md") {
+        return None;
     }
+    let project_id = parts
+        .iter()
+        .position(|part| *part == "projects")
+        .and_then(|projects| parts.get(projects + 1).copied())
+        .or(default_project_id)?;
+    Some(format!(
+        "{}/{}/{}",
+        project_id,
+        parts.get(volumes + 1)?,
+        parts.get(chapters + 1)?
+    ))
 }

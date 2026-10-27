@@ -25,11 +25,12 @@
 //! - 旧版单分区事件库由 [`crate::writing_stats::migration`] 一次性迁入本结构。
 
 use crate::error::Result;
+use crate::editor::kernel::ContentDigest;
 use crate::editor::{EditorChange, EditorSelection, Utf8ByteOffset};
 use crate::writing_stats::checkpoint::{self, ProofCheckpoint};
 use crate::writing_stats::proof::{
     self, apply_changes, chain_content_hash, compute_event_hash, content_hash_of_text,
-    text_sha256,
+    text_digest_matches, text_sha256,
 };
 use crate::writing_stats::calendar;
 use crate::writing_stats::{WritingActivitySegment, WritingInputEvent};
@@ -95,8 +96,8 @@ struct ProofStoreState {
     initialized: bool,
     next_seq: u64,
     chains: HashMap<String, ProofChainHead>,
-    /// 每章节链当前正文（首次需要时从检查点/事件重建）。
-    texts: HashMap<String, String>,
+    /// 每章节链当前正文摘要（首次需要时从检查点/事件重建）。
+    digests: HashMap<String, ContentDigest>,
 }
 
 impl StatsStore {
@@ -366,92 +367,108 @@ impl StatsStore {
         let latest_checkpoint =
             checkpoint::load_last_checkpoint(&self.app_data_root, &origin, &event.chapter_id)?;
 
-        let (seq, before_text, starts_new_chain, baseline_checkpoint) = if let Some(head) = head.as_ref()
-        {
-            let seq = state.next_seq.max(head.seq.saturating_add(1));
-            let before_text = if let Some(text) = state.texts.get(&chain_key) {
-                text.clone()
-            } else {
-                // 缓存缺失时只从已验证检查点 + 后续事件重建一次。
-                let frame = crate::writing_stats::replay::replay_chapter(
-                    self,
-                    &crate::writing_stats::replay::ProofReplayRequest {
-                        chapter_id: event.chapter_id.clone(),
-                        device_id: origin.clone(),
-                        target_seq: Some(head.seq),
-                        target_time_ms: None,
-                        target_index: None,
-                        baseline_text: baseline_text.map(ToString::to_string),
-                    },
-                )?;
-                if !frame.valid {
-                    return Err(crate::Error::Other(format!(
-                        "无法重建章节 {} 的证明链正文: {}",
-                        event.chapter_id,
-                        frame.errors.join("; ")
-                    )));
-                }
-                if !head.text_sha256.is_empty()
-                    && head.text_sha256 != text_sha256(&frame.text)
-                {
-                    return Err(crate::Error::Other(format!(
-                        "章节 {} 的证明链正文摘要与链头不一致",
-                        event.chapter_id
-                    )));
-                }
-                state.texts.insert(chain_key.clone(), frame.text.clone());
-                frame.text
-            };
-            (seq, before_text, false, None)
-        } else {
-            match latest_checkpoint {
-                Some(checkpoint) => {
-                    if checkpoint.seq != 0 {
+        let (seq, before_digest, mut before_text, starts_new_chain, baseline_checkpoint) =
+            if let Some(head) = head.as_ref() {
+                let seq = state.next_seq.max(head.seq.saturating_add(1));
+                let legacy_head = !head.text_sha256.is_empty()
+                    && !head.text_sha256.starts_with(proof::CONTENT_DIGEST_VERSION);
+                let cached = if legacy_head {
+                    None
+                } else {
+                    state.digests.get(&chain_key).cloned()
+                };
+                let (before_digest, frame_text) = if let Some(digest) = cached {
+                    (digest, None)
+                } else {
+                    // 缓存缺失（或链头仍是旧完整 SHA）时，从已验证检查点 + 事件重建一次。
+                    let frame = crate::writing_stats::replay::replay_chapter(
+                        self,
+                        &crate::writing_stats::replay::ProofReplayRequest {
+                            chapter_id: event.chapter_id.clone(),
+                            device_id: origin.clone(),
+                            target_seq: Some(head.seq),
+                            target_time_ms: None,
+                            target_index: None,
+                            baseline_text: baseline_text.map(ToString::to_string),
+                        },
+                    )?;
+                    if !frame.valid {
                         return Err(crate::Error::Other(format!(
-                            "章节 {} 有检查点但没有事件链，拒绝从 seq {} 继续",
-                            event.chapter_id, checkpoint.seq
+                            "无法重建章节 {} 的证明链正文: {}",
+                            event.chapter_id,
+                            frame.errors.join("; ")
                         )));
                     }
-                    if checkpoint.text_sha256 != text_sha256(&checkpoint.text)
-                        || checkpoint.content_hash != content_hash_of_text(&checkpoint.text)
+                    let digest = ContentDigest::from_text(&frame.text);
+                    if !head.text_sha256.is_empty()
+                        && !text_digest_matches(&head.text_sha256, &frame.text, &digest)
                     {
                         return Err(crate::Error::Other(format!(
-                            "章节 {} 的基线检查点校验失败",
+                            "章节 {} 的证明链正文摘要与链头不一致",
                             event.chapter_id
                         )));
                     }
-                    if let Some(given) = baseline_text {
-                        if given != checkpoint.text {
+                    state.digests.insert(chain_key.clone(), digest.clone());
+                    (digest, Some(frame.text))
+                };
+                (seq, before_digest, frame_text, false, None)
+            } else {
+                match latest_checkpoint {
+                    Some(checkpoint) => {
+                        if checkpoint.seq != 0 {
                             return Err(crate::Error::Other(format!(
-                                "章节 {} 的正文基线已变化，不能沿用旧检查点；请记录外部变更事件",
+                                "章节 {} 有检查点但没有事件链，拒绝从 seq {} 继续",
+                                event.chapter_id, checkpoint.seq
+                            )));
+                        }
+                        if checkpoint.text_sha256 != text_sha256(&checkpoint.text)
+                            || checkpoint.content_hash != content_hash_of_text(&checkpoint.text)
+                        {
+                            return Err(crate::Error::Other(format!(
+                                "章节 {} 的基线检查点校验失败",
                                 event.chapter_id
                             )));
                         }
+                        if let Some(given) = baseline_text {
+                            if given != checkpoint.text {
+                                return Err(crate::Error::Other(format!(
+                                    "章节 {} 的正文基线已变化，不能沿用旧检查点；请记录外部变更事件",
+                                    event.chapter_id
+                                )));
+                            }
+                        }
+                        let digest = ContentDigest::from_text(&checkpoint.text);
+                        (
+                            state.next_seq.max(checkpoint.seq.saturating_add(1)),
+                            digest,
+                            Some(checkpoint.text),
+                            true,
+                            None,
+                        )
                     }
-                    (
-                        state.next_seq.max(checkpoint.seq.saturating_add(1)),
-                        checkpoint.text,
-                        true,
-                        None,
-                    )
+                    None => {
+                        let text = baseline_text.unwrap_or_default().to_string();
+                        let checkpoint = ProofCheckpoint::new(
+                            &event.chapter_id,
+                            &origin,
+                            0,
+                            "",
+                            event.timestamp_ms,
+                            &text,
+                            &content_hash_of_text(&text),
+                            "",
+                            "baseline",
+                        );
+                        (
+                            state.next_seq.max(1),
+                            ContentDigest::from_text(&text),
+                            Some(text),
+                            true,
+                            Some(checkpoint),
+                        )
+                    }
                 }
-                None => {
-                    let text = baseline_text.unwrap_or_default().to_string();
-                    let checkpoint = ProofCheckpoint::new(
-                        &event.chapter_id,
-                        &origin,
-                        0,
-                        "",
-                        event.timestamp_ms,
-                        &text,
-                        &content_hash_of_text(&text),
-                        "",
-                        "baseline",
-                    );
-                    (state.next_seq.max(1), text, true, Some(checkpoint))
-                }
-            }
-        };
+            };
 
         if let Some(checkpoint) = baseline_checkpoint.as_ref() {
             // 先落基线再写事件：事件写失败时基线仍可复用，不会被伪造。
@@ -466,12 +483,13 @@ impl StatsStore {
         } else {
             String::new()
         };
-        let expected_before_content_hash = head
-            .as_ref()
-            .map_or_else(|| content_hash_of_text(&before_text), |head| head.content_hash.clone());
-        let before_text_sha256 = text_sha256(&before_text);
+        let expected_before_content_hash = head.as_ref().map_or_else(
+            || content_hash_of_text(before_text.as_deref().unwrap_or_default()),
+            |head| head.content_hash.clone(),
+        );
+        let before_digest_value = before_digest.digest();
 
-        let (changes_for_chain, after_text) = {
+        let (changes_for_chain, after_digest) = {
             let draft = event
                 .proof
                 .as_mut()
@@ -490,23 +508,61 @@ impl StatsStore {
                     event.chapter_id
                 )));
             }
+
+            let legacy_before = !draft.before_text_sha256.is_empty()
+                && !draft.before_text_sha256.starts_with(proof::CONTENT_DIGEST_VERSION);
+            let legacy_after = !draft.after_text_sha256.is_empty()
+                && !draft.after_text_sha256.starts_with(proof::CONTENT_DIGEST_VERSION);
+            if (legacy_before || legacy_after) && before_text.is_none() {
+                let frame = crate::writing_stats::replay::replay_chapter(
+                    self,
+                    &crate::writing_stats::replay::ProofReplayRequest {
+                        chapter_id: event.chapter_id.clone(),
+                        device_id: origin.clone(),
+                        target_seq: Some(seq.saturating_sub(1)),
+                        target_time_ms: None,
+                        target_index: None,
+                        baseline_text: baseline_text.map(ToString::to_string),
+                    },
+                )?;
+                if !frame.valid {
+                    return Err(crate::Error::Other(format!(
+                        "无法校验章节 {} 的旧正文摘要: {}",
+                        event.chapter_id,
+                        frame.errors.join("; ")
+                    )));
+                }
+                before_text = Some(frame.text);
+            }
+
             if !draft.before_text_sha256.is_empty()
-                && draft.before_text_sha256 != before_text_sha256
+                && !text_digest_matches(
+                    &draft.before_text_sha256,
+                    before_text.as_deref().unwrap_or_default(),
+                    &before_digest,
+                )
             {
                 return Err(crate::Error::Other(format!(
                     "章节 {} 的内核 before_text_sha256 与证明链当前正文不一致（可能有漏记事件）",
                     event.chapter_id
                 )));
             }
-            let mut after_text = before_text.clone();
-            apply_changes(&mut after_text, &draft.changes)?;
-            if !draft.after_text_sha256.is_empty()
-                && draft.after_text_sha256 != text_sha256(&after_text)
-            {
-                return Err(crate::Error::Other(format!(
-                    "章节 {} 的内核 after_text_sha256 与变更应用结果不一致",
-                    event.chapter_id
-                )));
+            let mut after_digest = before_digest.clone();
+            after_digest.apply_changes(&draft.changes)?;
+            if !draft.after_text_sha256.is_empty() {
+                let matches = if draft.after_text_sha256.starts_with(proof::CONTENT_DIGEST_VERSION) {
+                    draft.after_text_sha256 == after_digest.digest()
+                } else {
+                    let mut legacy_after_text = before_text.clone().unwrap_or_default();
+                    apply_changes(&mut legacy_after_text, &draft.changes)?;
+                    draft.after_text_sha256 == text_sha256(&legacy_after_text)
+                };
+                if !matches {
+                    return Err(crate::Error::Other(format!(
+                        "章节 {} 的内核 after_text_sha256 与变更应用结果不一致",
+                        event.chapter_id
+                    )));
+                }
             }
 
             draft.format_version = proof::PROOF_FORMAT_VERSION;
@@ -517,13 +573,14 @@ impl StatsStore {
             }
             draft.before_content_hash = expected_before_content_hash.clone();
             draft.prev_event_hash = previous_event_hash;
-            draft.before_text_sha256 = before_text_sha256;
-            draft.after_text_sha256 = text_sha256(&after_text);
-            draft.after_content_hash = chain_content_hash(&draft.before_content_hash, &draft.changes);
-            (draft.changes.clone(), after_text)
+            draft.before_text_sha256 = before_digest_value;
+            draft.after_text_sha256 = after_digest.digest();
+            draft.after_content_hash =
+                chain_content_hash(&draft.before_content_hash, &draft.changes);
+            (draft.changes.clone(), after_digest)
         };
         let after_content_hash = chain_content_hash(&expected_before_content_hash, &changes_for_chain);
-        let after_text_sha256 = text_sha256(&after_text);
+        let after_text_sha256 = after_digest.digest();
         let event_hash = compute_event_hash(&event);
         if let Some(draft) = event.proof.as_mut() {
             draft.event_hash = event_hash.clone();
@@ -545,7 +602,7 @@ impl StatsStore {
                 text_sha256: after_text_sha256,
             },
         );
-        state.texts.insert(chain_key, after_text);
+        state.digests.insert(chain_key, after_digest);
         drop(state);
         self.proof_generation.fetch_add(1, Ordering::SeqCst);
 
@@ -865,8 +922,8 @@ impl StatsStore {
             new_selection: EditorSelection::collapsed(new_text, new_text.len()),
             before_content_hash: String::new(),
             after_content_hash: String::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+            before_text_sha256: proof::content_digest_of_text(old_text),
+            after_text_sha256: proof::content_digest_of_text(new_text),
             prev_event_hash: String::new(),
             event_hash: String::new(),
             sync_source_device_id: String::new(),

@@ -2,6 +2,7 @@
 
 mod apply;
 mod composition;
+mod content_digest;
 mod history;
 mod replace;
 pub mod result;
@@ -18,6 +19,8 @@ use crate::editor::strong_types::{
 };
 use crate::editor::transaction::{EditorChange, EditorSelection};
 use crop::Rope;
+
+pub(crate) use content_digest::{ContentDigest, CONTENT_DIGEST_VERSION};
 
 /// 编辑 delta：只保存实际删除/插入的局部文本及 old/new ranges。
 ///
@@ -66,6 +69,8 @@ pub struct EditorKernel {
     /// [`self::result::EditorEditResult::changes`]，供写作统计/手写证明使用，
     /// 平台端不再按最终字符串猜 diff。
     pending_changes: Vec<EditorChange>,
+    /// 与正文同步维护的增量内容摘要；事务前后根值 O(1) 读取。
+    content_digest: ContentDigest,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +103,7 @@ impl EditorKernel {
             composition_session: None,
             next_composition_session_id: EditorSessionId::new(1),
             pending_changes: Vec::new(),
+            content_digest: ContentDigest::new(),
         }
     }
 
@@ -108,6 +114,7 @@ impl EditorKernel {
                 text_len: text.len(),
             });
         }
+        let content_digest = ContentDigest::from_text(&text);
         Ok(Self {
             text: Rope::from(text),
             revision: EditorRevision::initial(),
@@ -119,6 +126,7 @@ impl EditorKernel {
             composition_session: None,
             next_composition_session_id: EditorSessionId::new(1),
             pending_changes: Vec::new(),
+            content_digest,
         })
     }
 

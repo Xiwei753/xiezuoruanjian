@@ -115,10 +115,10 @@ pub struct EditorChangeStatsInputDto {
     /// 同步/外部变更依赖的父事件。
     #[serde(default)]
     pub parent_event_id: String,
-    /// 内核提交前真实正文 SHA-256；老客户端为空。
+    /// 内核提交前真实正文内容摘要（`content-v1:` 增量根）；老客户端为空。
     #[serde(default)]
     pub before_text_sha256: String,
-    /// 内核提交后真实正文 SHA-256；老客户端为空。
+    /// 内核提交后真实正文内容摘要（`content-v1:`）；老客户端为空。
     #[serde(default)]
     pub after_text_sha256: String,
 }
@@ -512,10 +512,10 @@ pub struct EditorEditResultDto {
     /// 平台原样转交统计/证明入口，不按最终字符串猜 diff。
     #[serde(default)]
     pub changes: Vec<EditorChangeDto>,
-    /// 内核提交前真实正文 SHA-256（`sha256:v1:` 格式）。
+    /// 内核提交前真实正文内容摘要（新事件 `content-v1:`，旧事件 `sha256:v1:`）。
     #[serde(default)]
     pub before_text_sha256: String,
-    /// 内核提交后真实正文 SHA-256。
+    /// 内核提交后真实正文内容摘要。
     #[serde(default)]
     pub after_text_sha256: String,
     /// 当前 composition 完整状态（preedit 文本 replace range cursor）。

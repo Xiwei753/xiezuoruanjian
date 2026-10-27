@@ -81,7 +81,7 @@ impl EditorKernel {
         let old_cursor = self.cursor;
         let old_selection_anchor = self.selection_anchor.value();
         let old_selection_head = self.cursor.value();
-        let before_text = self.text.to_string();
+        let before_text_digest = self.content_digest.digest();
 
         let mut outcome = match command {
             EditorCommand::Insert {
@@ -333,15 +333,19 @@ impl EditorKernel {
         };
 
         let changes = self.take_pending_changes();
-        let after_text = self.text.to_string();
+        if let Err(error) = self.content_digest.apply_changes(&changes) {
+            // changes 由内核自己产生，正常不会失败；若出现不一致，重新用正文
+            // 构建摘要以保证后续事务仍锚定真实文本，并保留错误日志。
+            log::error!("编辑器内容摘要更新失败，按正文重建: {error}");
+            self.content_digest = super::ContentDigest::from_text(&self.text.to_string());
+        }
+        let after_text_digest = self.content_digest.digest();
         let applied = !outcome.is_stale() && !outcome.is_invalid();
         let result = outcome.result_mut();
         result.changes = changes;
         if applied {
-            result.before_text_sha256 =
-                crate::writing_stats::proof::text_sha256(&before_text);
-            result.after_text_sha256 =
-                crate::writing_stats::proof::text_sha256(&after_text);
+            result.before_text_sha256 = before_text_digest;
+            result.after_text_sha256 = after_text_digest;
         }
         outcome
     }

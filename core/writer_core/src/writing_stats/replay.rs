@@ -13,9 +13,11 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use crate::editor::kernel::ContentDigest;
 use crate::writing_stats::checkpoint::{self, ProofCheckpoint};
 use crate::writing_stats::proof::{
-    apply_changes, chain_content_hash, compute_event_hash, content_hash_of_text, text_sha256,
+    apply_changes, chain_content_hash, compute_event_hash, content_hash_of_text,
+    text_digest_matches, text_sha256,
 };
 use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::{
@@ -112,6 +114,7 @@ struct ReplayState {
     event_id: String,
     timestamp_ms: i64,
     text: String,
+    digest: ContentDigest,
     expected_content_hash: String,
     previous_event_hash: String,
     selection_anchor: u32,
@@ -283,6 +286,7 @@ fn validate_full_chain(
         event_id: String::new(),
         timestamp_ms: 0,
         text: baseline_text.to_string(),
+        digest: ContentDigest::from_text(baseline_text),
         expected_content_hash: content_hash_of_text(baseline_text),
         previous_event_hash: String::new(),
         selection_anchor: 0,
@@ -296,6 +300,7 @@ fn validate_full_chain(
         .find(|checkpoint| checkpoint.seq == 0 && checkpoint_is_valid(checkpoint, events))
     {
         state.text = baseline.text.clone();
+        state.digest = ContentDigest::from_text(&baseline.text);
         state.expected_content_hash = baseline.content_hash.clone();
     }
 
@@ -412,6 +417,7 @@ fn initial_state(
                 event_id: String::new(),
                 timestamp_ms: checkpoint.timestamp_ms,
                 text: checkpoint.text.clone(),
+                digest: ContentDigest::from_text(&checkpoint.text),
                 expected_content_hash: checkpoint.content_hash.clone(),
                 previous_event_hash: checkpoint.event_hash.clone(),
                 selection_anchor: 0,
@@ -427,6 +433,7 @@ fn initial_state(
             event_id: String::new(),
             timestamp_ms: 0,
             text: baseline_text.to_string(),
+            digest: ContentDigest::from_text(baseline_text),
             expected_content_hash: content_hash_of_text(baseline_text),
             previous_event_hash: String::new(),
             selection_anchor: 0,
@@ -460,10 +467,15 @@ fn checkpoint_is_valid(checkpoint: &ProofCheckpoint, events: &[WritingInputEvent
     let Some(proof) = event.proof.as_ref() else {
         return false;
     };
+    let checkpoint_digest = ContentDigest::from_text(&checkpoint.text);
     proof.event_hash == checkpoint.event_hash
         && proof.after_content_hash == checkpoint.content_hash
         && (proof.after_text_sha256.is_empty()
-            || proof.after_text_sha256 == checkpoint.text_sha256)
+            || text_digest_matches(
+                &proof.after_text_sha256,
+                &checkpoint.text,
+                &checkpoint_digest,
+            ))
 }
 
 fn apply_event(state: &mut ReplayState, event: &WritingInputEvent) {
@@ -471,13 +483,15 @@ fn apply_event(state: &mut ReplayState, event: &WritingInputEvent) {
         return;
     };
     if proof.starts_new_chain && state.position > 0 {
-        let before_hash = text_sha256(&state.text);
-        if !proof.before_text_sha256.is_empty() && proof.before_text_sha256 != before_hash {
+        if !proof.before_text_sha256.is_empty()
+            && !text_digest_matches(&proof.before_text_sha256, &state.text, &state.digest)
+        {
             state.errors.push(format!(
                 "事件 {} 新链基线正文摘要不一致",
                 event.event_id
             ));
         }
+        state.digest = ContentDigest::from_text(&state.text);
         state.expected_content_hash = content_hash_of_text(&state.text);
         state.previous_event_hash.clear();
     }
@@ -494,7 +508,7 @@ fn apply_event(state: &mut ReplayState, event: &WritingInputEvent) {
         ));
     }
     if !proof.before_text_sha256.is_empty()
-        && proof.before_text_sha256 != text_sha256(&state.text)
+        && !text_digest_matches(&proof.before_text_sha256, &state.text, &state.digest)
     {
         state.errors.push(format!(
             "事件 {} 的 before_text_sha256 与回放正文不一致",
@@ -511,6 +525,10 @@ fn apply_event(state: &mut ReplayState, event: &WritingInputEvent) {
         state.errors.push(format!("事件 {} 应用失败: {error}", event.event_id));
         return;
     }
+    if let Err(error) = state.digest.apply_changes(&proof.changes) {
+        state.errors.push(format!("事件 {} 摘要更新失败: {error}", event.event_id));
+        return;
+    }
     let after = chain_content_hash(&proof.before_content_hash, &proof.changes);
     if after != proof.after_content_hash {
         state.errors.push(format!(
@@ -519,7 +537,7 @@ fn apply_event(state: &mut ReplayState, event: &WritingInputEvent) {
         ));
     }
     if !proof.after_text_sha256.is_empty()
-        && proof.after_text_sha256 != text_sha256(&state.text)
+        && !text_digest_matches(&proof.after_text_sha256, &state.text, &state.digest)
     {
         state.errors.push(format!(
             "事件 {} 的 after_text_sha256 与回放正文不一致",

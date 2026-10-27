@@ -1,5 +1,16 @@
 use std::path::{Path, PathBuf};
 
+/// 本次 commit 真正落盘的一个 workspace-relative 路径，以及它是写入还是删除。
+///
+/// 证明事件不能只看路径是否存在来判断 Apply/Delete：删除要记录真实同步删除
+/// 事实，写入则要读取落盘后的正文。动作类型由 commit plan 的 `CommitAction`
+/// 原样带出。
+#[derive(Debug, Clone)]
+pub(crate) struct CommittedPath {
+    pub path: PathBuf,
+    pub deleted: bool,
+}
+
 ///    把 target-relative `rel_path` 转成
 /// workspace-relative path，供 `record_workspace_history` 精确 stage。
 ///
@@ -28,14 +39,17 @@ fn collect_action_paths(
     target_kind: &str,
     project_id: Option<&str>,
     actions: &[crate::sync::staging::CommitAction],
-    out: &mut Vec<PathBuf>,
+    out: &mut Vec<CommittedPath>,
 ) {
     for action in actions {
         let rel = match action {
             crate::sync::staging::CommitAction::Apply { rel_path, .. } => rel_path,
             crate::sync::staging::CommitAction::Delete { rel_path } => rel_path,
         };
-        out.push(to_workspace_rel_path(target_kind, project_id, rel));
+        out.push(CommittedPath {
+            path: to_workspace_rel_path(target_kind, project_id, rel),
+            deleted: matches!(action, crate::sync::staging::CommitAction::Delete { .. }),
+        });
     }
 }
 
@@ -187,7 +201,7 @@ fn collect_rebased_anchor_paths(
     target_kind: &str,
     project_id: Option<&str>,
     content_actions: &[crate::sync::staging::CommitAction],
-    out: &mut Vec<PathBuf>,
+    out: &mut Vec<CommittedPath>,
 ) {
     let action_paths = content_actions
         .iter()
@@ -210,7 +224,10 @@ fn collect_rebased_anchor_paths(
         if entry.is_delete || !is_anchor_json || action_paths.contains(&entry.target_relative) {
             continue;
         }
-        out.push(to_workspace_rel_path(target_kind, project_id, path));
+        out.push(CommittedPath {
+            path: to_workspace_rel_path(target_kind, project_id, path),
+            deleted: false,
+        });
     }
 }
 
@@ -767,7 +784,7 @@ pub(crate) struct StagingCommitOutcome {
     /// 本次 commit 真正落盘（Apply/Delete）的
     /// workspace-relative paths。供 `record_workspace_history` 精确 stage，
     /// 替代全量 `&[]` 扫描。
-    pub(crate) committed_paths: Vec<PathBuf>,
+    pub(crate) committed_paths: Vec<CommittedPath>,
 }
 
 pub(crate) enum TargetCommitMode {
@@ -809,7 +826,7 @@ pub(crate) fn apply_staging_commits_for_targets(
 ) -> StagingCommitOutcome {
     let mut target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>> = Vec::new();
     let mut target_results: Vec<TargetCommitResult> = Vec::new();
-    let mut committed_paths: Vec<PathBuf> = Vec::new();
+    let mut committed_paths: Vec<CommittedPath> = Vec::new();
 
     for (idx, run) in staging_runs.iter().enumerate() {
         //   有 DeleteProject lifecycle action 的 target
@@ -1194,7 +1211,7 @@ pub(crate) fn apply_staging_commits_for_targets(
 /// - **不调用 `run.cleanup()`**：由调用方负责 cleanup，便于在 commit 后、cleanup 前
 ///   插入 `record_staging_conflicts` 等操作。
 /// - **输入是单个 `&StagingRun` 和 `&TargetSyncResult`**，不是批量切片。
-/// - **输出是 `(TargetCommitResult, Vec<StagingConflict>, Vec<PathBuf>)`**：
+/// - **输出是 `(TargetCommitResult, Vec<StagingConflict>, Vec<CommittedPath>)`**：
 ///   commit result, conflicts, committed_paths。
 ///
 /// 复用现有 Full / ConflictMetadataOnly / ReplaceProject / Skip 规则。
@@ -1209,7 +1226,7 @@ pub(crate) fn commit_single_target_staging(
 ) -> (
     TargetCommitResult,
     Vec<crate::sync::staging::StagingConflict>,
-    Vec<PathBuf>,
+    Vec<CommittedPath>,
 ) {
     let has_delete_action = matches!(
         target.local_lifecycle_action,
