@@ -323,7 +323,6 @@ Rectangle {
             id: tagSearch
             Layout.fillWidth: true
             placeholderText: qsTr("搜索标签")
-            clearButtonEnabled: true
         }
 
         ScrollView {
