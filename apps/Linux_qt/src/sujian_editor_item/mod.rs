@@ -729,6 +729,7 @@ impl Default for SujianEditorItem {
             pointer_cancel: Default::default(),
             record_pointer_activity: Default::default(),
             click_at: Default::default(),
+            prepare_context_menu_at: Default::default(),
             drag_select_at: Default::default(),
             clipboard_copy: Default::default(),
             clipboard_paste: Default::default(),
