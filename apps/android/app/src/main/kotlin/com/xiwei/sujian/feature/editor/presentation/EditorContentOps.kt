@@ -93,6 +93,8 @@ fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
         oldSelectionHead = event.oldSelectionHeadUtf8,
         newSelectionAnchor = event.selectionAnchorUtf8,
         newSelectionHead = event.selectionHeadUtf8,
+        beforeTextSha256 = event.beforeTextSha256,
+        afterTextSha256 = event.afterTextSha256,
     )
     if (event.contentDelta.insertedChars > 0 || event.contentDelta.deletedChars > 0) {
         proofBaselineSent = true

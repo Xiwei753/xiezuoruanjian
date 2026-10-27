@@ -484,16 +484,30 @@ impl StatsStore {
                     event.chapter_id
                 )));
             }
+            if draft.before_text_sha256.is_empty() != draft.after_text_sha256.is_empty() {
+                return Err(crate::Error::Other(format!(
+                    "章节 {} 的编辑前后正文摘要必须同时提供或同时省略",
+                    event.chapter_id
+                )));
+            }
             if !draft.before_text_sha256.is_empty()
                 && draft.before_text_sha256 != before_text_sha256
             {
                 return Err(crate::Error::Other(format!(
-                    "章节 {} 的 before_text_sha256 与真实正文不一致",
+                    "章节 {} 的内核 before_text_sha256 与证明链当前正文不一致（可能有漏记事件）",
                     event.chapter_id
                 )));
             }
             let mut after_text = before_text.clone();
             apply_changes(&mut after_text, &draft.changes)?;
+            if !draft.after_text_sha256.is_empty()
+                && draft.after_text_sha256 != text_sha256(&after_text)
+            {
+                return Err(crate::Error::Other(format!(
+                    "章节 {} 的内核 after_text_sha256 与变更应用结果不一致",
+                    event.chapter_id
+                )));
+            }
 
             draft.format_version = proof::PROOF_FORMAT_VERSION;
             draft.seq = seq;

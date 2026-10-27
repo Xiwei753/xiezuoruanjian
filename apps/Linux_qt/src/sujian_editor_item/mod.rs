@@ -405,7 +405,9 @@ pub struct SujianEditorItem {
         old_selection_anchor: u64,
         old_selection_head: u64,
         new_selection_anchor: u64,
-        new_selection_head: u64
+        new_selection_head: u64,
+        before_text_sha256: QString,
+        after_text_sha256: QString
     ),
 
     #[allow(dead_code)]

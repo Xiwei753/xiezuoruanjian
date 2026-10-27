@@ -81,6 +81,7 @@ impl EditorKernel {
         let old_cursor = self.cursor;
         let old_selection_anchor = self.selection_anchor.value();
         let old_selection_head = self.cursor.value();
+        let before_text = self.text.to_string();
 
         let mut outcome = match command {
             EditorCommand::Insert {
@@ -331,7 +332,17 @@ impl EditorKernel {
             ),
         };
 
-        outcome.result_mut().changes = self.take_pending_changes();
+        let changes = self.take_pending_changes();
+        let after_text = self.text.to_string();
+        let applied = !outcome.is_stale() && !outcome.is_invalid();
+        let result = outcome.result_mut();
+        result.changes = changes;
+        if applied {
+            result.before_text_sha256 =
+                crate::writing_stats::proof::text_sha256(&before_text);
+            result.after_text_sha256 =
+                crate::writing_stats::proof::text_sha256(&after_text);
+        }
         outcome
     }
 
@@ -410,6 +421,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Insert,
             // 单次编辑从 delta 直接构造 offset map，不再扫全文。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -514,6 +527,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Delete,
             // 单次删除从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -637,6 +652,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind,
             // 单次替换从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -734,6 +751,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Insert,
             // 单次换行插入从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -940,6 +959,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind,
             // 单次 commit 从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
@@ -1172,6 +1193,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Delete,
             offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
             content_delta,
@@ -1539,6 +1562,8 @@ impl EditorKernel {
             new_selection,
             cause,
             changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CompositionCommit,
             // 原子 IME commit 从 delta 构造 offset map。
             offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),

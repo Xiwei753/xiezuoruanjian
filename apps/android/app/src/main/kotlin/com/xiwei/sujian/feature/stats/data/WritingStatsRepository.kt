@@ -81,6 +81,8 @@ class WritingStatsRepository(
         val oldSelectionHead: Int = 0,
         val newSelectionAnchor: Int = 0,
         val newSelectionHead: Int = 0,
+        val beforeTextSha256: String = "",
+        val afterTextSha256: String = "",
     )
 
     private val _revision = MutableStateFlow(0L)
@@ -130,6 +132,8 @@ class WritingStatsRepository(
                                 cmd.event.oldSelectionHead,
                                 cmd.event.newSelectionAnchor,
                                 cmd.event.newSelectionHead,
+                                cmd.event.beforeTextSha256,
+                                cmd.event.afterTextSha256,
                             )
                         if (result is BridgeResult.Success) {
                             markChanged()
@@ -213,6 +217,8 @@ class WritingStatsRepository(
         oldSelectionHead: Int = 0,
         newSelectionAnchor: Int = 0,
         newSelectionHead: Int = 0,
+        beforeTextSha256: String = "",
+        afterTextSha256: String = "",
     ) {
         synchronized(enqueueLock) {
             val seq = ++seqCounter
@@ -237,6 +243,8 @@ class WritingStatsRepository(
                         oldSelectionHead = oldSelectionHead,
                         newSelectionAnchor = newSelectionAnchor,
                         newSelectionHead = newSelectionHead,
+                        beforeTextSha256 = beforeTextSha256,
+                        afterTextSha256 = afterTextSha256,
                     ),
                 ),
             )

@@ -254,7 +254,9 @@ export class WritingWorkflowCoordinator implements ActiveWritingSession {
         update.editResult.oldSelectionHead,
         update.editResult.newSelectionAnchor,
         update.editResult.newSelectionHead,
-        proofBaseline
+        proofBaseline,
+        update.editResult.beforeTextSha256 ?? '',
+        update.editResult.afterTextSha256 ?? ''
       )
       if (delta.insertedChars > 0 || delta.deletedChars > 0) {
         this.proofBaselineSent = true

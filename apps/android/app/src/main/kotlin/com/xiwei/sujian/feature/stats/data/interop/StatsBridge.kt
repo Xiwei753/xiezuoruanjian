@@ -84,6 +84,8 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
         oldSelectionHead: Int = 0,
         newSelectionAnchor: Int = 0,
         newSelectionHead: Int = 0,
+        beforeTextSha256: String = "",
+        afterTextSha256: String = "",
     ): BridgeResult<Unit> =
         holder.wrapResult {
             holder.service.recordEditorChangeStats(
@@ -108,6 +110,8 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
                     newSelectionHead = newSelectionHead.toUInt(),
                     syncSourceDeviceId = "",
                     parentEventId = "",
+                    beforeTextSha256 = beforeTextSha256,
+                    afterTextSha256 = afterTextSha256,
                 ),
             )
         }

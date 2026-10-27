@@ -800,6 +800,8 @@ class EditorViewModel(
                             oldSelectionAnchorUtf8 = edit.oldSelectionAnchor,
                             oldSelectionHeadUtf8 = edit.oldSelectionHead,
                             changes = edit.changes,
+                            beforeTextSha256 = edit.beforeTextSha256,
+                            afterTextSha256 = edit.afterTextSha256,
                         ),
                     )
                     _editFactEvents.send(
@@ -922,6 +924,8 @@ class EditorViewModel(
                     oldSelectionAnchorUtf8 = result.oldSelectionAnchor.toInt(),
                     oldSelectionHeadUtf8 = result.oldSelectionHead.toInt(),
                     changes = editResult.changes,
+                    beforeTextSha256 = editResult.beforeTextSha256,
+                    afterTextSha256 = editResult.afterTextSha256,
                 ),
             )
             // 完整提交后的正文；校对增量请求必须带事务时捕获的文本，避免排队期间

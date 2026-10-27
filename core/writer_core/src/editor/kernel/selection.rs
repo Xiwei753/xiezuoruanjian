@@ -54,6 +54,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::Programmatic,
             changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::CursorOnly,
             // 选区操作不变更正文，无 offset_map
             offset_map: None,

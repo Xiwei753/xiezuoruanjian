@@ -109,6 +109,9 @@ data class EditResult(
     val contentDelta: EditorContentDeltaDto = EditorContentDeltaDto(0u, 0u, 0u, 0u),
     /** 本次事务实际执行的插入/删除，按执行顺序；证明链的事实来源。 */
     val changes: List<EditorChangeDto> = emptyList(),
+    /** 内核事务提交前/后真实正文 SHA-256。 */
+    val beforeTextSha256: String = "",
+    val afterTextSha256: String = "",
 ) {
     companion object {
         fun fromDto(dto: EditorEditResultDto): EditResult =
@@ -127,6 +130,8 @@ data class EditResult(
                 offsetMap = dto.offsetMap?.let { OffsetMap.fromDto(it) },
                 contentDelta = dto.contentDelta,
                 changes = dto.changes,
+                beforeTextSha256 = dto.beforeTextSha256,
+                afterTextSha256 = dto.afterTextSha256,
             )
     }
 

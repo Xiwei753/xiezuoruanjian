@@ -54,6 +54,8 @@ interface QueuedStatsWrite {
   oldSelectionHead: number
   newSelectionAnchor: number
   newSelectionHead: number
+  beforeTextSha256: string
+  afterTextSha256: string
   segment: WritingActivitySegmentInput | null
 }
 
@@ -96,7 +98,9 @@ export class EditorStatsQueue {
           oldSelectionAnchor: item.oldSelectionAnchor,
           oldSelectionHead: item.oldSelectionHead,
           newSelectionAnchor: item.newSelectionAnchor,
-          newSelectionHead: item.newSelectionHead
+          newSelectionHead: item.newSelectionHead,
+          beforeTextSha256: item.beforeTextSha256,
+          afterTextSha256: item.afterTextSha256
         }
         // 这里 await 的 Promise 背后是 Node-API async work：Rust 调用跑在线程池，
         // 磁盘 I/O 不在 ArkUI 主线程上。串行保证同时只有一条在飞。
@@ -117,7 +121,7 @@ export class EditorStatsQueue {
     baseRevision: number = 0, newRevision: number = 0,
     oldSelectionAnchor: number = 0, oldSelectionHead: number = 0,
     newSelectionAnchor: number = 0, newSelectionHead: number = 0,
-    baselineText: string = ''): void {
+    baselineText: string = '', beforeTextSha256: string = '', afterTextSha256: string = ''): void {
     // 纯光标移动 / 选区变化：Core 那侧也不落盘，这里直接不进队列。
     if (insertedChars <= 0 && deletedChars <= 0) {
       return
@@ -147,6 +151,8 @@ export class EditorStatsQueue {
       oldSelectionHead: oldSelectionHead,
       newSelectionAnchor: newSelectionAnchor,
       newSelectionHead: newSelectionHead,
+      beforeTextSha256: beforeTextSha256,
+      afterTextSha256: afterTextSha256,
       segment: null
     })
   }

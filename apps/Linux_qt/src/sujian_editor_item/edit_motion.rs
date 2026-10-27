@@ -129,5 +129,7 @@ pub(crate) fn synthetic_edit_result(
         offset_map,
         content_delta: writer_core::editor::EditorContentDelta::default(),
         changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
     }
 }

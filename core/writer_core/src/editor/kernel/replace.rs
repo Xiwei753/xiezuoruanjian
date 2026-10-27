@@ -150,6 +150,8 @@ impl EditorKernel {
             new_selection,
             cause: EditorTransactionCause::Format,
             changes: Vec::new(),
+        before_text_sha256: String::new(),
+        after_text_sha256: String::new(),
             operation_kind: EditorOperationKind::Format,
             // 从 delta 直接构造 offset map，不再全文 diff。
             offset_map: Some(OffsetMap::from_edits(old_text.len(), &offset_pairs)),

@@ -161,6 +161,8 @@ impl SujianEditorItem {
                 result.old_selection.head.index.value() as u64,
                 result.new_selection.anchor.index.value() as u64,
                 result.new_selection.head.index.value() as u64,
+                QString::from(result.before_text_sha256.clone()),
+                QString::from(result.after_text_sha256.clone()),
             );
         }
     }

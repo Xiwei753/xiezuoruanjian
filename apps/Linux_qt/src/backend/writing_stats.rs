@@ -262,6 +262,8 @@ impl AppBackend {
         new_selection_anchor: u64,
         new_selection_head: u64,
         baseline_text: QString,
+        before_text_sha256: QString,
+        after_text_sha256: QString,
     ) {
         if let Some(ref writer) = self.stats_writer {
             // Issue #935 复核：编辑事实首次入队就固定稳定身份与发生时间，
@@ -287,6 +289,8 @@ impl AppBackend {
                 new_selection_anchor,
                 new_selection_head,
                 baseline_text: if baseline_text.is_empty() { None } else { Some(baseline_text.to_string()) },
+                before_text_sha256: before_text_sha256.to_string(),
+                after_text_sha256: after_text_sha256.to_string(),
                 event_id,
                 occurred_at_ms,
             }) {

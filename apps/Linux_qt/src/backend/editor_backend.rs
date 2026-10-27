@@ -136,6 +136,8 @@ pub struct EditorBackend {
             new_selection_anchor: u64,
             new_selection_head: u64,
             baseline_text: QString,
+            before_text_sha256: QString,
+            after_text_sha256: QString,
         )
     ),
     #[allow(dead_code)]
@@ -508,6 +510,8 @@ impl EditorBackend {
         new_selection_anchor: u64,
         new_selection_head: u64,
         baseline_text: QString,
+        before_text_sha256: QString,
+        after_text_sha256: QString,
     ) {
         let parsed_cause = match cause.to_string().as_str() {
             "Typing" => writer_core::editor::EditorTransactionCause::Typing,
@@ -569,6 +573,8 @@ impl EditorBackend {
                     new_selection_anchor,
                     new_selection_head,
                     baseline_text,
+                    before_text_sha256,
+                    after_text_sha256,
                 )
             })
             .is_err()

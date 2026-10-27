@@ -57,6 +57,9 @@ pub(crate) enum StatsWriteCommand {
         new_selection_head: u64,
         /// 首次证明事件的正文基线；之后为 None。
         baseline_text: Option<String>,
+        /// 内核事务提交前/后真实正文 SHA-256。
+        before_text_sha256: String,
+        after_text_sha256: String,
         /// Issue #935 复核：编辑事实首次入队就固定稳定身份与发生时间，
         /// 写盘失败重发时原样带回，避免每次重发都被 Core 当成新事件。
         event_id: String,
@@ -136,6 +139,8 @@ fn try_record_stats(
             new_selection_anchor,
             new_selection_head,
             baseline_text,
+            before_text_sha256,
+            after_text_sha256,
             event_id,
             occurred_at_ms,
         } => crate::writing_bridge::record_editor_change_stats(
@@ -155,6 +160,8 @@ fn try_record_stats(
             *new_selection_anchor,
             *new_selection_head,
             baseline_text.as_deref(),
+            before_text_sha256,
+            after_text_sha256,
             event_id,
             *occurred_at_ms,
         )

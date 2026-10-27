@@ -115,7 +115,8 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 
 - 事件目录：`stats/events/<device_id>/YYYY-MM-DD.events.jsonl`，文件按 UTC 日命名，事件内 `local_date` 仍是事件发生地的业务日，两个日期概念不混用。
 - 编辑证明：同一事件行可选携带 `proof`（`formatVersion`、设备内持久递增 `seq`、`sessionId`、`baselineId`、`cause`、实际 `changes`、前后选区、before/after 全文 SHA-256、命令链摘要、prev/event hash）。旧 JSONL 没有 `proof` 仍按旧字段读取，只可统计、不能逐字回放；不得为旧历史伪造变更列表。一次成功编辑事务只写一条事件，事务内的插入/删除顺序保留；失败、过期 revision、未提交 composition 不产生事件。
-- 检查点：`stats/events/<device_id>/proof/<chapter_id>.checkpoints.jsonl`，按章节与设备保存基线/阶段性完整正文、全文 SHA-256、对应事件序号 `seq` 与覆盖的日志位置。检查点只是回放加速索引，事件才是长期事实；同序号不同正文拒绝覆盖，保存正文与已验证事件重建结果不一致时先写显式外部变更事件。
+- 事件正文摘要：`before_text_sha256` / `after_text_sha256` 是编辑器内核在事务提交前后对**真实完整正文**计算的 SHA-256，和 `before_content_hash` / `after_content_hash`（命令链摘要）分开记录。平台必须随事件传递内核摘要；Core 写盘前核对上一条 `after_text_sha256` 与本次 `before_text_sha256`，不一致说明漏记或旁路修改，不能继续伪造连续链。
+- 检查点：`stats/events/<device_id>/proof/<chapter_id>.checkpoints.jsonl`，按章节与设备保存基线/阶段性完整正文、全文 SHA-256、对应事件序号 `seq` 与覆盖的日志位置。检查点只是回放加速索引，事件才是长期事实；同序号不同正文拒绝覆盖。每次保存先用已验证检查点和事件重建同序号正文，摘要一致才写 `save` 检查点；不一致必须先写带来源的外部变更事件（同步覆盖标 `SyncRemote` 并携带来源设备/父事件；无法确认来源才标 `Unknown`），不能借旧 `seq` 盖章。打开回放时会先顺序校验整条章节分支，近端检查点不能掩盖更早事件被篡改；校验失败时所有帧和导出都明确失败。
 - 封口归档：`stats/events/<device_id>/proof/archive/YYYY-MM-DD.events.jsonl.zst`。活跃当天只追加 JSONL，封口后才把不可变历史压缩为 zstd 事件段；归档段与其来源设备检查点留在同一设备分区，归档后不再改写。
 - 计时目录：同分区 `YYYY-MM-DD.sessions.jsonl`，每行是一条已测量的前台编辑器写作切片（`event_id`、`session_id`、起止毫秒、项目/卷/章、来源本地日、暂停原因）。切片不是两次按键时间差；本机只追加自己的分区并按 `event_id` 幂等去重。
 - 组 id `stats_device:<device_id>`，远端 storage key `stats-device-<hex>`；每台设备独占写入自己的分区，下载分区只读，其它设备不重写。跨设备回放按各设备内部的 `seq` 与 before/after hash、基线因果衔接，不按毫秒交错不同设备的事务；同步导入的正文变化显式记为 `SyncRemote`/依赖事件，不计入人工输入，分叉按设备分支展示；回放器按章节内事件位置 0..N 定位，按相邻事件真实时间差和倍速播放，全局 seq 只用于链校验。

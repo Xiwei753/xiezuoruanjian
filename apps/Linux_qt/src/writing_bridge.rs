@@ -87,6 +87,8 @@ pub fn record_editor_change_stats(
     new_selection_anchor: u64,
     new_selection_head: u64,
     baseline_text: Option<&str>,
+    before_text_sha256: &str,
+    after_text_sha256: &str,
     event_id: &str,
     occurred_at_ms: i64,
 ) -> Result<(), WriterError> {
@@ -115,6 +117,8 @@ pub fn record_editor_change_stats(
         new_selection_head: new_selection_head as u32,
         sync_source_device_id: String::new(),
         parent_event_id: String::new(),
+        before_text_sha256: before_text_sha256.to_string(),
+        after_text_sha256: after_text_sha256.to_string(),
     };
     api.record_editor_change_stats(input)
         .map_err(WriterError::from)

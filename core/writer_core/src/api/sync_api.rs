@@ -2264,6 +2264,7 @@ impl WriterCoreApi {
                 return (target_with_conflicts, Vec::new());
             }
 
+            let sync_sources = staging_manifest_device_ids(run);
             let (commit_result, conflicts, committed_paths) =
                 crate::sync::commit_helpers::commit_single_target_staging(run, target_sync_result);
             let mut target_with_conflicts = target_sync_result.clone();
@@ -2281,6 +2282,38 @@ impl WriterCoreApi {
                     &mut target_with_conflicts,
                     msg,
                 );
+            }
+
+            // Issue #1008：同步落盘的正文变化是明确的 SyncRemote 事实，不能等
+            // 下次保存时被统归为 Unknown 外部变更。事件以 Core 当前证明链头为
+            // before，应用后的正文取刚写入 live 的实际文本。
+            if matches!(commit_result, crate::sync::commit_helpers::TargetCommitResult::Ok) {
+                for path in &committed_paths {
+                    let Some((project_id, volume_id, chapter_id)) = chapter_path_parts(path) else {
+                        continue;
+                    };
+                    let live_path = core.app_data_root.join(path);
+                    let Ok(after_text) = std::fs::read_to_string(&live_path) else {
+                        continue;
+                    };
+                    let source_device = sync_sources
+                        .get(&chapter_id)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    if let Err(e) = core.record_sync_content_change(
+                        &project_id,
+                        &volume_id,
+                        &chapter_id,
+                        &after_text,
+                        source_device,
+                        "",
+                    ) {
+                        log::warn!(
+                            "[sync] record SyncRemote proof change failed for {}: {e}",
+                            path.display()
+                        );
+                    }
+                }
             }
 
             // 同一写锁持有期内完成 Store 协调与索引失效（问题1+2）：
@@ -2852,5 +2885,68 @@ mod tests {
             extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/")),
             None
         );
+    }
+}
+
+
+/// 从 workspace-relative 章节正文路径解析 `(project, volume, chapter)`。
+fn chapter_path_parts(path: &std::path::Path) -> Option<(String, String, String)> {
+    let parts: Vec<String> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str().map(ToString::to_string))
+        .collect();
+    let project = parts.iter().position(|part| part == "projects")?;
+    let volume = parts.iter().position(|part| part == "volumes")?;
+    let chapter = parts.iter().position(|part| part == "chapters")?;
+    if volume + 1 >= parts.len()
+        || !parts
+            .get(chapter + 2)
+            .is_some_and(|name| name == "chapter.md")
+    {
+        return None;
+    }
+    Some((
+        parts.get(project + 1)?.clone(),
+        parts.get(volume + 1)?.clone(),
+        parts.get(chapter + 1)?.clone(),
+    ))
+}
+
+
+/// 从 staging manifest 收集 `chapter_id -> 远端设备`，供 SyncRemote 证明事件
+/// 记录真实来源。manifest 不存在或字段缺失时返回空映射，不阻塞同步。
+fn staging_manifest_device_ids(
+    run: &crate::sync::staging::StagingRun,
+) -> std::collections::HashMap<String, String> {
+    let path = run
+        .staging_root()
+        .join(crate::sync::lww::SYNC_MANIFEST_PATH);
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return std::collections::HashMap::new();
+    };
+    let Ok(manifest) = serde_json::from_str::<crate::sync::types::SyncManifest>(&text) else {
+        return std::collections::HashMap::new();
+    };
+    let mut out = std::collections::HashMap::new();
+    for record in manifest.files {
+        if record.device_id.is_empty() {
+            continue;
+        }
+        if let Some(chapter_id) = chapter_id_from_path_str(&record.path) {
+            out.insert(chapter_id, record.device_id);
+        }
+    }
+    out
+}
+
+fn chapter_id_from_path_str(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let chapters = parts.iter().position(|part| *part == "chapters")?;
+    let id = parts.get(chapters + 1)?;
+    let file = parts.get(chapters + 2)?;
+    if *file == "chapter.md" {
+        Some((*id).to_string())
+    } else {
+        None
     }
 }

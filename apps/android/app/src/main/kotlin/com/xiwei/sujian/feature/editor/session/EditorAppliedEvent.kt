@@ -38,6 +38,9 @@ data class EditorAppliedEvent(
     val oldSelectionHeadUtf8: Int = -1,
     /** 事务实际执行的插入/删除（UTF-8 byte 坐标），按执行顺序。 */
     val changes: List<EditorChangeDto> = emptyList(),
+    /** 内核事务提交前/后真实正文 SHA-256。 */
+    val beforeTextSha256: String = "",
+    val afterTextSha256: String = "",
 )
 
 /**

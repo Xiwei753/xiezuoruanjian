@@ -175,6 +175,15 @@ pub struct EditorEditResult {
     /// 纯光标/选区事务为空。
     #[serde(default)]
     pub changes: Vec<EditorChange>,
+    /// 事务提交前真实正文的 SHA-256（`sha256:v1:` 格式）。
+    ///
+    /// 由内核在应用命令前对完整正文计算，不是平台或证明链自行推导。
+    /// 失败/过期事务为空。
+    #[serde(default)]
+    pub before_text_sha256: String,
+    /// 事务提交后真实正文的 SHA-256。
+    #[serde(default)]
+    pub after_text_sha256: String,
 }
 
 impl EditorEditResult {

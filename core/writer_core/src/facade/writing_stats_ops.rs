@@ -154,8 +154,8 @@ impl super::WriterCore {
             new_selection: selection(input.new_selection_anchor, input.new_selection_head),
             before_content_hash: String::new(),
             after_content_hash: String::new(),
-            before_text_sha256: String::new(),
-            after_text_sha256: String::new(),
+            before_text_sha256: input.before_text_sha256.clone(),
+            after_text_sha256: input.after_text_sha256.clone(),
             prev_event_hash: String::new(),
             event_hash: String::new(),
             sync_source_device_id: input.sync_source_device_id.clone(),
@@ -165,6 +165,122 @@ impl super::WriterCore {
         self.get_stats_api()
             .record_proof_event(event, input.baseline_text.as_deref())?;
         Ok(())
+    }
+
+    /// 记录一次“同步把正文改成 after_text”的明确事实。
+    ///
+    /// 同步层在 commit 成功后调用。事件来源固定为 `SyncRemote`，不计入人工
+    /// 输入；before 正文取 Core 当前证明链头，不信任同步层传入的旧磁盘文本。
+    /// 若该章节尚无证明链（例如旧章节第一次被同步覆盖），返回 `false`，
+    /// 由后续保存/编辑建立基线，不伪造逐字历史。
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_sync_content_change(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        after_text: &str,
+        sync_source_device_id: &str,
+        parent_event_id: &str,
+    ) -> Result<bool> {
+        use crate::editor::EditorTransactionCause;
+        use crate::editor::transaction::{EditorChange, EditorCursor, EditorSelection};
+        use crate::editor::Utf8ByteOffset;
+        use crate::writing_stats::proof::{text_sha256, ProofEditPayload, PROOF_FORMAT_VERSION};
+
+        let request = crate::writing_stats::replay::ProofReplayRequest {
+            chapter_id: chapter_id.to_string(),
+            device_id: String::new(),
+            target_seq: None,
+            target_time_ms: None,
+            target_index: None,
+            baseline_text: None,
+        };
+        let frame = match self.get_stats_api().replay_chapter_proof(&request) {
+            Ok(frame) if frame.valid => frame,
+            _ => return Ok(false),
+        };
+        if frame.text == after_text {
+            return Ok(false);
+        }
+        let parent_event_id = if parent_event_id.is_empty() {
+            frame.event_id.clone()
+        } else {
+            parent_event_id.to_string()
+        };
+        let before_text = frame.text;
+        let before_sha = text_sha256(&before_text);
+        let after_sha = text_sha256(after_text);
+        let mut changes = Vec::new();
+        if !before_text.is_empty() {
+            changes.push(EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(0),
+                text: before_text.clone(),
+            });
+        }
+        if !after_text.is_empty() {
+            changes.push(EditorChange::Insert {
+                index: Utf8ByteOffset::unchecked(0),
+                text: after_text.to_string(),
+            });
+        }
+        if changes.is_empty() {
+            return Ok(false);
+        }
+
+        let platform = writer_platform_api::PlatformKind::Desktop;
+        let preferred_device_id = self.preferred_device_id();
+        let device_info = self.ensure_device_info(
+            platform.to_str_name(),
+            platform.default_device_class(),
+            preferred_device_id.as_deref(),
+        )?;
+        let selection = EditorSelection {
+            anchor: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
+            head: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
+        };
+        let event_id = format!("sync:{chapter_id}:{before_sha}:{after_sha}");
+        let occurred_at_ms = chrono::Utc::now().timestamp_millis();
+        let mut event = WritingInputEvent::with_identity(
+            event_id,
+            occurred_at_ms,
+            &device_info.device_id,
+            platform,
+            &device_info.device_class,
+            project_id,
+            volume_id,
+            chapter_id,
+            EventSource::SyncRemote,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "",
+        );
+        event.proof = Some(ProofEditPayload {
+            format_version: PROOF_FORMAT_VERSION,
+            seq: 0,
+            session_id: String::new(),
+            baseline_id: String::new(),
+            starts_new_chain: false,
+            base_revision: 0,
+            new_revision: 0,
+            cause: EditorTransactionCause::Programmatic,
+            changes,
+            old_selection: selection,
+            new_selection: selection,
+            before_content_hash: String::new(),
+            after_content_hash: String::new(),
+            before_text_sha256: before_sha,
+            after_text_sha256: after_sha,
+            prev_event_hash: String::new(),
+            event_hash: String::new(),
+            sync_source_device_id: sync_source_device_id.to_string(),
+            parent_event_id,
+        });
+        self.get_stats_api()
+            .record_proof_event(event, Some(&before_text))
     }
 
     /// 正文保存成功后记录一份完整正文检查点，作为长章节回放的加速索引。

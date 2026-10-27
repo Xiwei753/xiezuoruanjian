@@ -129,6 +129,7 @@ pub struct ProofReplaySession {
     checkpoints: Vec<ProofCheckpoint>,
     baseline_text: String,
     branches: Vec<ProofDeviceBranch>,
+    chain_errors: Vec<String>,
     state: Mutex<ReplayState>,
 }
 
@@ -199,6 +200,7 @@ impl ProofReplaySession {
         let checkpoints =
             checkpoint::load_checkpoints(store.app_data_root(), &device_id, &request.chapter_id)?;
         let baseline_text = request.baseline_text.clone().unwrap_or_default();
+        let chain_errors = validate_full_chain(&events, &checkpoints, &baseline_text);
         let state = initial_state(&events, &checkpoints, &baseline_text, 0);
 
         Ok(Self {
@@ -208,6 +210,7 @@ impl ProofReplaySession {
             checkpoints,
             baseline_text,
             branches,
+            chain_errors,
             state: Mutex::new(state),
         })
     }
@@ -233,6 +236,8 @@ impl ProofReplaySession {
             state.position += 1;
         }
 
+        let mut errors = state.errors.clone();
+        errors.extend(self.chain_errors.iter().cloned());
         let next_timestamp_ms = self.events.get(state.position).map(|event| event.timestamp_ms);
         let first_timestamp_ms = self.events.first().map_or(0, |event| event.timestamp_ms);
         let last_timestamp_ms = self.events.last().map_or(0, |event| event.timestamp_ms);
@@ -255,14 +260,84 @@ impl ProofReplaySession {
             next_timestamp_ms,
             checkpoint_seq: state.checkpoint_seq,
             branches: self.branches.clone(),
-            valid: state.errors.is_empty(),
-            errors: state.errors.clone(),
+            valid: errors.is_empty(),
+            errors,
         }
     }
 
     fn reset_state(&self, target: usize) -> ReplayState {
         initial_state(&self.events, &self.checkpoints, &self.baseline_text, target)
     }
+}
+
+/// 首次载入时顺序校验整条章节事件链，避免近端 checkpoint 掩盖更早的篡改。
+/// 后续 seek 才利用已验证 checkpoint 快进。
+fn validate_full_chain(
+    events: &[WritingInputEvent],
+    checkpoints: &[ProofCheckpoint],
+    baseline_text: &str,
+) -> Vec<String> {
+    let mut state = ReplayState {
+        position: 0,
+        seq: 0,
+        event_id: String::new(),
+        timestamp_ms: 0,
+        text: baseline_text.to_string(),
+        expected_content_hash: content_hash_of_text(baseline_text),
+        previous_event_hash: String::new(),
+        selection_anchor: 0,
+        selection_head: 0,
+        source: EventSource::Unknown,
+        checkpoint_seq: 0,
+        errors: Vec::new(),
+    };
+    if let Some(baseline) = checkpoints
+        .iter()
+        .find(|checkpoint| checkpoint.seq == 0 && checkpoint_is_valid(checkpoint, events))
+    {
+        state.text = baseline.text.clone();
+        state.expected_content_hash = baseline.content_hash.clone();
+    }
+
+    let checkpoint_by_seq: std::collections::HashMap<u64, &ProofCheckpoint> =
+        checkpoints.iter().map(|checkpoint| (checkpoint.seq, checkpoint)).collect();
+    let mut errors = Vec::new();
+
+    for event in events {
+        let before_errors = state.errors.len();
+        apply_event(&mut state, event);
+        errors.extend(state.errors[before_errors..].iter().cloned());
+        state.position += 1;
+        let Some(proof) = event.proof.as_ref() else {
+            continue;
+        };
+        if let Some(checkpoint) = checkpoint_by_seq.get(&proof.seq) {
+            if checkpoint.text != state.text {
+                errors.push(format!(
+                    "检查点 {} 的正文与按事件重放结果不一致",
+                    proof.seq
+                ));
+            }
+            if checkpoint.content_hash != state.expected_content_hash {
+                errors.push(format!(
+                    "检查点 {} 的内容摘要与事件链不一致",
+                    proof.seq
+                ));
+            }
+        }
+    }
+
+    let last_seq = state.seq;
+    for checkpoint in checkpoints.iter().filter(|checkpoint| checkpoint.seq > 0) {
+        if checkpoint.seq > last_seq {
+            errors.push(format!(
+                "检查点 {} 没有对应的事件",
+                checkpoint.seq
+            ));
+        }
+    }
+    errors.dedup();
+    errors
 }
 
 fn target_position(
@@ -485,6 +560,12 @@ pub fn export_chapter_proof(
         baseline_text: None,
     };
     let frame = replay_chapter(store, &request)?;
+    if !frame.valid {
+        return Err(crate::Error::Other(format!(
+            "章节 {chapter_id} 的证明链校验失败，拒绝导出: {}",
+            frame.errors.join("; ")
+        )));
+    }
     let device_id = frame.device_id.clone();
 
     let mut events: Vec<WritingInputEvent> = store

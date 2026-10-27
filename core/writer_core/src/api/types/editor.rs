@@ -115,6 +115,12 @@ pub struct EditorChangeStatsInputDto {
     /// 同步/外部变更依赖的父事件。
     #[serde(default)]
     pub parent_event_id: String,
+    /// 内核提交前真实正文 SHA-256；老客户端为空。
+    #[serde(default)]
+    pub before_text_sha256: String,
+    /// 内核提交后真实正文 SHA-256；老客户端为空。
+    #[serde(default)]
+    pub after_text_sha256: String,
 }
 
 impl From<crate::editor::EditorTransactionCause> for EditorTransactionCauseDto {
@@ -506,6 +512,12 @@ pub struct EditorEditResultDto {
     /// 平台原样转交统计/证明入口，不按最终字符串猜 diff。
     #[serde(default)]
     pub changes: Vec<EditorChangeDto>,
+    /// 内核提交前真实正文 SHA-256（`sha256:v1:` 格式）。
+    #[serde(default)]
+    pub before_text_sha256: String,
+    /// 内核提交后真实正文 SHA-256。
+    #[serde(default)]
+    pub after_text_sha256: String,
     /// 当前 composition 完整状态（preedit 文本 replace range cursor）。
     /// 仅在 composition 活跃（begin/update 成功）时非 None；finish/cancel/普通编辑后为 None。
     /// 平台端据此构造临时显示文本和下划线范围，不复制 Core 的 composition 状态机。
@@ -531,6 +543,8 @@ impl EditorEditResultDto {
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
             changes: vec![],
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             composition: None,
         }
     }
@@ -552,6 +566,8 @@ impl EditorEditResultDto {
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
             changes: vec![],
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             composition: None,
         }
     }
@@ -573,6 +589,8 @@ impl EditorEditResultDto {
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
             changes: vec![],
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             composition: None,
         }
     }
@@ -633,6 +651,8 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
             composition_session: None,
             content_delta: r.content_delta.into(),
             changes: r.changes.into_iter().map(Into::into).collect(),
+            before_text_sha256: r.before_text_sha256,
+            after_text_sha256: r.after_text_sha256,
             composition: None,
         }
     }
@@ -658,6 +678,8 @@ impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
             composition_session: None,
             content_delta: r.content_delta.into(),
             changes: r.changes.into_iter().map(Into::into).collect(),
+            before_text_sha256: r.before_text_sha256,
+            after_text_sha256: r.after_text_sha256,
             composition: None,
         }
     }

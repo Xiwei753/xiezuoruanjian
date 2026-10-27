@@ -69,6 +69,8 @@ export interface EditorChangeStatsInput {
   oldSelectionHead?: number
   newSelectionAnchor?: number
   newSelectionHead?: number
+  beforeTextSha256?: string
+  afterTextSha256?: string
 }
 
 // ─── Editor Core DTOs ─── 与 Core api/types/editor.rs 真实契约对齐
@@ -190,6 +192,9 @@ export interface EditorEditResult {
   contentDelta: EditorContentDelta
   /** 本次事务实际执行的插入/删除，按执行顺序（Core pending_changes）。 */
   changes?: EditorChange[]
+  /** 内核事务提交前/后真实正文 SHA-256。 */
+  beforeTextSha256?: string
+  afterTextSha256?: string
   // #629 评论6 Part B：当前 composition 完整状态。composition 活跃时 Core 才发出该键，
   // 平台端据此构造临时显示文本和下划线范围。无 composition 时键省略。
   composition?: EditorCompositionState

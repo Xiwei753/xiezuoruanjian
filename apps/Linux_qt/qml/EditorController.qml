@@ -223,7 +223,8 @@ QtObject {
         function onEditor_change_applied(cause, insertedChars, deletedChars,
                                          baseRevision, newRevision, editRangesJson,
                                          changesJson, oldSelectionAnchor, oldSelectionHead,
-                                         newSelectionAnchor, newSelectionHead) {
+                                         newSelectionAnchor, newSelectionHead,
+                                         beforeTextSha256, afterTextSha256) {
             controller.reconcileCorrectionEdit(baseRevision, newRevision, editRangesJson);
             controller.applyAnnotationEditRanges(cause, baseRevision, newRevision, editRangesJson);
             if (controller.chapterId && controller.editorBackendRef) {
@@ -232,7 +233,8 @@ QtObject {
                     cause, insertedChars, deletedChars, changesJson,
                     baseRevision, newRevision, oldSelectionAnchor, oldSelectionHead,
                     newSelectionAnchor, newSelectionHead,
-                    controller.proofBaselineSent ? "" : controller.proofBaselineText);
+                    controller.proofBaselineSent ? "" : controller.proofBaselineText,
+                    beforeTextSha256, afterTextSha256);
             if (changesJson && changesJson !== "[]") {
                 controller.proofBaselineSent = true;
             }

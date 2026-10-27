@@ -1690,6 +1690,9 @@ dictionary EditorChangeStatsInputDto {
     string sync_source_device_id;
     // 同步/外部变更依赖的父事件。
     string parent_event_id;
+    // 内核提交前/后真实正文 SHA-256（sha256:v1:...）；老客户端为空。
+    string before_text_sha256;
+    string after_text_sha256;
 };
 
 // 平台端上报的一段已测量前台写作计时切片。
@@ -1796,6 +1799,9 @@ dictionary EditorEditResultDto {
     EditorContentDeltaDto content_delta;
     // 本次事务实际执行的插入/删除，按执行顺序，UTF-8 byte 坐标。
     sequence<EditorChangeDto> changes;
+    // 内核提交前/后真实正文 SHA-256，由编辑器内核在事务提交时计算。
+    string before_text_sha256;
+    string after_text_sha256;
     // 当前 composition 完整状态（preedit + replace range + cursor）。
     EditorCompositionStateDto? composition;
 };
