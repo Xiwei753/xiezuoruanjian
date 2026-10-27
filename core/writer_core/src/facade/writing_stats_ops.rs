@@ -154,6 +154,8 @@ impl super::WriterCore {
             new_selection: selection(input.new_selection_anchor, input.new_selection_head),
             before_content_hash: String::new(),
             after_content_hash: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
             prev_event_hash: String::new(),
             event_hash: String::new(),
             sync_source_device_id: input.sync_source_device_id.clone(),

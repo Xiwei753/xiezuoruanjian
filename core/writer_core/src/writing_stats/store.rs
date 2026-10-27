@@ -25,8 +25,11 @@
 //! - 旧版单分区事件库由 [`crate::writing_stats::migration`] 一次性迁入本结构。
 
 use crate::error::Result;
-use crate::writing_stats::checkpoint::{self, ProofCheckpoint};use crate::writing_stats::proof::{
-    self, chain_content_hash, compute_event_hash, content_hash_of_text, empty_content_hash,
+use crate::editor::{EditorChange, EditorSelection, Utf8ByteOffset};
+use crate::writing_stats::checkpoint::{self, ProofCheckpoint};
+use crate::writing_stats::proof::{
+    self, apply_changes, chain_content_hash, compute_event_hash, content_hash_of_text,
+    text_sha256,
 };
 use crate::writing_stats::calendar;
 use crate::writing_stats::{WritingActivitySegment, WritingInputEvent};
@@ -37,6 +40,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 统计事件根目录（相对 app_data_root）。
 const EVENTS_ROOT: &str = "stats/events";
@@ -74,6 +78,8 @@ pub struct StatsStore {
     written_ids: Mutex<HashMap<String, HashSet<String>>>,
     /// 证明序号与每章节链头。首次写入时扫描已有事件重建。
     proof_state: Mutex<ProofStoreState>,
+    /// 证明事件变化代数；回放缓存据此失效。
+    proof_generation: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +87,7 @@ struct ProofChainHead {
     seq: u64,
     event_hash: String,
     content_hash: String,
+    text_sha256: String,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +95,8 @@ struct ProofStoreState {
     initialized: bool,
     next_seq: u64,
     chains: HashMap<String, ProofChainHead>,
+    /// 每章节链当前正文（首次需要时从检查点/事件重建）。
+    texts: HashMap<String, String>,
 }
 
 impl StatsStore {
@@ -97,6 +106,7 @@ impl StatsStore {
             origin_device_id: Mutex::new(None),
             written_ids: Mutex::new(HashMap::new()),
             proof_state: Mutex::new(ProofStoreState::default()),
+            proof_generation: AtomicU64::new(0),
         }
     }
 
@@ -190,6 +200,7 @@ impl StatsStore {
             return Ok(0);
         }
         let origin = self.resolve_origin_device_id()?;
+        let has_proof = events.iter().any(|event| event.proof.is_some());
 
         let mut by_date: BTreeMap<String, Vec<WritingInputEvent>> = BTreeMap::new();
         for event in events {
@@ -211,6 +222,16 @@ impl StatsStore {
                     return Err(error);
                 }
             }
+        }
+        // 同步导入的 proof 事件同样会让回放索引过期；按写入批次递增版本，
+        // 避免 StatsApi 继续命中旧的内存回放会话。
+        if written > 0 && has_proof {
+            self.proof_generation.fetch_add(1, Ordering::SeqCst);
+        }
+        // UTC 日封口：切日后的第一次写入顺手把已关闭日期封成不可变 zstd 段。
+        // 归档失败不否定已经落盘的统计事件，下次写入继续尝试。
+        if let Err(error) = self.archive_closed_days(&origin) {
+            log::warn!("proof archive maintenance failed: {error}");
         }
         Ok(written)
     }
@@ -264,7 +285,7 @@ impl StatsStore {
         let mut cache = self.lock_written_ids();
         let cache_key = format!("{origin}/{date}");
         if !cache.contains_key(&cache_key) {
-            let ids = self.scan_ids(&self.event_file_path(origin, date))?;
+            let ids = self.scan_persisted_ids(origin, date)?;
             cache.insert(cache_key.clone(), ids);
         }
         let Some(ids) = cache.get(&cache_key) else {
@@ -342,59 +363,153 @@ impl StatsStore {
 
         let chain_key = format!("{origin}/{}", event.chapter_id);
         let head = state.chains.get(&chain_key).cloned();
-        let seq = state.next_seq;
-        let starts_new_chain = head.is_none();
-        let baseline_checkpoint = if starts_new_chain {
-            baseline_text.map(|text| {
-                ProofCheckpoint::new(
-                    &event.chapter_id,
-                    &origin,
-                    0,
-                    "",
-                    event.timestamp_ms,
-                    text,
-                    &content_hash_of_text(text),
-                    "",
-                    "baseline",
-                )
-            })
+        let latest_checkpoint =
+            checkpoint::load_last_checkpoint(&self.app_data_root, &origin, &event.chapter_id)?;
+
+        let (seq, before_text, starts_new_chain, baseline_checkpoint) = if let Some(head) = head.as_ref()
+        {
+            let seq = state.next_seq.max(head.seq.saturating_add(1));
+            let before_text = if let Some(text) = state.texts.get(&chain_key) {
+                text.clone()
+            } else {
+                // 缓存缺失时只从已验证检查点 + 后续事件重建一次。
+                let frame = crate::writing_stats::replay::replay_chapter(
+                    self,
+                    &crate::writing_stats::replay::ProofReplayRequest {
+                        chapter_id: event.chapter_id.clone(),
+                        device_id: origin.clone(),
+                        target_seq: Some(head.seq),
+                        target_time_ms: None,
+                        target_index: None,
+                        baseline_text: baseline_text.map(ToString::to_string),
+                    },
+                )?;
+                if !frame.valid {
+                    return Err(crate::Error::Other(format!(
+                        "无法重建章节 {} 的证明链正文: {}",
+                        event.chapter_id,
+                        frame.errors.join("; ")
+                    )));
+                }
+                if !head.text_sha256.is_empty()
+                    && head.text_sha256 != text_sha256(&frame.text)
+                {
+                    return Err(crate::Error::Other(format!(
+                        "章节 {} 的证明链正文摘要与链头不一致",
+                        event.chapter_id
+                    )));
+                }
+                state.texts.insert(chain_key.clone(), frame.text.clone());
+                frame.text
+            };
+            (seq, before_text, false, None)
         } else {
-            None
+            match latest_checkpoint {
+                Some(checkpoint) => {
+                    if checkpoint.seq != 0 {
+                        return Err(crate::Error::Other(format!(
+                            "章节 {} 有检查点但没有事件链，拒绝从 seq {} 继续",
+                            event.chapter_id, checkpoint.seq
+                        )));
+                    }
+                    if checkpoint.text_sha256 != text_sha256(&checkpoint.text)
+                        || checkpoint.content_hash != content_hash_of_text(&checkpoint.text)
+                    {
+                        return Err(crate::Error::Other(format!(
+                            "章节 {} 的基线检查点校验失败",
+                            event.chapter_id
+                        )));
+                    }
+                    if let Some(given) = baseline_text {
+                        if given != checkpoint.text {
+                            return Err(crate::Error::Other(format!(
+                                "章节 {} 的正文基线已变化，不能沿用旧检查点；请记录外部变更事件",
+                                event.chapter_id
+                            )));
+                        }
+                    }
+                    (
+                        state.next_seq.max(checkpoint.seq.saturating_add(1)),
+                        checkpoint.text,
+                        true,
+                        None,
+                    )
+                }
+                None => {
+                    let text = baseline_text.unwrap_or_default().to_string();
+                    let checkpoint = ProofCheckpoint::new(
+                        &event.chapter_id,
+                        &origin,
+                        0,
+                        "",
+                        event.timestamp_ms,
+                        &text,
+                        &content_hash_of_text(&text),
+                        "",
+                        "baseline",
+                    );
+                    (state.next_seq.max(1), text, true, Some(checkpoint))
+                }
+            }
         };
 
         if let Some(checkpoint) = baseline_checkpoint.as_ref() {
+            // 先落基线再写事件：事件写失败时基线仍可复用，不会被伪造。
             checkpoint::append_checkpoint(&self.app_data_root, checkpoint)?;
         }
 
-        let before_content_hash = head.as_ref().map_or_else(
-            || {
-                baseline_text.map_or_else(empty_content_hash, content_hash_of_text)
-            },
-            |head| head.content_hash.clone(),
-        );
-        let previous_event_hash = head.map_or_else(String::new, |head| head.event_hash);
+        let previous_event_hash = head
+            .as_ref()
+            .map_or_else(String::new, |head| head.event_hash.clone());
         let baseline_id = if starts_new_chain {
             format!("{origin}:{}:0", event.chapter_id)
         } else {
             String::new()
         };
-        let changes_for_chain = {
+        let expected_before_content_hash = head
+            .as_ref()
+            .map_or_else(|| content_hash_of_text(&before_text), |head| head.content_hash.clone());
+        let before_text_sha256 = text_sha256(&before_text);
+
+        let (changes_for_chain, after_text) = {
             let draft = event
                 .proof
                 .as_mut()
                 .ok_or_else(|| crate::Error::Other("proof 事件缺少 proof 细节".to_string()))?;
+            if !draft.before_content_hash.is_empty()
+                && draft.before_content_hash != expected_before_content_hash
+            {
+                return Err(crate::Error::Other(format!(
+                    "章节 {} 的 before_content_hash 与链头不一致",
+                    event.chapter_id
+                )));
+            }
+            if !draft.before_text_sha256.is_empty()
+                && draft.before_text_sha256 != before_text_sha256
+            {
+                return Err(crate::Error::Other(format!(
+                    "章节 {} 的 before_text_sha256 与真实正文不一致",
+                    event.chapter_id
+                )));
+            }
+            let mut after_text = before_text.clone();
+            apply_changes(&mut after_text, &draft.changes)?;
+
             draft.format_version = proof::PROOF_FORMAT_VERSION;
             draft.seq = seq;
             draft.starts_new_chain = starts_new_chain;
             if draft.baseline_id.is_empty() {
                 draft.baseline_id = baseline_id;
             }
-            draft.before_content_hash = before_content_hash.clone();
+            draft.before_content_hash = expected_before_content_hash.clone();
             draft.prev_event_hash = previous_event_hash;
-            draft.after_content_hash = chain_content_hash(&before_content_hash, &draft.changes);
-            draft.changes.clone()
+            draft.before_text_sha256 = before_text_sha256;
+            draft.after_text_sha256 = text_sha256(&after_text);
+            draft.after_content_hash = chain_content_hash(&draft.before_content_hash, &draft.changes);
+            (draft.changes.clone(), after_text)
         };
-        let after_content_hash = chain_content_hash(&before_content_hash, &changes_for_chain);
+        let after_content_hash = chain_content_hash(&expected_before_content_hash, &changes_for_chain);
+        let after_text_sha256 = text_sha256(&after_text);
         let event_hash = compute_event_hash(&event);
         if let Some(draft) = event.proof.as_mut() {
             draft.event_hash = event_hash.clone();
@@ -408,14 +523,17 @@ impl StatsStore {
         }
         state.next_seq = seq.saturating_add(1);
         state.chains.insert(
-            chain_key,
+            chain_key.clone(),
             ProofChainHead {
                 seq,
                 event_hash: event_hash.clone(),
-                content_hash: chain_content_hash(&before_content_hash, &changes_for_chain),
+                content_hash: after_content_hash.clone(),
+                text_sha256: after_text_sha256,
             },
         );
+        state.texts.insert(chain_key, after_text);
         drop(state);
+        self.proof_generation.fetch_add(1, Ordering::SeqCst);
 
         // Issue #1008：事件是长期事实，checkpoint 只是加速索引。长会话按固定事件
         // 间隔写一次完整正文，回放不必从会话起点重放；写失败不能反过来否定已落盘的
@@ -450,6 +568,7 @@ impl StatsStore {
             device_id: device_id.to_string(),
             target_seq: Some(seq),
             target_time_ms: None,
+            target_index: None,
             baseline_text: None,
         };
         let frame = crate::writing_stats::replay::replay_chapter(self, &request)?;
@@ -487,53 +606,259 @@ impl StatsStore {
         session_id: &str,
     ) -> Result<()> {
         let origin = self.resolve_origin_device_id()?;
+        let saved_text_sha256 = text_sha256(text);
+
+        let find_last = |events: &[WritingInputEvent]| -> Option<WritingInputEvent> {
+            events
+                .iter()
+                .filter(|event| {
+                    event.device_id == origin
+                        && event.project_id == project_id
+                        && event.volume_id == volume_id
+                        && event.chapter_id == chapter_id
+                        && event.proof.is_some()
+                })
+                .max_by_key(|event| event.proof.as_ref().map_or(0, |proof| proof.seq))
+                .cloned()
+        };
+
         let all_events = self.load_all_events()?;
-        let mut last: Option<&WritingInputEvent> = None;
-        for event in &all_events {
-            if event.device_id != origin
-                || event.project_id != project_id
-                || event.volume_id != volume_id
-                || event.chapter_id != chapter_id
-            {
-                continue;
+        let mut last = find_last(&all_events);
+        let mut repaired_external = false;
+        if let Some(event) = last.as_ref() {
+            let proof = event.proof.as_ref().ok_or_else(|| {
+                crate::Error::Other("proof 事件缺少 proof 细节".to_string())
+            })?;
+            let frame = crate::writing_stats::replay::replay_chapter(
+                self,
+                &crate::writing_stats::replay::ProofReplayRequest {
+                    chapter_id: chapter_id.to_string(),
+                    device_id: origin.clone(),
+                    target_seq: Some(proof.seq),
+                    target_time_ms: None,
+                    target_index: None,
+                    baseline_text: None,
+                },
+            )?;
+            if !frame.valid {
+                return Err(crate::Error::Other(format!(
+                    "保存前无法验证章节 {chapter_id} 的证明链: {}",
+                    frame.errors.join("; ")
+                )));
             }
-            if let Some(proof) = event.proof.as_ref() {
-                if last
-                    .and_then(|event| event.proof.as_ref())
-                    .is_none_or(|previous| proof.seq > previous.seq)
-                {
-                    last = Some(event);
+            if text_sha256(&frame.text) != saved_text_sha256 {
+                // 磁盘正文与事件重建结果不一致（同步、外部编辑、队列滞后）。
+                // 不能把保存正文硬盖到旧 seq 上；记录一条明确的程序性变更事件，
+                // 由 Core 从旧链正文应用变更并生成新的可验证链头。
+                let external = self.build_external_change_event(
+                    &origin,
+                    project_id,
+                    volume_id,
+                    chapter_id,
+                    &frame.text,
+                    text,
+                    session_id,
+                    Some(event),
+                );
+                if !self.record_proof_event(external, Some(&frame.text))? {
+                    return Err(crate::Error::Other(format!(
+                        "章节 {chapter_id} 的外部变更事件未写入"
+                    )));
                 }
+                let refreshed = self.load_all_events()?;
+                last = find_last(&refreshed);
+                repaired_external = true;
             }
         }
+
         let now = chrono::Utc::now().timestamp_millis();
-        let (seq, timestamp_ms, content_hash, event_hash, reason) = match last {
-            Some(event) => {
-                let proof = event.proof.as_ref().ok_or_else(|| {
+        if let Some(event) = last.as_ref() {
+            let proof = event.proof.as_ref().ok_or_else(|| {
+                crate::Error::Other("proof 事件缺少 proof 细节".to_string())
+            })?;
+            let frame = crate::writing_stats::replay::replay_chapter(
+                self,
+                &crate::writing_stats::replay::ProofReplayRequest {
+                    chapter_id: chapter_id.to_string(),
+                    device_id: origin.clone(),
+                    target_seq: Some(proof.seq),
+                    target_time_ms: None,
+                    target_index: None,
+                    baseline_text: None,
+                },
+            )?;
+            if !frame.valid || text_sha256(&frame.text) != saved_text_sha256 {
+                return Err(crate::Error::Other(format!(
+                    "章节 {chapter_id} 保存后的证明链仍无法对应正文"
+                )));
+            }
+            let checkpoint = ProofCheckpoint::new(
+                chapter_id,
+                &origin,
+                proof.seq,
+                session_id,
+                event.timestamp_ms,
+                text,
+                &proof.after_content_hash,
+                &proof.event_hash,
+                if repaired_external { "external" } else { "save" },
+            );
+            return checkpoint::append_checkpoint(&self.app_data_root, &checkpoint);
+        }
+
+        match checkpoint::load_last_checkpoint(&self.app_data_root, &origin, chapter_id)? {
+            Some(checkpoint) => {
+                if checkpoint.seq != 0 {
+                    return Err(crate::Error::Other(format!(
+                        "章节 {chapter_id} 有检查点 seq {} 却没有事件链",
+                        checkpoint.seq
+                    )));
+                }
+                if checkpoint.text_sha256 == saved_text_sha256 {
+                    return Ok(());
+                }
+                let external = self.build_external_change_event(
+                    &origin,
+                    project_id,
+                    volume_id,
+                    chapter_id,
+                    &checkpoint.text,
+                    text,
+                    session_id,
+                    None,
+                );
+                if !self.record_proof_event(external, Some(&checkpoint.text))? {
+                    return Err(crate::Error::Other(format!(
+                        "章节 {chapter_id} 的基线外部变更事件未写入"
+                    )));
+                }
+                let refreshed = self.load_all_events()?;
+                let last = find_last(&refreshed).ok_or_else(|| {
+                    crate::Error::Other(format!(
+                        "章节 {chapter_id} 的外部变更事件写入后缺少证明链"
+                    ))
+                })?;
+                let proof = last.proof.as_ref().ok_or_else(|| {
                     crate::Error::Other("proof 事件缺少 proof 细节".to_string())
                 })?;
-                (
+                let frame = crate::writing_stats::replay::replay_chapter(
+                    self,
+                    &crate::writing_stats::replay::ProofReplayRequest {
+                        chapter_id: chapter_id.to_string(),
+                        device_id: origin.clone(),
+                        target_seq: Some(proof.seq),
+                        target_time_ms: None,
+                        target_index: None,
+                        baseline_text: None,
+                    },
+                )?;
+                if !frame.valid || text_sha256(&frame.text) != saved_text_sha256 {
+                    return Err(crate::Error::Other(format!(
+                        "章节 {chapter_id} 的外部变更无法通过回放校验"
+                    )));
+                }
+                let checkpoint = ProofCheckpoint::new(
+                    chapter_id,
+                    &origin,
                     proof.seq,
-                    event.timestamp_ms,
-                    proof.after_content_hash.clone(),
-                    proof.event_hash.clone(),
-                    "save",
-                )
+                    session_id,
+                    last.timestamp_ms,
+                    text,
+                    &proof.after_content_hash,
+                    &proof.event_hash,
+                    "external",
+                );
+                checkpoint::append_checkpoint(&self.app_data_root, &checkpoint)
             }
-            None => (0, now, content_hash_of_text(text), String::new(), "baseline"),
-        };
-        let checkpoint = ProofCheckpoint::new(
+            None => {
+                let checkpoint = ProofCheckpoint::new(
+                    chapter_id,
+                    &origin,
+                    0,
+                    session_id,
+                    now,
+                    text,
+                    &content_hash_of_text(text),
+                    "",
+                    "baseline",
+                );
+                checkpoint::append_checkpoint(&self.app_data_root, &checkpoint)
+            }
+        }
+    }
+
+    fn build_external_change_event(
+        &self,
+        origin: &str,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        old_text: &str,
+        new_text: &str,
+        session_id: &str,
+        template: Option<&WritingInputEvent>,
+    ) -> WritingInputEvent {
+        let now = chrono::Utc::now().timestamp_millis();
+        let platform = template
+            .map(|event| event.platform.clone())
+            .unwrap_or(writer_platform_api::PlatformKind::Desktop);
+        let device_class = template.map_or("desktop", |event| event.device_class.as_str());
+        let mut event = WritingInputEvent::with_identity(
+            uuid::Uuid::new_v4().to_string(),
+            now,
+            origin,
+            platform,
+            device_class,
+            project_id,
+            volume_id,
             chapter_id,
-            &origin,
-            seq,
+            crate::writing_stats::EventSource::Unknown,
+            0,
+            0,
+            0,
+            0,
+            0,
             session_id,
-            timestamp_ms,
-            text,
-            &content_hash,
-            &event_hash,
-            reason,
         );
-        checkpoint::append_checkpoint(&self.app_data_root, &checkpoint)
+        let mut changes = Vec::new();
+        if !old_text.is_empty() {
+            changes.push(EditorChange::Delete {
+                index: Utf8ByteOffset::unchecked(0),
+                text: old_text.to_string(),
+            });
+        }
+        if !new_text.is_empty() {
+            changes.push(EditorChange::Insert {
+                index: Utf8ByteOffset::unchecked(0),
+                text: new_text.to_string(),
+            });
+        }
+        event.proof = Some(proof::ProofEditPayload {
+            format_version: 0,
+            seq: 0,
+            session_id: session_id.to_string(),
+            baseline_id: String::new(),
+            starts_new_chain: false,
+            base_revision: template.map_or(0, |event| {
+                event.proof.as_ref().map_or(0, |proof| proof.new_revision)
+            }),
+            new_revision: template.map_or(0, |event| {
+                event.proof.as_ref().map_or(0, |proof| proof.new_revision)
+            }) + 1,
+            cause: crate::editor::EditorTransactionCause::Programmatic,
+            changes,
+            old_selection: EditorSelection::collapsed(old_text, old_text.len()),
+            new_selection: EditorSelection::collapsed(new_text, new_text.len()),
+            before_content_hash: String::new(),
+            after_content_hash: String::new(),
+            before_text_sha256: String::new(),
+            after_text_sha256: String::new(),
+            prev_event_hash: String::new(),
+            event_hash: String::new(),
+            sync_source_device_id: String::new(),
+            parent_event_id: template.map_or_else(String::new, |event| event.event_id.clone()),
+        });
+        event
     }
 
     /// 本机当前证明链的最近序号（没有事件时为 0）。
@@ -563,6 +888,7 @@ impl StatsStore {
                         seq: proof.seq,
                         event_hash: proof.event_hash.clone(),
                         content_hash: proof.after_content_hash.clone(),
+                        text_sha256: proof.after_text_sha256.clone(),
                     },
                 );
             }
@@ -571,10 +897,58 @@ impl StatsStore {
         Ok(())
     }
 
+    /// 证明事件变化代数，供回放缓存失效。
+    pub(crate) fn proof_generation(&self) -> u64 {
+        self.proof_generation.load(Ordering::SeqCst)
+    }
+
     fn lock_proof_state(&self) -> std::sync::MutexGuard<'_, ProofStoreState> {
         self.proof_state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 扫描某设备某个 UTC 日期的原始 JSONL 与已封口归档，按 event_id 去重。
+    fn scan_persisted_ids(&self, origin: &str, date: &str) -> Result<HashSet<String>> {
+        let mut ids = self.scan_ids(&self.event_file_path(origin, date))?;
+        let archive_path = self
+            .app_data_root
+            .join(checkpoint::archive_relative_path(origin, date));
+        if archive_path.is_file() {
+            let file = EventFile {
+                origin: origin.to_string(),
+                date: date.to_string(),
+                path: archive_path,
+                compressed: true,
+            };
+            for event in self.parse_events_file(&file)? {
+                if !event.event_id.is_empty() {
+                    ids.insert(event.event_id);
+                }
+            }
+        }
+        Ok(ids)
+    }
+
+    /// 把本机分区中早于今天（UTC）且尚未归档的事件日封口。
+    fn archive_closed_days(&self, origin: &str) -> Result<()> {
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let files = list_origin_files(&self.events_root(), origin, ".events.jsonl")?;
+        for file in files {
+            if file.date.as_str() >= today.as_str() {
+                continue;
+            }
+            let archive = self
+                .app_data_root
+                .join(checkpoint::archive_relative_path(origin, &file.date));
+            if archive.is_file() {
+                // 归档不可改写；如果封口后又有迟到事件形成新的原始段，保留两者，
+                // 读取与去重仍以 event_id 为准。
+                continue;
+            }
+            checkpoint::archive_event_day(&self.app_data_root, origin, &file.date)?;
+        }
+        Ok(())
     }
 
     fn event_is_persisted(&self, origin: &str, date: &str, event_id: &str) -> Result<bool> {
@@ -584,7 +958,7 @@ impl StatsStore {
         let mut cache = self.lock_written_ids();
         let cache_key = format!("{origin}/{date}");
         if !cache.contains_key(&cache_key) {
-            let ids = self.scan_ids(&self.event_file_path(origin, date))?;
+            let ids = self.scan_persisted_ids(origin, date)?;
             cache.insert(cache_key.clone(), ids);
         }
         Ok(cache
@@ -819,6 +1193,37 @@ impl StatsStore {
     /// 把时间戳转换为存储分区使用的 UTC 日期。
     pub fn timestamp_to_date(&self, timestamp_ms: i64) -> Result<String> {
         calendar::utc_date_at(timestamp_ms)
+    }
+
+    /// 事件文件集合的轻量指纹（路径、大小、修改时间），用于识别同步导入、
+    /// 归档切换等不经过 `record_events` 的外部变化，避免回放会话无限期陈旧。
+    pub(crate) fn storage_fingerprint(&self) -> Result<u64> {
+        let mut hash = 0xcbf29ce484222325u64;
+        let mut files = self.list_event_files()?;
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        for file in files {
+            let Ok(metadata) = fs::metadata(&file.path) else {
+                // 归档 rename/删除与查询并发时跳过瞬时缺失文件；下一次查询会
+                // 得到新的稳定指纹。
+                continue;
+            };
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |duration| duration.as_nanos() as u64);
+            for byte in file.path.to_string_lossy().as_bytes() {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            for value in [metadata.len(), modified] {
+                for byte in value.to_le_bytes() {
+                    hash ^= u64::from(byte);
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+        Ok(hash)
     }
 
     /// 扫描事件库里的全部 `<origin>/<date>.events.jsonl` 文件。

@@ -2,7 +2,8 @@
 // ProofReplayDialog.qml — 手写证明回放（Issue #1008）
 // =============================================================================
 // 只渲染 Core 返回的正文、选区、来源和进度；不自行推演编辑规则。
-// 拖动时间轴时按设备内 seq 定位，逐次应用 Core replay 结果。
+// 时间轴按章节内事件位置（0..N）定位，全局 seq 仅用于链校验展示。
+// 播放间隔由相邻事件真实时间差和倍速计算。
 // =============================================================================
 
 import QtQuick
@@ -15,11 +16,16 @@ Dialog {
     property var editorBackendRef: null
     property string chapterId: ""
     property string deviceId: ""
+    property string selectedDeviceId: ""
     property var dt: null
     property var frame: null
-    property int currentSeq: 0
-    property int lastSeq: 0
+    property int currentPosition: 0
+    property int totalEvents: 0
+    property real currentTimestamp: 0
+    property real nextTimestamp: 0
     property bool playing: false
+    property real playbackSpeed: 1.0
+    property int playbackInterval: 260
     property string exportJson: ""
 
     title: qsTr("手写证明回放")
@@ -28,22 +34,33 @@ Dialog {
     height: 620
     anchors.centerIn: parent
 
-    function loadFrame(seq) {
+    function updatePlaybackInterval() {
+        var delta = nextTimestamp > currentTimestamp
+                ? nextTimestamp - currentTimestamp : 260
+        playbackInterval = Math.max(40, Math.min(2000,
+                Math.round(delta / Math.max(0.5, playbackSpeed))))
+    }
+
+    function loadFrame(position) {
         if (!editorBackendRef || !editorBackendRef.replay_chapter_proof_object || !chapterId)
             return
         var request = {
             "chapterId": chapterId,
-            "deviceId": deviceId,
-            "targetSeq": seq
+            "deviceId": selectedDeviceId
         }
+        if (position !== null && position !== undefined && position >= 0)
+            request.targetIndex = position
         var next = editorBackendRef.replay_chapter_proof_object(JSON.stringify(request))
         if (!next || next.valid === undefined) {
             errorLabel.text = qsTr("无法读取回放数据")
             return
         }
         frame = next
-        lastSeq = Number(next.lastSeq || 0)
-        currentSeq = Number(next.seq || 0)
+        totalEvents = Number(next.totalEvents || 0)
+        currentPosition = Number(next.position || 0)
+        currentTimestamp = Number(next.timestampMs || 0)
+        nextTimestamp = Number(next.nextTimestampMs || 0)
+        updatePlaybackInterval()
         errorLabel.text = (next.errors && next.errors.length > 0)
                 ? next.errors.join("\n") : ""
     }
@@ -51,6 +68,7 @@ Dialog {
     function openForChapter(chapter, device) {
         chapterId = String(chapter || "")
         deviceId = String(device || "")
+        selectedDeviceId = deviceId
         playing = false
         exportJson = ""
         frame = null
@@ -59,19 +77,20 @@ Dialog {
     }
 
     function step(delta) {
-        var next = Math.max(0, Math.min(lastSeq, currentSeq + delta))
-        if (next !== currentSeq)
+        var next = Math.max(0, Math.min(totalEvents, currentPosition + delta))
+        if (next !== currentPosition)
             loadFrame(next)
     }
 
     onOpened: loadFrame(null)
+    onClosed: playing = false
 
     Timer {
-        interval: 260
+        interval: root.playbackInterval
         repeat: true
         running: root.playing
         onTriggered: {
-            if (root.currentSeq >= root.lastSeq) {
+            if (root.currentPosition >= root.totalEvents) {
                 root.playing = false
             } else {
                 root.step(1)
@@ -94,40 +113,85 @@ Dialog {
 
             Button {
                 text: root.playing ? qsTr("暂停") : qsTr("播放")
-                enabled: root.lastSeq > 0
+                enabled: root.totalEvents > 0
                 onClicked: root.playing = !root.playing
             }
             Button {
                 text: qsTr("上一步")
-                enabled: root.currentSeq > 0
+                enabled: root.currentPosition > 0
                 onClicked: { root.playing = false; root.step(-1) }
             }
             Button {
                 text: qsTr("下一步")
-                enabled: root.currentSeq < root.lastSeq
+                enabled: root.currentPosition < root.totalEvents
                 onClicked: { root.playing = false; root.step(1) }
             }
             Label {
                 Layout.fillWidth: true
                 text: root.frame
                       ? qsTr("事件 %1 / %2 · 来源 %3")
-                            .arg(root.currentSeq).arg(root.lastSeq)
+                            .arg(root.currentPosition).arg(root.totalEvents)
                             .arg(String(root.frame.source || ""))
                       : qsTr("无事件")
                 elide: Text.ElideRight
+            }
+            ComboBox {
+                Layout.preferredWidth: 90
+                model: [0.5, 1.0, 2.0, 4.0]
+                currentIndex: 1
+                textRole: "modelData"
+                onActivated: {
+                    root.playbackSpeed = Number(model[currentIndex])
+                    root.updatePlaybackInterval()
+                }
             }
         }
 
         Slider {
             Layout.fillWidth: true
             from: 0
-            to: Math.max(1, root.lastSeq)
+            to: Math.max(1, root.totalEvents)
             stepSize: 1
-            value: root.currentSeq
-            enabled: root.lastSeq > 0
+            value: root.currentPosition
+            enabled: root.totalEvents > 0
             onMoved: {
                 root.playing = false
                 root.loadFrame(Math.round(value))
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Label { text: qsTr("设备分支"); font.pixelSize: 12 }
+            ComboBox {
+                Layout.fillWidth: true
+                model: root.frame && root.frame.branches
+                       ? root.frame.branches.map(function(branch) {
+                             return String(branch.deviceId || "")
+                         })
+                       : []
+                onActivated: {
+                    root.selectedDeviceId = String(model[currentIndex] || "")
+                    root.playing = false
+                    root.loadFrame(null)
+                }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Label {
+                Layout.fillWidth: true
+                text: root.currentTimestamp > 0
+                      ? qsTr("发生时间 %1").arg(Qt.formatDateTime(
+                            new Date(root.currentTimestamp), "yyyy-MM-dd HH:mm:ss"))
+                      : qsTr("事件时间未知")
+                font.pixelSize: 12
+            }
+            Label {
+                text: qsTr("链序号 %1").arg(root.frame ? Number(root.frame.seq || 0) : 0)
+                font.pixelSize: 12
+                opacity: 0.7
             }
         }
 
@@ -166,7 +230,7 @@ Dialog {
                 enabled: !!root.editorBackendRef && root.chapterId.length > 0
                 onClicked: {
                     var exported = root.editorBackendRef.export_chapter_proof_object(
-                                root.chapterId, root.deviceId)
+                                root.chapterId, root.selectedDeviceId)
                     if (!exported || exported.containsHistoricalText === undefined) {
                         errorLabel.text = qsTr("导出失败")
                         return

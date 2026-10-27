@@ -18,7 +18,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -28,6 +30,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -36,7 +40,7 @@ import org.json.JSONObject
  * Issue #1008：手写证明回放。
  *
  * 只渲染 Core `replayChapterProof` 返回的正文、选区和校验结果；拖动时间轴
- * 按设备内 seq 定位，不在 UI 侧推演编辑规则。
+ * 按章节内事件位置定位，播放间隔由相邻事件真实时间差和倍速计算。
  */
 @Composable
 internal fun ProofReplayDialog(
@@ -44,8 +48,14 @@ internal fun ProofReplayDialog(
     repository: WritingStatsRepository,
     onDismiss: () -> Unit,
 ) {
-    var currentSeq by remember(chapterId) { mutableIntStateOf(-1) }
-    var lastSeq by remember(chapterId) { mutableIntStateOf(0) }
+    var deviceId by remember(chapterId) { mutableStateOf("") }
+    var branches by remember(chapterId) { mutableStateOf(emptyList<String>()) }
+    var currentPosition by remember(chapterId) { mutableIntStateOf(-1) }
+    var totalEvents by remember(chapterId) { mutableIntStateOf(0) }
+    var framePosition by remember(chapterId) { mutableIntStateOf(-1) }
+    var timestampMs by remember(chapterId) { mutableLongStateOf(0L) }
+    var nextTimestampMs by remember(chapterId) { mutableLongStateOf(0L) }
+    var playbackSpeed by remember(chapterId) { mutableFloatStateOf(1f) }
     var text by remember(chapterId) { mutableStateOf("") }
     var source by remember(chapterId) { mutableStateOf("") }
     var valid by remember(chapterId) { mutableStateOf(false) }
@@ -68,34 +78,63 @@ internal fun ProofReplayDialog(
                     }
                 }
             text = frame.optString("text")
-            currentSeq = frame.optInt("seq", 0)
-            lastSeq = frame.optInt("lastSeq", 0)
+            val branchArray = frame.optJSONArray("branches")
+            branches =
+                if (branchArray == null) {
+                    emptyList()
+                } else {
+                    (0 until branchArray.length()).mapNotNull {
+                        branchArray.optJSONObject(it)?.optString("deviceId")?.takeIf { id -> id.isNotEmpty() }
+                    }
+                }
+            currentPosition = frame.optInt("position", 0)
+            framePosition = currentPosition
+            totalEvents = frame.optInt("totalEvents", 0)
+            timestampMs = frame.optLong("timestampMs", 0L)
+            nextTimestampMs = frame.optLong("nextTimestampMs", 0L)
             source = frame.optString("source")
             valid = frame.optBoolean("valid")
             errors = message
         }.onFailure { errors = it.message ?: "回放数据解析失败" }
     }
 
-    LaunchedEffect(chapterId, currentSeq) {
+    LaunchedEffect(chapterId, deviceId, currentPosition) {
         val request =
             JSONObject()
                 .put("chapterId", chapterId)
-                .put("deviceId", "")
-        if (currentSeq >= 0) {
-            request.put("targetSeq", currentSeq)
+                .put("deviceId", deviceId)
+        if (currentPosition >= 0) {
+            request.put("targetIndex", currentPosition)
         }
         applyFrame(repository.replayChapterProof(request.toString()))
     }
 
-    LaunchedEffect(playing, currentSeq, lastSeq) {
+    LaunchedEffect(
+        playing,
+        currentPosition,
+        framePosition,
+        totalEvents,
+        playbackSpeed,
+        timestampMs,
+        nextTimestampMs,
+    ) {
         if (!playing) return@LaunchedEffect
+        if (currentPosition < 0) {
+            currentPosition = 0
+            return@LaunchedEffect
+        }
+        if (currentPosition != framePosition) return@LaunchedEffect
         while (playing) {
-            delay(260)
-            if (currentSeq >= lastSeq) {
+            if (currentPosition >= totalEvents) {
                 playing = false
-            } else {
-                currentSeq += 1
+                break
             }
+            val delta = nextTimestampMs - timestampMs
+            val baseDelay = if (delta in 1L..60_000L) delta else 260L
+            val wait = (baseDelay / playbackSpeed).toLong().coerceIn(40L, 2_000L)
+            delay(wait)
+            if (!playing) break
+            currentPosition += 1
         }
     }
 
@@ -116,38 +155,92 @@ internal fun ProofReplayDialog(
                 ) {
                     Button(
                         onClick = {
-                            if (!playing && currentSeq < 0) currentSeq = 0
+                            if (!playing && currentPosition < 0) currentPosition = 0
                             playing = !playing
                         },
-                        enabled = lastSeq > 0,
+                        enabled = totalEvents > 0,
                     ) { Text(if (playing) "暂停" else "播放") }
                     OutlinedButton(
                         onClick = {
                             playing = false
-                            if (currentSeq > 0) currentSeq -= 1
+                            if (currentPosition > 0) currentPosition -= 1
                         },
-                        enabled = currentSeq > 0,
+                        enabled = currentPosition > 0,
                     ) { Text("上一步") }
                     OutlinedButton(
                         onClick = {
                             playing = false
-                            if (currentSeq < lastSeq) currentSeq += 1
+                            if (currentPosition < totalEvents) currentPosition += 1
                         },
-                        enabled = currentSeq < lastSeq,
+                        enabled = currentPosition < totalEvents,
                     ) { Text("下一步") }
                 }
+                if (branches.size > 1) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("设备分支", style = MaterialTheme.typography.bodySmall)
+                        branches.forEach { id ->
+                            TextButton(
+                                onClick = {
+                                    playing = false
+                                    deviceId = id
+                                    currentPosition = -1
+                                },
+                            ) {
+                                Text(
+                                    id,
+                                    color =
+                                        if (deviceId == id) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
+                                )
+                            }
+                        }
+                    }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("倍速", style = MaterialTheme.typography.bodySmall)
+                    listOf(0.5f, 1f, 2f, 4f).forEach { speed ->
+                        TextButton(onClick = { playbackSpeed = speed }) {
+                            Text(
+                                if (speed == speed.toInt().toFloat()) "${speed.toInt()}x" else "${speed}x",
+                                color =
+                                    if (playbackSpeed == speed) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                            )
+                        }
+                    }
+                }
                 Slider(
-                    value = currentSeq.toFloat(),
+                    value = currentPosition.coerceAtLeast(0).toFloat(),
                     onValueChange = {
                         playing = false
-                        currentSeq = it.toInt()
+                        currentPosition = it.toInt()
                     },
-                    valueRange = 0f..lastSeq.coerceAtLeast(1).toFloat(),
-                    steps = (lastSeq - 1).coerceAtLeast(0),
-                    enabled = lastSeq > 0,
+                    valueRange = 0f..totalEvents.coerceAtLeast(1).toFloat(),
+                    steps = (totalEvents - 1).coerceAtLeast(0),
+                    enabled = totalEvents > 0,
                 )
                 Text(
-                    "事件 $currentSeq / $lastSeq · 来源 $source",
+                    "事件 ${currentPosition.coerceAtLeast(0)} / $totalEvents · 来源 $source",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    if (timestampMs > 0) {
+                        "发生时间 " + DateFormat.getDateTimeInstance().format(Date(timestampMs))
+                    } else {
+                        "事件时间未知"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
@@ -197,11 +290,11 @@ internal fun ProofReplayDialog(
                             scope.launch {
                                 // 证明包包含历史正文；按钮文案已明确提示。
                                 exportJson =
-                                    repository.exportChapterProof(chapterId, "")
+                                    repository.exportChapterProof(chapterId, deviceId)
                                         ?: "导出失败"
                             }
                         },
-                        enabled = lastSeq > 0,
+                        enabled = totalEvents > 0,
                     ) { Text("导出证明包（含历史正文）") }
                     TextButton(
                         onClick = onDismiss,

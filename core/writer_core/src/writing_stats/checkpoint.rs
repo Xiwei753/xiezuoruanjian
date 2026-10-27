@@ -109,6 +109,14 @@ pub fn archive_event_day(
     }
     let destination = app_data_root.join(archive_relative_path(device_id, date));
     if destination.is_file() {
+        // 崩溃可能发生在 rename 之后、删除源文件之前。归档与源完全一致时
+        // 完成收尾；源若有迟到事件则保留两段，读取侧按 event_id 去重。
+        let source_bytes = fs::read(&source)?;
+        let archive_bytes = zstd::stream::decode_all(fs::File::open(&destination)?)
+            .map_err(|error| crate::Error::Other(format!("decode proof archive failed: {error}")))?;
+        if archive_bytes == source_bytes {
+            fs::remove_file(&source)?;
+        }
         return Ok(Some(destination));
     }
     if let Some(parent) = destination.parent() {
@@ -135,10 +143,33 @@ pub fn append_checkpoint(app_data_root: &Path, checkpoint: &ProofCheckpoint) -> 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    if let Some(last) = load_last_checkpoint(app_data_root, &checkpoint.device_id, &checkpoint.chapter_id)? {
-        if last.seq == checkpoint.seq && last.text_sha256 == checkpoint.text_sha256 {
-            return Ok(());
+    if let Some(last) =
+        load_last_checkpoint(app_data_root, &checkpoint.device_id, &checkpoint.chapter_id)?
+    {
+        if last.seq == checkpoint.seq {
+            if last.text_sha256 == checkpoint.text_sha256
+                && last.content_hash == checkpoint.content_hash
+                && last.event_hash == checkpoint.event_hash
+            {
+                return Ok(());
+            }
+            return Err(crate::Error::Other(format!(
+                "检查点 seq {} 已有不同正文，拒绝覆盖；外部变更必须另起事件链",
+                checkpoint.seq
+            )));
         }
+        if last.seq > checkpoint.seq {
+            return Err(crate::Error::Other(format!(
+                "检查点 seq {} 早于已写入的 seq {}，拒绝乱序追加",
+                checkpoint.seq, last.seq
+            )));
+        }
+    }
+    if checkpoint.text_sha256 != text_sha256(&checkpoint.text) {
+        return Err(crate::Error::Other(format!(
+            "检查点 seq {} 的正文摘要不一致",
+            checkpoint.seq
+        )));
     }
     let serialized = serde_json::to_string(checkpoint)?;
     let mut file = OpenOptions::new()

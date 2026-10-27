@@ -5,9 +5,11 @@
 //! `proof`，仍按旧字段读取统计，但不能逐字回放。
 //!
 //! 哈希分两层：
-//! - `before_content_hash` / `after_content_hash` 是章节内容的**链式摘要**，
-//!   只用于校验事件顺序与变更连续性；它不是全文 SHA。
-//! - checkpoint 里的 `text_sha256` 才是某个完整正文快照的 SHA-256。
+//! - `before_content_hash` / `after_content_hash` 是“上一链摘要 + 本次变更”
+//!   的命令链摘要，只用于校验事件顺序与变更连续性；它不是全文 SHA。
+//! - `before_text_sha256` / `after_text_sha256` 是 Core 在应用事务前后对
+//!   **真实正文**计算的 SHA-256，用来把事件锚定到具体文本。
+//! - checkpoint 里的 `text_sha256` 是某个完整正文快照的 SHA-256。
 //!
 //! 哈希编码带明确版本前缀，字段用长度前缀拼接，避免分隔符歧义。校验只能
 //! 说明「这份记录从记录起点起前后一致」，不宣称证明输入者一定是人类。
@@ -49,6 +51,12 @@ pub struct ProofEditPayload {
     pub new_selection: EditorSelection,
     pub before_content_hash: String,
     pub after_content_hash: String,
+    /// 事务应用前真实正文的全文 SHA-256；旧事件为空，回放时跳过强校验。
+    #[serde(default)]
+    pub before_text_sha256: String,
+    /// 事务应用后真实正文的全文 SHA-256。
+    #[serde(default)]
+    pub after_text_sha256: String,
     /// 同设备、同章节上一条事件的 `event_hash`；新链为空。
     #[serde(default)]
     pub prev_event_hash: String,
@@ -175,6 +183,12 @@ pub fn compute_event_hash(event: &WritingInputEvent) -> String {
     encoder.field(&(proof.new_selection.head.index.value() as u64).to_le_bytes());
     encoder.field(proof.before_content_hash.as_bytes());
     encoder.field(proof.after_content_hash.as_bytes());
+    // 全文 SHA 是后加字段：旧事件两项都为空时保持旧哈希编码不变，
+    // 否则历史事件链会在升级后整体失效。新事件两项始终非空。
+    if !proof.before_text_sha256.is_empty() || !proof.after_text_sha256.is_empty() {
+        encoder.field(proof.before_text_sha256.as_bytes());
+        encoder.field(proof.after_text_sha256.as_bytes());
+    }
     encoder.field(proof.prev_event_hash.as_bytes());
     encoder.field(proof.sync_source_device_id.as_bytes());
     encoder.field(proof.parent_event_id.as_bytes());
@@ -306,6 +320,16 @@ pub fn verify_event_chain(
             ));
         }
 
+        if !proof.before_text_sha256.is_empty()
+            && proof.before_text_sha256 != text_sha256(&result.final_text)
+        {
+            result.valid = false;
+            result.errors.push(format!(
+                "事件 {} 的 before_text_sha256 与真实正文不一致",
+                event.event_id
+            ));
+        }
+
         if let Err(error) = apply_changes(&mut result.final_text, &proof.changes) {
             result.valid = false;
             result.errors.push(format!("事件 {}: {error}", event.event_id));
@@ -315,6 +339,15 @@ pub fn verify_event_chain(
             result.valid = false;
             result.errors.push(format!(
                 "事件 {} 的 after_content_hash 与变更不一致",
+                event.event_id
+            ));
+        }
+        if !proof.after_text_sha256.is_empty()
+            && proof.after_text_sha256 != text_sha256(&result.final_text)
+        {
+            result.valid = false;
+            result.errors.push(format!(
+                "事件 {} 的 after_text_sha256 与真实正文不一致",
                 event.event_id
             ));
         }

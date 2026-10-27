@@ -154,6 +154,17 @@ fn speed_buckets_json(projection: &StatsProjection) -> Vec<Value> {
 /// 写作统计 API 入口 — 直接持有 `StatsStore`，所有查询走 projection。
 pub struct StatsApi {
     store: StatsStore,
+    /// 章节回放会话缓存：(代数, 章节/设备 -> 有序索引 + 增量状态)。
+    replay_cache: std::sync::Mutex<
+        std::collections::HashMap<
+            String,
+            (
+                u64,
+                u64,
+                std::sync::Arc<crate::writing_stats::replay::ProofReplaySession>,
+            ),
+        >,
+    >,
     /// 旧事件库迁移失败状态。
     ///
     /// 非空表示旧单机事件库尚未完整并入按设备分区的新事件库：
@@ -175,6 +186,7 @@ impl StatsApi {
         };
         Self {
             store: StatsStore::new(app_data_root),
+            replay_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             migration_error: std::sync::Mutex::new(migration_error),
         }
     }
@@ -825,7 +837,38 @@ impl StatsApi {
         &self,
         request: &crate::writing_stats::replay::ProofReplayRequest,
     ) -> Result<crate::writing_stats::replay::ProofReplayFrame> {
-        crate::writing_stats::replay::replay_chapter(&self.store, request)
+        let generation = self.store.proof_generation();
+        let fingerprint = self.store.storage_fingerprint()?;
+        let key = format!(
+            "{}|{}",
+            request.chapter_id,
+            if request.device_id.is_empty() {
+                "__origin"
+            } else {
+                &request.device_id
+            }
+        );
+        {
+            let cache = self
+                .replay_cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some((cached_generation, cached_fingerprint, session)) = cache.get(&key) {
+                if *cached_generation == generation && *cached_fingerprint == fingerprint {
+                    return Ok(session.frame_at(request));
+                }
+            }
+        }
+        let session = std::sync::Arc::new(
+            crate::writing_stats::replay::ProofReplaySession::open(&self.store, request)?,
+        );
+        let frame = session.frame_at(request);
+        let mut cache = self
+            .replay_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.insert(key, (generation, fingerprint, session));
+        Ok(frame)
     }
 
     /// 导出离线可校验的章节证明包。
