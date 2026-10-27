@@ -725,6 +725,21 @@ fn classify_git_error(
         _ => {}
     }
 
+    // Issue #1011：网络操作在 TLS/套接字读写时被信号打断（EINTR）时，
+    // libgit2/OpenSSL 可能没有对应错误码，只把错误归到 `Net`/`Ssl`/`Http`
+    // class。此时在一个已经出错的会话上原样重放没有意义，也不能落进
+    // `Other` 静默收尾；识别为 `Network`，让整轮同步重新建立 Provider 并
+    // 重新读取远端。只接受明确的 `Interrupted system call`/`EINTR` 文本，
+    // 且限定在网络操作，避免把证书、认证或本地 Git 读写中断误报为网络故障。
+    if is_interruptible_network_operation(operation)
+        && is_transport_interrupted(raw_message)
+        && matches!(class, ErrorClass::Net | ErrorClass::Ssl | ErrorClass::Http)
+    {
+        return ProviderError::Network {
+            reason: format!("transport interrupted: {message}"),
+        };
+    }
+
     match class {
         // `ErrorClass::Net` 是 libgit2 对连接层的明确分类；证书和 HTTP
         // 失败已在上面优先排除，此处才允许直接进入 GitHub API 后备。
@@ -846,6 +861,21 @@ fn is_network_transport_error(message: &str) -> bool {
     NEEDLES.iter().any(|needle| lower.contains(needle))
 }
 
+/// 会经过 TLS/长连接传输的 Git 操作。只有这些操作中的 EINTR 才表示
+/// 传输被系统调用中断；本地 Git 读写被信号打断不属于可切换网络的故障。
+fn is_interruptible_network_operation(operation: &str) -> bool {
+    matches!(operation, "connect_auth" | "list" | "fetch" | "push")
+}
+
+/// 明确的系统调用被信号中断语义。只匹配 EINTR 文本，不把泛 SSL/握手
+/// 错误都当成传输中断。
+fn is_transport_interrupted(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("interrupted system call")
+        || lower.contains("syscall failure: interrupted")
+        || lower.contains("eintr")
+}
+
 /// 脱敏诊断用的消息类型；不记录原始文本。
 fn message_kind(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
@@ -854,6 +884,9 @@ fn message_kind(message: &str) -> &'static str {
     }
     if is_tls_certificate_error(message) || lower.contains("certificate") {
         return "tls_certificate";
+    }
+    if is_transport_interrupted(message) {
+        return "transport_interrupted";
     }
     if lower.contains("handshake") || lower.contains("ssl connect error") {
         return "tls_handshake";
@@ -991,5 +1024,50 @@ fn classify_http_error(message: &str, code: ErrorCode) -> ProviderError {
     }
     ProviderError::Other {
         reason: message.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_ssl_transport_maps_to_network() {
+        let error = classify_git_error(
+            "fetch",
+            "SSL error: syscall failure: Interrupted system call",
+            ErrorCode::GenericError,
+            ErrorClass::Ssl,
+        );
+
+        assert!(matches!(error, ProviderError::Network { .. }));
+        assert_eq!(
+            message_kind("SSL error: syscall failure: Interrupted system call"),
+            "transport_interrupted"
+        );
+    }
+
+    #[test]
+    fn interrupted_local_operation_is_not_network() {
+        let error = classify_git_error(
+            "read_blob",
+            "Interrupted system call",
+            ErrorCode::GenericError,
+            ErrorClass::Ssl,
+        );
+
+        assert!(matches!(error, ProviderError::Other { .. }));
+    }
+
+    #[test]
+    fn certificate_error_wins_over_interrupted_transport() {
+        let error = classify_git_error(
+            "fetch",
+            "certificate verify failed: Interrupted system call",
+            ErrorCode::GenericError,
+            ErrorClass::Ssl,
+        );
+
+        assert!(matches!(error, ProviderError::TlsCertificateInvalid { .. }));
     }
 }

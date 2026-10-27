@@ -5,12 +5,15 @@
 // app-level sync 双套 handler 已删除，只保留全量同步三个入口
 // （dry-run / diagnostics / perform）+ 全局 config 读写 + App target 状态查询。
 //
-// NativePerformSync / NativeSyncDiagnostics / NativeSyncDryRun 使用
-// napi_create_async_work + napi_create_promise 在工作线程上执行 Rust 同步调用，
-// 避免阻塞 ArkTS 主线程。轻量级本地操作（config/secrets/state 读写）
-// 仍使用同步 ReturnJsonString。
+// NativePerformSync / NativeSyncDiagnostics / NativeSyncDryRun 是可能持续
+// 数秒至数分钟的 Rust Git/网络阻塞调用，统一交给 sync_native_worker.h 的
+// 专用工作线程 + napi_threadsafe_function（Issue #1011），不再占用 FFRT
+// 的 async work 执行线程。轻量级本地操作（config/secrets/state 读写）
+// 仍使用同步 ReturnJsonString；状态/冲突查询仍使用 async work。
 
-// ── Async work infrastructure for sync operations ──
+#include "sync_native_worker.h"
+
+// ── Async work infrastructure for lightweight sync operations ──
 
 struct SyncAsyncData {
     napi_async_work work;
@@ -77,22 +80,19 @@ static void SyncCompleteCb(napi_env env, napi_status status, void* data) {
     delete asyncData;
 }
 
-// PerformSyncExecuteCb: 工作线程上执行 writer_core_perform_full_sync()
-static void PerformSyncExecuteCb(napi_env env, void* data) {
-    SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
-    asyncData->result_json = writer_core_perform_full_sync();
+// 全量同步三个入口统一走专用原生工作线程（Issue #1011）。
+// 这些函数只执行 Rust C ABI，由工作线程调用；结果字符串的释放统一在
+// sync_native_worker.h 的 ArkTS 线程回调中完成。
+static char* PerformSyncExecute() {
+    return writer_core_perform_full_sync();
 }
 
-// SyncDiagnosticsExecuteCb: 工作线程上执行 writer_core_full_sync_diagnostics()
-static void SyncDiagnosticsExecuteCb(napi_env env, void* data) {
-    SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
-    asyncData->result_json = writer_core_full_sync_diagnostics();
+static char* SyncDiagnosticsExecute() {
+    return writer_core_full_sync_diagnostics();
 }
 
-// SyncDryRunExecuteCb: 工作线程上执行 writer_core_full_sync_dry_run()
-static void SyncDryRunExecuteCb(napi_env env, void* data) {
-    SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
-    asyncData->result_json = writer_core_full_sync_dry_run();
+static char* SyncDryRunExecute() {
+    return writer_core_full_sync_dry_run();
 }
 
 // ── 轻量级本地操作（同步调用，不阻塞主线程） ──
@@ -125,115 +125,21 @@ static napi_value NativeSaveSyncConfig(napi_env env, napi_callback_info info) {
 
 // ── 异步同步操作（使用 napi_create_async_work + napi_create_promise） ──
 
+// ── 全量同步长任务（使用专用原生工作线程 + TSFN） ──
+
 static napi_value NativeSyncDryRun(napi_env env, napi_callback_info info) {
     (void)info;
-
-    napi_deferred deferred;
-    napi_value promise;
-    napi_create_promise(env, &deferred, &promise);
-
-    SyncAsyncData* asyncData = new SyncAsyncData();
-    asyncData->deferred = deferred;
-    asyncData->result_json = nullptr;
-
-    napi_value name;
-    napi_create_string_utf8(env, "NativeSyncDryRun", NAPI_AUTO_LENGTH, &name);
-
-    napi_status asyncStatus = napi_create_async_work(env, nullptr, name,
-        SyncDryRunExecuteCb, SyncCompleteCb, asyncData, &asyncData->work);
-    if (asyncStatus != napi_ok) {
-        napi_value result;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_CREATE_FAILED\",\"userMessage\":\"Failed to create async work\"}", NAPI_AUTO_LENGTH, &result);
-        napi_resolve_deferred(env, deferred, result);
-        delete asyncData;
-        return promise;
-    }
-
-    napi_status queueStatus = napi_queue_async_work(env, asyncData->work);
-    if (queueStatus != napi_ok) {
-        napi_value result;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\",\"userMessage\":\"Failed to queue async work\"}", NAPI_AUTO_LENGTH, &result);
-        napi_resolve_deferred(env, deferred, result);
-        napi_delete_async_work(env, asyncData->work);
-        delete asyncData;
-        return promise;
-    }
-
-    return promise;
+    return SyncNativeWorkerSubmit(env, "NativeSyncDryRun", SyncDryRunExecute);
 }
 
 static napi_value NativeSyncDiagnostics(napi_env env, napi_callback_info info) {
     (void)info;
-
-    napi_deferred deferred;
-    napi_value promise;
-    napi_create_promise(env, &deferred, &promise);
-
-    SyncAsyncData* asyncData = new SyncAsyncData();
-    asyncData->deferred = deferred;
-    asyncData->result_json = nullptr;
-
-    napi_value name;
-    napi_create_string_utf8(env, "NativeSyncDiagnostics", NAPI_AUTO_LENGTH, &name);
-
-    napi_status asyncStatus = napi_create_async_work(env, nullptr, name,
-        SyncDiagnosticsExecuteCb, SyncCompleteCb, asyncData, &asyncData->work);
-    if (asyncStatus != napi_ok) {
-        napi_value result;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_CREATE_FAILED\",\"userMessage\":\"Failed to create async work\"}", NAPI_AUTO_LENGTH, &result);
-        napi_resolve_deferred(env, deferred, result);
-        delete asyncData;
-        return promise;
-    }
-
-    napi_status queueStatus = napi_queue_async_work(env, asyncData->work);
-    if (queueStatus != napi_ok) {
-        napi_value result;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\",\"userMessage\":\"Failed to queue async work\"}", NAPI_AUTO_LENGTH, &result);
-        napi_resolve_deferred(env, deferred, result);
-        napi_delete_async_work(env, asyncData->work);
-        delete asyncData;
-        return promise;
-    }
-
-    return promise;
+    return SyncNativeWorkerSubmit(env, "NativeSyncDiagnostics", SyncDiagnosticsExecute);
 }
 
 static napi_value NativePerformSync(napi_env env, napi_callback_info info) {
     (void)info;
-
-    napi_deferred deferred;
-    napi_value promise;
-    napi_create_promise(env, &deferred, &promise);
-
-    SyncAsyncData* asyncData = new SyncAsyncData();
-    asyncData->deferred = deferred;
-    asyncData->result_json = nullptr;
-
-    napi_value name;
-    napi_create_string_utf8(env, "NativePerformSync", NAPI_AUTO_LENGTH, &name);
-
-    napi_status asyncStatus = napi_create_async_work(env, nullptr, name,
-        PerformSyncExecuteCb, SyncCompleteCb, asyncData, &asyncData->work);
-    if (asyncStatus != napi_ok) {
-        napi_value result;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_CREATE_FAILED\",\"userMessage\":\"Failed to create async work\"}", NAPI_AUTO_LENGTH, &result);
-        napi_resolve_deferred(env, deferred, result);
-        delete asyncData;
-        return promise;
-    }
-
-    napi_status queueStatus = napi_queue_async_work(env, asyncData->work);
-    if (queueStatus != napi_ok) {
-        napi_value result;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\",\"userMessage\":\"Failed to queue async work\"}", NAPI_AUTO_LENGTH, &result);
-        napi_resolve_deferred(env, deferred, result);
-        napi_delete_async_work(env, asyncData->work);
-        delete asyncData;
-        return promise;
-    }
-
-    return promise;
+    return SyncNativeWorkerSubmit(env, "NativePerformSync", PerformSyncExecute);
 }
 
 // ── 轻量级本地操作（同步调用，不阻塞主线程） ──
