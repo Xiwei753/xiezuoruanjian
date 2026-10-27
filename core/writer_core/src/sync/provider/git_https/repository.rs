@@ -4,9 +4,10 @@
 //! `commit_batch` 在本地构造完整 tree + commit 后执行普通（非强制）push。
 //! 缓存与用户正文目录分离；后续同步只下载新增对象。
 //!
-//! 错误优先按 libgit2 `ErrorCode` 分类、再用 `ErrorClass` 兜底：超时、EOF 和
-//! TLS 传输断开属于“传输不可达”，可触发 GitHub API 后备；证书验证失败、
-//! 认证、权限和 non-fast-forward 保留准确错误，不会误报为网络不可达。
+//! 错误优先识别 TLS 证书校验失败，再按 libgit2 `ErrorCode` 分类、用
+//! `ErrorClass` 兜底：只有明确的 DNS/连接拒绝/超时/重置/EOF 等传输不可达
+//! 才可触发 GitHub API 后备；证书验证失败、认证、权限和 non-fast-forward
+//! 保留准确错误，不会被 `Http`/`Ssl` 或泛型 class 中的握手关键词误报为网络。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -682,20 +683,33 @@ fn classify_git_error(
 ) -> ProviderError {
     let message = format!("{operation}: {raw_message}");
 
-    // 先看具体错误码：libgit2 的传输超时/EOF 不一定落在 `ErrorClass::Net`，
-    // 而证书拒绝与其他 SSL 握手/传输断开也必须区分，否则会误触发或误阻断
-    // GitHub API 自动后备。
-    match code {
-        ErrorCode::Certificate => {
-            if is_ca_trust_error(raw_message) {
-                return ProviderError::TlsCaUnavailable {
-                    reason: format!("TLS CA trust unavailable: {message}"),
-                };
-            }
-            return ProviderError::TlsCertificateInvalid {
+    // 证书校验失败可能被 libgit2 报成 `Certificate` code，也可能落在
+    // `Http`/`Net`/`Ssl` 或泛型 class/code 中。必须在任何 class 和网络
+    // 关键词判断之前识别，否则 `certificate verify failed during TLS
+    // handshake` 这类文本会被 `handshake` 等泛关键词误判为网络不可达，
+    // 从而错误触发 GitHub API 后备。
+    if code == ErrorCode::Certificate {
+        return classify_tls_verification_error(&message, raw_message).unwrap_or_else(|| {
+            ProviderError::TlsCertificateInvalid {
                 reason: format!("TLS certificate verification failed: {message}"),
-            };
+            }
+        });
+    }
+    if let Some(error) = classify_tls_verification_error(&message, raw_message) {
+        return error;
+    }
+
+    // 明确的 HTTP 认证/权限/状态错误也先于连接不可达判断。`Http` class
+    // 必然检查；其他 class 只有文本包含明确 HTTP 语义时才检查，避免把
+    // 本地 Git 错误里的普通词或 OID 数字误当成 HTTP 状态。
+    if class == ErrorClass::Http || has_explicit_http_status(raw_message) {
+        let mapped = classify_http_error(&message, code);
+        if !matches!(mapped, ProviderError::Other { .. }) {
+            return mapped;
         }
+    }
+
+    match code {
         ErrorCode::Timeout | ErrorCode::Eof => {
             return ProviderError::Network { reason: message };
         }
@@ -712,40 +726,28 @@ fn classify_git_error(
     }
 
     match class {
+        // `ErrorClass::Net` 是 libgit2 对连接层的明确分类；证书和 HTTP
+        // 失败已在上面优先排除，此处才允许直接进入 GitHub API 后备。
         ErrorClass::Net => ProviderError::Network { reason: message },
-        // 证书错误已在上面单独处理。ErrorClass::Ssl 仍可能携带 OpenSSL
-        // 的验证错误文本（部分 libgit2 版本不返回 Certificate code），不能
-        // 一律归为“连接中断”，否则会误触发 GitHub API 后备。
+        // 未命中证书文本的 SSL/握手错误性质不明，不能凭 `handshake`、
+        // `ssl connect error` 等泛关键词触发 REST 后备。只有明确出现
+        // 连接拒绝/超时/重置/EOF 等传输失败时才归为 Network。
         ErrorClass::Ssl => {
-            let lower = raw_message.to_ascii_lowercase();
-            if is_ca_trust_error(&lower) {
-                ProviderError::TlsCaUnavailable {
-                    reason: format!("TLS CA trust unavailable: {message}"),
-                }
-            } else if lower.contains("certificate")
-                || lower.contains("self signed")
-                || lower.contains("hostname")
-                || lower.contains("cert verify")
-                || lower.contains("ssl verify")
-            {
-                ProviderError::TlsCertificateInvalid { reason: message }
-            } else {
+            if is_network_transport_error(raw_message) {
                 ProviderError::Network {
                     reason: format!("TLS transport error: {message}"),
                 }
+            } else {
+                ProviderError::Other { reason: message }
             }
         }
         ErrorClass::Http => {
-            let mapped = classify_http_error(&message, code);
-            // libgit2 常把 DNS/连接失败放进 Http class 而不返回 Net class。
-            // 状态码错误已由 classify_http_error 单独分类，只有明确的传输
-            // 失败才转成 Network，不能仅凭 ErrorClass::Http 就触发 REST 后备。
-            if matches!(mapped, ProviderError::Other { .. })
-                && is_network_transport_error(raw_message)
-            {
+            // 状态码/认证错误已在上面返回；这里只处理无法识别状态码的
+            // HTTP 错误，并且只有明确传输失败文本才转为 Network。
+            if is_network_transport_error(raw_message) {
                 ProviderError::Network { reason: message }
             } else {
-                mapped
+                ProviderError::Other { reason: message }
             }
         }
         ErrorClass::Reference if code == ErrorCode::NotFound => ProviderError::NotFound {
@@ -761,7 +763,48 @@ fn classify_git_error(
     }
 }
 
+/// 按 OpenSSL/libgit2 的错误文本区分 CA 信任源缺失与证书链/主机名校验失败。
+///
+/// 返回 `None` 表示文本没有明确证书校验语义，留给后续 class/code 判断。
+fn classify_tls_verification_error(message: &str, raw_message: &str) -> Option<ProviderError> {
+    if is_ca_trust_error(raw_message) {
+        return Some(ProviderError::TlsCaUnavailable {
+            reason: format!("TLS CA trust unavailable: {message}"),
+        });
+    }
+    if is_tls_certificate_error(raw_message) {
+        return Some(ProviderError::TlsCertificateInvalid {
+            reason: format!("TLS certificate verification failed: {message}"),
+        });
+    }
+    None
+}
+
+/// 明确的 HTTP 状态/错误语义。用于让非 `Http` class 的 HTTP 错误也能先于
+/// 连接不可达判断，同时避免仅凭普通词或 OID 中的数字误判。
+fn has_explicit_http_status(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("unauthorized")
+        || lower.contains("forbidden")
+        || lower.contains("proxy authentication")
+        || lower.contains("proxy authorization")
+        || lower.contains("internal server error")
+        || lower.contains("bad gateway")
+        || lower.contains("service unavailable")
+        || lower.contains("gateway timeout")
+    {
+        return true;
+    }
+    let has_status_code = ["401", "403", "404", "407", "500", "502", "503", "504"]
+        .iter()
+        .any(|status| lower.contains(status));
+    has_status_code && (lower.contains("http") || lower.contains("status"))
+}
+
 /// 明确属于连接层不可达的错误文本。只用于分类，不写入诊断日志。
+///
+/// 不包含 `handshake`、`ssl connect error` 或单独 `proxy` 等性质不明的
+/// 关键词；这类错误保持 `Other`，由诊断继续观察，不能驱动 REST 后备。
 fn is_network_transport_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     const NEEDLES: &[&str] = &[
@@ -786,7 +829,11 @@ fn is_network_transport_error(message: &str) -> bool {
         "operation timed out",
         "timed out",
         "timeout",
-        "proxy",
+        "proxy connection failed",
+        "failed to connect to proxy",
+        "could not connect to proxy",
+        "unable to connect to proxy",
+        "proxy connect error",
         "tunnel connection failed",
         "early eof",
         "unexpected eof",
@@ -795,8 +842,6 @@ fn is_network_transport_error(message: &str) -> bool {
         "connection closed",
         "recv failure",
         "send failure",
-        "ssl connect error",
-        "handshake",
     ];
     NEEDLES.iter().any(|needle| lower.contains(needle))
 }
@@ -807,13 +852,11 @@ fn message_kind(message: &str) -> &'static str {
     if is_ca_trust_error(&lower) {
         return "tls_ca";
     }
-    if lower.contains("certificate")
-        || lower.contains("self signed")
-        || lower.contains("hostname")
-        || lower.contains("cert verify")
-        || lower.contains("ssl verify")
-    {
+    if is_tls_certificate_error(message) || lower.contains("certificate") {
         return "tls_certificate";
+    }
+    if lower.contains("handshake") || lower.contains("ssl connect error") {
+        return "tls_handshake";
     }
     if lower.contains("could not resolve")
         || lower.contains("failed to resolve")
@@ -837,6 +880,9 @@ fn message_kind(message: &str) -> &'static str {
     if lower.contains("timed out") || lower.contains("timeout") {
         return "timeout";
     }
+    if lower.contains("proxy authentication") || lower.contains("proxy authorization") {
+        return "auth";
+    }
     if lower.contains("proxy") || lower.contains("tunnel") {
         return "proxy";
     }
@@ -844,6 +890,8 @@ fn message_kind(message: &str) -> &'static str {
         return "eof";
     }
     if lower.contains("401")
+        || lower.contains("407")
+        || lower.contains("unauthorized")
         || lower.contains("authentication")
         || lower.contains("credentials")
     {
@@ -860,6 +908,9 @@ fn message_kind(message: &str) -> &'static str {
         || lower.contains("503")
         || lower.contains("504")
         || lower.contains("server error")
+        || lower.contains("bad gateway")
+        || lower.contains("service unavailable")
+        || lower.contains("gateway timeout")
     {
         return "http_server";
     }
@@ -871,15 +922,42 @@ fn message_kind(message: &str) -> &'static str {
 fn is_ca_trust_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("unable to get local issuer")
+        || lower.contains("unable to get issuer certificate")
         || lower.contains("unable to verify the first certificate")
         || lower.contains("unknown ca")
         || lower.contains("no ca certificate")
         || lower.contains("ca certificate")
 }
 
+/// 明确的证书链/主机名/有效期校验失败文本。
+fn is_tls_certificate_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("certificate verify")
+        || lower.contains("certificate verification")
+        || lower.contains("cert verify")
+        || lower.contains("ssl verify")
+        || lower.contains("self signed")
+        || lower.contains("self-signed")
+        || lower.contains("hostname mismatch")
+        || lower.contains("hostname does not match")
+        || lower.contains("does not match certificate")
+        || lower.contains("certificate subject name")
+        || lower.contains("certificate has expired")
+        || lower.contains("certificate is not yet valid")
+        || lower.contains("certificate chain")
+        || lower.contains("peer certificate cannot be authenticated")
+        || lower.contains("certificate revoked")
+        || lower.contains("unsupported certificate purpose")
+        || lower.contains("invalid certificate")
+}
+
 fn classify_http_error(message: &str, code: ErrorCode) -> ProviderError {
     let lower = message.to_ascii_lowercase();
     if lower.contains("401")
+        || lower.contains("407")
+        || lower.contains("unauthorized")
+        || lower.contains("proxy authentication")
+        || lower.contains("proxy authorization")
         || lower.contains("authentication")
         || lower.contains("credentials")
         || code == ErrorCode::Auth
@@ -902,6 +980,10 @@ fn classify_http_error(message: &str, code: ErrorCode) -> ProviderError {
         || lower.contains("502")
         || lower.contains("503")
         || lower.contains("504")
+        || lower.contains("internal server error")
+        || lower.contains("bad gateway")
+        || lower.contains("service unavailable")
+        || lower.contains("gateway timeout")
     {
         return ProviderError::TemporaryUnavailable {
             reason: message.to_string(),
