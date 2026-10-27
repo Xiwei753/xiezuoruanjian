@@ -163,7 +163,7 @@ impl SyncProvider for GitHttpsProvider {
         let repo = repository::open_or_init(&self.cache_dir)?;
         let mut remote = repo
             .remote_anonymous(&self.config.remote_url)
-            .map_err(|error| repository::map_git_error(error, "open git remote"))?;
+            .map_err(|error| repository::map_git_error(error, "open_remote"))?;
         let callbacks =
             credentials::callbacks(&self.config.username, self.config.secret.as_deref());
         self.network_accounting.record_request(0);
@@ -173,10 +173,10 @@ impl SyncProvider for GitHttpsProvider {
                 Some(callbacks),
                 Some(credentials::proxy_options()),
             )
-            .map_err(|error| repository::map_git_error(error, "connect to git remote"))?;
+            .map_err(|error| repository::map_git_error(error, "connect_auth"))?;
         let heads = connection
             .list()
-            .map_err(|error| repository::map_git_error(error, "list remote refs"))?;
+            .map_err(|error| repository::map_git_error(error, "list"))?;
         let branch_ref = format!("refs/heads/{}", self.config.branch);
         Ok(heads
             .iter()
@@ -236,7 +236,7 @@ impl SyncProvider for GitHttpsProvider {
         repository::check_write_precondition(&snapshot, path, &precondition)?;
         let version = RemoteVersion::new(
             git2::Oid::hash_object(git2::ObjectType::Blob, content)
-                .map_err(|err| repository::map_git_error(err, "hash blob"))?
+                .map_err(|err| repository::map_git_error(err, "hash_blob"))?
                 .to_string(),
         );
         self.commit_from(

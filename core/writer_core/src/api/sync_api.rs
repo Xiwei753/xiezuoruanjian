@@ -711,6 +711,7 @@ impl WriterCoreApi {
         failed_target: String,
         error_category: String,
         phase: String,
+        detail: String,
     ) -> ApiResult<()> {
         let parsed = super::types::sync_status_from_wire(&status);
         self.core_write()
@@ -719,6 +720,7 @@ impl WriterCoreApi {
                 &failed_target,
                 &error_category,
                 &phase,
+                &detail,
             )
             .map_err(Into::into)
     }
@@ -1099,6 +1101,7 @@ impl WriterCoreApi {
                     "provider_init".to_string(),
                     category.clone(),
                     "provider_init".to_string(),
+                    detail.clone(),
                 ) {
                     log::warn!(
                         "[sync] provider_init failed-state write failed: error_code={}",
@@ -1144,6 +1147,7 @@ impl WriterCoreApi {
                 "starmap_store_flush".to_string(),
                 error_category,
                 "starmap_store_flush".to_string(),
+                writer_error.to_string(),
             );
             return Err(writer_error);
         }
@@ -1186,6 +1190,7 @@ impl WriterCoreApi {
                     "remote_revision".to_string(),
                     error_category,
                     "remote_revision".to_string(),
+                    writer_error.to_string(),
                 );
                 return Err(writer_error);
             }
@@ -1296,6 +1301,7 @@ impl WriterCoreApi {
                         "target_catalog".to_string(),
                         error_category,
                         "target_catalog".to_string(),
+                        msg,
                     );
                     return Err(crate::api::error::WriterError::from(e));
                 }
@@ -1349,6 +1355,7 @@ impl WriterCoreApi {
                             "target_catalog".to_string(),
                             error_category,
                             "target_catalog".to_string(),
+                            msg,
                         );
                         return Err(crate::api::error::WriterError::from(e));
                     }
@@ -1382,6 +1389,7 @@ impl WriterCoreApi {
                         "app_group_catalog".to_string(),
                         error_category,
                         "app_group_catalog".to_string(),
+                        msg,
                     );
                     return Err(crate::api::error::WriterError::from(e));
                 }
@@ -1430,6 +1438,7 @@ impl WriterCoreApi {
                     "global".to_string(),
                     error_category,
                     "plan".to_string(),
+                    msg,
                 );
                 return Err(crate::api::error::WriterError::from(err));
             }
@@ -1557,6 +1566,7 @@ impl WriterCoreApi {
                 "staging_seed".to_string(),
                 error_category,
                 "staging_seed".to_string(),
+                msg,
             );
             return Err(crate::api::error::WriterError::from(e));
         }
@@ -1585,6 +1595,7 @@ impl WriterCoreApi {
                     "staging_seed".to_string(),
                     error_category,
                     "staging_seed".to_string(),
+                    msg,
                 );
                 return Err(crate::api::error::WriterError::from(e));
             }
@@ -1606,6 +1617,7 @@ impl WriterCoreApi {
                     "staging_seed".to_string(),
                     error_category,
                     "staging_seed".to_string(),
+                    err.to_string(),
                 );
                 return Err(err.into());
             }

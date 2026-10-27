@@ -130,3 +130,6 @@ apps/harmony/privacy_acl/oh-package-lock.json5
 # HarmonyOS 本机/CI 生成的签名配置（公共模板入库：apps/harmony/build-profile.template.json5）
 # 签名材料（*.p12/*.cer/*.p7b/*.pem/*.jks/*.keystore）与 .env* 已在文件上方统一忽略
 /apps/harmony/build-profile.json5
+
+# HarmonyOS 构建期生成的 Git revision（entry/hvigorfile.ts GenerateBuildRevision）
+/apps/harmony/entry/src/main/ets/generated/BuildRevision.ets

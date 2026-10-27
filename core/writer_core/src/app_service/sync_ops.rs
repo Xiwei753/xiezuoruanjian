@@ -304,12 +304,14 @@ impl super::WriterAppService {
         failed_target: String,
         error_category: String,
         phase: String,
+        detail: String,
     ) -> Result<(), WriterError> {
         self.api.record_full_sync_preflight_failure_typed(
             status,
             failed_target,
             error_category,
             phase,
+            detail,
         )
     }
 }

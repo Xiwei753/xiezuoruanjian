@@ -199,7 +199,7 @@ where
     {
         if is_git_known_unreachable() {
             log::warn!(
-                "sync.route: provider=github_api host_class=github fallback=true phase=git_probe reason_code=network_cached"
+                "sync.route: provider=github_api host_class=github fallback=true phase=git_probe git_operation=probe reason_code=network_cached"
             );
             return fallback_to_github_api(git_config, create_github_api, None);
         }
@@ -216,13 +216,13 @@ where
             Err(ProviderError::Network { reason }) => {
                 mark_git_unreachable();
                 log::warn!(
-                    "sync.route: provider=github_api host_class=github fallback=true phase=git_probe reason_code=network"
+                    "sync.route: provider=github_api host_class=github fallback=true phase=git_probe git_operation=probe reason_code=network"
                 );
                 fallback_to_github_api(git_config, create_github_api, Some(reason))
             }
             Err(error) => {
                 log::warn!(
-                    "sync.route: provider=git_https host_class=github fallback=false phase=git_probe reason_code={}",
+                    "sync.route: provider=git_https host_class=github fallback=false phase=git_probe git_operation=probe reason_code={}",
                     error.stable_code()
                 );
                 Err(crate::Error::from(error))
@@ -242,7 +242,7 @@ where
             }
             Err(error) => {
                 log::warn!(
-                    "sync.route: provider=git_https host_class=github fallback=false phase=git_probe reason_code={}",
+                    "sync.route: provider=git_https host_class=github fallback=false phase=git_probe git_operation=probe reason_code={}",
                     error.stable_code()
                 );
                 Err(crate::Error::from(error))

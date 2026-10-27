@@ -428,8 +428,15 @@ impl crate::facade::WriterCore {
         failed_target: &str,
         error_category: &str,
         phase: &str,
+        detail: &str,
     ) -> crate::error::Result<()> {
-        self.persist_full_sync_early_failure_typed(status, failed_target, error_category, phase);
+        self.persist_full_sync_early_failure_typed(
+            status,
+            failed_target,
+            error_category,
+            phase,
+            detail,
+        );
         Ok(())
     }
 
@@ -482,6 +489,7 @@ impl crate::facade::WriterCore {
         failed_target: &str,
         error_category: &str,
         phase: &str,
+        detail: &str,
     ) {
         let report_time = now_epoch_seconds();
         let report_status = status.clone();
@@ -500,6 +508,7 @@ impl crate::facade::WriterCore {
             failed_target,
             error_category,
             phase,
+            detail,
             report_time,
         ) {
             log::warn!("Failed to persist typed early full sync report: {e}");

@@ -16,6 +16,7 @@ import hilog from '@ohos.hilog'
 import util from '@ohos.util'
 import fs from '@ohos.file.fs'
 import bundleManager from '@ohos.bundle.bundleManager'
+import { BUILD_GIT_SHA } from '../../generated/BuildRevision'
 
 import { IWriterCoreBridge } from '../../corebridge/IWriterCoreBridge'
 import { FullSyncReport, FullSyncReportFailure, FullSyncState } from '../../corebridge/dto/SyncDtos'
@@ -130,6 +131,7 @@ interface SyncOperationRuntimeAttachment {
 interface BuildIdentityAttachment {
   appVersion: string
   buildKey: string
+  gitSha: string
 }
 
 // Issue #773 评论 5845033983：ThemeRuntimeAttachment / UiRuntimeAttachment / EditorRuntimeAttachment
@@ -889,12 +891,14 @@ export class HarmonyDiagnosticsExporter {
       )
       return {
         appVersion: info.versionName,
-        buildKey: `harmony-v${info.versionCode}-${info.versionName}`
+        buildKey: `harmony-v${info.versionCode}-${info.versionName}-${BUILD_GIT_SHA}`,
+        gitSha: BUILD_GIT_SHA
       }
     } catch (_) {
       return {
         appVersion: 'unknown',
-        buildKey: 'harmony-unknown'
+        buildKey: `harmony-unknown-${BUILD_GIT_SHA}`,
+        gitSha: BUILD_GIT_SHA
       }
     }
   }

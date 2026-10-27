@@ -184,24 +184,31 @@ impl FullSyncReport {
             failed_target,
             &error_category,
             "preflight",
+            "",
             now_epoch_seconds,
             app_data_root,
             projects_root,
         )
     }
 
-    /// 使用调用方已有的真实错误分类与失败阶段生成早期报告，避免仅凭
-    /// Recoverable/Fatal 二值误判为 network/auth_failed。
+    /// 使用调用方已有的真实错误分类、失败阶段与脱敏前的 detail 生成早期报告，
+    /// 避免仅凭 Recoverable/Fatal 二值误判为 network/auth_failed，也避免报告
+    /// 只剩下 `preflight` 而丢失真实的 connect_auth/list 子阶段。
     pub fn early_failure_typed(
         status: &SyncStatus,
         failed_target: &str,
         error_category: &str,
         phase: &str,
+        detail: &str,
         now_epoch_seconds: i64,
         app_data_root: &std::path::Path,
         projects_root: &std::path::Path,
     ) -> Self {
-        let raw_detail = status_detail(status).unwrap_or("sync failed before data groups ran");
+        let raw_detail = if detail.is_empty() {
+            status_detail(status).unwrap_or("sync failed before data groups ran")
+        } else {
+            detail
+        };
         Self {
             attempted_at: now_epoch_seconds,
             completed_groups: 0,

@@ -421,6 +421,7 @@ impl super::WriterCore {
         failed_target: &str,
         error_category: &str,
         phase: &str,
+        detail: &str,
         now_epoch_seconds: i64,
     ) -> crate::error::Result<()> {
         let report = crate::sync::full_sync_state::FullSyncReport::early_failure_typed(
@@ -428,6 +429,7 @@ impl super::WriterCore {
             failed_target,
             error_category,
             phase,
+            detail,
             now_epoch_seconds,
             &self.app_data_root,
             &self.projects_root,

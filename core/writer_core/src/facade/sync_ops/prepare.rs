@@ -39,7 +39,13 @@ impl crate::facade::WriterCore {
                 } else {
                     category
                 };
-                self.persist_full_sync_early_failure_typed(status, "global", category, "prepare");
+                self.persist_full_sync_early_failure_typed(
+                    status,
+                    "global",
+                    category,
+                    "prepare",
+                    &err.to_string(),
+                );
                 return Err(err);
             }
         };
@@ -59,7 +65,11 @@ impl crate::facade::WriterCore {
                         category
                     };
                     self.persist_full_sync_early_failure_typed(
-                        status, "global", category, "prepare",
+                        status,
+                        "global",
+                        category,
+                        "prepare",
+                        &err.to_string(),
                     );
                     return Err(err);
                 }
@@ -268,6 +278,7 @@ impl crate::facade::WriterCore {
                     "github_api_fallback_init",
                     category,
                     "github_api_fallback_init",
+                    &err.to_string(),
                 );
             })
         } else {

@@ -138,6 +138,7 @@ fn persist_sync_preflight_failure(svc: &WriterAppService, stage: &str, category:
         "preflight".to_string(),
         category.to_string(),
         stage.to_string(),
+        stage.to_string(),
     ) {
         log::warn!(
             "[sync] preflight state write failed: stage={} error_code={}",

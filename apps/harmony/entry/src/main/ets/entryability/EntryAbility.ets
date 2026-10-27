@@ -18,11 +18,13 @@ import { NearbyDeviceSyncCoordinator } from '../platform/peer/NearbyDeviceSyncCo
 import { TabletWindowPolicy } from '../platform/window/TabletWindowPolicy'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
+import { BUILD_GIT_SHA } from '../generated/BuildRevision'
 
 // Issue #670 评论 5652500781：构建身份（命名 interface，避免对象字面量类型）。
 interface BuildIdentity {
   appVersion: string
   buildKey: string
+  gitSha: string
 }
 
 export default class EntryAbility extends UIAbility {
@@ -127,10 +129,10 @@ export default class EntryAbility extends UIAbility {
   }
 
   // 获取构建身份 — Issue #670 评论 5652500781：一次读取完整 bundle info，
-  // 同时给出 appVersion（versionName）和 buildKey（harmony-v{versionCode}-{versionName}）。
+  // 同时给出 appVersion（versionName）、buildKey（harmony-v{versionCode}-{versionName}-{gitSha}）和 gitSha。
   // buildKey 用于 writer_diagnostics 日志文件名 sujian-current-{build_key}.log 和导出 manifest 的 build_identity，
   // 不能留空，否则不同版本的日志无法按构建身份区分。失败返回 'unknown' / 'harmony-unknown'。
-  // 以后有 git SHA/正式构建号时再拼进同一个 buildKey。
+  // git SHA 由 entry/hvigorfile.ts 在 CompileArkTS 前生成，避免源码已修、设备上仍是旧 .so 却无法凭 buildKey 区分。
   private getBuildIdentity(): BuildIdentity {
     try {
       const info = bundleManager.getBundleInfoForSelfSync(
@@ -138,13 +140,15 @@ export default class EntryAbility extends UIAbility {
       )
       const identity: BuildIdentity = {
         appVersion: info.versionName,
-        buildKey: `harmony-v${info.versionCode}-${info.versionName}`
+        buildKey: `harmony-v${info.versionCode}-${info.versionName}-${BUILD_GIT_SHA}`,
+        gitSha: BUILD_GIT_SHA
       }
       return identity
     } catch (_) {
       const fallback: BuildIdentity = {
         appVersion: 'unknown',
-        buildKey: 'harmony-unknown'
+        buildKey: `harmony-unknown-${BUILD_GIT_SHA}`,
+        gitSha: BUILD_GIT_SHA
       }
       return fallback
     }
