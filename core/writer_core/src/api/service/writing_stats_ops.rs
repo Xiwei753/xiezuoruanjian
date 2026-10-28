@@ -19,10 +19,8 @@ impl WriterCoreApi {
     /// 不在平台端推演编辑规则。
     pub fn replay_chapter_proof_json(&self, request_json: &str) -> ApiResult<String> {
         let request =
-            serde_json::from_str::<crate::writing_stats::replay::ProofReplayRequest>(
-                request_json,
-            )
-            .map_err(WriterError::from)?;
+            serde_json::from_str::<crate::writing_stats::replay::ProofReplayRequest>(request_json)
+                .map_err(WriterError::from)?;
         let value = self
             .core_write()
             .replay_chapter_proof(&request)
@@ -31,7 +29,11 @@ impl WriterCoreApi {
     }
 
     /// 导出章节证明包。包内包含历史正文，平台 UI 必须先明确提示用户。
-    pub fn export_chapter_proof_json(&self, chapter_id: &str, device_id: &str) -> ApiResult<String> {
+    pub fn export_chapter_proof_json(
+        &self,
+        chapter_id: &str,
+        device_id: &str,
+    ) -> ApiResult<String> {
         let value = self
             .core_write()
             .export_chapter_proof(chapter_id, device_id)
@@ -86,13 +88,8 @@ impl WriterCoreApi {
         }
         // 正文保存事务完成后再写检查点：checkpoint 是事件流的加速索引，
         // 失败不影响正文与已确认事件，但会明确返回错误供上层重试。
-        self.core_write().record_chapter_checkpoint(
-            project_id,
-            volume_id,
-            chapter_id,
-            content,
-            "",
-        )?;
+        self.core_write()
+            .record_chapter_checkpoint(project_id, volume_id, chapter_id, content, "")?;
         Ok(receipt)
     }
 
@@ -322,7 +319,18 @@ impl WriterCoreApi {
             .core_read()
             .get_writing_stats_explorer(preset, custom_start, custom_end)
             .map_err(Into::<WriterError>::into)?;
-        serde_json::from_value(value).map_err(Into::into)
+        let mut snapshot: crate::api::types::WritingStatsExplorerDto =
+            serde_json::from_value(value).map_err(WriterError::from)?;
+        let range = snapshot.selected.range.clone();
+        snapshot.contributions = Some(self.get_contribution_stats(
+            &range.start_date,
+            &range.end_date,
+            None,
+            None,
+            None,
+            None,
+        )?);
+        Ok(snapshot)
     }
 
     pub fn get_writing_stats_explorer_json(
@@ -351,5 +359,141 @@ impl WriterCoreApi {
     pub fn get_writing_stats_heatmap_json(&self, year: i32) -> ApiResult<String> {
         let snapshot = self.get_writing_stats_heatmap(year)?;
         Self::json_string(&snapshot)
+    }
+
+    /// 贡献来源统计：历史操作量与当前保留内容来源一次查询返回。
+    ///
+    /// 只读已落盘的对象事件；MCP 写入的对象变更会在 Core 业务层记为 Ai。
+    #[allow(clippy::too_many_arguments)]
+    pub fn get_contribution_stats(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        project_id: Option<&str>,
+        actor: Option<&str>,
+        object_type: Option<&str>,
+        device_id: Option<&str>,
+    ) -> ApiResult<crate::api::types::ContributionStatsDto> {
+        let legacy_texts = if object_type.is_none_or(|value| value == "starmap_node")
+            && actor.is_none_or(|value| value == "unknown")
+            && device_id.is_none()
+        {
+            self.collect_legacy_starmap_texts(project_id)
+        } else {
+            Vec::new()
+        };
+        let (aggregate, history_scope) = {
+            let core = self.core_read();
+            let stats = core.get_stats_api();
+            (
+                stats.get_contribution_stats(
+                    start_date,
+                    end_date,
+                    project_id,
+                    actor,
+                    object_type,
+                    device_id,
+                    &legacy_texts,
+                )?,
+                stats.history_scope(),
+            )
+        };
+        Ok(contribution_stats_dto(
+            &aggregate,
+            start_date,
+            end_date,
+            project_id,
+            history_scope,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn get_contribution_stats_json(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        project_id: Option<&str>,
+        actor: Option<&str>,
+        object_type: Option<&str>,
+        device_id: Option<&str>,
+    ) -> ApiResult<String> {
+        let stats = self.get_contribution_stats(
+            start_date,
+            end_date,
+            project_id,
+            actor,
+            object_type,
+            device_id,
+        )?;
+        Self::json_string(&stats)
+    }
+}
+
+fn contribution_counts_dto(
+    counts: &crate::writing_stats::projection::ContributionCounts,
+) -> crate::api::types::ContributionCountsDto {
+    crate::api::types::ContributionCountsDto {
+        inserted_chars: counts.inserted_chars,
+        deleted_chars: counts.deleted_chars,
+        modified_chars: counts.modified_chars,
+        operations: counts.operations,
+        created_objects: counts.created_objects,
+        updated_objects: counts.updated_objects,
+        deleted_objects: counts.deleted_objects,
+        linked_objects: counts.linked_objects,
+        unlinked_objects: counts.unlinked_objects,
+    }
+}
+
+fn contribution_stats_dto(
+    aggregate: &crate::writing_stats::projection::ContributionStatsAgg,
+    start_date: &str,
+    end_date: &str,
+    project_id: Option<&str>,
+    history_scope: String,
+) -> crate::api::types::ContributionStatsDto {
+    crate::api::types::ContributionStatsDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        },
+        project_id: project_id.map(str::to_string),
+        total: contribution_counts_dto(&aggregate.total),
+        actors: aggregate
+            .actors
+            .values()
+            .map(|actor| crate::api::types::ContributionActorStatsDto {
+                actor: actor.actor.clone(),
+                counts: contribution_counts_dto(&actor.counts),
+                retained_chars: actor.retained_chars,
+            })
+            .collect(),
+        object_types: aggregate
+            .object_types
+            .values()
+            .map(|object| crate::api::types::ContributionObjectTypeStatsDto {
+                object_type: object.object_type.clone(),
+                counts: contribution_counts_dto(&object.counts),
+                retained_chars: object.retained_chars,
+            })
+            .collect(),
+        days: aggregate
+            .days
+            .values()
+            .map(|day| crate::api::types::ContributionDayStatsDto {
+                date: day.date.clone(),
+                counts: contribution_counts_dto(&day.counts),
+            })
+            .collect(),
+        devices: aggregate
+            .devices
+            .values()
+            .map(|device| crate::api::types::ContributionDeviceStatsDto {
+                device_id: device.device_id.clone(),
+                counts: contribution_counts_dto(&device.counts),
+            })
+            .collect(),
+        retained_total_chars: aggregate.retained_total_chars,
+        history_scope,
     }
 }

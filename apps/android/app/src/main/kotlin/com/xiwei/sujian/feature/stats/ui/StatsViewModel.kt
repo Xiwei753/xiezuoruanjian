@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.feature.stats.data.WritingStatsRepository
+import com.xiwei.sujian.feature.stats.data.model.ContributionStats
 import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsItem
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +25,8 @@ data class StatsUiState(
     val loading: Boolean = true,
     /** #843 复核评论 6045538399：barrier 失败时为 true，UI 展示统计读取失败而非"暂无数据"。 */
     val loadFailed: Boolean = false,
+    /** Issue #1010：Core 计算的贡献来源快照，前端只展示。 */
+    val contributions: ContributionStats? = null,
 )
 
 /**
@@ -105,12 +108,21 @@ class StatsViewModel(
                     withContext(Dispatchers.IO) {
                         val start = queriedEndDate.minusDays(30).format(DateTimeFormatter.ISO_LOCAL_DATE)
                         val end = queriedEndDate.format(DateTimeFormatter.ISO_LOCAL_DATE)
-                        repository.getWritingStatsSummary(start, end) to
-                            repository.getWritingStatsByProject(start, end)?.projects.orEmpty()
+                        Triple(
+                            repository.getWritingStatsSummary(start, end),
+                            repository.getWritingStatsByProject(start, end)?.projects.orEmpty(),
+                            repository.getContributionStats(start, end),
+                        )
                     }
                 loadedRevision = queriedRevision
                 loadedEndDate = queriedEndDate
-                _uiState.value = StatsUiState(result.first, result.second, false)
+                _uiState.value =
+                    StatsUiState(
+                        summary = result.first,
+                        projects = result.second,
+                        loading = false,
+                        contributions = result.third,
+                    )
             } catch (e: Exception) {
                 // 失败也只推进到查询快照：查询期间若有写入，下方 revision 校验会触发
                 // 重跑（loadedRevision=queriedRevision != 当前值，递归不命中缓存）；

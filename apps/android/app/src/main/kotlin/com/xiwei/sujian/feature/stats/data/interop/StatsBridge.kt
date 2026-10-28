@@ -57,6 +57,25 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
             holder.service.getWritingStatsByDevice(startDate, endDate).toModel()
         }
 
+    fun getContributionStatsJson(
+        startDate: String,
+        endDate: String,
+        projectId: String? = null,
+        actor: String? = null,
+        objectType: String? = null,
+        deviceId: String? = null,
+    ): BridgeResult<String> =
+        holder.wrapResult {
+            holder.service.getContributionStatsJson(
+                startDate,
+                endDate,
+                projectId,
+                actor,
+                objectType,
+                deviceId,
+            )
+        }
+
     fun getWritingSpeedCurve(
         startDate: String,
         endDate: String,

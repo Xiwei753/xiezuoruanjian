@@ -16,12 +16,17 @@ use crate::api::types::{
 };
 use crate::error::Result;
 use crate::writing_stats::calendar::{self, StatsPreset};
+use crate::writing_stats::contribution::{
+    ContributionEvent, ContributionObjectType, MutationActor,
+};
+use crate::writing_stats::contribution_store::ContributionStore;
 use crate::writing_stats::projection::{
     apply_measured_session_breakdown, bucket_trend, project_all_time_stats_with_sessions,
-    project_events, project_lifetime_stats, project_measured_session_breakdown,
-    project_measured_sessions, project_range_stats, project_range_stats_with_sessions,
-    CurrentWritingSpeed, ProjectLifetimeStatsAgg, RangeStatsAgg, StatsProjection, StatsRecord,
-    StatsSummary, TrendGranularity,
+    project_contributions, project_events, project_lifetime_stats,
+    project_measured_session_breakdown, project_measured_sessions, project_range_stats,
+    project_range_stats_with_sessions, ContributionStatsAgg, CurrentWritingSpeed,
+    ProjectLifetimeStatsAgg, RangeStatsAgg, StatsProjection, StatsRecord, StatsSummary,
+    TrendGranularity,
 };
 use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::{DateRange, WritingActivitySegment, WritingInputEvent};
@@ -154,6 +159,7 @@ fn speed_buckets_json(projection: &StatsProjection) -> Vec<Value> {
 /// 写作统计 API 入口 — 直接持有 `StatsStore`，所有查询走 projection。
 pub struct StatsApi {
     store: StatsStore,
+    contribution_store: ContributionStore,
     /// 章节回放会话缓存：(代数, 章节/设备 -> 有序索引 + 增量状态)。
     replay_cache: std::sync::Mutex<
         std::collections::HashMap<
@@ -186,6 +192,7 @@ impl StatsApi {
         };
         Self {
             store: StatsStore::new(app_data_root),
+            contribution_store: ContributionStore::new(app_data_root),
             replay_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             migration_error: std::sync::Mutex::new(migration_error),
         }
@@ -324,8 +331,7 @@ impl StatsApi {
         )?;
         let mut proj = project_events(&events, 60, None);
         proj.summary.total_active_seconds = measured.total_active_seconds;
-        proj.summary.total_sessions =
-            u32::try_from(measured.session_count).unwrap_or(u32::MAX);
+        proj.summary.total_sessions = u32::try_from(measured.session_count).unwrap_or(u32::MAX);
 
         Ok(summary_json(range, &proj.summary))
     }
@@ -636,6 +642,7 @@ impl StatsApi {
                     points,
                 },
             },
+            contributions: None,
         })
     }
 
@@ -707,24 +714,16 @@ impl StatsApi {
         let segments = self.store.load_segments_range(load_start, &today)?;
         let measured_today =
             project_measured_sessions(&today_events, &segments, Some((&today, &today)))?;
-        let measured_week = project_measured_sessions(
-            &week_events,
-            &segments,
-            Some((&week_start, &today)),
-        )?;
-        let measured_month = project_measured_sessions(
-            &month_events,
-            &segments,
-            Some((&month_start, &today)),
-        )?;
+        let measured_week =
+            project_measured_sessions(&week_events, &segments, Some((&week_start, &today)))?;
+        let measured_month =
+            project_measured_sessions(&month_events, &segments, Some((&month_start, &today)))?;
 
         let mut today_summary = project_events(&today_events, 60, None).summary;
         let mut week_projection = project_events(&week_events, 60, None);
         let mut month_summary = project_events(&month_events, 60, None).summary;
-        let week_breakdown = project_measured_session_breakdown(
-            &segments,
-            Some((&week_start, &today)),
-        );
+        let week_breakdown =
+            project_measured_session_breakdown(&segments, Some((&week_start, &today)));
         apply_measured_session_breakdown(&mut week_projection, &week_breakdown);
         week_projection.summary.total_active_seconds = measured_week.total_active_seconds;
         week_projection.summary.total_sessions =
@@ -810,6 +809,97 @@ impl StatsApi {
         Ok(())
     }
 
+    /// 幂等记录对象贡献事件。调用方必须在业务写入成功之后调用。
+    pub fn record_contribution_events(&self, events: Vec<ContributionEvent>) -> Result<usize> {
+        self.contribution_store.record_events(events)
+    }
+
+    pub fn load_contribution_events(&self) -> Result<Vec<ContributionEvent>> {
+        self.contribution_store.load_all_events()
+    }
+
+    /// 贡献统计查询：历史操作量 + 当前保留内容来源。
+    /// `legacy_texts` 是当前仍存在、但从未产生贡献事件的旧对象文字，
+    /// 这些内容按 Unknown 计入保留来源。
+    #[allow(clippy::too_many_arguments)]
+    pub fn get_contribution_stats(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        project_id: Option<&str>,
+        actor: Option<&str>,
+        object_type: Option<&str>,
+        device_id: Option<&str>,
+        legacy_texts: &[(String, ContributionObjectType, String, usize)],
+    ) -> Result<ContributionStatsAgg> {
+        // 历史操作量按查询区间/来源过滤；当前保留内容来源则必须从全量历史投影，
+        // 否则区间外的创建事件会让「保留字数」凭空缩水。日期不限制保留来源，
+        // 其余维度沿用查询过滤。
+        let retained_events: Vec<_> = self
+            .contribution_store
+            .load_all_events()?
+            .into_iter()
+            .filter(|event| {
+                project_id.is_none_or(|value| event.project_id == value)
+                    && actor.is_none_or(|value| event.actor.as_str() == value)
+                    && object_type.is_none_or(|value| event.object_type.as_str() == value)
+                    && device_id.is_none_or(|value| event.origin_device_id == value)
+            })
+            .collect();
+        let legacy_retained: Vec<_> = legacy_texts
+            .iter()
+            .filter(|(legacy_project, legacy_type, _, _)| {
+                project_id.is_none_or(|value| legacy_project == value)
+                    && object_type.is_none_or(|value| legacy_type.as_str() == value)
+                    && actor.is_none_or(|value| value == MutationActor::Unknown.as_str())
+                    && device_id.is_none()
+            })
+            .cloned()
+            .collect();
+        let retained = project_contributions(&retained_events, &legacy_retained);
+
+        let mut events = self
+            .contribution_store
+            .load_events_range(start_date, end_date)?;
+        if let Some(project_id) = project_id {
+            events.retain(|event| event.project_id == project_id);
+        }
+        if let Some(actor) = actor {
+            events.retain(|event| event.actor.as_str() == actor);
+        }
+        if let Some(object_type) = object_type {
+            events.retain(|event| event.object_type.as_str() == object_type);
+        }
+        if let Some(device_id) = device_id {
+            events.retain(|event| event.origin_device_id == device_id);
+        }
+        let mut stats = project_contributions(&events, &[]);
+        stats.retained_total_chars = retained.retained_total_chars;
+        for aggregate in retained.actors.values() {
+            stats
+                .actors
+                .entry(aggregate.actor.clone())
+                .or_insert_with(|| crate::writing_stats::projection::ContributionActorAgg {
+                    actor: aggregate.actor.clone(),
+                    ..Default::default()
+                })
+                .retained_chars = aggregate.retained_chars;
+        }
+        for aggregate in retained.object_types.values() {
+            stats
+                .object_types
+                .entry(aggregate.object_type.clone())
+                .or_insert_with(
+                    || crate::writing_stats::projection::ContributionObjectTypeAgg {
+                        object_type: aggregate.object_type.clone(),
+                        ..Default::default()
+                    },
+                )
+                .retained_chars = aggregate.retained_chars;
+        }
+        Ok(stats)
+    }
+
     /// 记录一次带证明细节的编辑事务；seq/哈希链由 store 串行补齐。
     pub fn record_proof_event(
         &self,
@@ -876,9 +966,10 @@ impl StatsApi {
                 }
             }
         }
-        let session = std::sync::Arc::new(
-            crate::writing_stats::replay::ProofReplaySession::open(&self.store, request)?,
-        );
+        let session = std::sync::Arc::new(crate::writing_stats::replay::ProofReplaySession::open(
+            &self.store,
+            request,
+        )?);
         let frame = session.frame_at(request);
         let mut cache = self
             .replay_cache
@@ -921,10 +1012,7 @@ impl StatsApi {
     }
 
     /// 批量记录计时切片（用于异步队列一次提交多段）。
-    pub fn record_activity_segments(
-        &self,
-        segments: Vec<WritingActivitySegment>,
-    ) -> Result<usize> {
+    pub fn record_activity_segments(&self, segments: Vec<WritingActivitySegment>) -> Result<usize> {
         self.ensure_migrated()?;
         self.store.record_activity_segments(segments)
     }
@@ -990,10 +1078,7 @@ fn build_heatmap_days(
     let mut date = start;
     while date <= end {
         let date_str = date.format("%Y-%m-%d").to_string();
-        let human_typed_chars = daily_human_typed_chars
-            .get(&date_str)
-            .copied()
-            .unwrap_or(0);
+        let human_typed_chars = daily_human_typed_chars.get(&date_str).copied().unwrap_or(0);
         // 单元格覆盖状态：未来未到 / 已确认（可为真实 0）/ 覆盖不完整或同步失败。
         let status = if date_str.as_str() > today {
             "future"
@@ -1083,12 +1168,8 @@ fn period_card(
         });
     }
     let range = calendar::resolve_range(preset, today, first_writing_date, custom_range)?;
-    let stats = project_range_stats_with_sessions(
-        events,
-        segments,
-        &range.start_date,
-        &range.end_date,
-    )?;
+    let stats =
+        project_range_stats_with_sessions(events, segments, &range.start_date, &range.end_date)?;
     // 卡片日均按区间自然日历天数均摊（含无输入日），不按实际写作天数。
     let calendar_days = calendar::day_span_inclusive(&range.start_date, &range.end_date)?;
     Ok(WritingStatsPeriodCardDto {

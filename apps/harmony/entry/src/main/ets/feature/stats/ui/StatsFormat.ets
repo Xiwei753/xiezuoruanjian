@@ -53,7 +53,8 @@ export const EMPTY_STATS_EXPLORER: WritingStatsExplorer = {
     hasMeasuredTiming: false,
     records: EMPTY_RECORDS,
     trend: EMPTY_TREND
-  }
+  },
+  contributions: null
 }
 
 /** 千分位整数。29456 → "29,456"。 */

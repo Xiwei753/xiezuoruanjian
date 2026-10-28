@@ -9,6 +9,7 @@ members = [
     "platform/rust/android",
     "platform/rust/harmony",
     "apps/Linux_qt",
+    "apps/sujian_mcp",
 ]
 resolver = "2"
 

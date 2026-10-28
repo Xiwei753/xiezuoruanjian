@@ -181,6 +181,10 @@ pub struct WritingStatsExplorerDto {
     pub lifetime: WritingStatsLifetimeDto,
     pub period_cards: Vec<WritingStatsPeriodCardDto>,
     pub selected: WritingStatsSelectedPeriodDto,
+    /// 与 `selected.range` 同区间的贡献来源分布。这里只做展示搬运，
+    /// 不把对象操作数混入人工码字或写作时长。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contributions: Option<ContributionStatsDto>,
 }
 
 /// 全应用生涯摘要。
@@ -361,6 +365,72 @@ pub struct WritingStatsHeatmapDto {
     /// `localEvents` / `syncedDevices` / `partialSync`，供端侧标注数据范围。
     pub history_scope: String,
     pub days: Vec<WritingStatsHeatmapDayDto>,
+}
+
+/// 历史操作量计数。对象操作与正文码字严格分开：
+/// 创建一条连线只增加 `linkedObjects`，不增加任何字符数。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionCountsDto {
+    pub inserted_chars: u64,
+    pub deleted_chars: u64,
+    pub modified_chars: u64,
+    pub operations: u64,
+    pub created_objects: u64,
+    pub updated_objects: u64,
+    pub deleted_objects: u64,
+    pub linked_objects: u64,
+    pub unlinked_objects: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionActorStatsDto {
+    pub actor: String,
+    pub counts: ContributionCountsDto,
+    /// 当前仍保留文字中来自该 actor 的字符数。
+    pub retained_chars: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionObjectTypeStatsDto {
+    pub object_type: String,
+    pub counts: ContributionCountsDto,
+    pub retained_chars: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionDayStatsDto {
+    pub date: String,
+    pub counts: ContributionCountsDto,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionDeviceStatsDto {
+    pub device_id: String,
+    pub counts: ContributionCountsDto,
+}
+
+/// 写作贡献来源快照。
+///
+/// `total` / `actors` / `objectTypes` / `days` / `devices` 是**历史操作量**；
+/// `retainedTotalChars` 与各 actor 的 `retainedChars` 是**当前保留内容来源**。
+/// 两个口径不能互相回推。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionStatsDto {
+    pub range: DateRangeDto,
+    pub project_id: Option<String>,
+    pub total: ContributionCountsDto,
+    pub actors: Vec<ContributionActorStatsDto>,
+    pub object_types: Vec<ContributionObjectTypeStatsDto>,
+    pub days: Vec<ContributionDayStatsDto>,
+    pub devices: Vec<ContributionDeviceStatsDto>,
+    pub retained_total_chars: u64,
+    pub history_scope: String,
 }
 
 /// 平台端上报的一段已测量前台写作计时切片。

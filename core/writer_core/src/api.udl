@@ -1275,6 +1275,11 @@ interface WriterAppService {
     [Throws=WriterError]
     DeviceStatsSummaryDto get_writing_stats_by_device(string start_date, string end_date);
 
+    // 贡献来源统计（历史操作量与当前保留内容来源）。返回 Core 生成的 JSON，
+    // 平台端只展示，不重算。
+    [Throws=WriterError]
+    string get_contribution_stats_json(string start_date, string end_date, string? project_id, string? actor, string? object_type, string? device_id);
+
     [Throws=WriterError]
     SpeedCurveSummaryDto get_writing_speed_curve(string start_date, string end_date, u32 bucket_minutes);
 

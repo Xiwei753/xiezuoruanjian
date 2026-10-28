@@ -15,6 +15,9 @@
 
 use crate::error::{Error, Result};
 use crate::writing_stats::calendar;
+use crate::writing_stats::contribution::{
+    ContributionEvent, ContributionObjectType, ContributionOperation, MutationActor,
+};
 use crate::writing_stats::{EventSource, WritingActivitySegment, WritingInputEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -424,12 +427,7 @@ pub fn project_range_stats_with_sessions(
         )));
     }
     let mut agg = aggregate_range_stats(events, Some((start_date, end_date)))?;
-    apply_measured_sessions(
-        &mut agg,
-        events,
-        segments,
-        Some((start_date, end_date)),
-    )?;
+    apply_measured_sessions(&mut agg, events, segments, Some((start_date, end_date)))?;
     Ok(agg)
 }
 
@@ -844,8 +842,7 @@ pub fn project_measured_sessions(
     range: Option<(&str, &str)>,
 ) -> Result<MeasuredSessionAgg> {
     let mut by_device: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
-    let mut by_chapter: HashMap<(String, String, String, String), Vec<(i64, i64)>> =
-        HashMap::new();
+    let mut by_chapter: HashMap<(String, String, String, String), Vec<(i64, i64)>> = HashMap::new();
     let mut by_session: HashMap<(String, String), Vec<(i64, i64)>> = HashMap::new();
     let mut session_dates: HashMap<(String, String), String> = HashMap::new();
 
@@ -894,12 +891,11 @@ pub fn project_measured_sessions(
         let merged = merge_intervals(intervals);
         total_ms = total_ms.saturating_add(merged.iter().map(|(s, e)| e - s).sum::<i64>());
     }
-    let merged_by_chapter: HashMap<&(String, String, String, String), Vec<(i64, i64)>> =
-        by_chapter
-            .iter()
-            .filter(|(_, intervals)| !intervals.is_empty())
-            .map(|(key, intervals)| (key, merge_intervals(intervals)))
-            .collect();
+    let merged_by_chapter: HashMap<&(String, String, String, String), Vec<(i64, i64)>> = by_chapter
+        .iter()
+        .filter(|(_, intervals)| !intervals.is_empty())
+        .map(|(key, intervals)| (key, merge_intervals(intervals)))
+        .collect();
 
     let mut timed_human_typed_chars: u64 = 0;
     for event in events {
@@ -1284,6 +1280,202 @@ fn compute_device_class_summary(
     result
 }
 
+/// 历史操作量：按 actor / 对象类型 / 日期 / 设备聚合。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionCounts {
+    pub inserted_chars: u64,
+    pub deleted_chars: u64,
+    pub modified_chars: u64,
+    pub operations: u64,
+    pub created_objects: u64,
+    pub updated_objects: u64,
+    pub deleted_objects: u64,
+    pub linked_objects: u64,
+    pub unlinked_objects: u64,
+}
+
+impl ContributionCounts {
+    fn add(&mut self, event: &ContributionEvent) {
+        self.inserted_chars += u64::from(event.inserted_chars);
+        self.deleted_chars += u64::from(event.deleted_chars);
+        self.modified_chars += u64::from(event.modified_chars);
+        self.operations += 1;
+        match event.operation {
+            ContributionOperation::Create => self.created_objects += 1,
+            ContributionOperation::Update => self.updated_objects += 1,
+            ContributionOperation::Delete => self.deleted_objects += 1,
+            ContributionOperation::Link => self.linked_objects += 1,
+            ContributionOperation::Unlink => self.unlinked_objects += 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionActorAgg {
+    pub actor: String,
+    pub counts: ContributionCounts,
+    /// 当前仍保留的文字中，来自该 actor 的字符数。
+    pub retained_chars: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionObjectTypeAgg {
+    pub object_type: String,
+    pub counts: ContributionCounts,
+    pub retained_chars: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionDayAgg {
+    pub date: String,
+    pub counts: ContributionCounts,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionDeviceAgg {
+    pub device_id: String,
+    pub counts: ContributionCounts,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionStatsAgg {
+    pub total: ContributionCounts,
+    pub actors: BTreeMap<String, ContributionActorAgg>,
+    pub object_types: BTreeMap<String, ContributionObjectTypeAgg>,
+    pub days: BTreeMap<String, ContributionDayAgg>,
+    pub devices: BTreeMap<String, ContributionDeviceAgg>,
+    pub retained_total_chars: u64,
+}
+
+/// 从对象事件投影出两种口径：
+///
+/// 1. 历史操作量：每次成功事务都计入，删除也算历史贡献；
+/// 2. 当前保留内容来源：只按真实文本变更维护字符来源，删除会移除区间。
+#[allow(clippy::too_many_arguments)]
+pub fn project_contributions(
+    events: &[ContributionEvent],
+    legacy_texts: &[(String, ContributionObjectType, String, usize)],
+) -> ContributionStatsAgg {
+    let mut result = ContributionStatsAgg::default();
+    let mut text_by_object: HashMap<String, Vec<(char, MutationActor)>> = HashMap::new();
+    let mut object_types: HashMap<String, String> = HashMap::new();
+
+    let mut ordered = events.to_vec();
+    ordered.sort_by(|left, right| {
+        left.occurred_at_ms
+            .cmp(&right.occurred_at_ms)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+
+    for event in &ordered {
+        let actor = event.actor.as_str().to_string();
+        let object_type = event.object_type.as_str().to_string();
+        let date = if event.local_date.is_empty() {
+            crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
+                .unwrap_or_else(|_| "1970-01-01".to_string())
+        } else {
+            event.local_date.clone()
+        };
+        let device = if event.origin_device_id.is_empty() {
+            "unknown".to_string()
+        } else {
+            event.origin_device_id.clone()
+        };
+
+        result.total.add(event);
+        result
+            .actors
+            .entry(actor.clone())
+            .or_insert_with(|| ContributionActorAgg {
+                actor,
+                ..Default::default()
+            })
+            .counts
+            .add(event);
+        result
+            .object_types
+            .entry(object_type.clone())
+            .or_insert_with(|| ContributionObjectTypeAgg {
+                object_type,
+                ..Default::default()
+            })
+            .counts
+            .add(event);
+        result
+            .days
+            .entry(date.clone())
+            .or_insert_with(|| ContributionDayAgg {
+                date,
+                ..Default::default()
+            })
+            .counts
+            .add(event);
+        result
+            .devices
+            .entry(device.clone())
+            .or_insert_with(|| ContributionDeviceAgg {
+                device_id: device,
+                ..Default::default()
+            })
+            .counts
+            .add(event);
+
+        if event.is_textual() {
+            let key = format!("{}|{}", event.object_type.as_str(), event.object_id);
+            object_types.insert(key.clone(), event.object_type.as_str().to_string());
+            let sources = text_by_object.entry(key).or_default();
+            crate::writing_stats::contribution::apply_text_sources(sources, event);
+        }
+    }
+
+    for (key, sources) in &text_by_object {
+        let object_type = object_types.get(key).cloned().unwrap_or_default();
+        for (_, actor) in sources {
+            add_retained_chars(&mut result, &object_type, *actor);
+        }
+    }
+
+    // 没有任何来源事件的旧对象没有可恢复的操作者，按 Unknown 计入当前保留内容；
+    // 它们的文字不参与历史操作量，也不伪造对象创建/修改次数。
+    for (_project_id, object_type, object_id, chars) in legacy_texts {
+        let key = format!("{}|{}", object_type.as_str(), object_id);
+        if text_by_object.contains_key(&key) || *chars == 0 {
+            continue;
+        }
+        for _ in 0..*chars {
+            add_retained_chars(&mut result, object_type.as_str(), MutationActor::Unknown);
+        }
+    }
+    result
+}
+
+fn add_retained_chars(result: &mut ContributionStatsAgg, object_type: &str, actor: MutationActor) {
+    let actor_name = actor.as_str().to_string();
+    result
+        .actors
+        .entry(actor_name.clone())
+        .or_insert_with(|| ContributionActorAgg {
+            actor: actor_name,
+            ..Default::default()
+        })
+        .retained_chars += 1;
+    result
+        .object_types
+        .entry(object_type.to_string())
+        .or_insert_with(|| ContributionObjectTypeAgg {
+            object_type: object_type.to_string(),
+            ..Default::default()
+        })
+        .retained_chars += 1;
+    result.retained_total_chars += 1;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1317,8 +1509,8 @@ mod tests {
             duration_seconds: 0,
             session_id: "s1".to_string(),
             local_date: String::new(),
-                proof: None,
-}
+            proof: None,
+        }
     }
 
     #[test]

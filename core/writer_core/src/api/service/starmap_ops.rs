@@ -57,6 +57,15 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let _ = self.record_workspace_change_set_history(&change_set, "create_starmap");
+        self.record_contribution_event(
+            project_id.as_deref().unwrap_or_default(),
+            crate::writing_stats::ContributionObjectType::StarMap,
+            &starmap_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            None,
+            Some(Self::starmap_meta_snapshot(&value)),
+        );
         Self::json_string(&value)
     }
 
@@ -70,6 +79,16 @@ impl WriterCoreApi {
             .add_starmap_embed(starmap_id, embed.try_into().map_err(WriterError::from)?)
             .map_err(WriterError::from)?;
         let project_id = get_starmap_project_id(self, starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapEmbed,
+            &result.instance_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            after.as_ref(),
+        );
         let entry = crate::search::extractor::extract_starmap_embed_entry(
             starmap_id,
             &result.instance_id,
@@ -178,6 +197,29 @@ impl WriterCoreApi {
             }
         };
 
+        let context = crate::writing_stats::current_mutation_context();
+        self.record_contribution_event_with_context(
+            &context,
+            project_id.as_deref().unwrap_or_default(),
+            crate::writing_stats::ContributionObjectType::StarMap,
+            &starmap_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            None,
+            Some(Self::starmap_meta_snapshot(&starmap_meta)),
+        );
+        let after = self.get_starmap_graph_snapshot(host_starmap_id);
+        self.record_starmap_object_with_context(
+            &context,
+            project_id.as_deref(),
+            host_starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapEmbed,
+            &embed.instance_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            after.as_ref(),
+        );
+
         Ok(crate::api::types::CreateStarMapChildEmbedResultDto {
             starmap: starmap_meta.into(),
             embed: embed.into(),
@@ -191,6 +233,8 @@ impl WriterCoreApi {
         instance_id: &str,
         patch: crate::api::types::StarMapEmbedPatchDto,
     ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
+        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id);
         let result = self
             .core_write()
             .update_starmap_embed(
@@ -199,7 +243,16 @@ impl WriterCoreApi {
                 patch.try_into().map_err(WriterError::from)?,
             )
             .map_err(WriterError::from)?;
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapEmbed,
+            instance_id,
+            crate::writing_stats::ContributionOperation::Update,
+            before.as_ref(),
+            after.as_ref(),
+        );
         let entry = crate::search::extractor::extract_starmap_embed_entry(
             starmap_id,
             instance_id,
@@ -218,8 +271,19 @@ impl WriterCoreApi {
     }
 
     pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> ApiResult<bool> {
+        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write()
             .delete_starmap_embed(starmap_id, instance_id)?;
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapEmbed,
+            instance_id,
+            crate::writing_stats::ContributionOperation::Delete,
+            before.as_ref(),
+            None,
+        );
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_embed:{}:{}", starmap_id, instance_id),
@@ -242,6 +306,16 @@ impl WriterCoreApi {
             .map_err(WriterError::from)?;
         let label = result.label.clone().unwrap_or_default();
         let project_id = get_starmap_project_id(self, starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapLink,
+            &result.link_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            after.as_ref(),
+        );
         let entry = crate::search::extractor::extract_starmap_link_entry(
             starmap_id,
             &result.link_id,
@@ -265,6 +339,8 @@ impl WriterCoreApi {
         link_id: &str,
         patch: crate::api::types::StarMapLinkPatchDto,
     ) -> ApiResult<crate::api::types::StarMapLinkDto> {
+        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id);
         let result = self
             .core_write()
             .update_starmap_link(
@@ -273,8 +349,17 @@ impl WriterCoreApi {
                 patch.try_into().map_err(WriterError::from)?,
             )
             .map_err(WriterError::from)?;
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapLink,
+            link_id,
+            crate::writing_stats::ContributionOperation::Update,
+            before.as_ref(),
+            after.as_ref(),
+        );
         let label = result.label.clone().unwrap_or_default();
-        let project_id = get_starmap_project_id(self, starmap_id);
         let entry = crate::search::extractor::extract_starmap_link_entry(
             starmap_id,
             link_id,
@@ -293,7 +378,18 @@ impl WriterCoreApi {
     }
 
     pub fn delete_starmap_link(&self, starmap_id: &str, link_id: &str) -> ApiResult<bool> {
+        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write().delete_starmap_link(starmap_id, link_id)?;
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapLink,
+            link_id,
+            crate::writing_stats::ContributionOperation::Delete,
+            before.as_ref(),
+            None,
+        );
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_link:{}:{}", starmap_id, link_id),
@@ -414,6 +510,79 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        let context = crate::writing_stats::current_mutation_context();
+        self.record_contribution_event_with_context(
+            &context,
+            project_id.unwrap_or(""),
+            crate::writing_stats::ContributionObjectType::StarMap,
+            &result.starmap_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            None,
+            Some(Self::starmap_meta_snapshot(&result)),
+        );
+        if let Some(graph) = self.get_starmap_graph_snapshot(&result.starmap_id) {
+            for node in &graph.nodes {
+                self.record_starmap_object_with_context(
+                    &context,
+                    project_id,
+                    &result.starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapNode,
+                    &node.id,
+                    crate::writing_stats::ContributionOperation::Create,
+                    None,
+                    Some(&graph),
+                );
+            }
+            for edge in &graph.edges {
+                self.record_starmap_object_with_context(
+                    &context,
+                    project_id,
+                    &result.starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapEdge,
+                    &edge.id,
+                    crate::writing_stats::ContributionOperation::Create,
+                    None,
+                    Some(&graph),
+                );
+            }
+            for embed in &graph.embeds {
+                self.record_starmap_object_with_context(
+                    &context,
+                    project_id,
+                    &result.starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapEmbed,
+                    &embed.instance_id,
+                    crate::writing_stats::ContributionOperation::Create,
+                    None,
+                    Some(&graph),
+                );
+            }
+            for link in &graph.links {
+                self.record_starmap_object_with_context(
+                    &context,
+                    project_id,
+                    &result.starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapLink,
+                    &link.link_id,
+                    crate::writing_stats::ContributionOperation::Create,
+                    None,
+                    Some(&graph),
+                );
+            }
+            for hyperlink in &graph.hyperlinks {
+                self.record_starmap_object_with_context(
+                    &context,
+                    project_id,
+                    &result.starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapHyperlink,
+                    &hyperlink.hyperlink_id,
+                    crate::writing_stats::ContributionOperation::Create,
+                    None,
+                    Some(&graph),
+                );
+            }
+        }
         let result_dto: crate::api::types::StarMapMetaDto = result.into();
         let _ = self.record_workspace_change_set_history(&change_set, "create_starmap");
         Ok(result_dto)
@@ -452,6 +621,16 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapNode,
+            &result.id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            after.as_ref(),
+        );
         Ok(result.into())
     }
 
@@ -461,6 +640,11 @@ impl WriterCoreApi {
         new_title: &str,
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
         //   用 _with_changes 版本记录本地历史。
+        let before = self
+            .core_write()
+            .get_starmap(starmap_id)
+            .ok()
+            .map(|meta| Self::starmap_meta_snapshot(&meta));
         let (result, change_set) = self
             .core_write()
             .rename_starmap_with_changes(starmap_id, new_title)
@@ -479,6 +663,16 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        let after = Self::starmap_meta_snapshot(&result);
+        self.record_contribution_event(
+            project_id.as_deref().unwrap_or_default(),
+            crate::writing_stats::ContributionObjectType::StarMap,
+            starmap_id,
+            crate::writing_stats::ContributionOperation::Update,
+            None,
+            before,
+            Some(after),
+        );
         let result_dto: crate::api::types::StarMapMetaDto = result.into();
         let _ = self.record_workspace_change_set_history(&change_set, "rename_starmap");
         Ok(result_dto)
@@ -495,6 +689,13 @@ impl WriterCoreApi {
         // 之前一进函数就删搜索索引，如果 plan_delete_starmap 因外部引用拒绝删除、
         // 或 save_pending 失败，星图还在但搜索索引已经没了。现在把搜索索引删除
         // 移到 apply_planned_delete_starmap 成功 + mark_local_applied 之后。
+        let before_meta = self.core_write().get_starmap(starmap_id).ok();
+        let contribution_project = before_meta
+            .as_ref()
+            .and_then(|meta| meta.project_id.clone())
+            .unwrap_or_default();
+        let before_snapshot = before_meta.as_ref().map(Self::starmap_meta_snapshot);
+        let before_graph = self.get_starmap_graph_snapshot(starmap_id);
         let device_id = crate::settings::load_device_info(&self.app_data_root)
             .map(|i| i.device_id)
             .unwrap_or_default();
@@ -584,6 +785,79 @@ impl WriterCoreApi {
                 return Err(WriterError::from(e));
             }
         }
+        let context = crate::writing_stats::current_mutation_context();
+        self.record_contribution_event_with_context(
+            &context,
+            &contribution_project,
+            crate::writing_stats::ContributionObjectType::StarMap,
+            starmap_id,
+            crate::writing_stats::ContributionOperation::Delete,
+            None,
+            before_snapshot,
+            None,
+        );
+        if let Some(graph) = before_graph {
+            for node in &graph.nodes {
+                self.record_starmap_object_with_context(
+                    &context,
+                    Some(&contribution_project),
+                    starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapNode,
+                    &node.id,
+                    crate::writing_stats::ContributionOperation::Delete,
+                    Some(&graph),
+                    None,
+                );
+            }
+            for edge in &graph.edges {
+                self.record_starmap_object_with_context(
+                    &context,
+                    Some(&contribution_project),
+                    starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapEdge,
+                    &edge.id,
+                    crate::writing_stats::ContributionOperation::Delete,
+                    Some(&graph),
+                    None,
+                );
+            }
+            for embed in &graph.embeds {
+                self.record_starmap_object_with_context(
+                    &context,
+                    Some(&contribution_project),
+                    starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapEmbed,
+                    &embed.instance_id,
+                    crate::writing_stats::ContributionOperation::Delete,
+                    Some(&graph),
+                    None,
+                );
+            }
+            for link in &graph.links {
+                self.record_starmap_object_with_context(
+                    &context,
+                    Some(&contribution_project),
+                    starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapLink,
+                    &link.link_id,
+                    crate::writing_stats::ContributionOperation::Delete,
+                    Some(&graph),
+                    None,
+                );
+            }
+            for hyperlink in &graph.hyperlinks {
+                self.record_starmap_object_with_context(
+                    &context,
+                    Some(&contribution_project),
+                    starmap_id,
+                    crate::writing_stats::ContributionObjectType::StarMapHyperlink,
+                    &hyperlink.hyperlink_id,
+                    crate::writing_stats::ContributionOperation::Delete,
+                    Some(&graph),
+                    None,
+                );
+            }
+        }
         Ok(true)
     }
 
@@ -596,6 +870,7 @@ impl WriterCoreApi {
         clippy::type_complexity
     )]
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
+        let before_meta = self.core_write().get_starmap(starmap_id).ok();
         //   用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
@@ -715,6 +990,15 @@ impl WriterCoreApi {
             }
         }
         let _ = self.record_workspace_change_set_history(&change_set, "bind_starmap_to_project");
+        self.record_contribution_event(
+            project_id,
+            crate::writing_stats::ContributionObjectType::StarMap,
+            starmap_id,
+            crate::writing_stats::ContributionOperation::Link,
+            None,
+            before_meta.as_ref().map(Self::starmap_meta_snapshot),
+            Some(Self::starmap_meta_snapshot(&meta)),
+        );
         Ok(true)
     }
 
@@ -727,6 +1011,7 @@ impl WriterCoreApi {
         clippy::type_complexity
     )]
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> ApiResult<bool> {
+        let before_meta = self.core_write().get_starmap(starmap_id).ok();
         //   用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
@@ -841,6 +1126,19 @@ impl WriterCoreApi {
         }
         let _ =
             self.record_workspace_change_set_history(&change_set, "unbind_starmap_from_project");
+        let contribution_project = before_meta
+            .as_ref()
+            .and_then(|meta| meta.project_id.clone())
+            .unwrap_or_default();
+        self.record_contribution_event(
+            &contribution_project,
+            crate::writing_stats::ContributionObjectType::StarMap,
+            starmap_id,
+            crate::writing_stats::ContributionOperation::Unlink,
+            None,
+            before_meta.as_ref().map(Self::starmap_meta_snapshot),
+            Some(Self::starmap_meta_snapshot(&meta)),
+        );
         Ok(true)
     }
 
@@ -968,12 +1266,46 @@ impl WriterCoreApi {
         project_id: &str,
     ) -> ApiResult<bool> {
         //   用 _with_changes 版本记录本地历史。
+        let previous = self.get_main_starmap_for_project(project_id).ok().flatten();
         let change_set = self
             .core_write()
             .set_main_starmap_for_project_with_changes(starmap_id, project_id)
             .map_err(crate::api::error::WriterError::from)?;
         let _ =
             self.record_workspace_change_set_history(&change_set, "set_main_starmap_for_project");
+        let context = crate::writing_stats::current_mutation_context();
+        if let Some(previous) = previous.filter(|meta| meta.starmap_id != starmap_id) {
+            let before = self
+                .core_write()
+                .get_starmap(&previous.starmap_id)
+                .ok()
+                .map(|meta| Self::starmap_meta_snapshot(&meta));
+            self.record_contribution_event_with_context(
+                &context,
+                project_id,
+                crate::writing_stats::ContributionObjectType::StarMap,
+                &previous.starmap_id,
+                crate::writing_stats::ContributionOperation::Unlink,
+                None,
+                before,
+                None,
+            );
+        }
+        let after = self
+            .core_write()
+            .get_starmap(starmap_id)
+            .ok()
+            .map(|meta| Self::starmap_meta_snapshot(&meta));
+        self.record_contribution_event_with_context(
+            &context,
+            project_id,
+            crate::writing_stats::ContributionObjectType::StarMap,
+            starmap_id,
+            crate::writing_stats::ContributionOperation::Link,
+            None,
+            None,
+            after,
+        );
         Ok(true)
     }
 
@@ -993,6 +1325,7 @@ impl WriterCoreApi {
         node_id: &str,
         patch: crate::api::types::StarMapNodePatchDto,
     ) -> ApiResult<crate::api::types::StarMapNodeDto> {
+        let before = self.get_starmap_graph_snapshot(starmap_id);
         let result = self
             .core_write()
             .update_starmap_node(
@@ -1018,10 +1351,22 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapNode,
+            node_id,
+            crate::writing_stats::ContributionOperation::Update,
+            before.as_ref(),
+            after.as_ref(),
+        );
         Ok(result.into())
     }
 
     pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> ApiResult<bool> {
+        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write().delete_starmap_node(starmap_id, node_id)?;
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
@@ -1031,6 +1376,15 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapNode,
+            node_id,
+            crate::writing_stats::ContributionOperation::Delete,
+            before.as_ref(),
+            None,
+        );
         Ok(true)
     }
 
@@ -1045,6 +1399,16 @@ impl WriterCoreApi {
             .map_err(WriterError::from)?;
         let label = result.label.clone().unwrap_or_default();
         let project_id = get_starmap_project_id(self, starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapEdge,
+            &result.id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            after.as_ref(),
+        );
         let entry = crate::search::extractor::extract_starmap_edge_entry(
             starmap_id,
             &result.id,
@@ -1068,6 +1432,7 @@ impl WriterCoreApi {
         edge_id: &str,
         patch: crate::api::types::StarMapEdgePatchDto,
     ) -> ApiResult<crate::api::types::StarMapEdgeDto> {
+        let before = self.get_starmap_graph_snapshot(starmap_id);
         let result = self
             .core_write()
             .update_starmap_edge(
@@ -1092,10 +1457,22 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapEdge,
+            edge_id,
+            crate::writing_stats::ContributionOperation::Update,
+            before.as_ref(),
+            after.as_ref(),
+        );
         Ok(result.into())
     }
 
     pub fn delete_starmap_edge(&self, starmap_id: &str, edge_id: &str) -> ApiResult<bool> {
+        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write().delete_starmap_edge(starmap_id, edge_id)?;
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
@@ -1105,6 +1482,15 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapEdge,
+            edge_id,
+            crate::writing_stats::ContributionOperation::Delete,
+            before.as_ref(),
+            None,
+        );
         Ok(true)
     }
 
@@ -1155,6 +1541,16 @@ impl WriterCoreApi {
             .add_starmap_hyperlink(starmap_id, hl.try_into().map_err(WriterError::from)?)
             .map_err(WriterError::from)?;
         let project_id = get_starmap_project_id(self, starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapHyperlink,
+            &result.hyperlink_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            after.as_ref(),
+        );
         let hl_label = result.label.as_deref().unwrap_or("");
         let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
             starmap_id,
@@ -1182,11 +1578,22 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapHyperlinkDto> {
         let core_patch: crate::starmap::types::StarMapHyperlinkPatch =
             patch.try_into().map_err(WriterError::from)?;
+        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id);
         let result = self
             .core_write()
             .update_starmap_hyperlink(starmap_id, hyperlink_id, &core_patch)
             .map_err(WriterError::from)?;
-        let project_id = get_starmap_project_id(self, starmap_id);
+        let after = self.get_starmap_graph_snapshot(starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapHyperlink,
+            hyperlink_id,
+            crate::writing_stats::ContributionOperation::Update,
+            before.as_ref(),
+            after.as_ref(),
+        );
         let hl_label = result.label.as_deref().unwrap_or("");
         let entry = crate::search::extractor::extract_starmap_hyperlink_entry(
             starmap_id,
@@ -1211,8 +1618,19 @@ impl WriterCoreApi {
         starmap_id: &str,
         hyperlink_id: &str,
     ) -> ApiResult<bool> {
+        let before = self.get_starmap_graph_snapshot(starmap_id);
+        let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write()
             .delete_starmap_hyperlink(starmap_id, hyperlink_id)?;
+        self.record_starmap_object(
+            project_id.as_deref(),
+            starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapHyperlink,
+            hyperlink_id,
+            crate::writing_stats::ContributionOperation::Delete,
+            before.as_ref(),
+            None,
+        );
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action: crate::search::SearchIndexAction::Delete,
             object_id: format!("starmap_hyperlink:{}:{}", starmap_id, hyperlink_id),
@@ -1497,6 +1915,19 @@ impl WriterCoreApi {
             .map_err(|e| {
                 WriterError::Other(format!("create_cross_canvas_edge: write failed: {e:?}"))
             })?;
+
+        let project_id = get_starmap_project_id(self, &result.owner_starmap_id);
+        let edge_id = result.edge.id.clone();
+        let after_graph = self.get_starmap_graph_snapshot(&result.owner_starmap_id);
+        self.record_starmap_object(
+            project_id.as_deref(),
+            &result.owner_starmap_id,
+            crate::writing_stats::ContributionObjectType::StarMapEdge,
+            &edge_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            after_graph.as_ref(),
+        );
 
         Ok(crate::api::types::CreateCrossCanvasEdgeResultDto {
             owner_starmap_id: result.owner_starmap_id,

@@ -14,7 +14,7 @@
 
 import { LocalSettings, SyncableSettings, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { DateRange, Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
-import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint, WritingStatsHeatmap, WritingStatsHeatmapDay } from '../dto/StatsDtos'
+import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint, WritingStatsHeatmap, WritingStatsHeatmapDay, ContributionCounts, ContributionActorStats, ContributionObjectTypeStats, ContributionDayStats, ContributionDeviceStats, ContributionStats } from '../dto/StatsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
@@ -775,6 +775,129 @@ function decodeWritingStatsSelectedPeriod(data: Object): DecodeResult<WritingSta
   return ok<WritingStatsSelectedPeriod>(value)
 }
 
+function decodeContributionCounts(data: Object): DecodeResult<ContributionCounts> {
+  const insertedChars: number | null = reqNum(data, 'insertedChars')
+  const deletedChars: number | null = reqNum(data, 'deletedChars')
+  const modifiedChars: number | null = reqNum(data, 'modifiedChars')
+  const operations: number | null = reqNum(data, 'operations')
+  const createdObjects: number | null = reqNum(data, 'createdObjects')
+  const updatedObjects: number | null = reqNum(data, 'updatedObjects')
+  const deletedObjects: number | null = reqNum(data, 'deletedObjects')
+  const linkedObjects: number | null = reqNum(data, 'linkedObjects')
+  const unlinkedObjects: number | null = reqNum(data, 'unlinkedObjects')
+  if (insertedChars === null || deletedChars === null || modifiedChars === null ||
+    operations === null || createdObjects === null || updatedObjects === null ||
+    deletedObjects === null || linkedObjects === null || unlinkedObjects === null) {
+    return err<ContributionCounts>('ContributionCounts: numeric field missing')
+  }
+  const value: ContributionCounts = {
+    insertedChars: insertedChars,
+    deletedChars: deletedChars,
+    modifiedChars: modifiedChars,
+    operations: operations,
+    createdObjects: createdObjects,
+    updatedObjects: updatedObjects,
+    deletedObjects: deletedObjects,
+    linkedObjects: linkedObjects,
+    unlinkedObjects: unlinkedObjects
+  }
+  return ok<ContributionCounts>(value)
+}
+
+function decodeContributionActorStats(data: Object): DecodeResult<ContributionActorStats> {
+  const actor: string | null = reqStr(data, 'actor')
+  const countsObj: Object | null = reqObj(data, 'counts')
+  const retainedChars: number | null = reqNum(data, 'retainedChars')
+  if (actor === null || countsObj === null || retainedChars === null) {
+    return err<ContributionActorStats>('ContributionActorStats: field missing')
+  }
+  const countsR: DecodeResult<ContributionCounts> = decodeContributionCounts(countsObj)
+  if (!countsR.ok || countsR.value === undefined) { return err<ContributionActorStats>(countsR.error ?? 'decode failed') }
+  const value: ContributionActorStats = { actor: actor, counts: countsR.value, retainedChars: retainedChars }
+  return ok<ContributionActorStats>(value)
+}
+
+function decodeContributionObjectTypeStats(data: Object): DecodeResult<ContributionObjectTypeStats> {
+  const objectType: string | null = reqStr(data, 'objectType')
+  const countsObj: Object | null = reqObj(data, 'counts')
+  const retainedChars: number | null = reqNum(data, 'retainedChars')
+  if (objectType === null || countsObj === null || retainedChars === null) {
+    return err<ContributionObjectTypeStats>('ContributionObjectTypeStats: field missing')
+  }
+  const countsR: DecodeResult<ContributionCounts> = decodeContributionCounts(countsObj)
+  if (!countsR.ok || countsR.value === undefined) { return err<ContributionObjectTypeStats>(countsR.error ?? 'decode failed') }
+  const value: ContributionObjectTypeStats = { objectType: objectType, counts: countsR.value, retainedChars: retainedChars }
+  return ok<ContributionObjectTypeStats>(value)
+}
+
+function decodeContributionDayStats(data: Object): DecodeResult<ContributionDayStats> {
+  const date: string | null = reqStr(data, 'date')
+  const countsObj: Object | null = reqObj(data, 'counts')
+  if (date === null || countsObj === null) { return err<ContributionDayStats>('ContributionDayStats: field missing') }
+  const countsR: DecodeResult<ContributionCounts> = decodeContributionCounts(countsObj)
+  if (!countsR.ok || countsR.value === undefined) { return err<ContributionDayStats>(countsR.error ?? 'decode failed') }
+  return ok<ContributionDayStats>({ date: date, counts: countsR.value })
+}
+
+function decodeContributionDeviceStats(data: Object): DecodeResult<ContributionDeviceStats> {
+  const deviceId: string | null = reqStr(data, 'deviceId')
+  const countsObj: Object | null = reqObj(data, 'counts')
+  if (deviceId === null || countsObj === null) { return err<ContributionDeviceStats>('ContributionDeviceStats: field missing') }
+  const countsR: DecodeResult<ContributionCounts> = decodeContributionCounts(countsObj)
+  if (!countsR.ok || countsR.value === undefined) { return err<ContributionDeviceStats>(countsR.error ?? 'decode failed') }
+  return ok<ContributionDeviceStats>({ deviceId: deviceId, counts: countsR.value })
+}
+
+function decodeContributionStats(data: Object): DecodeResult<ContributionStats> {
+  const rangeObj: Object | null = reqObj(data, 'range')
+  if (rangeObj === null) { return err<ContributionStats>('ContributionStats: range missing') }
+  const rangeR: DecodeResult<DateRange> = decodeDateRange(rangeObj)
+  if (!rangeR.ok || rangeR.value === undefined) { return err<ContributionStats>(rangeR.error ?? 'decode failed') }
+  const projectIdR: DecodeResult<string | null> = nullStr(data, 'projectId')
+  if (!projectIdR.ok || projectIdR.value === undefined) { return err<ContributionStats>(projectIdR.error ?? 'projectId missing') }
+  const totalObj: Object | null = reqObj(data, 'total')
+  if (totalObj === null) { return err<ContributionStats>('ContributionStats: total missing') }
+  const totalR: DecodeResult<ContributionCounts> = decodeContributionCounts(totalObj)
+  if (!totalR.ok || totalR.value === undefined) { return err<ContributionStats>(totalR.error ?? 'decode failed') }
+  const actorsArr: Array<Object> | null = reqArray(data, 'actors')
+  if (actorsArr === null) { return err<ContributionStats>('ContributionStats: actors missing') }
+  const actorsR: DecodeResult<ContributionActorStats[]> =
+    decodeArray<ContributionActorStats>(actorsArr as Object, decodeContributionActorStats, 'actors')
+  if (!actorsR.ok || actorsR.value === undefined) { return err<ContributionStats>(actorsR.error ?? 'decode failed') }
+  const objectTypesArr: Array<Object> | null = reqArray(data, 'objectTypes')
+  if (objectTypesArr === null) { return err<ContributionStats>('ContributionStats: objectTypes missing') }
+  const objectTypesR: DecodeResult<ContributionObjectTypeStats[]> =
+    decodeArray<ContributionObjectTypeStats>(objectTypesArr as Object, decodeContributionObjectTypeStats, 'objectTypes')
+  if (!objectTypesR.ok || objectTypesR.value === undefined) { return err<ContributionStats>(objectTypesR.error ?? 'decode failed') }
+  const daysArr: Array<Object> | null = reqArray(data, 'days')
+  if (daysArr === null) { return err<ContributionStats>('ContributionStats: days missing') }
+  const daysR: DecodeResult<ContributionDayStats[]> =
+    decodeArray<ContributionDayStats>(daysArr as Object, decodeContributionDayStats, 'days')
+  if (!daysR.ok || daysR.value === undefined) { return err<ContributionStats>(daysR.error ?? 'decode failed') }
+  const devicesArr: Array<Object> | null = reqArray(data, 'devices')
+  if (devicesArr === null) { return err<ContributionStats>('ContributionStats: devices missing') }
+  const devicesR: DecodeResult<ContributionDeviceStats[]> =
+    decodeArray<ContributionDeviceStats>(devicesArr as Object, decodeContributionDeviceStats, 'devices')
+  if (!devicesR.ok || devicesR.value === undefined) { return err<ContributionStats>(devicesR.error ?? 'decode failed') }
+  const retainedTotalChars: number | null = reqNum(data, 'retainedTotalChars')
+  const historyScope: string | null = reqStr(data, 'historyScope')
+  if (retainedTotalChars === null || historyScope === null) {
+    return err<ContributionStats>('ContributionStats: retainedTotalChars/historyScope missing')
+  }
+  const value: ContributionStats = {
+    range: rangeR.value,
+    projectId: projectIdR.value,
+    total: totalR.value,
+    actors: actorsR.value,
+    objectTypes: objectTypesR.value,
+    days: daysR.value,
+    devices: devicesR.value,
+    retainedTotalChars: retainedTotalChars,
+    historyScope: historyScope
+  }
+  return ok<ContributionStats>(value)
+}
+
 export function decodeWritingStatsExplorer(data: Object): DecodeResult<WritingStatsExplorer> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<WritingStatsExplorer>('WritingStatsExplorer: expected object')
@@ -794,11 +917,22 @@ export function decodeWritingStatsExplorer(data: Object): DecodeResult<WritingSt
   if (selectedObj === null) { return err<WritingStatsExplorer>('selected missing or not object') }
   const selectedR: DecodeResult<WritingStatsSelectedPeriod> = decodeWritingStatsSelectedPeriod(selectedObj)
   if (!selectedR.ok || selectedR.value === undefined) { return err<WritingStatsExplorer>(selectedR.error ?? 'decode failed') }
+  const contributionsObjR: DecodeResult<Object | undefined> = optObj(data, 'contributions')
+  if (!contributionsObjR.ok) { return err<WritingStatsExplorer>(contributionsObjR.error ?? 'contributions decode failed') }
+  let contributions: ContributionStats | null = null
+  if (contributionsObjR.value !== undefined) {
+    const contributionsR: DecodeResult<ContributionStats> = decodeContributionStats(contributionsObjR.value)
+    if (!contributionsR.ok || contributionsR.value === undefined) {
+      return err<WritingStatsExplorer>(contributionsR.error ?? 'contributions decode failed')
+    }
+    contributions = contributionsR.value
+  }
   const value: WritingStatsExplorer = {
     historyScope: historyScope,
     lifetime: lifetimeR.value,
     periodCards: cardsR.value,
-    selected: selectedR.value
+    selected: selectedR.value,
+    contributions: contributions
   }
   return ok<WritingStatsExplorer>(value)
 }

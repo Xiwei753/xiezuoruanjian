@@ -88,6 +88,56 @@ fun StatsScreen(modifier: Modifier = Modifier) {
             }
         }
 
+        uiState.contributions?.let { contributions ->
+            if (contributions.actors.isNotEmpty()) {
+                item {
+                    SujianCard(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = dims.space12),
+                    ) {
+                        Column(modifier = Modifier.padding(dims.space16)) {
+                            Text(
+                                stringResource(id = R.string.stats_contribution_sources),
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(
+                                stringResource(
+                                    R.string.stats_contribution_retained_total,
+                                    contributions.retainedTotalChars,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Spacer(modifier = Modifier.height(dims.space8))
+                            contributions.actors.forEach { actor ->
+                                Text(
+                                    stringResource(
+                                        R.string.stats_contribution_actor_line,
+                                        actorLabel(actor.actor),
+                                        actor.counts.operations,
+                                        actor.counts.insertedChars,
+                                        actor.counts.deletedChars,
+                                        actor.counts.modifiedChars,
+                                        actor.retainedChars,
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            Text(
+                                stringResource(
+                                    R.string.stats_contribution_object_ops,
+                                    contributions.total.createdObjects,
+                                    contributions.total.updatedObjects,
+                                    contributions.total.deletedObjects,
+                                    contributions.total.linkedObjects,
+                                    contributions.total.unlinkedObjects,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         if (uiState.projects.isNotEmpty()) {
             item {
                 Text(stringResource(id = R.string.stats_by_project), style = MaterialTheme.typography.titleSmall)
@@ -138,6 +188,15 @@ private fun StatItem(
         Text(label, style = MaterialTheme.typography.bodySmall)
     }
 }
+
+@Composable
+private fun actorLabel(actor: String): String =
+    when (actor) {
+        "human" -> stringResource(id = R.string.stats_contribution_human)
+        "ai" -> stringResource(id = R.string.stats_contribution_ai)
+        "system" -> stringResource(id = R.string.stats_contribution_system)
+        else -> stringResource(id = R.string.stats_contribution_unknown)
+    }
 
 private fun formatDuration(
     seconds: Long,

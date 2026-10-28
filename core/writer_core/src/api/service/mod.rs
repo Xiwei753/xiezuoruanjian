@@ -10,7 +10,9 @@ use crate::facade::WriterCore;
 pub type ApiResult<T> = Result<T, WriterError>;
 
 mod annotation_ops;
+mod contribution_ops;
 mod correction_ops;
+mod mcp_ops;
 
 pub struct WriterCoreApi {
     pub(crate) app_data_root: PathBuf,

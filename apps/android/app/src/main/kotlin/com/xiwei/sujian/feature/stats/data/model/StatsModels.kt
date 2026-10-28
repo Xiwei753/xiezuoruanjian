@@ -68,6 +68,34 @@ data class DeviceWritingStatsItem(
     val sessionsCount: Int? = null,
 )
 
+/** 历史操作量：某来源新增/删除/修改的字数与对象操作数。 */
+data class ContributionCounts(
+    val insertedChars: Long = 0,
+    val deletedChars: Long = 0,
+    val modifiedChars: Long = 0,
+    val operations: Long = 0,
+    val createdObjects: Long = 0,
+    val updatedObjects: Long = 0,
+    val deletedObjects: Long = 0,
+    val linkedObjects: Long = 0,
+    val unlinkedObjects: Long = 0,
+)
+
+/** 某一来源的贡献。`retainedChars` 是当前正文中仍保留的字符数，与历史操作量分开。 */
+data class ContributionActorStats(
+    val actor: String = "",
+    val counts: ContributionCounts = ContributionCounts(),
+    val retainedChars: Long = 0,
+)
+
+/** 贡献来源统计快照，全部数字由 Core 计算。 */
+data class ContributionStats(
+    val total: ContributionCounts = ContributionCounts(),
+    val actors: List<ContributionActorStats> = emptyList(),
+    val retainedTotalChars: Long = 0,
+    val historyScope: String? = null,
+)
+
 data class WritingSpeedCurve(
     val range: WritingStatsRange? = null,
     val bucketMinutes: Int = 0,

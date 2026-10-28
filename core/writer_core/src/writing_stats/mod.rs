@@ -48,6 +48,8 @@
 pub mod api;
 pub mod calendar;
 pub mod checkpoint;
+pub mod contribution;
+pub mod contribution_store;
 pub mod migration;
 pub mod projection;
 pub mod proof;
@@ -55,6 +57,11 @@ pub mod replay;
 pub mod session;
 pub mod store;
 
+pub use contribution::{
+    current_mutation_context, with_mutation_context, ContributionEvent, ContributionObjectSnapshot,
+    ContributionObjectType, ContributionOperation, MutationActor, MutationContext,
+    MutationEntrypoint,
+};
 pub use session::{
     WritingActivitySegment, WritingSessionClock, WritingSessionState,
 };

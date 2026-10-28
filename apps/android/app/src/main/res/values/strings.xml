@@ -308,6 +308,14 @@
     <string name="stats_session_count">会话数</string>
     <string name="stats_by_project">按作品统计</string>
     <string name="stats_project_item">%1$d 字 · %2$s</string>
+    <string name="stats_contribution_sources">贡献来源</string>
+    <string name="stats_contribution_retained_total">当前保留内容 %1$d 字</string>
+    <string name="stats_contribution_actor_line">%1$s · 操作 %2$d 次 · 新增 %3$d · 删除 %4$d · 修改 %5$d · 保留 %6$d 字</string>
+    <string name="stats_contribution_object_ops">对象操作：新建 %1$d · 更新 %2$d · 删除 %3$d · 关联 %4$d · 解除 %5$d</string>
+    <string name="stats_contribution_human">人工</string>
+    <string name="stats_contribution_ai">AI</string>
+    <string name="stats_contribution_system">系统</string>
+    <string name="stats_contribution_unknown">未知</string>
     <string name="stats_no_data">暂无统计数据</string>
     <string name="stats_load_failed">统计读取失败，请稍后重试</string>
     <string name="duration_seconds">%1$d秒</string>

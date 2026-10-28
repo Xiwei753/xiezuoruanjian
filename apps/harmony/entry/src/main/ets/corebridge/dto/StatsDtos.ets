@@ -108,6 +108,56 @@ export interface WritingStatsSelectedPeriod {
   trend: WritingStatsTrend
 }
 
+// ─── ContributionStatsDto：贡献来源与对象操作（Issue #1010） ───
+
+/** 历史操作量；与当前保留内容来源是两个口径。 */
+export interface ContributionCounts {
+  insertedChars: number
+  deletedChars: number
+  modifiedChars: number
+  operations: number
+  createdObjects: number
+  updatedObjects: number
+  deletedObjects: number
+  linkedObjects: number
+  unlinkedObjects: number
+}
+
+export interface ContributionActorStats {
+  actor: string
+  counts: ContributionCounts
+  /** 当前仍保留文字中来自该来源的字符数。 */
+  retainedChars: number
+}
+
+export interface ContributionObjectTypeStats {
+  objectType: string
+  counts: ContributionCounts
+  retainedChars: number
+}
+
+export interface ContributionDayStats {
+  date: string
+  counts: ContributionCounts
+}
+
+export interface ContributionDeviceStats {
+  deviceId: string
+  counts: ContributionCounts
+}
+
+export interface ContributionStats {
+  range: DateRange
+  projectId: string | null
+  total: ContributionCounts
+  actors: ContributionActorStats[]
+  objectTypes: ContributionObjectTypeStats[]
+  days: ContributionDayStats[]
+  devices: ContributionDeviceStats[]
+  retainedTotalChars: number
+  historyScope: string
+}
+
 // ─── WritingStatsExplorerDto：统计页一次性快照 ───
 
 export interface WritingStatsExplorer {
@@ -117,6 +167,8 @@ export interface WritingStatsExplorer {
   /** 近七天 / 近三十天 / 近半年 / 自选区间，顺序固定 */
   periodCards: WritingStatsPeriodCard[]
   selected: WritingStatsSelectedPeriod
+  /** 当前选中区间的贡献来源快照；Core 未提供时为 null。 */
+  contributions: ContributionStats | null
 }
 
 // ─── WritingActivitySegmentInputDto：平台端已测量完成的前台写作切片 ───

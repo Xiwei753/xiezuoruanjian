@@ -335,6 +335,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_nulls() {
                 points: Vec::new(),
             },
         },
+        contributions: None,
     };
 
     let json = serde_json::to_value(&dto).unwrap();
@@ -476,6 +477,7 @@ fn test_writing_stats_explorer_dto_key_contract_with_values() {
                 ],
             },
         },
+        contributions: None,
     };
 
     let json = serde_json::to_value(&dto).unwrap();

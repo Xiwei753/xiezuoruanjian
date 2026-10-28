@@ -2,6 +2,9 @@ package com.xiwei.sujian.feature.stats.data
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.stats.data.interop.StatsBridge
 import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsSummary
+import com.xiwei.sujian.feature.stats.data.model.ContributionActorStats
+import com.xiwei.sujian.feature.stats.data.model.ContributionCounts
+import com.xiwei.sujian.feature.stats.data.model.ContributionStats
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -13,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import uniffi.writer_core.EditorChangeDto
 import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.WritingActivitySegmentInputDto
@@ -191,6 +195,59 @@ class WritingStatsRepository(
             is BridgeResult.Success -> result.data
             else -> null
         }
+    }
+
+    /**
+     * Issue #1010：贡献来源统计。Core 返回序列化好的快照，这里只做结构解析，
+     * 不重算任何数字。解析失败返回 null，由 UI 如实展示为空。
+     */
+    fun getContributionStats(
+        startDate: String,
+        endDate: String,
+    ): ContributionStats? {
+        val result = statsBridge.getContributionStatsJson(startDate, endDate)
+        if (result !is BridgeResult.Success) return null
+        return runCatching { parseContributionStats(result.data) }.getOrNull()
+    }
+
+    private fun parseContributionStats(json: String): ContributionStats {
+        val root = JSONObject(json)
+        val actorsJson = root.optJSONArray("actors")
+        val actors = buildList {
+            if (actorsJson != null) {
+                for (index in 0 until actorsJson.length()) {
+                    val item = actorsJson.getJSONObject(index)
+                    add(
+                        ContributionActorStats(
+                            actor = item.optString("actor"),
+                            counts = parseContributionCounts(item.optJSONObject("counts")),
+                            retainedChars = item.optLong("retainedChars"),
+                        ),
+                    )
+                }
+            }
+        }
+        return ContributionStats(
+            total = parseContributionCounts(root.optJSONObject("total")),
+            actors = actors,
+            retainedTotalChars = root.optLong("retainedTotalChars"),
+            historyScope = root.optString("historyScope").ifEmpty { null },
+        )
+    }
+
+    private fun parseContributionCounts(json: JSONObject?): ContributionCounts {
+        if (json == null) return ContributionCounts()
+        return ContributionCounts(
+            insertedChars = json.optLong("insertedChars"),
+            deletedChars = json.optLong("deletedChars"),
+            modifiedChars = json.optLong("modifiedChars"),
+            operations = json.optLong("operations"),
+            createdObjects = json.optLong("createdObjects"),
+            updatedObjects = json.optLong("updatedObjects"),
+            deletedObjects = json.optLong("deletedObjects"),
+            linkedObjects = json.optLong("linkedObjects"),
+            unlinkedObjects = json.optLong("unlinkedObjects"),
+        )
     }
 
     /**

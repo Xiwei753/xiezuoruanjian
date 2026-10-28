@@ -1,0 +1,18 @@
+[package]
+name = "sujian_mcp"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Local MCP server exposing Sujian writing data to external AI clients"
+
+[dependencies]
+writer_core = { path = "../../core/writer_core" }
+rmcp = { version = "3.8", features = ["server", "transport-io", "macros", "schemars"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+uuid = { version = "1", features = ["v4"] }
+
+[lints]
+workspace = true

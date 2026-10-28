@@ -1,8 +1,9 @@
 use crate::api::{
-    ChapterStatsSummaryDto, CurrentWritingSpeedDto, DeviceInfoDto, DeviceStatsSummaryDto,
-    EditorChangeStatsInputDto, ProjectStatsSummaryDto, ProjectWritingLifetimeStatsDto,
-    SpeedCurveSummaryDto, WriterError, WritingActivitySegmentInputDto, WritingStatsExplorerDto,
-    WritingStatsHeatmapDto, WritingStatsSummaryDto,
+    ChapterStatsSummaryDto, ContributionStatsDto, CurrentWritingSpeedDto, DeviceInfoDto,
+    DeviceStatsSummaryDto, EditorChangeStatsInputDto, ProjectStatsSummaryDto,
+    ProjectWritingLifetimeStatsDto, SpeedCurveSummaryDto, WriterError,
+    WritingActivitySegmentInputDto, WritingStatsExplorerDto, WritingStatsHeatmapDto,
+    WritingStatsSummaryDto,
 };
 
 impl super::WriterAppService {
@@ -43,6 +44,28 @@ impl super::WriterAppService {
         end_date: String,
     ) -> Result<DeviceStatsSummaryDto, WriterError> {
         self.api.get_writing_stats_by_device(&start_date, &end_date)
+    }
+
+    /// 贡献来源统计。返回 Core 序列化好的 JSON，平台端不重算。
+    #[allow(clippy::too_many_arguments)]
+    pub fn get_contribution_stats_json(
+        &self,
+        start_date: String,
+        end_date: String,
+        project_id: Option<String>,
+        actor: Option<String>,
+        object_type: Option<String>,
+        device_id: Option<String>,
+    ) -> Result<String, WriterError> {
+        let stats = self.api.get_contribution_stats(
+            &start_date,
+            &end_date,
+            project_id.as_deref(),
+            actor.as_deref(),
+            object_type.as_deref(),
+            device_id.as_deref(),
+        )?;
+        serde_json::to_string(&stats).map_err(|error| WriterError::Json(error.to_string()))
     }
 
     pub fn get_writing_speed_curve(
@@ -175,5 +198,26 @@ impl super::WriterAppService {
         year: i32,
     ) -> Result<WritingStatsHeatmapDto, WriterError> {
         self.api.get_writing_stats_heatmap(year)
+    }
+
+    /// 贡献来源统计：历史操作量与当前保留内容来源。
+    #[allow(clippy::too_many_arguments)]
+    pub fn get_contribution_stats(
+        &self,
+        start_date: String,
+        end_date: String,
+        project_id: Option<String>,
+        actor: Option<String>,
+        object_type: Option<String>,
+        device_id: Option<String>,
+    ) -> Result<ContributionStatsDto, WriterError> {
+        self.api.get_contribution_stats(
+            &start_date,
+            &end_date,
+            project_id.as_deref(),
+            actor.as_deref(),
+            object_type.as_deref(),
+            device_id.as_deref(),
+        )
     }
 }

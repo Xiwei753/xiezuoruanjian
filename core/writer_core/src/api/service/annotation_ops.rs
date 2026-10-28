@@ -210,7 +210,7 @@ fn link_to_dto(value: ObjectLink) -> AnnotationObjectLinkDto {
 }
 
 impl WriterCoreApi {
-    pub(super) fn annotation_store(&self, project_id: &str) -> ApiResult<AnnotationStore> {
+    pub(crate) fn annotation_store(&self, project_id: &str) -> ApiResult<AnnotationStore> {
         safe_project_id(project_id)?;
         Ok(AnnotationStore::new(
             &self.projects_root.join(project_id),
@@ -428,10 +428,19 @@ impl WriterCoreApi {
             deleted_at_ms: None,
         };
         let result = tag_to_dto(tag.clone());
+        let after = Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name.clone());
         let paths = store
             .apply_mutation(AnnotationMutation::UpsertTag(tag))
             .map_err(WriterError::from)?;
         self.finish_annotation_write(&project_id, paths, "create_annotation_tag");
+        self.record_annotation_object(
+            &project_id,
+            crate::writing_stats::ContributionObjectType::Tag,
+            &result.tag_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            Some(after),
+        );
         Ok(result)
     }
 
@@ -460,28 +469,54 @@ impl WriterCoreApi {
             .map_err(WriterError::from)?
             .filter(|tag| tag.deleted_at_ms.is_none())
             .ok_or_else(|| invalid_annotation("tag does not exist"))?;
+        let before = Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name.clone());
         tag.name = name.to_string();
         tag.updated_at_ms = chrono::Utc::now().timestamp_millis();
         let result = tag_to_dto(tag.clone());
+        let after = Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name.clone());
         let paths = store
             .apply_mutation(AnnotationMutation::UpsertTag(tag))
             .map_err(WriterError::from)?;
         self.finish_annotation_write(&project_id, paths, "rename_annotation_tag");
+        self.record_annotation_object(
+            &project_id,
+            crate::writing_stats::ContributionObjectType::Tag,
+            &result.tag_id,
+            crate::writing_stats::ContributionOperation::Update,
+            Some(before),
+            Some(after),
+        );
         Ok(result)
     }
 
     pub fn delete_tag(&self, project_id: String, tag_id: String) -> ApiResult<bool> {
         let store = self.annotation_store(&project_id)?;
+        let before = store
+            .get_tag(&tag_id)
+            .ok()
+            .flatten()
+            .filter(|tag| tag.deleted_at_ms.is_none())
+            .map(|tag| Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name));
         let paths = store
             .apply_mutation(AnnotationMutation::Delete {
                 kind: AnnotationKind::Tag,
                 project_id: project_id.clone(),
-                object_id: tag_id,
+                object_id: tag_id.clone(),
                 deleted_at_ms: chrono::Utc::now().timestamp_millis(),
             })
             .map_err(WriterError::from)?;
         let changed = !paths.is_empty();
         self.finish_annotation_write(&project_id, paths, "delete_annotation_tag");
+        if changed {
+            self.record_annotation_object(
+                &project_id,
+                crate::writing_stats::ContributionObjectType::Tag,
+                &tag_id,
+                crate::writing_stats::ContributionOperation::Delete,
+                before,
+                None,
+            );
+        }
         Ok(changed)
     }
 
@@ -492,6 +527,18 @@ impl WriterCoreApi {
         target_tag_id: String,
     ) -> ApiResult<bool> {
         let store = self.annotation_store(&project_id)?;
+        let source_before = store
+            .get_tag(&source_tag_id)
+            .ok()
+            .flatten()
+            .filter(|tag| tag.deleted_at_ms.is_none())
+            .map(|tag| Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name.clone()));
+        let target_before = store
+            .get_tag(&target_tag_id)
+            .ok()
+            .flatten()
+            .filter(|tag| tag.deleted_at_ms.is_none())
+            .map(|tag| Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name));
         let paths = store
             .merge_tags(
                 &source_tag_id,
@@ -501,6 +548,33 @@ impl WriterCoreApi {
             .map_err(WriterError::from)?;
         let changed = !paths.is_empty();
         self.finish_annotation_write(&project_id, paths, "merge_annotation_tags");
+        if changed {
+            let target_after = store
+                .get_tag(&target_tag_id)
+                .ok()
+                .flatten()
+                .filter(|tag| tag.deleted_at_ms.is_none())
+                .map(|tag| Self::annotation_snapshot(tag.updated_at_ms.to_string(), tag.name));
+            let context = crate::writing_stats::current_mutation_context();
+            self.record_annotation_object_with_context(
+                &context,
+                &project_id,
+                crate::writing_stats::ContributionObjectType::Tag,
+                &source_tag_id,
+                crate::writing_stats::ContributionOperation::Delete,
+                source_before,
+                None,
+            );
+            self.record_annotation_object_with_context(
+                &context,
+                &project_id,
+                crate::writing_stats::ContributionObjectType::Tag,
+                &target_tag_id,
+                crate::writing_stats::ContributionOperation::Update,
+                target_before,
+                target_after,
+            );
+        }
         Ok(changed)
     }
 
@@ -581,8 +655,15 @@ impl WriterCoreApi {
             .collect::<HashSet<_>>();
         let now = chrono::Utc::now().timestamp_millis();
         let mut changed_paths = Vec::new();
+        let mut removed_bindings = Vec::new();
+        let mut added_bindings = Vec::new();
         for binding in existing {
             if !desired.contains(&binding.tag_id) {
+                let binding_id = binding.binding_id.clone();
+                let snapshot = Self::annotation_snapshot(
+                    binding.updated_at_ms.to_string(),
+                    binding.tag_id.clone(),
+                );
                 changed_paths.extend(
                     store
                         .apply_mutation(AnnotationMutation::Delete {
@@ -593,6 +674,7 @@ impl WriterCoreApi {
                         })
                         .map_err(WriterError::from)?,
                 );
+                removed_bindings.push((binding_id, snapshot));
             }
         }
         for tag_id in desired {
@@ -607,13 +689,42 @@ impl WriterCoreApi {
                 updated_at_ms: now,
                 deleted_at_ms: None,
             };
+            let binding_id = binding.binding_id.clone();
+            let snapshot = Self::annotation_snapshot(
+                binding.updated_at_ms.to_string(),
+                binding.tag_id.clone(),
+            );
             changed_paths.extend(
                 store
                     .apply_mutation(AnnotationMutation::UpsertBinding(binding))
                     .map_err(WriterError::from)?,
             );
+            added_bindings.push((binding_id, snapshot));
         }
         self.finish_annotation_write(&project_id, changed_paths, "set_annotation_tag_bindings");
+        let context = crate::writing_stats::current_mutation_context();
+        for (binding_id, snapshot) in removed_bindings {
+            self.record_annotation_object_with_context(
+                &context,
+                &project_id,
+                crate::writing_stats::ContributionObjectType::TagBinding,
+                &binding_id,
+                crate::writing_stats::ContributionOperation::Unlink,
+                Some(snapshot),
+                None,
+            );
+        }
+        for (binding_id, snapshot) in added_bindings {
+            self.record_annotation_object_with_context(
+                &context,
+                &project_id,
+                crate::writing_stats::ContributionObjectType::TagBinding,
+                &binding_id,
+                crate::writing_stats::ContributionOperation::Link,
+                None,
+                Some(snapshot),
+            );
+        }
         store
             .list_bindings_for_target(&target)
             .map(|values| values.into_iter().map(binding_to_dto).collect())
@@ -701,10 +812,23 @@ impl WriterCoreApi {
         capture_text_anchor(&mut anchor, &text).map_err(WriterError::from)?;
         let result = anchor_to_dto(anchor.clone())?;
         if self.saved_chapter_text_matches(&project_id, &chapter_id, &text)? {
+            let anchor_id = anchor.anchor_id.clone();
+            let snapshot = Self::annotation_snapshot(
+                anchor.updated_at_ms.to_string(),
+                format!("{chapter_id}:{start_byte}..{end_byte}"),
+            );
             let paths = store
                 .apply_mutation(AnnotationMutation::UpsertTextAnchor(anchor))
                 .map_err(WriterError::from)?;
             self.finish_annotation_write(&project_id, paths, "create_annotation_text_anchor");
+            self.record_annotation_object(
+                &project_id,
+                crate::writing_stats::ContributionObjectType::TextAnchor,
+                &anchor_id,
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(snapshot),
+            );
             return Ok(result);
         }
         let now = chrono::Utc::now().timestamp_millis();
@@ -774,11 +898,23 @@ impl WriterCoreApi {
             deleted_at_ms: None,
         };
         let result = named_entry_to_dto(entry.clone());
+        let snapshot = Self::annotation_snapshot(
+            entry.updated_at_ms.to_string(),
+            entry.canonical_name.clone(),
+        );
         let paths = store
             .apply_mutation(AnnotationMutation::UpsertNamedEntry(entry))
             .map_err(WriterError::from)?;
         self.sync_correction_named_entries(&project_id)?;
         self.finish_annotation_write(&project_id, paths, "create_named_entry");
+        self.record_annotation_object(
+            &project_id,
+            crate::writing_stats::ContributionObjectType::NamedEntry,
+            &result.entry_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            Some(snapshot),
+        );
         Ok(result)
     }
 
@@ -800,34 +936,68 @@ impl WriterCoreApi {
             .map_err(WriterError::from)?
             .filter(|entry| entry.deleted_at_ms.is_none())
             .ok_or_else(|| invalid_annotation("named entry does not exist"))?;
+        let before = Self::annotation_snapshot(
+            entry.updated_at_ms.to_string(),
+            entry.canonical_name.clone(),
+        );
         entry.canonical_name = canonical_name;
         entry.aliases = aliases;
         entry.confirmed_misspellings = confirmed_misspellings;
         entry.auto_link_enabled = auto_link_enabled;
         entry.updated_at_ms = chrono::Utc::now().timestamp_millis();
         let result = named_entry_to_dto(entry.clone());
+        let after = Self::annotation_snapshot(
+            entry.updated_at_ms.to_string(),
+            entry.canonical_name.clone(),
+        );
         let paths = store
             .apply_mutation(AnnotationMutation::UpsertNamedEntry(entry))
             .map_err(WriterError::from)?;
         self.sync_correction_named_entries(&project_id)?;
         self.finish_annotation_write(&project_id, paths, "update_named_entry");
+        self.record_annotation_object(
+            &project_id,
+            crate::writing_stats::ContributionObjectType::NamedEntry,
+            &result.entry_id,
+            crate::writing_stats::ContributionOperation::Update,
+            Some(before),
+            Some(after),
+        );
         Ok(result)
     }
 
     pub fn delete_named_entry(&self, project_id: String, entry_id: String) -> ApiResult<bool> {
         self.ensure_named_entries_migrated(&project_id)?;
         let store = self.annotation_store(&project_id)?;
+        let before = store
+            .get_named_entry(&entry_id)
+            .ok()
+            .flatten()
+            .filter(|entry| entry.deleted_at_ms.is_none())
+            .map(|entry| {
+                Self::annotation_snapshot(entry.updated_at_ms.to_string(), entry.canonical_name)
+            });
         let paths = store
             .apply_mutation(AnnotationMutation::Delete {
                 kind: AnnotationKind::NamedEntry,
                 project_id: project_id.clone(),
-                object_id: entry_id,
+                object_id: entry_id.clone(),
                 deleted_at_ms: chrono::Utc::now().timestamp_millis(),
             })
             .map_err(WriterError::from)?;
         let changed = !paths.is_empty();
         self.sync_correction_named_entries(&project_id)?;
         self.finish_annotation_write(&project_id, paths, "delete_named_entry");
+        if changed {
+            self.record_annotation_object(
+                &project_id,
+                crate::writing_stats::ContributionObjectType::NamedEntry,
+                &entry_id,
+                crate::writing_stats::ContributionOperation::Delete,
+                before,
+                None,
+            );
+        }
         Ok(changed)
     }
 
@@ -869,6 +1039,17 @@ impl WriterCoreApi {
             .apply_mutation(AnnotationMutation::UpsertLink(link))
             .map_err(WriterError::from)?;
         self.finish_annotation_write(&project_id, paths, "create_object_link");
+        self.record_annotation_object(
+            &project_id,
+            crate::writing_stats::ContributionObjectType::ObjectLink,
+            &result.link_id,
+            crate::writing_stats::ContributionOperation::Create,
+            None,
+            Some(Self::annotation_snapshot(
+                result.updated_at_ms.to_string(),
+                format!("{:?}", result.target),
+            )),
+        );
         Ok(result)
     }
 
@@ -978,6 +1159,17 @@ impl WriterCoreApi {
                 .apply_mutation(AnnotationMutation::UpsertLink(link.clone()))
                 .map_err(WriterError::from)?;
             self.finish_annotation_write(&project_id, paths, "update_object_link");
+            self.record_annotation_object(
+                &project_id,
+                crate::writing_stats::ContributionObjectType::ObjectLink,
+                &link.link_id,
+                crate::writing_stats::ContributionOperation::Update,
+                None,
+                Some(Self::annotation_snapshot(
+                    link.updated_at_ms.to_string(),
+                    format!("{:?}", link.target),
+                )),
+            );
             let mut baselines = self
                 .annotation_edit_baselines
                 .lock()
@@ -1000,14 +1192,26 @@ impl WriterCoreApi {
             .map_err(WriterError::from)?
             .filter(|link| link.deleted_at_ms.is_none())
             .ok_or_else(|| invalid_annotation("link does not exist"))?;
+        let before =
+            Self::annotation_snapshot(link.updated_at_ms.to_string(), format!("{:?}", link.target));
         link.source = source;
         link.target = target;
         link.updated_at_ms = chrono::Utc::now().timestamp_millis();
         let result = link_to_dto(link.clone());
+        let after =
+            Self::annotation_snapshot(link.updated_at_ms.to_string(), format!("{:?}", link.target));
         let paths = store
             .apply_mutation(AnnotationMutation::UpsertLink(link))
             .map_err(WriterError::from)?;
         self.finish_annotation_write(&project_id, paths, "update_object_link");
+        self.record_annotation_object(
+            &project_id,
+            crate::writing_stats::ContributionObjectType::ObjectLink,
+            &result.link_id,
+            crate::writing_stats::ContributionOperation::Update,
+            Some(before),
+            Some(after),
+        );
         Ok(result)
     }
 
@@ -1028,16 +1232,37 @@ impl WriterCoreApi {
             }
         }
         let store = self.annotation_store(&project_id)?;
+        let before = store
+            .get_link(&link_id)
+            .ok()
+            .flatten()
+            .filter(|link| link.deleted_at_ms.is_none())
+            .map(|link| {
+                Self::annotation_snapshot(
+                    link.updated_at_ms.to_string(),
+                    format!("{:?}", link.target),
+                )
+            });
         let paths = store
             .apply_mutation(AnnotationMutation::Delete {
                 kind: AnnotationKind::Link,
                 project_id: project_id.clone(),
-                object_id: link_id,
+                object_id: link_id.clone(),
                 deleted_at_ms: chrono::Utc::now().timestamp_millis(),
             })
             .map_err(WriterError::from)?;
         let changed = !paths.is_empty();
         self.finish_annotation_write(&project_id, paths, "delete_object_link");
+        if changed {
+            self.record_annotation_object(
+                &project_id,
+                crate::writing_stats::ContributionObjectType::ObjectLink,
+                &link_id,
+                crate::writing_stats::ContributionOperation::Delete,
+                before,
+                None,
+            );
+        }
         Ok(changed)
     }
 
@@ -1144,6 +1369,23 @@ impl WriterCoreApi {
             .filter(|anchor| anchor.deleted_at_ms.is_none())
             .map(anchor_to_dto)
             .transpose()
+    }
+
+    pub fn list_text_anchors_for_chapter(
+        &self,
+        project_id: String,
+        chapter_id: String,
+    ) -> ApiResult<Vec<AnnotationTextAnchorDto>> {
+        safe_project_id(&project_id)?;
+        if chapter_id.is_empty() {
+            return Err(invalid_annotation("chapter id must be non-empty"));
+        }
+        self.annotation_store(&project_id)?
+            .list_text_anchors_for_chapter(&chapter_id)
+            .map_err(WriterError::from)?
+            .into_iter()
+            .map(anchor_to_dto)
+            .collect()
     }
 
     pub fn resolve_link(
@@ -1862,6 +2104,71 @@ impl WriterCoreApi {
         let Some(baseline) = baselines.get_mut(baseline_id) else {
             return;
         };
+        let context = crate::writing_stats::current_mutation_context();
+        let project_id = session_key.0.clone();
+        let mut committed_objects = Vec::new();
+        for committed in &pending.prepared.committed_anchors {
+            let original = baseline
+                .original_anchors
+                .iter()
+                .find(|anchor| anchor.anchor_id == committed.anchor_id);
+            let operation = if original.is_none() {
+                crate::writing_stats::ContributionOperation::Create
+            } else if committed.deleted_at_ms.is_some() {
+                crate::writing_stats::ContributionOperation::Delete
+            } else {
+                crate::writing_stats::ContributionOperation::Update
+            };
+            let before = original.map(|anchor| {
+                Self::annotation_snapshot(
+                    anchor.updated_at_ms.to_string(),
+                    format!(
+                        "{}:{}..{}",
+                        anchor.chapter_id, anchor.start_byte, anchor.end_byte
+                    ),
+                )
+            });
+            let after = committed.deleted_at_ms.is_none().then(|| {
+                Self::annotation_snapshot(
+                    committed.updated_at_ms.to_string(),
+                    format!(
+                        "{}:{}..{}",
+                        committed.chapter_id, committed.start_byte, committed.end_byte
+                    ),
+                )
+            });
+            committed_objects.push((
+                crate::writing_stats::ContributionObjectType::TextAnchor,
+                committed.anchor_id.clone(),
+                operation,
+                before,
+                after,
+            ));
+        }
+        for binding in &pending.pending_bindings {
+            committed_objects.push((
+                crate::writing_stats::ContributionObjectType::TagBinding,
+                binding.binding_id.clone(),
+                crate::writing_stats::ContributionOperation::Link,
+                None,
+                Some(Self::annotation_snapshot(
+                    binding.updated_at_ms.to_string(),
+                    binding.tag_id.clone(),
+                )),
+            ));
+        }
+        for link in &pending.pending_links {
+            committed_objects.push((
+                crate::writing_stats::ContributionObjectType::ObjectLink,
+                link.link_id.clone(),
+                crate::writing_stats::ContributionOperation::Create,
+                None,
+                Some(Self::annotation_snapshot(
+                    link.updated_at_ms.to_string(),
+                    format!("{:?}", link.target),
+                )),
+            ));
+        }
         for committed in &pending.prepared.committed_anchors {
             if let Some(original) = baseline
                 .original_anchors
@@ -1893,6 +2200,18 @@ impl WriterCoreApi {
             if baseline.pending_links.get(&link.link_id) == Some(link) {
                 baseline.pending_links.remove(&link.link_id);
             }
+        }
+        drop(baselines);
+        for (object_type, object_id, operation, before, after) in committed_objects {
+            self.record_annotation_object_with_context(
+                &context,
+                &project_id,
+                object_type,
+                &object_id,
+                operation,
+                before,
+                after,
+            );
         }
     }
 }

@@ -64,6 +64,8 @@ Rectangle {
     readonly property var lifetime: explorer && explorer.lifetime ? explorer.lifetime : null
     readonly property var selected: explorer && explorer.selected ? explorer.selected : null
     readonly property var selectedRecords: selected ? selected.records : null
+    readonly property var contributions: explorer && explorer.contributions ? explorer.contributions : null
+    readonly property var contributionActors: contributions && contributions.actors ? contributions.actors : []
     readonly property string historyScope: explorer && explorer.historyScope ? String(explorer.historyScope) : ""
     // 首个快照到达前先摆四张空卡（只有预设名，数值显示 "—"）。
     readonly property var periodCards: explorer && explorer.periodCards && explorer.periodCards.length > 0
@@ -144,6 +146,16 @@ Rectangle {
         case "partialSync": return qsTr("同步不完整")
         }
         return ""
+    }
+
+    // 贡献来源只翻译 Core 的 actor 键，不在这里归类统计。
+    function contributionActorText(actor) {
+        switch (String(actor)) {
+        case "human": return qsTr("人工")
+        case "ai": return qsTr("AI")
+        case "system": return qsTr("系统")
+        }
+        return qsTr("未知")
     }
 
     // 当前详情需要请求的 preset：生涯展开优先，其次展开的时段卡，最后是选中时段。
@@ -436,6 +448,90 @@ Rectangle {
                                     historyScope: root.historyScope
                                 }
                             }
+                        }
+                    }
+                }
+
+                // ── 贡献来源：历史操作量与当前保留内容来源（Issue #1010）──
+                // 两列数字都直接来自 Core，端侧不把对象操作折算成码字。
+                Kirigami.ShadowedRectangle {
+                    Layout.fillWidth: true
+                    visible: root.contributions !== null && root.contributionActors.length > 0
+                    implicitHeight: contributionColumn.implicitHeight + Kirigami.Units.largeSpacing * 2
+                    radius: Kirigami.Units.cornerRadius
+                    color: Kirigami.Theme.alternateBackgroundColor
+                    border.color: Kirigami.Theme.disabledTextColor
+                    border.width: 1
+
+                    ColumnLayout {
+                        id: contributionColumn
+                        anchors.fill: parent
+                        anchors.margins: Kirigami.Units.largeSpacing
+                        spacing: Kirigami.Units.smallSpacing
+
+                        RowLayout {
+                            Layout.fillWidth: true
+
+                            Label {
+                                text: qsTr("贡献来源")
+                                font.weight: Font.Medium
+                                color: Kirigami.Theme.textColor
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+
+                            Label {
+                                text: qsTr("当前保留 %1 字")
+                                    .arg(root.formatNum(root.val(root.contributions, "retainedTotalChars")))
+                                color: Kirigami.Theme.disabledTextColor
+                            }
+                        }
+
+                        Repeater {
+                            model: root.contributionActors
+
+                            delegate: RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+
+                                Label {
+                                    Layout.preferredWidth: Kirigami.Units.gridUnit * 3
+                                    text: root.contributionActorText(modelData.actor)
+                                    color: Kirigami.Theme.textColor
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: qsTr("操作 %1 次 · 新增 %2 字 · 删除 %3 字 · 修改 %4 字")
+                                        .arg(root.formatNum(root.val(modelData.counts, "operations")))
+                                        .arg(root.formatNum(root.val(modelData.counts, "insertedChars")))
+                                        .arg(root.formatNum(root.val(modelData.counts, "deletedChars")))
+                                        .arg(root.formatNum(root.val(modelData.counts, "modifiedChars")))
+                                    color: Kirigami.Theme.disabledTextColor
+                                    elide: Text.ElideRight
+                                }
+
+                                Label {
+                                    text: qsTr("保留 %1 字").arg(root.formatNum(root.val(modelData, "retainedChars")))
+                                    color: Kirigami.Theme.textColor
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("对象操作：新建 %1 · 更新 %2 · 删除 %3 · 关联 %4 · 解除 %5")
+                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "createdObjects")))
+                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "updatedObjects")))
+                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "deletedObjects")))
+                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "linkedObjects")))
+                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "unlinkedObjects")))
+                            color: Kirigami.Theme.disabledTextColor
+                            font: Kirigami.Theme.smallFont
+                            elide: Text.ElideRight
                         }
                     }
                 }

@@ -1,0 +1,258 @@
+//! 对象贡献事件的按设备分区存储。
+//!
+//! 文件布局与章节输入事件一致：`stats/events/<device_id>/YYYY-MM-DD.objects.jsonl`。
+//! 每台设备只追加自己的分区；读取时扫描全部已到达分区并按 `event_id` 去重。
+//! 同步只搬运文件，不重写 `actor`/`entrypoint`。
+
+use std::collections::{BTreeMap, HashSet};
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use crate::error::{Error, Result};
+use crate::writing_stats::contribution::{
+    ContributionEvent, ContributionObjectType, ContributionOperation, MutationActor,
+};
+
+const EVENTS_ROOT: &str = "stats/events";
+const OBJECTS_SUFFIX: &str = ".objects.jsonl";
+
+pub struct ContributionStore {
+    app_data_root: PathBuf,
+    origin_device_id: Mutex<Option<String>>,
+}
+
+impl ContributionStore {
+    pub fn new(app_data_root: &Path) -> Self {
+        Self {
+            app_data_root: app_data_root.to_path_buf(),
+            origin_device_id: Mutex::new(None),
+        }
+    }
+
+    fn events_root(&self) -> PathBuf {
+        self.app_data_root.join(EVENTS_ROOT)
+    }
+
+    fn event_file_path(&self, origin: &str, date: &str) -> PathBuf {
+        self.events_root()
+            .join(origin)
+            .join(format!("{date}{OBJECTS_SUFFIX}"))
+    }
+
+    pub fn resolve_origin_device_id(&self) -> Result<String> {
+        if let Some(id) = self
+            .origin_device_id
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+        {
+            return Ok(id);
+        }
+        let info = match crate::settings::load_device_info(&self.app_data_root) {
+            Ok(info) if valid_segment(&info.device_id) => info,
+            _ => crate::settings::ensure_device_info(&self.app_data_root, "", "", None)?,
+        };
+        if !valid_segment(&info.device_id) {
+            return Err(Error::Other(format!(
+                "invalid device id for contribution event partition: {:?}",
+                info.device_id
+            )));
+        }
+        if let Ok(mut guard) = self.origin_device_id.lock() {
+            *guard = Some(info.device_id.clone());
+        }
+        Ok(info.device_id)
+    }
+
+    /// 幂等追加一批对象事件；返回真正新写入的事件数。
+    pub fn record_events(&self, events: Vec<ContributionEvent>) -> Result<usize> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+        let origin = self.resolve_origin_device_id()?;
+        let mut by_date: BTreeMap<String, Vec<ContributionEvent>> = BTreeMap::new();
+        for mut event in events {
+            if event.local_date.is_empty() {
+                event.local_date =
+                    crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
+                        .or_else(|_| {
+                            crate::writing_stats::calendar::utc_date_at(event.occurred_at_ms)
+                        })
+                        .unwrap_or_default();
+            }
+            if event.origin_device_id.is_empty() {
+                event.origin_device_id = origin.clone();
+            }
+            let date = if event.local_date.is_empty() {
+                crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
+                    .or_else(|_| crate::writing_stats::calendar::utc_date_at(event.occurred_at_ms))
+                    .unwrap_or_else(|_| "1970-01-01".to_string())
+            } else {
+                event.local_date.clone()
+            };
+            by_date.entry(date).or_default().push(event);
+        }
+
+        let partition_dir = self.events_root().join(&origin);
+        fs::create_dir_all(&partition_dir)?;
+        let mut written = 0usize;
+        for (date, events) in by_date {
+            let path = self.event_file_path(&origin, &date);
+            let existing = read_ids(&path)?;
+            let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+            for event in events {
+                if !event.event_id.is_empty() && existing.contains(&event.event_id) {
+                    continue;
+                }
+                let line = serde_json::to_string(&event)?;
+                writeln!(file, "{line}")?;
+                written += 1;
+            }
+        }
+        Ok(written)
+    }
+
+    pub fn load_all_events(&self) -> Result<Vec<ContributionEvent>> {
+        let mut events = Vec::new();
+        let mut seen = HashSet::new();
+        for origin in self.list_origins()? {
+            let dir = self.events_root().join(&origin);
+            if !dir.is_dir() {
+                continue;
+            }
+            let mut paths: Vec<PathBuf> = fs::read_dir(&dir)?
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.ends_with(OBJECTS_SUFFIX))
+                })
+                .collect();
+            paths.sort();
+            for path in paths {
+                let file = fs::File::open(&path)?;
+                for line in BufReader::new(file).lines() {
+                    let line = line?;
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let mut event: ContributionEvent = match serde_json::from_str(line) {
+                        Ok(event) => event,
+                        Err(error) => {
+                            eprintln!(
+                                "[writing_stats] skip malformed contribution event in {}: {error}",
+                                path.display()
+                            );
+                            continue;
+                        }
+                    };
+                    if event.origin_device_id.is_empty() {
+                        event.origin_device_id = origin.clone();
+                    }
+                    if !event.event_id.is_empty() && !seen.insert(event.event_id.clone()) {
+                        continue;
+                    }
+                    events.push(event);
+                }
+            }
+        }
+        events.sort_by(|left, right| {
+            left.occurred_at_ms
+                .cmp(&right.occurred_at_ms)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        });
+        Ok(events)
+    }
+
+    pub fn load_events_for_project(&self, project_id: &str) -> Result<Vec<ContributionEvent>> {
+        Ok(self
+            .load_all_events()?
+            .into_iter()
+            .filter(|event| event.project_id == project_id)
+            .collect())
+    }
+
+    pub fn load_events_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<ContributionEvent>> {
+        Ok(self
+            .load_all_events()?
+            .into_iter()
+            .filter(|event| {
+                let date = if event.local_date.is_empty() {
+                    crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
+                        .unwrap_or_default()
+                } else {
+                    event.local_date.clone()
+                };
+                !date.is_empty() && date.as_str() >= start_date && date.as_str() <= end_date
+            })
+            .collect())
+    }
+
+    fn list_origins(&self) -> Result<Vec<String>> {
+        let root = self.events_root();
+        if !root.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut origins = Vec::new();
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if valid_segment(&name) {
+                origins.push(name);
+            }
+        }
+        origins.sort();
+        Ok(origins)
+    }
+}
+
+fn read_ids(path: &Path) -> Result<HashSet<String>> {
+    let mut ids = HashSet::new();
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
+        Err(error) => return Err(error.into()),
+    };
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Some(id) = value.get("event_id").and_then(|id| id.as_str()) {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    Ok(ids)
+}
+
+fn valid_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
+
+/// 供投影层使用的稳定字符串键。
+pub fn actor_key(actor: MutationActor) -> &'static str {
+    actor.as_str()
+}
+
+pub fn object_type_key(object_type: ContributionObjectType) -> &'static str {
+    object_type.as_str()
+}
+
+pub fn operation_key(operation: ContributionOperation) -> &'static str {
+    operation.as_str()
+}

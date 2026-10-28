@@ -19,6 +19,7 @@ import {
 } from '../../../ui/theme/LayoutTokens'
 import { EMPTY_STATS_EXPLORER, formatDateHuman, formatDateRangeHuman, formatDurationHuman, formatHistoryScope, formatInt, formatMeasuredDuration, formatRecordValue } from './StatsFormat'
 import { WritingStatsCalendarHeatmap } from './WritingStatsCalendarHeatmap'
+import { ContributionStatsSection } from './ContributionStatsSection'
 
 interface RangeOption {
   label: string
@@ -92,6 +93,7 @@ export struct CompactStatsContent {
         this.RangeSwitch()
         this.SummarySection()
         this.RecordsSection()
+        ContributionStatsSection({ stats: this.explorer.contributions })
         this.HeatmapSection()
       }
       .width('100%')
