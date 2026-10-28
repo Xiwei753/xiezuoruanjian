@@ -115,12 +115,17 @@ impl WriterCoreApi {
         }
     }
 
-    /// 注入平台提供的稳定设备标识，转发给 `WriterCore`。
+    /// 注入平台提供的稳定设备标识和当前运行平台，转发给 `WriterCore`。
     /// 平台初始化（`WriterAppService`）时调用，保证写作统计事件分区
-    /// 首次解析来源设备时直接采用平台身份。
-    pub(crate) fn set_preferred_device_id(&self, device_id: &str) {
+    /// 首次解析来源设备时直接采用平台身份，且同步事件不会退化成 Desktop。
+    pub(crate) fn set_platform_identity(
+        &self,
+        device_id: &str,
+        platform: writer_platform_api::PlatformKind,
+    ) {
         let core = self.core_write();
         core.set_preferred_device_id(device_id);
+        core.set_preferred_platform(platform);
         // 应用启动、平台注入稳定设备身份后，立即补记上次进程留下的同步证明
         // 意图；此时解析出的来源分区与本次编辑事件一致。
         if core.sync_proof_intents_pending() {

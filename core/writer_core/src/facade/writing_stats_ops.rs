@@ -371,11 +371,34 @@ impl super::WriterCore {
             });
         }
 
-        let platform = writer_platform_api::PlatformKind::Desktop;
+        // 同步证明事件属于本机产生的 SyncRemote 事实，平台字段必须来自当前
+        // 设备，不能因为走同步路径就硬编码成 Desktop。优先使用平台初始化注入
+        // 的值；直接构造 Core（如 MCP/测试）时回退持久化设备身份。
+        let persisted_info = crate::settings::load_device_info(&self.app_data_root).ok();
+        let platform = self
+            .preferred_platform()
+            .or_else(|| {
+                persisted_info.as_ref().and_then(|info| {
+                    writer_platform_api::PlatformKind::from_str_name(&info.platform)
+                })
+            })
+            .unwrap_or(writer_platform_api::PlatformKind::Desktop);
+        // 只有持久化平台与当前平台一致时，持久化的 device_class 才可信；
+        // 旧版本可能已把平台写成 desktop，此时改用当前平台的默认设备类型。
+        let device_class = persisted_info
+            .as_ref()
+            .filter(|info| {
+                info.platform.is_empty()
+                    || writer_platform_api::PlatformKind::from_str_name(&info.platform)
+                        == Some(platform)
+            })
+            .map(|info| info.device_class.clone())
+            .filter(|class| !class.is_empty())
+            .unwrap_or_else(|| platform.default_device_class().to_string());
         let preferred_device_id = self.preferred_device_id();
         let device_info = self.ensure_device_info(
             platform.to_str_name(),
-            platform.default_device_class(),
+            &device_class,
             preferred_device_id.as_deref(),
         )?;
         let selection = EditorSelection {
@@ -387,7 +410,7 @@ impl super::WriterCore {
             occurred_at_ms,
             &device_info.device_id,
             platform,
-            &device_info.device_class,
+            &device_class,
             project_id,
             volume_id,
             chapter_id,

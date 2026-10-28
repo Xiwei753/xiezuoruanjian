@@ -190,7 +190,7 @@ impl<'a> ProofIntentSink<'a> {
                     }
                     CommitAction::Delete { .. } => (SyncProofAction::Delete, None),
                 };
-                if before_text == after_text {
+                if before_text.as_deref().unwrap_or("") == after_text.as_deref().unwrap_or("") {
                     continue;
                 }
                 let source_device_id = self

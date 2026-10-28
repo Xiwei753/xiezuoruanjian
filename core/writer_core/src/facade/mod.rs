@@ -87,6 +87,10 @@ pub struct WriterCore {
     /// 由 `WriterCoreApi` 在初始化时注入；写作统计事件分区首次解析来源设备时
     /// 优先使用它，避免 Core 先随机生成 UUID 导致同一台设备出现两个身份。
     pub(crate) preferred_device_id: std::sync::Mutex<Option<String>>,
+    /// 平台提供的当前运行平台。同步证明事件不能把 SyncRemote 一律当成
+    /// Desktop，否则首次同步会先把设备身份写成 desktop；本字段由
+    /// `WriterCoreApi` 从 `PlatformInit` 注入，未注入时才回退持久化身份。
+    pub(crate) preferred_platform: std::sync::Mutex<Option<writer_platform_api::PlatformKind>>,
     /// 是否存在未完成的同步证明意图。编辑/同步热路径只在为 true 时才扫描
     /// 意图目录，避免每次按键都做文件系统枚举。
     pub(crate) proof_intents_pending: std::sync::atomic::AtomicBool,
@@ -154,6 +158,7 @@ impl WriterCore {
             starmap_stores: std::sync::Mutex::new(HashMap::new()),
             path_dependency_index: std::sync::Mutex::new(None),
             preferred_device_id: std::sync::Mutex::new(None),
+            preferred_platform: std::sync::Mutex::new(None),
             proof_intents_pending: std::sync::atomic::AtomicBool::new(proof_intents_pending),
             proof_intents_last_recovery_ms: std::sync::atomic::AtomicI64::new(0),
         }
@@ -174,6 +179,17 @@ impl WriterCore {
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
+    }
+
+    /// 注入当前运行平台；只影响设备身份/统计事件的平台字段，不改变正文路径。
+    pub(crate) fn set_preferred_platform(&self, platform: writer_platform_api::PlatformKind) {
+        if let Ok(mut guard) = self.preferred_platform.lock() {
+            *guard = Some(platform);
+        }
+    }
+
+    pub(crate) fn preferred_platform(&self) -> Option<writer_platform_api::PlatformKind> {
+        self.preferred_platform.lock().ok().and_then(|guard| *guard)
     }
 
     pub(crate) fn get_stats_api(&self) -> &StatsApi {
