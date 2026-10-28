@@ -3363,6 +3363,13 @@ console.log('38. #1009：无固定缩放阈值，无 LOD/预览/外壳档位，�
     embedSource.includes('this.childAllowCycleProjection = repeated ? false : this.allowCycleProjection') &&
     embedSource.includes('isCycleBoundary'),
   '循环引用投影一层后停止实例化，不拒绝路径本身')
+  assert(embedSource.includes("@Prop @Watch('onProjectionInputsChange') scenePath") &&
+    embedSource.includes("@Prop @Watch('onProjectionInputsChange') ancestorStarmapIds") &&
+    embedSource.includes('generation !== this.loadGeneration'),
+  'A→A 重入时 @Prop 更新会重建 childScenePath，并用 generation 丢弃旧 route 的异步结果')
+  assert(sceneSource.includes('embedComponentKey') &&
+    sceneSource.includes('this.embedComponentKey(embed)'),
+  'Embed 投影组件以完整入口 route + Embed instanceId 作为 ForEach 身份')
   assert(sceneSource.includes("route.push({ type: 'enterEmbed', instanceId: embed.instanceId, nodeId: null })") &&
     sceneSource.includes('this.enterEmbedByInstance(embed)'),
   '点击/双击入口只追加一条 enterEmbed 路径段，把完整 route 交给页面')
@@ -3381,6 +3388,10 @@ console.log('38. #1009：无固定缩放阈值，无 LOD/预览/外壳档位，�
     screenSource.includes('this.activePath.slice(0, -1)') &&
     screenSource.includes('scenePath: this.activePath'),
   '页面持有完整 route；进入追加、退出只移除最后一段，并把 route 传给唯一活动画布')
+  assert(screenSource.includes('describeScenePath(path)') &&
+    screenSource.includes('describeScenePath(this.activePath)') &&
+    !screenSource.includes('private routeKey'),
+  'routeCameras/routeEntryContexts/前缀比较统一用 describeScenePath，Portal 不会撞键')
   assert(screenSource.includes('ancestorStarmapIds: this.activeStarmapIds'),
     '页面把完整 starmap 链交给投影层；重复 starmapId 是合法路径')
   assert(screenSource.includes('maybeTraverseByZoom') &&

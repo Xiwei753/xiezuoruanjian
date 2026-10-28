@@ -23,10 +23,10 @@ import { StarMapScene } from './StarMapScene'
 
 @Component
 export struct StarMapEmbedScene {
-  @Prop rootStarmapId: string = ''
+  @Prop @Watch('onProjectionInputsChange') rootStarmapId: string = ''
   /** 父画布自己的 route（不含当前入口这一段的起点） */
-  @Prop scenePath: StarMapPathSegment[] = []
-  @Prop embed: StarMapEmbed = {
+  @Prop @Watch('onProjectionInputsChange') scenePath: StarMapPathSegment[] = []
+  @Prop @Watch('onProjectionInputsChange') embed: StarMapEmbed = {
     instanceId: '',
     targetStarmapId: '',
     label: null,
@@ -103,9 +103,9 @@ export struct StarMapEmbedScene {
   onEnterEmbed: (path: StarMapPathSegment[]) => void = (_path: StarMapPathSegment[]) => {}
 
   /** 当前 route 已出现的 starmapId（含根，允许重复）。 */
-  @Prop ancestorStarmapIds: string[] = []
+  @Prop @Watch('onProjectionInputsChange') ancestorStarmapIds: string[] = []
   /** 是否还允许把“已出现在祖先链上的目标”再投影一层。 */
-  @Prop allowCycleProjection: boolean = true
+  @Prop @Watch('onProjectionInputsChange') allowCycleProjection: boolean = true
 
   @State childGraph: StarMapGraph | null = null
   @State isLoading: boolean = true
@@ -116,51 +116,88 @@ export struct StarMapEmbedScene {
   @State childAllowCycleProjection: boolean = true
   @State isCycleBoundary: boolean = false
 
+  /**
+   * 当前投影解析/加载代号。@Watch 可能在 A→A 重入、父图刷新时连续触发，
+   * 只有最后一次输入对应的 resolve/getGraph 结果能落到状态里。
+   */
+  private loadGeneration: number = 0
+
   async aboutToAppear() {
-    if (!this.bridge) {
-      this.isLoading = false
+    // 首次创建时 @Watch 不会触发；初始化由生命周期负责。
+    await this.reloadChildProjection()
+  }
+
+  /** @Prop 更新：重建 childScenePath，并按新 route 重新解析/加载目标。 */
+  private onProjectionInputsChange(): void {
+    void this.reloadChildProjection()
+  }
+
+  private async reloadChildProjection(): Promise<void> {
+    const generation: number = ++this.loadGeneration
+    this.isLoading = true
+    this.errorMessage = ''
+    this.isCycleBoundary = false
+    this.childGraph = null
+    this.finalStarmapId = ''
+    this.childAncestorStarmapIds = []
+    this.childAllowCycleProjection = this.allowCycleProjection
+
+    const bridge: IWriterCoreBridge | null = this.bridge
+    if (!bridge) {
       this.errorMessage = 'Bridge not available'
+      this.isLoading = false
       return
     }
     if (!this.embed.targetStarmapId) {
-      this.isLoading = false
       this.errorMessage = 'No target starmap'
+      this.isLoading = false
       return
     }
+
     const childPath: StarMapPathSegment[] = [
       ...this.scenePath,
       { type: 'enterEmbed', instanceId: this.embed.instanceId, nodeId: null }
     ]
     this.childScenePath = childPath
+
     try {
-      const resolveResult = await this.bridge.resolveStarMapPath(this.rootStarmapId, childPath)
+      const resolveResult = await bridge.resolveStarMapPath(this.rootStarmapId, childPath)
+      if (generation !== this.loadGeneration) {
+        return
+      }
       if (!resolveResult.success || !resolveResult.data || !resolveResult.data.finalStarmapId) {
-        this.isLoading = false
         this.errorMessage = '解析子星图路径失败'
         return
       }
       const finalId: string = resolveResult.data.finalStarmapId
       this.finalStarmapId = finalId
       const repeated: boolean = this.ancestorStarmapIds.includes(finalId)
+      this.childAncestorStarmapIds = [...this.ancestorStarmapIds, finalId]
+      this.childAllowCycleProjection = repeated ? false : this.allowCycleProjection
       if (repeated && !this.allowCycleProjection) {
         // 循环已经投影过一层：保留入口圆壳，不再实例化更深 Scene。
         this.isCycleBoundary = true
-        this.isLoading = false
         return
       }
-      this.childAncestorStarmapIds = [...this.ancestorStarmapIds, finalId]
-      this.childAllowCycleProjection = repeated ? false : this.allowCycleProjection
-      const result = await this.bridge.getStarMapGraph(finalId)
+      const result = await bridge.getStarMapGraph(finalId)
+      if (generation !== this.loadGeneration) {
+        return
+      }
       if (result.success && result.data) {
         this.childGraph = result.data
       } else {
         this.errorMessage = '加载子星图失败'
       }
     } catch (err) {
+      if (generation !== this.loadGeneration) {
+        return
+      }
       this.errorMessage = '加载子星图异常'
       hilog.error(0x0000, 'StarMapEmbedScene', `load error: ${JSON.stringify(err)}`)
     } finally {
-      this.isLoading = false
+      if (generation === this.loadGeneration) {
+        this.isLoading = false
+      }
     }
   }
 

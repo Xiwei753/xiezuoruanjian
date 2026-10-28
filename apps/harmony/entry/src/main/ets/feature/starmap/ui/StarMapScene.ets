@@ -1006,6 +1006,16 @@ export struct StarMapScene {
   }
 
   /**
+   * Embed 投影组件的稳定身份：完整入口实例 route + 本图 Embed instanceId。
+   *
+   * A→A 重入时 starmapId 和本图 Embed 列表都可能相同，只有完整 route 不同；
+   * 只用 embed.instanceId 当 ForEach key 会让组件沿用上一层的派生状态。
+   */
+  private embedComponentKey(embed: StarMapEmbed): string {
+    return `${describeScenePath(this.scenePath)}#embed:${embed.instanceId}`
+  }
+
+  /**
    * 某个 Embed 壳在这张图里的稳定输入节点 id（#818 复审）。
    *
    * id 的生成规则在 StarMapGeometry.describeEmbedInputNodeId（带 scenePath，
@@ -2907,11 +2917,12 @@ private refitAfterContentAdded(): void {
   // ─── @Builder：Embed 组件 ───
 
   /**
-   * Embed 的渲染入口：外壳固定为一颗正圆，当前活动画布只画入口本身。
+   * Embed 的渲染入口：外壳固定为一颗正圆，圆内是目标子图的真实几何投影。
    *
-   * 不再按缩放或覆盖率切换渲染器，也不在圆里预渲染子图缩略图。点击内部会
-   * 追加一条 enterEmbed 路径段，由页面按完整 route 解析并切换当前画布；
-   * 自嵌入、A→B→A 只是不同路径，不会在这里被拒绝，也不会生成无限 Scene 树。
+   * 投影里的节点卡片、文字、边和更深入口都按同一套布局/相机比例缩小，
+   * 不按缩放或覆盖率切换渲染器，也没有缩略图/圆点档位。双击（或页面级
+   * 缩放穿越）追加一条 enterEmbed 路径段；自嵌入、A→B→A 只是不同路径，
+   * 不会在这里被拒绝，也不会生成无限 Scene 树。
    */
   @Builder
   StarMapEmbedItem(embed: StarMapEmbed) {
@@ -3351,7 +3362,7 @@ private refitAfterContentAdded(): void {
         // 3. Embed 层
         ForEach(this.graph.embeds, (embed: StarMapEmbed) => {
           this.StarMapEmbedItem(embed)
-        }, (embed: StarMapEmbed) => embed.instanceId)
+        }, (embed: StarMapEmbed) => this.embedComponentKey(embed))
       }
 
       // 4. 预览连线 Canvas（connect 模式，只负责画，不参与触摸测试）

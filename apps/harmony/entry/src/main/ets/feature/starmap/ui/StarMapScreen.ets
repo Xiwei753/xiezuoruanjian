@@ -18,7 +18,7 @@ import {
   RecursiveSceneSource, EmbedFocusProbe,
   PlatformEdgeRender, PlatformNodeRect, resolveEdgeEndpointAnchor,
   buildRecursiveSceneContext, collectEmbedFocusProbes,
-  canvasToScreen, convertPointToRoot
+  canvasToScreen, convertPointToRoot, describeScenePath
 } from '../platform/StarMapGeometry'
 import {
   VisualLodContext, FocusCandidate, ProjectedEmbedMetrics,
@@ -401,19 +401,21 @@ export struct StarMapScreen {
     }
   }
 
-  private routeKey(path: StarMapPathSegment[]): string {
-    if (path.length === 0) {
-      return 'root'
+  /**
+   * 入口段真正的对象 ID：Embed 用 instanceId，Portal 用 nodeId。
+   *
+   * 路径身份本身统一走 describeScenePath；这里只用于在父画布 rects 里
+   * 找到入口对应的实测矩形。
+   */
+  private routeSegmentObjectId(segment: StarMapPathSegment): string {
+    if (segment.type === 'enterPortal') {
+      return segment.nodeId ?? segment.instanceId ?? ''
     }
-    const parts: string[] = []
-    for (const segment of path) {
-      parts.push(`${segment.type}:${segment.instanceId ?? ''}`)
-    }
-    return parts.join('/')
+    return segment.instanceId ?? segment.nodeId ?? ''
   }
 
   private saveRouteCamera(path: StarMapPathSegment[]): void {
-    this.routeCameras.set(this.routeKey(path), {
+    this.routeCameras.set(describeScenePath(path), {
       scale: this.cameraScale,
       offsetX: this.cameraOffsetX,
       offsetY: this.cameraOffsetY
@@ -421,7 +423,7 @@ export struct StarMapScreen {
   }
 
   private restoreRouteCamera(path: StarMapPathSegment[]): void {
-    const camera: RouteCameraState | undefined = this.routeCameras.get(this.routeKey(path))
+    const camera: RouteCameraState | undefined = this.routeCameras.get(describeScenePath(path))
     if (camera === undefined) {
       this.cameraScale = 1
       this.cameraOffsetX = 0
@@ -440,7 +442,7 @@ export struct StarMapScreen {
     // 点击入口时 route 通常就是“当前活动路径 + 一段”，直接续用已解析链，
     // 避免在 100 层路径里为了进下一层反复重解所有前缀。
     if (path.length === this.activePath.length + 1 &&
-        this.routeKey(path.slice(0, this.activePath.length)) === this.routeKey(this.activePath)) {
+        describeScenePath(path.slice(0, this.activePath.length)) === describeScenePath(this.activePath)) {
       ids = this.activeStarmapIds.slice()
       start = this.activePath.length
     }
@@ -474,8 +476,9 @@ export struct StarMapScreen {
     if (rootHandle === null || parentHandle === null || childHandle === null) {
       return null
     }
+    const entryObjectId: string = this.routeSegmentObjectId(last)
     const rect: PlatformNodeRect | undefined =
-      parentHandle.rects.find((item: PlatformNodeRect) => item.nodeId === last.instanceId)
+      parentHandle.rects.find((item: PlatformNodeRect) => item.nodeId === entryObjectId)
     if (rect === undefined) {
       return null
     }
@@ -505,8 +508,9 @@ export struct StarMapScreen {
     if (parentHandle === null) {
       return
     }
+    const entryObjectId: string = this.routeSegmentObjectId(last)
     const rect: PlatformNodeRect | undefined =
-      parentHandle.rects.find((item: PlatformNodeRect) => item.nodeId === last.instanceId)
+      parentHandle.rects.find((item: PlatformNodeRect) => item.nodeId === entryObjectId)
     if (rect === undefined) {
       return
     }
@@ -521,7 +525,7 @@ export struct StarMapScreen {
         !Number.isFinite(childScale) || childScale <= 0) {
       return
     }
-    this.routeEntryContexts.set(this.routeKey(path), {
+    this.routeEntryContexts.set(describeScenePath(path), {
       parentPath: parentPath,
       entryCoverage: entryCoverage,
       entryChildScale: childScale
@@ -551,7 +555,7 @@ export struct StarMapScreen {
     const entryCamera: RouteCameraState | null = this.entryCameraForRoute(path)
     this.rememberEntryContext(path, entryCamera)
     if (entryCamera !== null) {
-      this.routeCameras.set(this.routeKey(path), entryCamera)
+      this.routeCameras.set(describeScenePath(path), entryCamera)
     }
     this.routeTransitioning = true
     // 先丢掉上一张图的几何，避免新 route 的 scenePath 与旧 graph 混一帧。
@@ -854,7 +858,7 @@ export struct StarMapScreen {
     }
     if (nextScale < previousScale && this.activePath.length > 0) {
       const entry: RouteEntryContext | undefined =
-        this.routeEntryContexts.get(this.routeKey(this.activePath))
+        this.routeEntryContexts.get(describeScenePath(this.activePath))
       if (entry === undefined) {
         return
       }
@@ -880,14 +884,14 @@ export struct StarMapScreen {
       viewportHeightVp: this.canvasHeight,
       focusScenePath: this.focusScenePath
     }
-    const activeKey: string = this.routeKey(this.activePath)
+    const activeKey: string = describeScenePath(this.activePath)
     let best: EmbedFocusProbe | null = null
     let bestCoverage: number = FOCUS_ENTER_COVERAGE
     for (const probe of probes) {
       if (probe.segments.length !== this.activePath.length + 1) {
         continue
       }
-      if (this.routeKey(probe.segments.slice(0, this.activePath.length)) !== activeKey) {
+      if (describeScenePath(probe.segments.slice(0, this.activePath.length)) !== activeKey) {
         continue
       }
       const metrics: ProjectedEmbedMetrics = projectEmbedMetrics(probe.ownerScale, context)
