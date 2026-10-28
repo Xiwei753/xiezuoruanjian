@@ -374,6 +374,11 @@ impl WriterCoreApi {
         object_type: Option<&str>,
         device_id: Option<&str>,
     ) -> ApiResult<crate::api::types::ContributionStatsDto> {
+        if let Err(error) = crate::writing_stats::contribution_transaction::recover_pending(
+            &self.app_data_root,
+        ) {
+            log::warn!("recover pending contribution transactions failed: {error}");
+        }
         let current_texts = if object_type.is_none_or(|value| value == "starmap_node") {
             self.collect_current_starmap_texts(project_id)?
         } else {

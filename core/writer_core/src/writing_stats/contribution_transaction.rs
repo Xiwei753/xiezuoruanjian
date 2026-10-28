@@ -142,21 +142,48 @@ impl ContributionTransaction {
         Ok(())
     }
 
-    /// 新建路径在事务开始后才产生；回滚时直接删除，不做备份。
-    pub(crate) fn track_created_root(&mut self, source: &Path) -> Result<()> {
+    /// 延迟准备事务：先建立 Prepared 空清单，等对象变更写入前再登记具体文件。
+    pub(crate) fn begin_deferred(app_data_root: &Path) -> Result<Self> {
+        Self::begin(app_data_root, Vec::new())
+    }
+
+    /// 在真正写对象文件前登记具体路径，只备份这些文件/目录，不复制整棵图。
+    pub(crate) fn prepare_paths(&mut self, paths: &[PathBuf]) -> Result<()> {
         if !self.owns_transaction || self.phase != TransactionPhase::Prepared {
             return Ok(());
         }
-        let source = source.to_string_lossy().into_owned();
-        if self.roots.iter().any(|root| root.source == source) {
-            return Ok(());
+        let mut changed = false;
+        for path in paths {
+            let source = path.to_string_lossy().into_owned();
+            if self.roots.iter().any(|root| root.source == source) {
+                continue;
+            }
+            // 已被某个目录根覆盖的路径无需重复备份。
+            if self.roots.iter().any(|root| {
+                let existing = Path::new(&root.source);
+                existing != path && path.starts_with(existing)
+            }) {
+                continue;
+            }
+            let existed = path.exists();
+            let backup = if existed {
+                let backup = self.dir.join("backup").join(self.roots.len().to_string());
+                copy_path(path, &backup)?;
+                backup.to_string_lossy().into_owned()
+            } else {
+                String::new()
+            };
+            self.roots.push(BackupRoot {
+                source,
+                backup,
+                existed,
+            });
+            changed = true;
         }
-        self.roots.push(BackupRoot {
-            source,
-            backup: String::new(),
-            existed: false,
-        });
-        self.write_manifest(Vec::new())
+        if changed {
+            self.write_manifest(Vec::new())?;
+        }
+        Ok(())
     }
 
     fn restore(&self) -> Result<()> {
@@ -198,7 +225,7 @@ impl ContributionTransaction {
                 self.transaction_id
             );
             self.owns_transaction = false;
-            return Ok(());
+            return Err(error);
         }
 
         self.phase = TransactionPhase::Committed;

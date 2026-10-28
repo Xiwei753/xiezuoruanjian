@@ -149,11 +149,9 @@ impl WriterCoreApi {
         crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
             &self.app_data_root,
             vec![
-                starmaps.join(starmap_id),
                 starmaps.join(format!("{starmap_id}.meta.json")),
                 starmaps.join("index.json"),
                 self.app_data_root.join("app-meta/sync/state.local.json"),
-                self.app_data_root.join("app-meta/workspace-change-journals"),
             ],
         )
         .map_err(Into::into)
@@ -170,7 +168,6 @@ impl WriterCoreApi {
                 vec![
                     starmaps.join("index.json"),
                     self.app_data_root.join("app-meta/sync/state.local.json"),
-                    self.app_data_root.join("app-meta/workspace-change-journals"),
                 ],
             )?,
         )
@@ -186,12 +183,10 @@ impl WriterCoreApi {
         crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
             &self.app_data_root,
             vec![
-                starmaps.join(host_starmap_id),
                 starmaps.join(child_starmap_id),
                 starmaps.join(format!("{child_starmap_id}.meta.json")),
                 starmaps.join("index.json"),
                 self.app_data_root.join("app-meta/sync/state.local.json"),
-                self.app_data_root.join("app-meta/workspace-change-journals"),
             ],
         )
         .map_err(Into::into)
@@ -210,7 +205,6 @@ impl WriterCoreApi {
                 starmaps.join(format!("{starmap_id}.meta.json")),
                 starmaps.join("index.json"),
                 self.app_data_root.join("app-meta/sync/state.local.json"),
-                self.app_data_root.join("app-meta/workspace-change-journals"),
             ],
         )
         .map_err(Into::into)
