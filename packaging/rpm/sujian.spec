@@ -5,6 +5,10 @@
 #
 # 构建方式：见同目录 build-rpm.sh
 
+# GitHub 直接分发主安装包：快速 zstd 压缩，无需生成未发布的 debuginfo/debugsource 包。
+%global _binary_payload w1.zstdio
+%global debug_package %{nil}
+
 Name:           sujian
 Version:        0.1.0
 Release:        1%{?dist}

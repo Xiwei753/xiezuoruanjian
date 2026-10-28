@@ -14,6 +14,8 @@ depends=(
   'qqc2-breeze-style' 'breeze' 'breeze-icons'
 )
 optdepends=('fcitx5-qt: fcitx5 Qt6 输入法支持')
+# 仅发布主安装包，关闭 makepkg 的自动 debug 拆包。
+options=('!debug')
 
 package() {
   install -d "$pkgdir"

@@ -11,6 +11,7 @@ on:
       - 'crates/**'
       - 'platform/rust/linux/**'
       - 'packaging/deb/**'
+      - 'packaging/rpm/**'
       - 'packaging/linux/**'
       - 'packaging/correction/**'
       - 'Cargo.toml'

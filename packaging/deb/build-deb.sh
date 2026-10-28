@@ -28,5 +28,7 @@ Description: Sujian cross-platform writing application
 EOF
 # Debian 软件包使用 /usr/share/doc/<pkg>/copyright 记录主软件及第三方许可。
 cp "$ROOT/LICENSE" "$STAGE/usr/share/doc/sujian/copyright"
-dpkg-deb --build --root-owner-group "$STAGE" "$DIST/sujian_${VERSION}-1_${ARCH}.deb"
+# zstd 1 级：直接分发包优先快速打包，保留 dpkg 原生压缩格式。
+dpkg-deb --build --root-owner-group --compression=zstd --compression-level=1 \
+  "$STAGE" "$DIST/sujian_${VERSION}-1_${ARCH}.deb"
 echo "DEB: $DIST/sujian_${VERSION}-1_${ARCH}.deb"

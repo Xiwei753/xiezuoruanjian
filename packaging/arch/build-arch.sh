@@ -9,6 +9,12 @@ WORK="$DIST/makepkg"
 bash "$ROOT/packaging/linux/stage-native-package.sh" "$STAGE" arch
 mkdir -p "$WORK"
 cp "$ROOT/packaging/arch/PKGBUILD" "$WORK/PKGBUILD"
+# 保留发行版原生 makepkg 设置，只把主安装包压缩固定为 zstd 1 级。
+cp /etc/makepkg.conf "$WORK/makepkg.conf"
+cat >> "$WORK/makepkg.conf" <<'FAST_COMPRESSION'
+PKGEXT='.pkg.tar.zst'
+COMPRESSZST=(zstd -c -z -q -1 -)
+FAST_COMPRESSION
 VERSION="$(awk '/^\[package\]/{in_package=1;next} in_package && /^version = /{gsub(/"/,"",$3);print $3;exit}' "$ROOT/apps/Linux_qt/Cargo.toml")"
 [[ -n "$VERSION" ]] || { echo "无法读取 Linux Qt 包版本" >&2; exit 1; }
 sed -i "s/^pkgver=.*/pkgver=$VERSION/" "$WORK/PKGBUILD"
@@ -18,7 +24,7 @@ id sujianpkg >/dev/null 2>&1 || useradd -m sujianpkg
 chown -R sujianpkg:sujianpkg "$DIST"
 (
   cd "$WORK"
-  runuser -u sujianpkg -- makepkg --nodeps --noconfirm --force
+  runuser -u sujianpkg -- makepkg --config "$WORK/makepkg.conf" --nodeps --noconfirm --force
 )
 mapfile -t PACKAGES < <(find "$WORK" -maxdepth 1 -type f -name "sujian-$VERSION-*.pkg.tar.zst" -print)
 [[ "${#PACKAGES[@]}" -eq 1 ]] || { echo "无法定位唯一的 Arch 安装包" >&2; exit 1; }

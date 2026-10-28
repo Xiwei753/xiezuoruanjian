@@ -12,6 +12,7 @@ on:
       - 'platform/rust/linux/**'
       - 'packaging/rpm/**'
       - 'packaging/linux/**'
+      - 'packaging/correction/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/linux_rpm_build.yml'

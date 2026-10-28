@@ -122,10 +122,10 @@ SUJIAN_FETCH_ORT=1 "${SCRIPT_DIR}/../correction/fetch-model.sh" "${BUNDLED_MODEL
 # 4. 从 staging 目录生成 Source0 tarball
 # ---------------------------------------------------------------------------
 TARBALL="${RPM_TOPDIR}/SOURCES/${NAME}-${VERSION}.tar.gz"
-echo "==> 生成源码 tarball: ${TARBALL}"
-tar -czf "${TARBALL}" \
+echo "==> 生成源码 tarball（gzip -1 快速压缩）: ${TARBALL}"
+tar -cf - \
     --transform "s,^\.,${NAME}-${VERSION}," \
-    -C "${STAGING_DIR}" .
+    -C "${STAGING_DIR}" . | gzip -1 > "${TARBALL}"
 
 # ---------------------------------------------------------------------------
 # 5. 复制 spec 文件到 SPECS 目录
