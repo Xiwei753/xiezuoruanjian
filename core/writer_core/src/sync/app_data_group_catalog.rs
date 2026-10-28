@@ -20,7 +20,7 @@ pub const APP_DATA_GROUP_CATALOG_REMOTE_PATH: &str = "app/app-meta/sync/app_grou
 pub const LEGACY_APP_MANIFEST_REMOTE_PATH: &str = "app/app-meta/sync/manifest.sync.json";
 
 /// Current catalog wire version.
-pub const APP_DATA_GROUP_CATALOG_SCHEMA_VERSION: u32 = 2;
+pub const APP_DATA_GROUP_CATALOG_SCHEMA_VERSION: u32 = 3;
 
 /// One App group and the generation selected as its current remote snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,7 +67,7 @@ impl Default for AppDataGroupCatalog {
 impl AppDataGroupCatalog {
     /// Validate schema, stable ids, and duplicate entries before using remote state.
     pub fn validate(&self) -> crate::Result<()> {
-        if self.schema_version != APP_DATA_GROUP_CATALOG_SCHEMA_VERSION {
+        if !matches!(self.schema_version, 2 | APP_DATA_GROUP_CATALOG_SCHEMA_VERSION) {
             return Err(crate::Error::Other(format!(
                 "unsupported app data group catalog schema_version {}",
                 self.schema_version
@@ -124,6 +124,7 @@ impl AppDataGroupCatalog {
     /// Select the stable grouped tree as the group's remote snapshot.
     pub fn upsert_tree(&mut self, group: &AppDataGroup) {
         let group_id = group.id();
+        self.schema_version = APP_DATA_GROUP_CATALOG_SCHEMA_VERSION;
         if let Some(record) = self
             .groups
             .iter_mut()
@@ -142,15 +143,14 @@ impl AppDataGroupCatalog {
     }
 }
 
-/// Load the group catalog. Before v2 exists, seed it with legacy group ids that
+/// Load the group catalog. Before a persisted catalog exists, seed it with legacy group ids that
 /// remain mapped to the old flat `app/` source until each group is published.
 ///
-/// This is a one-way client upgrade boundary: once the first v2 catalog is
-/// published, every active client must understand the catalog. Older clients
-/// continue writing the flat `app/` tree, and those writes are deliberately not
-/// treated as a second live source for groups already pointing at generations.
-/// Keep old clients paused until all of them have upgraded; legacy objects stay
-/// available as migration input and recovery data.
+/// This is a one-way client upgrade boundary: once the first schema-3 catalog is
+/// published, every active client must understand the stable-tree marker. Older
+/// clients reject schema 3 instead of silently reading a stable group as the
+/// legacy flat `app/` layout. Keep old clients paused until upgraded; legacy
+/// objects stay available as migration input and recovery data.
 pub fn load_remote_app_data_group_catalog(
     provider: &dyn SyncProvider,
 ) -> crate::Result<RemoteAppDataGroupCatalogSnapshot> {
@@ -595,7 +595,7 @@ pub fn resolve_group_source_prefix(
     };
     catalog.validate()?;
     let Some(record) = catalog.record(group) else {
-        // A group not yet listed in a v2 catalog is not visible remotely.
+        // A group not yet listed in a persisted catalog is not visible remotely.
         return Ok(String::new());
     };
     Ok(group_source_prefix(record, group))

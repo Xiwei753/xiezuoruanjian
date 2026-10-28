@@ -255,6 +255,21 @@ pub trait SyncProvider: Send + Sync {
         })
     }
 
+    /// 在已知远端基线上执行一次批量提交。
+    ///
+    /// 支持分支级版本的 Provider 必须核对 `expected_revision` 与提交时的实际
+    /// HEAD；不一致返回 `PreconditionFailed`，由调用方重新 fetch + LWW。
+    /// 默认实现忽略基线，兼容不需要分支前置条件的 Provider。
+    fn commit_batch_at(
+        &self,
+        expected_revision: Option<&model::RemoteVersion>,
+        mutations: &[model::BatchMutation],
+        message: &str,
+    ) -> Result<model::BatchCommitResult, error::ProviderError> {
+        let _ = expected_revision;
+        self.commit_batch(mutations, message)
+    }
+
     /// 远端连通性/认证诊断。不支持诊断的 Provider 返回 `Other`。
     fn diagnose(&self) -> Result<crate::sync::types::SyncDiagnosticsResult, error::ProviderError> {
         Err(error::ProviderError::Other {

@@ -9,7 +9,7 @@
 //! Reads and `list` calls see the buffered overlay, so the catalog CAS helpers
 //! keep working against the latest in-round state without network round trips.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use crate::sync::provider::capabilities::SyncCapabilities;
@@ -28,24 +28,33 @@ enum BufferedValue {
 
 struct RoundState {
     entries: BTreeMap<String, Option<BufferedValue>>,
-    /// Versions observed by `read`/`list` during this round.  They let later
-    /// conditional writes check against the same snapshot without another read.
-    observed_versions: HashMap<String, Option<RemoteVersion>>,
+    /// Conditions that must be checked against the real remote baseline by the
+    /// final commit, not against the in-round overlay.
+    checks: Vec<BatchMutation>,
+}
+
+/// Result of the single remote publication at the end of a round.
+pub struct RoundFlushOutcome {
+    /// Whether a commit/tree change was actually published.
+    pub committed: bool,
+    pub result: BatchCommitResult,
 }
 
 /// Provider wrapper that defers all mutations until [`Self::flush`].
 pub struct RoundProvider<'a> {
     inner: &'a dyn SyncProvider,
+    base_revision: Option<RemoteVersion>,
     state: Mutex<RoundState>,
 }
 
 impl<'a> RoundProvider<'a> {
-    pub fn new(inner: &'a dyn SyncProvider) -> Self {
+    pub fn new(inner: &'a dyn SyncProvider, base_revision: Option<RemoteVersion>) -> Self {
         Self {
             inner,
+            base_revision,
             state: Mutex::new(RoundState {
                 entries: BTreeMap::new(),
-                observed_versions: HashMap::new(),
+                checks: Vec::new(),
             }),
         }
     }
@@ -58,34 +67,6 @@ impl<'a> RoundProvider<'a> {
 
     fn buffered_version(content: &[u8]) -> RemoteVersion {
         RemoteVersion::new(format!("round:{}", crate::sync::hash::content_md5(content)))
-    }
-
-    fn entry_value(entry: &Option<BufferedValue>) -> Option<RemoteVersion> {
-        entry.as_ref().map(|value| match value {
-            BufferedValue::Content(content) => Self::buffered_version(content),
-            BufferedValue::Version(version) => version.clone(),
-        })
-    }
-
-    fn current_version(&self, path: &str) -> Result<Option<RemoteVersion>, ProviderError> {
-        let buffered = {
-            let state = self.lock_state()?;
-            if let Some(entry) = state.entries.get(path) {
-                Some(Self::entry_value(entry))
-            } else {
-                state.observed_versions.get(path).cloned()
-            }
-        };
-        if let Some(version) = buffered {
-            return Ok(version);
-        }
-        let object = self.inner.read(path)?;
-        let version = object.map(|object| object.version);
-        let mut state = self.lock_state()?;
-        state
-            .observed_versions
-            .insert(path.to_string(), version.clone());
-        Ok(version)
     }
 
     fn overlay_entries(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
@@ -128,47 +109,6 @@ impl<'a> RoundProvider<'a> {
             .collect())
     }
 
-    fn check_write(
-        &self,
-        path: &str,
-        precondition: &WritePrecondition,
-    ) -> Result<(), ProviderError> {
-        let current = self.current_version(path)?;
-        let matches = match precondition {
-            WritePrecondition::Unconditional => true,
-            WritePrecondition::CreateNew => current.is_none(),
-            WritePrecondition::IfMatch(expected) => current.as_ref() == Some(expected),
-        };
-        if matches {
-            Ok(())
-        } else {
-            Err(ProviderError::PreconditionFailed {
-                path: path.to_string(),
-                reason: "buffered write precondition failed".to_string(),
-            })
-        }
-    }
-
-    fn check_delete(
-        &self,
-        path: &str,
-        precondition: &DeletePrecondition,
-    ) -> Result<(), ProviderError> {
-        let current = self.current_version(path)?;
-        let matches = match precondition {
-            DeletePrecondition::Unconditional => true,
-            DeletePrecondition::IfMatch(expected) => current.as_ref() == Some(expected),
-        };
-        if matches {
-            Ok(())
-        } else {
-            Err(ProviderError::PreconditionFailed {
-                path: path.to_string(),
-                reason: "buffered delete precondition failed".to_string(),
-            })
-        }
-    }
-
     fn apply_mutation(&self, mutation: &BatchMutation) -> Result<(), ProviderError> {
         match mutation {
             BatchMutation::Put { path, content } => {
@@ -191,8 +131,11 @@ impl<'a> RoundProvider<'a> {
                 Ok(())
             }
             BatchMutation::DeleteIfMatch { path, version } => {
-                self.check_delete(path, &DeletePrecondition::IfMatch(version.clone()))?;
                 let mut state = self.lock_state()?;
+                state.checks.push(BatchMutation::CheckObject {
+                    path: path.clone(),
+                    expected_version: Some(version.clone()),
+                });
                 state.entries.insert(path.clone(), None);
                 Ok(())
             }
@@ -200,34 +143,28 @@ impl<'a> RoundProvider<'a> {
                 path,
                 expected_version,
             } => {
-                let current = self.current_version(path)?;
-                if &current == expected_version {
-                    Ok(())
-                } else {
-                    Err(ProviderError::PreconditionFailed {
-                        path: path.clone(),
-                        reason: "buffered object precondition failed".to_string(),
-                    })
-                }
+                let mut state = self.lock_state()?;
+                state.checks.push(BatchMutation::CheckObject {
+                    path: path.clone(),
+                    expected_version: expected_version.clone(),
+                });
+                Ok(())
             }
             BatchMutation::CheckPrefix {
                 prefix,
                 expected_entries,
             } => {
-                let actual = self.overlay_entries(prefix)?;
-                if &actual == expected_entries {
-                    Ok(())
-                } else {
-                    Err(ProviderError::PreconditionFailed {
-                        path: prefix.clone(),
-                        reason: "buffered prefix precondition failed".to_string(),
-                    })
-                }
+                let mut state = self.lock_state()?;
+                state.checks.push(BatchMutation::CheckPrefix {
+                    prefix: prefix.clone(),
+                    expected_entries: expected_entries.clone(),
+                });
+                Ok(())
             }
         }
     }
 
-    /// Number of paths changed in this round before the final commit.
+    /// Number of buffered entries awaiting the final publication.
     pub fn pending_len(&self) -> usize {
         self.state
             .lock()
@@ -235,21 +172,41 @@ impl<'a> RoundProvider<'a> {
             .unwrap_or(0)
     }
 
+    /// Drop every buffered write and check, leaving the remote untouched.
+    pub fn discard(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.entries.clear();
+            state.checks.clear();
+        }
+    }
+
     /// Publish every buffered write as one atomic remote commit.
     ///
-    /// Returns `None` when the round produced no mutation.  A non-batch
-    /// provider receives the same mutations sequentially; the wrapper exists
-    /// for one-push semantics, not for provider-specific batching.
-    pub fn flush(&self) -> Result<Option<BatchCommitResult>, ProviderError> {
-        let entries = {
+    /// A non-batch provider receives the same mutations sequentially; the
+    /// wrapper exists for one-push semantics, not for provider-specific
+    /// batching.
+    pub fn flush(&self) -> Result<RoundFlushOutcome, ProviderError> {
+        let (entries, checks) = {
             let mut state = self.lock_state()?;
-            std::mem::take(&mut state.entries)
+            (
+                std::mem::take(&mut state.entries),
+                std::mem::take(&mut state.checks),
+            )
         };
-        if entries.is_empty() {
-            return Ok(None);
+        if entries.is_empty() && checks.is_empty() {
+            return Ok(RoundFlushOutcome {
+                committed: false,
+                result: BatchCommitResult {
+                    revision: self
+                        .base_revision
+                        .clone()
+                        .unwrap_or_else(|| RemoteVersion::new("")),
+                    touched_paths: Vec::new(),
+                },
+            });
         }
 
-        let mutations: Vec<BatchMutation> = entries
+        let mut mutations: Vec<BatchMutation> = entries
             .into_iter()
             .filter_map(|(path, entry)| match entry {
                 Some(BufferedValue::Content(content)) => Some(BatchMutation::Put { path, content }),
@@ -259,13 +216,48 @@ impl<'a> RoundProvider<'a> {
                 None => Some(BatchMutation::Delete { path }),
             })
             .collect();
+        mutations.extend(checks);
 
         if self.inner.capabilities().batch {
-            let result = self.inner.commit_batch(
+            let result = self.inner.commit_batch_at(
+                self.base_revision.as_ref(),
                 &mutations,
-                &format!("sujian: sync round ({} changes)", mutations.len()),
+                &format!("sujian: sync round ({} mutations)", mutations.len()),
             )?;
-            return Ok(Some(result));
+            let committed = Some(&result.revision) != self.base_revision.as_ref();
+            return Ok(RoundFlushOutcome { committed, result });
+        }
+
+        // Non-batch fallback: run baseline checks first, then apply mutations
+        // one by one.  This path is not used by the built-in providers.
+        for mutation in &mutations {
+            match mutation {
+                BatchMutation::CheckObject {
+                    path,
+                    expected_version,
+                } => {
+                    let actual = self.inner.read(path)?.map(|object| object.version);
+                    if &actual != expected_version {
+                        return Err(ProviderError::PreconditionFailed {
+                            path: path.clone(),
+                            reason: "remote object changed before final publish".to_string(),
+                        });
+                    }
+                }
+                BatchMutation::CheckPrefix {
+                    prefix,
+                    expected_entries,
+                } => {
+                    let actual = self.inner.list(prefix)?;
+                    if &actual != expected_entries {
+                        return Err(ProviderError::PreconditionFailed {
+                            path: prefix.clone(),
+                            reason: "remote prefix changed before final publish".to_string(),
+                        });
+                    }
+                }
+                _ => {}
+            }
         }
 
         let mut touched_paths = Vec::new();
@@ -292,10 +284,14 @@ impl<'a> RoundProvider<'a> {
                 | BatchMutation::CheckPrefix { .. } => {}
             }
         }
-        Ok(Some(BatchCommitResult {
-            revision: RemoteVersion::new("round"),
-            touched_paths,
-        }))
+        let committed = !touched_paths.is_empty();
+        Ok(RoundFlushOutcome {
+            committed,
+            result: BatchCommitResult {
+                revision: RemoteVersion::new("round"),
+                touched_paths,
+            },
+        })
     }
 }
 
@@ -335,20 +331,30 @@ impl SyncProvider for RoundProvider<'_> {
                 }))
             }
             Some(Some(BufferedValue::Version(version))) => {
-                let object = self.inner.read(path)?;
+                // The target path is new (for example a stable path replacing
+                // an old generation path).  Resolve the reused blob by finding
+                // a currently reachable path with the same version; delegating
+                // `read(new_path)` would incorrectly return None.
+                let entries = self.inner.list("")?;
+                let source = entries.into_iter().find(|entry| entry.version == version);
+                let Some(source) = source else {
+                    return Err(ProviderError::PreconditionFailed {
+                        path: path.to_string(),
+                        reason: format!(
+                            "reused blob version {} is not reachable",
+                            version.as_str()
+                        ),
+                    });
+                };
+                let object = self.inner.read(&source.path)?;
                 Ok(object.map(|mut object| {
+                    object.path = path.to_string();
                     object.version = version;
                     object
                 }))
             }
             Some(None) => Ok(None),
-            None => {
-                let object = self.inner.read(path)?;
-                let version = object.as_ref().map(|object| object.version.clone());
-                let mut state = self.lock_state()?;
-                state.observed_versions.insert(path.to_string(), version);
-                Ok(object)
-            }
+            None => self.inner.read(path),
         }
     }
 
@@ -358,7 +364,7 @@ impl SyncProvider for RoundProvider<'_> {
         content: &[u8],
         precondition: WritePrecondition,
     ) -> Result<RemoteVersion, ProviderError> {
-        self.check_write(path, &precondition)?;
+        let _ = precondition;
         let version = Self::buffered_version(content);
         let mut state = self.lock_state()?;
         state.entries.insert(
@@ -369,7 +375,7 @@ impl SyncProvider for RoundProvider<'_> {
     }
 
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
-        self.check_delete(path, &precondition)?;
+        let _ = precondition;
         let mut state = self.lock_state()?;
         state.entries.insert(path.to_string(), None);
         Ok(())
@@ -412,7 +418,7 @@ mod tests {
     #[test]
     fn writes_are_deferred_until_flush_and_visible_to_reads() {
         let inner = MemoryProvider::new();
-        let round = RoundProvider::new(&inner);
+        let round = RoundProvider::new(&inner, None);
 
         round
             .write("a.txt", b"a", WritePrecondition::CreateNew)

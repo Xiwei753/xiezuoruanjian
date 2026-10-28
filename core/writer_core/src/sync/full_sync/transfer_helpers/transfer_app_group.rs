@@ -36,25 +36,33 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
                 }
             };
 
-        // Bootstrap catalog records from the legacy manifest as `None` (legacy app/ source).
-        // A local-only group not present in the catalog is new and starts from an empty grouped
-        // prefix once v2 is already active.
-        let source_prefix = match catalog_snapshot.catalog.record(group) {
-            Some(_) => match crate::sync::app_data_group_catalog::resolve_group_source_prefix(
-                Some(&catalog_snapshot.catalog),
-                group,
-            ) {
-                Ok(prefix) if !prefix.is_empty() => prefix,
-                Ok(_) => target.remote_prefix.clone(),
-                Err(error) => {
-                    return mark_app_group_failure(sync_result_from_error(error), "catalog_read")
+        // No persisted catalog yet: every discovered group still lives in the
+        // legacy flat `app/` tree, even though the bootstrap catalog itself is
+        // already schema 3.
+        let source_prefix = if !catalog_snapshot.catalog_present {
+            "app".to_string()
+        } else {
+            match catalog_snapshot.catalog.record(group) {
+                Some(_) => {
+                    match crate::sync::app_data_group_catalog::resolve_group_source_prefix(
+                        Some(&catalog_snapshot.catalog),
+                        group,
+                    ) {
+                        Ok(prefix) if !prefix.is_empty() => prefix,
+                        Ok(_) => target.remote_prefix.clone(),
+                        Err(error) => {
+                            return mark_app_group_failure(
+                                sync_result_from_error(error),
+                                "catalog_read",
+                            )
+                        }
+                    }
                 }
-            },
-            None if !catalog_snapshot.catalog_present => "app".to_string(),
-            // A v2 catalog is authoritative. The group's base prefix may contain
-            // incomplete or orphaned generations, so query a never-published child
-            // as the empty remote source for a newly introduced group.
-            None => format!("{}/__empty_source__", target.remote_prefix),
+                // A persisted catalog is authoritative. The group's base prefix
+                // may contain incomplete/orphaned generations, so query a
+                // never-published child as the empty remote source.
+                None => format!("{}/__empty_source__", target.remote_prefix),
+            }
         };
 
         let mut state =

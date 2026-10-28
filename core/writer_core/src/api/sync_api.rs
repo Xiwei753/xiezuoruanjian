@@ -91,6 +91,21 @@ fn writer_error_is_retryable_network(error: &crate::api::error::WriterError) -> 
     }
 }
 
+/// Whether a target failure means the round's merged tree is incomplete and
+/// must not be published.  Isolated `migration` failures (for example one
+/// stats partition) do not invalidate the other groups.
+fn target_blocks_round_publish(target: &crate::sync::types::TargetSyncResult) -> bool {
+    if target.failure_phase.as_deref() == Some("migration") {
+        return false;
+    }
+    matches!(
+        target.result.status,
+        crate::sync::SyncStatus::RecoverableError(_)
+            | crate::sync::SyncStatus::FatalError(_)
+            | crate::sync::SyncStatus::Error(_)
+    )
+}
+
 fn record_sync_phase_failure(
     operation_id: &str,
     phase: &str,
@@ -1287,6 +1302,15 @@ impl WriterCoreApi {
             }
         }
 
+        // Issue #1012: create the one-round buffer before bootstrap so the
+        // first catalog write is part of the same final commit.
+        let round = crate::sync::provider::round::RoundProvider::new(
+            provider.as_ref(),
+            remote_revision_before
+                .clone()
+                .map(crate::sync::provider::model::RemoteVersion::new),
+        );
+
         // 写锁已释放。
         // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
         //   catalog 读取失败直接结束本次 full sync，
@@ -1347,7 +1371,7 @@ impl WriterCoreApi {
         let remote_catalog_snapshot =
             if remote_catalog_snapshot.version.as_str() == "__nonexistent__" {
                 match crate::sync::target_lifecycle::persist_bootstrap_catalog(
-                    provider.as_ref(),
+                    &round,
                     &remote_catalog_snapshot.catalog,
                     &remote_catalog_snapshot.version,
                 ) {
@@ -1682,6 +1706,7 @@ impl WriterCoreApi {
         // 同一 branch 导致 PreconditionFailed。
         let result = self.perform_full_sync_with_provider_for_run(
             provider.as_ref(),
+            &round,
             &plan,
             staging_runs,
             cancellation_token,
@@ -1771,8 +1796,15 @@ impl WriterCoreApi {
             .and_then(SyncProgressSink::operation_id)
             .map(str::to_string)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let base_revision = provider
+            .remote_revision()
+            .ok()
+            .flatten()
+            .map(crate::sync::provider::model::RemoteVersion::new);
+        let round = crate::sync::provider::round::RoundProvider::new(provider, base_revision);
         self.perform_full_sync_with_provider_for_run(
             provider,
+            &round,
             plan,
             staging_runs,
             cancellation_token,
@@ -1787,6 +1819,7 @@ impl WriterCoreApi {
     fn perform_full_sync_with_provider_for_run(
         &self,
         provider: &dyn crate::sync::provider::SyncProvider,
+        round: &crate::sync::provider::round::RoundProvider<'_>,
         plan: &crate::sync::full_sync::FullSyncPlan,
         staging_runs: Vec<crate::sync::staging::StagingRun>,
         cancellation_token: Option<SyncCancellationToken>,
@@ -1798,9 +1831,6 @@ impl WriterCoreApi {
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
         let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
-        // Issue #1012：一整轮同步的所有 target 只产生一次远端提交。target
-        // 执行期间的写入进入该轮缓冲，读取与 CAS 直接看到缓冲后的 catalog/tree。
-        let round = crate::sync::provider::round::RoundProvider::new(provider);
 
         let total_targets = u32::try_from(plan.targets.len()).unwrap_or(u32::MAX);
 
@@ -1902,7 +1932,7 @@ impl WriterCoreApi {
                 ))
             } else {
                 crate::sync::full_sync::run_single_target_transfer(
-                    &round,
+                    round,
                     plan,
                     target_index,
                     &mut catalog_snapshot,
@@ -2123,43 +2153,66 @@ impl WriterCoreApi {
             all_committed_paths.extend(target_committed_paths.into_iter().map(|path| path.path));
         }
 
-        // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
-        // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
-        // 该 phase 单独记录耗时与网络请求数，日志可区分“传输慢”和“真实失败”。
-        let publish_phase = SyncDiagnosticPhase::start_with_provider(
-            diagnostic_operation_id,
-            "remote_publish",
-            None,
-            provider,
-        );
-        let pending_paths = round.pending_len();
-        let publish_started_at = Instant::now();
-        match round.flush() {
-            Ok(result) => {
-                let outcome = if result.is_some() {
-                    "committed"
-                } else {
-                    "no_changes"
-                };
-                log::info!(
-                    "[sync] full-sync remote publish: outcome={} changed_paths={} duration_ms={}",
-                    outcome,
-                    pending_paths,
-                    publish_started_at.elapsed().as_millis()
-                );
-                publish_phase.finish_with_provider(outcome, provider);
-            }
-            Err(error) => {
-                log::warn!(
-                    "[sync] full-sync remote publish failed: changed_paths={} duration_ms={} error={}",
-                    pending_paths,
-                    publish_started_at.elapsed().as_millis(),
-                    error
-                );
-                publish_phase.finish_with_provider("error", provider);
-                return Err(crate::api::error::WriterError::from(
-                    crate::error::Error::from(error),
-                ));
+        // Issue #1012: cancellation discards this round's remote writes.  A
+        // target error that makes the merged tree incomplete also blocks the
+        // final publish instead of pushing a partial round.
+        if Self::sync_cancelled(cancellation_token.as_ref()) {
+            round.discard();
+            log::info!(
+                "[sync] perform_full_sync: cancellation requested after per-target loop — discarding buffered remote writes"
+            );
+            self.core_write().persist_full_sync_cancelled();
+            return Ok(Self::full_sync_noop_result());
+        }
+        let publish_blocked = all_targets
+            .iter()
+            .find(|target| target_blocks_round_publish(target));
+        if let Some(blocked) = publish_blocked {
+            round.discard();
+            log::warn!(
+                "[sync] full-sync remote publish discarded because target {} failed in phase {:?}",
+                blocked.remote_prefix,
+                blocked.failure_phase
+            );
+        } else {
+            // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
+            // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
+            // 该 phase 单独记录耗时与网络请求数，日志可区分“传输慢”和“真实失败”。
+            let publish_phase = SyncDiagnosticPhase::start_with_provider(
+                diagnostic_operation_id,
+                "remote_publish",
+                None,
+                provider,
+            );
+            let pending_paths = round.pending_len();
+            let publish_started_at = Instant::now();
+            match round.flush() {
+                Ok(outcome) => {
+                    let outcome = if outcome.committed {
+                        "committed"
+                    } else {
+                        "no_changes"
+                    };
+                    log::info!(
+                        "[sync] full-sync remote publish: outcome={} buffered_paths={} duration_ms={}",
+                        outcome,
+                        pending_paths,
+                        publish_started_at.elapsed().as_millis()
+                    );
+                    publish_phase.finish_with_provider(outcome, provider);
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[sync] full-sync remote publish failed: buffered_paths={} duration_ms={} error={}",
+                        pending_paths,
+                        publish_started_at.elapsed().as_millis(),
+                        error
+                    );
+                    publish_phase.finish_with_provider("error", provider);
+                    return Err(crate::api::error::WriterError::from(
+                        crate::error::Error::from(error),
+                    ));
+                }
             }
         }
 

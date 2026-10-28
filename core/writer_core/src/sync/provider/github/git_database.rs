@@ -302,6 +302,24 @@ pub(crate) fn commit_batch_via_git_database(
     mutations: &[BatchMutation],
     message: &str,
 ) -> Result<BatchCommitResult, ProviderError> {
+    commit_batch_via_git_database_at(
+        transport, api_base, token, branch, None, mutations, message,
+    )
+}
+
+/// 带远端基线校验的 Git Database 提交。
+///
+/// `expected_head` 是整轮规划使用的 branch HEAD。提交前重新 GET ref 后必须
+/// 仍等于该值；否则其他设备已更新远端，旧 LWW 结果不能提交到新 base。
+pub(crate) fn commit_batch_via_git_database_at(
+    transport: &dyn SyncTransport,
+    api_base: &str,
+    token: &str,
+    branch: &str,
+    expected_head: Option<&str>,
+    mutations: &[BatchMutation],
+    message: &str,
+) -> Result<BatchCommitResult, ProviderError> {
     // 1. GET /git/ref/heads/<branch> → head commit SHA
     let ref_resp = get_ref(transport, api_base, token, branch)?;
     let ref_body = String::from_utf8(ref_resp.body).unwrap_or_default();
@@ -313,6 +331,14 @@ pub(crate) fn commit_batch_via_git_database(
         ));
     }
     let head_sha = parse_ref_head_sha(&ref_body)?;
+    if let Some(expected_head) = expected_head {
+        if expected_head != head_sha {
+            return Err(ProviderError::PreconditionFailed {
+                path: format!("refs/heads/{branch}"),
+                reason: "remote branch head changed since the sync plan was built".to_string(),
+            });
+        }
+    }
 
     // 2. GET /git/commits/<head_sha> → tree SHA
     let commit_resp = get_commit(transport, api_base, token, &head_sha)?;

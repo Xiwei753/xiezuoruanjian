@@ -319,6 +319,23 @@ impl SyncProvider for GitHubProvider {
         )
     }
 
+    fn commit_batch_at(
+        &self,
+        expected_revision: Option<&RemoteVersion>,
+        mutations: &[BatchMutation],
+        message: &str,
+    ) -> Result<BatchCommitResult, ProviderError> {
+        git_database::commit_batch_via_git_database_at(
+            self.transport(),
+            &self.config.api_base_url,
+            &self.config.token,
+            &self.config.branch,
+            expected_revision.map(RemoteVersion::as_str),
+            mutations,
+            message,
+        )
+    }
+
     fn diagnose(&self) -> Result<SyncDiagnosticsResult, ProviderError> {
         GitHubProvider::diagnose(self)
     }
