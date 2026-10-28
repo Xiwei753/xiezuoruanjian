@@ -20,6 +20,8 @@
 //   独立的清理线程等待工作线程真正退出后 join，再
 //   `napi_remove_async_cleanup_hook`。工作线程不 detach，不会在模块卸载后
 //   继续运行。
+// - 工作线程在 `napi_call_threadsafe_function` 收到 `napi_closing` 后不再
+//   使用该 TSFN，包括线程退出时不再调用 release；结果内存仍由丢弃路径释放。
 // - 每个 napi_env 拥有独立的 state；TSFN 的 context 持有 state，直到 TSFN
 //   销毁，保证 env 销毁期间排队回调仍能安全释放资源。
 // - `writer_core_free_string` 只在正常回调或明确的丢弃路径调用一次，每条
@@ -212,22 +214,33 @@ static void SyncNativeCallJs(napi_env env, napi_value /*js_callback*/, void* con
     }
 }
 
+// TSFN 是否已经进入不可再使用的关闭状态。HarmonyOS 与 Node-API 都以
+// `napi_closing` 表示关闭；`napi_invalid_arg` 表示句柄已无效，也不能再触碰。
+static bool SyncNativeTsfnIsClosed(napi_status status) {
+    return status == napi_closing || status == napi_invalid_arg;
+}
+
 // 工作线程把结果投递回 ArkTS 线程；投递失败（TSFN 已关闭）时在这里释放结果。
 // 成功后 task 的所有权转交 TSFN，工作线程不能再访问它。
-static void SyncNativeDeliver(const std::shared_ptr<SyncNativeWorkerState>& state,
+// 返回值表示工作线程是否仍可继续使用该 TSFN；false 时不得再调用任何 TSFN API，
+// 包括 `napi_release_threadsafe_function`。
+static bool SyncNativeDeliver(const std::shared_ptr<SyncNativeWorkerState>& state,
                               napi_threadsafe_function tsfn,
                               SyncNativeTask* task) {
     if (tsfn == nullptr) {
         SyncNativeTaskDiscard(state, task);
-        return;
+        return false;
     }
 
     napi_status status = napi_call_threadsafe_function(tsfn, task, napi_tsfn_nonblocking);
-    if (status != napi_ok) {
-        OH_LOG_WARN(LOG_APP, "SyncNative: failed to deliver %{public}s result: %{public}d",
-                    task->work_name != nullptr ? task->work_name : "sync", static_cast<int>(status));
-        SyncNativeTaskDiscard(state, task);
+    if (status == napi_ok) {
+        return true;
     }
+
+    OH_LOG_WARN(LOG_APP, "SyncNative: failed to deliver %{public}s result: %{public}d",
+                task->work_name != nullptr ? task->work_name : "sync", static_cast<int>(status));
+    SyncNativeTaskDiscard(state, task);
+    return !SyncNativeTsfnIsClosed(status);
 }
 
 // 唯一的长任务工作线程：串行执行队列中的 Rust 调用。
@@ -236,6 +249,7 @@ static void SyncNativeDeliver(const std::shared_ptr<SyncNativeWorkerState>& stat
 // 假空闲窗口。
 static void SyncNativeWorkerLoop(std::shared_ptr<SyncNativeWorkerState> state,
                                  napi_threadsafe_function tsfn) {
+    bool tsfn_usable = tsfn != nullptr;
     std::unique_lock<std::mutex> lock(state->mutex);
     while (true) {
         state->cv.wait(lock, [&state] {
@@ -259,7 +273,7 @@ static void SyncNativeWorkerLoop(std::shared_ptr<SyncNativeWorkerState> state,
         bool started = false;
         {
             std::lock_guard<std::mutex> state_lock(state->mutex);
-            if (!state->stopping) {
+            if (!state->stopping && tsfn_usable) {
                 state->executing = true;
                 started = true;
             }
@@ -274,10 +288,17 @@ static void SyncNativeWorkerLoop(std::shared_ptr<SyncNativeWorkerState> state,
             }
         }
 
-        if (stopping) {
+        if (stopping || !tsfn_usable) {
             SyncNativeTaskDiscard(state, task);
-        } else {
-            SyncNativeDeliver(state, tsfn, task);
+        } else if (!SyncNativeDeliver(state, tsfn, task)) {
+            // 已经收到关闭返回码：此后不得再对该句柄调用任何 TSFN API，
+            // 包括退出时的 release；同时关闭任务入口并让工作线程尽快退出。
+            tsfn_usable = false;
+            {
+                std::lock_guard<std::mutex> state_lock(state->mutex);
+                state->stopping = true;
+            }
+            state->cv.notify_all();
         }
 
         if (started) {
@@ -290,8 +311,17 @@ static void SyncNativeWorkerLoop(std::shared_ptr<SyncNativeWorkerState> state,
     }
     lock.unlock();
 
-    // 释放工作线程自己持有的 TSFN 引用；模块引用由清理钩子 abort。
-    napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+    // 只对仍由本线程持有且未观察到关闭的 TSFN 引用调用 release。模块引用
+    // 由清理钩子 abort；收到 napi_closing 后句柄可能已经失效，不能再触碰。
+    if (tsfn_usable) {
+        napi_status status = napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+        if (status != napi_ok) {
+            OH_LOG_WARN(LOG_APP, "SyncNative: failed to release threadsafe function: %{public}d",
+                        static_cast<int>(status));
+        }
+    } else {
+        OH_LOG_WARN(LOG_APP, "SyncNative: skip releasing a closed threadsafe function");
+    }
 }
 
 // 异步清理的收尾线程：工作线程不可取消的 Rust 网络调用结束后才 join，
