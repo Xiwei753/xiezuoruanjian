@@ -112,10 +112,12 @@ impl<'a> ProofIntentSink<'a> {
         }
     }
 
-    /// 在正文事务提交前写入所有有效的章节正文动作。
+    /// 在正文事务提交前写入所有章节正文动作的意图。
     ///
-    /// `before` 与 `actions` 一一对应，来自事务提交前的真实快照。非章节路径、
-    /// 读取失败、非 UTF-8 或无内容变化的动作不生成意图（正常证明路径也会跳过）。
+    /// `before` 与 `actions` 一一对应，来自事务提交前的真实快照。只有非章节
+    /// 路径和实际无内容变化的动作可以跳过；章节动作的 before/after 读取、
+    /// UTF-8 解码或路径映射失败都必须中止本次 prepare，绝不能让正文在没有
+    /// 对应意图的情况下提交。
     pub(crate) fn prepare(
         &self,
         run_id: &str,
@@ -124,81 +126,141 @@ impl<'a> ProofIntentSink<'a> {
         actions: &[CommitAction],
         before: &[CommittedBefore],
     ) -> crate::Result<Vec<String>> {
-        let mut prepared_ids = Vec::new();
-        for (index, action) in actions.iter().enumerate() {
-            let Some((rel_path, action, after_text)) = action_edit(action) else {
-                continue;
-            };
-            if !is_chapter_content_path(rel_path) {
-                continue;
-            }
-            let before_text = match before.get(index) {
-                Some(CommittedBefore::Missing) => None,
-                Some(CommittedBefore::Text(bytes)) => match std::str::from_utf8(bytes) {
-                    Ok(text) => Some(text.to_string()),
-                    Err(_) => continue,
-                },
-                Some(CommittedBefore::NotTracked | CommittedBefore::Error(_)) | None => continue,
-            };
-            if before_text.as_deref().unwrap_or("") == after_text.as_deref().unwrap_or("") {
-                continue;
-            }
-            let workspace_path = to_workspace_rel_path(target_kind, project_id, rel_path);
-            let Some((project_id, volume_id, chapter_id)) = chapter_path_parts(&workspace_path)
-            else {
-                continue;
-            };
-            let source_device_id = self
-                .source_devices
-                .get(&format!("{project_id}/{volume_id}/{chapter_id}"))
-                .cloned()
-                .unwrap_or_default();
-            let event_id = format!("sync:{run_id}:{}:{index}", workspace_path.to_string_lossy());
-            // 同一意图重跑时保留第一次的时间，避免事件身份漂移。旧意图损坏时
-            // 不能覆盖它：否则原始时间/来源会被新时间取代，幂等性被破坏。
-            let occurred_at_ms = match self.load(&event_id) {
-                Ok(Some(intent)) => intent.occurred_at_ms,
-                Ok(None) => chrono::Utc::now().timestamp_millis(),
-                Err(error) => {
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "读取旧证明意图 {} 失败，拒绝覆盖: {error}",
-                        event_id
-                    ))));
+        let mut created_ids = Vec::new();
+        let result = (|| -> crate::Result<Vec<String>> {
+            let mut prepared_ids = Vec::new();
+            for (index, action) in actions.iter().enumerate() {
+                let rel_path = action_rel_path(action);
+                // 非章节文件不参与证明，也不需要读取/解码正文。
+                if !is_chapter_content_path(rel_path) {
+                    continue;
                 }
-            };
-            let before_content_digest = before_text
-                .as_deref()
-                .map(crate::writing_stats::proof::content_digest_of_text);
-            let after_content_digest = after_text
-                .as_deref()
-                .map(crate::writing_stats::proof::content_digest_of_text);
-            let intent = SyncProofIntent {
-                format_version: INTENT_FORMAT_VERSION,
-                event_id,
-                run_id: run_id.to_string(),
-                action_index: index,
-                project_id,
-                volume_id,
-                chapter_id,
-                workspace_path: workspace_path.to_string_lossy().into_owned(),
-                target_kind: target_kind.to_string(),
-                action,
-                before_text,
-                after_text,
-                before_content_digest,
-                after_content_digest,
-                source_device_id,
-                occurred_at_ms,
-            };
-            let serialized = serde_json::to_string(&intent)?;
-            mark_pending(self.root)?;
-            crate::storage::atomic_write_string(
-                &intent_path(self.root, &intent.event_id),
-                &serialized,
-            )?;
-            prepared_ids.push(intent.event_id);
+                let workspace_path = to_workspace_rel_path(target_kind, project_id, rel_path);
+                let Some((project_id, volume_id, chapter_id)) = chapter_path_parts(&workspace_path)
+                else {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "同步章节动作路径无法映射到作品/卷/章: {}",
+                        workspace_path.display()
+                    ))));
+                };
+                let before_snapshot = before.get(index).ok_or_else(|| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "同步章节 {} 缺少 commit 前置快照位置 {}",
+                        workspace_path.display(),
+                        index
+                    )))
+                })?;
+                let before_text = match before_snapshot {
+                    CommittedBefore::Missing => None,
+                    CommittedBefore::Text(bytes) => Some(
+                        std::str::from_utf8(bytes)
+                            .map_err(|error| {
+                                crate::Error::Io(std::io::Error::other(format!(
+                                    "同步章节 {} 的 before 正文不是 UTF-8: {}",
+                                    workspace_path.display(),
+                                    error
+                                )))
+                            })?
+                            .to_string(),
+                    ),
+                    CommittedBefore::NotTracked => {
+                        return Err(crate::Error::Io(std::io::Error::other(format!(
+                            "同步章节 {} 缺少 commit 前置快照",
+                            workspace_path.display()
+                        ))));
+                    }
+                    CommittedBefore::Error(message) => {
+                        return Err(crate::Error::Io(std::io::Error::other(format!(
+                            "同步章节 {} 的 before 读取失败: {}",
+                            workspace_path.display(),
+                            message
+                        ))));
+                    }
+                };
+                let (proof_action, after_text) = match action {
+                    CommitAction::Apply { content, .. } => {
+                        let text = std::str::from_utf8(content).map_err(|error| {
+                            crate::Error::Io(std::io::Error::other(format!(
+                                "同步章节 {} 的 after 正文不是 UTF-8: {}",
+                                workspace_path.display(),
+                                error
+                            )))
+                        })?;
+                        (SyncProofAction::Apply, Some(text.to_string()))
+                    }
+                    CommitAction::Delete { .. } => (SyncProofAction::Delete, None),
+                };
+                if before_text == after_text {
+                    continue;
+                }
+                let source_device_id = self
+                    .source_devices
+                    .get(&format!("{project_id}/{volume_id}/{chapter_id}"))
+                    .cloned()
+                    .unwrap_or_default();
+                let event_id =
+                    format!("sync:{run_id}:{}:{index}", workspace_path.to_string_lossy());
+                // 同一意图重跑时保留第一次的时间，避免事件身份漂移。旧意图损坏时
+                // 不能覆盖它：否则原始时间/来源会被新时间取代，幂等性被破坏。
+                let existing = self.load(&event_id)?;
+                let created = existing.is_none();
+                let occurred_at_ms = existing
+                    .map(|intent| intent.occurred_at_ms)
+                    .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+                let before_content_digest = before_text
+                    .as_deref()
+                    .map(crate::writing_stats::proof::content_digest_of_text);
+                let after_content_digest = after_text
+                    .as_deref()
+                    .map(crate::writing_stats::proof::content_digest_of_text);
+                let intent = SyncProofIntent {
+                    format_version: INTENT_FORMAT_VERSION,
+                    event_id: event_id.clone(),
+                    run_id: run_id.to_string(),
+                    action_index: index,
+                    project_id,
+                    volume_id,
+                    chapter_id,
+                    workspace_path: workspace_path.to_string_lossy().into_owned(),
+                    target_kind: target_kind.to_string(),
+                    action: proof_action,
+                    before_text,
+                    after_text,
+                    before_content_digest,
+                    after_content_digest,
+                    source_device_id,
+                    occurred_at_ms,
+                };
+                let serialized = serde_json::to_string(&intent)?;
+                mark_pending(self.root)?;
+                crate::storage::atomic_write_string(
+                    &intent_path(self.root, &intent.event_id),
+                    &serialized,
+                )?;
+                prepared_ids.push(intent.event_id);
+                if created {
+                    created_ids.push(event_id);
+                }
+            }
+            Ok(prepared_ids)
+        })();
+        if result.is_err() {
+            // prepare 失败时事务尚未创建，本次新写入的意图没有事务链接，
+            // 必须立即清理；否则下一次恢复会把它们当成待提交事实。
+            for event_id in created_ids {
+                if let Err(error) = remove_intent(self.root, &event_id) {
+                    log::warn!(
+                        "[proof_intent] 清理 prepare 失败后的意图 {} 失败: {error}",
+                        event_id
+                    );
+                }
+            }
+            // 清理后重新校准标记；若目录里还有更早的待恢复意图，标记会保持。
+            if let Err(error) = refresh_pending(self.root) {
+                log::warn!("[proof_intent] prepare 失败后刷新待恢复标记失败: {error}");
+            }
         }
-        Ok(prepared_ids)
+        result
     }
 
     /// 读取本次事件对应的意图，用于 Commit 后复用原始时间和来源设备。
@@ -286,20 +348,10 @@ impl<'a> ProofIntentSink<'a> {
     }
 }
 
-fn action_edit(action: &CommitAction) -> Option<(&Path, SyncProofAction, Option<String>)> {
+fn action_rel_path(action: &CommitAction) -> &Path {
     match action {
-        CommitAction::Apply { rel_path, content } => {
-            std::str::from_utf8(content).ok().map(|text| {
-                (
-                    rel_path.as_path(),
-                    SyncProofAction::Apply,
-                    Some(text.to_string()),
-                )
-            })
-        }
-        CommitAction::Delete { rel_path } => {
-            Some((rel_path.as_path(), SyncProofAction::Delete, None))
-        }
+        CommitAction::Apply { rel_path, .. } => rel_path.as_path(),
+        CommitAction::Delete { rel_path } => rel_path.as_path(),
     }
 }
 
@@ -669,6 +721,21 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
                 intent.event_id,
                 intent.workspace_path
             );
+            continue;
+        }
+
+        // 新格式意图在 prepare 时已写入 target_kind，正文提交必须经过同一
+        // SaveTransaction 链接。如果事务根里既没有该 ID 的已提交记录，也没有
+        // Prepared/读取错误，说明事务从未创建或明确回滚：按未提交清理，不能
+        // 再用 live 正文猜测，否则未提交的新章节会永久卡住同步，或把别的操作
+        // 恰好写出的 after 误记成本次同步。
+        if !intent.target_kind.is_empty() {
+            log::warn!(
+                "[proof_intent] 新格式意图没有对应提交事务，按未提交清理 {}（{}）",
+                intent.event_id,
+                intent.workspace_path
+            );
+            to_remove.insert(intent.event_id.clone());
             continue;
         }
 
