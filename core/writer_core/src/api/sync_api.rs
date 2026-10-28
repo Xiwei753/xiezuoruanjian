@@ -1828,8 +1828,21 @@ impl WriterCoreApi {
         diagnostic_operation_id: &str,
         remote_revision: Option<&str>,
     ) -> ApiResult<FullSyncResultDto> {
+        struct PendingTargetCommit {
+            target_index: usize,
+            prepared_failure: bool,
+            result: crate::sync::types::TargetSyncResult,
+            target_digest: String,
+            target_kind: String,
+            target_id_digest: Option<String>,
+            active_generation: Option<String>,
+            started_at: Instant,
+        }
+
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut pending_commits: Vec<PendingTargetCommit> = Vec::new();
+        let mut completed_transfer_results: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
 
         let total_targets = u32::try_from(plan.targets.len()).unwrap_or(u32::MAX);
@@ -1839,7 +1852,7 @@ impl WriterCoreApi {
             if Self::sync_cancelled(cancellation_token.as_ref()) {
                 log::info!(
                     "[sync] perform_full_sync: cancellation requested — breaking after {} targets",
-                    all_targets.len()
+                    pending_commits.len()
                 );
                 break;
             }
@@ -1937,7 +1950,7 @@ impl WriterCoreApi {
                     target_index,
                     &mut catalog_snapshot,
                     cancellation_token.as_ref(),
-                    &all_targets,
+                    &completed_transfer_results,
                     Some(diagnostic_operation_id),
                 )
                 .map(|(result, _resolution, _action)| result)
@@ -1990,167 +2003,20 @@ impl WriterCoreApi {
                 );
             }
 
-            // 3. sink.set_target_phase("commit") — 标记该 target 进入 Commit 阶段。
-            if let Some(ref sink) = progress_sink {
-                sink.set_target_phase(
-                    &planned.target.remote_prefix,
-                    planned.project_id.as_deref(),
-                    "commit",
-                );
-            }
-
-            // 4. Commit（短写锁）— 该 target 的 state/conflicts 成为 live 终态。
-            let commit_phase = SyncDiagnosticPhase::start_with_provider(
-                diagnostic_operation_id,
-                "commit",
-                Some(target_digest.clone()),
-                provider,
-            );
-            let (target_with_conflicts, target_committed_paths) = self.commit_transferred_target(
+            // Local live/state commit is delayed until the single remote
+            // publication succeeds.  This keeps known_files from advancing for
+            // content that was never pushed.
+            completed_transfer_results.push(target_sync_result.clone());
+            pending_commits.push(PendingTargetCommit {
                 target_index,
-                prepared_failure.is_some(),
-                &staging_runs,
-                &target_sync_result,
-            );
-            let commit_outcome =
-                crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
-            commit_phase.finish_with_provider(&commit_outcome, provider);
-
-            // Store 协调与索引失效已在 commit_target_after_transfer 内的
-            // 同一写锁持有期完成（问题1+2），不再在循环体中单独执行。
-
-            // 5. sink.update_target_finish — 标记该 target 已完成（phase 清空）。
-            if let Some(ref sink) = progress_sink {
-                let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
-                sink.update_target_finish(
-                    &planned.target.remote_prefix,
-                    planned.project_id.as_deref(),
-                    finished,
-                    total_targets,
-                );
-            }
-
-            // cleanup staging run — 之后整轮收口不再碰这个 target 的 staging。
-            if let Some(run) = staging_runs.get(target_index) {
-                run.cleanup();
-            }
-
-            // target_progress callback — 此时该 target 的 state/conflicts 已经成为
-            // live 最终状态。平台层收到回调时冲突已是 live 最终值，用户立即 resolve
-            // 不会被后续 Commit 覆盖。
-            if let Some(cb) = target_progress {
-                let progress_status =
-                    crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
-                let progress_conflict_count =
-                    u32::try_from(target_with_conflicts.result.conflicts.len()).unwrap_or(u32::MAX);
-                let progress_target_kind =
-                    plan.targets[target_index].target_kind.as_target_kind_str();
-                cb(crate::sync::full_sync::SyncTargetProgress {
-                    project_id: plan.targets[target_index].project_id.clone(),
-                    target_kind: progress_target_kind.to_string(),
-                    status: progress_status,
-                    conflict_count: progress_conflict_count,
-                });
-            }
-
-            let target_status =
-                crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
-            let mut target_end_fields =
-                sync_diagnostic_fields(diagnostic_operation_id, "complete", Some(&target_digest));
-            target_end_fields.insert(
-                "target_kind".to_string(),
-                serde_json::Value::String(target_kind),
-            );
-            target_end_fields.insert(
-                "target_index".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(
-                    u64::try_from(target_index).unwrap_or(u64::MAX),
-                )),
-            );
-            target_end_fields.insert(
-                "total_targets".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(total_targets)),
-            );
-            target_end_fields.insert(
-                "status_code".to_string(),
-                serde_json::Value::String(target_status),
-            );
-            target_end_fields.insert(
-                "duration_ms".to_string(),
-                serde_json::Value::Number(serde_json::Number::from(
-                    u64::try_from(target_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
-                )),
-            );
-            if let Some(target_id_digest) = target_id_digest {
-                target_end_fields.insert(
-                    "target_id_digest".to_string(),
-                    serde_json::Value::String(target_id_digest),
-                );
-            }
-            if let Some(remote_revision) = remote_revision {
-                target_end_fields.insert(
-                    "remote_revision".to_string(),
-                    serde_json::Value::String(remote_revision.to_string()),
-                );
-            }
-            if let Some(active_generation) = active_generation.as_deref() {
-                target_end_fields.insert(
-                    "remote_generation_digest".to_string(),
-                    serde_json::Value::String(sync_target_digest(active_generation)),
-                );
-            }
-            let sync_result = &target_with_conflicts.result;
-            let uploaded = sync_result.uploaded_files.len();
-            let downloaded = sync_result.downloaded_files.len();
-            let local_deleted = sync_result.local_deletes.len();
-            let remote_deleted = sync_result.remote_deletes.len();
-            let overwritten = sync_result.overwritten_files.len();
-            let ignored = sync_result.ignored_files.len();
-            let conflicts = sync_result.conflicts.len();
-            for (name, value) in [
-                ("uploaded", uploaded),
-                ("downloaded", downloaded),
-                ("local_deleted", local_deleted),
-                ("remote_deleted", remote_deleted),
-                ("overwritten", overwritten),
-                ("ignored", ignored),
-                ("conflicts", conflicts),
-            ] {
-                target_end_fields.insert(
-                    name.to_string(),
-                    serde_json::Value::Number(serde_json::Number::from(
-                        u64::try_from(value).unwrap_or(u64::MAX),
-                    )),
-                );
-            }
-            let decision_summary = if conflicts > 0 {
-                "conflict"
-            } else if downloaded > 0 || remote_deleted > 0 {
-                "remote_change_applied"
-            } else if uploaded > 0 || local_deleted > 0 {
-                "local_change_published"
-            } else if overwritten > 0 {
-                "overwritten"
-            } else if ignored > 0 {
-                "ignored_or_reused"
-            } else {
-                "unchanged"
-            };
-            target_end_fields.insert(
-                "lww_decision".to_string(),
-                serde_json::Value::String(decision_summary.to_string()),
-            );
-            target_end_fields.insert(
-                "state_source".to_string(),
-                serde_json::Value::String("live_after_commit".to_string()),
-            );
-            target_end_fields.insert(
-                "commit_modified_live".to_string(),
-                serde_json::Value::Bool(!target_committed_paths.is_empty()),
-            );
-            record_sync_diagnostic("sync.target.end", "sync.target", target_end_fields);
-            all_targets.push(target_with_conflicts);
-            all_committed_paths.extend(target_committed_paths.into_iter().map(|path| path.path));
+                prepared_failure: prepared_failure.is_some(),
+                result: target_sync_result,
+                target_digest,
+                target_kind,
+                target_id_digest,
+                active_generation,
+                started_at: target_started_at,
+            });
         }
 
         // Issue #1012: cancellation discards this round's remote writes.  A
@@ -2158,22 +2024,29 @@ impl WriterCoreApi {
         // final publish instead of pushing a partial round.
         if Self::sync_cancelled(cancellation_token.as_ref()) {
             round.discard();
+            for run in &staging_runs {
+                run.cleanup();
+            }
             log::info!(
                 "[sync] perform_full_sync: cancellation requested after per-target loop — discarding buffered remote writes"
             );
             self.core_write().persist_full_sync_cancelled();
             return Ok(Self::full_sync_noop_result());
         }
-        let publish_blocked = all_targets
+        let publish_blocked = pending_commits
             .iter()
-            .find(|target| target_blocks_round_publish(target));
+            .find(|pending| target_blocks_round_publish(&pending.result));
         if let Some(blocked) = publish_blocked {
             round.discard();
             log::warn!(
                 "[sync] full-sync remote publish discarded because target {} failed in phase {:?}",
-                blocked.remote_prefix,
-                blocked.failure_phase
+                blocked.result.remote_prefix,
+                blocked.result.failure_phase
             );
+            for run in &staging_runs {
+                run.cleanup();
+            }
+            all_targets.extend(pending_commits.into_iter().map(|pending| pending.result));
         } else {
             // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
             // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
@@ -2209,10 +2082,189 @@ impl WriterCoreApi {
                         error
                     );
                     publish_phase.finish_with_provider("error", provider);
+                    for run in &staging_runs {
+                        run.cleanup();
+                    }
                     return Err(crate::api::error::WriterError::from(
                         crate::error::Error::from(error),
                     ));
                 }
+            }
+
+            // Remote publish succeeded (or was a confirmed no-op).  Only now
+            // write the merged content and consensus state back to live, so a
+            // failed push cannot advance known_files for unpushed content.
+            for pending in pending_commits {
+                let PendingTargetCommit {
+                    target_index,
+                    prepared_failure,
+                    result: target_sync_result,
+                    target_digest,
+                    target_kind,
+                    target_id_digest,
+                    active_generation,
+                    started_at,
+                } = pending;
+                let planned = &plan.targets[target_index];
+
+                if let Some(ref sink) = progress_sink {
+                    sink.set_target_phase(
+                        &planned.target.remote_prefix,
+                        planned.project_id.as_deref(),
+                        "commit",
+                    );
+                }
+
+                let commit_phase = SyncDiagnosticPhase::start_with_provider(
+                    diagnostic_operation_id,
+                    "commit",
+                    Some(target_digest.clone()),
+                    provider,
+                );
+                let (target_with_conflicts, target_committed_paths) = self
+                    .commit_transferred_target(
+                        target_index,
+                        prepared_failure,
+                        &staging_runs,
+                        &target_sync_result,
+                    );
+                let commit_outcome =
+                    crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
+                commit_phase.finish_with_provider(&commit_outcome, provider);
+
+                if let Some(ref sink) = progress_sink {
+                    let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
+                    sink.update_target_finish(
+                        &planned.target.remote_prefix,
+                        planned.project_id.as_deref(),
+                        finished,
+                        total_targets,
+                    );
+                }
+
+                if let Some(run) = staging_runs.get(target_index) {
+                    run.cleanup();
+                }
+
+                if let Some(cb) = target_progress {
+                    let progress_status = crate::api::types::sync_status_to_wire(
+                        &target_with_conflicts.result.status,
+                    );
+                    let progress_conflict_count =
+                        u32::try_from(target_with_conflicts.result.conflicts.len())
+                            .unwrap_or(u32::MAX);
+                    let progress_target_kind =
+                        plan.targets[target_index].target_kind.as_target_kind_str();
+                    cb(crate::sync::full_sync::SyncTargetProgress {
+                        project_id: plan.targets[target_index].project_id.clone(),
+                        target_kind: progress_target_kind.to_string(),
+                        status: progress_status,
+                        conflict_count: progress_conflict_count,
+                    });
+                }
+
+                let target_status =
+                    crate::api::types::sync_status_to_wire(&target_with_conflicts.result.status);
+                let mut target_end_fields = sync_diagnostic_fields(
+                    diagnostic_operation_id,
+                    "complete",
+                    Some(&target_digest),
+                );
+                target_end_fields.insert(
+                    "target_kind".to_string(),
+                    serde_json::Value::String(target_kind),
+                );
+                target_end_fields.insert(
+                    "target_index".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        u64::try_from(target_index).unwrap_or(u64::MAX),
+                    )),
+                );
+                target_end_fields.insert(
+                    "total_targets".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(total_targets)),
+                );
+                target_end_fields.insert(
+                    "status_code".to_string(),
+                    serde_json::Value::String(target_status),
+                );
+                target_end_fields.insert(
+                    "duration_ms".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(
+                        u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    )),
+                );
+                if let Some(target_id_digest) = target_id_digest {
+                    target_end_fields.insert(
+                        "target_id_digest".to_string(),
+                        serde_json::Value::String(target_id_digest),
+                    );
+                }
+                if let Some(remote_revision) = remote_revision {
+                    target_end_fields.insert(
+                        "remote_revision".to_string(),
+                        serde_json::Value::String(remote_revision.to_string()),
+                    );
+                }
+                if let Some(active_generation) = active_generation.as_deref() {
+                    target_end_fields.insert(
+                        "remote_generation_digest".to_string(),
+                        serde_json::Value::String(sync_target_digest(active_generation)),
+                    );
+                }
+                let sync_result = &target_with_conflicts.result;
+                let uploaded = sync_result.uploaded_files.len();
+                let downloaded = sync_result.downloaded_files.len();
+                let local_deleted = sync_result.local_deletes.len();
+                let remote_deleted = sync_result.remote_deletes.len();
+                let overwritten = sync_result.overwritten_files.len();
+                let ignored = sync_result.ignored_files.len();
+                let conflicts = sync_result.conflicts.len();
+                for (name, value) in [
+                    ("uploaded", uploaded),
+                    ("downloaded", downloaded),
+                    ("local_deleted", local_deleted),
+                    ("remote_deleted", remote_deleted),
+                    ("overwritten", overwritten),
+                    ("ignored", ignored),
+                    ("conflicts", conflicts),
+                ] {
+                    target_end_fields.insert(
+                        name.to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(
+                            u64::try_from(value).unwrap_or(u64::MAX),
+                        )),
+                    );
+                }
+                let decision_summary = if conflicts > 0 {
+                    "conflict"
+                } else if downloaded > 0 || remote_deleted > 0 {
+                    "remote_change_applied"
+                } else if uploaded > 0 || local_deleted > 0 {
+                    "local_change_published"
+                } else if overwritten > 0 {
+                    "overwritten"
+                } else if ignored > 0 {
+                    "ignored_or_reused"
+                } else {
+                    "unchanged"
+                };
+                target_end_fields.insert(
+                    "lww_decision".to_string(),
+                    serde_json::Value::String(decision_summary.to_string()),
+                );
+                target_end_fields.insert(
+                    "state_source".to_string(),
+                    serde_json::Value::String("live_after_commit".to_string()),
+                );
+                target_end_fields.insert(
+                    "commit_modified_live".to_string(),
+                    serde_json::Value::Bool(!target_committed_paths.is_empty()),
+                );
+                record_sync_diagnostic("sync.target.end", "sync.target", target_end_fields);
+                all_targets.push(target_with_conflicts);
+                all_committed_paths
+                    .extend(target_committed_paths.into_iter().map(|path| path.path));
             }
         }
 

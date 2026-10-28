@@ -9,7 +9,7 @@
 //! Reads and `list` calls see the buffered overlay, so the catalog CAS helpers
 //! keep working against the latest in-round state without network round trips.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use crate::sync::provider::capabilities::SyncCapabilities;
@@ -28,9 +28,19 @@ enum BufferedValue {
 
 struct RoundState {
     entries: BTreeMap<String, Option<BufferedValue>>,
+    /// Real remote version observed on first touch, used for the final
+    /// baseline check.  `None` means the object did not exist.
+    baselines: BTreeMap<String, Option<RemoteVersion>>,
+    /// Paths whose write/delete precondition was validated against the in-round
+    /// overlay.  `flush` re-checks them against the real remote baseline.
+    preconditioned_paths: BTreeSet<String>,
     /// Conditions that must be checked against the real remote baseline by the
     /// final commit, not against the in-round overlay.
     checks: Vec<BatchMutation>,
+    /// Full remote tree cached once for the round.  Prevents GitHub's
+    /// `list(prefix)` (which fetches the recursive tree) from being called
+    /// again for every prefix/blob reuse.
+    base_entries: Option<Vec<RemoteEntry>>,
 }
 
 /// Result of the single remote publication at the end of a round.
@@ -54,7 +64,10 @@ impl<'a> RoundProvider<'a> {
             base_revision,
             state: Mutex::new(RoundState {
                 entries: BTreeMap::new(),
+                baselines: BTreeMap::new(),
+                preconditioned_paths: BTreeSet::new(),
                 checks: Vec::new(),
+                base_entries: None,
             }),
         }
     }
@@ -69,19 +82,216 @@ impl<'a> RoundProvider<'a> {
         RemoteVersion::new(format!("round:{}", crate::sync::hash::content_md5(content)))
     }
 
+    fn buffered_version_for(entry: &Option<BufferedValue>) -> Option<RemoteVersion> {
+        entry.as_ref().map(|value| match value {
+            BufferedValue::Content(content) => Self::buffered_version(content),
+            BufferedValue::Version(version) => version.clone(),
+        })
+    }
+
+    fn real_baseline_for(&self, path: &str) -> Result<Option<RemoteVersion>, ProviderError> {
+        {
+            let state = self.lock_state()?;
+            if let Some(version) = state.baselines.get(path) {
+                return Ok(version.clone());
+            }
+        }
+        let version = self.inner.read(path)?.map(|object| object.version);
+        let mut state = self.lock_state()?;
+        Ok(state
+            .baselines
+            .entry(path.to_string())
+            .or_insert_with(|| version)
+            .clone())
+    }
+
+    fn current_version(&self, path: &str) -> Result<Option<RemoteVersion>, ProviderError> {
+        let buffered = {
+            let state = self.lock_state()?;
+            if let Some(entry) = state.entries.get(path) {
+                Some(Self::buffered_version_for(entry))
+            } else {
+                None
+            }
+        };
+        if let Some(version) = buffered {
+            return Ok(version);
+        }
+        self.real_baseline_for(path)
+    }
+
+    /// Validate a write precondition against the in-round overlay and remember
+    /// that `flush` must re-check the same path against the real baseline.
+    fn check_write_precondition(
+        &self,
+        path: &str,
+        precondition: &WritePrecondition,
+    ) -> Result<(), ProviderError> {
+        match precondition {
+            WritePrecondition::Unconditional => return Ok(()),
+            WritePrecondition::CreateNew => {
+                if self.current_version(path)?.is_some() {
+                    return Err(ProviderError::PreconditionFailed {
+                        path: path.to_string(),
+                        reason: "object already exists".to_string(),
+                    });
+                }
+            }
+            WritePrecondition::IfMatch(expected) => {
+                let actual = self.current_version(path)?;
+                if actual.as_ref() != Some(expected) {
+                    return Err(ProviderError::PreconditionFailed {
+                        path: path.to_string(),
+                        reason: format!(
+                            "version mismatch: expected={}, current={:?}",
+                            expected.as_str(),
+                            actual.as_ref().map(RemoteVersion::as_str)
+                        ),
+                    });
+                }
+            }
+        }
+        self.lock_state()?
+            .preconditioned_paths
+            .insert(path.to_string());
+        Ok(())
+    }
+
+    fn check_delete_precondition(
+        &self,
+        path: &str,
+        precondition: &DeletePrecondition,
+    ) -> Result<(), ProviderError> {
+        match precondition {
+            DeletePrecondition::Unconditional => return Ok(()),
+            DeletePrecondition::IfMatch(expected) => {
+                let actual = self.current_version(path)?;
+                if actual.as_ref() != Some(expected) {
+                    return Err(ProviderError::PreconditionFailed {
+                        path: path.to_string(),
+                        reason: format!(
+                            "version mismatch: expected={}, current={:?}",
+                            expected.as_str(),
+                            actual.as_ref().map(RemoteVersion::as_str)
+                        ),
+                    });
+                }
+            }
+        }
+        self.lock_state()?
+            .preconditioned_paths
+            .insert(path.to_string());
+        Ok(())
+    }
+
+    /// Replace in-round virtual versions (`round:...`) with the real remote
+    /// baseline before a check reaches the final provider.  A virtual version
+    /// is only meaningful for the overlay; it is never a Git blob SHA.
+    fn sanitize_check(
+        &self,
+        check: &BatchMutation,
+        baselines: &BTreeMap<String, Option<RemoteVersion>>,
+    ) -> Result<Option<BatchMutation>, ProviderError> {
+        match check {
+            BatchMutation::CheckObject {
+                path,
+                expected_version,
+            } => {
+                let expected_version = match expected_version {
+                    Some(version) if Self::is_round_version(version) => {
+                        self.baseline_from(baselines, path)?
+                    }
+                    other => other.clone(),
+                };
+                Ok(Some(BatchMutation::CheckObject {
+                    path: path.clone(),
+                    expected_version,
+                }))
+            }
+            BatchMutation::CheckPrefix {
+                prefix,
+                expected_entries,
+            } => {
+                let needle = if prefix.is_empty() {
+                    String::new()
+                } else {
+                    format!("{prefix}/")
+                };
+                let mut sanitized = Vec::with_capacity(expected_entries.len());
+                for entry in expected_entries {
+                    if Self::is_round_version(&entry.version) {
+                        let full_path = format!("{needle}{}", entry.path);
+                        // The path only exists in the overlay, so the real
+                        // baseline tree does not contain it.
+                        let Some(version) = self.baseline_from(baselines, &full_path)? else {
+                            continue;
+                        };
+                        sanitized.push(RemoteEntry {
+                            path: entry.path.clone(),
+                            version,
+                        });
+                    } else {
+                        sanitized.push(entry.clone());
+                    }
+                }
+                Ok(Some(BatchMutation::CheckPrefix {
+                    prefix: prefix.clone(),
+                    expected_entries: sanitized,
+                }))
+            }
+            other => Ok(Some(other.clone())),
+        }
+    }
+
+    fn baseline_from(
+        &self,
+        baselines: &BTreeMap<String, Option<RemoteVersion>>,
+        path: &str,
+    ) -> Result<Option<RemoteVersion>, ProviderError> {
+        if let Some(version) = baselines.get(path) {
+            return Ok(version.clone());
+        }
+        self.real_baseline_for(path)
+    }
+
+    fn is_round_version(version: &RemoteVersion) -> bool {
+        version.as_str().starts_with("round:")
+    }
+
+    fn all_remote_entries(&self) -> Result<Vec<RemoteEntry>, ProviderError> {
+        {
+            let state = self.lock_state()?;
+            if let Some(entries) = &state.base_entries {
+                return Ok(entries.clone());
+            }
+        }
+        let entries = self.inner.list("")?;
+        let mut state = self.lock_state()?;
+        state.base_entries = Some(entries.clone());
+        Ok(entries)
+    }
+
     fn overlay_entries(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
-        let mut entries: BTreeMap<String, RemoteVersion> = self
-            .inner
-            .list(prefix)?
-            .into_iter()
-            .map(|entry| (entry.path, entry.version))
-            .collect();
-        let state = self.lock_state()?;
         let needle = if prefix.is_empty() {
             String::new()
         } else {
             format!("{prefix}/")
         };
+        let mut entries: BTreeMap<String, RemoteVersion> = self
+            .all_remote_entries()?
+            .into_iter()
+            .filter_map(|entry| {
+                if needle.is_empty() {
+                    Some((entry.path, entry.version))
+                } else {
+                    entry
+                        .path
+                        .strip_prefix(&needle)
+                        .map(|path| (path.to_string(), entry.version))
+                }
+            })
+            .collect();
+        let state = self.lock_state()?;
         for (path, entry) in &state.entries {
             let relative = if needle.is_empty() {
                 path.as_str()
@@ -177,6 +387,9 @@ impl<'a> RoundProvider<'a> {
         if let Ok(mut state) = self.state.lock() {
             state.entries.clear();
             state.checks.clear();
+            state.baselines.clear();
+            state.preconditioned_paths.clear();
+            state.base_entries = None;
         }
     }
 
@@ -186,11 +399,13 @@ impl<'a> RoundProvider<'a> {
     /// wrapper exists for one-push semantics, not for provider-specific
     /// batching.
     pub fn flush(&self) -> Result<RoundFlushOutcome, ProviderError> {
-        let (entries, checks) = {
+        let (entries, checks, baselines, preconditioned_paths) = {
             let mut state = self.lock_state()?;
             (
                 std::mem::take(&mut state.entries),
                 std::mem::take(&mut state.checks),
+                std::mem::take(&mut state.baselines),
+                std::mem::take(&mut state.preconditioned_paths),
             )
         };
         if entries.is_empty() && checks.is_empty() {
@@ -216,7 +431,27 @@ impl<'a> RoundProvider<'a> {
                 None => Some(BatchMutation::Delete { path }),
             })
             .collect();
-        mutations.extend(checks);
+        let mut checked_objects: BTreeSet<String> = BTreeSet::new();
+        for check in &checks {
+            if let Some(sanitized) = self.sanitize_check(check, &baselines)? {
+                if let BatchMutation::CheckObject { path, .. } = &sanitized {
+                    checked_objects.insert(path.clone());
+                }
+                mutations.push(sanitized);
+            }
+        }
+        // A write/delete precondition validated against the overlay must still
+        // hold on the real remote tree the final commit is built from.
+        for path in preconditioned_paths {
+            if checked_objects.contains(&path) {
+                continue;
+            }
+            let expected_version = self.baseline_from(&baselines, &path)?;
+            mutations.push(BatchMutation::CheckObject {
+                path,
+                expected_version,
+            });
+        }
 
         if self.inner.capabilities().batch {
             let result = self.inner.commit_batch_at(
@@ -335,7 +570,7 @@ impl SyncProvider for RoundProvider<'_> {
                 // an old generation path).  Resolve the reused blob by finding
                 // a currently reachable path with the same version; delegating
                 // `read(new_path)` would incorrectly return None.
-                let entries = self.inner.list("")?;
+                let entries = self.all_remote_entries()?;
                 let source = entries.into_iter().find(|entry| entry.version == version);
                 let Some(source) = source else {
                     return Err(ProviderError::PreconditionFailed {
@@ -364,7 +599,7 @@ impl SyncProvider for RoundProvider<'_> {
         content: &[u8],
         precondition: WritePrecondition,
     ) -> Result<RemoteVersion, ProviderError> {
-        let _ = precondition;
+        self.check_write_precondition(path, &precondition)?;
         let version = Self::buffered_version(content);
         let mut state = self.lock_state()?;
         state.entries.insert(
@@ -375,7 +610,7 @@ impl SyncProvider for RoundProvider<'_> {
     }
 
     fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
-        let _ = precondition;
+        self.check_delete_precondition(path, &precondition)?;
         let mut state = self.lock_state()?;
         state.entries.insert(path.to_string(), None);
         Ok(())
@@ -428,5 +663,107 @@ mod tests {
 
         round.flush().unwrap();
         assert_eq!(inner.read("a.txt").unwrap().unwrap().content, b"a".to_vec());
+    }
+
+    #[test]
+    fn write_preconditions_run_against_the_overlay() {
+        let inner = MemoryProvider::new();
+        let existing = inner
+            .write("a.txt", b"remote", WritePrecondition::Unconditional)
+            .unwrap();
+        let round = RoundProvider::new(&inner, None);
+
+        assert!(matches!(
+            round.write("a.txt", b"x", WritePrecondition::CreateNew),
+            Err(ProviderError::PreconditionFailed { .. })
+        ));
+        assert!(matches!(
+            round.write(
+                "a.txt",
+                b"x",
+                WritePrecondition::IfMatch(RemoteVersion::new("stale"))
+            ),
+            Err(ProviderError::PreconditionFailed { .. })
+        ));
+
+        round
+            .write("a.txt", b"next", WritePrecondition::IfMatch(existing))
+            .unwrap();
+        round.flush().unwrap();
+        assert_eq!(inner.read("a.txt").unwrap().unwrap().content, b"next");
+    }
+
+    #[test]
+    fn virtual_round_versions_stay_inside_the_overlay() {
+        let inner = MemoryProvider::new();
+        let round = RoundProvider::new(&inner, None);
+
+        let first = round
+            .write("catalog.json", b"one", WritePrecondition::CreateNew)
+            .unwrap();
+        assert!(first.as_str().starts_with("round:"));
+        let second = round
+            .write(
+                "catalog.json",
+                b"two",
+                WritePrecondition::IfMatch(first.clone()),
+            )
+            .unwrap();
+        assert!(matches!(
+            round.write("catalog.json", b"three", WritePrecondition::IfMatch(first)),
+            Err(ProviderError::PreconditionFailed { .. })
+        ));
+
+        round.flush().unwrap();
+        assert_eq!(inner.read("catalog.json").unwrap().unwrap().content, b"two");
+        assert!(second.as_str().starts_with("round:"));
+    }
+
+    #[test]
+    fn flush_rechecks_preconditions_against_the_real_remote() {
+        let inner = MemoryProvider::new();
+        let baseline = inner
+            .write("catalog.json", b"one", WritePrecondition::Unconditional)
+            .unwrap();
+        let round = RoundProvider::new(&inner, None);
+        round
+            .write("catalog.json", b"two", WritePrecondition::IfMatch(baseline))
+            .unwrap();
+
+        // Another client advances the branch after this round was planned.
+        inner
+            .write("catalog.json", b"other", WritePrecondition::Unconditional)
+            .unwrap();
+
+        assert!(matches!(
+            round.flush(),
+            Err(ProviderError::PreconditionFailed { .. })
+        ));
+        assert_eq!(
+            inner.read("catalog.json").unwrap().unwrap().content,
+            b"other"
+        );
+    }
+
+    #[test]
+    fn explicit_checks_are_sanitized_to_real_baselines() {
+        let inner = MemoryProvider::new();
+        let round = RoundProvider::new(&inner, None);
+        let virtual_version = round
+            .write("catalog.json", b"one", WritePrecondition::CreateNew)
+            .unwrap();
+
+        round
+            .commit_batch(
+                &[BatchMutation::CheckObject {
+                    path: "catalog.json".to_string(),
+                    expected_version: Some(virtual_version),
+                }],
+                "test",
+            )
+            .unwrap();
+
+        round.flush().unwrap();
+        assert_eq!(inner.read("catalog.json").unwrap().unwrap().content, b"one");
     }
 }

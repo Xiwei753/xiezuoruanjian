@@ -302,9 +302,7 @@ pub(crate) fn commit_batch_via_git_database(
     mutations: &[BatchMutation],
     message: &str,
 ) -> Result<BatchCommitResult, ProviderError> {
-    commit_batch_via_git_database_at(
-        transport, api_base, token, branch, None, mutations, message,
-    )
+    commit_batch_via_git_database_at(transport, api_base, token, branch, None, mutations, message)
 }
 
 /// 带远端基线校验的 Git Database 提交。

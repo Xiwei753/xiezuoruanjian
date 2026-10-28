@@ -37,8 +37,8 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
             };
 
         // No persisted catalog yet: every discovered group still lives in the
-        // legacy flat `app/` tree, even though the bootstrap catalog itself is
-        // already schema 3.
+        // legacy flat `app/` tree. The bootstrap catalog stays schema 2 so
+        // installed clients keep reading it.
         let source_prefix = if !catalog_snapshot.catalog_present {
             "app".to_string()
         } else {

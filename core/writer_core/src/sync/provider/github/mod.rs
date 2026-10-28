@@ -119,7 +119,11 @@ impl SyncProvider for GitHubProvider {
                 reason: "tree response missing 'tree' array".to_string(),
             })?;
 
-        let needle = format!("{prefix}/");
+        let needle = if prefix.is_empty() {
+            None
+        } else {
+            Some(format!("{prefix}/"))
+        };
         let mut entries = Vec::new();
         for item in tree {
             // 只取 blob（文件），跳过 tree（目录）。
@@ -132,7 +136,11 @@ impl SyncProvider for GitHubProvider {
             let Some(sha) = item["sha"].as_str() else {
                 continue;
             };
-            if let Some(stripped) = path.strip_prefix(&needle) {
+            let relative = match &needle {
+                None => Some(path),
+                Some(needle) => path.strip_prefix(needle),
+            };
+            if let Some(stripped) = relative {
                 entries.push(RemoteEntry {
                     path: stripped.to_string(),
                     version: RemoteVersion(sha.to_string()),
