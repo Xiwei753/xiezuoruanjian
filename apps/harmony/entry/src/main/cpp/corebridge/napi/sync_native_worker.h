@@ -5,25 +5,35 @@
 //
 // `napi_create_async_work` 的执行回调运行在 FFRT 工作线程上，可能持续数秒
 // 至数分钟的 Git/网络调用会被 FFRT 长任务监测信号打断（EINTR），导致 TLS
-// 读写以 `Interrupted system call` 失败。这里提供一个模块级、唯一的受控
-// pthread 工作线程：ArkTS 线程创建 Promise/deferred，工作线程只执行 Rust
-// C ABI 并产生结果，再通过 `napi_threadsafe_function` 投递回 ArkTS 线程
-// resolve。全量同步的 perform / diagnostics / dry-run 共用本执行器，不再为
-// 每个入口复制线程系统。
+// 读写以 `Interrupted system call` 失败。这里提供一个受控的原生工作线程：
+// ArkTS 线程创建 Promise/deferred，工作线程只执行 Rust C ABI 并产生结果，
+// 再通过 `napi_threadsafe_function` 投递回 ArkTS 线程 resolve。全量同步的
+// perform / diagnostics / dry-run 共用本执行器，不再为每个入口复制线程系统。
 //
 // 生命周期：
-// - 首次提交时在 ArkTS 线程创建 TSFN 并启动工作线程；之后复用。
-// - 环境销毁时停止队列、abort TSFN、释放未执行任务；若 Rust 调用仍在执行，
-//   因不可取消而 detach，由工作线程持有 state 自行释放。
-// - `writer_core_free_string` 只在 ArkTS 线程的 TSFN 回调里调用一次。
+// - TSFN 空闲时 unref，首个未完成任务到达时 ref，最后一条结果在
+//   `SyncNativeCallJs` 中 resolve 完成后再次 unref。引用转换由同一个
+//   pending 计数控制，避免工作线程阻止 ArkTS 事件循环退出，也避免事件循环
+//   在结果投递前退出。
+// - 环境销毁使用 `napi_add_async_cleanup_hook`：钩子关闭任务入口、丢弃排队
+//   任务并 abort TSFN 后立即返回，不阻塞 ArkTS 清理线程；独立的清理线程等待
+//   工作线程真正退出后 join，再 `napi_remove_async_cleanup_hook`。工作线程
+//   不 detach，不会在模块卸载后继续运行。
+// - 每个 napi_env 拥有独立的 state；TSFN 的 context 持有 state，直到 TSFN
+//   销毁，保证 env 销毁期间排队回调仍能安全释放资源。
+// - `writer_core_free_string` 只在正常回调或明确的丢弃路径调用一次，每条
+//   结果恰好释放一次；丢弃路径可能位于工作线程或清理线程。
 
 #include <condition_variable>
-#include <cstring>
+#include <cstddef>
 #include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <thread>
+#include <unordered_map>
+#include <utility>
 
 #include <hilog/log.h>
 #include <napi/native_api.h>
@@ -40,20 +50,47 @@ struct SyncNativeTask {
     char* result_json = nullptr;
 };
 
+struct SyncNativeTsfnContext;
+struct SyncNativeCleanupContext;
+
 struct SyncNativeWorkerState {
+    explicit SyncNativeWorkerState(napi_env value) : env(value) {}
+
+    napi_env env;
     std::mutex mutex;
     std::condition_variable cv;
     std::deque<SyncNativeTask*> queue;
     napi_threadsafe_function tsfn = nullptr;
+    napi_async_cleanup_hook_handle cleanup_handle = nullptr;
+    SyncNativeCleanupContext* cleanup_context = nullptr;
+    std::thread worker;
+    bool worker_started = false;
     bool stopping = false;
-    bool executing = false;
+    // TSFN 是否持有事件循环引用；ref/unref 只在创建它的 ArkTS 线程调用，
+    // 字段本身由 mutex 保护。
+    bool ref_held = false;
+    // 已提交但尚未在 call_js 或丢弃路径结束的任务数（排队 + 执行 + 投递中）。
+    std::size_t pending = 0;
 };
 
-static std::shared_ptr<SyncNativeWorkerState> g_sync_native_state;
-static std::thread g_sync_native_thread;
-static bool g_sync_native_thread_started = false;
-static napi_env g_sync_native_env = nullptr;
-static bool g_sync_native_cleanup_installed = false;
+// TSFN context：让 state 活到 TSFN 队列排空、finalize 回调执行。
+struct SyncNativeTsfnContext {
+    explicit SyncNativeTsfnContext(std::shared_ptr<SyncNativeWorkerState> value)
+        : state(std::move(value)) {}
+
+    std::shared_ptr<SyncNativeWorkerState> state;
+};
+
+// 异步清理钩子的参数由钩子侧负责释放。
+struct SyncNativeCleanupContext {
+    explicit SyncNativeCleanupContext(std::shared_ptr<SyncNativeWorkerState> value)
+        : state(std::move(value)) {}
+
+    std::shared_ptr<SyncNativeWorkerState> state;
+};
+
+static std::mutex g_sync_native_registry_mutex;
+static std::unordered_map<napi_env, std::shared_ptr<SyncNativeWorkerState>> g_sync_native_states;
 
 static constexpr const char* kSyncNativeCreateFailedEnvelope =
     "{\"success\":false,\"errorCode\":\"ASYNC_CREATE_FAILED\",\"userMessage\":\"Failed to create sync native worker\"}";
@@ -69,14 +106,71 @@ static void SyncNativeResolveEnvelope(napi_env env, napi_deferred deferred, cons
     }
 }
 
-// TSFN callback —— 运行在 ArkTS 所属线程，是 result_json 的唯一释放点。
-// env 为 nullptr 表示 thread-safe function 正在 abort/环境已销毁：只释放资源。
-static void SyncNativeCallJs(napi_env env, napi_value /*js_callback*/, void* /*context*/, void* data) {
+static void SyncNativeEraseState(napi_env env, SyncNativeWorkerState* state) {
+    std::lock_guard<std::mutex> lock(g_sync_native_registry_mutex);
+    auto found = g_sync_native_states.find(env);
+    if (found != g_sync_native_states.end() && found->second.get() == state) {
+        g_sync_native_states.erase(found);
+    }
+}
+
+static std::shared_ptr<SyncNativeWorkerState> SyncNativeGetOrCreateState(napi_env env) {
+    std::lock_guard<std::mutex> lock(g_sync_native_registry_mutex);
+    auto found = g_sync_native_states.find(env);
+    if (found != g_sync_native_states.end()) {
+        return found->second;
+    }
+
+    try {
+        auto state = std::make_shared<SyncNativeWorkerState>(env);
+        g_sync_native_states.emplace(env, state);
+        return state;
+    } catch (const std::exception& error) {
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to allocate worker state: %{public}s", error.what());
+        return nullptr;
+    } catch (...) {
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to allocate worker state");
+        return nullptr;
+    }
+}
+
+// 任务结束但结果不会进入 call_js：释放结果并更新 pending。
+// 该路径可能运行在工作线程或清理线程，不能调用 ref/unref。
+static void SyncNativeTaskDiscard(const std::shared_ptr<SyncNativeWorkerState>& state, SyncNativeTask* task) {
+    if (task == nullptr) {
+        return;
+    }
+    if (task->result_json != nullptr) {
+        writer_core_free_string(task->result_json);
+        task->result_json = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (state->pending > 0) {
+            --state->pending;
+        }
+    }
+    delete task;
+}
+
+// TSFN callback —— 运行在 ArkTS 所属线程，是正常结果 `result_json` 的唯一释放点。
+// env 为 nullptr 表示 TSFN 正在 abort/环境已销毁：只释放资源，不调用 N-API。
+static void SyncNativeCallJs(napi_env env, napi_value /*js_callback*/, void* context, void* data) {
     SyncNativeTask* task = static_cast<SyncNativeTask*>(data);
     if (task == nullptr) {
         return;
     }
 
+    SyncNativeTsfnContext* tsfn_context = static_cast<SyncNativeTsfnContext*>(context);
+    if (tsfn_context == nullptr) {
+        if (task->result_json != nullptr) {
+            writer_core_free_string(task->result_json);
+        }
+        delete task;
+        return;
+    }
+
+    std::shared_ptr<SyncNativeWorkerState> state = tsfn_context->state;
     if (env != nullptr && task->deferred != nullptr) {
         if (task->result_json != nullptr) {
             napi_value result = nullptr;
@@ -95,33 +189,49 @@ static void SyncNativeCallJs(napi_env env, napi_value /*js_callback*/, void* /*c
         task->result_json = nullptr;
     }
     delete task;
+
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (state->pending > 0) {
+            --state->pending;
+        }
+        // 最后一条结果真正 resolve/释放后，才允许事件循环退出。与清理钩子
+        // 共用 state->mutex，避免在 abort TSFN 之后再次 unref。
+        if (state->pending == 0 && state->ref_held && env != nullptr &&
+            !state->stopping && state->tsfn != nullptr) {
+            if (napi_unref_threadsafe_function(env, state->tsfn) == napi_ok) {
+                state->ref_held = false;
+            } else {
+                OH_LOG_WARN(LOG_APP, "SyncNative: failed to unref threadsafe function");
+            }
+        }
+    }
 }
 
 // 工作线程把结果投递回 ArkTS 线程；投递失败（TSFN 已关闭）时在这里释放结果。
-static void SyncNativeDeliver(const std::shared_ptr<SyncNativeWorkerState>& state, SyncNativeTask* task) {
-    napi_threadsafe_function tsfn = state->tsfn;
+// 成功后 task 的所有权转交 TSFN，工作线程不能再访问它。
+static void SyncNativeDeliver(const std::shared_ptr<SyncNativeWorkerState>& state,
+                              napi_threadsafe_function tsfn,
+                              SyncNativeTask* task) {
     if (tsfn == nullptr) {
-        if (task->result_json != nullptr) {
-            writer_core_free_string(task->result_json);
-        }
-        delete task;
+        SyncNativeTaskDiscard(state, task);
         return;
     }
 
     napi_status status = napi_call_threadsafe_function(tsfn, task, napi_tsfn_nonblocking);
     if (status != napi_ok) {
-        if (task->result_json != nullptr) {
-            writer_core_free_string(task->result_json);
-            task->result_json = nullptr;
-        }
         OH_LOG_WARN(LOG_APP, "SyncNative: failed to deliver %{public}s result: %{public}d",
                     task->work_name != nullptr ? task->work_name : "sync", static_cast<int>(status));
-        delete task;
+        SyncNativeTaskDiscard(state, task);
     }
 }
 
-// 唯一的同步长任务工作线程：串行执行队列中的 Rust 调用。
-static void SyncNativeWorkerLoop(std::shared_ptr<SyncNativeWorkerState> state) {
+// 唯一的长任务工作线程：串行执行队列中的 Rust 调用。
+// pending 只在 call_js 或明确的丢弃路径完成后递减，因此排队、执行、投递三个
+// 阶段的结束状态由同一生命周期计数发布，不存在“执行结束但结果尚未投递”的
+// 假空闲窗口。
+static void SyncNativeWorkerLoop(std::shared_ptr<SyncNativeWorkerState> state,
+                                 napi_threadsafe_function tsfn) {
     std::unique_lock<std::mutex> lock(state->mutex);
     while (true) {
         state->cv.wait(lock, [&state] {
@@ -137,168 +247,277 @@ static void SyncNativeWorkerLoop(std::shared_ptr<SyncNativeWorkerState> state) {
 
         SyncNativeTask* task = state->queue.front();
         state->queue.pop_front();
-        state->executing = true;
         lock.unlock();
 
-        task->result_json = task->execute();
+        bool stopping = false;
+        {
+            std::lock_guard<std::mutex> state_lock(state->mutex);
+            stopping = state->stopping;
+        }
 
-        lock.lock();
-        state->executing = false;
-        state->cv.notify_all();
-        lock.unlock();
+        // 清理已开始时不再启动新的长网络调用；已经开始的调用继续执行到返回，
+        // 但结果不再投递。这个检查仍与清理存在天然竞态，deliver 失败路径兜底。
+        if (!stopping) {
+            task->result_json = task->execute();
+            {
+                std::lock_guard<std::mutex> state_lock(state->mutex);
+                stopping = state->stopping;
+            }
+        }
 
-        SyncNativeDeliver(state, task);
+        if (stopping) {
+            SyncNativeTaskDiscard(state, task);
+        } else {
+            SyncNativeDeliver(state, tsfn, task);
+        }
 
         lock.lock();
     }
-
-    napi_threadsafe_function tsfn = state->tsfn;
     lock.unlock();
-    if (tsfn != nullptr) {
-        // 释放工作线程自己持有的 TSFN 引用；模块持有的引用由 cleanup hook 释放。
-        napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+
+    // 释放工作线程自己持有的 TSFN 引用；模块引用由清理钩子 abort。
+    napi_release_threadsafe_function(tsfn, napi_tsfn_release);
+}
+
+// 异步清理的收尾线程：工作线程不可取消的 Rust 网络调用结束后才 join，
+// 然后移除清理钩子，让环境销毁继续。这里不接触 napi_env，也不调用模块代码。
+static void SyncNativeCompleteCleanup(SyncNativeCleanupContext* context,
+                                      napi_async_cleanup_hook_handle handle) {
+    std::shared_ptr<SyncNativeWorkerState> state = context->state;
+    if (state->worker.joinable()) {
+        state->worker.join();
+    }
+    SyncNativeEraseState(state->env, state.get());
+    state->cleanup_handle = nullptr;
+    state->cleanup_context = nullptr;
+    delete context;
+    context = nullptr;
+    // 先释放本线程持有的 state 引用，再移除清理钩子；remove 返回后不再访问
+    // 模块状态，避免环境随即卸载模块时清理线程仍在执行库内代码。
+    state.reset();
+    if (handle != nullptr) {
+        napi_remove_async_cleanup_hook(handle);
     }
 }
 
-// 环境销毁：停止接收新任务，abort TSFN 并回收未执行任务。
-static void SyncNativeCleanupHook(void* /*arg*/) {
-    std::shared_ptr<SyncNativeWorkerState> state = g_sync_native_state;
-    if (state == nullptr) {
-        g_sync_native_env = nullptr;
-        g_sync_native_cleanup_installed = false;
+// 环境销毁钩子：只做关闭入口/丢弃排队任务/abort TSFN，然后交给独立收尾
+// 线程等待工作线程退出，避免在 ArkTS 清理线程上阻塞数分钟的网络调用。
+static void SyncNativeAsyncCleanup(napi_async_cleanup_hook_handle handle, void* arg) {
+    SyncNativeCleanupContext* context = static_cast<SyncNativeCleanupContext*>(arg);
+    if (context == nullptr) {
+        if (handle != nullptr) {
+            napi_remove_async_cleanup_hook(handle);
+        }
         return;
     }
 
+    std::shared_ptr<SyncNativeWorkerState> state = context->state;
     std::deque<SyncNativeTask*> pending;
-    bool executing = false;
+    napi_threadsafe_function tsfn = nullptr;
     {
         std::lock_guard<std::mutex> lock(state->mutex);
         state->stopping = true;
         pending.swap(state->queue);
-        executing = state->executing;
+        tsfn = state->tsfn;
+        state->tsfn = nullptr;
+        state->ref_held = false;
         state->cv.notify_all();
     }
 
-    // 丢弃模块持有的 TSFN 引用，并让已排队的投递以 env == nullptr 回调，
-    // 从而在 SyncNativeCallJs 里释放 result_json 和 task。
-    if (state->tsfn != nullptr) {
-        napi_release_threadsafe_function(state->tsfn, napi_tsfn_abort);
+    // abort 模块引用；工作线程仍持有自己的引用，因此 TSFN 不会在它退出前
+    // 被释放。已经排队的投递会以 env == nullptr 回调并释放结果。
+    if (tsfn != nullptr) {
+        napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
     }
 
     for (SyncNativeTask* task : pending) {
-        if (task->result_json != nullptr) {
-            writer_core_free_string(task->result_json);
-        }
-        delete task;
+        SyncNativeTaskDiscard(state, task);
     }
 
-    if (g_sync_native_thread.joinable()) {
-        if (executing) {
-            // Rust 网络调用不可取消；阻塞模块卸载直到它结束会让应用退出卡住。
-            // 工作线程持有 state 的 shared_ptr，完成投递/释放后自行退出。
-            g_sync_native_thread.detach();
-        } else {
-            g_sync_native_thread.join();
+    // 收尾线程只负责 join + remove，不 detach 工作线程，也不越过模块生命周期。
+    try {
+        std::thread cleanup_thread(SyncNativeCompleteCleanup, context, handle);
+        try {
+            cleanup_thread.detach();
+        } catch (...) {
+            // detach 极少数情况下失败：就地等待，保证清理钩子最终被移除。
+            if (cleanup_thread.joinable()) {
+                cleanup_thread.join();
+            }
         }
+    } catch (const std::exception& error) {
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to start cleanup thread: %{public}s", error.what());
+        SyncNativeCompleteCleanup(context, handle);
+    } catch (...) {
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to start cleanup thread");
+        SyncNativeCompleteCleanup(context, handle);
     }
-
-    g_sync_native_thread_started = false;
-    g_sync_native_state.reset();
-    g_sync_native_env = nullptr;
-    g_sync_native_cleanup_installed = false;
 }
 
-// TSFN 创建成功但工作线程启动失败：释放模块引用和尚未交给工作线程的
-// initial_thread_count 引用，避免 TSFN 泄漏。仅在尚未启动线程的路径调用。
-static void SyncNativeDiscardTsfn() {
-    if (g_sync_native_state == nullptr || g_sync_native_state->tsfn == nullptr) {
-        return;
+// TSFN 销毁时释放 context，确保排队回调结束后 state 才可能析构。
+static void SyncNativeTsfnFinalize(napi_env /*env*/, void* data, void* /*hint*/) {
+    delete static_cast<SyncNativeTsfnContext*>(data);
+}
+
+// 所有创建步骤成功后才把 state 发布到注册表；失败时撤销钩子并移除 state。
+static void SyncNativeEnsureRollback(const std::shared_ptr<SyncNativeWorkerState>& state) {
+    if (state->cleanup_handle != nullptr) {
+        napi_remove_async_cleanup_hook(state->cleanup_handle);
+        state->cleanup_handle = nullptr;
     }
-    napi_release_threadsafe_function(g_sync_native_state->tsfn, napi_tsfn_abort);
-    napi_release_threadsafe_function(g_sync_native_state->tsfn, napi_tsfn_abort);
-    g_sync_native_state->tsfn = nullptr;
+    delete state->cleanup_context;
+    state->cleanup_context = nullptr;
+    SyncNativeEraseState(state->env, state.get());
 }
 
 // 在 ArkTS 线程准备 TSFN / 工作线程。只在首次提交时创建，后续复用。
-static bool SyncNativeWorkerEnsure(napi_env env) {
-    if (g_sync_native_env != nullptr && g_sync_native_env != env) {
-        // 一个 HarmonyOS 模块实例只有一个 ArkTS 环境；拒绝跨环境复用，
-        // 避免把 deferred 投递到已销毁的 runtime。
-        OH_LOG_ERROR(LOG_APP, "SyncNative: worker already bound to another napi env");
+static bool SyncNativeWorkerEnsure(const std::shared_ptr<SyncNativeWorkerState>& state) {
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (state->stopping) {
+            return false;
+        }
+        if (state->tsfn != nullptr && state->worker_started) {
+            return true;
+        }
+    }
+
+    napi_env env = state->env;
+
+    // 先注册异步清理钩子；后续任一步失败都由 rollback 撤销。
+    if (state->cleanup_handle == nullptr) {
+        auto* cleanup_context = new (std::nothrow) SyncNativeCleanupContext(state);
+        if (cleanup_context == nullptr) {
+            OH_LOG_ERROR(LOG_APP, "SyncNative: failed to allocate cleanup context");
+            return false;
+        }
+
+        napi_status status = napi_add_async_cleanup_hook(
+            env, SyncNativeAsyncCleanup, cleanup_context, &state->cleanup_handle);
+        if (status != napi_ok) {
+            delete cleanup_context;
+            state->cleanup_handle = nullptr;
+            OH_LOG_ERROR(LOG_APP, "SyncNative: failed to install async cleanup hook: %{public}d",
+                         static_cast<int>(status));
+            SyncNativeEraseState(env, state.get());
+            return false;
+        }
+        state->cleanup_context = cleanup_context;
+    }
+
+    napi_value resource_name = nullptr;
+    if (napi_create_string_utf8(env, "SujianSyncNativeWorker", NAPI_AUTO_LENGTH,
+                                &resource_name) != napi_ok) {
+        SyncNativeEnsureRollback(state);
         return false;
     }
-    g_sync_native_env = env;
 
-    if (!g_sync_native_cleanup_installed) {
-        if (napi_add_env_cleanup_hook(env, SyncNativeCleanupHook, nullptr) != napi_ok) {
-            OH_LOG_ERROR(LOG_APP, "SyncNative: failed to install env cleanup hook");
-            return false;
-        }
-        g_sync_native_cleanup_installed = true;
+    auto* tsfn_context = new (std::nothrow) SyncNativeTsfnContext(state);
+    if (tsfn_context == nullptr) {
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to allocate threadsafe context");
+        SyncNativeEnsureRollback(state);
+        return false;
     }
 
-    if (g_sync_native_state == nullptr) {
-        g_sync_native_state = std::make_shared<SyncNativeWorkerState>();
+    napi_threadsafe_function tsfn = nullptr;
+    napi_status status = napi_create_threadsafe_function(
+        env, nullptr, nullptr, resource_name,
+        0,     // max_queue_size: 0 = 不限制，避免大文件同步时投递排队失败
+        1,     // initial_thread_count: 工作线程
+        tsfn_context, SyncNativeTsfnFinalize, tsfn_context,
+        SyncNativeCallJs, &tsfn);
+    if (status != napi_ok) {
+        delete tsfn_context;
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to create threadsafe function: %{public}d",
+                     static_cast<int>(status));
+        SyncNativeEnsureRollback(state);
+        return false;
     }
 
-    if (g_sync_native_state->tsfn == nullptr) {
-        napi_value resource_name = nullptr;
-        if (napi_create_string_utf8(env, "SujianSyncNativeWorker", NAPI_AUTO_LENGTH,
-                                    &resource_name) != napi_ok) {
-            return false;
-        }
-
-        napi_status status = napi_create_threadsafe_function(
-            env, nullptr, nullptr, resource_name,
-            0,     // max_queue_size: 0 = 不限制，避免大文件同步时投递排队失败
-            1,     // initial_thread_count: 工作线程
-            nullptr, nullptr, nullptr,
-            SyncNativeCallJs, &g_sync_native_state->tsfn);
-        if (status != napi_ok) {
-            g_sync_native_state->tsfn = nullptr;
-            OH_LOG_ERROR(LOG_APP, "SyncNative: failed to create threadsafe function: %{public}d",
-                         static_cast<int>(status));
-            return false;
-        }
-
-        // 模块自身也持有一个引用，保证 cleanup 时可以先 abort 再等工作线程退出。
-        if (napi_acquire_threadsafe_function(g_sync_native_state->tsfn) != napi_ok) {
-            napi_release_threadsafe_function(g_sync_native_state->tsfn, napi_tsfn_abort);
-            g_sync_native_state->tsfn = nullptr;
-            OH_LOG_ERROR(LOG_APP, "SyncNative: failed to acquire threadsafe function");
-            return false;
-        }
+    // 模块自身也持有一个引用，保证清理时可以先 abort 再等工作线程退出。
+    if (napi_acquire_threadsafe_function(tsfn) != napi_ok) {
+        // 此时只有 initial_thread_count 的引用。
+        napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to acquire threadsafe function");
+        SyncNativeEnsureRollback(state);
+        return false;
     }
 
-    if (!g_sync_native_thread_started) {
-        try {
-            g_sync_native_thread = std::thread(SyncNativeWorkerLoop, g_sync_native_state);
-            g_sync_native_thread_started = true;
-        } catch (const std::exception& error) {
-            OH_LOG_ERROR(LOG_APP, "SyncNative: failed to start worker thread: %{public}s", error.what());
-            SyncNativeDiscardTsfn();
-            return false;
-        } catch (...) {
-            OH_LOG_ERROR(LOG_APP, "SyncNative: failed to start worker thread");
-            SyncNativeDiscardTsfn();
-            return false;
+    // 刚创建时 TSFN 默认引用事件循环；空闲阶段必须 unref。
+    if (napi_unref_threadsafe_function(env, tsfn) != napi_ok) {
+        napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
+        napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to unref threadsafe function");
+        SyncNativeEnsureRollback(state);
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->tsfn = tsfn;
+        state->ref_held = false;
+    }
+
+    try {
+        state->worker = std::thread(SyncNativeWorkerLoop, state, tsfn);
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->worker_started = true;
         }
+    } catch (const std::exception& error) {
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to start worker thread: %{public}s", error.what());
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->tsfn = nullptr;
+        }
+        // 释放模块引用和 initial_thread_count 引用。
+        napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
+        napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
+        SyncNativeEnsureRollback(state);
+        return false;
+    } catch (...) {
+        OH_LOG_ERROR(LOG_APP, "SyncNative: failed to start worker thread");
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->tsfn = nullptr;
+        }
+        napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
+        napi_release_threadsafe_function(tsfn, napi_tsfn_abort);
+        SyncNativeEnsureRollback(state);
+        return false;
     }
 
     return true;
 }
 
-static bool SyncNativeWorkerEnqueue(SyncNativeTask* task) {
-    std::shared_ptr<SyncNativeWorkerState> state = g_sync_native_state;
-    if (state == nullptr) {
+static bool SyncNativeWorkerEnqueue(const std::shared_ptr<SyncNativeWorkerState>& state,
+                                    SyncNativeTask* task) {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (state->stopping || state->tsfn == nullptr) {
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(state->mutex);
-    if (state->stopping) {
+    // 0 → 1：第一个未完成任务出现时重新引用事件循环。ref/unref 只在 ArkTS
+    // 线程调用；这里由 SyncNativeWorkerSubmit 保证。
+    if (state->pending == 0 && !state->ref_held) {
+        if (napi_ref_threadsafe_function(state->env, state->tsfn) != napi_ok) {
+            return false;
+        }
+        state->ref_held = true;
+    }
+
+    ++state->pending;
+    try {
+        state->queue.push_back(task);
+    } catch (...) {
+        --state->pending;
+        if (state->pending == 0 && state->ref_held) {
+            if (napi_unref_threadsafe_function(state->env, state->tsfn) == napi_ok) {
+                state->ref_held = false;
+            }
+        }
         return false;
     }
-    state->queue.push_back(task);
     state->cv.notify_one();
     return true;
 }
@@ -312,17 +531,22 @@ static napi_value SyncNativeWorkerSubmit(napi_env env, const char* work_name, Sy
         return nullptr;
     }
 
-    if (!SyncNativeWorkerEnsure(env)) {
+    std::shared_ptr<SyncNativeWorkerState> state = SyncNativeGetOrCreateState(env);
+    if (state == nullptr || !SyncNativeWorkerEnsure(state)) {
         SyncNativeResolveEnvelope(env, deferred, kSyncNativeCreateFailedEnvelope);
         return promise;
     }
 
-    SyncNativeTask* task = new SyncNativeTask();
+    SyncNativeTask* task = new (std::nothrow) SyncNativeTask();
+    if (task == nullptr) {
+        SyncNativeResolveEnvelope(env, deferred, kSyncNativeCreateFailedEnvelope);
+        return promise;
+    }
     task->deferred = deferred;
     task->execute = execute;
     task->work_name = work_name;
 
-    if (!SyncNativeWorkerEnqueue(task)) {
+    if (!SyncNativeWorkerEnqueue(state, task)) {
         delete task;
         SyncNativeResolveEnvelope(env, deferred, kSyncNativeQueueFailedEnvelope);
     }
