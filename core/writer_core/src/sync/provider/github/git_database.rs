@@ -343,6 +343,15 @@ pub(crate) fn commit_batch_via_git_database(
     }
     let new_tree_sha = parse_tree_sha(&trees_body)?;
 
+    // No-change rounds must not create an empty commit or PATCH the ref.  The
+    // GitHub tree API returns the same SHA when the complete tree is unchanged.
+    if new_tree_sha == base_tree_sha {
+        return Ok(BatchCommitResult {
+            revision: RemoteVersion(head_sha),
+            touched_paths: Vec::new(),
+        });
+    }
+
     // 4. POST /git/commits（parent=head, tree=新 tree）→ 新 commit SHA
     let new_commit_resp = post_commit(
         transport,

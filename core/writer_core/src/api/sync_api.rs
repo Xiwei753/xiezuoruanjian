@@ -1798,6 +1798,9 @@ impl WriterCoreApi {
         let mut all_targets: Vec<crate::sync::types::TargetSyncResult> = Vec::new();
         let mut all_committed_paths: Vec<std::path::PathBuf> = Vec::new();
         let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
+        // Issue #1012：一整轮同步的所有 target 只产生一次远端提交。target
+        // 执行期间的写入进入该轮缓冲，读取与 CAS 直接看到缓冲后的 catalog/tree。
+        let round = crate::sync::provider::round::RoundProvider::new(provider);
 
         let total_targets = u32::try_from(plan.targets.len()).unwrap_or(u32::MAX);
 
@@ -1899,7 +1902,7 @@ impl WriterCoreApi {
                 ))
             } else {
                 crate::sync::full_sync::run_single_target_transfer(
-                    provider,
+                    &round,
                     plan,
                     target_index,
                     &mut catalog_snapshot,
@@ -2118,6 +2121,15 @@ impl WriterCoreApi {
             record_sync_diagnostic("sync.target.end", "sync.target", target_end_fields);
             all_targets.push(target_with_conflicts);
             all_committed_paths.extend(target_committed_paths.into_iter().map(|path| path.path));
+        }
+
+        // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
+        // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
+        if let Err(error) = round.flush() {
+            log::warn!("[sync] full-sync round publish failed: {error}");
+            return Err(crate::api::error::WriterError::from(crate::error::Error::from(
+                error,
+            )));
         }
 
         // 每个 target 的 commit 已在同一写锁内完成 Store 协调与索引失效（问题2）。

@@ -70,8 +70,6 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
         let mut accumulated_ignored_files: Vec<String> = Vec::new();
 
         for attempt in 0..MAX_CAS_RETRIES {
-            let generation_id = uuid::Uuid::new_v4().to_string();
-
             // 1. 用当前 catalog_snapshot 找 visible generation → merge 到 staging。
             //    每次重试都重新 load_sync_state，merge 对同一个 staging 可重复执行。
             //
@@ -358,8 +356,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                             &planned.target.remote_prefix,
                             lww.lww_time_ms,
                             &lww.device_id,
-                        )
-                        .with_active_generation(&generation_id),
+                        ),
                         None => {
                             // merged_manifest 为空（全新空 project）→ 用 live_lww 兜底。
                             let lww = planned.live_lww.as_ref().cloned().unwrap_or(LiveTargetLww {
@@ -372,7 +369,6 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 lww.lww_time_ms,
                                 &lww.device_id,
                             )
-                            .with_active_generation(&generation_id)
                         }
                     }
                 }
@@ -384,8 +380,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                             &planned.target.remote_prefix,
                             lww.lww_time_ms,
                             &lww.device_id,
-                        )
-                        .with_active_generation(&generation_id),
+                        ),
                         None => {
                             let msg = "post-transfer staging manifest unreadable".to_string();
                             return (
@@ -490,59 +485,27 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                     }
 
                     // 只有 candidate 严格赢（或远端无 record）才真正 publish。
-                    let gen_remote_prefix = match super::super::generation::generation_remote_prefix(
-                        &planned.target.remote_prefix,
-                        &generation_id,
-                    ) {
-                        Ok(p) => p,
-                        Err(e) => return (sync_result_from_error(e), None, None),
-                    };
                     log::info!(
-                        "[sync] run_transfer: LiveProject {} (attempt {}) — uploading to generation prefix {}",
+                        "[sync] run_transfer: LiveProject {} (attempt {}) — publishing stable tree {}",
                         planned.target.remote_prefix,
                         attempt + 1,
-                        gen_remote_prefix
+                        planned.target.remote_prefix
                     );
 
-                    // publish generation。
-                    //    Issue #761：冲突时仍可 publish + CAS（非冲突文件需同步），
-                    //    但 batch generation builder（publish_generation_batch）对冲突
-                    //    路径使用远端 blob SHA（ReuseVersion），不读本地冲突正文。
-                    //    没有 remote_tree_files[path] 可复用的 unresolved BothChanged
-                    //    时，publish_generation_batch 直接返回 PartialConflict，不
-                    //    生成内容不完整/哈希不一致的 generation。
-                    //    CAS 成功后仍记录 PartialConflict 状态（而非 Success），确保
-                    //    冲突信息不被丢失。
-                    //    Issue #716 评论 5741695768：merge_outcome 已在前面归一化，
-                    //    这里只负责根据归一化后的 outcome 决定 publish 参数。
-                    let content_result = match &merge_outcome_opt {
-                        Some(outcome) => super::super::generation::publish_generation(
-                            provider,
-                            sync_root,
-                            &gen_remote_prefix,
-                            &generation_id,
-                            planned.project_id.as_deref().unwrap_or(""),
-                            planned.target.scope,
-                            None,
-                            &plan.sync_policy,
-                            plan.force_sync,
-                            Some(outcome),
-                            cancellation_token,
-                        ),
-                        None => super::super::generation::publish_generation(
-                            provider,
-                            sync_root,
-                            &gen_remote_prefix,
-                            &generation_id,
-                            planned.project_id.as_deref().unwrap_or(""),
-                            planned.target.scope,
-                            None,
-                            &plan.sync_policy,
-                            plan.force_sync,
-                            None,
-                            cancellation_token,
-                        ),
-                    };
+                    // Issue #1012：作品内容写回稳定前缀 `projects/P`，与 catalog
+                    // 更新在同一次整轮 commit 中发布。冲突路径继续使用远端 blob
+                    // （ReuseVersion），不读本地冲突正文。
+                    let content_result = super::super::generation::publish_tree_snapshot(
+                        provider,
+                        sync_root,
+                        &planned.target.remote_prefix,
+                        planned.target.scope,
+                        None,
+                        &plan.sync_policy,
+                        plan.force_sync,
+                        merge_outcome_opt.as_ref(),
+                        cancellation_token,
+                    );
 
                     // Issue #990：Git HTTPS 在一轮完整同步内固定远端快照。
                     // generation 发布遇到 precondition_failed 时，当前 provider

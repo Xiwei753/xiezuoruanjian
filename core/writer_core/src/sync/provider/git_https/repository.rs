@@ -372,7 +372,7 @@ fn build_index(
 /// 从本地已创建的 commit 重建快照，不访问网络。
 ///
 /// 只用于把本 provider 自己成功 push 的提交推进为下一轮基线；远端是否变化
-/// 仍由每次提交前的 fetch + HEAD 比较决定。
+/// 由普通（非强制）push 的 fast-forward 约束决定。
 pub(crate) fn snapshot_from_commit(
     repo: &Repository,
     commit_oid: Oid,
@@ -407,6 +407,19 @@ pub(crate) fn commit_and_push(
     let tree = repo
         .find_tree(tree_oid)
         .map_err(|err| map_git_error(err, "find_written_tree"))?;
+
+    // No-change rounds must not publish a commit.  Git already has the exact
+    // tree; compare the tree OID before creating a commit or pushing.
+    if let Some(head) = snapshot.head {
+        let base_tree = repo
+            .find_commit(head)
+            .and_then(|commit| commit.tree())
+            .map_err(|err| map_git_error(err, "read_base_tree_for_compare"))?;
+        if base_tree.id() == tree_oid {
+            return Ok((head, snapshot.clone()));
+        }
+    }
+
     let signature = Signature::now(AUTHOR_NAME, AUTHOR_EMAIL)
         .map_err(|err| map_git_error(err, "create_signature"))?;
 

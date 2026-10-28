@@ -1045,25 +1045,19 @@ fn repro_issue_928_remote_upsert_lww_does_not_block_incremental_publish() {
         result.status
     );
 
-    // generation 指针已推进，且作品级 LWW 未被降级。
+    // 稳定 project 树成为远端快照，且作品级 LWW 未被降级。
     let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
     let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/p1")
         .expect("catalog record 应存在");
     assert_eq!(rec.op, crate::sync::types::TargetOp::Upsert);
     assert_eq!(rec.updated_at_ms, 2000);
     assert_eq!(rec.device_id, "dev-B");
-    let new_gen = rec
-        .active_generation
-        .clone()
-        .expect("active_generation 应存在");
-    assert_ne!(new_gen, "g1", "generation 指针应推进到新版本");
+    assert_eq!(rec.active_generation, None);
 
-    // 新 generation 包含上传的本地增量，并复用未变化远端文件的 blob。
+    // 稳定树包含上传的本地增量，并复用未变化远端文件的 blob。
     assert_eq!(
         provider
-            .read(&format!(
-                "projects/p1/__generations__/{new_gen}/project.json"
-            ))
+            .read("projects/p1/project.json")
             .unwrap()
             .unwrap()
             .content,
@@ -1071,9 +1065,7 @@ fn repro_issue_928_remote_upsert_lww_does_not_block_incremental_publish() {
     );
     assert_eq!(
         provider
-            .read(&format!(
-                "projects/p1/__generations__/{new_gen}/volumes/v1/chapter.md"
-            ))
+            .read("projects/p1/volumes/v1/chapter.md")
             .unwrap()
             .unwrap()
             .content,

@@ -14,8 +14,6 @@ mod repository;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use git2::Direction;
-
 use crate::sync::provider::capabilities::SyncCapabilities;
 use crate::sync::provider::error::ProviderError;
 use crate::sync::provider::model::{
@@ -100,10 +98,11 @@ impl GitHttpsProvider {
         self.commit_from(planned, mutations, message)
     }
 
-    /// 以 `planned` 为唯一基线提交。提交前重新读取远端 HEAD，但只有 HEAD
-    /// 未变化时才应用旧计划；否则 Git 会把它当成合法快进，绕过上一轮 LWW
-    /// 对远端新提交的决策。push 成功后只把自己的提交推进为本地快照，绝不
-    /// 把这次 fetch 到的远端 HEAD 当成新的规划基线。
+    /// 以 `planned` 为唯一基线提交。
+    ///
+    /// 本轮已经 fetch 过一次远端分支；提交时不再 fetch。普通（非强制）push 的
+    /// fast-forward 约束负责拒绝远端新提交，返回 `PreconditionFailed` 后由外层
+    /// 新建 provider、重新读取 catalog 并重新做完整 LWW，绝不重放旧结果。
     fn commit_from(
         &self,
         planned: repository::Snapshot,
@@ -111,16 +110,6 @@ impl GitHttpsProvider {
         message: &str,
     ) -> Result<BatchCommitResult, ProviderError> {
         let repo = repository::open_or_init(&self.cache_dir)?;
-        let latest = repository::fetch_snapshot(&repo, &self.config, &self.network_accounting)?;
-        if latest.head != planned.head {
-            // 保持本轮的旧快照：调用方必须重新建立 provider、重新读取 catalog
-            // 并经过 LWW 规划，不能用同一批 mutations 直接重试。
-            return Err(ProviderError::PreconditionFailed {
-                path: format!("refs/heads/{}", self.config.branch),
-                reason: "remote head changed since the sync plan was built; re-read and replan"
-                    .to_string(),
-            });
-        }
         let (commit_oid, committed_snapshot) = repository::commit_and_push(
             &repo,
             &self.config,
@@ -160,28 +149,10 @@ impl SyncProvider for GitHttpsProvider {
     }
 
     fn remote_revision(&self) -> Result<Option<String>, ProviderError> {
-        let repo = repository::open_or_init(&self.cache_dir)?;
-        let mut remote = repo
-            .remote_anonymous(&self.config.remote_url)
-            .map_err(|error| repository::map_git_error(error, "open_remote"))?;
-        let callbacks =
-            credentials::callbacks(&self.config.username, self.config.secret.as_deref());
-        self.network_accounting.record_request(0);
-        let connection = remote
-            .connect_auth(
-                Direction::Fetch,
-                Some(callbacks),
-                Some(credentials::proxy_options()),
-            )
-            .map_err(|error| repository::map_git_error(error, "connect_auth"))?;
-        let heads = connection
-            .list()
-            .map_err(|error| repository::map_git_error(error, "list"))?;
-        let branch_ref = format!("refs/heads/{}", self.config.branch);
-        Ok(heads
-            .iter()
-            .find(|head| head.name() == branch_ref)
-            .map(|head| head.oid().to_string()))
+        // Reuse the round snapshot.  The first call fetches the branch once;
+        // every later call (planning recheck, checkpoint, diagnostics) reads
+        // the same fixed snapshot instead of opening another connection.
+        Ok(self.snapshot()?.head.map(|head| head.to_string()))
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {

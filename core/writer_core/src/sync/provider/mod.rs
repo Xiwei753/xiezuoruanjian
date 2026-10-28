@@ -15,6 +15,7 @@ pub mod error;
 pub mod git_https;
 pub mod memory;
 pub mod model;
+pub mod round;
 pub mod router;
 
 #[cfg(feature = "github-api")]

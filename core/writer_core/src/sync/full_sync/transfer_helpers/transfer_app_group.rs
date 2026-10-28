@@ -154,22 +154,10 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
             }
         }
 
-        let generation_id = uuid::Uuid::new_v4().to_string();
-        let generation_prefix = match super::super::generation::generation_remote_prefix(
-            &target.remote_prefix,
-            &generation_id,
-        ) {
-            Ok(prefix) => prefix,
-            Err(error) => {
-                return mark_app_group_failure(sync_result_from_error(error), "generation_upload")
-            }
-        };
-        let content_result = super::super::generation::publish_generation(
+        let content_result = super::super::generation::publish_tree_snapshot(
             provider,
             sync_root,
-            &generation_prefix,
-            &generation_id,
-            &group.id(),
+            &target.remote_prefix,
             target.scope,
             Some(group),
             sync_policy,
@@ -183,7 +171,7 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
         // 时保留分类直接返回，由完整同步入口新建 provider、重新读取 catalog/latest
         // source 并重新做 LWW；不要在本轮循环里重放旧快照。
         if content_result.error_category.as_deref() == Some("precondition_failed") {
-            retry_failure_phase = "generation_upload";
+            retry_failure_phase = "tree_publish";
             log::info!(
                 "[sync] transfer_app_data_group: generation precondition failed group={} attempt={} — returning to full-sync replan",
                 group.id(),
@@ -196,12 +184,10 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
             SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
         );
         if !content_ok {
-            return mark_app_group_failure(content_result, "generation_upload");
+            return mark_app_group_failure(content_result, "tree_publish");
         }
 
-        catalog_snapshot
-            .catalog
-            .upsert(group, Some(generation_id.clone()));
+        catalog_snapshot.catalog.upsert_tree(group);
         match crate::sync::app_data_group_catalog::write_remote_app_data_group_catalog_once(
             provider,
             &catalog_snapshot,

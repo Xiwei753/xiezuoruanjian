@@ -75,27 +75,22 @@ fn test_live_project_uploads_to_generation_prefix() {
         crate::sync::types::TargetOp::Upsert,
         "catalog should have Upsert for projects/P"
     );
-    let gen_id = rec
-        .active_generation
-        .as_ref()
-        .expect("Upsert should carry active_generation");
-
-    let gen_prefix =
-        super::super::generation::generation_remote_prefix("projects/P", gen_id).unwrap();
-    let gen_entries = provider.list(&gen_prefix).unwrap();
-    assert!(
-        gen_entries
-            .iter()
-            .any(|e| e.path == "volumes/v1/chapter.md"),
-        "generation prefix {} should have volumes/v1/chapter.md, entries: {:?}",
-        gen_prefix,
-        gen_entries
+    assert_eq!(
+        rec.active_generation, None,
+        "Issue #1012: the Git tree at the stable project prefix is the snapshot"
     );
 
-    let legacy_read = provider.read("projects/P/volumes/v1/chapter.md").unwrap();
+    let entries = provider.list("projects/P").unwrap();
     assert!(
-        legacy_read.is_none(),
-        "legacy prefix should not have volumes/v1/chapter.md (uploaded to generation prefix)"
+        entries.iter().any(|e| e.path == "volumes/v1/chapter.md"),
+        "stable project prefix should have volumes/v1/chapter.md, entries: {entries:?}"
+    );
+    assert!(
+        provider
+            .read("projects/P/volumes/v1/chapter.md")
+            .unwrap()
+            .is_some(),
+        "Issue #1012: content must live at the stable project prefix"
     );
 }
 

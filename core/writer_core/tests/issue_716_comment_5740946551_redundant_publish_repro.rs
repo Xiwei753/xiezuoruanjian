@@ -250,44 +250,20 @@ fn repro_issue_716_comment_5740946551_redundant_publish() {
         "应只有一个 target（projects/p1）"
     );
 
-    // ── 5. 断言：恰好 publish 一次（#928 有文件级变化必须 publish；不重复 publish）──
+    // ── 5. 断言：本地增量进入稳定 project tree，catalog 指向 Git tree 快照 ──
     let meta_writes = provider.generation_meta_writes.load(Ordering::SeqCst);
     let generation_writes = provider.generation_writes.load(Ordering::SeqCst);
-    // batch 路径每次 publish 写 1 次 generation.meta.json（complete=true）。
-    let publish_count = meta_writes;
-
     assert_eq!(
-        publish_count, 1,
-        "Issue #928 修复失败：remote Upsert 同时间戳严格赢（device_remote={:?} > device_local={:?}, \
-         T={}）但 merge 有文件级变化（chapter.md 不在远端 visible generation）时，应恰好 publish 一次新 \
-         generation 并 CAS 推进 active_generation，不得丢弃本地增量、也不得重复 publish。实际 \
-         publish_count={}（meta_writes={}, generation_writes={}）。",
-        DEVICE_REMOTE,
-        DEVICE_LOCAL,
-        T,
-        publish_count,
-        meta_writes,
-        generation_writes,
+        meta_writes, 0,
+        "Issue #1012: stable tree publication must not write generation.meta.json"
     );
 
-    // 附加证据：generation_writes >= 3（新 generation 的 chapter.md + manifest + meta）。
-    assert!(
-        generation_writes >= 3,
-        "Issue #928 修复失败：新 generation 应写入 chapter.md、manifest、meta，\
-         实际 generation_writes={}",
-        generation_writes
-    );
-
-    // catalog：active_generation 推进到新 generation，作品级 LWW 保留远端赢家。
+    // catalog：active_generation 为 None，作品级 LWW 保留远端赢家。
     let snapshot = load_remote_catalog(&provider).unwrap();
     let record = find_record(&snapshot.catalog, "projects/p1").unwrap();
-    let new_generation = record
-        .active_generation
-        .as_deref()
-        .expect("active_generation 应已推进");
-    assert_ne!(
-        new_generation, GEN_EXISTING,
-        "active_generation 应从 gen_existing 推进到新 generation"
+    assert_eq!(
+        record.active_generation, None,
+        "Issue #1012: the Git tree at projects/p1 is the remote snapshot"
     );
     assert_eq!(
         record.updated_at_ms, T,
@@ -298,16 +274,14 @@ fn repro_issue_716_comment_5740946551_redundant_publish() {
         "作品级 LWW 不应被 candidate 降级：device_id 应保留远端赢家"
     );
 
-    // 新 generation 必须包含本地 chapter.md 增量内容。
+    // 稳定 project tree 必须包含本地 chapter.md 增量内容。
     let published = provider
-        .read(&format!(
-            "projects/p1/__generations__/{new_generation}/volumes/v1/chapter.md"
-        ))
+        .read("projects/p1/volumes/v1/chapter.md")
         .unwrap()
-        .expect("新 generation 应包含 chapter.md");
+        .expect("stable tree 应包含 chapter.md");
     assert_eq!(
         published.content, chapter_content,
-        "新 generation 中的 chapter.md 内容应与本地 staging 一致"
+        "稳定 project tree 中的 chapter.md 内容应与本地 staging 一致"
     );
 
     // 返回的 SyncResult：本地增量已应用（非 NoChanges——chapter.md 已上传）。
@@ -329,8 +303,7 @@ fn repro_issue_716_comment_5740946551_redundant_publish() {
     );
 
     eprintln!(
-        "[issue_716_repro] publish_count={}, meta_writes={}, generation_writes={}, \
-         active_generation={}, status={:?}",
-        publish_count, meta_writes, generation_writes, new_generation, result.status
+        "[issue_716_repro] meta_writes={}, generation_writes={}, active_generation={:?}, status={:?}",
+        meta_writes, generation_writes, record.active_generation, result.status
     );
 }

@@ -463,7 +463,7 @@ fn app_group_failure_phase(
         "dependency_check",
         "catalog_read",
         "merge",
-        "generation_upload",
+        "tree_publish",
         "catalog_publish",
     ]
     .iter()

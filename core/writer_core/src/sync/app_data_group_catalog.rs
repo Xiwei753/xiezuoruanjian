@@ -3,8 +3,9 @@
 //! The catalog is deliberately separate from `targets.sync.json`: that file tracks
 //! project lifecycle, while this one selects the active App-data layout. When it is
 //! absent, the old flat `app/` manifest remains the sole source of truth. Once
-//! present, its group records select either the legacy flat prefix (`None`) or an
-//! immutable grouped generation (`Some(generation)`) for each group.
+//! present, its group records select the legacy flat prefix (`None`), an
+//! immutable grouped generation (`Some(generation)`), or the stable grouped
+//! tree (`tree_snapshot = true`).
 
 use serde::{Deserialize, Serialize};
 
@@ -25,9 +26,18 @@ pub const APP_DATA_GROUP_CATALOG_SCHEMA_VERSION: u32 = 2;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppDataGroupRecord {
     pub group_id: String,
-    /// `None` means this group still reads from the legacy flat `app/` layout.
+    /// Legacy generation pointer. `None` with `tree_snapshot = false` means the
+    /// group still reads from the legacy flat `app/` layout.
     #[serde(default)]
     pub active_generation: Option<String>,
+    /// New layout: the group is published as a stable, complete tree under
+    /// `app/__groups__/<storage_key>/`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tree_snapshot: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// The active App layout. Each group has one deterministic source at a time.
@@ -72,6 +82,12 @@ impl AppDataGroupCatalog {
                     record.group_id
                 )));
             }
+            if record.tree_snapshot && record.active_generation.is_some() {
+                return Err(crate::Error::Other(format!(
+                    "app data group catalog record cannot select both a generation and a stable tree: {}",
+                    record.group_id
+                )));
+            }
             if let Some(generation) = &record.active_generation {
                 crate::sync::target_lifecycle::validate_generation_id(generation)?;
             }
@@ -94,10 +110,32 @@ impl AppDataGroupCatalog {
             .find(|record| record.group_id == group_id)
         {
             record.active_generation = active_generation;
+            record.tree_snapshot = false;
         } else {
             self.groups.push(AppDataGroupRecord {
                 group_id,
                 active_generation,
+                tree_snapshot: false,
+            });
+            self.groups.sort_by(|a, b| a.group_id.cmp(&b.group_id));
+        }
+    }
+
+    /// Select the stable grouped tree as the group's remote snapshot.
+    pub fn upsert_tree(&mut self, group: &AppDataGroup) {
+        let group_id = group.id();
+        if let Some(record) = self
+            .groups
+            .iter_mut()
+            .find(|record| record.group_id == group_id)
+        {
+            record.active_generation = None;
+            record.tree_snapshot = true;
+        } else {
+            self.groups.push(AppDataGroupRecord {
+                group_id,
+                active_generation: None,
+                tree_snapshot: true,
             });
             self.groups.sort_by(|a, b| a.group_id.cmp(&b.group_id));
         }
@@ -197,14 +235,7 @@ pub fn discover_remote_app_data_groups(
             .collect::<crate::Result<_>>()?;
         let index_group = AppDataGroup::StarmapIndex;
         if let Some(record) = catalog.record(&index_group) {
-            let source_prefix = match &record.active_generation {
-                Some(generation) => format!(
-                    "app/__groups__/{}/__generations__/{}",
-                    index_group.storage_key(),
-                    generation
-                ),
-                None => "app".to_string(),
-            };
+            let source_prefix = group_source_prefix(record, &index_group);
             let index_path = format!("{source_prefix}/starmaps/index.json");
             if let Some(object) = provider.read(&index_path).map_err(crate::Error::from)? {
                 groups.insert(index_group.id(), index_group);
@@ -567,13 +598,20 @@ pub fn resolve_group_source_prefix(
         // A group not yet listed in a v2 catalog is not visible remotely.
         return Ok(String::new());
     };
+    Ok(group_source_prefix(record, group))
+}
+
+fn group_source_prefix(record: &AppDataGroupRecord, group: &AppDataGroup) -> String {
+    if record.tree_snapshot {
+        return format!("app/__groups__/{}", group.storage_key());
+    }
     match &record.active_generation {
-        Some(generation) => Ok(format!(
+        Some(generation) => format!(
             "app/__groups__/{}/__generations__/{}",
             group.storage_key(),
             generation
-        )),
-        None => Ok("app".to_string()),
+        ),
+        None => "app".to_string(),
     }
 }
 
@@ -676,6 +714,7 @@ mod tests {
             groups: vec![AppDataGroupRecord {
                 group_id: group.id(),
                 active_generation: Some("a".repeat(40)),
+                tree_snapshot: false,
             }],
         };
         let prefix = resolve_group_source_prefix(Some(&catalog), &group).unwrap();
