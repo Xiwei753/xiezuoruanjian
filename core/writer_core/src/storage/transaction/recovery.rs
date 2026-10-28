@@ -3,51 +3,36 @@ use std::path::Path;
 
 use super::model::*;
 
-/// 扫描事务目录，恢复未完成的事务。
+/// 扫描事务目录，恢复未完成的事务，并保留所有无法判定的事务错误。
 ///
-/// 判定逻辑：
-/// - manifest 存在且 phase 为 `FilesCommitted`/`Finished`/`RolledBack` → 清理目录
-/// - manifest 存在且 phase 为 `Prepared` → 尝试将暂存文件 rename 到目标
-/// - 旧格式：`committed` 标记存在 → 清理目录（向后兼容）
-/// - 两者都不存在 → 无效目录，清理
-///
-/// `FilesCommittedPendingGit` 变体已移除。
-/// 旧 manifest 中 `"files_committed_pending_git"` 在反序列化时映射到
-/// `FilesCommitted`，因此会走 `FilesCommitted` 分支（清理目录）。
-/// 这与之前"直接 rollback"不同，但新代码不再产生 `FilesCommittedPendingGit`，
-/// 旧遗留事务的文件已 rename 完成（phase=FilesCommittedPendingGit 表示
-/// 文件已 commit 但 Git finalize 未完成），清理目录是安全的行为——
-/// 文件已在 live，无需 rollback。
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
-#[cfg(test)]
-#[allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::excessive_nesting,
-    clippy::too_many_arguments,
-    clippy::type_complexity,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_lossless,
-    deprecated
-)]
-pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecovery> {
+/// 与 [`recover_pending_transactions`] 相比，本函数不会吞掉 manifest 读/解析
+/// 失败：证明意图恢复必须知道“事务状态未知”，不能在未知时删除意图。
+pub(crate) fn scan_pending_transactions(target_root: &Path) -> TransactionRecoveryScan {
     let tx_base = target_root.join(TRANSACTIONS_DIR);
+    let mut scan = TransactionRecoveryScan::default();
     if !tx_base.exists() {
-        return Vec::new();
+        return scan;
     }
 
-    let mut results = Vec::new();
     let entries = match fs::read_dir(&tx_base) {
         Ok(e) => e,
-        Err(_) => return Vec::new(),
+        Err(error) => {
+            scan.errors.push(format!(
+                "read transaction dir {} failed: {error}",
+                tx_base.display()
+            ));
+            return scan;
+        }
     };
 
     for entry in entries {
         let entry = match entry {
             Ok(e) => e,
-            Err(_) => continue,
+            Err(error) => {
+                scan.errors
+                    .push(format!("read transaction entry failed: {error}"));
+                continue;
+            }
         };
         let tx_dir = entry.path();
         if !tx_dir.is_dir() {
@@ -61,31 +46,52 @@ pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecove
                 Ok(s) => match serde_json::from_str(&s) {
                     Ok(m) => m,
                     Err(e) => {
-                        log::warn!(
+                        let message = format!(
                             "[transaction] recover: manifest parse failed for tx_dir={}: {} \
                              — preserving tx_dir, will retry next startup",
                             tx_dir.display(),
                             e
                         );
+                        log::warn!("{message}");
+                        scan.errors.push(message);
                         continue;
                     }
                 },
                 Err(e) => {
-                    log::warn!(
+                    let message = format!(
                         "[transaction] recover: manifest read failed for tx_dir={}: {} \
                          — preserving tx_dir, will retry next startup",
                         tx_dir.display(),
                         e
                     );
+                    log::warn!("{message}");
+                    scan.errors.push(message);
                     continue;
                 }
             };
 
             match manifest.phase {
-                TransactionPhase::FilesCommitted
-                | TransactionPhase::Finished
-                | TransactionPhase::RolledBack => {
+                TransactionPhase::RolledBack => {
                     let _ = fs::remove_dir_all(&tx_dir);
+                    continue;
+                }
+                TransactionPhase::FilesCommitted | TransactionPhase::Finished
+                    if manifest.proof_intent_ids.is_empty() =>
+                {
+                    let _ = fs::remove_dir_all(&tx_dir);
+                    continue;
+                }
+                TransactionPhase::FilesCommitted | TransactionPhase::Finished => {
+                    // 正文已提交，但绑定的证明意图尚未写入证明事件链；
+                    // 保留 manifest 供 proof_intent recovery 依据 phase 补记。
+                    scan.transactions.push(TransactionRecovery {
+                        transaction_id: manifest.transaction_id,
+                        recovered_files: Vec::new(),
+                        missing_files: Vec::new(),
+                        phase: manifest.phase,
+                        proof_intent_ids: manifest.proof_intent_ids,
+                        tx_dir,
+                    });
                     continue;
                 }
                 TransactionPhase::Prepared => {
@@ -107,22 +113,26 @@ pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecove
             Ok(s) => match serde_json::from_str(&s) {
                 Ok(m) => m,
                 Err(e) => {
-                    log::warn!(
+                    let message = format!(
                         "[transaction] recover: manifest re-read parse failed for tx_dir={}: {} \
                          — preserving tx_dir, will retry next startup",
                         tx_dir.display(),
                         e
                     );
+                    log::warn!("{message}");
+                    scan.errors.push(message);
                     continue;
                 }
             },
             Err(e) => {
-                log::warn!(
+                let message = format!(
                     "[transaction] recover: manifest re-read failed for tx_dir={}: {} \
                      — preserving tx_dir, will retry next startup",
                     tx_dir.display(),
                     e
                 );
+                log::warn!("{message}");
+                scan.errors.push(message);
                 continue;
             }
         };
@@ -205,14 +215,59 @@ pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecove
             );
         }
 
-        let _ = fs::remove_dir_all(&tx_dir);
+        let phase = if manifest.proof_intent_ids.is_empty() {
+            let _ = fs::remove_dir_all(&tx_dir);
+            TransactionPhase::Prepared
+        } else if missing_files.is_empty() {
+            let mut restored = manifest.clone();
+            restored.phase = TransactionPhase::FilesCommitted;
+            match serde_json::to_string_pretty(&restored)
+                .map_err(crate::Error::from)
+                .and_then(|json| crate::storage::atomic_write_string(&manifest_path, &json))
+            {
+                Ok(()) => {
+                    scan.transactions.push(TransactionRecovery {
+                        transaction_id: restored.transaction_id,
+                        recovered_files,
+                        missing_files,
+                        phase: TransactionPhase::FilesCommitted,
+                        proof_intent_ids: restored.proof_intent_ids,
+                        tx_dir,
+                    });
+                    continue;
+                }
+                Err(error) => {
+                    let message = format!(
+                        "[transaction] recover: persist FilesCommitted failed for tx={} at {}: {error}",
+                        manifest.transaction_id,
+                        tx_dir.display()
+                    );
+                    log::warn!("{message}");
+                    scan.errors.push(message);
+                    TransactionPhase::Prepared
+                }
+            }
+        } else {
+            // 重放材料不完整，不能宣称事务已提交；保留 Prepared 目录，让证明
+            // 恢复保留意图并等待下一次启动重试。
+            TransactionPhase::Prepared
+        };
 
-        results.push(TransactionRecovery {
+        scan.transactions.push(TransactionRecovery {
             transaction_id: manifest.transaction_id,
             recovered_files,
             missing_files,
+            phase,
+            proof_intent_ids: manifest.proof_intent_ids,
+            tx_dir,
         });
     }
 
-    results
+    scan
+}
+
+/// 兼容旧调用方：只返回已识别的事务，不暴露扫描错误。
+#[cfg(test)]
+pub fn recover_pending_transactions(target_root: &Path) -> Vec<TransactionRecovery> {
+    scan_pending_transactions(target_root).transactions
 }

@@ -2280,11 +2280,50 @@ impl WriterCoreApi {
             // Issue #1008：先把上次崩溃留下的“正文已提交、证明未落盘”意图补记，
             // 再进入本次 Commit，避免旧链头缺失导致新的同步事件无法接续。
             if let Err(error) = core.recover_pending_sync_proof_intents() {
-                log::warn!("recover pending sync proof intents before commit failed: {error}");
+                let mut target_with_error = target_sync_result.clone();
+                target_with_error.result.status = crate::sync::SyncStatus::RecoverableError(
+                    "sync_proof_recovery_failed".to_string(),
+                );
+                target_with_error.result.error = Some(format!(
+                    "recover pending sync proof intents before commit failed: {error}"
+                ));
+                return (target_with_error, Vec::new());
             }
             let intent_root = core.sync_proof_intent_root();
-            let intent_sink =
-                crate::sync::proof_intent::ProofIntentSink::new(&intent_root, &sync_sources);
+            let intent_sink = crate::sync::proof_intent::ProofIntentSink::new(
+                &intent_root,
+                core.projects_root(),
+                &sync_sources,
+            );
+            let mut target_with_conflicts = target_sync_result.clone();
+            // 积压证明未完成时不能继续改同一项目正文：后续 Commit 会让新的
+            // before/after 越过旧事件，证明链将无法按发生顺序接续。
+            if let Some(project_id) = target_sync_result.project_id.as_deref() {
+                match intent_sink.has_unresolved_for_project(Some(project_id)) {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        target_with_conflicts.result.status =
+                            crate::sync::SyncStatus::RecoverableError(
+                                "sync_proof_recovery_pending".to_string(),
+                            );
+                        target_with_conflicts.result.error = Some(
+                            "上次同步正文已落盘但证明事件尚未恢复；先完成证明恢复再同步该作品"
+                                .to_string(),
+                        );
+                        return (target_with_conflicts, Vec::new());
+                    }
+                    Err(error) => {
+                        target_with_conflicts.result.status =
+                            crate::sync::SyncStatus::RecoverableError(
+                                "sync_proof_recovery_pending".to_string(),
+                            );
+                        target_with_conflicts.result.error = Some(format!(
+                            "检查未恢复的同步证明意图失败，暂不提交正文: {error}"
+                        ));
+                        return (target_with_conflicts, Vec::new());
+                    }
+                }
+            }
             let (commit_result, conflicts, committed_paths) =
                 crate::sync::commit_helpers::commit_single_target_staging(
                     run,
@@ -2292,7 +2331,6 @@ impl WriterCoreApi {
                     Some(&intent_sink),
                 );
             core.refresh_sync_proof_intents_pending();
-            let mut target_with_conflicts = target_sync_result.clone();
 
             Self::apply_staging_conflicts_to_target(
                 &mut target_with_conflicts,
@@ -2318,6 +2356,7 @@ impl WriterCoreApi {
                 crate::sync::commit_helpers::TargetCommitResult::Ok
             ) {
                 let mut proof_errors: Vec<String> = Vec::new();
+                let mut proof_completed_ids = std::collections::HashSet::new();
                 for (action_index, committed) in committed_paths.iter().enumerate() {
                     let path = &committed.path;
                     let Some((project_id, volume_id, chapter_id)) = chapter_path_parts(path) else {
@@ -2367,41 +2406,71 @@ impl WriterCoreApi {
                             }
                         }
                     };
-                    let chapter_key = format!("{project_id}/{volume_id}/{chapter_id}");
-                    let source_device = sync_sources
-                        .get(&chapter_key)
-                        .map(String::as_str)
-                        .unwrap_or("");
+                    // prepare 对无内容变化的动作不生成意图；证明循环也必须跳过，
+                    // 否则会把正常的 no-op 当成“意图缺失”。
+                    if before_text.as_deref().unwrap_or("") == after_text.as_deref().unwrap_or("") {
+                        continue;
+                    }
                     // run_id + 落盘路径 + 动作序号唯一标识一次真实同步提交；同一
                     // 章节 A→B→A→B 不会被内容 hash 误去重。事件 ID 固定后重发复用。
                     let sync_event_id =
                         format!("sync:{}:{}:{}", run.run_id(), path.display(), action_index);
                     let intent = match intent_sink.load(&sync_event_id) {
-                        Ok(intent) => intent,
+                        Ok(Some(intent)) => intent,
+                        Ok(None) => {
+                            proof_errors.push(format!(
+                                "同步证明意图缺失，已保留待恢复: {} {}",
+                                sync_event_id,
+                                path.display()
+                            ));
+                            continue;
+                        }
                         Err(error) => {
-                            log::warn!("load sync proof intent {} failed: {error}", sync_event_id);
-                            None
+                            proof_errors.push(format!(
+                                "读取同步证明意图失败，已保留待恢复 {}: {error}",
+                                sync_event_id
+                            ));
+                            continue;
                         }
                     };
-                    let occurred_at_ms = intent.as_ref().map_or_else(
-                        || chrono::Utc::now().timestamp_millis(),
-                        |intent| intent.occurred_at_ms,
-                    );
-                    let source_device = intent
-                        .as_ref()
-                        .map_or(source_device, |intent| intent.source_device_id.as_str());
+                    let expected_action = if committed.deleted {
+                        crate::sync::proof_intent::SyncProofAction::Delete
+                    } else {
+                        crate::sync::proof_intent::SyncProofAction::Apply
+                    };
+                    if intent.event_id != sync_event_id
+                        || intent.action_index != action_index
+                        || intent.workspace_path != path.display().to_string()
+                        || intent.action != expected_action
+                        || intent.is_delete() != committed.deleted
+                        || intent.project_id != project_id
+                        || intent.volume_id != volume_id
+                        || intent.chapter_id != chapter_id
+                        || intent.occurred_at_ms <= 0
+                        || intent.before_text.as_deref() != before_text.as_deref()
+                        || intent.after_text.as_deref() != after_text.as_deref()
+                    {
+                        proof_errors.push(format!(
+                            "同步证明意图与本次提交不匹配，已保留待恢复: {}",
+                            sync_event_id
+                        ));
+                        continue;
+                    }
+                    let occurred_at_ms = intent.occurred_at_ms;
+                    let source_device = intent.source_device_id.as_str();
                     match core.record_sync_content_change_at(
                         &project_id,
                         &volume_id,
                         &chapter_id,
-                        before_text.as_deref(),
-                        after_text.as_deref(),
+                        intent.before_text.as_deref(),
+                        intent.after_text.as_deref(),
                         &sync_event_id,
                         source_device,
                         "",
                         occurred_at_ms,
                     ) {
                         Ok(_) => {
+                            proof_completed_ids.insert(sync_event_id.clone());
                             if let Err(error) = intent_sink.remove(&sync_event_id) {
                                 log::warn!(
                                     "remove completed sync proof intent {} failed: {error}",
@@ -2412,6 +2481,10 @@ impl WriterCoreApi {
                         Err(e) => proof_errors.push(format!("{}: {e}", path.display())),
                     }
                 }
+                // 证明成功即删除意图；所有链接意图都消失后，才清理仅为
+                // 恢复而保留的正文事务目录。
+                intent_sink
+                    .cleanup_completed_transactions(run.target_live_root(), &proof_completed_ids);
                 core.refresh_sync_proof_intents_pending();
                 if !proof_errors.is_empty() {
                     target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(

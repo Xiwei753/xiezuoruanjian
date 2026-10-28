@@ -4,13 +4,11 @@
 
 mod atomic_write;
 mod model;
-#[cfg(test)]
 mod recovery;
 mod save;
 
 pub use atomic_write::*;
 pub use model::*;
-#[cfg(test)]
 pub(crate) use recovery::*;
 pub use save::*;
 

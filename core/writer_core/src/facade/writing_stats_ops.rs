@@ -17,8 +17,12 @@ impl super::WriterCore {
     }
 
     pub(crate) fn refresh_sync_proof_intents_pending(&self) {
+        let root = self.sync_proof_intent_root();
+        if let Err(error) = crate::sync::proof_intent::refresh_pending(&root) {
+            log::warn!("[proof_intent] 刷新待恢复标志失败: {error}");
+        }
         self.proof_intents_pending.store(
-            crate::sync::proof_intent::has_pending(&self.sync_proof_intent_root()),
+            crate::sync::proof_intent::has_pending(&root),
             std::sync::atomic::Ordering::Release,
         );
     }
@@ -26,9 +30,39 @@ impl super::WriterCore {
     /// 扫描并补记所有未完成的同步证明意图。返回本次完成（补记或确认已存在）
     /// 的意图数量。单个意图失败只记录错误，不阻断后续意图。
     pub(crate) fn recover_pending_sync_proof_intents(&self) -> Result<usize> {
+        self.proof_intents_last_recovery_ms.store(
+            chrono::Utc::now().timestamp_millis(),
+            std::sync::atomic::Ordering::Release,
+        );
         let recovered = crate::sync::proof_intent::recover_pending(self)?;
         self.refresh_sync_proof_intents_pending();
         Ok(recovered)
+    }
+
+    /// 编辑热路径的节流恢复：只读原子状态，最多每 60 秒扫描一次意图目录。
+    ///
+    /// 损坏/暂不可恢复的意图会让 pending 保持 true；没有节流时每次按键都会
+    /// 重新解析整个目录，输入会随崩溃遗留文件数量变慢。
+    pub(crate) fn try_recover_pending_sync_proof_intents(&self) {
+        /// 编辑热路径恢复间隔。
+        const RECOVERY_INTERVAL_MS: i64 = 60_000;
+        if !self.sync_proof_intents_pending() {
+            return;
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let last = self
+            .proof_intents_last_recovery_ms
+            .load(std::sync::atomic::Ordering::Acquire);
+        if now.saturating_sub(last) < RECOVERY_INTERVAL_MS {
+            return;
+        }
+        // 先占位，避免同一进程内多个编辑线程同时扫描目录。
+        self.proof_intents_last_recovery_ms
+            .store(now, std::sync::atomic::Ordering::Release);
+        if let Err(error) = crate::sync::proof_intent::recover_pending(self) {
+            eprintln!("[writing_stats] 恢复同步证明意图失败: {error}");
+        }
+        self.refresh_sync_proof_intents_pending();
     }
 
     /// 按章节回放证明事件，返回目标时刻的正文/选区与校验结果。
@@ -78,11 +112,7 @@ impl super::WriterCore {
         use crate::editor::EditorTransactionCause;
         use crate::writing_stats::proof::{ProofEditPayload, PROOF_FORMAT_VERSION};
 
-        if self.sync_proof_intents_pending() {
-            if let Err(error) = self.recover_pending_sync_proof_intents() {
-                eprintln!("[writing_stats] 恢复同步证明意图失败: {error}");
-            }
-        }
+        self.try_recover_pending_sync_proof_intents();
 
         if input.changes.is_empty() {
             return self.record_editor_change_stats(
@@ -444,11 +474,7 @@ impl super::WriterCore {
     ) -> Result<()> {
         use crate::editor::EditorTransactionCause;
 
-        if self.sync_proof_intents_pending() {
-            if let Err(error) = self.recover_pending_sync_proof_intents() {
-                eprintln!("[writing_stats] 恢复同步证明意图失败: {error}");
-            }
-        }
+        self.try_recover_pending_sync_proof_intents();
 
         // 设备身份由 Core 读/建，不让平台端传；平台初始化注入的稳定 ID 优先。
         let platform = writer_platform_api::PlatformKind::from_str_name(platform_str)

@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const TRANSACTIONS_DIR: &str = "app-meta/transactions";
 pub(crate) const MANIFEST_FILENAME: &str = "manifest.json";
-#[cfg(test)]
 pub(crate) const COMMIT_MARKER: &str = "committed";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +17,10 @@ pub struct TransactionManifest {
     /// 旧 manifest 中无此字段时反序列化为空 Vec（向后兼容）。
     #[serde(default)]
     pub backup_entries: Vec<BackupEntry>,
+    /// 与正文事务绑定的证明意图事件 ID。
+    /// 非空时事务目录必须保留到证明事件写入完成，恢复流程据此判断正文是否已提交。
+    #[serde(default)]
+    pub proof_intent_ids: Vec<String>,
 }
 
 fn default_phase() -> TransactionPhase {
@@ -104,11 +107,27 @@ pub enum BackupEntry {
     RemoveCreated { target_relative: String },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransactionRecovery {
     pub transaction_id: String,
     pub recovered_files: Vec<String>,
     pub missing_files: Vec<String>,
+    /// 恢复后的持久阶段。`FilesCommitted`/`Finished` 表示正文确实已提交；
+    /// `Prepared` 表示重放材料不完整，事务是否落地仍未确认。
+    pub phase: TransactionPhase,
+    /// 与该事务绑定的证明意图事件 ID。
+    pub proof_intent_ids: Vec<String>,
+    pub tx_dir: std::path::PathBuf,
+}
+
+/// 一次事务目录扫描的完整结果。
+///
+/// `errors` 保留无法解析/无法读取的事务目录；证明恢复不能把这些目录当作
+/// “事务不存在”，否则会把可能已提交的意图误删。
+#[derive(Debug, Default)]
+pub(crate) struct TransactionRecoveryScan {
+    pub transactions: Vec<TransactionRecovery>,
+    pub errors: Vec<String>,
 }
 
 #[cfg(test)]

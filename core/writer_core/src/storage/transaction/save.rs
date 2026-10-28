@@ -29,6 +29,8 @@ pub struct SaveTransaction {
     /// backup_mode 时 commit 不再 cleanup，
     /// 必须等事务完成后由调用方显式调用 `finish()` 清理。
     finished: bool,
+    /// 与本次正文提交绑定的证明意图。
+    proof_intent_ids: Vec<String>,
 }
 
 impl SaveTransaction {
@@ -44,7 +46,17 @@ impl SaveTransaction {
             backup_mode: false,
             backed_up_files: Vec::new(),
             finished: false,
+            proof_intent_ids: Vec::new(),
         }
+    }
+
+    /// 把证明意图绑定到本事务。必须在 `commit` 前调用。
+    pub fn link_proof_intents(&mut self, event_ids: Vec<String>) {
+        self.proof_intent_ids = event_ids;
+    }
+
+    fn has_linked_proof_intents(&self) -> bool {
+        !self.proof_intent_ids.is_empty()
     }
 
     pub fn transaction_id(&self) -> &str {
@@ -192,8 +204,11 @@ impl SaveTransaction {
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
         self.write_manifest_phase(&manifest_path, TransactionPhase::Finished)?;
         // Finished 已持久化成功，才设 finished 并 cleanup。
+        // 若绑定了证明意图，事务目录必须保留到事件写入完成，由恢复流程清理。
         self.finished = true;
-        self.cleanup();
+        if !self.has_linked_proof_intents() {
+            self.cleanup();
+        }
         Ok(())
     }
 
@@ -313,7 +328,9 @@ impl SaveTransaction {
 
         self.write_manifest_phase(&manifest_path, TransactionPhase::FilesCommitted)?;
         self.committed = true;
-        self.cleanup();
+        if !self.has_linked_proof_intents() {
+            self.cleanup();
+        }
         Ok(())
     }
 
@@ -381,10 +398,12 @@ impl SaveTransaction {
                 entries: self.entries.clone(),
                 phase: TransactionPhase::Prepared,
                 backup_entries: Vec::new(),
+                proof_intent_ids: self.proof_intent_ids.clone(),
             }
         };
         manifest.phase = phase;
         manifest.backup_entries = self.backed_up_files.clone();
+        manifest.proof_intent_ids = self.proof_intent_ids.clone();
         let json = serde_json::to_string_pretty(&manifest)?;
         crate::storage::atomic_write_string(manifest_path, &json)?;
         Ok(())
@@ -419,7 +438,9 @@ impl Drop for SaveTransaction {
         // - 非 backup_mode 且已 committed（原有行为）
         // - 已 finish()（finished == true）
         // backup_mode + committed 但未 finish 时，保留事务目录供 rollback 使用。
-        if self.finished || (self.committed && !self.backup_mode) {
+        if (self.finished || (self.committed && !self.backup_mode))
+            && !self.has_linked_proof_intents()
+        {
             self.cleanup();
         }
     }
