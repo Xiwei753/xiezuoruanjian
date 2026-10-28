@@ -125,6 +125,8 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::CreateStarMapChildEmbedResultDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn =
+            self.begin_starmap_child_embed_contribution_transaction(host_starmap_id)?;
         let mut contribution_batch = self.begin_contribution_batch();
         let core_position: crate::starmap::types::StarMapPoint = position.into();
         let (starmap_meta, embed, change_set, tx_id) = self
@@ -133,6 +135,9 @@ impl WriterCoreApi {
             .map_err(WriterError::from)?;
 
         let starmap_id = starmap_meta.starmap_id.clone();
+        let starmaps = self.app_data_root.join("starmaps");
+        contribution_txn.track_created_root(&starmaps.join(&starmap_id))?;
+        contribution_txn.track_created_root(&starmaps.join(format!("{starmap_id}.meta.json")))?;
         let project_id = starmap_meta.project_id.as_deref().map(|s| s.to_string());
 
         // 更新搜索索引：新创建的 starmap title
@@ -230,6 +235,7 @@ impl WriterCoreApi {
         )?;
 
         self.commit_contribution_batch(&mut contribution_batch)?;
+        self.finish_starmap_contribution_transaction(host_starmap_id, &mut contribution_txn)?;
         Ok(crate::api::types::CreateStarMapChildEmbedResultDto {
             starmap: starmap_meta.into(),
             embed: embed.into(),
@@ -618,6 +624,11 @@ impl WriterCoreApi {
             .core_write()
             .create_starmap_with_changes(title, desc, template_id)
             .map_err(WriterError::from)?;
+        let starmaps = self.app_data_root.join("starmaps");
+        contribution_txn.track_created_root(&starmaps.join(&result.starmap_id))?;
+        contribution_txn.track_created_root(
+            &starmaps.join(format!("{}.meta.json", result.starmap_id)),
+        )?;
         let project_id = result.project_id.as_deref();
         let entry = crate::search::extractor::extract_starmap_title_entry(
             &result.starmap_id,

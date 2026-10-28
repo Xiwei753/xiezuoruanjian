@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::storage::atomic_write_string;
 use crate::writing_stats::contribution::ContributionEvent;
 use crate::writing_stats::contribution_store::ContributionStore;
@@ -131,12 +131,45 @@ impl ContributionTransaction {
         for root in &self.roots {
             if root.existed {
                 copy_path(Path::new(&root.source), Path::new(&root.backup))?;
+                if !Path::new(&root.backup).exists() {
+                    return Err(Error::Other(format!(
+                        "contribution backup missing after copy: {}",
+                        root.backup
+                    )));
+                }
             }
         }
         Ok(())
     }
 
+    /// 新建路径在事务开始后才产生；回滚时直接删除，不做备份。
+    pub(crate) fn track_created_root(&mut self, source: &Path) -> Result<()> {
+        if !self.owns_transaction || self.phase != TransactionPhase::Prepared {
+            return Ok(());
+        }
+        let source = source.to_string_lossy().into_owned();
+        if self.roots.iter().any(|root| root.source == source) {
+            return Ok(());
+        }
+        self.roots.push(BackupRoot {
+            source,
+            backup: String::new(),
+            existed: false,
+        });
+        self.write_manifest(Vec::new())
+    }
+
     fn restore(&self) -> Result<()> {
+        for root in &self.roots {
+            if root.existed
+                && (root.backup.is_empty() || !Path::new(&root.backup).exists())
+            {
+                return Err(Error::Other(format!(
+                    "contribution backup missing during rollback: {}",
+                    root.source
+                )));
+            }
+        }
         for root in &self.roots {
             remove_path(Path::new(&root.source))?;
             if root.existed {
@@ -241,7 +274,12 @@ pub(crate) fn recover_pending(app_data_root: &Path) -> Result<()> {
             }
         };
         match manifest.phase {
-            TransactionPhase::BackingUp | TransactionPhase::Prepared => {
+            TransactionPhase::BackingUp => {
+                // 备份尚未完成，对象还没有开始修改；只清理不完整备份，
+                // 绝不能拿不完整备份覆盖原始对象。
+                let _ = fs::remove_dir_all(&dir);
+            }
+            TransactionPhase::Prepared => {
                 restore_manifest(&manifest)?;
                 let _ = fs::remove_dir_all(&dir);
             }
@@ -259,6 +297,16 @@ pub(crate) fn recover_pending(app_data_root: &Path) -> Result<()> {
 }
 
 fn restore_manifest(manifest: &ContributionTransactionManifest) -> Result<()> {
+    // 先确认所有需要恢复的备份都存在，再删除任何原始路径；避免备份缺失时
+    // 把原始对象删掉却无法恢复。
+    for root in &manifest.roots {
+        if root.existed && !Path::new(&root.backup).exists() {
+            return Err(Error::Other(format!(
+                "contribution backup missing during recovery: {}",
+                root.backup
+            )));
+        }
+    }
     for root in &manifest.roots {
         remove_path(Path::new(&root.source))?;
         if root.existed {

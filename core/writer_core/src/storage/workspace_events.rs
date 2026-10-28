@@ -77,15 +77,21 @@ pub fn read_since(app_data_root: &Path, offset: u64) -> Result<WorkspaceChangePa
     let length = file.metadata()?.len();
     let start = offset.min(length);
     file.seek(SeekFrom::Start(start))?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)?;
+    let mut content = Vec::new();
+    file.read_to_end(&mut content)?;
     let mut events = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
+    let mut consumed = 0usize;
+    for line in content.split_inclusive(|byte| *byte == b'\n') {
+        if !line.ends_with(b"\n") {
+            // 最后一条可能仍在写入中；保留到下一次读取。
+            break;
+        }
+        consumed += line.len();
+        let line = line.trim_ascii();
         if line.is_empty() {
             continue;
         }
-        match serde_json::from_str(line) {
+        match serde_json::from_slice(line) {
             Ok(event) => events.push(event),
             Err(error) => {
                 eprintln!("[workspace-events] skip malformed event: {error}");
@@ -94,6 +100,6 @@ pub fn read_since(app_data_root: &Path, offset: u64) -> Result<WorkspaceChangePa
     }
     Ok(WorkspaceChangePage {
         events,
-        next_offset: length,
+        next_offset: start.saturating_add(consumed as u64),
     })
 }
