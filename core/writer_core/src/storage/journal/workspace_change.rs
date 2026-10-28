@@ -1,13 +1,18 @@
 //! 统一 workspace 变更事务 journal。
 //!
-//! 用于作品、卷、章节删除产生的 `WorkspaceChangeSet` 的持久化事务。
-//! 流程固定为：
+//! 用于删除和星图元数据/关系写入产生的 `WorkspaceChangeSet` 的持久化事务。
+//! 删除流程固定为：
 //! 1. 先写 pending journal（`save_pending`）
 //! 2. 执行本地物理删除
 //! 3. 标记 local_applied（`mark_local_applied`）
 //! 4. 写 workspace history/tombstone
 //! 5. 标记 history_recorded（`mark_history_recorded`）
 //! 6. 清 journal（`clear_journal`）
+//!
+//! 星图创建/重命名/绑定/解绑/设主图等非删除操作没有本地删除步骤：
+//! journal 在对象与来源事件所属的 contribution transaction 提交前写入，
+//! 提交成功后才进入 history 阶段；来源事务回滚时 journal 路径作为恢复根
+//! 被删除，不会留下与对象状态相反的 history。
 //!
 //! 启动 workspace 时扫描未完成记录（`recover_unfinished`）：
 //! - 如果本地删除已经完成（`LocalApplied`）但 history 没写进去，就补 history
@@ -53,6 +58,24 @@ pub enum WorkspaceChangeOpType {
     DeleteVolume,
     DeleteChapter,
     DeleteStarMap,
+    CreateStarMap,
+    RenameStarMap,
+    BindStarMap,
+    UnbindStarMap,
+    SetMainStarMap,
+}
+
+impl WorkspaceChangeOpType {
+    /// 该操作是否需要在 Pending 阶段重放本地物理删除。
+    ///
+    /// 非删除类星图操作在来源事务提交后才允许补 history；Pending 仅表示
+    /// contribution transaction 尚未推进，恢复顺序保证对象已经 durable。
+    pub fn is_delete(&self) -> bool {
+        matches!(
+            self,
+            Self::DeleteProject | Self::DeleteVolume | Self::DeleteChapter | Self::DeleteStarMap
+        )
+    }
 }
 
 /// 明确的删除目标，供恢复阶段幂等执行本地删除。
@@ -399,6 +422,37 @@ impl WorkspaceChangeJournal {
         delete_target: Option<DeleteTarget>,
         planned_delete: Option<PlannedWorkspaceDelete>,
     ) -> Result<Self> {
+        let token = new_token();
+        Self::save_pending_with_token(
+            app_data_root,
+            &token,
+            change_set,
+            device_id,
+            op_type,
+            delete_target,
+            planned_delete,
+        )
+    }
+
+    /// 使用调用方预生成 token 写入 pending journal。
+    ///
+    /// 来源事务需要在写对象文件前把 journal 路径登记为恢复根，因此 token
+    /// 必须先于实际 journal 创建确定下来。
+    pub fn save_pending_with_token(
+        app_data_root: &Path,
+        token: &str,
+        change_set: &WorkspaceChangeSet,
+        device_id: &str,
+        op_type: WorkspaceChangeOpType,
+        delete_target: Option<DeleteTarget>,
+        planned_delete: Option<PlannedWorkspaceDelete>,
+    ) -> Result<Self> {
+        if token.is_empty() {
+            return Err(crate::error::Error::Other(
+                "save_pending_with_token: token must not be empty".to_string(),
+            ));
+        }
+
         // 校验：DeleteVolume/DeleteChapter/DeleteStarMap 必须携带非空 planned_delete + 非空 facts。
         let sync_delete_facts: Vec<SyncDeleteFact> = match (&op_type, &planned_delete) {
             (
@@ -447,9 +501,29 @@ impl WorkspaceChangeJournal {
                         .to_string(),
                 ));
             }
+            (
+                WorkspaceChangeOpType::CreateStarMap
+                | WorkspaceChangeOpType::RenameStarMap
+                | WorkspaceChangeOpType::BindStarMap
+                | WorkspaceChangeOpType::UnbindStarMap
+                | WorkspaceChangeOpType::SetMainStarMap,
+                Some(_),
+            ) => {
+                return Err(crate::error::Error::Other(format!(
+                    "save_pending: {op_type:?} must not carry planned_delete"
+                )));
+            }
+            (
+                WorkspaceChangeOpType::CreateStarMap
+                | WorkspaceChangeOpType::RenameStarMap
+                | WorkspaceChangeOpType::BindStarMap
+                | WorkspaceChangeOpType::UnbindStarMap
+                | WorkspaceChangeOpType::SetMainStarMap,
+                None,
+            ) => Vec::new(),
         };
 
-        let token = Uuid::new_v4().to_string();
+        let token = token.to_string();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
@@ -518,10 +592,11 @@ impl WorkspaceChangeJournal {
 /// 遍历 `app-meta/workspace-change-journals/` 下所有 journal，按阶段返回处理指令：
 /// - `HistoryRecorded`: history 已记，直接清理 journal（返回 None）。
 /// - `LocalApplied`: 本地删除已完成但 history 没写，返回供 bootstrap 补 history。
-/// - `Pending`: journal 落盘但本地删除未完成，返回供 bootstrap 先幂等完成本地删除
-///   再推进到 LocalApplied。
+/// - `Pending`: 删除操作由 bootstrap 先幂等完成本地删除再推进到 LocalApplied；
+///   非删除星图操作在来源事务恢复完成后直接推进到 LocalApplied。
 ///
-/// 不再让 Pending 直接进入 history——bootstrap 必须先完成本地删除。
+/// 不再让 Pending 直接进入 history——删除操作必须先完成本地删除，
+/// 所有操作都必须等来源事务恢复并确认对象 durable。
 pub fn recover_unfinished(app_data_root: &Path) -> Result<Vec<RecoveredWorkspaceChange>> {
     let journals_dir = app_data_root.join(WORKSPACE_CHANGE_JOURNALS_DIR);
     if !journals_dir.exists() {
@@ -614,8 +689,16 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
     }
 }
 
+/// 生成新的 workspace 变更 journal token。
+pub fn new_token() -> String {
+    Uuid::new_v4().to_string()
+}
+
 /// 根据 token 计算 journal 文件路径。
-fn journal_file_path(app_data_root: &Path, token: &str) -> PathBuf {
+///
+/// 调用方可在实际创建 journal 前把该路径登记进来源事务；回滚时路径
+/// 按“原本不存在”恢复，从而不会留下可被启动恢复误重放的孤立 journal。
+pub(crate) fn journal_file_path(app_data_root: &Path, token: &str) -> PathBuf {
     app_data_root
         .join(WORKSPACE_CHANGE_JOURNALS_DIR)
         .join(format!("{}{}", WORKSPACE_CHANGE_JOURNAL_PREFIX, token))

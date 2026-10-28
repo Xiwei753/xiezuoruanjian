@@ -531,6 +531,11 @@ fn recover_message_for_op_type(
         WorkspaceChangeOpType::DeleteVolume => "recover_delete_volume",
         WorkspaceChangeOpType::DeleteChapter => "recover_delete_chapter",
         WorkspaceChangeOpType::DeleteStarMap => "recover_delete_starmap",
+        WorkspaceChangeOpType::CreateStarMap => "recover_create_starmap",
+        WorkspaceChangeOpType::RenameStarMap => "recover_rename_starmap",
+        WorkspaceChangeOpType::BindStarMap => "recover_bind_starmap_to_project",
+        WorkspaceChangeOpType::UnbindStarMap => "recover_unbind_starmap_from_project",
+        WorkspaceChangeOpType::SetMainStarMap => "recover_set_main_starmap_for_project",
     }
 }
 
@@ -547,6 +552,35 @@ fn recover_pending_phase(
     if rec.phase != WorkspaceChangePhase::Pending {
         // 非 Pending 阶段，直接检查是否 LocalApplied。
         return rec.phase == WorkspaceChangePhase::LocalApplied;
+    }
+
+    // 非删除类星图操作没有可重放的本地物理删除。bootstrap 在取得工作区锁后
+    // 已先恢复 contribution transaction：
+    // - 来源事务 Prepared 时回滚对象并删除本 journal；
+    // - 来源事务 ObjectApplied/Committed 时对象已经 durable。
+    // 因而这里的 Pending 只表示来源提交后尚未推进阶段，直接进入 history。
+    if !rec.op_type.is_delete() {
+        let journal = crate::storage::journal::workspace_change::WorkspaceChangeJournal {
+            token: rec.journal_token.clone(),
+            change_set: rec.changes.clone(),
+            device_id: rec.device_id.clone(),
+            op_type: rec.op_type.clone(),
+            created_at: rec.created_at,
+            phase: WorkspaceChangePhase::Pending,
+            delete_target: rec.delete_target.clone(),
+            sync_delete_facts: rec.sync_delete_facts.clone(),
+            planned_delete: rec.planned_delete.clone(),
+        };
+        if let Err(e) = journal.mark_local_applied(app_data_root) {
+            log::warn!(
+                "recover_workspace_change_transactions: mark_local_applied failed \
+                 for non-delete journal {}: {} — journal retained",
+                rec.journal_token,
+                e
+            );
+            return false;
+        }
+        return true;
     }
 
     // Pending 阶段：先幂等完成本地删除。
@@ -1032,6 +1066,15 @@ fn recover_pending_local_delete_no_target(
             rec.journal_token
         ))),
         WorkspaceChangeOpType::DeleteStarMap => recover_starmap_no_target(app_data_root, rec),
+        WorkspaceChangeOpType::CreateStarMap
+        | WorkspaceChangeOpType::RenameStarMap
+        | WorkspaceChangeOpType::BindStarMap
+        | WorkspaceChangeOpType::UnbindStarMap
+        | WorkspaceChangeOpType::SetMainStarMap => Err(WriterError::Other(format!(
+            "recover_pending_local_delete: non-delete op_type {:?} must not reach local delete \
+             recovery for journal {}",
+            rec.op_type, rec.journal_token
+        ))),
     }
 }
 
@@ -1237,6 +1280,10 @@ fn ensure_workspace_git(
 pub fn bootstrap_workspace(
     app_data_root: &Path,
 ) -> std::result::Result<crate::storage::git_repo_layout::GitRepoLayout, WriterError> {
+    // 先取得工作区写锁；acquire 内部统一恢复 contribution transaction。
+    // 必须在 workspace/child journal 恢复之前完成：来源事务 Prepared 时回滚
+    // 对象并删除对应 journal，避免恢复流程把已回滚的删除/子图重新补写。
+    let _workspace_write_lock = crate::storage::WorkspaceWriteLock::acquire(app_data_root)?;
     let layout = ensure_workspace_git(app_data_root)?;
     recover_storage_transactions(app_data_root, &layout)?;
     Ok(layout)

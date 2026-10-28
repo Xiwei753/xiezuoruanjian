@@ -112,9 +112,17 @@ impl ContributionTransaction {
     }
 
     fn write_manifest(&self, events: Vec<ContributionEvent>) -> Result<()> {
+        self.write_manifest_for_phase(self.phase, events)
+    }
+
+    fn write_manifest_for_phase(
+        &self,
+        phase: TransactionPhase,
+        events: Vec<ContributionEvent>,
+    ) -> Result<()> {
         let manifest = ContributionTransactionManifest {
             transaction_id: self.transaction_id.clone(),
-            phase: self.phase,
+            phase,
             roots: self.roots.clone(),
             events,
         };
@@ -211,8 +219,10 @@ impl ContributionTransaction {
         let events = ACTIVE_EVENTS
             .with(|slot| slot.borrow_mut().take())
             .unwrap_or_default();
+        // 只有 ObjectApplied 清单真正落盘后才能把内存阶段推进；否则写盘失败时
+        // Drop 仍必须按 Prepared 回滚对象，不能因为内存阶段提前改变而漏回滚。
+        self.write_manifest_for_phase(TransactionPhase::ObjectApplied, events.clone())?;
         self.phase = TransactionPhase::ObjectApplied;
-        self.write_manifest(events.clone())?;
 
         let store = ContributionStore::new(&self.app_data_root);
         if let Err(error) = store.record_events(events.clone()) {
@@ -224,8 +234,8 @@ impl ContributionTransaction {
             return Err(error);
         }
 
+        self.write_manifest_for_phase(TransactionPhase::Committed, events)?;
         self.phase = TransactionPhase::Committed;
-        self.write_manifest(events)?;
         let _ = fs::remove_dir_all(&self.dir);
         self.owns_transaction = false;
         Ok(())

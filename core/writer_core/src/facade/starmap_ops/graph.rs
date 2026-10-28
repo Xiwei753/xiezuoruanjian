@@ -1059,14 +1059,14 @@ impl super::super::WriterCore {
         ) {
             Ok(meta) => meta,
             Err(e) => {
-                // 创建失败：清 journal（child 未创建，Pending phase）
+                // 创建失败：journal 保留在 Pending phase。来源事务回滚时会删除
+                // 已登记的 journal；直接调用 facade 时由启动恢复清理。
                 log::warn!(
                     "create_starmap_child_embed: create_starmap_with_id failed, \
-                     clearing journal tx_id={}: {}",
+                     journal retained at Pending tx_id={}: {}",
                     tx.tx_id(),
                     e
                 );
-                // journal 在 Pending phase，恢复时会清除
                 return Err(e);
             }
         };
@@ -1106,10 +1106,6 @@ impl super::super::WriterCore {
 
         // Step 5: flush host Store，确认 Embed 已落盘
         let host_changed_paths = self.flush_starmap_store(host_starmap_id)?;
-        tx.mark_embed_added()?;
-
-        // 不 complete/cleanup journal——由调用方在 history 记录成功后 ack。
-        let tx_id = tx.tx_id().to_string();
 
         // 构造 WorkspaceChangeSet：
         // - child meta 路径 + starmap index 路径（create_starmap_with_id 写的）
@@ -1124,6 +1120,12 @@ impl super::super::WriterCore {
         for path in host_changed_paths {
             change_set = change_set.add_upsert(path);
         }
+
+        // 变更集随 EmbedAdded 一起持久化；恢复时直接复用，不重新猜测。
+        tx.mark_embed_added_with_changes(change_set.clone())?;
+
+        // 不 complete/cleanup journal——由调用方在 history 记录成功后 ack。
+        let tx_id = tx.tx_id().to_string();
 
         Ok((child_meta, created_embed, change_set, tx_id))
     }

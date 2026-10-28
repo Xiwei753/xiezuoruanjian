@@ -75,6 +75,12 @@ pub struct StarMapChildEmbedJournal {
     pub title: String,
     /// Embed 在宿主图中的位置。
     pub position: crate::starmap::types::StarMapPoint,
+    /// 子图创建完成后待补记的 workspace 变更集。
+    ///
+    /// 在 EmbedAdded 阶段持久化，恢复时直接复用同一份路径清单，
+    /// 不再根据当前磁盘状态重新猜测历史。旧 journal 无此字段。
+    #[serde(default)]
+    pub change_set: Option<crate::storage::workspace_git::WorkspaceChangeSet>,
     /// 当前事务阶段。
     pub phase: StarMapChildEmbedPhase,
 }
@@ -189,6 +195,7 @@ impl StarMapChildEmbedTransaction {
             embed_instance_id: Some(embed_instance_id.to_string()),
             title: title.to_string(),
             position,
+            change_set: None,
             phase: StarMapChildEmbedPhase::Pending,
         };
 
@@ -245,6 +252,19 @@ impl StarMapChildEmbedTransaction {
     ///
     /// 调用方在 `add_starmap_embed()` + flush 成功后调用此方法。
     pub fn mark_embed_added(&mut self) -> Result<()> {
+        self.advance_phase(StarMapChildEmbedPhase::EmbedAdded)?;
+        Ok(())
+    }
+
+    /// 推进到 EmbedAdded，并把待补 history 的变更集写入 journal。
+    ///
+    /// 恢复时直接消费这份持久化清单，避免根据后续磁盘状态重新构造出
+    /// 与本次事务不一致的 history。
+    pub fn mark_embed_added_with_changes(
+        &mut self,
+        change_set: crate::storage::workspace_git::WorkspaceChangeSet,
+    ) -> Result<()> {
+        self.journal.change_set = Some(change_set);
         self.advance_phase(StarMapChildEmbedPhase::EmbedAdded)?;
         Ok(())
     }
@@ -560,7 +580,9 @@ fn recover_single_child_embed_journal(
                  for history tx_id={}",
                 journal.tx_id
             );
-            let changes = build_child_embed_change_set(app_data_root, &journal, Vec::new());
+            let changes = journal.change_set.clone().unwrap_or_else(|| {
+                build_child_embed_change_set(app_data_root, &journal, Vec::new())
+            });
             Ok(Some(RecoveredStarMapChildEmbed {
                 journal_token: journal.tx_id.clone(),
                 changes,
@@ -617,8 +639,8 @@ fn recover_child_created_or_embed_added(
              EmbedAdded tx_id={}",
             journal.tx_id
         );
-        tx.advance_phase(StarMapChildEmbedPhase::EmbedAdded)?;
         let changes = build_child_embed_change_set(app_data_root, journal, Vec::new());
+        tx.mark_embed_added_with_changes(changes.clone())?;
         Ok(Some(RecoveredStarMapChildEmbed {
             journal_token: journal.tx_id.clone(),
             changes,
@@ -630,8 +652,8 @@ fn recover_child_created_or_embed_added(
             journal.tx_id
         );
         let flush_paths = repair_embed_for_child(app_data_root, journal)?;
-        tx.advance_phase(StarMapChildEmbedPhase::EmbedAdded)?;
         let changes = build_child_embed_change_set(app_data_root, journal, flush_paths);
+        tx.mark_embed_added_with_changes(changes.clone())?;
         Ok(Some(RecoveredStarMapChildEmbed {
             journal_token: journal.tx_id.clone(),
             changes,
