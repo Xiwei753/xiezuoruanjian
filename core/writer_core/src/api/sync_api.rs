@@ -884,6 +884,16 @@ impl WriterCoreApi {
             })
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let started_at = Instant::now();
+        // Issue #1008：进入同步前先补记上次进程留下的“正文已提交、证明未落盘”
+        // 意图，保证本次 Prepare 使用的前置事实已包含原同步编辑。
+        let core = self.core_read();
+        let recovery = core
+            .sync_proof_intents_pending()
+            .then(|| core.recover_pending_sync_proof_intents());
+        if let Some(Err(error)) = recovery {
+            log::warn!("recover pending sync proof intents before sync failed: {error}");
+        }
+        drop(core);
         record_sync_diagnostic("sync.run.start", "sync.run", {
             let mut fields = sync_diagnostic_fields(&operation_id, "prepare", None);
             fields.insert(
@@ -2267,8 +2277,21 @@ impl WriterCoreApi {
 
             let sync_sources =
                 staging_manifest_device_ids(run, target_sync_result.project_id.as_deref());
+            // Issue #1008：先把上次崩溃留下的“正文已提交、证明未落盘”意图补记，
+            // 再进入本次 Commit，避免旧链头缺失导致新的同步事件无法接续。
+            if let Err(error) = core.recover_pending_sync_proof_intents() {
+                log::warn!("recover pending sync proof intents before commit failed: {error}");
+            }
+            let intent_root = core.sync_proof_intent_root();
+            let intent_sink =
+                crate::sync::proof_intent::ProofIntentSink::new(&intent_root, &sync_sources);
             let (commit_result, conflicts, committed_paths) =
-                crate::sync::commit_helpers::commit_single_target_staging(run, target_sync_result);
+                crate::sync::commit_helpers::commit_single_target_staging(
+                    run,
+                    target_sync_result,
+                    Some(&intent_sink),
+                );
+            core.refresh_sync_proof_intents_pending();
             let mut target_with_conflicts = target_sync_result.clone();
 
             Self::apply_staging_conflicts_to_target(
@@ -2353,7 +2376,21 @@ impl WriterCoreApi {
                     // 章节 A→B→A→B 不会被内容 hash 误去重。事件 ID 固定后重发复用。
                     let sync_event_id =
                         format!("sync:{}:{}:{}", run.run_id(), path.display(), action_index);
-                    if let Err(e) = core.record_sync_content_change(
+                    let intent = match intent_sink.load(&sync_event_id) {
+                        Ok(intent) => intent,
+                        Err(error) => {
+                            log::warn!("load sync proof intent {} failed: {error}", sync_event_id);
+                            None
+                        }
+                    };
+                    let occurred_at_ms = intent.as_ref().map_or_else(
+                        || chrono::Utc::now().timestamp_millis(),
+                        |intent| intent.occurred_at_ms,
+                    );
+                    let source_device = intent
+                        .as_ref()
+                        .map_or(source_device, |intent| intent.source_device_id.as_str());
+                    match core.record_sync_content_change_at(
                         &project_id,
                         &volume_id,
                         &chapter_id,
@@ -2362,10 +2399,20 @@ impl WriterCoreApi {
                         &sync_event_id,
                         source_device,
                         "",
+                        occurred_at_ms,
                     ) {
-                        proof_errors.push(format!("{}: {e}", path.display()));
+                        Ok(_) => {
+                            if let Err(error) = intent_sink.remove(&sync_event_id) {
+                                log::warn!(
+                                    "remove completed sync proof intent {} failed: {error}",
+                                    sync_event_id
+                                );
+                            }
+                        }
+                        Err(e) => proof_errors.push(format!("{}: {e}", path.display())),
                     }
                 }
+                core.refresh_sync_proof_intents_pending();
                 if !proof_errors.is_empty() {
                     target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
                         "sync_proof_record_failed".to_string(),

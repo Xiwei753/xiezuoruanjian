@@ -5,6 +5,32 @@ use crate::writing_stats::{DateRange, EventSource, WritingInputEvent};
 use serde_json::Value;
 
 impl super::WriterCore {
+    /// `stats/proof-intents` 绝对路径。
+    pub(crate) fn sync_proof_intent_root(&self) -> std::path::PathBuf {
+        self.app_data_root
+            .join(crate::sync::proof_intent::PROOF_INTENTS_DIR)
+    }
+
+    pub(crate) fn sync_proof_intents_pending(&self) -> bool {
+        self.proof_intents_pending
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn refresh_sync_proof_intents_pending(&self) {
+        self.proof_intents_pending.store(
+            crate::sync::proof_intent::has_pending(&self.sync_proof_intent_root()),
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+
+    /// 扫描并补记所有未完成的同步证明意图。返回本次完成（补记或确认已存在）
+    /// 的意图数量。单个意图失败只记录错误，不阻断后续意图。
+    pub(crate) fn recover_pending_sync_proof_intents(&self) -> Result<usize> {
+        let recovered = crate::sync::proof_intent::recover_pending(self)?;
+        self.refresh_sync_proof_intents_pending();
+        Ok(recovered)
+    }
+
     /// 按章节回放证明事件，返回目标时刻的正文/选区与校验结果。
     pub fn replay_chapter_proof(
         &self,
@@ -51,6 +77,12 @@ impl super::WriterCore {
         use crate::editor::transaction::{EditorChange, EditorCursor, EditorSelection};
         use crate::editor::EditorTransactionCause;
         use crate::writing_stats::proof::{ProofEditPayload, PROOF_FORMAT_VERSION};
+
+        if self.sync_proof_intents_pending() {
+            if let Err(error) = self.recover_pending_sync_proof_intents() {
+                eprintln!("[writing_stats] 恢复同步证明意图失败: {error}");
+            }
+        }
 
         if input.changes.is_empty() {
             return self.record_editor_change_stats(
@@ -187,6 +219,35 @@ impl super::WriterCore {
         sync_source_device_id: &str,
         parent_event_id: &str,
     ) -> Result<bool> {
+        self.record_sync_content_change_at(
+            project_id,
+            volume_id,
+            chapter_id,
+            before_text,
+            after_text,
+            sync_event_id,
+            sync_source_device_id,
+            parent_event_id,
+            chrono::Utc::now().timestamp_millis(),
+        )
+    }
+
+    /// 带稳定事件时间的同步证明写入。崩溃恢复必须复用意图日志里的原始时间，
+    /// 否则跨 UTC 日会落到另一个事件分区，幂等判断也会失效。
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn record_sync_content_change_at(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        before_text: Option<&str>,
+        after_text: Option<&str>,
+        sync_event_id: &str,
+        sync_source_device_id: &str,
+        parent_event_id: &str,
+        occurred_at_ms: i64,
+    ) -> Result<bool> {
         use crate::editor::transaction::{EditorChange, EditorCursor, EditorSelection};
         use crate::editor::EditorTransactionCause;
         use crate::editor::Utf8ByteOffset;
@@ -197,10 +258,16 @@ impl super::WriterCore {
         if sync_event_id.is_empty() {
             return Err(crate::Error::Other("同步证明事件缺少事务 ID".to_string()));
         }
+        let stats = self.get_stats_api();
+        if stats
+            .store()
+            .proof_event_persisted(sync_event_id, occurred_at_ms)?
+        {
+            return Ok(false);
+        }
         if before_text.unwrap_or("") == after_text.unwrap_or("") {
             return Ok(false);
         }
-        let stats = self.get_stats_api();
         let origin = stats.store().resolve_origin_device_id()?;
         let has_local_chain = stats.has_chapter_proof(&origin, chapter_id)?;
         let (before_text, chain_parent_event_id) = if has_local_chain {
@@ -283,7 +350,6 @@ impl super::WriterCore {
             anchor: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
             head: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
         };
-        let occurred_at_ms = chrono::Utc::now().timestamp_millis();
         let mut event = WritingInputEvent::with_identity(
             sync_event_id.to_string(),
             occurred_at_ms,
@@ -377,6 +443,12 @@ impl super::WriterCore {
         occurred_at_ms: i64,
     ) -> Result<()> {
         use crate::editor::EditorTransactionCause;
+
+        if self.sync_proof_intents_pending() {
+            if let Err(error) = self.recover_pending_sync_proof_intents() {
+                eprintln!("[writing_stats] 恢复同步证明意图失败: {error}");
+            }
+        }
 
         // 设备身份由 Core 读/建，不让平台端传；平台初始化注入的稳定 ID 优先。
         let platform = writer_platform_api::PlatformKind::from_str_name(platform_str)

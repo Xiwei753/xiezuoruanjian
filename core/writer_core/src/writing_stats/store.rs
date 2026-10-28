@@ -362,8 +362,14 @@ impl StatsStore {
 
         let chain_key = format!("{origin}/{}", event.chapter_id);
         let head = state.chains.get(&chain_key).cloned();
-        let latest_checkpoint =
-            checkpoint::load_last_checkpoint(&self.app_data_root, &origin, &event.chapter_id)?;
+        // 链头缓存存在时，逐字事件只消费缓存的增量摘要；绝不为了确认基线
+        // 去扫描整个检查点历史。只有首次建立链（head 为空）才需要读最后
+        // 一个基线检查点。
+        let latest_checkpoint = if head.is_none() {
+            checkpoint::load_last_checkpoint(&self.app_data_root, &origin, &event.chapter_id)?
+        } else {
+            None
+        };
 
         let (seq, before_digest, mut before_text, starts_new_chain, baseline_checkpoint) =
             if let Some(head) = head.as_ref() {
@@ -1110,6 +1116,20 @@ impl StatsStore {
         Ok(cache
             .get(&cache_key)
             .is_some_and(|ids| ids.contains(event_id)))
+    }
+
+    /// 判断一条同步证明事件是否已经按原始事件时间落盘。
+    ///
+    /// 崩溃恢复必须使用意图日志里固定的事件时间来判断日期分区，不能拿
+    /// “现在”重新计算，否则跨 UTC 日恢复会把同一事件写到另一个日期。
+    pub(crate) fn proof_event_persisted(
+        &self,
+        event_id: &str,
+        occurred_at_ms: i64,
+    ) -> Result<bool> {
+        let origin = self.resolve_origin_device_id()?;
+        let date = self.timestamp_to_date(occurred_at_ms)?;
+        self.event_is_persisted(&origin, &date, event_id)
     }
 
     /// 追加一批已测量的前台写作计时切片，只写入本机来源分区。

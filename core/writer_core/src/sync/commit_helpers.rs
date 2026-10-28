@@ -1283,6 +1283,7 @@ pub(crate) fn apply_staging_commits_for_targets(
 pub(crate) fn commit_single_target_staging(
     run: &crate::sync::staging::StagingRun,
     target: &crate::sync::types::TargetSyncResult,
+    intent_sink: Option<&crate::sync::proof_intent::ProofIntentSink<'_>>,
 ) -> (
     TargetCommitResult,
     Vec<crate::sync::staging::StagingConflict>,
@@ -1320,6 +1321,20 @@ pub(crate) fn commit_single_target_staging(
                 }
             };
             let before = capture_action_before(live_root, &plan.content_actions);
+
+            if let Some(sink) = intent_sink {
+                if let Err(error) = sink.prepare(
+                    run.run_id(),
+                    target.target_kind.as_str(),
+                    target.project_id.as_deref(),
+                    &plan.content_actions,
+                    &before,
+                ) {
+                    let msg = format!("prepare proof intent failed: {error}");
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            }
 
             let mut tx = match apply_commit_plan_with_optional_merge(
                 run,
@@ -1403,6 +1418,19 @@ pub(crate) fn commit_single_target_staging(
                 .cloned()
                 .collect();
             let before = capture_action_before(live_root, &safe_content_actions);
+            if let Some(sink) = intent_sink {
+                if let Err(error) = sink.prepare(
+                    run.run_id(),
+                    target.target_kind.as_str(),
+                    target.project_id.as_deref(),
+                    &safe_content_actions,
+                    &before,
+                ) {
+                    let msg = format!("prepare proof intent failed: {error}");
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            }
             let tx = match apply_commit_plan_with_optional_merge(
                 run,
                 live_root,
@@ -1504,6 +1532,19 @@ pub(crate) fn commit_single_target_staging(
             };
 
             let before = capture_action_before(live_root, &plan.content_actions);
+            if let Some(sink) = intent_sink {
+                if let Err(error) = sink.prepare(
+                    run.run_id(),
+                    target.target_kind.as_str(),
+                    target.project_id.as_deref(),
+                    &plan.content_actions,
+                    &before,
+                ) {
+                    let msg = format!("prepare proof intent failed: {error}");
+                    log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                    return (TargetCommitResult::Failed(msg), Vec::new(), Vec::new());
+                }
+            }
             let mut tx = match apply_commit_plan_to_live(
                 live_root,
                 &plan.content_actions,

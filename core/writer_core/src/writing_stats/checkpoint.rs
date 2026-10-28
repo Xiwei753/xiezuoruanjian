@@ -8,8 +8,8 @@
 //! `stats/events/<device_id>/proof/<chapter_id>.checkpoints.jsonl`。
 //! 设备只写自己的分区；同步来的其它设备分区只读。
 
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -143,6 +143,149 @@ pub fn archive_event_day(
     Ok(Some(destination))
 }
 
+/// 检查点索引文件的格式版本。索引只是定位加速，损坏或过期时回退全量扫描。
+const CHECKPOINT_INDEX_FORMAT_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CheckpointIndex {
+    format_version: u32,
+    /// 写入索引时的文件长度，用于发现索引之后又追加了检查点。
+    file_len: u64,
+    last_offset: u64,
+    last_len: u64,
+    last_seq: u64,
+    last_text_sha256: String,
+    last_content_hash: String,
+    last_event_hash: String,
+}
+
+struct CheckpointScan {
+    last: Option<ProofCheckpoint>,
+    last_offset: u64,
+    last_len: u64,
+    file_len: u64,
+}
+
+fn checkpoint_index_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".idx");
+    PathBuf::from(name)
+}
+
+fn read_checkpoint_index(path: &Path) -> Option<CheckpointIndex> {
+    let bytes = fs::read(checkpoint_index_path(path)).ok()?;
+    let index: CheckpointIndex = serde_json::from_slice(&bytes).ok()?;
+    (index.format_version == CHECKPOINT_INDEX_FORMAT_VERSION).then_some(index)
+}
+
+fn write_checkpoint_index(path: &Path, index: &CheckpointIndex) -> crate::Result<()> {
+    let serialized = serde_json::to_string(index)?;
+    crate::storage::atomic_write_string(&checkpoint_index_path(path), &serialized)
+}
+
+/// 从 `start` 开始扫描到文件末尾，记录最后一条属于本章节的检查点及其字节区间。
+/// `start` 必须是行边界；调用方负责校验，否则会从半行开始解析。
+fn scan_checkpoints_from(
+    path: &Path,
+    chapter_id: &str,
+    start: u64,
+) -> crate::Result<CheckpointScan> {
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(start))?;
+    let mut reader = BufReader::new(file);
+    let mut offset = start;
+    let mut last = None;
+    let mut last_offset = 0;
+    let mut last_len = 0;
+    loop {
+        let mut buffer = Vec::new();
+        let read = reader.read_until(b'\n', &mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let line_len = read as u64;
+        let line = buffer.strip_suffix(b"\n").unwrap_or(&buffer);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if !line.iter().all(u8::is_ascii_whitespace) {
+            match serde_json::from_slice::<ProofCheckpoint>(line) {
+                Ok(checkpoint) if checkpoint.chapter_id == chapter_id => {
+                    last = Some(checkpoint);
+                    last_offset = offset;
+                    last_len = line_len;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!(
+                        "[writing_stats] 跳过损坏的 proof checkpoint {}: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        offset = offset.saturating_add(line_len);
+    }
+    Ok(CheckpointScan {
+        last,
+        last_offset,
+        last_len,
+        file_len: offset,
+    })
+}
+
+fn checkpoint_matches_index(checkpoint: &ProofCheckpoint, index: &CheckpointIndex) -> bool {
+    checkpoint.seq == index.last_seq
+        && checkpoint.text_sha256 == index.last_text_sha256
+        && checkpoint.content_hash == index.last_content_hash
+        && checkpoint.event_hash == index.last_event_hash
+}
+
+fn index_for_scan(scan: &CheckpointScan, checkpoint: &ProofCheckpoint) -> CheckpointIndex {
+    CheckpointIndex {
+        format_version: CHECKPOINT_INDEX_FORMAT_VERSION,
+        file_len: scan.file_len,
+        last_offset: scan.last_offset,
+        last_len: scan.last_len,
+        last_seq: checkpoint.seq,
+        last_text_sha256: checkpoint.text_sha256.clone(),
+        last_content_hash: checkpoint.content_hash.clone(),
+        last_event_hash: checkpoint.event_hash.clone(),
+    }
+}
+
+fn read_line_range(path: &Path, offset: u64, length: u64) -> std::io::Result<String> {
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let length = usize::try_from(length).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "proof checkpoint line length exceeds address space",
+        )
+    })?;
+    let mut bytes = vec![0_u8; length];
+    file.read_exact(&mut bytes)?;
+    let line = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    String::from_utf8(line.to_vec())
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+fn is_line_boundary(path: &Path, file_len: u64, offset: u64) -> bool {
+    if offset == 0 {
+        return true;
+    }
+    if offset > file_len {
+        return false;
+    }
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    if file.seek(SeekFrom::Start(offset - 1)).is_err() {
+        return false;
+    }
+    let mut byte = [0_u8; 1];
+    file.read_exact(&mut byte).is_ok() && byte[0] == b'\n'
+}
+
 /// 追加检查点。同 seq、同正文摘要的检查点不重复写。
 pub fn append_checkpoint(app_data_root: &Path, checkpoint: &ProofCheckpoint) -> crate::Result<()> {
     let path = checkpoint_path(app_data_root, &checkpoint.device_id, &checkpoint.chapter_id);
@@ -178,13 +321,103 @@ pub fn append_checkpoint(app_data_root: &Path, checkpoint: &ProofCheckpoint) -> 
         )));
     }
     let serialized = serde_json::to_string(checkpoint)?;
-    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(&path)?;
+    let mut offset = file.metadata()?.len();
+    // 崩溃可能留下半行，旧版文件也可能最后一行没有换行。这里只补一个
+    // 分隔符，不截断已有内容：最后一条若本身有效，不能因为缺换行被丢掉。
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset - 1))?;
+        let mut last_byte = [0_u8; 1];
+        file.read_exact(&mut last_byte)?;
+        if last_byte[0] != b'\n' {
+            file.write_all(b"\n")?;
+            offset = offset.saturating_add(1);
+        }
+    }
     file.write_all(serialized.as_bytes())?;
     file.write_all(b"\n")?;
+    file.flush()?;
+    let line_len = serialized.len().saturating_add(1) as u64;
+    let index = CheckpointIndex {
+        format_version: CHECKPOINT_INDEX_FORMAT_VERSION,
+        file_len: offset.saturating_add(line_len),
+        last_offset: offset,
+        last_len: line_len,
+        last_seq: checkpoint.seq,
+        last_text_sha256: checkpoint.text_sha256.clone(),
+        last_content_hash: checkpoint.content_hash.clone(),
+        last_event_hash: checkpoint.event_hash.clone(),
+    };
+    // 索引写失败不影响已追加的事实；下次读取会全量重建索引。
+    if let Err(error) = write_checkpoint_index(&path, &index) {
+        log::warn!(
+            "[writing_stats] 写入 proof checkpoint 索引失败 {}: {error}",
+            path.display()
+        );
+    }
     Ok(())
 }
 
+/// 尝试用索引直接读取最后一条检查点；索引过期但文件只增长了尾部时，
+/// 只扫描 `index.file_len..EOF` 并刷新索引。
+fn load_checkpoint_from_index(
+    path: &Path,
+    chapter_id: &str,
+    index: &CheckpointIndex,
+    file_len: u64,
+) -> crate::Result<Option<ProofCheckpoint>> {
+    let range_end = index.last_offset.saturating_add(index.last_len);
+    if index.file_len > file_len || range_end > file_len {
+        return Ok(None);
+    }
+    let Ok(line) = read_line_range(path, index.last_offset, index.last_len) else {
+        return Ok(None);
+    };
+    let Ok(checkpoint) = serde_json::from_str::<ProofCheckpoint>(&line) else {
+        return Ok(None);
+    };
+    if checkpoint.chapter_id != chapter_id || !checkpoint_matches_index(&checkpoint, index) {
+        return Ok(None);
+    }
+    if index.file_len == file_len {
+        return Ok(Some(checkpoint));
+    }
+    if !is_line_boundary(path, file_len, index.file_len) {
+        return Ok(None);
+    }
+    // 索引之后又追加了检查点（可能发生在 append 成功、索引落盘前崩溃）。
+    // 只扫描尾部增量。
+    let tail = scan_checkpoints_from(path, chapter_id, index.file_len)?;
+    if let Some(latest) = tail.last.as_ref() {
+        let latest_index = index_for_scan(&tail, latest);
+        if let Err(error) = write_checkpoint_index(path, &latest_index) {
+            log::warn!(
+                "[writing_stats] 重建 proof checkpoint 索引失败 {}: {error}",
+                path.display()
+            );
+        }
+        return Ok(Some(latest.clone()));
+    }
+    // 尾部只有空行/损坏行：索引仍指向最后一条有效检查点。
+    let mut refreshed = index.clone();
+    refreshed.file_len = file_len;
+    if let Err(error) = write_checkpoint_index(path, &refreshed) {
+        log::warn!(
+            "[writing_stats] 刷新 proof checkpoint 索引失败 {}: {error}",
+            path.display()
+        );
+    }
+    Ok(Some(checkpoint))
+}
+
 /// 读取某个设备/章节的最后一个检查点。损坏行跳过并告警，不阻断回放。
+///
+/// 优先使用旁路索引直接定位最后一行；索引缺失、过期或损坏时回退一次全量扫描
+/// 并重建索引。正常连续写入只读取最后一条，不随历史检查点数量线性增长。
 pub fn load_last_checkpoint(
     app_data_root: &Path,
     device_id: &str,
@@ -194,26 +427,26 @@ pub fn load_last_checkpoint(
     if !path.exists() {
         return Ok(None);
     }
-    let file = fs::File::open(&path)?;
-    let reader = BufReader::new(file);
-    let mut last = None;
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<ProofCheckpoint>(&line) {
-            Ok(checkpoint) if checkpoint.chapter_id == chapter_id => last = Some(checkpoint),
-            Ok(_) => {}
-            Err(error) => {
-                eprintln!(
-                    "[writing_stats] 跳过损坏的 proof checkpoint {}: {error}",
-                    path.display()
-                );
-            }
+    let file_len = fs::metadata(&path)?.len();
+
+    if let Some(index) = read_checkpoint_index(&path) {
+        if let Some(checkpoint) = load_checkpoint_from_index(&path, chapter_id, &index, file_len)? {
+            return Ok(Some(checkpoint));
         }
     }
-    Ok(last)
+
+    // 索引缺失/损坏/不匹配：做一次全量扫描并重建；之后恢复正常快速路径。
+    let scan = scan_checkpoints_from(&path, chapter_id, 0)?;
+    if let Some(last) = scan.last.as_ref() {
+        let index = index_for_scan(&scan, last);
+        if let Err(error) = write_checkpoint_index(&path, &index) {
+            log::warn!(
+                "[writing_stats] 重建 proof checkpoint 索引失败 {}: {error}",
+                path.display()
+            );
+        }
+    }
+    Ok(scan.last)
 }
 
 /// 读取检查点文件里的全部快照，按 seq 升序。

@@ -87,6 +87,9 @@ pub struct WriterCore {
     /// 由 `WriterCoreApi` 在初始化时注入；写作统计事件分区首次解析来源设备时
     /// 优先使用它，避免 Core 先随机生成 UUID 导致同一台设备出现两个身份。
     pub(crate) preferred_device_id: std::sync::Mutex<Option<String>>,
+    /// 是否存在未完成的同步证明意图。编辑/同步热路径只在为 true 时才扫描
+    /// 意图目录，避免每次按键都做文件系统枚举。
+    pub(crate) proof_intents_pending: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -130,6 +133,13 @@ impl WriterCore {
             starmap_stores: std::sync::Mutex::new(HashMap::new()),
             path_dependency_index: std::sync::Mutex::new(None),
             preferred_device_id: std::sync::Mutex::new(None),
+            proof_intents_pending: std::sync::atomic::AtomicBool::new(
+                crate::sync::proof_intent::has_pending(
+                    &app_data_root
+                        .as_ref()
+                        .join(crate::sync::proof_intent::PROOF_INTENTS_DIR),
+                ),
+            ),
         }
     }
 
