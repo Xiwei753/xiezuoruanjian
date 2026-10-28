@@ -2,9 +2,9 @@
 #
 # build-rpm.sh — 素笺写作 RPM 打包脚本
 #
-# 在顶层工作目录创建 RPM 构建环境，staging 源码并打包为 RPM。
+# 直接从仓库工作目录构建 RPM，复用 Cargo target 缓存。
 # 不捆绑 Qt / QML runtime，运行时依赖由 spec 的 Requires 解决。
-# 实际编译发生在 spec 的 %build，使用 --locked --offline -p sujian-linux-qt。
+# 实际编译发生在 spec 的 %build，使用 --locked -p sujian-linux-qt。
 #
 # 用法:
 #   ./packaging/rpm/build-rpm.sh
@@ -26,9 +26,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# 固定并导出 Cargo 输出目录，使昂贵的 Rust Release 编译产物进入可复用的
-# target/rpm-cargo，而非 rpmbuild 每次新建即删的 BUILD 目录。
-# 这样本机连续打 RPM 与远端 CI 都能复用同一份编译结果。
+# 固定并导出 Cargo 输出目录，原工作区编译的 Rust Release 产物
+# 可由本地连续构建与 CI 的 rust-cache 直接复用。
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${REPO_ROOT}/target/rpm-cargo}"
 export CARGO_TARGET_DIR
 mkdir -p "${CARGO_TARGET_DIR}"
@@ -76,67 +75,18 @@ mkdir -p "${RPM_TOPDIR}/BUILD" \
          "${RPM_TOPDIR}/SRPMS"
 
 # ---------------------------------------------------------------------------
-# 3. 源码 staging：复制到临时目录，执行 cargo vendor
+# 3. 获取并校验内置 MacBERT4CSC ONNX 模型与 ONNX Runtime
 # ---------------------------------------------------------------------------
-STAGING_DIR="${RPM_TOPDIR}/staging/${NAME}-${VERSION}"
-echo "==> Staging 源码到: ${STAGING_DIR}"
-rm -rf "${STAGING_DIR}"
-mkdir -p "${STAGING_DIR}"
-
-# 复制源码（排除构建产物和 VCS 目录）
-tar -cf - \
-    --exclude="./rpm-build" \
-    --exclude="./target" \
-    --exclude="./.git" \
-    --exclude="./.cargo" \
-    -C "${REPO_ROOT}" . | tar -xf - -C "${STAGING_DIR}"
-
-# 在 staging 目录内执行 cargo vendor
-echo "==> cargo vendor --locked vendor"
-mkdir -p "${STAGING_DIR}/vendor"
-cargo vendor --locked "${STAGING_DIR}/vendor" \
-    --manifest-path "${STAGING_DIR}/Cargo.toml" > /dev/null
-
-# 写临时 .cargo/config.toml，将 crates.io 指向本地 vendor
-mkdir -p "${STAGING_DIR}/.cargo"
-cat > "${STAGING_DIR}/.cargo/config.toml" <<'VENDOR_TOML'
-[source.crates-io]
-replace-with = "vendored-sources"
-
-[source.vendored-sources]
-directory = "vendor"
-VENDOR_TOML
-
-# ---------------------------------------------------------------------------
-# 3.5. 获取并校验内置 MacBERT4CSC ONNX 模型与 ONNX Runtime（Issue #985）
-# ---------------------------------------------------------------------------
-# 模型/运行时二进制不入库；在生成 Source0 tarball 之前放进 staging，使
-# rpmbuild 的 %install 能从源码树装入 /usr/share/sujian/models/ 与
-# /usr/lib64/sujian/。下载或校验不符时脚本以非零状态退出，构建失败，
-# 而不是打出缺少模型或运行时错误的 RPM。
-BUNDLED_MODEL_DIR="${STAGING_DIR}/packaging/correction/bundled"
+# 资源存放在仓库现有的忽略目录；rpmbuild --build-in-place 的 %install
+# 将直接从此目录安装到包内，不再复制整份源码和生成 Source0 tarball。
+BUNDLED_MODEL_DIR="${REPO_ROOT}/packaging/correction/bundled"
 echo "==> 获取内置校对模型与 ONNX Runtime 到: ${BUNDLED_MODEL_DIR}"
-SUJIAN_FETCH_ORT=1 "${SCRIPT_DIR}/../correction/fetch-model.sh" "${BUNDLED_MODEL_DIR}"
-
-# ---------------------------------------------------------------------------
-# 4. 从 staging 目录生成 Source0 tarball
-# ---------------------------------------------------------------------------
-TARBALL="${RPM_TOPDIR}/SOURCES/${NAME}-${VERSION}.tar.gz"
-echo "==> 生成源码 tarball（gzip -1 快速压缩）: ${TARBALL}"
-tar -cf - \
-    --transform "s,^\.,${NAME}-${VERSION}," \
-    -C "${STAGING_DIR}" . | gzip -1 > "${TARBALL}"
-
-# ---------------------------------------------------------------------------
-# 5. 复制 spec 文件到 SPECS 目录
-# ---------------------------------------------------------------------------
-cp "${SCRIPT_DIR}/sujian.spec" "${RPM_TOPDIR}/SPECS/${NAME}.spec"
+SUJIAN_FETCH_ORT=1 bash "${SCRIPT_DIR}/../correction/fetch-model.sh" "${BUNDLED_MODEL_DIR}"
 
 # ---------------------------------------------------------------------------
 # 5.5. 计算并导出构建身份环境变量
 # ---------------------------------------------------------------------------
-# RPM staging 排除了 .git，build.rs 无法在 rpmbuild 内获取 git SHA。
-# 在仓库根目录先取 SHA，通过环境变量传给 rpmbuild/Cargo。
+# 显式传递 SHA 给 rpmbuild/Cargo，确保本地与 GitHub Actions 的构建身份一致。
 # Issue #710 评论 5731145076: git sha 不能再正常产出 unknown。
 # 优先使用显式传入值；GitHub Actions 直接使用 GITHUB_SHA，避免容器挂载仓库
 # 因 safe.directory / ownership 导致 git rev-parse 失败；本机构建再回退 git。
@@ -163,15 +113,18 @@ echo "==> SUJIAN_GIT_COMMIT_SHA=${SUJIAN_GIT_COMMIT_SHA}"
 echo "==> SUJIAN_PACKAGE_TYPE=${SUJIAN_PACKAGE_TYPE}"
 
 # ---------------------------------------------------------------------------
-# 6. 执行 rpmbuild -bb（仅构建二进制 RPM）
+# 4. 原仓库目录编译、打包（仅构建二进制 RPM）
 # ---------------------------------------------------------------------------
-echo "==> rpmbuild -bb"
-rpmbuild -bb \
+# --build-in-place 跳过 %prep，%build / %install 在当前源码目录执行。
+# --noclean 保留构建工作目录；%buildroot 仍位于独立的 RPM 构建目录。
+cd "${REPO_ROOT}"
+echo "==> rpmbuild --build-in-place -bb"
+rpmbuild --build-in-place --noclean -bb \
     --define "_topdir ${RPM_TOPDIR}" \
-    "${RPM_TOPDIR}/SPECS/${NAME}.spec"
+    "${SCRIPT_DIR}/sujian.spec"
 
 # ---------------------------------------------------------------------------
-# 7. 只把用户实际安装需要的主 RPM 复制到 dist/rpm/
+# 5. 只把用户实际安装需要的主 RPM 复制到 dist/rpm/
 # ---------------------------------------------------------------------------
 DIST_DIR="${REPO_ROOT}/dist/rpm"
 mkdir -p "${DIST_DIR}"

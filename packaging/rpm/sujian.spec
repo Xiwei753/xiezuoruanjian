@@ -80,7 +80,7 @@ export SUJIAN_PACKAGE_TYPE="${SUJIAN_PACKAGE_TYPE:-rpm}"
 # 普通 rpmbuild 未传时回退到源码目录自身的 target。
 : "${CARGO_TARGET_DIR:=target}"
 export CARGO_TARGET_DIR
-cargo build --release --locked --offline -p sujian-linux-qt
+cargo build --release --locked -p sujian-linux-qt
 
 %install
 # Issue #803 评论 5904340835：启动诊断层
@@ -109,7 +109,7 @@ install -Dpm 0644 packaging/rpm/io.github.Xiwei753.Sujian.metainfo.xml \
     %{buildroot}%{_datadir}/metainfo/io.github.Xiwei753.Sujian.metainfo.xml
 
 # Issue #985：内置 MacBERT4CSC ONNX 资源目录与 ONNX Runtime。模型由
-# build-rpm.sh 在生成 Source0 tarball 前按 manifest 下载校验；运行时只读加载，
+# build-rpm.sh 在原仓库的忽略目录按 manifest 下载校验；运行时只读加载，
 # 不复制到用户目录，也不在首次启动时联网下载。
 install -dpm 0755 %{buildroot}%{_datadir}/sujian/models/macbert4csc
 install -pm 0644 packaging/correction/bundled/macbert4csc/model.onnx \
