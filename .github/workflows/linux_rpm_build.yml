@@ -50,6 +50,9 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
+          # 原地编译使用仓库真实源码路径；旧缓存来自 vendor/staging 构建，不能复用。
+          # 更换缓存版本，使首次原地编译生成的新依赖产物能够写入并供后续构建使用。
+          prefix-key: v1-rpm-inplace
           shared-key: linux-rpm-fedora43
           workspaces: ". -> target/rpm-cargo"
           cache-workspace-crates: true
