@@ -188,15 +188,47 @@ impl WriterCore {
         }
     }
 
+    /// 平台初始化注入稳定设备身份。原子纠正旧版本写错的平台和设备类别，
+    /// 保留已有 `device_id` 与历史统计分区。
+    pub(crate) fn set_platform_identity(
+        &self,
+        device_id: &str,
+        platform: writer_platform_api::PlatformKind,
+    ) -> crate::Result<()> {
+        self.set_preferred_device_id(device_id);
+        self.set_preferred_platform(platform);
+        let preferred_device_id = self.preferred_device_id();
+        crate::settings::reconcile_platform_identity(
+            &self.app_data_root,
+            platform.to_str_name(),
+            platform.default_device_class(),
+            preferred_device_id.as_deref(),
+        )?;
+        Ok(())
+    }
+
+    /// 事件入口解析平台：平台初始化的确认值优先于调用方字符串。
+    pub(crate) fn effective_platform(&self, hinted: &str) -> writer_platform_api::PlatformKind {
+        self.preferred_platform()
+            .or_else(|| writer_platform_api::PlatformKind::from_str_name(hinted))
+            .unwrap_or(writer_platform_api::PlatformKind::Desktop)
+    }
+
     pub(crate) fn preferred_platform(&self) -> Option<writer_platform_api::PlatformKind> {
         self.preferred_platform.lock().ok().and_then(|guard| *guard)
     }
 
     pub(crate) fn get_stats_api(&self) -> &StatsApi {
         let preferred = self.preferred_device_id();
-        if let Err(e) =
-            crate::settings::ensure_device_info(&self.app_data_root, "", "", preferred.as_deref())
-        {
+        let platform = self.preferred_platform();
+        if let Err(e) = crate::settings::ensure_device_info(
+            &self.app_data_root,
+            platform.map(|value| value.to_str_name()).unwrap_or(""),
+            platform
+                .map(|value| value.default_device_class())
+                .unwrap_or(""),
+            preferred.as_deref(),
+        ) {
             eprintln!("[writing_stats] ensure device info failed: {}", e);
         }
         self.stats_api

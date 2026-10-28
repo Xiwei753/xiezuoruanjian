@@ -131,8 +131,7 @@ impl super::WriterCore {
         }
 
         // 设备身份由 Core 读/建，不让平台端传；平台初始化注入的稳定 ID 优先。
-        let platform = writer_platform_api::PlatformKind::from_str_name(&input.platform)
-            .unwrap_or(writer_platform_api::PlatformKind::Desktop);
+        let platform = self.effective_platform(&input.platform);
         let preferred_device_id = self.preferred_device_id();
         let device_info = self.ensure_device_info(
             platform.to_str_name(),
@@ -502,8 +501,7 @@ impl super::WriterCore {
         self.try_recover_pending_sync_proof_intents();
 
         // 设备身份由 Core 读/建，不让平台端传；平台初始化注入的稳定 ID 优先。
-        let platform = writer_platform_api::PlatformKind::from_str_name(platform_str)
-            .unwrap_or(writer_platform_api::PlatformKind::Desktop);
+        let platform = self.effective_platform(platform_str);
         let preferred_device_id = self.preferred_device_id();
         let device_info = self.ensure_device_info(
             platform.to_str_name(),
@@ -566,8 +564,7 @@ impl super::WriterCore {
         &self,
         input: crate::api::WritingActivitySegmentInputDto,
     ) -> Result<()> {
-        let platform = writer_platform_api::PlatformKind::from_str_name(&input.platform)
-            .unwrap_or(writer_platform_api::PlatformKind::Desktop);
+        let platform = self.effective_platform(&input.platform);
         let preferred_device_id = self.preferred_device_id();
         let device_info = self.ensure_device_info(
             platform.to_str_name(),

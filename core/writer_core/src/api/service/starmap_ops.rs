@@ -126,9 +126,14 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let child_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
+        let embed_instance_id =
+            crate::storage::journal::starmap_child_embed::new_embed_instance_id();
+        let journal_tx_id = crate::storage::journal::starmap_child_embed::new_journal_token();
         let mut contribution_txn = self.begin_starmap_child_embed_contribution_transaction(
             host_starmap_id,
             &child_starmap_id,
+            &embed_instance_id,
+            &journal_tx_id,
         )?;
         let mut contribution_batch = self.begin_contribution_batch();
         let core_position: crate::starmap::types::StarMapPoint = position.into();
@@ -137,6 +142,8 @@ impl WriterCoreApi {
             .create_starmap_child_embed_with_id(
                 host_starmap_id,
                 &child_starmap_id,
+                &embed_instance_id,
+                &journal_tx_id,
                 title,
                 core_position,
             )

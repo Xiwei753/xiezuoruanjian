@@ -1002,13 +1002,31 @@ impl super::super::WriterCore {
         String,
     )> {
         let child_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
-        self.create_starmap_child_embed_with_id(host_starmap_id, &child_starmap_id, title, position)
+        let embed_instance_id =
+            crate::storage::journal::starmap_child_embed::new_embed_instance_id();
+        let journal_tx_id = crate::storage::journal::starmap_child_embed::new_journal_token();
+        self.create_starmap_child_embed_with_id(
+            host_starmap_id,
+            &child_starmap_id,
+            &embed_instance_id,
+            &journal_tx_id,
+            title,
+            position,
+        )
     }
 
+    /// 创建子星图并写入宿主 Embed。
+    ///
+    /// 调用方在写任何文件前预生成 `child_starmap_id`、`embed_instance_id` 和
+    /// `journal_tx_id`，把子图 meta/index、宿主 Embed/graph meta 和 journal
+    /// 路径登记进同一个来源事务；这样回滚时宿主文件与子图 journal 一起撤销，
+    /// 不会留下 journal 恢复又补写宿主 Embed 的相反动作。
     pub fn create_starmap_child_embed_with_id(
         &self,
         host_starmap_id: &str,
         child_starmap_id: &str,
+        embed_instance_id: &str,
+        journal_tx_id: &str,
         title: &str,
         position: crate::starmap::types::StarMapPoint,
     ) -> Result<(
@@ -1018,9 +1036,11 @@ impl super::super::WriterCore {
         String,
     )> {
         // Step 2: 写 pending journal（原子写盘）
-        let mut tx = crate::storage::journal::StarMapChildEmbedTransaction::new(
+        let mut tx = crate::storage::journal::StarMapChildEmbedTransaction::new_with_ids(
             host_starmap_id,
-            &child_starmap_id,
+            child_starmap_id,
+            journal_tx_id,
+            embed_instance_id,
             title,
             position.clone(),
             &self.app_data_root,

@@ -621,6 +621,45 @@ pub fn ensure_device_info(
     Ok(info)
 }
 
+/// 平台初始化确认运行平台后调用：保留已有 `device_id`，纠正旧版本误写的
+/// `platform` 及由错误平台派生的 `device_class`。
+///
+/// 与 [`ensure_device_info`] 不同，本函数把平台注入视为权威事实：持久化平台
+/// 与当前平台不一致时覆盖平台；平台变化时同步替换设备类别，避免早期写死的
+/// `desktop` 继续污染打字、计时和同步证明事件。平台未变化时保留已有设备类别，
+/// 让平台端上报的 phone/tablet 不被默认值覆盖。
+pub fn reconcile_platform_identity(
+    config_dir: &Path,
+    platform: &str,
+    device_class: &str,
+    preferred_device_id: Option<&str>,
+) -> Result<DeviceInfo> {
+    if platform.is_empty() {
+        return ensure_device_info(config_dir, platform, device_class, preferred_device_id);
+    }
+    let mut info = load_device_info(config_dir).unwrap_or_default();
+    let mut changed = false;
+    if info.device_id.is_empty() {
+        info.device_id = preferred_device_id
+            .filter(|id| !id.is_empty())
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        changed = true;
+    }
+    if info.platform != platform {
+        info.platform = platform.to_string();
+        info.device_class = device_class.to_string();
+        changed = true;
+    } else if info.device_class.is_empty() && !device_class.is_empty() {
+        info.device_class = device_class.to_string();
+        changed = true;
+    }
+    if changed {
+        save_device_info(config_dir, &info)?;
+    }
+    Ok(info)
+}
+
 /// Returns the effective editor font size.
 /// Primary source: SyncableSettings.font_size
 /// Fallback: LocalSettings.editor_font_size (when syncable <= 0)
@@ -1203,6 +1242,43 @@ mod inline_tests {
         )
         .unwrap();
         assert_eq!(info.device_id, "platform-device-123");
+    }
+
+    #[test]
+    fn test_reconcile_platform_identity_corrects_legacy_desktop() {
+        let temp_dir = tempdir().unwrap();
+        let legacy = DeviceInfo {
+            device_id: "device-keep-me".to_string(),
+            device_class: "desktop".to_string(),
+            platform: "desktop".to_string(),
+        };
+        save_device_info(temp_dir.path(), &legacy).unwrap();
+
+        let info = reconcile_platform_identity(temp_dir.path(), "harmony", "tablet", None).unwrap();
+        assert_eq!(info.device_id, "device-keep-me");
+        assert_eq!(info.platform, "harmony");
+        assert_eq!(info.device_class, "tablet");
+
+        let loaded = load_device_info(temp_dir.path()).unwrap();
+        assert_eq!(loaded.device_id, "device-keep-me");
+        assert_eq!(loaded.platform, "harmony");
+        assert_eq!(loaded.device_class, "tablet");
+    }
+
+    #[test]
+    fn test_reconcile_platform_identity_keeps_confirmed_device_class() {
+        let temp_dir = tempdir().unwrap();
+        let confirmed = DeviceInfo {
+            device_id: "device-1".to_string(),
+            device_class: "phone".to_string(),
+            platform: "harmony".to_string(),
+        };
+        save_device_info(temp_dir.path(), &confirmed).unwrap();
+
+        let info = reconcile_platform_identity(temp_dir.path(), "harmony", "tablet", None).unwrap();
+        assert_eq!(info.device_id, "device-1");
+        assert_eq!(info.platform, "harmony");
+        assert_eq!(info.device_class, "phone");
     }
 
     #[test]

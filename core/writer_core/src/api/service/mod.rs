@@ -124,8 +124,9 @@ impl WriterCoreApi {
         platform: writer_platform_api::PlatformKind,
     ) {
         let core = self.core_write();
-        core.set_preferred_device_id(device_id);
-        core.set_preferred_platform(platform);
+        if let Err(error) = core.set_platform_identity(device_id, platform) {
+            log::error!("[writing_stats] 纠正设备平台身份失败: {error}");
+        }
         // 应用启动、平台注入稳定设备身份后，立即补记上次进程留下的同步证明
         // 意图；此时解析出的来源分区与本次编辑事件一致。
         if core.sync_proof_intents_pending() {

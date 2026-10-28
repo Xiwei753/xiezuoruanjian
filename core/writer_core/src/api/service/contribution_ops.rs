@@ -162,20 +162,48 @@ impl WriterCoreApi {
         .map_err(Into::into)
     }
 
+    /// 子星图创建来源事务。
+    ///
+    /// 在写任何宿主文件前调用：子图 meta/index、宿主 Embed/graph meta、全局
+    /// index、同步状态和子嵌入 journal 都进入同一份恢复清单。宿主 Embed 文件
+    /// 路径由预生成的 `embed_instance_id` 确定；journal 路径在创建前登记为
+    /// “不存在”，回滚会删除它，避免 journal 恢复再补写已撤销的宿主 Embed。
     pub(crate) fn begin_starmap_child_embed_contribution_transaction(
         &self,
-        _host_starmap_id: &str,
+        host_starmap_id: &str,
         child_starmap_id: &str,
+        embed_instance_id: &str,
+        journal_tx_id: &str,
     ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
     {
         let starmaps = self.app_data_root.join("starmaps");
+        let host_embed_path =
+            self.app_data_root
+                .join(crate::starmap::package_storage::embed_rel_path(
+                    host_starmap_id,
+                    embed_instance_id,
+                ));
+        let host_graph_meta_path =
+            self.app_data_root
+                .join(crate::starmap::package_storage::graph_meta_rel_path(
+                    host_starmap_id,
+                ));
+        let child_journal_path = crate::storage::journal::starmap_child_embed::journal_file_path(
+            &self.app_data_root,
+            journal_tx_id,
+        );
         crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
             &self.app_data_root,
             vec![
+                // 先撤销子嵌入 journal：回滚中途崩溃时，后续恢复不会把已撤销的
+                // 宿主 Embed 当成“journal 已记录、待补 history”再补回来。
+                child_journal_path,
                 starmaps.join(child_starmap_id),
                 starmaps.join(format!("{child_starmap_id}.meta.json")),
                 starmaps.join("index.json"),
                 self.app_data_root.join("app-meta/sync/state.local.json"),
+                host_embed_path,
+                host_graph_meta_path,
             ],
         )
         .map_err(Into::into)

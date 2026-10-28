@@ -104,11 +104,33 @@ pub struct StarMapChildEmbedTransaction {
     completed: bool,
 }
 
+/// 生成新的子嵌入 journal 事务 ID。
+pub(crate) fn new_journal_token() -> String {
+    format!(
+        "{}_{}",
+        chrono::Utc::now().timestamp_millis(),
+        uuid::Uuid::new_v4()
+    )
+}
+
+/// 生成 Embed 实例 ID。
+pub(crate) fn new_embed_instance_id() -> String {
+    format!("em_{}", uuid::Uuid::new_v4())
+}
+
+/// journal 文件路径。用于调用方在写入前把该路径纳入同一恢复计划。
+pub(crate) fn journal_file_path(app_data_root: &Path, tx_id: &str) -> PathBuf {
+    app_data_root
+        .join(CHILD_EMBED_JOURNALS_DIR)
+        .join(format!("{}{}", CHILD_EMBED_JOURNAL_PREFIX, tx_id))
+}
+
 impl StarMapChildEmbedTransaction {
     /// 创建新的子嵌入事务。
     ///
     /// 接收预先生成的 `child_starmap_id`（格式 `sm_{uuid}`），在 journal 中记录
-    /// 宿主星图、子星图、标题和位置信息。
+    /// 宿主星图、子星图、标题和位置信息。Embed 实例 ID 和事务 ID 自动生成；
+    /// 需要和来源事务共用 ID 时使用 [`Self::new_with_ids`]。
     pub fn new(
         host_starmap_id: &str,
         child_starmap_id: &str,
@@ -116,27 +138,61 @@ impl StarMapChildEmbedTransaction {
         position: crate::starmap::types::StarMapPoint,
         app_data_root: &Path,
     ) -> Self {
-        let tx_id = format!(
-            "{}_{}",
-            chrono::Utc::now().timestamp_millis(),
-            uuid::Uuid::new_v4()
-        );
+        Self::new_with_ids(
+            host_starmap_id,
+            child_starmap_id,
+            &new_journal_token(),
+            &new_embed_instance_id(),
+            title,
+            position,
+            app_data_root,
+        )
+    }
 
-        let embed_instance_id = format!("em_{}", uuid::Uuid::new_v4());
+    /// 创建子嵌入事务，使用调用方预生成的 Embed 实例 ID。
+    pub fn new_with_embed_instance_id(
+        host_starmap_id: &str,
+        child_starmap_id: &str,
+        embed_instance_id: &str,
+        title: &str,
+        position: crate::starmap::types::StarMapPoint,
+        app_data_root: &Path,
+    ) -> Self {
+        Self::new_with_ids(
+            host_starmap_id,
+            child_starmap_id,
+            &new_journal_token(),
+            embed_instance_id,
+            title,
+            position,
+            app_data_root,
+        )
+    }
 
+    /// 创建子嵌入事务，事务 ID 与 Embed 实例 ID 均由调用方预生成。
+    ///
+    /// 来源事务需要在写任何宿主文件前登记 journal 路径和 Embed 文件路径，
+    /// 因此这两个 ID 必须先于 journal 创建确定下来。
+    pub(crate) fn new_with_ids(
+        host_starmap_id: &str,
+        child_starmap_id: &str,
+        tx_id: &str,
+        embed_instance_id: &str,
+        title: &str,
+        position: crate::starmap::types::StarMapPoint,
+        app_data_root: &Path,
+    ) -> Self {
         let journal = StarMapChildEmbedJournal {
-            tx_id: tx_id.clone(),
+            tx_id: tx_id.to_string(),
             host_starmap_id: host_starmap_id.to_string(),
             child_starmap_id: child_starmap_id.to_string(),
-            embed_instance_id: Some(embed_instance_id.clone()),
+            embed_instance_id: Some(embed_instance_id.to_string()),
             title: title.to_string(),
             position,
             phase: StarMapChildEmbedPhase::Pending,
         };
 
-        let journal_path = app_data_root
-            .join(CHILD_EMBED_JOURNALS_DIR)
-            .join(format!("{}{}", CHILD_EMBED_JOURNAL_PREFIX, tx_id));
+        let journal_path = journal_file_path(app_data_root, tx_id);
 
         Self {
             journal,

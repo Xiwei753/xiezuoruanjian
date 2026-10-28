@@ -363,7 +363,9 @@ impl WriterCoreApi {
 
     /// 贡献来源统计：历史操作量与当前保留内容来源一次查询返回。
     ///
-    /// 只读已落盘的对象事件；MCP 写入的对象变更会在 Core 业务层记为 Ai。
+    /// 统计读取先取得跨进程工作区写锁；`WorkspaceWriteLock::acquire()` 在同一
+    /// 锁内完成贡献事务恢复，避免只读查询回滚另一进程正在执行的事务。恢复失败
+    /// 会把 Core 错误直接传回调用方。
     #[allow(clippy::too_many_arguments)]
     pub fn get_contribution_stats(
         &self,
@@ -374,11 +376,8 @@ impl WriterCoreApi {
         object_type: Option<&str>,
         device_id: Option<&str>,
     ) -> ApiResult<crate::api::types::ContributionStatsDto> {
-        if let Err(error) = crate::writing_stats::contribution_transaction::recover_pending(
-            &self.app_data_root,
-        ) {
-            log::warn!("recover pending contribution transactions failed: {error}");
-        }
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let current_texts = if object_type.is_none_or(|value| value == "starmap_node") {
             self.collect_current_starmap_texts(project_id)?
         } else {
