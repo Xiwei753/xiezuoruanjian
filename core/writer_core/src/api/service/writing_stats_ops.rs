@@ -374,11 +374,8 @@ impl WriterCoreApi {
         object_type: Option<&str>,
         device_id: Option<&str>,
     ) -> ApiResult<crate::api::types::ContributionStatsDto> {
-        let legacy_texts = if object_type.is_none_or(|value| value == "starmap_node")
-            && actor.is_none_or(|value| value == "unknown")
-            && device_id.is_none()
-        {
-            self.collect_legacy_starmap_texts(project_id)
+        let current_texts = if object_type.is_none_or(|value| value == "starmap_node") {
+            self.collect_current_starmap_texts(project_id)?
         } else {
             Vec::new()
         };
@@ -393,7 +390,7 @@ impl WriterCoreApi {
                     actor,
                     object_type,
                     device_id,
-                    &legacy_texts,
+                    &current_texts,
                 )?,
                 stats.history_scope(),
             )

@@ -4,11 +4,9 @@ mod tools;
 
 use std::path::PathBuf;
 
-use rmcp::transport::stdio;
-use writer_core::api::service::WriterCoreApi;
-
 use crate::context::McpContext;
 use crate::server::SujianMcpServer;
+use rmcp::transport::stdio;
 
 fn usage() -> &'static str {
     "sujian_mcp — local MCP server for Sujian\n\
@@ -88,8 +86,7 @@ async fn main() {
         projects_root.display()
     );
 
-    let api = WriterCoreApi::new(&app_data_root, &projects_root);
-    let server = SujianMcpServer::new(McpContext::new(api));
+    let server = SujianMcpServer::new(McpContext::new(&app_data_root, &projects_root));
 
     match rmcp::serve_server(server, stdio()).await {
         Ok(service) => {

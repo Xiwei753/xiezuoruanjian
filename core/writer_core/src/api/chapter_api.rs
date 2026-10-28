@@ -397,7 +397,7 @@ impl WriterCoreApi {
         }
         if let Some(pending) = pending_annotations {
             if pending.baseline_id.is_some() {
-                self.finish_annotation_edit_save(&pending);
+                self.finish_annotation_edit_save(&pending)?;
             }
             self.refresh_annotation_search_index(project_id, "save_chapter_content");
         }

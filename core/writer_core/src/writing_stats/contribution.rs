@@ -238,6 +238,20 @@ impl ContributionObjectSnapshot {
     }
 }
 
+/// 当前真实对象中的可归属文字快照。
+///
+/// 投影「当前保留内容来源」时必须与磁盘上的当前对象对账，不能只相信事件流：
+/// 对象可能被删除、被旧版本覆盖，或由没有贡献事件的旧代码写入。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentTextSnapshot {
+    pub project_id: String,
+    pub object_type: ContributionObjectType,
+    pub object_id: String,
+    pub container_id: Option<String>,
+    pub version: String,
+    pub text: String,
+}
+
 /// 一次成功对象修改的来源事件。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContributionEvent {
@@ -297,21 +311,31 @@ impl ContributionEvent {
                 .and_then(|snapshot| snapshot.text.as_deref()),
             after.as_ref().and_then(|snapshot| snapshot.text.as_deref()),
         );
+        let object_id = object_id.into();
+        let after_version = after.as_ref().map(|snapshot| snapshot.version.clone());
+        let event_id = format!(
+            "{}:{}:{}:{}:{}",
+            context.transaction_id(),
+            object_type.as_str(),
+            object_id,
+            operation.as_str(),
+            after_version.as_deref().unwrap_or("deleted")
+        );
         Self {
-            event_id: uuid::Uuid::new_v4().to_string(),
+            event_id,
             origin_device_id: String::new(),
             occurred_at_ms: context.occurred_at_ms(),
             local_date: String::new(),
             project_id: project_id.into(),
             object_type,
-            object_id: object_id.into(),
+            object_id,
             container_id,
             operation,
             actor: context.actor(),
             entrypoint: context.entrypoint(),
             transaction_id: context.transaction_id().to_string(),
             before_version: before.as_ref().map(|snapshot| snapshot.version.clone()),
-            after_version: after.as_ref().map(|snapshot| snapshot.version.clone()),
+            after_version,
             before_summary: before.as_ref().map(|snapshot| snapshot.summary.clone()),
             after_summary: after.as_ref().map(|snapshot| snapshot.summary.clone()),
             inserted_chars: inserted,

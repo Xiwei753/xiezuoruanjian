@@ -406,6 +406,8 @@ impl WriterCoreApi {
         name: String,
         color: Option<String>,
     ) -> ApiResult<AnnotationTagDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let name = name.trim();
         if name.is_empty() || name.chars().any(char::is_control) {
             return Err(invalid_annotation("tag name must be non-empty text"));
@@ -440,7 +442,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Create,
             None,
             Some(after),
-        );
+        )?;
         Ok(result)
     }
 
@@ -450,6 +452,8 @@ impl WriterCoreApi {
         tag_id: String,
         name: String,
     ) -> ApiResult<AnnotationTagDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let name = name.trim();
         if name.is_empty() || name.chars().any(char::is_control) {
             return Err(invalid_annotation("tag name must be non-empty text"));
@@ -485,11 +489,13 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Update,
             Some(before),
             Some(after),
-        );
+        )?;
         Ok(result)
     }
 
     pub fn delete_tag(&self, project_id: String, tag_id: String) -> ApiResult<bool> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let store = self.annotation_store(&project_id)?;
         let before = store
             .get_tag(&tag_id)
@@ -515,7 +521,7 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionOperation::Delete,
                 before,
                 None,
-            );
+            )?;
         }
         Ok(changed)
     }
@@ -526,6 +532,9 @@ impl WriterCoreApi {
         source_tag_id: String,
         target_tag_id: String,
     ) -> ApiResult<bool> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_batch = self.begin_contribution_batch();
         let store = self.annotation_store(&project_id)?;
         let source_before = store
             .get_tag(&source_tag_id)
@@ -564,7 +573,7 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionOperation::Delete,
                 source_before,
                 None,
-            );
+            )?;
             self.record_annotation_object_with_context(
                 &context,
                 &project_id,
@@ -573,8 +582,9 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionOperation::Update,
                 target_before,
                 target_after,
-            );
+            )?;
         }
+        self.commit_contribution_batch(&mut contribution_batch)?;
         Ok(changed)
     }
 
@@ -584,6 +594,9 @@ impl WriterCoreApi {
         target: AnnotationObjectRefDto,
         tag_ids: Vec<String>,
     ) -> ApiResult<Vec<AnnotationTagBindingDto>> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_batch = self.begin_contribution_batch();
         let target = object_ref_from_dto(target)?;
         if target.project_id() != project_id {
             return Err(invalid_annotation(
@@ -712,7 +725,7 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionOperation::Unlink,
                 Some(snapshot),
                 None,
-            );
+            )?;
         }
         for (binding_id, snapshot) in added_bindings {
             self.record_annotation_object_with_context(
@@ -723,8 +736,9 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionOperation::Link,
                 None,
                 Some(snapshot),
-            );
+            )?;
         }
+        self.commit_contribution_batch(&mut contribution_batch)?;
         store
             .list_bindings_for_target(&target)
             .map(|values| values.into_iter().map(binding_to_dto).collect())
@@ -772,6 +786,8 @@ impl WriterCoreApi {
         text_revision: u64,
         text: String,
     ) -> ApiResult<AnnotationTextAnchorDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         safe_project_id(&project_id)?;
         if chapter_id.is_empty() || start_byte >= end_byte {
             return Err(invalid_annotation(
@@ -828,7 +844,7 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionOperation::Create,
                 None,
                 Some(snapshot),
-            );
+            )?;
             return Ok(result);
         }
         let now = chrono::Utc::now().timestamp_millis();
@@ -883,6 +899,8 @@ impl WriterCoreApi {
         confirmed_misspellings: Vec<String>,
         auto_link_enabled: bool,
     ) -> ApiResult<AnnotationNamedEntryDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         self.ensure_named_entries_migrated(&project_id)?;
         let (canonical_name, aliases, confirmed_misspellings) =
             validate_named_entry(canonical_name, aliases, confirmed_misspellings)?;
@@ -914,7 +932,7 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Create,
             None,
             Some(snapshot),
-        );
+        )?;
         Ok(result)
     }
 
@@ -927,6 +945,8 @@ impl WriterCoreApi {
         confirmed_misspellings: Vec<String>,
         auto_link_enabled: bool,
     ) -> ApiResult<AnnotationNamedEntryDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         self.ensure_named_entries_migrated(&project_id)?;
         let (canonical_name, aliases, confirmed_misspellings) =
             validate_named_entry(canonical_name, aliases, confirmed_misspellings)?;
@@ -962,11 +982,13 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Update,
             Some(before),
             Some(after),
-        );
+        )?;
         Ok(result)
     }
 
     pub fn delete_named_entry(&self, project_id: String, entry_id: String) -> ApiResult<bool> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         self.ensure_named_entries_migrated(&project_id)?;
         let store = self.annotation_store(&project_id)?;
         let before = store
@@ -996,7 +1018,7 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionOperation::Delete,
                 before,
                 None,
-            );
+            )?;
         }
         Ok(changed)
     }
@@ -1006,6 +1028,8 @@ impl WriterCoreApi {
         source: AnnotationObjectRefDto,
         target: AnnotationTargetDto,
     ) -> ApiResult<AnnotationObjectLinkDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let source = object_ref_from_dto(source)?;
         let target = link_target_from_dto(target)?;
         if !self.object_ref_exists(&source)? {
@@ -1049,7 +1073,7 @@ impl WriterCoreApi {
                 result.updated_at_ms.to_string(),
                 format!("{:?}", result.target),
             )),
-        );
+        )?;
         Ok(result)
     }
 
@@ -1060,6 +1084,8 @@ impl WriterCoreApi {
         source: AnnotationObjectRefDto,
         target: AnnotationTargetDto,
     ) -> ApiResult<AnnotationObjectLinkDto> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         safe_project_id(&project_id)?;
         let source = object_ref_from_dto(source)?;
         if source.project_id() != project_id {
@@ -1169,7 +1195,7 @@ impl WriterCoreApi {
                     link.updated_at_ms.to_string(),
                     format!("{:?}", link.target),
                 )),
-            );
+            )?;
             let mut baselines = self
                 .annotation_edit_baselines
                 .lock()
@@ -1211,11 +1237,13 @@ impl WriterCoreApi {
             crate::writing_stats::ContributionOperation::Update,
             Some(before),
             Some(after),
-        );
+        )?;
         Ok(result)
     }
 
     pub fn delete_link(&self, project_id: String, link_id: String) -> ApiResult<bool> {
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         {
             let mut baselines = self
                 .annotation_edit_baselines
@@ -1261,7 +1289,7 @@ impl WriterCoreApi {
                 crate::writing_stats::ContributionOperation::Delete,
                 before,
                 None,
-            );
+            )?;
         }
         Ok(changed)
     }
@@ -2081,19 +2109,21 @@ impl WriterCoreApi {
         }))
     }
 
-    pub(crate) fn finish_annotation_edit_save(&self, pending: &PreparedAnnotationEditSave) {
+    pub(crate) fn finish_annotation_edit_save(
+        &self,
+        pending: &PreparedAnnotationEditSave,
+    ) -> ApiResult<()> {
         let Some(baseline_id) = pending.baseline_id.as_deref() else {
-            return;
+            return Ok(());
         };
-        let Ok(mut baselines) = self.annotation_edit_baselines.lock() else {
-            log::warn!("annotation edit baseline lock poisoned after chapter save");
-            return;
-        };
+        let mut baselines = self.annotation_edit_baselines.lock().map_err(|_| {
+            invalid_annotation("annotation edit baseline lock poisoned after chapter save")
+        })?;
         let Some(session_key) = baselines
             .get(baseline_id)
             .map(|baseline| (baseline.project_id.clone(), baseline.chapter_id.clone()))
         else {
-            return;
+            return Ok(());
         };
         baselines.retain(|id, baseline| {
             id == baseline_id
@@ -2102,7 +2132,7 @@ impl WriterCoreApi {
                 || annotation_baseline_is_dirty(baseline, &pending.chapter_text_hash)
         });
         let Some(baseline) = baselines.get_mut(baseline_id) else {
-            return;
+            return Ok(());
         };
         let context = crate::writing_stats::current_mutation_context();
         let project_id = session_key.0.clone();
@@ -2202,6 +2232,7 @@ impl WriterCoreApi {
             }
         }
         drop(baselines);
+        let mut contribution_batch = self.begin_contribution_batch();
         for (object_type, object_id, operation, before, after) in committed_objects {
             self.record_annotation_object_with_context(
                 &context,
@@ -2211,8 +2242,10 @@ impl WriterCoreApi {
                 operation,
                 before,
                 after,
-            );
+            )?;
         }
+        self.commit_contribution_batch(&mut contribution_batch)?;
+        Ok(())
     }
 }
 

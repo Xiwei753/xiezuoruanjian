@@ -16,7 +16,7 @@
 use crate::error::{Error, Result};
 use crate::writing_stats::calendar;
 use crate::writing_stats::contribution::{
-    ContributionEvent, ContributionObjectType, ContributionOperation, MutationActor,
+    ContributionEvent, ContributionOperation, CurrentTextSnapshot, MutationActor,
 };
 use crate::writing_stats::{EventSource, WritingActivitySegment, WritingInputEvent};
 use serde::{Deserialize, Serialize};
@@ -1353,19 +1353,12 @@ pub struct ContributionStatsAgg {
     pub retained_total_chars: u64,
 }
 
-/// 从对象事件投影出两种口径：
+/// 只投影历史操作量：每次成功事务都计入，删除也算历史贡献。
 ///
-/// 1. 历史操作量：每次成功事务都计入，删除也算历史贡献；
-/// 2. 当前保留内容来源：只按真实文本变更维护字符来源，删除会移除区间。
-#[allow(clippy::too_many_arguments)]
-pub fn project_contributions(
-    events: &[ContributionEvent],
-    legacy_texts: &[(String, ContributionObjectType, String, usize)],
-) -> ContributionStatsAgg {
+/// 当前保留内容来源必须由 [`project_contribution_retained`] 单独从完整历史
+/// 重建，不能把「历史区间过滤」和「当前字符来源」混在一次遍历里。
+pub fn project_contribution_history(events: &[ContributionEvent]) -> ContributionStatsAgg {
     let mut result = ContributionStatsAgg::default();
-    let mut text_by_object: HashMap<String, Vec<(char, MutationActor)>> = HashMap::new();
-    let mut object_types: HashMap<String, String> = HashMap::new();
-
     let mut ordered = events.to_vec();
     ordered.sort_by(|left, right| {
         left.occurred_at_ms
@@ -1425,34 +1418,164 @@ pub fn project_contributions(
             })
             .counts
             .add(event);
-
-        if event.is_textual() {
-            let key = format!("{}|{}", event.object_type.as_str(), event.object_id);
-            object_types.insert(key.clone(), event.object_type.as_str().to_string());
-            let sources = text_by_object.entry(key).or_default();
-            crate::writing_stats::contribution::apply_text_sources(sources, event);
-        }
     }
+    result
+}
 
-    for (key, sources) in &text_by_object {
-        let object_type = object_types.get(key).cloned().unwrap_or_default();
-        for (_, actor) in sources {
-            add_retained_chars(&mut result, &object_type, *actor);
-        }
-    }
-
-    // 没有任何来源事件的旧对象没有可恢复的操作者，按 Unknown 计入当前保留内容；
-    // 它们的文字不参与历史操作量，也不伪造对象创建/修改次数。
-    for (_project_id, object_type, object_id, chars) in legacy_texts {
-        let key = format!("{}|{}", object_type.as_str(), object_id);
-        if text_by_object.contains_key(&key) || *chars == 0 {
+/// 从对象完整历史重建当前保留文字的来源，再与磁盘上的真实对象对账。
+///
+/// 事件流只用于还原「每个字符是谁写的」；`current_texts` 决定对象今天是否
+/// 仍存在、文字是否被外部改动。删除的对象不会计入保留字数；外部改动无法
+/// 归属的字符按 `Unknown` 处理。
+///
+/// `actor_filter` / `object_type_filter` 只过滤**投影结果**，不会在重建前
+/// 删除其他 actor 的历史事件。否则「人工写 100 字、AI 改 1 字」在只查 AI 时
+/// 会把前 99 字错误归为未知。
+pub fn project_contribution_retained(
+    events: &[ContributionEvent],
+    current_texts: &[CurrentTextSnapshot],
+    actor_filter: Option<&str>,
+    object_type_filter: Option<&str>,
+) -> ContributionStatsAgg {
+    let mut result = ContributionStatsAgg::default();
+    let mut current_by_key: HashMap<TextObjectKey, &CurrentTextSnapshot> = HashMap::new();
+    for snapshot in current_texts {
+        if snapshot.text.is_empty() {
             continue;
         }
-        for _ in 0..*chars {
-            add_retained_chars(&mut result, object_type.as_str(), MutationActor::Unknown);
+        current_by_key.insert(TextObjectKey::from_snapshot(snapshot), snapshot);
+    }
+
+    let mut ordered = events.to_vec();
+    ordered.sort_by(|left, right| {
+        left.occurred_at_ms
+            .cmp(&right.occurred_at_ms)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let mut sources_by_object: HashMap<TextObjectKey, Vec<(char, MutationActor)>> = HashMap::new();
+    for event in &ordered {
+        if !event.is_textual() {
+            continue;
+        }
+        let key = TextObjectKey::from_event(event);
+        let sources = sources_by_object.entry(key).or_default();
+        crate::writing_stats::contribution::apply_text_sources(sources, event);
+    }
+
+    for (key, snapshot) in current_by_key {
+        if object_type_filter.is_some_and(|value| value != key.object_type) {
+            continue;
+        }
+        let mut sources = sources_by_object.remove(&key).unwrap_or_default();
+        reconcile_sources_with_current(&mut sources, &snapshot.text);
+        for (_, actor) in sources {
+            if actor_filter.is_some_and(|value| value != actor.as_str()) {
+                continue;
+            }
+            add_retained_chars(&mut result, &key.object_type, actor);
         }
     }
     result
+}
+
+/// 把重建出的字符来源对齐到当前真实文字。
+///
+/// 公共前后缀保留原来源，中间无法解释的新字符归 `Unknown`。这样旧事件缺少
+/// 标题、或被外部工具直接改盘时，不会把无来源内容算到某个 actor 头上。
+fn reconcile_sources_with_current(sources: &mut Vec<(char, MutationActor)>, current: &str) {
+    let current: Vec<char> = current.chars().collect();
+    if sources.is_empty() {
+        *sources = current
+            .into_iter()
+            .map(|ch| (ch, MutationActor::Unknown))
+            .collect();
+        return;
+    }
+    let prefix = sources
+        .iter()
+        .map(|(ch, _)| *ch)
+        .zip(current.iter().copied())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let max_suffix = sources.len().min(current.len()).saturating_sub(prefix);
+    let suffix = sources
+        .iter()
+        .rev()
+        .map(|(ch, _)| *ch)
+        .zip(current.iter().rev().copied())
+        .take(max_suffix)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let current_middle_end = current.len().saturating_sub(suffix);
+    let old_suffix = if suffix > 0 {
+        sources[sources.len() - suffix..].to_vec()
+    } else {
+        Vec::new()
+    };
+    sources.truncate(prefix);
+    sources.extend(
+        current[prefix..current_middle_end]
+            .iter()
+            .copied()
+            .map(|ch| (ch, MutationActor::Unknown)),
+    );
+    sources.extend(old_suffix);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TextObjectKey {
+    project_id: String,
+    object_type: String,
+    object_id: String,
+    container_id: Option<String>,
+}
+
+impl TextObjectKey {
+    fn from_event(event: &ContributionEvent) -> Self {
+        Self {
+            project_id: event.project_id.clone(),
+            object_type: event.object_type.as_str().to_string(),
+            object_id: event.object_id.clone(),
+            container_id: event.container_id.clone(),
+        }
+    }
+
+    fn from_snapshot(snapshot: &CurrentTextSnapshot) -> Self {
+        Self {
+            project_id: snapshot.project_id.clone(),
+            object_type: snapshot.object_type.as_str().to_string(),
+            object_id: snapshot.object_id.clone(),
+            container_id: snapshot.container_id.clone(),
+        }
+    }
+}
+
+/// 把单独投影的保留来源合并进历史操作量结果。
+pub fn merge_contribution_retained(
+    target: &mut ContributionStatsAgg,
+    retained: &ContributionStatsAgg,
+) {
+    target.retained_total_chars = retained.retained_total_chars;
+    for aggregate in retained.actors.values() {
+        target
+            .actors
+            .entry(aggregate.actor.clone())
+            .or_insert_with(|| ContributionActorAgg {
+                actor: aggregate.actor.clone(),
+                ..Default::default()
+            })
+            .retained_chars = aggregate.retained_chars;
+    }
+    for aggregate in retained.object_types.values() {
+        target
+            .object_types
+            .entry(aggregate.object_type.clone())
+            .or_insert_with(|| ContributionObjectTypeAgg {
+                object_type: aggregate.object_type.clone(),
+                ..Default::default()
+            })
+            .retained_chars = aggregate.retained_chars;
+    }
 }
 
 fn add_retained_chars(result: &mut ContributionStatsAgg, object_type: &str, actor: MutationActor) {

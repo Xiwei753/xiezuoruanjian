@@ -1,27 +1,36 @@
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 use rmcp::{model::ErrorCode, ErrorData};
 use writer_core::api::service::WriterCoreApi;
 use writer_core::api::WriterError;
 use writer_core::writing_stats::{with_mutation_context, MutationContext};
 
-/// Shared Core handle for all MCP tools.
+/// Local workspace context for MCP tools.
+///
+/// A fresh Core API is constructed for every tool call. The desktop client also
+/// constructs a Core API per operation, so both sides always read the current
+/// on-disk object and never keep competing starmap caches. Core-level workspace
+/// write locks serialize concurrent object mutations across processes.
 ///
 /// Tool handlers never construct mutation contexts themselves: every write goes
 /// through [`McpContext::write`], which pins the actor to `Ai` and the
 /// entrypoint to `mcp`. Tool parameters therefore cannot claim another actor.
 #[derive(Clone)]
 pub struct McpContext {
-    api: Arc<WriterCoreApi>,
+    app_data_root: PathBuf,
+    projects_root: PathBuf,
 }
 
 impl McpContext {
-    pub fn new(api: WriterCoreApi) -> Self {
-        Self { api: Arc::new(api) }
+    pub fn new(app_data_root: impl AsRef<Path>, projects_root: impl AsRef<Path>) -> Self {
+        Self {
+            app_data_root: app_data_root.as_ref().to_path_buf(),
+            projects_root: projects_root.as_ref().to_path_buf(),
+        }
     }
 
-    pub fn api(&self) -> &WriterCoreApi {
-        &self.api
+    pub fn api(&self) -> WriterCoreApi {
+        WriterCoreApi::new(&self.app_data_root, &self.projects_root)
     }
 
     /// Runs a Core mutation as an MCP-originated AI edit.
@@ -29,8 +38,8 @@ impl McpContext {
         &self,
         operation: impl FnOnce(&WriterCoreApi) -> Result<T, WriterError>,
     ) -> Result<T, ErrorData> {
-        let result = with_mutation_context(MutationContext::mcp(), || operation(&self.api));
-        result.map_err(api_error)
+        let api = self.api();
+        with_mutation_context(MutationContext::mcp(), || operation(&api)).map_err(api_error)
     }
 }
 

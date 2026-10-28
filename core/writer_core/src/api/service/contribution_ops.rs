@@ -2,8 +2,11 @@
 //!
 //! 所有星图/注释写操作在 Core 持久化成功后调用这里。调用点不自行拼统计
 //! 数字，也不允许平台端上报 actor；actor/entrypoint 来自当前业务入口的
-//! [`MutationContext`]。记录失败只写日志，不回滚已经成功的业务写入，也绝不
-//! 在业务失败时留下假事件。
+//! [`MutationContext`]。事件先写入 pending journal，再追加到正式分区；
+//! 记录失败会作为业务 API 错误返回，不再静默丢失来源。业务写入失败时不会
+//! 留下任何事件。
+
+use std::cell::RefCell;
 
 use crate::api::service::WriterCoreApi;
 use crate::starmap::semantic::StarMapNodeContent;
@@ -11,10 +14,57 @@ use crate::starmap::types::StarMapGraph;
 use crate::starmap::StarMapMeta;
 use crate::writing_stats::contribution::{
     current_mutation_context, ContributionEvent, ContributionObjectSnapshot,
-    ContributionObjectType, ContributionOperation, MutationContext,
+    ContributionObjectType, ContributionOperation, CurrentTextSnapshot, MutationContext,
 };
 
+thread_local! {
+    static ACTIVE_BATCH: RefCell<Option<Vec<ContributionEvent>>> = const { RefCell::new(None) };
+}
+
+/// 一次业务事务内的来源事件批次。成功提交时整批写入 pending journal；
+/// 业务返回错误时 [`Drop`] 丢弃，绝不留下假事件。
+pub(crate) struct ContributionBatch {
+    owns_batch: bool,
+}
+
+impl Drop for ContributionBatch {
+    fn drop(&mut self) {
+        if self.owns_batch {
+            ACTIVE_BATCH.with(|slot| {
+                slot.borrow_mut().take();
+            });
+        }
+    }
+}
+
 impl WriterCoreApi {
+    pub(crate) fn begin_contribution_batch(&self) -> ContributionBatch {
+        let owns_batch = ACTIVE_BATCH.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_some() {
+                false
+            } else {
+                *slot = Some(Vec::new());
+                true
+            }
+        });
+        ContributionBatch { owns_batch }
+    }
+
+    pub(crate) fn commit_contribution_batch(
+        &self,
+        batch: &mut ContributionBatch,
+    ) -> super::ApiResult<()> {
+        if !batch.owns_batch {
+            return Ok(());
+        }
+        batch.owns_batch = false;
+        let events = ACTIVE_BATCH
+            .with(|slot| slot.borrow_mut().take())
+            .unwrap_or_default();
+        self.record_contribution_events(events)
+    }
+
     pub(crate) fn record_contribution_event(
         &self,
         project_id: &str,
@@ -24,7 +74,7 @@ impl WriterCoreApi {
         container_id: Option<String>,
         before: Option<ContributionObjectSnapshot>,
         after: Option<ContributionObjectSnapshot>,
-    ) {
+    ) -> super::ApiResult<()> {
         let context = current_mutation_context();
         self.record_contribution_event_with_context(
             &context,
@@ -35,7 +85,7 @@ impl WriterCoreApi {
             container_id,
             before,
             after,
-        );
+        )
     }
 
     /// 同一业务事务里的多个对象变更必须共享事务 ID。
@@ -50,7 +100,7 @@ impl WriterCoreApi {
         container_id: Option<String>,
         before: Option<ContributionObjectSnapshot>,
         after: Option<ContributionObjectSnapshot>,
-    ) {
+    ) -> super::ApiResult<()> {
         let event = ContributionEvent::new(
             context,
             project_id,
@@ -61,20 +111,30 @@ impl WriterCoreApi {
             before,
             after,
         );
-        self.record_contribution_events(vec![event]);
+        let batched = ACTIVE_BATCH.with(|slot| slot.borrow().is_some());
+        if batched {
+            ACTIVE_BATCH.with(|slot| {
+                if let Some(events) = slot.borrow_mut().as_mut() {
+                    events.push(event);
+                }
+            });
+            return Ok(());
+        }
+        self.record_contribution_events(vec![event])
     }
 
-    pub(crate) fn record_contribution_events(&self, events: Vec<ContributionEvent>) {
+    pub(crate) fn record_contribution_events(
+        &self,
+        events: Vec<ContributionEvent>,
+    ) -> super::ApiResult<()> {
         if events.is_empty() {
-            return;
+            return Ok(());
         }
-        let result = self
-            .core_write()
+        self.core_write()
             .get_stats_api()
-            .record_contribution_events(events);
-        if let Err(error) = result {
-            log::warn!("record contribution events failed: {error}");
-        }
+            .record_contribution_events(events)
+            .map(|_| ())
+            .map_err(Into::into)
     }
 
     /// 从星图当前快照生成对象来源快照；不存在返回 `None`（删除后）。
@@ -92,7 +152,7 @@ impl WriterCoreApi {
                     ContributionObjectSnapshot::text(
                         node.updated_at.to_string(),
                         node.title.clone(),
-                        Self::node_contributing_text(&node.content),
+                        Self::node_contributing_text(&node.title, &node.content),
                     )
                 }),
             ContributionObjectType::StarMapEdge => graph
@@ -162,7 +222,7 @@ impl WriterCoreApi {
         operation: ContributionOperation,
         before_graph: Option<&StarMapGraph>,
         after_graph: Option<&StarMapGraph>,
-    ) {
+    ) -> super::ApiResult<()> {
         let before = before_graph
             .and_then(|graph| Self::starmap_object_snapshot(graph, object_type, object_id));
         let after = after_graph
@@ -176,7 +236,7 @@ impl WriterCoreApi {
             Some(starmap_id.to_string()),
             before,
             after,
-        );
+        )
     }
 
     pub(crate) fn record_starmap_object(
@@ -188,7 +248,7 @@ impl WriterCoreApi {
         operation: ContributionOperation,
         before_graph: Option<&StarMapGraph>,
         after_graph: Option<&StarMapGraph>,
-    ) {
+    ) -> super::ApiResult<()> {
         let context = current_mutation_context();
         self.record_starmap_object_with_context(
             &context,
@@ -199,23 +259,23 @@ impl WriterCoreApi {
             operation,
             before_graph,
             after_graph,
-        );
+        )
     }
 
     pub(crate) fn get_starmap_graph_snapshot(&self, starmap_id: &str) -> Option<StarMapGraph> {
         self.core_write().get_starmap_graph(starmap_id).ok()
     }
 
-    /// 节点正文用于保留内容来源；不把引用类内容伪造成作者文字。
-    /// 收集当前仍存在、但没有贡献事件的星图节点文字，供统计按 Unknown 兜底。
-    pub(crate) fn collect_legacy_starmap_texts(
+    /// 收集当前仍存在的星图节点文字快照。
+    ///
+    /// 快照包含节点标题和正文，带 project/container/version；统计投影用它
+    /// 与事件历史对账，删除或外部改盘的内容不会被错误计入当前保留来源。
+    pub(crate) fn collect_current_starmap_texts(
         &self,
         project_id: Option<&str>,
-    ) -> Vec<(String, ContributionObjectType, String, usize)> {
-        let Ok(starmaps) = self.list_starmaps() else {
-            return Vec::new();
-        };
-        let mut legacy = Vec::new();
+    ) -> super::ApiResult<Vec<CurrentTextSnapshot>> {
+        let starmaps = self.list_starmaps()?;
+        let mut snapshots = Vec::new();
         for starmap in starmaps {
             let starmap_project = starmap.project_id.clone().unwrap_or_default();
             if project_id.is_some_and(|value| value != starmap_project) {
@@ -225,38 +285,37 @@ impl WriterCoreApi {
                 continue;
             };
             for node in graph.nodes {
-                let text = dto_node_contributing_text(&node.content);
-                let chars = text.chars().count();
-                if chars > 0 {
-                    legacy.push((
-                        starmap_project.clone(),
-                        ContributionObjectType::StarMapNode,
-                        node.id,
-                        chars,
-                    ));
+                let text = dto_node_contributing_text(&node.title, &node.content);
+                if text.is_empty() {
+                    continue;
                 }
+                snapshots.push(CurrentTextSnapshot {
+                    project_id: starmap_project.clone(),
+                    object_type: ContributionObjectType::StarMapNode,
+                    object_id: node.id,
+                    container_id: Some(starmap.starmap_id.clone()),
+                    version: node.updated_at.to_string(),
+                    text,
+                });
             }
         }
-        legacy
+        Ok(snapshots)
     }
 
-    pub(crate) fn node_contributing_text(content: &StarMapNodeContent) -> String {
-        match content {
-            StarMapNodeContent::Inline { summary, body } => {
-                let mut text = String::new();
-                if let Some(summary) = summary {
-                    text.push_str(summary);
-                }
-                if let Some(body) = body {
-                    if !text.is_empty() {
-                        text.push('\n');
-                    }
-                    text.push_str(body);
-                }
-                text
+    pub(crate) fn node_contributing_text(title: &str, content: &StarMapNodeContent) -> String {
+        let mut text = String::new();
+        text.push_str(title);
+        if let StarMapNodeContent::Inline { summary, body } = content {
+            if let Some(summary) = summary {
+                text.push('\n');
+                text.push_str(summary);
             }
-            _ => String::new(),
+            if let Some(body) = body {
+                text.push('\n');
+                text.push_str(body);
+            }
         }
+        text
     }
 
     /// 注释对象（标签、绑定、锚点、链接）事件。
@@ -268,7 +327,7 @@ impl WriterCoreApi {
         operation: ContributionOperation,
         before: Option<ContributionObjectSnapshot>,
         after: Option<ContributionObjectSnapshot>,
-    ) {
+    ) -> super::ApiResult<()> {
         let context = current_mutation_context();
         self.record_annotation_object_with_context(
             &context,
@@ -278,7 +337,7 @@ impl WriterCoreApi {
             operation,
             before,
             after,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -291,7 +350,7 @@ impl WriterCoreApi {
         operation: ContributionOperation,
         before: Option<ContributionObjectSnapshot>,
         after: Option<ContributionObjectSnapshot>,
-    ) {
+    ) -> super::ApiResult<()> {
         self.record_contribution_event_with_context(
             context,
             project_id,
@@ -301,7 +360,7 @@ impl WriterCoreApi {
             None,
             before,
             after,
-        );
+        )
     }
 
     pub(crate) fn annotation_snapshot(
@@ -312,18 +371,20 @@ impl WriterCoreApi {
     }
 }
 
-fn dto_node_contributing_text(content: &crate::api::types::StarMapNodeContentDto) -> String {
+fn dto_node_contributing_text(
+    title: &str,
+    content: &crate::api::types::StarMapNodeContentDto,
+) -> String {
+    let mut text = title.to_string();
     if content.kind != "inline" {
-        return String::new();
+        return text;
     }
-    let mut text = String::new();
     if let Some(summary) = &content.summary {
+        text.push('\n');
         text.push_str(summary);
     }
     if let Some(body) = &content.body {
-        if !text.is_empty() {
-            text.push('\n');
-        }
+        text.push('\n');
         text.push_str(body);
     }
     text

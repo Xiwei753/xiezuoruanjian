@@ -11,11 +11,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::error::{Error, Result};
+use crate::storage::atomic_write_string;
 use crate::writing_stats::contribution::{
     ContributionEvent, ContributionObjectType, ContributionOperation, MutationActor,
 };
 
 const EVENTS_ROOT: &str = "stats/events";
+const PENDING_ROOT: &str = "stats/pending/contributions";
 const OBJECTS_SUFFIX: &str = ".objects.jsonl";
 
 pub struct ContributionStore {
@@ -67,12 +69,15 @@ impl ContributionStore {
     }
 
     /// 幂等追加一批对象事件；返回真正新写入的事件数。
+    ///
+    /// 事件先以事务为粒度落盘到 pending journal，再追加到正式分区。追加失败时
+    /// journal 保留，下次记录/读取时重放；稳定的 `event_id` 保证重放不会重复。
     pub fn record_events(&self, events: Vec<ContributionEvent>) -> Result<usize> {
         if events.is_empty() {
             return Ok(0);
         }
         let origin = self.resolve_origin_device_id()?;
-        let mut by_date: BTreeMap<String, Vec<ContributionEvent>> = BTreeMap::new();
+        let mut prepared = Vec::with_capacity(events.len());
         for mut event in events {
             if event.local_date.is_empty() {
                 event.local_date =
@@ -85,6 +90,19 @@ impl ContributionStore {
             if event.origin_device_id.is_empty() {
                 event.origin_device_id = origin.clone();
             }
+            prepared.push(event);
+        }
+
+        self.recover_pending_events()?;
+        let transaction_id = prepared
+            .first()
+            .map(|event| event.transaction_id.clone())
+            .unwrap_or_default();
+        let pending_path = self.pending_file_path(&transaction_id, prepared.len());
+        self.write_pending(&pending_path, &prepared)?;
+
+        let mut by_date: BTreeMap<String, Vec<ContributionEvent>> = BTreeMap::new();
+        for event in prepared {
             let date = if event.local_date.is_empty() {
                 crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
                     .or_else(|_| crate::writing_stats::calendar::utc_date_at(event.occurred_at_ms))
@@ -100,7 +118,7 @@ impl ContributionStore {
         let mut written = 0usize;
         for (date, events) in by_date {
             let path = self.event_file_path(&origin, &date);
-            let existing = read_ids(&path)?;
+            let mut existing = read_ids(&path)?;
             let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
             for event in events {
                 if !event.event_id.is_empty() && existing.contains(&event.event_id) {
@@ -108,13 +126,113 @@ impl ContributionStore {
                 }
                 let line = serde_json::to_string(&event)?;
                 writeln!(file, "{line}")?;
+                if !event.event_id.is_empty() {
+                    existing.insert(event.event_id.clone());
+                }
                 written += 1;
             }
         }
+        fs::remove_file(&pending_path)?;
         Ok(written)
     }
 
+    /// 重放上次进程在「业务已成功、事件已进入 journal」之后未能追加的事件。
+    pub fn recover_pending_events(&self) -> Result<()> {
+        let pending_dir = self.app_data_root.join(PENDING_ROOT);
+        if !pending_dir.is_dir() {
+            return Ok(());
+        }
+        let mut paths: Vec<PathBuf> = fs::read_dir(&pending_dir)?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
+            let content = fs::read_to_string(&path)?;
+            let events: Vec<ContributionEvent> = serde_json::from_str(&content)?;
+            if !events.is_empty() {
+                self.append_events(&events)?;
+            }
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    fn pending_file_path(&self, transaction_id: &str, count: usize) -> PathBuf {
+        let safe: String = transaction_id
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let safe = if safe.is_empty() {
+            "unidentified".to_string()
+        } else {
+            safe
+        };
+        self.app_data_root
+            .join(PENDING_ROOT)
+            .join(format!("{safe}-{count}.json"))
+    }
+
+    fn write_pending(&self, path: &Path, events: &[ContributionEvent]) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        atomic_write_string(path, &serde_json::to_string(events)?)
+    }
+
+    fn append_events(&self, events: &[ContributionEvent]) -> Result<()> {
+        let mut by_origin_date: BTreeMap<(String, String), Vec<&ContributionEvent>> =
+            BTreeMap::new();
+        for event in events {
+            let origin = if event.origin_device_id.is_empty() {
+                self.resolve_origin_device_id()?
+            } else {
+                event.origin_device_id.clone()
+            };
+            let date = if event.local_date.is_empty() {
+                crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
+                    .or_else(|_| crate::writing_stats::calendar::utc_date_at(event.occurred_at_ms))
+                    .unwrap_or_else(|_| "1970-01-01".to_string())
+            } else {
+                event.local_date.clone()
+            };
+            by_origin_date
+                .entry((origin, date))
+                .or_default()
+                .push(event);
+        }
+        for ((origin, date), events) in by_origin_date {
+            let path = self.event_file_path(&origin, &date);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut existing = read_ids(&path)?;
+            let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+            for event in events {
+                if !event.event_id.is_empty() && existing.contains(&event.event_id) {
+                    continue;
+                }
+                writeln!(file, "{}", serde_json::to_string(event)?)?;
+                if !event.event_id.is_empty() {
+                    existing.insert(event.event_id.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn load_all_events(&self) -> Result<Vec<ContributionEvent>> {
+        self.recover_pending_events()?;
         let mut events = Vec::new();
         let mut seen = HashSet::new();
         for origin in self.list_origins()? {

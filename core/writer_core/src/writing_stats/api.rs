@@ -16,13 +16,12 @@ use crate::api::types::{
 };
 use crate::error::Result;
 use crate::writing_stats::calendar::{self, StatsPreset};
-use crate::writing_stats::contribution::{
-    ContributionEvent, ContributionObjectType, MutationActor,
-};
+use crate::writing_stats::contribution::{ContributionEvent, CurrentTextSnapshot};
 use crate::writing_stats::contribution_store::ContributionStore;
 use crate::writing_stats::projection::{
-    apply_measured_session_breakdown, bucket_trend, project_all_time_stats_with_sessions,
-    project_contributions, project_events, project_lifetime_stats,
+    apply_measured_session_breakdown, bucket_trend, merge_contribution_retained,
+    project_all_time_stats_with_sessions, project_contribution_history,
+    project_contribution_retained, project_events, project_lifetime_stats,
     project_measured_session_breakdown, project_measured_sessions, project_range_stats,
     project_range_stats_with_sessions, ContributionStatsAgg, CurrentWritingSpeed,
     ProjectLifetimeStatsAgg, RangeStatsAgg, StatsProjection, StatsRecord, StatsSummary,
@@ -819,8 +818,8 @@ impl StatsApi {
     }
 
     /// 贡献统计查询：历史操作量 + 当前保留内容来源。
-    /// `legacy_texts` 是当前仍存在、但从未产生贡献事件的旧对象文字，
-    /// 这些内容按 Unknown 计入保留来源。
+    /// `current_texts` 是磁盘上真实对象文字的当前快照，用于和完整事件历史
+    /// 对账；没有快照的对象视为已删除，不计入当前保留字数。
     #[allow(clippy::too_many_arguments)]
     pub fn get_contribution_stats(
         &self,
@@ -830,73 +829,49 @@ impl StatsApi {
         actor: Option<&str>,
         object_type: Option<&str>,
         device_id: Option<&str>,
-        legacy_texts: &[(String, ContributionObjectType, String, usize)],
+        current_texts: &[CurrentTextSnapshot],
     ) -> Result<ContributionStatsAgg> {
-        // 历史操作量按查询区间/来源过滤；当前保留内容来源则必须从全量历史投影，
-        // 否则区间外的创建事件会让「保留字数」凭空缩水。日期不限制保留来源，
-        // 其余维度沿用查询过滤。
-        let retained_events: Vec<_> = self
-            .contribution_store
-            .load_all_events()?
+        let all_events = self.contribution_store.load_all_events()?;
+
+        // 当前保留内容必须从完整历史重建，日期/设备/actor 只能过滤最终结果。
+        // 项目过滤可以提前做，因为对象键本身包含 project_id；但同项目内其他
+        // actor 的事件不能删，否则人工写下的旧字符会被错误归为未知。
+        // device_id 只过滤历史操作量：保留内容来自多设备共同编辑，按设备删事件
+        // 会破坏字符来源重建。
+        let retained_events: Vec<_> = all_events
+            .iter()
+            .filter(|event| project_id.is_none_or(|value| event.project_id == value))
+            .cloned()
+            .collect();
+        let retained =
+            project_contribution_retained(&retained_events, current_texts, actor, object_type);
+
+        // 历史操作量按查询条件过滤；范围外事件仍保留在保留来源投影中。
+        let mut events: Vec<_> = all_events
             .into_iter()
             .filter(|event| {
-                project_id.is_none_or(|value| event.project_id == value)
+                let date = if event.local_date.is_empty() {
+                    crate::writing_stats::calendar::local_date_at(event.occurred_at_ms)
+                        .unwrap_or_default()
+                } else {
+                    event.local_date.clone()
+                };
+                !date.is_empty()
+                    && date.as_str() >= start_date
+                    && date.as_str() <= end_date
+                    && project_id.is_none_or(|value| event.project_id == value)
                     && actor.is_none_or(|value| event.actor.as_str() == value)
                     && object_type.is_none_or(|value| event.object_type.as_str() == value)
                     && device_id.is_none_or(|value| event.origin_device_id == value)
             })
             .collect();
-        let legacy_retained: Vec<_> = legacy_texts
-            .iter()
-            .filter(|(legacy_project, legacy_type, _, _)| {
-                project_id.is_none_or(|value| legacy_project == value)
-                    && object_type.is_none_or(|value| legacy_type.as_str() == value)
-                    && actor.is_none_or(|value| value == MutationActor::Unknown.as_str())
-                    && device_id.is_none()
-            })
-            .cloned()
-            .collect();
-        let retained = project_contributions(&retained_events, &legacy_retained);
-
-        let mut events = self
-            .contribution_store
-            .load_events_range(start_date, end_date)?;
-        if let Some(project_id) = project_id {
-            events.retain(|event| event.project_id == project_id);
-        }
-        if let Some(actor) = actor {
-            events.retain(|event| event.actor.as_str() == actor);
-        }
-        if let Some(object_type) = object_type {
-            events.retain(|event| event.object_type.as_str() == object_type);
-        }
-        if let Some(device_id) = device_id {
-            events.retain(|event| event.origin_device_id == device_id);
-        }
-        let mut stats = project_contributions(&events, &[]);
-        stats.retained_total_chars = retained.retained_total_chars;
-        for aggregate in retained.actors.values() {
-            stats
-                .actors
-                .entry(aggregate.actor.clone())
-                .or_insert_with(|| crate::writing_stats::projection::ContributionActorAgg {
-                    actor: aggregate.actor.clone(),
-                    ..Default::default()
-                })
-                .retained_chars = aggregate.retained_chars;
-        }
-        for aggregate in retained.object_types.values() {
-            stats
-                .object_types
-                .entry(aggregate.object_type.clone())
-                .or_insert_with(
-                    || crate::writing_stats::projection::ContributionObjectTypeAgg {
-                        object_type: aggregate.object_type.clone(),
-                        ..Default::default()
-                    },
-                )
-                .retained_chars = aggregate.retained_chars;
-        }
+        events.sort_by(|left, right| {
+            left.occurred_at_ms
+                .cmp(&right.occurred_at_ms)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        });
+        let mut stats = project_contribution_history(&events);
+        merge_contribution_retained(&mut stats, &retained);
         Ok(stats)
     }
 
