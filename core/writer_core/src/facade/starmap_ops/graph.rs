@@ -1001,8 +1001,27 @@ impl super::super::WriterCore {
         crate::storage::workspace_git::WorkspaceChangeSet,
         String,
     )> {
-        // Step 1: 生成确定的 child_starmap_id
         let child_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
+        self.create_starmap_child_embed_with_id(
+            host_starmap_id,
+            &child_starmap_id,
+            title,
+            position,
+        )
+    }
+
+    pub fn create_starmap_child_embed_with_id(
+        &self,
+        host_starmap_id: &str,
+        child_starmap_id: &str,
+        title: &str,
+        position: crate::starmap::types::StarMapPoint,
+    ) -> Result<(
+        crate::starmap::StarMapMeta,
+        crate::starmap::types::StarMapEmbed,
+        crate::storage::workspace_git::WorkspaceChangeSet,
+        String,
+    )> {
 
         // Step 2: 写 pending journal（原子写盘）
         let mut tx = crate::storage::journal::StarMapChildEmbedTransaction::new(
@@ -1019,7 +1038,7 @@ impl super::super::WriterCore {
         // 子星图身份在创建入口就是"嵌套"，正常一级列表不靠 Embed 关系过滤。
         let child_meta = match crate::starmap::create_nested_starmap_with_id(
             &self.app_data_root,
-            &child_starmap_id,
+            child_starmap_id,
             title,
             "",
             None,

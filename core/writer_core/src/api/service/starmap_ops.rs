@@ -125,19 +125,20 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::CreateStarMapChildEmbedResultDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let child_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
         let mut contribution_txn =
-            self.begin_starmap_child_embed_contribution_transaction(host_starmap_id)?;
+            self.begin_starmap_child_embed_contribution_transaction(
+                host_starmap_id,
+                &child_starmap_id,
+            )?;
         let mut contribution_batch = self.begin_contribution_batch();
         let core_position: crate::starmap::types::StarMapPoint = position.into();
         let (starmap_meta, embed, change_set, tx_id) = self
             .core_write()
-            .create_starmap_child_embed(host_starmap_id, title, core_position)
+            .create_starmap_child_embed_with_id(host_starmap_id, &child_starmap_id, title, core_position)
             .map_err(WriterError::from)?;
 
         let starmap_id = starmap_meta.starmap_id.clone();
-        let starmaps = self.app_data_root.join("starmaps");
-        contribution_txn.track_created_root(&starmaps.join(&starmap_id))?;
-        contribution_txn.track_created_root(&starmaps.join(format!("{starmap_id}.meta.json")))?;
         let project_id = starmap_meta.project_id.as_deref().map(|s| s.to_string());
 
         // 更新搜索索引：新创建的 starmap title
@@ -617,18 +618,15 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_batch = self.begin_contribution_batch();
-        let mut contribution_txn = self.begin_starmaps_contribution_transaction()?;
+        let starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
+        let mut contribution_txn =
+            self.begin_starmap_creation_contribution_transaction(&starmap_id)?;
         //   用 _with_changes 版本拿变更集，
         // 调 record_workspace_change_set_history 记录本地历史。
         let (result, change_set) = self
             .core_write()
-            .create_starmap_with_changes(title, desc, template_id)
+            .create_starmap_with_id_with_changes(&starmap_id, title, desc, template_id)
             .map_err(WriterError::from)?;
-        let starmaps = self.app_data_root.join("starmaps");
-        contribution_txn.track_created_root(&starmaps.join(&result.starmap_id))?;
-        contribution_txn.track_created_root(
-            &starmaps.join(format!("{}.meta.json", result.starmap_id)),
-        )?;
         let project_id = result.project_id.as_deref();
         let entry = crate::search::extractor::extract_starmap_title_entry(
             &result.starmap_id,

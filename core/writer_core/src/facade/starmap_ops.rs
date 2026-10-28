@@ -46,6 +46,25 @@ impl super::WriterCore {
         crate::starmap::create_starmap(&self.app_data_root, title, description, accent_color)
     }
 
+    pub fn create_starmap_with_id_with_changes(
+        &self,
+        starmap_id: &str,
+        title: &str,
+        description: &str,
+        accent_color: Option<&str>,
+    ) -> Result<(
+        crate::starmap::StarMapMeta,
+        crate::storage::workspace_git::WorkspaceChangeSet,
+    )> {
+        crate::starmap::create_starmap_with_id_with_changes(
+            &self.app_data_root,
+            starmap_id,
+            title,
+            description,
+            accent_color,
+        )
+    }
+
     ///   create_starmap 的变更集版本。
     pub fn create_starmap_with_changes(
         &self,

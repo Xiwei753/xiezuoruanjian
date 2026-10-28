@@ -179,6 +179,7 @@ impl WriterCoreApi {
     pub(crate) fn begin_starmap_child_embed_contribution_transaction(
         &self,
         host_starmap_id: &str,
+        child_starmap_id: &str,
     ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
     {
         let starmaps = self.app_data_root.join("starmaps");
@@ -186,6 +187,27 @@ impl WriterCoreApi {
             &self.app_data_root,
             vec![
                 starmaps.join(host_starmap_id),
+                starmaps.join(child_starmap_id),
+                starmaps.join(format!("{child_starmap_id}.meta.json")),
+                starmaps.join("index.json"),
+                self.app_data_root.join("app-meta/sync/state.local.json"),
+                self.app_data_root.join("app-meta/workspace-change-journals"),
+            ],
+        )
+        .map_err(Into::into)
+    }
+
+    pub(crate) fn begin_starmap_creation_contribution_transaction(
+        &self,
+        starmap_id: &str,
+    ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
+    {
+        let starmaps = self.app_data_root.join("starmaps");
+        crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
+            &self.app_data_root,
+            vec![
+                starmaps.join(starmap_id),
+                starmaps.join(format!("{starmap_id}.meta.json")),
                 starmaps.join("index.json"),
                 self.app_data_root.join("app-meta/sync/state.local.json"),
                 self.app_data_root.join("app-meta/workspace-change-journals"),
