@@ -2125,11 +2125,42 @@ impl WriterCoreApi {
 
         // Issue #1012：整轮 target 的写入在此合并为一次 Git commit + push。
         // 只有真正改变了 tree/catalog 时才 push；完全相同则直接结束。
-        if let Err(error) = round.flush() {
-            log::warn!("[sync] full-sync round publish failed: {error}");
-            return Err(crate::api::error::WriterError::from(crate::error::Error::from(
-                error,
-            )));
+        // 该 phase 单独记录耗时与网络请求数，日志可区分“传输慢”和“真实失败”。
+        let publish_phase = SyncDiagnosticPhase::start_with_provider(
+            diagnostic_operation_id,
+            "remote_publish",
+            None,
+            provider,
+        );
+        let pending_paths = round.pending_len();
+        let publish_started_at = Instant::now();
+        match round.flush() {
+            Ok(result) => {
+                let outcome = if result.is_some() {
+                    "committed"
+                } else {
+                    "no_changes"
+                };
+                log::info!(
+                    "[sync] full-sync remote publish: outcome={} changed_paths={} duration_ms={}",
+                    outcome,
+                    pending_paths,
+                    publish_started_at.elapsed().as_millis()
+                );
+                publish_phase.finish_with_provider(outcome, provider);
+            }
+            Err(error) => {
+                log::warn!(
+                    "[sync] full-sync remote publish failed: changed_paths={} duration_ms={} error={}",
+                    pending_paths,
+                    publish_started_at.elapsed().as_millis(),
+                    error
+                );
+                publish_phase.finish_with_provider("error", provider);
+                return Err(crate::api::error::WriterError::from(
+                    crate::error::Error::from(error),
+                ));
+            }
         }
 
         // 每个 target 的 commit 已在同一写锁内完成 Store 协调与索引失效（问题2）。

@@ -227,6 +227,14 @@ impl<'a> RoundProvider<'a> {
         }
     }
 
+    /// Number of paths changed in this round before the final commit.
+    pub fn pending_len(&self) -> usize {
+        self.state
+            .lock()
+            .map(|state| state.entries.len())
+            .unwrap_or(0)
+    }
+
     /// Publish every buffered write as one atomic remote commit.
     ///
     /// Returns `None` when the round produced no mutation.  A non-batch
