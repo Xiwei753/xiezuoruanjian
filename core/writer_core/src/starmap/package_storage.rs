@@ -21,6 +21,45 @@ fn starmap_pkg_rel_dir(starmap_id: &str) -> PathBuf {
     PathBuf::from("starmaps").join(starmap_id)
 }
 
+pub(crate) fn graph_meta_rel_path(starmap_id: &str) -> PathBuf {
+    starmap_pkg_rel_dir(starmap_id).join("graph.json")
+}
+
+pub(crate) fn node_rel_path(starmap_id: &str, node_id: &str) -> PathBuf {
+    starmap_pkg_rel_dir(starmap_id)
+        .join("nodes")
+        .join(bucket_for_id(node_id))
+        .join(format!("{node_id}.json"))
+}
+
+pub(crate) fn edge_rel_path(starmap_id: &str, edge_id: &str) -> PathBuf {
+    starmap_pkg_rel_dir(starmap_id)
+        .join("edges")
+        .join(bucket_for_id(edge_id))
+        .join(format!("{edge_id}.json"))
+}
+
+pub(crate) fn embed_rel_path(starmap_id: &str, instance_id: &str) -> PathBuf {
+    starmap_pkg_rel_dir(starmap_id)
+        .join("embeds")
+        .join(bucket_for_id(instance_id))
+        .join(format!("{instance_id}.json"))
+}
+
+pub(crate) fn link_rel_path(starmap_id: &str, link_id: &str) -> PathBuf {
+    starmap_pkg_rel_dir(starmap_id)
+        .join("links")
+        .join(bucket_for_id(link_id))
+        .join(format!("{link_id}.json"))
+}
+
+pub(crate) fn hyperlink_rel_path(starmap_id: &str, hyperlink_id: &str) -> PathBuf {
+    starmap_pkg_rel_dir(starmap_id)
+        .join("hyperlinks")
+        .join(bucket_for_id(hyperlink_id))
+        .join(format!("{hyperlink_id}.json"))
+}
+
 pub(crate) fn bucket_for_id(id: &str) -> &str {
     let bytes = id.as_bytes();
     if bytes.is_empty() {

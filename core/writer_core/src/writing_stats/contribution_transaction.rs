@@ -65,9 +65,7 @@ impl ContributionTransaction {
         }
 
         let transaction_id = uuid::Uuid::new_v4().to_string();
-        let dir = app_data_root
-            .join(TRANSACTIONS_ROOT)
-            .join(&transaction_id);
+        let dir = app_data_root.join(TRANSACTIONS_ROOT).join(&transaction_id);
         fs::create_dir_all(&dir)?;
 
         let roots: Vec<BackupRoot> = roots
@@ -188,9 +186,7 @@ impl ContributionTransaction {
 
     fn restore(&self) -> Result<()> {
         for root in &self.roots {
-            if root.existed
-                && (root.backup.is_empty() || !Path::new(&root.backup).exists())
-            {
+            if root.existed && (root.backup.is_empty() || !Path::new(&root.backup).exists()) {
                 return Err(Error::Other(format!(
                     "contribution backup missing during rollback: {}",
                     root.source

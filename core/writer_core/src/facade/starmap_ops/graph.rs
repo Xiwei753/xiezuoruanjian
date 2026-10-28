@@ -1002,12 +1002,7 @@ impl super::super::WriterCore {
         String,
     )> {
         let child_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
-        self.create_starmap_child_embed_with_id(
-            host_starmap_id,
-            &child_starmap_id,
-            title,
-            position,
-        )
+        self.create_starmap_child_embed_with_id(host_starmap_id, &child_starmap_id, title, position)
     }
 
     pub fn create_starmap_child_embed_with_id(
@@ -1022,7 +1017,6 @@ impl super::super::WriterCore {
         crate::storage::workspace_git::WorkspaceChangeSet,
         String,
     )> {
-
         // Step 2: 写 pending journal（原子写盘）
         let mut tx = crate::storage::journal::StarMapChildEmbedTransaction::new(
             host_starmap_id,

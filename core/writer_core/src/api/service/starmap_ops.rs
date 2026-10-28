@@ -126,16 +126,20 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let child_starmap_id = format!("sm_{}", uuid::Uuid::new_v4());
-        let mut contribution_txn =
-            self.begin_starmap_child_embed_contribution_transaction(
-                host_starmap_id,
-                &child_starmap_id,
-            )?;
+        let mut contribution_txn = self.begin_starmap_child_embed_contribution_transaction(
+            host_starmap_id,
+            &child_starmap_id,
+        )?;
         let mut contribution_batch = self.begin_contribution_batch();
         let core_position: crate::starmap::types::StarMapPoint = position.into();
         let (starmap_meta, embed, change_set, tx_id) = self
             .core_write()
-            .create_starmap_child_embed_with_id(host_starmap_id, &child_starmap_id, title, core_position)
+            .create_starmap_child_embed_with_id(
+                host_starmap_id,
+                &child_starmap_id,
+                title,
+                core_position,
+            )
             .map_err(WriterError::from)?;
 
         let starmap_id = starmap_meta.starmap_id.clone();
@@ -822,7 +826,8 @@ impl WriterCoreApi {
     pub fn delete_starmap(&self, starmap_id: &str) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
-        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
+        let mut contribution_txn =
+            self.begin_starmap_delete_contribution_transaction(starmap_id)?;
         let mut contribution_batch = self.begin_contribution_batch();
         //   durable 删除事务：先 plan（不碰磁盘，构造完整 PlannedStarmapDelete
         // 含固定 trash 路径和完整 sync_delete_facts），再 save_pending 落盘 journal，
@@ -1545,11 +1550,7 @@ impl WriterCoreApi {
             before.as_ref(),
             after.as_ref(),
         )?;
-        if let Err(error) = self.flush_starmap_store(starmap_id) {
-            let _ = self.core_write().remove_starmap_store(starmap_id);
-            return Err(error);
-        }
-        contribution_txn.commit()?;
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
@@ -1595,11 +1596,7 @@ impl WriterCoreApi {
             before.as_ref(),
             None,
         )?;
-        if let Err(error) = self.flush_starmap_store(starmap_id) {
-            let _ = self.core_write().remove_starmap_store(starmap_id);
-            return Err(error);
-        }
-        contribution_txn.commit()?;
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(true)
     }
 
@@ -2352,6 +2349,17 @@ impl WriterCoreApi {
         starmap_id: &str,
         transaction: &mut crate::writing_stats::contribution_transaction::ContributionTransaction,
     ) -> ApiResult<()> {
+        // 先把本次 flush 会写到的具体文件登记进事务，再真正写盘；不再整图备份。
+        let pending_paths = {
+            let core = self.core_read();
+            core.pending_starmap_flush_paths(starmap_id)
+        };
+        if !pending_paths.is_empty() {
+            let mut paths = pending_paths;
+            paths.push(self.app_data_root.join("starmaps/index.json"));
+            paths.push(self.app_data_root.join("app-meta/sync/state.local.json"));
+            transaction.prepare_paths(&paths)?;
+        }
         if let Err(error) = self.flush_starmap_store(starmap_id) {
             let _ = self.core_write().remove_starmap_store(starmap_id);
             return Err(error);

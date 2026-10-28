@@ -145,14 +145,9 @@ impl WriterCoreApi {
         starmap_id: &str,
     ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
     {
-        let starmaps = self.app_data_root.join("starmaps");
-        crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
+        let _ = starmap_id;
+        crate::writing_stats::contribution_transaction::ContributionTransaction::begin_deferred(
             &self.app_data_root,
-            vec![
-                starmaps.join(format!("{starmap_id}.meta.json")),
-                starmaps.join("index.json"),
-                self.app_data_root.join("app-meta/sync/state.local.json"),
-            ],
         )
         .map_err(Into::into)
     }
@@ -161,21 +156,15 @@ impl WriterCoreApi {
         &self,
     ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
     {
-        let starmaps = self.app_data_root.join("starmaps");
-        Ok(
-            crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
-                &self.app_data_root,
-                vec![
-                    starmaps.join("index.json"),
-                    self.app_data_root.join("app-meta/sync/state.local.json"),
-                ],
-            )?,
+        crate::writing_stats::contribution_transaction::ContributionTransaction::begin_deferred(
+            &self.app_data_root,
         )
+        .map_err(Into::into)
     }
 
     pub(crate) fn begin_starmap_child_embed_contribution_transaction(
         &self,
-        host_starmap_id: &str,
+        _host_starmap_id: &str,
         child_starmap_id: &str,
     ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
     {
@@ -193,6 +182,26 @@ impl WriterCoreApi {
     }
 
     pub(crate) fn begin_starmap_creation_contribution_transaction(
+        &self,
+        starmap_id: &str,
+    ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
+    {
+        let starmaps = self.app_data_root.join("starmaps");
+        crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
+            &self.app_data_root,
+            vec![
+                starmaps.join(starmap_id),
+                starmaps.join(format!("{starmap_id}.meta.json")),
+                starmaps.join("index.json"),
+                self.app_data_root.join("app-meta/sync/state.local.json"),
+            ],
+        )
+        .map_err(Into::into)
+    }
+
+    /// 删除星图会在事务提交前物理移除 graph 目录，因此必须在删除前把
+    /// 将被删除的路径登记到预备事务里，不能依赖 flush 时的 dirty 文件列表。
+    pub(crate) fn begin_starmap_delete_contribution_transaction(
         &self,
         starmap_id: &str,
     ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>

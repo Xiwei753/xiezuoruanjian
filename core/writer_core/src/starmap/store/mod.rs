@@ -174,6 +174,77 @@ impl StarMapStore {
         self.links.values()
     }
 
+    /// 本次 flush 会写到的相对路径；用于在真正写盘前登记文件级回滚范围。
+    pub fn pending_flush_paths(&self) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        for id in &self.dirty_nodes {
+            paths.push(crate::starmap::package_storage::node_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        for id in &self.dirty_edges {
+            paths.push(crate::starmap::package_storage::edge_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        for id in &self.dirty_embeds {
+            paths.push(crate::starmap::package_storage::embed_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        for id in &self.dirty_links {
+            paths.push(crate::starmap::package_storage::link_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        for id in &self.dirty_hyperlinks {
+            paths.push(crate::starmap::package_storage::hyperlink_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        for id in &self.deleted_node_ids {
+            paths.push(crate::starmap::package_storage::node_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        for id in &self.deleted_edge_ids {
+            paths.push(crate::starmap::package_storage::edge_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        for id in &self.deleted_embed_ids {
+            paths.push(crate::starmap::package_storage::embed_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        for id in &self.deleted_link_ids {
+            paths.push(crate::starmap::package_storage::link_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        for id in &self.deleted_hyperlink_ids {
+            paths.push(crate::starmap::package_storage::hyperlink_rel_path(
+                &self.starmap_id,
+                id,
+            ));
+        }
+        if self.dirty_graph_meta {
+            paths.push(crate::starmap::package_storage::graph_meta_rel_path(
+                &self.starmap_id,
+            ));
+        }
+        paths
+    }
+
     pub fn is_dirty(&self) -> bool {
         !self.dirty_nodes.is_empty()
             || !self.dirty_edges.is_empty()

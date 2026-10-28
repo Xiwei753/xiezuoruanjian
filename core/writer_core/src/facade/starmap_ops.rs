@@ -220,6 +220,23 @@ impl super::WriterCore {
         Ok(Vec::new())
     }
 
+    pub fn pending_starmap_flush_paths(&self, starmap_id: &str) -> Vec<std::path::PathBuf> {
+        let stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        stores
+            .get(starmap_id)
+            .map(|store| {
+                store
+                    .pending_flush_paths()
+                    .into_iter()
+                    .map(|path| self.app_data_root.join(path))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn flush_all_starmap_stores(&self) -> Result<Vec<std::path::PathBuf>> {
         let mut stores = self
             .starmap_stores
