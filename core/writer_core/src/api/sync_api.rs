@@ -2292,6 +2292,7 @@ impl WriterCoreApi {
             let intent_root = core.sync_proof_intent_root();
             let intent_sink = crate::sync::proof_intent::ProofIntentSink::new(
                 &intent_root,
+                core.app_data_root(),
                 core.projects_root(),
                 &sync_sources,
             );
@@ -2471,20 +2472,20 @@ impl WriterCoreApi {
                     ) {
                         Ok(_) => {
                             proof_completed_ids.insert(sync_event_id.clone());
-                            if let Err(error) = intent_sink.remove(&sync_event_id) {
-                                log::warn!(
-                                    "remove completed sync proof intent {} failed: {error}",
-                                    sync_event_id
-                                );
-                            }
                         }
                         Err(e) => proof_errors.push(format!("{}: {e}", path.display())),
                     }
                 }
-                // 证明成功即删除意图；所有链接意图都消失后，才清理仅为
-                // 恢复而保留的正文事务目录。
-                intent_sink
+                // 先删除仅因证明未写完而保留的事务目录，再删除意图。若进程在
+                // 两步之间退出，残留意图会因事件已落盘而被下次恢复直接清理；
+                // 反过来先删意图则会留下“事务已提交但意图缺失”的不可判定状态。
+                let retained_ids = intent_sink
                     .cleanup_completed_transactions(run.target_live_root(), &proof_completed_ids);
+                for event_id in proof_completed_ids.difference(&retained_ids) {
+                    if let Err(error) = intent_sink.remove(event_id) {
+                        log::warn!("remove completed sync proof intent {event_id} failed: {error}");
+                    }
+                }
                 core.refresh_sync_proof_intents_pending();
                 if !proof_errors.is_empty() {
                     target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(

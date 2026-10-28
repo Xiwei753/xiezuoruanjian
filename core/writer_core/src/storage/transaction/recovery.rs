@@ -171,8 +171,8 @@ pub(crate) fn scan_pending_transactions(target_root: &Path) -> TransactionRecove
                 }
             } else {
                 let staging_path = tx_dir.join(&tx_entry.staging_filename);
+                let target_path = target_root.join(&tx_entry.target_relative);
                 if staging_path.exists() {
-                    let target_path = target_root.join(&tx_entry.target_relative);
                     if let Some(parent) = target_path.parent() {
                         if !created_dirs.contains(parent) && fs::create_dir_all(parent).is_ok() {
                             created_dirs.insert(parent.to_path_buf());
@@ -202,6 +202,19 @@ pub(crate) fn scan_pending_transactions(target_root: &Path) -> TransactionRecove
                             missing_files.push(tx_entry.target_relative.clone());
                         }
                     }
+                } else if target_path.exists() {
+                    // 崩溃可能发生在 rename 完成、manifest 尚未写成 FilesCommitted
+                    // 的窗口内：staging 已消失但目标正文已就位，说明该条已提交。
+                    if let Err(e) = crate::storage::sync_parent(&target_path) {
+                        log::warn!(
+                            "[transaction] recovery existing target sync_parent failed: {}: {}",
+                            tx_entry.target_relative,
+                            e
+                        );
+                        missing_files.push(tx_entry.target_relative.clone());
+                        continue;
+                    }
+                    recovered_files.push(tx_entry.target_relative.clone());
                 } else {
                     missing_files.push(tx_entry.target_relative.clone());
                 }

@@ -18,13 +18,15 @@ impl super::WriterCore {
 
     pub(crate) fn refresh_sync_proof_intents_pending(&self) {
         let root = self.sync_proof_intent_root();
-        if let Err(error) = crate::sync::proof_intent::refresh_pending(&root) {
-            log::warn!("[proof_intent] 刷新待恢复标志失败: {error}");
-        }
-        self.proof_intents_pending.store(
-            crate::sync::proof_intent::has_pending(&root),
-            std::sync::atomic::Ordering::Release,
-        );
+        let pending = match crate::sync::proof_intent::refresh_pending(&root) {
+            Ok(()) => crate::sync::proof_intent::has_pending(&root),
+            Err(error) => {
+                log::warn!("[proof_intent] 刷新待恢复标志失败: {error}");
+                true
+            }
+        };
+        self.proof_intents_pending
+            .store(pending, std::sync::atomic::Ordering::Release);
     }
 
     /// 扫描并补记所有未完成的同步证明意图。返回本次完成（补记或确认已存在）

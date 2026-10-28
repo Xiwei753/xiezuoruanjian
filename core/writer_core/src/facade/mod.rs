@@ -90,6 +90,9 @@ pub struct WriterCore {
     /// 是否存在未完成的同步证明意图。编辑/同步热路径只在为 true 时才扫描
     /// 意图目录，避免每次按键都做文件系统枚举。
     pub(crate) proof_intents_pending: std::sync::atomic::AtomicBool,
+    /// 最近一次证明意图恢复时间（毫秒）。编辑热路径据此节流，避免损坏/未完成
+    /// 意图让每个按键都重新枚举整个目录。
+    pub(crate) proof_intents_last_recovery_ms: std::sync::atomic::AtomicI64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -122,6 +125,24 @@ pub struct ProjectWritingLifetimeStats {
 
 impl WriterCore {
     pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(app_data_root: P1, projects_root: P2) -> Self {
+        let proof_intent_root = app_data_root
+            .as_ref()
+            .join(crate::sync::proof_intent::PROOF_INTENTS_DIR);
+        // 升级兼容：旧版本可能已经留下意图文件但没有轻量标记。启动时只对
+        // 已存在的意图目录做一次校准，之后编辑热路径只 stat 标记。
+        let mut proof_intents_pending = crate::sync::proof_intent::has_pending(&proof_intent_root);
+        if proof_intent_root.is_dir() {
+            match crate::sync::proof_intent::refresh_pending(&proof_intent_root) {
+                Ok(()) => {
+                    proof_intents_pending =
+                        crate::sync::proof_intent::has_pending(&proof_intent_root);
+                }
+                Err(error) => {
+                    log::warn!("[proof_intent] 启动校准待恢复意图失败: {error}");
+                    proof_intents_pending = true;
+                }
+            }
+        }
         Self {
             app_data_root: app_data_root.as_ref().to_path_buf(),
             projects_root: projects_root.as_ref().to_path_buf(),
@@ -133,13 +154,8 @@ impl WriterCore {
             starmap_stores: std::sync::Mutex::new(HashMap::new()),
             path_dependency_index: std::sync::Mutex::new(None),
             preferred_device_id: std::sync::Mutex::new(None),
-            proof_intents_pending: std::sync::atomic::AtomicBool::new(
-                crate::sync::proof_intent::has_pending(
-                    &app_data_root
-                        .as_ref()
-                        .join(crate::sync::proof_intent::PROOF_INTENTS_DIR),
-                ),
-            ),
+            proof_intents_pending: std::sync::atomic::AtomicBool::new(proof_intents_pending),
+            proof_intents_last_recovery_ms: std::sync::atomic::AtomicI64::new(0),
         }
     }
 

@@ -53,6 +53,10 @@ pub(crate) struct SyncProofIntent {
     pub chapter_id: String,
     /// workspace-relative 路径，例如 `projects/<pid>/volumes/<vid>/chapters/<cid>/chapter.md`。
     pub workspace_path: String,
+    /// 本次正文提交所在的 target 类型：`app` / `project` / `deleted_project`。
+    /// 恢复时据此定位真正的 `SaveTransaction` 目录；旧意图无此字段。
+    #[serde(default)]
+    pub target_kind: String,
     pub action: SyncProofAction,
     pub before_text: Option<String>,
     pub after_text: Option<String>,
@@ -67,14 +71,6 @@ pub(crate) struct SyncProofIntent {
 impl SyncProofIntent {
     pub(crate) fn is_delete(&self) -> bool {
         self.action == SyncProofAction::Delete
-    }
-
-    /// 旧版本意图没有事务链接时，把 workspace 相对路径映射到本机 live。
-    fn live_path(&self, projects_root: &Path) -> Option<PathBuf> {
-        let relative = Path::new(&self.workspace_path)
-            .strip_prefix("projects")
-            .ok()?;
-        Some(projects_root.join(relative))
     }
 }
 
@@ -95,6 +91,7 @@ pub(crate) struct PendingProofIntents {
 /// Commit 前写入意图日志的入口。
 pub(crate) struct ProofIntentSink<'a> {
     root: &'a Path,
+    app_data_root: &'a Path,
     projects_root: &'a Path,
     /// `project/volume/chapter` -> 来源设备。
     source_devices: &'a HashMap<String, String>,
@@ -103,11 +100,13 @@ pub(crate) struct ProofIntentSink<'a> {
 impl<'a> ProofIntentSink<'a> {
     pub(crate) fn new(
         root: &'a Path,
+        app_data_root: &'a Path,
         projects_root: &'a Path,
         source_devices: &'a HashMap<String, String>,
     ) -> Self {
         Self {
             root,
+            app_data_root,
             projects_root,
             source_devices,
         }
@@ -182,6 +181,7 @@ impl<'a> ProofIntentSink<'a> {
                 volume_id,
                 chapter_id,
                 workspace_path: workspace_path.to_string_lossy().into_owned(),
+                target_kind: target_kind.to_string(),
                 action,
                 before_text,
                 after_text,
@@ -191,6 +191,7 @@ impl<'a> ProofIntentSink<'a> {
                 occurred_at_ms,
             };
             let serialized = serde_json::to_string(&intent)?;
+            mark_pending(self.root)?;
             crate::storage::atomic_write_string(
                 &intent_path(self.root, &intent.event_id),
                 &serialized,
@@ -222,25 +223,66 @@ impl<'a> ProofIntentSink<'a> {
         if !pending.errors.is_empty() {
             return Ok(true);
         }
-        Ok(pending
+        if pending
             .intents
             .iter()
-            .any(|intent| project_id.is_none_or(|pid| intent.project_id == pid)))
+            .any(|intent| project_id.is_none_or(|pid| intent.project_id == pid))
+        {
+            return Ok(true);
+        }
+        // 事务目录仍保留，说明还有证明未完成。App target 的事务在 app_data_root，
+        // Project target 的事务在 projects_root/<pid>，两者都要检查。
+        let mut transaction_roots = vec![self.app_data_root.to_path_buf()];
+        if let Some(pid) = project_id {
+            transaction_roots.push(self.projects_root.join(pid));
+        }
+        for transaction_root in transaction_roots {
+            let scan = scan_pending_transactions(&transaction_root);
+            if !scan.errors.is_empty() {
+                return Ok(true);
+            }
+            for transaction in &scan.transactions {
+                for event_id in &transaction.proof_intent_ids {
+                    match load_intent(self.root, event_id) {
+                        Ok(Some(intent))
+                            if project_id.is_none_or(|pid| intent.project_id == pid) =>
+                        {
+                            return Ok(true);
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            log::warn!(
+                                "[proof_intent] 事务 {} 缺少意图文件 {}，保留待人工恢复",
+                                transaction.transaction_id,
+                                event_id
+                            );
+                            return Ok(true);
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "[proof_intent] 事务 {} 的意图 {} 无法读取: {error}",
+                                transaction.transaction_id,
+                                event_id
+                            );
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// 清理已经完成证明、但仍因链接意图而保留的正文事务目录。
+    ///
+    /// 返回仍被保留事务引用的意图 ID；调用方在删除意图文件前必须排除这些 ID，
+    /// 否则事务目录还在、意图文件却已消失，下一次恢复无法判定正文是否提交。
     pub(crate) fn cleanup_completed_transactions(
         &self,
         transaction_root: &Path,
         completed_event_ids: &HashSet<String>,
-    ) {
-        cleanup_completed_transactions(transaction_root, completed_event_ids);
-    }
-
-    /// 该意图所属正文事务的 target_root。
-    #[allow(dead_code)]
-    fn transaction_root(&self, intent: &SyncProofIntent) -> PathBuf {
-        transaction_root_for_intent(intent, self.projects_root, self.root)
+    ) -> HashSet<String> {
+        cleanup_completed_transactions(transaction_root, completed_event_ids)
     }
 }
 
@@ -316,6 +358,44 @@ fn intent_path(root: &Path, event_id: &str) -> PathBuf {
     root.join(intent_filename(event_id))
 }
 
+fn pending_marker_path(root: &Path) -> PathBuf {
+    root.join(".pending")
+}
+
+/// 在写入任何意图文件前建立轻量待恢复标记。
+///
+/// 编辑热路径只 stat 这个标记，不解析目录；标记先于意图落盘，崩溃后即使意图
+/// 尚未写完也能被启动/同步恢复入口发现并报告。
+fn mark_pending(root: &Path) -> crate::Result<()> {
+    fs::create_dir_all(root)?;
+    let marker = pending_marker_path(root);
+    if !marker.is_file() {
+        fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&marker)?;
+        crate::storage::sync_parent(&marker)?;
+    }
+    Ok(())
+}
+
+fn clear_pending_marker(root: &Path) -> crate::Result<()> {
+    match fs::remove_file(pending_marker_path(root)) {
+        Ok(()) => crate::storage::sync_parent(root),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn update_pending_marker(root: &Path, pending: bool) -> crate::Result<()> {
+    if pending {
+        mark_pending(root)
+    } else {
+        clear_pending_marker(root)
+    }
+}
+
 fn components(path: &Path) -> Option<Vec<String>> {
     path.components()
         .map(|component| match component {
@@ -330,13 +410,20 @@ fn transaction_root_for_intent(
     projects_root: &Path,
     app_data_root: &Path,
 ) -> PathBuf {
-    let Some(parts) = components(Path::new(&intent.workspace_path)) else {
-        return app_data_root.to_path_buf();
-    };
-    if parts.first().map(String::as_str) == Some("projects") && parts.len() >= 2 {
-        projects_root.join(&parts[1])
-    } else {
-        app_data_root.to_path_buf()
+    match intent.target_kind.as_str() {
+        "project" | "deleted_project" => projects_root.join(&intent.project_id),
+        "app" => app_data_root.to_path_buf(),
+        _ => {
+            // 旧意图没有 target_kind：按 workspace 路径推断 project target。
+            let Some(parts) = components(Path::new(&intent.workspace_path)) else {
+                return app_data_root.to_path_buf();
+            };
+            if parts.first().map(String::as_str) == Some("projects") && parts.len() >= 2 {
+                projects_root.join(&parts[1])
+            } else {
+                app_data_root.to_path_buf()
+            }
+        }
     }
 }
 
@@ -391,24 +478,23 @@ pub(crate) fn load_pending(root: &Path) -> crate::Result<PendingProofIntents> {
     Ok(pending)
 }
 
+/// 编辑热路径的轻量检查：只看维护好的标记文件，不解析意图目录。
+///
+/// 标记由写意图、启动/同步恢复入口维护；即使损坏文件令标记保持为真，编辑路径
+/// 也只会在节流窗口内扫描，不会每键遍历整个目录。
 pub(crate) fn has_pending(root: &Path) -> bool {
-    match load_pending(root) {
-        Ok(pending) => !pending.intents.is_empty() || !pending.errors.is_empty(),
-        Err(error) => {
-            log::warn!(
-                "[proof_intent] 读取意图目录 {} 失败: {error}",
-                root.display()
-            );
-            true
-        }
-    }
+    pending_marker_path(root).is_file()
 }
 
-/// 重新扫描意图目录并报告无法解析的文件。
+/// 重新扫描意图目录，报告无法解析的文件，并同步待恢复标记。
 ///
 /// 该入口只用于启动/同步等低频路径；编辑热路径不得调用。
 pub(crate) fn refresh_pending(root: &Path) -> crate::Result<()> {
     let pending = load_pending(root)?;
+    update_pending_marker(
+        root,
+        !pending.intents.is_empty() || !pending.errors.is_empty(),
+    )?;
     for error in pending.errors {
         log::warn!(
             "[proof_intent] 未恢复的意图文件 {}: {}",
@@ -522,6 +608,7 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
 
     let mut recovered = 0usize;
     let mut completed_ids: HashSet<String> = HashSet::new();
+    let mut to_remove: HashSet<String> = HashSet::new();
     for intent in pending.intents {
         let stats = core.get_stats_api();
         match stats
@@ -530,9 +617,7 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
         {
             Ok(true) => {
                 completed_ids.insert(intent.event_id.clone());
-                if remove_completed_intent(&root, &intent.event_id) {
-                    recovered = recovered.saturating_add(1);
-                }
+                to_remove.insert(intent.event_id.clone());
                 continue;
             }
             Ok(false) => {}
@@ -566,9 +651,7 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
             ) {
                 Ok(_) => {
                     completed_ids.insert(intent.event_id.clone());
-                    if remove_completed_intent(&root, &intent.event_id) {
-                        recovered = recovered.saturating_add(1);
-                    }
+                    to_remove.insert(intent.event_id.clone());
                 }
                 Err(error) => {
                     log::warn!(
@@ -594,7 +677,7 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
         // 其他文本视为状态未知，保留意图等待人工/后续恢复。
         match legacy_live_state(&intent, core.projects_root()) {
             LegacyLiveState::Uncommitted => {
-                remove_completed_intent(&root, &intent.event_id);
+                to_remove.insert(intent.event_id.clone());
             }
             LegacyLiveState::Committed => {
                 match core.record_sync_content_change_at(
@@ -609,9 +692,7 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
                     intent.occurred_at_ms,
                 ) {
                     Ok(_) => {
-                        if remove_completed_intent(&root, &intent.event_id) {
-                            recovered = recovered.saturating_add(1);
-                        }
+                        to_remove.insert(intent.event_id.clone());
                     }
                     Err(error) => log::warn!(
                         "[proof_intent] 补记旧同步证明事件失败 {}: {error}",
@@ -626,8 +707,20 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
         }
     }
 
+    let mut retained_ids: HashSet<String> = HashSet::new();
     for transaction_root in scans.keys() {
-        cleanup_completed_transactions(transaction_root, &completed_ids);
+        retained_ids.extend(cleanup_completed_transactions(
+            transaction_root,
+            &completed_ids,
+        ));
+    }
+    // 事务目录仍在时不能删除它引用的意图文件，否则下次恢复会看到
+    // “已提交事务 + 缺失意图”的不可判定状态。
+    to_remove.retain(|event_id| !retained_ids.contains(event_id));
+    for event_id in &to_remove {
+        if remove_completed_intent(&root, event_id) {
+            recovered = recovered.saturating_add(1);
+        }
     }
     Ok(recovered)
 }
@@ -640,7 +733,8 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
 pub(crate) fn cleanup_completed_transactions(
     transaction_root: &Path,
     completed_event_ids: &HashSet<String>,
-) {
+) -> HashSet<String> {
+    let mut retained = HashSet::new();
     let scan = scan_pending_transactions(transaction_root);
     for error in &scan.errors {
         log::warn!(
@@ -649,11 +743,14 @@ pub(crate) fn cleanup_completed_transactions(
         );
     }
     for transaction in scan.transactions {
+        if transaction.proof_intent_ids.is_empty() {
+            continue;
+        }
         if !matches!(
             transaction.phase,
             TransactionPhase::FilesCommitted | TransactionPhase::Finished
-        ) || transaction.proof_intent_ids.is_empty()
-        {
+        ) {
+            retained.extend(transaction.proof_intent_ids);
             continue;
         }
         let all_proofs_done = transaction
@@ -661,6 +758,7 @@ pub(crate) fn cleanup_completed_transactions(
             .iter()
             .all(|event_id| completed_event_ids.contains(event_id));
         if !all_proofs_done {
+            retained.extend(transaction.proof_intent_ids);
             continue;
         }
         match fs::remove_dir_all(&transaction.tx_dir) {
@@ -680,9 +778,11 @@ pub(crate) fn cleanup_completed_transactions(
                     "[proof_intent] 清理已完成事务目录 {} 失败: {error}",
                     transaction.tx_dir.display()
                 );
+                retained.extend(transaction.proof_intent_ids);
             }
         }
     }
+    retained
 }
 enum LegacyLiveState {
     Committed,
