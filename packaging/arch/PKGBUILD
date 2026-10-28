@@ -1,0 +1,21 @@
+# 素笺写作 Arch 安装包。CI 先在 Arch 内原生编译并准备 ../stage，
+# makepkg 只负责按照 Arch 规范组装 pacman 包，不二次编译。
+pkgname=sujian
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='素笺写作：Rust + Qt6/Kirigami 跨平台写作软件'
+arch=('x86_64')
+url='https://github.com/Xiwei753/xiezuoruanjian'
+license=('GPL-3.0-only')
+depends=(
+  'glibc' 'gcc-libs' 'openssl'
+  'qt6-base>=6.7' 'qt6-declarative>=6.7' 'qt6-wayland'
+  'kirigami' 'kirigami-addons' 'kcolorscheme'
+  'qqc2-breeze-style' 'breeze' 'breeze-icons'
+)
+optdepends=('fcitx5-qt: fcitx5 Qt6 输入法支持')
+
+package() {
+  install -d "$pkgdir"
+  cp -a "$startdir/../stage/usr" "$pkgdir/"
+}

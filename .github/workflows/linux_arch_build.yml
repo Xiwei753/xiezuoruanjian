@@ -1,0 +1,63 @@
+name: Sujian Linux Arch Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/Linux_qt/**'
+      - 'core/**'
+      - 'crates/**'
+      - 'platform/rust/linux/**'
+      - 'packaging/arch/**'
+      - 'packaging/linux/**'
+      - 'packaging/correction/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/linux_arch_build.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/arch-cargo
+
+jobs:
+  arch:
+    name: Build Arch Linux package
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install Arch build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            ca-certificates curl git python python-pip \
+            base-devel shadow util-linux rust cargo gcc cmake pkgconf openssl \
+            qt6-base qt6-declarative qt6-tools kcolorscheme
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-arch
+          workspaces: ". -> target/arch-cargo"
+          cache-workspace-crates: true
+          cache-on-failure: true
+
+      - name: Build Arch package
+        run: bash packaging/arch/build-arch.sh
+
+      - name: Upload Arch package
+        uses: actions/upload-artifact@v7
+        with:
+          name: sujian-linux-arch
+          path: dist/arch/*.pkg.tar.zst
+          if-no-files-found: error
+          compression-level: 0
