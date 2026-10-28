@@ -47,6 +47,7 @@ log = "0.4"
 unicode-segmentation = "1.11"
 crop = { version = "0.4.3", features = ["graphemes"] }
 fs2 = "0.4"
+similar = "3.2"
 
 [dependencies.uniffi]
 version = "0.28.0"

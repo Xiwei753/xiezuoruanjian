@@ -130,6 +130,15 @@ impl WriterCoreApi {
         )
     }
 
+    /// 读取本机工作区对象变更事件，供桌面 UI 等多进程客户端增量刷新。
+    pub fn workspace_changes_since(
+        &self,
+        offset: u64,
+    ) -> ApiResult<crate::storage::workspace_events::WorkspaceChangePage> {
+        crate::storage::workspace_events::read_since(&self.app_data_root, offset)
+            .map_err(WriterError::from)
+    }
+
     fn mcp_find_chapter(
         &self,
         project_id: &str,

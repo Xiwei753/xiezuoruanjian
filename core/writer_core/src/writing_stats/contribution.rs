@@ -11,6 +11,7 @@
 use std::cell::RefCell;
 
 use serde::{Deserialize, Serialize};
+use similar::{capture_diff_slices, Algorithm, DiffOp};
 
 /// 对象修改的真实操作者。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -351,83 +352,145 @@ impl ContributionEvent {
     }
 }
 
-/// 基于公共前后缀的字符差异；不改来源的中间字符保留原有来源，
-/// 中间新增/删除部分才归本次操作者。
+/// 字符级差异片段。索引均为**字符**下标，不是 UTF-8 字节偏移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CharDiffOp {
+    Equal {
+        old_start: usize,
+        new_start: usize,
+        len: usize,
+    },
+    Delete {
+        old_start: usize,
+        old_len: usize,
+    },
+    Insert {
+        new_start: usize,
+        new_len: usize,
+    },
+    Replace {
+        old_start: usize,
+        old_len: usize,
+        new_start: usize,
+        new_len: usize,
+    },
+}
+
+/// 对前后文本做确定性的多段字符 diff。
+///
+/// 只使用公共前缀/后缀会把「甲X丙丁Y己」中的「丙丁」也算成一次替换；
+/// 这里用 Myers 算法保留所有未变化的连续片段。
+pub(crate) fn char_diff_ops(before: &str, after: &str) -> Vec<CharDiffOp> {
+    let before: Vec<char> = before.chars().collect();
+    let after: Vec<char> = after.chars().collect();
+    capture_diff_slices(Algorithm::Myers, &before, &after)
+        .into_iter()
+        .map(|op| match op {
+            DiffOp::Equal {
+                old_index,
+                new_index,
+                len,
+            } => CharDiffOp::Equal {
+                old_start: old_index,
+                new_start: new_index,
+                len,
+            },
+            DiffOp::Delete {
+                old_index,
+                old_len,
+                ..
+            } => CharDiffOp::Delete {
+                old_start: old_index,
+                old_len,
+            },
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => CharDiffOp::Insert {
+                new_start: new_index,
+                new_len,
+            },
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => CharDiffOp::Replace {
+                old_start: old_index,
+                old_len,
+                new_start: new_index,
+                new_len,
+            },
+        })
+        .collect()
+}
+
+/// 基于多段字符差异统计增删量；未变化的片段不归本次操作者。
 pub fn text_delta(before: Option<&str>, after: Option<&str>) -> (u32, u32, u32) {
-    let before: Vec<char> = before.unwrap_or_default().chars().collect();
-    let after: Vec<char> = after.unwrap_or_default().chars().collect();
-    let prefix = before
-        .iter()
-        .zip(after.iter())
-        .take_while(|(left, right)| left == right)
-        .count();
-    let max_suffix = before.len().min(after.len()).saturating_sub(prefix);
-    let suffix = before
-        .iter()
-        .rev()
-        .zip(after.iter().rev())
-        .take(max_suffix)
-        .take_while(|(left, right)| left == right)
-        .count();
-    let before_middle = before.len().saturating_sub(prefix + suffix);
-    let after_middle = after.len().saturating_sub(prefix + suffix);
-    let inserted = u32::try_from(after_middle).unwrap_or(u32::MAX);
-    let deleted = u32::try_from(before_middle).unwrap_or(u32::MAX);
+    let mut inserted = 0usize;
+    let mut deleted = 0usize;
+    for op in char_diff_ops(before.unwrap_or_default(), after.unwrap_or_default()) {
+        match op {
+            CharDiffOp::Equal { .. } => {}
+            CharDiffOp::Delete { old_len, .. } => deleted += old_len,
+            CharDiffOp::Insert { new_len, .. } => inserted += new_len,
+            CharDiffOp::Replace {
+                old_len, new_len, ..
+            } => {
+                deleted += old_len;
+                inserted += new_len;
+            }
+        }
+    }
+    let inserted = u32::try_from(inserted).unwrap_or(u32::MAX);
+    let deleted = u32::try_from(deleted).unwrap_or(u32::MAX);
     (inserted, deleted, inserted.min(deleted))
 }
 
 /// 应用一条文本事件，返回对象的最新字符来源。
 ///
 /// 未变化的字符保留原有来源；新增字符归本次 actor；删除字符直接移除。
-/// 这样 AI 只改一个词时，不会把整篇节点都算成 AI。
+/// 多段修改逐段处理，AI 只改一个词时不会把整篇节点都算成 AI。
 pub fn apply_text_sources(current: &mut Vec<(char, MutationActor)>, event: &ContributionEvent) {
-    let Some(after) = event.text_after.as_deref() else {
+    let Some(after_text) = event.text_after.as_deref() else {
         current.clear();
         return;
     };
-    let after: Vec<char> = after.chars().collect();
-    let before: Vec<char> = event
-        .text_before
-        .as_deref()
-        .unwrap_or_default()
-        .chars()
-        .collect();
-    if current.is_empty() {
-        // 没有历史来源的旧内容统一归 Unknown。
-        current.extend(
-            before
-                .iter()
-                .copied()
-                .map(|ch| (ch, MutationActor::Unknown)),
-        );
+    let before_text = event.text_before.as_deref().unwrap_or_default();
+    let before: Vec<char> = before_text.chars().collect();
+    let after: Vec<char> = after_text.chars().collect();
+    if current.len() != before.len() {
+        // 事件链对不上（旧数据缺失/外部改盘）时，不能借用错位的来源。
+        current.clear();
+        current.extend(before.iter().copied().map(|ch| (ch, MutationActor::Unknown)));
     }
-    let prefix = current
-        .iter()
-        .map(|(ch, _)| *ch)
-        .zip(after.iter().copied())
-        .take_while(|(left, right)| left == right)
-        .count();
-    let max_suffix = current.len().min(after.len()).saturating_sub(prefix);
-    let suffix = current
-        .iter()
-        .rev()
-        .map(|(ch, _)| *ch)
-        .zip(after.iter().rev().copied())
-        .take(max_suffix)
-        .take_while(|(left, right)| left == right)
-        .count();
-    let after_middle_end = after.len().saturating_sub(suffix);
-    let old_suffix = if suffix > 0 {
-        current[current.len() - suffix..].to_vec()
-    } else {
-        Vec::new()
-    };
-    current.truncate(prefix);
-    current.extend(
-        after[prefix..after_middle_end]
-            .iter()
-            .copied()
-            .map(|ch| (ch, event.actor)),
-    );
-    current.extend(old_suffix);
+    let mut updated = Vec::with_capacity(after.len());
+    for op in char_diff_ops(before_text, after_text) {
+        match op {
+            CharDiffOp::Equal {
+                old_start, len, ..
+            } => {
+                updated.extend(current[old_start..old_start + len].iter().copied());
+            }
+            CharDiffOp::Delete { .. } => {}
+            CharDiffOp::Insert { new_start, new_len } => {
+                updated.extend(
+                    after[new_start..new_start + new_len]
+                        .iter()
+                        .copied()
+                        .map(|ch| (ch, event.actor)),
+                );
+            }
+            CharDiffOp::Replace {
+                new_start, new_len, ..
+            } => {
+                updated.extend(
+                    after[new_start..new_start + new_len]
+                        .iter()
+                        .copied()
+                        .map(|ch| (ch, event.actor)),
+                );
+            }
+        }
+    }
+    *current = updated;
 }

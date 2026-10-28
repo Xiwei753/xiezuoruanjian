@@ -34,6 +34,21 @@ QtObject {
     // Issue #796 评论 5886483653: 子星图 Embed 显示模型，从 graphData.embeds 派生。
     property var embedsModel: []
 
+    // Issue #1010：同机其他进程（如 MCP）修改星图后，通过 Core 事件流
+    // 增量感知并重新读取图数据，避免继续用旧 graphData 覆盖外部修改。
+    property double _workspaceEventOffset: 0
+    property Timer workspaceChangeTimer: Timer {
+        interval: 1500
+        repeat: true
+        running: controller.starmapId !== ""
+        onTriggered: controller.pollWorkspaceChanges()
+    }
+
+    onStarmapIdChanged: {
+        _workspaceEventOffset = 0
+        if (starmapId !== "") pollWorkspaceChanges()
+    }
+
     // Issue #814 评论 5935285879: 共享选中控制器与本 Scene 的 pathKey。
     // selectNode/selectEdge/selectEmbed/clearSelection 改成调用共享 selectionController，
     // 选择身份带当前 pathKey。nodesModel/edgesModel/embedsModel 只保存图数据，
@@ -64,6 +79,64 @@ QtObject {
     }
 
     function clearError() { errorMessage = ""; }
+
+    function pollWorkspaceChanges() {
+        if (!starmapBackendRef || starmapId === "") return
+        var res = normalizeBackendResult(starmapBackendRef.workspace_changes_since_json(_workspaceEventOffset), "")
+        if (!res || !res.success) return
+        var page = res.data || {}
+        _workspaceEventOffset = page.nextOffset || 0
+        var events = page.events || []
+        for (var i = 0; i < events.length; i++) {
+            var event = events[i]
+            if (event.kind === "starmap" && event.starmapId === starmapId) {
+                loadGraph()
+                return
+            }
+        }
+    }
+
+    function revisionOfNode(nodeId) {
+        var nodes = graphData && graphData.nodes ? graphData.nodes : []
+        for (var i = 0; i < nodes.length; i++)
+            if (nodes[i].id === nodeId) return nodes[i].updatedAt
+        return undefined
+    }
+
+    function revisionOfEdge(edgeId) {
+        var edges = graphData && graphData.edges ? graphData.edges : []
+        for (var i = 0; i < edges.length; i++)
+            if (edges[i].id === edgeId) return edges[i].updatedAt
+        return undefined
+    }
+
+    function revisionOfEmbed(instanceId) {
+        var embeds = graphData && graphData.embeds ? graphData.embeds : []
+        for (var i = 0; i < embeds.length; i++)
+            if (embeds[i].instanceId === instanceId) return embeds[i].updatedAt
+        return undefined
+    }
+
+    function revisionOfHyperlink(hyperlinkId) {
+        var links = graphData && graphData.hyperlinks ? graphData.hyperlinks : []
+        for (var i = 0; i < links.length; i++)
+            if (links[i].hyperlinkId === hyperlinkId) return links[i].updatedAt
+        return undefined
+    }
+
+    function revisionOfLink(linkId) {
+        var links = graphData && graphData.links ? graphData.links : []
+        for (var i = 0; i < links.length; i++)
+            if (links[i].linkId === linkId) return links[i].updatedAt
+        return undefined
+    }
+
+    function withExpectedRevision(patch, revision) {
+        var next = copyObject(patch || {})
+        if (revision !== undefined && next.expectedRevision === undefined)
+            next.expectedRevision = revision
+        return next
+    }
 
     // 统一后端错误文本：按 ResultEnvelope 标准字段（errorCode）拼接，
     // 不读不存在的 message 字段；rawError 只进诊断日志，不直接展示给用户。
@@ -461,7 +534,7 @@ QtObject {
     function updateNode(nodeId, patch) {
         if (!ensureBackend())
             return { success: false, message: errorMessage }
-        var res = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(patch)), qsTr("更新节点失败"));
+        var res = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(withExpectedRevision(patch, revisionOfNode(nodeId)))), qsTr("更新节点失败"));
         if (res.success) {
             clearError();
             var updated = res.data;
@@ -520,7 +593,7 @@ QtObject {
 
     function updateEdge(edgeId, patch) {
         if (!ensureBackend()) return;
-        var res = normalizeBackendResult(starmapBackendRef.update_starmap_edge(starmapId, edgeId, JSON.stringify(patch)), qsTr("更新连线失败"));
+        var res = normalizeBackendResult(starmapBackendRef.update_starmap_edge(starmapId, edgeId, JSON.stringify(withExpectedRevision(patch, revisionOfEdge(edgeId)))), qsTr("更新连线失败"));
         if (res.success) {
             clearError();
             var nextEdges = [];
@@ -562,7 +635,7 @@ QtObject {
             var nodePatch = {};
             if (patch.label !== undefined) nodePatch.title = patch.label;
             if (patch.position !== undefined) nodePatch.position = patch.position;
-            var nodeRes = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, embed.legacyPortalNodeId, JSON.stringify(nodePatch)), qsTr("更新节点失败"));
+            var nodeRes = normalizeBackendResult(starmapBackendRef.update_starmap_node(starmapId, embed.legacyPortalNodeId, JSON.stringify(withExpectedRevision(nodePatch, revisionOfNode(embed.legacyPortalNodeId)))), qsTr("更新节点失败"));
             if (nodeRes.success) {
                 clearError();
                 var nextEmbeds = [];
@@ -585,7 +658,7 @@ QtObject {
             return;
         }
         // 正式 Embed 继续走 Embed API（原逻辑不变）
-        var res = normalizeBackendResult(starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify(patch)), qsTr("更新子星图入口失败"));
+        var res = normalizeBackendResult(starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify(withExpectedRevision(patch, revisionOfEmbed(instanceId)))), qsTr("更新子星图入口失败"));
         if (res.success) {
             clearError();
             var nextEmbeds = [];
@@ -667,7 +740,7 @@ QtObject {
     function commitNodeMove(nodeId, nx, ny) {
         if (!ensureBackend()) return false;
         var res = normalizeBackendResult(
-            starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify({ position: { x: nx, y: ny } })),
+            starmapBackendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(withExpectedRevision({ position: { x: nx, y: ny } }, revisionOfNode(nodeId)))),
             qsTr("更新节点位置失败")
         );
         if (res.success) {
@@ -699,7 +772,7 @@ QtObject {
         var embed = getEmbed(instanceId);
         if (embed && embed.legacyPortalNodeId) {
             var nodeRes = normalizeBackendResult(
-                starmapBackendRef.update_starmap_node(starmapId, embed.legacyPortalNodeId, JSON.stringify({ position: { x: nx, y: ny } })),
+                starmapBackendRef.update_starmap_node(starmapId, embed.legacyPortalNodeId, JSON.stringify(withExpectedRevision({ position: { x: nx, y: ny } }, revisionOfNode(embed.legacyPortalNodeId)))),
                 qsTr("更新节点位置失败")
             );
             if (nodeRes.success) {
@@ -723,7 +796,7 @@ QtObject {
         }
         // 正式 Embed 继续走 Embed API（原逻辑不变）
         var res = normalizeBackendResult(
-            starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify({ position: { x: nx, y: ny } })),
+            starmapBackendRef.update_starmap_embed(starmapId, instanceId, JSON.stringify(withExpectedRevision({ position: { x: nx, y: ny } }, revisionOfEmbed(instanceId)))),
             qsTr("更新子星图入口失败")
         );
         if (res.success) {
@@ -879,7 +952,7 @@ QtObject {
     function updateHyperlink(hlId, patch) {
         if (!ensureBackend()) return false;
         var res = normalizeBackendResult(
-            starmapBackendRef.update_starmap_hyperlink(starmapId, hlId, JSON.stringify(patch)),
+            starmapBackendRef.update_starmap_hyperlink(starmapId, hlId, JSON.stringify(withExpectedRevision(patch, revisionOfHyperlink(hlId)))),
             qsTr("更新超链接失败")
         );
         if (res.success) {
@@ -948,7 +1021,7 @@ QtObject {
     function updateLink(linkId, patch) {
         if (!ensureBackend()) return false;
         var res = normalizeBackendResult(
-            starmapBackendRef.update_starmap_link(starmapId, linkId, JSON.stringify(patch)),
+            starmapBackendRef.update_starmap_link(starmapId, linkId, JSON.stringify(withExpectedRevision(patch, revisionOfLink(linkId)))),
             qsTr("更新内部链接失败")
         );
         if (res.success) {

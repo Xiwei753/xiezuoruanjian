@@ -32,6 +32,13 @@ use writer_core::api::types::{
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
+fn take_expected_revision(value: &mut serde_json::Value) -> Option<u64> {
+    value
+        .as_object_mut()
+        .and_then(|object| object.remove("expectedRevision"))
+        .and_then(|revision| revision.as_u64())
+}
+
 fn parse_node_kind(kind: &str) -> StarMapNodeKindDto {
     serde_json::from_value(serde_json::json!(kind)).unwrap_or(StarMapNodeKindDto::Note)
 }
@@ -122,12 +129,22 @@ pub fn update_starmap_node(
     node_id: &str,
     patch_json: &str,
 ) -> String {
-    let patch: StarMapNodePatchDto = match serde_json::from_str(patch_json) {
+    let mut value: serde_json::Value = match serde_json::from_str(patch_json) {
+        Ok(value) => value,
+        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
+    };
+    let expected_revision = take_expected_revision(&mut value);
+    let patch: StarMapNodePatchDto = match serde_json::from_value(value) {
         Ok(p) => p,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
     };
 
-    envelope(api.update_starmap_node(starmap_id, node_id, patch))
+    envelope(api.update_starmap_node_expected(
+        starmap_id,
+        node_id,
+        patch,
+        expected_revision,
+    ))
 }
 
 pub fn delete_starmap_node(api: &WriterCoreApi, starmap_id: &str, node_id: &str) -> String {
@@ -321,18 +338,32 @@ pub fn plan_cross_layer_connection(
     envelope(api.plan_cross_layer_connection(from, to))
 }
 
+pub fn workspace_changes_since(api: &WriterCoreApi, offset: u64) -> String {
+    envelope(api.workspace_changes_since(offset))
+}
+
 pub fn update_starmap_edge(
     api: &WriterCoreApi,
     starmap_id: &str,
     edge_id: &str,
     patch_json: &str,
 ) -> String {
-    let patch: StarMapEdgePatchDto = match serde_json::from_str(patch_json) {
+    let mut value: serde_json::Value = match serde_json::from_str(patch_json) {
+        Ok(value) => value,
+        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
+    };
+    let expected_revision = take_expected_revision(&mut value);
+    let patch: StarMapEdgePatchDto = match serde_json::from_value(value) {
         Ok(p) => p,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
     };
 
-    envelope(api.update_starmap_edge(starmap_id, edge_id, patch))
+    envelope(api.update_starmap_edge_expected(
+        starmap_id,
+        edge_id,
+        patch,
+        expected_revision,
+    ))
 }
 
 pub fn delete_starmap_edge(api: &WriterCoreApi, starmap_id: &str, edge_id: &str) -> String {
@@ -422,13 +453,23 @@ pub fn update_starmap_embed(
     instance_id: &str,
     patch_json: &str,
 ) -> String {
-    let input: StarMapEmbedPatchInputDto = match serde_json::from_str(patch_json) {
+    let mut value: serde_json::Value = match serde_json::from_str(patch_json) {
+        Ok(value) => value,
+        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
+    };
+    let expected_revision = take_expected_revision(&mut value);
+    let input: StarMapEmbedPatchInputDto = match serde_json::from_value(value) {
         Ok(p) => p,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
     };
     let patch: StarMapEmbedPatchDto = input.into();
 
-    envelope(api.update_starmap_embed(starmap_id, instance_id, patch))
+    envelope(api.update_starmap_embed_expected(
+        starmap_id,
+        instance_id,
+        patch,
+        expected_revision,
+    ))
 }
 
 /// 删除子星图嵌入。
@@ -500,12 +541,22 @@ pub fn update_starmap_hyperlink(
 ) -> String {
     // 平台端用扁平的 label + clear_label 表达 Option<Option<String>>，
     // 经 StarMapHyperlinkPatchInputDto -> StarMapHyperlinkPatchDto 转换后再交给 Core。
-    let input: StarMapHyperlinkPatchInputDto = match serde_json::from_str(patch_json) {
+    let mut value: serde_json::Value = match serde_json::from_str(patch_json) {
+        Ok(value) => value,
+        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
+    };
+    let expected_revision = take_expected_revision(&mut value);
+    let input: StarMapHyperlinkPatchInputDto = match serde_json::from_value(value) {
         Ok(i) => i,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
     };
     let patch: StarMapHyperlinkPatchDto = input.into();
-    envelope(api.update_starmap_hyperlink(starmap_id, hyperlink_id, patch))
+    envelope(api.update_starmap_hyperlink_expected(
+        starmap_id,
+        hyperlink_id,
+        patch,
+        expected_revision,
+    ))
 }
 
 pub fn delete_starmap_hyperlink(
@@ -569,12 +620,22 @@ pub fn update_starmap_link(
 ) -> String {
     // 平台端用扁平的 label + clear_label 表达 Option<Option<String>>，
     // 经 StarMapLinkPatchInputDto -> StarMapLinkPatchDto 转换后再交给 Core。
-    let input: StarMapLinkPatchInputDto = match serde_json::from_str(patch_json) {
+    let mut value: serde_json::Value = match serde_json::from_str(patch_json) {
+        Ok(value) => value,
+        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
+    };
+    let expected_revision = take_expected_revision(&mut value);
+    let input: StarMapLinkPatchInputDto = match serde_json::from_value(value) {
         Ok(i) => i,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
     };
     let patch: StarMapLinkPatchDto = input.into();
-    envelope(api.update_starmap_link(starmap_id, link_id, patch))
+    envelope(api.update_starmap_link_expected(
+        starmap_id,
+        link_id,
+        patch,
+        expected_revision,
+    ))
 }
 
 pub fn delete_starmap_link(api: &WriterCoreApi, starmap_id: &str, link_id: &str) -> String {

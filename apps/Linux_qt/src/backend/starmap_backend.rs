@@ -46,6 +46,7 @@ pub struct StarMapBackend {
     get_main_starmap_json: qt_method!(fn(&self, project_id: QString) -> QString),
     unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
     get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
+    workspace_changes_since_json: qt_method!(fn(&self, offset: u64) -> QString),
     get_starmap_graph: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
     resolve_starmap_path_json:
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QString),
@@ -552,6 +553,10 @@ impl StarMapBackend {
     }
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
         self.with_app(|app| app.get_starmap_graph_json(starmap_id))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn workspace_changes_since_json(&self, offset: u64) -> QString {
+        self.with_app(|app| app.workspace_changes_since_json(offset))
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_starmap_graph(&self, starmap_id: QString) -> QJsonObject {

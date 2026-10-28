@@ -16,7 +16,8 @@
 use crate::error::{Error, Result};
 use crate::writing_stats::calendar;
 use crate::writing_stats::contribution::{
-    ContributionEvent, ContributionOperation, CurrentTextSnapshot, MutationActor,
+    char_diff_ops, CharDiffOp, ContributionEvent, ContributionOperation, CurrentTextSnapshot,
+    MutationActor,
 };
 use crate::writing_stats::{EventSource, WritingActivitySegment, WritingInputEvent};
 use serde::{Deserialize, Serialize};
@@ -1480,46 +1481,42 @@ pub fn project_contribution_retained(
 
 /// 把重建出的字符来源对齐到当前真实文字。
 ///
-/// 公共前后缀保留原来源，中间无法解释的新字符归 `Unknown`。这样旧事件缺少
-/// 标题、或被外部工具直接改盘时，不会把无来源内容算到某个 actor 头上。
+/// 多段差异中未变化的字符保留原来源，无法解释的新字符归 `Unknown`。
+/// 这样旧事件缺少标题、或被外部工具直接改盘时，不会把无来源内容算到
+/// 某个 actor 头上。
 fn reconcile_sources_with_current(sources: &mut Vec<(char, MutationActor)>, current: &str) {
-    let current: Vec<char> = current.chars().collect();
-    if sources.is_empty() {
-        *sources = current
-            .into_iter()
-            .map(|ch| (ch, MutationActor::Unknown))
-            .collect();
-        return;
+    let expected: String = sources.iter().map(|(ch, _)| *ch).collect();
+    let current_chars: Vec<char> = current.chars().collect();
+    let mut updated = Vec::with_capacity(current_chars.len());
+    for op in char_diff_ops(&expected, current) {
+        match op {
+            CharDiffOp::Equal {
+                old_start, len, ..
+            } => {
+                updated.extend(sources[old_start..old_start + len].iter().copied());
+            }
+            CharDiffOp::Delete { .. } => {}
+            CharDiffOp::Insert { new_start, new_len } => {
+                updated.extend(
+                    current_chars[new_start..new_start + new_len]
+                        .iter()
+                        .copied()
+                        .map(|ch| (ch, MutationActor::Unknown)),
+                );
+            }
+            CharDiffOp::Replace {
+                new_start, new_len, ..
+            } => {
+                updated.extend(
+                    current_chars[new_start..new_start + new_len]
+                        .iter()
+                        .copied()
+                        .map(|ch| (ch, MutationActor::Unknown)),
+                );
+            }
+        }
     }
-    let prefix = sources
-        .iter()
-        .map(|(ch, _)| *ch)
-        .zip(current.iter().copied())
-        .take_while(|(left, right)| left == right)
-        .count();
-    let max_suffix = sources.len().min(current.len()).saturating_sub(prefix);
-    let suffix = sources
-        .iter()
-        .rev()
-        .map(|(ch, _)| *ch)
-        .zip(current.iter().rev().copied())
-        .take(max_suffix)
-        .take_while(|(left, right)| left == right)
-        .count();
-    let current_middle_end = current.len().saturating_sub(suffix);
-    let old_suffix = if suffix > 0 {
-        sources[sources.len() - suffix..].to_vec()
-    } else {
-        Vec::new()
-    };
-    sources.truncate(prefix);
-    sources.extend(
-        current[prefix..current_middle_end]
-            .iter()
-            .copied()
-            .map(|ch| (ch, MutationActor::Unknown)),
-    );
-    sources.extend(old_suffix);
+    *sources = updated;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

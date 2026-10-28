@@ -300,9 +300,18 @@ impl AppBackend {
         raw.into()
     }
 
+    pub(crate) fn workspace_changes_since_json(&self, offset: u64) -> QString {
+        match self.core_api() {
+            Some(core) => starmap_bridge::workspace_changes_since(&core, offset).into(),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            )
+            .into(),
+        }
+    }
+
     // AppBackend::get_starmap_graph_json
-    pub(crate) fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
-        let sid = starmap_id.to_string();
+    pub(crate) fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {        let sid = starmap_id.to_string();
         if let Some(core) = self.core_api() {
             match core.get_starmap_graph(&sid) {
                 Ok(g) => {

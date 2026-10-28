@@ -9,6 +9,7 @@ pub mod transaction;
 pub mod git_repo_layout;
 pub mod git_runtime;
 pub mod workspace_git;
+pub mod workspace_events;
 pub mod workspace_lock;
 pub mod workspace_paths;
 

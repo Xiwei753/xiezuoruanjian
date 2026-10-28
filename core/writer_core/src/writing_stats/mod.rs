@@ -50,6 +50,7 @@ pub mod calendar;
 pub mod checkpoint;
 pub mod contribution;
 pub mod contribution_store;
+pub(crate) mod contribution_transaction;
 pub mod migration;
 pub mod projection;
 pub mod proof;

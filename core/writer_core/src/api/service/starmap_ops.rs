@@ -78,6 +78,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let result = self
             .core_write()
             .add_starmap_embed(starmap_id, embed.try_into().map_err(WriterError::from)?)
@@ -107,6 +108,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
@@ -241,9 +243,34 @@ impl WriterCoreApi {
         instance_id: &str,
         patch: crate::api::types::StarMapEmbedPatchDto,
     ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
+        self.update_starmap_embed_expected(starmap_id, instance_id, patch, None)
+    }
+
+    pub fn update_starmap_embed_expected(
+        &self,
+        starmap_id: &str,
+        instance_id: &str,
+        patch: crate::api::types::StarMapEmbedPatchDto,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| {
+                    graph
+                        .embeds
+                        .iter()
+                        .find(|embed| embed.instance_id == instance_id)
+                })
+                .map(|embed| embed.updated_at),
+            expected_revision,
+            "embed",
+            instance_id,
+        )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         let result = self
             .core_write()
@@ -277,13 +304,38 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
     pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> ApiResult<bool> {
+        self.delete_starmap_embed_expected(starmap_id, instance_id, None)
+    }
+
+    pub fn delete_starmap_embed_expected(
+        &self,
+        starmap_id: &str,
+        instance_id: &str,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| {
+                    graph
+                        .embeds
+                        .iter()
+                        .find(|embed| embed.instance_id == instance_id)
+                })
+                .map(|embed| embed.updated_at),
+            expected_revision,
+            "embed",
+            instance_id,
+        )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write()
             .delete_starmap_embed(starmap_id, instance_id)?;
@@ -304,6 +356,7 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(true)
     }
 
@@ -314,6 +367,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapLinkDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let result = self
             .core_write()
             .add_starmap_link(starmap_id, link.try_into().map_err(WriterError::from)?)
@@ -344,6 +398,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
@@ -353,9 +408,29 @@ impl WriterCoreApi {
         link_id: &str,
         patch: crate::api::types::StarMapLinkPatchDto,
     ) -> ApiResult<crate::api::types::StarMapLinkDto> {
+        self.update_starmap_link_expected(starmap_id, link_id, patch, None)
+    }
+
+    pub fn update_starmap_link_expected(
+        &self,
+        starmap_id: &str,
+        link_id: &str,
+        patch: crate::api::types::StarMapLinkPatchDto,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<crate::api::types::StarMapLinkDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| graph.links.iter().find(|link| link.link_id == link_id))
+                .map(|link| link.updated_at),
+            expected_revision,
+            "link",
+            link_id,
+        )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         let result = self
             .core_write()
@@ -390,13 +465,33 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
     pub fn delete_starmap_link(&self, starmap_id: &str, link_id: &str) -> ApiResult<bool> {
+        self.delete_starmap_link_expected(starmap_id, link_id, None)
+    }
+
+    pub fn delete_starmap_link_expected(
+        &self,
+        starmap_id: &str,
+        link_id: &str,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| graph.links.iter().find(|link| link.link_id == link_id))
+                .map(|link| link.updated_at),
+            expected_revision,
+            "link",
+            link_id,
+        )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write().delete_starmap_link(starmap_id, link_id)?;
         self.record_starmap_object(
@@ -416,6 +511,7 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(true)
     }
 
@@ -515,6 +611,7 @@ impl WriterCoreApi {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let mut contribution_batch = self.begin_contribution_batch();
+        let mut contribution_txn = self.begin_starmaps_contribution_transaction()?;
         //   用 _with_changes 版本拿变更集，
         // 调 record_workspace_change_set_history 记录本地历史。
         let (result, change_set) = self
@@ -609,6 +706,7 @@ impl WriterCoreApi {
             }
         }
         self.commit_contribution_batch(&mut contribution_batch)?;
+        self.finish_starmap_contribution_transaction(&result.starmap_id, &mut contribution_txn)?;
         let result_dto: crate::api::types::StarMapMetaDto = result.into();
         let _ = self.record_workspace_change_set_history(&change_set, "create_starmap")?;
         Ok(result_dto)
@@ -623,6 +721,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapNodeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let result = self
             .core_write()
             .add_starmap_node(
@@ -659,6 +758,7 @@ impl WriterCoreApi {
             None,
             after.as_ref(),
         )?;
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
@@ -669,6 +769,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         //   用 _with_changes 版本记录本地历史。
         let before = self
             .core_write()
@@ -703,6 +804,7 @@ impl WriterCoreApi {
             before,
             Some(after),
         )?;
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         let result_dto: crate::api::types::StarMapMetaDto = result.into();
         let _ = self.record_workspace_change_set_history(&change_set, "rename_starmap")?;
         Ok(result_dto)
@@ -711,6 +813,7 @@ impl WriterCoreApi {
     pub fn delete_starmap(&self, starmap_id: &str) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let mut contribution_batch = self.begin_contribution_batch();
         //   durable 删除事务：先 plan（不碰磁盘，构造完整 PlannedStarmapDelete
         // 含固定 trash 路径和完整 sync_delete_facts），再 save_pending 落盘 journal，
@@ -891,6 +994,7 @@ impl WriterCoreApi {
             }
         }
         self.commit_contribution_batch(&mut contribution_batch)?;
+        contribution_txn.commit()?;
         Ok(true)
     }
 
@@ -905,6 +1009,7 @@ impl WriterCoreApi {
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before_meta = self.core_write().get_starmap(starmap_id).ok();
         //   用 _with_changes 版本记录本地历史。
         let change_set = self
@@ -1034,6 +1139,7 @@ impl WriterCoreApi {
             before_meta.as_ref().map(Self::starmap_meta_snapshot),
             Some(Self::starmap_meta_snapshot(&meta)),
         )?;
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(true)
     }
 
@@ -1048,6 +1154,7 @@ impl WriterCoreApi {
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before_meta = self.core_write().get_starmap(starmap_id).ok();
         //   用 _with_changes 版本记录本地历史。
         let change_set = self
@@ -1176,6 +1283,7 @@ impl WriterCoreApi {
             before_meta.as_ref().map(Self::starmap_meta_snapshot),
             Some(Self::starmap_meta_snapshot(&meta)),
         )?;
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(true)
     }
 
@@ -1366,9 +1474,33 @@ impl WriterCoreApi {
         node_id: &str,
         patch: crate::api::types::StarMapNodePatchDto,
     ) -> ApiResult<crate::api::types::StarMapNodeDto> {
+        self.update_starmap_node_expected(starmap_id, node_id, patch, None)
+    }
+
+    /// 更新节点，并校验调用方读取到的对象版本。
+    ///
+    /// `expected_revision` 来自 `StarMapNodeDto.updated_at`。版本不一致时返回
+    /// `WriterError::Conflict`，调用方必须重新读取后再提交，不能覆盖别人的修改。
+    pub fn update_starmap_node_expected(
+        &self,
+        starmap_id: &str,
+        node_id: &str,
+        patch: crate::api::types::StarMapNodePatchDto,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<crate::api::types::StarMapNodeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| graph.nodes.iter().find(|node| node.id == node_id))
+                .map(|node| node.updated_at),
+            expected_revision,
+            "node",
+            node_id,
+        )?;
         let result = self
             .core_write()
             .update_starmap_node(
@@ -1404,13 +1536,37 @@ impl WriterCoreApi {
             before.as_ref(),
             after.as_ref(),
         )?;
+        if let Err(error) = self.flush_starmap_store(starmap_id) {
+            let _ = self.core_write().remove_starmap_store(starmap_id);
+            return Err(error);
+        }
+        contribution_txn.commit()?;
         Ok(result.into())
     }
 
     pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> ApiResult<bool> {
+        self.delete_starmap_node_expected(starmap_id, node_id, None)
+    }
+
+    pub fn delete_starmap_node_expected(
+        &self,
+        starmap_id: &str,
+        node_id: &str,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| graph.nodes.iter().find(|node| node.id == node_id))
+                .map(|node| node.updated_at),
+            expected_revision,
+            "node",
+            node_id,
+        )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write().delete_starmap_node(starmap_id, node_id)?;
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -1430,6 +1586,11 @@ impl WriterCoreApi {
             before.as_ref(),
             None,
         )?;
+        if let Err(error) = self.flush_starmap_store(starmap_id) {
+            let _ = self.core_write().remove_starmap_store(starmap_id);
+            return Err(error);
+        }
+        contribution_txn.commit()?;
         Ok(true)
     }
 
@@ -1440,6 +1601,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapEdgeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let result = self
             .core_write()
             .add_starmap_edge(starmap_id, edge.try_into().map_err(WriterError::from)?)
@@ -1470,6 +1632,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
@@ -1479,9 +1642,29 @@ impl WriterCoreApi {
         edge_id: &str,
         patch: crate::api::types::StarMapEdgePatchDto,
     ) -> ApiResult<crate::api::types::StarMapEdgeDto> {
+        self.update_starmap_edge_expected(starmap_id, edge_id, patch, None)
+    }
+
+    pub fn update_starmap_edge_expected(
+        &self,
+        starmap_id: &str,
+        edge_id: &str,
+        patch: crate::api::types::StarMapEdgePatchDto,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<crate::api::types::StarMapEdgeDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| graph.edges.iter().find(|edge| edge.id == edge_id))
+                .map(|edge| edge.updated_at),
+            expected_revision,
+            "edge",
+            edge_id,
+        )?;
         let result = self
             .core_write()
             .update_starmap_edge(
@@ -1516,13 +1699,33 @@ impl WriterCoreApi {
             before.as_ref(),
             after.as_ref(),
         )?;
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
     pub fn delete_starmap_edge(&self, starmap_id: &str, edge_id: &str) -> ApiResult<bool> {
+        self.delete_starmap_edge_expected(starmap_id, edge_id, None)
+    }
+
+    pub fn delete_starmap_edge_expected(
+        &self,
+        starmap_id: &str,
+        edge_id: &str,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| graph.edges.iter().find(|edge| edge.id == edge_id))
+                .map(|edge| edge.updated_at),
+            expected_revision,
+            "edge",
+            edge_id,
+        )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write().delete_starmap_edge(starmap_id, edge_id)?;
         self.enqueue_search_index_update(crate::search::SearchIndexUpdate {
@@ -1542,6 +1745,7 @@ impl WriterCoreApi {
             before.as_ref(),
             None,
         )?;
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(true)
     }
 
@@ -1595,6 +1799,7 @@ impl WriterCoreApi {
     ) -> ApiResult<crate::api::types::StarMapHyperlinkDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let result = self
             .core_write()
             .add_starmap_hyperlink(starmap_id, hl.try_into().map_err(WriterError::from)?)
@@ -1626,6 +1831,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
@@ -1635,11 +1841,36 @@ impl WriterCoreApi {
         hyperlink_id: &str,
         patch: crate::api::types::StarMapHyperlinkPatchDto,
     ) -> ApiResult<crate::api::types::StarMapHyperlinkDto> {
+        self.update_starmap_hyperlink_expected(starmap_id, hyperlink_id, patch, None)
+    }
+
+    pub fn update_starmap_hyperlink_expected(
+        &self,
+        starmap_id: &str,
+        hyperlink_id: &str,
+        patch: crate::api::types::StarMapHyperlinkPatchDto,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<crate::api::types::StarMapHyperlinkDto> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let core_patch: crate::starmap::types::StarMapHyperlinkPatch =
             patch.try_into().map_err(WriterError::from)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| {
+                    graph
+                        .hyperlinks
+                        .iter()
+                        .find(|hyperlink| hyperlink.hyperlink_id == hyperlink_id)
+                })
+                .map(|hyperlink| hyperlink.updated_at),
+            expected_revision,
+            "hyperlink",
+            hyperlink_id,
+        )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         let result = self
             .core_write()
@@ -1671,6 +1902,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(result.into())
     }
 
@@ -1679,9 +1911,33 @@ impl WriterCoreApi {
         starmap_id: &str,
         hyperlink_id: &str,
     ) -> ApiResult<bool> {
+        self.delete_starmap_hyperlink_expected(starmap_id, hyperlink_id, None)
+    }
+
+    pub fn delete_starmap_hyperlink_expected(
+        &self,
+        starmap_id: &str,
+        hyperlink_id: &str,
+        expected_revision: Option<u64>,
+    ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_starmap_contribution_transaction(starmap_id)?;
         let before = self.get_starmap_graph_snapshot(starmap_id);
+        ensure_starmap_revision(
+            before
+                .as_ref()
+                .and_then(|graph| {
+                    graph
+                        .hyperlinks
+                        .iter()
+                        .find(|hyperlink| hyperlink.hyperlink_id == hyperlink_id)
+                })
+                .map(|hyperlink| hyperlink.updated_at),
+            expected_revision,
+            "hyperlink",
+            hyperlink_id,
+        )?;
         let project_id = get_starmap_project_id(self, starmap_id);
         self.core_write()
             .delete_starmap_hyperlink(starmap_id, hyperlink_id)?;
@@ -1702,6 +1958,7 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
+        self.finish_starmap_contribution_transaction(starmap_id, &mut contribution_txn)?;
         Ok(true)
     }
 
@@ -2079,5 +2336,38 @@ impl WriterCoreApi {
         };
 
         Ok(connections.into_iter().map(Into::into).collect())
+    }
+
+    fn finish_starmap_contribution_transaction(
+        &self,
+        starmap_id: &str,
+        transaction: &mut crate::writing_stats::contribution_transaction::ContributionTransaction,
+    ) -> ApiResult<()> {
+        if let Err(error) = self.flush_starmap_store(starmap_id) {
+            let _ = self.core_write().remove_starmap_store(starmap_id);
+            return Err(error);
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+}
+
+fn ensure_starmap_revision(
+    actual: Option<u64>,
+    expected: Option<u64>,
+    object_type: &str,
+    object_id: &str,
+) -> ApiResult<()> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    match actual {
+        Some(actual) if actual == expected => Ok(()),
+        Some(actual) => Err(WriterError::Conflict(format!(
+            "revision conflict: {object_type} {object_id} expected={expected} actual={actual}"
+        ))),
+        None => Err(WriterError::Conflict(format!(
+            "revision conflict: {object_type} {object_id} no longer exists"
+        ))),
     }
 }

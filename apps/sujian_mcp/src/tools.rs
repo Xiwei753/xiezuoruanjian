@@ -172,6 +172,8 @@ struct CreateNodeParams {
 struct UpdateNodeParams {
     starmap_id: String,
     node_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
     /// StarMapNodePatchDto JSON. Use null for an inner field to clear it.
     patch: Value,
 }
@@ -201,6 +203,8 @@ struct CreateEdgeParams {
 struct UpdateEdgeParams {
     starmap_id: String,
     edge_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
     /// StarMapEdgePatchDto JSON.
     patch: Value,
 }
@@ -243,6 +247,8 @@ struct CreateChildEmbedParams {
 struct UpdateEmbedParams {
     starmap_id: String,
     instance_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
     /// StarMapEmbedPatchDto JSON.
     patch: Value,
 }
@@ -269,6 +275,8 @@ struct CreateLinkParams {
 struct UpdateLinkParams {
     starmap_id: String,
     link_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
     /// StarMapLinkPatchDto JSON.
     patch: Value,
 }
@@ -295,6 +303,8 @@ struct CreateHyperlinkParams {
 struct UpdateHyperlinkParams {
     starmap_id: String,
     hyperlink_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
     /// StarMapHyperlinkPatchDto JSON.
     patch: Value,
 }
@@ -728,7 +738,12 @@ impl SujianMcpServer {
         let patch: StarMapNodePatchDto = parse_input(params.patch, "patch")?;
         let result = self
             .ctx()
-            .write(|api| api.update_starmap_node(&params.starmap_id, &params.node_id, patch))?;
+            .write(|api| api.update_starmap_node_expected(
+                &params.starmap_id,
+                &params.node_id,
+                patch,
+                params.expected_revision,
+            ))?;
         to_json(&result)
     }
 
@@ -786,7 +801,12 @@ impl SujianMcpServer {
         let patch: StarMapEdgePatchDto = parse_input(params.patch, "patch")?;
         let result = self
             .ctx()
-            .write(|api| api.update_starmap_edge(&params.starmap_id, &params.edge_id, patch))?;
+            .write(|api| api.update_starmap_edge_expected(
+                &params.starmap_id,
+                &params.edge_id,
+                patch,
+                params.expected_revision,
+            ))?;
         to_json(&result)
     }
 
@@ -862,7 +882,12 @@ impl SujianMcpServer {
     ) -> Result<Json<Value>, ErrorData> {
         let patch: StarMapEmbedPatchDto = parse_input(params.patch, "patch")?;
         let result = self.ctx().write(|api| {
-            api.update_starmap_embed(&params.starmap_id, &params.instance_id, patch)
+            api.update_starmap_embed_expected(
+                &params.starmap_id,
+                &params.instance_id,
+                patch,
+                params.expected_revision,
+            )
         })?;
         to_json(&result)
     }
@@ -918,7 +943,12 @@ impl SujianMcpServer {
         let patch: StarMapLinkPatchDto = parse_input(params.patch, "patch")?;
         let result = self
             .ctx()
-            .write(|api| api.update_starmap_link(&params.starmap_id, &params.link_id, patch))?;
+            .write(|api| api.update_starmap_link_expected(
+                &params.starmap_id,
+                &params.link_id,
+                patch,
+                params.expected_revision,
+            ))?;
         to_json(&result)
     }
 
@@ -968,7 +998,12 @@ impl SujianMcpServer {
     ) -> Result<Json<Value>, ErrorData> {
         let patch: StarMapHyperlinkPatchDto = parse_input(params.patch, "patch")?;
         let result = self.ctx().write(|api| {
-            api.update_starmap_hyperlink(&params.starmap_id, &params.hyperlink_id, patch)
+            api.update_starmap_hyperlink_expected(
+                &params.starmap_id,
+                &params.hyperlink_id,
+                patch,
+                params.expected_revision,
+            )
         })?;
         to_json(&result)
     }

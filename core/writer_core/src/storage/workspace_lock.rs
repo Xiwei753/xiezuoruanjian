@@ -61,6 +61,13 @@ impl WorkspaceWriteLock {
             DEPTH.with(|depth| depth.set(0));
             return Err(error.into());
         }
+        if let Err(error) =
+            crate::writing_stats::contribution_transaction::recover_pending(app_data_root)
+        {
+            let _ = file.unlock();
+            DEPTH.with(|depth| depth.set(0));
+            return Err(error);
+        }
         Ok(Self {
             _process_guard: Some(process_guard),
             file: Some(file),

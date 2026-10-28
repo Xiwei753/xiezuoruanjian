@@ -183,6 +183,10 @@ impl crate::sync::SyncService {
         if rel_path.starts_with("app-meta/stats/") || rel_path.contains("/app-meta/stats/") {
             return true;
         }
+        // 本机多进程工作区变更通知，不属于可同步业务数据。
+        if rel_path.starts_with("app-meta/workspace-events") {
+            return true;
+        }
         if rel_path.starts_with("app-meta/transactions/")
             || rel_path.contains("/app-meta/transactions/")
         {

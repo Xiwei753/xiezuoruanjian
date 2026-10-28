@@ -534,6 +534,7 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_annotation_contribution_transaction(&project_id)?;
         let mut contribution_batch = self.begin_contribution_batch();
         let store = self.annotation_store(&project_id)?;
         let source_before = store
@@ -585,6 +586,7 @@ impl WriterCoreApi {
             )?;
         }
         self.commit_contribution_batch(&mut contribution_batch)?;
+        contribution_txn.commit()?;
         Ok(changed)
     }
 
@@ -596,6 +598,7 @@ impl WriterCoreApi {
     ) -> ApiResult<Vec<AnnotationTagBindingDto>> {
         let _workspace_write_lock =
             crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
+        let mut contribution_txn = self.begin_annotation_contribution_transaction(&project_id)?;
         let mut contribution_batch = self.begin_contribution_batch();
         let target = object_ref_from_dto(target)?;
         if target.project_id() != project_id {
@@ -739,6 +742,7 @@ impl WriterCoreApi {
             )?;
         }
         self.commit_contribution_batch(&mut contribution_batch)?;
+        contribution_txn.commit()?;
         store
             .list_bindings_for_target(&target)
             .map(|values| values.into_iter().map(binding_to_dto).collect())

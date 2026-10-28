@@ -130,11 +130,50 @@ impl WriterCoreApi {
         if events.is_empty() {
             return Ok(());
         }
+        if crate::writing_stats::contribution_transaction::queue_active_events(events.clone()) {
+            return Ok(());
+        }
         self.core_write()
             .get_stats_api()
             .record_contribution_events(events)
             .map(|_| ())
             .map_err(Into::into)
+    }
+
+    pub(crate) fn begin_starmap_contribution_transaction(
+        &self,
+        starmap_id: &str,
+    ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
+    {
+        crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
+            &self.app_data_root,
+            vec![self.app_data_root.join("starmaps").join(starmap_id)],
+        )
+        .map_err(Into::into)
+    }
+
+    pub(crate) fn begin_starmaps_contribution_transaction(
+        &self,
+    ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
+    {
+        Ok(
+            crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
+                &self.app_data_root,
+                vec![self.app_data_root.join("starmaps")],
+            )?,
+        )
+    }
+
+    pub(crate) fn begin_annotation_contribution_transaction(
+        &self,
+        project_id: &str,
+    ) -> super::ApiResult<crate::writing_stats::contribution_transaction::ContributionTransaction>
+    {
+        crate::writing_stats::contribution_transaction::ContributionTransaction::begin(
+            &self.app_data_root,
+            vec![self.projects_root.join(project_id).join("annotations")],
+        )
+        .map_err(Into::into)
     }
 
     /// 从星图当前快照生成对象来源快照；不存在返回 `None`（删除后）。
@@ -227,7 +266,11 @@ impl WriterCoreApi {
             .and_then(|graph| Self::starmap_object_snapshot(graph, object_type, object_id));
         let after = after_graph
             .and_then(|graph| Self::starmap_object_snapshot(graph, object_type, object_id));
-        self.record_contribution_event_with_context(
+        let revision = after
+            .as_ref()
+            .and_then(|snapshot| snapshot.version.parse::<u64>().ok())
+            .unwrap_or(0);
+        let result = self.record_contribution_event_with_context(
             context,
             project_id.unwrap_or_default(),
             object_type,
@@ -236,7 +279,20 @@ impl WriterCoreApi {
             Some(starmap_id.to_string()),
             before,
             after,
-        )
+        );
+        if result.is_ok() {
+            if let Err(error) = crate::storage::workspace_events::append_event(
+                &self.app_data_root,
+                "starmap",
+                starmap_id,
+                object_type.as_str(),
+                object_id,
+                revision,
+            ) {
+                log::warn!("failed to append workspace change event: {error}");
+            }
+        }
+        result
     }
 
     pub(crate) fn record_starmap_object(
