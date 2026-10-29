@@ -38,9 +38,9 @@ jobs:
 
       - name: Install Fedora build dependencies
         run: |
-          dnf install -y \
+          dnf install -y --setopt=install_weak_deps=False \
             git tar gzip findutils which \
-            rpm-build rpmdevtools \
+            rpm-build python3 \
             rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel \
             qt6-qtbase-devel \
             qt6-qtdeclarative-devel \
@@ -50,9 +50,9 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          # 原地编译使用仓库真实源码路径；旧缓存来自 vendor/staging 构建，不能复用。
-          # 更换缓存版本，使首次原地编译生成的新依赖产物能够写入并供后续构建使用。
-          prefix-key: v1-rpm-inplace
+          # 构建参数由 Fedora 单代码生成单元/完整调试信息调整为普通 Release。
+          # 单独缓存版本，避免复用旧 RUSTFLAGS 的依赖产物导致每次重编。
+          prefix-key: v2-rpm-fast-release
           shared-key: linux-rpm-fedora43
           workspaces: ". -> target/rpm-cargo"
           cache-workspace-crates: true

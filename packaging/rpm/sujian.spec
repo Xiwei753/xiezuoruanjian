@@ -80,6 +80,10 @@ export SUJIAN_PACKAGE_TYPE="${SUJIAN_PACKAGE_TYPE:-rpm}"
 # 普通 rpmbuild 未传时回退到源码目录自身的 target。
 : "${CARGO_TARGET_DIR:=target}"
 export CARGO_TARGET_DIR
+# Fedora RPM 自动注入的 Rust 标志默认采用单代码生成单元及完整调试符号。
+# GitHub 分发的主安装包不生成 debuginfo：保留其余 Fedora 安全编译标志，
+# 仅改用 Cargo Release 常规的并行代码生成与零调试符号。
+export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Ccodegen-units=16 -Cdebuginfo=0"
 cargo build --release --locked -p sujian-linux-qt
 
 %install

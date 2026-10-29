@@ -10,7 +10,7 @@
 #   ./packaging/rpm/build-rpm.sh
 #
 # 依赖 (Fedora/RHEL):
-#   sudo dnf install rpm-build rpmdevtools \
+#   sudo dnf install rpm-build python3 \
 #       qt6-qtbase-devel qt6-qtdeclarative-devel \
 #       qt6-qttools-devel kf6-kcolorscheme-devel \
 #       rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel
@@ -46,7 +46,7 @@ if ! command -v rpmbuild >/dev/null 2>&1; then
     echo "错误: 未找到 rpmbuild，请先安装 RPM 构建工具。" >&2
     echo "" >&2
     echo "  Fedora/RHEL:" >&2
-    echo "    sudo dnf install rpm-build rpmdevtools" >&2
+    echo "    sudo dnf install rpm-build python3" >&2
     echo "  构建依赖:" >&2
     echo "    sudo dnf install qt6-qtbase-devel qt6-qtdeclarative-devel \\" >&2
     echo "        qt6-qttools-devel kf6-kcolorscheme-devel \\" >&2
