@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::sync::provider::model::{RemoteVersion, WritePrecondition};
+use crate::sync::provider::model::{DeletePrecondition, RemoteVersion, WritePrecondition};
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{AppDataGroup, ManifestFileRecord, SyncManifest};
 
@@ -21,6 +21,22 @@ pub const LEGACY_APP_MANIFEST_REMOTE_PATH: &str = "app/app-meta/sync/manifest.sy
 
 /// Current catalog wire version.
 pub const APP_DATA_GROUP_CATALOG_SCHEMA_VERSION: u32 = 3;
+
+/// Transitional layout marker written by the intermediate schema-2 build
+/// (commit `56a2252`).  It is read-only migration input: the stable groups it
+/// lists must be merged with their legacy generation and folded into the
+/// schema-3 catalog, after which the sidecar is deleted from the new tree.
+pub const TRANSITIONAL_APP_DATA_GROUP_LAYOUT_REMOTE_PATH: &str =
+    "app/app-meta/sync/app_groups_layout.sync.json";
+
+const TRANSITIONAL_APP_DATA_GROUP_LAYOUT_SCHEMA_VERSION: u32 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+struct TransitionalAppDataGroupLayout {
+    schema_version: u32,
+    #[serde(default)]
+    stable_groups: Vec<String>,
+}
 
 /// One App group and the generation selected as its current remote snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +69,21 @@ pub struct RemoteAppDataGroupCatalogSnapshot {
     pub catalog: AppDataGroupCatalog,
     pub version: RemoteVersion,
     pub catalog_present: bool,
+    /// Groups marked stable by the transitional sidecar.  They are folded into
+    /// the schema-3 catalog in a later sync step, not exposed as a second
+    /// persistent layout.
+    transitional_stable_groups: std::collections::BTreeSet<String>,
+    /// Version of the transitional sidecar, used to delete it once every group
+    /// has a schema-3 stable-tree record.
+    transitional_layout_version: Option<RemoteVersion>,
+}
+
+impl RemoteAppDataGroupCatalogSnapshot {
+    /// Whether this group was published as a stable tree by the intermediate
+    /// schema-2 build and still needs a one-time merge with its generation.
+    pub fn is_transitional_stable(&self, group: &AppDataGroup) -> bool {
+        self.transitional_stable_groups.contains(&group.id())
+    }
 }
 
 impl Default for AppDataGroupCatalog {
@@ -146,6 +177,47 @@ impl AppDataGroupCatalog {
     }
 }
 
+/// Read the transitional stable-tree marker left by the intermediate schema-2
+/// build.  This is migration input only; the marker is never written again.
+fn read_transitional_layout(
+    provider: &dyn SyncProvider,
+) -> crate::Result<(std::collections::BTreeSet<String>, Option<RemoteVersion>)> {
+    let Some(object) = provider
+        .read(TRANSITIONAL_APP_DATA_GROUP_LAYOUT_REMOTE_PATH)
+        .map_err(crate::Error::from)?
+    else {
+        return Ok((std::collections::BTreeSet::new(), None));
+    };
+    let layout: TransitionalAppDataGroupLayout =
+        serde_json::from_slice(&object.content).map_err(|e| {
+            crate::Error::Other(format!(
+                "parse transitional app data group layout {}: {e}",
+                TRANSITIONAL_APP_DATA_GROUP_LAYOUT_REMOTE_PATH
+            ))
+        })?;
+    if layout.schema_version != TRANSITIONAL_APP_DATA_GROUP_LAYOUT_SCHEMA_VERSION {
+        return Err(crate::Error::Other(format!(
+            "unsupported transitional app data group layout schema_version {}",
+            layout.schema_version
+        )));
+    }
+    let mut stable_groups = std::collections::BTreeSet::new();
+    for group_id in layout.stable_groups {
+        AppDataGroup::from_id(&group_id)?;
+        if !stable_groups.insert(group_id.clone()) {
+            return Err(crate::Error::Other(format!(
+                "duplicate app data group id in transitional layout: {group_id}"
+            )));
+        }
+    }
+    Ok((stable_groups, Some(object.version)))
+}
+
+fn catalog_is_fully_stable(catalog: &AppDataGroupCatalog) -> bool {
+    catalog.schema_version == APP_DATA_GROUP_CATALOG_SCHEMA_VERSION
+        && catalog.groups.iter().all(|record| record.tree_snapshot)
+}
+
 /// Load the group catalog. Before a persisted catalog exists, seed it with legacy group ids that
 /// remain mapped to the old flat `app/` source until each group is published.
 ///
@@ -157,6 +229,8 @@ impl AppDataGroupCatalog {
 pub fn load_remote_app_data_group_catalog(
     provider: &dyn SyncProvider,
 ) -> crate::Result<RemoteAppDataGroupCatalogSnapshot> {
+    let (transitional_stable_groups, transitional_layout_version) =
+        read_transitional_layout(provider)?;
     if let Some(object) = provider
         .read(APP_DATA_GROUP_CATALOG_REMOTE_PATH)
         .map_err(crate::Error::from)?
@@ -173,6 +247,8 @@ pub fn load_remote_app_data_group_catalog(
             catalog,
             version: object.version,
             catalog_present: true,
+            transitional_stable_groups,
+            transitional_layout_version,
         });
     }
 
@@ -185,6 +261,8 @@ pub fn load_remote_app_data_group_catalog(
         catalog,
         version: RemoteVersion::new("__nonexistent__"),
         catalog_present: false,
+        transitional_stable_groups,
+        transitional_layout_version,
     })
 }
 
@@ -207,10 +285,36 @@ pub fn write_remote_app_data_group_catalog_once(
     let version = provider
         .write(APP_DATA_GROUP_CATALOG_REMOTE_PATH, &content, precondition)
         .map_err(crate::Error::from)?;
+
+    // Once every catalog record selects the stable tree, the transitional
+    // sidecar has been folded into schema 3.  Delete it in the same round so
+    // the final Git tree contains only the single authoritative catalog.
+    let fully_stable = catalog_is_fully_stable(&snapshot.catalog);
+    if fully_stable {
+        if let Some(layout_version) = &snapshot.transitional_layout_version {
+            provider
+                .delete(
+                    TRANSITIONAL_APP_DATA_GROUP_LAYOUT_REMOTE_PATH,
+                    DeletePrecondition::IfMatch(layout_version.clone()),
+                )
+                .map_err(crate::Error::from)?;
+        }
+    }
+
     Ok(RemoteAppDataGroupCatalogSnapshot {
         catalog: snapshot.catalog.clone(),
         version,
         catalog_present: true,
+        transitional_stable_groups: if fully_stable {
+            std::collections::BTreeSet::new()
+        } else {
+            snapshot.transitional_stable_groups.clone()
+        },
+        transitional_layout_version: if fully_stable {
+            None
+        } else {
+            snapshot.transitional_layout_version.clone()
+        },
     })
 }
 
@@ -849,5 +953,56 @@ mod tests {
         catalog.validate().unwrap();
         catalog.schema_version = 4;
         assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn test_transitional_sidecar_is_folded_into_schema_three_and_deleted() {
+        let provider = MemoryProvider::new();
+        let group = AppDataGroup::StatsDevice("device-abc".to_string());
+        let generation = "a".repeat(40);
+        let catalog = legacy_stats_catalog(&group, &generation);
+        provider
+            .write(
+                APP_DATA_GROUP_CATALOG_REMOTE_PATH,
+                &serde_json::to_vec(&catalog).unwrap(),
+                WritePrecondition::Unconditional,
+            )
+            .unwrap();
+        let transitional = serde_json::json!({
+            "schema_version": 3,
+            "stable_groups": [group.id()]
+        });
+        provider
+            .write(
+                TRANSITIONAL_APP_DATA_GROUP_LAYOUT_REMOTE_PATH,
+                &serde_json::to_vec(&transitional).unwrap(),
+                WritePrecondition::Unconditional,
+            )
+            .unwrap();
+
+        let mut loaded = load_remote_app_data_group_catalog(&provider).unwrap();
+        assert!(loaded.is_transitional_stable(&group));
+        assert_eq!(
+            resolve_group_source_prefix(Some(&loaded.catalog), &group).unwrap(),
+            format!(
+                "app/__groups__/{}/__generations__/{}",
+                group.storage_key(),
+                generation
+            )
+        );
+
+        loaded.catalog.upsert_tree(&group);
+        write_remote_app_data_group_catalog_once(&provider, &loaded).unwrap();
+
+        assert!(provider
+            .read(TRANSITIONAL_APP_DATA_GROUP_LAYOUT_REMOTE_PATH)
+            .unwrap()
+            .is_none());
+        let reloaded = load_remote_app_data_group_catalog(&provider).unwrap();
+        assert_eq!(reloaded.catalog.schema_version, 3);
+        let record = reloaded.catalog.record(&group).unwrap();
+        assert!(record.tree_snapshot);
+        assert!(record.active_generation.is_none());
+        assert!(!reloaded.is_transitional_stable(&group));
     }
 }

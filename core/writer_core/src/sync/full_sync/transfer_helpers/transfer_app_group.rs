@@ -81,16 +81,40 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
             }
         }
 
-        let outcome = match crate::sync::lww::merge_remote_into_local_app_group(
-            sync_root,
+        // A schema-2 catalog written by the intermediate sidecar build may
+        // point at the old generation while the stable tree already contains
+        // newer objects.  Merge both sources through the normal object-level
+        // LWW/tombstone path, then migrate the catalog to schema 3 below.
+        let transitional_stable = catalog_snapshot.is_transitional_stable(group);
+        let mut merge_prefixes: Vec<&str> = Vec::new();
+        if transitional_stable && target.remote_prefix != source_prefix {
+            merge_prefixes.push(target.remote_prefix.as_str());
+        }
+        merge_prefixes.push(source_prefix.as_str());
+
+        let mut outcome = match merge_app_group_sources(
             provider,
-            &source_prefix,
+            sync_root,
+            &merge_prefixes,
             group,
             &mut state,
         ) {
             Ok(outcome) => outcome,
             Err(error) => return mark_app_group_failure(sync_result_from_error(error), "merge"),
         };
+        if transitional_stable {
+            // The merged manifest may contain blobs from either source.  Force
+            // a complete upload for this one migration commit instead of
+            // reusing a version from only one of the two source trees.
+            outcome.remote_upload_paths = outcome
+                .merged_manifest
+                .files
+                .iter()
+                .filter(|record| record.op == "upsert")
+                .map(|record| record.path.clone())
+                .collect();
+            outcome.remote_tree_files.clear();
+        }
         if !outcome.unresolved_missing_paths.is_empty() {
             let paths = outcome.unresolved_missing_paths.join(", ");
             let failure_path_json = outcome
@@ -231,6 +255,73 @@ pub(in crate::sync::full_sync) fn transfer_app_data_group(
     )
 }
 
+fn merge_app_group_sources(
+    provider: &dyn SyncProvider,
+    sync_root: &Path,
+    prefixes: &[&str],
+    group: &crate::sync::types::AppDataGroup,
+    state: &mut crate::sync::types::SyncState,
+) -> crate::error::Result<crate::sync::lww::LwwMergeOutcome> {
+    let mut combined: Option<crate::sync::lww::LwwMergeOutcome> = None;
+    for prefix in prefixes {
+        let outcome = crate::sync::lww::merge_remote_into_local_app_group(
+            sync_root, provider, prefix, group, state,
+        )?;
+        combined = Some(match combined {
+            None => outcome,
+            Some(mut aggregate) => {
+                extend_unique(&mut aggregate.downloaded_files, outcome.downloaded_files);
+                extend_unique(&mut aggregate.local_deletes, outcome.local_deletes);
+                extend_unique(
+                    &mut aggregate.remote_upload_paths,
+                    outcome.remote_upload_paths,
+                );
+                extend_unique(
+                    &mut aggregate.remote_delete_paths,
+                    outcome.remote_delete_paths,
+                );
+                extend_unique(&mut aggregate.overwritten_files, outcome.overwritten_files);
+                extend_unique(&mut aggregate.ignored_files, outcome.ignored_files);
+                extend_unique(
+                    &mut aggregate.pending_take_remote_failed,
+                    outcome.pending_take_remote_failed,
+                );
+                extend_unique(
+                    &mut aggregate.unresolved_missing_paths,
+                    outcome.unresolved_missing_paths,
+                );
+                for conflict in outcome.conflicts {
+                    if !aggregate
+                        .conflicts
+                        .iter()
+                        .any(|existing| existing.local_path == conflict.local_path)
+                    {
+                        aggregate.conflicts.push(conflict);
+                    }
+                }
+                // The last merge sees the local state updated by every
+                // previous source, so its complete manifest is authoritative.
+                aggregate.remote_tree_files = outcome.remote_tree_files;
+                aggregate.remote_manifest_path = outcome.remote_manifest_path;
+                aggregate.manifest_json = outcome.manifest_json;
+                aggregate.merged_manifest = outcome.merged_manifest;
+                aggregate
+            }
+        });
+    }
+    combined.ok_or_else(|| {
+        crate::Error::Other("merge_app_group_sources: no source prefixes".to_string())
+    })
+}
+
+fn extend_unique(target: &mut Vec<String>, source: Vec<String>) {
+    for item in source {
+        if !target.contains(&item) {
+            target.push(item);
+        }
+    }
+}
+
 fn read_final_starmap_index_ids(
     sync_root: &Path,
 ) -> Result<std::collections::HashSet<String>, String> {
@@ -258,4 +349,236 @@ fn cancelled_app_group_result() -> SyncResult {
         )),
         "transfer",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::lww::LwwMergeOutcome;
+    use crate::sync::provider::memory::MemoryProvider;
+    use crate::sync::types::{AppDataGroup, ManifestFileRecord, SyncManifest, SyncState};
+
+    const EVENT_PATH: &str = "stats/events/device-abc/2024-05-01.events.jsonl";
+
+    fn stats_device_group() -> AppDataGroup {
+        AppDataGroup::StatsDevice("device-abc".to_string())
+    }
+
+    fn prefixes() -> (String, String) {
+        let stable = format!("app/__groups__/{}", stats_device_group().storage_key());
+        let generation = format!("{stable}/__generations__/{}", "a".repeat(40));
+        (stable, generation)
+    }
+
+    fn record(
+        content_hash: &str,
+        updated_at_ms: i64,
+        op: &str,
+        deleted_at_ms: Option<i64>,
+    ) -> ManifestFileRecord {
+        ManifestFileRecord {
+            path: EVENT_PATH.to_string(),
+            content_hash: content_hash.to_string(),
+            updated_at_ms,
+            deleted_at_ms,
+            device_id: "remote-device".to_string(),
+            op: op.to_string(),
+            schema_version: 1,
+        }
+    }
+
+    fn add_source(
+        entries: &mut Vec<(String, Vec<u8>)>,
+        prefix: &str,
+        records: Vec<ManifestFileRecord>,
+        blobs: &[(&str, &[u8])],
+    ) {
+        let manifest = SyncManifest { files: records };
+        entries.push((
+            format!("{prefix}/app-meta/sync/manifest.sync.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        ));
+        for (path, content) in blobs {
+            entries.push((format!("{prefix}/{path}"), content.to_vec()));
+        }
+    }
+
+    fn merge_both(provider: &MemoryProvider, sync_root: &Path) -> LwwMergeOutcome {
+        let (stable, generation) = prefixes();
+        let mut state = SyncState::default();
+        state.device_id = "local-device".to_string();
+        merge_app_group_sources(
+            provider,
+            sync_root,
+            &[stable.as_str(), generation.as_str()],
+            &stats_device_group(),
+            &mut state,
+        )
+        .unwrap()
+    }
+
+    fn merged_record<'a>(outcome: &'a LwwMergeOutcome, path: &str) -> &'a ManifestFileRecord {
+        outcome
+            .merged_manifest
+            .files
+            .iter()
+            .find(|record| record.path == path)
+            .expect("path must exist in merged manifest")
+    }
+
+    #[test]
+    fn test_transitional_merge_keeps_newer_stable_object() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let older = now - 60_000;
+        let newer = now - 1_000;
+        let stable_content = b"stable-new";
+        let generation_content = b"generation-old";
+        let (stable, generation) = prefixes();
+        let mut entries = Vec::new();
+        add_source(
+            &mut entries,
+            &stable,
+            vec![record(
+                &crate::sync::hash::content_md5(stable_content),
+                newer,
+                "upsert",
+                None,
+            )],
+            &[(EVENT_PATH, stable_content)],
+        );
+        add_source(
+            &mut entries,
+            &generation,
+            vec![record(
+                &crate::sync::hash::content_md5(generation_content),
+                older,
+                "upsert",
+                None,
+            )],
+            &[(EVENT_PATH, generation_content)],
+        );
+        let provider = MemoryProvider::with_entries(entries);
+        let root = tempfile::tempdir().unwrap();
+
+        let outcome = merge_both(&provider, root.path());
+
+        assert_eq!(
+            std::fs::read(root.path().join(EVENT_PATH)).unwrap(),
+            stable_content
+        );
+        assert_eq!(merged_record(&outcome, EVENT_PATH).updated_at_ms, newer);
+    }
+
+    #[test]
+    fn test_transitional_merge_keeps_newer_generation_object() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let older = now - 60_000;
+        let newer = now - 1_000;
+        let stable_content = b"stable-old";
+        let generation_content = b"generation-new";
+        let (stable, generation) = prefixes();
+        let mut entries = Vec::new();
+        add_source(
+            &mut entries,
+            &stable,
+            vec![record(
+                &crate::sync::hash::content_md5(stable_content),
+                older,
+                "upsert",
+                None,
+            )],
+            &[(EVENT_PATH, stable_content)],
+        );
+        add_source(
+            &mut entries,
+            &generation,
+            vec![record(
+                &crate::sync::hash::content_md5(generation_content),
+                newer,
+                "upsert",
+                None,
+            )],
+            &[(EVENT_PATH, generation_content)],
+        );
+        let provider = MemoryProvider::with_entries(entries);
+        let root = tempfile::tempdir().unwrap();
+
+        let outcome = merge_both(&provider, root.path());
+
+        assert_eq!(
+            std::fs::read(root.path().join(EVENT_PATH)).unwrap(),
+            generation_content
+        );
+        assert_eq!(merged_record(&outcome, EVENT_PATH).updated_at_ms, newer);
+    }
+
+    #[test]
+    fn test_transitional_merge_keeps_newer_stable_delete() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let older = now - 60_000;
+        let newer = now - 1_000;
+        let (stable, generation) = prefixes();
+        let mut entries = Vec::new();
+        add_source(
+            &mut entries,
+            &stable,
+            vec![record("", newer, "delete", Some(newer))],
+            &[],
+        );
+        add_source(
+            &mut entries,
+            &generation,
+            vec![record(
+                &crate::sync::hash::content_md5(b"generation-old"),
+                older,
+                "upsert",
+                None,
+            )],
+            &[(EVENT_PATH, b"generation-old")],
+        );
+        let provider = MemoryProvider::with_entries(entries);
+        let root = tempfile::tempdir().unwrap();
+
+        let outcome = merge_both(&provider, root.path());
+
+        assert!(!root.path().join(EVENT_PATH).exists());
+        let record = merged_record(&outcome, EVENT_PATH);
+        assert_eq!(record.op, "delete");
+        assert_eq!(record.deleted_at_ms, Some(newer));
+    }
+
+    #[test]
+    fn test_transitional_merge_keeps_newer_generation_delete() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let older = now - 60_000;
+        let newer = now - 1_000;
+        let (stable, generation) = prefixes();
+        let mut entries = Vec::new();
+        add_source(
+            &mut entries,
+            &stable,
+            vec![record(
+                &crate::sync::hash::content_md5(b"stable-old"),
+                older,
+                "upsert",
+                None,
+            )],
+            &[(EVENT_PATH, b"stable-old")],
+        );
+        add_source(
+            &mut entries,
+            &generation,
+            vec![record("", newer, "delete", Some(newer))],
+            &[],
+        );
+        let provider = MemoryProvider::with_entries(entries);
+        let root = tempfile::tempdir().unwrap();
+
+        let outcome = merge_both(&provider, root.path());
+
+        assert!(!root.path().join(EVENT_PATH).exists());
+        let record = merged_record(&outcome, EVENT_PATH);
+        assert_eq!(record.op, "delete");
+        assert_eq!(record.deleted_at_ms, Some(newer));
+    }
 }
