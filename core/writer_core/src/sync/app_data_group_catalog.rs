@@ -3,13 +3,9 @@
 //! The catalog is deliberately separate from `targets.sync.json`: that file tracks
 //! project lifecycle, while this one selects the active App-data layout. When it is
 //! absent, the old flat `app/` manifest remains the sole source of truth. Once
-//! present, its group records select the legacy flat prefix (`None`) or an
-//! immutable grouped generation (`Some(generation)`).
-//!
-//! The stable grouped tree is marked in [`APP_DATA_GROUP_LAYOUT_REMOTE_PATH`], a
-//! sidecar file added for the schema-3 migration.  The catalog itself stays at
-//! schema 2 so already-installed clients keep working; those clients never read
-//! the sidecar, and the last legacy generation pointer stays readable for them.
+//! present, its group records select the legacy flat prefix (`None`), an
+//! immutable grouped generation (`Some(generation)`), or the stable grouped
+//! tree (`tree_snapshot = true`).
 
 use serde::{Deserialize, Serialize};
 
@@ -24,120 +20,24 @@ pub const APP_DATA_GROUP_CATALOG_REMOTE_PATH: &str = "app/app-meta/sync/app_grou
 pub const LEGACY_APP_MANIFEST_REMOTE_PATH: &str = "app/app-meta/sync/manifest.sync.json";
 
 /// Current catalog wire version.
-///
-/// The catalog deliberately stays at schema 2: already-installed clients reject
-/// unknown schema versions, so the stable-tree migration cannot travel in this
-/// file.  It lives in [`APP_DATA_GROUP_LAYOUT_REMOTE_PATH`] instead, which old
-/// clients never read or rewrite.
-pub const APP_DATA_GROUP_CATALOG_SCHEMA_VERSION: u32 = 2;
-
-/// Schema version used by catalogs that embedded `tree_snapshot` directly.
-/// Such catalogs are read only so the marker can move into the layout sidecar;
-/// new writes always use schema 2 plus the sidecar.
-const TREE_SNAPSHOT_CATALOG_SCHEMA_VERSION: u32 = 3;
-
-/// Stable-tree layout marker path, relative to the remote repository root.
-///
-/// Kept separate from the catalog so a schema-2 client that adds a new group and
-/// re-serializes the catalog cannot drop the marker.
-pub const APP_DATA_GROUP_LAYOUT_REMOTE_PATH: &str = "app/app-meta/sync/app_groups_layout.sync.json";
-
-/// Wire version of the stable-tree layout marker.
-pub const APP_DATA_GROUP_LAYOUT_SCHEMA_VERSION: u32 = 3;
+pub const APP_DATA_GROUP_CATALOG_SCHEMA_VERSION: u32 = 3;
 
 /// One App group and the generation selected as its current remote snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppDataGroupRecord {
     pub group_id: String,
     /// Legacy generation pointer. `None` with `tree_snapshot = false` means the
-    /// group still reads from the legacy flat `app/` layout.  For a stable group
-    /// it stays as the last generation published by a schema-2 client so old
-    /// clients keep a readable snapshot; new clients prefer `tree_snapshot`.
+    /// group still reads from the legacy flat `app/` layout.
     #[serde(default)]
     pub active_generation: Option<String>,
     /// New layout: the group is published as a stable, complete tree under
     /// `app/__groups__/<storage_key>/`.
-    ///
-    /// This field is only read from legacy schema-3 catalogs.  New writes omit it
-    /// and use [`AppDataGroupLayout`] instead.
-    #[serde(default, skip_serializing)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub tree_snapshot: bool,
 }
 
-/// Stable-tree groups, stored in a sidecar file old clients never touch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AppDataGroupLayout {
-    pub schema_version: u32,
-    #[serde(default)]
-    pub stable_groups: Vec<String>,
-}
-
-impl Default for AppDataGroupLayout {
-    fn default() -> Self {
-        Self {
-            schema_version: APP_DATA_GROUP_LAYOUT_SCHEMA_VERSION,
-            stable_groups: Vec::new(),
-        }
-    }
-}
-
-impl AppDataGroupLayout {
-    /// Validate schema, stable ids, and duplicate entries.
-    pub fn validate(&self) -> crate::Result<()> {
-        if self.schema_version != APP_DATA_GROUP_LAYOUT_SCHEMA_VERSION {
-            return Err(crate::Error::Other(format!(
-                "unsupported app data group layout schema_version {}",
-                self.schema_version
-            )));
-        }
-        let mut seen = std::collections::HashSet::new();
-        for group_id in &self.stable_groups {
-            AppDataGroup::from_id(group_id)?;
-            if !seen.insert(group_id.as_str()) {
-                return Err(crate::Error::Other(format!(
-                    "duplicate app data group id in layout: {group_id}"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn normalized(mut self) -> Self {
-        self.schema_version = APP_DATA_GROUP_LAYOUT_SCHEMA_VERSION;
-        self.stable_groups.sort();
-        self.stable_groups.dedup();
-        self
-    }
-
-    fn is_stable(&self, group_id: &str) -> bool {
-        self.stable_groups
-            .binary_search_by(|candidate| candidate.as_str().cmp(group_id))
-            .is_ok()
-    }
-
-    fn mark_stable(&mut self, group_id: &str) {
-        if !self.is_stable(group_id) {
-            self.stable_groups.push(group_id.to_string());
-            self.stable_groups.sort();
-        }
-    }
-
-    fn from_catalog(catalog: &AppDataGroupCatalog) -> Self {
-        let mut layout = Self::default();
-        for record in &catalog.groups {
-            if record.tree_snapshot {
-                layout.mark_stable(&record.group_id);
-            }
-        }
-        layout
-    }
-
-    fn apply(&self, catalog: &mut AppDataGroupCatalog) {
-        catalog.schema_version = APP_DATA_GROUP_CATALOG_SCHEMA_VERSION;
-        for record in &mut catalog.groups {
-            record.tree_snapshot = self.is_stable(&record.group_id);
-        }
-    }
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// The active App layout. Each group has one deterministic source at a time.
@@ -153,9 +53,6 @@ pub struct RemoteAppDataGroupCatalogSnapshot {
     pub catalog: AppDataGroupCatalog,
     pub version: RemoteVersion,
     pub catalog_present: bool,
-    layout: AppDataGroupLayout,
-    layout_version: RemoteVersion,
-    layout_present: bool,
 }
 
 impl Default for AppDataGroupCatalog {
@@ -172,7 +69,7 @@ impl AppDataGroupCatalog {
     pub fn validate(&self) -> crate::Result<()> {
         if !matches!(
             self.schema_version,
-            APP_DATA_GROUP_CATALOG_SCHEMA_VERSION | TREE_SNAPSHOT_CATALOG_SCHEMA_VERSION
+            2 | APP_DATA_GROUP_CATALOG_SCHEMA_VERSION
         ) {
             return Err(crate::Error::Other(format!(
                 "unsupported app data group catalog schema_version {}",
@@ -185,6 +82,12 @@ impl AppDataGroupCatalog {
             if !seen.insert(record.group_id.as_str()) {
                 return Err(crate::Error::Other(format!(
                     "duplicate app data group id in catalog: {}",
+                    record.group_id
+                )));
+            }
+            if record.tree_snapshot && record.active_generation.is_some() {
+                return Err(crate::Error::Other(format!(
+                    "app data group catalog record cannot select both a generation and a stable tree: {}",
                     record.group_id
                 )));
             }
@@ -222,10 +125,6 @@ impl AppDataGroupCatalog {
     }
 
     /// Select the stable grouped tree as the group's remote snapshot.
-    ///
-    /// The last legacy generation pointer is retained: schema-2 clients keep
-    /// reading that immutable snapshot, while the sidecar makes new clients use
-    /// the stable tree.  The catalog wire version itself stays at 2.
     pub fn upsert_tree(&mut self, group: &AppDataGroup) {
         let group_id = group.id();
         self.schema_version = APP_DATA_GROUP_CATALOG_SCHEMA_VERSION;
@@ -234,6 +133,7 @@ impl AppDataGroupCatalog {
             .iter_mut()
             .find(|record| record.group_id == group_id)
         {
+            record.active_generation = None;
             record.tree_snapshot = true;
         } else {
             self.groups.push(AppDataGroupRecord {
@@ -246,82 +146,33 @@ impl AppDataGroupCatalog {
     }
 }
 
-fn parse_remote_catalog(bytes: &[u8]) -> crate::Result<AppDataGroupCatalog> {
-    serde_json::from_slice(bytes).map_err(|e| {
-        crate::Error::Other(format!(
-            "parse app data group catalog {}: {e}",
-            APP_DATA_GROUP_CATALOG_REMOTE_PATH
-        ))
-    })
-}
-
-/// Read the stable-tree layout sidecar.  Absence is not an error: a legacy
-/// repository has no marker file and all groups keep their generation layout.
-fn read_remote_layout(
-    provider: &dyn SyncProvider,
-) -> crate::Result<(AppDataGroupLayout, RemoteVersion, bool)> {
-    match provider
-        .read(APP_DATA_GROUP_LAYOUT_REMOTE_PATH)
-        .map_err(crate::Error::from)?
-    {
-        Some(object) => {
-            let layout: AppDataGroupLayout =
-                serde_json::from_slice(&object.content).map_err(|e| {
-                    crate::Error::Other(format!(
-                        "parse app data group layout {}: {e}",
-                        APP_DATA_GROUP_LAYOUT_REMOTE_PATH
-                    ))
-                })?;
-            let layout = layout.normalized();
-            layout.validate()?;
-            Ok((layout, object.version, true))
-        }
-        None => Ok((
-            AppDataGroupLayout::default(),
-            RemoteVersion::new("__nonexistent__"),
-            false,
-        )),
-    }
-}
-
-/// Fold stable-tree markers embedded by older schema-3 catalogs into the
-/// sidecar representation.
-fn merge_legacy_tree_markers(layout: &mut AppDataGroupLayout, catalog: &AppDataGroupCatalog) {
-    for record in &catalog.groups {
-        if record.tree_snapshot {
-            layout.mark_stable(&record.group_id);
-        }
-    }
-}
-
 /// Load the group catalog. Before a persisted catalog exists, seed it with legacy group ids that
 /// remain mapped to the old flat `app/` source until each group is published.
 ///
-/// The catalog file stays schema 2 so already-installed clients keep syncing the
-/// legacy generation/flat layout.  The stable-tree marker lives in the separate
-/// [`APP_DATA_GROUP_LAYOUT_REMOTE_PATH`] sidecar, which those clients never read
-/// or rewrite.  New clients read both files: legacy generation data remains
-/// readable, and every upgraded client converges on the stable tree.
+/// This is a one-way client upgrade boundary: once the first schema-3 catalog is
+/// published, every active client must understand the stable-tree marker. Older
+/// clients reject schema 3 instead of silently reading a stable group as the
+/// legacy flat `app/` layout. Keep old clients paused until upgraded; legacy
+/// objects stay available as migration input and recovery data.
 pub fn load_remote_app_data_group_catalog(
     provider: &dyn SyncProvider,
 ) -> crate::Result<RemoteAppDataGroupCatalogSnapshot> {
-    let (mut layout, layout_version, layout_present) = read_remote_layout(provider)?;
     if let Some(object) = provider
         .read(APP_DATA_GROUP_CATALOG_REMOTE_PATH)
         .map_err(crate::Error::from)?
     {
-        let mut catalog = parse_remote_catalog(&object.content)?;
+        let catalog: AppDataGroupCatalog =
+            serde_json::from_slice(&object.content).map_err(|e| {
+                crate::Error::Other(format!(
+                    "parse app data group catalog {}: {e}",
+                    APP_DATA_GROUP_CATALOG_REMOTE_PATH
+                ))
+            })?;
         catalog.validate()?;
-        merge_legacy_tree_markers(&mut layout, &catalog);
-        layout = layout.normalized();
-        layout.apply(&mut catalog);
         return Ok(RemoteAppDataGroupCatalogSnapshot {
             catalog,
             version: object.version,
             catalog_present: true,
-            layout,
-            layout_version,
-            layout_present,
         });
     }
 
@@ -330,56 +181,20 @@ pub fn load_remote_app_data_group_catalog(
     for group in legacy_groups {
         catalog.upsert(&group, None);
     }
-    layout = layout.normalized();
-    layout.apply(&mut catalog);
     Ok(RemoteAppDataGroupCatalogSnapshot {
         catalog,
         version: RemoteVersion::new("__nonexistent__"),
         catalog_present: false,
-        layout,
-        layout_version,
-        layout_present,
     })
 }
 
 /// CAS-write one complete group catalog snapshot.
-///
-/// The sidecar is written first: if it succeeds but the catalog CAS fails, the
-/// next round still sees the stable-tree marker and only republishes the
-/// catalog; the reverse order could silently drop the layout marker.
 pub fn write_remote_app_data_group_catalog_once(
     provider: &dyn SyncProvider,
     snapshot: &RemoteAppDataGroupCatalogSnapshot,
 ) -> crate::Result<RemoteAppDataGroupCatalogSnapshot> {
     snapshot.catalog.validate()?;
-    let layout = AppDataGroupLayout::from_catalog(&snapshot.catalog);
-    let write_layout = snapshot.layout_present || !layout.stable_groups.is_empty();
-    let (layout_version, layout_present) = if write_layout {
-        if !snapshot.layout_present || layout != snapshot.layout {
-            let content = serde_json::to_vec(&layout).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(format!(
-                    "serialize app data group layout: {e}"
-                )))
-            })?;
-            let precondition = if snapshot.layout_version.as_str() == "__nonexistent__" {
-                WritePrecondition::CreateNew
-            } else {
-                WritePrecondition::IfMatch(snapshot.layout_version.clone())
-            };
-            let version = provider
-                .write(APP_DATA_GROUP_LAYOUT_REMOTE_PATH, &content, precondition)
-                .map_err(crate::Error::from)?;
-            (version, true)
-        } else {
-            (snapshot.layout_version.clone(), true)
-        }
-    } else {
-        (snapshot.layout_version.clone(), false)
-    };
-
-    let mut catalog = snapshot.catalog.clone();
-    catalog.schema_version = APP_DATA_GROUP_CATALOG_SCHEMA_VERSION;
-    let content = serde_json::to_vec(&catalog).map_err(|e| {
+    let content = serde_json::to_vec(&snapshot.catalog).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "serialize app data group catalog: {e}"
         )))
@@ -396,9 +211,6 @@ pub fn write_remote_app_data_group_catalog_once(
         catalog: snapshot.catalog.clone(),
         version,
         catalog_present: true,
-        layout,
-        layout_version,
-        layout_present,
     })
 }
 
@@ -407,16 +219,18 @@ pub fn write_remote_app_data_group_catalog_once(
 pub fn discover_remote_app_data_groups(
     provider: &dyn SyncProvider,
 ) -> crate::Result<Vec<AppDataGroup>> {
-    let (mut layout, _, _) = read_remote_layout(provider)?;
     let catalog_object = provider
         .read(APP_DATA_GROUP_CATALOG_REMOTE_PATH)
         .map_err(crate::Error::from)?;
     if let Some(object) = catalog_object {
-        let mut catalog = parse_remote_catalog(&object.content)?;
+        let catalog: AppDataGroupCatalog =
+            serde_json::from_slice(&object.content).map_err(|e| {
+                crate::Error::Other(format!(
+                    "parse app data group catalog {}: {e}",
+                    APP_DATA_GROUP_CATALOG_REMOTE_PATH
+                ))
+            })?;
         catalog.validate()?;
-        merge_legacy_tree_markers(&mut layout, &catalog);
-        layout = layout.normalized();
-        layout.apply(&mut catalog);
         let mut groups: std::collections::BTreeMap<String, AppDataGroup> = catalog
             .groups
             .iter()
@@ -920,124 +734,120 @@ mod tests {
     use crate::sync::provider::memory::MemoryProvider;
     use crate::sync::provider::SyncProvider;
 
-    fn catalog_snapshot(catalog: AppDataGroupCatalog) -> RemoteAppDataGroupCatalogSnapshot {
-        RemoteAppDataGroupCatalogSnapshot {
-            catalog,
-            version: RemoteVersion::new("__nonexistent__"),
-            catalog_present: false,
-            layout: AppDataGroupLayout::default(),
-            layout_version: RemoteVersion::new("__nonexistent__"),
-            layout_present: false,
+    fn legacy_stats_catalog(group: &AppDataGroup, generation: &str) -> AppDataGroupCatalog {
+        AppDataGroupCatalog {
+            schema_version: 2,
+            groups: vec![AppDataGroupRecord {
+                group_id: group.id(),
+                active_generation: Some(generation.to_string()),
+                tree_snapshot: false,
+            }],
         }
     }
 
     #[test]
-    fn test_catalog_wire_format_stays_schema_two_without_tree_marker() {
+    fn test_legacy_generation_updates_are_read_before_migration() {
         let provider = MemoryProvider::new();
-        let group = AppDataGroup::StarmapIndex;
-        let mut catalog = AppDataGroupCatalog::default();
-        catalog.upsert_tree(&group);
-
-        let written =
-            write_remote_app_data_group_catalog_once(&provider, &catalog_snapshot(catalog))
-                .unwrap();
-
-        let catalog_bytes = provider
-            .read(APP_DATA_GROUP_CATALOG_REMOTE_PATH)
-            .unwrap()
-            .unwrap()
-            .content;
-        let catalog_json: serde_json::Value = serde_json::from_slice(&catalog_bytes).unwrap();
-        assert_eq!(catalog_json["schema_version"].as_u64(), Some(2));
-        assert!(catalog_json["groups"][0].get("tree_snapshot").is_none());
-
-        let layout_bytes = provider
-            .read(APP_DATA_GROUP_LAYOUT_REMOTE_PATH)
-            .unwrap()
-            .unwrap()
-            .content;
-        let layout_json: serde_json::Value = serde_json::from_slice(&layout_bytes).unwrap();
-        assert_eq!(layout_json["schema_version"].as_u64(), Some(3));
-        assert_eq!(
-            layout_json["stable_groups"][0].as_str(),
-            Some(group.id().as_str())
-        );
-
-        let reloaded = load_remote_app_data_group_catalog(&provider).unwrap();
-        assert!(reloaded.catalog.record(&group).unwrap().tree_snapshot);
-        assert_eq!(
-            resolve_group_source_prefix(Some(&reloaded.catalog), &group).unwrap(),
-            format!("app/__groups__/{}", group.storage_key())
-        );
-        assert_eq!(written.catalog.schema_version, 2);
-    }
-
-    #[test]
-    fn test_sidecar_keeps_stable_marker_after_old_client_catalog_rewrite() {
-        let provider = MemoryProvider::new();
-        let group = AppDataGroup::StarmapIndex;
-        let mut catalog = AppDataGroupCatalog::default();
-        catalog.upsert_tree(&group);
-        write_remote_app_data_group_catalog_once(&provider, &catalog_snapshot(catalog)).unwrap();
-
-        // A schema-2 client rewrites the whole catalog and knows nothing about
-        // the sidecar.  The stable-tree marker must survive.
-        let old_client_catalog = serde_json::json!({
-            "schema_version": 2,
-            "groups": [{
-                "group_id": group.id(),
-                "active_generation": null
-            }]
-        });
+        let group = AppDataGroup::StatsDevice("device-abc".to_string());
+        let first_generation = "a".repeat(40);
+        let second_generation = "b".repeat(40);
+        let mut catalog = legacy_stats_catalog(&group, &first_generation);
         provider
             .write(
                 APP_DATA_GROUP_CATALOG_REMOTE_PATH,
-                &serde_json::to_vec(&old_client_catalog).unwrap(),
-                WritePrecondition::Unconditional,
-            )
-            .unwrap();
-
-        let reloaded = load_remote_app_data_group_catalog(&provider).unwrap();
-        assert_eq!(reloaded.catalog.schema_version, 2);
-        assert!(reloaded.catalog.record(&group).unwrap().tree_snapshot);
-    }
-
-    #[test]
-    fn test_legacy_schema_three_catalog_moves_marker_to_sidecar() {
-        let provider = MemoryProvider::new();
-        let group = AppDataGroup::StarmapIndex;
-        let legacy_catalog = serde_json::json!({
-            "schema_version": 3,
-            "groups": [{
-                "group_id": group.id(),
-                "active_generation": null,
-                "tree_snapshot": true
-            }]
-        });
-        provider
-            .write(
-                APP_DATA_GROUP_CATALOG_REMOTE_PATH,
-                &serde_json::to_vec(&legacy_catalog).unwrap(),
+                &serde_json::to_vec(&catalog).unwrap(),
                 WritePrecondition::Unconditional,
             )
             .unwrap();
 
         let loaded = load_remote_app_data_group_catalog(&provider).unwrap();
-        assert_eq!(loaded.catalog.schema_version, 2);
-        assert!(loaded.catalog.record(&group).unwrap().tree_snapshot);
+        assert_eq!(
+            resolve_group_source_prefix(Some(&loaded.catalog), &group).unwrap(),
+            format!(
+                "app/__groups__/{}/__generations__/{}",
+                group.storage_key(),
+                first_generation
+            )
+        );
 
+        // A schema-2 client publishes a newer generation and updates the
+        // catalog. The upgraded client must read that generation before it
+        // migrates the group to the stable tree.
+        catalog.groups[0].active_generation = Some(second_generation.clone());
+        provider
+            .write(
+                APP_DATA_GROUP_CATALOG_REMOTE_PATH,
+                &serde_json::to_vec(&catalog).unwrap(),
+                WritePrecondition::Unconditional,
+            )
+            .unwrap();
+
+        let loaded = load_remote_app_data_group_catalog(&provider).unwrap();
+        assert_eq!(
+            resolve_group_source_prefix(Some(&loaded.catalog), &group).unwrap(),
+            format!(
+                "app/__groups__/{}/__generations__/{}",
+                group.storage_key(),
+                second_generation
+            )
+        );
+    }
+
+    #[test]
+    fn test_migration_writes_schema_three_stable_tree_catalog() {
+        let provider = MemoryProvider::new();
+        let group = AppDataGroup::StatsDevice("device-abc".to_string());
+        let catalog = legacy_stats_catalog(&group, &"a".repeat(40));
+        provider
+            .write(
+                APP_DATA_GROUP_CATALOG_REMOTE_PATH,
+                &serde_json::to_vec(&catalog).unwrap(),
+                WritePrecondition::Unconditional,
+            )
+            .unwrap();
+
+        let mut loaded = load_remote_app_data_group_catalog(&provider).unwrap();
+        loaded.catalog.upsert_tree(&group);
         let written = write_remote_app_data_group_catalog_once(&provider, &loaded).unwrap();
-        assert!(written.layout_present);
-        let catalog_bytes = provider
+        assert_eq!(written.catalog.schema_version, 3);
+
+        let bytes = provider
             .read(APP_DATA_GROUP_CATALOG_REMOTE_PATH)
             .unwrap()
             .unwrap()
             .content;
-        let catalog_json: serde_json::Value = serde_json::from_slice(&catalog_bytes).unwrap();
-        assert_eq!(catalog_json["schema_version"].as_u64(), Some(2));
-        assert!(provider
-            .read(APP_DATA_GROUP_LAYOUT_REMOTE_PATH)
-            .unwrap()
-            .is_some());
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["schema_version"].as_u64(), Some(3));
+        assert_eq!(json["groups"][0]["tree_snapshot"].as_bool(), Some(true));
+        assert!(json["groups"][0]["active_generation"].is_null());
+
+        let reloaded = load_remote_app_data_group_catalog(&provider).unwrap();
+        assert_eq!(
+            resolve_group_source_prefix(Some(&reloaded.catalog), &group).unwrap(),
+            format!("app/__groups__/{}", group.storage_key())
+        );
+    }
+
+    #[test]
+    fn test_catalog_rejects_two_authoritative_sources() {
+        let group = AppDataGroup::StarmapIndex;
+        let catalog = AppDataGroupCatalog {
+            schema_version: APP_DATA_GROUP_CATALOG_SCHEMA_VERSION,
+            groups: vec![AppDataGroupRecord {
+                group_id: group.id(),
+                active_generation: Some("a".repeat(40)),
+                tree_snapshot: true,
+            }],
+        };
+        assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn test_catalog_accepts_legacy_schema_two_and_rejects_unknown_schema() {
+        let group = AppDataGroup::StarmapIndex;
+        let mut catalog = legacy_stats_catalog(&group, &"a".repeat(40));
+        catalog.validate().unwrap();
+        catalog.schema_version = 4;
+        assert!(catalog.validate().is_err());
     }
 }
