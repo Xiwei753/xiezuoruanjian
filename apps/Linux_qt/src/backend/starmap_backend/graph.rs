@@ -158,12 +158,15 @@ impl AppBackend {
         &mut self,
         starmap_id: QString,
         node_id: QString,
+        expected_revision: u64,
     ) -> QString {
         let sid = starmap_id.to_string();
         let nid = node_id.to_string();
         let core = self.core_api();
         let raw = match core.as_ref() {
-            Some(core) => starmap_bridge::delete_starmap_node(core, &sid, &nid),
+            Some(core) => {
+                starmap_bridge::delete_starmap_node(core, &sid, &nid, Some(expected_revision))
+            }
             None => crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::Other("core api not available".to_string()),
             ),
@@ -434,12 +437,15 @@ impl AppBackend {
         &mut self,
         starmap_id: QString,
         edge_id: QString,
+        expected_revision: u64,
     ) -> QString {
         let sid = starmap_id.to_string();
         let eid = edge_id.to_string();
         let core = self.core_api();
         let raw = match core.as_ref() {
-            Some(core) => starmap_bridge::delete_starmap_edge(core, &sid, &eid),
+            Some(core) => {
+                starmap_bridge::delete_starmap_edge(core, &sid, &eid, Some(expected_revision))
+            }
             None => crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::Other("core api not available".to_string()),
             ),
@@ -578,12 +584,15 @@ impl AppBackend {
         &mut self,
         starmap_id: QString,
         instance_id: QString,
+        expected_revision: u64,
     ) -> QString {
         let sid = starmap_id.to_string();
         let iid = instance_id.to_string();
         let core = self.core_api();
         let raw = match core.as_ref() {
-            Some(core) => starmap_bridge::delete_starmap_embed(core, &sid, &iid),
+            Some(core) => {
+                starmap_bridge::delete_starmap_embed(core, &sid, &iid, Some(expected_revision))
+            }
             None => crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::Other("core api not available".to_string()),
             ),

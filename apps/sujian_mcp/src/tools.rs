@@ -183,6 +183,8 @@ struct UpdateNodeParams {
 struct NodeIdParams {
     starmap_id: String,
     node_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -214,6 +216,8 @@ struct UpdateEdgeParams {
 struct EdgeIdParams {
     starmap_id: String,
     edge_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -258,6 +262,8 @@ struct UpdateEmbedParams {
 struct EmbedIdParams {
     starmap_id: String,
     instance_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -286,6 +292,8 @@ struct UpdateLinkParams {
 struct LinkIdParams {
     starmap_id: String,
     link_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -314,6 +322,8 @@ struct UpdateHyperlinkParams {
 struct HyperlinkIdParams {
     starmap_id: String,
     hyperlink_id: String,
+    /// Revision from the last read; omit to write unconditionally.
+    expected_revision: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -736,14 +746,14 @@ impl SujianMcpServer {
         Parameters(params): Parameters<UpdateNodeParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let patch: StarMapNodePatchDto = parse_input(params.patch, "patch")?;
-        let result = self
-            .ctx()
-            .write(|api| api.update_starmap_node_expected(
+        let result = self.ctx().write(|api| {
+            api.update_starmap_node_expected(
                 &params.starmap_id,
                 &params.node_id,
                 patch,
                 params.expected_revision,
-            ))?;
+            )
+        })?;
         to_json(&result)
     }
 
@@ -752,9 +762,13 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<NodeIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.delete_starmap_node(&params.starmap_id, &params.node_id))?;
+        let result = self.ctx().write(|api| {
+            api.delete_starmap_node_expected(
+                &params.starmap_id,
+                &params.node_id,
+                params.expected_revision,
+            )
+        })?;
         to_json(&json!({ "deleted": result }))
     }
 
@@ -799,14 +813,14 @@ impl SujianMcpServer {
         Parameters(params): Parameters<UpdateEdgeParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let patch: StarMapEdgePatchDto = parse_input(params.patch, "patch")?;
-        let result = self
-            .ctx()
-            .write(|api| api.update_starmap_edge_expected(
+        let result = self.ctx().write(|api| {
+            api.update_starmap_edge_expected(
                 &params.starmap_id,
                 &params.edge_id,
                 patch,
                 params.expected_revision,
-            ))?;
+            )
+        })?;
         to_json(&result)
     }
 
@@ -815,9 +829,13 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<EdgeIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.delete_starmap_edge(&params.starmap_id, &params.edge_id))?;
+        let result = self.ctx().write(|api| {
+            api.delete_starmap_edge_expected(
+                &params.starmap_id,
+                &params.edge_id,
+                params.expected_revision,
+            )
+        })?;
         to_json(&json!({ "deleted": result }))
     }
 
@@ -900,9 +918,13 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<EmbedIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.delete_starmap_embed(&params.starmap_id, &params.instance_id))?;
+        let result = self.ctx().write(|api| {
+            api.delete_starmap_embed_expected(
+                &params.starmap_id,
+                &params.instance_id,
+                params.expected_revision,
+            )
+        })?;
         to_json(&json!({ "deleted": result }))
     }
 
@@ -941,14 +963,14 @@ impl SujianMcpServer {
         Parameters(params): Parameters<UpdateLinkParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let patch: StarMapLinkPatchDto = parse_input(params.patch, "patch")?;
-        let result = self
-            .ctx()
-            .write(|api| api.update_starmap_link_expected(
+        let result = self.ctx().write(|api| {
+            api.update_starmap_link_expected(
                 &params.starmap_id,
                 &params.link_id,
                 patch,
                 params.expected_revision,
-            ))?;
+            )
+        })?;
         to_json(&result)
     }
 
@@ -957,9 +979,13 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<LinkIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.delete_starmap_link(&params.starmap_id, &params.link_id))?;
+        let result = self.ctx().write(|api| {
+            api.delete_starmap_link_expected(
+                &params.starmap_id,
+                &params.link_id,
+                params.expected_revision,
+            )
+        })?;
         to_json(&json!({ "deleted": result }))
     }
 
@@ -1016,9 +1042,13 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<HyperlinkIdParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let result = self
-            .ctx()
-            .write(|api| api.delete_starmap_hyperlink(&params.starmap_id, &params.hyperlink_id))?;
+        let result = self.ctx().write(|api| {
+            api.delete_starmap_hyperlink_expected(
+                &params.starmap_id,
+                &params.hyperlink_id,
+                params.expected_revision,
+            )
+        })?;
         to_json(&json!({ "deleted": result }))
     }
 

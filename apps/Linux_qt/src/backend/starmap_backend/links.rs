@@ -110,12 +110,15 @@ impl AppBackend {
         &mut self,
         starmap_id: QString,
         link_id: QString,
+        expected_revision: u64,
     ) -> QString {
         let sid = starmap_id.to_string();
         let lid = link_id.to_string();
         let core = self.core_api();
         let raw = match core.as_ref() {
-            Some(core) => starmap_bridge::delete_starmap_link(core, &sid, &lid),
+            Some(core) => {
+                starmap_bridge::delete_starmap_link(core, &sid, &lid, Some(expected_revision))
+            }
             None => crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::Other("core api not available".to_string()),
             ),
@@ -134,9 +137,10 @@ impl AppBackend {
         &mut self,
         starmap_id: QString,
         link_id: QString,
+        expected_revision: u64,
     ) -> QJsonObject {
         let raw = self
-            .delete_starmap_link_json(starmap_id, link_id)
+            .delete_starmap_link_json(starmap_id, link_id, expected_revision)
             .to_string();
         qjson_object_from_json(&raw)
     }

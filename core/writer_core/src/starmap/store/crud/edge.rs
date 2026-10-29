@@ -57,7 +57,7 @@ impl StarMapStore {
         if let Some(ref t) = patch.to {
             edge.to = t.clone();
         }
-        edge.updated_at = crate::starmap::now_epoch();
+        edge.updated_at = crate::starmap::now_epoch().max(edge.updated_at.saturating_add(1));
         let updated = edge.clone();
         self.dirty_edges.insert(edge_id.to_string());
         self.dirty_graph_meta = true;

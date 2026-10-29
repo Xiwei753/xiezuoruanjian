@@ -139,16 +139,16 @@ pub fn update_starmap_node(
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
     };
 
-    envelope(api.update_starmap_node_expected(
-        starmap_id,
-        node_id,
-        patch,
-        expected_revision,
-    ))
+    envelope(api.update_starmap_node_expected(starmap_id, node_id, patch, expected_revision))
 }
 
-pub fn delete_starmap_node(api: &WriterCoreApi, starmap_id: &str, node_id: &str) -> String {
-    envelope(api.delete_starmap_node(starmap_id, node_id))
+pub fn delete_starmap_node(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    node_id: &str,
+    expected_revision: Option<u64>,
+) -> String {
+    envelope(api.delete_starmap_node_expected(starmap_id, node_id, expected_revision))
 }
 
 /// 解析 `root starmap + 路径段`，返回最终星图 ID。
@@ -358,16 +358,16 @@ pub fn update_starmap_edge(
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
     };
 
-    envelope(api.update_starmap_edge_expected(
-        starmap_id,
-        edge_id,
-        patch,
-        expected_revision,
-    ))
+    envelope(api.update_starmap_edge_expected(starmap_id, edge_id, patch, expected_revision))
 }
 
-pub fn delete_starmap_edge(api: &WriterCoreApi, starmap_id: &str, edge_id: &str) -> String {
-    envelope(api.delete_starmap_edge(starmap_id, edge_id))
+pub fn delete_starmap_edge(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    edge_id: &str,
+    expected_revision: Option<u64>,
+) -> String {
+    envelope(api.delete_starmap_edge_expected(starmap_id, edge_id, expected_revision))
 }
 
 // -----------------------------------------------------------------------------
@@ -464,17 +464,17 @@ pub fn update_starmap_embed(
     };
     let patch: StarMapEmbedPatchDto = input.into();
 
-    envelope(api.update_starmap_embed_expected(
-        starmap_id,
-        instance_id,
-        patch,
-        expected_revision,
-    ))
+    envelope(api.update_starmap_embed_expected(starmap_id, instance_id, patch, expected_revision))
 }
 
 /// 删除子星图嵌入。
-pub fn delete_starmap_embed(api: &WriterCoreApi, starmap_id: &str, instance_id: &str) -> String {
-    envelope(api.delete_starmap_embed(starmap_id, instance_id))
+pub fn delete_starmap_embed(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    instance_id: &str,
+    expected_revision: Option<u64>,
+) -> String {
+    envelope(api.delete_starmap_embed_expected(starmap_id, instance_id, expected_revision))
 }
 
 pub fn bind_starmap_to_project(api: &WriterCoreApi, starmap_id: &str, project_id: &str) -> String {
@@ -563,8 +563,9 @@ pub fn delete_starmap_hyperlink(
     api: &WriterCoreApi,
     starmap_id: &str,
     hyperlink_id: &str,
+    expected_revision: Option<u64>,
 ) -> String {
-    envelope(api.delete_starmap_hyperlink(starmap_id, hyperlink_id))
+    envelope(api.delete_starmap_hyperlink_expected(starmap_id, hyperlink_id, expected_revision))
 }
 
 pub fn list_starmap_hyperlinks(api: &WriterCoreApi, starmap_id: &str) -> String {
@@ -630,16 +631,16 @@ pub fn update_starmap_link(
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
     };
     let patch: StarMapLinkPatchDto = input.into();
-    envelope(api.update_starmap_link_expected(
-        starmap_id,
-        link_id,
-        patch,
-        expected_revision,
-    ))
+    envelope(api.update_starmap_link_expected(starmap_id, link_id, patch, expected_revision))
 }
 
-pub fn delete_starmap_link(api: &WriterCoreApi, starmap_id: &str, link_id: &str) -> String {
-    envelope(api.delete_starmap_link(starmap_id, link_id))
+pub fn delete_starmap_link(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    link_id: &str,
+    expected_revision: Option<u64>,
+) -> String {
+    envelope(api.delete_starmap_link_expected(starmap_id, link_id, expected_revision))
 }
 
 pub fn list_starmap_links(api: &WriterCoreApi, starmap_id: &str) -> String {

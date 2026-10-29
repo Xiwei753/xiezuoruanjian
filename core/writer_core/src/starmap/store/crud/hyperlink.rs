@@ -55,7 +55,7 @@ impl StarMapStore {
         if let Some(ref s) = patch.source {
             hl.source = s.clone();
         }
-        hl.updated_at = crate::starmap::now_epoch();
+        hl.updated_at = crate::starmap::now_epoch().max(hl.updated_at.saturating_add(1));
         let updated = hl.clone();
         self.dirty_hyperlinks.insert(hyperlink_id.to_string());
         self.dirty_graph_meta = true;

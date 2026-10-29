@@ -55,7 +55,7 @@ impl StarMapStore {
         if let Some(ref hp) = patch.host_path {
             embed.host_path = hp.clone();
         }
-        embed.updated_at = crate::starmap::now_epoch();
+        embed.updated_at = crate::starmap::now_epoch().max(embed.updated_at.saturating_add(1));
         let updated = embed.clone();
         self.dirty_embeds.insert(instance_id.to_string());
         self.dirty_graph_meta = true;
