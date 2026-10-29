@@ -172,8 +172,8 @@ struct CreateNodeParams {
 struct UpdateNodeParams {
     starmap_id: String,
     node_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
     /// StarMapNodePatchDto JSON. Use null for an inner field to clear it.
     patch: Value,
 }
@@ -183,8 +183,8 @@ struct UpdateNodeParams {
 struct NodeIdParams {
     starmap_id: String,
     node_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -205,8 +205,8 @@ struct CreateEdgeParams {
 struct UpdateEdgeParams {
     starmap_id: String,
     edge_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
     /// StarMapEdgePatchDto JSON.
     patch: Value,
 }
@@ -216,8 +216,8 @@ struct UpdateEdgeParams {
 struct EdgeIdParams {
     starmap_id: String,
     edge_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -251,8 +251,8 @@ struct CreateChildEmbedParams {
 struct UpdateEmbedParams {
     starmap_id: String,
     instance_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
     /// StarMapEmbedPatchDto JSON.
     patch: Value,
 }
@@ -262,8 +262,8 @@ struct UpdateEmbedParams {
 struct EmbedIdParams {
     starmap_id: String,
     instance_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -281,8 +281,8 @@ struct CreateLinkParams {
 struct UpdateLinkParams {
     starmap_id: String,
     link_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
     /// StarMapLinkPatchDto JSON.
     patch: Value,
 }
@@ -292,8 +292,8 @@ struct UpdateLinkParams {
 struct LinkIdParams {
     starmap_id: String,
     link_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -311,8 +311,8 @@ struct CreateHyperlinkParams {
 struct UpdateHyperlinkParams {
     starmap_id: String,
     hyperlink_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
     /// StarMapHyperlinkPatchDto JSON.
     patch: Value,
 }
@@ -322,8 +322,8 @@ struct UpdateHyperlinkParams {
 struct HyperlinkIdParams {
     starmap_id: String,
     hyperlink_id: String,
-    /// Revision from the last read; omit to write unconditionally.
-    expected_revision: Option<u64>,
+    /// Revision from the last read. Required to prevent overwriting newer changes.
+    expected_revision: u64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -751,7 +751,7 @@ impl SujianMcpServer {
                 &params.starmap_id,
                 &params.node_id,
                 patch,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&result)
@@ -766,7 +766,7 @@ impl SujianMcpServer {
             api.delete_starmap_node_expected(
                 &params.starmap_id,
                 &params.node_id,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&json!({ "deleted": result }))
@@ -818,7 +818,7 @@ impl SujianMcpServer {
                 &params.starmap_id,
                 &params.edge_id,
                 patch,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&result)
@@ -833,7 +833,7 @@ impl SujianMcpServer {
             api.delete_starmap_edge_expected(
                 &params.starmap_id,
                 &params.edge_id,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&json!({ "deleted": result }))
@@ -904,7 +904,7 @@ impl SujianMcpServer {
                 &params.starmap_id,
                 &params.instance_id,
                 patch,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&result)
@@ -922,7 +922,7 @@ impl SujianMcpServer {
             api.delete_starmap_embed_expected(
                 &params.starmap_id,
                 &params.instance_id,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&json!({ "deleted": result }))
@@ -968,7 +968,7 @@ impl SujianMcpServer {
                 &params.starmap_id,
                 &params.link_id,
                 patch,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&result)
@@ -983,7 +983,7 @@ impl SujianMcpServer {
             api.delete_starmap_link_expected(
                 &params.starmap_id,
                 &params.link_id,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&json!({ "deleted": result }))
@@ -1028,7 +1028,7 @@ impl SujianMcpServer {
                 &params.starmap_id,
                 &params.hyperlink_id,
                 patch,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&result)
@@ -1046,7 +1046,7 @@ impl SujianMcpServer {
             api.delete_starmap_hyperlink_expected(
                 &params.starmap_id,
                 &params.hyperlink_id,
-                params.expected_revision,
+                Some(params.expected_revision),
             )
         })?;
         to_json(&json!({ "deleted": result }))
