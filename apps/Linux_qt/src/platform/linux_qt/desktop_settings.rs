@@ -19,6 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -28,6 +29,23 @@ const DESKTOP_SETTINGS_FILE: &str = "linux_qt_desktop.json";
 /// 旧 Core 本地设置文件名。位于用户工作区数据根目录（`app_data_root`）下，
 /// **不是** XDG 配置目录。
 const LEGACY_CORE_SETTINGS_FILE: &str = "settings.local.json";
+
+/// 单个页面的栏宽手动覆盖。`None` 表示沿用全局默认宽度。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PagePaneWidths {
+    pub left: Option<f64>,
+    pub right: Option<f64>,
+}
+
+/// 单个页面的折叠状态。折叠与宽度相互独立，折叠不写入宽度覆盖。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PageCollapsedState {
+    pub left: bool,
+    pub right: bool,
+    pub top_bar: bool,
+}
 
 /// Qt 桌面端本地布局设置。所有长度单位都是 Qt 设备无关逻辑像素（vp）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,6 +61,10 @@ pub struct DesktopSettings {
     pub desktop_tool_pane_width: f64,
     /// 编辑器正文列宽度（vp）。0 表示不额外限宽。
     pub desktop_editor_width: f64,
+    /// Issue #1014：各页面手动拖动后的栏宽覆盖。页面 key 见 `DesktopLayoutState.qml`。
+    pub page_pane_overrides: BTreeMap<String, PagePaneWidths>,
+    /// Issue #1014：各页面左栏 / 右栏 / 顶栏的折叠状态。
+    pub page_collapsed: BTreeMap<String, PageCollapsedState>,
 }
 
 impl Default for DesktopSettings {
@@ -56,9 +78,36 @@ impl Default for DesktopSettings {
             // Issue #922：右工具 pane 宽度默认 240（与 LeftDrawer / 主题一致）。
             desktop_tool_pane_width: 240.0,
             desktop_editor_width: 0.0,
+            page_pane_overrides: BTreeMap::new(),
+            page_collapsed: BTreeMap::new(),
         }
     }
 }
+
+impl DesktopSettings {
+    /// 把旧的全局栏宽迁移为 `writing` 页面覆盖。
+    ///
+    /// 右栏新语义包含 56vp 工具轨，因此旧 `desktopToolPaneWidth`（仅抽屉）
+    /// 需要加回工具轨宽度。已有页面覆盖的边保持不动。
+    pub fn normalize_page_overrides(&mut self) {
+        if self.desktop_sidebar_width <= 0.0 && self.desktop_tool_pane_width <= 0.0 {
+            return;
+        }
+        let writing = self
+            .page_pane_overrides
+            .entry("writing".to_string())
+            .or_default();
+        if writing.left.is_none() && self.desktop_sidebar_width > 0.0 {
+            writing.left = Some(self.desktop_sidebar_width);
+        }
+        if writing.right.is_none() && self.desktop_tool_pane_width > 0.0 {
+            writing.right = Some(self.desktop_tool_pane_width + TOOL_RAIL_WIDTH);
+        }
+    }
+}
+
+/// 右栏工具轨固定宽度（vp），与 QML `DesktopLayoutState.toolRailWidth` 一致。
+pub const TOOL_RAIL_WIDTH: f64 = 56.0;
 
 /// 进程内缓存。首次访问从磁盘加载，加载失败或文件缺失时用默认值。
 static CURRENT: Mutex<Option<DesktopSettings>> = Mutex::new(None);
@@ -78,7 +127,7 @@ fn legacy_settings_path(data_root: &Path) -> PathBuf {
 /// [`DesktopSettings::default`]，不因为个别键缺失而整份回退。
 fn desktop_settings_from_legacy(value: &Value) -> DesktopSettings {
     let defaults = DesktopSettings::default();
-    DesktopSettings {
+    let settings = DesktopSettings {
         window_width: legacy_number(value, &["windowWidth", "window_width"])
             .unwrap_or(defaults.window_width),
         window_height: legacy_number(value, &["windowHeight", "window_height"])
@@ -111,7 +160,9 @@ fn desktop_settings_from_legacy(value: &Value) -> DesktopSettings {
             ],
         )
         .unwrap_or(defaults.desktop_editor_width),
-    }
+        ..DesktopSettings::default()
+    };
+    settings
 }
 
 /// 依次尝试多个键，返回第一个存在的数值。
@@ -129,7 +180,8 @@ fn migrate_from_legacy_settings_at(
 ) -> Option<DesktopSettings> {
     let bytes = std::fs::read(legacy_settings_path(data_root)).ok()?;
     let legacy: Value = serde_json::from_slice(&bytes).ok()?;
-    let migrated = desktop_settings_from_legacy(&legacy);
+    let mut migrated = desktop_settings_from_legacy(&legacy);
+    migrated.normalize_page_overrides();
     // 迁移后立刻落盘：此后即使 Core 重写 settings.local.json 丢弃这些未知字段，
     // Qt 的窗口 / 栏宽也不会丢失。
     let _ = write_to_disk_at(settings_path, &migrated);
@@ -138,7 +190,8 @@ fn migrate_from_legacy_settings_at(
 
 fn read_from_disk_at(settings_path: &Path, data_root: &Path) -> Option<DesktopSettings> {
     if let Ok(bytes) = std::fs::read(settings_path) {
-        if let Ok(settings) = serde_json::from_slice(&bytes) {
+        if let Ok(mut settings) = serde_json::from_slice::<DesktopSettings>(&bytes) {
+            settings.normalize_page_overrides();
             return Some(settings);
         }
     }
@@ -224,6 +277,7 @@ mod tests {
             desktop_sidebar_width: 320.0,
             desktop_tool_pane_width: 360.0,
             desktop_editor_width: 640.0,
+            ..DesktopSettings::default()
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("\"windowWidth\""));
@@ -249,6 +303,7 @@ mod tests {
                 desktop_sidebar_width: 320.0,
                 desktop_tool_pane_width: 240.0,
                 desktop_editor_width: 640.0,
+                ..DesktopSettings::default()
             }
         );
     }
@@ -289,6 +344,7 @@ mod tests {
                 desktop_sidebar_width: 260.0,
                 desktop_tool_pane_width: 240.0,
                 desktop_editor_width: 700.0,
+                ..DesktopSettings::default()
             }
         );
     }

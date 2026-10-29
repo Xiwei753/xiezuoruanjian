@@ -161,31 +161,6 @@ impl StarMapStore {
             }
         }
 
-        if !self.dirty_hyperlinks.is_empty() {
-            let ids: Vec<String> = self.dirty_hyperlinks.iter().cloned().collect();
-            let mut succeeded = true;
-            for hl_id in &ids {
-                if let Some(hl) = self.hyperlinks.get(hl_id) {
-                    match package_storage::save_hyperlink(&self.app_data_root, &self.starmap_id, hl)
-                    {
-                        Ok(rel_path) => {
-                            changed_paths.push(rel_path);
-                            successful_writes.hyperlinks.insert(hl_id.clone());
-                        }
-                        Err(_) => {
-                            succeeded = false;
-                            break;
-                        }
-                    }
-                } else {
-                    successful_writes.hyperlinks.insert(hl_id.clone());
-                }
-            }
-            if !succeeded {
-                failed_types.push("Hyperlink".to_string());
-            }
-        }
-
         // ── 对象级删除 durable transaction（Issue #805 评论 5912394108）──
         // 在执行任何 rename 前：
         // 1. 从 deleted_*_ids 固定本轮删除集合
@@ -199,8 +174,7 @@ impl StarMapStore {
         let has_object_deletes = !self.deleted_node_ids.is_empty()
             || !self.deleted_edge_ids.is_empty()
             || !self.deleted_embed_ids.is_empty()
-            || !self.deleted_link_ids.is_empty()
-            || !self.deleted_hyperlink_ids.is_empty();
+            || !self.deleted_link_ids.is_empty();
 
         // 标记对象删除 journal 是否已 durable 写入并活跃。
         // 供 Phase 2 GraphMeta 成功后更新 phase=GraphMetaWritten、
@@ -289,17 +263,6 @@ impl StarMapStore {
                     targets.push(StarMapObjectDeleteTarget {
                         kind: StarMapObjectKind::Link,
                         id: link_id.clone(),
-                        original_path: rel,
-                    });
-                }
-                for hl_id in &self.deleted_hyperlink_ids {
-                    let rel = format!(
-                        "starmaps/{starmap_id}/hyperlinks/{}/{hl_id}.json",
-                        package_storage::bucket_for_id(hl_id)
-                    );
-                    targets.push(StarMapObjectDeleteTarget {
-                        kind: StarMapObjectKind::Hyperlink,
-                        id: hl_id.clone(),
                         original_path: rel,
                     });
                 }
@@ -504,30 +467,8 @@ impl StarMapStore {
                             }
                         }
                         StarMapObjectKind::Hyperlink => {
-                            match package_storage::delete_hyperlink_file_to_trash(
-                                &self.app_data_root,
-                                &self.starmap_id,
-                                &target.id,
-                                &trash_root,
-                                &trash_rel_path,
-                            ) {
-                                Ok(Some((orig_rel, _))) => {
-                                    changed_paths.push(PathBuf::from(&orig_rel));
-                                    successful_deletes
-                                        .deleted_hyperlinks
-                                        .insert(target.id.clone());
-                                }
-                                Ok(None) => {
-                                    successful_deletes
-                                        .deleted_hyperlinks
-                                        .insert(target.id.clone());
-                                }
-                                Err(e) => {
-                                    self.record_delete_failure("hyperlink", &target.id, &e);
-                                    failed_types.push("DeleteHyperlink".to_string());
-                                    break;
-                                }
-                            }
+                            // 外部网页/URI 绑定能力已删除，不再产生新的 hyperlink
+                            // 删除事务；历史 journal 里残留的目标直接跳过。
                         }
                     }
                 }
@@ -542,7 +483,6 @@ impl StarMapStore {
                         || t == "DeleteEdge"
                         || t == "DeleteEmbed"
                         || t == "DeleteLink"
-                        || t == "DeleteHyperlink"
                 });
                 if !rename_failed && !object_delete_facts_for_tombstone.is_empty() {
                     match ensure_sync_tombstones_from_facts(
@@ -610,12 +550,10 @@ impl StarMapStore {
                 edges: successful_writes.edges.clone(),
                 embeds: successful_writes.embeds.clone(),
                 links: successful_writes.links.clone(),
-                hyperlinks: successful_writes.hyperlinks.clone(),
                 deleted_nodes: successful_deletes.deleted_nodes.clone(),
                 deleted_edges: successful_deletes.deleted_edges.clone(),
                 deleted_embeds: successful_deletes.deleted_embeds.clone(),
                 deleted_links: successful_deletes.deleted_links.clone(),
-                deleted_hyperlinks: successful_deletes.deleted_hyperlinks.clone(),
             };
             match self.update_graph_meta_file(&flush_dirty) {
                 Ok((written_revision, rel_path)) => {
@@ -664,9 +602,6 @@ impl StarMapStore {
             for link_id in &successful_writes.links {
                 self.dirty_links.remove(link_id);
             }
-            for hl_id in &successful_writes.hyperlinks {
-                self.dirty_hyperlinks.remove(hl_id);
-            }
             for node_id in &successful_deletes.deleted_nodes {
                 self.deleted_node_ids.remove(node_id);
             }
@@ -678,9 +613,6 @@ impl StarMapStore {
             }
             for link_id in &successful_deletes.deleted_links {
                 self.deleted_link_ids.remove(link_id);
-            }
-            for hl_id in &successful_deletes.deleted_hyperlinks {
-                self.deleted_hyperlink_ids.remove(hl_id);
             }
             self.dirty_graph_meta = false;
 
@@ -736,7 +668,6 @@ impl StarMapStore {
             || !self.deleted_edge_ids.is_empty()
             || !self.deleted_embed_ids.is_empty()
             || !self.deleted_link_ids.is_empty()
-            || !self.deleted_hyperlink_ids.is_empty()
     }
 
     pub(in crate::starmap::store) fn has_pending_writes(&self) -> bool {
@@ -757,15 +688,11 @@ impl StarMapStore {
         if !self.dirty_links.is_empty() {
             self.enqueue_save(SaveQueueEntry::Link);
         }
-        if !self.dirty_hyperlinks.is_empty() {
-            self.enqueue_save(SaveQueueEntry::Hyperlink);
-        }
         if self.has_pending_deletes() {
             self.enqueue_save(SaveQueueEntry::DeleteNode);
             self.enqueue_save(SaveQueueEntry::DeleteEdge);
             self.enqueue_save(SaveQueueEntry::DeleteEmbed);
             self.enqueue_save(SaveQueueEntry::DeleteLink);
-            self.enqueue_save(SaveQueueEntry::DeleteHyperlink);
         }
         if self.dirty_graph_meta {
             self.enqueue_save(SaveQueueEntry::GraphMeta);

@@ -21,7 +21,7 @@ sealed interface SujianRoute : Parcelable, NavKey {
      * 星图目的地。
      *
      * [starmapId] 为空时是一级星图根页；带 starmapId 时是详情页，
-     * 其余 ID 字段是全局搜索的一次性定位目标。链接/超链接没有独立几何，
+     * 其余 ID 字段是全局搜索的一次性定位目标。链接没有独立几何，
      * 由详情页解析 source 路径后高亮其 owner。
      */
     @Parcelize
@@ -33,7 +33,6 @@ sealed interface SujianRoute : Parcelable, NavKey {
         val edgeId: String? = null,
         val embedId: String? = null,
         val linkId: String? = null,
-        val hyperlinkId: String? = null,
     ) : SujianRoute {
         fun selectionTarget(): StarMapSelectionTarget? =
             when {
@@ -41,7 +40,6 @@ sealed interface SujianRoute : Parcelable, NavKey {
                 edgeId != null -> StarMapSelectionTarget.Edge(edgeId)
                 embedId != null -> StarMapSelectionTarget.Embed(embedId)
                 linkId != null -> StarMapSelectionTarget.Link(linkId)
-                hyperlinkId != null -> StarMapSelectionTarget.Hyperlink(hyperlinkId)
                 else -> null
             }
     }

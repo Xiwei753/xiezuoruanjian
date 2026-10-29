@@ -10,7 +10,6 @@ fn parse_scope(scope: &str) -> crate::search::SearchScope {
         "starmapTitle" => crate::search::SearchScope::StarmapTitle,
         "starmapNode" => crate::search::SearchScope::StarmapNode,
         "starmapEdgeLabel" => crate::search::SearchScope::StarmapEdgeLabel,
-        "starmapHyperlink" => crate::search::SearchScope::StarmapHyperlink,
         "starmapLink" => crate::search::SearchScope::StarmapLink,
         "starmapEmbed" => crate::search::SearchScope::StarmapEmbed,
         "setting" => crate::search::SearchScope::Setting,

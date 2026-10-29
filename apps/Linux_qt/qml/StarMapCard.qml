@@ -21,6 +21,8 @@ Kirigami.ShadowedRectangle {
     required property var dt
     property var starmapData: ({})
     property bool isChild: false
+    /// 首页拖放时由 DropArea 置位，仅用于高亮目标卡片。
+    property bool dropActive: false
 
     signal clicked(string starmapId, string title)
     signal menuRequested(string starmapId, string title)
@@ -29,8 +31,20 @@ Kirigami.ShadowedRectangle {
     height: isChild ? 140 : 180
     radius: isChild ? Kirigami.Units.smallSpacing : Kirigami.Units.cornerRadius
     color: Kirigami.Theme.alternateBackgroundColor
-    border.color: hoverArea.containsMouse ? Kirigami.Theme.highlightColor : Kirigami.Theme.disabledTextColor
-    border.width: 1
+    border.color: (dropActive || hoverArea.containsMouse)
+                  ? Kirigami.Theme.highlightColor
+                  : Kirigami.Theme.disabledTextColor
+    border.width: dropActive ? 2 : 1
+
+    // 首页根星图拖动：拖过阈值后由 DragHandler 接管，MouseArea 不再触发点击；
+    // 右键菜单仍由 MouseArea 处理。拖动只传递真实 starmapId，不改变 GridView 几何。
+    Drag.active: dragHandler.active
+    Drag.source: root
+    Drag.dragType: Drag.Automatic
+    Drag.mimeData: ({ "application/x-sujian-starmap-id": root.starmapData.starmapId || "" })
+    Drag.supportedActions: Qt.MoveAction
+    Drag.hotSpot.x: root.width / 2
+    Drag.hotSpot.y: root.height / 2
 
     Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
 
@@ -142,6 +156,13 @@ Kirigami.ShadowedRectangle {
                 Layout.alignment: Qt.AlignVCenter
             }
         }
+    }
+
+    DragHandler {
+        id: dragHandler
+        target: null
+        acceptedButtons: Qt.LeftButton
+        enabled: !root.isChild
     }
 
     MouseArea {

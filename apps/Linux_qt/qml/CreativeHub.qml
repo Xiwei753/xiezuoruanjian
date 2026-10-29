@@ -14,8 +14,9 @@
 // 保留：宽屏左侧一级导航 + 内容区（无底部导航），以及全部公共 API。
 //
 // Issue #977：顶栏与品牌区上移到 main.qml 的 DesktopTopBar。本页只负责
-// 「一级导航 + 当前 tab 内容」，不再自绘第二条 64px 顶栏或独立 divider；
-// 导航宽度由 main.qml 注入，和顶栏品牌区保持同宽。
+// 「一级导航 + 当前 tab 内容」，不再自绘第二条 64px 顶栏或独立 divider。
+// Issue #1014：导航改为 SplitView 左 pane，宽度从 DesktopLayoutState 按
+// Hub tab 读取；拖动结束才保存覆盖值，切页 / 窗口缩放只更新显示宽度。
 // =============================================================================
 
 import QtQuick
@@ -26,18 +27,21 @@ import org.kde.kirigami as Kirigami
 Rectangle {
     id: root
     required property var dt
+    // Issue #1014：整窗唯一的页面骨架尺寸 / 折叠状态，由 main.qml 注入。
+    property var layoutState: null
     property var projectBackendRef: null
     property var editorBackendRef: null
     property var starmapBackendRef: null
     property var starMapController: null
     property var appState: ({})
     property var tree: []
-    // Issue #977：与 DesktopTopBar.navigationWidth 共用同一个窗口级宽度。
-    property int navigationWidth: 200
     // Issue #796 评论 5886483653: Hub tab 由 appController.hubTab 驱动，
     // 不要 Loader 重建后永远回默认 0。
     property var appControllerRef: null
     property int currentTab: appControllerRef ? appControllerRef.hubTab : 0
+    // Issue #1014：三个 Hub tab 分别保存左栏拖动宽度。
+    readonly property string currentPageKey:
+        root.layoutState ? root.layoutState.hubPageKey(root.currentTab) : "hub.projects"
     property bool aiCapable: false
     property bool aiEnabled: false
     // Linux Qt 始终使用桌面外壳：一级导航固定在左栏，窗口宽度只影响内容区。
@@ -54,21 +58,69 @@ Rectangle {
 
     color: Kirigami.Theme.backgroundColor
 
+    // Issue #1014：切页 / 注入布局状态时只把 SplitView 显示宽度切到该页保存值，
+    // 不调用 setDraggedWidth，避免把布局重算误记成用户拖动。
+    function applyPageWidth() {
+        if (!root.layoutState)
+            return
+        navigationPane.SplitView.preferredWidth =
+            root.layoutState.paneWidth(root.currentPageKey, "left")
+    }
+
+    onCurrentTabChanged: applyPageWidth()
+    onLayoutStateChanged: applyPageWidth()
+    Component.onCompleted: applyPageWidth()
+
     // 顶栏已在 main.qml 统一绘制，本页内容从顶栏底线之下开始。
-    RowLayout {
+    // Issue #1014：导航与内容改为 Qt 原生 SplitView，左栏宽度按 Hub tab 分别保存。
+    SplitView {
+        id: hubSplitView
         anchors.fill: parent
-        spacing: 0
+        orientation: Qt.Horizontal
+
+        // 原生 6vp 分隔线：只画视觉，不挂 MouseArea / DragHandler，拖动由
+        // Qt SplitView 自己接管。命中区用 containmentMask 扩到 14vp，
+        // 不改变 6vp 的视觉宽度。
+        handle: Rectangle {
+            id: splitHandle
+            implicitWidth: 6
+            containmentMask: Item {
+                x: (splitHandle.width - width) / 2
+                width: 14
+                height: hubSplitView.height
+            }
+            color: SplitHandle.pressed
+                   ? Kirigami.Theme.highlightColor
+                   : (SplitHandle.hovered ? Kirigami.Theme.focusColor : "transparent")
+            Rectangle {
+                anchors.centerIn: parent
+                width: 1
+                height: parent.height
+                color: Kirigami.Theme.disabledTextColor
+                opacity: 0.3
+            }
+        }
+
+        // 只有用户拖动结束才持久化一次；普通切页 / 窗口缩放不写覆盖值。
+        onResizingChanged: {
+            if (hubSplitView.resizing || !root.layoutState)
+                return
+            root.layoutState.setDraggedWidth(root.currentPageKey, "left",
+                                             navigationPane.width)
+        }
 
         // Issue #829：宽屏一级导航只放左侧。这里就是手稿里的“作品 / 星图 / 统计”纵栏，
         // 作品/星图/统计仍复用原来的 currentTab + 三个 Loader，不另做第二套路由。
         // 宽屏不再有任何底部导航；侧栏也不为了追求沉浸光感改回底栏。
-        // Issue #977：导航加宽到 navigationWidth，条目使用 44–48px 行高与
-        // 12–16px 左右内边距，不把文字挤在固定 160px 的窄栏里。
+        // Issue #977：条目使用 44–48px 行高与 12–16px 左右内边距，不把文字挤在
+        // 固定 160px 的窄栏里。
         Rectangle {
-            Layout.fillHeight: true
-            Layout.preferredWidth: root.navigationWidth
-            Layout.minimumWidth: root.navigationWidth
-            Layout.maximumWidth: root.navigationWidth
+            id: navigationPane
+            SplitView.minimumWidth: root.layoutState ? root.layoutState.minLeftWidth : 200
+            SplitView.preferredWidth: root.layoutState
+                ? root.layoutState.paneWidth(root.currentPageKey, "left") : 240
+            SplitView.maximumWidth: 480
+            SplitView.fillHeight: true
             color: Kirigami.Theme.alternateBackgroundColor
 
             ColumnLayout {
@@ -113,8 +165,8 @@ Rectangle {
 
         // Content：三个 tab 仍复用原 Loader，不因顶栏上移重建页面状态。
         StackLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+            SplitView.fillWidth: true
+            SplitView.fillHeight: true
             currentIndex: root.currentTab
 
             Loader {

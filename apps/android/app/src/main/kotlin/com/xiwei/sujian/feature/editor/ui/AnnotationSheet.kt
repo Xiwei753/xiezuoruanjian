@@ -38,13 +38,11 @@ fun AnnotationSheet(
     onCreateTag: (name: String) -> Unit,
     onRegisterName: () -> Unit,
     onNameChanged: (String) -> Unit,
-    onExternalLink: (url: String) -> Unit,
     onSearchChanged: (String) -> Unit,
     onObjectLink: (com.xiwei.sujian.feature.editor.presentation.AnnotationObjectRef) -> Unit,
     onDeleteLink: (linkId: String) -> Unit,
 ) {
     var newTagName by remember(state.projectId) { mutableStateOf("") }
-    var externalUrl by remember(state.projectId) { mutableStateOf("") }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(
@@ -167,31 +165,6 @@ fun AnnotationSheet(
                     }
                 }
             }
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = externalUrl,
-                        onValueChange = { externalUrl = it },
-                        modifier = Modifier.weight(1f),
-                        label = { Text(stringResource(R.string.annotation_link_url_hint)) },
-                        singleLine = true,
-                    )
-                    TextButton(
-                        onClick = {
-                            onExternalLink(externalUrl)
-                            externalUrl = ""
-                        },
-                        enabled = externalUrl.isNotBlank() && !state.isSaving,
-                    ) {
-                        Text(stringResource(R.string.action_create))
-                    }
-                }
-            }
-
             item {
                 Text(stringResource(R.string.annotation_outgoing), style = MaterialTheme.typography.titleSmall)
                 if (state.outgoingLinks.isEmpty()) {

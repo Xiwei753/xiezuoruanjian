@@ -14,7 +14,7 @@
 //   - 不展示折线趋势图与「详细统计」。
 // 约束：
 //   - 纯展示层：只消费 editorBackendRef 的 Explorer 快照，不读文件系统、
-//     不做统计聚合（每日字数、纪录、热力强度、连续天数全在 Core）；
+//     不做统计聚合（每日字数、纪录、热力强度、连续天数、逐日贡献明细全在 Core）；
 //     字段缺失显示 "—"，不用 0 冒充。
 //   - Explorer 异步请求用递增 requestId 过滤迟到结果；失败保留上次数据，
 //     只提示本次读取失败；不在 UI 线程同步读盘（沿用 #935 的 worker 队列）。
@@ -26,6 +26,8 @@
 //   - Issue #976：右侧恢复为区间热力图，移除折线图、页底全年热力图与
 //     折叠「详细统计」；逐日热力格随 Explorer 一次返回。
 //   - Issue #980：移除页内追踪副标题，主体含底部陪伴条整体上移，横条下留白。
+//   - Issue #1014：移除独立「贡献来源」卡；逐日 actor 操作明细随
+//     contributions.dayActors 交给热力图，在选中日期后就地展示。
 // =============================================================================
 
 import QtQuick
@@ -65,7 +67,9 @@ Rectangle {
     readonly property var selected: explorer && explorer.selected ? explorer.selected : null
     readonly property var selectedRecords: selected ? selected.records : null
     readonly property var contributions: explorer && explorer.contributions ? explorer.contributions : null
-    readonly property var contributionActors: contributions && contributions.actors ? contributions.actors : []
+    // 逐日 actor 明细（#1014）：只从 Core 的 contributions.dayActors 搬运，
+    // 端侧不按区间总量拆日；旧快照没有该字段时为空数组。
+    readonly property var contributionDays: contributions && contributions.dayActors ? contributions.dayActors : []
     readonly property string historyScope: explorer && explorer.historyScope ? String(explorer.historyScope) : ""
     // 首个快照到达前先摆四张空卡（只有预设名，数值显示 "—"）。
     readonly property var periodCards: explorer && explorer.periodCards && explorer.periodCards.length > 0
@@ -146,16 +150,6 @@ Rectangle {
         case "partialSync": return qsTr("同步不完整")
         }
         return ""
-    }
-
-    // 贡献来源只翻译 Core 的 actor 键，不在这里归类统计。
-    function contributionActorText(actor) {
-        switch (String(actor)) {
-        case "human": return qsTr("人工")
-        case "ai": return qsTr("AI")
-        case "system": return qsTr("系统")
-        }
-        return qsTr("未知")
     }
 
     // 当前详情需要请求的 preset：生涯展开优先，其次展开的时段卡，最后是选中时段。
@@ -445,93 +439,11 @@ Rectangle {
                                     startDate: root.selected && root.selected.range ? root.selected.range.startDate : ""
                                     endDate: root.selected && root.selected.range ? root.selected.range.endDate : ""
                                     days: root.selected && root.selected.heatmapDays ? root.selected.heatmapDays : []
+                                    dayDetails: root.contributionDays
+                                    hasContributionData: root.contributions !== null
                                     historyScope: root.historyScope
                                 }
                             }
-                        }
-                    }
-                }
-
-                // ── 贡献来源：历史操作量与当前保留内容来源（Issue #1010）──
-                // 两列数字都直接来自 Core，端侧不把对象操作折算成码字。
-                Kirigami.ShadowedRectangle {
-                    Layout.fillWidth: true
-                    visible: root.contributions !== null && root.contributionActors.length > 0
-                    implicitHeight: contributionColumn.implicitHeight + Kirigami.Units.largeSpacing * 2
-                    radius: Kirigami.Units.cornerRadius
-                    color: Kirigami.Theme.alternateBackgroundColor
-                    border.color: Kirigami.Theme.disabledTextColor
-                    border.width: 1
-
-                    ColumnLayout {
-                        id: contributionColumn
-                        anchors.fill: parent
-                        anchors.margins: Kirigami.Units.largeSpacing
-                        spacing: Kirigami.Units.smallSpacing
-
-                        RowLayout {
-                            Layout.fillWidth: true
-
-                            Label {
-                                text: qsTr("贡献来源")
-                                font.weight: Font.Medium
-                                color: Kirigami.Theme.textColor
-                            }
-
-                            Item {
-                                Layout.fillWidth: true
-                            }
-
-                            Label {
-                                text: qsTr("当前保留 %1 字")
-                                    .arg(root.formatNum(root.val(root.contributions, "retainedTotalChars")))
-                                color: Kirigami.Theme.disabledTextColor
-                            }
-                        }
-
-                        Repeater {
-                            model: root.contributionActors
-
-                            delegate: RowLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                spacing: Kirigami.Units.smallSpacing
-
-                                Label {
-                                    Layout.preferredWidth: Kirigami.Units.gridUnit * 3
-                                    text: root.contributionActorText(modelData.actor)
-                                    color: Kirigami.Theme.textColor
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: qsTr("操作 %1 次 · 新增 %2 字 · 删除 %3 字 · 修改 %4 字")
-                                        .arg(root.formatNum(root.val(modelData.counts, "operations")))
-                                        .arg(root.formatNum(root.val(modelData.counts, "insertedChars")))
-                                        .arg(root.formatNum(root.val(modelData.counts, "deletedChars")))
-                                        .arg(root.formatNum(root.val(modelData.counts, "modifiedChars")))
-                                    color: Kirigami.Theme.disabledTextColor
-                                    elide: Text.ElideRight
-                                }
-
-                                Label {
-                                    text: qsTr("保留 %1 字").arg(root.formatNum(root.val(modelData, "retainedChars")))
-                                    color: Kirigami.Theme.textColor
-                                }
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: qsTr("对象操作：新建 %1 · 更新 %2 · 删除 %3 · 关联 %4 · 解除 %5")
-                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "createdObjects")))
-                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "updatedObjects")))
-                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "deletedObjects")))
-                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "linkedObjects")))
-                                .arg(root.formatNum(root.val(root.contributions ? root.contributions.total : null, "unlinkedObjects")))
-                            color: Kirigami.Theme.disabledTextColor
-                            font: Kirigami.Theme.smallFont
-                            elide: Text.ElideRight
                         }
                     }
                 }
@@ -650,6 +562,8 @@ Rectangle {
                                     startDate: root.selected && root.selected.range ? root.selected.range.startDate : ""
                                     endDate: root.selected && root.selected.range ? root.selected.range.endDate : ""
                                     days: root.selected && root.selected.heatmapDays ? root.selected.heatmapDays : []
+                                    dayDetails: root.contributionDays
+                                    hasContributionData: root.contributions !== null
                                     historyScope: root.historyScope
                                 }
                             }

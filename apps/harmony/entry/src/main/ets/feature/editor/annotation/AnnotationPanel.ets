@@ -32,7 +32,6 @@ export struct AnnotationPanel {
   @State private editCanonicalName: string = ''
   @State private editAliases: string = ''
   @State private editMisspellings: string = ''
-  @State private urlDraft: string = ''
   @State private searchDraft: string = ''
   @State private searchResults: SearchResult[] = []
   @State private linkResolutions: AnnotationLinkResolutionItem[] = []
@@ -81,7 +80,7 @@ export struct AnnotationPanel {
   }
 
   private objectTarget(ref: AnnotationObjectRefDto): AnnotationTargetDto {
-    return { objectRef: ref, externalUrl: null }
+    return { objectRef: ref }
   }
 
   private sameObject(left: AnnotationObjectRefDto, right: AnnotationObjectRefDto): boolean {
@@ -246,25 +245,6 @@ export struct AnnotationPanel {
     this.onChanged()
   }
 
-  private async addExternalLink(): Promise<void> {
-    const url = this.urlDraft.trim()
-    if (!url.startsWith('https://') && !url.startsWith('http://')) {
-      this.errorMessage = '请输入 http 或 https 链接'
-      return
-    }
-    this.busy = true
-    const result = await this.bridge.createLink(this.target, { objectRef: null, externalUrl: url })
-    this.busy = false
-    if (!result.success) {
-      this.errorMessage = result.userMessage ?? '链接未能保存'
-      return
-    }
-    this.urlDraft = ''
-    this.errorMessage = ''
-    await this.refresh()
-    this.onChanged()
-  }
-
   private async searchLinkTargets(): Promise<void> {
     const query = this.searchDraft.trim()
     if (query.length === 0) {
@@ -304,7 +284,7 @@ export struct AnnotationPanel {
     const ref = this.objectRefForResult(result)
     if (ref === null) return
     this.busy = true
-    const created = await this.bridge.createLink(this.target, { objectRef: ref, externalUrl: null })
+    const created = await this.bridge.createLink(this.target, { objectRef: ref })
     this.busy = false
     if (!created.success) {
       this.errorMessage = created.userMessage ?? '对象链接未能保存'
@@ -335,7 +315,7 @@ export struct AnnotationPanel {
     if (item.state === 'exists') return '可访问'
     if (item.state === 'missing') return '目标缺失'
     if (item.state === 'projectNotDownloaded') return '项目未下载'
-    return '外部网址'
+    return '状态未知'
   }
 
   private focusedEntrySummary(): string {
@@ -477,21 +457,12 @@ export struct AnnotationPanel {
               .onClick(() => { void this.addObjectLink(result) })
           }, (result: SearchResult) => result.objectId)
 
-          Row({ space: 8 }) {
-            TextInput({ text: this.urlDraft, placeholder: 'http(s) 链接' })
-              .layoutWeight(1)
-              .onChange((value: string) => { this.urlDraft = value })
-            Button('添加链接')
-              .enabled(!this.busy && this.urlDraft.trim().length > 0)
-              .onClick(() => { void this.addExternalLink() })
-          }
-
           if (this.links.length > 0) {
             Text('关联链接').fontSize(13).fontColor($r('sys.color.font_secondary'))
             ForEach(this.links, (link: AnnotationObjectLinkDto) => {
               Row() {
                 Column() {
-                  Text(link.target.externalUrl ?? `${link.target.objectRef?.kind ?? '对象'} · ${link.target.objectRef?.objectId ?? ''}`)
+                  Text(`${link.target.objectRef.kind} · ${link.target.objectRef.objectId}`)
                     .fontSize(13)
                     .maxLines(2)
                   Text(this.linkStateLabel(link.linkId))

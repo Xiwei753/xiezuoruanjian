@@ -8,8 +8,7 @@ export interface AnnotationObjectRefDto {
 }
 
 export interface AnnotationTargetDto {
-  objectRef: AnnotationObjectRefDto | null
-  externalUrl: string | null
+  objectRef: AnnotationObjectRefDto
 }
 
 export interface AnnotationTagDto {
@@ -61,7 +60,7 @@ export interface AnnotationObjectLinkDto {
 }
 
 export interface AnnotationLinkResolutionDto {
-  state: 'exists' | 'missing' | 'projectNotDownloaded' | 'externalUrl'
+  state: 'exists' | 'missing' | 'projectNotDownloaded'
   target: AnnotationTargetDto
 }
 

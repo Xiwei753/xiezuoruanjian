@@ -14,12 +14,10 @@ pub struct FlushDirtySet {
     pub edges: HashSet<String>,
     pub embeds: HashSet<String>,
     pub links: HashSet<String>,
-    pub hyperlinks: HashSet<String>,
     pub deleted_nodes: HashSet<String>,
     pub deleted_edges: HashSet<String>,
     pub deleted_embeds: HashSet<String>,
     pub deleted_links: HashSet<String>,
-    pub deleted_hyperlinks: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,7 +25,6 @@ pub enum DirtyKind {
     Node,
     Edge,
     Embed,
-    Hyperlink,
     Link,
     GraphMeta,
 }
@@ -59,7 +56,6 @@ pub struct StarMapStoreResult {
     pub loaded_edge_count: usize,
     pub loaded_embed_count: usize,
     pub loaded_link_count: usize,
-    pub loaded_hyperlink_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,11 +96,9 @@ pub enum SaveQueueEntry {
     Edge,
     Embed,
     Link,
-    Hyperlink,
     GraphMeta,
     DeleteNode,
     DeleteEdge,
     DeleteEmbed,
     DeleteLink,
-    DeleteHyperlink,
 }

@@ -50,6 +50,8 @@ ScrollView {
     property var syncBackendRef: null
     property var editorBackendRef: null
     property var themeControllerRef: null
+    // Issue #1014：AI 设置组与写作栏 AI 面板共享同一份 Agent CLI 清单/选择。
+    property var agentCliBackendRef: null
     property var beforeSyncHook: null
     // 宽屏顶部搜索关键词：只做分组过滤，不改任何设置读取/保存路径。
     property string searchText: ""
@@ -608,8 +610,9 @@ ScrollView {
                 id: aiSection
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
-                visible: (root.settingsBackendRef ? root.settingsBackendRef.ai_available : false)
-                         && root.sectionVisible(qsTr("AI"))
+                // Issue #1014：即使当前构建未启用 AI 编译特性，也要能先管理
+                // 本机 Agent CLI；只有原「启用 AI 功能」开关依赖 ai_available。
+                visible: root.sectionVisible(qsTr("AI"))
 
                 // Issue #900 复核：分组标题旁挂官方 ToolButton 做展开/收起，
                 // 不自建折叠组件。
@@ -639,11 +642,23 @@ ScrollView {
 
                     FormCard.FormCard {
                         Layout.fillWidth: true
+                        visible: root.settingsBackendRef
+                            ? root.settingsBackendRef.ai_available : false
                         FormCard.FormSwitchDelegate {
                             id: aiSwitch
                             text: qsTr("启用 AI 功能")
                             description: qsTr("控制 AI 功能入口显示")
                             onToggled: root.setSwitchValue(aiSwitch, "ai_enabled", aiSwitch.checked)
+                        }
+                    }
+
+                    // Issue #1014：Agent 清单来自后台扫描，不在这里写死
+                    // Codex / Claude / Gemini / OpenCode 卡片。
+                    FormCard.FormCard {
+                        Layout.fillWidth: true
+                        AgentCliManager {
+                            Layout.fillWidth: true
+                            backendRef: root.agentCliBackendRef
                         }
                     }
                 }

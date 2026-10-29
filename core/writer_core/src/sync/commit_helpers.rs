@@ -650,7 +650,6 @@ fn save_graph_conflict_snapshot(
         .chain(graph.edge_ids.iter().map(|id| ("edges", id)))
         .chain(graph.embed_instance_ids.iter().map(|id| ("embeds", id)))
         .chain(graph.link_ids.iter().map(|id| ("links", id)))
-        .chain(graph.hyperlink_ids.iter().map(|id| ("hyperlinks", id)))
         .collect();
 
     for (type_dir, id) in members {

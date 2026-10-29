@@ -117,33 +117,13 @@ fn object_ref_to_dto(value: ObjectRef) -> AnnotationObjectRefDto {
 }
 
 fn link_target_from_dto(value: AnnotationTargetDto) -> ApiResult<LinkTarget> {
-    match (value.object_ref, value.external_url) {
-        (Some(object_ref), None) => Ok(LinkTarget::Object(object_ref_from_dto(object_ref)?)),
-        (None, Some(url)) => {
-            let url = url.trim();
-            if url.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
-                return Err(invalid_annotation(
-                    "external link must be an HTTP or HTTPS URL",
-                ));
-            }
-            Ok(LinkTarget::ExternalUrl(url.to_string()))
-        }
-        _ => Err(invalid_annotation(
-            "link target must contain exactly one object reference or external URL",
-        )),
-    }
+    Ok(LinkTarget::Object(object_ref_from_dto(value.object_ref)?))
 }
 
 fn link_target_to_dto(value: LinkTarget) -> AnnotationTargetDto {
-    match value {
-        LinkTarget::Object(object_ref) => AnnotationTargetDto {
-            object_ref: Some(object_ref_to_dto(object_ref)),
-            external_url: None,
-        },
-        LinkTarget::ExternalUrl(url) => AnnotationTargetDto {
-            object_ref: None,
-            external_url: Some(url),
-        },
+    let LinkTarget::Object(object_ref) = value;
+    AnnotationTargetDto {
+        object_ref: object_ref_to_dto(object_ref),
     }
 }
 
@@ -1333,9 +1313,7 @@ impl WriterCoreApi {
         &self,
         target: AnnotationTargetDto,
     ) -> ApiResult<Vec<AnnotationObjectLinkDto>> {
-        let LinkTarget::Object(target) = link_target_from_dto(target)? else {
-            return Ok(Vec::new());
-        };
+        let LinkTarget::Object(target) = link_target_from_dto(target)?;
         let mut links_by_id = find_annotation_backlinks(&self.projects_root, &target)
             .map_err(WriterError::from)?
             .into_iter()
@@ -1425,18 +1403,14 @@ impl WriterCoreApi {
         target: AnnotationTargetDto,
     ) -> ApiResult<AnnotationLinkResolutionDto> {
         let target = link_target_from_dto(target)?;
-        let state = match &target {
-            LinkTarget::ExternalUrl(_) => AnnotationLinkResolutionStateDto::ExternalUrl,
-            LinkTarget::Object(object_ref) => {
-                let project_root = self.projects_root.join(object_ref.project_id());
-                if !project_root.join("project.json").exists() {
-                    AnnotationLinkResolutionStateDto::ProjectNotDownloaded
-                } else if self.object_ref_exists(object_ref)? {
-                    AnnotationLinkResolutionStateDto::Exists
-                } else {
-                    AnnotationLinkResolutionStateDto::Missing
-                }
-            }
+        let LinkTarget::Object(object_ref) = &target;
+        let project_root = self.projects_root.join(object_ref.project_id());
+        let state = if !project_root.join("project.json").exists() {
+            AnnotationLinkResolutionStateDto::ProjectNotDownloaded
+        } else if self.object_ref_exists(object_ref)? {
+            AnnotationLinkResolutionStateDto::Exists
+        } else {
+            AnnotationLinkResolutionStateDto::Missing
         };
         Ok(AnnotationLinkResolutionDto {
             state,

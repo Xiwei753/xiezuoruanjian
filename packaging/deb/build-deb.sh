@@ -20,7 +20,7 @@ Architecture: ${ARCH}
 Maintainer: Xiwei753 <xiwei753@users.noreply.github.com>
 Homepage: https://github.com/Xiwei753/xiezuoruanjian
 Installed-Size: $(du -sk "$STAGE/usr" | cut -f1)
-Depends: libc6, libstdc++6, libgcc-s1, libssl3t64, libqt6core6t64 (>= 6.7), libqt6gui6 (>= 6.7), libqt6qml6 (>= 6.7), libqt6quick6 (>= 6.7), libkf6colorscheme6, qt6-wayland, qml6-module-qtqml, qml6-module-qtquick, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-templates, qml6-module-org-kde-kirigami, qml6-module-org-kde-kirigamiaddons-components, qml6-module-org-kde-kirigamiaddons-formcard, qml6-module-org-kde-desktop, breeze, breeze-icon-theme
+Depends: libc6, libstdc++6, libgcc-s1, libssl3t64, libqt6core6t64 (>= 6.7), libqt6gui6 (>= 6.7), libqt6qml6 (>= 6.7), libqt6quick6 (>= 6.7), libkf6colorscheme6, qt6-wayland, qml6-module-qtqml, qml6-module-qtquick, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-templates, qml6-module-qtquick-dialogs, qml6-module-org-kde-kirigami, qml6-module-org-kde-kirigamiaddons-components, qml6-module-org-kde-kirigamiaddons-formcard, qml6-module-org-kde-desktop, breeze, breeze-icon-theme
 Recommends: fcitx5-frontend-qt6
 Description: Sujian cross-platform writing application
  A native Linux Qt6 and Kirigami application with a Rust core.

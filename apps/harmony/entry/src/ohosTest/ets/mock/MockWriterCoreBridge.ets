@@ -23,8 +23,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     nodes: [] as StarMapNode[],
     edges: [] as StarMapEdge[],
     embeds: [] as StarMapEmbed[],
-    links: [] as StarMapLink[],
-    hyperlinks: []
+    links: [] as StarMapLink[]
   }
 
   private mockSettings: LocalSettings = {
@@ -502,7 +501,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       kind: kind as NodeType,
       payload: null,
       tags: [],
-      content: { type: 'empty', summary: null, body: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null, label: null },
+      content: { type: 'empty', summary: null, body: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null },
       anchors: [],
       portal: null,
       position: { x: position.x, y: position.y },
@@ -527,7 +526,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       hostPath: {
         starmapId: starmapId,
         segments: [],
-        target: { type: 'starmap', nodeId: null, anchorId: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null }
+        target: { type: 'starmap', nodeId: null, anchorId: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null }
       },
       provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
       createdAt: now,
@@ -560,7 +559,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       hostPath: {
         starmapId: hostStarmapId,
         segments: [],
-        target: { type: 'starmap', nodeId: null, anchorId: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null }
+        target: { type: 'starmap', nodeId: null, anchorId: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null }
       },
       provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
       createdAt: now,

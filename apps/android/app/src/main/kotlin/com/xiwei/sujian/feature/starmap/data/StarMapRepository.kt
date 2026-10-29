@@ -15,7 +15,6 @@ import com.xiwei.sujian.feature.starmap.data.model.StarMapEdgeKind
 import com.xiwei.sujian.feature.starmap.data.model.StarMapEmbedData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphEdge
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphNode
-import com.xiwei.sujian.feature.starmap.data.model.StarMapHyperlinkData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapLinkData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapMeta
 import com.xiwei.sujian.feature.starmap.data.model.StarMapNodeContentData
@@ -211,7 +210,6 @@ class StarMapRepository internal constructor(
                     rangeEnd = null,
                     entityType = null,
                     entityId = null,
-                    uri = null,
                 ),
         )
 
@@ -336,57 +334,6 @@ class StarMapRepository internal constructor(
                 cache.removeLink(starmapId, linkId)
                 BridgeResult.Success(true)
             }
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun addStarmapHyperlink(
-        starmapId: String,
-        hl: uniffi.writer_core.StarMapHyperlinkDto,
-    ): BridgeResult<StarMapHyperlinkData> {
-        return when (val result = bridge.addStarmapHyperlink(starmapId, hl)) {
-            is BridgeResult.Success -> {
-                cache.putHyperlink(starmapId, result.data.hyperlinkId, result.data)
-                BridgeResult.Success(result.data.toModel())
-            }
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun updateStarmapHyperlink(
-        starmapId: String,
-        hyperlinkId: String,
-        patch: uniffi.writer_core.StarMapHyperlinkPatchInputDto,
-    ): BridgeResult<StarMapHyperlinkData> {
-        return when (val result = bridge.updateStarmapHyperlink(starmapId, hyperlinkId, patch)) {
-            is BridgeResult.Success -> {
-                cache.putHyperlink(starmapId, result.data.hyperlinkId, result.data)
-                BridgeResult.Success(result.data.toModel())
-            }
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun deleteStarmapHyperlink(
-        starmapId: String,
-        hyperlinkId: String,
-    ): BridgeResult<Boolean> {
-        return when (val result = bridge.deleteStarmapHyperlink(starmapId, hyperlinkId)) {
-            is BridgeResult.Success -> {
-                cache.removeHyperlink(starmapId, hyperlinkId)
-                BridgeResult.Success(true)
-            }
-            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
-            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
-        }
-    }
-
-    fun listStarmapHyperlinks(starmapId: String): BridgeResult<List<StarMapHyperlinkData>> {
-        return when (val result = bridge.listStarmapHyperlinks(starmapId)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.items.map { it.toModel() })
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
             BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }

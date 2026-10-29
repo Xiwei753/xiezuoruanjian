@@ -38,7 +38,7 @@ export struct StarMapEmbedScene {
         type: 'starmap', nodeId: null, anchorId: null,
         projectId: null, volumeId: null, chapterId: null,
         rangeStart: null, rangeEnd: null,
-        entityType: null, entityId: null, uri: null
+        entityType: null, entityId: null
       }
     },
     provenance: {

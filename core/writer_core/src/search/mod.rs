@@ -1,7 +1,7 @@
 //! # Core 全局搜索索引
 //!
 //! 统一索引：chapterBody、chapterTitle、chapterNote、projectTitle、volumeTitle、
-//! starmapTitle、starmapNode、starmapEdgeLabel、starmapHyperlink、setting。
+//! starmapTitle、starmapNode、starmapEdgeLabel、starmapLink、setting。
 //!
 //! 提供：
 //! - `global_search(query, scope, limit, cursor)` — 分页搜索

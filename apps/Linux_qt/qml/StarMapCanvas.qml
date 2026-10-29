@@ -92,6 +92,9 @@ Item {
         !currentRoute.segments || currentRoute.segments.length === 0
     readonly property string focusScenePathKey: routeKey
     signal visualFocusChanged()
+    // Issue #1014：星图导航树按完整 route 切换活动画布；进入 / 退出子星图时
+    // 把当前路由回传给 Workspace，由树同步选中与展开路径。
+    signal routeChanged(string rootStarmapId, string segmentsJson, string routeKey)
     // Issue #982：活动画布图数据/几何可用，供全局搜索按真实就绪时机定位。
     signal sceneGeometryReady(string starmapId, string routeKey)
     signal annotationActionRequested(string action, var targetRef, string title)
@@ -238,12 +241,14 @@ Item {
             currentRoute = { rootStarmapId: "", segments: [] }
             currentStarmapId = ""
             routeError = ""
+            emitRouteChanged(null)
             return
         }
         currentRoute = normalized
         if (!starmapBackendRef) {
             currentStarmapId = normalized.segments.length === 0 ? normalized.rootStarmapId : ""
             routeError = ""
+            emitRouteChanged(normalized)
             return
         }
         var res = starmapBackendRef.resolve_starmap_navigation(
@@ -257,6 +262,88 @@ Item {
             // 根层 route 没有穿越段，退化身份就是根图；子层解析失败则不加载。
             currentStarmapId = normalized.segments.length === 0 ? normalized.rootStarmapId : ""
         }
+        emitRouteChanged(normalized)
+    }
+
+    function segmentsJsonOf(route) {
+        if (!route || !route.segments)
+            return "[]"
+        var segments = []
+        for (var i = 0; i < route.segments.length; ++i) {
+            var segment = route.segments[i]
+            if (segment.type === "enterPortal") {
+                segments.push({
+                    type: "enterPortal",
+                    instanceId: null,
+                    nodeId: segment.nodeId ? segment.nodeId : null
+                })
+            } else {
+                segments.push({
+                    type: "enterEmbed",
+                    instanceId: segment.instanceId ? segment.instanceId : null,
+                    nodeId: null
+                })
+            }
+        }
+        return JSON.stringify(segments)
+    }
+
+    function emitRouteChanged(route) {
+        var normalized = normalizeRoute(route)
+        if (!normalized || !normalized.rootStarmapId) {
+            routeChanged("", "[]", "")
+            return
+        }
+        routeChanged(normalized.rootStarmapId,
+                     segmentsJsonOf(normalized),
+                     routeKeyOf(normalized))
+    }
+
+    // Issue #1014：树导航入口。先让 Core 解析 root + 完整 segments，解析失败
+    // 不切换画布；成功时先提交当前节点编辑，再复用 applyRoute / cameraStack。
+    function navigateToTreeRoute(rootStarmapId, segmentsJson, routeKey) {
+        if (!rootStarmapId)
+            return false
+        var parsedSegments = []
+        try {
+            parsedSegments = JSON.parse(String(segmentsJson || "[]"))
+        } catch (e) {
+            return false
+        }
+        if (!Array.isArray(parsedSegments))
+            return false
+        var route = normalizeRoute({
+            rootStarmapId: String(rootStarmapId),
+            segments: parsedSegments
+        })
+        if (!route)
+            return false
+        var targetKey = routeKeyOf(route)
+        if (routeKey && String(routeKey) !== targetKey)
+            return false
+        if (starmapBackendRef) {
+            var resolved = starmapBackendRef.resolve_starmap_navigation(
+                        route.rootStarmapId, JSON.stringify(route.segments))
+            if (!resolved || resolved.success !== true || !resolved.data
+                    || !resolved.data.currentStarmapId) {
+                routeError = qsTr("解析星图导航路由失败")
+                        + ((resolved && resolved.errorCode) ? " (" + resolved.errorCode + ")" : "")
+                return false
+            }
+        }
+        if (targetKey === routeKey && currentStarmapId !== "")
+            return true
+        if (!commitPendingNodeEditBeforeNavigation())
+            return false
+        settleViewportMotion()
+        prepareCanvasSwitch()
+        applyRoute(route)
+        var cachedCamera = cameraStack[targetKey]
+        applyCamera(cachedCamera ? cachedCamera : defaultCamera())
+        resetZoomRound()
+        storeCamera(targetKey, cameraSnapshot())
+        visualFocusChanged()
+        return true
     }
 
     function defaultCamera() {
@@ -1322,7 +1409,7 @@ Item {
         if (!target || !scene)
             return false
         if (!target.nodeId && !target.edgeId && !target.embedId
-                && !target.linkId && !target.hyperlinkId)
+                && !target.linkId)
             return false
         if (!focusIsRoot) {
             if (!resetToRoot())
@@ -1348,17 +1435,12 @@ Item {
         } else if (target.linkId) {
             kind = "link"
             itemId = target.linkId
-        } else {
-            kind = "hyperlink"
-            itemId = target.hyperlinkId
         }
 
-        // Link / Hyperlink 是挂在 node 或 embed 上的附属对象，没有独立几何。
+        // Link 是挂在 node 或 embed 上的附属对象，没有独立几何。
         // 定位时选中并居中其宿主，避免“打开了星图但什么也没高亮”。
-        if (kind === "link" || kind === "hyperlink") {
-            var owner = kind === "link"
-                    ? scene.linkOwner(itemId)
-                    : scene.hyperlinkOwner(itemId)
+        if (kind === "link") {
+            var owner = scene.linkOwner(itemId)
             if (!owner)
                 return false
             kind = owner.kind

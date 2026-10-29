@@ -25,12 +25,11 @@ pub struct AnnotationObjectRefDto {
     pub object_id: String,
 }
 
-/// Exactly one of `object_ref` and `external_url` is populated for link targets.
+/// Reference to an internal object that an annotation link points at.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AnnotationTargetDto {
-    pub object_ref: Option<AnnotationObjectRefDto>,
-    pub external_url: Option<String>,
+    pub object_ref: AnnotationObjectRefDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,7 +102,6 @@ pub enum AnnotationLinkResolutionStateDto {
     Exists,
     Missing,
     ProjectNotDownloaded,
-    ExternalUrl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

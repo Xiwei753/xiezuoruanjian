@@ -40,12 +40,10 @@ pub struct StarMapPhasedSnapshot {
     pub edges: Vec<StarMapEdge>,
     pub embeds: Vec<StarMapEmbed>,
     pub links: Vec<StarMapLink>,
-    pub hyperlinks: Vec<StarMapHyperlink>,
     pub deleted_node_ids: Vec<String>,
     pub deleted_edge_ids: Vec<String>,
     pub deleted_embed_ids: Vec<String>,
     pub deleted_link_ids: Vec<String>,
-    pub deleted_hyperlink_ids: Vec<String>,
     pub diagnostics: Vec<LoadDiagnostic>,
 }
 
@@ -58,7 +56,6 @@ impl StarMapStore {
             edges: self.edges.values().cloned().collect(),
             embeds: self.embeds.values().cloned().collect(),
             links: self.links.values().cloned().collect(),
-            hyperlinks: self.hyperlinks.values().cloned().collect(),
         }
     }
 
@@ -97,7 +94,6 @@ impl StarMapStore {
         let edge_revs = self.graph_meta.as_ref().map(|m| &m.edge_revisions);
         let embed_revs = self.graph_meta.as_ref().map(|m| &m.embed_revisions);
         let link_revs = self.graph_meta.as_ref().map(|m| &m.link_revisions);
-        let hyperlink_revs = self.graph_meta.as_ref().map(|m| &m.hyperlink_revisions);
 
         let nodes: Vec<StarMapNode> = if incremental {
             self.nodes
@@ -146,21 +142,6 @@ impl StarMapStore {
                 .collect()
         } else {
             self.links.values().cloned().collect()
-        };
-        let hyperlinks: Vec<StarMapHyperlink> = if incremental {
-            self.hyperlinks
-                .values()
-                .filter(|h| {
-                    hyperlink_revs
-                        .and_then(|r| r.get(&h.hyperlink_id))
-                        .copied()
-                        .unwrap_or(0)
-                        > since_rev
-                })
-                .cloned()
-                .collect()
-        } else {
-            self.hyperlinks.values().cloned().collect()
         };
 
         let persistent_entries = self
@@ -218,17 +199,6 @@ impl StarMapStore {
             )
             .cloned()
             .collect();
-        let deleted_hyperlink_ids: Vec<String> = self
-            .deleted_hyperlink_ids
-            .iter()
-            .chain(
-                persistent_entries
-                    .iter()
-                    .filter(|e| e.object_type == "hyperlink")
-                    .map(|e| &e.object_id),
-            )
-            .cloned()
-            .collect();
 
         Ok(StarMapPhasedSnapshot {
             starmap_id: self.starmap_id.clone(),
@@ -241,12 +211,10 @@ impl StarMapStore {
             edges,
             embeds,
             links,
-            hyperlinks,
             deleted_node_ids,
             deleted_edge_ids,
             deleted_embed_ids,
             deleted_link_ids,
-            deleted_hyperlink_ids,
             diagnostics: self.recovery_log.clone(),
         })
     }
@@ -268,11 +236,9 @@ impl StarMapStore {
             edge_ids: Vec::new(),
             embed_instance_ids: Vec::new(),
             link_ids: Vec::new(),
-            hyperlink_ids: Vec::new(),
             edge_relation_index: Vec::new(),
             embed_host_index: Vec::new(),
             link_relation_index: Vec::new(),
-            hyperlink_relation_index: Vec::new(),
             node_kind_counts: HashMap::new(),
             package_revision: self.package_revision,
             updated_at: crate::starmap::now_epoch(),
@@ -307,11 +273,6 @@ impl StarMapStore {
                 .link_revisions
                 .insert(link_id.clone(), next_revision);
         }
-        for hl_id in &dirty.hyperlinks {
-            candidate_meta
-                .hyperlink_revisions
-                .insert(hl_id.clone(), next_revision);
-        }
         for node_id in &dirty.deleted_nodes {
             candidate_meta.node_revisions.remove(node_id);
         }
@@ -324,9 +285,6 @@ impl StarMapStore {
         for link_id in &dirty.deleted_links {
             candidate_meta.link_revisions.remove(link_id);
         }
-        for hl_id in &dirty.deleted_hyperlinks {
-            candidate_meta.hyperlink_revisions.remove(hl_id);
-        }
 
         // 构造要写入磁盘的 GraphMeta（更新 package_revision 和 updated_at）。
         let meta_to_write = GraphMeta {
@@ -336,17 +294,14 @@ impl StarMapStore {
             edge_ids: candidate_meta.edge_ids.clone(),
             embed_instance_ids: candidate_meta.embed_instance_ids.clone(),
             link_ids: candidate_meta.link_ids.clone(),
-            hyperlink_ids: candidate_meta.hyperlink_ids.clone(),
             edge_relation_index: candidate_meta.edge_relation_index.clone(),
             embed_host_index: candidate_meta.embed_host_index.clone(),
             link_relation_index: candidate_meta.link_relation_index.clone(),
-            hyperlink_relation_index: candidate_meta.hyperlink_relation_index.clone(),
             node_kind_counts: candidate_meta.node_kind_counts.clone(),
             node_revisions: candidate_meta.node_revisions.clone(),
             edge_revisions: candidate_meta.edge_revisions.clone(),
             embed_revisions: candidate_meta.embed_revisions.clone(),
             link_revisions: candidate_meta.link_revisions.clone(),
-            hyperlink_revisions: candidate_meta.hyperlink_revisions.clone(),
             package_revision: next_revision,
             updated_at: crate::starmap::now_epoch(),
             deleted_since_last_sync: candidate_meta.deleted_since_last_sync.clone(),
@@ -389,7 +344,7 @@ impl StarMapStore {
     pub(super) fn merge_memory_ids_into_graph_meta_on(&self, meta: &mut GraphMeta) {
         // 增量合并：保留磁盘上已有的对象 IDs，添加内存中新增的，移除已删除的。
         // 不能无条件从 scratch 重建，因为 store 可能只部分加载，或者磁盘上有
-        // 其他 store 实例直接写入的对象（例如测试中局部 store 写入的 hyperlink）。
+        // 其他 store 实例直接写入的对象（例如测试中局部 store 写入的 link）。
         // 从 scratch 会丢失这些对象。增量合并保留磁盘已有，添加内存新增，移除
         // 明确删除的（deleted_*_ids）。删除处理在 flush 中先删文件后清空 deleted_*_ids，
         // 因此调用方需保证 merge 在清空 deleted_*_ids 之前执行。
@@ -491,35 +446,6 @@ impl StarMapStore {
         meta.link_relation_index
             .retain(|lri| !self.deleted_link_ids.contains(&lri.link_id));
 
-        // --- hyperlink_ids + hyperlink_relation_index ---
-        for hl in self.hyperlinks.values() {
-            if self.deleted_hyperlink_ids.contains(&hl.hyperlink_id) {
-                continue;
-            }
-            let source_node_id = target_path_node_id(&hl.source, &self.starmap_id)
-                .unwrap_or_default()
-                .to_string();
-            if !meta.hyperlink_ids.contains(&hl.hyperlink_id) {
-                meta.hyperlink_ids.push(hl.hyperlink_id.clone());
-            }
-            if let Some(hri) = meta
-                .hyperlink_relation_index
-                .iter_mut()
-                .find(|hri| hri.hyperlink_id == hl.hyperlink_id)
-            {
-                hri.source_node_id = source_node_id;
-            } else {
-                meta.hyperlink_relation_index.push(HyperlinkRelationIndex {
-                    hyperlink_id: hl.hyperlink_id.clone(),
-                    source_node_id,
-                });
-            }
-        }
-        meta.hyperlink_ids
-            .retain(|id| !self.deleted_hyperlink_ids.contains(id));
-        meta.hyperlink_relation_index
-            .retain(|hri| !self.deleted_hyperlink_ids.contains(&hri.hyperlink_id));
-
         // Update deleted_since_last_sync: add entries for newly deleted objects
         let next_rev = self.package_revision.saturating_add(1);
         for node_id in &self.deleted_node_ids {
@@ -538,10 +464,6 @@ impl StarMapStore {
             meta.deleted_since_last_sync
                 .add_entry("link", link_id, next_rev);
         }
-        for hl_id in &self.deleted_hyperlink_ids {
-            meta.deleted_since_last_sync
-                .add_entry("hyperlink", hl_id, next_rev);
-        }
 
         // Remove deleted_since_last_sync entries for objects that are back in memory
         for node_id in self.nodes.keys() {
@@ -556,10 +478,6 @@ impl StarMapStore {
         }
         for link_id in self.links.keys() {
             meta.deleted_since_last_sync.remove_entry("link", link_id);
-        }
-        for hl_id in self.hyperlinks.keys() {
-            meta.deleted_since_last_sync
-                .remove_entry("hyperlink", hl_id);
         }
     }
 }

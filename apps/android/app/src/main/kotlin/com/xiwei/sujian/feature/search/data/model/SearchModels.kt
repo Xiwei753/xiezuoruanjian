@@ -16,7 +16,6 @@ object SearchScopes {
     const val StarmapTitle = "starmapTitle"
     const val StarmapNode = "starmapNode"
     const val StarmapEdgeLabel = "starmapEdgeLabel"
-    const val StarmapHyperlink = "starmapHyperlink"
     const val StarmapLink = "starmapLink"
     const val StarmapEmbed = "starmapEmbed"
     const val Setting = "setting"
@@ -62,7 +61,6 @@ data class SearchTarget(
     val nodeId: String? = null,
     val edgeId: String? = null,
     val linkId: String? = null,
-    val hyperlinkId: String? = null,
     val embedId: String? = null,
     val settingKey: String? = null,
     val settingSection: String? = null,

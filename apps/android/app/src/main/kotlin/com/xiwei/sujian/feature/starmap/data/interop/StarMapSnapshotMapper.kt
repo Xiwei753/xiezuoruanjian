@@ -27,13 +27,11 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache =
                 edges = edges,
                 embeds = embeds,
                 links = links,
-                hyperlinks = hyperlinks,
             ),
         nodes = nodes.associateByTo(mutableMapOf()) { it.id },
         edges = edges.associateByTo(mutableMapOf()) { it.id },
         embeds = embeds.associateByTo(mutableMapOf()) { it.instanceId },
         links = links.associateByTo(mutableMapOf()) { it.linkId },
-        hyperlinks = hyperlinks.associateByTo(mutableMapOf()) { it.hyperlinkId },
         loadPhase = loadPhase,
         packageRevision = packageRevision,
         sinceRevision = sinceRevision,
@@ -43,7 +41,6 @@ internal fun StarMapPhasedSnapshotDto.toRawCache(): StarMapRawCache =
         deletedEdgeIds = deletedEdgeIds.toMutableSet(),
         deletedEmbedIds = deletedEmbedIds.toMutableSet(),
         deletedLinkIds = deletedLinkIds.toMutableSet(),
-        deletedHyperlinkIds = deletedHyperlinkIds.toMutableSet(),
     )
 
 internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotResult {
@@ -58,7 +55,6 @@ internal fun StarMapPhasedSnapshotDto.toSnapshotResult(): StarMapPhasedSnapshotR
                 ),
             embeds = embeds.map { it.toModel() },
             links = links.map { it.toModel() },
-            hyperlinks = hyperlinks.map { it.toModel() },
             loadPhase = loadPhase,
             packageRevision = packageRevision,
             sinceRevision = sinceRevision,

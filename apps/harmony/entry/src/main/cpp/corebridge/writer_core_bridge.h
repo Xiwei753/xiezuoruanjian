@@ -83,7 +83,7 @@ char*  writer_core_get_recent_edits(void);
 // writer_core_global_search_page: 统一全局搜索（作品/卷/章/星图/设置）。
 //   query/scope 为 UTF-8 字符串；scope 取 chapterBody、chapterTitle、chapterNote、
 //   projectTitle、volumeTitle、starmapTitle、starmapNode、starmapEdgeLabel、
-//   starmapHyperlink、starmapLink、starmapEmbed、setting 或 all。
+//   starmapLink、starmapEmbed、setting 或 all。
 //   cursor 为空时从第一页开始；context_json 为 SearchContext camelCase JSON（可为 null）。
 //   返回 ResultEnvelope JSON，data 为 { items, nextCursor }；正文 byteStart/byteEnd
 //   是原文 UTF-8 字节偏移。返回值由 Core 分配，必须用 writer_core_free_string 释放。

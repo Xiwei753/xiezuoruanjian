@@ -1,7 +1,7 @@
 # StarMap 语义地基 v2.0 (独立画布与跨图导航)
 
 Status: active
-Last verified: 2026-10-16
+Last verified: 2026-10-29
 Truth source: product decision / protocol
 Supersedes: v1.1 (2026-06-11)
 
@@ -28,8 +28,11 @@ StarMap 不再是一个强依赖父子拥有权的嵌套树，也不是"父画�
 
 ### 3. StarMapLink (跳转链接)
 * Link = **跳转**。表示从当前图的某个端点指向另一个目标，仅用于引用、跳转、打开，不会把目标放进当前画布。
+* Link 只指向素笺内部对象（通过 `StarMapTargetPath`），不绑定外部网页或 URL。
 * **正式 CRUD API**：`add_starmap_link`、`update_starmap_link`、`delete_starmap_link`。
 * 删除 Link 对目标 StarMap 也没有任何影响。
+
+星图对象与注释都不再绑定外部网页/URL：没有外链对象、外链目录或外链搜索与导航。正文中直接输入的网址只是普通文本，不会生成可跳转目标。内部对象引用（章节、实体、跨作品）、标签、文字锚点、Embed、Portal 和跨层 Edge 照常保留。
 
 ### 4. StarMapEdge (语义连线)
 * Edge = **语义连线**。连接的是真实节点对象（通过 `StarMapTargetPath`），不是连接两个屏幕坐标。

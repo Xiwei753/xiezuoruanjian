@@ -39,6 +39,8 @@ chrono = "0.4"
 cpp = "0.5.11"
 log = "0.4"
 bitflags = "2"
+# Issue #1014：拉取 ACP Agent 官方目录（离线时使用 XDG 缓存）。
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 
 [build-dependencies]
 cpp_build = "0.5.11"

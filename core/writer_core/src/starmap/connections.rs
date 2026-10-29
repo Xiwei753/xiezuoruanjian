@@ -28,9 +28,7 @@ use crate::starmap::package_storage::bucket_for_id;
 use crate::starmap::semantic::{StarMapTargetDetail, StarMapTargetResolveStatus};
 use crate::starmap::store::load::phased::load_current_graph_meta;
 use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
-use crate::starmap::types::{
-    StarMapEdge, StarMapEdgeKind, StarMapEmbed, StarMapHyperlink, StarMapLink,
-};
+use crate::starmap::types::{StarMapEdge, StarMapEdgeKind, StarMapEmbed, StarMapLink};
 
 // ---------------------------------------------------------------------------
 // 公开类型
@@ -166,7 +164,7 @@ fn longest_common_prefix_len(a: &[StarMapPathSegment], b: &[StarMapPathSegment])
 // route-aware 端点匹配（共用函数）
 // ---------------------------------------------------------------------------
 
-/// Route-aware 端点匹配：检查 Edge/Link/Hyperlink/Embed 端点路径是否
+/// Route-aware 端点匹配：检查 Edge/Link/Embed 端点路径是否
 /// 从指定祖先图出发、经过与实例路径后缀完全一致的穿越路径、落在当前画布。
 ///
 /// 这是 `connections.rs` 与 `relation_index.rs` 共用的唯一端点匹配规则，
@@ -251,17 +249,6 @@ pub fn load_graph_links(
     load_graph_links_from_disk(&context.app_data_root, starmap_id)
 }
 
-/// 加载星图的超链接列表（可靠对象读取）。
-pub fn load_graph_hyperlinks(
-    context: &GraphResolverContext,
-    starmap_id: &str,
-) -> crate::error::Result<Vec<StarMapHyperlink>> {
-    if let Some(graph) = context.overlays.get(starmap_id) {
-        return Ok(graph.hyperlinks.clone());
-    }
-    load_graph_hyperlinks_from_disk(&context.app_data_root, starmap_id)
-}
-
 /// 加载星图的嵌入列表（可靠对象读取）。
 pub fn load_graph_embeds(
     context: &GraphResolverContext,
@@ -333,35 +320,6 @@ fn load_graph_links_from_disk(
         links.push(link);
     }
     Ok(links)
-}
-
-/// 从磁盘加载星图的超链接列表（可靠对象读取）。
-fn load_graph_hyperlinks_from_disk(
-    app_data_root: &Path,
-    starmap_id: &str,
-) -> crate::error::Result<Vec<StarMapHyperlink>> {
-    let graph_json_path = app_data_root
-        .join("starmaps")
-        .join(starmap_id)
-        .join("graph.json");
-    let meta = match load_current_graph_meta(&graph_json_path, starmap_id)? {
-        Some(m) => m,
-        None => return Ok(Vec::new()),
-    };
-
-    let mut hyperlinks = Vec::new();
-    for hl_id in &meta.hyperlink_ids {
-        let bucket_dir = app_data_root
-            .join("starmaps")
-            .join(starmap_id)
-            .join("hyperlinks")
-            .join(bucket_for_id(hl_id));
-        let path = bucket_dir.join(format!("{}.json", hl_id));
-        let content = std::fs::read_to_string(&path)?;
-        let hl: StarMapHyperlink = serde_json::from_str(&content)?;
-        hyperlinks.push(hl);
-    }
-    Ok(hyperlinks)
 }
 
 /// 从磁盘加载星图的嵌入列表（可靠对象读取）。

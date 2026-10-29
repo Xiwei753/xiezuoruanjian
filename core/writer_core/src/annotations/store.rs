@@ -641,12 +641,42 @@ impl AnnotationStore {
         }
         paths.sort();
 
+        if collection == "links" {
+            self.remove_legacy_external_link_records(&paths)?;
+        }
+
         let mut records = Vec::with_capacity(paths.len());
         for path in paths {
             let content = fs::read_to_string(path)?;
             records.push(serde_json::from_str(&content)?);
         }
         Ok(records)
+    }
+
+    /// External-URL annotation links were removed with the external-binding
+    /// feature. Older project data stored them as
+    /// `{"target":{"kind":"externalUrl","value":"..."}}`; remove those records
+    /// before deserializing the object-only link model. Internal object links
+    /// are left untouched.
+    fn remove_legacy_external_link_records(&self, paths: &[PathBuf]) -> crate::Result<()> {
+        for path in paths {
+            let content = fs::read_to_string(path)?;
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+                continue;
+            };
+            let target = value.get("target");
+            let is_external = target
+                .and_then(|target| target.get("kind"))
+                .and_then(|kind| kind.as_str())
+                == Some("externalUrl")
+                || target
+                    .and_then(|target| target.get("externalUrl"))
+                    .is_some_and(|url| !url.is_null());
+            if is_external {
+                fs::remove_file(path)?;
+            }
+        }
+        Ok(())
     }
 
     fn write_record<T: Serialize>(

@@ -70,8 +70,6 @@ pub struct StarMapGraph {
     pub embeds: Vec<super::StarMapEmbed>,
     #[serde(default)]
     pub links: Vec<super::StarMapLink>,
-    #[serde(default)]
-    pub hyperlinks: Vec<super::StarMapHyperlink>,
 }
 
 impl Default for StarMapGraph {
@@ -83,7 +81,6 @@ impl Default for StarMapGraph {
             edges: vec![],
             embeds: vec![],
             links: vec![],
-            hyperlinks: vec![],
         }
     }
 }

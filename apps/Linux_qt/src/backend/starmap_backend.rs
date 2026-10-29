@@ -183,6 +183,24 @@ pub struct StarMapBackend {
             y: f64,
         ) -> QJsonObject
     ),
+    embed_existing_starmap_json: qt_method!(
+        fn(
+            &mut self,
+            host_starmap_id: QString,
+            child_starmap_id: QString,
+            x: f64,
+            y: f64,
+        ) -> QString
+    ),
+    embed_existing_starmap: qt_method!(
+        fn(
+            &mut self,
+            host_starmap_id: QString,
+            child_starmap_id: QString,
+            x: f64,
+            y: f64,
+        ) -> QJsonObject
+    ),
     create_starmap_child_embed_json: qt_method!(
         fn(&mut self, host_starmap_id: QString, title: QString, x: f64, y: f64) -> QString
     ),
@@ -243,25 +261,6 @@ pub struct StarMapBackend {
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64, threshold: f64) -> QJsonObject),
     hit_test_nodes_json: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
     hit_test_nodes: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QJsonObject),
-    add_starmap_hyperlink:
-        qt_method!(fn(&mut self, starmap_id: QString, hyperlink_json: QString) -> QJsonObject),
-    update_starmap_hyperlink: qt_method!(
-        fn(
-            &mut self,
-            starmap_id: QString,
-            hyperlink_id: QString,
-            patch_json: QString,
-        ) -> QJsonObject
-    ),
-    delete_starmap_hyperlink: qt_method!(
-        fn(
-            &mut self,
-            starmap_id: QString,
-            hyperlink_id: QString,
-            expected_revision: u64,
-        ) -> QJsonObject
-    ),
-    list_starmap_hyperlinks: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
     add_starmap_link:
         qt_method!(fn(&mut self, starmap_id: QString, link_json: QString) -> QJsonObject),
     update_starmap_link: qt_method!(
@@ -906,6 +905,32 @@ impl StarMapBackend {
         Self::log_starmap_envelope("create_starmap_embed", &sid, "", &raw);
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
+    fn embed_existing_starmap_json(
+        &mut self,
+        host_starmap_id: QString,
+        child_starmap_id: QString,
+        x: f64,
+        y: f64,
+    ) -> QString {
+        self.with_app_mut(|app| {
+            app.embed_existing_starmap_json(host_starmap_id, child_starmap_id, x, y)
+        })
+        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+    }
+    fn embed_existing_starmap(
+        &mut self,
+        host_starmap_id: QString,
+        child_starmap_id: QString,
+        x: f64,
+        y: f64,
+    ) -> QJsonObject {
+        let hid = host_starmap_id.to_string();
+        let raw = self
+            .embed_existing_starmap_json(host_starmap_id, child_starmap_id, x, y)
+            .to_string();
+        Self::log_starmap_envelope("embed_existing_starmap", &hid, "", &raw);
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
     fn create_starmap_child_embed_json(
         &mut self,
         host_starmap_id: QString,
@@ -981,54 +1006,6 @@ impl StarMapBackend {
             .to_string();
         Self::log_starmap_envelope("delete_starmap_embed", &sid, &iid, &raw);
         crate::backend::json_utils::qjson_object_from_json(&raw)
-    }
-    fn add_starmap_hyperlink(
-        &mut self,
-        starmap_id: QString,
-        hyperlink_json: QString,
-    ) -> QJsonObject {
-        self.with_app_mut(|app| app.add_starmap_hyperlink(starmap_id, hyperlink_json))
-            .unwrap_or_else(|_| {
-                crate::backend::json_utils::qjson_object_from_json(
-                    &crate::backend::json_utils::borrow_conflict_error_json(),
-                )
-            })
-    }
-    fn update_starmap_hyperlink(
-        &mut self,
-        starmap_id: QString,
-        hyperlink_id: QString,
-        patch_json: QString,
-    ) -> QJsonObject {
-        self.with_app_mut(|app| app.update_starmap_hyperlink(starmap_id, hyperlink_id, patch_json))
-            .unwrap_or_else(|_| {
-                crate::backend::json_utils::qjson_object_from_json(
-                    &crate::backend::json_utils::borrow_conflict_error_json(),
-                )
-            })
-    }
-    fn delete_starmap_hyperlink(
-        &mut self,
-        starmap_id: QString,
-        hyperlink_id: QString,
-        expected_revision: u64,
-    ) -> QJsonObject {
-        self.with_app_mut(|app| {
-            app.delete_starmap_hyperlink(starmap_id, hyperlink_id, expected_revision)
-        })
-        .unwrap_or_else(|_| {
-            crate::backend::json_utils::qjson_object_from_json(
-                &crate::backend::json_utils::borrow_conflict_error_json(),
-            )
-        })
-    }
-    fn list_starmap_hyperlinks(&self, starmap_id: QString) -> QJsonObject {
-        self.with_app(|app| app.list_starmap_hyperlinks(starmap_id))
-            .unwrap_or_else(|_| {
-                crate::backend::json_utils::qjson_object_from_json(
-                    &crate::backend::json_utils::borrow_conflict_error_json(),
-                )
-            })
     }
     fn add_starmap_link(&mut self, starmap_id: QString, link_json: QString) -> QJsonObject {
         self.with_app_mut(|app| app.add_starmap_link(starmap_id, link_json))
@@ -1130,10 +1107,9 @@ impl StarMapBackend {
 }
 
 // 原本内联在 `impl AppBackend`（定义在 app_backend.rs）里的星图领域方法，
-// 按关注点拆成四个子模块：
+// 按关注点拆成三个子模块：
 //   - documents.rs：星图本体 CRUD + 作品绑定 / 主星图
 //   - graph.rs：graph 读取、节点与边增删改、坐标布局落盘
-//   - hyperlinks.rs：超链接增删改查
 //   - links.rs：内部跳转链接增删改查
 // 本文件保留 QObject 桥接层（`StarMapBackend` 的 qt_method 实现）与共享的
 // with_app / with_app_mut / log_starmap_envelope / record_interaction 工具方法。
@@ -1143,7 +1119,5 @@ impl StarMapBackend {
 mod documents;
 #[path = "starmap_backend/graph.rs"]
 mod graph;
-#[path = "starmap_backend/hyperlinks.rs"]
-mod hyperlinks;
 #[path = "starmap_backend/links.rs"]
 mod links;

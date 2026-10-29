@@ -3,14 +3,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::starmap::connections::{
-    load_graph_edges, load_graph_embeds, load_graph_hyperlinks, load_graph_links,
-    route_aware_endpoint_matches, StarMapConnectionInfo,
+    load_graph_edges, load_graph_embeds, load_graph_links, route_aware_endpoint_matches,
+    StarMapConnectionInfo,
 };
 use crate::starmap::graph::resolve::{resolve_status_to_error, GraphResolverContext};
 use crate::starmap::navigation::{resolve_navigation_route, StarMapNavigationRoute};
 use crate::starmap::semantic::StarMapTargetDetail;
 use crate::starmap::types::reference::StarMapTargetPath;
-use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapHyperlink, StarMapLink};
+use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapLink};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,13 +33,6 @@ pub struct LinkRelationIndex {
     pub link_id: String,
     pub source: StarMapTargetPath,
     pub target: StarMapTargetPath,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HyperlinkRelationIndex {
-    pub hyperlink_id: String,
-    pub source_node_id: String,
 }
 
 /// 提取路径终点引用的**本地图**节点 ID。
@@ -152,16 +145,14 @@ pub struct CascadeIds {
     pub edge_ids: Vec<String>,
     pub embed_ids: Vec<String>,
     pub link_ids: Vec<String>,
-    pub hyperlink_ids: Vec<String>,
 }
 
-/// 计算删除本地 node 时需要级联删除的 edge/embed/link/hyperlink ID 集合。
+/// 计算删除本地 node 时需要级联删除的 edge/embed/link ID 集合。
 ///
 /// 级联规则（对每条路径检查终点引用 OR 第一段 portal 引用）：
 /// - edge: from 或 to 命中被删 node → 级联删 edge。
 /// - embed: host_path 命中被删 node → 级联删 embed。
 /// - link: source 或 target 命中被删 node → 级联删 link。
-/// - hyperlink: source 命中被删 node → 级联删 hyperlink。
 ///
 /// "命中"= `target_path_node_id(path, host) == Some(node_id)`（终点引用）
 /// OR `first_segment_portal_node_id(path, host) == Some(node_id)`（第一段
@@ -175,7 +166,6 @@ pub(super) fn node_cascade_ids<'a>(
     edges: impl Iterator<Item = &'a StarMapEdge>,
     embeds: impl Iterator<Item = &'a StarMapEmbed>,
     links: impl Iterator<Item = &'a StarMapLink>,
-    hyperlinks: impl Iterator<Item = &'a StarMapHyperlink>,
 ) -> CascadeIds {
     let mut result = CascadeIds::default();
     for e in edges {
@@ -211,24 +201,16 @@ pub(super) fn node_cascade_ids<'a>(
             result.link_ids.push(l.link_id.clone());
         }
     }
-    for hl in hyperlinks {
-        let s_target = target_path_node_id(&hl.source, host_starmap_id);
-        let s_first = first_segment_portal_node_id(&hl.source, host_starmap_id);
-        if s_target == Some(node_id) || s_first == Some(node_id) {
-            result.hyperlink_ids.push(hl.hyperlink_id.clone());
-        }
-    }
     result
 }
 
-/// 计算删除本地 embed instance 时需要级联删除的 edge/embed/link/hyperlink ID 集合。
+/// 计算删除本地 embed instance 时需要级联删除的 edge/embed/link ID 集合。
 ///
 /// 级联规则（对每条路径检查第一段 embed 引用）：
 /// - edge: from 或 to 第一段 `EnterEmbed` 命中被删 instance → 级联删 edge。
 /// - embed: host_path 第一段 `EnterEmbed` 命中被删 instance → 级联删 embed
 ///   （排除被删 instance 自己，避免自删）。
 /// - link: source 或 target 第一段 `EnterEmbed` 命中 → 级联删 link。
-/// - hyperlink: source 第一段 `EnterEmbed` 命中 → 级联删 hyperlink。
 ///
 /// "命中"= `first_segment_embed_instance_id(path, host) == Some(instance_id)`。
 /// 只看第一段：路径起点固定是宿主图，第一段对象才属于当前图；后续 segment
@@ -241,7 +223,6 @@ pub(super) fn embed_cascade_ids<'a>(
     edges: impl Iterator<Item = &'a StarMapEdge>,
     embeds: impl Iterator<Item = &'a StarMapEmbed>,
     links: impl Iterator<Item = &'a StarMapLink>,
-    hyperlinks: impl Iterator<Item = &'a StarMapHyperlink>,
 ) -> CascadeIds {
     let mut result = CascadeIds::default();
     for e in edges {
@@ -269,19 +250,13 @@ pub(super) fn embed_cascade_ids<'a>(
             result.link_ids.push(l.link_id.clone());
         }
     }
-    for hl in hyperlinks {
-        let s_first = first_segment_embed_instance_id(&hl.source, host_starmap_id);
-        if s_first == Some(instance_id) {
-            result.hyperlink_ids.push(hl.hyperlink_id.clone());
-        }
-    }
     result
 }
 
 /// 统一级联删除起点：待删除的本地 Node 或 Embed 实例。
 ///
 /// 由 [`cascade_closure_plan`] 接收，计算传递级联闭包——删除该对象后，
-/// 因路径失效而连带删除的所有 Edge/Embed/Link/Hyperlink。
+/// 因路径失效而连带删除的所有 Edge/Embed/Link。
 #[derive(Debug, Clone)]
 pub enum CascadeOrigin {
     /// 删除本地节点 `node_id`。
@@ -300,11 +275,11 @@ pub enum CascadeOrigin {
 /// [`embed_cascade_ids`]，把新增的被删 Embed 加入待处理队列，直到没有新增。
 /// 用 visited 集合防止无限循环。
 ///
-/// 只有被删 Embed 会引起下一层级联——删除 Edge/Link/Hyperlink 不会让其他
+/// 只有被删 Embed 会引起下一层级联——删除 Edge/Link 不会让其他
 /// 对象的路径失效（它们只是路径的载体，不是路径入口）；删除 Embed 会让
 /// 穿越它（第一段 `EnterEmbed`）的路径失效，因此需要继续扩展。
 ///
-/// 输出 [`CascadeIds`] 包含本轮会删除的全部 Edge/Embed/Link/Hyperlink ID
+/// 输出 [`CascadeIds`] 包含本轮会删除的全部 Edge/Embed/Link ID
 /// （不含 origin 本身）。纯函数：store 真实删除和 candidate 模拟删除都复用，
 /// 保证两者产生相同的最终对象集合。
 pub(super) fn cascade_closure_plan<'a>(
@@ -313,7 +288,6 @@ pub(super) fn cascade_closure_plan<'a>(
     edges: impl IntoIterator<Item = &'a StarMapEdge>,
     embeds: impl IntoIterator<Item = &'a StarMapEmbed>,
     links: impl IntoIterator<Item = &'a StarMapLink>,
-    hyperlinks: impl IntoIterator<Item = &'a StarMapHyperlink>,
 ) -> CascadeIds {
     use std::collections::HashSet;
 
@@ -321,19 +295,17 @@ pub(super) fn cascade_closure_plan<'a>(
     let edges: Vec<&StarMapEdge> = edges.into_iter().collect();
     let embeds: Vec<&StarMapEmbed> = embeds.into_iter().collect();
     let links: Vec<&StarMapLink> = links.into_iter().collect();
-    let hyperlinks: Vec<&StarMapHyperlink> = hyperlinks.into_iter().collect();
 
     let mut edge_ids: HashSet<String> = HashSet::new();
     let mut embed_ids: HashSet<String> = HashSet::new();
     let mut link_ids: HashSet<String> = HashSet::new();
-    let mut hyperlink_ids: HashSet<String> = HashSet::new();
 
     // 已计算过 embed_cascade_ids 的被删 Embed，防止无限循环。
     let mut visited_embeds: HashSet<String> = HashSet::new();
     // 待处理的被删 Embed 队列。
     let mut pending_embeds: Vec<String> = Vec::new();
 
-    // 合并一次级联结果中的 edge/link/hyperlink，返回该级联产生的 embed_ids
+    // 合并一次级联结果中的 edge/link，返回该级联产生的 embed_ids
     // （调用方负责 embed_ids 去重和 pending_embeds 入队，避免闭包同时
     // 可变借用 pending_embeds 导致后续 pop 冲突）。
     let mut merge_non_embed = |cascade: CascadeIds| {
@@ -342,9 +314,6 @@ pub(super) fn cascade_closure_plan<'a>(
         }
         for id in cascade.link_ids {
             link_ids.insert(id);
-        }
-        for id in cascade.hyperlink_ids {
-            hyperlink_ids.insert(id);
         }
         cascade.embed_ids
     };
@@ -357,7 +326,6 @@ pub(super) fn cascade_closure_plan<'a>(
             edges.iter().copied(),
             embeds.iter().copied(),
             links.iter().copied(),
-            hyperlinks.iter().copied(),
         ),
         CascadeOrigin::Embed(instance_id) => embed_cascade_ids(
             instance_id,
@@ -365,7 +333,6 @@ pub(super) fn cascade_closure_plan<'a>(
             edges.iter().copied(),
             embeds.iter().copied(),
             links.iter().copied(),
-            hyperlinks.iter().copied(),
         ),
     };
     for id in merge_non_embed(direct) {
@@ -385,7 +352,6 @@ pub(super) fn cascade_closure_plan<'a>(
             edges.iter().copied(),
             embeds.iter().copied(),
             links.iter().copied(),
-            hyperlinks.iter().copied(),
         );
         for id in merge_non_embed(cascade) {
             if embed_ids.insert(id.clone()) {
@@ -398,7 +364,6 @@ pub(super) fn cascade_closure_plan<'a>(
         edge_ids: edge_ids.into_iter().collect(),
         embed_ids: embed_ids.into_iter().collect(),
         link_ids: link_ids.into_iter().collect(),
-        hyperlink_ids: hyperlink_ids.into_iter().collect(),
     }
 }
 
@@ -408,7 +373,7 @@ pub(super) fn cascade_closure_plan<'a>(
 
 /// 跨画布引用的来源对象类型。
 ///
-/// 标识引用来自哪种对象（Edge/Link/Hyperlink/Embed）的哪个端点，
+/// 标识引用来自哪种对象（Edge/Link/Embed）的哪个端点，
 /// 用于删除保护时定位具体的外部依赖。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CrossCanvasRefSourceKind {
@@ -420,8 +385,6 @@ pub enum CrossCanvasRefSourceKind {
     LinkSource,
     /// Link 的 target 端。
     LinkTarget,
-    /// Hyperlink 的 source 端。
-    HyperlinkSource,
     /// Embed 的 host_path。
     EmbedHostPath,
 }
@@ -430,16 +393,16 @@ pub enum CrossCanvasRefSourceKind {
 ///
 /// 由 `PathDependencyIndex::query_dependents` 的删除保护查询产出
 ///（见 `facade::starmap_ops::graph::collect_external_refs`），收录 Edge 两端、
-/// Link 两端、Hyperlink source、Embed host_path 的路径引用，用于删除
+/// Link 两端、Embed host_path 的路径引用，用于删除
 /// Node（含 Anchor/Portal）、删除 Embed 以及修改 Portal/Embed 路由前的
 /// 外部依赖检查，覆盖所有路径引用来源，确保跨图语义完整。
 #[derive(Debug, Clone)]
 pub struct AllCrossCanvasReferenceInfo {
     /// 引用所在的宿主星图 ID。
     pub owner_starmap_id: String,
-    /// 引用来源类型（Edge/Link/Hyperlink/Embed 的哪个端点）。
+    /// 引用来源类型（Edge/Link/Embed 的哪个端点）。
     pub source_kind: CrossCanvasRefSourceKind,
-    /// 引用来源对象 ID（edge_id / link_id / hyperlink_id / instance_id）。
+    /// 引用来源对象 ID（edge_id / link_id / instance_id）。
     pub source_id: String,
     /// 被引用的路径。
     pub referenced_path: StarMapTargetPath,
@@ -456,11 +419,11 @@ pub struct AllCrossCanvasReferenceInfo {
 /// 删除保护据此返回"具体宿主、引用类型、引用 ID"，而不只是布尔拒绝。
 #[derive(Debug, Clone)]
 pub struct PathDependencySource {
-    /// 引用所在的宿主星图 ID（Edge/Link/Hyperlink/Embed 所属图）。
+    /// 引用所在的宿主星图 ID（Edge/Link/Embed 所属图）。
     pub owner_starmap_id: String,
-    /// 引用来源类型（Edge/Link/Hyperlink/Embed 的哪个端点）。
+    /// 引用来源类型（Edge/Link/Embed 的哪个端点）。
     pub source_kind: CrossCanvasRefSourceKind,
-    /// 引用来源对象 ID（edge_id / link_id / hyperlink_id / instance_id）。
+    /// 引用来源对象 ID（edge_id / link_id / instance_id）。
     pub source_id: String,
     /// 被引用的路径。
     pub referenced_path: StarMapTargetPath,
@@ -515,7 +478,7 @@ pub struct PathDependencyIndex {
 impl PathDependencyIndex {
     /// 从所有星图数据重建反向依赖索引。
     ///
-    /// 遍历每张星图的 Edge 两端、Link 两端、Hyperlink source、Embed host_path，
+    /// 遍历每张星图的 Edge 两端、Link 两端、Embed host_path，
     /// 对每条路径调用 [`extract_path_dependency_facts`] 提取全部依赖事实
     /// （途中穿越 + 终点），按 `(host_starmap_id, kind, object_id)` 入倒排表。
     ///
@@ -564,18 +527,6 @@ impl PathDependencyIndex {
                     &link.link_id,
                     &link.target,
                     &link.label,
-                    context,
-                )?;
-            }
-
-            // Hyperlink source
-            for hl in load_graph_hyperlinks(context, starmap_id)? {
-                index.add_path(
-                    starmap_id,
-                    CrossCanvasRefSourceKind::HyperlinkSource,
-                    &hl.hyperlink_id,
-                    &hl.source,
-                    &hl.label,
                     context,
                 )?;
             }
@@ -660,7 +611,7 @@ impl PathDependencyIndex {
     /// `PortalTraversal`；删除 Embed 时查 `EmbedTraversal`；修改 Portal 时查
     /// `PortalTraversal`；删除单个 Anchor 时查 `AnchorTarget` 并按 `target_anchor_id` 过滤。
     /// `CanvasEndpoint` 用于 `collect_candidate_edge_owners` 按最终画布 ID 收集
-    /// Edge 来源，覆盖 Starmap / ChapterRange / Entity / External 等非 Node/Anchor
+    /// Edge 来源，覆盖 Starmap / ChapterRange / Entity 等非 Node/Anchor
     /// 终点（问题1）。
     pub fn query_dependents(
         &self,
@@ -768,7 +719,7 @@ impl PathDependencyIndex {
 
     /// 先按 `(owner, kind, source_id)` 移除该来源的所有旧依赖事实，再插入新依赖事实。
     ///
-    /// 增删改操作后增量更新索引的统一入口：Edge/Link/Hyperlink/Embed 的 from/to/
+    /// 增删改操作后增量更新索引的统一入口：Edge/Link/Embed 的 from/to/
     /// source/host_path 变更后，先用本方法移除旧路径产生的全部 entry，再插入
     /// 新路径的 entry。避免每次从零扫描全库重建索引。
     ///
@@ -940,13 +891,13 @@ impl PathDependencyIndex {
     /// 不再遍历 `self.entries` 全表。`CanvasEndpoint` 事实由
     /// `extract_path_dependency_facts` 在路径成功到达终点画布时产出，
     /// `host_starmap_id` 和 `object_id` 均为最终画布 ID，覆盖
-    /// Starmap / ChapterRange / Entity / External 等非 Node/Anchor 终点。
+    /// Starmap / ChapterRange / Entity 等非 Node/Anchor 终点。
     fn collect_candidate_edge_owners(&self, current_starmap_id: &str) -> HashSet<String> {
         let mut owners: HashSet<String> = HashSet::new();
         // 用 CanvasEndpoint 定点查询，O(1) 命中，不遍历全表（问题3）。
         // CanvasEndpoint 事实由 extract_path_dependency_facts 在路径成功到达终点画布时产出，
         // host_starmap_id 和 object_id 均为最终画布 ID。
-        // 覆盖 Starmap / ChapterRange / Entity / External 等非 Node/Anchor 终点。
+        // 覆盖 Starmap / ChapterRange / Entity 等非 Node/Anchor 终点。
         let sources = self.query_dependents(
             current_starmap_id,
             &crate::starmap::graph::resolve::PathDependencyKind::CanvasEndpoint,
@@ -981,7 +932,7 @@ impl PathDependencyIndex {
     ///   `NodeTarget`/`AnchorTarget` 定点查询，候选集合是 `CanvasEndpoint` 候选
     ///   的子集，后续 route-aware 匹配（带 `Some(target)` 精确过滤）结果完全一致，
     ///   但避免在大图上读取任何曾经连到该画布的祖先图全部 Edge。
-    /// - `Starmap` / `ChapterRange` / `Entity` / `External` 终点：只产出
+    /// - `Starmap` / `ChapterRange` / `Entity` 终点：只产出
     ///   `CanvasEndpoint` 事实（无对应精确 kind），仍合并该画布的所有
     ///   `CanvasEndpoint` Edge owners。
     fn collect_candidate_edge_owners_for_target(
@@ -999,7 +950,7 @@ impl PathDependencyIndex {
             StarMapTargetDetail::Anchor { node_id, .. } => {
                 (PathDependencyKind::AnchorTarget, node_id.as_str())
             }
-            // Starmap / ChapterRange / Entity / External 终点只产出 CanvasEndpoint
+            // Starmap / ChapterRange / Entity 终点只产出 CanvasEndpoint
             // 事实（无对应精确 kind），合并该画布的所有 CanvasEndpoint Edge owners。
             _ => return self.collect_candidate_edge_owners(current_starmap_id),
         };
@@ -1134,7 +1085,6 @@ mod tests {
             edges: vec![edge],
             embeds: vec![embed],
             links: vec![],
-            hyperlinks: vec![],
             ..Default::default()
         };
         let graph_b = StarMapGraph {
@@ -1232,7 +1182,6 @@ mod tests {
             edges: vec![edge],
             embeds: vec![embed],
             links: vec![],
-            hyperlinks: vec![],
             ..Default::default()
         };
         let graph_b = StarMapGraph {
@@ -1388,7 +1337,6 @@ mod tests {
             edges: vec![edge_starmap],
             embeds: vec![embed_a],
             links: vec![],
-            hyperlinks: vec![],
             ..Default::default()
         };
 
@@ -1435,7 +1383,6 @@ mod tests {
             edges: vec![edge_to_node],
             embeds: vec![embed_m],
             links: vec![],
-            hyperlinks: vec![],
             ..Default::default()
         };
 
@@ -1529,7 +1476,7 @@ mod tests {
     }
 
     /// issue #902 第八轮复核：Starmap target 仍合并整张画布的 CanvasEndpoint
-    /// Edge owners（Starmap/ChapterRange/Entity/External 终点无精确 kind）。
+    /// Edge owners（Starmap/ChapterRange/Entity 终点无精确 kind）。
     ///
     /// 复用同一夹具，查询 target=Starmap 时候选应同时含 A 和 M——两条边都
     /// "到达画布 B"，CanvasEndpoint 是这类终点唯一的索引来源。

@@ -90,8 +90,6 @@ pub struct StarMapNodeContentDto {
     pub range_end: Option<u32>,
     pub entity_type: Option<String>,
     pub entity_id: Option<String>,
-    pub uri: Option<String>,
-    pub label: Option<String>,
 }
 
 // Issue #791 评论 5883783849: 手写 Default 返回合法的 kind:"empty"，
@@ -109,8 +107,6 @@ impl Default for StarMapNodeContentDto {
             range_end: None,
             entity_type: None,
             entity_id: None,
-            uri: None,
-            label: None,
         }
     }
 }
@@ -150,12 +146,6 @@ impl From<crate::starmap::semantic::StarMapNodeContent> for StarMapNodeContentDt
                 kind: "entityRef".to_string(),
                 entity_type: Some(entity_type),
                 entity_id: Some(entity_id),
-                ..Default::default()
-            },
-            crate::starmap::semantic::StarMapNodeContent::ExternalRef { uri, label } => Self {
-                kind: "externalRef".to_string(),
-                uri: Some(uri),
-                label,
                 ..Default::default()
             },
         }
@@ -205,17 +195,6 @@ impl TryFrom<StarMapNodeContentDto> for crate::starmap::semantic::StarMapNodeCon
                 Ok(Self::EntityRef {
                     entity_type,
                     entity_id,
-                })
-            }
-            "externalRef" => {
-                let uri = d.uri.filter(|s| !s.is_empty()).ok_or_else(|| {
-                    crate::error::Error::Other(
-                        "missing or empty required field uri for kind 'externalRef'".into(),
-                    )
-                })?;
-                Ok(Self::ExternalRef {
-                    uri,
-                    label: d.label,
                 })
             }
             unknown => Err(crate::error::Error::Other(format!(

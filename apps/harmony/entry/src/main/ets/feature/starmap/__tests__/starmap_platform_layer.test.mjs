@@ -258,8 +258,7 @@ function nodeTargetPath(starmapId, nodeId) {
       rangeStart: null,
       rangeEnd: null,
       entityType: null,
-      entityId: null,
-      uri: null
+      entityId: null
     }
   }
 }
@@ -746,7 +745,7 @@ console.log('8. 关系写入 JSON：id/时间戳平台端生成，target detail 
     'kind/label/payload 按 StarMapEdgeDto 字段出现')
   const detailKeys = [
     'type', 'nodeId', 'anchorId', 'projectId', 'volumeId', 'chapterId',
-    'rangeStart', 'rangeEnd', 'entityType', 'entityId', 'uri'
+    'rangeStart', 'rangeEnd', 'entityType', 'entityId'
   ]
   for (const side of ['from', 'to']) {
     assert(edge[side].starmapId === 'sm1' && eq(edge[side].segments, []),

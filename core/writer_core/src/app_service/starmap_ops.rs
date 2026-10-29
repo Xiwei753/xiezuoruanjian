@@ -1,9 +1,8 @@
 use crate::api::{
     CreateStarMapChildEmbedResultDto, StarMapConnectionInfoDto, StarMapEdgeDto,
     StarMapEdgePatchInputDto, StarMapEmbedDto, StarMapEmbedPatchInputDto,
-    StarMapEndpointSelectionDto, StarMapGraphDto, StarMapHyperlinkDto,
-    StarMapHyperlinkPatchInputDto, StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto,
-    StarMapNavigationLocationDto, StarMapNavigationRouteDto, StarMapNodeDto,
+    StarMapEndpointSelectionDto, StarMapGraphDto, StarMapLinkDto, StarMapLinkPatchInputDto,
+    StarMapMetaDto, StarMapNavigationLocationDto, StarMapNavigationRouteDto, StarMapNodeDto,
     StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPhasedSnapshotDto, StarMapPointDto,
     StarMapReferenceDto, StarMapResolvedPathDto, StarMapTargetDetailDto, StarMapTargetPathDto,
     WriterError,
@@ -104,6 +103,16 @@ impl super::WriterAppService {
         self.api.add_starmap_embed(&starmap_id, embed)
     }
 
+    pub fn embed_existing_starmap(
+        &self,
+        host_starmap_id: String,
+        child_starmap_id: String,
+        position: StarMapPointDto,
+    ) -> Result<StarMapEmbedDto, WriterError> {
+        self.api
+            .embed_existing_starmap(&host_starmap_id, &child_starmap_id, position)
+    }
+
     pub fn create_starmap_child_embed(
         &self,
         host_starmap_id: String,
@@ -192,40 +201,6 @@ impl super::WriterAppService {
         starmap_id: String,
     ) -> Result<crate::api::types::StarMapLinkListWithDiagnosticsDto, WriterError> {
         self.api.list_starmap_links(&starmap_id)
-    }
-
-    pub fn add_starmap_hyperlink(
-        &self,
-        starmap_id: String,
-        hl: StarMapHyperlinkDto,
-    ) -> Result<StarMapHyperlinkDto, WriterError> {
-        self.api.add_starmap_hyperlink(&starmap_id, hl)
-    }
-
-    pub fn update_starmap_hyperlink(
-        &self,
-        starmap_id: String,
-        hyperlink_id: String,
-        patch: StarMapHyperlinkPatchInputDto,
-    ) -> Result<StarMapHyperlinkDto, WriterError> {
-        self.api
-            .update_starmap_hyperlink(&starmap_id, &hyperlink_id, patch.into())
-    }
-
-    pub fn delete_starmap_hyperlink(
-        &self,
-        starmap_id: String,
-        hyperlink_id: String,
-    ) -> Result<bool, WriterError> {
-        self.api
-            .delete_starmap_hyperlink(&starmap_id, &hyperlink_id)
-    }
-
-    pub fn list_starmap_hyperlinks(
-        &self,
-        starmap_id: String,
-    ) -> Result<crate::api::types::StarMapHyperlinkListWithDiagnosticsDto, WriterError> {
-        self.api.list_starmap_hyperlinks(&starmap_id)
     }
 
     pub fn get_starmap_phased_snapshot(

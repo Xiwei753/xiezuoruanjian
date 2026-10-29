@@ -1,7 +1,7 @@
 //! # 星图包存储入口 — 唯一可写真相
 //!
 //! `StarMapStore` 是星图 CRUD、解析、保存和同步的唯一入口。
-//! 所有对星图对象（节点、边、嵌入、链接、超链接）的修改必须通过此类型执行。
+//! 所有对星图对象（节点、边、嵌入、链接）的修改必须通过此类型执行。
 //!
 //! ## 核心设计
 //!
@@ -19,7 +19,6 @@
 //! ├── nodes/<bucket>/<node_id>.json       -- 单个节点（bucket = hex 高 4 bit）
 //! ├── edges/<bucket>/<edge_id>.json       -- 单条边
 //! ├── embeds/<bucket>/<instance_id>.json -- 嵌入实例（含宿主图内 position）
-//! ├── hyperlinks/<bucket>/<hyperlink_id>.json    -- 超链接
 //! ├── links/<bucket>/<link_id>.json      -- 链接
 //! └── metadata/
 //!     └── recovery.json                  -- 解析失败对象的恢复记录
@@ -45,8 +44,8 @@ pub mod types;
 pub use meta::DeletedSinceLastSync;
 pub use meta::GraphMeta;
 pub use relation_index::{
-    CascadeIds, CascadeOrigin, EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex,
-    LinkRelationIndex, PathDependencyIndex, PathDependencySource,
+    CascadeIds, CascadeOrigin, EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex,
+    PathDependencyIndex, PathDependencySource,
 };
 pub use snapshot::{PhasedSnapshotRequest, StarMapPhasedSnapshot};
 pub use types::*;
@@ -58,19 +57,16 @@ pub struct StarMapStore {
     pub(super) edges: HashMap<String, StarMapEdge>,
     pub(super) embeds: HashMap<String, StarMapEmbed>,
     pub(super) links: HashMap<String, StarMapLink>,
-    pub(super) hyperlinks: HashMap<String, StarMapHyperlink>,
     pub(super) graph_meta: Option<GraphMeta>,
     pub(super) dirty_nodes: HashSet<String>,
     pub(super) dirty_edges: HashSet<String>,
     pub(super) dirty_embeds: HashSet<String>,
     pub(super) dirty_links: HashSet<String>,
-    pub(super) dirty_hyperlinks: HashSet<String>,
     pub(super) dirty_graph_meta: bool,
     pub(super) deleted_node_ids: HashSet<String>,
     pub(super) deleted_edge_ids: HashSet<String>,
     pub(super) deleted_embed_ids: HashSet<String>,
     pub(super) deleted_link_ids: HashSet<String>,
-    pub(super) deleted_hyperlink_ids: HashSet<String>,
     pub(super) package_revision: u64,
     pub(super) recovery_log: Vec<LoadDiagnostic>,
     pub(super) save_queue: VecDeque<SaveQueueEntry>,
@@ -86,19 +82,16 @@ impl StarMapStore {
             edges: HashMap::new(),
             embeds: HashMap::new(),
             links: HashMap::new(),
-            hyperlinks: HashMap::new(),
             graph_meta: None,
             dirty_nodes: HashSet::new(),
             dirty_edges: HashSet::new(),
             dirty_embeds: HashSet::new(),
             dirty_links: HashSet::new(),
-            dirty_hyperlinks: HashSet::new(),
             dirty_graph_meta: false,
             deleted_node_ids: HashSet::new(),
             deleted_edge_ids: HashSet::new(),
             deleted_embed_ids: HashSet::new(),
             deleted_link_ids: HashSet::new(),
-            deleted_hyperlink_ids: HashSet::new(),
             package_revision: 0,
             recovery_log: Vec::new(),
             save_queue: VecDeque::new(),
@@ -126,10 +119,6 @@ impl StarMapStore {
         self.embeds.len()
     }
 
-    pub fn hyperlink_count(&self) -> usize {
-        self.hyperlinks.len()
-    }
-
     pub fn link_count(&self) -> usize {
         self.links.len()
     }
@@ -146,10 +135,6 @@ impl StarMapStore {
         self.embeds.get(instance_id)
     }
 
-    pub fn get_hyperlink(&self, hyperlink_id: &str) -> Option<&StarMapHyperlink> {
-        self.hyperlinks.get(hyperlink_id)
-    }
-
     pub fn get_link(&self, link_id: &str) -> Option<&StarMapLink> {
         self.links.get(link_id)
     }
@@ -164,10 +149,6 @@ impl StarMapStore {
 
     pub fn all_embeds(&self) -> impl Iterator<Item = &StarMapEmbed> {
         self.embeds.values()
-    }
-
-    pub fn all_hyperlinks(&self) -> impl Iterator<Item = &StarMapHyperlink> {
-        self.hyperlinks.values()
     }
 
     pub fn all_links(&self) -> impl Iterator<Item = &StarMapLink> {
@@ -201,12 +182,6 @@ impl StarMapStore {
                 id,
             ));
         }
-        for id in &self.dirty_hyperlinks {
-            paths.push(crate::starmap::package_storage::hyperlink_rel_path(
-                &self.starmap_id,
-                id,
-            ));
-        }
         for id in &self.deleted_node_ids {
             paths.push(crate::starmap::package_storage::node_rel_path(
                 &self.starmap_id,
@@ -231,12 +206,6 @@ impl StarMapStore {
                 id,
             ));
         }
-        for id in &self.deleted_hyperlink_ids {
-            paths.push(crate::starmap::package_storage::hyperlink_rel_path(
-                &self.starmap_id,
-                id,
-            ));
-        }
         if self.dirty_graph_meta {
             paths.push(crate::starmap::package_storage::graph_meta_rel_path(
                 &self.starmap_id,
@@ -250,7 +219,6 @@ impl StarMapStore {
             || !self.dirty_edges.is_empty()
             || !self.dirty_embeds.is_empty()
             || !self.dirty_links.is_empty()
-            || !self.dirty_hyperlinks.is_empty()
             || self.dirty_graph_meta
     }
 
@@ -264,12 +232,10 @@ impl StarMapStore {
             edges: self.dirty_edges.clone(),
             embeds: self.dirty_embeds.clone(),
             links: self.dirty_links.clone(),
-            hyperlinks: self.dirty_hyperlinks.clone(),
             deleted_nodes: self.deleted_node_ids.clone(),
             deleted_edges: self.deleted_edge_ids.clone(),
             deleted_embeds: self.deleted_embed_ids.clone(),
             deleted_links: self.deleted_link_ids.clone(),
-            deleted_hyperlinks: self.deleted_hyperlink_ids.clone(),
         }
     }
 

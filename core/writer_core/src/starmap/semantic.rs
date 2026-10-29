@@ -1,6 +1,6 @@
 //! # 星图语义模型（Core 层）
 //!
-//! 定义节点内容类型（内联文本、章节引用、实体引用、外部链接）、
+//! 定义节点内容类型（内联文本、章节引用、实体引用）、
 //! 锚点、链接、嵌入和传送门等语义结构。
 //! 这些类型是星图数据模型的跨平台契约，平台端只负责渲染和交互。
 
@@ -29,10 +29,6 @@ pub enum StarMapNodeContent {
     EntityRef {
         entity_type: String,
         entity_id: String,
-    },
-    ExternalRef {
-        uri: String,
-        label: Option<String>,
     },
 }
 
@@ -73,16 +69,6 @@ impl StarMapNodeContent {
                 }
                 if !entity_id.is_empty() {
                     parts.push(entity_id.clone());
-                }
-            }
-            StarMapNodeContent::ExternalRef { uri, label } => {
-                if let Some(ref l) = label {
-                    if !l.is_empty() {
-                        parts.push(l.clone());
-                    }
-                }
-                if !uri.is_empty() {
-                    parts.push(uri.clone());
                 }
             }
             StarMapNodeContent::Empty => {}
@@ -144,9 +130,6 @@ pub enum StarMapAnchorTarget {
     },
     Starmap {
         starmap_id: String,
-    },
-    External {
-        uri: String,
     },
     Custom {
         payload: serde_json::Value,
@@ -266,9 +249,6 @@ pub enum StarMapTargetDetail {
     Entity {
         entity_type: String,
         entity_id: String,
-    },
-    External {
-        uri: String,
     },
 }
 

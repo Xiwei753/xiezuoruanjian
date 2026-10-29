@@ -45,6 +45,12 @@ Kirigami.ApplicationWindow {
     // 星图等专用色彩的桥接职责。
     color: Kirigami.Theme.backgroundColor
 
+    // Issue #1014：整窗唯一的页面骨架尺寸 / 折叠状态，注入所有主页面与顶栏。
+    DesktopLayoutState {
+        id: desktopLayout
+        settingsBackendRef: settingsBackend
+    }
+
     // Issue #912：深浅色以「实际显示的 KDE/Breeze 调色板」为准，而不是
     // Qt.styleHints.colorScheme。壳层底色来自 Kirigami.Theme，因此用它的
     // backgroundColor 与 textColor 亮度对比得到真实深浅；Kirigami.Theme 的
@@ -811,10 +817,6 @@ Kirigami.ApplicationWindow {
 
     function navigateAnnotationTarget(target) {
         if (!target) return false
-        if (target.externalUrl) {
-            Qt.openUrlExternally(String(target.externalUrl))
-            return true
-        }
         var ref = target.objectRef || target
         if (!ref || !ref.kind) return false
         var projectId = String(ref.projectId || "")
@@ -1084,10 +1086,10 @@ Kirigami.ApplicationWindow {
                 window.searchPathTail(result.path) || qsTr("星图")
             )
             if ((target.nodeId || target.edgeId || target.embedId
-                    || target.linkId || target.hyperlinkId)
+                    || target.linkId)
                     && result.scope !== "starmapTitle") {
                 // 不立即关闭浮层：等目标真正选中并居中后再关闭；
-                // 链接/超链接无法解析 owner 时保留搜索并提示，而不是只打开星图。
+                // 内部链接无法解析 owner 时保留搜索并提示，而不是只打开星图。
                 window.schedulePendingStarmapSearchTarget(target)
             } else {
                 globalSearchOverlay.close()
@@ -1146,11 +1148,16 @@ Kirigami.ApplicationWindow {
 
     property alias appState: appController.appState
     readonly property bool rootHasWorkspace: workspaceBackend !== null && workspaceBackend.has_workspace === true
-    // Issue #977：全窗口顶栏与左侧一级导航共用同一宽度，品牌区不再单独猜 160/64。
-    readonly property int desktopNavigationWidth: 200
     readonly property string desktopTopBarMode: appController.inWriting
         ? "writing"
         : (appController.inStarmap ? "starmap" : "hub")
+    // Issue #1014：页面 key 由当前页面 / Hub tab 决定；顶栏和页面共用同一 key。
+    readonly property string desktopPageKey: desktopTopBarMode === "writing"
+        ? "writing"
+        : (desktopTopBarMode === "starmap"
+           ? "starmap.workspace"
+           : desktopLayout.hubPageKey(appController.hubTab))
+    readonly property bool topBarCollapsed: desktopLayout.isCollapsed("writing", "topBar")
 
     property string previousEditorText: ""
 
@@ -1522,18 +1529,16 @@ Kirigami.ApplicationWindow {
         DesktopTopBar {
             Layout.fillWidth: true
             visible: rootHasWorkspace
+                     && !(window.desktopTopBarMode === "writing" && window.topBarCollapsed)
             mode: window.desktopTopBarMode
-            navigationWidth: window.desktopNavigationWidth
+            pageKey: window.desktopPageKey
+            layoutState: desktopLayout
             dt: designTokens
             appState: window.appState
             starmapTitle: appController.starmapTitle
             starmapFocusIsRoot: starmapWorkspaceLoader.item
                 && starmapWorkspaceLoader.item.focusIsRoot !== undefined
                 ? starmapWorkspaceLoader.item.focusIsRoot : true
-            toolbarLeadingWidth: writingWorkspaceLoader.item
-                ? writingWorkspaceLoader.item.toolbarLeadingWidth : 200
-            toolbarTrailingWidth: writingWorkspaceLoader.item
-                ? writingWorkspaceLoader.item.toolbarTrailingWidth : 200
             currentFontSize: settingsBackend ? settingsBackend.setting_font_size : 16
             currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
             firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
@@ -1583,6 +1588,19 @@ Kirigami.ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
+            // Issue #1014：顶栏折叠箭头属于应用壳层，浮在写作区顶部，不占布局高度。
+            // 顶栏收起后同一位置成为贴边恢复入口；返回作品列表仍由顶栏 go-previous 负责。
+            PaneFoldButton {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.topMargin: Kirigami.Units.smallSpacing
+                z: 100
+                visible: rootHasWorkspace && window.desktopTopBarMode === "writing"
+                dt: designTokens
+                glyph: window.topBarCollapsed ? "\u2304" : "\u2303"
+                onTriggered: desktopLayout.toggleCollapsed("writing", "topBar")
+            }
+
         // StarMapWorkspace: shown when in starmap editor mode
         Loader {
             id: starmapWorkspaceLoader
@@ -1590,6 +1608,8 @@ Kirigami.ApplicationWindow {
             active: rootHasWorkspace && appController.inStarmap
             sourceComponent: StarMapWorkspace {
                 dt: designTokens
+                layoutState: desktopLayout
+                pageKey: "starmap.workspace"
                 starmapBackendRef: starmapBackend
                 annotationBackendRef: annotationBackend
                 searchBackendRef: searchBackend
@@ -1628,7 +1648,7 @@ Kirigami.ApplicationWindow {
             active: rootHasWorkspace && appController.route === "hub"
             sourceComponent: CreativeHub {
                 dt: designTokens
-                navigationWidth: window.desktopNavigationWidth
+                layoutState: desktopLayout
                 projectBackendRef: projectBackend
             editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
@@ -1692,6 +1712,8 @@ Kirigami.ApplicationWindow {
             }
             sourceComponent: WritingWorkspace {
                 dt: designTokens
+                layoutState: desktopLayout
+                pageKey: "writing"
                 projectBackendRef: projectBackend
                 editorBackendRef: editorBackend
                 // Issue #933：设置/导航后端显式交给写作区，不再由子页面读全局 context property。
@@ -1710,6 +1732,8 @@ Kirigami.ApplicationWindow {
                 searchBackendRef: searchBackend
                 aiAvailable: settingsBackend.ai_available
                 aiEnabled: settingsBackend.ai_enabled
+                // Issue #1014：写作栏 AI 面板与设置页共享 Agent CLI 清单/选择。
+                agentCliBackendRef: agentCliBackend
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId
                 // Issue #757 评论 5818193510 第 5 点：传入 syncBackend 给 WritingWorkspace，
@@ -2017,6 +2041,8 @@ Kirigami.ApplicationWindow {
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend
             themeControllerRef: themeController
+            // Issue #1014：设置页 AI 组与写作栏 AI 面板使用同一份清单/选择。
+            agentCliBackendRef: agentCliBackend
             beforeSyncHook: function() { return window.preSyncBarrier() }
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));

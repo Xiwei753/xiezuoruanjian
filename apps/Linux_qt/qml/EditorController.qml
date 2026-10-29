@@ -437,7 +437,6 @@ QtObject {
 
     function annotationTargetLabel(target, namedEntries, matchedText) {
         if (!target) return qsTr("链接目标")
-        if (target.externalUrl) return String(target.externalUrl)
         var ref = target.objectRef || target
         if (!ref || !ref.kind) return qsTr("链接目标")
         if (ref.kind === "namedEntry") {
@@ -540,7 +539,7 @@ QtObject {
         for (var t = 0; t < targets.length; ++t) {
             var rawTarget = targets[t]
             var target = rawTarget && rawTarget.objectRef !== undefined
-                ? rawTarget : { objectRef: rawTarget, externalUrl: null }
+                ? rawTarget : { objectRef: rawTarget }
             var key = JSON.stringify(target)
             if (seen[key]) continue
             seen[key] = true
@@ -571,15 +570,11 @@ QtObject {
             annotationLinkActivationFailed(qsTr("链接目标已删除或不存在"))
             return false
         }
-        if (state !== "exists" && state !== "externalUrl") {
+        if (state !== "exists") {
             annotationLinkActivationFailed(qsTr("无法解析链接目标"))
             return false
         }
         var target = choice.target
-        if (state === "externalUrl" && target && target.externalUrl) {
-            Qt.openUrlExternally(String(target.externalUrl))
-            return true
-        }
         var ref = target ? (target.objectRef || target) : null
         if (!ref || !ref.kind) return false
         if (ref.kind === "textAnchor") {

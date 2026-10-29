@@ -7,9 +7,6 @@ import uniffi.writer_core.StarMapEdgePatchInputDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapEmbedPatchInputDto
 import uniffi.writer_core.StarMapGraphDto
-import uniffi.writer_core.StarMapHyperlinkDto
-import uniffi.writer_core.StarMapHyperlinkListWithDiagnosticsDto
-import uniffi.writer_core.StarMapHyperlinkPatchInputDto
 import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapLinkPatchInputDto
 import uniffi.writer_core.StarMapMetaDto
@@ -67,24 +64,6 @@ internal interface StarMapBridgeOps {
         starmapId: String,
         linkId: String,
     ): BridgeResult<Boolean>
-
-    fun addStarmapHyperlink(
-        starmapId: String,
-        hl: StarMapHyperlinkDto,
-    ): BridgeResult<StarMapHyperlinkDto>
-
-    fun updateStarmapHyperlink(
-        starmapId: String,
-        hyperlinkId: String,
-        patch: StarMapHyperlinkPatchInputDto,
-    ): BridgeResult<StarMapHyperlinkDto>
-
-    fun deleteStarmapHyperlink(
-        starmapId: String,
-        hyperlinkId: String,
-    ): BridgeResult<Boolean>
-
-    fun listStarmapHyperlinks(starmapId: String): BridgeResult<StarMapHyperlinkListWithDiagnosticsDto>
 
     fun getStarmapPhasedSnapshot(
         starmapId: String,

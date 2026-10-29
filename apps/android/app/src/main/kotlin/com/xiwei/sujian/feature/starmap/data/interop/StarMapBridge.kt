@@ -9,8 +9,6 @@ import uniffi.writer_core.StarMapEdgePatchInputDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapEmbedPatchInputDto
 import uniffi.writer_core.StarMapGraphDto
-import uniffi.writer_core.StarMapHyperlinkDto
-import uniffi.writer_core.StarMapHyperlinkPatchInputDto
 import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapLinkPatchInputDto
 import uniffi.writer_core.StarMapMetaDto
@@ -112,38 +110,6 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.deleteStarmapLink(starmapId, linkId)
-        }
-
-    override fun addStarmapHyperlink(
-        starmapId: String,
-        hl: StarMapHyperlinkDto,
-    ): BridgeResult<StarMapHyperlinkDto> =
-        holder.wrapResult {
-            holder.service.addStarmapHyperlink(starmapId, hl)
-        }
-
-    override fun updateStarmapHyperlink(
-        starmapId: String,
-        hyperlinkId: String,
-        patch: StarMapHyperlinkPatchInputDto,
-    ): BridgeResult<StarMapHyperlinkDto> =
-        holder.wrapResult {
-            holder.service.updateStarmapHyperlink(starmapId, hyperlinkId, patch)
-        }
-
-    override fun deleteStarmapHyperlink(
-        starmapId: String,
-        hyperlinkId: String,
-    ): BridgeResult<Boolean> =
-        holder.wrapResult {
-            holder.service.deleteStarmapHyperlink(starmapId, hyperlinkId)
-        }
-
-    override fun listStarmapHyperlinks(
-        starmapId: String,
-    ): BridgeResult<uniffi.writer_core.StarMapHyperlinkListWithDiagnosticsDto> =
-        holder.wrapResult {
-            holder.service.listStarmapHyperlinks(starmapId)
         }
 
     override fun getStarmapPhasedSnapshot(

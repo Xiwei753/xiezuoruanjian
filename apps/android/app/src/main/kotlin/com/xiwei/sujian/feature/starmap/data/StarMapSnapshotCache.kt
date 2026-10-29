@@ -9,7 +9,6 @@ import com.xiwei.sujian.feature.starmap.data.model.StarMapPhasedSnapshotResult
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapGraphDto
-import uniffi.writer_core.StarMapHyperlinkDto
 import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapNodeDto
 
@@ -25,7 +24,6 @@ internal data class StarMapRawCache(
     val edges: MutableMap<String, StarMapEdgeDto> = mutableMapOf(),
     val embeds: MutableMap<String, StarMapEmbedDto> = mutableMapOf(),
     val links: MutableMap<String, StarMapLinkDto> = mutableMapOf(),
-    val hyperlinks: MutableMap<String, StarMapHyperlinkDto> = mutableMapOf(),
     var loadPhase: String = "CurrentViewportObjects",
     var packageRevision: ULong = 0u,
     var sinceRevision: ULong = 0u,
@@ -35,7 +33,6 @@ internal data class StarMapRawCache(
     val deletedEdgeIds: MutableSet<String> = mutableSetOf(),
     val deletedEmbedIds: MutableSet<String> = mutableSetOf(),
     val deletedLinkIds: MutableSet<String> = mutableSetOf(),
-    val deletedHyperlinkIds: MutableSet<String> = mutableSetOf(),
 )
 
 internal fun StarMapRawCache.toSnapshotResult(): StarMapPhasedSnapshotResult {
@@ -51,7 +48,6 @@ internal fun StarMapRawCache.toSnapshotResult(): StarMapPhasedSnapshotResult {
                 ),
             embeds = embeds.values.map { it.toModel() },
             links = links.values.map { it.toModel() },
-            hyperlinks = hyperlinks.values.map { it.toModel() },
             loadPhase = loadPhase,
             packageRevision = packageRevision,
             sinceRevision = sinceRevision,
@@ -121,9 +117,6 @@ internal class StarMapSnapshotCache {
         for ((linkId, linkDto) in incoming.links) {
             existing.links[linkId] = linkDto
         }
-        for ((hyperlinkId, hlDto) in incoming.hyperlinks) {
-            existing.hyperlinks[hyperlinkId] = hlDto
-        }
         if (incoming.loadPhase != "CurrentViewportObjects" || existing.loadPhase == "CurrentViewportObjects") {
             existing.loadPhase = incoming.loadPhase
         }
@@ -152,10 +145,6 @@ internal class StarMapSnapshotCache {
             existing.links.remove(deletedId)
             existing.deletedLinkIds.add(deletedId)
         }
-        for (deletedId in incoming.deletedHyperlinkIds) {
-            existing.hyperlinks.remove(deletedId)
-            existing.deletedHyperlinkIds.add(deletedId)
-        }
         rebuildGraph(existing)
     }
 
@@ -169,7 +158,6 @@ internal class StarMapSnapshotCache {
                 edges = cache.edges.values.toList(),
                 embeds = cache.embeds.values.toList(),
                 links = cache.links.values.toList(),
-                hyperlinks = cache.hyperlinks.values.toList(),
             )
     }
 
@@ -199,13 +187,6 @@ internal class StarMapSnapshotCache {
         linkId: String,
     ) {
         rawCacheByStarmapId[starmapId]?.links?.remove(linkId)
-    }
-
-    fun removeHyperlink(
-        starmapId: String,
-        hyperlinkId: String,
-    ) {
-        rawCacheByStarmapId[starmapId]?.hyperlinks?.remove(hyperlinkId)
     }
 
     fun putNode(
@@ -238,13 +219,5 @@ internal class StarMapSnapshotCache {
         dto: StarMapLinkDto,
     ) {
         rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.links[linkId] = dto
-    }
-
-    fun putHyperlink(
-        starmapId: String,
-        hyperlinkId: String,
-        dto: StarMapHyperlinkDto,
-    ) {
-        rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }.hyperlinks[hyperlinkId] = dto
     }
 }

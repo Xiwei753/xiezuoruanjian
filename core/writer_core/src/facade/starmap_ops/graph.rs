@@ -1,4 +1,4 @@
-//! 星图 graph / 节点 / 边 / 嵌入 / 链接 / 超链接的 facade 方法。
+//! 星图 graph / 节点 / 边 / 嵌入 / 内部链接的 facade 方法。
 //!
 //! 与 `starmap_ops.rs` 属于同一个 `WriterCore` 类型，只是按关注点拆成两个固有
 //! `impl`：星图本身的增删改查与 store 生命周期在 `starmap_ops.rs`，图数据操作
@@ -6,7 +6,7 @@
 
 use super::patch::{
     apply_deletion_to_graph, apply_edge_patch_to_graph, apply_embed_patch_to_graph,
-    apply_hyperlink_update_to_graph, apply_link_patch_to_graph, apply_node_patch_to_graph,
+    apply_link_patch_to_graph, apply_node_patch_to_graph,
 };
 use super::*;
 
@@ -20,6 +20,29 @@ use super::*;
 pub struct CreateCrossCanvasEdgeResult {
     pub owner_starmap_id: String,
     pub edge: crate::starmap::types::StarMapEdge,
+}
+
+/// 为首页拖放选择一个不与现有 Embed 重叠的初始位置。
+fn first_free_embed_position(
+    graph: &crate::starmap::types::StarMapGraph,
+) -> crate::starmap::types::StarMapPoint {
+    const COLUMN_STEP: f64 = 320.0;
+    const ROW_STEP: f64 = 220.0;
+    for row in 0..100 {
+        for column in 0..4 {
+            let candidate = crate::starmap::types::StarMapPoint {
+                x: column as f64 * COLUMN_STEP,
+                y: row as f64 * ROW_STEP,
+            };
+            if graph.embeds.iter().all(|embed| {
+                (embed.position.x - candidate.x).abs() > 1.0
+                    || (embed.position.y - candidate.y).abs() > 1.0
+            }) {
+                return candidate;
+            }
+        }
+    }
+    crate::starmap::types::StarMapPoint::default()
 }
 
 impl super::super::WriterCore {
@@ -406,6 +429,82 @@ impl super::super::WriterCore {
         Ok(result)
     }
 
+    /// 将一个已存在的星图嵌入宿主星图，并把它从一级星图列表移出。
+    ///
+    /// Embed 与根身份更新都由同一 Workspace 写锁保护；同一星图仍可被多处
+    /// Embed 指向，只有第一次嵌入会改变根身份。
+    pub fn embed_existing_root_starmap(
+        &self,
+        host_starmap_id: &str,
+        child_starmap_id: &str,
+        position: crate::starmap::types::StarMapPoint,
+    ) -> Result<crate::starmap::types::StarMapEmbed> {
+        if host_starmap_id == child_starmap_id {
+            return Err(crate::error::Error::Other(
+                "cannot embed a starmap into itself".to_string(),
+            ));
+        }
+        let child = crate::starmap::get_starmap(&self.app_data_root, child_starmap_id)?;
+        // 首页拖放没有画布坐标：默认位置若已被占用，就在宿主图里找第一个空位。
+        let position = if position.x == 0.0 && position.y == 0.0 {
+            let host = self.get_starmap_graph(host_starmap_id)?;
+            first_free_embed_position(&host)
+        } else {
+            position
+        };
+        let now = crate::starmap::now_epoch();
+        let embed = crate::starmap::types::StarMapEmbed {
+            instance_id: crate::storage::journal::starmap_child_embed::new_embed_instance_id(),
+            target_starmap_id: child.starmap_id.clone(),
+            label: Some(child.title),
+            position,
+            host_path: crate::starmap::types::StarMapTargetPath {
+                starmap_id: host_starmap_id.to_string(),
+                segments: Vec::new(),
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            provenance: crate::starmap::semantic::StarMapProvenance::default(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let created = self.add_starmap_embed(host_starmap_id, embed)?;
+        if let Err(error) =
+            crate::starmap::set_starmap_root(&self.app_data_root, child_starmap_id, false)
+        {
+            // 根身份写失败时回滚刚写入的 Embed，避免出现“没有根入口但已嵌入”。
+            let _ = self.delete_starmap_embed(host_starmap_id, &created.instance_id);
+            let _ = self.flush_starmap_store(host_starmap_id);
+            return Err(error);
+        }
+        Ok(created)
+    }
+
+    /// 删除最后一个指向该星图的 Embed 后恢复它的一级身份。
+    pub fn restore_root_starmap_if_unembedded(&self, starmap_id: &str) -> Result<bool> {
+        let metas = self.list_starmaps()?;
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for meta in metas {
+            let store = stores
+                .entry(meta.starmap_id.clone())
+                .or_insert_with(|| StarMapStore::new(&self.app_data_root, &meta.starmap_id));
+            store.ensure_fully_loaded()?;
+            if store
+                .to_starmap_graph()
+                .embeds
+                .iter()
+                .any(|embed| embed.target_starmap_id == starmap_id)
+            {
+                return Ok(false);
+            }
+        }
+        drop(stores);
+        crate::starmap::set_starmap_root(&self.app_data_root, starmap_id, true)
+    }
+
     pub fn update_starmap_embed(
         &self,
         starmap_id: &str,
@@ -551,7 +650,6 @@ impl super::super::WriterCore {
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         store.enqueue_save(SaveQueueEntry::DeleteLink);
-        store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
         // 增量更新持久化路径依赖索引：移除所有被删来源的依赖事实。
@@ -596,14 +694,6 @@ impl super::super::WriterCore {
                 lid,
             );
         }
-        for hlid in &cascade.hyperlink_ids {
-            self.remove_source_from_path_dependency_index(
-                starmap_id,
-                &CrossCanvasRefSourceKind::HyperlinkSource,
-                hlid,
-            );
-        }
-
         Ok(())
     }
 
@@ -765,163 +855,6 @@ impl super::super::WriterCore {
             starmap_id,
             &CrossCanvasRefSourceKind::LinkTarget,
             link_id,
-        );
-
-        Ok(())
-    }
-
-    pub fn list_starmap_hyperlinks(
-        &self,
-        starmap_id: &str,
-    ) -> Result<crate::starmap::store::ListWithDiagnostics<crate::starmap::types::StarMapHyperlink>>
-    {
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_fully_loaded()?;
-        store.list_hyperlinks_with_diagnostics()
-    }
-
-    pub fn add_starmap_hyperlink(
-        &self,
-        starmap_id: &str,
-        hl: crate::starmap::types::StarMapHyperlink,
-    ) -> Result<crate::starmap::types::StarMapHyperlink> {
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        {
-            let store = stores
-                .entry(starmap_id.to_string())
-                .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
-        }
-
-        let candidate = {
-            let store = Self::get_store_or_err(&stores, starmap_id)?;
-            let mut g = store.to_starmap_graph();
-            g.hyperlinks.push(hl.clone());
-            g
-        };
-        validation::validate_graph(
-            &self.build_resolver_context_from_stores(&stores, &candidate),
-            &candidate,
-        )?;
-
-        // 两阶段索引更新（问题2）：先 prepare source 的事实（可失败，不修改状态）。
-        let context = self.build_resolver_context(&stores);
-        use crate::starmap::graph::resolve::extract_path_dependency_facts;
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        let source_facts = extract_path_dependency_facts(&context, &hl.source)?;
-
-        let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-        let result = store.add_hyperlink(hl)?;
-        store.enqueue_save(SaveQueueEntry::Hyperlink);
-        store.enqueue_save(SaveQueueEntry::GraphMeta);
-
-        // replace（不可失败）：用预计算的事实更新索引。
-        self.replace_source_facts_in_path_dependency_index(
-            starmap_id,
-            CrossCanvasRefSourceKind::HyperlinkSource,
-            &result.hyperlink_id,
-            &result.source,
-            &result.label,
-            source_facts,
-        );
-
-        Ok(result)
-    }
-
-    pub fn update_starmap_hyperlink(
-        &self,
-        starmap_id: &str,
-        hyperlink_id: &str,
-        patch: &crate::starmap::types::StarMapHyperlinkPatch,
-    ) -> Result<crate::starmap::types::StarMapHyperlink> {
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        {
-            let store = stores
-                .entry(starmap_id.to_string())
-                .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            store.ensure_fully_loaded()?;
-            store.ensure_hyperlink_loaded(hyperlink_id)?;
-        }
-
-        // hyperlink update 统一走 validate 以保持引用完整性（source 路径可能变）。
-        let candidate = {
-            let store = Self::get_store_or_err(&stores, starmap_id)?;
-            let mut g = store.to_starmap_graph();
-            apply_hyperlink_update_to_graph(&mut g, hyperlink_id, patch)?;
-            g
-        };
-        validation::validate_graph(
-            &self.build_resolver_context_from_stores(&stores, &candidate),
-            &candidate,
-        )?;
-
-        // 两阶段索引更新（问题2）：先 prepare source 的事实（可失败，不修改状态）。
-        // 用 candidate 中 patch 应用后的 hyperlink source。
-        let context = self.build_resolver_context(&stores);
-        use crate::starmap::graph::resolve::extract_path_dependency_facts;
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        let updated_hl = candidate
-            .hyperlinks
-            .iter()
-            .find(|h| h.hyperlink_id == hyperlink_id)
-            .ok_or_else(|| {
-                crate::error::Error::Other(format!(
-                    "internal error: updated hyperlink not found in candidate: {}",
-                    hyperlink_id
-                ))
-            })?;
-        let source_facts = extract_path_dependency_facts(&context, &updated_hl.source)?;
-
-        let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-        let result = store.update_hyperlink(hyperlink_id, patch)?;
-        store.enqueue_save(SaveQueueEntry::Hyperlink);
-        store.enqueue_save(SaveQueueEntry::GraphMeta);
-
-        // replace（不可失败）：用预计算的事实更新索引。
-        self.replace_source_facts_in_path_dependency_index(
-            starmap_id,
-            CrossCanvasRefSourceKind::HyperlinkSource,
-            &result.hyperlink_id,
-            &result.source,
-            &result.label,
-            source_facts,
-        );
-
-        Ok(result)
-    }
-
-    pub fn delete_starmap_hyperlink(&self, starmap_id: &str, hyperlink_id: &str) -> Result<()> {
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let store = stores
-            .entry(starmap_id.to_string())
-            .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_fully_loaded()?;
-        store.ensure_hyperlink_loaded(hyperlink_id)?;
-        store.delete_hyperlink(hyperlink_id)?;
-        store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
-        store.enqueue_save(SaveQueueEntry::GraphMeta);
-
-        // 增量更新持久化路径依赖索引：移除被删 Hyperlink 的 source 依赖事实。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.remove_source_from_path_dependency_index(
-            starmap_id,
-            &CrossCanvasRefSourceKind::HyperlinkSource,
-            hyperlink_id,
         );
 
         Ok(())

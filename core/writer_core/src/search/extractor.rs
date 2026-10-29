@@ -294,17 +294,12 @@ fn extract_annotation_named_entry(entry: &NamedEntry) -> IndexEntry {
 
 fn extract_annotation_link_entry(store: &AnnotationStore, link: &ObjectLink) -> Result<IndexEntry> {
     let source = object_ref_search_text(store, &link.source)?;
-    let (title, target_text) = match &link.target {
-        LinkTarget::ExternalUrl(url) => (url.clone(), url.clone()),
-        LinkTarget::Object(target) => {
-            let text = object_ref_search_text(store, target)?;
-            (text.clone(), text)
-        }
-    };
-    let title = if title.is_empty() {
+    let LinkTarget::Object(target) = &link.target;
+    let target_text = object_ref_search_text(store, target)?;
+    let title = if target_text.is_empty() {
         format!("链接 {}", link.link_id)
     } else {
-        title
+        target_text.clone()
     };
     Ok(IndexEntry {
         object_id: format!(
@@ -462,30 +457,6 @@ pub fn extract_starmap_entries(
                                 &eid,
                                 bound_project,
                                 label,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        let hyperlinks_dir = starmap_path.join("hyperlinks");
-        if hyperlinks_dir.exists() {
-            if let Ok(hl_files) = scan_json_files(&hyperlinks_dir) {
-                for (hid, hl_file) in hl_files {
-                    let hl: Option<crate::starmap::types::StarMapHyperlink> =
-                        std::fs::read_to_string(&hl_file)
-                            .ok()
-                            .and_then(|s| serde_json::from_str(&s).ok());
-                    if let Some(h) = hl {
-                        let hl_title = h.label.as_deref().unwrap_or("");
-                        if !hl_title.is_empty() || !h.target_uri.is_empty() {
-                            entries.push(extract_starmap_hyperlink_entry(
-                                &sid,
-                                &hid,
-                                bound_project,
-                                hl_title,
-                                &h.target_uri,
                             ));
                         }
                     }
@@ -870,36 +841,6 @@ pub fn extract_starmap_link_entry(
             starmap_id: Some(starmap_id.to_string()),
             node_id: None,
             link_id: Some(link_id.to_string()),
-            setting_key: None,
-            ..Default::default()
-        },
-    }
-}
-
-pub fn extract_starmap_hyperlink_entry(
-    starmap_id: &str,
-    hyperlink_id: &str,
-    project_id: Option<&str>,
-    title: &str,
-    url: &str,
-) -> IndexEntry {
-    let body = if url.is_empty() {
-        title.to_string()
-    } else {
-        format!("{} {}", title, url)
-    };
-    IndexEntry {
-        object_id: format!("starmap_hyperlink:{}:{}", starmap_id, hyperlink_id),
-        scope: SearchScope::StarmapHyperlink,
-        title: title.to_string(),
-        body,
-        target: SearchTarget {
-            project_id: project_id.map(|s| s.to_string()),
-            volume_id: None,
-            chapter_id: None,
-            starmap_id: Some(starmap_id.to_string()),
-            node_id: None,
-            hyperlink_id: Some(hyperlink_id.to_string()),
             setting_key: None,
             ..Default::default()
         },

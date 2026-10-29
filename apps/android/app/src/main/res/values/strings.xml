@@ -434,7 +434,6 @@
     <string name="annotation_name_hint">名称</string>
     <string name="annotation_links">添加链接</string>
     <string name="annotation_search_links_hint">搜索作品、章节或星图对象</string>
-    <string name="annotation_link_url_hint">外部网址</string>
     <string name="annotation_outgoing">此对象的链接</string>
     <string name="annotation_backlinks">反向引用</string>
     <string name="annotation_no_links">还没有链接</string>

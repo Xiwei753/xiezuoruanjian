@@ -126,8 +126,7 @@ fn save_queue_delete_variants_exist() {
     store.enqueue_save(SaveQueueEntry::DeleteEdge);
     store.enqueue_save(SaveQueueEntry::DeleteEmbed);
     store.enqueue_save(SaveQueueEntry::DeleteLink);
-    store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
-    assert_eq!(store.save_queue_len(), 5);
+    assert_eq!(store.save_queue_len(), 4);
 }
 #[test]
 fn flush_save_queue_increments_package_revision() {

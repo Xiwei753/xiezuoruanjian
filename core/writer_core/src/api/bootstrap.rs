@@ -330,13 +330,8 @@ fn recover_starmap_object_delete_replay_local_apply(
                 )?;
             }
             StarMapObjectKind::Hyperlink => {
-                package_storage::delete_hyperlink_file_to_trash(
-                    app_data_root,
-                    &plan.starmap_id,
-                    &target.id,
-                    &trash_root,
-                    &plan.trash_rel_path,
-                )?;
+                // 外部网页/URI 绑定能力已删除，不再产生新的 hyperlink 删除事务；
+                // 历史 journal 里残留的目标直接跳过。
             }
         }
     }
@@ -426,12 +421,12 @@ fn recover_starmap_object_delete_graph_meta(
     let next_revision = meta.package_revision.wrapping_add(1);
     let mut needs_new_entry = false;
     for target in &plan.objects {
-        let (type_str,): (&str,) = match target.kind {
-            StarMapObjectKind::Node => ("node",),
-            StarMapObjectKind::Edge => ("edge",),
-            StarMapObjectKind::Embed => ("embed",),
-            StarMapObjectKind::Link => ("link",),
-            StarMapObjectKind::Hyperlink => ("hyperlink",),
+        let type_str: &str = match target.kind {
+            StarMapObjectKind::Node => "node",
+            StarMapObjectKind::Edge => "edge",
+            StarMapObjectKind::Embed => "embed",
+            StarMapObjectKind::Link => "link",
+            StarMapObjectKind::Hyperlink => continue,
         };
         // 先做幂等的 retain/remove（这些本身幂等）。
         match target.kind {
@@ -451,10 +446,7 @@ fn recover_starmap_object_delete_graph_meta(
                 meta.link_ids.retain(|id| id != &target.id);
                 meta.link_revisions.remove(&target.id);
             }
-            StarMapObjectKind::Hyperlink => {
-                meta.hyperlink_ids.retain(|id| id != &target.id);
-                meta.hyperlink_revisions.remove(&target.id);
-            }
+            StarMapObjectKind::Hyperlink => {}
         }
         // 检查是否已有同 object_type + object_id 的 deletion entry。
         let already_logged = meta

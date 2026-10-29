@@ -10,11 +10,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use writer_core::api::types::{
     AnnotationObjectRefDto, AnnotationTargetDto, StarMapAnchorDto, StarMapEdgeDto,
-    StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
-    StarMapHyperlinkDto, StarMapHyperlinkPatchDto, StarMapLinkDto, StarMapLinkPatchDto,
-    StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
-    StarMapNodeStyleDto, StarMapPointDto, StarMapProvenanceDto, StarMapReviewStatusDto,
-    StarMapSourceKindDto, StarMapTargetPathDto,
+    StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto, StarMapLinkDto,
+    StarMapLinkPatchDto, StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto,
+    StarMapNodePatchDto, StarMapNodeStyleDto, StarMapPointDto, StarMapProvenanceDto,
+    StarMapReviewStatusDto, StarMapSourceKindDto, StarMapTargetPathDto,
 };
 
 use crate::context::{invalid_params, to_json};
@@ -28,6 +27,55 @@ fn parse_input<T: serde::de::DeserializeOwned>(value: Value, field: &str) -> Res
 fn parse_enum<T: serde::de::DeserializeOwned>(value: &str, field: &str) -> Result<T, ErrorData> {
     serde_json::from_value(Value::String(value.to_string()))
         .map_err(|error| invalid_params(format!("invalid {field}: {error}")))
+}
+
+/// External webpage/URI bindings no longer exist in the data model. Core DTOs
+/// ignore unknown fields, so reject the removed shapes at the MCP boundary
+/// instead of silently dropping them.
+const REMOVED_EXTERNAL_FIELDS: &[&str] = &[
+    "externalRef",
+    "externalUrl",
+    "external_url",
+    "targetUri",
+    "target_uri",
+    "uri",
+];
+
+fn reject_external_bindings(value: &Value, field: &str) -> Result<(), ErrorData> {
+    match value {
+        Value::Object(map) => {
+            if let Some(kind) = map.get("type").and_then(Value::as_str) {
+                if kind == "external" || kind == "externalRef" {
+                    return Err(invalid_params(format!(
+                        "invalid {field}: `{kind}` is no longer supported; reference an internal chapter, entity or object instead"
+                    )));
+                }
+            }
+            for key in REMOVED_EXTERNAL_FIELDS {
+                if map.contains_key(*key) {
+                    return Err(invalid_params(format!(
+                        "invalid {field}: `{key}` is no longer supported; Sujian only stores internal object references"
+                    )));
+                }
+            }
+            for nested in map.values() {
+                reject_external_bindings(nested, field)?;
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for item in items {
+                reject_external_bindings(item, field)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn parse_internal_target(value: Value, field: &str) -> Result<AnnotationTargetDto, ErrorData> {
+    reject_external_bindings(&value, field)?;
+    parse_input(value, field)
 }
 
 fn generated_by_mcp() -> StarMapProvenanceDto {
@@ -81,7 +129,7 @@ struct ReadChapterParams {
 struct SearchParams {
     query: String,
     /// chapterBody/chapterTitle/chapterNote/projectTitle/volumeTitle/starmapTitle/
-    /// starmapNode/starmapEdgeLabel/starmapHyperlink/starmapLink/starmapEmbed/
+    /// starmapNode/starmapEdgeLabel/starmapLink/starmapEmbed/
     /// setting/annotationTag/annotationEntry/annotationLink
     scope: Option<String>,
     limit: Option<u32>,
@@ -155,6 +203,7 @@ struct CreateNodeParams {
     /// Inline body; used only when `content` is omitted.
     body: Option<String>,
     /// Full StarMapNodeContentDto object. Takes precedence over summary/body.
+    /// `type` must be empty/inline/chapterRef/entityRef; external URI content is rejected.
     content: Option<Value>,
     #[serde(default)]
     anchors: Vec<Value>,
@@ -298,36 +347,6 @@ struct LinkIdParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct CreateHyperlinkParams {
-    starmap_id: String,
-    hyperlink_id: Option<String>,
-    source: Value,
-    target_uri: String,
-    label: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct UpdateHyperlinkParams {
-    starmap_id: String,
-    hyperlink_id: String,
-    /// Revision from the last read. Required to prevent overwriting newer changes.
-    expected_revision: u64,
-    /// StarMapHyperlinkPatchDto JSON.
-    patch: Value,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct HyperlinkIdParams {
-    starmap_id: String,
-    hyperlink_id: String,
-    /// Revision from the last read. Required to prevent overwriting newer changes.
-    expected_revision: u64,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 struct BindStarmapParams {
     starmap_id: String,
     project_id: String,
@@ -383,6 +402,8 @@ struct SetBindingsParams {
 #[serde(rename_all = "camelCase")]
 struct CreateObjectLinkParams {
     source: Value,
+    /// AnnotationTargetDto: `{"objectRef": {"kind", "projectId", "objectId"}}`.
+    /// External URLs are not supported.
     target: Value,
 }
 
@@ -392,6 +413,8 @@ struct UpdateObjectLinkParams {
     project_id: String,
     link_id: String,
     source: Value,
+    /// AnnotationTargetDto: `{"objectRef": {"kind", "projectId", "objectId"}}`.
+    /// External URLs are not supported.
     target: Value,
 }
 
@@ -524,7 +547,7 @@ impl SujianMcpServer {
 
     #[tool(
         name = "get_starmap_graph",
-        description = "Read a full starmap graph: nodes, edges, embeds, links and hyperlinks."
+        description = "Read a full starmap graph: nodes, edges, embeds and links."
     )]
     fn get_starmap_graph(
         &self,
@@ -576,13 +599,13 @@ impl SujianMcpServer {
 
     #[tool(
         name = "find_backlinks",
-        description = "Find object links that point at an AnnotationTargetDto."
+        description = "Find object links that point at an internal object target (AnnotationTargetDto.objectRef). External URLs are not supported."
     )]
     fn find_backlinks(
         &self,
         Parameters(params): Parameters<BacklinksParams>,
     ) -> Result<Json<Value>, ErrorData> {
-        let target: AnnotationTargetDto = parse_input(params.target, "target")?;
+        let target = parse_internal_target(params.target, "target")?;
         let api = self.ctx().api();
         let links = crate::context::read(|| api.find_backlinks(target))?;
         to_json(&links)
@@ -680,7 +703,10 @@ impl SujianMcpServer {
             None => StarMapNodeKindDto::Note,
         };
         let content: StarMapNodeContentDto = match params.content {
-            Some(value) => parse_input(value, "content")?,
+            Some(value) => {
+                reject_external_bindings(&value, "content")?;
+                parse_input(value, "content")?
+            }
             None => {
                 if params.summary.is_some() || params.body.is_some() {
                     StarMapNodeContentDto {
@@ -697,7 +723,10 @@ impl SujianMcpServer {
         let anchors = params
             .anchors
             .into_iter()
-            .map(|value| parse_input::<StarMapAnchorDto>(value, "anchors"))
+            .map(|value| {
+                reject_external_bindings(&value, "anchors")?;
+                parse_input::<StarMapAnchorDto>(value, "anchors")
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let portal = params
             .portal
@@ -745,6 +774,7 @@ impl SujianMcpServer {
         &self,
         Parameters(params): Parameters<UpdateNodeParams>,
     ) -> Result<Json<Value>, ErrorData> {
+        reject_external_bindings(&params.patch, "patch")?;
         let patch: StarMapNodePatchDto = parse_input(params.patch, "patch")?;
         let result = self.ctx().write(|api| {
             api.update_starmap_node_expected(
@@ -990,69 +1020,6 @@ impl SujianMcpServer {
     }
 
     #[tool(
-        name = "create_starmap_hyperlink",
-        description = "Create an external hyperlink from a starmap target path."
-    )]
-    fn create_starmap_hyperlink(
-        &self,
-        Parameters(params): Parameters<CreateHyperlinkParams>,
-    ) -> Result<Json<Value>, ErrorData> {
-        let source: StarMapTargetPathDto = parse_input(params.source, "source")?;
-        let hyperlink = StarMapHyperlinkDto {
-            hyperlink_id: params
-                .hyperlink_id
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-            source,
-            target_uri: params.target_uri,
-            label: params.label,
-            created_at: now_ms(),
-            updated_at: now_ms(),
-        };
-        let result = self
-            .ctx()
-            .write(|api| api.add_starmap_hyperlink(&params.starmap_id, hyperlink))?;
-        to_json(&result)
-    }
-
-    #[tool(
-        name = "update_starmap_hyperlink",
-        description = "Update a starmap hyperlink with a StarMapHyperlinkPatchDto JSON patch."
-    )]
-    fn update_starmap_hyperlink(
-        &self,
-        Parameters(params): Parameters<UpdateHyperlinkParams>,
-    ) -> Result<Json<Value>, ErrorData> {
-        let patch: StarMapHyperlinkPatchDto = parse_input(params.patch, "patch")?;
-        let result = self.ctx().write(|api| {
-            api.update_starmap_hyperlink_expected(
-                &params.starmap_id,
-                &params.hyperlink_id,
-                patch,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&result)
-    }
-
-    #[tool(
-        name = "delete_starmap_hyperlink",
-        description = "Delete a starmap hyperlink."
-    )]
-    fn delete_starmap_hyperlink(
-        &self,
-        Parameters(params): Parameters<HyperlinkIdParams>,
-    ) -> Result<Json<Value>, ErrorData> {
-        let result = self.ctx().write(|api| {
-            api.delete_starmap_hyperlink_expected(
-                &params.starmap_id,
-                &params.hyperlink_id,
-                Some(params.expected_revision),
-            )
-        })?;
-        to_json(&json!({ "deleted": result }))
-    }
-
-    #[tool(
         name = "bind_starmap_to_project",
         description = "Bind a starmap to a project."
     )]
@@ -1158,28 +1125,28 @@ impl SujianMcpServer {
 
     #[tool(
         name = "create_object_link",
-        description = "Create a cross-object link from an AnnotationObjectRefDto to an AnnotationTargetDto."
+        description = "Create a cross-object link from an AnnotationObjectRefDto to an internal object target (AnnotationTargetDto.objectRef). External URLs are not supported."
     )]
     fn create_object_link(
         &self,
         Parameters(params): Parameters<CreateObjectLinkParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let source: AnnotationObjectRefDto = parse_input(params.source, "source")?;
-        let target: AnnotationTargetDto = parse_input(params.target, "target")?;
+        let target = parse_internal_target(params.target, "target")?;
         let result = self.ctx().write(|api| api.create_link(source, target))?;
         to_json(&result)
     }
 
     #[tool(
         name = "update_object_link",
-        description = "Update an object link's source and target."
+        description = "Update an object link's source and internal object target (AnnotationTargetDto.objectRef). External URLs are not supported."
     )]
     fn update_object_link(
         &self,
         Parameters(params): Parameters<UpdateObjectLinkParams>,
     ) -> Result<Json<Value>, ErrorData> {
         let source: AnnotationObjectRefDto = parse_input(params.source, "source")?;
-        let target: AnnotationTargetDto = parse_input(params.target, "target")?;
+        let target = parse_internal_target(params.target, "target")?;
         let result = self
             .ctx()
             .write(|api| api.update_link(params.project_id, params.link_id, source, target))?;

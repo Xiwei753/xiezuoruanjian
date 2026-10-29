@@ -27,7 +27,7 @@ export type ReviewStatus = 'Accepted' | 'Draft' | 'NeedsReview' | 'Rejected' | '
 
 // StarMapNodeContentDto
 export interface StarMapNodeContent {
-  type: string  // "empty" | "inline" | "chapterRef" | "entityRef" | "externalRef"
+  type: string  // "empty" | "inline" | "chapterRef" | "entityRef"
   summary: string | null
   body: string | null
   projectId: string | null
@@ -37,14 +37,12 @@ export interface StarMapNodeContent {
   rangeEnd: number | null
   entityType: string | null
   entityId: string | null
-  uri: string | null
-  label: string | null
 }
 
 // StarMapAnchorTargetDto
 export interface StarMapAnchorTarget {
   type: string  // "chapterRange" | "project" | "volume" | "chapter" | "character" | "item"
-                // | "location" | "event" | "starmap" | "external" | "custom"
+                // | "location" | "event" | "starmap" | "custom"
   projectId: string | null
   volumeId: string | null
   chapterId: string | null
@@ -53,7 +51,6 @@ export interface StarMapAnchorTarget {
   entityId: string | null
   entityType: string | null
   starmapId: string | null
-  uri: string | null
   payload: string | null  // JSON 字符串，非对象
 }
 
@@ -79,7 +76,7 @@ export interface StarMapResolvedPath {
 
 // StarMapTargetDetailDto
 export interface StarMapTargetDetail {
-  type: string  // "starmap" | "node" | "anchor" | "chapterRange" | "entity" | "external"
+  type: string  // "starmap" | "node" | "anchor" | "chapterRange" | "entity"
   nodeId: string | null
   anchorId: string | null
   projectId: string | null
@@ -89,7 +86,6 @@ export interface StarMapTargetDetail {
   rangeEnd: number | null
   entityType: string | null
   entityId: string | null
-  uri: string | null
 }
 
 // StarMapTargetPathDto
@@ -172,7 +168,7 @@ export interface StarMapEdge {
   updatedAt: number
 }
 
-// ─── 内嵌 / 链接 / 超链接 ───
+// ─── 内嵌 / 链接 ───
 
 // StarMapEmbedDto
 export interface StarMapEmbed {
@@ -196,16 +192,6 @@ export interface StarMapLink {
   updatedAt: number
 }
 
-// StarMapHyperlinkDto
-export interface StarMapHyperlink {
-  hyperlinkId: string
-  source: StarMapTargetPath
-  targetUri: string
-  label: string | null
-  createdAt: number
-  updatedAt: number
-}
-
 // ─── 图 ───
 
 // StarMapGraphDto
@@ -216,7 +202,6 @@ export interface StarMapGraph {
   edges: StarMapEdge[]
   embeds: StarMapEmbed[]
   links: StarMapLink[]
-  hyperlinks: StarMapHyperlink[]
 }
 
 // ─── 元信息 ───

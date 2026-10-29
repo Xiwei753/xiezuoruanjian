@@ -54,7 +54,6 @@ pub struct StarMapAnchorTargetDto {
     pub entity_id: Option<String>,
     pub entity_type: Option<String>,
     pub starmap_id: Option<String>,
-    pub uri: Option<String>,
     pub payload: Option<String>,
 }
 
@@ -128,11 +127,6 @@ impl From<crate::starmap::semantic::StarMapAnchorTarget> for StarMapAnchorTarget
             crate::starmap::semantic::StarMapAnchorTarget::Starmap { starmap_id } => Self {
                 kind: "starmap".to_string(),
                 starmap_id: Some(starmap_id),
-                ..Default::default()
-            },
-            crate::starmap::semantic::StarMapAnchorTarget::External { uri } => Self {
-                kind: "external".to_string(),
-                uri: Some(uri),
                 ..Default::default()
             },
             crate::starmap::semantic::StarMapAnchorTarget::Custom { payload } => Self {
@@ -235,14 +229,6 @@ impl TryFrom<StarMapAnchorTargetDto> for crate::starmap::semantic::StarMapAnchor
                 })?;
                 Ok(Self::Starmap { starmap_id })
             }
-            "external" => {
-                let uri = d.uri.filter(|s| !s.is_empty()).ok_or_else(|| {
-                    crate::error::Error::Other(
-                        "missing or empty required field uri for kind 'external'".into(),
-                    )
-                })?;
-                Ok(Self::External { uri })
-            }
             "custom" => {
                 let payload_str = d.payload.filter(|s| !s.is_empty()).ok_or_else(|| {
                     crate::error::Error::Other(
@@ -273,7 +259,6 @@ impl Default for StarMapAnchorTargetDto {
             entity_id: None,
             entity_type: None,
             starmap_id: None,
-            uri: None,
             payload: None,
         }
     }
@@ -554,7 +539,6 @@ pub struct StarMapTargetDetailDto {
     pub range_end: Option<u32>,
     pub entity_type: Option<String>,
     pub entity_id: Option<String>,
-    pub uri: Option<String>,
 }
 
 impl From<crate::starmap::semantic::StarMapTargetDetail> for StarMapTargetDetailDto {
@@ -597,11 +581,6 @@ impl From<crate::starmap::semantic::StarMapTargetDetail> for StarMapTargetDetail
                 kind: "entity".to_string(),
                 entity_type: Some(entity_type),
                 entity_id: Some(entity_id),
-                ..Default::default()
-            },
-            crate::starmap::semantic::StarMapTargetDetail::External { uri } => Self {
-                kind: "external".to_string(),
-                uri: Some(uri),
                 ..Default::default()
             },
         }
@@ -665,14 +644,6 @@ impl TryFrom<StarMapTargetDetailDto> for crate::starmap::semantic::StarMapTarget
                     entity_id,
                 })
             }
-            "external" => {
-                let uri = d.uri.filter(|s| !s.is_empty()).ok_or_else(|| {
-                    crate::error::Error::Other(
-                        "missing or empty required field uri for kind 'external'".into(),
-                    )
-                })?;
-                Ok(Self::External { uri })
-            }
             unknown => Err(crate::error::Error::Other(format!(
                 "unknown target detail kind: {}",
                 unknown
@@ -694,7 +665,6 @@ impl Default for StarMapTargetDetailDto {
             range_end: None,
             entity_type: None,
             entity_id: None,
-            uri: None,
         }
     }
 }

@@ -34,6 +34,8 @@ Rectangle {
     property var searchBackendRef: null
     property bool aiAvailable: false
     property bool aiEnabled: false
+    // Issue #1014：AI 面板与设置页共享同一个 Agent CLI 后端。
+    property var agentCliBackendRef: null
     property var pendingLinkSource: null
     property string pendingLinkId: ""
     property var pendingLinkTarget: null
@@ -89,6 +91,8 @@ Rectangle {
 
     color: "transparent"
     clip: true
+    // Issue #1014：本组件只负责工具内容；折叠/展开由 WritingWorkspace 的
+    // 右侧容器统一控制，容器收起时 rail 与本面板一起消失。
     visible: isOpen
 
     Rectangle {
@@ -112,15 +116,8 @@ Rectangle {
                     anchors.rightMargin: Kirigami.Units.smallSpacing
                     spacing: Kirigami.Units.smallSpacing
 
-                    // Issue #829：手稿在工具面板顶部画了一个折叠钮
-                    // （docs/ui/reference/widescreen/宽屏全打开.png 右侧面板左上角）。
-                    // 收起后工具内容去最右 WritingToolRail，rail 本身常驻。
-                    PaneFoldButton {
-                        dt: root.dt
-                        Layout.alignment: Qt.AlignVCenter
-                        onTriggered: root.closeRequested()
-                    }
-
+                    // Issue #1014：折叠控制上移到右侧容器层级（rail 底部按钮 +
+                    // 窗口右缘恢复按钮），工具面板头部不再单独持有折叠箭头。
                     Label {
                         text: root.toolTitle(root.selectedTool)
                         color: Kirigami.Theme.textColor
@@ -155,6 +152,15 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
+
+                // Issue #1014：AI 面板先承载 Agent CLI 动态清单与选择，
+                // 真正的会话 UI 仍由 Issue #506 接入。
+                AiToolPanel {
+                    visible: root.selectedTool === "ai"
+                    anchors.fill: parent
+                    dt: root.dt
+                    agentCliBackendRef: root.agentCliBackendRef
+                }
 
                 // Issue #835 评论 6020221770: 星图工具区分两态，都在右栏内渲染，
                 // 不切 route、不销毁 WritingWorkspace。

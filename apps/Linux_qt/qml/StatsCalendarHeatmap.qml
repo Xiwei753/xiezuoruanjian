@@ -8,9 +8,13 @@
 //   - X 轴一列一个自然周，Y 轴固定周一至周日七行；
 //   - 短区间放大格子并居中，长区间保持可辨认格宽并让热力图自身横向滚动；
 //   - 已确认的日期按 Core 下发的 intensity（0–4）着色，未知/未来单独呈现；
-//   - 悬停或点击日期时显示当天日期与实际人工输入字数。
+//   - 悬停或点击日期时显示当天日期与实际人工输入字数；
+//   - 选中日期后追加 Core contributions.dayActors 的逐 actor 对象/AI 操作与
+//     本地小时切片（#1014），没有明细时明确说没有记录，不补造 0。
 // 约束：
-//   - 纯展示组件：不查询磁盘、不重算每日字数或色阶，只消费 days；
+//   - 纯展示组件：不查询磁盘、不重算每日字数或色阶，只消费 days / dayDetails；
+//   - 热力颜色只由 Core 的人工输入字数与 intensity 决定，绝不把 AI 操作量
+//     或对象操作混进人工码字；
 //   - 不把趋势的周/月聚合点拆成每日格子，也不补造区间外的日期；
 //   - 颜色全部来自 Kirigami.Theme，深浅色切换时重绘，不硬编码绿色。
 // 参考：Qt Canvas https://doc.qt.io/qt-6/qml-qtquick-canvas.html
@@ -29,6 +33,10 @@ Item {
     property string endDate: ""
     /// Core 下发的逐日热力格（WritingStatsHeatmapDayDto 列表，日期升序）。
     property var days: []
+    /// Core contributions.dayActors：当前区间逐日 actor 对象操作明细（可选）。
+    property var dayDetails: []
+    /// 当前 Explorer 是否带有贡献明细；false 时不把「没有明细」说成「没有操作」。
+    property bool hasContributionData: false
     /// 历史口径：localEvents / syncedDevices / partialSync。
     property string historyScope: ""
 
@@ -41,6 +49,25 @@ Item {
         }
         return map
     }
+
+    // 按日期归并 Core 的逐日 actor 明细；没有明细的日期不生成空对象。
+    readonly property var detailByDate: {
+        var map = ({})
+        for (var i = 0; i < dayDetails.length; i++) {
+            var detail = dayDetails[i]
+            if (!detail || !detail.date)
+                continue
+            var key = String(detail.date)
+            if (!map[key])
+                map[key] = []
+            map[key].push(detail)
+        }
+        return map
+    }
+
+    readonly property var selectedActors: selectedDate !== ""
+        ? (detailByDate[selectedDate] || [])
+        : []
 
     // 一周一列：严格按区间首末日期组成所需周列，首尾不完整周保留 outside 占位。
     readonly property var weeks: buildWeeks()
@@ -188,6 +215,86 @@ Item {
         return isNaN(value) ? "—" : value.toLocaleString()
     }
 
+    function countOf(detail, key) {
+        return detail && detail.counts ? detail.counts[key] : null
+    }
+
+    // 只翻译 Core 的 actor / entrypoint 键，不在这里归类或重算统计。
+    function actorLabel(actor) {
+        switch (String(actor)) {
+        case "human": return qsTr("人工")
+        case "ai": return qsTr("AI")
+        case "system": return qsTr("系统")
+        }
+        return qsTr("未知")
+    }
+
+    function entrypointLabel(entrypoint) {
+        switch (String(entrypoint)) {
+        case "ui": return qsTr("界面")
+        case "mcp": return qsTr("MCP")
+        case "import": return qsTr("导入")
+        case "sync": return qsTr("同步")
+        case "system": return qsTr("系统")
+        }
+        return qsTr("其他")
+    }
+
+    function formatHour(hour) {
+        var value = Number(hour)
+        if (isNaN(value)) return "—"
+        var h = Math.floor(value)
+        return (h < 10 ? "0" + h : String(h)) + ":00"
+    }
+
+    // 单日单 actor：操作量、新增/删除/修改字数都来自 Core 的事件聚合。
+    function actorDetailText(detail) {
+        return actorLabel(detail ? detail.actor : "") + " · "
+            + qsTr("操作 %1 次 · 新增 %2 字 · 删除 %3 字 · 修改 %4 字")
+                .arg(formatNum(countOf(detail, "operations")))
+                .arg(formatNum(countOf(detail, "insertedChars")))
+                .arg(formatNum(countOf(detail, "deletedChars")))
+                .arg(formatNum(countOf(detail, "modifiedChars")))
+    }
+
+    // 入口与可信覆盖：两者都来自事件字段，缺字段时只省略对应说明。
+    function actorCoverageText(detail) {
+        if (!detail) return ""
+        var parts = []
+        var entrypoints = detail.entrypoints || []
+        var labels = []
+        for (var i = 0; i < entrypoints.length; i++) {
+            var item = entrypoints[i]
+            if (!item) continue
+            labels.push(entrypointLabel(item.entrypoint) + " " + formatNum(item.operations))
+        }
+        if (labels.length > 0)
+            parts.push(qsTr("入口：") + labels.join(" · "))
+        if (detail.trustedOperations !== undefined && detail.trustedOperations !== null) {
+            parts.push(qsTr("可信记录 %1/%2 次")
+                .arg(formatNum(detail.trustedOperations))
+                .arg(formatNum(countOf(detail, "operations"))))
+        }
+        return parts.join(" · ")
+    }
+
+    // 本地小时切片：事件自带发生时间才有；没有切片时整行不显示。
+    function actorSliceText(detail) {
+        var slices = detail && detail.slices ? detail.slices : []
+        if (slices.length === 0) return ""
+        var parts = []
+        for (var i = 0; i < slices.length; i++) {
+            var slice = slices[i]
+            if (!slice) continue
+            parts.push(formatHour(slice.hour) + " "
+                + qsTr("操作 %1 · 新增 %2 · 删除 %3")
+                    .arg(formatNum(countOf(slice, "operations")))
+                    .arg(formatNum(countOf(slice, "insertedChars")))
+                    .arg(formatNum(countOf(slice, "deletedChars"))))
+        }
+        return qsTr("时段：") + parts.join("；")
+    }
+
     // Core 下发 0–4 强度；0 为低对比度底色，1–4 用主题强调色递进。
     function intensityColor(level) {
         var text = Kirigami.Theme.textColor
@@ -203,7 +310,9 @@ Item {
 
     function dayDescription(day) {
         if (!day)
-            return qsTr("悬停或点击日期查看当天人工输入字数")
+            return root.hasContributionData
+                ? qsTr("点击日期查看当天人工码字与 AI / 对象操作")
+                : qsTr("悬停或点击日期查看当天人工输入字数")
         if (day.status === "unknown")
             return day.date + " · " + qsTr("历史覆盖不完整，无法确认当天字数")
         if (day.status === "future")
@@ -446,6 +555,66 @@ Item {
                 ? Kirigami.Theme.disabledTextColor
                 : Kirigami.Theme.textColor
             elide: Text.ElideRight
+        }
+
+        // ── 选中日期的对象/AI 操作明细（#1014）：只展示 Core 已按日、按 actor
+        //    聚合的事实；没有明细就说没有记录，绝不把区间总量摊到当天。──
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: root.hasData && root.selectedDate !== "" && root.hasContributionData
+            spacing: 2
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.selectedActors.length > 0
+                text: qsTr("当天对象操作（不计入人工码字）")
+                color: Kirigami.Theme.disabledTextColor
+                font: Kirigami.Theme.smallFont
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.selectedActors.length === 0
+                text: qsTr("Core 未返回当天的 AI / 对象操作明细")
+                color: Kirigami.Theme.disabledTextColor
+                font: Kirigami.Theme.smallFont
+            }
+
+            Repeater {
+                model: root.selectedActors
+
+                delegate: ColumnLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: 0
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.actorDetailText(modelData)
+                        color: Kirigami.Theme.textColor
+                        font: Kirigami.Theme.smallFont
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: text.length > 0
+                        text: root.actorCoverageText(modelData)
+                        color: Kirigami.Theme.disabledTextColor
+                        font: Kirigami.Theme.smallFont
+                        elide: Text.ElideRight
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: text.length > 0
+                        text: root.actorSliceText(modelData)
+                        color: Kirigami.Theme.disabledTextColor
+                        font: Kirigami.Theme.smallFont
+                        elide: Text.ElideRight
+                    }
+                }
+            }
         }
 
         RowLayout {

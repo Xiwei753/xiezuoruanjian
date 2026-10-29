@@ -76,19 +76,6 @@ impl StarMapStore {
             }
         }
 
-        let hl_ids = self
-            .graph_meta
-            .as_ref()
-            .map(|m| m.hyperlink_ids.clone())
-            .unwrap_or_default();
-
-        for hl_id in &hl_ids {
-            if !self.hyperlinks.contains_key(hl_id) {
-                let hl = self.try_load_hyperlink(hl_id)?;
-                self.hyperlinks.insert(hl_id.clone(), hl);
-            }
-        }
-
         let link_ids = self
             .graph_meta
             .as_ref()
@@ -128,11 +115,6 @@ impl StarMapStore {
                 .as_ref()
                 .map(|m| m.link_ids.iter().cloned().collect())
                 .unwrap_or_default();
-            let declared_hl_ids: std::collections::HashSet<String> = self
-                .graph_meta
-                .as_ref()
-                .map(|m| m.hyperlink_ids.iter().cloned().collect())
-                .unwrap_or_default();
 
             self.nodes
                 .retain(|id, _| self.dirty_nodes.contains(id) || declared_node_ids.contains(id));
@@ -142,8 +124,6 @@ impl StarMapStore {
                 .retain(|id, _| self.dirty_embeds.contains(id) || declared_embed_ids.contains(id));
             self.links
                 .retain(|id, _| self.dirty_links.contains(id) || declared_link_ids.contains(id));
-            self.hyperlinks
-                .retain(|id, _| self.dirty_hyperlinks.contains(id) || declared_hl_ids.contains(id));
         }
 
         self.detect_dangling_references(&mut diagnostics);
@@ -166,7 +146,6 @@ impl StarMapStore {
             loaded_edge_count: self.edges.len(),
             loaded_embed_count: self.embeds.len(),
             loaded_link_count: self.links.len(),
-            loaded_hyperlink_count: self.hyperlinks.len(),
         })
     }
 }

@@ -414,11 +414,56 @@ pub struct ContributionDeviceStatsDto {
     pub counts: ContributionCountsDto,
 }
 
+/// 某个入口的贡献操作数（#1015）。
+///
+/// `entrypoint` 取 `"ui"` / `"mcp"` / `"import"` / `"sync"` / `"system"`，
+/// 来自事件记录的真实修改上下文，不从 actor 反推。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionEntrypointStatsDto {
+    pub entrypoint: String,
+    pub operations: u64,
+}
+
+/// 单日单 actor 的本地小时切片（#1015）。
+///
+/// 只有事件本身记录了发生时间才进入切片，组内计数口径与
+/// [`ContributionCountsDto`] 相同；界面不能用它反推人工码字。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionSliceStatsDto {
+    /// 本地小时（0–23）。
+    pub hour: u8,
+    pub counts: ContributionCountsDto,
+}
+
+/// 单日单 actor 的历史操作量（#1015）。
+///
+/// 严格由落在该业务日的贡献事件聚合：日期、actor、操作数、
+/// 新增/删除/修改字数都来自事件本身，不把所选区间的总量摊到某一天。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionDayActorStatsDto {
+    /// 业务日（`YYYY-MM-DD`，与 `days` 同源）。
+    pub date: String,
+    pub actor: String,
+    pub counts: ContributionCountsDto,
+    /// 该 actor 当天各入口的操作数，按入口名升序。
+    #[serde(default)]
+    pub entrypoints: Vec<ContributionEntrypointStatsDto>,
+    /// 带真实来源设备与业务日的事件数；其余历史事件只计入操作总量。
+    #[serde(default)]
+    pub trusted_operations: u64,
+    /// 当天该 actor 的本地小时切片，按小时升序；没有发生时间的历史事件不补造。
+    #[serde(default)]
+    pub slices: Vec<ContributionSliceStatsDto>,
+}
+
 /// 写作贡献来源快照。
 ///
-/// `total` / `actors` / `objectTypes` / `days` / `devices` 是**历史操作量**；
-/// `retainedTotalChars` 与各 actor 的 `retainedChars` 是**当前保留内容来源**。
-/// 两个口径不能互相回推。
+/// `total` / `actors` / `objectTypes` / `days` / `dayActors` / `devices`
+/// 是**历史操作量**；`retainedTotalChars` 与各 actor 的 `retainedChars`
+/// 是**当前保留内容来源**。两个口径不能互相回推。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ContributionStatsDto {
@@ -428,6 +473,10 @@ pub struct ContributionStatsDto {
     pub actors: Vec<ContributionActorStatsDto>,
     pub object_types: Vec<ContributionObjectTypeStatsDto>,
     pub days: Vec<ContributionDayStatsDto>,
+    /// 逐日 actor 明细（#1015）：供统计页选中某天时展示 AI / 对象操作，
+    /// 与 `days` 的逐日总量同源；旧快照没有该字段时为空，不补造。
+    #[serde(default)]
+    pub day_actors: Vec<ContributionDayActorStatsDto>,
     pub devices: Vec<ContributionDeviceStatsDto>,
     pub retained_total_chars: u64,
     pub history_scope: String,

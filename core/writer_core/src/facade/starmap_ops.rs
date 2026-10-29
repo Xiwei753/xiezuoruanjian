@@ -6,7 +6,7 @@ use crate::starmap::store::{LoadPhase, SaveQueueEntry, StarMapStore};
 
 // 星图 facade 操作按关注点拆成三个模块：
 //   - 本文件：星图本身的增删改查、store 生命周期、两个子模块共用的私有 helper
-//   - graph.rs：graph / node / edge / embed / link / hyperlink 数据操作
+//   - graph.rs：graph / node / edge / embed / link 数据操作
 //   - patch.rs：candidate graph patch 模拟（只被 graph.rs 调用）
 mod graph;
 mod patch;
@@ -398,7 +398,7 @@ impl super::WriterCore {
     /// 获取或惰性构建持久化路径依赖索引。
     ///
     /// 如果索引为 None（未初始化），从真实星图数据 `PathDependencyIndex::build`。
-    /// 首次访问后复用，Edge/Link/Hyperlink/Embed/Portal 增删改后通过
+    /// 首次访问后复用，Edge/Link/Embed/Portal 增删改后通过
     /// `add_or_replace_source` / `remove_source` 增量更新，不再每次从零扫描全库。
     ///
     /// 调用方必须在持有 `starmap_stores` 锁的上下文中调用此方法，
@@ -426,7 +426,7 @@ impl super::WriterCore {
 
     /// 增量更新持久化路径依赖索引：移除指定来源的旧依赖事实。
     ///
-    /// 删除 Edge/Link/Hyperlink/Embed 后调用，从索引中移除该来源产生的全部 entry。
+    /// 删除 Edge/Link/Embed 后调用，从索引中移除该来源产生的全部 entry。
     /// 调用方必须在持有 `starmap_stores` 锁的上下文中调用。
     fn remove_source_from_path_dependency_index(
         &self,

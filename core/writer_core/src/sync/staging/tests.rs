@@ -405,7 +405,6 @@ fn make_graph_meta_json(starmap_id: &str, node_ids: &[&str], updated_at: u64) ->
         "edgeIds": [],
         "embedInstanceIds": [],
         "linkIds": [],
-        "hyperlinkIds": [],
         "packageRevision": 0,
         "updatedAt": updated_at,
     });

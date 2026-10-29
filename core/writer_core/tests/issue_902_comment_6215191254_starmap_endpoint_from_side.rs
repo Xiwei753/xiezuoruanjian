@@ -2,8 +2,8 @@
 //!
 //! #902 实现路线第 2 节明确跨画布边端点目标是 `Node / Anchor / Starmap`。此前各轮
 //! 已从公开 API 覆盖 `Node`（父/子、兄弟、菱形多父图、多级嵌套）、`Anchor`、
-//! `Starmap`（整张子画布作为 `to` 端）以及语义终点 `ChapterRange / Entity /
-//! External` 的 from/to 对称用例。**`Starmap`（整张画布）作为 `from` 端**此前只在
+//! `Starmap`（整张子画布作为 `to` 端）以及语义终点 `ChapterRange / Entity`
+//! 的 from/to 对称用例。**`Starmap`（整张画布）作为 `from` 端**此前只在
 //! `to` 端验证过，缺少对称覆盖；同一张画布被同一父图的两个 Embed 实例分别进入、
 //! 两端指向**同一个物理节点对象**的自反连线也未走真实 Store。
 //!

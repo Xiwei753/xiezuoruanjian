@@ -150,7 +150,7 @@ interface WobbleOffset {
  * 节点编辑对话框参数。
  *
  * `body` 是**原样文本**：进入编辑时不做 trim，保存时也原样交回宿主 Scene。
- * `showBody === false` 用于 chapterRef / entityRef / externalRef：只改名称，
+ * `showBody === false` 用于 chapterRef / entityRef：只改名称，
  * 不发送 content，绝不把引用型内容覆盖成 inline。
  */
 interface StarMapNodeEditDialogArgs {
@@ -1931,8 +1931,7 @@ private refitAfterContentAdded(): void {
           nodes: this.graph.nodes,
           edges: [...this.graph.edges, result.data],
           embeds: this.graph.embeds,
-          links: this.graph.links,
-          hyperlinks: this.graph.hyperlinks
+          links: this.graph.links
         }
         this.recomputeGeometry()
       }
@@ -2068,9 +2067,7 @@ private refitAfterContentAdded(): void {
       rangeStart: node.content.rangeStart,
       rangeEnd: node.content.rangeEnd,
       entityType: node.content.entityType,
-      entityId: node.content.entityId,
-      uri: node.content.uri,
-      label: node.content.label
+      entityId: node.content.entityId
     }
   }
 
@@ -2079,7 +2076,7 @@ private refitAfterContentAdded(): void {
    *
    * 对话框挂在窗口层级，文字控件独占触摸 / 键盘；Scene 里的卡片手势在
    * `inlineEditingKey` 非空时让位，关闭后恢复。
-   * chapterRef / entityRef / externalRef 只显示名称输入，不编辑也不发送 content。
+   * chapterRef / entityRef 只显示名称输入，不编辑也不发送 content。
    */
   private openNodeEditDialog(nodeId: string) {
     if (!this.graph) {
@@ -2148,7 +2145,7 @@ private refitAfterContentAdded(): void {
    *
    * - 名称与正文分别更新：只有正文确实变化才发 `content: { type: 'inline', summary, body }`，
    *   只改名称只发 title；body 不 trim；
-   * - chapterRef / entityRef / externalRef：只发 title，content 字段保持 undefined，
+   * - chapterRef / entityRef：只发 title，content 字段保持 undefined，
    *   绝不会被覆盖成 inline。
    * 返回 {success,message}：失败由对话框保留草稿并展示 message。
    * 成功后优先采用 Core 返回的更新后节点，更新本地 graph 并重算几何；
@@ -2241,8 +2238,7 @@ private refitAfterContentAdded(): void {
       nodes: syncedNodes,
       edges: currentGraph.edges,
       embeds: currentGraph.embeds,
-      links: currentGraph.links,
-      hyperlinks: currentGraph.hyperlinks
+      links: currentGraph.links
     }
     this.platformLayoutNodes = buildFreeformLayout(syncedNodes, this.nodeTextHeightMeasure())
     this.recomputeGeometry()
@@ -2310,8 +2306,7 @@ private refitAfterContentAdded(): void {
           nodes: [...this.graph.nodes, result.data],
           edges: this.graph.edges,
           embeds: this.graph.embeds,
-          links: this.graph.links,
-          hyperlinks: this.graph.hyperlinks
+          links: this.graph.links
         }
         this.platformLayoutNodes = buildFreeformLayout(this.graph.nodes, this.nodeTextHeightMeasure())
         this.recomputeGeometry()
@@ -2362,8 +2357,7 @@ private refitAfterContentAdded(): void {
           nodes: this.graph.nodes,
           edges: this.graph.edges,
           embeds: [...this.graph.embeds, result.data.embed],
-          links: this.graph.links,
-          hyperlinks: this.graph.hyperlinks
+          links: this.graph.links
         }
         this.embedLayoutNodes = buildEmbedLayoutNodes(this.graph.embeds)
         this.recomputeGeometry()

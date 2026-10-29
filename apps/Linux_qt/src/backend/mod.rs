@@ -4,6 +4,8 @@
 
 #[allow(clippy::misnamed_getters)]
 pub mod app_backend;
+/// Issue #1014：Agent CLI 动态发现与选择的 QObject 后端。
+pub mod agent_cli_backend;
 pub mod annotation_backend;
 pub mod diagnostics;
 pub mod json_utils;
@@ -13,6 +15,8 @@ pub(crate) mod message_key_mapper;
 pub mod resolved_theme_snapshot;
 /// Issue #982：全局搜索 worker 与 QML SearchBackend。
 pub(crate) mod search_backend;
+/// Issue #1014：星图导航树 QAbstractItemModel（Linux Qt 平台端）。
+pub mod starmap_tree_model;
 /// Issue #843：异步串行统计写入器，避免统计 I/O 阻塞 UI 线程。
 pub(crate) mod stats_writer;
 
@@ -242,6 +246,7 @@ pub struct BackendRuntime {
     annotation_backend: QObjectBox<AnnotationBackend>,
     search_backend: QObjectBox<search_backend::SearchBackend>,
     theme_controller: QObjectBox<LinuxThemeController>,
+    agent_cli_backend: QObjectBox<agent_cli_backend::AgentCliBackend>,
     app: std::rc::Rc<std::cell::RefCell<AppBackend>>,
 }
 
@@ -277,6 +282,7 @@ impl BackendRuntime {
             annotation_backend: QObjectBox::new(AnnotationBackend::new(app_ref.clone())),
             search_backend: QObjectBox::new(search_backend::SearchBackend::new(search_bridge)),
             theme_controller: QObjectBox::new(LinuxThemeController::new(app_ref)),
+            agent_cli_backend: QObjectBox::new(agent_cli_backend::AgentCliBackend::new()),
             app,
         }
     }
@@ -305,5 +311,7 @@ impl BackendRuntime {
         // Issue #982：只给主窗口的全局搜索 overlay 使用。
         engine.set_object_property("searchBackend".into(), self.search_backend.pinned());
         engine.set_object_property("themeController".into(), self.theme_controller.pinned());
+        // Issue #1014：AI 工具面板与设置页共享同一份 Agent CLI 清单/选择。
+        engine.set_object_property("agentCliBackend".into(), self.agent_cli_backend.pinned());
     }
 }

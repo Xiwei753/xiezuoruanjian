@@ -7,6 +7,25 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 export APPDIR="${APPDIR:-$HERE}"
 
+# Issue #1014：外部 AI CLI 以 `<AppImage> --sujian-mcp ...` 启动。
+# 必须在 Qt hooks / GUI launcher / 启动日志镜像之前分流：stdout 从进程启动起
+# 只承载 MCP JSON-RPC，诊断信息由 MCP 自己写 stderr。
+if [ "${1:-}" = "--sujian-mcp" ]; then
+    shift
+    for libdir in \
+        "$APPDIR/usr/lib" \
+        "$APPDIR/usr/lib64" \
+        "$APPDIR/usr/lib/x86_64-linux-gnu" \
+        "$APPDIR/usr/lib/aarch64-linux-gnu"; do
+        [ -d "$libdir" ] || continue
+        case ":${LD_LIBRARY_PATH:-}:" in
+            *":$libdir:"*) ;;
+            *) export LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+        esac
+    done
+    exec "$APPDIR/usr/libexec/sujian/sujian_mcp" "$@"
+fi
+
 if [ -d "$APPDIR/apprun-hooks" ]; then
     for hook in "$APPDIR"/apprun-hooks/*.sh; do
         [ -f "$hook" ] || continue

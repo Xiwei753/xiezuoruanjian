@@ -77,7 +77,7 @@ pub struct WriterCore {
     pub(crate) starmap_stores: std::sync::Mutex<HashMap<String, StarMapStore>>,
     /// 持久化路径依赖索引：删除保护与关联查询的统一查询入口。
     ///
-    /// 惰性初始化——首次访问时从真实星图数据 `build`；Edge/Link/Hyperlink/Embed/Portal
+    /// 惰性初始化——首次访问时从真实星图数据 `build`；Edge/Link/Embed/Portal
     /// 增删改后通过 `add_or_replace_source` / `remove_source` 增量更新，不再每次
     /// 从零扫描全库重建。`WriterCoreApi` 持有 `core_instance: RwLock<WriterCore>`，
     /// 是跨 API 调用长期存在的实例，与 `starmap_stores` 一致都是持久化状态。

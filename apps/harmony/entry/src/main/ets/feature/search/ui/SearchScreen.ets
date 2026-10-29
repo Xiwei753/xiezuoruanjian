@@ -186,9 +186,6 @@ export struct SearchScreen {
       } else if (target.linkId !== null) {
         starmapParams.focusKind = 'link'
         starmapParams.focusId = target.linkId
-      } else if (target.hyperlinkId !== null) {
-        starmapParams.focusKind = 'hyperlink'
-        starmapParams.focusId = target.hyperlinkId
       } else if (target.embedId !== null) {
         starmapParams.focusKind = 'embed'
         starmapParams.focusId = target.embedId
@@ -341,7 +338,6 @@ export struct SearchScreen {
     if (scope === 'starmapTitle') { return '星图' }
     if (scope === 'starmapNode') { return '星图节点' }
     if (scope === 'starmapEdgeLabel') { return '星图连线' }
-    if (scope === 'starmapHyperlink') { return '星图超链接' }
     if (scope === 'starmapLink') { return '星图链接' }
     if (scope === 'starmapEmbed') { return '星图嵌入' }
     if (scope === 'setting') { return '设置' }

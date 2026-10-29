@@ -15,7 +15,7 @@
 import { LocalSettings, SyncableSettings, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { DateRange, Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, ProjectWritingLifetimeStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
 import { WritingStatsExplorer, WritingStatsLifetime, WritingStatsPeriodCard, WritingStatsSelectedPeriod, WritingStatsRecord, WritingStatsRecords, WritingStatsTrend, WritingStatsTrendPoint, WritingStatsHeatmap, WritingStatsHeatmapDay, ContributionCounts, ContributionActorStats, ContributionObjectTypeStats, ContributionDayStats, ContributionDeviceStats, ContributionStats } from '../dto/StatsDtos'
-import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
+import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, FullSyncReport, FullSyncReportFailure, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 import { SearchResultPage, SearchResult, SearchTarget, SearchField, SearchScope } from '../dto/SearchDtos'
@@ -1171,10 +1171,6 @@ function decodeStarMapNodeContent(data: Object): DecodeResult<import('../dto/Sta
   if (!entityTypeR.ok || entityTypeR.value === undefined) { return err(`StarMapNodeContent.${entityTypeR.error ?? 'decode failed'}`) }
   const entityIdR = nullStr(data, 'entityId')
   if (!entityIdR.ok || entityIdR.value === undefined) { return err(`StarMapNodeContent.${entityIdR.error ?? 'decode failed'}`) }
-  const uriR = nullStr(data, 'uri')
-  if (!uriR.ok || uriR.value === undefined) { return err(`StarMapNodeContent.${uriR.error ?? 'decode failed'}`) }
-  const labelR = nullStr(data, 'label')
-  if (!labelR.ok || labelR.value === undefined) { return err(`StarMapNodeContent.${labelR.error ?? 'decode failed'}`) }
   const value: import('../dto/StarMapDtos').StarMapNodeContent = {
     type: type,
     summary: summaryR.value,
@@ -1185,9 +1181,7 @@ function decodeStarMapNodeContent(data: Object): DecodeResult<import('../dto/Sta
     rangeStart: rangeStartR.value,
     rangeEnd: rangeEndR.value,
     entityType: entityTypeR.value,
-    entityId: entityIdR.value,
-    uri: uriR.value,
-    label: labelR.value
+    entityId: entityIdR.value
   }; return ok(value)
 }
 
@@ -1213,8 +1207,6 @@ function decodeStarMapAnchorTarget(data: Object): DecodeResult<import('../dto/St
   if (!entityTypeR.ok || entityTypeR.value === undefined) { return err(`StarMapAnchorTarget.${entityTypeR.error ?? 'decode failed'}`) }
   const starmapIdR = nullStr(data, 'starmapId')
   if (!starmapIdR.ok || starmapIdR.value === undefined) { return err(`StarMapAnchorTarget.${starmapIdR.error ?? 'decode failed'}`) }
-  const uriR = nullStr(data, 'uri')
-  if (!uriR.ok || uriR.value === undefined) { return err(`StarMapAnchorTarget.${uriR.error ?? 'decode failed'}`) }
   const payloadR = nullStr(data, 'payload')
   if (!payloadR.ok || payloadR.value === undefined) { return err(`StarMapAnchorTarget.${payloadR.error ?? 'decode failed'}`) }
   const value: import('../dto/StarMapDtos').StarMapAnchorTarget = {
@@ -1227,7 +1219,6 @@ function decodeStarMapAnchorTarget(data: Object): DecodeResult<import('../dto/St
     entityId: entityIdR.value,
     entityType: entityTypeR.value,
     starmapId: starmapIdR.value,
-    uri: uriR.value,
     payload: payloadR.value
   }; return ok(value)
 }
@@ -1492,8 +1483,6 @@ function decodeStarMapTargetDetail(data: Object): DecodeResult<import('../dto/St
   if (!entityTypeR.ok || entityTypeR.value === undefined) { return err(`StarMapTargetDetail.${entityTypeR.error ?? 'decode failed'}`) }
   const entityIdR = nullStr(data, 'entityId')
   if (!entityIdR.ok || entityIdR.value === undefined) { return err(`StarMapTargetDetail.${entityIdR.error ?? 'decode failed'}`) }
-  const uriR = nullStr(data, 'uri')
-  if (!uriR.ok || uriR.value === undefined) { return err(`StarMapTargetDetail.${uriR.error ?? 'decode failed'}`) }
   const value: import('../dto/StarMapDtos').StarMapTargetDetail = {
     type: type,
     nodeId: nodeIdR.value,
@@ -1504,8 +1493,7 @@ function decodeStarMapTargetDetail(data: Object): DecodeResult<import('../dto/St
     rangeStart: rangeStartR.value,
     rangeEnd: rangeEndR.value,
     entityType: entityTypeR.value,
-    entityId: entityIdR.value,
-    uri: uriR.value
+    entityId: entityIdR.value
   }; return ok(value)
 }
 
@@ -1565,35 +1553,6 @@ function decodeStarMapLink(data: Object): DecodeResult<StarMapLink> {
   return ok<StarMapLink>(value)
 }
 
-function decodeStarMapHyperlink(data: Object): DecodeResult<StarMapHyperlink> {
-  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
-    return err<StarMapHyperlink>('StarMapHyperlink: expected object')
-  }
-  const hyperlinkId: string | null = reqStr(data, 'hyperlinkId')
-  if (hyperlinkId === null) { return err<StarMapHyperlink>('hyperlinkId missing') }
-  const sourceObj: Object | null = reqObj(data, 'source')
-  if (sourceObj === null) { return err<StarMapHyperlink>('source missing or not object') }
-  const sourceR = decodeStarMapTargetPath(sourceObj)
-  if (!sourceR.ok || sourceR.value === undefined) { return err<StarMapHyperlink>(`source: ${sourceR.error}`) }
-  const targetUri: string | null = reqStr(data, 'targetUri')
-  if (targetUri === null) { return err<StarMapHyperlink>('targetUri missing') }
-  const createdAt: number | null = reqNum(data, 'createdAt')
-  if (createdAt === null) { return err<StarMapHyperlink>('createdAt missing') }
-  const updatedAt: number | null = reqNum(data, 'updatedAt')
-  if (updatedAt === null) { return err<StarMapHyperlink>('updatedAt missing') }
-  const labelR: DecodeResult<string | null> = nullStr(data, 'label')
-  if (!labelR.ok || labelR.value === undefined) { return err<StarMapHyperlink>(`StarMapHyperlink.${labelR.error ?? 'decode failed'}`) }
-  const value: StarMapHyperlink = {
-    hyperlinkId: hyperlinkId,
-    source: sourceR.value,
-    targetUri: targetUri,
-    label: labelR.value,
-    createdAt: createdAt,
-    updatedAt: updatedAt
-  }
-  return ok<StarMapHyperlink>(value)
-}
-
 export function decodeStarMapGraph(data: Object): DecodeResult<StarMapGraph> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return err<StarMapGraph>('StarMapGraph: expected object')
@@ -1618,18 +1577,13 @@ export function decodeStarMapGraph(data: Object): DecodeResult<StarMapGraph> {
   if (linksArr === null) { return err<StarMapGraph>('links missing or not array') }
   const linksR: DecodeResult<StarMapLink[]> = decodeArray<StarMapLink>(linksArr as Object, decodeStarMapLink, 'links')
   if (!linksR.ok || linksR.value === undefined) { return err<StarMapGraph>(linksR.error ?? 'decode failed') }
-  const hyperlinksArr: Array<Object> | null = reqArray(data, 'hyperlinks')
-  if (hyperlinksArr === null) { return err<StarMapGraph>('hyperlinks missing or not array') }
-  const hyperlinksR: DecodeResult<StarMapHyperlink[]> = decodeArray<StarMapHyperlink>(hyperlinksArr as Object, decodeStarMapHyperlink, 'hyperlinks')
-  if (!hyperlinksR.ok || hyperlinksR.value === undefined) { return err<StarMapGraph>(hyperlinksR.error ?? 'decode failed') }
   const value: StarMapGraph = {
     schemaVersion: schemaVersion,
     starmapId: starmapId,
     nodes: nodesR.value,
     edges: edgesR.value,
     embeds: embedsR.value,
-    links: linksR.value,
-    hyperlinks: hyperlinksR.value
+    links: linksR.value
   }
   return ok<StarMapGraph>(value)
 }
@@ -2471,8 +2425,6 @@ function decodeSearchTarget(data: Object): DecodeResult<SearchTarget> {
   if (!edgeIdR.ok || edgeIdR.value === undefined) { return err<SearchTarget>(`target.${edgeIdR.error ?? 'edgeId'}`) }
   const linkIdR: DecodeResult<string | null> = nullStr(data, 'linkId')
   if (!linkIdR.ok || linkIdR.value === undefined) { return err<SearchTarget>(`target.${linkIdR.error ?? 'linkId'}`) }
-  const hyperlinkIdR: DecodeResult<string | null> = nullStr(data, 'hyperlinkId')
-  if (!hyperlinkIdR.ok || hyperlinkIdR.value === undefined) { return err<SearchTarget>(`target.${hyperlinkIdR.error ?? 'hyperlinkId'}`) }
   const embedIdR: DecodeResult<string | null> = nullStr(data, 'embedId')
   if (!embedIdR.ok || embedIdR.value === undefined) { return err<SearchTarget>(`target.${embedIdR.error ?? 'embedId'}`) }
   const settingKeyR: DecodeResult<string | null> = nullStr(data, 'settingKey')
@@ -2487,7 +2439,6 @@ function decodeSearchTarget(data: Object): DecodeResult<SearchTarget> {
     nodeId: nodeIdR.value,
     edgeId: edgeIdR.value,
     linkId: linkIdR.value,
-    hyperlinkId: hyperlinkIdR.value,
     embedId: embedIdR.value,
     settingKey: settingKeyR.value,
     settingSection: settingSectionR.value

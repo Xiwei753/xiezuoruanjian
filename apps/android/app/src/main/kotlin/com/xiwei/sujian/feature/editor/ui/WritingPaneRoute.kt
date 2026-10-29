@@ -1,7 +1,5 @@
 package com.xiwei.sujian.feature.editor.ui
 
-import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -261,7 +259,6 @@ private fun WritingPaneEditorContent(
     onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean,
     modifier: Modifier,
 ) {
-    val context = LocalContext.current
     @Suppress("UNUSED_EXPRESSION")
     (coordinator.targetDecorationsVersionFlow.collectAsStateWithLifecycle().value)
     val surfaceMode = editorSurfaceMode(sessionState.bindingState, coordinator.windowId, targetId, isActivePane)
@@ -495,7 +492,6 @@ private fun WritingPaneEditorContent(
                                 openResolvedAnnotationTarget(
                                     target = result.targets.single(),
                                     coordinator = annotationCoordinator,
-                                    context = context,
                                     onAnnotationTargetOpen = onAnnotationTargetOpen,
                                     onError = { linkMessage = it },
                                 )
@@ -528,7 +524,6 @@ private fun WritingPaneEditorContent(
                         openResolvedAnnotationTarget(
                             target = target,
                             coordinator = annotationCoordinator,
-                            context = context,
                             onAnnotationTargetOpen = onAnnotationTargetOpen,
                             onError = { linkMessage = it },
                         )
@@ -555,7 +550,6 @@ private fun WritingPaneEditorContent(
                     onCreateTag = annotationCoordinator::createTag,
                     onRegisterName = annotationCoordinator::registerName,
                     onNameChanged = annotationCoordinator::onNameDraftChanged,
-                    onExternalLink = annotationCoordinator::addExternalLink,
                     onSearchChanged = annotationCoordinator::onLinkSearchChanged,
                     onObjectLink = annotationCoordinator::addObjectLink,
                     onDeleteLink = annotationCoordinator::deleteLink,
@@ -617,7 +611,6 @@ private fun AnnotationLinkTargetDialog(
 private fun openResolvedAnnotationTarget(
     target: AnnotationResolvedLinkTarget,
     coordinator: AnnotationCoordinator,
-    context: android.content.Context,
     onAnnotationTargetOpen: (AnnotationObjectRef, String) -> Boolean,
     onError: (String) -> Unit,
 ) {
@@ -632,31 +625,17 @@ private fun openResolvedAnnotationTarget(
                 coordinator.openObject(ref, target.target.label)
             }
         }
-        AnnotationLinkResolutionStateDto.EXTERNAL_URL -> {
-            val url = target.target.externalUrl
-            if (url.isNullOrBlank()) {
-                onError("Link URL is unavailable")
-            } else {
-                runCatching {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                }.onFailure { onError(it.message ?: "Could not open link") }
-            }
-        }
-        AnnotationLinkResolutionStateDto.MISSING,
-        AnnotationLinkResolutionStateDto.PROJECT_NOT_DOWNLOADED,
-        -> onError(target.state.displayMessage())
+        else -> onError(target.state.displayMessage())
     }
 }
 
-private fun AnnotationLinkResolutionStateDto.isOpenable(): Boolean =
-    this == AnnotationLinkResolutionStateDto.EXISTS || this == AnnotationLinkResolutionStateDto.EXTERNAL_URL
+private fun AnnotationLinkResolutionStateDto.isOpenable(): Boolean = this == AnnotationLinkResolutionStateDto.EXISTS
 
 private fun AnnotationLinkResolutionStateDto.displayMessage(): String =
     when (this) {
         AnnotationLinkResolutionStateDto.EXISTS -> "目标可访问"
-        AnnotationLinkResolutionStateDto.EXTERNAL_URL -> "外部网址"
-        AnnotationLinkResolutionStateDto.MISSING -> "目标不存在或已删除"
         AnnotationLinkResolutionStateDto.PROJECT_NOT_DOWNLOADED -> "目标作品尚未下载"
+        else -> "目标不存在或已删除"
     }
 
 @Composable

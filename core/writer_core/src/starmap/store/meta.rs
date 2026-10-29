@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::relation_index::{
-    EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
-};
+use super::relation_index::{EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex};
 
 /// 星图元信息、成员 ID 列表、规范顺序、package revision 和派生索引。
 ///
@@ -20,7 +18,6 @@ pub struct GraphMeta {
     pub edge_ids: Vec<String>,
     pub embed_instance_ids: Vec<String>,
     pub link_ids: Vec<String>,
-    pub hyperlink_ids: Vec<String>,
     /// 边关系索引（派生缓存，可从边对象文件重建）。
     #[serde(default)]
     pub edge_relation_index: Vec<EdgeRelationIndex>,
@@ -30,9 +27,6 @@ pub struct GraphMeta {
     /// 链接关系索引（派生缓存，可从链接对象文件重建）。
     #[serde(default)]
     pub link_relation_index: Vec<LinkRelationIndex>,
-    /// 超链接关系索引（派生缓存，可从超链接对象文件重建）。
-    #[serde(default)]
-    pub hyperlink_relation_index: Vec<HyperlinkRelationIndex>,
     /// 节点种类计数（派生缓存，可从节点对象文件重建）。
     #[serde(default)]
     pub node_kind_counts: HashMap<String, u32>,
@@ -50,9 +44,6 @@ pub struct GraphMeta {
     /// 每条链接最近一次被写入的事务 revision。
     #[serde(default)]
     pub link_revisions: HashMap<String, u64>,
-    /// 每条超链接最近一次被写入的事务 revision。
-    #[serde(default)]
-    pub hyperlink_revisions: HashMap<String, u64>,
     pub package_revision: u64,
     pub updated_at: u64,
     #[serde(default)]

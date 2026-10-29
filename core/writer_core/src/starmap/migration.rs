@@ -32,6 +32,14 @@
 //!   （GraphMeta 声明的成员列表必须可解析、每个 node/embed 文件都必须存在，
 //!   否则 Err 并保留旧 layout——那是 position 的唯一来源）
 //! - 最后把 GraphMeta schema 写成 "4"
+//!
+//! ### 删除“绑定外部网页 / URI”能力
+//! - 删除 graph.json 中旧 `hyperlinkIds` / `hyperlinks` / `hyperlinkRevisions` /
+//!   `hyperlinkRelationIndex` 记录
+//! - 删除 `starmaps/<id>/hyperlinks/**/*.json` 旧外链对象文件
+//! - 旧 node `content.type == "externalRef"` 降级为 `Empty`，外部锚点移除
+//! - 内部 `StarMapLink`、Edge、Embed、Node、Anchor 和其他对象全部保留
+//! - schema "4" 数据也执行同一套幂等清理（只清理外链残留，不重写其他对象）
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -344,8 +352,8 @@ fn migrate_all_starmap_graphs(app_data_root: &Path) -> Result<()> {
 
 /// 单个星图的对象存储迁移。
 ///
-/// 读取 `starmaps/{id}/graph.json`，如果 schemaVersion 是 "3" 则执行迁移。
-/// 已经是 "4" 或文件不存在则跳过。
+/// 读取 `starmaps/{id}/graph.json`，如果 schemaVersion 是 "3" 则执行迁移；
+/// 已经是 "4" 则只做旧外链数据清理（幂等）；文件不存在或未知格式则跳过。
 ///
 /// **Fail-closed 源数据保护**：GraphMeta 声明的每个 node / embed 都必须迁移成功
 /// （成员列表必须可解析、对象文件必须存在），否则返回 `Err` 并保留旧
@@ -362,14 +370,18 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
     }
 
     let content = std::fs::read_to_string(&graph_json_path)?;
-    let value: Value = serde_json::from_str(&content)?;
+    let mut value: Value = serde_json::from_str(&content)?;
 
     let schema_version = value
         .get("schemaVersion")
         .and_then(|v| v.as_str())
         .unwrap_or("");
     if schema_version != OLD_GRAPH_META_SCHEMA_VERSION {
-        // 已经是新格式或未知格式，跳过。
+        // 已经是新格式：仍要清理旧“绑定外部网页/URI”能力留下的
+        // hyperlink 元信息和对象目录（幂等）。未知格式保持原样跳过。
+        if schema_version == NEW_GRAPH_META_SCHEMA_VERSION {
+            cleanup_schema4_legacy_external_data(&graph_dir, &graph_json_path, &mut value)?;
+        }
         return Ok(());
     }
 
@@ -430,6 +442,11 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
     // 5. 把 GraphMeta schema 写成 "4"，删除 layoutRevision，推进 package revision。
     //    一次 schema 迁移就是一次真实的数据事务：文件内容变了 revision 必须变。
     let mut new_value = value.clone();
+    // 旧“绑定外部网页/URI”能力已删除：移除旧 hyperlink 成员列表和索引缓存，
+    // 删除 hyperlinks 对象目录，并把旧节点的 externalRef / 外部锚点降级。
+    // 内部 links / edges / embeds 原样保留。
+    let _ = cleanup_legacy_external_hyperlink_records(&graph_dir, &mut new_value)?;
+    let _ = cleanup_legacy_external_node_refs(&graph_dir, &new_value)?;
     if let Some(obj) = new_value.as_object_mut() {
         obj.insert(
             "schemaVersion".to_string(),
@@ -455,6 +472,157 @@ pub fn migrate_one_starmap_graph(app_data_root: &Path, starmap_id: &str) -> Resu
     crate::storage::atomic_write_string(&graph_json_path, &new_content)?;
 
     Ok(())
+}
+
+/// 旧外链数据是否仍存在：GraphMeta 里有 hyperlink 记录，或磁盘上还有 hyperlinks 目录。
+///
+/// 旧版 `GraphMeta` 总是序列化 `hyperlinkIds`（即使为空），因此 schema 4
+/// 旧数据一定会命中该标记；新版写出的 graph.json 不再包含该字段。
+fn graph_has_legacy_external_marker(graph_dir: &Path, value: &Value) -> bool {
+    value
+        .as_object()
+        .map(|obj| obj.contains_key("hyperlinkIds") || obj.contains_key("hyperlinks"))
+        .unwrap_or(false)
+        || graph_dir.join("hyperlinks").exists()
+}
+
+/// schema 4 数据的旧外链清理入口（幂等）。
+///
+/// 只删除“绑定外部网页/URI”能力的数据；内部 links 与其他对象不动。
+/// 只有确实清理了内容才推进 package revision 并重写 graph.json。
+fn cleanup_schema4_legacy_external_data(
+    graph_dir: &Path,
+    graph_json_path: &Path,
+    value: &mut Value,
+) -> Result<()> {
+    let has_legacy_marker = graph_has_legacy_external_marker(graph_dir, value);
+    let mut changed = cleanup_legacy_external_hyperlink_records(graph_dir, value)?;
+    // 旧 schema 4 的 graph.json 一定带 `hyperlinkIds`（即使为空），因此该标记
+    // 足以覆盖同时期的 externalRef 节点。新代码写出的 graph.json 没有标记，
+    // 不能再逐次扫描全部 node 文件。
+    if has_legacy_marker {
+        changed |= cleanup_legacy_external_node_refs(graph_dir, value)?;
+    }
+    if !changed {
+        return Ok(());
+    }
+    if let Some(obj) = value.as_object_mut() {
+        let old_package_revision = obj
+            .get("packageRevision")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        obj.insert(
+            "packageRevision".to_string(),
+            Value::from(old_package_revision.saturating_add(1)),
+        );
+        obj.insert("updatedAt".to_string(), Value::from(super::now_epoch()));
+    }
+    let new_content = serde_json::to_string_pretty(value)?;
+    crate::storage::atomic_write_string(graph_json_path, &new_content)?;
+    Ok(())
+}
+
+/// 删除旧 GraphMeta 中的 hyperlink 成员/索引/revision 记录，并删除 hyperlinks 对象目录。
+fn cleanup_legacy_external_hyperlink_records(graph_dir: &Path, value: &mut Value) -> Result<bool> {
+    let mut changed = false;
+    if let Some(obj) = value.as_object_mut() {
+        for field in [
+            "hyperlinkIds",
+            "hyperlinks",
+            "hyperlinkRevisions",
+            "hyperlinkRelationIndex",
+        ] {
+            if obj.remove(field).is_some() {
+                changed = true;
+            }
+        }
+    }
+    if let Some(entries) = value
+        .get_mut("deletedSinceLastSync")
+        .and_then(|v| v.get_mut("entries"))
+        .and_then(|v| v.as_array_mut())
+    {
+        let before = entries.len();
+        entries
+            .retain(|entry| entry.get("objectType").and_then(|v| v.as_str()) != Some("hyperlink"));
+        changed |= entries.len() != before;
+    }
+    let hyperlinks_dir = graph_dir.join("hyperlinks");
+    if hyperlinks_dir.exists() {
+        if hyperlinks_dir.is_dir() {
+            std::fs::remove_dir_all(&hyperlinks_dir)?;
+        } else {
+            std::fs::remove_file(&hyperlinks_dir)?;
+        }
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// 把旧节点里的外部引用内容/外部锚点降级为内部语义。
+fn cleanup_legacy_external_node_refs(graph_dir: &Path, value: &Value) -> Result<bool> {
+    let node_ids: Vec<String> = match value.get("nodeIds").and_then(|v| v.as_array()) {
+        Some(entries) => entries
+            .iter()
+            .filter_map(|entry| entry.as_str().map(str::to_string))
+            .collect(),
+        None => Vec::new(),
+    };
+    let mut changed = false;
+    for node_id in node_ids {
+        let bucket = crate::starmap::package_storage::bucket_for_id(&node_id);
+        let node_path = graph_dir
+            .join("nodes")
+            .join(bucket)
+            .join(format!("{}.json", node_id));
+        if !node_path.exists() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&node_path)?;
+        let mut node_value: Value = serde_json::from_str(&content)?;
+        let Some(obj) = node_value.as_object_mut() else {
+            continue;
+        };
+        if !clean_node_external_refs(obj) {
+            continue;
+        }
+        let new_content = serde_json::to_string_pretty(&node_value)?;
+        crate::storage::atomic_write_string(&node_path, &new_content)?;
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// 清理单个 node JSON 中的外部引用内容和外部锚点，返回是否修改。
+///
+/// - `content.type == "externalRef"` → `Empty`
+/// - `anchors[].target.type == "external"` 的锚点移除
+fn clean_node_external_refs(obj: &mut serde_json::Map<String, Value>) -> bool {
+    let mut changed = false;
+    let content_is_external = obj
+        .get("content")
+        .and_then(|c| c.get("type"))
+        .and_then(|t| t.as_str())
+        == Some("externalRef");
+    if content_is_external {
+        obj.insert(
+            "content".to_string(),
+            serde_json::json!({ "type": "empty" }),
+        );
+        changed = true;
+    }
+    if let Some(anchors) = obj.get_mut("anchors").and_then(|a| a.as_array_mut()) {
+        let before = anchors.len();
+        anchors.retain(|anchor| {
+            anchor
+                .get("target")
+                .and_then(|t| t.get("type"))
+                .and_then(|t| t.as_str())
+                != Some("external")
+        });
+        changed |= anchors.len() != before;
+    }
+    changed
 }
 
 /// 读取旧 GraphMeta 的成员 ID 数组（`nodeIds` / `embedInstanceIds`）。
@@ -612,6 +780,10 @@ fn migrate_node_json(
     // 删除旧显示层字段。
     obj.remove("displayPolicy");
     obj.remove("openBehavior");
+
+    // 旧“绑定外部网页/URI”能力已删除：外部引用内容降级为 Empty，
+    // 外部锚点移除；内部章节/实体引用原样保留。
+    clean_node_external_refs(obj);
 
     // 幂等 position 迁移：已有合法 position 则保留，否则从 layout 提取，
     // 否则用 (0, 0)。

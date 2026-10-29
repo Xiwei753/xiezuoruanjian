@@ -11,7 +11,6 @@ export type SearchScope =
   | 'starmapTitle'
   | 'starmapNode'
   | 'starmapEdgeLabel'
-  | 'starmapHyperlink'
   | 'starmapLink'
   | 'starmapEmbed'
   | 'annotationTag'
@@ -49,7 +48,6 @@ export interface SearchTarget {
   nodeId: string | null
   edgeId: string | null
   linkId: string | null
-  hyperlinkId: string | null
   embedId: string | null
   settingKey: string | null
   settingSection: string | null

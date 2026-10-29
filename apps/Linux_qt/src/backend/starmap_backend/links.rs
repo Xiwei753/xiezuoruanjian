@@ -1,8 +1,8 @@
 //! 星图内部跳转链接（link）的 `AppBackend` 领域方法。
 //!
-//! 从 `starmap_backend.rs` 拆出：内部链接是独立于节点/边/超链接的第五类图元，
+//! 从 `starmap_backend.rs` 拆出：内部链接是独立于节点/边/嵌入的第四类图元，
 //! 表达图内二元关系（source + target 两条 StarMapTargetPath），带独立的增删改查
-//! 与列表接口，单独成模块避免与图元操作混在一起。结构照 `hyperlinks.rs`。
+//! 与列表接口，单独成模块避免与图元操作混在一起。
 
 use super::*;
 use writer_core::api::types::StarMapLinkDto;

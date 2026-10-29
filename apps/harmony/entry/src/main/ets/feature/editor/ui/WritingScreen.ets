@@ -1780,9 +1780,7 @@ export struct WritingScreen {
     for (const link of annotations.links) {
       if (link.deletedAtMs !== null || link.source.kind !== 'textAnchor' ||
         link.source.projectId !== this.projectId || !sourceIds.includes(link.source.objectId)) continue
-      if (link.target.externalUrl !== null || link.target.objectRef !== null) {
-        manualTargets.push(link.target)
-      }
+      manualTargets.push(link.target)
     }
     if (manualTargets.length > 0) return this.uniqueHyperlinkTargets(manualTargets)
 
@@ -1790,13 +1788,12 @@ export struct WritingScreen {
     for (const match of annotations.autoMatches) {
       if (!covers(match.startByte, match.endByte)) continue
       for (const candidate of match.candidates) {
-        automaticTargets.push({ objectRef: candidate, externalUrl: null })
+        automaticTargets.push({ objectRef: candidate })
       }
       if (match.candidates.length === 0) {
         for (const entryId of match.entryIds) {
           automaticTargets.push({
-            objectRef: { kind: 'namedEntry', projectId: this.projectId, objectId: entryId },
-            externalUrl: null
+            objectRef: { kind: 'namedEntry', projectId: this.projectId, objectId: entryId }
           })
         }
       }
@@ -1809,9 +1806,7 @@ export struct WritingScreen {
     const keys: Set<string> = new Set<string>()
     for (const target of targets) {
       const ref = target.objectRef
-      const key: string = ref !== null
-        ? `${ref.kind}:${ref.projectId}:${ref.objectId}`
-        : `url:${target.externalUrl ?? ''}`
+      const key: string = `${ref.kind}:${ref.projectId}:${ref.objectId}`
       if (keys.has(key)) continue
       keys.add(key)
       output.push(target)
@@ -1908,7 +1903,6 @@ export struct WritingScreen {
 
   private async hyperlinkTargetLabel(target: AnnotationTargetDto): Promise<string> {
     const ref = target.objectRef
-    if (ref === null) return target.externalUrl ?? '外部链接'
     if (ref.kind === 'namedEntry') {
       const result = await this.annotationBridge.listNamedEntries(ref.projectId)
       const entry = result.data?.find((item) => item.entryId === ref.objectId && item.deletedAtMs === null)
@@ -1954,24 +1948,7 @@ export struct WritingScreen {
   }
 
   private async openHyperlinkTarget(target: AnnotationTargetDto): Promise<void> {
-    if (target.externalUrl !== null) {
-      const context = getAppContext().getAbilityContext()
-      if (context === null) {
-        this.showHyperlinkToast('无法打开外部链接')
-        return
-      }
-      try {
-        await context.openLink(target.externalUrl)
-      } catch (_error) {
-        this.showHyperlinkToast('外部链接打开失败')
-      }
-      return
-    }
     const ref = target.objectRef
-    if (ref === null) {
-      this.showHyperlinkToast('链接目标不可用')
-      return
-    }
     if (ref.kind === 'namedEntry') {
       this.annotationTarget = ref
       this.annotationPanelOpen = true

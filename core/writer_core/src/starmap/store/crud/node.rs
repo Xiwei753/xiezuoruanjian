@@ -79,7 +79,7 @@ impl StarMapStore {
         Ok(updated)
     }
 
-    /// 计算删除本地 node 时需要级联删除的 edge/embed/link/hyperlink ID 集合。
+    /// 计算删除本地 node 时需要级联删除的 edge/embed/link ID 集合。
     ///
     /// 这是 pub 方法，供 facade 的 candidate 模拟删除复用，保证 candidate
     /// 模拟和 store 真实删除产生相同的最终对象集合。内部调用
@@ -92,7 +92,6 @@ impl StarMapStore {
             self.edges.values(),
             self.embeds.values(),
             self.links.values(),
-            self.hyperlinks.values(),
         )
     }
 
@@ -111,7 +110,6 @@ impl StarMapStore {
             self.edges.values(),
             self.embeds.values(),
             self.links.values(),
-            self.hyperlinks.values(),
         )
     }
 
@@ -146,10 +144,6 @@ impl StarMapStore {
 
         for lid in &cascade.link_ids {
             self.remove_link(lid);
-        }
-
-        for hlid in &cascade.hyperlink_ids {
-            self.remove_hyperlink(hlid);
         }
 
         Ok(())

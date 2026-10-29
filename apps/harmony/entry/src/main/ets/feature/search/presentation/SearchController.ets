@@ -159,8 +159,7 @@ export class SearchController {
 
       if (item.target.starmapId !== null) {
         if (item.target.nodeId !== null || item.target.edgeId !== null
-          || item.target.embedId !== null || item.target.linkId !== null
-          || item.target.hyperlinkId !== null) {
+          || item.target.embedId !== null || item.target.linkId !== null) {
           const graph = await this.bridge.getStarMapGraph(item.target.starmapId)
           if (!graph.success || graph.data === undefined) {
             return true
@@ -192,14 +191,6 @@ export class SearchController {
           if (item.target.linkId !== null) {
             for (const link of graph.data.links) {
               if (link.linkId === item.target.linkId) {
-                return true
-              }
-            }
-            return false
-          }
-          if (item.target.hyperlinkId !== null) {
-            for (const hyperlink of graph.data.hyperlinks) {
-              if (hyperlink.hyperlinkId === item.target.hyperlinkId) {
                 return true
               }
             }

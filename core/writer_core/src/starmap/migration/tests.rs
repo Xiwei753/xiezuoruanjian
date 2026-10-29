@@ -561,6 +561,95 @@ fn migrate_starmap_graph_schema_3_to_4() {
 }
 
 #[test]
+fn migrate_starmap_graph_drops_legacy_external_hyperlinks_and_keeps_internal_links() {
+    let dir = temp_root();
+    let starmap_id = "sm_legacy_links";
+    let graph_dir = dir.path().join("starmaps").join(starmap_id);
+    std::fs::create_dir_all(graph_dir.join("nodes")).unwrap();
+
+    // 旧 schema "3"：同时声明内部 Link 与外部网页 Hyperlink。
+    let graph_meta = json!({
+        "schemaVersion": "3",
+        "starmapId": starmap_id,
+        "nodeIds": [],
+        "edgeIds": [],
+        "embedInstanceIds": [],
+        "linkIds": ["link-1"],
+        "hyperlinkIds": ["hl-1"],
+        "linkRelationIndex": [],
+        "hyperlinkRelationIndex": [
+            {"hyperlinkId": "hl-1", "sourceStarmapId": starmap_id}
+        ],
+        "packageRevision": 1,
+        "updatedAt": 0,
+    });
+    write_json(&graph_dir.join("graph.json"), &graph_meta);
+
+    let link_bucket = crate::starmap::package_storage::bucket_for_id("link-1");
+    let link_path = graph_dir
+        .join("links")
+        .join(link_bucket)
+        .join("link-1.json");
+    write_json(
+        &link_path,
+        &json!({
+            "linkId": "link-1",
+            "source": {"starmapId": starmap_id, "segments": [], "target": {"type": "starmap"}},
+            "target": {"starmapId": starmap_id, "segments": [], "target": {"type": "starmap"}},
+            "label": "internal",
+            "createdAt": 0,
+            "updatedAt": 0,
+        }),
+    );
+
+    let hyperlink_bucket = crate::starmap::package_storage::bucket_for_id("hl-1");
+    let hyperlink_path = graph_dir
+        .join("hyperlinks")
+        .join(hyperlink_bucket)
+        .join("hl-1.json");
+    write_json(
+        &hyperlink_path,
+        &json!({
+            "hyperlinkId": "hl-1",
+            "source": {"starmapId": starmap_id, "segments": [], "target": {"type": "starmap"}},
+            "targetUri": "https://example.com",
+            "label": "external",
+            "createdAt": 0,
+            "updatedAt": 0,
+        }),
+    );
+
+    migrate_one_starmap_graph(dir.path(), starmap_id).unwrap();
+
+    let migrated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(graph_dir.join("graph.json")).unwrap())
+            .unwrap();
+    assert_eq!(migrated["schemaVersion"], json!("4"));
+    assert!(
+        migrated.get("hyperlinkIds").is_none(),
+        "legacy hyperlinkIds must be removed from graph.json"
+    );
+    assert!(
+        migrated.get("hyperlinkRelationIndex").is_none(),
+        "legacy hyperlink relation index must be removed from graph.json"
+    );
+    assert_eq!(
+        migrated["linkIds"],
+        json!(["link-1"]),
+        "internal link ids must be preserved"
+    );
+
+    assert!(
+        !hyperlink_path.exists(),
+        "legacy external hyperlink object file must be removed during migration"
+    );
+    assert!(
+        link_path.exists(),
+        "internal link object file must be preserved during migration"
+    );
+}
+
+#[test]
 fn migrate_starmap_graph_skips_already_new_schema() {
     let dir = temp_root();
     let graph_dir = dir.path().join("starmaps").join("sm_new");
@@ -757,7 +846,6 @@ fn validate_nodes_rejects_nan_position() {
         edges: vec![],
         embeds: vec![],
         links: vec![],
-        hyperlinks: vec![],
     };
 
     let context = GraphResolverContext::new_disk_only(dir.path());
@@ -801,7 +889,6 @@ fn validate_nodes_rejects_infinity_position() {
         edges: vec![],
         embeds: vec![],
         links: vec![],
-        hyperlinks: vec![],
     };
 
     let context = GraphResolverContext::new_disk_only(dir.path());

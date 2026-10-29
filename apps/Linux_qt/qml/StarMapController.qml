@@ -75,4 +75,21 @@ QtObject {
             return false;
         }
     }
+
+    // 首页拖放：把已有独立根星图嵌入宿主星图。Core 在同一事务中创建 Embed
+    // 并把源星图移出根列表；成功后由 StarMapPage 刷新 listStarmaps。
+    function embedExistingStarmap(sourceStarmapId, hostStarmapId) {
+        var api = starmapApi();
+        if (!api || !appController || !sourceStarmapId || !hostStarmapId
+                || sourceStarmapId === hostStarmapId)
+            return false;
+        try {
+            return handleMutationJson(
+                api.embed_existing_starmap_json(hostStarmapId, sourceStarmapId, 0, 0),
+                qsTr("归入宿主星图失败"));
+        } catch (e) {
+            appController.emitError(qsTr("后端调用失败: ") + e);
+            return false;
+        }
+    }
 }

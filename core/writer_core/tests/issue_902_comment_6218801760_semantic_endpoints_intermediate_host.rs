@@ -1,4 +1,4 @@
-//! Issue #902 评论 6218801760 —「语义目标（`ChapterRange` / `External`）的跨画布边
+//! Issue #902 评论 6218801760 —「语义目标（`ChapterRange` / `Entity`）的跨画布边
 //! 宿主落在**中间画布**」经真实 `WriterCoreApi` 验证。
 //!
 //! #902 实现路线第 2 节规定跨画布边的宿主由两端导航路线的**最长公共实例路径
@@ -23,7 +23,7 @@
 //! 拓扑：`R --Embed(eB)--> B`，`B --Embed(eC)--> C`、`B --Embed(eD)--> D`。
 //! `B` 有节点 `b1`，`C` 有节点 `c1`（挂锚点 `a1`）。两条跨画布边的宿主都是 `B`：
 //!
-//! - `semantic_edge`：`ChapterRange → External`，两端输入路线分别为
+//! - `semantic_edge`：`ChapterRange → Entity`，两端输入路线分别为
 //!   `R/[eB, eC]` 与 `R/[eB, eD]`；
 //! - `anchor_edge`：`Anchor(c1, a1) → Node(b1)`，两端输入路线分别为
 //!   `R/[eB, eC]` 与 `R/[eB]`。
@@ -111,10 +111,11 @@ fn chapter_range_target() -> StarMapTargetDetailDto {
     }
 }
 
-fn external_target() -> StarMapTargetDetailDto {
+fn entity_target() -> StarMapTargetDetailDto {
     StarMapTargetDetailDto {
-        kind: "external".to_string(),
-        uri: Some("https://example.com/doc".to_string()),
+        kind: "entity".to_string(),
+        entity_type: Some("character".to_string()),
+        entity_id: Some("chen".to_string()),
         ..Default::default()
     }
 }
@@ -273,7 +274,7 @@ fn setup() -> Fixture {
     }
 }
 
-/// 创建 `ChapterRange → External`（两端都在 `B` 的深层子画布），断言宿主是 `B`。
+/// 创建 `ChapterRange → Entity`（两端都在 `B` 的深层子画布），断言宿主是 `B`。
 fn create_semantic_edge(
     api: &WriterCoreApi,
     root: &str,
@@ -290,7 +291,7 @@ fn create_semantic_edge(
             ),
             selection(
                 route(root, vec![enter_embed(eb), enter_embed(ed)]),
-                external_target(),
+                entity_target(),
             ),
             StarMapEdgeKindDto::References,
             Some("深层语义".to_string()),
@@ -304,7 +305,7 @@ fn create_semantic_edge(
         vec![enter_embed(ec)],
         chapter_range_target(),
         vec![enter_embed(ed)],
-        external_target(),
+        entity_target(),
     );
     created.edge.id
 }
@@ -413,11 +414,11 @@ fn assert_target_queries(f: &Fixture) {
         "C 的 ChapterRange 查询只应命中语义边；实际: {chapter:?}"
     );
 
-    let external = f.target(f.route_d(), external_target());
+    let entity = f.target(f.route_d(), entity_target());
     assert_eq!(
-        ids(&external),
+        ids(&entity),
         vec![f.semantic_edge.as_str()],
-        "D 的 External 查询只应命中语义边；实际: {external:?}"
+        "D 的 Entity 查询只应命中语义边；实际: {entity:?}"
     );
 
     let anchor = f.target(f.route_c(), anchor_target("c1", "a1"));
@@ -436,8 +437,8 @@ fn assert_target_queries(f: &Fixture) {
 
     // 跨画布/跨类型的错误 target 不得误命中。
     assert!(
-        f.target(f.route_c(), external_target()).is_empty(),
-        "C 查询 External 不应命中终点在 D 的语义边"
+        f.target(f.route_c(), entity_target()).is_empty(),
+        "C 查询 Entity 不应命中终点在 D 的语义边"
     );
     assert!(
         f.target(f.route_c(), node_target("c1")).is_empty(),
@@ -493,8 +494,8 @@ fn assert_delete_semantic_edge_clears_index(f: &Fixture) {
         "被删语义边的 ChapterRange 查询应变空"
     );
     assert!(
-        f.target(f.route_d(), external_target()).is_empty(),
-        "被删语义边的 External 查询应变空"
+        f.target(f.route_d(), entity_target()).is_empty(),
+        "被删语义边的 Entity 查询应变空"
     );
 
     let c_canvas = f.canvas(f.route_c());

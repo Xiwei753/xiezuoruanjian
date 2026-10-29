@@ -310,19 +310,6 @@ impl WriterCoreApi {
                         link.label.clone().unwrap_or_else(|| link.link_id.clone()),
                     )
                 }),
-            ContributionObjectType::StarMapHyperlink => graph
-                .hyperlinks
-                .iter()
-                .find(|hyperlink| hyperlink.hyperlink_id == object_id)
-                .map(|hyperlink| {
-                    ContributionObjectSnapshot::object(
-                        hyperlink.updated_at.to_string(),
-                        hyperlink
-                            .label
-                            .clone()
-                            .unwrap_or_else(|| hyperlink.target_uri.clone()),
-                    )
-                }),
             _ => None,
         }
     }

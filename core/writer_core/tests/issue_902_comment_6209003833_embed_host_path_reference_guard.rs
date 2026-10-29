@@ -1,10 +1,9 @@
 //! Issue #902 评论 6209003833 — 跨画布 **Embed host_path** 引用的删除保护。
 //!
 //! #902 实现路线第 3 节要求统一的反向依赖索引收录 Edge 两端、Link 两端、
-//! Hyperlink source、**Embed host_path**、Portal 入口。此前各轮已通过
-//! `WriterCoreApi` 覆盖 Edge 端点、Link target、Hyperlink source、Embed 入口、
-//! Portal 穿行与 Anchor 终点，但 **Embed 自己的 host_path 作为跨画布引用来源**
-//! 尚未被真实验证。
+//! **Embed host_path**、Portal 入口。此前各轮已通过 `WriterCoreApi` 覆盖 Edge
+//! 端点、Link target、Embed 入口、Portal 穿行与 Anchor 终点，但 **Embed 自己的
+//! host_path 作为跨画布引用来源**尚未被真实验证。
 //!
 //! 本测试构造根图 R，R 通过 Embed `eB` 进入 B、通过 Embed `eC` 进入 C，并在 B 中
 //! 放置节点 b1。随后在 R 中新增 Embed `ex`（目标 C），其 `host_path` 写成

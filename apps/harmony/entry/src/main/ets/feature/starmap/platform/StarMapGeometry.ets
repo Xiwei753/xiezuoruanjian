@@ -982,8 +982,7 @@ function emptyTargetDetail(type: string, nodeId: string | null): StarMapTargetDe
     rangeStart: null,
     rangeEnd: null,
     entityType: null,
-    entityId: null,
-    uri: null
+    entityId: null
   }
 }
 

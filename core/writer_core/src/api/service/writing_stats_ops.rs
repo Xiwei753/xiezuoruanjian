@@ -486,6 +486,42 @@ fn contribution_stats_dto(
                 counts: contribution_counts_dto(&day.counts),
             })
             .collect(),
+        // 逐日 actor 明细与 `days` 同源；每个日期下按 actor 升序展开成数组，
+        // 端侧可直接按 date 建索引，不自行把区间总量拆到某天。
+        day_actors: {
+            let mut day_actors = Vec::new();
+            for (date, actors) in &aggregate.day_actors {
+                for actor in actors.values() {
+                    day_actors.push(crate::api::types::ContributionDayActorStatsDto {
+                        date: date.clone(),
+                        actor: actor.actor.clone(),
+                        counts: contribution_counts_dto(&actor.counts),
+                        entrypoints: actor
+                            .entrypoints
+                            .iter()
+                            .map(|(entrypoint, operations)| {
+                                crate::api::types::ContributionEntrypointStatsDto {
+                                    entrypoint: entrypoint.clone(),
+                                    operations: *operations,
+                                }
+                            })
+                            .collect(),
+                        trusted_operations: actor.trusted_operations,
+                        slices: actor
+                            .slices
+                            .iter()
+                            .map(
+                                |(hour, counts)| crate::api::types::ContributionSliceStatsDto {
+                                    hour: *hour,
+                                    counts: contribution_counts_dto(counts),
+                                },
+                            )
+                            .collect(),
+                    });
+                }
+            }
+            day_actors
+        },
         devices: aggregate
             .devices
             .values()

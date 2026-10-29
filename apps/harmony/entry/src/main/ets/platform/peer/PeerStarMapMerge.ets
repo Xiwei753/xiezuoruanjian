@@ -44,10 +44,6 @@ interface PeerLinkRelationEntry {
   linkId?: string
 }
 
-interface PeerHyperlinkRelationEntry {
-  hyperlinkId?: string
-}
-
 interface PeerDeletionEntry {
   objectType?: string
   objectId?: string
@@ -65,17 +61,14 @@ interface PeerStarMapGraphMeta {
   edgeIds?: string[]
   embedInstanceIds?: string[]
   linkIds?: string[]
-  hyperlinkIds?: string[]
   edgeRelationIndex?: PeerEdgeRelationEntry[]
   embedHostIndex?: PeerEmbedHostEntry[]
   linkRelationIndex?: PeerLinkRelationEntry[]
-  hyperlinkRelationIndex?: PeerHyperlinkRelationEntry[]
   nodeKindCounts?: Record<string, number>
   nodeRevisions?: Record<string, number>
   edgeRevisions?: Record<string, number>
   embedRevisions?: Record<string, number>
   linkRevisions?: Record<string, number>
-  hyperlinkRevisions?: Record<string, number>
   packageRevision?: number
   updatedAt?: number
   deletedSinceLastSync?: PeerDeletedSinceLastSync
@@ -315,10 +308,6 @@ function linkKey(entry: PeerLinkRelationEntry): string {
   return entry.linkId ?? ''
 }
 
-function hyperlinkKey(entry: PeerHyperlinkRelationEntry): string {
-  return entry.hyperlinkId ?? ''
-}
-
 function mergeDeletions(local: PeerDeletedSinceLastSync | undefined,
   remote: PeerDeletedSinceLastSync | undefined): PeerDeletedSinceLastSync {
   const merged: PeerDeletionEntry[] = local?.entries === undefined ? [] : local.entries.slice()
@@ -440,7 +429,7 @@ function mergeMembersWithDeletions(localIds: string[] | undefined,
 
 function filterDeletions(deletions: PeerDeletedSinceLastSync,
   nodeIds: Set<string>, edgeIds: Set<string>, embedIds: Set<string>,
-  linkIds: Set<string>, hyperlinkIds: Set<string>): PeerDeletedSinceLastSync {
+  linkIds: Set<string>): PeerDeletedSinceLastSync {
   const filtered: PeerDeletionEntry[] = []
   ;(deletions.entries ?? []).forEach((entry: PeerDeletionEntry): void => {
     const id: string = entry.objectId ?? ''
@@ -453,8 +442,6 @@ function filterDeletions(deletions: PeerDeletedSinceLastSync,
       exists = embedIds.has(id)
     } else if (entry.objectType === 'link') {
       exists = linkIds.has(id)
-    } else if (entry.objectType === 'hyperlink') {
-      exists = hyperlinkIds.has(id)
     }
     if (!exists) {
       filtered.push(entry)
@@ -490,23 +477,18 @@ function mergeGraph(local: PeerStarMapGraphMeta,
   const linkMerge: PeerMemberMergeResult = mergeMembersWithDeletions(local.linkIds,
     remote.linkIds, local.linkRevisions, remote.linkRevisions, 'link',
     local.deletedSinceLastSync, remote.deletedSinceLastSync)
-  const hyperlinkMerge: PeerMemberMergeResult = mergeMembersWithDeletions(local.hyperlinkIds,
-    remote.hyperlinkIds, local.hyperlinkRevisions, remote.hyperlinkRevisions,
-    'hyperlink', local.deletedSinceLastSync, remote.deletedSinceLastSync)
   const nodeSet: Set<string> = new Set<string>(nodeMerge.ids)
   const edgeSet: Set<string> = new Set<string>(edgeMerge.ids)
   const embedSet: Set<string> = new Set<string>(embedMerge.ids)
   const linkSet: Set<string> = new Set<string>(linkMerge.ids)
-  const hyperlinkSet: Set<string> = new Set<string>(hyperlinkMerge.ids)
   conflict = nodeMerge.conflict || edgeMerge.conflict || embedMerge.conflict ||
-    linkMerge.conflict || hyperlinkMerge.conflict
+    linkMerge.conflict
   let description: string = ''
   const descriptions: string[] = [
     nodeMerge.description,
     edgeMerge.description,
     embedMerge.description,
-    linkMerge.description,
-    hyperlinkMerge.description
+    linkMerge.description
   ]
   descriptions.forEach((text: string): void => {
     if (description.length === 0 && text.length > 0) {
@@ -520,17 +502,14 @@ function mergeGraph(local: PeerStarMapGraphMeta,
     edgeIds: local.edgeIds,
     embedInstanceIds: local.embedInstanceIds,
     linkIds: local.linkIds,
-    hyperlinkIds: local.hyperlinkIds,
     edgeRelationIndex: local.edgeRelationIndex,
     embedHostIndex: local.embedHostIndex,
     linkRelationIndex: local.linkRelationIndex,
-    hyperlinkRelationIndex: local.hyperlinkRelationIndex,
     nodeKindCounts: local.nodeKindCounts,
     nodeRevisions: local.nodeRevisions,
     edgeRevisions: local.edgeRevisions,
     embedRevisions: local.embedRevisions,
     linkRevisions: local.linkRevisions,
-    hyperlinkRevisions: local.hyperlinkRevisions,
     packageRevision: local.packageRevision,
     updatedAt: local.updatedAt,
     deletedSinceLastSync: local.deletedSinceLastSync
@@ -543,16 +522,12 @@ function mergeGraph(local: PeerStarMapGraphMeta,
   merged.edgeIds = edgeMerge.ids
   merged.embedInstanceIds = embedMerge.ids
   merged.linkIds = linkMerge.ids
-  merged.hyperlinkIds = hyperlinkMerge.ids
   merged.edgeRelationIndex = filterRelationArray(mergeRelationArray(
     local.edgeRelationIndex, remote.edgeRelationIndex, relationKey), edgeSet, relationKey)
   merged.embedHostIndex = filterRelationArray(mergeRelationArray(
     local.embedHostIndex, remote.embedHostIndex, embedHostKey), embedSet, embedHostKey)
   merged.linkRelationIndex = filterRelationArray(mergeRelationArray(
     local.linkRelationIndex, remote.linkRelationIndex, linkKey), linkSet, linkKey)
-  merged.hyperlinkRelationIndex = filterRelationArray(mergeRelationArray(
-    local.hyperlinkRelationIndex, remote.hyperlinkRelationIndex, hyperlinkKey),
-    hyperlinkSet, hyperlinkKey)
   merged.nodeKindCounts = mergeNumberMap(local.nodeKindCounts, remote.nodeKindCounts)
   merged.nodeRevisions = filterNumberMap(mergeNumberMap(local.nodeRevisions,
     remote.nodeRevisions), nodeSet)
@@ -562,12 +537,10 @@ function mergeGraph(local: PeerStarMapGraphMeta,
     remote.embedRevisions), embedSet)
   merged.linkRevisions = filterNumberMap(mergeNumberMap(local.linkRevisions,
     remote.linkRevisions), linkSet)
-  merged.hyperlinkRevisions = filterNumberMap(mergeNumberMap(local.hyperlinkRevisions,
-    remote.hyperlinkRevisions), hyperlinkSet)
   merged.packageRevision = maxNumber(local.packageRevision, remote.packageRevision)
   merged.updatedAt = maxNumber(local.updatedAt, remote.updatedAt)
   merged.deletedSinceLastSync = filterDeletions(mergeDeletions(local.deletedSinceLastSync,
-    remote.deletedSinceLastSync), nodeSet, edgeSet, embedSet, linkSet, hyperlinkSet)
+    remote.deletedSinceLastSync), nodeSet, edgeSet, embedSet, linkSet)
   return finalize(local, merged, conflict, description)
 }
 

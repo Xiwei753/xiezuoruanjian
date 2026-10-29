@@ -112,7 +112,6 @@ fn searchable_fields(scope: SearchScope) -> (bool, bool) {
         | SearchScope::StarmapTitle => (true, false),
         SearchScope::StarmapNode
         | SearchScope::StarmapEdgeLabel
-        | SearchScope::StarmapHyperlink
         | SearchScope::StarmapLink
         | SearchScope::StarmapEmbed
         | SearchScope::AnnotationTag
@@ -133,7 +132,6 @@ fn base_text_score(scope: SearchScope, field: SearchField) -> f64 {
         SearchScope::Setting => 2.6,
         SearchScope::StarmapNode => 2.4,
         SearchScope::StarmapEdgeLabel => 2.2,
-        SearchScope::StarmapHyperlink => 2.1,
         SearchScope::StarmapLink => 2.0,
         SearchScope::StarmapEmbed => 2.0,
         SearchScope::AnnotationTag => 2.7,
@@ -189,7 +187,6 @@ fn context_boost(scope: SearchScope, target: &SearchTarget, context: &SearchCont
         SearchScope::StarmapTitle
         | SearchScope::StarmapNode
         | SearchScope::StarmapEdgeLabel
-        | SearchScope::StarmapHyperlink
         | SearchScope::StarmapLink
         | SearchScope::StarmapEmbed => {
             if same(
@@ -239,7 +236,6 @@ fn context_boost(scope: SearchScope, target: &SearchTarget, context: &SearchCont
                 SearchScope::StarmapTitle
                     | SearchScope::StarmapNode
                     | SearchScope::StarmapEdgeLabel
-                    | SearchScope::StarmapHyperlink
                     | SearchScope::StarmapLink
                     | SearchScope::StarmapEmbed
             ) =>
@@ -335,7 +331,6 @@ impl PathLookup {
             }
             SearchScope::StarmapNode
             | SearchScope::StarmapEdgeLabel
-            | SearchScope::StarmapHyperlink
             | SearchScope::StarmapLink
             | SearchScope::StarmapEmbed => {
                 let starmap = entry

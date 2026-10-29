@@ -903,7 +903,7 @@ impl crate::sync::SyncService {
                 // 星图对象文件：路由到领域级删除事务
                 if crate::sync::staging::starmap_merge::is_starmap_object_file_path(path) {
                     // issue #902 第十五轮复核：apply_starmap_object_remote_delete 返回
-                    // 实际删除的所有路径集合（含级联删除的 edge/link/hyperlink/embed）。
+                    // 实际删除的所有路径集合（含级联删除的 edge/link/embed）。
                     // 为每个路径清理 known_files / known_files_updated_at 并记录文件级
                     // tombstone，防止 snapshot_local_records_read_only 报
                     // "known file missing without tombstone"。
@@ -973,7 +973,7 @@ impl crate::sync::SyncService {
     /// 用户点"采用远端"后本函数将 Y 重新登记到 graph.json：读取 graph.json，
     /// 将 object_id 添加到成员表，更新 revision，清除对应 tombstone，重建全部
     /// 派生索引（edge_relation_index / embed_host_index / link_relation_index /
-    /// hyperlink_relation_index / node_kind_counts），最后用 SaveTransaction
+    /// node_kind_counts），最后用 SaveTransaction
     /// 把对象文件 + graph.json 原子提交。
     ///
     /// 任何环节失败都返回 `Err`：调用方不得清理冲突记录、不得宣告冲突解决成功。
@@ -1048,7 +1048,6 @@ impl crate::sync::SyncService {
         graph.edge_relation_index = derived.edge_relation_index;
         graph.embed_host_index = derived.embed_host_index;
         graph.link_relation_index = derived.link_relation_index;
-        graph.hyperlink_relation_index = derived.hyperlink_relation_index;
         graph.node_kind_counts = derived.node_kind_counts;
 
         // 更新 updated_at
@@ -1154,14 +1153,6 @@ impl crate::sync::SyncService {
             &graph.link_ids,
             &mut map,
         )?;
-        Self::read_member_files(
-            sync_root,
-            starmap_id,
-            "hyperlink",
-            "hyperlinks",
-            &graph.hyperlink_ids,
-            &mut map,
-        )?;
 
         Ok(map)
     }
@@ -1206,14 +1197,6 @@ impl crate::sync::SyncService {
             "link",
             "links",
             &graph.link_ids,
-            &mut map,
-        )?;
-        Self::read_member_files(
-            sync_root,
-            starmap_id,
-            "hyperlink",
-            "hyperlinks",
-            &graph.hyperlink_ids,
             &mut map,
         )?;
         Ok(map)
@@ -1290,14 +1273,14 @@ impl crate::sync::SyncService {
     /// `parse_member_object` 返回 `Ok(None)` 的分支理论上不再触发，保留为
     /// 防御性 `continue`；解析失败（对象文件损坏）仍返回 `Err`。
     fn rebuild_derived_indexes_for_graph(
-        starmap_id: &str,
+        _starmap_id: &str,
         graph: &crate::starmap::store::meta::GraphMeta,
         object_contents: &ObjectContentMap,
     ) -> crate::Result<crate::sync::staging::starmap_merge::DerivedIndexes> {
         use crate::starmap::store::relation_index::{
-            EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
+            EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex,
         };
-        use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapHyperlink, StarMapLink};
+        use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapLink};
 
         let mut edge_relation_index: Vec<EdgeRelationIndex> = Vec::new();
         for edge_id in &graph.edge_ids {
@@ -1340,23 +1323,6 @@ impl crate::sync::SyncService {
             });
         }
 
-        let mut hyperlink_relation_index: Vec<HyperlinkRelationIndex> = Vec::new();
-        for hl_id in &graph.hyperlink_ids {
-            let Some(hl) =
-                Self::parse_member_object::<StarMapHyperlink>(object_contents, "hyperlink", hl_id)?
-            else {
-                continue;
-            };
-            let source_node_id =
-                crate::starmap::store::relation_index::target_path_node_id(&hl.source, starmap_id)
-                    .unwrap_or_default()
-                    .to_string();
-            hyperlink_relation_index.push(HyperlinkRelationIndex {
-                hyperlink_id: hl.hyperlink_id,
-                source_node_id,
-            });
-        }
-
         let mut node_kind_counts: std::collections::HashMap<String, u32> =
             std::collections::HashMap::new();
         for node_id in &graph.node_ids {
@@ -1377,7 +1343,6 @@ impl crate::sync::SyncService {
             edge_relation_index,
             embed_host_index,
             link_relation_index,
-            hyperlink_relation_index,
             node_kind_counts,
         })
     }
@@ -1419,15 +1384,6 @@ impl crate::sync::SyncService {
                     graph.link_ids.push(object_id.to_string());
                 }
                 graph.link_revisions.insert(object_id.to_string(), new_pr);
-                true
-            }
-            "hyperlink" => {
-                if !graph.hyperlink_ids.iter().any(|x| x == object_id) {
-                    graph.hyperlink_ids.push(object_id.to_string());
-                }
-                graph
-                    .hyperlink_revisions
-                    .insert(object_id.to_string(), new_pr);
                 true
             }
             _ => false,
@@ -1478,12 +1434,6 @@ impl crate::sync::SyncService {
                 graph.link_revisions.remove(object_id);
                 graph.link_ids.len() < before
             }
-            "hyperlink" => {
-                let before = graph.hyperlink_ids.len();
-                graph.hyperlink_ids.retain(|x| x != object_id);
-                graph.hyperlink_revisions.remove(object_id);
-                graph.hyperlink_ids.len() < before
-            }
             _ => false,
         };
         if removed {
@@ -1497,7 +1447,7 @@ impl crate::sync::SyncService {
 
     /// 检查 `StarMapTargetPath` 是否引用给定 node_id（issue #902 第十四轮复核）。
     ///
-    /// 用于级联清理：删除 node 时，检查 edge/link/hyperlink/embed 的路径端点
+    /// 用于级联清理：删除 node 时，检查 edge/link/embed 的路径端点
     /// 是否引用该 node。引用出现在 `target`（Node/Anchor）或 `segments`
     /// （EnterPortal）中。
     fn target_path_references_node(
@@ -1708,7 +1658,7 @@ impl crate::sync::SyncService {
     /// 1. 解析路径得到 starmap_id、object_type、object_id
     /// 2. 读取 graph.json
     /// 3. 从成员表 / revisions 移除该 ID，添加 tombstone
-    /// 4. 级联清理引用该对象的 edge/embed/link/hyperlink（不允许悬挂成员）
+    /// 4. 级联清理引用该对象的 edge/embed/link（不允许悬挂成员）
     /// 5. 重建派生索引
     /// 6. SaveTransaction 原子提交：删除对象文件 + 更新 graph.json
     ///
@@ -1770,7 +1720,7 @@ impl crate::sync::SyncService {
         // 记算需要删除的对象文件路径列表（含级联删除的）
         let mut delete_rels: Vec<String> = vec![path.to_string()];
 
-        // 级联清理：删除 node 时，移除引用该 node 的 edge/embed/link/hyperlink
+        // 级联清理：删除 node 时，移除引用该 node 的 edge/embed/link
         if object_type == "node" {
             Self::cascade_remove_references(
                 &mut graph,
@@ -1793,7 +1743,6 @@ impl crate::sync::SyncService {
         graph.edge_relation_index = derived.edge_relation_index;
         graph.embed_host_index = derived.embed_host_index;
         graph.link_relation_index = derived.link_relation_index;
-        graph.hyperlink_relation_index = derived.hyperlink_relation_index;
         graph.node_kind_counts = derived.node_kind_counts;
 
         // 更新 updated_at
@@ -1836,10 +1785,10 @@ impl crate::sync::SyncService {
         Ok(delete_rels)
     }
 
-    /// 级联移除引用指定 node 的 edge/embed/link/hyperlink（issue #902 第十四轮复核）。
+    /// 级联移除引用指定 node 的 edge/embed/link（issue #902 第十四轮复核）。
     ///
     /// 不允许留下悬挂成员：删除 node 后，引用该 node 的 edge（from/to）、
-    /// link（source/target）、hyperlink（source）、embed（host_path）也必须移除。
+    /// link（source/target）、embed（host_path）也必须移除。
     fn cascade_remove_references(
         graph: &mut crate::starmap::store::meta::GraphMeta,
         node_id: &str,
@@ -1847,7 +1796,7 @@ impl crate::sync::SyncService {
         starmap_id: &str,
         delete_rels: &mut Vec<String>,
     ) -> crate::Result<()> {
-        use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapHyperlink, StarMapLink};
+        use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapLink};
 
         // edge：from/to 引用 node
         // issue #902 第十五轮复核：用显式 for 循环 + `?` 传播 parse_member_object
@@ -1889,23 +1838,6 @@ impl crate::sync::SyncService {
             delete_rels.push(Self::starmap_object_rel(starmap_id, "links", lid));
         }
 
-        // hyperlink：source 引用 node
-        let mut hyperlinks_to_remove: Vec<String> = Vec::new();
-        for hid in &graph.hyperlink_ids {
-            let Some(hl) =
-                Self::parse_member_object::<StarMapHyperlink>(object_contents, "hyperlink", hid)?
-            else {
-                continue;
-            };
-            if Self::target_path_references_node(&hl.source, node_id) {
-                hyperlinks_to_remove.push(hid.clone());
-            }
-        }
-        for hid in &hyperlinks_to_remove {
-            Self::remove_object_from_graph_members(graph, "hyperlink", hid);
-            delete_rels.push(Self::starmap_object_rel(starmap_id, "hyperlinks", hid));
-        }
-
         // embed：host_path 引用 node
         let mut embeds_to_remove: Vec<String> = Vec::new();
         for eid in &graph.embed_instance_ids {
@@ -1937,7 +1869,6 @@ impl crate::sync::SyncService {
             "edge" => graph.edge_ids.iter().any(|x| x == object_id),
             "embed" => graph.embed_instance_ids.iter().any(|x| x == object_id),
             "link" => graph.link_ids.iter().any(|x| x == object_id),
-            "hyperlink" => graph.hyperlink_ids.iter().any(|x| x == object_id),
             _ => false,
         }
     }
@@ -2093,7 +2024,6 @@ impl crate::sync::SyncService {
         remote_graph.edge_relation_index = derived.edge_relation_index;
         remote_graph.embed_host_index = derived.embed_host_index;
         remote_graph.link_relation_index = derived.link_relation_index;
-        remote_graph.hyperlink_relation_index = derived.hyperlink_relation_index;
         remote_graph.node_kind_counts = derived.node_kind_counts;
 
         let now_ms = u64::try_from(
@@ -2352,9 +2282,6 @@ impl crate::sync::SyncService {
         }
         for id in &graph.link_ids {
             rels.push(Self::starmap_object_rel(starmap_id, "links", id));
-        }
-        for id in &graph.hyperlink_ids {
-            rels.push(Self::starmap_object_rel(starmap_id, "hyperlinks", id));
         }
         rels
     }
@@ -2714,13 +2641,6 @@ mod tests {
                 "createdAt": 0,
                 "updatedAt": 0
             }),
-            "hyperlink" => serde_json::json!({
-                "hyperlinkId": object_id,
-                "source": path,
-                "targetUri": "u",
-                "createdAt": 0,
-                "updatedAt": 0
-            }),
             _ => serde_json::json!({}),
         };
         serde_json::to_vec(&obj).unwrap()
@@ -2801,23 +2721,6 @@ mod tests {
         assert!(
             graph.link_ids.iter().any(|x| x == "link_001"),
             "link_001 should be in link_ids after restore"
-        );
-    }
-
-    #[test]
-    fn test_restore_starmap_hyperlink_membership() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-        write_graph(root, "sm_1", &make_graph_json("sm_1"));
-
-        let path = "starmaps/sm_1/hyperlinks/00/hl_001.json";
-        let content = make_object_bytes("hyperlink", "hl_001");
-        SyncService::restore_starmap_object_membership(root, path, &content).unwrap();
-
-        let graph = read_graph(root, "sm_1");
-        assert!(
-            graph.hyperlink_ids.iter().any(|x| x == "hl_001"),
-            "hl_001 should be in hyperlink_ids after restore"
         );
     }
 

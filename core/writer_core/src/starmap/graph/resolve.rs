@@ -375,7 +375,7 @@ pub fn resolve_target(
             // 直接 Starmap 目标也要走 provider 检查，不能只查目录存在
             check_starmap_readable(context, &current_starmap_id)?;
         }
-        StarMapTargetDetail::Entity { .. } | StarMapTargetDetail::External { .. } => {}
+        StarMapTargetDetail::Entity { .. } => {}
     }
 
     Ok(ResolvedTarget {
@@ -453,7 +453,7 @@ pub(crate) fn resolve_status_to_error(
 /// - `CanvasEndpoint`：路径已成功到达终点画布，记录最终 canvas ID。
 ///   用于 [`crate::starmap::store::relation_index::PathDependencyIndex`]
 ///   的 `collect_candidate_edge_owners` 按最终画布找 Edge 来源，
-///   覆盖 Starmap / ChapterRange / Entity / External 等非 Node/Anchor 终点。
+///   覆盖 Starmap / ChapterRange / Entity 等非 Node/Anchor 终点。
 ///   `object_id` = 最终 canvas ID（即 `host_starmap_id`）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PathDependencyKind {
@@ -564,7 +564,7 @@ pub fn extract_path_dependency_facts(
 /// （`host_starmap_id` 和 `object_id` 均为最终画布 ID），供
 /// [`crate::starmap::store::relation_index::PathDependencyIndex`] 的
 /// `collect_candidate_edge_owners` 按最终画布收集 Edge 来源，覆盖
-/// Starmap / ChapterRange / Entity / External 等非 Node/Anchor 终点（问题1）。
+/// Starmap / ChapterRange / Entity 等非 Node/Anchor 终点（问题1）。
 fn push_terminal_dependency_facts(
     context: &GraphResolverContext,
     current_starmap_id: &str,
@@ -626,7 +626,7 @@ fn push_terminal_dependency_facts(
             check_starmap_readable(context, current_starmap_id).map_err(resolve_status_to_error)?;
             reached_canvas = true;
         }
-        StarMapTargetDetail::Entity { .. } | StarMapTargetDetail::External { .. } => {
+        StarMapTargetDetail::Entity { .. } => {
             reached_canvas = true;
         }
     }

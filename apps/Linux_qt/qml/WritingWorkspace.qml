@@ -25,9 +25,9 @@
 //
 // 组成（Issue #977 起）：
 //   全窗口 DesktopTopBar 由 main.qml 统一挂载，不在本页绘制。
-//   本页只负责顶栏以下内容区 RowLayout：
+//   本页只负责顶栏以下内容区：
 //     ChapterNavigation (章节树) | Editor (SujianEditorItem) |
-//     ToolPane (工具内容) | ToolRail (最右竖向工具栏)
+//     RightPane (ToolPane 工具内容 + ToolRail，整体可收起)
 // =============================================================================
 
 import QtQuick
@@ -49,6 +49,9 @@ Rectangle {
     property var settingsBackendRef: null
     property var workspaceBackendRef: null
     property var appState: ({})
+    // Issue #1014：由 main.qml 注入的全局桌面布局状态；栏宽与折叠状态都从这里读写。
+    property var layoutState: null
+    property string pageKey: "writing"
     property string preSyncFlushFailureReason: ""
     // Issue #835：星图后端透传给 RightDrawer（任务 4 已为 RightDrawer 加 starmapBackendRef 属性）。
     // 由 main.qml 注入，WritingWorkspace 只做透传，不在本地伪造星图业务状态。
@@ -57,19 +60,39 @@ Rectangle {
     property var searchBackendRef: null
     property bool aiAvailable: false
     property bool aiEnabled: false
+    // Issue #1014：Agent CLI 后端由 main.qml 注入，透传给 RightDrawer。
+    property var agentCliBackendRef: null
     // Issue #835 评论 6019713847: StarMapPage 需要真实 StarMapController 读根星图，
     // 由 main.qml 注入 globalStarMapController，透传给 RightDrawer.starMapControllerRef。
     property var starMapControllerRef: null
     property var tree: []
     // 左右 pane 的展开意图只是端侧 UI 状态（不进 Core、不进同步）。
-    // 工具 pane 用「选中的工具 key」表达："" = 收起，非空 = 展开并显示该工具。
     // Issue #829 / #950：手稿里的常驻入口是 starmap / ai / correction；冲突只作为动态附加工具。
     // 不再保留 drawerOpen + drawerTab 两份状态，避免第二套开关。
     // Issue #842 任务3：drawerTool 只表示当前工具选择，不再同时表达折叠状态。
-    // rightPaneCollapsed 独立保存右栏展开意图；drawerOpen 表示当前确实可见。
+    // Issue #1014：折叠状态存共享 DesktopLayoutState；drawerOpen 表示当前确实可见。
     property string drawerTool: "starmap"
-    property bool rightPaneCollapsed: true
-    property bool leftPaneCollapsed: false
+    // Issue #1014：折叠状态由共享 DesktopLayoutState 保管，页面切换后保持。
+    // layoutState 缺失时退回本地默认值，便于组件单独预览。
+    property bool fallbackRightPaneCollapsed: true
+    property bool fallbackLeftPaneCollapsed: false
+    readonly property bool rightPaneCollapsed: root.layoutState
+        ? root.layoutState.isCollapsed(root.pageKey, "right")
+        : root.fallbackRightPaneCollapsed
+    readonly property bool leftPaneCollapsed: root.layoutState
+        ? root.layoutState.isCollapsed(root.pageKey, "left")
+        : root.fallbackLeftPaneCollapsed
+
+    function setPaneCollapsed(side, collapsed) {
+        if (root.layoutState) {
+            root.layoutState.setCollapsed(root.pageKey, side, collapsed)
+        } else if (side === "left") {
+            root.fallbackLeftPaneCollapsed = collapsed
+        } else {
+            root.fallbackRightPaneCollapsed = collapsed
+        }
+    }
+
     readonly property bool chapterNavigationShown:
         !root.leftPaneCollapsed && root.workbenchFitsFor(true, false)
     readonly property bool drawerOpen:
@@ -78,74 +101,29 @@ Rectangle {
     // ── Issue #920 / #971：桌面 SplitView 尺寸与次要栏的有效可见状态 ──
     readonly property int listPaneMinWidth: 200
     readonly property int toolPaneMinWidth: 200
+    readonly property int toolPaneMaxWidth: 520
     readonly property int toolRailWidth: 56
     readonly property int editorMinWidth: 240
-    readonly property int toolbarMinHeight: 64
-    readonly property int toolbarLeadingMinWidth: 200
-    readonly property int toolbarTrailingMinWidth: 200
     // Issue #922：SplitView 原生分隔线宽度（vp）。拖动条由 Qt 接管，只看得到这条线。
     readonly property int splitHandleWidth: 6
 
-    // 请求展开的面板是否能与正文、最右工具轨共存；空间不足时只让面板让位。
+    // 请求展开的面板是否能与正文共存；空间不足时只让面板让位。
+    // Issue #1014：右栏宽度已包含 56vp 工具轨，不再单独给工具轨预留宽度。
     // 每个可见 pane 的预算都包含其原生 SplitView 分隔线。
     function workbenchFitsFor(chapterVisible, toolVisible) {
         var needed = (chapterVisible ? root.listPaneMinWidth + root.splitHandleWidth : 0)
                    + (toolVisible ? root.toolPaneMinWidth + root.splitHandleWidth : 0)
-                   + root.toolRailWidth
                    + root.editorMinWidth
         return root.width >= needed
     }
 
     // 左右栏保存用户展开意图；窄窗只改变有效可见状态，空间恢复后自动还原。
-    // 空间不足时始终优先保留正文 + 56vp 工具轨，再让右工具栏、左章节栏依次让位。
-    readonly property bool toolRailVisible: true
+    // 空间不足时始终优先保留正文，再让右工具栏、左章节栏依次让位。
+    readonly property bool paneEdgeHandlesVisible: true
 
-    // 工具条带三个分组的尺寸；leading/trailing 跟随桌面 SplitView 的有效栏宽。
-    // SplitView 拖动时会自己更新 sidebarRect/rightDrawerRect 的实际宽度，
-    // 这里直接读当前实际显示宽度，与 SplitView 原生布局保持同一尺度。
-    readonly property real toolbarHeight: root.toolbarMinHeight
-    readonly property real toolbarCenterWidth: -1
-    readonly property real toolbarLeadingWidth:
-        Math.max(root.toolbarLeadingMinWidth, root.chapterNavigationShown ? sidebarRect.width : 0)
-    readonly property real toolbarTrailingWidth:
-        Math.max(root.toolbarTrailingMinWidth,
-                 root.toolRailWidth + (root.drawerOpen ? rightDrawerRect.width : 0))
-
-    // Issue #922：SplitView 拖动与折叠/收起状态之间只互补、不互相写回。
-    // sidebarRect / rightDrawerRect 的 SplitView.preferredWidth 是唯一宽度状态源，
-    // 根组件不再维护一套 chapterNavWidth / toolPaneWidth 去反向覆盖原生拖拽。
-
-    // 启动恢复用户上次拖拽保存的栏宽（只做下界钳制，不因当前窗口暂时变窄而
-    // 永久改写保存的期望值；实际显示宽度由 SplitView 自己约束）。
-    function restorePersistedPaneWidths() {
-        if (!root.settingsBackendRef)
-            return
-        var storedSidebar = root.settingsBackendRef.setting_desktop_sidebar_width
-        if (storedSidebar !== undefined && storedSidebar > 0) {
-            sidebarRect.SplitView.preferredWidth = Math.max(root.listPaneMinWidth, storedSidebar)
-        }
-        var storedTool = root.settingsBackendRef.setting_desktop_tool_pane_width
-        if (storedTool !== undefined && storedTool > 0) {
-            rightDrawerRect.SplitView.preferredWidth = Math.max(root.toolPaneMinWidth, storedTool)
-        }
-    }
-
-    // 拖拽结束后把当前可见栏的期望宽度写回平台本地配置（不回写 Core 业务设置）。
-    // 只在拖动结束（!resizing）调用一次，不在每一帧写 JSON；只写当前可见栏，
-    // 收起栏的原宽度仍由 SplitView.preferredWidth 保留。
-    function persistPaneWidths() {
-        if (!root.settingsBackendRef)
-            return
-        if (sidebarRect.visible && sidebarRect.SplitView.preferredWidth > 0) {
-            root.settingsBackendRef.setting_desktop_sidebar_width =
-                Math.max(root.listPaneMinWidth, sidebarRect.SplitView.preferredWidth)
-        }
-        if (rightDrawerRect.visible && rightDrawerRect.SplitView.preferredWidth > 0) {
-            root.settingsBackendRef.setting_desktop_tool_pane_width =
-                Math.max(root.toolPaneMinWidth, rightDrawerRect.SplitView.preferredWidth)
-        }
-        root.settingsBackendRef.debounced_save_local_settings()
-    }
+    // Issue #1014：SplitView.preferredWidth 直接来自 DesktopLayoutState 的页面宽度，
+    // 页面切换 / 窗口缩放都不会反向改写用户拖动后的覆盖值。只有拖动结束才调用
+    // layoutState.setDraggedWidth()，正常布局重算不写持久化。
 
     // 展开侧 pane 是一个「请求」，不是直接写状态：一个属性都不改就把候选组合
     // 先按本地最小宽度算一遍，放得下才整体提交；放不下就什么都不改，
@@ -158,9 +136,9 @@ Rectangle {
             targetLeftCollapsed = true;
         }
         if (!fits) return;
-        root.leftPaneCollapsed = targetLeftCollapsed;
+        root.setPaneCollapsed("left", targetLeftCollapsed);
         root.drawerTool = toolKey || "starmap";
-        root.rightPaneCollapsed = false;
+        root.setPaneCollapsed("right", false);
     }
 
     // 左目录栏的展开请求，与右侧对称：必要时让右 pane 让位，仍放不下就不改任何状态。
@@ -172,17 +150,17 @@ Rectangle {
             targetRightPaneCollapsed = true;
         }
         if (!fits) return;
-        root.rightPaneCollapsed = targetRightPaneCollapsed;
-        root.leftPaneCollapsed = false;
+        root.setPaneCollapsed("right", targetRightPaneCollapsed);
+        root.setPaneCollapsed("left", false);
     }
 
     // 关闭方向不会把窗口撑小，永远放得下，直接改状态即可。
     function closeToolPane() {
-        root.rightPaneCollapsed = true;
+        root.setPaneCollapsed("right", true);
     }
 
     function closeChapterNavigation() {
-        root.leftPaneCollapsed = true;
+        root.setPaneCollapsed("left", true);
     }
 
     // 展开/收起工具 pane 的统一入口（rail 的展开收起按钮 + 右侧折叠把手）。
@@ -465,8 +443,8 @@ Rectangle {
     // Issue #833 复核：onTreeChanged -> populateTreeModel() 已删，
     // treeModel 现在由 WritingChapterNavigation 内部维护。
     Component.onCompleted: {
-        // Issue #920 复核：先恢复平台本地保存的侧栏宽度，再按它布局。
-        root.restorePersistedPaneWidths()
+        // Issue #1014：栏宽已由注入的 DesktopLayoutState 统一恢复，这里不再直接
+        // 读写 settingsBackend 的旧栏宽字段。
         // Issue #829：启动时先起状态栏的时钟。
         root.updateClockText()
         // Issue #829：状态栏左段（写作速度）也来自 Core 统计，起步就拉一次。
@@ -600,20 +578,23 @@ Rectangle {
     color: Kirigami.Theme.backgroundColor
 
     // Issue #977：顶栏已上移到 main.qml 的 DesktopTopBar。本页只负责顶栏以下的
-    // 写作主体：「章节导航 | 正文 | 工具 pane | 最右工具 rail」。
-    // Issue #922：内容区改用 Qt 原生 SplitView 管理三栏，两道分隔线由 Qt 自己生成
-    // 并驱动宽度；最右 WritingToolRail 仍固定宽度，留在外层 RowLayout
-    // （不放进 SplitView，避免造第三条可拖动线）。
+    // 写作主体：「章节导航 | 正文 | 右侧可收起工具容器（工具内容 + 56vp rail）」。
+    // Issue #1014：内容区使用 Qt 原生 SplitView 管理三栏；右侧工具容器作为一个
+    // 整体 pane 参与拖动，宽度包含 RightDrawer 与 WritingToolRail。
     RowLayout {
         anchors.fill: parent
         spacing: 0
 
-            // SplitView 始终承载章节树、正文与右工具 pane；次要 pane 按有效宽度让位。
+            // SplitView 始终承载章节树、正文与右侧工具容器；次要 pane 按有效宽度让位。
             SplitView {
                 id: paneSplitView
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 orientation: Qt.Horizontal
+                // 拖动开始时记录两侧宽度，结束前后对比，只把真正被拖动的一侧
+                // 写成该页面的用户覆盖宽度。
+                property real resizeStartLeftWidth: 0
+                property real resizeStartRightWidth: 0
 
                 // Issue #922：原生分隔线。纯视觉 Rectangle，不手工放 MouseArea /
                 // DragHandler（Qt 文档指出会与原生分割器输入冲突）。
@@ -644,10 +625,24 @@ Rectangle {
                 }
 
                 // 拖动结束（用户松手）才持久化一次，不在每一帧写 JSON。
+                // Issue #1014：只保存实际被拖动的那一侧；普通布局重算不落盘。
                 onResizingChanged: {
-                    if (!paneSplitView.resizing) {
-                        root.persistPaneWidths()
+                    if (paneSplitView.resizing) {
+                        paneSplitView.resizeStartLeftWidth = sidebarRect.width
+                        paneSplitView.resizeStartRightWidth = rightPaneContainer.width
+                        return
                     }
+                    if (!root.layoutState)
+                        return
+                    var leftChanged = Math.abs(sidebarRect.width
+                                               - paneSplitView.resizeStartLeftWidth) > 0.5
+                    var rightChanged = Math.abs(rightPaneContainer.width
+                                                - paneSplitView.resizeStartRightWidth) > 0.5
+                    if (leftChanged && sidebarRect.visible)
+                        root.layoutState.setDraggedWidth(root.pageKey, "left", sidebarRect.width)
+                    if (rightChanged && rightPaneContainer.visible)
+                        root.layoutState.setDraggedWidth(root.pageKey, "right",
+                                                         rightPaneContainer.width)
                 }
 
                 // Left sidebar: volume/chapter tree
@@ -655,10 +650,12 @@ Rectangle {
                 WritingChapterNavigation {
                     id: sidebarRect
                     visible: root.chapterNavigationShown
-                    // Issue #922：只有一份宽度状态就是 SplitView.preferredWidth，
-                    // 用户期望宽度保存于此；最小宽度钳制在这里表达。
+                    // Issue #1014：用户拖动的宽度来自共享布局状态；SplitView 负责
+                    // 在当前窗口内做安全钳制，不会把临时变窄写回持久值。
                     SplitView.minimumWidth: root.listPaneMinWidth
-                    SplitView.preferredWidth: 320
+                    SplitView.preferredWidth: root.layoutState
+                        ? root.layoutState.paneWidth(root.pageKey, "left")
+                        : root.listPaneMinWidth
 
                     dt: root.dt
                     tree: root.tree
@@ -697,30 +694,9 @@ Rectangle {
                     Layout.fillHeight: true
                     color: Kirigami.Theme.backgroundColor
 
-                    // Issue #829：正文区顶部的折叠钮（手稿「宽屏全打开」/「左右缩回」
-                    // 都在正文区顶部居中画了一个三角）。它是浮层，不占 ColumnLayout 的
-                    // 行高，所以正文纸面高度不受影响；左树收起 / 展开时按钮原地切换
-                    // ⌄ / ⌃。真正的「收起后重新拉开」仍由贴边把手 leftPaneHandle 负责。
-                    PaneFoldButton {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.top: parent.top
-                        anchors.topMargin: Kirigami.Units.smallSpacing
-                        z: 30
-                        dt: root.dt
-                        // Issue #833 复核3：任何模式下都给用户入口切换章节导航。
-                        visible: true
-                        // 统一读 chapterNavigationShown：展开时显示收起箭头 ⌃，
-                        // 收起时显示展开箭头 ⌄。
-                        glyph: root.chapterNavigationShown ? "\u2303" : "\u2304"
-                        onTriggered: {
-                            if (root.chapterNavigationShown) {
-                                root.closeChapterNavigation();
-                                root.requestEditorFocus();
-                            } else {
-                                root.requestChapterNavigationOpen();
-                            }
-                        }
-                    }
+                    // Issue #1014：原正文区顶部居中的折叠钮已移除。顶栏折叠由
+                    // main.qml 的 WindowShell 统一处理；章节树的展开/收起仍由
+                    // 左侧贴边把手 leftPaneHandle 负责。
 
                     // Centered paper container
                     Item {
@@ -781,8 +757,8 @@ Rectangle {
                 }
 
                 // Issue #829：底部状态栏。挂在中间 Editor 这一列的末尾，
-                // 所以它只横贯「章节树右缘 ~ 工具面板左缘」，和手稿一致——
-                // 左树 / 右工具面板 / 最右 rail 都不参与这条带子。
+                // 所以它只横贯「章节树右缘 ~ 右侧工具容器左缘」，和手稿一致——
+                // 左树 / 右侧工具容器都不参与这条带子。
                 // 硬约束 6：只放字数 / 进度 / 时间 / 本章字数，不放任何导航。
                 WritingStatusBar {
                     Layout.fillWidth: true
@@ -796,82 +772,94 @@ Rectangle {
                 }
             }
 
-            // Issue #825：工具 pane（ToolPane 角色）—— 只显示 rail 选中的那个工具内容。
-            RightDrawer {
-                id: rightDrawerRect
-                // Issue #922：工具 pane 宽度由 SplitView.preferredWidth 表达用户期望宽度，
-                // SplitView 拖动时自动更新它；最小宽度钳制在这里表达。
-                SplitView.minimumWidth: root.toolPaneMinWidth
-                SplitView.preferredWidth: 240
-                // 只有用户请求展开且当前空间容纳得下时才参与 SplitView。
+            // Issue #1014：右侧工具内容与 56vp rail 组成一个完整 pane。
+            // 折叠时两者一起消失，正文吃掉释放的宽度；展开时恢复本页总宽度。
+            Rectangle {
+                id: rightPaneContainer
                 visible: root.drawerOpen
-                dt: root.dt
-                editorBackendRef: root.editorBackendRef
-                editorControllerRef: editorController
-                isOpen: root.drawerOpen
-                selectedTool: root.drawerTool
-                // Issue #835：透传星图后端与 appState 给 RightDrawer（任务 4 已加属性）。
-                starmapBackendRef: root.starmapBackendRef
-                annotationBackendRef: root.annotationBackendRef
-                searchBackendRef: root.searchBackendRef
-                aiAvailable: root.aiAvailable
-                aiEnabled: root.aiEnabled
-                // Issue #835 评论 6019713847: 透传真实 StarMapController 给 RightDrawer，
-                // StarMapPage 据此调 listStarmaps() 读真实根星图。
-                starMapControllerRef: root.starMapControllerRef
-                appState: root.appState
-                onAnnotationTargetActivated: function(target) {
-                    root.annotationTargetRequested(target)
-                }
-                onToolRequested: function(toolKey) {
-                    root.requestToolPaneOpen(toolKey, true)
-                }
-                // Issue #757 评论 5818193510 第 5 点：冲突侧栏绑定。
-                syncBackendRef: root.syncBackendRef
-                workspaceProjectId: root.workspaceProjectId
-                hasConflicts: root.hasConflicts
-                // Issue #770 评论 5842877986: 透传完整冲突快照给 RightDrawer，
-                // 不再让 RightDrawer/SyncConflictPanel 各自查一份。
-                syncConflicts: root.syncConflicts
-                // Issue #762 评论 5826175490 第 4 点：透传请求的冲突路径给 RightDrawer。
-                // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
-                requestedConflictPath: root.conflictPath
-                onCloseRequested: root.closeToolPane()
-                onConflictToolRequested: {
-                    // 冲突刚产生或解决后刷新 — 选中 rail 的「冲突」工具。
-                    // allowCollapseLeft=false：冲突自动弹出不该顺手收起用户的章节栏，
-                    // 放不下就直接回滚（冲突入口仍在全局同步面板里）。
-                    root.requestToolPaneOpen("conflict", false);
-                    root.refreshConflictList();
+                SplitView.minimumWidth: root.toolPaneMinWidth
+                SplitView.preferredWidth: root.layoutState
+                    ? root.layoutState.paneWidth(root.pageKey, "right")
+                    : root.toolPaneMinWidth + root.toolRailWidth
+                SplitView.maximumWidth: root.toolPaneMaxWidth
+                color: "transparent"
+                clip: true
+
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 0
+
+                    // Issue #825：工具 pane（ToolPane 角色）—— 只显示 rail 选中的那个工具内容。
+                    RightDrawer {
+                        id: rightDrawerRect
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        dt: root.dt
+                        editorBackendRef: root.editorBackendRef
+                        editorControllerRef: editorController
+                        isOpen: root.drawerOpen
+                        selectedTool: root.drawerTool
+                        // Issue #835：透传星图后端与 appState 给 RightDrawer（任务 4 已加属性）。
+                        starmapBackendRef: root.starmapBackendRef
+                        annotationBackendRef: root.annotationBackendRef
+                        searchBackendRef: root.searchBackendRef
+                        aiAvailable: root.aiAvailable
+                        aiEnabled: root.aiEnabled
+                        agentCliBackendRef: root.agentCliBackendRef
+                        // Issue #835 评论 6019713847: 透传真实 StarMapController 给 RightDrawer，
+                        // StarMapPage 据此调 listStarmaps() 读真实根星图。
+                        starMapControllerRef: root.starMapControllerRef
+                        appState: root.appState
+                        onAnnotationTargetActivated: function(target) {
+                            root.annotationTargetRequested(target)
+                        }
+                        onToolRequested: function(toolKey) {
+                            root.requestToolPaneOpen(toolKey, true)
+                        }
+                        // Issue #757 评论 5818193510 第 5 点：冲突侧栏绑定。
+                        syncBackendRef: root.syncBackendRef
+                        workspaceProjectId: root.workspaceProjectId
+                        hasConflicts: root.hasConflicts
+                        // Issue #770 评论 5842877986: 透传完整冲突快照给 RightDrawer，
+                        // 不再让 RightDrawer/SyncConflictPanel 各自查一份。
+                        syncConflicts: root.syncConflicts
+                        // Issue #762 评论 5826175490 第 4 点：透传请求的冲突路径给 RightDrawer。
+                        // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
+                        requestedConflictPath: root.conflictPath
+                        onCloseRequested: root.closeToolPane()
+                        onConflictToolRequested: {
+                            // 冲突刚产生或解决后刷新 — 选中 rail 的「冲突」工具。
+                            // allowCollapseLeft=false：冲突自动弹出不该顺手收起用户的章节栏，
+                            // 放不下就直接回滚（冲突入口仍在全局同步面板里）。
+                            root.requestToolPaneOpen("conflict", false);
+                            root.refreshConflictList();
+                        }
+                    }
+
+                    // Issue #825：最右竖向工具 rail（Core 的 ToolRail 角色）。
+                    // Issue #1014：rail 固定 56vp，是右容器的纯子项；不再单独拥有
+                    // 收起状态，底部按钮只切换整个容器（工具内容 + rail）。
+                    WritingToolRail {
+                        id: toolRailRect
+                        Layout.preferredWidth: root.toolRailWidth
+                        Layout.minimumWidth: root.toolRailWidth
+                        Layout.maximumWidth: root.toolRailWidth
+                        Layout.fillHeight: true
+                        dt: root.dt
+                        hasConflicts: root.hasConflicts
+                        selectedTool: root.drawerTool
+                        toolPaneOpen: root.drawerOpen
+                        railWidth: root.toolRailWidth
+                        onToolRequested: function(toolKey) { root.requestToolPaneOpen(toolKey, true); }
+                        onToolPaneToggled: {
+                            root.toggleToolPane();
+                            if (root.drawerOpen) root.requestEditorFocus();
+                        }
+                    }
                 }
             }
             } // end SplitView paneSplitView
-
-            // Issue #825：最右竖向工具 rail（Core 的 ToolRail 角色）。
-            // 只负责「选哪个工具 + 展开/收起 ToolPane」，工具内容在右边的 ToolPane 里。
-            // 顶部工具条带 ToolbarTrailing 的同步/搜索/设置不搬到这里。
-            // Issue #922：rail 固定 56vp，留在外层 RowLayout，不进 SplitView，
-            // 不给最右加第三条可拖动线。
-            WritingToolRail {
-                id: toolRailRect
-                visible: root.toolRailVisible
-                Layout.preferredWidth: root.toolRailWidth
-                Layout.minimumWidth: root.toolRailWidth
-                Layout.maximumWidth: root.toolRailWidth
-                // Issue #835：内容区 RowLayout cross-axis 高度填满。
-                Layout.fillHeight: true
-                dt: root.dt
-                hasConflicts: root.hasConflicts
-                selectedTool: root.drawerTool
-                toolPaneOpen: root.drawerOpen
-                railWidth: root.toolRailWidth
-                onToolRequested: function(toolKey) { root.requestToolPaneOpen(toolKey, true); }
-                onToolPaneToggled: {
-                    root.toggleToolPane();
-                    if (root.drawerOpen) root.requestEditorFocus();
-                }
-            }
-        }
+        } // end content RowLayout
 
     Connections {
         target: root.settingsBackendRef
@@ -978,7 +966,7 @@ Rectangle {
     // 把手只改 Qt UI 布局，不进入 Core 编辑事务——编辑会话不受影响。
     Rectangle {
         id: leftPaneHandle
-        visible: root.toolRailVisible
+        visible: root.paneEdgeHandlesVisible
         z: 50
         width: Kirigami.Units.gridUnit
         height: Kirigami.Units.gridUnit * 3.5
@@ -1024,7 +1012,9 @@ Rectangle {
 
     Rectangle {
         id: rightPaneHandle
-        visible: root.toolRailVisible
+        // 右侧容器展开时贴在「正文 | 右栏」分隔边缘；收起后作为窗口右缘的
+        // 恢复按钮常驻，不占 RowLayout / SplitView 的任何垂直或水平空间。
+        visible: root.paneEdgeHandlesVisible
         z: 50
         width: Kirigami.Units.gridUnit
         height: Kirigami.Units.gridUnit * 3.5
@@ -1038,13 +1028,12 @@ Rectangle {
         Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
         Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
 
-        // Issue #825 复核第5项：右把手贴在“正文 | 工具区”分隔边缘上（RightDrawer 展开时
-        // 用它的左边缘），只有收起时才退回 ToolRail 左边缘。
-        // 工具 pane 收起后 rail 仍然常驻（Core 的 ToolRail 恒有宽度），
-        // 所以收起态贴的是 rail 左缘，不是窗口最右缘。
+        // Issue #1014：展开态把手贴在右侧容器（工具内容 + rail）的左边缘；
+        // 收起态固定到窗口右缘，作为重新展开整个容器的入口。
         x: root.drawerOpen
-           ? Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing, rightDrawerRect.x - width / 2))
-           : Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing, toolRailRect.x - width / 2))
+           ? Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing,
+                                  paneSplitView.x + rightPaneContainer.x - width / 2))
+           : root.width - width - Kirigami.Units.smallSpacing
         y: Math.round((root.height - height) / 2)
 
         Kirigami.Icon {

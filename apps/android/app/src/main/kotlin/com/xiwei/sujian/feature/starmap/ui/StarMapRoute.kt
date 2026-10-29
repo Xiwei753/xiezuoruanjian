@@ -627,8 +627,6 @@ private fun StarMapCanvas(
                     when (val requested = resolvedTarget.requested) {
                         is StarMapSelectionTarget.Link ->
                             data.linkLabel(requested.id) to resolvedTarget.owner.ownerTitle()
-                        is StarMapSelectionTarget.Hyperlink ->
-                            data.hyperlinkLabel(requested.id) to resolvedTarget.owner.ownerTitle()
                         else -> null
                     }
                 }
@@ -700,7 +698,6 @@ private fun StarMapCanvas(
                 onCreateTag = annotationCoordinator::createTag,
                 onRegisterName = annotationCoordinator::registerName,
                 onNameChanged = annotationCoordinator::onNameDraftChanged,
-                onExternalLink = annotationCoordinator::addExternalLink,
                 onSearchChanged = annotationCoordinator::onLinkSearchChanged,
                 onObjectLink = annotationCoordinator::addObjectLink,
                 onDeleteLink = annotationCoordinator::deleteLink,
@@ -1078,9 +1075,6 @@ private fun distanceToSegment(
 }
 
 private fun StarMapData.linkLabel(linkId: String): String = links.firstOrNull { it.linkId == linkId }?.label ?: linkId
-
-private fun StarMapData.hyperlinkLabel(hyperlinkId: String): String =
-    hyperlinks.firstOrNull { it.hyperlinkId == hyperlinkId }?.label ?: hyperlinkId
 
 private fun StarMapSelectionOwner.ownerTitle(): String =
     when (this) {

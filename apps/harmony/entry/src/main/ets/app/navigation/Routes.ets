@@ -24,8 +24,8 @@ export const TAB_STARMAP: number = 1
 export const TAB_STATS: number = 2
 
 // 搜索结果在星图里需要精确定位的对象类型。
-// link / hyperlink 没有独立位置，由页面解析 source 后选中其所属 node/embed。
-export type StarMapFocusKind = 'node' | 'edge' | 'embed' | 'link' | 'hyperlink'
+// link 没有独立位置，由页面解析 source 后选中其所属 node/embed。
+export type StarMapFocusKind = 'node' | 'edge' | 'embed' | 'link'
 
 export interface WorkspaceRouteParams {
   projectId: string

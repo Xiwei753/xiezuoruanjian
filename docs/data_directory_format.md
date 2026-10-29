@@ -1,7 +1,7 @@
 # 数据目录格式定义
 
 Status: active
-Last verified: 2026-10-18
+Last verified: 2026-10-29
 Truth source: protocol
 Supersedes: None
 
@@ -99,7 +99,23 @@ Core 只约束这些根目录**内部**的布局；根目录本身放哪里、�
 │  └── <device_id>/<fingerprint>.json
 ├── themes/palettes/               # 旧版调色板目录（只作 Android 升级迁移输入，不同步）
 ├── starmaps/                      # 星图数据（应用级白名单）
+│  ├── index.json                  # 全局星图索引
+│  ├── <starmap_id>.meta.json      # 星图元数据
+│  └── <starmap_id>/
+│     ├── graph.json               # 星图元信息、成员 ID 与 package revision
+│     ├── nodes/<bucket>/<node_id>.json
+│     ├── edges/<bucket>/<edge_id>.json
+│     ├── embeds/<bucket>/<instance_id>.json
+│     ├── links/<bucket>/<link_id>.json
+│     └── metadata/
+│        └── recovery.json         # 解析失败对象的恢复记录
 ```
+
+### 星图目录
+
+每张星图是 `starmaps/<starmap_id>/` 下的独立包。`graph.json` 与 `nodes/`、`edges/`、`embeds/`、`links/` 中的对象文件共同构成该图的事实；对象文件名是对象 ID，`<bucket>` 为 ID 首字节高 4 位的十六进制值（`00`–`0f`）。节点、语义连线、子星图入口和内部跳转链接分别保存在 `nodes/`、`edges/`、`embeds/`、`links/`。
+
+`starmaps/<starmap_id>/` 不再包含 `hyperlinks/`，星图对象也不再携带外部网页/URL 绑定。旧版本写入的 `hyperlinks/` 目录及 `hyperlinks` 成员记录在读取时由既有星图 schema 迁移清理并删除，内部 Link 原样保留在 `links/`。
 
 ### 应用级同步白名单/黑名单
 

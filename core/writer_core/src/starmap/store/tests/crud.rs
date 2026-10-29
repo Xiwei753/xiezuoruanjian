@@ -3,7 +3,6 @@ use super::*;
 use crate::facade::WriterCore;
 use crate::starmap::semantic::{StarMapPortal, StarMapTargetDetail};
 use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
-use crate::starmap::types::StarMapHyperlinkPatch;
 use tempfile::TempDir;
 
 #[test]
@@ -344,62 +343,6 @@ fn delete_link_updates_graph_meta_link_ids() {
     );
 }
 
-#[test]
-fn hyperlink_add_update_delete_round_trip() {
-    let dir = TempDir::new().unwrap();
-    std::fs::create_dir_all(dir.path().join("projects")).unwrap();
-    let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
-
-    let mut store = StarMapStore::new(dir.path(), &meta.starmap_id);
-    store.load_full().unwrap();
-    store.upsert_hyperlink(StarMapHyperlink {
-        hyperlink_id: "hl1".to_string(),
-        source: StarMapTargetPath {
-            starmap_id: meta.starmap_id.clone(),
-            segments: vec![],
-            target: StarMapTargetDetail::Starmap,
-        },
-        target_uri: "https://example.com".to_string(),
-        label: Some("Example".to_string()),
-        created_at: 0,
-        updated_at: 0,
-    });
-    store.flush().unwrap();
-    assert_eq!(store.hyperlink_count(), 1);
-
-    let mut store2 = StarMapStore::new(dir.path(), &meta.starmap_id);
-    store2.load_full().unwrap();
-    assert_eq!(store2.hyperlink_count(), 1);
-    let hl = store2.get_hyperlink("hl1").unwrap();
-    assert_eq!(hl.target_uri, "https://example.com");
-
-    store2
-        .update_hyperlink(
-            "hl1",
-            &StarMapHyperlinkPatch {
-                label: Some(Some("Updated".to_string())),
-                target_uri: None,
-                source: None,
-            },
-        )
-        .unwrap();
-    store2.flush().unwrap();
-
-    let mut store3 = StarMapStore::new(dir.path(), &meta.starmap_id);
-    store3.load_full().unwrap();
-    assert_eq!(
-        store3.get_hyperlink("hl1").unwrap().label.as_deref(),
-        Some("Updated")
-    );
-
-    store3.delete_hyperlink("hl1").unwrap();
-    store3.flush().unwrap();
-
-    let mut store4 = StarMapStore::new(dir.path(), &meta.starmap_id);
-    store4.load_full().unwrap();
-    assert_eq!(store4.hyperlink_count(), 0);
-}
-
 // ---------------------------------------------------------------------------
 // 测试组 A：delete Node/Embed 走统一 validator + 级联 EnterPortal/EnterEmbed
 // 第一段引用（Issue #772 回归）
@@ -572,7 +515,7 @@ fn delete_embed_cascades_edge_with_first_segment_enter_embed() {
 }
 
 #[test]
-fn delete_embed_cascades_link_and_hyperlink_with_first_segment_enter_embed() {
+fn delete_embed_cascades_link_with_first_segment_enter_embed() {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Host", "", None).unwrap();
@@ -606,7 +549,7 @@ fn delete_embed_cascades_link_and_hyperlink_with_first_segment_enter_embed() {
         link_id: "L".to_string(),
         source: StarMapTargetPath {
             starmap_id: host.to_string(),
-            segments: vec![enter_embed.clone()],
+            segments: vec![enter_embed],
             target: StarMapTargetDetail::Starmap,
         },
         target: StarMapTargetPath {
@@ -619,22 +562,7 @@ fn delete_embed_cascades_link_and_hyperlink_with_first_segment_enter_embed() {
         updated_at: 0,
     };
     store.upsert_link(link);
-
-    let hyperlink = StarMapHyperlink {
-        hyperlink_id: "H".to_string(),
-        source: StarMapTargetPath {
-            starmap_id: host.to_string(),
-            segments: vec![enter_embed],
-            target: StarMapTargetDetail::Starmap,
-        },
-        target_uri: "https://example.com".to_string(),
-        label: Some("H".to_string()),
-        created_at: 0,
-        updated_at: 0,
-    };
-    store.upsert_hyperlink(hyperlink);
     assert!(store.get_link("L").is_some());
-    assert!(store.get_hyperlink("H").is_some());
 
     store.delete_embed("I").unwrap();
 
@@ -642,10 +570,6 @@ fn delete_embed_cascades_link_and_hyperlink_with_first_segment_enter_embed() {
     assert!(
         store.get_link("L").is_none(),
         "link L should be cascaded deleted (source first segment EnterEmbed references I)"
-    );
-    assert!(
-        store.get_hyperlink("H").is_none(),
-        "hyperlink H should be cascaded deleted (source first segment EnterEmbed references I)"
     );
 }
 

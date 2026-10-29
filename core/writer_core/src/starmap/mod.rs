@@ -521,7 +521,7 @@ pub fn unbind_starmap_from_project_with_changes(
 pub struct StarMapReference {
     pub host_starmap_id: String,
     pub host_title: String,
-    pub ref_type: String, // "embed", "link", "portal", "edge", "hyperlink"
+    pub ref_type: String, // "embed", "link", "portal", "edge"
     pub ref_id: String,
     pub target_starmap_id: String,
 }
@@ -652,19 +652,6 @@ pub fn find_starmap_references(
                 }
             }
         }
-
-        // 5. Check hyperlinks — hyperlink 的 source 路径也可能穿越目标星图。
-        for hl in &graph.hyperlinks {
-            if target_path_references_starmap(&context, &hl.source, target_starmap_id)? {
-                refs.push(StarMapReference {
-                    host_starmap_id: id.clone(),
-                    host_title: host_meta.title.clone(),
-                    ref_type: "hyperlink".to_string(),
-                    ref_id: hl.hyperlink_id.clone(),
-                    target_starmap_id: target_starmap_id.to_string(),
-                });
-            }
-        }
     }
 
     Ok(refs)
@@ -741,6 +728,36 @@ pub fn list_root_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
         metas.push(load_starmap_meta(app_data_root, id)?);
     }
     Ok(metas)
+}
+
+/// 受控修改一张星图的“一级/嵌套”身份。
+///
+/// 根身份只改变 `root_starmap_ids`，不删除 `starmap_ids` 中的真实星图，
+/// 也不触碰星图内容。返回是否实际发生改变。
+pub(crate) fn set_starmap_root(
+    app_data_root: &Path,
+    starmap_id: &str,
+    is_root: bool,
+) -> Result<bool> {
+    let mut idx = load_index(app_data_root)?;
+    if !idx.starmap_ids.iter().any(|id| id == starmap_id) {
+        return Err(crate::error::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("StarMap not found: {}", starmap_id),
+        )));
+    }
+    let was_root = idx.root_starmap_ids.iter().any(|id| id == starmap_id);
+    if was_root == is_root {
+        return Ok(false);
+    }
+    if is_root {
+        idx.root_starmap_ids.push(starmap_id.to_string());
+    } else {
+        idx.root_starmap_ids.retain(|id| id != starmap_id);
+    }
+    idx.updated_at = now_epoch();
+    save_index(app_data_root, &idx)?;
+    Ok(true)
 }
 
 #[cfg(test)]

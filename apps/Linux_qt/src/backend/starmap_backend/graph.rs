@@ -523,6 +523,39 @@ impl AppBackend {
         raw.into()
     }
 
+    // AppBackend::embed_existing_starmap_json
+    // Issue #1014 星图首页拖放：把已存在的源根星图嵌入宿主根星图。
+    pub(crate) fn embed_existing_starmap_json(
+        &mut self,
+        host_starmap_id: QString,
+        child_starmap_id: QString,
+        x: f64,
+        y: f64,
+    ) -> QString {
+        let hid = host_starmap_id.to_string();
+        let cid = child_starmap_id.to_string();
+        let core = self.core_api();
+        let raw = match core.as_ref() {
+            Some(core) => starmap_bridge::embed_existing_starmap(core, &hid, &cid, x, y),
+            None => crate::backend::json_utils::envelope_error_json(
+                writer_core::api::WriterError::Other("core api not available".to_string()),
+            ),
+        };
+        if Self::starmap_mutation_succeeded(&raw) {
+            let instance_id = Self::starmap_mutation_data(&raw)
+                .and_then(|data| serde_json::from_value::<StarMapEmbedDto>(data).ok())
+                .map(|embed| embed.instance_id);
+            let updates = match (core.as_ref(), instance_id.as_deref()) {
+                (Some(core), Some(instance_id)) => {
+                    embed_search_update(core, &hid, instance_id).map(|update| vec![update])
+                }
+                _ => None,
+            };
+            self.finish_starmap_search_update(&hid, updates);
+        }
+        raw.into()
+    }
+
     // AppBackend::create_starmap_child_embed_json
     // 原子创建子星图并嵌入父图（Issue #805 评论 5907045450 第 5 部分）。
     // 替代 QML 侧 create_starmap -> create_starmap_embed -> 失败时 delete_starmap 拼接。

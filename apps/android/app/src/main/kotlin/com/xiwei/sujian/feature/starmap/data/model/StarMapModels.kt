@@ -78,9 +78,7 @@ data class StarMapGraphNode(
     val contentRangeEnd: Int? = null,
     val contentEntityType: String? = null,
     val contentEntityId: String? = null,
-    val contentLabel: String? = null,
     val contentChapterId: String? = null,
-    val contentUri: String? = null,
     val anchors: List<StarMapAnchorData> = emptyList(),
     val portal: StarMapPortalData? = null,
     val position: StarMapPointData = StarMapPointData(),
@@ -107,7 +105,6 @@ data class StarMapAnchorData(
     val targetChapterId: String? = null,
     val targetEntityId: String? = null,
     val targetStarmapId: String? = null,
-    val targetUri: String? = null,
     val label: String? = null,
     val role: String = "Source",
 )
@@ -144,7 +141,6 @@ data class StarMapTargetDetailData(
     val rangeEnd: UInt? = null,
     val entityType: String? = null,
     val entityId: String? = null,
-    val uri: String? = null,
 )
 
 data class StarMapGraphEdge(
@@ -185,7 +181,7 @@ data class StarMapNodeStyleData(
  * 节点正文内容 — 对应 Core 的 `StarMapNodeContent`。
  *
  * Issue #984：名称 `title` 与正文 `content` 是两份独立数据。Android 编辑正文时
- * 只构造 [TYPE_INLINE]；引用类型（chapterRef/entityRef/externalRef）不会被这个
+ * 只构造 [TYPE_INLINE]；引用类型（chapterRef/entityRef）不会被这个
  * 模型覆盖，保存时省略 content 即可保留 Core 中的原引用。
  */
 data class StarMapNodeContentData(
@@ -218,7 +214,6 @@ data class StarMapData(
     val graph: StarMapGraphData,
     val embeds: List<StarMapEmbedData> = emptyList(),
     val links: List<StarMapLinkData> = emptyList(),
-    val hyperlinks: List<StarMapHyperlinkData> = emptyList(),
     val loadPhase: String = "CurrentViewportObjects",
     val packageRevision: ULong = 0u,
     val sinceRevision: ULong = 0u,
@@ -238,13 +233,6 @@ data class StarMapLinkData(
     val linkId: String,
     val source: StarMapTargetPathData,
     val target: StarMapTargetPathData,
-    val label: String? = null,
-)
-
-data class StarMapHyperlinkData(
-    val hyperlinkId: String,
-    val source: StarMapTargetPathData? = null,
-    val targetUri: String,
     val label: String? = null,
 )
 

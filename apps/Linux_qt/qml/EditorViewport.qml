@@ -413,7 +413,7 @@ Item {
                 delegate: Button {
                     required property var modelData
                     Layout.fillWidth: true
-                    enabled: modelData.state === "exists" || modelData.state === "externalUrl"
+                    enabled: modelData.state === "exists"
                     text: {
                         var suffix = modelData.state === "projectNotDownloaded" ? qsTr("（目标作品未下载）")
                             : modelData.state === "missing" ? qsTr("（目标已删除）")

@@ -5,7 +5,6 @@ import com.xiwei.sujian.feature.starmap.data.StarMapRawCache
 import com.xiwei.sujian.feature.starmap.data.model.StarMapData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapEmbedData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapGraphData
-import com.xiwei.sujian.feature.starmap.data.model.StarMapHyperlinkData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapLinkData
 import com.xiwei.sujian.feature.starmap.data.model.StarMapLoadDiagnostic
 import com.xiwei.sujian.feature.starmap.data.model.StarMapMeta
@@ -16,7 +15,6 @@ import com.xiwei.sujian.feature.starmap.data.model.StarMapTargetPathData
 import uniffi.writer_core.LoadDiagnosticDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapGraphDto
-import uniffi.writer_core.StarMapHyperlinkDto
 import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapMetaDto
 import uniffi.writer_core.StarMapPathSegmentDto
@@ -42,7 +40,6 @@ internal fun StarMapGraphDto.toRawCache(): StarMapRawCache =
         edges = edges.associateByTo(mutableMapOf()) { it.id },
         embeds = embeds.associateByTo(mutableMapOf()) { it.instanceId },
         links = links.associateByTo(mutableMapOf()) { it.linkId },
-        hyperlinks = hyperlinks.associateByTo(mutableMapOf()) { it.hyperlinkId },
     )
 
 /**
@@ -98,14 +95,6 @@ internal fun StarMapLinkDto.toModel(): StarMapLinkData =
         label = label,
     )
 
-internal fun StarMapHyperlinkDto.toModel(): StarMapHyperlinkData =
-    StarMapHyperlinkData(
-        hyperlinkId = hyperlinkId,
-        source = source.toModel(),
-        targetUri = targetUri,
-        label = label,
-    )
-
 internal fun LoadDiagnosticDto.toModel(): StarMapLoadDiagnostic =
     StarMapLoadDiagnostic(
         kind = kind,
@@ -140,5 +129,4 @@ internal fun uniffi.writer_core.StarMapTargetDetailDto.toModel(): StarMapTargetD
         rangeEnd = rangeEnd,
         entityType = entityType,
         entityId = entityId,
-        uri = uri,
     )

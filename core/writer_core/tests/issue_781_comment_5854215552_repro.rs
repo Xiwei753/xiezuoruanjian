@@ -120,8 +120,8 @@ fn make_embed(
     }
 }
 
-/// 建一张含节点（带 portal、position、style）、嵌入（带 position）、链接、
-/// 超链接的星图，flush 后返回 store。
+/// 建一张含节点（带 portal、position、style）、嵌入（带 position）和链接
+/// 的星图，flush 后返回 store。
 fn seed_full_graph(dir: &TempDir, host_sid: &str, child_sid: &str) -> StarMapStore {
     let mut store = StarMapStore::new(dir.path(), host_sid);
     let mut node = make_node("n1", "甲");
@@ -149,16 +149,6 @@ fn seed_full_graph(dir: &TempDir, host_sid: &str, child_sid: &str) -> StarMapSto
                 target: StarMapTargetDetail::Starmap,
             },
             label: Some("跳转".to_string()),
-            created_at: 0,
-            updated_at: 0,
-        })
-        .unwrap();
-    store
-        .add_hyperlink(StarMapHyperlink {
-            hyperlink_id: "hl1".to_string(),
-            source: local_path(host_sid, "n1"),
-            target_uri: "https://example.com".to_string(),
-            label: None,
             created_at: 0,
             updated_at: 0,
         })
@@ -337,7 +327,6 @@ fn graph_serialization_carries_position_and_style_without_display_layer_state() 
         StarMapPoint { x: 700.0, y: 90.0 }
     );
     assert_eq!(restored.links.len(), 1);
-    assert_eq!(restored.hyperlinks.len(), 1);
 }
 
 /// 移动对象不会产生任何 layout/viewport/phased 显示状态文件；

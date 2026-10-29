@@ -27,6 +27,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::api::WriterCoreApi;
+use crate::platform::linux_qt::desktop_settings;
 // Issue #729：同步取消令牌 + workspace generation 用于切工作区后旧同步回调身份隔离。
 use std::sync::Arc;
 use writer_core::sync::SyncCancellationToken;
@@ -440,6 +441,8 @@ pub struct AppBackend {
     pub current_setting_desktop_sidebar_width: f64,
     pub current_setting_desktop_tool_pane_width: f64,
     pub current_setting_desktop_editor_width: f64,
+    /// Issue #1014：页面级栏宽 / 折叠状态是 Qt 平台本地布局事实来源。
+    pub current_desktop_layout: desktop_settings::DesktopSettings,
     current_setting_font_size: f32,
     current_setting_line_spacing: f32,
     current_setting_auto_save_enabled: bool,

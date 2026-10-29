@@ -151,7 +151,7 @@ impl EndpointShape {
 ///     拿不到才退回 portal 所在 node 的 layout 矩形（且确认 node 有 portal）。
 /// - **跨层路径**（`path.starmap_id != graph.starmap_id`）
 ///   -> `CrossLayerPath`，当前画布无法直接定位。
-/// - **非几何 target**（Starmap/ChapterRange/Entity/External）-> `NonGeometricTarget`。
+/// - **非几何 target**（Starmap/ChapterRange/Entity）-> `NonGeometricTarget`。
 ///
 /// 返回 `Err(diagnostic)` 表示无法定位，调用方应收集诊断而非静默丢掉。
 pub fn resolve_edge_endpoint_anchor(

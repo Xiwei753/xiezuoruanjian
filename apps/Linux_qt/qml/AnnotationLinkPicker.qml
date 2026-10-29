@@ -1,4 +1,4 @@
-// Object and URL target search for unified manual links.
+// Object target search for unified manual links.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -42,20 +42,20 @@ Rectangle {
         var entryPrefix = "annotation:" + p + ":entry:"
         if (p && objectId.indexOf(entryPrefix) === 0) {
             var entryId = objectId.substring(entryPrefix.length)
-            return { objectRef: { kind: "namedEntry", projectId: p, objectId: entryId }, externalUrl: null }
+            return { objectRef: { kind: "namedEntry", projectId: p, objectId: entryId } }
         }
         if (t.nodeId && t.starmapId)
-            return { objectRef: { kind: "starMapNode", projectId: p, objectId: String(t.nodeId) }, externalUrl: null }
+            return { objectRef: { kind: "starMapNode", projectId: p, objectId: String(t.nodeId) } }
         if (t.embedId && t.starmapId)
-            return { objectRef: { kind: "starMapEmbed", projectId: p, objectId: String(t.embedId) }, externalUrl: null }
+            return { objectRef: { kind: "starMapEmbed", projectId: p, objectId: String(t.embedId) } }
         if (t.starmapId)
-            return { objectRef: { kind: "starMap", projectId: p, objectId: String(t.starmapId) }, externalUrl: null }
+            return { objectRef: { kind: "starMap", projectId: p, objectId: String(t.starmapId) } }
         if (t.chapterId)
-            return { objectRef: { kind: "chapter", projectId: p, objectId: String(t.chapterId) }, externalUrl: null }
+            return { objectRef: { kind: "chapter", projectId: p, objectId: String(t.chapterId) } }
         if (t.volumeId)
-            return { objectRef: { kind: "volume", projectId: p, objectId: String(t.volumeId) }, externalUrl: null }
+            return { objectRef: { kind: "volume", projectId: p, objectId: String(t.volumeId) } }
         if (t.projectId)
-            return { objectRef: { kind: "project", projectId: p, objectId: String(t.projectId) }, externalUrl: null }
+            return { objectRef: { kind: "project", projectId: p, objectId: String(t.projectId) } }
         return null
     }
 
@@ -77,15 +77,6 @@ Rectangle {
         if (enabled && index < 0) next.push(target)
         if (!enabled && index >= 0) next.splice(index, 1)
         selectedTargets = next
-    }
-
-    function addExternalUrl() {
-        var url = externalUrlField.text.trim()
-        if (!url) return
-        if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = "https://" + url
-        var urlTarget = { objectRef: null, externalUrl: url }
-        toggleTarget(urlTarget, true)
-        externalUrlField.text = ""
     }
 
     Connections {
@@ -165,18 +156,6 @@ Rectangle {
                     }
                 }
             }
-        }
-
-        Label { text: qsTr("外部网址"); font.bold: true }
-        RowLayout {
-            Layout.fillWidth: true
-            TextField {
-                id: externalUrlField
-                Layout.fillWidth: true
-                placeholderText: "https://"
-                onAccepted: root.addExternalUrl()
-            }
-            Button { text: qsTr("添加"); enabled: externalUrlField.text.trim().length > 0; onClicked: root.addExternalUrl() }
         }
 
         Label {

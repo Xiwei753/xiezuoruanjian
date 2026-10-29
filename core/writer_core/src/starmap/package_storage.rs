@@ -53,13 +53,6 @@ pub(crate) fn link_rel_path(starmap_id: &str, link_id: &str) -> PathBuf {
         .join(format!("{link_id}.json"))
 }
 
-pub(crate) fn hyperlink_rel_path(starmap_id: &str, hyperlink_id: &str) -> PathBuf {
-    starmap_pkg_rel_dir(starmap_id)
-        .join("hyperlinks")
-        .join(bucket_for_id(hyperlink_id))
-        .join(format!("{hyperlink_id}.json"))
-}
-
 pub(crate) fn bucket_for_id(id: &str) -> &str {
     let bytes = id.as_bytes();
     if bytes.is_empty() {
@@ -136,12 +129,6 @@ fn link_path(dir: &Path, link_id: &str) -> PathBuf {
     dir.join("links")
         .join(bucket_for_id(link_id))
         .join(format!("{}.json", link_id))
-}
-
-fn hyperlink_path(dir: &Path, hyperlink_id: &str) -> PathBuf {
-    dir.join("hyperlinks")
-        .join(bucket_for_id(hyperlink_id))
-        .join(format!("{}.json", hyperlink_id))
 }
 
 pub fn save_node(app_data_root: &Path, starmap_id: &str, node: &StarMapNode) -> Result<PathBuf> {
@@ -358,62 +345,6 @@ pub fn delete_link_file_to_trash(
     let rel = format!(
         "starmaps/{starmap_id}/links/{}/{link_id}.json",
         bucket_for_id(link_id)
-    );
-    delete_object_file_to_trash(&abs, &rel, trash_root, trash_rel_prefix)
-}
-
-pub fn save_hyperlink(
-    app_data_root: &Path,
-    starmap_id: &str,
-    hl: &StarMapHyperlink,
-) -> Result<PathBuf> {
-    let dir = starmap_pkg_dir(app_data_root, starmap_id);
-    fs::create_dir_all(dir.join("hyperlinks").join(bucket_for_id(&hl.hyperlink_id)))?;
-    let json = serde_json::to_string_pretty(hl)?;
-    atomic_write_string(&hyperlink_path(&dir, &hl.hyperlink_id), &json)?;
-    Ok(starmap_pkg_rel_dir(starmap_id)
-        .join("hyperlinks")
-        .join(bucket_for_id(&hl.hyperlink_id))
-        .join(format!("{}.json", hl.hyperlink_id)))
-}
-
-/// 直接 unlink 的旧删除 API：生产代码不得调用（同 [`delete_node_file`] 语义）。
-#[cfg(test)]
-pub fn delete_hyperlink_file(
-    app_data_root: &Path,
-    starmap_id: &str,
-    hyperlink_id: &str,
-) -> Result<Vec<PathBuf>> {
-    let dir = starmap_pkg_dir(app_data_root, starmap_id);
-    let mut changed: Vec<PathBuf> = Vec::new();
-    let path = hyperlink_path(&dir, hyperlink_id);
-    if path.exists() {
-        fs::remove_file(&path)?;
-        changed.push(
-            starmap_pkg_rel_dir(starmap_id)
-                .join("hyperlinks")
-                .join(bucket_for_id(hyperlink_id))
-                .join(format!("{}.json", hyperlink_id)),
-        );
-    }
-    Ok(changed)
-}
-
-/// 把超链接文件 durable rename 到 trash 目录，返回 `(original_rel_path, trash_rel_path)`。
-///
-/// 语义与 [`delete_node_file_to_trash`] 对称。
-pub fn delete_hyperlink_file_to_trash(
-    app_data_root: &Path,
-    starmap_id: &str,
-    hyperlink_id: &str,
-    trash_root: &Path,
-    trash_rel_prefix: &str,
-) -> Result<Option<(String, String)>> {
-    let dir = starmap_pkg_dir(app_data_root, starmap_id);
-    let abs = hyperlink_path(&dir, hyperlink_id);
-    let rel = format!(
-        "starmaps/{starmap_id}/hyperlinks/{}/{hyperlink_id}.json",
-        bucket_for_id(hyperlink_id)
     );
     delete_object_file_to_trash(&abs, &rel, trash_root, trash_rel_prefix)
 }

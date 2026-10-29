@@ -293,7 +293,7 @@ function emptyTargetDetail(type, nodeId) {
   return {
     type, nodeId,
     anchorId: null, projectId: null, volumeId: null, chapterId: null,
-    rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null
+    rangeStart: null, rangeEnd: null, entityType: null, entityId: null
   }
 }
 
@@ -1653,7 +1653,7 @@ console.log('12. planCrossLayerEdge：父 Node → 子 Node，宿主是父 Scene
   assert(eq(plan.from.segments, []) && plan.from.target.nodeId === 'n-root', '起点 segments 为空、target 是根节点')
   assert(eq(plan.to.segments, [SEG_A]) && plan.to.target.nodeId === 'n-a1',
     '终点 segments = [enterEmbed(emb-a)]，target 是子节点')
-  assert(plan.to.target.type === 'node' && plan.to.target.anchorId === null && plan.to.target.uri === null,
+  assert(plan.to.target.type === 'node' && plan.to.target.anchorId === null,
     'target detail 全字段显式存在（Core serde 要求键存在）')
 }
 

@@ -145,7 +145,6 @@ impl StarMapStore {
             loaded_edge_count: self.edges.len(),
             loaded_embed_count: self.embeds.len(),
             loaded_link_count: self.links.len(),
-            loaded_hyperlink_count: self.hyperlinks.len(),
         })
     }
 
@@ -209,13 +208,6 @@ impl StarMapStore {
                 }
                 let link = self.try_load_link(link_id)?;
                 self.links.insert(link_id.clone(), link);
-            }
-            for hl_id in &meta.hyperlink_ids {
-                if self.hyperlinks.contains_key(hl_id) {
-                    continue;
-                }
-                let hl = self.try_load_hyperlink(hl_id)?;
-                self.hyperlinks.insert(hl_id.clone(), hl);
             }
         }
         Ok(())

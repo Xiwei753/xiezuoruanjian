@@ -28,6 +28,23 @@ Rectangle {
 
     color: Kirigami.Theme.backgroundColor
 
+    function draggedStarmapId(dragOrDrop) {
+        if (!dragOrDrop || !dragOrDrop.source || !dragOrDrop.source.starmapData)
+            return ""
+        return String(dragOrDrop.source.starmapData.starmapId || "")
+    }
+
+    // 首页把一张独立根星图拖到另一张根星图上：只发起一次 Core 组合操作，
+    // 成功后刷新根星图列表；源/目标相同或缺少控制器时不接受放置。
+    function dropStarmap(sourceStarmapId, hostStarmapId) {
+        if (!sourceStarmapId || !hostStarmapId || sourceStarmapId === hostStarmapId)
+            return
+        if (!root.starMapController)
+            return
+        if (root.starMapController.embedExistingStarmap(sourceStarmapId, hostStarmapId))
+            root.refreshStarmaps()
+    }
+
     // 刷新星图列表：通过 StarMapController 拉取后端数据
     function refreshStarmaps() {
         if (!starMapController) return
@@ -93,9 +110,11 @@ Rectangle {
                 height: GridView.view.gridRoot.cardHeight
 
                 StarMapCard {
+                    id: card
                     anchors.fill: parent
                     dt: root.dt
                     starmapData: cardWrapper.modelData || ({})
+                    dropActive: dropArea.dropAllowed
                     onClicked: function(smId, smTitle) {
                         root.openStarmap(smId, smTitle)
                     }
@@ -103,6 +122,31 @@ Rectangle {
                         starmapContextMenu.starmapId = smId
                         starmapContextMenu.starmapTitle = smTitle
                         starmapContextMenu.popup()
+                    }
+                }
+
+                DropArea {
+                    id: dropArea
+                    anchors.fill: parent
+                    keys: ["application/x-sujian-starmap-id"]
+                    property bool dropAllowed: false
+
+                    onEntered: function(drag) {
+                        var sourceId = root.draggedStarmapId(drag)
+                        var hostId = String(cardWrapper.modelData.starmapId || "")
+                        dropAllowed = sourceId !== "" && hostId !== "" && sourceId !== hostId
+                        if (dropAllowed)
+                            drag.accept(Qt.MoveAction)
+                    }
+                    onExited: dropAllowed = false
+                    onDropped: function(drop) {
+                        var sourceId = root.draggedStarmapId(drop)
+                        var hostId = String(cardWrapper.modelData.starmapId || "")
+                        dropAllowed = false
+                        if (!sourceId || !hostId || sourceId === hostId)
+                            return
+                        drop.accept(Qt.MoveAction)
+                        root.dropStarmap(sourceId, hostId)
                     }
                 }
             }

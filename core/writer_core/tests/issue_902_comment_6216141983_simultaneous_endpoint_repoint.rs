@@ -3,7 +3,7 @@
 //!
 //! #902 实现路线第 3 节要求反向关系索引在“写入/修改/删除后增量更新”。此前各轮
 //! 已覆盖只移动单端（评论 6209895056 移动 `to`）、只改元数据（`from/to` 都为
-//! None）、以及 Hyperlink/Embed 的路径迁移，但**同一条边在同一次 update 里两端
+//! None）、以及 Embed 的路径迁移，但**同一条边在同一次 update 里两端
 //! 都换到另一个画布对象**尚未被真实 `WriterCoreApi` 验证。这条路径在
 //! `facade/starmap_ops/graph.rs::update_starmap_edge` 里分别调用
 //! `replace_source_facts_in_path_dependency_index(EdgeFrom, ...)` 与

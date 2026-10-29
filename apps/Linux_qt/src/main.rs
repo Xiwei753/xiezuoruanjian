@@ -137,6 +137,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapCard.qml" as "StarMapCard.qml",
     "qml/StarMapPage.qml" as "StarMapPage.qml",
     "qml/StarMapWorkspace.qml" as "StarMapWorkspace.qml",
+    // Issue #1014：星图工作区左侧层级导航树（Qt 6.8 原生 TreeView + Rust 模型）。
+    "qml/StarMapNavigationTree.qml" as "StarMapNavigationTree.qml",
     // Issue #822: 递归的是星图内容，不是视口。StarMapScene.qml 已删除：
     // 它"每个 Scene 实例自己有一套 panX/panY/zoomLevel"的定义正是要废掉的抽象。
     "qml/StarMapSceneContent.qml" as "StarMapSceneContent.qml",
@@ -173,6 +175,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/CreativeHub.qml" as "CreativeHub.qml",
     // Issue #977：一级 / 二级主页面共用的全窗口桌面顶栏。
     "qml/DesktopTopBar.qml" as "DesktopTopBar.qml",
+    // Issue #1014：全页面共享的栏宽 / 折叠状态。
+    "qml/DesktopLayoutState.qml" as "DesktopLayoutState.qml",
     // Issue #790 评论 5875963057: 全局顶栏公共入口组件
     "qml/GlobalTopActions.qml" as "GlobalTopActions.qml",
     "qml/GlobalSearchOverlay.qml" as "GlobalSearchOverlay.qml",
@@ -196,6 +200,9 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapToolRail.qml" as "StarMapToolRail.qml",
     "qml/StarMapToolDrawer.qml" as "StarMapToolDrawer.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
+    // Issue #1014：Agent CLI 动态清单（写作栏 AI 与设置页共用）。
+    "qml/AgentCliManager.qml" as "AgentCliManager.qml",
+    "qml/AiToolPanel.qml" as "AiToolPanel.qml",
     "qml/CorrectionPanel.qml" as "CorrectionPanel.qml",
     // Issue #825 复核4 第1项：工作台最右竖向工具栏（Core 的 ToolRail 角色）。
     // qrc 是显式列表，漏登记开发目录里可能碰巧能找到，打包后就变成组件不存在。
@@ -698,6 +705,14 @@ fn main() {
     qml_resources();
     probe_hub_header_resource();
     qmetaobject::qml_register_type::<AppBackend>(c"SujianApp", 1, 0, c"AppBackend");
+    // Issue #1014：星图导航树的树模型类型；实例由 StarMapNavigationTree.qml 创建，
+    // 后端 QObject 指针在组件完成时注入。
+    qmetaobject::qml_register_type::<backend::starmap_tree_model::StarmapTreeModel>(
+        c"SujianApp",
+        1,
+        0,
+        c"StarmapTreeModel",
+    );
     qmetaobject::qml_register_type::<sujian_editor_item::SujianEditorItem>(
         c"Sujian",
         1,

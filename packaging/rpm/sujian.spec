@@ -84,7 +84,8 @@ export CARGO_TARGET_DIR
 # GitHub 分发的主安装包不生成 debuginfo：保留其余 Fedora 安全编译标志，
 # 仅改用 Cargo Release 常规的并行代码生成与零调试符号。
 export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Ccodegen-units=16 -Cdebuginfo=0"
-cargo build --release --locked -p sujian-linux-qt
+# Issue #1014：同次构建 Qt 客户端与 stdio MCP Server。
+cargo build --release --locked -p sujian-linux-qt -p sujian_mcp
 
 %install
 # Issue #803 评论 5904340835：启动诊断层
@@ -96,9 +97,14 @@ cargo build --release --locked -p sujian-linux-qt
 # 真实 ELF 装到 libexec
 install -Dpm 0755 "${CARGO_TARGET_DIR}/release/sujian-linux-qt" \
     %{buildroot}%{_libexecdir}/sujian/sujian-linux-qt
+# Issue #1014：MCP Server 与 Qt 主程序同在 libexec。
+install -Dpm 0755 "${CARGO_TARGET_DIR}/release/sujian_mcp" \
+    %{buildroot}%{_libexecdir}/sujian/sujian_mcp
 # launcher 装到 bin
 install -Dpm 0755 packaging/linux/sujian-launcher.sh \
     %{buildroot}%{_bindir}/sujian
+# 外部 AI CLI 的稳定 MCP 入口（相对符号链接，随 libexec 路径变化）。
+ln -s ../libexec/sujian/sujian_mcp %{buildroot}%{_bindir}/sujian-mcp
 
 # Desktop entry
 install -Dpm 0644 packaging/rpm/io.github.Xiwei753.Sujian.desktop \
@@ -136,9 +142,13 @@ ln -s libonnxruntime.so.1.22.0 %{buildroot}%{_libdir}/sujian/libonnxruntime.so
 
 %files
 %license LICENSE third_party/macbert4csc/LICENSE third_party/onnxruntime/LICENSE
+# Issue #1014：MCP 使用 AGPL-3.0-only，独立许可证正文随包提供。
+%license apps/sujian_mcp/LICENSE
 %doc README.md packaging/correction/THIRD_PARTY_MODEL_NOTICES.md third_party/macbert4csc/NOTICE third_party/onnxruntime/NOTICE
 %{_bindir}/sujian
+%{_bindir}/sujian-mcp
 %{_libexecdir}/sujian/sujian-linux-qt
+%{_libexecdir}/sujian/sujian_mcp
 %{_datadir}/applications/io.github.Xiwei753.Sujian.desktop
 %{_datadir}/icons/hicolor/scalable/apps/io.github.Xiwei753.Sujian.svg
 %{_datadir}/metainfo/io.github.Xiwei753.Sujian.metainfo.xml

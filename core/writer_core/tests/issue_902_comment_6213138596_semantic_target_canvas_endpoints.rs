@@ -1,17 +1,17 @@
 //! Issue #902 评论 6213138596 — 跨画布边终点为语义目标
-//!（`ChapterRange` / `Entity` / `External`）时的真实 `WriterCoreApi` 集成测试。
+//!（`ChapterRange` / `Entity`）时的真实 `WriterCoreApi` 集成测试。
 //!
 //! #902 要求「跨画布语义连线连接真实节点对象」，并把终点身份写成节点/目标 ID
 //! 而非屏幕线段。`starmap/graph/resolve.rs` 的 `push_terminal_dependency_facts`
 //! 明确承诺：路径**成功到达终点画布**时产出 `CanvasEndpoint` 事实，覆盖
-//! `Starmap / ChapterRange / Entity / External` 等非 Node/Anchor 终点。
+//! `Starmap / ChapterRange / Entity` 等非 Node/Anchor 终点。
 //!
 //! 此前各轮已从公开 API 覆盖 Node、Anchor、Starmap 三类终点，但
-//! `ChapterRange / Entity / External` 只在内层单元里间接验证过。本测试补齐：
+//! `ChapterRange / Entity` 只在内层单元里间接验证过。本测试补齐：
 //!
 //! 1. 从根图 `R`、经 `Embed(eB)` 进入子图 `B`，把三条跨画布边的终点分别设为
-//!    `ChapterRange` / `Entity` / `External`；断言它们都只写在宿主 `R`，
-//!    `to.segments` 保留 `eB`，`B` 不落假边。
+//!    `ChapterRange` / `Entity(chen)` / `Entity(harbor)`；断言它们都只写在宿主
+//!    `R`，`to.segments` 保留 `eB`，`B` 不落假边。
 //! 2. `list_starmap_connections` 在 `B` 的 canvas 查询依赖 `CanvasEndpoint`
 //!    命中全部三条；按具体语义 target 查询只命中对应那一条，不串到其他终点，
 //!    按 `Node(b1)` 查询也不误命中。
@@ -87,10 +87,11 @@ fn entity_target() -> StarMapTargetDetailDto {
     }
 }
 
-fn external_target() -> StarMapTargetDetailDto {
+fn second_entity_target() -> StarMapTargetDetailDto {
     StarMapTargetDetailDto {
-        kind: "external".to_string(),
-        uri: Some("https://example.com/doc".to_string()),
+        kind: "entity".to_string(),
+        entity_type: Some("location".to_string()),
+        entity_id: Some("harbor".to_string()),
         ..Default::default()
     }
 }
@@ -125,7 +126,7 @@ struct Fixture {
     eb: String,
     chapter_edge: String,
     entity_edge: String,
-    external_edge: String,
+    second_entity_edge: String,
 }
 
 /// 根图 `R --Embed(eB)--> B`，三条跨画布边终点分别是语义目标。
@@ -165,10 +166,10 @@ fn make_semantic_target_fixture() -> Fixture {
             None,
         )
         .unwrap();
-    let external = api
+    let second_entity = api
         .create_cross_canvas_edge(
             from(),
-            to(external_target()),
+            to(second_entity_target()),
             StarMapEdgeKindDto::References,
             None,
             None,
@@ -183,7 +184,7 @@ fn make_semantic_target_fixture() -> Fixture {
         eb,
         chapter_edge: chapter.edge.id,
         entity_edge: entity.edge.id,
-        external_edge: external.edge.id,
+        second_entity_edge: second_entity.edge.id,
     }
 }
 
@@ -207,7 +208,7 @@ fn semantic_targets_are_hosted_by_root_with_instance_path() {
     let expected = [
         (&f.chapter_edge, "chapterRange"),
         (&f.entity_edge, "entity"),
-        (&f.external_edge, "external"),
+        (&f.second_entity_edge, "entity"),
     ];
     for (edge_id, kind) in expected {
         let edge = root_graph
@@ -243,7 +244,7 @@ fn canvas_and_target_queries_isolate_each_semantic_endpoint() {
         .api
         .list_starmap_connections(child_route.clone(), None)
         .unwrap();
-    for edge_id in [&f.chapter_edge, &f.entity_edge, &f.external_edge] {
+    for edge_id in [&f.chapter_edge, &f.entity_edge, &f.second_entity_edge] {
         assert!(
             canvas
                 .iter()
@@ -280,17 +281,17 @@ fn canvas_and_target_queries_isolate_each_semantic_endpoint() {
         "entity 查询只应命中实体终点边；实际: {entity:?}"
     );
 
-    let external = f
+    let second_entity = f
         .api
-        .list_starmap_connections(child_route.clone(), Some(external_target()))
+        .list_starmap_connections(child_route.clone(), Some(second_entity_target()))
         .unwrap();
     assert_eq!(
-        external
+        second_entity
             .iter()
             .map(|c| c.edge_id.as_str())
             .collect::<Vec<_>>(),
-        vec![f.external_edge.as_str()],
-        "external 查询只应命中外部终点边；实际: {external:?}"
+        vec![f.second_entity_edge.as_str()],
+        "harbor 实体查询只应命中对应实体终点边；实际: {second_entity:?}"
     );
 
     // 按本图真实节点查询不应误命中只落在语义终点的边。
@@ -298,7 +299,7 @@ fn canvas_and_target_queries_isolate_each_semantic_endpoint() {
         .api
         .list_starmap_connections(child_route, Some(node_target("b1")))
         .unwrap();
-    for edge_id in [&f.chapter_edge, &f.entity_edge, &f.external_edge] {
+    for edge_id in [&f.chapter_edge, &f.entity_edge, &f.second_entity_edge] {
         assert!(
             node_query.iter().all(|c| &c.edge_id != edge_id),
             "Node(b1) 查询不应命中语义终点边 {edge_id}"
@@ -322,7 +323,7 @@ fn deleting_one_semantic_edge_clears_only_its_reverse_index() {
         canvas.iter().all(|c| c.edge_id != f.chapter_edge),
         "删除后 canvas 查询不应再返回已删除的边；实际: {canvas:?}"
     );
-    for edge_id in [&f.entity_edge, &f.external_edge] {
+    for edge_id in [&f.entity_edge, &f.second_entity_edge] {
         assert!(
             canvas.iter().any(|c| &c.edge_id == edge_id),
             "删除一条边不应影响其余语义终点边 {edge_id}"

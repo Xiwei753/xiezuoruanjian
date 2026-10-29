@@ -12,13 +12,22 @@
 //   返回入口）。子星图不是递归塞进父图的坐标空间，也不是工作台维护的另一层
 //   页面：进入 / 退出都由 Canvas 走 Core 导航路由完成，Workspace 只按
 //   `canvas.focusIsRoot` 决定返回动作是"退出星图工作区"还是"返回父星图"。
-//   工作台不再持有任何子 Scene / 子 Content 引用，也不把焦点栈当画布身份。
+//   工作台不持有任何子 Scene / 子 Content 引用，也不把焦点栈当画布身份。
 //
 // Issue #822：节点标题编辑已经移进节点自身的内联编辑，删掉 inspector 链路。
 //
 // Issue #977：删除本页自绘的 56px 顶栏和四边 border；返回 / 标题 / 公共入口
 //   统一由 main.qml 的 DesktopTopBar 负责。Workspace 保留导航语义，暴露
 //   focusIsRoot 与 navigateBack() 给壳层调用。
+//
+// Issue #1014：本页使用全应用统一的三栏骨架。
+//   - 左栏：StarMapNavigationTree，宽度来自 layoutState（默认 240），
+//     SplitView 拖动结束才写持久化；
+//   - 中栏：唯一 StarMapCanvas；
+//   - 右栏：StarMapToolDrawer + 56vp StarMapToolRail 作为一个完整容器，
+//     总宽度 = layoutState.paneWidth("starmap.workspace", "right")；
+//     折叠 / 展开整个容器，不再按窗口宽度临时算 260~340 的抽屉宽度。
+//   嵌入模式（RightDrawer 内）保持无侧栏，避免第二套导航。
 //
 // 约束：
 //   - 纯 UI 层，业务逻辑通过 StarMapCanvas 和各画布的 StarMapGraphController 委托
@@ -47,11 +56,39 @@ Item {
     property bool aiEnabled: false
     property bool embedded: false
     property string selectedTool: "tags"
-    property bool toolDrawerOpen: false
+    property bool toolDrawerOpen: true
     property var pendingLinkSource: null
     property string pendingLinkId: ""
     property var pendingLinkTarget: null
     property string pendingName: ""
+
+    // Issue #1014：由 main.qml 注入的统一页面骨架状态。
+    property var layoutState: null
+    property string pageKey: "starmap.workspace"
+    property bool fallbackLeftPaneCollapsed: false
+    property bool fallbackRightPaneCollapsed: false
+
+    readonly property bool leftPaneCollapsed: {
+        if (root.embedded)
+            return true
+        return root.layoutState
+            ? root.layoutState.isCollapsed(root.pageKey, "left")
+            : root.fallbackLeftPaneCollapsed
+    }
+    readonly property bool rightPaneCollapsed: {
+        if (root.embedded)
+            return true
+        return root.layoutState
+            ? root.layoutState.isCollapsed(root.pageKey, "right")
+            : root.fallbackRightPaneCollapsed
+    }
+
+    readonly property int toolRailWidth: 56
+    readonly property int splitHandleWidth: 6
+    readonly property int leftPaneMinWidth: 200
+    readonly property int rightPaneMinWidth: 200
+    readonly property int rightPaneMaxWidth: 520
+    readonly property int canvasMinWidth: 240
 
     // Issue #977：顶栏需要知道当前是根画布还是子画布，以决定返回文案与动作。
     readonly property bool focusIsRoot: canvas.focusIsRoot
@@ -63,6 +100,57 @@ Item {
     signal sceneGeometryReady(string starmapId, string routeKey)
     signal annotationTargetRequested(var target)
     signal annotationToolRequested(string toolKey)
+
+    property var pendingTreeRow: null
+
+    function setPaneCollapsed(side, collapsed) {
+        if (root.layoutState) {
+            root.layoutState.setCollapsed(root.pageKey, side, collapsed)
+        } else if (side === "left") {
+            root.fallbackLeftPaneCollapsed = collapsed
+        } else {
+            root.fallbackRightPaneCollapsed = collapsed
+        }
+    }
+
+    function toggleLeftPane() {
+        root.setPaneCollapsed("left", !root.leftPaneCollapsed)
+    }
+
+    function toggleRightPane() {
+        if (root.rightPaneCollapsed) {
+            root.toolDrawerOpen = true
+            root.setPaneCollapsed("right", false)
+        } else {
+            root.toolDrawerOpen = false
+            root.setPaneCollapsed("right", true)
+        }
+    }
+
+    function closeRightPane() {
+        root.toolDrawerOpen = false
+        root.setPaneCollapsed("right", true)
+    }
+
+    function requestToolPane(toolKey) {
+        root.selectedTool = toolKey || "tags"
+        root.toolDrawerOpen = true
+        root.setPaneCollapsed("right", false)
+    }
+
+    // ── 星图树回调 ──
+    function backendEnvelope(raw) {
+        try {
+            return JSON.parse(String(raw || "{}"))
+        } catch (e) {
+            return null
+        }
+    }
+
+    function backendSucceeded(raw) {
+        var envelope = backendEnvelope(raw)
+        return !!(envelope && envelope.success === true)
+    }
 
     function projectIdForStarmap(id) {
         if (starmapBackendRef && id && starmapBackendRef.get_starmap_json) {
@@ -115,6 +203,103 @@ Item {
         return canvas.revealSearchTarget(target)
     }
 
+    function syncTreeRoute(rootStarmapId, segmentsJson, routeKey) {
+        if (navigationTree)
+            navigationTree.syncRoute(rootStarmapId, segmentsJson, routeKey)
+    }
+
+    function activateTreeRoute(rootStarmapId, segmentsJson, routeKey) {
+        if (!canvas.navigateToTreeRoute(rootStarmapId, segmentsJson, routeKey)) {
+            navigationTree.syncRoute(canvas.currentRoute.rootStarmapId,
+                                     canvas.segmentsJsonOf(canvas.currentRoute),
+                                     canvas.routeKey)
+        }
+    }
+
+    function createRootStarmap(title) {
+        if (!root.starmapBackendRef || !root.starmapBackendRef.create_starmap_json)
+            return
+        var trimmed = String(title || "").trim()
+        if (!trimmed)
+            return
+        var raw = root.starmapBackendRef.create_starmap_json(trimmed, "", "")
+        if (!root.backendSucceeded(raw))
+            return
+        navigationTree.reload()
+    }
+
+    function renameTreeRow(rowInfo, title) {
+        if (!rowInfo || !root.starmapBackendRef)
+            return
+        var trimmed = String(title || "").trim()
+        if (!trimmed)
+            return
+        var raw = ""
+        if (rowInfo.rowKind === "root") {
+            raw = root.starmapBackendRef.rename_starmap_json(rowInfo.starmapId, trimmed)
+        } else if (rowInfo.rowKind === "embed") {
+            raw = root.starmapBackendRef.update_starmap_embed_json(
+                        rowInfo.parentStarmapId, rowInfo.instanceId,
+                        JSON.stringify({ label: trimmed, expectedRevision: rowInfo.revision }))
+        } else if (rowInfo.rowKind === "portal") {
+            raw = root.starmapBackendRef.update_starmap_node_json(
+                        rowInfo.parentStarmapId, rowInfo.nodeId,
+                        JSON.stringify({ title: trimmed, expectedRevision: rowInfo.revision }))
+        }
+        if (!root.backendSucceeded(raw))
+            return
+        navigationTree.reload()
+    }
+
+    function deleteTreeRow(rowInfo) {
+        if (!rowInfo || !root.starmapBackendRef)
+            return
+        var raw = ""
+        if (rowInfo.rowKind === "root") {
+            raw = root.starmapBackendRef.delete_starmap_json(rowInfo.starmapId)
+        } else if (rowInfo.rowKind === "embed") {
+            raw = root.starmapBackendRef.delete_starmap_embed_json(
+                        rowInfo.parentStarmapId, rowInfo.instanceId,
+                        Number(rowInfo.revision || 0))
+        } else if (rowInfo.rowKind === "portal") {
+            raw = root.starmapBackendRef.delete_starmap_node_json(
+                        rowInfo.parentStarmapId, rowInfo.nodeId,
+                        Number(rowInfo.revision || 0))
+        }
+        if (!root.backendSucceeded(raw))
+            return
+
+        if (canvas.routeKey === rowInfo.routeKey) {
+            if (rowInfo.rowKind === "root") {
+                root.backClicked()
+                return
+            }
+            var parentSegments = []
+            try {
+                parentSegments = JSON.parse(String(rowInfo.routeSegments || "[]"))
+                if (Array.isArray(parentSegments))
+                    parentSegments = parentSegments.slice(0, Math.max(0, parentSegments.length - 1))
+                else
+                    parentSegments = []
+            } catch (e) {
+                parentSegments = []
+            }
+            canvas.navigateToTreeRoute(rowInfo.rootStarmapId, JSON.stringify(parentSegments), "")
+        }
+        navigationTree.reload()
+    }
+
+    function beginRenameTreeRow(rowInfo) {
+        root.pendingTreeRow = rowInfo
+        treeRenameField.text = rowInfo ? String(rowInfo.title || "") : ""
+        treeRenameDialog.open()
+    }
+
+    function beginDeleteTreeRow(rowInfo) {
+        root.pendingTreeRow = rowInfo
+        treeDeleteDialog.open()
+    }
+
     // Issue #814 评论 5935285879: 当前活动画布共享的唯一选中状态控制器。
     // 由 Workspace 创建，传给 Canvas；切换活动画布时选中身份带新的 routeKey。
     StarMapSelectionController {
@@ -125,18 +310,100 @@ Item {
         anchors.fill: parent
         color: Kirigami.Theme.backgroundColor
 
-        RowLayout {
+        SplitView {
+            id: paneSplitView
             anchors.fill: parent
-            spacing: 0
+            orientation: Qt.Horizontal
 
-            // 主体：唯一一块星图画布，工具抽屉只在独立星图工作区加入。
+            property real resizeStartLeftWidth: 0
+            property real resizeStartRightWidth: 0
+
+            handle: Rectangle {
+                id: handleDelegate
+                implicitWidth: root.splitHandleWidth
+                containmentMask: Item {
+                    x: (handleDelegate.width - width) / 2
+                    width: 14
+                    height: paneSplitView.height
+                }
+                color: SplitHandle.pressed
+                       ? Kirigami.Theme.highlightColor
+                       : (SplitHandle.hovered
+                          ? Kirigami.Theme.focusColor
+                          : "transparent")
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 1
+                    height: parent.height
+                    color: Kirigami.Theme.disabledTextColor
+                    opacity: 0.3
+                }
+            }
+
+            onResizingChanged: {
+                if (paneSplitView.resizing) {
+                    paneSplitView.resizeStartLeftWidth = leftPaneContainer.width
+                    paneSplitView.resizeStartRightWidth = rightPaneContainer.width
+                    return
+                }
+                if (!root.layoutState)
+                    return
+                var leftChanged = Math.abs(leftPaneContainer.width
+                                           - paneSplitView.resizeStartLeftWidth) > 0.5
+                var rightChanged = Math.abs(rightPaneContainer.width
+                                            - paneSplitView.resizeStartRightWidth) > 0.5
+                if (leftChanged && leftPaneContainer.visible)
+                    root.layoutState.setDraggedWidth(root.pageKey, "left",
+                                                     leftPaneContainer.width)
+                if (rightChanged && rightPaneContainer.visible)
+                    root.layoutState.setDraggedWidth(root.pageKey, "right",
+                                                     rightPaneContainer.width)
+            }
+
+            // ── 左栏：星图层级树 ──
+            Rectangle {
+                id: leftPaneContainer
+                visible: !root.embedded && !root.leftPaneCollapsed
+                SplitView.minimumWidth: root.leftPaneMinWidth
+                SplitView.preferredWidth: root.layoutState
+                    ? root.layoutState.paneWidth(root.pageKey, "left")
+                    : root.leftPaneMinWidth
+                SplitView.maximumWidth: 420
+                color: "transparent"
+                clip: true
+
+                StarMapNavigationTree {
+                    id: navigationTree
+                    anchors.fill: parent
+                    dt: root.dt
+                    starmapBackendRef: root.starmapBackendRef
+                    onRouteActivated: function(rootStarmapId, segmentsJson, routeKey) {
+                        root.activateTreeRoute(rootStarmapId, segmentsJson, routeKey)
+                    }
+                    onCreateStarmapRequested: {
+                        treeCreateField.text = qsTr("未命名星图")
+                        treeCreateDialog.open()
+                    }
+                    onRenameRequested: function(rowInfo) {
+                        root.beginRenameTreeRow(rowInfo)
+                    }
+                    onDeleteRequested: function(rowInfo) {
+                        root.beginDeleteTreeRow(rowInfo)
+                    }
+                }
+            }
+
+            // ── 中栏：唯一一块星图画布 ──
             StarMapCanvas {
                 id: canvas
-                Layout.fillWidth: true
-                Layout.fillHeight: true
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: root.canvasMinWidth
                 dt: root.dt
                 onSceneGeometryReady: function(starmapId, routeKey) {
                     root.sceneGeometryReady(starmapId, routeKey)
+                }
+                onRouteChanged: function(rootStarmapId, segmentsJson, routeKey) {
+                    root.syncTreeRoute(rootStarmapId, segmentsJson, routeKey)
                 }
                 canvasBackgroundColor: Kirigami.Theme.backgroundColor
                 starmapId: root.starmapId
@@ -157,7 +424,7 @@ Item {
                     } else if (root.embedded) {
                         root.annotationToolRequested("tags")
                     } else {
-                        root.toolDrawerOpen = true
+                        root.requestToolPane("tags")
                     }
                 }
 
@@ -167,52 +434,151 @@ Item {
                 }
             }
 
-            StarMapToolDrawer {
-                id: starMapTools
-                visible: !root.embedded && root.toolDrawerOpen
-                Layout.preferredWidth: Math.min(340, Math.max(260, root.width * 0.32))
-                Layout.minimumWidth: 240
-                Layout.fillHeight: true
-                dt: root.dt
-                selectedTool: root.selectedTool
-                isOpen: visible
-                aiAvailable: root.aiAvailable
-                aiEnabled: root.aiEnabled
-                annotationBackendRef: root.annotationBackendRef
-                searchBackendRef: root.searchBackendRef
-                projectId: root.annotationProjectId
-                targetRef: root.annotationTargetRef
-                targetLabel: root.annotationTargetRef
-                    ? (root.annotationTargetRef.kind === "starMapNode" ? qsTr("星图节点")
-                       : root.annotationTargetRef.kind === "starMapEmbed" ? qsTr("子星图") : root.starmapTitle)
-                    : qsTr("星图对象")
-                onCloseRequested: root.toolDrawerOpen = false
-                onTargetActivated: function(target) { root.annotationTargetRequested(target) }
-                onLinkPickerRequested: function(sourceRef, link) {
-                    root.pendingLinkSource = sourceRef
-                    root.pendingLinkId = link ? String(link.linkId || "") : ""
-                    root.pendingLinkTarget = link ? link.target : null
-                    annotationLinkPicker.open()
-                }
-            }
+            // ── 右栏：工具内容 + 56vp rail 作为一个整体 ──
+            Rectangle {
+                id: rightPaneContainer
+                visible: !root.embedded && !root.rightPaneCollapsed
+                SplitView.minimumWidth: root.rightPaneMinWidth
+                SplitView.preferredWidth: root.layoutState
+                    ? root.layoutState.paneWidth(root.pageKey, "right")
+                    : root.rightPaneMinWidth + root.toolRailWidth
+                SplitView.maximumWidth: root.rightPaneMaxWidth
+                color: "transparent"
+                clip: true
 
-            StarMapToolRail {
-                visible: !root.embedded
-                Layout.preferredWidth: 56
-                Layout.minimumWidth: 56
-                Layout.maximumWidth: 56
-                Layout.fillHeight: true
-                dt: root.dt
-                selectedTool: root.selectedTool
-                drawerOpen: root.toolDrawerOpen
-                aiAvailable: root.aiAvailable
-                aiEnabled: root.aiEnabled
-                onToolRequested: function(key) {
-                    root.selectedTool = key
-                    root.toolDrawerOpen = true
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 0
+
+                    StarMapToolDrawer {
+                        id: starMapTools
+                        visible: root.toolDrawerOpen
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        dt: root.dt
+                        selectedTool: root.selectedTool
+                        isOpen: visible
+                        aiAvailable: root.aiAvailable
+                        aiEnabled: root.aiEnabled
+                        annotationBackendRef: root.annotationBackendRef
+                        searchBackendRef: root.searchBackendRef
+                        projectId: root.annotationProjectId
+                        targetRef: root.annotationTargetRef
+                        targetLabel: root.annotationTargetRef
+                            ? (root.annotationTargetRef.kind === "starMapNode" ? qsTr("星图节点")
+                               : root.annotationTargetRef.kind === "starMapEmbed" ? qsTr("子星图") : root.starmapTitle)
+                            : qsTr("星图对象")
+                        onCloseRequested: root.closeRightPane()
+                        onTargetActivated: function(target) { root.annotationTargetRequested(target) }
+                        onLinkPickerRequested: function(sourceRef, link) {
+                            root.pendingLinkSource = sourceRef
+                            root.pendingLinkId = link ? String(link.linkId || "") : ""
+                            root.pendingLinkTarget = link ? link.target : null
+                            annotationLinkPicker.open()
+                        }
+                    }
+
+                    StarMapToolRail {
+                        id: starMapRail
+                        Layout.preferredWidth: root.toolRailWidth
+                        Layout.minimumWidth: root.toolRailWidth
+                        Layout.maximumWidth: root.toolRailWidth
+                        Layout.fillHeight: true
+                        railWidth: root.toolRailWidth
+                        dt: root.dt
+                        selectedTool: root.selectedTool
+                        drawerOpen: root.toolDrawerOpen
+                        aiAvailable: root.aiAvailable
+                        aiEnabled: root.aiEnabled
+                        onToolRequested: function(key) {
+                            root.requestToolPane(key)
+                        }
+                        onDrawerToggled: root.toggleRightPane()
+                    }
                 }
-                onDrawerToggled: root.toolDrawerOpen = !root.toolDrawerOpen
             }
+        }
+    }
+
+    // ── 左右栏贴边折叠把手（嵌入模式不出现） ──
+    Rectangle {
+        id: leftPaneHandle
+        visible: !root.embedded
+        z: 50
+        width: Kirigami.Units.gridUnit
+        height: Kirigami.Units.gridUnit * 3.5
+        radius: width / 2
+        color: leftPaneHandleHover.containsMouse || leftPaneHandleHover.pressed
+                   ? Kirigami.Theme.alternateBackgroundColor
+                   : Kirigami.Theme.backgroundColor
+        border.color: leftPaneHandleHover.containsMouse ? Kirigami.Theme.focusColor
+                                                        : Kirigami.Theme.disabledTextColor
+        border.width: 1
+        x: root.leftPaneCollapsed
+           ? Kirigami.Units.smallSpacing
+           : Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing,
+                                  paneSplitView.x + leftPaneContainer.x
+                                  + leftPaneContainer.width - width / 2))
+        y: Math.round((root.height - height) / 2)
+
+        Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+        Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+
+        Kirigami.Icon {
+            anchors.centerIn: parent
+            source: root.leftPaneCollapsed ? "arrow-right" : "arrow-left"
+            color: Kirigami.Theme.textColor
+            implicitWidth: Kirigami.Units.iconSizes.smallMedium
+            implicitHeight: Kirigami.Units.iconSizes.smallMedium
+        }
+
+        MouseArea {
+            id: leftPaneHandleHover
+            anchors.fill: parent
+            anchors.margins: -Kirigami.Units.smallSpacing
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.toggleLeftPane()
+        }
+    }
+
+    Rectangle {
+        id: rightPaneHandle
+        visible: !root.embedded
+        z: 50
+        width: Kirigami.Units.gridUnit
+        height: Kirigami.Units.gridUnit * 3.5
+        radius: width / 2
+        color: rightPaneHandleHover.containsMouse || rightPaneHandleHover.pressed
+                   ? Kirigami.Theme.alternateBackgroundColor
+                   : Kirigami.Theme.backgroundColor
+        border.color: rightPaneHandleHover.containsMouse ? Kirigami.Theme.focusColor
+                                                         : Kirigami.Theme.disabledTextColor
+        border.width: 1
+        x: root.rightPaneCollapsed
+           ? root.width - width - Kirigami.Units.smallSpacing
+           : Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing,
+                                  paneSplitView.x + rightPaneContainer.x - width / 2))
+        y: Math.round((root.height - height) / 2)
+
+        Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+        Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+
+        Kirigami.Icon {
+            anchors.centerIn: parent
+            source: root.rightPaneCollapsed ? "arrow-left" : "arrow-right"
+            color: Kirigami.Theme.textColor
+            implicitWidth: Kirigami.Units.iconSizes.smallMedium
+            implicitHeight: Kirigami.Units.iconSizes.smallMedium
+        }
+
+        MouseArea {
+            id: rightPaneHandleHover
+            anchors.fill: parent
+            anchors.margins: -Kirigami.Units.smallSpacing
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.toggleRightPane()
         }
     }
 
@@ -268,11 +634,71 @@ Item {
                 var namedTarget = { objectRef: {
                     kind: "namedEntry", projectId: root.annotationProjectId,
                     objectId: String(entry.entryId)
-                }, externalUrl: null }
+                } }
                 root.annotationBackendRef.create_link_json(
                     JSON.stringify(root.pendingLinkSource), JSON.stringify(namedTarget))
                 Qt.callLater(starMapTools.refresh)
             }
+        }
+    }
+
+    Dialog {
+        id: treeCreateDialog
+        title: qsTr("新建星图")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        contentItem: TextField {
+            id: treeCreateField
+            placeholderText: qsTr("星图标题")
+            onAccepted: treeCreateDialog.accept()
+        }
+        onOpened: {
+            treeCreateField.forceActiveFocus()
+            treeCreateField.selectAll()
+        }
+        onAccepted: {
+            root.createRootStarmap(treeCreateField.text)
+            treeCreateField.text = ""
+        }
+    }
+
+    Dialog {
+        id: treeRenameDialog
+        title: qsTr("重命名")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        contentItem: TextField {
+            id: treeRenameField
+            placeholderText: qsTr("名称")
+            onAccepted: treeRenameDialog.accept()
+        }
+        onOpened: {
+            treeRenameField.forceActiveFocus()
+            treeRenameField.selectAll()
+        }
+        onAccepted: {
+            root.renameTreeRow(root.pendingTreeRow, treeRenameField.text)
+            root.pendingTreeRow = null
+        }
+    }
+
+    Dialog {
+        id: treeDeleteDialog
+        title: qsTr("删除")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        contentItem: Label {
+            text: root.pendingTreeRow
+                ? qsTr("确定删除“%1”？").arg(String(root.pendingTreeRow.title || ""))
+                : ""
+            wrapMode: Text.Wrap
+        }
+        onAccepted: {
+            root.deleteTreeRow(root.pendingTreeRow)
+            root.pendingTreeRow = null
         }
     }
 }

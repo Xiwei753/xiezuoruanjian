@@ -1,7 +1,7 @@
 # 星图普通节点呈现规范 v1.0
 
 Status: active
-Last verified: 2026-10-22
+Last verified: 2026-10-29
 Truth source: product decision / Issue #984
 Related: [starmap_semantics.md](starmap_semantics.md) · [starmap_viewport.md](starmap_viewport.md)
 
@@ -39,7 +39,8 @@ StarMapNode {
 
 * `empty`：节点尚无内容。首次保存正文时转为 `inline`。
 * `inline`：节点正文使用 `summary` / `body`。
-* `chapterRef` / `entityRef` / `externalRef`：引用型内容。用户只修改名称时必须保留原引用类型和引用字段，不得因为编辑标题而改写成 `inline`；正文编辑器不接管引用内容的语义。
+* `chapterRef` / `entityRef`：引用型内容，分别指向作品内章节与内部实体。用户只修改名称时必须保留原引用类型和引用字段，不得因为编辑标题而改写成 `inline`；正文编辑器不接管引用内容的语义。
+* 节点只引用素笺内部对象，不绑定外部网页或 URL。正文中直接输入的网址只是普通文本。
 * 局部更新使用 Core 的 `StarMapNodePatch.content`（省略即不修改）。不需要新增 Core 表或第二套节点 DTO。
 
 节点名称与正文的更新属于同一个节点对象，跨平台同步继续按该节点的 `updated_at` 和既有收敛规则处理，不建立“正文另存一份”的旁路。

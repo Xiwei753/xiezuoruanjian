@@ -123,12 +123,6 @@ impl AppBackend {
                 starmap_id, link.link_id
             )));
         }
-        for hyperlink in &graph.hyperlinks {
-            updates.push(Self::search_delete_update(format!(
-                "starmap_hyperlink:{}:{}",
-                starmap_id, hyperlink.hyperlink_id
-            )));
-        }
         for embed in &graph.embeds {
             updates.push(Self::search_delete_update(format!(
                 "starmap_embed:{}:{}",
@@ -316,16 +310,13 @@ impl AppBackend {
             match core.get_starmap_graph(&sid) {
                 Ok(g) => {
                     // 真正有用的图快照日志：记录各类图元数量，便于排查"图空了""embed 丢失"等问题。
-                    // StarMapGraphDto 同时持有 `links`（普通连线）和 `hyperlinks`（超链接）两个字段，
-                    // 分别记录两者，避免把 hyperlinks 误当成 links 输出到日志。
                     log::debug!(
-                        "starmap graph snapshot: id={} nodes={} edges={} embeds={} links={} hyperlinks={}",
+                        "starmap graph snapshot: id={} nodes={} edges={} embeds={} links={}",
                         sid,
                         g.nodes.len(),
                         g.edges.len(),
                         g.embeds.len(),
-                        g.links.len(),
-                        g.hyperlinks.len()
+                        g.links.len()
                     );
                     writer_core::api::ResultEnvelope::success(serde_json::json!({
                         "graph": g

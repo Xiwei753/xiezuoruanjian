@@ -198,7 +198,7 @@ export class NativeStarMapBridge {
         kind: kind,
         payload: null,
         tags: [],
-        content: { type: 'empty', summary: null, body: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null, label: null },
+        content: { type: 'empty', summary: null, body: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null },
         anchors: [],
         portal: null,
         position: position,
@@ -224,7 +224,7 @@ export class NativeStarMapBridge {
         hostPath: {
           starmapId: starmapId,
           segments: [],
-          target: { type: 'starmap', nodeId: null, anchorId: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null, uri: null }
+          target: { type: 'starmap', nodeId: null, anchorId: null, projectId: null, volumeId: null, chapterId: null, rangeStart: null, rangeEnd: null, entityType: null, entityId: null }
         },
         provenance: { source: 'Human', sourceId: null, generatedBy: null, promptId: null, reviewStatus: 'Accepted', createdFromAnchor: null },
         createdAt: now,

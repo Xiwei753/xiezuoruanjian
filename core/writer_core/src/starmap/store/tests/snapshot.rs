@@ -41,7 +41,6 @@ fn flush_store(store: &mut StarMapStore) {
     store.enqueue_save(SaveQueueEntry::Edge);
     store.enqueue_save(SaveQueueEntry::Embed);
     store.enqueue_save(SaveQueueEntry::Link);
-    store.enqueue_save(SaveQueueEntry::Hyperlink);
     store.enqueue_save(SaveQueueEntry::GraphMeta);
     store.flush_save_queue().unwrap();
 }
@@ -128,7 +127,7 @@ fn phased_snapshot_preserves_edge_endpoint_semantics() {
 }
 
 #[test]
-fn phased_snapshot_preserves_embed_link_hyperlink() {
+fn phased_snapshot_preserves_embed_link() {
     let (dir, sid) = setup_temp_dir();
     let mut store = StarMapStore::new(dir.path(), &sid);
     store.upsert_node(make_test_node("n1", "Host"));
@@ -168,29 +167,12 @@ fn phased_snapshot_preserves_embed_link_hyperlink() {
         created_at: 0,
         updated_at: 0,
     });
-    store.upsert_hyperlink(StarMapHyperlink {
-        hyperlink_id: "hl1".to_string(),
-        source: StarMapTargetPath {
-            starmap_id: sid.clone(),
-            segments: vec![],
-            target: StarMapTargetDetail::Node {
-                node_id: "n1".to_string(),
-            },
-        },
-        target_uri: "https://example.com".to_string(),
-        label: Some("hl".to_string()),
-        created_at: 0,
-        updated_at: 0,
-    });
     flush_store(&mut store);
     let snapshot = load_full_snapshot(dir.path(), &sid);
     assert_eq!(snapshot.embeds.len(), 1);
     assert_eq!(snapshot.embeds[0].instance_id, "emb1");
     assert_eq!(snapshot.links.len(), 1);
     assert_eq!(snapshot.links[0].link_id, "lk1");
-    assert_eq!(snapshot.hyperlinks.len(), 1);
-    assert_eq!(snapshot.hyperlinks[0].hyperlink_id, "hl1");
-    assert_eq!(snapshot.hyperlinks[0].target_uri, "https://example.com");
 }
 
 #[test]
@@ -280,7 +262,6 @@ fn phased_snapshot_returns_empty_when_revision_unchanged() {
     assert!(snap.edges.is_empty());
     assert!(snap.embeds.is_empty());
     assert!(snap.links.is_empty());
-    assert!(snap.hyperlinks.is_empty());
 }
 
 #[test]

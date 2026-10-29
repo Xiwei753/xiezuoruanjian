@@ -40,29 +40,6 @@ fn test_target_path_multi_layer_roundtrip() {
 }
 
 #[test]
-fn test_hyperlink_roundtrip() {
-    let hyperlink = StarMapHyperlink {
-        hyperlink_id: "hl_1".to_string(),
-        source: StarMapTargetPath {
-            starmap_id: "sm_1".to_string(),
-            segments: vec![],
-            target: StarMapTargetDetail::Node {
-                node_id: "n1".to_string(),
-            },
-        },
-        target_uri: "https://example.com".to_string(),
-        label: Some("Example".to_string()),
-        created_at: 0,
-        updated_at: 0,
-    };
-
-    let json = serde_json::to_string(&hyperlink).unwrap();
-    let deserialized: StarMapHyperlink = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.hyperlink_id, "hl_1");
-    assert_eq!(deserialized.target_uri, "https://example.com");
-}
-
-#[test]
 fn test_edge_target_path_roundtrip() {
     let edge = StarMapEdge {
         id: "e1".to_string(),
@@ -108,5 +85,4 @@ fn test_starmap_graph_default() {
     assert!(graph.edges.is_empty());
     assert!(graph.embeds.is_empty());
     assert!(graph.links.is_empty());
-    assert!(graph.hyperlinks.is_empty());
 }

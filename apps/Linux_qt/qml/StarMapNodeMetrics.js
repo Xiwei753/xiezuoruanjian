@@ -81,7 +81,7 @@ function bodyOf(nodeOrContent) {
 }
 
 // Issue #984：正文只在 empty / inline 两种内容类型下可编辑；
-// chapterRef / entityRef / externalRef 只改名称，不把引用内容改写成 inline。
+// chapterRef / entityRef 只改名称，不把引用内容改写成 inline。
 function canEditBody(nodeOrContent) {
     var t = contentTypeOf(nodeOrContent)
     return t === "empty" || t === "inline"

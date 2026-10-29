@@ -41,9 +41,7 @@ internal fun StarMapNodeDto.toGraphNode(): StarMapGraphNode =
         contentRangeEnd = content?.rangeEnd?.toInt(),
         contentEntityType = content?.entityType,
         contentEntityId = content?.entityId,
-        contentLabel = content?.label,
         contentChapterId = content?.chapterId,
-        contentUri = content?.uri,
         anchors = anchors.map { it.toAnchorModel() },
         portal = portal?.toPortalModel(),
         position = position.toModel(),
@@ -83,7 +81,6 @@ internal fun StarMapAnchorDto.toAnchorModel(): StarMapAnchorData =
         targetChapterId = target.chapterId,
         targetEntityId = target.entityId,
         targetStarmapId = target.starmapId,
-        targetUri = target.uri,
         label = label,
         role = role.name,
     )
@@ -162,11 +159,11 @@ internal fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
 internal fun StarMapGraphNode.contentToDto(base: StarMapNodeContentDto? = null): StarMapNodeContentDto {
     val suppliedKind = contentKind?.takeIf { it.isNotBlank() }
     // Issue #984：没有提供任何内容信息时沿用 Core 原内容，避免把已有
-    // chapterRef/entityRef/externalRef 覆盖成 empty。
+    // chapterRef/entityRef 覆盖成 empty。
     if (suppliedKind == null && contentBody == null) {
         base?.let { return it }
     }
-    // contentKind 是 Core 内容类型（empty/inline/chapterRef/entityRef/externalRef），
+    // contentKind 是 Core 内容类型（empty/inline/chapterRef/entityRef），
     // 不是节点种类 Note。只有旧数据缺少 contentKind 时才按 body 推断 inline。
     val resolvedKind =
         suppliedKind
@@ -186,8 +183,6 @@ internal fun StarMapGraphNode.contentToDto(base: StarMapNodeContentDto? = null):
         rangeEnd = contentRangeEnd?.toUInt(),
         entityType = contentEntityType,
         entityId = contentEntityId,
-        uri = contentUri,
-        label = contentLabel,
     )
 }
 
@@ -204,8 +199,6 @@ internal fun StarMapNodeContentData.toContentDto(): StarMapNodeContentDto =
         rangeEnd = null,
         entityType = null,
         entityId = null,
-        uri = null,
-        label = null,
     )
 
 internal fun StarMapAnchorData.anchorToDto(): StarMapAnchorDto =
@@ -222,7 +215,6 @@ internal fun StarMapAnchorData.anchorToDto(): StarMapAnchorDto =
                 entityId = targetEntityId,
                 entityType = targetEntityType,
                 starmapId = targetStarmapId,
-                uri = targetUri,
                 payload = targetPayload,
             ),
         label = label,
@@ -292,5 +284,4 @@ internal fun StarMapTargetDetailData.toTargetDetailDto(): StarMapTargetDetailDto
         rangeEnd = rangeEnd,
         entityType = entityType,
         entityId = entityId,
-        uri = uri,
     )

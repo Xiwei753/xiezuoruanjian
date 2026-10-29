@@ -55,13 +55,4 @@ impl StarMapStore {
         self.links.insert(link_id.to_string(), link);
         Ok(())
     }
-
-    pub fn ensure_hyperlink_loaded(&mut self, hyperlink_id: &str) -> Result<()> {
-        if self.hyperlinks.contains_key(hyperlink_id) {
-            return Ok(());
-        }
-        let hl = self.try_load_hyperlink(hyperlink_id)?;
-        self.hyperlinks.insert(hyperlink_id.to_string(), hl);
-        Ok(())
-    }
 }

@@ -17,55 +17,6 @@ impl StarMapStore {
         clippy::too_many_arguments,
         clippy::type_complexity
     )]
-    pub fn list_hyperlinks_with_diagnostics(
-        &mut self,
-    ) -> Result<ListWithDiagnostics<StarMapHyperlink>> {
-        self.reload_graph_meta_if_stale()?;
-        let hl_ids = self.graph_meta_hyperlink_ids();
-        let mut items = Vec::new();
-        let mut diagnostics = Vec::new();
-        for hl_id in &hl_ids {
-            if !self.hyperlinks.contains_key(hl_id) {
-                match self.try_load_hyperlink(hl_id) {
-                    Ok(hl) => {
-                        self.hyperlinks.insert(hl_id.clone(), hl);
-                    }
-                    Err(e) => {
-                        // 保持 ListWithDiagnostics 语义：单个坏对象不让整个列表失败。
-                        // try_load 已 push diagnostic 到 recovery_log，这里同步到 diagnostics。
-                        let recovery_len = self.recovery_log.len();
-                        if recovery_len > 0 {
-                            if let Some(last) = self.recovery_log.last().cloned() {
-                                if last.object_id == *hl_id {
-                                    diagnostics.push(last);
-                                    continue;
-                                }
-                            }
-                        }
-                        diagnostics.push(LoadDiagnostic {
-                            kind: LoadDiagnosticKind::Corrupt,
-                            object_type: "hyperlink".to_string(),
-                            object_id: hl_id.clone(),
-                            detail: format!("{}", e),
-                        });
-                        continue;
-                    }
-                }
-            }
-            if let Some(hl) = self.hyperlinks.get(hl_id).cloned() {
-                items.push(hl);
-            }
-        }
-        Ok(ListWithDiagnostics { items, diagnostics })
-    }
-
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
     pub fn list_links_with_diagnostics(&mut self) -> Result<ListWithDiagnostics<StarMapLink>> {
         self.reload_graph_meta_if_stale()?;
         let link_ids = self.graph_meta_link_ids();
@@ -105,13 +56,6 @@ impl StarMapStore {
         Ok(ListWithDiagnostics { items, diagnostics })
     }
 
-    pub fn graph_meta_hyperlink_ids(&self) -> Vec<String> {
-        self.graph_meta
-            .as_ref()
-            .map(|m| m.hyperlink_ids.clone())
-            .unwrap_or_default()
-    }
-
     pub fn graph_meta_link_ids(&self) -> Vec<String> {
         self.graph_meta
             .as_ref()
@@ -149,11 +93,6 @@ impl StarMapStore {
             .graph_meta
             .as_ref()
             .map(|m| m.link_ids.clone())
-            .unwrap_or_default();
-        let hl_ids = self
-            .graph_meta
-            .as_ref()
-            .map(|m| m.hyperlink_ids.clone())
             .unwrap_or_default();
 
         let mut edge_relation_index = Vec::new();
@@ -200,22 +139,6 @@ impl StarMapStore {
             }
         }
 
-        let mut hyperlink_relation_index = Vec::new();
-        for hl_id in &hl_ids {
-            if !self.hyperlinks.contains_key(hl_id) {
-                let hl = self.try_load_hyperlink(hl_id)?;
-                self.hyperlinks.insert(hl_id.clone(), hl);
-            }
-            if let Some(hl) = self.hyperlinks.get(hl_id) {
-                hyperlink_relation_index.push(HyperlinkRelationIndex {
-                    hyperlink_id: hl.hyperlink_id.clone(),
-                    source_node_id: target_path_node_id(&hl.source, &self.starmap_id)
-                        .unwrap_or_default()
-                        .to_string(),
-                });
-            }
-        }
-
         let mut node_kind_counts = HashMap::new();
         for node in self.nodes.values() {
             *node_kind_counts
@@ -227,7 +150,6 @@ impl StarMapStore {
             meta.edge_relation_index = edge_relation_index;
             meta.embed_host_index = embed_host_index;
             meta.link_relation_index = link_relation_index;
-            meta.hyperlink_relation_index = hyperlink_relation_index;
             meta.node_kind_counts = node_kind_counts;
         }
         self.dirty_graph_meta = true;
@@ -388,11 +310,6 @@ impl StarMapStore {
             .as_ref()
             .map(|m| m.embed_instance_ids.clone())
             .unwrap_or_default();
-        let all_hl_ids = self
-            .graph_meta
-            .as_ref()
-            .map(|m| m.hyperlink_ids.clone())
-            .unwrap_or_default();
         let all_link_ids = self
             .graph_meta
             .as_ref()
@@ -415,12 +332,6 @@ impl StarMapStore {
             if !self.embeds.contains_key(instance_id) {
                 let embed = self.try_load_embed(instance_id)?;
                 self.embeds.insert(instance_id.clone(), embed);
-            }
-        }
-        for hl_id in &all_hl_ids {
-            if !self.hyperlinks.contains_key(hl_id) {
-                let hl = self.try_load_hyperlink(hl_id)?;
-                self.hyperlinks.insert(hl_id.clone(), hl);
             }
         }
         for link_id in &all_link_ids {
@@ -597,17 +508,6 @@ impl StarMapStore {
                 "link target",
             );
         }
-        for hl in self.hyperlinks.values() {
-            check_owned_path(
-                &context,
-                diagnostics,
-                &host_starmap_id,
-                &hl.source,
-                "hyperlink",
-                &hl.hyperlink_id,
-                "hyperlink source",
-            );
-        }
         // Portal destination：构造 StarMapTargetPath 检查目标星图和落点。
         // Portal destination 是直接目标，不属于 owned path 起点规则，用 check_path。
         for node in self.nodes.values() {
@@ -652,11 +552,6 @@ impl StarMapStore {
             .as_ref()
             .map(|m| m.embed_instance_ids.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default();
-        let declared_hl_ids: HashSet<&str> = self
-            .graph_meta
-            .as_ref()
-            .map(|m| m.hyperlink_ids.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default();
         let declared_link_ids: HashSet<&str> = self
             .graph_meta
             .as_ref()
@@ -666,7 +561,6 @@ impl StarMapStore {
         self.check_orphan_dir("nodes", &declared_node_ids, "node", diagnostics);
         self.check_orphan_dir("edges", &declared_edge_ids, "edge", diagnostics);
         self.check_orphan_dir("embeds", &declared_embed_ids, "embed", diagnostics);
-        self.check_orphan_dir("hyperlinks", &declared_hl_ids, "hyperlink", diagnostics);
         self.check_orphan_dir("links", &declared_link_ids, "link", diagnostics);
     }
 

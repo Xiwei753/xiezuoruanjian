@@ -2,7 +2,7 @@
 //!
 //! These types intentionally contain no chapter-body write capability: MCP
 //! clients can list and page through body text, but may only mutate starmap,
-//! tag, hyperlink and anchor metadata through the normal business methods.
+//! tag and anchor metadata through the normal business methods.
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

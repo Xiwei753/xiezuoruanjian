@@ -3,7 +3,7 @@ package com.xiwei.sujian.feature.starmap.data.model
 /**
  * 搜索结果要定位的星图对象 — 只描述身份，不携带平台 UI 状态。
  *
- * 链接/超链接没有独立几何，必须通过其 source 路径解析到实际拥有的
+ * 链接没有独立几何，必须通过其 source 路径解析到实际拥有的
  * 节点 / 连线 / 嵌入后再高亮。
  */
 sealed interface StarMapSelectionTarget {
@@ -16,8 +16,6 @@ sealed interface StarMapSelectionTarget {
     data class Embed(override val id: String) : StarMapSelectionTarget
 
     data class Link(override val id: String) : StarMapSelectionTarget
-
-    data class Hyperlink(override val id: String) : StarMapSelectionTarget
 }
 
 /** 星图里真正拥有几何位置的对象。 */
@@ -50,7 +48,7 @@ data class StarMapResolvedSelection(
 /**
  * 在已加载的星图快照里解析搜索结果目标。
  *
- * 节点/连线/嵌入直接按 ID 查找；链接/超链接先找到记录，再把 source 路径
+ * 节点/连线/嵌入直接按 ID 查找；链接先找到记录，再把 source 路径
  * 解析为当前星图中可见的节点 / 连线 / 嵌入。解析不到 owner 时返回 null，
  * 调用方据此判定目标已不存在，而不是把“打开了星图”算作成功。
  */
@@ -65,10 +63,6 @@ fun StarMapData.resolveSelectionTarget(target: StarMapSelectionTarget): StarMapR
                 embeds.firstOrNull { it.instanceId == target.id }?.let(StarMapSelectionOwner::Embed)
             is StarMapSelectionTarget.Link ->
                 links.firstOrNull { it.linkId == target.id }?.let { resolvePathOwner(it.source) }
-            is StarMapSelectionTarget.Hyperlink ->
-                hyperlinks.firstOrNull { it.hyperlinkId == target.id }
-                    ?.source
-                    ?.let { resolvePathOwner(it) }
         } ?: return null
     // 目标存在但端点无法解析时没有可定位几何，不能当作可成功定位。
     if (ownerCenter(owner) == null) return null
@@ -109,7 +103,7 @@ fun StarMapData.positionForPath(path: StarMapTargetPathData): StarMapPointData? 
  * - 带 segments：目标位于嵌套星图，外层可见对象是 segments 里的嵌入实例；
  * - 直接 node/anchor：owner 是该节点；
  * - entity：按 entityType 尝试节点 / 连线 / 嵌入；
- * - 其余（章节范围、外部 URI、纯星图目标）没有当前画布几何。
+ * - 其余（章节范围、纯星图目标）没有当前画布几何。
  */
 private fun StarMapData.resolvePathOwner(path: StarMapTargetPathData): StarMapSelectionOwner? {
     path.segments.firstOrNull()?.instanceId?.let { instanceId ->

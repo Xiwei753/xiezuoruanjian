@@ -18,6 +18,7 @@ OUT_DIR="${1:-$ROOT/dist}"
 APPDIR="$OUT_DIR/AppDir"
 BUNDLE_DIR="$OUT_DIR/correction-bundle"
 BINARY="$ROOT/target/release/sujian-linux-qt"
+MCP_BINARY="$ROOT/target/release/sujian_mcp"
 LINUXDEPLOY="${LINUXDEPLOY:-linuxdeploy}"
 APPIMAGETOOL="${APPIMAGETOOL:-appimagetool}"
 # QML is embedded in the Rust binary via qrc, so linuxdeploy cannot discover
@@ -32,8 +33,9 @@ for tool in "$LINUXDEPLOY" "$APPIMAGETOOL"; do
     fi
 done
 
-echo "==> 构建 Linux Qt release"
-cargo build --release -p sujian-linux-qt --manifest-path "$ROOT/Cargo.toml"
+echo "==> 构建 Linux Qt release 与 MCP Server"
+# Issue #1014：MCP 与 Qt 客户端同次构建，AppImage 内置稳定入口。
+cargo build --release -p sujian-linux-qt -p sujian_mcp --manifest-path "$ROOT/Cargo.toml"
 
 echo "==> 获取并校验模型与 ONNX Runtime（持久缓存复用）"
 rm -rf "$BUNDLE_DIR"
@@ -50,8 +52,12 @@ mkdir -p \
     "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 
 cp "$BINARY" "$APPDIR/usr/bin/sujian-linux-qt"
+# Issue #1014：MCP 放在内部固定路径，AppRun 的 --sujian-mcp 入口转发到这里；
+# 不把 /tmp/.mount_* 下的临时路径交给外部 CLI。
+cp "$MCP_BINARY" "$APPDIR/usr/libexec/sujian/sujian_mcp"
 cp "$ROOT/packaging/linux/sujian-launcher.sh" "$APPDIR/usr/libexec/sujian/sujian-launcher.sh"
-chmod +x "$APPDIR/usr/bin/sujian-linux-qt" "$APPDIR/usr/libexec/sujian/sujian-launcher.sh"
+chmod +x "$APPDIR/usr/bin/sujian-linux-qt" "$APPDIR/usr/libexec/sujian/sujian_mcp" \
+    "$APPDIR/usr/libexec/sujian/sujian-launcher.sh"
 ln -sf ../libexec/sujian/sujian-launcher.sh "$APPDIR/usr/bin/sujian"
 cp "$ROOT/packaging/linux/sujian.desktop" "$APPDIR/usr/share/applications/sujian.desktop"
 cp "$ROOT/packaging/linux/icons/hicolor/256x256/apps/sujian.png" \
@@ -63,10 +69,16 @@ cp "$ROOT/packaging/linux/icons/hicolor/scalable/apps/sujian.svg" \
 cp -a "$BUNDLE_DIR/macbert4csc/." "$APPDIR/usr/share/sujian/models/macbert4csc/"
 cp "$BUNDLE_DIR/runtime/libonnxruntime.so."* "$APPDIR/usr/lib/sujian/libonnxruntime.so"
 
+# Issue #1014：MCP 自身 AGPL 许可证随 AppImage 提供。
+mkdir -p "$APPDIR/usr/share/licenses/sujian/sujian_mcp"
+cp "$ROOT/apps/sujian_mcp/LICENSE" "$APPDIR/usr/share/licenses/sujian/sujian_mcp/LICENSE"
+
 echo "==> 部署 Qt 运行库/插件"
+# MCP 是独立 Rust ELF；把它也交给 linuxdeploy 处理动态库。
 "$LINUXDEPLOY" \
     --appdir "$APPDIR" \
     --executable "$APPDIR/usr/bin/sujian-linux-qt" \
+    --executable "$APPDIR/usr/libexec/sujian/sujian_mcp" \
     --desktop-file "$APPDIR/usr/share/applications/sujian.desktop" \
     --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/sujian.png" \
     --plugin qt

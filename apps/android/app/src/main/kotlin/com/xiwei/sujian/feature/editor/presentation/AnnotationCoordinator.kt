@@ -51,7 +51,6 @@ data class AnnotationUiLink(
     val id: String,
     val label: String,
     val target: AnnotationObjectRef?,
-    val externalUrl: String?,
 )
 
 data class AnnotationUiRange(
@@ -66,7 +65,6 @@ enum class AnnotationLinkOrigin {
 
 data class AnnotationUiLinkTarget(
     val ref: AnnotationObjectRef? = null,
-    val externalUrl: String? = null,
     val label: String,
 )
 
@@ -232,7 +230,7 @@ class AnnotationCoordinator(
         val selectedRanges = manual.ifEmpty { hitRanges.filter { it.origin == AnnotationLinkOrigin.Automatic } }
         val origin = if (manual.isNotEmpty()) AnnotationLinkOrigin.Manual else AnnotationLinkOrigin.Automatic
         val targets = selectedRanges.flatMap { it.targets }.distinctBy { target ->
-            target.ref?.let { "${it.kind}:${it.projectId}:${it.objectId}" } ?: "url:${target.externalUrl}"
+            target.ref?.let { "${it.kind}:${it.projectId}:${it.objectId}" } ?: ""
         }
         if (targets.isEmpty()) return
 
@@ -240,12 +238,9 @@ class AnnotationCoordinator(
             val resolved =
                 runCatching {
                     withContext(Dispatchers.IO) {
-                        targets.map { target ->
-                            val dto =
-                                AnnotationTargetDto(
-                                    objectRef = target.ref?.toDto(),
-                                    externalUrl = target.externalUrl,
-                                )
+                        targets.mapNotNull { target ->
+                            val ref = target.ref ?: return@mapNotNull null
+                            val dto = AnnotationTargetDto(objectRef = ref.toDto())
                             val resolution = requireData(bridge.resolveLink(dto))
                             AnnotationResolvedLinkTarget(target, resolution.state)
                         }
@@ -334,25 +329,6 @@ class AnnotationCoordinator(
         }
     }
 
-    fun addExternalLink(url: String) {
-        val cleanedUrl = url.trim()
-        if (cleanedUrl.isEmpty()) return
-        scope.launch {
-            mutationMutex.withLock {
-                mutate {
-                    val ref = ensureObjectRef() ?: error("Select a chapter range or object first")
-                    requireData(
-                        bridge.createLink(
-                            ref.toDto(),
-                            AnnotationTargetDto(objectRef = null, externalUrl = cleanedUrl),
-                        ),
-                    )
-                    Unit
-                }
-            }
-        }
-    }
-
     fun addObjectLink(target: AnnotationObjectRef) {
         scope.launch {
             mutationMutex.withLock {
@@ -361,7 +337,7 @@ class AnnotationCoordinator(
                     requireData(
                         bridge.createLink(
                             source.toDto(),
-                            AnnotationTargetDto(objectRef = target.toDto(), externalUrl = null),
+                            AnnotationTargetDto(objectRef = target.toDto()),
                         ),
                     )
                     Unit
@@ -546,7 +522,7 @@ class AnnotationCoordinator(
             if (ref != null) {
                 requireData(
                     bridge.findBacklinks(
-                        AnnotationTargetDto(objectRef = ref.toDto(), externalUrl = null),
+                        AnnotationTargetDto(objectRef = ref.toDto()),
                     ),
                 )
             } else {
@@ -574,23 +550,12 @@ class AnnotationCoordinator(
                     val anchor = anchorById[anchorId]?.takeIf { it.deletedAtMs == null } ?: return@forEach
                     val range = anchor.toUiRange(text) ?: return@forEach
                     val targets =
-                        links.mapNotNull { link ->
-                            val objectRef = link.target.objectRef?.toUi()
-                            val externalUrl = link.target.externalUrl
-                            if (objectRef == null && externalUrl.isNullOrBlank()) {
-                                null
-                            } else {
-                                AnnotationUiLinkTarget(
-                                    ref = objectRef,
-                                    externalUrl = externalUrl,
-                                    label =
-                                        externalUrl
-                                            ?: objectRef?.let { ref ->
-                                                namedEntriesById[ref.objectId]?.canonicalName ?: ref.objectId
-                                            }
-                                            ?: "Link",
-                                )
-                            }
+                        links.map { link ->
+                            val objectRef = link.target.objectRef.toUi()
+                            AnnotationUiLinkTarget(
+                                ref = objectRef,
+                                label = namedEntriesById[objectRef.objectId]?.canonicalName ?: objectRef.objectId,
+                            )
                         }
                     if (targets.isNotEmpty()) add(AnnotationUiLinkedRange(range, targets, AnnotationLinkOrigin.Manual))
                 }
@@ -737,9 +702,8 @@ private fun uniffi.writer_core.AnnotationObjectRefDto.toUi(): AnnotationObjectRe
 private fun uniffi.writer_core.AnnotationObjectLinkDto.toUi(): AnnotationUiLink =
     AnnotationUiLink(
         id = linkId,
-        label = target.externalUrl ?: target.objectRef?.objectId.orEmpty(),
-        target = target.objectRef?.toUi(),
-        externalUrl = target.externalUrl,
+        label = target.objectRef.objectId,
+        target = target.objectRef.toUi(),
     )
 
 private fun uniffi.writer_core.AnnotationTextAnchorDto.toUiRange(text: String): AnnotationUiRange? {

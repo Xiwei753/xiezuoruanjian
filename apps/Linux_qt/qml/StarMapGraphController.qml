@@ -117,13 +117,6 @@ QtObject {
         return undefined
     }
 
-    function revisionOfHyperlink(hyperlinkId) {
-        var links = graphData && graphData.hyperlinks ? graphData.hyperlinks : []
-        for (var i = 0; i < links.length; i++)
-            if (links[i].hyperlinkId === hyperlinkId) return links[i].updatedAt
-        return undefined
-    }
-
     function revisionOfLink(linkId) {
         var links = graphData && graphData.links ? graphData.links : []
         for (var i = 0; i < links.length; i++)
@@ -999,89 +992,10 @@ QtObject {
     function invalidateEdgeRenders() { edgeRenders = []; }
 
     // ---------------------------------------------------------------------------
-    // Issue #832 评论 6013799805 / #373：超链接菜单（add/update/delete/list）
-    // 后端 API 已齐全（starmap_backend.rs 第 207-219/820-855 行），这里只做
-    // normalizeBackendResult/ensureBackend 包装。sourcePath 由调用方传入完整
-    // nodePath()/embedPath()，不退化成裸 nodeId。
-    // ---------------------------------------------------------------------------
-    function addHyperlink(sourcePath, targetUri, label) {
-        if (!ensureBackend()) return null;
-        // bridge 层 StarMapHyperlinkCreateInput（camelCase）：{source, targetUri, label?}
-        var body = { source: sourcePath, targetUri: targetUri, label: label || null };
-        var res = normalizeBackendResult(
-            starmapBackendRef.add_starmap_hyperlink(starmapId, JSON.stringify(body)),
-            qsTr("添加超链接失败")
-        );
-        if (res.success) {
-            clearError();
-            return res.data;
-        }
-        setError(backendErrorText(res, qsTr("添加超链接失败")));
-        return null;
-    }
-
-    // patch 遵循 StarMapHyperlinkPatchInputDto（camelCase）：{label?, clearLabel, targetUri?, source?}。
-    // 清空 label 由调用方传 clearLabel:true（不在此处隐式构造）。
-    function updateHyperlink(hlId, patch) {
-        if (!ensureBackend()) return false;
-        var res = normalizeBackendResult(
-            starmapBackendRef.update_starmap_hyperlink(starmapId, hlId, JSON.stringify(withExpectedRevision(patch, revisionOfHyperlink(hlId)))),
-            qsTr("更新超链接失败")
-        );
-        if (res.success) {
-            clearError();
-            var updated = res.data;
-            if (!updated || updated.hyperlinkId !== hlId
-                    || !_replaceGraphObject("hyperlinks", "hyperlinkId", hlId, updated)) {
-                loadGraph();
-                return true;
-            }
-            graphChanged();
-            return true;
-        }
-        _reloadOnConflict(res);
-        setError(backendErrorText(res, qsTr("更新超链接失败")));
-        return false;
-    }
-
-    function deleteHyperlink(hlId) {
-        if (!ensureBackend()) return false;
-        var res = normalizeBackendResult(
-            starmapBackendRef.delete_starmap_hyperlink(starmapId, hlId, revisionOfHyperlink(hlId) || 0),
-            qsTr("删除超链接失败")
-        );
-        if (res.success) {
-            clearError();
-            loadGraph();
-            return true;
-        }
-        _reloadOnConflict(res);
-        setError(backendErrorText(res, qsTr("删除超链接失败")));
-        return false;
-    }
-
-    // 返回 StarMapHyperlinkDto 数组（list_starmap_hyperlinks 返回
-    // StarMapHyperlinkListWithDiagnosticsDto，取 items）。
-    function listHyperlinks() {
-        if (!ensureBackend()) return [];
-        var res = normalizeBackendResult(
-            starmapBackendRef.list_starmap_hyperlinks(starmapId),
-            qsTr("列出超链接失败")
-        );
-        if (res.success && res.data && res.data.items) {
-            clearError();
-            return res.data.items;
-        }
-        return [];
-    }
-
-    // ---------------------------------------------------------------------------
     // Issue #834：内部链接（StarMapLink）菜单（add/update/delete/list）。
-    // Link 是星图内部跳转（source/target 都是 StarMapTargetPathDto），区别于
-    // Hyperlink（targetUri 指向外部 URI）。后端 bridge 已注册
-    // add/update/delete/list_starmap_link（starmap_backend/links.rs），这里照
-    // addHyperlink/updateHyperlink/deleteHyperlink/listHyperlinks 做
-    // ensureBackend/normalizeBackendResult 包装。
+    // Link 是星图内部跳转（source/target 都是 StarMapTargetPathDto）。
+    // 后端 bridge 已注册 add/update/delete/list_starmap_link
+    // （starmap_backend/links.rs），这里只做 ensureBackend/normalizeBackendResult 包装。
     // ---------------------------------------------------------------------------
     function addLink(sourcePath, targetPath, label) {
         if (!ensureBackend()) return null;

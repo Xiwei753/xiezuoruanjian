@@ -150,7 +150,6 @@ fn harmony_target_path(starmap_id: &str, node_id: &str) -> Value {
             "rangeEnd": Value::Null,
             "entityType": Value::Null,
             "entityId": Value::Null,
-            "uri": Value::Null,
         }
     })
 }

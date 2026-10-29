@@ -148,33 +148,6 @@ pub(super) fn apply_link_patch_to_graph(
     Ok(())
 }
 
-pub(super) fn apply_hyperlink_update_to_graph(
-    graph: &mut crate::starmap::types::StarMapGraph,
-    hyperlink_id: &str,
-    patch: &crate::starmap::types::StarMapHyperlinkPatch,
-) -> Result<()> {
-    let hl = graph
-        .hyperlinks
-        .iter_mut()
-        .find(|h| h.hyperlink_id == hyperlink_id)
-        .ok_or_else(|| {
-            crate::error::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Hyperlink not found",
-            ))
-        })?;
-    if let Some(ref l) = patch.label {
-        hl.label = l.clone();
-    }
-    if let Some(ref u) = patch.target_uri {
-        hl.target_uri = u.clone();
-    }
-    if let Some(ref s) = patch.source {
-        hl.source = s.clone();
-    }
-    Ok(())
-}
-
 /// 在 candidate graph 上模拟统一删除（含传递级联）。
 ///
 /// `origin` 标识删除起点（Node 或 Embed），`cascade` 由
@@ -204,7 +177,4 @@ pub(super) fn apply_deletion_to_graph(
     graph
         .links
         .retain(|l| !cascade.link_ids.contains(&l.link_id));
-    graph
-        .hyperlinks
-        .retain(|hl| !cascade.hyperlink_ids.contains(&hl.hyperlink_id));
 }

@@ -304,23 +304,6 @@ Item {
         }
     }
 
-    // 超链接 source path 必须满足 Core 不变量 path.starmap_id == host graph.starmap_id：
-    // 活动画布的 graph 就是 starmapId 自己，source 从本画布起步（segments 空）。
-    function nodeSourcePath(nodeId) {
-        return {
-            starmapId: starmapId,
-            segments: [],
-            target: { type: "node", nodeId: nodeId }
-        }
-    }
-    function embedSourcePath(instanceId) {
-        return {
-            starmapId: starmapId,
-            segments: [graphController.embedPathSegment(instanceId)],
-            target: { type: "starmap" }
-        }
-    }
-
     // ── 路径比较（Core DTO 的 null 字段不影响语义相等）──
     function _sameSegment(a, b) {
         if (!a || !b || a.type !== b.type)
@@ -340,37 +323,8 @@ Item {
         }
         return true
     }
-    function _sameTarget(a, b) {
-        if (!a || !b || a.type !== b.type)
-            return false
-        switch (a.type) {
-        case "node":
-            return (a.nodeId || "") === (b.nodeId || "")
-        case "starmap":
-            return true
-        case "anchor":
-            return (a.nodeId || "") === (b.nodeId || "")
-                    && (a.anchorId || "") === (b.anchorId || "")
-        default:
-            return (a.nodeId || "") === (b.nodeId || "")
-                    && (a.anchorId || "") === (b.anchorId || "")
-                    && (a.projectId || "") === (b.projectId || "")
-                    && (a.volumeId || "") === (b.volumeId || "")
-                    && (a.chapterId || "") === (b.chapterId || "")
-                    && (a.entityType || "") === (b.entityType || "")
-                    && (a.entityId || "") === (b.entityId || "")
-                    && (a.uri || "") === (b.uri || "")
-        }
-    }
-    function _sameSourcePath(a, b) {
-        if (!a || !b || a.starmapId !== b.starmapId)
-            return false
-        if (!_sameSegments(a.segments || [], b.segments || []))
-            return false
-        return _sameTarget(a.target || {}, b.target || {})
-    }
 
-    // Link / Hyperlink 没有独立位置：把 source path 解析成真正可画、可选的
+    // Link 没有独立位置：把 source path 解析成真正可画、可选的
     // 宿主对象（node 或 embed）。返回 null 表示该来源不是本画布可定位对象。
     function sourcePathOwner(sourcePath) {
         if (!sourcePath)
@@ -391,14 +345,6 @@ Item {
         var items = graphController.listLinks()
         for (var i = 0; i < items.length; i++) {
             if (items[i].linkId === linkId)
-                return sourcePathOwner(items[i].source)
-        }
-        return null
-    }
-    function hyperlinkOwner(hyperlinkId) {
-        var items = graphController.listHyperlinks()
-        for (var i = 0; i < items.length; i++) {
-            if (items[i].hyperlinkId === hyperlinkId)
                 return sourcePathOwner(items[i].source)
         }
         return null
@@ -462,7 +408,7 @@ Item {
     function deleteEmbed(instanceId) { graphController.deleteEmbed(instanceId) }
     // Issue #984：普通节点名称 + 正文统一保存入口。
     // title === null 表示只改正文；body === null 表示只改名称或引用类型
-    // （引用类型不写 content，绝不把 chapterRef/entityRef/externalRef 改写成 inline）。
+    // （引用类型不写 content，绝不把 chapterRef/entityRef 改写成 inline）。
     // 返回 graphController 的 { success, message }，编辑层据此决定是否退出编辑。
     function commitNodeEdit(nodeId, title, body) {
         var patch = {}
@@ -984,35 +930,6 @@ Item {
                 out.push({ link: items[i], hostOwner: scene })
         }
         return out
-    }
-
-    // 超链接（StarMapHyperlink）透传，保持组件 API 完整。
-    function listHyperlinksForNode(nodeId) {
-        return _filterHyperlinks(nodeSourcePath(nodeId))
-    }
-    function listHyperlinksForEmbed(instanceId) {
-        return _filterHyperlinks(embedSourcePath(instanceId))
-    }
-    function _filterHyperlinks(want) {
-        var items = graphController.listHyperlinks()
-        var out = []
-        for (var i = 0; i < items.length; i++) {
-            if (_sameSourcePath(items[i].source, want))
-                out.push(items[i])
-        }
-        return out
-    }
-    function addHyperlinkForNode(nodeId, uri, label) {
-        return graphController.addHyperlink(nodeSourcePath(nodeId), uri, label)
-    }
-    function addHyperlinkForEmbed(instanceId, uri, label) {
-        return graphController.addHyperlink(embedSourcePath(instanceId), uri, label)
-    }
-    function updateHyperlink(hlId, patch) {
-        return graphController.updateHyperlink(hlId, patch)
-    }
-    function deleteHyperlink(hlId) {
-        return graphController.deleteHyperlink(hlId)
     }
 
     // ── 空白右键新建（无限画布：不做安全区 clamp）──

@@ -65,6 +65,7 @@ pub enum StarMapObjectKind {
     Edge,
     Embed,
     Link,
+    /// 仅用于解码历史对象删除 journal；外部网页/URI 绑定删除后不再产生该类型。
     Hyperlink,
 }
 

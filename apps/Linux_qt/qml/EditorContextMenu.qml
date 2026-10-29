@@ -154,8 +154,7 @@ Menu {
             targetRef: editorContextMenu.pendingSourceRef
             targetLabel: targetRef && targetRef.kind === "textAnchor" ? qsTr("所选正文") : qsTr("本章")
             onTargetActivated: function(target) {
-                if (target && target.externalUrl) Qt.openUrlExternally(String(target.externalUrl))
-                else if (target) editorContextMenu.editorControllerRef.annotationTargetActivated(target)
+                if (target) editorContextMenu.editorControllerRef.annotationTargetActivated(target)
             }
             onLinkPickerRequested: function(sourceRef, link) {
                 editorContextMenu.pendingSourceRef = sourceRef
@@ -223,7 +222,7 @@ Menu {
             var target = { objectRef: {
                 kind: "namedEntry", projectId: String(editorContextMenu.pendingSourceRef.projectId),
                 objectId: String(entry.entryId)
-            }, externalUrl: null }
+            } }
             editorContextMenu.annotationBackendRef.create_link_json(
                 JSON.stringify(editorContextMenu.pendingSourceRef), JSON.stringify(target))
             if (editorContextMenu.editorControllerRef && editorContextMenu.editorControllerRef.refreshChapterAnnotations)

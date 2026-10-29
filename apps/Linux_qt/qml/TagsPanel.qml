@@ -129,7 +129,7 @@ Rectangle {
             if (linkData !== null) outgoingLinks = linkData
         }
         var backlinkData = parseData(annotationBackendRef.find_backlinks_json(
-            JSON.stringify({ objectRef: targetRef, externalUrl: null })))
+            JSON.stringify({ objectRef: targetRef })))
         if (backlinkData !== null) backlinks = backlinkData
         busy = false
     }
@@ -255,7 +255,6 @@ Rectangle {
 
     function linkTargetLabel(link) {
         if (!link || !link.target) return qsTr("引用")
-        if (link.target.externalUrl) return String(link.target.externalUrl)
         var ref = link.target.objectRef || ({})
         return ref.objectId || ref.kind || qsTr("引用")
     }
@@ -265,9 +264,7 @@ Rectangle {
         var resolution = annotationBackendRef
             ? parseData(annotationBackendRef.resolve_link_json(JSON.stringify(link.target))) : null
         if (!resolution) return
-        if (resolution.state === "externalUrl" && link.target.externalUrl) {
-            Qt.openUrlExternally(String(link.target.externalUrl))
-        } else if (resolution.state === "exists" && resolution.target && resolution.target.objectRef) {
+        if (resolution.state === "exists" && resolution.target && resolution.target.objectRef) {
             targetActivated(resolution.target)
         } else if (resolution.state === "projectNotDownloaded") {
             errorText = qsTr("目标作品尚未下载")
@@ -448,7 +445,7 @@ Rectangle {
                 width: ListView.view.width
                 text: modelData.source ? modelData.source.objectId : qsTr("来源")
                 icon.name: "go-jump"
-                onClicked: root.targetActivated({ objectRef: modelData.source, externalUrl: null })
+                onClicked: root.targetActivated({ objectRef: modelData.source })
             }
         }
 

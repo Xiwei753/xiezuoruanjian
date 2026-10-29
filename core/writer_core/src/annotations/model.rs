@@ -180,7 +180,6 @@ pub enum LinkOrigin {
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum LinkTarget {
     Object(ObjectRef),
-    ExternalUrl(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

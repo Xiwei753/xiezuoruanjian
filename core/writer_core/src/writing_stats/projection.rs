@@ -20,6 +20,7 @@ use crate::writing_stats::contribution::{
     MutationActor,
 };
 use crate::writing_stats::{EventSource, WritingActivitySegment, WritingInputEvent};
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -1336,6 +1337,23 @@ pub struct ContributionDayAgg {
     pub counts: ContributionCounts,
 }
 
+/// 单日单 actor 的历史操作量（#1015）。
+///
+/// 只由事件自带的业务日、actor、入口和发生时间聚合；旧事件缺少入口或
+/// 来源设备时只是不计入对应覆盖数，不把区间总量摊到某一天。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContributionDayActorAgg {
+    pub actor: String,
+    pub counts: ContributionCounts,
+    /// 该 actor 当天各入口的操作数（入口名来自事件，不从 actor 反推）。
+    pub entrypoints: BTreeMap<String, u64>,
+    /// 带真实来源设备与业务日的事件数。
+    pub trusted_operations: u64,
+    /// 本地小时 → 该小时操作量；没有有效发生时间的事件不进切片。
+    pub slices: BTreeMap<u8, ContributionCounts>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContributionDeviceAgg {
@@ -1350,6 +1368,8 @@ pub struct ContributionStatsAgg {
     pub actors: BTreeMap<String, ContributionActorAgg>,
     pub object_types: BTreeMap<String, ContributionObjectTypeAgg>,
     pub days: BTreeMap<String, ContributionDayAgg>,
+    /// 业务日 → actor → 单日操作量（#1015），供统计页按天展示来源明细。
+    pub day_actors: BTreeMap<String, BTreeMap<String, ContributionDayActorAgg>>,
     pub devices: BTreeMap<String, ContributionDeviceAgg>,
     pub retained_total_chars: u64,
 }
@@ -1383,6 +1403,31 @@ pub fn project_contribution_history(events: &[ContributionEvent]) -> Contributio
         };
 
         result.total.add(event);
+
+        // 逐日 actor 明细与上面的总量使用同一条事件，不按区间总量均摊。
+        // 放在 date / actor 被聚合表移动之前，避免为兼容闭包再复制一份。
+        let day_actor = result
+            .day_actors
+            .entry(date.clone())
+            .or_default()
+            .entry(actor.clone())
+            .or_insert_with(|| ContributionDayActorAgg {
+                actor: actor.clone(),
+                ..Default::default()
+            });
+        day_actor.counts.add(event);
+        *day_actor
+            .entrypoints
+            .entry(event.entrypoint.as_str().to_string())
+            .or_default() += 1;
+        // 旧事件可能没有来源设备或业务日；只有两者都来自事件本身才算可信覆盖。
+        if !event.origin_device_id.is_empty() && !event.local_date.is_empty() {
+            day_actor.trusted_operations += 1;
+        }
+        if let Some(hour) = local_hour_at(event.occurred_at_ms) {
+            day_actor.slices.entry(hour).or_default().add(event);
+        }
+
         result
             .actors
             .entry(actor.clone())
@@ -1421,6 +1466,12 @@ pub fn project_contribution_history(events: &[ContributionEvent]) -> Contributio
             .add(event);
     }
     result
+}
+
+/// 事件发生时刻的本地小时（0–23）；时间戳非法时返回 `None`，不伪造成 0 点。
+fn local_hour_at(timestamp_ms: i64) -> Option<u8> {
+    let dt = chrono::DateTime::from_timestamp_millis(timestamp_ms)?;
+    u8::try_from(dt.with_timezone(&chrono::Local).hour()).ok()
 }
 
 /// 从对象完整历史重建当前保留文字的来源，再与磁盘上的真实对象对账。

@@ -11,15 +11,15 @@ use super::super::StarMapStore;
 
 /// 严格加载单个对象的通用 helper：文件存在 -> 读取 -> 解析 -> ID 校验。
 ///
-/// 统一 node / edge / embed / link / hyperlink 五种对象的 fail-closed 错误处理，
-/// 避免五处复制同一套「文件存在 → 读取 → 解析 → ID 校验」代码。
+/// 统一 node / edge / embed / link 四种对象的 fail-closed 错误处理，
+/// 避免四处复制同一套「文件存在 → 读取 → 解析 → ID 校验」代码。
 ///
 /// - 文件不存在 → push `Missing` diagnostic 后 `Err`；
 /// - `read_to_string` 失败 → `Err`（IO 错误直接传播，不压成 None）；
 /// - JSON 解析失败 → push `Corrupt` diagnostic 后 `Err`；
 /// - `extract_id(obj)` 与文件名不一致 → push `Corrupt` diagnostic 后 `Err`。
 ///
-/// `id_label` 仅用于 ID 不一致错误消息中描述内部字段名（node/edge/hyperlink/link
+/// `id_label` 仅用于 ID 不一致错误消息中描述内部字段名（node/edge/link
 /// 用 `"id"`，embed 用 `"instance_id"`），以保持与原逐字实现完全一致的消息文本。
 ///
 /// diagnostic 只负责说明「哪里坏了」，不承担「错误已处理、可继续返回成功」的作用。
@@ -138,23 +138,6 @@ impl StarMapStore {
             instance_id,
             "instance_id",
             |e: &StarMapEmbed| e.instance_id.as_str(),
-        )
-    }
-
-    /// 严格加载单个 hyperlink：同 `try_load_node` 的 fail-closed 语义。
-    pub(in crate::starmap::store) fn try_load_hyperlink(
-        &mut self,
-        hyperlink_id: &str,
-    ) -> Result<StarMapHyperlink> {
-        let dir = self.starmap_dir();
-        load_object_strict(
-            &mut self.recovery_log,
-            &dir,
-            "hyperlinks",
-            "hyperlink",
-            hyperlink_id,
-            "id",
-            |h: &StarMapHyperlink| h.hyperlink_id.as_str(),
         )
     }
 

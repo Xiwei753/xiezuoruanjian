@@ -12,7 +12,6 @@ fn store_new_has_zero_counts() {
     assert_eq!(store.node_count(), 0);
     assert_eq!(store.edge_count(), 0);
     assert_eq!(store.embed_count(), 0);
-    assert_eq!(store.hyperlink_count(), 0);
     assert_eq!(store.package_revision(), 0);
     assert!(!store.is_dirty());
 }
@@ -23,7 +22,6 @@ fn load_full_errors_for_missing_declared_node() {
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
@@ -33,11 +31,9 @@ fn load_full_errors_for_missing_declared_node() {
         edge_ids: vec![],
         embed_instance_ids: vec![],
         link_ids: vec![],
-        hyperlink_ids: vec![],
         edge_relation_index: vec![],
         embed_host_index: vec![],
         link_relation_index: vec![],
-        hyperlink_relation_index: vec![],
         node_kind_counts: HashMap::new(),
         package_revision: 1,
         updated_at: 0,
@@ -61,7 +57,6 @@ fn load_full_errors_for_missing_declared_link() {
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
@@ -71,11 +66,9 @@ fn load_full_errors_for_missing_declared_link() {
         edge_ids: vec![],
         embed_instance_ids: vec![],
         link_ids: vec!["missing-link".to_string()],
-        hyperlink_ids: vec![],
         edge_relation_index: vec![],
         embed_host_index: vec![],
         link_relation_index: vec![],
-        hyperlink_relation_index: vec![],
         node_kind_counts: HashMap::new(),
         package_revision: 1,
         updated_at: 0,
@@ -99,7 +92,6 @@ fn load_full_detects_dangling_edge_reference() {
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let node = make_test_node("n1", "Node1");
@@ -138,11 +130,9 @@ fn load_full_detects_dangling_edge_reference() {
         edge_ids: vec!["e1".to_string()],
         embed_instance_ids: vec![],
         link_ids: vec![],
-        hyperlink_ids: vec![],
         edge_relation_index: vec![],
         embed_host_index: vec![],
         link_relation_index: vec![],
-        hyperlink_relation_index: vec![],
         node_kind_counts: HashMap::new(),
         package_revision: 1,
         updated_at: 0,
@@ -169,7 +159,6 @@ fn load_full_detects_orphan_object_on_disk() {
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let orphan_node = make_test_node("orphan-node", "Orphan");
@@ -183,11 +172,9 @@ fn load_full_detects_orphan_object_on_disk() {
         edge_ids: vec![],
         embed_instance_ids: vec![],
         link_ids: vec![],
-        hyperlink_ids: vec![],
         edge_relation_index: vec![],
         embed_host_index: vec![],
         link_relation_index: vec![],
-        hyperlink_relation_index: vec![],
         node_kind_counts: HashMap::new(),
         package_revision: 1,
         updated_at: 0,
@@ -214,7 +201,6 @@ fn load_full_detects_unsupported_version() {
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
@@ -224,11 +210,9 @@ fn load_full_detects_unsupported_version() {
         edge_ids: vec![],
         embed_instance_ids: vec![],
         link_ids: vec![],
-        hyperlink_ids: vec![],
         edge_relation_index: vec![],
         embed_host_index: vec![],
         link_relation_index: vec![],
-        hyperlink_relation_index: vec![],
         node_kind_counts: HashMap::new(),
         package_revision: 1,
         updated_at: 0,
@@ -432,7 +416,7 @@ fn ensure_loaded_preserves_dirty_after_crud() {
     assert!(store2.dirty_nodes.contains("n2"));
 }
 #[test]
-fn ensure_object_loaded_for_edge_embed_link_hyperlink() {
+fn ensure_object_loaded_for_edge_embed_link() {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("projects")).unwrap();
     let meta = crate::starmap::create_starmap(dir.path(), "Test", "", None).unwrap();
@@ -489,11 +473,9 @@ fn list_links_with_diagnostics_returns_missing_diagnostic() {
         edge_ids: vec![],
         embed_instance_ids: vec![],
         link_ids: vec!["missing-link".to_string()],
-        hyperlink_ids: vec![],
         edge_relation_index: vec![],
         embed_host_index: vec![],
         link_relation_index: vec![],
-        hyperlink_relation_index: vec![],
         node_kind_counts: HashMap::new(),
         package_revision: 0,
         updated_at: 0,
@@ -884,7 +866,6 @@ fn repro_781_load_full_missing_declared_node_must_error() {
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     // graph.json 声明 node "missing-node"，但不写对应的 node 文件。
@@ -895,11 +876,9 @@ fn repro_781_load_full_missing_declared_node_must_error() {
         edge_ids: vec![],
         embed_instance_ids: vec![],
         link_ids: vec![],
-        hyperlink_ids: vec![],
         edge_relation_index: vec![],
         embed_host_index: vec![],
         link_relation_index: vec![],
-        hyperlink_relation_index: vec![],
         node_kind_counts: HashMap::new(),
         package_revision: 1,
         updated_at: 0,
@@ -933,7 +912,6 @@ fn repro_781_load_full_missing_declared_link_must_error() {
     std::fs::create_dir_all(starmap_dir.join("nodes")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("edges")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("embeds")).unwrap();
-    std::fs::create_dir_all(starmap_dir.join("hyperlinks")).unwrap();
     std::fs::create_dir_all(starmap_dir.join("links")).unwrap();
 
     let meta = GraphMeta {
@@ -943,11 +921,9 @@ fn repro_781_load_full_missing_declared_link_must_error() {
         edge_ids: vec![],
         embed_instance_ids: vec![],
         link_ids: vec!["missing-link".to_string()],
-        hyperlink_ids: vec![],
         edge_relation_index: vec![],
         embed_host_index: vec![],
         link_relation_index: vec![],
-        hyperlink_relation_index: vec![],
         node_kind_counts: HashMap::new(),
         package_revision: 1,
         updated_at: 0,
@@ -991,7 +967,6 @@ fn write_graph_meta_declaring(
         "edgeIds" => meta.edge_ids = ids,
         "embedInstanceIds" => meta.embed_instance_ids = ids,
         "linkIds" => meta.link_ids = ids,
-        "hyperlinkIds" => meta.hyperlink_ids = ids,
         other => panic!("unknown member list field '{other}'"),
     }
     std::fs::write(
@@ -1028,7 +1003,7 @@ fn load_full_errors_when_object_internal_id_mismatches_filename() {
     let dir = TempDir::new().unwrap();
     let starmap_id = "test-id";
     let starmap_dir = dir.path().join("starmaps").join(starmap_id);
-    for subdir in ["nodes", "edges", "embeds", "hyperlinks", "links"] {
+    for subdir in ["nodes", "edges", "embeds", "links"] {
         std::fs::create_dir_all(starmap_dir.join(subdir)).unwrap();
     }
 
@@ -1058,14 +1033,6 @@ fn load_full_errors_when_object_internal_id_mismatches_filename() {
         created_at: 0,
         updated_at: 0,
     };
-    let mismatched_hyperlink = StarMapHyperlink {
-        hyperlink_id: "id-in-file".to_string(),
-        source: target(starmap_id),
-        target_uri: "https://example.com".to_string(),
-        label: None,
-        created_at: 0,
-        updated_at: 0,
-    };
     let mismatched_link = make_test_link("id-in-file", "L");
 
     let cases = [
@@ -1086,12 +1053,6 @@ fn load_full_errors_when_object_internal_id_mismatches_filename() {
             "embedInstanceIds",
             "embed-a",
             serde_json::to_string(&mismatched_embed).unwrap(),
-        ),
-        (
-            "hyperlinks",
-            "hyperlinkIds",
-            "hyperlink-a",
-            serde_json::to_string(&mismatched_hyperlink).unwrap(),
         ),
         (
             "links",

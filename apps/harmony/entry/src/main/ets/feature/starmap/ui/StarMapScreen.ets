@@ -640,7 +640,7 @@ export struct StarMapScreen {
   /**
    * Issue #982：搜索结果跳转星图对象。
    * 不把「打开星图」当成功：必须把稳定 Core id 解析成当前根 Scene 的画布几何，
-   * 写入全树共享选中态，并按几何中心移动全局相机。link / hyperlink 没有独立位置，
+   * 写入全树共享选中态，并按几何中心移动全局相机。link 没有独立位置，
    * 解析 source 到所属 node/embed 后选中/居中宿主对象。
    */
   private scheduleSearchFocus(): void {
@@ -722,7 +722,7 @@ export struct StarMapScreen {
       }
     }
 
-    if (this.searchFocusKind === 'link' || this.searchFocusKind === 'hyperlink') {
+    if (this.searchFocusKind === 'link') {
       const source: StarMapTargetPath | null = this.resolveLinkSource(this.searchFocusKind, this.searchFocusId)
       if (source === null) {
         return null
@@ -736,7 +736,7 @@ export struct StarMapScreen {
         return null
       }
       return {
-        // link/hyperlink 没有独立坐标，选中并居中它所属的 node / embed。
+        // link 没有独立坐标，选中并居中它所属的 node / embed。
         kind: root.embedInstanceIds.has(ownerId) ? 'embed' : 'node',
         itemId: ownerId,
         centerX: rect.x + rect.width / 2,
@@ -760,12 +760,11 @@ export struct StarMapScreen {
       const link = this.graph.links.find((item): boolean => item.linkId === id)
       return link !== undefined ? link.source : null
     }
-    const hyperlink = this.graph.hyperlinks.find((item): boolean => item.hyperlinkId === id)
-    return hyperlink !== undefined ? hyperlink.source : null
+    return null
   }
 
   /**
-   * 解析 link/hyperlink 的 source 到当前根画布上可绘制的对象。
+   * 解析 link 的 source 到当前根画布上可绘制的对象。
    * 优先复用边端点同一套规则（本地 node/anchor，深路径取第一段 enterEmbed/enterPortal），
    * 规则不适用时再退回 source.target.nodeId。
    */

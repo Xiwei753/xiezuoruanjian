@@ -125,7 +125,7 @@ internal suspend fun openSearchResult(
 }
 
 /**
- * 星图搜索结果 — 必须先读 repository 确认目标仍存在，链接/超链接还要确认
+ * 星图搜索结果 — 必须先读 repository 确认目标仍存在，链接还要确认
  * source 能解析到当前画布上的 owner；确认成功后才关闭搜索页。
  */
 private suspend fun openStarMapSearchResult(
@@ -142,7 +142,6 @@ private suspend fun openStarMapSearchResult(
             edgeId = target.edgeId,
             embedId = target.embedId,
             linkId = target.linkId,
-            hyperlinkId = target.hyperlinkId,
         )
     val data = loadStarMapForSearch(deps, starmapId) ?: return false
     val selection = route.selectionTarget()

@@ -24,9 +24,7 @@ use crate::error::{Error, Result};
 use crate::starmap::store::meta::{
     DeletedSinceLastSync, DeletionEntry, GraphMeta, CURRENT_SCHEMA_VERSION,
 };
-use crate::starmap::store::relation_index::{
-    EdgeRelationIndex, EmbedHostIndex, HyperlinkRelationIndex, LinkRelationIndex,
-};
+use crate::starmap::store::relation_index::{EdgeRelationIndex, EmbedHostIndex, LinkRelationIndex};
 use crate::starmap::StarMapIndexRecord;
 use crate::sync::content_class::{resolve_lww, LwwRecord, LwwWinner};
 
@@ -79,17 +77,14 @@ fn is_valid_bucket(bucket: &str) -> bool {
 }
 
 /// 判断 rel_path 是否是星图对象文件
-/// `starmaps/<id>/{nodes,edges,embeds,links,hyperlinks}/<bucket>/<obj_id>.json`。
+/// `starmaps/<id>/{nodes,edges,embeds,links}/<bucket>/<obj_id>.json`。
 pub(crate) fn is_starmap_object_file_path(rel_path: &str) -> bool {
     let normalized = normalize_path(rel_path);
     let parts: Vec<&str> = normalized.split('/').collect();
     parts.len() == 5
         && parts[0] == "starmaps"
         && !parts[1].is_empty()
-        && matches!(
-            parts[2],
-            "nodes" | "edges" | "embeds" | "links" | "hyperlinks"
-        )
+        && matches!(parts[2], "nodes" | "edges" | "embeds" | "links")
         && is_valid_bucket(parts[3])
         && parts[4].ends_with(".json")
         && parts[4].len() > ".json".len()
@@ -129,7 +124,7 @@ pub(crate) enum StarmapMergeResult {
 
 /// 对象级三方合并决策结果。
 ///
-/// 用于星图对象文件（`nodes/edges/embeds/links/hyperlinks/<bucket>/<id>.json`）
+/// 用于星图对象文件（`nodes/edges/embeds/links/<bucket>/<id>.json`）
 /// 的按内容三方比较，替代整文件 LWW，识别双端同改冲突而非静默覆盖。
 #[derive(Debug, Clone)]
 pub(crate) enum ObjectMergeDecision {
@@ -531,26 +526,23 @@ pub(crate) struct MemberIdSets {
     edge_ids: HashSet<String>,
     embed_ids: HashSet<String>,
     link_ids: HashSet<String>,
-    hyperlink_ids: HashSet<String>,
 }
 
-/// 合并后的五个成员 ID 列表及其 HashSet 集合。
+/// 合并后的四个成员 ID 列表及其 HashSet 集合。
 pub(crate) struct MergedMemberIds {
     node_ids: Vec<String>,
     edge_ids: Vec<String>,
     embed_ids: Vec<String>,
     link_ids: Vec<String>,
-    hyperlink_ids: Vec<String>,
     sets: MemberIdSets,
 }
 
-/// 合并后的五个 revisions HashMap。
+/// 合并后的四个 revisions HashMap。
 struct MergedRevisions {
     node: HashMap<String, u64>,
     edge: HashMap<String, u64>,
     embed: HashMap<String, u64>,
     link: HashMap<String, u64>,
-    hyperlink: HashMap<String, u64>,
 }
 
 /// 判断 tombstone 对应的对象是否仍在成员表中。
@@ -560,7 +552,6 @@ fn is_object_still_exists(object_type: &str, object_id: &str, sets: &MemberIdSet
         "edge" => sets.edge_ids.contains(object_id),
         "embed" => sets.embed_ids.contains(object_id),
         "link" => sets.link_ids.contains(object_id),
-        "hyperlink" => sets.hyperlink_ids.contains(object_id),
         _ => false, // 未知类型视为已删除，保留 tombstone（保守策略）
     }
 }
@@ -892,7 +883,7 @@ fn extract_modified_ids(
     modified
 }
 
-/// 合并五个成员 ID 列表，返回合并后的 ID 和对应的 HashSet 集合。
+/// 合并四个成员 ID 列表，返回合并后的 ID 和对应的 HashSet 集合。
 ///
 /// 从 revisions 中提取 `local_modified`/`incoming_modified` 集合，传入
 /// `three_way_merge_id_set` 处理删除-修改冲突。
@@ -934,14 +925,6 @@ fn merge_member_ids(
         base_meta.map(|m| &m.link_revisions),
         incoming_meta.map(|m| &m.link_revisions),
     );
-    let hyperlink_local_mod = extract_modified_ids(
-        base_meta.map(|m| &m.hyperlink_revisions),
-        local_meta.map(|m| &m.hyperlink_revisions),
-    );
-    let hyperlink_incoming_mod = extract_modified_ids(
-        base_meta.map(|m| &m.hyperlink_revisions),
-        incoming_meta.map(|m| &m.hyperlink_revisions),
-    );
 
     let node_ids = three_way_merge_id_set(
         base_meta.map(|m| &m.node_ids),
@@ -971,20 +954,12 @@ fn merge_member_ids(
         &link_local_mod,
         &link_incoming_mod,
     );
-    let hyperlink_ids = three_way_merge_id_set(
-        base_meta.map(|m| &m.hyperlink_ids),
-        local_meta.map(|m| &m.hyperlink_ids),
-        incoming_meta.map(|m| &m.hyperlink_ids),
-        &hyperlink_local_mod,
-        &hyperlink_incoming_mod,
-    );
 
     let sets = MemberIdSets {
         node_ids: node_ids.iter().cloned().collect(),
         edge_ids: edge_ids.iter().cloned().collect(),
         embed_ids: embed_ids.iter().cloned().collect(),
         link_ids: link_ids.iter().cloned().collect(),
-        hyperlink_ids: hyperlink_ids.iter().cloned().collect(),
     };
 
     MergedMemberIds {
@@ -992,7 +967,6 @@ fn merge_member_ids(
         edge_ids,
         embed_ids,
         link_ids,
-        hyperlink_ids,
         sets,
     }
 }
@@ -1005,7 +979,7 @@ fn meta_revisions<'a>(
     meta.map(f)
 }
 
-/// 合并五个 revisions HashMap。
+/// 合并四个 revisions HashMap。
 fn merge_all_revisions(
     base_meta: Option<&GraphMeta>,
     local_meta: Option<&GraphMeta>,
@@ -1036,18 +1010,11 @@ fn merge_all_revisions(
         meta_revisions(incoming_meta, |m| &m.link_revisions),
         &sets.link_ids,
     );
-    let hyperlink = merge_revisions(
-        meta_revisions(base_meta, |m| &m.hyperlink_revisions),
-        meta_revisions(local_meta, |m| &m.hyperlink_revisions),
-        meta_revisions(incoming_meta, |m| &m.hyperlink_revisions),
-        &sets.hyperlink_ids,
-    );
     MergedRevisions {
         node,
         edge,
         embed,
         link,
-        hyperlink,
     }
 }
 
@@ -1061,7 +1028,6 @@ pub(crate) struct DerivedIndexes {
     pub edge_relation_index: Vec<EdgeRelationIndex>,
     pub embed_host_index: Vec<EmbedHostIndex>,
     pub link_relation_index: Vec<LinkRelationIndex>,
-    pub hyperlink_relation_index: Vec<HyperlinkRelationIndex>,
     pub node_kind_counts: HashMap<String, u32>,
 }
 
@@ -1077,20 +1043,18 @@ pub(crate) struct DerivedIndexes {
 /// - `edge_relation_index`：从 edge 对象的 `from`/`to` 构建
 /// - `embed_host_index`：从 embed 对象的 `host_path` 构建
 /// - `link_relation_index`：从 link 对象的 `source`/`target` 构建
-/// - `hyperlink_relation_index`：从 hyperlink 对象的 `source` 提取 `source_node_id`
 /// - `node_kind_counts`：从 node 对象的 `kind` 字段统计计数
 #[allow(clippy::too_many_lines)]
 pub(crate) fn rebuild_derived_indexes(
-    starmap_id: &str,
+    _starmap_id: &str,
     member_ids: &MergedMemberIds,
     object_contents: &HashMap<(String, String), Vec<u8>>,
 ) -> Result<DerivedIndexes> {
-    use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapHyperlink, StarMapLink};
+    use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapLink};
 
     let mut edge_relation_index: Vec<EdgeRelationIndex> = Vec::new();
     let mut embed_host_index: Vec<EmbedHostIndex> = Vec::new();
     let mut link_relation_index: Vec<LinkRelationIndex> = Vec::new();
-    let mut hyperlink_relation_index: Vec<HyperlinkRelationIndex> = Vec::new();
     let mut node_kind_counts: HashMap<String, u32> = HashMap::new();
 
     // 重建 edge_relation_index
@@ -1131,22 +1095,6 @@ pub(crate) fn rebuild_derived_indexes(
         }
     }
 
-    // 重建 hyperlink_relation_index
-    for hl_id in &member_ids.hyperlink_ids {
-        let key = ("hyperlink".to_string(), hl_id.clone());
-        if let Some(bytes) = object_contents.get(&key) {
-            let hl: StarMapHyperlink = serde_json::from_slice(bytes)?;
-            let source_node_id =
-                crate::starmap::store::relation_index::target_path_node_id(&hl.source, starmap_id)
-                    .unwrap_or_default()
-                    .to_string();
-            hyperlink_relation_index.push(HyperlinkRelationIndex {
-                hyperlink_id: hl.hyperlink_id.clone(),
-                source_node_id,
-            });
-        }
-    }
-
     // 重建 node_kind_counts
     for node_id in &member_ids.node_ids {
         let key = ("node".to_string(), node_id.clone());
@@ -1162,7 +1110,6 @@ pub(crate) fn rebuild_derived_indexes(
         edge_relation_index,
         embed_host_index,
         link_relation_index,
-        hyperlink_relation_index,
         node_kind_counts,
     })
 }
@@ -1180,7 +1127,6 @@ fn dir_to_object_type(dir: &str) -> Option<&'static str> {
         "edges" => Some("edge"),
         "embeds" => Some("embed"),
         "links" => Some("link"),
-        "hyperlinks" => Some("hyperlink"),
         _ => None,
     }
 }
@@ -1188,7 +1134,7 @@ fn dir_to_object_type(dir: &str) -> Option<&'static str> {
 /// 从对象文件路径提取 `(object_type, object_id)`。
 ///
 /// 路径格式：`starmaps/<id>/<type_dir>/<bucket>/<obj_id>.json`。
-/// `object_type` 是单数形式（`node`/`edge`/`embed`/`link`/`hyperlink`），
+/// `object_type` 是单数形式（`node`/`edge`/`embed`/`link`），
 /// 与 [`rebuild_derived_indexes`] 和 `DeletionEntry.object_type` 一致。
 /// 返回 `None` 如果路径不符合对象文件格式。
 pub(crate) fn parse_object_path(rel_path: &std::path::Path) -> Option<(String, String)> {
@@ -1545,7 +1491,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     let mut edge_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
     let mut embed_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
     let mut link_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
-    let mut hyperlink_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
 
     for (rel_path, object_type, object_id, base, local, incoming) in objects {
         let version_key = rel_path.to_string_lossy().to_string();
@@ -1594,9 +1539,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
             "link" => {
                 link_decisions.insert(object_id.clone(), decision.clone());
             }
-            "hyperlink" => {
-                hyperlink_decisions.insert(object_id.clone(), decision.clone());
-            }
             _ => {}
         }
 
@@ -1625,7 +1567,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     let mut final_edge: HashSet<String> = HashSet::new();
     let mut final_embed: HashSet<String> = HashSet::new();
     let mut final_link: HashSet<String> = HashSet::new();
-    let mut final_hyperlink: HashSet<String> = HashSet::new();
     for (obj_type, obj_id) in final_objects.keys() {
         match obj_type.as_str() {
             "node" => {
@@ -1640,9 +1581,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
             "link" => {
                 final_link.insert(obj_id.clone());
             }
-            "hyperlink" => {
-                final_hyperlink.insert(obj_id.clone());
-            }
             _ => {}
         }
     }
@@ -1652,28 +1590,24 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
     let edge_ids = reconcile_member_list(&initial_members.edge_ids, &final_edge);
     let embed_ids = reconcile_member_list(&initial_members.embed_ids, &final_embed);
     let link_ids = reconcile_member_list(&initial_members.link_ids, &final_link);
-    let hyperlink_ids = reconcile_member_list(&initial_members.hyperlink_ids, &final_hyperlink);
 
     // --- 6. 检查一致性：成员表中的每个 ID 必须有对应胜出对象 bytes ---
     check_member_object_consistency("node", &node_ids, &final_objects)?;
     check_member_object_consistency("edge", &edge_ids, &final_objects)?;
     check_member_object_consistency("embed", &embed_ids, &final_objects)?;
     check_member_object_consistency("link", &link_ids, &final_objects)?;
-    check_member_object_consistency("hyperlink", &hyperlink_ids, &final_objects)?;
 
     let sets = MemberIdSets {
         node_ids: node_ids.iter().cloned().collect(),
         edge_ids: edge_ids.iter().cloned().collect(),
         embed_ids: embed_ids.iter().cloned().collect(),
         link_ids: link_ids.iter().cloned().collect(),
-        hyperlink_ids: hyperlink_ids.iter().cloned().collect(),
     };
     let member_ids = MergedMemberIds {
         node_ids: node_ids.clone(),
         edge_ids: edge_ids.clone(),
         embed_ids: embed_ids.clone(),
         link_ids: link_ids.clone(),
-        hyperlink_ids: hyperlink_ids.clone(),
         sets,
     };
 
@@ -1736,10 +1670,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
             .collect();
         let link_refs: HashMap<String, &ObjectMergeDecision> =
             link_decisions.iter().map(|(k, v)| (k.clone(), v)).collect();
-        let hyperlink_refs: HashMap<String, &ObjectMergeDecision> = hyperlink_decisions
-            .iter()
-            .map(|(k, v)| (k.clone(), v))
-            .collect();
         apply_revision_by_decisions(
             &mut revisions.node,
             &node_refs,
@@ -1764,12 +1694,6 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
             &member_ids.sets.link_ids,
             package_revision,
         );
-        apply_revision_by_decisions(
-            &mut revisions.hyperlink,
-            &hyperlink_refs,
-            &member_ids.sets.hyperlink_ids,
-            package_revision,
-        );
     }
 
     // --- 10. 构造最终 GraphMeta ---
@@ -1780,17 +1704,14 @@ pub(crate) fn merge_starmap_graph_with_object_versions(
         edge_ids,
         embed_instance_ids: embed_ids,
         link_ids,
-        hyperlink_ids,
         edge_relation_index: derived.edge_relation_index,
         embed_host_index: derived.embed_host_index,
         link_relation_index: derived.link_relation_index,
-        hyperlink_relation_index: derived.hyperlink_relation_index,
         node_kind_counts: derived.node_kind_counts,
         node_revisions: revisions.node,
         edge_revisions: revisions.edge,
         embed_revisions: revisions.embed,
         link_revisions: revisions.link,
-        hyperlink_revisions: revisions.hyperlink,
         package_revision,
         updated_at: local_ua.max(incoming_ua),
         deleted_since_last_sync: merged_deletions,
@@ -1999,9 +1920,6 @@ mod tests {
         ));
         assert!(is_starmap_object_file_path(
             "starmaps/sm_1/links/0a/link_d.json"
-        ));
-        assert!(is_starmap_object_file_path(
-            "starmaps/sm_1/hyperlinks/00/hl_e.json"
         ));
         assert!(is_starmap_object_file_path(
             "starmaps\\sm_1\\nodes\\00\\node_a.json"
@@ -2312,17 +2230,14 @@ mod tests {
             edge_ids: vec![],
             embed_instance_ids: vec![],
             link_ids: vec![],
-            hyperlink_ids: vec![],
             edge_relation_index: vec![],
             embed_host_index: vec![],
             link_relation_index: vec![],
-            hyperlink_relation_index: vec![],
             node_kind_counts: HashMap::new(),
             node_revisions: node_revs,
             edge_revisions: HashMap::new(),
             embed_revisions: HashMap::new(),
             link_revisions: HashMap::new(),
-            hyperlink_revisions: HashMap::new(),
             package_revision,
             updated_at,
             deleted_since_last_sync: DeletedSinceLastSync::default(),

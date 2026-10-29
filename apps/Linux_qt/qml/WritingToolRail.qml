@@ -3,12 +3,14 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：只做两件事 —— 选哪个工具、展开/收起右边的工具 pane
+// 职责：只做两件事 —— 选哪个工具、切换右侧容器（工具内容 + rail）的展开/收起
 // 约束（Issue #825）：
 //   - 工具内容在 WritingWorkspace 里的 RightDrawer（ToolPane），rail 不持有内容状态；
 //   - 顶部工具条带的 ToolbarTrailing 同步 / 搜索 / 设置不搬到这里；
 //   - Issue #829：手稿把最右 rail 固定为“星图 / AI / 校对”；冲突只在确有冲突时追加；
 //   - 只发信号，由 WritingWorkspace 单向写 selectedTool，避免双向写 binding。
+// Issue #1014：rail 固定 56vp，作为右侧可收起容器内的纯子项，不再单独拥有
+//   折叠状态；底部按钮切换的是 RightDrawer + rail 整个容器。
 //
 // Issue #900：自绘 Rectangle 工具项换成 Breeze Controls.ItemDelegate
 //   （自带 hover / 选中态），展开收起按钮用 Breeze go-previous / go-next 图标，
@@ -31,19 +33,19 @@ Rectangle {
     property string selectedTool: ""
 
     // Issue #842 任务3：toolPaneOpen 改为独立输入属性，不再从 selectedTool 派生。
-    // 由 WritingWorkspace 绑定到 rightPaneCollapsed 的反值，与工具选择解耦。
+    // Issue #1014：它现在只反映右侧容器是否展开，由 WritingWorkspace 绑定到
+    // rightPaneCollapsed 的反值；rail 自己不保存折叠状态。
     property bool toolPaneOpen: false
 
     // Issue #1003：统一标签作为常驻写作入口，星图 / AI / 校对入口保持不变。
     // 冲突属于运行时异常入口，只在确实存在冲突时追加到下面。
-    // Issue #835 评论 6020221770: AI 暂无 Linux_Qt 真实会话面板，rail 位置保留
-    // 但 enabled:false 禁用，降 opacity，不发 toolRequested，不伪造 AI 页面。
-    // 以后真实 AI 面板接进来把 enabled 改 true 即可。
+    // Issue #1014：AI 入口始终可用；即使本机没有 Agent CLI，也先打开
+    // Agent 管理面板，不伪造聊天内容。
     readonly property var tools: {
         var list = [
             { key: "starmap", label: qsTr("星图"), icon: "view-grid", enabled: true },
             { key: "tags", label: qsTr("标签"), icon: "tag", enabled: true },
-            { key: "ai", label: qsTr("AI"), enabled: false },
+            { key: "ai", label: qsTr("AI"), enabled: true },
             { key: "correction", label: qsTr("校对"), icon: "tools-check-spelling", enabled: true }
         ]
         if (root.hasConflicts) {
@@ -133,7 +135,7 @@ Rectangle {
             display: AbstractButton.IconOnly
 
             ToolTip.visible: hovered
-            ToolTip.text: root.toolPaneOpen ? qsTr("收起工具面板") : qsTr("展开工具面板")
+            ToolTip.text: root.toolPaneOpen ? qsTr("收起右侧栏") : qsTr("展开右侧栏")
 
             onClicked: root.toolPaneToggled()
         }

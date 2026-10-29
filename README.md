@@ -53,6 +53,24 @@ Linux Qt：
 cargo run -p sujian-linux-qt
 ```
 
+### Linux 安装包中的 MCP
+
+RPM、DEB、Arch 安装包与 AppImage 都内置素笺的 stdio MCP Server，外部 OpenCode、Codex
+等 AI CLI 可直接把它注册成本机 MCP。命令中的数据根必须换成 Qt 当前选中的数据目录
+（不是 MCP 默认的 `~/.local/share/sujian`），作品目录通常就是 `<数据根>/projects`：
+
+```bash
+# 原生包
+sujian-mcp --app-data-root <实际数据根> --projects-root <实际数据根>/projects
+
+# AppImage：使用 AppImage 的实际绝对路径，不要使用 /tmp/.mount_* 临时目录
+/path/to/素笺写作-x86_64.AppImage --sujian-mcp \
+  --app-data-root <实际数据根> --projects-root <实际数据根>/projects
+```
+
+把上述命令按 stdio MCP 的方式注册到外部 AI CLI 即可；该入口只启动现有 MCP Server，
+不要求素笺 GUI 或后台常驻服务同时运行。
+
 ## 文档
 
 仓库只保留长期有效的架构契约与数据格式。文档入口见 [docs/README.md](docs/README.md)。

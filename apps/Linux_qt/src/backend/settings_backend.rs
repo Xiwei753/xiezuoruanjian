@@ -115,6 +115,15 @@ pub struct SettingsBackend {
     /// 应用关闭前 flush pending save
     #[allow(dead_code)]
     flush_pending_settings_save: qt_method!(fn(&mut self) -> bool),
+    /// Issue #1014：读取页面级栏宽 / 折叠状态（JSON）。
+    #[allow(dead_code)]
+    desktop_layout_json: qt_method!(fn(&self) -> QString),
+    /// Issue #1014：记录某页面某一侧的手动拖动宽度。
+    #[allow(dead_code)]
+    set_desktop_pane_width: qt_method!(fn(&mut self, page_key: QString, side: QString, value: f64)),
+    /// Issue #1014：记录某页面某一部分的折叠状态。
+    #[allow(dead_code)]
+    set_desktop_pane_collapsed: qt_method!(fn(&mut self, page_key: QString, part: QString, collapsed: bool)),
     #[allow(dead_code)]
     export_diagnostics_pack: qt_method!(fn(&self) -> QString),
     #[allow(dead_code)]
@@ -818,6 +827,72 @@ impl SettingsBackend {
         }
     }
 
+    /// Issue #1014：页面级栏宽 / 折叠状态以 `DesktopSettings` 为唯一事实来源。
+    fn desktop_layout_json(&self) -> QString {
+        self.with_app(|app| {
+            serde_json::to_string(&app.current_desktop_layout)
+                .unwrap_or_else(|_| "{}".to_string())
+        })
+        .map(Into::into)
+        .unwrap_or_else(|_| "{}".into())
+    }
+
+    fn set_desktop_pane_width(&mut self, page_key: QString, side: QString, value: f64) {
+        let page_key = page_key.to_string();
+        let side = side.to_string();
+        let ok = self
+            .with_app_mut(|app| {
+                let entry = app
+                    .current_desktop_layout
+                    .page_pane_overrides
+                    .entry(page_key.clone())
+                    .or_default();
+                if side == "left" {
+                    entry.left = Some(value);
+                } else {
+                    entry.right = Some(value);
+                }
+                // 旧字段只作为兼容镜像，右栏旧语义不含 56vp 工具轨。
+                if page_key == "writing" {
+                    if side == "left" {
+                        app.current_setting_desktop_sidebar_width = value;
+                        app.current_desktop_layout.desktop_sidebar_width = value;
+                    } else {
+                        let drawer = (value - 56.0).max(0.0);
+                        app.current_setting_desktop_tool_pane_width = drawer;
+                        app.current_desktop_layout.desktop_tool_pane_width = drawer;
+                    }
+                }
+            })
+            .is_ok();
+        if ok {
+            self.debounced_save_local_settings();
+        }
+    }
+
+    fn set_desktop_pane_collapsed(&mut self, page_key: QString, part: QString, collapsed: bool) {
+        let page_key = page_key.to_string();
+        let part = part.to_string();
+        let ok = self
+            .with_app_mut(|app| {
+                let entry = app
+                    .current_desktop_layout
+                    .page_collapsed
+                    .entry(page_key)
+                    .or_default();
+                match part.as_str() {
+                    "left" => entry.left = collapsed,
+                    "right" => entry.right = collapsed,
+                    "topBar" => entry.top_bar = collapsed,
+                    _ => {}
+                }
+            })
+            .is_ok();
+        if ok {
+            self.debounced_save_local_settings();
+        }
+    }
+
     fn export_diagnostics_pack(&self) -> QString {
         self.with_app(|app| {
             let app_data_root = std::path::PathBuf::from(&app.current_data_root);
@@ -1098,6 +1173,7 @@ impl AppBackend {
         // 旧 Core `settings.local.json` 在用户数据根目录（不一定等于 XDG 配置目录），
         // 迁移必须传入真实数据根，否则自定义数据目录的用户会掉到默认栏宽。
         let desktop = desktop_settings::load(&self.desktop_settings_data_root());
+        self.current_desktop_layout = desktop.clone();
         self.current_setting_desktop_sidebar_width = desktop.desktop_sidebar_width;
         self.current_setting_desktop_tool_pane_width = desktop.desktop_tool_pane_width;
         self.current_setting_desktop_editor_width = desktop.desktop_editor_width;
@@ -1196,10 +1272,12 @@ impl AppBackend {
         let sidebar_width = self.current_setting_desktop_sidebar_width;
         let tool_pane_width = self.current_setting_desktop_tool_pane_width;
         let editor_width = self.current_setting_desktop_editor_width;
+        let mut desktop_layout = self.current_desktop_layout.clone();
+        desktop_layout.desktop_sidebar_width = sidebar_width;
+        desktop_layout.desktop_tool_pane_width = tool_pane_width;
+        desktop_layout.desktop_editor_width = editor_width;
         if let Err(e) = desktop_settings::update(&self.desktop_settings_data_root(), |settings| {
-            settings.desktop_sidebar_width = sidebar_width;
-            settings.desktop_tool_pane_width = tool_pane_width;
-            settings.desktop_editor_width = editor_width;
+            *settings = desktop_layout.clone();
         }) {
             error_msg = Some(format!("desktop settings save failed: {e}"));
         }

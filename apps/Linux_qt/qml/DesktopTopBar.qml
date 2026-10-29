@@ -28,12 +28,12 @@ ColumnLayout {
 
     required property var dt
     property string mode: "hub"
-    property int navigationWidth: 200
+    // Issue #1014：顶栏不再从写作区实际宽度反推，统一读页面骨架状态。
+    property var layoutState: null
+    property string pageKey: "hub.projects"
     property var appState: ({})
     property string starmapTitle: ""
     property bool starmapFocusIsRoot: true
-    property real toolbarLeadingWidth: 200
-    property real toolbarTrailingWidth: 200
     property real currentFontSize: 16
     property real currentLineSpacing: 1.5
     property bool firstLineIndent: false
@@ -53,6 +53,18 @@ ColumnLayout {
     spacing: 0
     implicitHeight: barFace.implicitHeight + barDivider.implicitHeight
 
+    // Issue #1014：顶栏高度也取整窗唯一骨架常量，未注入时回退 64。
+    readonly property int topBarHeight:
+        root.layoutState ? root.layoutState.topBarHeight : 64
+    readonly property real effectiveLeftWidth:
+        root.layoutState ? root.layoutState.paneWidth(root.pageKey, "left") : 240
+    readonly property real effectiveRightWidth:
+        root.layoutState ? root.layoutState.paneWidth(root.pageKey, "right") : 296
+    readonly property bool leftCollapsed:
+        root.layoutState ? root.layoutState.isCollapsed(root.pageKey, "left") : false
+    readonly property bool rightCollapsed:
+        root.layoutState ? root.layoutState.isCollapsed(root.pageKey, "right") : false
+
     readonly property real writingLeadingNaturalWidth:
         writingLeadingInner.implicitWidth + Kirigami.Units.largeSpacing + Kirigami.Units.smallSpacing
     readonly property real writingTrailingNaturalWidth:
@@ -62,8 +74,9 @@ ColumnLayout {
     // 反过来改变 compactActions 的绑定环。完整态右侧至少按 14 个
     // gridUnit 预留，覆盖同步状态文案 / 搜索 / 设置同时显示的情况。
     readonly property real writingExpandedWidth:
-        Math.max(root.toolbarLeadingWidth, writingLeadingNaturalWidth)
-        + Math.max(root.toolbarTrailingWidth, Kirigami.Units.gridUnit * 14)
+        Math.max(root.leftCollapsed ? 0 : root.effectiveLeftWidth, writingLeadingNaturalWidth)
+        + Math.max(root.rightCollapsed ? 0 : root.effectiveRightWidth,
+                   Kirigami.Units.gridUnit * 14)
         + formatGroup.implicitWidth
         + Kirigami.Units.largeSpacing * 2
 
@@ -73,12 +86,12 @@ ColumnLayout {
         ? root.width < writingExpandedWidth
         : root.width < Kirigami.Units.gridUnit * 30
 
-    // 顶栏面：64 高。底线不在这个 Rectangle 内绘制。
+    // 顶栏面：统一 64 高。底线不在这个 Rectangle 内绘制。
     Rectangle {
         id: barFace
         Layout.fillWidth: true
-        Layout.preferredHeight: 64
-        implicitHeight: 64
+        Layout.preferredHeight: root.topBarHeight
+        implicitHeight: root.topBarHeight
         color: Kirigami.Theme.alternateBackgroundColor
 
         RowLayout {
@@ -90,9 +103,9 @@ ColumnLayout {
                 id: hubBrandSlot
                 visible: root.mode === "hub"
                 Layout.fillHeight: true
-                Layout.preferredWidth: root.navigationWidth
-                Layout.minimumWidth: root.navigationWidth
-                Layout.maximumWidth: root.navigationWidth
+                Layout.preferredWidth: root.effectiveLeftWidth
+                Layout.minimumWidth: root.effectiveLeftWidth
+                Layout.maximumWidth: root.effectiveLeftWidth
 
                 Kirigami.Heading {
                     anchors.left: parent.left
@@ -109,9 +122,9 @@ ColumnLayout {
                 id: writingLeadingSlot
                 visible: root.mode === "writing"
                 Layout.fillHeight: true
-                Layout.preferredWidth: root.compactActions
+                Layout.preferredWidth: root.compactActions || root.leftCollapsed
                     ? root.writingLeadingNaturalWidth
-                    : Math.max(root.toolbarLeadingWidth, root.writingLeadingNaturalWidth)
+                    : Math.max(root.effectiveLeftWidth, root.writingLeadingNaturalWidth)
                 Layout.minimumWidth: Layout.preferredWidth
                 Layout.maximumWidth: Layout.preferredWidth
 
@@ -165,9 +178,12 @@ ColumnLayout {
                 id: starmapLeadingSlot
                 visible: root.mode === "starmap"
                 Layout.fillHeight: true
-                Layout.preferredWidth:
-                    starmapLeadingInner.implicitWidth + Kirigami.Units.largeSpacing
-                    + Kirigami.Units.smallSpacing
+                Layout.preferredWidth: root.compactActions || root.leftCollapsed
+                    ? starmapLeadingInner.implicitWidth + Kirigami.Units.largeSpacing
+                      + Kirigami.Units.smallSpacing
+                    : Math.max(root.effectiveLeftWidth,
+                               starmapLeadingInner.implicitWidth + Kirigami.Units.largeSpacing
+                               + Kirigami.Units.smallSpacing)
                 Layout.minimumWidth: Layout.preferredWidth
                 Layout.maximumWidth: Layout.preferredWidth
 
@@ -236,7 +252,8 @@ ColumnLayout {
                 id: trailingSlot
                 Layout.fillHeight: true
                 Layout.preferredWidth: root.mode === "writing" && !root.compactActions
-                    ? Math.max(root.toolbarTrailingWidth, root.writingTrailingNaturalWidth)
+                    && !root.rightCollapsed
+                    ? Math.max(root.effectiveRightWidth, root.writingTrailingNaturalWidth)
                     : root.writingTrailingNaturalWidth
                 Layout.minimumWidth: Layout.preferredWidth
                 Layout.maximumWidth: Layout.preferredWidth

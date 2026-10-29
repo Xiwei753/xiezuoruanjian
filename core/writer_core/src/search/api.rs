@@ -72,7 +72,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -103,7 +102,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -147,7 +145,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -177,7 +174,6 @@ mod tests {
                     setting_key: None,
                     edge_id: None,
                     link_id: None,
-                    hyperlink_id: None,
                     embed_id: None,
                     setting_section: None,
                 }),
@@ -225,7 +221,6 @@ mod tests {
                     setting_key: None,
                     edge_id: None,
                     link_id: None,
-                    hyperlink_id: None,
                     embed_id: None,
                     setting_section: None,
                 }),
@@ -260,7 +255,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -298,7 +292,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -340,7 +333,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -424,7 +416,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -458,7 +449,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -478,7 +468,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -498,7 +487,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -535,7 +523,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -555,7 +542,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -575,7 +561,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -595,7 +580,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -615,27 +599,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
-                embed_id: None,
-                setting_section: None,
-            }),
-        });
-        service.enqueue_update(SearchIndexUpdate {
-            action: SearchIndexAction::Upsert,
-            object_id: "starmap_hyperlink:s1:h1".to_string(),
-            scope: SearchScope::StarmapHyperlink,
-            title: "HL1".to_string(),
-            body: "HL1".to_string(),
-            target: Some(SearchTarget {
-                project_id: None,
-                volume_id: None,
-                chapter_id: None,
-                starmap_id: Some("s1".to_string()),
-                node_id: None,
-                setting_key: None,
-                edge_id: None,
-                link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -655,19 +618,17 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
         });
 
-        assert_eq!(service.status().total_entries, 7);
+        assert_eq!(service.status().total_entries, 6);
 
         for prefix in &[
             "starmap:s1".to_string(),
             "starmap_node:s1:".to_string(),
             "starmap_edge:s1:".to_string(),
-            "starmap_hyperlink:s1:".to_string(),
             "starmap_link:s1:".to_string(),
             "starmap_embed:s1:".to_string(),
         ] {
@@ -701,12 +662,6 @@ mod tests {
             entity_id: "e1".to_string(),
         };
         assert_eq!(entity_ref.search_text(), "character e1");
-
-        let external_ref = StarMapNodeContent::ExternalRef {
-            uri: "https://example.com".to_string(),
-            label: Some("Example".to_string()),
-        };
-        assert_eq!(external_ref.search_text(), "Example https://example.com");
 
         let empty = StarMapNodeContent::Empty;
         assert_eq!(empty.search_text(), "");
@@ -1321,48 +1276,6 @@ mod tests {
     }
 
     #[test]
-    fn cross_entry_rebuild_hyperlink_uses_target_uri() {
-        use crate::search::extractor::extract_starmap_entries;
-        let dir = TempDir::new().unwrap();
-        std::fs::create_dir_all(dir.path().join("projects")).unwrap();
-        let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
-        let meta = api.create_starmap("HLMap", "desc", None).unwrap();
-
-        let hl = crate::starmap::types::StarMapHyperlink {
-            hyperlink_id: "hl1".to_string(),
-            source: crate::starmap::types::reference::StarMapTargetPath {
-                starmap_id: "sm1".to_string(),
-                segments: vec![],
-                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-            },
-            target_uri: "https://example.com/docs".to_string(),
-            label: Some("ExampleDoc".to_string()),
-            created_at: 0,
-            updated_at: 0,
-        };
-        let starmap_dir = dir
-            .path()
-            .join("starmaps")
-            .join(&meta.starmap_id)
-            .join("hyperlinks");
-        std::fs::create_dir_all(&starmap_dir).unwrap();
-        std::fs::write(
-            starmap_dir.join("hl1.json"),
-            serde_json::to_string(&hl).unwrap(),
-        )
-        .unwrap();
-
-        let entries = extract_starmap_entries(dir.path(), None).unwrap();
-        let hl_entries: Vec<_> = entries
-            .iter()
-            .filter(|e| e.scope == SearchScope::StarmapHyperlink)
-            .collect();
-        assert_eq!(hl_entries.len(), 1);
-        assert_eq!(hl_entries[0].title, "ExampleDoc");
-        assert!(hl_entries[0].body.contains("example.com"));
-    }
-
-    #[test]
     fn create_project_indexes_default_volume() {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("projects")).unwrap();
@@ -1491,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn bind_unbind_updates_embed_and_hyperlink_project_id() {
+    fn bind_unbind_updates_embed_project_id() {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("projects")).unwrap();
         let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
@@ -1515,25 +1428,6 @@ mod tests {
         };
         let _ = api.add_starmap_embed(&meta.starmap_id, embed);
 
-        let hl = crate::starmap::types::StarMapHyperlink {
-            hyperlink_id: "hl1".to_string(),
-            source: crate::starmap::types::reference::StarMapTargetPath {
-                starmap_id: meta.starmap_id.clone(),
-                segments: vec![],
-                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-            },
-            target_uri: "https://example.com".to_string(),
-            label: Some("MyHL".to_string()),
-            created_at: 0,
-            updated_at: 0,
-        };
-        {
-            let mut store = crate::starmap::store::StarMapStore::new(dir.path(), &meta.starmap_id);
-            store.load_full().unwrap();
-            store.upsert_hyperlink(hl);
-            store.flush().unwrap();
-        }
-
         let embed_before =
             api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
         assert_eq!(embed_before.len(), 1);
@@ -1550,37 +1444,12 @@ mod tests {
             Some(project.id.as_str())
         );
 
-        let hl_after_bind =
-            api.search_service_search("MyHL", SearchScope::StarmapHyperlink, 10, None);
-        assert_eq!(
-            hl_after_bind.len(),
-            1,
-            "hyperlink index should exist after bind"
-        );
-        assert_eq!(
-            hl_after_bind[0].target.project_id.as_deref(),
-            Some(project.id.as_str()),
-            "hyperlink project_id must match bound project after bind"
-        );
-
         api.unbind_starmap_from_project(&meta.starmap_id).unwrap();
 
         let embed_after_unbind =
             api.search_service_search("MyEmbed", SearchScope::StarmapEmbed, 10, None);
         assert_eq!(embed_after_unbind.len(), 1);
         assert!(embed_after_unbind[0].target.project_id.is_none());
-
-        let hl_after_unbind =
-            api.search_service_search("MyHL", SearchScope::StarmapHyperlink, 10, None);
-        assert_eq!(
-            hl_after_unbind.len(),
-            1,
-            "hyperlink index should exist after unbind"
-        );
-        assert!(
-            hl_after_unbind[0].target.project_id.is_none(),
-            "hyperlink project_id must be None after unbind"
-        );
     }
 
     #[test]
@@ -1616,7 +1485,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_project_cascades_to_embed_and_hyperlink_indices() {
+    fn delete_project_cascades_to_embed_indices() {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("projects")).unwrap();
         let api = crate::api::service::WriterCoreApi::new(dir.path(), dir.path().join("projects"));
@@ -1642,25 +1511,6 @@ mod tests {
         };
         let _ = api.add_starmap_embed(&meta.starmap_id, embed);
 
-        let hl = crate::starmap::types::StarMapHyperlink {
-            hyperlink_id: "hl1".to_string(),
-            source: crate::starmap::types::reference::StarMapTargetPath {
-                starmap_id: meta.starmap_id.clone(),
-                segments: vec![],
-                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-            },
-            target_uri: "https://example.com".to_string(),
-            label: Some("CascadeHL".to_string()),
-            created_at: 0,
-            updated_at: 0,
-        };
-        {
-            let mut store = crate::starmap::store::StarMapStore::new(dir.path(), &meta.starmap_id);
-            store.load_full().unwrap();
-            store.upsert_hyperlink(hl);
-            store.flush().unwrap();
-        }
-
         api.search_service_rebuild(None).unwrap();
 
         let embed_before =
@@ -1669,13 +1519,6 @@ mod tests {
             embed_before.len(),
             1,
             "embed index should exist before delete"
-        );
-        let hl_before =
-            api.search_service_search("CascadeHL", SearchScope::StarmapHyperlink, 10, None);
-        assert_eq!(
-            hl_before.len(),
-            1,
-            "hyperlink index should exist before delete"
         );
 
         api.delete_project(&project.id).unwrap();
@@ -1690,17 +1533,6 @@ mod tests {
         assert!(
             embed_after[0].target.project_id.is_none(),
             "embed project_id must be cleared after project deletion"
-        );
-        let hl_after =
-            api.search_service_search("CascadeHL", SearchScope::StarmapHyperlink, 10, None);
-        assert_eq!(
-            hl_after.len(),
-            1,
-            "hyperlink index must remain as unbound after project deletion"
-        );
-        assert!(
-            hl_after[0].target.project_id.is_none(),
-            "hyperlink project_id must be cleared after project deletion"
         );
     }
 
@@ -1768,7 +1600,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -1788,7 +1619,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -1808,7 +1638,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -1876,7 +1705,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -1896,7 +1724,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),
@@ -1916,7 +1743,6 @@ mod tests {
                 setting_key: None,
                 edge_id: None,
                 link_id: None,
-                hyperlink_id: None,
                 embed_id: None,
                 setting_section: None,
             }),

@@ -5,7 +5,7 @@ import {
   AnnotationTagDto, AnnotationTargetDto, AnnotationTextAnchorDto, ChapterAnnotationsDto
 } from '../dto/AnnotationDtos'
 
-type AnnotationLinkResolutionState = 'exists' | 'missing' | 'projectNotDownloaded' | 'externalUrl'
+type AnnotationLinkResolutionState = 'exists' | 'missing' | 'projectNotDownloaded'
 
 function success<T>(value: T): DecodeResult<T> { return { ok: true, value: value } }
 function failure<T>(message: string): DecodeResult<T> { return { ok: false, error: message } }
@@ -87,17 +87,12 @@ export function decodeAnnotationObjectRef(value: Object): DecodeResult<Annotatio
 export function decodeAnnotationTarget(value: Object): DecodeResult<AnnotationTargetDto> {
   const rec = record(value, 'AnnotationTargetDto')
   if (rec === null) return failure('expected object')
-  let objectRef: AnnotationObjectRefDto | null = null
   const rawRef: Object | undefined = rec['objectRef']
-  if (rawRef !== undefined && rawRef !== null) {
-    const decoded = decodeAnnotationObjectRef(rawRef)
-    if (!decoded.ok || decoded.value === undefined) return failure(`objectRef: ${decoded.error}`)
-    objectRef = decoded.value
-  }
-  const externalUrl = nullableString(rec, 'externalUrl')
-  if (externalUrl === undefined) return failure('externalUrl must be a string or null')
-  const decoded: AnnotationTargetDto = { objectRef: objectRef, externalUrl: externalUrl }
-  return success(decoded)
+  if (rawRef === undefined) return failure('missing objectRef')
+  const decoded = decodeAnnotationObjectRef(rawRef)
+  if (!decoded.ok || decoded.value === undefined) return failure(`objectRef: ${decoded.error}`)
+  const target: AnnotationTargetDto = { objectRef: decoded.value }
+  return success(target)
 }
 
 export function decodeAnnotationTag(value: Object): DecodeResult<AnnotationTagDto> {
@@ -220,7 +215,7 @@ export function decodeAnnotationLinkResolution(value: Object): DecodeResult<Anno
   const rec = record(value, 'AnnotationLinkResolutionDto')
   if (rec === null) return failure('expected object')
   const state = text(rec, 'state'); const targetValue: Object | undefined = rec['target']
-  if (state === null || !['exists', 'missing', 'projectNotDownloaded', 'externalUrl'].includes(state) || targetValue === undefined) {
+  if (state === null || !['exists', 'missing', 'projectNotDownloaded'].includes(state) || targetValue === undefined) {
     return failure('missing resolution fields')
   }
   const target = decodeAnnotationTarget(targetValue)

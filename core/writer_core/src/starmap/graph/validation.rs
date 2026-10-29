@@ -3,49 +3,6 @@ use crate::starmap::graph::resolve::{resolve_target_path, GraphResolverContext};
 use crate::starmap::types::reference::StarMapTargetPath;
 use crate::starmap::types::*;
 
-/// 校验 hyperlink target_uri 的 scheme。
-///
-/// URI 必须有合法 scheme：以 `xxx:` 开头，scheme 第一字符必须是 ASCII 字母，
-/// 后续字符允许 ASCII 字母/数字/+/-/.。
-/// 不用 `contains("://")` 因为 `mailto:`、`tel:` 等没有 `//`。
-pub(crate) fn validate_hyperlink_uri(uri: &str) -> Result<()> {
-    let colon = uri.find(':').ok_or_else(|| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "target_uri must have a scheme (e.g. 'https:', 'mailto:')",
-        ))
-    })?;
-    let scheme = &uri[..colon];
-    if scheme.is_empty() {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "target_uri scheme must not be empty",
-        )));
-    }
-    let mut chars = scheme.chars();
-    let first = chars.next().ok_or_else(|| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "target_uri scheme must not be empty",
-        ))
-    })?;
-    if !first.is_ascii_alphabetic() {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "target_uri scheme first character must be a letter",
-        )));
-    }
-    for c in chars {
-        if !c.is_ascii_alphanumeric() && c != '+' && c != '-' && c != '.' {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("target_uri scheme contains invalid character: {c}"),
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// 图数据完整性验证入口。
 ///
 /// 在 `save_starmap_graph` 保存前调用，确保写入磁盘的数据满足引用完整性不变量。
@@ -57,7 +14,6 @@ pub(crate) fn validate_hyperlink_uri(uri: &str) -> Result<()> {
 /// - 边端点引用的节点/锚点必须存在
 /// - 嵌入的 `instance_id` 全局唯一，且不能自嵌入
 /// - 链接的 `link_id` 全局唯一
-/// - 超链接的 `hyperlink_id` 全局唯一，source 路径合法，URI 非空且有 scheme
 /// - Portal 的 `destination_starmap_id` 必须存在，可选落点在目标图中存在
 /// - 数值字段 finite（无 NaN/Inf）
 /// - 跨图引用一致性：Edge 的 from/to 路径如果穿越了 Embed/Portal，
@@ -67,7 +23,6 @@ pub(crate) fn validate_graph(context: &GraphResolverContext, graph: &StarMapGrap
     validate_edges(context, graph, &node_ids)?;
     validate_embeds(context, graph, &node_ids)?;
     validate_links(context, graph, &node_ids)?;
-    validate_hyperlinks(context, graph, &node_ids)?;
     Ok(())
 }
 
@@ -189,7 +144,7 @@ fn validate_edges(
 ) -> Result<()> {
     let mut edge_ids = std::collections::HashSet::new();
     for edge in &graph.edges {
-        // Edge ID 全局唯一，与 node/embed/link/hyperlink 一致。
+        // Edge ID 全局唯一，与 node/embed/link 一致。
         // add_edge 也会显式拒绝重复 ID，这里在 validate_graph 层再守一道。
         if !edge_ids.insert(&edge.id) {
             return Err(Error::Io(std::io::Error::new(
@@ -387,35 +342,6 @@ fn validate_links(
         validate_target_path(context, &link.source, graph, node_ids, "link source")?;
         // 验证 target 路径
         validate_target_path(context, &link.target, graph, node_ids, "link target")?;
-    }
-    Ok(())
-}
-
-/// 验证超链接：hyperlink_id 唯一、source 路径合法、target_uri 非空且有合法 scheme。
-fn validate_hyperlinks(
-    context: &GraphResolverContext,
-    graph: &StarMapGraph,
-    node_ids: &std::collections::HashSet<String>,
-) -> Result<()> {
-    let mut hyperlink_ids = std::collections::HashSet::new();
-    for hl in &graph.hyperlinks {
-        if !hyperlink_ids.insert(&hl.hyperlink_id) {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Duplicate hyperlink_id",
-            )));
-        }
-        // source 路径必须合法
-        validate_target_path(context, &hl.source, graph, node_ids, "hyperlink source")?;
-        // target_uri 非空
-        if hl.target_uri.is_empty() {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Hyperlink target_uri cannot be empty",
-            )));
-        }
-        // target_uri 必须有合法 scheme（统一调用 validate_hyperlink_uri）
-        validate_hyperlink_uri(&hl.target_uri)?;
     }
     Ok(())
 }
