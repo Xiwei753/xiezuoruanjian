@@ -110,6 +110,8 @@ impl AgentAdapter for ClaudeAdapter {
         if let Ok(mut guard) = self.current_child.lock() {
             *guard = Some(child);
         }
+        // `claude -p` 已成功启动并接管本轮消息。
+        (self.emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
         if let Some(stderr) = stderr {
             std::thread::Builder::new()
                 .name("agent-claude-stderr".to_string())

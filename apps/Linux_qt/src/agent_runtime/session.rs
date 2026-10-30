@@ -96,6 +96,9 @@ impl AgentSessionManager {
             }
         };
         ctx.mcp_servers = mcp_servers;
+        ctx.mcp_socket_dir = mcp_broker
+            .as_ref()
+            .map(|broker| broker.directory().to_path_buf());
         let conversation_id = ctx.conversation_id.clone();
         let current_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let turn_id = current_turn_id.clone();

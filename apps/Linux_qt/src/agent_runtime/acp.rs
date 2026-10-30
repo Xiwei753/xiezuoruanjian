@@ -320,17 +320,18 @@ impl AgentAdapter for AcpAdapter {
                     }),
                     REQUEST_TIMEOUT,
                 );
-                let event = match result {
-                    Ok(_) => AgentEvent::TurnCompleted,
-                    Err(error) => AgentEvent::TurnFailed { message: error },
-                };
-                (emit)(RuntimeEvent {
-                    conversation_id: String::new(),
-                    generation: 0,
-                    core_turn_id: String::new(),
-                    native_turn_id: String::new(),
-                    event,
-                });
+                match result {
+                    Ok(_) => {
+                        (emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
+                        (emit)(RuntimeEvent::native("", AgentEvent::TurnCompleted));
+                    }
+                    Err(error) => {
+                        (emit)(RuntimeEvent::native(
+                            "",
+                            AgentEvent::TurnFailed { message: error },
+                        ));
+                    }
+                }
             })
             .map_err(|error| format!("无法启动 ACP 请求线程：{error}"))?;
         Ok(())

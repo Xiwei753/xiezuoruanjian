@@ -953,7 +953,9 @@ impl AgentAdapter for OpenCodeAdapter {
                     .json(&body)
                     .send();
                 match response {
-                    Ok(response) if response.status().is_success() => {}
+                    Ok(response) if response.status().is_success() => {
+                        (emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
+                    }
                     Ok(response) => (emit)(RuntimeEvent {
                         conversation_id: String::new(),
                         generation: 0,

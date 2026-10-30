@@ -132,6 +132,12 @@ pub struct McpBroker {
     directory: PathBuf,
 }
 
+impl McpBroker {
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+}
+
 impl Drop for McpBroker {
     fn drop(&mut self) {
         for child in &mut self.children {

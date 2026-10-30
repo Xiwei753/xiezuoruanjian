@@ -374,6 +374,7 @@ impl AgentAdapter for CodexAdapter {
                                 *guard = Some(id);
                             }
                         }
+                        (emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
                     }
                     Err(error) => (emit)(RuntimeEvent {
                         conversation_id: String::new(),

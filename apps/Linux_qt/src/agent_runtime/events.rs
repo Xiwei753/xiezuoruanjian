@@ -49,6 +49,9 @@ pub struct AgentLaunchContext {
     pub app_data_root: PathBuf,
     /// 真实作品根；沙箱中只读，所有写入必须走 Core/MCP。
     pub projects_root: PathBuf,
+    /// 本次会话 MCP broker 的 Unix Socket 目录。沙箱只暴露这个目录，
+    /// 不暴露整个应用数据根。
+    pub mcp_socket_dir: Option<PathBuf>,
     /// Core 会话 id。切换会话时必须重建原生进程，不能复用上一段对话。
     pub conversation_id: String,
     pub project_id: String,
@@ -95,6 +98,9 @@ pub enum AgentEvent {
         description: String,
         options: Vec<PermissionOption>,
     },
+    /// Agent 协议已确认接收本轮消息。只有收到该事件后才记录输入使用量；
+    /// 进程/握手/HTTP 失败都不算用户真正发出请求。
+    PromptAccepted,
     Usage {
         input_chars: u32,
         output_chars: u32,

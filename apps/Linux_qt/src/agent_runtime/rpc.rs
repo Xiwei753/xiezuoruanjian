@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -74,6 +74,23 @@ impl RpcClient {
                             continue;
                         }
                     };
+                    // JSON-RPC 先按消息形态分流，不能先看 `id`：ACP 权限和
+                    // Codex 审批都是“method + id”的对端请求，若按响应取走会
+                    // 让 Agent 永久等待，甚至误完成同号的客户端请求。
+                    if let Some(method) = value
+                        .get("method")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                    {
+                        // 传递完整消息：对端请求保留原始 id 供 respond() 回复；
+                        // 无 id 的通知也走同一 handler。
+                        (reader_handler)(&method, value);
+                        continue;
+                    }
+                    if value.get("result").is_none() && value.get("error").is_none() {
+                        log::debug!(target: "agent", "agent message without method/result: {trimmed}");
+                        continue;
+                    }
                     if let Some(id) = value.get("id").and_then(serde_json::Value::as_i64) {
                         if let Some(pending) = reader_pending
                             .lock()
@@ -93,16 +110,6 @@ impl RpcClient {
                             };
                             let _ = pending.response.send(response);
                         }
-                        continue;
-                    }
-                    let method = value
-                        .get("method")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string);
-                    if let Some(method) = method {
-                        // 传递完整消息：ACP 的 `session/request_permission` 是带
-                        // id 的服务器→客户端请求，需要保留 id 才能回复。
-                        (reader_handler)(&method, value);
                     }
                 }
                 // 进程退出：唤醒所有等待者，避免 UI 线程永久挂起。
@@ -154,9 +161,21 @@ impl RpcClient {
             "method": method,
             "params": params,
         }))?;
-        receiver
-            .recv_timeout(timeout)
-            .map_err(|_| format!("{method} 超时"))?
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => {
+                if let Ok(mut map) = self.pending.lock() {
+                    map.remove(&id);
+                }
+                Err(format!("{method} 超时"))
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                if let Ok(mut map) = self.pending.lock() {
+                    map.remove(&id);
+                }
+                Err(format!("{method} 等待响应时 Agent 已退出"))
+            }
+        }
     }
 
     pub fn notify(&self, method: &str, params: serde_json::Value) -> Result<(), String> {

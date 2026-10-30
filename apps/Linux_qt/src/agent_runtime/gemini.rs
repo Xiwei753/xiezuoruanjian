@@ -74,7 +74,14 @@ fn prepare_system_settings(ctx: &AgentLaunchContext) -> Result<Option<PathBuf>, 
         });
     }
 
-    let directory = std::env::temp_dir().join(format!("sujian-gemini-{}", uuid::Uuid::new_v4()));
+    // 配置必须放在沙箱可写的 Gemini 配置目录内；宿主 /tmp 在沙箱里是私有
+    // tmpfs，宿主侧创建的临时文件不会自动可见。
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "无法确定 HOME，不能生成 Gemini 私有配置".to_string())?;
+    let directory = home
+        .join(".gemini")
+        .join(format!(".sujian-runtime-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("创建 Gemini 临时配置目录失败：{error}"))?;
     #[cfg(unix)]
@@ -161,6 +168,8 @@ impl AgentAdapter for GeminiAdapter {
         if let Ok(mut guard) = self.current_child.lock() {
             *guard = Some(child);
         }
+        // `gemini -p` 已成功启动并接管本轮消息。
+        (self.emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
         if let Some(stderr) = stderr {
             std::thread::Builder::new()
                 .name("agent-gemini-stderr".to_string())

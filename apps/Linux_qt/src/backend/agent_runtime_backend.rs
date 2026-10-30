@@ -370,6 +370,7 @@ impl AgentRuntimeBackend {
             working_dir,
             app_data_root: PathBuf::from(app_data_root),
             projects_root: PathBuf::from(projects_root),
+            mcp_socket_dir: None,
             conversation_id,
             project_id: conversation_project_id,
             project_title: self.project_title.clone(),
@@ -737,7 +738,6 @@ impl AgentRuntimeBackend {
             self.set_error(format!("保存 AI 会话失败：{error}"));
             return;
         }
-        self.record_usage(&conversation, &turn_id_value, false);
         self.conversation = Some(conversation);
         self.active_turn_id = turn_id_value.clone();
         self.ignored_turn_id.clear();
@@ -984,6 +984,11 @@ impl AgentRuntimeBackend {
                     .unwrap_or(serde_json::Value::Null);
                 self.mcp_status_json_value = mcp.to_string();
                 self.mcp_status_changed();
+            }
+            AgentEvent::PromptAccepted => {
+                // 只有 Agent 正式接口确认接收后才记 Input；启动失败、握手
+                // 失败或 HTTP 拒绝都不会走到这里。
+                self.record_usage(&conversation, &core_turn_id, false);
             }
             AgentEvent::TextDelta { text } => {
                 if let Some(turn) = conversation.turn_mut(&core_turn_id) {
