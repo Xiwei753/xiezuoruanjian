@@ -62,6 +62,8 @@ Rectangle {
     property bool aiEnabled: false
     // Issue #1014：Agent CLI 后端由 main.qml 注入，透传给 RightDrawer。
     property var agentCliBackendRef: null
+    // Issue #1016：写作与星图共用同一个 Agent 会话运行时。
+    property var agentRuntimeBackendRef: null
     // Issue #835 评论 6019713847: StarMapPage 需要真实 StarMapController 读根星图，
     // 由 main.qml 注入 globalStarMapController，透传给 RightDrawer.starMapControllerRef。
     property var starMapControllerRef: null
@@ -100,7 +102,10 @@ Rectangle {
 
     // ── Issue #920 / #971：桌面 SplitView 尺寸与次要栏的有效可见状态 ──
     readonly property int listPaneMinWidth: 200
-    readonly property int toolPaneMinWidth: 200
+    // Issue #1016：右栏总最小宽度 = 内容 200 + 工具轨 56，避免 SplitView
+    // 最小值 200 把工具内容挤到 144。
+    readonly property int toolPaneContentMinWidth: 200
+    readonly property int toolPaneMinWidth: toolPaneContentMinWidth + toolRailWidth
     readonly property int toolPaneMaxWidth: 520
     readonly property int toolRailWidth: 56
     readonly property int editorMinWidth: 240
@@ -124,6 +129,14 @@ Rectangle {
     // Issue #1014：SplitView.preferredWidth 直接来自 DesktopLayoutState 的页面宽度，
     // 页面切换 / 窗口缩放都不会反向改写用户拖动后的覆盖值。只有拖动结束才调用
     // layoutState.setDraggedWidth()，正常布局重算不写持久化。
+    // Issue #1016：每次实际布局把真实 pane 宽度/可见状态上报给顶栏，顶栏不再
+    // 读取“期望宽度”造成与下方 SplitView 错位。
+    function reportRenderedPane(side, pane) {
+        if (!root.layoutState || !pane)
+            return
+        root.layoutState.setRenderedPaneWidth(root.pageKey, side,
+            pane.visible ? pane.width : 0)
+    }
 
     // 展开侧 pane 是一个「请求」，不是直接写状态：一个属性都不改就把候选组合
     // 先按本地最小宽度算一遍，放得下才整体提交；放不下就什么都不改，
@@ -656,6 +669,8 @@ Rectangle {
                     SplitView.preferredWidth: root.layoutState
                         ? root.layoutState.paneWidth(root.pageKey, "left")
                         : root.listPaneMinWidth
+                    onWidthChanged: root.reportRenderedPane("left", sidebarRect)
+                    onVisibleChanged: root.reportRenderedPane("left", sidebarRect)
 
                     dt: root.dt
                     tree: root.tree
@@ -780,8 +795,10 @@ Rectangle {
                 SplitView.minimumWidth: root.toolPaneMinWidth
                 SplitView.preferredWidth: root.layoutState
                     ? root.layoutState.paneWidth(root.pageKey, "right")
-                    : root.toolPaneMinWidth + root.toolRailWidth
+                    : root.toolPaneMinWidth
                 SplitView.maximumWidth: root.toolPaneMaxWidth
+                onWidthChanged: root.reportRenderedPane("right", rightPaneContainer)
+                onVisibleChanged: root.reportRenderedPane("right", rightPaneContainer)
                 color: "transparent"
                 clip: true
 
@@ -806,6 +823,10 @@ Rectangle {
                         aiAvailable: root.aiAvailable
                         aiEnabled: root.aiEnabled
                         agentCliBackendRef: root.agentCliBackendRef
+                        agentRuntimeBackendRef: root.agentRuntimeBackendRef
+                        workspaceProjectTitle: root.workspaceProjectTitle
+                        aiContextLabel: root.workspaceProjectTitle !== ""
+                            ? root.workspaceProjectTitle : root.workspaceProjectId
                         // Issue #835 评论 6019713847: 透传真实 StarMapController 给 RightDrawer，
                         // StarMapPage 据此调 listStarmaps() 读真实根星图。
                         starMapControllerRef: root.starMapControllerRef

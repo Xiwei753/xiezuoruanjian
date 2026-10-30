@@ -54,6 +54,11 @@ Item {
     property var searchBackendRef: null
     property bool aiAvailable: false
     property bool aiEnabled: false
+    // Issue #1016：写作与星图共用同一个 Agent CLI / 会话后端。
+    property var agentCliBackendRef: null
+    property var agentRuntimeBackendRef: null
+    property string workspaceProjectId: ""
+    property string workspaceProjectTitle: ""
     property bool embedded: false
     property string selectedTool: "tags"
     property bool toolDrawerOpen: true
@@ -86,7 +91,9 @@ Item {
     readonly property int toolRailWidth: 56
     readonly property int splitHandleWidth: 6
     readonly property int leftPaneMinWidth: 200
-    readonly property int rightPaneMinWidth: 200
+    // Issue #1016：右栏总最小宽度 = 内容 200 + 工具轨 56。
+    readonly property int rightPaneContentMinWidth: 200
+    readonly property int rightPaneMinWidth: rightPaneContentMinWidth + toolRailWidth
     readonly property int rightPaneMaxWidth: 520
     readonly property int canvasMinWidth: 240
 
@@ -102,6 +109,14 @@ Item {
     signal annotationToolRequested(string toolKey)
 
     property var pendingTreeRow: null
+
+    // Issue #1016：把本次 SplitView 的真实宽度/可见状态上报给顶栏。
+    function reportRenderedPane(side, pane) {
+        if (!root.layoutState || !pane)
+            return
+        root.layoutState.setRenderedPaneWidth(root.pageKey, side,
+            pane.visible ? pane.width : 0)
+    }
 
     function setPaneCollapsed(side, collapsed) {
         if (root.layoutState) {
@@ -369,6 +384,8 @@ Item {
                     ? root.layoutState.paneWidth(root.pageKey, "left")
                     : root.leftPaneMinWidth
                 SplitView.maximumWidth: 420
+                onWidthChanged: root.reportRenderedPane("left", leftPaneContainer)
+                onVisibleChanged: root.reportRenderedPane("left", leftPaneContainer)
                 color: "transparent"
                 clip: true
 
@@ -441,8 +458,10 @@ Item {
                 SplitView.minimumWidth: root.rightPaneMinWidth
                 SplitView.preferredWidth: root.layoutState
                     ? root.layoutState.paneWidth(root.pageKey, "right")
-                    : root.rightPaneMinWidth + root.toolRailWidth
+                    : root.rightPaneMinWidth
                 SplitView.maximumWidth: root.rightPaneMaxWidth
+                onWidthChanged: root.reportRenderedPane("right", rightPaneContainer)
+                onVisibleChanged: root.reportRenderedPane("right", rightPaneContainer)
                 color: "transparent"
                 clip: true
 
@@ -460,6 +479,15 @@ Item {
                         isOpen: visible
                         aiAvailable: root.aiAvailable
                         aiEnabled: root.aiEnabled
+                        agentCliBackendRef: root.agentCliBackendRef
+                        agentRuntimeBackendRef: root.agentRuntimeBackendRef
+                        // 绑定作品的星图与写作页共用同一作品会话；未绑定时
+                        // 以星图身份作为上下文 key，历史仍由 Core 保存。
+                        workspaceProjectId: root.annotationProjectId !== ""
+                            ? root.annotationProjectId : root.workspaceProjectId
+                        workspaceProjectTitle: root.workspaceProjectTitle !== ""
+                            ? root.workspaceProjectTitle : root.starmapTitle
+                        aiContextLabel: root.starmapTitle
                         annotationBackendRef: root.annotationBackendRef
                         searchBackendRef: root.searchBackendRef
                         projectId: root.annotationProjectId
@@ -490,6 +518,8 @@ Item {
                         drawerOpen: root.toolDrawerOpen
                         aiAvailable: root.aiAvailable
                         aiEnabled: root.aiEnabled
+                        agentAvailable: root.agentCliBackendRef
+                            && String(root.agentCliBackendRef.selected_agent_id || "") !== ""
                         onToolRequested: function(key) {
                             root.requestToolPane(key)
                         }

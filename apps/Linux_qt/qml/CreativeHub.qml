@@ -65,6 +65,15 @@ Rectangle {
             return
         navigationPane.SplitView.preferredWidth =
             root.layoutState.paneWidth(root.currentPageKey, "left")
+        root.reportRenderedPane()
+    }
+
+    // Issue #1016：顶栏品牌区读取本次真实渲染宽度，而不是期望宽度。
+    function reportRenderedPane() {
+        if (!root.layoutState || !navigationPane)
+            return
+        root.layoutState.setRenderedPaneWidth(root.currentPageKey, "left",
+            navigationPane.visible ? navigationPane.width : 0)
     }
 
     onCurrentTabChanged: applyPageWidth()
@@ -121,6 +130,8 @@ Rectangle {
                 ? root.layoutState.paneWidth(root.currentPageKey, "left") : 240
             SplitView.maximumWidth: 480
             SplitView.fillHeight: true
+            onWidthChanged: root.reportRenderedPane()
+            onVisibleChanged: root.reportRenderedPane()
             color: Kirigami.Theme.alternateBackgroundColor
 
             ColumnLayout {

@@ -1615,6 +1615,15 @@ Kirigami.ApplicationWindow {
                 searchBackendRef: searchBackend
                 aiAvailable: settingsBackend.ai_available
                 aiEnabled: settingsBackend.ai_enabled
+                // Issue #1016：星图与写作共用同一 AI 会话；未绑定作品的根星图
+                // 用星图身份作为会话上下文 key。
+                agentCliBackendRef: agentCliBackend
+                agentRuntimeBackendRef: agentRuntimeBackend
+                workspaceProjectId: appController.writingProjectId !== ""
+                    ? appController.writingProjectId
+                    : (appController.starmapId !== "" ? "starmap:" + appController.starmapId : "")
+                workspaceProjectTitle: appController.writingProjectTitle !== ""
+                    ? appController.writingProjectTitle : appController.starmapTitle
                 starmapId: appController.starmapId
                 starmapTitle: appController.starmapTitle
                 appState: window.appState
@@ -1734,6 +1743,8 @@ Kirigami.ApplicationWindow {
                 aiEnabled: settingsBackend.ai_enabled
                 // Issue #1014：写作栏 AI 面板与设置页共享 Agent CLI 清单/选择。
                 agentCliBackendRef: agentCliBackend
+                // Issue #1016：撰写页与星图共用同一个 Agent 会话运行时。
+                agentRuntimeBackendRef: agentRuntimeBackend
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId
                 // Issue #757 评论 5818193510 第 5 点：传入 syncBackend 给 WritingWorkspace，

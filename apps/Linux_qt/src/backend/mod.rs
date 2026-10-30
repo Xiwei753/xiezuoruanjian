@@ -6,6 +6,8 @@
 pub mod app_backend;
 /// Issue #1014：Agent CLI 动态发现与选择的 QObject 后端。
 pub mod agent_cli_backend;
+/// Issue #1016：统一 Agent 会话运行时 QObject 后端。
+pub mod agent_runtime_backend;
 pub mod annotation_backend;
 pub mod diagnostics;
 pub mod json_utils;
@@ -247,6 +249,7 @@ pub struct BackendRuntime {
     search_backend: QObjectBox<search_backend::SearchBackend>,
     theme_controller: QObjectBox<LinuxThemeController>,
     agent_cli_backend: QObjectBox<agent_cli_backend::AgentCliBackend>,
+    agent_runtime_backend: QObjectBox<agent_runtime_backend::AgentRuntimeBackend>,
     app: std::rc::Rc<std::cell::RefCell<AppBackend>>,
 }
 
@@ -271,6 +274,9 @@ impl BackendRuntime {
         let app_ref = AppRef::new(app.clone());
         app_ref.init_snapshot();
         let search_bridge = app.borrow().search_bridge();
+        let agent_runtime_backend = QObjectBox::new(
+            agent_runtime_backend::AgentRuntimeBackend::new(app_ref.clone()),
+        );
 
         Self {
             workspace_backend: QObjectBox::new(WorkspaceBackend::new(app_ref.clone())),
@@ -283,6 +289,7 @@ impl BackendRuntime {
             search_backend: QObjectBox::new(search_backend::SearchBackend::new(search_bridge)),
             theme_controller: QObjectBox::new(LinuxThemeController::new(app_ref)),
             agent_cli_backend: QObjectBox::new(agent_cli_backend::AgentCliBackend::new()),
+            agent_runtime_backend,
             app,
         }
     }
@@ -313,5 +320,10 @@ impl BackendRuntime {
         engine.set_object_property("themeController".into(), self.theme_controller.pinned());
         // Issue #1014：AI 工具面板与设置页共享同一份 Agent CLI 清单/选择。
         engine.set_object_property("agentCliBackend".into(), self.agent_cli_backend.pinned());
+        // Issue #1016：写作与星图共用同一个 AI 会话运行时。
+        engine.set_object_property(
+            "agentRuntimeBackend".into(),
+            self.agent_runtime_backend.pinned(),
+        );
     }
 }

@@ -56,10 +56,12 @@ ColumnLayout {
     // Issue #1014：顶栏高度也取整窗唯一骨架常量，未注入时回退 64。
     readonly property int topBarHeight:
         root.layoutState ? root.layoutState.topBarHeight : 64
+    // Issue #1016：读取下方 SplitView 本次实际渲染宽度；无记录时才回退到
+    // 期望宽度。窗口缩窄导致的钳制不会再让顶栏与实际 pane 错位。
     readonly property real effectiveLeftWidth:
-        root.layoutState ? root.layoutState.paneWidth(root.pageKey, "left") : 240
+        root.layoutState ? root.layoutState.renderedPaneWidth(root.pageKey, "left") : 240
     readonly property real effectiveRightWidth:
-        root.layoutState ? root.layoutState.paneWidth(root.pageKey, "right") : 296
+        root.layoutState ? root.layoutState.renderedPaneWidth(root.pageKey, "right") : 296
     readonly property bool leftCollapsed:
         root.layoutState ? root.layoutState.isCollapsed(root.pageKey, "left") : false
     readonly property bool rightCollapsed:

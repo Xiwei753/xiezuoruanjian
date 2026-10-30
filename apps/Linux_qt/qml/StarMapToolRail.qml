@@ -11,6 +11,8 @@ Rectangle {
     property bool drawerOpen: false
     property bool aiAvailable: false
     property bool aiEnabled: false
+    // Issue #1016：AI 入口的真实可用性来自当前选中的本机 Agent。
+    property bool agentAvailable: false
 
     signal toolRequested(string toolKey)
     signal drawerToggled()
@@ -25,7 +27,7 @@ Rectangle {
 
         Repeater {
             model: [
-                { key: "ai", label: qsTr("AI"), icon: "tools-wizard", enabled: root.aiAvailable && root.aiEnabled },
+                { key: "ai", label: qsTr("AI"), icon: "tools-wizard", enabled: true },
                 { key: "tags", label: qsTr("标签"), icon: "tag", enabled: true }
             ]
             ItemDelegate {
@@ -43,7 +45,7 @@ Rectangle {
                 opacity: modelData.enabled ? 1.0 : 0.65
                 ToolTip.visible: hovered
                 ToolTip.text: modelData.key === "ai"
-                    ? (root.aiAvailable ? (root.aiEnabled ? qsTr("AI 已启用") : qsTr("AI 未启用")) : qsTr("AI 能力不可用"))
+                    ? (root.agentAvailable ? qsTr("打开 AI 会话") : qsTr("管理本机 Agent"))
                     : modelData.label
                 onClicked: root.toolRequested(modelData.key)
             }

@@ -87,6 +87,15 @@ fn segments_json(segments: &[RouteSegment]) -> String {
     serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_string())
 }
 
+/// 子项状态：未探测、确定有子项、确定为空。不能把“未加载”当成有子项，
+/// 否则叶子节点会先出现可展开箭头。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChildrenState {
+    Unknown,
+    Present,
+    Empty,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowKind {
     Root,
@@ -117,7 +126,7 @@ struct TreeRow {
     revision: u64,
     depth: i32,
     children: Vec<usize>,
-    children_loaded: bool,
+    children_state: ChildrenState,
     expanded: bool,
 }
 
@@ -167,6 +176,8 @@ pub struct StarmapTreeModel {
     ensure_children_loaded: qt_method!(fn(&self, route_key: QString) -> bool),
     index_for_route:
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QModelIndex),
+    /// 用完整 routeKey 找回行并懒加载路径；刷新后恢复展开状态使用。
+    index_for_key: qt_method!(fn(&self, route_key: QString) -> QModelIndex),
     route_key_of: qt_method!(fn(&self, index: QModelIndex) -> QString),
     set_expanded: qt_method!(fn(&self, route_key: QString, expanded: bool)),
     set_starmap_title: qt_method!(fn(&self, starmap_id: QString, title: QString)),
@@ -274,12 +285,37 @@ impl StarmapTreeModel {
         self.state.borrow().index_by_route.get(key).copied()
     }
 
-    fn row_has_children(&self, row: &TreeRow) -> bool {
-        if row.children_loaded {
-            !row.children.is_empty()
-        } else {
-            // 未加载时先显示展开箭头；真正展开后再按 graph 结果收口。
-            true
+    /// 准确的三态判断。未探测时读取一次真实 graph，只缓存“有/无子项”，
+    /// 不插入子行；子行仍在用户展开时懒加载。
+    fn row_has_children(&self, node_id: usize) -> bool {
+        let (state, starmap_id) = {
+            let state = self.state.borrow();
+            let Some(row) = state.rows.get(node_id) else {
+                return false;
+            };
+            (row.children_state, row.starmap_id.clone())
+        };
+        match state {
+            ChildrenState::Present => true,
+            ChildrenState::Empty => false,
+            ChildrenState::Unknown => {
+                let Some(specs) = self.load_child_specs(&starmap_id) else {
+                    // 读取失败时保留 Unknown 并临时显示箭头，允许用户重试；
+                    // 不能把一次后端失败缓存成“确定为空”。
+                    return true;
+                };
+                let present = !specs.is_empty();
+                if let Ok(mut state) = self.state.try_borrow_mut() {
+                    if let Some(row) = state.rows.get_mut(node_id) {
+                        row.children_state = if present {
+                            ChildrenState::Present
+                        } else {
+                            ChildrenState::Empty
+                        };
+                    }
+                }
+                present
+            }
         }
     }
 
@@ -321,7 +357,7 @@ impl StarmapTreeModel {
                     revision: meta.updated_at,
                     depth: 0,
                     children: Vec::new(),
-                    children_loaded: false,
+                    children_state: ChildrenState::Unknown,
                     expanded: false,
                 });
                 state.root_ids.push(node_id);
@@ -333,30 +369,8 @@ impl StarmapTreeModel {
         self.end_reset_model();
     }
 
-    fn ensure_children_loaded_internal(&self, key: &str) -> bool {
-        let Some(node_id) = self.node_at_route(key) else {
-            return false;
-        };
-        let (depth, loaded, starmap_id, root_starmap_id, segments, parent_starmap_id) = {
-            let state = self.state.borrow();
-            let Some(row) = state.rows.get(node_id) else {
-                return false;
-            };
-            (
-                row.depth,
-                row.children_loaded,
-                row.starmap_id.clone(),
-                row.root_starmap_id.clone(),
-                row.segments.clone(),
-                row.starmap_id.clone(),
-            )
-        };
-        if loaded {
-            return true;
-        }
-
-        let specs = self
-            .call_backend_json("get_starmap_graph_json", Some(&starmap_id))
+    fn load_child_specs(&self, starmap_id: &str) -> Option<Vec<ChildSpec>> {
+        self.call_backend_json("get_starmap_graph_json", Some(starmap_id))
             .as_deref()
             .and_then(Self::envelope_data)
             .and_then(|data| data.get("graph").cloned())
@@ -399,16 +413,52 @@ impl StarmapTreeModel {
                     });
                 }
                 children
-            });
+            })
+    }
 
-        let Some(specs) = specs else {
+    fn ensure_children_loaded_internal(&self, key: &str) -> bool {
+        let Some(node_id) = self.node_at_route(key) else {
+            return false;
+        };
+        let (
+            depth,
+            children_state,
+            children_loaded,
+            starmap_id,
+            root_starmap_id,
+            segments,
+            parent_starmap_id,
+        ) = {
+            let state = self.state.borrow();
+            let Some(row) = state.rows.get(node_id) else {
+                return false;
+            };
+            (
+                row.depth,
+                row.children_state,
+                !row.children.is_empty(),
+                row.starmap_id.clone(),
+                row.root_starmap_id.clone(),
+                row.segments.clone(),
+                row.starmap_id.clone(),
+            )
+        };
+        // `row_has_children` 探测真实 graph 后只缓存 Present/Empty，不会插入
+        // 子行；因此 Present 但 children 为空时仍然必须在这里真正加载一次。
+        if children_state == ChildrenState::Empty
+            || (children_state == ChildrenState::Present && children_loaded)
+        {
+            return true;
+        }
+
+        let Some(specs) = self.load_child_specs(&starmap_id) else {
             return false;
         };
 
         if specs.is_empty() {
             let mut state = self.state.borrow_mut();
             if let Some(row) = state.rows.get_mut(node_id) {
-                row.children_loaded = true;
+                row.children_state = ChildrenState::Empty;
             }
             drop(state);
             let index = self.index_for_node(node_id);
@@ -438,7 +488,7 @@ impl StarmapTreeModel {
                     revision: spec.revision,
                     depth: depth + 1,
                     children: Vec::new(),
-                    children_loaded: false,
+                    children_state: ChildrenState::Unknown,
                     expanded: false,
                 });
                 state.index_by_route.insert(child_key, child_id);
@@ -446,7 +496,7 @@ impl StarmapTreeModel {
             }
             if let Some(row) = state.rows.get_mut(node_id) {
                 row.children = child_ids;
-                row.children_loaded = true;
+                row.children_state = ChildrenState::Present;
                 row.expanded = true;
             }
         }
@@ -512,6 +562,9 @@ impl QAbstractItemModel for StarmapTreeModel {
         let Some(node_id) = self.row_for_index(index) else {
             return QVariant::default();
         };
+        if role == ROLE_HAS_CHILDREN {
+            return QVariant::from(self.row_has_children(node_id));
+        }
         let state = self.state.borrow();
         let Some(row) = state.rows.get(node_id) else {
             return QVariant::default();
@@ -523,7 +576,6 @@ impl QAbstractItemModel for StarmapTreeModel {
             ROLE_ROOT_STARMAP_ID => QVariant::from(QString::from(row.root_starmap_id.as_str())),
             ROLE_ROUTE_SEGMENTS => QVariant::from(QString::from(segments_json(&row.segments))),
             ROLE_ROUTE_KEY => QVariant::from(QString::from(row.route_key())),
-            ROLE_HAS_CHILDREN => QVariant::from(self.row_has_children(row)),
             ROLE_EXPANDED => QVariant::from(row.expanded),
             ROLE_ROW_KIND => QVariant::from(QString::from(row.kind.as_str())),
             ROLE_PARENT_STARMAP_ID => QVariant::from(QString::from(row.parent_starmap_id.as_str())),
@@ -602,12 +654,16 @@ impl StarmapTreeModel {
             }
         }
 
-        let Some(mut node_id) = self.node_at_route(&route_key(&root_id, &[])) else {
+        self.index_for_segments(&root_id, &segments)
+    }
+
+    fn index_for_segments(&self, root_id: &str, segments: &[RouteSegment]) -> QModelIndex {
+        let Some(mut node_id) = self.node_at_route(&route_key(root_id, &[])) else {
             return QModelIndex::default();
         };
         let mut walked: Vec<RouteSegment> = Vec::new();
         for segment in segments {
-            let parent_key = route_key(&root_id, &walked);
+            let parent_key = route_key(root_id, &walked);
             if !self.ensure_children_loaded_internal(&parent_key) {
                 return QModelIndex::default();
             }
@@ -624,17 +680,48 @@ impl StarmapTreeModel {
                             .rows
                             .get(**child_id)
                             .and_then(|child| child.segments.last())
-                            .is_some_and(|last| *last == segment)
+                            .is_some_and(|last| last == segment)
                     })
                     .copied()
             };
             let Some(next_id) = next else {
                 return QModelIndex::default();
             };
-            walked.push(segment);
+            walked.push(segment.clone());
             node_id = next_id;
         }
         self.index_for_node(node_id)
+    }
+
+    fn index_for_key(&self, key: QString) -> QModelIndex {
+        let key = key.to_string();
+        let Some((root_id, rest)) = key.split_once('|') else {
+            return QModelIndex::default();
+        };
+        if rest.is_empty() {
+            return self.index_for_segments(root_id, &[]);
+        }
+        let mut segments = Vec::new();
+        for part in rest.split('/') {
+            if let Some(instance_id) = part.strip_prefix("enterEmbed:") {
+                if instance_id.is_empty() {
+                    return QModelIndex::default();
+                }
+                segments.push(RouteSegment::Embed {
+                    instance_id: instance_id.to_string(),
+                });
+            } else if let Some(node_id) = part.strip_prefix("enterPortal:") {
+                if node_id.is_empty() {
+                    return QModelIndex::default();
+                }
+                segments.push(RouteSegment::Portal {
+                    node_id: node_id.to_string(),
+                });
+            } else {
+                return QModelIndex::default();
+            }
+        }
+        self.index_for_segments(root_id, &segments)
     }
 
     fn route_key_of(&self, index: QModelIndex) -> QString {

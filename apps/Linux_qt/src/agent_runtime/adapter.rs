@@ -1,0 +1,47 @@
+//! Agent 适配器统一契约与工厂。
+//!
+//! Issue #1016：扫描器只负责发现/选择，不承载协议状态。真正的会话进程、
+//! 请求序列、流式事件与取消由 [`AgentAdapter`] 的实现管理；管理器只面向
+//! 这个统一接口。
+
+use super::acp::AcpAdapter;
+use super::claude::ClaudeAdapter;
+use super::codex::CodexAdapter;
+use super::events::{AgentLaunchContext, EventSink};
+use super::gemini::GeminiAdapter;
+use super::opencode::OpenCodeAdapter;
+
+/// 一个已启动的 Agent 会话协议实现。
+pub trait AgentAdapter: Send {
+    /// 发送一条用户消息。实现必须尽快返回；长连接/进程读取在后台线程完成。
+    fn prompt(&mut self, message: &str) -> Result<(), String>;
+    /// 请求中断当前轮次。
+    fn cancel(&mut self) -> Result<(), String>;
+    /// 当前适配器持有的原生 session / thread ID，用于判断能否复用进程。
+    fn native_session_id(&self) -> Option<String> {
+        None
+    }
+    /// 回复 Agent 的权限请求。不支持交互式权限的协议返回明确错误。
+    fn respond_permission(&mut self, _request_id: &str, _option_id: &str) -> Result<(), String> {
+        Err("当前 Agent 未声明可用的权限回复接口".to_string())
+    }
+}
+
+/// 按 Agent 的真实协议创建适配器。注册表标签只作提示，内置 Agent 优先使用
+/// 各自官方机器接口；未知 ACP 条目才回退到通用 ACP。
+pub fn create_adapter(
+    ctx: &AgentLaunchContext,
+    emit: EventSink,
+) -> Result<Box<dyn AgentAdapter>, String> {
+    match ctx.agent_id.as_str() {
+        "codex" => Ok(Box::new(CodexAdapter::start(ctx, emit)?)),
+        "opencode" => Ok(Box::new(OpenCodeAdapter::start(ctx, emit)?)),
+        "claude" => Ok(Box::new(ClaudeAdapter::start(ctx, emit)?)),
+        "gemini" => Ok(Box::new(GeminiAdapter::start(ctx, emit)?)),
+        _ if ctx.protocol == "acp" => Ok(Box::new(AcpAdapter::start(ctx, emit)?)),
+        _ => Err(format!(
+            "Agent {} 未声明可用的机器会话协议（protocol={}）",
+            ctx.agent_name, ctx.protocol
+        )),
+    }
+}

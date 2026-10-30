@@ -65,11 +65,40 @@ Rectangle {
         }
     }
 
+    function expandedRouteKeys() {
+        var keys = []
+        if (!treeView || !treeModel)
+            return keys
+        for (var row = 0; row < treeView.rows; ++row) {
+            if (!treeView.isExpanded(row))
+                continue
+            var index = treeView.index(row, 0)
+            var key = treeModel.route_key_of(index)
+            if (key !== "")
+                keys.push(String(key))
+        }
+        return keys
+    }
+
     function reload() {
         if (!treeModel)
             return
+        // Issue #1016：reload 前保存全部展开的完整 routeKey，刷新后按仍存在
+        // 的路径恢复展开与当前路由选中；叶子/空分支不会被重新伪造展开。
+        var expandedKeys = expandedRouteKeys()
         treeModel.set_backend_ref(root.starmapBackendRef)
         treeModel.refresh()
+        for (var i = 0; i < expandedKeys.length; ++i) {
+            var key = expandedKeys[i]
+            var index = treeModel.index_for_key(key)
+            if (!index)
+                continue
+            var row = treeView.rowAtIndex(index)
+            if (row < 0)
+                continue
+            treeView.expand(row)
+            treeModel.set_expanded(key, true)
+        }
         if (root.currentRouteKey !== "")
             syncRoute(root.currentRootStarmapId, root.currentSegmentsJson, root.currentRouteKey)
     }
@@ -111,11 +140,17 @@ Rectangle {
 
     function ensureExpanded(row, model) {
         var key = model ? String(model.routeKey || "") : ""
-        if (key === "")
+        if (key === "" || row < 0)
             return
+        // Issue #1016：箭头是真正的展开/收起切换，不再只 expand。
+        if (treeView.isExpanded(row)) {
+            treeView.collapse(row)
+            treeModel.set_expanded(key, false)
+            return
+        }
         if (treeModel.ensure_children_loaded(key)) {
-            if (!treeView.isExpanded(row))
-                treeView.expand(row)
+            treeView.expand(row)
+            treeModel.set_expanded(key, true)
         }
     }
 

@@ -29,10 +29,16 @@ QtObject {
     readonly property int toolRailWidth: 56
     readonly property int splitHandleWidth: 6
     readonly property int minLeftWidth: 200
-    readonly property int minRightWidth: 200
+    readonly property int minRightContentWidth: 200
+    // 右栏总宽度 = 内容最小宽度 + 56vp 工具轨；SplitView 的最小值必须用总宽度，
+    // 否则 200 会被工具轨挤占成 144 内容。
+    readonly property int minRightWidth: minRightContentWidth + toolRailWidth
 
     // { pageKey: { left: number, right: number } }
     property var paneOverrides: ({})
+    // Issue #1016：本次窗口布局真实渲染宽度（不持久化）。0 表示该侧当前不可见。
+    // 与用户拖动偏好分开：窗口缩窄只改这里，不覆盖 paneOverrides。
+    property var renderedPaneWidths: ({})
     // { pageKey: { left: bool, right: bool, topBar: bool } }
     property var collapsedState: ({})
 
@@ -43,6 +49,7 @@ QtObject {
     function reload() {
         paneOverrides = ({})
         collapsedState = ({})
+        renderedPaneWidths = ({})
         if (!settingsBackendRef)
             return
         var raw = settingsBackendRef.desktop_layout_json()
@@ -77,7 +84,32 @@ QtObject {
 
     // 右栏内容宽度（不含工具轨）。
     function rightContentWidth(pageKey) {
-        return Math.max(minRightWidth, paneWidth(pageKey, "right") - toolRailWidth)
+        return Math.max(minRightContentWidth, paneWidth(pageKey, "right") - toolRailWidth)
+    }
+
+    /// 记录某页某侧本次布局的真实宽度；0 表示不可见。不写盘。
+    function setRenderedPaneWidth(pageKey, side, visibleWidth) {
+        if (!pageKey)
+            return
+        var width = Math.max(0, Math.round(visibleWidth))
+        var page = renderedPaneWidths[pageKey]
+        if (page && page[side] === width)
+            return
+        var next = Object.assign({}, renderedPaneWidths)
+        var nextPage = Object.assign({}, next[pageKey] || ({}))
+        nextPage[side] = width
+        next[pageKey] = nextPage
+        renderedPaneWidths = next
+    }
+
+    /// 顶栏读取本次真实渲染宽度；尚未上报时回退到期望宽度/折叠状态。
+    function renderedPaneWidth(pageKey, side) {
+        var page = renderedPaneWidths[pageKey]
+        if (page && typeof page[side] === "number")
+            return page[side]
+        if (isCollapsed(pageKey, side))
+            return 0
+        return paneWidth(pageKey, side)
     }
 
     function setDraggedWidth(pageKey, side, value) {

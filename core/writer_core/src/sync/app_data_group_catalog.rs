@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::sync::provider::model::{DeletePrecondition, RemoteVersion, WritePrecondition};
 use crate::sync::provider::SyncProvider;
-use crate::sync::types::{AppDataGroup, ManifestFileRecord, SyncManifest};
+use crate::sync::types::{
+    is_agent_conversation_path, AppDataGroup, ManifestFileRecord, SyncManifest,
+};
 
 /// Root catalog path, relative to the remote repository root.
 pub const APP_DATA_GROUP_CATALOG_REMOTE_PATH: &str = "app/app-meta/sync/app_groups.sync.json";
@@ -656,7 +658,7 @@ pub fn groups_from_manifest_records(records: &[ManifestFileRecord]) -> Vec<AppDa
     let mut groups = std::collections::BTreeMap::<String, AppDataGroup>::new();
     for record in records {
         let path = record.path.replace('\\', "/");
-        if path == "settings.sync.json" {
+        if path == "settings.sync.json" || is_agent_conversation_path(&path) {
             let group = AppDataGroup::Global;
             groups.insert(group.id(), group);
         } else if path == "starmaps/index.json" {

@@ -12,6 +12,12 @@ Rectangle {
     property bool aiEnabled: false
     property var annotationBackendRef: null
     property var searchBackendRef: null
+    // Issue #1016：星图右栏复用写作区同一套 AI 会话。
+    property var agentCliBackendRef: null
+    property var agentRuntimeBackendRef: null
+    property string workspaceProjectId: ""
+    property string workspaceProjectTitle: ""
+    property string aiContextLabel: ""
     property string projectId: ""
     property var targetRef: null
     property string targetLabel: ""
@@ -66,21 +72,16 @@ Rectangle {
             onLinkPickerRequested: function(sourceRef, link) { root.linkPickerRequested(sourceRef, link) }
         }
 
-        ColumnLayout {
+        AiToolPanel {
             visible: root.selectedTool === "ai"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.margins: Kirigami.Units.largeSpacing
-            spacing: Kirigami.Units.smallSpacing
-            Label { text: qsTr("AI 能力状态"); font.bold: true }
-            Label {
-                Layout.fillWidth: true
-                text: !root.aiAvailable ? qsTr("当前环境未提供 AI 能力")
-                    : root.aiEnabled ? qsTr("AI 能力已在设置中启用")
-                    : qsTr("AI 能力尚未启用")
-                wrapMode: Text.Wrap
-                color: Kirigami.Theme.disabledTextColor
-            }
+            dt: root.dt
+            agentCliBackendRef: root.agentCliBackendRef
+            runtimeBackendRef: root.agentRuntimeBackendRef
+            workspaceProjectId: root.workspaceProjectId
+            workspaceProjectTitle: root.workspaceProjectTitle
+            contextLabel: root.aiContextLabel
         }
     }
 }

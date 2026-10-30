@@ -52,6 +52,8 @@
 //! ```
 
 pub mod action_registry;
+/// Issue #1016：AI Agent 会话（持久化事实，不含进程协议）。
+pub mod agent;
 pub mod api;
 pub(crate) mod delete_guard;
 // Always export these for UniFFI

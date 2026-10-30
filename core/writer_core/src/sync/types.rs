@@ -225,7 +225,9 @@ impl AppDataGroup {
     pub fn owns_path(&self, path: &str) -> bool {
         let path = path.replace('\\', "/");
         match self {
-            Self::Global => path == "settings.sync.json",
+            Self::Global => {
+                path == "settings.sync.json" || is_agent_conversation_path(&path)
+            }
             Self::StarmapIndex => path == "starmaps/index.json",
             Self::Starmap(id) => {
                 path == format!("starmaps/{id}.meta.json")
@@ -277,6 +279,23 @@ fn validate_group_segment(value: &str) -> bool {
         && value != ".."
         && !value.contains('/')
         && !value.contains('\\')
+}
+
+/// 认 Agent 会话文件：`agent/conversations/<安全 id>.json`。
+/// 会话历史属于全局应用数据，跟随 Core 同步规则跨设备保存。
+pub(crate) fn is_agent_conversation_path(rel_path: &str) -> bool {
+    let path = rel_path.replace('\\', "/");
+    let Some(name) = path.strip_prefix("agent/conversations/") else {
+        return false;
+    };
+    let Some(id) = name.strip_suffix(".json") else {
+        return false;
+    };
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 /// 从相对 App 根路径解析统计文件所属的设备分区：

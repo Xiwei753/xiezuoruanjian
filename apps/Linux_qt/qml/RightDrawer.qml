@@ -36,6 +36,10 @@ Rectangle {
     property bool aiEnabled: false
     // Issue #1014：AI 面板与设置页共享同一个 Agent CLI 后端。
     property var agentCliBackendRef: null
+    // Issue #1016：写作与星图共用同一个 Agent 会话运行时。
+    property var agentRuntimeBackendRef: null
+    property string workspaceProjectTitle: ""
+    property string aiContextLabel: ""
     property var pendingLinkSource: null
     property string pendingLinkId: ""
     property var pendingLinkTarget: null
@@ -153,13 +157,17 @@ Rectangle {
                 Layout.fillHeight: true
                 clip: true
 
-                // Issue #1014：AI 面板先承载 Agent CLI 动态清单与选择，
-                // 真正的会话 UI 仍由 Issue #506 接入。
+                // Issue #1016：AI 面板承载真实会话；Agent CLI 清单收为
+                // 可展开的管理区，与设置页共享同一份选择。
                 AiToolPanel {
                     visible: root.selectedTool === "ai"
                     anchors.fill: parent
                     dt: root.dt
                     agentCliBackendRef: root.agentCliBackendRef
+                    runtimeBackendRef: root.agentRuntimeBackendRef
+                    workspaceProjectId: root.workspaceProjectId
+                    workspaceProjectTitle: root.workspaceProjectTitle
+                    contextLabel: root.aiContextLabel
                 }
 
                 // Issue #835 评论 6020221770: 星图工具区分两态，都在右栏内渲染，

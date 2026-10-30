@@ -10,6 +10,7 @@ use crate::facade::WriterCore;
 pub type ApiResult<T> = Result<T, WriterError>;
 
 mod ai_usage_ops;
+mod agent_ops;
 mod annotation_ops;
 mod contribution_ops;
 mod correction_ops;

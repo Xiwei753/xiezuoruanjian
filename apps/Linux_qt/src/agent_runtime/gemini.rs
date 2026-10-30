@@ -1,0 +1,302 @@
+//! Gemini CLI 适配器。
+//!
+//! 使用 `gemini -p ... --output-format stream-json` 的结构化输出，解析
+//! init / message / tool_use / tool_result / result，记录原生 session ID，
+//! 下一轮用官方 `--resume` 恢复。MCP 按 Gemini CLI 的正式机制写入项目
+//! `.gemini/settings.json`（合并已有配置，不覆盖用户其它设置）。
+
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+
+use serde_json::{json, Value};
+
+use super::adapter::AgentAdapter;
+use super::events::{
+    json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent,
+};
+
+pub struct GeminiAdapter {
+    ctx: AgentLaunchContext,
+    emit: EventSink,
+    session_id: Arc<Mutex<Option<String>>>,
+    current_child: Arc<Mutex<Option<Child>>>,
+    session_started: Arc<Mutex<bool>>,
+}
+
+fn merge_mcp_settings(ctx: &AgentLaunchContext) -> Result<(), String> {
+    if ctx.mcp_servers.is_empty() {
+        return Ok(());
+    }
+    let directory = ctx.working_dir.join(".gemini");
+    let path = directory.join("settings.json");
+    let mut settings = match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str::<Value>(&content)
+            .map_err(|error| format!("已有 .gemini/settings.json 无法解析：{error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => return Err(format!("读取 .gemini/settings.json 失败：{error}")),
+    };
+    if !settings.is_object() {
+        return Err("已有 .gemini/settings.json 不是对象".to_string());
+    }
+    let servers = settings
+        .as_object_mut()
+        .expect("checked object")
+        .entry("mcpServers")
+        .or_insert_with(|| json!({}));
+    if !servers.is_object() {
+        return Err(".gemini/settings.json 的 mcpServers 不是对象".to_string());
+    }
+    for server in &ctx.mcp_servers {
+        let env: serde_json::Map<String, Value> = server
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+            .collect();
+        servers[&server.name] = json!({
+            "command": server.command,
+            "args": server.args,
+            "env": env,
+        });
+    }
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("创建 .gemini 目录失败：{error}"))?;
+    let content = serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?;
+    let temporary = directory.join("settings.json.sujian-tmp");
+    std::fs::write(&temporary, content)
+        .and_then(|()| std::fs::rename(&temporary, &path))
+        .map_err(|error| format!("写入 .gemini/settings.json 失败：{error}"))
+}
+
+impl GeminiAdapter {
+    pub fn start(ctx: &AgentLaunchContext, emit: EventSink) -> Result<Self, String> {
+        merge_mcp_settings(ctx)?;
+        let session_id = Arc::new(Mutex::new(ctx.resume_native_session_id.clone()));
+        if let Some(id) = ctx.resume_native_session_id.as_ref() {
+            (emit)(RuntimeEvent {
+                turn_id: String::new(),
+                event: AgentEvent::SessionStarted {
+                    native_session_id: id.clone(),
+                    model: ctx.model.clone(),
+                },
+            });
+        }
+        Ok(Self {
+            ctx: ctx.clone(),
+            emit,
+            session_id,
+            current_child: Arc::new(Mutex::new(None)),
+            session_started: Arc::new(Mutex::new(false)),
+        })
+    }
+}
+
+impl AgentAdapter for GeminiAdapter {
+    fn prompt(&mut self, message: &str) -> Result<(), String> {
+        let mut command = Command::new(&self.ctx.launch_path);
+        command
+            .arg("-p")
+            .arg(message)
+            .arg("--output-format")
+            .arg("stream-json")
+            .current_dir(&self.ctx.working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(model) = self.ctx.model.as_ref() {
+            command.arg("--model").arg(model);
+        }
+        if let Some(session_id) = self.session_id.lock().ok().and_then(|guard| guard.clone()) {
+            command.arg("--resume").arg(session_id);
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("无法启动 Gemini CLI：{error}"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Gemini CLI 没有 stdout".to_string())?;
+        let stderr = child.stderr.take();
+        if let Ok(mut guard) = self.current_child.lock() {
+            *guard = Some(child);
+        }
+        if let Some(stderr) = stderr {
+            std::thread::Builder::new()
+                .name("agent-gemini-stderr".to_string())
+                .spawn(move || {
+                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                        log::debug!(target: "agent", "gemini stderr: {line}");
+                    }
+                })
+                .ok();
+        }
+
+        let emit = self.emit.clone();
+        let session_id = self.session_id.clone();
+        let current_child = self.current_child.clone();
+        let session_started = self.session_started.clone();
+        let input_chars = u32::try_from(message.chars().count()).unwrap_or(u32::MAX);
+        std::thread::Builder::new()
+            .name("agent-gemini-turn".to_string())
+            .spawn(move || {
+                let reader = BufReader::new(stdout);
+                let mut output_chars: u32 = 0;
+                let mut finished = false;
+                for line in reader.lines().map_while(Result::ok) {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+                        log::debug!(target: "agent", "gemini stdout: {trimmed}");
+                        continue;
+                    };
+                    let kind = value
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    match kind {
+                        "init" => {
+                            if let Some(id) = json_text(&value, &["session_id"]) {
+                                if let Ok(mut guard) = session_id.lock() {
+                                    *guard = Some(id.clone());
+                                }
+                                let already =
+                                    session_started.lock().map(|guard| *guard).unwrap_or(true);
+                                if !already {
+                                    if let Ok(mut guard) = session_started.lock() {
+                                        *guard = true;
+                                    }
+                                    (emit)(RuntimeEvent {
+                                        turn_id: String::new(),
+                                        event: AgentEvent::SessionStarted {
+                                            native_session_id: id,
+                                            model: json_text(&value, &["model"]),
+                                        },
+                                    });
+                                }
+                            }
+                        }
+                        "message" => {
+                            if value.get("role").and_then(Value::as_str) != Some("assistant") {
+                                continue;
+                            }
+                            let Some(text) = json_text(&value, &["content"]) else {
+                                continue;
+                            };
+                            let delta = value.get("delta").and_then(Value::as_bool).unwrap_or(true);
+                            if text.is_empty() || !delta {
+                                continue;
+                            }
+                            output_chars = output_chars.saturating_add(
+                                u32::try_from(text.chars().count()).unwrap_or(u32::MAX),
+                            );
+                            (emit)(RuntimeEvent {
+                                turn_id: String::new(),
+                                event: AgentEvent::TextDelta { text },
+                            });
+                        }
+                        "tool_use" => {
+                            let tool_call_id = json_text(&value, &["tool_id"])
+                                .or_else(|| json_text(&value, &["id"]))
+                                .unwrap_or_else(|| "tool".to_string());
+                            let name = json_text(&value, &["tool_name"])
+                                .unwrap_or_else(|| "工具".to_string());
+                            (emit)(RuntimeEvent {
+                                turn_id: String::new(),
+                                event: AgentEvent::ToolStarted {
+                                    tool_call_id,
+                                    name,
+                                    input_json: json_value_text(value.get("parameters")),
+                                },
+                            });
+                        }
+                        "tool_result" => {
+                            let tool_call_id = json_text(&value, &["tool_id"])
+                                .or_else(|| json_text(&value, &["id"]))
+                                .unwrap_or_else(|| "tool".to_string());
+                            let name = json_text(&value, &["tool_name"])
+                                .unwrap_or_else(|| "工具".to_string());
+                            let status = json_text(&value, &["status"]).unwrap_or_default();
+                            (emit)(RuntimeEvent {
+                                turn_id: String::new(),
+                                event: AgentEvent::ToolFinished {
+                                    tool_call_id,
+                                    name,
+                                    output_json: json_value_text(
+                                        value.get("output").or_else(|| value.get("error")),
+                                    ),
+                                    success: status != "error" && status != "failed",
+                                },
+                            });
+                        }
+                        "result" => {
+                            finished = true;
+                            if let Some(id) = json_text(&value, &["session_id"]) {
+                                if let Ok(mut guard) = session_id.lock() {
+                                    *guard = Some(id);
+                                }
+                            }
+                            (emit)(RuntimeEvent {
+                                turn_id: String::new(),
+                                event: AgentEvent::Usage {
+                                    input_chars,
+                                    output_chars,
+                                },
+                            });
+                            let failed = value.get("status").and_then(Value::as_str)
+                                == Some("error")
+                                || value.get("error").is_some_and(|error| !error.is_null());
+                            if failed {
+                                let message = json_text(&value, &["error", "message"])
+                                    .or_else(|| json_text(&value, &["error"]))
+                                    .unwrap_or_else(|| "Gemini CLI 请求失败".to_string());
+                                (emit)(RuntimeEvent {
+                                    turn_id: String::new(),
+                                    event: AgentEvent::TurnFailed { message },
+                                });
+                            } else {
+                                (emit)(RuntimeEvent {
+                                    turn_id: String::new(),
+                                    event: AgentEvent::TurnCompleted,
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let status = current_child
+                    .lock()
+                    .ok()
+                    .and_then(|mut guard| guard.take())
+                    .and_then(|mut child| child.wait().ok());
+                if !finished {
+                    let message = match status {
+                        Some(status) if !status.success() => {
+                            format!("Gemini CLI 退出码异常：{status}")
+                        }
+                        _ => "Gemini CLI 未返回结果".to_string(),
+                    };
+                    (emit)(RuntimeEvent {
+                        turn_id: String::new(),
+                        event: AgentEvent::TurnFailed { message },
+                    });
+                }
+            })
+            .map_err(|error| format!("无法启动 Gemini CLI 读取线程：{error}"))?;
+        Ok(())
+    }
+
+    fn native_session_id(&self) -> Option<String> {
+        self.session_id.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    fn cancel(&mut self) -> Result<(), String> {
+        if let Ok(mut guard) = self.current_child.lock() {
+            if let Some(child) = guard.as_mut() {
+                child.kill().map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
+    }
+}

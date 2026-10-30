@@ -18,7 +18,9 @@
 //! 同步状态存储在 `app-meta/sync/state.local.json`，使用 atomic write（写临时文件后 rename）
 //! 防止写入中断导致文件损坏。旧格式 `sync_state.json` 在首次加载时自动迁移并删除。
 
-use crate::sync::types::{AppDataGroup, SyncScope, SyncState, SyncTarget};
+use crate::sync::types::{
+    is_agent_conversation_path, AppDataGroup, SyncScope, SyncState, SyncTarget,
+};
 use std::path::Path;
 
 /// Normalize a relative path to use forward slashes.
@@ -326,6 +328,11 @@ impl crate::sync::SyncService {
     fn is_app_whitelisted_path(rel_path: &str) -> bool {
         // 可同步设置
         if rel_path == "settings.sync.json" {
+            return true;
+        }
+
+        // Agent 会话历史（Core 持久化，Global 数据组）
+        if is_agent_conversation_path(rel_path) {
             return true;
         }
 

@@ -77,6 +77,8 @@
 /// Issue #707 评论 5723616999: main.rs 的 cpp! 块和调用移到本模块，
 /// 让 build.rs 只 build lib.rs 一次就能覆盖所有 cpp! 宏。
 pub mod agent_cli;
+/// Issue #1016：统一 Agent 会话运行时（ACP/Codex/OpenCode/Claude/Gemini）。
+pub mod agent_runtime;
 pub mod app_main_cpp;
 pub mod backend;
 pub mod editor;

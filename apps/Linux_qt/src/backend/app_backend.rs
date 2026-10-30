@@ -574,6 +574,23 @@ impl AppBackend {
         })
     }
 
+    /// Issue #1016：给 Agent 运行时的真实工作区身份。只返回已打开工作区的
+    /// 路径和当前选中作品；没有作品时返回 `None`，不回退到默认数据目录。
+    pub(crate) fn agent_project_context(&self) -> Option<(String, String, String)> {
+        if !self.current_has_data_root
+            || self.current_data_root.is_empty()
+            || self.current_projects_root.is_empty()
+        {
+            return None;
+        }
+        // 星图可以不绑定作品；此时项目 ID 为空，但工作区根路径仍然真实存在。
+        Some((
+            self.current_data_root.clone(),
+            self.current_projects_root.clone(),
+            self.selected_project_id.clone().unwrap_or_default(),
+        ))
+    }
+
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
         if self.current_has_data_root && !self.current_data_root.is_empty() {
             // 用打开 workspace 时保存的 layout 快照构造 API，不再重新 bootstrap。

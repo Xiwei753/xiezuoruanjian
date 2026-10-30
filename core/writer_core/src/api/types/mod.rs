@@ -34,6 +34,11 @@ mod volume_tests;
 
 pub use action::*;
 pub use annotations::*;
+// Issue #1016：Agent 会话跨端类型（serde camelCase JSON）。
+pub use crate::agent::{
+    AgentConversation, AgentConversationStatus, AgentMessagePart, AgentToolEvent, AgentTurn,
+    AgentTurnStatus,
+};
 pub use correction::*;
 pub use diagnostics::*;
 pub use editor::*;

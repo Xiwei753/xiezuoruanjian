@@ -599,6 +599,7 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/RightDrawer.qml");
     println!("cargo:rerun-if-changed=qml/AgentCliManager.qml");
     println!("cargo:rerun-if-changed=qml/AiToolPanel.qml");
+    println!("cargo:rerun-if-changed=qml/AiConversationView.qml");
     println!("cargo:rerun-if-changed=qml/DesktopLayoutState.qml");
     println!("cargo:rerun-if-changed=qml/StarMapNavigationTree.qml");
     println!("cargo:rerun-if-changed=qml/CorrectionPanel.qml");
