@@ -172,6 +172,15 @@ pub struct AgentConversation {
     /// 用户选择的真实可执行文件路径；恢复会话时必须继续使用同一安装。
     #[serde(default)]
     pub launch_path: String,
+    /// 创建会话时使用的适配器协议（`acp` / `server` / `cli`）。
+    #[serde(default)]
+    pub agent_protocol: String,
+    /// 创建会话时目录声明的启动参数，恢复时必须按同一组参数启动。
+    #[serde(default)]
+    pub agent_launch_args: Vec<String>,
+    /// 适配器映射版本；协议解释变化时用于提示旧会话重新选择。
+    #[serde(default)]
+    pub agent_adapter_version: u32,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -196,6 +205,9 @@ impl AgentConversation {
         agent_id: impl Into<String>,
         agent_name: impl Into<String>,
         launch_path: impl Into<String>,
+        agent_protocol: impl Into<String>,
+        agent_launch_args: Vec<String>,
+        agent_adapter_version: u32,
         title: impl Into<String>,
         model: Option<String>,
         now_ms: i64,
@@ -207,6 +219,9 @@ impl AgentConversation {
             agent_id: agent_id.into(),
             agent_name: agent_name.into(),
             launch_path: launch_path.into(),
+            agent_protocol: agent_protocol.into(),
+            agent_launch_args,
+            agent_adapter_version,
             title: title.into(),
             model,
             status: AgentConversationStatus::Idle,

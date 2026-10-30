@@ -3,16 +3,22 @@
 //! 负责一个会话的原生进程/线程、当前轮次身份、取消和权限回复。发现与选择
 //! 仍由 `agent_cli` 承担；切换 Agent 时显式关闭旧适配器，再按新选择重建。
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::adapter::{create_adapter, AgentAdapter};
 use super::events::{AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent};
+use super::mcp_binding::{prepare_mcp_brokers, McpBroker};
 
 pub struct AgentSessionManager {
     adapter: Option<Box<dyn AgentAdapter>>,
     current_turn_id: Arc<Mutex<String>>,
     context: Option<AgentLaunchContext>,
+    mcp_broker: Option<McpBroker>,
     started: bool,
+    /// 运行实例代次。每次重建原生进程都会递增，旧进程迟到的事件必须失效。
+    generation: u64,
+    next_generation: u64,
 }
 
 impl Default for AgentSessionManager {
@@ -27,7 +33,10 @@ impl AgentSessionManager {
             adapter: None,
             current_turn_id: Arc::new(Mutex::new(String::new())),
             context: None,
+            mcp_broker: None,
             started: false,
+            generation: 0,
+            next_generation: 0,
         }
     }
 
@@ -42,7 +51,7 @@ impl AgentSessionManager {
     /// 启动（或恢复）会话。相同 Agent + 原生 session 已运行时不重复拉起。
     pub fn ensure_session(
         &mut self,
-        ctx: AgentLaunchContext,
+        mut ctx: AgentLaunchContext,
         sink: EventSink,
     ) -> Result<(), String> {
         if self.started {
@@ -69,28 +78,70 @@ impl AgentSessionManager {
             }
         }
         self.shutdown();
+        self.next_generation = self.next_generation.saturating_add(1);
+        let generation = self.next_generation;
+        // broker 必须在沙箱外启动；随后适配器拿到的只是 stdio bridge 配置。
+        let (mcp_servers, mcp_broker) = match prepare_mcp_brokers(&ctx) {
+            Ok(value) => value,
+            Err(error) => {
+                if let Some(server) = ctx.mcp_servers.first() {
+                    (sink)(RuntimeEvent::session(AgentEvent::McpConnectionChanged {
+                        server: server.name.clone(),
+                        status: "failed".to_string(),
+                        error: Some(error.clone()),
+                        tools: Vec::new(),
+                    }));
+                }
+                return Err(error);
+            }
+        };
+        ctx.mcp_servers = mcp_servers;
+        let conversation_id = ctx.conversation_id.clone();
         let current_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let turn_id = current_turn_id.clone();
+        // 原生轮次 ID（Codex turnId、OpenCode assistant message id 等）只做
+        // 协议内部映射；第一次看到它时绑定到当时的 Core Turn，之后迟到的
+        // 事件仍然回到旧 Turn，而不会被误算进新回答。
+        let turn_bindings: Arc<Mutex<HashMap<String, String>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let bindings = turn_bindings.clone();
         let wrapped: EventSink = Arc::new(move |mut event: RuntimeEvent| {
-            // 会话级事件在 `prompt` 之前产生，不能借用上一轮 turn id，
-            // 否则新进程的 SessionStarted / 模型列表会被后端当成旧轮次丢弃。
             let session_event = matches!(
                 event.event,
-                AgentEvent::SessionStarted { .. } | AgentEvent::ModelsAvailable { .. }
+                AgentEvent::SessionStarted { .. }
+                    | AgentEvent::ModelsAvailable { .. }
+                    | AgentEvent::McpConnectionChanged { .. }
             );
-            if event.turn_id.is_empty() && !session_event {
-                event.turn_id = turn_id
+            let current = turn_id
+                .lock()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+            let core_turn_id = if session_event {
+                String::new()
+            } else if event.native_turn_id.is_empty() {
+                current
+            } else {
+                bindings
                     .lock()
-                    .map(|guard| guard.clone())
-                    .unwrap_or_default();
-            }
+                    .map(|mut map| {
+                        map.entry(event.native_turn_id.clone())
+                            .or_insert(current)
+                            .clone()
+                    })
+                    .unwrap_or_default()
+            };
+            event.conversation_id = conversation_id.clone();
+            event.generation = generation;
+            event.core_turn_id = core_turn_id;
             (sink)(event);
         });
         let adapter = create_adapter(&ctx, wrapped)?;
         self.current_turn_id = current_turn_id;
         self.adapter = Some(adapter);
         self.context = Some(ctx);
+        self.mcp_broker = mcp_broker;
         self.started = true;
+        self.generation = generation;
         Ok(())
     }
 
@@ -133,18 +184,12 @@ impl AgentSessionManager {
             .respond_permission(request_id, option_id)
     }
 
-    /// 把管理器内部产生的错误转成统一失败事件，调用方不必区分来源。
-    pub fn fail_current_turn(sink: &EventSink, turn_id: &str, message: String) {
-        (sink)(RuntimeEvent {
-            turn_id: turn_id.to_string(),
-            event: AgentEvent::TurnFailed { message },
-        });
-    }
-
     pub fn shutdown(&mut self) {
         self.adapter = None;
+        self.mcp_broker = None;
         self.context = None;
         self.started = false;
+        self.generation = 0;
         if let Ok(mut guard) = self.current_turn_id.lock() {
             guard.clear();
         }

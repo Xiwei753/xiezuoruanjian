@@ -21,9 +21,11 @@ pub mod mcp_binding;
 pub mod opencode;
 pub mod rpc;
 pub mod session;
+mod workspace_access;
 
 pub use events::{
     AgentEvent, AgentLaunchContext, EventSink, McpServerLaunch, PermissionOption, RuntimeEvent,
+    ADAPTER_VERSION,
 };
 pub use mcp_binding::{bind_current_project, McpBinding};
 pub use session::AgentSessionManager;

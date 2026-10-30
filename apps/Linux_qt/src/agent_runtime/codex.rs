@@ -16,6 +16,7 @@ use super::events::{
     RuntimeEvent,
 };
 use super::rpc::RpcClient;
+use super::workspace_access::WorkspaceAccess;
 
 pub struct CodexAdapter {
     client: Arc<RpcClient>,
@@ -52,7 +53,10 @@ impl CodexAdapter {
                     "item/agentMessage/delta" => {
                         if let Some(text) = json_text(&params, &["delta"]) {
                             (handler_emit)(RuntimeEvent {
-                                turn_id,
+                                conversation_id: String::new(),
+                                generation: 0,
+                                core_turn_id: String::new(),
+                                native_turn_id: turn_id,
                                 event: AgentEvent::TextDelta { text },
                             });
                         }
@@ -60,7 +64,10 @@ impl CodexAdapter {
                     "item/reasoning/textDelta" | "item/reasoning/summaryTextDelta" => {
                         if let Some(text) = json_text(&params, &["delta"]) {
                             (handler_emit)(RuntimeEvent {
-                                turn_id,
+                                conversation_id: String::new(),
+                                generation: 0,
+                                core_turn_id: String::new(),
+                                native_turn_id: turn_id,
                                 event: AgentEvent::ReasoningDelta { text },
                             });
                         }
@@ -84,7 +91,10 @@ impl CodexAdapter {
                             other => other.to_string(),
                         };
                         (handler_emit)(RuntimeEvent {
-                            turn_id,
+                            conversation_id: String::new(),
+                            generation: 0,
+                            core_turn_id: String::new(),
+                            native_turn_id: turn_id,
                             event: AgentEvent::ToolStarted {
                                 tool_call_id,
                                 name,
@@ -120,7 +130,10 @@ impl CodexAdapter {
                         };
                         let status = json_text(item, &["status"]).unwrap_or_default();
                         (handler_emit)(RuntimeEvent {
-                            turn_id,
+                            conversation_id: String::new(),
+                            generation: 0,
+                            core_turn_id: String::new(),
+                            native_turn_id: turn_id,
                             event: AgentEvent::ToolFinished {
                                 tool_call_id,
                                 name,
@@ -138,7 +151,10 @@ impl CodexAdapter {
                     }
                     "turn/completed" => {
                         (handler_emit)(RuntimeEvent {
-                            turn_id,
+                            conversation_id: String::new(),
+                            generation: 0,
+                            core_turn_id: String::new(),
+                            native_turn_id: turn_id,
                             event: AgentEvent::TurnCompleted,
                         });
                     }
@@ -147,7 +163,10 @@ impl CodexAdapter {
                             .or_else(|| json_text(&params, &["message"]))
                             .unwrap_or_else(|| "Codex 请求失败".to_string());
                         (handler_emit)(RuntimeEvent {
-                            turn_id,
+                            conversation_id: String::new(),
+                            generation: 0,
+                            core_turn_id: String::new(),
+                            native_turn_id: turn_id,
                             event: AgentEvent::TurnFailed { message },
                         });
                     }
@@ -164,7 +183,10 @@ impl CodexAdapter {
                             .or_else(|| json_text(&params, &["item", "command"]))
                             .unwrap_or_else(|| "Agent 请求执行操作".to_string());
                         (handler_emit)(RuntimeEvent {
-                            turn_id,
+                            conversation_id: String::new(),
+                            generation: 0,
+                            core_turn_id: String::new(),
+                            native_turn_id: turn_id,
                             event: AgentEvent::PermissionRequested {
                                 request_id,
                                 description,
@@ -205,9 +227,10 @@ impl CodexAdapter {
                 args.push(arg.clone());
             }
         }
+        let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args);
         let client = Arc::new(RpcClient::spawn(
-            &ctx.launch_path,
-            &args,
+            "Codex app-server",
+            command,
             &ctx.working_dir,
             &[],
             handler,
@@ -293,7 +316,10 @@ impl CodexAdapter {
             *guard = Some(native_thread_id.clone());
         }
         (emit)(RuntimeEvent {
-            turn_id: String::new(),
+            conversation_id: String::new(),
+            generation: 0,
+            core_turn_id: String::new(),
+            native_turn_id: String::new(),
             event: AgentEvent::SessionStarted {
                 native_session_id: native_thread_id,
                 model: model.clone(),
@@ -350,7 +376,10 @@ impl AgentAdapter for CodexAdapter {
                         }
                     }
                     Err(error) => (emit)(RuntimeEvent {
-                        turn_id: String::new(),
+                        conversation_id: String::new(),
+                        generation: 0,
+                        core_turn_id: String::new(),
+                        native_turn_id: String::new(),
                         event: AgentEvent::TurnFailed { message: error },
                     }),
                 }

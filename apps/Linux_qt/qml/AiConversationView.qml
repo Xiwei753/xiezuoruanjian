@@ -97,6 +97,23 @@ Item {
         runtimeBackendRef.set_project(workspaceProjectId, workspaceProjectTitle)
     }
 
+    function syncAgentCatalog() {
+        if (runtimeBackendRef && agentCliBackendRef)
+            runtimeBackendRef.set_agent_catalog(agentCliBackendRef.inventory_json)
+    }
+
+    // 打开历史会话后，把设置页/右栏共用的选择同步到该会话真实使用的安装。
+    function syncCliSelectionFromConversation() {
+        if (!runtimeBackendRef || !agentCliBackendRef || !conversation)
+            return
+        var id = String(conversation.agentId || "")
+        var path = String(conversation.launchPath || "")
+        if (id === "" || path === "")
+            return
+        if (agentId() !== id || agentLaunchPath() !== path)
+            agentCliBackendRef.select_agent(id, path)
+    }
+
     function buildMessages(value) {
         if (!value || !value.turns)
             return []
@@ -148,6 +165,7 @@ Item {
 
     onRuntimeBackendRefChanged: refresh()
     onAgentCliBackendRefChanged: {
+        syncAgentCatalog()
         syncAgentSelection()
         refresh()
     }
@@ -156,6 +174,7 @@ Item {
         refresh()
     }
     Component.onCompleted: {
+        syncAgentCatalog()
         syncAgentSelection()
         syncProjectContext()
         refresh()
@@ -164,12 +183,19 @@ Item {
     Connections {
         target: root.agentCliBackendRef
         function onSelected_agent_changed() { root.syncAgentSelection() }
-        function onInventory_changed() { root.syncAgentSelection() }
+        function onInventory_changed() {
+            root.syncAgentCatalog()
+            root.syncAgentSelection()
+        }
     }
 
     Connections {
         target: root.runtimeBackendRef
-        function onConversation_changed() { root.refresh() }
+        function onConversation_changed() {
+            root.refresh()
+            root.syncCliSelectionFromConversation()
+        }
+        function onAgent_changed() { root.syncCliSelectionFromConversation() }
         function onConversations_changed() { root.refresh() }
         function onRunning_changed() { root.refresh() }
         function onPermission_changed() { root.refresh() }

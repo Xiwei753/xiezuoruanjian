@@ -5,7 +5,7 @@
 //! ID，下一轮用 `--resume` 恢复。每轮是一个独立进程，取消时终止该进程。
 
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -14,6 +14,7 @@ use super::adapter::AgentAdapter;
 use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent,
 };
+use super::workspace_access::WorkspaceAccess;
 
 pub struct ClaudeAdapter {
     ctx: AgentLaunchContext,
@@ -28,7 +29,10 @@ impl ClaudeAdapter {
         let session_id = Arc::new(Mutex::new(ctx.resume_native_session_id.clone()));
         if let Some(id) = ctx.resume_native_session_id.as_ref() {
             (emit)(RuntimeEvent {
-                turn_id: String::new(),
+                conversation_id: String::new(),
+                generation: 0,
+                core_turn_id: String::new(),
+                native_turn_id: String::new(),
                 event: AgentEvent::SessionStarted {
                     native_session_id: id.clone(),
                     model: ctx.model.clone(),
@@ -74,7 +78,8 @@ impl ClaudeAdapter {
 
 impl AgentAdapter for ClaudeAdapter {
     fn prompt(&mut self, message: &str) -> Result<(), String> {
-        let mut command = Command::new(&self.ctx.launch_path);
+        let mut command = WorkspaceAccess::for_context(&self.ctx)?
+            .command(&self.ctx.launch_path, &[]);
         command
             .arg("-p")
             .arg(message)
@@ -154,7 +159,10 @@ impl AgentAdapter for ClaudeAdapter {
                                             *guard = true;
                                         }
                                         (emit)(RuntimeEvent {
-                                            turn_id: String::new(),
+                                            conversation_id: String::new(),
+                                            generation: 0,
+                                            core_turn_id: String::new(),
+                                            native_turn_id: String::new(),
                                             event: AgentEvent::SessionStarted {
                                                 native_session_id: id,
                                                 model: json_text(&value, &["model"]),
@@ -182,7 +190,10 @@ impl AgentAdapter for ClaudeAdapter {
                                                         .unwrap_or(u32::MAX),
                                                 );
                                                 (emit)(RuntimeEvent {
-                                                    turn_id: String::new(),
+                                                    conversation_id: String::new(),
+                                                    generation: 0,
+                                                    core_turn_id: String::new(),
+                                                    native_turn_id: String::new(),
                                                     event: AgentEvent::TextDelta { text },
                                                 });
                                             }
@@ -191,7 +202,10 @@ impl AgentAdapter for ClaudeAdapter {
                                     Some("thinking") => {
                                         if let Some(text) = json_text(block, &["thinking"]) {
                                             (emit)(RuntimeEvent {
-                                                turn_id: String::new(),
+                                                conversation_id: String::new(),
+                                                generation: 0,
+                                                core_turn_id: String::new(),
+                                                native_turn_id: String::new(),
                                                 event: AgentEvent::ReasoningDelta { text },
                                             });
                                         }
@@ -202,7 +216,10 @@ impl AgentAdapter for ClaudeAdapter {
                                         let name = json_text(block, &["name"])
                                             .unwrap_or_else(|| "工具".to_string());
                                         (emit)(RuntimeEvent {
-                                            turn_id: String::new(),
+                                            conversation_id: String::new(),
+                                            generation: 0,
+                                            core_turn_id: String::new(),
+                                            native_turn_id: String::new(),
                                             event: AgentEvent::ToolStarted {
                                                 tool_call_id,
                                                 name,
@@ -230,7 +247,10 @@ impl AgentAdapter for ClaudeAdapter {
                                 let tool_call_id = json_text(block, &["tool_use_id"])
                                     .unwrap_or_else(|| "tool".to_string());
                                 (emit)(RuntimeEvent {
-                                    turn_id: String::new(),
+                                    conversation_id: String::new(),
+                                    generation: 0,
+                                    core_turn_id: String::new(),
+                                    native_turn_id: String::new(),
                                     event: AgentEvent::ToolFinished {
                                         tool_call_id,
                                         name: "工具".to_string(),
@@ -251,7 +271,10 @@ impl AgentAdapter for ClaudeAdapter {
                                 }
                             }
                             (emit)(RuntimeEvent {
-                                turn_id: String::new(),
+                                conversation_id: String::new(),
+                                generation: 0,
+                                core_turn_id: String::new(),
+                                native_turn_id: String::new(),
                                 event: AgentEvent::Usage {
                                     input_chars,
                                     output_chars,
@@ -266,12 +289,18 @@ impl AgentAdapter for ClaudeAdapter {
                                 let message = json_text(&value, &["result"])
                                     .unwrap_or_else(|| "Claude Code 请求失败".to_string());
                                 (emit)(RuntimeEvent {
-                                    turn_id: String::new(),
+                                    conversation_id: String::new(),
+                                    generation: 0,
+                                    core_turn_id: String::new(),
+                                    native_turn_id: String::new(),
                                     event: AgentEvent::TurnFailed { message },
                                 });
                             } else {
                                 (emit)(RuntimeEvent {
-                                    turn_id: String::new(),
+                                    conversation_id: String::new(),
+                                    generation: 0,
+                                    core_turn_id: String::new(),
+                                    native_turn_id: String::new(),
                                     event: AgentEvent::TurnCompleted,
                                 });
                             }
@@ -292,7 +321,10 @@ impl AgentAdapter for ClaudeAdapter {
                         _ => "Claude Code 未返回结果".to_string(),
                     };
                     (emit)(RuntimeEvent {
-                        turn_id: String::new(),
+                        conversation_id: String::new(),
+                        generation: 0,
+                        core_turn_id: String::new(),
+                        native_turn_id: String::new(),
                         event: AgentEvent::TurnFailed { message },
                     });
                 }

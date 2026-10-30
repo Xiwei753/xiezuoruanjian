@@ -27,15 +27,13 @@ pub struct RpcClient {
 
 impl RpcClient {
     pub fn spawn(
-        program: &str,
-        args: &[String],
+        label: &str,
+        mut command: Command,
         working_dir: &std::path::Path,
         env: &[(String, String)],
         notification_handler: NotificationHandler,
     ) -> Result<Self, String> {
-        let mut command = Command::new(program);
         command
-            .args(args)
             .current_dir(working_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -45,15 +43,15 @@ impl RpcClient {
         }
         let mut child = command
             .spawn()
-            .map_err(|error| format!("无法启动 {program}：{error}"))?;
+            .map_err(|error| format!("无法启动 {label}：{error}"))?;
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| format!("{program} 没有 stdin"))?;
+            .ok_or_else(|| format!("{label} 没有 stdin"))?;
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| format!("{program} 没有 stdout"))?;
+            .ok_or_else(|| format!("{label} 没有 stdout"))?;
         let stderr = child.stderr.take();
 
         let pending: Arc<Mutex<HashMap<i64, PendingRequest>>> =

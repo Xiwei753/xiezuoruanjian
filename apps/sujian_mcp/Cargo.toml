@@ -7,11 +7,11 @@ description = "Local MCP server exposing Sujian writing data to external AI clie
 
 [dependencies]
 writer_core = { path = "../../core/writer_core" }
-rmcp = { version = "3.8", features = ["server", "transport-io", "macros", "schemars"] }
+rmcp = { version = "3.8", features = ["server", "transport-io", "transport-async-rw", "macros", "schemars"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
 uuid = { version = "1", features = ["v4"] }
 
 [lints]

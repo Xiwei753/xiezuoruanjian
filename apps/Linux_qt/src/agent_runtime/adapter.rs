@@ -7,7 +7,7 @@
 use super::acp::AcpAdapter;
 use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
-use super::events::{AgentLaunchContext, EventSink};
+use super::events::{AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent};
 use super::gemini::GeminiAdapter;
 use super::opencode::OpenCodeAdapter;
 
@@ -33,15 +33,29 @@ pub fn create_adapter(
     ctx: &AgentLaunchContext,
     emit: EventSink,
 ) -> Result<Box<dyn AgentAdapter>, String> {
-    match ctx.agent_id.as_str() {
-        "codex" => Ok(Box::new(CodexAdapter::start(ctx, emit)?)),
-        "opencode" => Ok(Box::new(OpenCodeAdapter::start(ctx, emit)?)),
-        "claude" => Ok(Box::new(ClaudeAdapter::start(ctx, emit)?)),
-        "gemini" => Ok(Box::new(GeminiAdapter::start(ctx, emit)?)),
-        _ if ctx.protocol == "acp" => Ok(Box::new(AcpAdapter::start(ctx, emit)?)),
-        _ => Err(format!(
-            "Agent {} 未声明可用的机器会话协议（protocol={}）",
-            ctx.agent_name, ctx.protocol
-        )),
+    // 先上报“已注入配置”。适配器启动过程中若从官方状态接口拿到真实
+    // connected/failed，会在这条基线之后覆盖它；没有状态接口时不能假装
+    // 连接成功。
+    for server in &ctx.mcp_servers {
+        (emit)(RuntimeEvent::session(AgentEvent::McpConnectionChanged {
+            server: server.name.clone(),
+            status: "configured".to_string(),
+            error: None,
+            tools: Vec::new(),
+        }));
     }
+    let adapter: Box<dyn AgentAdapter> = match ctx.agent_id.as_str() {
+        "codex" => Box::new(CodexAdapter::start(ctx, emit.clone())?),
+        "opencode" => Box::new(OpenCodeAdapter::start(ctx, emit.clone())?),
+        "claude" => Box::new(ClaudeAdapter::start(ctx, emit.clone())?),
+        "gemini" => Box::new(GeminiAdapter::start(ctx, emit.clone())?),
+        _ if ctx.protocol == "acp" => Box::new(AcpAdapter::start(ctx, emit.clone())?),
+        _ => {
+            return Err(format!(
+                "Agent {} 未声明可用的机器会话协议（protocol={}）",
+                ctx.agent_name, ctx.protocol
+            ))
+        }
+    };
+    Ok(adapter)
 }

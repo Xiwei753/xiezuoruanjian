@@ -45,6 +45,10 @@ pub struct AgentLaunchContext {
     /// 目录声明的附加参数；启动时按数组直接传给 Agent，不经过 shell。
     pub launch_args: Vec<String>,
     pub working_dir: PathBuf,
+    /// 真实 Sujian 应用数据根；沙箱中只读，MCP broker 在其外写入。
+    pub app_data_root: PathBuf,
+    /// 真实作品根；沙箱中只读，所有写入必须走 Core/MCP。
+    pub projects_root: PathBuf,
     /// Core 会话 id。切换会话时必须重建原生进程，不能复用上一段对话。
     pub conversation_id: String,
     pub project_id: String,
@@ -99,20 +103,56 @@ pub enum AgentEvent {
     ModelsAvailable {
         models: Vec<String>,
     },
+    /// MCP 的真实连接/发现状态，只能由适配器根据官方接口上报。
+    /// `status` 使用 `connected` / `failed` / `configured` / `stopped`。
+    McpConnectionChanged {
+        server: String,
+        status: String,
+        error: Option<String>,
+        tools: Vec<String>,
+    },
     TurnCompleted,
     TurnFailed {
         message: String,
     },
 }
 
-/// 带上当前轮次身份的运行时事件。轮次由 Core 创建，适配层不自行生成。
+/// 带上当前轮次身份的运行时事件。
+///
+/// `conversation_id` / `generation` / `core_turn_id` 由会话管理器填写；
+/// `native_turn_id` 只用于协议内部识别（例如 Codex 的 turn id），绝不能与
+/// Core 创建的轮次 UUID 混用。适配层只负责填入原生 ID。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeEvent {
-    pub turn_id: String,
+    pub conversation_id: String,
+    pub generation: u64,
+    pub core_turn_id: String,
+    pub native_turn_id: String,
     pub event: AgentEvent,
 }
 
+impl RuntimeEvent {
+    /// 适配器事件：只携带原生轮次 ID，其余身份由 Manager 补齐。
+    pub fn native(native_turn_id: impl Into<String>, event: AgentEvent) -> Self {
+        Self {
+            conversation_id: String::new(),
+            generation: 0,
+            core_turn_id: String::new(),
+            native_turn_id: native_turn_id.into(),
+            event,
+        }
+    }
+
+    /// 会话级事件（启动、模型列表）没有 Core turn。
+    pub fn session(event: AgentEvent) -> Self {
+        Self::native(String::new(), event)
+    }
+}
+
 pub type EventSink = Arc<dyn Fn(RuntimeEvent) + Send + Sync>;
+
+/// 当前适配器映射版本。协议解释发生变化时递增，用于识别无法原样恢复的旧会话。
+pub const ADAPTER_VERSION: u32 = 1;
 
 /// 把一个 JSON-RPC/SSE 字段安全地当作字符串读取。
 pub(crate) fn json_text(value: &serde_json::Value, path: &[&str]) -> Option<String> {

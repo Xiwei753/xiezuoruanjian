@@ -16,6 +16,7 @@ use super::events::{
     RuntimeEvent,
 };
 use super::rpc::RpcClient;
+use super::workspace_access::WorkspaceAccess;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -52,7 +53,10 @@ impl AcpAdapter {
                                     .and_then(|content| json_text(content, &["text"]))
                                 {
                                     (handler_emit)(RuntimeEvent {
-                                        turn_id: String::new(),
+                                        conversation_id: String::new(),
+                                        generation: 0,
+                                        core_turn_id: String::new(),
+                                        native_turn_id: String::new(),
                                         event: AgentEvent::TextDelta { text },
                                     });
                                 }
@@ -63,7 +67,10 @@ impl AcpAdapter {
                                     .and_then(|content| json_text(content, &["text"]))
                                 {
                                     (handler_emit)(RuntimeEvent {
-                                        turn_id: String::new(),
+                                        conversation_id: String::new(),
+                                        generation: 0,
+                                        core_turn_id: String::new(),
+                                        native_turn_id: String::new(),
                                         event: AgentEvent::ReasoningDelta { text },
                                     });
                                 }
@@ -75,7 +82,10 @@ impl AcpAdapter {
                                     .or_else(|| json_text(update, &["kind"]))
                                     .unwrap_or_else(|| "tool".to_string());
                                 (handler_emit)(RuntimeEvent {
-                                    turn_id: String::new(),
+                                    conversation_id: String::new(),
+                                    generation: 0,
+                                    core_turn_id: String::new(),
+                                    native_turn_id: String::new(),
                                     event: AgentEvent::ToolStarted {
                                         tool_call_id,
                                         name,
@@ -91,7 +101,10 @@ impl AcpAdapter {
                                 let status = json_text(update, &["status"]).unwrap_or_default();
                                 if matches!(status.as_str(), "completed" | "failed") {
                                     (handler_emit)(RuntimeEvent {
-                                        turn_id: String::new(),
+                                        conversation_id: String::new(),
+                                        generation: 0,
+                                        core_turn_id: String::new(),
+                                        native_turn_id: String::new(),
                                         event: AgentEvent::ToolFinished {
                                             tool_call_id,
                                             name,
@@ -135,7 +148,10 @@ impl AcpAdapter {
                             guard.insert(permission_key.clone(), request_id);
                         }
                         (handler_emit)(RuntimeEvent {
-                            turn_id: String::new(),
+                            conversation_id: String::new(),
+                            generation: 0,
+                            core_turn_id: String::new(),
+                            native_turn_id: String::new(),
                             event: AgentEvent::PermissionRequested {
                                 request_id: permission_key,
                                 description: format!("Agent 请求执行：{tool}"),
@@ -160,9 +176,10 @@ impl AcpAdapter {
         if ctx.agent_id == "gemini" && !args.iter().any(|arg| arg == "--acp") {
             args.push("--acp".to_string());
         }
+        let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args);
         let client = Arc::new(RpcClient::spawn(
-            &ctx.launch_path,
-            &args,
+            "ACP Agent",
+            command,
             &ctx.working_dir,
             &[],
             handler,
@@ -252,14 +269,20 @@ impl AcpAdapter {
             .unwrap_or_default();
         if !models.is_empty() {
             (emit)(RuntimeEvent {
-                turn_id: String::new(),
+                conversation_id: String::new(),
+                generation: 0,
+                core_turn_id: String::new(),
+                native_turn_id: String::new(),
                 event: AgentEvent::ModelsAvailable {
                     models: models.clone(),
                 },
             });
         }
         (emit)(RuntimeEvent {
-            turn_id: String::new(),
+            conversation_id: String::new(),
+            generation: 0,
+            core_turn_id: String::new(),
+            native_turn_id: String::new(),
             event: AgentEvent::SessionStarted {
                 native_session_id,
                 model,
@@ -302,7 +325,10 @@ impl AgentAdapter for AcpAdapter {
                     Err(error) => AgentEvent::TurnFailed { message: error },
                 };
                 (emit)(RuntimeEvent {
-                    turn_id: String::new(),
+                    conversation_id: String::new(),
+                    generation: 0,
+                    core_turn_id: String::new(),
+                    native_turn_id: String::new(),
                     event,
                 });
             })

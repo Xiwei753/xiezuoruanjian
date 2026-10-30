@@ -10,9 +10,10 @@ use std::sync::{Arc, Mutex};
 
 use qmetaobject::prelude::*;
 
+use crate::agent_cli::{AgentInstallation, AgentInventory};
 use crate::agent_runtime::{
     bind_current_project, AgentEvent, AgentLaunchContext, AgentSessionManager, EventSink,
-    RuntimeEvent,
+    RuntimeEvent, ADAPTER_VERSION,
 };
 use crate::backend::AppRef;
 use writer_core::agent::{AgentConversation, AgentConversationStatus, AgentToolEvent};
@@ -52,6 +53,7 @@ pub struct AgentRuntimeBackend {
     mcp_status_changed: qt_signal!(),
 
     set_project: qt_method!(fn(&mut self, project_id: QString, project_title: QString)),
+    set_agent_catalog: qt_method!(fn(&mut self, inventory_json: QString)),
     set_agent: qt_method!(
         fn(
             &mut self,
@@ -88,6 +90,8 @@ pub struct AgentRuntimeBackend {
     /// 每次切换项目/Agent/会话或发送新轮次都递增；异步 shutdown 线程只有
     /// 在仍持有旧 epoch 时才允许关闭运行时，避免误杀随后新建的会话。
     runtime_epoch: Arc<AtomicU64>,
+    /// 当前原生运行实例代次；只有最新代次的事件可以改动会话。
+    runtime_generation: u64,
 
     project_id: String,
     project_title: String,
@@ -96,6 +100,8 @@ pub struct AgentRuntimeBackend {
     launch_path: String,
     protocol: String,
     launch_args: Vec<String>,
+    /// AgentCliBackend 最近一次扫描结果；恢复历史会话时按真实安装重新解析协议。
+    agent_catalog: Vec<AgentInstallation>,
     model: Option<String>,
     available_models: Vec<String>,
     conversation: Option<AgentConversation>,
@@ -134,6 +140,7 @@ impl AgentRuntimeBackend {
             permission_changed: Default::default(),
             mcp_status_changed: Default::default(),
             set_project: Default::default(),
+            set_agent_catalog: Default::default(),
             set_agent: Default::default(),
             switch_agent: Default::default(),
             new_conversation: Default::default(),
@@ -149,6 +156,7 @@ impl AgentRuntimeBackend {
             app_ref,
             runtime: Arc::new(Mutex::new(AgentSessionManager::new())),
             runtime_epoch: Arc::new(AtomicU64::new(0)),
+            runtime_generation: 0,
             project_id: String::new(),
             project_title: String::new(),
             agent_id: String::new(),
@@ -156,6 +164,7 @@ impl AgentRuntimeBackend {
             launch_path: String::new(),
             protocol: String::new(),
             launch_args: Vec::new(),
+            agent_catalog: Vec::new(),
             model: None,
             available_models: Vec::new(),
             conversation: None,
@@ -359,6 +368,8 @@ impl AgentRuntimeBackend {
             launch_path: self.launch_path.clone(),
             launch_args: self.launch_args.clone(),
             working_dir,
+            app_data_root: PathBuf::from(app_data_root),
+            projects_root: PathBuf::from(projects_root),
             conversation_id,
             project_id: conversation_project_id,
             project_title: self.project_title.clone(),
@@ -384,6 +395,9 @@ impl AgentRuntimeBackend {
                 &self.agent_id,
                 &self.agent_name,
                 &self.launch_path,
+                &self.protocol,
+                &self.launch_args,
+                ADAPTER_VERSION,
                 "新会话",
                 self.model.clone(),
                 now_ms(),
@@ -431,6 +445,36 @@ impl AgentRuntimeBackend {
         if let Err(error) = api.record_ai_usage_event(event) {
             log::warn!("[agent] 记录 AI 使用事件失败: {error}");
         }
+    }
+
+    fn set_agent_catalog(&mut self, inventory_json: QString) {
+        let text = inventory_json.to_string();
+        if let Ok(inventory) = serde_json::from_str::<AgentInventory>(&text) {
+            self.agent_catalog = inventory.installed;
+        }
+    }
+
+    /// 历史会话只能按“同一 Agent ID + 同一真实启动路径”恢复协议描述。
+    /// 找不到时返回 `None`，由调用方明确提示用户重新选择，而不是沿用上一个
+    /// Agent 的参数。
+    fn resolve_descriptor(
+        &self,
+        agent_id: &str,
+        launch_path: &str,
+    ) -> Option<(String, Vec<String>, String)> {
+        let installation = self.agent_catalog.iter().find(|installation| {
+            installation.descriptor.id == agent_id
+                && installation.candidates.iter().any(|candidate| {
+                    candidate.executable.launch_path == launch_path
+                        || candidate.executable.canonical_path.as_deref() == Some(launch_path)
+                })
+        })?;
+        let descriptor = &installation.descriptor;
+        Some((
+            descriptor.protocol.clone(),
+            descriptor.launch.args.clone(),
+            descriptor.name.clone(),
+        ))
     }
 
     fn set_project(&mut self, project_id: QString, project_title: QString) {
@@ -581,6 +625,26 @@ impl AgentRuntimeBackend {
                 self.agent_id = conversation.agent_id.clone();
                 self.agent_name = conversation.agent_name.clone();
                 self.launch_path = conversation.launch_path.clone();
+                // 先使用会话持久化的启动描述，避免混入上一个 Agent 的参数；
+                // 再从当前安装清单按真实路径重新解析并覆盖。
+                self.protocol = conversation.agent_protocol.clone();
+                self.launch_args = conversation.agent_launch_args.clone();
+                if let Some((protocol, launch_args, agent_name)) =
+                    self.resolve_descriptor(&conversation.agent_id, &conversation.launch_path)
+                {
+                    self.protocol = protocol.clone();
+                    self.launch_args = launch_args.clone();
+                    self.agent_name = agent_name.clone();
+                    conversation.agent_protocol = protocol;
+                    conversation.agent_launch_args = launch_args;
+                    conversation.agent_name = agent_name;
+                    conversation.agent_adapter_version = ADAPTER_VERSION;
+                    let _ = api.save_agent_conversation(&conversation);
+                } else {
+                    self.set_error(
+                        "该会话使用的 Agent 安装已不存在，请重新选择 Agent 后再发送消息",
+                    );
+                }
                 self.model = conversation.model.clone();
                 self.available_models.clear();
                 self.conversation = Some(conversation);
@@ -657,6 +721,9 @@ impl AgentRuntimeBackend {
         conversation.agent_id = self.agent_id.clone();
         conversation.agent_name = self.agent_name.clone();
         conversation.launch_path = self.launch_path.clone();
+        conversation.agent_protocol = self.protocol.clone();
+        conversation.agent_launch_args = self.launch_args.clone();
+        conversation.agent_adapter_version = ADAPTER_VERSION;
         conversation.model = self.model.clone();
         conversation.begin_turn(text.clone(), now_ms());
         let turn_id_value = conversation
@@ -692,6 +759,11 @@ impl AgentRuntimeBackend {
         let sink: EventSink = Arc::new(move |event: RuntimeEvent| callback(event));
         let runtime = self.runtime.clone();
         let message = text;
+        let failure_conversation_id = self
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.id.clone())
+            .unwrap_or_default();
         // 新轮次已经获准启动，之前排队的 shutdown 必须失效，否则会关掉
         // 本线程即将创建的新原生会话。
         self.runtime_epoch.fetch_add(1, Ordering::SeqCst);
@@ -711,7 +783,10 @@ impl AgentRuntimeBackend {
                 }
                 if let Some(error) = failure {
                     (sink)(RuntimeEvent {
-                        turn_id: turn_id_value,
+                        conversation_id: failure_conversation_id,
+                        generation: 0,
+                        core_turn_id: turn_id_value,
+                        native_turn_id: String::new(),
                         event: AgentEvent::TurnFailed { message: error },
                     });
                 }
@@ -803,7 +878,38 @@ impl AgentRuntimeBackend {
     }
 
     fn apply_event(&mut self, event: RuntimeEvent) {
-        if event.turn_id.is_empty()
+        let Some(mut conversation) = self.conversation.take() else {
+            return;
+        };
+        // 事件必须属于当前 Core 会话。切换会话后旧进程的迟到事件直接丢弃。
+        if !event.conversation_id.is_empty() && event.conversation_id != conversation.id {
+            self.conversation = Some(conversation);
+            return;
+        }
+        let session_event = matches!(
+            event.event,
+            AgentEvent::SessionStarted { .. }
+                    | AgentEvent::ModelsAvailable { .. }
+                    | AgentEvent::McpConnectionChanged { .. }
+        );
+        if event.generation != 0 {
+            if self.runtime_generation != 0 && event.generation < self.runtime_generation {
+                // 代次只会随进程重建单调递增；旧实例的迟到事件即使先于新
+                // SessionStarted 到达，也不能再操作当前会话或覆盖 MCP 状态。
+                self.conversation = Some(conversation);
+                return;
+            }
+            if session_event {
+                self.runtime_generation = event.generation;
+            } else if self.runtime_generation != 0
+                && event.generation != self.runtime_generation
+            {
+                self.conversation = Some(conversation);
+                return;
+            }
+        }
+        let core_turn_id = event.core_turn_id.clone();
+        if core_turn_id.is_empty()
             && matches!(
                 event.event,
                 AgentEvent::TurnCompleted | AgentEvent::TurnFailed { .. }
@@ -811,17 +917,21 @@ impl AgentRuntimeBackend {
         {
             // 没有活动轮次时（例如 OpenCode 恢复会话后的空闲通知）不能把
             // 界面从“未开始”改成“回答完成”。
+            self.conversation = Some(conversation);
             return;
         }
-        if !event.turn_id.is_empty()
-            && ((!self.active_turn_id.is_empty() && event.turn_id != self.active_turn_id)
-                || event.turn_id == self.ignored_turn_id)
-        {
-            return;
+        if !core_turn_id.is_empty() {
+            let belongs_to_active = core_turn_id == self.active_turn_id
+                && core_turn_id != self.ignored_turn_id;
+            let still_running = conversation
+                .turn_mut(&core_turn_id)
+                .is_some_and(|turn| turn.status == writer_core::agent::AgentTurnStatus::Running);
+            if !belongs_to_active || !still_running {
+                // 完成/取消后的迟到增量、以及旧轮次事件不能修改当前会话。
+                self.conversation = Some(conversation);
+                return;
+            }
         }
-        let Some(mut conversation) = self.conversation.take() else {
-            return;
-        };
         let mut persist = false;
         let mut finished: Option<(bool, String)> = None;
         let mut permission: Option<(String, String, Vec<serde_json::Value>)> = None;
@@ -837,22 +947,46 @@ impl AgentRuntimeBackend {
                 }
                 conversation.updated_at_ms = now_ms();
                 persist = true;
-                // 会话真正启动后才把 MCP 状态从“已绑定”推进到“已注入”，
-                // 不以“找到 sujian-mcp 可执行文件”冒充连接成功。
+                // 原生会话建立只代表 Agent 已连接；MCP 是否真正连上必须等
+                // 适配器通过官方接口上报 McpConnectionChanged。
+            }
+            AgentEvent::McpConnectionChanged {
+                server,
+                status,
+                error,
+                tools,
+            } => {
                 let mut mcp = serde_json::from_str::<serde_json::Value>(
                     &self.mcp_status_json_value,
                 )
                 .unwrap_or_else(|_| serde_json::json!({}));
-                if mcp.get("available").and_then(serde_json::Value::as_bool) == Some(true) {
-                    mcp["connected"] = serde_json::Value::Bool(true);
-                    mcp["status"] =
-                        serde_json::Value::String("MCP 已随 Agent 会话启动".to_string());
-                    self.mcp_status_json_value = mcp.to_string();
-                    self.mcp_status_changed();
-                }
+                let connected = status == "connected";
+                let display = if connected {
+                    if tools.is_empty() {
+                        format!("{} 已连接", server)
+                    } else {
+                        format!("{} 已连接（{} 个工具）", server, tools.len())
+                    }
+                } else if let Some(error) = error.as_ref() {
+                    format!("{} 连接失败：{}", server, error)
+                } else if status == "configured" {
+                    format!("{} 已配置，等待连接", server)
+                } else {
+                    format!("{}：{}", server, status)
+                };
+                mcp["connected"] = serde_json::Value::Bool(connected);
+                mcp["status"] = serde_json::Value::String(display);
+                mcp["server"] = serde_json::Value::String(server);
+                mcp["serverState"] = serde_json::Value::String(status);
+                mcp["tools"] = serde_json::json!(tools);
+                mcp["error"] = error
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null);
+                self.mcp_status_json_value = mcp.to_string();
+                self.mcp_status_changed();
             }
             AgentEvent::TextDelta { text } => {
-                if let Some(turn) = conversation.turn_mut(&event.turn_id) {
+                if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     turn.append_text(&text);
                 }
                 self.stream_events_since_persist =
@@ -863,7 +997,7 @@ impl AgentRuntimeBackend {
                 }
             }
             AgentEvent::ReasoningDelta { text } => {
-                if let Some(turn) = conversation.turn_mut(&event.turn_id) {
+                if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     turn.append_reasoning(&text);
                 }
                 self.stream_events_since_persist =
@@ -878,7 +1012,7 @@ impl AgentRuntimeBackend {
                 name,
                 input_json,
             } => {
-                if let Some(turn) = conversation.turn_mut(&event.turn_id) {
+                if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     if let Some(existing) = turn
                         .tool_events
                         .iter_mut()
@@ -912,7 +1046,7 @@ impl AgentRuntimeBackend {
                 output_json,
                 success,
             } => {
-                if let Some(turn) = conversation.turn_mut(&event.turn_id) {
+                if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     if let Some(existing) = turn
                         .tool_events
                         .iter_mut()
@@ -968,7 +1102,7 @@ impl AgentRuntimeBackend {
                 // 计数单位不同导致统计口径漂移。
             }
             AgentEvent::TurnCompleted => {
-                if let Some(turn) = conversation.turn_mut(&event.turn_id) {
+                if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     turn.complete(now_ms());
                 }
                 conversation.status = AgentConversationStatus::Idle;
@@ -977,7 +1111,7 @@ impl AgentRuntimeBackend {
                 finished = Some((false, String::new()));
             }
             AgentEvent::TurnFailed { message } => {
-                if let Some(turn) = conversation.turn_mut(&event.turn_id) {
+                if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     turn.fail(now_ms(), message.clone());
                 }
                 conversation.status = AgentConversationStatus::Failed;
@@ -1003,17 +1137,17 @@ impl AgentRuntimeBackend {
                 let chars = conversation
                     .turns
                     .iter()
-                    .find(|turn| turn.id == event.turn_id)
+                    .find(|turn| turn.id == core_turn_id)
                     .map(writer_core::agent::AgentTurn::assistant_char_count)
                     .unwrap_or(0);
                 let usage = AiUsageEvent::new(
-                    stable_event_id(&conversation.id, &event.turn_id, AiUsageDirection::Output),
+                    stable_event_id(&conversation.id, &core_turn_id, AiUsageDirection::Output),
                     &conversation.project_id,
                     now_ms(),
                     AiUsageDirection::Output,
                     chars,
                 )
-                .with_conversation_turn(&conversation.id, &event.turn_id);
+                .with_conversation_turn(&conversation.id, &core_turn_id);
                 if let Err(error) = api.record_ai_usage_event(usage) {
                     log::warn!("[agent] 记录 AI 输出事件失败: {error}");
                 }

@@ -2,11 +2,12 @@
 //!
 //! 使用 `gemini -p ... --output-format stream-json` 的结构化输出，解析
 //! init / message / tool_use / tool_result / result，记录原生 session ID，
-//! 下一轮用官方 `--resume` 恢复。MCP 按 Gemini CLI 的正式机制写入项目
-//! `.gemini/settings.json`（合并已有配置，不覆盖用户其它设置）。
+//! 下一轮用官方 `--resume` 恢复。MCP 通过 `GEMINI_CLI_SYSTEM_SETTINGS_PATH`
+//! 指向本次会话私有的临时系统设置文件，不修改作品目录或用户的持久配置。
 
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -15,6 +16,7 @@ use super::adapter::AgentAdapter;
 use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent,
 };
+use super::workspace_access::WorkspaceAccess;
 
 pub struct GeminiAdapter {
     ctx: AgentLaunchContext,
@@ -22,22 +24,34 @@ pub struct GeminiAdapter {
     session_id: Arc<Mutex<Option<String>>>,
     current_child: Arc<Mutex<Option<Child>>>,
     session_started: Arc<Mutex<bool>>,
+    system_settings_dir: Option<PathBuf>,
 }
 
-fn merge_mcp_settings(ctx: &AgentLaunchContext) -> Result<(), String> {
+/// 生成仅本次 Gemini 进程可见的系统设置文件。
+///
+/// Gemini 的系统设置优先级最高，会叠加到用户/项目设置之上。这里先读取宿主
+/// 原有的系统设置（通常由管理员维护），只追加 Sujian 的 MCP 条目，避免覆盖
+/// 企业策略，同时不向作品目录写入任何文件。
+fn prepare_system_settings(ctx: &AgentLaunchContext) -> Result<Option<PathBuf>, String> {
     if ctx.mcp_servers.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    let directory = ctx.working_dir.join(".gemini");
-    let path = directory.join("settings.json");
-    let mut settings = match std::fs::read_to_string(&path) {
+    let source = std::env::var_os("GEMINI_CLI_SYSTEM_SETTINGS_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/etc/gemini-cli/settings.json"));
+    let mut settings = match std::fs::read_to_string(&source) {
         Ok(content) => serde_json::from_str::<Value>(&content)
-            .map_err(|error| format!("已有 .gemini/settings.json 无法解析：{error}"))?,
+            .map_err(|error| format!("系统 Gemini 设置无法解析：{error}"))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
-        Err(error) => return Err(format!("读取 .gemini/settings.json 失败：{error}")),
+        Err(error) => {
+            return Err(format!(
+                "读取系统 Gemini 设置 {} 失败：{error}",
+                source.display()
+            ))
+        }
     };
     if !settings.is_object() {
-        return Err("已有 .gemini/settings.json 不是对象".to_string());
+        return Err("系统 Gemini 设置不是 JSON 对象".to_string());
     }
     let servers = settings
         .as_object_mut()
@@ -45,7 +59,7 @@ fn merge_mcp_settings(ctx: &AgentLaunchContext) -> Result<(), String> {
         .entry("mcpServers")
         .or_insert_with(|| json!({}));
     if !servers.is_object() {
-        return Err(".gemini/settings.json 的 mcpServers 不是对象".to_string());
+        return Err("系统 Gemini 设置的 mcpServers 不是对象".to_string());
     }
     for server in &ctx.mcp_servers {
         let env: serde_json::Map<String, Value> = server
@@ -59,22 +73,41 @@ fn merge_mcp_settings(ctx: &AgentLaunchContext) -> Result<(), String> {
             "env": env,
         });
     }
+
+    let directory = std::env::temp_dir().join(format!("sujian-gemini-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory)
-        .map_err(|error| format!("创建 .gemini 目录失败：{error}"))?;
+        .map_err(|error| format!("创建 Gemini 临时配置目录失败：{error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700));
+    }
+    let path = directory.join("settings.json");
     let content = serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?;
-    let temporary = directory.join("settings.json.sujian-tmp");
-    std::fs::write(&temporary, content)
-        .and_then(|()| std::fs::rename(&temporary, &path))
-        .map_err(|error| format!("写入 .gemini/settings.json 失败：{error}"))
+    std::fs::write(&path, content)
+        .map_err(|error| format!("写入 Gemini 临时系统设置失败：{error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(Some(directory))
+}
+
+fn remove_private_settings(directory: &Path) {
+    let _ = std::fs::remove_dir_all(directory);
 }
 
 impl GeminiAdapter {
     pub fn start(ctx: &AgentLaunchContext, emit: EventSink) -> Result<Self, String> {
-        merge_mcp_settings(ctx)?;
+        let system_settings_dir = prepare_system_settings(ctx)?;
         let session_id = Arc::new(Mutex::new(ctx.resume_native_session_id.clone()));
         if let Some(id) = ctx.resume_native_session_id.as_ref() {
             (emit)(RuntimeEvent {
-                turn_id: String::new(),
+                conversation_id: String::new(),
+                generation: 0,
+                core_turn_id: String::new(),
+                native_turn_id: String::new(),
                 event: AgentEvent::SessionStarted {
                     native_session_id: id.clone(),
                     model: ctx.model.clone(),
@@ -87,13 +120,15 @@ impl GeminiAdapter {
             session_id,
             current_child: Arc::new(Mutex::new(None)),
             session_started: Arc::new(Mutex::new(false)),
+            system_settings_dir,
         })
     }
 }
 
 impl AgentAdapter for GeminiAdapter {
     fn prompt(&mut self, message: &str) -> Result<(), String> {
-        let mut command = Command::new(&self.ctx.launch_path);
+        let mut command = WorkspaceAccess::for_context(&self.ctx)?
+            .command(&self.ctx.launch_path, &[]);
         command
             .arg("-p")
             .arg(message)
@@ -103,6 +138,12 @@ impl AgentAdapter for GeminiAdapter {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(directory) = self.system_settings_dir.as_ref() {
+            command.env(
+                "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+                directory.join("settings.json"),
+            );
+        }
         if let Some(model) = self.ctx.model.as_ref() {
             command.arg("--model").arg(model);
         }
@@ -168,7 +209,10 @@ impl AgentAdapter for GeminiAdapter {
                                         *guard = true;
                                     }
                                     (emit)(RuntimeEvent {
-                                        turn_id: String::new(),
+                                        conversation_id: String::new(),
+                                        generation: 0,
+                                        core_turn_id: String::new(),
+                                        native_turn_id: String::new(),
                                         event: AgentEvent::SessionStarted {
                                             native_session_id: id,
                                             model: json_text(&value, &["model"]),
@@ -192,7 +236,10 @@ impl AgentAdapter for GeminiAdapter {
                                 u32::try_from(text.chars().count()).unwrap_or(u32::MAX),
                             );
                             (emit)(RuntimeEvent {
-                                turn_id: String::new(),
+                                conversation_id: String::new(),
+                                generation: 0,
+                                core_turn_id: String::new(),
+                                native_turn_id: String::new(),
                                 event: AgentEvent::TextDelta { text },
                             });
                         }
@@ -203,7 +250,10 @@ impl AgentAdapter for GeminiAdapter {
                             let name = json_text(&value, &["tool_name"])
                                 .unwrap_or_else(|| "工具".to_string());
                             (emit)(RuntimeEvent {
-                                turn_id: String::new(),
+                                conversation_id: String::new(),
+                                generation: 0,
+                                core_turn_id: String::new(),
+                                native_turn_id: String::new(),
                                 event: AgentEvent::ToolStarted {
                                     tool_call_id,
                                     name,
@@ -219,7 +269,10 @@ impl AgentAdapter for GeminiAdapter {
                                 .unwrap_or_else(|| "工具".to_string());
                             let status = json_text(&value, &["status"]).unwrap_or_default();
                             (emit)(RuntimeEvent {
-                                turn_id: String::new(),
+                                conversation_id: String::new(),
+                                generation: 0,
+                                core_turn_id: String::new(),
+                                native_turn_id: String::new(),
                                 event: AgentEvent::ToolFinished {
                                     tool_call_id,
                                     name,
@@ -238,7 +291,10 @@ impl AgentAdapter for GeminiAdapter {
                                 }
                             }
                             (emit)(RuntimeEvent {
-                                turn_id: String::new(),
+                                conversation_id: String::new(),
+                                generation: 0,
+                                core_turn_id: String::new(),
+                                native_turn_id: String::new(),
                                 event: AgentEvent::Usage {
                                     input_chars,
                                     output_chars,
@@ -252,12 +308,18 @@ impl AgentAdapter for GeminiAdapter {
                                     .or_else(|| json_text(&value, &["error"]))
                                     .unwrap_or_else(|| "Gemini CLI 请求失败".to_string());
                                 (emit)(RuntimeEvent {
-                                    turn_id: String::new(),
+                                    conversation_id: String::new(),
+                                    generation: 0,
+                                    core_turn_id: String::new(),
+                                    native_turn_id: String::new(),
                                     event: AgentEvent::TurnFailed { message },
                                 });
                             } else {
                                 (emit)(RuntimeEvent {
-                                    turn_id: String::new(),
+                                    conversation_id: String::new(),
+                                    generation: 0,
+                                    core_turn_id: String::new(),
+                                    native_turn_id: String::new(),
                                     event: AgentEvent::TurnCompleted,
                                 });
                             }
@@ -278,7 +340,10 @@ impl AgentAdapter for GeminiAdapter {
                         _ => "Gemini CLI 未返回结果".to_string(),
                     };
                     (emit)(RuntimeEvent {
-                        turn_id: String::new(),
+                        conversation_id: String::new(),
+                        generation: 0,
+                        core_turn_id: String::new(),
+                        native_turn_id: String::new(),
                         event: AgentEvent::TurnFailed { message },
                     });
                 }
@@ -298,5 +363,19 @@ impl AgentAdapter for GeminiAdapter {
             }
         }
         Ok(())
+    }
+}
+
+impl Drop for GeminiAdapter {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.current_child.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        if let Some(directory) = self.system_settings_dir.take() {
+            remove_private_settings(&directory);
+        }
     }
 }
