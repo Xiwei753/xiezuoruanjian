@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::adapter::AgentAdapter;
+use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, PermissionOption,
     RuntimeEvent,
@@ -363,7 +363,7 @@ impl AgentAdapter for AcpAdapter {
         self.session_id.lock().ok().and_then(|guard| guard.clone())
     }
 
-    fn cancel(&mut self, core_turn_id: &str) -> Result<(), String> {
+    fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {
         let active = self
             .active_core_turn_id
             .lock()
@@ -375,7 +375,7 @@ impl AgentAdapter for AcpAdapter {
             if let Ok(mut guard) = self.cancelled_turns.lock() {
                 guard.insert(core_turn_id.to_string());
             }
-            return Ok(());
+            return Ok(CancelOutcome::Cancelled);
         }
         let session_id = self
             .session_id
@@ -384,7 +384,8 @@ impl AgentAdapter for AcpAdapter {
             .and_then(|guard| guard.clone())
             .ok_or_else(|| "ACP 会话尚未建立".to_string())?;
         self.client
-            .notify("session/cancel", json!({ "sessionId": session_id }))
+            .notify("session/cancel", json!({ "sessionId": session_id }))?;
+        Ok(CancelOutcome::Cancelled)
     }
 
     fn respond_permission(&mut self, request_id: &str, option_id: &str) -> Result<(), String> {

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use super::adapter::AgentAdapter;
+use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent,
 };
@@ -375,20 +375,26 @@ impl AgentAdapter for GeminiAdapter {
         self.session_id.lock().ok().and_then(|guard| guard.clone())
     }
 
-    fn cancel(&mut self, core_turn_id: &str) -> Result<(), String> {
+    fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {
+        let mut cancelled = false;
         if let Ok(guard) = self.active_child.lock() {
             if let Some((active_turn, child)) = guard.as_ref() {
                 if active_turn != core_turn_id {
-                    return Ok(());
+                    return Ok(CancelOutcome::AlreadyFinished);
                 }
                 if let Ok(mut child) = child.lock() {
                     if let Some(child) = child.as_mut() {
                         child.kill().map_err(|error| error.to_string())?;
+                        cancelled = true;
                     }
                 }
             }
         }
-        Ok(())
+        Ok(if cancelled {
+            CancelOutcome::Cancelled
+        } else {
+            CancelOutcome::AlreadyFinished
+        })
     }
 }
 

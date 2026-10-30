@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::adapter::AgentAdapter;
+use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, PermissionOption,
     RuntimeEvent,
@@ -27,7 +27,15 @@ enum CodexTurnState {
     Cancelling(Option<String>),
     Cancelled(String),
     CancelFailed(String),
-    Finished,
+    /// 自然完成/失败。取消请求看到它时必须返回 AlreadyFinished，让原生
+    /// 完成事件按真实结果结算，不能改写成“用户取消”。
+    Finished(CodexFinish),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexFinish {
+    Completed,
+    Failed,
 }
 
 #[derive(Default)]
@@ -105,11 +113,11 @@ impl CodexTurnStore {
         self.changed.notify_all();
     }
 
-    fn finish(&self, core_turn_id: &str) {
+    fn finish(&self, core_turn_id: &str, finish: CodexFinish) {
         if let Ok(mut states) = self.states.lock() {
             states.insert(
                 core_turn_id.to_string(),
-                CodexTurnState::Finished,
+                CodexTurnState::Finished(finish),
             );
         }
         self.changed.notify_all();
@@ -138,14 +146,21 @@ impl CodexTurnStore {
         self.set(core_turn_id, state);
     }
 
-    fn wait_cancel(&self, core_turn_id: &str, timeout: Duration) -> Result<(), String> {
+    fn wait_cancel(
+        &self,
+        core_turn_id: &str,
+        timeout: Duration,
+    ) -> Result<CancelOutcome, String> {
         let started = Instant::now();
         loop {
             let state = self.snapshot(core_turn_id);
             match state {
-                None | Some(CodexTurnState::Finished) | Some(CodexTurnState::Cancelled(_)) => {
-                    return Ok(());
+                // 没有状态记录说明本就不是当前适配器管理的轮次；自然完成
+                // 必须交由原生终态事件结算。
+                None | Some(CodexTurnState::Finished(_)) => {
+                    return Ok(CancelOutcome::AlreadyFinished);
                 }
+                Some(CodexTurnState::Cancelled(_)) => return Ok(CancelOutcome::Cancelled),
                 Some(CodexTurnState::CancelFailed(error)) => return Err(error),
                 _ => {}
             }
@@ -364,7 +379,7 @@ impl CodexAdapter {
                     }
                     "turn/completed" => {
                         if !core_turn_id.is_empty() {
-                            handler_turn_store.finish(&core_turn_id);
+                            handler_turn_store.finish(&core_turn_id, CodexFinish::Completed);
                         }
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
@@ -379,7 +394,7 @@ impl CodexAdapter {
                             .or_else(|| json_text(&params, &["message"]))
                             .unwrap_or_else(|| "Codex 请求失败".to_string());
                         if !core_turn_id.is_empty() {
-                            handler_turn_store.finish(&core_turn_id);
+                            handler_turn_store.finish(&core_turn_id, CodexFinish::Failed);
                         }
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
@@ -621,7 +636,10 @@ impl AgentAdapter for CodexAdapter {
                         }
                     }
                     Err(error) => {
-                        turn_store.set(&round_turn_id, CodexTurnState::Finished);
+                        turn_store.set(
+                            &round_turn_id,
+                            CodexTurnState::Finished(CodexFinish::Failed),
+                        );
                         (emit)(RuntimeEvent::turn(
                             round_turn_id,
                             "",
@@ -639,7 +657,7 @@ impl AgentAdapter for CodexAdapter {
         self.thread_id.lock().ok().and_then(|guard| guard.clone())
     }
 
-    fn cancel(&mut self, core_turn_id: &str) -> Result<(), String> {
+    fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {
         let thread_id = self
             .thread_id
             .lock()
@@ -648,10 +666,11 @@ impl AgentAdapter for CodexAdapter {
             .ok_or_else(|| "Codex thread 尚未建立".to_string())?;
         let previous = match self.turn_store.begin_cancel(core_turn_id) {
             Some(state) => state,
-            None => return Ok(()),
+            None => return Ok(CancelOutcome::AlreadyFinished),
         };
         match previous {
-            CodexTurnState::Finished | CodexTurnState::Cancelled(_) => Ok(()),
+            CodexTurnState::Finished(_) => Ok(CancelOutcome::AlreadyFinished),
+            CodexTurnState::Cancelled(_) => Ok(CancelOutcome::Cancelled),
             CodexTurnState::CancelFailed(error) => {
                 // 前一次中断失败；让调用方看到真实原因，而不是再次谎报已取消。
                 self.turn_store
@@ -663,7 +682,7 @@ impl AgentAdapter for CodexAdapter {
                     Ok(()) => {
                         self.turn_store
                             .resolve_cancel(core_turn_id, Ok(native_turn_id));
-                        Ok(())
+                        Ok(CancelOutcome::Cancelled)
                     }
                     Err(error) => {
                         self.turn_store

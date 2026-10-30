@@ -11,6 +11,14 @@ use super::events::{AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent};
 use super::gemini::GeminiAdapter;
 use super::opencode::OpenCodeAdapter;
 
+/// 取消请求的结果。自然完成不能伪装成“取消成功”，否则后端会把已经
+/// 正常结束的轮次改写成用户取消。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelOutcome {
+    Cancelled,
+    AlreadyFinished,
+}
+
 /// 一个已启动的 Agent 会话协议实现。
 pub trait AgentAdapter: Send {
     /// 发送一条用户消息。实现必须尽快返回；长连接/进程读取在后台线程完成。
@@ -19,8 +27,9 @@ pub trait AgentAdapter: Send {
     /// 保存并使用这个值，不能回读会话当前轮次。
     fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String>;
     /// 请求中断指定 Core 轮次。实现必须忽略已经结束的轮次，并取消仍在
-    /// 串行派发队列中、尚未写入协议的待发送轮次。
-    fn cancel(&mut self, core_turn_id: &str) -> Result<(), String>;
+    /// 串行派发队列中、尚未写入协议的待发送轮次。自然完成返回
+    /// [`CancelOutcome::AlreadyFinished`]，不能谎报为取消成功。
+    fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String>;
     /// 当前适配器持有的原生 session / thread ID，用于判断能否复用进程。
     fn native_session_id(&self) -> Option<String> {
         None

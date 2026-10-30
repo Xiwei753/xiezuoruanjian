@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::adapter::{create_adapter, AgentAdapter};
+use super::adapter::{create_adapter, AgentAdapter, CancelOutcome};
 use super::events::{AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent};
 use super::mcp_binding::{prepare_mcp_brokers, McpBroker};
 
@@ -129,7 +129,7 @@ impl AgentSessionManager {
         adapter.prompt(turn_id, message)
     }
 
-    pub fn cancel(&mut self) -> Result<(), String> {
+    pub fn cancel(&mut self) -> Result<CancelOutcome, String> {
         let current = self
             .current_turn_id
             .lock()
@@ -144,7 +144,7 @@ impl AgentSessionManager {
     /// 按 Core 轮次取消。用户停止后立刻发送下一轮时，取消线程可能晚于新
     /// 轮次执行；适配器必须按轮次 id 决定是否中断原生协议，不能因为当前
     /// 轮次已经变化就放弃取消上一轮，也不能误中止新回答。
-    pub fn cancel_turn(&mut self, turn_id: &str) -> Result<(), String> {
+    pub fn cancel_turn(&mut self, turn_id: &str) -> Result<CancelOutcome, String> {
         self.adapter
             .as_mut()
             .ok_or_else(|| "Agent 会话尚未启动".to_string())?

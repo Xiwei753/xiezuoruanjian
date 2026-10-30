@@ -12,8 +12,8 @@ use qmetaobject::prelude::*;
 
 use crate::agent_cli::{AgentInstallation, AgentInventory};
 use crate::agent_runtime::{
-    bind_current_project, AgentEvent, AgentLaunchContext, AgentSessionManager, EventSink,
-    RuntimeEvent, ADAPTER_VERSION,
+    bind_current_project, AgentEvent, AgentLaunchContext, AgentSessionManager, CancelOutcome,
+    EventSink, RuntimeEvent, ADAPTER_VERSION,
 };
 use crate::backend::AppRef;
 use writer_core::agent::{AgentConversation, AgentConversationStatus, AgentToolEvent};
@@ -802,6 +802,31 @@ impl AgentRuntimeBackend {
             .ok();
     }
 
+    /// 协议确认取消后统一结算：Core Turn 失败为 Cancelled、会话回到 Idle，
+    /// 并忽略旧进程随后补发的完成/增量事件。
+    fn apply_cancelled_turn(&mut self, turn_id: &str) {
+        self.ignored_turn_id = turn_id.to_string();
+        self.cancelling_turn_id.clear();
+        self.running_value = false;
+        self.running_changed();
+        self.set_status("已取消");
+        let api = self.core_api();
+        if let Some(conversation) = self.conversation.as_mut() {
+            if let Some(turn) = conversation.turn_mut(turn_id) {
+                turn.cancel(now_ms());
+            }
+            conversation.status = AgentConversationStatus::Idle;
+            conversation.updated_at_ms = now_ms();
+            if let Some(api) = api {
+                let _ = api.save_agent_conversation(conversation);
+            }
+        }
+        self.active_turn_id.clear();
+        self.permission_json_value = "null".to_string();
+        self.permission_changed();
+        self.emit_conversation();
+    }
+
     /// 切换项目/Agent/会话时直接放弃当前轮次：随后一定会销毁原生进程，
     /// 不需要等待协议确认。用户点击“停止”则走 [`Self::cancel_turn`] 的真实
     /// 确认流程，不能把两者混为一谈。
@@ -845,7 +870,7 @@ impl AgentRuntimeBackend {
         let runtime = self.runtime.clone();
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(
-            move |(turn_id, result): (String, Result<(), String>)| {
+            move |(turn_id, result): (String, Result<CancelOutcome, String>)| {
                 if let Some(pinned) = qptr.as_pinned() {
                     let mut this = pinned.borrow_mut();
                     if this.cancelling_turn_id != turn_id {
@@ -857,26 +882,13 @@ impl AgentRuntimeBackend {
                         return;
                     }
                     match result {
-                        Ok(()) => {
-                            this.ignored_turn_id = turn_id.clone();
-                            this.running_value = false;
-                            this.running_changed();
-                            this.set_status("已取消");
-                            let api = this.core_api();
-                            if let Some(conversation) = this.conversation.as_mut() {
-                                if let Some(turn) = conversation.turn_mut(&turn_id) {
-                                    turn.cancel(now_ms());
-                                }
-                                conversation.status = AgentConversationStatus::Idle;
-                                conversation.updated_at_ms = now_ms();
-                                if let Some(api) = api {
-                                    let _ = api.save_agent_conversation(conversation);
-                                }
-                            }
-                            this.active_turn_id.clear();
-                            this.permission_json_value = "null".to_string();
-                            this.permission_changed();
-                            this.emit_conversation();
+                        Ok(CancelOutcome::Cancelled) => {
+                            this.apply_cancelled_turn(&turn_id);
+                        }
+                        Ok(CancelOutcome::AlreadyFinished) => {
+                            // 取消请求与自然完成交错：原生完成事件仍然有效，
+                            // 由它按真实状态结算，不能改写成用户取消。
+                            this.set_status("本轮已结束，等待 Agent 结算");
                         }
                         Err(error) => {
                             this.set_status("停止失败，Agent 仍在运行");
@@ -981,18 +993,14 @@ impl AgentRuntimeBackend {
             }
         }
         let core_turn_id = event.core_turn_id.clone();
-        if core_turn_id.is_empty()
-            && matches!(
-                event.event,
-                AgentEvent::TurnCompleted | AgentEvent::TurnFailed { .. }
-            )
-        {
-            // 没有活动轮次时（例如 OpenCode 恢复会话后的空闲通知）不能把
-            // 界面从“未开始”改成“回答完成”。
-            self.conversation = Some(conversation);
-            return;
-        }
-        if !core_turn_id.is_empty() {
+        if core_turn_id.is_empty() {
+            if !session_event {
+                // 适配器必须给每个轮次事件绑定不可变的 Core Turn。没有
+                // 归属的增量/终态一律丢弃，不能落到“当前轮次”或界面状态。
+                self.conversation = Some(conversation);
+                return;
+            }
+        } else {
             let belongs_to_active = core_turn_id == self.active_turn_id
                 && core_turn_id != self.ignored_turn_id;
             let still_running = conversation
@@ -1006,6 +1014,7 @@ impl AgentRuntimeBackend {
         }
         let mut persist = false;
         let mut finished: Option<(bool, String)> = None;
+        let mut cancelled = false;
         let mut permission: Option<(String, String, Vec<serde_json::Value>)> = None;
         match event.event {
             AgentEvent::SessionStarted {
@@ -1188,6 +1197,15 @@ impl AgentRuntimeBackend {
                     self.set_status("Agent 会话异常");
                 }
             }
+            AgentEvent::TurnCancelled => {
+                if let Some(turn) = conversation.turn_mut(&core_turn_id) {
+                    turn.cancel(now_ms());
+                }
+                conversation.status = AgentConversationStatus::Idle;
+                conversation.updated_at_ms = now_ms();
+                persist = true;
+                cancelled = true;
+            }
             AgentEvent::TurnCompleted => {
                 if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     turn.complete(now_ms());
@@ -1218,7 +1236,20 @@ impl AgentRuntimeBackend {
                 }
             }
         }
+        if cancelled {
+            self.apply_cancelled_turn(&core_turn_id);
+            return;
+        }
         if let Some((failed, message)) = finished {
+            // 完成事件可能先于 HTTP/JSON-RPC 的受理回执抵达（尤其 OpenCode
+            // 的 SSE 与 POST 回应没有顺序保证）。输入事件使用稳定 ID，重复
+            // 补记是幂等的；失败事件只在确实受理后由 PromptAccepted 记录，
+            // 避免启动失败被算作用户已发送。
+            if !failed {
+                if let Some(conversation) = self.conversation.as_ref() {
+                    self.record_usage(conversation, &core_turn_id, false);
+                }
+            }
             let api = self.core_api();
             if let (Some(api), Some(conversation)) = (api, self.conversation.as_ref()) {
                 let chars = conversation

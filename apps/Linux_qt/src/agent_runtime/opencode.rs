@@ -5,7 +5,7 @@
 //! 推理、工具和权限事件，用 `/api/session/:id/prompt` 发送消息、
 //! `/api/session/:id/interrupt` 中断。进程和服务器生命周期由本适配器管理。
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::adapter::AgentAdapter;
+use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, PermissionOption,
     RuntimeEvent,
@@ -33,6 +33,10 @@ struct PromptInput {
     post_done: (Mutex<bool>, Condvar),
     accepted: AtomicBool,
     cancel_requested: AtomicBool,
+    /// 同一次取消只能由一个执行者认领，避免同步取消线程和 POST 回执
+    /// worker 同时删除 inbox / interrupt。
+    cancel_claimed: AtomicBool,
+    cancel_result: (Mutex<Option<Result<CancelOutcome, String>>>, Condvar),
 }
 
 impl PromptInput {
@@ -42,6 +46,8 @@ impl PromptInput {
             post_done: (Mutex::new(false), Condvar::new()),
             accepted: AtomicBool::new(false),
             cancel_requested: AtomicBool::new(false),
+            cancel_claimed: AtomicBool::new(false),
+            cancel_result: (Mutex::new(None), Condvar::new()),
         }
     }
 
@@ -76,7 +82,40 @@ impl PromptInput {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *done
     }
+
+    fn claim_cancel(&self) -> bool {
+        self.cancel_claimed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    fn settle_cancel(&self, result: Result<CancelOutcome, String>) {
+        if let Ok(mut guard) = self.cancel_result.0.lock() {
+            *guard = Some(result);
+        }
+        self.cancel_result.1.notify_all();
+    }
+
+    /// 取消执行失败后释放认领，允许用户重试；已经结算的失败结果仍会
+    /// 立即返回给已经等待的调用方。
+    fn release_cancel_claim(&self) {
+        self.cancel_claimed.store(false, Ordering::SeqCst);
+    }
+
+    fn wait_cancel_result(&self, timeout: Duration) -> Option<Result<CancelOutcome, String>> {
+        let guard = self.cancel_result.0.lock().ok()?;
+        let (guard, _) = self
+            .cancel_result
+            .1
+            .wait_timeout_while(guard, timeout, |result| result.is_none())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.clone()
+    }
 }
+
+/// SSE 到达早于 HTTP POST 回应/服务端消息历史投影时，暂时保留无法归属
+/// 的流式事件；等用户消息可查询后按原顺序回放，不能静默丢掉增量。
+type PendingEvents = Arc<Mutex<VecDeque<(String, Value)>>>;
 
 #[derive(Debug, Clone)]
 enum TurnOutcome {
@@ -99,6 +138,8 @@ pub struct OpenCodeAdapter {
     /// 服务端用户消息 id → Core Turn。助手消息 id 通过消息历史回溯到这条
     /// 用户消息后才允许归属，绝不因为“它是当前轮次”就猜。
     input_bindings: Arc<Mutex<HashMap<String, String>>>,
+    /// HTTP 回应/消息历史投影之前到达、暂时无法归属的 SSE 事件。
+    pending_events: PendingEvents,
     /// Drop 时通知 SSE 线程退出，避免进程结束后后台无限重连。
     stop_events: Arc<AtomicBool>,
 }
@@ -419,10 +460,12 @@ impl OpenCodeAdapter {
             Arc::new(Mutex::new(HashMap::new()));
         let input_bindings: Arc<Mutex<HashMap<String, String>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let pending_events: PendingEvents = Arc::new(Mutex::new(VecDeque::new()));
         let stop_events = Arc::new(AtomicBool::new(false));
         let sse_session = session_id.clone();
         let sse_prompt_inputs = prompt_inputs.clone();
         let sse_input_bindings = input_bindings.clone();
+        let sse_pending_events = pending_events.clone();
         let sse_stop = stop_events.clone();
         let sse_emit = emit.clone();
         let sse_url = base_url.clone();
@@ -445,6 +488,7 @@ impl OpenCodeAdapter {
                     sse_session,
                     sse_prompt_inputs,
                     sse_input_bindings,
+                    sse_pending_events,
                     sse_stop,
                     sse_emit,
                 )
@@ -477,6 +521,7 @@ impl OpenCodeAdapter {
             model_hint: ctx.model.clone(),
             prompt_inputs,
             input_bindings,
+            pending_events,
             stop_events,
         })
     }
@@ -491,6 +536,7 @@ struct OpenCodeEventProcessor {
     session_id: Arc<Mutex<Option<String>>>,
     prompt_inputs: Arc<Mutex<HashMap<String, Arc<PromptInput>>>>,
     input_bindings: Arc<Mutex<HashMap<String, String>>>,
+    pending_events: PendingEvents,
     /// 助手消息 id → Core Turn 的稳定映射，只由服务端消息历史确认后建立。
     turn_bindings: HashMap<String, String>,
     emit: EventSink,
@@ -514,6 +560,7 @@ impl OpenCodeEventProcessor {
         session_id: Arc<Mutex<Option<String>>>,
         prompt_inputs: Arc<Mutex<HashMap<String, Arc<PromptInput>>>>,
         input_bindings: Arc<Mutex<HashMap<String, String>>>,
+        pending_events: PendingEvents,
         stop: Arc<AtomicBool>,
         emit: EventSink,
     ) -> Self {
@@ -526,6 +573,7 @@ impl OpenCodeEventProcessor {
             session_id,
             prompt_inputs,
             input_bindings,
+            pending_events,
             turn_bindings: HashMap::new(),
             emit,
             text_state: HashMap::new(),
@@ -710,6 +758,16 @@ impl OpenCodeEventProcessor {
             return;
         }
         self.handle_event(&event_type, &payload);
+        // 当前帧可能刚刚让用户消息出现在服务端（prompt.admitted/idle），
+        // 尝试把此前暂存的增量按顺序补上。
+        let has_pending = self
+            .pending_events
+            .lock()
+            .map(|pending| !pending.is_empty())
+            .unwrap_or(false);
+        if has_pending {
+            self.replay_pending_events();
+        }
     }
 
     fn messages(&self) -> Result<Vec<Value>, String> {
@@ -778,8 +836,16 @@ impl OpenCodeEventProcessor {
     }
 
     fn remove_prompt(&mut self, core_turn_id: &str) {
-        if let Ok(mut inputs) = self.prompt_inputs.lock() {
-            inputs.remove(core_turn_id);
+        let input_id = self
+            .prompt_inputs
+            .lock()
+            .ok()
+            .and_then(|mut inputs| inputs.remove(core_turn_id))
+            .map(|input| input.id());
+        if let Some(input_id) = input_id {
+            if let Ok(mut bindings) = self.input_bindings.lock() {
+                bindings.remove(&input_id);
+            }
         }
         self.turn_bindings.retain(|_, core| core != core_turn_id);
     }
@@ -787,6 +853,7 @@ impl OpenCodeEventProcessor {
     /// 只按服务端确认的消息历史终态结算。`session.idle` / `session.status`
     /// 本身没有任何轮次身份，因此它只是一个“去问服务端”的触发信号。
     fn reconcile_terminals(&mut self) {
+        self.replay_pending_events();
         let cores: Vec<String> = match self.prompt_inputs.lock() {
             Ok(inputs) => inputs.keys().cloned().collect(),
             Err(_) => return,
@@ -852,34 +919,120 @@ impl OpenCodeEventProcessor {
         (self.emit)(RuntimeEvent::session(AgentEvent::SessionError { message }));
     }
 
-    fn handle_event(&mut self, event_type: &str, payload: &Value) {
+    fn event_core_id(&mut self, event_type: &str, payload: &Value) -> String {
         let native_turn_id = json_text(payload, &["assistantMessageID"])
             .or_else(|| json_text(payload, &["messageID"]))
             .unwrap_or_default();
-        let core_turn_id = match event_type {
+        match event_type {
             "session.next.prompted" | "session.next.prompt.admitted" => {
                 let user_message_id = json_text(payload, &["messageID"]).unwrap_or_default();
-                let core = self
-                    .input_bindings
+                self.input_bindings
                     .lock()
                     .ok()
                     .and_then(|bindings| bindings.get(&user_message_id).cloned())
-                    .unwrap_or_default();
-                if core.is_empty() {
-                    log::debug!("[agent] OpenCode prompt.admitted 未匹配本地轮次");
-                    return;
-                }
-                core
+                    .unwrap_or_default()
             }
             "session.status" | "session.idle" => String::new(),
             "permission.asked" => self.sole_prompt_core(),
             _ => self.resolve_assistant_core(&native_turn_id),
-        };
-        if core_turn_id.is_empty()
-            && (event_type.starts_with("session.tool.") || event_type == "permission.asked")
+        }
+    }
+
+    fn should_buffer_event(&self, event_type: &str, payload: &Value) -> bool {
+        if event_type == "permission.asked" {
+            return true;
+        }
+        let has_message_id = json_text(payload, &["assistantMessageID"])
+            .or_else(|| json_text(payload, &["messageID"]))
+            .is_some();
+        if event_type.starts_with("session.tool.")
+            || event_type.starts_with("session.text.")
+            || event_type.starts_with("session.reasoning.")
+            || event_type == "session.next.step.failed"
+            || matches!(
+                event_type,
+                "session.error" | "session.execution.failed" | "session.step.failed"
+            )
         {
+            return has_message_id;
+        }
+        false
+    }
+
+    fn buffer_event(&self, event_type: &str, payload: &Value) {
+        let Ok(mut pending) = self.pending_events.lock() else {
+            return;
+        };
+        if pending.len() >= 4096 {
+            pending.pop_front();
+        }
+        pending.push_back((event_type.to_string(), payload.clone()));
+        log::debug!("[agent] OpenCode 事件暂存，等待消息归属：{event_type}");
+    }
+
+    /// 消息历史里出现用户输入后，按原顺序回放暂存事件。第一条仍无法归属
+    /// 的事件留在队首，保证增量顺序不被打乱。
+    fn replay_pending_events(&mut self) {
+        loop {
+            let Some((event_type, payload)) = ({
+                let Ok(mut pending) = self.pending_events.lock() else {
+                    return;
+                };
+                pending.pop_front()
+            }) else {
+                return;
+            };
+            let core_turn_id = self.event_core_id(&event_type, &payload);
+            if core_turn_id.is_empty() {
+                if let Ok(mut pending) = self.pending_events.lock() {
+                    pending.push_front((event_type, payload));
+                }
+                return;
+            }
+            let still_active = self
+                .prompt_inputs
+                .lock()
+                .map(|inputs| inputs.contains_key(&core_turn_id))
+                .unwrap_or(false);
+            if !still_active {
+                continue;
+            }
+            let native_turn_id = json_text(&payload, &["assistantMessageID"])
+                .or_else(|| json_text(&payload, &["messageID"]))
+                .unwrap_or_default();
+            self.dispatch_event(&event_type, &payload, core_turn_id, native_turn_id);
+        }
+    }
+
+    fn handle_event(&mut self, event_type: &str, payload: &Value) {
+        let native_turn_id = json_text(payload, &["assistantMessageID"])
+            .or_else(|| json_text(payload, &["messageID"]))
+            .unwrap_or_default();
+        let core_turn_id = self.event_core_id(event_type, payload);
+        if core_turn_id.is_empty() && self.should_buffer_event(event_type, payload) {
+            // POST 回应与 SSE 到达顺序没有保证；先保留，等用户消息可查询
+            // 或 idle 触发回放，不能把已生成的增量直接丢掉。错误同时记入
+            // 会话级状态，避免在归属确认前界面完全看不到失败。
+            if matches!(
+                event_type,
+                "session.error" | "session.execution.failed" | "session.step.failed"
+            ) || event_type == "session.next.step.failed"
+            {
+                self.session_error(error_message(payload));
+            }
+            self.buffer_event(event_type, payload);
             return;
         }
+        self.dispatch_event(event_type, payload, core_turn_id, native_turn_id);
+    }
+
+    fn dispatch_event(
+        &mut self,
+        event_type: &str,
+        payload: &Value,
+        core_turn_id: String,
+        native_turn_id: String,
+    ) {
         match event_type {
             "session.text.delta" | "session.reasoning.delta" => {
                 if core_turn_id.is_empty() {
@@ -1315,15 +1468,38 @@ fn create_session(
 }
 
 impl OpenCodeAdapter {
-    fn inbox_contains(&self, session_id: &str, input_id: &str) -> Result<bool, String> {
-        let response = self
-            .client
-            .get(format!(
-                "{}/api/session/{}/inbox",
-                self.base_url, session_id
-            ))
-            .basic_auth(SERVER_USER, Some(&self.password))
-            .query(&[("location[directory]", location_value(&self.working_dir))])
+    fn cancel_admitted_input(
+        &self,
+        session_id: &str,
+        input_id: &str,
+    ) -> Result<CancelOutcome, String> {
+        cancel_admitted_input_http(
+            &self.client,
+            &self.base_url,
+            &self.password,
+            &self.working_dir,
+            session_id,
+            input_id,
+        )
+    }
+}
+
+/// 取消一个已经被服务端受理的输入。只有删除 inbox、明确 `interrupted:true`
+/// 或服务端 idle outcome 为 `interrupted` 才算取消成功；自然完成返回
+/// `AlreadyFinished`，由消息历史终态按真实结果结算。
+fn cancel_admitted_input_http(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    password: &str,
+    working_dir: &Path,
+    session_id: &str,
+    input_id: &str,
+) -> Result<CancelOutcome, String> {
+    let inbox_contains = |input_id: &str| -> Result<bool, String> {
+        let response = client
+            .get(format!("{base_url}/api/session/{session_id}/inbox"))
+            .basic_auth(SERVER_USER, Some(password))
+            .query(&[("location[directory]", location_value(working_dir))])
             .send()
             .map_err(|error| format!("读取 OpenCode inbox 失败：{error}"))?;
         if !response.status().is_success() {
@@ -1339,19 +1515,15 @@ impl OpenCodeAdapter {
             json_text(item, &["id"]).as_deref() == Some(input_id)
                 || json_text(item, &["data", "id"]).as_deref() == Some(input_id)
         }))
-    }
-
-    fn delete_inbox(&self, session_id: &str, input_id: &str) -> Result<(), String> {
-        let response = self
-            .client
+    };
+    let delete_inbox = |input_id: &str| -> Result<(), String> {
+        let response = client
             .delete(format!(
-                "{}/api/session/{}/inbox/{}",
-                self.base_url,
-                session_id,
+                "{base_url}/api/session/{session_id}/inbox/{}",
                 url_path_segment(input_id)
             ))
-            .basic_auth(SERVER_USER, Some(&self.password))
-            .query(&[("location[directory]", location_value(&self.working_dir))])
+            .basic_auth(SERVER_USER, Some(password))
+            .query(&[("location[directory]", location_value(working_dir))])
             .send()
             .map_err(|error| format!("取消 OpenCode inbox 消息失败：{error}"))?;
         if response.status().is_success() {
@@ -1359,19 +1531,12 @@ impl OpenCodeAdapter {
         } else {
             Err(response_error(response))
         }
-    }
-
-    /// 返回 true 仅表示服务端明确确认有执行被中断；2xx 但
-    /// `interrupted:false` 绝不能当成取消成功。
-    fn interrupt_once(&self, session_id: &str) -> Result<bool, String> {
-        let response = self
-            .client
-            .post(format!(
-                "{}/api/session/{}/interrupt",
-                self.base_url, session_id
-            ))
-            .basic_auth(SERVER_USER, Some(&self.password))
-            .query(&[("location[directory]", location_value(&self.working_dir))])
+    };
+    let interrupt_once = || -> Result<bool, String> {
+        let response = client
+            .post(format!("{base_url}/api/session/{session_id}/interrupt"))
+            .basic_auth(SERVER_USER, Some(password))
+            .query(&[("location[directory]", location_value(working_dir))])
             .send()
             .map_err(|error| format!("中断 OpenCode 请求失败：{error}"))?;
         if !response.status().is_success() {
@@ -1388,65 +1553,57 @@ impl OpenCodeAdapter {
                     .and_then(Value::as_bool)
             })
             .unwrap_or(false))
+    };
+
+    // 1. 尚未投递的 inbox 消息优先精确删除，避免“空闲时 interrupt
+    //    返回 false，但随后队列里的消息又被执行”的竞态。DELETE 对已投递
+    //    消息是 no-op，因此删除后还要确认消息没有出现在服务端历史里。
+    let mut removed_from_inbox = false;
+    match inbox_contains(input_id) {
+        Ok(true) => {
+            delete_inbox(input_id)?;
+            std::thread::sleep(Duration::from_millis(50));
+            match inbox_contains(input_id) {
+                Ok(true) => {
+                    return Err("OpenCode 消息仍在待执行队列中，无法确认取消".to_string());
+                }
+                Ok(false) => removed_from_inbox = true,
+                Err(error) => {
+                    log::debug!("[agent] OpenCode inbox 删除后复核失败: {error}");
+                }
+            }
+        }
+        Ok(false) => {}
+        Err(error) => log::debug!("[agent] OpenCode inbox 查询失败，改用 interrupt: {error}"),
     }
 
-    fn cancel_admitted_input(&self, session_id: &str, input_id: &str) -> Result<(), String> {
-        // 1. 尚未投递的 inbox 消息优先精确删除，避免“空闲时 interrupt
-        //    返回 false，但随后队列里的消息又被执行”的竞态。DELETE 对已投递
-        //    消息是 no-op，因此删除后还要确认消息没有出现在服务端历史里。
-        let mut removed_from_inbox = false;
-        match self.inbox_contains(session_id, input_id) {
-            Ok(true) => {
-                self.delete_inbox(session_id, input_id)?;
-                std::thread::sleep(Duration::from_millis(50));
-                match self.inbox_contains(session_id, input_id) {
-                    Ok(true) => {
-                        return Err("OpenCode 消息仍在待执行队列中，无法确认取消".to_string());
-                    }
-                    Ok(false) => removed_from_inbox = true,
-                    Err(error) => {
-                        log::debug!("[agent] OpenCode inbox 删除后复核失败: {error}");
-                    }
-                }
-            }
+    let mut last_error = None;
+    for _ in 0..3 {
+        match interrupt_once() {
+            Ok(true) => return Ok(CancelOutcome::Cancelled),
             Ok(false) => {}
-            Err(error) => log::debug!("[agent] OpenCode inbox 查询失败，改用 interrupt: {error}"),
+            Err(error) => last_error = Some(error),
         }
+        std::thread::sleep(Duration::from_millis(80));
+    }
 
-        let mut last_error = None;
-        for _ in 0..3 {
-            match self.interrupt_once(session_id) {
-                Ok(true) => return Ok(()),
-                Ok(false) => {}
-                Err(error) => last_error = Some(error),
+    // 2. interrupt 没有确认时，再以服务端消息历史的 idle outcome 为准。
+    match fetch_session_messages(client, base_url, password, working_dir, session_id) {
+        Ok(messages) => {
+            let delivered = messages
+                .iter()
+                .any(|message| message_id(message) == input_id && message_type(message) == "user");
+            match terminal_outcome(&messages, input_id) {
+                Some(TurnOutcome::Interrupted) => Ok(CancelOutcome::Cancelled),
+                Some(_) => Ok(CancelOutcome::AlreadyFinished),
+                // 已经确认从 inbox 删除，且服务端历史里没有这条消息，
+                // 说明它从未开始执行。
+                None if removed_from_inbox && !delivered => Ok(CancelOutcome::Cancelled),
+                None => Err(last_error
+                    .unwrap_or_else(|| "OpenCode 未确认中断（interrupted=false）".to_string())),
             }
-            std::thread::sleep(Duration::from_millis(80));
         }
-
-        // 2. interrupt 没有确认时，再以服务端消息历史的 idle outcome 为准。
-        match fetch_session_messages(
-            &self.client,
-            &self.base_url,
-            &self.password,
-            &self.working_dir,
-            session_id,
-        ) {
-            Ok(messages) => {
-                let delivered = messages
-                    .iter()
-                    .any(|message| message_id(message) == input_id && message_type(message) == "user");
-                match terminal_outcome(&messages, input_id) {
-                    Some(TurnOutcome::Interrupted) => Ok(()),
-                    Some(_) => Err("OpenCode 本轮已经结束，无法再取消".to_string()),
-                    // 已经确认从 inbox 删除，且服务端历史里没有这条消息，
-                    // 说明它从未开始执行。
-                    None if removed_from_inbox && !delivered => Ok(()),
-                    None => Err(last_error
-                        .unwrap_or_else(|| "OpenCode 未确认中断（interrupted=false）".to_string())),
-                }
-            }
-            Err(error) => Err(last_error.unwrap_or(error)),
-        }
+        Err(error) => Err(last_error.unwrap_or(error)),
     }
 }
 
@@ -1466,6 +1623,15 @@ impl AgentAdapter for OpenCodeAdapter {
         if let Ok(mut inputs) = self.prompt_inputs.lock() {
             inputs.insert(round_turn_id.clone(), input.clone());
         }
+        // 必须在 POST 之前同时登记 user message → Core Turn。服务端可能
+        // 先通过 SSE 发出 text/tool 增量，HTTP 回应后到；若等回应再登记，
+        // 这些已经持久接收的增量会被误判为无归属。
+        if let Ok(mut bindings) = self.input_bindings.lock() {
+            bindings.insert(input_id.clone(), round_turn_id.clone());
+        }
+        if let Ok(mut pending) = self.pending_events.lock() {
+            pending.clear();
+        }
         let mut body = json!({ "id": input_id.clone(), "text": message });
         // 用户明确选择模型时才传；格式为 `provider/model`。
         if let Some(model) = self.model_hint.as_ref() {
@@ -1480,6 +1646,7 @@ impl AgentAdapter for OpenCodeAdapter {
         let emit = self.emit.clone();
         let prompt_inputs = self.prompt_inputs.clone();
         let input_bindings = self.input_bindings.clone();
+        let pending_events = self.pending_events.clone();
         let thread_input = input.clone();
         let spawn_result = std::thread::Builder::new()
             .name("agent-opencode-prompt".to_string())
@@ -1487,11 +1654,12 @@ impl AgentAdapter for OpenCodeAdapter {
                 let response = client
                     .post(format!("{base_url}/api/session/{session_id}/prompt"))
                     .basic_auth(SERVER_USER, Some(&password))
-                    .query(&[("location[directory]", working_dir)])
+                    .query(&[("location[directory]", working_dir.clone())])
                     .json(&body)
                     .send();
                 match response {
                     Ok(response) if response.status().is_success() => {
+                        let old_id = thread_input.id();
                         let accepted_id = response
                             .json::<Value>()
                             .ok()
@@ -1500,43 +1668,110 @@ impl AgentAdapter for OpenCodeAdapter {
                                     .or_else(|| json_text(&value, &["id"]))
                             })
                             .filter(|id| !id.is_empty())
-                            .unwrap_or_else(|| thread_input.id());
-                        thread_input.set_id(accepted_id.clone());
-                        thread_input.accepted.store(true, Ordering::SeqCst);
-                        if let Ok(mut bindings) = input_bindings.lock() {
-                            bindings.insert(accepted_id, round_turn_id.clone());
+                            .unwrap_or_else(|| old_id.clone());
+                        if accepted_id != old_id {
+                            // 服务端替换了消息 id 时原子迁移映射，暂存事件
+                            // 会在下一条 SSE/ idle 触发时按新用户消息回放。
+                            thread_input.set_id(accepted_id.clone());
+                            if let Ok(mut bindings) = input_bindings.lock() {
+                                let core = bindings
+                                    .remove(&old_id)
+                                    .unwrap_or_else(|| round_turn_id.clone());
+                                bindings.insert(accepted_id.clone(), core);
+                            }
                         }
-                        thread_input.mark_post_done();
+                        thread_input.accepted.store(true, Ordering::SeqCst);
                         (emit)(RuntimeEvent::turn(
-                            round_turn_id,
+                            round_turn_id.clone(),
                             "",
                             AgentEvent::PromptAccepted,
                         ));
+                        // 先发受理事件再唤醒等待中的取消线程，确保立即停止
+                        // 不会让“已发出”的本轮输入统计被取消回调抢先清掉。
+                        thread_input.mark_post_done();
+                        if thread_input.cancel_requested.load(Ordering::SeqCst)
+                            && thread_input.claim_cancel()
+                        {
+                            // 同步 cancel() 可能已经超时返回；这里必须继续
+                            // 执行已登记的取消意图，并用 TurnCancelled 把
+                            // 真实结果送回 Qt 后端。
+                            let result = cancel_admitted_input_http(
+                                &client,
+                                &base_url,
+                                &password,
+                                Path::new(&working_dir),
+                                &session_id,
+                                &accepted_id,
+                            );
+                            thread_input.settle_cancel(result.clone());
+                            match result {
+                                Ok(CancelOutcome::Cancelled) => {
+                                    if let Ok(mut inputs) = prompt_inputs.lock() {
+                                        inputs.remove(&round_turn_id);
+                                    }
+                                    if let Ok(mut bindings) = input_bindings.lock() {
+                                        bindings.remove(&accepted_id);
+                                    }
+                                    if let Ok(mut pending) = pending_events.lock() {
+                                        pending.clear();
+                                    }
+                                    (emit)(RuntimeEvent::turn(
+                                        round_turn_id,
+                                        "",
+                                        AgentEvent::TurnCancelled,
+                                    ));
+                                }
+                                Ok(CancelOutcome::AlreadyFinished) => {
+                                    // 服务端已经自然结束；保留映射让处理器按
+                                    // 消息历史 idle outcome 结算真实终态。
+                                }
+                                Err(error) => {
+                                    thread_input.release_cancel_claim();
+                                    (emit)(RuntimeEvent::session(AgentEvent::SessionError {
+                                        message: format!("OpenCode 取消失败：{error}"),
+                                    }));
+                                }
+                            }
+                        }
                     }
                     Ok(response) => {
                         let message = response_error(response);
-                        thread_input.mark_post_done();
                         if let Ok(mut inputs) = prompt_inputs.lock() {
                             inputs.remove(&round_turn_id);
                         }
-                        (emit)(RuntimeEvent::turn(
-                            round_turn_id,
-                            "",
-                            AgentEvent::TurnFailed { message },
-                        ));
+                        if let Ok(mut bindings) = input_bindings.lock() {
+                            bindings.remove(&thread_input.id());
+                        }
+                        if let Ok(mut pending) = pending_events.lock() {
+                            pending.clear();
+                        }
+                        thread_input.mark_post_done();
+                        let event = if thread_input.cancel_requested.load(Ordering::SeqCst) {
+                            AgentEvent::TurnCancelled
+                        } else {
+                            AgentEvent::TurnFailed { message }
+                        };
+                        (emit)(RuntimeEvent::turn(round_turn_id, "", event));
                     }
                     Err(error) => {
-                        thread_input.mark_post_done();
                         if let Ok(mut inputs) = prompt_inputs.lock() {
                             inputs.remove(&round_turn_id);
                         }
-                        (emit)(RuntimeEvent::turn(
-                            round_turn_id,
-                            "",
+                        if let Ok(mut bindings) = input_bindings.lock() {
+                            bindings.remove(&thread_input.id());
+                        }
+                        if let Ok(mut pending) = pending_events.lock() {
+                            pending.clear();
+                        }
+                        thread_input.mark_post_done();
+                        let event = if thread_input.cancel_requested.load(Ordering::SeqCst) {
+                            AgentEvent::TurnCancelled
+                        } else {
                             AgentEvent::TurnFailed {
                                 message: format!("发送 OpenCode 消息失败：{error}"),
-                            },
-                        ));
+                            }
+                        };
+                        (emit)(RuntimeEvent::turn(round_turn_id, "", event));
                     }
                 }
                 // 完成事件由 `/api/event` 的 idle 触发，但终态必须由
@@ -1547,6 +1782,12 @@ impl AgentAdapter for OpenCodeAdapter {
             if let Ok(mut inputs) = self.prompt_inputs.lock() {
                 inputs.remove(core_turn_id);
             }
+            if let Ok(mut bindings) = self.input_bindings.lock() {
+                bindings.remove(&input_id);
+            }
+            if let Ok(mut pending) = self.pending_events.lock() {
+                pending.clear();
+            }
             return Err(format!("无法启动 OpenCode 请求线程：{error}"));
         }
         Ok(())
@@ -1556,7 +1797,7 @@ impl AgentAdapter for OpenCodeAdapter {
         self.session_id.lock().ok().and_then(|guard| guard.clone())
     }
 
-    fn cancel(&mut self, core_turn_id: &str) -> Result<(), String> {
+    fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {
         let session_id = self
             .session_id
             .lock()
@@ -1570,27 +1811,50 @@ impl AgentAdapter for OpenCodeAdapter {
             .and_then(|inputs| inputs.get(core_turn_id).cloned());
         let Some(input) = input else {
             // 本轮已经结算或从未提交，重复停止是幂等的。
-            return Ok(());
+            return Ok(CancelOutcome::AlreadyFinished);
         };
         input.cancel_requested.store(true, Ordering::SeqCst);
         if !input.wait_post_done(Duration::from_secs(15)) {
+            // 同步等待只负责给 UI 一个明确反馈；POST worker 稍后成功时
+            // 会读取 cancel_requested 并继续执行取消，最终发 TurnCancelled。
             return Err(
-                "OpenCode 尚未确认消息是否已受理，无法确认取消；请稍后重试".to_string()
+                "OpenCode 尚未确认消息是否已受理，取消任务仍在后台等待".to_string()
             );
         }
         if !input.accepted.load(Ordering::SeqCst) {
             // POST 失败意味着消息没有进入服务端执行队列，取消已经满足。
-            return Ok(());
+            return Ok(CancelOutcome::Cancelled);
         }
         let input_id = input.id();
-        self.cancel_admitted_input(&session_id, &input_id)?;
-        if let Ok(mut inputs) = self.prompt_inputs.lock() {
-            inputs.remove(core_turn_id);
+        let result = if input.claim_cancel() {
+            // 同一次取消只允许一个执行者删除 inbox/interrupt。
+            let result = self.cancel_admitted_input(&session_id, &input_id);
+            input.settle_cancel(result.clone());
+            result
+        } else {
+            // POST worker 已经接手取消；等待它返回真实结果，避免重复操作。
+            input
+                .wait_cancel_result(Duration::from_secs(15))
+                .unwrap_or_else(|| {
+                    Err("OpenCode 正在后台确认取消结果，请稍后重试".to_string())
+                })
+        };
+        if result.is_err() {
+            input.release_cancel_claim();
         }
-        if let Ok(mut bindings) = self.input_bindings.lock() {
-            bindings.remove(&input_id);
+        let result = result?;
+        if result == CancelOutcome::Cancelled {
+            if let Ok(mut inputs) = self.prompt_inputs.lock() {
+                inputs.remove(core_turn_id);
+            }
+            if let Ok(mut bindings) = self.input_bindings.lock() {
+                bindings.remove(&input_id);
+            }
+            if let Ok(mut pending) = self.pending_events.lock() {
+                pending.clear();
+            }
         }
-        Ok(())
+        Ok(result)
     }
 
     fn respond_permission(&mut self, request_id: &str, option_id: &str) -> Result<(), String> {

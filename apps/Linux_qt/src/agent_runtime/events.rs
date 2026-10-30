@@ -124,6 +124,9 @@ pub enum AgentEvent {
         message: String,
     },
     TurnCompleted,
+    /// 协议已确认本轮被用户取消。异步停止任务在等待 HTTP/进程回执时
+    /// 迟到的确认必须能结算到原来的 Core Turn。
+    TurnCancelled,
     TurnFailed {
         message: String,
     },

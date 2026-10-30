@@ -23,6 +23,7 @@ pub mod rpc;
 pub mod session;
 mod workspace_access;
 
+pub use adapter::CancelOutcome;
 pub use events::{
     AgentEvent, AgentLaunchContext, EventSink, McpServerLaunch, PermissionOption, RuntimeEvent,
     ADAPTER_VERSION,
