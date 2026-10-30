@@ -18,8 +18,9 @@ pub trait AgentAdapter: Send {
     /// `core_turn_id` 是本轮在 Core 中的固定身份。异步回调和读取线程必须
     /// 保存并使用这个值，不能回读会话当前轮次。
     fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String>;
-    /// 请求中断当前轮次。
-    fn cancel(&mut self) -> Result<(), String>;
+    /// 请求中断指定 Core 轮次。实现必须忽略已经结束的轮次，并取消仍在
+    /// 串行派发队列中、尚未写入协议的待发送轮次。
+    fn cancel(&mut self, core_turn_id: &str) -> Result<(), String>;
     /// 当前适配器持有的原生 session / thread ID，用于判断能否复用进程。
     fn native_session_id(&self) -> Option<String> {
         None

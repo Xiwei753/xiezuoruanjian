@@ -4,7 +4,7 @@
 //! `session/new` / `session/load` 建立或恢复会话，`session/prompt` 发送请求，
 //! `session/update` 通知转成统一事件。MCP 作为 stdio server 配置随会话传递。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -26,10 +26,14 @@ pub struct AcpAdapter {
     emit: EventSink,
     permission_ids: Arc<Mutex<HashMap<String, i64>>>,
     /// 当前轮次的固定 Core Turn。ACP 的 `session/update` 通知不带轮次 ID，
-    /// 只能由管理器在发起 prompt 时写入；下一轮必须等上一轮响应线程结束后
-    /// 再切换，避免同一连接上的旧通知被误归到新轮次。
+    /// 由串行派发器在真正发出请求时写入；上一轮终态前不切换。
     active_core_turn_id: Arc<Mutex<String>>,
-    previous_prompt: Option<std::thread::JoinHandle<()>>,
+    /// 会话级异步串行派发器。每个 prompt 线程都必须先取得这把锁，才能写入
+    /// `active_core_turn_id` 并发送 `session/prompt`。等待发生在线程内，不能
+    /// 持有 `AgentSessionManager` 互斥锁，否则取消线程无法发送 `session/cancel`。
+    dispatch_lock: Arc<Mutex<()>>,
+    /// 已被用户取消、但还没轮到派发的 Core Turn。
+    cancelled_turns: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AcpAdapter {
@@ -271,7 +275,8 @@ impl AcpAdapter {
             emit,
             permission_ids,
             active_core_turn_id,
-            previous_prompt: None,
+            dispatch_lock: Arc::new(Mutex::new(())),
+            cancelled_turns: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 }
@@ -281,23 +286,35 @@ impl AgentAdapter for AcpAdapter {
         let Some(session_id) = self.session_id.lock().ok().and_then(|guard| guard.clone()) else {
             return Err("ACP 会话尚未建立".to_string());
         };
-        // ACP 的增量通知没有 turn id。先等上一轮 `session/prompt` 响应结束，
-        // 期间通知仍归上一轮；响应之后同一连接不会再补发旧轮次通知。
-        if let Some(previous) = self.previous_prompt.take() {
-            let _ = previous.join();
-        }
-        if let Ok(mut guard) = self.active_core_turn_id.lock() {
-            *guard = core_turn_id.to_string();
-        }
         let client = self.client.clone();
         let emit = self.emit.clone();
+        let active_turn = self.active_core_turn_id.clone();
+        let dispatch = self.dispatch_lock.clone();
+        let cancelled_turns = self.cancelled_turns.clone();
         let round_turn_id = core_turn_id.to_string();
         let accepted_turn_id = round_turn_id.clone();
         let text = message.to_string();
-        let prompt_thread = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("agent-acp-prompt".to_string())
             .spawn(move || {
+                // 等待上一轮终态只在 worker 中发生，绝不持有会话管理器锁；
+                // 这样取消线程仍能及时写入 `session/cancel`。
+                let _dispatch_guard = dispatch.lock();
+                let cancelled_before_send = cancelled_turns
+                    .lock()
+                    .map(|mut guard| guard.remove(&round_turn_id))
+                    .unwrap_or(false);
+                if cancelled_before_send {
+                    log::debug!("[agent] skip cancelled ACP turn {}", round_turn_id);
+                    return;
+                }
+                if let Ok(mut guard) = active_turn.lock() {
+                    *guard = round_turn_id.clone();
+                }
                 let accepted_emit = emit.clone();
+                let accepted_cancelled = cancelled_turns.clone();
+                let accepted_client = client.clone();
+                let accepted_session = session_id.clone();
                 let result = client.request_observed(
                     "session/prompt",
                     json!({
@@ -306,6 +323,18 @@ impl AgentAdapter for AcpAdapter {
                     }),
                     REQUEST_TIMEOUT,
                     move || {
+                        // 取消可能恰好发生在“检查队列”和“写入 stdin”之间。
+                        // 写入成功后再次检查，若已取消则立刻补发 session/cancel。
+                        let cancelled_after_send = accepted_cancelled
+                            .lock()
+                            .map(|mut guard| guard.remove(&accepted_turn_id))
+                            .unwrap_or(false);
+                        if cancelled_after_send {
+                            let _ = accepted_client.notify(
+                                "session/cancel",
+                                json!({ "sessionId": accepted_session }),
+                            );
+                        }
                         (accepted_emit)(RuntimeEvent::turn(
                             accepted_turn_id.clone(),
                             "",
@@ -327,7 +356,6 @@ impl AgentAdapter for AcpAdapter {
                 }
             })
             .map_err(|error| format!("无法启动 ACP 请求线程：{error}"))?;
-        self.previous_prompt = Some(prompt_thread);
         Ok(())
     }
 
@@ -335,7 +363,20 @@ impl AgentAdapter for AcpAdapter {
         self.session_id.lock().ok().and_then(|guard| guard.clone())
     }
 
-    fn cancel(&mut self) -> Result<(), String> {
+    fn cancel(&mut self, core_turn_id: &str) -> Result<(), String> {
+        let active = self
+            .active_core_turn_id
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+        if active != core_turn_id {
+            // 轮次还在串行队列中：标记后由 worker 跳过。此时绝不能发
+            // `session/cancel`，否则会误杀正在运行的另一轮。
+            if let Ok(mut guard) = self.cancelled_turns.lock() {
+                guard.insert(core_turn_id.to_string());
+            }
+            return Ok(());
+        }
         let session_id = self
             .session_id
             .lock()

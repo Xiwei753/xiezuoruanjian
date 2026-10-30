@@ -108,10 +108,14 @@ impl AgentSessionManager {
                     | AgentEvent::ModelsAvailable { .. }
                     | AgentEvent::McpConnectionChanged { .. }
             );
+            let terminal = matches!(
+                event.event,
+                AgentEvent::TurnCompleted | AgentEvent::TurnFailed { .. }
+            );
             // 适配器显式携带的 Core Turn 是创建异步线程时的固定身份，绝不能
-            // 用事件到达时的 current_turn_id 覆盖。只有尚未标注的非会话事件
-            // 才补当前轮次，兼容少量同步发出的事件。
-            if event.core_turn_id.is_empty() && !session_event {
+            // 用事件到达时的 current_turn_id 覆盖。终态事件必须由适配器确认
+            // 归属；仅有未标注的终态时宁可丢弃，也不能结束刚发出的新轮次。
+            if event.core_turn_id.is_empty() && !session_event && !terminal {
                 event.core_turn_id = turn_id
                     .lock()
                     .map(|guard| guard.clone())
@@ -143,24 +147,25 @@ impl AgentSessionManager {
     }
 
     pub fn cancel(&mut self) -> Result<(), String> {
-        self.adapter
-            .as_mut()
-            .ok_or_else(|| "Agent 会话尚未启动".to_string())?
-            .cancel()
-    }
-
-    /// 只取消仍然处于活动状态的轮次。用户停止后立刻发送下一轮时，旧的
-    /// 取消线程可能晚于新轮次拿到锁；按轮次 id 校验可避免误中止新回答。
-    pub fn cancel_turn(&mut self, turn_id: &str) -> Result<(), String> {
         let current = self
             .current_turn_id
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default();
-        if current != turn_id {
-            return Ok(());
-        }
-        self.cancel()
+        self.adapter
+            .as_mut()
+            .ok_or_else(|| "Agent 会话尚未启动".to_string())?
+            .cancel(&current)
+    }
+
+    /// 按 Core 轮次取消。用户停止后立刻发送下一轮时，取消线程可能晚于新
+    /// 轮次执行；适配器必须按轮次 id 决定是否中断原生协议，不能因为当前
+    /// 轮次已经变化就放弃取消上一轮，也不能误中止新回答。
+    pub fn cancel_turn(&mut self, turn_id: &str) -> Result<(), String> {
+        self.adapter
+            .as_mut()
+            .ok_or_else(|| "Agent 会话尚未启动".to_string())?
+            .cancel(turn_id)
     }
 
     pub fn respond_permission(&mut self, request_id: &str, option_id: &str) -> Result<(), String> {

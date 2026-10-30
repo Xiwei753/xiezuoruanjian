@@ -436,7 +436,15 @@ impl AgentAdapter for CodexAdapter {
         self.thread_id.lock().ok().and_then(|guard| guard.clone())
     }
 
-    fn cancel(&mut self) -> Result<(), String> {
+    fn cancel(&mut self, core_turn_id: &str) -> Result<(), String> {
+        let active = self
+            .active_core_turn_id
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+        if active != core_turn_id {
+            return Ok(());
+        }
         let thread_id = self
             .thread_id
             .lock()

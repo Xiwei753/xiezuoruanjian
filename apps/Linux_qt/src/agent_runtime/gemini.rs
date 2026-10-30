@@ -375,9 +375,12 @@ impl AgentAdapter for GeminiAdapter {
         self.session_id.lock().ok().and_then(|guard| guard.clone())
     }
 
-    fn cancel(&mut self) -> Result<(), String> {
+    fn cancel(&mut self, core_turn_id: &str) -> Result<(), String> {
         if let Ok(guard) = self.active_child.lock() {
-            if let Some((_, child)) = guard.as_ref() {
+            if let Some((active_turn, child)) = guard.as_ref() {
+                if active_turn != core_turn_id {
+                    return Ok(());
+                }
                 if let Ok(mut child) = child.lock() {
                     if let Some(child) = child.as_mut() {
                         child.kill().map_err(|error| error.to_string())?;
