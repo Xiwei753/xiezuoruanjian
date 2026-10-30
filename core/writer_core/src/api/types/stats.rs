@@ -381,6 +381,15 @@ pub struct ContributionCountsDto {
     pub deleted_objects: u64,
     pub linked_objects: u64,
     pub unlinked_objects: u64,
+    /// AI 请求输入的真实字符数；未记录方向的事件不推断。
+    #[serde(default)]
+    pub ai_input_chars: u64,
+    /// AI 模型输出的真实字符数；未记录方向的事件不推断。
+    #[serde(default)]
+    pub ai_output_chars: u64,
+    /// 带 AI 方向标记的操作数；0 表示方向未区分，而不是“输入输出都是 0”。
+    #[serde(default)]
+    pub ai_direction_operations: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -425,14 +434,15 @@ pub struct ContributionEntrypointStatsDto {
     pub operations: u64,
 }
 
-/// 单日单 actor 的本地小时切片（#1015）。
+/// 单日单 actor 的事件原产地小时切片（#1015）。
 ///
-/// 只有事件本身记录了发生时间才进入切片，组内计数口径与
-/// [`ContributionCountsDto`] 相同；界面不能用它反推人工码字。
+/// 只有事件本身在发生设备记录了本地小时才进入切片；聚合端不得用查看
+/// 统计的机器时区重算。组内计数口径与 [`ContributionCountsDto`] 相同；
+/// 界面不能用它反推人工码字。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ContributionSliceStatsDto {
-    /// 本地小时（0–23）。
+    /// 事件发生设备记录的本地小时（0–23）。
     pub hour: u8,
     pub counts: ContributionCountsDto,
 }
@@ -454,7 +464,7 @@ pub struct ContributionDayActorStatsDto {
     /// 带真实来源设备与业务日的事件数；其余历史事件只计入操作总量。
     #[serde(default)]
     pub trusted_operations: u64,
-    /// 当天该 actor 的本地小时切片，按小时升序；没有发生时间的历史事件不补造。
+    /// 当天该 actor 的事件原产地小时切片，按小时升序；旧事件没有小时信息时不补造。
     #[serde(default)]
     pub slices: Vec<ContributionSliceStatsDto>,
 }

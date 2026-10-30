@@ -443,6 +443,9 @@ fn contribution_counts_dto(
         deleted_objects: counts.deleted_objects,
         linked_objects: counts.linked_objects,
         unlinked_objects: counts.unlinked_objects,
+        ai_input_chars: counts.ai_input_chars,
+        ai_output_chars: counts.ai_output_chars,
+        ai_direction_operations: counts.ai_direction_operations,
     }
 }
 

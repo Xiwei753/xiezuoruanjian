@@ -249,12 +249,30 @@ Item {
 
     // 单日单 actor：操作量、新增/删除/修改字数都来自 Core 的事件聚合。
     function actorDetailText(detail) {
-        return actorLabel(detail ? detail.actor : "") + " · "
+        var base = actorLabel(detail ? detail.actor : "") + " · "
             + qsTr("操作 %1 次 · 新增 %2 字 · 删除 %3 字 · 修改 %4 字")
                 .arg(formatNum(countOf(detail, "operations")))
                 .arg(formatNum(countOf(detail, "insertedChars")))
                 .arg(formatNum(countOf(detail, "deletedChars")))
                 .arg(formatNum(countOf(detail, "modifiedChars")))
+        if (detail && detail.actor === "ai") {
+            var direction = aiDirectionSummary(detail.counts)
+            base += " · " + (direction !== ""
+                ? direction
+                : qsTr("请求输入/模型输出未区分"))
+        }
+        return base
+    }
+
+    // 只有事件源显式记录方向时才展示输入/输出；文本编辑量不能冒充请求输入。
+    function aiDirectionSummary(counts) {
+        if (!counts) return ""
+        var recorded = Number(counts.aiDirectionOperations || 0)
+        if (recorded <= 0) return ""
+        return qsTr("请求输入 %1 字 · 模型输出 %2 字 · 方向记录 %3 次")
+            .arg(formatNum(counts.aiInputChars))
+            .arg(formatNum(counts.aiOutputChars))
+            .arg(formatNum(recorded))
     }
 
     // 入口与可信覆盖：两者都来自事件字段，缺字段时只省略对应说明。
@@ -278,7 +296,7 @@ Item {
         return parts.join(" · ")
     }
 
-    // 本地小时切片：事件自带发生时间才有；没有切片时整行不显示。
+    // 事件原产地小时切片：事件自带发生小时才有；没有切片时整行不显示。
     function actorSliceText(detail) {
         var slices = detail && detail.slices ? detail.slices : []
         if (slices.length === 0) return ""
@@ -286,11 +304,17 @@ Item {
         for (var i = 0; i < slices.length; i++) {
             var slice = slices[i]
             if (!slice) continue
-            parts.push(formatHour(slice.hour) + " "
+            var text = formatHour(slice.hour) + " "
                 + qsTr("操作 %1 · 新增 %2 · 删除 %3")
                     .arg(formatNum(countOf(slice, "operations")))
                     .arg(formatNum(countOf(slice, "insertedChars")))
-                    .arg(formatNum(countOf(slice, "deletedChars"))))
+                    .arg(formatNum(countOf(slice, "deletedChars")))
+            if (detail.actor === "ai") {
+                var direction = aiDirectionSummary(slice.counts)
+                if (direction !== "")
+                    text += " · " + direction
+            }
+            parts.push(text)
         }
         return qsTr("时段：") + parts.join("；")
     }

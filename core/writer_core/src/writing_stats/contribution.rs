@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use similar::{capture_diff_slices, Algorithm, DiffOp};
 
@@ -65,6 +66,8 @@ pub struct MutationContext {
     entrypoint: MutationEntrypoint,
     transaction_id: String,
     occurred_at_ms: i64,
+    ai_input_chars: Option<u32>,
+    ai_output_chars: Option<u32>,
 }
 
 impl MutationContext {
@@ -78,6 +81,8 @@ impl MutationContext {
             entrypoint,
             transaction_id: transaction_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+            ai_input_chars: None,
+            ai_output_chars: None,
         }
     }
 
@@ -102,6 +107,20 @@ impl MutationContext {
 
     pub fn with_transaction_id(mut self, transaction_id: impl Into<String>) -> Self {
         self.transaction_id = transaction_id.into();
+        self
+    }
+
+    /// 记录 AI 请求输入与模型输出的真实字符数。
+    ///
+    /// 只有实际产出这些数据的 AI 事件源才能设置；普通对象修改不能从
+    /// `inserted_chars` / `modified_chars` 反推，因此保持 `None`。
+    pub fn with_ai_direction(
+        mut self,
+        input_chars: Option<u32>,
+        output_chars: Option<u32>,
+    ) -> Self {
+        self.ai_input_chars = input_chars;
+        self.ai_output_chars = output_chars;
         self
     }
 
@@ -261,6 +280,12 @@ pub struct ContributionEvent {
     pub occurred_at_ms: i64,
     #[serde(default)]
     pub local_date: String,
+    /// 事件发生设备当时记录的本地小时（0–23）。
+    ///
+    /// 与 `local_date` 一起同步；旧事件没有该字段时保持 `None`，统计端不得
+    /// 用查看统计的机器时区补造切片。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_hour: Option<u8>,
     pub project_id: String,
     pub object_type: ContributionObjectType,
     pub object_id: String,
@@ -285,6 +310,12 @@ pub struct ContributionEvent {
     pub deleted_chars: u32,
     #[serde(default)]
     pub modified_chars: u32,
+    /// AI 请求输入的真实字符数；旧事件或非 AI 事件为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_input_chars: Option<u32>,
+    /// AI 模型输出的真实字符数；旧事件或非 AI 事件为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_output_chars: Option<u32>,
     /// 仅含正文的对象使用：用于增量维护「当前保留内容来源」。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_before: Option<String>,
@@ -325,6 +356,7 @@ impl ContributionEvent {
             origin_device_id: String::new(),
             occurred_at_ms: context.occurred_at_ms(),
             local_date: String::new(),
+            local_hour: local_hour_at(context.occurred_at_ms()),
             project_id: project_id.into(),
             object_type,
             object_id,
@@ -340,6 +372,8 @@ impl ContributionEvent {
             inserted_chars: inserted,
             deleted_chars: deleted,
             modified_chars: modified,
+            ai_input_chars: context.ai_input_chars,
+            ai_output_chars: context.ai_output_chars,
             text_before: before.and_then(|snapshot| snapshot.text),
             text_after: after.and_then(|snapshot| snapshot.text),
         }
@@ -348,6 +382,14 @@ impl ContributionEvent {
     pub fn is_textual(&self) -> bool {
         self.text_before.is_some() || self.text_after.is_some()
     }
+}
+
+/// 事件发生设备记录的发生小时（0–23）。
+///
+/// 在事件创建时调用一次并随事件持久化，统计投影不再读取查看端的本地时区。
+fn local_hour_at(timestamp_ms: i64) -> Option<u8> {
+    let dt = chrono::DateTime::from_timestamp_millis(timestamp_ms)?;
+    u8::try_from(dt.with_timezone(&chrono::Local).hour()).ok()
 }
 
 /// 字符级差异片段。索引均为**字符**下标，不是 UTF-8 字节偏移。
@@ -394,9 +436,7 @@ pub(crate) fn char_diff_ops(before: &str, after: &str) -> Vec<CharDiffOp> {
                 len,
             },
             DiffOp::Delete {
-                old_index,
-                old_len,
-                ..
+                old_index, old_len, ..
             } => CharDiffOp::Delete {
                 old_start: old_index,
                 old_len,
@@ -459,14 +499,17 @@ pub fn apply_text_sources(current: &mut Vec<(char, MutationActor)>, event: &Cont
     if current.len() != before.len() {
         // 事件链对不上（旧数据缺失/外部改盘）时，不能借用错位的来源。
         current.clear();
-        current.extend(before.iter().copied().map(|ch| (ch, MutationActor::Unknown)));
+        current.extend(
+            before
+                .iter()
+                .copied()
+                .map(|ch| (ch, MutationActor::Unknown)),
+        );
     }
     let mut updated = Vec::with_capacity(after.len());
     for op in char_diff_ops(before_text, after_text) {
         match op {
-            CharDiffOp::Equal {
-                old_start, len, ..
-            } => {
+            CharDiffOp::Equal { old_start, len, .. } => {
                 updated.extend(current[old_start..old_start + len].iter().copied());
             }
             CharDiffOp::Delete { .. } => {}

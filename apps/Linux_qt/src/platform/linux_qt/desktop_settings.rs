@@ -47,10 +47,19 @@ pub struct PageCollapsedState {
     pub top_bar: bool,
 }
 
+/// 布局设置版本。缺失时按 0 处理，用于一次性迁移旧全局栏宽。
+pub const CURRENT_LAYOUT_VERSION: u32 = 1;
+
+/// 首次把旧全局栏宽迁入页面覆盖的版本；更高版本不得重复执行这段推断。
+const PAGE_OVERRIDE_MIGRATION_VERSION: u32 = 1;
+
 /// Qt 桌面端本地布局设置。所有长度单位都是 Qt 设备无关逻辑像素（vp）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DesktopSettings {
+    /// 布局迁移版本；全新配置直接写入当前版本，旧文件缺少时为 0。
+    #[serde(default)]
+    pub layout_version: u32,
     /// 上次窗口宽度（vp）。0 表示未记录，由 QML 按屏幕可用几何决定。
     pub window_width: f64,
     /// 上次窗口高度（vp）。0 表示未记录。
@@ -70,6 +79,7 @@ pub struct DesktopSettings {
 impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
+            layout_version: CURRENT_LAYOUT_VERSION,
             // 与 main.qml 的初始窗口尺寸默认值一致。
             window_width: 1100.0,
             window_height: 768.0,
@@ -85,29 +95,78 @@ impl Default for DesktopSettings {
 }
 
 impl DesktopSettings {
-    /// 把旧的全局栏宽迁移为 `writing` 页面覆盖。
+    /// 一次性把真正自定义过的旧全局栏宽迁移为 `writing` 页面覆盖。
     ///
-    /// 右栏新语义包含 56vp 工具轨，因此旧 `desktopToolPaneWidth`（仅抽屉）
-    /// 需要加回工具轨宽度。已有页面覆盖的边保持不动。
-    pub fn normalize_page_overrides(&mut self) {
-        if self.desktop_sidebar_width <= 0.0 && self.desktop_tool_pane_width <= 0.0 {
-            return;
+    /// 旧版本曾在加载时无条件用默认值 240 / 240 合成
+    /// `writing.left=240, writing.right=296`，导致新用户失去“跟随全局默认”
+    /// 的语义。这里用布局版本区分：
+    /// - 默认宽度不生成覆盖；
+    /// - 只有历史全局宽度确实偏离默认值时才补 writing 覆盖；
+    /// - 旧版本合成出来的默认 writing 覆盖会被移除；
+    /// - 已有页面覆盖（用户真正拖过的值）保持不动。
+    ///
+    /// 返回是否修改了布局版本并需要回写文件。
+    pub fn normalize_page_overrides(&mut self) -> bool {
+        if self.layout_version >= PAGE_OVERRIDE_MIGRATION_VERSION {
+            return false;
         }
+
+        let defaults = DesktopSettings::default();
+        let legacy_global_defaults =
+            approx(self.desktop_sidebar_width, defaults.desktop_sidebar_width)
+                && approx(
+                    self.desktop_tool_pane_width,
+                    defaults.desktop_tool_pane_width,
+                );
+        let synthetic_writing_defaults =
+            self.page_pane_overrides
+                .get("writing")
+                .is_some_and(|writing| {
+                    writing
+                        .left
+                        .is_some_and(|value| approx(value, defaults.desktop_sidebar_width))
+                        && writing.right.is_some_and(|value| {
+                            approx(value, defaults.desktop_tool_pane_width + TOOL_RAIL_WIDTH)
+                        })
+                });
+        if legacy_global_defaults && synthetic_writing_defaults {
+            self.page_pane_overrides.remove("writing");
+        }
+
         let writing = self
             .page_pane_overrides
             .entry("writing".to_string())
             .or_default();
-        if writing.left.is_none() && self.desktop_sidebar_width > 0.0 {
+        if writing.left.is_none()
+            && self.desktop_sidebar_width > 0.0
+            && !approx(self.desktop_sidebar_width, defaults.desktop_sidebar_width)
+        {
             writing.left = Some(self.desktop_sidebar_width);
         }
-        if writing.right.is_none() && self.desktop_tool_pane_width > 0.0 {
+        if writing.right.is_none()
+            && self.desktop_tool_pane_width > 0.0
+            && !approx(
+                self.desktop_tool_pane_width,
+                defaults.desktop_tool_pane_width,
+            )
+        {
             writing.right = Some(self.desktop_tool_pane_width + TOOL_RAIL_WIDTH);
         }
+        if writing.left.is_none() && writing.right.is_none() {
+            self.page_pane_overrides.remove("writing");
+        }
+
+        self.layout_version = CURRENT_LAYOUT_VERSION;
+        true
     }
 }
 
 /// 右栏工具轨固定宽度（vp），与 QML `DesktopLayoutState.toolRailWidth` 一致。
 pub const TOOL_RAIL_WIDTH: f64 = 56.0;
+
+fn approx(left: f64, right: f64) -> bool {
+    (left - right).abs() < 0.5
+}
 
 /// 进程内缓存。首次访问从磁盘加载，加载失败或文件缺失时用默认值。
 static CURRENT: Mutex<Option<DesktopSettings>> = Mutex::new(None);
@@ -160,6 +219,7 @@ fn desktop_settings_from_legacy(value: &Value) -> DesktopSettings {
             ],
         )
         .unwrap_or(defaults.desktop_editor_width),
+        layout_version: 0,
         ..DesktopSettings::default()
     };
     settings
@@ -191,7 +251,10 @@ fn migrate_from_legacy_settings_at(
 fn read_from_disk_at(settings_path: &Path, data_root: &Path) -> Option<DesktopSettings> {
     if let Ok(bytes) = std::fs::read(settings_path) {
         if let Ok(mut settings) = serde_json::from_slice::<DesktopSettings>(&bytes) {
-            settings.normalize_page_overrides();
+            if settings.normalize_page_overrides() {
+                // 只回写一次迁移标记，避免每次启动重复推断历史栏宽。
+                let _ = write_to_disk_at(settings_path, &settings);
+            }
             return Some(settings);
         }
     }
@@ -288,6 +351,15 @@ mod tests {
     }
 
     #[test]
+    fn missing_layout_version_is_zero_for_one_time_migration() {
+        let old: DesktopSettings =
+            serde_json::from_str(r#"{"windowWidth":1280.0,"windowHeight":800.0}"#).unwrap();
+        assert_eq!(old.layout_version, 0);
+        assert_eq!(old.window_width, 1280.0);
+        assert_eq!(old.desktop_sidebar_width, 240.0);
+    }
+
+    #[test]
     fn legacy_camel_case_keys_migrate() {
         let legacy = serde_json::json!({
             "windowWidth": 1280.0,
@@ -298,6 +370,7 @@ mod tests {
         assert_eq!(
             desktop_settings_from_legacy(&legacy),
             DesktopSettings {
+                layout_version: 0,
                 window_width: 1280.0,
                 window_height: 800.0,
                 desktop_sidebar_width: 320.0,
@@ -339,6 +412,7 @@ mod tests {
         assert_eq!(
             desktop_settings_from_legacy(&legacy),
             DesktopSettings {
+                layout_version: 0,
                 window_width: 1440.0,
                 window_height: 900.0,
                 desktop_sidebar_width: 260.0,
@@ -385,13 +459,47 @@ mod tests {
 
     #[test]
     fn legacy_missing_or_invalid_fields_fall_back_to_defaults() {
-        let defaults = DesktopSettings::default();
+        let defaults = DesktopSettings {
+            layout_version: 0,
+            ..DesktopSettings::default()
+        };
         assert_eq!(
             desktop_settings_from_legacy(&serde_json::json!({})),
             defaults
         );
         let invalid = serde_json::json!({ "windowWidth": "wide", "desktopSidebarWidth": null });
         assert_eq!(desktop_settings_from_legacy(&invalid), defaults);
+    }
+
+    #[test]
+    fn default_widths_do_not_create_manual_writing_overrides() {
+        let mut settings = DesktopSettings {
+            layout_version: 0,
+            ..DesktopSettings::default()
+        };
+        assert!(settings.normalize_page_overrides());
+        assert!(settings.page_pane_overrides.is_empty());
+        assert_eq!(settings.layout_version, CURRENT_LAYOUT_VERSION);
+        // 已升级的配置不会再次根据旧字段补写覆盖。
+        assert!(!settings.normalize_page_overrides());
+        assert!(settings.page_pane_overrides.is_empty());
+    }
+
+    #[test]
+    fn synthetic_default_writing_overrides_are_removed_once() {
+        let mut settings = DesktopSettings {
+            layout_version: 0,
+            ..DesktopSettings::default()
+        };
+        settings.page_pane_overrides.insert(
+            "writing".to_string(),
+            PagePaneWidths {
+                left: Some(240.0),
+                right: Some(240.0 + TOOL_RAIL_WIDTH),
+            },
+        );
+        assert!(settings.normalize_page_overrides());
+        assert!(settings.page_pane_overrides.is_empty());
     }
 
     fn unique_temp_dir(suffix: &str) -> std::path::PathBuf {
@@ -428,6 +536,21 @@ mod tests {
         assert_eq!(migrated.window_height, 800.0);
         assert_eq!(migrated.desktop_sidebar_width, 360.0);
         assert_eq!(migrated.desktop_editor_width, 520.0);
+        assert_eq!(migrated.layout_version, CURRENT_LAYOUT_VERSION);
+        assert_eq!(
+            migrated
+                .page_pane_overrides
+                .get("writing")
+                .and_then(|writing| writing.left),
+            Some(360.0)
+        );
+        assert_eq!(
+            migrated
+                .page_pane_overrides
+                .get("writing")
+                .and_then(|writing| writing.right),
+            None
+        );
         // 迁移后立刻写入平台配置目录。
         assert!(new_path.exists());
 

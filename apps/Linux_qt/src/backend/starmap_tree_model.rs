@@ -13,7 +13,7 @@
 // 边界：
 //   - 模型只读 Core 数据，不缓存第二套星图业务状态；新建 / 重命名 / 删除仍由
 //     Workspace 调 starmapBackend 完成，成功后调用 refresh()/set_starmap_title()。
-//   - 最多展示三层（根 / 子 / 孙），避免树的无限展开与循环图。
+//   - 层级不设人为上限；每次展开只懒加载当前分支的下一层。
 // =============================================================================
 
 use super::*;
@@ -46,9 +46,6 @@ const ROLE_DEPTH: i32 = 269;
 
 const QT_DISPLAY_ROLE: i32 = 0;
 const QT_EDIT_ROLE: i32 = 2;
-
-/// 根 0 / 子 1 / 孙 2；再往下不再展开。
-const MAX_TREE_DEPTH: i32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RouteSegment {
@@ -278,9 +275,6 @@ impl StarmapTreeModel {
     }
 
     fn row_has_children(&self, row: &TreeRow) -> bool {
-        if row.depth >= MAX_TREE_DEPTH {
-            return false;
-        }
         if row.children_loaded {
             !row.children.is_empty()
         } else {
@@ -358,12 +352,6 @@ impl StarmapTreeModel {
             )
         };
         if loaded {
-            return true;
-        }
-        if depth >= MAX_TREE_DEPTH {
-            if let Some(row) = self.state.borrow_mut().rows.get_mut(node_id) {
-                row.children_loaded = true;
-            }
             return true;
         }
 
@@ -480,10 +468,7 @@ impl QAbstractItemModel for StarmapTreeModel {
             let Some(parent_row) = state.rows.get(parent_id) else {
                 return QModelIndex::default();
             };
-            parent_row
-                .children
-                .get(row as usize)
-                .copied()
+            parent_row.children.get(row as usize).copied()
         } else {
             self.state.borrow().root_ids.get(row as usize).copied()
         };
@@ -535,17 +520,13 @@ impl QAbstractItemModel for StarmapTreeModel {
             QT_DISPLAY_ROLE | QT_EDIT_ROLE => QVariant::from(QString::from(row.title.as_str())),
             ROLE_TITLE => QVariant::from(QString::from(row.title.as_str())),
             ROLE_STARMAP_ID => QVariant::from(QString::from(row.starmap_id.as_str())),
-            ROLE_ROOT_STARMAP_ID => {
-                QVariant::from(QString::from(row.root_starmap_id.as_str()))
-            }
+            ROLE_ROOT_STARMAP_ID => QVariant::from(QString::from(row.root_starmap_id.as_str())),
             ROLE_ROUTE_SEGMENTS => QVariant::from(QString::from(segments_json(&row.segments))),
             ROLE_ROUTE_KEY => QVariant::from(QString::from(row.route_key())),
             ROLE_HAS_CHILDREN => QVariant::from(self.row_has_children(row)),
             ROLE_EXPANDED => QVariant::from(row.expanded),
             ROLE_ROW_KIND => QVariant::from(QString::from(row.kind.as_str())),
-            ROLE_PARENT_STARMAP_ID => {
-                QVariant::from(QString::from(row.parent_starmap_id.as_str()))
-            }
+            ROLE_PARENT_STARMAP_ID => QVariant::from(QString::from(row.parent_starmap_id.as_str())),
             ROLE_INSTANCE_ID => QVariant::from(QString::from(row.instance_id())),
             ROLE_NODE_ID => QVariant::from(QString::from(row.node_id())),
             ROLE_REVISION => QVariant::from(row.revision),
@@ -582,11 +563,7 @@ impl StarmapTreeModel {
         self.ensure_children_loaded_internal(&route_key.to_string())
     }
 
-    fn index_for_route(
-        &self,
-        root_starmap_id: QString,
-        segments_json: QString,
-    ) -> QModelIndex {
+    fn index_for_route(&self, root_starmap_id: QString, segments_json: QString) -> QModelIndex {
         let root_id = root_starmap_id.to_string();
         let raw_segments: Vec<serde_json::Value> =
             serde_json::from_str(&segments_json.to_string()).unwrap_or_default();

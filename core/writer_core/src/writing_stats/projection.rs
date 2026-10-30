@@ -20,7 +20,6 @@ use crate::writing_stats::contribution::{
     MutationActor,
 };
 use crate::writing_stats::{EventSource, WritingActivitySegment, WritingInputEvent};
-use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -1295,6 +1294,12 @@ pub struct ContributionCounts {
     pub deleted_objects: u64,
     pub linked_objects: u64,
     pub unlinked_objects: u64,
+    /// AI 请求输入的真实字符数；只有事件源显式记录方向时累计。
+    pub ai_input_chars: u64,
+    /// AI 模型输出的真实字符数；只有事件源显式记录方向时累计。
+    pub ai_output_chars: u64,
+    /// 带 AI 方向标记的事件数；用于区分“方向未记录”和真实的 0 字。
+    pub ai_direction_operations: u64,
 }
 
 impl ContributionCounts {
@@ -1309,6 +1314,11 @@ impl ContributionCounts {
             ContributionOperation::Delete => self.deleted_objects += 1,
             ContributionOperation::Link => self.linked_objects += 1,
             ContributionOperation::Unlink => self.unlinked_objects += 1,
+        }
+        if event.ai_input_chars.is_some() || event.ai_output_chars.is_some() {
+            self.ai_input_chars += u64::from(event.ai_input_chars.unwrap_or(0));
+            self.ai_output_chars += u64::from(event.ai_output_chars.unwrap_or(0));
+            self.ai_direction_operations += 1;
         }
     }
 }
@@ -1350,7 +1360,7 @@ pub struct ContributionDayActorAgg {
     pub entrypoints: BTreeMap<String, u64>,
     /// 带真实来源设备与业务日的事件数。
     pub trusted_operations: u64,
-    /// 本地小时 → 该小时操作量；没有有效发生时间的事件不进切片。
+    /// 事件发生设备记录的本地小时 → 该小时操作量；旧事件没有该信息时不补造切片。
     pub slices: BTreeMap<u8, ContributionCounts>,
 }
 
@@ -1424,7 +1434,7 @@ pub fn project_contribution_history(events: &[ContributionEvent]) -> Contributio
         if !event.origin_device_id.is_empty() && !event.local_date.is_empty() {
             day_actor.trusted_operations += 1;
         }
-        if let Some(hour) = local_hour_at(event.occurred_at_ms) {
+        if let Some(hour) = event.local_hour.filter(|hour| *hour < 24) {
             day_actor.slices.entry(hour).or_default().add(event);
         }
 
@@ -1466,12 +1476,6 @@ pub fn project_contribution_history(events: &[ContributionEvent]) -> Contributio
             .add(event);
     }
     result
-}
-
-/// 事件发生时刻的本地小时（0–23）；时间戳非法时返回 `None`，不伪造成 0 点。
-fn local_hour_at(timestamp_ms: i64) -> Option<u8> {
-    let dt = chrono::DateTime::from_timestamp_millis(timestamp_ms)?;
-    u8::try_from(dt.with_timezone(&chrono::Local).hour()).ok()
 }
 
 /// 从对象完整历史重建当前保留文字的来源，再与磁盘上的真实对象对账。
@@ -1541,9 +1545,7 @@ fn reconcile_sources_with_current(sources: &mut Vec<(char, MutationActor)>, curr
     let mut updated = Vec::with_capacity(current_chars.len());
     for op in char_diff_ops(&expected, current) {
         match op {
-            CharDiffOp::Equal {
-                old_start, len, ..
-            } => {
+            CharDiffOp::Equal { old_start, len, .. } => {
                 updated.extend(sources[old_start..old_start + len].iter().copied());
             }
             CharDiffOp::Delete { .. } => {}
