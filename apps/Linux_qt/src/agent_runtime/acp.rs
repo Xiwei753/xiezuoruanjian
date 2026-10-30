@@ -5,7 +5,7 @@
 //! `session/update` 通知转成统一事件。MCP 作为 stdio server 配置随会话传递。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -20,37 +20,45 @@ use super::workspace_access::WorkspaceAccess;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// ACP v1: a session permits only one foreground prompt. All cancellation and
+/// permission state is protected by one lock so cancelling and permissions cannot race.
+#[derive(Default)]
+struct AcpTurnState {
+    active_turn: String,
+    queued_turns: HashSet<String>,
+    skipped_turns: HashSet<String>,
+    prompt_written: bool,
+    cancel_requested: bool,
+    cancel_notified: bool,
+    pending_permissions: HashMap<String, i64>,
+}
+
 pub struct AcpAdapter {
     client: Arc<RpcClient>,
     session_id: Arc<Mutex<Option<String>>>,
     emit: EventSink,
-    permission_ids: Arc<Mutex<HashMap<String, i64>>>,
-    /// 当前轮次的固定 Core Turn。ACP 的 `session/update` 通知不带轮次 ID，
-    /// 由串行派发器在真正发出请求时写入；上一轮终态前不切换。
-    active_core_turn_id: Arc<Mutex<String>>,
-    /// 会话级异步串行派发器。每个 prompt 线程都必须先取得这把锁，才能写入
-    /// `active_core_turn_id` 并发送 `session/prompt`。等待发生在线程内，不能
-    /// 持有 `AgentSessionManager` 互斥锁，否则取消线程无法发送 `session/cancel`。
+    state: Arc<Mutex<AcpTurnState>>,
+    /// Only one session/prompt at a time. This lock belongs to prompt workers,
+    /// never to the AgentSessionManager lock, so cancel can run immediately.
     dispatch_lock: Arc<Mutex<()>>,
-    /// 已被用户取消、但还没轮到派发的 Core Turn。
-    cancelled_turns: Arc<Mutex<HashSet<String>>>,
 }
 
 impl AcpAdapter {
     pub fn start(ctx: &AgentLaunchContext, emit: EventSink) -> Result<Self, String> {
         let session_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let permission_ids: Arc<Mutex<HashMap<String, i64>>> = Arc::new(Mutex::new(HashMap::new()));
-        let active_core_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let state: Arc<Mutex<AcpTurnState>> = Arc::new(Mutex::new(AcpTurnState::default()));
+        // A Weak client avoids a cycle: RpcClient owns the reader handler.
+        let handler_client: Arc<Mutex<Option<Weak<RpcClient>>>> = Arc::new(Mutex::new(None));
         let handler_emit = emit.clone();
         let handler_session = session_id.clone();
-        let handler_permissions = permission_ids.clone();
-        let handler_active_turn = active_core_turn_id.clone();
+        let handler_state = state.clone();
+        let handler_rpc = handler_client.clone();
         let handler: Arc<dyn Fn(&str, Value) + Send + Sync> =
             Arc::new(move |method: &str, message: Value| {
                 let params = message.get("params").cloned().unwrap_or_default();
-                let core_turn_id = handler_active_turn
+                let core_turn_id = handler_state
                     .lock()
-                    .map(|guard| guard.clone())
+                    .map(|guard| guard.active_turn.clone())
                     .unwrap_or_default();
                 match method {
                     "session/update" => {
@@ -139,14 +147,43 @@ impl AcpAdapter {
                             })
                             .unwrap_or_default();
                         let permission_key = request_id.to_string();
-                        if let Ok(mut guard) = handler_permissions.lock() {
-                            guard.insert(permission_key.clone(), request_id);
+                        // Register the permission under the same mutex as cancel_requested.
+                        // A request arriving *after* cancel is answered immediately.
+                        let reject = match handler_state.lock() {
+                            Ok(mut guard) => {
+                                if guard.active_turn.is_empty() || guard.cancel_requested {
+                                    true
+                                } else {
+                                    guard.pending_permissions.insert(permission_key.clone(), request_id);
+                                    false
+                                }
+                            }
+                            Err(_) => true,
+                        };
+                        if reject {
+                            let client = handler_rpc
+                                .lock()
+                                .ok()
+                                .and_then(|guard| guard.as_ref().and_then(Weak::upgrade));
+                            if let Some(client) = client {
+                                if let Err(error) = client.respond(
+                                    request_id,
+                                    json!({ "outcome": { "outcome": "cancelled" } }),
+                                ) {
+                                    log::warn!("[agent] ACP 自动拒绝权限失败: {error}");
+                                }
+                            }
+                            return;
                         }
-                        (handler_emit)(RuntimeEvent::turn(core_turn_id.clone(), "", AgentEvent::PermissionRequested {
+                        (handler_emit)(RuntimeEvent::turn(
+                            core_turn_id.clone(),
+                            "",
+                            AgentEvent::PermissionRequested {
                                 request_id: permission_key,
                                 description: format!("Agent 请求执行：{tool}"),
                                 options,
-                            }));
+                            },
+                        ));
                     }
                     _ => {}
                 }
@@ -173,6 +210,9 @@ impl AcpAdapter {
             &[],
             handler,
         )?);
+        if let Ok(mut guard) = handler_client.lock() {
+            *guard = Some(Arc::downgrade(&client));
+        }
 
         let init = client.request(
             "initialize",
@@ -273,89 +313,163 @@ impl AcpAdapter {
             client,
             session_id,
             emit,
-            permission_ids,
-            active_core_turn_id,
+            state,
             dispatch_lock: Arc::new(Mutex::new(())),
-            cancelled_turns: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 }
 
 impl AgentAdapter for AcpAdapter {
     fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
-        let Some(session_id) = self.session_id.lock().ok().and_then(|guard| guard.clone()) else {
-            return Err("ACP 会话尚未建立".to_string());
-        };
+        let session_id = self
+            .session_id
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .ok_or_else(|| "ACP 会话尚未建立".to_string())?;
+        {
+            let mut state = self.state.lock().map_err(|_| "ACP 轮次状态锁损坏")?;
+            state.queued_turns.insert(core_turn_id.to_string());
+        }
         let client = self.client.clone();
         let emit = self.emit.clone();
-        let active_turn = self.active_core_turn_id.clone();
+        let state = self.state.clone();
         let dispatch = self.dispatch_lock.clone();
-        let cancelled_turns = self.cancelled_turns.clone();
-        let round_turn_id = core_turn_id.to_string();
-        let accepted_turn_id = round_turn_id.clone();
-        let text = message.to_string();
-        std::thread::Builder::new()
+        let round_id = core_turn_id.to_string();
+        let message = message.to_string();
+        let task = std::thread::Builder::new()
             .name("agent-acp-prompt".to_string())
             .spawn(move || {
-                // 等待上一轮终态只在 worker 中发生，绝不持有会话管理器锁；
-                // 这样取消线程仍能及时写入 `session/cancel`。
-                let _dispatch_guard = dispatch.lock();
-                let cancelled_before_send = cancelled_turns
-                    .lock()
-                    .map(|mut guard| guard.remove(&round_turn_id))
-                    .unwrap_or(false);
-                if cancelled_before_send {
-                    log::debug!("[agent] skip cancelled ACP turn {}", round_turn_id);
+                // Never wait for an earlier turn while holding AgentSessionManager's lock.
+                let _dispatch_guard = match dispatch.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        (emit)(RuntimeEvent::turn(
+                            round_id,
+                            "",
+                            AgentEvent::TurnFailed { message: "ACP 派发锁损坏".to_string() },
+                        ));
+                        return;
+                    }
+                };
+                let skipped = match state.lock() {
+                    Ok(mut guard) => {
+                        guard.queued_turns.remove(&round_id);
+                        if guard.skipped_turns.remove(&round_id) {
+                            true
+                        } else {
+                            guard.active_turn = round_id.clone();
+                            guard.prompt_written = false;
+                            guard.cancel_requested = false;
+                            guard.cancel_notified = false;
+                            guard.pending_permissions.clear();
+                            false
+                        }
+                    }
+                    Err(_) => {
+                        (emit)(RuntimeEvent::turn(
+                            round_id,
+                            "",
+                            AgentEvent::TurnFailed { message: "ACP 轮次状态锁损坏".to_string() },
+                        ));
+                        return;
+                    }
+                };
+                if skipped {
+                    (emit)(RuntimeEvent::turn(round_id, "", AgentEvent::TurnCancelled));
                     return;
                 }
-                if let Ok(mut guard) = active_turn.lock() {
-                    *guard = round_turn_id.clone();
-                }
+
+                let accepted_state = state.clone();
                 let accepted_emit = emit.clone();
-                let accepted_cancelled = cancelled_turns.clone();
                 let accepted_client = client.clone();
                 let accepted_session = session_id.clone();
+                let accepted_id = round_id.clone();
                 let result = client.request_observed(
                     "session/prompt",
                     json!({
                         "sessionId": session_id,
-                        "prompt": [{ "type": "text", "text": text }],
+                        "prompt": [{ "type": "text", "text": message }],
                     }),
                     REQUEST_TIMEOUT,
                     move || {
-                        // 取消可能恰好发生在“检查队列”和“写入 stdin”之间。
-                        // 写入成功后再次检查，若已取消则立刻补发 session/cancel。
-                        let cancelled_after_send = accepted_cancelled
-                            .lock()
-                            .map(|mut guard| guard.remove(&accepted_turn_id))
-                            .unwrap_or(false);
-                        if cancelled_after_send {
-                            let _ = accepted_client.notify(
+                        let cancel_now = match accepted_state.lock() {
+                            Ok(mut guard) if guard.active_turn == accepted_id => {
+                                guard.prompt_written = true;
+                                if guard.cancel_requested && !guard.cancel_notified {
+                                    guard.cancel_notified = true;
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            _ => false,
+                        };
+                        (accepted_emit)(RuntimeEvent::turn(
+                            accepted_id.clone(), "", AgentEvent::PromptAccepted,
+                        ));
+                        if cancel_now {
+                            if let Err(error) = accepted_client.notify(
                                 "session/cancel",
                                 json!({ "sessionId": accepted_session }),
-                            );
+                            ) {
+                                if let Ok(mut guard) = accepted_state.lock() {
+                                    if guard.active_turn == accepted_id {
+                                        guard.cancel_notified = false;
+                                    }
+                                }
+                                (accepted_emit)(RuntimeEvent::session(
+                                    AgentEvent::SessionError {
+                                        message: format!("ACP 发送取消通知失败：{error}"),
+                                    },
+                                ));
+                            }
                         }
-                        (accepted_emit)(RuntimeEvent::turn(
-                            accepted_turn_id.clone(),
-                            "",
-                            AgentEvent::PromptAccepted,
-                        ));
                     },
                 );
-                match result {
-                    Ok(_) => {
-                        (emit)(RuntimeEvent::turn(round_turn_id, "", AgentEvent::TurnCompleted));
+                // ACP guarantees the prompt response follows all final updates.
+                // Close the current identity before releasing the dispatch lock.
+                let orphaned_permissions = match state.lock() {
+                    Ok(mut guard) if guard.active_turn == round_id => {
+                        guard.active_turn.clear();
+                        guard.prompt_written = false;
+                        guard.cancel_requested = false;
+                        guard.cancel_notified = false;
+                        std::mem::take(&mut guard.pending_permissions)
+                            .into_values()
+                            .collect::<Vec<_>>()
                     }
-                    Err(error) => {
-                        (emit)(RuntimeEvent::turn(
-                            round_turn_id,
-                            "",
-                            AgentEvent::TurnFailed { message: error },
-                        ));
-                    }
+                    _ => Vec::new(),
+                };
+                for request_id in orphaned_permissions {
+                    let _ = client.respond(
+                        request_id,
+                        json!({ "outcome": { "outcome": "cancelled" } }),
+                    );
                 }
-            })
-            .map_err(|error| format!("无法启动 ACP 请求线程：{error}"))?;
+                let event = match result {
+                    Ok(value) => match json_text(&value, &["stopReason"]).as_deref() {
+                        Some("cancelled") => AgentEvent::TurnCancelled,
+                        Some("end_turn" | "max_tokens" | "max_turn_requests" | "refusal") => {
+                            AgentEvent::TurnCompleted
+                        }
+                        Some(other) => AgentEvent::TurnFailed {
+                            message: format!("ACP 未知停止原因：{other}"),
+                        },
+                        None => AgentEvent::TurnFailed {
+                            message: "ACP session/prompt 未返回 stopReason".to_string(),
+                        },
+                    },
+                    Err(error) => AgentEvent::TurnFailed { message: error },
+                };
+                (emit)(RuntimeEvent::turn(round_id, "", event));
+            });
+        if let Err(error) = task {
+            if let Ok(mut guard) = self.state.lock() {
+                guard.queued_turns.remove(core_turn_id);
+            }
+            return Err(format!("无法启动 ACP 请求线程：{error}"));
+        }
         Ok(())
     }
 
@@ -364,42 +478,85 @@ impl AgentAdapter for AcpAdapter {
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {
-        let active = self
-            .active_core_turn_id
-            .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default();
-        if active != core_turn_id {
-            // 轮次还在串行队列中：标记后由 worker 跳过。此时绝不能发
-            // `session/cancel`，否则会误杀正在运行的另一轮。
-            if let Ok(mut guard) = self.cancelled_turns.lock() {
-                guard.insert(core_turn_id.to_string());
+        let (send_cancel, permissions) = {
+            let mut guard = self.state.lock().map_err(|_| "ACP 轮次状态锁损坏")?;
+            if guard.active_turn != core_turn_id {
+                if guard.queued_turns.contains(core_turn_id) {
+                    guard.skipped_turns.insert(core_turn_id.to_string());
+                    return Ok(CancelOutcome::Cancelled);
+                }
+                return Ok(CancelOutcome::AlreadyFinished);
             }
-            return Ok(CancelOutcome::Cancelled);
+            guard.cancel_requested = true;
+            let send_cancel = guard.prompt_written && !guard.cancel_notified;
+            if send_cancel {
+                guard.cancel_notified = true;
+            }
+            let permissions = std::mem::take(&mut guard.pending_permissions)
+                .into_values()
+                .collect::<Vec<_>>();
+            (send_cancel, permissions)
+        };
+        // session/cancel is a one-way notification, NOT proof of cancellation.
+        // The original session/prompt reply must carry stopReason=cancelled.
+        let mut first_error: Option<String> = None;
+        if send_cancel {
+            let session_id = self
+                .session_id
+                .lock()
+                .ok()
+                .and_then(|guard| guard.clone())
+                .ok_or_else(|| "ACP 会话尚未建立".to_string())?;
+            if let Err(error) = self.client.notify(
+                "session/cancel",
+                json!({ "sessionId": session_id }),
+            ) {
+                if let Ok(mut guard) = self.state.lock() {
+                    if guard.active_turn == core_turn_id {
+                        guard.cancel_notified = false;
+                    }
+                }
+                first_error = Some(error);
+            }
         }
-        let session_id = self
-            .session_id
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone())
-            .ok_or_else(|| "ACP 会话尚未建立".to_string())?;
-        self.client
-            .notify("session/cancel", json!({ "sessionId": session_id }))?;
-        Ok(CancelOutcome::Cancelled)
+        // ACP requires replies for *all* outstanding permission requests.
+        // Requests arriving after cancel_requested are auto-rejected by the handler.
+        for request_id in permissions {
+            if let Err(error) = self.client.respond(
+                request_id,
+                json!({ "outcome": { "outcome": "cancelled" } }),
+            ) {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        if let Some(error) = first_error {
+            Err(error)
+        } else {
+            Ok(CancelOutcome::Pending)
+        }
     }
 
     fn respond_permission(&mut self, request_id: &str, option_id: &str) -> Result<(), String> {
-        let rpc_id = self
-            .permission_ids
-            .lock()
-            .ok()
-            .and_then(|mut guard| guard.remove(request_id))
+        // Keep the state mutex while writing the reply: cancel cannot race in and
+        // accidentally let a late "allow" through after cancellation.
+        let mut state = self.state.lock().map_err(|_| "ACP 轮次状态锁损坏")?;
+        if state.cancel_requested {
+            return Err("本轮正在取消，权限请求已失效".to_string());
+        }
+        let rpc_id = *state
+            .pending_permissions
+            .get(request_id)
             .ok_or_else(|| "权限请求已失效".to_string())?;
         let result = if option_id.is_empty() {
             json!({ "outcome": { "outcome": "cancelled" } })
         } else {
             json!({ "outcome": { "outcome": "selected", "optionId": option_id } })
         };
-        self.client.respond(rpc_id, result)
+        self.client.respond(rpc_id, result)?;
+        state.pending_permissions.remove(request_id);
+        Ok(())
     }
+
 }
