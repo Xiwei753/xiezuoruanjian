@@ -149,6 +149,23 @@ impl RuntimeEvent {
         }
     }
 
+    /// 绑定到明确 Core Turn 的适配器事件。异步线程必须使用创建时捕获的
+    /// Core Turn ID，不能在事件到达时再读取“当前轮次”，否则取消后立即发送
+    /// 新消息时，旧线程的迟到事件会被误记到新回答。
+    pub fn turn(
+        core_turn_id: impl Into<String>,
+        native_turn_id: impl Into<String>,
+        event: AgentEvent,
+    ) -> Self {
+        Self {
+            conversation_id: String::new(),
+            generation: 0,
+            core_turn_id: core_turn_id.into(),
+            native_turn_id: native_turn_id.into(),
+            event,
+        }
+    }
+
     /// 会话级事件（启动、模型列表）没有 Core turn。
     pub fn session(event: AgentEvent) -> Self {
         Self::native(String::new(), event)

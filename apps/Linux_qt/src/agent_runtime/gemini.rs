@@ -18,13 +18,16 @@ use super::events::{
 };
 use super::workspace_access::WorkspaceAccess;
 
+/// 每轮独占的子进程槽位。读取线程只能回收自己的子进程，不能触碰下一轮。
+type RoundChild = Arc<Mutex<Option<Child>>>;
+
 pub struct GeminiAdapter {
     ctx: AgentLaunchContext,
     emit: EventSink,
     session_id: Arc<Mutex<Option<String>>>,
-    current_child: Arc<Mutex<Option<Child>>>,
+    /// 当前活动轮次及其独占子进程；旧读取线程完成时只在 turn id 匹配时清理。
+    active_child: Arc<Mutex<Option<(String, RoundChild)>>>,
     session_started: Arc<Mutex<bool>>,
-    prompt_accepted: Arc<Mutex<bool>>,
     system_settings_dir: Option<PathBuf>,
 }
 
@@ -111,31 +114,24 @@ impl GeminiAdapter {
         let system_settings_dir = prepare_system_settings(ctx)?;
         let session_id = Arc::new(Mutex::new(ctx.resume_native_session_id.clone()));
         if let Some(id) = ctx.resume_native_session_id.as_ref() {
-            (emit)(RuntimeEvent {
-                conversation_id: String::new(),
-                generation: 0,
-                core_turn_id: String::new(),
-                native_turn_id: String::new(),
-                event: AgentEvent::SessionStarted {
-                    native_session_id: id.clone(),
-                    model: ctx.model.clone(),
-                },
-            });
+            (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
+                native_session_id: id.clone(),
+                model: ctx.model.clone(),
+            }));
         }
         Ok(Self {
             ctx: ctx.clone(),
             emit,
             session_id,
-            current_child: Arc::new(Mutex::new(None)),
+            active_child: Arc::new(Mutex::new(None)),
             session_started: Arc::new(Mutex::new(false)),
-            prompt_accepted: Arc::new(Mutex::new(false)),
             system_settings_dir,
         })
     }
 }
 
 impl AgentAdapter for GeminiAdapter {
-    fn prompt(&mut self, message: &str) -> Result<(), String> {
+    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
         let mut command = WorkspaceAccess::for_context(&self.ctx)?
             .command(&self.ctx.launch_path, &[])?;
         command
@@ -167,11 +163,9 @@ impl AgentAdapter for GeminiAdapter {
             .take()
             .ok_or_else(|| "Gemini CLI 没有 stdout".to_string())?;
         let stderr = child.stderr.take();
-        if let Ok(mut guard) = self.current_child.lock() {
-            *guard = Some(child);
-        }
-        if let Ok(mut guard) = self.prompt_accepted.lock() {
-            *guard = false;
+        let round_child: RoundChild = Arc::new(Mutex::new(Some(child)));
+        if let Ok(mut guard) = self.active_child.lock() {
+            *guard = Some((core_turn_id.to_string(), round_child.clone()));
         }
         if let Some(stderr) = stderr {
             std::thread::Builder::new()
@@ -186,9 +180,9 @@ impl AgentAdapter for GeminiAdapter {
 
         let emit = self.emit.clone();
         let session_id = self.session_id.clone();
-        let current_child = self.current_child.clone();
+        let active_child = self.active_child.clone();
         let session_started = self.session_started.clone();
-        let prompt_accepted = self.prompt_accepted.clone();
+        let round_turn_id = core_turn_id.to_string();
         let input_chars = u32::try_from(message.chars().count()).unwrap_or(u32::MAX);
         std::thread::Builder::new()
             .name("agent-gemini-turn".to_string())
@@ -196,6 +190,7 @@ impl AgentAdapter for GeminiAdapter {
                 let reader = BufReader::new(stdout);
                 let mut output_chars: u32 = 0;
                 let mut finished = false;
+                let mut accepted = false;
                 for line in reader.lines().map_while(Result::ok) {
                     let trimmed = line.trim();
                     if trimmed.is_empty() {
@@ -211,15 +206,13 @@ impl AgentAdapter for GeminiAdapter {
                         .unwrap_or_default();
                     match kind {
                         "init" => {
-                            let already_accepted = prompt_accepted
-                                .lock()
-                                .map(|guard| *guard)
-                                .unwrap_or(true);
-                            if !already_accepted {
-                                if let Ok(mut guard) = prompt_accepted.lock() {
-                                    *guard = true;
-                                }
-                                (emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
+                            if !accepted {
+                                accepted = true;
+                                (emit)(RuntimeEvent::turn(
+                                    round_turn_id.clone(),
+                                    "",
+                                    AgentEvent::PromptAccepted,
+                                ));
                             }
                             if let Some(id) = json_text(&value, &["session_id"]) {
                                 if let Ok(mut guard) = session_id.lock() {
@@ -231,16 +224,12 @@ impl AgentAdapter for GeminiAdapter {
                                     if let Ok(mut guard) = session_started.lock() {
                                         *guard = true;
                                     }
-                                    (emit)(RuntimeEvent {
-                                        conversation_id: String::new(),
-                                        generation: 0,
-                                        core_turn_id: String::new(),
-                                        native_turn_id: String::new(),
-                                        event: AgentEvent::SessionStarted {
+                                    (emit)(RuntimeEvent::session(
+                                        AgentEvent::SessionStarted {
                                             native_session_id: id,
                                             model: json_text(&value, &["model"]),
                                         },
-                                    });
+                                    ));
                                 }
                             }
                         }
@@ -261,7 +250,7 @@ impl AgentAdapter for GeminiAdapter {
                             (emit)(RuntimeEvent {
                                 conversation_id: String::new(),
                                 generation: 0,
-                                core_turn_id: String::new(),
+                                core_turn_id: round_turn_id.clone(),
                                 native_turn_id: String::new(),
                                 event: AgentEvent::TextDelta { text },
                             });
@@ -275,7 +264,7 @@ impl AgentAdapter for GeminiAdapter {
                             (emit)(RuntimeEvent {
                                 conversation_id: String::new(),
                                 generation: 0,
-                                core_turn_id: String::new(),
+                                core_turn_id: round_turn_id.clone(),
                                 native_turn_id: String::new(),
                                 event: AgentEvent::ToolStarted {
                                     tool_call_id,
@@ -294,7 +283,7 @@ impl AgentAdapter for GeminiAdapter {
                             (emit)(RuntimeEvent {
                                 conversation_id: String::new(),
                                 generation: 0,
-                                core_turn_id: String::new(),
+                                core_turn_id: round_turn_id.clone(),
                                 native_turn_id: String::new(),
                                 event: AgentEvent::ToolFinished {
                                     tool_call_id,
@@ -316,7 +305,7 @@ impl AgentAdapter for GeminiAdapter {
                             (emit)(RuntimeEvent {
                                 conversation_id: String::new(),
                                 generation: 0,
-                                core_turn_id: String::new(),
+                                core_turn_id: round_turn_id.clone(),
                                 native_turn_id: String::new(),
                                 event: AgentEvent::Usage {
                                     input_chars,
@@ -333,7 +322,7 @@ impl AgentAdapter for GeminiAdapter {
                                 (emit)(RuntimeEvent {
                                     conversation_id: String::new(),
                                     generation: 0,
-                                    core_turn_id: String::new(),
+                                    core_turn_id: round_turn_id.clone(),
                                     native_turn_id: String::new(),
                                     event: AgentEvent::TurnFailed { message },
                                 });
@@ -341,7 +330,7 @@ impl AgentAdapter for GeminiAdapter {
                                 (emit)(RuntimeEvent {
                                     conversation_id: String::new(),
                                     generation: 0,
-                                    core_turn_id: String::new(),
+                                    core_turn_id: round_turn_id.clone(),
                                     native_turn_id: String::new(),
                                     event: AgentEvent::TurnCompleted,
                                 });
@@ -350,11 +339,20 @@ impl AgentAdapter for GeminiAdapter {
                         _ => {}
                     }
                 }
-                let status = current_child
+                // 只回收本轮自己的子进程，旧读取线程不会误取下一轮进程。
+                let status = round_child
                     .lock()
                     .ok()
                     .and_then(|mut guard| guard.take())
                     .and_then(|mut child| child.wait().ok());
+                if let Ok(mut guard) = active_child.lock() {
+                    if guard
+                        .as_ref()
+                        .is_some_and(|(turn_id, _)| turn_id == &round_turn_id)
+                    {
+                        *guard = None;
+                    }
+                }
                 if !finished {
                     let message = match status {
                         Some(status) if !status.success() => {
@@ -362,13 +360,11 @@ impl AgentAdapter for GeminiAdapter {
                         }
                         _ => "Gemini CLI 未返回结果".to_string(),
                     };
-                    (emit)(RuntimeEvent {
-                        conversation_id: String::new(),
-                        generation: 0,
-                        core_turn_id: String::new(),
-                        native_turn_id: String::new(),
-                        event: AgentEvent::TurnFailed { message },
-                    });
+                    (emit)(RuntimeEvent::turn(
+                        round_turn_id,
+                        "",
+                        AgentEvent::TurnFailed { message },
+                    ));
                 }
             })
             .map_err(|error| format!("无法启动 Gemini CLI 读取线程：{error}"))?;
@@ -380,9 +376,13 @@ impl AgentAdapter for GeminiAdapter {
     }
 
     fn cancel(&mut self) -> Result<(), String> {
-        if let Ok(mut guard) = self.current_child.lock() {
-            if let Some(child) = guard.as_mut() {
-                child.kill().map_err(|error| error.to_string())?;
+        if let Ok(guard) = self.active_child.lock() {
+            if let Some((_, child)) = guard.as_ref() {
+                if let Ok(mut child) = child.lock() {
+                    if let Some(child) = child.as_mut() {
+                        child.kill().map_err(|error| error.to_string())?;
+                    }
+                }
             }
         }
         Ok(())
@@ -391,10 +391,12 @@ impl AgentAdapter for GeminiAdapter {
 
 impl Drop for GeminiAdapter {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.current_child.lock() {
-            if let Some(mut child) = guard.take() {
-                let _ = child.kill();
-                let _ = child.wait();
+        if let Ok(guard) = self.active_child.lock() {
+            if let Some((_, child)) = guard.as_ref() {
+                if let Some(mut child) = child.lock().ok().and_then(|mut guard| guard.take()) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
             }
         }
         if let Some(directory) = self.system_settings_dir.take() {

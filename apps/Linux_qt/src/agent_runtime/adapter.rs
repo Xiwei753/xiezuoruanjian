@@ -14,7 +14,10 @@ use super::opencode::OpenCodeAdapter;
 /// 一个已启动的 Agent 会话协议实现。
 pub trait AgentAdapter: Send {
     /// 发送一条用户消息。实现必须尽快返回；长连接/进程读取在后台线程完成。
-    fn prompt(&mut self, message: &str) -> Result<(), String>;
+    ///
+    /// `core_turn_id` 是本轮在 Core 中的固定身份。异步回调和读取线程必须
+    /// 保存并使用这个值，不能回读会话当前轮次。
+    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String>;
     /// 请求中断当前轮次。
     fn cancel(&mut self) -> Result<(), String>;
     /// 当前适配器持有的原生 session / thread ID，用于判断能否复用进程。

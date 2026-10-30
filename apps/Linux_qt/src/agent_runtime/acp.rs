@@ -25,18 +25,29 @@ pub struct AcpAdapter {
     session_id: Arc<Mutex<Option<String>>>,
     emit: EventSink,
     permission_ids: Arc<Mutex<HashMap<String, i64>>>,
+    /// 当前轮次的固定 Core Turn。ACP 的 `session/update` 通知不带轮次 ID，
+    /// 只能由管理器在发起 prompt 时写入；下一轮必须等上一轮响应线程结束后
+    /// 再切换，避免同一连接上的旧通知被误归到新轮次。
+    active_core_turn_id: Arc<Mutex<String>>,
+    previous_prompt: Option<std::thread::JoinHandle<()>>,
 }
 
 impl AcpAdapter {
     pub fn start(ctx: &AgentLaunchContext, emit: EventSink) -> Result<Self, String> {
         let session_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let permission_ids: Arc<Mutex<HashMap<String, i64>>> = Arc::new(Mutex::new(HashMap::new()));
+        let active_core_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let handler_emit = emit.clone();
         let handler_session = session_id.clone();
         let handler_permissions = permission_ids.clone();
+        let handler_active_turn = active_core_turn_id.clone();
         let handler: Arc<dyn Fn(&str, Value) + Send + Sync> =
             Arc::new(move |method: &str, message: Value| {
                 let params = message.get("params").cloned().unwrap_or_default();
+                let core_turn_id = handler_active_turn
+                    .lock()
+                    .map(|guard| guard.clone())
+                    .unwrap_or_default();
                 match method {
                     "session/update" => {
                         let Some(update) = params.get("update") else {
@@ -52,13 +63,7 @@ impl AcpAdapter {
                                     .get("content")
                                     .and_then(|content| json_text(content, &["text"]))
                                 {
-                                    (handler_emit)(RuntimeEvent {
-                                        conversation_id: String::new(),
-                                        generation: 0,
-                                        core_turn_id: String::new(),
-                                        native_turn_id: String::new(),
-                                        event: AgentEvent::TextDelta { text },
-                                    });
+                                    (handler_emit)(RuntimeEvent::turn(core_turn_id.clone(), "", AgentEvent::TextDelta { text }));
                                 }
                             }
                             "agent_thought_chunk" => {
@@ -66,13 +71,7 @@ impl AcpAdapter {
                                     .get("content")
                                     .and_then(|content| json_text(content, &["text"]))
                                 {
-                                    (handler_emit)(RuntimeEvent {
-                                        conversation_id: String::new(),
-                                        generation: 0,
-                                        core_turn_id: String::new(),
-                                        native_turn_id: String::new(),
-                                        event: AgentEvent::ReasoningDelta { text },
-                                    });
+                                    (handler_emit)(RuntimeEvent::turn(core_turn_id.clone(), "", AgentEvent::ReasoningDelta { text }));
                                 }
                             }
                             "tool_call" => {
@@ -81,17 +80,15 @@ impl AcpAdapter {
                                 let name = json_text(update, &["title"])
                                     .or_else(|| json_text(update, &["kind"]))
                                     .unwrap_or_else(|| "tool".to_string());
-                                (handler_emit)(RuntimeEvent {
-                                    conversation_id: String::new(),
-                                    generation: 0,
-                                    core_turn_id: String::new(),
-                                    native_turn_id: String::new(),
-                                    event: AgentEvent::ToolStarted {
+                                (handler_emit)(RuntimeEvent::turn(
+                                    core_turn_id.clone(),
+                                    "",
+                                    AgentEvent::ToolStarted {
                                         tool_call_id,
                                         name,
                                         input_json: json_value_text(update.get("rawInput")),
                                     },
-                                });
+                                ));
                             }
                             "tool_call_update" => {
                                 let tool_call_id = json_text(update, &["toolCallId"])
@@ -100,19 +97,13 @@ impl AcpAdapter {
                                     .unwrap_or_else(|| "tool".to_string());
                                 let status = json_text(update, &["status"]).unwrap_or_default();
                                 if matches!(status.as_str(), "completed" | "failed") {
-                                    (handler_emit)(RuntimeEvent {
-                                        conversation_id: String::new(),
-                                        generation: 0,
-                                        core_turn_id: String::new(),
-                                        native_turn_id: String::new(),
-                                        event: AgentEvent::ToolFinished {
+                                    (handler_emit)(RuntimeEvent::turn(core_turn_id.clone(), "", AgentEvent::ToolFinished {
                                             tool_call_id,
                                             name,
                                             output_json: json_value_text(update.get("rawOutput"))
                                                 .or_else(|| json_value_text(update.get("content"))),
                                             success: status == "completed",
-                                        },
-                                    });
+                                        }));
                                 }
                             }
                             _ => {}
@@ -147,17 +138,11 @@ impl AcpAdapter {
                         if let Ok(mut guard) = handler_permissions.lock() {
                             guard.insert(permission_key.clone(), request_id);
                         }
-                        (handler_emit)(RuntimeEvent {
-                            conversation_id: String::new(),
-                            generation: 0,
-                            core_turn_id: String::new(),
-                            native_turn_id: String::new(),
-                            event: AgentEvent::PermissionRequested {
+                        (handler_emit)(RuntimeEvent::turn(core_turn_id.clone(), "", AgentEvent::PermissionRequested {
                                 request_id: permission_key,
                                 description: format!("Agent 请求执行：{tool}"),
                                 options,
-                            },
-                        });
+                            }));
                     }
                     _ => {}
                 }
@@ -268,26 +253,14 @@ impl AcpAdapter {
             })
             .unwrap_or_default();
         if !models.is_empty() {
-            (emit)(RuntimeEvent {
-                conversation_id: String::new(),
-                generation: 0,
-                core_turn_id: String::new(),
-                native_turn_id: String::new(),
-                event: AgentEvent::ModelsAvailable {
-                    models: models.clone(),
-                },
-            });
+            (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable {
+                models: models.clone(),
+            }));
         }
-        (emit)(RuntimeEvent {
-            conversation_id: String::new(),
-            generation: 0,
-            core_turn_id: String::new(),
-            native_turn_id: String::new(),
-            event: AgentEvent::SessionStarted {
-                native_session_id,
-                model,
-            },
-        });
+        (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
+            native_session_id,
+            model,
+        }));
         if resumed {
             log::info!("[agent] ACP session resumed");
         }
@@ -297,19 +270,31 @@ impl AcpAdapter {
             session_id,
             emit,
             permission_ids,
+            active_core_turn_id,
+            previous_prompt: None,
         })
     }
 }
 
 impl AgentAdapter for AcpAdapter {
-    fn prompt(&mut self, message: &str) -> Result<(), String> {
+    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
         let Some(session_id) = self.session_id.lock().ok().and_then(|guard| guard.clone()) else {
             return Err("ACP 会话尚未建立".to_string());
         };
+        // ACP 的增量通知没有 turn id。先等上一轮 `session/prompt` 响应结束，
+        // 期间通知仍归上一轮；响应之后同一连接不会再补发旧轮次通知。
+        if let Some(previous) = self.previous_prompt.take() {
+            let _ = previous.join();
+        }
+        if let Ok(mut guard) = self.active_core_turn_id.lock() {
+            *guard = core_turn_id.to_string();
+        }
         let client = self.client.clone();
         let emit = self.emit.clone();
+        let round_turn_id = core_turn_id.to_string();
+        let accepted_turn_id = round_turn_id.clone();
         let text = message.to_string();
-        std::thread::Builder::new()
+        let prompt_thread = std::thread::Builder::new()
             .name("agent-acp-prompt".to_string())
             .spawn(move || {
                 let accepted_emit = emit.clone();
@@ -321,15 +306,20 @@ impl AgentAdapter for AcpAdapter {
                     }),
                     REQUEST_TIMEOUT,
                     move || {
-                        (accepted_emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
+                        (accepted_emit)(RuntimeEvent::turn(
+                            accepted_turn_id.clone(),
+                            "",
+                            AgentEvent::PromptAccepted,
+                        ));
                     },
                 );
                 match result {
                     Ok(_) => {
-                        (emit)(RuntimeEvent::native("", AgentEvent::TurnCompleted));
+                        (emit)(RuntimeEvent::turn(round_turn_id, "", AgentEvent::TurnCompleted));
                     }
                     Err(error) => {
-                        (emit)(RuntimeEvent::native(
+                        (emit)(RuntimeEvent::turn(
+                            round_turn_id,
                             "",
                             AgentEvent::TurnFailed { message: error },
                         ));
@@ -337,6 +327,7 @@ impl AgentAdapter for AcpAdapter {
                 }
             })
             .map_err(|error| format!("无法启动 ACP 请求线程：{error}"))?;
+        self.previous_prompt = Some(prompt_thread);
         Ok(())
     }
 

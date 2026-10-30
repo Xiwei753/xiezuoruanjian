@@ -25,6 +25,34 @@ pub struct CodexAdapter {
     emit: EventSink,
     approval_ids: Arc<Mutex<HashMap<String, i64>>>,
     model: Option<String>,
+    /// 当前轮次的固定 Core Turn。`turn/started` 等通知只有原生 turnId 时，
+    /// 用它建立本轮的 native → Core 映射。
+    active_core_turn_id: Arc<Mutex<String>>,
+    /// 原生 turnId → Core Turn 的稳定映射。旧轮次迟到通知始终回到旧 Turn，
+    /// 不会因为用户已经发送下一轮而改记到新回答。
+    turn_bindings: Arc<Mutex<HashMap<String, String>>>,
+}
+
+fn core_for_native_turn(
+    native_turn_id: &str,
+    active: &Arc<Mutex<String>>,
+    bindings: &Arc<Mutex<HashMap<String, String>>>,
+) -> String {
+    let current = active
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    if native_turn_id.is_empty() {
+        return current;
+    }
+    bindings
+        .lock()
+        .map(|mut map| {
+            map.entry(native_turn_id.to_string())
+                .or_insert(current)
+                .clone()
+        })
+        .unwrap_or_default()
 }
 
 impl CodexAdapter {
@@ -32,14 +60,21 @@ impl CodexAdapter {
         let thread_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let turn_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let approval_ids: Arc<Mutex<HashMap<String, i64>>> = Arc::new(Mutex::new(HashMap::new()));
+        let active_core_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let turn_bindings: Arc<Mutex<HashMap<String, String>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let handler_emit = emit.clone();
         let handler_thread = thread_id.clone();
         let handler_turn = turn_id.clone();
         let handler_approvals = approval_ids.clone();
+        let handler_active_turn = active_core_turn_id.clone();
+        let handler_bindings = turn_bindings.clone();
         let handler: Arc<dyn Fn(&str, Value) + Send + Sync> =
             Arc::new(move |method: &str, message: Value| {
                 let params = message.get("params").cloned().unwrap_or_default();
                 let turn_id = json_text(&params, &["turnId"]).unwrap_or_default();
+                let core_turn_id =
+                    core_for_native_turn(&turn_id, &handler_active_turn, &handler_bindings);
                 match method {
                     "turn/started" => {
                         if let Some(id) = json_text(&params, &["turn", "id"])
@@ -55,7 +90,7 @@ impl CodexAdapter {
                             (handler_emit)(RuntimeEvent {
                                 conversation_id: String::new(),
                                 generation: 0,
-                                core_turn_id: String::new(),
+                                core_turn_id: core_turn_id.clone(),
                                 native_turn_id: turn_id,
                                 event: AgentEvent::TextDelta { text },
                             });
@@ -66,7 +101,7 @@ impl CodexAdapter {
                             (handler_emit)(RuntimeEvent {
                                 conversation_id: String::new(),
                                 generation: 0,
-                                core_turn_id: String::new(),
+                                core_turn_id: core_turn_id.clone(),
                                 native_turn_id: turn_id,
                                 event: AgentEvent::ReasoningDelta { text },
                             });
@@ -93,7 +128,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
-                            core_turn_id: String::new(),
+                            core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::ToolStarted {
                                 tool_call_id,
@@ -132,7 +167,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
-                            core_turn_id: String::new(),
+                            core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::ToolFinished {
                                 tool_call_id,
@@ -153,7 +188,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
-                            core_turn_id: String::new(),
+                            core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::TurnCompleted,
                         });
@@ -165,7 +200,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
-                            core_turn_id: String::new(),
+                            core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::TurnFailed { message },
                         });
@@ -185,7 +220,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
-                            core_turn_id: String::new(),
+                            core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::PermissionRequested {
                                 request_id,
@@ -315,16 +350,10 @@ impl CodexAdapter {
         if let Ok(mut guard) = thread_id.lock() {
             *guard = Some(native_thread_id.clone());
         }
-        (emit)(RuntimeEvent {
-            conversation_id: String::new(),
-            generation: 0,
-            core_turn_id: String::new(),
-            native_turn_id: String::new(),
-            event: AgentEvent::SessionStarted {
-                native_session_id: native_thread_id,
-                model: model.clone(),
-            },
-        });
+        (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
+            native_session_id: native_thread_id,
+            model: model.clone(),
+        }));
         if resumed {
             log::info!("[agent] Codex thread resumed");
         }
@@ -335,21 +364,29 @@ impl CodexAdapter {
             emit,
             approval_ids,
             model,
+            active_core_turn_id,
+            turn_bindings,
         })
     }
 }
 
 impl AgentAdapter for CodexAdapter {
-    fn prompt(&mut self, message: &str) -> Result<(), String> {
+    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
         let thread_id = self
             .thread_id
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
             .ok_or_else(|| "Codex thread 尚未建立".to_string())?;
+        if let Ok(mut guard) = self.active_core_turn_id.lock() {
+            *guard = core_turn_id.to_string();
+        }
         let client = self.client.clone();
         let emit = self.emit.clone();
         let turn_state = self.turn_id.clone();
+        let bindings = self.turn_bindings.clone();
+        let round_turn_id = core_turn_id.to_string();
+        let accepted_turn_id = round_turn_id.clone();
         if let Ok(mut guard) = turn_state.lock() {
             *guard = None;
         }
@@ -370,19 +407,24 @@ impl AgentAdapter for CodexAdapter {
                         if let Some(id) = json_text(&result, &["turn", "id"])
                             .or_else(|| json_text(&result, &["turnId"]))
                         {
+                            if let Ok(mut map) = bindings.lock() {
+                                map.insert(id.clone(), round_turn_id.clone());
+                            }
                             if let Ok(mut guard) = turn_state.lock() {
                                 *guard = Some(id);
                             }
                         }
-                        (emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
+                        (emit)(RuntimeEvent::turn(
+                            accepted_turn_id,
+                            "",
+                            AgentEvent::PromptAccepted,
+                        ));
                     }
-                    Err(error) => (emit)(RuntimeEvent {
-                        conversation_id: String::new(),
-                        generation: 0,
-                        core_turn_id: String::new(),
-                        native_turn_id: String::new(),
-                        event: AgentEvent::TurnFailed { message: error },
-                    }),
+                    Err(error) => (emit)(RuntimeEvent::turn(
+                        round_turn_id,
+                        "",
+                        AgentEvent::TurnFailed { message: error },
+                    )),
                 }
                 // 轮次完成由 `turn/completed` / `turn/failed` 通知驱动。
             })
@@ -407,6 +449,9 @@ impl AgentAdapter for CodexAdapter {
             .ok()
             .and_then(|guard| guard.clone())
             .ok_or_else(|| "Codex 轮次尚未建立".to_string())?;
+        if let Ok(mut guard) = self.active_core_turn_id.lock() {
+            guard.clear();
+        }
         self.client.request(
             "turn/interrupt",
             json!({ "threadId": thread_id, "turnId": turn_id }),

@@ -33,6 +33,9 @@ pub struct OpenCodeAdapter {
     child: Arc<Mutex<Child>>,
     emit: EventSink,
     model_hint: Option<String>,
+    /// 当前轮的固定 Core Turn。SSE 事件只带原生 message id，处理器用它建立
+    /// native → Core 映射，旧轮次事件不会漂移到新回答。
+    active_core_turn_id: Arc<Mutex<String>>,
 }
 
 fn free_loopback_port() -> Result<u16, String> {
@@ -347,7 +350,9 @@ impl OpenCodeAdapter {
         }
 
         let session_id = Arc::new(Mutex::new(Some(session_id.clone())));
+        let active_core_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let sse_session = session_id.clone();
+        let sse_active_turn = active_core_turn_id.clone();
         let sse_emit = emit.clone();
         let sse_url = base_url.clone();
         // SSE 是长连接，不能使用带 30 秒总超时的请求客户端。
@@ -367,6 +372,7 @@ impl OpenCodeAdapter {
                     sse_password,
                     sse_directory,
                     sse_session,
+                    sse_active_turn,
                     sse_emit,
                 )
                 .run();
@@ -374,30 +380,18 @@ impl OpenCodeAdapter {
             .map_err(|error| format!("无法启动 OpenCode 事件线程：{error}"))?;
 
         if !available_models.is_empty() {
-            (emit)(RuntimeEvent {
-                conversation_id: String::new(),
-                generation: 0,
-                core_turn_id: String::new(),
-                native_turn_id: String::new(),
-                event: AgentEvent::ModelsAvailable {
-                    models: available_models,
-                },
-            });
+            (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable {
+                models: available_models,
+            }));
         }
-        (emit)(RuntimeEvent {
-            conversation_id: String::new(),
-            generation: 0,
-            core_turn_id: String::new(),
-            native_turn_id: String::new(),
-            event: AgentEvent::SessionStarted {
-                native_session_id: session_id
-                    .lock()
-                    .ok()
-                    .and_then(|guard| guard.clone())
-                    .unwrap_or_default(),
-                model: ctx.model.clone(),
-            },
-        });
+        (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
+            native_session_id: session_id
+                .lock()
+                .ok()
+                .and_then(|guard| guard.clone())
+                .unwrap_or_default(),
+            model: ctx.model.clone(),
+        }));
 
         Ok(Self {
             client,
@@ -408,6 +402,7 @@ impl OpenCodeAdapter {
             child,
             emit,
             model_hint: ctx.model.clone(),
+            active_core_turn_id,
         })
     }
 }
@@ -419,6 +414,8 @@ struct OpenCodeEventProcessor {
     password: String,
     directory: String,
     session_id: Arc<Mutex<Option<String>>>,
+    active_core_turn_id: Arc<Mutex<String>>,
+    turn_bindings: HashMap<String, String>,
     emit: EventSink,
     text_state: HashMap<String, String>,
     seen_ids: HashSet<String>,
@@ -434,6 +431,7 @@ impl OpenCodeEventProcessor {
         password: String,
         directory: String,
         session_id: Arc<Mutex<Option<String>>>,
+        active_core_turn_id: Arc<Mutex<String>>,
         emit: EventSink,
     ) -> Self {
         Self {
@@ -443,6 +441,8 @@ impl OpenCodeEventProcessor {
             password,
             directory,
             session_id,
+            active_core_turn_id,
+            turn_bindings: HashMap::new(),
             emit,
             text_state: HashMap::new(),
             seen_ids: HashSet::new(),
@@ -613,7 +613,23 @@ impl OpenCodeEventProcessor {
         self.handle_event(&event_type, &payload, native_turn_id);
     }
 
+    fn core_for_native_turn(&mut self, native_turn_id: &str) -> String {
+        let current = self
+            .active_core_turn_id
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+        if native_turn_id.is_empty() {
+            return current;
+        }
+        self.turn_bindings
+            .entry(native_turn_id.to_string())
+            .or_insert(current)
+            .clone()
+    }
+
     fn handle_event(&mut self, event_type: &str, payload: &Value, native_turn_id: String) {
+        let core_turn_id = self.core_for_native_turn(&native_turn_id);
         match event_type {
             "session.text.delta" | "session.reasoning.delta" => {
                 let Some(delta) = json_text(payload, &["delta"]) else {
@@ -632,7 +648,7 @@ impl OpenCodeEventProcessor {
                 } else {
                     AgentEvent::ReasoningDelta { text: delta }
                 };
-                (self.emit)(RuntimeEvent::native(native_turn_id, event));
+                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id, event));
             }
             "session.text.ended" | "session.reasoning.ended" => {
                 let Some(full) = json_text(payload, &["text"]) else {
@@ -656,7 +672,7 @@ impl OpenCodeEventProcessor {
                 } else {
                     AgentEvent::ReasoningDelta { text }
                 };
-                (self.emit)(RuntimeEvent::native(native_turn_id, event));
+                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id, event));
             }
             "session.tool.input.started" | "session.tool.called" => {
                 let tool_call_id = json_text(payload, &["id"])
@@ -665,8 +681,7 @@ impl OpenCodeEventProcessor {
                 let name = json_text(payload, &["name"])
                     .or_else(|| json_text(payload, &["tool"]))
                     .unwrap_or_else(|| "工具".to_string());
-                (self.emit)(RuntimeEvent::native(
-                    native_turn_id,
+                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
                     AgentEvent::ToolStarted {
                         tool_call_id,
                         name,
@@ -678,8 +693,7 @@ impl OpenCodeEventProcessor {
                 let Some(tool_call_id) = json_text(payload, &["id"]) else {
                     return;
                 };
-                (self.emit)(RuntimeEvent::native(
-                    native_turn_id,
+                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
                     AgentEvent::ToolStarted {
                         tool_call_id,
                         name: json_text(payload, &["name"]).unwrap_or_else(|| "工具".to_string()),
@@ -700,8 +714,7 @@ impl OpenCodeEventProcessor {
                     json_text(payload, &["error"])
                         .or_else(|| json_value_text(payload.get("content")))
                 };
-                (self.emit)(RuntimeEvent::native(
-                    native_turn_id,
+                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
                     AgentEvent::ToolFinished {
                         tool_call_id,
                         name: json_text(payload, &["name"]).unwrap_or_else(|| "工具".to_string()),
@@ -717,8 +730,7 @@ impl OpenCodeEventProcessor {
                 let description = json_text(payload, &["message"])
                     .or_else(|| json_text(payload, &["action"]))
                     .unwrap_or_else(|| "Agent 请求执行工具".to_string());
-                (self.emit)(RuntimeEvent::native(
-                    native_turn_id,
+                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
                     AgentEvent::PermissionRequested {
                         request_id,
                         description,
@@ -745,15 +757,13 @@ impl OpenCodeEventProcessor {
             "session.status" => {
                 let status = json_text(payload, &["status", "type"]).unwrap_or_default();
                 if status == "idle" {
-                    (self.emit)(RuntimeEvent::native(
-                        native_turn_id,
+                    (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
                         AgentEvent::TurnCompleted,
                     ));
                 }
             }
             "session.idle" => {
-                (self.emit)(RuntimeEvent::native(
-                    native_turn_id,
+                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
                     AgentEvent::TurnCompleted,
                 ));
             }
@@ -763,8 +773,7 @@ impl OpenCodeEventProcessor {
                     .or_else(|| json_text(payload, &["error"]))
                     .or_else(|| json_text(payload, &["message"]))
                     .unwrap_or_else(|| "OpenCode 请求失败".to_string());
-                (self.emit)(RuntimeEvent::native(
-                    native_turn_id,
+                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
                     AgentEvent::TurnFailed { message },
                 ));
             }
@@ -924,13 +933,17 @@ fn create_session(
 }
 
 impl AgentAdapter for OpenCodeAdapter {
-    fn prompt(&mut self, message: &str) -> Result<(), String> {
+    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
         let session_id = self
             .session_id
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
             .ok_or_else(|| "OpenCode 会话尚未建立".to_string())?;
+        if let Ok(mut guard) = self.active_core_turn_id.lock() {
+            *guard = core_turn_id.to_string();
+        }
+        let round_turn_id = core_turn_id.to_string();
         let mut body = json!({ "text": message });
         // 用户明确选择模型时才传；格式为 `provider/model`。
         if let Some(model) = self.model_hint.as_ref() {
@@ -954,26 +967,26 @@ impl AgentAdapter for OpenCodeAdapter {
                     .send();
                 match response {
                     Ok(response) if response.status().is_success() => {
-                        (emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
+                        (emit)(RuntimeEvent::turn(
+                            round_turn_id,
+                            "",
+                            AgentEvent::PromptAccepted,
+                        ));
                     }
-                    Ok(response) => (emit)(RuntimeEvent {
-                        conversation_id: String::new(),
-                        generation: 0,
-                        core_turn_id: String::new(),
-                        native_turn_id: String::new(),
-                        event: AgentEvent::TurnFailed {
+                    Ok(response) => (emit)(RuntimeEvent::turn(
+                        round_turn_id,
+                        "",
+                        AgentEvent::TurnFailed {
                             message: response_error(response),
                         },
-                    }),
-                    Err(error) => (emit)(RuntimeEvent {
-                        conversation_id: String::new(),
-                        generation: 0,
-                        core_turn_id: String::new(),
-                        native_turn_id: String::new(),
-                        event: AgentEvent::TurnFailed {
+                    )),
+                    Err(error) => (emit)(RuntimeEvent::turn(
+                        round_turn_id,
+                        "",
+                        AgentEvent::TurnFailed {
                             message: format!("发送 OpenCode 消息失败：{error}"),
                         },
-                    }),
+                    )),
                 }
                 // 完成事件由 `/api/event` 的 session.status idle 驱动。
             })
@@ -992,6 +1005,9 @@ impl AgentAdapter for OpenCodeAdapter {
             .ok()
             .and_then(|guard| guard.clone())
             .ok_or_else(|| "OpenCode 会话尚未建立".to_string())?;
+        if let Ok(mut guard) = self.active_core_turn_id.lock() {
+            guard.clear();
+        }
         let response = self
             .client
             .post(format!(

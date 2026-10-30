@@ -3,7 +3,6 @@
 //! 负责一个会话的原生进程/线程、当前轮次身份、取消和权限回复。发现与选择
 //! 仍由 `agent_cli` 承担；切换 Agent 时显式关闭旧适配器，再按新选择重建。
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::adapter::{create_adapter, AgentAdapter};
@@ -102,12 +101,6 @@ impl AgentSessionManager {
         let conversation_id = ctx.conversation_id.clone();
         let current_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let turn_id = current_turn_id.clone();
-        // 原生轮次 ID（Codex turnId、OpenCode assistant message id 等）只做
-        // 协议内部映射；第一次看到它时绑定到当时的 Core Turn，之后迟到的
-        // 事件仍然回到旧 Turn，而不会被误算进新回答。
-        let turn_bindings: Arc<Mutex<HashMap<String, String>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let bindings = turn_bindings.clone();
         let wrapped: EventSink = Arc::new(move |mut event: RuntimeEvent| {
             let session_event = matches!(
                 event.event,
@@ -115,27 +108,17 @@ impl AgentSessionManager {
                     | AgentEvent::ModelsAvailable { .. }
                     | AgentEvent::McpConnectionChanged { .. }
             );
-            let current = turn_id
-                .lock()
-                .map(|guard| guard.clone())
-                .unwrap_or_default();
-            let core_turn_id = if session_event {
-                String::new()
-            } else if event.native_turn_id.is_empty() {
-                current
-            } else {
-                bindings
+            // 适配器显式携带的 Core Turn 是创建异步线程时的固定身份，绝不能
+            // 用事件到达时的 current_turn_id 覆盖。只有尚未标注的非会话事件
+            // 才补当前轮次，兼容少量同步发出的事件。
+            if event.core_turn_id.is_empty() && !session_event {
+                event.core_turn_id = turn_id
                     .lock()
-                    .map(|mut map| {
-                        map.entry(event.native_turn_id.clone())
-                            .or_insert(current)
-                            .clone()
-                    })
-                    .unwrap_or_default()
-            };
+                    .map(|guard| guard.clone())
+                    .unwrap_or_default();
+            }
             event.conversation_id = conversation_id.clone();
             event.generation = generation;
-            event.core_turn_id = core_turn_id;
             (sink)(event);
         });
         let adapter = create_adapter(&ctx, wrapped)?;
@@ -156,7 +139,7 @@ impl AgentSessionManager {
         if let Ok(mut guard) = self.current_turn_id.lock() {
             *guard = turn_id.to_string();
         }
-        adapter.prompt(message)
+        adapter.prompt(turn_id, message)
     }
 
     pub fn cancel(&mut self) -> Result<(), String> {
