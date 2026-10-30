@@ -17,6 +17,9 @@ impl WriterCoreApi {
 
     /// 幂等记录一批 AI 方向事件。
     pub fn record_ai_usage_events(&self, events: Vec<AiUsageEvent>) -> super::ApiResult<usize> {
+        // 锁序：工作区跨进程锁 → Core 写锁 → StatsApi/Store。
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         self.core_write()
             .get_stats_api()
             .record_ai_usage_events(events)
@@ -25,6 +28,9 @@ impl WriterCoreApi {
 
     /// 读取全部已到达设备的 AI 请求输入 / 模型响应输出事实。
     pub fn load_ai_usage_events(&self) -> super::ApiResult<Vec<AiUsageEvent>> {
+        // 读取也要先恢复 pending journal，锁序与写入、贡献统计查询一致。
+        let _workspace_write_lock =
+            crate::storage::WorkspaceWriteLock::acquire(&self.app_data_root)?;
         self.core_read()
             .get_stats_api()
             .load_ai_usage_events()

@@ -5,9 +5,10 @@
 //! 同步只搬运文件，不重写发生时间、当地日期或小时。
 //!
 //! 持久化流程与对象贡献事件一致：先写 `stats/pending/ai-usage/` 下的 journal，
-//! 成功追加正式分区后才删除 journal；读取前先恢复未完成的 journal。写入和恢复
-//! 由同一把锁串行化，稳定 `event_id` 保证重放不会重复计数。`local_date` 在拼入
-//! 文件名前会严格校验为 `YYYY-MM-DD`，避免外部会话适配层传入非法日期。
+//! 成功追加正式分区后才删除 journal；读取前先恢复未完成的 journal。写入、恢复和
+//! 读取共用工作区跨进程写锁，再加实例内互斥，稳定 `event_id` 保证重放不会重复
+//! 计数。`local_date` 在拼入文件名前会严格校验为 `YYYY-MM-DD`，避免外部会话
+//! 适配层传入非法日期。
 //!
 //! 与对象贡献事件分开存放是有意的：一次 AI 请求及模型响应可能对应多个对象
 //! 修改，不能把输入/输出字数随 `MutationContext` 复制到每条对象事件上。
@@ -22,6 +23,7 @@ use chrono::NaiveDate;
 
 use crate::error::{Error, Result};
 use crate::storage::atomic_write_string;
+use crate::storage::WorkspaceWriteLock;
 use crate::writing_stats::ai_usage::AiUsageEvent;
 use crate::writing_stats::calendar;
 use crate::writing_stats::contribution_store::{resolve_device_partition_id, valid_segment};
@@ -81,6 +83,8 @@ impl AiUsageStore {
         if events.is_empty() {
             return Ok(0);
         }
+        // 锁序与业务层一致：工作区跨进程锁 → 本实例写锁 → 磁盘。
+        let _workspace_write_lock = WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let _guard = self.lock_write();
         self.recover_pending_events_locked()?;
 
@@ -96,6 +100,7 @@ impl AiUsageStore {
 
     /// 重放上次进程在 journal 已落盘、正式分区尚未确认前中断的事件。
     pub fn recover_pending_events(&self) -> Result<()> {
+        let _workspace_write_lock = WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let _guard = self.lock_write();
         self.recover_pending_events_locked()
     }
@@ -235,6 +240,7 @@ impl AiUsageStore {
     ///
     /// 正式分区在读取前先恢复 journal；没有完成追加的事件不会永久消失。
     pub fn load_all_events(&self) -> Result<Vec<AiUsageEvent>> {
+        let _workspace_write_lock = WorkspaceWriteLock::acquire(&self.app_data_root)?;
         let _guard = self.lock_write();
         self.recover_pending_events_locked()?;
 
