@@ -12,7 +12,7 @@
 //! ## 模块结构
 //!
 //! - `api`: 统计查询接口，统一从合并后的事件库投影读数
-//! - `ai_usage`: 独立 AI 请求/响应事件（请求输入、模型输出与发生时间）
+//! - `ai_usage`: 独立 AI 请求输入 / 模型响应输出事件（各自带真实时间与设备）
 //! - `calendar`: 业务日历（本地日、周/月边界、预设区间解析）
 //! - `migration`: 旧版单机事件库到按来源设备分区事件库的一次性迁移
 //! - `projection`: 从原始事件投影出汇总、纪录、趋势
@@ -61,7 +61,7 @@ pub mod replay;
 pub mod session;
 pub mod store;
 
-pub use ai_usage::AiUsageEvent;
+pub use ai_usage::{stable_event_id, AiUsageDirection, AiUsageEvent};
 pub use contribution::{
     current_mutation_context, with_mutation_context, ContributionEvent, ContributionObjectSnapshot,
     ContributionObjectType, ContributionOperation, MutationActor, MutationContext,

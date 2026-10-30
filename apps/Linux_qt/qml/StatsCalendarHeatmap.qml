@@ -10,7 +10,7 @@
 //   - 已确认的日期按 Core 下发的 intensity（0–4）着色，未知/未来单独呈现；
 //   - 悬停或点击日期时显示当天日期与实际人工输入字数；
 //   - 选中日期后追加 Core contributions.dayActors 的逐 actor 对象/AI 操作与
-//     本地小时切片（#1014），没有明细时明确说没有记录，不补造 0。
+//     事件原产地小时切片（#1014），没有明细时明确说没有记录，不补造 0。
 // 约束：
 //   - 纯展示组件：不查询磁盘、不重算每日字数或色阶，只消费 days / dayDetails；
 //   - 热力颜色只由 Core 的人工输入字数与 intensity 决定，绝不把 AI 操作量
@@ -269,7 +269,7 @@ Item {
         if (!counts) return ""
         var recorded = Number(counts.aiDirectionOperations || 0)
         if (recorded <= 0) return ""
-        return qsTr("请求输入 %1 字 · 模型输出 %2 字 · 已记录 %3 次")
+        return qsTr("请求输入 %1 字 · 模型输出 %2 字 · 已记录 %3 条方向事件")
             .arg(formatNum(counts.aiInputChars))
             .arg(formatNum(counts.aiOutputChars))
             .arg(formatNum(recorded))

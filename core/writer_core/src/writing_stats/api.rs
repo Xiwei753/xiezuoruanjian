@@ -821,10 +821,15 @@ impl StatsApi {
         self.contribution_store.load_all_events()
     }
 
-    /// 幂等记录一次 AI 请求/响应事实。调用方必须在请求/响应真实发生后调用；
-    /// 一次请求/响应只写一条事件，不随对象修改数量复制。
+    /// 幂等记录一批 AI 方向事件。请求输入与模型响应输出分别是独立事件，
+    /// 调用方在请求发出 / 响应完成时各调用一次，不随对象修改数量复制。
+    pub fn record_ai_usage_events(&self, events: Vec<AiUsageEvent>) -> Result<usize> {
+        self.ai_usage_store.record_events(events)
+    }
+
+    /// 幂等记录一条 AI 方向事件。
     pub fn record_ai_usage_event(&self, event: AiUsageEvent) -> Result<usize> {
-        self.ai_usage_store.record_events(vec![event])
+        self.record_ai_usage_events(vec![event])
     }
 
     pub fn load_ai_usage_events(&self) -> Result<Vec<AiUsageEvent>> {
@@ -885,8 +890,9 @@ impl StatsApi {
                 .then_with(|| left.event_id.cmp(&right.event_id))
         });
 
-        // AI 请求/响应只按事件自带的日期、项目、设备和 actor 过滤。对象类型
-        // 过滤不适用于 AI 会话事实，指定对象类型时不混入方向统计。
+        // AI 请求输入 / 模型响应输出只按各自事件自带的日期、项目、设备和
+        // actor 过滤。对象类型过滤不适用于 AI 会话事实，指定对象类型时不混入
+        // 方向统计。
         let ai_usage_events: Vec<_> = self
             .ai_usage_store
             .load_all_events()?

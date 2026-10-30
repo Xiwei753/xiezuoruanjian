@@ -282,8 +282,8 @@ fn validate_group_segment(value: &str) -> bool {
 /// 从相对 App 根路径解析统计文件所属的设备分区：
 /// 认可 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl`、同目录下的
 /// `YYYY-MM-DD.sessions.jsonl`（真实计时切片）、`YYYY-MM-DD.objects.jsonl`
-/// （星图/标签/超链接等对象贡献事件）、`YYYY-MM-DD.ai.jsonl`（AI 请求/响应
-/// 独立事实），以及同设备分区内的 `proof/<chapter>.checkpoints.jsonl` 与
+/// （星图/标签/超链接等对象贡献事件）、`YYYY-MM-DD.ai.jsonl`（AI 请求输入 /
+/// 模型响应输出独立事实），以及同设备分区内的 `proof/<chapter>.checkpoints.jsonl` 与
 /// `proof/archive/YYYY-MM-DD.events.jsonl.zst`。
 /// 其它设备的证明/归档文件只能同步为只读，不接受本机写入。
 pub(crate) fn stats_device_id_for_event_path(rel_path: &str) -> Option<String> {

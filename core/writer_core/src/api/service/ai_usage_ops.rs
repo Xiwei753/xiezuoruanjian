@@ -1,23 +1,29 @@
-//! AI 请求/响应统计事件的业务层记录器。
+//! AI 请求输入 / 模型响应输出统计事件的业务层记录器。
 //!
-//! 真正的 Agent 会话（#506）在请求发出、响应完成后调用这里，一次请求/响应
-//! 只写一条 [`AiUsageEvent`]；事件独立于对象修改，避免一次 AI 操作修改多个
-//! 节点时输入/输出被重复累计。本模块不负责拉起 Agent，也不解释机器接口。
+//! 真正的 Agent 会话（#506）在请求发出时记录一条 `Input` 事件，在响应完成时
+//! 记录一条 `Output` 事件；两条事件各有稳定事件 ID、真实发生时间和设备，
+//! 用同一 `conversation_id` / `turn_id` 关联。事件独立于对象修改，避免一次
+//! AI 操作修改多个节点时输入/输出被重复累计。本模块不负责拉起 Agent，也不
+//! 解释机器接口。
 
 use crate::api::service::WriterCoreApi;
 use crate::writing_stats::AiUsageEvent;
 
 impl WriterCoreApi {
-    /// 幂等记录一次 AI 请求/响应事实。
+    /// 幂等记录一条 AI 方向事件。
     pub fn record_ai_usage_event(&self, event: AiUsageEvent) -> super::ApiResult<()> {
+        self.record_ai_usage_events(vec![event]).map(|_| ())
+    }
+
+    /// 幂等记录一批 AI 方向事件。
+    pub fn record_ai_usage_events(&self, events: Vec<AiUsageEvent>) -> super::ApiResult<usize> {
         self.core_write()
             .get_stats_api()
-            .record_ai_usage_event(event)
-            .map(|_| ())
+            .record_ai_usage_events(events)
             .map_err(Into::into)
     }
 
-    /// 读取全部已到达设备的 AI 请求/响应事实。
+    /// 读取全部已到达设备的 AI 请求输入 / 模型响应输出事实。
     pub fn load_ai_usage_events(&self) -> super::ApiResult<Vec<AiUsageEvent>> {
         self.core_read()
             .get_stats_api()

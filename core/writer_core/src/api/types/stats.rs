@@ -368,8 +368,8 @@ pub struct WritingStatsHeatmapDto {
 }
 
 /// 历史操作量计数。对象操作与正文码字严格分开：
-/// 创建一条连线只增加 `linkedObjects`，不增加任何字符数；AI 请求/响应
-/// 字数来自独立事件，不从对象修改量推断。
+/// 创建一条连线只增加 `linkedObjects`，不增加任何字符数；AI 请求输入 /
+/// 模型输出字数来自各自独立的事件，不从对象修改量推断。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ContributionCountsDto {
@@ -382,13 +382,14 @@ pub struct ContributionCountsDto {
     pub deleted_objects: u64,
     pub linked_objects: u64,
     pub unlinked_objects: u64,
-    /// AI 请求输入的真实字符数；来自独立 AI 请求/响应事件，不从修改量推断。
+    /// AI 请求输入的真实字符数；来自独立的请求输入事件，不从修改量推断。
     #[serde(default)]
     pub ai_input_chars: u64,
-    /// AI 模型输出的真实字符数；来自独立 AI 请求/响应事件，不从修改量推断。
+    /// AI 模型输出的真实字符数；来自独立的模型输出事件，不从修改量推断。
     #[serde(default)]
     pub ai_output_chars: u64,
-    /// 带 AI 方向事实的事件数；0 表示方向未区分，而不是“输入输出都是 0”。
+    /// 已记录的 AI 方向事件数（请求输入 + 模型响应）；不是对话轮数。
+    /// 0 表示方向未区分，而不是“输入输出都是 0”。
     #[serde(default)]
     pub ai_direction_operations: u64,
 }
@@ -450,8 +451,9 @@ pub struct ContributionSliceStatsDto {
 
 /// 单日单 actor 的历史操作量（#1015）。
 ///
-/// 由落在该业务日的对象贡献事件与独立 AI 请求/响应事件聚合：日期、actor、
-/// 操作数、新增/删除/修改字数都来自事件本身，不把所选区间的总量摊到某一天。
+/// 由落在该业务日的对象贡献事件与独立 AI 请求输入 / 模型输出事件聚合：
+/// 日期、actor、操作数、新增/删除/修改字数都来自事件本身，不把所选区间的
+/// 总量摊到某一天。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ContributionDayActorStatsDto {

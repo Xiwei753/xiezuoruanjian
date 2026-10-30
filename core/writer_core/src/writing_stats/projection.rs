@@ -14,7 +14,7 @@
 //!   不得再作为速度分母或真实最长会话依据。
 
 use crate::error::{Error, Result};
-use crate::writing_stats::ai_usage::AiUsageEvent;
+use crate::writing_stats::ai_usage::{AiUsageDirection, AiUsageEvent};
 use crate::writing_stats::calendar;
 use crate::writing_stats::contribution::{
     char_diff_ops, CharDiffOp, ContributionEvent, ContributionOperation, CurrentTextSnapshot,
@@ -1295,9 +1295,9 @@ pub struct ContributionCounts {
     pub deleted_objects: u64,
     pub linked_objects: u64,
     pub unlinked_objects: u64,
-    /// AI 请求输入的真实字符数；只来自独立 AI 请求/响应事件。
+    /// AI 请求输入的真实字符数；只来自独立的请求输入事件。
     pub ai_input_chars: u64,
-    /// AI 模型输出的真实字符数；只来自独立 AI 请求/响应事件。
+    /// AI 模型输出的真实字符数；只来自独立的模型响应事件。
     pub ai_output_chars: u64,
     /// 带 AI 方向事实的事件数；用于区分“方向未记录”和真实的 0 字。
     pub ai_direction_operations: u64,
@@ -1318,13 +1318,15 @@ impl ContributionCounts {
         }
     }
 
-    /// AI 请求/响应事件只累计真实方向字数，不增加对象操作数。
+    /// 每条 AI 事件只属于一个方向，按方向累计对应字数，不增加对象操作数。
     ///
-    /// `ai_direction_operations` 记录带方向事实的事件数，用于区分真实的
-    /// 0 字和“没有记录方向”的旧数据。
+    /// `ai_direction_operations` 记录方向事件数，用于区分真实的 0 字和
+    /// “没有记录方向”的旧数据。
     fn add_ai_usage(&mut self, event: &AiUsageEvent) {
-        self.ai_input_chars += u64::from(event.input_chars);
-        self.ai_output_chars += u64::from(event.output_chars);
+        match event.direction {
+            AiUsageDirection::Input => self.ai_input_chars += u64::from(event.char_count),
+            AiUsageDirection::Output => self.ai_output_chars += u64::from(event.char_count),
+        }
         self.ai_direction_operations += 1;
     }
 }
@@ -1392,8 +1394,9 @@ pub struct ContributionStatsAgg {
 
 /// 只投影历史操作量：每次成功事务都计入，删除也算历史贡献。
 ///
-/// `ai_usage_events` 是独立的 AI 请求/响应事实，只并入对应日期/小时的
-/// actor=`ai` 方向字数，不冒充对象操作，也不从对象修改事件反推。
+/// `ai_usage_events` 是独立的 AI 请求输入 / 模型响应输出事实，各自按自己的
+/// 发生日期和小时并入 actor=`ai` 方向字数，不冒充对象操作，也不从对象修改
+/// 事件反推。
 ///
 /// 当前保留内容来源必须由 [`project_contribution_retained`] 单独从完整历史
 /// 重建，不能把「历史区间过滤」和「当前字符来源」混在一次遍历里。
@@ -1488,7 +1491,8 @@ pub fn project_contribution_history(
             .add(event);
     }
 
-    // AI 请求/响应是独立事件：只并入日期/小时与 actor=ai 的方向字数。
+    // AI 请求输入 / 模型响应输出是独立事件：各自按自己的日期/小时并入
+    // actor=ai 的方向字数，不共享一个轮次时间。
     for event in ai_usage_events {
         let date = event.business_date();
         let device = if event.origin_device_id.is_empty() {
