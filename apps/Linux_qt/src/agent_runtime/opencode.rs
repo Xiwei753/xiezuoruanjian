@@ -1725,6 +1725,10 @@ impl AgentAdapter for OpenCodeAdapter {
                                     // 服务端已经自然结束；保留映射让处理器按
                                     // 消息历史 idle outcome 结算真实终态。
                                 }
+                                Ok(CancelOutcome::Pending) => {
+                                    // 取消通知已发出但尚未确认；不在这里补发
+                                    // TurnCancelled，保留映射等真实终态结算。
+                                }
                                 Err(error) => {
                                     thread_input.release_cancel_claim();
                                     (emit)(RuntimeEvent::session(AgentEvent::SessionError {
