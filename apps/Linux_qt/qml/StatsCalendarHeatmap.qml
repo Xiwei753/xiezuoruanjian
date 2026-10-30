@@ -269,7 +269,7 @@ Item {
         if (!counts) return ""
         var recorded = Number(counts.aiDirectionOperations || 0)
         if (recorded <= 0) return ""
-        return qsTr("请求输入 %1 字 · 模型输出 %2 字 · 方向记录 %3 次")
+        return qsTr("请求输入 %1 字 · 模型输出 %2 字 · 已记录 %3 次")
             .arg(formatNum(counts.aiInputChars))
             .arg(formatNum(counts.aiOutputChars))
             .arg(formatNum(recorded))
@@ -288,7 +288,8 @@ Item {
         }
         if (labels.length > 0)
             parts.push(qsTr("入口：") + labels.join(" · "))
-        if (detail.trustedOperations !== undefined && detail.trustedOperations !== null) {
+        if (detail.trustedOperations !== undefined && detail.trustedOperations !== null
+                && countOf(detail, "operations") > 0) {
             parts.push(qsTr("可信记录 %1/%2 次")
                 .arg(formatNum(detail.trustedOperations))
                 .arg(formatNum(countOf(detail, "operations"))))
@@ -591,7 +592,7 @@ Item {
             Label {
                 Layout.fillWidth: true
                 visible: root.selectedActors.length > 0
-                text: qsTr("当天对象操作（不计入人工码字）")
+                text: qsTr("当天 AI / 对象操作（不计入人工码字）")
                 color: Kirigami.Theme.disabledTextColor
                 font: Kirigami.Theme.smallFont
             }

@@ -21,7 +21,7 @@
 
 use crate::error::{Error, Result};
 use crate::writing_stats::DateRange;
-use chrono::{DateTime, Datelike, Months, NaiveDate};
+use chrono::{DateTime, Datelike, Months, NaiveDate, Timelike};
 
 /// 按给定 UTC 偏移（秒）把时间戳换算成 `YYYY-MM-DD` 业务日历日。
 ///
@@ -49,6 +49,15 @@ pub fn local_date_at(timestamp_ms: i64) -> Result<String> {
 /// 本机当前时区的 UTC 偏移（秒）。
 pub fn local_utc_offset_seconds() -> i32 {
     chrono::Local::now().offset().local_minus_utc()
+}
+
+/// 时间戳所在时刻的**本机本地**小时（0–23）。
+///
+/// 与 [`local_date_at`] 一样只在事件发生的设备上调用一次，结果随事件持久化；
+/// 统计投影不得再用查看端的 `chrono::Local` 重算别人的小时。
+pub fn local_hour_at(timestamp_ms: i64) -> Option<u8> {
+    let dt = DateTime::from_timestamp_millis(timestamp_ms)?;
+    u8::try_from(dt.with_timezone(&chrono::Local).hour()).ok()
 }
 
 /// 本机当前的业务日历日（`YYYY-MM-DD`）。

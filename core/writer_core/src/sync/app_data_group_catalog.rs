@@ -745,6 +745,7 @@ mod tests {
         assert_eq!(group.storage_key(), "stats-device-6465766963652d616263");
         assert_eq!(AppDataGroup::from_id(&group.id()).unwrap(), group);
         assert!(group.owns_path("stats/events/device-abc/2024-05-01.events.jsonl"));
+        assert!(group.owns_path("stats/events/device-abc/2024-05-01.ai.jsonl"));
         assert!(!group.owns_path("stats/events/device-other/2024-05-01.events.jsonl"));
         assert!(!group.owns_path("stats/events/device-abc"));
     }

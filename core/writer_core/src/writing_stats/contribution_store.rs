@@ -52,20 +52,11 @@ impl ContributionStore {
         {
             return Ok(id);
         }
-        let info = match crate::settings::load_device_info(&self.app_data_root) {
-            Ok(info) if valid_segment(&info.device_id) => info,
-            _ => crate::settings::ensure_device_info(&self.app_data_root, "", "", None)?,
-        };
-        if !valid_segment(&info.device_id) {
-            return Err(Error::Other(format!(
-                "invalid device id for contribution event partition: {:?}",
-                info.device_id
-            )));
-        }
+        let id = resolve_device_partition_id(&self.app_data_root)?;
         if let Ok(mut guard) = self.origin_device_id.lock() {
-            *guard = Some(info.device_id.clone());
+            *guard = Some(id.clone());
         }
-        Ok(info.device_id)
+        Ok(id)
     }
 
     /// 幂等追加一批对象事件；返回真正新写入的事件数。
@@ -335,6 +326,24 @@ impl ContributionStore {
     }
 }
 
+/// 解析本机统计事件分区使用的稳定设备 ID。
+///
+/// 对象贡献事件与 AI 请求/响应事件共用同一来源分区规则；设备信息缺失时
+/// 按既有设置流程生成，已有但非法则明确报错，不写入无法同步的目录名。
+pub(crate) fn resolve_device_partition_id(app_data_root: &Path) -> Result<String> {
+    let info = match crate::settings::load_device_info(app_data_root) {
+        Ok(info) if valid_segment(&info.device_id) => info,
+        _ => crate::settings::ensure_device_info(app_data_root, "", "", None)?,
+    };
+    if !valid_segment(&info.device_id) {
+        return Err(Error::Other(format!(
+            "invalid device id for stats event partition: {:?}",
+            info.device_id
+        )));
+    }
+    Ok(info.device_id)
+}
+
 fn read_ids(path: &Path) -> Result<HashSet<String>> {
     let mut ids = HashSet::new();
     let file = match fs::File::open(path) {
@@ -353,7 +362,7 @@ fn read_ids(path: &Path) -> Result<HashSet<String>> {
     Ok(ids)
 }
 
-fn valid_segment(value: &str) -> bool {
+pub(crate) fn valid_segment(value: &str) -> bool {
     !value.is_empty()
         && value != "."
         && value != ".."

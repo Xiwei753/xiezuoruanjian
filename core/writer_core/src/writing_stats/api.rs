@@ -15,6 +15,8 @@ use crate::api::types::{
     WritingStatsTrendPointDto,
 };
 use crate::error::Result;
+use crate::writing_stats::ai_usage::AiUsageEvent;
+use crate::writing_stats::ai_usage_store::AiUsageStore;
 use crate::writing_stats::calendar::{self, StatsPreset};
 use crate::writing_stats::contribution::{ContributionEvent, CurrentTextSnapshot};
 use crate::writing_stats::contribution_store::ContributionStore;
@@ -159,6 +161,7 @@ fn speed_buckets_json(projection: &StatsProjection) -> Vec<Value> {
 pub struct StatsApi {
     store: StatsStore,
     contribution_store: ContributionStore,
+    ai_usage_store: AiUsageStore,
     /// 章节回放会话缓存：(代数, 章节/设备 -> 有序索引 + 增量状态)。
     replay_cache: std::sync::Mutex<
         std::collections::HashMap<
@@ -192,6 +195,7 @@ impl StatsApi {
         Self {
             store: StatsStore::new(app_data_root),
             contribution_store: ContributionStore::new(app_data_root),
+            ai_usage_store: AiUsageStore::new(app_data_root),
             replay_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             migration_error: std::sync::Mutex::new(migration_error),
         }
@@ -817,6 +821,16 @@ impl StatsApi {
         self.contribution_store.load_all_events()
     }
 
+    /// 幂等记录一次 AI 请求/响应事实。调用方必须在请求/响应真实发生后调用；
+    /// 一次请求/响应只写一条事件，不随对象修改数量复制。
+    pub fn record_ai_usage_event(&self, event: AiUsageEvent) -> Result<usize> {
+        self.ai_usage_store.record_events(vec![event])
+    }
+
+    pub fn load_ai_usage_events(&self) -> Result<Vec<AiUsageEvent>> {
+        self.ai_usage_store.load_all_events()
+    }
+
     /// 贡献统计查询：历史操作量 + 当前保留内容来源。
     /// `current_texts` 是磁盘上真实对象文字的当前快照，用于和完整事件历史
     /// 对账；没有快照的对象视为已删除，不计入当前保留字数。
@@ -870,7 +884,25 @@ impl StatsApi {
                 .cmp(&right.occurred_at_ms)
                 .then_with(|| left.event_id.cmp(&right.event_id))
         });
-        let mut stats = project_contribution_history(&events);
+
+        // AI 请求/响应只按事件自带的日期、项目、设备和 actor 过滤。对象类型
+        // 过滤不适用于 AI 会话事实，指定对象类型时不混入方向统计。
+        let ai_usage_events: Vec<_> = self
+            .ai_usage_store
+            .load_all_events()?
+            .into_iter()
+            .filter(|event| {
+                let date = event.business_date();
+                !date.is_empty()
+                    && date.as_str() >= start_date
+                    && date.as_str() <= end_date
+                    && project_id.is_none_or(|value| event.project_id == value)
+                    && actor.is_none_or(|value| value == "ai")
+                    && object_type.is_none()
+                    && device_id.is_none_or(|value| event.origin_device_id == value)
+            })
+            .collect();
+        let mut stats = project_contribution_history(&events, &ai_usage_events);
         merge_contribution_retained(&mut stats, &retained);
         Ok(stats)
     }
