@@ -885,6 +885,12 @@ impl AgentRuntimeBackend {
                         Ok(CancelOutcome::Cancelled) => {
                             this.apply_cancelled_turn(&turn_id);
                         }
+                        Ok(CancelOutcome::Pending) => {
+                            // ACP v1 confirms cancellation with the original
+                            // session/prompt response, not the session/cancel notification.
+                            this.cancelling_turn_id = turn_id;
+                            this.set_status("正在停止，等待 Agent 确认…");
+                        }
                         Ok(CancelOutcome::AlreadyFinished) => {
                             // 取消请求与自然完成交错：原生完成事件仍然有效，
                             // 由它按真实状态结算，不能改写成用户取消。
