@@ -16,6 +16,8 @@ use super::opencode::OpenCodeAdapter;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelOutcome {
     Cancelled,
+    /// The cancel notification was sent, but the agent has not yet acknowledged it.
+    Pending,
     AlreadyFinished,
 }
 
