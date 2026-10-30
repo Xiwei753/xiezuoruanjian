@@ -46,6 +46,11 @@ for libdir in \
     esac
 done
 
+# 系统 bwrap 可能是 setuid 安装，优先使用；否则回退到 AppImage 内置副本。
+if [ -z "${SUJIAN_BWRAP:-}" ] && ! command -v bwrap >/dev/null 2>&1; then
+    export SUJIAN_BWRAP="$APPDIR/usr/libexec/sujian/bwrap"
+fi
+
 if [ -z "${QT_PLUGIN_PATH:-}" ]; then
     export QT_PLUGIN_PATH="$APPDIR/usr/plugins"
 fi

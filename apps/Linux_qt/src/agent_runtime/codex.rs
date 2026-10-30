@@ -227,7 +227,7 @@ impl CodexAdapter {
                 args.push(arg.clone());
             }
         }
-        let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args);
+        let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args)?;
         let client = Arc::new(RpcClient::spawn(
             "Codex app-server",
             command,

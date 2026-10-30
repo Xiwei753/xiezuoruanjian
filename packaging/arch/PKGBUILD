@@ -8,7 +8,7 @@ arch=('x86_64')
 url='https://github.com/Xiwei753/xiezuoruanjian'
 license=('GPL-3.0-only')
 depends=(
-  'glibc' 'gcc-libs' 'openssl'
+  'glibc' 'gcc-libs' 'openssl' 'bubblewrap'
   'qt6-base>=6.7' 'qt6-declarative>=6.7' 'qt6-wayland'
   'kirigami' 'kirigami-addons' 'kcolorscheme'
   'qqc2-breeze-style' 'breeze' 'breeze-icons'

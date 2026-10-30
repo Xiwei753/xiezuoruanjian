@@ -24,6 +24,7 @@ pub struct GeminiAdapter {
     session_id: Arc<Mutex<Option<String>>>,
     current_child: Arc<Mutex<Option<Child>>>,
     session_started: Arc<Mutex<bool>>,
+    prompt_accepted: Arc<Mutex<bool>>,
     system_settings_dir: Option<PathBuf>,
 }
 
@@ -127,6 +128,7 @@ impl GeminiAdapter {
             session_id,
             current_child: Arc::new(Mutex::new(None)),
             session_started: Arc::new(Mutex::new(false)),
+            prompt_accepted: Arc::new(Mutex::new(false)),
             system_settings_dir,
         })
     }
@@ -135,7 +137,7 @@ impl GeminiAdapter {
 impl AgentAdapter for GeminiAdapter {
     fn prompt(&mut self, message: &str) -> Result<(), String> {
         let mut command = WorkspaceAccess::for_context(&self.ctx)?
-            .command(&self.ctx.launch_path, &[]);
+            .command(&self.ctx.launch_path, &[])?;
         command
             .arg("-p")
             .arg(message)
@@ -168,8 +170,9 @@ impl AgentAdapter for GeminiAdapter {
         if let Ok(mut guard) = self.current_child.lock() {
             *guard = Some(child);
         }
-        // `gemini -p` 已成功启动并接管本轮消息。
-        (self.emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
+        if let Ok(mut guard) = self.prompt_accepted.lock() {
+            *guard = false;
+        }
         if let Some(stderr) = stderr {
             std::thread::Builder::new()
                 .name("agent-gemini-stderr".to_string())
@@ -185,6 +188,7 @@ impl AgentAdapter for GeminiAdapter {
         let session_id = self.session_id.clone();
         let current_child = self.current_child.clone();
         let session_started = self.session_started.clone();
+        let prompt_accepted = self.prompt_accepted.clone();
         let input_chars = u32::try_from(message.chars().count()).unwrap_or(u32::MAX);
         std::thread::Builder::new()
             .name("agent-gemini-turn".to_string())
@@ -207,6 +211,16 @@ impl AgentAdapter for GeminiAdapter {
                         .unwrap_or_default();
                     match kind {
                         "init" => {
+                            let already_accepted = prompt_accepted
+                                .lock()
+                                .map(|guard| *guard)
+                                .unwrap_or(true);
+                            if !already_accepted {
+                                if let Ok(mut guard) = prompt_accepted.lock() {
+                                    *guard = true;
+                                }
+                                (emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
+                            }
                             if let Some(id) = json_text(&value, &["session_id"]) {
                                 if let Ok(mut guard) = session_id.lock() {
                                     *guard = Some(id.clone());

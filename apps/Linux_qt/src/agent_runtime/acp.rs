@@ -176,7 +176,7 @@ impl AcpAdapter {
         if ctx.agent_id == "gemini" && !args.iter().any(|arg| arg == "--acp") {
             args.push("--acp".to_string());
         }
-        let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args);
+        let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args)?;
         let client = Arc::new(RpcClient::spawn(
             "ACP Agent",
             command,
@@ -312,17 +312,20 @@ impl AgentAdapter for AcpAdapter {
         std::thread::Builder::new()
             .name("agent-acp-prompt".to_string())
             .spawn(move || {
-                let result = client.request(
+                let accepted_emit = emit.clone();
+                let result = client.request_observed(
                     "session/prompt",
                     json!({
                         "sessionId": session_id,
                         "prompt": [{ "type": "text", "text": text }],
                     }),
                     REQUEST_TIMEOUT,
+                    move || {
+                        (accepted_emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
+                    },
                 );
                 match result {
                     Ok(_) => {
-                        (emit)(RuntimeEvent::native("", AgentEvent::PromptAccepted));
                         (emit)(RuntimeEvent::native("", AgentEvent::TurnCompleted));
                     }
                     Err(error) => {

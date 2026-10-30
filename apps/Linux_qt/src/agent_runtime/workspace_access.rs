@@ -148,7 +148,7 @@ impl WorkspaceAccess {
     }
 
     /// 生成 bwrap 命令；调用方追加的 Agent 参数会落在 `-- program` 之后。
-    pub fn command(&self, program: &str, args: &[String]) -> Command {
+    pub fn command(&self, program: &str, args: &[String]) -> Result<Command, String> {
         let mut command = Command::new(&self.bwrap);
         command.env_clear();
         // 只保留定位运行时、语言、证书和代理所需的变量。DBUS/XDG_RUNTIME_DIR
@@ -251,13 +251,56 @@ impl WorkspaceAccess {
             command.arg("--ro-bind").arg(socket_dir).arg(socket_dir);
         }
         for path in &self.extra_ro_paths {
-            command.arg("--ro-bind").arg(path).arg(path);
+            if !path.exists() {
+                continue;
+            }
+            let canonical = canonical_for_sandbox(path, "Agent 依赖")?;
+            if forbidden_host_path(&canonical) || forbidden_host_path(path) {
+                return Err(format!(
+                    "Agent 依赖位于宿主用户会话目录，不能暴露给沙箱：{}",
+                    path.display()
+                ));
+            }
+            // 已随 /usr 等运行时目录可见的路径不重复挂载。
+            if trusted_runtime_path(path) && trusted_runtime_path(&canonical) {
+                continue;
+            }
+            command.arg("--ro-bind").arg(&canonical).arg(path);
         }
-        if program_path_is_outside_runtime(program) {
-            let path = PathBuf::from(program);
-            if let Some(parent) = path.parent() {
-                if parent.exists() {
-                    command.arg("--ro-bind").arg(parent).arg(parent);
+
+        let program_path = PathBuf::from(program);
+        let program_canonical = canonical_for_sandbox(&program_path, "Agent 可执行文件")?;
+        if forbidden_host_path(&program_path) || forbidden_host_path(&program_canonical) {
+            return Err(format!(
+                "Agent 可执行文件位于宿主用户会话目录，不能在沙箱中运行：{}",
+                program_path.display()
+            ));
+        }
+        if !trusted_runtime_path(&program_canonical) {
+            // 自定义安装只暴露精确的可执行文件及最小运行时目录，绝不挂载
+            // 任意父目录，避免从 /run/user 等路径重新引入宿主 IPC。
+            command
+                .arg("--ro-bind")
+                .arg(&program_canonical)
+                .arg(&program_canonical);
+            if let Some(parent) = program_canonical.parent() {
+                for name in ["lib", "lib64", "share"] {
+                    let directory = parent.join(name);
+                    if directory.is_dir() {
+                        command.arg("--ro-bind").arg(&directory).arg(&directory);
+                    }
+                }
+            }
+            if let Some(interpreter) = script_interpreter(&program_canonical) {
+                let canonical = canonical_for_sandbox(&interpreter, "Agent 解释器")?;
+                if forbidden_host_path(&interpreter) || forbidden_host_path(&canonical) {
+                    return Err(format!(
+                        "Agent 解释器位于宿主用户会话目录，不能暴露给沙箱：{}",
+                        interpreter.display()
+                    ));
+                }
+                if !trusted_runtime_path(&canonical) {
+                    command.arg("--ro-bind").arg(&canonical).arg(&interpreter);
                 }
             }
         }
@@ -274,17 +317,36 @@ impl WorkspaceAccess {
             .arg("--die-with-parent")
             .arg("--new-session")
             .arg("--")
-            .arg(program)
+            .arg(&program_canonical)
             .args(args);
-        command
+        Ok(command)
     }
 }
 
-fn program_path_is_outside_runtime(program: &str) -> bool {
-    let path = Path::new(program);
-    !path.starts_with("/usr")
-        && !path.starts_with("/bin")
-        && !path.starts_with("/sbin")
-        && !path.starts_with("/lib")
-        && !path.starts_with("/opt")
+fn trusted_runtime_path(path: &Path) -> bool {
+    ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt"]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+fn forbidden_host_path(path: &Path) -> bool {
+    // 这些目录包含宿主用户会话、进程、设备和运行时 IPC。即使只读挂载，
+    // 也允许连接 Unix Socket，因此不能把它们重新带回沙箱。
+    ["/run", "/var/run", "/proc", "/sys", "/dev"]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+}
+
+fn canonical_for_sandbox(path: &Path, label: &str) -> Result<PathBuf, String> {
+    std::fs::canonicalize(path)
+        .map_err(|error| format!("无法解析{label}路径 {}：{error}", path.display()))
+}
+
+fn script_interpreter(path: &Path) -> Option<PathBuf> {
+    let bytes = std::fs::read(path).ok()?;
+    let first = bytes.split(|byte| *byte == b'\n').next()?;
+    let line = first.strip_prefix(b"#!")?;
+    let line = String::from_utf8_lossy(line);
+    let interpreter = line.split_whitespace().next()?;
+    Some(PathBuf::from(interpreter))
 }

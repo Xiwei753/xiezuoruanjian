@@ -148,6 +148,21 @@ impl RpcClient {
         params: serde_json::Value,
         timeout: Duration,
     ) -> Result<serde_json::Value, String> {
+        self.request_observed(method, params, timeout, || {})
+    }
+
+    /// 发送请求，并在 JSON-RPC 报文真正写入 stdin 后立刻回调。
+    ///
+    /// ACP 的 `session/prompt` 是长请求：写入成功即表示消息已交给 Agent，
+    /// 不能等整个回答结束才把它算作“已发送输入”。回调只表示协议通道受理，
+    /// 轮次结果仍由后续响应的 `Ok/Err` 决定。
+    pub fn request_observed(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+        on_accepted: impl FnOnce(),
+    ) -> Result<serde_json::Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver): (Sender<Result<serde_json::Value, String>>, Receiver<_>) =
             mpsc::channel();
@@ -155,12 +170,18 @@ impl RpcClient {
             .lock()
             .map_err(|_| "JSON-RPC 状态锁损坏".to_string())?
             .insert(id, PendingRequest { response: sender });
-        self.write_json(&serde_json::json!({
+        if let Err(error) = self.write_json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params,
-        }))?;
+        })) {
+            if let Ok(mut map) = self.pending.lock() {
+                map.remove(&id);
+            }
+            return Err(error);
+        }
+        on_accepted();
         match receiver.recv_timeout(timeout) {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {

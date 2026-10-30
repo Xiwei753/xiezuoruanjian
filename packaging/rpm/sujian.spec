@@ -39,6 +39,8 @@ BuildRequires:  openssl-devel
 BuildRequires:  pkgconf-pkg-config
 
 # 运行时依赖：系统 Qt 6.7+ 运行库
+# Issue #1016：侧载 Agent 统一在 bubblewrap 只读作品视图中运行。
+Requires:       bubblewrap
 Requires:       qt6-qtbase >= 6.7
 Requires:       qt6-qtdeclarative >= 6.7
 # Issue #729 评论 5762596831 第 1 部分：收口到原生 Wayland 运行环境

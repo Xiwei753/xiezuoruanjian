@@ -128,7 +128,7 @@ impl OpenCodeAdapter {
         // Agent 自身和它启动的 Shell/文件工具都进入 bwrap：作品目录只读，
         // 只有外部 MCP broker 能通过 Core 事务写回对象元数据。
         let mut command =
-            WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &ctx.launch_args);
+            WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &ctx.launch_args)?;
         let child = command
             .args([
                 "serve",

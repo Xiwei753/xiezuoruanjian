@@ -19,6 +19,9 @@ APPDIR="$OUT_DIR/AppDir"
 BUNDLE_DIR="$OUT_DIR/correction-bundle"
 BINARY="$ROOT/target/release/sujian-linux-qt"
 MCP_BINARY="$ROOT/target/release/sujian_mcp"
+# 侧载 Agent 的只读作品视图依赖 bubblewrap；AppImage 不能要求系统包管理器
+# 自动安装它，因此把构建机的 bwrap 一并放进 AppDir（系统已有 bwrap 时优先用系统版本）。
+BWRAP="${BWRAP:-$(command -v bwrap || true)}"
 LINUXDEPLOY="${LINUXDEPLOY:-linuxdeploy}"
 APPIMAGETOOL="${APPIMAGETOOL:-appimagetool}"
 # QML is embedded in the Rust binary via qrc, so linuxdeploy cannot discover
@@ -32,6 +35,10 @@ for tool in "$LINUXDEPLOY" "$APPIMAGETOOL"; do
         exit 1
     fi
 done
+if [ -z "$BWRAP" ] || [ ! -x "$BWRAP" ]; then
+    echo "错误：AppImage 需要 bubblewrap；请安装 bubblewrap 或用 BWRAP=/path/to/bwrap 指定。" >&2
+    exit 1
+fi
 
 echo "==> 构建 Linux Qt release 与 MCP Server"
 # Issue #1014：MCP 与 Qt 客户端同次构建，AppImage 内置稳定入口。
@@ -55,9 +62,12 @@ cp "$BINARY" "$APPDIR/usr/bin/sujian-linux-qt"
 # Issue #1014：MCP 放在内部固定路径，AppRun 的 --sujian-mcp 入口转发到这里；
 # 不把 /tmp/.mount_* 下的临时路径交给外部 CLI。
 cp "$MCP_BINARY" "$APPDIR/usr/libexec/sujian/sujian_mcp"
+# AppImage 内置 bwrap；系统有 bwrap 时 AppRun 仍优先用系统版本（可能是
+# setuid 安装），没有时回退到这里的副本。
+cp "$BWRAP" "$APPDIR/usr/libexec/sujian/bwrap"
 cp "$ROOT/packaging/linux/sujian-launcher.sh" "$APPDIR/usr/libexec/sujian/sujian-launcher.sh"
 chmod +x "$APPDIR/usr/bin/sujian-linux-qt" "$APPDIR/usr/libexec/sujian/sujian_mcp" \
-    "$APPDIR/usr/libexec/sujian/sujian-launcher.sh"
+    "$APPDIR/usr/libexec/sujian/bwrap" "$APPDIR/usr/libexec/sujian/sujian-launcher.sh"
 ln -sf ../libexec/sujian/sujian-launcher.sh "$APPDIR/usr/bin/sujian"
 cp "$ROOT/packaging/linux/sujian.desktop" "$APPDIR/usr/share/applications/sujian.desktop"
 cp "$ROOT/packaging/linux/icons/hicolor/256x256/apps/sujian.png" \
@@ -79,6 +89,7 @@ echo "==> 部署 Qt 运行库/插件"
     --appdir "$APPDIR" \
     --executable "$APPDIR/usr/bin/sujian-linux-qt" \
     --executable "$APPDIR/usr/libexec/sujian/sujian_mcp" \
+    --executable "$APPDIR/usr/libexec/sujian/bwrap" \
     --desktop-file "$APPDIR/usr/share/applications/sujian.desktop" \
     --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/sujian.png" \
     --plugin qt
