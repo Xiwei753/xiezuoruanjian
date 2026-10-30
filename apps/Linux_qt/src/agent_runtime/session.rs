@@ -100,27 +100,10 @@ impl AgentSessionManager {
             .map(|broker| broker.directory().to_path_buf());
         let conversation_id = ctx.conversation_id.clone();
         let current_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-        let turn_id = current_turn_id.clone();
         let wrapped: EventSink = Arc::new(move |mut event: RuntimeEvent| {
-            let session_event = matches!(
-                event.event,
-                AgentEvent::SessionStarted { .. }
-                    | AgentEvent::ModelsAvailable { .. }
-                    | AgentEvent::McpConnectionChanged { .. }
-            );
-            let terminal = matches!(
-                event.event,
-                AgentEvent::TurnCompleted | AgentEvent::TurnFailed { .. }
-            );
-            // 适配器显式携带的 Core Turn 是创建异步线程时的固定身份，绝不能
-            // 用事件到达时的 current_turn_id 覆盖。终态事件必须由适配器确认
-            // 归属；仅有未标注的终态时宁可丢弃，也不能结束刚发出的新轮次。
-            if event.core_turn_id.is_empty() && !session_event && !terminal {
-                event.core_turn_id = turn_id
-                    .lock()
-                    .map(|guard| guard.clone())
-                    .unwrap_or_default();
-            }
+            // 适配器显式携带的 Core Turn 是创建异步线程时的固定身份。管理器
+            // 不再用事件到达时的 current_turn_id 补空：任何没有明确归属的
+            // 事件都交给后端丢弃，避免停止后立即重发时旧线程污染新轮次。
             event.conversation_id = conversation_id.clone();
             event.generation = generation;
             (sink)(event);

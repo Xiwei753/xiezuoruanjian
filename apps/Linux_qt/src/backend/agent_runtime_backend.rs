@@ -108,6 +108,9 @@ pub struct AgentRuntimeBackend {
     conversations: Vec<AgentConversation>,
     active_turn_id: String,
     ignored_turn_id: String,
+    /// 用户已请求停止、正在等待 Agent 原生协议确认的 Core Turn。确认前
+    /// 不得把轮次标成 Cancelled，也不得把 running 置 false。
+    cancelling_turn_id: String,
     /// 流式增量累计到一定数量才落盘一次，避免每个 token 写盘。
     stream_events_since_persist: u32,
     running_value: bool,
@@ -171,6 +174,7 @@ impl AgentRuntimeBackend {
             conversations: Vec::new(),
             active_turn_id: String::new(),
             ignored_turn_id: String::new(),
+            cancelling_turn_id: String::new(),
             stream_events_since_persist: 0,
             running_value: false,
             status_text_value: "未开始会话".to_string(),
@@ -486,7 +490,7 @@ impl AgentRuntimeBackend {
             return;
         }
         if self.running_value {
-            self.cancel_turn();
+            self.abandon_active_turn();
         }
         self.cancel_runtime_only();
         self.project_id = project_id;
@@ -495,6 +499,7 @@ impl AgentRuntimeBackend {
         self.available_models.clear();
         self.active_turn_id.clear();
         self.ignored_turn_id.clear();
+        self.cancelling_turn_id.clear();
         self.set_running(false, "未开始会话");
         self.permission_json_value = "null".to_string();
         self.permission_changed();
@@ -543,7 +548,7 @@ impl AgentRuntimeBackend {
             return;
         }
         if self.running_value {
-            self.cancel_turn();
+            self.abandon_active_turn();
         }
         self.cancel_runtime_only();
         self.agent_id = agent_id;
@@ -585,7 +590,7 @@ impl AgentRuntimeBackend {
 
     fn new_conversation(&mut self) {
         if self.running_value {
-            self.cancel_turn();
+            self.abandon_active_turn();
         }
         // 新会话不能复用上一段原生 session；同时换掉运行中的进程。
         self.cancel_runtime_only();
@@ -593,6 +598,7 @@ impl AgentRuntimeBackend {
         self.available_models.clear();
         self.active_turn_id.clear();
         self.ignored_turn_id.clear();
+        self.cancelling_turn_id.clear();
         self.permission_json_value = "null".to_string();
         self.permission_changed();
         self.emit_conversation();
@@ -620,7 +626,7 @@ impl AgentRuntimeBackend {
                     let _ = api.save_agent_conversation(&conversation);
                 }
                 if self.running_value {
-                    self.cancel_turn();
+                    self.abandon_active_turn();
                 }
                 self.cancel_runtime_only();
                 self.agent_id = conversation.agent_id.clone();
@@ -650,6 +656,7 @@ impl AgentRuntimeBackend {
                 self.available_models.clear();
                 self.conversation = Some(conversation);
                 self.active_turn_id.clear();
+                self.cancelling_turn_id.clear();
                 self.set_running(false, "已打开会话");
                 self.permission_json_value = "null".to_string();
                 self.permission_changed();
@@ -741,6 +748,7 @@ impl AgentRuntimeBackend {
         self.conversation = Some(conversation);
         self.active_turn_id = turn_id_value.clone();
         self.ignored_turn_id.clear();
+        self.cancelling_turn_id.clear();
         self.stream_events_since_persist = 0;
         self.permission_json_value = "null".to_string();
         self.permission_changed();
@@ -794,15 +802,19 @@ impl AgentRuntimeBackend {
             .ok();
     }
 
-    fn cancel_turn(&mut self) {
+    /// 切换项目/Agent/会话时直接放弃当前轮次：随后一定会销毁原生进程，
+    /// 不需要等待协议确认。用户点击“停止”则走 [`Self::cancel_turn`] 的真实
+    /// 确认流程，不能把两者混为一谈。
+    fn abandon_active_turn(&mut self) {
         if !self.running_value {
             return;
         }
         let turn_id = self.active_turn_id.clone();
         self.ignored_turn_id = turn_id.clone();
+        self.cancelling_turn_id.clear();
         self.running_value = false;
         self.running_changed();
-        self.set_status("已取消");
+        self.set_status("已停止");
         let api = self.core_api();
         if let Some(conversation) = self.conversation.as_mut() {
             if let Some(turn) = conversation.turn_mut(&turn_id) {
@@ -815,14 +827,73 @@ impl AgentRuntimeBackend {
             }
         }
         self.emit_conversation();
+    }
+
+    fn cancel_turn(&mut self) {
+        if !self.running_value || !self.cancelling_turn_id.is_empty() {
+            if self.running_value {
+                self.set_status("正在停止…");
+            }
+            return;
+        }
+        let turn_id = self.active_turn_id.clone();
+        if turn_id.is_empty() {
+            return;
+        }
+        self.cancelling_turn_id = turn_id.clone();
+        self.set_status("正在停止…");
         let runtime = self.runtime.clone();
-        let cancel_turn_id = turn_id;
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(
+            move |(turn_id, result): (String, Result<(), String>)| {
+                if let Some(pinned) = qptr.as_pinned() {
+                    let mut this = pinned.borrow_mut();
+                    if this.cancelling_turn_id != turn_id {
+                        return;
+                    }
+                    this.cancelling_turn_id.clear();
+                    if this.active_turn_id != turn_id {
+                        // 停止请求发出后，Agent 已经先一步完成/失败；以后者为准。
+                        return;
+                    }
+                    match result {
+                        Ok(()) => {
+                            this.ignored_turn_id = turn_id.clone();
+                            this.running_value = false;
+                            this.running_changed();
+                            this.set_status("已取消");
+                            let api = this.core_api();
+                            if let Some(conversation) = this.conversation.as_mut() {
+                                if let Some(turn) = conversation.turn_mut(&turn_id) {
+                                    turn.cancel(now_ms());
+                                }
+                                conversation.status = AgentConversationStatus::Idle;
+                                conversation.updated_at_ms = now_ms();
+                                if let Some(api) = api {
+                                    let _ = api.save_agent_conversation(conversation);
+                                }
+                            }
+                            this.active_turn_id.clear();
+                            this.permission_json_value = "null".to_string();
+                            this.permission_changed();
+                            this.emit_conversation();
+                        }
+                        Err(error) => {
+                            this.set_status("停止失败，Agent 仍在运行");
+                            this.set_error(format!("停止失败：{error}"));
+                        }
+                    }
+                }
+            },
+        );
         std::thread::Builder::new()
             .name("agent-runtime-cancel".to_string())
             .spawn(move || {
-                if let Ok(mut manager) = runtime.lock() {
-                    let _ = manager.cancel_turn(&cancel_turn_id);
-                }
+                let result = match runtime.lock() {
+                    Ok(mut manager) => manager.cancel_turn(&turn_id),
+                    Err(_) => Err("Agent 运行时状态锁已损坏".to_string()),
+                };
+                callback((turn_id, result));
             })
             .ok();
     }
@@ -891,6 +962,7 @@ impl AgentRuntimeBackend {
             AgentEvent::SessionStarted { .. }
                     | AgentEvent::ModelsAvailable { .. }
                     | AgentEvent::McpConnectionChanged { .. }
+                    | AgentEvent::SessionError { .. }
         );
         if event.generation != 0 {
             if self.runtime_generation != 0 && event.generation < self.runtime_generation {
@@ -1106,6 +1178,16 @@ impl AgentRuntimeBackend {
                 // 真实使用量在轮次完成时按消息字符数记录，避免各协议 token
                 // 计数单位不同导致统计口径漂移。
             }
+            AgentEvent::SessionError { message } => {
+                // 会话级错误没有确认的轮次终态，不能据此结束回答；保留
+                // running，等 idle/消息历史/重连恢复后再由明确终态结算。
+                self.set_error(format!("Agent 会话错误：{message}"));
+                if self.running_value {
+                    self.set_status("Agent 连接异常，等待服务端状态");
+                } else {
+                    self.set_status("Agent 会话异常");
+                }
+            }
             AgentEvent::TurnCompleted => {
                 if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     turn.complete(now_ms());
@@ -1158,6 +1240,7 @@ impl AgentRuntimeBackend {
                 }
             }
             self.active_turn_id.clear();
+            self.cancelling_turn_id.clear();
             if failed {
                 self.set_running(false, "回答失败");
                 self.set_error(message);

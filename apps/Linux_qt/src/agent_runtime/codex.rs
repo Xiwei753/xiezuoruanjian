@@ -5,8 +5,8 @@
 //! 复用用户已有的 `~/.codex` 登录环境；不启动交互式 TUI。
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -18,10 +18,156 @@ use super::events::{
 use super::rpc::RpcClient;
 use super::workspace_access::WorkspaceAccess;
 
+/// 单个 Core Turn 在 Codex 侧的生命周期。取消可能发生在 `turn/start` 的
+/// 响应之前，因此取消意图必须独立于任何共享的“当前 native turn id”。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodexTurnState {
+    Starting,
+    Running(String),
+    Cancelling(Option<String>),
+    Cancelled(String),
+    CancelFailed(String),
+    Finished,
+}
+
+#[derive(Default)]
+struct CodexTurnStore {
+    states: Mutex<HashMap<String, CodexTurnState>>,
+    changed: Condvar,
+}
+
+impl CodexTurnStore {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn set(&self, core_turn_id: &str, state: CodexTurnState) {
+        if let Ok(mut states) = self.states.lock() {
+            states.insert(core_turn_id.to_string(), state);
+        }
+        self.changed.notify_all();
+    }
+
+    fn snapshot(&self, core_turn_id: &str) -> Option<CodexTurnState> {
+        self.states
+            .lock()
+            .ok()
+            .and_then(|states| states.get(core_turn_id).cloned())
+    }
+
+    /// `turn/start` 成功后落定 native id。如果取消已经先到，返回 true 表示
+    /// 必须立刻对这个 native turn 发送 interrupt。
+    fn running(&self, core_turn_id: &str, native_turn_id: &str) -> bool {
+        let mut interrupt = false;
+        if let Ok(mut states) = self.states.lock() {
+            match states.get(core_turn_id).cloned() {
+                Some(CodexTurnState::Starting) => {
+                    states.insert(
+                        core_turn_id.to_string(),
+                        CodexTurnState::Running(native_turn_id.to_string()),
+                    );
+                }
+                Some(CodexTurnState::Cancelling(None)) => {
+                    states.insert(
+                        core_turn_id.to_string(),
+                        CodexTurnState::Cancelling(Some(native_turn_id.to_string())),
+                    );
+                    interrupt = true;
+                }
+                Some(CodexTurnState::Cancelling(Some(_))) => {
+                    // 取消线程已经拿到 native id 并负责发送 interrupt。
+                }
+                None => {
+                    states.insert(
+                        core_turn_id.to_string(),
+                        CodexTurnState::Running(native_turn_id.to_string()),
+                    );
+                }
+                _ => {}
+            }
+        }
+        self.changed.notify_all();
+        interrupt
+    }
+
+    fn started_notification(&self, core_turn_id: &str, native_turn_id: &str) {
+        if let Ok(mut states) = self.states.lock() {
+            if matches!(
+                states.get(core_turn_id),
+                Some(CodexTurnState::Starting) | None
+            ) {
+                states.insert(
+                    core_turn_id.to_string(),
+                    CodexTurnState::Running(native_turn_id.to_string()),
+                );
+            }
+        }
+        self.changed.notify_all();
+    }
+
+    fn finish(&self, core_turn_id: &str) {
+        if let Ok(mut states) = self.states.lock() {
+            states.insert(
+                core_turn_id.to_string(),
+                CodexTurnState::Finished,
+            );
+        }
+        self.changed.notify_all();
+    }
+
+    fn begin_cancel(&self, core_turn_id: &str) -> Option<CodexTurnState> {
+        let mut states = self.states.lock().ok()?;
+        let state = states.get(core_turn_id).cloned()?;
+        let active = match state.clone() {
+            CodexTurnState::Starting => CodexTurnState::Cancelling(None),
+            CodexTurnState::Running(native) => {
+                CodexTurnState::Cancelling(Some(native))
+            }
+            other => other,
+        };
+        states.insert(core_turn_id.to_string(), active);
+        self.changed.notify_all();
+        Some(state)
+    }
+
+    fn resolve_cancel(&self, core_turn_id: &str, result: Result<String, String>) {
+        let state = match result {
+            Ok(native) => CodexTurnState::Cancelled(native),
+            Err(error) => CodexTurnState::CancelFailed(error),
+        };
+        self.set(core_turn_id, state);
+    }
+
+    fn wait_cancel(&self, core_turn_id: &str, timeout: Duration) -> Result<(), String> {
+        let started = Instant::now();
+        loop {
+            let state = self.snapshot(core_turn_id);
+            match state {
+                None | Some(CodexTurnState::Finished) | Some(CodexTurnState::Cancelled(_)) => {
+                    return Ok(());
+                }
+                Some(CodexTurnState::CancelFailed(error)) => return Err(error),
+                _ => {}
+            }
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err("等待 Codex 确认中断超时".to_string());
+            }
+            match self.states.lock() {
+                Ok(states) => {
+                    let _ = self
+                        .changed
+                        .wait_timeout(states, remaining.min(Duration::from_millis(100)));
+                }
+                Err(_) => return Err("Codex 轮次状态锁已损坏".to_string()),
+            }
+        }
+    }
+}
+
 pub struct CodexAdapter {
     client: Arc<RpcClient>,
     thread_id: Arc<Mutex<Option<String>>>,
-    turn_id: Arc<Mutex<Option<String>>>,
     emit: EventSink,
     approval_ids: Arc<Mutex<HashMap<String, i64>>>,
     model: Option<String>,
@@ -31,6 +177,9 @@ pub struct CodexAdapter {
     /// 原生 turnId → Core Turn 的稳定映射。旧轮次迟到通知始终回到旧 Turn，
     /// 不会因为用户已经发送下一轮而改记到新回答。
     turn_bindings: Arc<Mutex<HashMap<String, String>>>,
+    /// 每个 Core Turn 的启动/运行/取消状态。取消先落在这个表里，绝不会
+    /// 读取下一轮的共享 native turn id。
+    turn_store: Arc<CodexTurnStore>,
 }
 
 fn core_for_native_turn(
@@ -55,24 +204,42 @@ fn core_for_native_turn(
         .unwrap_or_default()
 }
 
+fn interrupt_codex_turn(
+    client: &RpcClient,
+    thread_id: &str,
+    native_turn_id: &str,
+) -> Result<(), String> {
+    if native_turn_id.is_empty() {
+        return Err("Codex 尚未返回 turn id，无法确认中断".to_string());
+    }
+    client.request(
+        "turn/interrupt",
+        json!({ "threadId": thread_id, "turnId": native_turn_id }),
+        Duration::from_secs(10),
+    )?;
+    Ok(())
+}
+
 impl CodexAdapter {
     pub fn start(ctx: &AgentLaunchContext, emit: EventSink) -> Result<Self, String> {
         let thread_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let turn_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let approval_ids: Arc<Mutex<HashMap<String, i64>>> = Arc::new(Mutex::new(HashMap::new()));
         let active_core_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let turn_bindings: Arc<Mutex<HashMap<String, String>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let turn_store: Arc<CodexTurnStore> = Arc::new(CodexTurnStore::new());
         let handler_emit = emit.clone();
         let handler_thread = thread_id.clone();
-        let handler_turn = turn_id.clone();
         let handler_approvals = approval_ids.clone();
         let handler_active_turn = active_core_turn_id.clone();
         let handler_bindings = turn_bindings.clone();
+        let handler_turn_store = turn_store.clone();
         let handler: Arc<dyn Fn(&str, Value) + Send + Sync> =
             Arc::new(move |method: &str, message: Value| {
                 let params = message.get("params").cloned().unwrap_or_default();
-                let turn_id = json_text(&params, &["turnId"]).unwrap_or_default();
+                let turn_id = json_text(&params, &["turnId"])
+                    .or_else(|| json_text(&params, &["turn", "id"]))
+                    .unwrap_or_default();
                 let core_turn_id =
                     core_for_native_turn(&turn_id, &handler_active_turn, &handler_bindings);
                 match method {
@@ -80,8 +247,19 @@ impl CodexAdapter {
                         if let Some(id) = json_text(&params, &["turn", "id"])
                             .or_else(|| json_text(&params, &["turnId"]))
                         {
-                            if let Ok(mut guard) = handler_turn.lock() {
-                                *guard = Some(id);
+                            let core = if core_turn_id.is_empty() {
+                                handler_active_turn
+                                    .lock()
+                                    .map(|guard| guard.clone())
+                                    .unwrap_or_default()
+                            } else {
+                                core_turn_id.clone()
+                            };
+                            if !core.is_empty() {
+                                if let Ok(mut bindings) = handler_bindings.lock() {
+                                    bindings.insert(id.clone(), core.clone());
+                                }
+                                handler_turn_store.started_notification(&core, &id);
                             }
                         }
                     }
@@ -185,6 +363,9 @@ impl CodexAdapter {
                         });
                     }
                     "turn/completed" => {
+                        if !core_turn_id.is_empty() {
+                            handler_turn_store.finish(&core_turn_id);
+                        }
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
@@ -197,6 +378,9 @@ impl CodexAdapter {
                         let message = json_text(&params, &["error", "message"])
                             .or_else(|| json_text(&params, &["message"]))
                             .unwrap_or_else(|| "Codex 请求失败".to_string());
+                        if !core_turn_id.is_empty() {
+                            handler_turn_store.finish(&core_turn_id);
+                        }
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
@@ -360,12 +544,12 @@ impl CodexAdapter {
         Ok(Self {
             client,
             thread_id,
-            turn_id,
             emit,
             approval_ids,
             model,
             active_core_turn_id,
             turn_bindings,
+            turn_store,
         })
     }
 }
@@ -383,13 +567,13 @@ impl AgentAdapter for CodexAdapter {
         }
         let client = self.client.clone();
         let emit = self.emit.clone();
-        let turn_state = self.turn_id.clone();
         let bindings = self.turn_bindings.clone();
+        let turn_store = self.turn_store.clone();
         let round_turn_id = core_turn_id.to_string();
         let accepted_turn_id = round_turn_id.clone();
-        if let Ok(mut guard) = turn_state.lock() {
-            *guard = None;
-        }
+        // 在 spawn 前落定 Starting，保证随后到达的取消一定能看到本轮。
+        self.turn_store
+            .set(&round_turn_id, CodexTurnState::Starting);
         let text = message.to_string();
         let model = self.model.clone();
         std::thread::Builder::new()
@@ -404,27 +588,46 @@ impl AgentAdapter for CodexAdapter {
                 }
                 match client.request("turn/start", params, Duration::from_secs(60)) {
                     Ok(result) => {
-                        if let Some(id) = json_text(&result, &["turn", "id"])
+                        let native_turn_id = json_text(&result, &["turn", "id"])
                             .or_else(|| json_text(&result, &["turnId"]))
-                        {
+                            .unwrap_or_default();
+                        if !native_turn_id.is_empty() {
                             if let Ok(mut map) = bindings.lock() {
-                                map.insert(id.clone(), round_turn_id.clone());
-                            }
-                            if let Ok(mut guard) = turn_state.lock() {
-                                *guard = Some(id);
+                                map.insert(native_turn_id.clone(), round_turn_id.clone());
                             }
                         }
+                        let interrupt = turn_store.running(&round_turn_id, &native_turn_id);
                         (emit)(RuntimeEvent::turn(
                             accepted_turn_id,
-                            "",
+                            native_turn_id.clone(),
                             AgentEvent::PromptAccepted,
                         ));
+                        if interrupt {
+                            let outcome = interrupt_codex_turn(
+                                &client,
+                                &thread_id,
+                                &native_turn_id,
+                            );
+                            match outcome {
+                                Ok(()) => turn_store.resolve_cancel(
+                                    &round_turn_id,
+                                    Ok(native_turn_id),
+                                ),
+                                Err(error) => turn_store.resolve_cancel(
+                                    &round_turn_id,
+                                    Err(error),
+                                ),
+                            }
+                        }
                     }
-                    Err(error) => (emit)(RuntimeEvent::turn(
-                        round_turn_id,
-                        "",
-                        AgentEvent::TurnFailed { message: error },
-                    )),
+                    Err(error) => {
+                        turn_store.set(&round_turn_id, CodexTurnState::Finished);
+                        (emit)(RuntimeEvent::turn(
+                            round_turn_id,
+                            "",
+                            AgentEvent::TurnFailed { message: error },
+                        ));
+                    }
                 }
                 // 轮次完成由 `turn/completed` / `turn/failed` 通知驱动。
             })
@@ -437,35 +640,45 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<(), String> {
-        let active = self
-            .active_core_turn_id
-            .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_default();
-        if active != core_turn_id {
-            return Ok(());
-        }
         let thread_id = self
             .thread_id
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
             .ok_or_else(|| "Codex thread 尚未建立".to_string())?;
-        let turn_id = self
-            .turn_id
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone())
-            .ok_or_else(|| "Codex 轮次尚未建立".to_string())?;
-        if let Ok(mut guard) = self.active_core_turn_id.lock() {
-            guard.clear();
+        let previous = match self.turn_store.begin_cancel(core_turn_id) {
+            Some(state) => state,
+            None => return Ok(()),
+        };
+        match previous {
+            CodexTurnState::Finished | CodexTurnState::Cancelled(_) => Ok(()),
+            CodexTurnState::CancelFailed(error) => {
+                // 前一次中断失败；让调用方看到真实原因，而不是再次谎报已取消。
+                self.turn_store
+                    .set(core_turn_id, CodexTurnState::CancelFailed(error.clone()));
+                Err(error)
+            }
+            CodexTurnState::Running(native_turn_id) => {
+                match interrupt_codex_turn(&self.client, &thread_id, &native_turn_id) {
+                    Ok(()) => {
+                        self.turn_store
+                            .resolve_cancel(core_turn_id, Ok(native_turn_id));
+                        Ok(())
+                    }
+                    Err(error) => {
+                        self.turn_store
+                            .resolve_cancel(core_turn_id, Err(error.clone()));
+                        Err(error)
+                    }
+                }
+            }
+            CodexTurnState::Starting | CodexTurnState::Cancelling(_) => {
+                // `turn/start` 还没返回 native id，或请求线程正在发送中断。
+                // 等待本轮自己的响应/中断结果，绝不读取下一轮的共享 id。
+                self.turn_store
+                    .wait_cancel(core_turn_id, Duration::from_secs(15))
+            }
         }
-        self.client.request(
-            "turn/interrupt",
-            json!({ "threadId": thread_id, "turnId": turn_id }),
-            Duration::from_secs(10),
-        )?;
-        Ok(())
     }
 
     fn respond_permission(&mut self, request_id: &str, option_id: &str) -> Result<(), String> {

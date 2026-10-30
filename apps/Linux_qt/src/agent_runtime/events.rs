@@ -117,6 +117,12 @@ pub enum AgentEvent {
         error: Option<String>,
         tools: Vec<String>,
     },
+    /// 无法归属到具体轮次的会话级错误（例如事件流断开、无消息 ID 的
+    /// 服务端错误）。它不结束当前轮次，只把真实原因展示给用户，等待
+    /// idle/消息历史/重连恢复后再结算具体轮次。
+    SessionError {
+        message: String,
+    },
     TurnCompleted,
     TurnFailed {
         message: String,
