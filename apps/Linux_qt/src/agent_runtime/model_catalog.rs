@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::events::{json_text, AgentLaunchContext, AgentModelInfo};
+use super::opencode::subcommand_args;
 use super::rpc::RpcClient;
 use super::workspace_access::WorkspaceAccess;
 
@@ -252,12 +253,16 @@ fn query_opencode(
     ctx: &AgentLaunchContext,
     refresh: bool,
 ) -> Result<ModelProbeResult, String> {
-    let mut args = vec!["models".to_string()];
+    let mut models_args = Vec::new();
     if refresh {
-        args.push("--refresh".to_string());
+        models_args.push("--refresh".to_string());
     }
-    let mut command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args)?;
+    // 与 OpenCodeAdapter::start 使用同一启动路径和通用参数；`models` 只是
+    // 不同的子命令，用户 manifest 里的包装参数不会被目录探测丢掉。
+    let mut command = WorkspaceAccess::for_context(ctx)?
+        .command(&ctx.launch_path, &ctx.launch_args)?;
     command
+        .args(subcommand_args("models", &models_args))
         .current_dir(&ctx.working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

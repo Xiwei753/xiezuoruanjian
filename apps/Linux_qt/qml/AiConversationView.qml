@@ -507,7 +507,8 @@ Item {
                 id: modelCandidateList
                 Layout.fillWidth: true
                 Layout.preferredHeight: count > 0
-                    ? Math.min(contentHeight, Kirigami.Units.gridUnit * 12) : 0
+                    ? Math.min(count * Kirigami.Units.gridUnit * 2.5,
+                               Kirigami.Units.gridUnit * 12) : 0
                 visible: count > 0
                 clip: true
                 model: root.modelCandidates()
@@ -515,6 +516,7 @@ Item {
 
                 delegate: ItemDelegate {
                     required property var modelData
+                    implicitHeight: Kirigami.Units.gridUnit * 2.5
                     width: ListView.view ? ListView.view.width : 0
                     text: String(modelData.displayText || modelData.id)
                     ToolTip.visible: hovered

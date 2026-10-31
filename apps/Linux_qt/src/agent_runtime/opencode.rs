@@ -25,6 +25,17 @@ use super::workspace_access::WorkspaceAccess;
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) const SERVER_USER: &str = "opencode";
 
+/// 按 OpenCode CLI 的 `opencode [通用参数] <子命令> [子命令参数]` 结构组装
+/// 子命令参数。manifest 中的启动参数由 `WorkspaceAccess::command` 作为通用
+/// 参数传入；`serve`/`models` 只追加各自适用的子命令参数，避免探测和正式
+/// 会话机械拼接出互不兼容的命令。
+pub(crate) fn subcommand_args(subcommand: &str, args: &[String]) -> Vec<String> {
+    let mut command_args = Vec::with_capacity(args.len() + 1);
+    command_args.push(subcommand.to_string());
+    command_args.extend(args.iter().cloned());
+    command_args
+}
+
 /// 一次 Core Turn 对应的 OpenCode inbox/用户消息身份。HTTP POST 可能是异步
 /// 的，取消必须等它确认本轮到底有没有被服务端受理，再决定删 inbox 还是
 /// interrupt，不能只发一个全局 `/interrupt` 就宣称已取消。
@@ -241,14 +252,15 @@ impl OpenCodeAdapter {
         // 只有外部 MCP broker 能通过 Core 事务写回对象元数据。
         let mut command =
             WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &ctx.launch_args)?;
+        let serve_args = [
+            "--hostname".to_string(),
+            "127.0.0.1".to_string(),
+            "--port".to_string(),
+            port.to_string(),
+        ];
+        let args = subcommand_args("serve", &serve_args);
         let child = command
-            .args([
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                &port.to_string(),
-            ])
+            .args(&args)
             .current_dir(&ctx.working_dir)
             .env("OPENCODE_PASSWORD", &password)
             .env("OPENCODE_SERVER_PASSWORD", &password)
