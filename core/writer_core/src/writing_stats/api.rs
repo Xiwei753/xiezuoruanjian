@@ -183,11 +183,11 @@ pub struct StatsApi {
 
 impl StatsApi {
     pub fn new(app_data_root: &Path) -> Self {
-        // 迁移：把旧版单机事件库一次性并入按设备分区的新事件库。
+        // 迁移：把旧版事件库和旧连续性缺口一次性并入本机分区的新格式。
         let migration_error = if let Err(e) =
             crate::writing_stats::migration::migrate_stats_event_store(app_data_root)
         {
-            eprintln!("[writing_stats] event store migration failed: {}", e);
+            eprintln!("[writing_stats] stats migration failed: {}", e);
             Some(e.to_string())
         } else {
             None
@@ -208,7 +208,7 @@ impl StatsApi {
     /// 读取查询前的迁移闸门：失败时显式报错并允许下一次重试。
     ///
     /// 迁移成功前不能把新目录当成唯一事实源；`record_event` 不受此限制，
-    /// 迁移重试会按 `event_id` 幂等并入旧事件，不会重复计数。
+    /// 迁移重试会按 `event_id`/事务事件身份幂等并入旧数据，不会重复计数。
     fn ensure_migrated(&self) -> Result<()> {
         let pending = self
             .migration_error
@@ -969,6 +969,7 @@ impl StatsApi {
         device_id: &str,
         chapter_id: &str,
     ) -> Result<Vec<crate::writing_stats::proof::ProofContinuityGap>> {
+        self.ensure_migrated()?;
         crate::writing_stats::checkpoint::load_continuity_gaps(
             self.store.app_data_root(),
             device_id,
@@ -994,6 +995,7 @@ impl StatsApi {
         &self,
         request: &crate::writing_stats::replay::ProofReplayRequest,
     ) -> Result<crate::writing_stats::replay::ProofReplayFrame> {
+        self.ensure_migrated()?;
         let generation = self.store.proof_generation();
         let fingerprint = self.store.storage_fingerprint()?;
         let key = format!(
@@ -1035,6 +1037,7 @@ impl StatsApi {
         chapter_id: &str,
         device_id: &str,
     ) -> Result<crate::writing_stats::replay::ProofExportPackage> {
+        self.ensure_migrated()?;
         crate::writing_stats::replay::export_chapter_proof(&self.store, chapter_id, device_id)
     }
 

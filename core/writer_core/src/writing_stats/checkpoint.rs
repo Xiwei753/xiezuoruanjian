@@ -17,9 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::writing_stats::proof::{
-    content_hash_of_text, text_sha256, ProofContinuityGap, PROOF_FORMAT_VERSION,
-};
+use crate::writing_stats::proof::{text_sha256, ProofContinuityGap, PROOF_FORMAT_VERSION};
 
 pub const CHECKPOINT_FORMAT_VERSION: u32 = PROOF_FORMAT_VERSION;
 
@@ -545,134 +543,6 @@ fn continuity_gap_path(app_data_root: &Path, gap: &ProofContinuityGap) -> PathBu
     ))
 }
 
-/// 前一轮实现写下的 `<chapter>.gaps.jsonl` 仅作为迁移输入。
-fn legacy_continuity_gap_path(
-    app_data_root: &Path,
-    device_id: &str,
-    chapter_id: &str,
-) -> PathBuf {
-    let checkpoint = checkpoint_relative_path(device_id, chapter_id);
-    let prefix = checkpoint
-        .strip_suffix(".checkpoints.jsonl")
-        .unwrap_or(&checkpoint);
-    app_data_root.join(format!("{prefix}.gaps.jsonl"))
-}
-
-/// 旧 JSONL 缺口没有 `baseline_text`；正文快照在同次写入的
-/// `reason=continuity_gap` 检查点里。
-#[derive(Debug, Deserialize)]
-struct LegacyProofContinuityGap {
-    format_version: u32,
-    transaction_id: String,
-    event_id: String,
-    project_id: String,
-    volume_id: String,
-    chapter_id: String,
-    device_id: String,
-    missing_fields: Vec<String>,
-    phase: String,
-    recovered_at_ms: i64,
-    baseline_seq: u64,
-    baseline_text_sha256: String,
-    baseline_content_hash: String,
-    verifiable: bool,
-}
-
-impl LegacyProofContinuityGap {
-    fn with_baseline_text(self, baseline_text: String) -> ProofContinuityGap {
-        ProofContinuityGap {
-            format_version: self.format_version,
-            transaction_id: self.transaction_id,
-            event_id: self.event_id,
-            project_id: self.project_id,
-            volume_id: self.volume_id,
-            chapter_id: self.chapter_id,
-            device_id: self.device_id,
-            missing_fields: self.missing_fields,
-            phase: self.phase,
-            recovered_at_ms: self.recovered_at_ms,
-            baseline_seq: self.baseline_seq,
-            baseline_text,
-            baseline_text_sha256: self.baseline_text_sha256,
-            baseline_content_hash: self.baseline_content_hash,
-            verifiable: self.verifiable,
-        }
-    }
-}
-
-/// 把旧 JSONL 缺口逐条迁移为新的原子记录。
-///
-/// 同一 transaction/event 身份仍由 `append_continuity_gap()` 保证幂等；
-/// 基线正文必须从当年写入的 `continuity_gap` 检查点取回并重新核对摘要，
-/// 缺失或不一致时显式失败，不能把旧缺口当作不存在。
-fn migrate_legacy_continuity_gaps(
-    app_data_root: &Path,
-    device_id: &str,
-    chapter_id: &str,
-) -> crate::Result<Vec<ProofContinuityGap>> {
-    let path = legacy_continuity_gap_path(app_data_root, device_id, chapter_id);
-    if !path.is_file() {
-        return Ok(Vec::new());
-    }
-    let checkpoints = load_checkpoints(app_data_root, device_id, chapter_id)?;
-    let file = File::open(&path)?;
-    let mut migrated = Vec::new();
-    for (index, line) in BufReader::new(file).lines().enumerate() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let legacy: LegacyProofContinuityGap =
-            serde_json::from_str(&line).map_err(|error| {
-                crate::Error::Other(format!(
-                    "旧连续性缺口记录损坏 {}:{}: {error}",
-                    path.display(),
-                    index + 1
-                ))
-            })?;
-        if legacy.device_id != device_id || legacy.chapter_id != chapter_id {
-            return Err(crate::Error::Other(format!(
-                "旧连续性缺口 {} 的设备/章节身份不一致",
-                legacy.event_id
-            )));
-        }
-        let session_id = format!("gap:{}", legacy.event_id);
-        let checkpoint = checkpoints
-            .iter()
-            .find(|checkpoint| {
-                checkpoint.reason == "continuity_gap"
-                    && checkpoint.seq == legacy.baseline_seq
-                    && checkpoint.session_id == session_id
-            })
-            .or_else(|| {
-                checkpoints.iter().find(|checkpoint| {
-                    checkpoint.reason == "continuity_gap"
-                        && checkpoint.seq == legacy.baseline_seq
-                        && checkpoint.text_sha256 == legacy.baseline_text_sha256
-                        && checkpoint.content_hash == legacy.baseline_content_hash
-                })
-            });
-        let Some(checkpoint) = checkpoint else {
-            return Err(crate::Error::Other(format!(
-                "旧连续性缺口 {} 找不到可迁移的基线检查点",
-                legacy.event_id
-            )));
-        };
-        if text_sha256(&checkpoint.text) != legacy.baseline_text_sha256
-            || content_hash_of_text(&checkpoint.text) != legacy.baseline_content_hash
-        {
-            return Err(crate::Error::Other(format!(
-                "旧连续性缺口 {} 的基线正文与检查点摘要不一致",
-                legacy.event_id
-            )));
-        }
-        let gap = legacy.with_baseline_text(checkpoint.text.clone());
-        append_continuity_gap(app_data_root, &gap)?;
-        migrated.push(gap);
-    }
-    Ok(migrated)
-}
-
 /// 原子写一条缺口记录。缺口、基线正文和摘要都在同一个 JSON 文件里，
 /// rename 成功即为发布点，不存在 checkpoint 已写而缺口未写的半事务。
 pub fn append_continuity_gap(
@@ -738,14 +608,6 @@ pub fn load_continuity_gaps(
         }
     }
 
-    for legacy in migrate_legacy_continuity_gaps(app_data_root, device_id, chapter_id)? {
-        if !gaps.iter().any(|gap| {
-            gap.transaction_id == legacy.transaction_id && gap.event_id == legacy.event_id
-        }) {
-            gaps.push(legacy);
-        }
-    }
-
     gaps.sort_by(|left, right| {
         left.baseline_seq
             .cmp(&right.baseline_seq)
@@ -772,7 +634,6 @@ pub fn list_proof_devices(
         let device_id = entry.file_name().to_string_lossy().to_string();
         if checkpoint_path(app_data_root, &device_id, chapter_id).is_file()
             || continuity_gap_dir(app_data_root, &device_id, chapter_id).is_dir()
-            || legacy_continuity_gap_path(app_data_root, &device_id, chapter_id).is_file()
         {
             devices.push(device_id);
         }

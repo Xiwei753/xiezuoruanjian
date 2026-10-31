@@ -8,9 +8,11 @@
 //! 失败时不会写入完成标记，下次启动可以安全重试。
 
 use crate::error::Result;
+use crate::writing_stats::proof::{content_hash_of_text, text_sha256, ProofContinuityGap};
 use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::WritingInputEvent;
 use chrono::NaiveDate;
+use serde::Deserialize;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -19,8 +21,22 @@ use std::path::{Path, PathBuf};
 pub const MARKER_NAME: &str = "events.device_partitions.v1";
 pub const MARKER_CONTENT: &str = "raw events migrated into per-device partitions\n";
 
+/// 旧连续性缺口迁入单文件原子记录后的独立完成标记。
+pub const CONTINUITY_GAP_MARKER_NAME: &str = "proof_continuity_gaps.v1";
+pub const CONTINUITY_GAP_MARKER_CONTENT: &str =
+    "legacy proof continuity gaps migrated to atomic records\n";
+
 /// 旧版本地事件目录（相对 app_data_root）。
 const LEGACY_EVENTS_DIR: &str = "app-meta/stats/events.local";
+
+/// 执行全部本地统计存储迁移。
+///
+/// 事件库迁移和连续性缺口迁移各有独立完成标记：即使旧事件库已经迁移完成，
+/// 升级到缺口原子格式的用户仍会执行一次缺口迁移。
+pub fn migrate_stats_event_store(app_data_root: &Path) -> Result<()> {
+    migrate_stats_event_store_inner(app_data_root)?;
+    migrate_local_continuity_gaps_for_origin(app_data_root)
+}
 
 /// 把旧版本地事件库迁移到按来源设备分区的新事件库。
 ///
@@ -28,7 +44,7 @@ const LEGACY_EVENTS_DIR: &str = "app-meta/stats/events.local";
 /// - 旧库为空（全新安装）时只写完成标记；
 /// - 否则逐文件严格读取旧事件、补齐缺失的业务日 `local_date`，按 `event_id`
 ///   幂等写入本机来源分区，全部成功后再写完成标记。
-pub fn migrate_stats_event_store(app_data_root: &Path) -> Result<()> {
+fn migrate_stats_event_store_inner(app_data_root: &Path) -> Result<()> {
     let stats_dir = app_data_root.join("app-meta/stats");
     if stats_dir.join(MARKER_NAME).exists() {
         return Ok(());
@@ -72,6 +88,229 @@ pub fn legacy_events_present(app_data_root: &Path) -> bool {
 fn write_marker(stats_dir: &Path) -> Result<()> {
     fs::create_dir_all(stats_dir)?;
     fs::write(stats_dir.join(MARKER_NAME), MARKER_CONTENT)?;
+    Ok(())
+}
+
+/// 把本机来源设备分区里上一轮写下的 `<chapter>.gaps.jsonl` 一次性迁移为
+/// 单文件原子缺口记录。
+///
+/// 该函数只能由本机初始化或同步正式准备阶段调用。它只扫描
+/// `stats/events/<origin_device_id>/`，不会读写其它设备分区；迁移成功后写入
+/// 独立完成标记，后续读取和逐字事件热路径只查询原子记录。
+pub fn migrate_local_continuity_gaps(app_data_root: &Path, origin_device_id: &str) -> Result<()> {
+    let stats_dir = app_data_root.join("app-meta/stats");
+    if stats_dir.join(CONTINUITY_GAP_MARKER_NAME).exists() {
+        return Ok(());
+    }
+    if origin_device_id.is_empty() {
+        return Err(crate::Error::Other(
+            "连续性缺口迁移缺少本机来源设备".to_string(),
+        ));
+    }
+    let proof_dir = app_data_root
+        .join("stats/events")
+        .join(origin_device_id)
+        .join("proof");
+    for path in list_legacy_continuity_gap_files(&proof_dir)? {
+        migrate_legacy_continuity_gap_file(app_data_root, origin_device_id, &path)?;
+    }
+    write_continuity_gap_marker(&stats_dir)
+}
+
+/// 解析本机来源设备并执行缺口迁移。
+///
+/// 设备信息尚不存在时，只有确认没有任何旧缺口文件才写完成标记；否则显式
+/// 失败，避免把用户历史静默留在旧格式里。
+fn migrate_local_continuity_gaps_for_origin(app_data_root: &Path) -> Result<()> {
+    let stats_dir = app_data_root.join("app-meta/stats");
+    if stats_dir.join(CONTINUITY_GAP_MARKER_NAME).exists() {
+        return Ok(());
+    }
+    match StatsStore::new(app_data_root).load_origin_device_id() {
+        Some(origin_device_id) => migrate_local_continuity_gaps(app_data_root, &origin_device_id),
+        None if !any_legacy_continuity_gap_files(app_data_root)? => {
+            write_continuity_gap_marker(&stats_dir)
+        }
+        None => Err(crate::Error::Other(
+            "发现旧连续性缺口文件，但无法确定本机设备，无法安全迁移".to_string(),
+        )),
+    }
+}
+
+fn write_continuity_gap_marker(stats_dir: &Path) -> Result<()> {
+    fs::create_dir_all(stats_dir)?;
+    crate::storage::atomic_write_string(
+        &stats_dir.join(CONTINUITY_GAP_MARKER_NAME),
+        CONTINUITY_GAP_MARKER_CONTENT,
+    )
+}
+
+fn any_legacy_continuity_gap_files(app_data_root: &Path) -> Result<bool> {
+    let root = app_data_root.join("stats/events");
+    if !root.is_dir() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        if !list_legacy_continuity_gap_files(&entry.path().join("proof"))?.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn list_legacy_continuity_gap_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        if entry.file_name().to_string_lossy().ends_with(".gaps.jsonl") {
+            files.push(entry.path());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// 旧 JSONL 缺口没有 `baseline_text`；正文快照在同次写入的
+/// `reason=continuity_gap` 检查点里。
+#[derive(Debug, Deserialize)]
+struct LegacyProofContinuityGap {
+    format_version: u32,
+    transaction_id: String,
+    event_id: String,
+    project_id: String,
+    volume_id: String,
+    chapter_id: String,
+    device_id: String,
+    missing_fields: Vec<String>,
+    phase: String,
+    recovered_at_ms: i64,
+    baseline_seq: u64,
+    baseline_text_sha256: String,
+    baseline_content_hash: String,
+    verifiable: bool,
+}
+
+impl LegacyProofContinuityGap {
+    fn with_baseline_text(self, baseline_text: String) -> ProofContinuityGap {
+        ProofContinuityGap {
+            format_version: self.format_version,
+            transaction_id: self.transaction_id,
+            event_id: self.event_id,
+            project_id: self.project_id,
+            volume_id: self.volume_id,
+            chapter_id: self.chapter_id,
+            device_id: self.device_id,
+            missing_fields: self.missing_fields,
+            phase: self.phase,
+            recovered_at_ms: self.recovered_at_ms,
+            baseline_seq: self.baseline_seq,
+            baseline_text,
+            baseline_text_sha256: self.baseline_text_sha256,
+            baseline_content_hash: self.baseline_content_hash,
+            verifiable: self.verifiable,
+        }
+    }
+}
+
+fn migrate_legacy_continuity_gap_file(
+    app_data_root: &Path,
+    device_id: &str,
+    path: &Path,
+) -> Result<()> {
+    let file = File::open(path)?;
+    let mut legacy_gaps = Vec::new();
+    for (index, line) in BufReader::new(file).lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let legacy: LegacyProofContinuityGap = serde_json::from_str(&line).map_err(|error| {
+            crate::Error::Other(format!(
+                "旧连续性缺口记录损坏 {}:{}: {error}",
+                path.display(),
+                index + 1
+            ))
+        })?;
+        if legacy.device_id != device_id {
+            return Err(crate::Error::Other(format!(
+                "旧连续性缺口 {} 的来源设备与目录不一致",
+                legacy.event_id
+            )));
+        }
+        legacy_gaps.push(legacy);
+    }
+    let Some(first) = legacy_gaps.first() else {
+        return Ok(());
+    };
+    let chapter_id = first.chapter_id.clone();
+    if legacy_gaps.iter().any(|gap| gap.chapter_id != chapter_id) {
+        return Err(crate::Error::Other(format!(
+            "旧连续性缺口文件 {} 包含多个章节，拒绝迁移",
+            path.display()
+        )));
+    }
+    let checkpoints =
+        crate::writing_stats::checkpoint::load_checkpoints(app_data_root, device_id, &chapter_id)?;
+    for legacy in legacy_gaps {
+        migrate_legacy_continuity_gap(app_data_root, &chapter_id, &checkpoints, legacy)?;
+    }
+    Ok(())
+}
+
+fn migrate_legacy_continuity_gap(
+    app_data_root: &Path,
+    chapter_id: &str,
+    checkpoints: &[crate::writing_stats::checkpoint::ProofCheckpoint],
+    legacy: LegacyProofContinuityGap,
+) -> Result<()> {
+    let session_id = format!("gap:{}", legacy.event_id);
+    let checkpoint = checkpoints
+        .iter()
+        .find(|checkpoint| {
+            checkpoint.reason == "continuity_gap"
+                && checkpoint.seq == legacy.baseline_seq
+                && checkpoint.session_id == session_id
+        })
+        .or_else(|| {
+            checkpoints.iter().find(|checkpoint| {
+                checkpoint.reason == "continuity_gap"
+                    && checkpoint.seq == legacy.baseline_seq
+                    && checkpoint.text_sha256 == legacy.baseline_text_sha256
+                    && checkpoint.content_hash == legacy.baseline_content_hash
+            })
+        });
+    let Some(checkpoint) = checkpoint else {
+        return Err(crate::Error::Other(format!(
+            "旧连续性缺口 {} 找不到可迁移的基线检查点",
+            legacy.event_id
+        )));
+    };
+    if text_sha256(&checkpoint.text) != legacy.baseline_text_sha256
+        || content_hash_of_text(&checkpoint.text) != legacy.baseline_content_hash
+    {
+        return Err(crate::Error::Other(format!(
+            "旧连续性缺口 {} 的基线正文与检查点摘要不一致",
+            legacy.event_id
+        )));
+    }
+    if legacy.chapter_id != chapter_id {
+        return Err(crate::Error::Other(format!(
+            "旧连续性缺口 {} 的章节身份不一致",
+            legacy.event_id
+        )));
+    }
+    let gap = legacy.with_baseline_text(checkpoint.text.clone());
+    crate::writing_stats::checkpoint::append_continuity_gap(app_data_root, &gap)?;
     Ok(())
 }
 

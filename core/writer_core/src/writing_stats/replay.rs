@@ -386,17 +386,6 @@ impl ProofReplaySession {
             errors,
         }
     }
-
-    fn reset_state(&self, target: usize, gap_target: Option<&ProofCheckpoint>) -> ReplayState {
-        initial_state(
-            &self.events,
-            &self.checkpoints,
-            &self.gap_baselines,
-            gap_target,
-            &self.baseline_text,
-            target,
-        )
-    }
 }
 
 /// 首次载入时顺序校验整条章节事件链，避免近端 checkpoint 掩盖更早的篡改。
