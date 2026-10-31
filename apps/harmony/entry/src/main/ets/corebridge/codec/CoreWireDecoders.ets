@@ -1998,6 +1998,8 @@ export function decodeFullSyncResult(data: Object): DecodeResult<FullSyncResult>
   if (!errorCategoryR.ok || errorCategoryR.value === undefined) { return err<FullSyncResult>(`FullSyncResult.${errorCategoryR.error ?? 'decode failed'}`) }
   const messageKeyR: DecodeResult<string | null> = nullStr(data, 'messageKey')
   if (!messageKeyR.ok || messageKeyR.value === undefined) { return err<FullSyncResult>(`FullSyncResult.${messageKeyR.error ?? 'decode failed'}`) }
+  const failureStageR: DecodeResult<string | null> = nullStr(data, 'failureStage')
+  if (!failureStageR.ok || failureStageR.value === undefined) { return err<FullSyncResult>(`FullSyncResult.${failureStageR.error ?? 'decode failed'}`) }
   const totalUploaded: number | null = reqNum(data, 'totalUploaded')
   if (totalUploaded === null) { return err<FullSyncResult>('FullSyncResult.totalUploaded missing or not number') }
   const totalDownloaded: number | null = reqNum(data, 'totalDownloaded')
@@ -2024,7 +2026,8 @@ export function decodeFullSyncResult(data: Object): DecodeResult<FullSyncResult>
     totalConflicts: totalConflicts,
     error: errorR.value,
     errorCategory: errorCategoryR.value,
-    messageKey: messageKeyR.value
+    messageKey: messageKeyR.value,
+    failureStage: failureStageR.value
   }
   return ok<FullSyncResult>(value)
 }

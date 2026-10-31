@@ -60,10 +60,39 @@ fn sync_failure_category(error: &WriterError, stage: &str) -> String {
         WriterError::RetryableIo(_) => "local_io_error".to_string(),
         WriterError::RetryableNetwork(_) => "network_error".to_string(),
         WriterError::Authentication(_) => "authentication_error".to_string(),
-        WriterError::SyncFailure { category, .. } => category.clone(),
-        WriterError::Other(_) if stage == "core_enter" => "sync_core_error".to_string(),
+        WriterError::SyncFailure { category, .. } if !category.trim().is_empty() => {
+            category.clone()
+        }
+        _ if matches!(stage, "core_enter" | "app_service_entry") => "sync_core_error".to_string(),
         _ => "sync_error".to_string(),
     }
+}
+
+/// 全量同步聚合终态是否属于失败终态（成功信封仍需携带类型化失败字段）。
+fn full_sync_terminal_failure_status(status: &str) -> bool {
+    matches!(
+        status,
+        "recoverable_error" | "fatal_error" | "error" | "conflict" | "partial_conflict"
+    )
+}
+
+/// 失败终态的分类回退：保留 Core 已有 `error_category`，缺失时用稳定分类。
+fn full_sync_failure_category(data: &crate::api::FullSyncResultDto) -> String {
+    data.error_category
+        .as_deref()
+        .map(str::trim)
+        .filter(|category| !category.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if matches!(
+                data.overall_status.as_str(),
+                "conflict" | "partial_conflict"
+            ) {
+                "conflict".to_string()
+            } else {
+                "sync_error".to_string()
+            }
+        })
 }
 
 fn sync_config_has_remote_url(config: &SyncConfigDto) -> bool {
@@ -215,7 +244,7 @@ fn perform_full_sync_with_preflight_diagnostics(
                 sync_failure_category(&error, "core_enter")
             };
             let stage = match &error {
-                WriterError::SyncFailure { stage, .. } => stage.clone(),
+                WriterError::SyncFailure { stage, .. } if !stage.trim().is_empty() => stage.clone(),
                 _ => "core_enter".to_string(),
             };
             record_sync_preflight_event(
@@ -452,9 +481,43 @@ pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
     });
     match inner_result {
         Ok(Ok(data)) => {
-            record_sync_preflight_event(&operation_id, "operation", "success", None, None);
+            let terminal_failure = full_sync_terminal_failure_status(&data.overall_status);
+            let failure_stage = if terminal_failure {
+                Some(
+                    data.failure_stage
+                        .clone()
+                        .unwrap_or_else(|| "core_sync".to_string()),
+                )
+            } else {
+                None
+            };
+            let failure_category = if terminal_failure {
+                Some(full_sync_failure_category(&data))
+            } else {
+                None
+            };
+            if terminal_failure {
+                record_sync_preflight_event(
+                    &operation_id,
+                    failure_stage.as_deref().unwrap_or("core_sync"),
+                    "error",
+                    None,
+                    failure_category.as_deref(),
+                );
+                record_sync_preflight_event(
+                    &operation_id,
+                    "operation",
+                    "error",
+                    None,
+                    failure_category.as_deref(),
+                );
+            } else {
+                record_sync_preflight_event(&operation_id, "operation", "success", None, None);
+            }
             let mut envelope = ResultEnvelope::success(data);
             envelope.diagnostic_operation_id = Some(operation_id);
+            envelope.failure_stage = failure_stage;
+            envelope.failure_category = failure_category;
             std::ffi::CString::new(envelope.to_json_string())
                 .unwrap_or_default()
                 .into_raw()

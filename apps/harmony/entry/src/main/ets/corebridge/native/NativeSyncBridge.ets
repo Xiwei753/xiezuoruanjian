@@ -16,7 +16,9 @@ function nativeError<T>(e: Object): ResultEnvelope<T> {
     userMessage: String(e),
     rawError: String(e),
     messageKey: undefined,
-    messageArgs: undefined
+    messageArgs: undefined,
+    failureStage: 'arkts_bridge',
+    failureCategory: 'native_bridge_exception'
   }
 }
 

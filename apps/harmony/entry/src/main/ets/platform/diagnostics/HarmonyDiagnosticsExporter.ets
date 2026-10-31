@@ -1,19 +1,20 @@
 // HarmonyDiagnosticsExporter — HarmonyOS 诊断导出器。
 //
 // 负责：
-// 1. 收集 HarmonyOS 平台附件（hilog / app_settings / sync_state / device_info / build_identity）
-// 2. 将白名单附件和脱敏后的持久日志写入 staging 树，再由 ArkTS zlib 生成 zip
-// 3. 拉起 HarmonyOS 系统分享面板
+// 1. 在 ArkUI 线程收集轻量、已脱敏的平台附件（hilog / app_settings / sync_state /
+//    device_info / build_identity / 运行态 JSON）
+// 2. 把附件清单、沙箱路径和归档用途投递给 DiagnosticsArchiveWorker；日志枚举、
+//    故障附件复制、manifest、ZIP 压缩和 latest/previous 发布全部在 Worker 执行
+// 3. 拉起 HarmonyOS 系统分享面板或保存到用户文件
 //
 // 导出不能依赖 writer_core NAPI；Native 可用时仅尽力 flush / 读取 HiLog 快照。
-// 导入 staging 的文本与 JSON 均由 HarmonyDiagnosticsArchive 做脱敏。
+// 本类不再扫描/读取持久日志或 crash 目录，也不在 ArkUI 线程做整包压缩。
 //
 // 参考 Android 端 DiagnosticsExporterInterop.kt。
 
 import { common } from '@kit.AbilityKit'
 import { fileUri, picker } from '@kit.CoreFileKit'
 import hilog from '@ohos.hilog'
-import util from '@ohos.util'
 import fs from '@ohos.file.fs'
 import bundleManager from '@ohos.bundle.bundleManager'
 import { BUILD_GIT_SHA } from '../../generated/BuildRevision'
@@ -29,31 +30,19 @@ import { HarmonyShareService } from '../share/HarmonyShareService'
 import { SharePayload } from '../share/SharePayload'
 import { DeviceInfoSnapshot, getDeviceInfoSnapshot } from '../device/DeviceInfoSnapshot'
 import { HarmonyDiagnosticsRuntimeSnapshot } from './HarmonyDiagnosticsRuntimeSnapshot'
-import { HarmonyDiagnosticsArchive } from './HarmonyDiagnosticsArchive'
+import { HarmonyDiagnosticsArchiveWorkerClient } from './HarmonyDiagnosticsArchiveWorkerClient'
+import {
+  DiagnosticsArchiveAttachment,
+  DiagnosticsArchiveKind,
+  DiagnosticsArchiveManifestMeta,
+  DiagnosticsArchiveRequest,
+  DIAGNOSTICS_ARCHIVE_DATA_VERSION
+} from './DiagnosticsArchiveProtocol'
 
 // 已整理的 UTF-8 诊断附件。relative_path 必须命中本文件的显式白名单。
 interface AttachmentItem {
   relative_path: string
   content: string
-}
-
-interface LogCollectionSummary {
-  status: string
-  file_count: number
-  files: string[]
-}
-
-interface DiagnosticsCollectionSummary {
-  logs: LogCollectionSummary
-  attachments: string[]
-}
-
-interface DiagnosticsManifest {
-  schema_version: number
-  platform: string
-  build_identity: string
-  exported_at: string
-  collection: DiagnosticsCollectionSummary
 }
 
 // Issue #804：诊断导出保存结果 — 区分成功 / 用户取消 / 真失败，让 UI 能给出明确反馈。
@@ -177,9 +166,8 @@ export class HarmonyDiagnosticsExporter {
     this.abilityContext = context
   }
 
-  // 导出诊断包 — 完整流程：flush → 收集附件 → export → 分享。
+  // 用户手动导出完整诊断包 — 当前 live 事件 + 最近故障附件。
   // 返回 zip 文件路径；失败返回 null。
-  // Issue #773 评论 5845033983：内部调用 exportTo(defaultDir)，复用统一逻辑。
   async export(): Promise<string | null> {
     if (this.abilityContext === null) {
       hilog.error(0x0000, LOG_TAG, 'abilityContext is null; cannot export')
@@ -187,78 +175,99 @@ export class HarmonyDiagnosticsExporter {
     }
     const filesDir = this.abilityContext.filesDir
     const outputDir = `${filesDir}/${DIAGNOSTICS_DIR}/snapshots`
-    return this.exportTo(outputDir)
+    return this.exportTo(outputDir, 'full', '')
   }
 
-  // Issue #773 评论 5845033983：导出诊断包到指定目录。
-  // 与 export() 类似，但接受 outputDir 参数，不使用默认的 snapshots 目录。
-  // Checkpoint 调用此方法导出到 staging 目录，确认完整成功后再移动到 snapshots。
-  async exportTo(outputDir: string): Promise<string | null> {
-    let stagingDir: string = ''
-    try {
-      // 1. 准备输出目录
-      if (this.abilityContext === null) {
-        hilog.error(0x0000, LOG_TAG, 'abilityContext is null; cannot export')
-        return null
-      }
-      this.ensureOutputDir(outputDir)
-
-      // Flush is only a best-effort log barrier. Its failure cannot block the
-      // ArkTS archive path when the writer native module is unavailable.
-      try {
-        const flushResult = this.diagnosticsBridge.flushDiagnostics()
-        if (flushResult !== 0) {
-          hilog.warn(0x0000, LOG_TAG, 'flushDiagnostics returned %{public}d; archiving persisted files', flushResult)
-        }
-      } catch (_) {
-        hilog.info(0x0000, LOG_TAG, 'native diagnostics flush unavailable; archiving persisted files')
-      }
-
-      // 2. 收集平台附件
-      const attachments = await this.collectAttachments()
-
-      // 3. 只把固定附件白名单和 writer 持久日志放进沙箱 staging 树。
-      stagingDir = `${outputDir}/.archive-${Date.now()}-${Math.floor(Math.random() * 1000000)}`
-      this.ensureOutputDir(stagingDir)
-      const logSummary = this.copyPersistedLogs(stagingDir)
-      const attachmentNames: string[] = []
-      for (const attachment of attachments) {
-        if (!this.isWhitelistedAttachmentPath(attachment.relative_path)) {
-          hilog.warn(0x0000, LOG_TAG, 'Skipped non-whitelisted attachment')
-          continue
-        }
-        HarmonyDiagnosticsArchive.writeTextFile(stagingDir, attachment.relative_path, attachment.content)
-        attachmentNames.push(attachment.relative_path)
-      }
-
-      const manifest: DiagnosticsManifest = {
-        schema_version: 1,
-        platform: 'harmony',
-        build_identity: this.getBuildIdentity().buildKey,
-        exported_at: new Date().toISOString(),
-        collection: {
-          logs: logSummary,
-          attachments: attachmentNames
-        }
-      }
-      HarmonyDiagnosticsArchive.writeTextFile(
-        stagingDir, 'diagnostics_manifest.json', JSON.stringify(manifest, null, 2)
-      )
-
-      // 4. NativeDiagnosticsBridge.exportDiagnostics is deliberately not involved.
-      const zipPath = await HarmonyDiagnosticsArchive.compressDirectory(
-        stagingDir, outputDir, 'sujian-diagnostics'
-      )
-      hilog.info(0x0000, LOG_TAG, 'ArkTS diagnostics archive generated')
-      return zipPath
-    } catch (e) {
-      hilog.error(0x0000, LOG_TAG, 'exportTo failed: %{public}s', e instanceof Error ? e.name : 'UNKNOWN_ERROR')
+  // 后台收尾归档 — 由 Checkpoint 在后台保存全部完成后调用，发布 latest/previous 双槽。
+  async exportCheckpoint(): Promise<string | null> {
+    if (this.abilityContext === null) {
       return null
-    } finally {
-      if (stagingDir.length > 0) {
-        HarmonyDiagnosticsArchive.removeTree(stagingDir)
-      }
     }
+    const outputDir = `${this.abilityContext.filesDir}/${DIAGNOSTICS_DIR}/snapshots`
+    return this.exportTo(outputDir, 'checkpoint', '')
+  }
+
+  // 单个真实故障事件收尾归档 — 只附带该 eventKey 的故障附件，不覆盖双槽包。
+  async exportFault(eventKey: string): Promise<string | null> {
+    if (this.abilityContext === null) {
+      return null
+    }
+    const outputDir = `${this.abilityContext.filesDir}/${DIAGNOSTICS_DIR}/snapshots`
+    return this.exportTo(outputDir, 'fault', eventKey)
+  }
+
+  // 归档统一入口：ArkUI 线程只收集轻量附件并投递 Worker 请求。
+  // archiveKind 决定输出命名/发布策略，eventKey 只用于 fault 包。
+  async exportTo(outputDir: string, archiveKind: DiagnosticsArchiveKind = 'full',
+    eventKey: string = ''): Promise<string | null> {
+    if (this.abilityContext === null) {
+      hilog.error(0x0000, LOG_TAG, 'abilityContext is null; cannot export')
+      return null
+    }
+
+    // Flush is only a best-effort log barrier. Its failure cannot block the
+    // archive request when the writer native module is unavailable.
+    try {
+      const flushResult = this.diagnosticsBridge.flushDiagnostics()
+      if (flushResult !== 0) {
+        hilog.warn(0x0000, LOG_TAG, 'flushDiagnostics returned %{public}d; archiving persisted files', flushResult)
+      }
+    } catch (_) {
+      hilog.info(0x0000, LOG_TAG, 'native diagnostics flush unavailable; archiving persisted files')
+    }
+
+    const attachments = await this.collectAttachments()
+    const filtered: DiagnosticsArchiveAttachment[] = []
+    for (const attachment of attachments) {
+      if (!this.isWhitelistedAttachmentPath(attachment.relative_path)) {
+        hilog.warn(0x0000, LOG_TAG, 'Skipped non-whitelisted attachment')
+        continue
+      }
+      const item: DiagnosticsArchiveAttachment = {
+        relativePath: attachment.relative_path,
+        content: attachment.content
+      }
+      filtered.push(item)
+    }
+
+    const filesDir = this.abilityContext.filesDir
+    const identity = this.getBuildIdentity()
+    const safeEventKey = eventKey.replace(/[^A-Za-z0-9_-]/g, '_')
+    const manifest: DiagnosticsArchiveManifestMeta = {
+      dataVersion: DIAGNOSTICS_ARCHIVE_DATA_VERSION,
+      appVersion: identity.appVersion,
+      buildKey: identity.buildKey,
+      gitSha: identity.gitSha,
+      exportedAt: new Date().toISOString()
+    }
+    const request: DiagnosticsArchiveRequest = {
+      requestKind: 'archive',
+      requestId: '',
+      archiveKind: archiveKind,
+      filesDir: filesDir,
+      outputDir: outputDir,
+      logDir: `${filesDir}/${DIAGNOSTICS_DIR}/live/log`,
+      crashesDir: `${filesDir}/${DIAGNOSTICS_DIR}/crashes`,
+      fileStem: archiveKind === 'checkpoint' ? 'sujian-diagnostics-latest' :
+        (archiveKind === 'fault' ? `sujian-diagnostics-fault-${safeEventKey}` : 'sujian-diagnostics'),
+      eventKey: safeEventKey,
+      attachments: filtered,
+      recentCrashLimit: archiveKind === 'full' ? 3 : 0,
+      publishLatest: archiveKind === 'checkpoint',
+      manifest: manifest
+    }
+
+    const result = await HarmonyDiagnosticsArchiveWorkerClient.getInstance().requestArchive(request)
+    if (!result.success) {
+      hilog.error(0x0000, LOG_TAG,
+        'diagnostics archive failed: kind=%{public}s stage=%{public}s durationMs=%{public}d',
+        archiveKind, result.stage, result.durationMs)
+      return null
+    }
+    hilog.info(0x0000, LOG_TAG,
+      'diagnostics archive generated: kind=%{public}s durationMs=%{public}d',
+      archiveKind, result.durationMs)
+    return result.archivePath.length > 0 ? result.archivePath : null
   }
 
   // 导出并分享 — 导出成功后拉起系统分享面板。
@@ -416,9 +425,7 @@ export class HarmonyDiagnosticsExporter {
     // editor_runtime_sanitized.json — Issue #768 编辑器运行时快照
     this.addEditorRuntimeAttachment(attachments)
 
-    // crash fault stack — Issue #802
-    await this.addLatestCrashAttachments(attachments)
-
+    // 故障附件由 Worker 按 archiveKind/eventKey 从 crashes/ 复制，避免主线程扫描目录。
     return attachments
   }
 
@@ -722,95 +729,7 @@ export class HarmonyDiagnosticsExporter {
     }
   }
 
-  // crash fault stack — Issue #802
-  // 从 filesDir/diagnostics/crashes/ 目录找最近一次 crash 事件目录，
-  // 把 params.json 和已保存的 external crash log 装入诊断包。
-  // 如果 crashes 目录不存在或没有事件目录，静默跳过（不报错）。
-  private async addLatestCrashAttachments(attachments: AttachmentItem[]): Promise<void> {
-    try {
-      if (this.abilityContext === null) {
-        return
-      }
-      const filesDir = this.abilityContext.filesDir
-      const crashesDir = `${filesDir}/${DIAGNOSTICS_DIR}/crashes`
-
-      // crashes 目录不存在时静默跳过
-      if (!fs.accessSync(crashesDir)) {
-        return
-      }
-
-      // 遍历 crashes 目录，找到最近修改的事件子目录
-      const entries = fs.listFileSync(crashesDir)
-      let latestEventKey: string | null = null
-      let latestMtime: number = 0
-
-      for (const entry of entries) {
-        const eventDirPath = `${crashesDir}/${entry}`
-        try {
-          const stat = fs.statSync(eventDirPath)
-          if (stat.isDirectory() && stat.mtime > latestMtime) {
-            latestMtime = stat.mtime
-            latestEventKey = entry
-          }
-        } catch (_) {
-          // 单个目录 stat 失败不影响其他目录
-        }
-      }
-
-      if (latestEventKey === null) {
-        return
-      }
-
-      if (!/^[A-Za-z0-9_-]+$/.test(latestEventKey)) {
-        return
-      }
-
-      // 只复制 crash 参数摘要和本应用持久化的 fault-N.log；不把原始
-      // external_log 路径或目录中的任意文件纳入 ZIP。
-      const eventDirPath = `${crashesDir}/${latestEventKey}`
-      const eventFiles = fs.listFileSync(eventDirPath)
-
-      for (const fileName of eventFiles) {
-        if (fileName !== 'params.json' && !/^fault-[0-9]+\.log$/.test(fileName)) {
-          continue
-        }
-        const filePath = `${eventDirPath}/${fileName}`
-        try {
-          const content = this.readFileContent(filePath)
-          if (content.length > 0) {
-            attachments.push(this.makeAttachment(`crashes/${latestEventKey}/${fileName}`, content))
-          }
-        } catch (_) {
-          // 单个文件读取失败不影响其他文件
-        }
-      }
-
-      hilog.info(0x0000, LOG_TAG, 'Added crash attachments from event: %{public}s', latestEventKey)
-    } catch (e) {
-      hilog.error(0x0000, LOG_TAG, 'addLatestCrashAttachments failed: %{public}s', String(e))
-    }
-  }
-
   // ── 工具方法 ──────────────────────────────────────────────────
-
-  // 读取单个文件内容为字符串 — 用于 crash 附件收集。
-  private readFileContent(filePath: string): string {
-    try {
-      const fd = fs.openSync(filePath, fs.OpenMode.READ_ONLY)
-      try {
-        const stat = fs.statSync(filePath)
-        const buf = new ArrayBuffer(stat.size)
-        fs.readSync(fd.fd, buf)
-        const textDecoder = new util.TextDecoder('utf-8')
-        return textDecoder.decodeWithStream(new Uint8Array(buf))
-      } finally {
-        fs.closeSync(fd)
-      }
-    } catch (e) {
-      hilog.warn(0x0000, LOG_TAG, 'readFileContent failed: %{public}s', e instanceof Error ? e.name : 'UNKNOWN_ERROR')
-      return ''
-    }
-  }
 
   // 构造尚未写入 staging 的 UTF-8 附件项。
   private makeAttachment(relativePath: string, textContent: string): AttachmentItem {
@@ -836,45 +755,7 @@ export class HarmonyDiagnosticsExporter {
       ATTACHMENT_UI_RUNTIME,
       ATTACHMENT_EDITOR_RUNTIME
     ]
-    if (allowedPaths.indexOf(relativePath) >= 0) {
-      return true
-    }
-    return /^crashes\/[A-Za-z0-9_-]+\/(?:params\.json|fault-[0-9]+\.log)$/.test(relativePath)
-  }
-
-  // Rust's writer stores up to five build logs in this sandbox directory. Include
-  // only its deterministic file names; the staging writer redacts their contents.
-  private copyPersistedLogs(stagingDir: string): LogCollectionSummary {
-    const files: string[] = []
-    const logDir = `${this.abilityContext!.filesDir}/${DIAGNOSTICS_DIR}/live/log`
-    try {
-      if (!fs.accessSync(logDir)) {
-        return { status: 'missing', file_count: 0, files: files }
-      }
-      for (const fileName of fs.listFileSync(logDir)) {
-        if (!/^sujian-current-[A-Za-z0-9._-]+\.log$/.test(fileName)) {
-          continue
-        }
-        const filePath = `${logDir}/${fileName}`
-        try {
-          if (!fs.statSync(filePath).isFile()) {
-            continue
-          }
-          const content = this.readFileContent(filePath)
-          HarmonyDiagnosticsArchive.writeTextFile(stagingDir, `logs/${fileName}`, content)
-          files.push(fileName)
-        } catch (_) {
-          // A single unreadable log should not prevent the remaining archive.
-        }
-      }
-    } catch (_) {
-      return { status: 'error', file_count: 0, files: files }
-    }
-    return {
-      status: files.length > 0 ? 'ok' : 'missing',
-      file_count: files.length,
-      files: files
-    }
+    return allowedPaths.indexOf(relativePath) >= 0
   }
 
   // 构造错误附件 — 收集失败时写入合法 JSON 附件，不让整个导出失败。

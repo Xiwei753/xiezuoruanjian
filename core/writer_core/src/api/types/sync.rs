@@ -659,10 +659,53 @@ pub struct FullSyncResultDto {
     pub error: Option<String>,
     pub error_category: Option<String>,
     pub message_key: Option<String>,
+    /// 失败 target 的稳定阶段（来自 `TargetSyncResult.failure_phase`）。
+    /// 无具体阶段时用 `core_sync`，供平台层错误提示和诊断定位。
+    #[serde(default)]
+    pub failure_stage: Option<String>,
+}
+
+/// 选出与 `overall_status` 同优先级的失败 target 的 `failure_phase`。
+/// 没有可定位阶段时返回 `core_sync`；非失败终态返回 `None`。
+fn full_sync_failure_stage(r: &crate::sync::types::FullSyncResult) -> Option<String> {
+    use crate::sync::SyncStatus;
+
+    fn priority(status: &SyncStatus) -> u8 {
+        match status {
+            SyncStatus::FatalError(_) | SyncStatus::Error(_) => 4,
+            SyncStatus::Conflict | SyncStatus::PartialConflict => 3,
+            SyncStatus::RecoverableError(_) => 1,
+            _ => 0,
+        }
+    }
+
+    let overall_priority = priority(&r.overall_status);
+    if overall_priority == 0 {
+        return None;
+    }
+    let failing = r
+        .targets
+        .iter()
+        .find(|t| priority(&t.result.status) == overall_priority)
+        .or_else(|| r.targets.iter().find(|t| priority(&t.result.status) > 0));
+    failing
+        .and_then(|t| t.failure_phase.as_deref())
+        .map(str::trim)
+        .filter(|phase| !phase.is_empty())
+        .or_else(|| {
+            r.targets
+                .iter()
+                .filter_map(|t| t.failure_phase.as_deref())
+                .map(str::trim)
+                .find(|phase| !phase.is_empty())
+        })
+        .map(str::to_string)
+        .or_else(|| Some("core_sync".to_string()))
 }
 
 impl From<crate::sync::types::FullSyncResult> for FullSyncResultDto {
     fn from(r: crate::sync::types::FullSyncResult) -> Self {
+        let failure_stage = full_sync_failure_stage(&r);
         Self {
             overall_status: sync_status_to_wire(&r.overall_status),
             targets: r.targets.into_iter().map(Into::into).collect(),
@@ -677,6 +720,7 @@ impl From<crate::sync::types::FullSyncResult> for FullSyncResultDto {
             error: r.error,
             error_category: r.error_category,
             message_key: r.message_key,
+            failure_stage,
         }
     }
 }

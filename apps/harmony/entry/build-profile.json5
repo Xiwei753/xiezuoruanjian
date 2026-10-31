@@ -1,6 +1,11 @@
 {
   "apiType": "stageMode",
   "buildOption": {
+    "sourceOption": {
+      "workers": [
+        "./src/main/ets/platform/diagnostics/DiagnosticsArchiveWorker.ets"
+      ]
+    },
     "externalNativeOptions": {
       "path": "src/main/cpp/CMakeLists.txt",
       "arguments": "",

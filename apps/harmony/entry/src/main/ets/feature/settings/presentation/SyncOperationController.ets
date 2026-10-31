@@ -73,11 +73,20 @@ export class SyncOperationController {
     state.begin(source)
     this.recordSyncStarted(source)
 
-    const execution: Promise<SyncOutcome> = this.executeSync().catch((e: Error): SyncOutcome => {
+    const execution: Promise<SyncOutcome> = this.executeSync(startedAtMs).catch((e: Error): SyncOutcome => {
       // executeSync 已覆盖预检和 NAPI 路径；这里兜住完成通知等外围意外，仍产出唯一终态。
       const errorType: string = e instanceof Error ? e.name : 'Unknown'
-      hilog.error(DOMAIN, TAG, 'performSync: unhandled operation error: errorType=%{public}s', errorType)
-      return { phase: 'failed', message: '同步异常', errorCode: 'NATIVE_ERROR' }
+      hilog.error(DOMAIN, TAG,
+        'performSync: unhandled operation error: errorType=%{public}s failureStage=arkts_bridge ' +
+        'failureCategory=native_bridge_exception durationMs=%{public}s',
+        errorType, String(Math.max(0, Date.now() - startedAtMs)))
+      return {
+        phase: 'failed',
+        message: '同步异常',
+        errorCode: 'NATIVE_ERROR',
+        failureStage: 'arkts_bridge',
+        errorCategory: 'native_bridge_exception'
+      }
     })
     execution.then((outcome: SyncOutcome): void => {
       try {
@@ -109,6 +118,11 @@ export class SyncOperationController {
       { key: 'phase', value: 'in_progress' },
       { key: 'overallStatus', value: '' },
       { key: 'errorCode', value: '' },
+      { key: 'operationId', value: '' },
+      { key: 'diagnosticOperationId', value: '' },
+      { key: 'failureStage', value: '' },
+      { key: 'errorCategory', value: '' },
+      { key: 'failureCategory', value: '' },
       { key: 'durationMs', value: '0' }
     ]
     HarmonyDiagnosticEvents.record('Info', source === 'manual' ? 'User' : 'App',
@@ -122,8 +136,10 @@ export class SyncOperationController {
       { key: 'overallStatus', value: outcome.overallStatus ?? '' },
       { key: 'errorCode', value: outcome.errorCode ?? '' },
       { key: 'operationId', value: outcome.operationId ?? '' },
+      { key: 'diagnosticOperationId', value: outcome.operationId ?? '' },
       { key: 'failureStage', value: outcome.failureStage ?? '' },
       { key: 'errorCategory', value: outcome.errorCategory ?? '' },
+      { key: 'failureCategory', value: outcome.errorCategory ?? '' },
       { key: 'durationMs', value: String(Math.max(0, Date.now() - startedAtMs)) }
     ]
     const level = outcome.phase === 'success' ? 'Info' : 'Warn'
@@ -134,7 +150,7 @@ export class SyncOperationController {
   // Issue #923：同步是一个统一事务——活跃章节保存屏障 → 网络状态刷新 → Core 全量同步
   // → 按终态回填活跃会话（下载内容替换 live 正文时重开同一编辑会话）→ 事务结束 → 内容变化通知。
   // 所有手动（顶栏/设置页）与自动同步都必须经过这里（performSync 是唯一对外入口）。
-  private async executeSync(): Promise<SyncOutcome> {
+  private async executeSync(startedAtMs: number): Promise<SyncOutcome> {
     hilog.info(DOMAIN, TAG, 'performSync: starting')
     let contentChanged: boolean = false
     let outcome: SyncOutcome
@@ -145,18 +161,24 @@ export class SyncOperationController {
           await this.refreshNetworkState()
           const result = await this.syncBridge.performSync()
           if (!result.success) {
-            // Issue #906：HiLog 只记稳定错误码，不记 rawError（可能含 URL/Token/正文）。
-            hilog.error(DOMAIN, TAG, 'performSync: envelope failed: errorCode=%{public}s',
-              result.errorCode ?? 'UNKNOWN')
+            // Issue #1017：失败必须带稳定阶段/分类/operationId/耗时，HiLog 不记 rawError。
+            const failureStage: string = result.failureStage ?? 'core_sync'
+            const failureCategory: string = result.failureCategory ?? 'sync_error'
+            const durationMs: number = Math.max(0, Date.now() - startedAtMs)
+            hilog.error(DOMAIN, TAG,
+              'performSync: envelope failed: errorCode=%{public}s failureStage=%{public}s ' +
+              'failureCategory=%{public}s diagnosticOperationId=%{public}s durationMs=%{public}s',
+              result.errorCode ?? 'UNKNOWN', failureStage, failureCategory,
+              result.diagnosticOperationId ?? '', String(durationMs))
             return {
               phase: 'failed',
-              message: this.safeSyncFailureMessage(result.failureStage, result.failureCategory,
+              message: this.safeSyncFailureMessage(failureStage, failureCategory,
                 result.errorCode),
               messageKey: result.messageKey,
               messageArgs: this.mapToRecord(result.messageArgs),
               operationId: result.diagnosticOperationId,
-              failureStage: result.failureStage,
-              errorCategory: result.failureCategory,
+              failureStage: failureStage,
+              errorCategory: failureCategory,
               errorCode: result.errorCode,
               rawError: result.rawError
             }
@@ -164,10 +186,15 @@ export class SyncOperationController {
 
           const syncResult = result.data
           if (syncResult === undefined || syncResult === null) {
-            hilog.error(DOMAIN, TAG, 'performSync: success but data is null')
+            const durationMs: number = Math.max(0, Date.now() - startedAtMs)
+            hilog.error(DOMAIN, TAG,
+              'performSync: success but data is null: errorCode=SCHEMA_MISMATCH failureStage=core_sync ' +
+              'failureCategory=schema_mismatch diagnosticOperationId=%{public}s durationMs=%{public}s',
+              result.diagnosticOperationId ?? '', String(durationMs))
             return {
               phase: 'failed', message: '同步结果数据缺失', errorCode: 'SCHEMA_MISMATCH',
-              operationId: result.diagnosticOperationId
+              operationId: result.diagnosticOperationId,
+              failureStage: 'core_sync', errorCategory: 'schema_mismatch'
             }
           }
 
@@ -187,12 +214,20 @@ export class SyncOperationController {
           if (!aligned) {
             // 活跃会话存在未提交的本地变化：明确冲突，不把远端内容悄悄覆盖成旧文本，
             // 也不在此后报告"已对齐"。
+            const durationMs: number = Math.max(0, Date.now() - startedAtMs)
+            hilog.warn(DOMAIN, TAG,
+              'performSync: session unaligned: errorCode=SYNC_SESSION_UNALIGNED ' +
+              'failureStage=session_reconcile failureCategory=session_unaligned ' +
+              'diagnosticOperationId=%{public}s durationMs=%{public}s',
+              result.diagnosticOperationId ?? '', String(durationMs))
             return {
               phase: 'failed',
               message: '同步已改动本地内容，但当前写作会话存在未提交内容，需要先处理',
               messageKey: 'sync.result.session_unaligned',
               errorCode: 'SYNC_SESSION_UNALIGNED',
               operationId: result.diagnosticOperationId,
+              failureStage: 'session_reconcile',
+              errorCategory: 'session_unaligned',
               totalDownloaded: syncResult.totalDownloaded,
               totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts,
@@ -215,12 +250,22 @@ export class SyncOperationController {
           }
 
           if (status === 'conflict' || status === 'partial_conflict') {
+            const failureStage: string = result.failureStage ?? syncResult.failureStage ?? 'core_sync'
+            const failureCategory: string = result.failureCategory ?? 'conflict'
+            const durationMs: number = Math.max(0, Date.now() - startedAtMs)
+            hilog.warn(DOMAIN, TAG,
+              'performSync: conflict: status=%{public}s failureStage=%{public}s ' +
+              'failureCategory=%{public}s diagnosticOperationId=%{public}s durationMs=%{public}s',
+              status, failureStage, failureCategory, result.diagnosticOperationId ?? '',
+              String(durationMs))
             return {
               phase: 'failed',
               message: '同步冲突，需要手动解决',
               messageKey: 'sync.result.conflict_summary',
               errorCode: 'SYNC_CONFLICT',
               operationId: result.diagnosticOperationId,
+              failureStage: failureStage,
+              errorCategory: failureCategory,
               totalDownloaded: syncResult.totalDownloaded,
               totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts,
@@ -233,9 +278,18 @@ export class SyncOperationController {
             // 直接透传 Core 的类型化字段，由 MessageKeyMapper 统一映射，不再手写中文字典。
             const messageKey = syncResult.messageKey ?? ''
             const errorCategory = result.failureCategory ?? syncResult.errorCategory ?? ''
-            const failureStage = result.failureStage ?? 'core_sync'
+            const failureStage = result.failureStage ?? syncResult.failureStage ?? 'core_sync'
+            const stableCategory = errorCategory.length > 0 ? errorCategory : 'sync_error'
+            const errorCode = errorCategory.length > 0 ? errorCategory : 'SYNC_ERROR'
             const errorMsg = syncResult.error ?? ''
+            const durationMs: number = Math.max(0, Date.now() - startedAtMs)
 
+            hilog.error(DOMAIN, TAG,
+              'performSync: terminal failure: status=%{public}s errorCode=%{public}s ' +
+              'failureStage=%{public}s failureCategory=%{public}s diagnosticOperationId=%{public}s ' +
+              'durationMs=%{public}s',
+              status, errorCode, failureStage, stableCategory,
+              result.diagnosticOperationId ?? '', String(durationMs))
             if (messageKey.length === 0 && errorCategory.length === 0) {
               hilog.warn(DOMAIN, TAG,
                 'performSync: missing typed error fields, status=%{public}s, fallback to raw error',
@@ -244,10 +298,10 @@ export class SyncOperationController {
 
             return {
               phase: 'failed',
-              message: this.safeSyncFailureMessage(failureStage, errorCategory, errorCategory),
+              message: this.safeSyncFailureMessage(failureStage, stableCategory, errorCode),
               messageKey: messageKey.length > 0 ? messageKey : undefined,
-              errorCategory: errorCategory.length > 0 ? errorCategory : undefined,
-              errorCode: errorCategory.length > 0 ? errorCategory : 'SYNC_ERROR',
+              errorCategory: stableCategory,
+              errorCode: errorCode,
               rawError: errorMsg.length > 0 ? errorMsg : undefined,
               operationId: result.diagnosticOperationId,
               failureStage,
@@ -261,6 +315,7 @@ export class SyncOperationController {
             return {
               phase: 'failed', message: '同步仍在进行中（状态异常）', errorCode: 'SYNC_STATE_ERROR',
               operationId: result.diagnosticOperationId,
+              failureStage: 'core_sync', errorCategory: 'protocol_error',
               totalDownloaded: syncResult.totalDownloaded, totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts, overallStatus: status
             }
@@ -269,16 +324,22 @@ export class SyncOperationController {
             return {
               phase: 'failed', message: '同步未执行（状态异常）', errorCode: 'SYNC_STATE_ERROR',
               operationId: result.diagnosticOperationId,
+              failureStage: 'core_sync', errorCategory: 'protocol_error',
               totalDownloaded: syncResult.totalDownloaded, totalUploaded: syncResult.totalUploaded,
               totalConflicts: syncResult.totalConflicts, overallStatus: status
             }
           }
 
           // 未知值是协议错误
-          hilog.error(DOMAIN, TAG, 'performSync: unknown overallStatus=%{public}s', status)
+          hilog.error(DOMAIN, TAG,
+            'performSync: unknown overallStatus=%{public}s failureStage=core_sync ' +
+            'failureCategory=protocol_error diagnosticOperationId=%{public}s durationMs=%{public}s',
+            status, result.diagnosticOperationId ?? '',
+            String(Math.max(0, Date.now() - startedAtMs)))
           return {
             phase: 'failed', message: `未知的同步状态: ${status}`, errorCode: 'SCHEMA_MISMATCH',
             operationId: result.diagnosticOperationId,
+            failureStage: 'core_sync', errorCategory: 'protocol_error',
             totalDownloaded: syncResult.totalDownloaded, totalUploaded: syncResult.totalUploaded,
             totalConflicts: syncResult.totalConflicts, overallStatus: status
           }
@@ -287,17 +348,30 @@ export class SyncOperationController {
     } catch (e) {
       if (e instanceof SyncPreflightError) {
         // 保存屏障失败：正文没有可靠落盘，禁止进入 Core 同步（不制造"假成功"）。
-        hilog.error(DOMAIN, TAG, 'performSync: preflight save failed: errorCode=%{public}s', e.errorCode)
+        const durationMs: number = Math.max(0, Date.now() - startedAtMs)
+        hilog.error(DOMAIN, TAG,
+          'performSync: preflight save failed: errorCode=%{public}s failureStage=preflight_save ' +
+          'failureCategory=preflight_save_failed diagnosticOperationId= durationMs=%{public}s',
+          e.errorCode, String(durationMs))
         return {
           phase: 'failed',
           message: '同步前保存当前正文失败，已取消同步',
-          errorCode: e.errorCode.length > 0 ? e.errorCode : SYNC_PREFLIGHT_SAVE_FAILED
+          errorCode: e.errorCode.length > 0 ? e.errorCode : SYNC_PREFLIGHT_SAVE_FAILED,
+          failureStage: 'preflight_save',
+          errorCategory: 'preflight_save_failed'
         }
       }
       // Issue #906：异常只记类型，不记 String(e)（可能含 URL/Token）。
-      hilog.error(DOMAIN, TAG, 'performSync: exception: %{public}s',
-        e instanceof Error ? e.name : 'Unknown')
-      return { phase: 'failed', message: '同步异常，请查看诊断信息。', errorCode: 'NATIVE_ERROR', rawError: String(e) }
+      const errorType: string = e instanceof Error ? e.name : 'Unknown'
+      hilog.error(DOMAIN, TAG,
+        'performSync: exception: errorType=%{public}s failureStage=arkts_bridge ' +
+        'failureCategory=native_bridge_exception diagnosticOperationId= durationMs=%{public}s',
+        errorType, String(Math.max(0, Date.now() - startedAtMs)))
+      return {
+        phase: 'failed', message: '同步异常，请查看诊断信息。', errorCode: 'NATIVE_ERROR',
+        failureStage: 'arkts_bridge', errorCategory: 'native_bridge_exception',
+        rawError: String(e)
+      }
     }
     // 同步屏障（含活跃会话回填）已释放，再通知页面刷新，避免刷新读到未回填的旧会话状态。
     if (contentChanged) {
@@ -314,9 +388,36 @@ export class SyncOperationController {
     if (stage === 'secrets_load') {
       return '同步凭据读取失败，请检查本地凭据设置。'
     }
+    if (stage === 'core_enter') {
+      return '同步核心流程失败，请查看诊断信息。'
+    }
+    if (stage === 'provider_init') {
+      return '云端同步连接初始化失败，请检查同步设置。'
+    }
+    if (stage === 'preflight') {
+      return '同步前检查失败，请查看诊断信息。'
+    }
+    if (stage === 'prepare' || stage === 'seed') {
+      return '本地同步数据准备失败，请查看诊断信息。'
+    }
+    if (stage === 'transfer' || stage === 'remote_revision' || stage === 'commit') {
+      return '同步传输或提交失败，请查看诊断信息。'
+    }
+    if (stage === 'starmap_store_flush') {
+      return '星图数据保存失败，请查看诊断信息。'
+    }
+    if (stage === 'cleanup') {
+      return '同步已完成，但收尾清理失败，请查看诊断信息。'
+    }
     switch (category) {
       case 'repository_unconfigured':
         return '云端仓库未配置，请先完成同步设置。'
+      case 'sync_core_error':
+        return '同步核心流程失败，请查看诊断信息。'
+      case 'native_bridge_exception':
+        return '原生同步调用异常，请查看诊断信息。'
+      case 'preflight_save_failed':
+        return '同步前保存当前正文失败，已取消同步。'
       case 'network':
       case 'network_error':
       case 'network_failed':

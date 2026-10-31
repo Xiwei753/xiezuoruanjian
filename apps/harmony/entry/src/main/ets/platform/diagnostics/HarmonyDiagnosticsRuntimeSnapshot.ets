@@ -8,12 +8,12 @@
 // - getUiRuntimeJson(): 从 NavigationChromeStore 和 AdaptiveContext 读取 UI 状态
 // - getEditorRuntimeJson(): 从 EditorRuntimeSnapshotStore 读取编辑器状态
 //
-// persistAll(context): 把三个 JSON 写到 filesDir/diagnostics/live/runtime/ 目录下，
-// 使用双槽原子写入（file.new → file.json，崩溃恢复时从 file.bak 恢复）。
+// persistAll(context): 把三个 JSON 和归档元数据交给诊断归档 Worker，由 Worker
+// 在 filesDir/diagnostics/live/runtime/ 下做双槽原子写入；ArkUI 线程不再执行
+// 任何 fs.*Sync。高频编辑器/窗口变化在 Worker 侧合并为最后一次完整 payload。
 
 import { common, ConfigurationConstant } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
-import fs from '@ohos.file.fs'
 
 import { HarmonyThemeAdapter } from '../../ui/theme/HarmonyThemeAdapter'
 import { NavigationChromeStore } from '../../app/navigation/NavigationChromeStore'
@@ -24,15 +24,14 @@ import { ScreenRole } from '../../app/navigation/ScreenSemantics'
 import { WidthClass } from '../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../version/PlatformApiResolver'
 import { HarmonyMaterialRuntimeApi26 } from '../material/impl/api26/HarmonyMaterialRuntimeApi26'
+import { HarmonyDiagnosticsArchiveWorkerClient } from './HarmonyDiagnosticsArchiveWorkerClient'
 
 const LOG_TAG = 'HarmonyDiagnosticsRuntimeSnapshot'
 const DIAGNOSTICS_DIR = 'diagnostics'
 const RUNTIME_SUBDIR = 'live/runtime'
 
-// 运行态 JSON 文件名常量 — 与 Exporter 的 attachment 名对齐。
-const THEME_RUNTIME_FILE = 'theme_runtime_sanitized.json'
-const UI_RUNTIME_FILE = 'ui_runtime_sanitized.json'
-const EDITOR_RUNTIME_FILE = 'editor_runtime_sanitized.json'
+// 归档元数据文件 — 只保存最近一次归档时间/路径/计数，不包含日志内容。
+const ARCHIVE_STATE_FILE = 'archive-state.json'
 
 // ── Theme runtime DTO ──────────────────────────────────────────
 // 与 Exporter 中 ThemeRuntimeAttachment interface 字段完全对齐。
@@ -265,96 +264,25 @@ export class HarmonyDiagnosticsRuntimeSnapshot {
     return JSON.stringify(dto, null, 2)
   }
 
-  // 把三个 JSON 写到 filesDir/diagnostics/live/runtime/ 目录下，使用双槽原子写入。
-  persistAll(context: common.UIAbilityContext): void {
+  // 构建三个运行态 JSON 和归档元数据，一次性投递给归档 Worker。
+  // 返回的 Promise 在 Worker 完成原子写入后 resolve；调用方可以忽略，后台收尾
+  // 路径会 await 它，保证压缩前元数据已经落盘。
+  persistAll(context: common.UIAbilityContext, archiveStateJson: string = ''): Promise<void> {
     const runtimeDir = `${context.filesDir}/${DIAGNOSTICS_DIR}/${RUNTIME_SUBDIR}`
-    this.ensureDir(runtimeDir)
-
-    // 初始化恢复：如果 file.json 不存在但 file.bak 存在，恢复 bak → json
-    this.recoverBak(runtimeDir, THEME_RUNTIME_FILE)
-    this.recoverBak(runtimeDir, UI_RUNTIME_FILE)
-    this.recoverBak(runtimeDir, EDITOR_RUNTIME_FILE)
-
-    // 双槽原子写入三个文件
-    this.atomicWrite(runtimeDir, THEME_RUNTIME_FILE, this.getThemeRuntimeJson())
-    this.atomicWrite(runtimeDir, UI_RUNTIME_FILE, this.getUiRuntimeJson())
-    this.atomicWrite(runtimeDir, EDITOR_RUNTIME_FILE, this.getEditorRuntimeJson())
-  }
-
-  // 双槽原子写入：
-  // 1. 写完整 file.new
-  // 2. 删旧 file.bak（如果存在）
-  // 3. file.json → file.bak（如果 file.json 存在）
-  // 4. file.new → file.json
-  // 5. 成功后删 file.bak
-  private atomicWrite(dir: string, filename: string, content: string): void {
-    const basePath = `${dir}/${filename}`
-    const newPath = `${dir}/${filename}.new`
-    const bakPath = `${dir}/${filename}.bak`
-    try {
-      // 1. 写完整 file.new
-      const file = fs.openSync(newPath, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC)
-      try {
-        fs.writeSync(file.fd, content)
-      } finally {
-        fs.closeSync(file)
+    const archiveStatePath = `${context.filesDir}/${DIAGNOSTICS_DIR}/snapshots/${ARCHIVE_STATE_FILE}`
+    return HarmonyDiagnosticsArchiveWorkerClient.getInstance().requestSnapshot(
+      runtimeDir,
+      archiveStatePath,
+      archiveStateJson,
+      this.getThemeRuntimeJson(),
+      this.getUiRuntimeJson(),
+      this.getEditorRuntimeJson()
+    ).then((result) => {
+      if (!result.success) {
+        hilog.error(0x0000, LOG_TAG,
+          'runtime snapshot failed: stage=%{public}s reason=%{public}s',
+          result.stage, result.message)
       }
-      // 2. 删旧 file.bak（如果存在）
-      this.safeDelete(bakPath)
-      // 3. file.json → file.bak（如果 file.json 存在）
-      if (this.fileExists(basePath)) {
-        fs.renameSync(basePath, bakPath)
-      }
-      // 4. file.new → file.json
-      fs.renameSync(newPath, basePath)
-      // 5. 成功后删 file.bak
-      this.safeDelete(bakPath)
-    } catch (e) {
-      hilog.error(0x0000, LOG_TAG, 'atomicWrite failed for %{public}s: %{public}s', filename, String(e))
-    }
-  }
-
-  // 初始化恢复：如果 file.json 不存在但 file.bak 存在，恢复 bak → json。
-  private recoverBak(dir: string, filename: string): void {
-    const basePath = `${dir}/${filename}`
-    const bakPath = `${dir}/${filename}.bak`
-    if (!this.fileExists(basePath) && this.fileExists(bakPath)) {
-      try {
-        fs.renameSync(bakPath, basePath)
-        hilog.info(0x0000, LOG_TAG, 'recovered %{public}s from bak', filename)
-      } catch (e) {
-        hilog.error(0x0000, LOG_TAG, 'recoverBak failed for %{public}s: %{public}s', filename, String(e))
-      }
-    }
-  }
-
-  // 安全删除文件 — 如果文件不存在，不抛异常。
-  private safeDelete(filePath: string): void {
-    try {
-      if (fs.accessSync(filePath)) {
-        fs.unlinkSync(filePath)
-      }
-    } catch (_) {
-    }
-  }
-
-  // 检查文件是否存在。
-  private fileExists(filePath: string): boolean {
-    try {
-      return fs.accessSync(filePath)
-    } catch (_) {
-      return false
-    }
-  }
-
-  // 确保目录存在 — 如果不存在则创建（含父目录）。
-  private ensureDir(dirPath: string): void {
-    try {
-      if (!fs.accessSync(dirPath)) {
-        fs.mkdirSync(dirPath, true)
-      }
-    } catch (_) {
-      // 目录创建失败不影响后续操作
-    }
+    })
   }
 }

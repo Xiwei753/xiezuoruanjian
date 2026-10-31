@@ -64,13 +64,6 @@ export class HarmonyDiagnosticEvents {
   // 进程内唯一的诊断 bridge。`libwriter_core.so` 本身是全局单例，
   // 这里只做一次懒初始化，避免每个事件都重新 `new` 一套 bridge。
   private static bridge: NativeDiagnosticsBridge | null = null
-  private static checkpointDirtyHandler: (() => void) | null = null
-
-  // Checkpoint registers this callback during initialization. Keeping the
-  // dependency as a callback avoids a diagnostics/lifecycle import cycle.
-  static setCheckpointDirtyHandler(handler: (() => void) | null): void {
-    HarmonyDiagnosticEvents.checkpointDirtyHandler = handler
-  }
 
   // 懒获取诊断 bridge：首次调用时构造，之后复用同一实例。
   private static getBridge(): NativeDiagnosticsBridge {
@@ -123,10 +116,8 @@ export class HarmonyDiagnosticEvents {
       }
     }
 
-    // Schedule the ArkTS checkpoint before touching NAPI. Even if the native
-    // diagnostics bridge is unavailable, the event-triggered snapshot still runs.
-    HarmonyDiagnosticEvents.checkpointDirtyHandler?.()
-
+    // 事件持久化与归档是两条独立链路：这里只写入 Rust 诊断日志，不再隐式
+    // 触发 checkpoint / ZIP。归档只由显式导出、真实故障收尾和后台收尾发起。
     try {
       const bridge: NativeDiagnosticsBridge = HarmonyDiagnosticEvents.getBridge()
       const payloadJson: string = JSON.stringify(payload)

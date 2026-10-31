@@ -431,6 +431,7 @@ dictionary FullSyncResultDto {
     string? error;
     string? error_category;
     string? message_key;
+    string? failure_stage;
 };
 
 dictionary FullSyncDryRunResultDto {

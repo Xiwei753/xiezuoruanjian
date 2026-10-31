@@ -27,13 +27,18 @@
 // - `writer_core_free_string` 只在正常回调或明确的丢弃路径调用一次，每条
 //   结果恰好释放一次；丢弃路径可能位于工作线程或清理线程。
 
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>
 #include <new>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -51,6 +56,10 @@ struct SyncNativeTask {
     SyncNativeExecuteFn execute = nullptr;
     const char* work_name = nullptr;
     char* result_json = nullptr;
+    std::uint64_t task_id = 0;
+    std::chrono::steady_clock::time_point queued_at;
+    std::chrono::steady_clock::time_point rust_started_at;
+    std::string diagnostic_operation_id;
 };
 
 struct SyncNativeTsfnContext;
@@ -97,6 +106,7 @@ struct SyncNativeCleanupContext {
 
 static std::mutex g_sync_native_registry_mutex;
 static std::unordered_map<napi_env, std::shared_ptr<SyncNativeWorkerState>> g_sync_native_states;
+static std::atomic<std::uint64_t> g_sync_native_next_task_id{1};
 
 static constexpr const char* kSyncNativeCreateFailedEnvelope =
     "{\"success\":false,\"errorCode\":\"ASYNC_CREATE_FAILED\",\"userMessage\":\"Failed to create sync native worker\"}";
@@ -104,6 +114,53 @@ static constexpr const char* kSyncNativeQueueFailedEnvelope =
     "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\",\"userMessage\":\"Failed to queue sync native work\"}";
 static constexpr const char* kSyncNativeNullResultEnvelope =
     "{\"success\":false,\"errorCode\":\"NULL_RESULT\",\"userMessage\":\"Sync operation returned no result\"}";
+
+static const char* SyncNativeTaskWorkName(const SyncNativeTask* task) {
+    return task != nullptr && task->work_name != nullptr ? task->work_name : "sync";
+}
+
+static const char* SyncNativeTaskOperationId(const SyncNativeTask* task) {
+    if (task == nullptr || task->diagnostic_operation_id.empty()) {
+        return "-";
+    }
+    return task->diagnostic_operation_id.c_str();
+}
+
+static long long SyncNativeElapsedMs(const std::chrono::steady_clock::time_point& start) {
+    return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count());
+}
+
+// 只提取信封里的稳定 operation id，不读取/记录任何结果正文。
+// 仅接受字母、数字、'-'、'_'，长度上限 128；不符合时返回空串。
+static std::string SyncNativeExtractOperationId(const char* json) {
+    if (json == nullptr) {
+        return {};
+    }
+    static constexpr const char kMarker[] = "\"diagnosticOperationId\":\"";
+    const char* begin = std::strstr(json, kMarker);
+    if (begin == nullptr) {
+        return {};
+    }
+    begin += sizeof(kMarker) - 1;
+    const char* end = std::strchr(begin, '"');
+    if (end == nullptr || end == begin) {
+        return {};
+    }
+    const std::size_t length = static_cast<std::size_t>(end - begin);
+    if (length > 128) {
+        return {};
+    }
+    for (const char* cursor = begin; cursor < end; ++cursor) {
+        const char value = *cursor;
+        const bool safe = (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+                          (value >= '0' && value <= '9') || value == '-' || value == '_';
+        if (!safe) {
+            return {};
+        }
+    }
+    return std::string(begin, length);
+}
 
 static void SyncNativeResolveEnvelope(napi_env env, napi_deferred deferred, const char* json) {
     napi_value result = nullptr;
@@ -167,6 +224,9 @@ static void SyncNativeCallJs(napi_env env, napi_value /*js_callback*/, void* con
         return;
     }
 
+    const char* work_name = SyncNativeTaskWorkName(task);
+    const char* operation_id = SyncNativeTaskOperationId(task);
+
     SyncNativeTsfnContext* tsfn_context = static_cast<SyncNativeTsfnContext*>(context);
     if (tsfn_context == nullptr) {
         if (task->result_json != nullptr) {
@@ -177,17 +237,25 @@ static void SyncNativeCallJs(napi_env env, napi_value /*js_callback*/, void* con
     }
 
     std::shared_ptr<SyncNativeWorkerState> state = tsfn_context->state;
+    bool arkts_received = false;
     if (env != nullptr && task->deferred != nullptr) {
         if (task->result_json != nullptr) {
             napi_value result = nullptr;
             if (napi_create_string_utf8(env, task->result_json, NAPI_AUTO_LENGTH, &result) == napi_ok) {
-                napi_resolve_deferred(env, task->deferred, result);
+                arkts_received = napi_resolve_deferred(env, task->deferred, result) == napi_ok;
             }
         } else {
             // Rust 返回 nullptr：resolve 标准 ResultEnvelope，而不是 reject 成
             // 字符串后在 ArkTS catch 里丢成 NATIVE_ERROR。
             SyncNativeResolveEnvelope(env, task->deferred, kSyncNativeNullResultEnvelope);
+            arkts_received = true;
         }
+    }
+    if (arkts_received) {
+        OH_LOG_INFO(LOG_APP,
+                    "SyncNative: arkts_received task=%{public}llu work=%{public}s elapsedMs=%{public}lld op=%{public}s",
+                    static_cast<unsigned long long>(task->task_id), work_name,
+                    SyncNativeElapsedMs(task->queued_at), operation_id);
     }
 
     if (task->result_json != nullptr) {
@@ -232,8 +300,20 @@ static bool SyncNativeDeliver(const std::shared_ptr<SyncNativeWorkerState>& stat
         return false;
     }
 
+    // 成功投递后 task 的所有权立即转交 TSFN，不能在调用后再读取其字段；
+    // 因此先把稳定 ID 和耗时复制出来，再记录投递时间点。ArkTS 真正消费时由
+    // SyncNativeCallJs 记录 arkts_received，两者可区分 TSFN 排队延迟。
+    const std::uint64_t task_id = task->task_id;
+    const char* work_name = SyncNativeTaskWorkName(task);
+    const long long elapsed_ms = SyncNativeElapsedMs(task->queued_at);
+    const std::string operation_id = SyncNativeExtractOperationId(task->result_json);
+
     napi_status status = napi_call_threadsafe_function(tsfn, task, napi_tsfn_nonblocking);
     if (status == napi_ok) {
+        OH_LOG_INFO(LOG_APP,
+                    "SyncNative: tsfn_delivered task=%{public}llu work=%{public}s elapsedMs=%{public}lld op=%{public}s",
+                    static_cast<unsigned long long>(task_id), work_name, elapsed_ms,
+                    operation_id.empty() ? "-" : operation_id.c_str());
         return true;
     }
 
@@ -281,7 +361,22 @@ static void SyncNativeWorkerLoop(std::shared_ptr<SyncNativeWorkerState> state,
 
         bool stopping = !started;
         if (started) {
+            task->rust_started_at = std::chrono::steady_clock::now();
+            const long long wait_ms = static_cast<long long>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    task->rust_started_at - task->queued_at).count());
+            OH_LOG_INFO(LOG_APP,
+                        "SyncNative: rust_start task=%{public}llu work=%{public}s waitMs=%{public}lld op=%{public}s",
+                        static_cast<unsigned long long>(task->task_id),
+                        SyncNativeTaskWorkName(task), wait_ms,
+                        SyncNativeTaskOperationId(task));
             task->result_json = task->execute();
+            task->diagnostic_operation_id = SyncNativeExtractOperationId(task->result_json);
+            OH_LOG_INFO(LOG_APP,
+                        "SyncNative: rust_return task=%{public}llu work=%{public}s elapsedMs=%{public}lld op=%{public}s",
+                        static_cast<unsigned long long>(task->task_id),
+                        SyncNativeTaskWorkName(task), SyncNativeElapsedMs(task->rust_started_at),
+                        SyncNativeTaskOperationId(task));
             {
                 std::lock_guard<std::mutex> state_lock(state->mutex);
                 stopping = state->stopping;
@@ -607,10 +702,17 @@ static napi_value SyncNativeWorkerSubmit(napi_env env, const char* work_name, Sy
     task->deferred = deferred;
     task->execute = execute;
     task->work_name = work_name;
+    task->task_id = g_sync_native_next_task_id.fetch_add(1, std::memory_order_relaxed);
+    task->queued_at = std::chrono::steady_clock::now();
 
     if (!SyncNativeWorkerEnqueue(state, task)) {
         delete task;
         SyncNativeResolveEnvelope(env, deferred, kSyncNativeQueueFailedEnvelope);
+    } else {
+        OH_LOG_INFO(LOG_APP,
+                    "SyncNative: queued task=%{public}llu work=%{public}s elapsedMs=0 op=%{public}s",
+                    static_cast<unsigned long long>(task->task_id),
+                    SyncNativeTaskWorkName(task), SyncNativeTaskOperationId(task));
     }
     return promise;
 }

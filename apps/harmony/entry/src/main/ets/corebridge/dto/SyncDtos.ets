@@ -98,6 +98,7 @@ export interface FullSyncResult {
   error: string | null
   errorCategory: string | null
   messageKey: string | null
+  failureStage: string | null
 }
 
 export interface FullSyncTargetResult {

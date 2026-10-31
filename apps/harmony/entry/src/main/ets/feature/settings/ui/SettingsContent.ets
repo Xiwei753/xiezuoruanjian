@@ -41,6 +41,8 @@ import { GripAdaptiveToggleRow } from '../../../ui/components/GripAdaptiveToggle
 // Issue #972：宽屏浮层的两列分类卡片。
 import { WideSettingsSection } from './wide/WideSettingsSection'
 import { WideSettingsCategoryContent } from './wide/WideSettingsCategoryContent'
+// Issue #1017：校对模型/词典资源从写作页移入编辑器设置。
+import { CorrectionResourceSettingsPanel } from './CorrectionResourceSettingsPanel'
 // Issue #986：智感握姿 → 设置开关所在侧。
 import { GripLayoutSide, GripLayoutSideStore } from '../../../ui/adaptive/GripLayoutSide'
 
@@ -1510,6 +1512,11 @@ export struct SettingsContent {
       .padding({ left: 4, right: 4, top: 2, bottom: 2 })
       .borderRadius(DesignTokens.radiusSm)
       .backgroundColor(this.settingHighlightColor('editorCoordinatedTextCursorAnimationEnabled'))
+
+      // Issue #1017：校对资源由设置管理，不再占用写作区。
+      CorrectionResourceSettingsPanel()
+        .width('100%')
+        .margin({ top: 8 })
     }
   }
 

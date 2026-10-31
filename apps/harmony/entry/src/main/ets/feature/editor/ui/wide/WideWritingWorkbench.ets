@@ -47,6 +47,12 @@ export struct WideWritingWorkbench {
   @Param onFontSizeChange: (value: number) => void = () => {}
   @Param onLineSpacingChange: (value: number) => void = () => {}
   @Param onHeaderAction: (role: ActionRole) => void = () => {}
+  /** Issue #1017：轻量校对入口及写作操作菜单。 */
+  @Param proofingSuggestionCount: number = 0
+  @Param isProofing: boolean = false
+  @Param onOpenProofing: () => void = () => {}
+  @Param onOpenAnnotation: () => void = () => {}
+  @Param onOpenProofReplay: () => void = () => {}
 
   // ── 左侧章节树 ──
   @Param projectTitle: string = ''
@@ -186,6 +192,17 @@ export struct WideWritingWorkbench {
         },
         onHeaderAction: (role: ActionRole): void => {
           this.onHeaderAction(role)
+        },
+        proofingSuggestionCount: this.proofingSuggestionCount,
+        isProofing: this.isProofing,
+        onOpenProofing: (): void => {
+          this.onOpenProofing()
+        },
+        onOpenAnnotation: (): void => {
+          this.onOpenAnnotation()
+        },
+        onOpenProofReplay: (): void => {
+          this.onOpenProofReplay()
         }
       })
         .width('100%')

@@ -147,10 +147,7 @@ export struct WritingScreen {
   @State correctionSuggestions: MappedCorrectionSuggestion[] = []
   @State correctionIsChecking: boolean = false
   @State correctionErrorMessage: string = ''
-  @State correctionResourceDirectory: string = ''
-  @State correctionDictionaryResourceStatus: string = ''
-  @State correctionModelResourceStatus: string = ''
-  @State correctionResourcesBusy: boolean = false
+  @State correctionSheetOpen: boolean = false
   @State annotationPanelOpen: boolean = false
   @State proofReplayOpen: boolean = false
   @State annotationTarget: AnnotationObjectRefDto | null = null
@@ -280,7 +277,6 @@ export struct WritingScreen {
   private annotationBridge: NativeAnnotationBridge = new NativeAnnotationBridge()
   private annotationEditQueue: Promise<void> = Promise.resolve()
   private correctionModelCleanupQueue: Promise<void> = Promise.resolve()
-  private correctionModelCleanupDeferred: boolean = false
   private inputAdapter: EditorInputAdapter = new EditorInputAdapter(this.editorCoordinator)
   private selectionController: SelectionController = new SelectionController(this.editorCoordinator)
   private harmonyImeConnection: HarmonyImeConnection = new HarmonyImeConnection()
@@ -357,11 +353,7 @@ export struct WritingScreen {
       this.correctionErrorMessage = state.errorMessage
     })
     this.correctionCoordinator.setScanCompletionListener((): void => {
-      if (this.correctionResourcesBusy) {
-        this.correctionModelCleanupDeferred = true
-      } else {
-        void this.cleanupInactiveCorrectionModels().catch(() => {})
-      }
+      void this.cleanupInactiveCorrectionModels().catch(() => {})
     })
     // Issue #920 A：把路由上下文交给协调器，并注册显示状态回流 + 会话打开后的平台侧恢复。
     const workflowConfig: WritingWorkflowConfig = {
@@ -374,9 +366,7 @@ export struct WritingScreen {
     this.writingWorkflow.setSessionOpenedHook((snap: EditorSessionSnapshot): Promise<void> => {
       // Issue #958：Core 就绪、会话打开后再尝试内置模型兜底；不阻塞会话恢复，
       // 失败保持可重试（由 CorrectionCoordinator 判定是否已处理）。
-      void this.ensureBundledCorrectionModel().then((): void => {
-        this.refreshCorrectionResourceStatus()
-      })
+      void this.ensureBundledCorrectionModel()
       return this.restoreContinuationEditorState(snap)
     })
     this.writingWorkflow.setListener((update: WritingWorkflowUpdate): void => {
@@ -868,6 +858,14 @@ export struct WritingScreen {
     }
   }
 
+  private showWritingToast(message: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message })
+    } catch (_e) {
+      // 提示失败不影响编辑。
+    }
+  }
+
   // ── Issue #629 评论 5 第 7 节：碰一碰/隔空传送 Share 生命周期 ──
 
   // 构造当前章节的 SharePayload。内容来自 coordinator snapshot（不另算一份）。
@@ -1323,6 +1321,17 @@ export struct WritingScreen {
         onHeaderAction: (role: ActionRole): void => {
           NavigationHeaderActionDispatcher.getInstance().dispatchAction(role)
         },
+        proofingSuggestionCount: this.correctionSuggestions.length,
+        isProofing: this.correctionIsChecking,
+        onOpenProofing: (): void => {
+          this.correctionSheetOpen = true
+        },
+        onOpenAnnotation: (): void => {
+          void this.openAnnotationPanel()
+        },
+        onOpenProofReplay: (): void => {
+          this.proofReplayOpen = true
+        },
 
         projectTitle: this.projectTitle,
         volumeTrees: this.volumeTrees,
@@ -1527,8 +1536,14 @@ export struct WritingScreen {
               Text(this.chapterTitle)
                 .fontSize(20)
                 .margin({ left: 12 })
+                .layoutWeight(1)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
 
               Blank()
+
+              this.CompactProofingButton()
+              this.CompactOperationsButton()
 
               ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
                 Button({ type: ButtonType.Circle, stateEffect: true }) {
@@ -1577,96 +1592,158 @@ export struct WritingScreen {
     })
   }
 
+  private proofingEntryLabel(): string {
+    if (this.correctionIsChecking) {
+      return '校对中'
+    }
+    return this.correctionSuggestions.length > 0 ? `校对 ${this.correctionSuggestions.length}` : '校对'
+  }
+
+  @Builder
+  CompactProofingButton() {
+    Button(this.proofingEntryLabel(), { type: ButtonType.Normal, stateEffect: true })
+      .height(32)
+      .padding({ left: 10, right: 10 })
+      .fontSize(13)
+      .fontColor($r('sys.color.font_primary'))
+      .borderRadius(16)
+      .backgroundColor($r('sys.color.comp_background_gray'))
+      .enabled(this.chapterId.length > 0)
+      .onClick(() => {
+        this.correctionSheetOpen = true
+      })
+  }
+
+  @Builder
+  WritingOperationsMenu() {
+    Menu() {
+      MenuItem({ content: '标注' })
+        .onClick(() => {
+          void this.openAnnotationPanel()
+        })
+      MenuItem({ content: '写作回放' })
+        .onClick(() => {
+          this.proofReplayOpen = true
+        })
+    }
+  }
+
+  @Builder
+  CompactOperationsButton() {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text('⋯')
+        .fontSize(20)
+        .fontColor($r('sys.color.icon_primary'))
+    }
+    .width(36)
+    .height(36)
+    .borderRadius(18)
+    .backgroundColor($r('sys.color.comp_background_gray'))
+    .margin({ left: 8 })
+    .accessibilityText('更多写作操作')
+    .bindMenu(this.WritingOperationsMenu)
+  }
+
+  // API23+ 的 HDS 标题栏由系统壳层自绘，写作页在正文顶部只保留一条轻量动作带。
+  @Builder
+  CompactWritingActions() {
+    Row({ space: 8 }) {
+      this.CompactProofingButton()
+      this.CompactOperationsButton()
+    }
+    .width('100%')
+    .height(44)
+    .padding({ left: 12, right: 12 })
+    .justifyContent(FlexAlign.End)
+    .backgroundColor($r('sys.color.background_secondary'))
+  }
+
+  // Issue #1017：校对面板只在用户点击“校对”后以 sheet 出现，正文不再被常驻面板挤占。
+  @Builder
+  CorrectionSheet() {
+    Column() {
+      Scroll() {
+        CorrectionSuggestionsPanel({
+          suggestions: this.correctionSuggestions,
+          isChecking: this.correctionIsChecking,
+          errorMessage: this.correctionErrorMessage,
+          onCheckChapter: (): void => { void this.correctionCoordinator.checkChapter() },
+          onApply: (suggestion: MappedCorrectionSuggestion): void => { void this.applyCorrection(suggestion) },
+          onIgnore: (suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): void => {
+            void this.ignoreCorrection(suggestion, scope)
+          },
+          onAddDictionary: (suggestion: MappedCorrectionSuggestion): void => {
+            void this.addCorrectionDictionaryEntry(suggestion)
+          },
+          onJump: (suggestion: MappedCorrectionSuggestion): void => {
+            void this.jumpToCorrectionSuggestion(suggestion)
+          }
+        })
+          .width('100%')
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Auto)
+      .align(Alignment.Top)
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 8, right: 8, bottom: 12 })
+    .backgroundColor($r('sys.color.background_secondary'))
+  }
+
+  // 标注内容沿用现有 AnnotationPanel，只把入口从正文前的常驻按钮移进操作菜单。
+  @Builder
+  AnnotationSheet() {
+    Column() {
+      if (this.annotationTarget !== null) {
+        AnnotationPanel({
+          projectId: this.annotationTarget !== null ? this.annotationTarget.projectId : this.projectId,
+          target: this.annotationTarget,
+          onChanged: (): void => {
+            const snapshot = this.editorCoordinator.getSnapshot()
+            if (snapshot !== null) void this.refreshAnnotationsAfterPendingEdits(snapshot)
+          }
+        })
+          .width('100%')
+          .constraintSize({ maxWidth: this.editorMaxWidthVp() })
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .padding(12)
+    .backgroundColor($r('sys.color.background_secondary'))
+  }
+
   @Builder
   EditorBody() {
-    Column() {
-      if (this.isLoading) {
-        Column() {
-          LoadingProgress()
-            .width(48)
-            .height(48)
-          Text($r('app.string.loading'))
-            .fontSize(14)
-            .margin({ top: 12 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.errorMessage) {
-        Column() {
-          Text(this.errorMessage)
-            .fontSize(16)
-            .margin({ bottom: 16 })
-
-          Button($r('app.string.retry'))
-            .onClick(() => { this.writingWorkflow.loadChapter() })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Column() {
-          CorrectionSuggestionsPanel({
-            suggestions: this.correctionSuggestions,
-            isChecking: this.correctionIsChecking,
-            errorMessage: this.correctionErrorMessage,
-            resourceDirectory: this.correctionResourceDirectory,
-            dictionaryResourceStatus: this.correctionDictionaryResourceStatus,
-            modelResourceStatus: this.correctionModelResourceStatus,
-            isPreparingResources: this.correctionResourcesBusy,
-            onCheckChapter: (): void => { void this.correctionCoordinator.checkChapter() },
-            onImportModel: (): void => { void this.importCorrectionModel() },
-            onImportDictionary: (): void => { void this.importCorrectionDictionary() },
-            onApply: (suggestion: MappedCorrectionSuggestion): void => { void this.applyCorrection(suggestion) },
-            onIgnore: (suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): void => {
-              void this.ignoreCorrection(suggestion, scope)
-            },
-            onAddDictionary: (suggestion: MappedCorrectionSuggestion): void => {
-              void this.addCorrectionDictionaryEntry(suggestion)
-            }
-          })
-            .width('100%')
-            .constraintSize({ maxWidth: this.editorMaxWidthVp() })
-
-          if (this.layoutMode === WideLayoutMode.Compact) {
-            Row() {
-              Button(this.annotationPanelOpen ? '收起标注' : '标注')
-                .height(34)
-                .onClick(() => {
-                  if (this.annotationPanelOpen) {
-                    this.annotationPanelOpen = false
-                  } else {
-                    void this.openAnnotationPanel()
-                  }
-                })
-              Button('写作回放')
-                .height(34)
-                .margin({ left: 8 })
-                .onClick(() => { this.proofReplayOpen = true })
-              if (this.annotationErrorMessage.length > 0) {
-                Text(this.annotationErrorMessage)
-                  .fontSize(12)
-                  .fontColor($r('sys.color.ohos_id_color_alert'))
-                  .margin({ left: 8 })
-              }
-            }
-            .width('100%')
-            .bindSheet($$this.proofReplayOpen, this.ProofReplaySheet(), { height: 560 })
-
-            if (this.annotationPanelOpen && this.annotationTarget !== null) {
-              AnnotationPanel({
-                projectId: this.annotationTarget !== null ? this.annotationTarget.projectId : this.projectId,
-                target: this.annotationTarget,
-                onChanged: (): void => {
-                  const snapshot = this.editorCoordinator.getSnapshot()
-                  if (snapshot !== null) void this.refreshAnnotationsAfterPendingEdits(snapshot)
-                }
-              })
-                .width('100%')
-                .constraintSize({ maxWidth: this.editorMaxWidthVp() })
-            }
+    Stack({ alignContent: Alignment.Top }) {
+      Column() {
+        if (this.isLoading) {
+          Column() {
+            LoadingProgress()
+              .width(48)
+              .height(48)
+            Text($r('app.string.loading'))
+              .fontSize(14)
+              .margin({ top: 12 })
           }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.errorMessage) {
+          Column() {
+            Text(this.errorMessage)
+              .fontSize(16)
+              .margin({ bottom: 16 })
 
+            Button($r('app.string.retry'))
+              .onClick(() => { this.writingWorkflow.loadChapter() })
+          }
+          .width('100%')
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
           SujianEditor({
             scroller: this.editorScroller,
             presentationUpdate: this.presentationUpdate,
@@ -1693,14 +1770,27 @@ export struct WritingScreen {
             .width('100%')
             .layoutWeight(1)
         }
-        .width('100%')
-        .layoutWeight(1)
-        .constraintSize({ maxWidth: this.editorMaxWidthVp() })
       }
+      .width('100%')
+      .height('100%')
+      .constraintSize({ maxWidth: this.editorMaxWidthVp() })
+
+      // 三个 sheet 各自挂在独立锚点上，避免同一节点重复 bindSheet 只保留最后一个。
+      Row()
+        .width(1)
+        .height(1)
+        .bindSheet($$this.correctionSheetOpen, this.CorrectionSheet(), { height: 560 })
+      Row()
+        .width(1)
+        .height(1)
+        .bindSheet($$this.annotationPanelOpen, this.AnnotationSheet(), { height: 560 })
+      Row()
+        .width(1)
+        .height(1)
+        .bindSheet($$this.proofReplayOpen, this.ProofReplaySheet(), { height: 560 })
     }
     .width('100%')
     .height('100%')
-    .alignItems(HorizontalAlign.Center)
   }
 
   private async openAnnotationPanel(): Promise<void> {
@@ -1724,7 +1814,9 @@ export struct WritingScreen {
         const created = await this.annotationBridge.createTextAnchor(
           this.projectId, this.chapterId, startByte, endByte, snapshot.revision, snapshot.text)
         if (!created.success || created.data === undefined) {
-          this.annotationErrorMessage = created.userMessage ?? '选区标注创建失败'
+          const message = created.userMessage ?? '选区标注创建失败'
+          this.annotationErrorMessage = message
+          this.showWritingToast(message)
           return
         }
         anchor = created.data
@@ -2241,46 +2333,17 @@ export struct WritingScreen {
     }
   }
 
-  private async refreshCorrectionResourceStatus(): Promise<void> {
-    const snapshot = CorrectionResourceImporter.inspect(getAppDataRoot())
-    this.correctionResourceDirectory = snapshot.directory
-    const result = await this.correctionCoordinator.getResourceStatus()
-    if (!result.success || result.data === undefined) {
-      this.correctionDictionaryResourceStatus =
-        `无法读取 Core 词库状态：${result.userMessage ?? result.rawError ?? '未知错误'}`
-      this.correctionModelResourceStatus =
-        `无法读取 Core 模型状态：${result.userMessage ?? result.rawError ?? '未知错误'}`
-      return
-    }
-    const status = result.data
-    const missingDictionaries = status.missingDictionaryFiles
-    const dictionaryReadiness = missingDictionaries.length > 0
-      ? `可选词典 ${status.installedDictionaryFiles.length}/8 已安装；未安装：${missingDictionaries.join('、')}`
-      : '六种可选词典均已安装'
-    this.correctionDictionaryResourceStatus = status.bundledLexiconAvailable
-      ? `Core 内置词库已就绪；${dictionaryReadiness}`
-      : 'Core 内置词库不可用'
-    const modelName = status.modelPath === null
-      ? ''
-      : status.modelPath.substring(status.modelPath.lastIndexOf('/') + 1)
-    this.correctionModelResourceStatus = status.modelFileAvailable
-      ? `Core 已配置可读取的模型${modelName.length > 0 ? `：${modelName}` : '文件'}`
-      : status.modelConfigured
-        ? 'Core 已配置模型路径，但模型文件不可用'
-        : '尚未配置语言模型；内置固定规则仍可用'
-  }
-
-  private cleanupInactiveCorrectionModels(allowDuringImport: boolean = false): Promise<string> {
+  private cleanupInactiveCorrectionModels(): Promise<string> {
     let lifecycleMessage = ''
     const task = this.correctionModelCleanupQueue.then(async (): Promise<void> => {
-      lifecycleMessage = await this.performInactiveCorrectionModelCleanup(allowDuringImport)
+      lifecycleMessage = await this.performInactiveCorrectionModelCleanup()
     })
     this.correctionModelCleanupQueue = task.then((): void => {}, (): void => {})
     return task.then((): string => lifecycleMessage,
       (): string => '；清理状态无法确认，旧模型均已保留')
   }
 
-  private async performInactiveCorrectionModelCleanup(allowDuringImport: boolean): Promise<string> {
+  private async performInactiveCorrectionModelCleanup(): Promise<string> {
     const appDataRoot = getAppDataRoot()
     if (appDataRoot.length === 0) {
       return '；无法获取应用数据目录，旧模型均已保留'
@@ -2307,15 +2370,7 @@ export struct WritingScreen {
         continue
       }
       managedModelCount++
-      if (this.correctionResourcesBusy && !allowDuringImport) {
-        retainedModels++
-        continue
-      }
       const pathStatus = await this.correctionCoordinator.getModelPathStatus(path)
-      if (this.correctionResourcesBusy && !allowDuringImport) {
-        retainedModels++
-        continue
-      }
       if (pathStatus.success && pathStatus.data !== undefined &&
           CorrectionResourceImporter.removeModelIfEligible(appDataRoot, path, pathStatus.data)) {
         removedModels++
@@ -2335,73 +2390,26 @@ export struct WritingScreen {
     return message
   }
 
-  private runDeferredCorrectionModelCleanup(): void {
-    if (!this.correctionModelCleanupDeferred) {
+  // Issue #1017：把建议范围交给现有 Core 选区命令，再用现有 viewport reveal 滚到可见行。
+  private async jumpToCorrectionSuggestion(suggestion: MappedCorrectionSuggestion): Promise<void> {
+    const snapshot = this.editorCoordinator.getSnapshot()
+    if (snapshot === null) {
       return
     }
-    this.correctionModelCleanupDeferred = false
-    void this.cleanupInactiveCorrectionModels().catch(() => {})
-  }
-
-  private async importCorrectionModel(): Promise<void> {
-    if (this.correctionResourcesBusy) {
+    const textByteLength: number = TextOffsetMapper.utf16ToUtf8(snapshot.text, snapshot.text.length)
+    const startByte: number = Math.max(0, Math.min(suggestion.startByte, textByteLength))
+    const endByte: number = Math.max(startByte, Math.min(suggestion.endByte, textByteLength))
+    const result = await this.editorCoordinator.setSelection(startByte, endByte)
+    if (!result.success) {
+      this.correctionErrorMessage = result.userMessage ?? result.errorCode ?? '无法定位到建议位置'
       return
     }
-    const context = getAppContext().getAbilityContext()
-    const appDataRoot = getAppDataRoot()
-    if (context === null || appDataRoot.length === 0) {
-      this.correctionModelResourceStatus = '无法获取应用目录或 UIAbilityContext，模型未导入'
-      return
-    }
-    this.correctionResourcesBusy = true
-    try {
-      const result = await CorrectionResourceImporter.importModel(
-        context,
-        appDataRoot,
-        (path: string) => this.correctionCoordinator.setModelPath(path),
-        (message: string): void => { this.correctionModelResourceStatus = message }
-      )
-      let lifecycleMessage = ''
-      if (result.status === 'imported') {
-        lifecycleMessage = await this.cleanupInactiveCorrectionModels(true)
-      }
-      await this.refreshCorrectionResourceStatus()
-      if (result.status === 'imported') {
-        this.correctionModelResourceStatus = `${result.message}${lifecycleMessage}`
-      } else if (result.status === 'cancelled') {
-        this.correctionModelResourceStatus = `模型配置未改变；${result.message}`
-      } else {
-        this.correctionModelResourceStatus = `${result.message}；${this.correctionModelResourceStatus}`
-      }
-    } finally {
-      this.correctionResourcesBusy = false
-      this.runDeferredCorrectionModelCleanup()
-    }
-  }
-
-  private async importCorrectionDictionary(): Promise<void> {
-    if (this.correctionResourcesBusy) {
-      return
-    }
-    const context = getAppContext().getAbilityContext()
-    const appDataRoot = getAppDataRoot()
-    if (context === null || appDataRoot.length === 0) {
-      this.correctionDictionaryResourceStatus = '无法获取应用目录或 UIAbilityContext，词典未导入'
-      return
-    }
-    this.correctionResourcesBusy = true
-    try {
-      const result = await CorrectionResourceImporter.importDictionary(
-        context,
-        appDataRoot,
-        (message: string): void => { this.correctionDictionaryResourceStatus = message }
-      )
-      await this.refreshCorrectionResourceStatus()
-      this.correctionDictionaryResourceStatus = `${result.message}；${this.correctionDictionaryResourceStatus}`
-    } finally {
-      this.correctionResourcesBusy = false
-      this.runDeferredCorrectionModelCleanup()
-    }
+    this.correctionSheetOpen = false
+    const restored = this.editorCoordinator.getSnapshot()
+    const revealUtf16: number = restored !== null
+      ? TextOffsetMapper.utf8ToUtf16(restored.text, startByte)
+      : suggestion.startUtf16
+    this.viewportController.reveal(revealUtf16)
   }
 
   private async ignoreCorrection(suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope): Promise<void> {
@@ -2447,6 +2455,10 @@ export struct WritingScreen {
   @Builder
   EditorPane() {
     Column() {
+      // HDS 标题栏不承载页面自绘动作；轻量校对/更多入口贴着正文顶部右侧，不放置常驻校对面板。
+      if (this.useHdsNav) {
+        this.CompactWritingActions()
+      }
       if (this.chapterId.length === 0) {
         Column() {
           Text('请先选择或创建章节')

@@ -1,22 +1,20 @@
 import { MappedCorrectionSuggestion } from './CorrectionDtos'
 import { CorrectionIgnoreScope } from './ICorrectionBridge'
 
-/** Compact presentation for Core correction diagnostics and their explicit actions. */
+/**
+ * Correction diagnostics presentation: progress, suggestions and their explicit actions.
+ * Model/dictionary resources are managed in settings; this panel only renders proofing.
+ */
 @Component
 export struct CorrectionSuggestionsPanel {
   @Prop suggestions: MappedCorrectionSuggestion[] = []
   @Prop isChecking: boolean = false
   @Prop errorMessage: string = ''
-  @Prop resourceDirectory: string = ''
-  @Prop dictionaryResourceStatus: string = ''
-  @Prop modelResourceStatus: string = ''
-  @Prop isPreparingResources: boolean = false
   onCheckChapter: (() => void) | null = null
-  onImportModel: (() => void) | null = null
-  onImportDictionary: (() => void) | null = null
   onApply: ((suggestion: MappedCorrectionSuggestion) => void) | null = null
   onIgnore: ((suggestion: MappedCorrectionSuggestion, scope: CorrectionIgnoreScope) => void) | null = null
   onAddDictionary: ((suggestion: MappedCorrectionSuggestion) => void) | null = null
+  onJump: ((suggestion: MappedCorrectionSuggestion) => void) | null = null
   @State private selectedSuggestion: MappedCorrectionSuggestion | null = null
 
   private ignoreSelected(scope: CorrectionIgnoreScope): void {
@@ -81,67 +79,54 @@ export struct CorrectionSuggestionsPanel {
     }
   }
 
+  @Builder
+  SuggestionActions(suggestion: MappedCorrectionSuggestion) {
+    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.End, alignItems: ItemAlign.Center }) {
+      Button('跳转')
+        .height(30)
+        .margin({ left: 8, top: 2, bottom: 2 })
+        .onClick(() => this.onJump?.(suggestion))
+      Button('采纳')
+        .height(30)
+        .margin({ left: 8, top: 2, bottom: 2 })
+        .onClick(() => this.onApply?.(suggestion))
+      Button('更多')
+        .height(30)
+        .margin({ left: 8, top: 2, bottom: 2 })
+        .onClick(() => { this.selectedSuggestion = suggestion })
+        .bindMenu(this.IgnoreMenu)
+    }
+  }
+
   build() {
     Column({ space: 8 }) {
-      Row({ space: 8 }) {
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Center }) {
         Text('智能校对')
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
+          .margin({ right: 8 })
         if (this.isChecking) {
           LoadingProgress()
             .width(16)
             .height(16)
+            .margin({ right: 4 })
           Text('正在检查')
             .fontSize(12)
             .fontColor($r('sys.color.font_secondary'))
+            .margin({ right: 8 })
         } else if (this.suggestions.length > 0) {
           Text(`发现 ${this.suggestions.length} 条建议`)
             .fontSize(12)
             .fontColor($r('sys.color.font_secondary'))
+            .margin({ right: 8 })
         }
-        Blank()
         Button('校对本章')
           .height(34)
           .enabled(!this.isChecking)
+          .margin({ left: 8 })
           .onClick(() => this.onCheckChapter?.())
       }
       .width('100%')
-
-      Row({ space: 8 }) {
-        Button('导入 ONNX 模型目录')
-          .height(32)
-          .enabled(!this.isPreparingResources)
-          .onClick(() => this.onImportModel?.())
-        Button('导入词典 .txt')
-          .height(32)
-          .enabled(!this.isPreparingResources)
-          .onClick(() => this.onImportDictionary?.())
-      }
-      .width('100%')
-
-      if (this.isPreparingResources) {
-        Text('正在准备校对资源…')
-          .fontSize(12)
-          .fontColor($r('sys.color.font_secondary'))
-      }
-      if (this.modelResourceStatus.length > 0) {
-        Text(this.modelResourceStatus)
-          .fontSize(12)
-          .fontColor($r('sys.color.font_secondary'))
-          .width('100%')
-      }
-      if (this.dictionaryResourceStatus.length > 0) {
-        Text(this.dictionaryResourceStatus)
-          .fontSize(12)
-          .fontColor($r('sys.color.font_secondary'))
-          .width('100%')
-      }
-      if (this.resourceDirectory.length > 0) {
-        Text(`资源目录：${this.resourceDirectory}`)
-          .fontSize(10)
-          .fontColor($r('sys.color.font_secondary'))
-          .width('100%')
-      }
 
       if (this.errorMessage.length > 0) {
         Text(this.errorMessage)
@@ -151,46 +136,40 @@ export struct CorrectionSuggestionsPanel {
       }
 
       if (this.suggestions.length > 0) {
-        Scroll() {
-          Column({ space: 8 }) {
-            ForEach(this.suggestions, (suggestion: MappedCorrectionSuggestion) => {
-              Column({ space: 6 }) {
-                Row({ space: 8 }) {
-                  Text(this.severityLabel(suggestion))
-                    .fontSize(12)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor(this.severityColor(suggestion))
-                  Text(`“${suggestion.original}” → “${suggestion.replacement}”`)
-                    .fontSize(14)
-                    .layoutWeight(1)
-                  Button('采纳')
-                    .height(30)
-                    .onClick(() => this.onApply?.(suggestion))
-                  Button('更多')
-                    .height(30)
-                    .onClick(() => { this.selectedSuggestion = suggestion })
-                    .bindMenu(this.IgnoreMenu)
-                }
-                Text(`${suggestion.source} · ${suggestion.ruleId} · ${suggestion.severity}`)
+        Column({ space: 8 }) {
+          ForEach(this.suggestions, (suggestion: MappedCorrectionSuggestion) => {
+            Column({ space: 6 }) {
+              Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start, alignItems: ItemAlign.Center }) {
+                Text(this.severityLabel(suggestion))
                   .fontSize(12)
-                  .fontColor($r('sys.color.font_secondary'))
-                  .width('100%')
-                Text(this.reasonFor(suggestion))
-                  .fontSize(12)
-                  .fontColor($r('sys.color.font_secondary'))
-                  .width('100%')
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.severityColor(suggestion))
+                  .margin({ right: 8 })
+                Text(`“${suggestion.original}” → “${suggestion.replacement}”`)
+                  .fontSize(14)
+                  .layoutWeight(1)
+                  .constraintSize({ minWidth: 120 })
               }
               .width('100%')
-              .padding(10)
-              .borderRadius(8)
-              .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
-            }, (suggestion: MappedCorrectionSuggestion) => `${suggestion.ruleId}_${suggestion.startByte}_${suggestion.endByte}`)
-          }
-          .width('100%')
+
+              Text(`${suggestion.source} · ${suggestion.ruleId} · ${suggestion.severity}`)
+                .fontSize(12)
+                .fontColor($r('sys.color.font_secondary'))
+                .width('100%')
+              Text(this.reasonFor(suggestion))
+                .fontSize(12)
+                .fontColor($r('sys.color.font_secondary'))
+                .width('100%')
+
+              this.SuggestionActions(suggestion)
+            }
+            .width('100%')
+            .padding(10)
+            .borderRadius(8)
+            .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+          }, (suggestion: MappedCorrectionSuggestion) => `${suggestion.ruleId}_${suggestion.startByte}_${suggestion.endByte}`)
         }
         .width('100%')
-        .constraintSize({ maxHeight: 180 })
-        .scrollBar(BarState.Off)
       }
     }
     .width('100%')

@@ -11,6 +11,7 @@ import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
 import { HarmonyColorModeController } from '../ui/theme/HarmonyColorModeController'
 import { HarmonyCrashEventWatcher } from '../platform/diagnostics/HarmonyCrashEventWatcher'
 import { HarmonyDiagnosticsCheckpoint } from '../platform/diagnostics/HarmonyDiagnosticsCheckpoint'
+import { HarmonyDiagnosticsArchiveWorkerClient } from '../platform/diagnostics/HarmonyDiagnosticsArchiveWorkerClient'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../platform/diagnostics/HarmonyDiagnosticEvents'
 import { HarmonyAutoSyncScheduler } from '../feature/settings/presentation/HarmonyAutoSyncScheduler'
 import { TrustedDeviceService } from '../platform/device/TrustedDeviceService'
@@ -53,12 +54,12 @@ export default class EntryAbility extends UIAbility {
     // 在下一次启动时把上一轮 crash fault log 补进 diagnostics/crashes/。
     HarmonyCrashEventWatcher.getInstance().init(this.context)
 
-    // Issue #773 评论 5845398115：初始化诊断 checkpoint，首次启动立即排一轮，不等 5 秒 timer。
-    // 消除"首启 5 秒空窗期内闪退文件管理里只有 live 目录没有 latest.zip"的问题。
+    // Issue #1017：启动只落运行态快照，不再强制生成整包 latest.zip。归档由用户
+    // 显式导出、真实故障收尾和后台收尾触发；冷启动回放的 APP_KILLED 等事件由
+    // HarmonyCrashEventWatcher 按 eventKey 去重后各自生成 fault 包。
     const checkpoint = HarmonyDiagnosticsCheckpoint.getInstance()
     checkpoint.init(this.context)
     checkpoint.persistRuntimeSnapshot()
-    checkpoint.requestCheckpoint()
 
     this.lifecycle.notifyCreate()
 
@@ -161,6 +162,9 @@ export default class EntryAbility extends UIAbility {
     HarmonyDiagnosticEvents.record('Info', 'App', 'ability.destroyed', 'EntryAbility', [])
     HarmonyDiagnosticsCheckpoint.getInstance().destroy()
     HarmonyCrashEventWatcher.getInstance().destroy()
+    // Issue #1017：checkpoint/crash watcher 都解绑后终止诊断归档 Worker，避免
+    // Ability 重建后遗留线程与未完成请求。
+    HarmonyDiagnosticsArchiveWorkerClient.getInstance().terminate()
     // Issue #925：Ability 级解绑自动同步调度器（移除生命周期与网络恢复监听）。
     HarmonyAutoSyncScheduler.getInstance().detach(this.lifecycle)
     this.lifecycle.notifyDestroy()

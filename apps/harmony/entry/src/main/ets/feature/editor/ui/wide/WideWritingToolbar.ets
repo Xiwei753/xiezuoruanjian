@@ -38,6 +38,19 @@ export struct WideWritingToolbar {
   @Param onFontSizeChange: (value: number) => void = () => {}
   @Param onLineSpacingChange: (value: number) => void = () => {}
   @Param onHeaderAction: (role: ActionRole) => void = () => {}
+  /** Issue #1017：轻量校对入口和建议数量；具体面板由 WritingScreen 的 sheet 承载。 */
+  @Param proofingSuggestionCount: number = 0
+  @Param isProofing: boolean = false
+  @Param onOpenProofing: () => void = () => {}
+  @Param onOpenAnnotation: () => void = () => {}
+  @Param onOpenProofReplay: () => void = () => {}
+
+  private proofingLabel(): string {
+    if (this.isProofing) {
+      return '校对中'
+    }
+    return this.proofingSuggestionCount > 0 ? `校对 ${this.proofingSuggestionCount}` : '校对'
+  }
 
   private clampFontSize(value: number): number {
     return Math.min(FONT_SIZE_MAX_PT, Math.max(FONT_SIZE_MIN_PT, Math.round(value)))
@@ -154,6 +167,54 @@ export struct WideWritingToolbar {
     })
   }
 
+  @Builder
+  ProofingButton() {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text(this.proofingLabel())
+        .fontSize(13)
+        .fontColor($r('sys.color.font_primary'))
+        .maxLines(1)
+    }
+    .height(36)
+    .padding({ left: 10, right: 10 })
+    .borderRadius(DesignTokens.radiusPill)
+    .backgroundColor($r('sys.color.comp_background_gray'))
+    .margin({ left: 8 })
+    .onClick(() => {
+      this.onOpenProofing()
+    })
+  }
+
+  @Builder
+  WritingOperationsMenu() {
+    Menu() {
+      MenuItem({ content: '标注' })
+        .onClick(() => {
+          this.onOpenAnnotation()
+        })
+      MenuItem({ content: '写作回放' })
+        .onClick(() => {
+          this.onOpenProofReplay()
+        })
+    }
+  }
+
+  @Builder
+  OperationsButton() {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Text('⋯')
+        .fontSize(20)
+        .fontColor($r('sys.color.icon_primary'))
+    }
+    .width(TOOLBAR_ICON_SIZE_VP)
+    .height(TOOLBAR_ICON_SIZE_VP)
+    .borderRadius(DesignTokens.radiusPill)
+    .backgroundColor($r('sys.color.comp_background_gray'))
+    .margin({ left: 8 })
+    .accessibilityText('更多写作操作')
+    .bindMenu(this.WritingOperationsMenu)
+  }
+
   build() {
     Column() {
       Row() {
@@ -225,8 +286,11 @@ export struct WideWritingToolbar {
         .justifyContent(FlexAlign.Center)
         .alignItems(VerticalAlign.Center)
 
-        // ── 右：同步 / 搜索 / 设置（普通 Button，不走 HDS 胶囊）──
+        // ── 右：校对 / 更多 / 同步 / 搜索 / 设置（普通 Button，不走 HDS 胶囊）──
         Row() {
+          this.ProofingButton()
+          this.OperationsButton()
+
           ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
             this.HeaderActionButton(slot)
           }, (slot: ActionSlot) => slot.role)
