@@ -65,11 +65,22 @@ interface DiagnosticsManifest {
   expected_external_log_count?: number
   confirmed_external_log_count?: number
   log_over_limit?: boolean
+  // full/checkpoint 包中未能读入 staging 的历史故障附件；如实反映缺口。
+  missing_crash_attachments?: string[]
 }
 
 interface CrashCandidate {
   eventKey: string
   mtime: number
+}
+
+interface CrashAttachmentCopyResult {
+  eventKeys: string[]
+  missing: string[]
+}
+
+interface FaultPublishProgress {
+  stage: DiagnosticsArchiveStage
 }
 
 interface FaultAttachmentEntry {
@@ -268,13 +279,16 @@ async function runArchive(request: DiagnosticsArchiveRequest): Promise<Diagnosti
       attachmentNames.push(attachment.relativePath)
     }
 
-    stage = 'crash_copy'
-    const crashEvents = copyCrashAttachments(
+    stage = request.archiveKind === 'fault' ? 'fault_archive_attachment_copy' : 'crash_copy'
+    const crashCopy = copyCrashAttachments(
       request.crashesDir, stagingDir, request.archiveKind, request.eventKey, request.recentCrashLimit
     )
 
     stage = 'manifest_write'
-    const manifest = buildManifest(request, logSummary, attachmentNames, crashEvents)
+    const manifest = buildManifest(request, logSummary, attachmentNames, crashCopy.eventKeys)
+    if (crashCopy.missing.length > 0) {
+      manifest.missing_crash_attachments = crashCopy.missing
+    }
     HarmonyDiagnosticsArchive.writeTextFile(
       stagingDir, 'diagnostics_manifest.json', JSON.stringify(manifest, null, 2)
     )
@@ -411,9 +425,15 @@ async function runFaultCapture(request: DiagnosticsFaultCaptureRequest): Promise
     }
 
     stage = 'fault_compress'
-    const archivePath = await publishFaultArchive(
-      request.outputDir, request.logDir, request.crashesDir, request.manifest, eventKey, state
-    )
+    const progress: FaultPublishProgress = { stage: 'fault_compress' }
+    let archivePath = ''
+    try {
+      archivePath = await publishFaultArchive(
+        request.outputDir, request.logDir, request.crashesDir, request.manifest, eventKey, state, progress
+      )
+    } catch (e) {
+      return failureResult(request.requestId, progress.stage, errorName(e), '', startedAt)
+    }
 
     stage = 'fault_complete'
     writeFaultCompletion(eventDir, eventKey, archivePath, state)
@@ -429,6 +449,7 @@ async function runFaultCapture(request: DiagnosticsFaultCaptureRequest): Promise
 async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promise<DiagnosticsWorkerResult> {
   const startedAt = Date.now()
   let stage: DiagnosticsArchiveStage = 'fault_recovery'
+  let failureStage: DiagnosticsArchiveStage = 'fault_recovery'
   let incomplete = 0
   let failed = 0
   try {
@@ -450,6 +471,8 @@ async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promi
       if (!fileExists(`${eventDir}/params.json`) || isFaultComplete(eventDir)) {
         continue
       }
+      let eventFailureStage: DiagnosticsArchiveStage = 'fault_recovery'
+      stage = 'fault_recovery'
       try {
         const completePath = `${eventDir}/${FAULT_COMPLETE_FILE}`
         if (fileExists(completePath)) {
@@ -457,7 +480,7 @@ async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promi
         }
         let state = readFaultAttachmentState(eventDir, entry)
         if (state === null) {
-          // 旧版本没有 fault-state.json：只能从 params 的 external_log_count
+          // 旧版本没有 fault-state.json：只能从 params.params.external_log_count
           // 恢复预期数量；没有该字段就保持 incomplete，绝不把 partial 包标记完成。
           const expected = readExternalLogCountFromParams(eventDir)
           if (expected < 0) {
@@ -465,6 +488,8 @@ async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promi
             continue
           }
           state = createFaultAttachmentState(entry, expected, false)
+          // 状态丢失时，已存在的 fault-N.log 只能按文件完整性恢复；.tmp 不算完成。
+          restoreFaultAttachmentEntriesFromFiles(eventDir, state)
           writeFaultAttachmentState(eventDir, state)
         } else {
           const expected = readExternalLogCountFromParams(eventDir)
@@ -479,24 +504,33 @@ async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promi
           continue
         }
         stage = 'fault_compress'
-        const archivePath = await publishFaultArchive(
-          request.outputDir, request.logDir, request.crashesDir, request.manifest, entry, state
-        )
+        const progress: FaultPublishProgress = { stage: 'fault_compress' }
+        let archivePath = ''
+        try {
+          archivePath = await publishFaultArchive(
+            request.outputDir, request.logDir, request.crashesDir, request.manifest, entry, state, progress
+          )
+        } catch (e) {
+          eventFailureStage = progress.stage
+          throw new Error('fault publish failed')
+        }
         stage = 'fault_complete'
+        failureStage = 'fault_complete'
         writeFaultCompletion(eventDir, entry, archivePath, state)
       } catch (e) {
         failed += 1
+        failureStage = eventFailureStage
         hilog.warn(0x0000, LOG_TAG, 'fault recovery event failed: stage=%{public}s reason=%{public}s',
-          stage, errorName(e))
+          eventFailureStage, errorName(e))
       }
+    }
+    if (failed > 0) {
+      return failureResult(request.requestId, failureStage,
+        `fault_recovery_failed:${failed}`, '', startedAt)
     }
     if (incomplete > 0) {
       return failureResult(request.requestId, 'fault_log_copy',
         `fault_recovery_incomplete:${incomplete}`, '', startedAt)
-    }
-    if (failed > 0) {
-      return failureResult(request.requestId, 'fault_recovery',
-        `fault_recovery_failed:${failed}`, '', startedAt)
     }
     return successResult(request.requestId, 'fault_complete', '', startedAt)
   } catch (e) {
@@ -506,14 +540,20 @@ async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promi
 
 async function publishFaultArchive(outputDir: string, logDir: string, crashesDir: string,
   meta: DiagnosticsArchiveManifestMeta, eventKey: string,
-  state: FaultAttachmentState): Promise<string> {
+  state: FaultAttachmentState, progress: FaultPublishProgress): Promise<string> {
   const stagingDir = `${outputDir}/.staging-fault-${eventKey}-${Date.now()}-${Math.floor(Math.random() * 1000000)}`
   try {
+    progress.stage = 'staging_cleanup'
     cleanStaleStaging(outputDir)
     HarmonyDiagnosticsArchive.removeTree(stagingDir)
     ensureDirectory(stagingDir)
+    progress.stage = 'log_copy'
     const logSummary = copyPersistedLogs(logDir, stagingDir)
-    const crashEvents = copyCrashAttachments(crashesDir, stagingDir, 'fault', eventKey, 0)
+    // fault 包不能沿用非关键的 crash_copy：params、state 和每份已确认日志
+    // 必须真实进入 staging，否则 complete.json 的含义就不成立。
+    progress.stage = 'fault_archive_attachment_copy'
+    const crashEvents = copyFaultAttachmentsStrict(crashesDir, stagingDir, eventKey, state)
+    progress.stage = 'manifest_write'
     const manifest = buildManifestFrom(meta, 'fault', eventKey, logSummary, [], crashEvents)
     manifest.fault_status = 'complete'
     manifest.expected_external_log_count = state.expectedExternalLogCount
@@ -522,11 +562,100 @@ async function publishFaultArchive(outputDir: string, logDir: string, crashesDir
     HarmonyDiagnosticsArchive.writeTextFile(
       stagingDir, 'diagnostics_manifest.json', JSON.stringify(manifest, null, 2)
     )
+    progress.stage = 'fault_compress'
     return await HarmonyDiagnosticsArchive.compressDirectory(
       stagingDir, outputDir, `sujian-diagnostics-fault-${eventKey}`, true
     )
   } finally {
     HarmonyDiagnosticsArchive.removeTree(stagingDir)
+  }
+}
+
+// fault 包的严格附件投影：params.json、fault-state.json 和 state.attachments 中
+// 每个已确认的 fault-N.log 都必须成功写入 staging；任何缺失/读失败/空文件都
+// 抛出，阻止 manifest、压缩和 complete.json。
+function copyFaultAttachmentsStrict(crashesDir: string, stagingDir: string,
+  eventKey: string, state: FaultAttachmentState): string[] {
+  if (!EVENT_KEY_PATTERN.test(eventKey)) {
+    throw new Error('fault event key invalid')
+  }
+  const eventDir = `${crashesDir}/${eventKey}`
+  if (!fileExists(eventDir)) {
+    throw new Error('fault event directory missing')
+  }
+  try {
+    if (!fs.statSync(eventDir).isDirectory()) {
+      throw new Error('fault event path is not a directory')
+    }
+  } catch (e) {
+    throw new Error('fault event directory unreadable')
+  }
+  if (state.attachments.length !== state.expectedExternalLogCount) {
+    throw new Error('fault attachment state count mismatch')
+  }
+  if (state.confirmedExternalLogCount < state.expectedExternalLogCount) {
+    throw new Error('fault attachments incomplete')
+  }
+  copyFaultFileStrict(eventDir, stagingDir, eventKey, 'params.json', -1)
+  copyFaultFileStrict(eventDir, stagingDir, eventKey, FAULT_STATE_FILE, -1)
+  for (const entry of state.attachments) {
+    if (!entry.complete) {
+      throw new Error('fault attachment not confirmed')
+    }
+    copyFaultFileStrict(eventDir, stagingDir, eventKey, entry.fileName, entry.size)
+  }
+  return [eventKey]
+}
+
+function copyFaultFileStrict(eventDir: string, stagingDir: string, eventKey: string,
+  fileName: string, expectedSize: number): void {
+  const sourcePath = `${eventDir}/${fileName}`
+  if (!fileExists(sourcePath)) {
+    throw new Error('fault attachment missing')
+  }
+  let sourceSize = 0
+  try {
+    const sourceStat = fs.statSync(sourcePath)
+    if (!sourceStat.isFile()) {
+      throw new Error('fault attachment is not a file')
+    }
+    sourceSize = sourceStat.size
+  } catch (e) {
+    throw new Error('fault attachment unreadable')
+  }
+  if (expectedSize >= 0 && sourceSize !== expectedSize) {
+    throw new Error('fault attachment size mismatch')
+  }
+  if (sourceSize === 0 && expectedSize !== 0) {
+    throw new Error('fault attachment empty')
+  }
+  let content = ''
+  try {
+    content = readTextFile(sourcePath)
+  } catch (e) {
+    throw new Error('fault attachment read failed')
+  }
+  try {
+    HarmonyDiagnosticsArchive.writeTextFile(
+      stagingDir, `crashes/${eventKey}/${fileName}`, content
+    )
+  } catch (e) {
+    throw new Error('fault attachment staging write failed')
+  }
+  const stagedPath = `${stagingDir}/crashes/${eventKey}/${fileName}`
+  try {
+    const stagedStat = fs.statSync(stagedPath)
+    if (!stagedStat.isFile()) {
+      throw new Error('fault attachment staging missing')
+    }
+    if (expectedSize === 0 && stagedStat.size !== 0) {
+      throw new Error('fault attachment staging size mismatch')
+    }
+    if (expectedSize !== 0 && stagedStat.size === 0) {
+      throw new Error('fault attachment staging empty')
+    }
+  } catch (e) {
+    throw new Error('fault attachment staging verification failed')
   }
 }
 
@@ -715,6 +844,29 @@ function refreshFaultAttachmentState(eventDir: string, state: FaultAttachmentSta
   writeFaultAttachmentState(eventDir, state)
 }
 
+// fault-state.json 丢失时只能从事件目录恢复：存在非空 final fault-N.log 且不是
+// 遗留 .tmp，才按实际大小标记完成。缺失的附件保持 incomplete，等待系统回放。
+function restoreFaultAttachmentEntriesFromFiles(eventDir: string, state: FaultAttachmentState): void {
+  for (const entry of state.attachments) {
+    if (entry.complete) {
+      continue
+    }
+    const targetPath = `${eventDir}/${entry.fileName}`
+    if (!fileExists(targetPath)) {
+      continue
+    }
+    try {
+      const stat = fs.statSync(targetPath)
+      if (stat.isFile() && stat.size > 0) {
+        entry.complete = true
+        entry.size = stat.size
+      }
+    } catch (_) {
+      entry.complete = false
+    }
+  }
+}
+
 function countConfirmedAttachments(eventDir: string, state: FaultAttachmentState): number {
   let confirmed = 0
   for (const entry of state.attachments) {
@@ -758,6 +910,7 @@ function isFaultComplete(eventDir: string): boolean {
   }
   refreshFaultAttachmentState(eventDir, state)
   if (state.expectedExternalLogCount !== completion.expectedExternalLogCount ||
+    state.attachments.length !== state.expectedExternalLogCount ||
     state.confirmedExternalLogCount < state.expectedExternalLogCount ||
     completion.confirmedExternalLogCount < completion.expectedExternalLogCount) {
     return false
@@ -825,6 +978,14 @@ function writeFaultCompletion(eventDir: string, eventKey: string, archivePath: s
 function readExternalLogCountFromParams(eventDir: string): number {
   try {
     const parsed = JSON.parse(readTextFile(`${eventDir}/params.json`)) as Record<string, Object>
+    const params = parsed['params']
+    if (params !== null && typeof params === 'object' && !Array.isArray(params)) {
+      const nested = (params as Record<string, Object>)['external_log_count']
+      if (typeof nested === 'number' && nested >= 0) {
+        return normalizeCount(nested)
+      }
+    }
+    // 兼容历史顶层字段。
     const value = parsed['external_log_count']
     if (typeof value === 'number' && value >= 0) {
       return normalizeCount(value)
@@ -980,6 +1141,16 @@ function sanitizeEventKey(key: string): string {
   return key.replace(/[^A-Za-z0-9_-]/g, '_')
 }
 
+function uniqueStrings(values: string[]): string[] {
+  const unique: string[] = []
+  for (const value of values) {
+    if (unique.indexOf(value) < 0) {
+      unique.push(value)
+    }
+  }
+  return unique
+}
+
 function writeAttachment(stagingDir: string, attachment: DiagnosticsArchiveAttachment): void {
   if (attachment.relativePath.length === 0 || attachment.relativePath.startsWith('/') ||
     attachment.relativePath.includes('..') || attachment.relativePath.includes('\\')) {
@@ -1023,18 +1194,28 @@ function copyPersistedLogs(logDir: string, stagingDir: string): LogSummary {
 }
 
 function copyCrashAttachments(crashesDir: string, stagingDir: string, archiveKind: string,
-  eventKey: string, recentCrashLimit: number): string[] {
-  const copied: string[] = []
+  eventKey: string, recentCrashLimit: number): CrashAttachmentCopyResult {
+  const eventKeys: string[] = []
+  const missing: string[] = []
   if (!fileExists(crashesDir)) {
-    return copied
+    return { eventKeys: eventKeys, missing: missing }
+  }
+  if (archiveKind === 'fault') {
+    // fault 路径不接受“跳过并继续”：严格函数会把任何未进入 staging 的必需
+    // 附件抛给 publishFaultArchive 的 fault_archive_attachment_copy 阶段。
+    if (!EVENT_KEY_PATTERN.test(eventKey)) {
+      throw new Error('fault event key invalid')
+    }
+    const state = readFaultAttachmentState(`${crashesDir}/${eventKey}`, eventKey)
+    if (state === null) {
+      throw new Error('fault attachment state missing')
+    }
+    refreshFaultAttachmentState(`${crashesDir}/${eventKey}`, state)
+    const copied = copyFaultAttachmentsStrict(crashesDir, stagingDir, eventKey, state)
+    return { eventKeys: copied, missing: missing }
   }
   const candidates: CrashCandidate[] = []
-  if (archiveKind === 'fault') {
-    if (EVENT_KEY_PATTERN.test(eventKey)) {
-      const candidate: CrashCandidate = { eventKey: eventKey, mtime: 0 }
-      candidates.push(candidate)
-    }
-  } else if (recentCrashLimit > 0) {
+  if (recentCrashLimit > 0) {
     try {
       for (const entry of fs.listFileSync(crashesDir)) {
         if (!EVENT_KEY_PATTERN.test(entry)) {
@@ -1047,47 +1228,64 @@ function copyCrashAttachments(crashesDir: string, stagingDir: string, archiveKin
             candidates.push(candidate)
           }
         } catch (_) {
+          missing.push(`crashes/${entry}`)
         }
       }
     } catch (_) {
-      return copied
+      missing.push('crashes')
+      return { eventKeys: eventKeys, missing: missing }
     }
     candidates.sort((left: CrashCandidate, right: CrashCandidate): number => right.mtime - left.mtime)
   }
 
-  const limit = archiveKind === 'fault' ? candidates.length : recentCrashLimit
-  for (let index = 0; index < candidates.length && index < limit; index++) {
-    const eventDir = `${crashesDir}/${candidates[index].eventKey}`
+  for (let index = 0; index < candidates.length && index < recentCrashLimit; index++) {
+    const key = candidates[index].eventKey
+    const eventDir = `${crashesDir}/${key}`
     if (!fileExists(eventDir)) {
+      missing.push(`crashes/${key}`)
       continue
     }
+    let names: string[] = []
     try {
-      for (const fileName of fs.listFileSync(eventDir)) {
-        if (fileName !== 'params.json' && fileName !== FAULT_STATE_FILE &&
-          !CRASH_FILE_PATTERN.test(fileName)) {
+      names = fs.listFileSync(eventDir)
+    } catch (_) {
+      missing.push(`crashes/${key}`)
+      continue
+    }
+    const required: string[] = ['params.json', FAULT_STATE_FILE]
+    for (const requiredName of required) {
+      if (names.indexOf(requiredName) < 0) {
+        missing.push(`crashes/${key}/${requiredName}`)
+      }
+    }
+    for (const fileName of names) {
+      if (fileName !== 'params.json' && fileName !== FAULT_STATE_FILE &&
+        !CRASH_FILE_PATTERN.test(fileName)) {
+        continue
+      }
+      const relativePath = `crashes/${key}/${fileName}`
+      const sourcePath = `${eventDir}/${fileName}`
+      try {
+        const stat = fs.statSync(sourcePath)
+        if (!stat.isFile() || stat.size === 0) {
+          missing.push(relativePath)
           continue
         }
-        try {
-          const content = readTextFile(`${eventDir}/${fileName}`)
-          if (content.length > 0) {
-            HarmonyDiagnosticsArchive.writeTextFile(
-              stagingDir, `crashes/${candidates[index].eventKey}/${fileName}`, content
-            )
-            copied.push(candidates[index].eventKey)
-          }
-        } catch (_) {
+        const content = readTextFile(sourcePath)
+        if (content.length === 0) {
+          missing.push(relativePath)
+          continue
         }
+        HarmonyDiagnosticsArchive.writeTextFile(stagingDir, relativePath, content)
+        if (eventKeys.indexOf(key) < 0) {
+          eventKeys.push(key)
+        }
+      } catch (_) {
+        missing.push(relativePath)
       }
-    } catch (_) {
     }
   }
-  const unique: string[] = []
-  for (const event of copied) {
-    if (unique.indexOf(event) < 0) {
-      unique.push(event)
-    }
-  }
-  return unique
+  return { eventKeys: eventKeys, missing: uniqueStrings(missing) }
 }
 
 function buildManifest(request: DiagnosticsArchiveRequest, logs: LogSummary,

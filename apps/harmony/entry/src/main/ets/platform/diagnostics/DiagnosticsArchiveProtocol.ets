@@ -27,6 +27,7 @@ export type DiagnosticsArchiveStage =
   'snapshot_write' |
   'fault_prepare' |
   'fault_log_copy' |
+  'fault_archive_attachment_copy' |
   'fault_compress' |
   'fault_complete' |
   'fault_recovery' |
