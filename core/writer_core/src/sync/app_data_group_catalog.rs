@@ -769,13 +769,30 @@ mod tests {
             panic!("valid stats event path must map to a device id");
         };
         assert_eq!(device_id, "device-abc");
-        // 目录名、非法日期与非事件文件都不属于统计设备组。
+        // 连续性缺口原子记录随来源设备统计组同步。
+        let gap_path = format!(
+            "stats/events/device-abc/proof/chapter-1.gaps/{}.json",
+            "a".repeat(64)
+        );
+        assert_eq!(
+            crate::sync::types::stats_device_id_for_event_path(&gap_path),
+            Some("device-abc".to_string())
+        );
+        // 目录名、非法日期、非事件文件与不完整的缺口路径都不属于统计设备组。
         assert!(crate::sync::types::stats_device_id_for_event_path(
             "stats/events/device-abc/readme.txt"
         )
         .is_none());
         assert!(crate::sync::types::stats_device_id_for_event_path(
             "stats/events/device-abc/2024-13-01.events.jsonl"
+        )
+        .is_none());
+        assert!(crate::sync::types::stats_device_id_for_event_path(
+            "stats/events/device-abc/proof/chapter-1.gaps/not-a-record.json"
+        )
+        .is_none());
+        assert!(crate::sync::types::stats_device_id_for_event_path(
+            "stats/events/device-abc/proof/chapter-1.gaps/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/extra.json"
         )
         .is_none());
 

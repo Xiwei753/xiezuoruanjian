@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::writing_stats::checkpoint::is_safe_checkpoint_segment;
+
 /// 同步错误分类 — provider-neutral 纯枚举，不携带可变文案，不含 GitHub/Git 特定语义。
 ///
 /// 通用 core 只保留 provider-neutral 分类，
@@ -302,7 +304,8 @@ pub(crate) fn is_agent_conversation_path(rel_path: &str) -> bool {
 /// 认可 `stats/events/<device_id>/YYYY-MM-DD.events.jsonl`、同目录下的
 /// `YYYY-MM-DD.sessions.jsonl`（真实计时切片）、`YYYY-MM-DD.objects.jsonl`
 /// （星图/标签/超链接等对象贡献事件）、`YYYY-MM-DD.ai.jsonl`（AI 请求输入 /
-/// 模型响应输出独立事实），以及同设备分区内的 `proof/<chapter>.checkpoints.jsonl` 与
+/// 模型响应输出独立事实），以及同设备分区内的 `proof/<chapter>.checkpoints.jsonl`、
+/// `proof/<chapter>.gaps/<64位十六进制记录ID>.json` 与
 /// `proof/archive/YYYY-MM-DD.events.jsonl.zst`。
 /// 其它设备的证明/归档文件只能同步为只读，不接受本机写入。
 pub(crate) fn stats_device_id_for_event_path(rel_path: &str) -> Option<String> {
@@ -324,13 +327,28 @@ pub(crate) fn stats_device_id_for_event_path(rel_path: &str) -> Option<String> {
         }
         return Some(device_id.to_string());
     }
-    // 证明检查点：<device>/proof/<chapter>.checkpoints.jsonl。
+    // 证明检查点与连续性缺口：<device>/proof/<chapter>.checkpoints.jsonl、
+    // <device>/proof/<chapter>.gaps/<64位十六进制记录ID>.json。
     if let Some(name) = tail.strip_prefix("proof/") {
         if !name.contains('/')
             && name.len() > ".checkpoints.jsonl".len()
             && name.ends_with(".checkpoints.jsonl")
         {
             return Some(device_id.to_string());
+        }
+        if let Some((chapter_segment, record)) = name.split_once('/') {
+            if let Some(chapter) = chapter_segment.strip_suffix(".gaps") {
+                let record = record.as_bytes();
+                if is_safe_checkpoint_segment(chapter)
+                    && record.len() == 64 + ".json".len()
+                    && record.ends_with(b".json")
+                    && record[..64]
+                        .iter()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                {
+                    return Some(device_id.to_string());
+                }
+            }
         }
     }
     // 封口归档段：<device>/proof/archive/YYYY-MM-DD.events.jsonl.zst。

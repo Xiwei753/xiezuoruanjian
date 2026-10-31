@@ -587,6 +587,15 @@ mod tests {
             "starmaps/x.json",
             crate::sync::types::SyncScope::App
         ));
+        // 章节连续性缺口原子记录随来源设备统计组同步。
+        let gap_path = format!(
+            "stats/events/device-abc/proof/chapter-1.gaps/{}.json",
+            "a".repeat(64)
+        );
+        assert!(SyncService::is_whitelisted_path(
+            &gap_path,
+            crate::sync::types::SyncScope::App
+        ));
         // Issue #1005: Android 设备配色快照不进入 App 同步。
         assert!(!SyncService::is_whitelisted_path(
             "themes/palettes/dark.json",
