@@ -200,6 +200,7 @@ export struct SettingsContent {
   private wideColumnScroller0: Scroller = new Scroller()
   private wideColumnScroller1: Scroller = new Scroller()
   private instanceToken: string = ''
+  private lifecycleDisposed: boolean = false
   private syncRunPresentation: SyncRunPresentationState = SyncRunPresentationState.getInstance()
   private unsubscribeSyncRun: (() => void) | null = null
   // Issue #986：握姿侧订阅句柄。
@@ -216,6 +217,8 @@ export struct SettingsContent {
   aboutToAppear() {
     settingsContentInstanceSeq++
     this.instanceToken = String(settingsContentInstanceSeq)
+    this.lifecycleDisposed = false
+    this.viewModel.beginDisplaySession()
     // Issue #982：搜索结果跳转到具体设置分类时展开该分类；普通进入不改变用户折叠状态。
     // 有精确 settingKey 时以真实控件所在分类为准（Core 索引的 section 可能仍是旧分类名）。
     const keySection: SettingsSectionId | null = this.initialSettingKey.length > 0
@@ -285,6 +288,8 @@ export struct SettingsContent {
   }
 
   aboutToDisappear() {
+    this.lifecycleDisposed = true
+    this.viewModel.endDisplaySession()
     if (this.sectionContextListener !== null) {
       SettingsSectionContext.unsubscribe(this.sectionContextListener)
       this.sectionContextListener = null
@@ -320,10 +325,21 @@ export struct SettingsContent {
   }
 
   private async loadSettingsAndSyncState(): Promise<void> {
+    const lifecycleToken: string = this.instanceToken
     await this.viewModel.loadData()
+    if (!this.isLifecycleCurrent(lifecycleToken)) {
+      return
+    }
     // Issue #982：数据到位后再尝试精确设置项定位，避免在静态默认值上滚动/高亮。
     this.tryApplyPendingLocate()
-    await Promise.all([this.refreshFullSyncState(), this.refreshLatestFullSyncReport()])
+    await Promise.all([
+      this.refreshFullSyncState(lifecycleToken),
+      this.refreshLatestFullSyncReport(lifecycleToken)
+    ])
+  }
+
+  private isLifecycleCurrent(token: string): boolean {
+    return !this.lifecycleDisposed && token === this.instanceToken
   }
 
   // ── Issue #982：搜索结果精确设置项定位 ──
@@ -509,9 +525,13 @@ export struct SettingsContent {
     }
   }
 
-  private async refreshFullSyncState(): Promise<void> {
+  private async refreshFullSyncState(lifecycleToken?: string): Promise<void> {
+    const token: string = lifecycleToken ?? this.instanceToken
     try {
       const result = await this.syncStateBridge.loadFullSyncState()
+      if (!this.isLifecycleCurrent(token)) {
+        return
+      }
       if (!result.success) {
         this.fullSyncState = null
         this.fullSyncStateReadError = result.errorCode ?? 'UNKNOWN'
@@ -520,14 +540,21 @@ export struct SettingsContent {
       this.fullSyncState = result.data ?? null
       this.fullSyncStateReadError = ''
     } catch (_e) {
+      if (!this.isLifecycleCurrent(token)) {
+        return
+      }
       this.fullSyncState = null
       this.fullSyncStateReadError = 'NATIVE_ERROR'
     }
   }
 
-  private async refreshLatestFullSyncReport(): Promise<void> {
+  private async refreshLatestFullSyncReport(lifecycleToken?: string): Promise<void> {
+    const token: string = lifecycleToken ?? this.instanceToken
     try {
       const result = await this.syncStateBridge.loadLatestFullSyncReport()
+      if (!this.isLifecycleCurrent(token)) {
+        return
+      }
       if (!result.success) {
         this.latestFullSyncReport = null
         this.latestFullSyncReportReadError = result.errorCode ?? 'UNKNOWN'
@@ -536,6 +563,9 @@ export struct SettingsContent {
       this.latestFullSyncReport = result.data ?? null
       this.latestFullSyncReportReadError = ''
     } catch (_e) {
+      if (!this.isLifecycleCurrent(token)) {
+        return
+      }
       this.latestFullSyncReport = null
       this.latestFullSyncReportReadError = 'NATIVE_ERROR'
     }

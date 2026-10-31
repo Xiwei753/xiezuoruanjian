@@ -28,6 +28,50 @@ import { EditorLayoutIdentity } from './editor_layout_identity'
 // Issue #629 评论18：NavigationLine 直接复用 LineLayout（已含 breakKind + caretStops）。
 export type NavigationLine = LineLayout
 
+/**
+ * Issue #1026：系统行的 caretStops 延迟到真正需要行内 offset↔x 映射时再生成。
+ * 缓存绑定当前布局身份（revision/text/font/contentWidth/line 边界）；
+ * 同一份稳定布局上的重复行导航查询复用已生成的行，不再每次逐 code point measure。
+ */
+export class LineCaretStopsCache {
+  private readonly revision: number
+  private readonly displayText: string
+  private readonly fontSize: number
+  private readonly contentWidth: number
+  private readonly lines: NavigationLine[]
+  private readonly stopsByLine: Map<number, CaretStop[]> = new Map<number, CaretStop[]>()
+
+  constructor(
+    revision: number,
+    displayText: string,
+    fontSize: number,
+    contentWidth: number,
+    lines: NavigationLine[],
+  ) {
+    this.revision = revision
+    this.displayText = displayText
+    this.fontSize = fontSize
+    this.contentWidth = contentWidth
+    this.lines = lines
+  }
+
+  matches(state: LineLayoutState): boolean {
+    return this.revision === state.revision
+      && this.displayText === state.displayText
+      && this.fontSize === state.fontSize
+      && this.contentWidth === state.contentWidth
+      && this.lines === state.lines
+  }
+
+  get(lineIndex: number): CaretStop[] | undefined {
+    return this.stopsByLine.get(lineIndex)
+  }
+
+  set(lineIndex: number, stops: CaretStop[]): void {
+    this.stopsByLine.set(lineIndex, stops)
+  }
+}
+
 // 带身份的行布局状态。
 // Issue #768 评论5835171266 第4项：新增 systemLayoutManager 字段。
 // 当此字段非 null 时，Up/Down 行导航用系统 LayoutManager API 取真实 x/offset，
@@ -43,6 +87,9 @@ export interface LineLayoutState extends EditorLayoutIdentity {
   // 把系统 API 的 px 坐标和编辑器的 vp 坐标互相转换。
   readonly pxToVp?: (value: number) => number
   readonly vpToPx?: (value: number) => number
+  // Issue #1026：系统行 caretStops 按需生成时使用的测量函数和行级缓存。
+  readonly measureTextFn?: (s: string) => number
+  readonly caretStopCache?: LineCaretStopsCache
 }
 
 export class LineNavigationResolver {
@@ -159,7 +206,7 @@ export class LineNavigationResolver {
     if (lineIdx < 0 || lineIdx >= state.lines.length) {
       return 0
     }
-    const stops = state.lines[lineIdx].caretStops
+    const stops = LineNavigationResolver.ensureCaretStops(state, lineIdx)
     return horizontalForOffset(stops, position.utf16Offset)
   }
 
@@ -171,11 +218,42 @@ export class LineNavigationResolver {
       return 0
     }
     const line = state.lines[lineIndex]
-    const stops = line.caretStops
+    const stops = LineNavigationResolver.ensureCaretStops(state, lineIndex)
     if (stops.length === 0) {
       return line.startUtf16
     }
     return offsetForHorizontal(stops, x)
+  }
+
+  /**
+   * Issue #1026：系统行只在真正需要时生成 caretStops。
+   * 同一 LineLayoutState 上按行缓存；缓存身份由 revision/text/font/contentWidth/行边界共同决定。
+   */
+  private static ensureCaretStops(state: LineLayoutState, lineIndex: number): CaretStop[] {
+    const line = state.lines[lineIndex]
+    if (line.caretStops.length > 0) {
+      return line.caretStops
+    }
+    const cache = state.caretStopCache
+    const measureTextFn = state.measureTextFn
+    if (cache === undefined || measureTextFn === undefined || !cache.matches(state)) {
+      return []
+    }
+    const cached = cache.get(lineIndex)
+    if (cached !== undefined) {
+      return cached
+    }
+    const rawStops = buildLineCaretStops(
+      state.displayText,
+      { start: line.startUtf16, end: line.endUtf16 },
+      measureTextFn,
+    )
+    const stops = rawStops.map((stop: CaretStop): CaretStop => ({
+      utf16Offset: stop.utf16Offset,
+      x: line.left + stop.x,
+    }))
+    cache.set(lineIndex, stops)
+    return stops
   }
 
   // ── Issue #768 评论5835171266 第4项：系统 LayoutManager 行导航 API ──
@@ -258,9 +336,8 @@ export class LineNavigationResolver {
    * 然后构造 LineLayoutState。
    * Issue #768 评论5835171266 第4项：把 layout 引用写入 systemLayoutManager，
    * 让行导航可以直接用系统 API。
-   * Issue #768 评论5836390597 第2项：API12~13 的 caretStops 不再为空数组。
-   * 用 buildLineCaretStops 生成行内 caret stops，再用 metrics.left 偏移每个 stop 的 x，
-   * 这样 API12~13 的 Up/Down 行导航能正确保持横向位置，不会跳到行首。
+   * Issue #768 评论5836390597 第2项：API12~13 的 Up/Down 行导航需要 caretStops。
+   * Issue #1026：改为真正查询时才按行生成并缓存，不再在每次整章布局时预生成。
    * 同时把系统行的真实 left（首行缩进时 > 0）放进 LineLayout，
    * API12~13 的 caret/selection/composition 都使用每行自己的 left/y/height。
    */
@@ -292,20 +369,10 @@ export class LineNavigationResolver {
       const height = pxToVp ? pxToVp(metrics.height) : metrics.height
       const left = pxToVp ? pxToVp(metrics.left) : metrics.left
 
-      // Issue #768 评论5836390597 第2项：用 buildLineCaretStops 生成行内 caret stops，
-      // 再用 metrics.left 偏移每个 stop 的 x，使 caretStops 反映真实行左边界。
-      let caretStops: CaretStop[] = []
-      if (measureTextFn !== undefined) {
-        const rawStops = buildLineCaretStops(
-          text,
-          { start: startUtf16, end: endUtf16 },
-          measureTextFn,
-        )
-        caretStops = rawStops.map((stop: CaretStop): CaretStop => ({
-          utf16Offset: stop.utf16Offset,
-          x: left + stop.x,
-        }))
-      }
+      // Issue #1026：系统行的 caretStops 不再在整章布局时预生成。
+      // 只有在 API12~13 行导航真正需要行内 offset↔x 映射时，
+      // 才由 LineNavigationResolver.ensureCaretStops 按行延迟生成并缓存。
+      const caretStops: CaretStop[] = []
 
       systemLines.push({
         startUtf16,
@@ -345,6 +412,11 @@ export class LineNavigationResolver {
       // Issue #776 评论5849108212 问题2：把 pxToVp/vpToPx 写入 state，供行导航调用系统 API 时使用。
       pxToVp,
       vpToPx,
+      // Issue #1026：按需生成系统行 caretStops 所需的测量函数和行级缓存。
+      measureTextFn,
+      caretStopCache: measureTextFn !== undefined
+        ? new LineCaretStopsCache(snapshot.revision, text, snapshot.fontSize, contentWidth, systemLines)
+        : undefined,
     }
   }
 }

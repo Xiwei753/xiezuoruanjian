@@ -16,28 +16,28 @@ export class NativeSettingsBridge {
 
   async getLocalSettings(): Promise<ResultEnvelope<LocalSettings>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeLoadLocalSettings()
+      const jsonStr: string = await (this.core.getNativeModule().nativeLoadLocalSettings() as Promise<string>)
       return this.core.decodeEnvelope<LocalSettings>(jsonStr, decodeLocalSettings)
     } catch (e) { return nativeError<LocalSettings>(e) }
   }
 
   async saveLocalSettings(settings: LocalSettings): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSaveLocalSettings(JSON.stringify(settings))
+      const jsonStr: string = await (this.core.getNativeModule().nativeSaveLocalSettings(JSON.stringify(settings)) as Promise<string>)
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) { return nativeError<boolean>(e) }
   }
 
   async getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeLoadSyncableSettings()
+      const jsonStr: string = await (this.core.getNativeModule().nativeLoadSyncableSettings() as Promise<string>)
       return this.core.decodeEnvelope<SyncableSettings>(jsonStr, decodeSyncableSettings)
     } catch (e) { return nativeError<SyncableSettings>(e) }
   }
 
   async saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSaveSyncableSettings(JSON.stringify(settings))
+      const jsonStr: string = await (this.core.getNativeModule().nativeSaveSyncableSettings(JSON.stringify(settings)) as Promise<string>)
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) { return nativeError<boolean>(e) }
   }

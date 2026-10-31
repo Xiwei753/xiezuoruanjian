@@ -35,7 +35,7 @@ export class NativeSyncBridge {
 
   async loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeLoadSyncConfig()
+      const jsonStr: string = await (this.core.getNativeModule().nativeLoadSyncConfig() as Promise<string>)
       // nativeLoadSyncConfig() 现在 resolve 标准错误信封（包括 success:false），
       // decodeEnvelope 会正确解析并透传 errorCode/userMessage。
       // catch 只处理真正的 JS 异常（如 native 模块不存在）。
@@ -45,7 +45,7 @@ export class NativeSyncBridge {
 
   async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSaveSyncConfig(JSON.stringify(config))
+      const jsonStr: string = await (this.core.getNativeModule().nativeSaveSyncConfig(JSON.stringify(config)) as Promise<string>)
       // nativeSaveSyncConfig() 现在 resolve 标准错误信封，parseEnvelope 会正确解析。
       // catch 只处理真正的 JS 异常。
       return this.core.parseEnvelope<boolean>(jsonStr)
@@ -54,7 +54,7 @@ export class NativeSyncBridge {
 
   async loadSyncSecrets(): Promise<ResultEnvelope<SyncSecrets>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeLoadSyncSecrets()
+      const jsonStr: string = await (this.core.getNativeModule().nativeLoadSyncSecrets() as Promise<string>)
       // nativeLoadSyncSecrets() 现在 resolve 标准错误信封，decodeEnvelope 会正确解析。
       // catch 只处理真正的 JS 异常。
       return this.core.decodeEnvelope<SyncSecrets>(jsonStr, decodeSyncSecrets)
@@ -63,7 +63,7 @@ export class NativeSyncBridge {
 
   async saveSyncSecrets(secrets: SyncSecrets): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSaveSyncSecrets(JSON.stringify(secrets))
+      const jsonStr: string = await (this.core.getNativeModule().nativeSaveSyncSecrets(JSON.stringify(secrets)) as Promise<string>)
       // nativeSaveSyncSecrets() 现在 resolve 标准错误信封，parseEnvelope 会正确解析。
       // catch 只处理真正的 JS 异常。
       return this.core.parseEnvelope<boolean>(jsonStr)
@@ -103,14 +103,14 @@ export class NativeSyncBridge {
 
   async loadAppSyncState(): Promise<ResultEnvelope<SyncState>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeLoadAppSyncState()
+      const jsonStr: string = await (this.core.getNativeModule().nativeLoadAppSyncState() as Promise<string>)
       return this.core.decodeEnvelope<SyncState>(jsonStr, decodeSyncState)
     } catch (e) { return nativeError<SyncState>(e) }
   }
 
   async saveAppSyncState(state: SyncState): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSaveAppSyncState(JSON.stringify(state))
+      const jsonStr: string = await (this.core.getNativeModule().nativeSaveAppSyncState(JSON.stringify(state)) as Promise<string>)
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) { return nativeError<boolean>(e) }
   }

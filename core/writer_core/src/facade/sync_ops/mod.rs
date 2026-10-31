@@ -316,7 +316,15 @@ impl super::WriterCore {
     fn init_sync_transport(
         &self,
     ) -> crate::error::Result<std::sync::Arc<dyn writer_platform_api::SyncTransport>> {
-        match self.sync_transport.as_ref() {
+        Self::init_sync_transport_from_factory(self.sync_transport.as_ref())
+    }
+
+    /// 锁外初始化同步传输。调用方负责在短锁内 clone factory 后释放锁。
+    #[cfg(feature = "github-api")]
+    fn init_sync_transport_from_factory(
+        sync_transport: Option<&writer_platform_api::SyncTransportFactory>,
+    ) -> crate::error::Result<std::sync::Arc<dyn writer_platform_api::SyncTransport>> {
+        match sync_transport {
             Some(transport_fn) => match transport_fn() {
                 Ok(t) => Ok(std::sync::Arc::from(t)),
                 Err(e) => Err(transport_init_failure_error(&e.category, &e.message)),

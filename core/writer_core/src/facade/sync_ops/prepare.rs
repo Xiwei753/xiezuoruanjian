@@ -251,6 +251,54 @@ impl crate::facade::WriterCore {
         )
     }
 
+    /// 锁外创建 provider。
+    ///
+    /// 调用方在短读锁内 clone `app_data_root` 与 `sync_transport` 后释放锁，再调用
+    /// 本函数；transport 初始化、Git 探测和 GitHub API 构造都不会占用 Core 锁。
+    pub(crate) fn create_sync_provider_unlocked(
+        app_data_root: &std::path::Path,
+        sync_transport: Option<&writer_platform_api::SyncTransportFactory>,
+        config: &crate::sync::SyncConfig,
+        secrets: &crate::sync::SyncSecrets,
+    ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
+        #[cfg(not(feature = "github-api"))]
+        let _ = sync_transport;
+        let create_github_api = |provider_config: &crate::sync::provider::ProviderConfig| {
+            #[cfg(feature = "github-api")]
+            {
+                let transport = Self::init_sync_transport_from_factory(sync_transport)?;
+                let crate::sync::provider::ProviderConfig::GitHub(github_config) = provider_config
+                else {
+                    return Err(crate::Error::Other(
+                        "GitHub API fallback requires github provider config".into(),
+                    ));
+                };
+                let runtime =
+                    crate::sync::provider::github::config::GitHubRuntimeConfig::from_persisted(
+                        github_config,
+                        secrets.provider_secrets.as_ref(),
+                    )
+                    .map_err(crate::Error::from)?;
+                Ok(Box::new(crate::sync::provider::github::GitHubProvider::new(
+                    runtime, transport,
+                ))
+                    as Box<dyn crate::sync::provider::SyncProvider>)
+            }
+            #[cfg(not(feature = "github-api"))]
+            {
+                let _ = provider_config;
+                Err(crate::Error::NotImplemented)
+            }
+        };
+
+        crate::sync::provider::router::create_provider(
+            config,
+            secrets,
+            app_data_root,
+            create_github_api,
+        )
+    }
+
     /// 初始化 sync transport，可选持久化 preflight 失败状态。
     ///
     /// `persist_preflight_failure = true`（用户同步路径）：失败时调

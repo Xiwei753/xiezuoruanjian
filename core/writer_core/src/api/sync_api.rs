@@ -768,13 +768,23 @@ impl WriterCoreApi {
         //   三段短锁 — 网络 IO 不持 core 写锁。
         // 1a. 短锁 A：创建 provider（transport 初始化可能涉及本地 IO）。
         let provider = if sync_config.enabled {
-            let core = self.core_write();
-            match core.create_sync_provider_for_plan(&sync_config, &secrets) {
+            // 短读锁只 clone 平台路径与 transport factory；provider 构造（含 Git 探测、
+            // GitHub API 初始化）在锁外完成，不阻塞设置/正文读取。
+            let (app_data_root, sync_transport) = {
+                let core = self.core_read();
+                (core.app_data_root.clone(), core.sync_transport.clone())
+            };
+            match crate::facade::WriterCore::create_sync_provider_unlocked(
+                &app_data_root,
+                sync_transport.as_ref(),
+                &sync_config,
+                &secrets,
+            ) {
                 Ok(p) => p,
                 Err(e) => {
                     //   provider 创建失败 → 返回错误，
                     // 不降级为空 catalog（dry-run 是预览，但不能返回假的远端事实）。
-                    log::warn!("[sync] dry-run: create_sync_provider_for_plan failed: {e}");
+                    log::warn!("[sync] dry-run: create_sync_provider_unlocked failed: {e}");
                     return Err(crate::api::error::WriterError::from(e));
                 }
             }
@@ -1102,13 +1112,21 @@ impl WriterCoreApi {
         //   load_remote_catalog 是网络 IO，必须在
         // core_write 作用域外执行，不阻塞正文/作品读取（ 拆锁路线）。
         //
-        // 1a. 短锁 A：创建 provider（transport 初始化可能涉及本地 IO）。
+        // 1a. 短读锁：只 snapshot 平台路径与 transport factory。
+        // provider 构造（transport 初始化、Git 探测、GitHub API 初始化）在锁外执行，
+        // 避免手动同步期间长时间占用 Core 锁阻塞设置/正文读取。
         let provider_phase =
             SyncDiagnosticPhase::start(diagnostic_operation_id, "provider_init", None);
-        let provider_result = {
-            let core = self.core_write();
-            core.create_sync_provider_for_plan(&sync_config, &secrets)
+        let (app_data_root, sync_transport) = {
+            let core = self.core_read();
+            (core.app_data_root.clone(), core.sync_transport.clone())
         };
+        let provider_result = crate::facade::WriterCore::create_sync_provider_unlocked(
+            &app_data_root,
+            sync_transport.as_ref(),
+            &sync_config,
+            &secrets,
+        );
         let provider = match provider_result {
             Ok(provider) => provider,
             Err(error) => {

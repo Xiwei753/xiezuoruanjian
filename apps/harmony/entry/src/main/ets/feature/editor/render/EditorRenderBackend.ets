@@ -267,6 +267,69 @@ export class EditorRenderBackend {
   }
 
   /**
+   * 仅重算光标/选区/composition 几何，复用已有行布局。
+   *
+   * Issue #1026：拖动选区时只更新目标光标和选区矩形，不重新遍历全部
+   * LineMetrics，也不为整章构建 caretStops。API14+ 优先用系统
+   * getRectsForRange；API12-13/fallback 只对选区/光标涉及的文本段测量。
+   */
+  static renderSelectionGeometry(
+    layout: LayoutManager | null,
+    lines: LineLayout[],
+    snapshot: EditorLayoutSnapshot,
+    contentWidth: number,
+    visualCaretAffinity: CaretAffinity,
+    isApi14Plus: boolean,
+    measureTextFn: (s: string) => number,
+    pxToVp: (value: number) => number,
+    cursorUtf16Override: number | null = null,
+  ): EditorRenderResult {
+    const base = EditorRenderBackend.render(snapshot)
+    const text = base.text
+    const cursorUtf16 = cursorUtf16Override === null ? base.cursorUtf16 : cursorUtf16Override
+    const selStart = Math.min(base.selectionStartUtf16, base.selectionEndUtf16)
+    const selEnd = Math.max(base.selectionStartUtf16, base.selectionEndUtf16)
+
+    let selectionRects: SelectionRect[] = []
+    let caretRect: CaretRect | null = null
+    let compositionUnderlineRects: CompositionUnderlineRect[] = []
+
+    if (layout !== null && isApi14Plus) {
+      selectionRects = EditorRenderBackend.buildSelectionRectsFromSystem(layout, selStart, selEnd, pxToVp)
+      caretRect = EditorRenderBackend.buildCaretRectFromSystem(
+        layout, lines, cursorUtf16, text, visualCaretAffinity, pxToVp,
+      )
+      compositionUnderlineRects = EditorRenderBackend.buildCompositionRectsFromSystem(
+        layout, base.compositionStartUtf16, base.compositionEndUtf16, pxToVp,
+      )
+    } else {
+      selectionRects = computeSelectionRectsFromLineLayouts(
+        text, lines, contentWidth, selStart, selEnd, measureTextFn,
+      )
+      caretRect = computeCaretRectFromLineLayouts(
+        text, lines, cursorUtf16, measureTextFn, visualCaretAffinity,
+      )
+      compositionUnderlineRects = computeCompositionUnderlineRectsFromLineLayouts(
+        text, lines, base.compositionStartUtf16, base.compositionEndUtf16, measureTextFn,
+      )
+    }
+
+    return {
+      text: base.text,
+      selectionStartUtf16: base.selectionStartUtf16,
+      selectionEndUtf16: base.selectionEndUtf16,
+      compositionStartUtf16: base.compositionStartUtf16,
+      compositionEndUtf16: base.compositionEndUtf16,
+      cursorUtf16,
+      revision: base.revision,
+      lines,
+      selectionRects,
+      caretRect,
+      compositionUnderlineRects,
+    }
+  }
+
+  /**
    * 从系统 LayoutManager 做命中测试。
    * 用 layout.getGlyphPositionAtCoordinate(x, y) 做命中测试，
    * 将系统 Affinity（UPSTREAM=0/DOWNSTREAM=1）映射到 CaretAffinity。

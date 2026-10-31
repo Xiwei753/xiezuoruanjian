@@ -87,6 +87,9 @@ export class SettingsViewModel {
   private diagnosticsExporter: HarmonyDiagnosticsExporter | null = null
   // 问题6：持有 NativeDiagnosticsBridge 实例，用于 clearHilogSnapshot
   private diagnosticsBridge: NativeDiagnosticsBridge = new NativeDiagnosticsBridge(new NativeCoreModule())
+  // 设置页显示生命周期：旧页面的异步加载结果不得覆盖新页面/新请求。
+  private loadGeneration: number = 0
+  private displaySessionActive: boolean = false
 
   // 问题4：折叠展开状态 — 通过 AppStorageV2 持久化，跨页面实例保留
   private presentationStore: SettingsPresentationStore = AppStorageV2.connect(
@@ -170,20 +173,46 @@ export class SettingsViewModel {
 
   // ── 加载数据 ──
 
+  /** 进入设置页：开启新的显示生命周期，之前未完成的加载全部失效。 */
+  beginDisplaySession(): void {
+    this.loadGeneration += 1
+    this.displaySessionActive = true
+  }
+
+  /** 离开设置页：让在途请求失效，避免旧结果继续写 ViewModel 或全局主题/调度器。 */
+  endDisplaySession(): void {
+    this.loadGeneration += 1
+    this.displaySessionActive = false
+  }
+
+  private isLoadCurrent(generation: number): boolean {
+    return this.displaySessionActive && generation === this.loadGeneration
+  }
+
   async loadData(): Promise<void> {
+    const loadGeneration: number = ++this.loadGeneration
     this.isLoading = true
 
     try {
       const settingsResult = await this.bridge.getLocalSettings()
       const syncConfigResult = await this.bridge.loadSyncConfig()
+      if (!this.isLoadCurrent(loadGeneration)) {
+        return
+      }
 
       try {
         const builtinResult = await this.bridge.listBuiltinThemes()
+        if (!this.isLoadCurrent(loadGeneration)) {
+          return
+        }
         if (builtinResult.success && builtinResult.data) {
           this.builtinThemes = builtinResult.data
           this.themeAdapter.setBuiltinThemes(builtinResult.data)
         }
       } catch (_e) {
+        if (!this.isLoadCurrent(loadGeneration)) {
+          return
+        }
         hilog.warn(DOMAIN, TAG, 'listBuiltinThemes failed')
       }
 
@@ -222,11 +251,15 @@ export class SettingsViewModel {
       }
 
       // 加载同步密钥，回填 token
-      await this.loadSyncSecrets()
+      await this.loadSyncSecrets(loadGeneration)
     } catch (err) {
-      hilog.error(DOMAIN, TAG, `Failed to load settings: ${err}`)
+      if (this.isLoadCurrent(loadGeneration)) {
+        hilog.error(DOMAIN, TAG, `Failed to load settings: ${err}`)
+      }
     } finally {
-      this.isLoading = false
+      if (this.isLoadCurrent(loadGeneration)) {
+        this.isLoading = false
+      }
     }
   }
 
@@ -516,9 +549,12 @@ export class SettingsViewModel {
   /**
    * 加载同步密钥，从结果中提取 token 回填到 syncToken。
    */
-  async loadSyncSecrets(): Promise<void> {
+  async loadSyncSecrets(loadGeneration?: number): Promise<void> {
     try {
       const result = await this.bridge.loadSyncSecrets()
+      if (loadGeneration !== undefined && !this.isLoadCurrent(loadGeneration)) {
+        return
+      }
       if (result.success && result.data) {
         if (result.data.providerSecrets) {
           const secrets = result.data.providerSecrets

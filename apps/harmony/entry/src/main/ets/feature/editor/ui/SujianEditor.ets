@@ -39,7 +39,7 @@ import { EditorRenderBackend, EditorRenderResult } from '../render/EditorRenderB
 import { SelectionRect, CaretRect, CompositionUnderlineRect, LineLayout, computeSelectionRectsFromLineLayouts } from '../render/editor_render_geometry'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
-import { SelectionController } from '../selection/SelectionController'
+import { SelectionController, VisualCaretChangeKind } from '../selection/SelectionController'
 import { EditorSemanticDispatcher, SemanticEditCommand } from '../input/EditorSemanticDispatcher'
 import { LineNavigationResolver, LineLayoutState, NavigationLine } from '../selection/LineNavigationResolver'
 import { CaretAffinity } from '../render/editor_layout_math'
@@ -63,7 +63,7 @@ import { EditorMotionCoordinator, DisplayedSnapshotContext, PreparedCandidate } 
 import { RevisionPositionMap, PositionMapStep } from '../motion/editor_revision_position_map'
 import { EditorMotionLayer, ClipRect, MotionTextOverlayBuilder, MotionTextOverlayParams, MotionWindowSource } from '../motion/EditorMotionLayer'
 // Issue #879 最新复核评论修复（问题1）：EditorEditResult 用于收集事务链。
-import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
+import { EditorEditResult, EditorOperationKind } from '../../../corebridge/dto/EditorDtos'
 import { MappedCorrectionSuggestion } from '../correction/CorrectionDtos'
 import { AnnotationRangeDto } from '../../../corebridge/dto/AnnotationDtos'
 // Issue #879 复核评论修复（问题1/3/4）：前后台排版隔离 + 稳定运动字形源池。
@@ -357,6 +357,15 @@ export struct SujianEditor {
   private layoutRevision: number = 0
   private layoutGeneration: number = 0
   private layoutCompositionGeneration: number = 0
+  // Issue #1026：选区/光标变化时复用行布局的身份。
+  // 只有正文 revision、文本、字号、行距、自动缩进、内容宽度全部一致时，
+  // 才允许走 selection-only 几何更新，不重新构建行布局。
+  private layoutDisplayText: string = ''
+  private layoutFontSize: number = 0
+  private layoutLineSpacingMultiplier: number = 0
+  private layoutAutoIndentEnabled: boolean = false
+  private layoutAutoIndentWidth: number = 0
+  private layoutContentWidth: number = -1
   private visualCaretAffinity: string = 'downstream'
   // Issue #768 评论5837824666：缓存上一次布局完成后的行度量和行数，
   // 供 pushDiagnosticsSnapshot 在布局未完成时使用（避免读到旧 LayoutManager）。
@@ -408,8 +417,10 @@ export struct SujianEditor {
     // Issue #629 R7：订阅 SelectionController visual caret 变化，只触发重新布局。
     // 不再缓存 affinity——refreshRenderLayout() 每次从 owner 按当前 cursor 取。
     if (this.selectionController) {
-      this.selectionController.registerVisualCaretListener((_pos: VisualCaretPosition | null) => {
-        this.refreshRenderLayout()
+      this.selectionController.registerVisualCaretListener((position: VisualCaretPosition | null, changeKind: VisualCaretChangeKind) => {
+        // Issue #1026：visual caret 变化只改光标/选区，直接复用已有行布局。
+        // 只有文本/样式/宽度身份变化时才重新构建完整行布局。
+        this.refreshSelectionOnlyGeometry(position, changeKind)
         // Issue #768：光标/选区变化时推送诊断快照。
         this.pushDiagnosticsSnapshot()
       })
@@ -910,6 +921,25 @@ export struct SujianEditor {
       this.previousSnapshot = null
       this.previousLayout = []
       this.oldStyledString = null
+    }
+
+    // Issue #1026：setSelection 产生的 presentationUpdate 只改选区/光标，正文和
+    // 样式身份未变。直接复用已显示行布局更新选区/光标几何，不进入 StyledString
+    // 后台重排、不生成候选帧，也不重新构建整章行布局。
+    const selectionEdit = this.presentationUpdate.editResult
+    if (selectionEdit !== null
+      && selectionEdit.operationKind === EditorOperationKind.CursorOnly
+      && selectionEdit.displayPatches.length === 0
+      && this.displayedSnapshot !== null
+      && this.canReuseLayoutForSelection(this.presentationUpdate.layoutSnapshot)) {
+      const selectionSnapshot = this.presentationUpdate.layoutSnapshot
+      this.currentSnapshot = selectionSnapshot
+      this.displayedSnapshot = selectionSnapshot
+      this.latestCoreSnapshot = selectionSnapshot
+      this.displayedPresentation = this.presentationUpdate
+      this.refreshSelectionOnlyGeometry(null, 'selection')
+      this.pushDiagnosticsSnapshot()
+      return
     }
 
     // Issue #879 复核评论修复（问题1）：同会话内收到新 presentationUpdate 时，
@@ -2212,6 +2242,91 @@ export struct SujianEditor {
   // - API14+：用 getRectsForRange 获取选区/光标/composition 矩形，完全不需要 measureText
   // - API12-13：用 LineMetrics 获取行边界（折行/行高），用 measureText 算行内 x 坐标
   // - Fallback：LayoutManager 不可用时走旧的自计算路径
+  /**
+   * Issue #1026：选区/光标变化只重算目标几何，复用已有行布局。
+   * 文本 revision、文本、字号、行距、自动缩进、内容宽度任一变化，才回退完整布局。
+   */
+  private refreshSelectionOnlyGeometry(
+    position: VisualCaretPosition | null,
+    changeKind: VisualCaretChangeKind,
+  ): void {
+    if (changeKind !== 'selection') {
+      this.refreshRenderLayout()
+      return
+    }
+    const snap = this.currentSnapshot !== null ? this.currentSnapshot : this.displayedSnapshot
+    if (snap === null || this.contentWidth <= 0 || !this.canReuseLayoutForSelection(snap)) {
+      this.refreshRenderLayout()
+      return
+    }
+    const existing = this.renderResult
+    if (existing === null || existing.lines.length === 0) {
+      this.refreshRenderLayout()
+      return
+    }
+
+    let systemLayout: LayoutManager | null = null
+    if (this.lastLayoutSource === 'system') {
+      const layout = this.textController.getLayoutManager()
+      if (layout === null || layout === undefined || layout.getLineCount() !== existing.lines.length) {
+        this.refreshRenderLayout()
+        return
+      }
+      systemLayout = layout
+    }
+
+    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursorByteOffset)
+    const visualCaret = position
+      ?? this.selectionController?.getVisualCaret(cursorUtf16)
+      ?? { utf16Offset: cursorUtf16, affinity: CaretAffinity.Downstream }
+    const isApi14Plus = PlatformApiResolver.getInstance().isApiAtLeast(14)
+    const measureUtils = this.getUIContext().getMeasureUtils()
+    const measureTextFn = (s: string): number => {
+      return this.getUIContext().px2vp(measureUtils.measureText({ textContent: s, fontSize: snap.fontSize }))
+    }
+    const pxToVp = (value: number): number => this.getUIContext().px2vp(value)
+
+    try {
+      const result = EditorRenderBackend.renderSelectionGeometry(
+        systemLayout,
+        existing.lines,
+        snap,
+        this.contentWidth,
+        visualCaret.affinity,
+        isApi14Plus,
+        measureTextFn,
+        pxToVp,
+        visualCaret.utf16Offset,
+      )
+      this.renderResult = result
+      this.selectionRects = result.selectionRects
+      this.caretRect = result.caretRect
+      this.compositionUnderlineRects = result.compositionUnderlineRects
+      // 选区变化不影响批注/纠错范围；仅 composition 开始时清理旧纠错下划线。
+      if (snap.compositionStart !== null && this.correctionUnderlineRects.length > 0) {
+        this.correctionUnderlineRects = []
+      }
+      this.layoutGeneration = snap.generation
+      this.layoutCompositionGeneration = snap.compositionGeneration
+      this.visualCaretAffinity = visualCaret.affinity === CaretAffinity.Upstream ? 'upstream' : 'downstream'
+    } catch (_e) {
+      this.refreshRenderLayout()
+    }
+  }
+
+  private canReuseLayoutForSelection(snap: EditorLayoutSnapshot): boolean {
+    const result = this.renderResult
+    return result !== null
+      && result.lines.length > 0
+      && this.layoutRevision === snap.revision
+      && this.layoutDisplayText === snap.text
+      && this.layoutFontSize === snap.fontSize
+      && this.layoutLineSpacingMultiplier === snap.lineSpacingMultiplier
+      && this.layoutAutoIndentEnabled === snap.autoIndentEnabled
+      && this.layoutAutoIndentWidth === snap.autoIndentWidth
+      && this.layoutContentWidth === this.contentWidth
+  }
+
   private refreshRenderLayout(): void {
     // Issue #879 复核评论修复（问题3）：主 Text observer 只用 displayed 版本生成渲染几何——
     // 使用 displayedSnapshot 而非 currentSnapshot（可能已被 pending 更新覆盖）。
@@ -2398,6 +2513,12 @@ export struct SujianEditor {
       this.layoutRevision = snap.revision
       this.layoutGeneration = snap.generation
       this.layoutCompositionGeneration = snap.compositionGeneration
+      this.layoutDisplayText = snap.text
+      this.layoutFontSize = snap.fontSize
+      this.layoutLineSpacingMultiplier = snap.lineSpacingMultiplier
+      this.layoutAutoIndentEnabled = snap.autoIndentEnabled
+      this.layoutAutoIndentWidth = snap.autoIndentWidth
+      this.layoutContentWidth = this.contentWidth
       this.visualCaretAffinity = visualCaret.affinity === CaretAffinity.Upstream ? 'upstream' : 'downstream'
       // Issue #768 评论5837824666：缓存系统布局行数和当前行度量，供 pushDiagnosticsSnapshot 使用。
       this.lastSystemLayoutLineCount = systemLineCount
@@ -2460,6 +2581,12 @@ export struct SujianEditor {
     this.layoutRevision = snap.revision
     this.layoutGeneration = snap.generation
     this.layoutCompositionGeneration = snap.compositionGeneration
+    this.layoutDisplayText = snap.text
+    this.layoutFontSize = snap.fontSize
+    this.layoutLineSpacingMultiplier = snap.lineSpacingMultiplier
+    this.layoutAutoIndentEnabled = snap.autoIndentEnabled
+    this.layoutAutoIndentWidth = snap.autoIndentWidth
+    this.layoutContentWidth = this.contentWidth
     this.visualCaretAffinity = visualCaret.affinity === CaretAffinity.Upstream ? 'upstream' : 'downstream'
     // Issue #768 评论5837824666：缓存系统布局行数（fallback 路径无 LayoutManager，行数为 0）
     // 和当前行度量（从 renderResult.lines 获取，但 baseline/left/topHeight 不可用）。

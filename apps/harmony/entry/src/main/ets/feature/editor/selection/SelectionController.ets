@@ -21,6 +21,12 @@ interface VisualCaretIdentity {
   readonly compositionGeneration: number
 }
 
+/**
+ * Issue #1026：visual caret 变化只改光标/选区，不改正文排版。
+ * SujianEditor 据此直接复用已有行布局，只重算目标光标和选区矩形。
+ */
+export type VisualCaretChangeKind = 'selection'
+
 export class SelectionController {
   private coordinator: EditorSessionCoordinator
   // visual hint 绑定 revision/generation/compositionSessionId+compositionGeneration+offset。
@@ -28,7 +34,7 @@ export class SelectionController {
   // 无命中时返回默认 Downstream。
   private visualCaret: VisualCaretPosition | null = null
   private visualCaretIdentity: VisualCaretIdentity | null = null
-  private visualCaretListener: ((position: VisualCaretPosition | null) => void) | null = null
+  private visualCaretListener: ((position: VisualCaretPosition | null, changeKind: VisualCaretChangeKind) => void) | null = null
 
   constructor(coordinator: EditorSessionCoordinator) {
     this.coordinator = coordinator
@@ -47,7 +53,7 @@ export class SelectionController {
   }
 
   // Issue #629 评论18：注册 visual caret 监听器（SujianEditor 订阅后传 affinity 给 renderLayout）。
-  registerVisualCaretListener(listener: (position: VisualCaretPosition | null) => void): void {
+  registerVisualCaretListener(listener: (position: VisualCaretPosition | null, changeKind: VisualCaretChangeKind) => void): void {
     this.visualCaretListener = listener
   }
 
@@ -78,14 +84,14 @@ export class SelectionController {
   rememberVisualCaret(position: VisualCaretPosition): void {
     this.visualCaret = position
     this.visualCaretIdentity = this.currentIdentity()
-    this.visualCaretListener?.(position)
+    this.visualCaretListener?.(position, 'selection')
   }
 
   // Issue #629 评论18 + R10：发布 visual caret position（命中测试成功后调用）。
   private publishVisualCaret(position: VisualCaretPosition): void {
     this.visualCaret = position
     this.visualCaretIdentity = this.currentIdentity()
-    this.visualCaretListener?.(position)
+    this.visualCaretListener?.(position, 'selection')
   }
 
   // Issue #629 R11 评论5329310563 第3项：宽度/字体变化调用 invalidateVisualCaret。

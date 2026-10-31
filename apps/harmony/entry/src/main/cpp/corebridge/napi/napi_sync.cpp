@@ -9,8 +9,10 @@
 // 数秒至数分钟的 Rust Git/网络阻塞调用，统一交给 sync_native_worker.h 的
 // 专用工作线程 + napi_threadsafe_function（Issue #1011），不再占用 FFRT
 // 的 async work 执行线程。轻量级本地操作（config/secrets/state 读写）
-// 仍使用同步 ReturnJsonString；状态/冲突查询仍使用 async work。
+// 走 napi_json_async.h 的 async work，独立完成，不排在网络同步之后。
+// 状态/冲突查询仍使用 async work。
 
+#include "napi_json_async.h"
 #include "sync_native_worker.h"
 
 // ── Async work infrastructure for lightweight sync operations ──
@@ -95,32 +97,27 @@ static char* SyncDryRunExecute() {
     return writer_core_full_sync_dry_run();
 }
 
-// ── 轻量级本地操作（同步调用，不阻塞主线程） ──
+// ── 轻量级本地操作（异步，不阻塞主线程） ──
+
+static char* LoadSyncConfigExecute(const char* input) {
+    (void)input;
+    return writer_core_load_sync_config();
+}
+
+static char* SaveSyncConfigExecute(const char* input) {
+    return writer_core_save_sync_config(input);
+}
 
 static napi_value NativeLoadSyncConfig(napi_env env, napi_callback_info info) {
     (void)info;
-    return ReturnJsonString(env, writer_core_load_sync_config());
+    return NapiJsonAsyncSubmit(env, "NativeLoadSyncConfig", "", LoadSyncConfigExecute);
 }
 
 static napi_value NativeSaveSyncConfig(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_save_sync_config(json));
-    delete[] json;
-    return result;
+    std::string input;
+    NapiJsonAsyncReadArg(env, info, &input);
+    return NapiJsonAsyncSubmit(env, "NativeSaveSyncConfig", input.c_str(),
+                               SaveSyncConfigExecute);
 }
 
 // ── 异步同步操作（使用 napi_create_async_work + napi_create_promise） ──
@@ -142,58 +139,49 @@ static napi_value NativePerformSync(napi_env env, napi_callback_info info) {
     return SyncNativeWorkerSubmit(env, "NativePerformSync", PerformSyncExecute);
 }
 
-// ── 轻量级本地操作（同步调用，不阻塞主线程） ──
+// ── 轻量级本地操作（异步，不阻塞主线程） ──
+
+static char* LoadAppSyncStateExecute(const char* input) {
+    (void)input;
+    return writer_core_load_app_sync_state();
+}
+
+static char* SaveAppSyncStateExecute(const char* input) {
+    return writer_core_save_app_sync_state(input);
+}
 
 static napi_value NativeLoadAppSyncState(napi_env env, napi_callback_info info) {
     (void)info;
-    return ReturnJsonString(env, writer_core_load_app_sync_state());
+    return NapiJsonAsyncSubmit(env, "NativeLoadAppSyncState", "",
+                               LoadAppSyncStateExecute);
 }
 
 static napi_value NativeSaveAppSyncState(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string input;
+    NapiJsonAsyncReadArg(env, info, &input);
+    return NapiJsonAsyncSubmit(env, "NativeSaveAppSyncState", input.c_str(),
+                               SaveAppSyncStateExecute);
+}
 
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
+static char* LoadSyncSecretsExecute(const char* input) {
+    (void)input;
+    return writer_core_load_sync_secrets();
+}
 
-    napi_value result = ReturnJsonString(env, writer_core_save_app_sync_state(json));
-    delete[] json;
-    return result;
+static char* SaveSyncSecretsExecute(const char* input) {
+    return writer_core_save_sync_secrets(input);
 }
 
 static napi_value NativeLoadSyncSecrets(napi_env env, napi_callback_info info) {
     (void)info;
-    return ReturnJsonString(env, writer_core_load_sync_secrets());
+    return NapiJsonAsyncSubmit(env, "NativeLoadSyncSecrets", "", LoadSyncSecretsExecute);
 }
 
 static napi_value NativeSaveSyncSecrets(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_save_sync_secrets(json));
-    delete[] json;
-    return result;
+    std::string input;
+    NapiJsonAsyncReadArg(env, info, &input);
+    return NapiJsonAsyncSubmit(env, "NativeSaveSyncSecrets", input.c_str(),
+                               SaveSyncSecretsExecute);
 }
 
 // ── 全量同步状态 / 冲突查询与解决（Issue #925 / #926） ──

@@ -3,8 +3,7 @@ use super::types::*;
 
 impl WriterCoreApi {
     pub fn load_local_settings(&self) -> ApiResult<LocalSettingsDto> {
-        self.core_read()
-            .load_local_settings()
+        crate::settings::load_local_settings(&self.app_data_root)
             .map(Into::into)
             .map_err(Into::into)
     }
@@ -31,8 +30,7 @@ impl WriterCoreApi {
     }
 
     pub fn load_syncable_settings(&self) -> ApiResult<SyncableSettingsDto> {
-        self.core_read()
-            .load_syncable_settings()
+        crate::settings::load_syncable_settings(&self.app_data_root)
             .map(Into::into)
             .map_err(Into::into)
     }
