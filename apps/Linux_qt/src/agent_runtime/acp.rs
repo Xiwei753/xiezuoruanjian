@@ -291,7 +291,10 @@ impl AcpAdapter {
                 "name": server.name,
                 "command": server.command,
                 "args": server.args,
-                "env": server.env.iter().cloned().map(|(key, value)| (key, serde_json::Value::String(value))).collect::<serde_json::Map<String, serde_json::Value>>()
+                "env": server.env.iter().map(|(name, value)| json!({
+                    "name": name,
+                    "value": value,
+                })).collect::<Vec<_>>()
             })
         }).collect();
         let session_params = json!({

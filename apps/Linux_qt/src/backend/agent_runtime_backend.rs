@@ -638,9 +638,9 @@ impl AgentRuntimeBackend {
         self.mcp_status_changed();
     }
 
-    /// 复制当前作品可用的 sujian-mcp stdio 配置。外部 TUI 自行把这段
-    /// `command` / `args` / `env` 写入自己的 MCP 配置，终端工作目录仍是
-    /// 用户 HOME，不需要进入作品目录。
+    /// 复制当前作品可用的 sujian-mcp 接入信息。外部 TUI 各家的 MCP 配置
+    /// 外壳不同，这里只提供通用的 `command` / `args` / `env`，由用户按
+    /// 对应 TUI 的语法接入；终端工作目录仍是用户 HOME。
     fn copy_mcp_config(&mut self) {
         let Some((app_data_root, projects_root, actual_project_id)) = self
             .app_ref
@@ -667,24 +667,19 @@ impl AgentRuntimeBackend {
             .iter()
             .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
             .collect();
-        let mut servers = serde_json::Map::new();
-        servers.insert(
-            launch.name,
-            serde_json::json!({
-                "command": launch.command,
-                "args": launch.args,
-                "env": env,
-            }),
-        );
-        let config = serde_json::json!({ "mcpServers": servers });
+        let config = serde_json::json!({
+            "command": launch.command,
+            "args": launch.args,
+            "env": env,
+        });
         let text = serde_json::to_string_pretty(&config)
             .unwrap_or_else(|_| "{}".to_string());
         match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text)) {
             Ok(_) => {
                 self.set_error(String::new());
-                self.set_status("MCP 接入配置已复制，可粘贴到外部 TUI 的 MCP 配置中");
+                self.set_status("MCP 接入信息已复制，请按外部 TUI 的 MCP 配置语法填入");
             }
-            Err(error) => self.set_error(format!("复制 MCP 配置失败：{error}")),
+            Err(error) => self.set_error(format!("复制 MCP 接入信息失败：{error}")),
         }
     }
 

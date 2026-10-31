@@ -43,7 +43,7 @@ Item {
             }
 
             Button {
-                text: qsTr("复制 MCP 配置")
+                text: qsTr("复制 MCP 接入信息")
                 enabled: root.runtimeBackendRef !== null
                 onClicked: if (root.runtimeBackendRef)
                     root.runtimeBackendRef.copy_mcp_config()
