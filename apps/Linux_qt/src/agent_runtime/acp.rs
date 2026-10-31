@@ -51,17 +51,10 @@ impl AcpModelConfig {
     fn from_options(value: &Value) -> Option<Self> {
         let option = model_option(value)?;
         let config_id = option.get("id").and_then(Value::as_str)?.to_string();
-        let allowed = option
-            .get("options")
-            .or_else(|| option.get("values"))
-            .and_then(Value::as_array)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter_map(option_value_id)
-                    .collect::<HashSet<_>>()
-            })
-            .unwrap_or_default();
+        let allowed = flatten_select_options(option)
+            .into_iter()
+            .filter_map(option_value_id)
+            .collect::<HashSet<_>>();
         Some(Self {
             config_id,
             current: option_current_value(option),
@@ -76,6 +69,7 @@ pub struct AcpAdapter {
     emit: EventSink,
     state: Arc<Mutex<AcpTurnState>>,
     agent_id: String,
+    agent_name: String,
     /// 下一轮要使用的模型。模型切换不重建会话，只在 prompt 前同步给运行时。
     model: Option<String>,
     applied_model: Arc<Mutex<Option<String>>>,
@@ -439,6 +433,7 @@ impl AcpAdapter {
                 emit,
                 state,
                 agent_id: ctx.agent_id.clone(),
+                agent_name: ctx.agent_name.clone(),
                 model: ctx.model.clone(),
                 applied_model,
                 model_config,
@@ -524,6 +519,38 @@ fn option_current_value(option: &Value) -> Option<String> {
         .or_else(|| option.get("current").and_then(option_value_id))
 }
 
+/// ACP v1 的 select 选项既可能是平铺 `[{value,...}]`，也可能是按供应商/
+/// 类型分组的 `[{group,name,options:[{value,...}]}]`。两种结构必须用同一
+/// 份展开结果生成 allowed 与展示列表，不能把 group ID 当成模型 ID。
+fn flatten_select_options(option: &Value) -> Vec<&Value> {
+    fn push_entry<'a>(entry: &'a Value, result: &mut Vec<&'a Value>) {
+        if let Some(children) = entry.get("options").and_then(Value::as_array) {
+            // 分组容器带 `group` 和/或没有自身 value/id；内层才是模型值。
+            let is_group = entry.get("group").is_some()
+                || (entry.get("value").is_none() && entry.get("id").is_none());
+            if is_group {
+                for child in children {
+                    push_entry(child, result);
+                }
+                return;
+            }
+        }
+        result.push(entry);
+    }
+
+    let mut result = Vec::new();
+    if let Some(entries) = option
+        .get("options")
+        .or_else(|| option.get("values"))
+        .and_then(Value::as_array)
+    {
+        for entry in entries {
+            push_entry(entry, &mut result);
+        }
+    }
+    result
+}
+
 fn split_model_id(value: &str) -> (String, String) {
     match value.find('/') {
         Some(slash) if slash > 0 && slash < value.len() - 1 => {
@@ -539,14 +566,8 @@ fn models_from_option(
     fallback_provider_name: &str,
     current: Option<&str>,
 ) -> Vec<AgentModelInfo> {
-    let entries = option
-        .get("options")
-        .or_else(|| option.get("values"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    entries
-        .iter()
+    flatten_select_options(option)
+        .into_iter()
         .filter_map(|entry| {
             let id = option_value_id(entry)?;
             let (provider_id, model_id) = split_model_id(&id);
@@ -749,6 +770,7 @@ impl AgentAdapter for AcpAdapter {
         let state = self.state.clone();
         let dispatch = self.dispatch_lock.clone();
         let agent_id = self.agent_id.clone();
+        let agent_name = self.agent_name.clone();
         let selected_model = self.model.clone();
         let applied_model = self.applied_model.clone();
         let model_config = self.model_config.clone();
@@ -867,6 +889,17 @@ impl AgentAdapter for AcpAdapter {
                             Duration::from_secs(30),
                         ) {
                             Ok(result) => {
+                                // 官方 response 携带的是最新完整 configOptions；
+                                // 先整体替换模型配置/当前值/可选列表，再做本轮确认。
+                                publish_model_options(
+                                    &result,
+                                    &agent_id,
+                                    &agent_name,
+                                    &emit,
+                                    &applied_model,
+                                    &model_config,
+                                    &model_update_generation,
+                                );
                                 let response_confirmed = model_option(&result)
                                     .and_then(option_current_value);
                                 let actual = match response_confirmed {

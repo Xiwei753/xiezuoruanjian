@@ -67,6 +67,7 @@ impl AgentSessionManager {
             let reusable = self.context.as_ref().is_some_and(|existing| {
                 existing.agent_id == ctx.agent_id
                     && existing.launch_path == ctx.launch_path
+                    && existing.launch_args == ctx.launch_args
                     && existing.protocol == ctx.protocol
                     && existing.conversation_id == ctx.conversation_id
                     && existing.project_id == ctx.project_id
