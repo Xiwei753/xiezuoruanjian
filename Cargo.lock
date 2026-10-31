@@ -3112,7 +3112,6 @@ dependencies = [
  "log",
  "pkg-config",
  "qmetaobject",
- "reqwest",
  "rfd",
  "semver",
  "serde",

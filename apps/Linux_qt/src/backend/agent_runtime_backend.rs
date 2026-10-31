@@ -148,6 +148,7 @@ pub struct AgentRuntimeBackend {
     choose_model: qt_method!(fn(&mut self, model: QString)),
     refresh_models: qt_method!(fn(&mut self)),
     respond_to_permission: qt_method!(fn(&mut self, request_id: QString, option_id: QString)),
+    copy_mcp_config: qt_method!(fn(&mut self)),
     clear_error: qt_method!(fn(&mut self)),
 
     app_ref: AppRef,
@@ -237,6 +238,7 @@ impl AgentRuntimeBackend {
             choose_model: Default::default(),
             refresh_models: Default::default(),
             respond_to_permission: Default::default(),
+            copy_mcp_config: Default::default(),
             clear_error: Default::default(),
             app_ref,
             runtime: Arc::new(Mutex::new(AgentSessionManager::new())),
@@ -634,6 +636,56 @@ impl AgentRuntimeBackend {
         })
         .to_string();
         self.mcp_status_changed();
+    }
+
+    /// 复制当前作品可用的 sujian-mcp stdio 配置。外部 TUI 自行把这段
+    /// `command` / `args` / `env` 写入自己的 MCP 配置，终端工作目录仍是
+    /// 用户 HOME，不需要进入作品目录。
+    fn copy_mcp_config(&mut self) {
+        let Some((app_data_root, projects_root, actual_project_id)) = self
+            .app_ref
+            .with_app(|app| app.agent_project_context())
+            .ok()
+            .flatten()
+        else {
+            self.set_error("没有已打开的作品，无法生成 MCP 配置".to_string());
+            return;
+        };
+        let project_id = if !self.project_id.is_empty() && !self.project_id.starts_with("starmap:")
+        {
+            self.project_id.clone()
+        } else {
+            actual_project_id
+        };
+        let binding = bind_current_project(&app_data_root, &projects_root, &project_id);
+        let Some(launch) = binding.launch else {
+            self.set_error(binding.status);
+            return;
+        };
+        let env: serde_json::Map<String, serde_json::Value> = launch
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+            .collect();
+        let mut servers = serde_json::Map::new();
+        servers.insert(
+            launch.name,
+            serde_json::json!({
+                "command": launch.command,
+                "args": launch.args,
+                "env": env,
+            }),
+        );
+        let config = serde_json::json!({ "mcpServers": servers });
+        let text = serde_json::to_string_pretty(&config)
+            .unwrap_or_else(|_| "{}".to_string());
+        match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text)) {
+            Ok(_) => {
+                self.set_error(String::new());
+                self.set_status("MCP 接入配置已复制，可粘贴到外部 TUI 的 MCP 配置中");
+            }
+            Err(error) => self.set_error(format!("复制 MCP 配置失败：{error}")),
+        }
     }
 
     fn launch_roots(&self) -> Result<(String, String, String, String), String> {
@@ -1213,6 +1265,8 @@ impl AgentRuntimeBackend {
         let sink: EventSink = Arc::new(move |event: RuntimeEvent| callback(event));
         let runtime = self.runtime.clone();
         let message = text;
+        let diagnostic_agent_id = self.agent_id.clone();
+        let diagnostic_launch_path = self.launch_path.clone();
         let failure_conversation_id = self
             .conversation
             .as_ref()
@@ -1247,6 +1301,9 @@ impl AgentRuntimeBackend {
                     Err(_) => failure = Some("Agent 运行时状态锁已损坏".to_string()),
                 }
                 if let Some(error) = failure {
+                    log::warn!(
+                        "[agent] {diagnostic_agent_id}（{diagnostic_launch_path}）启动/发送失败：{error}"
+                    );
                     (sink)(RuntimeEvent {
                         conversation_id: failure_conversation_id,
                         generation: 0,
@@ -1856,6 +1913,11 @@ impl AgentRuntimeBackend {
                 finished = Some((false, String::new()));
             }
             AgentEvent::TurnFailed { message } => {
+                log::warn!(
+                    "[agent] 轮次失败（{} / {}）：{message}",
+                    conversation.agent_id,
+                    conversation.launch_path
+                );
                 if let Some(turn) = conversation.turn_mut(&core_turn_id) {
                     turn.fail(now_ms(), message.clone());
                 }

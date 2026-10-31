@@ -2,9 +2,8 @@
 // preferences.rs — Agent CLI 用户选择
 // =============================================================================
 //
-// 只持久化“用户的选择”和手工输入：选中 Agent、实际执行路径、自定义
-// manifest / 可执行文件、隐藏项。发现到的安装清单不写入配置，下次扫描
-// 重新以本机事实为准。
+// 只持久化用户选择：选中 Agent、实际执行路径和手工指定的可执行文件。
+// 发现到的安装清单不写入配置；旧配置里的第三方 Agent / manifest 会被忽略。
 // =============================================================================
 
 use std::fs;
@@ -18,7 +17,6 @@ pub struct AgentCliPreferences {
     pub selected_agent_id: String,
     pub selected_launch_path: String,
     pub custom_executables: Vec<String>,
-    pub agent_manifests: Vec<String>,
 }
 
 impl Default for AgentCliPreferences {
@@ -27,7 +25,6 @@ impl Default for AgentCliPreferences {
             selected_agent_id: String::new(),
             selected_launch_path: String::new(),
             custom_executables: Vec::new(),
-            agent_manifests: Vec::new(),
         }
     }
 }

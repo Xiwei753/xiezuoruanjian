@@ -75,16 +75,11 @@ fn agent_state_dirs(
     state_home: &Path,
     cache_home: &Path,
 ) -> Vec<PathBuf> {
-    let mut names: Vec<&str> = match agent_id {
-        "claude" => vec!["claude", "claude-code"],
+    let names: Vec<&str> = match agent_id {
         "codex" => vec!["codex"],
-        "gemini" => vec!["gemini"],
         "opencode" => vec!["opencode"],
-        other if !other.is_empty() => vec![other],
         _ => Vec::new(),
     };
-    names.sort_unstable();
-    names.dedup();
 
     let mut dirs = Vec::new();
     for name in names {
@@ -181,20 +176,6 @@ fn ensure_dir(path: &Path) -> Option<PathBuf> {
         return Some(path.to_path_buf());
     }
     std::fs::create_dir_all(path).ok()?;
-    Some(path.to_path_buf())
-}
-
-fn ensure_json_file(path: &Path) -> Option<PathBuf> {
-    if let Ok(metadata) = std::fs::metadata(path) {
-        if metadata.is_file() && metadata.len() > 0 {
-            return Some(path.to_path_buf());
-        }
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok()?;
-    }
-    // Claude 首次启动需要可写的 ~/.claude.json；空文件不是合法 JSON。
-    std::fs::write(path, b"{}").ok()?;
     Some(path.to_path_buf())
 }
 
@@ -304,17 +285,11 @@ impl WorkspaceAccess {
         ) {
             push_writable_dir(&mut command, &dir, &mut mounted)?;
         }
-        if self.agent_id == "claude" {
-            let config = self.home.join(".claude.json");
-            if let Some(config) = ensure_json_file(&config) {
-                if mounted.insert(config.clone()) {
-                    command.arg("--bind").arg(&config).arg(&config);
-                }
-            }
-        }
         // 用户显式设置的 CLI 配置目录/文件可能位于 HOME 之外，按实际路径
-        // 精确挂载；不读取也不记录认证文件内容。
-        for key in ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "OPENCODE_CONFIG_DIR"] {
+        // 精确挂载；不读取也不记录认证文件内容。OpenCode 的
+        // ~/.local/share/opencode/auth.json 已随数据目录整体可见，避免
+        // 沙箱内看不到已登录的付费供应商。
+        for key in ["CODEX_HOME", "OPENCODE_CONFIG_DIR"] {
             if let Some(path) = env_absolute_path(key) {
                 push_writable_dir(&mut command, &path, &mut mounted)?;
             }

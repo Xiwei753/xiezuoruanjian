@@ -7,6 +7,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
@@ -136,6 +137,27 @@ ColumnLayout {
             ToolTip.visible: hovered
             ToolTip.text: qsTr("重新扫描本机 CLI")
             onClicked: if (root.backendRef) root.backendRef.refresh_inventory()
+        }
+
+        // OpenCode / Codex 未在 PATH 中时，允许用户直接指定真实可执行文件。
+        ToolButton {
+            icon.name: "document-open-folder"
+            display: AbstractButton.IconOnly
+            ToolTip.visible: hovered
+            ToolTip.text: qsTr("选择 CLI 安装路径")
+            onClicked: cliPathDialog.open()
+        }
+    }
+
+    FileDialog {
+        id: cliPathDialog
+        title: qsTr("选择 OpenCode 或 Codex 可执行文件")
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            if (!root.backendRef)
+                return
+            var path = decodeURIComponent(String(selectedFile).replace(/^file:\/\//, ""))
+            root.backendRef.add_custom_executable(path)
         }
     }
 

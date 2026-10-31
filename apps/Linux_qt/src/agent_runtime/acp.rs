@@ -43,9 +43,6 @@ pub struct AcpAdapter {
     model: Option<String>,
     applied_model: Arc<Mutex<Option<String>>>,
     supports_model_switch: bool,
-    /// ACP 会话声明的模型 ID 集合。用于在切换前识别跨执行器的
-    /// `provider/model`，避免把其它 CLI 的目录结果发给当前 Agent。
-    model_ids: HashSet<String>,
     history_restored: bool,
     /// Only one session/prompt at a time. This lock belongs to prompt workers,
     /// never to the AgentSessionManager lock, so cancel can run immediately.
@@ -56,12 +53,16 @@ impl AcpAdapter {
     pub fn start(ctx: &AgentLaunchContext, emit: EventSink) -> Result<Self, String> {
         let session_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let state: Arc<Mutex<AcpTurnState>> = Arc::new(Mutex::new(AcpTurnState::default()));
+        let applied_model: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         // A Weak client avoids a cycle: RpcClient owns the reader handler.
         let handler_client: Arc<Mutex<Option<Weak<RpcClient>>>> = Arc::new(Mutex::new(None));
         let handler_emit = emit.clone();
         let handler_session = session_id.clone();
         let handler_state = state.clone();
         let handler_rpc = handler_client.clone();
+        let handler_applied_model = applied_model.clone();
+        let handler_provider_id = ctx.agent_id.clone();
+        let handler_provider_name = ctx.agent_name.clone();
         let handler: Arc<dyn Fn(&str, Value) + Send + Sync> =
             Arc::new(move |method: &str, message: Value| {
                 let params = message.get("params").cloned().unwrap_or_default();
@@ -139,8 +140,37 @@ impl AcpAdapter {
                                     ));
                                 }
                             }
+                            "config_option_update" => {
+                                let options = update
+                                    .get("configOptions")
+                                    .cloned()
+                                    .or_else(|| params.get("configOptions").cloned());
+                                if let Some(options) = options {
+                                    publish_model_options(
+                                        &options,
+                                        &handler_provider_id,
+                                        &handler_provider_name,
+                                        &handler_emit,
+                                        &handler_applied_model,
+                                    );
+                                }
+                            }
                             _ => {}
                         }
+                    }
+                    "config_option_update" => {
+                        let options = params
+                            .get("configOptions")
+                            .cloned()
+                            .or_else(|| params.get("configOption").cloned())
+                            .unwrap_or_else(|| params.clone());
+                        publish_model_options(
+                            &options,
+                            &handler_provider_id,
+                            &handler_provider_name,
+                            &handler_emit,
+                            &handler_applied_model,
+                        );
                     }
                     "session/request_permission" => {
                         let Some(request_id) = message.get("id").and_then(Value::as_i64) else {
@@ -221,13 +251,10 @@ impl AcpAdapter {
                 }
             });
 
-        let mut args = ctx.launch_args.clone();
-        if ctx.agent_id == "gemini" && !args.iter().any(|arg| arg == "--acp") {
-            args.push("--acp".to_string());
-        }
+        let args = ctx.launch_args.clone();
         let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args)?;
         let client = Arc::new(RpcClient::spawn(
-            "ACP Agent",
+            "OpenCode ACP",
             command,
             &ctx.working_dir,
             &[],
@@ -300,52 +327,19 @@ impl AcpAdapter {
             ),
         };
         let native_session_id = json_text(&session_result, &["sessionId"])
-            .ok_or_else(|| "ACP 未返回 sessionId".to_string())?;
-        // currentModelId 是原生会话实际模型；ctx.model 是用户本轮的请求模型。
-        // 两者不能合并，否则启动默认值会把用户选择覆盖掉，后续也不再切换。
-        let actual_model = json_text(&session_result, &["models", "currentModelId"]);
+            .ok_or_else(|| "OpenCode ACP 未返回 sessionId".to_string())?;
+        // currentModelId / configOptions.model.currentValue 是原生会话实际模型；
+        // ctx.model 是用户本轮的请求模型。两者不能合并，否则启动默认值会把
+        // 用户选择覆盖掉，后续也不再切换。
+        let (models, actual_model) =
+            models_from_session(&session_result, &ctx.agent_id, &ctx.agent_name);
+        let supports_model_switch = model_option(&session_result).is_some();
         if let Ok(mut guard) = session_id.lock() {
             *guard = Some(native_session_id.clone());
         }
-        let provider_id = ctx.agent_id.clone();
-        let provider_name = ctx.agent_name.clone();
-        let models: Vec<AgentModelInfo> = session_result
-            .get("models")
-            .and_then(|models| models.get("availableModels"))
-            .and_then(Value::as_array)
-            .map(|models| {
-                models
-                    .iter()
-                    .filter_map(|model| {
-                        let id =
-                            json_text(model, &["modelId"]).or_else(|| json_text(model, &["id"]))?;
-                        let mut capabilities = Vec::new();
-                        for key in [
-                            "supportsEffort",
-                            "supportsAdaptiveThinking",
-                            "supportsFastMode",
-                            "supportsAutoMode",
-                        ] {
-                            if model.get(key).and_then(Value::as_bool) == Some(true) {
-                                capabilities.push(key.to_string());
-                            }
-                        }
-                        Some(AgentModelInfo {
-                            provider_id: provider_id.clone(),
-                            model_id: id.clone(),
-                            provider_name: provider_name.clone(),
-                            id,
-                            display_name: json_text(model, &["name"])
-                                .or_else(|| json_text(model, &["displayName"]))
-                                .unwrap_or_default(),
-                            description: json_text(model, &["description"]).unwrap_or_default(),
-                            is_default: false,
-                            capabilities,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        if let Ok(mut guard) = applied_model.lock() {
+            *guard = actual_model.clone();
+        }
         if !models.is_empty() {
             (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable {
                 models: models.clone(),
@@ -357,9 +351,8 @@ impl AcpAdapter {
             resumed,
         }));
         if resumed {
-            log::info!("[agent] ACP session resumed");
+            log::info!("[agent] OpenCode ACP session resumed");
         }
-        let model_ids = models.iter().map(|model| model.id.clone()).collect();
 
         Ok(Self {
             client,
@@ -368,12 +361,205 @@ impl AcpAdapter {
             state,
             agent_id: ctx.agent_id.clone(),
             model: ctx.model.clone(),
-            applied_model: Arc::new(Mutex::new(actual_model)),
-            supports_model_switch: ctx.agent_id == "gemini" && !models.is_empty(),
-            model_ids,
+            applied_model,
+            supports_model_switch,
             history_restored: resumed,
             dispatch_lock: Arc::new(Mutex::new(())),
         })
+    }
+}
+
+fn model_option(value: &Value) -> Option<&Value> {
+    if let Some(options) = value.as_array() {
+        return options.iter().find(|option| {
+            option.get("id").and_then(Value::as_str) == Some("model")
+                || option.get("category").and_then(Value::as_str) == Some("model")
+        });
+    }
+    if let Some(options) = value.get("configOptions").and_then(Value::as_array) {
+        return options.iter().find(|option| {
+            option.get("id").and_then(Value::as_str) == Some("model")
+                || option.get("category").and_then(Value::as_str) == Some("model")
+        });
+    }
+    if value.get("id").and_then(Value::as_str) == Some("model")
+        || value.get("category").and_then(Value::as_str) == Some("model")
+    {
+        return Some(value);
+    }
+    None
+}
+
+fn option_value_id(value: &Value) -> Option<String> {
+    if let Some(value) = value.as_str() {
+        return (!value.is_empty()).then(|| value.to_string());
+    }
+    for key in ["value", "id", "modelId"] {
+        if let Some(value) = value.get(key).and_then(Value::as_str) {
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn option_current_value(option: &Value) -> Option<String> {
+    option
+        .get("currentValue")
+        .and_then(option_value_id)
+        .or_else(|| option.get("current").and_then(option_value_id))
+}
+
+fn split_model_id(value: &str) -> (String, String) {
+    match value.find('/') {
+        Some(slash) if slash > 0 && slash < value.len() - 1 => (
+            value[..slash].to_string(),
+            value[slash + 1..].to_string(),
+        ),
+        _ => (String::new(), value.to_string()),
+    }
+}
+
+fn models_from_option(
+    option: &Value,
+    fallback_provider_id: &str,
+    fallback_provider_name: &str,
+    current: Option<&str>,
+) -> Vec<AgentModelInfo> {
+    let entries = option
+        .get("options")
+        .or_else(|| option.get("values"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let id = option_value_id(entry)?;
+            let (provider_id, model_id) = split_model_id(&id);
+            let provider_id = if provider_id.is_empty() {
+                fallback_provider_id.to_string()
+            } else {
+                provider_id
+            };
+            let label = entry
+                .get("name")
+                .or_else(|| entry.get("displayName"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map(|name| {
+                    // OpenCode 的显示名常带 `provider/` 前缀；界面已经单独
+                    // 展示供应商，这里去掉前缀避免“供应商 · 供应商/模型”。
+                    name.strip_prefix(&format!("{provider_id}/"))
+                        .unwrap_or(name)
+                        .to_string()
+                })
+                .unwrap_or_else(|| model_id.clone());
+            Some(AgentModelInfo {
+                provider_id: provider_id.clone(),
+                model_id: model_id.clone(),
+                provider_name: if provider_id.is_empty() {
+                    fallback_provider_name.to_string()
+                } else {
+                    provider_id
+                },
+                id: id.clone(),
+                display_name: label,
+                description: entry
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                is_default: current == Some(id.as_str()),
+                capabilities: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+fn legacy_models_from_session(
+    session: &Value,
+    provider_id: &str,
+    provider_name: &str,
+    current: Option<&str>,
+) -> Vec<AgentModelInfo> {
+    session
+        .get("models")
+        .and_then(|models| models.get("availableModels"))
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| {
+                    let id =
+                        json_text(model, &["modelId"]).or_else(|| json_text(model, &["id"]))?;
+                    let (split_provider, model_id) = split_model_id(&id);
+                    Some(AgentModelInfo {
+                        provider_id: if split_provider.is_empty() {
+                            provider_id.to_string()
+                        } else {
+                            split_provider.clone()
+                        },
+                        model_id: model_id.clone(),
+                        provider_name: if split_provider.is_empty() {
+                            provider_name.to_string()
+                        } else {
+                            split_provider
+                        },
+                        id: id.clone(),
+                        display_name: json_text(model, &["name"])
+                            .or_else(|| json_text(model, &["displayName"]))
+                            .unwrap_or(model_id),
+                        description: json_text(model, &["description"]).unwrap_or_default(),
+                        is_default: current == Some(id.as_str()),
+                        capabilities: Vec::new(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 从 session/new、session/load 或 config_option_update 中读取 OpenCode
+/// 官方模型配置，返回完整 `provider/model`（保留 `/variant` 后缀）。
+fn models_from_session(
+    session: &Value,
+    provider_id: &str,
+    provider_name: &str,
+) -> (Vec<AgentModelInfo>, Option<String>) {
+    let current = model_option(session)
+        .and_then(option_current_value)
+        .or_else(|| json_text(session, &["models", "currentModelId"]));
+    if let Some(option) = model_option(session) {
+        let models = models_from_option(option, provider_id, provider_name, current.as_deref());
+        if !models.is_empty() {
+            return (models, current);
+        }
+    }
+    let models = legacy_models_from_session(session, provider_id, provider_name, current.as_deref());
+    (models, current)
+}
+
+fn publish_model_options(
+    options: &Value,
+    provider_id: &str,
+    provider_name: &str,
+    emit: &EventSink,
+    applied_model: &Arc<Mutex<Option<String>>>,
+) {
+    let Some(option) = model_option(options) else {
+        return;
+    };
+    let current = option_current_value(option);
+    let models = models_from_option(option, provider_id, provider_name, current.as_deref());
+    if let Some(current) = current {
+        if let Ok(mut guard) = applied_model.lock() {
+            *guard = Some(current);
+        }
+    }
+    if !models.is_empty() {
+        (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable { models }));
     }
 }
 
@@ -397,7 +583,6 @@ impl AgentAdapter for AcpAdapter {
         let selected_model = self.model.clone();
         let applied_model = self.applied_model.clone();
         let supports_model_switch = self.supports_model_switch;
-        let model_ids = self.model_ids.clone();
         let round_id = core_turn_id.to_string();
         let message = request.text_with_history_context();
         let task = std::thread::Builder::new()
@@ -447,79 +632,80 @@ impl AgentAdapter for AcpAdapter {
                     return;
                 }
 
-                // Gemini ACP 提供 unstable_setSessionModel 扩展。切换失败只降级为
-                // 当前模型，不影响这一轮对话。其它 ACP Agent 暂不猜测私有方法。
+                // OpenCode 通过官方 configOptions 暴露模型。用户切换后必须
+                // 先让 session/set_config_option 成功，再发送本轮 prompt；
+                // 不能用免费/默认模型代替用户明确选择的模型。
                 if let Some(model) = selected_model.as_ref() {
                     let needs_switch = applied_model
                         .lock()
                         .map(|guard| guard.as_deref() != Some(model.as_str()))
                         .unwrap_or(true);
-                    let catalog_mismatch = needs_switch
-                        && !model_ids.is_empty()
-                        && !model_ids.contains(model.as_str());
-                    if catalog_mismatch {
-                        let actual = applied_model.lock().ok().and_then(|guard| guard.clone());
-                        (emit)(RuntimeEvent::turn(
-                            round_id.clone(),
-                            "",
-                            AgentEvent::ModelSwitchFailed {
-                                requested: model.clone(),
-                                actual,
-                                message: format!(
-                                    "执行器与模型不匹配：{agent_id} 的模型目录中没有 {model}，本轮继续使用当前会话模型"
-                                ),
-                            },
-                        ));
-                    } else {
-                        if needs_switch && !(agent_id == "gemini" && supports_model_switch) {
-                            let actual =
-                                applied_model.lock().ok().and_then(|guard| guard.clone());
+                    if needs_switch {
+                        if !supports_model_switch {
+                            if let Ok(mut guard) = state.lock() {
+                                if guard.active_turn == round_id {
+                                    guard.active_turn.clear();
+                                }
+                            }
                             (emit)(RuntimeEvent::turn(
-                                round_id.clone(),
+                                round_id,
                                 "",
-                                AgentEvent::ModelSwitchFailed {
-                                    requested: model.clone(),
-                                    actual,
-                                    message:
-                                        "当前 ACP Agent 未声明运行时切换模型能力，继续使用会话模型"
-                                            .to_string(),
+                                AgentEvent::TurnFailed {
+                                    message: format!(
+                                        "OpenCode ACP 未声明 model 配置项，无法切换到 {model}"
+                                    ),
                                 },
                             ));
+                            return;
                         }
-                        if agent_id == "gemini" && supports_model_switch && needs_switch {
-                            match client.request(
-                                "unstable_setSessionModel",
-                                json!({ "sessionId": session_id, "modelId": model }),
-                                Duration::from_secs(30),
-                            ) {
-                                Ok(_) => {
-                                    if let Ok(mut guard) = applied_model.lock() {
-                                        *guard = Some(model.clone());
+                        match client.request(
+                            "session/set_config_option",
+                            json!({
+                                "sessionId": session_id,
+                                "configId": "model",
+                                "value": model,
+                            }),
+                            Duration::from_secs(30),
+                        ) {
+                            Ok(result) => {
+                                let actual = model_option(&result)
+                                    .and_then(option_current_value)
+                                    .unwrap_or_else(|| model.clone());
+                                if let Ok(mut guard) = applied_model.lock() {
+                                    *guard = Some(actual.clone());
+                                }
+                                (emit)(RuntimeEvent::turn(
+                                    round_id.clone(),
+                                    "",
+                                    AgentEvent::ModelSwitchApplied {
+                                        requested: Some(model.clone()),
+                                        actual: Some(actual),
+                                    },
+                                ));
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    "[agent] OpenCode 切换模型失败（{agent_id} / {model}）：{error}"
+                                );
+                                if let Ok(mut guard) = state.lock() {
+                                    if guard.active_turn == round_id {
+                                        guard.active_turn.clear();
+                                        guard.prompt_written = false;
+                                        guard.cancel_requested = false;
+                                        guard.cancel_notified = false;
+                                        guard.pending_permissions.clear();
                                     }
-                                    (emit)(RuntimeEvent::turn(
-                                        round_id.clone(),
-                                        "",
-                                        AgentEvent::ModelSwitchApplied {
-                                            requested: Some(model.clone()),
-                                            actual: Some(model.clone()),
-                                        },
-                                    ));
                                 }
-                                Err(error) => {
-                                    let actual =
-                                        applied_model.lock().ok().and_then(|guard| guard.clone());
-                                    (emit)(RuntimeEvent::turn(
-                                        round_id.clone(),
-                                        "",
-                                        AgentEvent::ModelSwitchFailed {
-                                            requested: model.clone(),
-                                            actual,
-                                            message: format!(
-                                                "Gemini ACP 切换模型失败，继续使用当前模型：{error}"
-                                            ),
-                                        },
-                                    ));
-                                }
+                                (emit)(RuntimeEvent::turn(
+                                    round_id,
+                                    "",
+                                    AgentEvent::TurnFailed {
+                                        message: format!(
+                                            "OpenCode 切换模型失败（{model}）：{error}"
+                                        ),
+                                    },
+                                ));
+                                return;
                             }
                         }
                     }

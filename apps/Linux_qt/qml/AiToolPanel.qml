@@ -32,6 +32,26 @@ Item {
             dt: root.dt
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.smallSpacing
+
+            Button {
+                text: qsTr("打开终端")
+                onClicked: if (root.agentCliBackendRef)
+                    root.agentCliBackendRef.open_terminal()
+            }
+
+            Button {
+                text: qsTr("复制 MCP 配置")
+                enabled: root.runtimeBackendRef !== null
+                onClicked: if (root.runtimeBackendRef)
+                    root.runtimeBackendRef.copy_mcp_config()
+            }
+
+            Item { Layout.fillWidth: true }
+        }
+
         AiConversationView {
             Layout.fillWidth: true
             Layout.fillHeight: true

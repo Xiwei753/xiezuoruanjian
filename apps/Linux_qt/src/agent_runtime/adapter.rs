@@ -5,10 +5,8 @@
 //! 这个统一接口。
 
 use super::acp::AcpAdapter;
-use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
 use super::events::{AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink, RuntimeEvent};
-use super::opencode::OpenCodeAdapter;
 
 /// 取消请求的结果。自然完成不能伪装成“取消成功”，否则后端会把已经
 /// 正常结束的轮次改写成用户取消。
@@ -54,8 +52,8 @@ pub trait AgentAdapter: Send {
     }
 }
 
-/// 按 Agent 的真实协议创建适配器。注册表标签只作提示，内置 Agent 优先使用
-/// 各自官方机器接口；未知 ACP 条目才回退到通用 ACP。
+/// 按 Agent 的真实协议创建适配器。Issue #1022：只支持 OpenCode ACP 与
+/// Codex app-server，不再为任意 ACP 程序提供通用回退。
 pub fn create_adapter(
     ctx: &AgentLaunchContext,
     emit: EventSink,
@@ -72,14 +70,12 @@ pub fn create_adapter(
         }));
     }
     let adapter: Box<dyn AgentAdapter> = match ctx.agent_id.as_str() {
+        "opencode" => Box::new(AcpAdapter::start(ctx, emit.clone())?),
         "codex" => Box::new(CodexAdapter::start(ctx, emit.clone())?),
-        "opencode" => Box::new(OpenCodeAdapter::start(ctx, emit.clone())?),
-        "claude" => Box::new(ClaudeAdapter::start(ctx, emit.clone())?),
-        _ if ctx.protocol == "acp" => Box::new(AcpAdapter::start(ctx, emit.clone())?),
         _ => {
             return Err(format!(
-                "Agent {} 未声明可用的机器会话协议（protocol={}）",
-                ctx.agent_name, ctx.protocol
+                "不支持的 AI 命令行 {}（仅支持 OpenCode 与 Codex）",
+                ctx.agent_name
             ));
         }
     };

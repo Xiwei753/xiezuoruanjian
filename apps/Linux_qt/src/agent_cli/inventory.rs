@@ -2,9 +2,9 @@
 // inventory.rs — Agent CLI 发现结果的数据模型
 // =============================================================================
 //
-// Issue #1014：Agent 不由固定枚举列举。目录（registry / 本地 manifest）中的
-// Agent 是可安装条目；只有和本机真实可执行文件或包元数据匹配后，才进入
-// installed 列表。QML 只消费这里定义的 JSON，不写死 Agent 数量或安装路径。
+// Issue #1022：只保留 OpenCode 与 Codex 两个官方机器接口。这里描述本机
+// 真实安装路径、版本探测和用户选择的启动路径；QML 只消费此 JSON，不写死
+// 安装目录。
 // =============================================================================
 
 use serde::{Deserialize, Serialize};
@@ -50,8 +50,7 @@ impl DiscoveredExecutable {
     }
 }
 
-/// 声明式 Agent 描述。所有字段都由 registry / manifest / 内置适配器提供，
-/// 不依赖固定枚举。
+/// 内置 Agent 描述。只由本程序的 OpenCode / Codex 适配器提供。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDescriptor {
@@ -61,7 +60,7 @@ pub struct AgentDescriptor {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// `acp` 或 `cli`。ACP 是首选项，但协议描述由数据决定。
+    /// `acp`（OpenCode）或 `server`（Codex app-server）。
     pub protocol: String,
     #[serde(default)]
     pub capabilities: Vec<String>,
@@ -78,7 +77,7 @@ pub struct AgentDescriptor {
     pub website: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
-    /// `builtin` / `registry` / `manifest`
+    /// 固定为 `builtin`。
     pub provenance: String,
 }
 
@@ -184,9 +183,6 @@ pub struct AgentInventory {
     pub generation: u64,
     pub scanned_at: String,
     pub installed: Vec<AgentInstallation>,
-    pub registry_source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry_error: Option<String>,
 }
 
 impl AgentInventory {
@@ -195,8 +191,6 @@ impl AgentInventory {
             generation,
             scanned_at: String::new(),
             installed: Vec::new(),
-            registry_source: "none".to_string(),
-            registry_error: None,
         }
     }
 

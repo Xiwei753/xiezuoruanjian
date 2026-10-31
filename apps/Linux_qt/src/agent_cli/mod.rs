@@ -1,9 +1,9 @@
 // =============================================================================
-// agent_cli — Linux Qt 的 Agent CLI 动态发现与管理
+// agent_cli — Linux Qt 的 Agent CLI 发现与选择
 // =============================================================================
 //
-// Issue #1014：目录中的 Agent 是数据，不是枚举；安装状态必须由本机实际
-// 可执行文件/包元数据确认。扫描在后台线程完成，QML 只消费一次发布的结果。
+// Issue #1022：只发现 OpenCode 与 Codex 的真实安装路径。扫描在后台线程
+// 完成，QML 只消费一次发布的结果。
 // =============================================================================
 
 pub mod adapters;
@@ -11,7 +11,6 @@ pub mod discovery;
 pub mod inventory;
 pub mod preferences;
 pub mod probe;
-pub mod registry;
 
 use std::collections::HashMap;
 
@@ -28,24 +27,16 @@ pub struct ScanOutcome {
 
 /// 一次完整扫描。只应在后台 worker 线程调用。
 pub fn scan(generation: u64) -> ScanOutcome {
-    let preferences = preferences::load();
-    let executables = discovery::collect_installed_executables(&preferences.custom_executables);
-    let registry = registry::load_registry();
-
-    let mut manifest_agents = Vec::new();
-    let mut manifest_errors = Vec::new();
-    for path in &preferences.agent_manifests {
-        match registry::load_manifest(std::path::Path::new(path)) {
-            Ok(mut agents) => manifest_agents.append(&mut agents),
-            Err(error) => manifest_errors.push(error),
-        }
+    let mut preferences = preferences::load();
+    // 旧版本可能保存了 claude / gemini 或第三方 Agent 标识；这些标识不再
+    // 对应任何内置描述，直接清掉，避免选择器残留不可执行的条目。
+    if !matches!(preferences.selected_agent_id.as_str(), "opencode" | "codex") {
+        preferences.selected_agent_id.clear();
+        preferences.selected_launch_path.clear();
     }
 
-    let catalog = adapters::merge_catalog(
-        adapters::builtin_descriptors(),
-        registry.agents,
-        manifest_agents,
-    );
+    let executables = discovery::collect_installed_executables(&preferences.custom_executables);
+    let catalog = adapters::builtin_descriptors();
 
     let mut preferred_paths = HashMap::new();
     if !preferences.selected_agent_id.is_empty() && !preferences.selected_launch_path.is_empty() {
@@ -57,22 +48,11 @@ pub fn scan(generation: u64) -> ScanOutcome {
 
     let installed = adapters::build_installations(&catalog, &executables, &preferred_paths);
 
-    let mut registry_error = registry.error;
-    if !manifest_errors.is_empty() {
-        let message = format!("部分本地 manifest 无法加载：{}", manifest_errors.join("；"));
-        registry_error = Some(match registry_error {
-            Some(existing) => format!("{existing}；{message}"),
-            None => message,
-        });
-    }
-
     ScanOutcome {
         inventory: AgentInventory {
             generation,
             scanned_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             installed,
-            registry_source: registry.source,
-            registry_error,
         },
         preferences,
     }
