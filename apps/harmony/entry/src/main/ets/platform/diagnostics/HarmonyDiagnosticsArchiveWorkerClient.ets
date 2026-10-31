@@ -69,8 +69,8 @@ export class HarmonyDiagnosticsArchiveWorkerClient {
   // 故障事件落盘 + fault ZIP 由 Worker 串行完成；ArkUI 线程只传白名单元数据和
   // 系统 external_log 路径，不创建目录、不复制大文件。
   requestFaultCapture(outputDir: string, logDir: string, crashesDir: string, eventKey: string,
-    paramsJson: string, externalLogPaths: string[],
-    manifest: DiagnosticsArchiveManifestMeta): Promise<DiagnosticsWorkerResult> {
+    paramsJson: string, externalLogPaths: string[], expectedExternalLogCount: number,
+    logOverLimit: boolean, manifest: DiagnosticsArchiveManifestMeta): Promise<DiagnosticsWorkerResult> {
     const requestId = this.nextRequestId()
     const request: DiagnosticsFaultCaptureRequest = {
       requestKind: 'fault_capture',
@@ -81,6 +81,8 @@ export class HarmonyDiagnosticsArchiveWorkerClient {
       eventKey: eventKey,
       paramsJson: paramsJson,
       externalLogPaths: externalLogPaths,
+      expectedExternalLogCount: expectedExternalLogCount,
+      logOverLimit: logOverLimit,
       manifest: manifest
     }
     return this.send(request, requestId)

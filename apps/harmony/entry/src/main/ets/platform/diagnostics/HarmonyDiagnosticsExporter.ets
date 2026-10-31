@@ -205,7 +205,8 @@ export class HarmonyDiagnosticsExporter {
   // 故障事件落盘 + fault ZIP。事件回调只传白名单元数据和 external_log 路径，
   // 目录创建、params 原子写入、大文件复制/删除、压缩和 complete.json 全在 Worker。
   async captureFault(eventKey: string, paramsJson: string,
-    externalLogPaths: string[]): Promise<string | null> {
+    externalLogPaths: string[], expectedExternalLogCount: number,
+    logOverLimit: boolean): Promise<string | null> {
     if (this.abilityContext === null) {
       return null
     }
@@ -219,6 +220,8 @@ export class HarmonyDiagnosticsExporter {
       safeEventKey,
       paramsJson,
       externalLogPaths,
+      expectedExternalLogCount,
+      logOverLimit,
       this.buildManifestMeta()
     )
     if (!result.success) {

@@ -70,6 +70,9 @@ export interface DiagnosticsArchiveRequest {
 
 // 故障事件落盘请求。paramsJson 已在 ArkUI 线程完成白名单投影；externalLogPaths
 // 只传系统外部日志路径，复制、删除和 ZIP 都由 Worker 串行执行。
+// expectedExternalLogCount 是系统事件给出的 external_log 数量；Worker 用它和
+// 持久化附件完成状态判定是否允许写 complete.json。logOverLimit 只作为缺失原因
+// 写入事件元数据，不参与完成判定。
 export interface DiagnosticsFaultCaptureRequest {
   requestKind: 'fault_capture'
   requestId: string
@@ -79,11 +82,14 @@ export interface DiagnosticsFaultCaptureRequest {
   eventKey: string
   paramsJson: string
   externalLogPaths: string[]
+  expectedExternalLogCount: number
+  logOverLimit: boolean
   manifest: DiagnosticsArchiveManifestMeta
 }
 
-// 启动补全请求。Worker 扫描 crashes/ 下没有有效 complete.json 的事件目录，
-// 使用已经保存的 params.json / fault-N.log 重新发布 fault ZIP。
+// 启动补全请求。Worker 扫描 crashes/ 下没有有效 complete.json 的事件目录；
+// 只有当 fault-state.json 记录的已确认附件数达到预期数时才重新发布 fault ZIP，
+// 否则保持 incomplete，等待系统后续回放提供外部日志。
 export interface DiagnosticsFaultRecoveryRequest {
   requestKind: 'fault_recovery'
   requestId: string

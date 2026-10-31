@@ -32,6 +32,7 @@ const LOG_FILENAME_PATTERN = /^sujian-current-[A-Za-z0-9._-]+\.log$/
 const CRASH_FILE_PATTERN = /^fault-[0-9]+\.log$/
 const EVENT_KEY_PATTERN = /^[A-Za-z0-9_-]+$/
 const FAULT_COMPLETE_FILE = 'complete.json'
+const FAULT_STATE_FILE = 'fault-state.json'
 const FILE_COPY_CHUNK_BYTES = 256 * 1024
 
 const workerPort: ThreadWorkerGlobalScope = worker.workerPort
@@ -59,6 +60,11 @@ interface DiagnosticsManifest {
   exported_at: string
   event_key: string
   collection: ManifestCollection
+  // 仅 fault 包写入；用于说明附件是否完整以及系统是否因 log_over_limit 截断。
+  fault_status?: string
+  expected_external_log_count?: number
+  confirmed_external_log_count?: number
+  log_over_limit?: boolean
 }
 
 interface CrashCandidate {
@@ -66,11 +72,32 @@ interface CrashCandidate {
   mtime: number
 }
 
+interface FaultAttachmentEntry {
+  fileName: string
+  complete: boolean
+  size: number
+}
+
+// 事件目录内的持久附件状态。它只记录数量/文件名/大小/完成位，不保存系统路径，
+// 是 complete.json 是否可以写入的唯一依据。
+interface FaultAttachmentState {
+  schemaVersion: number
+  eventKey: string
+  expectedExternalLogCount: number
+  confirmedExternalLogCount: number
+  logOverLimit: boolean
+  updatedAtMs: number
+  attachments: FaultAttachmentEntry[]
+}
+
 interface FaultCompletion {
   schemaVersion: number
   eventKey: string
   archivePath: string
+  archiveSize: number
   completedAtMs: number
+  expectedExternalLogCount: number
+  confirmedExternalLogCount: number
 }
 
 interface PendingOperation {
@@ -323,7 +350,8 @@ function runFaultKeys(request: DiagnosticsFaultKeysRequest): DiagnosticsWorkerRe
 
 // 故障事件：Worker 内完成 crashes/<eventKey> 建目录、params 原子写入、
 // external_log 分块复制/清理、fault ZIP 发布和 complete.json 完成标记。
-// complete.json 是唯一的持久完成标记；params.json 只是原始事件快照。
+// params.json 只是原始事件快照；fault-state.json 记录每个附件的预期大小和确认
+// 状态；只有 confirmed >= expected 时才允许发布 fault ZIP 并写 complete.json。
 async function runFaultCapture(request: DiagnosticsFaultCaptureRequest): Promise<DiagnosticsWorkerResult> {
   const startedAt = Date.now()
   let stage: DiagnosticsArchiveStage = 'fault_prepare'
@@ -342,7 +370,7 @@ async function runFaultCapture(request: DiagnosticsFaultCaptureRequest): Promise
       return successResult(request.requestId, 'fault_complete',
         completion === null ? '' : completion.archivePath, startedAt)
     }
-    // 有 complete.json 但 ZIP 已被清理时，删除旧标记并重新生成。
+    // 有 complete.json 但 ZIP 已被清理或附件不完整时，删除旧标记并重新收尾。
     if (fileExists(completePath)) {
       safeDeleteFile(completePath)
     }
@@ -354,27 +382,55 @@ async function runFaultCapture(request: DiagnosticsFaultCaptureRequest): Promise
       atomicWrite(eventDir, 'params.json', request.paramsJson)
     }
 
+    const requestedExpected = Math.max(
+      normalizeCount(request.expectedExternalLogCount),
+      normalizeCount(request.externalLogPaths.length)
+    )
+    let state = readFaultAttachmentState(eventDir, eventKey)
+    if (state === null) {
+      state = createFaultAttachmentState(eventKey, requestedExpected, request.logOverLimit)
+    } else {
+      const expected = Math.max(state.expectedExternalLogCount, requestedExpected)
+      state.expectedExternalLogCount = expected
+      state.logOverLimit = state.logOverLimit || request.logOverLimit
+      ensureFaultAttachmentEntries(state)
+    }
+    writeFaultAttachmentState(eventDir, state)
+
     stage = 'fault_log_copy'
-    copyExternalFaultLogs(request.externalLogPaths, eventDir)
+    for (let index = 0; index < request.externalLogPaths.length; index++) {
+      copyExternalFaultLog(request.externalLogPaths[index], eventDir, index, state)
+    }
+    refreshFaultAttachmentState(eventDir, state)
+    if (state.confirmedExternalLogCount < state.expectedExternalLogCount) {
+      // 不生成普通 fault ZIP，也不写 complete.json；保留 params + fault-state
+      // 给系统后续回放或下一次启动恢复。missing source / 复制中断都落在这里。
+      return failureResult(request.requestId, 'fault_log_copy',
+        `fault_attachments_incomplete:${state.confirmedExternalLogCount}/${state.expectedExternalLogCount}`,
+        '', startedAt)
+    }
 
     stage = 'fault_compress'
     const archivePath = await publishFaultArchive(
-      request.outputDir, request.logDir, request.crashesDir, request.manifest, eventKey
+      request.outputDir, request.logDir, request.crashesDir, request.manifest, eventKey, state
     )
 
     stage = 'fault_complete'
-    writeFaultCompletion(eventDir, eventKey, archivePath)
+    writeFaultCompletion(eventDir, eventKey, archivePath, state)
     return successResult(request.requestId, 'fault_complete', archivePath, startedAt)
   } catch (e) {
     return failureResult(request.requestId, stage, errorName(e), '', startedAt)
   }
 }
 
-// 启动补全：上次进程如果在复制/压缩/写完成标记之间被杀，这里从已经落盘的
-// params.json + fault-N.log 继续生成 ZIP，而不是因为 params.json 存在就跳过。
+// 启动补全：上次进程如果在复制/压缩/写 complete.json 之间被杀，这里从已经
+// 落盘的 params.json + fault-state.json + fault-N.log 继续。只有确认附件数量
+// 达到预期才发布 ZIP；否则保持 incomplete，等待系统回放补充 external_log。
 async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promise<DiagnosticsWorkerResult> {
   const startedAt = Date.now()
   let stage: DiagnosticsArchiveStage = 'fault_recovery'
+  let incomplete = 0
+  let failed = 0
   try {
     if (!fileExists(request.crashesDir)) {
       return successResult(request.requestId, 'fault_complete', '', startedAt)
@@ -394,16 +450,53 @@ async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promi
       if (!fileExists(`${eventDir}/params.json`) || isFaultComplete(eventDir)) {
         continue
       }
-      const completePath = `${eventDir}/${FAULT_COMPLETE_FILE}`
-      if (fileExists(completePath)) {
-        safeDeleteFile(completePath)
+      try {
+        const completePath = `${eventDir}/${FAULT_COMPLETE_FILE}`
+        if (fileExists(completePath)) {
+          safeDeleteFile(completePath)
+        }
+        let state = readFaultAttachmentState(eventDir, entry)
+        if (state === null) {
+          // 旧版本没有 fault-state.json：只能从 params 的 external_log_count
+          // 恢复预期数量；没有该字段就保持 incomplete，绝不把 partial 包标记完成。
+          const expected = readExternalLogCountFromParams(eventDir)
+          if (expected < 0) {
+            incomplete += 1
+            continue
+          }
+          state = createFaultAttachmentState(entry, expected, false)
+          writeFaultAttachmentState(eventDir, state)
+        } else {
+          const expected = readExternalLogCountFromParams(eventDir)
+          if (expected > state.expectedExternalLogCount) {
+            state.expectedExternalLogCount = expected
+            ensureFaultAttachmentEntries(state)
+          }
+        }
+        refreshFaultAttachmentState(eventDir, state)
+        if (state.confirmedExternalLogCount < state.expectedExternalLogCount) {
+          incomplete += 1
+          continue
+        }
+        stage = 'fault_compress'
+        const archivePath = await publishFaultArchive(
+          request.outputDir, request.logDir, request.crashesDir, request.manifest, entry, state
+        )
+        stage = 'fault_complete'
+        writeFaultCompletion(eventDir, entry, archivePath, state)
+      } catch (e) {
+        failed += 1
+        hilog.warn(0x0000, LOG_TAG, 'fault recovery event failed: stage=%{public}s reason=%{public}s',
+          stage, errorName(e))
       }
-      stage = 'fault_compress'
-      const archivePath = await publishFaultArchive(
-        request.outputDir, request.logDir, request.crashesDir, request.manifest, entry
-      )
-      stage = 'fault_complete'
-      writeFaultCompletion(eventDir, entry, archivePath)
+    }
+    if (incomplete > 0) {
+      return failureResult(request.requestId, 'fault_log_copy',
+        `fault_recovery_incomplete:${incomplete}`, '', startedAt)
+    }
+    if (failed > 0) {
+      return failureResult(request.requestId, 'fault_recovery',
+        `fault_recovery_failed:${failed}`, '', startedAt)
     }
     return successResult(request.requestId, 'fault_complete', '', startedAt)
   } catch (e) {
@@ -412,7 +505,8 @@ async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promi
 }
 
 async function publishFaultArchive(outputDir: string, logDir: string, crashesDir: string,
-  meta: DiagnosticsArchiveManifestMeta, eventKey: string): Promise<string> {
+  meta: DiagnosticsArchiveManifestMeta, eventKey: string,
+  state: FaultAttachmentState): Promise<string> {
   const stagingDir = `${outputDir}/.staging-fault-${eventKey}-${Date.now()}-${Math.floor(Math.random() * 1000000)}`
   try {
     cleanStaleStaging(outputDir)
@@ -421,6 +515,10 @@ async function publishFaultArchive(outputDir: string, logDir: string, crashesDir
     const logSummary = copyPersistedLogs(logDir, stagingDir)
     const crashEvents = copyCrashAttachments(crashesDir, stagingDir, 'fault', eventKey, 0)
     const manifest = buildManifestFrom(meta, 'fault', eventKey, logSummary, [], crashEvents)
+    manifest.fault_status = 'complete'
+    manifest.expected_external_log_count = state.expectedExternalLogCount
+    manifest.confirmed_external_log_count = state.confirmedExternalLogCount
+    manifest.log_over_limit = state.logOverLimit
     HarmonyDiagnosticsArchive.writeTextFile(
       stagingDir, 'diagnostics_manifest.json', JSON.stringify(manifest, null, 2)
     )
@@ -432,27 +530,250 @@ async function publishFaultArchive(outputDir: string, logDir: string, crashesDir
   }
 }
 
-// external_log 可能是大文件：按固定块复制，成功后删除系统源文件。源文件已不存在
-// 时不阻塞补全（上次可能已经复制过，fault-N.log 仍在事件目录）。
-function copyExternalFaultLogs(paths: string[], eventDir: string): void {
-  for (let index = 0; index < paths.length; index++) {
-    const sourcePath = paths[index]
-    if (sourcePath.length === 0 || !fileExists(sourcePath)) {
-      continue
+// external_log 可能是大文件：先写 fault-N.log.tmp，校验源/目标字节数并关闭句柄，
+// 原子 rename 为正式文件后才删除系统源日志。中断只留下 .tmp，不会污染 final。
+function copyExternalFaultLog(sourcePath: string, eventDir: string, index: number,
+  state: FaultAttachmentState): void {
+  const fileName = `fault-${index + 1}.log`
+  const targetPath = `${eventDir}/${fileName}`
+  const tempPath = `${targetPath}.tmp`
+  const entry = findOrCreateAttachmentEntry(state, fileName)
+  if (entry.complete && isConfirmedAttachment(targetPath, entry.size)) {
+    try {
+      if (fileExists(sourcePath)) {
+        fs.unlinkSync(sourcePath)
+      }
+    } catch (_) {
     }
-    copyFileChunked(sourcePath, `${eventDir}/fault-${index + 1}.log`)
+    return
+  }
+  if (sourcePath.length === 0 || !fileExists(sourcePath)) {
+    return
+  }
+  let sourceSize = 0
+  try {
+    const sourceStat = fs.statSync(sourcePath)
+    if (!sourceStat.isFile()) {
+      return
+    }
+    sourceSize = sourceStat.size
+  } catch (_) {
+    return
+  }
+
+  entry.complete = false
+  entry.size = sourceSize
+  writeFaultAttachmentState(eventDir, state)
+  safeDeleteFile(tempPath)
+  try {
+    copyFileChunked(sourcePath, tempPath)
+    if (fs.statSync(tempPath).size !== sourceSize) {
+      throw new Error('fault log copy size mismatch')
+    }
+    // 先写完成状态再 rename：如果进程在两者之间被杀，refresh 会用同尺寸 .tmp
+    // 补做 rename；如果 rename 失败则回退 complete=false。
+    entry.complete = true
+    entry.size = sourceSize
+    writeFaultAttachmentState(eventDir, state)
+    try {
+      replaceFile(tempPath, targetPath)
+    } catch (e) {
+      entry.complete = false
+      writeFaultAttachmentState(eventDir, state)
+      safeDeleteFile(tempPath)
+      throw new Error('fault log rename failed')
+    }
+    writeFaultAttachmentState(eventDir, state)
     try {
       fs.unlinkSync(sourcePath)
     } catch (_) {
       hilog.warn(0x0000, LOG_TAG, 'unable to remove copied external fault log source')
     }
+  } catch (_) {
+    entry.complete = false
+    writeFaultAttachmentState(eventDir, state)
+    safeDeleteFile(tempPath)
+  }
+}
+
+function createFaultAttachmentState(eventKey: string, expected: number,
+  logOverLimit: boolean): FaultAttachmentState {
+  const state: FaultAttachmentState = {
+    schemaVersion: 2,
+    eventKey: eventKey,
+    expectedExternalLogCount: normalizeCount(expected),
+    confirmedExternalLogCount: 0,
+    logOverLimit: logOverLimit,
+    updatedAtMs: Date.now(),
+    attachments: []
+  }
+  ensureFaultAttachmentEntries(state)
+  return state
+}
+
+function ensureFaultAttachmentEntries(state: FaultAttachmentState): void {
+  while (state.attachments.length < state.expectedExternalLogCount) {
+    const entry: FaultAttachmentEntry = {
+      fileName: `fault-${state.attachments.length + 1}.log`,
+      complete: false,
+      size: 0
+    }
+    state.attachments.push(entry)
+  }
+}
+
+function findOrCreateAttachmentEntry(state: FaultAttachmentState,
+  fileName: string): FaultAttachmentEntry {
+  for (const entry of state.attachments) {
+    if (entry.fileName === fileName) {
+      return entry
+    }
+  }
+  const created: FaultAttachmentEntry = { fileName: fileName, complete: false, size: 0 }
+  state.attachments.push(created)
+  return created
+}
+
+function readFaultAttachmentState(eventDir: string,
+  eventKey: string): FaultAttachmentState | null {
+  const path = `${eventDir}/${FAULT_STATE_FILE}`
+  if (!fileExists(path)) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(readTextFile(path)) as Record<string, Object>
+    const schemaVersion = readIntegerField(parsed, 'schemaVersion', -1)
+    const expected = readIntegerField(parsed, 'expectedExternalLogCount', -1)
+    if (schemaVersion < 2 || expected < 0 || readStringField(parsed, 'eventKey') !== eventKey) {
+      return null
+    }
+    const attachments: FaultAttachmentEntry[] = []
+    const rawAttachments = parsed['attachments']
+    if (Array.isArray(rawAttachments)) {
+      const entries = rawAttachments as Object[]
+      for (const item of entries) {
+        if (item === null || typeof item !== 'object') {
+          continue
+        }
+        const record = item as Record<string, Object>
+        const fileName = readStringField(record, 'fileName')
+        const size = readIntegerField(record, 'size', -1)
+        if (!CRASH_FILE_PATTERN.test(fileName) || size < 0) {
+          continue
+        }
+        const entry: FaultAttachmentEntry = {
+          fileName: fileName,
+          complete: record['complete'] === true,
+          size: size
+        }
+        attachments.push(entry)
+      }
+    }
+    const state: FaultAttachmentState = {
+      schemaVersion: 2,
+      eventKey: eventKey,
+      expectedExternalLogCount: expected,
+      confirmedExternalLogCount: 0,
+      logOverLimit: parsed['logOverLimit'] === true,
+      updatedAtMs: readIntegerField(parsed, 'updatedAtMs', 0),
+      attachments: attachments
+    }
+    ensureFaultAttachmentEntries(state)
+    return state
+  } catch (_) {
+    return null
+  }
+}
+
+function writeFaultAttachmentState(eventDir: string, state: FaultAttachmentState): void {
+  state.confirmedExternalLogCount = countConfirmedAttachments(eventDir, state)
+  state.updatedAtMs = Date.now()
+  atomicWrite(eventDir, FAULT_STATE_FILE, JSON.stringify(state, null, 2))
+}
+
+// 恢复时修复"已写 complete=true、rename 前被杀"的窗口：同尺寸 .tmp 可以补做
+// rename。没有 .tmp 且 final 缺失/尺寸不符的条目会回退为未完成。
+function refreshFaultAttachmentState(eventDir: string, state: FaultAttachmentState): void {
+  for (const entry of state.attachments) {
+    if (!entry.complete) {
+      continue
+    }
+    const targetPath = `${eventDir}/${entry.fileName}`
+    if (isConfirmedAttachment(targetPath, entry.size)) {
+      continue
+    }
+    const tempPath = `${targetPath}.tmp`
+    if (isConfirmedAttachment(tempPath, entry.size)) {
+      try {
+        replaceFile(tempPath, targetPath)
+        continue
+      } catch (_) {
+      }
+    }
+    entry.complete = false
+  }
+  writeFaultAttachmentState(eventDir, state)
+}
+
+function countConfirmedAttachments(eventDir: string, state: FaultAttachmentState): number {
+  let confirmed = 0
+  for (const entry of state.attachments) {
+    if (entry.complete && isConfirmedAttachment(`${eventDir}/${entry.fileName}`, entry.size)) {
+      confirmed += 1
+    }
+  }
+  return confirmed
+}
+
+function isConfirmedAttachment(path: string, expectedSize: number): boolean {
+  try {
+    if (!fileExists(path)) {
+      return false
+    }
+    const stat = fs.statSync(path)
+    return stat.isFile() && stat.size === expectedSize
+  } catch (_) {
+    return false
+  }
+}
+
+function replaceFile(sourcePath: string, targetPath: string): void {
+  try {
+    fs.renameSync(sourcePath, targetPath)
+  } catch (_) {
+    safeDeleteFile(targetPath)
+    fs.renameSync(sourcePath, targetPath)
   }
 }
 
 function isFaultComplete(eventDir: string): boolean {
-  const completePath = `${eventDir}/${FAULT_COMPLETE_FILE}`
-  const completion = readFaultCompletion(completePath)
-  return completion !== null && completion.archivePath.length > 0 && fileExists(completion.archivePath)
+  const eventKey = fileName(eventDir)
+  const completion = readFaultCompletion(`${eventDir}/${FAULT_COMPLETE_FILE}`)
+  if (completion === null || completion.schemaVersion < 2 || completion.eventKey !== eventKey) {
+    return false
+  }
+  const state = readFaultAttachmentState(eventDir, eventKey)
+  if (state === null) {
+    return false
+  }
+  refreshFaultAttachmentState(eventDir, state)
+  if (state.expectedExternalLogCount !== completion.expectedExternalLogCount ||
+    state.confirmedExternalLogCount < state.expectedExternalLogCount ||
+    completion.confirmedExternalLogCount < completion.expectedExternalLogCount) {
+    return false
+  }
+  if (fileName(completion.archivePath) !== `sujian-diagnostics-fault-${eventKey}.zip`) {
+    return false
+  }
+  try {
+    if (!fileExists(completion.archivePath)) {
+      return false
+    }
+    const stat = fs.statSync(completion.archivePath)
+    return stat.isFile() && stat.size > 0 && stat.size === completion.archiveSize
+  } catch (_) {
+    return false
+  }
 }
 
 function readFaultCompletion(path: string): FaultCompletion | null {
@@ -460,24 +781,77 @@ function readFaultCompletion(path: string): FaultCompletion | null {
     return null
   }
   try {
-    const parsed = JSON.parse(readTextFile(path)) as FaultCompletion
-    if (parsed !== null && typeof parsed.archivePath === 'string' &&
-      typeof parsed.completedAtMs === 'number') {
-      return parsed
+    const parsed = JSON.parse(readTextFile(path)) as Record<string, Object>
+    const completion: FaultCompletion = {
+      schemaVersion: readIntegerField(parsed, 'schemaVersion', -1),
+      eventKey: readStringField(parsed, 'eventKey'),
+      archivePath: readStringField(parsed, 'archivePath'),
+      archiveSize: readIntegerField(parsed, 'archiveSize', -1),
+      completedAtMs: readIntegerField(parsed, 'completedAtMs', -1),
+      expectedExternalLogCount: readIntegerField(parsed, 'expectedExternalLogCount', -1),
+      confirmedExternalLogCount: readIntegerField(parsed, 'confirmedExternalLogCount', -1)
+    }
+    if (completion.archivePath.length === 0 || completion.archiveSize <= 0 ||
+      completion.expectedExternalLogCount < 0 || completion.confirmedExternalLogCount < 0) {
+      return null
+    }
+    return completion
+  } catch (_) {
+    return null
+  }
+}
+
+function writeFaultCompletion(eventDir: string, eventKey: string, archivePath: string,
+  state: FaultAttachmentState): void {
+  if (state.confirmedExternalLogCount < state.expectedExternalLogCount) {
+    throw new Error('fault attachments incomplete')
+  }
+  const stat = fs.statSync(archivePath)
+  if (!stat.isFile() || stat.size <= 0) {
+    throw new Error('fault archive invalid')
+  }
+  const completion: FaultCompletion = {
+    schemaVersion: 2,
+    eventKey: eventKey,
+    archivePath: archivePath,
+    archiveSize: stat.size,
+    completedAtMs: Date.now(),
+    expectedExternalLogCount: state.expectedExternalLogCount,
+    confirmedExternalLogCount: state.confirmedExternalLogCount
+  }
+  atomicWrite(eventDir, FAULT_COMPLETE_FILE, JSON.stringify(completion, null, 2))
+}
+
+function readExternalLogCountFromParams(eventDir: string): number {
+  try {
+    const parsed = JSON.parse(readTextFile(`${eventDir}/params.json`)) as Record<string, Object>
+    const value = parsed['external_log_count']
+    if (typeof value === 'number' && value >= 0) {
+      return normalizeCount(value)
     }
   } catch (_) {
   }
-  return null
+  return -1
 }
 
-function writeFaultCompletion(eventDir: string, eventKey: string, archivePath: string): void {
-  const completion: FaultCompletion = {
-    schemaVersion: 1,
-    eventKey: eventKey,
-    archivePath: archivePath,
-    completedAtMs: Date.now()
+function normalizeCount(value: number): number {
+  if (!(value >= 0)) {
+    return 0
   }
-  atomicWrite(eventDir, FAULT_COMPLETE_FILE, JSON.stringify(completion, null, 2))
+  return Math.floor(value)
+}
+
+function readIntegerField(source: Record<string, Object>, key: string, fallback: number): number {
+  const value = source[key]
+  if (typeof value === 'number' && value >= 0) {
+    return Math.floor(value)
+  }
+  return fallback
+}
+
+function readStringField(source: Record<string, Object>, key: string): string {
+  const value = source[key]
+  return typeof value === 'string' ? value : ''
 }
 
 // 导出包搬运：源路径在沙箱，目标可以是沙箱路径或 picker URI。固定 256 KiB
@@ -689,7 +1063,8 @@ function copyCrashAttachments(crashesDir: string, stagingDir: string, archiveKin
     }
     try {
       for (const fileName of fs.listFileSync(eventDir)) {
-        if (fileName !== 'params.json' && !CRASH_FILE_PATTERN.test(fileName)) {
+        if (fileName !== 'params.json' && fileName !== FAULT_STATE_FILE &&
+          !CRASH_FILE_PATTERN.test(fileName)) {
           continue
         }
         try {

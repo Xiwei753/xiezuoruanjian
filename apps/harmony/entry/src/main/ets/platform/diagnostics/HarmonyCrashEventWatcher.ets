@@ -44,7 +44,11 @@ export class HarmonyCrashEventWatcher {
   private initialized: boolean = false
   private generation: number = 0
   private recoveryTimerId: number = -1
+  // processedEventKeys 只合并同进程正在处理的同一事件；capture 失败后必须移除，
+  // 让后续带着 external_log 的系统回放继续补全。持久完成状态由 Worker 的
+  // complete.json + fault-state.json 判定，completedEventKeys 只是启动扫描缓存。
   private processedEventKeys: Set<string> = new Set()
+  private completedEventKeys: Set<string> = new Set()
 
   private constructor() {
     this.exporter = new HarmonyDiagnosticsExporter()
@@ -74,7 +78,7 @@ export class HarmonyCrashEventWatcher {
     try {
       const knownKeys = await this.exporter.listKnownFaultEventKeys()
       for (const key of knownKeys) {
-        this.processedEventKeys.add(key)
+        this.completedEventKeys.add(key)
       }
     } catch (e) {
       hilog.warn(0x0000, LOG_TAG, 'load known fault keys failed: %{public}s',
@@ -85,7 +89,8 @@ export class HarmonyCrashEventWatcher {
     }
     this.subscribeCrashEvents()
     // 先给系统回放留一个短窗口：未完成故障若仍带 external_log 路径，优先由
-    // fault_capture 复制；没有回放时再从已落盘的 params/fault 日志补全。
+    // fault_capture 复制；3 秒后恢复只处理 fault-state 已确认附件齐全的事件，
+    // 不把“等待时间到了”当作日志已到齐。
     if (this.recoveryTimerId >= 0) {
       clearTimeout(this.recoveryTimerId)
     }
@@ -112,6 +117,7 @@ export class HarmonyCrashEventWatcher {
       this.watcher = null
     }
     this.processedEventKeys.clear()
+    this.completedEventKeys.clear()
     this.initialized = false
     this.context = null
   }
@@ -171,8 +177,12 @@ export class HarmonyCrashEventWatcher {
       const externalLog = this.extractExternalLog(params)
       const timestamp = this.formatTimestamp(time)
       const eventKey = this.sanitizeEventKey(`${timestamp}-${event.name}`)
+      if (this.completedEventKeys.has(eventKey)) {
+        hilog.info(0x0000, LOG_TAG, 'Completed fault event skipped: %{public}s', eventKey)
+        return
+      }
       if (this.processedEventKeys.has(eventKey)) {
-        hilog.info(0x0000, LOG_TAG, 'Duplicate fault event key skipped in process: %{public}s', eventKey)
+        hilog.info(0x0000, LOG_TAG, 'Concurrent fault event merged in process: %{public}s', eventKey)
         return
       }
       this.processedEventKeys.add(eventKey)
@@ -190,30 +200,44 @@ export class HarmonyCrashEventWatcher {
         HarmonyDiagnosticEvents.record('Warn', 'System', 'system.app_killed', 'HarmonyCrashEventWatcher', eventFields)
       }
 
+      const logOverLimit = params['log_over_limit'] === true
       const crashRecord: CrashRecord = {
         domain: hiAppEvent.domain.OS,
         name: event.name,
         eventType: event.eventType,
-        params: this.safeCrashParams(params)
+        params: this.safeCrashParams(params, externalLog.length)
       }
-      void this.persistFault(eventKey, JSON.stringify(crashRecord, null, 2), externalLog)
+      void this.persistFault(eventKey, JSON.stringify(crashRecord, null, 2),
+        externalLog, logOverLimit)
     } catch (e) {
       hilog.error(0x0000, LOG_TAG, 'handleCrashEvent failed: %{public}s', String(e))
     }
   }
 
   private async persistFault(eventKey: string, paramsJson: string,
-    externalLog: string[]): Promise<void> {
+    externalLog: string[], logOverLimit: boolean): Promise<void> {
+    let completed = false
     try {
-      const archivePath = await this.exporter.captureFault(eventKey, paramsJson, externalLog)
+      const archivePath = await this.exporter.captureFault(
+        eventKey, paramsJson, externalLog, externalLog.length, logOverLimit
+      )
       if (archivePath === null) {
         hilog.warn(0x0000, LOG_TAG, 'Fault capture incomplete for event %{public}s', eventKey)
         return
       }
+      completed = true
+      this.completedEventKeys.add(eventKey)
       hilog.info(0x0000, LOG_TAG, 'Fault archive generated for event %{public}s', eventKey)
     } catch (e) {
       hilog.error(0x0000, LOG_TAG, 'persistFault exception: %{public}s',
         e instanceof Error ? e.name : 'UNKNOWN_ERROR')
+    } finally {
+      // 同进程并发合并结束：成功则转入 completedEventKeys；失败/未完成则释放
+      // eventKey，后续系统回放可以继续复制缺失的 external_log。
+      this.processedEventKeys.delete(eventKey)
+      if (!completed) {
+        hilog.warn(0x0000, LOG_TAG, 'Fault event remains incomplete: %{public}s', eventKey)
+      }
     }
   }
 
@@ -265,8 +289,10 @@ export class HarmonyCrashEventWatcher {
 
   // params.json 只保留稳定、非敏感的故障元数据。external_log 路径、exception
   // message、stack 和正文内容都不进入归档；threads 只保留名称/TID/状态摘要。
-  private safeCrashParams(params: Record<string, Object>): Record<string, Object> {
+  private safeCrashParams(params: Record<string, Object>,
+    externalLogCount: number): Record<string, Object> {
     const safe: Record<string, Object> = {}
+    safe['external_log_count'] = externalLogCount
     this.copyNumber(params, safe, 'time')
     this.copyNumber(params, safe, 'pid')
     this.copyNumber(params, safe, 'uid')
