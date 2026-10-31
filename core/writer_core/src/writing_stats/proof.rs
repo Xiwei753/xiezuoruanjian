@@ -83,6 +83,37 @@ impl ProofEditPayload {
     }
 }
 
+/// 已确认发生、但无法恢复原始证明事实的历史区间。
+///
+/// 这不是一条编辑事件，也不冒充 SyncRemote 或人工写作事实。它只记录：
+/// - 哪个已提交事务/事件在此处失去原始证据；
+/// - 缺了哪些字段；
+/// - 从哪个新的当前正文基线继续建链；
+/// - 该区间永远不可校验（`verifiable = false`）。
+///
+/// `recovered_at_ms` 只能是发现/封存时间，绝不是原事件发生时间。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProofContinuityGap {
+    pub format_version: u32,
+    pub transaction_id: String,
+    pub event_id: String,
+    pub project_id: String,
+    pub volume_id: String,
+    pub chapter_id: String,
+    pub device_id: String,
+    pub missing_fields: Vec<String>,
+    /// 原事务已确认的阶段：`files_committed` / `finished`。
+    pub phase: String,
+    /// 发现并封存缺口的时间，不是原事件时间。
+    pub recovered_at_ms: i64,
+    /// 新基线 checkpoint 的序号；旧区间到此为止。
+    pub baseline_seq: u64,
+    pub baseline_text_sha256: String,
+    pub baseline_content_hash: String,
+    /// 该历史区间是否可被证明。封存缺口时恒为 false。
+    pub verifiable: bool,
+}
+
 /// 事件链校验结果。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProofVerification {

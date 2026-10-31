@@ -365,14 +365,42 @@ impl StatsStore {
         // 链头缓存存在时，逐字事件只消费缓存的增量摘要；绝不为了确认基线
         // 去扫描整个检查点历史。只有首次建立链（head 为空）才需要读最后
         // 一个基线检查点。
-        let latest_checkpoint = if head.is_none() {
-            checkpoint::load_last_checkpoint(&self.app_data_root, &origin, &event.chapter_id)?
+        // 同步连续性缺口会写入 reason=continuity_gap 的基线检查点。
+        // 该检查点的 seq 位于旧链头之后，必须先于旧链头判断：缺口之后的新事件
+        // 必须从当前真实正文的新链开始，不能继续引用不可证明的旧链。
+        let latest_checkpoint =
+            checkpoint::load_last_checkpoint(&self.app_data_root, &origin, &event.chapter_id)?;
+        let gap_baseline = if let Some(checkpoint) = latest_checkpoint.as_ref().filter(|checkpoint| {
+            checkpoint.reason == "continuity_gap"
+                && head
+                    .as_ref()
+                    .is_none_or(|current| checkpoint.seq > current.seq)
+        }) {
+            let gaps = checkpoint::load_continuity_gaps(
+                &self.app_data_root,
+                &origin,
+                &event.chapter_id,
+            )?;
+            if gaps.iter().any(|gap| gap.baseline_seq == checkpoint.seq) {
+                Some(checkpoint.clone())
+            } else {
+                None
+            }
         } else {
             None
         };
 
         let (seq, before_digest, mut before_text, starts_new_chain, baseline_checkpoint) =
-            if let Some(head) = head.as_ref() {
+            if let Some(gap) = gap_baseline {
+                let digest = ContentDigest::from_text(&gap.text);
+                (
+                    state.next_seq.max(gap.seq.saturating_add(1)),
+                    digest,
+                    Some(gap.text.clone()),
+                    true,
+                    None,
+                )
+            } else if let Some(head) = head.as_ref() {
                 let seq = state.next_seq.max(head.seq.saturating_add(1));
                 let legacy_head = !head.text_sha256.is_empty()
                     && !head.text_sha256.starts_with(proof::CONTENT_DIGEST_VERSION);
@@ -479,18 +507,29 @@ impl StatsStore {
             checkpoint::append_checkpoint(&self.app_data_root, checkpoint)?;
         }
 
-        let previous_event_hash = head
-            .as_ref()
-            .map_or_else(String::new, |head| head.event_hash.clone());
+        let previous_event_hash = if starts_new_chain {
+            String::new()
+        } else {
+            head.as_ref()
+                .map_or_else(String::new, |head| head.event_hash.clone())
+        };
         let baseline_id = if starts_new_chain {
-            format!("{origin}:{}:0", event.chapter_id)
+            format!(
+                "{origin}:{}:{}",
+                event.chapter_id,
+                seq.saturating_sub(1)
+            )
         } else {
             String::new()
         };
-        let expected_before_content_hash = head.as_ref().map_or_else(
-            || content_hash_of_text(before_text.as_deref().unwrap_or_default()),
-            |head| head.content_hash.clone(),
-        );
+        let expected_before_content_hash = if starts_new_chain {
+            content_hash_of_text(before_text.as_deref().unwrap_or_default())
+        } else {
+            head.as_ref().map_or_else(
+                || content_hash_of_text(before_text.as_deref().unwrap_or_default()),
+                |head| head.content_hash.clone(),
+            )
+        };
         let before_digest_value = before_digest.digest();
 
         let (changes_for_chain, after_digest) = {
@@ -1009,6 +1048,98 @@ impl StatsStore {
         );
         checkpoint.source_device_id = source_device_id.to_string();
         checkpoint::append_checkpoint(&self.app_data_root, &checkpoint)?;
+        self.proof_generation.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// 为无法重建原始事实的旧事务封存“证明连续性缺口”，并以当前真实正文
+    /// 建立新的证明链基线。
+    ///
+    /// 缺口记录只说明“这段历史无法逐字验证”，不是恢复出来的编辑事件。基线
+    /// checkpoint 与缺口记录都按事务/事件 ID 幂等：先写 checkpoint 再写缺口，
+    /// 任一步失败时下次重试会复用同一 checkpoint，不会产生多条不同基线。
+    pub(crate) fn seal_proof_continuity_gap(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        transaction_id: &str,
+        event_id: &str,
+        missing_fields: &[String],
+        phase: &str,
+        text: &str,
+    ) -> Result<()> {
+        if chapter_id.is_empty() || event_id.is_empty() {
+            return Err(crate::Error::Other(
+                "封存证明连续性缺口需要非空章节和事件 ID".to_string(),
+            ));
+        }
+        let origin = self.resolve_origin_device_id()?;
+        let gaps = checkpoint::load_continuity_gaps(&self.app_data_root, &origin, chapter_id)?;
+        if gaps
+            .iter()
+            .any(|gap| gap.transaction_id == transaction_id && gap.event_id == event_id)
+        {
+            return Ok(());
+        }
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let text_sha256_value = text_sha256(text);
+        let content_hash = content_hash_of_text(text);
+        let checkpoints = checkpoint::load_checkpoints(&self.app_data_root, &origin, chapter_id)?;
+        let gap_session = format!("gap:{event_id}");
+        let existing_baseline = checkpoints.iter().find(|checkpoint| {
+            checkpoint.reason == "continuity_gap"
+                && checkpoint.session_id == gap_session
+                && checkpoint.text_sha256 == text_sha256_value
+                && checkpoint.content_hash == content_hash
+        });
+        let baseline_seq = match existing_baseline {
+            Some(checkpoint) => checkpoint.seq,
+            None => {
+                let latest_checkpoint_seq = checkpoints
+                    .iter()
+                    .map(|checkpoint| checkpoint.seq)
+                    .max()
+                    .unwrap_or(0);
+                let latest_event_seq = self.latest_proof_seq()?;
+                let seq = latest_checkpoint_seq
+                    .max(latest_event_seq)
+                    .saturating_add(1)
+                    .max(1);
+                let baseline = ProofCheckpoint::new(
+                    chapter_id,
+                    &origin,
+                    seq,
+                    &gap_session,
+                    now,
+                    text,
+                    &content_hash,
+                    "",
+                    "continuity_gap",
+                );
+                checkpoint::append_checkpoint(&self.app_data_root, &baseline)?;
+                seq
+            }
+        };
+
+        let gap = proof::ProofContinuityGap {
+            format_version: proof::PROOF_FORMAT_VERSION,
+            transaction_id: transaction_id.to_string(),
+            event_id: event_id.to_string(),
+            project_id: project_id.to_string(),
+            volume_id: volume_id.to_string(),
+            chapter_id: chapter_id.to_string(),
+            device_id: origin,
+            missing_fields: missing_fields.to_vec(),
+            phase: phase.to_string(),
+            recovered_at_ms: now,
+            baseline_seq,
+            baseline_text_sha256: text_sha256_value,
+            baseline_content_hash: content_hash,
+            verifiable: false,
+        };
+        checkpoint::append_continuity_gap(&self.app_data_root, &gap)?;
         self.proof_generation.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }

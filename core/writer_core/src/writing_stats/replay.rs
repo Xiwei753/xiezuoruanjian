@@ -17,7 +17,7 @@ use crate::editor::kernel::ContentDigest;
 use crate::writing_stats::checkpoint::{self, ProofCheckpoint};
 use crate::writing_stats::proof::{
     apply_changes, chain_content_hash, compute_event_hash, content_hash_of_text,
-    text_digest_matches, text_sha256,
+    text_digest_matches, text_sha256, ProofContinuityGap,
 };
 use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::{
@@ -69,6 +69,12 @@ pub struct ProofReplayFrame {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_timestamp_ms: Option<i64>,
     pub checkpoint_seq: u64,
+    /// 是否存在正式记录的证明连续性缺口；false 表示此前的历史不能声称完整。
+    #[serde(default = "default_history_complete")]
+    pub history_complete: bool,
+    /// 正式记录的不可恢复证明区间；不是编辑事件，也不冒充任何输入来源。
+    #[serde(default)]
+    pub continuity_gaps: Vec<ProofContinuityGap>,
     /// 同一章节在不同设备上的独立证明分支；跨设备不按毫秒交错。
     #[serde(default)]
     pub branches: Vec<ProofDeviceBranch>,
@@ -105,6 +111,11 @@ pub struct ProofExportPackage {
     pub final_seq: u64,
     /// 导出包包含历史正文，UI 必须提示用户。
     pub contains_historical_text: bool,
+    /// 缺口之后的链可以继续校验，但此前历史不能声称完整。
+    #[serde(default = "default_history_complete")]
+    pub history_complete: bool,
+    #[serde(default)]
+    pub continuity_gaps: Vec<ProofContinuityGap>,
 }
 
 #[derive(Debug)]
@@ -130,10 +141,17 @@ pub struct ProofReplaySession {
     pub device_id: String,
     events: Vec<WritingInputEvent>,
     checkpoints: Vec<ProofCheckpoint>,
+    gaps: Vec<ProofContinuityGap>,
+    gap_baselines: BTreeMap<u64, ProofCheckpoint>,
     baseline_text: String,
     branches: Vec<ProofDeviceBranch>,
     chain_errors: Vec<String>,
     state: Mutex<ReplayState>,
+}
+
+/// 旧帧/旧导出包没有缺口字段时按“历史完整”读取，保持兼容。
+fn default_history_complete() -> bool {
+    true
 }
 
 impl ProofReplaySession {
@@ -202,15 +220,53 @@ impl ProofReplaySession {
         })?;
         let checkpoints =
             checkpoint::load_checkpoints(store.app_data_root(), &device_id, &request.chapter_id)?;
+        let gaps = checkpoint::load_continuity_gaps(
+            store.app_data_root(),
+            &device_id,
+            &request.chapter_id,
+        )?;
+        let gap_baselines: BTreeMap<u64, ProofCheckpoint> = checkpoints
+            .iter()
+            .filter(|checkpoint| {
+                gaps.iter()
+                    .any(|gap| gap.baseline_seq == checkpoint.seq)
+            })
+            .map(|checkpoint| (checkpoint.seq, checkpoint.clone()))
+            .collect();
         let baseline_text = request.baseline_text.clone().unwrap_or_default();
-        let chain_errors = validate_full_chain(&events, &checkpoints, &baseline_text);
-        let state = initial_state(&events, &checkpoints, &baseline_text, 0);
+        let mut chain_errors = validate_full_chain(
+            &events,
+            &checkpoints,
+            &gap_baselines,
+            &baseline_text,
+        );
+        for gap in &gaps {
+            match checkpoints
+                .iter()
+                .find(|checkpoint| checkpoint.seq == gap.baseline_seq)
+            {
+                Some(checkpoint)
+                    if checkpoint.text_sha256 == gap.baseline_text_sha256
+                        && checkpoint.content_hash == gap.baseline_content_hash => {}
+                Some(_) => chain_errors.push(format!(
+                    "连续性缺口 {} 的基线检查点摘要不一致",
+                    gap.event_id
+                )),
+                None => chain_errors.push(format!(
+                    "连续性缺口 {} 缺少基线检查点",
+                    gap.event_id
+                )),
+            }
+        }
+        let state = initial_state(&events, &checkpoints, &gap_baselines, &baseline_text, 0);
 
         Ok(Self {
             chapter_id: request.chapter_id.clone(),
             device_id,
             events,
             checkpoints,
+            gaps,
+            gap_baselines,
             baseline_text,
             branches,
             chain_errors,
@@ -235,6 +291,7 @@ impl ProofReplaySession {
         }
         while state.position < target && state.position < self.events.len() {
             let event = &self.events[state.position];
+            reset_at_gap_baseline(&mut state, event, &self.gap_baselines);
             apply_event(&mut state, event);
             state.position += 1;
         }
@@ -262,6 +319,8 @@ impl ProofReplaySession {
             last_timestamp_ms,
             next_timestamp_ms,
             checkpoint_seq: state.checkpoint_seq,
+            history_complete: self.gaps.is_empty(),
+            continuity_gaps: self.gaps.clone(),
             branches: self.branches.clone(),
             valid: errors.is_empty(),
             errors,
@@ -269,7 +328,13 @@ impl ProofReplaySession {
     }
 
     fn reset_state(&self, target: usize) -> ReplayState {
-        initial_state(&self.events, &self.checkpoints, &self.baseline_text, target)
+        initial_state(
+            &self.events,
+            &self.checkpoints,
+            &self.gap_baselines,
+            &self.baseline_text,
+            target,
+        )
     }
 }
 
@@ -278,6 +343,7 @@ impl ProofReplaySession {
 fn validate_full_chain(
     events: &[WritingInputEvent],
     checkpoints: &[ProofCheckpoint],
+    gap_baselines: &BTreeMap<u64, ProofCheckpoint>,
     baseline_text: &str,
 ) -> Vec<String> {
     let mut state = ReplayState {
@@ -304,11 +370,15 @@ fn validate_full_chain(
         state.expected_content_hash = baseline.content_hash.clone();
     }
 
-    let checkpoint_by_seq: std::collections::HashMap<u64, &ProofCheckpoint> =
-        checkpoints.iter().map(|checkpoint| (checkpoint.seq, checkpoint)).collect();
+    let checkpoint_by_seq: std::collections::HashMap<u64, &ProofCheckpoint> = checkpoints
+        .iter()
+        .filter(|checkpoint| checkpoint.reason != "continuity_gap")
+        .map(|checkpoint| (checkpoint.seq, checkpoint))
+        .collect();
     let mut errors = Vec::new();
 
     for event in events {
+        reset_at_gap_baseline(&mut state, event, gap_baselines);
         let before_errors = state.errors.len();
         apply_event(&mut state, event);
         errors.extend(state.errors[before_errors..].iter().cloned());
@@ -333,7 +403,9 @@ fn validate_full_chain(
     }
 
     let last_seq = state.seq;
-    for checkpoint in checkpoints.iter().filter(|checkpoint| checkpoint.seq > 0) {
+    for checkpoint in checkpoints.iter().filter(|checkpoint| {
+        checkpoint.seq > 0 && checkpoint.reason != "continuity_gap"
+    }) {
         if checkpoint.seq > last_seq {
             errors.push(format!(
                 "检查点 {} 没有对应的事件",
@@ -372,6 +444,7 @@ fn target_position(
 fn initial_state(
     events: &[WritingInputEvent],
     checkpoints: &[ProofCheckpoint],
+    gap_baselines: &BTreeMap<u64, ProofCheckpoint>,
     baseline_text: &str,
     target: usize,
 ) -> ReplayState {
@@ -384,6 +457,9 @@ fn initial_state(
     };
     let mut chosen = None;
     for checkpoint in checkpoints.iter().rev() {
+        if checkpoint.reason == "continuity_gap" {
+            continue;
+        }
         if checkpoint.seq != 0 {
             let Some(target_seq) = target_seq else {
                 continue;
@@ -445,10 +521,58 @@ fn initial_state(
     };
     while state.position < target && state.position < events.len() {
         let event = &events[state.position];
+        reset_at_gap_baseline(&mut state, event, gap_baselines);
         apply_event(&mut state, event);
         state.position += 1;
     }
+    apply_trailing_gap_baseline(&mut state, target, events.len(), gap_baselines);
     state
+}
+
+/// 目标位于全部事件之后时，即使缺口之后还没有新事件，回放正文也必须
+/// 停在缺口记录的新链基线上，不能返回缺口前的旧链尾。
+fn apply_trailing_gap_baseline(
+    state: &mut ReplayState,
+    target: usize,
+    events_len: usize,
+    gap_baselines: &BTreeMap<u64, ProofCheckpoint>,
+) {
+    if target < events_len {
+        return;
+    }
+    let Some((&gap_seq, checkpoint)) = gap_baselines.iter().next_back() else {
+        return;
+    };
+    if state.seq > gap_seq {
+        return;
+    }
+    state.text = checkpoint.text.clone();
+    state.digest = ContentDigest::from_text(&checkpoint.text);
+    state.expected_content_hash = checkpoint.content_hash.clone();
+    state.previous_event_hash.clear();
+    state.checkpoint_seq = gap_seq;
+}
+
+/// 跨过连续性缺口时，把回放状态重置到缺口记录的新链基线。
+fn reset_at_gap_baseline(
+    state: &mut ReplayState,
+    event: &WritingInputEvent,
+    gap_baselines: &BTreeMap<u64, ProofCheckpoint>,
+) {
+    let Some(proof) = event.proof.as_ref() else {
+        return;
+    };
+    let Some((&gap_seq, checkpoint)) = gap_baselines.range(..proof.seq).next_back() else {
+        return;
+    };
+    if state.seq > gap_seq {
+        return;
+    }
+    state.text = checkpoint.text.clone();
+    state.digest = ContentDigest::from_text(&checkpoint.text);
+    state.expected_content_hash = checkpoint.content_hash.clone();
+    state.previous_event_hash.clear();
+    state.checkpoint_seq = gap_seq;
 }
 
 fn checkpoint_is_valid(checkpoint: &ProofCheckpoint, events: &[WritingInputEvent]) -> bool {
@@ -597,6 +721,8 @@ pub fn export_chapter_proof(
         .collect();
     events.sort_by_key(|event| event.proof.as_ref().map_or(0, |proof| proof.seq));
     let checkpoints = checkpoint::load_checkpoints(store.app_data_root(), &device_id, chapter_id)?;
+    let continuity_gaps =
+        checkpoint::load_continuity_gaps(store.app_data_root(), &device_id, chapter_id)?;
     let baseline = checkpoints
         .iter()
         .find(|checkpoint| checkpoint.seq == 0)
@@ -621,5 +747,7 @@ pub fn export_chapter_proof(
         final_text_sha256: text_sha256(&frame.text),
         final_seq: frame.seq,
         contains_historical_text: true,
+        history_complete: continuity_gaps.is_empty(),
+        continuity_gaps,
     })
 }

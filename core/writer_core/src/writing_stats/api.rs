@@ -939,6 +939,43 @@ impl StatsApi {
             .record_sync_import_baseline(chapter_id, text, sync_event_id, source_device_id)
     }
 
+    /// 封存无法重建原始事实的证明连续性缺口，并用当前真实正文建立新链基线。
+    pub fn seal_proof_continuity_gap(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        transaction_id: &str,
+        event_id: &str,
+        missing_fields: &[String],
+        phase: &str,
+        text: &str,
+    ) -> Result<()> {
+        self.store.seal_proof_continuity_gap(
+            project_id,
+            volume_id,
+            chapter_id,
+            transaction_id,
+            event_id,
+            missing_fields,
+            phase,
+            text,
+        )
+    }
+
+    /// 读取某章节已封存的证明连续性缺口。
+    pub fn load_proof_continuity_gaps(
+        &self,
+        device_id: &str,
+        chapter_id: &str,
+    ) -> Result<Vec<crate::writing_stats::proof::ProofContinuityGap>> {
+        crate::writing_stats::checkpoint::load_continuity_gaps(
+            self.store.app_data_root(),
+            device_id,
+            chapter_id,
+        )
+    }
+
     /// 正文保存后写入完整正文检查点。
     pub fn record_chapter_checkpoint(
         &self,

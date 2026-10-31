@@ -674,6 +674,14 @@ impl ProofRecoveryState {
             .retain(|issue| issue.event_id.as_deref() != Some(event_id));
     }
 
+    /// 标记一个事件已经以持久事实收敛：真实事件已落盘，或旧事务已封存
+    /// 连续性缺口并建立新链基线。两种结果都不能再触发下一轮重建。
+    pub(crate) fn mark_event_resolved(&mut self, event_id: &str) {
+        self.persisted_event_ids.insert(event_id.to_string());
+        self.issues
+            .retain(|issue| issue.event_id.as_deref() != Some(event_id));
+    }
+
     /// 记录本轮仍未恢复的对象，供后续 target 直接复用，不重新查库。
     pub(crate) fn record_issue(&mut self, issue: ProofRecoveryIssue) {
         if let Some(event_id) = issue.event_id.as_deref() {
@@ -878,6 +886,33 @@ struct RecoveryWorkItem {
     transaction_id: Option<String>,
 }
 
+/// 无法重建原始事实、但正文提交已确认的旧事务。先完成所有可恢复事件，
+/// 再统一封存缺口，避免新链基线提前截断仍可补记的 before→after 链。
+#[derive(Debug)]
+struct GapWorkItem {
+    transaction_id: String,
+    event_id: String,
+    project_id: String,
+    volume_id: String,
+    chapter_id: String,
+    missing_fields: Vec<String>,
+    phase: String,
+    live_path: PathBuf,
+}
+
+fn gap_work_order(left: &GapWorkItem, right: &GapWorkItem) -> std::cmp::Ordering {
+    left.project_id
+        .cmp(&right.project_id)
+        .then_with(|| left.volume_id.cmp(&right.volume_id))
+        .then_with(|| left.chapter_id.cmp(&right.chapter_id))
+        .then_with(|| {
+            event_action_index(&left.event_id)
+                .unwrap_or(usize::MAX)
+                .cmp(&event_action_index(&right.event_id).unwrap_or(usize::MAX))
+        })
+        .then_with(|| left.event_id.cmp(&right.event_id))
+}
+
 /// 按章节聚合后，按真实发生时间/动作序号/事件 ID 排序。
 fn recovery_work_order(left: &RecoveryWorkItem, right: &RecoveryWorkItem) -> std::cmp::Ordering {
     left.record
@@ -1010,8 +1045,11 @@ pub(crate) fn recover_pending_state(
         .find_events_by_ids(&all_event_ids)?;
     state.persisted_event_ids = persisted_events.keys().cloned().collect();
     let mut completed_ids = state.persisted_event_ids.clone();
+    let mut recovered = 0usize;
     let mut to_remove: HashSet<String> = HashSet::new();
     let mut work_items: Vec<RecoveryWorkItem> = Vec::new();
+    let mut gap_items: Vec<GapWorkItem> = Vec::new();
+    let mut failed_chapters: HashSet<(String, String, String)> = HashSet::new();
 
     for intent in pending.intents {
         if state.persisted_event_ids.contains(&intent.event_id) {
@@ -1125,19 +1163,54 @@ pub(crate) fn recover_pending_state(
             event_id,
             gap.missing_fields.join(",")
         );
-        state.add_issue_with_missing(
-            event_project_id(&event_id),
-            Some(transaction.transaction_id.clone()),
-            Some(event_id.clone()),
-            format!("事务 {} 无法重建原始证明: {}", transaction.transaction_id, gap.reason),
-            gap.missing_fields,
-        );
+        let Some(workspace_path) = event_workspace_path(&event_id) else {
+            state.add_issue_with_missing(
+                event_project_id(&event_id),
+                Some(transaction.transaction_id.clone()),
+                Some(event_id.clone()),
+                format!(
+                    "事务 {} 无法重建原始证明，且事件 ID 无法定位章节: {}",
+                    transaction.transaction_id, gap.reason
+                ),
+                gap.missing_fields,
+            );
+            continue;
+        };
+        let Some((project_id, volume_id, chapter_id)) =
+            chapter_path_parts(Path::new(&workspace_path))
+        else {
+            state.add_issue_with_missing(
+                event_project_id(&event_id),
+                Some(transaction.transaction_id.clone()),
+                Some(event_id.clone()),
+                format!(
+                    "事务 {} 无法重建原始证明，且事件路径不是章节正文: {}",
+                    transaction.transaction_id, gap.reason
+                ),
+                gap.missing_fields,
+            );
+            continue;
+        };
+        let phase = match transaction.phase {
+            TransactionPhase::FilesCommitted => "files_committed",
+            TransactionPhase::Finished => "finished",
+            _ => "unconfirmed",
+        };
+        gap_items.push(GapWorkItem {
+            transaction_id: transaction.transaction_id.clone(),
+            event_id,
+            project_id,
+            volume_id,
+            chapter_id,
+            missing_fields: gap.missing_fields,
+            phase: phase.to_string(),
+            live_path: core.app_data_root().join(&workspace_path),
+        });
     }
 
     // 同一章节必须按 before→after 顺序重放；跨章节互不依赖，但固定按章节分组，
     // 避免诊断与重试顺序随 HashMap/目录遍历变化。
     work_items.sort_by(recovery_work_order);
-    let mut recovered = 0usize;
     for item in work_items {
         let record = &item.record;
         match core.record_sync_content_change_at(
@@ -1151,12 +1224,55 @@ pub(crate) fn recover_pending_state(
             "",
             record.occurred_at_ms,
         ) {
-            Ok(_) => {
+            Ok(true) => {
                 completed_ids.insert(record.event_id.clone());
                 state.mark_event_persisted(&record.event_id);
                 recovered = recovered.saturating_add(1);
             }
+            Ok(false) => {
+                let mut ids = HashSet::new();
+                ids.insert(record.event_id.clone());
+                match core.get_stats_api().store().find_events_by_ids(&ids) {
+                    Ok(persisted) if persisted.contains_key(&record.event_id) => {
+                        completed_ids.insert(record.event_id.clone());
+                        state.mark_event_persisted(&record.event_id);
+                        recovered = recovered.saturating_add(1);
+                    }
+                    Ok(_) => {
+                        failed_chapters.insert((
+                            record.project_id.clone(),
+                            record.volume_id.clone(),
+                            record.chapter_id.clone(),
+                        ));
+                        state.add_issue(
+                            Some(record.project_id.clone()),
+                            item.transaction_id.clone(),
+                            Some(record.event_id.clone()),
+                            "record_sync_content_change_at 返回 false 且事件未落盘（可能是重复事件 ID 或无实际正文变化），保留事务材料"
+                                .to_string(),
+                        );
+                    }
+                    Err(error) => {
+                        failed_chapters.insert((
+                            record.project_id.clone(),
+                            record.volume_id.clone(),
+                            record.chapter_id.clone(),
+                        ));
+                        state.add_issue(
+                            Some(record.project_id.clone()),
+                            item.transaction_id.clone(),
+                            Some(record.event_id.clone()),
+                            format!("record_sync_content_change_at 返回 false 后确认事件落盘失败: {error}"),
+                        );
+                    }
+                }
+            }
             Err(error) => {
+                failed_chapters.insert((
+                    record.project_id.clone(),
+                    record.volume_id.clone(),
+                    record.chapter_id.clone(),
+                ));
                 log::warn!(
                     "[proof_intent] 按原始记录恢复同步证明失败 {}: {error}",
                     record.event_id
@@ -1173,6 +1289,70 @@ pub(crate) fn recover_pending_state(
 
     // 先清理已确认完成的事务目录，再删除其引用的意图文件；事务目录仍在时
     // 不能先删意图，否则下一次恢复会重新落入“已提交事务 + 缺失意图”的歧义。
+    // 可恢复事件全部按原顺序补记后，再封存无法重建的旧事务。封存会把
+    // 当前真实正文设为新链基线，因此绝不能早于仍可恢复的 before→after 事件。
+    gap_items.sort_by(gap_work_order);
+    for item in gap_items {
+        if failed_chapters.contains(&(
+            item.project_id.clone(),
+            item.volume_id.clone(),
+            item.chapter_id.clone(),
+        )) {
+            state.add_issue_with_missing(
+                Some(item.project_id),
+                Some(item.transaction_id),
+                Some(item.event_id),
+                "同章节仍有未恢复的可恢复证明事件，暂不封存连续性缺口".to_string(),
+                item.missing_fields,
+            );
+            continue;
+        }
+        let baseline_text = match fs::read_to_string(&item.live_path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => {
+                state.add_issue_with_missing(
+                    Some(item.project_id),
+                    Some(item.transaction_id),
+                    Some(item.event_id),
+                    format!("旧事务已确认提交，但读取当前正文作为新链基线失败: {error}"),
+                    item.missing_fields,
+                );
+                continue;
+            }
+        };
+        match core.get_stats_api().store().seal_proof_continuity_gap(
+            &item.project_id,
+            &item.volume_id,
+            &item.chapter_id,
+            &item.transaction_id,
+            &item.event_id,
+            &item.missing_fields,
+            &item.phase,
+            &baseline_text,
+        ) {
+            Ok(()) => {
+                completed_ids.insert(item.event_id.clone());
+                state.mark_event_resolved(&item.event_id);
+                recovered = recovered.saturating_add(1);
+                log::warn!(
+                    "[proof_intent] 事务 {} 的历史证明事实无法重建，已封存连续性缺口并以当前正文开启新链 {}",
+                    item.transaction_id,
+                    item.event_id
+                );
+            }
+            Err(error) => {
+                state.add_issue_with_missing(
+                    Some(item.project_id),
+                    Some(item.transaction_id),
+                    Some(item.event_id),
+                    format!("无法重建原始证明，封存连续性缺口失败: {error}"),
+                    item.missing_fields,
+                );
+            }
+        }
+    }
+
     let mut retained_ids: HashSet<String> = HashSet::new();
     for transaction_root in scans.keys() {
         retained_ids.extend(cleanup_completed_transactions(
