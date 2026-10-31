@@ -32,6 +32,17 @@
   </provides>
 
   <releases>
+    <release version="1.0.0" date="2026-10-31">
+      <description>
+        <p>素笺写作 1.0 正式版。</p>
+        <ul>
+          <li>全新 KDE Kirigami 6 界面，原生 Wayland 与 Breeze 深浅色适配。</li>
+          <li>内置离线中文校对模型，支持全文校对与逐句回放。</li>
+          <li>星图、写作统计、多端同步与 AI Agent 工作流。</li>
+          <li>内置 stdio MCP Server，AI 工具可在只读作品沙箱中调用。</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-09-10">
       <description>
         <p>初始发布版本。</p>

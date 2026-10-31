@@ -33,7 +33,7 @@ export CARGO_TARGET_DIR
 mkdir -p "${CARGO_TARGET_DIR}"
 
 NAME="sujian"
-VERSION="0.1.0"
+VERSION="1.0.0"
 RELEASE="1"
 
 echo "==> 仓库根目录: ${REPO_ROOT}"

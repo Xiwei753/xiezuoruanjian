@@ -10,7 +10,7 @@
 %global debug_package %{nil}
 
 Name:           sujian
-Version:        0.1.0
+Version:        1.0.0
 Release:        1%{?dist}
 Summary:        素笺写作 — 跨平台写作软件
 
@@ -160,6 +160,13 @@ ln -s libonnxruntime.so.1.22.0 %{buildroot}%{_libdir}/sujian/libonnxruntime.so
 %{_libdir}/sujian/libonnxruntime.so.1.22.0
 
 %changelog
+* Sat Oct 31 2026 Xiwei753 <xiwei753@users.noreply.github.com> - 1.0.0-1
+- 素笺写作 1.0.0 正式发布
+- 全新 KDE Kirigami 6 界面、原生 Wayland 与 Breeze 深浅色适配
+- 内置离线中文校对模型 MacBERT4CSC，支持全文校对与逐句回放
+- 星图、写作统计、多端同步与 AI Agent 工作流
+- 内置 stdio MCP Server，可在 OpenCode、Codex 等 AI CLI 中直接调用作品
+- AI 侧载能力运行在 bubblewrap 只读作品沙箱中
 * Sun Oct 18 2026 Xiwei753 <xiwei753@users.noreply.github.com> - 0.1.0-1
 - 校对引擎换代：内置 MacBERT4CSC ONNX 模型与 ONNX Runtime，随包分发 Apache-2.0/MIT 许可与第三方来源说明（Issue #985）
 * Thu Oct 15 2026 Xiwei753 <xiwei753@users.noreply.github.com> - 0.1.0-1
