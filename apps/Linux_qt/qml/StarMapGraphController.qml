@@ -667,7 +667,10 @@ QtObject {
                 var updatedNode = nodeRes.data;
                 if (!updatedNode || updatedNode.id !== embed.legacyPortalNodeId
                         || !_replaceGraphObject("nodes", "id", embed.legacyPortalNodeId, updatedNode)) {
+                    // Core 已保存成功；即使返回 DTO 不完整、无法原地替换，
+                    // 重新载入图后也必须通知左栏刷新标题。
                     loadGraph();
+                    structureChanged();
                     return;
                 }
                 var nextEmbeds = [];
@@ -697,7 +700,9 @@ QtObject {
             var updated = res.data;
             if (!updated || updated.instanceId !== instanceId
                     || !_replaceGraphObject("embeds", "instanceId", instanceId, updated)) {
+                // 正式 Embed 同样已在 Core 保存成功，重载后补发结构变更。
                 loadGraph();
+                structureChanged();
                 return;
             }
             var nextEmbeds = [];
