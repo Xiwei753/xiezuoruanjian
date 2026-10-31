@@ -142,8 +142,17 @@ pub struct AgentProbe {
     pub config_status: String,
     pub auth_status: String,
     pub launchability: String,
+    /// 该候选是否满足内置适配器的兼容性要求：`supported` /
+    /// `unsupported` / `unknown`。OpenCode 只有确认主版本为 2 才算
+    /// supported；界面和启动选择不能从展示用版本字符串反推。
+    #[serde(default = "default_compatibility")]
+    pub compatibility: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+fn default_compatibility() -> String {
+    "unknown".to_string()
 }
 
 impl Default for AgentProbe {
@@ -154,8 +163,15 @@ impl Default for AgentProbe {
             config_status: "unknown".to_string(),
             auth_status: "unknown".to_string(),
             launchability: "unknown".to_string(),
+            compatibility: default_compatibility(),
             error: None,
         }
+    }
+}
+
+impl AgentProbe {
+    pub fn is_supported(&self) -> bool {
+        self.compatibility == "supported"
     }
 }
 
@@ -183,6 +199,10 @@ pub struct AgentInventory {
     pub generation: u64,
     pub scanned_at: String,
     pub installed: Vec<AgentInstallation>,
+    /// 真实存在但不满足兼容性要求的候选（例如 OpenCode 1.x）。它们不能
+    /// 被选择或启动，只用于向用户清楚报告检测到的路径与版本。
+    #[serde(default)]
+    pub rejected: Vec<AgentCandidate>,
 }
 
 impl AgentInventory {
@@ -191,6 +211,7 @@ impl AgentInventory {
             generation,
             scanned_at: String::new(),
             installed: Vec::new(),
+            rejected: Vec::new(),
         }
     }
 

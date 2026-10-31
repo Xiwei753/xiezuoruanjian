@@ -878,8 +878,9 @@ impl AgentRuntimeBackend {
         let installation = self.agent_catalog.iter().find(|installation| {
             installation.descriptor.id == agent_id
                 && installation.candidates.iter().any(|candidate| {
-                    candidate.executable.launch_path == launch_path
-                        || candidate.executable.canonical_path.as_deref() == Some(launch_path)
+                    (candidate.executable.launch_path == launch_path
+                        || candidate.executable.canonical_path.as_deref() == Some(launch_path))
+                        && (agent_id != "opencode" || candidate.probe.is_supported())
                 })
         })?;
         let descriptor = &installation.descriptor;
@@ -888,6 +889,42 @@ impl AgentRuntimeBackend {
             descriptor.launch.args.clone(),
             descriptor.name.clone(),
         ))
+    }
+
+    /// OpenCode 的实际启动选择必须来自已确认 major=2 的候选；不能只相信
+    /// QML 传来的路径字符串。Codex 继续使用原有选择规则。
+    fn validate_agent_selection(&self, agent_id: &str, launch_path: &str) -> Result<(), String> {
+        if agent_id != "opencode" {
+            return Ok(());
+        }
+        let installation = self
+            .agent_catalog
+            .iter()
+            .find(|installation| installation.descriptor.id == agent_id)
+            .ok_or_else(|| {
+                "需要 OpenCode 2.x：当前安装清单中没有与 OpenCode 2.x 兼容的安装，请先安装或选择 OpenCode 2.x"
+                    .to_string()
+            })?;
+        let candidate = installation
+            .candidates
+            .iter()
+            .find(|candidate| {
+                candidate.executable.launch_path == launch_path
+                    || candidate.executable.canonical_path.as_deref() == Some(launch_path)
+            })
+            .ok_or_else(|| {
+                format!(
+                    "需要 OpenCode 2.x：{launch_path} 不是当前已发现的兼容安装，请重新选择 OpenCode 2.x"
+                )
+            })?;
+        if !candidate.probe.is_supported() {
+            return Err(candidate
+                .probe
+                .error
+                .clone()
+                .unwrap_or_else(|| format!("需要 OpenCode 2.x：{launch_path} 的版本不兼容")));
+        }
+        Ok(())
     }
 
     fn set_project(&mut self, project_id: QString, project_title: QString) {
@@ -952,6 +989,10 @@ impl AgentRuntimeBackend {
         let protocol = protocol.to_string();
         let launch_args: Vec<String> =
             serde_json::from_str(&launch_args_json.to_string()).unwrap_or_default();
+        if let Err(error) = self.validate_agent_selection(&agent_id, &launch_path) {
+            self.set_error(error);
+            return;
+        }
         if self.agent_id == agent_id
             && self.launch_path == launch_path
             && self.protocol == protocol
@@ -1088,9 +1129,19 @@ impl AgentRuntimeBackend {
                     conversation.agent_adapter_version = ADAPTER_VERSION;
                     let _ = api.save_agent_conversation(&conversation);
                 } else {
-                    self.set_error(
-                        "该会话使用的 Agent 安装已不存在，请重新选择 Agent 后再发送消息",
-                    );
+                    if conversation.agent_id == "opencode" {
+                        // 旧会话可能绑定到 OpenCode 1.x 或已失效路径。保留 Core
+                        // 聊天内容，但不把旧路径交给 ACP；用户可切换到已发现的
+                        // OpenCode 2.x 后继续。
+                        self.set_error(
+                            "该会话使用的 OpenCode 安装不兼容或已不存在：需要 OpenCode 2.x。请在 AI 面板重新选择已发现的 OpenCode 2.x；素笺聊天记录已保留",
+                        );
+                        self.launch_path.clear();
+                    } else {
+                        self.set_error(
+                            "该会话使用的 Agent 安装已不存在，请重新选择 Agent 后再发送消息",
+                        );
+                    }
                 }
                 self.model = Self::restored_model_for_executor(
                     &conversation,
@@ -1151,6 +1202,10 @@ impl AgentRuntimeBackend {
         }
         if self.agent_id.is_empty() || self.launch_path.is_empty() {
             self.set_error("请先在本机 Agent 列表中选择一个 Agent");
+            return;
+        }
+        if let Err(error) = self.validate_agent_selection(&self.agent_id, &self.launch_path) {
+            self.set_error(error);
             return;
         }
         let mut conversation = match self.ensure_conversation() {

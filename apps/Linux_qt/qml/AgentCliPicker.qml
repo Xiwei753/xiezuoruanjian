@@ -17,6 +17,9 @@ ColumnLayout {
     property var backendRef: null
     property var dt
     property var installedAgents: []
+    // 探测到但版本不满足要求的候选（例如 OpenCode 1.x），只用于明确提示，
+    // 不进入可选安装列表。
+    property var rejectedAgents: []
     property string lastError: ""
 
     spacing: Kirigami.Units.smallSpacing
@@ -55,6 +58,7 @@ ColumnLayout {
     function reload() {
         if (!backendRef) {
             installedAgents = []
+            rejectedAgents = []
             return
         }
         var inventory = parseInventory(backendRef.inventory_json)
@@ -65,6 +69,14 @@ ColumnLayout {
                 next.push(installation)
         }
         installedAgents = next
+        var rejected = []
+        var rawRejected = inventory.rejected ? inventory.rejected : []
+        for (var r = 0; r < rawRejected.length; ++r) {
+            var probe = rawRejected[r] && rawRejected[r].probe ? rawRejected[r].probe : {}
+            var detail = String(probe.error || qsTr("版本不兼容，未加入可选安装"))
+            rejected.push(detail)
+        }
+        rejectedAgents = rejected
         lastError = String(backendRef.last_error || "")
     }
 
@@ -204,6 +216,15 @@ ColumnLayout {
             currentIndex: root.candidateIndex(root.currentInstallation())
             onActivated: function(index) { root.chooseCandidate(index) }
         }
+    }
+
+    Label {
+        Layout.fillWidth: true
+        visible: root.rejectedAgents.length > 0
+        text: root.rejectedAgents.join("\n")
+        color: Kirigami.Theme.negativeTextColor
+        wrapMode: Text.WordWrap
+        font.pixelSize: Kirigami.Theme.smallFont.pixelSize
     }
 
     Label {

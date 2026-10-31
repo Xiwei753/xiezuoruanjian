@@ -297,12 +297,22 @@ impl AgentCliBackend {
             self.set_last_error("只能选择本机已经检测到的 Agent".to_string());
             return;
         };
-        if !installation
+        let Some(candidate) = installation
             .candidates
             .iter()
-            .any(|candidate| candidate.executable.launch_path == launch_path)
-        {
+            .find(|candidate| candidate.executable.launch_path == launch_path)
+        else {
             self.set_last_error("所选启动路径不属于该 Agent 的本机安装".to_string());
+            return;
+        };
+        if !candidate.probe.is_supported() {
+            self.set_last_error(
+                candidate
+                    .probe
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "该 Agent 安装的版本不兼容".to_string()),
+            );
             return;
         }
         if self.selected_agent_id_value == agent_id
@@ -521,16 +531,17 @@ fn choose_selection(
         let Some(installation) = inventory.find_installation(agent_id) else {
             continue;
         };
-        let path = if installation
-            .candidates
-            .iter()
-            .any(|candidate| candidate.executable.launch_path == launch_path)
-        {
+        // 只有探测确认兼容的候选才能成为实际选择；OpenCode 的 1.x/未确认
+        // 版本在 inventory 中已进入 rejected，这里仍防御性过滤一次。
+        let path = if installation.candidates.iter().any(|candidate| {
+            candidate.executable.launch_path == launch_path && candidate.probe.is_supported()
+        }) {
             launch_path.to_string()
         } else {
             installation
                 .candidates
-                .first()
+                .iter()
+                .find(|candidate| candidate.probe.is_supported())
                 .map(|candidate| candidate.executable.launch_path.clone())
                 .unwrap_or_default()
         };
@@ -540,14 +551,18 @@ fn choose_selection(
     }
     inventory
         .installed
-        .first()
-        .and_then(|installation: &AgentInstallation| {
-            installation.candidates.first().map(|candidate| {
-                (
-                    installation.descriptor.id.clone(),
-                    candidate.executable.launch_path.clone(),
-                )
-            })
+        .iter()
+        .find_map(|installation: &AgentInstallation| {
+            installation
+                .candidates
+                .iter()
+                .find(|candidate| candidate.probe.is_supported())
+                .map(|candidate| {
+                    (
+                        installation.descriptor.id.clone(),
+                        candidate.executable.launch_path.clone(),
+                    )
+                })
         })
         .unwrap_or_default()
 }

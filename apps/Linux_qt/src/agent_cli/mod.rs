@@ -46,13 +46,15 @@ pub fn scan(generation: u64) -> ScanOutcome {
         );
     }
 
-    let installed = adapters::build_installations(&catalog, &executables, &preferred_paths);
+    let (installed, rejected) =
+        adapters::build_installations(&catalog, &executables, &preferred_paths);
 
     ScanOutcome {
         inventory: AgentInventory {
             generation,
             scanned_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             installed,
+            rejected,
         },
         preferences,
     }

@@ -48,8 +48,7 @@ struct AcpModelConfig {
 }
 
 impl AcpModelConfig {
-    fn from_options(value: &Value) -> Option<Self> {
-        let option = model_option(value)?;
+    fn from_option(option: &Value) -> Option<Self> {
         let config_id = option.get("id").and_then(Value::as_str)?.to_string();
         let allowed = flatten_select_options(option)
             .into_iter()
@@ -63,6 +62,49 @@ impl AcpModelConfig {
     }
 }
 
+/// OpenCode v2 在 `session/new` / `session/load` 和 `config_option_update`
+/// 中同时声明 model、effort、mode 三个官方配置项。模型与其他配置只在
+/// 同一个会话快照中消费，不能把模型名的后缀猜成另一家的模型。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AcpSessionConfig {
+    model: Option<AcpModelConfig>,
+    effort: Option<AcpModelConfig>,
+    mode: Option<AcpModelConfig>,
+}
+
+impl AcpSessionConfig {
+    fn from_options(value: &Value) -> Option<Self> {
+        let model = model_option(value).and_then(AcpModelConfig::from_option);
+        let effort = effort_option(value).and_then(AcpModelConfig::from_option);
+        let mode = mode_option(value).and_then(AcpModelConfig::from_option);
+        (model.is_some() || effort.is_some() || mode.is_some()).then_some(Self {
+            model,
+            effort,
+            mode,
+        })
+    }
+
+    fn detail(&self) -> String {
+        fn describe(name: &str, config: &Option<AcpModelConfig>) -> String {
+            match config {
+                Some(config) => format!(
+                    "{name}(configId={} 当前值={} 可选值={})",
+                    config.config_id,
+                    config.current.as_deref().unwrap_or("<未声明>"),
+                    config.allowed.len()
+                ),
+                None => format!("{name}(未声明)"),
+            }
+        }
+        format!(
+            "{}，{}，{}",
+            describe("model", &self.model),
+            describe("effort", &self.effort),
+            describe("mode", &self.mode)
+        )
+    }
+}
+
 pub struct AcpAdapter {
     client: Arc<RpcClient>,
     session_id: Arc<Mutex<Option<String>>>,
@@ -73,8 +115,8 @@ pub struct AcpAdapter {
     /// 下一轮要使用的模型。模型切换不重建会话，只在 prompt 前同步给运行时。
     model: Option<String>,
     applied_model: Arc<Mutex<Option<String>>>,
-    /// 原生会话声明的模型配置项与可选值；仅由会话协议更新。
-    model_config: Arc<Mutex<Option<AcpModelConfig>>>,
+    /// 原生会话声明的 model、effort、mode 配置快照；仅由会话协议更新。
+    session_config: Arc<Mutex<Option<AcpSessionConfig>>>,
     /// 每次收到 config_option_update 的 currentValue 时递增，供切换请求
     /// 在响应缺少 currentValue 时等待真实确认。
     model_update_generation: Arc<AtomicU64>,
@@ -89,7 +131,7 @@ impl AcpAdapter {
         let session_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let state: Arc<Mutex<AcpTurnState>> = Arc::new(Mutex::new(AcpTurnState::default()));
         let applied_model: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let model_config: Arc<Mutex<Option<AcpModelConfig>>> = Arc::new(Mutex::new(None));
+        let session_config: Arc<Mutex<Option<AcpSessionConfig>>> = Arc::new(Mutex::new(None));
         let model_update_generation: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         // A Weak client avoids a cycle: RpcClient owns the reader handler.
         let handler_client: Arc<Mutex<Option<Weak<RpcClient>>>> = Arc::new(Mutex::new(None));
@@ -98,7 +140,7 @@ impl AcpAdapter {
         let handler_state = state.clone();
         let handler_rpc = handler_client.clone();
         let handler_applied_model = applied_model.clone();
-        let handler_model_config = model_config.clone();
+        let handler_session_config = session_config.clone();
         let handler_model_generation = model_update_generation.clone();
         let handler_provider_id = ctx.agent_id.clone();
         let handler_provider_name = ctx.agent_name.clone();
@@ -192,7 +234,7 @@ impl AcpAdapter {
                                     &handler_provider_name,
                                     &handler_emit,
                                     &handler_applied_model,
-                                    &handler_model_config,
+                                    &handler_session_config,
                                     &handler_model_generation,
                                 );
                             }
@@ -211,7 +253,7 @@ impl AcpAdapter {
                             &handler_provider_name,
                             &handler_emit,
                             &handler_applied_model,
-                            &handler_model_config,
+                            &handler_session_config,
                             &handler_model_generation,
                         );
                     }
@@ -361,7 +403,14 @@ impl AcpAdapter {
                     match client.request("session/load", params, Duration::from_secs(60)) {
                         Ok(result) => (result, true),
                         Err(error) => {
-                            log::warn!("[agent] ACP session/load failed, creating new: {error}");
+                            // v2 的 session/load 要求 cwd 与原生会话目录完全一致。
+                            // 存档目录或执行者变化时不能静默换目录恢复，否则可能
+                            // 恢复到错误的工作区；明确告知后按 Core 历史新建会话。
+                            let message = format!(
+                                "无法恢复 OpenCode 原生会话（当前目录与原会话目录不一致或会话已失效）：{error}；素笺将根据 Core 历史创建新会话"
+                            );
+                            log::warn!("[agent] {message}");
+                            (emit)(RuntimeEvent::session(AgentEvent::SessionError { message }));
                             (
                                 client.request(
                                     "session/new",
@@ -385,32 +434,25 @@ impl AcpAdapter {
             // 用户选择覆盖掉，后续也不再切换。
             let (models, actual_model) =
                 models_from_session(&session_result, &ctx.agent_id, &ctx.agent_name);
-            let session_model_config = AcpModelConfig::from_options(&session_result);
+            let session_config_value = AcpSessionConfig::from_options(&session_result);
             if let Ok(mut guard) = session_id.lock() {
                 *guard = Some(native_session_id.clone());
             }
             if let Ok(mut guard) = applied_model.lock() {
                 *guard = actual_model.clone();
             }
-            if let Ok(mut guard) = model_config.lock() {
-                *guard = session_model_config.clone();
+            if let Ok(mut guard) = session_config.lock() {
+                *guard = session_config_value.clone();
             }
-            let model_config_detail = session_model_config
+            let session_config_detail = session_config_value
                 .as_ref()
-                .map(|config| {
-                    format!(
-                        "configId={} 当前值={} 可选值={}",
-                        config.config_id,
-                        config.current.as_deref().unwrap_or("<未声明>"),
-                        config.allowed.len()
-                    )
-                })
-                .unwrap_or_else(|| "未声明模型配置项".to_string());
+                .map(AcpSessionConfig::detail)
+                .unwrap_or_else(|| "未声明 model/effort/mode 配置项".to_string());
             log::info!(
                 "[agent] ACP 会话建立：实例 {}，原生会话 {}，{}，会话层可选模型 {} 个（层：session-selectable）",
                 client.instance_id(),
                 redact_session_id(&native_session_id),
-                model_config_detail,
+                session_config_detail,
                 models.len()
             );
             if !models.is_empty() {
@@ -436,7 +478,7 @@ impl AcpAdapter {
                 agent_name: ctx.agent_name.clone(),
                 model: ctx.model.clone(),
                 applied_model,
-                model_config,
+                session_config,
                 model_update_generation,
                 history_restored: resumed,
                 dispatch_lock: Arc::new(Mutex::new(())),
@@ -452,40 +494,52 @@ impl AcpAdapter {
     }
 }
 
-fn model_option(value: &Value) -> Option<&Value> {
-    fn is_model_option(option: &&Value) -> bool {
-        let id = option.get("id").and_then(Value::as_str).unwrap_or_default();
-        let category = option
-            .get("category")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        id.eq_ignore_ascii_case("model")
-            || id.eq_ignore_ascii_case("models")
-            || category.eq_ignore_ascii_case("model")
-    }
-    if let Some(options) = value.as_array() {
-        return options.iter().find(is_model_option);
-    }
-    if let Some(options) = value.get("configOptions").and_then(Value::as_array) {
-        return options.iter().find(is_model_option);
-    }
-    if let Some(option) = value.get("configOption") {
-        if is_model_option(&option) {
-            return Some(option);
-        }
-    }
-    let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
-    let category = value
+fn is_config_option(option: &Value, ids: &[&str], categories: &[&str]) -> bool {
+    let id = option.get("id").and_then(Value::as_str).unwrap_or_default();
+    let category = option
         .get("category")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if id.eq_ignore_ascii_case("model")
-        || id.eq_ignore_ascii_case("models")
-        || category.eq_ignore_ascii_case("model")
-    {
-        return Some(value);
+    ids.iter()
+        .any(|candidate| id.eq_ignore_ascii_case(candidate))
+        || categories
+            .iter()
+            .any(|candidate| category.eq_ignore_ascii_case(candidate))
+}
+
+fn find_config_option<'a>(
+    value: &'a Value,
+    ids: &[&str],
+    categories: &[&str],
+) -> Option<&'a Value> {
+    if let Some(options) = value.as_array() {
+        return options
+            .iter()
+            .find(|option| is_config_option(option, ids, categories));
     }
-    None
+    if let Some(options) = value.get("configOptions").and_then(Value::as_array) {
+        return options
+            .iter()
+            .find(|option| is_config_option(option, ids, categories));
+    }
+    if let Some(option) = value.get("configOption") {
+        if is_config_option(option, ids, categories) {
+            return Some(option);
+        }
+    }
+    is_config_option(value, ids, categories).then_some(value)
+}
+
+fn model_option(value: &Value) -> Option<&Value> {
+    find_config_option(value, &["model", "models"], &["model"])
+}
+
+fn effort_option(value: &Value) -> Option<&Value> {
+    find_config_option(value, &["effort"], &["thought_level"])
+}
+
+fn mode_option(value: &Value) -> Option<&Value> {
+    find_config_option(value, &["mode"], &["mode"])
 }
 
 fn redact_session_id(id: &str) -> String {
@@ -681,16 +735,21 @@ fn publish_model_options(
     provider_name: &str,
     emit: &EventSink,
     applied_model: &Arc<Mutex<Option<String>>>,
-    model_config: &Arc<Mutex<Option<AcpModelConfig>>>,
+    session_config: &Arc<Mutex<Option<AcpSessionConfig>>>,
     model_update_generation: &Arc<AtomicU64>,
 ) {
-    let Some(option) = model_option(options) else {
-        return;
-    };
-    let current = option_current_value(option);
-    let models = models_from_option(option, provider_id, provider_name, current.as_deref());
-    if let Some(config) = AcpModelConfig::from_options(options) {
-        if let Ok(mut guard) = model_config.lock() {
+    let model = model_option(options);
+    let current = model.and_then(option_current_value);
+    let models = model
+        .map(|option| models_from_option(option, provider_id, provider_name, current.as_deref()))
+        .unwrap_or_default();
+    let config_value = AcpSessionConfig::from_options(options);
+    let config_detail = config_value
+        .as_ref()
+        .map(AcpSessionConfig::detail)
+        .unwrap_or_else(|| "未声明 model/effort/mode 配置项".to_string());
+    if let Some(config) = config_value {
+        if let Ok(mut guard) = session_config.lock() {
             *guard = Some(config);
         }
     }
@@ -700,9 +759,11 @@ fn publish_model_options(
         }
         model_update_generation.fetch_add(1, Ordering::SeqCst);
         log::info!(
-            "[agent] ACP config_option_update：当前模型={current}，会话可选模型 {} 个",
+            "[agent] ACP config_option_update：当前模型={current}，会话可选模型 {} 个，{config_detail}",
             models.len()
         );
+    } else {
+        log::info!("[agent] ACP config_option_update：{config_detail}");
     }
     if !models.is_empty() {
         (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable {
@@ -773,7 +834,7 @@ impl AgentAdapter for AcpAdapter {
         let agent_name = self.agent_name.clone();
         let selected_model = self.model.clone();
         let applied_model = self.applied_model.clone();
-        let model_config = self.model_config.clone();
+        let session_config = self.session_config.clone();
         let model_update_generation = self.model_update_generation.clone();
         let round_id = core_turn_id.to_string();
         let message = request.text_with_history_context();
@@ -833,7 +894,10 @@ impl AgentAdapter for AcpAdapter {
                         .map(|guard| guard.as_deref() != Some(model.as_str()))
                         .unwrap_or(true);
                     if needs_switch {
-                        let Some(config) = model_config.lock().ok().and_then(|guard| guard.clone())
+                        let Some(config) = session_config
+                            .lock()
+                            .ok()
+                            .and_then(|guard| guard.as_ref().and_then(|config| config.model.clone()))
                         else {
                             fail_turn_before_prompt(
                                 &state,
@@ -897,7 +961,7 @@ impl AgentAdapter for AcpAdapter {
                                     &agent_name,
                                     &emit,
                                     &applied_model,
-                                    &model_config,
+                                    &session_config,
                                     &model_update_generation,
                                 );
                                 let response_confirmed = model_option(&result)

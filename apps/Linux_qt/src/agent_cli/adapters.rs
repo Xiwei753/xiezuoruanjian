@@ -19,7 +19,7 @@ pub fn builtin_descriptors() -> Vec<AgentDescriptor> {
             id: "opencode".to_string(),
             name: "OpenCode".to_string(),
             version: None,
-            description: Some("OpenCode 官方 ACP 模式".to_string()),
+            description: Some("OpenCode v2 官方 ACP 模式".to_string()),
             protocol: "acp".to_string(),
             capabilities: vec!["acp".to_string(), "chat".to_string(), "code".to_string()],
             launch: AgentLaunch {
@@ -30,9 +30,9 @@ pub fn builtin_descriptors() -> Vec<AgentDescriptor> {
             version_args: vec!["--version".to_string()],
             login_args: vec!["auth".to_string(), "login".to_string()],
             config_paths: vec!["~/.config/opencode/opencode.json".to_string()],
-            docs_url: Some("https://opencode.ai/docs".to_string()),
-            website: Some("https://opencode.ai".to_string()),
-            repository: Some("https://github.com/sst/opencode".to_string()),
+            docs_url: Some("https://opencode.ai/v2/docs/cli/acp/".to_string()),
+            website: Some("https://opencode.ai/v2/docs".to_string()),
+            repository: Some("https://github.com/anomalyco/opencode".to_string()),
             provenance: "builtin".to_string(),
         },
         AgentDescriptor {
@@ -58,13 +58,16 @@ pub fn builtin_descriptors() -> Vec<AgentDescriptor> {
     ]
 }
 
-/// 把内置描述匹配到本机实际文件。只有真实安装路径才进入 installed。
+/// 把内置描述匹配到本机实际文件。只有真实安装路径才进入 installed；
+/// OpenCode 还必须在探测阶段确认主版本为 2.x，1.x 或无法解析的安装只会
+/// 进入 `rejected`，供界面报告，不会成为可启动候选。
 pub fn build_installations(
     catalog: &[AgentDescriptor],
     executables: &[DiscoveredExecutable],
     preferred_paths: &std::collections::HashMap<String, String>,
-) -> Vec<AgentInstallation> {
+) -> (Vec<AgentInstallation>, Vec<AgentCandidate>) {
     let mut installed = Vec::new();
+    let mut rejected = Vec::new();
 
     for descriptor in catalog {
         let mut candidates = Vec::new();
@@ -78,7 +81,21 @@ pub fn build_installations(
             }
             let executable = executable.clone();
             let probe = probe_executable(&executable, descriptor);
-            candidates.push(AgentCandidate { executable, probe });
+            let candidate = AgentCandidate { executable, probe };
+            if descriptor.id == "opencode" && !candidate.probe.is_supported() {
+                log::warn!(
+                    "[agent_cli] 忽略不兼容的 OpenCode 安装：{}（{}）",
+                    candidate.executable.launch_path,
+                    candidate
+                        .probe
+                        .error
+                        .as_deref()
+                        .unwrap_or("未确认 OpenCode 2.x")
+                );
+                rejected.push(candidate);
+                continue;
+            }
+            candidates.push(candidate);
         }
         if candidates.is_empty() {
             continue;
@@ -111,6 +128,11 @@ pub fn build_installations(
             .cmp(&left.descriptor.is_acp())
             .then_with(|| left.descriptor.name.cmp(&right.descriptor.name))
     });
+    rejected.sort_by(|left, right| {
+        left.executable
+            .launch_path
+            .cmp(&right.executable.launch_path)
+    });
 
-    installed
+    (installed, rejected)
 }

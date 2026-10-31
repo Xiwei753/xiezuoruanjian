@@ -126,6 +126,85 @@ fn env_absolute_path(key: &str) -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
+/// 按 OpenCode v2 的 `OPENCODE_DB` 语义解析实际数据库路径：
+/// 绝对路径直接使用；相对路径位于 `$XDG_DATA_HOME/opencode/` 下；
+/// `:memory:` 没有磁盘路径；未设置时使用默认 `opencode.db`。
+fn opencode_database_path(data_home: &Path) -> Option<PathBuf> {
+    let data_dir = data_home.join("opencode");
+    let Some(value) = std::env::var_os("OPENCODE_DB") else {
+        return Some(data_dir.join("opencode.db"));
+    };
+    let value = value.to_string_lossy();
+    if value.is_empty() {
+        return Some(data_dir.join("opencode.db"));
+    }
+    if value == ":memory:" {
+        return None;
+    }
+    let path = PathBuf::from(value.as_ref());
+    Some(if path.is_absolute() {
+        path
+    } else {
+        data_dir.join(path)
+    })
+}
+
+/// 去掉 `.`/`..`，用于判断数据库路径是否已经落在某个可写挂载目录内。
+/// 路径可能尚不存在（SQLite 首次创建数据库），不能依赖 canonicalize。
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+/// OpenCode v2 把认证与项目状态写入 SQLite 数据库，WAL/SHM 边车文件由
+/// SQLite 在数据库所在目录创建。默认数据目录已整体可写；若 `OPENCODE_DB`
+/// 指向外部路径，只额外挂载其父目录，确保数据库与 `-wal`/`-shm` 都能创建。
+fn mount_opencode_database(
+    command: &mut Command,
+    home: &Path,
+    data_home: &Path,
+    mounted: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
+    let Some(database) = opencode_database_path(data_home) else {
+        return Ok(());
+    };
+    let database = normalize_path(&database);
+    let Some(parent) = database.parent() else {
+        return Err(format!(
+            "无法确定 OpenCode 数据库目录：{}",
+            database.display()
+        ));
+    };
+    if mounted
+        .iter()
+        .any(|directory| database.starts_with(directory))
+    {
+        return Ok(());
+    }
+    if forbidden_host_path(parent) || forbidden_host_path(&database) {
+        return Err(format!(
+            "OpenCode 数据库位于宿主用户会话目录，不能暴露给沙箱：{}",
+            database.display()
+        ));
+    }
+    if parent == Path::new("/") || parent == home {
+        return Err(format!(
+            "OPENCODE_DB 必须位于独立子目录，不能把整个 HOME 或根目录暴露给沙箱：{}",
+            database.display()
+        ));
+    }
+    push_writable_dir(command, parent, mounted)
+}
+
 /// 沙箱继承宿主环境中的配置和认证变量（包括各 CLI 自己的 API Key），
 /// 但不继承桌面会话、D-Bus、SSH Agent 等可以绕过文件边界的 IPC 入口。
 fn inherit_host_env(key: &str) -> bool {
@@ -302,13 +381,16 @@ impl WorkspaceAccess {
             push_writable_dir(&mut command, &dir, &mut mounted)?;
         }
         // 用户显式设置的 CLI 配置目录/文件可能位于 HOME 之外，按实际路径
-        // 精确挂载；不读取也不记录认证文件内容。OpenCode 的
-        // ~/.local/share/opencode/auth.json 已随数据目录整体可见，避免
-        // 沙箱内看不到已登录的付费供应商。
+        // 精确挂载；不读取也不记录认证文件内容。OpenCode v2 的凭据存放在
+        // `opencode.db`（SQLite）中，旧 `auth.json` 只是 CLI 可能自行迁移的
+        // 历史数据，素笺不把它当作当前认证来源，也不读取或修改数据库内容。
         for key in ["CODEX_HOME", "OPENCODE_CONFIG_DIR"] {
             if let Some(path) = env_absolute_path(key) {
                 push_writable_dir(&mut command, &path, &mut mounted)?;
             }
+        }
+        if self.agent_id == "opencode" {
+            mount_opencode_database(&mut command, &self.home, &data_home, &mut mounted)?;
         }
         for key in ["OPENCODE_CONFIG", "OPENCODE_TUI_CONFIG"] {
             if let Some(path) = env_absolute_path(key) {

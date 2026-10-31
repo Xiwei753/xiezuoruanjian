@@ -332,8 +332,11 @@ fn query_opencode(ctx: &AgentLaunchContext, _refresh: bool) -> Result<ModelProbe
     })
 }
 
-/// 记录探测子进程实际能看到的 OpenCode 登录供应商。输出里只有供应商名称，
-/// 不包含密钥；用于区分“沙箱/环境看不到凭证”和“模型目录本身不完整”。
+/// 记录探测子进程实际能看到的 OpenCode v2 认证连接。使用官方
+/// `auth list --format json`，只输出供应商 ID、连接数量与来源类型
+/// （`credential` / `environment`）；不输出账号名、密钥、令牌、数据库
+/// 字段或 JSON 原文。认证可见只表示存在连接记录，不代表密钥当前有效，
+/// 也不代表模型一定能在本轮会话中调用。
 fn log_opencode_auth(ctx: &AgentLaunchContext) {
     let command =
         WorkspaceAccess::for_context(ctx).and_then(|access| access.command(&ctx.launch_path, &[]));
@@ -343,31 +346,90 @@ fn log_opencode_auth(ctx: &AgentLaunchContext) {
     command
         .arg("auth")
         .arg("list")
+        .arg("--format")
+        .arg("json")
         .current_dir(&ctx.working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    match run_bounded_command("opencode auth list", command, Duration::from_secs(5)) {
+    match run_bounded_command(
+        "opencode auth list --format json",
+        command,
+        Duration::from_secs(5),
+    ) {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let providers: std::collections::BTreeSet<&str> = stdout
-                .lines()
-                .filter_map(|line| line.split("  ").next())
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .collect();
+            let Ok(value) = serde_json::from_str::<Value>(&stdout) else {
+                log::warn!(
+                    "[agent] opencode auth list --format json 输出无法解析，已忽略（不输出原始内容）"
+                );
+                return;
+            };
+            let Some(integrations) = value.as_array() else {
+                log::warn!(
+                    "[agent] opencode auth list --format json 顶层不是数组，已忽略（不输出原始内容）"
+                );
+                return;
+            };
+            let mut provider_count = 0usize;
+            let mut connection_count = 0usize;
+            let mut source_count: BTreeMap<String, usize> = BTreeMap::new();
+            for integration in integrations {
+                let Some(provider_id) = integration
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    continue;
+                };
+                let Some(connections) = integration.get("connections").and_then(Value::as_array)
+                else {
+                    continue;
+                };
+                if connections.is_empty() {
+                    continue;
+                }
+                let mut provider_sources: BTreeMap<String, usize> = BTreeMap::new();
+                for connection in connections {
+                    let source = connection
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    *provider_sources.entry(source.clone()).or_default() += 1;
+                    *source_count.entry(source).or_default() += 1;
+                }
+                provider_count += 1;
+                connection_count += connections.len();
+                log::info!(
+                    "[agent] opencode auth 可见连接：provider={}，连接数={}，来源={}",
+                    provider_id,
+                    connections.len(),
+                    provider_sources
+                        .into_iter()
+                        .map(|(source, count)| format!("{source}:{count}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+            }
             log::info!(
-                "[agent] opencode auth 可见供应商 {} 个（{}）",
-                providers.len(),
-                providers.into_iter().collect::<Vec<_>>().join(", ")
+                "[agent] opencode auth 汇总：供应商 {} 个，连接 {} 个，来源 {}；auth-visible 仅表示存在连接记录，不代表密钥当前有效或会话一定可调用",
+                provider_count,
+                connection_count,
+                source_count
+                    .into_iter()
+                    .map(|(source, count)| format!("{source}:{count}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
             );
         }
         Ok(output) => log::warn!(
-            "[agent] opencode auth list 退出码 {}：{}",
-            exit_status_label(&output.status),
-            stderr_summary(&output.stderr)
+            "[agent] opencode auth list --format json 退出码 {}（stderr 已省略，避免输出敏感内容）",
+            exit_status_label(&output.status)
         ),
-        Err(error) => log::warn!("[agent] opencode auth list 失败：{error}"),
+        Err(error) => log::warn!("[agent] opencode auth list --format json 失败：{error}"),
     }
 }
 

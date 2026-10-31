@@ -48,6 +48,8 @@ Item {
         : ""
     property bool advancedModelInput: false
     property string modelSearch: ""
+    // 两级模型弹层：空字符串表示供应商层，否则显示该供应商的模型层。
+    property string selectedProviderId: ""
 
     function parseJson(text, fallback) {
         if (!text)
@@ -236,6 +238,57 @@ Item {
         return choices
     }
 
+    // 供应商层只按 providerId 聚合，同名模型不会跨供应商合并。
+    function providerChoices() {
+        var choices = modelChoices()
+        var groups = ({})
+        var providers = []
+        for (var i = 0; i < choices.length; ++i) {
+            var choice = choices[i]
+            var providerId = String(choice.providerId || "")
+            var key = "provider:" + providerId
+            if (!groups[key]) {
+                groups[key] = {
+                    providerId: providerId,
+                    providerName: String(choice.providerName || providerId
+                        || qsTr("未标注供应商")),
+                    count: 0,
+                    searchText: ""
+                }
+                providers.push(groups[key])
+            }
+            groups[key].count += 1
+            groups[key].searchText += " " + choice.searchText
+        }
+        providers.sort(function(left, right) {
+            var provider = left.providerId.localeCompare(right.providerId)
+            if (provider !== 0)
+                return provider
+            return left.providerName.localeCompare(right.providerName)
+        })
+        return providers
+    }
+
+    function modelsForProvider(providerId, query) {
+        var id = String(providerId || "")
+        var needle = String(query || "").trim().toLowerCase()
+        return modelChoices().filter(function(choice) {
+            if (String(choice.providerId || "") !== id)
+                return false
+            return needle === "" || choice.searchText.indexOf(needle) >= 0
+        })
+    }
+
+    function providerNameById(providerId) {
+        var providers = providerChoices()
+        var id = String(providerId || "")
+        for (var i = 0; i < providers.length; ++i) {
+            if (providers[i].providerId === id)
+                return providers[i].providerName
+        }
+        return id !== "" ? id : qsTr("未标注供应商")
+    }
+
     function modelChoiceById(id) {
         var choices = modelChoices()
         for (var i = 0; i < choices.length; ++i) {
@@ -418,22 +471,149 @@ Item {
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
 
-            ComboBox {
-                id: modelPicker
+            // 入口只显示当前“供应商 · 模型”一行；点击后先选供应商，
+            // 再进入该供应商的模型列表。打开弹层不重新探测模型目录。
+            Button {
+                id: modelPickerButton
                 Layout.fillWidth: true
-                // 主选择器只列协议真实返回的模型；没有目录时显示明确状态，
-                // 不留下一个空输入框。
-                editable: false
-                model: root.modelChoices()
-                textRole: "displayText"
-                valueRole: "id"
-                currentIndex: root.modelIndex()
-                displayText: root.modelDisplayText()
+                Layout.minimumWidth: 120
                 enabled: root.hasAgent
-                onActivated: function(index) {
-                    var choices = root.modelChoices()
-                    if (index >= 0 && index < choices.length)
-                        root.runtimeBackendRef.choose_model(String(choices[index].id))
+                text: root.modelDisplayText()
+                display: AbstractButton.TextOnly
+                ToolTip.visible: hovered && root.currentModel !== ""
+                ToolTip.text: root.currentModel
+                contentItem: Label {
+                    text: root.modelDisplayText()
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignLeft
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: {
+                    root.selectedProviderId = ""
+                    modelPopup.open()
+                }
+
+                Popup {
+                    id: modelPopup
+                    parent: modelPickerButton
+                    x: 0
+                    y: modelPickerButton.height + Kirigami.Units.smallSpacing
+                    width: Math.max(modelPickerButton.width,
+                                    Kirigami.Units.gridUnit * 22)
+                    height: Math.min(modelPopupContent.implicitHeight
+                                     + topPadding + bottomPadding,
+                                     Kirigami.Units.gridUnit * 30)
+                    padding: Kirigami.Units.smallSpacing
+                    focus: true
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+                    contentItem: ColumnLayout {
+                        id: modelPopupContent
+                        width: modelPopup.availableWidth
+                        spacing: Kirigami.Units.smallSpacing
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: root.selectedProviderId === ""
+                            text: qsTr("选择供应商")
+                            font.bold: true
+                        }
+
+                        ListView {
+                            id: providerLevelList
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(contentHeight,
+                                Kirigami.Units.gridUnit * 16)
+                            visible: root.selectedProviderId === ""
+                            clip: true
+                            spacing: 1
+                            model: root.providerChoices()
+
+                            delegate: ItemDelegate {
+                                required property var modelData
+                                width: providerLevelList.width
+                                implicitHeight: Kirigami.Units.gridUnit * 2.5
+                                contentItem: RowLayout {
+                                    spacing: Kirigami.Units.smallSpacing
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.providerName
+                                            || modelData.providerId
+                                            || qsTr("未标注供应商"))
+                                        elide: Text.ElideRight
+                                    }
+                                    Label {
+                                        text: qsTr("%1 个模型").arg(modelData.count)
+                                        color: Kirigami.Theme.disabledTextColor
+                                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                                    }
+                                }
+                                onClicked: root.selectedProviderId =
+                                    String(modelData.providerId)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: root.selectedProviderId !== ""
+                            spacing: Kirigami.Units.smallSpacing
+
+                            Button {
+                                text: qsTr("返回供应商")
+                                flat: true
+                                onClicked: root.selectedProviderId = ""
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.providerNameById(root.selectedProviderId)
+                                elide: Text.ElideRight
+                                font.bold: true
+                            }
+                        }
+
+                        ListView {
+                            id: providerModelLevelList
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(contentHeight,
+                                Kirigami.Units.gridUnit * 16)
+                            visible: root.selectedProviderId !== ""
+                            clip: true
+                            spacing: 1
+                            model: root.modelsForProvider(root.selectedProviderId, "")
+
+                            delegate: ItemDelegate {
+                                required property var modelData
+                                width: providerModelLevelList.width
+                                implicitHeight: Kirigami.Units.gridUnit * 3
+                                contentItem: ColumnLayout {
+                                    spacing: 0
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.displayName
+                                            || modelData.modelId || modelData.id)
+                                        elide: Text.ElideRight
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: String(modelData.modelId || "") !== ""
+                                            && String(modelData.modelId || "")
+                                                !== String(modelData.displayName || "")
+                                        text: String(modelData.modelId || "")
+                                        elide: Text.ElideRight
+                                        color: Kirigami.Theme.disabledTextColor
+                                        font.pixelSize:
+                                            Kirigami.Theme.smallFont.pixelSize
+                                    }
+                                }
+                                ToolTip.visible: hovered
+                                ToolTip.text: String(modelData.id)
+                                onClicked: {
+                                    root.chooseModelCandidate(String(modelData.id))
+                                    modelPopup.close()
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

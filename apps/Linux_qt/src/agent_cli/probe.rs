@@ -74,13 +74,22 @@ pub fn probe_executable(
     .to_string();
 
     if !launchable {
+        probe.compatibility = "unsupported".to_string();
         probe.error = Some("可执行文件不存在或不可执行".to_string());
         return probe;
     }
 
     probe.config_status = config_status(&descriptor.config_paths);
+    let requires_opencode_v2 = descriptor.id == "opencode";
+    if !requires_opencode_v2 {
+        // Codex 等适配器保留自己的版本规则；这里只表示可执行文件可启动。
+        probe.compatibility = "supported".to_string();
+    }
 
     if descriptor.version_args.is_empty() {
+        if requires_opencode_v2 {
+            mark_opencode_incompatible(&mut probe, executable, None);
+        }
         return probe;
     }
 
@@ -110,7 +119,67 @@ pub fn probe_executable(
         }
     }
 
+    if requires_opencode_v2 {
+        let major = probe.version.as_deref().and_then(parse_major);
+        if major == Some(2) {
+            probe.compatibility = "supported".to_string();
+        } else {
+            mark_opencode_incompatible(&mut probe, executable, major);
+        }
+    }
+
     probe
+}
+
+/// 从 `opencode --version` 等输出中提取主版本。允许程序名前缀（如
+/// `opencode 2.0.1`）、`v` 前缀、预发布/修订后缀；只取第一个带数字的
+/// 版本 token，避免把路径或说明文字误当成版本。
+fn parse_major(version: &str) -> Option<u64> {
+    for token in version.split_whitespace() {
+        let token = token.trim_matches(|value: char| {
+            matches!(value, ',' | ';' | '(' | ')' | '[' | ']' | ':' | '"' | '\'')
+        });
+        let token = token
+            .strip_prefix('v')
+            .or_else(|| token.strip_prefix('V'))
+            .unwrap_or(token);
+        let digits: String = token
+            .chars()
+            .take_while(|value| value.is_ascii_digit())
+            .collect();
+        if !digits.is_empty() {
+            return digits.parse().ok();
+        }
+    }
+    None
+}
+
+fn mark_opencode_incompatible(
+    probe: &mut AgentProbe,
+    executable: &DiscoveredExecutable,
+    major: Option<u64>,
+) {
+    probe.compatibility = "unsupported".to_string();
+    let path = &executable.launch_path;
+    let reason = match (&probe.version, probe.version_status.as_str()) {
+        (Some(version), "detected") if major.is_some() => format!(
+            "检测到 OpenCode {version}（主版本 {}），素笺只支持 OpenCode 2.x",
+            major.unwrap_or_default()
+        ),
+        (Some(version), "detected") => {
+            format!("无法从版本输出解析主版本：{version}；素笺需要 OpenCode 2.x")
+        }
+        (_, "empty") => "版本输出为空，无法确认 OpenCode 2.x".to_string(),
+        (_, "failed") => {
+            let detail = probe
+                .error
+                .take()
+                .unwrap_or_else(|| "版本探测失败".to_string());
+            format!("版本探测失败（{detail}），无法确认 OpenCode 2.x")
+        }
+        _ => "无法确认 OpenCode 2.x".to_string(),
+    };
+    probe.error = Some(format!("{reason}（路径：{path}）"));
 }
 
 fn first_non_empty_line(text: &str) -> Option<String> {
