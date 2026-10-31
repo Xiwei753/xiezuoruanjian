@@ -1,12 +1,13 @@
 //! 独立模型目录探测。
 //!
-//! Issue #1019：模型选择器只查询各家官方机器接口，不创建 Core 对话、
-//! 不启动 MCP broker，也不启动聊天轮次。每次探测拥有自己的子进程和总超时，
-//! 失败只影响选择器，不阻塞输入发送。
+//! Issue #1020：模型选择器只查询各家官方机器接口；OpenCode 使用官方
+//! `opencode models` 命令行目录。探测不创建 Core 对话、不启动 MCP broker，
+//! 也不启动聊天轮次。每次探测拥有自己的子进程和总超时，失败只影响选择器，
+//! 不阻塞输入发送。
 
-use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Write};
-use std::process::Stdio;
+use std::collections::{BTreeMap, HashSet};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,11 +15,13 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::events::{json_text, AgentLaunchContext, AgentModelInfo};
-use super::opencode::{fetch_models, free_loopback_port, SERVER_USER};
 use super::rpc::RpcClient;
 use super::workspace_access::WorkspaceAccess;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
+/// 单路输出最多保留的字节数。读取线程会继续排空管道，避免子进程因
+/// stdout/stderr 写满而阻塞，但诊断信息只保留有界前缀。
+const CLI_OUTPUT_LIMIT: usize = 1024 * 1024;
 
 /// 模型目录探测结果。`Unsupported` 表示 CLI 正常响应但该版本不提供模型目录，
 /// 与网络/进程失败区分开，平台端可显示明确的说明。
@@ -53,8 +56,15 @@ fn model_info(
     is_default: bool,
     capabilities: Vec<String>,
 ) -> AgentModelInfo {
+    let (provider_id, model_id) = id
+        .split_once('/')
+        .map(|(provider, model)| (provider.to_string(), model.to_string()))
+        .unwrap_or_else(|| (String::new(), id.clone()));
     AgentModelInfo {
         id,
+        provider_id,
+        model_id,
+        provider_name: String::new(),
         display_name: display_name.unwrap_or_default(),
         description: description.unwrap_or_default(),
         is_default,
@@ -69,18 +79,46 @@ fn default_model(models: &[AgentModelInfo]) -> Option<String> {
         .map(|model| model.id.clone())
 }
 
-/// 按 Agent 自身协议查询模型目录。
-pub fn query_models(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
-    match ctx.agent_id.as_str() {
+/// 按 Agent 自身协议查询模型目录。`refresh` 只影响 OpenCode 的官方 CLI
+/// 缓存刷新参数；其它 Agent 仍使用各自的官方 machine API。
+pub fn query_models(
+    ctx: &AgentLaunchContext,
+    refresh: bool,
+) -> Result<ModelProbeResult, String> {
+    let mut result = match ctx.agent_id.as_str() {
         "codex" => query_codex(ctx),
-        "opencode" => query_opencode(ctx),
+        "opencode" => query_opencode(ctx, refresh),
         "claude" => query_claude(ctx),
         "gemini" => query_acp(ctx),
         _ if ctx.protocol == "acp" => query_acp(ctx),
         other => Ok(ModelProbeResult::Unsupported {
             message: format!("{other} 没有可用的模型目录接口"),
         }),
+    }?;
+    // 没有供应商目录的 CLI 用所选执行者作为来源，保证界面始终能显示
+    // “来源 · 模型”，又不会伪造不存在的 provider 信息。
+    if let ModelProbeResult::Models { models, .. } = &mut result {
+        for model in models {
+            if model.provider_id.is_empty() {
+                model.provider_id = ctx.agent_id.clone();
+            }
+            if model.model_id.is_empty() {
+                model.model_id = model
+                    .id
+                    .split_once('/')
+                    .map(|(_, model)| model.to_string())
+                    .unwrap_or_else(|| model.id.clone());
+            }
+            if model.provider_name.is_empty() {
+                model.provider_name = if model.provider_id == ctx.agent_id {
+                    ctx.agent_name.clone()
+                } else {
+                    model.provider_id.clone()
+                };
+            }
+        }
     }
+    Ok(result)
 }
 
 fn query_codex(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
@@ -93,77 +131,184 @@ fn query_codex(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
     }
     let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args)?;
     let client = RpcClient::spawn(
-        "Codex model/list",
+        "Codex",
         command,
         &ctx.working_dir,
         &[],
         noop_handler(),
     )?;
-    client.request(
-        "initialize",
-        json!({
-            "clientInfo": {
-                "name": "sujian",
-                "title": "素笺",
-                "version": env!("CARGO_PKG_VERSION")
-            },
-            "capabilities": { "experimentalApi": true }
-        }),
-        remaining(deadline, "initialize")?,
-    )?;
-    client.notify("initialized", json!({}))?;
+    client
+        .request(
+            "initialize",
+            json!({
+                "clientInfo": {
+                    "name": "sujian",
+                    "title": "素笺",
+                    "version": env!("CARGO_PKG_VERSION")
+                },
+                "capabilities": { "experimentalApi": true }
+            }),
+            remaining(deadline, "initialize")?,
+        )
+        .map_err(|error| format!("Codex 模型目录 initialize 阶段失败：{error}"))?;
+    client
+        .notify("initialized", json!({}))
+        .map_err(|error| format!("Codex 模型目录 initialized 通知失败：{error}"))?;
 
     let mut models = BTreeMap::new();
     let mut cursor: Option<String> = None;
+    let mut seen_cursors = HashSet::new();
+    let mut page_count = 0usize;
     for _ in 0..10 {
         let mut params = json!({ "limit": 100, "includeHidden": false });
         if let Some(cursor) = cursor.as_deref() {
             params["cursor"] = Value::String(cursor.to_string());
         }
-        let result = client.request("model/list", params, remaining(deadline, "model/list")?)?;
-        if let Some(data) = result.get("data").and_then(Value::as_array) {
-            for model in data {
-                let Some(id) = json_text(model, &["id"]).or_else(|| json_text(model, &["model"]))
-                else {
-                    continue;
-                };
-                if id.is_empty() {
-                    continue;
-                }
-                let mut capabilities = Vec::new();
-                if let Some(efforts) = model
-                    .get("supportedReasoningEfforts")
-                    .and_then(Value::as_array)
-                {
-                    for effort in efforts {
-                        if let Some(effort) = effort.as_str() {
-                            capabilities.push(format!("reasoning:{effort}"));
-                        }
-                    }
-                }
-                if let Some(modalities) = model.get("inputModalities").and_then(Value::as_array) {
-                    for modality in modalities {
-                        if let Some(modality) = modality.as_str() {
-                            capabilities.push(format!("input:{modality}"));
-                        }
-                    }
-                }
-                models.insert(
-                    id.clone(),
-                    model_info(
-                        id,
-                        json_text(model, &["displayName"]),
-                        json_text(model, &["description"]),
-                        model.get("isDefault").and_then(Value::as_bool) == Some(true),
-                        capabilities,
-                    ),
-                );
+        let result = client
+            .request("model/list", params, remaining(deadline, "model/list")?)
+            .map_err(|error| format!("Codex 模型目录 model/list 阶段失败：{error}"))?;
+        let Some(data) = result.get("data").and_then(Value::as_array) else {
+            return Err(format!(
+                "Codex model/list 响应异常：缺少 data 数组（{}）",
+                json_preview(&result)
+            ));
+        };
+        page_count += 1;
+        for model in data {
+            let Some(id) = json_text(model, &["id"]).or_else(|| json_text(model, &["model"]))
+            else {
+                continue;
+            };
+            if id.is_empty() {
+                continue;
             }
+            let mut capabilities = Vec::new();
+            if let Some(efforts) = model
+                .get("supportedReasoningEfforts")
+                .and_then(Value::as_array)
+            {
+                for effort in efforts {
+                    if let Some(effort) = effort.as_str() {
+                        capabilities.push(format!("reasoning:{effort}"));
+                    }
+                }
+            }
+            if let Some(modalities) = model.get("inputModalities").and_then(Value::as_array) {
+                for modality in modalities {
+                    if let Some(modality) = modality.as_str() {
+                        capabilities.push(format!("input:{modality}"));
+                    }
+                }
+            }
+            models.insert(
+                id.clone(),
+                model_info(
+                    id,
+                    json_text(model, &["displayName"]),
+                    json_text(model, &["description"]),
+                    model.get("isDefault").and_then(Value::as_bool) == Some(true),
+                    capabilities,
+                ),
+            );
         }
         cursor = json_text(&result, &["nextCursor"]).filter(|cursor| !cursor.is_empty());
-        if cursor.is_none() {
+        let Some(next_cursor) = cursor.clone() else {
             break;
+        };
+        if !seen_cursors.insert(next_cursor.clone()) {
+            return Err(format!(
+                "Codex model/list 分页返回了重复 cursor：{next_cursor}"
+            ));
         }
+    }
+    if cursor.is_some() {
+        return Err("Codex model/list 分页超过 10 页仍未结束".to_string());
+    }
+    let models: Vec<_> = models.into_values().collect();
+    if models.is_empty() {
+        return Err(if page_count == 0 {
+            "Codex model/list 没有返回任何模型".to_string()
+        } else {
+            "Codex model/list 返回的模型目录为空".to_string()
+        });
+    }
+    let default_model = default_model(&models);
+    Ok(ModelProbeResult::Models {
+        models,
+        default_model,
+    })
+}
+
+fn json_preview(value: &Value) -> String {
+    let text = value.to_string();
+    let mut preview: String = text.chars().take(500).collect();
+    if preview.len() < text.len() {
+        preview.push_str("…");
+    }
+    preview
+}
+
+fn query_opencode(
+    ctx: &AgentLaunchContext,
+    refresh: bool,
+) -> Result<ModelProbeResult, String> {
+    let mut args = vec!["models".to_string()];
+    if refresh {
+        args.push("--refresh".to_string());
+    }
+    let mut command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args)?;
+    command
+        .current_dir(&ctx.working_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_bounded_command("opencode models", command, PROBE_TIMEOUT)?;
+    if !output.status.success() {
+        return Err(format!(
+            "opencode models 退出码 {}：{}",
+            exit_status_label(&output.status),
+            stderr_summary(&output.stderr)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut models = BTreeMap::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // 官方 `opencode models` 每行固定为 `provider/model`；只按第一个
+        // `/` 拆分，模型名自身包含的 `/` 保留给 model_id。
+        let Some((provider_id, model_id)) = line.split_once('/') else {
+            continue;
+        };
+        let provider_id = provider_id.trim();
+        let model_id = model_id.trim();
+        if provider_id.is_empty() || model_id.is_empty() {
+            continue;
+        }
+        let id = format!("{provider_id}/{model_id}");
+        models.entry(id.clone()).or_insert_with(|| AgentModelInfo {
+            id,
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+            // CLI 只返回 provider ID。用 ID 作为来源名，避免伪造官方显示名。
+            provider_name: provider_id.to_string(),
+            display_name: model_id.to_string(),
+            description: String::new(),
+            is_default: false,
+            capabilities: Vec::new(),
+        });
+    }
+    if models.is_empty() {
+        return Err(if stdout.trim().is_empty() {
+            "opencode models 没有输出任何模型".to_string()
+        } else {
+            format!(
+                "opencode models 输出中没有可识别的 provider/model：{}",
+                stdout.trim().chars().take(300).collect::<String>()
+            )
+        });
     }
     let models: Vec<_> = models.into_values().collect();
     let default_model = default_model(&models);
@@ -173,61 +318,94 @@ fn query_codex(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
     })
 }
 
-fn query_opencode(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
-    let port = free_loopback_port()?;
-    let password = format!("sujian-{}", uuid::Uuid::new_v4());
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(4))
-        .build()
-        .map_err(|error| error.to_string())?;
-    let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &ctx.launch_args)?;
-    let mut command = command;
-    let mut child = command
-        .args([
-            "serve",
-            "--hostname",
-            "127.0.0.1",
-            "--port",
-            &port.to_string(),
-        ])
-        .current_dir(&ctx.working_dir)
-        .env("OPENCODE_PASSWORD", &password)
-        .env("OPENCODE_SERVER_PASSWORD", &password)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("无法启动 opencode serve 探测模型：{error}"))?;
-    let base_url = format!("http://127.0.0.1:{port}");
+struct CommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
 
-    let result = (|| {
-        let deadline = Instant::now() + PROBE_TIMEOUT;
-        loop {
-            let ready = client
-                .get(format!("{base_url}/api/session"))
-                .basic_auth(SERVER_USER, Some(&password))
-                .send()
-                .map(|response| response.status().is_success())
-                .unwrap_or(false);
-            if ready {
-                break;
+fn exit_status_label(status: &ExitStatus) -> String {
+    match status.code() {
+        Some(code) => code.to_string(),
+        None => "被信号终止".to_string(),
+    }
+}
+
+fn stderr_summary(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return "无 stderr 输出".to_string();
+    }
+    let mut summary: String = trimmed.chars().rev().take(1200).collect();
+    summary = summary.chars().rev().collect();
+    summary
+}
+
+fn read_capped<R: Read>(mut reader: R, limit: usize) -> Vec<u8> {
+    let mut kept = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                if kept.len() < limit {
+                    let remaining = limit - kept.len();
+                    kept.extend_from_slice(&buffer[..read.min(remaining)]);
+                }
+                // 超出上限后继续读取并丢弃，确保子进程不会因为管道写满而卡住。
             }
-            if Instant::now() >= deadline {
-                return Err("opencode serve 模型探测启动超时".to_string());
-            }
-            std::thread::sleep(Duration::from_millis(150));
+            Err(_) => break,
         }
-        let models = fetch_models(&client, &base_url, &password, &ctx.working_dir)?;
-        let default_model = default_model(&models);
-        Ok(ModelProbeResult::Models {
-            models,
-            default_model,
-        })
-    })();
+    }
+    kept
+}
 
-    let _ = child.kill();
-    let _ = child.wait();
-    result
+fn run_bounded_command(
+    label: &str,
+    mut command: Command,
+    timeout: Duration,
+) -> Result<CommandOutput, String> {
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("无法启动 {label}：{error}"))?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("{label} 没有 stdout 管道"));
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("{label} 没有 stderr 管道"));
+    };
+    let stdout_reader = std::thread::spawn(move || read_capped(stdout, CLI_OUTPUT_LIMIT));
+    let stderr_reader = std::thread::spawn(move || read_capped(stderr, CLI_OUTPUT_LIMIT));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("等待 {label} 退出失败：{error}"));
+            }
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("{label} 超时（{} 秒）", timeout.as_secs()));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    Ok(CommandOutput {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn query_claude(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {

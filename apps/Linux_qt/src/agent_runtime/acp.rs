@@ -43,6 +43,9 @@ pub struct AcpAdapter {
     model: Option<String>,
     applied_model: Arc<Mutex<Option<String>>>,
     supports_model_switch: bool,
+    /// ACP 会话声明的模型 ID 集合。用于在切换前识别跨执行器的
+    /// `provider/model`，避免把其它 CLI 的目录结果发给当前 Agent。
+    model_ids: HashSet<String>,
     history_restored: bool,
     /// Only one session/prompt at a time. This lock belongs to prompt workers,
     /// never to the AgentSessionManager lock, so cancel can run immediately.
@@ -304,6 +307,8 @@ impl AcpAdapter {
         if let Ok(mut guard) = session_id.lock() {
             *guard = Some(native_session_id.clone());
         }
+        let provider_id = ctx.agent_id.clone();
+        let provider_name = ctx.agent_name.clone();
         let models: Vec<AgentModelInfo> = session_result
             .get("models")
             .and_then(|models| models.get("availableModels"))
@@ -326,6 +331,9 @@ impl AcpAdapter {
                             }
                         }
                         Some(AgentModelInfo {
+                            provider_id: provider_id.clone(),
+                            model_id: id.clone(),
+                            provider_name: provider_name.clone(),
                             id,
                             display_name: json_text(model, &["name"])
                                 .or_else(|| json_text(model, &["displayName"]))
@@ -351,6 +359,7 @@ impl AcpAdapter {
         if resumed {
             log::info!("[agent] ACP session resumed");
         }
+        let model_ids = models.iter().map(|model| model.id.clone()).collect();
 
         Ok(Self {
             client,
@@ -361,6 +370,7 @@ impl AcpAdapter {
             model: ctx.model.clone(),
             applied_model: Arc::new(Mutex::new(actual_model)),
             supports_model_switch: ctx.agent_id == "gemini" && !models.is_empty(),
+            model_ids,
             history_restored: resumed,
             dispatch_lock: Arc::new(Mutex::new(())),
         })
@@ -387,6 +397,7 @@ impl AgentAdapter for AcpAdapter {
         let selected_model = self.model.clone();
         let applied_model = self.applied_model.clone();
         let supports_model_switch = self.supports_model_switch;
+        let model_ids = self.model_ids.clone();
         let round_id = core_turn_id.to_string();
         let message = request.text_with_history_context();
         let task = std::thread::Builder::new()
@@ -443,7 +454,10 @@ impl AgentAdapter for AcpAdapter {
                         .lock()
                         .map(|guard| guard.as_deref() != Some(model.as_str()))
                         .unwrap_or(true);
-                    if needs_switch && !(agent_id == "gemini" && supports_model_switch) {
+                    let catalog_mismatch = needs_switch
+                        && !model_ids.is_empty()
+                        && !model_ids.contains(model.as_str());
+                    if catalog_mismatch {
                         let actual = applied_model.lock().ok().and_then(|guard| guard.clone());
                         (emit)(RuntimeEvent::turn(
                             round_id.clone(),
@@ -451,45 +465,61 @@ impl AgentAdapter for AcpAdapter {
                             AgentEvent::ModelSwitchFailed {
                                 requested: model.clone(),
                                 actual,
-                                message:
-                                    "当前 ACP Agent 未声明运行时切换模型能力，继续使用会话模型"
-                                        .to_string(),
+                                message: format!(
+                                    "执行器与模型不匹配：{agent_id} 的模型目录中没有 {model}，本轮继续使用当前会话模型"
+                                ),
                             },
                         ));
-                    }
-                    if agent_id == "gemini" && supports_model_switch && needs_switch {
-                        match client.request(
-                            "unstable_setSessionModel",
-                            json!({ "sessionId": session_id, "modelId": model }),
-                            Duration::from_secs(30),
-                        ) {
-                            Ok(_) => {
-                                if let Ok(mut guard) = applied_model.lock() {
-                                    *guard = Some(model.clone());
+                    } else {
+                        if needs_switch && !(agent_id == "gemini" && supports_model_switch) {
+                            let actual =
+                                applied_model.lock().ok().and_then(|guard| guard.clone());
+                            (emit)(RuntimeEvent::turn(
+                                round_id.clone(),
+                                "",
+                                AgentEvent::ModelSwitchFailed {
+                                    requested: model.clone(),
+                                    actual,
+                                    message:
+                                        "当前 ACP Agent 未声明运行时切换模型能力，继续使用会话模型"
+                                            .to_string(),
+                                },
+                            ));
+                        }
+                        if agent_id == "gemini" && supports_model_switch && needs_switch {
+                            match client.request(
+                                "unstable_setSessionModel",
+                                json!({ "sessionId": session_id, "modelId": model }),
+                                Duration::from_secs(30),
+                            ) {
+                                Ok(_) => {
+                                    if let Ok(mut guard) = applied_model.lock() {
+                                        *guard = Some(model.clone());
+                                    }
+                                    (emit)(RuntimeEvent::turn(
+                                        round_id.clone(),
+                                        "",
+                                        AgentEvent::ModelSwitchApplied {
+                                            requested: Some(model.clone()),
+                                            actual: Some(model.clone()),
+                                        },
+                                    ));
                                 }
-                                (emit)(RuntimeEvent::turn(
-                                    round_id.clone(),
-                                    "",
-                                    AgentEvent::ModelSwitchApplied {
-                                        requested: Some(model.clone()),
-                                        actual: Some(model.clone()),
-                                    },
-                                ));
-                            }
-                            Err(error) => {
-                                let actual =
-                                    applied_model.lock().ok().and_then(|guard| guard.clone());
-                                (emit)(RuntimeEvent::turn(
-                                    round_id.clone(),
-                                    "",
-                                    AgentEvent::ModelSwitchFailed {
-                                        requested: model.clone(),
-                                        actual,
-                                        message: format!(
-                                            "Gemini ACP 切换模型失败，继续使用当前模型：{error}"
-                                        ),
-                                    },
-                                ));
+                                Err(error) => {
+                                    let actual =
+                                        applied_model.lock().ok().and_then(|guard| guard.clone());
+                                    (emit)(RuntimeEvent::turn(
+                                        round_id.clone(),
+                                        "",
+                                        AgentEvent::ModelSwitchFailed {
+                                            requested: model.clone(),
+                                            actual,
+                                            message: format!(
+                                                "Gemini ACP 切换模型失败，继续使用当前模型：{error}"
+                                            ),
+                                        },
+                                    ));
+                                }
                             }
                         }
                     }

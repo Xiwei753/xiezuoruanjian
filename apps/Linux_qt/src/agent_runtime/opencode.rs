@@ -5,7 +5,7 @@
 //! 推理、工具和权限事件，用 `/api/session/:id/prompt` 发送消息、
 //! `/api/session/:id/interrupt` 中断。进程和服务器生命周期由本适配器管理。
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 
 use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
-    json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentModelInfo, AgentPromptRequest,
-    EventSink, PermissionOption, RuntimeEvent,
+    json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink,
+    PermissionOption, RuntimeEvent,
 };
 use super::workspace_access::WorkspaceAccess;
 
@@ -1411,60 +1411,6 @@ fn url_path_segment(value: &str) -> String {
         .collect()
 }
 
-pub(crate) fn fetch_models(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
-    password: &str,
-    working_dir: &Path,
-) -> Result<Vec<AgentModelInfo>, String> {
-    let response = client
-        .get(format!("{base_url}/api/model"))
-        .basic_auth(SERVER_USER, Some(password))
-        .query(&[("location[directory]", location_value(working_dir))])
-        .send()
-        .map_err(|error| format!("读取 OpenCode 模型失败：{error}"))?;
-    if !response.status().is_success() {
-        return Err(response_error(response));
-    }
-    let value: Value = response.json().map_err(|error| error.to_string())?;
-    let Some(models) = value.get("data").and_then(Value::as_array) else {
-        return Ok(Vec::new());
-    };
-    let mut result = BTreeMap::new();
-    for model in models {
-        let provider = json_text(model, &["providerID"]);
-        let model_id = json_text(model, &["modelID"]).or_else(|| json_text(model, &["id"]));
-        if let (Some(provider), Some(model_id)) = (provider, model_id) {
-            if provider.is_empty() || model_id.is_empty() {
-                continue;
-            }
-            let id = format!("{provider}/{model_id}");
-            let mut capabilities = Vec::new();
-            if let Some(values) = model.get("capabilities").and_then(Value::as_array) {
-                for value in values {
-                    if let Some(value) = value.as_str() {
-                        capabilities.push(value.to_string());
-                    }
-                }
-            }
-            result.insert(
-                id.clone(),
-                AgentModelInfo {
-                    id,
-                    display_name: json_text(model, &["name"])
-                        .or_else(|| json_text(model, &["displayName"]))
-                        .unwrap_or_default(),
-                    description: json_text(model, &["description"]).unwrap_or_default(),
-                    is_default: model.get("isDefault").and_then(Value::as_bool) == Some(true)
-                        || model.get("default").and_then(Value::as_bool) == Some(true),
-                    capabilities,
-                },
-            );
-        }
-    }
-    Ok(result.into_values().collect())
-}
-
 fn create_session(
     client: &reqwest::blocking::Client,
     base_url: &str,
@@ -1507,11 +1453,15 @@ fn model_ref(value: &Value) -> Option<(String, String)> {
 }
 
 fn parse_requested_model(model: &str) -> Result<(String, String), String> {
-    let (provider, id) = model
-        .split_once('/')
-        .ok_or_else(|| format!("OpenCode 模型标识必须为 provider/model：{model}"))?;
+    let (provider, id) = model.split_once('/').ok_or_else(|| {
+        format!(
+            "执行器与模型不匹配：OpenCode 需要完整的 provider/model，当前模型为 {model}（可能来自其它 CLI）"
+        )
+    })?;
     if provider.is_empty() || id.is_empty() {
-        return Err(format!("OpenCode 模型标识不完整：{model}"));
+        return Err(format!(
+            "执行器与模型不匹配：OpenCode 模型标识不完整：{model}"
+        ));
     }
     Ok((provider.to_string(), id.to_string()))
 }

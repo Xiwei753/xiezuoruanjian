@@ -91,7 +91,15 @@ impl AgentLaunchContext {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentModelInfo {
+    /// 完整模型身份。OpenCode 使用 `provider/model`，其它 CLI 使用协议返回的
+    /// 原生 ID；持久化选择与目录去重都以这个字段为准。
     pub id: String,
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
+    pub provider_name: String,
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
@@ -104,8 +112,16 @@ pub struct AgentModelInfo {
 
 impl AgentModelInfo {
     pub fn from_id(id: impl Into<String>) -> Self {
+        let id = id.into();
+        let (provider_id, model_id) = id
+            .split_once('/')
+            .map(|(provider, model)| (provider.to_string(), model.to_string()))
+            .unwrap_or_else(|| (String::new(), id.clone()));
         Self {
-            id: id.into(),
+            id,
+            provider_id,
+            model_id,
+            provider_name: String::new(),
             display_name: String::new(),
             description: String::new(),
             is_default: false,

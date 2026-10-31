@@ -429,7 +429,7 @@ impl AgentRuntimeBackend {
 
     /// 用各家官方机器接口独立查询模型目录。探测不创建 Core 对话、不启动
     /// MCP，也不占用聊天运行时锁；失败只改变选择器状态，不阻塞发送。
-    fn start_model_probe(&mut self) {
+    fn start_model_probe(&mut self, refresh: bool) {
         if self.agent_id.is_empty() || self.launch_path.is_empty() {
             return;
         }
@@ -438,7 +438,7 @@ impl AgentRuntimeBackend {
             return;
         }
         let key = self.model_cache_key();
-        if self.models_probed_for == key {
+        if self.models_probed_for == key && !refresh {
             return;
         }
         self.models_probed_for = key.clone();
@@ -516,7 +516,7 @@ impl AgentRuntimeBackend {
         if let Err(error) = std::thread::Builder::new()
             .name("agent-model-probe".to_string())
             .spawn(move || {
-                let result = crate::agent_runtime::model_catalog::query_models(&ctx);
+                let result = crate::agent_runtime::model_catalog::query_models(&ctx, refresh);
                 callback((key, epoch, result));
             })
         {
@@ -865,7 +865,7 @@ impl AgentRuntimeBackend {
         self.emit_conversation();
         self.update_mcp_status();
         self.refresh_conversations_list();
-        self.start_model_probe();
+        self.start_model_probe(false);
     }
 
     fn cancel_runtime_only(&self) {
@@ -909,7 +909,7 @@ impl AgentRuntimeBackend {
         {
             // 同一选择被 QML 重复同步时不再重建进程；但如果模型探测尚未
             // 开始（例如先 set_agent、后 set_project），补一次启动。
-            self.start_model_probe();
+            self.start_model_probe(false);
             return;
         }
         if self.running_value {
@@ -946,7 +946,7 @@ impl AgentRuntimeBackend {
         } else {
             self.set_status(format!("已选择 {}", self.agent_name));
         }
-        self.start_model_probe();
+        self.start_model_probe(false);
     }
 
     #[allow(dead_code)]
@@ -983,7 +983,7 @@ impl AgentRuntimeBackend {
         self.emit_conversation();
         self.set_running(false, "新会话");
         // 新会话也不提前创建 Core 聊天或原生会话；第一条消息发送时才建立。
-        self.start_model_probe();
+        self.start_model_probe(false);
     }
 
     fn refresh_conversations(&mut self) {
@@ -1049,7 +1049,7 @@ impl AgentRuntimeBackend {
                 self.agent_changed();
                 // 只有显式打开历史会话才允许界面反向同步 CLI/模型选择。
                 self.conversation_opened();
-                self.start_model_probe();
+                self.start_model_probe(false);
             }
             Ok(None) => self.set_error("AI 会话不存在"),
             Err(error) => self.set_error(format!("读取 AI 会话失败：{error}")),
@@ -1413,7 +1413,7 @@ impl AgentRuntimeBackend {
     fn refresh_models(&mut self) {
         self.models_probed_for.clear();
         self.model_probe_epoch.fetch_add(1, Ordering::SeqCst);
-        self.start_model_probe();
+        self.start_model_probe(true);
     }
 
     fn respond_to_permission(&mut self, request_id: QString, option_id: QString) {

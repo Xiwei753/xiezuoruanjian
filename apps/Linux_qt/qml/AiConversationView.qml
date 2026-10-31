@@ -47,6 +47,7 @@ Item {
         ? String(runtimeBackendRef.models_error || "")
         : ""
     property bool advancedModelInput: false
+    property string modelSearch: ""
 
     function parseJson(text, fallback) {
         if (!text)
@@ -153,7 +154,7 @@ Item {
                     kind: "meta",
                     text: "",
                     name: turnAgent,
-                    detail: turnModel
+                    detail: root.modelLabel(turnModel)
                 })
             }
             var tools = turn.toolEvents || []
@@ -181,20 +182,125 @@ Item {
         return -1
     }
 
+    function splitModelId(id) {
+        var value = String(id || "")
+        var slash = value.indexOf("/")
+        if (slash <= 0 || slash >= value.length - 1)
+            return { providerId: "", modelId: value }
+        return {
+            providerId: value.slice(0, slash),
+            modelId: value.slice(slash + 1)
+        }
+    }
+
+    // 模型身份固定为完整 provider/model；显示名只用于辅助阅读。
     function modelChoices() {
         var models = parseJson(runtimeBackendRef ? runtimeBackendRef.models_json : "[]", [])
         var choices = []
+        var seen = ({})
         for (var i = 0; i < models.length; ++i) {
             var model = models[i]
             var id = String(model.id || "")
-            if (id === "")
+            var key = "id:" + id
+            if (id === "" || seen[key])
                 continue
-            var label = String(model.displayName || "")
-            if (label === "")
-                label = id
-            choices.push({ id: id, displayText: label })
+            seen[key] = true
+            var split = splitModelId(id)
+            var providerId = String(model.providerId || split.providerId || "")
+            var modelId = String(model.modelId || split.modelId || id)
+            var providerName = String(model.providerName || providerId || "")
+            var displayName = String(model.displayName || modelId || id)
+            var displayText = providerName !== ""
+                ? providerName + " · " + displayName
+                : displayName
+            choices.push({
+                id: id,
+                providerId: providerId,
+                modelId: modelId,
+                providerName: providerName,
+                displayName: displayName,
+                displayText: displayText,
+                searchText: (id + " " + modelId + " " + displayName + " "
+                    + providerId + " " + providerName).toLowerCase()
+            })
+        }
+        choices.sort(function(left, right) {
+            var provider = left.providerId.localeCompare(right.providerId)
+            if (provider !== 0)
+                return provider
+            var name = left.displayName.localeCompare(right.displayName)
+            if (name !== 0)
+                return name
+            return left.id.localeCompare(right.id)
+        })
+        return choices
+    }
+
+    function modelChoiceById(id) {
+        var choices = modelChoices()
+        for (var i = 0; i < choices.length; ++i) {
+            if (choices[i].id === id)
+                return choices[i]
+        }
+        return null
+    }
+
+    function modelLabel(id) {
+        var value = String(id || "")
+        if (value === "")
+            return ""
+        var choice = modelChoiceById(value)
+        if (choice)
+            return choice.displayText
+        // 目录尚未加载或该模型来自其它执行器时，仍保留完整来源，便于用户
+        // 识别旧选择或手动输入的目标。
+        var split = splitModelId(value)
+        return split.providerId !== ""
+            ? split.providerId + " · " + split.modelId
+            : value
+    }
+
+    function filterModelChoices(query) {
+        var needle = String(query || "").trim().toLowerCase()
+        var choices = modelChoices()
+        if (needle === "")
+            return choices
+        return choices.filter(function(choice) {
+            return choice.searchText.indexOf(needle) >= 0
+        })
+    }
+
+    function customModelId() {
+        var value = String(modelSearch || "").trim()
+        if (value === "" || value.indexOf("/") <= 0 || value.slice(-1) === "/")
+            return ""
+        return modelChoiceById(value) ? "" : value
+    }
+
+    function modelCandidates() {
+        var choices = filterModelChoices(modelSearch)
+        var custom = customModelId()
+        if (custom !== "") {
+            choices.push({
+                id: custom,
+                providerId: splitModelId(custom).providerId,
+                modelId: splitModelId(custom).modelId,
+                providerName: "",
+                displayName: splitModelId(custom).modelId,
+                displayText: modelLabel(custom) + qsTr("（未收录，仍将向该来源发送）"),
+                searchText: custom.toLowerCase(),
+                custom: true
+            })
         }
         return choices
+    }
+
+    function chooseModelCandidate(id) {
+        var value = String(id || "").trim()
+        if (value === "")
+            return
+        runtimeBackendRef.choose_model(value)
+        modelSearch = ""
     }
 
     function modelIndex() {
@@ -208,7 +314,7 @@ Item {
 
     function modelDisplayText() {
         if (currentModel !== "")
-            return currentModel
+            return modelLabel(currentModel)
         if (modelsState === "loading")
             return qsTr("正在获取模型…")
         if (modelsState === "default")
@@ -346,7 +452,7 @@ Item {
                 checkable: true
                 checked: root.advancedModelInput
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("手动输入模型 ID")
+                ToolTip.text: qsTr("搜索或指定模型")
                 onClicked: root.advancedModelInput = checked
             }
         }
@@ -361,12 +467,61 @@ Item {
             font.pixelSize: Kirigami.Theme.smallFont.pixelSize
         }
 
-        // 高级输入默认折叠；只有协议没有模型目录或用户明确需要时展开。
-        TextField {
+        // 高级输入默认折叠；支持按 provider/模型名搜索，也允许使用完整
+        // provider/model 指定目录中尚未出现的模型。
+        ColumnLayout {
             Layout.fillWidth: true
             visible: root.advancedModelInput
-            placeholderText: qsTr("provider/model")
-            onAccepted: root.runtimeBackendRef.choose_model(String(text))
+            spacing: Kirigami.Units.smallSpacing / 2
+
+            TextField {
+                id: modelSearchField
+                Layout.fillWidth: true
+                text: root.modelSearch
+                placeholderText: qsTr("搜索模型，或输入完整 provider/model")
+                onTextChanged: {
+                    if (text !== root.modelSearch)
+                        root.modelSearch = text
+                }
+                onAccepted: {
+                    var value = String(text || "").trim()
+                    var exact = root.modelChoiceById(value)
+                    if (exact)
+                        root.chooseModelCandidate(exact.id)
+                    else if (root.customModelId() !== "")
+                        root.chooseModelCandidate(root.customModelId())
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.modelSearch.trim() !== ""
+                    && root.modelCandidates().length === 0
+                text: qsTr("没有匹配模型；请从候选中选择，或输入完整的 provider/model。")
+                wrapMode: Text.Wrap
+                color: Kirigami.Theme.disabledTextColor
+                font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+            }
+
+            ListView {
+                id: modelCandidateList
+                Layout.fillWidth: true
+                Layout.preferredHeight: count > 0
+                    ? Math.min(contentHeight, Kirigami.Units.gridUnit * 12) : 0
+                visible: count > 0
+                clip: true
+                model: root.modelCandidates()
+                spacing: 1
+
+                delegate: ItemDelegate {
+                    required property var modelData
+                    width: ListView.view ? ListView.view.width : 0
+                    text: String(modelData.displayText || modelData.id)
+                    ToolTip.visible: hovered
+                    ToolTip.text: String(modelData.id)
+                    onClicked: root.chooseModelCandidate(String(modelData.id))
+                }
+            }
         }
 
         // 当前上下文 / Agent 状态

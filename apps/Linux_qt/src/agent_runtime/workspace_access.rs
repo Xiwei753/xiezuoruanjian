@@ -2,9 +2,11 @@
 //!
 //! Agent 只能看到运行所需的系统目录、当前作品（只读）、自身认证/状态目录
 //! （可写）和 Sujian MCP broker 的 Unix Socket。宿主 `/run/user`、D-Bus、
-//! systemd user manager、X11/Wayland 等会话 IPC 不进入沙箱，进程环境也按
-//! 白名单重建，避免通过 `systemd-run --user` 等方式绕过 Core 直接改作品。
+//! systemd user manager、X11/Wayland 等会话 IPC 不进入沙箱；进程环境继承
+//! 用户启动 CLI 时的配置与认证变量，但排除这些会话 IPC 入口，避免通过
+//! `systemd-run --user` 等方式绕过 Core 直接改作品。
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -65,7 +67,14 @@ fn resolve_bwrap() -> Result<PathBuf, String> {
     })
 }
 
-fn agent_state_dirs(agent_id: &str, home: &Path) -> Vec<PathBuf> {
+fn agent_state_dirs(
+    agent_id: &str,
+    home: &Path,
+    config_home: &Path,
+    data_home: &Path,
+    state_home: &Path,
+    cache_home: &Path,
+) -> Vec<PathBuf> {
     let mut names: Vec<&str> = match agent_id {
         "claude" => vec!["claude", "claude-code"],
         "codex" => vec!["codex"],
@@ -79,13 +88,92 @@ fn agent_state_dirs(agent_id: &str, home: &Path) -> Vec<PathBuf> {
 
     let mut dirs = Vec::new();
     for name in names {
+        // HOME 下的点目录是多数 CLI 的兼容位置；XDG 基目录则尊重用户
+        // 启动 OpenCode/Codex 时的真实配置环境，两边都保留。
         dirs.push(home.join(format!(".{name}")));
         dirs.push(home.join(".config").join(name));
         dirs.push(home.join(".local/share").join(name));
         dirs.push(home.join(".local/state").join(name));
         dirs.push(home.join(".cache").join(name));
+        dirs.push(config_home.join(name));
+        dirs.push(data_home.join(name));
+        dirs.push(state_home.join(name));
+        dirs.push(cache_home.join(name));
     }
+    dirs.sort();
+    dirs.dedup();
     dirs
+}
+
+fn env_absolute_path(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
+/// 沙箱继承宿主环境中的配置和认证变量（包括各 CLI 自己的 API Key），
+/// 但不继承桌面会话、D-Bus、SSH Agent 等可以绕过文件边界的 IPC 入口。
+fn inherit_host_env(key: &str) -> bool {
+    let lowered = key.to_ascii_lowercase();
+    if lowered.starts_with("dbus_") || lowered.starts_with("pulse_") {
+        return false;
+    }
+    !matches!(
+        key,
+        "DISPLAY"
+            | "WAYLAND_DISPLAY"
+            | "XAUTHORITY"
+            | "XDG_RUNTIME_DIR"
+            | "XDG_ACTIVATION_TOKEN"
+            | "DESKTOP_STARTUP_ID"
+            | "SESSION_MANAGER"
+            | "NOTIFY_SOCKET"
+            | "SSH_AUTH_SOCK"
+            | "SSH_AGENT_PID"
+            | "GPG_AGENT_INFO"
+            | "LD_PRELOAD"
+            | "LD_LIBRARY_PATH"
+            | "LD_AUDIT"
+            | "LD_DEBUG"
+            | "MALLOC_PERTURB_"
+            | "SUJIAN_BWRAP"
+            | "OLDPWD"
+            | "PWD"
+            | "TMPDIR"
+    )
+}
+
+fn push_writable_dir(
+    command: &mut Command,
+    path: &Path,
+    mounted: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
+    if !path.is_absolute() || !mounted.insert(path.to_path_buf()) {
+        return Ok(());
+    }
+    let Some(directory) = ensure_dir(path) else {
+        return Err(format!(
+            "无法创建 Agent 配置目录，可能导致 CLI 读到空配置：{}",
+            path.display()
+        ));
+    };
+    command.arg("--bind").arg(&directory).arg(path);
+    Ok(())
+}
+
+fn push_existing_file(
+    command: &mut Command,
+    path: &Path,
+    writable: bool,
+    mounted: &mut HashSet<PathBuf>,
+) {
+    if !path.is_absolute() || !path.is_file() || !mounted.insert(path.to_path_buf()) {
+        return;
+    }
+    command
+        .arg(if writable { "--bind" } else { "--ro-bind" })
+        .arg(path)
+        .arg(path);
 }
 
 fn ensure_dir(path: &Path) -> Option<PathBuf> {
@@ -151,38 +239,32 @@ impl WorkspaceAccess {
     pub fn command(&self, program: &str, args: &[String]) -> Result<Command, String> {
         let mut command = Command::new(&self.bwrap);
         command.env_clear();
-        // 只保留定位运行时、语言、证书和代理所需的变量。DBUS/XDG_RUNTIME_DIR
-        // 等会话通信变量一律不传入。
-        for key in [
-            "PATH",
-            "LANG",
-            "LC_ALL",
-            "TERM",
-            "SHELL",
-            "USER",
-            "LOGNAME",
-            "http_proxy",
-            "https_proxy",
-            "no_proxy",
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "NO_PROXY",
-            "SSL_CERT_FILE",
-            "SSL_CERT_DIR",
-            "NODE_EXTRA_CA_CERTS",
-            "GIT_SSL_CAINFO",
-        ] {
-            if let Some(value) = std::env::var_os(key) {
-                command.env(key, value);
+        // 继承用户启动 CLI 时的真实配置环境：自定义 XDG 路径、CLI 配置目录
+        // 和认证变量必须与宿主一致，否则目录探测与真实会话会看到不同的
+        // provider。这里不枚举任何厂商 API Key，只排除会话 IPC 与动态链接
+        // 注入变量。
+        for (key, value) in std::env::vars_os() {
+            let key_text = key.to_string_lossy();
+            if inherit_host_env(&key_text) {
+                command.env(&key, &value);
             }
         }
+        let config_home = env_absolute_path("XDG_CONFIG_HOME")
+            .unwrap_or_else(|| self.home.join(".config"));
+        let data_home =
+            env_absolute_path("XDG_DATA_HOME").unwrap_or_else(|| self.home.join(".local/share"));
+        let state_home =
+            env_absolute_path("XDG_STATE_HOME").unwrap_or_else(|| self.home.join(".local/state"));
+        let cache_home =
+            env_absolute_path("XDG_CACHE_HOME").unwrap_or_else(|| self.home.join(".cache"));
         command
             .env("HOME", &self.home)
+            .env("PWD", &self.working_dir)
             .env("TMPDIR", "/tmp")
-            .env("XDG_CACHE_HOME", self.home.join(".cache"))
-            .env("XDG_CONFIG_HOME", self.home.join(".config"))
-            .env("XDG_DATA_HOME", self.home.join(".local/share"))
-            .env("XDG_STATE_HOME", self.home.join(".local/state"));
+            .env("XDG_CACHE_HOME", &cache_home)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_DATA_HOME", &data_home)
+            .env("XDG_STATE_HOME", &state_home);
 
         // 运行时与系统配置：只读。
         for dir in ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt"] {
@@ -210,16 +292,44 @@ impl WorkspaceAccess {
         // 仅 DNS 解析所需的 systemd-resolved 目录；不暴露 /run/user。
         push_existing_ro(&mut command, Path::new("/run/systemd/resolve"));
 
+        let mut mounted = HashSet::new();
         command.arg("--dir").arg(&self.home);
-        for dir in agent_state_dirs(&self.agent_id, &self.home) {
-            if let Some(dir) = ensure_dir(&dir) {
-                command.arg("--bind").arg(&dir).arg(&dir);
-            }
+        for dir in agent_state_dirs(
+            &self.agent_id,
+            &self.home,
+            &config_home,
+            &data_home,
+            &state_home,
+            &cache_home,
+        ) {
+            push_writable_dir(&mut command, &dir, &mut mounted)?;
         }
         if self.agent_id == "claude" {
             let config = self.home.join(".claude.json");
             if let Some(config) = ensure_json_file(&config) {
-                command.arg("--bind").arg(&config).arg(&config);
+                if mounted.insert(config.clone()) {
+                    command.arg("--bind").arg(&config).arg(&config);
+                }
+            }
+        }
+        // 用户显式设置的 CLI 配置目录/文件可能位于 HOME 之外，按实际路径
+        // 精确挂载；不读取也不记录认证文件内容。
+        for key in ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "OPENCODE_CONFIG_DIR"] {
+            if let Some(path) = env_absolute_path(key) {
+                push_writable_dir(&mut command, &path, &mut mounted)?;
+            }
+        }
+        for key in ["OPENCODE_CONFIG", "OPENCODE_TUI_CONFIG"] {
+            if let Some(path) = env_absolute_path(key) {
+                push_existing_file(&mut command, &path, false, &mut mounted);
+            }
+        }
+        if let Some(path) = env_absolute_path("OPENCODE_MODELS_PATH") {
+            push_existing_file(&mut command, &path, true, &mut mounted);
+        }
+        for key in ["SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO"] {
+            if let Some(path) = env_absolute_path(key) {
+                push_existing_file(&mut command, &path, false, &mut mounted);
             }
         }
         // 只读保留已安装 CLI 的运行时目录。
