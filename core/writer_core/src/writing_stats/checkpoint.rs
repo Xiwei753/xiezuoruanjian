@@ -616,6 +616,55 @@ pub fn load_continuity_gaps(
     Ok(gaps)
 }
 
+/// 读取某设备全部章节的原子连续性缺口记录。
+///
+/// 仅用于本机一次性证明序号恢复和缺口封存分配序号；普通逐字编辑只查询
+/// 章节缓存，不调用这里。任何损坏记录都必须显式报错，否则无法安全判断
+/// 当前设备已经占用的证明序号。
+pub fn load_device_continuity_gaps(
+    app_data_root: &Path,
+    device_id: &str,
+) -> crate::Result<Vec<ProofContinuityGap>> {
+    let proof_dir = app_data_root
+        .join("stats/events")
+        .join(device_id)
+        .join("proof");
+    if !proof_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut gaps = Vec::new();
+    for entry in fs::read_dir(&proof_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        if !name.to_string_lossy().ends_with(".gaps") {
+            continue;
+        }
+        for file in fs::read_dir(entry.path())? {
+            let file = file?;
+            let path = file.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let text = fs::read_to_string(&path)?;
+            let gap: ProofContinuityGap = serde_json::from_str(&text).map_err(|error| {
+                crate::Error::Other(format!("连续性缺口记录损坏 {}: {error}", path.display()))
+            })?;
+            if gap.device_id == device_id {
+                gaps.push(gap);
+            }
+        }
+    }
+    gaps.sort_by(|left, right| {
+        left.baseline_seq
+            .cmp(&right.baseline_seq)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    Ok(gaps)
+}
+
 /// 列出某章节存在 checkpoint 或缺口记录的设备，供回放选择本机基线。
 pub fn list_proof_devices(
     app_data_root: &Path,

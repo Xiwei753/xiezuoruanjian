@@ -1087,8 +1087,21 @@ impl StatsStore {
             ));
         }
         let origin = self.resolve_origin_device_id()?;
-        let gaps = checkpoint::load_continuity_gaps(&self.app_data_root, &origin, chapter_id)?;
-        if let Some(existing) = gaps
+
+        // 序号分配与持久化必须在同一 proof_state 锁内完成，否则两个章节
+        // 同时封存缺口会从同一个 next_seq 分到相同的基线序号。
+        let mut state = self.lock_proof_state();
+        if !state.initialized {
+            self.initialize_proof_state(&mut state)?;
+        }
+        let mut device_gaps =
+            checkpoint::load_device_continuity_gaps(&self.app_data_root, &origin)?;
+        // 已持久化缺口可能来自上一进程；先把分配器推进到它们之后。
+        for gap in &device_gaps {
+            state.next_seq = state.next_seq.max(gap.baseline_seq.saturating_add(1));
+        }
+
+        if let Some(existing) = device_gaps
             .iter()
             .find(|gap| gap.transaction_id == transaction_id && gap.event_id == event_id)
         {
@@ -1101,7 +1114,7 @@ impl StatsStore {
                     event_id
                 )));
             }
-            self.cache_gap_baseline(&origin, chapter_id, &gaps);
+            self.cache_gap_baseline_locked(&mut state, &origin, chapter_id, &device_gaps);
             return Ok(());
         }
 
@@ -1114,12 +1127,15 @@ impl StatsStore {
             .map(|checkpoint| checkpoint.seq)
             .max()
             .unwrap_or(0);
-        let latest_event_seq = self.latest_proof_seq()?;
-        let latest_gap_seq = gaps.iter().map(|gap| gap.baseline_seq).max().unwrap_or(0);
-        let baseline_seq = latest_checkpoint_seq
-            .max(latest_event_seq)
-            .max(latest_gap_seq)
-            .saturating_add(1)
+        let latest_gap_seq = device_gaps
+            .iter()
+            .map(|gap| gap.baseline_seq)
+            .max()
+            .unwrap_or(0);
+        let baseline_seq = state
+            .next_seq
+            .max(latest_gap_seq.saturating_add(1))
+            .max(latest_checkpoint_seq.saturating_add(1))
             .max(1);
         let gap = proof::ProofContinuityGap {
             format_version: proof::PROOF_FORMAT_VERSION,
@@ -1139,32 +1155,35 @@ impl StatsStore {
             verifiable: false,
         };
         let written = checkpoint::append_continuity_gap(&self.app_data_root, &gap)?;
-        let mut cached_gaps = gaps;
-        cached_gaps.push(gap);
-        // 先完成持久化，再单独获取 proof_state 更新缓存；seal 路径已经调用过
-        // latest_proof_seq()，不能在这里持锁递归进入同一 Mutex。
-        self.cache_gap_baseline(&origin, chapter_id, &cached_gaps);
+        device_gaps.push(gap);
+        state.next_seq = state.next_seq.max(baseline_seq.saturating_add(1));
+        self.cache_gap_baseline_locked(&mut state, &origin, chapter_id, &device_gaps);
+        drop(state);
         if written {
             self.proof_generation.fetch_add(1, Ordering::SeqCst);
         }
         Ok(())
     }
 
-    /// 本机当前证明链的最近序号（没有事件时为 0）。
-    pub(crate) fn latest_proof_seq(&self) -> Result<u64> {
-        let mut state = self.lock_proof_state();
-        if !state.initialized {
-            self.initialize_proof_state(&mut state)?;
-        }
-        Ok(state.next_seq.saturating_sub(1))
-    }
-
     fn initialize_proof_state(&self, state: &mut ProofStoreState) -> Result<()> {
+        let origin = self.resolve_origin_device_id()?;
+        let mut local_event_seqs: HashMap<u64, String> = HashMap::new();
         for event in self.load_all_events()? {
             let Some(proof) = event.proof.as_ref() else {
                 continue;
             };
             state.next_seq = state.next_seq.max(proof.seq.saturating_add(1));
+            if event.device_id == origin {
+                let identity = format!("事件 {}", event.event_id);
+                if let Some(previous) = local_event_seqs.insert(proof.seq, identity.clone()) {
+                    log::warn!(
+                        "[writing_stats] 本机证明序号 {} 同时被 {} 和 {} 使用，保留历史事实",
+                        proof.seq,
+                        previous,
+                        identity
+                    );
+                }
+            }
             let key = format!("{}/{}", event.device_id, event.chapter_id);
             let replace = state
                 .chains
@@ -1179,6 +1198,31 @@ impl StatsStore {
                         content_hash: proof.after_content_hash.clone(),
                         text_sha256: proof.after_text_sha256.clone(),
                     },
+                );
+            }
+        }
+
+        // 缺口与编辑事件共用同一设备级序号空间。初始化时只读扫描本机全部
+        // 原子缺口记录（包括从旧格式迁移来的记录），恢复分配器下界；之后
+        // 逐字编辑热路径只读内存状态。
+        let mut gap_seqs: HashMap<u64, String> = HashMap::new();
+        for gap in checkpoint::load_device_continuity_gaps(&self.app_data_root, &origin)? {
+            state.next_seq = state.next_seq.max(gap.baseline_seq.saturating_add(1));
+            let identity = format!("连续性缺口 {}", gap.event_id);
+            if let Some(previous) = local_event_seqs.get(&gap.baseline_seq) {
+                log::warn!(
+                    "[writing_stats] 本机证明序号 {} 同时被 {} 和 {} 使用，保留历史事实",
+                    gap.baseline_seq,
+                    previous,
+                    identity
+                );
+            }
+            if let Some(previous) = gap_seqs.insert(gap.baseline_seq, identity.clone()) {
+                log::warn!(
+                    "[writing_stats] 本机证明序号 {} 同时被 {} 和 {} 使用，保留历史事实",
+                    gap.baseline_seq,
+                    previous,
+                    identity
                 );
             }
         }
@@ -1212,11 +1256,12 @@ impl StatsStore {
         Ok(())
     }
 
-    /// 封存缺口成功后更新同进程缓存，包括之前缓存为“无缺口”的章节。
+    /// 在已持有 `proof_state` 锁时更新章节的缺口缓存。
     ///
     /// 只允许向更晚的基线推进：并发封存旧缺口时不能覆盖已经看到的更新缺口。
-    fn cache_gap_baseline(
+    fn cache_gap_baseline_locked(
         &self,
+        state: &mut ProofStoreState,
         origin: &str,
         chapter_id: &str,
         gaps: &[proof::ProofContinuityGap],
@@ -1224,12 +1269,12 @@ impl StatsStore {
         let key = format!("{origin}/{chapter_id}");
         let latest = gaps
             .iter()
+            .filter(|gap| gap.device_id == origin && gap.chapter_id == chapter_id)
             .max_by_key(|gap| gap.baseline_seq)
             .map(|gap| ProofGapBaseline {
                 baseline_seq: gap.baseline_seq,
                 baseline_text: gap.baseline_text.clone(),
             });
-        let mut state = self.lock_proof_state();
         match latest {
             Some(latest) => {
                 let replace = state
