@@ -7,8 +7,9 @@
 //!
 //! 本模块在正文 Commit **之前**把一次同步编辑的稳定事实写到
 //! `stats/proof-intents/`（不参与远端作品同步）。正文 `SaveTransaction` 会在
-//! manifest 中链接同一批事件 ID；只有事务进入 `FilesCommitted`/`Finished`，
-//! 恢复流程才按原事件 ID、原时间戳和来源补记证明。因此“后来正文又被覆盖”
+//! manifest 中链接同一批事件 ID，并把完整恢复材料写入事务目录；
+//! 即使意图文件随后丢失，只要事务进入 `FilesCommitted`/`Finished`，
+//! 恢复流程仍能按原事件 ID、原时间戳和来源补记证明。因此“后来正文又被覆盖”
 //! 不会再被误判成“这次正文从未提交”。恢复顺序按 `occurred_at_ms`，先发生的
 //! 事件先补记，保证证明链不因积压而错位。
 //!
@@ -22,7 +23,10 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::storage::transaction::{scan_pending_transactions, TransactionPhase};
+use crate::storage::transaction::{
+    scan_pending_transactions, ProofRecoveryRecord, TransactionManifest, TransactionPhase,
+    TransactionRecovery, MANIFEST_FILENAME,
+};
 use crate::sync::commit_helpers::CommittedBefore;
 use crate::sync::staging::CommitAction;
 
@@ -71,6 +75,21 @@ pub(crate) struct SyncProofIntent {
 impl SyncProofIntent {
     pub(crate) fn is_delete(&self) -> bool {
         self.action == SyncProofAction::Delete
+    }
+
+    /// 转换为随正文事务持久化的恢复材料。
+    fn recovery_record(&self) -> ProofRecoveryRecord {
+        ProofRecoveryRecord {
+            event_id: self.event_id.clone(),
+            project_id: self.project_id.clone(),
+            volume_id: self.volume_id.clone(),
+            chapter_id: self.chapter_id.clone(),
+            workspace_path: self.workspace_path.clone(),
+            before_text: self.before_text.clone(),
+            after_text: self.after_text.clone(),
+            source_device_id: self.source_device_id.clone(),
+            occurred_at_ms: self.occurred_at_ms,
+        }
     }
 }
 
@@ -125,10 +144,10 @@ impl<'a> ProofIntentSink<'a> {
         project_id: Option<&str>,
         actions: &[CommitAction],
         before: &[CommittedBefore],
-    ) -> crate::Result<Vec<String>> {
+    ) -> crate::Result<Vec<ProofRecoveryRecord>> {
         let mut created_ids = Vec::new();
-        let result = (|| -> crate::Result<Vec<String>> {
-            let mut prepared_ids = Vec::new();
+        let result = (|| -> crate::Result<Vec<ProofRecoveryRecord>> {
+            let mut prepared_records = Vec::new();
             for (index, action) in actions.iter().enumerate() {
                 let rel_path = action_rel_path(action);
                 // 非章节文件不参与证明，也不需要读取/解码正文。
@@ -237,12 +256,12 @@ impl<'a> ProofIntentSink<'a> {
                     &intent_path(self.root, &intent.event_id),
                     &serialized,
                 )?;
-                prepared_ids.push(intent.event_id);
+                prepared_records.push(intent.recovery_record());
                 if created {
                     created_ids.push(event_id);
                 }
             }
-            Ok(prepared_ids)
+            Ok(prepared_records)
         })();
         if result.is_err() {
             // prepare 失败时事务尚未创建，本次新写入的意图没有事务链接，
@@ -273,66 +292,175 @@ impl<'a> ProofIntentSink<'a> {
         remove_intent(self.root, event_id)
     }
 
-    /// 当前目标项目是否仍有未恢复意图（含无法解析的意图）。
+    /// 当前目标项目是否仍有真正未恢复的证明对象。
     ///
-    /// 同步 Commit 在恢复后调用；只要有积压，就不允许继续修改同一项目正文，
-    /// 否则新事件会越过旧事件，证明链无法按发生顺序接续。
-    pub(crate) fn has_unresolved_for_project(
+    /// 已完成并清理的旧事务不会再出现在结果里；返回项必须带具体事务/事件 ID，
+    /// 让同步层报告可定位的恢复失败，而不是重新落回通用 pending。
+    pub(crate) fn unresolved_for_project(
         &self,
+        core: &crate::facade::WriterCore,
         project_id: Option<&str>,
-    ) -> crate::Result<bool> {
+    ) -> crate::Result<Vec<ProofRecoveryIssue>> {
+        let mut issues = Vec::new();
         let pending = load_pending(self.root)?;
-        if !pending.errors.is_empty() {
-            return Ok(true);
+        for error in &pending.errors {
+            issues.push(ProofRecoveryIssue {
+                transaction_id: None,
+                event_id: None,
+                message: format!(
+                    "同步证明意图文件无法解析（{}）: {}",
+                    error.path.display(),
+                    error.message
+                ),
+            });
         }
-        if pending
-            .intents
-            .iter()
-            .any(|intent| project_id.is_none_or(|pid| intent.project_id == pid))
-        {
-            return Ok(true);
+        for intent in &pending.intents {
+            if !project_id.is_none_or(|pid| intent.project_id == pid) {
+                continue;
+            }
+            // 事件已经持久化时恢复事实已经成立，剩余的意图/事务目录只是清理问题，
+            // 不能再用它永久阻断该项目同步。
+            match core
+                .get_stats_api()
+                .store()
+                .find_event_by_id(&intent.event_id)
+            {
+                Ok(Some(_)) => continue,
+                Ok(None) => {}
+                Err(error) => {
+                    issues.push(ProofRecoveryIssue {
+                        transaction_id: None,
+                        event_id: Some(intent.event_id.clone()),
+                        message: format!(
+                            "章节 {} 的同步证明事件查询失败: {error}",
+                            intent.workspace_path
+                        ),
+                    });
+                    continue;
+                }
+            }
+            issues.push(ProofRecoveryIssue {
+                transaction_id: None,
+                event_id: Some(intent.event_id.clone()),
+                message: format!(
+                    "章节 {} 的同步证明仍在等待恢复",
+                    intent.workspace_path
+                ),
+            });
         }
-        // 事务目录仍保留，说明还有证明未完成。App target 的事务在 app_data_root，
-        // Project target 的事务在 projects_root/<pid>，两者都要检查。
+
         let mut transaction_roots = vec![self.app_data_root.to_path_buf()];
         if let Some(pid) = project_id {
             transaction_roots.push(self.projects_root.join(pid));
         }
         for transaction_root in transaction_roots {
             let scan = scan_pending_transactions(&transaction_root);
-            if !scan.errors.is_empty() {
-                return Ok(true);
+            for error in &scan.errors {
+                issues.push(ProofRecoveryIssue {
+                    transaction_id: None,
+                    event_id: None,
+                    message: format!(
+                        "正文事务状态无法读取（{}）: {}",
+                        transaction_root.display(),
+                        error
+                    ),
+                });
             }
             for transaction in &scan.transactions {
                 for event_id in &transaction.proof_intent_ids {
-                    match load_intent(self.root, event_id) {
-                        Ok(Some(intent))
-                            if project_id.is_none_or(|pid| intent.project_id == pid) =>
-                        {
-                            return Ok(true);
-                        }
-                        Ok(Some(_)) => {}
-                        Ok(None) => {
-                            log::warn!(
-                                "[proof_intent] 事务 {} 缺少意图文件 {}，保留待人工恢复",
-                                transaction.transaction_id,
-                                event_id
-                            );
-                            return Ok(true);
-                        }
+                    // 事件已落盘：事务目录只是待清理垃圾，不是未完成证明。
+                    match core
+                        .get_stats_api()
+                        .store()
+                        .find_event_by_id(event_id)
+                    {
+                        Ok(Some(_)) => continue,
+                        Ok(None) => {}
                         Err(error) => {
-                            log::warn!(
-                                "[proof_intent] 事务 {} 的意图 {} 无法读取: {error}",
-                                transaction.transaction_id,
-                                event_id
-                            );
-                            return Ok(true);
+                            issues.push(ProofRecoveryIssue {
+                                transaction_id: Some(transaction.transaction_id.clone()),
+                                event_id: Some(event_id.clone()),
+                                message: format!(
+                                    "事务 {} 的证明事件查询失败: {error}",
+                                    transaction.transaction_id
+                                ),
+                            });
+                            continue;
                         }
+                    }
+                    match load_intent(self.root, event_id) {
+                        Ok(Some(intent)) => {
+                            if project_id.is_none_or(|pid| intent.project_id == pid)
+                                && !issues
+                                    .iter()
+                                    .any(|issue| issue.event_id.as_deref() == Some(event_id))
+                            {
+                                issues.push(ProofRecoveryIssue {
+                                    transaction_id: Some(transaction.transaction_id.clone()),
+                                    event_id: Some(event_id.clone()),
+                                    message: format!(
+                                        "章节 {} 的同步证明仍在等待恢复",
+                                        intent.workspace_path
+                                    ),
+                                });
+                            }
+                        }
+                        Ok(None) => {
+                            let record = match load_proof_recovery_records(transaction) {
+                                Ok(records) => records
+                                    .into_iter()
+                                    .find(|record| record.event_id == *event_id),
+                                Err(error) => {
+                                    issues.push(ProofRecoveryIssue {
+                                        transaction_id: Some(transaction.transaction_id.clone()),
+                                        event_id: Some(event_id.clone()),
+                                        message: format!(
+                                            "事务 {} 的证明恢复材料无法读取: {error}",
+                                            transaction.transaction_id
+                                        ),
+                                    });
+                                    continue;
+                                }
+                            };
+                            if let Some(record) = &record {
+                                if project_id.is_some_and(|pid| record.project_id != pid) {
+                                    continue;
+                                }
+                            } else if project_id.is_some_and(|pid| {
+                                event_project_id(event_id).as_deref() != Some(pid)
+                            }) {
+                                continue;
+                            }
+                            let message = if record.is_some() {
+                                format!(
+                                    "事务 {} 缺少意图文件 {}，恢复材料存在但证明事件仍未落盘",
+                                    transaction.transaction_id, event_id
+                                )
+                            } else {
+                                format!(
+                                    "事务 {} 缺少意图文件 {}，且事务目录没有可用的证明恢复材料",
+                                    transaction.transaction_id, event_id
+                                )
+                            };
+                            issues.push(ProofRecoveryIssue {
+                                transaction_id: Some(transaction.transaction_id.clone()),
+                                event_id: Some(event_id.clone()),
+                                message,
+                            });
+                        }
+                        Err(error) => issues.push(ProofRecoveryIssue {
+                            transaction_id: Some(transaction.transaction_id.clone()),
+                            event_id: Some(event_id.clone()),
+                            message: format!(
+                                "事务 {} 的意图文件 {} 无法读取: {error}",
+                                transaction.transaction_id, event_id
+                            ),
+                        }),
                     }
                 }
             }
         }
-        Ok(false)
+        Ok(issues)
     }
 
     /// 清理已经完成证明、但仍因链接意图而保留的正文事务目录。
@@ -345,6 +473,30 @@ impl<'a> ProofIntentSink<'a> {
         completed_event_ids: &HashSet<String>,
     ) -> HashSet<String> {
         cleanup_completed_transactions(transaction_root, completed_event_ids)
+    }
+}
+
+/// 恢复后仍无法自动收敛的证明对象。
+///
+/// 与旧的布尔判断不同，这里返回具体事务/事件 ID，调用方不能再用一个
+/// 笼统的 pending 状态永久阻断项目同步。
+#[derive(Debug, Clone)]
+pub(crate) struct ProofRecoveryIssue {
+    pub transaction_id: Option<String>,
+    pub event_id: Option<String>,
+    pub message: String,
+}
+
+impl ProofRecoveryIssue {
+    pub(crate) fn description(&self) -> String {
+        let mut text = self.message.clone();
+        if let Some(transaction_id) = &self.transaction_id {
+            text.push_str(&format!("（事务 {transaction_id}）"));
+        }
+        if let Some(event_id) = &self.event_id {
+            text.push_str(&format!("（事件 {event_id}）"));
+        }
+        text
     }
 }
 
@@ -476,6 +628,44 @@ fn transaction_root_for_intent(
                 app_data_root.to_path_buf()
             }
         }
+    }
+}
+
+/// 从稳定事件 ID 中解析所属项目。
+///
+/// 事件 ID 形如 `sync:<run_id>:<workspace path>:<action index>`，其中
+/// workspace 路径以 `projects/<pid>/...` 开头。旧事务可能已丢失意图文件，
+/// 只能靠事件 ID 做项目级归属判断。
+fn event_project_id(event_id: &str) -> Option<String> {
+    let rest = event_id.strip_prefix("sync:")?;
+    let (_run_id, rest) = rest.split_once(':')?;
+    let (workspace_path, _action_index) = rest.rsplit_once(':')?;
+    let mut parts = workspace_path.split(|character| character == '/' || character == '\\');
+    if parts.next()? != "projects" {
+        return None;
+    }
+    parts.next().map(str::to_string)
+}
+
+/// 读取事务目录中随正文提交持久化的证明恢复材料。
+fn load_proof_recovery_records(
+    transaction: &TransactionRecovery,
+) -> crate::Result<Vec<ProofRecoveryRecord>> {
+    let manifest_path = transaction.tx_dir.join(MANIFEST_FILENAME);
+    let text = match fs::read_to_string(&manifest_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let manifest: TransactionManifest = serde_json::from_str(&text)?;
+    let Some(filename) = manifest.proof_recovery_file else {
+        return Ok(Vec::new());
+    };
+    let path = transaction.tx_dir.join(filename);
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(serde_json::from_str(&text)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -618,16 +808,40 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
         );
     }
 
-    let mut scans = HashMap::new();
+    // 双向扫描：既从意图文件找事务根，也遍历所有可能保存正文事务的根。
+    // 只从意图反推时，意图文件丢失的已提交事务永远不会进入恢复循环。
+    let intent_event_ids: HashSet<String> = pending
+        .intents
+        .iter()
+        .map(|intent| intent.event_id.clone())
+        .collect();
+    let mut transaction_roots: HashSet<PathBuf> = HashSet::new();
+    transaction_roots.insert(core.app_data_root().to_path_buf());
+    if let Ok(entries) = fs::read_dir(core.projects_root()) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                transaction_roots.insert(entry.path());
+            }
+        }
+    }
     for intent in &pending.intents {
-        let transaction_root =
-            transaction_root_for_intent(intent, core.projects_root(), core.app_data_root());
-        scans
-            .entry(transaction_root.clone())
-            .or_insert_with(|| scan_pending_transactions(&transaction_root));
+        transaction_roots.insert(transaction_root_for_intent(
+            intent,
+            core.projects_root(),
+            core.app_data_root(),
+        ));
+    }
+
+    let mut scans = HashMap::new();
+    for transaction_root in transaction_roots {
+        scans.insert(
+            transaction_root.clone(),
+            scan_pending_transactions(&transaction_root),
+        );
     }
 
     let mut committed = HashMap::new();
+    let mut known_transactions: HashMap<String, (PathBuf, TransactionRecovery)> = HashMap::new();
     let mut blocked_ids = HashSet::new();
     let mut blocked_roots = HashSet::new();
     for (transaction_root, scan) in &scans {
@@ -641,6 +855,12 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
             blocked_roots.insert(transaction_root.clone());
         }
         for transaction in &scan.transactions {
+            for event_id in &transaction.proof_intent_ids {
+                known_transactions.insert(
+                    event_id.clone(),
+                    (transaction_root.clone(), transaction.clone()),
+                );
+            }
             match transaction.phase {
                 TransactionPhase::FilesCommitted | TransactionPhase::Finished => {
                     for event_id in &transaction.proof_intent_ids {
@@ -662,17 +882,19 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
     let mut completed_ids: HashSet<String> = HashSet::new();
     let mut to_remove: HashSet<String> = HashSet::new();
     for intent in pending.intents {
-        let stats = core.get_stats_api();
-        match stats
+        // 按稳定 event_id 查真实事件，不再依赖可能漂移的时间分区；
+        // 事件已存在说明上次已补记成功，只需清理事务目录和意图文件。
+        match core
+            .get_stats_api()
             .store()
-            .proof_event_persisted(&intent.event_id, intent.occurred_at_ms)
+            .find_event_by_id(&intent.event_id)
         {
-            Ok(true) => {
+            Ok(Some(_)) => {
                 completed_ids.insert(intent.event_id.clone());
                 to_remove.insert(intent.event_id.clone());
                 continue;
             }
-            Ok(false) => {}
+            Ok(None) => {}
             Err(error) => {
                 log::warn!(
                     "[proof_intent] 检查事件是否已落盘失败 {}: {error}",
@@ -770,6 +992,78 @@ pub(crate) fn recover_pending(core: &crate::facade::WriterCore) -> crate::Result
             LegacyLiveState::Unknown => log::warn!(
                 "[proof_intent] 旧意图缺少事务阶段且正文无法确认，保留意图 {}",
                 intent.event_id
+            ),
+        }
+    }
+
+    // 事务仍在、但意图文件已丢失的孤儿事件：先确认事件是否已落盘；
+    // 未落盘时从事务目录内持久化的恢复材料补记。这样旧版本留下的
+    // “事件已写入、意图已删、事务目录还在”可以自行收敛。
+    for (event_id, (_, transaction)) in &known_transactions {
+        if intent_event_ids.contains(event_id) || completed_ids.contains(event_id) {
+            continue;
+        }
+        match core.get_stats_api().store().find_event_by_id(event_id) {
+            Ok(Some(_)) => {
+                completed_ids.insert(event_id.clone());
+                recovered = recovered.saturating_add(1);
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                log::warn!(
+                    "[proof_intent] 检查孤儿事务事件是否已落盘失败 {}: {error}",
+                    event_id
+                );
+                continue;
+            }
+        }
+        if !matches!(
+            transaction.phase,
+            TransactionPhase::FilesCommitted | TransactionPhase::Finished
+        ) {
+            continue;
+        }
+        let records = match load_proof_recovery_records(transaction) {
+            Ok(records) => records,
+            Err(error) => {
+                log::warn!(
+                    "[proof_intent] 读取事务 {} 的证明恢复材料失败: {error}",
+                    transaction.transaction_id
+                );
+                continue;
+            }
+        };
+        let Some(record) = records
+            .into_iter()
+            .find(|record| record.event_id == *event_id)
+        else {
+            log::warn!(
+                "[proof_intent] 事务 {} 缺少意图文件 {}，且没有可用的证明恢复材料",
+                transaction.transaction_id,
+                event_id
+            );
+            continue;
+        };
+        match core.record_sync_content_change_at(
+            &record.project_id,
+            &record.volume_id,
+            &record.chapter_id,
+            record.before_text.as_deref(),
+            record.after_text.as_deref(),
+            &record.event_id,
+            &record.source_device_id,
+            "",
+            record.occurred_at_ms,
+        ) {
+            Ok(_) => {
+                completed_ids.insert(event_id.clone());
+                recovered = recovered.saturating_add(1);
+            }
+            Err(error) => log::warn!(
+                "[proof_intent] 从事务 {} 恢复同步证明事件 {} 失败: {error}",
+                transaction.transaction_id,
+                event_id
             ),
         }
     }

@@ -21,6 +21,29 @@ pub struct TransactionManifest {
     /// 非空时事务目录必须保留到证明事件写入完成，恢复流程据此判断正文是否已提交。
     #[serde(default)]
     pub proof_intent_ids: Vec<String>,
+    /// 事务目录内保存证明恢复材料的文件名。
+    /// 意图文件丢失时，恢复流程仍可从该文件重建 proof 事件。
+    #[serde(default)]
+    pub proof_recovery_file: Option<String>,
+}
+
+/// 与正文提交绑定、在事务目录内持久化的证明恢复材料。
+///
+/// 仅保存 `proof_intent_ids` 时，一旦 `stats/proof-intents/` 中的意图文件丢失，
+/// 恢复流程无法判断或重建对应 proof 事件，事务会永久卡住项目同步。
+/// 该记录随 `SaveTransaction` 一起落盘，使正文提交、证明入库、事务清理
+/// 成为同一个可恢复生命周期。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProofRecoveryRecord {
+    pub event_id: String,
+    pub project_id: String,
+    pub volume_id: String,
+    pub chapter_id: String,
+    pub workspace_path: String,
+    pub before_text: Option<String>,
+    pub after_text: Option<String>,
+    pub source_device_id: String,
+    pub occurred_at_ms: i64,
 }
 
 fn default_phase() -> TransactionPhase {

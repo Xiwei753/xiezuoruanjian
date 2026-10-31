@@ -210,6 +210,13 @@ export struct SujianEditor {
   private displayedSnapshot: EditorLayoutSnapshot | null = null
   private displayedLineLayouts: LineLayout[] = []
   private displayedStyledString: StyledString | null = null
+  // Issue #1021：staticClipCommands 只由 displayed 帧和 displayedLineLayouts 计算。
+  // 不再单独缓存后台排版结果；候选布局只存在于 pendingDisplayData 中。
+  private staticClipMode: string = 'full'
+  private staticClipLayoutRevision: number = -1
+  private staticClipLayoutGeneration: number = -1
+  private staticMaskRectCount: number = 1
+  private staticMaskEmpty: boolean = false
   // Issue #879 复核评论修复（问题1）：排版请求——通过 @State + @Prop 传给 EditorPendingLayoutHost，
   // @Watch 自动触发排版。token 用于校验回调对应哪次排版请求。
   @State private pendingLayoutRequest: PendingLayoutRequest | null = null
@@ -222,9 +229,6 @@ export struct SujianEditor {
   private styledStringByToken: Map<number, StyledString> = new Map()
   // Issue #879 复核评论修复（问题3）：已消费的 token 集合——防止同一 token 重复消费。
   private consumedTokens: Set<number> = new Set()
-  // Issue #879 复核评论修复（问题6）：后台排版完成的行布局——作为 Coordinator 和
-  // computeStaticMaskRects 的唯一相同输入，不用 renderResult.lines（可能为空）。
-  private committedLineLayouts: LineLayout[] = []
   // Issue #879 复核评论修复（问题3）：运动字形源池——替代旧的 oldTextControllers/newTextControllers。
   // 源池用 sourceRevision + stableRunId 保存 StyledString/TextController，
   // ForEach key 基于稳定 run 身份（runId），而非一次性自增事务编号。
@@ -547,6 +551,29 @@ export struct SujianEditor {
   // 不写正文内容，只写长度、offset、几何和状态。在各生命周期点调用。
   // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot——
   // 诊断快照应反映当前显示的内容。
+  // Issue #1021：诊断只记录 UTF-16 区间，不记录正文内容。
+  private describeStaticVisibleRanges(frame: EditorVisualFrame | null): string {
+    if (frame === null) {
+      return ''
+    }
+    const parts: string[] = []
+    for (const range of frame.staticVisibleRanges) {
+      parts.push(`${range.utf16Start}-${range.utf16End}`)
+    }
+    return parts.join(',')
+  }
+
+  private describeMotionGlyphRanges(frame: EditorVisualFrame | null): string {
+    if (frame === null) {
+      return ''
+    }
+    const parts: string[] = []
+    for (const window of frame.motionGlyphWindows) {
+      parts.push(`${window.utf16Start}-${window.utf16End}`)
+    }
+    return parts.join(',')
+  }
+
   private pushDiagnosticsSnapshot(): void {
     const store = EditorRuntimeSnapshotStore.getInstance()
     const snap = this.displayedSnapshot ?? this.currentSnapshot
@@ -607,6 +634,23 @@ export struct SujianEditor {
         layoutGeneration: 0,
         layoutCompositionGeneration: 0,
         visualCaretAffinity: 'downstream',
+        // Issue #1021：无显示帧时不存在任何排版/遮罩版本。
+        displayedSessionId: -1,
+        displayedRevision: -1,
+        displayedLayoutLineCount: 0,
+        candidateSessionId: -1,
+        candidateRevision: -1,
+        candidateLayoutLineCount: 0,
+        isMotionAnimating: false,
+        displayedFrameAnimating: false,
+        displayedMotionWindowCount: 0,
+        staticClipMode: this.staticClipMode,
+        staticClipLayoutRevision: this.staticClipLayoutRevision,
+        staticClipLayoutGeneration: this.staticClipLayoutGeneration,
+        staticVisibleRanges: '',
+        motionGlyphRanges: '',
+        staticMaskRectCount: this.staticMaskRectCount,
+        staticMaskEmpty: this.staticMaskEmpty,
         // Issue #768 评论5835171266 第5项：编辑器挂载状态和时间戳。
         isEditorMounted: true,
         capturedAtMs: Date.now(),
@@ -699,6 +743,23 @@ export struct SujianEditor {
       layoutGeneration: this.layoutGeneration,
       layoutCompositionGeneration: this.layoutCompositionGeneration,
       visualCaretAffinity: this.visualCaretAffinity,
+      // Issue #1021：displayed/candidate 身份与静态遮罩证据。
+      displayedSessionId: this.displayedPresentation?.sessionId ?? -1,
+      displayedRevision: this.displayedSnapshot?.revision ?? -1,
+      displayedLayoutLineCount: this.displayedLineLayouts.length,
+      candidateSessionId: this.candidateToken?.sessionId ?? -1,
+      candidateRevision: this.candidateToken?.revision ?? -1,
+      candidateLayoutLineCount: this.pendingDisplayData?.lineLayouts.length ?? 0,
+      isMotionAnimating: this.isMotionAnimating,
+      displayedFrameAnimating: this.displayedVisualFrame?.isAnimating ?? false,
+      displayedMotionWindowCount: this.displayedVisualFrame?.motionGlyphWindows.length ?? 0,
+      staticClipMode: this.staticClipMode,
+      staticClipLayoutRevision: this.staticClipLayoutRevision,
+      staticClipLayoutGeneration: this.staticClipLayoutGeneration,
+      staticVisibleRanges: this.describeStaticVisibleRanges(this.displayedVisualFrame),
+      motionGlyphRanges: this.describeMotionGlyphRanges(this.displayedVisualFrame),
+      staticMaskRectCount: this.staticMaskRectCount,
+      staticMaskEmpty: this.staticMaskEmpty,
       // Issue #768 评论5835171266 第5项：编辑器挂载状态和时间戳。
       isEditorMounted: true,
       capturedAtMs: Date.now(),
@@ -843,6 +904,9 @@ export struct SujianEditor {
       this.displayedStyledString = null
       this.displayedLineLayouts = []
       this.displayedVisualFrame = null
+      // Issue #1021：会话切换必须立刻恢复主 Text 完整静态显示，
+      // 不能残留上一会话的静态遮罩几何。
+      this.updateStaticClipCommands()
       this.previousSnapshot = null
       this.previousLayout = []
       this.oldStyledString = null
@@ -1000,7 +1064,7 @@ export struct SujianEditor {
   // 运动窗口 layoutReady 之前不切换主 Text 内容和静态遮罩。
   // 1. 生成候选 plan（调 prepareCandidate），设置 visualFrame（让运动窗口 ForEach 创建组件）
   // 2. 准备运动源（prepareMotionSources）
-  // 3. 保存 committedLineLayouts
+  // 3. 候选行布局只随 pendingDisplayData 暂存，不覆盖 displayedLineLayouts
   // 4. 不更新 displayedSnapshot/displayedLineLayouts/displayedStyledString
   // 5. 不调 refreshRender()（主 Text 保持旧内容）
   // 6. 不调 updateStaticClipCommands()（保持全尺寸矩形，不裁切）
@@ -1053,8 +1117,8 @@ export struct SujianEditor {
     // 后台候选等待期间，hitTest/cursor 使用 displayedSnapshot（对应主 Text 的 LayoutManager）。
     this.latestCoreSnapshot = latestUpdate.layoutSnapshot
 
-    // Issue #879 本轮复核评论修复（问题4）：步骤4——保存后台排版的行布局。
-    this.committedLineLayouts = lineLayouts
+    // Issue #1021：后台排版结果只进入 pendingDisplayData，不能提前写 displayedLineLayouts。
+    // 旧动画继续运行时，静态遮罩必须继续使用 displayedVisualFrame 同版的 displayedLineLayouts。
 
     // Issue #879 最新复核评论修复（问题4）：步骤5——使用 prepareCandidate 生成候选 plan，
     // 不修改 Coordinator 的 currentPlan/currentFrame——旧动画在交棒期间仍能正确使用旧状态。
@@ -1480,6 +1544,12 @@ export struct SujianEditor {
     if (this.displayedVisualFrame === null || !this.displayedVisualFrame.isAnimating) {
       return []
     }
+    // Issue #1021：静态遮罩因几何失配回退完整显示时，displayed 运动窗口必须同步退出。
+    // 否则主 Text 已完整显示这些字形，运动层再画一份移动副本，会形成双重字形所有权。
+    // 候选窗口仍由 buildCandidateMotionWindowSources 以不可见状态参与布局，保证交接等待不被破坏。
+    if (this.staticClipMode === 'fallback-full') {
+      return []
+    }
     const clipRects = EditorMotionLayer.buildAllClipRects(this.displayedVisualFrame)
     const result: MotionWindowSource[] = []
     const windows = this.displayedVisualFrame.motionGlyphWindows
@@ -1817,34 +1887,60 @@ export struct SujianEditor {
 
   // Issue #879 复核评论修复（问题4）：更新主 Text 的静态裁切 path 命令。
   // 静态模式（非动画）不做裁切——全尺寸矩形 path。
-  // 只有动画中且有 motion owner 时才计算遮罩 path。
+  // 只有动画中且 displayed 帧确实有 motion owner 时才计算遮罩 path。
   // 初始挂载阶段（contentWidth/contentHeight 为 0）也不裁切——用足够大的矩形。
   // 不再用空字符串——空字符串在内容尺寸为零时会构建宽高为 0 的矩形。
-  // Issue #879 复核评论修复（问题1）：使用 displayedVisualFrame——
-  // 静态裁切只跟随当前可见帧，不跟随候选帧。
+  // Issue #1021：遮罩几何唯一来源是 displayedVisualFrame + displayedLineLayouts。
+  // 二者只在 executeDisplaySwitch 成功时一起切换；候选布局/动画不得提前覆盖它们。
+  // 几何失配时宁可回退完整显示，也不能把有内容的正文裁成永久不可见。
   private updateStaticClipCommands(): void {
-    if (this.displayedVisualFrame === null || !this.displayedVisualFrame.isAnimating ||
-        !EditorMotionLayer.needsStaticMask(this.displayedVisualFrame)) {
+    const frame = this.displayedVisualFrame
+    this.staticClipLayoutRevision = frame === null ? -1 : (this.displayedSnapshot?.revision ?? -1)
+    this.staticClipLayoutGeneration = frame === null ? -1 : (this.displayedSnapshot?.generation ?? -1)
+
+    if (frame === null || !frame.isAnimating || !EditorMotionLayer.needsStaticMask(frame)) {
       // 非动画或无 motion owner：全尺寸矩形（不裁切）
-      if (this.contentWidth > 0 && this.contentHeight > 0) {
-        this.staticClipCommands =
-          `M0 0 L${this.contentWidth} 0 L${this.contentWidth} ${this.contentHeight} L0 ${this.contentHeight} Z`
-      } else {
-        this.staticClipCommands = 'M0 0 L99999 0 L99999 99999 L0 99999 Z'
-      }
-    } else {
-      // 动画且有 motion owner：按 staticVisibleRanges 裁切
-      // Issue #879 复核评论修复（问题6）：用 committedLineLayouts（后台排版结果）而非
-      // renderResult.lines（refreshRender 后可能为空），确保静态遮罩有正确的行几何。
-      this.staticClipCommands = EditorMotionLayer.buildStaticMaskPath(
-        EditorMotionLayer.computeStaticMaskRects(
-          this.displayedVisualFrame,
-          this.committedLineLayouts,
-          this.contentWidth,
-          this.contentHeight
-        )
-      )
+      this.applyFullStaticClip('full')
+      return
     }
+
+    // displayed 帧确实拥有全部字形（staticVisibleRanges 为空）：静态层应当不可见。
+    // 这是唯一的合法空遮罩场景，由运动层完整接管正文。
+    if (frame.staticVisibleRanges.length === 0) {
+      this.staticClipCommands = EditorMotionLayer.buildStaticMaskPath([])
+      this.staticClipMode = 'motion-only'
+      this.staticMaskRectCount = 0
+      this.staticMaskEmpty = true
+      return
+    }
+
+    // displayedLineLayouts 与 displayedVisualFrame 同版；若缺少行几何或区间无法换算，
+    // computeStaticMaskRects 返回空数组，这里回退完整显示（证据见 staticClipMode）。
+    const rects = EditorMotionLayer.computeStaticMaskRects(
+      frame,
+      this.displayedLineLayouts,
+      this.contentWidth,
+      this.contentHeight
+    )
+    if (rects.length === 0) {
+      this.applyFullStaticClip('fallback-full')
+      return
+    }
+    this.staticClipCommands = EditorMotionLayer.buildStaticMaskPath(rects)
+    this.staticClipMode = 'mask'
+    this.staticMaskRectCount = rects.length
+    this.staticMaskEmpty = false
+  }
+
+  // Issue #1021：静态层完整显示的单一构造入口，同时记录诊断状态。
+  // 始终使用足够大的矩形，不跟随 contentWidth/contentHeight：正文尺寸来自异步
+  // onAreaChange，切帧瞬间读取旧尺寸会把新增长出来的行永久裁掉。静态模式必须是
+  // 无条件完整显示，几何失效也不能退化成局部可见。
+  private applyFullStaticClip(mode: string): void {
+    this.staticClipCommands = 'M0 0 L99999 0 L99999 99999 L0 99999 Z'
+    this.staticClipMode = mode
+    this.staticMaskRectCount = 1
+    this.staticMaskEmpty = false
   }
 
   // Issue #879 本轮复核评论修复（问题6）：统一停止动画入口。

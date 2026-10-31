@@ -2448,17 +2448,22 @@ impl WriterCoreApi {
             // 积压证明未完成时不能继续改同一项目正文：后续 Commit 会让新的
             // before/after 越过旧事件，证明链将无法按发生顺序接续。
             if let Some(project_id) = target_sync_result.project_id.as_deref() {
-                match intent_sink.has_unresolved_for_project(Some(project_id)) {
-                    Ok(false) => {}
-                    Ok(true) => {
+                match intent_sink.unresolved_for_project(&core, Some(project_id)) {
+                    Ok(issues) if issues.is_empty() => {}
+                    Ok(issues) => {
                         target_with_conflicts.result.status =
                             crate::sync::SyncStatus::RecoverableError(
                                 "sync_proof_recovery_pending".to_string(),
                             );
-                        target_with_conflicts.result.error = Some(
-                            "上次同步正文已落盘但证明事件尚未恢复；先完成证明恢复再同步该作品"
-                                .to_string(),
-                        );
+                        let detail = issues
+                            .iter()
+                            .take(3)
+                            .map(|issue| issue.description())
+                            .collect::<Vec<_>>()
+                            .join("；");
+                        target_with_conflicts.result.error = Some(format!(
+                            "上次同步正文已落盘但证明事件尚未恢复；先完成证明恢复再同步该作品: {detail}"
+                        ));
                         return (target_with_conflicts, Vec::new());
                     }
                     Err(error) => {

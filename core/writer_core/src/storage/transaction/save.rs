@@ -31,6 +31,10 @@ pub struct SaveTransaction {
     finished: bool,
     /// 与本次正文提交绑定的证明意图。
     proof_intent_ids: Vec<String>,
+    /// 与证明意图配套的恢复材料，commit 前写入事务目录。
+    proof_recovery_records: Vec<ProofRecoveryRecord>,
+    /// 恢复材料在事务目录内的文件名。
+    proof_recovery_file: Option<String>,
 }
 
 impl SaveTransaction {
@@ -47,7 +51,18 @@ impl SaveTransaction {
             backed_up_files: Vec::new(),
             finished: false,
             proof_intent_ids: Vec::new(),
+            proof_recovery_records: Vec::new(),
+            proof_recovery_file: None,
         }
+    }
+
+    /// 把证明意图及恢复材料绑定到本事务。必须在 `commit` 前调用。
+    pub fn link_proof_recovery(&mut self, records: Vec<ProofRecoveryRecord>) {
+        self.proof_intent_ids = records
+            .iter()
+            .map(|record| record.event_id.clone())
+            .collect();
+        self.proof_recovery_records = records;
     }
 
     /// 把证明意图绑定到本事务。必须在 `commit` 前调用。
@@ -225,6 +240,10 @@ impl SaveTransaction {
             return Ok(());
         }
 
+        // 证明恢复材料必须先于 manifest 和正文落盘：意图文件可能被单独清理，
+        // 但事务目录里的这份材料要与正文提交同生命周期。
+        self.persist_proof_recovery()?;
+
         // backup_mode 时先完成全部备份，不改 live。
         // 备份信息一次原子写入 manifest。
         // manifest 持久化成功后，才开始 rename/delete live 文件。
@@ -371,6 +390,20 @@ impl SaveTransaction {
         Ok(())
     }
 
+    /// 将证明恢复材料原子写入事务目录，并记录 manifest 引用。
+    fn persist_proof_recovery(&mut self) -> Result<()> {
+        if self.proof_recovery_records.is_empty() {
+            return Ok(());
+        }
+        fs::create_dir_all(&self.tx_dir)?;
+        let filename = "proof-recovery.json";
+        let json = serde_json::to_string_pretty(&self.proof_recovery_records)?;
+        crate::storage::atomic_write_string(&self.tx_dir.join(filename), &json)?;
+        crate::storage::sync_dir(&self.tx_dir)?;
+        self.proof_recovery_file = Some(filename.to_string());
+        Ok(())
+    }
+
     /// 更新 manifest 中的 phase 字段。
     ///
     /// 读取现有 manifest（若存在），更新 phase 和 backup_entries，原子写回。
@@ -399,11 +432,13 @@ impl SaveTransaction {
                 phase: TransactionPhase::Prepared,
                 backup_entries: Vec::new(),
                 proof_intent_ids: self.proof_intent_ids.clone(),
+                proof_recovery_file: self.proof_recovery_file.clone(),
             }
         };
         manifest.phase = phase;
         manifest.backup_entries = self.backed_up_files.clone();
         manifest.proof_intent_ids = self.proof_intent_ids.clone();
+        manifest.proof_recovery_file = self.proof_recovery_file.clone();
         let json = serde_json::to_string_pretty(&manifest)?;
         crate::storage::atomic_write_string(manifest_path, &json)?;
         Ok(())

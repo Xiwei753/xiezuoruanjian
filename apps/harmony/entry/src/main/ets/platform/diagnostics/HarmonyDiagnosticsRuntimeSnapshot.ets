@@ -110,6 +110,22 @@ interface EditorRuntimeDto {
   layoutGeneration: number
   layoutCompositionGeneration: number
   visualCaretAffinity: string
+  displayedSessionId: number
+  displayedRevision: number
+  displayedLayoutLineCount: number
+  candidateSessionId: number
+  candidateRevision: number
+  candidateLayoutLineCount: number
+  isMotionAnimating: boolean
+  displayedFrameAnimating: boolean
+  displayedMotionWindowCount: number
+  staticClipMode: string
+  staticClipLayoutRevision: number
+  staticClipLayoutGeneration: number
+  staticVisibleRanges: string
+  motionGlyphRanges: string
+  staticMaskRectCount: number
+  staticMaskEmpty: boolean
 }
 
 export class HarmonyDiagnosticsRuntimeSnapshot {
@@ -259,7 +275,23 @@ export class HarmonyDiagnosticsRuntimeSnapshot {
       layoutRevision: snapshot.layoutRevision,
       layoutGeneration: snapshot.layoutGeneration,
       layoutCompositionGeneration: snapshot.layoutCompositionGeneration,
-      visualCaretAffinity: snapshot.visualCaretAffinity
+      visualCaretAffinity: snapshot.visualCaretAffinity,
+      displayedSessionId: snapshot.displayedSessionId,
+      displayedRevision: snapshot.displayedRevision,
+      displayedLayoutLineCount: snapshot.displayedLayoutLineCount,
+      candidateSessionId: snapshot.candidateSessionId,
+      candidateRevision: snapshot.candidateRevision,
+      candidateLayoutLineCount: snapshot.candidateLayoutLineCount,
+      isMotionAnimating: snapshot.isMotionAnimating,
+      displayedFrameAnimating: snapshot.displayedFrameAnimating,
+      displayedMotionWindowCount: snapshot.displayedMotionWindowCount,
+      staticClipMode: snapshot.staticClipMode,
+      staticClipLayoutRevision: snapshot.staticClipLayoutRevision,
+      staticClipLayoutGeneration: snapshot.staticClipLayoutGeneration,
+      staticVisibleRanges: snapshot.staticVisibleRanges,
+      motionGlyphRanges: snapshot.motionGlyphRanges,
+      staticMaskRectCount: snapshot.staticMaskRectCount,
+      staticMaskEmpty: snapshot.staticMaskEmpty
     }
     return JSON.stringify(dto, null, 2)
   }

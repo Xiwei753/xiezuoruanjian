@@ -56,6 +56,7 @@ fn test_transaction_recovery_staging_exists() {
         phase: TransactionPhase::Prepared,
         backup_entries: Vec::new(),
         proof_intent_ids: Vec::new(),
+        proof_recovery_file: None,
     };
     let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
     fs::write(tx_dir.join(MANIFEST_FILENAME), &manifest_json).unwrap();
@@ -98,6 +99,7 @@ fn test_transaction_recovery_staging_lost() {
         phase: TransactionPhase::Prepared,
         backup_entries: Vec::new(),
         proof_intent_ids: Vec::new(),
+        proof_recovery_file: None,
     };
     let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
     fs::write(tx_dir.join(MANIFEST_FILENAME), &manifest_json).unwrap();

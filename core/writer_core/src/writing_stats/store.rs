@@ -1132,6 +1132,32 @@ impl StatsStore {
         self.event_is_persisted(&origin, &date, event_id)
     }
 
+    /// 按稳定事件 ID 在本机事件分区中查找已落盘事件。
+    ///
+    /// 事务恢复只持有 `event_id`，可能已经丢失原意图文件（及其时间）。
+    /// 该查询遍历本机原始段与归档段，返回真实事件及其原始 `timestamp_ms`，
+    /// 不按“当前时间”重建事件。
+    pub(crate) fn find_event_by_id(&self, event_id: &str) -> Result<Option<WritingInputEvent>> {
+        if event_id.is_empty() {
+            return Ok(None);
+        }
+        let origin = self.resolve_origin_device_id()?;
+        let root = self.events_root();
+        let mut files = Vec::new();
+        if root.join(&origin).is_dir() {
+            files.extend(list_origin_files(&root, &origin, ".events.jsonl")?);
+        }
+        files.extend(list_archive_files(&root, &origin)?);
+        for file in files {
+            for event in self.parse_events_file(&file)? {
+                if event.event_id == event_id {
+                    return Ok(Some(event));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// 追加一批已测量的前台写作计时切片，只写入本机来源分区。
     ///
     /// 切片先按写作设备本地日期切开，再按切片起点的 UTC 日期落到

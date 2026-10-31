@@ -300,13 +300,13 @@ pub(crate) fn apply_commit_plan_to_live(
     content_actions: &[crate::sync::staging::CommitAction],
     engine_state_actions: &[crate::sync::staging::CommitAction],
     backup_mode: bool,
-    proof_intent_ids: &[String],
+    proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
 ) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
     if content_actions.is_empty() && engine_state_actions.is_empty() && !backup_mode {
         return Ok(crate::storage::transaction::SaveTransaction::new(live_root));
     }
     let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
-    tx.link_proof_intents(proof_intent_ids.to_vec());
+    tx.link_proof_recovery(proof_recovery_records.to_vec());
     if backup_mode {
         tx.enable_backup_mode();
     }
@@ -380,7 +380,7 @@ fn apply_commit_plan_with_sync_state_merge_for_group(
     merged_conflicts: &[crate::sync::types::SyncConflict],
     app_group: Option<&crate::sync::types::AppDataGroup>,
     backup_mode: bool,
-    proof_intent_ids: &[String],
+    proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
 ) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
     // 注意：此处不像 apply_commit_plan_to_live 那样对
     // `content_actions.is_empty() && engine_state_actions.is_empty() && !backup_mode`
@@ -390,7 +390,7 @@ fn apply_commit_plan_with_sync_state_merge_for_group(
     // `app-meta/sync/conflicts.json` 加入 SaveTransaction，否则已算好的 merged state
     // 会被静默丢掉，live 的 state/conflicts 停留在旧值（Issue #762 评论 5831990584）。
     let mut tx = crate::storage::transaction::SaveTransaction::new(live_root);
-    tx.link_proof_intents(proof_intent_ids.to_vec());
+    tx.link_proof_recovery(proof_recovery_records.to_vec());
     if backup_mode {
         tx.enable_backup_mode();
     }
@@ -488,7 +488,7 @@ fn apply_commit_plan_with_optional_merge(
     plan: &crate::sync::staging::CommitPlan,
     content_actions: &[crate::sync::staging::CommitAction],
     backup_mode: bool,
-    proof_intent_ids: &[String],
+    proof_recovery_records: &[crate::storage::transaction::ProofRecoveryRecord],
 ) -> crate::error::Result<crate::storage::transaction::SaveTransaction> {
     if plan.needs_sync_state_merge {
         let base_root = run.base_root();
@@ -519,7 +519,7 @@ fn apply_commit_plan_with_optional_merge(
             &merged_conflicts,
             app_group,
             backup_mode,
-            proof_intent_ids,
+            proof_recovery_records,
         )
     } else {
         apply_commit_plan_to_live(
@@ -527,7 +527,7 @@ fn apply_commit_plan_with_optional_merge(
             content_actions,
             &plan.engine_state_actions,
             backup_mode,
-            proof_intent_ids,
+            proof_recovery_records,
         )
     }
 }
@@ -1332,7 +1332,7 @@ pub(crate) fn commit_single_target_staging(
             };
             let before = capture_action_before(live_root, &plan.content_actions);
 
-            let proof_intent_ids = match intent_sink {
+            let proof_recovery_records = match intent_sink {
                 Some(sink) => match sink.prepare(
                     run.run_id(),
                     target.target_kind.as_str(),
@@ -1340,7 +1340,7 @@ pub(crate) fn commit_single_target_staging(
                     &plan.content_actions,
                     &before,
                 ) {
-                    Ok(ids) => ids,
+                    Ok(records) => records,
                     Err(error) => {
                         let msg = format!("prepare proof intent failed: {error}");
                         log::warn!("Staging commit: {} for run {}", msg, run.run_id());
@@ -1356,7 +1356,7 @@ pub(crate) fn commit_single_target_staging(
                 &plan,
                 &plan.content_actions,
                 false,
-                &proof_intent_ids,
+                &proof_recovery_records,
             ) {
                 Ok(tx) => tx,
                 Err(e) => {
@@ -1433,7 +1433,7 @@ pub(crate) fn commit_single_target_staging(
                 .cloned()
                 .collect();
             let before = capture_action_before(live_root, &safe_content_actions);
-            let proof_intent_ids = match intent_sink {
+            let proof_recovery_records = match intent_sink {
                 Some(sink) => match sink.prepare(
                     run.run_id(),
                     target.target_kind.as_str(),
@@ -1441,7 +1441,7 @@ pub(crate) fn commit_single_target_staging(
                     &safe_content_actions,
                     &before,
                 ) {
-                    Ok(ids) => ids,
+                    Ok(records) => records,
                     Err(error) => {
                         let msg = format!("prepare proof intent failed: {error}");
                         log::warn!("Staging commit: {} for run {}", msg, run.run_id());
@@ -1456,7 +1456,7 @@ pub(crate) fn commit_single_target_staging(
                 &plan,
                 &safe_content_actions,
                 false,
-                &proof_intent_ids,
+                &proof_recovery_records,
             ) {
                 Ok(tx) => tx,
                 Err(e) => {
@@ -1552,7 +1552,7 @@ pub(crate) fn commit_single_target_staging(
             };
 
             let before = capture_action_before(live_root, &plan.content_actions);
-            let proof_intent_ids = match intent_sink {
+            let proof_recovery_records = match intent_sink {
                 Some(sink) => match sink.prepare(
                     run.run_id(),
                     target.target_kind.as_str(),
@@ -1560,7 +1560,7 @@ pub(crate) fn commit_single_target_staging(
                     &plan.content_actions,
                     &before,
                 ) {
-                    Ok(ids) => ids,
+                    Ok(records) => records,
                     Err(error) => {
                         let msg = format!("prepare proof intent failed: {error}");
                         log::warn!("Staging commit: {} for run {}", msg, run.run_id());
@@ -1574,7 +1574,7 @@ pub(crate) fn commit_single_target_staging(
                 &plan.content_actions,
                 &plan.engine_state_actions,
                 false,
-                &proof_intent_ids,
+                &proof_recovery_records,
             ) {
                 Ok(tx) => tx,
                 Err(e) => {

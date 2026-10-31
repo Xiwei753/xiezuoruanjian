@@ -220,6 +220,16 @@ export class EditorMotionLayer {
       return [{ x: 0, y: 0, width: fullWidth, height: fullHeight }]
     }
 
+    // Issue #1021：全部字形由运动层接管——静态层合法地不画任何内容。
+    if (frame.staticVisibleRanges.length === 0) {
+      return []
+    }
+    // 几何来源缺失/尺寸无效：返回空数组让调用方回退完整显示，
+    // 不能把这个结果当成「静态层无内容」而构建空 path。
+    if (lineLayouts.length === 0 || fullWidth <= 0 || fullHeight <= 0) {
+      return []
+    }
+
     // 动画状态：把每个 staticVisibleRange 按行拆成矩形
     const rects: ClipRect[] = []
     for (const range of frame.staticVisibleRanges) {
@@ -227,6 +237,11 @@ export class EditorMotionLayer {
         // 行与区间无交集
         if (line.endUtf16 <= range.utf16Start || line.startUtf16 >= range.utf16End) {
           continue
+        }
+        // 行几何与当前 displayed 帧不匹配（没有 caretStops 无法换算 x）：
+        // 整帧回退完整显示，避免只隐藏一部分行。
+        if (line.caretStops.length === 0) {
+          return []
         }
         const segStart = Math.max(range.utf16Start, line.startUtf16)
         const segEnd = Math.min(range.utf16End, line.endUtf16)
@@ -246,10 +261,13 @@ export class EditorMotionLayer {
             endX = stop.x
           }
         }
+        if (endX <= x || line.height <= 0) {
+          continue
+        }
         rects.push({
           x,
           y: line.y,
-          width: Math.max(0, endX - x),
+          width: endX - x,
           height: line.height
         })
       }

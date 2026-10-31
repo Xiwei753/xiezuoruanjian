@@ -102,6 +102,26 @@ export interface EditorRuntimeSnapshot {
   layoutCompositionGeneration: number   // 布局对应的 snapshot compositionGeneration
   visualCaretAffinity: string           // 布局对应的 visual caret affinity ('upstream' | 'downstream')
 
+  // Issue #1021：显示帧/候选布局/静态遮罩的版本与可见区证据。
+  // displayed* 与 staticClip* 必须在同一次 executeDisplaySwitch 中一起切换；
+  // candidate* 只描述后台候选，不得作为主 Text 静态遮罩的输入。
+  displayedSessionId: number            // 已显示帧的 sessionId（无显示帧时为 -1）
+  displayedRevision: number             // 已显示帧对应的 snapshot revision（未知时为 -1）
+  displayedLayoutLineCount: number      // 已显示帧使用的行布局数量
+  candidateSessionId: number            // 后台候选 sessionId（无候选时为 -1）
+  candidateRevision: number             // 后台候选 revision（无候选时为 -1）
+  candidateLayoutLineCount: number      // 后台候选行布局数量
+  isMotionAnimating: boolean            // 主 Text 运动动画是否正在运行
+  displayedFrameAnimating: boolean      // displayedVisualFrame.isAnimating
+  displayedMotionWindowCount: number    // displayedVisualFrame.motionGlyphWindows.length
+  staticClipMode: string                // 'full' | 'mask' | 'motion-only' | 'fallback-full'
+  staticClipLayoutRevision: number      // staticClipCommands 对应行布局的 revision（-1 表示未知）
+  staticClipLayoutGeneration: number    // staticClipCommands 对应行布局的 generation（-1 表示未知）
+  staticVisibleRanges: string           // 静态可见 UTF-16 区间，如 '0-3,5-8'
+  motionGlyphRanges: string             // 运动层接管 UTF-16 区间，如 '3-5'
+  staticMaskRectCount: number           // 最终静态遮罩矩形数量
+  staticMaskEmpty: boolean              // staticClipCommands 是否为空路径（M0 0 Z）
+
   // Issue #768 评论5835171266 第5项：编辑器挂载状态和快照时间戳。
   isEditorMounted: boolean              // 编辑器是否仍挂载（aboutToDisappear 时设 false）
   capturedAtMs: number                  // 快照捕获时间戳（Date.now()）
@@ -206,6 +226,22 @@ export class EditorRuntimeSnapshotStore {
         layoutGeneration: old.layoutGeneration,
         layoutCompositionGeneration: old.layoutCompositionGeneration,
         visualCaretAffinity: old.visualCaretAffinity,
+        displayedSessionId: old.displayedSessionId,
+        displayedRevision: old.displayedRevision,
+        displayedLayoutLineCount: old.displayedLayoutLineCount,
+        candidateSessionId: old.candidateSessionId,
+        candidateRevision: old.candidateRevision,
+        candidateLayoutLineCount: old.candidateLayoutLineCount,
+        isMotionAnimating: old.isMotionAnimating,
+        displayedFrameAnimating: old.displayedFrameAnimating,
+        displayedMotionWindowCount: old.displayedMotionWindowCount,
+        staticClipMode: old.staticClipMode,
+        staticClipLayoutRevision: old.staticClipLayoutRevision,
+        staticClipLayoutGeneration: old.staticClipLayoutGeneration,
+        staticVisibleRanges: old.staticVisibleRanges,
+        motionGlyphRanges: old.motionGlyphRanges,
+        staticMaskRectCount: old.staticMaskRectCount,
+        staticMaskEmpty: old.staticMaskEmpty,
         isEditorMounted: false,
         capturedAtMs: old.capturedAtMs,
       }
