@@ -1172,8 +1172,10 @@ impl StatsStore {
             let Some(proof) = event.proof.as_ref() else {
                 continue;
             };
-            state.next_seq = state.next_seq.max(proof.seq.saturating_add(1));
             if event.device_id == origin {
+                // 证明序号只在来源设备内递增；其他设备的 seq 不能推进本机
+                // 分配器，否则本机下一次编辑会跳到远端设备的序号区间。
+                state.next_seq = state.next_seq.max(proof.seq.saturating_add(1));
                 let identity = format!("事件 {}", event.event_id);
                 if let Some(previous) = local_event_seqs.insert(proof.seq, identity.clone()) {
                     log::warn!(
