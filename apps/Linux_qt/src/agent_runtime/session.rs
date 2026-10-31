@@ -6,8 +6,17 @@
 use std::sync::{Arc, Mutex};
 
 use super::adapter::{create_adapter, AgentAdapter, CancelOutcome};
-use super::events::{AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent};
+use super::events::{AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink, RuntimeEvent};
 use super::mcp_binding::{prepare_mcp_brokers, McpBroker};
+
+/// 原生会话准备结果。后端据此决定补增量历史还是完整历史。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionPreparation {
+    /// 复用了管理器里已在运行的同一原生会话。
+    pub reused: bool,
+    /// 原生会话已经持有历史；false 时必须补完整 Core 历史。
+    pub history_restored: bool,
+}
 
 pub struct AgentSessionManager {
     adapter: Option<Box<dyn AgentAdapter>>,
@@ -52,7 +61,7 @@ impl AgentSessionManager {
         &mut self,
         mut ctx: AgentLaunchContext,
         sink: EventSink,
-    ) -> Result<(), String> {
+    ) -> Result<SessionPreparation, String> {
         if self.started {
             let reusable = self.context.as_ref().is_some_and(|existing| {
                 existing.agent_id == ctx.agent_id
@@ -79,7 +88,14 @@ impl AgentSessionManager {
                     if let Some(adapter) = self.adapter.as_mut() {
                         adapter.set_model(ctx.model.clone());
                     }
-                    return Ok(());
+                    let history_restored = self
+                        .adapter
+                        .as_ref()
+                        .is_some_and(|adapter| adapter.history_restored_on_reuse());
+                    return Ok(SessionPreparation {
+                        reused: true,
+                        history_restored,
+                    });
                 }
             }
         }
@@ -118,16 +134,20 @@ impl AgentSessionManager {
             (sink)(event);
         });
         let adapter = create_adapter(&ctx, wrapped)?;
+        let history_restored = adapter.history_restored();
         self.current_turn_id = current_turn_id;
         self.adapter = Some(adapter);
         self.context = Some(ctx);
         self.mcp_broker = mcp_broker;
         self.started = true;
         self.generation = generation;
-        Ok(())
+        Ok(SessionPreparation {
+            reused: false,
+            history_restored,
+        })
     }
 
-    pub fn prompt(&mut self, turn_id: &str, message: &str) -> Result<(), String> {
+    pub fn prompt(&mut self, turn_id: &str, request: &AgentPromptRequest) -> Result<(), String> {
         let adapter = self
             .adapter
             .as_mut()
@@ -135,7 +155,7 @@ impl AgentSessionManager {
         if let Ok(mut guard) = self.current_turn_id.lock() {
             *guard = turn_id.to_string();
         }
-        adapter.prompt(turn_id, message)
+        adapter.prompt(turn_id, request)
     }
 
     pub fn cancel(&mut self) -> Result<CancelOutcome, String> {

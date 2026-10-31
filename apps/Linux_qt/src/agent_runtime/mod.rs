@@ -26,8 +26,8 @@ mod workspace_access;
 
 pub use adapter::CancelOutcome;
 pub use events::{
-    AgentEvent, AgentLaunchContext, EventSink, McpServerLaunch, PermissionOption, RuntimeEvent,
-    ADAPTER_VERSION,
+    AgentEvent, AgentHistoryMessage, AgentLaunchContext, AgentModelInfo, AgentPromptRequest,
+    EventSink, McpServerLaunch, PermissionOption, RuntimeEvent, ADAPTER_VERSION,
 };
 pub use mcp_binding::{bind_current_project, McpBinding};
 pub use session::AgentSessionManager;

@@ -8,13 +8,15 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
 use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
-    json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent,
+    json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink,
+    RuntimeEvent,
 };
 use super::workspace_access::WorkspaceAccess;
 
@@ -29,6 +31,8 @@ pub struct GeminiAdapter {
     active_child: Arc<Mutex<Option<(String, RoundChild)>>>,
     session_started: Arc<Mutex<bool>>,
     system_settings_dir: Option<PathBuf>,
+    /// 只有 init 返回的 session id 与请求的 resume id 一致才为 true。
+    history_restored: Arc<AtomicBool>,
 }
 
 /// 生成仅本次 Gemini 进程可见的系统设置文件。
@@ -117,6 +121,7 @@ impl GeminiAdapter {
             (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
                 native_session_id: id.clone(),
                 model: ctx.model.clone(),
+                resumed: true,
             }));
         }
         Ok(Self {
@@ -126,17 +131,24 @@ impl GeminiAdapter {
             active_child: Arc::new(Mutex::new(None)),
             session_started: Arc::new(Mutex::new(false)),
             system_settings_dir,
+            // 有 resume 时先按“已恢复”处理，避免把完整历史再次注入已恢复
+            // 的原生会话；init 若返回不同 session id 会立即改回 false。
+            history_restored: Arc::new(AtomicBool::new(
+                ctx.resume_native_session_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty()),
+            )),
         })
     }
 }
 
 impl AgentAdapter for GeminiAdapter {
-    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
+    fn prompt(&mut self, core_turn_id: &str, request: &AgentPromptRequest) -> Result<(), String> {
         let mut command =
             WorkspaceAccess::for_context(&self.ctx)?.command(&self.ctx.launch_path, &[])?;
         command
             .arg("-p")
-            .arg(message)
+            .arg(request.text_with_history_context())
             .arg("--output-format")
             .arg("stream-json")
             .current_dir(&self.ctx.working_dir)
@@ -152,7 +164,8 @@ impl AgentAdapter for GeminiAdapter {
         if let Some(model) = self.ctx.model.as_ref() {
             command.arg("--model").arg(model);
         }
-        if let Some(session_id) = self.session_id.lock().ok().and_then(|guard| guard.clone()) {
+        let requested_resume_id = self.session_id.lock().ok().and_then(|guard| guard.clone());
+        if let Some(session_id) = requested_resume_id.as_ref() {
             command.arg("--resume").arg(session_id);
         }
         let mut child = command
@@ -182,8 +195,9 @@ impl AgentAdapter for GeminiAdapter {
         let session_id = self.session_id.clone();
         let active_child = self.active_child.clone();
         let session_started = self.session_started.clone();
+        let history_restored = self.history_restored.clone();
         let round_turn_id = core_turn_id.to_string();
-        let input_chars = u32::try_from(message.chars().count()).unwrap_or(u32::MAX);
+        let input_chars = u32::try_from(request.text.chars().count()).unwrap_or(u32::MAX);
         std::thread::Builder::new()
             .name("agent-gemini-turn".to_string())
             .spawn(move || {
@@ -218,15 +232,25 @@ impl AgentAdapter for GeminiAdapter {
                                 if let Ok(mut guard) = session_id.lock() {
                                     *guard = Some(id.clone());
                                 }
+                                let resumed = requested_resume_id
+                                    .as_deref()
+                                    .is_some_and(|requested| requested == id);
+                                // 新原生会话本轮已携带上下文；有 resume 时
+                                // 必须核对真实 session 才能确认历史已恢复。
+                                history_restored.store(
+                                    requested_resume_id.is_none() || resumed,
+                                    Ordering::SeqCst,
+                                );
                                 let already =
                                     session_started.lock().map(|guard| *guard).unwrap_or(true);
-                                if !already {
+                                if !already || !resumed {
                                     if let Ok(mut guard) = session_started.lock() {
                                         *guard = true;
                                     }
                                     (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
                                         native_session_id: id,
                                         model: json_text(&value, &["model"]),
+                                        resumed,
                                     }));
                                 }
                             }
@@ -381,6 +405,14 @@ impl AgentAdapter for GeminiAdapter {
 
     fn set_model(&mut self, model: Option<String>) {
         self.ctx.model = model;
+    }
+
+    fn history_restored(&self) -> bool {
+        self.history_restored.load(Ordering::SeqCst)
+    }
+
+    fn history_restored_on_reuse(&self) -> bool {
+        self.history_restored.load(Ordering::SeqCst)
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {

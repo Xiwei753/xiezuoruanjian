@@ -62,7 +62,13 @@ impl AgentConversationStore {
     pub fn load(&self, id: &str) -> Result<Option<AgentConversation>> {
         let path = self.path_for(id)?;
         match fs::read_to_string(&path) {
-            Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
+            Ok(content) => {
+                let mut conversation = serde_json::from_str::<AgentConversation>(&content)?;
+                if conversation.migrate_legacy() {
+                    self.save(&conversation)?;
+                }
+                Ok(Some(conversation))
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
         }
@@ -86,13 +92,14 @@ impl AgentConversationStore {
             let Ok(content) = fs::read_to_string(&path) else {
                 continue;
             };
-            let Ok(conversation) = serde_json::from_str::<AgentConversation>(&content) else {
+            let Ok(mut conversation) = serde_json::from_str::<AgentConversation>(&content) else {
                 log::warn!(
                     "[agent] skipping unreadable conversation file {}",
                     path.display()
                 );
                 continue;
             };
+            conversation.migrate_legacy();
             if let Some(project_id) = project_id {
                 if conversation.project_id != project_id {
                     continue;

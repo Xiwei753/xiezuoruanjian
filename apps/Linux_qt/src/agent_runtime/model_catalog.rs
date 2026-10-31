@@ -1,22 +1,37 @@
 //! 独立模型目录探测。
 //!
 //! Issue #1019：模型选择器只查询各家官方机器接口，不创建 Core 对话、
-//! 不启动 MCP broker，也不调用聊天用的 `session/new`。每次探测拥有自己的
-//! 子进程和总超时，失败只影响选择器，不阻塞输入发送。
+//! 不启动 MCP broker，也不启动聊天轮次。每次探测拥有自己的子进程和总超时，
+//! 失败只影响选择器，不阻塞输入发送。
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader, Write};
 use std::process::Stdio;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::events::{json_text, AgentLaunchContext};
+use super::events::{json_text, AgentLaunchContext, AgentModelInfo};
 use super::opencode::{fetch_models, free_loopback_port, SERVER_USER};
 use super::rpc::RpcClient;
 use super::workspace_access::WorkspaceAccess;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
+
+/// 模型目录探测结果。`Unsupported` 表示 CLI 正常响应但该版本不提供模型目录，
+/// 与网络/进程失败区分开，平台端可显示明确的说明。
+#[derive(Debug, Clone)]
+pub enum ModelProbeResult {
+    Models {
+        models: Vec<AgentModelInfo>,
+        default_model: Option<String>,
+    },
+    Unsupported {
+        message: String,
+    },
+}
 
 fn remaining(deadline: Instant, method: &str) -> Result<Duration, String> {
     let left = deadline.saturating_duration_since(Instant::now());
@@ -31,22 +46,44 @@ fn noop_handler() -> Arc<dyn Fn(&str, Value) + Send + Sync> {
     Arc::new(|_, _| {})
 }
 
-/// 按 Agent 自身协议查询模型目录。返回空列表表示该 CLI 没有可枚举的
-/// 机器接口（当前是 Claude Code），由平台端显示“默认模型”而不是猜列表。
-pub fn query_models(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
-    match ctx.agent_id.as_str() {
-        "codex" => query_codex(ctx),
-        "opencode" => query_opencode(ctx),
-        // Claude Code 官方只在交互式 `/model` 中维护模型列表，`-p` 模式
-        // 没有机器可读目录；不要伪造静态列表。
-        "claude" => Ok(Vec::new()),
-        "gemini" => query_acp(ctx),
-        _ if ctx.protocol == "acp" => query_acp(ctx),
-        other => Err(format!("{other} 没有可用的模型目录接口")),
+fn model_info(
+    id: String,
+    display_name: Option<String>,
+    description: Option<String>,
+    is_default: bool,
+    capabilities: Vec<String>,
+) -> AgentModelInfo {
+    AgentModelInfo {
+        id,
+        display_name: display_name.unwrap_or_default(),
+        description: description.unwrap_or_default(),
+        is_default,
+        capabilities,
     }
 }
 
-fn query_codex(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
+fn default_model(models: &[AgentModelInfo]) -> Option<String> {
+    models
+        .iter()
+        .find(|model| model.is_default)
+        .map(|model| model.id.clone())
+}
+
+/// 按 Agent 自身协议查询模型目录。
+pub fn query_models(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
+    match ctx.agent_id.as_str() {
+        "codex" => query_codex(ctx),
+        "opencode" => query_opencode(ctx),
+        "claude" => query_claude(ctx),
+        "gemini" => query_acp(ctx),
+        _ if ctx.protocol == "acp" => query_acp(ctx),
+        other => Ok(ModelProbeResult::Unsupported {
+            message: format!("{other} 没有可用的模型目录接口"),
+        }),
+    }
+}
+
+fn query_codex(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let mut args = vec!["app-server".to_string()];
     for arg in &ctx.launch_args {
@@ -76,7 +113,7 @@ fn query_codex(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
     )?;
     client.notify("initialized", json!({}))?;
 
-    let mut models = BTreeSet::new();
+    let mut models = BTreeMap::new();
     let mut cursor: Option<String> = None;
     for _ in 0..10 {
         let mut params = json!({ "limit": 100, "includeHidden": false });
@@ -86,12 +123,41 @@ fn query_codex(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
         let result = client.request("model/list", params, remaining(deadline, "model/list")?)?;
         if let Some(data) = result.get("data").and_then(Value::as_array) {
             for model in data {
-                if let Some(id) = json_text(model, &["id"]).or_else(|| json_text(model, &["model"]))
+                let Some(id) = json_text(model, &["id"]).or_else(|| json_text(model, &["model"]))
+                else {
+                    continue;
+                };
+                if id.is_empty() {
+                    continue;
+                }
+                let mut capabilities = Vec::new();
+                if let Some(efforts) = model
+                    .get("supportedReasoningEfforts")
+                    .and_then(Value::as_array)
                 {
-                    if !id.is_empty() {
-                        models.insert(id);
+                    for effort in efforts {
+                        if let Some(effort) = effort.as_str() {
+                            capabilities.push(format!("reasoning:{effort}"));
+                        }
                     }
                 }
+                if let Some(modalities) = model.get("inputModalities").and_then(Value::as_array) {
+                    for modality in modalities {
+                        if let Some(modality) = modality.as_str() {
+                            capabilities.push(format!("input:{modality}"));
+                        }
+                    }
+                }
+                models.insert(
+                    id.clone(),
+                    model_info(
+                        id,
+                        json_text(model, &["displayName"]),
+                        json_text(model, &["description"]),
+                        model.get("isDefault").and_then(Value::as_bool) == Some(true),
+                        capabilities,
+                    ),
+                );
             }
         }
         cursor = json_text(&result, &["nextCursor"]).filter(|cursor| !cursor.is_empty());
@@ -99,10 +165,15 @@ fn query_codex(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
             break;
         }
     }
-    Ok(models.into_iter().collect())
+    let models: Vec<_> = models.into_values().collect();
+    let default_model = default_model(&models);
+    Ok(ModelProbeResult::Models {
+        models,
+        default_model,
+    })
 }
 
-fn query_opencode(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
+fn query_opencode(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
     let port = free_loopback_port()?;
     let password = format!("sujian-{}", uuid::Uuid::new_v4());
     let client = reqwest::blocking::Client::builder()
@@ -146,7 +217,12 @@ fn query_opencode(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
             }
             std::thread::sleep(Duration::from_millis(150));
         }
-        fetch_models(&client, &base_url, &password, &ctx.working_dir)
+        let models = fetch_models(&client, &base_url, &password, &ctx.working_dir)?;
+        let default_model = default_model(&models);
+        Ok(ModelProbeResult::Models {
+            models,
+            default_model,
+        })
     })();
 
     let _ = child.kill();
@@ -154,7 +230,184 @@ fn query_opencode(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
     result
 }
 
-fn query_acp(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
+fn query_claude(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let mut args = Vec::new();
+    let mut skip_value = false;
+    for arg in &ctx.launch_args {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        match arg.as_str() {
+            "--print" | "-p" => continue,
+            "--input-format" | "--output-format" => {
+                skip_value = true;
+                continue;
+            }
+            _ => args.push(arg.clone()),
+        }
+    }
+    args.extend(
+        [
+            "--print",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--safe-mode",
+            "--no-session-persistence",
+        ]
+        .iter()
+        .map(|arg| arg.to_string()),
+    );
+    let mut command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args)?;
+    command
+        .current_dir(&ctx.working_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("无法启动 Claude Code 模型探测：{error}"))?;
+
+    let result = (|| {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Claude Code 模型探测没有 stdin".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Claude Code 模型探测没有 stdout".to_string())?;
+        let request_id = format!("sujian-models-{}", uuid::Uuid::new_v4());
+        let request = json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": { "subtype": "initialize" }
+        });
+        writeln!(stdin, "{request}")
+            .and_then(|_| stdin.flush())
+            .map_err(|error| format!("写入 Claude Code initialize 失败：{error}"))?;
+
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if sender.send(value).is_err() {
+                    break;
+                }
+            }
+        });
+
+        loop {
+            let left = remaining(deadline, "initialize")?;
+            let value = receiver
+                .recv_timeout(left)
+                .map_err(|_| "Claude Code 模型探测等待 initialize 响应超时".to_string())?;
+            if value.get("type").and_then(Value::as_str) != Some("control_response") {
+                continue;
+            }
+            let Some(response) = value.get("response") else {
+                continue;
+            };
+            let response_id = response
+                .get("request_id")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("request_id").and_then(Value::as_str));
+            if response_id != Some(request_id.as_str()) {
+                continue;
+            }
+            match response.get("subtype").and_then(Value::as_str) {
+                Some("success") => {
+                    let payload = response.get("response").unwrap_or(response);
+                    let Some(items) = payload.get("models").and_then(Value::as_array) else {
+                        return Ok(ModelProbeResult::Unsupported {
+                            message: "当前 Claude Code 版本未在初始化响应中提供模型目录"
+                                .to_string(),
+                        });
+                    };
+                    let mut models = Vec::new();
+                    for model in items {
+                        let Some(id) = json_text(model, &["value"])
+                            .or_else(|| json_text(model, &["resolvedModel"]))
+                            .or_else(|| json_text(model, &["id"]))
+                        else {
+                            continue;
+                        };
+                        if id.is_empty() {
+                            continue;
+                        }
+                        let mut capabilities = Vec::new();
+                        for key in [
+                            "supportsEffort",
+                            "supportsAdaptiveThinking",
+                            "supportsFastMode",
+                            "supportsAutoMode",
+                        ] {
+                            if model.get(key).and_then(Value::as_bool) == Some(true) {
+                                capabilities.push(key.to_string());
+                            }
+                        }
+                        if let Some(levels) =
+                            model.get("supportedEffortLevels").and_then(Value::as_array)
+                        {
+                            for level in levels {
+                                if let Some(level) = level.as_str() {
+                                    capabilities.push(format!("effort:{level}"));
+                                }
+                            }
+                        }
+                        models.push(model_info(
+                            id,
+                            json_text(model, &["displayName"]),
+                            json_text(model, &["description"]),
+                            false,
+                            capabilities,
+                        ));
+                    }
+                    if models.is_empty() {
+                        return Ok(ModelProbeResult::Unsupported {
+                            message: "Claude Code 初始化响应中的模型目录为空".to_string(),
+                        });
+                    }
+                    let default_model = default_model(&models);
+                    return Ok(ModelProbeResult::Models {
+                        models,
+                        default_model,
+                    });
+                }
+                Some("error") => {
+                    let error = response
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("未知错误");
+                    return Err(format!("Claude Code 初始化模型目录失败：{error}"));
+                }
+                Some(other) => {
+                    return Err(format!("Claude Code 初始化响应类型异常：{other}"));
+                }
+                None => return Err("Claude Code 初始化响应缺少 subtype".to_string()),
+            }
+        }
+    })();
+
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
+fn query_acp(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let mut args = ctx.launch_args.clone();
     if ctx.agent_id == "gemini" && !args.iter().any(|arg| arg == "--acp") {
@@ -199,22 +452,60 @@ fn query_acp(ctx: &AgentLaunchContext) -> Result<Vec<String>, String> {
         }),
         remaining(deadline, "session/new")?,
     )?;
-    Ok(acp_model_ids(&session))
+    let models = acp_models(&session);
+    if models.is_empty() {
+        return Ok(ModelProbeResult::Unsupported {
+            message: "当前 ACP Agent 未在会话初始化响应中提供模型目录".to_string(),
+        });
+    }
+    let default_model = json_text(
+        session.get("models").unwrap_or(&Value::Null),
+        &["currentModelId"],
+    )
+    .filter(|id| models.iter().any(|model| &model.id == id))
+    .or_else(|| default_model(&models));
+    Ok(ModelProbeResult::Models {
+        models,
+        default_model,
+    })
 }
 
-fn acp_model_ids(session: &Value) -> Vec<String> {
-    let mut models = BTreeSet::new();
+fn acp_models(session: &Value) -> Vec<AgentModelInfo> {
+    let mut models = BTreeMap::new();
     if let Some(available) = session
         .get("models")
         .and_then(|models| models.get("availableModels"))
         .and_then(Value::as_array)
     {
         for model in available {
-            if let Some(id) = json_text(model, &["modelId"]).or_else(|| json_text(model, &["id"])) {
-                if !id.is_empty() {
-                    models.insert(id);
+            let Some(id) = json_text(model, &["modelId"]).or_else(|| json_text(model, &["id"]))
+            else {
+                continue;
+            };
+            if id.is_empty() {
+                continue;
+            }
+            let mut capabilities = Vec::new();
+            for key in [
+                "supportsEffort",
+                "supportsAdaptiveThinking",
+                "supportsFastMode",
+                "supportsAutoMode",
+            ] {
+                if model.get(key).and_then(Value::as_bool) == Some(true) {
+                    capabilities.push(key.to_string());
                 }
             }
+            models.insert(
+                id.clone(),
+                model_info(
+                    id,
+                    json_text(model, &["name"]).or_else(|| json_text(model, &["displayName"])),
+                    json_text(model, &["description"]),
+                    false,
+                    capabilities,
+                ),
+            );
         }
     }
     // 标准 ACP 也可能通过 configOptions 暴露模型选择项。
@@ -227,17 +518,29 @@ fn acp_model_ids(session: &Value) -> Vec<String> {
             }
             if let Some(values) = option.get("options").and_then(Value::as_array) {
                 for value in values {
-                    if let Some(model_id) = json_text(value, &["value"])
+                    let Some(model_id) = json_text(value, &["value"])
                         .or_else(|| json_text(value, &["id"]))
                         .or_else(|| json_text(value, &["modelId"]))
-                    {
-                        if !model_id.is_empty() {
-                            models.insert(model_id);
-                        }
+                    else {
+                        continue;
+                    };
+                    if model_id.is_empty() || models.contains_key(&model_id) {
+                        continue;
                     }
+                    models.insert(
+                        model_id.clone(),
+                        model_info(
+                            model_id,
+                            json_text(value, &["name"])
+                                .or_else(|| json_text(value, &["displayName"])),
+                            json_text(value, &["description"]),
+                            false,
+                            Vec::new(),
+                        ),
+                    );
                 }
             }
         }
     }
-    models.into_iter().collect()
+    models.into_values().collect()
 }

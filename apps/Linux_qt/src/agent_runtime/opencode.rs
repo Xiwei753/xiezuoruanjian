@@ -5,7 +5,7 @@
 //! 推理、工具和权限事件，用 `/api/session/:id/prompt` 发送消息、
 //! `/api/session/:id/interrupt` 中断。进程和服务器生命周期由本适配器管理。
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 
 use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
-    json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, PermissionOption,
-    RuntimeEvent,
+    json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentModelInfo, AgentPromptRequest,
+    EventSink, PermissionOption, RuntimeEvent,
 };
 use super::workspace_access::WorkspaceAccess;
 
@@ -142,6 +142,7 @@ pub struct OpenCodeAdapter {
     pending_events: PendingEvents,
     /// Drop 时通知 SSE 线程退出，避免进程结束后后台无限重连。
     stop_events: Arc<AtomicBool>,
+    history_restored: bool,
 }
 
 pub(crate) fn free_loopback_port() -> Result<u16, String> {
@@ -285,7 +286,7 @@ impl OpenCodeAdapter {
             .resume_native_session_id
             .clone()
             .filter(|id| !id.is_empty());
-        let session_id = match resume_id {
+        let (session_id, resumed) = match resume_id {
             Some(id) => {
                 let exists = client
                     .get(format!("{base_url}/api/session/{id}"))
@@ -295,24 +296,30 @@ impl OpenCodeAdapter {
                     .map(|response| response.status().is_success())
                     .unwrap_or(false);
                 if exists {
-                    id
+                    (id, true)
                 } else {
-                    create_session(
-                        &client,
-                        &base_url,
-                        &password,
-                        &ctx.working_dir,
-                        &ctx.project_title,
-                    )?
+                    (
+                        create_session(
+                            &client,
+                            &base_url,
+                            &password,
+                            &ctx.working_dir,
+                            &ctx.project_title,
+                        )?,
+                        false,
+                    )
                 }
             }
-            None => create_session(
-                &client,
-                &base_url,
-                &password,
-                &ctx.working_dir,
-                &ctx.project_title,
-            )?,
+            None => (
+                create_session(
+                    &client,
+                    &base_url,
+                    &password,
+                    &ctx.working_dir,
+                    &ctx.project_title,
+                )?,
+                false,
+            ),
         };
 
         // 模型目录由独立探测线程通过 `/api/model` 获取，不绑定聊天会话，
@@ -482,6 +489,7 @@ impl OpenCodeAdapter {
                 .and_then(|guard| guard.clone())
                 .unwrap_or_default(),
             model: ctx.model.clone(),
+            resumed,
         }));
 
         Ok(Self {
@@ -497,6 +505,7 @@ impl OpenCodeAdapter {
             input_bindings,
             pending_events,
             stop_events,
+            history_restored: resumed,
         })
     }
 }
@@ -1397,7 +1406,7 @@ pub(crate) fn fetch_models(
     base_url: &str,
     password: &str,
     working_dir: &Path,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<AgentModelInfo>, String> {
     let response = client
         .get(format!("{base_url}/api/model"))
         .basic_auth(SERVER_USER, Some(password))
@@ -1411,17 +1420,39 @@ pub(crate) fn fetch_models(
     let Some(models) = value.get("data").and_then(Value::as_array) else {
         return Ok(Vec::new());
     };
-    let mut result = BTreeSet::new();
+    let mut result = BTreeMap::new();
     for model in models {
         let provider = json_text(model, &["providerID"]);
         let model_id = json_text(model, &["modelID"]).or_else(|| json_text(model, &["id"]));
         if let (Some(provider), Some(model_id)) = (provider, model_id) {
-            if !provider.is_empty() && !model_id.is_empty() {
-                result.insert(format!("{provider}/{model_id}"));
+            if provider.is_empty() || model_id.is_empty() {
+                continue;
             }
+            let id = format!("{provider}/{model_id}");
+            let mut capabilities = Vec::new();
+            if let Some(values) = model.get("capabilities").and_then(Value::as_array) {
+                for value in values {
+                    if let Some(value) = value.as_str() {
+                        capabilities.push(value.to_string());
+                    }
+                }
+            }
+            result.insert(
+                id.clone(),
+                AgentModelInfo {
+                    id,
+                    display_name: json_text(model, &["name"])
+                        .or_else(|| json_text(model, &["displayName"]))
+                        .unwrap_or_default(),
+                    description: json_text(model, &["description"]).unwrap_or_default(),
+                    is_default: model.get("isDefault").and_then(Value::as_bool) == Some(true)
+                        || model.get("default").and_then(Value::as_bool) == Some(true),
+                    capabilities,
+                },
+            );
         }
     }
-    Ok(result.into_iter().collect())
+    Ok(result.into_values().collect())
 }
 
 fn create_session(
@@ -1594,7 +1625,7 @@ fn cancel_admitted_input_http(
 }
 
 impl AgentAdapter for OpenCodeAdapter {
-    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
+    fn prompt(&mut self, core_turn_id: &str, request: &AgentPromptRequest) -> Result<(), String> {
         let session_id = self
             .session_id
             .lock()
@@ -1618,7 +1649,10 @@ impl AgentAdapter for OpenCodeAdapter {
         if let Ok(mut pending) = self.pending_events.lock() {
             pending.clear();
         }
-        let mut body = json!({ "id": input_id.clone(), "text": message });
+        let mut body = json!({
+            "id": input_id.clone(),
+            "text": request.text_with_history_context(),
+        });
         // 用户明确选择模型时才传；格式为 `provider/model`。
         if let Some(model) = self.model_hint.as_ref() {
             if let Some((provider, model_id)) = model.split_once('/') {
@@ -1789,6 +1823,10 @@ impl AgentAdapter for OpenCodeAdapter {
 
     fn set_model(&mut self, model: Option<String>) {
         self.model_hint = model;
+    }
+
+    fn history_restored(&self) -> bool {
+        self.history_restored
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {

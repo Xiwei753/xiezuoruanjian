@@ -198,6 +198,10 @@ pub struct AgentNativeSession {
     pub native_session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 已经确定进入该原生会话的最后一轮素笺对话。下一轮从这里之后补充
+    /// 上下文；原生会话重建时清空，重新同步完整历史。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_synchronized_turn_id: Option<String>,
     pub updated_at_ms: i64,
 }
 
@@ -299,11 +303,15 @@ impl AgentConversation {
     /// 当前执行者在此会话中保存的原生 session。只按 Agent ID + 真实启动
     /// 路径匹配，防止同名 CLI 的不同安装混用线程。
     pub fn native_session_for(&self, agent_id: &str, launch_path: &str) -> Option<&str> {
+        self.native_session(agent_id, launch_path)
+            .map(|session| session.native_session_id.as_str())
+    }
+
+    pub fn native_session(&self, agent_id: &str, launch_path: &str) -> Option<&AgentNativeSession> {
         self.native_sessions
             .iter()
             .rev()
             .find(|session| session.agent_id == agent_id && session.launch_path == launch_path)
-            .map(|session| session.native_session_id.as_str())
     }
 
     /// 记录当前执行者最新的原生 session。保留有限条数，避免长期切换 CLI
@@ -314,6 +322,7 @@ impl AgentConversation {
         launch_path: &str,
         native_session_id: &str,
         model: Option<String>,
+        last_synchronized_turn_id: Option<String>,
         at_ms: i64,
     ) {
         self.native_sessions
@@ -323,6 +332,7 @@ impl AgentConversation {
             launch_path: launch_path.to_string(),
             native_session_id: native_session_id.to_string(),
             model,
+            last_synchronized_turn_id,
             updated_at_ms: at_ms,
         });
         const MAX_NATIVE_SESSIONS: usize = 16;
@@ -330,6 +340,98 @@ impl AgentConversation {
             let excess = self.native_sessions.len() - MAX_NATIVE_SESSIONS;
             self.native_sessions.drain(0..excess);
         }
+    }
+
+    pub fn set_executor_model(
+        &mut self,
+        agent_id: &str,
+        launch_path: &str,
+        model: Option<String>,
+        at_ms: i64,
+    ) {
+        if let Some(session) = self
+            .native_sessions
+            .iter_mut()
+            .rev()
+            .find(|session| session.agent_id == agent_id && session.launch_path == launch_path)
+        {
+            session.model = model;
+            session.updated_at_ms = at_ms;
+        }
+    }
+
+    pub fn set_native_session_synchronized_turn(
+        &mut self,
+        agent_id: &str,
+        launch_path: &str,
+        turn_id: Option<String>,
+        at_ms: i64,
+    ) {
+        if let Some(session) = self
+            .native_sessions
+            .iter_mut()
+            .rev()
+            .find(|session| session.agent_id == agent_id && session.launch_path == launch_path)
+        {
+            session.last_synchronized_turn_id = turn_id;
+            session.updated_at_ms = at_ms;
+        }
+    }
+
+    /// 旧版会话只有会话级 Agent 身份。首次加载时把该身份固定到每一轮，
+    /// 并迁移旧的原生 session，避免后续切换 CLI 时追溯改写历史轮次。
+    pub fn migrate_legacy(&mut self) -> bool {
+        let mut changed = false;
+        if self.schema_version < CURRENT_SCHEMA_VERSION {
+            self.schema_version = CURRENT_SCHEMA_VERSION;
+            changed = true;
+        }
+        let legacy_agent_id = self.agent_id.clone();
+        let legacy_agent_name = self.agent_name.clone();
+        let legacy_launch_path = self.launch_path.clone();
+        let legacy_protocol = self.agent_protocol.clone();
+        let legacy_args = self.agent_launch_args.clone();
+        let legacy_model = self.model.clone();
+        for turn in &mut self.turns {
+            if !turn.agent_id.is_empty() {
+                continue;
+            }
+            turn.agent_id = legacy_agent_id.clone();
+            turn.agent_name = legacy_agent_name.clone();
+            turn.launch_path = legacy_launch_path.clone();
+            turn.agent_protocol = legacy_protocol.clone();
+            turn.agent_launch_args = legacy_args.clone();
+            if turn.model.is_none() {
+                turn.model = legacy_model.clone();
+            }
+            changed = true;
+        }
+        if self.native_sessions.is_empty() {
+            if let Some(native_session_id) = self.native_session_id.clone() {
+                if !legacy_agent_id.is_empty() {
+                    let synchronized = self
+                        .turns
+                        .iter()
+                        .rev()
+                        .find(|turn| {
+                            turn.agent_id == legacy_agent_id
+                                && turn.launch_path == legacy_launch_path
+                                && turn.status == AgentTurnStatus::Completed
+                        })
+                        .map(|turn| turn.id.clone());
+                    self.record_native_session(
+                        &legacy_agent_id,
+                        &legacy_launch_path,
+                        &native_session_id,
+                        legacy_model,
+                        synchronized,
+                        self.updated_at_ms,
+                    );
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     pub fn last_running_turn_mut(&mut self) -> Option<&mut AgentTurn> {

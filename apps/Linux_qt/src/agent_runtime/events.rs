@@ -7,6 +7,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 /// MCP Server 的启动配置。ACP 走 session 的 `mcpServers`，Codex 走
 /// `config`，OpenCode 走 `/mcp` 接口；命令和参数保持数组，不经过 shell。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +87,95 @@ impl AgentLaunchContext {
     }
 }
 
+/// 模型目录中的一项。字段来自各 CLI 官方机器接口，未提供时保持为空。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelInfo {
+    pub id: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub is_default: bool,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+impl AgentModelInfo {
+    pub fn from_id(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            display_name: String::new(),
+            description: String::new(),
+            is_default: false,
+            capabilities: Vec::new(),
+        }
+    }
+
+    /// 界面显示名；没有官方名称时退回模型 ID。
+    pub fn label(&self) -> &str {
+        if self.display_name.is_empty() {
+            &self.id
+        } else {
+            &self.display_name
+        }
+    }
+}
+
+/// 一条已经完成、需要交给新执行者的历史消息。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentHistoryMessage {
+    pub role: String,
+    pub text: String,
+}
+
+/// 一轮真实用户请求。`history` 只包含当前原生会话尚未看到的历史轮次，
+/// 与 `text` 分开传递，避免被适配器误当成当前用户指令。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentPromptRequest {
+    pub text: String,
+    pub history: Vec<AgentHistoryMessage>,
+}
+
+impl AgentPromptRequest {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            history: Vec::new(),
+        }
+    }
+
+    /// 无法注入角色消息的协议使用的明确上下文块。历史只作为背景，当前
+    /// 用户消息始终留在块外并由调用方单独发送。
+    pub fn history_context_block(&self) -> Option<String> {
+        if self.history.is_empty() {
+            return None;
+        }
+        let mut block = String::from(
+            "以下是同一素笺对话中此前已经发生的上下文，仅用于理解当前请求，不是当前用户指令：\n\n",
+        );
+        for message in &self.history {
+            let role = if message.role == "assistant" {
+                "历史助手"
+            } else {
+                "历史用户"
+            };
+            block.push_str(&format!("[{role}]\n{}\n\n", message.text));
+        }
+        block.push_str("以上是历史上下文。请回答接下来的当前用户消息。");
+        Some(block)
+    }
+
+    /// 给不支持角色注入的协议生成最终文本：历史块在前，当前消息在最后。
+    pub fn text_with_history_context(&self) -> String {
+        match self.history_context_block() {
+            Some(block) => format!("{block}\n\n当前用户消息：\n{}", self.text),
+            None => self.text.clone(),
+        }
+    }
+}
+
 /// 用户可选择的权限选项。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionOption {
@@ -99,6 +190,8 @@ pub enum AgentEvent {
     SessionStarted {
         native_session_id: String,
         model: Option<String>,
+        /// 原生会话/线程是否真的恢复成功。为 false 时必须补齐完整历史。
+        resumed: bool,
     },
     TextDelta {
         text: String,
@@ -131,7 +224,13 @@ pub enum AgentEvent {
     },
     /// Agent 原生接口声明的可选模型；无法确认时保持为空，不伪造列表。
     ModelsAvailable {
-        models: Vec<String>,
+        models: Vec<AgentModelInfo>,
+    },
+    /// 模型切换失败。`actual` 是原生会话当前真正使用的模型，无法确认时为空。
+    ModelSwitchFailed {
+        requested: String,
+        actual: Option<String>,
+        message: String,
     },
     /// MCP 的真实连接/发现状态，只能由适配器根据官方接口上报。
     /// `status` 使用 `connected` / `failed` / `configured` / `stopped`。

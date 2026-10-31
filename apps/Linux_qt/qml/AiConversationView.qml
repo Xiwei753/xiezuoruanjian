@@ -43,6 +43,9 @@ Item {
     readonly property string modelsState: runtimeBackendRef
         ? String(runtimeBackendRef.models_state || "none")
         : "none"
+    readonly property string modelsError: runtimeBackendRef
+        ? String(runtimeBackendRef.models_error || "")
+        : ""
     property bool advancedModelInput: false
 
     function parseJson(text, fallback) {
@@ -142,6 +145,17 @@ Item {
                     name: ""
                 })
             }
+            // 每轮显示实际执行者与模型，而不是当前下拉框的最新选择。
+            var turnAgent = String(turn.agentName || turn.agentId || value.agentName || "")
+            var turnModel = String(turn.model || "")
+            if (turnAgent !== "" || turnModel !== "") {
+                rows.push({
+                    kind: "meta",
+                    text: "",
+                    name: turnAgent,
+                    detail: turnModel
+                })
+            }
             var tools = turn.toolEvents || []
             for (var t = 0; t < tools.length; ++t) {
                 rows.push({
@@ -169,9 +183,27 @@ Item {
 
     function modelChoices() {
         var models = parseJson(runtimeBackendRef ? runtimeBackendRef.models_json : "[]", [])
-        if (currentModel && models.indexOf(currentModel) < 0)
-            models.push(currentModel)
-        return models
+        var choices = []
+        for (var i = 0; i < models.length; ++i) {
+            var model = models[i]
+            var id = String(model.id || "")
+            if (id === "")
+                continue
+            var label = String(model.displayName || "")
+            if (label === "")
+                label = id
+            choices.push({ id: id, displayText: label })
+        }
+        return choices
+    }
+
+    function modelIndex() {
+        var models = modelChoices()
+        for (var i = 0; i < models.length; ++i) {
+            if (models[i].id === currentModel)
+                return i
+        }
+        return -1
     }
 
     function modelDisplayText() {
@@ -181,9 +213,19 @@ Item {
             return qsTr("正在获取模型…")
         if (modelsState === "default")
             return qsTr("使用 CLI 默认模型")
+        if (modelsState === "unsupported")
+            return qsTr("该 CLI 不提供模型列表")
         if (modelsState === "error")
             return qsTr("模型列表获取失败")
         return qsTr("默认模型")
+    }
+
+    function modelsDetailText() {
+        if (modelsError === "")
+            return ""
+        if (modelsState === "ready")
+            return qsTr("已显示缓存模型；刷新失败：%1").arg(modelsError)
+        return modelsError
     }
 
     onRuntimeBackendRefChanged: refresh()
@@ -214,11 +256,11 @@ Item {
 
     Connections {
         target: root.runtimeBackendRef
-        function onConversation_changed() {
-            root.refresh()
+        function onConversation_changed() { root.refresh() }
+        function onConversation_opened() {
             root.syncCliSelectionFromConversation()
+            root.refresh()
         }
-        function onAgent_changed() { root.syncCliSelectionFromConversation() }
         function onConversations_changed() { root.refresh() }
         function onModels_changed() { root.refresh() }
         function onRunning_changed() { root.refresh() }
@@ -277,13 +319,25 @@ Item {
                 // 不留下一个空输入框。
                 editable: false
                 model: root.modelChoices()
-                currentIndex: model.indexOf(root.currentModel)
+                textRole: "displayText"
+                valueRole: "id"
+                currentIndex: root.modelIndex()
                 displayText: root.modelDisplayText()
                 enabled: root.hasAgent
                 onActivated: function(index) {
-                    if (index >= 0)
-                        root.runtimeBackendRef.choose_model(String(currentText))
+                    var choices = root.modelChoices()
+                    if (index >= 0 && index < choices.length)
+                        root.runtimeBackendRef.choose_model(String(choices[index].id))
                 }
+            }
+
+            ToolButton {
+                icon.name: "view-refresh"
+                display: AbstractButton.IconOnly
+                enabled: root.hasAgent
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("刷新模型目录")
+                onClicked: root.runtimeBackendRef.refresh_models()
             }
 
             ToolButton {
@@ -295,6 +349,16 @@ Item {
                 ToolTip.text: qsTr("手动输入模型 ID")
                 onClicked: root.advancedModelInput = checked
             }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: text !== ""
+            text: root.modelsDetailText()
+            wrapMode: Text.Wrap
+            color: root.modelsState === "error" || root.modelsState === "unsupported"
+                ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.disabledTextColor
+            font.pixelSize: Kirigami.Theme.smallFont.pixelSize
         }
 
         // 高级输入默认折叠；只有协议没有模型目录或用户明确需要时展开。
@@ -355,11 +419,17 @@ Item {
 
                     Label {
                         Layout.fillWidth: true
-                        visible: modelData.kind === "tool" || modelData.kind === "reasoning"
+                        visible: modelData.kind === "tool"
+                            || modelData.kind === "reasoning"
+                            || modelData.kind === "meta"
                         text: modelData.kind === "tool"
                             ? qsTr("工具：%1（%2）").arg(modelData.name).arg(modelData.status)
-                            : qsTr("思考过程")
-                        font.bold: true
+                            : modelData.kind === "meta"
+                                ? (modelData.detail !== ""
+                                    ? qsTr("%1 · %2").arg(modelData.name).arg(modelData.detail)
+                                    : String(modelData.name))
+                                : qsTr("思考过程")
+                        font.bold: modelData.kind !== "meta"
                         font.pixelSize: Kirigami.Theme.smallFont.pixelSize
                         color: Kirigami.Theme.disabledTextColor
                     }

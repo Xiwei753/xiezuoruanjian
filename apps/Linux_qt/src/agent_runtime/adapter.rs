@@ -7,7 +7,7 @@
 use super::acp::AcpAdapter;
 use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
-use super::events::{AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent};
+use super::events::{AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink, RuntimeEvent};
 use super::gemini::GeminiAdapter;
 use super::opencode::OpenCodeAdapter;
 
@@ -27,10 +27,20 @@ pub trait AgentAdapter: Send {
     ///
     /// `core_turn_id` 是本轮在 Core 中的固定身份。异步回调和读取线程必须
     /// 保存并使用这个值，不能回读会话当前轮次。
-    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String>;
+    fn prompt(&mut self, core_turn_id: &str, request: &AgentPromptRequest) -> Result<(), String>;
     /// 更新下一轮使用的模型。模型只影响执行参数，不应重建原生会话或
     /// 阻塞发送；协议不支持逐轮切换时保留当前值。
     fn set_model(&mut self, _model: Option<String>) {}
+    /// 当前原生会话在启动时是否真的恢复成功、已持有同步游标之前的历史。
+    fn history_restored(&self) -> bool {
+        false
+    }
+
+    /// 复用已在运行的会话时，历史是否仍在原生侧。Codex/OpenCode/ACP 在
+    /// 建立会话时已经确认过恢复结果；逐轮进程类 CLI 会在初始化后动态更新。
+    fn history_restored_on_reuse(&self) -> bool {
+        true
+    }
     /// 请求中断指定 Core 轮次。实现必须忽略已经结束的轮次，并取消仍在
     /// 串行派发队列中、尚未写入协议的待发送轮次。自然完成返回
     /// [`CancelOutcome::AlreadyFinished`]，不能谎报为取消成功。

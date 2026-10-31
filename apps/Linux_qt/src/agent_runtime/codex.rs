@@ -12,8 +12,8 @@ use serde_json::{json, Value};
 
 use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
-    json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, PermissionOption,
-    RuntimeEvent,
+    json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink,
+    PermissionOption, RuntimeEvent,
 };
 use super::rpc::RpcClient;
 use super::workspace_access::WorkspaceAccess;
@@ -186,6 +186,7 @@ pub struct CodexAdapter {
     /// 每个 Core Turn 的启动/运行/取消状态。取消先落在这个表里，绝不会
     /// 读取下一轮的共享 native turn id。
     turn_store: Arc<CodexTurnStore>,
+    history_restored: bool,
 }
 
 fn core_for_native_turn(
@@ -547,6 +548,7 @@ impl CodexAdapter {
         (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
             native_session_id: native_thread_id,
             model: model.clone(),
+            resumed,
         }));
         if resumed {
             log::info!("[agent] Codex thread resumed");
@@ -560,12 +562,13 @@ impl CodexAdapter {
             active_core_turn_id,
             turn_bindings,
             turn_store,
+            history_restored: resumed,
         })
     }
 }
 
 impl AgentAdapter for CodexAdapter {
-    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
+    fn prompt(&mut self, core_turn_id: &str, request: &AgentPromptRequest) -> Result<(), String> {
         let thread_id = self
             .thread_id
             .lock()
@@ -584,11 +587,54 @@ impl AgentAdapter for CodexAdapter {
         // 在 spawn 前落定 Starting，保证随后到达的取消一定能看到本轮。
         self.turn_store
             .set(&round_turn_id, CodexTurnState::Starting);
-        let text = message.to_string();
+        let text = request.text.clone();
+        let history = request.history.clone();
         let model = self.model.clone();
         std::thread::Builder::new()
             .name("agent-codex-turn".to_string())
             .spawn(move || {
+                if !history.is_empty() {
+                    // Codex 支持把真实 user/assistant 消息注入 thread 的模型
+                    // 可见历史，不伪造当前用户轮次，也不覆盖已有上下文。
+                    let items: Vec<Value> = history
+                        .iter()
+                        .map(|message| {
+                            let role = if message.role == "assistant" {
+                                "assistant"
+                            } else {
+                                "user"
+                            };
+                            let content_type = if role == "assistant" {
+                                "output_text"
+                            } else {
+                                "input_text"
+                            };
+                            json!({
+                                "type": "message",
+                                "role": role,
+                                "content": [{ "type": content_type, "text": message.text }],
+                            })
+                        })
+                        .collect();
+                    if let Err(error) = client.request(
+                        "thread/inject_items",
+                        json!({ "threadId": thread_id, "items": items }),
+                        Duration::from_secs(30),
+                    ) {
+                        turn_store.set(
+                            &round_turn_id,
+                            CodexTurnState::Finished(CodexFinish::Failed),
+                        );
+                        (emit)(RuntimeEvent::turn(
+                            round_turn_id,
+                            "",
+                            AgentEvent::TurnFailed {
+                                message: format!("写入 Codex 历史上下文失败：{error}"),
+                            },
+                        ));
+                        return;
+                    }
+                }
                 let mut params = json!({
                     "threadId": thread_id,
                     "input": [{ "type": "text", "text": text }],
@@ -647,6 +693,10 @@ impl AgentAdapter for CodexAdapter {
 
     fn set_model(&mut self, model: Option<String>) {
         self.model = model;
+    }
+
+    fn history_restored(&self) -> bool {
+        self.history_restored
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {

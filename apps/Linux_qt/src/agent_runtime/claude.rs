@@ -6,13 +6,15 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
 use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
-    json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, RuntimeEvent,
+    json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink,
+    RuntimeEvent,
 };
 use super::workspace_access::WorkspaceAccess;
 
@@ -26,6 +28,8 @@ pub struct ClaudeAdapter {
     /// 当前活动轮次及其独占子进程；旧读取线程完成时只在 turn id 匹配时清理。
     active_child: Arc<Mutex<Option<(String, RoundChild)>>>,
     session_started: Arc<Mutex<bool>>,
+    /// 只有 init 返回的 session id 与请求的 resume id 一致才为 true。
+    history_restored: Arc<AtomicBool>,
 }
 
 impl ClaudeAdapter {
@@ -35,6 +39,7 @@ impl ClaudeAdapter {
             (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
                 native_session_id: id.clone(),
                 model: ctx.model.clone(),
+                resumed: true,
             }));
         }
         Ok(Self {
@@ -43,6 +48,13 @@ impl ClaudeAdapter {
             session_id,
             active_child: Arc::new(Mutex::new(None)),
             session_started: Arc::new(Mutex::new(false)),
+            // 有 resume 时先按“已恢复”处理，避免把完整历史再次追加到已恢复
+            // 的原生会话；init 若返回不同 session id 会立即改回 false。
+            history_restored: Arc::new(AtomicBool::new(
+                ctx.resume_native_session_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty()),
+            )),
         })
     }
 
@@ -75,12 +87,12 @@ impl ClaudeAdapter {
 }
 
 impl AgentAdapter for ClaudeAdapter {
-    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
+    fn prompt(&mut self, core_turn_id: &str, request: &AgentPromptRequest) -> Result<(), String> {
         let mut command =
             WorkspaceAccess::for_context(&self.ctx)?.command(&self.ctx.launch_path, &[])?;
         command
             .arg("-p")
-            .arg(message)
+            .arg(&request.text)
             .arg("--output-format")
             .arg("stream-json")
             .arg("--verbose")
@@ -88,10 +100,16 @@ impl AgentAdapter for ClaudeAdapter {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(history) = request.history_context_block() {
+            // 使用官方追加系统提示接口，不覆盖 Claude 自带系统指令；历史
+            // 保持为背景，当前用户消息仍由 -p 独立发送。
+            command.arg("--append-system-prompt").arg(history);
+        }
         if let Some(model) = self.ctx.model.as_ref() {
             command.arg("--model").arg(model);
         }
-        if let Some(session_id) = self.session_id.lock().ok().and_then(|guard| guard.clone()) {
+        let requested_resume_id = self.session_id.lock().ok().and_then(|guard| guard.clone());
+        if let Some(session_id) = requested_resume_id.as_ref() {
             command.arg("--resume").arg(session_id);
         }
         if let Some(config) = self.mcp_config_json() {
@@ -124,8 +142,9 @@ impl AgentAdapter for ClaudeAdapter {
         let session_id = self.session_id.clone();
         let active_child = self.active_child.clone();
         let session_started = self.session_started.clone();
+        let history_restored = self.history_restored.clone();
         let round_turn_id = core_turn_id.to_string();
-        let input_chars = u32::try_from(message.chars().count()).unwrap_or(u32::MAX);
+        let input_chars = u32::try_from(request.text.chars().count()).unwrap_or(u32::MAX);
         std::thread::Builder::new()
             .name("agent-claude-turn".to_string())
             .spawn(move || {
@@ -161,15 +180,26 @@ impl AgentAdapter for ClaudeAdapter {
                                     if let Ok(mut guard) = session_id.lock() {
                                         *guard = Some(id.clone());
                                     }
+                                    let resumed = requested_resume_id
+                                        .as_deref()
+                                        .is_some_and(|requested| requested == id);
+                                    // 没有 resume 参数时这是新原生会话，本轮启动
+                                    // 已通过追加系统提示补齐历史，下一轮可以直接
+                                    // 增量同步；有 resume 时必须核对真实 session。
+                                    history_restored.store(
+                                        requested_resume_id.is_none() || resumed,
+                                        Ordering::SeqCst,
+                                    );
                                     let already =
                                         session_started.lock().map(|guard| *guard).unwrap_or(true);
-                                    if !already {
+                                    if !already || !resumed {
                                         if let Ok(mut guard) = session_started.lock() {
                                             *guard = true;
                                         }
                                         (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
                                             native_session_id: id,
                                             model: json_text(&value, &["model"]),
+                                            resumed,
                                         }));
                                     }
                                 }
@@ -356,6 +386,14 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn set_model(&mut self, model: Option<String>) {
         self.ctx.model = model;
+    }
+
+    fn history_restored(&self) -> bool {
+        self.history_restored.load(Ordering::SeqCst)
+    }
+
+    fn history_restored_on_reuse(&self) -> bool {
+        self.history_restored.load(Ordering::SeqCst)
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {

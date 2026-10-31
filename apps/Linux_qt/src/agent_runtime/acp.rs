@@ -12,8 +12,8 @@ use serde_json::{json, Value};
 
 use super::adapter::{AgentAdapter, CancelOutcome};
 use super::events::{
-    json_text, json_value_text, AgentEvent, AgentLaunchContext, EventSink, PermissionOption,
-    RuntimeEvent,
+    json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentModelInfo, AgentPromptRequest,
+    EventSink, PermissionOption, RuntimeEvent,
 };
 use super::rpc::RpcClient;
 use super::workspace_access::WorkspaceAccess;
@@ -42,6 +42,8 @@ pub struct AcpAdapter {
     /// 下一轮要使用的模型。模型切换不重建会话，只在 prompt 前尽力同步给运行时。
     model: Option<String>,
     applied_model: Arc<Mutex<Option<String>>>,
+    supports_model_switch: bool,
+    history_restored: bool,
     /// Only one session/prompt at a time. This lock belongs to prompt workers,
     /// never to the AgentSessionManager lock, so cancel can run immediately.
     dispatch_lock: Arc<Mutex<()>>,
@@ -301,7 +303,7 @@ impl AcpAdapter {
         if let Ok(mut guard) = session_id.lock() {
             *guard = Some(native_session_id.clone());
         }
-        let models: Vec<String> = session_result
+        let models: Vec<AgentModelInfo> = session_result
             .get("models")
             .and_then(|models| models.get("availableModels"))
             .and_then(Value::as_array)
@@ -309,7 +311,28 @@ impl AcpAdapter {
                 models
                     .iter()
                     .filter_map(|model| {
-                        json_text(model, &["modelId"]).or_else(|| json_text(model, &["id"]))
+                        let id =
+                            json_text(model, &["modelId"]).or_else(|| json_text(model, &["id"]))?;
+                        let mut capabilities = Vec::new();
+                        for key in [
+                            "supportsEffort",
+                            "supportsAdaptiveThinking",
+                            "supportsFastMode",
+                            "supportsAutoMode",
+                        ] {
+                            if model.get(key).and_then(Value::as_bool) == Some(true) {
+                                capabilities.push(key.to_string());
+                            }
+                        }
+                        Some(AgentModelInfo {
+                            id,
+                            display_name: json_text(model, &["name"])
+                                .or_else(|| json_text(model, &["displayName"]))
+                                .unwrap_or_default(),
+                            description: json_text(model, &["description"]).unwrap_or_default(),
+                            is_default: false,
+                            capabilities,
+                        })
                     })
                     .collect()
             })
@@ -322,6 +345,7 @@ impl AcpAdapter {
         (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
             native_session_id,
             model: model.clone(),
+            resumed,
         }));
         if resumed {
             log::info!("[agent] ACP session resumed");
@@ -335,13 +359,15 @@ impl AcpAdapter {
             agent_id: ctx.agent_id.clone(),
             model: model.clone(),
             applied_model: Arc::new(Mutex::new(model)),
+            supports_model_switch: ctx.agent_id == "gemini" && !models.is_empty(),
+            history_restored: resumed,
             dispatch_lock: Arc::new(Mutex::new(())),
         })
     }
 }
 
 impl AgentAdapter for AcpAdapter {
-    fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
+    fn prompt(&mut self, core_turn_id: &str, request: &AgentPromptRequest) -> Result<(), String> {
         let session_id = self
             .session_id
             .lock()
@@ -359,8 +385,9 @@ impl AgentAdapter for AcpAdapter {
         let agent_id = self.agent_id.clone();
         let selected_model = self.model.clone();
         let applied_model = self.applied_model.clone();
+        let supports_model_switch = self.supports_model_switch;
         let round_id = core_turn_id.to_string();
-        let message = message.to_string();
+        let message = request.text_with_history_context();
         let task = std::thread::Builder::new()
             .name("agent-acp-prompt".to_string())
             .spawn(move || {
@@ -410,26 +437,41 @@ impl AgentAdapter for AcpAdapter {
 
                 // Gemini ACP 提供 unstable_setSessionModel 扩展。切换失败只降级为
                 // 当前模型，不影响这一轮对话。其它 ACP Agent 暂不猜测私有方法。
-                if agent_id == "gemini" {
-                    if let Some(model) = selected_model.as_ref() {
-                        let needs_switch = applied_model
-                            .lock()
-                            .map(|guard| guard.as_deref() != Some(model.as_str()))
-                            .unwrap_or(true);
-                        if needs_switch {
-                            match client.request(
-                                "unstable_setSessionModel",
-                                json!({ "sessionId": session_id, "modelId": model }),
-                                Duration::from_secs(30),
-                            ) {
-                                Ok(_) => {
-                                    if let Ok(mut guard) = applied_model.lock() {
-                                        *guard = Some(model.clone());
-                                    }
+                if let Some(model) = selected_model.as_ref() {
+                    let needs_switch = applied_model
+                        .lock()
+                        .map(|guard| guard.as_deref() != Some(model.as_str()))
+                        .unwrap_or(true);
+                    if needs_switch && !(agent_id == "gemini" && supports_model_switch) {
+                        let actual = applied_model.lock().ok().and_then(|guard| guard.clone());
+                        (emit)(RuntimeEvent::session(AgentEvent::ModelSwitchFailed {
+                            requested: model.clone(),
+                            actual,
+                            message: "当前 ACP Agent 未声明运行时切换模型能力，继续使用会话模型"
+                                .to_string(),
+                        }));
+                    }
+                    if agent_id == "gemini" && supports_model_switch && needs_switch {
+                        match client.request(
+                            "unstable_setSessionModel",
+                            json!({ "sessionId": session_id, "modelId": model }),
+                            Duration::from_secs(30),
+                        ) {
+                            Ok(_) => {
+                                if let Ok(mut guard) = applied_model.lock() {
+                                    *guard = Some(model.clone());
                                 }
-                                Err(error) => log::warn!(
-                                    "[agent] Gemini ACP 切换模型失败，继续使用当前模型: {error}"
-                                ),
+                            }
+                            Err(error) => {
+                                let actual =
+                                    applied_model.lock().ok().and_then(|guard| guard.clone());
+                                (emit)(RuntimeEvent::session(AgentEvent::ModelSwitchFailed {
+                                    requested: model.clone(),
+                                    actual,
+                                    message: format!(
+                                        "Gemini ACP 切换模型失败，继续使用当前模型：{error}"
+                                    ),
+                                }));
                             }
                         }
                     }
@@ -531,6 +573,10 @@ impl AgentAdapter for AcpAdapter {
 
     fn set_model(&mut self, model: Option<String>) {
         self.model = model;
+    }
+
+    fn history_restored(&self) -> bool {
+        self.history_restored
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {
