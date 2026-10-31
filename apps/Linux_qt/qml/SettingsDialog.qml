@@ -57,8 +57,6 @@ MotionDialog {
     property var syncBackendRef: null
     property var editorBackendRef: null
     property var themeControllerRef: null
-    // Issue #1014：与写作栏 AI 面板共享同一份 Agent CLI 清单/选择。
-    property var agentCliBackendRef: null
     property var beforeSyncHook: null
 
     signal settingsChanged()
@@ -83,7 +81,6 @@ MotionDialog {
         syncBackendRef: root.syncBackendRef
         editorBackendRef: root.editorBackendRef
         themeControllerRef: root.themeControllerRef
-        agentCliBackendRef: root.agentCliBackendRef
         beforeSyncHook: root.beforeSyncHook
         onSettingsChanged: root.settingsChanged()
         // Issue #902：转发 targetKind 给主窗口，保持信号链一致。

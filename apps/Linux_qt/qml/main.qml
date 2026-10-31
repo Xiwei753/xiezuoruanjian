@@ -331,7 +331,7 @@ Kirigami.ApplicationWindow {
         case "sync.phase.background_syncing": return qsTr("正在同步")
         case "sync.phase.github_init": return qsTr("正在初始化同步连接")
         case "sync.result.success_summary": return qsTr("同步完成")
-        case "sync.result.latest_wins_summary": return qsTr("同步完成（已应用较新版本）")
+        case "sync.result.latest_wins_summary": return qsTr("已按较新版本合并")
         case "sync.result.no_changes_summary": return qsTr("无需同步，本地与远端一致")
         case "sync.result.conflict_summary": return qsTr("同步完成，存在冲突文件")
         case "sync.result.partial_conflict_summary": return qsTr("部分同步，仍有冲突待处理")
@@ -2052,8 +2052,6 @@ Kirigami.ApplicationWindow {
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend
             themeControllerRef: themeController
-            // Issue #1014：设置页 AI 组与写作栏 AI 面板使用同一份清单/选择。
-            agentCliBackendRef: agentCliBackend
             beforeSyncHook: function() { return window.preSyncBarrier() }
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));

@@ -200,8 +200,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapToolRail.qml" as "StarMapToolRail.qml",
     "qml/StarMapToolDrawer.qml" as "StarMapToolDrawer.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
-    // Issue #1014：Agent CLI 动态清单（写作栏 AI 与设置页共用）。
-    "qml/AgentCliManager.qml" as "AgentCliManager.qml",
+    // Issue #1018：AI 面板顶部只选择本机真实安装的 CLI。
+    "qml/AgentCliPicker.qml" as "AgentCliPicker.qml",
     // Issue #1016：写作与星图共用的 AI 会话视图。
     "qml/AiConversationView.qml" as "AiConversationView.qml",
     "qml/AiToolPanel.qml" as "AiToolPanel.qml",

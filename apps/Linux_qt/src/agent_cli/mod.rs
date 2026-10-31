@@ -55,18 +55,7 @@ pub fn scan(generation: u64) -> ScanOutcome {
         );
     }
 
-    let (installed, mut available) =
-        adapters::build_installations(&catalog, &executables, &preferred_paths);
-    if preferences.show_available_agents {
-        available.retain(|descriptor| {
-            !preferences
-                .hidden_agent_ids
-                .iter()
-                .any(|hidden| hidden == &descriptor.id)
-        });
-    } else {
-        available.clear();
-    }
+    let installed = adapters::build_installations(&catalog, &executables, &preferred_paths);
 
     let mut registry_error = registry.error;
     if !manifest_errors.is_empty() {
@@ -82,7 +71,6 @@ pub fn scan(generation: u64) -> ScanOutcome {
             generation,
             scanned_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             installed,
-            available,
             registry_source: registry.source,
             registry_error,
         },

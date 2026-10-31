@@ -19,8 +19,6 @@ pub struct AgentCliPreferences {
     pub selected_launch_path: String,
     pub custom_executables: Vec<String>,
     pub agent_manifests: Vec<String>,
-    pub hidden_agent_ids: Vec<String>,
-    pub show_available_agents: bool,
 }
 
 impl Default for AgentCliPreferences {
@@ -30,8 +28,6 @@ impl Default for AgentCliPreferences {
             selected_launch_path: String::new(),
             custom_executables: Vec::new(),
             agent_manifests: Vec::new(),
-            hidden_agent_ids: Vec::new(),
-            show_available_agents: true,
         }
     }
 }

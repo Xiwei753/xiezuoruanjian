@@ -4,6 +4,7 @@
 //! [`AgentSessionManager`] 在后台线程管理。选中 Agent 仍由 `AgentCliBackend`
 //! 维护，本对象通过 `set_agent()` 接收同一份选择。
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -36,7 +37,13 @@ pub struct AgentRuntimeBackend {
     conversations_json: qt_property!(QString; READ conversations_json NOTIFY conversations_changed),
     current_conversation_id: qt_property!(QString; READ current_conversation_id NOTIFY conversation_changed),
     current_agent_id: qt_property!(QString; READ current_agent_id NOTIFY agent_changed),
-    models_json: qt_property!(QString; READ models_json NOTIFY conversation_changed),
+    /// 当前 Agent 的显式模型选择；新会话尚未写入 conversation.model 时也有效。
+    current_model: qt_property!(QString; READ current_model NOTIFY models_changed),
+    /// 真实可选模型列表。只由 Agent 协议返回，不伪造静态表。
+    models_json: qt_property!(QString; READ models_json NOTIFY models_changed),
+    /// `none` / `loading` / `ready` / `default` / `error`，供界面区分
+    /// “正在获取模型”“使用 CLI 默认模型”和真实列表。
+    models_state: qt_property!(QString; READ models_state NOTIFY models_changed),
     running: qt_property!(bool; READ running NOTIFY running_changed),
     status_text: qt_property!(QString; READ status_text NOTIFY status_changed),
     last_error: qt_property!(QString; READ last_error NOTIFY last_error_changed),
@@ -46,6 +53,7 @@ pub struct AgentRuntimeBackend {
     conversation_changed: qt_signal!(),
     conversations_changed: qt_signal!(),
     agent_changed: qt_signal!(),
+    models_changed: qt_signal!(),
     running_changed: qt_signal!(),
     status_changed: qt_signal!(),
     last_error_changed: qt_signal!(),
@@ -104,6 +112,12 @@ pub struct AgentRuntimeBackend {
     agent_catalog: Vec<AgentInstallation>,
     model: Option<String>,
     available_models: Vec<String>,
+    /// 按“Agent ID + 真实启动路径”缓存协议返回过的模型目录。切换回来时
+    /// 先显示缓存，再在后台刷新，绝不把上一个 Agent 的列表留在界面上。
+    model_cache: HashMap<String, Vec<String>>,
+    models_state_value: String,
+    /// 已为哪一份 Agent 选择启动过“只建会话、不发送消息”的模型探测。
+    models_primed_for: String,
     conversation: Option<AgentConversation>,
     conversations: Vec<AgentConversation>,
     active_turn_id: String,
@@ -128,7 +142,9 @@ impl AgentRuntimeBackend {
             conversations_json: Default::default(),
             current_conversation_id: Default::default(),
             current_agent_id: Default::default(),
+            current_model: Default::default(),
             models_json: Default::default(),
+            models_state: Default::default(),
             running: Default::default(),
             status_text: Default::default(),
             last_error: Default::default(),
@@ -137,6 +153,7 @@ impl AgentRuntimeBackend {
             conversation_changed: Default::default(),
             conversations_changed: Default::default(),
             agent_changed: Default::default(),
+            models_changed: Default::default(),
             running_changed: Default::default(),
             status_changed: Default::default(),
             last_error_changed: Default::default(),
@@ -170,6 +187,9 @@ impl AgentRuntimeBackend {
             agent_catalog: Vec::new(),
             model: None,
             available_models: Vec::new(),
+            model_cache: HashMap::new(),
+            models_state_value: "none".to_string(),
+            models_primed_for: String::new(),
             conversation: None,
             conversations: Vec::new(),
             active_turn_id: String::new(),
@@ -208,13 +228,21 @@ impl AgentRuntimeBackend {
         self.agent_id.clone().into()
     }
 
+    fn current_model(&self) -> QString {
+        self.current_model_value().unwrap_or_default().into()
+    }
+
+    fn current_model_value(&self) -> Option<String> {
+        self.model.clone().or_else(|| {
+            self.conversation
+                .as_ref()
+                .and_then(|conversation| conversation.model.clone())
+        })
+    }
+
     fn models_json(&self) -> QString {
         let mut models = self.available_models.clone();
-        if let Some(current) = self
-            .conversation
-            .as_ref()
-            .and_then(|conversation| conversation.model.clone())
-        {
+        if let Some(current) = self.current_model_value() {
             if !models.contains(&current) {
                 models.push(current);
             }
@@ -222,6 +250,123 @@ impl AgentRuntimeBackend {
         serde_json::to_string(&models)
             .unwrap_or_else(|_| "[]".to_string())
             .into()
+    }
+
+    fn models_state(&self) -> QString {
+        self.models_state_value.clone().into()
+    }
+
+    fn model_cache_key(&self) -> String {
+        format!("{}\n{}", self.agent_id, self.launch_path)
+    }
+
+    fn set_models_state(&mut self, state: &str) {
+        if self.models_state_value == state {
+            return;
+        }
+        self.models_state_value = state.to_string();
+        self.models_changed();
+    }
+
+    /// 切换 Agent/会话时先清掉上一个 Agent 的模型，再恢复该 Agent 自己的
+    /// 缓存并进入 loading；真正的协议目录由 [`Self::prime_agent_session`]
+    /// 在后台拉取。
+    fn reset_models_for_agent(&mut self) {
+        self.available_models.clear();
+        self.models_primed_for.clear();
+        if self.agent_id.is_empty() {
+            self.models_state_value = "none".to_string();
+        } else {
+            if let Some(models) = self.model_cache.get(&self.model_cache_key()) {
+                self.available_models = models.clone();
+            }
+            // 没有作品上下文时无法启动原生会话，先明确显示默认模型；
+            // set_project 后会重新进入 loading 并主动探测。
+            self.models_state_value = if self.project_id.is_empty() {
+                "default".to_string()
+            } else {
+                "loading".to_string()
+            };
+        }
+        self.models_changed();
+    }
+
+    /// 选中 CLI 后主动建立原生会话以读取模型目录，不要求用户先发一条消息。
+    /// 只启动会话、不发送 prompt；协议没有模型目录时由 SessionStarted 或
+    /// 错误事件把状态落到 default/error。
+    fn prime_agent_session(&mut self) {
+        if self.agent_id.is_empty()
+            || self.launch_path.is_empty()
+            || self.project_id.is_empty()
+            || self.running_value
+        {
+            return;
+        }
+        let key = self.model_cache_key();
+        if self.models_primed_for == key {
+            return;
+        }
+        let conversation = match self.ensure_conversation() {
+            Ok(conversation) => conversation,
+            Err(error) => {
+                self.set_models_state("error");
+                self.set_error(error);
+                return;
+            }
+        };
+        let ctx = match self.launch_context() {
+            Ok(ctx) => ctx,
+            Err(error) => {
+                self.set_models_state("error");
+                self.set_error(error);
+                return;
+            }
+        };
+        self.models_primed_for = key;
+        self.models_state_value = "loading".to_string();
+        self.models_changed();
+
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(move |event: RuntimeEvent| {
+            if let Some(pinned) = qptr.as_pinned() {
+                let mut this = pinned.borrow_mut();
+                this.apply_event(event);
+            }
+        });
+        let sink: EventSink = Arc::new(move |event: RuntimeEvent| callback(event));
+        let runtime = self.runtime.clone();
+        let runtime_epoch = self.runtime_epoch.clone();
+        let conversation_id = conversation.id;
+        // 与发送消息相同：本次启动必须让之前排队的 shutdown 失效。若用户在
+        // 启动过程中又切换了 Agent，旧线程必须放弃，不能把旧进程留在后台。
+        let epoch = self.runtime_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        std::thread::Builder::new()
+            .name("agent-runtime-models".to_string())
+            .spawn(move || {
+                if runtime_epoch.load(Ordering::SeqCst) != epoch {
+                    return;
+                }
+                let failure = match runtime.lock() {
+                    Ok(mut manager) => {
+                        if runtime_epoch.load(Ordering::SeqCst) != epoch {
+                            manager.shutdown();
+                            return;
+                        }
+                        manager.ensure_session(ctx, sink.clone()).err()
+                    }
+                    Err(_) => Some("Agent 运行时状态锁已损坏".to_string()),
+                };
+                if let Some(error) = failure {
+                    (sink)(RuntimeEvent {
+                        conversation_id,
+                        generation: 0,
+                        core_turn_id: String::new(),
+                        native_turn_id: String::new(),
+                        event: AgentEvent::SessionError { message: error },
+                    });
+                }
+            })
+            .ok();
     }
 
     fn running(&self) -> bool {
@@ -496,7 +641,8 @@ impl AgentRuntimeBackend {
         self.project_id = project_id;
         self.project_title = project_title;
         self.conversation = None;
-        self.available_models.clear();
+        self.model = None;
+        self.reset_models_for_agent();
         self.active_turn_id.clear();
         self.ignored_turn_id.clear();
         self.cancelling_turn_id.clear();
@@ -506,6 +652,7 @@ impl AgentRuntimeBackend {
         self.emit_conversation();
         self.update_mcp_status();
         self.refresh_conversations_list();
+        self.prime_agent_session();
     }
 
     fn cancel_runtime_only(&self) {
@@ -545,6 +692,9 @@ impl AgentRuntimeBackend {
             && self.launch_path == launch_path
             && self.launch_args == launch_args
         {
+            // 同一选择被 QML 重复同步时不再重建进程；但如果模型探测尚未
+            // 开始（例如先 set_agent、后 set_project），补一次启动。
+            self.prime_agent_session();
             return;
         }
         if self.running_value {
@@ -556,24 +706,27 @@ impl AgentRuntimeBackend {
         self.launch_path = launch_path;
         self.protocol = protocol.to_string();
         self.launch_args = launch_args;
-        // 不同 Agent 的原生 session 身份不可混用；保留旧会话历史，但下一轮
-        // 从新的空会话开始。
-        if self
-            .conversation
-            .as_ref()
-            .is_some_and(|conversation| conversation.agent_id != self.agent_id)
-        {
+        // 不同 Agent / 启动路径的原生 session 身份不可混用；保留旧会话
+        // 历史，但下一轮从新的空会话开始，也绝不沿用上一个 CLI 的模型。
+        if self.conversation.as_ref().is_some_and(|conversation| {
+            conversation.agent_id != self.agent_id
+                || conversation.launch_path != self.launch_path
+                || conversation.agent_protocol != self.protocol
+                || conversation.agent_launch_args != self.launch_args
+        }) {
             self.conversation = None;
-            self.available_models.clear();
             self.active_turn_id.clear();
             self.emit_conversation();
         }
+        self.model = None;
+        self.reset_models_for_agent();
         self.agent_changed();
         if self.agent_id.is_empty() {
-            self.set_status("请在设置或 AI 面板中选择 Agent");
+            self.set_status("请在 AI 面板中选择本机已安装的 CLI");
         } else {
             self.set_status(format!("已选择 {}", self.agent_name));
         }
+        self.prime_agent_session();
     }
 
     #[allow(dead_code)]
@@ -595,7 +748,7 @@ impl AgentRuntimeBackend {
         // 新会话不能复用上一段原生 session；同时换掉运行中的进程。
         self.cancel_runtime_only();
         self.conversation = None;
-        self.available_models.clear();
+        self.reset_models_for_agent();
         self.active_turn_id.clear();
         self.ignored_turn_id.clear();
         self.cancelling_turn_id.clear();
@@ -603,6 +756,7 @@ impl AgentRuntimeBackend {
         self.permission_changed();
         self.emit_conversation();
         self.set_running(false, "新会话");
+        self.prime_agent_session();
     }
 
     fn refresh_conversations(&mut self) {
@@ -653,8 +807,8 @@ impl AgentRuntimeBackend {
                     );
                 }
                 self.model = conversation.model.clone();
-                self.available_models.clear();
                 self.conversation = Some(conversation);
+                self.reset_models_for_agent();
                 self.active_turn_id.clear();
                 self.cancelling_turn_id.clear();
                 self.set_running(false, "已打开会话");
@@ -662,6 +816,7 @@ impl AgentRuntimeBackend {
                 self.permission_changed();
                 self.emit_conversation();
                 self.agent_changed();
+                self.prime_agent_session();
             }
             Ok(None) => self.set_error("AI 会话不存在"),
             Err(error) => self.set_error(format!("读取 AI 会话失败：{error}")),
@@ -927,6 +1082,12 @@ impl AgentRuntimeBackend {
                 self.set_error(format!("保存模型选择失败：{error}"));
             }
         }
+        self.models_state_value = if self.model.is_some() {
+            "ready".to_string()
+        } else {
+            "default".to_string()
+        };
+        self.models_changed();
         self.emit_conversation();
     }
 
@@ -1036,6 +1197,14 @@ impl AgentRuntimeBackend {
                 persist = true;
                 // 原生会话建立只代表 Agent 已连接；MCP 是否真正连上必须等
                 // 适配器通过官方接口上报 McpConnectionChanged。
+                if self.available_models.is_empty() {
+                    self.models_state_value = if self.model.is_some() {
+                        "ready".to_string()
+                    } else {
+                        "default".to_string()
+                    };
+                    self.models_changed();
+                }
             }
             AgentEvent::McpConnectionChanged {
                 server,
@@ -1187,7 +1356,16 @@ impl AgentRuntimeBackend {
                 permission = Some((request_id, description, options));
             }
             AgentEvent::ModelsAvailable { models } => {
-                self.available_models = models;
+                if models.is_empty() {
+                    self.available_models.clear();
+                    self.models_state_value = "default".to_string();
+                } else {
+                    self.available_models = models.clone();
+                    let cache_key = self.model_cache_key();
+                    self.model_cache.insert(cache_key, models);
+                    self.models_state_value = "ready".to_string();
+                }
+                self.models_changed();
             }
             AgentEvent::Usage { .. } => {
                 // 真实使用量在轮次完成时按消息字符数记录，避免各协议 token
@@ -1196,6 +1374,12 @@ impl AgentRuntimeBackend {
             AgentEvent::SessionError { message } => {
                 // 会话级错误没有确认的轮次终态，不能据此结束回答；保留
                 // running，等 idle/消息历史/重连恢复后再由明确终态结算。
+                // 允许用户重新选择同一 CLI 时再次探测模型目录。
+                self.models_primed_for.clear();
+                if self.models_state_value == "loading" {
+                    self.models_state_value = "error".to_string();
+                    self.models_changed();
+                }
                 self.set_error(format!("Agent 会话错误：{message}"));
                 if self.running_value {
                     self.set_status("Agent 连接异常，等待服务端状态");

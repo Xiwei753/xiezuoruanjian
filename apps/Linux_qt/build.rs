@@ -597,7 +597,7 @@ fn main() {
     // Issue #904：编辑区视口层组件，WritingWorkspace 直接实例化，纳入重编译列表。
     println!("cargo:rerun-if-changed=qml/EditorViewport.qml");
     println!("cargo:rerun-if-changed=qml/RightDrawer.qml");
-    println!("cargo:rerun-if-changed=qml/AgentCliManager.qml");
+    println!("cargo:rerun-if-changed=qml/AgentCliPicker.qml");
     println!("cargo:rerun-if-changed=qml/AiToolPanel.qml");
     println!("cargo:rerun-if-changed=qml/AiConversationView.qml");
     println!("cargo:rerun-if-changed=qml/DesktopLayoutState.qml");

@@ -149,8 +149,13 @@ pub(crate) struct LwwMergeOutcome {
     pub remote_upload_paths: Vec<String>,
     /// 调用方应从远端删除的文件路径。
     pub remote_delete_paths: Vec<String>,
-    /// 被覆盖的文件路径（LWW 决胜中被覆盖的一方，仅 Metadata/GeneratedCache）。
+    /// 被覆盖的文件路径（仅当双方相对 known_files 基线都变化、由 LWW 自动裁决时）。
     pub overwritten_files: Vec<String>,
+    /// 双方相对基线都变化、由 LWW 自动裁决的路径（真正发生过冲突裁决）。
+    ///
+    /// 单侧上传/下载/删除、无基线或内容相同都不计入。调用方只能依据此字段
+    /// 把终态标为 `LatestWinsApplied`，不能从 uploaded/downloaded 数量反推。
+    pub auto_adjudicated_files: Vec<String>,
     /// 被跳过的文件路径（NoOp / unresolved conflict / pending_take_remote）。
     pub ignored_files: Vec<String>,
     /// pending_take_remote 中下载失败（远端缺失）的路径，保留在 pending 中待下轮重试。
@@ -530,9 +535,9 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                 (local_records.get(&path), remote_records.get(&path))
             {
                 let is_document = is_document_content_path(&path);
-                let (decision, _overwritten) =
+                let resolution =
                     resolve_path_decision(local_rec, remote_rec, &new_base, is_document);
-                match decision {
+                match resolution.decision {
                     PathDecision::DocumentConflictBothChanged
                     | PathDecision::DocumentConflictRemoteDeleted => {
                         // 仍是真实冲突，保留用户选择权。
@@ -688,6 +693,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
     let mut local_deletes_count = Vec::new();
     let mut remote_deletes_count = Vec::new();
     let mut overwritten_files = Vec::new();
+    let mut auto_adjudicated_files = Vec::new();
     let mut doc_conflicts: Vec<SyncConflict> = Vec::new();
     let mut ignored_files = Vec::new();
 
@@ -764,14 +770,16 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
                     .map(|s| s.as_str())
                     .unwrap_or("");
                 let is_document = is_document_content_path(&path);
-                let (decision, overwritten) =
-                    resolve_path_decision(local_rec, remote_rec, base_hash, is_document);
+                let resolution = resolve_path_decision(local_rec, remote_rec, base_hash, is_document);
 
-                if overwritten {
+                if resolution.overwritten {
                     overwritten_files.push(path.clone());
                 }
+                if resolution.auto_adjudicated {
+                    auto_adjudicated_files.push(path.clone());
+                }
 
-                match decision {
+                match resolution.decision {
                     PathDecision::NoOp => {
                         merged_manifest_files.insert(path.clone(), local_rec.clone());
                         ignored_files.push(path);
@@ -1126,6 +1134,7 @@ fn merge_remote_into_local_snapshot_with_group_and_diagnostics(
         remote_upload_paths: to_upload,
         remote_delete_paths: local_deletes_count,
         overwritten_files,
+        auto_adjudicated_files,
         ignored_files,
         pending_take_remote_failed,
         unresolved_missing_paths,
@@ -1358,6 +1367,7 @@ pub(crate) fn materialize_local_snapshot_for_empty_remote(
         remote_upload_paths,
         remote_delete_paths: Vec::new(),
         overwritten_files: Vec::new(),
+        auto_adjudicated_files: Vec::new(),
         ignored_files: Vec::new(),
         pending_take_remote_failed: Vec::new(),
         unresolved_missing_paths,

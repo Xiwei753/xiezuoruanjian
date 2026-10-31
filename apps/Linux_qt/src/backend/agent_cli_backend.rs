@@ -393,12 +393,6 @@ impl AgentCliBackend {
             .inventory
             .find_installation(&agent_id)
             .map(|installation| &installation.descriptor)
-            .or_else(|| {
-                self.inventory
-                    .available
-                    .iter()
-                    .find(|descriptor| descriptor.id == agent_id)
-            })
             .and_then(|descriptor| {
                 descriptor
                     .docs_url

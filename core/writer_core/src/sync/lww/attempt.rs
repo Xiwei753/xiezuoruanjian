@@ -29,6 +29,7 @@ fn apply_outcome_status(result: &mut SyncResult, outcome: &LwwMergeOutcome, remo
         || !outcome.downloaded_files.is_empty()
         || !outcome.local_deletes.is_empty()
         || !outcome.remote_delete_paths.is_empty();
+    let has_auto_adjudication = !outcome.auto_adjudicated_files.is_empty();
 
     if !outcome.unresolved_missing_paths.is_empty() {
         // 显式报出目标与路径，保留 known_files 基线待后续恢复。
@@ -56,8 +57,14 @@ fn apply_outcome_status(result: &mut SyncResult, outcome: &LwwMergeOutcome, remo
             "pending_take_remote: remote file missing for paths: {}",
             outcome.pending_take_remote_failed.join(", ")
         ));
-    } else if has_changes {
-        result.status = SyncStatus::LatestWinsApplied;
+    } else if has_changes || has_auto_adjudication {
+        // 普通单侧变更只是 Success；只有双方相对基线都变化、由 LWW
+        // 自动裁决时才标 LatestWinsApplied。
+        result.status = if has_auto_adjudication {
+            SyncStatus::LatestWinsApplied
+        } else {
+            SyncStatus::Success
+        };
     } else {
         result.status = SyncStatus::NoChanges;
     }

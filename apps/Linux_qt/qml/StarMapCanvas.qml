@@ -95,6 +95,8 @@ Item {
     // Issue #1014：星图导航树按完整 route 切换活动画布；进入 / 退出子星图时
     // 把当前路由回传给 Workspace，由树同步选中与展开路径。
     signal routeChanged(string rootStarmapId, string segmentsJson, string routeKey)
+    // 画布内新建/移除图对象后通知左栏刷新当前分支。
+    signal treeStructureChanged()
     // Issue #982：活动画布图数据/几何可用，供全局搜索按真实就绪时机定位。
     signal sceneGeometryReady(string starmapId, string routeKey)
     signal annotationActionRequested(string action, var targetRef, string title)
@@ -297,6 +299,61 @@ Item {
         routeChanged(normalized.rootStarmapId,
                      segmentsJsonOf(normalized),
                      routeKeyOf(normalized))
+    }
+
+    // 左栏 + 入口：在当前活动画布创建节点或子星图，不再创建独立根星图。
+    function openCreateDialog(mode) {
+        if (mode !== "node" && mode !== "starmap")
+            return
+        menuOwnerContent = activeScene()
+        if (!menuOwnerContent)
+            return
+        createDialog.open(mode, width / 2, height / 2)
+    }
+
+    // Issue #1018：树中普通对象行定位。先进入该对象所在画布，再命中、
+    // 选中并居中；不复用 revealSearchTarget()，避免它强制回到根画布。
+    function revealTreeObject(rootStarmapId, segmentsJson, kind, objectId) {
+        if (!rootStarmapId || !objectId)
+            return false
+        if (kind !== "node" && kind !== "portal" && kind !== "embed")
+            return false
+        var segments = []
+        try {
+            segments = JSON.parse(String(segmentsJson || "[]"))
+        } catch (e) {
+            return false
+        }
+        if (!Array.isArray(segments))
+            return false
+        var targetSegments = segments
+        if (kind === "embed" || kind === "portal")
+            targetSegments = segments.slice(0, Math.max(0, segments.length - 1))
+        var targetRoute = normalizeRoute({
+            rootStarmapId: String(rootStarmapId),
+            segments: targetSegments
+        })
+        if (!targetRoute)
+            return false
+        if (!navigateToTreeRoute(rootStarmapId, JSON.stringify(targetSegments),
+                                 routeKeyOf(targetRoute)))
+            return false
+        var scene = activeScene()
+        if (!scene)
+            return false
+        var item = kind === "embed" ? scene.hitEmbed(objectId) : scene.hitNode(objectId)
+        if (!item)
+            return false
+        if (kind === "embed")
+            scene.selectEmbed(objectId)
+        else
+            scene.selectNode(objectId)
+        var center = scene.itemCenterScene(kind === "embed" ? "embed" : "node", objectId)
+        if (center) {
+            applyPan(finiteDifference(width / 2, finiteProduct(center.x, zoomLevel)),
+                     finiteDifference(height / 2, finiteProduct(center.y, zoomLevel)))
+        }
+        return center !== null
     }
 
     // Issue #1014：树导航入口。先让 Core 解析 root + 完整 segments，解析失败
@@ -2648,6 +2705,7 @@ Item {
             else if (createMode === "starmap")
                 menuOwnerContent.createSubStarmapWithName(name, contextMenuSceneX, contextMenuSceneY)
             close()
+            treeStructureChanged()
         }
     }
 

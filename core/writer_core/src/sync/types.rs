@@ -632,7 +632,9 @@ impl Default for SyncPolicy {
 ///
 /// `RecoverableError`：网络/限流等临时错误，下次自动重试可恢复。
 /// `FatalError`：认证/权限等不可自动恢复的错误，需用户干预。
-/// `LatestWinsApplied`：LWW 决胜后自动应用了较新版本（仅 Metadata/GeneratedCache）。
+/// `LatestWinsApplied`：双方相对上次同步基线都发生了真实变化，
+/// 由文件级 LWW 自动裁决并应用了较新版本（仅 Metadata/GeneratedCache）。
+/// 单侧上传/下载/删除、首次同步或没有基线时不得使用此状态，应报 `Success`。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncStatus {
@@ -835,7 +837,8 @@ pub struct SyncConflictSummary {
 /// `status` 是终端状态（Success/Conflict/Error 等），其余字段提供详情。
 /// `uploaded_files` / `downloaded_files` / `ignored_files` 仅在 Success 时有意义。
 /// `conflicts` 仅在 Conflict/PartialConflict 时非空。
-/// `overwritten_files` 记录 LWW 决胜中被覆盖的一方（仅 Metadata/GeneratedCache）。
+/// `overwritten_files` 记录双方相对 `known_files` 基线都变化、由 LWW
+/// 自动裁决时被覆盖的一方（仅 Metadata/GeneratedCache）。单侧变更不计入。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResult {
     pub status: SyncStatus,

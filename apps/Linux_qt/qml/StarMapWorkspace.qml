@@ -21,8 +21,8 @@
 //   focusIsRoot 与 navigateBack() 给壳层调用。
 //
 // Issue #1014：本页使用全应用统一的三栏骨架。
-//   - 左栏：StarMapNavigationTree，宽度来自 layoutState（默认 240），
-//     SplitView 拖动结束才写持久化；
+//   - 左栏：StarMapNavigationTree，宽度固定跟随 layoutState 全局值（默认 240），
+//     不提供本页 SplitView 拖动入口；
 //   - 中栏：唯一 StarMapCanvas；
 //   - 右栏：StarMapToolDrawer + 56vp StarMapToolRail 作为一个完整容器，
 //     总宽度 = layoutState.paneWidth("starmap.workspace", "right")；
@@ -91,6 +91,10 @@ Item {
     readonly property int toolRailWidth: 56
     readonly property int splitHandleWidth: 6
     readonly property int leftPaneMinWidth: 200
+    // 左栏只跟随全局骨架宽度；本页不再提供自由拖拽。
+    readonly property int leftPaneWidth: root.layoutState
+        ? root.layoutState.paneWidth(root.pageKey, "left")
+        : root.leftPaneMinWidth
     // Issue #1016：右栏总最小宽度 = 内容 200 + 工具轨 56。
     readonly property int rightPaneContentMinWidth: 200
     readonly property int rightPaneMinWidth: rightPaneContentMinWidth + toolRailWidth
@@ -109,6 +113,13 @@ Item {
     signal annotationToolRequested(string toolKey)
 
     property var pendingTreeRow: null
+
+    onStarmapIdChanged: {
+        if (!navigationTree)
+            return
+        navigationTree.currentObjectKey = ""
+        navigationTree.reload()
+    }
 
     // Issue #1016：把本次 SplitView 的真实宽度/可见状态上报给顶栏。
     function reportRenderedPane(side, pane) {
@@ -219,8 +230,12 @@ Item {
     }
 
     function syncTreeRoute(rootStarmapId, segmentsJson, routeKey) {
-        if (navigationTree)
-            navigationTree.syncRoute(rootStarmapId, segmentsJson, routeKey)
+        if (!navigationTree)
+            return
+        // 画布真正换路由时，旧的普通节点高亮已经不属于当前画布。
+        if (String(routeKey || "") !== String(navigationTree.currentRouteKey || ""))
+            navigationTree.currentObjectKey = ""
+        navigationTree.syncRoute(rootStarmapId, segmentsJson, routeKey)
     }
 
     function activateTreeRoute(rootStarmapId, segmentsJson, routeKey) {
@@ -231,16 +246,24 @@ Item {
         }
     }
 
-    function createRootStarmap(title) {
-        if (!root.starmapBackendRef || !root.starmapBackendRef.create_starmap_json)
+    // 普通节点行：先进入它所在的画布，再命中、选中并居中该对象。
+    function revealTreeObject(rootStarmapId, segmentsJson, kind, objectId, objectKey) {
+        var revealed = canvas.revealTreeObject(rootStarmapId, segmentsJson, kind, objectId)
+        if (revealed) {
+            navigationTree.currentObjectKey = String(objectKey || "")
+            return true
+        }
+        navigationTree.currentObjectKey = ""
+        navigationTree.syncRoute(canvas.currentRoute.rootStarmapId,
+                                 canvas.segmentsJsonOf(canvas.currentRoute),
+                                 canvas.routeKey)
+        return false
+    }
+
+    function createObject(mode) {
+        if (mode !== "node" && mode !== "starmap")
             return
-        var trimmed = String(title || "").trim()
-        if (!trimmed)
-            return
-        var raw = root.starmapBackendRef.create_starmap_json(trimmed, "", "")
-        if (!root.backendSucceeded(raw))
-            return
-        navigationTree.reload()
+        canvas.openCreateDialog(mode)
     }
 
     function renameTreeRow(rowInfo, title) {
@@ -256,7 +279,7 @@ Item {
             raw = root.starmapBackendRef.update_starmap_embed_json(
                         rowInfo.parentStarmapId, rowInfo.instanceId,
                         JSON.stringify({ label: trimmed, expectedRevision: rowInfo.revision }))
-        } else if (rowInfo.rowKind === "portal") {
+        } else if (rowInfo.rowKind === "portal" || rowInfo.rowKind === "node") {
             raw = root.starmapBackendRef.update_starmap_node_json(
                         rowInfo.parentStarmapId, rowInfo.nodeId,
                         JSON.stringify({ title: trimmed, expectedRevision: rowInfo.revision }))
@@ -276,7 +299,7 @@ Item {
             raw = root.starmapBackendRef.delete_starmap_embed_json(
                         rowInfo.parentStarmapId, rowInfo.instanceId,
                         Number(rowInfo.revision || 0))
-        } else if (rowInfo.rowKind === "portal") {
+        } else if (rowInfo.rowKind === "portal" || rowInfo.rowKind === "node") {
             raw = root.starmapBackendRef.delete_starmap_node_json(
                         rowInfo.parentStarmapId, rowInfo.nodeId,
                         Number(rowInfo.revision || 0))
@@ -284,6 +307,14 @@ Item {
         if (!root.backendSucceeded(raw))
             return
 
+        // 普通节点不是可导航画布：删除它只需要刷新树，不能按 routeKey
+        // 把当前画布错误地导航到父级。
+        if (rowInfo.rowKind === "node") {
+            if (navigationTree.currentObjectKey === String(rowInfo.objectKey || ""))
+                navigationTree.currentObjectKey = ""
+            navigationTree.reload()
+            return
+        }
         if (canvas.routeKey === rowInfo.routeKey) {
             if (rowInfo.rowKind === "root") {
                 root.backClicked()
@@ -330,7 +361,6 @@ Item {
             anchors.fill: parent
             orientation: Qt.Horizontal
 
-            property real resizeStartLeftWidth: 0
             property real resizeStartRightWidth: 0
 
             handle: Rectangle {
@@ -357,19 +387,14 @@ Item {
 
             onResizingChanged: {
                 if (paneSplitView.resizing) {
-                    paneSplitView.resizeStartLeftWidth = leftPaneContainer.width
                     paneSplitView.resizeStartRightWidth = rightPaneContainer.width
                     return
                 }
                 if (!root.layoutState)
                     return
-                var leftChanged = Math.abs(leftPaneContainer.width
-                                           - paneSplitView.resizeStartLeftWidth) > 0.5
+                // 左栏固定跟随全局 paneWidth，只有右栏拖动结果写回持久化。
                 var rightChanged = Math.abs(rightPaneContainer.width
                                             - paneSplitView.resizeStartRightWidth) > 0.5
-                if (leftChanged && leftPaneContainer.visible)
-                    root.layoutState.setDraggedWidth(root.pageKey, "left",
-                                                     leftPaneContainer.width)
                 if (rightChanged && rightPaneContainer.visible)
                     root.layoutState.setDraggedWidth(root.pageKey, "right",
                                                      rightPaneContainer.width)
@@ -379,11 +404,11 @@ Item {
             Rectangle {
                 id: leftPaneContainer
                 visible: !root.embedded && !root.leftPaneCollapsed
-                SplitView.minimumWidth: root.leftPaneMinWidth
-                SplitView.preferredWidth: root.layoutState
-                    ? root.layoutState.paneWidth(root.pageKey, "left")
-                    : root.leftPaneMinWidth
-                SplitView.maximumWidth: 420
+                // 左栏宽度完全由全局骨架决定；min = max 让本页 SplitView
+                // 不再提供可拖动的自由宽度入口。
+                SplitView.minimumWidth: root.leftPaneWidth
+                SplitView.preferredWidth: root.leftPaneWidth
+                SplitView.maximumWidth: root.leftPaneWidth
                 onWidthChanged: root.reportRenderedPane("left", leftPaneContainer)
                 onVisibleChanged: root.reportRenderedPane("left", leftPaneContainer)
                 color: "transparent"
@@ -394,12 +419,17 @@ Item {
                     anchors.fill: parent
                     dt: root.dt
                     starmapBackendRef: root.starmapBackendRef
+                    workspaceRootStarmapId: root.starmapId
                     onRouteActivated: function(rootStarmapId, segmentsJson, routeKey) {
                         root.activateTreeRoute(rootStarmapId, segmentsJson, routeKey)
                     }
-                    onCreateStarmapRequested: {
-                        treeCreateField.text = qsTr("未命名星图")
-                        treeCreateDialog.open()
+                    onObjectActivated: function(rootStarmapId, segmentsJson,
+                                                kind, objectId, objectKey) {
+                        root.revealTreeObject(rootStarmapId, segmentsJson,
+                                              kind, objectId, objectKey)
+                    }
+                    onCreateObjectRequested: function(mode) {
+                        root.createObject(mode)
                     }
                     onRenameRequested: function(rowInfo) {
                         root.beginRenameTreeRow(rowInfo)
@@ -422,6 +452,7 @@ Item {
                 onRouteChanged: function(rootStarmapId, segmentsJson, routeKey) {
                     root.syncTreeRoute(rootStarmapId, segmentsJson, routeKey)
                 }
+                onTreeStructureChanged: navigationTree.reload()
                 canvasBackgroundColor: Kirigami.Theme.backgroundColor
                 starmapId: root.starmapId
                 starmapBackendRef: root.starmapBackendRef
@@ -669,27 +700,6 @@ Item {
                     JSON.stringify(root.pendingLinkSource), JSON.stringify(namedTarget))
                 Qt.callLater(starMapTools.refresh)
             }
-        }
-    }
-
-    Dialog {
-        id: treeCreateDialog
-        title: qsTr("新建星图")
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        contentItem: TextField {
-            id: treeCreateField
-            placeholderText: qsTr("星图标题")
-            onAccepted: treeCreateDialog.accept()
-        }
-        onOpened: {
-            treeCreateField.forceActiveFocus()
-            treeCreateField.selectAll()
-        }
-        onAccepted: {
-            root.createRootStarmap(treeCreateField.text)
-            treeCreateField.text = ""
         }
     }
 

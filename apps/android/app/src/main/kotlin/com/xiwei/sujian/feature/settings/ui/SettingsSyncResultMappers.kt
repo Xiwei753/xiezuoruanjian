@@ -7,6 +7,7 @@ import com.xiwei.sujian.feature.sync.data.SyncDiagnosticsOutcome
 import com.xiwei.sujian.feature.sync.data.SyncDryRunOutcome
 import com.xiwei.sujian.feature.sync.data.SyncFailureKind
 import com.xiwei.sujian.feature.sync.data.SyncOutcome
+import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 
 // #597 同步事务协议字符串 — 提取为常量避免 StringLiteralDuplication
 internal const val SYNC_STATUS_ERROR = "error"
@@ -39,7 +40,12 @@ internal fun SyncOutcome.Completed.completedToIoResult(): SyncCommandIoResult {
         true,
         StructuredSyncResult(
             statusCode = if (sr.error == null) "ok" else SYNC_STATUS_ERROR,
-            messageKey = "sync_perform_result",
+            messageKey =
+                when (sr.overallStatus) {
+                    SyncStatus.NoChanges -> "sync_no_changes"
+                    SyncStatus.LatestWinsApplied -> "sync_latest_wins_merged"
+                    else -> "sync_perform_result"
+                },
             counts =
                 SyncCounts(
                     uploaded = sr.totalUploaded,

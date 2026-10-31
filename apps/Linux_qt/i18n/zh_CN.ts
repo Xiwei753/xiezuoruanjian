@@ -1621,8 +1621,8 @@
         <translation>无需同步</translation>
     </message>
     <message>
-        <source>已同步（已应用较新版本）</source>
-        <translation>已同步（已应用较新版本）</translation>
+        <source>已按较新版本合并</source>
+        <translation>已按较新版本合并</translation>
     </message>
     <message>
         <source>已设置（输入新 Token 以覆盖）</source>
@@ -2033,7 +2033,7 @@
     </message>
     <message>
         <source>sync.result.latest_wins_summary</source>
-        <translation>同步完成（以最新版本为准）</translation>
+        <translation>已按较新版本合并</translation>
     </message>
     <message>
         <source>sync.result.no_changes_summary</source>
@@ -2272,8 +2272,8 @@
         <translation>同步完成</translation>
     </message>
     <message>
-        <source>同步完成（以最新版本为准）</source>
-        <translation>同步完成（以最新版本为准）</translation>
+        <source>已按较新版本合并</source>
+        <translation>已按较新版本合并</translation>
     </message>
     <message>
         <source>同步完成，存在冲突文件</source>

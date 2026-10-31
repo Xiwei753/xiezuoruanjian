@@ -35,8 +35,15 @@ Item {
         runtimeBackendRef ? runtimeBackendRef.mcp_status_json : "{}", ({}))
     readonly property bool running: runtimeBackendRef ? runtimeBackendRef.running : false
     readonly property bool hasAgent: agentId() !== ""
-    readonly property string currentModel: conversation && conversation.model
-        ? String(conversation.model) : ""
+    // 新会话的 conversation.model 为空，但运行时仍保存用户刚选的模型；
+    // 先读显式 current_model，再回退到会话持久化值。
+    readonly property string currentModel: runtimeBackendRef
+        ? String(runtimeBackendRef.current_model || "")
+        : ""
+    readonly property string modelsState: runtimeBackendRef
+        ? String(runtimeBackendRef.models_state || "none")
+        : "none"
+    property bool advancedModelInput: false
 
     function parseJson(text, fallback) {
         if (!text)
@@ -102,13 +109,17 @@ Item {
             runtimeBackendRef.set_agent_catalog(agentCliBackendRef.inventory_json)
     }
 
-    // 打开历史会话后，把设置页/右栏共用的选择同步到该会话真实使用的安装。
+    // 打开历史会话后，把共用选择同步到该会话真实使用的安装。只有运行时
+    // 确实已经绑定该会话和该 Agent 时才同步，避免迟到的 conversation_changed
+    // 覆盖用户刚做出的显式 CLI 选择。
     function syncCliSelectionFromConversation() {
         if (!runtimeBackendRef || !agentCliBackendRef || !conversation)
             return
+        var conversationId = String(runtimeBackendRef.current_conversation_id || "")
+        var runtimeAgentId = String(runtimeBackendRef.current_agent_id || "")
         var id = String(conversation.agentId || "")
         var path = String(conversation.launchPath || "")
-        if (id === "" || path === "")
+        if (conversationId === "" || runtimeAgentId !== id || id === "" || path === "")
             return
         if (agentId() !== id || agentLaunchPath() !== path)
             agentCliBackendRef.select_agent(id, path)
@@ -163,6 +174,18 @@ Item {
         return models
     }
 
+    function modelDisplayText() {
+        if (currentModel !== "")
+            return currentModel
+        if (modelsState === "loading")
+            return qsTr("正在获取模型…")
+        if (modelsState === "default")
+            return qsTr("使用 CLI 默认模型")
+        if (modelsState === "error")
+            return qsTr("模型列表获取失败")
+        return qsTr("默认模型")
+    }
+
     onRuntimeBackendRefChanged: refresh()
     onAgentCliBackendRefChanged: {
         syncAgentCatalog()
@@ -197,6 +220,7 @@ Item {
         }
         function onAgent_changed() { root.syncCliSelectionFromConversation() }
         function onConversations_changed() { root.refresh() }
+        function onModels_changed() { root.refresh() }
         function onRunning_changed() { root.refresh() }
         function onPermission_changed() { root.refresh() }
         function onLast_error_changed() { root.refresh() }
@@ -242,18 +266,43 @@ Item {
             }
         }
 
-        ComboBox {
+        RowLayout {
             Layout.fillWidth: true
-            editable: true
-            model: root.modelChoices()
-            currentIndex: model.indexOf(root.currentModel)
-            displayText: root.currentModel
-            onActivated: function(index) {
-                root.runtimeBackendRef.choose_model(String(currentText))
+            spacing: Kirigami.Units.smallSpacing
+
+            ComboBox {
+                id: modelPicker
+                Layout.fillWidth: true
+                // 主选择器只列协议真实返回的模型；没有目录时显示明确状态，
+                // 不留下一个空输入框。
+                editable: false
+                model: root.modelChoices()
+                currentIndex: model.indexOf(root.currentModel)
+                displayText: root.modelDisplayText()
+                enabled: root.hasAgent
+                onActivated: function(index) {
+                    if (index >= 0)
+                        root.runtimeBackendRef.choose_model(String(currentText))
+                }
             }
-            onAccepted: root.runtimeBackendRef.choose_model(String(editText))
-            ToolTip.visible: hovered
-            ToolTip.text: qsTr("模型（可直接输入 provider/model）")
+
+            ToolButton {
+                icon.name: "insert-text"
+                display: AbstractButton.IconOnly
+                checkable: true
+                checked: root.advancedModelInput
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("手动输入模型 ID")
+                onClicked: root.advancedModelInput = checked
+            }
+        }
+
+        // 高级输入默认折叠；只有协议没有模型目录或用户明确需要时展开。
+        TextField {
+            Layout.fillWidth: true
+            visible: root.advancedModelInput
+            placeholderText: qsTr("provider/model")
+            onAccepted: root.runtimeBackendRef.choose_model(String(text))
         }
 
         // 当前上下文 / Agent 状态
@@ -340,8 +389,8 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
                 text: root.hasAgent
-                    ? qsTr("向 %1 发送第一条消息").arg(String(root.agentCliBackendRef.selected_agent_id || ""))
-                    : qsTr("请先在下方“管理本机 Agent”中选择一个已安装的 Agent")
+                    ? qsTr("向 %1 发送第一条消息").arg(root.agentId())
+                    : qsTr("请先在上方选择一个本机已安装的 AI 命令行工具")
                 color: Kirigami.Theme.disabledTextColor
             }
         }

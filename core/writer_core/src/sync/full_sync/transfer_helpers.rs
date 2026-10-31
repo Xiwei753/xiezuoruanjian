@@ -209,12 +209,14 @@ pub(super) fn run_single_target(
 ///
 /// 只合并本地效果（downloaded/remote_deletes=本地trashed/overwritten/ignored），
 /// 不碰 `local_deletes`（远端侧动作），避免覆盖 publish 路径已正确设置的远端删除。
+/// `auto_adjudicated` 只接收双方相对基线都变化、由 LWW 明确裁决的路径。
 fn merge_accumulated_local_effects(
     result: &mut SyncResult,
     downloaded: &[String],
     trashed: &[String],
     overwritten: &[String],
     ignored: &[String],
+    auto_adjudicated: &[String],
 ) {
     use crate::sync::SyncStatus;
     for f in downloaded {
@@ -237,9 +239,15 @@ fn merge_accumulated_local_effects(
             result.ignored_files.push(f.clone());
         }
     }
-    // 如果累计有本地变化，状态不能降回 NoChanges。
+    // 普通单侧变化不能把状态降回 NoChanges；只有明确的 LWW 自动裁决
+    // 才升级为 LatestWinsApplied，不能从下载/上传数量反推冲突。
     let has_accumulated_changes = !downloaded.is_empty() || !trashed.is_empty();
     if has_accumulated_changes && matches!(result.status, SyncStatus::NoChanges) {
+        result.status = SyncStatus::Success;
+    }
+    if !auto_adjudicated.is_empty()
+        && matches!(result.status, SyncStatus::NoChanges | SyncStatus::Success)
+    {
         result.status = SyncStatus::LatestWinsApplied;
     }
 }

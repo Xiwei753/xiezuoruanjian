@@ -1040,8 +1040,8 @@ fn repro_issue_928_remote_upsert_lww_does_not_block_incremental_publish() {
         result.error
     );
     assert!(
-        matches!(result.status, crate::sync::SyncStatus::LatestWinsApplied),
-        "有真实上传应报 LatestWinsApplied；实际 {:?}",
+        matches!(result.status, crate::sync::SyncStatus::Success),
+        "有真实上传但无双方分歧裁决应报 Success；实际 {:?}",
         result.status
     );
 

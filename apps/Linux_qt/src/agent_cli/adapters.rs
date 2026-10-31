@@ -176,14 +176,13 @@ fn merge_descriptor(existing: &mut AgentDescriptor, overlay: AgentDescriptor) {
 }
 
 /// 把目录条目匹配到本机实际文件。只有在这里匹配成功的条目才进入
-/// installed；registry 里未被安装的条目继续留在 available。
+/// installed；目录本身只作为识别安装的元数据，不再生成“可安装”列表。
 pub fn build_installations(
     catalog: &[AgentDescriptor],
     executables: &[DiscoveredExecutable],
     preferred_paths: &std::collections::HashMap<String, String>,
-) -> (Vec<AgentInstallation>, Vec<AgentDescriptor>) {
+) -> Vec<AgentInstallation> {
     let mut installed = Vec::new();
-    let mut installed_ids = HashSet::new();
 
     for descriptor in catalog {
         let mut candidates = Vec::new();
@@ -217,19 +216,12 @@ pub fn build_installations(
             })
             .cloned()
             .unwrap_or_else(|| candidates[0].executable.launch_path.clone());
-        installed_ids.insert(descriptor.id.clone());
         installed.push(AgentInstallation {
             descriptor: descriptor.clone(),
             candidates,
             selected_launch_path,
         });
     }
-
-    let mut available = catalog
-        .iter()
-        .filter(|descriptor| !installed_ids.contains(&descriptor.id))
-        .cloned()
-        .collect::<Vec<_>>();
 
     installed.sort_by(|left, right| {
         right
@@ -238,12 +230,6 @@ pub fn build_installations(
             .cmp(&left.descriptor.is_acp())
             .then_with(|| left.descriptor.name.cmp(&right.descriptor.name))
     });
-    available.sort_by(|left, right| {
-        right
-            .is_acp()
-            .cmp(&left.is_acp())
-            .then_with(|| left.name.cmp(&right.name))
-    });
 
-    (installed, available)
+    installed
 }

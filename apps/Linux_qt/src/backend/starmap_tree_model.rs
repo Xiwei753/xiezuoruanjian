@@ -4,11 +4,11 @@
 //
 // 层级：Linux_qt 平台端（Rust ↔ Qt 桥接层）
 // 职责：给 StarMapNavigationTree.qml 的 Qt 6.8 原生 TreeView 提供树模型：
-//   - 根层来自现有 `list_root_starmaps_json()`；
+//   - 根层只来自当前工作区传入的 rootStarmapId，不再混入其它独立星图；
 //   - 子层在该星图第一次展开时调用 `get_starmap_graph_json()`，把 Embed /
-//     旧 Portal 实例转成子行；
-//   - 每一行都带完整路由（rootStarmapId + segments），同一个子星图通过不同
-//     Embed 到达时 routeKey 不同，因此树节点身份不是裸 starmapId。
+//     旧 Portal 实例和普通节点都转成子行；
+//   - 每一行都带完整路由（rootStarmapId + segments）；可导航行用 routeKey，
+//     所有对象行另带 objectKey，避免同一容器下的多个节点共用索引键。
 //
 // 边界：
 //   - 模型只读 Core 数据，不缓存第二套星图业务状态；新建 / 重命名 / 删除仍由
@@ -43,6 +43,8 @@ const ROLE_INSTANCE_ID: i32 = 266;
 const ROLE_NODE_ID: i32 = 267;
 const ROLE_REVISION: i32 = 268;
 const ROLE_DEPTH: i32 = 269;
+const ROLE_OBJECT_KEY: i32 = 270;
+const ROLE_OBJECT_ID: i32 = 271;
 
 const QT_DISPLAY_ROLE: i32 = 0;
 const QT_EDIT_ROLE: i32 = 2;
@@ -87,6 +89,14 @@ fn segments_json(segments: &[RouteSegment]) -> String {
     serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_string())
 }
 
+/// 对象身份由“所在容器路由 + 行类型 + 对象 ID”组成。
+///
+/// routeKey 只描述可进入的画布；同一画布里的多个普通节点必须用 objectKey
+/// 区分，否则 TreeView 的 currentIndex / 高亮会落到同一行。
+fn object_key(container_route_key: &str, kind: RowKind, object_id: &str) -> String {
+    format!("{container_route_key}|{}:{object_id}", kind.as_str())
+}
+
 /// 子项状态：未探测、确定有子项、确定为空。不能把“未加载”当成有子项，
 /// 否则叶子节点会先出现可展开箭头。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +111,7 @@ enum RowKind {
     Root,
     Embed,
     Portal,
+    Node,
 }
 
 impl RowKind {
@@ -109,7 +120,12 @@ impl RowKind {
             Self::Root => "root",
             Self::Embed => "embed",
             Self::Portal => "portal",
+            Self::Node => "node",
         }
+    }
+
+    fn is_navigable(self) -> bool {
+        !matches!(self, Self::Node)
     }
 }
 
@@ -123,6 +139,10 @@ struct TreeRow {
     /// 子行所属的容器星图（父行实际加载的星图）；根行为空。
     parent_starmap_id: String,
     kind: RowKind,
+    /// 行所代表对象自身的 ID：根星图 ID / Embed 实例 ID / 节点 ID。
+    object_id: String,
+    /// 唯一对象键：容器 routeKey + 行类型 + object_id。
+    object_key: String,
     revision: u64,
     depth: i32,
     children: Vec<usize>,
@@ -136,16 +156,18 @@ impl TreeRow {
     }
 
     fn instance_id(&self) -> String {
-        match self.segments.last() {
-            Some(RouteSegment::Embed { instance_id }) => instance_id.clone(),
-            _ => String::new(),
+        if self.kind == RowKind::Embed {
+            self.object_id.clone()
+        } else {
+            String::new()
         }
     }
 
     fn node_id(&self) -> String {
-        match self.segments.last() {
-            Some(RouteSegment::Portal { node_id }) => node_id.clone(),
-            _ => String::new(),
+        if matches!(self.kind, RowKind::Portal | RowKind::Node) {
+            self.object_id.clone()
+        } else {
+            String::new()
         }
     }
 }
@@ -154,15 +176,21 @@ impl TreeRow {
 struct TreeState {
     rows: Vec<TreeRow>,
     root_ids: Vec<usize>,
+    /// 只索引可导航画布（root / embed / portal），普通节点不能进入。
     index_by_route: HashMap<String, usize>,
+    /// 所有行（含普通节点）的对象键索引，用于选中恢复。
+    index_by_object: HashMap<String, usize>,
     titles: HashMap<String, String>,
+    /// 当前工作区唯一的根星图 ID。
+    root_starmap_id: String,
 }
 
 struct ChildSpec {
     kind: RowKind,
     title: String,
     starmap_id: String,
-    segment: RouteSegment,
+    segment: Option<RouteSegment>,
+    object_id: String,
     revision: u64,
 }
 
@@ -172,13 +200,20 @@ pub struct StarmapTreeModel {
     base: qt_base_class!(trait QAbstractItemModel),
 
     set_backend_ref: qt_method!(fn(&mut self, backend: QVariant)),
+    /// 设置当前工作区根星图。只构造这一棵根树，不混入其它独立根。
+    set_root_starmap_id: qt_method!(fn(&mut self, root_starmap_id: QString)),
     refresh: qt_method!(fn(&self)),
     ensure_children_loaded: qt_method!(fn(&self, route_key: QString) -> bool),
     index_for_route:
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QModelIndex),
     /// 用完整 routeKey 找回行并懒加载路径；刷新后恢复展开状态使用。
     index_for_key: qt_method!(fn(&self, route_key: QString) -> QModelIndex),
+    /// 用 objectKey 找回行（含普通节点），刷新后恢复选中对象使用。
+    index_for_object_key: qt_method!(fn(&self, object_key: QString) -> QModelIndex),
     route_key_of: qt_method!(fn(&self, index: QModelIndex) -> QString),
+    object_key_of: qt_method!(fn(&self, index: QModelIndex) -> QString),
+    /// 当前已展开的可导航 routeKey 列表（JSON 数组），刷新后恢复分支使用。
+    expanded_keys_json: qt_method!(fn(&self) -> QString),
     set_expanded: qt_method!(fn(&self, route_key: QString, expanded: bool)),
     set_starmap_title: qt_method!(fn(&self, starmap_id: QString, title: QString)),
     remove_starmap: qt_method!(fn(&self, starmap_id: QString)),
@@ -286,15 +321,18 @@ impl StarmapTreeModel {
     }
 
     /// 准确的三态判断。未探测时读取一次真实 graph，只缓存“有/无子项”，
-    /// 不插入子行；子行仍在用户展开时懒加载。
+    /// 不插入子行；子行仍在用户展开时懒加载。普通节点永远不可展开。
     fn row_has_children(&self, node_id: usize) -> bool {
-        let (state, starmap_id) = {
+        let (state, starmap_id, kind) = {
             let state = self.state.borrow();
             let Some(row) = state.rows.get(node_id) else {
                 return false;
             };
-            (row.children_state, row.starmap_id.clone())
+            (row.children_state, row.starmap_id.clone(), row.kind)
         };
+        if kind == RowKind::Node {
+            return false;
+        }
         match state {
             ChildrenState::Present => true,
             ChildrenState::Empty => false,
@@ -328,12 +366,15 @@ impl StarmapTreeModel {
     }
 
     fn refresh_internal(&self) {
-        let roots: Vec<StarMapMetaDto> = self
-            .call_backend_json("list_root_starmaps_json", None)
-            .as_deref()
-            .and_then(Self::envelope_data)
-            .and_then(|data| serde_json::from_value(data).ok())
-            .unwrap_or_default();
+        let root_id = self.state.borrow().root_starmap_id.clone();
+        let root_meta: Option<StarMapMetaDto> = if root_id.is_empty() {
+            None
+        } else {
+            self.call_backend_json("get_starmap_json", Some(&root_id))
+                .as_deref()
+                .and_then(Self::envelope_data)
+                .and_then(|data| serde_json::from_value(data).ok())
+        };
 
         self.begin_reset_model();
         {
@@ -341,10 +382,13 @@ impl StarmapTreeModel {
             state.rows.clear();
             state.root_ids.clear();
             state.index_by_route.clear();
+            state.index_by_object.clear();
             state.titles.clear();
-            for meta in roots {
+            if let Some(meta) = root_meta {
                 let node_id = state.rows.len();
                 let root_id = meta.starmap_id;
+                let root_route_key = route_key(&root_id, &[]);
+                let root_object_key = object_key(&root_route_key, RowKind::Root, &root_id);
                 state.titles.insert(root_id.clone(), meta.title.clone());
                 state.rows.push(TreeRow {
                     parent: None,
@@ -354,6 +398,8 @@ impl StarmapTreeModel {
                     segments: Vec::new(),
                     parent_starmap_id: String::new(),
                     kind: RowKind::Root,
+                    object_id: root_id.clone(),
+                    object_key: root_object_key.clone(),
                     revision: meta.updated_at,
                     depth: 0,
                     children: Vec::new(),
@@ -361,15 +407,28 @@ impl StarmapTreeModel {
                     expanded: false,
                 });
                 state.root_ids.push(node_id);
-                state
-                    .index_by_route
-                    .insert(route_key(&root_id, &[]), node_id);
+                state.index_by_route.insert(root_route_key, node_id);
+                state.index_by_object.insert(root_object_key, node_id);
             }
         }
         self.end_reset_model();
+
+        // 打开当前根星图后直接展开根行并插入真实子项；普通节点也在这时
+        // 出现在左栏，而不是等到用户先点一次展开箭头。
+        let root_key = self
+            .state
+            .borrow()
+            .rows
+            .first()
+            .map(TreeRow::route_key)
+            .unwrap_or_default();
+        if !root_key.is_empty() {
+            self.ensure_children_loaded_internal(&root_key);
+        }
     }
 
     fn load_child_specs(&self, starmap_id: &str) -> Option<Vec<ChildSpec>> {
+        let container_starmap_id = starmap_id.to_string();
         self.call_backend_json("get_starmap_graph_json", Some(starmap_id))
             .as_deref()
             .and_then(Self::envelope_data)
@@ -389,28 +448,47 @@ impl StarmapTreeModel {
                         kind: RowKind::Embed,
                         title,
                         starmap_id: target_starmap_id,
-                        segment: RouteSegment::Embed { instance_id },
+                        segment: Some(RouteSegment::Embed {
+                            instance_id: instance_id.clone(),
+                        }),
+                        object_id: instance_id,
                         revision: embed.updated_at,
                     });
                 }
                 for node in graph.nodes {
-                    let Some(portal) = node.portal else {
-                        continue;
-                    };
-                    let target_starmap_id = portal.destination_starmap_id;
-                    let title = if node.title.trim().is_empty() {
-                        self.title_for_starmap(&target_starmap_id)
-                            .unwrap_or_else(|| target_starmap_id.clone())
+                    if let Some(portal) = node.portal {
+                        let target_starmap_id = portal.destination_starmap_id;
+                        let title = if node.title.trim().is_empty() {
+                            self.title_for_starmap(&target_starmap_id)
+                                .unwrap_or_else(|| target_starmap_id.clone())
+                        } else {
+                            node.title
+                        };
+                        children.push(ChildSpec {
+                            kind: RowKind::Portal,
+                            title,
+                            starmap_id: target_starmap_id,
+                            segment: Some(RouteSegment::Portal {
+                                node_id: node.id.clone(),
+                            }),
+                            object_id: node.id,
+                            revision: node.updated_at,
+                        });
                     } else {
-                        node.title
-                    };
-                    children.push(ChildSpec {
-                        kind: RowKind::Portal,
-                        title,
-                        starmap_id: target_starmap_id,
-                        segment: RouteSegment::Portal { node_id: node.id },
-                        revision: node.updated_at,
-                    });
+                        let title = if node.title.trim().is_empty() {
+                            "未命名节点".to_string()
+                        } else {
+                            node.title
+                        };
+                        children.push(ChildSpec {
+                            kind: RowKind::Node,
+                            title,
+                            starmap_id: container_starmap_id.clone(),
+                            segment: None,
+                            object_id: node.id,
+                            revision: node.updated_at,
+                        });
+                    }
                 }
                 children
             })
@@ -428,6 +506,7 @@ impl StarmapTreeModel {
             root_starmap_id,
             segments,
             parent_starmap_id,
+            kind,
         ) = {
             let state = self.state.borrow();
             let Some(row) = state.rows.get(node_id) else {
@@ -441,8 +520,12 @@ impl StarmapTreeModel {
                 row.root_starmap_id.clone(),
                 row.segments.clone(),
                 row.starmap_id.clone(),
+                row.kind,
             )
         };
+        if kind == RowKind::Node {
+            return true;
+        }
         // `row_has_children` 探测真实 graph 后只缓存 Present/Empty，不会插入
         // 子行；因此 Present 但 children 为空时仍然必须在这里真正加载一次。
         if children_state == ChildrenState::Empty
@@ -466,6 +549,7 @@ impl StarmapTreeModel {
             return true;
         }
 
+        let parent_route_key = route_key(&root_starmap_id, &segments);
         let parent_index = self.index_for_node(node_id);
         let child_count = specs.len() as i32;
         self.begin_insert_rows(parent_index, 0, child_count - 1);
@@ -475,8 +559,12 @@ impl StarmapTreeModel {
             for spec in specs {
                 let child_id = state.rows.len();
                 let mut child_segments = segments.clone();
-                child_segments.push(spec.segment);
-                let child_key = route_key(&root_starmap_id, &child_segments);
+                if let Some(segment) = spec.segment {
+                    child_segments.push(segment);
+                }
+                let child_route_key = route_key(&root_starmap_id, &child_segments);
+                let child_object_key =
+                    object_key(&parent_route_key, spec.kind, &spec.object_id);
                 state.rows.push(TreeRow {
                     parent: Some(node_id),
                     title: spec.title,
@@ -485,13 +573,22 @@ impl StarmapTreeModel {
                     segments: child_segments,
                     parent_starmap_id: parent_starmap_id.clone(),
                     kind: spec.kind,
+                    object_id: spec.object_id,
+                    object_key: child_object_key.clone(),
                     revision: spec.revision,
                     depth: depth + 1,
                     children: Vec::new(),
-                    children_state: ChildrenState::Unknown,
+                    children_state: if spec.kind == RowKind::Node {
+                        ChildrenState::Empty
+                    } else {
+                        ChildrenState::Unknown
+                    },
                     expanded: false,
                 });
-                state.index_by_route.insert(child_key, child_id);
+                if spec.kind.is_navigable() {
+                    state.index_by_route.insert(child_route_key, child_id);
+                }
+                state.index_by_object.insert(child_object_key, child_id);
                 child_ids.push(child_id);
             }
             if let Some(row) = state.rows.get_mut(node_id) {
@@ -583,6 +680,8 @@ impl QAbstractItemModel for StarmapTreeModel {
             ROLE_NODE_ID => QVariant::from(QString::from(row.node_id())),
             ROLE_REVISION => QVariant::from(row.revision),
             ROLE_DEPTH => QVariant::from(row.depth),
+            ROLE_OBJECT_KEY => QVariant::from(QString::from(row.object_key.as_str())),
+            ROLE_OBJECT_ID => QVariant::from(QString::from(row.object_id.as_str())),
             _ => QVariant::default(),
         }
     }
@@ -602,11 +701,17 @@ impl QAbstractItemModel for StarmapTreeModel {
         names.insert(ROLE_NODE_ID, QByteArray::from("nodeId"));
         names.insert(ROLE_REVISION, QByteArray::from("revision"));
         names.insert(ROLE_DEPTH, QByteArray::from("depth"));
+        names.insert(ROLE_OBJECT_KEY, QByteArray::from("objectKey"));
+        names.insert(ROLE_OBJECT_ID, QByteArray::from("objectId"));
         names
     }
 }
 
 impl StarmapTreeModel {
+    fn set_root_starmap_id(&mut self, root_starmap_id: QString) {
+        self.state.borrow_mut().root_starmap_id = root_starmap_id.to_string();
+    }
+
     fn refresh(&self) {
         self.refresh_internal();
     }
@@ -724,6 +829,54 @@ impl StarmapTreeModel {
         self.index_for_segments(root_id, &segments)
     }
 
+    fn index_for_object_key(&self, object_key: QString) -> QModelIndex {
+        let key = object_key.to_string();
+        if key.is_empty() {
+            return QModelIndex::default();
+        }
+        // 根行直接命中。
+        if let Some(node_id) = self.state.borrow().index_by_object.get(&key).copied() {
+            let is_root = self
+                .state
+                .borrow()
+                .rows
+                .get(node_id)
+                .is_some_and(|row| row.parent.is_none());
+            if is_root {
+                return self.index_for_node(node_id);
+            }
+        }
+        let Some((container_key, _)) = key.rsplit_once('|') else {
+            return QModelIndex::default();
+        };
+        let parent_index = self.index_for_key(QString::from(container_key));
+        if !parent_index.is_valid() {
+            return QModelIndex::default();
+        }
+        let parent_id = parent_index.id();
+        let child_id = {
+            let state = self.state.borrow();
+            let Some(parent) = state.rows.get(parent_id) else {
+                return QModelIndex::default();
+            };
+            if parent.object_key == key {
+                Some(parent_id)
+            } else {
+                parent
+                    .children
+                    .iter()
+                    .copied()
+                    .find(|child_id| {
+                        state
+                            .rows
+                            .get(*child_id)
+                            .is_some_and(|child| child.object_key == key)
+                    })
+            }
+        };
+        child_id.map_or_else(QModelIndex::default, |id| self.index_for_node(id))
+    }
+
     fn route_key_of(&self, index: QModelIndex) -> QString {
         let Some(node_id) = self.row_for_index(index) else {
             return QString::default();
@@ -735,6 +888,31 @@ impl StarmapTreeModel {
             .get(node_id)
             .map_or_else(String::new, TreeRow::route_key);
         QString::from(key)
+    }
+
+    fn object_key_of(&self, index: QModelIndex) -> QString {
+        let Some(node_id) = self.row_for_index(index) else {
+            return QString::default();
+        };
+        let key = self
+            .state
+            .borrow()
+            .rows
+            .get(node_id)
+            .map_or_else(String::new, |row| row.object_key.clone());
+        QString::from(key)
+    }
+
+    fn expanded_keys_json(&self) -> QString {
+        let keys: Vec<String> = self
+            .state
+            .borrow()
+            .rows
+            .iter()
+            .filter(|row| row.expanded && row.kind.is_navigable() && !row.children.is_empty())
+            .map(TreeRow::route_key)
+            .collect();
+        QString::from(serde_json::to_string(&keys).unwrap_or_else(|_| "[]".to_string()))
     }
 
     fn set_expanded(&self, route_key: QString, expanded: bool) {
@@ -762,7 +940,9 @@ impl StarmapTreeModel {
                 .iter_mut()
                 .enumerate()
                 .filter_map(|(node_id, row)| {
-                    if row.starmap_id == starmap_id {
+                    // 普通节点行的 starmap_id 只是“所在星图”，标题是节点
+                    // 自己的标题，不能跟着星图改名一起被覆盖。
+                    if row.kind != RowKind::Node && row.starmap_id == starmap_id {
                         row.title = title.clone();
                         Some(node_id)
                     } else {

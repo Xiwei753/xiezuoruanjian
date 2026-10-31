@@ -366,6 +366,8 @@
     <string name="save_sync_config_failed">保存同步配置失败</string>
     <string name="save_sync_secrets_failed">保存同步密钥失败</string>
     <string name="sync_test_connection_result">网络: %1$s 认证: %2$s 仓库: %3$s 分支: %4$s</string>
+    <string name="sync_no_changes">已是最新</string>
+    <string name="sync_latest_wins_merged">已按较新版本合并</string>
     <plurals name="sync_perform_result">
         <item quantity="one">上传: %1$d 下载: %2$d 远端删除: %3$d 本地移入回收站: %4$d 冲突: %5$d</item>
         <item quantity="other">上传: %1$d 下载: %2$d 远端删除: %3$d 本地移入回收站: %4$d 冲突: %5$d</item>

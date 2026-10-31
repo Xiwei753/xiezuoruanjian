@@ -211,6 +211,8 @@
     <string name="save_sync_secrets_failed">Failed to save sync credentials</string>
     <string name="sync_block_not_ready">Sync not ready</string>
     <string name="sync_test_connection_result">Network: %1$s Auth: %2$s Repo: %3$s Branch: %4$s</string>
+    <string name="sync_no_changes">Already up to date</string>
+    <string name="sync_latest_wins_merged">Merged using the newer version</string>
     <plurals name="sync_perform_result">
         <item quantity="one">Uploaded: %1$d Downloaded: %2$d Remote deleted: %3$d Local moved to trash: %4$d Conflict: %5$d</item>
         <item quantity="other">Uploaded: %1$d Downloaded: %2$d Remote deleted: %3$d Local moved to trash: %4$d Conflicts: %5$d</item>

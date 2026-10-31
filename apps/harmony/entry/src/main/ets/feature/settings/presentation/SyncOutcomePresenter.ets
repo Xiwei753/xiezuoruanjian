@@ -51,7 +51,10 @@ export class SyncOutcomePresenter {
     if (status === 'no_changes') {
       return `同步完成，没有文件变化${counts}`
     }
-    if (status === 'success' || status === 'latest_wins_applied') {
+    if (status === 'latest_wins_applied') {
+      return `已按较新版本合并${counts}`
+    }
+    if (status === 'success') {
       return `同步完成${counts}`
     }
 

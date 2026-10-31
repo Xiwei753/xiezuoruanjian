@@ -68,6 +68,9 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
         let mut accumulated_local_trashed_files: Vec<String> = Vec::new();
         let mut accumulated_overwritten_files: Vec<String> = Vec::new();
         let mut accumulated_ignored_files: Vec<String> = Vec::new();
+        // 明确发生过 LWW 自动裁决的路径。CAS 重试跨轮累计，不能因为后续轮次
+        // 变成 NoChanges/Success 就丢掉前几轮的真实裁决事件。
+        let mut accumulated_auto_adjudicated_files: Vec<String> = Vec::new();
 
         for attempt in 0..MAX_CAS_RETRIES {
             // 1. 用当前 catalog_snapshot 找 visible generation → merge 到 staging。
@@ -227,7 +230,8 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
             // 规则与 sync/lww/attempt.rs 对齐：
             // - 有 unresolved conflict → PartialConflict（已在 retained_conflict 中）
             // - 有 pending_take_remote_failed → RecoverableError（Issue #716 评论 5742849844 问题 1）
-            // - 无冲突但 downloaded_files/local_deletes 任一非空（对本地产生的实际变化）→ LatestWinsApplied
+            // - 无自动裁决但 downloaded_files/local_deletes 任一非空（对本地产生的实际变化）→ Success
+            // - 只有双方相对基线都变化、由 LWW 明确裁决 → LatestWinsApplied
             // - 真正全空 → NoChanges
             // 注意：remote_upload_paths/remote_delete_paths 是对远端的操作，不是对本地产生的变化，
             // 在 RemoteWins 分支中不应影响状态判断。
@@ -244,6 +248,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                     // 只考虑对本地产生的实际变化：下载到本地的文件、本地被删除的文件
                     let has_local_changes =
                         !outcome.downloaded_files.is_empty() || !outcome.local_deletes.is_empty();
+                    let has_auto_adjudication = !outcome.auto_adjudicated_files.is_empty();
                     let mut r = SyncResult::success();
                     r.downloaded_files = outcome.downloaded_files.clone();
                     // 问题 3 修复：no-publish 路径不报告未执行的远端删除。
@@ -263,8 +268,10 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                             "pending_take_remote: remote file missing for paths: {}",
                             outcome.pending_take_remote_failed.join(", ")
                         ));
-                    } else if has_local_changes {
+                    } else if has_auto_adjudication {
                         r.status = SyncStatus::LatestWinsApplied;
+                    } else if has_local_changes {
+                        r.status = SyncStatus::Success;
                     } else {
                         r.status = SyncStatus::NoChanges;
                     }
@@ -294,6 +301,11 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                 for f in &outcome.ignored_files {
                     if !accumulated_ignored_files.contains(f) {
                         accumulated_ignored_files.push(f.clone());
+                    }
+                }
+                for f in &outcome.auto_adjudicated_files {
+                    if !accumulated_auto_adjudicated_files.contains(f) {
+                        accumulated_auto_adjudicated_files.push(f.clone());
                     }
                 }
             }
@@ -331,6 +343,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                         &accumulated_local_trashed_files,
                         &accumulated_overwritten_files,
                         &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                     );
                     return (r, None, None);
                 }
@@ -444,6 +457,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 &accumulated_local_trashed_files,
                                 &accumulated_overwritten_files,
                                 &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                             );
                             return (r, None, None);
                         }
@@ -478,6 +492,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                     &accumulated_local_trashed_files,
                                     &accumulated_overwritten_files,
                                     &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                                 );
                                 return (r, None, None);
                             }
@@ -525,6 +540,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                             &accumulated_local_trashed_files,
                             &accumulated_overwritten_files,
                             &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                         );
                         return (result, None, None);
                     }
@@ -552,6 +568,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 &accumulated_local_trashed_files,
                                 &accumulated_overwritten_files,
                                 &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                             );
                             return (r, None, None);
                         }
@@ -598,6 +615,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 &accumulated_local_trashed_files,
                                 &accumulated_overwritten_files,
                                 &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                             );
                             return (final_result, None, None);
                         }
@@ -625,6 +643,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 &accumulated_local_trashed_files,
                                 &accumulated_overwritten_files,
                                 &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                             );
                             return (final_result, None, None);
                         }
@@ -700,6 +719,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                             &accumulated_local_trashed_files,
                                             &accumulated_overwritten_files,
                                             &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                                         );
                                         return (final_result, None, action);
                                     }
@@ -728,6 +748,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                         &accumulated_local_trashed_files,
                         &accumulated_overwritten_files,
                         &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                     );
                     return (result, None, None);
                 }
@@ -751,6 +772,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                 &accumulated_local_trashed_files,
                                 &accumulated_overwritten_files,
                                 &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                             );
                             return (result, None, None);
                         }
@@ -811,6 +833,7 @@ pub(in crate::sync::full_sync) fn transfer_live_project(
                                     &accumulated_local_trashed_files,
                                     &accumulated_overwritten_files,
                                     &accumulated_ignored_files,
+                        &accumulated_auto_adjudicated_files,
                                 );
                                 return (final_result, None, action);
                             }

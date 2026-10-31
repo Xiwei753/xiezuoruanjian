@@ -102,7 +102,7 @@ ColumnLayout {
         case "sync.result.dry_run_summary": msg = qsTr("试运行完成"); break;
         case "sync.result.dry_run_failed": msg = qsTr("试运行失败"); break;
         case "sync.result.success_summary": msg = qsTr("同步完成"); break;
-        case "sync.result.latest_wins_summary": msg = qsTr("同步完成（以最新版本为准）"); break;
+        case "sync.result.latest_wins_summary": msg = qsTr("已按较新版本合并"); break;
         case "sync.result.no_changes_summary": msg = qsTr("无需同步，本地与远端一致"); break;
         case "sync.result.conflict_summary": msg = qsTr("同步完成，存在冲突文件"); break;
         case "sync.result.partial_conflict_summary": msg = qsTr("部分同步：非冲突文件已同步，{conflict_count} 个冲突待处理"); break;
@@ -566,7 +566,7 @@ ColumnLayout {
         // Issue #782 评论 5856119763: 补齐 Core 合法同步终态的展示映射。
         // no_changes / latest_wins_applied 之前会一路掉到"同步"，不是完成状态。
         if (s === "no_changes") return qsTr("无需同步")
-        if (s === "latest_wins_applied") return qsTr("已同步（已应用较新版本）")
+        if (s === "latest_wins_applied") return qsTr("已按较新版本合并")
         if (s === "syncing") return qsTr("同步中")
         if (s === "conflict") return qsTr("同步冲突")
         if (s === "partial_conflict") return qsTr("部分同步，存在未处理冲突")

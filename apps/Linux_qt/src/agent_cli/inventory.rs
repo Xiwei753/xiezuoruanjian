@@ -184,8 +184,6 @@ pub struct AgentInventory {
     pub generation: u64,
     pub scanned_at: String,
     pub installed: Vec<AgentInstallation>,
-    /// registry / manifest 中的可安装条目；不会仅凭目录条目标记 Installed。
-    pub available: Vec<AgentDescriptor>,
     pub registry_source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry_error: Option<String>,
@@ -197,7 +195,6 @@ impl AgentInventory {
             generation,
             scanned_at: String::new(),
             installed: Vec::new(),
-            available: Vec::new(),
             registry_source: "none".to_string(),
             registry_error: None,
         }

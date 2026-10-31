@@ -276,6 +276,8 @@ private fun resolveStructuredResult(result: StructuredSyncResult): String {
                 result.counts.deletedLocal,
                 result.counts.conflicts,
             )
+        "sync_no_changes" -> stringResource(id = R.string.sync_no_changes)
+        "sync_latest_wins_merged" -> stringResource(id = R.string.sync_latest_wins_merged)
         "sync_terminal_failure" -> stringResource(id = R.string.sync_terminal_failure)
         "sync_retryable_failure" -> stringResource(id = R.string.sync_retryable_failure)
         "sync_retryable_network" -> stringResource(id = R.string.sync_retryable_network)

@@ -7,14 +7,15 @@
 //   TreeViewDelegate，数据来自 Rust 的 StarmapTreeModel（QAbstractItemModel）。
 //
 // 身份：树行不是“文件系统目录”，而是 rootStarmapId + 完整 route segments。
+//   可导航行用 routeKey；普通节点没有可进入画布，用 objectKey 区分并定位。
 //   同一个子星图通过不同 Embed / Portal 到达时拥有不同 routeKey，必须分别选中。
 //
 // 交互：
-//   - 单击行：Workspace 让 Canvas 按该行的完整路由切换活动画布；
-//   - 展开箭头：第一次展开时才让 Rust 模型调用 get_starmap_graph_json() 加载
-//     子层（根层来自 list_root_starmaps_json()）；
+//   - 单击可导航行：Workspace 让 Canvas 按该行的完整路由切换活动画布；
+//   - 单击普通节点：Workspace 让 Canvas 在当前画布命中、选中并居中该对象；
+//   - 展开箭头：只有 Embed / Portal 行可展开，第一次展开时才加载下一层；
 //   - 右键行：重命名 / 删除，交给 Workspace 复用 starmapBackend 的方法；
-//   - 顶部 +：新建根星图。
+//   - 顶部 +：在当前画布新建节点或子星图，不再创建独立根星图。
 // =============================================================================
 
 import QtQuick
@@ -30,14 +31,21 @@ Rectangle {
     required property var dt
     property var starmapBackendRef: null
 
+    // 当前工作区唯一的根星图；切换根时整棵树重载，不继承旧根的展开/选中。
+    property string workspaceRootStarmapId: ""
+
     // Canvas 当前路由；由 Workspace 在进入 / 退出子星图时同步。
     property string currentRootStarmapId: ""
     property string currentSegmentsJson: "[]"
     property string currentRouteKey: ""
+    // 当前选中的普通节点对象键；为空时按 routeKey 高亮可导航行。
+    property string currentObjectKey: ""
     property var contextRow: null
 
     signal routeActivated(string rootStarmapId, string segmentsJson, string routeKey)
-    signal createStarmapRequested()
+    signal objectActivated(string rootStarmapId, string segmentsJson,
+                           string kind, string objectId, string objectKey)
+    signal createObjectRequested(string mode)
     signal renameRequested(var rowInfo)
     signal deleteRequested(var rowInfo)
 
@@ -56,6 +64,8 @@ Rectangle {
             rootStarmapId: String(model.rootStarmapId || ""),
             routeSegments: String(model.routeSegments || "[]"),
             routeKey: String(model.routeKey || ""),
+            objectKey: String(model.objectKey || ""),
+            objectId: String(model.objectId || ""),
             rowKind: String(model.rowKind || "root"),
             parentStarmapId: String(model.parentStarmapId || ""),
             instanceId: String(model.instanceId || ""),
@@ -67,15 +77,14 @@ Rectangle {
 
     function expandedRouteKeys() {
         var keys = []
-        if (!treeView || !treeModel)
+        if (!treeModel)
             return keys
-        for (var row = 0; row < treeView.rows; ++row) {
-            if (!treeView.isExpanded(row))
-                continue
-            var index = treeView.index(row, 0)
-            var key = treeModel.route_key_of(index)
-            if (key !== "")
-                keys.push(String(key))
+        try {
+            var parsed = JSON.parse(String(treeModel.expanded_keys_json() || "[]"))
+            if (Array.isArray(parsed))
+                keys = parsed.map(function(key) { return String(key) })
+        } catch (e) {
+            keys = []
         }
         return keys
     }
@@ -83,10 +92,12 @@ Rectangle {
     function reload() {
         if (!treeModel)
             return
-        // Issue #1016：reload 前保存全部展开的完整 routeKey，刷新后按仍存在
-        // 的路径恢复展开与当前路由选中；叶子/空分支不会被重新伪造展开。
+        // reload 前保存已加载分支的完整 routeKey 和当前普通节点对象键；
+        // 刷新后只恢复当前根下仍存在的路径，不把旧根的展开/选中带过来。
         var expandedKeys = expandedRouteKeys()
+        var selectedObjectKey = root.currentObjectKey
         treeModel.set_backend_ref(root.starmapBackendRef)
+        treeModel.set_root_starmap_id(root.workspaceRootStarmapId)
         treeModel.refresh()
         for (var i = 0; i < expandedKeys.length; ++i) {
             var key = expandedKeys[i]
@@ -99,6 +110,18 @@ Rectangle {
             treeView.expand(row)
             treeModel.set_expanded(key, true)
         }
+        if (selectedObjectKey !== "") {
+            var objectIndex = treeModel.index_for_object_key(selectedObjectKey)
+            if (objectIndex) {
+                var objectRow = treeView.rowAtIndex(objectIndex)
+                if (objectRow >= 0) {
+                    if (treeView.selectionModel)
+                        treeView.selectionModel.setCurrentIndex(
+                            objectIndex, ItemSelectionModel.ClearAndSelect)
+                    treeView.positionViewAtRow(objectRow, Qt.AlignVCenter)
+                }
+            }
+        }
         if (root.currentRouteKey !== "")
             syncRoute(root.currentRootStarmapId, root.currentSegmentsJson, root.currentRouteKey)
     }
@@ -109,6 +132,10 @@ Rectangle {
         root.currentRouteKey = String(routeKey || "")
         if (!treeModel || root.currentRouteKey === "" || root.currentRootStarmapId === "")
             return
+        // 根行必须在首次进入时主动加载真实子项；模型刷新时已预加载，
+        // 这里再兜底一次后端失败后的重试。
+        if (String(root.currentSegmentsJson || "[]") === "[]")
+            treeModel.ensure_children_loaded(root.currentRootStarmapId + "|")
         var index = treeModel.index_for_route(root.currentRootStarmapId, root.currentSegmentsJson)
         var row = treeView.rowAtIndex(index)
         if (row < 0)
@@ -125,8 +152,19 @@ Rectangle {
 
     function activateRow(model) {
         var info = rowInfoOf(model)
-        if (!info || info.routeKey === "")
+        if (!info)
             return
+        if (info.rowKind === "node") {
+            if (info.objectKey === "" || info.nodeId === "")
+                return
+            root.currentObjectKey = info.objectKey
+            root.objectActivated(info.rootStarmapId, info.routeSegments,
+                                 "node", info.nodeId, info.objectKey)
+            return
+        }
+        if (info.routeKey === "")
+            return
+        root.currentObjectKey = ""
         root.currentRouteKey = info.routeKey
         root.routeActivated(info.rootStarmapId, info.routeSegments, info.routeKey)
     }
@@ -140,7 +178,7 @@ Rectangle {
 
     function ensureExpanded(row, model) {
         var key = model ? String(model.routeKey || "") : ""
-        if (key === "" || row < 0)
+        if (key === "" || row < 0 || String(model.rowKind || "") === "node")
             return
         // Issue #1016：箭头是真正的展开/收起切换，不再只 expand。
         if (treeView.isExpanded(row)) {
@@ -155,6 +193,16 @@ Rectangle {
     }
 
     onStarmapBackendRefChanged: reload()
+
+    onWorkspaceRootStarmapIdChanged: {
+        if (String(root.workspaceRootStarmapId) !== String(root.currentRootStarmapId)) {
+            root.currentRootStarmapId = String(root.workspaceRootStarmapId)
+            root.currentSegmentsJson = "[]"
+            root.currentRouteKey = ""
+            root.currentObjectKey = ""
+        }
+        reload()
+    }
 
     Component.onCompleted: reload()
 
@@ -187,9 +235,9 @@ Rectangle {
             ToolButton {
                 icon.name: "list-add"
                 display: AbstractButton.IconOnly
-                onClicked: root.createStarmapRequested()
+                onClicked: createMenu.popup()
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("新建星图")
+                ToolTip.text: qsTr("在当前星图中新建")
             }
         }
 
@@ -216,8 +264,10 @@ Rectangle {
                 indentation: Kirigami.Units.gridUnit
                 leftMargin: Kirigami.Units.smallSpacing
                 rightMargin: Kirigami.Units.smallSpacing
-                highlighted: root.currentRouteKey !== ""
-                    && String(delegate.model.routeKey || "") === root.currentRouteKey
+                highlighted: root.currentObjectKey !== ""
+                    ? String(delegate.model.objectKey || "") === root.currentObjectKey
+                    : (root.currentRouteKey !== ""
+                       && String(delegate.model.routeKey || "") === root.currentRouteKey)
 
                 ToolTip.visible: hovered
                 ToolTip.text: String(delegate.model.title || "")
@@ -232,6 +282,7 @@ Rectangle {
                 indicator: Item {
                     id: indicatorItem
                     readonly property bool hasAnyChildren: delegate.isTreeNode
+                        && String(delegate.model.rowKind || "") !== "node"
                         && (delegate.hasChildren
                             || (delegate.model && delegate.model.hasChildren === true))
                     visible: hasAnyChildren
@@ -266,6 +317,20 @@ Rectangle {
             text: qsTr("暂无星图")
             color: Kirigami.Theme.disabledTextColor
             horizontalAlignment: Text.AlignHCenter
+        }
+    }
+
+    Menu {
+        id: createMenu
+
+        MenuItem {
+            text: qsTr("新建节点")
+            onTriggered: root.createObjectRequested("node")
+        }
+
+        MenuItem {
+            text: qsTr("新建子星图")
+            onTriggered: root.createObjectRequested("starmap")
         }
     }
 

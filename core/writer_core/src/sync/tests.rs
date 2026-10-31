@@ -1903,7 +1903,7 @@ mod tests {
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
-        assert_eq!(res.status, SyncStatus::LatestWinsApplied);
+        assert_eq!(res.status, SyncStatus::Success);
         assert!(res.uploaded_files.contains(&chapter_rel.to_string()));
         assert!(res.conflicts.is_empty());
         assert!(res.overwritten_files.is_empty());
@@ -1979,7 +1979,7 @@ mod tests {
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
 
-        assert_eq!(res.status, SyncStatus::LatestWinsApplied);
+        assert_eq!(res.status, SyncStatus::Success);
         assert!(res.downloaded_files.contains(&chapter_rel.to_string()));
         assert!(res.conflicts.is_empty());
         assert!(res.overwritten_files.is_empty());
