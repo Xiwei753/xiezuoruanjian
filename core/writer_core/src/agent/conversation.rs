@@ -372,6 +372,27 @@ impl AgentConversation {
             .map(|preference| preference.model.clone())
     }
 
+    /// 只更新原生会话绑定的实际模型，不覆盖用户在模型选择器中的偏好。
+    /// ACP/OpenCode 在会话启动时可能先报告旧默认模型，真正的用户选择要等
+    /// 本轮切换确认后才落定。
+    pub fn set_native_session_model(
+        &mut self,
+        agent_id: &str,
+        launch_path: &str,
+        model: Option<String>,
+        at_ms: i64,
+    ) {
+        if let Some(binding) = self
+            .native_sessions
+            .iter_mut()
+            .rev()
+            .find(|binding| binding.agent_id == agent_id && binding.launch_path == launch_path)
+        {
+            binding.model = model;
+            binding.updated_at_ms = at_ms;
+        }
+    }
+
     pub fn set_executor_model(
         &mut self,
         agent_id: &str,
@@ -379,15 +400,18 @@ impl AgentConversation {
         model: Option<String>,
         at_ms: i64,
     ) {
-        if let Some(session) = self
-            .native_sessions
-            .iter_mut()
-            .rev()
-            .find(|session| session.agent_id == agent_id && session.launch_path == launch_path)
-        {
-            session.model = model.clone();
-            session.updated_at_ms = at_ms;
-        }
+        self.set_native_session_model(agent_id, launch_path, model.clone(), at_ms);
+        self.set_model_preference(agent_id, launch_path, model, at_ms);
+    }
+
+    /// 只更新用户对执行者的模型偏好，不影响原生会话绑定的实际模型。
+    pub fn set_model_preference(
+        &mut self,
+        agent_id: &str,
+        launch_path: &str,
+        model: Option<String>,
+        at_ms: i64,
+    ) {
         self.model_preferences.retain(|preference| {
             preference.agent_id != agent_id || preference.launch_path != launch_path
         });

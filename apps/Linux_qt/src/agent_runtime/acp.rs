@@ -298,8 +298,9 @@ impl AcpAdapter {
         };
         let native_session_id = json_text(&session_result, &["sessionId"])
             .ok_or_else(|| "ACP 未返回 sessionId".to_string())?;
-        let model =
-            json_text(&session_result, &["models", "currentModelId"]).or_else(|| ctx.model.clone());
+        // currentModelId 是原生会话实际模型；ctx.model 是用户本轮的请求模型。
+        // 两者不能合并，否则启动默认值会把用户选择覆盖掉，后续也不再切换。
+        let actual_model = json_text(&session_result, &["models", "currentModelId"]);
         if let Ok(mut guard) = session_id.lock() {
             *guard = Some(native_session_id.clone());
         }
@@ -344,7 +345,7 @@ impl AcpAdapter {
         }
         (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
             native_session_id,
-            model: model.clone(),
+            model: actual_model.clone(),
             resumed,
         }));
         if resumed {
@@ -357,8 +358,8 @@ impl AcpAdapter {
             emit,
             state,
             agent_id: ctx.agent_id.clone(),
-            model: model.clone(),
-            applied_model: Arc::new(Mutex::new(model)),
+            model: ctx.model.clone(),
+            applied_model: Arc::new(Mutex::new(actual_model)),
             supports_model_switch: ctx.agent_id == "gemini" && !models.is_empty(),
             history_restored: resumed,
             dispatch_lock: Arc::new(Mutex::new(())),
@@ -466,6 +467,14 @@ impl AgentAdapter for AcpAdapter {
                                 if let Ok(mut guard) = applied_model.lock() {
                                     *guard = Some(model.clone());
                                 }
+                                (emit)(RuntimeEvent::turn(
+                                    round_id.clone(),
+                                    "",
+                                    AgentEvent::ModelSwitchApplied {
+                                        requested: Some(model.clone()),
+                                        actual: Some(model.clone()),
+                                    },
+                                ));
                             }
                             Err(error) => {
                                 let actual =

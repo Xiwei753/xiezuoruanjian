@@ -132,7 +132,10 @@ pub struct OpenCodeAdapter {
     session_id: Arc<Mutex<Option<String>>>,
     child: Arc<Mutex<Child>>,
     emit: EventSink,
-    model_hint: Option<String>,
+    /// 用户在本轮之前选择的模型；None 表示使用 CLI 默认模型。
+    requested_model: Option<String>,
+    /// OpenCode 会话当前实际生效的模型，由会话信息和 switchModel 回执更新。
+    actual_model: Arc<Mutex<Option<String>>>,
     /// 每个已提交 Core Turn 的 inbox/用户消息生命周期。
     prompt_inputs: Arc<Mutex<HashMap<String, Arc<PromptInput>>>>,
     /// 服务端用户消息 id → Core Turn。助手消息 id 通过消息历史回溯到这条
@@ -322,6 +325,12 @@ impl OpenCodeAdapter {
             ),
         };
 
+        // 会话响应里的 model 才是当前原生会话实际使用的模型；用户选择的
+        // 模型可能要在本轮 prompt 前通过 switchModel 才生效。
+        let actual_model =
+            fetch_session_model(&client, &base_url, &password, &ctx.working_dir, &session_id);
+        let actual_model = Arc::new(Mutex::new(actual_model));
+
         // 模型目录由独立探测线程通过 `/api/model` 获取，不绑定聊天会话，
         // 也不能在发送消息的启动路径上等待目录请求。
 
@@ -488,7 +497,7 @@ impl OpenCodeAdapter {
                 .ok()
                 .and_then(|guard| guard.clone())
                 .unwrap_or_default(),
-            model: ctx.model.clone(),
+            model: actual_model.lock().ok().and_then(|guard| guard.clone()),
             resumed,
         }));
 
@@ -500,7 +509,8 @@ impl OpenCodeAdapter {
             session_id,
             child,
             emit,
-            model_hint: ctx.model.clone(),
+            requested_model: ctx.model.clone(),
+            actual_model,
             prompt_inputs,
             input_bindings,
             pending_events,
@@ -1484,6 +1494,90 @@ fn create_session(
         .ok_or_else(|| "OpenCode 未返回 session id".to_string())
 }
 
+/// 从 `Session.Info.model` 或 `Model.Info` 中取出 switchModel 需要的引用。
+fn model_ref(value: &Value) -> Option<(String, String)> {
+    let data = value.get("data").unwrap_or(value);
+    let reference = data.get("model").unwrap_or(data);
+    let provider = json_text(reference, &["providerID"])?;
+    let id = json_text(reference, &["id"]).or_else(|| json_text(reference, &["modelID"]))?;
+    if provider.is_empty() || id.is_empty() {
+        return None;
+    }
+    Some((provider, id))
+}
+
+fn parse_requested_model(model: &str) -> Result<(String, String), String> {
+    let (provider, id) = model
+        .split_once('/')
+        .ok_or_else(|| format!("OpenCode 模型标识必须为 provider/model：{model}"))?;
+    if provider.is_empty() || id.is_empty() {
+        return Err(format!("OpenCode 模型标识不完整：{model}"));
+    }
+    Ok((provider.to_string(), id.to_string()))
+}
+
+fn fetch_session_model(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    password: &str,
+    working_dir: &Path,
+    session_id: &str,
+) -> Option<String> {
+    let response = client
+        .get(format!("{base_url}/api/session/{session_id}"))
+        .basic_auth(SERVER_USER, Some(password))
+        .query(&[("location[directory]", location_value(working_dir))])
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let value: Value = response.json().ok()?;
+    model_ref(&value).map(|(provider, id)| format!("{provider}/{id}"))
+}
+
+fn fetch_default_model(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    password: &str,
+    working_dir: &Path,
+) -> Result<(String, String), String> {
+    let response = client
+        .get(format!("{base_url}/api/model/default"))
+        .basic_auth(SERVER_USER, Some(password))
+        .query(&[("location[directory]", location_value(working_dir))])
+        .send()
+        .map_err(|error| format!("读取 OpenCode 默认模型失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(response_error(response));
+    }
+    let value: Value = response.json().map_err(|error| error.to_string())?;
+    model_ref(&value).ok_or_else(|| "OpenCode 未返回默认模型".to_string())
+}
+
+fn switch_session_model(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    password: &str,
+    session_id: &str,
+    provider: &str,
+    id: &str,
+) -> Result<(), String> {
+    let response = client
+        .post(format!("{base_url}/api/session/{session_id}/model"))
+        .basic_auth(SERVER_USER, Some(password))
+        .json(&json!({
+            "model": { "providerID": provider, "id": id }
+        }))
+        .send()
+        .map_err(|error| format!("切换 OpenCode 模型失败：{error}"))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(response_error(response))
+    }
+}
+
 impl OpenCodeAdapter {
     fn cancel_admitted_input(
         &self,
@@ -1649,16 +1743,14 @@ impl AgentAdapter for OpenCodeAdapter {
         if let Ok(mut pending) = self.pending_events.lock() {
             pending.clear();
         }
-        let mut body = json!({
+        // V2 的 prompt 接口不接受模型字段；模型必须在发送前通过
+        // `POST /api/session/{id}/model` 切换。
+        let body = json!({
             "id": input_id.clone(),
             "text": request.text_with_history_context(),
         });
-        // 用户明确选择模型时才传；格式为 `provider/model`。
-        if let Some(model) = self.model_hint.as_ref() {
-            if let Some((provider, model_id)) = model.split_once('/') {
-                body["model"] = json!({ "providerID": provider, "modelID": model_id });
-            }
-        }
+        let requested_model = self.requested_model.clone();
+        let actual_model = self.actual_model.clone();
         let client = self.client.clone();
         let base_url = self.base_url.clone();
         let password = self.password.clone();
@@ -1671,6 +1763,72 @@ impl AgentAdapter for OpenCodeAdapter {
         let spawn_result = std::thread::Builder::new()
             .name("agent-opencode-prompt".to_string())
             .spawn(move || {
+                let requested_label = requested_model
+                    .clone()
+                    .unwrap_or_else(|| "CLI 默认模型".to_string());
+                let target = match requested_model.as_deref() {
+                    Some(model) => parse_requested_model(model),
+                    None => {
+                        fetch_default_model(&client, &base_url, &password, Path::new(&working_dir))
+                    }
+                };
+                match target {
+                    Ok((provider, model_id)) => {
+                        let target_label = format!("{provider}/{model_id}");
+                        let current = actual_model.lock().ok().and_then(|guard| guard.clone());
+                        if current.as_deref() != Some(target_label.as_str()) {
+                            match switch_session_model(
+                                &client,
+                                &base_url,
+                                &password,
+                                &session_id,
+                                &provider,
+                                &model_id,
+                            ) {
+                                Ok(()) => {
+                                    if let Ok(mut guard) = actual_model.lock() {
+                                        *guard = Some(target_label.clone());
+                                    }
+                                    (emit)(RuntimeEvent::turn(
+                                        round_turn_id.clone(),
+                                        "",
+                                        AgentEvent::ModelSwitchApplied {
+                                            requested: requested_model.clone(),
+                                            actual: Some(target_label),
+                                        },
+                                    ));
+                                }
+                                Err(error) => {
+                                    (emit)(RuntimeEvent::turn(
+                                        round_turn_id.clone(),
+                                        "",
+                                        AgentEvent::ModelSwitchFailed {
+                                            requested: requested_label,
+                                            actual: current,
+                                            message: format!(
+                                                "OpenCode 切换模型失败，继续使用当前模型：{error}"
+                                            ),
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let current = actual_model.lock().ok().and_then(|guard| guard.clone());
+                        (emit)(RuntimeEvent::turn(
+                            round_turn_id.clone(),
+                            "",
+                            AgentEvent::ModelSwitchFailed {
+                                requested: requested_label,
+                                actual: current,
+                                message: format!(
+                                    "无法确定 OpenCode 目标模型，继续使用当前模型：{error}"
+                                ),
+                            },
+                        ));
+                    }
+                }
                 let response = client
                     .post(format!("{base_url}/api/session/{session_id}/prompt"))
                     .basic_auth(SERVER_USER, Some(&password))
@@ -1822,7 +1980,7 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 
     fn set_model(&mut self, model: Option<String>) {
-        self.model_hint = model;
+        self.requested_model = model;
     }
 
     fn history_restored(&self) -> bool {

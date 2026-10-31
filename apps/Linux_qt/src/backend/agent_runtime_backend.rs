@@ -1534,7 +1534,10 @@ impl AgentRuntimeBackend {
                     .iter()
                     .find(|turn| turn.id == turn_id)
                     .and_then(|turn| turn.model.clone());
-                let recorded_model = model.clone().or(turn_model).or_else(|| self.model.clone());
+                // 原生会话上报的是启动时实际模型，可能还不是用户刚选择的
+                // 模型；绑定先记录实际值，选择器保留待切换请求，等本轮
+                // ModelSwitchApplied/ModelSwitchFailed 再落定。
+                let recorded_model = model.clone().or_else(|| turn_model.clone());
                 // 恢复失败意味着新原生会话里没有任何旧轮次；游标必须清空，
                 // 下一轮提示词才能补全真实历史。
                 let synchronized_turn = if resumed {
@@ -1553,27 +1556,19 @@ impl AgentRuntimeBackend {
                     synchronized_turn,
                     at_ms,
                 );
-                // 原生会话上报的实际模型同步到执行者偏好；切换 CLI 后再
-                // 回来时恢复的是真实模型，而不是被别名或默认值覆盖的旧选择。
-                conversation.set_executor_model(
-                    &self.agent_id,
-                    &self.launch_path,
-                    recorded_model.clone(),
-                    at_ms,
-                );
+                let pending_model_switch = turn_model
+                    .as_deref()
+                    .zip(model.as_deref())
+                    .is_some_and(|(requested, actual)| requested != actual);
                 if let Some(turn) = conversation
                     .turns
                     .iter_mut()
                     .find(|turn| turn.id == turn_id)
                 {
                     turn.native_session_id = Some(native_session_id);
-                    if recorded_model.is_some() {
+                    if !pending_model_switch && recorded_model.is_some() {
                         turn.model = recorded_model;
                     }
-                }
-                if model.is_some() {
-                    self.model = model.clone();
-                    conversation.model = model;
                 }
                 conversation.updated_at_ms = at_ms;
                 persist = true;
@@ -1757,6 +1752,44 @@ impl AgentRuntimeBackend {
                     self.models_state_value = "ready".to_string();
                 }
                 self.models_changed();
+            }
+            AgentEvent::ModelSwitchApplied { requested, actual } => {
+                if let Some(turn) = conversation.turn_mut(&core_turn_id) {
+                    turn.model = actual.clone();
+                }
+                conversation.set_native_session_model(
+                    &self.agent_id,
+                    &self.launch_path,
+                    actual.clone(),
+                    now_ms(),
+                );
+                if requested.is_some() {
+                    self.model = actual.clone();
+                    if self.conversation_matches_current_agent(&conversation) {
+                        conversation.model = actual.clone();
+                    }
+                    conversation.set_model_preference(
+                        &self.agent_id,
+                        &self.launch_path,
+                        actual,
+                        now_ms(),
+                    );
+                } else {
+                    // 用户选的是 CLI 默认模型；原生会话可以报告具体默认值，
+                    // 但选择器继续保留“默认”语义，不反向锁定到某个模型。
+                    self.model = None;
+                    if self.conversation_matches_current_agent(&conversation) {
+                        conversation.model = None;
+                    }
+                    conversation.set_model_preference(
+                        &self.agent_id,
+                        &self.launch_path,
+                        None,
+                        now_ms(),
+                    );
+                }
+                conversation.updated_at_ms = now_ms();
+                persist = true;
             }
             AgentEvent::ModelSwitchFailed {
                 requested,

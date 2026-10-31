@@ -246,6 +246,11 @@ pub enum AgentEvent {
         actual: Option<String>,
         message: String,
     },
+    /// 请求的模型已在本轮发送前生效；actual 是原生会话确认后的实际模型。
+    ModelSwitchApplied {
+        requested: Option<String>,
+        actual: Option<String>,
+    },
     /// MCP 的真实连接/发现状态，只能由适配器根据官方接口上报。
     /// `status` 使用 `connected` / `failed` / `configured` / `stopped`。
     McpConnectionChanged {
