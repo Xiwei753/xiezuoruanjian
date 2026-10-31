@@ -40,7 +40,8 @@ pub struct ProofEditPayload {
     /// 真实前台写作会话 ID（与 `WritingActivitySegment` 同源）。
     #[serde(default)]
     pub session_id: String,
-    /// 记录起点/正文基线标识，对应一个 checkpoint。
+    /// 记录起点/正文基线标识，对应真实基线序号：普通检查点为该检查点 seq，
+    /// 连续性缺口为 `ProofContinuityGap.baseline_seq`；续写旧链时为空。
     #[serde(default)]
     pub baseline_id: String,
     /// 本事件是否开启新的链（旧会话首次记录、或正文被显式重载）。

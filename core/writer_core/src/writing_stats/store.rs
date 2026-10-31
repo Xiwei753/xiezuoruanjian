@@ -395,9 +395,11 @@ impl StatsStore {
             None
         };
 
+        let mut baseline_seq = None;
         let (seq, before_digest, mut before_text, starts_new_chain, baseline_checkpoint) =
             if let Some(gap) = gap_baseline {
                 let digest = ContentDigest::from_text(&gap.baseline_text);
+                baseline_seq = Some(gap.baseline_seq);
                 (
                     state.next_seq.max(gap.baseline_seq.saturating_add(1)),
                     digest,
@@ -475,6 +477,7 @@ impl StatsStore {
                             }
                         }
                         let digest = ContentDigest::from_text(&checkpoint.text);
+                        baseline_seq = Some(0);
                         (
                             state.next_seq.max(checkpoint.seq.saturating_add(1)),
                             digest,
@@ -485,6 +488,7 @@ impl StatsStore {
                     }
                     None => {
                         let text = baseline_text.unwrap_or_default().to_string();
+                        baseline_seq = Some(0);
                         let checkpoint = ProofCheckpoint::new(
                             &event.chapter_id,
                             &origin,
@@ -519,7 +523,13 @@ impl StatsStore {
                 .map_or_else(String::new, |head| head.event_hash.clone())
         };
         let baseline_id = if starts_new_chain {
-            format!("{origin}:{}:{}", event.chapter_id, seq.saturating_sub(1))
+            let baseline_seq = baseline_seq.ok_or_else(|| {
+                crate::Error::Other(format!(
+                    "章节 {} 开启新链时缺少真实基线序号",
+                    event.chapter_id
+                ))
+            })?;
+            format!("{origin}:{}:{baseline_seq}", event.chapter_id)
         } else {
             String::new()
         };
@@ -619,7 +629,9 @@ impl StatsStore {
             draft.format_version = proof::PROOF_FORMAT_VERSION;
             draft.seq = seq;
             draft.starts_new_chain = starts_new_chain;
-            if draft.baseline_id.is_empty() {
+            // 新链必须引用真实基线：缺口取 gap.baseline_seq，普通基线取 seq 0，
+            // 不能用设备级事件序号减一猜测。续写旧链不产生新的 baseline_id。
+            if !baseline_id.is_empty() {
                 draft.baseline_id = baseline_id;
             }
             draft.before_content_hash = expected_before_content_hash.clone();
