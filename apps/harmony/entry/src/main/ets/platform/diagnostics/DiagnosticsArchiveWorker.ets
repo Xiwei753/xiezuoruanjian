@@ -444,8 +444,10 @@ async function runFaultCapture(request: DiagnosticsFaultCaptureRequest): Promise
 }
 
 // 启动补全：上次进程如果在复制/压缩/写 complete.json 之间被杀，这里从已经
-// 落盘的 params.json + fault-state.json + fault-N.log 继续。只有确认附件数量
-// 达到预期才发布 ZIP；否则保持 incomplete，等待系统回放补充 external_log。
+// 落盘的 params.json + fault-state.json + fault-N.log 继续。只有 fault-state
+// 中已确认的附件数量达到预期才发布 ZIP；fault-state 丢失/损坏时，即使目录里
+// 已有非空 fault-N.log，也不能凭 stat.size 推断完整，必须保持 incomplete 并
+// 等待同一事件的系统回放重新提供 external_log。
 async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promise<DiagnosticsWorkerResult> {
   const startedAt = Date.now()
   let stage: DiagnosticsArchiveStage = 'fault_recovery'
@@ -487,9 +489,10 @@ async function runFaultRecovery(request: DiagnosticsFaultRecoveryRequest): Promi
             incomplete += 1
             continue
           }
+          // 旧版本曾直接 TRUNC 写正式 fault-N.log，半截文件同样非空。没有可信的
+          // 复制完成记录时，不能仅凭当前 stat.size 把附件升级为 complete；保留
+          // 预期数量并等待同一事件回放重新复制，或由人工诊断包报告缺失。
           state = createFaultAttachmentState(entry, expected, false)
-          // 状态丢失时，已存在的 fault-N.log 只能按文件完整性恢复；.tmp 不算完成。
-          restoreFaultAttachmentEntriesFromFiles(eventDir, state)
           writeFaultAttachmentState(eventDir, state)
         } else {
           const expected = readExternalLogCountFromParams(eventDir)
@@ -842,29 +845,6 @@ function refreshFaultAttachmentState(eventDir: string, state: FaultAttachmentSta
     entry.complete = false
   }
   writeFaultAttachmentState(eventDir, state)
-}
-
-// fault-state.json 丢失时只能从事件目录恢复：存在非空 final fault-N.log 且不是
-// 遗留 .tmp，才按实际大小标记完成。缺失的附件保持 incomplete，等待系统回放。
-function restoreFaultAttachmentEntriesFromFiles(eventDir: string, state: FaultAttachmentState): void {
-  for (const entry of state.attachments) {
-    if (entry.complete) {
-      continue
-    }
-    const targetPath = `${eventDir}/${entry.fileName}`
-    if (!fileExists(targetPath)) {
-      continue
-    }
-    try {
-      const stat = fs.statSync(targetPath)
-      if (stat.isFile() && stat.size > 0) {
-        entry.complete = true
-        entry.size = stat.size
-      }
-    } catch (_) {
-      entry.complete = false
-    }
-  }
 }
 
 function countConfirmedAttachments(eventDir: string, state: FaultAttachmentState): number {
