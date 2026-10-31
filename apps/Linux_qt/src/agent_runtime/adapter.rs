@@ -28,6 +28,9 @@ pub trait AgentAdapter: Send {
     /// `core_turn_id` 是本轮在 Core 中的固定身份。异步回调和读取线程必须
     /// 保存并使用这个值，不能回读会话当前轮次。
     fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String>;
+    /// 更新下一轮使用的模型。模型只影响执行参数，不应重建原生会话或
+    /// 阻塞发送；协议不支持逐轮切换时保留当前值。
+    fn set_model(&mut self, _model: Option<String>) {}
     /// 请求中断指定 Core 轮次。实现必须忽略已经结束的轮次，并取消仍在
     /// 串行派发队列中、尚未写入协议的待发送轮次。自然完成返回
     /// [`CancelOutcome::AlreadyFinished`]，不能谎报为取消成功。
@@ -69,7 +72,7 @@ pub fn create_adapter(
             return Err(format!(
                 "Agent {} 未声明可用的机器会话协议（protocol={}）",
                 ctx.agent_name, ctx.protocol
-            ))
+            ));
         }
     };
     Ok(adapter)

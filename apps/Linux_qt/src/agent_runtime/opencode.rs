@@ -23,7 +23,7 @@ use super::events::{
 use super::workspace_access::WorkspaceAccess;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
-const SERVER_USER: &str = "opencode";
+pub(crate) const SERVER_USER: &str = "opencode";
 
 /// 一次 Core Turn 对应的 OpenCode inbox/用户消息身份。HTTP POST 可能是异步
 /// 的，取消必须等它确认本轮到底有没有被服务端受理，再决定删 inbox 还是
@@ -144,7 +144,7 @@ pub struct OpenCodeAdapter {
     stop_events: Arc<AtomicBool>,
 }
 
-fn free_loopback_port() -> Result<u16, String> {
+pub(crate) fn free_loopback_port() -> Result<u16, String> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
         .map_err(|error| format!("无法分配本地端口：{error}"))?;
     listener
@@ -193,8 +193,7 @@ fn mcp_status(
     let status = json_text(status_value, &["status"])
         .or_else(|| json_text(entry, &["status"]))
         .unwrap_or_else(|| "configured".to_string());
-    let error = json_text(status_value, &["error"])
-        .or_else(|| json_text(entry, &["error"]));
+    let error = json_text(status_value, &["error"]).or_else(|| json_text(entry, &["error"]));
     let tools = status_value
         .get("tools")
         .or_else(|| entry.get("tools"))
@@ -316,16 +315,8 @@ impl OpenCodeAdapter {
             )?,
         };
 
-        let available_models = fetch_models(
-            &client,
-            &base_url,
-            &password,
-            &ctx.working_dir,
-        )
-        .unwrap_or_else(|error| {
-            log::warn!("[agent] OpenCode model list failed: {error}");
-            Vec::new()
-        });
+        // 模型目录由独立探测线程通过 `/api/model` 获取，不绑定聊天会话，
+        // 也不能在发送消息的启动路径上等待目录请求。
 
         // MCP：走 OpenCode 2.x 的 server 配置接口；失败只记录，不影响聊天。
         for server in &ctx.mcp_servers {
@@ -377,18 +368,10 @@ impl OpenCodeAdapter {
                                         "[agent] OpenCode MCP {} status={status}",
                                         server.name
                                     );
-                                    emit_mcp_status(
-                                        &emit,
-                                        &server.name,
-                                        status,
-                                        error,
-                                        tools,
-                                    );
+                                    emit_mcp_status(&emit, &server.name, status, error, tools);
                                 }
                                 Err(error) => {
-                                    log::warn!(
-                                        "[agent] OpenCode MCP status unavailable: {error}"
-                                    );
+                                    log::warn!("[agent] OpenCode MCP status unavailable: {error}");
                                     emit_mcp_status(
                                         &emit,
                                         &server.name,
@@ -401,9 +384,7 @@ impl OpenCodeAdapter {
                         }
                         Ok(response) => {
                             let error = response_error(response);
-                            log::warn!(
-                                "[agent] OpenCode MCP connect rejected: {error}"
-                            );
+                            log::warn!("[agent] OpenCode MCP connect rejected: {error}");
                             emit_mcp_status(
                                 &emit,
                                 &server.name,
@@ -430,9 +411,7 @@ impl OpenCodeAdapter {
                 }
                 Ok(response) => {
                     let error = response_error(response);
-                    log::warn!(
-                        "[agent] OpenCode MCP rejected: {error}"
-                    );
+                    log::warn!("[agent] OpenCode MCP rejected: {error}");
                     emit_mcp_status(
                         &emit,
                         &server.name,
@@ -496,11 +475,6 @@ impl OpenCodeAdapter {
             })
             .map_err(|error| format!("无法启动 OpenCode 事件线程：{error}"))?;
 
-        if !available_models.is_empty() {
-            (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable {
-                models: available_models,
-            }));
-        }
         (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
             native_session_id: session_id
                 .lock()
@@ -615,9 +589,7 @@ impl OpenCodeEventProcessor {
                     .session_error
                     .clone()
                     .unwrap_or_else(|| "OpenCode 事件流已断开，正在等待服务端恢复".to_string());
-                (self.emit)(RuntimeEvent::session(AgentEvent::SessionError {
-                    message,
-                }));
+                (self.emit)(RuntimeEvent::session(AgentEvent::SessionError { message }));
             }
             let delay = if failures >= 20 {
                 5_000
@@ -750,10 +722,7 @@ impl OpenCodeEventProcessor {
                 self.seen_ids.insert(event_id);
             }
         }
-        let payload = event
-            .get("data")
-            .cloned()
-            .unwrap_or_else(|| event.clone());
+        let payload = event.get("data").cloned().unwrap_or_else(|| event.clone());
         if !event_matches_session(&payload, &self.session_id) {
             return;
         }
@@ -1054,7 +1023,11 @@ impl OpenCodeEventProcessor {
                 } else {
                     AgentEvent::ReasoningDelta { text: delta }
                 };
-                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id, event));
+                (self.emit)(RuntimeEvent::turn(
+                    core_turn_id.clone(),
+                    native_turn_id,
+                    event,
+                ));
             }
             "session.text.ended" | "session.reasoning.ended" => {
                 if core_turn_id.is_empty() {
@@ -1112,7 +1085,9 @@ impl OpenCodeEventProcessor {
                 let name = json_text(payload, &["name"])
                     .or_else(|| json_text(payload, &["tool"]))
                     .unwrap_or_else(|| "工具".to_string());
-                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
+                (self.emit)(RuntimeEvent::turn(
+                    core_turn_id.clone(),
+                    native_turn_id,
                     AgentEvent::ToolStarted {
                         tool_call_id,
                         name,
@@ -1124,7 +1099,9 @@ impl OpenCodeEventProcessor {
                 let Some(tool_call_id) = json_text(payload, &["id"]) else {
                     return;
                 };
-                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
+                (self.emit)(RuntimeEvent::turn(
+                    core_turn_id.clone(),
+                    native_turn_id,
                     AgentEvent::ToolStarted {
                         tool_call_id,
                         name: json_text(payload, &["name"]).unwrap_or_else(|| "工具".to_string()),
@@ -1145,7 +1122,9 @@ impl OpenCodeEventProcessor {
                     json_text(payload, &["error"])
                         .or_else(|| json_value_text(payload.get("content")))
                 };
-                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
+                (self.emit)(RuntimeEvent::turn(
+                    core_turn_id.clone(),
+                    native_turn_id,
                     AgentEvent::ToolFinished {
                         tool_call_id,
                         name: json_text(payload, &["name"]).unwrap_or_else(|| "工具".to_string()),
@@ -1161,7 +1140,9 @@ impl OpenCodeEventProcessor {
                 let description = json_text(payload, &["message"])
                     .or_else(|| json_text(payload, &["action"]))
                     .unwrap_or_else(|| "Agent 请求执行工具".to_string());
-                (self.emit)(RuntimeEvent::turn(core_turn_id.clone(), native_turn_id,
+                (self.emit)(RuntimeEvent::turn(
+                    core_turn_id.clone(),
+                    native_turn_id,
                     AgentEvent::PermissionRequested {
                         request_id,
                         description,
@@ -1245,7 +1226,12 @@ fn fetch_session_messages(
         .ok_or_else(|| "OpenCode 消息历史格式不正确".to_string())?;
     let mut result: Vec<Value> = messages
         .iter()
-        .map(|message| message.get("info").cloned().unwrap_or_else(|| message.clone()))
+        .map(|message| {
+            message
+                .get("info")
+                .cloned()
+                .unwrap_or_else(|| message.clone())
+        })
         .collect();
     result.reverse();
     Ok(result)
@@ -1406,7 +1392,7 @@ fn url_path_segment(value: &str) -> String {
         .collect()
 }
 
-fn fetch_models(
+pub(crate) fn fetch_models(
     client: &reqwest::blocking::Client,
     base_url: &str,
     password: &str,
@@ -1801,6 +1787,10 @@ impl AgentAdapter for OpenCodeAdapter {
         self.session_id.lock().ok().and_then(|guard| guard.clone())
     }
 
+    fn set_model(&mut self, model: Option<String>) {
+        self.model_hint = model;
+    }
+
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {
         let session_id = self
             .session_id
@@ -1821,9 +1811,7 @@ impl AgentAdapter for OpenCodeAdapter {
         if !input.wait_post_done(Duration::from_secs(15)) {
             // 同步等待只负责给 UI 一个明确反馈；POST worker 稍后成功时
             // 会读取 cancel_requested 并继续执行取消，最终发 TurnCancelled。
-            return Err(
-                "OpenCode 尚未确认消息是否已受理，取消任务仍在后台等待".to_string()
-            );
+            return Err("OpenCode 尚未确认消息是否已受理，取消任务仍在后台等待".to_string());
         }
         if !input.accepted.load(Ordering::SeqCst) {
             // POST 失败意味着消息没有进入服务端执行队列，取消已经满足。
@@ -1839,9 +1827,7 @@ impl AgentAdapter for OpenCodeAdapter {
             // POST worker 已经接手取消；等待它返回真实结果，避免重复操作。
             input
                 .wait_cancel_result(Duration::from_secs(15))
-                .unwrap_or_else(|| {
-                    Err("OpenCode 正在后台确认取消结果，请稍后重试".to_string())
-                })
+                .unwrap_or_else(|| Err("OpenCode 正在后台确认取消结果，请稍后重试".to_string()))
         };
         if result.is_err() {
             input.release_cancel_claim();

@@ -97,6 +97,25 @@ pub struct AgentTurn {
     pub completed_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// 本轮实际执行的 CLI。旧会话文件没有这些字段时为空，由会话级
+    /// Agent 身份兜底。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub launch_path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_protocol: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_launch_args: Vec<String>,
+    /// 本轮实际请求的模型。CLI 未显式选择时为空，表示使用默认模型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// 本轮对应的原生 session / thread。跨 CLI 切换后只恢复同一执行者的
+    /// 原生会话，绝不把别的 CLI 的 ID 传给当前进程。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
 }
 
 impl AgentTurn {
@@ -111,6 +130,13 @@ impl AgentTurn {
             started_at_ms,
             completed_at_ms: None,
             error: None,
+            agent_id: String::new(),
+            agent_name: String::new(),
+            launch_path: String::new(),
+            agent_protocol: String::new(),
+            agent_launch_args: Vec::new(),
+            model: None,
+            native_session_id: None,
         }
     }
 
@@ -159,6 +185,22 @@ impl AgentTurn {
     }
 }
 
+/// 某个 CLI 安装在此会话中的原生 session 映射。
+///
+/// 同一个素笺对话可以连续切换不同 CLI；每个 CLI 的原生会话身份互相独立，
+/// 恢复时只能使用当前执行者自己的映射。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentNativeSession {
+    pub agent_id: String,
+    #[serde(default)]
+    pub launch_path: String,
+    pub native_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub updated_at_ms: i64,
+}
+
 /// 一个持久化 AI 会话。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,15 +227,23 @@ pub struct AgentConversation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub status: AgentConversationStatus,
-    /// Agent 原生会话 / 线程 ID，用于 `--resume` / `thread/resume` /
-    /// ACP `session/load`。缺失时下一轮重新创建。
+    /// 最近一次实际使用的 Agent 原生会话 / 线程 ID。保留该字段兼容旧
+    /// 会话文件；新逻辑优先使用 [`Self::native_sessions`] 中按执行者保存
+    /// 的映射。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_session_id: Option<String>,
+    /// 按 Agent 安装分别保存的原生会话。缺失时回退到上面的旧字段，但只在
+    /// 当前执行者与会话最后使用者的身份一致时才允许恢复。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_sessions: Vec<AgentNativeSession>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     #[serde(default)]
     pub turns: Vec<AgentTurn>,
 }
+
+/// 当前会话文件格式。旧文件缺失版本时按 1 读取；新增字段均带 serde 默认值。
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 fn default_schema_version() -> u32 {
     1
@@ -213,7 +263,7 @@ impl AgentConversation {
         now_ms: i64,
     ) -> Self {
         Self {
-            schema_version: default_schema_version(),
+            schema_version: CURRENT_SCHEMA_VERSION,
             id: uuid::Uuid::new_v4().to_string(),
             project_id: project_id.into(),
             agent_id: agent_id.into(),
@@ -226,6 +276,7 @@ impl AgentConversation {
             model,
             status: AgentConversationStatus::Idle,
             native_session_id: None,
+            native_sessions: Vec::new(),
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
             turns: Vec::new(),
@@ -243,6 +294,42 @@ impl AgentConversation {
 
     pub fn turn_mut(&mut self, turn_id: &str) -> Option<&mut AgentTurn> {
         self.turns.iter_mut().find(|turn| turn.id == turn_id)
+    }
+
+    /// 当前执行者在此会话中保存的原生 session。只按 Agent ID + 真实启动
+    /// 路径匹配，防止同名 CLI 的不同安装混用线程。
+    pub fn native_session_for(&self, agent_id: &str, launch_path: &str) -> Option<&str> {
+        self.native_sessions
+            .iter()
+            .rev()
+            .find(|session| session.agent_id == agent_id && session.launch_path == launch_path)
+            .map(|session| session.native_session_id.as_str())
+    }
+
+    /// 记录当前执行者最新的原生 session。保留有限条数，避免长期切换 CLI
+    /// 让会话文件无限增长。
+    pub fn record_native_session(
+        &mut self,
+        agent_id: &str,
+        launch_path: &str,
+        native_session_id: &str,
+        model: Option<String>,
+        at_ms: i64,
+    ) {
+        self.native_sessions
+            .retain(|session| session.agent_id != agent_id || session.launch_path != launch_path);
+        self.native_sessions.push(AgentNativeSession {
+            agent_id: agent_id.to_string(),
+            launch_path: launch_path.to_string(),
+            native_session_id: native_session_id.to_string(),
+            model,
+            updated_at_ms: at_ms,
+        });
+        const MAX_NATIVE_SESSIONS: usize = 16;
+        if self.native_sessions.len() > MAX_NATIVE_SESSIONS {
+            let excess = self.native_sessions.len() - MAX_NATIVE_SESSIONS;
+            self.native_sessions.drain(0..excess);
+        }
     }
 
     pub fn last_running_turn_mut(&mut self) -> Option<&mut AgentTurn> {

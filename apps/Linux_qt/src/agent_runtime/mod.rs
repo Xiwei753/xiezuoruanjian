@@ -18,6 +18,7 @@ pub mod codex;
 pub mod events;
 pub mod gemini;
 pub mod mcp_binding;
+pub mod model_catalog;
 pub mod opencode;
 pub mod rpc;
 pub mod session;

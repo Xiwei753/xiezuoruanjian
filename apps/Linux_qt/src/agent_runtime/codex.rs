@@ -115,10 +115,7 @@ impl CodexTurnStore {
 
     fn finish(&self, core_turn_id: &str, finish: CodexFinish) {
         if let Ok(mut states) = self.states.lock() {
-            states.insert(
-                core_turn_id.to_string(),
-                CodexTurnState::Finished(finish),
-            );
+            states.insert(core_turn_id.to_string(), CodexTurnState::Finished(finish));
         }
         self.changed.notify_all();
     }
@@ -128,9 +125,7 @@ impl CodexTurnStore {
         let state = states.get(core_turn_id).cloned()?;
         let active = match state.clone() {
             CodexTurnState::Starting => CodexTurnState::Cancelling(None),
-            CodexTurnState::Running(native) => {
-                CodexTurnState::Cancelling(Some(native))
-            }
+            CodexTurnState::Running(native) => CodexTurnState::Cancelling(Some(native)),
             other => other,
         };
         states.insert(core_turn_id.to_string(), active);
@@ -146,11 +141,7 @@ impl CodexTurnStore {
         self.set(core_turn_id, state);
     }
 
-    fn wait_cancel(
-        &self,
-        core_turn_id: &str,
-        timeout: Duration,
-    ) -> Result<CancelOutcome, String> {
+    fn wait_cancel(&self, core_turn_id: &str, timeout: Duration) -> Result<CancelOutcome, String> {
         let started = Instant::now();
         loop {
             let state = self.snapshot(core_turn_id);
@@ -202,10 +193,7 @@ fn core_for_native_turn(
     active: &Arc<Mutex<String>>,
     bindings: &Arc<Mutex<HashMap<String, String>>>,
 ) -> String {
-    let current = active
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
+    let current = active.lock().map(|guard| guard.clone()).unwrap_or_default();
     if native_turn_id.is_empty() {
         return current;
     }
@@ -283,6 +271,7 @@ impl CodexAdapter {
                             (handler_emit)(RuntimeEvent {
                                 conversation_id: String::new(),
                                 generation: 0,
+                                agent_identity: String::new(),
                                 core_turn_id: core_turn_id.clone(),
                                 native_turn_id: turn_id,
                                 event: AgentEvent::TextDelta { text },
@@ -294,6 +283,7 @@ impl CodexAdapter {
                             (handler_emit)(RuntimeEvent {
                                 conversation_id: String::new(),
                                 generation: 0,
+                                agent_identity: String::new(),
                                 core_turn_id: core_turn_id.clone(),
                                 native_turn_id: turn_id,
                                 event: AgentEvent::ReasoningDelta { text },
@@ -321,6 +311,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
+                            agent_identity: String::new(),
                             core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::ToolStarted {
@@ -360,6 +351,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
+                            agent_identity: String::new(),
                             core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::ToolFinished {
@@ -384,6 +376,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
+                            agent_identity: String::new(),
                             core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::TurnCompleted,
@@ -399,6 +392,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
+                            agent_identity: String::new(),
                             core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::TurnFailed { message },
@@ -419,6 +413,7 @@ impl CodexAdapter {
                         (handler_emit)(RuntimeEvent {
                             conversation_id: String::new(),
                             generation: 0,
+                            agent_identity: String::new(),
                             core_turn_id: core_turn_id.clone(),
                             native_turn_id: turn_id,
                             event: AgentEvent::PermissionRequested {
@@ -618,20 +613,13 @@ impl AgentAdapter for CodexAdapter {
                             AgentEvent::PromptAccepted,
                         ));
                         if interrupt {
-                            let outcome = interrupt_codex_turn(
-                                &client,
-                                &thread_id,
-                                &native_turn_id,
-                            );
+                            let outcome =
+                                interrupt_codex_turn(&client, &thread_id, &native_turn_id);
                             match outcome {
-                                Ok(()) => turn_store.resolve_cancel(
-                                    &round_turn_id,
-                                    Ok(native_turn_id),
-                                ),
-                                Err(error) => turn_store.resolve_cancel(
-                                    &round_turn_id,
-                                    Err(error),
-                                ),
+                                Ok(()) => {
+                                    turn_store.resolve_cancel(&round_turn_id, Ok(native_turn_id))
+                                }
+                                Err(error) => turn_store.resolve_cancel(&round_turn_id, Err(error)),
                             }
                         }
                     }
@@ -655,6 +643,10 @@ impl AgentAdapter for CodexAdapter {
 
     fn native_session_id(&self) -> Option<String> {
         self.thread_id.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    fn set_model(&mut self, model: Option<String>) {
+        self.model = model;
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {

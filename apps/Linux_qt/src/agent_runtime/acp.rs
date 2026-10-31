@@ -38,6 +38,10 @@ pub struct AcpAdapter {
     session_id: Arc<Mutex<Option<String>>>,
     emit: EventSink,
     state: Arc<Mutex<AcpTurnState>>,
+    agent_id: String,
+    /// 下一轮要使用的模型。模型切换不重建会话，只在 prompt 前尽力同步给运行时。
+    model: Option<String>,
+    applied_model: Arc<Mutex<Option<String>>>,
     /// Only one session/prompt at a time. This lock belongs to prompt workers,
     /// never to the AgentSessionManager lock, so cancel can run immediately.
     dispatch_lock: Arc<Mutex<()>>,
@@ -75,7 +79,11 @@ impl AcpAdapter {
                                     .get("content")
                                     .and_then(|content| json_text(content, &["text"]))
                                 {
-                                    (handler_emit)(RuntimeEvent::turn(core_turn_id.clone(), "", AgentEvent::TextDelta { text }));
+                                    (handler_emit)(RuntimeEvent::turn(
+                                        core_turn_id.clone(),
+                                        "",
+                                        AgentEvent::TextDelta { text },
+                                    ));
                                 }
                             }
                             "agent_thought_chunk" => {
@@ -83,7 +91,11 @@ impl AcpAdapter {
                                     .get("content")
                                     .and_then(|content| json_text(content, &["text"]))
                                 {
-                                    (handler_emit)(RuntimeEvent::turn(core_turn_id.clone(), "", AgentEvent::ReasoningDelta { text }));
+                                    (handler_emit)(RuntimeEvent::turn(
+                                        core_turn_id.clone(),
+                                        "",
+                                        AgentEvent::ReasoningDelta { text },
+                                    ));
                                 }
                             }
                             "tool_call" => {
@@ -109,13 +121,17 @@ impl AcpAdapter {
                                     .unwrap_or_else(|| "tool".to_string());
                                 let status = json_text(update, &["status"]).unwrap_or_default();
                                 if matches!(status.as_str(), "completed" | "failed") {
-                                    (handler_emit)(RuntimeEvent::turn(core_turn_id.clone(), "", AgentEvent::ToolFinished {
+                                    (handler_emit)(RuntimeEvent::turn(
+                                        core_turn_id.clone(),
+                                        "",
+                                        AgentEvent::ToolFinished {
                                             tool_call_id,
                                             name,
                                             output_json: json_value_text(update.get("rawOutput"))
                                                 .or_else(|| json_value_text(update.get("content"))),
                                             success: status == "completed",
-                                        }));
+                                        },
+                                    ));
                                 }
                             }
                             _ => {}
@@ -154,7 +170,9 @@ impl AcpAdapter {
                                 if guard.active_turn.is_empty() || guard.cancel_requested {
                                     true
                                 } else {
-                                    guard.pending_permissions.insert(permission_key.clone(), request_id);
+                                    guard
+                                        .pending_permissions
+                                        .insert(permission_key.clone(), request_id);
                                     false
                                 }
                             }
@@ -303,7 +321,7 @@ impl AcpAdapter {
         }
         (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
             native_session_id,
-            model,
+            model: model.clone(),
         }));
         if resumed {
             log::info!("[agent] ACP session resumed");
@@ -314,6 +332,9 @@ impl AcpAdapter {
             session_id,
             emit,
             state,
+            agent_id: ctx.agent_id.clone(),
+            model: model.clone(),
+            applied_model: Arc::new(Mutex::new(model)),
             dispatch_lock: Arc::new(Mutex::new(())),
         })
     }
@@ -335,6 +356,9 @@ impl AgentAdapter for AcpAdapter {
         let emit = self.emit.clone();
         let state = self.state.clone();
         let dispatch = self.dispatch_lock.clone();
+        let agent_id = self.agent_id.clone();
+        let selected_model = self.model.clone();
+        let applied_model = self.applied_model.clone();
         let round_id = core_turn_id.to_string();
         let message = message.to_string();
         let task = std::thread::Builder::new()
@@ -347,7 +371,9 @@ impl AgentAdapter for AcpAdapter {
                         (emit)(RuntimeEvent::turn(
                             round_id,
                             "",
-                            AgentEvent::TurnFailed { message: "ACP 派发锁损坏".to_string() },
+                            AgentEvent::TurnFailed {
+                                message: "ACP 派发锁损坏".to_string(),
+                            },
                         ));
                         return;
                     }
@@ -370,7 +396,9 @@ impl AgentAdapter for AcpAdapter {
                         (emit)(RuntimeEvent::turn(
                             round_id,
                             "",
-                            AgentEvent::TurnFailed { message: "ACP 轮次状态锁损坏".to_string() },
+                            AgentEvent::TurnFailed {
+                                message: "ACP 轮次状态锁损坏".to_string(),
+                            },
                         ));
                         return;
                     }
@@ -378,6 +406,33 @@ impl AgentAdapter for AcpAdapter {
                 if skipped {
                     (emit)(RuntimeEvent::turn(round_id, "", AgentEvent::TurnCancelled));
                     return;
+                }
+
+                // Gemini ACP 提供 unstable_setSessionModel 扩展。切换失败只降级为
+                // 当前模型，不影响这一轮对话。其它 ACP Agent 暂不猜测私有方法。
+                if agent_id == "gemini" {
+                    if let Some(model) = selected_model.as_ref() {
+                        let needs_switch = applied_model
+                            .lock()
+                            .map(|guard| guard.as_deref() != Some(model.as_str()))
+                            .unwrap_or(true);
+                        if needs_switch {
+                            match client.request(
+                                "unstable_setSessionModel",
+                                json!({ "sessionId": session_id, "modelId": model }),
+                                Duration::from_secs(30),
+                            ) {
+                                Ok(_) => {
+                                    if let Ok(mut guard) = applied_model.lock() {
+                                        *guard = Some(model.clone());
+                                    }
+                                }
+                                Err(error) => log::warn!(
+                                    "[agent] Gemini ACP 切换模型失败，继续使用当前模型: {error}"
+                                ),
+                            }
+                        }
+                    }
                 }
 
                 let accepted_state = state.clone();
@@ -406,23 +461,22 @@ impl AgentAdapter for AcpAdapter {
                             _ => false,
                         };
                         (accepted_emit)(RuntimeEvent::turn(
-                            accepted_id.clone(), "", AgentEvent::PromptAccepted,
+                            accepted_id.clone(),
+                            "",
+                            AgentEvent::PromptAccepted,
                         ));
                         if cancel_now {
-                            if let Err(error) = accepted_client.notify(
-                                "session/cancel",
-                                json!({ "sessionId": accepted_session }),
-                            ) {
+                            if let Err(error) = accepted_client
+                                .notify("session/cancel", json!({ "sessionId": accepted_session }))
+                            {
                                 if let Ok(mut guard) = accepted_state.lock() {
                                     if guard.active_turn == accepted_id {
                                         guard.cancel_notified = false;
                                     }
                                 }
-                                (accepted_emit)(RuntimeEvent::session(
-                                    AgentEvent::SessionError {
-                                        message: format!("ACP 发送取消通知失败：{error}"),
-                                    },
-                                ));
+                                (accepted_emit)(RuntimeEvent::session(AgentEvent::SessionError {
+                                    message: format!("ACP 发送取消通知失败：{error}"),
+                                }));
                             }
                         }
                     },
@@ -442,10 +496,8 @@ impl AgentAdapter for AcpAdapter {
                     _ => Vec::new(),
                 };
                 for request_id in orphaned_permissions {
-                    let _ = client.respond(
-                        request_id,
-                        json!({ "outcome": { "outcome": "cancelled" } }),
-                    );
+                    let _ = client
+                        .respond(request_id, json!({ "outcome": { "outcome": "cancelled" } }));
                 }
                 let event = match result {
                     Ok(value) => match json_text(&value, &["stopReason"]).as_deref() {
@@ -475,6 +527,10 @@ impl AgentAdapter for AcpAdapter {
 
     fn native_session_id(&self) -> Option<String> {
         self.session_id.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    fn set_model(&mut self, model: Option<String>) {
+        self.model = model;
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {
@@ -507,10 +563,10 @@ impl AgentAdapter for AcpAdapter {
                 .ok()
                 .and_then(|guard| guard.clone())
                 .ok_or_else(|| "ACP 会话尚未建立".to_string())?;
-            if let Err(error) = self.client.notify(
-                "session/cancel",
-                json!({ "sessionId": session_id }),
-            ) {
+            if let Err(error) = self
+                .client
+                .notify("session/cancel", json!({ "sessionId": session_id }))
+            {
                 if let Ok(mut guard) = self.state.lock() {
                     if guard.active_turn == core_turn_id {
                         guard.cancel_notified = false;
@@ -522,10 +578,10 @@ impl AgentAdapter for AcpAdapter {
         // ACP requires replies for *all* outstanding permission requests.
         // Requests arriving after cancel_requested are auto-rejected by the handler.
         for request_id in permissions {
-            if let Err(error) = self.client.respond(
-                request_id,
-                json!({ "outcome": { "outcome": "cancelled" } }),
-            ) {
+            if let Err(error) = self
+                .client
+                .respond(request_id, json!({ "outcome": { "outcome": "cancelled" } }))
+            {
                 if first_error.is_none() {
                     first_error = Some(error);
                 }
@@ -558,5 +614,4 @@ impl AgentAdapter for AcpAdapter {
         state.pending_permissions.remove(request_id);
         Ok(())
     }
-
 }

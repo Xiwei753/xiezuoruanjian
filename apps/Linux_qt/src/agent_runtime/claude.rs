@@ -76,8 +76,8 @@ impl ClaudeAdapter {
 
 impl AgentAdapter for ClaudeAdapter {
     fn prompt(&mut self, core_turn_id: &str, message: &str) -> Result<(), String> {
-        let mut command = WorkspaceAccess::for_context(&self.ctx)?
-            .command(&self.ctx.launch_path, &[])?;
+        let mut command =
+            WorkspaceAccess::for_context(&self.ctx)?.command(&self.ctx.launch_path, &[])?;
         command
             .arg("-p")
             .arg(message)
@@ -167,12 +167,10 @@ impl AgentAdapter for ClaudeAdapter {
                                         if let Ok(mut guard) = session_started.lock() {
                                             *guard = true;
                                         }
-                                        (emit)(RuntimeEvent::session(
-                                            AgentEvent::SessionStarted {
-                                                native_session_id: id,
-                                                model: json_text(&value, &["model"]),
-                                            },
-                                        ));
+                                        (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
+                                            native_session_id: id,
+                                            model: json_text(&value, &["model"]),
+                                        }));
                                     }
                                 }
                             }
@@ -197,6 +195,7 @@ impl AgentAdapter for ClaudeAdapter {
                                                 (emit)(RuntimeEvent {
                                                     conversation_id: String::new(),
                                                     generation: 0,
+                                                    agent_identity: String::new(),
                                                     core_turn_id: round_turn_id.clone(),
                                                     native_turn_id: String::new(),
                                                     event: AgentEvent::TextDelta { text },
@@ -209,6 +208,7 @@ impl AgentAdapter for ClaudeAdapter {
                                             (emit)(RuntimeEvent {
                                                 conversation_id: String::new(),
                                                 generation: 0,
+                                                agent_identity: String::new(),
                                                 core_turn_id: round_turn_id.clone(),
                                                 native_turn_id: String::new(),
                                                 event: AgentEvent::ReasoningDelta { text },
@@ -223,6 +223,7 @@ impl AgentAdapter for ClaudeAdapter {
                                         (emit)(RuntimeEvent {
                                             conversation_id: String::new(),
                                             generation: 0,
+                                            agent_identity: String::new(),
                                             core_turn_id: round_turn_id.clone(),
                                             native_turn_id: String::new(),
                                             event: AgentEvent::ToolStarted {
@@ -254,6 +255,7 @@ impl AgentAdapter for ClaudeAdapter {
                                 (emit)(RuntimeEvent {
                                     conversation_id: String::new(),
                                     generation: 0,
+                                    agent_identity: String::new(),
                                     core_turn_id: round_turn_id.clone(),
                                     native_turn_id: String::new(),
                                     event: AgentEvent::ToolFinished {
@@ -278,6 +280,7 @@ impl AgentAdapter for ClaudeAdapter {
                             (emit)(RuntimeEvent {
                                 conversation_id: String::new(),
                                 generation: 0,
+                                agent_identity: String::new(),
                                 core_turn_id: round_turn_id.clone(),
                                 native_turn_id: String::new(),
                                 event: AgentEvent::Usage {
@@ -296,6 +299,7 @@ impl AgentAdapter for ClaudeAdapter {
                                 (emit)(RuntimeEvent {
                                     conversation_id: String::new(),
                                     generation: 0,
+                                    agent_identity: String::new(),
                                     core_turn_id: round_turn_id.clone(),
                                     native_turn_id: String::new(),
                                     event: AgentEvent::TurnFailed { message },
@@ -304,6 +308,7 @@ impl AgentAdapter for ClaudeAdapter {
                                 (emit)(RuntimeEvent {
                                     conversation_id: String::new(),
                                     generation: 0,
+                                    agent_identity: String::new(),
                                     core_turn_id: round_turn_id.clone(),
                                     native_turn_id: String::new(),
                                     event: AgentEvent::TurnCompleted,
@@ -347,6 +352,10 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn native_session_id(&self) -> Option<String> {
         self.session_id.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    fn set_model(&mut self, model: Option<String>) {
+        self.ctx.model = model;
     }
 
     fn cancel(&mut self, core_turn_id: &str) -> Result<CancelOutcome, String> {

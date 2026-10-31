@@ -61,6 +61,30 @@ pub struct AgentLaunchContext {
     pub mcp_servers: Vec<McpServerLaunch>,
 }
 
+/// 执行者身份：同一 Core 会话切换 CLI 后，旧进程事件不能污染新执行者。
+pub fn executor_identity(
+    agent_id: &str,
+    launch_path: &str,
+    protocol: &str,
+    launch_args: &[String],
+) -> String {
+    format!(
+        "{agent_id}\n{launch_path}\n{protocol}\n{}",
+        launch_args.join("\u{0}")
+    )
+}
+
+impl AgentLaunchContext {
+    pub fn executor_identity(&self) -> String {
+        executor_identity(
+            &self.agent_id,
+            &self.launch_path,
+            &self.protocol,
+            &self.launch_args,
+        )
+    }
+}
+
 /// 用户可选择的权限选项。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionOption {
@@ -141,6 +165,9 @@ pub enum AgentEvent {
 pub struct RuntimeEvent {
     pub conversation_id: String,
     pub generation: u64,
+    /// 启动该原生进程的执行者身份（Agent ID / 路径 / 协议 / 参数）。切换
+    /// CLI 后旧进程的迟到事件必须失效，即使它们属于同一个 Core 会话。
+    pub agent_identity: String,
     pub core_turn_id: String,
     pub native_turn_id: String,
     pub event: AgentEvent,
@@ -152,6 +179,7 @@ impl RuntimeEvent {
         Self {
             conversation_id: String::new(),
             generation: 0,
+            agent_identity: String::new(),
             core_turn_id: String::new(),
             native_turn_id: native_turn_id.into(),
             event,
@@ -169,6 +197,7 @@ impl RuntimeEvent {
         Self {
             conversation_id: String::new(),
             generation: 0,
+            agent_identity: String::new(),
             core_turn_id: core_turn_id.into(),
             native_turn_id: native_turn_id.into(),
             event,

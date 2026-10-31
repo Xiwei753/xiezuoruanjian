@@ -54,25 +54,32 @@ impl AgentSessionManager {
         sink: EventSink,
     ) -> Result<(), String> {
         if self.started {
-            if let Some(existing) = self.context.as_ref() {
-                if existing.agent_id == ctx.agent_id
+            let reusable = self.context.as_ref().is_some_and(|existing| {
+                existing.agent_id == ctx.agent_id
                     && existing.launch_path == ctx.launch_path
                     && existing.launch_args == ctx.launch_args
                     && existing.protocol == ctx.protocol
                     && existing.conversation_id == ctx.conversation_id
                     && existing.project_id == ctx.project_id
-                    && existing.model == ctx.model
-                {
-                    // Core 会话在首轮之后才拿到原生 session ID；不能让同一个
-                    // 进程因为“恢复参数从 None 变成 Some”而每轮重启。
-                    let live_id = self
-                        .adapter
-                        .as_ref()
-                        .and_then(|adapter| adapter.native_session_id());
-                    let requested_id = ctx.resume_native_session_id.clone();
-                    if requested_id.is_none() || requested_id == live_id {
-                        return Ok(());
+            });
+            if reusable {
+                // Core 会话在首轮之后才拿到原生 session ID；不能让同一个
+                // 进程因为“恢复参数从 None 变成 Some”而每轮重启。
+                let live_id = self
+                    .adapter
+                    .as_ref()
+                    .and_then(|adapter| adapter.native_session_id());
+                let requested_id = ctx.resume_native_session_id.clone();
+                if requested_id.is_none() || requested_id == live_id {
+                    // 模型只是下一轮的执行参数，不允许触发进程重启，更不能
+                    // 阻塞新模型的发送。适配器在收到新模型后按协议逐轮应用。
+                    if let Some(existing) = self.context.as_mut() {
+                        existing.model = ctx.model.clone();
                     }
+                    if let Some(adapter) = self.adapter.as_mut() {
+                        adapter.set_model(ctx.model.clone());
+                    }
+                    return Ok(());
                 }
             }
         }
@@ -99,6 +106,7 @@ impl AgentSessionManager {
             .as_ref()
             .map(|broker| broker.directory().to_path_buf());
         let conversation_id = ctx.conversation_id.clone();
+        let agent_identity = ctx.executor_identity();
         let current_turn_id: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let wrapped: EventSink = Arc::new(move |mut event: RuntimeEvent| {
             // 适配器显式携带的 Core Turn 是创建异步线程时的固定身份。管理器
@@ -106,6 +114,7 @@ impl AgentSessionManager {
             // 事件都交给后端丢弃，避免停止后立即重发时旧线程污染新轮次。
             event.conversation_id = conversation_id.clone();
             event.generation = generation;
+            event.agent_identity = agent_identity.clone();
             (sink)(event);
         });
         let adapter = create_adapter(&ctx, wrapped)?;
