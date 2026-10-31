@@ -91,6 +91,16 @@ struct ProofChainHead {
     text_sha256: String,
 }
 
+/// 章节最近一次已封存连续性缺口的基线。
+///
+/// 缺口记录内嵌完整正文，逐字事件热路径不能反复读取和反序列化。这里只缓存
+/// 判断新链起点所需的最小事实；`None` 表示该章节已经检查过且没有缺口。
+#[derive(Debug, Clone)]
+struct ProofGapBaseline {
+    baseline_seq: u64,
+    baseline_text: String,
+}
+
 #[derive(Debug, Default)]
 struct ProofStoreState {
     initialized: bool,
@@ -98,6 +108,8 @@ struct ProofStoreState {
     chains: HashMap<String, ProofChainHead>,
     /// 每章节链当前正文摘要（首次需要时从检查点/事件重建）。
     digests: HashMap<String, ContentDigest>,
+    /// 每 `{origin}/{chapter_id}` 的最近缺口基线，按需从磁盘加载一次。
+    gap_baselines: HashMap<String, Option<ProofGapBaseline>>,
 }
 
 impl StatsStore {
@@ -364,15 +376,15 @@ impl StatsStore {
         let head = state.chains.get(&chain_key).cloned();
         // 缺口记录是不可变的链起点：其 baseline_seq 位于旧链头之后时，
         // 新事件必须从缺口保存的正文快照开始，不能继续引用旧链。
-        let gaps = checkpoint::load_continuity_gaps(
-            &self.app_data_root,
-            &origin,
-            &event.chapter_id,
-        )?;
-        let gap_baseline = gaps
-            .iter()
-            .rev()
-            .find(|gap| {
+        // 缺口记录内嵌完整正文，章节首次访问时读取一次并缓存；之后逐字事件
+        // 只比较内存中的 baseline_seq，不再枚举目录或反序列化历史正文。
+        // 链头已越过缺口时不克隆基线正文，只有缺口真正成为新链起点才复制。
+        self.ensure_gap_baseline(&mut state, &origin, &event.chapter_id)?;
+        let gap_baseline = state
+            .gap_baselines
+            .get(&chain_key)
+            .and_then(|cached| cached.as_ref())
+            .filter(|gap| {
                 head.as_ref()
                     .is_none_or(|current| gap.baseline_seq > current.seq)
             })
@@ -507,11 +519,7 @@ impl StatsStore {
                 .map_or_else(String::new, |head| head.event_hash.clone())
         };
         let baseline_id = if starts_new_chain {
-            format!(
-                "{origin}:{}:{}",
-                event.chapter_id,
-                seq.saturating_sub(1)
-            )
+            format!("{origin}:{}:{}", event.chapter_id, seq.saturating_sub(1))
         } else {
             String::new()
         };
@@ -1045,89 +1053,90 @@ impl StatsStore {
         Ok(())
     }
 
-/// 为无法重建原始事实的旧事务封存“证明连续性缺口”，并以当前真实正文
-/// 建立新的证明链基线。
-///
-/// 缺口、基线正文和摘要写在同一个原子 JSON 记录里，按事务/事件 ID 定址；
-/// 写入完成后即可被回放和后续同步读取，不存在 checkpoint/缺口两文件半事务。
-pub(crate) fn seal_proof_continuity_gap(
-    &self,
-    project_id: &str,
-    volume_id: &str,
-    chapter_id: &str,
-    transaction_id: &str,
-    event_id: &str,
-    missing_fields: &[String],
-    phase: &str,
-    text: &str,
-) -> Result<()> {
-    if chapter_id.is_empty() || event_id.is_empty() {
-        return Err(crate::Error::Other(
-            "封存证明连续性缺口需要非空章节和事件 ID".to_string(),
-        ));
-    }
-    let origin = self.resolve_origin_device_id()?;
-    let gaps = checkpoint::load_continuity_gaps(&self.app_data_root, &origin, chapter_id)?;
-    if let Some(existing) = gaps
-        .iter()
-        .find(|gap| gap.transaction_id == transaction_id && gap.event_id == event_id)
-    {
-        if existing.project_id != project_id
-            || existing.volume_id != volume_id
-            || existing.chapter_id != chapter_id
-        {
-            return Err(crate::Error::Other(format!(
-                "连续性缺口 {} 已存在，但章节身份不一致，拒绝覆盖",
-                event_id
-            )));
+    /// 为无法重建原始事实的旧事务封存“证明连续性缺口”，并以当前真实正文
+    /// 建立新的证明链基线。
+    ///
+    /// 缺口、基线正文和摘要写在同一个原子 JSON 记录里，按事务/事件 ID 定址；
+    /// 写入完成后即可被回放和后续同步读取，不存在 checkpoint/缺口两文件半事务。
+    pub(crate) fn seal_proof_continuity_gap(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        transaction_id: &str,
+        event_id: &str,
+        missing_fields: &[String],
+        phase: &str,
+        text: &str,
+    ) -> Result<()> {
+        if chapter_id.is_empty() || event_id.is_empty() {
+            return Err(crate::Error::Other(
+                "封存证明连续性缺口需要非空章节和事件 ID".to_string(),
+            ));
         }
-        return Ok(());
+        let origin = self.resolve_origin_device_id()?;
+        let gaps = checkpoint::load_continuity_gaps(&self.app_data_root, &origin, chapter_id)?;
+        if let Some(existing) = gaps
+            .iter()
+            .find(|gap| gap.transaction_id == transaction_id && gap.event_id == event_id)
+        {
+            if existing.project_id != project_id
+                || existing.volume_id != volume_id
+                || existing.chapter_id != chapter_id
+            {
+                return Err(crate::Error::Other(format!(
+                    "连续性缺口 {} 已存在，但章节身份不一致，拒绝覆盖",
+                    event_id
+                )));
+            }
+            self.cache_gap_baseline(&origin, chapter_id, &gaps);
+            return Ok(());
+        }
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let text_sha256_value = text_sha256(text);
+        let content_hash = content_hash_of_text(text);
+        let checkpoints = checkpoint::load_checkpoints(&self.app_data_root, &origin, chapter_id)?;
+        let latest_checkpoint_seq = checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.seq)
+            .max()
+            .unwrap_or(0);
+        let latest_event_seq = self.latest_proof_seq()?;
+        let latest_gap_seq = gaps.iter().map(|gap| gap.baseline_seq).max().unwrap_or(0);
+        let baseline_seq = latest_checkpoint_seq
+            .max(latest_event_seq)
+            .max(latest_gap_seq)
+            .saturating_add(1)
+            .max(1);
+        let gap = proof::ProofContinuityGap {
+            format_version: proof::PROOF_FORMAT_VERSION,
+            transaction_id: transaction_id.to_string(),
+            event_id: event_id.to_string(),
+            project_id: project_id.to_string(),
+            volume_id: volume_id.to_string(),
+            chapter_id: chapter_id.to_string(),
+            device_id: origin.clone(),
+            missing_fields: missing_fields.to_vec(),
+            phase: phase.to_string(),
+            recovered_at_ms: now,
+            baseline_seq,
+            baseline_text: text.to_string(),
+            baseline_text_sha256: text_sha256_value,
+            baseline_content_hash: content_hash,
+            verifiable: false,
+        };
+        let written = checkpoint::append_continuity_gap(&self.app_data_root, &gap)?;
+        let mut cached_gaps = gaps;
+        cached_gaps.push(gap);
+        // 先完成持久化，再单独获取 proof_state 更新缓存；seal 路径已经调用过
+        // latest_proof_seq()，不能在这里持锁递归进入同一 Mutex。
+        self.cache_gap_baseline(&origin, chapter_id, &cached_gaps);
+        if written {
+            self.proof_generation.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
     }
-
-    let now = chrono::Utc::now().timestamp_millis();
-    let text_sha256_value = text_sha256(text);
-    let content_hash = content_hash_of_text(text);
-    let checkpoints = checkpoint::load_checkpoints(&self.app_data_root, &origin, chapter_id)?;
-    let latest_checkpoint_seq = checkpoints
-        .iter()
-        .map(|checkpoint| checkpoint.seq)
-        .max()
-        .unwrap_or(0);
-    let latest_event_seq = self.latest_proof_seq()?;
-    let latest_gap_seq = gaps
-        .iter()
-        .map(|gap| gap.baseline_seq)
-        .max()
-        .unwrap_or(0);
-    let baseline_seq = latest_checkpoint_seq
-        .max(latest_event_seq)
-        .max(latest_gap_seq)
-        .saturating_add(1)
-        .max(1);
-    let gap = proof::ProofContinuityGap {
-        format_version: proof::PROOF_FORMAT_VERSION,
-        transaction_id: transaction_id.to_string(),
-        event_id: event_id.to_string(),
-        project_id: project_id.to_string(),
-        volume_id: volume_id.to_string(),
-        chapter_id: chapter_id.to_string(),
-        device_id: origin,
-        missing_fields: missing_fields.to_vec(),
-        phase: phase.to_string(),
-        recovered_at_ms: now,
-        baseline_seq,
-        baseline_text: text.to_string(),
-        baseline_text_sha256: text_sha256_value,
-        baseline_content_hash: content_hash,
-        verifiable: false,
-    };
-    if checkpoint::append_continuity_gap(&self.app_data_root, &gap)? {
-        self.proof_generation.fetch_add(1, Ordering::SeqCst);
-    }
-    Ok(())
-}
-
-
 
     /// 本机当前证明链的最近序号（没有事件时为 0）。
     pub(crate) fn latest_proof_seq(&self) -> Result<u64> {
@@ -1163,6 +1172,67 @@ pub(crate) fn seal_proof_continuity_gap(
         }
         state.initialized = true;
         Ok(())
+    }
+
+    /// 确保章节的最近缺口基线已经进入内存缓存。
+    ///
+    /// 章节首次访问读取一次磁盘；缓存未命中时仍严格解析，损坏记录按现有错误
+    /// 语义返回，不会被当成“没有缺口”继续写链。正常逐字事件只查询缓存，
+    /// 不在这里克隆完整基线正文。
+    fn ensure_gap_baseline(
+        &self,
+        state: &mut ProofStoreState,
+        origin: &str,
+        chapter_id: &str,
+    ) -> Result<()> {
+        let key = format!("{origin}/{chapter_id}");
+        if state.gap_baselines.contains_key(&key) {
+            return Ok(());
+        }
+        let latest = checkpoint::load_continuity_gaps(&self.app_data_root, origin, chapter_id)?
+            .into_iter()
+            .max_by_key(|gap| gap.baseline_seq)
+            .map(|gap| ProofGapBaseline {
+                baseline_seq: gap.baseline_seq,
+                baseline_text: gap.baseline_text,
+            });
+        state.gap_baselines.insert(key, latest);
+        Ok(())
+    }
+
+    /// 封存缺口成功后更新同进程缓存，包括之前缓存为“无缺口”的章节。
+    ///
+    /// 只允许向更晚的基线推进：并发封存旧缺口时不能覆盖已经看到的更新缺口。
+    fn cache_gap_baseline(
+        &self,
+        origin: &str,
+        chapter_id: &str,
+        gaps: &[proof::ProofContinuityGap],
+    ) {
+        let key = format!("{origin}/{chapter_id}");
+        let latest = gaps
+            .iter()
+            .max_by_key(|gap| gap.baseline_seq)
+            .map(|gap| ProofGapBaseline {
+                baseline_seq: gap.baseline_seq,
+                baseline_text: gap.baseline_text.clone(),
+            });
+        let mut state = self.lock_proof_state();
+        match latest {
+            Some(latest) => {
+                let replace = state
+                    .gap_baselines
+                    .get(&key)
+                    .and_then(|cached| cached.as_ref())
+                    .is_none_or(|cached| latest.baseline_seq >= cached.baseline_seq);
+                if replace {
+                    state.gap_baselines.insert(key, Some(latest));
+                }
+            }
+            None => {
+                state.gap_baselines.entry(key).or_insert(None);
+            }
+        }
     }
 
     /// 证明事件变化代数，供回放缓存失效。
