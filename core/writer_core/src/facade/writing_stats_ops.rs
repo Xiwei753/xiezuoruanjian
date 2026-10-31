@@ -310,7 +310,11 @@ impl super::WriterCore {
             return Ok(false);
         }
         let origin = stats.store().resolve_origin_device_id()?;
-        let has_local_chain = stats.has_chapter_proof(&origin, chapter_id)?;
+        // continuity_gap 本身没有编辑事件，但它已经建立了新的正文基线；
+        // 必须按“已有链”走 replay，而不是回落到 seq=0 的同步导入基线。
+        let continuity_gaps = stats.load_proof_continuity_gaps(&origin, chapter_id)?;
+        let has_local_chain =
+            stats.has_chapter_proof(&origin, chapter_id)? || !continuity_gaps.is_empty();
         let (before_text, chain_parent_event_id) = if has_local_chain {
             let request = crate::writing_stats::replay::ProofReplayRequest {
                 chapter_id: chapter_id.to_string(),

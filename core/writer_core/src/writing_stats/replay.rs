@@ -207,17 +207,21 @@ impl ProofReplaySession {
             if by_device.contains_key(&origin) {
                 origin
             } else {
-                by_device.keys().next().cloned().unwrap_or_default()
+                by_device.keys().next().cloned().unwrap_or(origin)
             }
         } else {
             by_device.keys().next().cloned().unwrap_or_default()
         };
-        let events = by_device.remove(&device_id).ok_or_else(|| {
-            crate::Error::Other(format!(
-                "设备 {device_id} 没有章节 {} 的证明事件",
-                request.chapter_id
-            ))
-        })?;
+        let events = match by_device.remove(&device_id) {
+            Some(events) => events,
+            None if by_device.is_empty() => Vec::new(),
+            None => {
+                return Err(crate::Error::Other(format!(
+                    "设备 {device_id} 没有章节 {} 的证明事件",
+                    request.chapter_id
+                )))
+            }
+        };
         let checkpoints =
             checkpoint::load_checkpoints(store.app_data_root(), &device_id, &request.chapter_id)?;
         let gaps = checkpoint::load_continuity_gaps(
@@ -225,6 +229,12 @@ impl ProofReplaySession {
             &device_id,
             &request.chapter_id,
         )?;
+        if events.is_empty() && checkpoints.is_empty() && gaps.is_empty() {
+            return Err(crate::Error::Other(format!(
+                "章节 {} 没有逐字编辑证明",
+                request.chapter_id
+            )));
+        }
         let gap_baselines: BTreeMap<u64, ProofCheckpoint> = checkpoints
             .iter()
             .filter(|checkpoint| {
@@ -295,6 +305,12 @@ impl ProofReplaySession {
             apply_event(&mut state, event);
             state.position += 1;
         }
+        apply_trailing_gap_baseline(
+            &mut state,
+            target,
+            self.events.len(),
+            &self.gap_baselines,
+        );
 
         let mut errors = state.errors.clone();
         errors.extend(self.chain_errors.iter().cloned());
@@ -546,10 +562,16 @@ fn apply_trailing_gap_baseline(
     if state.seq > gap_seq {
         return;
     }
+    state.seq = gap_seq;
+    state.event_id.clear();
+    state.timestamp_ms = checkpoint.timestamp_ms;
     state.text = checkpoint.text.clone();
     state.digest = ContentDigest::from_text(&checkpoint.text);
     state.expected_content_hash = checkpoint.content_hash.clone();
     state.previous_event_hash.clear();
+    state.selection_anchor = 0;
+    state.selection_head = 0;
+    state.source = EventSource::Unknown;
     state.checkpoint_seq = gap_seq;
 }
 
@@ -568,10 +590,16 @@ fn reset_at_gap_baseline(
     if state.seq > gap_seq {
         return;
     }
+    state.seq = gap_seq;
+    state.event_id.clear();
+    state.timestamp_ms = checkpoint.timestamp_ms;
     state.text = checkpoint.text.clone();
     state.digest = ContentDigest::from_text(&checkpoint.text);
     state.expected_content_hash = checkpoint.content_hash.clone();
     state.previous_event_hash.clear();
+    state.selection_anchor = 0;
+    state.selection_head = 0;
+    state.source = EventSource::Unknown;
     state.checkpoint_seq = gap_seq;
 }
 

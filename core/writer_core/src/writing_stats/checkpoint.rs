@@ -543,13 +543,25 @@ pub fn append_continuity_gap(
             if line.trim().is_empty() {
                 continue;
             }
-            let Ok(existing) = serde_json::from_str::<ProofContinuityGap>(&line) else {
-                continue;
-            };
+            let existing = serde_json::from_str::<ProofContinuityGap>(&line).map_err(|error| {
+                crate::Error::Other(format!(
+                    "连续性缺口文件包含损坏记录 {}: {error}",
+                    path.display()
+                ))
+            })?;
             if existing.transaction_id == gap.transaction_id
                 && existing.event_id == gap.event_id
             {
-                return Ok(false);
+                if existing.baseline_seq == gap.baseline_seq
+                    && existing.baseline_text_sha256 == gap.baseline_text_sha256
+                    && existing.baseline_content_hash == gap.baseline_content_hash
+                {
+                    return Ok(false);
+                }
+                return Err(crate::Error::Other(format!(
+                    "同一连续性缺口 {} / {} 已存在不同基线，拒绝覆盖",
+                    gap.transaction_id, gap.event_id
+                )));
             }
         }
     }
@@ -565,7 +577,10 @@ pub fn append_continuity_gap(
         let mut last = [0u8; 1];
         file.read_exact(&mut last)?;
         if last[0] != b'\n' {
-            file.write_all(b"\n")?;
+            return Err(crate::Error::Other(format!(
+                "连续性缺口文件末尾存在未完成记录，拒绝继续追加: {}",
+                path.display()
+            )));
         }
     }
     file.write_all(json.as_bytes())?;

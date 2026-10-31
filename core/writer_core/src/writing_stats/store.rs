@@ -1076,26 +1076,57 @@ impl StatsStore {
         }
         let origin = self.resolve_origin_device_id()?;
         let gaps = checkpoint::load_continuity_gaps(&self.app_data_root, &origin, chapter_id)?;
-        if gaps
+        let checkpoints = checkpoint::load_checkpoints(&self.app_data_root, &origin, chapter_id)?;
+        let gap_session = format!("gap:{event_id}");
+
+        // 已封存的缺口必须先验证它引用的基线 checkpoint 仍然存在且摘要一致。
+        if let Some(existing) = gaps
             .iter()
-            .any(|gap| gap.transaction_id == transaction_id && gap.event_id == event_id)
+            .find(|gap| gap.transaction_id == transaction_id && gap.event_id == event_id)
         {
+            let Some(baseline) = checkpoints
+                .iter()
+                .find(|checkpoint| checkpoint.seq == existing.baseline_seq)
+            else {
+                return Err(crate::Error::Other(format!(
+                    "连续性缺口 {} 已存在，但缺少基线检查点 seq {}",
+                    event_id, existing.baseline_seq
+                )));
+            };
+            if baseline.text_sha256 != existing.baseline_text_sha256
+                || baseline.content_hash != existing.baseline_content_hash
+            {
+                return Err(crate::Error::Other(format!(
+                    "连续性缺口 {} 的基线检查点摘要与缺口记录不一致",
+                    event_id
+                )));
+            }
             return Ok(());
         }
 
         let now = chrono::Utc::now().timestamp_millis();
         let text_sha256_value = text_sha256(text);
         let content_hash = content_hash_of_text(text);
-        let checkpoints = checkpoint::load_checkpoints(&self.app_data_root, &origin, chapter_id)?;
-        let gap_session = format!("gap:{event_id}");
+        // 只按稳定身份 gap:<event> 查找首次尝试写入的 checkpoint。
+        // 不能用“当前正文摘要”匹配，否则正文变化后会新建第二条同身份基线。
         let existing_baseline = checkpoints.iter().find(|checkpoint| {
-            checkpoint.reason == "continuity_gap"
-                && checkpoint.session_id == gap_session
-                && checkpoint.text_sha256 == text_sha256_value
-                && checkpoint.content_hash == content_hash
+            checkpoint.reason == "continuity_gap" && checkpoint.session_id == gap_session
         });
-        let baseline_seq = match existing_baseline {
-            Some(checkpoint) => checkpoint.seq,
+        let (baseline_seq, baseline_text_sha256, baseline_content_hash) = match existing_baseline
+        {
+            Some(checkpoint) => {
+                if checkpoint.text != text {
+                    return Err(crate::Error::Other(format!(
+                        "连续性缺口 {} 的基线正文已固定为历史快照，当前正文已变化；不能替换历史基线",
+                        event_id
+                    )));
+                }
+                (
+                    checkpoint.seq,
+                    checkpoint.text_sha256.clone(),
+                    checkpoint.content_hash.clone(),
+                )
+            }
             None => {
                 let latest_checkpoint_seq = checkpoints
                     .iter()
@@ -1119,7 +1150,7 @@ impl StatsStore {
                     "continuity_gap",
                 );
                 checkpoint::append_checkpoint(&self.app_data_root, &baseline)?;
-                seq
+                (seq, text_sha256_value.clone(), content_hash.clone())
             }
         };
 
@@ -1135,8 +1166,8 @@ impl StatsStore {
             phase: phase.to_string(),
             recovered_at_ms: now,
             baseline_seq,
-            baseline_text_sha256: text_sha256_value,
-            baseline_content_hash: content_hash,
+            baseline_text_sha256,
+            baseline_content_hash,
             verifiable: false,
         };
         checkpoint::append_continuity_gap(&self.app_data_root, &gap)?;
