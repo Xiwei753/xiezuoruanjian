@@ -6,11 +6,13 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::ExitStatusExt;
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use super::process_supervisor::{self, ProcessSupervisor, SharedStdin};
 
 type NotificationHandler = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
@@ -20,8 +22,6 @@ const STDERR_TAIL_LIMIT: usize = 16 * 1024;
 /// stdout 已关闭但素笺没有发起关闭时，先给子进程一个自行退出的窗口；
 /// 超过后只能视为通道不可恢复并强制回收。
 const EXIT_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
-/// 素笺主动关闭时等待 stdin EOF 后子进程自行退出的时间。
-const CLOSE_GRACE: Duration = Duration::from_secs(3);
 
 /// 谁、为什么结束了运行实例。关闭原因必须显式传递，不能再由 `Drop`
 /// 隐式 kill，否则日志会把素笺主动回收误报成 Agent 自己退出。
@@ -64,8 +64,6 @@ struct RequestStats {
 
 struct LifecycleState {
     closed: Option<CloseReason>,
-    /// 是否已经由素笺记录并发出强制 SIGKILL，避免重复把退出归因成外部信号。
-    forced_kill: bool,
     stats: RequestStats,
 }
 
@@ -73,7 +71,6 @@ impl Default for LifecycleState {
     fn default() -> Self {
         Self {
             closed: None,
-            forced_kill: false,
             stats: RequestStats::default(),
         }
     }
@@ -87,10 +84,11 @@ struct PendingRequest {
 pub struct RpcClient {
     label: String,
     pid: u32,
-    stdin: Mutex<Option<ChildStdin>>,
+    stdin: SharedStdin,
     pending: Arc<Mutex<HashMap<i64, PendingRequest>>>,
     next_id: AtomicI64,
-    child: Arc<Mutex<Child>>,
+    /// 子进程由所有者线程持有并回收；这里只共享控制通道与退出状态。
+    supervisor: ProcessSupervisor,
     notification_handler: NotificationHandler,
     lifecycle: Arc<Mutex<LifecycleState>>,
     /// stdout 已关闭后记录的真实退出原因，供之后才发出的请求直接失败。
@@ -105,28 +103,19 @@ impl RpcClient {
         env: &[(String, String)],
         notification_handler: NotificationHandler,
     ) -> Result<Self, String> {
-        command
-            .current_dir(working_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        command.current_dir(working_dir);
         for (key, value) in env {
             command.env(key, value);
         }
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("无法启动 {label}：{error}"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| format!("{label} 没有 stdin"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| format!("{label} 没有 stdout"))?;
-        let stderr = child.stderr.take();
-        let pid = child.id();
-        let child = Arc::new(Mutex::new(child));
+        // `spawn` 必须发生在与 CLI 同寿命的所有者线程里：bwrap 的
+        // --die-with-parent 绑定创建线程，而不是整个进程（Issue #1024）。
+        let process_supervisor::SpawnedProcess {
+            pid,
+            stdin,
+            stdout,
+            stderr,
+            supervisor,
+        } = process_supervisor::spawn(label, command)?;
 
         let pending: Arc<Mutex<HashMap<i64, PendingRequest>>> =
             Arc::new(Mutex::new(HashMap::new()));
@@ -149,7 +138,7 @@ impl RpcClient {
         });
         let reader_pending = pending.clone();
         let reader_handler = notification_handler.clone();
-        let reader_child = child.clone();
+        let reader_supervisor = supervisor.clone();
         let reader_lifecycle = lifecycle.clone();
         let reader_label = label.to_string();
         let reader_exit_reason = exit_reason.clone();
@@ -211,34 +200,33 @@ impl RpcClient {
                     }
                 }
                 // stdout 已关闭。先区分“素笺主动关闭”和“Agent 自己退出”：
-                // 只有前者超过关闭宽限期才由素笺发送 SIGKILL；后者绝不能被
-                // 描述成外部信号误杀。
+                // 退出状态与回收由所有者线程统一记录，reader 只等待结果，
+                // 不能再直接 try_wait/kill，避免与 close() 重复回收。
                 let requested_close = reader_lifecycle
                     .lock()
                     .ok()
-                    .and_then(|state| state.closed.clone());
+                    .and_then(|state| state.closed.clone())
+                    .or_else(|| reader_supervisor.close_reason());
                 let wait = if requested_close.is_some() {
-                    CLOSE_GRACE
+                    process_supervisor::CLOSE_GRACE
                 } else {
                     EXIT_WAIT_TIMEOUT
                 };
-                let mut status = wait_for_status(&reader_child, wait);
-                let mut forced_reason = None;
-                if status.is_none() {
+                let mut exit = reader_supervisor.wait_exit(wait);
+                if exit.is_none() {
                     let reason = requested_close.clone().unwrap_or_else(|| {
-                        CloseReason::ChannelError(format!("{reader_label} 的 stdout 已关闭，但进程仍在运行"))
+                        CloseReason::ChannelError(format!(
+                            "{reader_label} 的 stdout 已关闭，但进程仍在运行"
+                        ))
                     });
-                    forced_reason = Some(reason.clone());
                     let _ = mark_closed(&reader_lifecycle, reason.clone());
-                    status = force_reap(
-                        &reader_child,
-                        &reader_lifecycle,
-                        &reader_label,
-                        pid,
-                        &reason,
+                    reader_supervisor.close(reason);
+                    // 所有者线程关闭 stdin 后还有一段协议退出宽限期。
+                    exit = reader_supervisor.wait_exit(
+                        process_supervisor::CLOSE_GRACE + Duration::from_secs(1),
                     );
                 }
-                if status.is_some() {
+                if exit.is_some() {
                     if let Some(handle) = stderr_handle {
                         wait_for_stderr_reader(handle);
                     }
@@ -247,14 +235,16 @@ impl RpcClient {
                     .lock()
                     .map(|tail| tail.clone())
                     .unwrap_or_default();
-                let forced = reader_lifecycle
-                    .lock()
-                    .map(|state| state.forced_kill)
-                    .unwrap_or(false);
+                let requested_close = exit
+                    .as_ref()
+                    .and_then(|info| info.requested_close.clone())
+                    .or(requested_close);
+                let forced = exit.as_ref().is_some_and(|info| info.forced);
+                let forced_reason = exit.as_ref().and_then(|info| info.forced_reason.clone());
+                let status = exit.as_ref().and_then(|info| info.status);
                 let cause = if forced {
                     ExitCause::ForcedReap(
                         forced_reason
-                            .clone()
                             .or_else(|| requested_close.clone())
                             .unwrap_or_else(|| {
                                 CloseReason::ChannelError("进程未随协议通道退出".to_string())
@@ -285,10 +275,10 @@ impl RpcClient {
         Ok(Self {
             label: label.to_string(),
             pid,
-            stdin: Mutex::new(Some(stdin)),
+            stdin,
             pending,
             next_id: AtomicI64::new(1),
-            child,
+            supervisor,
             notification_handler,
             lifecycle,
             exit_reason,
@@ -537,17 +527,23 @@ impl RpcClient {
                 )));
             }
         }
-        if let Ok(mut stdin) = self.stdin.lock() {
-            // 关闭 stdin 让 ACP/app-server 有机会完成协议退出。
-            stdin.take();
-        }
-        if wait_for_status(&self.child, CLOSE_GRACE).is_none() {
-            force_reap(&self.child, &self.lifecycle, &self.label, self.pid, &reason);
-        }
+        // 关闭 stdin、等待协议退出、超时 kill 都交给进程所有者线程；
+        // reader EOF 与外部 close 不会各自回收同一子进程。
+        self.supervisor.close(reason);
     }
 
     pub fn notification_handler(&self) -> NotificationHandler {
         self.notification_handler.clone()
+    }
+}
+
+impl Drop for RpcClient {
+    fn drop(&mut self) {
+        // 正常路径由适配器显式 close()；这里是最后一道兜底，避免调用方
+        // 忘记关闭时留下仍在沙箱内运行的 CLI。
+        if self.closed_reason().is_none() {
+            self.supervisor.close(CloseReason::AppExit);
+        }
     }
 }
 
@@ -560,58 +556,6 @@ fn mark_closed(lifecycle: &Arc<Mutex<LifecycleState>>, reason: CloseReason) -> b
     }
     state.closed = Some(reason);
     true
-}
-
-fn wait_for_status(child: &Arc<Mutex<Child>>, timeout: Duration) -> Option<ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.lock() {
-            Ok(mut child) => match child.try_wait() {
-                Ok(Some(status)) => return Some(status),
-                Ok(None) => {}
-                Err(_) => return None,
-            },
-            Err(_) => return None,
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-/// 只在协议通道已经不可恢复时回收子进程；日志明确写成素笺主动结束，
-/// 避免后续 describe_exit 把 SIGKILL 误报成外部信号。
-fn force_reap(
-    child: &Arc<Mutex<Child>>,
-    lifecycle: &Arc<Mutex<LifecycleState>>,
-    label: &str,
-    pid: u32,
-    reason: &CloseReason,
-) -> Option<ExitStatus> {
-    let first = lifecycle
-        .lock()
-        .map(|mut state| {
-            if state.forced_kill {
-                false
-            } else {
-                state.forced_kill = true;
-                true
-            }
-        })
-        .unwrap_or(false);
-    if first {
-        log::warn!(
-            "[agent] 素笺主动回收 {label} 进程（PID {pid}），发送 SIGKILL；原因：{}",
-            reason.description()
-        );
-    }
-    let mut child = child.lock().ok()?;
-    if let Ok(Some(status)) = child.try_wait() {
-        return Some(status);
-    }
-    let _ = child.kill();
-    child.wait().ok()
 }
 
 fn wait_for_stderr_reader(handle: std::thread::JoinHandle<()>) {

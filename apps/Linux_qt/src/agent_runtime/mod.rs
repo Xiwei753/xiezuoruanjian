@@ -9,7 +9,9 @@
 //! - `adapter` / `session`：适配器契约与单会话生命周期；
 //! - `acp` / `codex`：两个受支持 CLI 的官方接口；
 //! - `mcp_binding`：当前作品的 `sujian-mcp` 启动配置；
-//! - `rpc`：ACP 与 Codex 共用的 stdio JSON-RPC 客户端。
+//! - `rpc`：ACP 与 Codex 共用的 stdio JSON-RPC 客户端；
+//! - `process_supervisor`：持久 CLI 子进程的所有者线程，保证 Linux 下
+//!   bwrap 的父线程死亡语义绑定到与 CLI 同寿命的线程。
 
 pub mod acp;
 pub mod adapter;
@@ -17,6 +19,7 @@ pub mod codex;
 pub mod events;
 pub mod mcp_binding;
 pub mod model_catalog;
+pub mod process_supervisor;
 pub mod rpc;
 pub mod session;
 mod workspace_access;

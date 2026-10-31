@@ -410,6 +410,8 @@ impl WorkspaceAccess {
             .arg("--unshare-cgroup-try")
             .arg("--cap-drop")
             .arg("ALL")
+            // 这里的“父”是创建 bwrap 的线程。RpcClient 经 process_supervisor
+            // 让与 CLI 同寿命的所有者线程执行 spawn，不能用临时派发线程启动。
             .arg("--die-with-parent")
             .arg("--new-session")
             .arg("--")

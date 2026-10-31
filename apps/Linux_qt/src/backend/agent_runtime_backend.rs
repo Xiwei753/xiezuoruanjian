@@ -1283,6 +1283,9 @@ impl AgentRuntimeBackend {
         // 本线程即将创建的新原生会话。epoch 与本次实际进程实例、轮次绑定。
         let runtime_epoch = self.runtime_epoch.clone();
         let turn_epoch = self.runtime_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        // 这个线程只负责组织会话/投递轮次，可以在 manager.prompt() 创建
+        // 异步任务后返回；CLI 进程由 process_supervisor 的所有者线程创建
+        // 并持有，不能再把它当作 Linux 下的父线程（Issue #1024）。
         std::thread::Builder::new()
             .name("agent-runtime-prompt".to_string())
             .spawn(move || {
