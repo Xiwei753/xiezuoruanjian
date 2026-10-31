@@ -1,0 +1,59 @@
+name: Attach Linux Packages to Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, for example v1.0'
+        required: true
+        type: string
+      deb_run_id:
+        description: 'Workflow run ID that produced sujian-linux-deb'
+        required: true
+        type: string
+      arch_run_id:
+        description: 'Workflow run ID that produced sujian-linux-arch'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  attach:
+    name: Attach DEB and Arch packages
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download DEB artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.deb_run_id }}
+        run: |
+          mkdir -p artifacts/deb artifacts/arch
+          gh run download "${RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name sujian-linux-deb \
+            --dir artifacts/deb
+
+      - name: Download Arch artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.arch_run_id }}
+        run: |
+          gh run download "${RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name sujian-linux-arch \
+            --dir artifacts/arch
+
+      - name: Upload packages to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          ls -lh artifacts/deb artifacts/arch
+          gh release upload "${RELEASE_TAG}" \
+            artifacts/deb/*.deb \
+            artifacts/arch/*.pkg.tar.zst \
+            --clobber \
+            --repo "${GITHUB_REPOSITORY}"
