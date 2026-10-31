@@ -168,6 +168,8 @@ pub struct AgentRuntimeBackend {
     /// AgentCliBackend 最近一次扫描结果；恢复历史会话时按真实安装重新解析协议。
     agent_catalog: Vec<AgentInstallation>,
     model: Option<String>,
+    /// 尚无 Core 会话可保存时，也按执行者记住用户刚选的模型。
+    model_preferences: HashMap<String, Option<String>>,
     available_models: Vec<AgentModelInfo>,
     /// 按“Agent ID + 真实启动路径”缓存协议返回过的模型目录。切换回来时
     /// 先显示缓存，再在后台刷新，绝不把上一个 Agent 的列表留在界面上。
@@ -249,6 +251,7 @@ impl AgentRuntimeBackend {
             launch_args: Vec::new(),
             agent_catalog: Vec::new(),
             model: None,
+            model_preferences: HashMap::new(),
             available_models: Vec::new(),
             model_cache: HashMap::new(),
             models_state_value: "none".to_string(),
@@ -329,6 +332,9 @@ impl AgentRuntimeBackend {
         agent_id: &str,
         launch_path: &str,
     ) -> Option<String> {
+        if let Some(model) = conversation.executor_model(agent_id, launch_path) {
+            return model;
+        }
         if let Some(binding) = conversation.native_session(agent_id, launch_path) {
             return binding.model.clone();
         }
@@ -910,11 +916,15 @@ impl AgentRuntimeBackend {
             self.abandon_active_turn();
         }
         self.cancel_runtime_only();
-        // 每个 CLI 的模型选择随其原生会话绑定保存；切回来时恢复该 CLI
-        // 上次确认的模型，而不是无条件回到 CLI 默认。
-        let restored_model = self.conversation.as_ref().and_then(|conversation| {
-            Self::restored_model_for_executor(conversation, &agent_id, &launch_path)
-        });
+        // 模型选择独立于原生会话保存；即使这个 CLI 还没发送过消息，
+        // 切换回来也要恢复用户上次的选择（包括明确选择默认模型）。
+        let target_key = executor_identity(&agent_id, &launch_path, &protocol, &launch_args);
+        let restored_model = match self.model_preferences.get(&target_key) {
+            Some(model) => model.clone(),
+            None => self.conversation.as_ref().and_then(|conversation| {
+                Self::restored_model_for_executor(conversation, &agent_id, &launch_path)
+            }),
+        };
         self.agent_id = agent_id;
         self.agent_name = agent_name.to_string();
         self.launch_path = launch_path;
@@ -1154,6 +1164,14 @@ impl AgentRuntimeBackend {
         conversation.agent_adapter_version = ADAPTER_VERSION;
         conversation.model = self.model.clone();
         conversation.native_session_id = resume_native_session_id.clone();
+        // 模型偏好独立于原生会话保存：即使这个 CLI 还没成功建过
+        // native session，下次切回来也应恢复用户当前选择。
+        conversation.set_executor_model(
+            &self.agent_id,
+            &self.launch_path,
+            self.model.clone(),
+            now_ms(),
+        );
         conversation.begin_turn(text.clone(), now_ms());
         let turn_id_value = {
             let turn = conversation.turns.last_mut().expect("turn just appended");
@@ -1213,11 +1231,12 @@ impl AgentRuntimeBackend {
                             let history = if preparation.history_restored {
                                 incremental_history
                             } else {
-                                full_history
+                                full_history.clone()
                             };
                             let request = AgentPromptRequest {
                                 text: message,
                                 history,
+                                full_history,
                             };
                             if let Err(error) = manager.prompt(&turn_id_value, &request) {
                                 failure = Some(error);
@@ -1358,36 +1377,28 @@ impl AgentRuntimeBackend {
     fn choose_model(&mut self, model: QString) {
         let model = model.to_string();
         self.model = if model.is_empty() { None } else { Some(model) };
+        self.model_preferences
+            .insert(self.model_cache_key(), self.model.clone());
         let api = self.core_api();
         let matches_current = self
             .conversation
             .as_ref()
             .is_some_and(|conversation| self.conversation_matches_current_agent(conversation));
         if let (Some(conversation), Some(api)) = (self.conversation.as_mut(), api) {
-            let mut changed = false;
-            // 模型属于具体 CLI 的原生会话；即使当前会话最后执行者是别的
-            // CLI，也要写入当前选择的绑定，切回来时才能恢复。
-            if conversation
-                .native_session(&self.agent_id, &self.launch_path)
-                .is_some()
-            {
-                conversation.set_executor_model(
-                    &self.agent_id,
-                    &self.launch_path,
-                    self.model.clone(),
-                    now_ms(),
-                );
-                changed = true;
-            }
+            // 模型偏好按 agentId + launchPath 独立保存，不要求该 CLI 已有
+            // native session；这样从未发送过的新 CLI 也能记住选择。
+            conversation.set_executor_model(
+                &self.agent_id,
+                &self.launch_path,
+                self.model.clone(),
+                now_ms(),
+            );
             if matches_current {
                 conversation.model = self.model.clone();
-                changed = true;
             }
-            if changed {
-                conversation.updated_at_ms = now_ms();
-                if let Err(error) = api.save_agent_conversation(conversation) {
-                    self.set_error(format!("保存模型选择失败：{error}"));
-                }
+            conversation.updated_at_ms = now_ms();
+            if let Err(error) = api.save_agent_conversation(conversation) {
+                self.set_error(format!("保存模型选择失败：{error}"));
             }
         }
         self.models_state_value = if self.model.is_some() {
@@ -1542,6 +1553,14 @@ impl AgentRuntimeBackend {
                     synchronized_turn,
                     at_ms,
                 );
+                // 原生会话上报的实际模型同步到执行者偏好；切换 CLI 后再
+                // 回来时恢复的是真实模型，而不是被别名或默认值覆盖的旧选择。
+                conversation.set_executor_model(
+                    &self.agent_id,
+                    &self.launch_path,
+                    recorded_model.clone(),
+                    at_ms,
+                );
                 if let Some(turn) = conversation
                     .turns
                     .iter_mut()
@@ -1598,8 +1617,13 @@ impl AgentRuntimeBackend {
             AgentEvent::PromptAccepted => {
                 // 只有 Agent 正式接口确认接收后才记 Input；启动失败、握手
                 // 失败或 HTTP 拒绝都不会走到这里。此刻该轮及其前置历史已
-                // 真正送达原生会话，推进同步游标。
-                if !core_turn_id.is_empty() {
+                // 真正送达原生会话，推进同步游标。绑定必须已经由
+                // SessionStarted 建立，否则游标没有可写入的原生会话。
+                if !core_turn_id.is_empty()
+                    && conversation
+                        .native_session_for(&self.agent_id, &self.launch_path)
+                        .is_some()
+                {
                     let at_ms = now_ms();
                     conversation.set_native_session_synchronized_turn(
                         &self.agent_id,
@@ -1747,14 +1771,14 @@ impl AgentRuntimeBackend {
                 if self.conversation_matches_current_agent(&conversation) {
                     conversation.model = actual.clone();
                 }
-                if actual.is_some() {
-                    conversation.set_executor_model(
-                        &self.agent_id,
-                        &self.launch_path,
-                        actual,
-                        now_ms(),
-                    );
-                }
+                // 实际模型未知时按 CLI 默认处理，不能把被拒绝的请求模型
+                // 继续当成事实。
+                conversation.set_executor_model(
+                    &self.agent_id,
+                    &self.launch_path,
+                    actual,
+                    now_ms(),
+                );
                 conversation.updated_at_ms = now_ms();
                 persist = true;
                 self.set_error(message.clone());

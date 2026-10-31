@@ -8,7 +8,6 @@ use super::acp::AcpAdapter;
 use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
 use super::events::{AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink, RuntimeEvent};
-use super::gemini::GeminiAdapter;
 use super::opencode::OpenCodeAdapter;
 
 /// 取消请求的结果。自然完成不能伪装成“取消成功”，否则后端会把已经
@@ -76,7 +75,6 @@ pub fn create_adapter(
         "codex" => Box::new(CodexAdapter::start(ctx, emit.clone())?),
         "opencode" => Box::new(OpenCodeAdapter::start(ctx, emit.clone())?),
         "claude" => Box::new(ClaudeAdapter::start(ctx, emit.clone())?),
-        "gemini" => Box::new(GeminiAdapter::start(ctx, emit.clone())?),
         _ if ctx.protocol == "acp" => Box::new(AcpAdapter::start(ctx, emit.clone())?),
         _ => {
             return Err(format!(

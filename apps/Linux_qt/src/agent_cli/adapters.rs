@@ -62,9 +62,9 @@ pub fn builtin_descriptors() -> Vec<AgentDescriptor> {
             id: "gemini".to_string(),
             name: "Gemini CLI".to_string(),
             version: None,
-            description: Some("Google Gemini CLI（headless stream-json）".to_string()),
-            protocol: "cli".to_string(),
-            capabilities: vec!["cli".to_string(), "chat".to_string()],
+            description: Some("Google Gemini CLI（官方 ACP 模式）".to_string()),
+            protocol: "acp".to_string(),
+            capabilities: vec!["cli".to_string(), "acp".to_string(), "chat".to_string()],
             launch: AgentLaunch {
                 bin_names: vec!["gemini".to_string()],
                 args: Vec::new(),

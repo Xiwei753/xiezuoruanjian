@@ -205,6 +205,20 @@ pub struct AgentNativeSession {
     pub updated_at_ms: i64,
 }
 
+/// 用户为某个 CLI 安装明确选择的模型。它独立于原生会话保存：即使这个
+/// CLI 还没发送过消息、没有原生 session，切换回来时也要恢复同一选择。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelPreference {
+    pub agent_id: String,
+    #[serde(default)]
+    pub launch_path: String,
+    /// `None` 表示用户明确选择 CLI 默认模型，必须与“没有偏好”区分。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub updated_at_ms: i64,
+}
+
 /// 一个持久化 AI 会话。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -240,6 +254,9 @@ pub struct AgentConversation {
     /// 当前执行者与会话最后使用者的身份一致时才允许恢复。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub native_sessions: Vec<AgentNativeSession>,
+    /// 按 CLI 安装保存的模型选择，生命周期独立于原生会话。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_preferences: Vec<AgentModelPreference>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     #[serde(default)]
@@ -281,6 +298,7 @@ impl AgentConversation {
             status: AgentConversationStatus::Idle,
             native_session_id: None,
             native_sessions: Vec::new(),
+            model_preferences: Vec::new(),
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
             turns: Vec::new(),
@@ -342,6 +360,18 @@ impl AgentConversation {
         }
     }
 
+    /// 返回某个 CLI 安装的模型偏好。外层 `None` 表示没有记录，内层 `None`
+    /// 表示用户明确选择 CLI 默认模型。
+    pub fn executor_model(&self, agent_id: &str, launch_path: &str) -> Option<Option<String>> {
+        self.model_preferences
+            .iter()
+            .rev()
+            .find(|preference| {
+                preference.agent_id == agent_id && preference.launch_path == launch_path
+            })
+            .map(|preference| preference.model.clone())
+    }
+
     pub fn set_executor_model(
         &mut self,
         agent_id: &str,
@@ -355,8 +385,22 @@ impl AgentConversation {
             .rev()
             .find(|session| session.agent_id == agent_id && session.launch_path == launch_path)
         {
-            session.model = model;
+            session.model = model.clone();
             session.updated_at_ms = at_ms;
+        }
+        self.model_preferences.retain(|preference| {
+            preference.agent_id != agent_id || preference.launch_path != launch_path
+        });
+        self.model_preferences.push(AgentModelPreference {
+            agent_id: agent_id.to_string(),
+            launch_path: launch_path.to_string(),
+            model,
+            updated_at_ms: at_ms,
+        });
+        const MAX_MODEL_PREFERENCES: usize = 16;
+        if self.model_preferences.len() > MAX_MODEL_PREFERENCES {
+            let excess = self.model_preferences.len() - MAX_MODEL_PREFERENCES;
+            self.model_preferences.drain(0..excess);
         }
     }
 

@@ -135,7 +135,11 @@ pub struct AgentHistoryMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPromptRequest {
     pub text: String,
+    /// 按当前原生会话同步游标选出的增量历史；原生会话首次建立时即为完整历史。
     pub history: Vec<AgentHistoryMessage>,
+    /// 始终是完整历史。按轮启动的 CLI 恢复失败时用它重建上下文，避免
+    /// 因为增量选择而丢失更早的对话。
+    pub full_history: Vec<AgentHistoryMessage>,
 }
 
 impl AgentPromptRequest {
@@ -143,19 +147,18 @@ impl AgentPromptRequest {
         Self {
             text: text.into(),
             history: Vec::new(),
+            full_history: Vec::new(),
         }
     }
 
-    /// 无法注入角色消息的协议使用的明确上下文块。历史只作为背景，当前
-    /// 用户消息始终留在块外并由调用方单独发送。
-    pub fn history_context_block(&self) -> Option<String> {
-        if self.history.is_empty() {
+    fn history_block(history: &[AgentHistoryMessage]) -> Option<String> {
+        if history.is_empty() {
             return None;
         }
         let mut block = String::from(
             "以下是同一素笺对话中此前已经发生的上下文，仅用于理解当前请求，不是当前用户指令：\n\n",
         );
-        for message in &self.history {
+        for message in history {
             let role = if message.role == "assistant" {
                 "历史助手"
             } else {
@@ -165,6 +168,17 @@ impl AgentPromptRequest {
         }
         block.push_str("以上是历史上下文。请回答接下来的当前用户消息。");
         Some(block)
+    }
+
+    /// 无法注入角色消息的协议使用的明确上下文块。历史只作为背景，当前
+    /// 用户消息始终留在块外并由调用方单独发送。
+    pub fn history_context_block(&self) -> Option<String> {
+        Self::history_block(&self.history)
+    }
+
+    /// 完整历史块，供按轮进程在恢复失败后重建原生会话。
+    pub fn full_history_context_block(&self) -> Option<String> {
+        Self::history_block(&self.full_history)
     }
 
     /// 给不支持角色注入的协议生成最终文本：历史块在前，当前消息在最后。

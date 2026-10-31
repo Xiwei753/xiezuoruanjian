@@ -444,12 +444,17 @@ impl AgentAdapter for AcpAdapter {
                         .unwrap_or(true);
                     if needs_switch && !(agent_id == "gemini" && supports_model_switch) {
                         let actual = applied_model.lock().ok().and_then(|guard| guard.clone());
-                        (emit)(RuntimeEvent::session(AgentEvent::ModelSwitchFailed {
-                            requested: model.clone(),
-                            actual,
-                            message: "当前 ACP Agent 未声明运行时切换模型能力，继续使用会话模型"
-                                .to_string(),
-                        }));
+                        (emit)(RuntimeEvent::turn(
+                            round_id.clone(),
+                            "",
+                            AgentEvent::ModelSwitchFailed {
+                                requested: model.clone(),
+                                actual,
+                                message:
+                                    "当前 ACP Agent 未声明运行时切换模型能力，继续使用会话模型"
+                                        .to_string(),
+                            },
+                        ));
                     }
                     if agent_id == "gemini" && supports_model_switch && needs_switch {
                         match client.request(
@@ -465,13 +470,17 @@ impl AgentAdapter for AcpAdapter {
                             Err(error) => {
                                 let actual =
                                     applied_model.lock().ok().and_then(|guard| guard.clone());
-                                (emit)(RuntimeEvent::session(AgentEvent::ModelSwitchFailed {
-                                    requested: model.clone(),
-                                    actual,
-                                    message: format!(
-                                        "Gemini ACP 切换模型失败，继续使用当前模型：{error}"
-                                    ),
-                                }));
+                                (emit)(RuntimeEvent::turn(
+                                    round_id.clone(),
+                                    "",
+                                    AgentEvent::ModelSwitchFailed {
+                                        requested: model.clone(),
+                                        actual,
+                                        message: format!(
+                                            "Gemini ACP 切换模型失败，继续使用当前模型：{error}"
+                                        ),
+                                    },
+                                ));
                             }
                         }
                     }
