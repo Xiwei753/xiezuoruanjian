@@ -15,8 +15,37 @@ use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink,
     PermissionOption, RuntimeEvent,
 };
-use super::rpc::RpcClient;
+use super::rpc::{CloseReason, RpcClient};
 use super::workspace_access::WorkspaceAccess;
+
+/// 启动阶段一旦失败，必须显式关闭已经 spawn 的 app-server，否则没有
+/// 会话管理器持有的进程会泄漏。成功返回前解除守卫。
+struct StartGuard {
+    client: Arc<RpcClient>,
+    armed: bool,
+}
+
+impl StartGuard {
+    fn new(client: Arc<RpcClient>) -> Self {
+        Self {
+            client,
+            armed: true,
+        }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.client
+                .close(CloseReason::ChannelError("Codex 启动未完成".to_string()));
+        }
+    }
+}
 
 /// 单个 Core Turn 在 Codex 侧的生命周期。取消可能发生在 `turn/start` 的
 /// 响应之前，因此取消意图必须独立于任何共享的“当前 native turn id”。
@@ -465,6 +494,7 @@ impl CodexAdapter {
             &[],
             handler,
         )?);
+        let start_guard = StartGuard::new(client.clone());
         client.request(
             "initialize",
             json!({
@@ -546,13 +576,21 @@ impl CodexAdapter {
             *guard = Some(native_thread_id.clone());
         }
         (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
-            native_session_id: native_thread_id,
+            native_session_id: native_thread_id.clone(),
             model: model.clone(),
             resumed,
         }));
         if resumed {
             log::info!("[agent] Codex thread resumed");
         }
+        log::info!(
+            "[agent] Codex 会话建立：实例 {}，原生 thread {}，模型 {}，恢复={}",
+            client.instance_id(),
+            redact_session_id(&native_thread_id),
+            model.as_deref().unwrap_or("<默认>"),
+            resumed
+        );
+        start_guard.disarm();
         Ok(Self {
             client,
             thread_id,
@@ -629,7 +667,9 @@ impl AgentAdapter for CodexAdapter {
                             round_turn_id,
                             "",
                             AgentEvent::TurnFailed {
-                                message: format!("写入 Codex 历史上下文失败：{error}"),
+                                message: format!(
+                                    "尚未发送给 Agent：写入 Codex 历史上下文失败：{error}"
+                                ),
                             },
                         ));
                         return;
@@ -677,7 +717,9 @@ impl AgentAdapter for CodexAdapter {
                         (emit)(RuntimeEvent::turn(
                             round_turn_id,
                             "",
-                            AgentEvent::TurnFailed { message: error },
+                            AgentEvent::TurnFailed {
+                                message: format!("尚未发送给 Agent：{error}"),
+                            },
                         ));
                     }
                 }
@@ -756,4 +798,18 @@ impl AgentAdapter for CodexAdapter {
         };
         self.client.respond(rpc_id, json!({ "decision": decision }))
     }
+
+    fn close(&mut self, reason: CloseReason) {
+        self.client.close(reason);
+    }
+}
+
+fn redact_session_id(id: &str) -> String {
+    let chars: Vec<char> = id.chars().collect();
+    if chars.len() <= 8 {
+        return format!("<已脱敏 {} 字符>", chars.len());
+    }
+    let head: String = chars.iter().take(4).collect();
+    let tail: String = chars.iter().skip(chars.len().saturating_sub(4)).collect();
+    format!("{head}…{tail}")
 }

@@ -5,8 +5,9 @@
 //! `session/update` 通知转成统一事件。MCP 作为 stdio server 配置随会话传递。
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -15,10 +16,13 @@ use super::events::{
     json_text, json_value_text, AgentEvent, AgentLaunchContext, AgentModelInfo, AgentPromptRequest,
     EventSink, PermissionOption, RuntimeEvent,
 };
-use super::rpc::RpcClient;
+use super::rpc::{CloseReason, RpcClient};
 use super::workspace_access::WorkspaceAccess;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+/// `session/set_config_option` 响应缺少 currentValue 时，等待
+/// `config_option_update` 确认实际模型的时间。不能用请求值假装确认成功。
+const MODEL_UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// ACP v1: a session permits only one foreground prompt. All cancellation and
 /// permission state is protected by one lock so cancelling and permissions cannot race.
@@ -33,16 +37,53 @@ struct AcpTurnState {
     pending_permissions: HashMap<String, i64>,
 }
 
+/// 当前 ACP 会话真实声明的模型配置项。`allowed` 只来自 `session/new`、
+/// `session/load` 或 `config_option_update`，不能用独立的 `opencode models`
+/// 目录推断某个模型一定能在本会话请求。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AcpModelConfig {
+    config_id: String,
+    current: Option<String>,
+    allowed: HashSet<String>,
+}
+
+impl AcpModelConfig {
+    fn from_options(value: &Value) -> Option<Self> {
+        let option = model_option(value)?;
+        let config_id = option.get("id").and_then(Value::as_str)?.to_string();
+        let allowed = option
+            .get("options")
+            .or_else(|| option.get("values"))
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(option_value_id)
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            config_id,
+            current: option_current_value(option),
+            allowed,
+        })
+    }
+}
+
 pub struct AcpAdapter {
     client: Arc<RpcClient>,
     session_id: Arc<Mutex<Option<String>>>,
     emit: EventSink,
     state: Arc<Mutex<AcpTurnState>>,
     agent_id: String,
-    /// 下一轮要使用的模型。模型切换不重建会话，只在 prompt 前尽力同步给运行时。
+    /// 下一轮要使用的模型。模型切换不重建会话，只在 prompt 前同步给运行时。
     model: Option<String>,
     applied_model: Arc<Mutex<Option<String>>>,
-    supports_model_switch: bool,
+    /// 原生会话声明的模型配置项与可选值；仅由会话协议更新。
+    model_config: Arc<Mutex<Option<AcpModelConfig>>>,
+    /// 每次收到 config_option_update 的 currentValue 时递增，供切换请求
+    /// 在响应缺少 currentValue 时等待真实确认。
+    model_update_generation: Arc<AtomicU64>,
     history_restored: bool,
     /// Only one session/prompt at a time. This lock belongs to prompt workers,
     /// never to the AgentSessionManager lock, so cancel can run immediately.
@@ -54,6 +95,8 @@ impl AcpAdapter {
         let session_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let state: Arc<Mutex<AcpTurnState>> = Arc::new(Mutex::new(AcpTurnState::default()));
         let applied_model: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let model_config: Arc<Mutex<Option<AcpModelConfig>>> = Arc::new(Mutex::new(None));
+        let model_update_generation: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         // A Weak client avoids a cycle: RpcClient owns the reader handler.
         let handler_client: Arc<Mutex<Option<Weak<RpcClient>>>> = Arc::new(Mutex::new(None));
         let handler_emit = emit.clone();
@@ -61,6 +104,8 @@ impl AcpAdapter {
         let handler_state = state.clone();
         let handler_rpc = handler_client.clone();
         let handler_applied_model = applied_model.clone();
+        let handler_model_config = model_config.clone();
+        let handler_model_generation = model_update_generation.clone();
         let handler_provider_id = ctx.agent_id.clone();
         let handler_provider_name = ctx.agent_name.clone();
         let handler: Arc<dyn Fn(&str, Value) + Send + Sync> =
@@ -144,16 +189,18 @@ impl AcpAdapter {
                                 let options = update
                                     .get("configOptions")
                                     .cloned()
-                                    .or_else(|| params.get("configOptions").cloned());
-                                if let Some(options) = options {
-                                    publish_model_options(
-                                        &options,
-                                        &handler_provider_id,
-                                        &handler_provider_name,
-                                        &handler_emit,
-                                        &handler_applied_model,
-                                    );
-                                }
+                                    .or_else(|| params.get("configOptions").cloned())
+                                    .or_else(|| update.get("configOption").cloned())
+                                    .unwrap_or_else(|| update.clone());
+                                publish_model_options(
+                                    &options,
+                                    &handler_provider_id,
+                                    &handler_provider_name,
+                                    &handler_emit,
+                                    &handler_applied_model,
+                                    &handler_model_config,
+                                    &handler_model_generation,
+                                );
                             }
                             _ => {}
                         }
@@ -170,6 +217,8 @@ impl AcpAdapter {
                             &handler_provider_name,
                             &handler_emit,
                             &handler_applied_model,
+                            &handler_model_config,
+                            &handler_model_generation,
                         );
                     }
                     "session/request_permission" => {
@@ -264,133 +313,194 @@ impl AcpAdapter {
             *guard = Some(Arc::downgrade(&client));
         }
 
-        let init = client.request(
-            "initialize",
-            json!({
-                "protocolVersion": 1,
-                "clientCapabilities": {
-                    "fs": { "readTextFile": false, "writeTextFile": false },
-                    "terminal": false
-                },
-                "clientInfo": {
-                    "name": "sujian",
-                    "title": "素笺",
-                    "version": env!("CARGO_PKG_VERSION")
+        let start_client = client.clone();
+        let started = (|| -> Result<Self, String> {
+            let init = client.request(
+                "initialize",
+                json!({
+                    "protocolVersion": 1,
+                    "clientCapabilities": {
+                        "fs": { "readTextFile": false, "writeTextFile": false },
+                        "terminal": false
+                    },
+                    "clientInfo": {
+                        "name": "sujian",
+                        "title": "素笺",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                }),
+                Duration::from_secs(30),
+            )?;
+            if let Some(version) = init.get("protocolVersion").and_then(Value::as_i64) {
+                if version < 1 {
+                    return Err(format!("ACP 协议版本不受支持：{version}"));
                 }
-            }),
-            Duration::from_secs(30),
-        )?;
-        if let Some(version) = init.get("protocolVersion").and_then(Value::as_i64) {
-            if version < 1 {
-                return Err(format!("ACP 协议版本不受支持：{version}"));
             }
-        }
 
-        let mcp_servers: Vec<Value> = ctx.mcp_servers.iter().map(|server| {
-            json!({
-                "name": server.name,
-                "command": server.command,
-                "args": server.args,
-                "env": server.env.iter().map(|(name, value)| json!({
-                    "name": name,
-                    "value": value,
-                })).collect::<Vec<_>>()
-            })
-        }).collect();
-        let session_params = json!({
-            "cwd": ctx.working_dir.to_string_lossy(),
-            "mcpServers": mcp_servers,
-        });
-        let resume_id = ctx
-            .resume_native_session_id
-            .clone()
-            .filter(|id| !id.is_empty());
-        let (session_result, resumed) = match resume_id {
-            Some(id) => {
-                let mut params = session_params.clone();
-                params["sessionId"] = Value::String(id);
-                match client.request("session/load", params, Duration::from_secs(60)) {
-                    Ok(result) => (result, true),
-                    Err(error) => {
-                        log::warn!("[agent] ACP session/load failed, creating new: {error}");
-                        (
-                            client.request(
-                                "session/new",
-                                session_params,
-                                Duration::from_secs(60),
-                            )?,
-                            false,
-                        )
+            let mcp_servers: Vec<Value> = ctx
+                .mcp_servers
+                .iter()
+                .map(|server| {
+                    json!({
+                        "name": server.name,
+                        "command": server.command,
+                        "args": server.args,
+                        "env": server.env.iter().map(|(name, value)| json!({
+                            "name": name,
+                            "value": value,
+                        })).collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            let session_params = json!({
+                "cwd": ctx.working_dir.to_string_lossy(),
+                "mcpServers": mcp_servers,
+            });
+            let resume_id = ctx
+                .resume_native_session_id
+                .clone()
+                .filter(|id| !id.is_empty());
+            let (session_result, resumed) = match resume_id {
+                Some(id) => {
+                    let mut params = session_params.clone();
+                    params["sessionId"] = Value::String(id);
+                    match client.request("session/load", params, Duration::from_secs(60)) {
+                        Ok(result) => (result, true),
+                        Err(error) => {
+                            log::warn!("[agent] ACP session/load failed, creating new: {error}");
+                            (
+                                client.request(
+                                    "session/new",
+                                    session_params,
+                                    Duration::from_secs(60),
+                                )?,
+                                false,
+                            )
+                        }
                     }
                 }
+                None => (
+                    client.request("session/new", session_params, Duration::from_secs(60))?,
+                    false,
+                ),
+            };
+            let native_session_id = json_text(&session_result, &["sessionId"])
+                .ok_or_else(|| "OpenCode ACP 未返回 sessionId".to_string())?;
+            // currentModelId / configOptions.model.currentValue 是原生会话实际模型；
+            // ctx.model 是用户本轮的请求模型。两者不能合并，否则启动默认值会把
+            // 用户选择覆盖掉，后续也不再切换。
+            let (models, actual_model) =
+                models_from_session(&session_result, &ctx.agent_id, &ctx.agent_name);
+            let session_model_config = AcpModelConfig::from_options(&session_result);
+            if let Ok(mut guard) = session_id.lock() {
+                *guard = Some(native_session_id.clone());
             }
-            None => (
-                client.request("session/new", session_params, Duration::from_secs(60))?,
-                false,
-            ),
-        };
-        let native_session_id = json_text(&session_result, &["sessionId"])
-            .ok_or_else(|| "OpenCode ACP 未返回 sessionId".to_string())?;
-        // currentModelId / configOptions.model.currentValue 是原生会话实际模型；
-        // ctx.model 是用户本轮的请求模型。两者不能合并，否则启动默认值会把
-        // 用户选择覆盖掉，后续也不再切换。
-        let (models, actual_model) =
-            models_from_session(&session_result, &ctx.agent_id, &ctx.agent_name);
-        let supports_model_switch = model_option(&session_result).is_some();
-        if let Ok(mut guard) = session_id.lock() {
-            *guard = Some(native_session_id.clone());
-        }
-        if let Ok(mut guard) = applied_model.lock() {
-            *guard = actual_model.clone();
-        }
-        if !models.is_empty() {
-            (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable {
-                models: models.clone(),
+            if let Ok(mut guard) = applied_model.lock() {
+                *guard = actual_model.clone();
+            }
+            if let Ok(mut guard) = model_config.lock() {
+                *guard = session_model_config.clone();
+            }
+            let model_config_detail = session_model_config
+                .as_ref()
+                .map(|config| {
+                    format!(
+                        "configId={} 当前值={} 可选值={}",
+                        config.config_id,
+                        config.current.as_deref().unwrap_or("<未声明>"),
+                        config.allowed.len()
+                    )
+                })
+                .unwrap_or_else(|| "未声明模型配置项".to_string());
+            log::info!(
+                "[agent] ACP 会话建立：实例 {}，原生会话 {}，{}，会话层可选模型 {} 个（层：session-selectable）",
+                client.instance_id(),
+                redact_session_id(&native_session_id),
+                model_config_detail,
+                models.len()
+            );
+            if !models.is_empty() {
+                (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable {
+                    models: models.clone(),
+                }));
+            }
+            (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
+                native_session_id,
+                model: actual_model.clone(),
+                resumed,
             }));
-        }
-        (emit)(RuntimeEvent::session(AgentEvent::SessionStarted {
-            native_session_id,
-            model: actual_model.clone(),
-            resumed,
-        }));
-        if resumed {
-            log::info!("[agent] OpenCode ACP session resumed");
-        }
+            if resumed {
+                log::info!("[agent] OpenCode ACP session resumed");
+            }
 
-        Ok(Self {
-            client,
-            session_id,
-            emit,
-            state,
-            agent_id: ctx.agent_id.clone(),
-            model: ctx.model.clone(),
-            applied_model,
-            supports_model_switch,
-            history_restored: resumed,
-            dispatch_lock: Arc::new(Mutex::new(())),
-        })
+            Ok(Self {
+                client,
+                session_id,
+                emit,
+                state,
+                agent_id: ctx.agent_id.clone(),
+                model: ctx.model.clone(),
+                applied_model,
+                model_config,
+                model_update_generation,
+                history_restored: resumed,
+                dispatch_lock: Arc::new(Mutex::new(())),
+            })
+        })();
+        match started {
+            Ok(adapter) => Ok(adapter),
+            Err(error) => {
+                start_client.close(CloseReason::ChannelError(error.clone()));
+                Err(error)
+            }
+        }
     }
 }
 
 fn model_option(value: &Value) -> Option<&Value> {
+    fn is_model_option(option: &&Value) -> bool {
+        let id = option.get("id").and_then(Value::as_str).unwrap_or_default();
+        let category = option
+            .get("category")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        id.eq_ignore_ascii_case("model")
+            || id.eq_ignore_ascii_case("models")
+            || category.eq_ignore_ascii_case("model")
+    }
     if let Some(options) = value.as_array() {
-        return options.iter().find(|option| {
-            option.get("id").and_then(Value::as_str) == Some("model")
-                || option.get("category").and_then(Value::as_str) == Some("model")
-        });
+        return options.iter().find(is_model_option);
     }
     if let Some(options) = value.get("configOptions").and_then(Value::as_array) {
-        return options.iter().find(|option| {
-            option.get("id").and_then(Value::as_str) == Some("model")
-                || option.get("category").and_then(Value::as_str) == Some("model")
-        });
+        return options.iter().find(is_model_option);
     }
-    if value.get("id").and_then(Value::as_str) == Some("model")
-        || value.get("category").and_then(Value::as_str) == Some("model")
+    if let Some(option) = value.get("configOption") {
+        if is_model_option(&option) {
+            return Some(option);
+        }
+    }
+    let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
+    let category = value
+        .get("category")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if id.eq_ignore_ascii_case("model")
+        || id.eq_ignore_ascii_case("models")
+        || category.eq_ignore_ascii_case("model")
     {
         return Some(value);
     }
     None
+}
+
+fn redact_session_id(id: &str) -> String {
+    let chars: Vec<char> = id.chars().collect();
+    if chars.len() <= 8 {
+        return format!("<已脱敏 {} 字符>", chars.len());
+    }
+    let head: String = chars.iter().take(4).collect();
+    let tail: String = chars.iter().skip(chars.len().saturating_sub(4)).collect();
+    format!("{head}…{tail}")
 }
 
 fn option_value_id(value: &Value) -> Option<String> {
@@ -416,10 +526,9 @@ fn option_current_value(option: &Value) -> Option<String> {
 
 fn split_model_id(value: &str) -> (String, String) {
     match value.find('/') {
-        Some(slash) if slash > 0 && slash < value.len() - 1 => (
-            value[..slash].to_string(),
-            value[slash + 1..].to_string(),
-        ),
+        Some(slash) if slash > 0 && slash < value.len() - 1 => {
+            (value[..slash].to_string(), value[slash + 1..].to_string())
+        }
         _ => (String::new(), value.to_string()),
     }
 }
@@ -475,7 +584,7 @@ fn models_from_option(
                     .unwrap_or_default()
                     .to_string(),
                 is_default: current == Some(id.as_str()),
-                capabilities: Vec::new(),
+                capabilities: vec!["session-selectable".to_string()],
             })
         })
         .collect()
@@ -516,7 +625,7 @@ fn legacy_models_from_session(
                             .unwrap_or(model_id),
                         description: json_text(model, &["description"]).unwrap_or_default(),
                         is_default: current == Some(id.as_str()),
-                        capabilities: Vec::new(),
+                        capabilities: vec!["session-selectable".to_string()],
                     })
                 })
                 .collect()
@@ -540,7 +649,8 @@ fn models_from_session(
             return (models, current);
         }
     }
-    let models = legacy_models_from_session(session, provider_id, provider_name, current.as_deref());
+    let models =
+        legacy_models_from_session(session, provider_id, provider_name, current.as_deref());
     (models, current)
 }
 
@@ -550,20 +660,76 @@ fn publish_model_options(
     provider_name: &str,
     emit: &EventSink,
     applied_model: &Arc<Mutex<Option<String>>>,
+    model_config: &Arc<Mutex<Option<AcpModelConfig>>>,
+    model_update_generation: &Arc<AtomicU64>,
 ) {
     let Some(option) = model_option(options) else {
         return;
     };
     let current = option_current_value(option);
     let models = models_from_option(option, provider_id, provider_name, current.as_deref());
-    if let Some(current) = current {
-        if let Ok(mut guard) = applied_model.lock() {
-            *guard = Some(current);
+    if let Some(config) = AcpModelConfig::from_options(options) {
+        if let Ok(mut guard) = model_config.lock() {
+            *guard = Some(config);
         }
     }
-    if !models.is_empty() {
-        (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable { models }));
+    if let Some(current) = current {
+        if let Ok(mut guard) = applied_model.lock() {
+            *guard = Some(current.clone());
+        }
+        model_update_generation.fetch_add(1, Ordering::SeqCst);
+        log::info!(
+            "[agent] ACP config_option_update：当前模型={current}，会话可选模型 {} 个",
+            models.len()
+        );
     }
+    if !models.is_empty() {
+        (emit)(RuntimeEvent::session(AgentEvent::ModelsAvailable {
+            models,
+        }));
+    }
+}
+
+fn wait_for_model_confirmation(
+    applied_model: &Arc<Mutex<Option<String>>>,
+    generation: &Arc<AtomicU64>,
+    generation_before: u64,
+    timeout: Duration,
+) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if generation.load(Ordering::SeqCst) != generation_before {
+            return applied_model.lock().ok().and_then(|guard| guard.clone());
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// 在 prompt 写入之前失败时，清掉活动轮次并投递明确错误。调用方需保证
+/// 该错误文案已经区分“模型切换失败”和“prompt 发送失败”。
+fn fail_turn_before_prompt(
+    state: &Arc<Mutex<AcpTurnState>>,
+    emit: &EventSink,
+    round_id: &str,
+    message: String,
+) {
+    if let Ok(mut guard) = state.lock() {
+        if guard.active_turn == round_id {
+            guard.active_turn.clear();
+            guard.prompt_written = false;
+            guard.cancel_requested = false;
+            guard.cancel_notified = false;
+            guard.pending_permissions.clear();
+        }
+    }
+    (emit)(RuntimeEvent::turn(
+        round_id.to_string(),
+        "",
+        AgentEvent::TurnFailed { message },
+    ));
 }
 
 impl AgentAdapter for AcpAdapter {
@@ -585,7 +751,8 @@ impl AgentAdapter for AcpAdapter {
         let agent_id = self.agent_id.clone();
         let selected_model = self.model.clone();
         let applied_model = self.applied_model.clone();
-        let supports_model_switch = self.supports_model_switch;
+        let model_config = self.model_config.clone();
+        let model_update_generation = self.model_update_generation.clone();
         let round_id = core_turn_id.to_string();
         let message = request.text_with_history_context();
         let task = std::thread::Builder::new()
@@ -636,83 +803,191 @@ impl AgentAdapter for AcpAdapter {
                 }
 
                 // OpenCode 通过官方 configOptions 暴露模型。用户切换后必须
-                // 先让 session/set_config_option 成功，再发送本轮 prompt；
-                // 不能用免费/默认模型代替用户明确选择的模型。
+                // 先让 session/set_config_option 成功并确认 currentValue，
+                // 再发送本轮 prompt；不能用请求值假装确认成功。
                 if let Some(model) = selected_model.as_ref() {
                     let needs_switch = applied_model
                         .lock()
                         .map(|guard| guard.as_deref() != Some(model.as_str()))
                         .unwrap_or(true);
                     if needs_switch {
-                        if !supports_model_switch {
-                            if let Ok(mut guard) = state.lock() {
-                                if guard.active_turn == round_id {
-                                    guard.active_turn.clear();
-                                }
-                            }
-                            (emit)(RuntimeEvent::turn(
-                                round_id,
-                                "",
-                                AgentEvent::TurnFailed {
-                                    message: format!(
-                                        "OpenCode ACP 未声明 model 配置项，无法切换到 {model}"
-                                    ),
-                                },
-                            ));
+                        let Some(config) = model_config.lock().ok().and_then(|guard| guard.clone())
+                        else {
+                            fail_turn_before_prompt(
+                                &state,
+                                &emit,
+                                &round_id,
+                                format!(
+                                    "OpenCode ACP 未声明模型配置项，无法确认并切换到 {model}；尚未发送给 Agent"
+                                ),
+                            );
+                            return;
+                        };
+                        if config.allowed.is_empty() {
+                            fail_turn_before_prompt(
+                                &state,
+                                &emit,
+                                &round_id,
+                                format!(
+                                    "当前 ACP 会话未返回可选模型值，无法确认 {model} 是否可用；尚未发送给 Agent"
+                                ),
+                            );
                             return;
                         }
+                        if !config.allowed.contains(model) {
+                            fail_turn_before_prompt(
+                                &state,
+                                &emit,
+                                &round_id,
+                                format!(
+                                    "所选模型 {model} 不在当前 ACP 会话的可选模型列表中（会话可选 {} 个）；为避免使用错误模型，尚未发送给 Agent",
+                                    config.allowed.len()
+                                ),
+                            );
+                            return;
+                        }
+                        let generation_before = model_update_generation.load(Ordering::SeqCst);
+                        let switch_started = Instant::now();
+                        log::info!(
+                            "[agent] ACP 切换模型：实例 {}，核心轮次 {}，原生会话 {}，configId={}，请求={}（会话可选 {} 个）",
+                            client.instance_id(),
+                            round_id,
+                            redact_session_id(&session_id),
+                            config.config_id,
+                            model,
+                            config.allowed.len()
+                        );
                         match client.request(
                             "session/set_config_option",
                             json!({
                                 "sessionId": session_id,
-                                "configId": "model",
+                                "configId": config.config_id,
                                 "value": model,
                             }),
                             Duration::from_secs(30),
                         ) {
                             Ok(result) => {
-                                let actual = model_option(&result)
-                                    .and_then(option_current_value)
-                                    .unwrap_or_else(|| model.clone());
-                                if let Ok(mut guard) = applied_model.lock() {
-                                    *guard = Some(actual.clone());
+                                let response_confirmed = model_option(&result)
+                                    .and_then(option_current_value);
+                                let actual = match response_confirmed {
+                                    Some(value) => Some(value),
+                                    None => wait_for_model_confirmation(
+                                        &applied_model,
+                                        &model_update_generation,
+                                        generation_before,
+                                        MODEL_UPDATE_TIMEOUT,
+                                    ),
+                                };
+                                match actual {
+                                    Some(actual) if actual == *model => {
+                                        if let Ok(mut guard) = applied_model.lock() {
+                                            *guard = Some(actual.clone());
+                                        }
+                                        log::info!(
+                                            "[agent] ACP 模型切换确认：请求={}，实际={}，耗时={}ms，方法=session/set_config_option",
+                                            model,
+                                            actual,
+                                            switch_started.elapsed().as_millis()
+                                        );
+                                        (emit)(RuntimeEvent::turn(
+                                            round_id.clone(),
+                                            "",
+                                            AgentEvent::ModelSwitchApplied {
+                                                requested: Some(model.clone()),
+                                                actual: Some(actual),
+                                            },
+                                        ));
+                                    }
+                                    Some(actual) => {
+                                        let message = format!(
+                                            "模型切换未生效：请求 {model}，原生会话实际为 {actual}；尚未发送给 Agent"
+                                        );
+                                        log::warn!(
+                                            "[agent] {message}（实例 {}，核心轮次 {}，方法 session/set_config_option，耗时 {}ms）",
+                                            client.instance_id(),
+                                            round_id,
+                                            switch_started.elapsed().as_millis()
+                                        );
+                                        (emit)(RuntimeEvent::turn(
+                                            round_id.clone(),
+                                            "",
+                                            AgentEvent::ModelSwitchFailed {
+                                                requested: model.clone(),
+                                                actual: Some(actual.clone()),
+                                                message: message.clone(),
+                                            },
+                                        ));
+                                        fail_turn_before_prompt(&state, &emit, &round_id, message);
+                                        return;
+                                    }
+                                    None => {
+                                        let actual = applied_model
+                                            .lock()
+                                            .ok()
+                                            .and_then(|guard| guard.clone());
+                                        let message = format!(
+                                            "session/set_config_option 未确认模型切换：请求 {model}，响应缺少 currentValue，且 {}ms 内未收到 config_option_update；尚未发送给 Agent",
+                                            MODEL_UPDATE_TIMEOUT.as_millis()
+                                        );
+                                        log::warn!(
+                                            "[agent] {message}（实例 {}，核心轮次 {}，实际={}，耗时 {}ms）",
+                                            client.instance_id(),
+                                            round_id,
+                                            actual.as_deref().unwrap_or("<未知>"),
+                                            switch_started.elapsed().as_millis()
+                                        );
+                                        (emit)(RuntimeEvent::turn(
+                                            round_id.clone(),
+                                            "",
+                                            AgentEvent::ModelSwitchFailed {
+                                                requested: model.clone(),
+                                                actual,
+                                                message: message.clone(),
+                                            },
+                                        ));
+                                        fail_turn_before_prompt(&state, &emit, &round_id, message);
+                                        return;
+                                    }
                                 }
+                            }
+                            Err(error) => {
+                                let actual = applied_model
+                                    .lock()
+                                    .ok()
+                                    .and_then(|guard| guard.clone());
+                                let message = format!(
+                                    "模型切换请求失败（session/set_config_option，请求 {model}）：{error}；尚未发送给 Agent"
+                                );
+                                log::warn!(
+                                    "[agent] {message}（实例 {}，核心轮次 {}，配置项 {}，耗时 {}ms）",
+                                    client.instance_id(),
+                                    round_id,
+                                    agent_id,
+                                    switch_started.elapsed().as_millis()
+                                );
                                 (emit)(RuntimeEvent::turn(
                                     round_id.clone(),
                                     "",
-                                    AgentEvent::ModelSwitchApplied {
-                                        requested: Some(model.clone()),
-                                        actual: Some(actual),
+                                    AgentEvent::ModelSwitchFailed {
+                                        requested: model.clone(),
+                                        actual,
+                                        message: message.clone(),
                                     },
                                 ));
-                            }
-                            Err(error) => {
-                                log::warn!(
-                                    "[agent] OpenCode 切换模型失败（{agent_id} / {model}）：{error}"
-                                );
-                                if let Ok(mut guard) = state.lock() {
-                                    if guard.active_turn == round_id {
-                                        guard.active_turn.clear();
-                                        guard.prompt_written = false;
-                                        guard.cancel_requested = false;
-                                        guard.cancel_notified = false;
-                                        guard.pending_permissions.clear();
-                                    }
-                                }
-                                (emit)(RuntimeEvent::turn(
-                                    round_id,
-                                    "",
-                                    AgentEvent::TurnFailed {
-                                        message: format!(
-                                            "OpenCode 切换模型失败（{model}）：{error}"
-                                        ),
-                                    },
-                                ));
+                                fail_turn_before_prompt(&state, &emit, &round_id, message);
                                 return;
                             }
                         }
                     }
                 }
+
+                log::info!(
+                    "[agent] ACP 发送 session/prompt：实例 {}，核心轮次 {}，原生会话 {}，模型={}",
+                    client.instance_id(),
+                    round_id,
+                    redact_session_id(&session_id),
+                    selected_model.as_deref().unwrap_or("<会话默认>")
+                );
 
                 let accepted_state = state.clone();
                 let accepted_emit = emit.clone();
@@ -896,5 +1171,9 @@ impl AgentAdapter for AcpAdapter {
         self.client.respond(rpc_id, result)?;
         state.pending_permissions.remove(request_id);
         Ok(())
+    }
+
+    fn close(&mut self, reason: CloseReason) {
+        self.client.close(reason);
     }
 }

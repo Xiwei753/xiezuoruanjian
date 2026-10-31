@@ -5,7 +5,7 @@
 //! 维护，本对象通过 `set_agent()` 接收同一份选择。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -15,9 +15,9 @@ use crate::agent_cli::{AgentInstallation, AgentInventory};
 use crate::agent_runtime::events::executor_identity;
 use crate::agent_runtime::model_catalog::ModelProbeResult;
 use crate::agent_runtime::{
-    bind_current_project, AgentEvent, AgentHistoryMessage, AgentLaunchContext, AgentModelInfo,
-    AgentPromptRequest, AgentSessionManager, CancelOutcome, EventSink, McpServerLaunch,
-    RuntimeEvent, ADAPTER_VERSION,
+    agent_working_dir, bind_current_project, AgentEvent, AgentHistoryMessage, AgentLaunchContext,
+    AgentModelInfo, AgentPromptRequest, AgentSessionManager, CancelOutcome, CloseReason, EventSink,
+    McpServerLaunch, RuntimeEvent, ADAPTER_VERSION,
 };
 use crate::backend::AppRef;
 use writer_core::agent::{
@@ -622,11 +622,7 @@ impl AgentRuntimeBackend {
             project_id
         };
         let binding = bind_current_project(&app_data_root, &projects_root, &project_id);
-        let working_dir = if project_id.is_empty() {
-            PathBuf::from(&projects_root)
-        } else {
-            PathBuf::from(&projects_root).join(&project_id)
-        };
+        let working_dir = agent_working_dir(Path::new(&app_data_root), &self.agent_id);
         self.mcp_status_json_value = serde_json::json!({
             "status": binding.status,
             "available": binding.launch.is_some(),
@@ -672,8 +668,7 @@ impl AgentRuntimeBackend {
             "args": launch.args,
             "env": env,
         });
-        let text = serde_json::to_string_pretty(&config)
-            .unwrap_or_else(|_| "{}".to_string());
+        let text = serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string());
         match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text)) {
             Ok(_) => {
                 self.set_error(String::new());
@@ -708,22 +703,28 @@ impl AgentRuntimeBackend {
         ))
     }
 
+    fn ensure_working_dir(&self, app_data_root: &str) -> Result<PathBuf, String> {
+        let working_dir = agent_working_dir(Path::new(app_data_root), &self.agent_id);
+        std::fs::create_dir_all(&working_dir).map_err(|error| {
+            format!(
+                "无法创建 Agent 独立工作目录 {}：{error}",
+                working_dir.display()
+            )
+        })?;
+        Ok(working_dir)
+    }
+
     fn base_launch_context(
         &self,
         app_data_root: String,
         projects_root: String,
         actual_project_id: String,
-        workspace_project_id: String,
         conversation_id: String,
         resume_native_session_id: Option<String>,
         model: Option<String>,
         mcp_servers: Vec<McpServerLaunch>,
+        working_dir: PathBuf,
     ) -> AgentLaunchContext {
-        let working_dir = if workspace_project_id.is_empty() {
-            PathBuf::from(&projects_root)
-        } else {
-            PathBuf::from(&projects_root).join(&workspace_project_id)
-        };
         let conversation_project_id = if self.project_id.is_empty() {
             actual_project_id
         } else {
@@ -763,32 +764,34 @@ impl AgentRuntimeBackend {
             self.launch_roots()?;
         let binding = bind_current_project(&app_data_root, &projects_root, &workspace_project_id);
         let mcp_servers = binding.launch.clone().into_iter().collect();
+        let working_dir = self.ensure_working_dir(&app_data_root)?;
         Ok(self.base_launch_context(
             app_data_root,
             projects_root,
             actual_project_id,
-            workspace_project_id,
             conversation_id,
             resume_native_session_id,
             self.model.clone(),
             mcp_servers,
+            working_dir,
         ))
     }
 
     /// 探测上下文没有 Core 会话、原生 resume 身份和 MCP；它只借用当前 CLI
-    /// 的安装路径与作品目录去查询官方模型目录。
+    /// 的安装路径与独立工作目录去查询官方模型目录。
     fn model_probe_context(&self) -> Result<AgentLaunchContext, String> {
-        let (app_data_root, projects_root, actual_project_id, workspace_project_id) =
+        let (app_data_root, projects_root, actual_project_id, _workspace_project_id) =
             self.launch_roots()?;
+        let working_dir = self.ensure_working_dir(&app_data_root)?;
         Ok(self.base_launch_context(
             app_data_root,
             projects_root,
             actual_project_id,
-            workspace_project_id,
             String::new(),
             None,
             None,
             Vec::new(),
+            working_dir,
         ))
     }
 
@@ -897,7 +900,7 @@ impl AgentRuntimeBackend {
         if self.running_value {
             self.abandon_active_turn();
         }
-        self.cancel_runtime_only();
+        self.cancel_runtime_only(CloseReason::UserSwitch("切换作品".to_string()));
         self.project_id = project_id;
         self.project_title = project_title;
         self.conversation = None;
@@ -915,7 +918,7 @@ impl AgentRuntimeBackend {
         self.start_model_probe(false);
     }
 
-    fn cancel_runtime_only(&self) {
+    fn cancel_runtime_only(&self, reason: CloseReason) {
         // 关闭进程可能等待子进程退出，不能在 UI 线程同步做；epoch 用来防止
         // 延迟执行的 shutdown 把用户随后启动的新会话一并关掉。
         let epoch = self.runtime_epoch.fetch_add(1, Ordering::SeqCst) + 1;
@@ -929,7 +932,7 @@ impl AgentRuntimeBackend {
                 }
                 if let Ok(mut manager) = runtime.lock() {
                     if runtime_epoch.load(Ordering::SeqCst) == epoch {
-                        manager.shutdown();
+                        manager.shutdown(reason);
                     }
                 }
             })
@@ -962,7 +965,7 @@ impl AgentRuntimeBackend {
         if self.running_value {
             self.abandon_active_turn();
         }
-        self.cancel_runtime_only();
+        self.cancel_runtime_only(CloseReason::UserSwitch("切换 CLI".to_string()));
         // 模型选择独立于原生会话保存；即使这个 CLI 还没发送过消息，
         // 切换回来也要恢复用户上次的选择（包括明确选择默认模型）。
         let target_key = executor_identity(&agent_id, &launch_path, &protocol, &launch_args);
@@ -1019,7 +1022,7 @@ impl AgentRuntimeBackend {
             self.abandon_active_turn();
         }
         // 新会话不能复用上一段原生 session；同时换掉运行中的进程。
-        self.cancel_runtime_only();
+        self.cancel_runtime_only(CloseReason::UserSwitch("新建会话".to_string()));
         self.conversation = None;
         self.reset_models_for_agent();
         self.active_turn_id.clear();
@@ -1039,6 +1042,15 @@ impl AgentRuntimeBackend {
 
     fn open_conversation(&mut self, conversation_id: QString) {
         let conversation_id = conversation_id.to_string();
+        if self
+            .conversation
+            .as_ref()
+            .is_some_and(|conversation| conversation.id == conversation_id)
+        {
+            // 重复打开同一会话不能重建原生进程；发送消息仍复用现有实例。
+            self.set_status("已打开会话");
+            return;
+        }
         let Some(api) = self.core_api() else {
             self.set_error("当前工作区不可用");
             return;
@@ -1056,7 +1068,7 @@ impl AgentRuntimeBackend {
                 if self.running_value {
                     self.abandon_active_turn();
                 }
-                self.cancel_runtime_only();
+                self.cancel_runtime_only(CloseReason::UserSwitch("打开其他会话".to_string()));
                 self.agent_id = conversation.agent_id.clone();
                 self.agent_name = conversation.agent_name.clone();
                 self.launch_path = conversation.launch_path.clone();
@@ -1268,12 +1280,30 @@ impl AgentRuntimeBackend {
             .map(|conversation| conversation.id.clone())
             .unwrap_or_default();
         // 新轮次已经获准启动，之前排队的 shutdown 必须失效，否则会关掉
-        // 本线程即将创建的新原生会话。
-        self.runtime_epoch.fetch_add(1, Ordering::SeqCst);
+        // 本线程即将创建的新原生会话。epoch 与本次实际进程实例、轮次绑定。
+        let runtime_epoch = self.runtime_epoch.clone();
+        let turn_epoch = self.runtime_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         std::thread::Builder::new()
             .name("agent-runtime-prompt".to_string())
             .spawn(move || {
+                if runtime_epoch.load(Ordering::SeqCst) != turn_epoch {
+                    log::warn!(
+                        "[agent] {diagnostic_agent_id}（{diagnostic_launch_path}）轮次已被新的运行实例取代，未发送"
+                    );
+                    (sink)(RuntimeEvent {
+                        conversation_id: failure_conversation_id,
+                        generation: 0,
+                        agent_identity: String::new(),
+                        core_turn_id: turn_id_value,
+                        native_turn_id: String::new(),
+                        event: AgentEvent::TurnFailed {
+                            message: "本轮已被新的运行实例取代（尚未发送给 Agent）".to_string(),
+                        },
+                    });
+                    return;
+                }
                 let mut failure = None;
+                let mut startup_failure = false;
                 match runtime.lock() {
                     Ok(mut manager) => match manager.ensure_session(ctx, sink.clone()) {
                         Ok(preparation) => {
@@ -1291,21 +1321,32 @@ impl AgentRuntimeBackend {
                                 failure = Some(error);
                             }
                         }
-                        Err(error) => failure = Some(error),
+                        Err(error) => {
+                            failure = Some(error);
+                            startup_failure = true;
+                        }
                     },
-                    Err(_) => failure = Some("Agent 运行时状态锁已损坏".to_string()),
+                    Err(_) => {
+                        failure = Some("Agent 运行时状态锁已损坏".to_string());
+                        startup_failure = true;
+                    }
                 }
                 if let Some(error) = failure {
                     log::warn!(
                         "[agent] {diagnostic_agent_id}（{diagnostic_launch_path}）启动/发送失败：{error}"
                     );
+                    let message = if startup_failure {
+                        format!("启动 Agent 失败（尚未发送给 Agent）：{error}")
+                    } else {
+                        format!("尚未发送给 Agent：{error}")
+                    };
                     (sink)(RuntimeEvent {
                         conversation_id: failure_conversation_id,
                         generation: 0,
                         agent_identity: String::new(),
                         core_turn_id: turn_id_value,
                         native_turn_id: String::new(),
-                        event: AgentEvent::TurnFailed { message: error },
+                        event: AgentEvent::TurnFailed { message },
                     });
                 }
             })

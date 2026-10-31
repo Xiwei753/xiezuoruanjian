@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::events::{json_text, AgentLaunchContext, AgentModelInfo};
-use super::rpc::RpcClient;
+use super::rpc::{CloseReason, RpcClient};
 use super::workspace_access::WorkspaceAccess;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
@@ -81,10 +81,7 @@ fn default_model(models: &[AgentModelInfo]) -> Option<String> {
 /// 按 Agent 自身协议查询模型目录。`refresh` 表示用户主动刷新；OpenCode
 /// 目前提供的是 `opencode models` 目录命令，每次调用都会重新读取当前可用
 /// 供应商，不能附加旧版本不支持的刷新参数。
-pub fn query_models(
-    ctx: &AgentLaunchContext,
-    refresh: bool,
-) -> Result<ModelProbeResult, String> {
+pub fn query_models(ctx: &AgentLaunchContext, refresh: bool) -> Result<ModelProbeResult, String> {
     let mut result = match ctx.agent_id.as_str() {
         "codex" => query_codex(ctx),
         "opencode" => query_opencode(ctx, refresh),
@@ -127,13 +124,19 @@ fn query_codex(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
         }
     }
     let command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &args)?;
-    let client = RpcClient::spawn(
+    let client = Arc::new(RpcClient::spawn(
         "Codex",
         command,
         &ctx.working_dir,
         &[],
         noop_handler(),
-    )?;
+    )?);
+    let result = query_codex_session(&client, deadline);
+    client.close(CloseReason::ProbeFinished);
+    result
+}
+
+fn query_codex_session(client: &RpcClient, deadline: Instant) -> Result<ModelProbeResult, String> {
     client
         .request(
             "initialize",
@@ -179,7 +182,7 @@ fn query_codex(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
             if id.is_empty() {
                 continue;
             }
-            let mut capabilities = Vec::new();
+            let mut capabilities = vec!["catalog-visible".to_string()];
             if let Some(efforts) = model
                 .get("supportedReasoningEfforts")
                 .and_then(Value::as_array)
@@ -229,6 +232,11 @@ fn query_codex(ctx: &AgentLaunchContext) -> Result<ModelProbeResult, String> {
             "Codex model/list 返回的模型目录为空".to_string()
         });
     }
+    log::info!(
+        "[agent] Codex 模型目录（catalog-visible）：{} 个模型，{} 页；会话可选范围以 thread/start 响应为准",
+        models.len(),
+        page_count
+    );
     let default_model = default_model(&models);
     Ok(ModelProbeResult::Models {
         models,
@@ -245,10 +253,7 @@ fn json_preview(value: &Value) -> String {
     preview
 }
 
-fn query_opencode(
-    ctx: &AgentLaunchContext,
-    _refresh: bool,
-) -> Result<ModelProbeResult, String> {
+fn query_opencode(ctx: &AgentLaunchContext, _refresh: bool) -> Result<ModelProbeResult, String> {
     // 与 OpenCode ACP 会话使用同一可执行文件、HOME/XDG、OpenCode 配置与
     // 认证环境；`models` 是 CLI 顶层子命令，不能带上会话专用的 `acp` 参数。
     let mut command = WorkspaceAccess::for_context(ctx)?.command(&ctx.launch_path, &[])?;
@@ -293,7 +298,7 @@ fn query_opencode(
             display_name: model_id.to_string(),
             description: String::new(),
             is_default: false,
-            capabilities: Vec::new(),
+            capabilities: vec!["catalog-visible".to_string()],
         });
     }
     if models.is_empty() {
@@ -307,12 +312,14 @@ fn query_opencode(
         });
     }
     let models: Vec<_> = models.into_values().collect();
-    let providers: std::collections::BTreeSet<&str> =
-        models.iter().map(|model| model.provider_id.as_str()).collect();
+    let providers: std::collections::BTreeSet<&str> = models
+        .iter()
+        .map(|model| model.provider_id.as_str())
+        .collect();
     // 只记录供应商身份和数量，不读取、不输出任何密钥；用于排查沙箱内
     // 已登录供应商是否真的对 `opencode models` 可见。
     log::info!(
-        "[agent] opencode models 可见供应商 {} 个（{}），模型 {} 个",
+        "[agent] opencode models 目录（catalog-visible）可见供应商 {} 个（{}），模型 {} 个；认证可见范围见下一条日志；会话可选范围以 ACP session/new 的 configOptions 为准",
         providers.len(),
         providers.into_iter().collect::<Vec<_>>().join(", "),
         models.len()
@@ -328,8 +335,8 @@ fn query_opencode(
 /// 记录探测子进程实际能看到的 OpenCode 登录供应商。输出里只有供应商名称，
 /// 不包含密钥；用于区分“沙箱/环境看不到凭证”和“模型目录本身不完整”。
 fn log_opencode_auth(ctx: &AgentLaunchContext) {
-    let command = WorkspaceAccess::for_context(ctx)
-        .and_then(|access| access.command(&ctx.launch_path, &[]));
+    let command =
+        WorkspaceAccess::for_context(ctx).and_then(|access| access.command(&ctx.launch_path, &[]));
     let Ok(mut command) = command else {
         return;
     };
@@ -340,11 +347,7 @@ fn log_opencode_auth(ctx: &AgentLaunchContext) {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    match run_bounded_command(
-        "opencode auth list",
-        command,
-        Duration::from_secs(5),
-    ) {
+    match run_bounded_command("opencode auth list", command, Duration::from_secs(5)) {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let providers: std::collections::BTreeSet<&str> = stdout

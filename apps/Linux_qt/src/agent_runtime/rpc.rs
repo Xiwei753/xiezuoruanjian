@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -16,7 +17,67 @@ type NotificationHandler = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 /// 只保留 stderr 尾部，既能让失败原因进入用户可见错误，又避免把整段
 /// 日志常驻内存。
 const STDERR_TAIL_LIMIT: usize = 16 * 1024;
+/// stdout 已关闭但素笺没有发起关闭时，先给子进程一个自行退出的窗口；
+/// 超过后只能视为通道不可恢复并强制回收。
 const EXIT_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+/// 素笺主动关闭时等待 stdin EOF 后子进程自行退出的时间。
+const CLOSE_GRACE: Duration = Duration::from_secs(3);
+
+/// 谁、为什么结束了运行实例。关闭原因必须显式传递，不能再由 `Drop`
+/// 隐式 kill，否则日志会把素笺主动回收误报成 Agent 自己退出。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CloseReason {
+    /// 用户切换作品、CLI 或会话。
+    UserSwitch(String),
+    /// 应用退出。
+    AppExit,
+    /// 同一会话被新的执行者或原生实例替换。
+    SessionReplaced(String),
+    /// RPC 通道损坏，无法继续复用子进程。
+    ChannelError(String),
+    /// 请求超时后主动结束进程。
+    Timeout(String),
+    /// 一次性探测/查询结束，回收探测专用子进程。
+    ProbeFinished,
+}
+
+impl CloseReason {
+    pub fn description(&self) -> String {
+        match self {
+            Self::UserSwitch(detail) => format!("用户切换（{detail}）"),
+            Self::AppExit => "应用退出".to_string(),
+            Self::SessionReplaced(detail) => format!("会话实例替换（{detail}）"),
+            Self::ChannelError(detail) => format!("RPC 通道异常（{detail}）"),
+            Self::Timeout(detail) => format!("请求超时（{detail}）"),
+            Self::ProbeFinished => "一次性探测结束".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct RequestStats {
+    sent: u64,
+    responses: u64,
+    timeouts: u64,
+    disconnects: u64,
+}
+
+struct LifecycleState {
+    closed: Option<CloseReason>,
+    /// 是否已经由素笺记录并发出强制 SIGKILL，避免重复把退出归因成外部信号。
+    forced_kill: bool,
+    stats: RequestStats,
+}
+
+impl Default for LifecycleState {
+    fn default() -> Self {
+        Self {
+            closed: None,
+            forced_kill: false,
+            stats: RequestStats::default(),
+        }
+    }
+}
 
 struct PendingRequest {
     method: String,
@@ -24,11 +85,14 @@ struct PendingRequest {
 }
 
 pub struct RpcClient {
-    stdin: Mutex<ChildStdin>,
+    label: String,
+    pid: u32,
+    stdin: Mutex<Option<ChildStdin>>,
     pending: Arc<Mutex<HashMap<i64, PendingRequest>>>,
     next_id: AtomicI64,
     child: Arc<Mutex<Child>>,
     notification_handler: NotificationHandler,
+    lifecycle: Arc<Mutex<LifecycleState>>,
     /// stdout 已关闭后记录的真实退出原因，供之后才发出的请求直接失败。
     exit_reason: Arc<Mutex<Option<String>>>,
 }
@@ -61,11 +125,13 @@ impl RpcClient {
             .take()
             .ok_or_else(|| format!("{label} 没有 stdout"))?;
         let stderr = child.stderr.take();
+        let pid = child.id();
         let child = Arc::new(Mutex::new(child));
 
         let pending: Arc<Mutex<HashMap<i64, PendingRequest>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let exit_reason: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let lifecycle: Arc<Mutex<LifecycleState>> = Arc::new(Mutex::new(LifecycleState::default()));
         let stderr_tail: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let stderr_tail_reader = stderr_tail.clone();
         let stderr_handle = stderr.and_then(|stderr| {
@@ -84,6 +150,7 @@ impl RpcClient {
         let reader_pending = pending.clone();
         let reader_handler = notification_handler.clone();
         let reader_child = child.clone();
+        let reader_lifecycle = lifecycle.clone();
         let reader_label = label.to_string();
         let reader_exit_reason = exit_reason.clone();
         std::thread::Builder::new()
@@ -125,6 +192,9 @@ impl RpcClient {
                             .ok()
                             .and_then(|mut map| map.remove(&id))
                         {
+                            if let Ok(mut state) = reader_lifecycle.lock() {
+                                state.stats.responses += 1;
+                            }
                             let response = match value.get("error") {
                                 Some(error) => Err(error
                                     .get("message")
@@ -140,10 +210,34 @@ impl RpcClient {
                         }
                     }
                 }
-                // stdout 已关闭：读取真实退出状态和（已脱敏的）stderr 尾部，
-                // 再唤醒所有等待者。这样 initialize/model/list 失败时用户
-                // 看到的是 CLI 的真实原因，而不是笼统的“进程已退出”。
-                let status = wait_for_exit(&reader_child);
+                // stdout 已关闭。先区分“素笺主动关闭”和“Agent 自己退出”：
+                // 只有前者超过关闭宽限期才由素笺发送 SIGKILL；后者绝不能被
+                // 描述成外部信号误杀。
+                let requested_close = reader_lifecycle
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.closed.clone());
+                let wait = if requested_close.is_some() {
+                    CLOSE_GRACE
+                } else {
+                    EXIT_WAIT_TIMEOUT
+                };
+                let mut status = wait_for_status(&reader_child, wait);
+                let mut forced_reason = None;
+                if status.is_none() {
+                    let reason = requested_close.clone().unwrap_or_else(|| {
+                        CloseReason::ChannelError(format!("{reader_label} 的 stdout 已关闭，但进程仍在运行"))
+                    });
+                    forced_reason = Some(reason.clone());
+                    let _ = mark_closed(&reader_lifecycle, reason.clone());
+                    status = force_reap(
+                        &reader_child,
+                        &reader_lifecycle,
+                        &reader_label,
+                        pid,
+                        &reason,
+                    );
+                }
                 if status.is_some() {
                     if let Some(handle) = stderr_handle {
                         wait_for_stderr_reader(handle);
@@ -153,7 +247,27 @@ impl RpcClient {
                     .lock()
                     .map(|tail| tail.clone())
                     .unwrap_or_default();
-                let reason = describe_exit(&reader_label, status, &tail);
+                let forced = reader_lifecycle
+                    .lock()
+                    .map(|state| state.forced_kill)
+                    .unwrap_or(false);
+                let cause = if forced {
+                    ExitCause::ForcedReap(
+                        forced_reason
+                            .clone()
+                            .or_else(|| requested_close.clone())
+                            .unwrap_or_else(|| {
+                                CloseReason::ChannelError("进程未随协议通道退出".to_string())
+                            }),
+                    )
+                } else if let Some(reason) = requested_close {
+                    ExitCause::RequestedClose(reason)
+                } else if status.and_then(|status| status.signal()).is_some() {
+                    ExitCause::ExternalSignal
+                } else {
+                    ExitCause::SelfExit
+                };
+                let reason = describe_exit(&reader_label, pid, status, &tail, cause);
                 if let Ok(mut slot) = reader_exit_reason.lock() {
                     *slot = Some(reason.clone());
                 }
@@ -169,11 +283,14 @@ impl RpcClient {
             .map_err(|error| format!("无法启动 Agent 读取线程：{error}"))?;
 
         Ok(Self {
-            stdin: Mutex::new(stdin),
+            label: label.to_string(),
+            pid,
+            stdin: Mutex::new(Some(stdin)),
             pending,
             next_id: AtomicI64::new(1),
             child,
             notification_handler,
+            lifecycle,
             exit_reason,
         })
     }
@@ -185,6 +302,16 @@ impl RpcClient {
         timeout: Duration,
     ) -> Result<serde_json::Value, String> {
         self.request_observed(method, params, timeout, || {})
+    }
+
+    /// 运行实例标识（协议名 + PID），用于把模型切换、请求与进程退出串在
+    /// 同一条诊断链路里。
+    pub fn instance_id(&self) -> String {
+        format!("{}#{}", self.label, self.pid)
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
     }
 
     /// 发送请求，并在 JSON-RPC 报文真正写入 stdin 后立刻回调。
@@ -199,6 +326,13 @@ impl RpcClient {
         timeout: Duration,
         on_accepted: impl FnOnce(),
     ) -> Result<serde_json::Value, String> {
+        if let Some(reason) = self.closed_reason() {
+            return Err(format!(
+                "{method} 阶段失败：{} 已关闭（{}）",
+                self.label,
+                reason.description()
+            ));
+        }
         if let Some(reason) = self.exited_reason() {
             return Err(format!("{method} 阶段失败：{reason}"));
         }
@@ -215,6 +349,13 @@ impl RpcClient {
                     response: sender,
                 },
             );
+        let started = Instant::now();
+        log::info!(
+            "[agent] RPC #{} {} 发送阶段开始（实例 {}）",
+            id,
+            method,
+            self.instance_id()
+        );
         if let Err(error) = self.write_json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -224,28 +365,87 @@ impl RpcClient {
             if let Ok(mut map) = self.pending.lock() {
                 map.remove(&id);
             }
+            if let Some(reason) = self.closed_reason() {
+                return Err(format!(
+                    "{method} 阶段失败：{} 已关闭（{}）",
+                    self.label,
+                    reason.description()
+                ));
+            }
             if let Some(reason) = self.exited_reason() {
                 return Err(format!("{method} 阶段失败：{reason}"));
             }
             return Err(error);
         }
+        if let Ok(mut state) = self.lifecycle.lock() {
+            state.stats.sent += 1;
+        }
+        log::debug!(
+            "[agent] RPC #{} {} 已写入 stdin（实例 {}，{}ms）",
+            id,
+            method,
+            self.instance_id(),
+            started.elapsed().as_millis()
+        );
         on_accepted();
         match receiver.recv_timeout(timeout) {
-            Ok(result) => result,
+            Ok(result) => {
+                log::info!(
+                    "[agent] RPC #{} {} 收到响应（实例 {}，{}ms，结果：{}）",
+                    id,
+                    method,
+                    self.instance_id(),
+                    started.elapsed().as_millis(),
+                    if result.is_ok() { "ok" } else { "error" }
+                );
+                result
+            }
             Err(RecvTimeoutError::Timeout) => {
                 if let Ok(mut map) = self.pending.lock() {
                     map.remove(&id);
                 }
+                if let Ok(mut state) = self.lifecycle.lock() {
+                    state.stats.timeouts += 1;
+                }
                 if let Some(reason) = self.exited_reason() {
+                    log::warn!(
+                        "[agent] RPC #{} {} 超时但进程已退出（实例 {}，{}ms）：{}",
+                        id,
+                        method,
+                        self.instance_id(),
+                        started.elapsed().as_millis(),
+                        reason
+                    );
                     return Err(format!("{method} 阶段失败：{reason}"));
                 }
-                Err(format!("{method} 超时"))
+                log::warn!(
+                    "[agent] RPC #{} {} 超时（实例 {}，{}ms）",
+                    id,
+                    method,
+                    self.instance_id(),
+                    started.elapsed().as_millis()
+                );
+                Err(format!(
+                    "{method} 超时（{} 秒，请求 #{id}）",
+                    timeout.as_secs()
+                ))
             }
             Err(RecvTimeoutError::Disconnected) => {
                 if let Ok(mut map) = self.pending.lock() {
                     map.remove(&id);
                 }
+                if let Ok(mut state) = self.lifecycle.lock() {
+                    state.stats.disconnects += 1;
+                }
                 if let Some(reason) = self.exited_reason() {
+                    log::warn!(
+                        "[agent] RPC #{} {} 等待响应时断连（实例 {}，{}ms）：{}",
+                        id,
+                        method,
+                        self.instance_id(),
+                        started.elapsed().as_millis(),
+                        reason
+                    );
                     return Err(format!("{method} 阶段失败：{reason}"));
                 }
                 Err(format!("{method} 等待响应时 Agent 已退出"))
@@ -258,6 +458,13 @@ impl RpcClient {
             .lock()
             .ok()
             .and_then(|reason| reason.clone())
+    }
+
+    fn closed_reason(&self) -> Option<CloseReason> {
+        self.lifecycle
+            .lock()
+            .ok()
+            .and_then(|state| state.closed.clone())
     }
 
     pub fn notify(&self, method: &str, params: serde_json::Value) -> Result<(), String> {
@@ -277,10 +484,20 @@ impl RpcClient {
     }
 
     fn write_json(&self, value: &serde_json::Value) -> Result<(), String> {
-        let mut stdin = self
+        if let Some(reason) = self.closed_reason() {
+            return Err(format!(
+                "{} 已关闭，不能继续写入（{}）",
+                self.label,
+                reason.description()
+            ));
+        }
+        let mut guard = self
             .stdin
             .lock()
             .map_err(|_| "Agent stdin 锁损坏".to_string())?;
+        let stdin = guard
+            .as_mut()
+            .ok_or_else(|| format!("{} 的 stdin 已关闭", self.label))?;
         serde_json::to_writer(&mut *stdin, value).map_err(|error| error.to_string())?;
         stdin
             .write_all(b"\n")
@@ -288,10 +505,44 @@ impl RpcClient {
             .map_err(|error| format!("写入 Agent 失败：{error}"))
     }
 
-    pub fn kill(&self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+    /// 显式关闭入口：先停止接收新请求，再处理在途请求、关闭 stdin，
+    /// 最后在宽限期后回收子进程。只有 RPC 通道已不可恢复时才发送 SIGKILL，
+    /// 并记录为素笺主动触发。
+    pub fn close(&self, reason: CloseReason) {
+        if !mark_closed(&self.lifecycle, reason.clone()) {
+            return;
+        }
+        let stats = self
+            .lifecycle
+            .lock()
+            .map(|state| state.stats)
+            .unwrap_or_default();
+        log::info!(
+            "[agent] 关闭 {}（PID {}）：{}；请求统计：发送 {}，响应 {}，超时 {}，断连 {}",
+            self.label,
+            self.pid,
+            reason.description(),
+            stats.sent,
+            stats.responses,
+            stats.timeouts,
+            stats.disconnects
+        );
+        if let Ok(mut map) = self.pending.lock() {
+            for (id, pending) in map.drain() {
+                let _ = pending.response.send(Err(format!(
+                    "{}（{} 阶段）失败：进程关闭（{}，请求 #{id}）",
+                    self.label,
+                    pending.method,
+                    reason.description()
+                )));
+            }
+        }
+        if let Ok(mut stdin) = self.stdin.lock() {
+            // 关闭 stdin 让 ACP/app-server 有机会完成协议退出。
+            stdin.take();
+        }
+        if wait_for_status(&self.child, CLOSE_GRACE).is_none() {
+            force_reap(&self.child, &self.lifecycle, &self.label, self.pid, &reason);
         }
     }
 
@@ -300,14 +551,19 @@ impl RpcClient {
     }
 }
 
-impl Drop for RpcClient {
-    fn drop(&mut self) {
-        self.kill();
+fn mark_closed(lifecycle: &Arc<Mutex<LifecycleState>>, reason: CloseReason) -> bool {
+    let Ok(mut state) = lifecycle.lock() else {
+        return false;
+    };
+    if state.closed.is_some() {
+        return false;
     }
+    state.closed = Some(reason);
+    true
 }
 
-fn wait_for_exit(child: &Arc<Mutex<Child>>) -> Option<ExitStatus> {
-    let deadline = Instant::now() + EXIT_WAIT_TIMEOUT;
+fn wait_for_status(child: &Arc<Mutex<Child>>, timeout: Duration) -> Option<ExitStatus> {
+    let deadline = Instant::now() + timeout;
     loop {
         match child.lock() {
             Ok(mut child) => match child.try_wait() {
@@ -318,17 +574,44 @@ fn wait_for_exit(child: &Arc<Mutex<Child>>) -> Option<ExitStatus> {
             Err(_) => return None,
         }
         if Instant::now() >= deadline {
-            break;
+            return None;
         }
         std::thread::sleep(Duration::from_millis(25));
     }
-    // stdout 已关闭但进程仍未退出，协议通道已经不可用；回收子进程，
-    // 避免残留 app-server 占着会话资源。
-    if let Ok(mut child) = child.lock() {
-        let _ = child.kill();
-        return child.wait().ok();
+}
+
+/// 只在协议通道已经不可恢复时回收子进程；日志明确写成素笺主动结束，
+/// 避免后续 describe_exit 把 SIGKILL 误报成外部信号。
+fn force_reap(
+    child: &Arc<Mutex<Child>>,
+    lifecycle: &Arc<Mutex<LifecycleState>>,
+    label: &str,
+    pid: u32,
+    reason: &CloseReason,
+) -> Option<ExitStatus> {
+    let first = lifecycle
+        .lock()
+        .map(|mut state| {
+            if state.forced_kill {
+                false
+            } else {
+                state.forced_kill = true;
+                true
+            }
+        })
+        .unwrap_or(false);
+    if first {
+        log::warn!(
+            "[agent] 素笺主动回收 {label} 进程（PID {pid}），发送 SIGKILL；原因：{}",
+            reason.description()
+        );
     }
-    None
+    let mut child = child.lock().ok()?;
+    if let Ok(Some(status)) = child.try_wait() {
+        return Some(status);
+    }
+    let _ = child.kill();
+    child.wait().ok()
 }
 
 fn wait_for_stderr_reader(handle: std::thread::JoinHandle<()>) {
@@ -341,7 +624,24 @@ fn wait_for_stderr_reader(handle: std::thread::JoinHandle<()>) {
     }
 }
 
-fn describe_exit(label: &str, status: Option<ExitStatus>, tail: &str) -> String {
+enum ExitCause {
+    /// 素笺显式请求结束，子进程随后自行退出。
+    RequestedClose(CloseReason),
+    /// 素笺在关闭宽限期后主动发送 SIGKILL 回收。
+    ForcedReap(CloseReason),
+    /// 素笺没有请求结束，进程被外部信号终止。
+    ExternalSignal,
+    /// 素笺没有请求结束，只有退出码；无法判断真正来源。
+    SelfExit,
+}
+
+fn describe_exit(
+    label: &str,
+    pid: u32,
+    status: Option<ExitStatus>,
+    tail: &str,
+    cause: ExitCause,
+) -> String {
     let status_text = match status {
         Some(status) => match status.code() {
             Some(code) => format!("退出码 {code}"),
@@ -349,9 +649,20 @@ fn describe_exit(label: &str, status: Option<ExitStatus>, tail: &str) -> String 
         },
         None => "退出状态未知".to_string(),
     };
+    let provenance = match &cause {
+        ExitCause::RequestedClose(reason) => {
+            format!("素笺主动请求结束（原因：{}）", reason.description())
+        }
+        ExitCause::ForcedReap(reason) => format!(
+            "素笺主动发送 SIGKILL 回收（原因：{}）",
+            reason.description()
+        ),
+        ExitCause::ExternalSignal => "结束来源：外部信号（素笺未发送结束信号）".to_string(),
+        ExitCause::SelfExit => "结束来源未知（素笺未发送结束信号，仅有退出码）".to_string(),
+    };
     let mut message = format!(
-        "{label} 进程退出（{status_text}）：{}",
-        classify_exit(tail, status)
+        "{label} 进程退出（PID {pid}，{status_text}）：{provenance}；{}",
+        classify_exit(tail)
     );
     let tail = tail.trim();
     if !tail.is_empty() {
@@ -363,7 +674,7 @@ fn describe_exit(label: &str, status: Option<ExitStatus>, tail: &str) -> String 
     message
 }
 
-fn classify_exit(tail: &str, status: Option<ExitStatus>) -> &'static str {
+fn classify_exit(tail: &str) -> &'static str {
     let lower = tail.to_ascii_lowercase();
     let contains = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
     if contains(&["bwrap", "namespace", "sandbox", "permission denied"]) {
@@ -412,8 +723,6 @@ fn classify_exit(tail: &str, status: Option<ExitStatus>) -> &'static str {
         "504",
     ]) {
         "服务端返回错误（认证、限流或远端故障）"
-    } else if status.is_some_and(|status| status.code().is_none()) {
-        "CLI 被信号终止"
     } else {
         "CLI 进程异常退出"
     }
@@ -533,9 +842,7 @@ fn redact_assignment(line: &str, key: &str) -> String {
         } else {
             let end = value
                 .char_indices()
-                .find(|(_, value)| {
-                    value.is_whitespace() || matches!(value, ',' | ';' | '}' | ']')
-                })
+                .find(|(_, value)| value.is_whitespace() || matches!(value, ',' | ';' | '}' | ']'))
                 .map(|(index, _)| index)
                 .unwrap_or(value.len());
             (end, "***".to_string())
@@ -562,8 +869,7 @@ fn redact_after_marker(line: &str, marker: &str) -> String {
         let end = value
             .char_indices()
             .find(|(_, value)| {
-                value.is_whitespace()
-                    || matches!(value, '"' | '\'' | ',' | ';' | '}' | ']' | ')')
+                value.is_whitespace() || matches!(value, '"' | '\'' | ',' | ';' | '}' | ']' | ')')
             })
             .map(|(index, _)| index)
             .unwrap_or(value.len());
@@ -619,8 +925,7 @@ fn redact_prefixed_token(line: &str, prefix: &str) -> String {
         let end = value
             .char_indices()
             .find(|(_, value)| {
-                value.is_whitespace()
-                    || matches!(value, '"' | '\'' | ',' | ';' | '}' | ']' | ')')
+                value.is_whitespace() || matches!(value, '"' | '\'' | ',' | ';' | '}' | ']' | ')')
             })
             .map(|(index, _)| index)
             .unwrap_or(value.len());

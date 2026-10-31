@@ -27,4 +27,6 @@ pub use events::{
     EventSink, McpServerLaunch, PermissionOption, RuntimeEvent, ADAPTER_VERSION,
 };
 pub use mcp_binding::{bind_current_project, McpBinding};
+pub use rpc::CloseReason;
 pub use session::AgentSessionManager;
+pub use workspace_access::agent_working_dir;

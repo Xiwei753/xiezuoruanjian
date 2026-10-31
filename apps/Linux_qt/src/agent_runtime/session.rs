@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use super::adapter::{create_adapter, AgentAdapter, CancelOutcome};
 use super::events::{AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink, RuntimeEvent};
 use super::mcp_binding::{prepare_mcp_brokers, McpBroker};
+use super::rpc::CloseReason;
 
 /// 原生会话准备结果。后端据此决定补增量历史还是完整历史。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +67,6 @@ impl AgentSessionManager {
             let reusable = self.context.as_ref().is_some_and(|existing| {
                 existing.agent_id == ctx.agent_id
                     && existing.launch_path == ctx.launch_path
-                    && existing.launch_args == ctx.launch_args
                     && existing.protocol == ctx.protocol
                     && existing.conversation_id == ctx.conversation_id
                     && existing.project_id == ctx.project_id
@@ -99,7 +99,9 @@ impl AgentSessionManager {
                 }
             }
         }
-        self.shutdown();
+        self.shutdown(CloseReason::SessionReplaced(
+            "执行者或会话身份发生变化".to_string(),
+        ));
         self.next_generation = self.next_generation.saturating_add(1);
         let generation = self.next_generation;
         // broker 必须在沙箱外启动；随后适配器拿到的只是 stdio bridge 配置。
@@ -187,8 +189,12 @@ impl AgentSessionManager {
             .respond_permission(request_id, option_id)
     }
 
-    pub fn shutdown(&mut self) {
-        self.adapter = None;
+    /// 显式关闭当前原生实例：停止接收新请求、取消在途轮次、关闭 stdin
+    /// 并回收子进程。不能依赖 `adapter = None` 的隐式析构去杀进程。
+    pub fn shutdown(&mut self, reason: CloseReason) {
+        if let Some(mut adapter) = self.adapter.take() {
+            adapter.close(reason);
+        }
         self.mcp_broker = None;
         self.context = None;
         self.started = false;
@@ -201,6 +207,6 @@ impl AgentSessionManager {
 
 impl Drop for AgentSessionManager {
     fn drop(&mut self) {
-        self.shutdown();
+        self.shutdown(CloseReason::AppExit);
     }
 }

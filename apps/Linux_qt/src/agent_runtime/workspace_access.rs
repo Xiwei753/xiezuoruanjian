@@ -16,10 +16,30 @@ pub struct WorkspaceAccess {
     bwrap: PathBuf,
     home: PathBuf,
     agent_id: String,
-    projects_root: PathBuf,
     working_dir: PathBuf,
     mcp_socket_dir: Option<PathBuf>,
     extra_ro_paths: Vec<PathBuf>,
+}
+
+/// 每个 CLI 在应用私有目录下拥有稳定、可写的工作目录。作品正文与元数据
+/// 不通过文件系统暴露给 CLI，读写一律走 `sujian-mcp` 的权限接口。
+pub fn agent_working_dir(app_data_root: &Path, agent_id: &str) -> PathBuf {
+    let name: String = agent_id
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() || value == '-' || value == '_' {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let name = if name.is_empty() {
+        "default".to_string()
+    } else {
+        name
+    };
+    app_data_root.join("agent").join("workspaces").join(name)
 }
 
 fn executable(path: &Path) -> bool {
@@ -209,7 +229,6 @@ impl WorkspaceAccess {
             bwrap,
             home,
             agent_id: ctx.agent_id.clone(),
-            projects_root: ctx.projects_root.clone(),
             working_dir: ctx.working_dir.clone(),
             mcp_socket_dir: ctx.mcp_socket_dir.clone(),
             extra_ro_paths,
@@ -230,8 +249,8 @@ impl WorkspaceAccess {
                 command.env(&key, &value);
             }
         }
-        let config_home = env_absolute_path("XDG_CONFIG_HOME")
-            .unwrap_or_else(|| self.home.join(".config"));
+        let config_home =
+            env_absolute_path("XDG_CONFIG_HOME").unwrap_or_else(|| self.home.join(".config"));
         let data_home =
             env_absolute_path("XDG_DATA_HOME").unwrap_or_else(|| self.home.join(".local/share"));
         let state_home =
@@ -265,10 +284,7 @@ impl WorkspaceAccess {
             .arg("--tmpfs")
             .arg("/dev/shm");
         if Path::new("/dev/fuse").exists() {
-            command
-                .arg("--dev-bind")
-                .arg("/dev/fuse")
-                .arg("/dev/fuse");
+            command.arg("--dev-bind").arg("/dev/fuse").arg("/dev/fuse");
         }
         // 仅 DNS 解析所需的 systemd-resolved 目录；不暴露 /run/user。
         push_existing_ro(&mut command, Path::new("/run/systemd/resolve"));
@@ -320,18 +336,13 @@ impl WorkspaceAccess {
         ] {
             push_existing_ro(&mut command, &self.home.join(dir));
         }
-        for path in [
-            ".gitconfig",
-            ".config/git",
-            ".config/npm",
-        ] {
+        for path in [".gitconfig", ".config/git", ".config/npm"] {
             push_existing_ro(&mut command, &self.home.join(path));
         }
 
-        command
-            .arg("--ro-bind")
-            .arg(&self.projects_root)
-            .arg(&self.projects_root);
+        // Agent 的 cwd 是应用私有工作目录（可写），作品目录不挂载进
+        // 沙箱：正文与元数据只能通过 sujian-mcp 的权限接口访问。
+        push_writable_dir(&mut command, &self.working_dir, &mut mounted)?;
         if let Some(socket_dir) = self.mcp_socket_dir.as_ref() {
             command.arg("--ro-bind").arg(socket_dir).arg(socket_dir);
         }

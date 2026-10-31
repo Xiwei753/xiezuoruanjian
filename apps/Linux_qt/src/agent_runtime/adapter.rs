@@ -7,6 +7,7 @@
 use super::acp::AcpAdapter;
 use super::codex::CodexAdapter;
 use super::events::{AgentEvent, AgentLaunchContext, AgentPromptRequest, EventSink, RuntimeEvent};
+use super::rpc::CloseReason;
 
 /// 取消请求的结果。自然完成不能伪装成“取消成功”，否则后端会把已经
 /// 正常结束的轮次改写成用户取消。
@@ -50,6 +51,8 @@ pub trait AgentAdapter: Send {
     fn respond_permission(&mut self, _request_id: &str, _option_id: &str) -> Result<(), String> {
         Err("当前 Agent 未声明可用的权限回复接口".to_string())
     }
+    /// 由会话管理器显式调用一次：结束原生进程并记录关闭原因。
+    fn close(&mut self, _reason: CloseReason) {}
 }
 
 /// 按 Agent 的真实协议创建适配器。Issue #1022：只支持 OpenCode ACP 与
