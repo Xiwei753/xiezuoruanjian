@@ -167,13 +167,6 @@ impl ProofReplaySession {
                 .or_default()
                 .push(event);
         }
-        if by_device.is_empty() {
-            return Err(crate::Error::Other(format!(
-                "章节 {} 没有逐字编辑证明",
-                request.chapter_id
-            )));
-        }
-
         for events in by_device.values_mut() {
             events.sort_by_key(|event| event.proof.as_ref().map_or(0, |proof| proof.seq));
         }
@@ -201,47 +194,78 @@ impl ProofReplaySession {
             })
             .collect();
 
-        let device_id = if !request.device_id.is_empty() {
-            request.device_id.clone()
-        } else if let Some(origin) = store.load_origin_device_id() {
-            if by_device.contains_key(&origin) {
-                origin
-            } else {
-                by_device.keys().next().cloned().unwrap_or(origin)
-            }
+        let origin = store.load_origin_device_id();
+        let requested_device = if request.device_id.is_empty() {
+            None
         } else {
-            by_device.keys().next().cloned().unwrap_or_default()
+            Some(request.device_id.clone())
         };
-        let events = match by_device.remove(&device_id) {
-            Some(events) => events,
-            None if by_device.is_empty() => Vec::new(),
-            None => {
-                return Err(crate::Error::Other(format!(
-                    "设备 {device_id} 没有章节 {} 的证明事件",
-                    request.chapter_id
-                )))
+        let mut candidates: Vec<String> = Vec::new();
+        if let Some(device) = requested_device.as_ref() {
+            candidates.push(device.clone());
+        } else {
+            if let Some(origin) = origin.as_ref() {
+                candidates.push(origin.clone());
             }
-        };
-        let checkpoints =
-            checkpoint::load_checkpoints(store.app_data_root(), &device_id, &request.chapter_id)?;
-        let gaps = checkpoint::load_continuity_gaps(
-            store.app_data_root(),
-            &device_id,
-            &request.chapter_id,
-        )?;
-        if events.is_empty() && checkpoints.is_empty() && gaps.is_empty() {
+            for device in by_device.keys() {
+                if !candidates.iter().any(|value| value == device) {
+                    candidates.push(device.clone());
+                }
+            }
+            for device in checkpoint::list_proof_devices(
+                store.app_data_root(),
+                &request.chapter_id,
+            )? {
+                if !candidates.iter().any(|value| value == &device) {
+                    candidates.push(device);
+                }
+            }
+        }
+        let mut selected = None;
+        for device_id in candidates {
+            let events = by_device.get(&device_id).cloned().unwrap_or_default();
+            let checkpoints = checkpoint::load_checkpoints(
+                store.app_data_root(),
+                &device_id,
+                &request.chapter_id,
+            )?;
+            let gaps = checkpoint::load_continuity_gaps(
+                store.app_data_root(),
+                &device_id,
+                &request.chapter_id,
+            )?;
+            if events.is_empty() && checkpoints.is_empty() && gaps.is_empty() {
+                continue;
+            }
+            selected = Some((device_id, events, checkpoints, gaps));
+            break;
+        }
+        let Some((device_id, events, checkpoints, gaps)) = selected else {
             return Err(crate::Error::Other(format!(
                 "章节 {} 没有逐字编辑证明",
                 request.chapter_id
             )));
-        }
-        let gap_baselines: BTreeMap<u64, ProofCheckpoint> = checkpoints
+        };
+        let gap_baselines: BTreeMap<u64, ProofCheckpoint> = gaps
             .iter()
-            .filter(|checkpoint| {
-                gaps.iter()
-                    .any(|gap| gap.baseline_seq == checkpoint.seq)
+            .map(|gap| {
+                let checkpoint = ProofCheckpoint {
+                    format_version: gap.format_version,
+                    chapter_id: gap.chapter_id.clone(),
+                    device_id: gap.device_id.clone(),
+                    seq: gap.baseline_seq,
+                    session_id: format!("gap:{}", gap.event_id),
+                    timestamp_ms: gap.recovered_at_ms,
+                    text: gap.baseline_text.clone(),
+                    text_sha256: gap.baseline_text_sha256.clone(),
+                    content_hash: gap.baseline_content_hash.clone(),
+                    event_hash: String::new(),
+                    created_at_ms: gap.recovered_at_ms,
+                    reason: "continuity_gap".to_string(),
+                    source_device_id: String::new(),
+                };
+                (gap.baseline_seq, checkpoint)
             })
-            .map(|checkpoint| (checkpoint.seq, checkpoint.clone()))
             .collect();
         let baseline_text = request.baseline_text.clone().unwrap_or_default();
         let mut chain_errors = validate_full_chain(
@@ -251,24 +275,23 @@ impl ProofReplaySession {
             &baseline_text,
         );
         for gap in &gaps {
-            match checkpoints
-                .iter()
-                .find(|checkpoint| checkpoint.seq == gap.baseline_seq)
+            if text_sha256(&gap.baseline_text) != gap.baseline_text_sha256
+                || content_hash_of_text(&gap.baseline_text) != gap.baseline_content_hash
             {
-                Some(checkpoint)
-                    if checkpoint.text_sha256 == gap.baseline_text_sha256
-                        && checkpoint.content_hash == gap.baseline_content_hash => {}
-                Some(_) => chain_errors.push(format!(
-                    "连续性缺口 {} 的基线检查点摘要不一致",
+                chain_errors.push(format!(
+                    "连续性缺口 {} 的基线正文摘要不一致",
                     gap.event_id
-                )),
-                None => chain_errors.push(format!(
-                    "连续性缺口 {} 缺少基线检查点",
-                    gap.event_id
-                )),
+                ));
             }
         }
-        let state = initial_state(&events, &checkpoints, &gap_baselines, &baseline_text, 0);
+        let state = initial_state(
+            &events,
+            &checkpoints,
+            &gap_baselines,
+            None,
+            &baseline_text,
+            0,
+        );
 
         Ok(Self {
             chapter_id: request.chapter_id.clone(),
@@ -295,22 +318,43 @@ impl ProofReplaySession {
             request.target_seq,
             request.target_time_ms,
         );
-
-        if target < state.position {
-            *state = self.reset_state(target);
+        let latest_request = request.target_index.is_none()
+            && request.target_seq.is_none()
+            && request.target_time_ms.is_none();
+        let gap_target = request_gap_baseline(request, &self.gap_baselines).cloned();
+        if !latest_request {
+            *state = initial_state(
+                &self.events,
+                &self.checkpoints,
+                &self.gap_baselines,
+                gap_target.as_ref(),
+                &self.baseline_text,
+                target,
+            );
+        } else {
+            if target < state.position {
+                *state = initial_state(
+                    &self.events,
+                    &self.checkpoints,
+                    &self.gap_baselines,
+                    gap_target.as_ref(),
+                    &self.baseline_text,
+                    target,
+                );
+            }
+            while state.position < target && state.position < self.events.len() {
+                let event = &self.events[state.position];
+                reset_at_gap_baseline(&mut state, event, &self.gap_baselines);
+                apply_event(&mut state, event);
+                state.position += 1;
+            }
+            apply_trailing_gap_baseline(
+                &mut state,
+                target,
+                self.events.len(),
+                &self.gap_baselines,
+            );
         }
-        while state.position < target && state.position < self.events.len() {
-            let event = &self.events[state.position];
-            reset_at_gap_baseline(&mut state, event, &self.gap_baselines);
-            apply_event(&mut state, event);
-            state.position += 1;
-        }
-        apply_trailing_gap_baseline(
-            &mut state,
-            target,
-            self.events.len(),
-            &self.gap_baselines,
-        );
 
         let mut errors = state.errors.clone();
         errors.extend(self.chain_errors.iter().cloned());
@@ -343,11 +387,12 @@ impl ProofReplaySession {
         }
     }
 
-    fn reset_state(&self, target: usize) -> ReplayState {
+    fn reset_state(&self, target: usize, gap_target: Option<&ProofCheckpoint>) -> ReplayState {
         initial_state(
             &self.events,
             &self.checkpoints,
             &self.gap_baselines,
+            gap_target,
             &self.baseline_text,
             target,
         )
@@ -457,13 +502,68 @@ fn target_position(
     events.len()
 }
 
+/// 根据请求选择允许跨越的最后一个缺口基线。
+///
+/// - 默认“最新”请求：使用最新缺口。
+/// - `target_seq`：只允许 seq 不大于目标的缺口。
+/// - `target_time_ms`：只允许封存时间不晚于目标的缺口；封存时间不是原始事件时间。
+/// - `target_index`：按事件索引定位，永不跨越尾部缺口；看缺口后状态请用默认/seq/time。
+fn request_gap_baseline<'a>(
+    request: &ProofReplayRequest,
+    gap_baselines: &'a BTreeMap<u64, ProofCheckpoint>,
+) -> Option<&'a ProofCheckpoint> {
+    if let Some(target_seq) = request.target_seq {
+        return gap_baselines.range(..=target_seq).next_back().map(|(_, value)| value);
+    }
+    if request.target_index.is_some() {
+        return None;
+    }
+    if let Some(target_time) = request.target_time_ms {
+        return gap_baselines
+            .values()
+            .filter(|checkpoint| checkpoint.timestamp_ms <= target_time)
+            .max_by_key(|checkpoint| checkpoint.seq);
+    }
+    gap_baselines.iter().next_back().map(|(_, value)| value)
+}
+
 fn initial_state(
     events: &[WritingInputEvent],
     checkpoints: &[ProofCheckpoint],
     gap_baselines: &BTreeMap<u64, ProofCheckpoint>,
+    gap_target: Option<&ProofCheckpoint>,
     baseline_text: &str,
     target: usize,
 ) -> ReplayState {
+    if let Some(gap) = gap_target {
+        let mut state = ReplayState {
+            position: events
+                .iter()
+                .take_while(|event| {
+                    event.proof.as_ref().is_some_and(|proof| proof.seq <= gap.seq)
+                })
+                .count(),
+            seq: gap.seq,
+            event_id: String::new(),
+            timestamp_ms: gap.timestamp_ms,
+            text: gap.text.clone(),
+            digest: ContentDigest::from_text(&gap.text),
+            expected_content_hash: gap.content_hash.clone(),
+            previous_event_hash: String::new(),
+            selection_anchor: 0,
+            selection_head: 0,
+            source: EventSource::Unknown,
+            checkpoint_seq: gap.seq,
+            errors: Vec::new(),
+        };
+        while state.position < target && state.position < events.len() {
+            let event = &events[state.position];
+            reset_at_gap_baseline(&mut state, event, gap_baselines);
+            apply_event(&mut state, event);
+            state.position += 1;
+        }
+        return state;
+    }
     let target_seq = if target == 0 {
         None
     } else {
@@ -541,7 +641,6 @@ fn initial_state(
         apply_event(&mut state, event);
         state.position += 1;
     }
-    apply_trailing_gap_baseline(&mut state, target, events.len(), gap_baselines);
     state
 }
 

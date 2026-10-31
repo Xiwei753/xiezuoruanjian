@@ -362,41 +362,34 @@ impl StatsStore {
 
         let chain_key = format!("{origin}/{}", event.chapter_id);
         let head = state.chains.get(&chain_key).cloned();
-        // 链头缓存存在时，逐字事件只消费缓存的增量摘要；绝不为了确认基线
-        // 去扫描整个检查点历史。只有首次建立链（head 为空）才需要读最后
-        // 一个基线检查点。
-        // 同步连续性缺口会写入 reason=continuity_gap 的基线检查点。
-        // 该检查点的 seq 位于旧链头之后，必须先于旧链头判断：缺口之后的新事件
-        // 必须从当前真实正文的新链开始，不能继续引用不可证明的旧链。
-        let latest_checkpoint =
-            checkpoint::load_last_checkpoint(&self.app_data_root, &origin, &event.chapter_id)?;
-        let gap_baseline = if let Some(checkpoint) = latest_checkpoint.as_ref().filter(|checkpoint| {
-            checkpoint.reason == "continuity_gap"
-                && head
-                    .as_ref()
-                    .is_none_or(|current| checkpoint.seq > current.seq)
-        }) {
-            let gaps = checkpoint::load_continuity_gaps(
-                &self.app_data_root,
-                &origin,
-                &event.chapter_id,
-            )?;
-            if gaps.iter().any(|gap| gap.baseline_seq == checkpoint.seq) {
-                Some(checkpoint.clone())
-            } else {
-                None
-            }
+        // 缺口记录是不可变的链起点：其 baseline_seq 位于旧链头之后时，
+        // 新事件必须从缺口保存的正文快照开始，不能继续引用旧链。
+        let gaps = checkpoint::load_continuity_gaps(
+            &self.app_data_root,
+            &origin,
+            &event.chapter_id,
+        )?;
+        let gap_baseline = gaps
+            .iter()
+            .rev()
+            .find(|gap| {
+                head.as_ref()
+                    .is_none_or(|current| gap.baseline_seq > current.seq)
+            })
+            .cloned();
+        let latest_checkpoint = if head.is_none() && gap_baseline.is_none() {
+            checkpoint::load_last_checkpoint(&self.app_data_root, &origin, &event.chapter_id)?
         } else {
             None
         };
 
         let (seq, before_digest, mut before_text, starts_new_chain, baseline_checkpoint) =
             if let Some(gap) = gap_baseline {
-                let digest = ContentDigest::from_text(&gap.text);
+                let digest = ContentDigest::from_text(&gap.baseline_text);
                 (
-                    state.next_seq.max(gap.seq.saturating_add(1)),
+                    state.next_seq.max(gap.baseline_seq.saturating_add(1)),
                     digest,
-                    Some(gap.text.clone()),
+                    Some(gap.baseline_text),
                     true,
                     None,
                 )
@@ -1052,128 +1045,89 @@ impl StatsStore {
         Ok(())
     }
 
-    /// 为无法重建原始事实的旧事务封存“证明连续性缺口”，并以当前真实正文
-    /// 建立新的证明链基线。
-    ///
-    /// 缺口记录只说明“这段历史无法逐字验证”，不是恢复出来的编辑事件。基线
-    /// checkpoint 与缺口记录都按事务/事件 ID 幂等：先写 checkpoint 再写缺口，
-    /// 任一步失败时下次重试会复用同一 checkpoint，不会产生多条不同基线。
-    pub(crate) fn seal_proof_continuity_gap(
-        &self,
-        project_id: &str,
-        volume_id: &str,
-        chapter_id: &str,
-        transaction_id: &str,
-        event_id: &str,
-        missing_fields: &[String],
-        phase: &str,
-        text: &str,
-    ) -> Result<()> {
-        if chapter_id.is_empty() || event_id.is_empty() {
-            return Err(crate::Error::Other(
-                "封存证明连续性缺口需要非空章节和事件 ID".to_string(),
-            ));
-        }
-        let origin = self.resolve_origin_device_id()?;
-        let gaps = checkpoint::load_continuity_gaps(&self.app_data_root, &origin, chapter_id)?;
-        let checkpoints = checkpoint::load_checkpoints(&self.app_data_root, &origin, chapter_id)?;
-        let gap_session = format!("gap:{event_id}");
-
-        // 已封存的缺口必须先验证它引用的基线 checkpoint 仍然存在且摘要一致。
-        if let Some(existing) = gaps
-            .iter()
-            .find(|gap| gap.transaction_id == transaction_id && gap.event_id == event_id)
-        {
-            let Some(baseline) = checkpoints
-                .iter()
-                .find(|checkpoint| checkpoint.seq == existing.baseline_seq)
-            else {
-                return Err(crate::Error::Other(format!(
-                    "连续性缺口 {} 已存在，但缺少基线检查点 seq {}",
-                    event_id, existing.baseline_seq
-                )));
-            };
-            if baseline.text_sha256 != existing.baseline_text_sha256
-                || baseline.content_hash != existing.baseline_content_hash
-            {
-                return Err(crate::Error::Other(format!(
-                    "连续性缺口 {} 的基线检查点摘要与缺口记录不一致",
-                    event_id
-                )));
-            }
-            return Ok(());
-        }
-
-        let now = chrono::Utc::now().timestamp_millis();
-        let text_sha256_value = text_sha256(text);
-        let content_hash = content_hash_of_text(text);
-        // 只按稳定身份 gap:<event> 查找首次尝试写入的 checkpoint。
-        // 不能用“当前正文摘要”匹配，否则正文变化后会新建第二条同身份基线。
-        let existing_baseline = checkpoints.iter().find(|checkpoint| {
-            checkpoint.reason == "continuity_gap" && checkpoint.session_id == gap_session
-        });
-        let (baseline_seq, baseline_text_sha256, baseline_content_hash) = match existing_baseline
-        {
-            Some(checkpoint) => {
-                if checkpoint.text != text {
-                    return Err(crate::Error::Other(format!(
-                        "连续性缺口 {} 的基线正文已固定为历史快照，当前正文已变化；不能替换历史基线",
-                        event_id
-                    )));
-                }
-                (
-                    checkpoint.seq,
-                    checkpoint.text_sha256.clone(),
-                    checkpoint.content_hash.clone(),
-                )
-            }
-            None => {
-                let latest_checkpoint_seq = checkpoints
-                    .iter()
-                    .map(|checkpoint| checkpoint.seq)
-                    .max()
-                    .unwrap_or(0);
-                let latest_event_seq = self.latest_proof_seq()?;
-                let seq = latest_checkpoint_seq
-                    .max(latest_event_seq)
-                    .saturating_add(1)
-                    .max(1);
-                let baseline = ProofCheckpoint::new(
-                    chapter_id,
-                    &origin,
-                    seq,
-                    &gap_session,
-                    now,
-                    text,
-                    &content_hash,
-                    "",
-                    "continuity_gap",
-                );
-                checkpoint::append_checkpoint(&self.app_data_root, &baseline)?;
-                (seq, text_sha256_value.clone(), content_hash.clone())
-            }
-        };
-
-        let gap = proof::ProofContinuityGap {
-            format_version: proof::PROOF_FORMAT_VERSION,
-            transaction_id: transaction_id.to_string(),
-            event_id: event_id.to_string(),
-            project_id: project_id.to_string(),
-            volume_id: volume_id.to_string(),
-            chapter_id: chapter_id.to_string(),
-            device_id: origin,
-            missing_fields: missing_fields.to_vec(),
-            phase: phase.to_string(),
-            recovered_at_ms: now,
-            baseline_seq,
-            baseline_text_sha256,
-            baseline_content_hash,
-            verifiable: false,
-        };
-        checkpoint::append_continuity_gap(&self.app_data_root, &gap)?;
-        self.proof_generation.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+/// 为无法重建原始事实的旧事务封存“证明连续性缺口”，并以当前真实正文
+/// 建立新的证明链基线。
+///
+/// 缺口、基线正文和摘要写在同一个原子 JSON 记录里，按事务/事件 ID 定址；
+/// 写入完成后即可被回放和后续同步读取，不存在 checkpoint/缺口两文件半事务。
+pub(crate) fn seal_proof_continuity_gap(
+    &self,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    transaction_id: &str,
+    event_id: &str,
+    missing_fields: &[String],
+    phase: &str,
+    text: &str,
+) -> Result<()> {
+    if chapter_id.is_empty() || event_id.is_empty() {
+        return Err(crate::Error::Other(
+            "封存证明连续性缺口需要非空章节和事件 ID".to_string(),
+        ));
     }
+    let origin = self.resolve_origin_device_id()?;
+    let gaps = checkpoint::load_continuity_gaps(&self.app_data_root, &origin, chapter_id)?;
+    if let Some(existing) = gaps
+        .iter()
+        .find(|gap| gap.transaction_id == transaction_id && gap.event_id == event_id)
+    {
+        if existing.project_id != project_id
+            || existing.volume_id != volume_id
+            || existing.chapter_id != chapter_id
+        {
+            return Err(crate::Error::Other(format!(
+                "连续性缺口 {} 已存在，但章节身份不一致，拒绝覆盖",
+                event_id
+            )));
+        }
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let text_sha256_value = text_sha256(text);
+    let content_hash = content_hash_of_text(text);
+    let checkpoints = checkpoint::load_checkpoints(&self.app_data_root, &origin, chapter_id)?;
+    let latest_checkpoint_seq = checkpoints
+        .iter()
+        .map(|checkpoint| checkpoint.seq)
+        .max()
+        .unwrap_or(0);
+    let latest_event_seq = self.latest_proof_seq()?;
+    let latest_gap_seq = gaps
+        .iter()
+        .map(|gap| gap.baseline_seq)
+        .max()
+        .unwrap_or(0);
+    let baseline_seq = latest_checkpoint_seq
+        .max(latest_event_seq)
+        .max(latest_gap_seq)
+        .saturating_add(1)
+        .max(1);
+    let gap = proof::ProofContinuityGap {
+        format_version: proof::PROOF_FORMAT_VERSION,
+        transaction_id: transaction_id.to_string(),
+        event_id: event_id.to_string(),
+        project_id: project_id.to_string(),
+        volume_id: volume_id.to_string(),
+        chapter_id: chapter_id.to_string(),
+        device_id: origin,
+        missing_fields: missing_fields.to_vec(),
+        phase: phase.to_string(),
+        recovered_at_ms: now,
+        baseline_seq,
+        baseline_text: text.to_string(),
+        baseline_text_sha256: text_sha256_value,
+        baseline_content_hash: content_hash,
+        verifiable: false,
+    };
+    if checkpoint::append_continuity_gap(&self.app_data_root, &gap)? {
+        self.proof_generation.fetch_add(1, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+
 
     /// 本机当前证明链的最近序号（没有事件时为 0）。
     pub(crate) fn latest_proof_seq(&self) -> Result<u64> {

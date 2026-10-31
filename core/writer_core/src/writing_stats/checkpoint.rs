@@ -13,6 +13,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::writing_stats::proof::{
     text_sha256, ProofContinuityGap, PROOF_FORMAT_VERSION,
@@ -508,109 +509,100 @@ fn sanitize_segment(segment: &str) -> String {
 }
 
 
-/// 章节证明连续性缺口文件（与 checkpoint 同目录）。
-///
-/// 缺口不是编辑事件：它只记录某段历史正文已无法用原始事件证明，
-/// 并指向一个新的当前正文基线。文件按事务/事件幂等追加。
-pub fn continuity_gap_relative_path(device_id: &str, chapter_id: &str) -> String {
-    let checkpoint_path = checkpoint_relative_path(device_id, chapter_id);
-    match checkpoint_path.strip_suffix(".checkpoints.jsonl") {
-        Some(prefix) => format!("{prefix}.gaps.jsonl"),
-        None => format!("{checkpoint_path}.gaps.jsonl"),
-    }
+/// 章节证明连续性缺口的原子记录目录（与 checkpoint 同目录）。
+pub fn continuity_gap_relative_dir(device_id: &str, chapter_id: &str) -> String {
+    let checkpoint = checkpoint_relative_path(device_id, chapter_id);
+    let prefix = checkpoint
+        .strip_suffix(".checkpoints.jsonl")
+        .unwrap_or(&checkpoint);
+    format!("{prefix}.gaps")
 }
 
-fn continuity_gap_path(app_data_root: &Path, device_id: &str, chapter_id: &str) -> PathBuf {
-    app_data_root.join(continuity_gap_relative_path(device_id, chapter_id))
+fn continuity_gap_dir(app_data_root: &Path, device_id: &str, chapter_id: &str) -> PathBuf {
+    app_data_root.join(continuity_gap_relative_dir(device_id, chapter_id))
 }
 
-/// 追加一条连续性缺口记录。
-///
-/// 返回 `Ok(false)` 表示同一事务/事件已经记录过。先写 checkpoint 再写缺口，
-/// 两步都按事务/事件幂等，失败后重试不会产生重复事实。
+fn continuity_gap_identity(transaction_id: &str, event_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(transaction_id.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(event_id.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn continuity_gap_path(
+    app_data_root: &Path,
+    gap: &ProofContinuityGap,
+) -> PathBuf {
+    continuity_gap_dir(app_data_root, &gap.device_id, &gap.chapter_id)
+        .join(format!("{}.json", continuity_gap_identity(&gap.transaction_id, &gap.event_id)))
+}
+
+/// 原子写一条缺口记录。缺口、基线正文和摘要都在同一个 JSON 文件里，
+/// rename 成功即为发布点，不存在 checkpoint 已写而缺口未写的半事务。
 pub fn append_continuity_gap(
     app_data_root: &Path,
     gap: &ProofContinuityGap,
 ) -> crate::Result<bool> {
-    let path = continuity_gap_path(app_data_root, &gap.device_id, &gap.chapter_id);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let path = continuity_gap_path(app_data_root, gap);
     if path.is_file() {
-        let file = File::open(&path)?;
-        for line in BufReader::new(file).lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let existing = serde_json::from_str::<ProofContinuityGap>(&line).map_err(|error| {
-                crate::Error::Other(format!(
-                    "连续性缺口文件包含损坏记录 {}: {error}",
-                    path.display()
-                ))
-            })?;
-            if existing.transaction_id == gap.transaction_id
-                && existing.event_id == gap.event_id
-            {
-                if existing.baseline_seq == gap.baseline_seq
-                    && existing.baseline_text_sha256 == gap.baseline_text_sha256
-                    && existing.baseline_content_hash == gap.baseline_content_hash
-                {
-                    return Ok(false);
-                }
-                return Err(crate::Error::Other(format!(
-                    "同一连续性缺口 {} / {} 已存在不同基线，拒绝覆盖",
-                    gap.transaction_id, gap.event_id
-                )));
-            }
-        }
-    }
-    let json = serde_json::to_string(gap)?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .read(true)
-        .open(&path)?;
-    let len = file.metadata()?.len();
-    if len > 0 {
-        file.seek(SeekFrom::End(-1))?;
-        let mut last = [0u8; 1];
-        file.read_exact(&mut last)?;
-        if last[0] != b'\n' {
-            return Err(crate::Error::Other(format!(
-                "连续性缺口文件末尾存在未完成记录，拒绝继续追加: {}",
+        let text = fs::read_to_string(&path)?;
+        let existing: ProofContinuityGap = serde_json::from_str(&text).map_err(|error| {
+            crate::Error::Other(format!(
+                "连续性缺口记录损坏 {}: {error}",
                 path.display()
-            )));
+            ))
+        })?;
+        if existing == *gap {
+            return Ok(false);
         }
+        return Err(crate::Error::Other(format!(
+            "连续性缺口 {} 已存在不同内容，拒绝覆盖",
+            gap.event_id
+        )));
     }
-    file.write_all(json.as_bytes())?;
-    file.write_all(b"\n")?;
-    file.flush()?;
-    file.sync_all()?;
+    let Some(parent) = path.parent() else {
+        return Err(crate::Error::Other(format!(
+            "连续性缺口路径没有父目录: {}",
+            path.display()
+        )));
+    };
+    fs::create_dir_all(parent)?;
+    let json = serde_json::to_string_pretty(gap)?;
+    crate::storage::atomic_write_string(&path, &json)?;
+    crate::storage::sync_dir(parent)?;
     Ok(true)
 }
 
-/// 读取某设备/章节的全部连续性缺口，按基线序号升序。
+/// 读取本章节的全部缺口记录。任何损坏记录都必须显式报错，不能静默跳过，
+/// 否则同步会一直停在同一事务上。
 pub fn load_continuity_gaps(
     app_data_root: &Path,
     device_id: &str,
     chapter_id: &str,
 ) -> crate::Result<Vec<ProofContinuityGap>> {
-    let path = continuity_gap_path(app_data_root, device_id, chapter_id);
-    if !path.is_file() {
+    let dir = continuity_gap_dir(app_data_root, device_id, chapter_id);
+    if !dir.is_dir() {
         return Ok(Vec::new());
     }
-    let file = File::open(&path)?;
     let mut gaps = Vec::new();
-    for line in BufReader::new(file).lines() {
-        let line = line?;
-        if line.trim().is_empty() {
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;
         }
-        let Ok(gap) = serde_json::from_str::<ProofContinuityGap>(&line) else {
-            log::warn!("忽略损坏的证明连续性缺口记录: {}", path.display());
-            continue;
-        };
+        let text = fs::read_to_string(&path)?;
+        let gap: ProofContinuityGap = serde_json::from_str(&text).map_err(|error| {
+            crate::Error::Other(format!(
+                "连续性缺口记录损坏 {}: {error}",
+                path.display()
+            ))
+        })?;
         if gap.device_id == device_id && gap.chapter_id == chapter_id {
             gaps.push(gap);
         }
@@ -621,4 +613,30 @@ pub fn load_continuity_gaps(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     Ok(gaps)
+}
+
+/// 列出某章节存在 checkpoint 或缺口记录的设备，供回放选择本机基线。
+pub fn list_proof_devices(
+    app_data_root: &Path,
+    chapter_id: &str,
+) -> crate::Result<Vec<String>> {
+    let root = app_data_root.join("stats/events");
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut devices = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let device_id = entry.file_name().to_string_lossy().to_string();
+        if checkpoint_path(app_data_root, &device_id, chapter_id).is_file()
+            || continuity_gap_dir(app_data_root, &device_id, chapter_id).is_dir()
+        {
+            devices.push(device_id);
+        }
+    }
+    devices.sort();
+    Ok(devices)
 }

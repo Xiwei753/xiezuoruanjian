@@ -108,6 +108,8 @@ pub struct ProofContinuityGap {
     pub recovered_at_ms: i64,
     /// 新基线 checkpoint 的序号；旧区间到此为止。
     pub baseline_seq: u64,
+    /// 缺口封存时的真实正文全文，作为新链不可变的起点快照。
+    pub baseline_text: String,
     pub baseline_text_sha256: String,
     pub baseline_content_hash: String,
     /// 该历史区间是否可被证明。封存缺口时恒为 false。
